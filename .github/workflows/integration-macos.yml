@@ -6,10 +6,7 @@ on:
 
 jobs:
   integration:
-    # Intel runner: Apple Silicon runners on GitHub do not expose nested
-    # virtualization, so Colima/lima cannot bring up its Docker VM. Intel
-    # runners do support it.
-    runs-on: macos-13
+    runs-on: macos-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
@@ -30,11 +27,16 @@ jobs:
           brew install tmux
           tmux -V
 
-      - name: Install Docker via Colima
-        # GitHub macOS Intel runners do not ship Docker. Colima brings up
-        # a small Linux VM that exposes the docker socket.
+      - name: Install Docker via Colima (pinned)
+        # GitHub macOS runners do not ship Docker. The latest colima
+        # (0.10.1) pulls lima 2.1.1, which aborts during the raw-datadisk
+        # conversion on Apple Silicon GitHub runners. Pin to colima
+        # 0.8.1, which ships lima 1.x and predates the regression.
         run: |
-          brew install colima docker
+          brew install docker
+          brew tap-new fleet/tap --no-git
+          brew extract --version=0.8.1 colima fleet/tap
+          brew install fleet/tap/colima@0.8.1
           colima start --cpu 3 --memory 6 --disk 14
           docker version
           docker info
