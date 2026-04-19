@@ -6,7 +6,10 @@ on:
 
 jobs:
   integration:
-    runs-on: macos-latest
+    # Intel runner: Apple Silicon runners on GitHub do not expose nested
+    # virtualization, so Colima/lima cannot bring up its Docker VM. Intel
+    # runners do support it.
+    runs-on: macos-13
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
@@ -27,18 +30,12 @@ jobs:
           brew install tmux
           tmux -V
 
-      # GitHub's macOS runners do not ship Docker. Bringing up Colima
-      # inline fails on Sequoia ARM64 due to a lima 2.1.1 regression in
-      # the raw datadisk path; this action bundles a known-good lima and
-      # is the de-facto standard for running Docker on macOS runners.
-      - name: Setup Docker on macOS
-        uses: douglascamata/setup-docker-macos-action@v1-alpha
-        with:
-          colima-cpu: 3
-          colima-memory: 6
-
-      - name: Verify docker
+      - name: Install Docker via Colima
+        # GitHub macOS Intel runners do not ship Docker. Colima brings up
+        # a small Linux VM that exposes the docker socket.
         run: |
+          brew install colima docker
+          colima start --cpu 3 --memory 6 --disk 14
           docker version
           docker info
 
