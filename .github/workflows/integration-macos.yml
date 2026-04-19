@@ -27,8 +27,8 @@ jobs:
           brew install tmux
           tmux -V
 
-      - name: Install Docker CLI
-        run: brew install docker
+      - name: Install Docker CLI and qemu
+        run: brew install docker qemu
 
       - name: Install lima and colima (pinned, from upstream releases)
         # Homebrew's current lima (2.1.1) hits a raw-datadisk conversion
@@ -63,8 +63,13 @@ jobs:
           colima version
 
       - name: Start Colima
+        # Apple's Virtualization.framework (vz driver) fails immediately
+        # on GitHub's hosted Apple Silicon runners — the hostagent exits
+        # 50 ms after Starting VZ. qemu's HVF path is more permissive
+        # about what the host exposes, and falls back to TCG emulation
+        # if the hardware does not expose hardware virt.
         run: |
-          colima start --cpu 3 --memory 6 --disk 14
+          colima start --vm-type=qemu --cpu 3 --memory 6 --disk 14
           docker version
           docker info
 
