@@ -39,7 +39,7 @@ jobs:
         # binaries at versions that predate the regression.
         run: |
           set -euo pipefail
-          LIMA_VERSION=1.3.0
+          LIMA_VERSION=1.2.3
           COLIMA_VERSION=0.8.1
 
           # Lima — extracts to ./bin/limactl and ./share/lima/...
