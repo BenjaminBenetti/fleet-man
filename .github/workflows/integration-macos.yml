@@ -1,0 +1,48 @@
+name: Integration Tests (macOS)
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  integration:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install devcontainer CLI
+        run: npm install -g @devcontainers/cli
+
+      - name: Install tmux (used by TUI tests)
+        run: |
+          brew install tmux
+          tmux -V
+
+      - name: Install Docker via Colima
+        run: |
+          brew install colima docker
+          # Start a small Linux VM that exposes the docker socket.
+          # qemu is used under the hood; keep the VM modest to fit
+          # inside the macOS runner's resources.
+          colima start --cpu 3 --memory 6 --disk 20
+          docker version
+          docker info
+
+      - name: Build fleet binary
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/bin"
+          go build -o "${GITHUB_WORKSPACE}/bin/fleet" ./cmd/fleet
+
+      - name: Run integration tests
+        env:
+          FLEET_BIN: ${{ github.workspace }}/bin/fleet
+        run: ./integration/run.sh
