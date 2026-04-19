@@ -28,12 +28,16 @@ jobs:
           tmux -V
 
       - name: Install Docker via Colima
+        # GitHub macOS runners do not ship Docker. Colima + lima's vz
+        # driver starts fastest on Apple Silicon; --mount-type=virtiofs
+        # avoids the datadisk conversion bug in lima 2.1.1 that fails
+        # when colima initialises its default raw datadisk.
         run: |
           brew install colima docker
-          # Start a small Linux VM that exposes the docker socket.
-          # qemu is used under the hood; keep the VM modest to fit
-          # inside the macOS runner's resources.
-          colima start --cpu 3 --memory 6 --disk 20
+          colima start \
+            --vm-type=vz \
+            --mount-type=virtiofs \
+            --cpu 3 --memory 6 --disk 14
           docker version
           docker info
 
