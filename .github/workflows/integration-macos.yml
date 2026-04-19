@@ -27,16 +27,43 @@ jobs:
           brew install tmux
           tmux -V
 
-      - name: Install Docker via Colima (pinned)
-        # GitHub macOS runners do not ship Docker. The latest colima
-        # (0.10.1) pulls lima 2.1.1, which aborts during the raw-datadisk
-        # conversion on Apple Silicon GitHub runners. Pin to colima
-        # 0.8.1, which ships lima 1.x and predates the regression.
+      - name: Install Docker CLI
+        run: brew install docker
+
+      - name: Install lima and colima (pinned, from upstream releases)
+        # Homebrew's current lima (2.1.1) hits a raw-datadisk conversion
+        # bug on Apple Silicon GitHub runners, aborting every colima
+        # cold-start. `brew extract` only pins the named formula, not
+        # its deps, so pinning colima via brew still drags in broken
+        # lima. Install both directly from their upstream GitHub release
+        # binaries at versions that predate the regression.
         run: |
-          brew install docker
-          brew tap-new fleet/tap --no-git
-          brew extract --version=0.8.1 colima fleet/tap
-          brew install fleet/tap/colima@0.8.1
+          set -euo pipefail
+          LIMA_VERSION=1.3.0
+          COLIMA_VERSION=0.8.1
+
+          # Lima — extracts to ./bin/limactl and ./share/lima/...
+          mkdir -p "$HOME/.local/lima"
+          curl -fsSL "https://github.com/lima-vm/lima/releases/download/v${LIMA_VERSION}/lima-${LIMA_VERSION}-Darwin-arm64.tar.gz" \
+            | tar -xz -C "$HOME/.local/lima"
+
+          # Colima — single binary.
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o "$HOME/.local/bin/colima" \
+            "https://github.com/abiosoft/colima/releases/download/v${COLIMA_VERSION}/colima-Darwin-arm64"
+          chmod +x "$HOME/.local/bin/colima"
+
+          # Put both on PATH for subsequent steps.
+          echo "$HOME/.local/lima/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin"      >> "$GITHUB_PATH"
+
+          # Sanity check in this step's own shell.
+          export PATH="$HOME/.local/lima/bin:$HOME/.local/bin:$PATH"
+          limactl --version
+          colima version
+
+      - name: Start Colima
+        run: |
           colima start --cpu 3 --memory 6 --disk 14
           docker version
           docker info
