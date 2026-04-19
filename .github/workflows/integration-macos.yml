@@ -6,7 +6,20 @@ on:
 
 jobs:
   integration:
-    runs-on: macos-latest
+    # Why Intel (macos-13) and not Apple Silicon (macos-latest):
+    #
+    # Docker on macOS needs a hypervisor — Colima/lima with VZ, Colima
+    # with qemu+HVF, and Docker Desktop all ultimately require nested
+    # virtualization. GitHub's standard hosted Apple Silicon runners
+    # (macos-latest, macos-14, macos-15) do not expose it: VZ exits
+    # immediately after Starting VZ, and qemu crashes with "signal:
+    # abort trap" as soon as HVF is unavailable.
+    #
+    # Nested virt is only available on the "xlarge" paid Apple Silicon
+    # runners (macos-14-xlarge, macos-15-xlarge). Free Intel runners
+    # (macos-13) support it out of the box, so that is where we run
+    # until a free ARM64 option exists.
+    runs-on: macos-13
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
@@ -27,49 +40,10 @@ jobs:
           brew install tmux
           tmux -V
 
-      - name: Install Docker CLI and qemu
-        run: brew install docker qemu
-
-      - name: Install lima and colima (pinned, from upstream releases)
-        # Homebrew's current lima (2.1.1) hits a raw-datadisk conversion
-        # bug on Apple Silicon GitHub runners, aborting every colima
-        # cold-start. `brew extract` only pins the named formula, not
-        # its deps, so pinning colima via brew still drags in broken
-        # lima. Install both directly from their upstream GitHub release
-        # binaries at versions that predate the regression.
+      - name: Install Docker via Colima
         run: |
-          set -euo pipefail
-          LIMA_VERSION=1.2.3
-          COLIMA_VERSION=0.8.1
-
-          # Lima — extracts to ./bin/limactl and ./share/lima/...
-          mkdir -p "$HOME/.local/lima"
-          curl -fsSL "https://github.com/lima-vm/lima/releases/download/v${LIMA_VERSION}/lima-${LIMA_VERSION}-Darwin-arm64.tar.gz" \
-            | tar -xz -C "$HOME/.local/lima"
-
-          # Colima — single binary.
-          mkdir -p "$HOME/.local/bin"
-          curl -fsSL -o "$HOME/.local/bin/colima" \
-            "https://github.com/abiosoft/colima/releases/download/v${COLIMA_VERSION}/colima-Darwin-arm64"
-          chmod +x "$HOME/.local/bin/colima"
-
-          # Put both on PATH for subsequent steps.
-          echo "$HOME/.local/lima/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.local/bin"      >> "$GITHUB_PATH"
-
-          # Sanity check in this step's own shell.
-          export PATH="$HOME/.local/lima/bin:$HOME/.local/bin:$PATH"
-          limactl --version
-          colima version
-
-      - name: Start Colima
-        # Apple's Virtualization.framework (vz driver) fails immediately
-        # on GitHub's hosted Apple Silicon runners — the hostagent exits
-        # 50 ms after Starting VZ. qemu's HVF path is more permissive
-        # about what the host exposes, and falls back to TCG emulation
-        # if the hardware does not expose hardware virt.
-        run: |
-          colima start --vm-type=qemu --cpu 3 --memory 6 --disk 14
+          brew install colima docker
+          colima start --cpu 3 --memory 6 --disk 14
           docker version
           docker info
 
