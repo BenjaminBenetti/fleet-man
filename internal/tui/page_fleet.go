@@ -409,6 +409,10 @@ func (fp *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = fmt.Sprintf("Instance %s is failed and cannot be toggled", key)
 				break
 			}
+			if !m.instanceBackend(r.instance).Stateful() {
+				m.message = fmt.Sprintf("%s instances cannot be stopped or started", backendTypeLabel(r.instance.Backend))
+				break
+			}
 
 			if r.instance.Status == fleet.StatusRunning {
 				r.instance.Status = fleet.StatusStopping

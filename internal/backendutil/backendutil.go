@@ -5,6 +5,7 @@ import (
 	coderbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/coder"
 	codespacesbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/codespaces"
 	devcontainerbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
+	localdirbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/localdir"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 )
 
@@ -23,6 +24,12 @@ func New(bt fleet.BackendType, verbose bool) backend.Backend {
 			opts = append(opts, codespacesbackend.WithVerbose(verbose))
 		}
 		return codespacesbackend.New(opts...)
+	case fleet.BackendLocalDir:
+		opts := []localdirbackend.Option{}
+		if verbose {
+			opts = append(opts, localdirbackend.WithVerbose(verbose))
+		}
+		return localdirbackend.New(opts...)
 	default:
 		opts := []devcontainerbackend.Option{}
 		if verbose {

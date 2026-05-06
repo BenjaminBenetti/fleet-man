@@ -21,6 +21,7 @@ const (
 	BackendDevcontainer BackendType = "devcontainer"
 	BackendCoder        BackendType = "coder"
 	BackendCodespaces   BackendType = "codespaces"
+	BackendLocalDir     BackendType = "local_dir"
 )
 
 // Instance represents a single devcontainer workspace in a fleet.

@@ -256,6 +256,9 @@ func (b *DevcontainerBackend) PortForwardCommand(containerID string, localPort, 
 	return exec.Command("sh", "-c", script)
 }
 
+// Stateful reports that devcontainers have lifecycle state (running/stopped).
+func (b *DevcontainerBackend) Stateful() bool { return true }
+
 // ResolveHostname returns the container's IP address obtained via
 // `docker inspect`. For local Docker containers this is directly reachable.
 func (b *DevcontainerBackend) ResolveHostname(containerID string) (string, bool) {

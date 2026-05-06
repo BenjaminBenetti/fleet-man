@@ -132,8 +132,9 @@ func (fp *fleetPage) updateConfirmDeleteSession(m *model, msg tea.Msg) tea.Cmd {
 // requires. An empty string means no external tool is needed.
 var backendToolRequirements = map[fleet.BackendType]string{
 	fleet.BackendDevcontainer: "devcontainer",
-	fleet.BackendCoder:       "coder",
-	fleet.BackendCodespaces:  "gh",
+	fleet.BackendCoder:        "coder",
+	fleet.BackendCodespaces:   "gh",
+	fleet.BackendLocalDir:     "",
 }
 
 // allBackendTypes is the ordered master list of every backend type.
@@ -141,6 +142,7 @@ var allBackendTypes = []fleet.BackendType{
 	fleet.BackendDevcontainer,
 	fleet.BackendCoder,
 	fleet.BackendCodespaces,
+	fleet.BackendLocalDir,
 }
 
 // nextBackendType cycles through the given options list from current.
@@ -166,6 +168,8 @@ func backendTypeLabel(bt fleet.BackendType) string {
 		return "Coder"
 	case fleet.BackendCodespaces:
 		return "Codespaces"
+	case fleet.BackendLocalDir:
+		return "Local Dir"
 	default:
 		return "Devcontainer"
 	}

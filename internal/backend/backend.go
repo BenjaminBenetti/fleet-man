@@ -62,4 +62,10 @@ type Backend interface {
 	// connections to hostname:port without spawning external processes.
 	// Returns ("", false) when the container is not directly reachable.
 	ResolveHostname(containerID string) (string, bool)
+
+	// Stateful reports whether the backend has lifecycle state, i.e.
+	// whether Stop and Start are meaningful. Backends that return false
+	// describe instances that are always "running" — callers must not
+	// invoke Stop/Start and must not transition instance status.
+	Stateful() bool
 }

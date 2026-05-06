@@ -29,6 +29,8 @@ func newUpCmd() *cobra.Command {
 				bt = fleet.BackendCoder
 			case "codespaces":
 				bt = fleet.BackendCodespaces
+			case "local_dir", "local":
+				bt = fleet.BackendLocalDir
 			}
 
 			target, err := fleet.Resolve(name, repoFlag)
@@ -100,7 +102,7 @@ func newUpCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&repoFlag, "repo", "", "Git remote URL to clone from")
-	cmd.Flags().StringVar(&backendFlag, "backend", "devcontainer", "Backend type: devcontainer, coder, or codespaces")
+	cmd.Flags().StringVar(&backendFlag, "backend", "devcontainer", "Backend type: devcontainer, coder, codespaces, or local_dir")
 	cmd.Flags().StringVar(&branchFlag, "branch", "", "Git branch to check out (defaults to the repository's default branch)")
 	return cmd
 }

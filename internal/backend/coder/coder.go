@@ -307,6 +307,9 @@ func (b *CoderBackend) ResolveHostname(containerID string) (string, bool) {
 	return "", false
 }
 
+// Stateful reports that Coder workspaces have lifecycle state (running/stopped).
+func (b *CoderBackend) Stateful() bool { return true }
+
 // EditorURI returns a VS Code URI for connecting to a Coder workspace.
 func (b *CoderBackend) EditorURI(workspaceDir string, projectName string) (string, bool) {
 	name := coderWorkspaceName(workspaceDir)

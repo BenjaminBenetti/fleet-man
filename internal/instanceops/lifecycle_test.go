@@ -25,6 +25,8 @@ func (f *fakeClient) Stop(containerID string) error {
 	return f.stopErr
 }
 
+func (f *fakeClient) Stateful() bool { return true }
+
 func TestStopInstanceTransitionsRunningToStopped(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

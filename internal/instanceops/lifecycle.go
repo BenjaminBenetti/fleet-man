@@ -11,6 +11,7 @@ import (
 type containerController interface {
 	Start(containerID string) error
 	Stop(containerID string) error
+	Stateful() bool
 }
 
 var newClient = func(bt fleet.BackendType) containerController {
@@ -75,6 +76,10 @@ func transitionLoadedInstance(st *state.State, inst *fleet.Instance, fleetName, 
 	}
 
 	dc := newClient(inst.Backend)
+
+	if !dc.Stateful() {
+		return nil, fmt.Errorf("backend %q does not support start/stop for instance %s/%s", inst.Backend, fleetName, instanceName)
+	}
 
 	switch targetStatus {
 	case fleet.StatusStopped:

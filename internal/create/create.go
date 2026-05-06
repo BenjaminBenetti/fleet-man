@@ -40,8 +40,11 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, bt fle
 		dc = backendutil.New(bt, verbose)
 	}
 
-	if bt != fleet.BackendCoder && bt != fleet.BackendCodespaces {
-		// Devcontainer: clone repo first, then provision
+	// Backends that operate on a host-side workspace dir need the repo
+	// cloned locally before Up() runs. Coder and Codespaces clone inside
+	// their remote workspace via their own template/devcontainer flow.
+	if bt == fleet.BackendDevcontainer || bt == fleet.BackendLocalDir || bt == "" {
+		// Devcontainer / local dir: clone repo first, then provision
 		if err := os.MkdirAll(filepath.Dir(wsDir), 0755); err != nil {
 			setFailed(fleetName, instanceName, err)
 			return fmt.Errorf("mkdir: %w", err)

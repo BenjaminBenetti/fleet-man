@@ -284,6 +284,9 @@ func (m *model) backendFor(bt fleet.BackendType) backend.Backend {
 	if bt == "" {
 		bt = fleet.BackendDevcontainer
 	}
+	if m.backends == nil {
+		m.backends = make(map[fleet.BackendType]backend.Backend)
+	}
 	if b, ok := m.backends[bt]; ok {
 		return b
 	}

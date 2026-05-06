@@ -332,6 +332,9 @@ func (b *CodespacesBackend) ResolveHostname(containerID string) (string, bool) {
 	return "", false
 }
 
+// Stateful reports that codespaces have lifecycle state (running/stopped).
+func (b *CodespacesBackend) Stateful() bool { return true }
+
 // ===========================================
 // Internal helpers
 // ===========================================
