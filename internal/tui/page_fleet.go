@@ -717,14 +717,14 @@ func (fp *fleetPage) handleEnter(m *model) tea.Cmd {
 			b := m.instanceBackend(inst)
 			cmd := b.ExecCommand(
 				inst.WorkspaceDir,
-				ShellCommandForSession(m.cfg, sessionName, cols, rows, true, b.SupportsDotfiles()),
+				ShellCommandForSession(m.cfg, sessionName, cols, rows, true, b.SupportsDotfiles(), b.SupportsAgentForwarding()),
 			)
 			return splitPaneCmd(fp.splitPaneID, r.fleetName, inst.Name, sessionName, groupID, cmd)
 		}
 		b := m.instanceBackend(inst)
 		cmd := b.ExecCommand(
 			inst.WorkspaceDir,
-			ShellCommandForSession(m.cfg, sessionName, m.width, m.height, false, b.SupportsDotfiles()),
+			ShellCommandForSession(m.cfg, sessionName, m.width, m.height, false, b.SupportsDotfiles(), b.SupportsAgentForwarding()),
 		)
 		banner := renderGradient(nameToBanner(inst.GetDisplayName()))
 		banner += "\n  " + dimStyle.Render("ctrl+q/ctrl+o to detach (session persists)")
@@ -770,7 +770,7 @@ func (fp *fleetPage) handleEnter(m *model) tea.Cmd {
 		m.lastActive[instKey] = lastSession{sessionName: sessionName}
 
 		b := m.instanceBackend(inst)
-		cmd := b.ExecCommand(inst.WorkspaceDir, ShellCommandForSession(m.cfg, sessionName, m.width, m.height, false, b.SupportsDotfiles()))
+		cmd := b.ExecCommand(inst.WorkspaceDir, ShellCommandForSession(m.cfg, sessionName, m.width, m.height, false, b.SupportsDotfiles(), b.SupportsAgentForwarding()))
 		banner := renderGradient(nameToBanner(inst.GetDisplayName()))
 		banner += "\n  " + dimStyle.Render("ctrl+q/ctrl+o to detach (session persists)")
 		return tea.ExecProcess(
@@ -1376,7 +1376,7 @@ func (fp *fleetPage) openInstanceSession(m *model, fleetName string, inst *fleet
 		b := m.instanceBackend(inst)
 		cmd := b.ExecCommand(
 			inst.WorkspaceDir,
-			ShellCommandForSession(m.cfg, last.sessionName, cols, rows, true, b.SupportsDotfiles()),
+			ShellCommandForSession(m.cfg, last.sessionName, cols, rows, true, b.SupportsDotfiles(), b.SupportsAgentForwarding()),
 		)
 		return splitPaneCmd(fp.splitPaneID, fleetName, inst.Name, last.sessionName, last.groupID, cmd)
 	}
@@ -1394,7 +1394,7 @@ func (fp *fleetPage) openInstanceSession(m *model, fleetName string, inst *fleet
 			b := m.instanceBackend(inst)
 			cmd := b.ExecCommand(
 				inst.WorkspaceDir,
-				ShellCommandForSession(m.cfg, rootName, cols, rows, true, b.SupportsDotfiles()),
+				ShellCommandForSession(m.cfg, rootName, cols, rows, true, b.SupportsDotfiles(), b.SupportsAgentForwarding()),
 			)
 			return splitPaneCmd(fp.splitPaneID, fleetName, inst.Name, rootName, g.GroupID, cmd)
 		}
@@ -1407,7 +1407,7 @@ func (fp *fleetPage) openInstanceSession(m *model, fleetName string, inst *fleet
 	b := m.instanceBackend(inst)
 	cmd := b.ExecCommand(
 		inst.WorkspaceDir,
-		ShellCommandForSession(m.cfg, sessName, cols, rows, true, b.SupportsDotfiles()),
+		ShellCommandForSession(m.cfg, sessName, cols, rows, true, b.SupportsDotfiles(), b.SupportsAgentForwarding()),
 	)
 	return splitPaneCmd(fp.splitPaneID, fleetName, inst.Name, sessName, newGroupID, cmd)
 }

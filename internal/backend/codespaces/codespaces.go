@@ -339,6 +339,10 @@ func (b *CodespacesBackend) Stateful() bool { return true }
 // each codespace is a distinct remote environment.
 func (b *CodespacesBackend) SupportsDotfiles() bool { return true }
 
+// SupportsAgentForwarding reports that the SSH agent socket should be
+// re-pinned inside codespaces — each ssh connection creates a new socket.
+func (b *CodespacesBackend) SupportsAgentForwarding() bool { return true }
+
 // ===========================================
 // Internal helpers
 // ===========================================

@@ -67,15 +67,15 @@ var tmuxEnsureInstalled = `command -v tmux >/dev/null 2>&1 || { echo '==> Instal
 // is used to correct the remote PTY size before tmux starts. This is
 // needed for backends like coder ssh that may report incorrect sizes
 // (e.g. 128x128).
-func shellCommand(cfg *state.Config, instanceName string, cols, rows int, nested, supportsDotfiles bool) []string {
-	return ShellCommandForSession(cfg, SanitizeSessionName(instanceName), cols, rows, nested, supportsDotfiles)
+func shellCommand(cfg *state.Config, instanceName string, cols, rows int, nested, supportsDotfiles, supportsAgentForwarding bool) []string {
+	return ShellCommandForSession(cfg, SanitizeSessionName(instanceName), cols, rows, nested, supportsDotfiles, supportsAgentForwarding)
 }
 
 // ShellCommandForSession returns the command to run inside a devcontainer
 // with a persistent tmux session using the given session name. This allows
 // connecting to a specific named session rather than the default one derived
 // from the instance name.
-func ShellCommandForSession(cfg *state.Config, session string, cols, rows int, nested, supportsDotfiles bool) []string {
+func ShellCommandForSession(cfg *state.Config, session string, cols, rows int, nested, supportsDotfiles, supportsAgentForwarding bool) []string {
 	setup := dotfilesSetup(cfg, supportsDotfiles)
 	// coder ssh may report incorrect terminal dimensions (e.g. 128x128).
 	// We fix the PTY size with stty before tmux starts and pass -x/-y for
@@ -118,8 +118,13 @@ func ShellCommandForSession(cfg *state.Config, session string, cols, rows int, n
 	// Each SSH connection creates a new agent socket, but tmux keeps the
 	// old SSH_AUTH_SOCK from the original session. We symlink the current
 	// socket to a fixed path and point SSH_AUTH_SOCK there so it survives
-	// reconnects.
-	sshAgentFix := `if [ -n "$SSH_AUTH_SOCK" ] && [ "$SSH_AUTH_SOCK" != "$HOME/.ssh/ssh_auth_sock" ]; then mkdir -p ~/.ssh && ln -sf "$SSH_AUTH_SOCK" ~/.ssh/ssh_auth_sock; if [ ! -S /run/ssh-agent.sock ]; then ln -sf "$SSH_AUTH_SOCK" /run/ssh-agent.sock; fi; export SSH_AUTH_SOCK="$HOME/.ssh/ssh_auth_sock"; fi; `
+	// reconnects. Skipped for backends that report SupportsAgentForwarding
+	// ()==false (e.g. local_dir) where the host's real agent is already
+	// directly accessible and writing /run/ssh-agent.sock would fail.
+	sshAgentFix := ""
+	if supportsAgentForwarding {
+		sshAgentFix = `if [ -n "$SSH_AUTH_SOCK" ] && [ "$SSH_AUTH_SOCK" != "$HOME/.ssh/ssh_auth_sock" ]; then mkdir -p ~/.ssh && ln -sf "$SSH_AUTH_SOCK" ~/.ssh/ssh_auth_sock; if [ ! -S /run/ssh-agent.sock ]; then ln -sf "$SSH_AUTH_SOCK" /run/ssh-agent.sock; fi; export SSH_AUTH_SOCK="$HOME/.ssh/ssh_auth_sock"; fi; `
+	}
 	hookClear := fmt.Sprintf(
 		`tmux has-session -t %s 2>/dev/null && tmux set-hook -gu client-attached 2>/dev/null; `,
 		shQuote(session),

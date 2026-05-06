@@ -54,7 +54,7 @@ func TestSanitizeSessionName(t *testing.T) {
 
 func TestShellCommandProducesTmux(t *testing.T) {
 	cfg := state.DefaultConfig()
-	got := shellCommand(cfg, "agent-1", 0, 0, false, true)
+	got := shellCommand(cfg, "agent-1", 0, 0, false, true, true)
 	if len(got) != 3 || got[0] != "sh" || got[1] != "-c" {
 		t.Fatalf("shellCommand() = %v, want [sh -c ...]", got)
 	}
@@ -75,7 +75,7 @@ func TestShellCommandProducesTmux(t *testing.T) {
 
 func TestShellCommandClipboard(t *testing.T) {
 	cfg := state.DefaultConfig()
-	got := shellCommand(cfg, "agent-1", 0, 0, false, true)
+	got := shellCommand(cfg, "agent-1", 0, 0, false, true, true)
 	script := got[2]
 	if !strings.Contains(script, "set -g set-clipboard on") {
 		t.Errorf("script missing set-clipboard on: %s", script)
@@ -87,7 +87,7 @@ func TestShellCommandClipboard(t *testing.T) {
 
 func TestShellCommandClipboardNested(t *testing.T) {
 	cfg := state.DefaultConfig()
-	got := shellCommand(cfg, "agent-1", 80, 24, true, true)
+	got := shellCommand(cfg, "agent-1", 80, 24, true, true, true)
 	script := got[2]
 	if !strings.Contains(script, "set -g set-clipboard on") {
 		t.Errorf("nested script missing set-clipboard on: %s", script)
@@ -99,7 +99,7 @@ func TestShellCommandClipboardNested(t *testing.T) {
 
 func TestShellCommandClipboardFeaturesIsLast(t *testing.T) {
 	cfg := state.DefaultConfig()
-	got := shellCommand(cfg, "agent-1", 80, 24, false, true)
+	got := shellCommand(cfg, "agent-1", 80, 24, false, true, true)
 	script := got[2]
 	featIdx := strings.LastIndex(script, "terminal-features")
 	mouseIdx := strings.Index(script, "set -g mouse on")
@@ -120,7 +120,7 @@ func TestShellCommandWithDotfilesAndTmux(t *testing.T) {
 	cfg.DotfilesSettings.RepoURL = "https://github.com/user/dots"
 	cfg.DotfilesSettings.InstallScript = "install.sh"
 
-	got := shellCommand(cfg, "worker-2", 0, 0, false, true)
+	got := shellCommand(cfg, "worker-2", 0, 0, false, true, true)
 	script := got[2]
 
 	// Dotfiles setup should come before tmux
@@ -145,7 +145,7 @@ func TestShellCommandWithDotfilesAndTmux(t *testing.T) {
 
 func TestShellCommandSanitizesSessionName(t *testing.T) {
 	cfg := state.DefaultConfig()
-	got := shellCommand(cfg, "my.instance:1", 0, 0, false, true)
+	got := shellCommand(cfg, "my.instance:1", 0, 0, false, true, true)
 	script := got[2]
 	if !strings.Contains(script, "tmux -u new-session -A -s 'my-instance-1'") {
 		t.Errorf("script should sanitize session name: %s", script)
@@ -217,7 +217,7 @@ func TestFreshShellCommandBothSet(t *testing.T) {
 
 func TestShellCommandNestedNoInnerPaneKeys(t *testing.T) {
 	cfg := state.DefaultConfig()
-	got := shellCommand(cfg, "agent-1", 80, 24, true, true)
+	got := shellCommand(cfg, "agent-1", 80, 24, true, true, true)
 	script := got[2]
 	// Pane navigation is handled by the outer tmux, so the inner
 	// tmux should not bind j/k even when vim keys are enabled.
@@ -242,7 +242,7 @@ func TestShellCommandNestedVimKeysDisabled(t *testing.T) {
 	off := false
 	cfg.GeneralSettings.TmuxVimKeys = &off
 
-	got := shellCommand(cfg, "agent-1", 80, 24, true, true)
+	got := shellCommand(cfg, "agent-1", 80, 24, true, true, true)
 	script := got[2]
 	if strings.Contains(script, "bind-key j select-pane") {
 		t.Errorf("nested script should not have j keybinding when vim keys disabled: %s", script)
@@ -265,7 +265,7 @@ func TestShellCommandAutoInstallSkipsDotfiles(t *testing.T) {
 	cfg.DotfilesSettings.InstallScript = "install.sh"
 	cfg.DotfilesSettings.AutoInstall = true
 
-	got := shellCommand(cfg, "agent-1", 80, 24, false, true)
+	got := shellCommand(cfg, "agent-1", 80, 24, false, true, true)
 	script := got[2]
 	if strings.Contains(script, "dotfiles") {
 		t.Errorf("script should not contain dotfiles setup when auto-install is on: %s", script)
@@ -308,13 +308,37 @@ func TestShellCommandSkipsDotfilesWhenBackendUnsupported(t *testing.T) {
 	cfg.DotfilesSettings.InstallScript = "install.sh"
 	// AutoInstall=false so dotfiles WOULD normally be injected at attach time.
 
-	got := shellCommand(cfg, "agent-1", 0, 0, false, false)
+	got := shellCommand(cfg, "agent-1", 0, 0, false, false, true)
 	script := got[2]
 	if strings.Contains(script, "dotfiles") {
 		t.Errorf("script should not reference dotfiles when supportsDotfiles=false: %s", script)
 	}
 	if !strings.Contains(script, "exec tmux") {
 		t.Errorf("script should still contain tmux: %s", script)
+	}
+}
+
+func TestShellCommandIncludesAgentForwardingFixWhenSupported(t *testing.T) {
+	cfg := state.DefaultConfig()
+	got := shellCommand(cfg, "agent-1", 0, 0, false, true, true)
+	script := got[2]
+	if !strings.Contains(script, "/run/ssh-agent.sock") {
+		t.Errorf("script should contain SSH agent socket relink when supportsAgentForwarding=true: %s", script)
+	}
+}
+
+func TestShellCommandSkipsAgentForwardingFixWhenUnsupported(t *testing.T) {
+	cfg := state.DefaultConfig()
+	got := shellCommand(cfg, "agent-1", 0, 0, false, true, false)
+	script := got[2]
+	if strings.Contains(script, "/run/ssh-agent.sock") {
+		t.Errorf("script should NOT touch /run/ssh-agent.sock when supportsAgentForwarding=false: %s", script)
+	}
+	if strings.Contains(script, "ssh_auth_sock") {
+		t.Errorf("script should NOT relink SSH_AUTH_SOCK when supportsAgentForwarding=false: %s", script)
+	}
+	if !strings.Contains(script, "exec tmux") {
+		t.Errorf("script should still launch tmux: %s", script)
 	}
 }
 

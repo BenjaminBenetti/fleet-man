@@ -88,6 +88,12 @@ func (b *LocalDirBackend) Stateful() bool { return false }
 // would interfere with the host environment.
 func (b *LocalDirBackend) SupportsDotfiles() bool { return false }
 
+// SupportsAgentForwarding reports false: the host's SSH_AUTH_SOCK is
+// already directly accessible. Re-pinning the socket would try to
+// touch system paths like /run/ssh-agent.sock, which fails without
+// privileges and serves no purpose locally.
+func (b *LocalDirBackend) SupportsAgentForwarding() bool { return false }
+
 // ===========================================
 // Execution
 // ===========================================

@@ -314,6 +314,10 @@ func (b *CoderBackend) Stateful() bool { return true }
 // dotfiles — each remote workspace is a distinct environment.
 func (b *CoderBackend) SupportsDotfiles() bool { return true }
 
+// SupportsAgentForwarding reports that the SSH agent socket should be
+// re-pinned inside Coder workspaces — each ssh connection creates a new socket.
+func (b *CoderBackend) SupportsAgentForwarding() bool { return true }
+
 // EditorURI returns a VS Code URI for connecting to a Coder workspace.
 func (b *CoderBackend) EditorURI(workspaceDir string, projectName string) (string, bool) {
 	name := coderWorkspaceName(workspaceDir)

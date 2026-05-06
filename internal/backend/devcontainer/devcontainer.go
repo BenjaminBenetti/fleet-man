@@ -263,6 +263,10 @@ func (b *DevcontainerBackend) Stateful() bool { return true }
 // dotfiles, since each container is an isolated environment.
 func (b *DevcontainerBackend) SupportsDotfiles() bool { return true }
 
+// SupportsAgentForwarding reports that the SSH agent socket should be
+// re-pinned inside the container — each docker exec creates a new socket.
+func (b *DevcontainerBackend) SupportsAgentForwarding() bool { return true }
+
 // ResolveHostname returns the container's IP address obtained via
 // `docker inspect`. For local Docker containers this is directly reachable.
 func (b *DevcontainerBackend) ResolveHostname(containerID string) (string, bool) {

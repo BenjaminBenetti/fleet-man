@@ -74,4 +74,13 @@ type Backend interface {
 	// the host filesystem (where the user's real dotfiles already live and
 	// cloning into ~/dotfiles would interfere with the host environment).
 	SupportsDotfiles() bool
+
+	// SupportsAgentForwarding reports whether the SSH-agent socket needs
+	// to be re-pinned inside the workspace for stability across reattach.
+	// True for backends that cross an SSH/exec boundary (devcontainer,
+	// coder, codespaces) where each connection mints a fresh socket path.
+	// False for host-side backends (local_dir) where the user's real SSH
+	// agent is already directly accessible — attempting the relink would
+	// fail on system paths like /run/ssh-agent.sock.
+	SupportsAgentForwarding() bool
 }
