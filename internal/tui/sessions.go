@@ -136,7 +136,7 @@ func sessionDiscoveryCmd(
 					mu.Unlock()
 					return
 				}
-				sessions := parseTmuxSessions(string(out))
+				sessions := parseTmuxSessions(string(out), sanitizedFromInstanceKey(instKey))
 				mu.Lock()
 				discovered[instKey] = sessions
 				mu.Unlock()
@@ -167,7 +167,7 @@ func ensureSessionsLoaded(m *model, b backend.Backend, workspaceDir, instanceKey
 		return
 	}
 	m.sessions[instanceKey] = &sessionDiscovery{
-		sessions:  parseTmuxSessions(string(out)),
+		sessions:  parseTmuxSessions(string(out), sanitizedFromInstanceKey(instanceKey)),
 		fetchedAt: time.Now(),
 	}
 }
@@ -184,7 +184,7 @@ func listSessionsCmd(b backend.Backend, workspaceDir, instanceKey string) tea.Cm
 		if err != nil {
 			return sessionsMsg{instanceKey: instanceKey, err: err}
 		}
-		sessions := parseTmuxSessions(string(out))
+		sessions := parseTmuxSessions(string(out), sanitizedFromInstanceKey(instanceKey))
 		return sessionsMsg{instanceKey: instanceKey, sessions: sessions}
 	}
 }
@@ -341,9 +341,18 @@ func sessionStillExists(last lastSession, sessions []tmuxSession) bool {
 
 // parseTmuxSessions parses the output of `tmux list-sessions -F
 // "#{session_name}:#{session_windows}:#{session_attached}"` into
-// a slice of tmuxSession.
-func parseTmuxSessions(output string) []tmuxSession {
+// a slice of tmuxSession scoped to a single instance.
+//
+// Only sessions whose name equals sanitizedInstance (legacy non-grouped
+// shell session) or starts with sanitizedInstance + groupSep are
+// returned. Containerized backends naturally only have fleet-managed
+// sessions on their per-container tmux server, so this filter is a
+// no-op for them. For local_dir the host tmux server is shared, and
+// the prefix filter is what keeps unrelated host sessions (the fleet
+// TUI's own outer tmux, the user's other work) out of the instance view.
+func parseTmuxSessions(output string, sanitizedInstance string) []tmuxSession {
 	var sessions []tmuxSession
+	prefix := sanitizedInstance + groupSep
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -353,7 +362,11 @@ func parseTmuxSessions(output string) []tmuxSession {
 		if len(parts) < 1 || parts[0] == "" {
 			continue
 		}
-		s := tmuxSession{Name: parts[0]}
+		name := parts[0]
+		if name != sanitizedInstance && !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		s := tmuxSession{Name: name}
 		if len(parts) >= 2 {
 			s.Windows, _ = strconv.Atoi(parts[1])
 		}
@@ -363,6 +376,15 @@ func parseTmuxSessions(output string) []tmuxSession {
 		sessions = append(sessions, s)
 	}
 	return sessions
+}
+
+// sanitizedFromInstanceKey returns the sanitized instance name from an
+// "<fleet>/<instance>" key, suitable for matching tmux session prefixes.
+func sanitizedFromInstanceKey(instanceKey string) string {
+	if i := strings.LastIndex(instanceKey, "/"); i >= 0 {
+		return SanitizeSessionName(instanceKey[i+1:])
+	}
+	return SanitizeSessionName(instanceKey)
 }
 
 // nextSessionName generates an auto-incrementing session name like
