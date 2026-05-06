@@ -83,6 +83,11 @@ func (b *LocalDirBackend) Start(containerID string) error { return nil }
 // Stateful reports false: local directories have no lifecycle state.
 func (b *LocalDirBackend) Stateful() bool { return false }
 
+// SupportsDotfiles reports false: the workspace is the host filesystem,
+// where the user's real dotfiles already live. Cloning into ~/dotfiles
+// would interfere with the host environment.
+func (b *LocalDirBackend) SupportsDotfiles() bool { return false }
+
 // ===========================================
 // Execution
 // ===========================================

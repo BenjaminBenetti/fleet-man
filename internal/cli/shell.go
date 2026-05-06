@@ -85,8 +85,8 @@ existing group, or --session to reconnect to a specific named session.`,
 
 			cols, rows := termSize()
 
-			shellCmd := tui.ShellCommandForSession(cfg, sessionName, cols, rows, nested)
 			dc := backendutil.NewForInstance(inst, false)
+			shellCmd := tui.ShellCommandForSession(cfg, sessionName, cols, rows, nested, dc.SupportsDotfiles())
 			execCmd := dc.ExecCommand(inst.WorkspaceDir, shellCmd)
 			execCmd.Stdin = os.Stdin
 			execCmd.Stdout = os.Stdout

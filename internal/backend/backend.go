@@ -68,4 +68,10 @@ type Backend interface {
 	// describe instances that are always "running" — callers must not
 	// invoke Stop/Start and must not transition instance status.
 	Stateful() bool
+
+	// SupportsDotfiles reports whether dotfiles installation should be
+	// attempted for this backend's instances. False when the workspace is
+	// the host filesystem (where the user's real dotfiles already live and
+	// cloning into ~/dotfiles would interfere with the host environment).
+	SupportsDotfiles() bool
 }

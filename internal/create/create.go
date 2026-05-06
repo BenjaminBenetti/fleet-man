@@ -76,9 +76,11 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, bt fle
 
 	// Auto-install dotfiles. A failure here is non-fatal — the instance
 	// is still usable, so we mark it running and surface the error as a
-	// warning rather than blocking the whole creation.
+	// warning rather than blocking the whole creation. Backends whose
+	// workspace is the host filesystem (e.g. local_dir) opt out via
+	// SupportsDotfiles() so we don't trample the user's real dotfiles.
 	cfg, _ := state.LoadConfig()
-	if cfg != nil && cfg.DotfilesSettings.AutoInstall {
+	if cfg != nil && cfg.DotfilesSettings.AutoInstall && dc.SupportsDotfiles() {
 		if script := dotfiles.SetupScript(cfg); script != "" {
 			cmd := dc.ExecCommand(wsDir, []string{"sh", "-c", script})
 			out, err := cmd.CombinedOutput()

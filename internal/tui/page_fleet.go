@@ -533,7 +533,8 @@ func (fp *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "Select an instance"
 				break
 			}
-			cmd := m.instanceBackend(inst).ExecCommand(inst.WorkspaceDir, freshShellCommand(m.cfg))
+			b := m.instanceBackend(inst)
+			cmd := b.ExecCommand(inst.WorkspaceDir, freshShellCommand(m.cfg, b.SupportsDotfiles()))
 			err := openInTerminal(cmd.Args)
 			if err != nil {
 				m.message = fmt.Sprintf("Could not open terminal: %v", err)
@@ -713,15 +714,17 @@ func (fp *fleetPage) handleEnter(m *model) tea.Cmd {
 			}
 			cols, rows := tmuxWindowSize()
 			cols = cols * 70 / 100
-			cmd := m.instanceBackend(inst).ExecCommand(
+			b := m.instanceBackend(inst)
+			cmd := b.ExecCommand(
 				inst.WorkspaceDir,
-				ShellCommandForSession(m.cfg, sessionName, cols, rows, true),
+				ShellCommandForSession(m.cfg, sessionName, cols, rows, true, b.SupportsDotfiles()),
 			)
 			return splitPaneCmd(fp.splitPaneID, r.fleetName, inst.Name, sessionName, groupID, cmd)
 		}
-		cmd := m.instanceBackend(inst).ExecCommand(
+		b := m.instanceBackend(inst)
+		cmd := b.ExecCommand(
 			inst.WorkspaceDir,
-			ShellCommandForSession(m.cfg, sessionName, m.width, m.height, false),
+			ShellCommandForSession(m.cfg, sessionName, m.width, m.height, false, b.SupportsDotfiles()),
 		)
 		banner := renderGradient(nameToBanner(inst.GetDisplayName()))
 		banner += "\n  " + dimStyle.Render("ctrl+q/ctrl+o to detach (session persists)")
@@ -766,7 +769,8 @@ func (fp *fleetPage) handleEnter(m *model) tea.Cmd {
 		}
 		m.lastActive[instKey] = lastSession{sessionName: sessionName}
 
-		cmd := m.instanceBackend(inst).ExecCommand(inst.WorkspaceDir, ShellCommandForSession(m.cfg, sessionName, m.width, m.height, false))
+		b := m.instanceBackend(inst)
+		cmd := b.ExecCommand(inst.WorkspaceDir, ShellCommandForSession(m.cfg, sessionName, m.width, m.height, false, b.SupportsDotfiles()))
 		banner := renderGradient(nameToBanner(inst.GetDisplayName()))
 		banner += "\n  " + dimStyle.Render("ctrl+q/ctrl+o to detach (session persists)")
 		return tea.ExecProcess(
@@ -1369,9 +1373,10 @@ func (fp *fleetPage) openInstanceSession(m *model, fleetName string, inst *fleet
 		}
 		cols, rows := tmuxWindowSize()
 		cols = cols * 70 / 100
-		cmd := m.instanceBackend(inst).ExecCommand(
+		b := m.instanceBackend(inst)
+		cmd := b.ExecCommand(
 			inst.WorkspaceDir,
-			ShellCommandForSession(m.cfg, last.sessionName, cols, rows, true),
+			ShellCommandForSession(m.cfg, last.sessionName, cols, rows, true, b.SupportsDotfiles()),
 		)
 		return splitPaneCmd(fp.splitPaneID, fleetName, inst.Name, last.sessionName, last.groupID, cmd)
 	}
@@ -1386,9 +1391,10 @@ func (fp *fleetPage) openInstanceSession(m *model, fleetName string, inst *fleet
 			}
 			cols, rows := tmuxWindowSize()
 			cols = cols * 70 / 100
-			cmd := m.instanceBackend(inst).ExecCommand(
+			b := m.instanceBackend(inst)
+			cmd := b.ExecCommand(
 				inst.WorkspaceDir,
-				ShellCommandForSession(m.cfg, rootName, cols, rows, true),
+				ShellCommandForSession(m.cfg, rootName, cols, rows, true, b.SupportsDotfiles()),
 			)
 			return splitPaneCmd(fp.splitPaneID, fleetName, inst.Name, rootName, g.GroupID, cmd)
 		}
@@ -1398,9 +1404,10 @@ func (fp *fleetPage) openInstanceSession(m *model, fleetName string, inst *fleet
 	sessName := groupSessionName(sanitized, newGroupID)
 	cols, rows := tmuxWindowSize()
 	cols = cols * 70 / 100
-	cmd := m.instanceBackend(inst).ExecCommand(
+	b := m.instanceBackend(inst)
+	cmd := b.ExecCommand(
 		inst.WorkspaceDir,
-		ShellCommandForSession(m.cfg, sessName, cols, rows, true),
+		ShellCommandForSession(m.cfg, sessName, cols, rows, true, b.SupportsDotfiles()),
 	)
 	return splitPaneCmd(fp.splitPaneID, fleetName, inst.Name, sessName, newGroupID, cmd)
 }

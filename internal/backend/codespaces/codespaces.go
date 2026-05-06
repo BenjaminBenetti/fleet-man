@@ -335,6 +335,10 @@ func (b *CodespacesBackend) ResolveHostname(containerID string) (string, bool) {
 // Stateful reports that codespaces have lifecycle state (running/stopped).
 func (b *CodespacesBackend) Stateful() bool { return true }
 
+// SupportsDotfiles reports that codespaces should receive dotfiles —
+// each codespace is a distinct remote environment.
+func (b *CodespacesBackend) SupportsDotfiles() bool { return true }
+
 // ===========================================
 // Internal helpers
 // ===========================================
