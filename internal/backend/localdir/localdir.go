@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 )
@@ -105,6 +106,7 @@ func (b *LocalDirBackend) Exec(workspaceDir string, command []string) error {
 	}
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = workspaceDir
+	cmd.Env = sanitizedEnv()
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -123,7 +125,27 @@ func (b *LocalDirBackend) ExecCommand(workspaceDir string, command []string) *ex
 		cmd = exec.Command(command[0], command[1:]...)
 	}
 	cmd.Dir = workspaceDir
+	cmd.Env = sanitizedEnv()
 	return cmd
+}
+
+// sanitizedEnv returns os.Environ() minus variables that would leak
+// the parent process's tmux context into the child. The other backends
+// avoid this naturally because docker exec / ssh spawn a fresh process
+// tree; local_dir inherits parent env directly, which makes tmux refuse
+// to start a new session ("sessions should be nested with care") when
+// the parent is itself running inside tmux (e.g. the fleet TUI's split
+// pane mode).
+func sanitizedEnv() []string {
+	env := os.Environ()
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		if strings.HasPrefix(e, "TMUX=") || strings.HasPrefix(e, "TMUX_PANE=") {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // ===========================================
