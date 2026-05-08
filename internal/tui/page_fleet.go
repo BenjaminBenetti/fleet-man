@@ -19,28 +19,6 @@ import (
 )
 
 // ===========================================
-// View Mode
-// ===========================================
-
-type viewMode int
-
-const (
-	viewNormal viewMode = iota
-	viewConfirmDelete
-	viewConfirmDeleteFleetWarn
-	viewAddInstance
-	viewAddFleet
-	viewTagInstance
-	viewPortForward
-	viewCodespacesAuth
-	viewCodespacesLimit
-	viewCodespacesMachine
-	viewCreateSession
-	viewRenameSession
-	viewConfirmDeleteSession
-)
-
-// ===========================================
 // Fleet Page
 // ===========================================
 
@@ -977,15 +955,51 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				}
 			}
 
-			paddedName := fmt.Sprintf("%s%-22s", arrow, instance.GetDisplayName())
+			// Single switch derives BOTH the left-of-name throbber
+			// and the right-of-status agentStr. Throbber animates
+			// only in the working ("play") state; every other case
+			// (waiting, not running, instance not running) leaves
+			// the throbber at the default grey ○. agentStr is
+			// consumed below in the non-transitional render branch.
+			throbber := agentOffStyle.Render("○")
+			agentStr := ""
+			if instance.Status == fleet.StatusRunning && m.activity != nil {
+				tool := m.activity.Tool(instance.ContainerID)
+				label := agentToolLabel(tool)
+				switch m.activity.State(instance.ContainerID) {
+				case agentWorking:
+					agentStr = agentWorkingStyle.Render(fmt.Sprintf("  ▶ %s", label))
+					if len(m.agentSpinner.Spinner.Frames) > 0 {
+						throbber = strings.TrimRight(m.agentSpinner.View(), "\n")
+					} else {
+						throbber = agentWorkingStyle.Render("✻")
+					}
+				case agentWaiting:
+					agentStr = agentWaitingStyle.Render(fmt.Sprintf("  ⏸ %s", label))
+				default:
+					agentStr = agentOffStyle.Render("  ○ idle")
+				}
+			}
+
+			nameRaw := fmt.Sprintf("%-22s", instance.GetDisplayName())
+			var arrowStyled, nameStyled string
 			switch {
 			case isSelected && instanceColorHasCustom(instance.Color):
-				paddedName = instanceColorStyle(instance.Color).Bold(true).Render(paddedName)
+				colorStyle := instanceColorStyle(instance.Color).Bold(true)
+				arrowStyled = colorStyle.Render(arrow)
+				nameStyled = colorStyle.Render(nameRaw)
 			case isSelected:
-				paddedName = selectedStyle.Render(paddedName)
+				arrowStyled = selectedStyle.Render(arrow)
+				nameStyled = selectedStyle.Render(nameRaw)
 			case instanceColorHasCustom(instance.Color):
-				paddedName = instanceColorStyle(instance.Color).Render(paddedName)
+				colorStyle := instanceColorStyle(instance.Color)
+				arrowStyled = colorStyle.Render(arrow)
+				nameStyled = colorStyle.Render(nameRaw)
+			default:
+				arrowStyled = arrow
+				nameStyled = nameRaw
 			}
+			paddedName := arrowStyled + throbber + " " + nameStyled
 
 			backendIcon := "⬡"
 			switch instance.Backend {
@@ -1007,20 +1021,6 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 					cursor, paddedName, status, branchItem,
 				)
 			} else {
-				agentStr := ""
-				if instance.Status == fleet.StatusRunning && m.activity != nil {
-					tool := m.activity.Tool(instance.ContainerID)
-					label := agentToolLabel(tool)
-					switch m.activity.State(instance.ContainerID) {
-					case agentWorking:
-						agentStr = agentWorkingStyle.Render(fmt.Sprintf("  \u25b6 %s", label))
-					case agentWaiting:
-						agentStr = agentWaitingStyle.Render(fmt.Sprintf("  \u23f8 %s", label))
-					default:
-						agentStr = agentOffStyle.Render("  \u25cb idle")
-					}
-				}
-
 				statsStr := ""
 				if s, ok := m.stats[instance.ContainerID]; ok {
 					statsStr = dimStyle.Render(fmt.Sprintf("  %4.0f mcpu  %6.1f MB", s.CPUMillicores, s.MemoryMB))

@@ -35,8 +35,9 @@ type model struct {
 	currentPage Page
 	fleetPage   *fleetPage // persistent — has running state accessed by background message handlers
 
-	spinner  spinner.Model
-	creating map[string]bool // "fleet/instance" keys currently being created
+	spinner      spinner.Model
+	agentSpinner spinner.Model // pulse throbber rendered next to running agents' instance names
+	creating     map[string]bool // "fleet/instance" keys currently being created
 
 	backends map[fleet.BackendType]backend.Backend // one per backend type, lazily created
 	stats    map[string]*backend.ContainerStats    // containerID → stats
@@ -90,6 +91,13 @@ func newModel() model {
 	spinnerModel.Spinner = spinner.Dot
 	spinnerModel.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("170"))
 
+	agentSpinnerModel := spinner.New()
+	agentSpinnerModel.Spinner = spinner.Spinner{
+		Frames: []string{"·", "✦", "✻", "✶", "✻", "✦"},
+		FPS:    time.Second / 4,
+	}
+	agentSpinnerModel.Style = agentWorkingStyle
+
 	m := model{
 		creating:          make(map[string]bool),
 		backends:          make(map[fleet.BackendType]backend.Backend),
@@ -100,6 +108,7 @@ func newModel() model {
 		sessions:          make(map[string]*sessionDiscovery),
 		lastActive:        make(map[string]lastSession),
 		spinner:           spinnerModel,
+		agentSpinner:      agentSpinnerModel,
 		inHostTmux:        os.Getenv("TMUX") != "",
 	}
 
@@ -319,13 +328,6 @@ func (m *model) instanceBackend(instance *fleet.Instance) backend.Backend {
 	return backendImpl
 }
 
-// backendGroup holds container IDs grouped by backend type. Sessions
-// no longer need to be tracked here — CaptureAllSessions discovers
-// every tmux session inside each container at capture time.
-type backendGroup struct {
-	ids []string
-}
-
 // containersByBackend groups running instances by their backend type.
 func (m *model) containersByBackend() map[fleet.BackendType]*backendGroup {
 	groups := make(map[fleet.BackendType]*backendGroup)
@@ -463,6 +465,7 @@ func (m model) fetchAllStatsCmd(delay bool) tea.Cmd {
 func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.spinner.Tick,
+		m.agentSpinner.Tick,
 		m.fetchAllStatsCmd(false),
 		m.sessionDiscoveryLoop(),
 		layoutTickCmd(),
@@ -546,9 +549,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = windowSize.Height
 	}
 
-	// 2. Always update spinner
-	var spinCmd tea.Cmd
-	m.spinner, spinCmd = m.spinner.Update(msg)
+	// 2. Always update spinners
+	var statusSpinCmd tea.Cmd
+	m.spinner, statusSpinCmd = m.spinner.Update(msg)
+	var agentSpinCmd tea.Cmd
+	m.agentSpinner, agentSpinCmd = m.agentSpinner.Update(msg)
+	spinCmd := tea.Batch(statusSpinCmd, agentSpinCmd)
 
 	// 3. Shared-only messages — return early
 	switch msg := msg.(type) {
