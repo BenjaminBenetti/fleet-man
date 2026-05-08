@@ -13,6 +13,12 @@ jobs:
   integration-wsl:
     runs-on: windows-latest
     timeout-minutes: 40
+    # WSLENV tells wsl.exe which Windows env vars to surface inside WSL.
+    # The /p flag rewrites the path from D:\...  to /mnt/d/..., so
+    # run.sh can write the markdown step summary to the real file the
+    # runner publishes on the job summary page.
+    env:
+      WSLENV: GITHUB_STEP_SUMMARY/p
     steps:
       # actions/checkout on Windows would otherwise rewrite shell scripts
       # to CRLF and break every bash shebang once they cross into WSL.
