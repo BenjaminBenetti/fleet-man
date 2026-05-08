@@ -112,6 +112,12 @@ jobs:
         shell: wsl-bash {0}
         env:
           FLEET_BIN: /usr/local/bin/fleet
+          # WSL+nested-virt is materially slower than a bare-metal Linux
+          # runner: the same TUI redraws and `docker exec` calls that take
+          # ~100ms on Linux take seconds here. Multiply every tui_wait_for
+          # budget by 3 so legitimately-passing tests aren't killed by the
+          # default polling deadlines. Linux job is unaffected.
+          FLEET_TUI_WAIT_SCALE: "3"
         run: |
           set -euo pipefail
           export PATH=/usr/local/go/bin:$PATH

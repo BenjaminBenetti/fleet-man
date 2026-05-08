@@ -241,6 +241,17 @@ fleet_up() {
 # would: launch `fleet` inside a detached tmux session of fixed size,
 # then send keys + capture the rendered screen.
 
+# _scale_timeout <seconds>
+# Multiply a wait-budget by FLEET_TUI_WAIT_SCALE (default 1, integer).
+# Slow runners (e.g. WSL on a Windows host) export a higher value so the
+# polling helpers below give the TUI/dockerd enough headroom without us
+# editing every test.
+_scale_timeout() {
+  local raw="$1"
+  local scale="${FLEET_TUI_WAIT_SCALE:-1}"
+  printf '%s' "$(( raw * scale ))"
+}
+
 # tui_spawn [session] [args...]
 # Start the TUI inside a detached tmux session. Any extra arguments are
 # passed through to the fleet binary. The TMUX env var is implicitly set
@@ -297,7 +308,8 @@ tui_pane_count() {
 # Wait until the tmux window has `expected_count` panes (e.g. 2 after a
 # split opens, 1 after it's closed).
 tui_wait_for_pane() {
-  local expected="$1"; local timeout="${2:-10}"
+  local expected="$1"; local timeout
+  timeout=$(_scale_timeout "${2:-10}")
   local session="${3:-${TUI_SESSION}}"
   local deadline=$(( $(date +%s) + timeout ))
   while [ "$(date +%s)" -lt "${deadline}" ]; do
@@ -312,7 +324,8 @@ tui_wait_for_pane() {
 # tui_wait_for_in_pane <pane_index> <needle> [timeout_s] [session]
 # Poll a specific pane's capture for a substring.
 tui_wait_for_in_pane() {
-  local pane="$1"; local needle="$2"; local timeout="${3:-10}"
+  local pane="$1"; local needle="$2"; local timeout
+  timeout=$(_scale_timeout "${3:-10}")
   local session="${4:-${TUI_SESSION}}"
   local deadline=$(( $(date +%s) + timeout ))
   local screen=""
@@ -351,7 +364,8 @@ tui_send() {
 # timeout. On timeout also dumps the final screen to stderr.
 tui_wait_for() {
   local needle="$1"
-  local timeout="${2:-10}"
+  local timeout
+  timeout=$(_scale_timeout "${2:-10}")
   local session="${3:-${TUI_SESSION}}"
   local deadline=$(( $(date +%s) + timeout ))
   local screen=""
@@ -372,7 +386,8 @@ tui_wait_for() {
 # Inverse of tui_wait_for — poll until the needle disappears from screen.
 tui_wait_for_absent() {
   local needle="$1"
-  local timeout="${2:-10}"
+  local timeout
+  timeout=$(_scale_timeout "${2:-10}")
   local session="${3:-${TUI_SESSION}}"
   local deadline=$(( $(date +%s) + timeout ))
   local screen=""
