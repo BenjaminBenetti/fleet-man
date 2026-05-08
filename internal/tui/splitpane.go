@@ -46,8 +46,8 @@ func tmuxWindowSize() (int, int) {
 // quoteArgs builds a shell-safe command string from exec args.
 func quoteArgs(args []string) string {
 	quoted := make([]string, len(args))
-	for i, a := range args {
-		quoted[i] = "'" + strings.ReplaceAll(a, "'", "'\\''") + "'"
+	for i, arg := range args {
+		quoted[i] = "'" + strings.ReplaceAll(arg, "'", "'\\''") + "'"
 	}
 	return strings.Join(quoted, " ")
 }
@@ -81,7 +81,10 @@ func splitPaneCmd(existingPaneID string, fleetName string, instanceName string, 
 		}
 
 		// Kill any stale sibling panes before creating a fresh split.
-		_ = exec.Command("tmux", "kill-pane", "-a").Run()
+		// Must select the TUI pane first — `kill-pane -a` kills every
+		// pane except the focused one, and rapid switches can leave a
+		// child shell pane focused, which would kill the TUI itself.
+		killAllSplitPanes()
 
 		// Create a horizontal split (side by side). -P -F prints the new
 		// pane ID so we can track it. -l 70% gives the shell pane 70% width.
@@ -164,6 +167,27 @@ func unbindDefaultSplitKeys() {
 	msg := "Select an instance in fleet first"
 	_ = exec.Command("tmux", "bind-key", "%", "display-message", msg).Run()
 	_ = exec.Command("tmux", "bind-key", `"`, "display-message", msg).Run()
+}
+
+// splitWindowWithRetry runs `tmux split-window` with the given args,
+// retrying up to 3 times with a 250ms pause between attempts. tmux
+// occasionally fails a split mid-layout under rapid pane churn — a
+// short backoff lets the server settle. Returns the trimmed stdout
+// (the new pane's ID, captured via -P -F) on success, or the last
+// error after all attempts fail.
+func splitWindowWithRetry(args []string) (string, error) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(250 * time.Millisecond)
+		}
+		out, err := exec.Command("tmux", args...).Output()
+		if err == nil {
+			return strings.TrimSpace(string(out)), nil
+		}
+		lastErr = err
+	}
+	return "", lastErr
 }
 
 // killAllSplitPanes kills all panes except the TUI pane (index 0).
@@ -321,7 +345,7 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 		return
 	}
 
-	sg := savedGroup{
+	groupSnapshot := savedGroup{
 		GroupID:      fleetPage.activeGroupID,
 		InstanceName: fleetPage.splitInstance,
 		Sessions:     sessionNames,
@@ -332,10 +356,10 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 	// No-op when nothing changed. The 250ms layout tick fires this
 	// constantly; without this gate an idle split would rewrite
 	// state.json every tick with identical bytes.
-	if existing, ok := fleetPage.savedGroups[fleetPage.activeGroupID]; ok && sameSavedGroup(existing, sg) {
+	if existing, ok := fleetPage.savedGroups[fleetPage.activeGroupID]; ok && sameSavedGroup(existing, groupSnapshot) {
 		return
 	}
-	fleetPage.savedGroups[fleetPage.activeGroupID] = sg
+	fleetPage.savedGroups[fleetPage.activeGroupID] = groupSnapshot
 
 	if st == nil {
 		return
@@ -344,11 +368,11 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 		st.GroupLayouts = make(map[string]state.GroupLayout)
 	}
 	st.GroupLayouts[fleetPage.activeGroupID] = state.GroupLayout{
-		GroupID:      sg.GroupID,
-		InstanceName: sg.InstanceName,
-		Sessions:     sg.Sessions,
-		Layout:       sg.Layout,
-		PaneCount:    sg.PaneCount,
+		GroupID:      groupSnapshot.GroupID,
+		InstanceName: groupSnapshot.InstanceName,
+		Sessions:     groupSnapshot.Sessions,
+		Layout:       groupSnapshot.Layout,
+		PaneCount:    groupSnapshot.PaneCount,
 	}
 	_ = state.Save(st)
 }
@@ -367,15 +391,15 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 
 	// Grab saved layout if available.
 	savedLayout := ""
-	if sg, ok := fleetPage.savedGroups[groupID]; ok {
-		savedLayout = sg.Layout
+	if groupSnapshot, ok := fleetPage.savedGroups[groupID]; ok {
+		savedLayout = groupSnapshot.Layout
 	}
 
 	// Prefer saved session order (from pane titles) to preserve
 	// the exact pane-to-session mapping.
 	var savedOrder []string
-	if sg, ok := fleetPage.savedGroups[groupID]; ok && len(sg.Sessions) > 0 {
-		savedOrder = sg.Sessions
+	if groupSnapshot, ok := fleetPage.savedGroups[groupID]; ok && len(groupSnapshot.Sessions) > 0 {
+		savedOrder = groupSnapshot.Sessions
 	}
 
 	return func() tea.Msg {
@@ -422,14 +446,23 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 			return splitPaneMsg{err: fmt.Errorf("no sessions found for group %s", groupID)}
 		}
 
-		// Kill any existing split panes.
-		_ = exec.Command("tmux", "kill-pane", "-a").Run()
+		// Kill any existing split panes. Must select the TUI pane first —
+		// `kill-pane -a` kills every pane except the focused one, and a
+		// previous switch may have left a child shell pane focused.
+		killAllSplitPanes()
 
 		// Phase 1: Create placeholder panes with `sleep` so we can
 		// establish the layout geometry without worrying about which
-		// session goes where.
+		// session goes where. Each split is retried (see
+		// splitWindowWithRetry) because tmux can transiently refuse
+		// splits during rapid pane churn. If a pane still can't be
+		// created after retries, we record the error, skip that slot,
+		// and surface the failure via splitPaneMsg.err so the user
+		// sees it in the status line — Phases 2 and 3 still run on
+		// whatever panes did succeed.
 		var firstPaneID string
 		var lastPaneID string
+		var splitErr error
 		for i := range sessions {
 			var tmuxArgs []string
 			if i == 0 {
@@ -447,11 +480,11 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 					"--", "sleep", "infinity",
 				}
 			}
-			paneOut, err := exec.Command("tmux", tmuxArgs...).Output()
+			paneID, err := splitWindowWithRetry(tmuxArgs)
 			if err != nil {
+				splitErr = err
 				continue
 			}
-			paneID := strings.TrimSpace(string(paneOut))
 			lastPaneID = paneID
 			if i == 0 {
 				firstPaneID = paneID
@@ -494,13 +527,17 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 		if len(sessions) > 0 {
 			firstSession = sessions[0]
 		}
-		return splitPaneMsg{
+		msg := splitPaneMsg{
 			paneID:   firstPaneID,
 			fleet:    fleetName,
 			instance: instanceName,
 			session:  firstSession,
 			groupID:  groupID,
 		}
+		if splitErr != nil {
+			msg.err = fmt.Errorf("failed to do tmux split pane: %w", splitErr)
+		}
+		return msg
 	}
 }
 

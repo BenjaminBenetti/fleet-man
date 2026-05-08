@@ -86,9 +86,9 @@ type model struct {
 // newModel creates and initialises the top-level model, including all
 // page instances and their initial state.
 func newModel() model {
-	sp := spinner.New()
-	sp.Spinner = spinner.Dot
-	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("170"))
+	spinnerModel := spinner.New()
+	spinnerModel.Spinner = spinner.Dot
+	spinnerModel.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("170"))
 
 	m := model{
 		creating:          make(map[string]bool),
@@ -99,7 +99,7 @@ func newModel() model {
 		expandedInstances: make(map[string]bool),
 		sessions:          make(map[string]*sessionDiscovery),
 		lastActive:        make(map[string]lastSession),
-		spinner:           sp,
+		spinner:           spinnerModel,
 		inHostTmux:        os.Getenv("TMUX") != "",
 	}
 
@@ -198,13 +198,13 @@ func (m *model) hydrateSavedGroups() {
 	if m.st == nil || m.fleetPage == nil {
 		return
 	}
-	for gid, gl := range m.st.GroupLayouts {
+	for gid, layout := range m.st.GroupLayouts {
 		m.fleetPage.savedGroups[gid] = savedGroup{
-			GroupID:      gl.GroupID,
-			InstanceName: gl.InstanceName,
-			Sessions:     gl.Sessions,
-			Layout:       gl.Layout,
-			PaneCount:    gl.PaneCount,
+			GroupID:      layout.GroupID,
+			InstanceName: layout.InstanceName,
+			Sessions:     layout.Sessions,
+			Layout:       layout.Layout,
+			PaneCount:    layout.PaneCount,
 		}
 	}
 }
@@ -234,8 +234,8 @@ func (m *model) pruneSavedGroupsForInstance(instKey string) {
 		}
 	}
 	changed := false
-	for gid, sg := range m.fleetPage.savedGroups {
-		if sg.InstanceName != instanceName {
+	for gid, savedLayout := range m.fleetPage.savedGroups {
+		if savedLayout.InstanceName != instanceName {
 			continue
 		}
 		if !live[gid] {
@@ -263,8 +263,8 @@ func (m *model) pruneOrphanedSavedGroups() {
 		}
 	}
 	changed := false
-	for gid, sg := range m.fleetPage.savedGroups {
-		if !live[sg.InstanceName] {
+	for gid, savedLayout := range m.fleetPage.savedGroups {
+		if !live[savedLayout.InstanceName] {
 			delete(m.fleetPage.savedGroups, gid)
 			delete(m.st.GroupLayouts, gid)
 			changed = true
@@ -428,13 +428,13 @@ func (m model) fetchAllStatsCmd(delay bool) tea.Cmd {
 		}
 
 		ch := make(chan result, len(inputs))
-		for _, inp := range inputs {
+		for _, input := range inputs {
 			go func(instanceBackend backend.Backend, ids []string) {
 				stats, _ := instanceBackend.Stats(ids)
 				screens := backend.CaptureAllSessionsForAll(instanceBackend, ids)
 				probes := backend.AgentToolProbes(instanceBackend, ids)
 				ch <- result{stats, screens, probes, ids}
-			}(inp.instanceBackend, inp.ids)
+			}(input.instanceBackend, input.ids)
 		}
 
 		for range inputs {
@@ -496,14 +496,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// instance rows fire Space (expand/collapse sessions), every other
 	// click fires Enter. Other mouse events (motion, wheel, release,
 	// other buttons) are dropped: page handlers only know about KeyMsgs.
-	if mm, ok := msg.(tea.MouseMsg); ok {
-		if mm.Action == tea.MouseActionPress && mm.Button == tea.MouseButtonLeft {
+	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+		if mouseMsg.Action == tea.MouseActionPress && mouseMsg.Button == tea.MouseButtonLeft {
 			synthesizedKey := tea.KeyMsg{Type: tea.KeyEnter}
 			hit := false
 			switch page := m.currentPage.(type) {
 			case *fleetPage:
 				if page.mode == viewNormal && page.listRowY >= 0 {
-					if idx := mm.Y - page.listRowY; idx >= 0 && idx < len(page.rows) {
+					if idx := mouseMsg.Y - page.listRowY; idx >= 0 && idx < len(page.rows) {
 						page.cursor = idx
 						hit = true
 						if page.rows[idx].kind == rowInstance {
@@ -523,7 +523,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if h <= 0 {
 							h = 1
 						}
-						if mm.Y >= y && mm.Y < y+h {
+						if mouseMsg.Y >= y && mouseMsg.Y < y+h {
 							page.cursor = i
 							hit = true
 							break
@@ -541,9 +541,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// 1. Window size (shared)
-	if ws, ok := msg.(tea.WindowSizeMsg); ok {
-		m.width = ws.Width
-		m.height = ws.Height
+	if windowSize, ok := msg.(tea.WindowSizeMsg); ok {
+		m.width = windowSize.Width
+		m.height = windowSize.Height
 	}
 
 	// 2. Always update spinner
@@ -716,9 +716,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.message = fmt.Sprintf("Failed to create %s: %v", key, msg.err)
 
 	case splitPaneMsg:
+		// err and paneID are independent: a restoreGroupCmd run can
+		// partially succeed (some splits OK, some failed after retries),
+		// in which case both are set — show the error AND wire up the
+		// panes that did make it.
 		if msg.err != nil {
-			m.message = fmt.Sprintf("Split pane error: %v", msg.err)
-		} else {
+			m.message = fmt.Sprintf("failed to do tmux split pane: %v", msg.err)
+		}
+		if msg.paneID != "" {
 			fp := m.fleetPage
 			fp.splitPaneID = msg.paneID
 			fp.splitFleet = msg.fleet
@@ -925,38 +930,6 @@ func (m model) View() string {
 }
 
 // ===========================================
-// Row Types (shared, used by fleet page)
-// ===========================================
-
-type rowKind int
-
-const (
-	rowFleetHeader rowKind = iota
-	rowInstance
-	rowSession
-	rowNewSession
-	rowSettings
-)
-
-// row represents a single navigable row in the TUI.
-type row struct {
-	kind        rowKind
-	fleetName   string
-	instance    *fleet.Instance
-	sessionName string // set when kind == rowSession or rowNewSession
-	groupID     string // set for grouped session rows
-	groupSize   int    // number of sessions in the group (for display)
-}
-
-// lastSession tracks the most recently used session for an instance,
-// allowing reconnection on subsequent enter presses instead of always
-// creating a new session.
-type lastSession struct {
-	sessionName string
-	groupID     string
-}
-
-// ===========================================
 // Sorting Helper
 // ===========================================
 
@@ -1007,9 +980,9 @@ func Run() error {
 	// in the new fleet exits cleanly instead of dropping back into
 	// the old fleet.
 	if err == nil {
-		if fm, ok := finalModel.(model); ok && fm.pendingExecPath != "" {
-			if execErr := syscall.Exec(fm.pendingExecPath, fm.pendingExecArgs, os.Environ()); execErr != nil {
-				return fmt.Errorf("failed to launch updated fleet %q: %w", fm.pendingExecPath, execErr)
+		if finalAppModel, ok := finalModel.(model); ok && finalAppModel.pendingExecPath != "" {
+			if execErr := syscall.Exec(finalAppModel.pendingExecPath, finalAppModel.pendingExecArgs, os.Environ()); execErr != nil {
+				return fmt.Errorf("failed to launch updated fleet %q: %w", finalAppModel.pendingExecPath, execErr)
 			}
 			// syscall.Exec does not return on success.
 		}
