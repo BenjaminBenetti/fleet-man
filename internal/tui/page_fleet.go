@@ -956,11 +956,12 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			}
 
 			// Single switch derives BOTH the left-of-name throbber
-			// and the right-of-status agentStr. Throbber animates
-			// only in the working ("play") state; every other case
-			// (waiting, not running, instance not running) leaves
-			// the throbber at the default grey ○. agentStr is
-			// consumed below in the non-transitional render branch.
+			// and the right-of-status agentStr. Colors mirror the
+			// right indicator: green animated pulse while working,
+			// yellow static ○ while the agent is alive but waiting,
+			// grey ○ when the agent is absent (or instance not
+			// running). agentStr is consumed below in the
+			// non-transitional render branch.
 			throbber := agentOffStyle.Render("○")
 			agentStr := ""
 			if instance.Status == fleet.StatusRunning && m.activity != nil {
@@ -976,6 +977,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 					}
 				case agentWaiting:
 					agentStr = agentWaitingStyle.Render(fmt.Sprintf("  ⏸ %s", label))
+					throbber = agentWaitingStyle.Render("○")
 				default:
 					agentStr = agentOffStyle.Render("  ○ idle")
 				}
