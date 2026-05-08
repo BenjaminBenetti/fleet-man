@@ -71,9 +71,31 @@ trap 'rm -f "${FLEET_ITEST_RESULTS}"' EXIT
 # shellcheck disable=SC1091
 source "${INTEGRATION_DIR}/common.sh"
 
+# FLEET_ITEST_SKIP — comma-separated list of test basenames to skip
+# (without the .sh suffix). Skipped tests emit a "skip" row and never
+# run; the suite does not fail on them. Used by the WSL CI job to
+# exempt environment-specific known-bad tests.
+declare -A skip_set=()
+if [ -n "${FLEET_ITEST_SKIP:-}" ]; then
+  IFS=',' read -ra _skip_list <<< "${FLEET_ITEST_SKIP}"
+  for s in "${_skip_list[@]}"; do
+    s_trimmed=$(printf '%s' "${s}" | tr -d '[:space:]')
+    [ -n "${s_trimmed}" ] && skip_set["${s_trimmed}"]=1
+  done
+fi
+
 for test_file in "${tests[@]}"; do
   test_name=$(basename "${test_file}" .sh)
   printf "\n"
+  if [ -n "${skip_set[${test_name}]:-}" ]; then
+    say "${YELLOW}SKIP${RESET} ${test_name} (FLEET_ITEST_SKIP)"
+    desc=$(grep -m1 -E '^# Description:' "${test_file}" 2>/dev/null \
+      | sed -E 's/^# Description: *//')
+    [ -z "${desc}" ] && desc="(no description)"
+    printf '%s|skip|0|%s\n' "${test_name}" "${desc}" \
+      >> "${FLEET_ITEST_RESULTS}"
+    continue
+  fi
   say "${BOLD}RUN${RESET}  ${test_name}"
   bash "${test_file}" || true
   say "teardown ${test_name}"
@@ -83,18 +105,21 @@ done
 # Aggregate the per-test rows.
 passed=0
 failed=0
+skipped=0
 failed_tests=()
 result_rows=()
 if [ -s "${FLEET_ITEST_RESULTS}" ]; then
   while IFS='|' read -r name status dur desc; do
     [ -z "${name}" ] && continue
     result_rows+=("${name}|${status}|${dur}|${desc}")
-    if [ "${status}" = "pass" ]; then
-      passed=$((passed + 1))
-    else
-      failed=$((failed + 1))
-      failed_tests+=("${name}")
-    fi
+    case "${status}" in
+      pass) passed=$((passed + 1)) ;;
+      skip) skipped=$((skipped + 1)) ;;
+      *)
+        failed=$((failed + 1))
+        failed_tests+=("${name}")
+        ;;
+    esac
   done < "${FLEET_ITEST_RESULTS}"
 fi
 
@@ -114,33 +139,46 @@ for test_file in "${tests[@]}"; do
   fi
 done
 
-printf "\n%b==>%b Summary: %b%d passed%b, %b%d failed%b\n" \
-  "${BOLD}" "${RESET}" \
-  "${GREEN}" "${passed}" "${RESET}" \
-  "${RED}"   "${failed}" "${RESET}"
+if [ "${skipped}" -gt 0 ]; then
+  printf "\n%b==>%b Summary: %b%d passed%b, %b%d failed%b, %b%d skipped%b\n" \
+    "${BOLD}" "${RESET}" \
+    "${GREEN}"  "${passed}"  "${RESET}" \
+    "${RED}"    "${failed}"  "${RESET}" \
+    "${YELLOW}" "${skipped}" "${RESET}"
+else
+  printf "\n%b==>%b Summary: %b%d passed%b, %b%d failed%b\n" \
+    "${BOLD}" "${RESET}" \
+    "${GREEN}" "${passed}" "${RESET}" \
+    "${RED}"   "${failed}" "${RESET}"
+fi
 
 # Emit a GitHub Actions step summary if running inside a workflow.
 # GITHUB_STEP_SUMMARY is a file path the runner publishes as markdown on
 # the job summary page. Outside Actions this env var is unset and we skip.
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-  total=$((passed + failed))
+  total=$((passed + failed + skipped))
   if [ "${failed}" -eq 0 ]; then
-    overall="✅ all green"
+    if [ "${skipped}" -gt 0 ]; then
+      overall="✅ all green (with ${skipped} skipped)"
+    else
+      overall="✅ all green"
+    fi
   else
     overall="❌ ${failed} failing"
   fi
   {
     printf '## Integration Tests — %s\n\n' "${overall}"
-    printf '**%d passed**, **%d failed** out of %d.\n\n' "${passed}" "${failed}" "${total}"
+    printf '**%d passed**, **%d failed**, **%d skipped** out of %d.\n\n' \
+      "${passed}" "${failed}" "${skipped}" "${total}"
     printf '| Test | Status | Duration | Description |\n'
     printf '| --- | --- | ---: | --- |\n'
     for row in "${result_rows[@]}"; do
       IFS='|' read -r name status dur desc <<< "${row}"
-      if [ "${status}" = "pass" ]; then
-        icon="✅ pass"
-      else
-        icon="❌ fail"
-      fi
+      case "${status}" in
+        pass) icon="✅ pass" ;;
+        skip) icon="⏭️ skip" ;;
+        *)    icon="❌ fail" ;;
+      esac
       printf '| `%s` | %s | %ss | %s |\n' "${name}" "${icon}" "${dur}" "${desc}"
     done
     if [ "${failed}" -gt 0 ]; then
