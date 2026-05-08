@@ -1,0 +1,125 @@
+name: Integration Tests (Windows / WSL)
+
+# Fleet targets WSL on Windows, not native Windows. This job spins up a
+# Windows runner, installs Ubuntu-24.04 inside WSL2, sets up a Linux
+# toolchain + dockerd + devcontainer CLI in WSL, and then runs the same
+# integration suite the Linux job runs.
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  integration-wsl:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      # actions/checkout on Windows would otherwise rewrite shell scripts
+      # to CRLF and break every bash shebang once they cross into WSL.
+      - name: Force LF line endings on checkout
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
+      - uses: actions/checkout@v5
+
+      - name: Setup WSL (Ubuntu-24.04)
+        uses: Vampire/setup-wsl@v6
+        with:
+          distribution: Ubuntu-24.04
+          set-as-default: "true"
+          # Packages installed once at distro provisioning time.
+          # Go and Node are pulled separately below so we can pin versions.
+          additional-packages: |
+            ca-certificates
+            curl
+            git
+            iptables
+            jq
+            tmux
+            uidmap
+
+      - name: Install Go in WSL
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          # Pin to the toolchain declared in go.mod so we test the same
+          # compiler the Linux job uses.
+          go_version="$(awk '/^go [0-9]/ {print $2; exit}' go.mod)"
+          echo "Installing Go ${go_version}"
+          curl -fsSL "https://go.dev/dl/go${go_version}.linux-amd64.tar.gz" -o /tmp/go.tgz
+          sudo rm -rf /usr/local/go
+          sudo tar -C /usr/local -xzf /tmp/go.tgz
+          # Make /usr/local/go/bin available to every subsequent wsl-bash step.
+          printf 'export PATH=/usr/local/go/bin:$PATH\n' | sudo tee /etc/profile.d/go.sh > /dev/null
+          sudo chmod +x /etc/profile.d/go.sh
+          /usr/local/go/bin/go version
+
+      - name: Install Node + devcontainer CLI in WSL
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+          sudo apt-get install -y -qq --no-install-recommends nodejs
+          sudo npm install -g @devcontainers/cli
+          devcontainer --version
+
+      - name: Install Docker engine in WSL
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://get.docker.com | sudo sh
+          # Ubuntu 24.04 ships nftables by default; dockerd's default
+          # bridge networking expects iptables-legacy or the rules silently
+          # drop traffic. Switch the alternatives so dockerd can program
+          # NAT correctly.
+          sudo update-alternatives --set iptables /usr/sbin/iptables-legacy || true
+          sudo update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy || true
+          docker --version
+
+      - name: Start dockerd in WSL
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          # WSL2 has no systemd by default, so launch dockerd manually and
+          # poll the socket until it is reachable.
+          sudo nohup dockerd \
+            --host=unix:///var/run/docker.sock \
+            --iptables=true \
+            > /tmp/dockerd.log 2>&1 &
+          for i in $(seq 1 30); do
+            if sudo docker info > /dev/null 2>&1; then
+              echo "dockerd ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          # Open the socket to the runner user so subsequent steps don't
+          # need sudo for every docker call.
+          sudo chmod 666 /var/run/docker.sock
+          docker info
+
+      - name: Build fleet binary in WSL
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          export PATH=/usr/local/go/bin:$PATH
+          go build -o /usr/local/bin/fleet ./cmd/fleet
+          /usr/local/bin/fleet --help > /dev/null
+
+      - name: Run integration tests in WSL
+        shell: wsl-bash {0}
+        env:
+          FLEET_BIN: /usr/local/bin/fleet
+        run: |
+          set -euo pipefail
+          export PATH=/usr/local/go/bin:$PATH
+          ./integration/run.sh
+
+      - name: Dump dockerd log on failure
+        if: failure()
+        shell: wsl-bash {0}
+        run: |
+          echo "=== dockerd log (last 200 lines) ==="
+          sudo tail -200 /tmp/dockerd.log || true

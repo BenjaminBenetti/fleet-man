@@ -90,5 +90,11 @@ FLEET_BIN=/path/to/fleet ./integration/run.sh
 
 ## CI
 
-`.github/workflows/integration.yml` runs this suite on every PR to
-`main`.
+Two PR checks run this suite end-to-end on every PR to `main`:
+
+- `.github/workflows/integration.yml` — Linux (`ubuntu-latest`), the
+  primary target.
+- `.github/workflows/integration-windows.yml` — Windows host running
+  Ubuntu-24.04 inside WSL2, with dockerd installed in the distro.
+  Fleet is intended to run inside WSL on Windows (not native Windows),
+  so this job exercises that path.
