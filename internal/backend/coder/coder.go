@@ -13,29 +13,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 )
 
-// Option configures a CoderBackend.
-type Option func(*CoderBackend)
-
-// WithVerbose enables verbose output.
-func WithVerbose(v bool) Option {
-	return func(coderBackend *CoderBackend) { coderBackend.verbose = v }
-}
-
-// WithTemplate sets the Coder template to use when creating workspaces.
-func WithTemplate(t string) Option {
-	return func(coderBackend *CoderBackend) { coderBackend.template = t }
-}
-
-// WithPreset sets the Coder preset to use when creating workspaces.
-func WithPreset(p string) Option {
-	return func(coderBackend *CoderBackend) { coderBackend.preset = p }
-}
-
-// WithParameters sets the resolved parameter key-value pairs for workspace creation.
-func WithParameters(params map[string]string) Option {
-	return func(coderBackend *CoderBackend) { coderBackend.parameters = params }
-}
-
 // CoderBackend implements backend.Backend using the Coder CLI.
 // The "containerID" for coder workspaces is the workspace name.
 type CoderBackend struct {
@@ -52,29 +29,6 @@ func New(opts ...Option) *CoderBackend {
 		o(coderBackend)
 	}
 	return coderBackend
-}
-
-// coderAgent represents a single agent in a coder workspace.
-type coderAgent struct {
-	Name              string  `json:"name"`
-	Status            string  `json:"status"`
-	LifecycleState    string  `json:"lifecycle_state"`
-	ParentID          *string `json:"parent_id"` // non-nil for devcontainer agents
-	Directory         string  `json:"directory"`
-	ExpandedDirectory string  `json:"expanded_directory"`
-}
-
-// coderWorkspace is the JSON structure returned by `coder list -o json`.
-type coderWorkspace struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	TemplateName string `json:"template_name"`
-	LatestBuild  struct {
-		Status    string `json:"status"`
-		Resources []struct {
-			Agents []coderAgent `json:"agents"`
-		} `json:"resources"`
-	} `json:"latest_build"`
 }
 
 // Up creates a Coder workspace. workspaceDir is used to derive the workspace
@@ -305,6 +259,36 @@ func (coderBackend *CoderBackend) PortForwardCommand(containerID string, localPo
 // are remote and not directly reachable by IP from the host.
 func (coderBackend *CoderBackend) ResolveHostname(containerID string) (string, bool) {
 	return "", false
+}
+
+// Status reports the live state of a Coder workspace by reading
+// `coder list`'s LatestBuild.Status. Lifecycle: running/started →
+// running; stopped/canceled → stopped; transitional builds (starting,
+// stopping, pending, deleting) and unrecognized states map to unknown
+// so callers preserve persisted state during in-flight transitions.
+// A workspace that no longer exists maps to missing.
+func (coderBackend *CoderBackend) Status(containerID string) backend.LiveStatus {
+	name := workspaceName(containerID)
+	if name == "" {
+		return backend.LiveStatusUnknown
+	}
+	ws, err := coderBackend.getWorkspace(name)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return backend.LiveStatusMissing
+		}
+		return backend.LiveStatusUnknown
+	}
+	switch ws.LatestBuild.Status {
+	case "running", "started":
+		return backend.LiveStatusRunning
+	case "stopped", "canceled":
+		return backend.LiveStatusStopped
+	case "deleted":
+		return backend.LiveStatusMissing
+	default:
+		return backend.LiveStatusUnknown
+	}
 }
 
 // EditorURI returns a VS Code URI for connecting to a Coder workspace.

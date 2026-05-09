@@ -474,6 +474,12 @@ func (m model) Init() tea.Cmd {
 		layoutTickCmd(),
 		checkUpdateCmd(),
 		forceRepaintCmd(),
+		// Probe live state right away so a fleet started after a long
+		// idle (e.g. overnight) reflects containers that stopped while
+		// fleet was offline before the user even sees the list. The
+		// periodic tick that follows handles drift during the session.
+		refreshLiveStatusCmd(collectLiveStatusProbes(m.st)),
+		liveStatusPollCmd(),
 		m.currentPage.Init(&m),
 	}
 	if len(m.creating) > 0 {
@@ -638,6 +644,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.config != nil && m.config.CodespacesSettings.Machine == "" && len(m.codespaceMachines) > 0 {
 			m.config.CodespacesSettings.Machine = m.codespaceMachines[0].Name
 			_ = state.SaveConfig(m.config)
+		}
+		return m, spinCmd
+
+	case liveStatusTickMsg:
+		// Rearm the periodic refresh and kick off a probe pass over
+		// the current snapshot of instances. Probe goroutines run
+		// independently and feed back via liveStatusMsg.
+		return m, tea.Batch(
+			spinCmd,
+			refreshLiveStatusCmd(collectLiveStatusProbes(m.st)),
+			liveStatusPollCmd(),
+		)
+
+	case liveStatusMsg:
+		// Reconcile persisted state with what each backend reports.
+		// applyLiveStatuses writes through to disk when anything
+		// changed; reload() then refreshes the in-memory view so the
+		// fleet page renders the corrected statuses on the next draw.
+		if applyLiveStatuses(m.st, msg.updates) {
+			m.reload()
 		}
 		return m, spinCmd
 
