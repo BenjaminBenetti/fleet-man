@@ -159,3 +159,27 @@ func (codespacesBackend *CodespacesBackend) sshCommand(csName string, command []
 	args := sshArgs(csName, command)
 	return exec.Command("gh", args...)
 }
+
+// ===========================================
+// gh CLI SSH Args
+// ===========================================
+
+// sshArgs builds the argument list for `gh codespace ssh`.
+// gh codespace ssh concatenates everything after -- and passes it to the
+// remote shell, so "sh -c 'script'" must be collapsed to just "script"
+// to avoid double-shell wrapping.
+func sshArgs(csName string, command []string) []string {
+	args := []string{"codespace", "ssh", "-c", csName}
+	if len(command) == 0 {
+		return args
+	}
+	args = append(args, "--")
+	// Collapse "sh -c 'script'" into just "script" since gh codespace ssh
+	// already wraps in a shell.
+	if len(command) == 3 && command[0] == "sh" && command[1] == "-c" {
+		args = append(args, command[2])
+	} else {
+		args = append(args, command...)
+	}
+	return args
+}

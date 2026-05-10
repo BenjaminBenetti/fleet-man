@@ -14,14 +14,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 )
 
-// Option configures a DevcontainerBackend.
-type Option func(*DevcontainerBackend)
-
-// WithVerbose enables verbose output (sends devcontainer stderr to os.Stderr).
-func WithVerbose(v bool) Option {
-	return func(devcontainerBackend *DevcontainerBackend) { devcontainerBackend.verbose = v }
-}
-
 // DevcontainerBackend implements backend.Backend using the devcontainer
 // and docker CLIs.
 type DevcontainerBackend struct {
@@ -297,6 +289,38 @@ func (devcontainerBackend *DevcontainerBackend) PortForwardCommand(containerID s
 		localPort, containerID, remotePort,
 	)
 	return exec.Command("sh", "-c", script)
+}
+
+// Status reports the live state of a docker container by reading
+// `docker inspect --format {{.State.Status}}`. Maps docker's
+// fine-grained states into the coarser backend.LiveStatus enum:
+// running/restarting → running; exited/paused/dead/created → stopped;
+// "No such container" → missing; everything else (and probe errors)
+// → unknown so callers preserve whatever was persisted.
+func (devcontainerBackend *DevcontainerBackend) Status(containerID string) backend.LiveStatus {
+	if containerID == "" {
+		return backend.LiveStatusUnknown
+	}
+	cmd := exec.Command("docker", "inspect", "--format", "{{.State.Status}}", containerID)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if strings.Contains(string(exitErr.Stderr), "No such container") {
+				return backend.LiveStatusMissing
+			}
+		}
+		return backend.LiveStatusUnknown
+	}
+	switch strings.TrimSpace(string(out)) {
+	case "running", "restarting":
+		return backend.LiveStatusRunning
+	case "exited", "paused", "dead", "created":
+		return backend.LiveStatusStopped
+	case "removing":
+		return backend.LiveStatusMissing
+	default:
+		return backend.LiveStatusUnknown
+	}
 }
 
 // ResolveHostname returns the container's IP address obtained via
