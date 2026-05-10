@@ -269,6 +269,36 @@ func (coderBackend *CoderBackend) SupportsCustomMounts() bool {
 	return false
 }
 
+// Status reports the live state of a Coder workspace by reading
+// `coder list`'s LatestBuild.Status. Lifecycle: running/started →
+// running; stopped/canceled → stopped; transitional builds (starting,
+// stopping, pending, deleting) and unrecognized states map to unknown
+// so callers preserve persisted state during in-flight transitions.
+// A workspace that no longer exists maps to missing.
+func (coderBackend *CoderBackend) Status(containerID string) backend.LiveStatus {
+	name := workspaceName(containerID)
+	if name == "" {
+		return backend.LiveStatusUnknown
+	}
+	ws, err := coderBackend.getWorkspace(name)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return backend.LiveStatusMissing
+		}
+		return backend.LiveStatusUnknown
+	}
+	switch ws.LatestBuild.Status {
+	case "running", "started":
+		return backend.LiveStatusRunning
+	case "stopped", "canceled":
+		return backend.LiveStatusStopped
+	case "deleted":
+		return backend.LiveStatusMissing
+	default:
+		return backend.LiveStatusUnknown
+	}
+}
+
 // EditorURI returns a VS Code URI for connecting to a Coder workspace.
 func (coderBackend *CoderBackend) EditorURI(workspaceDir string, projectName string) (string, bool) {
 	name := coderWorkspaceName(workspaceDir)

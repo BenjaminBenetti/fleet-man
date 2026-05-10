@@ -2,6 +2,7 @@ package codespaces
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -303,31 +304,47 @@ func (codespacesBackend *CodespacesBackend) SupportsCustomMounts() bool {
 	return false
 }
 
+// Status reports the live state of a GitHub Codespace via
+// `gh codespace view`. GitHub's lifecycle: Available → running;
+// Shutdown/Archived → stopped (the most common drift the live probe
+// catches: a codespace stopped overnight by the idle timeout while
+// fleet still showed it as running). Transitional states like
+// Starting/Provisioning/Queued map to unknown so the persisted
+// state isn't clobbered while the transition completes.
+func (codespacesBackend *CodespacesBackend) Status(containerID string) backend.LiveStatus {
+	if containerID == "" {
+		return backend.LiveStatusUnknown
+	}
+	info, err := codespacesBackend.getCodespace(containerID)
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			stderr := string(exitErr.Stderr)
+			if strings.Contains(stderr, "not found") || strings.Contains(stderr, "could not find codespace") {
+				return backend.LiveStatusMissing
+			}
+		}
+		return backend.LiveStatusUnknown
+	}
+	switch info.State {
+	case "Available":
+		return backend.LiveStatusRunning
+	case "Shutdown", "Archived":
+		return backend.LiveStatusStopped
+	default:
+		return backend.LiveStatusUnknown
+	}
+}
+
 // ===========================================
 // Internal helpers
 // ===========================================
 
-// sshArgs builds the argument list for `gh codespace ssh`.
-// gh codespace ssh concatenates everything after -- and passes it to the
-// remote shell, so "sh -c 'script'" must be collapsed to just "script"
-// to avoid double-shell wrapping.
-func sshArgs(csName string, command []string) []string {
-	args := []string{"codespace", "ssh", "-c", csName}
-	if len(command) == 0 {
-		return args
-	}
-	args = append(args, "--")
-	// Collapse "sh -c 'script'" into just "script" since gh codespace ssh
-	// already wraps in a shell.
-	if len(command) == 3 && command[0] == "sh" && command[1] == "-c" {
-		args = append(args, command[2])
-	} else {
-		args = append(args, command...)
-	}
-	return args
-}
-
 // getCodespace fetches codespace details via `gh codespace view`.
+// The returned error is wrapped with %w so that callers can use
+// errors.As to recover the underlying *exec.ExitError (and its
+// captured stderr) when they need to distinguish "missing" from
+// other failure modes.
 func (codespacesBackend *CodespacesBackend) getCodespace(name string) (*codespaceInfo, error) {
 	cmd := exec.Command("gh", "codespace", "view", "-c", name, "--json", "name,displayName,state")
 	out, err := cmd.Output()

@@ -73,4 +73,15 @@ type Backend interface {
 	// connections to hostname:port without spawning external processes.
 	// Returns ("", false) when the container is not directly reachable.
 	ResolveHostname(containerID string) (string, bool)
+
+	// Status returns the live state of a single container/workspace as
+	// reported by the underlying provider. Callers use this to detect
+	// external lifecycle changes — e.g. a codespace that stopped due to
+	// inactivity, a docker container that crashed, or a coder workspace
+	// stopped by an admin.
+	//
+	// Returns LiveStatusUnknown when the probe fails (network, auth,
+	// daemon down). Callers must treat that as inconclusive and preserve
+	// any persisted state rather than overwriting it.
+	Status(containerID string) LiveStatus
 }
