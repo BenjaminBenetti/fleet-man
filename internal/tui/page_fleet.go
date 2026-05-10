@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -1057,14 +1058,14 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				tool := m.activity.Tool(instance.ContainerID)
 				label := agentToolLabel(tool)
 				switch m.activity.State(instance.ContainerID) {
-				case agentWorking:
+				case agentdetect.StateWorking:
 					agentStr = agentWorkingStyle.Render(fmt.Sprintf("  ▶ %s", label))
 					if len(m.agentSpinner.Spinner.Frames) > 0 {
 						throbber = strings.TrimRight(m.agentSpinner.View(), "\n")
 					} else {
 						throbber = agentWorkingStyle.Render("✻")
 					}
-				case agentWaiting:
+				case agentdetect.StateWaiting:
 					agentStr = agentWaitingStyle.Render(fmt.Sprintf("  ⏸ %s", label))
 					throbber = agentWaitingStyle.Render("○")
 				default:

@@ -3,54 +3,67 @@ package tui
 import (
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
-type agentState int
+// ===========================================
+// ActivityTracker
+// ===========================================
 
-const (
-	agentNotRunning agentState = iota
-	agentWorking
-	agentWaiting
-)
-
-// screenChangeThreshold is the minimum number of characters that must
-// differ between consecutive screen captures to count as meaningful
-// activity (catches spinner animations while ignoring cursor blink).
-const screenChangeThreshold = 3
-
-// screenActivityWindow is how recently a meaningful screen change must
-// have occurred for the agent to be considered actively working.
-const screenActivityWindow = 12 * time.Second
-
-// ActivityTracker determines agent working/waiting/idle state by
-// diffing consecutive tmux screen captures. State is aggregated
-// across every session inside a container — a working agent in any
-// session marks the container as working.
+// ActivityTracker is the generic, strategy-agnostic owner of agent
+// run-state across all tracked containers.
+//
+// It is responsible for:
+//
+//   - Tool detection (from process probes).
+//   - Lifecycle of per-container Detector strategies — built via
+//     agentdetect.NewDetector when a container's tool first appears
+//     or changes, discarded when the agent disappears.
+//   - The transient-failure semantics that apply regardless of
+//     strategy: an OK=false capture preserves the previous state so
+//     the UI does not flicker through "not running" when an exec
+//     blips.
+//
+// The actual working/waiting decision is delegated to whichever
+// agentdetect.Detector the factory returned for the container.
 type ActivityTracker struct {
-	states     map[string]agentState
-	tools      map[string]state.AgentTool
-	prevScreen map[string]map[string]string    // containerID → sessionName → last content
-	lastChange map[string]map[string]time.Time // containerID → sessionName → last change
+	// ===========================================
+	// Fields
+	// ===========================================
+
+	states    map[string]agentdetect.State     // containerID → last derived state
+	tools     map[string]state.AgentTool       // containerID → last detected agent tool
+	detectors map[string]agentdetect.Detector  // containerID → per-container strategy
 }
 
-// NewActivityTracker returns an initialized tracker.
+// ===========================================
+// Constructors
+// ===========================================
+
+// NewActivityTracker returns an initialised tracker with no tracked
+// containers.
 func NewActivityTracker() *ActivityTracker {
 	return &ActivityTracker{
-		states:     make(map[string]agentState),
-		tools:      make(map[string]state.AgentTool),
-		prevScreen: make(map[string]map[string]string),
-		lastChange: make(map[string]map[string]time.Time),
+		states:    make(map[string]agentdetect.State),
+		tools:     make(map[string]state.AgentTool),
+		detectors: make(map[string]agentdetect.Detector),
 	}
 }
 
-// State returns the derived agent state for a container.
-func (t *ActivityTracker) State(containerID string) agentState {
+// ===========================================
+// Public Methods
+// ===========================================
+
+// State returns the derived agent state for a container. Unknown
+// containers return agentdetect.StateNotRunning (the zero value).
+func (t *ActivityTracker) State(containerID string) agentdetect.State {
 	return t.states[containerID]
 }
 
-// Tool returns the detected tool for a container.
+// Tool returns the detected agent tool for a container, or the empty
+// string when no tool has been observed.
 func (t *ActivityTracker) Tool(containerID string) state.AgentTool {
 	return t.tools[containerID]
 }
@@ -62,144 +75,99 @@ func (t *ActivityTracker) Tool(containerID string) state.AgentTool {
 // and is independent of screen capture success — a probe finding
 // claude is recorded even if every tmux capture failed transiently.
 //
-// State detection iterates over every session captured per container:
-//   - Container missing from captures → preserve previous state
-//   - Container OK=false → agentNotRunning (exec failed entirely)
-//   - Container OK=true with no sessions → agentNotRunning
-//   - Container OK=true with sessions → diff each session against its
-//     previous capture; container is agentWorking if ANY session had
-//     ≥ threshold change within the activity window
+// State detection per container:
+//   - Container missing from captures, or OK=false → preserve
+//     previous state, tool, and detector (transient exec failure).
+//   - Probe explicitly returned no tool → StateNotRunning, detector
+//     dropped so a future agent starts from a clean slate.
+//   - Otherwise the per-container Detector (built/refreshed via the
+//     factory based on the current tool) decides the state.
 //
 // Containers absent from expectedIDs are dropped (cleanup).
-func (t *ActivityTracker) Update(captures map[string]backend.AllSessions, probes map[string]string, expectedIDs []string, now time.Time) {
-	newStates := make(map[string]agentState, len(expectedIDs))
+func (t *ActivityTracker) Update(
+	captures map[string]backend.AllSessions,
+	probes map[string]string,
+	expectedIDs []string,
+	now time.Time,
+) {
+	newStates := make(map[string]agentdetect.State, len(expectedIDs))
 	newTools := make(map[string]state.AgentTool, len(expectedIDs))
-	newPrev := make(map[string]map[string]string, len(expectedIDs))
-	newLastChange := make(map[string]map[string]time.Time, len(expectedIDs))
+	newDetectors := make(map[string]agentdetect.Detector, len(expectedIDs))
 
 	for _, id := range expectedIDs {
-		all, captured := captures[id]
-		if !captured || !all.OK {
-			// Capture exec failed — preserve previous state to avoid flicker
+		capture, captured := captures[id]
+		if !captured || !capture.OK {
+			// Capture exec failed — preserve previous state to avoid flicker.
 			if prev, ok := t.states[id]; ok {
 				newStates[id] = prev
 			}
 			if tool, ok := t.tools[id]; ok {
 				newTools[id] = tool
 			}
-			if s, ok := t.prevScreen[id]; ok {
-				newPrev[id] = s
-			}
-			if lc, ok := t.lastChange[id]; ok {
-				newLastChange[id] = lc
+			if existing, ok := t.detectors[id]; ok {
+				newDetectors[id] = existing
 			}
 			continue
 		}
 
-		// Tool detection runs independently of session capture — a
-		// probe that found claude must be recorded even when no
-		// sessions match a tracked baseline.
-		probeConfirmedEmpty := false
-		if probes != nil {
-			if probeTool, probed := probes[id]; probed {
-				if probeTool != "" {
-					newTools[id] = state.AgentTool(probeTool)
-				} else {
-					probeConfirmedEmpty = true
-				}
-			} else if tool, ok := t.tools[id]; ok {
-				newTools[id] = tool
-			}
-		} else if tool, ok := t.tools[id]; ok {
-			newTools[id] = tool
-		}
-
-		// Snapshot every captured session as the new baseline. Doing
-		// this even when probeConfirmedEmpty / no-sessions ensures
-		// the next cycle has prev content to diff against once an
-		// agent starts.
-		nextPrev := make(map[string]string, len(all.Sessions))
-		for sName, sc := range all.Sessions {
-			if sc.OK {
-				nextPrev[sName] = sc.Content
-			}
-		}
-		newPrev[id] = nextPrev
+		probeConfirmedEmpty := t.applyProbe(id, probes, newTools)
 
 		if probeConfirmedEmpty {
-			newStates[id] = agentNotRunning
+			newStates[id] = agentdetect.StateNotRunning
+			// Detector intentionally dropped: when a new agent starts
+			// later we want a fresh strategy keyed off the new tool.
 			continue
 		}
 
-		if len(all.Sessions) == 0 {
-			newStates[id] = agentNotRunning
-			continue
-		}
-
-		prevBySession := t.prevScreen[id]
-		lcBySession := t.lastChange[id]
-
-		nextLC := make(map[string]time.Time, len(all.Sessions))
-		anyHadHistory := false
-		workingDetected := false
-
-		for sName, sc := range all.Sessions {
-			if !sc.OK {
-				continue
-			}
-			prev, hasPrev := prevBySession[sName]
-			var lc time.Time
-			if lcBySession != nil {
-				lc = lcBySession[sName]
-			}
-			if hasPrev {
-				anyHadHistory = true
-				if countDiffs(prev, sc.Content) >= screenChangeThreshold {
-					lc = now
-				}
-			}
-			nextLC[sName] = lc
-			if !lc.IsZero() && now.Sub(lc) < screenActivityWindow {
-				workingDetected = true
-			}
-		}
-		newLastChange[id] = nextLC
-
-		switch {
-		case workingDetected:
-			newStates[id] = agentWorking
-		case anyHadHistory:
-			newStates[id] = agentWaiting
-		default:
-			// First capture(s) — no history yet, assume waiting
-			newStates[id] = agentWaiting
-		}
+		detector := t.detectorFor(id, newTools[id])
+		newDetectors[id] = detector
+		newStates[id] = detector.Detect(capture, now)
 	}
 
 	t.states = newStates
 	t.tools = newTools
-	t.prevScreen = newPrev
-	t.lastChange = newLastChange
+	t.detectors = newDetectors
 }
 
-// countDiffs returns the number of character positions that differ
-// between two strings, plus any length difference.
-func countDiffs(a, b string) int {
-	diffs := 0
-	ar, br := []rune(a), []rune(b)
-	minLen := len(ar)
-	if len(br) < minLen {
-		minLen = len(br)
-	}
-	for i := 0; i < minLen; i++ {
-		if ar[i] != br[i] {
-			diffs++
+// ===========================================
+// Private Methods
+// ===========================================
+
+// applyProbe records the tool for a container based on the probe
+// result, falling back to the previously-known tool when no probe
+// ran this cycle. Returns true when the probe explicitly confirmed
+// that no agent is running.
+func (t *ActivityTracker) applyProbe(
+	containerID string,
+	probes map[string]string,
+	newTools map[string]state.AgentTool,
+) bool {
+	if probes == nil {
+		if tool, ok := t.tools[containerID]; ok {
+			newTools[containerID] = tool
 		}
+		return false
 	}
-	if len(ar) > minLen {
-		diffs += len(ar) - minLen
-	} else {
-		diffs += len(br) - minLen
+	probeTool, probed := probes[containerID]
+	if !probed {
+		if tool, ok := t.tools[containerID]; ok {
+			newTools[containerID] = tool
+		}
+		return false
 	}
-	return diffs
+	if probeTool == "" {
+		return true
+	}
+	newTools[containerID] = state.AgentTool(probeTool)
+	return false
+}
+
+// detectorFor returns the Detector for a container, building a fresh
+// one when none exists yet or when the detected tool has changed
+// since the last cycle.
+func (t *ActivityTracker) detectorFor(containerID string, tool state.AgentTool) agentdetect.Detector {
+	if existing, ok := t.detectors[containerID]; ok && t.tools[containerID] == tool {
+		return existing
+	}
+	return agentdetect.NewDetector(tool)
 }
