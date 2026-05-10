@@ -121,24 +121,44 @@ func fleetMountDir(fleetName string) string {
 	return filepath.Join(state.WorkspacesDir(), fleetName)
 }
 
-// ensureHostDir creates path with 0700 permissions if it does not yet
-// exist. Permissions are restrictive because the directories typically
-// hold authentication tokens (Claude/Codex login state).
+// ensureHostDir creates path with 0777 permissions if it does not yet
+// exist, and re-chmods existing paths to the same so older fleets get
+// upgraded on the next provision.
+//
+// Why 0777 rather than 0700: these directories are bind-mounted into
+// containers whose user may have a different UID from the host user
+// running fleet (e.g. host root vs container "node" UID 1000). Without
+// world-writable perms the container user can't write its own state
+// into the mount. Privacy still holds at the parent level: the dirs
+// live under ~/.fleet/workspaces/<fleet>/ which is already inside the
+// user's HOME, and the agents (Claude/Codex) write their token files
+// with their own 0600 perms.
 func ensureHostDir(path string) error {
-	return os.MkdirAll(path, 0700)
+	if err := os.MkdirAll(path, 0777); err != nil {
+		return err
+	}
+	// Explicit chmod since MkdirAll is subject to umask and existing
+	// directories from older fleets may have been created at 0700.
+	return os.Chmod(path, 0777)
 }
 
-// ensureHostFile creates an empty file at path with 0600 permissions
-// when one does not already exist, leaving any existing content
-// untouched. The parent directory must already exist (callers run
-// ensureHostDir on it first).
+// ensureHostFile creates an empty file at path with 0666 permissions
+// when one does not already exist, and re-chmods existing files to the
+// same. Empty content of an existing file is preserved.
+//
+// 0666 is chosen for the same UID-mismatch reason described on
+// ensureHostDir — the agent that owns the symlinked target inside the
+// container must be able to write through to the host file.
 func ensureHostFile(path string) error {
 	if _, err := os.Stat(path); err == nil {
-		return nil
+		return os.Chmod(path, 0666)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0666)
 }
