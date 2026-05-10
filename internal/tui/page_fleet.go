@@ -447,8 +447,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				fleetPage.textInput.SetValue(displayName)
 				fleetPage.textInput.Placeholder = "new-session-name"
 				fleetPage.textInput.CharLimit = 64
-				fleetPage.deactivateTextInput()
-				return nil
+				return fleetPage.activateTextInput()
 			}
 			m.reload()
 			fleetPage.buildRows(m)
@@ -526,8 +525,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				fleetPage.textInput.SetValue("")
 				fleetPage.textInput.Placeholder = "session-name (or empty for auto)"
 				fleetPage.textInput.CharLimit = 64
-				fleetPage.deactivateTextInput()
-				return nil
+				return fleetPage.activateTextInput()
 			}
 			fleetName := fleetPage.currentFleetName()
 			if fleetName == "" {
@@ -562,16 +560,14 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.branchInput.SetValue("")
 			fleetPage.branchInput.Placeholder = "default branch"
 			fleetPage.branchInput.CharLimit = 128
-			fleetPage.syncAddInstanceFocus()
-			return nil
+			return fleetPage.activateAddInstanceField()
 
 		case "n":
 			fleetPage.mode = viewAddFleet
 			fleetPage.textInput.SetValue("")
 			fleetPage.textInput.Placeholder = "git@github.com:org/repo.git"
 			fleetPage.textInput.CharLimit = 256
-			fleetPage.deactivateTextInput()
-			return nil
+			return fleetPage.activateTextInput()
 
 		case "pgup", "pgdown":
 			if m.inHostTmux && fleetPage.splitRef.Valid() && !fleetPage.activeGroup.Empty() {
@@ -734,8 +730,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		fleetPage.textInput.SetValue("")
 		fleetPage.textInput.Placeholder = "session-name (or empty for auto)"
 		fleetPage.textInput.CharLimit = 64
-		fleetPage.deactivateTextInput()
-		return nil
+		return fleetPage.activateTextInput()
 
 	case rowSession:
 		instance := r.instance
