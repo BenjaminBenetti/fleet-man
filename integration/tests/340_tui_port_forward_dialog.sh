@@ -54,10 +54,12 @@ tui_send Enter
 tui_wait_for "invalid local port" 5
 
 # ===========================================
-# Esc closes the dialog without adding any forward.
+# Close the dialog without adding any forward. The Add field is active
+# (after the failed submits), so Esc would only deactivate it. The
+# rendered hint `[ctrl+c] Close` is the direct close path.
 # ===========================================
-info "pressing Esc to close dialog"
-tui_send Escape
+info "pressing Ctrl+c to close dialog"
+tui_send "C-c"
 tui_wait_for_absent "local:remote" 5
 # Row should not have a "⇄" port-forward indicator (none was added).
 tui_assert_not_contains "⇄" "no port forwards should be active after esc"

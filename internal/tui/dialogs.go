@@ -193,7 +193,14 @@ func isDialogRightKey(key string) bool {
 }
 
 func isDialogTextKey(msg tea.KeyMsg) bool {
-	if msg.Type != tea.KeyRunes || len(msg.Runes) == 0 || msg.Alt {
+	if msg.Alt {
+		return false
+	}
+	switch msg.Type {
+	case tea.KeyBackspace, tea.KeyDelete:
+		return true
+	}
+	if msg.Type != tea.KeyRunes || len(msg.Runes) == 0 {
 		return false
 	}
 	switch msg.String() {
