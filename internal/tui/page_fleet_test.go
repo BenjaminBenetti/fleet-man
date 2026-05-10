@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
@@ -12,7 +13,7 @@ import (
 )
 
 // testTracker returns an ActivityTracker pre-loaded with specific states/tools.
-func testTracker(states map[string]agentState, tools map[string]state.AgentTool) *ActivityTracker {
+func testTracker(states map[string]agentdetect.State, tools map[string]state.AgentTool) *ActivityTracker {
 	t := NewActivityTracker()
 	for k, v := range states {
 		t.states[k] = v
@@ -315,7 +316,7 @@ func TestViewFleetListShowsAgentWorkingIndicator(t *testing.T) {
 			AgentSettings: state.AgentSettings{ToolSelection: state.AgentToolClaude},
 		},
 		activity: testTracker(
-			map[string]agentState{"abc123": agentWorking},
+			map[string]agentdetect.State{"abc123": agentdetect.StateWorking},
 			map[string]state.AgentTool{"abc123": state.AgentToolClaude},
 		),
 		expandedInstances: make(map[string]bool),
@@ -356,7 +357,7 @@ func TestViewFleetListShowsAgentWaitingIndicator(t *testing.T) {
 			AgentSettings: state.AgentSettings{ToolSelection: state.AgentToolClaude},
 		},
 		activity: testTracker(
-			map[string]agentState{"abc123": agentWaiting},
+			map[string]agentdetect.State{"abc123": agentdetect.StateWaiting},
 			map[string]state.AgentTool{"abc123": state.AgentToolClaude},
 		),
 		expandedInstances: make(map[string]bool),
@@ -397,7 +398,7 @@ func TestViewFleetListShowsAgentOffIndicator(t *testing.T) {
 			AgentSettings: state.AgentSettings{ToolSelection: state.AgentToolClaude},
 		},
 		activity: testTracker(
-			map[string]agentState{"abc123": agentNotRunning},
+			map[string]agentdetect.State{"abc123": agentdetect.StateNotRunning},
 			nil,
 		),
 		expandedInstances: make(map[string]bool),
