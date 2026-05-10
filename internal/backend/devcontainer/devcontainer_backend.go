@@ -26,8 +26,8 @@ type DevcontainerBackend struct {
 // New creates a new DevcontainerBackend.
 func New(opts ...Option) *DevcontainerBackend {
 	devcontainerBackend := &DevcontainerBackend{userCache: make(map[string]string)}
-	for _, o := range opts {
-		o(devcontainerBackend)
+	for _, opt := range opts {
+		opt(devcontainerBackend)
 	}
 	return devcontainerBackend
 }
@@ -264,7 +264,8 @@ func (devcontainerBackend *DevcontainerBackend) CaptureAllSessions(containerID s
 	if err != nil {
 		return backend.AllSessions{OK: false}
 	}
-	return backend.AllSessions{Sessions: backend.ParseAllSessionsOutput(string(out)), OK: true}
+	sessions, files := backend.ParseCaptureOutput(string(out))
+	return backend.AllSessions{Sessions: sessions, ExtraFiles: files, OK: true}
 }
 
 // AgentToolProbe detects which agent tool is running inside a container.
