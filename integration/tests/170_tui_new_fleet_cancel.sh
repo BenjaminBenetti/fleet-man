@@ -17,8 +17,8 @@ tui_send n
 tui_wait_for "git@github.com" 5
 tui_assert_contains "New fleet" "new-fleet dialog title missing"
 
-info "cancelling dialog with Escape"
-tui_send Escape
+info "cancelling dialog with Ctrl+c (field auto-focuses on open; the hint advertises ctrl+c as the cancel key)"
+tui_send "C-c"
 tui_wait_for_absent "git@github.com" 5
 tui_wait_for_absent "New fleet" 5
 
