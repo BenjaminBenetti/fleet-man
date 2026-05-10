@@ -75,9 +75,11 @@ func keybindingsData() []keybindingGroup {
 			Title: "Dialogs",
 			Entries: []keybindingEntry{
 				{"enter", "Confirm action"},
-				{"esc", "Cancel / close"},
+				{"q / esc", "Cancel / close"},
+				{"j / k", "Navigate dialog rows"},
+				{"h / l", "Cycle dialog values"},
 				{"y / n", "Yes / no (delete)"},
-				{"tab", "Cycle backend (add)"},
+				{"enter", "Activate selected text field"},
 			},
 		},
 	}
