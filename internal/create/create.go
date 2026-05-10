@@ -15,6 +15,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	mountresolver "github.com/BenjaminBenetti/fleet-man/internal/mounts/resolver"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -70,10 +71,26 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 		}
 	}
 
-	result, err := instanceBackend.Up(wsDir)
+	resolvedMounts, err := resolveCustomMounts(instanceBackend, fleetName)
 	if err != nil {
 		setFailed(fleetName, instanceName, err)
 		return err
+	}
+
+	result, err := instanceBackend.Up(wsDir, resolvedMounts.Mounts)
+	if err != nil {
+		setFailed(fleetName, instanceName, err)
+		return err
+	}
+
+	// Materialise the post-Up symlinks for any single-file mounts.
+	// Failure is non-fatal — the instance is still usable; the agent
+	// will just have to log in fresh — so we surface the error as a
+	// warning and keep going.
+	if err := applyMountSymlinks(instanceBackend, wsDir, resolvedMounts.Symlinks); err != nil {
+		warning := fmt.Sprintf("setting up agentic mount symlinks: %v", err)
+		warnPath := filepath.Join(state.FleetDir(), "logs", fleetName+"-"+instanceName+".warn")
+		_ = os.WriteFile(warnPath, []byte(warning), 0644)
 	}
 
 	// Auto-install dotfiles. A failure here is non-fatal — the instance
@@ -107,6 +124,81 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 		}
 	}
 	return state.Save(st)
+}
+
+// resolveCustomMounts looks up the fleet's persisted settings and
+// translates them into a Resolved bundle (mounts + symlinks). Returns
+// a zero-value Resolved when the backend does not advertise
+// SupportsCustomMounts so callers avoid wasted host-side preparation
+// for cloud-managed backends.
+//
+// State load failures are tolerated: if state.json cannot be read the
+// instance is still allowed to provision, just without any custom
+// mounts. (The instance record we are about to fill in is loaded from
+// the same file in the success path immediately after, which will
+// surface a hard error then if the file is truly broken.)
+func resolveCustomMounts(instanceBackend backend.Backend, fleetName string) (mountresolver.Resolved, error) {
+	if !instanceBackend.SupportsCustomMounts() {
+		return mountresolver.Resolved{}, nil
+	}
+	st, err := state.Load()
+	if err != nil {
+		return mountresolver.Resolved{}, nil
+	}
+	f, ok := st.Fleets[fleetName]
+	if !ok {
+		return mountresolver.Resolved{}, nil
+	}
+	return mountresolver.Resolve(fleetName, f.Settings)
+}
+
+// applyMountSymlinks runs a shell script inside the just-created
+// container to materialise each Symlink in symlinks. The script for
+// each link, in order:
+//
+//  1. Migrates any pre-baked file at the symlink target into the
+//     shared host file when the host file is still empty — preserving
+//     agent state shipped in the image (e.g. a stub ~/.claude.json).
+//  2. Replaces the target with a symlink pointing at the shared file.
+//  3. If the shared file is still empty AND the link declares a
+//     SeedContent, writes that seed so apps that parse the file on
+//     startup see a valid initial value (Claude Code, for instance,
+//     crashes if ~/.claude.json is not valid JSON).
+func applyMountSymlinks(instanceBackend backend.Backend, wsDir string, symlinks []mountresolver.Symlink) error {
+	if len(symlinks) == 0 {
+		return nil
+	}
+	var script strings.Builder
+	script.WriteString("set -e\n")
+	for _, link := range symlinks {
+		fmt.Fprintf(&script, `mkdir -p %s
+if [ -e %s ] && [ ! -L %s ] && [ ! -s %s ]; then
+  cp %s %s
+fi
+ln -sf %s %s
+`,
+			dotfiles.ShQuote(filepath.Dir(link.Target)),
+			dotfiles.ShQuote(link.Target), dotfiles.ShQuote(link.Target), dotfiles.ShQuote(link.Source),
+			dotfiles.ShQuote(link.Target), dotfiles.ShQuote(link.Source),
+			dotfiles.ShQuote(link.Source), dotfiles.ShQuote(link.Target),
+		)
+		if link.SeedContent != "" {
+			fmt.Fprintf(&script, `if [ ! -s %s ]; then
+  printf '%%s' %s > %s
+fi
+`,
+				dotfiles.ShQuote(link.Source),
+				dotfiles.ShQuote(link.SeedContent),
+				dotfiles.ShQuote(link.Source),
+			)
+		}
+	}
+	cmd := instanceBackend.ExecCommand(wsDir, []string{"sh", "-c", script.String()})
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // buildCoderBackend creates a CoderBackend configured from ~/.fleet/config.json

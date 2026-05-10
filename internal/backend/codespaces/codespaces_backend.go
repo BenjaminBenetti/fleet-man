@@ -77,8 +77,10 @@ func (codespacesBackend *CodespacesBackend) resolveCodespaceName(workspaceDir st
 // ===========================================
 
 // Up creates a GitHub Codespace. workspaceDir is used to derive the display
-// name. The repo is set via WithRepo at construction time.
-func (codespacesBackend *CodespacesBackend) Up(workspaceDir string) (*backend.UpResult, error) {
+// name. The repo is set via WithRepo at construction time. The mounts
+// argument is ignored — Codespaces are managed by GitHub and the gh CLI
+// cannot inject host bind mounts.
+func (codespacesBackend *CodespacesBackend) Up(workspaceDir string, _ []backend.Mount) (*backend.UpResult, error) {
 	displayName := codespaceName(workspaceDir)
 
 	args := []string{"codespace", "create", "--repo", codespacesBackend.repo, "--display-name", displayName}
@@ -209,16 +211,16 @@ func (codespacesBackend *CodespacesBackend) Stats(containerIDs []string) (map[st
 	ch := make(chan statsResult, len(containerIDs))
 	for _, id := range containerIDs {
 		go func(csName string) {
-			s, err := codespacesBackend.fetchStats(csName)
-			ch <- statsResult{csName, s, err}
+			stats, err := codespacesBackend.fetchStats(csName)
+			ch <- statsResult{csName, stats, err}
 		}(id)
 	}
 
 	result := make(map[string]*backend.ContainerStats)
 	for range containerIDs {
-		r := <-ch
-		if r.err == nil && r.stats != nil {
-			result[r.id] = r.stats
+		received := <-ch
+		if received.err == nil && received.stats != nil {
+			result[received.id] = received.stats
 		}
 	}
 
@@ -293,6 +295,13 @@ func (codespacesBackend *CodespacesBackend) PortForwardCommand(containerID strin
 // are remote and not directly reachable by IP from the host.
 func (codespacesBackend *CodespacesBackend) ResolveHostname(containerID string) (string, bool) {
 	return "", false
+}
+
+// SupportsCustomMounts reports false: GitHub Codespaces are provisioned
+// by GitHub's control plane and the gh CLI does not expose a way to
+// inject host bind mounts.
+func (codespacesBackend *CodespacesBackend) SupportsCustomMounts() bool {
+	return false
 }
 
 // Status reports the live state of a GitHub Codespace via

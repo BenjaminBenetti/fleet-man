@@ -548,6 +548,189 @@ func TestEditInstanceRejectsEmptyName(t *testing.T) {
 	}
 }
 
+// TestEditFleetTogglesAndSavesSettings verifies that pressing 'e' on a
+// fleet header opens the edit-fleet dialog, that space toggles a row's
+// boolean, and that enter persists the new settings to the fleet.
+func TestEditFleetTogglesAndSavesSettings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{}}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{
+		st: &state.State{
+			Fleets: map[string]*fleet.Fleet{"alpha": f},
+		},
+		fleetPage: fp,
+	}
+
+	// Press 'e' on the fleet header to open the edit dialog.
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+
+	if fp.mode != viewEditFleet {
+		t.Fatalf("mode = %v, want viewEditFleet", fp.mode)
+	}
+	if fp.dialogFleet != "alpha" {
+		t.Fatalf("dialogFleet = %q, want %q", fp.dialogFleet, "alpha")
+	}
+	if fp.dialogClaudeMount || fp.dialogCodexMount {
+		t.Fatalf("expected mounts off by default; got claude=%v codex=%v", fp.dialogClaudeMount, fp.dialogCodexMount)
+	}
+
+	// Toggle Claude (cursor starts on row 0), move down, toggle Codex.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
+
+	if !fp.dialogClaudeMount || !fp.dialogCodexMount {
+		t.Fatalf("after toggles: claude=%v codex=%v, want both true", fp.dialogClaudeMount, fp.dialogCodexMount)
+	}
+
+	// Submit.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if fp.mode != viewNormal {
+		t.Fatalf("mode after enter = %v, want viewNormal", fp.mode)
+	}
+	if !f.Settings.ClaudeCodeMount || !f.Settings.CodexMount {
+		t.Fatalf("settings not persisted: %+v", f.Settings)
+	}
+}
+
+// TestEditFleetHomedirDetectedFillsEmptyInput verifies the success
+// path of auto-detection: when the result arrives and the user has
+// not typed anything, the home-dir input is populated.
+func TestEditFleetHomedirDetectedFillsEmptyInput(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	f := &fleet.Fleet{Name: "alpha", Remote: "git@example.com:org/repo.git"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{
+		st:        &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}},
+		fleetPage: fp,
+	}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle Claude → kicks detect
+	if !fp.dialogDetecting {
+		t.Fatalf("expected dialogDetecting to be true after toggle-on")
+	}
+
+	fp.handleHomedirDetected(homedirDetectedMsg{fleetName: "alpha", homeDir: "/home/node"})
+
+	if fp.dialogDetecting {
+		t.Fatalf("dialogDetecting still true after result arrived")
+	}
+	if got := fp.homedirInput.Value(); got != "/home/node" {
+		t.Fatalf("homedirInput = %q, want %q", got, "/home/node")
+	}
+}
+
+// TestEditFleetHomedirDetectedRespectsUserInput verifies that an
+// auto-detected value is discarded when the user has already typed
+// something into the home-dir field.
+func TestEditFleetHomedirDetectedRespectsUserInput(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	f := &fleet.Fleet{Name: "alpha", Remote: "git@example.com:org/repo.git"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{
+		st:        &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}},
+		fleetPage: fp,
+	}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle Claude → kicks detect
+	fp.homedirInput.SetValue("/custom/path")              // simulate user typing while detect runs
+
+	fp.handleHomedirDetected(homedirDetectedMsg{fleetName: "alpha", homeDir: "/home/node"})
+
+	if got := fp.homedirInput.Value(); got != "/custom/path" {
+		t.Fatalf("homedirInput = %q, want unchanged %q", got, "/custom/path")
+	}
+}
+
+// TestEditFleetHomedirDetectedIgnoresStaleFleet verifies that a
+// detection result for a fleet other than the one currently being
+// edited is dropped, so closing one dialog and opening another never
+// has cross-talk.
+func TestEditFleetHomedirDetectedIgnoresStaleFleet(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	f := &fleet.Fleet{Name: "alpha", Remote: "git@example.com:org/repo.git"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{
+		st:        &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}},
+		fleetPage: fp,
+	}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
+
+	// Result for a different fleet — must be ignored, and must not
+	// clear our in-flight flag.
+	fp.handleHomedirDetected(homedirDetectedMsg{fleetName: "beta", homeDir: "/wrong"})
+
+	if got := fp.homedirInput.Value(); got != "" {
+		t.Fatalf("homedirInput = %q, want empty", got)
+	}
+	if !fp.dialogDetecting {
+		t.Fatalf("dialogDetecting cleared by stale-fleet result; should remain true")
+	}
+}
+
+// TestEditFleetSavesHomedir verifies the home-dir text field is
+// persisted to FleetSettings when the user submits the dialog.
+func TestEditFleetSavesHomedir(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	f := &fleet.Fleet{Name: "alpha", Remote: "git@example.com:org/repo.git"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{
+		st:        &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}},
+		fleetPage: fp,
+	}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	fp.homedirInput.SetValue("/opt/agent")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if f.Settings.HomeDir != "/opt/agent" {
+		t.Fatalf("Settings.HomeDir = %q, want %q", f.Settings.HomeDir, "/opt/agent")
+	}
+}
+
+// TestEditFleetEscDiscardsChanges verifies that pressing esc abandons
+// pending toggles without modifying the fleet's saved settings.
+func TestEditFleetEscDiscardsChanges(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{}}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{
+		st: &state.State{
+			Fleets: map[string]*fleet.Fleet{"alpha": f},
+		},
+		fleetPage: fp,
+	}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle claude on
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
+
+	if fp.mode != viewNormal {
+		t.Fatalf("mode after esc = %v, want viewNormal", fp.mode)
+	}
+	if f.Settings.ClaudeCodeMount {
+		t.Fatalf("ClaudeCodeMount = true, expected esc to discard the toggle")
+	}
+}
+
 // TestMoveCursorToInstanceSkipsBetweenInstances verifies that shift-jump
 // navigation lands on the next instance row, skipping sessions, headers,
 // and settings rows in between.

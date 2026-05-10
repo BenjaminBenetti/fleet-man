@@ -7,7 +7,18 @@ import "os/exec"
 // monitoring, and introspection of containerized workspaces.
 type Backend interface {
 	// Up creates and starts a workspace from a workspace directory.
-	Up(workspaceDir string) (*UpResult, error)
+	// The mounts argument carries optional custom bind mounts requested
+	// by the caller (e.g. shared agentic context dirs). Backends that
+	// return false from SupportsCustomMounts may ignore mounts entirely;
+	// callers should consult SupportsCustomMounts and pass nil when not
+	// supported to avoid wasted host-side preparation.
+	Up(workspaceDir string, mounts []Mount) (*UpResult, error)
+
+	// SupportsCustomMounts reports whether this backend can honor the
+	// mounts argument passed to Up. Backends that do not control the
+	// container's filesystem layer (managed cloud workspaces, for example)
+	// should return false.
+	SupportsCustomMounts() bool
 
 	// Down stops and removes a container permanently.
 	Down(containerID string) error
