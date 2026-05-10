@@ -1,0 +1,4 @@
+{
+  "name": "fleet-man integration agent fixture",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-bookworm"
+}

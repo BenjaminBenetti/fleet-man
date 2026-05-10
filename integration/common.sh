@@ -25,6 +25,11 @@ INTEGRATION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${INTEGRATION_DIR}/.." && pwd)"
 FIXTURE_SRC="${INTEGRATION_DIR}/fixture"
 
+# Alternate fixture used by tests that need an image with curl + npm
+# pre-installed (Claude Code installer + Codex npm package). Tests opt
+# into it via setup_agent_test instead of setup_test.
+FIXTURE_AGENT_SRC="${INTEGRATION_DIR}/fixture-agent"
+
 # Test scratch dir created fresh per test.
 TEST_SCRATCH_DIR="${TEST_SCRATCH_DIR:-/tmp/fleet-man-itest}"
 
@@ -185,6 +190,47 @@ setup_test() {
     git add -A
     git commit -q -m "fixture: initial commit"
   )
+}
+
+# setup_agent_test prepares a clean environment for tests that need an
+# image with curl + npm available (the Claude / Codex install tests).
+# Identical to setup_test but uses the agent fixture instead of the
+# default debian-base fixture so the install scripts have the tools
+# they need.
+setup_agent_test() {
+  FIXTURE_SRC="${FIXTURE_AGENT_SRC}" setup_test
+}
+
+# seed_fleet_settings writes ~/.fleet/state.json with a fleet record
+# that already has its FleetSettings populated, so the very first
+# `fleet up` call against the fleet picks them up. Settings are
+# normally edited via the TUI; pre-seeding lets non-TUI tests exercise
+# the settings-driven code paths without driving the TUI.
+#
+# Usage:
+#   seed_fleet_settings <fleet_name> <claude:true|false> <codex:true|false> <homedir>
+seed_fleet_settings() {
+  local fleet_name="$1"
+  local claude="${2:-false}"
+  local codex="${3:-false}"
+  local homedir="${4:-/home/node}"
+  mkdir -p "${HOME}/.fleet"
+  cat > "${HOME}/.fleet/state.json" <<EOF
+{
+  "fleets": {
+    "${fleet_name}": {
+      "name": "${fleet_name}",
+      "remote": "${FIXTURE_REPO_URL}",
+      "settings": {
+        "claudeCodeMount": ${claude},
+        "codexMount": ${codex},
+        "homeDir": "${homedir}"
+      },
+      "instances": []
+    }
+  }
+}
+EOF
 }
 
 # teardown_test best-effort cleans up any containers spawned by a test.

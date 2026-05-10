@@ -45,12 +45,18 @@ if ! command -v devcontainer >/dev/null 2>&1; then
   exit 2
 fi
 
-# 3. Pre-pull the fixture image once so each test is not waiting on image pulls.
-fixture_image=$(grep -oE '"image":\s*"[^"]+"' "${INTEGRATION_DIR}/fixture/.devcontainer/devcontainer.json" | sed -E 's/.*"([^"]+)"$/\1/')
-if [ -n "${fixture_image}" ]; then
-  say "Pre-pulling fixture image: ${fixture_image}"
-  docker pull -q "${fixture_image}" >/dev/null || true
-fi
+# 3. Pre-pull each fixture image once so individual tests are not waiting
+#    on image pulls. The agent fixture is used by the startup-script tests
+#    (claude / codex install) and is a different image from the default.
+for fixture_dir in "${INTEGRATION_DIR}/fixture" "${INTEGRATION_DIR}/fixture-agent"; do
+  dc_json="${fixture_dir}/.devcontainer/devcontainer.json"
+  [ -f "${dc_json}" ] || continue
+  fixture_image=$(grep -oE '"image":\s*"[^"]+"' "${dc_json}" | sed -E 's/.*"([^"]+)"$/\1/')
+  if [ -n "${fixture_image}" ]; then
+    say "Pre-pulling fixture image: ${fixture_image}"
+    docker pull -q "${fixture_image}" >/dev/null || true
+  fi
+done
 
 # 4. Iterate tests.
 shopt -s nullglob
