@@ -13,29 +13,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 )
 
-// Option configures a CoderBackend.
-type Option func(*CoderBackend)
-
-// WithVerbose enables verbose output.
-func WithVerbose(v bool) Option {
-	return func(coderBackend *CoderBackend) { coderBackend.verbose = v }
-}
-
-// WithTemplate sets the Coder template to use when creating workspaces.
-func WithTemplate(t string) Option {
-	return func(coderBackend *CoderBackend) { coderBackend.template = t }
-}
-
-// WithPreset sets the Coder preset to use when creating workspaces.
-func WithPreset(p string) Option {
-	return func(coderBackend *CoderBackend) { coderBackend.preset = p }
-}
-
-// WithParameters sets the resolved parameter key-value pairs for workspace creation.
-func WithParameters(params map[string]string) Option {
-	return func(coderBackend *CoderBackend) { coderBackend.parameters = params }
-}
-
 // CoderBackend implements backend.Backend using the Coder CLI.
 // The "containerID" for coder workspaces is the workspace name.
 type CoderBackend struct {
@@ -54,33 +31,11 @@ func New(opts ...Option) *CoderBackend {
 	return coderBackend
 }
 
-// coderAgent represents a single agent in a coder workspace.
-type coderAgent struct {
-	Name              string  `json:"name"`
-	Status            string  `json:"status"`
-	LifecycleState    string  `json:"lifecycle_state"`
-	ParentID          *string `json:"parent_id"` // non-nil for devcontainer agents
-	Directory         string  `json:"directory"`
-	ExpandedDirectory string  `json:"expanded_directory"`
-}
-
-// coderWorkspace is the JSON structure returned by `coder list -o json`.
-type coderWorkspace struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	TemplateName string `json:"template_name"`
-	LatestBuild  struct {
-		Status    string `json:"status"`
-		Resources []struct {
-			Agents []coderAgent `json:"agents"`
-		} `json:"resources"`
-	} `json:"latest_build"`
-}
-
 // Up creates a Coder workspace. workspaceDir is used to derive the workspace
 // name (last path component). The git clone happens inside the Coder template
-// via the repo parameter.
-func (coderBackend *CoderBackend) Up(workspaceDir string) (*backend.UpResult, error) {
+// via the repo parameter. The mounts argument is ignored: Coder workspaces
+// are managed remotely and SupportsCustomMounts reports false.
+func (coderBackend *CoderBackend) Up(workspaceDir string, _ []backend.Mount) (*backend.UpResult, error) {
 	// Derive workspace name from the workspace dir path.
 	// workspaceDir format: ~/.fleet/workspaces/{fleet}/{instance}/{fleet}
 	// We need a unique, valid coder workspace name.
@@ -231,15 +186,15 @@ func (coderBackend *CoderBackend) Stats(containerIDs []string) (map[string]*back
 	ch := make(chan statsResult, len(containerIDs))
 	for _, id := range containerIDs {
 		go func(wsName string) {
-			s, err := coderBackend.fetchWorkspaceStats(wsName)
-			ch <- statsResult{wsName, s, err}
+			stats, err := coderBackend.fetchWorkspaceStats(wsName)
+			ch <- statsResult{wsName, stats, err}
 		}(id)
 	}
 
 	for range containerIDs {
-		r := <-ch
-		if r.err == nil && r.stats != nil {
-			result[r.id] = r.stats
+		received := <-ch
+		if received.err == nil && received.stats != nil {
+			result[received.id] = received.stats
 		}
 	}
 
@@ -307,6 +262,13 @@ func (coderBackend *CoderBackend) ResolveHostname(containerID string) (string, b
 	return "", false
 }
 
+// SupportsCustomMounts reports false: Coder workspaces are provisioned
+// by a remote control plane and the local CLI cannot inject host bind
+// mounts into them.
+func (coderBackend *CoderBackend) SupportsCustomMounts() bool {
+	return false
+}
+
 // EditorURI returns a VS Code URI for connecting to a Coder workspace.
 func (coderBackend *CoderBackend) EditorURI(workspaceDir string, projectName string) (string, bool) {
 	name := coderWorkspaceName(workspaceDir)
@@ -347,14 +309,14 @@ func (coderBackend *CoderBackend) waitForAgent(wsName string) (string, error) {
 	remoteDir := "/workspaces"
 
 	for time.Now().Before(deadline) {
-		ws, err := coderBackend.getWorkspace(wsName)
+		workspace, err := coderBackend.getWorkspace(wsName)
 		if err == nil {
-			for _, r := range ws.LatestBuild.Resources {
-				for _, a := range r.Agents {
-					if a.ExpandedDirectory != "" {
-						remoteDir = a.ExpandedDirectory
+			for _, resource := range workspace.LatestBuild.Resources {
+				for _, agent := range resource.Agents {
+					if agent.ExpandedDirectory != "" {
+						remoteDir = agent.ExpandedDirectory
 					}
-					if a.Status == "connected" && a.LifecycleState == "ready" {
+					if agent.Status == "connected" && agent.LifecycleState == "ready" {
 						return remoteDir, nil
 					}
 				}
@@ -437,14 +399,14 @@ func (coderBackend *CoderBackend) maybeDevcontainerUp(wsName, remoteDir string) 
 // agent (identified by having a non-nil parent_id). Returns the agent name
 // or empty string if none found.
 func (coderBackend *CoderBackend) findDevcontainerAgent(wsName string) string {
-	ws, err := coderBackend.getWorkspace(wsName)
+	workspace, err := coderBackend.getWorkspace(wsName)
 	if err != nil {
 		return ""
 	}
-	for _, r := range ws.LatestBuild.Resources {
-		for _, a := range r.Agents {
-			if a.ParentID != nil && a.Status == "connected" {
-				return a.Name
+	for _, resource := range workspace.LatestBuild.Resources {
+		for _, agent := range resource.Agents {
+			if agent.ParentID != nil && agent.Status == "connected" {
+				return agent.Name
 			}
 		}
 	}

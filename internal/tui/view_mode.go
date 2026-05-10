@@ -15,6 +15,7 @@ const (
 	viewConfirmDeleteFleetWarn
 	viewAddInstance
 	viewAddFleet
+	viewEditFleet
 	viewTagInstance
 	viewPortForward
 	viewCodespacesAuth

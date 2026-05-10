@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/inspector"
+	homedircheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/homedir"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -542,6 +544,238 @@ func (fleetPage *fleetPage) updateAddFleet(m *model, msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	fleetPage.textInput, cmd = fleetPage.textInput.Update(msg)
 	return cmd
+}
+
+// ===========================================
+// Edit Fleet Dialog
+// ===========================================
+
+// editFleetRow identifies a focusable row in the edit-fleet dialog.
+const (
+	editFleetRowClaude = iota
+	editFleetRowCodex
+	editFleetRowHomeDir
+	editFleetRowCount
+)
+
+// homedirDetectedMsg is delivered when an asynchronous home-directory
+// detection cmd completes. The fleetName lets the receiver discard
+// stale results when the user has moved on to a different fleet.
+type homedirDetectedMsg struct {
+	fleetName string
+	homeDir   string
+	err       error
+}
+
+// detectHomedirCmd opens an inspector handle for the fleet's remote
+// and runs the home-dir check against it in a background goroutine.
+// The handle is closed before the message is returned so the temp
+// clone never outlives the command.
+//
+// Errors are surfaced as part of homedirDetectedMsg; the caller
+// treats them the same as a successful empty result (spinner stops,
+// nothing populated) because failure is expected (no devcontainer.json,
+// missing docker, network blocked, …) and the user can always type a
+// path manually.
+func detectHomedirCmd(fleetName, remoteURL, branch string) tea.Cmd {
+	return func() tea.Msg {
+		repo, err := inspector.Open(remoteURL, branch)
+		if err != nil {
+			return homedirDetectedMsg{fleetName: fleetName, err: err}
+		}
+		defer repo.Close()
+		homeDir, err := homedircheck.Detect(repo)
+		return homedirDetectedMsg{fleetName: fleetName, homeDir: homeDir, err: err}
+	}
+}
+
+// openEditFleetDialog opens the edit-fleet dialog for the fleet at the
+// cursor. The dialog edits FleetSettings — the Claude Code / Codex
+// shared-mount toggles plus the container-side HomeDir those mounts
+// resolve under. Settings declare the user's intent; supported backends
+// honor them at instance-creation time, others silently skip.
+//
+// When the fleet already has a mount enabled but no HomeDir, this
+// function kicks off the detector immediately so the user does not
+// have to re-toggle to recover an empty value.
+func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
+	r := fleetPage.currentRow()
+	if r == nil || r.kind != rowFleetHeader {
+		m.message = "Select a fleet to edit"
+		return nil
+	}
+	f, ok := m.st.Fleets[r.fleetName]
+	if !ok {
+		m.message = fmt.Sprintf("Fleet %s not found", r.fleetName)
+		return nil
+	}
+
+	fleetPage.mode = viewEditFleet
+	fleetPage.dialogFleet = f.Name
+	fleetPage.dialogClaudeMount = f.Settings.ClaudeCodeMount
+	fleetPage.dialogCodexMount = f.Settings.CodexMount
+	fleetPage.dialogRow = editFleetRowClaude
+	fleetPage.dialogDetecting = false
+
+	fleetPage.homedirInput.SetValue(f.Settings.HomeDir)
+	fleetPage.homedirInput.Blur()
+
+	if fleetPage.shouldKickHomedirDetect(f) {
+		return fleetPage.startHomedirDetect(f)
+	}
+	return nil
+}
+
+// updateEditFleet handles the edit-fleet dialog: arrow-key navigation
+// between rows, space/x toggling the mount checkboxes, character keys
+// editing the home-dir text input, enter committing, esc cancelling.
+func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return nil
+	}
+
+	switch keyMsg.String() {
+	case "enter":
+		return fleetPage.saveFleetEdits(m)
+
+	case "up":
+		fleetPage.dialogRow = (fleetPage.dialogRow - 1 + editFleetRowCount) % editFleetRowCount
+		fleetPage.syncEditFleetFocus()
+		return nil
+
+	case "down", "tab":
+		fleetPage.dialogRow = (fleetPage.dialogRow + 1) % editFleetRowCount
+		fleetPage.syncEditFleetFocus()
+		return nil
+
+	case "esc", "ctrl+c":
+		fleetPage.mode = viewNormal
+		fleetPage.homedirInput.Blur()
+		m.message = "Cancelled"
+		return nil
+	}
+
+	// Toggle / character input is row-specific.
+	switch fleetPage.dialogRow {
+	case editFleetRowClaude, editFleetRowCodex:
+		switch keyMsg.String() {
+		case " ", "left", "right", "x":
+			return fleetPage.toggleEditFleetRow(m)
+		}
+		return nil
+	case editFleetRowHomeDir:
+		var cmd tea.Cmd
+		fleetPage.homedirInput, cmd = fleetPage.homedirInput.Update(msg)
+		return cmd
+	}
+	return nil
+}
+
+// toggleEditFleetRow flips the boolean for the currently focused
+// checkbox row. When a mount is being turned on it may also kick off
+// auto-detection of the container's home directory so the user does
+// not have to type it themselves.
+func (fleetPage *fleetPage) toggleEditFleetRow(m *model) tea.Cmd {
+	turnedOn := false
+	switch fleetPage.dialogRow {
+	case editFleetRowClaude:
+		fleetPage.dialogClaudeMount = !fleetPage.dialogClaudeMount
+		turnedOn = fleetPage.dialogClaudeMount
+	case editFleetRowCodex:
+		fleetPage.dialogCodexMount = !fleetPage.dialogCodexMount
+		turnedOn = fleetPage.dialogCodexMount
+	}
+	if !turnedOn {
+		return nil
+	}
+	f, ok := m.st.Fleets[fleetPage.dialogFleet]
+	if !ok {
+		return nil
+	}
+	if fleetPage.shouldKickHomedirDetect(f) {
+		return fleetPage.startHomedirDetect(f)
+	}
+	return nil
+}
+
+// shouldKickHomedirDetect reports whether conditions are right to
+// trigger an auto-detection: at least one mount is enabled in the
+// current dialog state, the home-dir text input is empty, no detection
+// is already in flight, and the fleet has a remote URL we can clone.
+func (fleetPage *fleetPage) shouldKickHomedirDetect(f *fleet.Fleet) bool {
+	if fleetPage.dialogDetecting {
+		return false
+	}
+	if strings.TrimSpace(fleetPage.homedirInput.Value()) != "" {
+		return false
+	}
+	if !fleetPage.dialogClaudeMount && !fleetPage.dialogCodexMount {
+		return false
+	}
+	return strings.TrimSpace(f.Remote) != ""
+}
+
+// startHomedirDetect marks detection as in flight and returns the cmd
+// that performs the actual clone+inspect work in the background.
+func (fleetPage *fleetPage) startHomedirDetect(f *fleet.Fleet) tea.Cmd {
+	fleetPage.dialogDetecting = true
+	return detectHomedirCmd(f.Name, f.Remote, "")
+}
+
+// handleHomedirDetected applies the result of an auto-detection. The
+// guard checks ensure stale results — from a fleet the user has since
+// closed, or arriving after the user has already typed a value —
+// never overwrite live state.
+func (fleetPage *fleetPage) handleHomedirDetected(msg homedirDetectedMsg) {
+	// Always clear the in-flight flag for *this* fleet so the spinner
+	// stops, even when the result is not applied.
+	if fleetPage.dialogFleet == msg.fleetName {
+		fleetPage.dialogDetecting = false
+	}
+	if msg.err != nil || msg.homeDir == "" {
+		return
+	}
+	if fleetPage.mode != viewEditFleet || fleetPage.dialogFleet != msg.fleetName {
+		return
+	}
+	if strings.TrimSpace(fleetPage.homedirInput.Value()) != "" {
+		return
+	}
+	fleetPage.homedirInput.SetValue(msg.homeDir)
+}
+
+// syncEditFleetFocus moves the cursor blink to the home-dir input only
+// when that row is the currently selected row. Other rows have no
+// editable text so the input must blur to avoid a stray cursor.
+func (fleetPage *fleetPage) syncEditFleetFocus() {
+	if fleetPage.dialogRow == editFleetRowHomeDir {
+		fleetPage.homedirInput.Focus()
+	} else {
+		fleetPage.homedirInput.Blur()
+	}
+}
+
+// saveFleetEdits commits the dialog's mount toggles + home-dir to the
+// fleet's persisted settings and closes the dialog. Existing instances
+// are not retroactively re-mounted; the new settings apply to the next
+// instance provisioned on a supporting backend.
+func (fleetPage *fleetPage) saveFleetEdits(m *model) tea.Cmd {
+	f, ok := m.st.Fleets[fleetPage.dialogFleet]
+	if !ok {
+		fleetPage.mode = viewNormal
+		m.message = fmt.Sprintf("Fleet %s not found", fleetPage.dialogFleet)
+		return nil
+	}
+	f.Settings.ClaudeCodeMount = fleetPage.dialogClaudeMount
+	f.Settings.CodexMount = fleetPage.dialogCodexMount
+	f.Settings.HomeDir = strings.TrimSpace(fleetPage.homedirInput.Value())
+	_ = state.Save(m.st)
+
+	fleetPage.mode = viewNormal
+	fleetPage.homedirInput.Blur()
+	m.message = fmt.Sprintf("Updated %s settings", f.Name)
+	return nil
 }
 
 // ===========================================

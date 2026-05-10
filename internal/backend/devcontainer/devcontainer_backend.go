@@ -14,14 +14,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 )
 
-// Option configures a DevcontainerBackend.
-type Option func(*DevcontainerBackend)
-
-// WithVerbose enables verbose output (sends devcontainer stderr to os.Stderr).
-func WithVerbose(v bool) Option {
-	return func(devcontainerBackend *DevcontainerBackend) { devcontainerBackend.verbose = v }
-}
-
 // DevcontainerBackend implements backend.Backend using the devcontainer
 // and docker CLIs.
 type DevcontainerBackend struct {
@@ -73,8 +65,11 @@ func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string
 	return user
 }
 
-// Up runs `devcontainer up` for the given workspace folder.
-func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string) (*backend.UpResult, error) {
+// Up runs `devcontainer up` for the given workspace folder. Any mounts
+// in the slice are translated into `--mount type=bind,source=L,target=C`
+// flags so they appear inside the container alongside the SSH agent
+// socket and the workspace itself.
+func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string, mounts []backend.Mount) (*backend.UpResult, error) {
 	args := []string{"up", "--workspace-folder", workspaceDir}
 	var err error
 	args, err = devcontainerUpArgs(args)
@@ -82,6 +77,7 @@ func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string) (*backen
 		return nil, err
 	}
 	args = append(args, sshUpArgs()...)
+	args = append(args, customMountArgs(mounts)...)
 	cmd := exec.Command("devcontainer", args...)
 	env, err := devcontainerEnv(os.Environ())
 	if err != nil {
@@ -119,6 +115,8 @@ func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string) (*backen
 	return &result, nil
 }
 
+// devcontainerUpArgs appends the optional --update-remote-user-uid-default
+// flag based on the FLEET_DEVCONTAINER_UPDATE_REMOTE_USER_UID env var.
 func devcontainerUpArgs(base []string) ([]string, error) {
 	mode := strings.TrimSpace(os.Getenv("FLEET_DEVCONTAINER_UPDATE_REMOTE_USER_UID"))
 	switch mode {
@@ -131,6 +129,8 @@ func devcontainerUpArgs(base []string) ([]string, error) {
 	}
 }
 
+// devcontainerEnv applies BuildKit-related env tweaks based on the
+// FLEET_DEVCONTAINER_BUILDKIT env var.
 func devcontainerEnv(base []string) ([]string, error) {
 	mode := strings.TrimSpace(os.Getenv("FLEET_DEVCONTAINER_BUILDKIT"))
 	switch mode {
@@ -255,8 +255,8 @@ func (devcontainerBackend *DevcontainerBackend) LogsCommand(containerID string, 
 // container in one docker exec call.
 func (devcontainerBackend *DevcontainerBackend) CaptureAllSessions(containerID string) backend.AllSessions {
 	args := []string{"exec"}
-	if u := devcontainerBackend.containerUser(containerID); u != "" {
-		args = append(args, "-u", u)
+	if user := devcontainerBackend.containerUser(containerID); user != "" {
+		args = append(args, "-u", user)
 	}
 	args = append(args, containerID, "sh", "-c", backend.CaptureAllScript)
 	cmd := exec.Command("docker", args...)
@@ -270,8 +270,8 @@ func (devcontainerBackend *DevcontainerBackend) CaptureAllSessions(containerID s
 // AgentToolProbe detects which agent tool is running inside a container.
 func (devcontainerBackend *DevcontainerBackend) AgentToolProbe(containerID string) (string, bool) {
 	args := []string{"exec"}
-	if u := devcontainerBackend.containerUser(containerID); u != "" {
-		args = append(args, "-u", u)
+	if user := devcontainerBackend.containerUser(containerID); user != "" {
+		args = append(args, "-u", user)
 	}
 	args = append(args, containerID, "sh", "-c", backend.ToolProbeScript)
 	cmd := exec.Command("docker", args...)
@@ -280,6 +280,29 @@ func (devcontainerBackend *DevcontainerBackend) AgentToolProbe(containerID strin
 		return "", false
 	}
 	return backend.ParseToolProbeOutput(string(out))
+}
+
+// SupportsCustomMounts reports that the devcontainer backend honors
+// caller-supplied bind mounts via `devcontainer up --mount` flags.
+func (devcontainerBackend *DevcontainerBackend) SupportsCustomMounts() bool {
+	return true
+}
+
+// customMountArgs translates a slice of backend.Mount values into the
+// `--mount type=bind,...` flag pairs accepted by `devcontainer up`.
+// Returns nil for an empty input so callers can append unconditionally.
+func customMountArgs(mounts []backend.Mount) []string {
+	if len(mounts) == 0 {
+		return nil
+	}
+	args := make([]string, 0, len(mounts)*2)
+	for _, mount := range mounts {
+		if mount.LocalPath == "" || mount.ContainerPath == "" {
+			continue
+		}
+		args = append(args, "--mount", "type=bind,source="+mount.LocalPath+",target="+mount.ContainerPath)
+	}
+	return args
 }
 
 // EditorURI returns a VS Code devcontainer remote URI.

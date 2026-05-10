@@ -32,17 +32,21 @@ type fleetPage struct {
 	cursor    int
 	collapsed map[string]bool
 
-	mode          viewMode
-	dialogFleet   string
-	dialogInst    string
-	dialogBackend fleet.BackendType
-	dialogColor   string
-	dialogRow     int
-	dialogEditing bool
-	dialogGroupID string
-	dialogSession string
-	textInput     textinput.Model
-	branchInput   textinput.Model
+	mode              viewMode
+	dialogFleet       string
+	dialogInst        string
+	dialogBackend     fleet.BackendType
+	dialogColor       string
+	dialogRow         int
+	dialogEditing     bool
+	dialogGroupID     string
+	dialogSession     string
+	dialogClaudeMount bool
+	dialogCodexMount  bool
+	dialogDetecting   bool // true while a homedir auto-detect cmd is in flight
+	textInput         textinput.Model
+	branchInput       textinput.Model
+	homedirInput      textinput.Model
 
 	pfCursor      int
 	pfContainerID string
@@ -75,12 +79,17 @@ func newFleetPage() *fleetPage {
 	bi.Placeholder = "default branch"
 	bi.CharLimit = 128
 
+	hi := textinput.New()
+	hi.Placeholder = "/home/vscode"
+	hi.CharLimit = 256
+
 	return &fleetPage{
-		collapsed:   make(map[string]bool),
-		savedGroups: make(map[string]savedGroup),
-		textInput:   ti,
-		branchInput: bi,
-		listRowY:    -1,
+		collapsed:    make(map[string]bool),
+		savedGroups:  make(map[string]savedGroup),
+		textInput:    ti,
+		branchInput:  bi,
+		homedirInput: hi,
+		listRowY:     -1,
 	}
 }
 
@@ -161,6 +170,10 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 			m.message = fmt.Sprintf("Browser opened (proxy on localhost:%d)", bpm.localPort)
 		}
 		return nil
+
+	case homedirDetectedMsg:
+		fleetPage.handleHomedirDetected(msg.(homedirDetectedMsg))
+		return nil
 	}
 
 	// Mode-specific dispatch
@@ -173,6 +186,8 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.updateAddInstance(m, msg)
 	case viewAddFleet:
 		return fleetPage.updateAddFleet(m, msg)
+	case viewEditFleet:
+		return fleetPage.updateEditFleet(m, msg)
 	case viewTagInstance:
 		return fleetPage.updateTagInstance(m, msg)
 	case viewPortForward:
@@ -260,27 +275,27 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 
 func (fleetPage *fleetPage) appendSavedGroupRows(fleetName string, instance *fleet.Instance, liveGroups map[string]bool) {
 	sanitized := SanitizeSessionName(instance.Name)
-	for _, sg := range fleetPage.savedGroupsForInstance(instance.Name) {
-		if liveGroups[sg.GroupID] {
+	for _, group := range fleetPage.savedGroupsForInstance(instance.Name) {
+		if liveGroups[group.GroupID] {
 			continue
 		}
-		sessions := savedGroupSessionNames(sg, sanitized)
+		sessions := savedGroupSessionNames(group, sanitized)
 		fleetPage.rows = append(fleetPage.rows, row{
 			kind:        rowSession,
 			fleetName:   fleetName,
 			instance:    instance,
 			sessionName: sessions[0],
-			groupID:     sg.GroupID,
-			groupSize:   savedGroupPaneCount(sg),
+			groupID:     group.GroupID,
+			groupSize:   savedGroupPaneCount(group),
 		})
 	}
 }
 
 func (fleetPage *fleetPage) savedGroupsForInstance(instanceName string) []savedGroup {
 	groups := make([]savedGroup, 0, len(fleetPage.savedGroups))
-	for _, sg := range fleetPage.savedGroups {
-		if sg.InstanceName == instanceName {
-			groups = append(groups, sg)
+	for _, group := range fleetPage.savedGroups {
+		if group.InstanceName == instanceName {
+			groups = append(groups, group)
 		}
 	}
 	sort.Slice(groups, func(i, j int) bool {
@@ -564,6 +579,9 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			return fleetPage.handleEnter(m)
 
 		case "e":
+			if r := fleetPage.currentRow(); r != nil && r.kind == rowFleetHeader {
+				return fleetPage.openEditFleetDialog(m)
+			}
 			return fleetPage.openEditInstanceDialog(m)
 
 		case "o":
@@ -844,7 +862,7 @@ func (fleetPage *fleetPage) contextualHelpKeys(m *model) []string {
 	switch r.kind {
 	case rowFleetHeader:
 		return []string{
-			"j/k: navigate", "space: expand/collapse", "enter/e: toggle",
+			"j/k: navigate", "space/enter: expand/collapse", "e: edit fleet",
 			"a: add instance", "n: new fleet", "d: delete fleet", "r: refresh", "q: quit",
 		}
 
@@ -854,14 +872,14 @@ func (fleetPage *fleetPage) contextualHelpKeys(m *model) []string {
 			switch {
 			case r.instance.Status == fleet.StatusRunning:
 				keys = append(keys,
-					"space: show sessions", "enter/e: open shell",
+					"space: show sessions", "enter: open shell", "e: edit",
 					"s: stop", "a: new session", "d: delete", "t: tag",
 					"f: port-forward", "b: browser", "c: code", "o: terminal", "l: logs",
 					"r: refresh", "q: quit",
 				)
 			case r.instance.Status == fleet.StatusStopped:
 				keys = append(keys,
-					"enter/e: open shell", "s: start",
+					"enter: open shell", "e: edit", "s: start",
 					"a: new session", "d: delete", "t: tag", "r: refresh", "q: quit",
 				)
 			case r.instance.Status == fleet.StatusFailed:
@@ -1277,6 +1295,60 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			dialogLabel.Render("Repo:"),
 			fleetPage.textInput.View(),
 			dialogHint.Render("[enter] Add  [esc] Cancel"),
+		)
+		b.WriteString(dialogBox.Render(dialog))
+		b.WriteString("\n")
+
+	case viewEditFleet:
+		b.WriteString("\n")
+		rowMarker := func(r int) string {
+			if fleetPage.dialogRow == r {
+				return cursorStyle.Render("> ")
+			}
+			return "  "
+		}
+		checkbox := func(on bool) string {
+			if on {
+				return "[x]"
+			}
+			return "[ ]"
+		}
+
+		// Home-dir field: text input when focused, dim static text
+		// otherwise. Append a spinner + status when an auto-detect is
+		// running so the user knows the field will fill in soon (or
+		// can be safely typed over to discard the result).
+		var homedirField string
+		if fleetPage.dialogRow == editFleetRowHomeDir {
+			homedirField = fleetPage.homedirInput.View()
+		} else {
+			value := fleetPage.homedirInput.Value()
+			if value == "" {
+				homedirField = dimStyle.Render("(unset — defaults to /home/vscode)")
+			} else {
+				homedirField = value
+			}
+		}
+		if fleetPage.dialogDetecting {
+			homedirField = homedirField + " " + m.spinner.View() + dimStyle.Render(" detecting home dir...")
+		}
+
+		dialog := fmt.Sprintf(
+			"%s\n\n  %s %s\n%s%s %s\n%s%s %s\n%s%s %s\n\n  %s\n\n%s",
+			dialogTitle.Render("Edit fleet"),
+			dialogLabel.Render("Fleet:    "),
+			fleetExpandedStyle.Render(fleetPage.dialogFleet),
+			rowMarker(editFleetRowClaude),
+			checkbox(fleetPage.dialogClaudeMount),
+			dialogLabel.Render("Claude Code mount"),
+			rowMarker(editFleetRowCodex),
+			checkbox(fleetPage.dialogCodexMount),
+			dialogLabel.Render("Codex mount"),
+			rowMarker(editFleetRowHomeDir),
+			dialogLabel.Render("Home dir: "),
+			homedirField,
+			dimStyle.Render("Mounts apply on supported backends only"),
+			dialogHint.Render("[↑↓] Select  [space] Toggle  [enter] Save  [esc] Cancel"),
 		)
 		b.WriteString(dialogBox.Render(dialog))
 		b.WriteString("\n")

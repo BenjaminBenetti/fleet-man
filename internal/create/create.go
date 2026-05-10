@@ -15,6 +15,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	mountresolver "github.com/BenjaminBenetti/fleet-man/internal/mounts/resolver"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -70,7 +71,13 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 		}
 	}
 
-	result, err := instanceBackend.Up(wsDir)
+	mounts, err := resolveCustomMounts(instanceBackend, fleetName)
+	if err != nil {
+		setFailed(fleetName, instanceName, err)
+		return err
+	}
+
+	result, err := instanceBackend.Up(wsDir, mounts)
 	if err != nil {
 		setFailed(fleetName, instanceName, err)
 		return err
@@ -107,6 +114,31 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 		}
 	}
 	return state.Save(st)
+}
+
+// resolveCustomMounts looks up the fleet's persisted settings and
+// translates them into a slice of backend.Mount values. Returns nil
+// when the backend does not advertise SupportsCustomMounts so callers
+// avoid wasted host-side preparation for cloud-managed backends.
+//
+// State load failures are tolerated: if state.json cannot be read the
+// instance is still allowed to provision, just without any custom
+// mounts. (The instance record we are about to fill in is loaded from
+// the same file in the success path immediately after, which will
+// surface a hard error then if the file is truly broken.)
+func resolveCustomMounts(instanceBackend backend.Backend, fleetName string) ([]backend.Mount, error) {
+	if !instanceBackend.SupportsCustomMounts() {
+		return nil, nil
+	}
+	st, err := state.Load()
+	if err != nil {
+		return nil, nil
+	}
+	f, ok := st.Fleets[fleetName]
+	if !ok {
+		return nil, nil
+	}
+	return mountresolver.Resolve(fleetName, f.Settings)
 }
 
 // buildCoderBackend creates a CoderBackend configured from ~/.fleet/config.json
