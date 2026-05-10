@@ -16,12 +16,11 @@ import (
 
 // splitPaneMsg is sent after a tmux split-window command completes.
 type splitPaneMsg struct {
-	paneID     string // tmux pane ID (e.g. "%3")
-	fleet      string // fleet name for the instance
-	instance   string // instance name occupying the pane
-	session    string // tmux session name in the pane
-	groupID    string // session group ID (for group management)
-	restoreSeq int    // async restore token; zero means not a group restore
+	paneID     string      // tmux pane ID (e.g. "%3")
+	ref        InstanceRef // instance occupying the pane
+	session    string      // tmux session name in the pane
+	groupID    string      // session group ID (for group management)
+	restoreSeq int         // async restore token; zero means not a group restore
 	err        error
 }
 
@@ -57,7 +56,7 @@ func quoteArgs(args []string) string {
 // command. When an existing pane ID is provided, it is respawned in-place
 // (via respawn-pane) to avoid layout changes that cause visual corruption.
 // If the pane no longer exists, it falls back to creating a fresh split.
-func splitPaneCmd(existingPaneID string, fleetName string, instanceName string, sessionName string, groupID string, cmd *exec.Cmd) tea.Cmd {
+func splitPaneCmd(existingPaneID string, ref InstanceRef, sessionName string, groupID string, cmd *exec.Cmd) tea.Cmd {
 	// Snapshot the args — we must not capture the *exec.Cmd across goroutines.
 	args := cmd.Args
 
@@ -76,7 +75,7 @@ func splitPaneCmd(existingPaneID string, fleetName string, instanceName string, 
 			}
 			if exec.Command("tmux", respawnArgs...).Run() == nil {
 				_ = exec.Command("tmux", "select-pane", "-t", existingPaneID).Run()
-				return splitPaneMsg{paneID: existingPaneID, fleet: fleetName, instance: instanceName, session: sessionName, groupID: groupID}
+				return splitPaneMsg{paneID: existingPaneID, ref: ref, session: sessionName, groupID: groupID}
 			}
 			// Pane is gone — fall through to create a fresh split.
 		}
@@ -102,7 +101,7 @@ func splitPaneCmd(existingPaneID string, fleetName string, instanceName string, 
 
 		paneID := strings.TrimSpace(string(out))
 		_ = exec.Command("tmux", "select-pane", "-t", paneID).Run()
-		return splitPaneMsg{paneID: paneID, fleet: fleetName, instance: instanceName, session: sessionName, groupID: groupID}
+		return splitPaneMsg{paneID: paneID, ref: ref, session: sessionName, groupID: groupID}
 	}
 }
 
@@ -330,7 +329,7 @@ func paneSessionOrder() []string {
 // st is non-nil the layout is also mirrored into state.json so it
 // survives a fleet restart.
 func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
-	if fleetPage.activeGroupID == "" || fleetPage.splitInstance == "" {
+	if fleetPage.activeGroup.Empty() {
 		return
 	}
 	if fleetPage.restoreInProgress() {
@@ -341,8 +340,8 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 	// panes briefly report the host title before fleet shell sets a title;
 	// normalize those placeholders into deterministic group session names
 	// before persisting the layout.
-	sanitized := SanitizeSessionName(fleetPage.splitInstance)
-	sessionNames := normalizeSavedGroupSessions(paneSessionOrder(), sanitized, fleetPage.activeGroupID)
+	sanitized := SanitizeSessionName(fleetPage.activeGroup.Ref.Instance)
+	sessionNames := normalizeSavedGroupSessions(paneSessionOrder(), sanitized, fleetPage.activeGroup.GroupID)
 
 	// No shell panes visible in the outer tmux means either the group
 	// hasn't opened yet or its panes have already been killed (Ctrl+Q,
@@ -354,8 +353,8 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 	}
 
 	groupSnapshot := savedGroup{
-		GroupID:      fleetPage.activeGroupID,
-		InstanceName: fleetPage.splitInstance,
+		GroupID:      fleetPage.activeGroup.GroupID,
+		InstanceName: fleetPage.activeGroup.Ref.Instance,
 		Sessions:     sessionNames,
 		Layout:       tmuxLayoutString(),
 		PaneCount:    len(sessionNames),
@@ -364,10 +363,10 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 	// No-op when nothing changed. The 250ms layout tick fires this
 	// constantly; without this gate an idle split would rewrite
 	// state.json every tick with identical bytes.
-	if existing, ok := fleetPage.savedGroups[fleetPage.activeGroupID]; ok && sameSavedGroup(existing, groupSnapshot) {
+	if existing, ok := fleetPage.savedGroups[groupSnapshot.GroupID]; ok && sameSavedGroup(existing, groupSnapshot) {
 		return
 	}
-	fleetPage.savedGroups[fleetPage.activeGroupID] = groupSnapshot
+	fleetPage.savedGroups[groupSnapshot.GroupID] = groupSnapshot
 
 	if st == nil {
 		return
@@ -375,7 +374,7 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 	if st.GroupLayouts == nil {
 		st.GroupLayouts = make(map[string]state.GroupLayout)
 	}
-	st.GroupLayouts[fleetPage.activeGroupID] = state.GroupLayout{
+	st.GroupLayouts[groupSnapshot.GroupID] = state.GroupLayout{
 		GroupID:      groupSnapshot.GroupID,
 		InstanceName: groupSnapshot.InstanceName,
 		Sessions:     groupSnapshot.Sessions,
@@ -518,8 +517,7 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 		}
 		msg := splitPaneMsg{
 			paneID:     firstPaneID,
-			fleet:      fleetName,
-			instance:   instanceName,
+			ref:        InstanceRef{Fleet: fleetName, Instance: instanceName},
 			session:    firstSession,
 			groupID:    groupID,
 			restoreSeq: restoreSeq,

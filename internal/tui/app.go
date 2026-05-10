@@ -54,14 +54,11 @@ type model struct {
 	// Port forwarding
 	portForwards *portforward.Manager // manages active port forward processes
 
-	// Instance expansion: which instances are expanded to show sessions
-	expandedInstances map[string]bool              // key: "fleet/instance"
-	sessions          map[string]*sessionDiscovery // key: "fleet/instance"
-
-	// Last active session per instance (in-memory only). Used to
-	// reconnect to the previous session when pressing enter on an
-	// instance row instead of always creating a new one.
-	lastActive map[string]lastSession // key: "fleet/instance"
+	// Per-instance session state: discovery, expansion, last-active
+	// session. All three are owned by the SessionStore so every read
+	// or write is forced through an InstanceRef and cannot collide
+	// across instances that share a session or group name.
+	sessionStore *SessionStore
 
 	// Split pane mode: when fleet runs inside a host tmux session,
 	// pressing enter opens the instance shell in a right-side pane
@@ -99,17 +96,15 @@ func newModel() model {
 	agentSpinnerModel.Style = agentWorkingStyle
 
 	m := model{
-		creating:          make(map[string]bool),
-		backends:          make(map[fleet.BackendType]backend.Backend),
-		stats:             make(map[string]*backend.ContainerStats),
-		activity:          NewActivityTracker(),
-		portForwards:      portforward.NewManager(),
-		expandedInstances: make(map[string]bool),
-		sessions:          make(map[string]*sessionDiscovery),
-		lastActive:        make(map[string]lastSession),
-		spinner:           spinnerModel,
-		agentSpinner:      agentSpinnerModel,
-		inHostTmux:        os.Getenv("TMUX") != "",
+		creating:     make(map[string]bool),
+		backends:     make(map[fleet.BackendType]backend.Backend),
+		stats:        make(map[string]*backend.ContainerStats),
+		activity:     NewActivityTracker(),
+		portForwards: portforward.NewManager(),
+		sessionStore: NewSessionStore(),
+		spinner:      spinnerModel,
+		agentSpinner: agentSpinnerModel,
+		inHostTmux:   os.Getenv("TMUX") != "",
 	}
 
 	// Create the fleet page (persistent — background handlers reference it)
@@ -185,17 +180,13 @@ func (m *model) reload() {
 	m.err = nil
 
 	// Auto-collapse expanded instances that are no longer running
-	for key := range m.expandedInstances {
-		parts := strings.SplitN(key, "/", 2)
-		if len(parts) == 2 {
-			if f, ok := st.Fleets[parts[0]]; ok {
-				if instance, err := f.GetInstance(parts[1]); err == nil && instance.Status == fleet.StatusRunning {
-					continue
-				}
+	for _, ref := range m.sessionStore.ExpandedRefs() {
+		if f, ok := st.Fleets[ref.Fleet]; ok {
+			if instance, err := f.GetInstance(ref.Instance); err == nil && instance.Status == fleet.StatusRunning {
+				continue
 			}
 		}
-		delete(m.expandedInstances, key)
-		delete(m.sessions, key)
+		m.sessionStore.CollapseAndForgetSessions(ref)
 	}
 }
 
@@ -222,22 +213,17 @@ func (m *model) hydrateSavedGroups() {
 // instance whose group IDs no longer appear in the latest session
 // discovery. Called after each successful discovery so the next restart
 // doesn't resurrect layouts for groups the user has already deleted.
-func (m *model) pruneSavedGroupsForInstance(instKey string) {
-	if m.st == nil || m.fleetPage == nil {
+func (m *model) pruneSavedGroupsForInstance(ref InstanceRef) {
+	if m.st == nil || m.fleetPage == nil || !ref.Valid() {
 		return
 	}
-	parts := strings.SplitN(instKey, "/", 2)
-	if len(parts) != 2 {
-		return
-	}
-	instanceName := parts[1]
-	sanitized := SanitizeSessionName(instanceName)
-	disc, ok := m.sessions[instKey]
-	if !ok || disc == nil || disc.err != nil {
+	sanitized := SanitizeSessionName(ref.Instance)
+	sessions := m.sessionStore.Sessions(ref)
+	if len(sessions) == 0 {
 		return
 	}
 	live := make(map[string]bool)
-	for _, s := range disc.sessions {
+	for _, s := range sessions {
 		if gid, ok := parseGroupID(sanitized, s.Name); ok {
 			live[gid] = true
 		}
@@ -247,7 +233,7 @@ func (m *model) pruneSavedGroupsForInstance(instKey string) {
 	}
 	changed := false
 	for gid, savedLayout := range m.fleetPage.savedGroups {
-		if savedLayout.InstanceName != instanceName {
+		if savedLayout.InstanceName != ref.Instance {
 			continue
 		}
 		if !live[gid] {
@@ -361,29 +347,25 @@ func (m *model) containersByBackend() map[fleet.BackendType]*backendGroup {
 // sessionDiscoveryLoop returns a tea.Cmd that lists tmux sessions for
 // expanded instances on a 1-second cycle.
 func (m model) sessionDiscoveryLoop() tea.Cmd {
-	return sessionDiscoveryCmd(m.backends, m.expandedInstances, m.st.Fleets)
+	return sessionDiscoveryCmd(m.backends, m.sessionStore.ExpandedRefs(), m.st.Fleets)
 }
 
 // refreshInstanceSessions returns a tea.Cmd that re-lists tmux sessions
-// for the given instance (if expanded). Used after split pane creation,
+// for the given ref (if expanded). Used after split pane creation,
 // group switching, and session creation to keep the UI in sync.
-func (m *model) refreshInstanceSessions(instanceName string) tea.Cmd {
-	for instKey, expanded := range m.expandedInstances {
-		if !expanded {
-			continue
-		}
-		parts := strings.SplitN(instKey, "/", 2)
-		if len(parts) != 2 || parts[1] != instanceName {
-			continue
-		}
-		if f, ok := m.st.Fleets[parts[0]]; ok {
-			if instance, err := f.GetInstance(parts[1]); err == nil {
-				instanceBackend := m.instanceBackend(instance)
-				return listSessionsCmd(instanceBackend, instance.WorkspaceDir, instKey)
-			}
-		}
+func (m *model) refreshInstanceSessions(ref InstanceRef) tea.Cmd {
+	if !ref.Valid() || !m.sessionStore.IsExpanded(ref) {
+		return nil
 	}
-	return nil
+	f, ok := m.st.Fleets[ref.Fleet]
+	if !ok {
+		return nil
+	}
+	instance, err := f.GetInstance(ref.Instance)
+	if err != nil {
+		return nil
+	}
+	return listSessionsCmd(m.instanceBackend(instance), instance.WorkspaceDir, ref)
 }
 
 // ===========================================
@@ -698,30 +680,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// can't race ahead of the save. The diff gate makes idle ticks
 		// free. Always reschedule so the tick keeps firing.
 		fp := m.fleetPage
-		if fp != nil && fp.splitPaneID != "" && fp.activeGroupID != "" && splitOpen() {
+		if fp != nil && fp.splitPaneID != "" && !fp.activeGroup.Empty() && splitOpen() {
 			fp.saveCurrentGroupLayout(m.st)
 		}
 		extraCmds = append(extraCmds, layoutTickCmd())
 
 	case sessionDiscoveryMsg:
 		if msg.discovered != nil {
-			for key, sessions := range msg.discovered {
-				m.sessions[key] = &sessionDiscovery{sessions: sessions, fetchedAt: time.Now()}
+			for ref, sessions := range msg.discovered {
+				m.sessionStore.SetDiscovery(ref, sessions)
 			}
-			// Clear lastActive entries that point to sessions/groups
-			// that no longer exist.
-			for key, last := range m.lastActive {
-				disc, ok := m.sessions[key]
-				if !ok || disc.err != nil {
-					delete(m.lastActive, key)
-					continue
-				}
-				if !sessionStillExists(last, disc.sessions) {
-					delete(m.lastActive, key)
-				}
-			}
-			for key := range msg.discovered {
-				m.pruneSavedGroupsForInstance(key)
+			m.sessionStore.PruneStaleLastActive()
+			for ref := range msg.discovered {
+				m.pruneSavedGroupsForInstance(ref)
 			}
 		}
 		extraCmds = append(extraCmds, m.sessionDiscoveryLoop())
@@ -764,22 +735,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.paneID != "" {
 			fp.splitPaneID = msg.paneID
-			fp.splitFleet = msg.fleet
-			fp.splitInstance = msg.instance
+			fp.splitRef = msg.ref
 			fp.splitSession = msg.session
-			fp.activeGroupID = msg.groupID
-			instKey := msg.fleet + "/" + msg.instance
-			m.lastActive[instKey] = lastSession{sessionName: msg.session, groupID: msg.groupID}
-			bindHostSplitKeys(instKey, msg.groupID)
-			extraCmds = append(extraCmds, m.refreshInstanceSessions(msg.instance))
+			fp.activeGroup = ActiveGroup{Ref: msg.ref, GroupID: msg.groupID}
+			m.sessionStore.SetLastActive(msg.ref, lastSession{sessionName: msg.session, groupID: msg.groupID})
+			bindHostSplitKeys(msg.ref.Key(), msg.groupID)
+			extraCmds = append(extraCmds, m.refreshInstanceSessions(msg.ref))
 		}
 
 	case sessionsMsg:
 		if msg.err != nil {
-			m.sessions[msg.instanceKey] = &sessionDiscovery{err: msg.err, fetchedAt: time.Now()}
+			m.sessionStore.SetDiscoveryError(msg.ref, msg.err)
 		} else {
-			m.sessions[msg.instanceKey] = &sessionDiscovery{sessions: msg.sessions, fetchedAt: time.Now()}
-			m.pruneSavedGroupsForInstance(msg.instanceKey)
+			m.sessionStore.SetDiscovery(msg.ref, msg.sessions)
+			m.pruneSavedGroupsForInstance(msg.ref)
 		}
 
 	case sessionCreatedMsg:
@@ -788,14 +757,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.message = "Session created"
 		}
-		if m.expandedInstances[msg.instanceKey] {
-			parts := strings.SplitN(msg.instanceKey, "/", 2)
-			if len(parts) == 2 {
-				if f, ok := m.st.Fleets[parts[0]]; ok {
-					if instance, err := f.GetInstance(parts[1]); err == nil {
-						instanceBackend := m.instanceBackend(instance)
-						extraCmds = append(extraCmds, listSessionsCmd(instanceBackend, instance.WorkspaceDir, msg.instanceKey))
-					}
+		if m.sessionStore.IsExpanded(msg.ref) {
+			if f, ok := m.st.Fleets[msg.ref.Fleet]; ok {
+				if instance, err := f.GetInstance(msg.ref.Instance); err == nil {
+					extraCmds = append(extraCmds, listSessionsCmd(m.instanceBackend(instance), instance.WorkspaceDir, msg.ref))
 				}
 			}
 		}
@@ -806,14 +771,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.message = fmt.Sprintf("Renamed session %s → %s", msg.oldName, msg.newName)
 		}
-		if m.expandedInstances[msg.instanceKey] {
-			parts := strings.SplitN(msg.instanceKey, "/", 2)
-			if len(parts) == 2 {
-				if f, ok := m.st.Fleets[parts[0]]; ok {
-					if instance, err := f.GetInstance(parts[1]); err == nil {
-						instanceBackend := m.instanceBackend(instance)
-						extraCmds = append(extraCmds, listSessionsCmd(instanceBackend, instance.WorkspaceDir, msg.instanceKey))
-					}
+		if m.sessionStore.IsExpanded(msg.ref) {
+			if f, ok := m.st.Fleets[msg.ref.Fleet]; ok {
+				if instance, err := f.GetInstance(msg.ref.Instance); err == nil {
+					extraCmds = append(extraCmds, listSessionsCmd(m.instanceBackend(instance), instance.WorkspaceDir, msg.ref))
 				}
 			}
 		}
@@ -824,9 +785,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.message = fmt.Sprintf("Deleted session %s", msg.sessionName)
 		}
-		if last, ok := m.lastActive[msg.instanceKey]; ok {
-			if last.sessionName == msg.sessionName || last.groupID == msg.groupID {
-				delete(m.lastActive, msg.instanceKey)
+		if last, ok := m.sessionStore.LastActive(msg.ref); ok {
+			if last.sessionName == msg.sessionName || (msg.groupID != "" && last.groupID == msg.groupID) {
+				m.sessionStore.ClearLastActive(msg.ref)
 			}
 		}
 		fp := m.fleetPage
@@ -837,26 +798,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = state.Save(m.st)
 			}
 		}
-		if fp.splitSession == msg.sessionName || (msg.groupID != "" && fp.activeGroupID == msg.groupID) {
+		// Tear down the split only when the deletion targets the very
+		// group/session we're attached to — must match instance too,
+		// since group IDs are not unique across instances.
+		deletedActive := fp.splitRef == msg.ref &&
+			(fp.splitSession == msg.sessionName ||
+				(msg.groupID != "" && fp.activeGroup.GroupID == msg.groupID))
+		if deletedActive {
 			if fp.splitPaneID != "" {
 				killAllSplitPanes()
 				unbindHostSplitKeys()
 			}
-			fp.splitPaneID = ""
-			fp.splitFleet = ""
-			fp.splitInstance = ""
-			fp.splitSession = ""
-			fp.activeGroupID = ""
-			fp.restoringGroupID = ""
+			fp.clearSplit()
 		}
-		if m.expandedInstances[msg.instanceKey] {
-			parts := strings.SplitN(msg.instanceKey, "/", 2)
-			if len(parts) == 2 {
-				if f, ok := m.st.Fleets[parts[0]]; ok {
-					if instance, err := f.GetInstance(parts[1]); err == nil {
-						instanceBackend := m.instanceBackend(instance)
-						extraCmds = append(extraCmds, listSessionsCmd(instanceBackend, instance.WorkspaceDir, msg.instanceKey))
-					}
+		if m.sessionStore.IsExpanded(msg.ref) {
+			if f, ok := m.st.Fleets[msg.ref.Fleet]; ok {
+				if instance, err := f.GetInstance(msg.ref.Instance); err == nil {
+					extraCmds = append(extraCmds, listSessionsCmd(m.instanceBackend(instance), instance.WorkspaceDir, msg.ref))
 				}
 			}
 		}
@@ -919,7 +877,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case groupCycleMsg:
 		fp := m.fleetPage
-		if msg.seq == fp.debounceSeq && fp.pendingGroupID != "" {
+		if msg.seq == fp.debounceSeq && !fp.pendingGroup.Empty() {
 			cmd := fp.commitGroupCycle(&m)
 			extraCmds = append(extraCmds, cmd)
 		}
