@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/devcontainersetup"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/inspector"
+	devcontainercheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/devcontainer"
 	homedircheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/homedir"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
@@ -508,6 +510,12 @@ func (fleetPage *fleetPage) updateTagInstance(m *model, msg tea.Msg) tea.Cmd {
 // ===========================================
 
 // updateAddFleet handles the add-fleet dialog.
+//
+// Pressing enter does not immediately persist the fleet — instead, it
+// kicks off an asynchronous inspection (clone + .devcontainer lookup)
+// and switches to viewAddFleetInspecting so the user sees a spinner
+// while the network work runs. The inspect result is delivered via
+// devcontainerInspectedMsg and resumed in handleDevcontainerInspected.
 func (fleetPage *fleetPage) updateAddFleet(m *model, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -525,13 +533,13 @@ func (fleetPage *fleetPage) updateAddFleet(m *model, msg tea.Msg) tea.Cmd {
 				fleetPage.mode = viewNormal
 				return nil
 			}
-			m.st.GetOrCreateFleet(fleetName, repoURL)
-			_ = state.Save(m.st)
-			fleetPage.buildRows(m)
-			fleetPage.mode = viewNormal
+
+			fleetPage.dialogPendingRepoURL = repoURL
+			fleetPage.dialogPendingFleetName = fleetName
+			fleetPage.mode = viewAddFleetInspecting
 			fleetPage.textInput.Blur()
-			m.message = fmt.Sprintf("Added fleet %s", fleetName)
-			return nil
+			m.message = fmt.Sprintf("Inspecting %s...", repoURL)
+			return inspectDevcontainerCmd(fleetName, repoURL)
 
 		case "esc", "ctrl+c":
 			fleetPage.mode = viewNormal
@@ -544,6 +552,172 @@ func (fleetPage *fleetPage) updateAddFleet(m *model, msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	fleetPage.textInput, cmd = fleetPage.textInput.Update(msg)
 	return cmd
+}
+
+// ===========================================
+// Devcontainer Inspection (new fleet)
+// ===========================================
+
+// devcontainerInspectedMsg is delivered when the asynchronous repo
+// clone + devcontainer.json lookup completes. The fleetName is echoed
+// back so a stale result (the user dismissed the dialog before the
+// clone finished) can be discarded.
+type devcontainerInspectedMsg struct {
+	fleetName       string
+	hasDevcontainer bool
+	err             error
+}
+
+// inspectDevcontainerCmd runs a shallow clone and a devcontainer-check
+// in a background goroutine. The Repo handle is closed before the
+// message is returned so the temp clone never outlives the command.
+//
+// A clone failure surfaces with err set so the caller can report it
+// rather than blindly assuming the repo lacks a devcontainer — an
+// unreachable URL is a different problem than a configured-but-missing
+// devcontainer, and the user almost certainly wants to fix the URL
+// before being offered a setup workflow.
+func inspectDevcontainerCmd(fleetName, remoteURL string) tea.Cmd {
+	return func() tea.Msg {
+		repo, err := inspector.Open(remoteURL, "")
+		if err != nil {
+			return devcontainerInspectedMsg{fleetName: fleetName, err: err}
+		}
+		defer repo.Close()
+		present, err := devcontainercheck.Present(repo)
+		return devcontainerInspectedMsg{
+			fleetName:       fleetName,
+			hasDevcontainer: present,
+			err:             err,
+		}
+	}
+}
+
+// handleDevcontainerInspected resumes the new-fleet flow once the
+// asynchronous inspection has completed. There are three branches:
+//
+//  1. clone failed → surface the error, drop back to the URL input so
+//     the user can correct it. The fleet is not persisted.
+//  2. devcontainer present → persist the fleet immediately and dismiss.
+//  3. devcontainer missing → switch to the no-devcontainer dialog so
+//     the user can choose to abort or launch the setup agent.
+//
+// Stale results from a dialog the user has already abandoned are
+// dropped silently.
+func (fleetPage *fleetPage) handleDevcontainerInspected(m *model, msg devcontainerInspectedMsg) tea.Cmd {
+	if fleetPage.mode != viewAddFleetInspecting || fleetPage.dialogPendingFleetName != msg.fleetName {
+		return nil
+	}
+
+	if msg.err != nil {
+		fleetPage.mode = viewAddFleet
+		fleetPage.textInput.Focus()
+		m.message = fmt.Sprintf("Could not inspect repo: %v", msg.err)
+		return fleetPage.textInput.Cursor.BlinkCmd()
+	}
+
+	if msg.hasDevcontainer {
+		fleetPage.addPendingFleet(m)
+		m.message = fmt.Sprintf("Added fleet %s", fleetPage.dialogPendingFleetName)
+		fleetPage.clearPendingFleet()
+		fleetPage.mode = viewNormal
+		return nil
+	}
+
+	fleetPage.mode = viewAddFleetNoDevcontainer
+	return nil
+}
+
+// addPendingFleet creates the fleet record for whichever URL is
+// currently pending and rebuilds the row list. Used by both the
+// "devcontainer present → just add it" success path and the
+// "user picked Setup → optimistically add then hand off to agent"
+// branch.
+func (fleetPage *fleetPage) addPendingFleet(m *model) {
+	m.st.GetOrCreateFleet(fleetPage.dialogPendingFleetName, fleetPage.dialogPendingRepoURL)
+	_ = state.Save(m.st)
+	fleetPage.buildRows(m)
+}
+
+// clearPendingFleet wipes the per-dialog scratch fields once the
+// inspect/setup workflow finishes (success, abort, or error). The
+// values are not load-bearing after the dialog closes; resetting them
+// keeps a future open-this-dialog-again from seeing stale data.
+func (fleetPage *fleetPage) clearPendingFleet() {
+	fleetPage.dialogPendingRepoURL = ""
+	fleetPage.dialogPendingFleetName = ""
+}
+
+// ===========================================
+// No-Devcontainer Dialog
+// ===========================================
+
+// updateAddFleetInspecting handles input while the
+// "Inspecting <repo>..." spinner is on screen. The user can press esc /
+// ctrl+c to bail out of the new-fleet flow without waiting for the
+// clone to finish (the goroutine will still complete and the result
+// will be dropped by the stale-mode guard in
+// handleDevcontainerInspected).
+func (fleetPage *fleetPage) updateAddFleetInspecting(m *model, msg tea.Msg) tea.Cmd {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return nil
+	}
+	switch keyMsg.String() {
+	case "esc", "ctrl+c":
+		fleetPage.mode = viewNormal
+		fleetPage.clearPendingFleet()
+		m.message = "Cancelled"
+	}
+	return nil
+}
+
+// updateAddFleetNoDevcontainer handles the dialog shown when the
+// inspected repo has no devcontainer.json. Two paths:
+//
+//   - Abort (default; esc / n / a / enter): drop the pending fleet
+//     and return to the fleet list without persisting anything.
+//   - Setup (s): persist the fleet optimistically (so the user can see
+//     it in the list while they work) and hand off to the local
+//     coding agent with a devcontainer-authoring prompt. The agent's
+//     stdio takes over the terminal; when it exits (ctrl+c / ctrl+d)
+//     bubbletea repaints and we are back in the fleet list.
+func (fleetPage *fleetPage) updateAddFleetNoDevcontainer(m *model, msg tea.Msg) tea.Cmd {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return nil
+	}
+	switch keyMsg.String() {
+	case "s", "S":
+		repoURL := fleetPage.dialogPendingRepoURL
+		fleetName := fleetPage.dialogPendingFleetName
+
+		cmd, err := devcontainersetup.Command(repoURL)
+		if err != nil {
+			fleetPage.mode = viewNormal
+			fleetPage.clearPendingFleet()
+			m.message = fmt.Sprintf("No coding agent available: %v", err)
+			return nil
+		}
+
+		// Add the fleet immediately, before launching the agent. The
+		// issue spec is explicit: assume the user follows through. If
+		// they bail mid-setup the fleet still appears in the list so
+		// they can return to it (or delete it) later.
+		fleetPage.addPendingFleet(m)
+		m.message = fmt.Sprintf("Added fleet %s — launching setup agent...", fleetName)
+		fleetPage.clearPendingFleet()
+		fleetPage.mode = viewNormal
+
+		return tea.ExecProcess(cmd, func(err error) tea.Msg { return execDoneMsg{err} })
+
+	case "a", "A", "n", "N", "esc", "ctrl+c", "enter":
+		fleetPage.mode = viewNormal
+		fleetPage.clearPendingFleet()
+		m.message = "Cancelled — fleet not added"
+		return nil
+	}
+	return nil
 }
 
 // ===========================================

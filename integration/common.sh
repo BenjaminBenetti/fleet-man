@@ -233,6 +233,39 @@ seed_fleet_settings() {
 EOF
 }
 
+# install_stub_agent <marker_path>
+#
+# Drop a fake `claude` binary onto PATH ahead of any real one and have
+# it record its invocation to <marker_path>. Used by the new-fleet
+# devcontainer-check tests so the Setup branch behaves identically
+# regardless of whether the runner happens to have a real claude / codex
+# install on PATH.
+#
+# The stub exits 0 immediately so bubbletea regains the terminal after
+# tea.ExecProcess hands off — without a real agent the test would
+# otherwise hang waiting for an interactive prompt.
+#
+# Side-effects:
+#   - Writes the stub at $TEST_SCRATCH_DIR/stubs/claude
+#   - Prepends that dir to PATH for the current shell. tmux inherits the
+#     environment, so a subsequent tui_spawn will see the stub first.
+install_stub_agent() {
+  local marker="$1"
+  local stub_dir="${TEST_SCRATCH_DIR}/stubs"
+  mkdir -p "${stub_dir}"
+  cat > "${stub_dir}/claude" <<EOF
+#!/usr/bin/env bash
+# Stub agent installed by install_stub_agent — used by integration tests
+# to assert the Setup branch of the new-fleet devcontainer dialog
+# actually launches an agent. Records its argv to the marker file and
+# exits cleanly so the TUI repaints.
+printf '%s\n' "\$*" > "${marker}"
+exit 0
+EOF
+  chmod +x "${stub_dir}/claude"
+  export PATH="${stub_dir}:${PATH}"
+}
+
 # teardown_test best-effort cleans up any containers spawned by a test.
 # It tears down every fleet in state, then wipes state files. Called by
 # run.sh after each test whether it passed or failed.

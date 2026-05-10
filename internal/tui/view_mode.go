@@ -15,6 +15,8 @@ const (
 	viewConfirmDeleteFleetWarn
 	viewAddInstance
 	viewAddFleet
+	viewAddFleetInspecting
+	viewAddFleetNoDevcontainer
 	viewEditFleet
 	viewTagInstance
 	viewPortForward
