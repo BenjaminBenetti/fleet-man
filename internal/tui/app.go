@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -833,7 +832,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						switch instance.Status {
 						case fleet.StatusRunning:
 							delete(m.creating, key)
-							warnPath := filepath.Join(state.FleetDir(), "logs", fleetName+"-"+instName+".warn")
+							warnPath := state.WarnPath(fleetName, instName)
 							if warnData, err := os.ReadFile(warnPath); err == nil {
 								_ = os.Remove(warnPath)
 								firstLine := strings.SplitN(strings.TrimSpace(string(warnData)), "\n", 2)[0]

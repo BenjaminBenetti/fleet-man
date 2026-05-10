@@ -33,6 +33,24 @@ func WorkspacesDir() string {
 	return filepath.Join(FleetDir(), "workspaces")
 }
 
+// WarnPath returns the path to the host-side warning file for a single
+// instance. The TUI watches this path after StatusRunning and surfaces
+// the first line as a banner — a non-existent file simply means
+// "no warnings". Producers should use WriteWarn rather than constructing
+// the path manually so all warnings end up in the same well-known place.
+func WarnPath(fleetName, instanceName string) string {
+	return filepath.Join(FleetDir(), "logs", fleetName+"-"+instanceName+".warn")
+}
+
+// WriteWarn writes warning to the instance's WarnPath. Errors are
+// intentionally swallowed: warning files are best-effort surfacing of
+// non-fatal failures during instance creation, and a write failure here
+// must not itself fail the creation flow. Callers can assume the
+// function returns immediately and never panics.
+func WriteWarn(fleetName, instanceName, warning string) {
+	_ = os.WriteFile(WarnPath(fleetName, instanceName), []byte(warning), 0644)
+}
+
 // Load reads the state from disk. Returns an empty state if the file doesn't exist.
 func Load() (*State, error) {
 	mu.Lock()
