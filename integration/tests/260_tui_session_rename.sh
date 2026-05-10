@@ -43,8 +43,8 @@ tui_wait_for "Rename session" 5
 tui_assert_contains "Current:" "rename dialog missing Current label"
 tui_assert_contains "origname" "rename dialog should reference original name"
 
-info "testing esc-cancel on rename dialog"
-tui_send Escape
+info "testing ctrl+c cancel on rename dialog (name field auto-focuses on open)"
+tui_send "C-c"
 tui_wait_for "Cancelled" 5
 tui_wait_for_absent "Rename session" 5
 tui_assert_contains "origname" "session should still exist after cancel"

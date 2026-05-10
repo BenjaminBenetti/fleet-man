@@ -18,8 +18,8 @@ tui_send a
 tui_wait_for "instance-name" 5
 tui_assert_contains "New instance" "new-instance dialog title missing"
 
-info "pressing Escape to cancel the dialog"
-tui_send Escape
+info "pressing Ctrl+c to cancel the dialog (Name field auto-focuses on open; ctrl+c is the documented cancel from active mode)"
+tui_send "C-c"
 tui_wait_for_absent "instance-name" 5
 tui_wait_for_absent "New instance" 5
 

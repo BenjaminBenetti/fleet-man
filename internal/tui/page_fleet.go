@@ -40,6 +40,7 @@ type fleetPage struct {
 	dialogColor       string
 	dialogRow         int
 	dialogEditing     bool
+	dialogFieldActive bool
 	dialogGroupID     string
 	dialogSession     string
 	dialogClaudeMount bool
@@ -446,8 +447,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				fleetPage.textInput.SetValue(displayName)
 				fleetPage.textInput.Placeholder = "new-session-name"
 				fleetPage.textInput.CharLimit = 64
-				fleetPage.textInput.Focus()
-				return fleetPage.textInput.Cursor.BlinkCmd()
+				return fleetPage.activateTextInput()
 			}
 			m.reload()
 			fleetPage.buildRows(m)
@@ -525,8 +525,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				fleetPage.textInput.SetValue("")
 				fleetPage.textInput.Placeholder = "session-name (or empty for auto)"
 				fleetPage.textInput.CharLimit = 64
-				fleetPage.textInput.Focus()
-				return fleetPage.textInput.Cursor.BlinkCmd()
+				return fleetPage.activateTextInput()
 			}
 			fleetName := fleetPage.currentFleetName()
 			if fleetName == "" {
@@ -554,23 +553,21 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.dialogColor = instanceColorWhite
 			fleetPage.dialogRow = addInstanceRowName
 			fleetPage.dialogEditing = false
+			fleetPage.dialogFieldActive = false
 			fleetPage.textInput.SetValue("")
 			fleetPage.textInput.Placeholder = "instance-name"
 			fleetPage.textInput.CharLimit = 64
-			fleetPage.textInput.Focus()
 			fleetPage.branchInput.SetValue("")
 			fleetPage.branchInput.Placeholder = "default branch"
 			fleetPage.branchInput.CharLimit = 128
-			fleetPage.branchInput.Blur()
-			return fleetPage.textInput.Cursor.BlinkCmd()
+			return fleetPage.activateAddInstanceField()
 
 		case "n":
 			fleetPage.mode = viewAddFleet
 			fleetPage.textInput.SetValue("")
 			fleetPage.textInput.Placeholder = "git@github.com:org/repo.git"
 			fleetPage.textInput.CharLimit = 256
-			fleetPage.textInput.Focus()
-			return fleetPage.textInput.Cursor.BlinkCmd()
+			return fleetPage.activateTextInput()
 
 		case "pgup", "pgdown":
 			if m.inHostTmux && fleetPage.splitRef.Valid() && !fleetPage.activeGroup.Empty() {
@@ -656,8 +653,8 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.textInput.SetValue(instance.Tag)
 			fleetPage.textInput.Placeholder = "short description"
 			fleetPage.textInput.CharLimit = 128
-			fleetPage.textInput.Focus()
-			return fleetPage.textInput.Cursor.BlinkCmd()
+			fleetPage.deactivateTextInput()
+			return nil
 
 		case "l":
 			_, instance := fleetPage.selectedInstance(m)
@@ -689,8 +686,8 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.textInput.SetValue("")
 			fleetPage.textInput.Placeholder = "local:remote (e.g. 8080:80)"
 			fleetPage.textInput.CharLimit = 11
-			fleetPage.textInput.Focus()
-			return fleetPage.textInput.Cursor.BlinkCmd()
+			fleetPage.deactivateTextInput()
+			return nil
 		}
 
 	case execDoneMsg:
@@ -733,8 +730,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		fleetPage.textInput.SetValue("")
 		fleetPage.textInput.Placeholder = "session-name (or empty for auto)"
 		fleetPage.textInput.CharLimit = 64
-		fleetPage.textInput.Focus()
-		return fleetPage.textInput.Cursor.BlinkCmd()
+		return fleetPage.activateTextInput()
 
 	case rowSession:
 		instance := r.instance
@@ -1185,7 +1181,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			"%s\n\n%s\n\n%s",
 			dialogTitle.Render(title),
 			dialogLabel.Render(body),
-			dialogHint.Render("[y] Yes  [n] No"),
+			dialogHint.Render("[y] Yes  [n/q/esc] No"),
 		)
 		b.WriteString(dialogBox.Render(dialog))
 		b.WriteString("\n")
@@ -1204,7 +1200,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				fleetPage.dialogFleet, count,
 			)),
 			errorStyle.Render("This action cannot be undone."),
-			dialogHint.Render("[y] Confirm destroy  [n] Cancel"),
+			dialogHint.Render("[y] Confirm destroy  [n/q/esc] Cancel"),
 		)
 		b.WriteString(warnBox.Render(warnDialog))
 		b.WriteString("\n")
@@ -1223,7 +1219,11 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 		var title, hint, nameField, branchField, deployField string
 		if fleetPage.dialogEditing {
 			title = "Edit instance"
-			hint = "[↑↓] Select  [←→/space] Cycle color  [shift+tab] Color  [enter] Save  [esc] Cancel"
+			if fleetPage.dialogFieldActive {
+				hint = "[enter] Save  [esc] Done editing  [ctrl+c] Cancel"
+			} else {
+				hint = "[j/k] Select  [h/l/space] Cycle color  [shift+tab] Color  [enter] Edit/Save  [q/esc] Cancel"
+			}
 			nameField = fleetPage.textInput.View()
 			branchDisplay := fleetPage.branchInput.Value()
 			if branchDisplay == "" {
@@ -1233,9 +1233,13 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			deployField = dimStyle.Render(fmt.Sprintf("[ %s ]", backendTypeLabel(backendType)))
 		} else {
 			title = "New instance"
-			hint = "[↑↓] Select  [←→/space] Cycle  [shift+tab] Color  [enter] Create  [esc] Cancel"
-			if len(fleetPage.availableBackendTypes(m)) > 1 {
-				hint = "[↑↓] Select  [←→/space/tab] Cycle  [shift+tab] Color  [enter] Create  [esc] Cancel"
+			if fleetPage.dialogFieldActive {
+				hint = "[enter] Create  [esc] Done editing  [ctrl+c] Cancel"
+			} else {
+				hint = "[j/k] Select  [h/l/space] Cycle  [shift+tab] Color  [enter] Edit/Create  [q/esc] Cancel"
+				if len(fleetPage.availableBackendTypes(m)) > 1 {
+					hint = "[j/k] Select  [h/l/space/tab] Cycle  [shift+tab] Color  [enter] Edit/Create  [q/esc] Cancel"
+				}
 			}
 			nameField = fleetPage.textInput.View()
 			branchField = fleetPage.branchInput.View()
@@ -1282,7 +1286,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			dialogTitle.Render("New fleet"),
 			dialogLabel.Render("Repo:"),
 			fleetPage.textInput.View(),
-			dialogHint.Render("[enter] Add  [esc] Cancel"),
+			dialogHint.Render(fleetPage.textDialogHint("Add")),
 		)
 		b.WriteString(dialogBox.Render(dialog))
 		b.WriteString("\n")
@@ -1307,7 +1311,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 		// running so the user knows the field will fill in soon (or
 		// can be safely typed over to discard the result).
 		var homedirField string
-		if fleetPage.dialogRow == editFleetRowHomeDir {
+		if fleetPage.dialogFieldActive && fleetPage.dialogRow == editFleetRowHomeDir {
 			homedirField = fleetPage.homedirInput.View()
 		} else {
 			value := fleetPage.homedirInput.Value()
@@ -1336,7 +1340,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			dialogLabel.Render("Home dir: "),
 			homedirField,
 			dimStyle.Render("Mounts apply on supported backends only"),
-			dialogHint.Render("[↑↓] Select  [space] Toggle  [enter] Save  [esc] Cancel"),
+			dialogHint.Render(fleetPage.editFleetHint()),
 		)
 		b.WriteString(dialogBox.Render(dialog))
 		b.WriteString("\n")
@@ -1350,7 +1354,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			fleetExpandedStyle.Render(fleetPage.dialogFleet+"/"+fleetPage.dialogInst),
 			dialogLabel.Render("Tag:     "),
 			fleetPage.textInput.View(),
-			dialogHint.Render("[enter] Save  [esc] Cancel"),
+			dialogHint.Render(fleetPage.textDialogHint("Save")),
 		)
 		b.WriteString(dialogBox.Render(dialog))
 		b.WriteString("\n")
@@ -1384,7 +1388,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			strings.TrimRight(fwdLines.String(), "\n"),
 			dialogLabel.Render("Add:"),
 			fleetPage.textInput.View(),
-			dialogHint.Render("[enter] Add  [d] Delete selected  [j/k] Navigate  [esc] Close"),
+			dialogHint.Render(fleetPage.portForwardHint()),
 		)
 		b.WriteString(portForwardBox.Render(dialog))
 		b.WriteString("\n")
@@ -1399,7 +1403,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 					"required. Press Enter to log in and grant the required scope.",
 			),
 			dimStyle.Render("gh auth login -h github.com -s codespace"),
-			dialogHint.Render("[enter] Authenticate  [esc] Cancel"),
+			dialogHint.Render("[enter] Authenticate  [q/esc] Cancel"),
 		)
 		b.WriteString(warnBox.Render(dialog))
 		b.WriteString("\n")
@@ -1413,7 +1417,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				"GitHub Codespaces requires a machine type but none is\n"+
 					"configured. Press Enter to open Settings and set one.",
 			),
-			dialogHint.Render("[enter] Open Settings  [esc] Cancel"),
+			dialogHint.Render("[enter] Open Settings  [q/esc] Cancel"),
 		)
 		b.WriteString(warnBox.Render(dialog))
 		b.WriteString("\n")
@@ -1428,7 +1432,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 					"Please stop some before creating a new instance,\n"+
 					"or use a different instance backend.",
 			),
-			dialogHint.Render("[enter/esc] Dismiss"),
+			dialogHint.Render("[enter/q/esc] Dismiss"),
 		)
 		b.WriteString(warnBox.Render(dialog))
 		b.WriteString("\n")
@@ -1442,7 +1446,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			fleetExpandedStyle.Render(fleetPage.dialogFleet+"/"+fleetPage.dialogInst),
 			dialogLabel.Render("Name:    "),
 			fleetPage.textInput.View(),
-			dialogHint.Render("[enter] Create (empty for auto-name)  [esc] Cancel"),
+			dialogHint.Render(fleetPage.textDialogHint("Create (empty for auto-name)")),
 		)
 		b.WriteString(dialogBox.Render(dialog))
 		b.WriteString("\n")
@@ -1458,7 +1462,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			sessionStyle.Render(fleetPage.dialogSession),
 			dialogLabel.Render("New:     "),
 			fleetPage.textInput.View(),
-			dialogHint.Render("[enter] Rename  [esc] Cancel"),
+			dialogHint.Render(fleetPage.textDialogHint("Rename")),
 		)
 		b.WriteString(dialogBox.Render(dialog))
 		b.WriteString("\n")
@@ -1474,7 +1478,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			dialogTitle.Render("Delete session"),
 			dialogLabel.Render(fmt.Sprintf("Remove session %s from %s/%s?",
 				displayName, fleetPage.dialogFleet, fleetPage.dialogInst)),
-			dialogHint.Render("[y] Yes  [n] No"),
+			dialogHint.Render("[y] Yes  [n/q/esc] No"),
 		)
 		b.WriteString(dialogBox.Render(dialog))
 		b.WriteString("\n")
@@ -1490,6 +1494,27 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 	}
 
 	return b.String()
+}
+
+func (fleetPage *fleetPage) textDialogHint(action string) string {
+	if fleetPage.dialogFieldActive {
+		return fmt.Sprintf("[enter] %s  [esc] Done editing  [ctrl+c] Cancel", action)
+	}
+	return "[enter] Edit  [q/esc] Cancel"
+}
+
+func (fleetPage *fleetPage) editFleetHint() string {
+	if fleetPage.dialogFieldActive {
+		return "[enter] Save  [esc] Done editing  [ctrl+c] Cancel"
+	}
+	return "[j/k] Select  [h/l/space] Toggle  [enter] Edit/Save  [q/esc] Cancel"
+}
+
+func (fleetPage *fleetPage) portForwardHint() string {
+	if fleetPage.dialogFieldActive {
+		return "[enter] Add  [esc] List  [ctrl+c] Close"
+	}
+	return "[j/k] Navigate  [d] Delete selected  [enter] Edit add field  [q/esc] Close"
 }
 
 // ===========================================

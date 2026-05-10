@@ -169,8 +169,8 @@ func TestViewFleetListShowsBranchItemForInstance(t *testing.T) {
 			},
 		},
 		sessionStore: NewSessionStore(),
-		stats:             map[string]*backend.ContainerStats{},
-		fleetPage:         fp,
+		stats:        map[string]*backend.ContainerStats{},
+		fleetPage:    fp,
 	}
 
 	prevResolveBranch := resolveWorkspaceBranch
@@ -284,8 +284,8 @@ func TestViewFleetListOmitsBranchItemWhenBranchIsUnavailable(t *testing.T) {
 			},
 		},
 		sessionStore: NewSessionStore(),
-		stats:             map[string]*backend.ContainerStats{},
-		fleetPage:         fp,
+		stats:        map[string]*backend.ContainerStats{},
+		fleetPage:    fp,
 	}
 
 	prevResolveBranch := resolveWorkspaceBranch
@@ -325,8 +325,8 @@ func TestViewFleetListShowsAgentWorkingIndicator(t *testing.T) {
 			map[string]state.AgentTool{"abc123": state.AgentToolClaude},
 		),
 		sessionStore: NewSessionStore(),
-		stats:             map[string]*backend.ContainerStats{},
-		fleetPage:         fp,
+		stats:        map[string]*backend.ContainerStats{},
+		fleetPage:    fp,
 	}
 
 	prevResolveBranch := resolveWorkspaceBranch
@@ -366,8 +366,8 @@ func TestViewFleetListShowsAgentWaitingIndicator(t *testing.T) {
 			map[string]state.AgentTool{"abc123": state.AgentToolClaude},
 		),
 		sessionStore: NewSessionStore(),
-		stats:             map[string]*backend.ContainerStats{},
-		fleetPage:         fp,
+		stats:        map[string]*backend.ContainerStats{},
+		fleetPage:    fp,
 	}
 
 	prevResolveBranch := resolveWorkspaceBranch
@@ -407,8 +407,8 @@ func TestViewFleetListShowsAgentOffIndicator(t *testing.T) {
 			nil,
 		),
 		sessionStore: NewSessionStore(),
-		stats:             map[string]*backend.ContainerStats{},
-		fleetPage:         fp,
+		stats:        map[string]*backend.ContainerStats{},
+		fleetPage:    fp,
 	}
 
 	prevResolveBranch := resolveWorkspaceBranch
@@ -446,10 +446,10 @@ func TestViewFleetListNoAgentIndicatorForStoppedInstance(t *testing.T) {
 		config: &state.Config{
 			AgentSettings: state.AgentSettings{ToolSelection: state.AgentToolClaude},
 		},
-		activity:          NewActivityTracker(),
+		activity:     NewActivityTracker(),
 		sessionStore: NewSessionStore(),
-		stats:             map[string]*backend.ContainerStats{},
-		fleetPage:         fp,
+		stats:        map[string]*backend.ContainerStats{},
+		fleetPage:    fp,
 	}
 
 	prevResolveBranch := resolveWorkspaceBranch
@@ -483,8 +483,8 @@ func TestEditInstanceRenamesViaDisplayName(t *testing.T) {
 			},
 		},
 		sessionStore: NewSessionStore(),
-		stats:             map[string]*backend.ContainerStats{},
-		fleetPage:         fp,
+		stats:        map[string]*backend.ContainerStats{},
+		fleetPage:    fp,
 	}
 
 	// Press 'e' on the instance row to open the edit dialog.
@@ -500,7 +500,11 @@ func TestEditInstanceRenamesViaDisplayName(t *testing.T) {
 		t.Fatalf("prefilled input = %q, want %q", got, "agent-1")
 	}
 
-	// Type a new name and submit.
+	// First Enter activates the name field, then type and submit with another Enter.
+	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !fp.dialogFieldActive {
+		t.Fatalf("expected name field to activate after first enter")
+	}
 	fp.textInput.SetValue("auth-fix")
 	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyEnter})
 
@@ -540,6 +544,8 @@ func TestEditInstanceRejectsEmptyName(t *testing.T) {
 	}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	// Activate the name field, then submit an empty value.
+	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyEnter})
 	fp.textInput.SetValue("   ")
 	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyEnter})
 
@@ -734,6 +740,97 @@ func TestEditFleetEscDiscardsChanges(t *testing.T) {
 	}
 	if f.Settings.ClaudeCodeMount {
 		t.Fatalf("ClaudeCodeMount = true, expected esc to discard the toggle")
+	}
+}
+
+func TestAddInstanceDialogVimKeysRespectActiveField(t *testing.T) {
+	fp := newFleetPage()
+	fp.mode = viewAddInstance
+	fp.dialogFleet = "alpha"
+	fp.dialogBackend = fleet.BackendDevcontainer
+	fp.dialogColor = instanceColorWhite
+	fp.dialogRow = addInstanceRowName
+	fp.dialogFieldActive = true
+	fp.textInput.Focus()
+	m := &model{}
+
+	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if got := fp.textInput.Value(); got != "k" {
+		t.Fatalf("active name input = %q, want k", got)
+	}
+	if fp.dialogRow != addInstanceRowName {
+		t.Fatalf("dialogRow moved while input active: got %d", fp.dialogRow)
+	}
+
+	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if fp.dialogFieldActive {
+		t.Fatal("dialogFieldActive should be false after esc from active field")
+	}
+
+	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if fp.dialogRow != addInstanceRowBranch {
+		t.Fatalf("dialogRow = %d, want branch row", fp.dialogRow)
+	}
+	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if fp.dialogRow != addInstanceRowColor {
+		t.Fatalf("dialogRow = %d, want color row", fp.dialogRow)
+	}
+	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if fp.dialogColor != "red" {
+		t.Fatalf("dialogColor = %q, want red after l", fp.dialogColor)
+	}
+	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if fp.mode != viewNormal {
+		t.Fatalf("mode after q = %v, want viewNormal", fp.mode)
+	}
+}
+
+func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{}}
+	fp := newFleetPage()
+	fp.mode = viewEditFleet
+	fp.dialogFleet = "alpha"
+	fp.dialogRow = editFleetRowClaude
+	m := &model{
+		st:        &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}},
+		fleetPage: fp,
+	}
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if fp.dialogRow != editFleetRowCodex {
+		t.Fatalf("dialogRow = %d, want codex row", fp.dialogRow)
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if !fp.dialogCodexMount {
+		t.Fatal("l should toggle selected codex row")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if fp.dialogRow != editFleetRowHomeDir {
+		t.Fatalf("dialogRow = %d, want home-dir row", fp.dialogRow)
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !fp.dialogFieldActive {
+		t.Fatal("enter on home-dir row should activate text field")
+	}
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if got := fp.homedirInput.Value(); got != "k" {
+		t.Fatalf("active home-dir input = %q, want k", got)
+	}
+	if fp.dialogRow != editFleetRowHomeDir {
+		t.Fatalf("dialogRow moved while home-dir active: got %d", fp.dialogRow)
+	}
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if fp.dialogRow != editFleetRowCodex {
+		t.Fatalf("dialogRow = %d, want codex row after inactive k", fp.dialogRow)
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if fp.mode != viewNormal {
+		t.Fatalf("mode after q = %v, want viewNormal", fp.mode)
 	}
 }
 
