@@ -1,5 +1,6 @@
 // Package resolver translates fleet-level mount settings into concrete
-// host→container bind mounts. It owns the mapping between agent-specific
+// host→container bind mounts (and, where needed, symlinks layered on
+// top of those mounts). It owns the mapping between agent-specific
 // toggles (Claude Code, Codex, …) and the filesystem layout under
 // ~/.fleet/workspaces/<fleet>/, so the rest of the codebase can treat
 // mounts as a generic primitive.
@@ -16,14 +17,38 @@ import (
 )
 
 // ===========================================
+// Constants
+// ===========================================
+
+// defaultContainerHome is used when FleetSettings.HomeDir is empty —
+// either because the user has not run the home-dir detector yet, or
+// because the fleet predates the field. Matches the user created by
+// Microsoft's standard devcontainer base images.
+const defaultContainerHome = "/home/vscode"
+
+// sharedFilesSubdir is the directory name (under a fleet's mount
+// root on the host) that holds every single-file mount. Living in
+// one shared directory keeps the bind-mount count to one regardless
+// of how many file mounts are enabled.
+const sharedFilesSubdir = "files"
+
+// sharedFilesContainerPath is the absolute path inside the container
+// where the shared files directory is mounted. Lives at the root
+// (rather than under the user's home) so it never collides with
+// agent-managed paths and so its top-level dir creation does not
+// require user-level permissions.
+const sharedFilesContainerPath = "/fleet-mounts/files"
+
+// ===========================================
 // Public API
 // ===========================================
 
 // Resolve translates the mount-related fields of fleetSettings into a
-// slice of backend.Mount values for the named fleet. For each enabled
-// setting it ensures the host-side directory exists (creating it with
-// 0700 permissions if needed) so the bind mount target is valid before
-// the backend's Up call runs.
+// Resolved bundle for the named fleet. For each enabled directory
+// setting it ensures the host-side directory exists; for each enabled
+// single-file setting it ensures the host file exists and adds both a
+// shared parent-dir mount and a Symlink that the caller must create
+// inside the container after Up.
 //
 // The container side of each mount is rooted at fleetSettings.HomeDir
 // (the user's container home). When HomeDir is empty Resolve falls
@@ -31,85 +56,63 @@ import (
 // devcontainer images — so existing fleets created before the home-dir
 // detector existed still get a working mount on the common case.
 //
-// Returns an empty slice when no mounts are enabled. An error is
-// returned only when a host directory cannot be created, leaving the
-// caller to decide whether to abort provisioning or proceed without
-// the mount.
-func Resolve(fleetName string, fleetSettings fleet.FleetSettings) ([]backend.Mount, error) {
+// Returns a zero-value Resolved when no mounts are enabled. An error
+// is returned only when a host directory or file cannot be created,
+// leaving the caller to decide whether to abort provisioning or
+// proceed without the mount.
+func Resolve(fleetName string, fleetSettings fleet.FleetSettings) (Resolved, error) {
 	containerHome := fleetSettings.HomeDir
 	if containerHome == "" {
 		containerHome = defaultContainerHome
 	}
 
-	mountSpecs := mountSpecsFor(fleetSettings, containerHome)
-	if len(mountSpecs) == 0 {
-		return nil, nil
-	}
-
+	var resolved Resolved
 	fleetMountRoot := fleetMountDir(fleetName)
-	mounts := make([]backend.Mount, 0, len(mountSpecs))
-	for _, spec := range mountSpecs {
+
+	// Directory mounts.
+	for _, spec := range dirMountSpecsFor(fleetSettings, containerHome) {
 		hostPath := filepath.Join(fleetMountRoot, spec.hostSubdir)
 		if err := ensureHostDir(hostPath); err != nil {
-			return nil, fmt.Errorf("preparing %s mount: %w", spec.name, err)
+			return Resolved{}, fmt.Errorf("preparing %s mount: %w", spec.name, err)
 		}
-		mounts = append(mounts, backend.Mount{
+		resolved.Mounts = append(resolved.Mounts, backend.Mount{
 			LocalPath:     hostPath,
 			ContainerPath: spec.containerPath,
 		})
 	}
-	return mounts, nil
-}
 
-// ===========================================
-// Internal types
-// ===========================================
+	// File mounts: one shared host directory bind-mounted into the
+	// container, plus a symlink per file pointing the agent's
+	// expected path at the file inside the shared mount.
+	fileSpecs := fileMountSpecsFor(fleetSettings, containerHome)
+	if len(fileSpecs) > 0 {
+		sharedHostDir := filepath.Join(fleetMountRoot, sharedFilesSubdir)
+		if err := ensureHostDir(sharedHostDir); err != nil {
+			return Resolved{}, fmt.Errorf("preparing shared files mount: %w", err)
+		}
+		resolved.Mounts = append(resolved.Mounts, backend.Mount{
+			LocalPath:     sharedHostDir,
+			ContainerPath: sharedFilesContainerPath,
+		})
+		for _, spec := range fileSpecs {
+			hostFile := filepath.Join(sharedHostDir, spec.filename)
+			if err := ensureHostFile(hostFile); err != nil {
+				return Resolved{}, fmt.Errorf("preparing %s file: %w", spec.name, err)
+			}
+			resolved.Symlinks = append(resolved.Symlinks, Symlink{
+				Source:      sharedFilesContainerPath + "/" + spec.filename,
+				Target:      spec.symlinkTarget,
+				SeedContent: spec.seedContent,
+			})
+		}
+	}
 
-// mountSpec describes a single host↔container mapping that a fleet
-// setting can request. The host path is computed by joining the fleet's
-// mount root with hostSubdir; the container path is used verbatim.
-type mountSpec struct {
-	// name is a human-readable identifier used in error messages.
-	name string
-	// hostSubdir is the relative path under the fleet's mount root.
-	hostSubdir string
-	// containerPath is the absolute path inside the container where the
-	// host directory should appear.
-	containerPath string
+	return resolved, nil
 }
 
 // ===========================================
 // Internal helpers
 // ===========================================
-
-// mountSpecsFor returns the mountSpecs implied by the enabled fields of
-// fleetSettings, anchored at the given containerHome. Adding a new
-// agentic mount toggle is one new entry in this function plus one new
-// bool on fleet.FleetSettings.
-func mountSpecsFor(fleetSettings fleet.FleetSettings, containerHome string) []mountSpec {
-	var specs []mountSpec
-	if fleetSettings.ClaudeCodeMount {
-		specs = append(specs, mountSpec{
-			name:          "Claude Code",
-			hostSubdir:    ".claude",
-			containerPath: containerHome + "/.claude",
-		})
-	}
-	if fleetSettings.CodexMount {
-		specs = append(specs, mountSpec{
-			name:          "Codex",
-			hostSubdir:    ".codex",
-			containerPath: containerHome + "/.codex",
-		})
-	}
-	return specs
-}
-
-// defaultContainerHome is used when FleetSettings.HomeDir is empty —
-// either because the user has not run the home-dir detector yet, or
-// because the fleet predates the field. Matches the user created by
-// Microsoft's standard devcontainer base images.
-const defaultContainerHome = "/home/vscode"
 
 // fleetMountDir returns the host directory under which all of a fleet's
 // shared mount targets live. Lives next to (not inside) the per-instance
@@ -123,4 +126,19 @@ func fleetMountDir(fleetName string) string {
 // hold authentication tokens (Claude/Codex login state).
 func ensureHostDir(path string) error {
 	return os.MkdirAll(path, 0700)
+}
+
+// ensureHostFile creates an empty file at path with 0600 permissions
+// when one does not already exist, leaving any existing content
+// untouched. The parent directory must already exist (callers run
+// ensureHostDir on it first).
+func ensureHostFile(path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
