@@ -47,14 +47,13 @@ type fleetPage struct {
 	pfCursor      int
 	pfContainerID string
 
-	splitPaneID   string
-	splitFleet    string
-	splitInstance string
-	splitSession  string
+	splitPaneID  string
+	splitRef     InstanceRef // (fleet, instance) of the open split pane; zero when none
+	splitSession string
 
-	activeGroupID    string
+	activeGroup      ActiveGroup // qualified by splitRef so two groups with the same ID across instances cannot alias
 	savedGroups      map[string]savedGroup
-	pendingGroupID   string
+	pendingGroup     ActiveGroup
 	debounceSeq      int
 	restoringGroupID string
 	restoreSeq       int
@@ -105,6 +104,17 @@ func (fleetPage *fleetPage) finishGroupRestore(seq int) bool {
 	return true
 }
 
+// clearSplit resets every field that tracks the open split pane. Used
+// whenever the split is closed (user toggle, external kill, restore
+// teardown) so a future open starts from a known-empty state.
+func (fleetPage *fleetPage) clearSplit() {
+	fleetPage.splitPaneID = ""
+	fleetPage.splitRef = InstanceRef{}
+	fleetPage.splitSession = ""
+	fleetPage.activeGroup = ActiveGroup{}
+	fleetPage.restoringGroupID = ""
+}
+
 // Init is called when the fleet page becomes active.
 func (fleetPage *fleetPage) Init(m *model) tea.Cmd {
 	fleetPage.buildRows(m)
@@ -124,7 +134,7 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		// %/" adds new panes via a tmux binding, mouse drag resizes,
 		// Ctrl+Q/O closes without notifying fleet. The save is
 		// diff-gated so idle ticks don't hit disk.
-		if fleetPage.splitPaneID != "" && fleetPage.activeGroupID != "" && splitOpen() {
+		if fleetPage.splitPaneID != "" && !fleetPage.activeGroup.Empty() && splitOpen() {
 			fleetPage.saveCurrentGroupLayout(m.st)
 		}
 		// Detect when panes were killed externally. savedGroups already
@@ -132,12 +142,7 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		// transient fields here loses nothing.
 		if fleetPage.splitPaneID != "" && !splitOpen() {
 			unbindHostSplitKeys()
-			fleetPage.splitPaneID = ""
-			fleetPage.splitFleet = ""
-			fleetPage.splitInstance = ""
-			fleetPage.splitSession = ""
-			fleetPage.activeGroupID = ""
-			fleetPage.restoringGroupID = ""
+			fleetPage.clearSplit()
 		}
 		return nil
 
@@ -220,24 +225,20 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 		if !fleetPage.collapsed[name] {
 			for _, instance := range f.Instances {
 				fleetPage.rows = append(fleetPage.rows, row{kind: rowInstance, fleetName: name, instance: instance})
-				instKey := name + "/" + instance.Name
-				if m.expandedInstances[instKey] {
+				ref := InstanceRef{Fleet: name, Instance: instance.Name}
+				if m.sessionStore.IsExpanded(ref) {
 					liveGroups := make(map[string]bool)
-					if disc, ok := m.sessions[instKey]; ok && disc.err == nil {
-						sanitized := SanitizeSessionName(instance.Name)
-						groups := groupSessions(sanitized, disc.sessions)
-						for _, g := range groups {
-							liveGroups[g.GroupID] = true
-							rootName := g.Sessions[0].Name
-							fleetPage.rows = append(fleetPage.rows, row{
-								kind:        rowSession,
-								fleetName:   name,
-								instance:    instance,
-								sessionName: rootName,
-								groupID:     g.GroupID,
-								groupSize:   len(g.Sessions),
-							})
-						}
+					for _, g := range m.sessionStore.Groups(ref) {
+						liveGroups[g.GroupID] = true
+						rootName := g.Sessions[0].Name
+						fleetPage.rows = append(fleetPage.rows, row{
+							kind:        rowSession,
+							fleetName:   name,
+							instance:    instance,
+							sessionName: rootName,
+							groupID:     g.GroupID,
+							groupSize:   len(g.Sessions),
+						})
 					}
 					fleetPage.appendSavedGroupRows(name, instance, liveGroups)
 					fleetPage.rows = append(fleetPage.rows, row{
@@ -398,15 +399,15 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 						m.message = "Instance must be running to view sessions"
 						break
 					}
-					instKey := r.fleetName + "/" + r.instance.Name
-					if m.expandedInstances[instKey] {
-						delete(m.expandedInstances, instKey)
+					ref := InstanceRef{Fleet: r.fleetName, Instance: r.instance.Name}
+					if m.sessionStore.IsExpanded(ref) {
+						m.sessionStore.SetExpanded(ref, false)
 						fleetPage.buildRows(m)
 					} else {
-						m.expandedInstances[instKey] = true
+						m.sessionStore.SetExpanded(ref, true)
 						fleetPage.buildRows(m)
 						b := m.instanceBackend(r.instance)
-						return listSessionsCmd(b, r.instance.WorkspaceDir, instKey)
+						return listSessionsCmd(b, r.instance.WorkspaceDir, ref)
 					}
 				case rowSession, rowNewSession, rowSettings:
 					return fleetPage.handleEnter(m)
@@ -556,7 +557,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			return fleetPage.textInput.Cursor.BlinkCmd()
 
 		case "pgup", "pgdown":
-			if m.inHostTmux && fleetPage.splitInstance != "" && fleetPage.activeGroupID != "" {
+			if m.inHostTmux && fleetPage.splitRef.Valid() && !fleetPage.activeGroup.Empty() {
 				return fleetPage.cycleSessionGroup(m, msg.String() == "pgup")
 			}
 
@@ -720,8 +721,8 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		instance := r.instance
 		sessionName := r.sessionName
 		groupID := r.groupID
-		sessInstKey := r.fleetName + "/" + instance.Name
-		m.lastActive[sessInstKey] = lastSession{sessionName: sessionName, groupID: groupID}
+		sessRef := InstanceRef{Fleet: r.fleetName, Instance: instance.Name}
+		m.sessionStore.SetLastActive(sessRef, lastSession{sessionName: sessionName, groupID: groupID})
 		if m.inHostTmux {
 			if fleetPage.restoreInProgress() {
 				m.message = "Pane group restore already in progress"
@@ -729,30 +730,22 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 			}
 			if fleetPage.splitPaneID != "" && !splitOpen() {
 				unbindHostSplitKeys()
-				fleetPage.splitPaneID = ""
-				fleetPage.splitFleet = ""
-				fleetPage.splitInstance = ""
-				fleetPage.splitSession = ""
-				fleetPage.activeGroupID = ""
-				fleetPage.restoringGroupID = ""
+				fleetPage.clearSplit()
 			}
-			if fleetPage.splitPaneID != "" && fleetPage.splitInstance == instance.Name && groupID != "" && groupID == fleetPage.activeGroupID {
+			rowGroup := ActiveGroup{Ref: sessRef, GroupID: groupID}
+			// Same instance + same group → toggle split closed.
+			if fleetPage.splitPaneID != "" && fleetPage.splitRef == sessRef && groupID != "" && fleetPage.activeGroup == rowGroup {
 				fleetPage.saveCurrentGroupLayout(m.st)
 				killAllSplitPanes()
 				unbindHostSplitKeys()
-				fleetPage.splitPaneID = ""
-				fleetPage.splitFleet = ""
-				fleetPage.splitInstance = ""
-				fleetPage.splitSession = ""
-				fleetPage.activeGroupID = ""
-				fleetPage.restoringGroupID = ""
+				fleetPage.clearSplit()
 				return nil
 			}
-			if fleetPage.splitPaneID != "" && fleetPage.activeGroupID != "" {
+			if fleetPage.splitPaneID != "" && !fleetPage.activeGroup.Empty() {
 				fleetPage.saveCurrentGroupLayout(m.st)
 				killAllSplitPanes()
 			}
-			fleetPage.activeGroupID = groupID
+			fleetPage.activeGroup = rowGroup
 			if groupID != "" && isGroupedSession(SanitizeSessionName(instance.Name), sessionName) {
 				return fleetPage.restoreGroupCmd(m, r.fleetName, instance, groupID)
 			}
@@ -762,7 +755,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 				instance.WorkspaceDir,
 				ShellCommandForSession(m.config, sessionName, cols, rows, true),
 			)
-			return splitPaneCmd(fleetPage.splitPaneID, r.fleetName, instance.Name, sessionName, groupID, cmd)
+			return splitPaneCmd(fleetPage.splitPaneID, sessRef, sessionName, groupID, cmd)
 		}
 		cmd := m.instanceBackend(instance).ExecCommand(
 			instance.WorkspaceDir,
@@ -781,7 +774,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 			break
 		}
 		instFleetName := r.fleetName
-		instKey := instFleetName + "/" + instance.Name
+		instRef := InstanceRef{Fleet: instFleetName, Instance: instance.Name}
 		if m.inHostTmux {
 			if fleetPage.restoreInProgress() {
 				m.message = "Pane group restore already in progress"
@@ -789,33 +782,23 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 			}
 			if fleetPage.splitPaneID != "" && !splitOpen() {
 				unbindHostSplitKeys()
-				fleetPage.splitPaneID = ""
-				fleetPage.splitFleet = ""
-				fleetPage.splitInstance = ""
-				fleetPage.splitSession = ""
-				fleetPage.activeGroupID = ""
-				fleetPage.restoringGroupID = ""
+				fleetPage.clearSplit()
 			}
-			if fleetPage.splitPaneID != "" && fleetPage.splitInstance == instance.Name {
+			if fleetPage.splitPaneID != "" && fleetPage.splitRef == instRef {
 				fleetPage.saveCurrentGroupLayout(m.st)
 				killAllSplitPanes()
 				unbindHostSplitKeys()
-				fleetPage.splitPaneID = ""
-				fleetPage.splitFleet = ""
-				fleetPage.splitInstance = ""
-				fleetPage.splitSession = ""
-				fleetPage.activeGroupID = ""
-				fleetPage.restoringGroupID = ""
+				fleetPage.clearSplit()
 				return nil
 			}
 			return fleetPage.openInstanceSession(m, instFleetName, instance)
 		}
 
 		sessionName := SanitizeSessionName(instance.Name)
-		if last, ok := m.lastActive[instKey]; ok {
+		if last, ok := m.sessionStore.LastActive(instRef); ok {
 			sessionName = last.sessionName
 		}
-		m.lastActive[instKey] = lastSession{sessionName: sessionName}
+		m.sessionStore.SetLastActive(instRef, lastSession{sessionName: sessionName})
 
 		cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, ShellCommandForSession(m.config, sessionName, m.width, m.height, false))
 		banner := renderGradient(nameToBanner(instance.GetDisplayName()))
@@ -879,7 +862,7 @@ func (fleetPage *fleetPage) contextualHelpKeys(m *model) []string {
 			"j/k: navigate", "space/enter/e: connect",
 			"a: new session", "d: delete session", "r: rename", "q: quit",
 		}
-		if m.inHostTmux && fleetPage.splitInstance != "" && fleetPage.activeGroupID != "" {
+		if m.inHostTmux && fleetPage.splitRef.Valid() && !fleetPage.activeGroup.Empty() {
 			keys = append(keys[:len(keys)-1], "pgup/pgdn: cycle groups", "q: quit")
 		}
 		return keys
@@ -973,11 +956,15 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 		} else if r.kind == rowSession {
 			icon := "○"
 			style := sessionStyle
-			displayGroupID := fleetPage.activeGroupID
-			if fleetPage.pendingGroupID != "" {
-				displayGroupID = fleetPage.pendingGroupID
+			displayGroup := fleetPage.activeGroup
+			if !fleetPage.pendingGroup.Empty() {
+				displayGroup = fleetPage.pendingGroup
 			}
-			if r.groupID != "" && r.groupID == displayGroupID {
+			rowGroup := ActiveGroup{
+				Ref:     InstanceRef{Fleet: r.fleetName, Instance: r.instance.Name},
+				GroupID: r.groupID,
+			}
+			if r.groupID != "" && rowGroup == displayGroup {
 				icon = "●"
 				style = sessionActiveStyle
 			}
@@ -1016,10 +1003,10 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				status = renderStatus(instance.Status)
 			}
 
-			instKey := r.fleetName + "/" + instance.Name
+			ref := InstanceRef{Fleet: r.fleetName, Instance: instance.Name}
 			arrow := "  "
 			if instance.Status == fleet.StatusRunning {
-				if m.expandedInstances[instKey] {
+				if m.sessionStore.IsExpanded(ref) {
 					arrow = "▼ "
 				} else {
 					arrow = "▶ "
@@ -1444,16 +1431,16 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 		return nil
 	}
 
-	instKey := fleetName + "/" + instance.Name
+	ref := InstanceRef{Fleet: fleetName, Instance: instance.Name}
 	sanitized := SanitizeSessionName(instance.Name)
 
 	// The session discovery loop only runs for expanded instances, so
 	// hitting enter on a collapsed row with no lastActive entry would
 	// otherwise always spawn a new group. Load sessions on demand here
 	// so we can attach to an existing one when available.
-	ensureSessionsLoaded(m, m.instanceBackend(instance), instance.WorkspaceDir, instKey)
+	ensureSessionsLoaded(m, m.instanceBackend(instance), instance.WorkspaceDir, ref)
 
-	if last, ok := m.lastActive[instKey]; ok {
+	if last, ok := m.sessionStore.LastActive(ref); ok {
 		if last.groupID != "" {
 			return fleetPage.restoreGroupCmd(m, fleetName, instance, last.groupID)
 		}
@@ -1463,25 +1450,22 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 			instance.WorkspaceDir,
 			ShellCommandForSession(m.config, last.sessionName, cols, rows, true),
 		)
-		return splitPaneCmd(fleetPage.splitPaneID, fleetName, instance.Name, last.sessionName, last.groupID, cmd)
+		return splitPaneCmd(fleetPage.splitPaneID, ref, last.sessionName, last.groupID, cmd)
 	}
 
-	if disc, ok := m.sessions[instKey]; ok && disc.err == nil && len(disc.sessions) > 0 {
-		groups := groupSessions(sanitized, disc.sessions)
-		if len(groups) > 0 {
-			g := groups[0]
-			rootName := g.Sessions[0].Name
-			if g.GroupID != "" && isGroupedSession(sanitized, rootName) {
-				return fleetPage.restoreGroupCmd(m, fleetName, instance, g.GroupID)
-			}
-			cols, rows := tmuxWindowSize()
-			cols = cols * 70 / 100
-			cmd := m.instanceBackend(instance).ExecCommand(
-				instance.WorkspaceDir,
-				ShellCommandForSession(m.config, rootName, cols, rows, true),
-			)
-			return splitPaneCmd(fleetPage.splitPaneID, fleetName, instance.Name, rootName, g.GroupID, cmd)
+	if groups := m.sessionStore.Groups(ref); len(groups) > 0 {
+		g := groups[0]
+		rootName := g.Sessions[0].Name
+		if g.GroupID != "" && isGroupedSession(sanitized, rootName) {
+			return fleetPage.restoreGroupCmd(m, fleetName, instance, g.GroupID)
 		}
+		cols, rows := tmuxWindowSize()
+		cols = cols * 70 / 100
+		cmd := m.instanceBackend(instance).ExecCommand(
+			instance.WorkspaceDir,
+			ShellCommandForSession(m.config, rootName, cols, rows, true),
+		)
+		return splitPaneCmd(fleetPage.splitPaneID, ref, rootName, g.GroupID, cmd)
 	}
 
 	newGroupID := randomHex(3)
@@ -1492,45 +1476,32 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 		instance.WorkspaceDir,
 		ShellCommandForSession(m.config, sessName, cols, rows, true),
 	)
-	return splitPaneCmd(fleetPage.splitPaneID, fleetName, instance.Name, sessName, newGroupID, cmd)
-}
-
-// instanceGroups returns the session groups for the given instance name.
-func (fleetPage *fleetPage) instanceGroups(m *model, instanceName string) []sessionGroup {
-	sanitized := SanitizeSessionName(instanceName)
-	for _, disc := range m.sessions {
-		if disc == nil || disc.err != nil {
-			continue
-		}
-		g := groupSessions(sanitized, disc.sessions)
-		if len(g) > 0 {
-			return g
-		}
-	}
-	return nil
+	return splitPaneCmd(fleetPage.splitPaneID, ref, sessName, newGroupID, cmd)
 }
 
 // cycleSessionGroup moves the visual selection to the next or previous
-// session group and starts a debounce timer.
+// session group within the currently-split instance and starts a
+// debounce timer. Group lookup is scoped to fleetPage.splitRef so two
+// instances that share group IDs cannot leak into each other.
 func (fleetPage *fleetPage) cycleSessionGroup(m *model, prev bool) tea.Cmd {
 	if fleetPage.restoreInProgress() {
 		m.message = "Pane group restore already in progress"
 		return nil
 	}
 
-	groups := fleetPage.instanceGroups(m, fleetPage.splitInstance)
+	groups := m.sessionStore.Groups(fleetPage.splitRef)
 	if len(groups) < 2 {
 		return nil
 	}
 
-	fromID := fleetPage.activeGroupID
-	if fleetPage.pendingGroupID != "" {
-		fromID = fleetPage.pendingGroupID
+	from := fleetPage.activeGroup
+	if !fleetPage.pendingGroup.Empty() {
+		from = fleetPage.pendingGroup
 	}
 
 	currentIdx := -1
 	for i, g := range groups {
-		if g.GroupID == fromID {
+		if g.GroupID == from.GroupID && from.Ref == fleetPage.splitRef {
 			currentIdx = i
 			break
 		}
@@ -1549,7 +1520,7 @@ func (fleetPage *fleetPage) cycleSessionGroup(m *model, prev bool) tea.Cmd {
 		targetIdx = 0
 	}
 
-	fleetPage.pendingGroupID = groups[targetIdx].GroupID
+	fleetPage.pendingGroup = ActiveGroup{Ref: fleetPage.splitRef, GroupID: groups[targetIdx].GroupID}
 	fleetPage.debounceSeq++
 	return groupCycleDebounce(fleetPage.debounceSeq)
 }
@@ -1562,37 +1533,29 @@ func (fleetPage *fleetPage) commitGroupCycle(m *model) tea.Cmd {
 		return nil
 	}
 
-	if fleetPage.pendingGroupID == "" || fleetPage.pendingGroupID == fleetPage.activeGroupID {
-		fleetPage.pendingGroupID = ""
+	if fleetPage.pendingGroup.Empty() || fleetPage.pendingGroup == fleetPage.activeGroup {
+		fleetPage.pendingGroup = ActiveGroup{}
 		return nil
 	}
 
-	var instance *fleet.Instance
-	for _, f := range m.st.Fleets {
-		for _, i := range f.Instances {
-			if i.Name == fleetPage.splitInstance {
-				instance = i
-				break
-			}
-		}
-		if instance != nil {
-			break
-		}
-	}
-	if instance == nil {
-		fleetPage.pendingGroupID = ""
+	target := fleetPage.pendingGroup
+	fleetPage.pendingGroup = ActiveGroup{}
+
+	f, ok := m.st.Fleets[target.Ref.Fleet]
+	if !ok {
 		return nil
 	}
-
-	targetGroupID := fleetPage.pendingGroupID
-	fleetPage.pendingGroupID = ""
+	instance, err := f.GetInstance(target.Ref.Instance)
+	if err != nil {
+		return nil
+	}
 
 	fleetPage.saveCurrentGroupLayout(m.st)
 	killAllSplitPanes()
 
-	fleetPage.activeGroupID = targetGroupID
+	fleetPage.activeGroup = target
 
-	return fleetPage.restoreGroupCmd(m, fleetPage.splitFleet, instance, targetGroupID)
+	return fleetPage.restoreGroupCmd(m, target.Ref.Fleet, instance, target.GroupID)
 }
 
 // ===========================================

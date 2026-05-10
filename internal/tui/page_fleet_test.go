@@ -167,7 +167,7 @@ func TestViewFleetListShowsBranchItemForInstance(t *testing.T) {
 				"alpha": {Name: "alpha", Instances: []*fleet.Instance{inst}},
 			},
 		},
-		expandedInstances: make(map[string]bool),
+		sessionStore: NewSessionStore(),
 		stats:             map[string]*backend.ContainerStats{},
 		fleetPage:         fp,
 	}
@@ -202,10 +202,13 @@ func TestBuildRowsShowsSavedGroupWithoutLiveSessions(t *testing.T) {
 				"repo": {Name: "repo", Instances: []*fleet.Instance{inst}},
 			},
 		},
-		expandedInstances: map[string]bool{"repo/alpha": true},
-		sessions: map[string]*sessionDiscovery{
-			"repo/alpha": {sessions: nil},
-		},
+		sessionStore: func() *SessionStore {
+			s := NewSessionStore()
+			ref := InstanceRef{Fleet: "repo", Instance: "alpha"}
+			s.SetExpanded(ref, true)
+			s.SetDiscovery(ref, nil)
+			return s
+		}(),
 		fleetPage: fp,
 	}
 
@@ -244,12 +247,14 @@ func TestPruneSavedGroupsKeepsSavedGroupWhenDiscoveryIsEmpty(t *testing.T) {
 			GroupLayouts: map[string]state.GroupLayout{"abc123": {GroupID: "abc123", InstanceName: "alpha"}},
 		},
 		fleetPage: fp,
-		sessions: map[string]*sessionDiscovery{
-			"repo/alpha": {sessions: nil},
-		},
+		sessionStore: func() *SessionStore {
+			s := NewSessionStore()
+			s.SetDiscovery(InstanceRef{Fleet: "repo", Instance: "alpha"}, nil)
+			return s
+		}(),
 	}
 
-	m.pruneSavedGroupsForInstance("repo/alpha")
+	m.pruneSavedGroupsForInstance(InstanceRef{Fleet: "repo", Instance: "alpha"})
 
 	if _, ok := m.fleetPage.savedGroups["abc123"]; !ok {
 		t.Fatal("saved group was pruned even though WSL discovery returned no live sessions")
@@ -277,7 +282,7 @@ func TestViewFleetListOmitsBranchItemWhenBranchIsUnavailable(t *testing.T) {
 				"alpha": {Name: "alpha", Instances: []*fleet.Instance{inst}},
 			},
 		},
-		expandedInstances: make(map[string]bool),
+		sessionStore: NewSessionStore(),
 		stats:             map[string]*backend.ContainerStats{},
 		fleetPage:         fp,
 	}
@@ -318,7 +323,7 @@ func TestViewFleetListShowsAgentWorkingIndicator(t *testing.T) {
 			map[string]agentState{"abc123": agentWorking},
 			map[string]state.AgentTool{"abc123": state.AgentToolClaude},
 		),
-		expandedInstances: make(map[string]bool),
+		sessionStore: NewSessionStore(),
 		stats:             map[string]*backend.ContainerStats{},
 		fleetPage:         fp,
 	}
@@ -359,7 +364,7 @@ func TestViewFleetListShowsAgentWaitingIndicator(t *testing.T) {
 			map[string]agentState{"abc123": agentWaiting},
 			map[string]state.AgentTool{"abc123": state.AgentToolClaude},
 		),
-		expandedInstances: make(map[string]bool),
+		sessionStore: NewSessionStore(),
 		stats:             map[string]*backend.ContainerStats{},
 		fleetPage:         fp,
 	}
@@ -400,7 +405,7 @@ func TestViewFleetListShowsAgentOffIndicator(t *testing.T) {
 			map[string]agentState{"abc123": agentNotRunning},
 			nil,
 		),
-		expandedInstances: make(map[string]bool),
+		sessionStore: NewSessionStore(),
 		stats:             map[string]*backend.ContainerStats{},
 		fleetPage:         fp,
 	}
@@ -441,7 +446,7 @@ func TestViewFleetListNoAgentIndicatorForStoppedInstance(t *testing.T) {
 			AgentSettings: state.AgentSettings{ToolSelection: state.AgentToolClaude},
 		},
 		activity:          NewActivityTracker(),
-		expandedInstances: make(map[string]bool),
+		sessionStore: NewSessionStore(),
 		stats:             map[string]*backend.ContainerStats{},
 		fleetPage:         fp,
 	}
@@ -476,7 +481,7 @@ func TestEditInstanceRenamesViaDisplayName(t *testing.T) {
 				"alpha": {Name: "alpha", Instances: []*fleet.Instance{inst}},
 			},
 		},
-		expandedInstances: make(map[string]bool),
+		sessionStore: NewSessionStore(),
 		stats:             map[string]*backend.ContainerStats{},
 		fleetPage:         fp,
 	}

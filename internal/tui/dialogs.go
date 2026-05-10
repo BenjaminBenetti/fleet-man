@@ -100,7 +100,7 @@ func (fleetPage *fleetPage) updateConfirmDeleteSession(m *model, msg tea.Msg) te
 		switch msg.String() {
 		case "y", "Y", "enter":
 			fleetPage.mode = viewNormal
-			instKey := fleetPage.dialogFleet + "/" + fleetPage.dialogInst
+			ref := InstanceRef{Fleet: fleetPage.dialogFleet, Instance: fleetPage.dialogInst}
 			f, ok := m.st.Fleets[fleetPage.dialogFleet]
 			if !ok {
 				break
@@ -112,9 +112,9 @@ func (fleetPage *fleetPage) updateConfirmDeleteSession(m *model, msg tea.Msg) te
 			instanceBackend := m.instanceBackend(instance)
 			sanitized := SanitizeSessionName(instance.Name)
 			if fleetPage.dialogGroupID != "" && isGroupedSession(sanitized, fleetPage.dialogSession) {
-				return deleteGroupSessionsCmd(instanceBackend, instance.WorkspaceDir, instKey, sanitized, fleetPage.dialogGroupID)
+				return deleteGroupSessionsCmd(instanceBackend, instance.WorkspaceDir, ref, sanitized, fleetPage.dialogGroupID)
 			}
-			return deleteSessionCmd(instanceBackend, instance.WorkspaceDir, instKey, fleetPage.dialogSession)
+			return deleteSessionCmd(instanceBackend, instance.WorkspaceDir, ref, fleetPage.dialogSession)
 
 		case "n", "N", "esc", "ctrl+c":
 			fleetPage.mode = viewNormal
@@ -724,13 +724,9 @@ func (fleetPage *fleetPage) updateCreateSession(m *model, msg tea.Msg) tea.Cmd {
 		switch msg.String() {
 		case "enter":
 			name := strings.TrimSpace(fleetPage.textInput.Value())
-			instKey := fleetPage.dialogFleet + "/" + fleetPage.dialogInst
+			ref := InstanceRef{Fleet: fleetPage.dialogFleet, Instance: fleetPage.dialogInst}
 			if name == "" {
-				var existing []tmuxSession
-				if disc, ok := m.sessions[instKey]; ok && disc.err == nil {
-					existing = disc.sessions
-				}
-				name = nextSessionName(existing)
+				name = nextSessionName(m.sessionStore.Sessions(ref))
 			}
 			name = SanitizeSessionName(name)
 
@@ -754,7 +750,7 @@ func (fleetPage *fleetPage) updateCreateSession(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.textInput.Blur()
 			m.message = fmt.Sprintf("Creating session %s...", name)
 			instanceBackend := m.instanceBackend(instance)
-			return createSessionCmd(instanceBackend, instance.WorkspaceDir, instKey, fullName)
+			return createSessionCmd(instanceBackend, instance.WorkspaceDir, ref, fullName)
 
 		case "esc", "ctrl+c":
 			fleetPage.mode = viewNormal
@@ -784,7 +780,7 @@ func (fleetPage *fleetPage) updateRenameSession(m *model, msg tea.Msg) tea.Cmd {
 			}
 			newName = SanitizeSessionName(newName)
 
-			instKey := fleetPage.dialogFleet + "/" + fleetPage.dialogInst
+			ref := InstanceRef{Fleet: fleetPage.dialogFleet, Instance: fleetPage.dialogInst}
 
 			f, ok := m.st.Fleets[fleetPage.dialogFleet]
 			if !ok {
@@ -808,9 +804,9 @@ func (fleetPage *fleetPage) updateRenameSession(m *model, msg tea.Msg) tea.Cmd {
 			instanceBackend := m.instanceBackend(instance)
 
 			if isGrouped {
-				return renameGroupCmd(instanceBackend, instance.WorkspaceDir, instKey, sanitized, oldGID, newName)
+				return renameGroupCmd(instanceBackend, instance.WorkspaceDir, ref, sanitized, oldGID, newName)
 			}
-			return renameSessionCmd(instanceBackend, instance.WorkspaceDir, instKey, oldName, newName)
+			return renameSessionCmd(instanceBackend, instance.WorkspaceDir, ref, oldName, newName)
 
 		case "esc", "ctrl+c":
 			fleetPage.mode = viewNormal
