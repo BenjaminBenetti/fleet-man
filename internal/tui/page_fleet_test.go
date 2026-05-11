@@ -743,6 +743,141 @@ func TestEditFleetEscDiscardsChanges(t *testing.T) {
 	}
 }
 
+// TestAddFleetInspectedPresentAddsFleet verifies the happy path: an
+// inspection that finds a devcontainer.json persists the fleet and
+// dismisses the dialog.
+func TestAddFleetInspectedPresentAddsFleet(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	fp := newFleetPage()
+	m := &model{
+		st:        &state.State{Fleets: map[string]*fleet.Fleet{}},
+		fleetPage: fp,
+	}
+
+	fp.mode = viewAddFleetInspecting
+	fp.dialogPendingFleetName = "alpha"
+	fp.dialogPendingRepoURL = "git@example.com:org/alpha.git"
+
+	fp.handleDevcontainerInspected(m, devcontainerInspectedMsg{
+		fleetName:       "alpha",
+		hasDevcontainer: true,
+	})
+
+	if fp.mode != viewNormal {
+		t.Fatalf("mode = %v, want viewNormal", fp.mode)
+	}
+	if _, ok := m.st.Fleets["alpha"]; !ok {
+		t.Fatalf("expected fleet alpha to be persisted")
+	}
+	if fp.dialogPendingFleetName != "" || fp.dialogPendingRepoURL != "" {
+		t.Fatalf("pending fields not cleared: %q %q", fp.dialogPendingFleetName, fp.dialogPendingRepoURL)
+	}
+}
+
+// TestAddFleetInspectedMissingShowsDialog verifies that a "no
+// devcontainer" result switches to the choice dialog rather than
+// silently persisting the fleet.
+func TestAddFleetInspectedMissingShowsDialog(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	fp := newFleetPage()
+	m := &model{
+		st:        &state.State{Fleets: map[string]*fleet.Fleet{}},
+		fleetPage: fp,
+	}
+
+	fp.mode = viewAddFleetInspecting
+	fp.dialogPendingFleetName = "alpha"
+	fp.dialogPendingRepoURL = "git@example.com:org/alpha.git"
+
+	fp.handleDevcontainerInspected(m, devcontainerInspectedMsg{
+		fleetName:       "alpha",
+		hasDevcontainer: false,
+	})
+
+	if fp.mode != viewAddFleetNoDevcontainer {
+		t.Fatalf("mode = %v, want viewAddFleetNoDevcontainer", fp.mode)
+	}
+	if _, ok := m.st.Fleets["alpha"]; ok {
+		t.Fatalf("fleet was persisted before user chose Abort/Setup")
+	}
+	// Pending fields must survive — the no-devcontainer dialog reads
+	// them to know which fleet to add/launch the agent for.
+	if fp.dialogPendingFleetName != "alpha" {
+		t.Fatalf("pending fleet name dropped: %q", fp.dialogPendingFleetName)
+	}
+}
+
+// TestAddFleetNoDevcontainerAbortDoesNotPersist verifies that the
+// default Abort action — covered by [a], [n], [enter], and [esc] —
+// leaves no trace of the fleet in state.
+func TestAddFleetNoDevcontainerAbortDoesNotPersist(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	for _, key := range []string{"a", "n", "esc", "enter"} {
+		fp := newFleetPage()
+		m := &model{
+			st:        &state.State{Fleets: map[string]*fleet.Fleet{}},
+			fleetPage: fp,
+		}
+		fp.mode = viewAddFleetNoDevcontainer
+		fp.dialogPendingFleetName = "alpha"
+		fp.dialogPendingRepoURL = "git@example.com:org/alpha.git"
+
+		var keyMsg tea.KeyMsg
+		switch key {
+		case "esc":
+			keyMsg = tea.KeyMsg{Type: tea.KeyEsc}
+		case "enter":
+			keyMsg = tea.KeyMsg{Type: tea.KeyEnter}
+		default:
+			keyMsg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+		}
+
+		fp.updateAddFleetNoDevcontainer(m, keyMsg)
+
+		if fp.mode != viewNormal {
+			t.Fatalf("key %q: mode = %v, want viewNormal", key, fp.mode)
+		}
+		if _, ok := m.st.Fleets["alpha"]; ok {
+			t.Fatalf("key %q: fleet was added by Abort path", key)
+		}
+		if fp.dialogPendingFleetName != "" {
+			t.Fatalf("key %q: pending fields not cleared", key)
+		}
+	}
+}
+
+// TestAddFleetInspectStaleResultDropped verifies a result for a
+// different fleet (the user dismissed the dialog and started a new
+// one in the meantime) is ignored.
+func TestAddFleetInspectStaleResultDropped(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	fp := newFleetPage()
+	m := &model{
+		st:        &state.State{Fleets: map[string]*fleet.Fleet{}},
+		fleetPage: fp,
+	}
+	fp.mode = viewAddFleetInspecting
+	fp.dialogPendingFleetName = "beta"
+	fp.dialogPendingRepoURL = "git@example.com:org/beta.git"
+
+	// Result is for "alpha" — must not mutate state or change the mode.
+	fp.handleDevcontainerInspected(m, devcontainerInspectedMsg{
+		fleetName:       "alpha",
+		hasDevcontainer: true,
+	})
+
+	if fp.mode != viewAddFleetInspecting {
+		t.Fatalf("mode changed to %v on stale result", fp.mode)
+	}
+	if _, ok := m.st.Fleets["alpha"]; ok {
+		t.Fatalf("stale result persisted unexpected fleet")
+	}
+}
+
 func TestAddInstanceDialogVimKeysRespectActiveField(t *testing.T) {
 	fp := newFleetPage()
 	fp.mode = viewAddInstance

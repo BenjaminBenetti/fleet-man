@@ -9,6 +9,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
+	"github.com/BenjaminBenetti/fleet-man/internal/devcontainersetup"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
@@ -46,9 +47,18 @@ type fleetPage struct {
 	dialogClaudeMount bool
 	dialogCodexMount  bool
 	dialogDetecting   bool // true while a homedir auto-detect cmd is in flight
-	textInput         textinput.Model
-	branchInput       textinput.Model
-	homedirInput      textinput.Model
+
+	// dialogPendingRepoURL is the repo URL the user submitted in the
+	// new-fleet dialog. It is held here across the asynchronous
+	// devcontainer inspection so the inspect-result handler can fall
+	// through into either adding the fleet or showing the
+	// no-devcontainer prompt without re-asking the user.
+	dialogPendingRepoURL   string
+	dialogPendingFleetName string
+
+	textInput    textinput.Model
+	branchInput  textinput.Model
+	homedirInput textinput.Model
 
 	pfCursor      int
 	pfContainerID string
@@ -181,6 +191,9 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 	case homedirDetectedMsg:
 		fleetPage.handleHomedirDetected(msg.(homedirDetectedMsg))
 		return nil
+
+	case devcontainerInspectedMsg:
+		return fleetPage.handleDevcontainerInspected(m, msg.(devcontainerInspectedMsg))
 	}
 
 	// Mode-specific dispatch
@@ -193,6 +206,10 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.updateAddInstance(m, msg)
 	case viewAddFleet:
 		return fleetPage.updateAddFleet(m, msg)
+	case viewAddFleetInspecting:
+		return fleetPage.updateAddFleetInspecting(m, msg)
+	case viewAddFleetNoDevcontainer:
+		return fleetPage.updateAddFleetNoDevcontainer(m, msg)
 	case viewEditFleet:
 		return fleetPage.updateEditFleet(m, msg)
 	case viewTagInstance:
@@ -1289,6 +1306,50 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			dialogHint.Render(fleetPage.textDialogHint("Add")),
 		)
 		b.WriteString(dialogBox.Render(dialog))
+		b.WriteString("\n")
+
+	case viewAddFleetInspecting:
+		b.WriteString("\n")
+		dialog := fmt.Sprintf(
+			"%s\n\n%s %s\n\n%s %s\n\n%s",
+			dialogTitle.Render("New fleet"),
+			dialogLabel.Render("Repo: "),
+			fleetExpandedStyle.Render(fleetPage.dialogPendingRepoURL),
+			m.spinner.View(),
+			dialogLabel.Render("Inspecting for devcontainer.json..."),
+			dialogHint.Render("[q/esc] Cancel"),
+		)
+		b.WriteString(dialogBox.Render(dialog))
+		b.WriteString("\n")
+
+	case viewAddFleetNoDevcontainer:
+		b.WriteString("\n")
+		agentName, _, agentErr := devcontainersetup.FindAgent()
+		var setupLine string
+		if agentErr != nil {
+			setupLine = statusCreatingStyle.Render("no agent found") +
+				"  " + dimStyle.Render("install claude, codex, gemini, or copilot to use Setup")
+		} else {
+			setupLine = statusRunningStyle.Render(agentName) +
+				"  " + dimStyle.Render("will clone the repo and walk you through configuration")
+		}
+		dialog := fmt.Sprintf(
+			"%s\n\n%s\n\n%s %s\n\n%s\n\n%s\n\n%s",
+			warnBanner.Render("  No devcontainer.json found  "),
+			dialogLabel.Render(
+				"This repository has no .devcontainer/devcontainer.json.\n"+
+					"fleet-man needs one before it can provision instances.",
+			),
+			dialogLabel.Render("Repo:"),
+			fleetExpandedStyle.Render(fleetPage.dialogPendingRepoURL),
+			dialogLabel.Render("Setup agent: ")+setupLine,
+			dialogLabel.Render(
+				"[a] Abort — do not add the fleet (default)\n"+
+					"[s] Setup — add the fleet now and launch a guided agent to write the devcontainer",
+			),
+			dialogHint.Render("[a/q/enter/esc] Abort  [s] Setup"),
+		)
+		b.WriteString(warnBox.Render(dialog))
 		b.WriteString("\n")
 
 	case viewEditFleet:

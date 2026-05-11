@@ -8,11 +8,13 @@ real docker daemon.
 
 ```
 integration/
-├── run.sh              # driver: builds binary, runs every test, teardown between
-├── common.sh           # shared helpers: assertions, setup/teardown, fleet_up
-├── fixture/            # minimal devcontainer fixture cloned via file:// per test
+├── run.sh                      # driver: builds binary, runs every test, teardown between
+├── common.sh                   # shared helpers: assertions, setup/teardown, fleet_up
+├── fixture/                    # minimal devcontainer fixture cloned via file:// per test
 │   └── .devcontainer/
 │       └── devcontainer.json
+├── fixture-no-devcontainer/    # repo template deliberately missing a devcontainer
+│                               # config, used by new-fleet check-flow tests
 └── tests/
     ├── 010_up_and_ls.sh        # CLI — up + ls
     ├── 020_exec.sh             # CLI — exec
