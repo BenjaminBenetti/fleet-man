@@ -46,6 +46,7 @@ type fleetPage struct {
 	dialogSession     string
 	dialogClaudeMount bool
 	dialogCodexMount  bool
+	dialogGhMount     bool
 	dialogDetecting   bool // true while a homedir auto-detect cmd is in flight
 
 	// dialogPendingRepoURL is the repo URL the user submitted in the
@@ -1387,7 +1388,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 		}
 
 		dialog := fmt.Sprintf(
-			"%s\n\n  %s %s\n%s%s %s\n%s%s %s\n%s%s %s\n\n  %s\n\n%s",
+			"%s\n\n  %s %s\n%s%s %s\n%s%s %s\n%s%s %s\n%s%s %s\n\n  %s\n\n%s",
 			dialogTitle.Render("Edit fleet"),
 			dialogLabel.Render("Fleet:    "),
 			fleetExpandedStyle.Render(fleetPage.dialogFleet),
@@ -1397,6 +1398,9 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			rowMarker(editFleetRowCodex),
 			checkbox(fleetPage.dialogCodexMount),
 			dialogLabel.Render("Codex mount"),
+			rowMarker(editFleetRowGh),
+			checkbox(fleetPage.dialogGhMount),
+			dialogLabel.Render("GitHub CLI mount"),
 			rowMarker(editFleetRowHomeDir),
 			dialogLabel.Render("Home dir: "),
 			homedirField,

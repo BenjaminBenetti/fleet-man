@@ -23,6 +23,14 @@ type FleetSettings struct {
 	// instances and across sessions.
 	CodexMount bool `json:"codexMount,omitempty"`
 
+	// GhMount enables a shared host directory at
+	// ~/.fleet/workspaces/<fleet>/.config/gh that is bind-mounted into
+	// every instance of this fleet at <containerHome>/.config/gh, so the
+	// GitHub CLI stays logged in across instances and across instance
+	// churn. The directory holds gh's hosts.yml (oauth_token + user) and
+	// config.yml.
+	GhMount bool `json:"ghMount,omitempty"`
+
 	// HomeDir is the absolute path inside the container that should be
 	// treated as the home directory when computing mount targets — e.g.
 	// "/home/vscode" so a Claude Code mount lands at "/home/vscode/.claude".

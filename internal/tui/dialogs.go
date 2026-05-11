@@ -942,6 +942,7 @@ func (fleetPage *fleetPage) updateAddFleetNoDevcontainer(m *model, msg tea.Msg) 
 const (
 	editFleetRowClaude = iota
 	editFleetRowCodex
+	editFleetRowGh
 	editFleetRowHomeDir
 	editFleetRowCount
 )
@@ -1002,6 +1003,7 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.dialogFleet = f.Name
 	fleetPage.dialogClaudeMount = f.Settings.ClaudeCodeMount
 	fleetPage.dialogCodexMount = f.Settings.CodexMount
+	fleetPage.dialogGhMount = f.Settings.GhMount
 	fleetPage.dialogRow = editFleetRowClaude
 	fleetPage.dialogDetecting = false
 	fleetPage.dialogFieldActive = false
@@ -1075,7 +1077,7 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 
 	// Toggle / character input is row-specific.
 	switch fleetPage.dialogRow {
-	case editFleetRowClaude, editFleetRowCodex:
+	case editFleetRowClaude, editFleetRowCodex, editFleetRowGh:
 		switch keyMsg.String() {
 		case " ", "left", "right", "h", "l", "x":
 			return fleetPage.toggleEditFleetRow(m)
@@ -1113,6 +1115,9 @@ func (fleetPage *fleetPage) toggleEditFleetRow(m *model) tea.Cmd {
 	case editFleetRowCodex:
 		fleetPage.dialogCodexMount = !fleetPage.dialogCodexMount
 		turnedOn = fleetPage.dialogCodexMount
+	case editFleetRowGh:
+		fleetPage.dialogGhMount = !fleetPage.dialogGhMount
+		turnedOn = fleetPage.dialogGhMount
 	}
 	if !turnedOn {
 		return nil
@@ -1138,7 +1143,7 @@ func (fleetPage *fleetPage) shouldKickHomedirDetect(f *fleet.Fleet) bool {
 	if strings.TrimSpace(fleetPage.homedirInput.Value()) != "" {
 		return false
 	}
-	if !fleetPage.dialogClaudeMount && !fleetPage.dialogCodexMount {
+	if !fleetPage.dialogClaudeMount && !fleetPage.dialogCodexMount && !fleetPage.dialogGhMount {
 		return false
 	}
 	return strings.TrimSpace(f.Remote) != ""
@@ -1198,6 +1203,7 @@ func (fleetPage *fleetPage) saveFleetEdits(m *model) tea.Cmd {
 	}
 	f.Settings.ClaudeCodeMount = fleetPage.dialogClaudeMount
 	f.Settings.CodexMount = fleetPage.dialogCodexMount
+	f.Settings.GhMount = fleetPage.dialogGhMount
 	f.Settings.HomeDir = strings.TrimSpace(fleetPage.homedirInput.Value())
 	_ = state.Save(m.st)
 

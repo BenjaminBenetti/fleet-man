@@ -178,6 +178,44 @@ func TestResolveUsesHomeDirSetting(t *testing.T) {
 	}
 }
 
+// TestResolveCreatesGhMount verifies that enabling GhMount produces a
+// directory mount at <containerHome>/.config/gh backed by a host dir
+// under the fleet's mount root, and that no symlinks are involved
+// (gh's config dir is self-contained).
+func TestResolveCreatesGhMount(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	resolved, err := Resolve("gamma", fleet.FleetSettings{GhMount: true})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if len(resolved.Symlinks) != 0 {
+		t.Errorf("len(Symlinks) = %d, want 0", len(resolved.Symlinks))
+	}
+	if len(resolved.Mounts) != 1 {
+		t.Fatalf("len(Mounts) = %d, want 1", len(resolved.Mounts))
+	}
+
+	wantHost := filepath.Join(home, ".fleet", "workspaces", "gamma", ".config", "gh")
+	mount := resolved.Mounts[0]
+	if mount.LocalPath != wantHost {
+		t.Errorf("LocalPath = %q, want %q", mount.LocalPath, wantHost)
+	}
+	if mount.ContainerPath != "/home/vscode/.config/gh" {
+		t.Errorf("ContainerPath = %q, want %q", mount.ContainerPath, "/home/vscode/.config/gh")
+	}
+
+	info, err := os.Stat(wantHost)
+	if err != nil {
+		t.Fatalf("expected host dir %s to exist: %v", wantHost, err)
+	}
+	if !info.IsDir() {
+		t.Errorf("%s is not a directory", wantHost)
+	}
+}
+
 // TestResolveOnlyEnabledMountsAreReturned ensures disabled toggles do
 // not produce mounts, symlinks, or host-side artefacts.
 func TestResolveOnlyEnabledMountsAreReturned(t *testing.T) {
