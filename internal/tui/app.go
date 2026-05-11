@@ -6,9 +6,11 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	codespacesbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/codespaces"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
@@ -41,6 +43,15 @@ type model struct {
 	backends map[fleet.BackendType]backend.Backend // one per backend type, lazily created
 	stats    map[string]*backend.ContainerStats    // containerID → stats
 	activity *ActivityTracker                      // agent working/waiting/idle detection
+
+	// reprovisioning dedupes in-flight Claude hook reinstall attempts
+	// per containerID. The capture loop fires every few seconds, and a
+	// reinstall on a slow backend can outlast one tick — without
+	// dedup we'd stack concurrent provisions for the same container.
+	// LoadOrStore inserts a sentinel; the goroutine clears it on exit.
+	// Pointer-typed because the bubbletea model is passed by value,
+	// which would otherwise copy the sync.Map's internal lock.
+	reprovisioning *sync.Map // containerID → struct{}
 
 	coderPresets        []string // available preset names (in-memory, from API)
 	coderFetchingParams bool     // true while fetching template parameters
@@ -95,15 +106,16 @@ func newModel() model {
 	agentSpinnerModel.Style = agentWorkingStyle
 
 	m := model{
-		creating:     make(map[string]bool),
-		backends:     make(map[fleet.BackendType]backend.Backend),
-		stats:        make(map[string]*backend.ContainerStats),
-		activity:     NewActivityTracker(),
-		portForwards: portforward.NewManager(),
-		sessionStore: NewSessionStore(),
-		spinner:      spinnerModel,
-		agentSpinner: agentSpinnerModel,
-		inHostTmux:   os.Getenv("TMUX") != "",
+		creating:       make(map[string]bool),
+		backends:       make(map[fleet.BackendType]backend.Backend),
+		stats:          make(map[string]*backend.ContainerStats),
+		activity:       NewActivityTracker(),
+		reprovisioning: &sync.Map{},
+		portForwards:   portforward.NewManager(),
+		sessionStore:   NewSessionStore(),
+		spinner:        spinnerModel,
+		agentSpinner:   agentSpinnerModel,
+		inHostTmux:     os.Getenv("TMUX") != "",
 	}
 
 	// Create the fleet page (persistent — background handlers reference it)
@@ -339,6 +351,60 @@ func (m *model) containersByBackend() map[fleet.BackendType]*backendGroup {
 	return groups
 }
 
+// reinstallMissingClaudeHooks scans the latest captures for the
+// "Claude hook script missing" signal and re-runs the provisioner
+// for any container that reports it. Fire-and-forget: each reinstall
+// runs in its own goroutine so the TUI message loop is never
+// blocked, and a sync.Map dedupes concurrent attempts per container
+// in case provisioning takes longer than the capture interval.
+//
+// Failures are non-fatal — the next capture tick will trigger
+// another attempt — but each failure is surfaced as a per-instance
+// warning so the user can spot a persistently-failing reinstall.
+func (m *model) reinstallMissingClaudeHooks(screens map[string]backend.AllSessions) {
+	if m.st == nil {
+		return
+	}
+	for cid, capture := range screens {
+		if !capture.OK || !capture.ClaudeHookMissing {
+			continue
+		}
+		fleetName, instance := m.findInstanceByContainerID(cid)
+		if instance == nil {
+			continue
+		}
+		if _, busy := m.reprovisioning.LoadOrStore(cid, struct{}{}); busy {
+			continue
+		}
+		backendImpl := m.instanceBackend(instance)
+		wsDir := instance.WorkspaceDir
+		instanceName := instance.Name
+		go func(id string) {
+			defer m.reprovisioning.Delete(id)
+			executor := agentdetect.NewBackendExecutor(backendImpl, wsDir)
+			if err := agentdetect.NewClaudeProvisioner(executor).Provision(); err != nil {
+				state.WriteWarn(fleetName, instanceName, fmt.Sprintf("claude hook reinstall failed: %v", err))
+			}
+		}(cid)
+	}
+}
+
+// findInstanceByContainerID returns the fleet name and instance for
+// the given containerID, or "", nil when no running instance matches.
+func (m *model) findInstanceByContainerID(containerID string) (string, *fleet.Instance) {
+	if m.st == nil {
+		return "", nil
+	}
+	for fleetName, f := range m.st.Fleets {
+		for _, instance := range f.Instances {
+			if instance.ContainerID == containerID {
+				return fleetName, instance
+			}
+		}
+	}
+	return "", nil
+}
+
 // ===========================================
 // Session Discovery
 // ===========================================
@@ -554,6 +620,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.screens != nil {
 			m.activity.Update(msg.screens, msg.probes, msg.containerIDs, time.Now())
+			m.reinstallMissingClaudeHooks(msg.screens)
 		}
 		return m, tea.Batch(spinCmd, m.fetchAllStatsCmd(true))
 
