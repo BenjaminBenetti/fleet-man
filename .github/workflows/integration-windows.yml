@@ -12,7 +12,11 @@ on:
 jobs:
   integration-wsl:
     runs-on: windows-latest
-    timeout-minutes: 40
+    # Healthy WSL CI runs sit around 25–28 minutes; WSL2-on-Windows
+    # is materially slower than the Linux job and individual runs
+    # can drift another ~10 minutes on a noisy runner. 60 minutes
+    # gives comfortable headroom without masking real regressions.
+    timeout-minutes: 60
     # WSLENV tells wsl.exe which Windows env vars to surface inside WSL.
     # The /p flag rewrites the path from D:\...  to /mnt/d/..., so
     # run.sh can write the markdown step summary to the real file the
