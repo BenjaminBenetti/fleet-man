@@ -104,6 +104,13 @@ if ! grep -q '"paneCount": 2' "${HOME}/.fleet/state.json"; then
 fi
 info "new pane count captured"
 
+# Regression guard for PR #42's ghost-pane bug: under the old save logic
+# the brief window between split-window and `fleet shell` tagging the
+# pane title could persist a synthetic `~restored##` session. The strict
+# save in derivePersistableSnapshot bails during that race instead.
+assert_not_contains "$(cat "${HOME}/.fleet/state.json")" "~restored" \
+  "state.json contains synthetic ~restored entries after pane add — PR #42 ghost-pane bug regressed"
+
 # ---------------------------------------------------------------------------
 # Assertion 3: an external kill-pane -a (what Ctrl+Q does) does NOT
 # erase the pre-kill snapshot. The tick AFTER the kill detects
@@ -125,5 +132,7 @@ assert_contains "${state}" "\"${group_id}\"" \
   "group entry should survive external kill"
 assert_contains "${state}" '"paneCount": 2' \
   "pre-kill pane count should survive external kill"
+assert_not_contains "${state}" "~restored" \
+  "post-kill state.json contains synthetic ~restored entries — PR #42 ghost-pane bug regressed"
 
 pass "Pane layout syncs with tmux via discovery poll (%/Ctrl+Q coverage)"
