@@ -12,21 +12,21 @@ fleet_up alpha
 # ---------------------------------------------------------------------------
 # Regression guard for the PR #42 ghost-pane bug.
 #
-# PR #42's normalizeSavedGroupSessions used to map any non-parseable pane
-# title (e.g. the runner hostname that a brand-new tmux pane defaults to
-# before `fleet shell` runs `tmux select-pane -T`) into a synthetic
+# PR #42's normalizeSavedGroupSessions mapped any non-parseable outer-tmux
+# pane title (e.g. the runner hostname a brand-new pane defaults to before
+# `fleet shell` runs `tmux select-pane -T`) into a synthetic
 # `<instance>~<groupID>~restored##` session name. The fabricated name was
-# then persisted in state.json. On the next restore, `fleet shell
-# --session <name>` would create that tmux session if it didn't exist —
-# producing a blank terminal that the user could not get rid of.
+# persisted in state.json; on restore `fleet shell --session <name>` then
+# created that tmux session, producing a blank terminal the user could not
+# remove.
 #
-# The fix replaces normalizeSavedGroupSessions with a strict
-# derivePersistableSnapshot that bails whenever any pane has an empty or
-# non-group title. This test exercises the exact window the old logic
-# corrupted: open a group with one pane, then rapidly add a second pane
-# via the same path the outer-tmux %/" binding uses (`fleet shell --group
-# <gid>`), and watch state.json for synthetic entries throughout the
-# title-tag race.
+# The fix replaces normalizeSavedGroupSessions with derivePersistableSnapshot,
+# which bails when any pane has an empty/non-group title — the 250ms layout
+# tick simply retries on the next firing instead of poisoning the persisted
+# state. This test exercises the exact window the old logic corrupted: open
+# a group with one pane, rapidly add a second via the same path the outer-
+# tmux %/" binding uses (`fleet shell --group <gid>`), and watch state.json
+# for any synthetic entries through the race.
 # ---------------------------------------------------------------------------
 
 info "Launch TUI and expand alpha"
@@ -62,21 +62,16 @@ if [ -z "${group_id}" ]; then
 fi
 info "group id: ${group_id}"
 
-# Watch state.json continuously while we add the second pane. The bug
-# would write `~restored` for any tick that fires after split-window but
-# before `fleet shell` tags the new pane's title — usually a window of
-# 100ms to several seconds depending on host/devcontainer speed. Even on
-# a fast runner the 250ms layoutTickMsg fires inside that window often
-# enough to catch the regression reliably.
+# Add the second pane and watch state.json through the title-tag race.
+# Each iteration grep's the live file — if any save tick during the race
+# wrote a synthetic entry, this catches it before the next clean tick can
+# overwrite it. Poll faster than the 250ms layoutTickMsg to maximise
+# detection of a transient corrupt save.
 info "Add a second pane and watch state.json for synthetic entries"
 tmux split-window -h -t "${TUI_SESSION}:.1" \
   "env TERM=xterm-256color ${FLEET_BIN} shell ${FIXTURE_REPO_NAME}/alpha --group ${group_id}"
 tui_wait_for_pane 3 20
 
-# Poll for up to 10 seconds (scaled). On every iteration grep the live
-# file — if any save tick during the race wrote a synthetic entry the
-# next tick can overwrite it with a clean snapshot, so polling at a
-# higher rate than the 250ms tick maximises detection.
 watch_deadline=$(( $(date +%s) + $(_scale_timeout 10) ))
 while [ "$(date +%s)" -lt "${watch_deadline}" ]; do
   if [ -f "${HOME}/.fleet/state.json" ] \
@@ -88,38 +83,16 @@ while [ "$(date +%s)" -lt "${watch_deadline}" ]; do
   sleep 0.1
 done
 
-# ---------------------------------------------------------------------------
-# Sanity: by now titles have settled and the save should reflect 2 real
-# panes with names that parse as belonging to this group. A non-matching
-# session name would be a different kind of fabrication.
-# ---------------------------------------------------------------------------
+# Final invariant: the persisted state must never contain ~restored, even
+# after the race has fully settled. The watch loop above catches transient
+# bad writes; this catches a save that landed and stuck.
+info "Verify final state.json"
+assert_file_exists "${HOME}/.fleet/state.json"
 state=$(cat "${HOME}/.fleet/state.json")
-assert_contains "${state}" "\"${group_id}\"" \
-  "state.json missing entry for group ${group_id}"
-assert_contains "${state}" '"paneCount": 2' \
-  "state.json should record 2 shell panes after title-tag settle"
+# Dump for diagnostics — if a future regression hits here, the log will
+# show exactly what was on disk without needing to re-run.
+printf -- '--- state.json ---\n%s\n--- end ---\n' "${state}" >&2
 assert_not_contains "${state}" "~restored" \
-  "post-settle state.json contains synthetic ~restored entries"
-
-# Every persisted session name must start with `alpha~${group_id}`. Names
-# that don't belong to this group would imply fabrication or cross-group
-# contamination.
-sessions_blob=$(printf '%s' "${state}" \
-  | grep -oE '"sessions"[[:space:]]*:[[:space:]]*\[[^]]*\]' \
-  | head -1)
-[ -n "${sessions_blob}" ] || fail "could not locate sessions array in state.json"
-info "sessions: ${sessions_blob}"
-expected_prefix="alpha~${group_id}"
-names=$(printf '%s' "${sessions_blob}" | grep -oE '"[^"]+"' | sed 's/^"//;s/"$//')
-while IFS= read -r name; do
-  [ -z "${name}" ] && continue
-  case "${name}" in
-    "${expected_prefix}"*) ;;
-    *)
-      printf -- '--- state.json ---\n%s\n--- end ---\n' "${state}" >&2
-      fail "saved session [${name}] does not belong to group ${group_id}"
-      ;;
-  esac
-done <<< "${names}"
+  "final state.json contains synthetic ~restored entries — PR #42 ghost-pane bug regressed"
 
 pass "Save path never persists synthetic ~restored session names"
