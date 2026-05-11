@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 )
 
 // ===========================================
@@ -490,5 +492,19 @@ func TestInjectFleetManHooks_AllManagedEventsCovered(t *testing.T) {
 		if _, ok := hooks[event]; !ok {
 			t.Errorf("managed event %q missing from output", event)
 		}
+	}
+}
+
+// TestCaptureAllScript_HookPathInLockstep guards against drift between
+// FleetManScriptSuffix (the canonical hook-script home-relative path)
+// and the literal embedded in backend.CaptureAllScript. The capture
+// script cannot import this package, so the path is duplicated; this
+// test fails fast if someone updates one without the other and would
+// otherwise leave the host triggering reprovisions for a perfectly
+// healthy container, or silently failing to detect a missing script.
+func TestCaptureAllScript_HookPathInLockstep(t *testing.T) {
+	want := "$HOME/" + FleetManScriptSuffix
+	if !strings.Contains(backend.CaptureAllScript, want) {
+		t.Errorf("backend.CaptureAllScript does not reference %q — it must check the same path the provisioner installs to", want)
 	}
 }

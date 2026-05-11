@@ -264,8 +264,13 @@ func (devcontainerBackend *DevcontainerBackend) CaptureAllSessions(containerID s
 	if err != nil {
 		return backend.AllSessions{OK: false}
 	}
-	sessions, files := backend.ParseCaptureOutput(string(out))
-	return backend.AllSessions{Sessions: sessions, ExtraFiles: files, OK: true}
+	sessions, files, hookMissing := backend.ParseCaptureOutput(string(out))
+	return backend.AllSessions{
+		Sessions:          sessions,
+		ExtraFiles:        files,
+		ClaudeHookMissing: hookMissing,
+		OK:                true,
+	}
 }
 
 // AgentToolProbe detects which agent tool is running inside a container.
