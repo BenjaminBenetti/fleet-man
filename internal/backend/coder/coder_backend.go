@@ -25,8 +25,8 @@ type CoderBackend struct {
 // New creates a new CoderBackend.
 func New(opts ...Option) *CoderBackend {
 	coderBackend := &CoderBackend{}
-	for _, o := range opts {
-		o(coderBackend)
+	for _, opt := range opts {
+		opt(coderBackend)
 	}
 	return coderBackend
 }
@@ -232,7 +232,8 @@ func (coderBackend *CoderBackend) CaptureAllSessions(containerID string) backend
 	if err != nil {
 		return backend.AllSessions{OK: false}
 	}
-	return backend.AllSessions{Sessions: backend.ParseAllSessionsOutput(string(out)), OK: true}
+	sessions, files := backend.ParseCaptureOutput(string(out))
+	return backend.AllSessions{Sessions: sessions, ExtraFiles: files, OK: true}
 }
 
 // AgentToolProbe detects which agent tool is running inside a Coder workspace.
@@ -280,14 +281,14 @@ func (coderBackend *CoderBackend) Status(containerID string) backend.LiveStatus 
 	if name == "" {
 		return backend.LiveStatusUnknown
 	}
-	ws, err := coderBackend.getWorkspace(name)
+	workspace, err := coderBackend.getWorkspace(name)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			return backend.LiveStatusMissing
 		}
 		return backend.LiveStatusUnknown
 	}
-	switch ws.LatestBuild.Status {
+	switch workspace.LatestBuild.Status {
 	case "running", "started":
 		return backend.LiveStatusRunning
 	case "stopped", "canceled":

@@ -30,81 +30,165 @@ func TestParseToolProbeOutput(t *testing.T) {
 	}
 }
 
-func TestParseAllSessionsOutput(t *testing.T) {
+// ===========================================
+// ParseCaptureOutput — sessions
+// ===========================================
+
+func TestParseCaptureOutput_Sessions(t *testing.T) {
 	mk := func(name, content string) string {
 		return sessionMarker + name + "\n" + content
 	}
 
 	t.Run("empty input means no sessions", func(t *testing.T) {
-		got := ParseAllSessionsOutput("")
-		if len(got) != 0 {
-			t.Fatalf("expected 0 sessions, got %d", len(got))
+		sessions, files := ParseCaptureOutput("")
+		if len(sessions) != 0 {
+			t.Fatalf("expected 0 sessions, got %d", len(sessions))
+		}
+		if len(files) != 0 {
+			t.Fatalf("expected 0 files, got %d", len(files))
 		}
 	})
 
 	t.Run("single session with content", func(t *testing.T) {
 		input := mk("main", "line1\nline2\n")
-		got := ParseAllSessionsOutput(input)
-		if len(got) != 1 {
-			t.Fatalf("expected 1 session, got %d", len(got))
+		sessions, _ := ParseCaptureOutput(input)
+		if len(sessions) != 1 {
+			t.Fatalf("expected 1 session, got %d", len(sessions))
 		}
-		sc, ok := got["main"]
+		capture, ok := sessions["main"]
 		if !ok {
 			t.Fatalf("session 'main' missing")
 		}
-		if !sc.OK {
+		if !capture.OK {
 			t.Fatal("expected OK=true")
 		}
-		if sc.Content != "line1\nline2" {
-			t.Fatalf("got content %q", sc.Content)
+		if capture.Content != "line1\nline2" {
+			t.Fatalf("got content %q", capture.Content)
 		}
 	})
 
 	t.Run("multiple sessions are demultiplexed", func(t *testing.T) {
 		input := mk("main", "alpha\n") + mk("session-2", "beta\nbeta2\n") + mk("hex-abc", "")
-		got := ParseAllSessionsOutput(input)
-		if len(got) != 3 {
-			t.Fatalf("expected 3 sessions, got %d", len(got))
+		sessions, _ := ParseCaptureOutput(input)
+		if len(sessions) != 3 {
+			t.Fatalf("expected 3 sessions, got %d", len(sessions))
 		}
-		if got["main"].Content != "alpha" {
-			t.Fatalf("main content: %q", got["main"].Content)
+		if sessions["main"].Content != "alpha" {
+			t.Fatalf("main content: %q", sessions["main"].Content)
 		}
-		if got["session-2"].Content != "beta\nbeta2" {
-			t.Fatalf("session-2 content: %q", got["session-2"].Content)
+		if sessions["session-2"].Content != "beta\nbeta2" {
+			t.Fatalf("session-2 content: %q", sessions["session-2"].Content)
 		}
-		if got["hex-abc"].Content != "" {
-			t.Fatalf("hex-abc should be empty, got %q", got["hex-abc"].Content)
+		if sessions["hex-abc"].Content != "" {
+			t.Fatalf("hex-abc should be empty, got %q", sessions["hex-abc"].Content)
 		}
 	})
 
 	t.Run("session names with special characters survive", func(t *testing.T) {
-		// Group sessions use ~ as separator; any printable ASCII
-		// other than RS (\x1e) must round-trip through the marker.
 		input := mk("fleet~abc123~def", "content")
-		got := ParseAllSessionsOutput(input)
-		sc, ok := got["fleet~abc123~def"]
+		sessions, _ := ParseCaptureOutput(input)
+		capture, ok := sessions["fleet~abc123~def"]
 		if !ok {
-			t.Fatalf("expected fleet~abc123~def in result; got keys: %v", keys(got))
+			t.Fatalf("expected fleet~abc123~def in result; got keys: %v", sessionKeys(sessions))
 		}
-		if sc.Content != "content" {
-			t.Fatalf("got content %q", sc.Content)
+		if capture.Content != "content" {
+			t.Fatalf("got content %q", capture.Content)
 		}
 	})
 
 	t.Run("output without markers is ignored", func(t *testing.T) {
-		// tmux server not running → script exits with no output
-		// before any marker — nothing to record.
-		got := ParseAllSessionsOutput("orphan content with no marker\n")
-		if len(got) != 0 {
-			t.Fatalf("expected 0 sessions, got %d", len(got))
+		sessions, files := ParseCaptureOutput("orphan content with no marker\n")
+		if len(sessions) != 0 || len(files) != 0 {
+			t.Fatalf("expected empty results, got sessions=%d files=%d", len(sessions), len(files))
 		}
 	})
 }
 
-func keys(m map[string]ScreenCapture) []string {
-	ks := make([]string, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
+// ===========================================
+// ParseCaptureOutput — files
+// ===========================================
+
+func TestParseCaptureOutput_Files(t *testing.T) {
+	mkFile := func(path, content string) string {
+		return fileMarker + path + "\n" + content
 	}
-	return ks
+	mkSession := func(name, content string) string {
+		return sessionMarker + name + "\n" + content
+	}
+
+	t.Run("single file capture", func(t *testing.T) {
+		input := mkFile("/tmp/fleet-man/claude-state", "working 1700000000\n")
+		_, files := ParseCaptureOutput(input)
+		if got := files["/tmp/fleet-man/claude-state"]; got != "working 1700000000" {
+			t.Errorf("got %q, want %q", got, "working 1700000000")
+		}
+	})
+
+	t.Run("multiple files demultiplexed", func(t *testing.T) {
+		input := mkFile("/tmp/fleet-man/claude-state", "working 100\n") +
+			mkFile("/tmp/fleet-man/codex-state", "waiting 200\n")
+		_, files := ParseCaptureOutput(input)
+		if len(files) != 2 {
+			t.Fatalf("got %d files, want 2", len(files))
+		}
+		if files["/tmp/fleet-man/claude-state"] != "working 100" {
+			t.Errorf("claude-state: %q", files["/tmp/fleet-man/claude-state"])
+		}
+		if files["/tmp/fleet-man/codex-state"] != "waiting 200" {
+			t.Errorf("codex-state: %q", files["/tmp/fleet-man/codex-state"])
+		}
+	})
+
+	t.Run("empty file content is captured as empty string", func(t *testing.T) {
+		// State files exist but were empty (race between mkdir and
+		// first hook fire) — must produce an entry, not an absence.
+		input := mkFile("/tmp/fleet-man/claude-state", "")
+		_, files := ParseCaptureOutput(input)
+		if _, present := files["/tmp/fleet-man/claude-state"]; !present {
+			t.Fatalf("expected entry for empty file, got: %v", files)
+		}
+	})
+
+	t.Run("sessions and files coexist in one output", func(t *testing.T) {
+		// This is the normal CaptureAllScript shape: sessions first,
+		// then state files. Both must demultiplex cleanly.
+		input := mkSession("main", "tmux pane content\n") +
+			mkFile("/tmp/fleet-man/claude-state", "working 42\n")
+		sessions, files := ParseCaptureOutput(input)
+		if got := sessions["main"].Content; got != "tmux pane content" {
+			t.Errorf("session content: %q", got)
+		}
+		if got := files["/tmp/fleet-man/claude-state"]; got != "working 42" {
+			t.Errorf("file content: %q", got)
+		}
+	})
+
+	t.Run("file content survives newlines and special chars", func(t *testing.T) {
+		body := "line1\nline2\n  indented\n"
+		input := mkFile("/tmp/fleet-man/claude-state", body)
+		_, files := ParseCaptureOutput(input)
+		if got := files["/tmp/fleet-man/claude-state"]; got != "line1\nline2\n  indented" {
+			t.Errorf("got %q", got)
+		}
+	})
+
+	t.Run("file marker followed by session marker switches mode", func(t *testing.T) {
+		input := mkFile("/tmp/fleet-man/claude-state", "working 1\n") +
+			mkSession("main", "pane\n")
+		sessions, files := ParseCaptureOutput(input)
+		if files["/tmp/fleet-man/claude-state"] != "working 1" {
+			t.Errorf("file content: %q", files["/tmp/fleet-man/claude-state"])
+		}
+		if sessions["main"].Content != "pane" {
+			t.Errorf("session content: %q", sessions["main"].Content)
+		}
+	})
+}
+
+func sessionKeys(captures map[string]ScreenCapture) []string {
+	keys := make([]string, 0, len(captures))
+	for key := range captures {
+		keys = append(keys, key)
+	}
+	return keys
 }

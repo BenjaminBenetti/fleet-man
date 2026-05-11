@@ -7,14 +7,15 @@ import (
 // NewDetector returns the appropriate Detector strategy for a given
 // agent tool.
 //
-// Today every tool falls back to TmuxPaneChangeDetector — the generic
-// pane-diffing strategy works for any CLI agent that draws into a
-// tmux pane. As tool-specific signals are added (e.g., parsing a
-// known agent's status line, watching its log files, hitting an
-// exposed status endpoint) new branches can be added here without
-// touching the call sites.
+// Per-tool branches plug in tool-specific signals when they are
+// available (e.g., Claude Code's lifecycle hooks). Tools without a
+// dedicated strategy fall back to TmuxPaneChangeDetector — the
+// generic pane-diffing strategy that works for any CLI agent
+// drawing into a tmux pane.
 func NewDetector(tool state.AgentTool) Detector {
 	switch tool {
+	case state.AgentToolClaude:
+		return NewClaudeHookDetector()
 	default:
 		return NewTmuxPaneChangeDetector()
 	}

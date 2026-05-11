@@ -65,7 +65,7 @@ func ParseToolProbeOutput(output string) (string, bool) {
 }
 
 // ===========================================
-// Session Capture
+// Capture (sessions + per-tool state files)
 // ===========================================
 
 // sessionMarker is emitted before each session's capture inside
@@ -73,28 +73,61 @@ func ParseToolProbeOutput(output string) (string, bool) {
 // output, so splitting on this marker is unambiguous.
 const sessionMarker = "\x1eFLEET_SESSION_8f4a2b1c\x1e"
 
-// CaptureAllScript lists every tmux session and captures each pane's
-// visible content in a single shell invocation. The session name
-// precedes each capture on its own marker line so the Go side can
-// demultiplex the output back into per-session captures.
+// fileMarker is emitted before each captured auxiliary file inside
+// CaptureAllScript. Same marker scheme as sessions but a distinct
+// payload type so the parser knows which map the body belongs to.
+const fileMarker = "\x1eFLEET_FILE_8f4a2b1c\x1e"
+
+// CaptureAllScript runs every per-container read fleet-man needs in a
+// single shell invocation:
+//
+//  1. List tmux sessions and capture each pane's visible content.
+//  2. Cat any /tmp/fleet-man/*-state files written by in-container
+//     hook scripts (today: Claude Code's fleet-man-state-hook).
+//
+// Each block is preceded by a marker line so the Go side can
+// demultiplex back into typed maps. The script is tolerant of
+// "nothing to capture" at every step: missing tmux server, missing
+// /tmp/fleet-man directory, missing state files all reduce to silent
+// no-ops.
 const CaptureAllScript = `sessions=$(tmux list-sessions -F "#{session_name}" 2>/dev/null)
-[ -z "$sessions" ] && exit 0
-printf '%s\n' "$sessions" | while IFS= read -r sess; do
-  [ -z "$sess" ] && continue
-  printf '\036FLEET_SESSION_8f4a2b1c\036%s\n' "$sess"
-  tmux capture-pane -t "$sess" -p 2>/dev/null
+if [ -n "$sessions" ]; then
+  printf '%s\n' "$sessions" | while IFS= read -r sess; do
+    [ -z "$sess" ] && continue
+    printf '\036FLEET_SESSION_8f4a2b1c\036%s\n' "$sess"
+    tmux capture-pane -t "$sess" -p 2>/dev/null
+  done
+fi
+for f in /tmp/fleet-man/*-state; do
+  [ -e "$f" ] || continue
+  printf '\036FLEET_FILE_8f4a2b1c\036%s\n' "$f"
+  cat "$f" 2>/dev/null || true
 done
 `
 
-// ParseAllSessionsOutput parses CaptureAllScript output into
-// per-session captures. Returns an empty map when the output has no
-// session markers (tmux server not running or no sessions).
-func ParseAllSessionsOutput(output string) map[string]ScreenCapture {
-	result := make(map[string]ScreenCapture)
+// ParseCaptureOutput demultiplexes CaptureAllScript output into its
+// two payload kinds:
+//
+//   - sessions: tmux sessionName → ScreenCapture
+//   - files:    containerPath    → file contents
+//
+// Lines preceding the first marker are ignored (the script may emit
+// stray output if tmux is misbehaving and we want to fail soft).
+// Returns empty maps when the output has no markers.
+func ParseCaptureOutput(output string) (map[string]ScreenCapture, map[string]string) {
+	sessions := make(map[string]ScreenCapture)
+	files := make(map[string]string)
 	if output == "" {
-		return result
+		return sessions, files
 	}
 
+	const (
+		modeNone = iota
+		modeSession
+		modeFile
+	)
+
+	mode := modeNone
 	var currentName string
 	var currentBuf strings.Builder
 	flush := func() {
@@ -102,22 +135,35 @@ func ParseAllSessionsOutput(output string) map[string]ScreenCapture {
 			return
 		}
 		content := strings.TrimRight(currentBuf.String(), "\n")
-		result[currentName] = ScreenCapture{Content: content, OK: true}
+		switch mode {
+		case modeSession:
+			sessions[currentName] = ScreenCapture{Content: content, OK: true}
+		case modeFile:
+			files[currentName] = content
+		}
 	}
 
 	for _, line := range strings.SplitAfter(output, "\n") {
 		trimmed := strings.TrimRight(line, "\n")
-		if strings.HasPrefix(trimmed, sessionMarker) {
+		switch {
+		case strings.HasPrefix(trimmed, sessionMarker):
 			flush()
 			currentName = strings.TrimPrefix(trimmed, sessionMarker)
+			mode = modeSession
+			currentBuf.Reset()
+			continue
+		case strings.HasPrefix(trimmed, fileMarker):
+			flush()
+			currentName = strings.TrimPrefix(trimmed, fileMarker)
+			mode = modeFile
 			currentBuf.Reset()
 			continue
 		}
-		if currentName == "" {
+		if mode == modeNone {
 			continue
 		}
 		currentBuf.WriteString(line)
 	}
 	flush()
-	return result
+	return sessions, files
 }

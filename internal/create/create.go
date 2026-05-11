@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	coderbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/coder"
 	codespacesbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/codespaces"
@@ -114,6 +115,20 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 	// failures are non-fatal — the instance is still usable, so we
 	// surface them as a warning rather than aborting creation.
 	runStartupScripts(instanceBackend, wsDir, fleetName, instanceName)
+
+	// Install Claude Code state-detection hooks. Runs after the
+	// startup scripts so any per-fleet Claude Code install above
+	// has had a chance to land before we drop our hooks alongside
+	// it. Like dotfiles, this is non-fatal: if hook installation
+	// fails the user can still use the instance — fleet-man's
+	// per-instance Detector falls back to a safe default for
+	// Claude state. We always install (regardless of which agent
+	// the user actually runs) because we don't know the choice at
+	// creation time, and the cost of unused hooks is negligible.
+	executor := agentdetect.NewBackendExecutor(instanceBackend, wsDir)
+	if err := agentdetect.NewClaudeProvisioner(executor).Provision(); err != nil {
+		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("claude hook install failed: %v", err))
+	}
 
 	// Success: update state (instance is running even if dotfiles failed)
 	st, err := state.Load()
@@ -255,28 +270,28 @@ func buildCoderBackend(fleetName, instanceName, remoteURL, branch string, verbos
 		return coderbackend.New(opts...)
 	}
 
-	cs := config.CoderSettings
-	if cs.Template != "" {
-		opts = append(opts, coderbackend.WithTemplate(cs.Template))
+	coderSettings := config.CoderSettings
+	if coderSettings.Template != "" {
+		opts = append(opts, coderbackend.WithTemplate(coderSettings.Template))
 	}
-	if cs.Preset != "" {
-		opts = append(opts, coderbackend.WithPreset(cs.Preset))
+	if coderSettings.Preset != "" {
+		opts = append(opts, coderbackend.WithPreset(coderSettings.Preset))
 	}
 
 	// Resolve parameters with variable substitution
-	if len(cs.Parameters) > 0 {
+	if len(coderSettings.Parameters) > 0 {
 		wsName := fleetName + "-" + instanceName
-		resolved := make(map[string]string, len(cs.Parameters))
-		for _, p := range cs.Parameters {
-			value := p.Value
+		resolved := make(map[string]string, len(coderSettings.Parameters))
+		for _, param := range coderSettings.Parameters {
+			value := param.Value
 			if value == "" {
-				value = p.DefaultValue
+				value = param.DefaultValue
 			}
 			value = strings.ReplaceAll(value, "${GIT_URL}", remoteURL)
 			value = strings.ReplaceAll(value, "${GIT_BRANCH}", branch)
 			value = strings.ReplaceAll(value, "${INSTANCE_NAME}", wsName)
 			if value != "" {
-				resolved[p.Name] = value
+				resolved[param.Name] = value
 			}
 		}
 		opts = append(opts, coderbackend.WithParameters(resolved))
@@ -310,15 +325,15 @@ func buildCodespacesBackend(remoteURL, branch string, verbose bool) backend.Back
 		return codespacesbackend.New(opts...)
 	}
 
-	cs := config.CodespacesSettings
-	if cs.Machine != "" {
-		opts = append(opts, codespacesbackend.WithMachine(cs.Machine))
+	codespacesSettings := config.CodespacesSettings
+	if codespacesSettings.Machine != "" {
+		opts = append(opts, codespacesbackend.WithMachine(codespacesSettings.Machine))
 	}
-	if cs.IdleTimeout != "" {
-		opts = append(opts, codespacesbackend.WithIdleTimeout(cs.IdleTimeout))
+	if codespacesSettings.IdleTimeout != "" {
+		opts = append(opts, codespacesbackend.WithIdleTimeout(codespacesSettings.IdleTimeout))
 	}
-	if cs.DevcontainerPath != "" {
-		opts = append(opts, codespacesbackend.WithDevcontainerPath(cs.DevcontainerPath))
+	if codespacesSettings.DevcontainerPath != "" {
+		opts = append(opts, codespacesbackend.WithDevcontainerPath(codespacesSettings.DevcontainerPath))
 	}
 
 	return codespacesbackend.New(opts...)

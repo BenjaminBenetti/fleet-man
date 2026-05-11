@@ -46,8 +46,8 @@ func New(opts ...Option) *CodespacesBackend {
 		nameCache:  make(map[string]string),
 		sshConfigs: make(map[string]sshConfig),
 	}
-	for _, o := range opts {
-		o(codespacesBackend)
+	for _, opt := range opts {
+		opt(codespacesBackend)
 	}
 	return codespacesBackend
 }
@@ -257,7 +257,8 @@ func (codespacesBackend *CodespacesBackend) CaptureAllSessions(containerID strin
 	if err != nil {
 		return backend.AllSessions{OK: false}
 	}
-	return backend.AllSessions{Sessions: backend.ParseAllSessionsOutput(string(out)), OK: true}
+	sessions, files := backend.ParseCaptureOutput(string(out))
+	return backend.AllSessions{Sessions: sessions, ExtraFiles: files, OK: true}
 }
 
 // AgentToolProbe detects which agent tool is running inside a codespace.
