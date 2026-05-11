@@ -208,12 +208,16 @@ setup_agent_test() {
 # the settings-driven code paths without driving the TUI.
 #
 # Usage:
-#   seed_fleet_settings <fleet_name> <claude:true|false> <codex:true|false> <homedir>
+#   seed_fleet_settings <fleet_name> <claude:true|false> <codex:true|false> <homedir> [<gh:true|false>]
+#
+# gh defaults to false so older callers that pre-date the GhMount setting
+# keep working unchanged.
 seed_fleet_settings() {
   local fleet_name="$1"
   local claude="${2:-false}"
   local codex="${3:-false}"
   local homedir="${4:-/home/node}"
+  local gh="${5:-false}"
   mkdir -p "${HOME}/.fleet"
   cat > "${HOME}/.fleet/state.json" <<EOF
 {
@@ -224,6 +228,7 @@ seed_fleet_settings() {
       "settings": {
         "claudeCodeMount": ${claude},
         "codexMount": ${codex},
+        "ghMount": ${gh},
         "homeDir": "${homedir}"
       },
       "instances": []

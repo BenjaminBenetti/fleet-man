@@ -34,5 +34,12 @@ func dirMountSpecsFor(fleetSettings fleet.FleetSettings, containerHome string) [
 			containerPath: containerHome + "/.codex",
 		})
 	}
+	if fleetSettings.GhMount {
+		specs = append(specs, dirMountSpec{
+			name:          "GitHub CLI",
+			hostSubdir:    ".config/gh",
+			containerPath: containerHome + "/.config/gh",
+		})
+	}
 	return specs
 }
