@@ -102,6 +102,12 @@ state=$(cat "${HOME}/.fleet/state.json")
 assert_contains "${state}" '"groupLayouts"' "state.json missing groupLayouts field"
 assert_contains "${state}" "\"${group_id}\"" "state.json missing entry for group ${group_id}"
 assert_contains "${state}" '"paneCount": 2' "state.json should record 2 shell panes"
+# Regression guard for PR #42's ghost-pane bug: the save path used to
+# fabricate synthetic `~restored##` session names from un-tagged pane
+# titles, then persist them. Restoring those fakes spawned blank tmux
+# sessions. The strict save in derivePersistableSnapshot bails instead.
+assert_not_contains "${state}" "~restored" \
+  "state.json contains synthetic ~restored entries — the PR #42 ghost-pane bug is back"
 
 saved_layout=$(grep -oE '"layout"[[:space:]]*:[[:space:]]*"[^"]*"' "${HOME}/.fleet/state.json" \
   | head -1 \

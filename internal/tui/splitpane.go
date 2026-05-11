@@ -74,6 +74,7 @@ func splitPaneCmd(existingPaneID string, ref InstanceRef, sessionName string, gr
 				"sh", "-c", shellScript,
 			}
 			if exec.Command("tmux", respawnArgs...).Run() == nil {
+				tagPaneTitle(existingPaneID, sessionName)
 				_ = exec.Command("tmux", "select-pane", "-t", existingPaneID).Run()
 				return splitPaneMsg{paneID: existingPaneID, ref: ref, session: sessionName, groupID: groupID}
 			}
@@ -100,9 +101,24 @@ func splitPaneCmd(existingPaneID string, ref InstanceRef, sessionName string, gr
 		}
 
 		paneID := strings.TrimSpace(string(out))
+		tagPaneTitle(paneID, sessionName)
 		_ = exec.Command("tmux", "select-pane", "-t", paneID).Run()
 		return splitPaneMsg{paneID: paneID, ref: ref, session: sessionName, groupID: groupID}
 	}
+}
+
+// tagPaneTitle sets the outer-tmux pane title to the session name the
+// TUI just spawned. Required so that derivePersistableSnapshot can
+// reliably map panes back to their sessions: `fleet shell` does this
+// inside its own startup path, but the TUI bypasses the CLI for the
+// first pane and during Phase-3 restore, so without this call those
+// panes would report the runner hostname as their title and the strict
+// save would bail forever.
+func tagPaneTitle(paneID, sessionName string) {
+	if paneID == "" || sessionName == "" {
+		return
+	}
+	_ = exec.Command("tmux", "select-pane", "-t", paneID, "-T", sessionName).Run()
 }
 
 // splitOpen returns true if the current tmux window has more than one
@@ -310,21 +326,55 @@ func listPanesByPosition() []paneByPosition {
 	return panes
 }
 
-// paneSessionOrder returns session names (from pane titles) sorted by
-// screen position. This gives a stable ordering for save/restore.
-func paneSessionOrder() []string {
-	panes := listPanesByPosition()
-	var sessions []string
-	for _, p := range panes {
-		if p.title != "" {
-			sessions = append(sessions, p.title)
-		}
+// derivePersistableSnapshot turns the live outer-tmux pane state into a
+// savedGroup that's safe to persist. It returns ok=false whenever any
+// pane fails strict validation — an empty title, a title that doesn't
+// parse as a session in the active group, a parsed groupID that doesn't
+// match active, or a duplicate title across panes. The 250ms layout
+// tick fires this constantly, so a transient ok=false (e.g. a pane that
+// hasn't been tagged by `fleet shell` yet) is just a "retry next tick"
+// signal — the in-memory snapshot from a previous successful tick is
+// preserved.
+//
+// This is the strict replacement for PR #42's normalizeSavedGroupSessions,
+// which fabricated synthetic `~restored##` session names from unparseable
+// pane titles. Those fakes then got persisted and later restored as
+// brand-new empty tmux sessions, surfacing as ghost panes.
+func derivePersistableSnapshot(activeGroup ActiveGroup, panes []paneByPosition, layout string) (savedGroup, bool) {
+	if activeGroup.Empty() || len(panes) == 0 {
+		return savedGroup{}, false
 	}
-	return sessions
+	sanitized := SanitizeSessionName(activeGroup.Ref.Instance)
+	groupID := activeGroup.GroupID
+
+	sessionNames := make([]string, 0, len(panes))
+	seen := make(map[string]bool, len(panes))
+	for _, p := range panes {
+		if p.title == "" {
+			return savedGroup{}, false
+		}
+		parsedGID, ok := parseGroupID(sanitized, p.title)
+		if !ok || parsedGID != groupID {
+			return savedGroup{}, false
+		}
+		if seen[p.title] {
+			return savedGroup{}, false
+		}
+		sessionNames = append(sessionNames, p.title)
+		seen[p.title] = true
+	}
+
+	return savedGroup{
+		GroupID:      groupID,
+		InstanceName: activeGroup.Ref.Instance,
+		Sessions:     sessionNames,
+		Layout:       layout,
+		PaneCount:    len(sessionNames),
+	}, true
 }
 
 // saveCurrentGroupLayout saves the active group's outer tmux layout so
-// it can be restored later. Pane titles (set by fleet shell) are read
+// it can be restored later. Pane titles (set by `fleet shell`) are read
 // in pane index order to preserve the session-to-position mapping. When
 // st is non-nil the layout is also mirrored into state.json so it
 // survives a fleet restart.
@@ -336,28 +386,13 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 		return
 	}
 
-	// Read session names from outer tmux pane titles, in pane order. Some
-	// panes briefly report the host title before fleet shell sets a title;
-	// normalize those placeholders into deterministic group session names
-	// before persisting the layout.
-	sanitized := SanitizeSessionName(fleetPage.activeGroup.Ref.Instance)
-	sessionNames := normalizeSavedGroupSessions(paneSessionOrder(), sanitized, fleetPage.activeGroup.GroupID)
-
-	// No shell panes visible in the outer tmux means either the group
-	// hasn't opened yet or its panes have already been killed (Ctrl+Q,
-	// external kill, teardown mid-quit). Either way there's nothing
-	// truthful to save — bail before we clobber a previously good
-	// snapshot with a zero- or fallback-sized record.
-	if len(sessionNames) == 0 {
+	groupSnapshot, ok := derivePersistableSnapshot(
+		fleetPage.activeGroup,
+		listPanesByPosition(),
+		tmuxLayoutString(),
+	)
+	if !ok {
 		return
-	}
-
-	groupSnapshot := savedGroup{
-		GroupID:      fleetPage.activeGroup.GroupID,
-		InstanceName: fleetPage.activeGroup.Ref.Instance,
-		Sessions:     sessionNames,
-		Layout:       tmuxLayoutString(),
-		PaneCount:    len(sessionNames),
 	}
 
 	// No-op when nothing changed. The 250ms layout tick fires this
@@ -488,12 +523,19 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 		// then respawn each pane with the correct session based on
 		// position. This guarantees the right session is in the right
 		// pane regardless of how tmux reordered indices.
+		//
+		// We tag the pane title with the session name BEFORE respawning,
+		// not after — derivePersistableSnapshot's strict check runs on
+		// every 250ms layoutTick and would otherwise bail until each
+		// `fleet shell` child got far enough to call `tmux select-pane
+		// -T`. The pre-tag closes the race deterministically.
 		paneSlots := listPaneSlots()
 		for i, sessName := range sessions {
 			if i >= len(paneSlots) {
 				break
 			}
 			pid := paneSlots[i]
+			tagPaneTitle(pid, sessName)
 			shellCmd := fmt.Sprintf("%s shell %s --session %s", self, qualifiedName, sessName)
 			script := shellCmd + `; __rc=$?; if [ $__rc -ne 0 ]; then echo; echo "exited with code $__rc — closing in 3s"; sleep 3; fi; exit $__rc`
 			_ = exec.Command("tmux", "respawn-pane", "-k", "-t", pid, "sh", "-c", script).Run()

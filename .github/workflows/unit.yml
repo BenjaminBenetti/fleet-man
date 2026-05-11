@@ -1,0 +1,26 @@
+name: Unit Tests
+
+# Fast, docker-free checks. Runs in parallel with the integration jobs so a
+# PR fails immediately on a broken unit test rather than waiting 5+ minutes
+# for the devcontainer suite to spin up.
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...

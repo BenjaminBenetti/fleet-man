@@ -157,7 +157,12 @@ func TestSavedGroupSessionNamesUsesSavedOrder(t *testing.T) {
 	}
 }
 
-func TestSavedGroupSessionNamesSynthesizesMissingPanes(t *testing.T) {
+// TestSavedGroupSessionNamesFallsBackToRootWhenSessionsEmpty documents
+// the only legitimate synthesis path: legacy state that recorded a
+// PaneCount with no Sessions array. Returns a single root session — the
+// callers don't see an empty slice but also don't get padded ghost
+// names like the old implementation produced.
+func TestSavedGroupSessionNamesFallsBackToRootWhenSessionsEmpty(t *testing.T) {
 	sg := savedGroup{
 		GroupID:      "abc123",
 		InstanceName: "alpha",
@@ -165,31 +170,142 @@ func TestSavedGroupSessionNamesSynthesizesMissingPanes(t *testing.T) {
 	}
 
 	got := savedGroupSessionNames(sg, "alpha")
-	want := []string{"alpha~abc123", "alpha~abc123~restored01"}
+	want := []string{"alpha~abc123"}
 	if len(got) != len(want) {
 		t.Fatalf("len = %d, want %d: %#v", len(got), len(want), got)
 	}
+	if got[0] != want[0] {
+		t.Fatalf("session[0] = %q, want %q", got[0], want[0])
+	}
+}
+
+// TestSavedGroupSessionNamesDoesNotPadFromPaneCount is the regression
+// test for the PR #42 ghost-pane bug. PaneCount > len(Sessions) must NOT
+// trigger fabrication of `~restored##` names — those get persisted on
+// the next save and later restore as blank tmux sessions.
+func TestSavedGroupSessionNamesDoesNotPadFromPaneCount(t *testing.T) {
+	sg := savedGroup{
+		GroupID:      "abc123",
+		InstanceName: "alpha",
+		Sessions:     []string{"alpha~abc123"},
+		PaneCount:    3,
+	}
+
+	got := savedGroupSessionNames(sg, "alpha")
+	want := []string{"alpha~abc123"}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d (pad must not happen): %#v", len(got), len(want), got)
+	}
+	if got[0] != want[0] {
+		t.Fatalf("session[0] = %q, want %q", got[0], want[0])
+	}
+}
+
+func TestDerivePersistableSnapshotHappyPath(t *testing.T) {
+	active := ActiveGroup{
+		Ref:     InstanceRef{Fleet: "repo", Instance: "alpha"},
+		GroupID: "abc123",
+	}
+	panes := []paneByPosition{
+		{title: "alpha~abc123"},
+		{title: "alpha~abc123~ff00"},
+	}
+	sg, ok := derivePersistableSnapshot(active, panes, "layout-string")
+	if !ok {
+		t.Fatal("expected ok=true for well-formed pane titles")
+	}
+	if sg.PaneCount != 2 {
+		t.Fatalf("PaneCount = %d, want 2", sg.PaneCount)
+	}
+	if sg.Layout != "layout-string" {
+		t.Fatalf("Layout = %q, want layout-string", sg.Layout)
+	}
+	want := []string{"alpha~abc123", "alpha~abc123~ff00"}
+	if len(sg.Sessions) != len(want) {
+		t.Fatalf("Sessions len = %d, want %d", len(sg.Sessions), len(want))
+	}
 	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("session[%d] = %q, want %q", i, got[i], want[i])
+		if sg.Sessions[i] != want[i] {
+			t.Fatalf("Sessions[%d] = %q, want %q", i, sg.Sessions[i], want[i])
 		}
 	}
 }
 
-func TestNormalizeSavedGroupSessionsReplacesHostPaneTitles(t *testing.T) {
-	got := normalizeSavedGroupSessions(
-		[]string{"runner-host", "alpha~abc123~ff00"},
-		"alpha",
-		"abc123",
-	)
-	want := []string{"alpha~abc123", "alpha~abc123~ff00"}
-	if len(got) != len(want) {
-		t.Fatalf("len = %d, want %d: %#v", len(got), len(want), got)
+// TestDerivePersistableSnapshotBailsOnEmptyTitle is the core regression
+// guard: when a pane hasn't been tagged by `fleet shell` yet, its title
+// is empty (or the host hostname, see ParsesUnknownTitleAsHost). We must
+// bail rather than fabricate a placeholder, because fabricated names get
+// persisted and later restored as ghost panes.
+func TestDerivePersistableSnapshotBailsOnEmptyTitle(t *testing.T) {
+	active := ActiveGroup{
+		Ref:     InstanceRef{Fleet: "repo", Instance: "alpha"},
+		GroupID: "abc123",
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("session[%d] = %q, want %q", i, got[i], want[i])
-		}
+	panes := []paneByPosition{
+		{title: "alpha~abc123"},
+		{title: ""},
+	}
+	if _, ok := derivePersistableSnapshot(active, panes, "L"); ok {
+		t.Fatal("expected ok=false when a pane has no title")
+	}
+}
+
+func TestDerivePersistableSnapshotBailsOnUnparseableTitle(t *testing.T) {
+	active := ActiveGroup{
+		Ref:     InstanceRef{Fleet: "repo", Instance: "alpha"},
+		GroupID: "abc123",
+	}
+	panes := []paneByPosition{
+		{title: "alpha~abc123"},
+		{title: "runner-host"}, // pre-tag default, must NOT be coerced
+	}
+	if _, ok := derivePersistableSnapshot(active, panes, "L"); ok {
+		t.Fatal("expected ok=false when a pane title doesn't parse as a group session")
+	}
+}
+
+func TestDerivePersistableSnapshotBailsOnForeignGroup(t *testing.T) {
+	active := ActiveGroup{
+		Ref:     InstanceRef{Fleet: "repo", Instance: "alpha"},
+		GroupID: "abc123",
+	}
+	panes := []paneByPosition{
+		{title: "alpha~abc123"},
+		{title: "alpha~def456~ff00"}, // belongs to a different group
+	}
+	if _, ok := derivePersistableSnapshot(active, panes, "L"); ok {
+		t.Fatal("expected ok=false when a pane belongs to a different group")
+	}
+}
+
+func TestDerivePersistableSnapshotBailsOnDuplicateTitle(t *testing.T) {
+	active := ActiveGroup{
+		Ref:     InstanceRef{Fleet: "repo", Instance: "alpha"},
+		GroupID: "abc123",
+	}
+	panes := []paneByPosition{
+		{title: "alpha~abc123"},
+		{title: "alpha~abc123"},
+	}
+	if _, ok := derivePersistableSnapshot(active, panes, "L"); ok {
+		t.Fatal("expected ok=false when two panes report the same title")
+	}
+}
+
+func TestDerivePersistableSnapshotBailsWithoutActiveGroup(t *testing.T) {
+	panes := []paneByPosition{{title: "alpha~abc123"}}
+	if _, ok := derivePersistableSnapshot(ActiveGroup{}, panes, "L"); ok {
+		t.Fatal("expected ok=false when activeGroup is empty")
+	}
+}
+
+func TestDerivePersistableSnapshotBailsWithNoPanes(t *testing.T) {
+	active := ActiveGroup{
+		Ref:     InstanceRef{Fleet: "repo", Instance: "alpha"},
+		GroupID: "abc123",
+	}
+	if _, ok := derivePersistableSnapshot(active, nil, "L"); ok {
+		t.Fatal("expected ok=false when no panes exist")
 	}
 }
 

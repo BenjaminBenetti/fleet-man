@@ -3,7 +3,6 @@ package tui
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -58,20 +57,30 @@ func sameSavedGroup(a, b savedGroup) bool {
 	return true
 }
 
+// savedGroupPaneCount reports the number of panes the group is expected
+// to restore. Sessions length is authoritative because save always sets
+// PaneCount = len(Sessions); PaneCount is only consulted as a fallback
+// for legacy state that recorded a count but no Sessions array.
 func savedGroupPaneCount(sg savedGroup) int {
-	if sg.PaneCount > 0 {
-		return sg.PaneCount
-	}
 	if len(sg.Sessions) > 0 {
 		return len(sg.Sessions)
+	}
+	if sg.PaneCount > 0 {
+		return sg.PaneCount
 	}
 	return 1
 }
 
+// savedGroupSessionNames returns the persisted session order for a saved
+// group, deduplicated. When Sessions is empty (legacy state that only
+// recorded PaneCount) it falls back to a single root session — callers
+// should never see an empty result. It deliberately does NOT synthesize
+// names to pad up to PaneCount: doing that was the source of the "ghost
+// pane" bug, because synthesized names get persisted and later restored
+// as brand-new empty tmux sessions.
 func savedGroupSessionNames(sg savedGroup, sanitizedInstance string) []string {
-	count := savedGroupPaneCount(sg)
-	sessions := make([]string, 0, count)
-	seen := make(map[string]bool, count)
+	sessions := make([]string, 0, len(sg.Sessions))
+	seen := make(map[string]bool, len(sg.Sessions))
 	for _, name := range sg.Sessions {
 		if name == "" || seen[name] {
 			continue
@@ -79,52 +88,8 @@ func savedGroupSessionNames(sg savedGroup, sanitizedInstance string) []string {
 		sessions = append(sessions, name)
 		seen[name] = true
 	}
-	if len(sessions) > count {
-		return sessions[:count]
-	}
 	if len(sessions) == 0 {
-		root := groupSessionName(sanitizedInstance, sg.GroupID)
-		sessions = append(sessions, root)
-		seen[root] = true
-	}
-	for len(sessions) < count {
-		name := groupMemberName(sanitizedInstance, sg.GroupID, fmt.Sprintf("restored%02d", len(sessions)))
-		if seen[name] {
-			name = groupMemberName(sanitizedInstance, sg.GroupID, randomHex(2))
-		}
-		sessions = append(sessions, name)
-		seen[name] = true
-	}
-	return sessions
-}
-
-func normalizeSavedGroupSessions(raw []string, sanitizedInstance, groupID string) []string {
-	if len(raw) == 0 {
-		return nil
-	}
-	sessions := make([]string, 0, len(raw))
-	seen := make(map[string]bool, len(raw))
-	root := groupSessionName(sanitizedInstance, groupID)
-	for _, name := range raw {
-		parsedGroupID, ok := parseGroupID(sanitizedInstance, name)
-		if ok && parsedGroupID == groupID {
-			if !seen[name] {
-				sessions = append(sessions, name)
-				seen[name] = true
-			}
-			continue
-		}
-		replacement := root
-		if seen[replacement] {
-			replacement = groupMemberName(sanitizedInstance, groupID, fmt.Sprintf("restored%02d", len(sessions)))
-		}
-		if !seen[replacement] {
-			sessions = append(sessions, replacement)
-			seen[replacement] = true
-		}
-	}
-	if len(sessions) > len(raw) {
-		return sessions[:len(raw)]
+		sessions = append(sessions, groupSessionName(sanitizedInstance, sg.GroupID))
 	}
 	return sessions
 }
@@ -132,11 +97,6 @@ func normalizeSavedGroupSessions(raw []string, sanitizedInstance, groupID string
 // groupSessionName builds a session name for the root session of a new group.
 func groupSessionName(sanitizedInstance, groupID string) string {
 	return sanitizedInstance + groupSep + groupID
-}
-
-// groupMemberName builds a session name for an additional pane in a group.
-func groupMemberName(sanitizedInstance, groupID, suffix string) string {
-	return sanitizedInstance + groupSep + groupID + groupSep + suffix
 }
 
 // parseGroupID extracts the group ID from a session name, if it follows
