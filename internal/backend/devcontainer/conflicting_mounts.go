@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
@@ -49,7 +48,10 @@ func neutralizeConflictingMounts(workspaceDir string, fleetMounts []backend.Moun
 		// Parse failures are non-fatal: leave the file alone and let
 		// devcontainer up surface its own error if there really is a
 		// conflict. Erroring here would block instance creation for
-		// users with valid-but-exotic JSONC the CLI accepts.
+		// users with valid-but-exotic JSONC the CLI accepts. But log
+		// to stderr so the failure mode is visible — silently
+		// skipping is what previously hid a regex bug.
+		fmt.Fprintf(os.Stderr, "fleet: could not parse %s to neutralise conflicting mounts (continuing anyway): %v\n", configPath, err)
 		return noop, nil
 	}
 	if len(conflicts) == 0 {
@@ -59,6 +61,8 @@ func neutralizeConflictingMounts(workspaceDir string, fleetMounts []backend.Moun
 	if err := os.WriteFile(configPath, rewritten, 0644); err != nil {
 		return noop, fmt.Errorf("rewriting %s: %w", configPath, err)
 	}
+
+	fmt.Fprintf(os.Stderr, "fleet: overriding %d mount(s) in %s: %s\n", len(conflicts), configPath, strings.Join(conflicts, ", "))
 
 	restore := func() {
 		_ = os.WriteFile(configPath, original, 0644)
@@ -185,20 +189,131 @@ func mountEntryTarget(entry any) string {
 
 // toStrictJSON converts a JSONC payload (the dialect devcontainer.json
 // uses — line comments, block comments, trailing commas) into strict
-// JSON that encoding/json can parse. The implementation intentionally
-// matches the simplified approach in
-// inspector/check/homedir/homedir.go: comment markers inside string
-// literals are not respected, on the assumption that real
-// devcontainer.json values do not contain those sequences.
+// JSON that encoding/json can parse.
+//
+// Implemented as two string-aware passes rather than a regex pipeline
+// because real devcontainer.json files routinely contain URL values
+// like "http://localhost:81/" inside `customizations`, port
+// attributes, and so on. A naive `//[^\n]*` regex would strip the
+// rest of those lines, producing invalid JSON and a silent no-op
+// upstream — that is exactly how the original implementation of this
+// function masked a real conflict.
+//
+// Pass 1 strips comments; pass 2 elides trailing commas. The two
+// passes are kept separate so a comma followed by a line comment
+// followed by `]` (which only looks like a trailing comma AFTER pass
+// 1 has removed the comment) is correctly handled. Both passes track
+// string state so any `//`, `/*`, or `,` byte inside a string literal
+// is preserved verbatim.
 func toStrictJSON(jsoncBytes []byte) []byte {
-	jsoncBytes = blockCommentRegex.ReplaceAll(jsoncBytes, nil)
-	jsoncBytes = lineCommentRegex.ReplaceAll(jsoncBytes, nil)
-	jsoncBytes = trailingCommaRegex.ReplaceAll(jsoncBytes, []byte("$1"))
-	return jsoncBytes
+	return stripTrailingCommas(stripJSONCComments(jsoncBytes))
 }
 
-var (
-	blockCommentRegex   = regexp.MustCompile(`(?s)/\*.*?\*/`)
-	lineCommentRegex    = regexp.MustCompile(`//[^\n]*`)
-	trailingCommaRegex  = regexp.MustCompile(`,(\s*[}\]])`)
-)
+// stripJSONCComments removes // line comments and /* block comments
+// from a JSONC payload, leaving comment markers inside string
+// literals untouched. Line endings of stripped line comments are
+// preserved so error line numbers stay aligned with the original
+// file; block-comment line counts may shift.
+func stripJSONCComments(jsoncBytes []byte) []byte {
+	out := make([]byte, 0, len(jsoncBytes))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(jsoncBytes); i++ {
+		current := jsoncBytes[i]
+
+		if inString {
+			out = append(out, current)
+			switch {
+			case escaped:
+				escaped = false
+			case current == '\\':
+				escaped = true
+			case current == '"':
+				inString = false
+			}
+			continue
+		}
+
+		if current == '"' {
+			inString = true
+			out = append(out, current)
+			continue
+		}
+
+		if current == '/' && i+1 < len(jsoncBytes) && jsoncBytes[i+1] == '/' {
+			for i < len(jsoncBytes) && jsoncBytes[i] != '\n' {
+				i++
+			}
+			if i < len(jsoncBytes) {
+				out = append(out, jsoncBytes[i])
+			}
+			continue
+		}
+
+		if current == '/' && i+1 < len(jsoncBytes) && jsoncBytes[i+1] == '*' {
+			i += 2
+			for i+1 < len(jsoncBytes) && !(jsoncBytes[i] == '*' && jsoncBytes[i+1] == '/') {
+				i++
+			}
+			i++ // step past the closing '/'
+			continue
+		}
+
+		out = append(out, current)
+	}
+	return out
+}
+
+// stripTrailingCommas drops every comma that is followed only by
+// whitespace and a closing `]` or `}`, anywhere outside a string
+// literal. Commas inside string values are preserved verbatim — a
+// blind regex `,(\s*[}\]])` would silently corrupt strings like
+// "foo,]" otherwise.
+func stripTrailingCommas(jsonBytes []byte) []byte {
+	out := make([]byte, 0, len(jsonBytes))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(jsonBytes); i++ {
+		current := jsonBytes[i]
+
+		if inString {
+			out = append(out, current)
+			switch {
+			case escaped:
+				escaped = false
+			case current == '\\':
+				escaped = true
+			case current == '"':
+				inString = false
+			}
+			continue
+		}
+
+		if current == '"' {
+			inString = true
+			out = append(out, current)
+			continue
+		}
+
+		if current == ',' {
+			lookahead := i + 1
+			for lookahead < len(jsonBytes) && isJSONWhitespace(jsonBytes[lookahead]) {
+				lookahead++
+			}
+			if lookahead < len(jsonBytes) && (jsonBytes[lookahead] == ']' || jsonBytes[lookahead] == '}') {
+				continue
+			}
+		}
+
+		out = append(out, current)
+	}
+	return out
+}
+
+// isJSONWhitespace reports whether b is one of the four whitespace
+// bytes recognised by JSON (space, tab, newline, carriage return).
+func isJSONWhitespace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
+}

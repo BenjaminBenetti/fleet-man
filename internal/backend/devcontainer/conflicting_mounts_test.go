@@ -270,6 +270,108 @@ func TestNeutralizePrefersDotDevcontainerSubdir(t *testing.T) {
 	}
 }
 
+// TestStripConflictingMountsPreservesURLsInStrings is the regression
+// test for a real-world failure: devcontainer.json values like
+// "http://localhost:81/" caused a naive `//[^\n]*` comment regex to
+// truncate the string, json.Unmarshal to fail, and the neutraliser to
+// silently no-op — so the duplicate mount was never stripped and
+// docker rejected the run. The fix is a string-aware JSONC scanner,
+// and this test pins it: a URL inside any string value must NOT cause
+// a parse failure or content change.
+func TestStripConflictingMountsPreservesURLsInStrings(t *testing.T) {
+	original := []byte(`{
+  "name": "demo",
+  "mounts": [
+    "source=${localWorkspaceFolder}/.claude,target=/home/vscode/.claude,type=bind"
+  ],
+  "customizations": {
+    "coder": {
+      "apps": [
+        { "url": "http://localhost:81/" },
+        { "url": "https://example.com/path//double-slash" }
+      ]
+    }
+  }
+}`)
+	rewritten, removed, err := stripConflictingMounts(original, []backend.Mount{
+		{ContainerPath: "/home/vscode/.claude"},
+	})
+	if err != nil {
+		t.Fatalf("stripConflictingMounts on JSON with URLs = %v, want nil", err)
+	}
+	if len(removed) != 1 || removed[0] != "/home/vscode/.claude" {
+		t.Fatalf("removed = %v, want [/home/vscode/.claude]", removed)
+	}
+	// The URLs must survive the rewrite verbatim — proves comment
+	// stripping respected string boundaries.
+	for _, mustKeep := range []string{"http://localhost:81/", "https://example.com/path//double-slash"} {
+		if !strings.Contains(string(rewritten), mustKeep) {
+			t.Fatalf("rewritten lost URL %q:\n%s", mustKeep, rewritten)
+		}
+	}
+}
+
+// TestStripConflictingMountsRealWorldDevcontainerJSON exercises the
+// exact shape of a failing real-world config (URLs in coder
+// customizations, line comments at the top, ${localEnv:...} mount
+// substitutions). Locks in the end-to-end behaviour: parse succeeds,
+// the .claude entry is stripped, the .ssh entry is kept.
+func TestStripConflictingMountsRealWorldDevcontainerJSON(t *testing.T) {
+	original := []byte(`// For format details, see https://aka.ms/devcontainer.json.
+{
+  "name": "Cloud Development Environment",
+  "mounts": [
+    "source=/home/${localEnv:USER}/.ssh,target=/home/vscode/.ssh,type=bind",
+    "source=${localWorkspaceFolder}/.claude,target=/home/vscode/.claude,type=bind"
+  ],
+  "customizations": {
+    "coder": {
+      "apps": [
+        {
+          "url": "http://localhost:81/",
+          "healthCheck": { "url": "http://localhost:81/" }
+        }
+      ]
+    }
+  }
+}`)
+	_, removed, err := stripConflictingMounts(original, []backend.Mount{
+		{ContainerPath: "/home/vscode/.claude"},
+		{ContainerPath: "/home/vscode/.codex"},
+	})
+	if err != nil {
+		t.Fatalf("stripConflictingMounts on real-world config = %v, want nil", err)
+	}
+	if len(removed) != 1 || removed[0] != "/home/vscode/.claude" {
+		t.Fatalf("removed = %v, want [/home/vscode/.claude]", removed)
+	}
+}
+
+// TestToStrictJSONHandlesStringEscapes guards against a class of
+// state-machine bugs: an escaped quote inside a string must not be
+// treated as the closing quote, or the scanner would think it's
+// outside the string and start interpreting subsequent `//` as a
+// comment.
+func TestToStrictJSONHandlesStringEscapes(t *testing.T) {
+	input := []byte(`{"a":"quote\"//notacomment","b":"x"}`)
+	got := toStrictJSON(input)
+	if string(got) != string(input) {
+		t.Fatalf("escaped quotes were misparsed:\nwant: %s\ngot:  %s", input, got)
+	}
+}
+
+// TestToStrictJSONTrailingCommaInStringIsPreserved verifies the
+// trailing-comma elision is string-aware: a comma followed by `]`
+// inside a string literal must NOT be stripped, or the string's
+// content changes.
+func TestToStrictJSONTrailingCommaInStringIsPreserved(t *testing.T) {
+	input := []byte(`{"odd":"foo,]bar"}`)
+	got := toStrictJSON(input)
+	if string(got) != string(input) {
+		t.Fatalf("comma inside string was elided:\nwant: %s\ngot:  %s", input, got)
+	}
+}
+
 // TestMountEntryTargetUnknownShape pins the contract that an
 // unrecognised entry shape (e.g. a number, or an object missing both
 // target and destination) returns "" rather than mis-attributing it to
