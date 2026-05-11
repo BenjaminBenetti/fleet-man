@@ -70,6 +70,17 @@ func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string
 // flags so they appear inside the container alongside the SSH agent
 // socket and the workspace itself.
 func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string, mounts []backend.Mount) (*backend.UpResult, error) {
+	// Drop any docker container still labelled with this workspace
+	// folder before provisioning. The devcontainer CLI matches existing
+	// containers by `devcontainer.local_folder=<wsDir>` and silently
+	// reuses one when found — if a previous instance under the same
+	// name left a container behind (failed Down, mid-creation crash,
+	// hand-edited state), reuse binds the new instance to a container
+	// whose workspace mount no longer maps anywhere, and subsequent
+	// `devcontainer exec` calls fail with runc's "current working
+	// directory is outside of container mount namespace root" check.
+	devcontainerBackend.pruneStaleContainers(workspaceDir)
+
 	args := []string{"up", "--workspace-folder", workspaceDir}
 	var err error
 	args, err = devcontainerUpArgs(args)
@@ -158,6 +169,32 @@ func (devcontainerBackend *DevcontainerBackend) Exec(workspaceDir string, comman
 func (devcontainerBackend *DevcontainerBackend) ExecCommand(workspaceDir string, command []string) *exec.Cmd {
 	args := execArgs(workspaceDir, command)
 	return exec.Command("devcontainer", args...)
+}
+
+// pruneStaleContainers force-removes any docker container labelled
+// `devcontainer.local_folder=<workspaceDir>`. Called from Up() so that
+// reusing an instance name (same wsDir on disk) never silently rebinds
+// to a leftover container with a broken workspace mount. Errors are
+// logged but non-fatal: if cleanup genuinely fails, the subsequent
+// `devcontainer up` will surface a real error.
+func (devcontainerBackend *DevcontainerBackend) pruneStaleContainers(workspaceDir string) {
+	if workspaceDir == "" {
+		return
+	}
+	listCmd := exec.Command("docker", "ps", "-a", "-q",
+		"--filter", "label=devcontainer.local_folder="+workspaceDir)
+	out, err := listCmd.Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to list stale containers for %s: %v\n", workspaceDir, err)
+		return
+	}
+	for _, id := range strings.Fields(string(out)) {
+		rmCmd := exec.Command("docker", "rm", "-f", id)
+		if rmOut, err := rmCmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to remove stale container %s: %v\n%s\n",
+				id, err, strings.TrimSpace(string(rmOut)))
+		}
+	}
 }
 
 // Down stops and removes a container by ID using docker directly.
