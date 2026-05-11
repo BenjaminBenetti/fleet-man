@@ -69,9 +69,23 @@ func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string
 // in the slice are translated into `--mount type=bind,source=L,target=C`
 // flags so they appear inside the container alongside the SSH agent
 // socket and the workspace itself.
+//
+// When the workspace's devcontainer.json declares its own mount at the
+// same container path as one of the fleet-supplied mounts, the user's
+// entry is temporarily stripped from the file before launching the
+// devcontainer CLI and restored once Up returns. Without this, docker
+// rejects the resulting `docker run` invocation with "Duplicate mount
+// point" and the instance enters StatusFailed. Fleet's mount wins by
+// design — the user's per-fleet agent state should override whatever
+// the repo's devcontainer.json was pointing at.
 func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string, mounts []backend.Mount) (*backend.UpResult, error) {
+	restore, err := neutralizeConflictingMounts(workspaceDir, mounts)
+	if err != nil {
+		return nil, err
+	}
+	defer restore()
+
 	args := []string{"up", "--workspace-folder", workspaceDir}
-	var err error
 	args, err = devcontainerUpArgs(args)
 	if err != nil {
 		return nil, err
