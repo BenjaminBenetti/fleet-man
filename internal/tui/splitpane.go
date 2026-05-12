@@ -398,7 +398,7 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 	// No-op when nothing changed. The 250ms layout tick fires this
 	// constantly; without this gate an idle split would rewrite
 	// state.json every tick with identical bytes.
-	key := savedGroupKey(groupSnapshot.InstanceName, groupSnapshot.GroupID)
+	key := computeGroupKey(groupSnapshot.InstanceName, groupSnapshot.GroupID)
 	if existing, ok := fleetPage.savedGroups[key]; ok && sameSavedGroup(existing, groupSnapshot) {
 		return
 	}
@@ -412,7 +412,7 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 	}
 	// Use composite key (instanceName/groupID) for state persistence
 	// to ensure isolation between instances with the same group ID.
-	stateKey := savedGroupKey(groupSnapshot.InstanceName, groupSnapshot.GroupID)
+	stateKey := computeGroupKey(groupSnapshot.InstanceName, groupSnapshot.GroupID)
 	st.GroupLayouts[stateKey] = state.GroupLayout{
 		GroupID:      groupSnapshot.GroupID,
 		InstanceName: groupSnapshot.InstanceName,
@@ -437,7 +437,7 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 	prefix := sanitized + groupSep + groupID
 
 	// Grab saved layout if available.
-	key := savedGroupKey(instanceName, groupID)
+	key := computeGroupKey(instanceName, groupID)
 	savedLayout := ""
 	if groupSnapshot, ok := fleetPage.savedGroups[key]; ok {
 		savedLayout = groupSnapshot.Layout

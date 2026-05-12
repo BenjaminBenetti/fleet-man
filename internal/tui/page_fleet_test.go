@@ -191,7 +191,7 @@ func TestViewFleetListShowsBranchItemForInstance(t *testing.T) {
 func TestBuildRowsShowsSavedGroupWithoutLiveSessions(t *testing.T) {
 	inst := &fleet.Instance{Name: "alpha", Status: fleet.StatusRunning, ContainerID: "abc"}
 	fp := newFleetPage()
-	key := savedGroupKey("alpha", "abc123")
+	key := computeGroupKey("alpha", "abc123")
 	fp.savedGroups[key] = savedGroup{
 		GroupID:      "abc123",
 		InstanceName: "alpha",
@@ -237,7 +237,7 @@ func TestPruneSavedGroupsKeepsSavedGroupWhenDiscoveryIsEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	fp := newFleetPage()
-	key := savedGroupKey("alpha", "abc123")
+	key := computeGroupKey("alpha", "abc123")
 	fp.savedGroups[key] = savedGroup{
 		GroupID:      "abc123",
 		InstanceName: "alpha",

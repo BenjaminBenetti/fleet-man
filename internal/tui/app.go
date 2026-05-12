@@ -860,7 +860,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		fp := m.fleetPage
 		if msg.groupID != "" {
-			key := savedGroupKey(msg.ref.Instance, msg.groupID)
+			key := computeGroupKey(msg.ref.Instance, msg.groupID)
 			delete(fp.savedGroups, key)
 			if m.st != nil && m.st.GroupLayouts != nil {
 				delete(m.st.GroupLayouts, key)
