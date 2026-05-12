@@ -14,6 +14,7 @@ const (
 	viewConfirmDelete
 	viewConfirmDeleteFleetWarn
 	viewAddInstance
+	viewCloneInstance
 	viewAddFleet
 	viewAddFleetInspecting
 	viewAddFleetNoDevcontainer

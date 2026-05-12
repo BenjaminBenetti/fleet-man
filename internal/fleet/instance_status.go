@@ -5,6 +5,7 @@ type InstanceStatus string
 
 const (
 	StatusCreating InstanceStatus = "creating"
+	StatusCloning  InstanceStatus = "cloning"
 	StatusRunning  InstanceStatus = "running"
 	StatusStopped  InstanceStatus = "stopped"
 	StatusFailed   InstanceStatus = "failed"

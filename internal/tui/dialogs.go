@@ -1478,6 +1478,103 @@ func (fleetPage *fleetPage) saveCreateSession(m *model) tea.Cmd {
 	return createSessionCmd(instanceBackend, instance.WorkspaceDir, ref, fullName)
 }
 
+// updateCloneInstance handles the single-text-input dialog that asks
+// the user for a destination instance name when cloning. dialogFleet
+// and dialogInst hold the source instance's identifiers.
+func (fleetPage *fleetPage) updateCloneInstance(m *model, msg tea.Msg) tea.Cmd {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if fleetPage.dialogFieldActive {
+			switch msg.String() {
+			case "enter":
+				return fleetPage.saveCloneInstance(m)
+			case "esc":
+				fleetPage.deactivateTextInput()
+				return nil
+			case "ctrl+c":
+				return fleetPage.cancelTextDialog(m)
+			}
+			var cmd tea.Cmd
+			fleetPage.textInput, cmd = fleetPage.textInput.Update(msg)
+			return cmd
+		}
+
+		switch msg.String() {
+		case "enter", " ":
+			return fleetPage.activateTextInput()
+		case "esc", "q", "Q", "ctrl+c":
+			return fleetPage.cancelTextDialog(m)
+		}
+		if isDialogTextKey(msg) {
+			return fleetPage.activateTextInputWithMsg(msg)
+		}
+	}
+
+	return nil
+}
+
+// saveCloneInstance validates the destination name, pre-creates the
+// destination instance record with StatusCloning so the TUI can render
+// progress, and spawns the detached _clone-instance subprocess.
+func (fleetPage *fleetPage) saveCloneInstance(m *model) tea.Cmd {
+	destName := strings.TrimSpace(fleetPage.textInput.Value())
+	if destName == "" {
+		m.message = "Name cannot be empty"
+		fleetPage.mode = viewNormal
+		fleetPage.blurDialogFields()
+		return nil
+	}
+
+	fleetName := fleetPage.dialogFleet
+	srcName := fleetPage.dialogInst
+
+	f, ok := m.st.Fleets[fleetName]
+	if !ok {
+		m.message = fmt.Sprintf("Fleet %s not found", fleetName)
+		fleetPage.mode = viewNormal
+		fleetPage.blurDialogFields()
+		return nil
+	}
+	src, err := f.GetInstance(srcName)
+	if err != nil {
+		m.message = fmt.Sprintf("Source instance %s/%s not found", fleetName, srcName)
+		fleetPage.mode = viewNormal
+		fleetPage.blurDialogFields()
+		return nil
+	}
+	if _, err := f.GetInstance(destName); err == nil {
+		m.message = fmt.Sprintf("Instance %s/%s already exists", fleetName, destName)
+		fleetPage.mode = viewNormal
+		fleetPage.blurDialogFields()
+		return nil
+	}
+
+	wsDir := filepath.Join(state.WorkspacesDir(), fleetName, destName, fleetName)
+	instance := &fleet.Instance{
+		Name:         destName,
+		DisplayName:  destName,
+		Config:       src.Config,
+		WorkspaceDir: wsDir,
+		CreatedAt:    time.Now(),
+		Status:       fleet.StatusCloning,
+		Backend:      src.Backend,
+		Tag:          src.Tag,
+		Color:        src.Color,
+		Branch:       src.Branch,
+	}
+	_ = f.AddInstance(instance)
+	_ = state.Save(m.st)
+
+	key := fleetName + "/" + destName
+	m.creating[key] = true
+	fleetPage.buildRows(m)
+	fleetPage.mode = viewNormal
+	fleetPage.blurDialogFields()
+	m.message = fmt.Sprintf("Cloning %s/%s -> %s...", fleetName, srcName, destName)
+
+	return cloneInstanceCmd(fleetName, srcName, destName)
+}
+
 // updateRenameSession handles the dialog for renaming a tmux session.
 func (fleetPage *fleetPage) updateRenameSession(m *model, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {

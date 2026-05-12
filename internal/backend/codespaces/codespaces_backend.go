@@ -310,6 +310,17 @@ func (codespacesBackend *CodespacesBackend) SupportsCustomMounts() bool {
 	return false
 }
 
+// SupportsClone reports false: GitHub Codespaces have no clone
+// primitive — they are managed by GitHub and ephemeral by design.
+func (codespacesBackend *CodespacesBackend) SupportsClone() bool {
+	return false
+}
+
+// Clone is unsupported for GitHub Codespaces.
+func (codespacesBackend *CodespacesBackend) Clone(sourceContainerID, destWorkspaceDir string, mounts []backend.Mount) (*backend.UpResult, error) {
+	return nil, fmt.Errorf("codespaces backend does not support cloning")
+}
+
 // Status reports the live state of a GitHub Codespace via
 // `gh codespace view`. GitHub's lifecycle: Available → running;
 // Shutdown/Archived → stopped (the most common drift the live probe

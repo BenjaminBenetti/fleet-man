@@ -42,6 +42,8 @@ func renderStatus(s fleet.InstanceStatus) string {
 		return statusStoppedStyle.Render("stopped")
 	case fleet.StatusCreating:
 		return statusCreatingStyle.Render("creating")
+	case fleet.StatusCloning:
+		return statusCreatingStyle.Render("cloning")
 	case fleet.StatusStopping:
 		return statusCreatingStyle.Render("stopping")
 	case fleet.StatusStarting:
@@ -59,7 +61,7 @@ func renderStatus(s fleet.InstanceStatus) string {
 // background operation (shown with a spinner on the instance row).
 func isTransitional(s fleet.InstanceStatus) bool {
 	switch s {
-	case fleet.StatusCreating, fleet.StatusStopping, fleet.StatusStarting, fleet.StatusDeleting:
+	case fleet.StatusCreating, fleet.StatusCloning, fleet.StatusStopping, fleet.StatusStarting, fleet.StatusDeleting:
 		return true
 	}
 	return false

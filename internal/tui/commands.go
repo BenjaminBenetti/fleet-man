@@ -305,3 +305,34 @@ func createInstanceCmd(fleetName, instanceName, remoteURL, branch string, backen
 		return instanceSpawnedMsg{fleetName, instanceName}
 	}
 }
+
+// cloneInstanceCmd spawns the hidden _clone-instance subcommand as a
+// detached child to clone an instance asynchronously. The destination
+// instance record must already exist in state with StatusCloning so
+// the TUI can render progress while the docker commit + run runs.
+func cloneInstanceCmd(fleetName, srcInstance, destInstance string) tea.Cmd {
+	return func() tea.Msg {
+		self, err := os.Executable()
+		if err != nil {
+			return instanceCreateErrMsg{fleetName, destInstance, fmt.Errorf("os.Executable: %w", err)}
+		}
+
+		args := []string{"_clone-instance", fleetName, srcInstance, destInstance}
+		cmd := exec.Command(self, args...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+		logDir := filepath.Join(state.FleetDir(), "logs")
+		_ = os.MkdirAll(logDir, 0755)
+		logFile, err := os.Create(filepath.Join(logDir, fleetName+"-"+destInstance+".log"))
+		if err == nil {
+			cmd.Stdout = logFile
+			cmd.Stderr = logFile
+		}
+
+		if err := cmd.Start(); err != nil {
+			return instanceCreateErrMsg{fleetName, destInstance, fmt.Errorf("spawn: %w", err)}
+		}
+
+		return instanceSpawnedMsg{fleetName, destInstance}
+	}
+}

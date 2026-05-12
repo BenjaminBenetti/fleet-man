@@ -40,6 +40,7 @@ func keybindingsData() []keybindingGroup {
 				{"t", "Tag instance"},
 				{"f", "Port forward"},
 				{"c", "Open VS Code"},
+				{"C", "Clone instance"},
 				{"o", "Open external terminal"},
 				{"l", "View logs"},
 				{"r", "Refresh / rename session"},

@@ -45,6 +45,8 @@ func NewRootCmd() *cobra.Command {
 		newLogsCmd(),
 		newStatusCmd(),
 		newCreateInstanceCmd(),
+		newCloneCmd(),
+		newCloneInstanceCmd(),
 		newPortForwardCmd(),
 		newShellCmd(),
 	)

@@ -275,6 +275,17 @@ func (coderBackend *CoderBackend) SupportsCustomMounts() bool {
 	return false
 }
 
+// SupportsClone reports false: Coder workspaces are cloned at the
+// template level by the control plane, not by fleet-man.
+func (coderBackend *CoderBackend) SupportsClone() bool {
+	return false
+}
+
+// Clone is unsupported for Coder workspaces.
+func (coderBackend *CoderBackend) Clone(sourceContainerID, destWorkspaceDir string, mounts []backend.Mount) (*backend.UpResult, error) {
+	return nil, fmt.Errorf("coder backend does not support cloning")
+}
+
 // Status reports the live state of a Coder workspace by reading
 // `coder list`'s LatestBuild.Status. Lifecycle: running/started →
 // running; stopped/canceled → stopped; transitional builds (starting,
