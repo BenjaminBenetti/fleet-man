@@ -229,6 +229,8 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.updateCreateSession(m, msg)
 	case viewRenameSession:
 		return fleetPage.updateRenameSession(m, msg)
+	case viewCloneInstance:
+		return fleetPage.updateCloneInstance(m, msg)
 	default:
 		return fleetPage.updateNormal(m, msg)
 	}
@@ -644,6 +646,28 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				}
 			}
 
+		case "C":
+			_, instance := fleetPage.selectedInstance(m)
+			if instance == nil {
+				m.message = "Select an instance"
+				break
+			}
+			if !m.instanceBackend(instance).SupportsClone() {
+				m.message = fmt.Sprintf("Clone not supported by %s backend", instance.Backend)
+				break
+			}
+			if instance.ContainerID == "" {
+				m.message = "Instance has not finished provisioning; nothing to clone yet"
+				break
+			}
+			fleetPage.mode = viewCloneInstance
+			fleetPage.dialogFleet = fleetPage.currentFleetName()
+			fleetPage.dialogInst = instance.Name
+			fleetPage.textInput.SetValue("")
+			fleetPage.textInput.Placeholder = "destination-name"
+			fleetPage.textInput.CharLimit = 64
+			return fleetPage.activateTextInput()
+
 		case "b":
 			_, instance := fleetPage.selectedInstance(m)
 			if instance == nil {
@@ -872,7 +896,7 @@ func (fleetPage *fleetPage) contextualHelpKeys(m *model) []string {
 				keys = append(keys,
 					"space: show sessions", "enter: open shell", "e: edit",
 					"s: stop", "a: new session", "d: delete", "t: tag",
-					"f: port-forward", "b: browser", "c: code", "o: terminal", "l: logs",
+					"f: port-forward", "b: browser", "c: code", "C: clone", "o: terminal", "l: logs",
 					"r: refresh", "q: quit",
 				)
 			case r.instance.Status == fleet.StatusStopped:
@@ -1512,6 +1536,20 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			dialogLabel.Render("Name:    "),
 			fleetPage.textInput.View(),
 			dialogHint.Render(fleetPage.textDialogHint("Create (empty for auto-name)")),
+		)
+		b.WriteString(dialogBox.Render(dialog))
+		b.WriteString("\n")
+
+	case viewCloneInstance:
+		b.WriteString("\n")
+		dialog := fmt.Sprintf(
+			"%s\n\n%s %s\n%s %s\n\n%s",
+			dialogTitle.Render("Clone instance"),
+			dialogLabel.Render("Source:     "),
+			fleetExpandedStyle.Render(fleetPage.dialogFleet+"/"+fleetPage.dialogInst),
+			dialogLabel.Render("Destination:"),
+			fleetPage.textInput.View(),
+			dialogHint.Render(fleetPage.textDialogHint("Clone")),
 		)
 		b.WriteString(dialogBox.Render(dialog))
 		b.WriteString("\n")

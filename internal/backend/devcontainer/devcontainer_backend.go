@@ -212,10 +212,28 @@ func (devcontainerBackend *DevcontainerBackend) pruneStaleContainers(workspaceDi
 }
 
 // Down stops and removes a container by ID using docker directly.
+// If the container was produced by Clone (carries the fleet.clone.image
+// label), the committed image is removed afterwards so cloned-instance
+// teardown does not leak intermediate images. Image-rm failures are
+// logged but non-fatal — the container is already gone, which is what
+// callers actually need.
 func (devcontainerBackend *DevcontainerBackend) Down(containerID string) error {
+	cloneImage := cloneImageForContainer(containerID)
+
 	cmd := exec.Command("docker", "rm", "-f", containerID)
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+
+	if cloneImage != "" {
+		rmiCmd := exec.Command("docker", "rmi", cloneImage)
+		if rmiOut, err := rmiCmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to remove clone image %s: %v\n%s\n",
+				cloneImage, err, strings.TrimSpace(string(rmiOut)))
+		}
+	}
+	return nil
 }
 
 // Stop stops a container by ID without removing it.

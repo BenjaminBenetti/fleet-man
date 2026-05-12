@@ -156,7 +156,7 @@ func newModel() model {
 	if m.st != nil {
 		for fleetName, f := range m.st.Fleets {
 			for _, instance := range f.Instances {
-				if instance.Status == fleet.StatusCreating {
+				if instance.Status == fleet.StatusCreating || instance.Status == fleet.StatusCloning {
 					m.creating[fleetName+"/"+instance.Name] = true
 				}
 			}

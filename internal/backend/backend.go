@@ -20,6 +20,25 @@ type Backend interface {
 	// should return false.
 	SupportsCustomMounts() bool
 
+	// Clone snapshots an existing workspace and starts a new one from
+	// that snapshot bound to destWorkspaceDir. The clone must preserve
+	// state inside the source container (e.g. manually installed
+	// packages) — callers rely on this to fan out hand-configured
+	// instances. mounts carry the same caller-supplied bind mounts as
+	// Up; backends that return false from SupportsCustomMounts may
+	// ignore them.
+	//
+	// Returns the same shape of UpResult as Up so callers can persist
+	// ContainerID identically. Backends that cannot clone should
+	// return false from SupportsClone and an error from Clone.
+	Clone(sourceContainerID, destWorkspaceDir string, mounts []Mount) (*UpResult, error)
+
+	// SupportsClone reports whether this backend implements Clone.
+	// Callers should check this before offering a clone action; cloning
+	// is unavailable for managed cloud backends whose snapshot
+	// primitives live outside fleet-man's control.
+	SupportsClone() bool
+
 	// Down stops and removes a container permanently.
 	Down(containerID string) error
 
