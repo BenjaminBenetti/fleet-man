@@ -191,7 +191,8 @@ func TestViewFleetListShowsBranchItemForInstance(t *testing.T) {
 func TestBuildRowsShowsSavedGroupWithoutLiveSessions(t *testing.T) {
 	inst := &fleet.Instance{Name: "alpha", Status: fleet.StatusRunning, ContainerID: "abc"}
 	fp := newFleetPage()
-	fp.savedGroups["abc123"] = savedGroup{
+	key := computeGroupKey("alpha", "abc123")
+	fp.savedGroups[key] = savedGroup{
 		GroupID:      "abc123",
 		InstanceName: "alpha",
 		Sessions:     []string{"alpha~abc123", "alpha~abc123~ff00"},
@@ -236,7 +237,8 @@ func TestPruneSavedGroupsKeepsSavedGroupWhenDiscoveryIsEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	fp := newFleetPage()
-	fp.savedGroups["abc123"] = savedGroup{
+	key := computeGroupKey("alpha", "abc123")
+	fp.savedGroups[key] = savedGroup{
 		GroupID:      "abc123",
 		InstanceName: "alpha",
 		Sessions:     []string{"alpha~abc123"},
@@ -245,7 +247,7 @@ func TestPruneSavedGroupsKeepsSavedGroupWhenDiscoveryIsEmpty(t *testing.T) {
 	m := &model{
 		st: &state.State{
 			Fleets:       map[string]*fleet.Fleet{},
-			GroupLayouts: map[string]state.GroupLayout{"abc123": {GroupID: "abc123", InstanceName: "alpha"}},
+			GroupLayouts: map[string]state.GroupLayout{key: {GroupID: "abc123", InstanceName: "alpha"}},
 		},
 		fleetPage: fp,
 		sessionStore: func() *SessionStore {
@@ -257,10 +259,10 @@ func TestPruneSavedGroupsKeepsSavedGroupWhenDiscoveryIsEmpty(t *testing.T) {
 
 	m.pruneSavedGroupsForInstance(InstanceRef{Fleet: "repo", Instance: "alpha"})
 
-	if _, ok := m.fleetPage.savedGroups["abc123"]; !ok {
+	if _, ok := m.fleetPage.savedGroups[key]; !ok {
 		t.Fatal("saved group was pruned even though WSL discovery returned no live sessions")
 	}
-	if _, ok := m.st.GroupLayouts["abc123"]; !ok {
+	if _, ok := m.st.GroupLayouts[key]; !ok {
 		t.Fatal("state group layout was pruned even though WSL discovery returned no live sessions")
 	}
 }

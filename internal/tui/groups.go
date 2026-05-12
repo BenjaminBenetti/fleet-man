@@ -38,6 +38,14 @@ type savedGroup struct {
 	PaneCount    int      // number of shell panes (excluding TUI)
 }
 
+// computeGroupKey returns a composite key for the savedGroups map that
+// uniquely identifies a group within a specific instance. This ensures
+// that two instances with sessions sharing the same group ID do not
+// collide in the map.
+func computeGroupKey(instanceName, groupID string) string {
+	return instanceName + "/" + groupID
+}
+
 // sameSavedGroup reports whether two savedGroup values are byte-identical.
 // Used by saveCurrentGroupLayout to skip redundant writes on poll ticks
 // when the user hasn't changed anything.

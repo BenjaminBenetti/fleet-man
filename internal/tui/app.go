@@ -209,8 +209,10 @@ func (m *model) hydrateSavedGroups() {
 	if m.st == nil || m.fleetPage == nil {
 		return
 	}
-	for gid, layout := range m.st.GroupLayouts {
-		m.fleetPage.savedGroups[gid] = savedGroup{
+	for stateKey, layout := range m.st.GroupLayouts {
+		// Use the stateKey (instanceName/groupID) directly as the
+		// savedGroups map key to maintain instance isolation.
+		m.fleetPage.savedGroups[stateKey] = savedGroup{
 			GroupID:      layout.GroupID,
 			InstanceName: layout.InstanceName,
 			Sessions:     layout.Sessions,
@@ -243,13 +245,13 @@ func (m *model) pruneSavedGroupsForInstance(ref InstanceRef) {
 		return
 	}
 	changed := false
-	for gid, savedLayout := range m.fleetPage.savedGroups {
+	for key, savedLayout := range m.fleetPage.savedGroups {
 		if savedLayout.InstanceName != ref.Instance {
 			continue
 		}
-		if !live[gid] {
-			delete(m.fleetPage.savedGroups, gid)
-			delete(m.st.GroupLayouts, gid)
+		if !live[savedLayout.GroupID] {
+			delete(m.fleetPage.savedGroups, key)
+			delete(m.st.GroupLayouts, key)
 			changed = true
 		}
 	}
@@ -272,10 +274,10 @@ func (m *model) pruneOrphanedSavedGroups() {
 		}
 	}
 	changed := false
-	for gid, savedLayout := range m.fleetPage.savedGroups {
+	for key, savedLayout := range m.fleetPage.savedGroups {
 		if !live[savedLayout.InstanceName] {
-			delete(m.fleetPage.savedGroups, gid)
-			delete(m.st.GroupLayouts, gid)
+			delete(m.fleetPage.savedGroups, key)
+			delete(m.st.GroupLayouts, key)
 			changed = true
 		}
 	}
@@ -858,9 +860,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		fp := m.fleetPage
 		if msg.groupID != "" {
-			delete(fp.savedGroups, msg.groupID)
+			key := computeGroupKey(msg.ref.Instance, msg.groupID)
+			delete(fp.savedGroups, key)
 			if m.st != nil && m.st.GroupLayouts != nil {
-				delete(m.st.GroupLayouts, msg.groupID)
+				delete(m.st.GroupLayouts, key)
 				_ = state.Save(m.st)
 			}
 		}
