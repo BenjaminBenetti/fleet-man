@@ -398,10 +398,11 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 	// No-op when nothing changed. The 250ms layout tick fires this
 	// constantly; without this gate an idle split would rewrite
 	// state.json every tick with identical bytes.
-	if existing, ok := fleetPage.savedGroups[groupSnapshot.GroupID]; ok && sameSavedGroup(existing, groupSnapshot) {
+	key := savedGroupKey(groupSnapshot.InstanceName, groupSnapshot.GroupID)
+	if existing, ok := fleetPage.savedGroups[key]; ok && sameSavedGroup(existing, groupSnapshot) {
 		return
 	}
-	fleetPage.savedGroups[groupSnapshot.GroupID] = groupSnapshot
+	fleetPage.savedGroups[key] = groupSnapshot
 
 	if st == nil {
 		return
@@ -409,7 +410,10 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 	if st.GroupLayouts == nil {
 		st.GroupLayouts = make(map[string]state.GroupLayout)
 	}
-	st.GroupLayouts[groupSnapshot.GroupID] = state.GroupLayout{
+	// Use composite key (instanceName/groupID) for state persistence
+	// to ensure isolation between instances with the same group ID.
+	stateKey := savedGroupKey(groupSnapshot.InstanceName, groupSnapshot.GroupID)
+	st.GroupLayouts[stateKey] = state.GroupLayout{
 		GroupID:      groupSnapshot.GroupID,
 		InstanceName: groupSnapshot.InstanceName,
 		Sessions:     groupSnapshot.Sessions,
@@ -433,15 +437,16 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 	prefix := sanitized + groupSep + groupID
 
 	// Grab saved layout if available.
+	key := savedGroupKey(instanceName, groupID)
 	savedLayout := ""
-	if groupSnapshot, ok := fleetPage.savedGroups[groupID]; ok {
+	if groupSnapshot, ok := fleetPage.savedGroups[key]; ok {
 		savedLayout = groupSnapshot.Layout
 	}
 
 	// Prefer saved session order (from pane titles) to preserve
 	// the exact pane-to-session mapping.
 	var savedOrder []string
-	if groupSnapshot, ok := fleetPage.savedGroups[groupID]; ok && len(groupSnapshot.Sessions) > 0 {
+	if groupSnapshot, ok := fleetPage.savedGroups[key]; ok && len(groupSnapshot.Sessions) > 0 {
 		savedOrder = groupSnapshot.Sessions
 	}
 
@@ -459,12 +464,12 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 		out, _ := listCmd.Output()
 
 		var savedSnapshot *savedGroup
-		if sg, ok := fleetPage.savedGroups[groupID]; ok {
+		if sg, ok := fleetPage.savedGroups[key]; ok {
 			savedSnapshot = &sg
 		}
 		sessions := restoreSessionNames(string(out), prefix, savedOrder, savedSnapshot, sanitized)
 		if len(sessions) == 0 {
-			if _, ok := fleetPage.savedGroups[groupID]; !ok {
+			if _, ok := fleetPage.savedGroups[key]; !ok {
 				return splitPaneMsg{restoreSeq: restoreSeq, err: fmt.Errorf("no sessions found for group %s", groupID)}
 			}
 		}
