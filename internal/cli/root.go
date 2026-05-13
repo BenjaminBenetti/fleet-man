@@ -49,6 +49,8 @@ func NewRootCmd() *cobra.Command {
 		newCloneInstanceCmd(),
 		newPortForwardCmd(),
 		newShellCmd(),
+		newSpawnSessionCmd(),
+		newExecInSessionCmd(),
 	)
 
 	return root
