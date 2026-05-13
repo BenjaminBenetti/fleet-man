@@ -1034,18 +1034,18 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				label = fmt.Sprintf("%s %s", icon, r.sessionName)
 			}
 			if isSelected {
-				listContent.WriteString(fmt.Sprintf("%s      %s", cursor, selectedStyle.Render(label)))
+				listContent.WriteString(fmt.Sprintf("%s        %s", cursor, selectedStyle.Render(label)))
 			} else {
-				listContent.WriteString(fmt.Sprintf("%s      %s", cursor, style.Render(label)))
+				listContent.WriteString(fmt.Sprintf("%s        %s", cursor, style.Render(label)))
 			}
 			listContent.WriteString("\n")
 
 		} else if r.kind == rowNewSession {
 			label := "+ new session"
 			if isSelected {
-				listContent.WriteString(fmt.Sprintf("%s      %s", cursor, selectedStyle.Render(label)))
+				listContent.WriteString(fmt.Sprintf("%s        %s", cursor, selectedStyle.Render(label)))
 			} else {
-				listContent.WriteString(fmt.Sprintf("%s      %s", cursor, newSessionStyle.Render(label)))
+				listContent.WriteString(fmt.Sprintf("%s        %s", cursor, newSessionStyle.Render(label)))
 			}
 			listContent.WriteString("\n")
 
