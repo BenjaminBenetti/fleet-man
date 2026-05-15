@@ -51,6 +51,7 @@ func NewRootCmd() *cobra.Command {
 		newShellCmd(),
 		newSpawnSessionCmd(),
 		newExecInSessionCmd(),
+		newReadSessionCmd(),
 	)
 
 	return root

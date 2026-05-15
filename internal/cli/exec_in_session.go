@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -54,11 +53,9 @@ Examples:
 				return fmt.Errorf("instance %s is not running (status: %s)", args[0], instance.Status)
 			}
 
-			instanceBackend := backendutil.NewForInstance(instance, false)
-
-			// Send the command to the tmux session
-			// We use tmux send-keys to send the command followed by Enter
-			execCmd := instanceBackend.ExecCommand(instance.WorkspaceDir, []string{
+			// Send the command to the tmux session via send-keys
+			// followed by Enter so the shell executes it.
+			execCmd := sessionExecCommand(instance, []string{
 				"sh", "-c",
 				fmt.Sprintf(`tmux send-keys -t %s %s Enter`, dotfiles.ShQuote(sessionName), dotfiles.ShQuote(command)),
 			})

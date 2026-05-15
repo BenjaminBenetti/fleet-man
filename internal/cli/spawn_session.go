@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -50,10 +49,8 @@ Examples:
 				return fmt.Errorf("instance %s is not running (status: %s)", args[0], instance.Status)
 			}
 
-			instanceBackend := backendutil.NewForInstance(instance, false)
-
 			// Create a detached tmux session with the specified name.
-			createCmd := instanceBackend.ExecCommand(instance.WorkspaceDir, []string{
+			createCmd := sessionExecCommand(instance, []string{
 				"sh", "-c",
 				dotfiles.TmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s`, dotfiles.ShQuote(sessionName)),
 			})
