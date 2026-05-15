@@ -693,20 +693,27 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				break
 			}
 			fleetName := fleetPage.currentFleetName()
-			dataDir := browserDataDir(fleetName, instance.Name, multipleBrowsersPerFleet(m))
+			multiplePerFleet := multipleBrowsersPerFleet(m)
+			dataDir := browserDataDir(fleetName, instance.Name, multiplePerFleet)
+			b := m.instanceBackend(instance)
+			instanceKey := fleetName + "/" + instance.Name
+
 			// A browser already running against this data dir would
 			// either inherit our --proxy-server flag (Chrome forwards
 			// the launch to the existing process and drops the flag)
-			// or fight us over the singleton lock. Prompt before
-			// killing it.
+			// or fight us over the singleton lock. Default behavior
+			// is to prompt; when AutoSwitch is on (only meaningful in
+			// shared-profile mode) we skip the prompt and just switch.
 			if _, running := existingBrowserPID(dataDir); running {
+				if !multiplePerFleet && m.config != nil && m.config.BrowserSettings.AutoSwitchEnabled() {
+					m.message = fmt.Sprintf("Switching browser to %s...", instance.GetDisplayName())
+					return switchBrowserCmd(m.portForwards, b, instance, instanceKey, dataDir)
+				}
 				fleetPage.mode = viewConfirmBrowserSwitch
 				fleetPage.dialogFleet = fleetName
 				fleetPage.dialogInst = instance.Name
 				return nil
 			}
-			b := m.instanceBackend(instance)
-			instanceKey := fleetName + "/" + instance.Name
 			m.message = fmt.Sprintf("Starting browser proxy for %s...", instance.GetDisplayName())
 			return openBrowserProxyCmd(m.portForwards, b, instance, instanceKey, dataDir)
 

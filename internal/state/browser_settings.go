@@ -13,6 +13,13 @@ type BrowserSettings struct {
 	// instances. Per-instance lets two browsers run at once for the
 	// same fleet at the cost of duplicated profile state.
 	MultipleBrowsersPerFleet *bool `json:"multiple_browsers_per_fleet,omitempty"`
+
+	// AutoSwitch silences the "another browser is running, switch?"
+	// prompt and kills+relaunches automatically. Only meaningful when
+	// MultipleBrowsersPerFleet is false — in per-instance mode each
+	// instance owns its own data dir, so the prompt has a different
+	// meaning (restart this instance's browser) and isn't auto-suppressed.
+	AutoSwitch *bool `json:"auto_switch,omitempty"`
 }
 
 // MultipleBrowsersPerFleetEnabled reports whether each instance should
@@ -22,4 +29,14 @@ func (b BrowserSettings) MultipleBrowsersPerFleetEnabled() bool {
 		return false
 	}
 	return *b.MultipleBrowsersPerFleet
+}
+
+// AutoSwitchEnabled reports whether the browser-switch confirmation
+// dialog should be skipped. Defaults to false. Only consulted in
+// per-fleet (shared profile) mode.
+func (b BrowserSettings) AutoSwitchEnabled() bool {
+	if b.AutoSwitch == nil {
+		return false
+	}
+	return *b.AutoSwitch
 }

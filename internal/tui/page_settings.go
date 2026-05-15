@@ -32,7 +32,8 @@ const (
 
 	settingsItemCodespacesMachine = 500 // codespaces settings start here
 
-	settingsItemBrowserMultiple = 600 // browser settings start here
+	settingsItemBrowserMultiple   = 600 // browser settings start here
+	settingsItemBrowserAutoSwitch = 601
 
 	settingsItemToolStatusBase = 1000 // tool status rows start here
 	settingsItemDoctor         = 2000 // doctor action row
@@ -146,8 +147,14 @@ var settingsSections = []settingsSection{
 	},
 	{
 		Title: "Browser",
-		Items: func(_ *state.Config) []int {
-			return []int{settingsItemBrowserMultiple}
+		Items: func(config *state.Config) []int {
+			items := []int{settingsItemBrowserMultiple}
+			// Auto-switch only applies in shared-profile mode — in
+			// per-instance mode there is no "switch" to suppress.
+			if config != nil && !config.BrowserSettings.MultipleBrowsersPerFleetEnabled() {
+				items = append(items, settingsItemBrowserAutoSwitch)
+			}
+			return items
 		},
 	},
 	{
@@ -258,6 +265,29 @@ func (settingsPage *settingsPage) toggleShowHelpText(m *model) {
 		label = "on"
 	}
 	m.message = fmt.Sprintf("Show help text set to %s", label)
+}
+
+// toggleBrowserAutoSwitch flips the "Auto Switch" preference and saves.
+// When on, the browser-switch confirmation dialog is suppressed and any
+// running browser bound to the target data dir is killed+relaunched
+// silently.
+func (settingsPage *settingsPage) toggleBrowserAutoSwitch(m *model) {
+	if m.config == nil {
+		m.config = state.DefaultConfig()
+	}
+	current := m.config.BrowserSettings.AutoSwitchEnabled()
+	next := !current
+	m.config.BrowserSettings.AutoSwitch = &next
+	if err := state.SaveConfig(m.config); err != nil {
+		m.config.BrowserSettings.AutoSwitch = &current
+		m.message = fmt.Sprintf("Failed to save settings: %v", err)
+		return
+	}
+	label := "off"
+	if next {
+		label = "on"
+	}
+	m.message = fmt.Sprintf("Auto switch set to %s", label)
 }
 
 // toggleBrowserMultiple flips the "Enable Multiple Browsers Per Fleet"
@@ -410,6 +440,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleAutoInstall(m)
 			} else if item == settingsItemBrowserMultiple {
 				settingsPage.toggleBrowserMultiple(m)
+			} else if item == settingsItemBrowserAutoSwitch {
+				settingsPage.toggleBrowserAutoSwitch(m)
 			} else if item == settingsItemCoderPreset {
 				settingsPage.cycleCoderPreset(m, -1)
 			} else if item == settingsItemCodespacesMachine {
@@ -427,6 +459,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleAutoInstall(m)
 			} else if item == settingsItemBrowserMultiple {
 				settingsPage.toggleBrowserMultiple(m)
+			} else if item == settingsItemBrowserAutoSwitch {
+				settingsPage.toggleBrowserAutoSwitch(m)
 			} else if item == settingsItemCoderPreset {
 				settingsPage.cycleCoderPreset(m, 1)
 			} else if item == settingsItemCodespacesMachine {
@@ -450,6 +484,10 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			}
 			if item == settingsItemBrowserMultiple {
 				settingsPage.toggleBrowserMultiple(m)
+				return nil
+			}
+			if item == settingsItemBrowserAutoSwitch {
+				settingsPage.toggleBrowserAutoSwitch(m)
 				return nil
 			}
 			if item == settingsItemCoderPreset {
@@ -765,6 +803,20 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				multipleValue = "[ on ]"
 			}
 			recordRow(settingsItemBrowserMultiple, settingsPage.renderSettingsRow(m, currentItem == settingsItemBrowserMultiple, "Enable Multiple Browsers Per Fleet", multipleValue))
+
+			if !config.BrowserSettings.MultipleBrowsersPerFleetEnabled() {
+				listContent.WriteString("\n")
+				autoSwitchValue := "[ off ]"
+				if config.BrowserSettings.AutoSwitchEnabled() {
+					autoSwitchValue = "[ on ]"
+				}
+				// Append a dim sub-line under the value so the
+				// setting carries its own one-line description.
+				// The 21-space indent matches cursor (2) + label
+				// (%-18s) + value-separator (1).
+				autoSwitchValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Do not prompt when switching the browser to another instance")
+				recordRow(settingsItemBrowserAutoSwitch, settingsPage.renderSettingsRow(m, currentItem == settingsItemBrowserAutoSwitch, "Auto Switch", autoSwitchValue))
+			}
 
 		case "Tool Status":
 			for i, t := range m.toolStatus {
