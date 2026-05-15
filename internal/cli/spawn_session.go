@@ -52,12 +52,10 @@ Examples:
 
 			instanceBackend := backendutil.NewForInstance(instance, false)
 
-			// Create a detached tmux session with the specified name
-			// We use the same tmux installation check as the TUI
-			tmuxEnsure := `command -v tmux >/dev/null 2>&1 || { echo '==> Installing tmux...'; (apt-get update -qq && apt-get install -y -qq tmux) 2>/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq tmux) 2>/dev/null || (apk add tmux) 2>/dev/null || (sudo apk add tmux) 2>/dev/null || (dnf install -y tmux) 2>/dev/null || (sudo dnf install -y tmux) 2>/dev/null || echo 'ERROR: failed to install tmux'; }; `
+			// Create a detached tmux session with the specified name.
 			createCmd := instanceBackend.ExecCommand(instance.WorkspaceDir, []string{
 				"sh", "-c",
-				tmuxEnsure + fmt.Sprintf(`tmux new-session -d -s %s`, dotfiles.ShQuote(sessionName)),
+				dotfiles.TmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s`, dotfiles.ShQuote(sessionName)),
 			})
 
 			if err := createCmd.Run(); err != nil {

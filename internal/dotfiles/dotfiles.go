@@ -13,6 +13,18 @@ func ShQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
+// TmuxEnsureInstalled is a shell snippet that installs tmux if it is not
+// already present. Shared by the CLI's spawn-session/exec-in-session commands
+// and the TUI's session-creation paths so containers without tmux preinstalled
+// get it on first use.
+//
+// `apt-get update` and `apt-get install` are joined with `;` (not `&&`) inside
+// a brace group: some images have stale or misconfigured apt repos where
+// `update` exits non-zero (e.g. a GPG warning on a third-party repo), which
+// would otherwise short-circuit the install. The group's exit code is the
+// install's, so the fallback chain still works correctly.
+const TmuxEnsureInstalled = `command -v tmux >/dev/null 2>&1 || { echo '==> Installing tmux...'; { apt-get update -qq; apt-get install -y -qq tmux; } 2>/dev/null || { sudo apt-get update -qq; sudo apt-get install -y -qq tmux; } 2>/dev/null || (apk add tmux) 2>/dev/null || (sudo apk add tmux) 2>/dev/null || (dnf install -y tmux) 2>/dev/null || (sudo dnf install -y tmux) 2>/dev/null || echo 'ERROR: failed to install tmux'; }; `
+
 // SetupScript returns the raw shell snippet for dotfiles installation
 // regardless of the auto-install setting. Returns empty if dotfiles are not
 // configured (repo URL or install script missing).
