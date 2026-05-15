@@ -15,6 +15,7 @@ type Config struct {
 	DotfilesSettings   DotfilesSettings   `json:"dotfiles_settings"`
 	CoderSettings      CoderSettings      `json:"coder_settings"`
 	CodespacesSettings CodespacesSettings `json:"codespaces_settings"`
+	BrowserSettings    BrowserSettings    `json:"browser_settings"`
 	DefaultBackend     string             `json:"default_backend,omitempty"` // "devcontainer", "coder", or "codespaces"
 }
 

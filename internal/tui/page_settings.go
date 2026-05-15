@@ -32,6 +32,8 @@ const (
 
 	settingsItemCodespacesMachine = 500 // codespaces settings start here
 
+	settingsItemBrowserMultiple = 600 // browser settings start here
+
 	settingsItemToolStatusBase = 1000 // tool status rows start here
 	settingsItemDoctor         = 2000 // doctor action row
 	settingsItemKeybindings    = 2001 // keybindings dialog row
@@ -143,6 +145,12 @@ var settingsSections = []settingsSection{
 		},
 	},
 	{
+		Title: "Browser",
+		Items: func(_ *state.Config) []int {
+			return []int{settingsItemBrowserMultiple}
+		},
+	},
+	{
 		Title: "Tool Status",
 		Items: func(_ *state.Config) []int {
 			items := make([]int, toolStatusCount)
@@ -250,6 +258,29 @@ func (settingsPage *settingsPage) toggleShowHelpText(m *model) {
 		label = "on"
 	}
 	m.message = fmt.Sprintf("Show help text set to %s", label)
+}
+
+// toggleBrowserMultiple flips the "Enable Multiple Browsers Per Fleet"
+// preference and saves. When on, each instance gets its own browser
+// data dir under <fleet>/<instance>/.browser instead of sharing a
+// single profile under <fleet>/.browser.
+func (settingsPage *settingsPage) toggleBrowserMultiple(m *model) {
+	if m.config == nil {
+		m.config = state.DefaultConfig()
+	}
+	current := m.config.BrowserSettings.MultipleBrowsersPerFleetEnabled()
+	next := !current
+	m.config.BrowserSettings.MultipleBrowsersPerFleet = &next
+	if err := state.SaveConfig(m.config); err != nil {
+		m.config.BrowserSettings.MultipleBrowsersPerFleet = &current
+		m.message = fmt.Sprintf("Failed to save settings: %v", err)
+		return
+	}
+	label := "off"
+	if next {
+		label = "on"
+	}
+	m.message = fmt.Sprintf("Multiple browsers per fleet set to %s", label)
 }
 
 // toggleAutoInstall toggles the dotfiles auto-install setting.
@@ -377,6 +408,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleShowHelpText(m)
 			} else if item == settingsItemDotfilesAutoInstall {
 				settingsPage.toggleAutoInstall(m)
+			} else if item == settingsItemBrowserMultiple {
+				settingsPage.toggleBrowserMultiple(m)
 			} else if item == settingsItemCoderPreset {
 				settingsPage.cycleCoderPreset(m, -1)
 			} else if item == settingsItemCodespacesMachine {
@@ -392,6 +425,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleShowHelpText(m)
 			} else if item == settingsItemDotfilesAutoInstall {
 				settingsPage.toggleAutoInstall(m)
+			} else if item == settingsItemBrowserMultiple {
+				settingsPage.toggleBrowserMultiple(m)
 			} else if item == settingsItemCoderPreset {
 				settingsPage.cycleCoderPreset(m, 1)
 			} else if item == settingsItemCodespacesMachine {
@@ -411,6 +446,10 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			}
 			if item == settingsItemDotfilesAutoInstall {
 				settingsPage.toggleAutoInstall(m)
+				return nil
+			}
+			if item == settingsItemBrowserMultiple {
+				settingsPage.toggleBrowserMultiple(m)
 				return nil
 			}
 			if item == settingsItemCoderPreset {
@@ -719,6 +758,13 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				}
 			}
 			recordRow(settingsItemCodespacesMachine, settingsPage.renderSettingsRow(m, currentItem == settingsItemCodespacesMachine, "Machine", machineValue))
+
+		case "Browser":
+			multipleValue := "[ off ]"
+			if config.BrowserSettings.MultipleBrowsersPerFleetEnabled() {
+				multipleValue = "[ on ]"
+			}
+			recordRow(settingsItemBrowserMultiple, settingsPage.renderSettingsRow(m, currentItem == settingsItemBrowserMultiple, "Enable Multiple Browsers Per Fleet", multipleValue))
 
 		case "Tool Status":
 			for i, t := range m.toolStatus {

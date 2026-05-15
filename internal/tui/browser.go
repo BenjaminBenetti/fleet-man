@@ -2,13 +2,18 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -107,11 +112,11 @@ func openBrowserProxyCmd(
 	instanceBackend backend.Backend,
 	instance *fleet.Instance,
 	instanceKey string,
+	dataDir string,
 ) tea.Cmd {
 	// Capture values for the goroutine.
 	workspaceDir := instance.WorkspaceDir
 	containerID := instance.ContainerID
-	instanceName := instance.Name
 
 	return func() tea.Msg {
 		// 1. Reuse an existing browser proxy forward if one exists.
@@ -139,11 +144,35 @@ func openBrowserProxyCmd(
 		}
 
 		// 4. Launch the browser.
-		if err := launchBrowser(localPort, instanceName); err != nil {
+		if err := launchBrowser(localPort, dataDir); err != nil {
 			return browserProxyMsg{instanceKey: instanceKey, err: fmt.Errorf("launch browser: %w", err)}
 		}
 
 		return browserProxyMsg{instanceKey: instanceKey, localPort: localPort}
+	}
+}
+
+// switchBrowserCmd kills any browser currently bound to dataDir and then
+// runs the normal open-browser-proxy flow against the given instance.
+// The two steps are folded into a single tea.Cmd so the UI can keep a
+// "Switching..." spinner up for the entire kill+relaunch window and
+// tear it down when the resulting browserProxyMsg arrives.
+func switchBrowserCmd(
+	pf *portforward.Manager,
+	instanceBackend backend.Backend,
+	instance *fleet.Instance,
+	instanceKey string,
+	dataDir string,
+) tea.Cmd {
+	inner := openBrowserProxyCmd(pf, instanceBackend, instance, instanceKey, dataDir)
+	return func() tea.Msg {
+		if err := killExistingBrowser(dataDir); err != nil {
+			return browserProxyMsg{
+				instanceKey: instanceKey,
+				err:         fmt.Errorf("stop existing browser: %w", err),
+			}
+		}
+		return inner()
 	}
 }
 
@@ -180,12 +209,19 @@ func ensureProxyRunning(instanceBackend backend.Backend, workspaceDir string) er
 }
 
 // launchBrowser opens a Chromium-based browser with its HTTP/HTTPS/WS/WSS
-// traffic routed through the proxy on localPort. A per-instance user data
-// directory avoids profile conflicts when multiple browsers are open for
-// different containers.
-func launchBrowser(localPort int, instanceName string) error {
+// traffic routed through the proxy on localPort. The user data directory
+// is supplied by the caller so the layout (per-fleet vs per-instance) is
+// owned by configuration, not by this function.
+func launchBrowser(localPort int, dataDir string) error {
 	proxyArg := fmt.Sprintf("--proxy-server=http://localhost:%d", localPort)
-	dataDir := fmt.Sprintf("/tmp/fleet-browser-%s", instanceName)
+
+	// Chrome won't start if the data dir doesn't exist on first launch
+	// (it will, but only sometimes — depends on parent perms). Create
+	// it eagerly with the same permissions used elsewhere in fleet-man
+	// so subsequent provisioning logic can also write through.
+	if err := os.MkdirAll(dataDir, 0777); err != nil {
+		return fmt.Errorf("create browser data dir: %w", err)
+	}
 
 	browsers := []string{
 		"google-chrome",
@@ -213,4 +249,119 @@ func launchBrowser(localPort int, instanceName string) error {
 	}
 
 	return fmt.Errorf("no Chromium-based browser found (tried: %s)", strings.Join(browsers, ", "))
+}
+
+// ===========================================
+// Data dir & singleton detection
+// ===========================================
+
+// browserDataDirName is the subdirectory under a fleet (or instance)
+// where Chrome's user-data-dir lives.
+const browserDataDirName = ".browser"
+
+// browserDataDir returns the host path that Chrome should use as its
+// --user-data-dir for an instance. The layout is determined by the
+// MultipleBrowsersPerFleet setting:
+//
+//	false (default): ~/.fleet/workspaces/<fleet>/.browser
+//	true:            ~/.fleet/workspaces/<fleet>/<instance>/.browser
+//
+// Per-fleet keeps bookmarks/passwords shared across instances. Per-instance
+// lets two browsers run concurrently for the same fleet.
+func browserDataDir(fleetName, instanceName string, multiplePerFleet bool) string {
+	if multiplePerFleet {
+		return filepath.Join(state.WorkspacesDir(), fleetName, instanceName, browserDataDirName)
+	}
+	return filepath.Join(state.WorkspacesDir(), fleetName, browserDataDirName)
+}
+
+// existingBrowserPID returns the PID of a Chrome process that currently
+// owns dataDir, if one is running. It works by reading Chrome's own
+// SingletonLock symlink — Chrome creates this on startup with a target
+// of "<hostname>-<pid>" and removes it on clean shutdown. A stale lock
+// (process gone) returns ok=false so callers don't try to kill nothing.
+func existingBrowserPID(dataDir string) (int, bool) {
+	target, err := os.Readlink(filepath.Join(dataDir, "SingletonLock"))
+	if err != nil {
+		return 0, false
+	}
+	// Format is "<hostname>-<pid>"; split on the last '-' to be safe
+	// against hostnames that themselves contain dashes.
+	idx := strings.LastIndex(target, "-")
+	if idx < 0 || idx == len(target)-1 {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(target[idx+1:])
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	// Verify the process is actually alive. Signal 0 performs no
+	// action but still triggers the kernel's permission/existence
+	// checks, so ESRCH means stale.
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return 0, false
+	}
+	if err := proc.Signal(syscall.Signal(0)); err != nil {
+		return 0, false
+	}
+	return pid, true
+}
+
+// killExistingBrowser terminates the Chrome process that owns dataDir
+// and cleans up the singleton metadata files so the next launch is not
+// rejected as "another instance is already running". Returns nil if no
+// browser was running or after a successful shutdown.
+func killExistingBrowser(dataDir string) error {
+	pid, ok := existingBrowserPID(dataDir)
+	if !ok {
+		// Clean up any stale singleton files even when no live PID
+		// was found — Chrome occasionally leaves them after a crash
+		// and refuses to start until they're gone.
+		removeSingletonFiles(dataDir)
+		return nil
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("find browser process %d: %w", pid, err)
+	}
+	// SIGTERM lets Chrome shut down cleanly (flushes session state,
+	// closes the SQLite DBs). We escalate to SIGKILL only if it
+	// doesn't exit within a short window.
+	_ = proc.Signal(syscall.SIGTERM)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := proc.Signal(syscall.Signal(0)); err != nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err := proc.Signal(syscall.Signal(0)); err == nil {
+		_ = proc.Signal(syscall.SIGKILL)
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	removeSingletonFiles(dataDir)
+	return nil
+}
+
+// removeSingletonFiles clears Chrome's three singleton-tracking symlinks
+// from dataDir. Safe to call when they don't exist.
+func removeSingletonFiles(dataDir string) {
+	for _, name := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket"} {
+		_ = os.Remove(filepath.Join(dataDir, name))
+	}
+}
+
+// multipleBrowsersPerFleet returns the user's preference for whether
+// each instance gets its own browser data dir. Falls back to false when
+// no config is loaded yet so first-launch behavior matches the documented
+// default.
+func multipleBrowsersPerFleet(m *model) bool {
+	if m.config == nil {
+		return false
+	}
+	return m.config.BrowserSettings.MultipleBrowsersPerFleetEnabled()
 }

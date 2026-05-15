@@ -49,6 +49,13 @@ type fleetPage struct {
 	dialogGhMount     bool
 	dialogDetecting   bool // true while a homedir auto-detect cmd is in flight
 
+	// dialogBrowserSwitching is true while the switch-browser dialog
+	// has dispatched a kill+relaunch but the browserProxyMsg has not
+	// yet returned. Used to swap the dialog body for a spinner so the
+	// user isn't staring at a static prompt during the SIGTERM grace
+	// period.
+	dialogBrowserSwitching bool
+
 	// dialogPendingRepoURL is the repo URL the user submitted in the
 	// new-fleet dialog. It is held here across the asynchronous
 	// devcontainer inspection so the inspect-result handler can fall
@@ -187,6 +194,11 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		} else {
 			m.message = fmt.Sprintf("Browser opened (proxy on localhost:%d)", bpm.localPort)
 		}
+		// Tear down the switching-spinner dialog if it was active.
+		if fleetPage.dialogBrowserSwitching {
+			fleetPage.dialogBrowserSwitching = false
+			fleetPage.mode = viewNormal
+		}
 		return nil
 
 	case homedirDetectedMsg:
@@ -225,6 +237,8 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.updateCodespacesMachine(m, msg)
 	case viewConfirmDeleteSession:
 		return fleetPage.updateConfirmDeleteSession(m, msg)
+	case viewConfirmBrowserSwitch:
+		return fleetPage.updateConfirmBrowserSwitch(m, msg)
 	case viewCreateSession:
 		return fleetPage.updateCreateSession(m, msg)
 	case viewRenameSession:
@@ -678,10 +692,23 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "Instance must be running to open browser"
 				break
 			}
+			fleetName := fleetPage.currentFleetName()
+			dataDir := browserDataDir(fleetName, instance.Name, multipleBrowsersPerFleet(m))
+			// A browser already running against this data dir would
+			// either inherit our --proxy-server flag (Chrome forwards
+			// the launch to the existing process and drops the flag)
+			// or fight us over the singleton lock. Prompt before
+			// killing it.
+			if _, running := existingBrowserPID(dataDir); running {
+				fleetPage.mode = viewConfirmBrowserSwitch
+				fleetPage.dialogFleet = fleetName
+				fleetPage.dialogInst = instance.Name
+				return nil
+			}
 			b := m.instanceBackend(instance)
-			instanceKey := fleetPage.currentFleetName() + "/" + instance.Name
+			instanceKey := fleetName + "/" + instance.Name
 			m.message = fmt.Sprintf("Starting browser proxy for %s...", instance.GetDisplayName())
-			return openBrowserProxyCmd(m.portForwards, b, instance, instanceKey)
+			return openBrowserProxyCmd(m.portForwards, b, instance, instanceKey, dataDir)
 
 		case "t":
 			_, instance := fleetPage.selectedInstance(m)
@@ -1583,6 +1610,34 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				displayName, fleetPage.dialogFleet, fleetPage.dialogInst)),
 			dialogHint.Render("[y] Yes  [n/q/esc] No"),
 		)
+		b.WriteString(dialogBox.Render(dialog))
+		b.WriteString("\n")
+
+	case viewConfirmBrowserSwitch:
+		b.WriteString("\n")
+		var dialog string
+		if fleetPage.dialogBrowserSwitching {
+			dialog = fmt.Sprintf(
+				"%s\n\n%s %s",
+				dialogTitle.Render("Switch browser"),
+				m.spinner.View(),
+				dialogLabel.Render(fmt.Sprintf(
+					"Switching browser to %s/%s...",
+					fleetPage.dialogFleet, fleetPage.dialogInst,
+				)),
+			)
+		} else {
+			dialog = fmt.Sprintf(
+				"%s\n\n%s\n\n%s\n\n%s",
+				dialogTitle.Render("Switch browser"),
+				dialogLabel.Render(fmt.Sprintf(
+					"Another browser is running. Switch it to %s/%s?",
+					fleetPage.dialogFleet, fleetPage.dialogInst,
+				)),
+				dimStyle.Render("For two at once: Settings → Browser → Multiple Browsers (separate profiles per instance)."),
+				dialogHint.Render("[Y/enter] Yes (default)  [n/q/esc] No"),
+			)
+		}
 		b.WriteString(dialogBox.Render(dialog))
 		b.WriteString("\n")
 	}
