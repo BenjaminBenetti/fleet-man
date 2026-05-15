@@ -99,6 +99,71 @@ func (fleetPage *fleetPage) updateConfirmDeleteFleetWarn(m *model, msg tea.Msg) 
 	return nil
 }
 
+// updateConfirmBrowserSwitch handles the prompt shown when the user asks
+// to open a browser for an instance but another browser is already
+// running against the same user-data-dir. Default action is "yes,
+// switch": Chrome's singleton lock means the existing process must be
+// killed before a fresh launch with this instance's proxy can succeed.
+//
+// Once the user confirms, the dialog stays open but its body swaps to a
+// "Switching..." spinner — the kill+relaunch cmd runs asynchronously and
+// the dialog is torn down when browserProxyMsg returns.
+func (fleetPage *fleetPage) updateConfirmBrowserSwitch(m *model, msg tea.Msg) tea.Cmd {
+	// While the kill+relaunch is in flight, swallow input so the user
+	// can't double-trigger the flow.
+	if fleetPage.dialogBrowserSwitching {
+		return nil
+	}
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "n", "N", "esc", "q", "Q", "ctrl+c":
+			fleetPage.mode = viewNormal
+			m.message = "Cancelled"
+			return nil
+
+		// Anything else (y/Y/enter/space) confirms — default-yes
+		// matches the issue spec, so we treat unrecognised keys as
+		// "proceed" rather than swallowing them.
+		default:
+			fleetName := fleetPage.dialogFleet
+			instanceName := fleetPage.dialogInst
+
+			f, ok := m.st.Fleets[fleetName]
+			if !ok {
+				fleetPage.mode = viewNormal
+				m.message = "Fleet no longer exists"
+				return nil
+			}
+			instance, err := f.GetInstance(instanceName)
+			if err != nil {
+				fleetPage.mode = viewNormal
+				m.message = fmt.Sprintf("Instance no longer exists: %v", err)
+				return nil
+			}
+			if instance.Status != fleet.StatusRunning {
+				fleetPage.mode = viewNormal
+				m.message = "Instance must be running to open browser"
+				return nil
+			}
+
+			dataDir := browserDataDir(fleetName, instanceName, multipleBrowsersPerFleet(m))
+			instanceBackend := m.instanceBackend(instance)
+			instanceKey := fleetName + "/" + instanceName
+
+			// Switch the dialog into "in-flight" mode; the renderer
+			// will draw the spinner. The cmd does the kill + relaunch
+			// in the background and the resulting browserProxyMsg
+			// clears the flag and the mode.
+			fleetPage.dialogBrowserSwitching = true
+			m.message = ""
+			return switchBrowserCmd(m.portForwards, instanceBackend, instance, instanceKey, dataDir)
+		}
+	}
+	return nil
+}
+
 // updateConfirmDeleteSession handles the session deletion confirmation dialog.
 func (fleetPage *fleetPage) updateConfirmDeleteSession(m *model, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {

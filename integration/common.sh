@@ -45,7 +45,12 @@ FIXTURE_REPO_URL="file://${FIXTURE_REPO_DIR}"
 # Default tmux session name used by TUI tests. Overridable per-test.
 TUI_SESSION="${TUI_SESSION:-fleetman-itest}"
 TUI_WIDTH="${TUI_WIDTH:-140}"
-TUI_HEIGHT="${TUI_HEIGHT:-40}"
+# 60 rows accommodates the settings page when all sections are visible
+# (General, Dotfiles, Codespaces, Browser, Tool Status, Help) — combined
+# they exceed 40 rows on a 140-col layout, which would scroll the top
+# off the visible viewport and break tests that grep for first-section
+# rows like "Tmux vim keys".
+TUI_HEIGHT="${TUI_HEIGHT:-60}"
 
 # === Logging / result emission ===
 #
