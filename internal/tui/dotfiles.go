@@ -42,11 +42,9 @@ func dotfilesSetup(config *state.Config) string {
 	return dotfilesSetupScript(config)
 }
 
-// tmuxEnsureInstalled is a shell snippet that installs tmux if it is not
-// already present. Used by both ShellCommandForSession (interactive attach)
-// and createSessionCmd (detached session creation) so that both paths
-// handle containers that don't ship tmux out of the box.
-var tmuxEnsureInstalled = `command -v tmux >/dev/null 2>&1 || { echo '==> Installing tmux...'; (apt-get update -qq && apt-get install -y -qq tmux) 2>/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq tmux) 2>/dev/null || (apk add tmux) 2>/dev/null || (sudo apk add tmux) 2>/dev/null || (dnf install -y tmux) 2>/dev/null || (sudo dnf install -y tmux) 2>/dev/null || echo 'ERROR: failed to install tmux'; }; `
+// tmuxEnsureInstalled aliases the shared snippet in the dotfiles package.
+// Kept as a package-local name so existing TUI call sites stay terse.
+var tmuxEnsureInstalled = dotfiles.TmuxEnsureInstalled
 
 // shellCommand returns the command to run inside a devcontainer with a
 // persistent tmux session. The session is named after the instance so
