@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -23,6 +24,11 @@ import (
 
 // browserProxyPort is the port privoxy listens on inside the container.
 const browserProxyPort = 58888
+
+// defaultBrowserURL is the page the browser opens to when a fleet
+// customization in the workspace's devcontainer.json does not specify
+// an initialUrl (see customizations.fleet.browser.initialUrl).
+const defaultBrowserURL = "about:blank"
 
 // ===========================================
 // Messages
@@ -143,8 +149,15 @@ func openBrowserProxyCmd(
 			return browserProxyMsg{instanceKey: instanceKey, err: err}
 		}
 
-		// 4. Launch the browser.
-		if err := launchBrowser(localPort, dataDir); err != nil {
+		// 4. Launch the browser, honoring any initialUrl declared in the
+		//    workspace's devcontainer.json fleet customization. A missing
+		//    or malformed config falls back to the default page rather
+		//    than blocking the launch.
+		initialURL := defaultBrowserURL
+		if fc, err := devcontainer.LoadFleetCustomizations(workspaceDir); err == nil && fc.Browser.InitialURL != "" {
+			initialURL = fc.Browser.InitialURL
+		}
+		if err := launchBrowser(localPort, dataDir, initialURL); err != nil {
 			return browserProxyMsg{instanceKey: instanceKey, err: fmt.Errorf("launch browser: %w", err)}
 		}
 
@@ -212,7 +225,11 @@ func ensureProxyRunning(instanceBackend backend.Backend, workspaceDir string) er
 // traffic routed through the proxy on localPort. The user data directory
 // is supplied by the caller so the layout (per-fleet vs per-instance) is
 // owned by configuration, not by this function.
-func launchBrowser(localPort int, dataDir string) error {
+//
+// initialURL is the page the browser opens to. Callers resolve it from
+// the workspace's devcontainer.json fleet customization, falling back to
+// defaultBrowserURL when none is configured.
+func launchBrowser(localPort int, dataDir, initialURL string) error {
 	proxyArg := fmt.Sprintf("--proxy-server=http://localhost:%d", localPort)
 
 	// Chrome won't start if the data dir doesn't exist on first launch
@@ -242,7 +259,7 @@ func launchBrowser(localPort int, dataDir string) error {
 				"--user-data-dir="+dataDir,
 				"--no-first-run",
 				"--no-default-browser-check",
-				"about:blank",
+				initialURL,
 			)
 			return cmd.Start()
 		}

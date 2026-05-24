@@ -120,6 +120,33 @@ echo 'export FLEET_DEVCONTAINER_UPDATE_REMOTE_USER_UID=never' >> ~/.bashrc
 See [Windows WSL notes](docs/windows-wsl-notes.md) for a full health check and
 disposable smoke-test workflow.
 
+## Devcontainer Customizations
+
+Fleet reads project-level settings from a `customizations.fleet` block in a
+repo's `devcontainer.json`. This follows the standard devcontainer pattern
+where each tool owns a namespaced sub-object under `customizations` (VS Code
+uses `vscode`, GitHub uses `codespaces`, and so on) — Fleet reads `fleet` and
+ignores the rest.
+
+```jsonc
+{
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "customizations": {
+    "fleet": {
+      "browser": {
+        "initialUrl": "http://localhost:3000"
+      }
+    }
+  }
+}
+```
+
+### `browser.initialUrl`
+
+The address the built-in browser (`b` in the TUI) opens to instead of
+`about:blank`. Handy for jumping straight to a dev server or app running
+inside the instance.
+
 ## Devcontainer BuildKit
 
 Fleet uses the devcontainer CLI's default BuildKit behavior unless explicitly
