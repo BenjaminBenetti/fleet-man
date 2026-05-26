@@ -1,0 +1,119 @@
+/*
+ * Fleet landing page theme.
+ *
+ * All colors are defined once here as design tokens (CSS custom
+ * properties) and referenced everywhere else — in this file's base/
+ * component rules and in the template's Tailwind utilities via
+ * `var(--token)` arbitrary values. Change a value here and it updates
+ * across the whole page.
+ *
+ * The palette mirrors the fleet TUI: the GitHub-dark surfaces the TUI
+ * runs against, the pink selection/cursor accent (lipgloss color 170 =
+ * #d75fd7), and the cyan -> blue wordmark gradient from renderGradient.
+ */
+:root {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --color-bg: #0d1117;       /* page background */
+  --color-surface: #161b22;  /* cards / raised panels */
+  --color-border: #30363d;   /* card & divider borders */
+
+  /* Text */
+  --color-fg: #e6edf3;        /* primary text */
+  --color-fg-muted: #8b949e;  /* secondary / sub-title text */
+
+  /* Accent — TUI selection/cursor pink (lipgloss color 170) */
+  --color-accent: #d75fd7;
+
+  /* Health status */
+  --color-healthy: #3fb950;    /* green heart */
+  --color-unhealthy: #f85149;  /* red skull */
+
+  /* Wordmark gradient — TUI renderGradient endpoints (left -> right) */
+  --gradient-from: #82dcff;  /* light cyan */
+  --gradient-to: #3c50c8;    /* deep blue */
+
+  /* Type */
+  --font-sans: system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ============================================================
+ * Base
+ * ============================================================ */
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--color-bg);
+  color: var(--color-fg);
+  /* The full-bleed panel below uses 100vw; suppress the stray horizontal
+   * scrollbar that can introduce. */
+  overflow-x: hidden;
+}
+
+/* Breaks an element out of its centered max-width container so it spans
+ * the full viewport width (used by the Docker tab's iframe, while the
+ * title and tabs stay centered). */
+.full-bleed {
+  width: 100vw;
+  position: relative;
+  left: 50%;
+  right: 50%;
+  margin-left: -50vw;
+  margin-right: -50vw;
+}
+
+/* ============================================================
+ * Components
+ * ============================================================ */
+
+/* Tab bar under the wordmark. The active tab is marked with a 2px
+ * underline drawn in the same cyan -> blue gradient as the wordmark
+ * (painted as a bottom-anchored background so only the bottom edge is
+ * gradient, unlike border-image which would colour all four sides). */
+.tabs {
+  display: flex;
+  flex: 1 1 auto; /* fill the row so the underline runs to the content edge */
+  gap: 24px;
+  border-bottom: 1px solid var(--color-border);
+}
+.tab {
+  appearance: none;
+  background: none;
+  border: 0;
+  margin-bottom: -1px;
+  padding: 8px 2px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+}
+.tab:hover {
+  color: var(--color-fg);
+}
+.tab.is-active {
+  color: var(--color-fg);
+  background-image: linear-gradient(to right, var(--gradient-from), var(--gradient-to));
+  background-size: 100% 2px;
+  background-position: bottom;
+  background-repeat: no-repeat;
+}
+
+/* ASCII-art wordmark: figlet block letters under the same left-cyan ->
+ * right-blue gradient as the TUI. Each word is its own .banner block so
+ * the gradient restarts per word; inline-block sizes the gradient box to
+ * the art so the sweep runs across that word's letters. */
+.banner {
+  display: inline-block;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1.1;
+  white-space: pre;
+  background: linear-gradient(to right, var(--gradient-from), var(--gradient-to));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}

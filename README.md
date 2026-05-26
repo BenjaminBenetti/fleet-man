@@ -134,7 +134,17 @@ ignores the rest.
   "customizations": {
     "fleet": {
       "browser": {
-        "initialUrl": "http://localhost:3000"
+        "initialUrl": "http://localhost:3000",
+        "landingPage": {
+          "sites": [
+            {
+              "title": "API",
+              "subTitle": "REST backend",
+              "url": "http://localhost:3000",
+              "healthCheck": "http://localhost:3000/healthz"
+            }
+          ]
+        }
       }
     }
   }
@@ -146,6 +156,36 @@ ignores the rest.
 The address the built-in browser (`b` in the TUI) opens to instead of
 `about:blank`. Handy for jumping straight to a dev server or app running
 inside the instance.
+
+### `browser.landingPage.sites`
+
+A directory of links to the dev services running inside the instance. Each
+entry has:
+
+- `title` — the primary label for the link.
+- `subTitle` — secondary descriptive text shown under the title (optional).
+- `url` — the address the link navigates to.
+- `icon` — an image shown before the title, used verbatim as an `<img>`
+  source so any path the browser can load works, e.g. an `https` URL or a
+  `data:` URI (optional).
+- `healthCheck` — an address polled to indicate whether the service is
+  reachable; a healthy service shows a green heart, an unreachable one a red
+  skull, and hovering reveals the HTTP status (optional).
+
+### Precedence: `initialUrl` vs. the landing page
+
+When a devcontainer.json sets **both** `initialUrl` and a `landingPage.sites`
+list, the per-fleet **Prefer Fleet Launch** setting decides which the browser
+opens to:
+
+- off — `initialUrl` wins.
+- on — the Fleet Launch landing page wins.
+
+The **first** time you open the browser on a fleet whose workspace has both
+configured, the TUI prompts you to choose, and saves your answer as the
+fleet's Prefer Fleet Launch setting. You can change it later by editing the
+fleet (`e` in the TUI). When only one of the two is configured, that one is
+used and the setting has no effect.
 
 ## Devcontainer BuildKit
 

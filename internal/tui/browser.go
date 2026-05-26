@@ -13,6 +13,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/landingpage"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
@@ -29,6 +30,14 @@ const browserProxyPort = 58888
 // customization in the workspace's devcontainer.json does not specify
 // an initialUrl (see customizations.fleet.browser.initialUrl).
 const defaultBrowserURL = "about:blank"
+
+// landingPageRemotePath is where fleet-man's own binary is copied inside
+// the container to serve the browser landing page, and landingPagePidPath
+// tracks the running server's PID for idempotent (re)starts.
+const (
+	landingPageRemotePath = "/tmp/fleet-landing-page"
+	landingPagePidPath    = "/tmp/fleet-landing-page.pid"
+)
 
 // ===========================================
 // Messages
@@ -119,6 +128,7 @@ func openBrowserProxyCmd(
 	instance *fleet.Instance,
 	instanceKey string,
 	dataDir string,
+	preferFleetLaunch bool,
 ) tea.Cmd {
 	// Capture values for the goroutine.
 	workspaceDir := instance.WorkspaceDir
@@ -149,13 +159,34 @@ func openBrowserProxyCmd(
 			return browserProxyMsg{instanceKey: instanceKey, err: err}
 		}
 
-		// 4. Launch the browser, honoring any initialUrl declared in the
-		//    workspace's devcontainer.json fleet customization. A missing
-		//    or malformed config falls back to the default page rather
-		//    than blocking the launch.
+		// 4. Resolve the page the browser opens to from the workspace's
+		//    devcontainer.json fleet customization. Two pages can be
+		//    configured — browser.initialUrl and the landingPage.sites
+		//    list — and precedence between them is:
+		//      - only one configured: use that one.
+		//      - both configured: the fleet's PreferFleetLaunch setting
+		//        decides — false (default) opens initialUrl, true opens
+		//        the Fleet Launch landing page.
+		//      - neither: the default page.
+		//    Choosing the landing page injects and starts fleet-man's own
+		//    binary as the landing-page server in the container. A missing
+		//    or malformed config (load error) falls back to the default
+		//    rather than blocking the launch.
 		initialURL := defaultBrowserURL
-		if fc, err := devcontainer.LoadFleetCustomizations(workspaceDir); err == nil && fc.Browser.InitialURL != "" {
-			initialURL = fc.Browser.InitialURL
+		if fc, err := devcontainer.LoadFleetCustomizations(workspaceDir); err == nil {
+			hasURL := fc.Browser.InitialURL != ""
+			hasLanding := len(fc.Browser.LandingPage.Sites) > 0
+			useLanding := shouldUseLandingPage(hasURL, hasLanding, preferFleetLaunch)
+
+			switch {
+			case useLanding:
+				if err := ensureLandingPageRunning(instanceBackend, workspaceDir); err != nil {
+					return browserProxyMsg{instanceKey: instanceKey, err: fmt.Errorf("landing page: %w", err)}
+				}
+				initialURL = fmt.Sprintf("http://localhost:%d", landingpage.DefaultPort)
+			case hasURL:
+				initialURL = fc.Browser.InitialURL
+			}
 		}
 		if err := launchBrowser(localPort, dataDir, initialURL); err != nil {
 			return browserProxyMsg{instanceKey: instanceKey, err: fmt.Errorf("launch browser: %w", err)}
@@ -163,6 +194,78 @@ func openBrowserProxyCmd(
 
 		return browserProxyMsg{instanceKey: instanceKey, localPort: localPort}
 	}
+}
+
+// beginBrowserOpen is the entry point for the `b` action. When the fleet
+// has never had a browser-start preference chosen and the workspace
+// configures BOTH an initialUrl and a Fleet Launch landing page, it opens
+// the choose-launch dialog (which saves the answer and then launches);
+// otherwise it launches straight away.
+func (fleetPage *fleetPage) beginBrowserOpen(m *model, instance *fleet.Instance, fleetName string) tea.Cmd {
+	if f, ok := m.st.Fleets[fleetName]; ok && !f.Settings.PreferFleetLaunchSet() {
+		if _, both := bothBrowserTargets(instance.WorkspaceDir); both {
+			fleetPage.mode = viewChooseBrowserLaunch
+			fleetPage.dialogFleet = fleetName
+			fleetPage.dialogInst = instance.Name
+			fleetPage.dialogRow = chooseBrowserRowFleetLaunch
+			return nil
+		}
+	}
+	return fleetPage.startBrowser(m, instance, fleetName)
+}
+
+// startBrowser launches (or switches to) the browser for an instance,
+// reading the fleet's resolved Fleet-Launch preference. A browser already
+// bound to the data dir triggers the switch flow (auto when AutoSwitch is
+// on, otherwise a confirm dialog) because Chrome would otherwise forward
+// the launch to the existing process and drop our --proxy-server flag.
+func (fleetPage *fleetPage) startBrowser(m *model, instance *fleet.Instance, fleetName string) tea.Cmd {
+	multiplePerFleet := multipleBrowsersPerFleet(m)
+	dataDir := browserDataDir(fleetName, instance.Name, multiplePerFleet)
+	b := m.instanceBackend(instance)
+	instanceKey := fleetName + "/" + instance.Name
+
+	preferFleetLaunch := false
+	if f, ok := m.st.Fleets[fleetName]; ok {
+		preferFleetLaunch = f.Settings.PreferFleetLaunchEnabled()
+	}
+
+	if _, running := existingBrowserPID(dataDir); running {
+		if !multiplePerFleet && m.config != nil && m.config.BrowserSettings.AutoSwitchEnabled() {
+			m.message = fmt.Sprintf("Switching browser to %s...", instance.GetDisplayName())
+			return switchBrowserCmd(m.portForwards, b, instance, instanceKey, dataDir, preferFleetLaunch)
+		}
+		fleetPage.mode = viewConfirmBrowserSwitch
+		fleetPage.dialogFleet = fleetName
+		fleetPage.dialogInst = instance.Name
+		return nil
+	}
+	m.message = fmt.Sprintf("Starting browser proxy for %s...", instance.GetDisplayName())
+	return openBrowserProxyCmd(m.portForwards, b, instance, instanceKey, dataDir, preferFleetLaunch)
+}
+
+// bothBrowserTargets reports whether the workspace's devcontainer.json
+// configures both an initialUrl and a Fleet Launch landing page, and
+// returns the initialUrl so the chooser dialog can show it. A load error
+// is treated as "not both configured".
+func bothBrowserTargets(workspaceDir string) (initialURL string, both bool) {
+	fc, err := devcontainer.LoadFleetCustomizations(workspaceDir)
+	if err != nil {
+		return "", false
+	}
+	initialURL = fc.Browser.InitialURL
+	return initialURL, initialURL != "" && len(fc.Browser.LandingPage.Sites) > 0
+}
+
+// shouldUseLandingPage decides whether the browser should open the Fleet
+// Launch landing page rather than browser.initialUrl, given which of the
+// two are configured in devcontainer.json and the fleet's PreferFleetLaunch
+// setting. The landing page is used when it is configured AND either no
+// initialUrl is set or the fleet prefers Fleet Launch. When both are
+// configured, preferFleetLaunch is the tie-breaker; when only one is
+// configured the setting is irrelevant.
+func shouldUseLandingPage(hasURL, hasLanding, preferFleetLaunch bool) bool {
+	return hasLanding && (!hasURL || preferFleetLaunch)
 }
 
 // switchBrowserCmd kills any browser currently bound to dataDir and then
@@ -176,8 +279,9 @@ func switchBrowserCmd(
 	instance *fleet.Instance,
 	instanceKey string,
 	dataDir string,
+	preferFleetLaunch bool,
 ) tea.Cmd {
-	inner := openBrowserProxyCmd(pf, instanceBackend, instance, instanceKey, dataDir)
+	inner := openBrowserProxyCmd(pf, instanceBackend, instance, instanceKey, dataDir, preferFleetLaunch)
 	return func() tea.Msg {
 		if err := killExistingBrowser(dataDir); err != nil {
 			return browserProxyMsg{
@@ -218,6 +322,63 @@ func ensureProxyRunning(instanceBackend backend.Backend, workspaceDir string) er
 		time.Sleep(500 * time.Millisecond)
 	}
 	// "ALREADY_RUNNING" falls through — nothing extra to do.
+	return nil
+}
+
+// ensureLandingPageRunning injects fleet-man's own binary into the
+// container and starts it as `fleet landing-page` on the landing page
+// port. The browser then opens to it through the same privoxy proxy used
+// for all container traffic.
+//
+// It is idempotent: when a landing page process is already running
+// (tracked via pidfile) it returns without re-copying the binary, which
+// also avoids the ETXTBSY that would result from overwriting the running
+// executable. fleet-man only ever serves one landing page per container,
+// so the fixed /tmp paths are safe.
+func ensureLandingPageRunning(instanceBackend backend.Backend, workspaceDir string) error {
+	// Already running? Leave it be.
+	check := fmt.Sprintf(`[ -f %s ] && kill -0 "$(cat %s)" 2>/dev/null && echo RUNNING || echo STOPPED`,
+		landingPagePidPath, landingPagePidPath)
+	out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", check}).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("check status: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	if strings.Contains(string(out), "RUNNING") {
+		return nil
+	}
+
+	// Stream this fleet binary into the container over stdin. devcontainer
+	// exec allocates no TTY, so the bytes pass through unmangled.
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate fleet binary: %w", err)
+	}
+	bin, err := os.Open(self)
+	if err != nil {
+		return fmt.Errorf("open fleet binary: %w", err)
+	}
+	defer bin.Close()
+
+	copyScript := fmt.Sprintf(`cat > %s && chmod +x %s`, landingPageRemotePath, landingPageRemotePath)
+	copyCmd := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", copyScript})
+	copyCmd.Stdin = bin
+	if out, err := copyCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("copy fleet binary: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+
+	// Start it detached on the landing page port. nohup + redirected stdio
+	// lets the server outlive this exec session; the workspace defaults to
+	// the exec's working dir (the container's workspace folder), so the
+	// server reads the same devcontainer.json fleet just loaded.
+	startScript := fmt.Sprintf(
+		`nohup %s landing-page --port %d --workspace . >/tmp/fleet-landing-page.log 2>&1 & echo $! > %s`,
+		landingPageRemotePath, landingpage.DefaultPort, landingPagePidPath)
+	if out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", startScript}).CombinedOutput(); err != nil {
+		return fmt.Errorf("start server: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+
+	// Give the server a moment to bind before the browser hits it.
+	time.Sleep(500 * time.Millisecond)
 	return nil
 }
 

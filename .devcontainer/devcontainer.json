@@ -18,4 +18,76 @@
   // "customizations": {},
   // Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
   // "remoteUser": "root"
+  "customizations": {
+    "fleet": {
+      "browser": {
+        "initialUrl": "https://example.com",
+        "landingPage": {
+          "sites": [
+            {
+              "title": "Cats",
+              "subTitle": "Do you like cats?",
+              "url": "https://cats.com",
+              "healthCheck": "https://cats.com/",
+              "icon": "https://cataas.com/cat"
+            },
+            {
+              "title": "GitHub",
+              "subTitle": "Where the code lives",
+              "url": "https://github.com",
+              "healthCheck": "https://github.com/",
+              "icon": "https://github.githubassets.com/favicons/favicon.svg"
+            },
+            {
+              "title": "Hacker News",
+              "subTitle": "Tech news & discussion",
+              "url": "https://news.ycombinator.com",
+              "healthCheck": "https://news.ycombinator.com/"
+            },
+            {
+              "title": "Wikipedia",
+              "subTitle": "The free encyclopedia",
+              "url": "https://www.wikipedia.org",
+              "icon": "https://www.wikipedia.org/static/apple-touch/wikipedia.png"
+            },
+            {
+              "title": "Go",
+              "subTitle": "Build simple, reliable software",
+              "url": "https://go.dev",
+              "healthCheck": "https://go.dev/",
+              "icon": "https://go.dev/images/go-logo-blue.svg"
+            },
+            {
+              "title": "MDN",
+              "subTitle": "Web docs",
+              "url": "https://developer.mozilla.org"
+            },
+            {
+              "title": "Stack Overflow",
+              "subTitle": "Q&A for developers",
+              "url": "https://stackoverflow.com",
+              "healthCheck": "https://stackoverflow.com/",
+              "icon": "https://cdn.sstatic.net/Sites/stackoverflow/Img/apple-touch-icon.png"
+            },
+            {
+              "title": "Reddit",
+              "url": "https://www.reddit.com"
+            },
+            {
+              "title": "Example",
+              "subTitle": "The canonical example domain",
+              "url": "https://example.com",
+              "healthCheck": "https://example.com/"
+            },
+            {
+              "title": "httpbin",
+              "subTitle": "HTTP request & response service",
+              "url": "https://httpbin.org",
+              "healthCheck": "https://httpbin.org/status/200"
+            }
+          ]
+        }
+      }
+    }
+  }
 }

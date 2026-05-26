@@ -611,6 +611,40 @@ func TestEditFleetTogglesAndSavesSettings(t *testing.T) {
 	}
 }
 
+// TestEditFleetSavesPreferFleetLaunch verifies the "Prefer Fleet Launch"
+// checkbox toggles and persists to FleetSettings on submit.
+func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	f := &fleet.Fleet{Name: "alpha"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{
+		st:        &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}},
+		fleetPage: fp,
+	}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if fp.dialogPreferFleetLaunch {
+		t.Fatalf("expected PreferFleetLaunch off by default")
+	}
+
+	// Navigate to the Prefer Fleet Launch row (last row) and toggle it.
+	for fp.dialogRow != editFleetRowPreferFleetLaunch {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
+	if !fp.dialogPreferFleetLaunch {
+		t.Fatalf("toggle did not set dialogPreferFleetLaunch")
+	}
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if !f.Settings.PreferFleetLaunchEnabled() {
+		t.Fatalf("Settings.PreferFleetLaunch = %v, want enabled", f.Settings.PreferFleetLaunch)
+	}
+}
+
 // TestEditFleetHomedirDetectedFillsEmptyInput verifies the success
 // path of auto-detection: when the result arrives and the user has
 // not typed anything, the home-dir input is populated.

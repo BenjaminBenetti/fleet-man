@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fleet</title>
+  <link rel="stylesheet" href="/static/theme.css">
+  <script src="/static/tailwind.js"></script>
+  <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+  <div class="mx-auto max-w-6xl px-10 py-8">
+    <header class="mb-5 flex items-end gap-8">
+      <div class="flex items-start gap-4" role="img" aria-label="fleet - launch">
+        <pre class="banner">  __ _         _
+ / _| |___ ___| |_
+|  _| / -_) -_)  _|
+|_| |_\___\___|\__|</pre>
+        <pre class="banner" aria-hidden="true"> 
+ ___
+|___|</pre>
+        <pre class="banner"> _                   _
+| |__ _ _  _ _ _  __| |_
+| / _` | || | ' \/ _| ' \
+|_\__,_|\_,_|_||_\__|_||_|</pre>
+      </div>
+
+      <nav class="tabs">
+        <button class="tab is-active" data-tab="links">Links</button>
+        {{- if .Docker}}
+        <button class="tab" data-tab="docker"
+                hx-get="/docker" hx-target="#docker-panel" hx-swap="innerHTML" hx-trigger="click once">Docker</button>
+        {{- end}}
+      </nav>
+    </header>
+
+    <main>
+      <div data-tab-panel="links">
+      {{- if .Sites}}
+      <div class="grid grid-cols-4 gap-4">
+        {{- range $i, $site := .Sites}}
+        <a href="{{$site.URL}}"
+           class="group relative block rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 text-inherit no-underline transition-colors hover:border-[var(--color-accent)]">
+          <div class="flex items-start justify-between gap-2">
+            <div class="flex min-w-0 items-center gap-3">
+              {{- if $site.Icon}}
+              <img src="{{$site.Icon}}" alt="" class="max-h-4 max-w-4 shrink-0 object-contain">
+              {{- end}}
+              <div class="text-[15px] font-semibold text-[var(--color-fg)] transition-colors group-hover:text-[var(--color-accent)]">{{$site.Title}}</div>
+            </div>
+            {{- if $site.HealthCheck}}
+            <span class="group/health relative inline-flex h-4 w-4 shrink-0 items-center justify-center"
+                  hx-get="/health/{{$i}}"
+                  hx-trigger="load, every 10s"
+                  hx-swap="innerHTML">
+              <span class="h-2 w-2 animate-pulse rounded-full bg-[var(--color-border)]"></span>
+            </span>
+            {{- end}}
+          </div>
+          {{- if $site.SubTitle}}
+          <div class="mt-0.5 text-[13px] text-[var(--color-fg-muted)] line-clamp-2">{{$site.SubTitle}}</div>
+          {{- end}}
+        </a>
+        {{- end}}
+      </div>
+      {{- else}}
+      <p class="text-sm text-[var(--color-fg-muted)]">No sites configured.</p>
+      {{- end}}
+      </div>
+
+      {{- if .Docker}}
+      <div id="docker-panel" data-tab-panel="docker" class="hidden full-bleed -mb-8">
+        <p class="text-sm text-[var(--color-fg-muted)]">Starting Dozzle…</p>
+      </div>
+      {{- end}}
+    </main>
+  </div>
+
+  <script>
+    // Tab switching: clicking a [data-tab] button shows its matching
+    // [data-tab-panel] and marks the button active. Pure client-side UI
+    // state — no server round-trip.
+    document.addEventListener('click', function (e) {
+      var tab = e.target.closest('[data-tab]');
+      if (!tab) return;
+      var name = tab.getAttribute('data-tab');
+      document.querySelectorAll('[data-tab]').forEach(function (t) {
+        t.classList.toggle('is-active', t === tab);
+      });
+      document.querySelectorAll('[data-tab-panel]').forEach(function (p) {
+        p.classList.toggle('hidden', p.getAttribute('data-tab-panel') !== name);
+      });
+    });
+  </script>
+</body>
+</html>
