@@ -47,11 +47,58 @@ body {
   font-family: var(--font-sans);
   background: var(--color-bg);
   color: var(--color-fg);
+  /* The full-bleed panel below uses 100vw; suppress the stray horizontal
+   * scrollbar that can introduce. */
+  overflow-x: hidden;
+}
+
+/* Breaks an element out of its centered max-width container so it spans
+ * the full viewport width (used by the Docker tab's iframe, while the
+ * title and tabs stay centered). */
+.full-bleed {
+  width: 100vw;
+  position: relative;
+  left: 50%;
+  right: 50%;
+  margin-left: -50vw;
+  margin-right: -50vw;
 }
 
 /* ============================================================
  * Components
  * ============================================================ */
+
+/* Tab bar under the wordmark. The active tab is marked with a 2px
+ * underline drawn in the same cyan -> blue gradient as the wordmark
+ * (painted as a bottom-anchored background so only the bottom edge is
+ * gradient, unlike border-image which would colour all four sides). */
+.tabs {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--color-border);
+}
+.tab {
+  appearance: none;
+  background: none;
+  border: 0;
+  margin-bottom: -1px;
+  padding: 8px 2px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+}
+.tab:hover {
+  color: var(--color-fg);
+}
+.tab.is-active {
+  color: var(--color-fg);
+  background-image: linear-gradient(to right, var(--gradient-from), var(--gradient-to));
+  background-size: 100% 2px;
+  background-position: bottom;
+  background-repeat: no-repeat;
+}
 
 /* ASCII-art wordmark: figlet block letters under the same left-cyan ->
  * right-blue gradient as the TUI. Each word is its own .banner block so

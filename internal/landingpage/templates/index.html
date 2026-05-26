@@ -10,7 +10,7 @@
 </head>
 <body>
   <div class="mx-auto max-w-6xl px-10 py-8">
-    <header class="mb-10">
+    <header class="mb-5">
       <div class="flex items-start gap-4" role="img" aria-label="fleet - launch">
         <pre class="banner">  __ _         _
  / _| |___ ___| |_
@@ -25,7 +25,17 @@
 |_\__,_|\_,_|_||_\__|_||_|</pre>
       </div>
     </header>
+
+    <nav class="tabs">
+      <button class="tab is-active" data-tab="links">Links</button>
+      {{- if .Docker}}
+      <button class="tab" data-tab="docker"
+              hx-get="/docker" hx-target="#docker-panel" hx-swap="innerHTML" hx-trigger="click once">Docker</button>
+      {{- end}}
+    </nav>
+
     <main>
+      <div data-tab-panel="links">
       {{- if .Sites}}
       <div class="grid grid-cols-4 gap-4">
         {{- range $i, $site := .Sites}}
@@ -56,7 +66,31 @@
       {{- else}}
       <p class="text-sm text-[var(--color-fg-muted)]">No sites configured.</p>
       {{- end}}
+      </div>
+
+      {{- if .Docker}}
+      <div id="docker-panel" data-tab-panel="docker" class="hidden full-bleed -mb-8">
+        <p class="text-sm text-[var(--color-fg-muted)]">Starting Dozzle…</p>
+      </div>
+      {{- end}}
     </main>
   </div>
+
+  <script>
+    // Tab switching: clicking a [data-tab] button shows its matching
+    // [data-tab-panel] and marks the button active. Pure client-side UI
+    // state — no server round-trip.
+    document.addEventListener('click', function (e) {
+      var tab = e.target.closest('[data-tab]');
+      if (!tab) return;
+      var name = tab.getAttribute('data-tab');
+      document.querySelectorAll('[data-tab]').forEach(function (t) {
+        t.classList.toggle('is-active', t === tab);
+      });
+      document.querySelectorAll('[data-tab-panel]').forEach(function (p) {
+        p.classList.toggle('hidden', p.getAttribute('data-tab-panel') !== name);
+      });
+    });
+  </script>
 </body>
 </html>

@@ -1,0 +1,13 @@
+{{/*
+  Docker-tab fragment, loaded by htmx the first time the Docker tab is
+  clicked. handleDocker launches Dozzle (a web Docker log viewer) inside
+  the instance and renders either the iframe pointing at it or an error.
+*/ -}}
+{{if .Err -}}
+<div class="rounded-lg border border-[var(--color-unhealthy)] bg-[var(--color-surface)] p-4 text-sm text-[var(--color-fg)]">
+  Failed to start Dozzle: {{.Err}}
+</div>
+{{- else -}}
+<iframe src="{{.URL}}" title="Dozzle"
+        class="block h-[calc(100vh-178px)] w-full border-0 bg-[var(--color-surface)]"></iframe>
+{{- end}}
