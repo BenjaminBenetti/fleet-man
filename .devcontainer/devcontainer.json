@@ -21,6 +21,7 @@
   "customizations": {
     "fleet": {
       "browser": {
+        "initialUrl": "https://example.com",
         "landingPage": {
           "sites": [
             {

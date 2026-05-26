@@ -128,6 +128,7 @@ func openBrowserProxyCmd(
 	instance *fleet.Instance,
 	instanceKey string,
 	dataDir string,
+	preferFleetLaunch bool,
 ) tea.Cmd {
 	// Capture values for the goroutine.
 	workspaceDir := instance.WorkspaceDir
@@ -159,25 +160,32 @@ func openBrowserProxyCmd(
 		}
 
 		// 4. Resolve the page the browser opens to from the workspace's
-		//    devcontainer.json fleet customization. Precedence:
-		//      a) browser.initialUrl — if set, it always wins and the
-		//         landing page does not activate.
-		//      b) otherwise, if a landing page is configured, inject and
-		//         start fleet-man's own binary as the landing-page server
-		//         in the container and open to it.
-		//      c) otherwise, the default page.
-		//    A missing or malformed config (load error) falls back to the
-		//    default rather than blocking the launch.
+		//    devcontainer.json fleet customization. Two pages can be
+		//    configured — browser.initialUrl and the landingPage.sites
+		//    list — and precedence between them is:
+		//      - only one configured: use that one.
+		//      - both configured: the fleet's PreferFleetLaunch setting
+		//        decides — false (default) opens initialUrl, true opens
+		//        the Fleet Launch landing page.
+		//      - neither: the default page.
+		//    Choosing the landing page injects and starts fleet-man's own
+		//    binary as the landing-page server in the container. A missing
+		//    or malformed config (load error) falls back to the default
+		//    rather than blocking the launch.
 		initialURL := defaultBrowserURL
 		if fc, err := devcontainer.LoadFleetCustomizations(workspaceDir); err == nil {
+			hasURL := fc.Browser.InitialURL != ""
+			hasLanding := len(fc.Browser.LandingPage.Sites) > 0
+			useLanding := shouldUseLandingPage(hasURL, hasLanding, preferFleetLaunch)
+
 			switch {
-			case fc.Browser.InitialURL != "":
-				initialURL = fc.Browser.InitialURL
-			case len(fc.Browser.LandingPage.Sites) > 0:
+			case useLanding:
 				if err := ensureLandingPageRunning(instanceBackend, workspaceDir); err != nil {
 					return browserProxyMsg{instanceKey: instanceKey, err: fmt.Errorf("landing page: %w", err)}
 				}
 				initialURL = fmt.Sprintf("http://localhost:%d", landingpage.DefaultPort)
+			case hasURL:
+				initialURL = fc.Browser.InitialURL
 			}
 		}
 		if err := launchBrowser(localPort, dataDir, initialURL); err != nil {
@@ -186,6 +194,17 @@ func openBrowserProxyCmd(
 
 		return browserProxyMsg{instanceKey: instanceKey, localPort: localPort}
 	}
+}
+
+// shouldUseLandingPage decides whether the browser should open the Fleet
+// Launch landing page rather than browser.initialUrl, given which of the
+// two are configured in devcontainer.json and the fleet's PreferFleetLaunch
+// setting. The landing page is used when it is configured AND either no
+// initialUrl is set or the fleet prefers Fleet Launch. When both are
+// configured, preferFleetLaunch is the tie-breaker; when only one is
+// configured the setting is irrelevant.
+func shouldUseLandingPage(hasURL, hasLanding, preferFleetLaunch bool) bool {
+	return hasLanding && (!hasURL || preferFleetLaunch)
 }
 
 // switchBrowserCmd kills any browser currently bound to dataDir and then
@@ -199,8 +218,9 @@ func switchBrowserCmd(
 	instance *fleet.Instance,
 	instanceKey string,
 	dataDir string,
+	preferFleetLaunch bool,
 ) tea.Cmd {
-	inner := openBrowserProxyCmd(pf, instanceBackend, instance, instanceKey, dataDir)
+	inner := openBrowserProxyCmd(pf, instanceBackend, instance, instanceKey, dataDir, preferFleetLaunch)
 	return func() tea.Msg {
 		if err := killExistingBrowser(dataDir); err != nil {
 			return browserProxyMsg{

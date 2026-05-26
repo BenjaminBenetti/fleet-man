@@ -34,20 +34,21 @@ type fleetPage struct {
 	cursor    int
 	collapsed map[string]bool
 
-	mode              viewMode
-	dialogFleet       string
-	dialogInst        string
-	dialogBackend     fleet.BackendType
-	dialogColor       string
-	dialogRow         int
-	dialogEditing     bool
-	dialogFieldActive bool
-	dialogGroupID     string
-	dialogSession     string
-	dialogClaudeMount bool
-	dialogCodexMount  bool
-	dialogGhMount     bool
-	dialogDetecting   bool // true while a homedir auto-detect cmd is in flight
+	mode                    viewMode
+	dialogFleet             string
+	dialogInst              string
+	dialogBackend           fleet.BackendType
+	dialogColor             string
+	dialogRow               int
+	dialogEditing           bool
+	dialogFieldActive       bool
+	dialogGroupID           string
+	dialogSession           string
+	dialogClaudeMount       bool
+	dialogCodexMount        bool
+	dialogGhMount           bool
+	dialogPreferFleetLaunch bool
+	dialogDetecting         bool // true while a homedir auto-detect cmd is in flight
 
 	// dialogBrowserSwitching is true while the switch-browser dialog
 	// has dispatched a kill+relaunch but the browserProxyMsg has not
@@ -697,6 +698,10 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			dataDir := browserDataDir(fleetName, instance.Name, multiplePerFleet)
 			b := m.instanceBackend(instance)
 			instanceKey := fleetName + "/" + instance.Name
+			preferFleetLaunch := false
+			if f, ok := m.st.Fleets[fleetName]; ok {
+				preferFleetLaunch = f.Settings.PreferFleetLaunch
+			}
 
 			// A browser already running against this data dir would
 			// either inherit our --proxy-server flag (Chrome forwards
@@ -707,7 +712,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			if _, running := existingBrowserPID(dataDir); running {
 				if !multiplePerFleet && m.config != nil && m.config.BrowserSettings.AutoSwitchEnabled() {
 					m.message = fmt.Sprintf("Switching browser to %s...", instance.GetDisplayName())
-					return switchBrowserCmd(m.portForwards, b, instance, instanceKey, dataDir)
+					return switchBrowserCmd(m.portForwards, b, instance, instanceKey, dataDir, preferFleetLaunch)
 				}
 				fleetPage.mode = viewConfirmBrowserSwitch
 				fleetPage.dialogFleet = fleetName
@@ -715,7 +720,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				return nil
 			}
 			m.message = fmt.Sprintf("Starting browser proxy for %s...", instance.GetDisplayName())
-			return openBrowserProxyCmd(m.portForwards, b, instance, instanceKey, dataDir)
+			return openBrowserProxyCmd(m.portForwards, b, instance, instanceKey, dataDir, preferFleetLaunch)
 
 		case "t":
 			_, instance := fleetPage.selectedInstance(m)
@@ -1446,7 +1451,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 		}
 
 		dialog := fmt.Sprintf(
-			"%s\n\n  %s %s\n%s%s %s\n%s%s %s\n%s%s %s\n%s%s %s\n\n  %s\n\n%s",
+			"%s\n\n  %s %s\n%s%s %s\n%s%s %s\n%s%s %s\n%s%s %s\n%s%s %s\n\n  %s\n\n%s",
 			dialogTitle.Render("Edit fleet"),
 			dialogLabel.Render("Fleet:    "),
 			fleetExpandedStyle.Render(fleetPage.dialogFleet),
@@ -1462,6 +1467,9 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			rowMarker(editFleetRowHomeDir),
 			dialogLabel.Render("Home dir: "),
 			homedirField,
+			rowMarker(editFleetRowPreferFleetLaunch),
+			checkbox(fleetPage.dialogPreferFleetLaunch),
+			dialogLabel.Render("Prefer Fleet Launch"),
 			dimStyle.Render("Mounts apply on supported backends only"),
 			dialogHint.Render(fleetPage.editFleetHint()),
 		)

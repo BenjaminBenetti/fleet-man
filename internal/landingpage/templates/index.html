@@ -32,9 +32,9 @@
         <a href="{{$site.URL}}"
            class="group relative block rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 text-inherit no-underline transition-colors hover:border-[var(--color-accent)]">
           <div class="flex items-start justify-between gap-2">
-            <div class="flex min-w-0 items-end gap-3">
+            <div class="flex min-w-0 items-center gap-3">
               {{- if $site.Icon}}
-              <img src="{{$site.Icon}}" alt="" class="max-h-8 max-w-8 shrink-0 object-contain">
+              <img src="{{$site.Icon}}" alt="" class="max-h-4 max-w-4 shrink-0 object-contain">
               {{- end}}
               <div class="text-[15px] font-semibold text-[var(--color-fg)] transition-colors group-hover:text-[var(--color-accent)]">{{$site.Title}}</div>
             </div>

@@ -39,4 +39,12 @@ type FleetSettings struct {
 	// directive) when the user enables a mount, and the resolver falls
 	// back to "/home/vscode" if it stays empty at provisioning time.
 	HomeDir string `json:"homeDir,omitempty"`
+
+	// PreferFleetLaunch controls which page the built-in browser opens to
+	// when a workspace's devcontainer.json configures BOTH a
+	// customizations.fleet.browser.initialUrl AND a landingPage.sites
+	// list. When false (default) initialUrl wins; when true the Fleet
+	// Launch landing page takes priority. When only one of the two is
+	// configured, this setting has no effect.
+	PreferFleetLaunch bool `json:"preferFleetLaunch,omitempty"`
 }

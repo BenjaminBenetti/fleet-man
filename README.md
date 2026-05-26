@@ -165,8 +165,24 @@ entry has:
 - `title` — the primary label for the link.
 - `subTitle` — secondary descriptive text shown under the title (optional).
 - `url` — the address the link navigates to.
+- `icon` — an image shown before the title, used verbatim as an `<img>`
+  source so any path the browser can load works, e.g. an `https` URL or a
+  `data:` URI (optional).
 - `healthCheck` — an address polled to indicate whether the service is
-  reachable (optional).
+  reachable; a healthy service shows a green heart, an unreachable one a red
+  skull, and hovering reveals the HTTP status (optional).
+
+### Precedence: `initialUrl` vs. the landing page
+
+When a devcontainer.json sets **both** `initialUrl` and a `landingPage.sites`
+list, the per-fleet **Prefer Fleet Launch** setting decides which the browser
+opens to (edit a fleet with `e` in the TUI):
+
+- off (default) — `initialUrl` wins.
+- on — the Fleet Launch landing page wins.
+
+When only one of the two is configured, that one is used and the setting has
+no effect.
 
 ## Devcontainer BuildKit
 

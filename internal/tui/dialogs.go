@@ -158,7 +158,7 @@ func (fleetPage *fleetPage) updateConfirmBrowserSwitch(m *model, msg tea.Msg) te
 			// clears the flag and the mode.
 			fleetPage.dialogBrowserSwitching = true
 			m.message = ""
-			return switchBrowserCmd(m.portForwards, instanceBackend, instance, instanceKey, dataDir)
+			return switchBrowserCmd(m.portForwards, instanceBackend, instance, instanceKey, dataDir, f.Settings.PreferFleetLaunch)
 		}
 	}
 	return nil
@@ -1009,6 +1009,7 @@ const (
 	editFleetRowCodex
 	editFleetRowGh
 	editFleetRowHomeDir
+	editFleetRowPreferFleetLaunch
 	editFleetRowCount
 )
 
@@ -1069,6 +1070,7 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.dialogClaudeMount = f.Settings.ClaudeCodeMount
 	fleetPage.dialogCodexMount = f.Settings.CodexMount
 	fleetPage.dialogGhMount = f.Settings.GhMount
+	fleetPage.dialogPreferFleetLaunch = f.Settings.PreferFleetLaunch
 	fleetPage.dialogRow = editFleetRowClaude
 	fleetPage.dialogDetecting = false
 	fleetPage.dialogFieldActive = false
@@ -1142,7 +1144,7 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 
 	// Toggle / character input is row-specific.
 	switch fleetPage.dialogRow {
-	case editFleetRowClaude, editFleetRowCodex, editFleetRowGh:
+	case editFleetRowClaude, editFleetRowCodex, editFleetRowGh, editFleetRowPreferFleetLaunch:
 		switch keyMsg.String() {
 		case " ", "left", "right", "h", "l", "x":
 			return fleetPage.toggleEditFleetRow(m)
@@ -1183,6 +1185,10 @@ func (fleetPage *fleetPage) toggleEditFleetRow(m *model) tea.Cmd {
 	case editFleetRowGh:
 		fleetPage.dialogGhMount = !fleetPage.dialogGhMount
 		turnedOn = fleetPage.dialogGhMount
+	case editFleetRowPreferFleetLaunch:
+		// Not a mount, so no home-dir detection to kick off — just flip it.
+		fleetPage.dialogPreferFleetLaunch = !fleetPage.dialogPreferFleetLaunch
+		return nil
 	}
 	if !turnedOn {
 		return nil
@@ -1269,6 +1275,7 @@ func (fleetPage *fleetPage) saveFleetEdits(m *model) tea.Cmd {
 	f.Settings.ClaudeCodeMount = fleetPage.dialogClaudeMount
 	f.Settings.CodexMount = fleetPage.dialogCodexMount
 	f.Settings.GhMount = fleetPage.dialogGhMount
+	f.Settings.PreferFleetLaunch = fleetPage.dialogPreferFleetLaunch
 	f.Settings.HomeDir = strings.TrimSpace(fleetPage.homedirInput.Value())
 	_ = state.Save(m.st)
 
