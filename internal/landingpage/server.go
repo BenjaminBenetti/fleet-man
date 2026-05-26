@@ -11,6 +11,7 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"net/http"
 	"strconv"
 
@@ -25,6 +26,15 @@ const DefaultPort = 16767
 
 //go:embed templates/*.html
 var templatesFS embed.FS
+
+// staticFS holds client-side assets (htmx, etc.) served under /static.
+// They are vendored and embedded rather than loaded from a CDN: the page
+// is served inside the instance and reached through the privoxy proxy, so
+// it cannot assume public internet access — and embedding keeps the whole
+// feature inside the single fleet binary.
+//
+//go:embed static/*
+var staticFS embed.FS
 
 // Config holds the resolved inputs the server needs to run.
 type Config struct {
@@ -62,12 +72,20 @@ func Run(cfg Config) error {
 		return fmt.Errorf("parse templates: %w", err)
 	}
 
+	// Re-root the embedded assets at the "static" dir so a request for
+	// /static/htmx.min.js maps to static/htmx.min.js rather than the
+	// doubled-up static/static/... the raw embed.FS would expect.
+	assets, err := fs.Sub(staticFS, "static")
+	if err != nil {
+		return fmt.Errorf("sub static fs: %w", err)
+	}
+
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.SetHTMLTemplate(tmpl)
 
 	srv := &server{sites: fc.Browser.LandingPage.Sites}
-	srv.routes(router)
+	srv.routes(router, assets)
 
 	addr := ":" + strconv.Itoa(cfg.Port)
 	return router.Run(addr)
@@ -78,9 +96,12 @@ type server struct {
 	sites []devcontainer.LandingPageSite
 }
 
-// routes registers the landing page's HTTP handlers.
-func (s *server) routes(r *gin.Engine) {
+// routes registers the landing page's HTTP handlers. assets is the
+// embedded client-asset filesystem (re-rooted at the static dir), served
+// under /static.
+func (s *server) routes(r *gin.Engine, assets fs.FS) {
 	r.GET("/", s.handleIndex)
+	r.StaticFS("/static", http.FS(assets))
 }
 
 // handleIndex renders the directory of configured sites.
