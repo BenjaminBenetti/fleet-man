@@ -176,13 +176,16 @@ entry has:
 
 When a devcontainer.json sets **both** `initialUrl` and a `landingPage.sites`
 list, the per-fleet **Prefer Fleet Launch** setting decides which the browser
-opens to (edit a fleet with `e` in the TUI):
+opens to:
 
-- off (default) — `initialUrl` wins.
+- off — `initialUrl` wins.
 - on — the Fleet Launch landing page wins.
 
-When only one of the two is configured, that one is used and the setting has
-no effect.
+The **first** time you open the browser on a fleet whose workspace has both
+configured, the TUI prompts you to choose, and saves your answer as the
+fleet's Prefer Fleet Launch setting. You can change it later by editing the
+fleet (`e` in the TUI). When only one of the two is configured, that one is
+used and the setting has no effect.
 
 ## Devcontainer BuildKit
 

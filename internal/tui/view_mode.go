@@ -28,4 +28,5 @@ const (
 	viewRenameSession
 	viewConfirmDeleteSession
 	viewConfirmBrowserSwitch
+	viewChooseBrowserLaunch
 )

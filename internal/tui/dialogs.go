@@ -158,10 +158,77 @@ func (fleetPage *fleetPage) updateConfirmBrowserSwitch(m *model, msg tea.Msg) te
 			// clears the flag and the mode.
 			fleetPage.dialogBrowserSwitching = true
 			m.message = ""
-			return switchBrowserCmd(m.portForwards, instanceBackend, instance, instanceKey, dataDir, f.Settings.PreferFleetLaunch)
+			return switchBrowserCmd(m.portForwards, instanceBackend, instance, instanceKey, dataDir, f.Settings.PreferFleetLaunchEnabled())
 		}
 	}
 	return nil
+}
+
+// chooseBrowserRow identifies a selectable option in the
+// choose-browser-launch dialog.
+const (
+	chooseBrowserRowFleetLaunch = iota
+	chooseBrowserRowInitialURL
+	chooseBrowserRowCount
+)
+
+// updateChooseBrowserLaunch handles the dialog shown the first time the
+// browser is opened on a fleet whose workspace configures both an
+// initialUrl and a Fleet Launch landing page. Navigation matches the rest
+// of fleet — j/k or arrows move the cursor, enter/space chooses the
+// selected row — and the [f]/[u] shortcuts jump straight to a choice. The
+// answer is saved as the fleet's PreferFleetLaunch setting and the browser
+// then launches.
+func (fleetPage *fleetPage) updateChooseBrowserLaunch(m *model, msg tea.Msg) tea.Cmd {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return nil
+	}
+	switch keyMsg.String() {
+	case "esc", "q", "Q", "ctrl+c":
+		fleetPage.mode = viewNormal
+		m.message = "Cancelled"
+		return nil
+	case "up", "k":
+		fleetPage.dialogRow = (fleetPage.dialogRow - 1 + chooseBrowserRowCount) % chooseBrowserRowCount
+		return nil
+	case "down", "j", "tab":
+		fleetPage.dialogRow = (fleetPage.dialogRow + 1) % chooseBrowserRowCount
+		return nil
+	case "enter", " ":
+		return fleetPage.chooseBrowserLaunch(m, fleetPage.dialogRow == chooseBrowserRowFleetLaunch)
+	case "f", "F":
+		return fleetPage.chooseBrowserLaunch(m, true)
+	case "u", "U":
+		return fleetPage.chooseBrowserLaunch(m, false)
+	}
+	return nil
+}
+
+// chooseBrowserLaunch persists the browser-start preference for the fleet
+// and proceeds with the launch using it.
+func (fleetPage *fleetPage) chooseBrowserLaunch(m *model, preferFleetLaunch bool) tea.Cmd {
+	fleetName := fleetPage.dialogFleet
+	f, ok := m.st.Fleets[fleetName]
+	if !ok {
+		fleetPage.mode = viewNormal
+		m.message = "Fleet no longer exists"
+		return nil
+	}
+
+	v := preferFleetLaunch
+	f.Settings.PreferFleetLaunch = &v
+	_ = state.Save(m.st)
+
+	instance, err := f.GetInstance(fleetPage.dialogInst)
+	if err != nil || instance.Status != fleet.StatusRunning {
+		fleetPage.mode = viewNormal
+		m.message = "Instance must be running to open browser"
+		return nil
+	}
+
+	fleetPage.mode = viewNormal
+	return fleetPage.startBrowser(m, instance, fleetName)
 }
 
 // updateConfirmDeleteSession handles the session deletion confirmation dialog.
@@ -1070,7 +1137,7 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.dialogClaudeMount = f.Settings.ClaudeCodeMount
 	fleetPage.dialogCodexMount = f.Settings.CodexMount
 	fleetPage.dialogGhMount = f.Settings.GhMount
-	fleetPage.dialogPreferFleetLaunch = f.Settings.PreferFleetLaunch
+	fleetPage.dialogPreferFleetLaunch = f.Settings.PreferFleetLaunchEnabled()
 	fleetPage.dialogRow = editFleetRowClaude
 	fleetPage.dialogDetecting = false
 	fleetPage.dialogFieldActive = false
@@ -1275,7 +1342,8 @@ func (fleetPage *fleetPage) saveFleetEdits(m *model) tea.Cmd {
 	f.Settings.ClaudeCodeMount = fleetPage.dialogClaudeMount
 	f.Settings.CodexMount = fleetPage.dialogCodexMount
 	f.Settings.GhMount = fleetPage.dialogGhMount
-	f.Settings.PreferFleetLaunch = fleetPage.dialogPreferFleetLaunch
+	preferFleetLaunch := fleetPage.dialogPreferFleetLaunch
+	f.Settings.PreferFleetLaunch = &preferFleetLaunch
 	f.Settings.HomeDir = strings.TrimSpace(fleetPage.homedirInput.Value())
 	_ = state.Save(m.st)
 

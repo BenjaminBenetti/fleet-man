@@ -43,8 +43,25 @@ type FleetSettings struct {
 	// PreferFleetLaunch controls which page the built-in browser opens to
 	// when a workspace's devcontainer.json configures BOTH a
 	// customizations.fleet.browser.initialUrl AND a landingPage.sites
-	// list. When false (default) initialUrl wins; when true the Fleet
-	// Launch landing page takes priority. When only one of the two is
-	// configured, this setting has no effect.
-	PreferFleetLaunch bool `json:"preferFleetLaunch,omitempty"`
+	// list. When only one of the two is configured, it has no effect.
+	//
+	// It is a pointer so "never set" (nil) is distinct from an explicit
+	// false: the first time the browser is opened on a fleet whose
+	// workspace has both configured and this is still nil, the TUI prompts
+	// the user to choose and stores their answer here. false → initialUrl
+	// wins; true → the Fleet Launch landing page wins.
+	PreferFleetLaunch *bool `json:"preferFleetLaunch,omitempty"`
+}
+
+// PreferFleetLaunchSet reports whether a browser-start preference has ever
+// been chosen for this fleet (vs. nil, "never asked").
+func (s FleetSettings) PreferFleetLaunchSet() bool {
+	return s.PreferFleetLaunch != nil
+}
+
+// PreferFleetLaunchEnabled reports whether the Fleet Launch landing page
+// should win over initialUrl when both are configured. Defaults to false
+// when unset.
+func (s FleetSettings) PreferFleetLaunchEnabled() bool {
+	return s.PreferFleetLaunch != nil && *s.PreferFleetLaunch
 }

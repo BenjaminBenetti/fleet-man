@@ -196,6 +196,67 @@ func openBrowserProxyCmd(
 	}
 }
 
+// beginBrowserOpen is the entry point for the `b` action. When the fleet
+// has never had a browser-start preference chosen and the workspace
+// configures BOTH an initialUrl and a Fleet Launch landing page, it opens
+// the choose-launch dialog (which saves the answer and then launches);
+// otherwise it launches straight away.
+func (fleetPage *fleetPage) beginBrowserOpen(m *model, instance *fleet.Instance, fleetName string) tea.Cmd {
+	if f, ok := m.st.Fleets[fleetName]; ok && !f.Settings.PreferFleetLaunchSet() {
+		if _, both := bothBrowserTargets(instance.WorkspaceDir); both {
+			fleetPage.mode = viewChooseBrowserLaunch
+			fleetPage.dialogFleet = fleetName
+			fleetPage.dialogInst = instance.Name
+			fleetPage.dialogRow = chooseBrowserRowFleetLaunch
+			return nil
+		}
+	}
+	return fleetPage.startBrowser(m, instance, fleetName)
+}
+
+// startBrowser launches (or switches to) the browser for an instance,
+// reading the fleet's resolved Fleet-Launch preference. A browser already
+// bound to the data dir triggers the switch flow (auto when AutoSwitch is
+// on, otherwise a confirm dialog) because Chrome would otherwise forward
+// the launch to the existing process and drop our --proxy-server flag.
+func (fleetPage *fleetPage) startBrowser(m *model, instance *fleet.Instance, fleetName string) tea.Cmd {
+	multiplePerFleet := multipleBrowsersPerFleet(m)
+	dataDir := browserDataDir(fleetName, instance.Name, multiplePerFleet)
+	b := m.instanceBackend(instance)
+	instanceKey := fleetName + "/" + instance.Name
+
+	preferFleetLaunch := false
+	if f, ok := m.st.Fleets[fleetName]; ok {
+		preferFleetLaunch = f.Settings.PreferFleetLaunchEnabled()
+	}
+
+	if _, running := existingBrowserPID(dataDir); running {
+		if !multiplePerFleet && m.config != nil && m.config.BrowserSettings.AutoSwitchEnabled() {
+			m.message = fmt.Sprintf("Switching browser to %s...", instance.GetDisplayName())
+			return switchBrowserCmd(m.portForwards, b, instance, instanceKey, dataDir, preferFleetLaunch)
+		}
+		fleetPage.mode = viewConfirmBrowserSwitch
+		fleetPage.dialogFleet = fleetName
+		fleetPage.dialogInst = instance.Name
+		return nil
+	}
+	m.message = fmt.Sprintf("Starting browser proxy for %s...", instance.GetDisplayName())
+	return openBrowserProxyCmd(m.portForwards, b, instance, instanceKey, dataDir, preferFleetLaunch)
+}
+
+// bothBrowserTargets reports whether the workspace's devcontainer.json
+// configures both an initialUrl and a Fleet Launch landing page, and
+// returns the initialUrl so the chooser dialog can show it. A load error
+// is treated as "not both configured".
+func bothBrowserTargets(workspaceDir string) (initialURL string, both bool) {
+	fc, err := devcontainer.LoadFleetCustomizations(workspaceDir)
+	if err != nil {
+		return "", false
+	}
+	initialURL = fc.Browser.InitialURL
+	return initialURL, initialURL != "" && len(fc.Browser.LandingPage.Sites) > 0
+}
+
 // shouldUseLandingPage decides whether the browser should open the Fleet
 // Launch landing page rather than browser.initialUrl, given which of the
 // two are configured in devcontainer.json and the fleet's PreferFleetLaunch

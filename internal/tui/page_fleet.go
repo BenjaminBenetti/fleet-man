@@ -240,6 +240,8 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.updateConfirmDeleteSession(m, msg)
 	case viewConfirmBrowserSwitch:
 		return fleetPage.updateConfirmBrowserSwitch(m, msg)
+	case viewChooseBrowserLaunch:
+		return fleetPage.updateChooseBrowserLaunch(m, msg)
 	case viewCreateSession:
 		return fleetPage.updateCreateSession(m, msg)
 	case viewRenameSession:
@@ -693,34 +695,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "Instance must be running to open browser"
 				break
 			}
-			fleetName := fleetPage.currentFleetName()
-			multiplePerFleet := multipleBrowsersPerFleet(m)
-			dataDir := browserDataDir(fleetName, instance.Name, multiplePerFleet)
-			b := m.instanceBackend(instance)
-			instanceKey := fleetName + "/" + instance.Name
-			preferFleetLaunch := false
-			if f, ok := m.st.Fleets[fleetName]; ok {
-				preferFleetLaunch = f.Settings.PreferFleetLaunch
-			}
-
-			// A browser already running against this data dir would
-			// either inherit our --proxy-server flag (Chrome forwards
-			// the launch to the existing process and drops the flag)
-			// or fight us over the singleton lock. Default behavior
-			// is to prompt; when AutoSwitch is on (only meaningful in
-			// shared-profile mode) we skip the prompt and just switch.
-			if _, running := existingBrowserPID(dataDir); running {
-				if !multiplePerFleet && m.config != nil && m.config.BrowserSettings.AutoSwitchEnabled() {
-					m.message = fmt.Sprintf("Switching browser to %s...", instance.GetDisplayName())
-					return switchBrowserCmd(m.portForwards, b, instance, instanceKey, dataDir, preferFleetLaunch)
-				}
-				fleetPage.mode = viewConfirmBrowserSwitch
-				fleetPage.dialogFleet = fleetName
-				fleetPage.dialogInst = instance.Name
-				return nil
-			}
-			m.message = fmt.Sprintf("Starting browser proxy for %s...", instance.GetDisplayName())
-			return openBrowserProxyCmd(m.portForwards, b, instance, instanceKey, dataDir, preferFleetLaunch)
+			return fleetPage.beginBrowserOpen(m, instance, fleetPage.currentFleetName())
 
 		case "t":
 			_, instance := fleetPage.selectedInstance(m)
@@ -1653,6 +1628,28 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				dialogHint.Render("[Y/enter] Yes (default)  [n/q/esc] No"),
 			)
 		}
+		b.WriteString(dialogBox.Render(dialog))
+		b.WriteString("\n")
+
+	case viewChooseBrowserLaunch:
+		b.WriteString("\n")
+		// Cursor-selectable option line: "> " marker + pink highlight on
+		// the focused row, matching the fleet list's selection style.
+		optLine := func(r int, label string) string {
+			if fleetPage.dialogRow == r {
+				return cursorStyle.Render("> ") + selectedStyle.Render(label)
+			}
+			return "  " + dialogLabel.Render(label)
+		}
+		dialog := fmt.Sprintf(
+			"%s\n\n%s\n\n%s\n%s\n\n%s\n\n%s",
+			dialogTitle.Render("Choose browser start page"),
+			dialogLabel.Render("This project configures both a Fleet Launch landing page and an initialUrl. Which should the browser open?"),
+			optLine(chooseBrowserRowFleetLaunch, "[f] Fleet Launch"),
+			optLine(chooseBrowserRowInitialURL, "[u] Initial URL"),
+			dimStyle.Render("Selection will be saved to fleet settings"),
+			dialogHint.Render("[j/k] Select  [enter/space] Choose  [f/u] Shortcut  [q/esc] Cancel"),
+		)
 		b.WriteString(dialogBox.Render(dialog))
 		b.WriteString("\n")
 	}

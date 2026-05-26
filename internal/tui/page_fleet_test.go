@@ -640,8 +640,8 @@ func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
 
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
 
-	if !f.Settings.PreferFleetLaunch {
-		t.Fatalf("Settings.PreferFleetLaunch = false, want true")
+	if !f.Settings.PreferFleetLaunchEnabled() {
+		t.Fatalf("Settings.PreferFleetLaunch = %v, want enabled", f.Settings.PreferFleetLaunch)
 	}
 }
 
