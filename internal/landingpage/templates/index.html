@@ -4,50 +4,59 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Fleet</title>
+  <link rel="stylesheet" href="/static/theme.css">
+  <script src="/static/tailwind.js"></script>
   <script src="/static/htmx.min.js"></script>
-  <style>
-    :root { color-scheme: dark; }
-    body {
-      margin: 0;
-      font-family: system-ui, -apple-system, sans-serif;
-      background: #0d1117;
-      color: #e6edf3;
-    }
-    .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px; }
-    h1 { font-size: 20px; font-weight: 600; margin: 0 0 24px; }
-    .sites { display: grid; gap: 12px; }
-    a.site {
-      display: block;
-      padding: 16px 20px;
-      border: 1px solid #30363d;
-      border-radius: 8px;
-      background: #161b22;
-      text-decoration: none;
-      color: inherit;
-    }
-    a.site:hover { border-color: #58a6ff; }
-    .title { font-size: 15px; font-weight: 600; }
-    .sub-title { font-size: 13px; color: #8b949e; margin-top: 2px; }
-    .empty { color: #8b949e; font-size: 14px; }
-  </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Fleet</h1>
-    <div class="sites">
+  <div class="mx-auto max-w-6xl px-10 py-8">
+    <header class="mb-10">
+      <div class="flex items-start gap-4" role="img" aria-label="fleet - launch">
+        <pre class="banner">  __ _         _
+ / _| |___ ___| |_
+|  _| / -_) -_)  _|
+|_| |_\___\___|\__|</pre>
+        <pre class="banner" aria-hidden="true"> 
+ ___
+|___|</pre>
+        <pre class="banner"> _                   _
+| |__ _ _  _ _ _  __| |_
+| / _` | || | ' \/ _| ' \
+|_\__,_|\_,_|_||_\__|_||_|</pre>
+      </div>
+    </header>
+    <main>
       {{- if .Sites}}
-        {{- range .Sites}}
-      <a class="site" href="{{.URL}}">
-        <div class="title">{{.Title}}</div>
-        {{- if .SubTitle}}
-        <div class="sub-title">{{.SubTitle}}</div>
+      <div class="grid grid-cols-4 gap-4">
+        {{- range $i, $site := .Sites}}
+        <a href="{{$site.URL}}"
+           class="group relative block rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 text-inherit no-underline transition-colors hover:border-[var(--color-accent)]">
+          <div class="flex items-start justify-between gap-2">
+            <div class="flex min-w-0 items-end gap-3">
+              {{- if $site.Icon}}
+              <img src="{{$site.Icon}}" alt="" class="max-h-8 max-w-8 shrink-0 object-contain">
+              {{- end}}
+              <div class="text-[15px] font-semibold text-[var(--color-fg)] transition-colors group-hover:text-[var(--color-accent)]">{{$site.Title}}</div>
+            </div>
+            {{- if $site.HealthCheck}}
+            <span class="group/health relative inline-flex h-4 w-4 shrink-0 items-center justify-center"
+                  hx-get="/health/{{$i}}"
+                  hx-trigger="load, every 10s"
+                  hx-swap="innerHTML">
+              <span class="h-2 w-2 animate-pulse rounded-full bg-[var(--color-border)]"></span>
+            </span>
+            {{- end}}
+          </div>
+          {{- if $site.SubTitle}}
+          <div class="mt-0.5 text-[13px] text-[var(--color-fg-muted)] line-clamp-2">{{$site.SubTitle}}</div>
+          {{- end}}
+        </a>
         {{- end}}
-      </a>
-        {{- end}}
+      </div>
       {{- else}}
-      <p class="empty">No sites configured.</p>
+      <p class="text-sm text-[var(--color-fg-muted)]">No sites configured.</p>
       {{- end}}
-    </div>
+    </main>
   </div>
 </body>
 </html>

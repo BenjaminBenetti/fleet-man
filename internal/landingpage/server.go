@@ -14,10 +14,15 @@ import (
 	"io/fs"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
 	"github.com/gin-gonic/gin"
 )
+
+// healthTimeout caps each upstream health probe so a slow or hung service
+// can't tie up the poll request.
+const healthTimeout = 5 * time.Second
 
 // DefaultPort is the port the landing page listens on inside the
 // instance. fleet-man's browser opens to http://localhost:<DefaultPort>,
@@ -84,7 +89,10 @@ func Run(cfg Config) error {
 	router := gin.New()
 	router.SetHTMLTemplate(tmpl)
 
-	srv := &server{sites: fc.Browser.LandingPage.Sites}
+	srv := &server{
+		sites:  fc.Browser.LandingPage.Sites,
+		client: &http.Client{Timeout: healthTimeout},
+	}
 	srv.routes(router, assets)
 
 	addr := ":" + strconv.Itoa(cfg.Port)
@@ -93,7 +101,8 @@ func Run(cfg Config) error {
 
 // server holds the request-handling state for the landing page.
 type server struct {
-	sites []devcontainer.LandingPageSite
+	sites  []devcontainer.LandingPageSite
+	client *http.Client
 }
 
 // routes registers the landing page's HTTP handlers. assets is the
@@ -101,6 +110,7 @@ type server struct {
 // under /static.
 func (s *server) routes(r *gin.Engine, assets fs.FS) {
 	r.GET("/", s.handleIndex)
+	r.GET("/health/:i", s.handleHealth)
 	r.StaticFS("/static", http.FS(assets))
 }
 
@@ -109,4 +119,54 @@ func (s *server) handleIndex(c *gin.Context) {
 	c.HTML(http.StatusOK, "index.html", gin.H{
 		"Sites": s.sites,
 	})
+}
+
+// healthResult is the resolved state of one site's health probe, rendered
+// into the health.html fragment that htmx polls for.
+type healthResult struct {
+	// Healthy is true when the probe got an HTTP response with a status
+	// below 400.
+	Healthy bool
+	// Label is the hover text: the HTTP status (e.g. "200 OK") or a short
+	// failure reason when no response came back.
+	Label string
+}
+
+// handleHealth probes a single site's healthCheck URL and returns the
+// health.html fragment (heart/skull + status label) for htmx to swap in.
+//
+// The site is addressed by its index in the configured list rather than by
+// a URL in the request: the server only ever probes URLs it loaded from the
+// devcontainer.json, so a client can't coerce it into fetching an arbitrary
+// address (no SSRF surface).
+func (s *server) handleHealth(c *gin.Context) {
+	i, err := strconv.Atoi(c.Param("i"))
+	if err != nil || i < 0 || i >= len(s.sites) {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	site := s.sites[i]
+	if site.HealthCheck == "" {
+		c.Status(http.StatusNoContent)
+		return
+	}
+
+	c.HTML(http.StatusOK, "health.html", s.probeHealth(site.HealthCheck))
+}
+
+// probeHealth issues a GET to url and classifies the outcome. Any response
+// with a status below 400 is healthy; a transport error (DNS, refused,
+// timeout) or a 4xx/5xx is unhealthy.
+func (s *server) probeHealth(url string) healthResult {
+	resp, err := s.client.Get(url)
+	if err != nil {
+		return healthResult{Healthy: false, Label: "unreachable"}
+	}
+	defer resp.Body.Close()
+
+	label := strconv.Itoa(resp.StatusCode)
+	if text := http.StatusText(resp.StatusCode); text != "" {
+		label += " " + text
+	}
+	return healthResult{Healthy: resp.StatusCode < 400, Label: label}
 }
