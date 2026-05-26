@@ -78,6 +78,12 @@ type model struct {
 	// Update check
 	updateAvailable string // non-empty = new version tag from GitHub
 
+	// Release notes overlay: shown once after an upgrade. When
+	// releaseNotesVersion is non-empty the dialog is active and swallows
+	// all key input until dismissed. See releasenotes.go.
+	releaseNotesVersion string
+	releaseNotesBody    string
+
 	// Pending exec after quit: after a successful update the TUI
 	// quits, then Run() replaces the current process with the new
 	// fleet binary via syscall.Exec so the new fleet is NOT nested
@@ -522,6 +528,7 @@ func (m model) Init() tea.Cmd {
 		m.sessionDiscoveryLoop(),
 		layoutTickCmd(),
 		checkUpdateCmd(),
+		checkReleaseNotesCmd(m.lastSeenVersion()),
 		forceRepaintCmd(),
 		// Probe live state right away so a fleet started after a long
 		// idle (e.g. overnight) reflects containers that stopped while
@@ -614,6 +621,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.agentSpinner, agentSpinCmd = m.agentSpinner.Update(msg)
 	spinCmd := tea.Batch(statusSpinCmd, agentSpinCmd)
 
+	// 2.5 Release notes overlay — while shown it swallows all key input:
+	// any key dismisses it (and persists the version) and is NOT
+	// forwarded to the active page, so e.g. 'q' won't quit the app.
+	if m.releaseNotesShowing() {
+		if _, ok := msg.(tea.KeyMsg); ok {
+			m.dismissReleaseNotes()
+			return m, spinCmd
+		}
+	}
+
 	// 3. Shared-only messages — return early
 	switch msg := msg.(type) {
 	case statsMsg:
@@ -629,6 +646,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateCheckMsg:
 		if msg.latestVersion != "" {
 			m.updateAvailable = msg.latestVersion
+		}
+		return m, spinCmd
+
+	case releaseNotesMsg:
+		// Only surface the overlay when there's an actual body to show;
+		// an empty message means dev build, already seen, or fetch error.
+		if msg.version != "" && strings.TrimSpace(msg.body) != "" {
+			m.releaseNotesVersion = msg.version
+			m.releaseNotesBody = msg.body
 		}
 		return m, spinCmd
 
@@ -1000,6 +1026,10 @@ func (m model) View() string {
 	// accompanying WindowSizeMsg invalidates the full line cache,
 	// forcing the last line — and thus this escape — to be rewritten
 	// inside the same atomic buffer flush as the rest of the redraw.
+	// Release notes overlay takes over the whole screen, centered.
+	if m.releaseNotesShowing() {
+		return m.viewReleaseNotes() + "\x1b[0J"
+	}
 	return m.currentPage.View(&m) + "\x1b[0J"
 }
 
