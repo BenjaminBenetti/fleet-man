@@ -54,22 +54,22 @@ func TestLoadFleetCustomizationsInitialURL(t *testing.T) {
 	}
 }
 
-// TestLoadFleetCustomizationsLandingPageSites verifies the landing-page
+// TestLoadFleetCustomizationsLandingPageSites verifies the landingPage
 // sites list is read out of the customizations.fleet.browser block,
-// including the kebab-case sub-title and health-check fields.
+// including the subTitle and healthCheck fields.
 func TestLoadFleetCustomizationsLandingPageSites(t *testing.T) {
 	dir := t.TempDir()
 	writeDevcontainer(t, dir, `{
 		"customizations": {
 			"fleet": {
 				"browser": {
-					"landing-page": {
+					"landingPage": {
 						"sites": [
 							{
 								"title": "API",
-								"sub-title": "REST backend",
+								"subTitle": "REST backend",
 								"url": "http://localhost:3000",
-								"health-check": "http://localhost:3000/healthz"
+								"healthCheck": "http://localhost:3000/healthz"
 							},
 							{
 								"title": "Docs",
@@ -113,7 +113,7 @@ func TestLoadFleetCustomizationsLandingPageSites(t *testing.T) {
 }
 
 // TestLoadFleetCustomizationsNoLandingPageIsZero verifies a browser block
-// without a landing-page yields an empty sites list rather than an error.
+// without a landingPage yields an empty sites list rather than an error.
 func TestLoadFleetCustomizationsNoLandingPageIsZero(t *testing.T) {
 	dir := t.TempDir()
 	writeDevcontainer(t, dir, `{

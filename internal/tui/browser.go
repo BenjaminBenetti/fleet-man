@@ -13,6 +13,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/landingpage"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
@@ -29,6 +30,14 @@ const browserProxyPort = 58888
 // customization in the workspace's devcontainer.json does not specify
 // an initialUrl (see customizations.fleet.browser.initialUrl).
 const defaultBrowserURL = "about:blank"
+
+// landingPageRemotePath is where fleet-man's own binary is copied inside
+// the container to serve the browser landing page, and landingPagePidPath
+// tracks the running server's PID for idempotent (re)starts.
+const (
+	landingPageRemotePath = "/tmp/fleet-landing-page"
+	landingPagePidPath    = "/tmp/fleet-landing-page.pid"
+)
 
 // ===========================================
 // Messages
@@ -149,13 +158,27 @@ func openBrowserProxyCmd(
 			return browserProxyMsg{instanceKey: instanceKey, err: err}
 		}
 
-		// 4. Launch the browser, honoring any initialUrl declared in the
-		//    workspace's devcontainer.json fleet customization. A missing
-		//    or malformed config falls back to the default page rather
-		//    than blocking the launch.
+		// 4. Resolve the page the browser opens to from the workspace's
+		//    devcontainer.json fleet customization. Precedence:
+		//      a) browser.initialUrl — if set, it always wins and the
+		//         landing page does not activate.
+		//      b) otherwise, if a landing page is configured, inject and
+		//         start fleet-man's own binary as the landing-page server
+		//         in the container and open to it.
+		//      c) otherwise, the default page.
+		//    A missing or malformed config (load error) falls back to the
+		//    default rather than blocking the launch.
 		initialURL := defaultBrowserURL
-		if fc, err := devcontainer.LoadFleetCustomizations(workspaceDir); err == nil && fc.Browser.InitialURL != "" {
-			initialURL = fc.Browser.InitialURL
+		if fc, err := devcontainer.LoadFleetCustomizations(workspaceDir); err == nil {
+			switch {
+			case fc.Browser.InitialURL != "":
+				initialURL = fc.Browser.InitialURL
+			case len(fc.Browser.LandingPage.Sites) > 0:
+				if err := ensureLandingPageRunning(instanceBackend, workspaceDir); err != nil {
+					return browserProxyMsg{instanceKey: instanceKey, err: fmt.Errorf("landing page: %w", err)}
+				}
+				initialURL = fmt.Sprintf("http://localhost:%d", landingpage.DefaultPort)
+			}
 		}
 		if err := launchBrowser(localPort, dataDir, initialURL); err != nil {
 			return browserProxyMsg{instanceKey: instanceKey, err: fmt.Errorf("launch browser: %w", err)}
@@ -218,6 +241,63 @@ func ensureProxyRunning(instanceBackend backend.Backend, workspaceDir string) er
 		time.Sleep(500 * time.Millisecond)
 	}
 	// "ALREADY_RUNNING" falls through — nothing extra to do.
+	return nil
+}
+
+// ensureLandingPageRunning injects fleet-man's own binary into the
+// container and starts it as `fleet landing-page` on the landing page
+// port. The browser then opens to it through the same privoxy proxy used
+// for all container traffic.
+//
+// It is idempotent: when a landing page process is already running
+// (tracked via pidfile) it returns without re-copying the binary, which
+// also avoids the ETXTBSY that would result from overwriting the running
+// executable. fleet-man only ever serves one landing page per container,
+// so the fixed /tmp paths are safe.
+func ensureLandingPageRunning(instanceBackend backend.Backend, workspaceDir string) error {
+	// Already running? Leave it be.
+	check := fmt.Sprintf(`[ -f %s ] && kill -0 "$(cat %s)" 2>/dev/null && echo RUNNING || echo STOPPED`,
+		landingPagePidPath, landingPagePidPath)
+	out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", check}).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("check status: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	if strings.Contains(string(out), "RUNNING") {
+		return nil
+	}
+
+	// Stream this fleet binary into the container over stdin. devcontainer
+	// exec allocates no TTY, so the bytes pass through unmangled.
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate fleet binary: %w", err)
+	}
+	bin, err := os.Open(self)
+	if err != nil {
+		return fmt.Errorf("open fleet binary: %w", err)
+	}
+	defer bin.Close()
+
+	copyScript := fmt.Sprintf(`cat > %s && chmod +x %s`, landingPageRemotePath, landingPageRemotePath)
+	copyCmd := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", copyScript})
+	copyCmd.Stdin = bin
+	if out, err := copyCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("copy fleet binary: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+
+	// Start it detached on the landing page port. nohup + redirected stdio
+	// lets the server outlive this exec session; the workspace defaults to
+	// the exec's working dir (the container's workspace folder), so the
+	// server reads the same devcontainer.json fleet just loaded.
+	startScript := fmt.Sprintf(
+		`nohup %s landing-page --port %d --workspace . >/tmp/fleet-landing-page.log 2>&1 & echo $! > %s`,
+		landingPageRemotePath, landingpage.DefaultPort, landingPagePidPath)
+	if out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", startScript}).CombinedOutput(); err != nil {
+		return fmt.Errorf("start server: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+
+	// Give the server a moment to bind before the browser hits it.
+	time.Sleep(500 * time.Millisecond)
 	return nil
 }
 

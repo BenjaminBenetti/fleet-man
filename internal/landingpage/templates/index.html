@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fleet</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+    }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px; }
+    h1 { font-size: 20px; font-weight: 600; margin: 0 0 24px; }
+    .sites { display: grid; gap: 12px; }
+    a.site {
+      display: block;
+      padding: 16px 20px;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      background: #161b22;
+      text-decoration: none;
+      color: inherit;
+    }
+    a.site:hover { border-color: #58a6ff; }
+    .title { font-size: 15px; font-weight: 600; }
+    .sub-title { font-size: 13px; color: #8b949e; margin-top: 2px; }
+    .empty { color: #8b949e; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Fleet</h1>
+    <div class="sites">
+      {{- if .Sites}}
+        {{- range .Sites}}
+      <a class="site" href="{{.URL}}">
+        <div class="title">{{.Title}}</div>
+        {{- if .SubTitle}}
+        <div class="sub-title">{{.SubTitle}}</div>
+        {{- end}}
+      </a>
+        {{- end}}
+      {{- else}}
+      <p class="empty">No sites configured.</p>
+      {{- end}}
+    </div>
+  </div>
+</body>
+</html>
