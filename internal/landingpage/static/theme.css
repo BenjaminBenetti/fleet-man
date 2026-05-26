@@ -74,8 +74,8 @@ body {
  * gradient, unlike border-image which would colour all four sides). */
 .tabs {
   display: flex;
+  flex: 1 1 auto; /* fill the row so the underline runs to the content edge */
   gap: 24px;
-  margin-bottom: 24px;
   border-bottom: 1px solid var(--color-border);
 }
 .tab {

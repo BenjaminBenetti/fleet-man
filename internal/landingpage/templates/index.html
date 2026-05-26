@@ -10,7 +10,7 @@
 </head>
 <body>
   <div class="mx-auto max-w-6xl px-10 py-8">
-    <header class="mb-5">
+    <header class="mb-5 flex items-end gap-8">
       <div class="flex items-start gap-4" role="img" aria-label="fleet - launch">
         <pre class="banner">  __ _         _
  / _| |___ ___| |_
@@ -24,15 +24,15 @@
 | / _` | || | ' \/ _| ' \
 |_\__,_|\_,_|_||_\__|_||_|</pre>
       </div>
-    </header>
 
-    <nav class="tabs">
-      <button class="tab is-active" data-tab="links">Links</button>
-      {{- if .Docker}}
-      <button class="tab" data-tab="docker"
-              hx-get="/docker" hx-target="#docker-panel" hx-swap="innerHTML" hx-trigger="click once">Docker</button>
-      {{- end}}
-    </nav>
+      <nav class="tabs">
+        <button class="tab is-active" data-tab="links">Links</button>
+        {{- if .Docker}}
+        <button class="tab" data-tab="docker"
+                hx-get="/docker" hx-target="#docker-panel" hx-swap="innerHTML" hx-trigger="click once">Docker</button>
+        {{- end}}
+      </nav>
+    </header>
 
     <main>
       <div data-tab-panel="links">
