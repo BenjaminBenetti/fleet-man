@@ -16,6 +16,12 @@ var mu sync.Mutex
 type State struct {
 	Fleets       map[string]*fleet.Fleet `json:"fleets"`
 	GroupLayouts map[string]GroupLayout  `json:"groupLayouts,omitempty"`
+	// LastSeenVersion is the fleet version whose release notes the user
+	// has already been shown. When it differs from the compiled-in
+	// version (e.g. after an upgrade) the TUI surfaces that version's
+	// GitHub release notes once, then records the version here so the
+	// dialog isn't shown again.
+	LastSeenVersion string `json:"lastSeenVersion,omitempty"`
 }
 
 // FleetDir returns the base directory for fleet state.
