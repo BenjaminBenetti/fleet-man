@@ -134,7 +134,17 @@ ignores the rest.
   "customizations": {
     "fleet": {
       "browser": {
-        "initialUrl": "http://localhost:3000"
+        "initialUrl": "http://localhost:3000",
+        "landing-page": {
+          "sites": [
+            {
+              "title": "API",
+              "sub-title": "REST backend",
+              "url": "http://localhost:3000",
+              "health-check": "http://localhost:3000/healthz"
+            }
+          ]
+        }
       }
     }
   }
@@ -146,6 +156,17 @@ ignores the rest.
 The address the built-in browser (`b` in the TUI) opens to instead of
 `about:blank`. Handy for jumping straight to a dev server or app running
 inside the instance.
+
+### `browser.landing-page.sites`
+
+A directory of links to the dev services running inside the instance. Each
+entry has:
+
+- `title` — the primary label for the link.
+- `sub-title` — secondary descriptive text shown under the title (optional).
+- `url` — the address the link navigates to.
+- `health-check` — an address polled to indicate whether the service is
+  reachable (optional).
 
 ## Devcontainer BuildKit
 

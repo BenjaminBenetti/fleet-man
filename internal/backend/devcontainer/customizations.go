@@ -50,6 +50,32 @@ type BrowserCustomizations struct {
 	// InitialURL is the address the browser opens to instead of
 	// about:blank. An empty value means "use fleet-man's default".
 	InitialURL string `json:"initialUrl"`
+
+	// LandingPage configures fleet-man's built-in landing page — a
+	// directory of links to the dev services running inside the
+	// instance.
+	LandingPage LandingPageCustomizations `json:"landing-page"`
+}
+
+// LandingPageCustomizations configures fleet-man's built-in browser
+// landing page.
+type LandingPageCustomizations struct {
+	// Sites is the list of links shown on the landing page. An empty
+	// list means "no landing page entries configured".
+	Sites []LandingPageSite `json:"sites"`
+}
+
+// LandingPageSite is a single entry on the browser landing page.
+type LandingPageSite struct {
+	// Title is the primary label shown for the link.
+	Title string `json:"title"`
+	// SubTitle is the secondary descriptive text shown under the title.
+	SubTitle string `json:"sub-title"`
+	// URL is the address the link navigates to.
+	URL string `json:"url"`
+	// HealthCheck is an address polled to indicate whether the service
+	// is reachable. An empty value means "no health check".
+	HealthCheck string `json:"health-check"`
 }
 
 // ===========================================
