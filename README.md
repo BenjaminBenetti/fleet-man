@@ -198,6 +198,12 @@ dashboard — without leaving Fleet Launch. Each entry has:
   iframes `http://localhost:<port>`; if it never comes up, the tab shows an
   error instead.
 
+The app is shown in an iframe, so it must allow being framed. An app that
+sends `X-Frame-Options: deny`/`sameorigin` or a restrictive
+`Content-Security-Policy: frame-ancestors` will render as a blank "refused
+to connect" box; configure it to permit embedding. For example, Grafana
+needs `GF_SECURITY_ALLOW_EMBEDDING=true`.
+
 For example, to replace Fleet's former built-in Dozzle log viewer:
 
 ```jsonc

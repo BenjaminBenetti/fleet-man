@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,64 +9,74 @@
   <script src="/static/tailwind.js"></script>
   <script src="/static/htmx.min.js"></script>
 </head>
+
 <body>
-  <div class="mx-auto max-w-6xl px-10 py-8">
-    <header class="mb-5 flex items-end gap-8">
-      <div class="flex items-start gap-4" role="img" aria-label="fleet - launch">
-        <pre class="banner">  __ _         _
+  <!-- Header spans the full viewport (16px side padding): the wordmark sits
+       at the far left and the tab bar's underline runs out to the right
+       edge. Only the main content below stays in the centered column. -->
+  <header class="mb-5 flex items-end gap-8 px-4">
+    <div class="flex items-start gap-4" role="img" aria-label="fleet - launch">
+      <pre class="banner">  __ _         _
  / _| |___ ___| |_
 |  _| / -_) -_)  _|
 |_| |_\___\___|\__|</pre>
-        <pre class="banner" aria-hidden="true"> 
+      <!-- The blank line below is load-bearing: it gives the dash its top
+           row so it sits centred against the 4-line words. It must be a
+           real empty line, NOT a trailing space (linters strip that, and
+           the browser then eats the leading newline and the dash rides
+           one row too high). -->
+      <pre class="banner" aria-hidden="true">
+
  ___
 |___|</pre>
-        <pre class="banner"> _                   _
+      <pre class="banner"> _                   _
 | |__ _ _  _ _ _  __| |_
 | / _` | || | ' \/ _| ' \
 |_\__,_|\_,_|_||_\__|_||_|</pre>
-      </div>
+    </div>
 
-      <nav class="tabs">
-        <button class="tab is-active" data-tab="links">Links</button>
-        {{- range $i, $app := .Apps}}
-        <button class="tab" data-tab="app-{{$i}}"
-                hx-get="/app/{{$i}}" hx-target="#app-panel-{{$i}}" hx-swap="innerHTML" hx-trigger="click once">{{$app.Title}}</button>
-        {{- end}}
-      </nav>
-    </header>
+    <nav class="tabs">
+      <button class="tab is-active" data-tab="links">Links</button>
+      {{- range $i, $app := .Apps}}
+      <button class="tab" data-tab="app-{{$i}}" hx-get="/app/{{$i}}" hx-target="#app-panel-{{$i}}" hx-swap="innerHTML"
+        hx-trigger="click once">{{$app.Title}}</button>
+      {{- end}}
+    </nav>
+  </header>
 
+  <div class="mx-auto max-w-6xl px-10 pb-8">
     <main>
       <div data-tab-panel="links">
-      {{- if .Sites}}
-      <div class="grid grid-cols-4 gap-4">
-        {{- range $i, $site := .Sites}}
-        <a href="{{$site.URL}}"
-           class="group relative block rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 text-inherit no-underline transition-colors hover:border-[var(--color-accent)]">
-          <div class="flex items-start justify-between gap-2">
-            <div class="flex min-w-0 items-center gap-3">
-              {{- if $site.Icon}}
-              <img src="{{$site.Icon}}" alt="" class="max-h-4 max-w-4 shrink-0 object-contain">
+        {{- if .Sites}}
+        <div class="grid grid-cols-4 gap-4">
+          {{- range $i, $site := .Sites}}
+          <a href="{{$site.URL}}"
+            class="group relative block rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 text-inherit no-underline transition-colors hover:border-[var(--color-accent)]">
+            <div class="flex items-start justify-between gap-2">
+              <div class="flex min-w-0 items-center gap-3">
+                {{- if $site.Icon}}
+                <img src="{{$site.Icon}}" alt="" class="max-h-4 max-w-4 shrink-0 object-contain">
+                {{- end}}
+                <div
+                  class="text-[15px] font-semibold text-[var(--color-fg)] transition-colors group-hover:text-[var(--color-accent)]">
+                  {{$site.Title}}</div>
+              </div>
+              {{- if $site.HealthCheck}}
+              <span class="group/health relative inline-flex h-4 w-4 shrink-0 items-center justify-center"
+                hx-get="/health/{{$i}}" hx-trigger="load, every 10s" hx-swap="innerHTML">
+                <span class="h-2 w-2 animate-pulse rounded-full bg-[var(--color-border)]"></span>
+              </span>
               {{- end}}
-              <div class="text-[15px] font-semibold text-[var(--color-fg)] transition-colors group-hover:text-[var(--color-accent)]">{{$site.Title}}</div>
             </div>
-            {{- if $site.HealthCheck}}
-            <span class="group/health relative inline-flex h-4 w-4 shrink-0 items-center justify-center"
-                  hx-get="/health/{{$i}}"
-                  hx-trigger="load, every 10s"
-                  hx-swap="innerHTML">
-              <span class="h-2 w-2 animate-pulse rounded-full bg-[var(--color-border)]"></span>
-            </span>
+            {{- if $site.SubTitle}}
+            <div class="mt-0.5 text-[13px] text-[var(--color-fg-muted)] line-clamp-2">{{$site.SubTitle}}</div>
             {{- end}}
-          </div>
-          {{- if $site.SubTitle}}
-          <div class="mt-0.5 text-[13px] text-[var(--color-fg-muted)] line-clamp-2">{{$site.SubTitle}}</div>
+          </a>
           {{- end}}
-        </a>
+        </div>
+        {{- else}}
+        <p class="text-sm text-[var(--color-fg-muted)]">No sites configured.</p>
         {{- end}}
-      </div>
-      {{- else}}
-      <p class="text-sm text-[var(--color-fg-muted)]">No sites configured.</p>
-      {{- end}}
       </div>
 
       {{- range $i, $app := .Apps}}
@@ -91,6 +102,22 @@
         p.classList.toggle('hidden', p.getAttribute('data-tab-panel') !== name);
       });
     });
+
+    // Keep --header-h in sync with the real header height so an app tab's
+    // iframe (height: 100vh - var(--header-h)) always reaches the bottom of
+    // the page. <main>'s top edge is exactly where an app panel begins (the
+    // links panel above it leaves the flow when an app tab is active), so it
+    // measures the header + its margin in one shot — no magic number to
+    // retune when the header changes.
+    var mainEl = document.querySelector('main');
+    function syncHeaderHeight() {
+      var top = Math.round(mainEl.getBoundingClientRect().top);
+      document.documentElement.style.setProperty('--header-h', top + 'px');
+    }
+    syncHeaderHeight();
+    window.addEventListener('resize', syncHeaderHeight);
+    window.addEventListener('load', syncHeaderHeight);
   </script>
 </body>
+
 </html>
