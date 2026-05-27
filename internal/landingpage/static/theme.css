@@ -37,6 +37,12 @@
   /* Type */
   --font-sans: system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Height of everything above the content area (the header + its bottom
+   * margin). Set from the real header height in JS, with this as a
+   * fallback; the app-tab iframe subtracts it from the viewport so it
+   * reaches the bottom no matter how tall the header is. */
+  --header-h: 96px;
 }
 
 /* ============================================================
@@ -67,6 +73,17 @@ body {
 /* ============================================================
  * Components
  * ============================================================ */
+
+/* App-tab iframe. Fills the width and runs from just below the header
+ * (--header-h, kept in sync with the real header height in index.html) to
+ * the bottom of the viewport, so the embedded app reaches the page edge. */
+.app-frame {
+  display: block;
+  width: 100%;
+  height: calc(100vh - var(--header-h));
+  border: 0;
+  background: var(--color-surface);
+}
 
 /* Tab bar under the wordmark. The active tab is marked with a 2px
  * underline drawn in the same cyan -> blue gradient as the wordmark

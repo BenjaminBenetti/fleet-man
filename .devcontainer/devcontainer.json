@@ -85,6 +85,18 @@
               "url": "https://httpbin.org",
               "healthCheck": "https://httpbin.org/status/200"
             }
+          ],
+          "apps": [
+            {
+              "title": "Docker",
+              "command": "docker run -d --name fleet-dozzle -p 16768:8080 -v /var/run/docker.sock:/var/run/docker.sock amir20/dozzle:latest",
+              "port": 16768
+            },
+            {
+              "title": "Grafana",
+              "command": "docker run -d --name fleet-lgtm -e GF_SECURITY_ALLOW_EMBEDDING=true -p 3000:3000 -p 4317:4317 -p 4318:4318 grafana/otel-lgtm",
+              "port": 3000
+            }
           ]
         }
       }

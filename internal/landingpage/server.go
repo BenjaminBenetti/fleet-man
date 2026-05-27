@@ -26,16 +26,6 @@ import (
 // can't tie up the poll request.
 const healthTimeout = 5 * time.Second
 
-// Dozzle is the web-based Docker log viewer surfaced in the Docker tab.
-// fleet-man launches it on demand via `docker run` inside the instance and
-// iframes it in. dozzlePort is published on the instance's localhost and
-// reached through the same privoxy proxy as the rest of the page.
-const (
-	dozzlePort  = 16768
-	dozzleImage = "amir20/dozzle:latest"
-	dozzleName  = "fleet-dozzle"
-)
-
 // DefaultPort is the port the landing page listens on inside the
 // instance. fleet-man's browser opens to http://localhost:<DefaultPort>,
 // routed through the privoxy proxy into the container's localhost.
@@ -102,9 +92,9 @@ func Run(cfg Config) error {
 	router.SetHTMLTemplate(tmpl)
 
 	srv := &server{
-		sites:           fc.Browser.LandingPage.Sites,
-		dockerAvailable: dockerDetected(),
-		client:          &http.Client{Timeout: healthTimeout},
+		sites:  fc.Browser.LandingPage.Sites,
+		apps:   fc.Browser.LandingPage.Apps,
+		client: &http.Client{Timeout: healthTimeout},
 	}
 	srv.routes(router, assets)
 
@@ -114,16 +104,9 @@ func Run(cfg Config) error {
 
 // server holds the request-handling state for the landing page.
 type server struct {
-	sites           []devcontainer.LandingPageSite
-	dockerAvailable bool
-	client          *http.Client
-}
-
-// dockerDetected reports whether a docker CLI is available on the system
-// the landing page runs on (inside the instance). It gates the Docker tab.
-func dockerDetected() bool {
-	_, err := exec.LookPath("docker")
-	return err == nil
+	sites  []devcontainer.LandingPageSite
+	apps   []devcontainer.LandingPageApp
+	client *http.Client
 }
 
 // routes registers the landing page's HTTP handlers. assets is the
@@ -132,15 +115,15 @@ func dockerDetected() bool {
 func (s *server) routes(r *gin.Engine, assets fs.FS) {
 	r.GET("/", s.handleIndex)
 	r.GET("/health/:i", s.handleHealth)
-	r.GET("/docker", s.handleDocker)
+	r.GET("/app/:i", s.handleApp)
 	r.StaticFS("/static", http.FS(assets))
 }
 
-// handleIndex renders the directory of configured sites.
+// handleIndex renders the directory of configured sites and app tabs.
 func (s *server) handleIndex(c *gin.Context) {
 	c.HTML(http.StatusOK, "index.html", gin.H{
-		"Sites":  s.sites,
-		"Docker": s.dockerAvailable,
+		"Sites": s.sites,
+		"Apps":  s.apps,
 	})
 }
 
@@ -194,61 +177,87 @@ func (s *server) probeHealth(url string) healthResult {
 	return healthResult{Healthy: resp.StatusCode < 400, Label: label}
 }
 
-// handleDocker ensures Dozzle is running inside the instance and returns
-// the docker.html fragment (an iframe pointing at it, or an error). htmx
-// loads this into the Docker tab the first time the tab is clicked.
-func (s *server) handleDocker(c *gin.Context) {
-	if !s.dockerAvailable {
+// handleApp starts a configured app (if it isn't already up) and returns
+// the app.html fragment — an iframe pointing at the app, or an error.
+// htmx loads this into the app's tab the first time the tab is clicked.
+//
+// The app is addressed by its index in the configured list rather than by
+// a command or port in the request: the server only ever runs commands and
+// iframes ports it loaded from the devcontainer.json, so a client can't
+// coerce it into executing arbitrary commands.
+func (s *server) handleApp(c *gin.Context) {
+	i, err := strconv.Atoi(c.Param("i"))
+	if err != nil || i < 0 || i >= len(s.apps) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	url := fmt.Sprintf("http://localhost:%d", dozzlePort)
-	if err := ensureDozzleRunning(); err != nil {
-		c.HTML(http.StatusOK, "docker.html", gin.H{"Err": err.Error()})
+	app := s.apps[i]
+	url := fmt.Sprintf("http://localhost:%d", app.Port)
+
+	if err := ensureAppRunning(app, url); err != nil {
+		c.HTML(http.StatusOK, "app.html", gin.H{"Title": app.Title, "Err": err.Error()})
 		return
 	}
-	// Wait until Dozzle is actually answering before handing the browser
-	// an iframe, so the first paint isn't a connection-refused page.
-	waitForReachable(url)
-	c.HTML(http.StatusOK, "docker.html", gin.H{"URL": url})
+	// Hold the request open until the app is actually answering, so the
+	// browser's first paint isn't a connection-refused page.
+	if !waitForReachable(url) {
+		c.HTML(http.StatusOK, "app.html", gin.H{
+			"Title": app.Title,
+			"Err":   fmt.Sprintf("did not become reachable on port %d", app.Port),
+		})
+		return
+	}
+	c.HTML(http.StatusOK, "app.html", gin.H{"Title": app.Title, "URL": url})
 }
 
-// ensureDozzleRunning starts the Dozzle container if it is not already
-// running. It is idempotent: a running container is left alone, and a
-// stale (stopped) one with the same name is removed first. Dozzle reads
-// the docker socket and serves on 8080, which we publish on dozzlePort.
-func ensureDozzleRunning() error {
-	out, _ := exec.Command("docker", "ps", "-q", "-f", "name=^"+dozzleName+"$").Output()
-	if strings.TrimSpace(string(out)) != "" {
+// ensureAppRunning starts the app's command unless its port is already
+// answering. It is idempotent: an app already serving on its port is left
+// alone (so a second tab open or a browser relaunch doesn't double-start
+// it), and an app with no command relies entirely on the port poll.
+//
+// The command is started in the background and not waited on — it is
+// expected to be a long-running server (or to detach itself, e.g.
+// `docker run -d`). Readiness is determined by polling the port, not by
+// the command's exit, so a server that never binds the port surfaces as a
+// "did not become reachable" error from handleApp rather than a hang.
+func ensureAppRunning(app devcontainer.LandingPageApp, url string) error {
+	if reachable(url) {
 		return nil // already running
 	}
-	// Clear any stopped container holding the name (ignore "no such
-	// container" errors), then run fresh.
-	_ = exec.Command("docker", "rm", "-f", dozzleName).Run()
-
-	run := exec.Command("docker", "run", "-d",
-		"--name", dozzleName,
-		"-p", fmt.Sprintf("%d:8080", dozzlePort),
-		"-v", "/var/run/docker.sock:/var/run/docker.sock",
-		dozzleImage,
-	)
-	if out, err := run.CombinedOutput(); err != nil {
-		return fmt.Errorf("docker run dozzle: %w (%s)", err, strings.TrimSpace(string(out)))
+	if strings.TrimSpace(app.Command) == "" {
+		return nil // nothing to start; rely on the port poll
+	}
+	cmd := exec.Command("bash", "-c", app.Command)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start command: %w", err)
 	}
 	return nil
 }
 
-// waitForReachable polls url until it answers or a short deadline passes.
-// Used to hold the Docker-tab request open until Dozzle's HTTP server is
-// up (the container can take a moment to start after `docker run`).
-func waitForReachable(url string) {
+// reachable reports whether url answers an HTTP request within a short
+// timeout. Any response (even an error status) counts as reachable — the
+// app's own server is up.
+func reachable(url string) bool {
 	client := &http.Client{Timeout: time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return true
+}
+
+// waitForReachable polls url until it answers or a deadline passes,
+// reporting whether it came up. Used to hold an app-tab request open until
+// the app's HTTP server is listening (it can take a moment to start after
+// its command is launched).
+func waitForReachable(url string) bool {
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		if resp, err := client.Get(url); err == nil {
-			resp.Body.Close()
-			return
+		if reachable(url) {
+			return true
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
+	return false
 }

@@ -60,9 +60,36 @@ type BrowserCustomizations struct {
 // LandingPageCustomizations configures fleet-man's built-in browser
 // landing page.
 type LandingPageCustomizations struct {
-	// Sites is the list of links shown on the landing page. An empty
-	// list means "no landing page entries configured".
+	// Sites is the list of links shown on the landing page's Links tab. An
+	// empty list means "no link entries configured".
 	Sites []LandingPageSite `json:"sites"`
+	// Apps is the list of embedded apps shown on the landing page. Each app
+	// becomes its own tab; opening the tab runs the app's command and
+	// iframes its localhost port. An empty list means "no app tabs".
+	Apps []LandingPageApp `json:"apps"`
+}
+
+// Configured reports whether the landing page has anything to show — at
+// least one site link or one app tab. The browser launch logic uses this
+// to decide whether the Fleet Launch page is a valid target.
+func (lp LandingPageCustomizations) Configured() bool {
+	return len(lp.Sites) > 0 || len(lp.Apps) > 0
+}
+
+// LandingPageApp is a single embedded app shown as a tab on the landing
+// page. Opening the tab starts the app (if its port isn't already
+// answering) and iframes http://localhost:<port>.
+type LandingPageApp struct {
+	// Title is the label shown on the app's tab.
+	Title string `json:"title"`
+	// Command is a bash command that starts the app. It is run the first
+	// time the tab is opened, unless the app's port is already reachable
+	// (so a second open or a browser relaunch doesn't double-start it). An
+	// empty command means "the app is already running; just iframe it".
+	Command string `json:"command"`
+	// Port is the localhost port the app serves on. The tab iframes
+	// http://localhost:<port> once it answers.
+	Port int `json:"port"`
 }
 
 // LandingPageSite is a single entry on the browser landing page.

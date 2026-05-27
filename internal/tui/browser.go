@@ -175,7 +175,7 @@ func openBrowserProxyCmd(
 		initialURL := defaultBrowserURL
 		if fc, err := devcontainer.LoadFleetCustomizations(workspaceDir); err == nil {
 			hasURL := fc.Browser.InitialURL != ""
-			hasLanding := len(fc.Browser.LandingPage.Sites) > 0
+			hasLanding := fc.Browser.LandingPage.Configured()
 			useLanding := shouldUseLandingPage(hasURL, hasLanding, preferFleetLaunch)
 
 			switch {
@@ -254,7 +254,7 @@ func bothBrowserTargets(workspaceDir string) (initialURL string, both bool) {
 		return "", false
 	}
 	initialURL = fc.Browser.InitialURL
-	return initialURL, initialURL != "" && len(fc.Browser.LandingPage.Sites) > 0
+	return initialURL, initialURL != "" && fc.Browser.LandingPage.Configured()
 }
 
 // shouldUseLandingPage decides whether the browser should open the Fleet
