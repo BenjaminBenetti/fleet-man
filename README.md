@@ -143,6 +143,13 @@ ignores the rest.
               "url": "http://localhost:3000",
               "healthCheck": "http://localhost:3000/healthz"
             }
+          ],
+          "apps": [
+            {
+              "title": "Logs",
+              "command": "docker run -d -p 16768:8080 -v /var/run/docker.sock:/var/run/docker.sock amir20/dozzle:latest",
+              "port": 16768
+            }
           ]
         }
       }
@@ -172,11 +179,42 @@ entry has:
   reachable; a healthy service shows a green heart, an unreachable one a red
   skull, and hovering reveals the HTTP status (optional).
 
+### `browser.landingPage.apps`
+
+Embedded apps shown as extra tabs on the landing page, alongside the Links
+tab. Each app gets its own tab; opening it starts the app inside the
+instance and embeds it in an iframe. This is how you surface a web UI that
+lives in the instance — a log viewer, a database console, a build
+dashboard — without leaving Fleet Launch. Each entry has:
+
+- `title` — the label shown on the app's tab.
+- `command` — a bash command that starts the app. It runs the first time
+  the tab is opened, unless the app's `port` is already answering (so a
+  second open or a browser relaunch won't double-start it). The command is
+  started in the background, so it can be a blocking server or a
+  self-detaching one like `docker run -d`. Optional — omit it for an app
+  that is already running and only needs to be embedded.
+- `port` — the localhost port the app serves on. Once it answers, the tab
+  iframes `http://localhost:<port>`; if it never comes up, the tab shows an
+  error instead.
+
+For example, to replace Fleet's former built-in Dozzle log viewer:
+
+```jsonc
+"apps": [
+  {
+    "title": "Logs",
+    "command": "docker run -d -p 16768:8080 -v /var/run/docker.sock:/var/run/docker.sock amir20/dozzle:latest",
+    "port": 16768
+  }
+]
+```
+
 ### Precedence: `initialUrl` vs. the landing page
 
-When a devcontainer.json sets **both** `initialUrl` and a `landingPage.sites`
-list, the per-fleet **Prefer Fleet Launch** setting decides which the browser
-opens to:
+When a devcontainer.json sets **both** `initialUrl` and a landing page (any
+`landingPage.sites` or `landingPage.apps`), the per-fleet **Prefer Fleet
+Launch** setting decides which the browser opens to:
 
 - off — `initialUrl` wins.
 - on — the Fleet Launch landing page wins.

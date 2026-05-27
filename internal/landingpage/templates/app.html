@@ -1,0 +1,14 @@
+{{/*
+  App-tab fragment, loaded by htmx the first time an app's tab is clicked.
+  handleApp starts the app's command inside the instance (if its port isn't
+  already answering) and renders either the iframe pointing at it or an
+  error.
+*/ -}}
+{{if .Err -}}
+<div class="rounded-lg border border-[var(--color-unhealthy)] bg-[var(--color-surface)] p-4 text-sm text-[var(--color-fg)]">
+  Failed to start {{.Title}}: {{.Err}}
+</div>
+{{- else -}}
+<iframe src="{{.URL}}" title="{{.Title}}"
+        class="block h-[calc(100vh-110px)] w-full border-0 bg-[var(--color-surface)]"></iframe>
+{{- end}}

@@ -112,6 +112,65 @@ func TestLoadFleetCustomizationsLandingPageSites(t *testing.T) {
 	}
 }
 
+// TestLoadFleetCustomizationsLandingPageApps verifies the landingPage apps
+// list is read out of the customizations.fleet.browser block, including
+// the command and port fields, and that Configured reflects an apps-only
+// config.
+func TestLoadFleetCustomizationsLandingPageApps(t *testing.T) {
+	dir := t.TempDir()
+	writeDevcontainer(t, dir, `{
+		"customizations": {
+			"fleet": {
+				"browser": {
+					"landingPage": {
+						"apps": [
+							{
+								"title": "Logs",
+								"command": "docker run -d -p 16768:8080 amir20/dozzle:latest",
+								"port": 16768
+							},
+							{
+								"title": "Already up"
+							}
+						]
+					}
+				}
+			}
+		}
+	}`)
+
+	fc, err := LoadFleetCustomizations(dir)
+	if err != nil {
+		t.Fatalf("LoadFleetCustomizations = %v, want nil", err)
+	}
+
+	apps := fc.Browser.LandingPage.Apps
+	if got, want := len(apps), 2; got != want {
+		t.Fatalf("len(Apps) = %d, want %d", got, want)
+	}
+
+	first := apps[0]
+	if first.Title != "Logs" {
+		t.Errorf("Apps[0].Title = %q, want %q", first.Title, "Logs")
+	}
+	if first.Command != "docker run -d -p 16768:8080 amir20/dozzle:latest" {
+		t.Errorf("Apps[0].Command = %q, want the dozzle run command", first.Command)
+	}
+	if first.Port != 16768 {
+		t.Errorf("Apps[0].Port = %d, want %d", first.Port, 16768)
+	}
+
+	// Optional fields left unset surface as the zero value.
+	if second := apps[1]; second.Command != "" || second.Port != 0 {
+		t.Errorf("Apps[1] optional fields = %q/%d, want empty/0", second.Command, second.Port)
+	}
+
+	// A landing page with only apps (no sites) is still configured.
+	if !fc.Browser.LandingPage.Configured() {
+		t.Error("Configured() = false for an apps-only landing page, want true")
+	}
+}
+
 // TestLoadFleetCustomizationsNoLandingPageIsZero verifies a browser block
 // without a landingPage yields an empty sites list rather than an error.
 func TestLoadFleetCustomizationsNoLandingPageIsZero(t *testing.T) {

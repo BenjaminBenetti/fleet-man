@@ -27,9 +27,9 @@
 
       <nav class="tabs">
         <button class="tab is-active" data-tab="links">Links</button>
-        {{- if .Docker}}
-        <button class="tab" data-tab="docker"
-                hx-get="/docker" hx-target="#docker-panel" hx-swap="innerHTML" hx-trigger="click once">Docker</button>
+        {{- range $i, $app := .Apps}}
+        <button class="tab" data-tab="app-{{$i}}"
+                hx-get="/app/{{$i}}" hx-target="#app-panel-{{$i}}" hx-swap="innerHTML" hx-trigger="click once">{{$app.Title}}</button>
         {{- end}}
       </nav>
     </header>
@@ -68,9 +68,9 @@
       {{- end}}
       </div>
 
-      {{- if .Docker}}
-      <div id="docker-panel" data-tab-panel="docker" class="hidden full-bleed -mb-8">
-        <p class="text-sm text-[var(--color-fg-muted)]">Starting Dozzle…</p>
+      {{- range $i, $app := .Apps}}
+      <div id="app-panel-{{$i}}" data-tab-panel="app-{{$i}}" class="hidden full-bleed -mb-8">
+        <p class="text-sm text-[var(--color-fg-muted)]">Starting {{$app.Title}}…</p>
       </div>
       {{- end}}
     </main>
