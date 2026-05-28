@@ -5,6 +5,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -15,6 +16,21 @@ type containerController interface {
 
 var newClient = func(backendType fleet.BackendType) containerController {
 	return backendutil.New(backendType, false)
+}
+
+// postStartHook runs after a successful container Start to set up
+// in-container scaffolding — today, staging the fleet-launch binary so
+// later in-container subcommands have something to invoke. Failures are
+// surfaced as warnings rather than failing the start; the browser-open
+// path stages on demand as a backstop.
+//
+// It is a package-level var so tests can replace it with a no-op
+// (a real call would need a host backend + a real container).
+var postStartHook = func(fleetName string, instance *fleet.Instance) {
+	b := backendutil.NewForInstance(instance, false)
+	if _, err := fleetlaunch.EnsureFresh(b, instance.WorkspaceDir, nil); err != nil {
+		state.WriteWarn(fleetName, instance.Name, fmt.Sprintf("stage fleet-launch: %v", err))
+	}
 }
 
 type Result struct {
@@ -91,6 +107,7 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 		if err := instanceBackend.Start(instance.ContainerID); err != nil {
 			return nil, fmt.Errorf("start instance %s/%s: %w", fleetName, instanceName, err)
 		}
+		postStartHook(fleetName, instance)
 	default:
 		return nil, fmt.Errorf("unsupported target status %q", targetStatus)
 	}

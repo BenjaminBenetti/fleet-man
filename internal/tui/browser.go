@@ -13,6 +13,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/landingpage"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -31,12 +32,14 @@ const browserProxyPort = 58888
 // an initialUrl (see customizations.fleet.browser.initialUrl).
 const defaultBrowserURL = "about:blank"
 
-// landingPageRemotePath is where fleet-man's own binary is copied inside
-// the container to serve the browser landing page, and landingPagePidPath
-// tracks the running server's PID for idempotent (re)starts.
+// landingPagePidPath and landingPageLogPath track the in-container
+// landing-page server fleet-launch hosts. They are namespaced under
+// fleet-launch so future in-container services (each fronted by its
+// own subcommand of the staged binary) can claim their own /tmp paths
+// without colliding. The binary itself lives at fleetlaunch.RemotePath.
 const (
-	landingPageRemotePath = "/tmp/fleet-landing-page"
-	landingPagePidPath    = "/tmp/fleet-landing-page.pid"
+	landingPagePidPath = "/tmp/fleet-launch-landingpage.pid"
+	landingPageLogPath = "/tmp/fleet-launch-landingpage.log"
 )
 
 // ===========================================
@@ -325,60 +328,103 @@ func ensureProxyRunning(instanceBackend backend.Backend, workspaceDir string) er
 	return nil
 }
 
-// ensureLandingPageRunning injects fleet-man's own binary into the
-// container and starts it as `fleet landing-page` on the landing page
-// port. The browser then opens to it through the same privoxy proxy used
-// for all container traffic.
+// ensureLandingPageRunning makes sure the in-container fleet-launch
+// binary is up to date and the landing-page server it hosts is alive.
+// The browser then opens to it through the same privoxy proxy used for
+// all container traffic.
 //
-// It is idempotent: when a landing page process is already running
-// (tracked via pidfile) it returns without re-copying the binary, which
-// also avoids the ETXTBSY that would result from overwriting the running
-// executable. fleet-man only ever serves one landing page per container,
-// so the fixed /tmp paths are safe.
+// Staging the binary is delegated to fleetlaunch.EnsureFresh, which
+// handles the version check + copy. The landing-page-specific pieces —
+// is the server alive, kill the running server before a refresh so the
+// new code actually takes effect, start a fresh server — live here
+// because they are scoped to this particular in-container service. The
+// fleet-launch binary may host more services later; each will own its
+// own pidfile under the /tmp/fleet-launch-* namespace.
 func ensureLandingPageRunning(instanceBackend backend.Backend, workspaceDir string) error {
-	// Already running? Leave it be.
-	check := fmt.Sprintf(`[ -f %s ] && kill -0 "$(cat %s)" 2>/dev/null && echo RUNNING || echo STOPPED`,
-		landingPagePidPath, landingPagePidPath)
-	out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", check}).CombinedOutput()
+	running, err := landingPageProcessAlive(instanceBackend, workspaceDir)
 	if err != nil {
-		return fmt.Errorf("check status: %w (%s)", err, strings.TrimSpace(string(out)))
+		return err
 	}
-	if strings.Contains(string(out), "RUNNING") {
+
+	// Refresh the staged binary if needed. If the landing-page server is
+	// up when we decide to refresh, stop it first — a running process
+	// keeps its old executable mmap'd and otherwise wouldn't pick up the
+	// new code on the next start.
+	refreshed, err := fleetlaunch.EnsureFresh(instanceBackend, workspaceDir, func() error {
+		if !running {
+			return nil
+		}
+		if err := stopLandingPage(instanceBackend, workspaceDir); err != nil {
+			return err
+		}
+		running = false
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	if running && !refreshed {
 		return nil
 	}
 
-	// Stream this fleet binary into the container over stdin. devcontainer
-	// exec allocates no TTY, so the bytes pass through unmangled.
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("locate fleet binary: %w", err)
-	}
-	bin, err := os.Open(self)
-	if err != nil {
-		return fmt.Errorf("open fleet binary: %w", err)
-	}
-	defer bin.Close()
-
-	copyScript := fmt.Sprintf(`cat > %s && chmod +x %s`, landingPageRemotePath, landingPageRemotePath)
-	copyCmd := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", copyScript})
-	copyCmd.Stdin = bin
-	if out, err := copyCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("copy fleet binary: %w (%s)", err, strings.TrimSpace(string(out)))
-	}
-
-	// Start it detached on the landing page port. nohup + redirected stdio
-	// lets the server outlive this exec session; the workspace defaults to
-	// the exec's working dir (the container's workspace folder), so the
-	// server reads the same devcontainer.json fleet just loaded.
-	startScript := fmt.Sprintf(
-		`nohup %s landing-page --port %d --workspace . >/tmp/fleet-landing-page.log 2>&1 & echo $! > %s`,
-		landingPageRemotePath, landingpage.DefaultPort, landingPagePidPath)
-	if out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", startScript}).CombinedOutput(); err != nil {
-		return fmt.Errorf("start server: %w (%s)", err, strings.TrimSpace(string(out)))
+	if err := startLandingPage(instanceBackend, workspaceDir); err != nil {
+		return err
 	}
 
 	// Give the server a moment to bind before the browser hits it.
 	time.Sleep(500 * time.Millisecond)
+	return nil
+}
+
+// landingPageProcessAlive reports whether the in-container landing-page
+// server is still serving — i.e. the pidfile exists and the PID it names
+// is alive. A missing pidfile or a stale one (process gone) both read as
+// "not running".
+func landingPageProcessAlive(instanceBackend backend.Backend, workspaceDir string) (bool, error) {
+	check := fmt.Sprintf(`[ -f %s ] && kill -0 "$(cat %s)" 2>/dev/null && echo RUNNING || echo STOPPED`,
+		landingPagePidPath, landingPagePidPath)
+	out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", check}).CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("check status: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return strings.Contains(string(out), "RUNNING"), nil
+}
+
+// stopLandingPage signals the in-container landing-page server to exit
+// and clears its pidfile. It waits briefly for the process to actually
+// die so the follow-up start isn't racing the dying server for the port.
+// Missing pidfile or already-dead process are both fine — the goal state
+// is "no server running", not "we killed something".
+func stopLandingPage(instanceBackend backend.Backend, workspaceDir string) error {
+	script := fmt.Sprintf(`
+pid="$(cat %s 2>/dev/null)"
+if [ -n "$pid" ]; then
+  kill "$pid" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+fi
+rm -f %s`, landingPagePidPath, landingPagePidPath)
+	if out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", script}).CombinedOutput(); err != nil {
+		return fmt.Errorf("stop landing page: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// startLandingPage launches the in-container fleet binary as the
+// landing-page server, detached so it outlives this exec session. The
+// workspace flag defaults to "." — the exec runs in the container's
+// workspace folder, so the server reads the same devcontainer.json this
+// process just resolved.
+func startLandingPage(instanceBackend backend.Backend, workspaceDir string) error {
+	startScript := fmt.Sprintf(
+		`nohup %s landing-page --port %d --workspace . >%s 2>&1 & echo $! > %s`,
+		fleetlaunch.RemotePath, landingpage.DefaultPort, landingPageLogPath, landingPagePidPath)
+	if out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", startScript}).CombinedOutput(); err != nil {
+		return fmt.Errorf("start server: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
 	return nil
 }
 

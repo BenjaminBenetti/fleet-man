@@ -10,6 +10,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -92,6 +93,14 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) error {
 	if err != nil {
 		setFailed(fleetName, destInstance, err)
 		return err
+	}
+
+	// Stage the fleet-launch binary into the clone the same way Up does
+	// for fresh instances — the source's copy doesn't carry over because
+	// /tmp isn't in the committed image layer. Non-fatal for the same
+	// reason as in Run.
+	if _, err := fleetlaunch.EnsureFresh(instanceBackend, destWorkspaceDir, nil); err != nil {
+		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("stage fleet-launch: %v", err))
 	}
 
 	// Materialise post-clone symlinks the same way Up does so agent

@@ -132,11 +132,20 @@ func TestStartInstanceNoOpsWhenAlreadyRunning(t *testing.T) {
 	}
 }
 
+// stubLifecycleClient swaps the package-level client + post-start hook
+// for test doubles. Both are reset together because every transition
+// test goes through the same path: build a client, call Start/Stop, run
+// the post-start hook. Letting the real hook run would have it reach
+// for a host backend and a real container, neither of which exists in
+// these tests.
 func stubLifecycleClient(client containerController) func() {
-	prev := newClient
+	prevClient := newClient
+	prevHook := postStartHook
 	newClient = func(backendType fleet.BackendType) containerController { return client }
+	postStartHook = func(string, *fleet.Instance) {}
 	return func() {
-		newClient = prev
+		newClient = prevClient
+		postStartHook = prevHook
 	}
 }
 

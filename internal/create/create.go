@@ -16,6 +16,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	mountresolver "github.com/BenjaminBenetti/fleet-man/internal/mounts/resolver"
 	"github.com/BenjaminBenetti/fleet-man/internal/startup"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -83,6 +84,15 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 	if err != nil {
 		setFailed(fleetName, instanceName, err)
 		return err
+	}
+
+	// Stage the fleet-launch binary into the container so its
+	// in-container subcommands (landing-page server, etc.) are ready
+	// without waiting for the first browser open. Non-fatal: the
+	// browser-open path stages on demand too, so a failure here just
+	// defers the work, it doesn't break the instance.
+	if _, err := fleetlaunch.EnsureFresh(instanceBackend, wsDir, nil); err != nil {
+		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("stage fleet-launch: %v", err))
 	}
 
 	// Materialise the post-Up symlinks for any single-file mounts.
