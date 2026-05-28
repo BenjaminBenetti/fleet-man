@@ -12,7 +12,7 @@ import (
 // browser landing page (see internal/landingpage and the browser launch
 // flow). It is hidden from --help because running it on the host is
 // meaningless — it reads the local devcontainer.json's
-// customizations.fleet.browser.landingPage block and serves it.
+// customizations.fleet.fleetLaunch block and serves it.
 func newLandingPageCmd() *cobra.Command {
 	var port int
 	var workspace string

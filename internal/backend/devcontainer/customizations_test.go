@@ -54,29 +54,27 @@ func TestLoadFleetCustomizationsInitialURL(t *testing.T) {
 	}
 }
 
-// TestLoadFleetCustomizationsLandingPageSites verifies the landingPage
-// sites list is read out of the customizations.fleet.browser block,
-// including the subTitle and healthCheck fields.
-func TestLoadFleetCustomizationsLandingPageSites(t *testing.T) {
+// TestLoadFleetCustomizationsFleetLaunchSites verifies the fleetLaunch
+// sites list is read out of the customizations.fleet block, including
+// the subTitle and healthCheck fields.
+func TestLoadFleetCustomizationsFleetLaunchSites(t *testing.T) {
 	dir := t.TempDir()
 	writeDevcontainer(t, dir, `{
 		"customizations": {
 			"fleet": {
-				"browser": {
-					"landingPage": {
-						"sites": [
-							{
-								"title": "API",
-								"subTitle": "REST backend",
-								"url": "http://localhost:3000",
-								"healthCheck": "http://localhost:3000/healthz"
-							},
-							{
-								"title": "Docs",
-								"url": "http://localhost:8080"
-							}
-						]
-					}
+				"fleetLaunch": {
+					"sites": [
+						{
+							"title": "API",
+							"subTitle": "REST backend",
+							"url": "http://localhost:3000",
+							"healthCheck": "http://localhost:3000/healthz"
+						},
+						{
+							"title": "Docs",
+							"url": "http://localhost:8080"
+						}
+					]
 				}
 			}
 		}
@@ -87,7 +85,7 @@ func TestLoadFleetCustomizationsLandingPageSites(t *testing.T) {
 		t.Fatalf("LoadFleetCustomizations = %v, want nil", err)
 	}
 
-	sites := fc.Browser.LandingPage.Sites
+	sites := fc.FleetLaunch.Sites
 	if got, want := len(sites), 2; got != want {
 		t.Fatalf("len(Sites) = %d, want %d", got, want)
 	}
@@ -112,28 +110,26 @@ func TestLoadFleetCustomizationsLandingPageSites(t *testing.T) {
 	}
 }
 
-// TestLoadFleetCustomizationsLandingPageApps verifies the landingPage apps
-// list is read out of the customizations.fleet.browser block, including
-// the command and port fields, and that Configured reflects an apps-only
-// config.
-func TestLoadFleetCustomizationsLandingPageApps(t *testing.T) {
+// TestLoadFleetCustomizationsFleetLaunchApps verifies the fleetLaunch
+// apps list is read out of the customizations.fleet block, including
+// the command and port fields, and that Configured reflects an
+// apps-only config.
+func TestLoadFleetCustomizationsFleetLaunchApps(t *testing.T) {
 	dir := t.TempDir()
 	writeDevcontainer(t, dir, `{
 		"customizations": {
 			"fleet": {
-				"browser": {
-					"landingPage": {
-						"apps": [
-							{
-								"title": "Logs",
-								"command": "docker run -d -p 16768:8080 amir20/dozzle:latest",
-								"port": 16768
-							},
-							{
-								"title": "Already up"
-							}
-						]
-					}
+				"fleetLaunch": {
+					"apps": [
+						{
+							"title": "Logs",
+							"command": "docker run -d -p 16768:8080 amir20/dozzle:latest",
+							"port": 16768
+						},
+						{
+							"title": "Already up"
+						}
+					]
 				}
 			}
 		}
@@ -144,7 +140,7 @@ func TestLoadFleetCustomizationsLandingPageApps(t *testing.T) {
 		t.Fatalf("LoadFleetCustomizations = %v, want nil", err)
 	}
 
-	apps := fc.Browser.LandingPage.Apps
+	apps := fc.FleetLaunch.Apps
 	if got, want := len(apps), 2; got != want {
 		t.Fatalf("len(Apps) = %d, want %d", got, want)
 	}
@@ -165,15 +161,15 @@ func TestLoadFleetCustomizationsLandingPageApps(t *testing.T) {
 		t.Errorf("Apps[1] optional fields = %q/%d, want empty/0", second.Command, second.Port)
 	}
 
-	// A landing page with only apps (no sites) is still configured.
-	if !fc.Browser.LandingPage.Configured() {
-		t.Error("Configured() = false for an apps-only landing page, want true")
+	// A Fleet Launch with only apps (no sites) is still configured.
+	if !fc.FleetLaunch.Configured() {
+		t.Error("Configured() = false for an apps-only Fleet Launch, want true")
 	}
 }
 
-// TestLoadFleetCustomizationsNoLandingPageIsZero verifies a browser block
-// without a landingPage yields an empty sites list rather than an error.
-func TestLoadFleetCustomizationsNoLandingPageIsZero(t *testing.T) {
+// TestLoadFleetCustomizationsNoFleetLaunchIsZero verifies a fleet block
+// without a fleetLaunch yields an empty sites list rather than an error.
+func TestLoadFleetCustomizationsNoFleetLaunchIsZero(t *testing.T) {
 	dir := t.TempDir()
 	writeDevcontainer(t, dir, `{
 		"customizations": {
@@ -185,7 +181,7 @@ func TestLoadFleetCustomizationsNoLandingPageIsZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFleetCustomizations = %v, want nil", err)
 	}
-	if got := len(fc.Browser.LandingPage.Sites); got != 0 {
+	if got := len(fc.FleetLaunch.Sites); got != 0 {
 		t.Errorf("len(Sites) = %d, want 0", got)
 	}
 }

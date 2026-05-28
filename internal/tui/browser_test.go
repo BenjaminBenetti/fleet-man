@@ -25,10 +25,10 @@ func writeWorkspaceDevcontainer(t *testing.T, dir, contents string) {
 }
 
 const bothTargetsDevcontainer = `{
-  "customizations": { "fleet": { "browser": {
-    "initialUrl": "https://example.com",
-    "landingPage": { "sites": [ { "title": "API", "url": "http://localhost:3000" } ] }
-  } } }
+  "customizations": { "fleet": {
+    "browser": { "initialUrl": "https://example.com" },
+    "fleetLaunch": { "sites": [ { "title": "API", "url": "http://localhost:3000" } ] }
+  } }
 }`
 
 // TestBothBrowserTargets verifies detection of "both initialUrl and a
@@ -51,7 +51,7 @@ func TestBothBrowserTargets(t *testing.T) {
 	})
 	t.Run("only landing", func(t *testing.T) {
 		dir := t.TempDir()
-		writeWorkspaceDevcontainer(t, dir, `{"customizations":{"fleet":{"browser":{"landingPage":{"sites":[{"title":"A","url":"u"}]}}}}}`)
+		writeWorkspaceDevcontainer(t, dir, `{"customizations":{"fleet":{"fleetLaunch":{"sites":[{"title":"A","url":"u"}]}}}}`)
 		if _, both := bothBrowserTargets(dir); both {
 			t.Fatalf("both = true, want false (only landing)")
 		}

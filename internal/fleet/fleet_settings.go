@@ -42,8 +42,8 @@ type FleetSettings struct {
 
 	// PreferFleetLaunch controls which page the built-in browser opens to
 	// when a workspace's devcontainer.json configures BOTH a
-	// customizations.fleet.browser.initialUrl AND a landingPage.sites
-	// list. When only one of the two is configured, it has no effect.
+	// customizations.fleet.browser.initialUrl AND a fleetLaunch block.
+	// When only one of the two is configured, it has no effect.
 	//
 	// It is a pointer so "never set" (nil) is distinct from an explicit
 	// false: the first time the browser is opened on a fleet whose
