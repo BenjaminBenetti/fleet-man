@@ -95,12 +95,17 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) error {
 		return err
 	}
 
-	// Stage the fleet-launch binary into the clone the same way Up does
-	// for fresh instances — the source's copy doesn't carry over because
-	// /tmp isn't in the committed image layer. Non-fatal for the same
-	// reason as in Run.
+	// Re-stage the fleet-launch binary and rc in the clone. /usr/bin/fleet
+	// and ~/.fleet/fleet.rc both ride along in the docker commit, so the clone
+	// inherits whatever the source had — which may be stale if the host
+	// has been updated since the source was staged. EnsureFresh skips
+	// when the binary already matches; EnsureFleetRC always rewrites,
+	// which is cheap (small file, one exec). Non-fatal like in Run.
 	if _, err := fleetlaunch.EnsureFresh(instanceBackend, destWorkspaceDir, nil); err != nil {
 		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("stage fleet-launch: %v", err))
+	}
+	if err := fleetlaunch.EnsureFleetRC(instanceBackend, destWorkspaceDir, homeDirForFleet(fleetName)); err != nil {
+		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("stage fleet.rc: %v", err))
 	}
 
 	// Materialise post-clone symlinks the same way Up does so agent

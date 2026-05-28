@@ -142,7 +142,7 @@ func stubLifecycleClient(client containerController) func() {
 	prevClient := newClient
 	prevHook := postStartHook
 	newClient = func(backendType fleet.BackendType) containerController { return client }
-	postStartHook = func(string, *fleet.Instance) {}
+	postStartHook = func(string, *fleet.Instance, string) {}
 	return func() {
 		newClient = prevClient
 		postStartHook = prevHook

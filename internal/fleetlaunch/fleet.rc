@@ -1,0 +1,12 @@
+# fleet.rc
+#
+# Sourced automatically from ~/.bashrc inside fleet-managed
+# devcontainers. Exposes convenience aliases for the in-container
+# `fleet` binary.
+#
+# fleet-man rewrites this file every time it stages the fleet binary
+# into the container, so the rc and the binary stay in lockstep. Don't
+# edit this file directly — your changes will be overwritten on the
+# next instance start.
+
+# (Aliases for fleet subcommands will be added here in a future change.)

@@ -95,6 +95,14 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("stage fleet-launch: %v", err))
 	}
 
+	// Stage fleet.rc into the container user's home so interactive
+	// shells can source fleet-aware aliases. Respects the fleet's
+	// HomeDir setting; empty falls back to fleetlaunch.DefaultHomeDir.
+	// Non-fatal for the same reason as the binary stage.
+	if err := fleetlaunch.EnsureFleetRC(instanceBackend, wsDir, homeDirForFleet(fleetName)); err != nil {
+		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("stage fleet.rc: %v", err))
+	}
+
 	// Materialise the post-Up symlinks for any single-file mounts.
 	// Failure is non-fatal — the instance is still usable; the agent
 	// will just have to log in fresh — so we surface the error as a
@@ -370,6 +378,24 @@ func repoFromRemoteURL(remoteURL string) string {
 	}
 
 	return remoteURL
+}
+
+// homeDirForFleet looks up the named fleet's persisted HomeDir
+// setting, returning empty when state can't be loaded or the fleet
+// isn't recorded yet. Callers pass the result straight to
+// fleetlaunch.EnsureFleetRC, which substitutes its DefaultHomeDir
+// when given empty — so missing state silently falls back rather
+// than failing the stage.
+func homeDirForFleet(fleetName string) string {
+	st, err := state.Load()
+	if err != nil {
+		return ""
+	}
+	f, ok := st.Fleets[fleetName]
+	if !ok {
+		return ""
+	}
+	return f.Settings.HomeDir
 }
 
 func setFailed(fleetName, instanceName string, origErr error) {
