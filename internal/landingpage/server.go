@@ -1,10 +1,10 @@
-// Package landingpage serves fleet-man's built-in browser landing page —
+// Package landingpage serves fleet-man's built-in Fleet Launch page —
 // a directory of links to the dev services running inside an instance.
 //
-// The page is configured by the customizations.fleet.browser.landingPage
-// block in a repo's devcontainer.json. fleet-man injects its own binary
-// into the instance and runs it as `fleet landing-page`; that process
-// serves this page on a fixed port, and the built-in browser opens to it.
+// The page is configured by the customizations.fleet.fleetLaunch block
+// in a repo's devcontainer.json. fleet-man injects its own binary into
+// the instance and runs it as `fleet landing-page`; that process serves
+// this page on a fixed port, and the built-in browser opens to it.
 package landingpage
 
 import (
@@ -92,8 +92,8 @@ func Run(cfg Config) error {
 	router.SetHTMLTemplate(tmpl)
 
 	srv := &server{
-		sites:  fc.Browser.LandingPage.Sites,
-		apps:   fc.Browser.LandingPage.Apps,
+		sites:  fc.FleetLaunch.Sites,
+		apps:   fc.FleetLaunch.Apps,
 		client: &http.Client{Timeout: healthTimeout},
 	}
 	srv.routes(router, assets)
@@ -104,8 +104,8 @@ func Run(cfg Config) error {
 
 // server holds the request-handling state for the landing page.
 type server struct {
-	sites  []devcontainer.LandingPageSite
-	apps   []devcontainer.LandingPageApp
+	sites  []devcontainer.FleetLaunchSite
+	apps   []devcontainer.FleetLaunchApp
 	client *http.Client
 }
 
@@ -220,7 +220,7 @@ func (s *server) handleApp(c *gin.Context) {
 // `docker run -d`). Readiness is determined by polling the port, not by
 // the command's exit, so a server that never binds the port surfaces as a
 // "did not become reachable" error from handleApp rather than a hang.
-func ensureAppRunning(app devcontainer.LandingPageApp, url string) error {
+func ensureAppRunning(app devcontainer.FleetLaunchApp, url string) error {
 	if reachable(url) {
 		return nil // already running
 	}

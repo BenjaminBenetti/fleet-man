@@ -5,6 +5,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -15,6 +16,27 @@ type containerController interface {
 
 var newClient = func(backendType fleet.BackendType) containerController {
 	return backendutil.New(backendType, false)
+}
+
+// postStartHook runs after a successful container Start to set up
+// in-container scaffolding: the fleet-launch binary so later
+// subcommands have something to invoke, and the fleet.rc so
+// interactive shells can source fleet-aware aliases. homeDir is the
+// fleet's persisted HomeDir setting (empty falls back to
+// fleetlaunch.DefaultHomeDir). Failures on either step are surfaced
+// as warnings rather than failing the start; the browser-open path
+// stages the binary on demand as a backstop.
+//
+// It is a package-level var so tests can replace it with a no-op
+// (a real call would need a host backend + a real container).
+var postStartHook = func(fleetName string, instance *fleet.Instance, homeDir string) {
+	b := backendutil.NewForInstance(instance, false)
+	if _, err := fleetlaunch.EnsureFresh(b, instance.WorkspaceDir, nil); err != nil {
+		state.WriteWarn(fleetName, instance.Name, fmt.Sprintf("stage fleet-launch: %v", err))
+	}
+	if err := fleetlaunch.EnsureFleetRC(b, instance.WorkspaceDir, homeDir); err != nil {
+		state.WriteWarn(fleetName, instance.Name, fmt.Sprintf("stage fleet.rc: %v", err))
+	}
 }
 
 type Result struct {
@@ -91,6 +113,13 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 		if err := instanceBackend.Start(instance.ContainerID); err != nil {
 			return nil, fmt.Errorf("start instance %s/%s: %w", fleetName, instanceName, err)
 		}
+		// Resolve the fleet's persisted container-home for the hook; empty
+		// is fine — fleetlaunch substitutes its own default.
+		var homeDir string
+		if f, ok := st.Fleets[fleetName]; ok {
+			homeDir = f.Settings.HomeDir
+		}
+		postStartHook(fleetName, instance, homeDir)
 	default:
 		return nil, fmt.Errorf("unsupported target status %q", targetStatus)
 	}

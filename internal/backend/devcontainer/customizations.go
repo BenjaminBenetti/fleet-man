@@ -43,6 +43,12 @@ type Customizations struct {
 type FleetCustomizations struct {
 	// Browser configures the built-in browser launch feature.
 	Browser BrowserCustomizations `json:"browser"`
+
+	// FleetLaunch configures fleet-man's built-in Fleet Launch page —
+	// a directory of links and embedded apps for the dev services
+	// running inside the instance. Sits at the same level as Browser
+	// because it is its own feature; the browser merely opens to it.
+	FleetLaunch FleetLaunchCustomizations `json:"fleetLaunch"`
 }
 
 // BrowserCustomizations configures fleet-man's built-in browser launch.
@@ -50,36 +56,32 @@ type BrowserCustomizations struct {
 	// InitialURL is the address the browser opens to instead of
 	// about:blank. An empty value means "use fleet-man's default".
 	InitialURL string `json:"initialUrl"`
-
-	// LandingPage configures fleet-man's built-in landing page — a
-	// directory of links to the dev services running inside the
-	// instance.
-	LandingPage LandingPageCustomizations `json:"landingPage"`
 }
 
-// LandingPageCustomizations configures fleet-man's built-in browser
-// landing page.
-type LandingPageCustomizations struct {
-	// Sites is the list of links shown on the landing page's Links tab. An
-	// empty list means "no link entries configured".
-	Sites []LandingPageSite `json:"sites"`
-	// Apps is the list of embedded apps shown on the landing page. Each app
-	// becomes its own tab; opening the tab runs the app's command and
-	// iframes its localhost port. An empty list means "no app tabs".
-	Apps []LandingPageApp `json:"apps"`
+// FleetLaunchCustomizations configures fleet-man's built-in Fleet
+// Launch page.
+type FleetLaunchCustomizations struct {
+	// Sites is the list of links shown on the Fleet Launch page's Links
+	// tab. An empty list means "no link entries configured".
+	Sites []FleetLaunchSite `json:"sites"`
+	// Apps is the list of embedded apps shown on the Fleet Launch page.
+	// Each app becomes its own tab; opening the tab runs the app's
+	// command and iframes its localhost port. An empty list means "no
+	// app tabs".
+	Apps []FleetLaunchApp `json:"apps"`
 }
 
-// Configured reports whether the landing page has anything to show — at
+// Configured reports whether Fleet Launch has anything to show — at
 // least one site link or one app tab. The browser launch logic uses this
 // to decide whether the Fleet Launch page is a valid target.
-func (lp LandingPageCustomizations) Configured() bool {
-	return len(lp.Sites) > 0 || len(lp.Apps) > 0
+func (fl FleetLaunchCustomizations) Configured() bool {
+	return len(fl.Sites) > 0 || len(fl.Apps) > 0
 }
 
-// LandingPageApp is a single embedded app shown as a tab on the landing
-// page. Opening the tab starts the app (if its port isn't already
+// FleetLaunchApp is a single embedded app shown as a tab on the Fleet
+// Launch page. Opening the tab starts the app (if its port isn't already
 // answering) and iframes http://localhost:<port>.
-type LandingPageApp struct {
+type FleetLaunchApp struct {
 	// Title is the label shown on the app's tab.
 	Title string `json:"title"`
 	// Command is a bash command that starts the app. It is run the first
@@ -92,8 +94,8 @@ type LandingPageApp struct {
 	Port int `json:"port"`
 }
 
-// LandingPageSite is a single entry on the browser landing page.
-type LandingPageSite struct {
+// FleetLaunchSite is a single entry on the Fleet Launch page.
+type FleetLaunchSite struct {
 	// Title is the primary label shown for the link.
 	Title string `json:"title"`
 	// Icon is an optional image shown before the title. Its value is used

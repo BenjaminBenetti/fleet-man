@@ -134,24 +134,24 @@ ignores the rest.
   "customizations": {
     "fleet": {
       "browser": {
-        "initialUrl": "http://localhost:3000",
-        "landingPage": {
-          "sites": [
-            {
-              "title": "API",
-              "subTitle": "REST backend",
-              "url": "http://localhost:3000",
-              "healthCheck": "http://localhost:3000/healthz"
-            }
-          ],
-          "apps": [
-            {
-              "title": "Logs",
-              "command": "docker run -d -p 16768:8080 -v /var/run/docker.sock:/var/run/docker.sock amir20/dozzle:latest",
-              "port": 16768
-            }
-          ]
-        }
+        "initialUrl": "http://localhost:3000"
+      },
+      "fleetLaunch": {
+        "sites": [
+          {
+            "title": "API",
+            "subTitle": "REST backend",
+            "url": "http://localhost:3000",
+            "healthCheck": "http://localhost:3000/healthz"
+          }
+        ],
+        "apps": [
+          {
+            "title": "Logs",
+            "command": "docker run -d -p 16768:8080 -v /var/run/docker.sock:/var/run/docker.sock amir20/dozzle:latest",
+            "port": 16768
+          }
+        ]
       }
     }
   }
@@ -164,7 +164,7 @@ The address the built-in browser (`b` in the TUI) opens to instead of
 `about:blank`. Handy for jumping straight to a dev server or app running
 inside the instance.
 
-### `browser.landingPage.sites`
+### `fleetLaunch.sites`
 
 A directory of links to the dev services running inside the instance. Each
 entry has:
@@ -179,10 +179,10 @@ entry has:
   reachable; a healthy service shows a green heart, an unreachable one a red
   skull, and hovering reveals the HTTP status (optional).
 
-### `browser.landingPage.apps`
+### `fleetLaunch.apps`
 
-Embedded apps shown as extra tabs on the landing page, alongside the Links
-tab. Each app gets its own tab; opening it starts the app inside the
+Embedded apps shown as extra tabs on the Fleet Launch page, alongside the
+Links tab. Each app gets its own tab; opening it starts the app inside the
 instance and embeds it in an iframe. This is how you surface a web UI that
 lives in the instance — a log viewer, a database console, a build
 dashboard — without leaving Fleet Launch. Each entry has:
@@ -216,14 +216,14 @@ For example, to replace Fleet's former built-in Dozzle log viewer:
 ]
 ```
 
-### Precedence: `initialUrl` vs. the landing page
+### Precedence: `initialUrl` vs. Fleet Launch
 
-When a devcontainer.json sets **both** `initialUrl` and a landing page (any
-`landingPage.sites` or `landingPage.apps`), the per-fleet **Prefer Fleet
-Launch** setting decides which the browser opens to:
+When a devcontainer.json sets **both** `initialUrl` and a Fleet Launch
+block (any `fleetLaunch.sites` or `fleetLaunch.apps`), the per-fleet
+**Prefer Fleet Launch** setting decides which the browser opens to:
 
 - off — `initialUrl` wins.
-- on — the Fleet Launch landing page wins.
+- on — the Fleet Launch page wins.
 
 The **first** time you open the browser on a fleet whose workspace has both
 configured, the TUI prompts you to choose, and saves your answer as the

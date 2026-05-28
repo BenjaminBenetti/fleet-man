@@ -16,6 +16,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	mountresolver "github.com/BenjaminBenetti/fleet-man/internal/mounts/resolver"
 	"github.com/BenjaminBenetti/fleet-man/internal/startup"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -83,6 +84,23 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 	if err != nil {
 		setFailed(fleetName, instanceName, err)
 		return err
+	}
+
+	// Stage the fleet-launch binary into the container so its
+	// in-container subcommands (landing-page server, etc.) are ready
+	// without waiting for the first browser open. Non-fatal: the
+	// browser-open path stages on demand too, so a failure here just
+	// defers the work, it doesn't break the instance.
+	if _, err := fleetlaunch.EnsureFresh(instanceBackend, wsDir, nil); err != nil {
+		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("stage fleet-launch: %v", err))
+	}
+
+	// Stage fleet.rc into the container user's home so interactive
+	// shells can source fleet-aware aliases. Respects the fleet's
+	// HomeDir setting; empty falls back to fleetlaunch.DefaultHomeDir.
+	// Non-fatal for the same reason as the binary stage.
+	if err := fleetlaunch.EnsureFleetRC(instanceBackend, wsDir, homeDirForFleet(fleetName)); err != nil {
+		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("stage fleet.rc: %v", err))
 	}
 
 	// Materialise the post-Up symlinks for any single-file mounts.
@@ -360,6 +378,24 @@ func repoFromRemoteURL(remoteURL string) string {
 	}
 
 	return remoteURL
+}
+
+// homeDirForFleet looks up the named fleet's persisted HomeDir
+// setting, returning empty when state can't be loaded or the fleet
+// isn't recorded yet. Callers pass the result straight to
+// fleetlaunch.EnsureFleetRC, which substitutes its DefaultHomeDir
+// when given empty — so missing state silently falls back rather
+// than failing the stage.
+func homeDirForFleet(fleetName string) string {
+	st, err := state.Load()
+	if err != nil {
+		return ""
+	}
+	f, ok := st.Fleets[fleetName]
+	if !ok {
+		return ""
+	}
+	return f.Settings.HomeDir
 }
 
 func setFailed(fleetName, instanceName string, origErr error) {
