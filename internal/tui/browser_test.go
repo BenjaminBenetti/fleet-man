@@ -185,3 +185,31 @@ func TestShouldUseLandingPage(t *testing.T) {
 		})
 	}
 }
+
+// TestShouldSwitchBrowser documents the control-socket open decision matrix:
+// a switch (kill + relaunch) is required only when a browser is actually
+// running for the data dir and it is not already proxied to the requesting
+// instance — with an unknown owner treated as "not this instance".
+func TestShouldSwitchBrowser(t *testing.T) {
+	cases := []struct {
+		name    string
+		running bool
+		active  string
+		key     string
+		want    bool
+	}{
+		{"none running", false, "", "fleet/b", false},
+		{"none running, stale active", false, "fleet/a", "fleet/b", false},
+		{"running, same instance", true, "fleet/b", "fleet/b", false},
+		{"running, different instance", true, "fleet/a", "fleet/b", true},
+		{"running, unknown owner", true, "", "fleet/b", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldSwitchBrowser(tc.running, tc.active, tc.key); got != tc.want {
+				t.Errorf("shouldSwitchBrowser(running=%v, active=%q, key=%q) = %v, want %v",
+					tc.running, tc.active, tc.key, got, tc.want)
+			}
+		})
+	}
+}

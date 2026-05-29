@@ -149,3 +149,31 @@ func LoadFleetCustomizations(workspaceDir string) (FleetCustomizations, error) {
 	}
 	return cfg.Customizations.Fleet, nil
 }
+
+// LoadFleetCustomizationsFromFile reads fleet-man's "customizations.fleet"
+// block from an explicit devcontainer.json at path, for callers handed a
+// concrete file (e.g. `fleet launch --config ./path/to/devcontainer.json`)
+// rather than a workspace directory to search.
+//
+// Unlike LoadFleetCustomizations, a missing file IS an error here: the path
+// was named explicitly, so its absence is a mistake the caller wants to hear
+// about rather than silently treat as "defaults". An absent customizations or
+// fleet block still surfaces as the zero value — only unset fields, not a
+// missing file, mean "use defaults". The file is parsed through the same
+// JSONC-tolerant toStrictJSON conversion as the workspace loader, so comments
+// and trailing commas are accepted.
+func LoadFleetCustomizationsFromFile(path string) (FleetCustomizations, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return FleetCustomizations{}, err
+	}
+
+	// devcontainer.json is JSONC (comments, trailing commas); reuse the
+	// same strict-JSON conversion the workspace loader and mount-conflict
+	// logic rely on.
+	var cfg devcontainerConfig
+	if err := json.Unmarshal(toStrictJSON(raw), &cfg); err != nil {
+		return FleetCustomizations{}, fmt.Errorf("parse devcontainer.json customizations: %w", err)
+	}
+	return cfg.Customizations.Fleet, nil
+}

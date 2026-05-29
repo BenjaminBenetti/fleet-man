@@ -158,7 +158,7 @@ func (fleetPage *fleetPage) updateConfirmBrowserSwitch(m *model, msg tea.Msg) te
 			// clears the flag and the mode.
 			fleetPage.dialogBrowserSwitching = true
 			m.message = ""
-			return switchBrowserCmd(m.portForwards, instanceBackend, instance, instanceKey, dataDir, f.Settings.PreferFleetLaunchEnabled())
+			return switchBrowserCmd(m.portForwards, instanceBackend, instance, instanceKey, dataDir, f.Settings.PreferFleetLaunchEnabled(), "")
 		}
 	}
 	return nil

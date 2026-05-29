@@ -80,6 +80,23 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 		return err
 	}
 
+	// Bind-mount the per-instance control directory so the host fleet TUI
+	// can create a unix socket the in-instance `fleet launch` connects to.
+	// Only devcontainer-style backends honor custom mounts; cloud-managed
+	// backends ignore them, so we skip the host-side prep for those. A
+	// failure to create the host directory is non-fatal — the instance is
+	// still usable, it just won't have in-instance control until recreated —
+	// so we surface it as a warning and continue, matching the surrounding
+	// best-effort pattern.
+	if instanceBackend.SupportsCustomMounts() {
+		mount, err := controlMount(fleetName, instanceName)
+		if err != nil {
+			state.WriteWarn(fleetName, instanceName, fmt.Sprintf("control mount: %v", err))
+		} else {
+			resolvedMounts.Mounts = append(resolvedMounts.Mounts, mount)
+		}
+	}
+
 	result, err := instanceBackend.Up(wsDir, resolvedMounts.Mounts)
 	if err != nil {
 		setFailed(fleetName, instanceName, err)

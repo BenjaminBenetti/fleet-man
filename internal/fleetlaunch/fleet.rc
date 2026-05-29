@@ -9,4 +9,7 @@
 # edit this file directly — your changes will be overwritten on the
 # next instance start.
 
-# (Aliases for fleet subcommands will be added here in a future change.)
+# fl — shorthand for Fleet Launch. With no argument it opens the interactive
+# grid of this instance's configured links and apps; `fl list` prints them; and
+# `fl <name>` launches one directly by (a unique prefix of) its name.
+alias fl='fleet launch'

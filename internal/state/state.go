@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/control"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 )
 
@@ -46,6 +47,22 @@ func WorkspacesDir() string {
 // the path manually so all warnings end up in the same well-known place.
 func WarnPath(fleetName, instanceName string) string {
 	return filepath.Join(FleetDir(), "logs", fleetName+"-"+instanceName+".warn")
+}
+
+// ControlDir returns the host directory bind-mounted into an instance to
+// carry the control socket. It is per-instance (not per-fleet) so the host
+// can tell which instance a received message came from, and it lives under
+// the instance's workspace tree so it shares that tree's lifecycle (created
+// when the instance is and cleaned up with it).
+func ControlDir(fleetName, instanceName string) string {
+	return filepath.Join(WorkspacesDir(), fleetName, instanceName, ".control")
+}
+
+// ControlSocketPath returns the host path of an instance's control socket.
+// The basename comes from control.SocketName so the host listener and the
+// in-container client agree on the same file through the bind mount.
+func ControlSocketPath(fleetName, instanceName string) string {
+	return filepath.Join(ControlDir(fleetName, instanceName), control.SocketName)
 }
 
 // WriteWarn writes warning to the instance's WarnPath. Errors are

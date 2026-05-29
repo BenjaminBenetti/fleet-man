@@ -89,6 +89,21 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) error {
 		return err
 	}
 
+	// Bind-mount the per-instance control directory into the clone, the same
+	// way Run does, so the host fleet TUI can drive the in-instance
+	// `fleet launch` browser control over a unix socket. Guard with
+	// SupportsCustomMounts (only devcontainer-style backends honor mounts)
+	// and treat a host-directory failure as non-fatal — surface a warning
+	// and keep going rather than aborting the clone.
+	if instanceBackend.SupportsCustomMounts() {
+		mount, err := controlMount(fleetName, destInstance)
+		if err != nil {
+			state.WriteWarn(fleetName, destInstance, fmt.Sprintf("control mount: %v", err))
+		} else {
+			resolvedMounts.Mounts = append(resolvedMounts.Mounts, mount)
+		}
+	}
+
 	result, err := instanceBackend.Clone(src.ContainerID, destWorkspaceDir, resolvedMounts.Mounts)
 	if err != nil {
 		setFailed(fleetName, destInstance, err)

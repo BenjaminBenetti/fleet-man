@@ -125,6 +125,14 @@ var proxySetupScript = privoxyEnsureInstalled +
 //	  | Launch browser with   |
 //	  | --proxy-server flag   |
 //	  +-----------------------+
+//
+// targetURL, when non-empty, overrides the page the browser opens to: it is
+// used verbatim as the initial URL and the config-resolution / landing-page
+// startup block is skipped entirely. This is the path taken by control-socket
+// "browser.open" requests, where the in-instance TUI has already chosen the
+// exact URL (a site link, or http://localhost:<port> for an app). An empty
+// targetURL preserves the original behaviour: resolve the page from the
+// workspace's devcontainer.json fleet customization.
 func openBrowserProxyCmd(
 	pf *portforward.Manager,
 	instanceBackend backend.Backend,
@@ -132,6 +140,7 @@ func openBrowserProxyCmd(
 	instanceKey string,
 	dataDir string,
 	preferFleetLaunch bool,
+	targetURL string,
 ) tea.Cmd {
 	// Capture values for the goroutine.
 	workspaceDir := instance.WorkspaceDir
@@ -175,8 +184,15 @@ func openBrowserProxyCmd(
 		//    binary as the landing-page server in the container. A missing
 		//    or malformed config (load error) falls back to the default
 		//    rather than blocking the launch.
+		//
+		//    When the caller supplied an explicit targetURL (a control-socket
+		//    "browser.open" request), skip all of this: the URL was already
+		//    chosen by the in-instance TUI, so there is no config to resolve
+		//    and no landing page to start.
 		initialURL := defaultBrowserURL
-		if fc, err := devcontainer.LoadFleetCustomizations(workspaceDir); err == nil {
+		if targetURL != "" {
+			initialURL = targetURL
+		} else if fc, err := devcontainer.LoadFleetCustomizations(workspaceDir); err == nil {
 			hasURL := fc.Browser.InitialURL != ""
 			hasLanding := fc.FleetLaunch.Configured()
 			useLanding := shouldUseLandingPage(hasURL, hasLanding, preferFleetLaunch)
@@ -236,7 +252,7 @@ func (fleetPage *fleetPage) startBrowser(m *model, instance *fleet.Instance, fle
 	if _, running := existingBrowserPID(dataDir); running {
 		if !multiplePerFleet && m.config != nil && m.config.BrowserSettings.AutoSwitchEnabled() {
 			m.message = fmt.Sprintf("Switching browser to %s...", instance.GetDisplayName())
-			return switchBrowserCmd(m.portForwards, b, instance, instanceKey, dataDir, preferFleetLaunch)
+			return switchBrowserCmd(m.portForwards, b, instance, instanceKey, dataDir, preferFleetLaunch, "")
 		}
 		fleetPage.mode = viewConfirmBrowserSwitch
 		fleetPage.dialogFleet = fleetName
@@ -244,7 +260,84 @@ func (fleetPage *fleetPage) startBrowser(m *model, instance *fleet.Instance, fle
 		return nil
 	}
 	m.message = fmt.Sprintf("Starting browser proxy for %s...", instance.GetDisplayName())
-	return openBrowserProxyCmd(m.portForwards, b, instance, instanceKey, dataDir, preferFleetLaunch)
+	return openBrowserProxyCmd(m.portForwards, b, instance, instanceKey, dataDir, preferFleetLaunch, "")
+}
+
+// openControlBrowserCmd builds the browser-open command for a control-socket
+// "browser.open" request: resolve the instance from instanceKey, then open the
+// proxied browser at url.
+//
+// The subtlety is which instance the existing browser (if any) is proxied to.
+// A fleet's instances share one Chrome data dir (unless MultipleBrowsersPerFleet),
+// and that one Chrome can only route through a single instance's privoxy proxy
+// at a time. There are three cases for the data dir's live browser:
+//
+//   - none running              → start a fresh proxied browser at url.
+//   - running, this instance    → forward url to it as a new tab (Chrome's
+//     singleton drops the second --proxy-server flag, but the live process
+//     already has the right proxy), which is what a plain openBrowserProxyCmd
+//     does.
+//   - running, OTHER instance   → switch: kill it and relaunch against THIS
+//     instance, then open url. Without this the URL would be forwarded into the
+//     other instance's browser, whose proxy can't reach this instance's
+//     address — the bug this guards against.
+//
+// activeBrowser records who the live browser serves (see model). An unknown
+// owner (empty) is treated as "different" and switches, which is also correct
+// after a host restart: the surviving Chrome's old proxy port is dead, so a
+// fresh relaunch is needed regardless.
+//
+// If the instance can't be found or isn't running, it returns a
+// browserProxyMsg carrying the error, which the existing page_fleet.go handler
+// surfaces as a status message — no special-casing needed at the call site.
+func (m *model) openControlBrowserCmd(instanceKey, url string) tea.Cmd {
+	fleetName, instanceName, ok := splitInstanceKey(instanceKey)
+	if !ok {
+		return func() tea.Msg {
+			return browserProxyMsg{instanceKey: instanceKey, err: fmt.Errorf("malformed instance key %q", instanceKey)}
+		}
+	}
+
+	f, ok := m.st.Fleets[fleetName]
+	if !ok {
+		return func() tea.Msg {
+			return browserProxyMsg{instanceKey: instanceKey, err: fmt.Errorf("fleet %q not found", fleetName)}
+		}
+	}
+	instance, err := f.GetInstance(instanceName)
+	if err != nil {
+		return func() tea.Msg {
+			return browserProxyMsg{instanceKey: instanceKey, err: err}
+		}
+	}
+	if instance.Status != fleet.StatusRunning {
+		return func() tea.Msg {
+			return browserProxyMsg{instanceKey: instanceKey, err: fmt.Errorf("instance %q is not running", instanceKey)}
+		}
+	}
+
+	dataDir := browserDataDir(fleetName, instance.Name, multipleBrowsersPerFleet(m))
+	b := m.instanceBackend(instance)
+
+	// If a browser is already live for this data dir but proxied to a different
+	// instance, switch it over to this one (kill + relaunch) instead of letting
+	// Chrome forward the URL into the wrong-proxied process.
+	_, running := existingBrowserPID(dataDir)
+	if shouldSwitchBrowser(running, m.activeBrowser[dataDir], instanceKey) {
+		return switchBrowserCmd(m.portForwards, b, instance, instanceKey, dataDir, false, url)
+	}
+	return openBrowserProxyCmd(m.portForwards, b, instance, instanceKey, dataDir, false, url)
+}
+
+// shouldSwitchBrowser reports whether a control-socket open for instanceKey must
+// switch the live browser (kill + relaunch) rather than reuse it. That is the
+// case only when a browser is actually running for the data dir AND it is not
+// already proxied to instanceKey — an unknown/empty recorded owner counts as
+// "not this instance" so a browser of uncertain origin (e.g. one that survived
+// a host restart with a now-dead proxy) is relaunched cleanly rather than
+// new-tabbed into.
+func shouldSwitchBrowser(running bool, activeInstanceKey, instanceKey string) bool {
+	return running && activeInstanceKey != instanceKey
 }
 
 // bothBrowserTargets reports whether the workspace's devcontainer.json
@@ -283,8 +376,9 @@ func switchBrowserCmd(
 	instanceKey string,
 	dataDir string,
 	preferFleetLaunch bool,
+	targetURL string,
 ) tea.Cmd {
-	inner := openBrowserProxyCmd(pf, instanceBackend, instance, instanceKey, dataDir, preferFleetLaunch)
+	inner := openBrowserProxyCmd(pf, instanceBackend, instance, instanceKey, dataDir, preferFleetLaunch, targetURL)
 	return func() tea.Msg {
 		if err := killExistingBrowser(dataDir); err != nil {
 			return browserProxyMsg{
