@@ -194,6 +194,17 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 			m.message = fmt.Sprintf("Browser proxy error: %v", bpm.err)
 		} else {
 			m.message = fmt.Sprintf("Browser opened (proxy on localhost:%d)", bpm.localPort)
+			// Record which instance the browser bound to this data dir now
+			// serves, so a later control-socket open for a different instance
+			// switches the browser over rather than new-tabbing into the wrong
+			// proxy. Recompute the data dir the same way the open path did.
+			if fleetName, instanceName, ok := splitInstanceKey(bpm.instanceKey); ok {
+				dataDir := browserDataDir(fleetName, instanceName, multipleBrowsersPerFleet(m))
+				if m.activeBrowser == nil {
+					m.activeBrowser = make(map[string]string)
+				}
+				m.activeBrowser[dataDir] = bpm.instanceKey
+			}
 		}
 		// Tear down the switching-spinner dialog if it was active.
 		if fleetPage.dialogBrowserSwitching {

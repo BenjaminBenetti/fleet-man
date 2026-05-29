@@ -13,11 +13,10 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
-	"os/exec"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/appstart"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
 	"github.com/gin-gonic/gin"
 )
@@ -192,72 +191,14 @@ func (s *server) handleApp(c *gin.Context) {
 		return
 	}
 	app := s.apps[i]
-	url := fmt.Sprintf("http://localhost:%d", app.Port)
 
-	if err := ensureAppRunning(app, url); err != nil {
+	// EnsureRunningOnPort starts the command if the port isn't already
+	// answering and holds until it comes up, so the browser's first paint
+	// isn't a connection-refused page. A start failure or a port that never
+	// binds both surface as a single error rendered into the fragment.
+	if err := appstart.EnsureRunningOnPort(app.Command, app.Port); err != nil {
 		c.HTML(http.StatusOK, "app.html", gin.H{"Title": app.Title, "Err": err.Error()})
 		return
 	}
-	// Hold the request open until the app is actually answering, so the
-	// browser's first paint isn't a connection-refused page.
-	if !waitForReachable(url) {
-		c.HTML(http.StatusOK, "app.html", gin.H{
-			"Title": app.Title,
-			"Err":   fmt.Sprintf("did not become reachable on port %d", app.Port),
-		})
-		return
-	}
-	c.HTML(http.StatusOK, "app.html", gin.H{"Title": app.Title, "URL": url})
-}
-
-// ensureAppRunning starts the app's command unless its port is already
-// answering. It is idempotent: an app already serving on its port is left
-// alone (so a second tab open or a browser relaunch doesn't double-start
-// it), and an app with no command relies entirely on the port poll.
-//
-// The command is started in the background and not waited on — it is
-// expected to be a long-running server (or to detach itself, e.g.
-// `docker run -d`). Readiness is determined by polling the port, not by
-// the command's exit, so a server that never binds the port surfaces as a
-// "did not become reachable" error from handleApp rather than a hang.
-func ensureAppRunning(app devcontainer.FleetLaunchApp, url string) error {
-	if reachable(url) {
-		return nil // already running
-	}
-	if strings.TrimSpace(app.Command) == "" {
-		return nil // nothing to start; rely on the port poll
-	}
-	cmd := exec.Command("bash", "-c", app.Command)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start command: %w", err)
-	}
-	return nil
-}
-
-// reachable reports whether url answers an HTTP request within a short
-// timeout. Any response (even an error status) counts as reachable — the
-// app's own server is up.
-func reachable(url string) bool {
-	client := &http.Client{Timeout: time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return true
-}
-
-// waitForReachable polls url until it answers or a deadline passes,
-// reporting whether it came up. Used to hold an app-tab request open until
-// the app's HTTP server is listening (it can take a moment to start after
-// its command is launched).
-func waitForReachable(url string) bool {
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if reachable(url) {
-			return true
-		}
-		time.Sleep(300 * time.Millisecond)
-	}
-	return false
+	c.HTML(http.StatusOK, "app.html", gin.H{"Title": app.Title, "URL": appstart.LocalURL(app.Port)})
 }

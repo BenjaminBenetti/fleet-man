@@ -41,6 +41,9 @@ fleet exec agent-1 bash
 # Open VS Code on an instance
 fleet code agent-1
 
+# Launch the in-instance link/app grid (run inside an instance)
+fleet launch
+
 # View logs
 fleet logs agent-1
 
@@ -230,6 +233,57 @@ configured, the TUI prompts you to choose, and saves your answer as the
 fleet's Prefer Fleet Launch setting. You can change it later by editing the
 fleet (`e` in the TUI). When only one of the two is configured, that one is
 used and the setting has no effect.
+
+## Fleet Launch (in-instance TUI)
+
+`fleet launch` is a small terminal UI you run **inside an instance** (over
+`fleet exec`, in a `fleet code` terminal, or any shell in the container). It
+reads the workspace's `customizations.fleet.fleetLaunch` block — the same
+`sites` and `apps` described above — and lays them out as a navigable grid of
+squares: a "Links" section for `fleetLaunch.sites` and an "Apps" section for
+`fleetLaunch.apps`.
+
+```bash
+# auto-detect .devcontainer/devcontainer.json (or ./devcontainer.json) in cwd
+fleet launch
+
+# or point it at an explicit devcontainer.json
+fleet launch --config ./path/to/devcontainer.json
+
+# print the configured links and apps (and the names you can launch), then exit
+fleet launch list
+
+# open a link or app directly by name (a unique prefix is enough), as if clicked
+fleet launch graf
+```
+
+In the grid, navigate with the arrow keys or `hjkl`, or click a square with the
+mouse; `enter` or a click activates the selected square, and `q`/`esc`/`ctrl+c`
+quits. Activating a **link** opens the host browser to its `url`; activating
+an **app** first starts the app's `command` on its `port` inside the instance
+(only if the port isn't already answering), waits for it to come up, then
+opens the host browser to `http://localhost:<port>`.
+
+`fleet launch list` prints the configured Links and Apps with their targets and
+exits — handy for discovering the names. `fleet launch <name>` performs that
+same link/app activation headlessly, without opening the grid. The name is
+matched case-insensitively against the titles: an exact title wins, otherwise a
+unique prefix is enough (so `fleet launch graf` opens "Grafana"). If a prefix
+matches more than one, the candidates are listed so you can type more.
+
+The browser lives on the **host** (it is proxied into the container by
+privoxy), so the in-instance TUI can't open it directly. Instead it drives the
+host browser over a **control socket** — a unix domain socket the host `fleet`
+TUI creates per instance and bind-mounts into the instance (the same mechanism
+as mounting `docker.sock`). The running host `fleet` TUI listens on that socket
+and opens or navigates the browser when `fleet launch` sends it a request. If
+the host `fleet` TUI isn't running, `fleet launch` still renders the grid so
+you can browse the configured options, but shows a status line noting that
+opening won't work until a host connection exists.
+
+Only instances **created or cloned after** this feature was added get the
+control-socket mount; pre-existing instances need to be recreated for
+in-instance launch to drive the host browser.
 
 ## Devcontainer BuildKit
 

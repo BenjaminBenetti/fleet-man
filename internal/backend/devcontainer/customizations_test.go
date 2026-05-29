@@ -241,3 +241,57 @@ func TestLoadFleetCustomizationsMalformedErrors(t *testing.T) {
 		t.Fatal("LoadFleetCustomizations on malformed JSON = nil, want error")
 	}
 }
+
+// TestLoadFleetCustomizationsFromFile verifies the explicit-path loader
+// parses a JSONC devcontainer.json (comments + trailing commas) with a
+// fleetLaunch block of both sites and apps.
+func TestLoadFleetCustomizationsFromFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "devcontainer.json")
+	contents := `{
+		// explicit-path config
+		"image": "ubuntu",
+		"customizations": {
+			"fleet": {
+				"fleetLaunch": {
+					"sites": [
+						{ "title": "API", "url": "http://localhost:3000" },
+					],
+					"apps": [
+						{ "title": "Web", "command": "npm start", "port": 5173 },
+					],
+				},
+			},
+		},
+	}`
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write devcontainer.json: %v", err)
+	}
+
+	fc, err := LoadFleetCustomizationsFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFleetCustomizationsFromFile = %v, want nil", err)
+	}
+	if got := len(fc.FleetLaunch.Sites); got != 1 {
+		t.Fatalf("len(Sites) = %d, want 1", got)
+	}
+	if got := fc.FleetLaunch.Sites[0].URL; got != "http://localhost:3000" {
+		t.Errorf("Sites[0].URL = %q, want http://localhost:3000", got)
+	}
+	if got := len(fc.FleetLaunch.Apps); got != 1 {
+		t.Fatalf("len(Apps) = %d, want 1", got)
+	}
+	if got := fc.FleetLaunch.Apps[0].Port; got != 5173 {
+		t.Errorf("Apps[0].Port = %d, want 5173", got)
+	}
+}
+
+// TestLoadFleetCustomizationsFromFileMissing verifies a missing explicit
+// path is an error (unlike the workspace loader, which treats absence as
+// "use defaults").
+func TestLoadFleetCustomizationsFromFileMissing(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist.json")
+	if _, err := LoadFleetCustomizationsFromFile(missing); err == nil {
+		t.Fatal("LoadFleetCustomizationsFromFile on missing file = nil, want error")
+	}
+}

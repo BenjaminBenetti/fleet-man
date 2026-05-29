@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	codespacesbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/codespaces"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/control"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
@@ -63,6 +65,21 @@ type model struct {
 
 	// Port forwarding
 	portForwards *portforward.Manager // manages active port forward processes
+
+	// activeBrowser records which instance the browser bound to a given
+	// Chrome data dir is currently proxied to: data dir → "<fleet>/<instance>".
+	// A data dir is shared across a fleet's instances (unless
+	// MultipleBrowsersPerFleet), and a Chrome process can only be proxied to one
+	// instance at a time, so a control-socket "open" for a different instance
+	// must switch the browser over rather than forward the URL into the
+	// wrong-proxied existing process. Populated on every successful browser open.
+	activeBrowser map[string]string
+
+	// control owns one control-socket listener per running instance and
+	// funnels received envelopes (e.g. an in-instance `fleet launch` TUI's
+	// "browser.open" requests) into a channel the Update loop drains. Its
+	// listener set is kept in step with the running instances by reload().
+	control *controlRegistry
 
 	// Per-instance session state: discovery, expansion, last-active
 	// session. All three are owned by the SessionStore so every read
@@ -118,6 +135,8 @@ func newModel() model {
 		activity:       NewActivityTracker(),
 		reprovisioning: &sync.Map{},
 		portForwards:   portforward.NewManager(),
+		activeBrowser:  make(map[string]string),
+		control:        newControlRegistry(),
 		sessionStore:   NewSessionStore(),
 		spinner:        spinnerModel,
 		agentSpinner:   agentSpinnerModel,
@@ -195,6 +214,13 @@ func (m *model) reload() {
 	m.st = st
 	m.config = config
 	m.err = nil
+
+	// Keep the control-socket listeners in step with the running set: start
+	// listeners for newly-running instances, drop them for stopped/gone ones.
+	// Idempotent, so funnelling every state refresh through here is cheap.
+	if m.control != nil {
+		m.control.syncRunning(st)
+	}
 
 	// Auto-collapse expanded instances that are no longer running
 	for _, ref := range m.sessionStore.ExpandedRefs() {
@@ -536,6 +562,10 @@ func (m model) Init() tea.Cmd {
 		// periodic tick that follows handles drift during the session.
 		refreshLiveStatusCmd(collectLiveStatusProbes(m.st)),
 		liveStatusPollCmd(),
+		// Drain control-socket events from in-instance senders (the listeners
+		// themselves were started by the reload() inside newModel()). The
+		// model-level Update re-arms this waiter after each event.
+		waitForControlEventCmd(m.control.events),
 		m.currentPage.Init(&m),
 	}
 	if len(m.creating) > 0 {
@@ -742,6 +772,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.reload()
 		}
 		return m, spinCmd
+
+	case controlEventMsg:
+		// An in-instance sender (e.g. a `fleet launch` TUI) wrote an Envelope
+		// to that instance's control socket. Dispatch by type, then re-arm the
+		// waiter so the single in-flight command keeps draining the channel.
+		// msg is already the concrete controlEventMsg here (the switch binds
+		// it), so convert it to the underlying controlEvent directly.
+		ev := controlEvent(msg)
+		var cmd tea.Cmd
+		switch ev.env.Type {
+		case control.TypeOpenBrowser:
+			var p control.OpenBrowserPayload
+			if json.Unmarshal(ev.env.Payload, &p) == nil && p.URL != "" {
+				cmd = m.openControlBrowserCmd(ev.instanceKey, p.URL)
+			}
+		}
+		return m, tea.Batch(cmd, waitForControlEventCmd(m.control.events))
 
 	case forceRepaintTickMsg:
 		// Scrub artifacts left by outer-tmux pane resizes without
@@ -1075,6 +1122,11 @@ func Run() error {
 	if clipCancel != nil {
 		clipCancel()
 	}
+
+	// Tear down every control-socket listener so the host releases the socket
+	// files it created. The registry pointer in m is shared with the program's
+	// copy of the model, so this Closes the same servers the loop was draining.
+	m.control.shutdown()
 
 	// If the user just performed a successful auto-update, replace
 	// the current process with the freshly installed binary. Doing
