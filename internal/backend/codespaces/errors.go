@@ -1,15 +1,6 @@
 package codespaces
 
-import (
-	"path/filepath"
-	"regexp"
-	"strconv"
-	"strings"
-)
-
-// ===========================================
-// Error Detection
-// ===========================================
+import "strings"
 
 // ErrPrefixAuthScope is the prefix used in error messages when the gh
 // auth token is missing the "codespace" scope.
@@ -50,44 +41,4 @@ func isCodespaceLimitError(stderr string) bool {
 		strings.Contains(lower, "limit") && strings.Contains(lower, "codespace") ||
 		strings.Contains(lower, "you have already reached") ||
 		strings.Contains(lower, "out of codespaces")
-}
-
-// parseFloat parses a trimmed string into a float64.
-func parseFloat(s string) (float64, error) {
-	return strconv.ParseFloat(strings.TrimSpace(s), 64)
-}
-
-// codespaceName derives a display name for a GitHub Codespace from a workspace dir path.
-// workspaceDir format: ~/.fleet/workspaces/{fleet}/{instance}/{fleet}
-// Returns "{fleet}-{instance}" sanitized for Codespace display names.
-func codespaceName(workspaceDir string) string {
-	parent := filepath.Dir(workspaceDir)       // .../workspaces/{fleet}/{instance}
-	instance := filepath.Base(parent)           // {instance}
-	grandparent := filepath.Dir(parent)         // .../workspaces/{fleet}
-	fleetName := filepath.Base(grandparent)     // {fleet}
-
-	name := fleetName + "-" + instance
-	return sanitizeName(name)
-}
-
-// invalidNameChars matches characters not allowed in codespace display names.
-var invalidNameChars = regexp.MustCompile(`[^a-z0-9-]`)
-
-// sanitizeName produces a valid codespace display name: lowercase alphanumeric
-// with hyphens, max 48 characters.
-func sanitizeName(name string) string {
-	name = strings.ToLower(name)
-	name = invalidNameChars.ReplaceAllString(name, "-")
-	for strings.Contains(name, "--") {
-		name = strings.ReplaceAll(name, "--", "-")
-	}
-	name = strings.Trim(name, "-")
-	if len(name) > 48 {
-		name = name[:48]
-	}
-	name = strings.TrimRight(name, "-")
-	if name == "" {
-		name = "workspace"
-	}
-	return name
 }

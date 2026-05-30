@@ -97,11 +97,7 @@ func LaunchByName(cfg Config, name string, out io.Writer) error {
 			name, strings.Join(matches, ", "))
 	}
 
-	socketPath := cfg.SocketPath
-	if socketPath == "" {
-		socketPath = control.ContainerSocketPath
-	}
-	client, err := control.Dial(socketPath)
+	client, err := control.Dial(cfg.socketPath())
 	if err != nil {
 		return fmt.Errorf("not connected to host fleet — is the host `fleet` TUI running? (%w)", err)
 	}
@@ -164,8 +160,8 @@ func resolveItem(items []item, name string) (int, []string) {
 	}
 
 	titles := make([]string, len(candidates))
-	for i, c := range candidates {
-		titles[i] = itemTitle(items[c])
+	for i, candidateIdx := range candidates {
+		titles[i] = itemTitle(items[candidateIdx])
 	}
 	return -1, titles
 }

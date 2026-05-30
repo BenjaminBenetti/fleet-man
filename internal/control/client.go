@@ -46,18 +46,18 @@ func Dial(socketPath string) (*Client, error) {
 	return &Client{conn: conn, enc: json.NewEncoder(conn)}, nil
 }
 
-// Send marshals payload, wraps it in an Envelope{Type: typ}, and writes it as
-// one JSON line. payload may be nil for a type-only message. Safe for
+// Send marshals payload, wraps it in an Envelope{Type: messageType}, and writes
+// it as one JSON line. payload may be nil for a type-only message. Safe for
 // concurrent use: a mutex serialises the underlying write so two goroutines
 // can't interleave bytes mid-line.
-func (c *Client) Send(typ string, payload any) error {
-	var raw json.RawMessage
+func (c *Client) Send(messageType string, payload any) error {
+	var rawPayload json.RawMessage
 	if payload != nil {
-		b, err := json.Marshal(payload)
+		marshaled, err := json.Marshal(payload)
 		if err != nil {
 			return fmt.Errorf("marshal control payload: %w", err)
 		}
-		raw = b
+		rawPayload = marshaled
 	}
 
 	c.mu.Lock()
@@ -66,7 +66,7 @@ func (c *Client) Send(typ string, payload any) error {
 	// indefinitely once the kernel send buffer fills. A best-effort deadline:
 	// connections that don't support one simply ignore the error here.
 	_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if err := c.enc.Encode(Envelope{Type: typ, Payload: raw}); err != nil {
+	if err := c.enc.Encode(Envelope{Type: messageType, Payload: rawPayload}); err != nil {
 		return fmt.Errorf("send control envelope: %w", err)
 	}
 	return nil

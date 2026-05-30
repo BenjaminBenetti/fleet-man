@@ -76,8 +76,8 @@ func Check() []Dependency {
 
 // HasMissing returns true if any dependency in the list was not found.
 func HasMissing(deps []Dependency) bool {
-	for _, d := range deps {
-		if !d.Found {
+	for _, dep := range deps {
+		if !dep.Found {
 			return true
 		}
 	}

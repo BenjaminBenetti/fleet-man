@@ -26,21 +26,7 @@ func newCloneCmd() *cobra.Command {
 			srcName := args[0]
 			destName := args[1]
 
-			srcTarget, err := fleet.Resolve(srcName, repoFlag)
-			if err != nil {
-				return err
-			}
-
-			st, err := state.Load()
-			if err != nil {
-				return err
-			}
-
-			f, ok := st.Fleets[srcTarget.Fleet]
-			if !ok {
-				return fmt.Errorf("fleet %q not found", srcTarget.Fleet)
-			}
-			src, err := f.GetInstance(srcTarget.Instance)
+			srcTarget, st, f, srcInstance, err := resolveInstance(srcName, repoFlag)
 			if err != nil {
 				return err
 			}
@@ -52,14 +38,14 @@ func newCloneCmd() *cobra.Command {
 			instance := &fleet.Instance{
 				Name:         destName,
 				DisplayName:  destName,
-				Config:       src.Config,
+				Config:       srcInstance.Config,
 				WorkspaceDir: destWorkspaceDir,
 				CreatedAt:    time.Now(),
 				Status:       fleet.StatusCloning,
-				Backend:      src.Backend,
-				Tag:          src.Tag,
-				Color:        src.Color,
-				Branch:       src.Branch,
+				Backend:      srcInstance.Backend,
+				Tag:          srcInstance.Tag,
+				Color:        srcInstance.Color,
+				Branch:       srcInstance.Branch,
 			}
 			if err := f.AddInstance(instance); err != nil {
 				return err
@@ -69,7 +55,7 @@ func newCloneCmd() *cobra.Command {
 			}
 
 			fmt.Printf("Cloning %s/%s -> %s/%s (backend: %s)...\n",
-				srcTarget.Fleet, srcTarget.Instance, srcTarget.Fleet, destName, src.Backend)
+				srcTarget.Fleet, srcTarget.Instance, srcTarget.Fleet, destName, srcInstance.Backend)
 			if err := create.RunClone(srcTarget.Fleet, srcTarget.Instance, destName, true); err != nil {
 				return err
 			}

@@ -16,12 +16,12 @@ func BranchName(workspaceDir string) string {
 		return ""
 	}
 
-	out, err := exec.Command("git", "-C", workspaceDir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	output, err := exec.Command("git", "-C", workspaceDir, "rev-parse", "--abbrev-ref", "HEAD").Output()
 	if err != nil {
 		return ""
 	}
 
-	branch := strings.TrimSpace(string(out))
+	branch := strings.TrimSpace(string(output))
 	if branch == "" || branch == "HEAD" {
 		return ""
 	}

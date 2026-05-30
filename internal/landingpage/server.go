@@ -42,17 +42,6 @@ var templatesFS embed.FS
 //go:embed static/*
 var staticFS embed.FS
 
-// Config holds the resolved inputs the server needs to run.
-type Config struct {
-	// Port is the TCP port to listen on.
-	Port int
-	// WorkspaceDir is the directory whose devcontainer.json supplies the
-	// landing-page site list. The injected process runs with its working
-	// directory at the instance's workspace folder, so this is "." in the
-	// normal case.
-	WorkspaceDir string
-}
-
 // Run loads the landing-page configuration from the workspace's
 // devcontainer.json and serves the page until the process is killed.
 // It blocks; callers (the `fleet landing-page` subcommand) run it as the
@@ -68,7 +57,7 @@ func Run(cfg Config) error {
 	// The site list is read once at startup. fleet-man re-injects and
 	// restarts the process when it relaunches the browser, so a config
 	// change is picked up on the next browser open rather than live.
-	fc, err := devcontainer.LoadFleetCustomizations(cfg.WorkspaceDir)
+	customizations, err := devcontainer.LoadFleetCustomizations(cfg.WorkspaceDir)
 	if err != nil {
 		return fmt.Errorf("load landing-page customizations: %w", err)
 	}
@@ -91,8 +80,8 @@ func Run(cfg Config) error {
 	router.SetHTMLTemplate(tmpl)
 
 	srv := &server{
-		sites:  fc.FleetLaunch.Sites,
-		apps:   fc.FleetLaunch.Apps,
+		sites:  customizations.FleetLaunch.Sites,
+		apps:   customizations.FleetLaunch.Apps,
 		client: &http.Client{Timeout: healthTimeout},
 	}
 	srv.routes(router, assets)
@@ -111,11 +100,11 @@ type server struct {
 // routes registers the landing page's HTTP handlers. assets is the
 // embedded client-asset filesystem (re-rooted at the static dir), served
 // under /static.
-func (s *server) routes(r *gin.Engine, assets fs.FS) {
-	r.GET("/", s.handleIndex)
-	r.GET("/health/:i", s.handleHealth)
-	r.GET("/app/:i", s.handleApp)
-	r.StaticFS("/static", http.FS(assets))
+func (s *server) routes(router *gin.Engine, assets fs.FS) {
+	router.GET("/", s.handleIndex)
+	router.GET("/health/:i", s.handleHealth)
+	router.GET("/app/:i", s.handleApp)
+	router.StaticFS("/static", http.FS(assets))
 }
 
 // handleIndex renders the directory of configured sites and app tabs.
@@ -145,12 +134,12 @@ type healthResult struct {
 // devcontainer.json, so a client can't coerce it into fetching an arbitrary
 // address (no SSRF surface).
 func (s *server) handleHealth(c *gin.Context) {
-	i, err := strconv.Atoi(c.Param("i"))
-	if err != nil || i < 0 || i >= len(s.sites) {
+	index, err := strconv.Atoi(c.Param("i"))
+	if err != nil || index < 0 || index >= len(s.sites) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	site := s.sites[i]
+	site := s.sites[index]
 	if site.HealthCheck == "" {
 		c.Status(http.StatusNoContent)
 		return
@@ -185,12 +174,12 @@ func (s *server) probeHealth(url string) healthResult {
 // iframes ports it loaded from the devcontainer.json, so a client can't
 // coerce it into executing arbitrary commands.
 func (s *server) handleApp(c *gin.Context) {
-	i, err := strconv.Atoi(c.Param("i"))
-	if err != nil || i < 0 || i >= len(s.apps) {
+	index, err := strconv.Atoi(c.Param("i"))
+	if err != nil || index < 0 || index >= len(s.apps) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	app := s.apps[i]
+	app := s.apps[index]
 
 	// EnsureRunningOnPort starts the command if the port isn't already
 	// answering and holds until it comes up, so the browser's first paint

@@ -28,14 +28,14 @@ func (f Forward) Label() string {
 
 // stopForward cleanly shuts down a forward, whether it uses an
 // in-process listener or an external process.
-func stopForward(f *Forward) {
-	if f.listener != nil {
-		f.listener.Close()
-		if f.done != nil {
-			<-f.done
+func stopForward(fwd *Forward) {
+	if fwd.listener != nil {
+		fwd.listener.Close()
+		if fwd.done != nil {
+			<-fwd.done
 		}
 	}
-	if f.cmd != nil && f.cmd.Process != nil {
-		_ = f.cmd.Process.Kill()
+	if fwd.cmd != nil && fwd.cmd.Process != nil {
+		_ = fwd.cmd.Process.Kill()
 	}
 }

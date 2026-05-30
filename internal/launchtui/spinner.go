@@ -70,9 +70,9 @@ func startSpinner(w io.Writer, msg string) (stop func()) {
 // isTerminalWriter reports whether w is an *os.File backed by a terminal, i.e.
 // one we can safely animate on.
 func isTerminalWriter(w io.Writer) bool {
-	f, ok := w.(*os.File)
+	file, ok := w.(*os.File)
 	if !ok {
 		return false
 	}
-	return term.IsTerminal(f.Fd())
+	return term.IsTerminal(file.Fd())
 }

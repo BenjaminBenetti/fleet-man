@@ -21,8 +21,6 @@
 // path, and both must resolve to the same file through the bind mount.
 package control
 
-import "encoding/json"
-
 // Path constants for the container side of the channel. The host side derives
 // its own absolute path via internal/state; both ends resolve to the SAME
 // file through the bind mount, so the socket basename (SocketName) MUST be
@@ -47,25 +45,3 @@ const (
 	// URL. Its payload is OpenBrowserPayload.
 	TypeOpenBrowser = "browser.open"
 )
-
-// Envelope is the generic wire message: a type discriminator plus an opaque
-// JSON payload. The transport carries the Envelope verbatim; the handler
-// registered for env.Type decodes env.Payload into the matching payload
-// struct. Keeping the payload as json.RawMessage means the transport never
-// needs to know about individual message shapes.
-type Envelope struct {
-	// Type names the kind of message — one of the Type* constants. The
-	// handler switches on it to choose how to decode Payload.
-	Type string `json:"type"`
-	// Payload is the message body, left undecoded by the transport. It is
-	// omitted from the wire when empty so type-only messages stay compact.
-	Payload json.RawMessage `json:"payload,omitempty"`
-}
-
-// OpenBrowserPayload is the body of a TypeOpenBrowser Envelope: the address
-// the host browser should open or navigate to.
-type OpenBrowserPayload struct {
-	// URL is the address to open. The host opens its proxied browser to this
-	// URL (or forwards it as a new tab to an already-running browser).
-	URL string `json:"url"`
-}

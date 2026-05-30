@@ -69,10 +69,10 @@ type settingsPage struct {
 
 // newSettingsPage creates a new settings page with default state.
 func newSettingsPage() *settingsPage {
-	si := textinput.New()
-	si.CharLimit = 256
+	input := textinput.New()
+	input.CharLimit = 256
 	return &settingsPage{
-		input:       si,
+		input:       input,
 		itemRowYs:   make(map[int]int),
 		itemHeights: make(map[int]int),
 	}
@@ -106,8 +106,8 @@ func (settingsPage *settingsPage) View(m *model) string {
 // settingsSection defines a titled group of settings rows that can be
 // conditionally shown based on tool availability.
 type settingsSection struct {
-	Title string                        // section header text
-	Tool  string                        // required tool binary; "" = always visible
+	Title string                           // section header text
+	Tool  string                           // required tool binary; "" = always visible
 	Items func(config *state.Config) []int // returns navigable item IDs for this section
 }
 
@@ -180,13 +180,13 @@ var settingsSections = []settingsSection{
 // ===========================================
 
 // sectionVisible reports whether a settings section should be shown.
-func (settingsPage *settingsPage) sectionVisible(m *model, s settingsSection) bool {
-	if s.Tool == "" {
+func (settingsPage *settingsPage) sectionVisible(m *model, section settingsSection) bool {
+	if section.Tool == "" {
 		return true
 	}
-	for _, t := range m.toolStatus {
-		if t.Binary == s.Tool {
-			return t.Found
+	for _, tool := range m.toolStatus {
+		if tool.Binary == section.Tool {
+			return tool.Found
 		}
 	}
 	return false
@@ -195,11 +195,11 @@ func (settingsPage *settingsPage) sectionVisible(m *model, s settingsSection) bo
 // visibleItems returns the flat ordered list of navigable item IDs.
 func (settingsPage *settingsPage) visibleItems(m *model) []int {
 	var items []int
-	for _, s := range settingsSections {
-		if !settingsPage.sectionVisible(m, s) {
+	for _, section := range settingsSections {
+		if !settingsPage.sectionVisible(m, section) {
 			continue
 		}
-		for _, id := range s.Items(m.config) {
+		for _, id := range section.Items(m.config) {
 			if id == settingsItemUpdate && m.updateAvailable == "" {
 				continue
 			}
@@ -338,8 +338,8 @@ func (settingsPage *settingsPage) cycleCoderPreset(m *model, direction int) {
 	}
 	current := m.config.CoderSettings.Preset
 	idx := 0
-	for i, p := range m.coderPresets {
-		if p == current {
+	for i, preset := range m.coderPresets {
+		if preset == current {
 			idx = i
 			break
 		}
@@ -361,8 +361,8 @@ func (settingsPage *settingsPage) cycleCodespacesMachine(m *model, direction int
 	}
 	current := m.config.CodespacesSettings.Machine
 	idx := 0
-	for i, mt := range m.codespaceMachines {
-		if mt.Name == current {
+	for i, machine := range m.codespaceMachines {
+		if machine.Name == current {
 			idx = i
 			break
 		}
@@ -382,9 +382,9 @@ func (settingsPage *settingsPage) cycleCodespacesMachine(m *model, direction int
 // configured machine.
 func (settingsPage *settingsPage) codespacesMachineLabel(m *model) string {
 	name := m.config.CodespacesSettings.Machine
-	for _, mt := range m.codespaceMachines {
-		if mt.Name == name {
-			return mt.DisplayName
+	for _, machine := range m.codespaceMachines {
+		if machine.Name == name {
+			return machine.DisplayName
 		}
 	}
 	return name
@@ -557,9 +557,9 @@ func (settingsPage *settingsPage) enterSettingsEditing(m *model) tea.Cmd {
 		idx := item - settingsItemCoderParamBase
 		if idx < len(m.config.CoderSettings.Parameters) {
 			current = m.config.CoderSettings.Parameters[idx].Value
-			p := m.config.CoderSettings.Parameters[idx]
-			if p.DefaultValue != "" {
-				settingsPage.input.Placeholder = p.DefaultValue
+			param := m.config.CoderSettings.Parameters[idx]
+			if param.DefaultValue != "" {
+				settingsPage.input.Placeholder = param.DefaultValue
 			} else {
 				settingsPage.input.Placeholder = "value"
 			}
@@ -682,17 +682,17 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		listContent.WriteString(content)
 	}
 
-	for _, s := range settingsSections {
-		if !settingsPage.sectionVisible(m, s) {
+	for _, section := range settingsSections {
+		if !settingsPage.sectionVisible(m, section) {
 			continue
 		}
 
-		listContent.WriteString(fleetExpandedStyle.Render(s.Title))
+		listContent.WriteString(fleetExpandedStyle.Render(section.Title))
 		listContent.WriteString("\n")
 		listContent.WriteString(dimStyle.Render(strings.Repeat("─", ruleWidth)))
 		listContent.WriteString("\n\n")
 
-		switch s.Title {
+		switch section.Title {
 		case "General":
 			vimKeysValue := "[ off ]"
 			if config.GeneralSettings.TmuxVimKeysEnabled() {
@@ -763,20 +763,20 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			}
 			recordRow(settingsItemCoderPreset, settingsPage.renderSettingsRow(m, currentItem == settingsItemCoderPreset, "Preset", presetValue))
 
-			for i, p := range config.CoderSettings.Parameters {
+			for i, param := range config.CoderSettings.Parameters {
 				listContent.WriteString("\n")
 				paramItem := settingsItemCoderParamBase + i
-				value := p.Value
+				value := param.Value
 				if value == "" && !(settingsPage.editing && currentItem == paramItem) {
-					if p.DefaultValue != "" {
-						value = dimStyle.Render(p.DefaultValue + " (default)")
+					if param.DefaultValue != "" {
+						value = dimStyle.Render(param.DefaultValue + " (default)")
 					} else {
 						value = dimStyle.Render("(not set)")
 					}
 				}
-				label := p.Name
-				if p.DisplayName != "" {
-					label = p.DisplayName
+				label := param.Name
+				if param.DisplayName != "" {
+					label = param.DisplayName
 				}
 				recordRow(paramItem, settingsPage.renderSettingsRow(m, currentItem == paramItem, label, value))
 			}
@@ -819,19 +819,19 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			}
 
 		case "Tool Status":
-			for i, t := range m.toolStatus {
+			for i, tool := range m.toolStatus {
 				if i > 0 {
 					listContent.WriteString("\n")
 				}
 				var badge string
-				if t.Found {
+				if tool.Found {
 					badge = statusRunningStyle.Render("installed")
 				} else {
 					badge = statusCreatingStyle.Render("not found")
 				}
-				value := badge + "  " + dimStyle.Render(t.Description)
+				value := badge + "  " + dimStyle.Render(tool.Description)
 				itemID := settingsItemToolStatusBase + i
-				recordRow(itemID, settingsPage.renderSettingsRow(m, currentItem == itemID, t.Name, value))
+				recordRow(itemID, settingsPage.renderSettingsRow(m, currentItem == itemID, tool.Name, value))
 			}
 
 		case "Help":

@@ -131,27 +131,27 @@ func groupSessions(sanitizedInstance string, sessions []tmuxSession) []sessionGr
 	grouped := make(map[string]*sessionGroup)
 	var ungrouped []tmuxSession
 
-	for _, s := range sessions {
-		gid, ok := parseGroupID(sanitizedInstance, s.Name)
+	for _, session := range sessions {
+		gid, ok := parseGroupID(sanitizedInstance, session.Name)
 		if !ok {
-			ungrouped = append(ungrouped, s)
+			ungrouped = append(ungrouped, session)
 			continue
 		}
-		g, exists := grouped[gid]
+		group, exists := grouped[gid]
 		if !exists {
-			g = &sessionGroup{GroupID: gid}
-			grouped[gid] = g
+			group = &sessionGroup{GroupID: gid}
+			grouped[gid] = group
 		}
-		g.Sessions = append(g.Sessions, s)
+		group.Sessions = append(group.Sessions, session)
 	}
 
 	// Build result: ungrouped sessions first (as single-session groups),
 	// then grouped sessions sorted by ID.
 	var result []sessionGroup
-	for _, s := range ungrouped {
+	for _, session := range ungrouped {
 		result = append(result, sessionGroup{
-			GroupID:  s.Name, // use session name as pseudo-group ID
-			Sessions: []tmuxSession{s},
+			GroupID:  session.Name, // use session name as pseudo-group ID
+			Sessions: []tmuxSession{session},
 		})
 	}
 

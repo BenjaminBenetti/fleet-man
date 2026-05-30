@@ -234,11 +234,11 @@ func isFleetManGroup(group any) bool {
 		if !ok {
 			continue
 		}
-		cmd, ok := hookMap["command"].(string)
+		command, ok := hookMap["command"].(string)
 		if !ok {
 			continue
 		}
-		if isFleetManCommand(cmd) {
+		if isFleetManCommand(command) {
 			return true
 		}
 	}
@@ -252,14 +252,14 @@ func isFleetManGroup(group any) bool {
 // example a different remoteUser between fleet-man versions or
 // re-provisioning passes — are still recognised as ours and get
 // updated rather than duplicated.
-func isFleetManCommand(cmd string) bool {
-	cmd = strings.TrimSpace(cmd)
-	if cmd == "" {
+func isFleetManCommand(command string) bool {
+	command = strings.TrimSpace(command)
+	if command == "" {
 		return false
 	}
-	first := cmd
-	if idx := strings.IndexAny(cmd, " \t"); idx >= 0 {
-		first = cmd[:idx]
+	first := command
+	if idx := strings.IndexAny(command, " \t"); idx >= 0 {
+		first = command[:idx]
 	}
 	return strings.HasSuffix(first, "/"+FleetManScriptSuffix)
 }

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
-	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -130,18 +129,7 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) error {
 		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("setting up agentic mount symlinks: %v", err))
 	}
 
-	st, err = state.Load()
-	if err != nil {
-		return err
-	}
-	if f, ok := st.Fleets[fleetName]; ok {
-		if instance, err := f.GetInstance(destInstance); err == nil {
-			instance.ContainerID = result.ContainerID
-			instance.Status = fleet.StatusRunning
-			instance.Error = ""
-		}
-	}
-	return state.Save(st)
+	return markInstanceRunning(fleetName, destInstance, result.ContainerID)
 }
 
 // copyWorkspaceTree runs `cp -a <src>/. <dest>/` so the contents of src

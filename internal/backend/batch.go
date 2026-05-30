@@ -13,11 +13,11 @@ func CaptureAllSessionsForAll(instanceBackend Backend, containerIDs []string) ma
 
 	for _, id := range containerIDs {
 		wg.Add(1)
-		go func(cid string) {
+		go func(containerID string) {
 			defer wg.Done()
-			all := instanceBackend.CaptureAllSessions(cid)
+			sessions := instanceBackend.CaptureAllSessions(containerID)
 			mu.Lock()
-			result[cid] = all
+			result[containerID] = sessions
 			mu.Unlock()
 		}(id)
 	}
@@ -37,12 +37,12 @@ func AgentToolProbes(instanceBackend Backend, containerIDs []string) map[string]
 
 	for _, id := range containerIDs {
 		wg.Add(1)
-		go func(cid string) {
+		go func(containerID string) {
 			defer wg.Done()
-			tool, ok := instanceBackend.AgentToolProbe(cid)
+			tool, ok := instanceBackend.AgentToolProbe(containerID)
 			mu.Lock()
 			if ok {
-				result[cid] = tool
+				result[containerID] = tool
 			}
 			mu.Unlock()
 		}(id)

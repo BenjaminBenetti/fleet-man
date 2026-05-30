@@ -129,11 +129,11 @@ func (s *Server) serveConn(conn net.Conn) {
 
 	dec := json.NewDecoder(conn)
 	for {
-		var env Envelope
-		if err := dec.Decode(&env); err != nil {
+		var envelope Envelope
+		if err := dec.Decode(&envelope); err != nil {
 			return // EOF or undecodable: close this connection
 		}
-		s.handler(env)
+		s.handler(envelope)
 	}
 }
 

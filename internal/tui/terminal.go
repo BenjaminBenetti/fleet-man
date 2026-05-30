@@ -38,11 +38,11 @@ func openInTerminal(command []string) error {
 	}
 
 	tried := make([]string, 0, len(terminals))
-	for _, t := range terminals {
-		tried = append(tried, t.bin)
-		if _, err := exec.LookPath(t.bin); err == nil {
-			args := t.args(command)
-			return exec.Command(t.bin, args...).Start()
+	for _, term := range terminals {
+		tried = append(tried, term.bin)
+		if _, err := exec.LookPath(term.bin); err == nil {
+			args := term.args(command)
+			return exec.Command(term.bin, args...).Start()
 		}
 	}
 

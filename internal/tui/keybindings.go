@@ -90,15 +90,15 @@ func keybindingsData() []keybindingGroup {
 // single column string.
 func renderKeybindingColumn(groups []keybindingGroup) string {
 	var b strings.Builder
-	for i, g := range groups {
+	for i, group := range groups {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(keybindingSectionStyle.Render(g.Title))
+		b.WriteString(keybindingSectionStyle.Render(group.Title))
 		b.WriteString("\n")
-		for _, e := range g.Entries {
-			b.WriteString(keybindingKeyStyle.Render(e.Key))
-			b.WriteString(keybindingDescStyle.Render(e.Desc))
+		for _, entry := range group.Entries {
+			b.WriteString(keybindingKeyStyle.Render(entry.Key))
+			b.WriteString(keybindingDescStyle.Render(entry.Desc))
 			b.WriteString("\n")
 		}
 	}
@@ -115,14 +115,14 @@ func (settingsPage *settingsPage) renderKeybindingsDialog() string {
 	groups := keybindingsData()
 
 	var totalLines int
-	for _, g := range groups {
-		totalLines += len(g.Entries) + 2
+	for _, group := range groups {
+		totalLines += len(group.Entries) + 2
 	}
 	half := totalLines / 2
 	splitAt := len(groups)
 	running := 0
-	for i, g := range groups {
-		running += len(g.Entries) + 2
+	for i, group := range groups {
+		running += len(group.Entries) + 2
 		if running >= half {
 			splitAt = i + 1
 			break

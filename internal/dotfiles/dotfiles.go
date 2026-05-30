@@ -7,10 +7,10 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
-// ShQuote returns s wrapped in single quotes with any embedded
-// single quotes escaped using the '\'' idiom.
-func ShQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+// ShQuote returns value wrapped in single quotes with any embedded
+// single quotes escaped using the '\” idiom.
+func ShQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 // TmuxEnsureInstalled is a shell snippet that installs tmux if it is not

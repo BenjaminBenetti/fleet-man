@@ -153,11 +153,11 @@ func ensureHostFile(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return os.Chmod(path, 0666)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0666)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		return err
 	}
-	if err := f.Close(); err != nil {
+	if err := file.Close(); err != nil {
 		return err
 	}
 	return os.Chmod(path, 0666)

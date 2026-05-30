@@ -91,24 +91,24 @@ type fleetPage struct {
 
 // newFleetPage creates a new fleet page with default state.
 func newFleetPage() *fleetPage {
-	ti := textinput.New()
-	ti.Placeholder = "instance-name"
-	ti.CharLimit = 64
+	nameInput := textinput.New()
+	nameInput.Placeholder = "instance-name"
+	nameInput.CharLimit = 64
 
-	bi := textinput.New()
-	bi.Placeholder = "default branch"
-	bi.CharLimit = 128
+	branchInput := textinput.New()
+	branchInput.Placeholder = "default branch"
+	branchInput.CharLimit = 128
 
-	hi := textinput.New()
-	hi.Placeholder = "/home/vscode"
-	hi.CharLimit = 256
+	homedirInput := textinput.New()
+	homedirInput.Placeholder = "/home/vscode"
+	homedirInput.CharLimit = 256
 
 	return &fleetPage{
 		collapsed:    make(map[string]bool),
 		savedGroups:  make(map[string]savedGroup),
-		textInput:    ti,
-		branchInput:  bi,
-		homedirInput: hi,
+		textInput:    nameInput,
+		branchInput:  branchInput,
+		homedirInput: homedirInput,
 		listRowY:     -1,
 	}
 }
@@ -189,21 +189,21 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return nil
 
 	case browserProxyMsg:
-		bpm := msg.(browserProxyMsg)
-		if bpm.err != nil {
-			m.message = fmt.Sprintf("Browser proxy error: %v", bpm.err)
+		proxyMsg := msg.(browserProxyMsg)
+		if proxyMsg.err != nil {
+			m.message = fmt.Sprintf("Browser proxy error: %v", proxyMsg.err)
 		} else {
-			m.message = fmt.Sprintf("Browser opened (proxy on localhost:%d)", bpm.localPort)
+			m.message = fmt.Sprintf("Browser opened (proxy on localhost:%d)", proxyMsg.localPort)
 			// Record which instance the browser bound to this data dir now
 			// serves, so a later control-socket open for a different instance
 			// switches the browser over rather than new-tabbing into the wrong
 			// proxy. Recompute the data dir the same way the open path did.
-			if fleetName, instanceName, ok := splitInstanceKey(bpm.instanceKey); ok {
+			if fleetName, instanceName, ok := splitInstanceKey(proxyMsg.instanceKey); ok {
 				dataDir := browserDataDir(fleetName, instanceName, multipleBrowsersPerFleet(m))
 				if m.activeBrowser == nil {
 					m.activeBrowser = make(map[string]string)
 				}
-				m.activeBrowser[dataDir] = bpm.instanceKey
+				m.activeBrowser[dataDir] = proxyMsg.instanceKey
 			}
 		}
 		// Tear down the switching-spinner dialog if it was active.

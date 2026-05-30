@@ -3,60 +3,26 @@ package instanceops
 import (
 	"fmt"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
-type containerController interface {
-	Start(containerID string) error
-	Stop(containerID string) error
-}
-
-var newClient = func(backendType fleet.BackendType) containerController {
-	return backendutil.New(backendType, false)
-}
-
-// postStartHook runs after a successful container Start to set up
-// in-container scaffolding: the fleet-launch binary so later
-// subcommands have something to invoke, and the fleet.rc so
-// interactive shells can source fleet-aware aliases. homeDir is the
-// fleet's persisted HomeDir setting (empty falls back to
-// fleetlaunch.DefaultHomeDir). Failures on either step are surfaced
-// as warnings rather than failing the start; the browser-open path
-// stages the binary on demand as a backstop.
-//
-// It is a package-level var so tests can replace it with a no-op
-// (a real call would need a host backend + a real container).
-var postStartHook = func(fleetName string, instance *fleet.Instance, homeDir string) {
-	b := backendutil.NewForInstance(instance, false)
-	if _, err := fleetlaunch.EnsureFresh(b, instance.WorkspaceDir, nil); err != nil {
-		state.WriteWarn(fleetName, instance.Name, fmt.Sprintf("stage fleet-launch: %v", err))
-	}
-	if err := fleetlaunch.EnsureFleetRC(b, instance.WorkspaceDir, homeDir); err != nil {
-		state.WriteWarn(fleetName, instance.Name, fmt.Sprintf("stage fleet.rc: %v", err))
-	}
-}
-
-type Result struct {
-	FleetName      string
-	InstanceName   string
-	PreviousStatus fleet.InstanceStatus
-	Status         fleet.InstanceStatus
-	Changed        bool
-}
-
+// StopInstance transitions the named instance to StatusStopped, stopping its
+// container if it is currently running.
 func StopInstance(fleetName, instanceName string) (*Result, error) {
 	return transitionInstance(fleetName, instanceName, fleet.StatusStopped)
 }
 
+// StartInstance transitions the named instance to StatusRunning, starting its
+// container and running the post-start hook if it is currently stopped.
 func StartInstance(fleetName, instanceName string) (*Result, error) {
 	return transitionInstance(fleetName, instanceName, fleet.StatusRunning)
 }
 
+// ToggleInstance flips the named instance between running and stopped based on
+// its current status, erroring for statuses that have no meaningful toggle.
 func ToggleInstance(fleetName, instanceName string) (*Result, error) {
-	st, _, instance, err := loadInstance(fleetName, instanceName)
+	st, _, instance, err := LoadInstance(fleetName, instanceName)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +38,7 @@ func ToggleInstance(fleetName, instanceName string) (*Result, error) {
 }
 
 func transitionInstance(fleetName, instanceName string, targetStatus fleet.InstanceStatus) (*Result, error) {
-	st, _, instance, err := loadInstance(fleetName, instanceName)
+	st, _, instance, err := LoadInstance(fleetName, instanceName)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +104,12 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 	return result, nil
 }
 
-func loadInstance(fleetName, instanceName string) (*state.State, *fleet.Fleet, *fleet.Instance, error) {
+// LoadInstance loads the global state, looks up the named fleet, and resolves
+// the named instance within it. It returns the loaded state, the owning fleet,
+// and the instance so callers can read or mutate and persist them. It errors
+// with "fleet %q not found" when the fleet is absent and propagates the
+// instance lookup error from Fleet.GetInstance.
+func LoadInstance(fleetName, instanceName string) (*state.State, *fleet.Fleet, *fleet.Instance, error) {
 	st, err := state.Load()
 	if err != nil {
 		return nil, nil, nil, err

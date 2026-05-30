@@ -9,7 +9,6 @@ package devcontainersetup
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agent"
@@ -66,8 +65,5 @@ func Run(remoteURL string) error {
 	if err != nil {
 		return err
 	}
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return agent.RunInteractive(cmd)
 }

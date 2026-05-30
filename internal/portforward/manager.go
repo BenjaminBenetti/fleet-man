@@ -26,12 +26,22 @@ func (m *Manager) Add(key string, localPort, remotePort int, factory CmdFactory,
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, f := range m.forwards[key] {
-		if f.LocalPort == localPort {
+	for _, fwd := range m.forwards[key] {
+		if fwd.LocalPort == localPort {
 			return fmt.Errorf("local port %d is already forwarded on %s", localPort, key)
 		}
 	}
 
+	return m.addForwardLocked(key, localPort, remotePort, factory, containerID, resolve, false)
+}
+
+// addForwardLocked starts a forward on localPort and records it under
+// key. It first tries an in-process TCP proxy via resolve, then falls
+// back to spawning an external process via factory. When browserProxy
+// is true the recorded Forward is marked as a browser proxy.
+//
+// The caller must hold m.mu; addForwardLocked does not lock.
+func (m *Manager) addForwardLocked(key string, localPort, remotePort int, factory CmdFactory, containerID string, resolve ResolveFunc, browserProxy bool) error {
 	// Try in-process proxy via ResolveHostname.
 	if resolve != nil {
 		if hostname, ok := resolve(containerID); ok {
@@ -39,6 +49,7 @@ func (m *Manager) Add(key string, localPort, remotePort int, factory CmdFactory,
 			if err != nil {
 				return fmt.Errorf("start proxy %d->%d: %w", localPort, remotePort, err)
 			}
+			fwd.BrowserProxy = browserProxy
 			m.forwards[key] = append(m.forwards[key], fwd)
 			return nil
 		}
@@ -51,9 +62,10 @@ func (m *Manager) Add(key string, localPort, remotePort int, factory CmdFactory,
 	}
 
 	fwd := &Forward{
-		LocalPort:  localPort,
-		RemotePort: remotePort,
-		cmd:        cmd,
+		LocalPort:    localPort,
+		RemotePort:   remotePort,
+		BrowserProxy: browserProxy,
+		cmd:          cmd,
 	}
 	m.forwards[key] = append(m.forwards[key], fwd)
 
@@ -69,9 +81,9 @@ func (m *Manager) FindBrowserProxy(key string) (int, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, f := range m.forwards[key] {
-		if f.BrowserProxy {
-			return f.LocalPort, true
+	for _, fwd := range m.forwards[key] {
+		if fwd.BrowserProxy {
+			return fwd.LocalPort, true
 		}
 	}
 	return 0, false
@@ -92,36 +104,9 @@ func (m *Manager) AddBrowserProxy(key string, remotePort int, factory CmdFactory
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Try in-process proxy via ResolveHostname.
-	if resolve != nil {
-		if hostname, ok := resolve(containerID); ok {
-			fwd, err := startProxy(localPort, hostname, remotePort)
-			if err != nil {
-				return 0, fmt.Errorf("start proxy %d->%d: %w", localPort, remotePort, err)
-			}
-			fwd.BrowserProxy = true
-			m.forwards[key] = append(m.forwards[key], fwd)
-			return localPort, nil
-		}
+	if err := m.addForwardLocked(key, localPort, remotePort, factory, containerID, resolve, true); err != nil {
+		return 0, err
 	}
-
-	// Fallback: spawn an external process.
-	cmd := factory(containerID, localPort, remotePort)
-	if err := cmd.Start(); err != nil {
-		return 0, fmt.Errorf("start port forward %d->%d: %w", localPort, remotePort, err)
-	}
-
-	fwd := &Forward{
-		LocalPort:    localPort,
-		RemotePort:   remotePort,
-		BrowserProxy: true,
-		cmd:          cmd,
-	}
-	m.forwards[key] = append(m.forwards[key], fwd)
-
-	// Reap the process in the background so it doesn't become a zombie.
-	go cmd.Wait() //nolint:errcheck
-
 	return localPort, nil
 }
 
@@ -131,9 +116,9 @@ func (m *Manager) Remove(key string, localPort int) error {
 	defer m.mu.Unlock()
 
 	fwds := m.forwards[key]
-	for i, f := range fwds {
-		if f.LocalPort == localPort {
-			stopForward(f)
+	for i, fwd := range fwds {
+		if fwd.LocalPort == localPort {
+			stopForward(fwd)
 			m.forwards[key] = append(fwds[:i], fwds[i+1:]...)
 			return nil
 		}
@@ -146,8 +131,8 @@ func (m *Manager) RemoveAll(key string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, f := range m.forwards[key] {
-		stopForward(f)
+	for _, fwd := range m.forwards[key] {
+		stopForward(fwd)
 	}
 	delete(m.forwards, key)
 }
@@ -162,8 +147,8 @@ func (m *Manager) List(key string) []Forward {
 
 	fwds := m.forwards[key]
 	result := make([]Forward, len(fwds))
-	for i, f := range fwds {
-		result[i] = Forward{LocalPort: f.LocalPort, RemotePort: f.RemotePort, BrowserProxy: f.BrowserProxy}
+	for i, fwd := range fwds {
+		result[i] = Forward{LocalPort: fwd.LocalPort, RemotePort: fwd.RemotePort, BrowserProxy: fwd.BrowserProxy}
 	}
 	return result
 }
@@ -176,8 +161,8 @@ func (m *Manager) ListAll() map[string][]Forward {
 	result := make(map[string][]Forward, len(m.forwards))
 	for key, fwds := range m.forwards {
 		entries := make([]Forward, len(fwds))
-		for i, f := range fwds {
-			entries[i] = Forward{LocalPort: f.LocalPort, RemotePort: f.RemotePort, BrowserProxy: f.BrowserProxy}
+		for i, fwd := range fwds {
+			entries[i] = Forward{LocalPort: fwd.LocalPort, RemotePort: fwd.RemotePort, BrowserProxy: fwd.BrowserProxy}
 		}
 		result[key] = entries
 	}
@@ -195,11 +180,11 @@ func (m *Manager) FormatLabels(key string) string {
 		return ""
 	}
 	labels := ""
-	for i, f := range fwds {
+	for i, fwd := range fwds {
 		if i > 0 {
 			labels += ", "
 		}
-		labels += f.Label()
+		labels += fwd.Label()
 	}
 	return labels
 }
@@ -213,8 +198,8 @@ func (m *Manager) Shutdown() {
 	defer m.mu.Unlock()
 
 	for key, fwds := range m.forwards {
-		for _, f := range fwds {
-			stopForward(f)
+		for _, fwd := range fwds {
+			stopForward(fwd)
 		}
 		delete(m.forwards, key)
 	}

@@ -18,16 +18,16 @@ const (
 // DetectDistro reads /etc/os-release and returns the distro family.
 // Returns DistroUnknown if detection fails or the distro is not recognised.
 func DetectDistro() Distro {
-	f, err := os.Open("/etc/os-release")
+	osReleaseFile, err := os.Open("/etc/os-release")
 	if err != nil {
 		return DistroUnknown
 	}
-	defer f.Close()
+	defer osReleaseFile.Close()
 
 	var id, idLike string
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		line := s.Text()
+	scanner := bufio.NewScanner(osReleaseFile)
+	for scanner.Scan() {
+		line := scanner.Text()
 		switch {
 		case strings.HasPrefix(line, "ID="):
 			id = strings.Trim(strings.TrimPrefix(line, "ID="), `"`)

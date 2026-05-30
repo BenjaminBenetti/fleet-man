@@ -72,26 +72,26 @@ func (depsCheckPage *depsCheckPage) View(m *model) string {
 	lines = append(lines, dialogTitle.Render("Dependency Check"))
 	lines = append(lines, "")
 
-	for _, d := range depsCheckPage.result {
+	for _, dep := range depsCheckPage.result {
 		var status, note string
-		if d.Found {
+		if dep.Found {
 			status = statusRunningStyle.Render("found")
 		} else {
 			status = errorStyle.Render("not found")
 		}
 
-		if !d.Required {
+		if !dep.Required {
 			note = dimStyle.Render(" (optional)")
 		}
 
-		lines = append(lines, fmt.Sprintf("  %s  %s%s", status, dialogLabel.Render(d.Name), note))
+		lines = append(lines, fmt.Sprintf("  %s  %s%s", status, dialogLabel.Render(dep.Name), note))
 
-		if d.Description != "" {
-			lines = append(lines, fmt.Sprintf("    %s", dimStyle.Render(d.Description)))
+		if dep.Description != "" {
+			lines = append(lines, fmt.Sprintf("    %s", dimStyle.Render(dep.Description)))
 		}
 
-		if !d.Found {
-			lines = append(lines, fmt.Sprintf("    Install: %s", dimStyle.Render(d.InstallURL)))
+		if !dep.Found {
+			lines = append(lines, fmt.Sprintf("    Install: %s", dimStyle.Render(dep.InstallURL)))
 		}
 	}
 

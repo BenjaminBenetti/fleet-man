@@ -4,8 +4,8 @@ package codespaces
 type Option func(*CodespacesBackend)
 
 // WithVerbose enables verbose output.
-func WithVerbose(v bool) Option {
-	return func(codespacesBackend *CodespacesBackend) { codespacesBackend.verbose = v }
+func WithVerbose(verbose bool) Option {
+	return func(codespacesBackend *CodespacesBackend) { codespacesBackend.verbose = verbose }
 }
 
 // WithRepo sets the GitHub repository (owner/repo) for codespace creation.

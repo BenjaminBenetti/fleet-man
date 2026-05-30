@@ -198,33 +198,7 @@ func (codespacesBackend *CodespacesBackend) ExecCommand(workspaceDir string, com
 // Stats returns CPU and memory usage for the given codespace names.
 // Uses SSH to read process stats from each codespace concurrently.
 func (codespacesBackend *CodespacesBackend) Stats(containerIDs []string) (map[string]*backend.ContainerStats, error) {
-	if len(containerIDs) == 0 {
-		return nil, nil
-	}
-
-	type statsResult struct {
-		id    string
-		stats *backend.ContainerStats
-		err   error
-	}
-
-	ch := make(chan statsResult, len(containerIDs))
-	for _, id := range containerIDs {
-		go func(csName string) {
-			stats, err := codespacesBackend.fetchStats(csName)
-			ch <- statsResult{csName, stats, err}
-		}(id)
-	}
-
-	result := make(map[string]*backend.ContainerStats)
-	for range containerIDs {
-		received := <-ch
-		if received.err == nil && received.stats != nil {
-			result[received.id] = received.stats
-		}
-	}
-
-	return result, nil
+	return backend.ConcurrentStats(containerIDs, codespacesBackend.fetchStats)
 }
 
 // Logs streams codespace creation logs.
@@ -400,20 +374,5 @@ func (codespacesBackend *CodespacesBackend) fetchStats(csName string) (*backend.
 		return nil, err
 	}
 
-	var totalCPU, totalMem float64
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		cpu, _ := parseFloat(fields[0])
-		mem, _ := parseFloat(fields[1])
-		totalCPU += cpu
-		totalMem += mem
-	}
-
-	return &backend.ContainerStats{
-		CPUMillicores: totalCPU * 10,
-		MemoryMB:      totalMem / 1024,
-	}, nil
+	return backend.AggregatePSStats(out), nil
 }

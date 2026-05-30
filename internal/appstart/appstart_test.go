@@ -79,8 +79,8 @@ func TestEnsureRunningOnPortAlreadyUp(t *testing.T) {
 func serverPort(t *testing.T, srv *httptest.Server) int {
 	t.Helper()
 	// httptest binds 127.0.0.1:<port>; pull the port from the TCPAddr.
-	if ta, ok := srv.Listener.Addr().(*net.TCPAddr); ok {
-		return ta.Port
+	if tcpAddr, ok := srv.Listener.Addr().(*net.TCPAddr); ok {
+		return tcpAddr.Port
 	}
 	t.Fatalf("could not determine server port from %v", srv.Listener.Addr())
 	return 0

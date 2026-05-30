@@ -4,18 +4,18 @@ package coder
 type Option func(*CoderBackend)
 
 // WithVerbose enables verbose output.
-func WithVerbose(v bool) Option {
-	return func(coderBackend *CoderBackend) { coderBackend.verbose = v }
+func WithVerbose(verbose bool) Option {
+	return func(coderBackend *CoderBackend) { coderBackend.verbose = verbose }
 }
 
 // WithTemplate sets the Coder template to use when creating workspaces.
-func WithTemplate(t string) Option {
-	return func(coderBackend *CoderBackend) { coderBackend.template = t }
+func WithTemplate(template string) Option {
+	return func(coderBackend *CoderBackend) { coderBackend.template = template }
 }
 
 // WithPreset sets the Coder preset to use when creating workspaces.
-func WithPreset(p string) Option {
-	return func(coderBackend *CoderBackend) { coderBackend.preset = p }
+func WithPreset(preset string) Option {
+	return func(coderBackend *CoderBackend) { coderBackend.preset = preset }
 }
 
 // WithParameters sets the resolved parameter key-value pairs for workspace creation.
