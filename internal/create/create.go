@@ -15,6 +15,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -28,6 +29,7 @@ import (
 // --branch <branch>` so the instance is provisioned against that ref
 // rather than the repository's default branch.
 func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backendType fleet.BackendType) error {
+	flog.Info("instance create started", "fleet", fleetName, "instance", instanceName, "backend", backendType, "branch", branch, "remote", remoteURL)
 	if err := fleet.ValidateBackendType(backendType); err != nil {
 		setFailed(fleetName, instanceName, err)
 		return err
@@ -162,5 +164,9 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 	}
 
 	// Success: update state (instance is running even if dotfiles failed)
-	return markInstanceRunning(fleetName, instanceName, result.ContainerID)
+	if err := markInstanceRunning(fleetName, instanceName, result.ContainerID); err != nil {
+		return err
+	}
+	flog.Info("instance created", "fleet", fleetName, "instance", instanceName, "backend", backendType, "container", result.ContainerID)
+	return nil
 }

@@ -53,8 +53,17 @@ type Backend interface {
 	Exec(workspaceDir string, command []string) error
 
 	// ExecCommand returns an unstarted *exec.Cmd for running a command
-	// inside a workspace. The caller controls stdio and lifecycle.
+	// inside a workspace. The caller controls stdio and lifecycle. It
+	// writes a "container exec" entry to the event log (~/.fleet/fleet.log)
+	// so container commands are traceable by default; use it for everything
+	// except hot polling loops.
 	ExecCommand(workspaceDir string, command []string) *exec.Cmd
+
+	// ExecCommandQuiet is ExecCommand without the event-log entry. Use it
+	// from high-frequency polling and probe loops (e.g. the periodic tmux
+	// session discovery) where logging every command would flood the event
+	// log. Behaviour is otherwise identical to ExecCommand.
+	ExecCommandQuiet(workspaceDir string, command []string) *exec.Cmd
 
 	// Stats returns CPU and memory usage for the given container IDs.
 	Stats(containerIDs []string) (map[string]*ContainerStats, error)

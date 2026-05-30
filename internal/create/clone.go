@@ -10,6 +10,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -38,6 +39,7 @@ import (
 // carries their effects. Running them again would diverge the clone
 // from the source.
 func RunClone(fleetName, srcInstance, destInstance string, verbose bool) error {
+	flog.Info("instance clone started", "fleet", fleetName, "src", srcInstance, "instance", destInstance)
 	st, err := state.Load()
 	if err != nil {
 		setFailed(fleetName, destInstance, err)
@@ -129,7 +131,11 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) error {
 		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("setting up agentic mount symlinks: %v", err))
 	}
 
-	return markInstanceRunning(fleetName, destInstance, result.ContainerID)
+	if err := markInstanceRunning(fleetName, destInstance, result.ContainerID); err != nil {
+		return err
+	}
+	flog.Info("instance cloned", "fleet", fleetName, "src", srcInstance, "instance", destInstance, "container", result.ContainerID)
+	return nil
 }
 
 // copyWorkspaceTree runs `cp -a <src>/. <dest>/` so the contents of src

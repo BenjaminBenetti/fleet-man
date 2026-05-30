@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -46,6 +47,7 @@ func newDestroyCmd() *cobra.Command {
 				return err
 			}
 
+			flog.Info("fleet destroyed", "fleet", fleetName, "instances", len(f.Instances))
 			fmt.Printf("Fleet %s destroyed (%d instances removed).\n", fleetName, len(f.Instances))
 			return nil
 		},

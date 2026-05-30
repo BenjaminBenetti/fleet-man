@@ -18,6 +18,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -1100,6 +1101,7 @@ func sortedFleetNames(fleets map[string]*fleet.Fleet) []string {
 
 // Run starts the TUI.
 func Run() error {
+	flog.Info("fleet TUI started")
 	m := newModel()
 
 	// Start clipboard buffer polling when running inside tmux.
@@ -1118,6 +1120,7 @@ func Run() error {
 
 	program := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	finalModel, err := program.Run()
+	flog.Info("fleet TUI stopped")
 
 	if clipCancel != nil {
 		clipCancel()

@@ -2,6 +2,7 @@ package create
 
 import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -11,6 +12,7 @@ import (
 // already decided to bail, so it must not mask the original error with a
 // secondary one.
 func setFailed(fleetName, instanceName string, origErr error) {
+	flog.Error("instance provisioning failed", "fleet", fleetName, "instance", instanceName, "err", origErr)
 	st, err := state.Load()
 	if err != nil {
 		return

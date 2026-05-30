@@ -6,6 +6,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/spf13/cobra"
 )
 
@@ -48,6 +49,7 @@ Examples:
 				return fmt.Errorf("failed to execute command in session %q: %w", sessionName, err)
 			}
 
+			flog.Info("session exec", "instance", args[0], "session", sessionName, "cmd", command)
 			fmt.Printf("Executed command in session %q of instance %s\n", sessionName, args[0])
 			return nil
 		},

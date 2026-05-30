@@ -457,7 +457,7 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 		}
 
 		// Query the inner tmux for all sessions in this group.
-		listCmd := instanceBackend.ExecCommand(workspaceDir, []string{
+		listCmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
 			"sh", "-c",
 			`tmux list-sessions -F "#{session_name}" 2>/dev/null`,
 		})

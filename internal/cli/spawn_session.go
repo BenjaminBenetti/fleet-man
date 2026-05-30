@@ -5,6 +5,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/spf13/cobra"
 )
 
@@ -40,9 +41,11 @@ Examples:
 			})
 
 			if err := createCmd.Run(); err != nil {
+				flog.Error("session create failed", "instance", args[0], "session", sessionName, "err", err)
 				return fmt.Errorf("failed to create session %q: %w", sessionName, err)
 			}
 
+			flog.Info("session created", "instance", args[0], "session", sessionName)
 			fmt.Printf("Created tmux session %q in instance %s\n", sessionName, args[0])
 			return nil
 		},

@@ -15,6 +15,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/landingpage"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -222,6 +223,7 @@ func openBrowserProxyCmd(
 // the choose-launch dialog (which saves the answer and then launches);
 // otherwise it launches straight away.
 func (fleetPage *fleetPage) beginBrowserOpen(m *model, instance *fleet.Instance, fleetName string) tea.Cmd {
+	flog.Info("browser open requested", "fleet", fleetName, "instance", instance.Name)
 	if f, ok := m.st.Fleets[fleetName]; ok && !f.Settings.PreferFleetLaunchSet() {
 		if _, both := bothBrowserTargets(instance.WorkspaceDir); both {
 			fleetPage.mode = viewChooseBrowserLaunch

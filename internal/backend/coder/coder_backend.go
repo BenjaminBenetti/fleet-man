@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
 // CoderBackend implements backend.Backend using the Coder CLI.
@@ -150,6 +151,7 @@ func (coderBackend *CoderBackend) Start(containerID string) error {
 
 // Exec runs an interactive command inside a Coder workspace via SSH.
 func (coderBackend *CoderBackend) Exec(workspaceDir string, command []string) error {
+	flog.ContainerExec("coder", workspaceDir, command)
 	name := coderWorkspaceName(workspaceDir)
 	target := coderBackend.resolveSSHTarget(name)
 	args := sshArgs(target, command)
@@ -161,8 +163,15 @@ func (coderBackend *CoderBackend) Exec(workspaceDir string, command []string) er
 }
 
 // ExecCommand returns an unstarted *exec.Cmd for running a command
-// inside a Coder workspace via SSH.
+// inside a Coder workspace via SSH, logging the command to the event
+// log. Hot polling loops should use ExecCommandQuiet instead.
 func (coderBackend *CoderBackend) ExecCommand(workspaceDir string, command []string) *exec.Cmd {
+	flog.ContainerExec("coder", workspaceDir, command)
+	return coderBackend.ExecCommandQuiet(workspaceDir, command)
+}
+
+// ExecCommandQuiet is ExecCommand without the event-log entry.
+func (coderBackend *CoderBackend) ExecCommandQuiet(workspaceDir string, command []string) *exec.Cmd {
 	name := coderWorkspaceName(workspaceDir)
 	target := coderBackend.resolveSSHTarget(name)
 	args := sshArgs(target, command)

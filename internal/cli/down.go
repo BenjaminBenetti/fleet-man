@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -43,6 +44,7 @@ func newDownCmd() *cobra.Command {
 				return err
 			}
 
+			flog.Info("instance deleted", "fleet", target.Fleet, "instance", target.Instance)
 			fmt.Printf("Instance %s/%s removed.\n", target.Fleet, target.Instance)
 			return nil
 		},

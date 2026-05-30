@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -101,6 +102,7 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 
 	result.Status = instance.Status
 	result.Changed = true
+	flog.Info("instance status changed", "fleet", fleetName, "instance", instanceName, "from", result.PreviousStatus, "to", targetStatus)
 	return result, nil
 }
 

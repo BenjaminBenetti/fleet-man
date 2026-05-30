@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
 // DevcontainerBackend implements backend.Backend using the devcontainer
@@ -170,6 +171,7 @@ func devcontainerEnv(base []string) ([]string, error) {
 
 // Exec runs `devcontainer exec` in the given workspace folder.
 func (devcontainerBackend *DevcontainerBackend) Exec(workspaceDir string, command []string) error {
+	flog.ContainerExec("devcontainer", workspaceDir, command)
 	args := execArgs(workspaceDir, command)
 	cmd := exec.Command("devcontainer", args...)
 	cmd.Stdin = os.Stdin
@@ -179,8 +181,15 @@ func (devcontainerBackend *DevcontainerBackend) Exec(workspaceDir string, comman
 }
 
 // ExecCommand returns an unstarted *exec.Cmd for running a command
-// inside a workspace via `devcontainer exec`.
+// inside a workspace via `devcontainer exec`, logging the command to the
+// event log. Hot polling loops should use ExecCommandQuiet instead.
 func (devcontainerBackend *DevcontainerBackend) ExecCommand(workspaceDir string, command []string) *exec.Cmd {
+	flog.ContainerExec("devcontainer", workspaceDir, command)
+	return devcontainerBackend.ExecCommandQuiet(workspaceDir, command)
+}
+
+// ExecCommandQuiet is ExecCommand without the event-log entry.
+func (devcontainerBackend *DevcontainerBackend) ExecCommandQuiet(workspaceDir string, command []string) *exec.Cmd {
 	args := execArgs(workspaceDir, command)
 	return exec.Command("devcontainer", args...)
 }

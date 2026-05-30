@@ -13,6 +13,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	coderbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/coder"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 
@@ -128,6 +129,7 @@ func deleteInstanceCmd(instanceBackend backend.Backend, fleetName, instanceName,
 				_ = state.Save(st)
 			}
 		}
+		flog.Info("instance deleted", "fleet", fleetName, "instance", instanceName)
 		key := fleetName + "/" + instanceName
 		return operationDoneMsg{fleetName, instanceName, fmt.Sprintf("Removed %s", key), nil}
 	}
@@ -165,6 +167,7 @@ func deleteFleetCmd(backends map[fleet.BackendType]backend.Backend, fleetName st
 			delete(st.Fleets, fleetName)
 			_ = state.Save(st)
 		}
+		flog.Info("fleet destroyed", "fleet", fleetName, "instances", len(targets))
 		return operationDoneMsg{fleetName, "", fmt.Sprintf("Removed fleet %s", fleetName), nil}
 	}
 }
@@ -301,6 +304,7 @@ func createInstanceCmd(fleetName, instanceName, remoteURL, branch string, backen
 			return instanceCreateErrMsg{fleetName, instanceName, fmt.Errorf("spawn: %w", err)}
 		}
 
+		flog.Info("instance create dispatched", "fleet", fleetName, "instance", instanceName, "backend", backendType, "branch", branch)
 		// Detach: do not call cmd.Wait(). The child runs independently.
 		return instanceSpawnedMsg{fleetName, instanceName}
 	}
@@ -333,6 +337,7 @@ func cloneInstanceCmd(fleetName, srcInstance, destInstance string) tea.Cmd {
 			return instanceCreateErrMsg{fleetName, destInstance, fmt.Errorf("spawn: %w", err)}
 		}
 
+		flog.Info("instance clone dispatched", "fleet", fleetName, "src", srcInstance, "instance", destInstance)
 		return instanceSpawnedMsg{fleetName, destInstance}
 	}
 }

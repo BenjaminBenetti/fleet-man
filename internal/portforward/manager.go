@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"sync"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
 // Manager tracks active port forward processes per instance.
@@ -32,7 +34,11 @@ func (m *Manager) Add(key string, localPort, remotePort int, factory CmdFactory,
 		}
 	}
 
-	return m.addForwardLocked(key, localPort, remotePort, factory, containerID, resolve, false)
+	if err := m.addForwardLocked(key, localPort, remotePort, factory, containerID, resolve, false); err != nil {
+		return err
+	}
+	flog.Info("port-forward started", "key", key, "localPort", localPort, "remotePort", remotePort)
+	return nil
 }
 
 // addForwardLocked starts a forward on localPort and records it under
@@ -107,6 +113,7 @@ func (m *Manager) AddBrowserProxy(key string, remotePort int, factory CmdFactory
 	if err := m.addForwardLocked(key, localPort, remotePort, factory, containerID, resolve, true); err != nil {
 		return 0, err
 	}
+	flog.Info("browser proxy started", "key", key, "localPort", localPort, "remotePort", remotePort)
 	return localPort, nil
 }
 
@@ -120,6 +127,7 @@ func (m *Manager) Remove(key string, localPort int) error {
 		if fwd.LocalPort == localPort {
 			stopForward(fwd)
 			m.forwards[key] = append(fwds[:i], fwds[i+1:]...)
+			flog.Info("port-forward stopped", "key", key, "localPort", localPort)
 			return nil
 		}
 	}
@@ -130,6 +138,10 @@ func (m *Manager) Remove(key string, localPort int) error {
 func (m *Manager) RemoveAll(key string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if n := len(m.forwards[key]); n > 0 {
+		flog.Info("port-forwards stopped", "key", key, "count", n)
+	}
 
 	for _, fwd := range m.forwards[key] {
 		stopForward(fwd)

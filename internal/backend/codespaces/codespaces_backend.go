@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
 // ===========================================
@@ -176,6 +177,7 @@ func (codespacesBackend *CodespacesBackend) Start(containerID string) error {
 
 // Exec runs an interactive command inside a codespace via SSH.
 func (codespacesBackend *CodespacesBackend) Exec(workspaceDir string, command []string) error {
+	flog.ContainerExec("codespaces", workspaceDir, command)
 	name := codespacesBackend.resolveCodespaceName(workspaceDir)
 	cmd := codespacesBackend.sshCommand(name, command, true)
 	cmd.Stdin = os.Stdin
@@ -185,8 +187,15 @@ func (codespacesBackend *CodespacesBackend) Exec(workspaceDir string, command []
 }
 
 // ExecCommand returns an unstarted *exec.Cmd for running a command
-// inside a codespace via SSH.
+// inside a codespace via SSH, logging the command to the event log.
+// Hot polling loops should use ExecCommandQuiet instead.
 func (codespacesBackend *CodespacesBackend) ExecCommand(workspaceDir string, command []string) *exec.Cmd {
+	flog.ContainerExec("codespaces", workspaceDir, command)
+	return codespacesBackend.ExecCommandQuiet(workspaceDir, command)
+}
+
+// ExecCommandQuiet is ExecCommand without the event-log entry.
+func (codespacesBackend *CodespacesBackend) ExecCommandQuiet(workspaceDir string, command []string) *exec.Cmd {
 	name := codespacesBackend.resolveCodespaceName(workspaceDir)
 	return codespacesBackend.sshCommand(name, command, true)
 }
