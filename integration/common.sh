@@ -30,6 +30,12 @@ FIXTURE_SRC="${INTEGRATION_DIR}/fixture"
 # into it via setup_agent_test instead of setup_test.
 FIXTURE_AGENT_SRC="${INTEGRATION_DIR}/fixture-agent"
 
+# Alternate fixture whose devcontainer.json carries a populated
+# customizations.fleet.fleetLaunch block (Links + Apps). Tests that
+# exercise `fleet launch` opt into it via setup_launch_test so the
+# in-instance launcher has something to list / resolve.
+FIXTURE_LAUNCH_SRC="${INTEGRATION_DIR}/fixture-launch"
+
 # Test scratch dir created fresh per test.
 TEST_SCRATCH_DIR="${TEST_SCRATCH_DIR:-/tmp/fleet-man-itest}"
 
@@ -204,6 +210,14 @@ setup_test() {
 # they need.
 setup_agent_test() {
   FIXTURE_SRC="${FIXTURE_AGENT_SRC}" setup_test
+}
+
+# setup_launch_test prepares a clean environment whose fixture
+# devcontainer.json declares a customizations.fleet.fleetLaunch block,
+# so the in-instance `fleet launch` subcommands have Links and Apps to
+# list / resolve. Identical to setup_test but uses the launch fixture.
+setup_launch_test() {
+  FIXTURE_SRC="${FIXTURE_LAUNCH_SRC}" setup_test
 }
 
 # seed_fleet_settings writes ~/.fleet/state.json with a fleet record

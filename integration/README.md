@@ -15,6 +15,8 @@ integration/
 │       └── devcontainer.json
 ├── fixture-no-devcontainer/    # repo template deliberately missing a devcontainer
 │                               # config, used by new-fleet check-flow tests
+├── fixture-launch/             # devcontainer with a customizations.fleet.fleetLaunch
+│                               # block (Links + Apps), used by the launch tests
 └── tests/
     ├── 010_up_and_ls.sh        # CLI — up + ls
     ├── 020_exec.sh             # CLI — exec

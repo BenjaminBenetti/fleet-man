@@ -1,0 +1,28 @@
+{
+  "name": "fleet-man integration launch fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "customizations": {
+    "fleet": {
+      "fleetLaunch": {
+        "sites": [
+          {
+            "title": "Grafana",
+            "subTitle": "Metrics dashboards",
+            "url": "http://localhost:3000"
+          },
+          {
+            "title": "Project Docs",
+            "url": "https://example.com/docs"
+          }
+        ],
+        "apps": [
+          {
+            "title": "Webapp",
+            "command": "true",
+            "port": 8080
+          }
+        ]
+      }
+    }
+  }
+}
