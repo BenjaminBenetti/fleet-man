@@ -6,8 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-)
 
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+)
 
 // ===========================================
 // SSH Config Types
@@ -84,12 +85,7 @@ func nativeSSHArgs(config *sshConfig, command []string, allocPTY bool) []string 
 	args = append(args, "--")
 	// Collapse "sh -c 'script'" into just "script" since SSH already
 	// wraps the remote command in a shell.
-	if len(command) == 3 && command[0] == "sh" && command[1] == "-c" {
-		args = append(args, command[2])
-	} else {
-		args = append(args, command...)
-	}
-	return args
+	return backend.AppendRemoteCommand(args, command)
 }
 
 // ===========================================
@@ -176,10 +172,5 @@ func sshArgs(csName string, command []string) []string {
 	args = append(args, "--")
 	// Collapse "sh -c 'script'" into just "script" since gh codespace ssh
 	// already wraps in a shell.
-	if len(command) == 3 && command[0] == "sh" && command[1] == "-c" {
-		args = append(args, command[2])
-	} else {
-		args = append(args, command...)
-	}
-	return args
+	return backend.AppendRemoteCommand(args, command)
 }

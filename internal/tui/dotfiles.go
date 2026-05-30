@@ -8,21 +8,21 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
-// shQuote returns s wrapped in single quotes with any embedded
-// single quotes escaped using the '\'' idiom.
-func shQuote(s string) string {
-	return dotfiles.ShQuote(s)
+// shQuote returns value wrapped in single quotes with any embedded
+// single quotes escaped using the '\” idiom.
+func shQuote(value string) string {
+	return dotfiles.ShQuote(value)
 }
 
 // SanitizeSessionName replaces characters that are problematic in
 // socket filenames with hyphens.
 func SanitizeSessionName(name string) string {
-	r := strings.NewReplacer(".", "-", ":", "-", "/", "-")
-	s := r.Replace(name)
-	if s == "" {
+	replacer := strings.NewReplacer(".", "-", ":", "-", "/", "-")
+	sanitized := replacer.Replace(name)
+	if sanitized == "" {
 		return "fleet"
 	}
-	return s
+	return sanitized
 }
 
 // dotfilesSetupScript returns the raw shell snippet for dotfiles installation

@@ -37,8 +37,8 @@ func nextInstanceColor(current string, direction int) string {
 		current = instanceColorWhite
 	}
 	idx := 0
-	for i, c := range instanceColors {
-		if c.Name == current {
+	for i, colorOption := range instanceColors {
+		if colorOption.Name == current {
 			idx = i
 			break
 		}
@@ -54,9 +54,9 @@ func instanceColorStyle(name string) lipgloss.Style {
 	if name == "" || name == instanceColorWhite {
 		return lipgloss.NewStyle()
 	}
-	for _, c := range instanceColors {
-		if c.Name == name {
-			return lipgloss.NewStyle().Foreground(c.Color)
+	for _, colorOption := range instanceColors {
+		if colorOption.Name == name {
+			return lipgloss.NewStyle().Foreground(colorOption.Color)
 		}
 	}
 	return lipgloss.NewStyle()

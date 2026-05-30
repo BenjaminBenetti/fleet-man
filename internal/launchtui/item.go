@@ -53,21 +53,21 @@ type item struct {
 // cursor indexes into the same slice.
 func buildItems(fl devcontainer.FleetCustomizations) []item {
 	items := make([]item, 0, len(fl.FleetLaunch.Sites)+len(fl.FleetLaunch.Apps))
-	for _, s := range fl.FleetLaunch.Sites {
+	for _, site := range fl.FleetLaunch.Sites {
 		items = append(items, item{
 			kind:     kindLink,
-			title:    s.Title,
-			subtitle: s.SubTitle,
-			url:      s.URL,
+			title:    site.Title,
+			subtitle: site.SubTitle,
+			url:      site.URL,
 		})
 	}
-	for _, a := range fl.FleetLaunch.Apps {
+	for _, app := range fl.FleetLaunch.Apps {
 		items = append(items, item{
 			kind:     kindApp,
-			title:    a.Title,
-			subtitle: localhostHint(a.Port),
-			command:  a.Command,
-			port:     a.Port,
+			title:    app.Title,
+			subtitle: localhostHint(app.Port),
+			command:  app.Command,
+			port:     app.Port,
 		})
 	}
 	return items

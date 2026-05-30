@@ -173,11 +173,11 @@ func rebaseConfigFileLabel(inspected *inspectedContainer, destWorkspaceDir strin
 	if sourceConfigFile == "" || sourceLocalFolder == "" {
 		return ""
 	}
-	rel, err := filepath.Rel(sourceLocalFolder, sourceConfigFile)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	relPath, err := filepath.Rel(sourceLocalFolder, sourceConfigFile)
+	if err != nil || strings.HasPrefix(relPath, "..") {
 		return ""
 	}
-	return filepath.Join(destWorkspaceDir, rel)
+	return filepath.Join(destWorkspaceDir, relPath)
 }
 
 // findWorkspaceMountTarget returns the container-side target path of the
@@ -226,19 +226,19 @@ func buildCloneRunArgs(imageTag, destWorkspaceDir, workspaceTarget string, inspe
 	if inspected.HostConfig.Privileged {
 		args = append(args, "--privileged")
 	}
-	for _, cap := range inspected.HostConfig.CapAdd {
-		args = append(args, "--cap-add", cap)
+	for _, capability := range inspected.HostConfig.CapAdd {
+		args = append(args, "--cap-add", capability)
 	}
-	for _, opt := range inspected.HostConfig.SecurityOpt {
-		args = append(args, "--security-opt", opt)
+	for _, securityOpt := range inspected.HostConfig.SecurityOpt {
+		args = append(args, "--security-opt", securityOpt)
 	}
-	for _, dev := range inspected.HostConfig.Devices {
-		spec := dev.PathOnHost
-		if dev.PathInContainer != "" {
-			spec += ":" + dev.PathInContainer
+	for _, device := range inspected.HostConfig.Devices {
+		spec := device.PathOnHost
+		if device.PathInContainer != "" {
+			spec += ":" + device.PathInContainer
 		}
-		if dev.CgroupPermissions != "" {
-			spec += ":" + dev.CgroupPermissions
+		if device.CgroupPermissions != "" {
+			spec += ":" + device.CgroupPermissions
 		}
 		args = append(args, "--device", spec)
 	}
@@ -261,11 +261,11 @@ func buildCloneRunArgs(imageTag, destWorkspaceDir, workspaceTarget string, inspe
 // newCloneImageTag returns a unique image tag of the form
 // fleet-clone-<hex>:latest.
 func newCloneImageTag() (string, error) {
-	var raw [6]byte
-	if _, err := rand.Read(raw[:]); err != nil {
+	var randomBytes [6]byte
+	if _, err := rand.Read(randomBytes[:]); err != nil {
 		return "", err
 	}
-	return "fleet-clone-" + hex.EncodeToString(raw[:]) + ":latest", nil
+	return "fleet-clone-" + hex.EncodeToString(randomBytes[:]) + ":latest", nil
 }
 
 // cloneImageForContainer returns the fleet.clone.image label value for a

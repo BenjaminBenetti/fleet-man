@@ -2,9 +2,6 @@ package fleet
 
 import (
 	"fmt"
-	"net/url"
-	"os/exec"
-	"path"
 	"strings"
 )
 
@@ -42,58 +39,4 @@ func Resolve(name string, repoFlag string) (*Target, error) {
 		return nil, fmt.Errorf("could not infer fleet from cwd: %w (use fleet/instance or --repo)", err)
 	}
 	return &Target{Fleet: fleetName, Instance: name}, nil
-}
-
-// FleetNameFromCwd reads the git remote origin URL from the current directory
-// and derives a fleet name from it.
-func FleetNameFromCwd() (string, error) {
-	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
-	if err != nil {
-		return "", fmt.Errorf("not in a git repo or no origin remote: %w", err)
-	}
-	remote := strings.TrimSpace(string(out))
-	name := FleetNameFromRemote(remote)
-	if name == "" {
-		return "", fmt.Errorf("could not parse fleet name from remote %q", remote)
-	}
-	return name, nil
-}
-
-// FleetNameFromRemote extracts a fleet name from a git remote URL.
-// Examples:
-//
-//	git@github.com:org/fleet-man.git → fleet-man
-//	https://github.com/org/fleet-man.git → fleet-man
-//	https://github.com/org/fleet-man → fleet-man
-func FleetNameFromRemote(remote string) string {
-	remote = strings.TrimSpace(remote)
-
-	// Handle SSH-style: git@github.com:org/repo.git
-	if strings.Contains(remote, ":") && !strings.Contains(remote, "://") {
-		parts := strings.SplitN(remote, ":", 2)
-		if len(parts) == 2 {
-			remote = parts[1]
-		}
-	} else {
-		// Handle HTTPS-style URLs
-		parsed, err := url.Parse(remote)
-		if err != nil {
-			return ""
-		}
-		remote = parsed.Path
-	}
-
-	// Get the last path component and strip .git suffix
-	name := path.Base(remote)
-	name = strings.TrimSuffix(name, ".git")
-	return name
-}
-
-// RemoteURLFromCwd reads the git remote origin URL from the current directory.
-func RemoteURLFromCwd() (string, error) {
-	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
-	if err != nil {
-		return "", fmt.Errorf("not in a git repo or no origin remote: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
 }

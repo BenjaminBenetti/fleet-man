@@ -95,8 +95,8 @@ func (coderBackend *CoderBackend) Up(workspaceDir string, _ []backend.Mount) (*b
 // be in "workspace.agent" format. Coder lifecycle commands (stop, start,
 // delete) operate on the workspace, not individual agents.
 func workspaceName(containerID string) string {
-	if i := strings.Index(containerID, "."); i >= 0 {
-		return containerID[:i]
+	if dotIndex := strings.Index(containerID, "."); dotIndex >= 0 {
+		return containerID[:dotIndex]
 	}
 	return containerID
 }
@@ -172,33 +172,7 @@ func (coderBackend *CoderBackend) ExecCommand(workspaceDir string, command []str
 // Stats returns CPU and memory usage for the given workspace IDs (names).
 // Uses SSH to read /proc stats from each workspace concurrently.
 func (coderBackend *CoderBackend) Stats(containerIDs []string) (map[string]*backend.ContainerStats, error) {
-	if len(containerIDs) == 0 {
-		return nil, nil
-	}
-
-	result := make(map[string]*backend.ContainerStats)
-	type statsResult struct {
-		id    string
-		stats *backend.ContainerStats
-		err   error
-	}
-
-	ch := make(chan statsResult, len(containerIDs))
-	for _, id := range containerIDs {
-		go func(wsName string) {
-			stats, err := coderBackend.fetchWorkspaceStats(wsName)
-			ch <- statsResult{wsName, stats, err}
-		}(id)
-	}
-
-	for range containerIDs {
-		received := <-ch
-		if received.err == nil && received.stats != nil {
-			result[received.id] = received.stats
-		}
-	}
-
-	return result, nil
+	return backend.ConcurrentStats(containerIDs, coderBackend.fetchWorkspaceStats)
 }
 
 // Logs streams workspace build logs.
@@ -471,22 +445,7 @@ func (coderBackend *CoderBackend) fetchWorkspaceStats(wsName string) (*backend.C
 		return nil, err
 	}
 
-	var totalCPU, totalMem float64
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		cpu, _ := parseFloat(fields[0])
-		mem, _ := parseFloat(fields[1])
-		totalCPU += cpu
-		totalMem += mem
-	}
-
-	return &backend.ContainerStats{
-		CPUMillicores: totalCPU * 10, // convert percentage to millicores
-		MemoryMB:      totalMem / 1024,
-	}, nil
+	return backend.AggregatePSStats(out), nil
 }
 
 // sshArgs builds the argument list for `coder ssh`.
@@ -506,10 +465,5 @@ func sshArgs(wsName string, command []string) []string {
 	args = append(args, "--")
 	// Collapse "sh -c 'script'" into just "script" since coder ssh
 	// already wraps in a shell.
-	if len(command) == 3 && command[0] == "sh" && command[1] == "-c" {
-		args = append(args, command[2])
-	} else {
-		args = append(args, command...)
-	}
-	return args
+	return backend.AppendRemoteCommand(args, command)
 }

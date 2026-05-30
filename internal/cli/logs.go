@@ -1,11 +1,7 @@
 package cli
 
 import (
-	"fmt"
-
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
-	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -17,22 +13,7 @@ func newLogsCmd() *cobra.Command {
 		Short: "Show logs for an instance",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			target, err := fleet.Resolve(args[0], "")
-			if err != nil {
-				return err
-			}
-
-			st, err := state.Load()
-			if err != nil {
-				return err
-			}
-
-			f, ok := st.Fleets[target.Fleet]
-			if !ok {
-				return fmt.Errorf("fleet %q not found", target.Fleet)
-			}
-
-			instance, err := f.GetInstance(target.Instance)
+			_, _, _, instance, err := resolveInstance(args[0], "")
 			if err != nil {
 				return err
 			}

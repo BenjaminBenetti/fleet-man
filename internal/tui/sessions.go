@@ -325,15 +325,15 @@ func deleteGroupSessionsCmd(instanceBackend backend.Backend, workspaceDir string
 func sessionStillExists(last lastSession, sessions []tmuxSession) bool {
 	if last.groupID != "" {
 		// Group session: check if any session has the group prefix.
-		for _, s := range sessions {
-			if strings.Contains(s.Name, groupSep+last.groupID) {
+		for _, session := range sessions {
+			if strings.Contains(session.Name, groupSep+last.groupID) {
 				return true
 			}
 		}
 		return false
 	}
-	for _, s := range sessions {
-		if s.Name == last.sessionName {
+	for _, session := range sessions {
+		if session.Name == last.sessionName {
 			return true
 		}
 	}
@@ -354,14 +354,14 @@ func parseTmuxSessions(output string) []tmuxSession {
 		if len(parts) < 1 || parts[0] == "" {
 			continue
 		}
-		s := tmuxSession{Name: parts[0]}
+		session := tmuxSession{Name: parts[0]}
 		if len(parts) >= 2 {
-			s.Windows, _ = strconv.Atoi(parts[1])
+			session.Windows, _ = strconv.Atoi(parts[1])
 		}
 		if len(parts) >= 3 {
-			s.Attached = parts[2] == "1"
+			session.Attached = parts[2] == "1"
 		}
-		sessions = append(sessions, s)
+		sessions = append(sessions, session)
 	}
 	return sessions
 }
@@ -370,9 +370,9 @@ func parseTmuxSessions(output string) []tmuxSession {
 // "session-2", "session-3", etc. based on existing sessions.
 func nextSessionName(existing []tmuxSession) string {
 	maxN := 1
-	for _, s := range existing {
-		if strings.HasPrefix(s.Name, "session-") {
-			if n, err := strconv.Atoi(strings.TrimPrefix(s.Name, "session-")); err == nil && n > maxN {
+	for _, session := range existing {
+		if strings.HasPrefix(session.Name, "session-") {
+			if n, err := strconv.Atoi(strings.TrimPrefix(session.Name, "session-")); err == nil && n > maxN {
 				maxN = n
 			}
 		}

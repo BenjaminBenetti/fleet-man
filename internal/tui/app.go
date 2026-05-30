@@ -617,11 +617,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if !ok {
 							continue
 						}
-						h := page.itemHeights[id]
-						if h <= 0 {
-							h = 1
+						rowHeight := page.itemHeights[id]
+						if rowHeight <= 0 {
+							rowHeight = 1
 						}
-						if mouseMsg.Y >= y && mouseMsg.Y < y+h {
+						if mouseMsg.Y >= y && mouseMsg.Y < y+rowHeight {
 							page.cursor = i
 							hit = true
 							break
@@ -712,27 +712,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Merge parameters: keep existing user-set values, add new ones with defaults
 		existing := make(map[string]string)
-		for _, p := range m.config.CoderSettings.Parameters {
-			if p.Value != "" {
-				existing[p.Name] = p.Value
+		for _, param := range m.config.CoderSettings.Parameters {
+			if param.Value != "" {
+				existing[param.Name] = param.Value
 			}
 		}
 		var newParams []state.CoderParameter
-		for _, rp := range msg.params {
-			existingValue := existing[rp.Name]
+		for _, fetchedParam := range msg.params {
+			existingValue := existing[fetchedParam.Name]
 			newParams = append(newParams, state.CoderParameter{
-				Name:         rp.Name,
+				Name:         fetchedParam.Name,
 				Value:        existingValue,
-				DefaultValue: rp.DefaultValue,
-				DisplayName:  rp.DisplayName,
-				Description:  rp.Description,
-				Type:         rp.Type,
+				DefaultValue: fetchedParam.DefaultValue,
+				DisplayName:  fetchedParam.DisplayName,
+				Description:  fetchedParam.Description,
+				Type:         fetchedParam.Type,
 			})
 		}
 		m.config.CoderSettings.Parameters = newParams
 		m.coderPresets = nil
-		for _, p := range msg.presets {
-			m.coderPresets = append(m.coderPresets, p.Name)
+		for _, preset := range msg.presets {
+			m.coderPresets = append(m.coderPresets, preset.Name)
 		}
 		if m.config.CoderSettings.Preset == "" && len(m.coderPresets) > 0 {
 			m.config.CoderSettings.Preset = m.coderPresets[0]
@@ -779,13 +779,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// waiter so the single in-flight command keeps draining the channel.
 		// msg is already the concrete controlEventMsg here (the switch binds
 		// it), so convert it to the underlying controlEvent directly.
-		ev := controlEvent(msg)
+		event := controlEvent(msg)
 		var cmd tea.Cmd
-		switch ev.env.Type {
+		switch event.env.Type {
 		case control.TypeOpenBrowser:
-			var p control.OpenBrowserPayload
-			if json.Unmarshal(ev.env.Payload, &p) == nil && p.URL != "" {
-				cmd = m.openControlBrowserCmd(ev.instanceKey, p.URL)
+			var payload control.OpenBrowserPayload
+			if json.Unmarshal(event.env.Payload, &payload) == nil && payload.URL != "" {
+				cmd = m.openControlBrowserCmd(event.instanceKey, payload.URL)
 			}
 		}
 		return m, tea.Batch(cmd, waitForControlEventCmd(m.control.events))
@@ -820,9 +820,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// kill panes via an outer tmux binding that bypasses fleet —
 		// can't race ahead of the save. The diff gate makes idle ticks
 		// free. Always reschedule so the tick keeps firing.
-		fp := m.fleetPage
-		if fp != nil && fp.splitPaneID != "" && !fp.activeGroup.Empty() && splitOpen() {
-			fp.saveCurrentGroupLayout(m.st)
+		fleetPage := m.fleetPage
+		if fleetPage != nil && fleetPage.splitPaneID != "" && !fleetPage.activeGroup.Empty() && splitOpen() {
+			fleetPage.saveCurrentGroupLayout(m.st)
 		}
 		extraCmds = append(extraCmds, layoutTickCmd())
 
@@ -867,18 +867,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// partially succeed (some splits OK, some failed after retries),
 		// in which case both are set — show the error AND wire up the
 		// panes that did make it.
-		fp := m.fleetPage
-		if !fp.finishGroupRestore(msg.restoreSeq) {
+		fleetPage := m.fleetPage
+		if !fleetPage.finishGroupRestore(msg.restoreSeq) {
 			break
 		}
 		if msg.err != nil {
 			m.message = fmt.Sprintf("failed to do tmux split pane: %v", msg.err)
 		}
 		if msg.paneID != "" {
-			fp.splitPaneID = msg.paneID
-			fp.splitRef = msg.ref
-			fp.splitSession = msg.session
-			fp.activeGroup = ActiveGroup{Ref: msg.ref, GroupID: msg.groupID}
+			fleetPage.splitPaneID = msg.paneID
+			fleetPage.splitRef = msg.ref
+			fleetPage.splitSession = msg.session
+			fleetPage.activeGroup = ActiveGroup{Ref: msg.ref, GroupID: msg.groupID}
 			m.sessionStore.SetLastActive(msg.ref, lastSession{sessionName: msg.session, groupID: msg.groupID})
 			bindHostSplitKeys(msg.ref.Key(), msg.groupID)
 			extraCmds = append(extraCmds, m.refreshInstanceSessions(msg.ref))
@@ -931,10 +931,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sessionStore.ClearLastActive(msg.ref)
 			}
 		}
-		fp := m.fleetPage
+		fleetPage := m.fleetPage
 		if msg.groupID != "" {
 			key := computeGroupKey(msg.ref.Instance, msg.groupID)
-			delete(fp.savedGroups, key)
+			delete(fleetPage.savedGroups, key)
 			if m.st != nil && m.st.GroupLayouts != nil {
 				delete(m.st.GroupLayouts, key)
 				_ = state.Save(m.st)
@@ -943,15 +943,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Tear down the split only when the deletion targets the very
 		// group/session we're attached to — must match instance too,
 		// since group IDs are not unique across instances.
-		deletedActive := fp.splitRef == msg.ref &&
-			(fp.splitSession == msg.sessionName ||
-				(msg.groupID != "" && fp.activeGroup.GroupID == msg.groupID))
+		deletedActive := fleetPage.splitRef == msg.ref &&
+			(fleetPage.splitSession == msg.sessionName ||
+				(msg.groupID != "" && fleetPage.activeGroup.GroupID == msg.groupID))
 		if deletedActive {
-			if fp.splitPaneID != "" {
+			if fleetPage.splitPaneID != "" {
 				killAllSplitPanes()
 				unbindHostSplitKeys()
 			}
-			fp.clearSplit()
+			fleetPage.clearSplit()
 		}
 		if m.sessionStore.IsExpanded(msg.ref) {
 			if f, ok := m.st.Fleets[msg.ref.Fleet]; ok {
@@ -986,21 +986,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							}
 						case fleet.StatusFailed:
 							delete(m.creating, key)
-							fp := m.fleetPage
+							fleetPage := m.fleetPage
 							if instance.Backend == fleet.BackendCodespaces && strings.HasPrefix(instance.Error, codespacesbackend.ErrPrefixAuthScope) {
-								fp.mode = viewCodespacesAuth
-								fp.dialogFleet = fleetName
-								fp.dialogInst = instName
+								fleetPage.mode = viewCodespacesAuth
+								fleetPage.dialogFleet = fleetName
+								fleetPage.dialogInst = instName
 								m.message = ""
 							} else if instance.Backend == fleet.BackendCodespaces && strings.HasPrefix(instance.Error, codespacesbackend.ErrPrefixMachine) {
-								fp.mode = viewCodespacesMachine
-								fp.dialogFleet = fleetName
-								fp.dialogInst = instName
+								fleetPage.mode = viewCodespacesMachine
+								fleetPage.dialogFleet = fleetName
+								fleetPage.dialogInst = instName
 								m.message = ""
 							} else if instance.Backend == fleet.BackendCodespaces && strings.HasPrefix(instance.Error, codespacesbackend.ErrPrefixLimit) {
-								fp.mode = viewCodespacesLimit
-								fp.dialogFleet = fleetName
-								fp.dialogInst = instName
+								fleetPage.mode = viewCodespacesLimit
+								fleetPage.dialogFleet = fleetName
+								fleetPage.dialogInst = instName
 								m.message = ""
 							} else {
 								m.message = fmt.Sprintf("Failed to create %s: %s", key, instance.Error)
@@ -1018,9 +1018,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		extraCmds = append(extraCmds, pollCreatingCmd())
 
 	case groupCycleMsg:
-		fp := m.fleetPage
-		if msg.seq == fp.debounceSeq && !fp.pendingGroup.Empty() {
-			cmd := fp.commitGroupCycle(&m)
+		fleetPage := m.fleetPage
+		if msg.seq == fleetPage.debounceSeq && !fleetPage.pendingGroup.Empty() {
+			cmd := fleetPage.commitGroupCycle(&m)
 			extraCmds = append(extraCmds, cmd)
 		}
 	}
@@ -1049,12 +1049,12 @@ func (m model) View() string {
 		// the second saveCurrentGroupLayout reads the post-kill tmux
 		// layout (1 pane, TUI only) and overwrites the correct save
 		// with a truncated single-pane record.
-		fp := m.fleetPage
-		if fp.splitPaneID != "" {
-			fp.saveCurrentGroupLayout(m.st)
+		fleetPage := m.fleetPage
+		if fleetPage.splitPaneID != "" {
+			fleetPage.saveCurrentGroupLayout(m.st)
 			killAllSplitPanes()
-			fp.splitPaneID = ""
-			fp.restoringGroupID = ""
+			fleetPage.splitPaneID = ""
+			fleetPage.restoringGroupID = ""
 		}
 		m.portForwards.Shutdown()
 		if m.inHostTmux {
@@ -1109,15 +1109,15 @@ func Run() error {
 	// including those without OSC 52 support.
 	var clipCancel context.CancelFunc
 	if m.inHostTmux {
-		if cs := newClipboardSync(); cs != nil {
+		if clipSync := newClipboardSync(); clipSync != nil {
 			ctx, cancel := context.WithCancel(context.Background())
 			clipCancel = cancel
-			go cs.Start(ctx)
+			go clipSync.Start(ctx)
 		}
 	}
 
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	finalModel, err := p.Run()
+	program := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	finalModel, err := program.Run()
 
 	if clipCancel != nil {
 		clipCancel()

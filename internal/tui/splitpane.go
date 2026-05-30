@@ -35,19 +35,19 @@ func tmuxWindowSize() (int, int) {
 	if len(parts) != 2 {
 		return 0, 0
 	}
-	w, err1 := strconv.Atoi(parts[0])
-	h, err2 := strconv.Atoi(parts[1])
+	width, err1 := strconv.Atoi(parts[0])
+	height, err2 := strconv.Atoi(parts[1])
 	if err1 != nil || err2 != nil {
 		return 0, 0
 	}
-	return w, h
+	return width, height
 }
 
 // quoteArgs builds a shell-safe command string from exec args.
 func quoteArgs(args []string) string {
 	quoted := make([]string, len(args))
 	for i, arg := range args {
-		quoted[i] = "'" + strings.ReplaceAll(arg, "'", "'\\''") + "'"
+		quoted[i] = shQuote(arg)
 	}
 	return strings.Join(quoted, " ")
 }
@@ -539,11 +539,11 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 			if i >= len(paneSlots) {
 				break
 			}
-			pid := paneSlots[i]
-			tagPaneTitle(pid, sessName)
+			paneID := paneSlots[i]
+			tagPaneTitle(paneID, sessName)
 			shellCmd := fmt.Sprintf("%s shell %s --session %s", self, qualifiedName, sessName)
 			script := shellCmd + `; __rc=$?; if [ $__rc -ne 0 ]; then echo; echo "exited with code $__rc — closing in 3s"; sleep 3; fi; exit $__rc`
-			_ = exec.Command("tmux", "respawn-pane", "-k", "-t", pid, "sh", "-c", script).Run()
+			_ = exec.Command("tmux", "respawn-pane", "-k", "-t", paneID, "sh", "-c", script).Run()
 		}
 
 		if firstPaneID != "" {

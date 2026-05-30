@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/appstart"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -202,7 +203,7 @@ func openBrowserProxyCmd(
 				if err := ensureLandingPageRunning(instanceBackend, workspaceDir); err != nil {
 					return browserProxyMsg{instanceKey: instanceKey, err: fmt.Errorf("landing page: %w", err)}
 				}
-				initialURL = fmt.Sprintf("http://localhost:%d", landingpage.DefaultPort)
+				initialURL = appstart.LocalURL(landingpage.DefaultPort)
 			case hasURL:
 				initialURL = fc.Browser.InitialURL
 			}
@@ -241,7 +242,7 @@ func (fleetPage *fleetPage) beginBrowserOpen(m *model, instance *fleet.Instance,
 func (fleetPage *fleetPage) startBrowser(m *model, instance *fleet.Instance, fleetName string) tea.Cmd {
 	multiplePerFleet := multipleBrowsersPerFleet(m)
 	dataDir := browserDataDir(fleetName, instance.Name, multiplePerFleet)
-	b := m.instanceBackend(instance)
+	instanceBackend := m.instanceBackend(instance)
 	instanceKey := fleetName + "/" + instance.Name
 
 	preferFleetLaunch := false
@@ -252,7 +253,7 @@ func (fleetPage *fleetPage) startBrowser(m *model, instance *fleet.Instance, fle
 	if _, running := existingBrowserPID(dataDir); running {
 		if !multiplePerFleet && m.config != nil && m.config.BrowserSettings.AutoSwitchEnabled() {
 			m.message = fmt.Sprintf("Switching browser to %s...", instance.GetDisplayName())
-			return switchBrowserCmd(m.portForwards, b, instance, instanceKey, dataDir, preferFleetLaunch, "")
+			return switchBrowserCmd(m.portForwards, instanceBackend, instance, instanceKey, dataDir, preferFleetLaunch, "")
 		}
 		fleetPage.mode = viewConfirmBrowserSwitch
 		fleetPage.dialogFleet = fleetName
@@ -260,7 +261,7 @@ func (fleetPage *fleetPage) startBrowser(m *model, instance *fleet.Instance, fle
 		return nil
 	}
 	m.message = fmt.Sprintf("Starting browser proxy for %s...", instance.GetDisplayName())
-	return openBrowserProxyCmd(m.portForwards, b, instance, instanceKey, dataDir, preferFleetLaunch, "")
+	return openBrowserProxyCmd(m.portForwards, instanceBackend, instance, instanceKey, dataDir, preferFleetLaunch, "")
 }
 
 // openControlBrowserCmd builds the browser-open command for a control-socket
@@ -317,16 +318,16 @@ func (m *model) openControlBrowserCmd(instanceKey, url string) tea.Cmd {
 	}
 
 	dataDir := browserDataDir(fleetName, instance.Name, multipleBrowsersPerFleet(m))
-	b := m.instanceBackend(instance)
+	instanceBackend := m.instanceBackend(instance)
 
 	// If a browser is already live for this data dir but proxied to a different
 	// instance, switch it over to this one (kill + relaunch) instead of letting
 	// Chrome forward the URL into the wrong-proxied process.
 	_, running := existingBrowserPID(dataDir)
 	if shouldSwitchBrowser(running, m.activeBrowser[dataDir], instanceKey) {
-		return switchBrowserCmd(m.portForwards, b, instance, instanceKey, dataDir, false, url)
+		return switchBrowserCmd(m.portForwards, instanceBackend, instance, instanceKey, dataDir, false, url)
 	}
-	return openBrowserProxyCmd(m.portForwards, b, instance, instanceKey, dataDir, false, url)
+	return openBrowserProxyCmd(m.portForwards, instanceBackend, instance, instanceKey, dataDir, false, url)
 }
 
 // shouldSwitchBrowser reports whether a control-socket open for instanceKey must

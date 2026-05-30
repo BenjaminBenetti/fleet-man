@@ -6,7 +6,6 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -26,28 +25,13 @@ Examples:
   fleet exec-in-session my-fleet/agent-1 task-session "npm test"`,
 		Args: cobra.MinimumNArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			target, err := fleet.Resolve(args[0], "")
+			_, _, _, instance, err := resolveInstance(args[0], "")
 			if err != nil {
 				return err
 			}
 
 			sessionName := args[1]
 			command := strings.Join(args[2:], " ")
-
-			st, err := state.Load()
-			if err != nil {
-				return err
-			}
-
-			f, ok := st.Fleets[target.Fleet]
-			if !ok {
-				return fmt.Errorf("fleet %q not found", target.Fleet)
-			}
-
-			instance, err := f.GetInstance(target.Instance)
-			if err != nil {
-				return err
-			}
 
 			if instance.Status != fleet.StatusRunning {
 				return fmt.Errorf("instance %s is not running (status: %s)", args[0], instance.Status)

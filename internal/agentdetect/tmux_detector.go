@@ -80,21 +80,21 @@ func (d *TmuxPaneChangeDetector) Detect(capture backend.AllSessions, now time.Ti
 	anyHadHistory := false
 	workingDetected := false
 
-	for sessionName, sc := range capture.Sessions {
-		if !sc.OK {
+	for sessionName, sessionCapture := range capture.Sessions {
+		if !sessionCapture.OK {
 			continue
 		}
 		prev, hasPrev := d.prevScreen[sessionName]
-		lc := d.lastChange[sessionName]
+		lastChange := d.lastChange[sessionName]
 		if hasPrev {
 			anyHadHistory = true
-			if countDiffs(prev, sc.Content) >= screenChangeThreshold {
-				lc = now
+			if countDiffs(prev, sessionCapture.Content) >= screenChangeThreshold {
+				lastChange = now
 			}
 		}
-		nextPrev[sessionName] = sc.Content
-		nextLastChange[sessionName] = lc
-		if !lc.IsZero() && now.Sub(lc) < screenActivityWindow {
+		nextPrev[sessionName] = sessionCapture.Content
+		nextLastChange[sessionName] = lastChange
+		if !lastChange.IsZero() && now.Sub(lastChange) < screenActivityWindow {
 			workingDetected = true
 		}
 	}
@@ -119,19 +119,19 @@ func (d *TmuxPaneChangeDetector) Detect(capture backend.AllSessions, now time.Ti
 
 // countDiffs returns the number of character positions that differ
 // between two strings, plus any length difference.
-func countDiffs(a, b string) int {
+func countDiffs(oldContent, newContent string) int {
 	diffs := 0
-	ar, br := []rune(a), []rune(b)
-	minLen := min(len(ar), len(br))
+	oldRunes, newRunes := []rune(oldContent), []rune(newContent)
+	minLen := min(len(oldRunes), len(newRunes))
 	for i := range minLen {
-		if ar[i] != br[i] {
+		if oldRunes[i] != newRunes[i] {
 			diffs++
 		}
 	}
-	if len(ar) > minLen {
-		diffs += len(ar) - minLen
+	if len(oldRunes) > minLen {
+		diffs += len(oldRunes) - minLen
 	} else {
-		diffs += len(br) - minLen
+		diffs += len(newRunes) - minLen
 	}
 	return diffs
 }

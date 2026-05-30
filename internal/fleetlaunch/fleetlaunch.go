@@ -44,8 +44,8 @@ const (
 // reliably takes effect on the next start. It is NOT called when the
 // binary is already up to date, so passing a hook that always kills a
 // service won't churn services unnecessarily.
-func EnsureFresh(b backend.Backend, workspaceDir string, beforeRefresh func() error) (bool, error) {
-	refresh, err := needsRefresh(b, workspaceDir)
+func EnsureFresh(instanceBackend backend.Backend, workspaceDir string, beforeRefresh func() error) (bool, error) {
+	refresh, err := needsRefresh(instanceBackend, workspaceDir)
 	if err != nil {
 		return false, err
 	}
@@ -57,7 +57,7 @@ func EnsureFresh(b backend.Backend, workspaceDir string, beforeRefresh func() er
 			return false, err
 		}
 	}
-	if err := copyBinary(b, workspaceDir); err != nil {
+	if err := copyBinary(instanceBackend, workspaceDir); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -78,7 +78,7 @@ func EnsureFresh(b backend.Backend, workspaceDir string, beforeRefresh func() er
 //
 // The four states are signalled by stdout markers from a single shell
 // snippet so the whole probe is one exec call.
-func needsRefresh(b backend.Backend, workspaceDir string) (bool, error) {
+func needsRefresh(instanceBackend backend.Backend, workspaceDir string) (bool, error) {
 	if version.Version == "" {
 		return true, nil
 	}
@@ -97,7 +97,7 @@ else
   fi
 fi`, RemotePath, RemotePath)
 
-	out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", probe}).CombinedOutput()
+	out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", probe}).CombinedOutput()
 	if err != nil {
 		return false, fmt.Errorf("probe remote binary: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -128,7 +128,7 @@ fi`, RemotePath, RemotePath)
 // privoxy and tmux installers elsewhere). The branch is decided BEFORE
 // stdin is consumed so the binary bytes flow down exactly one of the
 // two paths — important because a pipe can only be read once.
-func copyBinary(b backend.Backend, workspaceDir string) error {
+func copyBinary(instanceBackend backend.Backend, workspaceDir string) error {
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate fleet binary: %w", err)
@@ -147,7 +147,7 @@ else
   sudo -n sh -c "$write"
 fi`, RemotePath, RemotePath, RemotePath, remoteDir)
 
-	cmd := b.ExecCommand(workspaceDir, []string{"sh", "-c", script})
+	cmd := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", script})
 	cmd.Stdin = bin
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("copy fleet binary: %w (%s)", err, strings.TrimSpace(string(out)))

@@ -2,40 +2,12 @@ package backend
 
 import "testing"
 
-func TestParseToolProbeOutput(t *testing.T) {
-	tests := []struct {
-		name     string
-		output   string
-		wantTool string
-		wantOK   bool
-	}{
-		{"claude detected", "claude\n", "claude", true},
-		{"copilot detected", "copilot\n", "copilot", true},
-		{"codex detected", "codex\n", "codex", true},
-		{"gemini detected", "gemini\n", "gemini", true},
-		{"no agent", "-\n", "", true},
-		{"empty output (exec failure)", "", "", false},
-		{"whitespace only (exec failure)", "  \n", "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tool, ok := ParseToolProbeOutput(tt.output)
-			if ok != tt.wantOK {
-				t.Fatalf("ParseToolProbeOutput(%q) ok = %v, want %v", tt.output, ok, tt.wantOK)
-			}
-			if tool != tt.wantTool {
-				t.Fatalf("ParseToolProbeOutput(%q) tool = %q, want %q", tt.output, tool, tt.wantTool)
-			}
-		})
-	}
-}
-
 // ===========================================
 // ParseCaptureOutput — sessions
 // ===========================================
 
 func TestParseCaptureOutput_Sessions(t *testing.T) {
-	mk := func(name, content string) string {
+	mkSession := func(name, content string) string {
 		return sessionMarker + name + "\n" + content
 	}
 
@@ -50,7 +22,7 @@ func TestParseCaptureOutput_Sessions(t *testing.T) {
 	})
 
 	t.Run("single session with content", func(t *testing.T) {
-		input := mk("main", "line1\nline2\n")
+		input := mkSession("main", "line1\nline2\n")
 		sessions, _, _ := ParseCaptureOutput(input)
 		if len(sessions) != 1 {
 			t.Fatalf("expected 1 session, got %d", len(sessions))
@@ -68,7 +40,7 @@ func TestParseCaptureOutput_Sessions(t *testing.T) {
 	})
 
 	t.Run("multiple sessions are demultiplexed", func(t *testing.T) {
-		input := mk("main", "alpha\n") + mk("session-2", "beta\nbeta2\n") + mk("hex-abc", "")
+		input := mkSession("main", "alpha\n") + mkSession("session-2", "beta\nbeta2\n") + mkSession("hex-abc", "")
 		sessions, _, _ := ParseCaptureOutput(input)
 		if len(sessions) != 3 {
 			t.Fatalf("expected 3 sessions, got %d", len(sessions))
@@ -85,7 +57,7 @@ func TestParseCaptureOutput_Sessions(t *testing.T) {
 	})
 
 	t.Run("session names with special characters survive", func(t *testing.T) {
-		input := mk("fleet~abc123~def", "content")
+		input := mkSession("fleet~abc123~def", "content")
 		sessions, _, _ := ParseCaptureOutput(input)
 		capture, ok := sessions["fleet~abc123~def"]
 		if !ok {

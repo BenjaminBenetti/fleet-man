@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/control"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 )
 
@@ -23,55 +21,6 @@ type State struct {
 	// GitHub release notes once, then records the version here so the
 	// dialog isn't shown again.
 	LastSeenVersion string `json:"lastSeenVersion,omitempty"`
-}
-
-// FleetDir returns the base directory for fleet state.
-func FleetDir() string {
-	return filepath.Join(os.Getenv("HOME"), ".fleet")
-}
-
-// StatePath returns the path to the state file.
-func StatePath() string {
-	return filepath.Join(FleetDir(), "state.json")
-}
-
-// WorkspacesDir returns the base directory for instance workspace clones.
-func WorkspacesDir() string {
-	return filepath.Join(FleetDir(), "workspaces")
-}
-
-// WarnPath returns the path to the host-side warning file for a single
-// instance. The TUI watches this path after StatusRunning and surfaces
-// the first line as a banner — a non-existent file simply means
-// "no warnings". Producers should use WriteWarn rather than constructing
-// the path manually so all warnings end up in the same well-known place.
-func WarnPath(fleetName, instanceName string) string {
-	return filepath.Join(FleetDir(), "logs", fleetName+"-"+instanceName+".warn")
-}
-
-// ControlDir returns the host directory bind-mounted into an instance to
-// carry the control socket. It is per-instance (not per-fleet) so the host
-// can tell which instance a received message came from, and it lives under
-// the instance's workspace tree so it shares that tree's lifecycle (created
-// when the instance is and cleaned up with it).
-func ControlDir(fleetName, instanceName string) string {
-	return filepath.Join(WorkspacesDir(), fleetName, instanceName, ".control")
-}
-
-// ControlSocketPath returns the host path of an instance's control socket.
-// The basename comes from control.SocketName so the host listener and the
-// in-container client agree on the same file through the bind mount.
-func ControlSocketPath(fleetName, instanceName string) string {
-	return filepath.Join(ControlDir(fleetName, instanceName), control.SocketName)
-}
-
-// WriteWarn writes warning to the instance's WarnPath. Errors are
-// intentionally swallowed: warning files are best-effort surfacing of
-// non-fatal failures during instance creation, and a write failure here
-// must not itself fail the creation flow. Callers can assume the
-// function returns immediately and never panics.
-func WriteWarn(fleetName, instanceName, warning string) {
-	_ = os.WriteFile(WarnPath(fleetName, instanceName), []byte(warning), 0644)
 }
 
 // Load reads the state from disk. Returns an empty state if the file doesn't exist.
@@ -126,23 +75,23 @@ func Save(s *State) error {
 
 // GetOrCreateFleet returns an existing fleet by name, or creates a new one with the given remote.
 func (s *State) GetOrCreateFleet(name, remote string) *fleet.Fleet {
-	if f, ok := s.Fleets[name]; ok {
-		return f
+	if existing, ok := s.Fleets[name]; ok {
+		return existing
 	}
-	f := &fleet.Fleet{
+	newFleet := &fleet.Fleet{
 		Name:      name,
 		Remote:    remote,
 		Instances: make([]*fleet.Instance, 0),
 	}
-	s.Fleets[name] = f
-	return f
+	s.Fleets[name] = newFleet
+	return newFleet
 }
 
 // FindFleetByRemote finds a fleet by its remote URL.
 func (s *State) FindFleetByRemote(remote string) *fleet.Fleet {
-	for _, f := range s.Fleets {
-		if f.Remote == remote {
-			return f
+	for _, candidate := range s.Fleets {
+		if candidate.Remote == remote {
+			return candidate
 		}
 	}
 	return nil

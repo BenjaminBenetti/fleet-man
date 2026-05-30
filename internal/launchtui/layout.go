@@ -156,11 +156,11 @@ func layoutSection(items []item, sec section, avail, sectionTop int) ([]itemPlac
 	x, row, col := 0, 0, 0
 	for _, it := range items {
 		label := pillLabel(it, avail)
-		w := pillWidth(label)
+		pillW := pillWidth(label)
 		// Wrap when this pill wouldn't fit on the current row (but never wrap a
 		// row that has no pills yet — a single over-wide pill just gets its own
 		// row, clamped by pillLabel).
-		if col > 0 && x+w > avail {
+		if col > 0 && x+pillW > avail {
 			row++
 			col = 0
 			x = 0
@@ -170,9 +170,9 @@ func layoutSection(items []item, sec section, avail, sectionTop int) ([]itemPlac
 			row:     row,
 			col:     col,
 			label:   label,
-			rect:    rect{X: horizontalMargin + x, Y: sectionTop + row*rowStride, W: w, H: 1},
+			rect:    rect{X: horizontalMargin + x, Y: sectionTop + row*rowStride, W: pillW, H: 1},
 		})
-		x += w + pillGap
+		x += pillW + pillGap
 		col++
 	}
 	rows := 0

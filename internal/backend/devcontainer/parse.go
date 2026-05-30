@@ -5,28 +5,24 @@ import (
 	"strings"
 )
 
-func parseFloat(s string) (float64, error) {
-	return strconv.ParseFloat(strings.TrimSpace(s), 64)
-}
-
-func parseMemToMB(s string) float64 {
-	s = strings.TrimSpace(s)
+func parseMemToMB(memText string) float64 {
+	memText = strings.TrimSpace(memText)
 	multiplier := 1.0
 
-	if strings.HasSuffix(s, "GiB") {
+	if strings.HasSuffix(memText, "GiB") {
 		multiplier = 1024
-		s = strings.TrimSuffix(s, "GiB")
-	} else if strings.HasSuffix(s, "MiB") {
+		memText = strings.TrimSuffix(memText, "GiB")
+	} else if strings.HasSuffix(memText, "MiB") {
 		multiplier = 1
-		s = strings.TrimSuffix(s, "MiB")
-	} else if strings.HasSuffix(s, "KiB") {
+		memText = strings.TrimSuffix(memText, "MiB")
+	} else if strings.HasSuffix(memText, "KiB") {
 		multiplier = 1.0 / 1024
-		s = strings.TrimSuffix(s, "KiB")
-	} else if strings.HasSuffix(s, "B") {
+		memText = strings.TrimSuffix(memText, "KiB")
+	} else if strings.HasSuffix(memText, "B") {
 		multiplier = 1.0 / (1024 * 1024)
-		s = strings.TrimSuffix(s, "B")
+		memText = strings.TrimSuffix(memText, "B")
 	}
 
-	val, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	return val * multiplier
+	value, _ := strconv.ParseFloat(strings.TrimSpace(memText), 64)
+	return value * multiplier
 }

@@ -14,11 +14,11 @@ func hostSSHAuthSock() string {
 	if sock == "" {
 		return ""
 	}
-	fi, err := os.Stat(sock)
+	info, err := os.Stat(sock)
 	if err != nil {
 		return ""
 	}
-	if fi.Mode()&os.ModeSocket == 0 {
+	if info.Mode()&os.ModeSocket == 0 {
 		return ""
 	}
 	return sock

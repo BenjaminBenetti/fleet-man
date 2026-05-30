@@ -216,8 +216,8 @@ func (fleetPage *fleetPage) chooseBrowserLaunch(m *model, preferFleetLaunch bool
 		return nil
 	}
 
-	v := preferFleetLaunch
-	f.Settings.PreferFleetLaunch = &v
+	prefer := preferFleetLaunch
+	f.Settings.PreferFleetLaunch = &prefer
 	_ = state.Save(m.st)
 
 	instance, err := f.GetInstance(fleetPage.dialogInst)
@@ -1421,11 +1421,11 @@ func (fleetPage *fleetPage) updatePortForward(m *model, msg tea.Msg) tea.Cmd {
 }
 
 func (fleetPage *fleetPage) addPortForward(m *model, key string) tea.Cmd {
-	raw := strings.TrimSpace(fleetPage.textInput.Value())
-	if raw == "" {
+	mappingInput := strings.TrimSpace(fleetPage.textInput.Value())
+	if mappingInput == "" {
 		return nil
 	}
-	local, remote, err := parsePortMapping(raw)
+	local, remote, err := parsePortMapping(mappingInput)
 	if err != nil {
 		m.message = err.Error()
 		return nil

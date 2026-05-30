@@ -112,14 +112,9 @@ func execWithBannerCmd(banner string, cmd *exec.Cmd) *exec.Cmd {
 	f.Close()
 
 	// Build a shell command: clear, print banner, exec into container
-	quoted := make([]string, len(cmd.Args))
-	for i, a := range cmd.Args {
-		quoted[i] = "'" + strings.ReplaceAll(a, "'", "'\\''") + "'"
-	}
-
 	script := fmt.Sprintf(
 		`clear; cat '%s'; rm -f '%s'; exec %s`,
-		f.Name(), f.Name(), strings.Join(quoted, " "),
+		f.Name(), f.Name(), quoteArgs(cmd.Args),
 	)
 
 	return exec.Command("sh", "-c", script)

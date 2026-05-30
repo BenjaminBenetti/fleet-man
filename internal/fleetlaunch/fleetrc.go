@@ -47,7 +47,7 @@ var fleetRCContent string
 //     already present, so re-stages don't accumulate duplicates.
 //
 // All paths live in the user's home, so no sudo is needed.
-func EnsureFleetRC(b backend.Backend, workspaceDir, homeDir string) error {
+func EnsureFleetRC(instanceBackend backend.Backend, workspaceDir, homeDir string) error {
 	if homeDir == "" {
 		homeDir = DefaultHomeDir
 	}
@@ -59,7 +59,7 @@ func EnsureFleetRC(b backend.Backend, workspaceDir, homeDir string) error {
 	// content over stdin so the body never has to be shell-quoted into
 	// the script literal.
 	write := fmt.Sprintf(`mkdir -p %s && cat > %s`, rcDir, target)
-	cmd := b.ExecCommand(workspaceDir, []string{"sh", "-c", write})
+	cmd := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", write})
 	cmd.Stdin = strings.NewReader(fleetRCContent)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("write fleet.rc: %w (%s)", err, strings.TrimSpace(string(out)))
@@ -78,7 +78,7 @@ if ! grep -qF '%s' %s; then
 [ -f ~/%s/%s ] && . ~/%s/%s
 EOF
 fi`, bashrc, bashrcMarker, bashrc, bashrc, rcSubdir, rcFilename, rcSubdir, rcFilename)
-	if out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", wire}).CombinedOutput(); err != nil {
+	if out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", wire}).CombinedOutput(); err != nil {
 		return fmt.Errorf("wire fleet.rc into .bashrc: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil

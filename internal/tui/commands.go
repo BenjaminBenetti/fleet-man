@@ -140,7 +140,7 @@ func deleteFleetCmd(backends map[fleet.BackendType]backend.Backend, fleetName st
 		instanceBackend backend.Backend
 		name            string
 		containerID     string
-		wsDir           string
+		workspaceDir    string
 	}
 	var targets []target
 	for _, instance := range instances {
@@ -151,13 +151,13 @@ func deleteFleetCmd(backends map[fleet.BackendType]backend.Backend, fleetName st
 		targets = append(targets, target{backends[backendType], instance.Name, instance.ContainerID, instance.WorkspaceDir})
 	}
 	return func() tea.Msg {
-		for _, t := range targets {
-			pf.RemoveAll(fleetName + "/" + t.name)
-			if t.instanceBackend != nil {
-				_ = t.instanceBackend.Down(t.containerID)
+		for _, instanceTarget := range targets {
+			pf.RemoveAll(fleetName + "/" + instanceTarget.name)
+			if instanceTarget.instanceBackend != nil {
+				_ = instanceTarget.instanceBackend.Down(instanceTarget.containerID)
 			}
-			if t.wsDir != "" {
-				_ = os.RemoveAll(t.wsDir)
+			if instanceTarget.workspaceDir != "" {
+				_ = os.RemoveAll(instanceTarget.workspaceDir)
 			}
 		}
 		st, err := state.Load()

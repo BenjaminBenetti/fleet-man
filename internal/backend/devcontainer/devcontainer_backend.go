@@ -277,15 +277,15 @@ func (devcontainerBackend *DevcontainerBackend) Stats(containerIDs []string) (ma
 
 		id := fields[0]
 		cpuStr := strings.TrimSuffix(strings.TrimSpace(fields[1]), "%")
-		cpuPct, _ := parseFloat(cpuStr)
+		cpuPct, _ := backend.ParseFloat(cpuStr)
 		cpuMillicores := cpuPct * 10
 
 		memParts := strings.SplitN(fields[2], "/", 2)
 		memMB := parseMemToMB(strings.TrimSpace(memParts[0]))
 
-		for _, cid := range containerIDs {
-			if strings.HasPrefix(cid, id) || strings.HasPrefix(id, cid) {
-				result[cid] = &backend.ContainerStats{
+		for _, requestedID := range containerIDs {
+			if strings.HasPrefix(requestedID, id) || strings.HasPrefix(id, requestedID) {
+				result[requestedID] = &backend.ContainerStats{
 					CPUMillicores: cpuMillicores,
 					MemoryMB:      memMB,
 				}
