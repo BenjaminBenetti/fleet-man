@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
@@ -637,7 +638,9 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "Select an instance"
 				break
 			}
-			cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, freshShellCommand(m.config))
+			shellCmd := freshShellCommand(m.config)
+			cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
+			logSessionOpen("terminal", fleetPage.currentFleetName(), instance.Name, "", shellCmd)
 			err := openInTerminal(cmd.Args)
 			if err != nil {
 				m.message = fmt.Sprintf("Could not open terminal: %v", err)
@@ -833,21 +836,24 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 			}
 			cols, rows := tmuxWindowSize()
 			cols = cols * 70 / 100
-			cmd := m.instanceBackend(instance).ExecCommand(
-				instance.WorkspaceDir,
-				ShellCommandForSession(m.config, sessionName, cols, rows, true),
-			)
+			shellCmd := ShellCommandForSession(m.config, sessionName, cols, rows, true)
+			cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
+			logSessionOpen("split", r.fleetName, instance.Name, sessionName, shellCmd)
 			return splitPaneCmd(fleetPage.splitPaneID, sessRef, sessionName, groupID, cmd.Cmd)
 		}
-		cmd := m.instanceBackend(instance).ExecCommand(
-			instance.WorkspaceDir,
-			ShellCommandForSession(m.config, sessionName, m.width, m.height, false),
-		)
+		shellCmd := ShellCommandForSession(m.config, sessionName, m.width, m.height, false)
+		cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
 		banner := renderGradient(nameToBanner(instance.GetDisplayName()))
 		banner += "\n  " + dimStyle.Render("ctrl+q/ctrl+o to detach (session persists)")
+		sessFleet, sessInstance := r.fleetName, instance.Name
+		start := time.Now()
+		logSessionOpen("attach", sessFleet, sessInstance, sessionName, shellCmd)
 		return tea.ExecProcess(
 			execWithBannerCmd(banner, cmd.Cmd),
-			func(err error) tea.Msg { return execDoneMsg{err} },
+			func(err error) tea.Msg {
+				logSessionClose(sessFleet, sessInstance, sessionName, start)
+				return execDoneMsg{err}
+			},
 		)
 
 	case rowInstance:
@@ -882,12 +888,19 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		}
 		m.sessionStore.SetLastActive(instRef, lastSession{sessionName: sessionName})
 
-		cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, ShellCommandForSession(m.config, sessionName, m.width, m.height, false))
+		shellCmd := ShellCommandForSession(m.config, sessionName, m.width, m.height, false)
+		cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
 		banner := renderGradient(nameToBanner(instance.GetDisplayName()))
 		banner += "\n  " + dimStyle.Render("ctrl+q/ctrl+o to detach (session persists)")
+		instName := instance.Name
+		start := time.Now()
+		logSessionOpen("attach", instFleetName, instName, sessionName, shellCmd)
 		return tea.ExecProcess(
 			execWithBannerCmd(banner, cmd.Cmd),
-			func(err error) tea.Msg { return execDoneMsg{err} },
+			func(err error) tea.Msg {
+				logSessionClose(instFleetName, instName, sessionName, start)
+				return execDoneMsg{err}
+			},
 		)
 	}
 
@@ -1725,10 +1738,9 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 		}
 		cols, rows := tmuxWindowSize()
 		cols = cols * 70 / 100
-		cmd := m.instanceBackend(instance).ExecCommand(
-			instance.WorkspaceDir,
-			ShellCommandForSession(m.config, last.sessionName, cols, rows, true),
-		)
+		shellCmd := ShellCommandForSession(m.config, last.sessionName, cols, rows, true)
+		cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
+		logSessionOpen("split", fleetName, instance.Name, last.sessionName, shellCmd)
 		return splitPaneCmd(fleetPage.splitPaneID, ref, last.sessionName, last.groupID, cmd.Cmd)
 	}
 
@@ -1740,10 +1752,9 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 		}
 		cols, rows := tmuxWindowSize()
 		cols = cols * 70 / 100
-		cmd := m.instanceBackend(instance).ExecCommand(
-			instance.WorkspaceDir,
-			ShellCommandForSession(m.config, rootName, cols, rows, true),
-		)
+		shellCmd := ShellCommandForSession(m.config, rootName, cols, rows, true)
+		cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
+		logSessionOpen("split", fleetName, instance.Name, rootName, shellCmd)
 		return splitPaneCmd(fleetPage.splitPaneID, ref, rootName, g.GroupID, cmd.Cmd)
 	}
 
@@ -1751,10 +1762,9 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 	sessName := groupSessionName(sanitized, newGroupID)
 	cols, rows := tmuxWindowSize()
 	cols = cols * 70 / 100
-	cmd := m.instanceBackend(instance).ExecCommand(
-		instance.WorkspaceDir,
-		ShellCommandForSession(m.config, sessName, cols, rows, true),
-	)
+	shellCmd := ShellCommandForSession(m.config, sessName, cols, rows, true)
+	cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
+	logSessionOpen("split", fleetName, instance.Name, sessName, shellCmd)
 	return splitPaneCmd(fleetPage.splitPaneID, ref, sessName, newGroupID, cmd.Cmd)
 }
 

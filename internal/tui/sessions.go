@@ -209,6 +209,26 @@ func createSessionCmd(instanceBackend backend.Backend, workspaceDir string, ref 
 	}
 }
 
+// logSessionOpen records a TUI session being opened, including the raw shell
+// command run inside the container and how it is surfaced: "attach" (suspends
+// the TUI, runs in the foreground), "split" (a tmux split pane), or "terminal"
+// (a separate terminal emulator). These paths run the command outside the
+// backend.Cmd wrapper, so they are instrumented here by hand. Only "attach"
+// has a matching close event (logSessionClose) and therefore a duration; split
+// panes and external terminals detach and keep running, so they are logged
+// without one. The command is the inner command (what runs in the container),
+// not the backend's exec wrapper.
+func logSessionOpen(mode, fleetName, instanceName, sessionName string, command []string) {
+	flog.Info("session opened", "fleet", fleetName, "instance", instanceName, "session", sessionName, "mode", mode, "cmd", strings.Join(command, " "))
+}
+
+// logSessionClose records a foreground session attach ending, with how long it
+// was attached. Called from the tea.ExecProcess completion callback, which
+// fires when the user detaches or the shell exits.
+func logSessionClose(fleetName, instanceName, sessionName string, start time.Time) {
+	flog.Info("session closed", "fleet", fleetName, "instance", instanceName, "session", sessionName, "ms", flog.MillisSince(start))
+}
+
 // renameSessionCmd execs `tmux rename-session -t <old> <new>` inside
 // the container.
 func renameSessionCmd(instanceBackend backend.Backend, workspaceDir string, ref InstanceRef, oldName, newName string) tea.Cmd {
