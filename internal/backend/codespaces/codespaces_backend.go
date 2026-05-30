@@ -175,27 +175,37 @@ func (codespacesBackend *CodespacesBackend) Start(containerID string) error {
 // Execution
 // ===========================================
 
-// Exec runs an interactive command inside a codespace via SSH.
+// Exec runs an interactive command inside a codespace via SSH, logging a
+// single timed "container exec" event when it completes.
 func (codespacesBackend *CodespacesBackend) Exec(workspaceDir string, command []string) error {
-	flog.ContainerExec("codespaces", workspaceDir, command)
-	name := codespacesBackend.resolveCodespaceName(workspaceDir)
-	cmd := codespacesBackend.sshCommand(name, command, true)
+	cmd := codespacesBackend.rawExec(workspaceDir, command)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	start := time.Now()
+	err := cmd.Run()
+	flog.ContainerExec("codespaces", workspaceDir, command, time.Since(start), err)
+	return err
 }
 
-// ExecCommand returns an unstarted *exec.Cmd for running a command
-// inside a codespace via SSH, logging the command to the event log.
-// Hot polling loops should use ExecCommandQuiet instead.
-func (codespacesBackend *CodespacesBackend) ExecCommand(workspaceDir string, command []string) *exec.Cmd {
-	flog.ContainerExec("codespaces", workspaceDir, command)
-	return codespacesBackend.ExecCommandQuiet(workspaceDir, command)
+// ExecCommand returns an unstarted *backend.Cmd for running a command inside
+// a codespace via SSH. Because *Cmd shadows the run methods, it logs a single
+// timed "container exec" event when the caller runs it via
+// Run/Output/CombinedOutput. Hot polling loops should use ExecCommandQuiet.
+func (codespacesBackend *CodespacesBackend) ExecCommand(workspaceDir string, command []string) *backend.Cmd {
+	return backend.NewCmd(codespacesBackend.rawExec(workspaceDir, command), func(d time.Duration, err error) {
+		flog.ContainerExec("codespaces", workspaceDir, command, d, err)
+	})
 }
 
-// ExecCommandQuiet is ExecCommand without the event-log entry.
-func (codespacesBackend *CodespacesBackend) ExecCommandQuiet(workspaceDir string, command []string) *exec.Cmd {
+// ExecCommandQuiet is ExecCommand without any event-log entries.
+func (codespacesBackend *CodespacesBackend) ExecCommandQuiet(workspaceDir string, command []string) *backend.Cmd {
+	return backend.NewCmd(codespacesBackend.rawExec(workspaceDir, command), nil)
+}
+
+// rawExec builds the underlying `gh codespace ssh` *exec.Cmd shared by
+// ExecCommand and ExecCommandQuiet.
+func (codespacesBackend *CodespacesBackend) rawExec(workspaceDir string, command []string) *exec.Cmd {
 	name := codespacesBackend.resolveCodespaceName(workspaceDir)
 	return codespacesBackend.sshCommand(name, command, true)
 }

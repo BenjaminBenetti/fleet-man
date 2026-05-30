@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
@@ -38,8 +39,16 @@ import (
 // scripts: the source already executed those, and the committed image
 // carries their effects. Running them again would diverge the clone
 // from the source.
-func RunClone(fleetName, srcInstance, destInstance string, verbose bool) error {
+func RunClone(fleetName, srcInstance, destInstance string, verbose bool) (err error) {
+	start := time.Now()
 	flog.Info("instance clone started", "fleet", fleetName, "src", srcInstance, "instance", destInstance)
+	// Failure outcome (with elapsed time) is logged from one place; setFailed
+	// only annotates state. Success is logged inline at the end.
+	defer func() {
+		if err != nil {
+			flog.Error("instance clone failed", "fleet", fleetName, "src", srcInstance, "instance", destInstance, "ms", flog.MillisSince(start), "err", err)
+		}
+	}()
 	st, err := state.Load()
 	if err != nil {
 		setFailed(fleetName, destInstance, err)
@@ -134,7 +143,7 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) error {
 	if err := markInstanceRunning(fleetName, destInstance, result.ContainerID); err != nil {
 		return err
 	}
-	flog.Info("instance cloned", "fleet", fleetName, "src", srcInstance, "instance", destInstance, "container", result.ContainerID)
+	flog.Info("instance cloned", "fleet", fleetName, "src", srcInstance, "instance", destInstance, "container", result.ContainerID, "ms", flog.MillisSince(start))
 	return nil
 }
 

@@ -199,11 +199,12 @@ func createSessionCmd(instanceBackend backend.Backend, workspaceDir string, ref 
 			"sh", "-c",
 			tmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s 2>/dev/null`, shQuote(sessionName)),
 		})
+		start := time.Now()
 		if err := cmd.Run(); err != nil {
-			flog.Error("session create failed", "fleet", ref.Fleet, "instance", ref.Instance, "session", sessionName, "err", err)
+			flog.Error("session create failed", "fleet", ref.Fleet, "instance", ref.Instance, "session", sessionName, "ms", flog.MillisSince(start), "err", err)
 			return sessionCreatedMsg{ref: ref, err: err}
 		}
-		flog.Info("session created", "fleet", ref.Fleet, "instance", ref.Instance, "session", sessionName)
+		flog.Info("session created", "fleet", ref.Fleet, "instance", ref.Instance, "session", sessionName, "ms", flog.MillisSince(start))
 		return sessionCreatedMsg{ref: ref}
 	}
 }
@@ -216,10 +217,11 @@ func renameSessionCmd(instanceBackend backend.Backend, workspaceDir string, ref 
 			"sh", "-c",
 			fmt.Sprintf(`tmux rename-session -t %s %s 2>/dev/null`, shQuote(oldName), shQuote(newName)),
 		})
+		start := time.Now()
 		if err := cmd.Run(); err != nil {
 			return sessionRenamedMsg{ref: ref, oldName: oldName, newName: newName, err: err}
 		}
-		flog.Info("session renamed", "fleet", ref.Fleet, "instance", ref.Instance, "from", oldName, "to", newName)
+		flog.Info("session renamed", "fleet", ref.Fleet, "instance", ref.Instance, "from", oldName, "to", newName, "ms", flog.MillisSince(start))
 		return sessionRenamedMsg{ref: ref, oldName: oldName, newName: newName}
 	}
 }
@@ -232,6 +234,7 @@ func renameGroupCmd(instanceBackend backend.Backend, workspaceDir string, ref In
 	newPrefix := sanitizedInstance + groupSep + newGroupID
 
 	return func() tea.Msg {
+		start := time.Now()
 		// List all sessions in the container.
 		listCmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
 			"sh", "-c",
@@ -262,7 +265,7 @@ func renameGroupCmd(instanceBackend backend.Backend, workspaceDir string, ref In
 		if lastErr != nil {
 			return sessionRenamedMsg{ref: ref, oldName: oldPrefix, newName: newPrefix, err: lastErr}
 		}
-		flog.Info("session group renamed", "fleet", ref.Fleet, "instance", ref.Instance, "from", oldPrefix, "to", newPrefix)
+		flog.Info("session group renamed", "fleet", ref.Fleet, "instance", ref.Instance, "from", oldPrefix, "to", newPrefix, "ms", flog.MillisSince(start))
 		return sessionRenamedMsg{ref: ref, oldName: oldPrefix, newName: newPrefix}
 	}
 }
@@ -274,10 +277,11 @@ func deleteSessionCmd(instanceBackend backend.Backend, workspaceDir string, ref 
 			"sh", "-c",
 			fmt.Sprintf(`tmux kill-session -t %s 2>/dev/null`, shQuote(sessionName)),
 		})
+		start := time.Now()
 		if err := cmd.Run(); err != nil {
 			return sessionDeletedMsg{ref: ref, sessionName: sessionName, err: err}
 		}
-		flog.Info("session killed", "fleet", ref.Fleet, "instance", ref.Instance, "session", sessionName)
+		flog.Info("session killed", "fleet", ref.Fleet, "instance", ref.Instance, "session", sessionName, "ms", flog.MillisSince(start))
 		return sessionDeletedMsg{ref: ref, sessionName: sessionName}
 	}
 }
@@ -288,6 +292,7 @@ func deleteGroupSessionsCmd(instanceBackend backend.Backend, workspaceDir string
 	prefix := sanitizedInstance + groupSep + groupID
 
 	return func() tea.Msg {
+		start := time.Now()
 		// List all sessions in the container.
 		listCmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
 			"sh", "-c",
@@ -316,7 +321,7 @@ func deleteGroupSessionsCmd(instanceBackend backend.Backend, workspaceDir string
 		if lastErr != nil {
 			return sessionDeletedMsg{ref: ref, sessionName: prefix, groupID: groupID, err: lastErr}
 		}
-		flog.Info("session group killed", "fleet", ref.Fleet, "instance", ref.Instance, "group", groupID)
+		flog.Info("session group killed", "fleet", ref.Fleet, "instance", ref.Instance, "group", groupID, "ms", flog.MillisSince(start))
 		return sessionDeletedMsg{ref: ref, sessionName: prefix, groupID: groupID}
 	}
 }

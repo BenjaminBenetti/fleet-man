@@ -31,6 +31,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 const logFileName = "fleet.log"
@@ -95,21 +96,40 @@ func initLogger() {
 //
 // Keep keys consistent across call sites so the log stays greppable. The
 // conventional keys are: fleet, instance, session, backend, container,
-// branch, remote, from, to, port, and err.
+// branch, remote, from, to, port, ms, and err.
 func Info(msg string, args ...any)  { L().Info(msg, args...) }
 func Warn(msg string, args ...any)  { L().Warn(msg, args...) }
 func Error(msg string, args ...any) { L().Error(msg, args...) }
 
-// ContainerExec records a command being run against a container's workspace.
-// Backends call it from their Exec/ExecCommand implementations so that every
-// command fleet runs inside a container is traced by default — useful for
-// following what a workflow (instance creation, dotfiles install, session
-// spawn, …) is actually doing.
+// MillisSince returns the whole milliseconds elapsed since start. Use it for
+// the "ms" attribute on completion events so durations are logged as a plain
+// integer count of milliseconds:
 //
-// High-frequency polling and probe loops (periodic tmux session discovery,
-// etc.) deliberately route through the backend's ExecCommandQuiet variant,
-// which skips this call, so the log stays a readable trace instead of being
-// flooded by per-tick reads.
-func ContainerExec(backend, workspaceDir string, command []string) {
-	Info("container exec", "backend", backend, "workspace", workspaceDir, "cmd", strings.Join(command, " "))
+//	start := time.Now()
+//	... do the work ...
+//	flog.Info("instance created", "fleet", f, "instance", i, "ms", flog.MillisSince(start))
+//
+// Only attach "ms" to events that mark the END of work that takes a
+// measurable amount of time (provisioning, container start/stop, deletes,
+// session/exec round-trips). Instant actions and "…started" markers should
+// be left without it.
+func MillisSince(start time.Time) int64 {
+	return time.Since(start).Milliseconds()
+}
+
+// ContainerExec records a command run against a container's workspace, with
+// how long it took (ms) and whether it errored. Each container command is
+// logged exactly once — when it finishes — so there is no separate "issued"
+// event. Backends wire it up as the completion callback on the *Cmd returned
+// by ExecCommand (so the duration is measured around the caller's own
+// Run/Output/CombinedOutput) and call it directly from the synchronous Exec.
+//
+// High-frequency polling and probe loops route through ExecCommandQuiet, whose
+// *Cmd carries no callback, so they log nothing and never flood the trace.
+func ContainerExec(backend, workspaceDir string, command []string, d time.Duration, err error) {
+	if err != nil {
+		Error("container exec", "backend", backend, "workspace", workspaceDir, "cmd", strings.Join(command, " "), "ms", d.Milliseconds(), "err", err)
+		return
+	}
+	Info("container exec", "backend", backend, "workspace", workspaceDir, "cmd", strings.Join(command, " "), "ms", d.Milliseconds())
 }

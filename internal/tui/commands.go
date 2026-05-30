@@ -117,6 +117,7 @@ func toggleInstanceCmd(fleetName, instanceName string) tea.Cmd {
 // deleteInstanceCmd runs instance deletion in the background.
 func deleteInstanceCmd(instanceBackend backend.Backend, fleetName, instanceName, containerID, wsDir string, pf *portforward.Manager) tea.Cmd {
 	return func() tea.Msg {
+		start := time.Now()
 		pf.RemoveAll(fleetName + "/" + instanceName)
 		_ = instanceBackend.Down(containerID)
 		if wsDir != "" {
@@ -129,7 +130,7 @@ func deleteInstanceCmd(instanceBackend backend.Backend, fleetName, instanceName,
 				_ = state.Save(st)
 			}
 		}
-		flog.Info("instance deleted", "fleet", fleetName, "instance", instanceName)
+		flog.Info("instance deleted", "fleet", fleetName, "instance", instanceName, "ms", flog.MillisSince(start))
 		key := fleetName + "/" + instanceName
 		return operationDoneMsg{fleetName, instanceName, fmt.Sprintf("Removed %s", key), nil}
 	}
@@ -153,6 +154,7 @@ func deleteFleetCmd(backends map[fleet.BackendType]backend.Backend, fleetName st
 		targets = append(targets, target{backends[backendType], instance.Name, instance.ContainerID, instance.WorkspaceDir})
 	}
 	return func() tea.Msg {
+		start := time.Now()
 		for _, instanceTarget := range targets {
 			pf.RemoveAll(fleetName + "/" + instanceTarget.name)
 			if instanceTarget.instanceBackend != nil {
@@ -167,7 +169,7 @@ func deleteFleetCmd(backends map[fleet.BackendType]backend.Backend, fleetName st
 			delete(st.Fleets, fleetName)
 			_ = state.Save(st)
 		}
-		flog.Info("fleet destroyed", "fleet", fleetName, "instances", len(targets))
+		flog.Info("fleet destroyed", "fleet", fleetName, "instances", len(targets), "ms", flog.MillisSince(start))
 		return operationDoneMsg{fleetName, "", fmt.Sprintf("Removed fleet %s", fleetName), nil}
 	}
 }

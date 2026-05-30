@@ -837,7 +837,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 				instance.WorkspaceDir,
 				ShellCommandForSession(m.config, sessionName, cols, rows, true),
 			)
-			return splitPaneCmd(fleetPage.splitPaneID, sessRef, sessionName, groupID, cmd)
+			return splitPaneCmd(fleetPage.splitPaneID, sessRef, sessionName, groupID, cmd.Cmd)
 		}
 		cmd := m.instanceBackend(instance).ExecCommand(
 			instance.WorkspaceDir,
@@ -846,7 +846,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		banner := renderGradient(nameToBanner(instance.GetDisplayName()))
 		banner += "\n  " + dimStyle.Render("ctrl+q/ctrl+o to detach (session persists)")
 		return tea.ExecProcess(
-			execWithBannerCmd(banner, cmd),
+			execWithBannerCmd(banner, cmd.Cmd),
 			func(err error) tea.Msg { return execDoneMsg{err} },
 		)
 
@@ -886,7 +886,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		banner := renderGradient(nameToBanner(instance.GetDisplayName()))
 		banner += "\n  " + dimStyle.Render("ctrl+q/ctrl+o to detach (session persists)")
 		return tea.ExecProcess(
-			execWithBannerCmd(banner, cmd),
+			execWithBannerCmd(banner, cmd.Cmd),
 			func(err error) tea.Msg { return execDoneMsg{err} },
 		)
 	}
@@ -1729,7 +1729,7 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 			instance.WorkspaceDir,
 			ShellCommandForSession(m.config, last.sessionName, cols, rows, true),
 		)
-		return splitPaneCmd(fleetPage.splitPaneID, ref, last.sessionName, last.groupID, cmd)
+		return splitPaneCmd(fleetPage.splitPaneID, ref, last.sessionName, last.groupID, cmd.Cmd)
 	}
 
 	if groups := m.sessionStore.Groups(ref); len(groups) > 0 {
@@ -1744,7 +1744,7 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 			instance.WorkspaceDir,
 			ShellCommandForSession(m.config, rootName, cols, rows, true),
 		)
-		return splitPaneCmd(fleetPage.splitPaneID, ref, rootName, g.GroupID, cmd)
+		return splitPaneCmd(fleetPage.splitPaneID, ref, rootName, g.GroupID, cmd.Cmd)
 	}
 
 	newGroupID := randomHex(3)
@@ -1755,7 +1755,7 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 		instance.WorkspaceDir,
 		ShellCommandForSession(m.config, sessName, cols, rows, true),
 	)
-	return splitPaneCmd(fleetPage.splitPaneID, ref, sessName, newGroupID, cmd)
+	return splitPaneCmd(fleetPage.splitPaneID, ref, sessName, newGroupID, cmd.Cmd)
 }
 
 // cycleSessionGroup moves the visual selection to the next or previous

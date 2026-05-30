@@ -52,18 +52,21 @@ type Backend interface {
 	// Stdin, stdout, and stderr are connected to the caller's terminal.
 	Exec(workspaceDir string, command []string) error
 
-	// ExecCommand returns an unstarted *exec.Cmd for running a command
-	// inside a workspace. The caller controls stdio and lifecycle. It
-	// writes a "container exec" entry to the event log (~/.fleet/fleet.log)
-	// so container commands are traceable by default; use it for everything
-	// except hot polling loops.
-	ExecCommand(workspaceDir string, command []string) *exec.Cmd
+	// ExecCommand returns an unstarted *Cmd for running a command inside a
+	// workspace. The caller controls stdio and lifecycle. Because *Cmd
+	// shadows the run methods, it writes a single timed "container exec"
+	// entry to the event log (~/.fleet/fleet.log) when the caller runs it via
+	// Run/Output/CombinedOutput. Use it for everything except hot polling
+	// loops. Callers needing the raw *exec.Cmd reach it via the returned
+	// value's embedded .Cmd field (which forgoes the log entry).
+	ExecCommand(workspaceDir string, command []string) *Cmd
 
-	// ExecCommandQuiet is ExecCommand without the event-log entry. Use it
-	// from high-frequency polling and probe loops (e.g. the periodic tmux
-	// session discovery) where logging every command would flood the event
-	// log. Behaviour is otherwise identical to ExecCommand.
-	ExecCommandQuiet(workspaceDir string, command []string) *exec.Cmd
+	// ExecCommandQuiet is ExecCommand without any event-log entries (its
+	// *Cmd carries no completion callback). Use it from high-frequency
+	// polling and probe loops (e.g. the periodic tmux session discovery)
+	// where logging every command would flood the event log. Behaviour is
+	// otherwise identical to ExecCommand.
+	ExecCommandQuiet(workspaceDir string, command []string) *Cmd
 
 	// Stats returns CPU and memory usage for the given container IDs.
 	Stats(containerIDs []string) (map[string]*ContainerStats, error)

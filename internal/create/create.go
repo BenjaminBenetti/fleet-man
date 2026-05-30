@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
@@ -28,8 +29,18 @@ import (
 // When branch is non-empty, the devcontainer clone uses `git clone
 // --branch <branch>` so the instance is provisioned against that ref
 // rather than the repository's default branch.
-func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backendType fleet.BackendType) error {
+func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backendType fleet.BackendType) (err error) {
+	start := time.Now()
 	flog.Info("instance create started", "fleet", fleetName, "instance", instanceName, "backend", backendType, "branch", branch, "remote", remoteURL)
+	// Log the failure outcome (with elapsed time) from one place: every error
+	// return below flows through the named err, and setFailed only annotates
+	// state. The success outcome is logged inline at the end where the
+	// container ID is in scope.
+	defer func() {
+		if err != nil {
+			flog.Error("instance create failed", "fleet", fleetName, "instance", instanceName, "backend", backendType, "ms", flog.MillisSince(start), "err", err)
+		}
+	}()
 	if err := fleet.ValidateBackendType(backendType); err != nil {
 		setFailed(fleetName, instanceName, err)
 		return err
@@ -167,6 +178,6 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 	if err := markInstanceRunning(fleetName, instanceName, result.ContainerID); err != nil {
 		return err
 	}
-	flog.Info("instance created", "fleet", fleetName, "instance", instanceName, "backend", backendType, "container", result.ContainerID)
+	flog.Info("instance created", "fleet", fleetName, "instance", instanceName, "backend", backendType, "container", result.ContainerID, "ms", flog.MillisSince(start))
 	return nil
 }

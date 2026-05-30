@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
@@ -28,6 +29,7 @@ func newDestroyCmd() *cobra.Command {
 				return fmt.Errorf("fleet %q not found", fleetName)
 			}
 
+			start := time.Now()
 			for _, instance := range f.Instances {
 				fmt.Printf("Stopping %s/%s...\n", fleetName, instance.Name)
 				instanceBackend := backendutil.New(instance.Backend, false)
@@ -47,7 +49,7 @@ func newDestroyCmd() *cobra.Command {
 				return err
 			}
 
-			flog.Info("fleet destroyed", "fleet", fleetName, "instances", len(f.Instances))
+			flog.Info("fleet destroyed", "fleet", fleetName, "instances", len(f.Instances), "ms", flog.MillisSince(start))
 			fmt.Printf("Fleet %s destroyed (%d instances removed).\n", fleetName, len(f.Instances))
 			return nil
 		},

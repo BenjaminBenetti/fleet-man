@@ -1101,6 +1101,7 @@ func sortedFleetNames(fleets map[string]*fleet.Fleet) []string {
 
 // Run starts the TUI.
 func Run() error {
+	start := time.Now()
 	flog.Info("fleet TUI started")
 	m := newModel()
 
@@ -1120,7 +1121,7 @@ func Run() error {
 
 	program := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	finalModel, err := program.Run()
-	flog.Info("fleet TUI stopped")
+	flog.Info("fleet TUI stopped", "ms", flog.MillisSince(start))
 
 	if clipCancel != nil {
 		clipCancel()

@@ -2,7 +2,6 @@ package create
 
 import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -10,9 +9,9 @@ import (
 // message on it, persisting the change. State load/save errors are swallowed:
 // it is a best-effort failure annotation invoked from error paths that have
 // already decided to bail, so it must not mask the original error with a
-// secondary one.
+// secondary one. The failure itself (with timing) is logged by the caller
+// (Run / RunClone), so setFailed does not log.
 func setFailed(fleetName, instanceName string, origErr error) {
-	flog.Error("instance provisioning failed", "fleet", fleetName, "instance", instanceName, "err", origErr)
 	st, err := state.Load()
 	if err != nil {
 		return
