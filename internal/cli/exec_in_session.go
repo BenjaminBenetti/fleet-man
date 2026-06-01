@@ -3,9 +3,11 @@ package cli
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/spf13/cobra"
 )
 
@@ -44,10 +46,12 @@ Examples:
 				fmt.Sprintf(`tmux send-keys -t %s %s Enter`, dotfiles.ShQuote(sessionName), dotfiles.ShQuote(command)),
 			})
 
+			start := time.Now()
 			if err := execCmd.Run(); err != nil {
 				return fmt.Errorf("failed to execute command in session %q: %w", sessionName, err)
 			}
 
+			flog.Info("session exec", "instance", args[0], "session", sessionName, "cmd", command, "ms", flog.MillisSince(start))
 			fmt.Printf("Executed command in session %q of instance %s\n", sessionName, args[0])
 			return nil
 		},

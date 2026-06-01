@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/spf13/cobra"
 )
 
@@ -54,16 +57,21 @@ Examples:
 			// Stream tmux's capture directly to our stdout so the caller
 			// (typically an AI agent) sees the raw pane contents with no
 			// wrapping noise from this process.
-			captureCmd := sessionExecCommand(instance, []string{
+			readCmd := []string{
 				"sh", "-c",
 				fmt.Sprintf(`tmux capture-pane -p %s-t %s`, startFlag, dotfiles.ShQuote(sessionName)),
-			})
+			}
+			captureCmd := sessionExecCommand(instance, readCmd)
 			captureCmd.Stdout = readSessionStdout
 			captureCmd.Stderr = readSessionStderr
 
-			if err := captureCmd.Run(); err != nil {
+			start := time.Now()
+			err = captureCmd.Run()
+			if err != nil {
+				flog.Error("session read failed", "instance", args[0], "session", sessionName, "cmd", strings.Join(readCmd, " "), "ms", flog.MillisSince(start), "err", err)
 				return fmt.Errorf("failed to read session %q: %w", sessionName, err)
 			}
+			flog.Info("session read", "instance", args[0], "session", sessionName, "cmd", strings.Join(readCmd, " "), "ms", flog.MillisSince(start))
 
 			return nil
 		},

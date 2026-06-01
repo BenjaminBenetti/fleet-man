@@ -2,8 +2,10 @@ package instanceops
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -64,6 +66,7 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 
 	instanceBackend := newClient(instance.Backend)
 
+	start := time.Now()
 	switch targetStatus {
 	case fleet.StatusStopped:
 		if instance.Status != fleet.StatusRunning && instance.Status != fleet.StatusStopping {
@@ -101,6 +104,7 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 
 	result.Status = instance.Status
 	result.Changed = true
+	flog.Info("instance status changed", "fleet", fleetName, "instance", instanceName, "from", result.PreviousStatus, "to", targetStatus, "ms", flog.MillisSince(start))
 	return result, nil
 }
 

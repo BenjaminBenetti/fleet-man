@@ -5,8 +5,14 @@ import (
 	"encoding/hex"
 	"os"
 	"os/exec"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/tui"
 	"github.com/spf13/cobra"
@@ -26,7 +32,7 @@ By default, creates a new session group. Use --group to add a pane to an
 existing group, or --session to reconnect to a specific named session.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _, _, instance, err := resolveInstance(args[0], "")
+			target, _, _, instance, err := resolveInstance(args[0], "")
 			if err != nil {
 				return err
 			}
@@ -69,12 +75,36 @@ existing group, or --session to reconnect to a specific named session.`,
 			cols, rows := termSize()
 
 			shellCmd := tui.ShellCommandForSession(config, sessionName, cols, rows, nested)
+			start := time.Now()
+			// Log the full in-container command (tmux attach + the SSH-agent
+			// socket fix, etc.) at start, and the close with how long the
+			// session ran. We log here and run the raw .Cmd (rather than the
+			// *Cmd wrapper) so there is exactly one open/close pair.
+			flog.Info("session opened", "fleet", target.Fleet, "instance", instance.Name, "session", sessionName, "mode", "shell", "cmd", strings.Join(shellCmd, " "))
+			logClose := sync.OnceFunc(func() {
+				flog.Info("session closed", "fleet", target.Fleet, "instance", instance.Name, "session", sessionName, "mode", "shell", "ms", flog.MillisSince(start))
+			})
+			// fleet shell is interactive and is SIGHUP'd (not gracefully
+			// returned) when its tmux pane is closed/killed, which would
+			// otherwise lose the close timing. Catch the signal, log the
+			// close, and exit. sync.OnceFunc keeps it to a single entry
+			// whether we exit via signal or a normal return.
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGHUP, syscall.SIGTERM)
+			go func() {
+				<-sigCh
+				logClose()
+				os.Exit(0)
+			}()
+
 			instanceBackend := backendutil.NewForInstance(instance, false)
-			execCmd := instanceBackend.ExecCommand(instance.WorkspaceDir, shellCmd)
+			execCmd := instanceBackend.ExecCommand(instance.WorkspaceDir, shellCmd).Cmd
 			execCmd.Stdin = os.Stdin
 			execCmd.Stdout = os.Stdout
 			execCmd.Stderr = os.Stderr
-			return execCmd.Run()
+			err = execCmd.Run()
+			logClose()
+			return err
 		},
 	}
 

@@ -18,6 +18,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -875,6 +876,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = fmt.Sprintf("failed to do tmux split pane: %v", msg.err)
 		}
 		if msg.paneID != "" {
+			// Log "session opened" only for direct (splitPaneCmd) opens, which
+			// run the command in the pane with no `fleet shell` subprocess.
+			// Group restores (restoreSeq != 0) spawn `fleet shell` per pane,
+			// and that process logs its own open/close — logging here too
+			// would duplicate it. splitOpenedAt/splitViaRestore pair with the
+			// "session closed" log in clearSplit.
+			fleetPage.splitOpenedAt = time.Now()
+			fleetPage.splitViaRestore = msg.restoreSeq != 0
+			if !fleetPage.splitViaRestore {
+				logSessionOpen("split", msg.ref.Fleet, msg.ref.Instance, msg.session, msg.command)
+			}
 			fleetPage.splitPaneID = msg.paneID
 			fleetPage.splitRef = msg.ref
 			fleetPage.splitSession = msg.session
@@ -1100,6 +1112,8 @@ func sortedFleetNames(fleets map[string]*fleet.Fleet) []string {
 
 // Run starts the TUI.
 func Run() error {
+	start := time.Now()
+	flog.Info("fleet TUI started")
 	m := newModel()
 
 	// Start clipboard buffer polling when running inside tmux.
@@ -1118,6 +1132,7 @@ func Run() error {
 
 	program := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	finalModel, err := program.Run()
+	flog.Info("fleet TUI stopped", "ms", flog.MillisSince(start))
 
 	if clipCancel != nil {
 		clipCancel()
