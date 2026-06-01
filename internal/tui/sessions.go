@@ -218,8 +218,8 @@ func createSessionCmd(instanceBackend backend.Backend, workspaceDir string, ref 
 // panes and external terminals detach and keep running, so they are logged
 // without one. The command is the inner command (what runs in the container),
 // not the backend's exec wrapper.
-func logSessionOpen(mode, fleetName, instanceName, sessionName string, command []string) {
-	flog.Info("session opened", "fleet", fleetName, "instance", instanceName, "session", sessionName, "mode", mode, "cmd", strings.Join(command, " "))
+func logSessionOpen(mode, fleetName, instanceName, sessionName, command string) {
+	flog.Info("session opened", "fleet", fleetName, "instance", instanceName, "session", sessionName, "mode", mode, "cmd", command)
 }
 
 // logSessionClose records a foreground session attach ending, with how long it

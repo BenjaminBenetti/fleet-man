@@ -20,6 +20,7 @@ type splitPaneMsg struct {
 	ref        InstanceRef // instance occupying the pane
 	session    string      // tmux session name in the pane
 	groupID    string      // session group ID (for group management)
+	command    string      // command(s) launched in the pane(s); for the event log
 	restoreSeq int         // async restore token; zero means not a group restore
 	err        error
 }
@@ -59,6 +60,7 @@ func quoteArgs(args []string) string {
 func splitPaneCmd(existingPaneID string, ref InstanceRef, sessionName string, groupID string, cmd *exec.Cmd) tea.Cmd {
 	// Snapshot the args — we must not capture the *exec.Cmd across goroutines.
 	args := cmd.Args
+	cmdStr := strings.Join(args, " ")
 
 	return func() tea.Msg {
 		// Wrap the command so that on non-zero exit the pane stays open
@@ -76,7 +78,7 @@ func splitPaneCmd(existingPaneID string, ref InstanceRef, sessionName string, gr
 			if exec.Command("tmux", respawnArgs...).Run() == nil {
 				tagPaneTitle(existingPaneID, sessionName)
 				_ = exec.Command("tmux", "select-pane", "-t", existingPaneID).Run()
-				return splitPaneMsg{paneID: existingPaneID, ref: ref, session: sessionName, groupID: groupID}
+				return splitPaneMsg{paneID: existingPaneID, ref: ref, session: sessionName, groupID: groupID, command: cmdStr}
 			}
 			// Pane is gone — fall through to create a fresh split.
 		}
@@ -103,7 +105,7 @@ func splitPaneCmd(existingPaneID string, ref InstanceRef, sessionName string, gr
 		paneID := strings.TrimSpace(string(out))
 		tagPaneTitle(paneID, sessionName)
 		_ = exec.Command("tmux", "select-pane", "-t", paneID).Run()
-		return splitPaneMsg{paneID: paneID, ref: ref, session: sessionName, groupID: groupID}
+		return splitPaneMsg{paneID: paneID, ref: ref, session: sessionName, groupID: groupID, command: cmdStr}
 	}
 }
 
@@ -535,6 +537,7 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 		// `fleet shell` child got far enough to call `tmux select-pane
 		// -T`. The pre-tag closes the race deterministically.
 		paneSlots := listPaneSlots()
+		var ranCmds []string
 		for i, sessName := range sessions {
 			if i >= len(paneSlots) {
 				break
@@ -542,6 +545,7 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 			paneID := paneSlots[i]
 			tagPaneTitle(paneID, sessName)
 			shellCmd := fmt.Sprintf("%s shell %s --session %s", self, qualifiedName, sessName)
+			ranCmds = append(ranCmds, shellCmd)
 			script := shellCmd + `; __rc=$?; if [ $__rc -ne 0 ]; then echo; echo "exited with code $__rc — closing in 3s"; sleep 3; fi; exit $__rc`
 			_ = exec.Command("tmux", "respawn-pane", "-k", "-t", paneID, "sh", "-c", script).Run()
 		}
@@ -567,6 +571,7 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 			ref:        InstanceRef{Fleet: fleetName, Instance: instanceName},
 			session:    firstSession,
 			groupID:    groupID,
+			command:    strings.Join(ranCmds, " ; "),
 			restoreSeq: restoreSeq,
 		}
 		if splitErr != nil {

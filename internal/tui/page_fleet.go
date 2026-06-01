@@ -73,9 +73,11 @@ type fleetPage struct {
 	pfCursor      int
 	pfContainerID string
 
-	splitPaneID  string
-	splitRef     InstanceRef // (fleet, instance) of the open split pane; zero when none
-	splitSession string
+	splitPaneID     string
+	splitRef        InstanceRef // (fleet, instance) of the open split pane; zero when none
+	splitSession    string
+	splitOpenedAt   time.Time // when the current split pane was opened; for "session closed" duration
+	splitViaRestore bool      // true when the split was opened via restoreGroupCmd (fleet shell logs its own open/close, so the TUI must not duplicate it)
 
 	activeGroup      ActiveGroup // qualified by splitRef so two groups with the same ID across instances cannot alias
 	savedGroups      map[string]savedGroup
@@ -139,9 +141,19 @@ func (fleetPage *fleetPage) finishGroupRestore(seq int) bool {
 // whenever the split is closed (user toggle, external kill, restore
 // teardown) so a future open starts from a known-empty state.
 func (fleetPage *fleetPage) clearSplit() {
+	// A non-empty paneID means a split was actually open, so this is a real
+	// session close (toggle shut, switched away, deleted, or the pane was
+	// closed externally) — log it with how long it was open. Skip it for
+	// restore-backed splits: their `fleet shell` panes log their own close,
+	// so logging here would duplicate it.
+	if fleetPage.splitPaneID != "" && !fleetPage.splitViaRestore {
+		logSessionClose(fleetPage.splitRef.Fleet, fleetPage.splitRef.Instance, fleetPage.splitSession, fleetPage.splitOpenedAt)
+	}
 	fleetPage.splitPaneID = ""
 	fleetPage.splitRef = InstanceRef{}
 	fleetPage.splitSession = ""
+	fleetPage.splitOpenedAt = time.Time{}
+	fleetPage.splitViaRestore = false
 	fleetPage.activeGroup = ActiveGroup{}
 	fleetPage.restoringGroupID = ""
 }
@@ -640,7 +652,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			}
 			shellCmd := freshShellCommand(m.config)
 			cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
-			logSessionOpen("terminal", fleetPage.currentFleetName(), instance.Name, "", shellCmd)
+			logSessionOpen("terminal", fleetPage.currentFleetName(), instance.Name, "", strings.Join(shellCmd, " "))
 			err := openInTerminal(cmd.Args)
 			if err != nil {
 				m.message = fmt.Sprintf("Could not open terminal: %v", err)
@@ -838,7 +850,8 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 			cols = cols * 70 / 100
 			shellCmd := ShellCommandForSession(m.config, sessionName, cols, rows, true)
 			cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
-			logSessionOpen("split", r.fleetName, instance.Name, sessionName, shellCmd)
+			// The "session opened" event for split panes is logged centrally
+			// in the splitPaneMsg handler (covers grouped + ungrouped opens).
 			return splitPaneCmd(fleetPage.splitPaneID, sessRef, sessionName, groupID, cmd.Cmd)
 		}
 		shellCmd := ShellCommandForSession(m.config, sessionName, m.width, m.height, false)
@@ -847,7 +860,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		banner += "\n  " + dimStyle.Render("ctrl+q/ctrl+o to detach (session persists)")
 		sessFleet, sessInstance := r.fleetName, instance.Name
 		start := time.Now()
-		logSessionOpen("attach", sessFleet, sessInstance, sessionName, shellCmd)
+		logSessionOpen("attach", sessFleet, sessInstance, sessionName, strings.Join(shellCmd, " "))
 		return tea.ExecProcess(
 			execWithBannerCmd(banner, cmd.Cmd),
 			func(err error) tea.Msg {
@@ -894,7 +907,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		banner += "\n  " + dimStyle.Render("ctrl+q/ctrl+o to detach (session persists)")
 		instName := instance.Name
 		start := time.Now()
-		logSessionOpen("attach", instFleetName, instName, sessionName, shellCmd)
+		logSessionOpen("attach", instFleetName, instName, sessionName, strings.Join(shellCmd, " "))
 		return tea.ExecProcess(
 			execWithBannerCmd(banner, cmd.Cmd),
 			func(err error) tea.Msg {
@@ -1740,7 +1753,6 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 		cols = cols * 70 / 100
 		shellCmd := ShellCommandForSession(m.config, last.sessionName, cols, rows, true)
 		cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
-		logSessionOpen("split", fleetName, instance.Name, last.sessionName, shellCmd)
 		return splitPaneCmd(fleetPage.splitPaneID, ref, last.sessionName, last.groupID, cmd.Cmd)
 	}
 
@@ -1754,7 +1766,6 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 		cols = cols * 70 / 100
 		shellCmd := ShellCommandForSession(m.config, rootName, cols, rows, true)
 		cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
-		logSessionOpen("split", fleetName, instance.Name, rootName, shellCmd)
 		return splitPaneCmd(fleetPage.splitPaneID, ref, rootName, g.GroupID, cmd.Cmd)
 	}
 
@@ -1764,7 +1775,6 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 	cols = cols * 70 / 100
 	shellCmd := ShellCommandForSession(m.config, sessName, cols, rows, true)
 	cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
-	logSessionOpen("split", fleetName, instance.Name, sessName, shellCmd)
 	return splitPaneCmd(fleetPage.splitPaneID, ref, sessName, newGroupID, cmd.Cmd)
 }
 
