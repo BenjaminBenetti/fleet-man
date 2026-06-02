@@ -5,25 +5,11 @@ import (
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
-	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
-	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-// testTracker returns an ActivityTracker pre-loaded with specific states/tools.
-func testTracker(states map[string]agentdetect.State, tools map[string]state.AgentTool) *ActivityTracker {
-	t := NewActivityTracker()
-	for k, v := range states {
-		t.states[k] = v
-	}
-	for k, v := range tools {
-		t.tools[k] = v
-	}
-	return t
-}
 
 func TestUpdateNormalStopShortcutStopsRunningInstance(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -170,7 +156,6 @@ func TestViewFleetListShowsBranchItemForInstance(t *testing.T) {
 			},
 		},
 		sessionStore: NewSessionStore(),
-		stats:        map[string]*backend.ContainerStats{},
 		fleetPage:    fp,
 	}
 
@@ -287,7 +272,6 @@ func TestViewFleetListOmitsBranchItemWhenBranchIsUnavailable(t *testing.T) {
 			},
 		},
 		sessionStore: NewSessionStore(),
-		stats:        map[string]*backend.ContainerStats{},
 		fleetPage:    fp,
 	}
 
@@ -411,12 +395,7 @@ func TestViewFleetListShowsAgentOffIndicator(t *testing.T) {
 		config: &state.Config{
 			AgentSettings: state.AgentSettings{ToolSelection: state.AgentToolClaude},
 		},
-		activity: testTracker(
-			map[string]agentdetect.State{"abc123": agentdetect.StateNotRunning},
-			nil,
-		),
 		sessionStore: NewSessionStore(),
-		stats:        map[string]*backend.ContainerStats{},
 		fleetPage:    fp,
 	}
 
@@ -455,9 +434,7 @@ func TestViewFleetListNoAgentIndicatorForStoppedInstance(t *testing.T) {
 		config: &state.Config{
 			AgentSettings: state.AgentSettings{ToolSelection: state.AgentToolClaude},
 		},
-		activity:     NewActivityTracker(),
 		sessionStore: NewSessionStore(),
-		stats:        map[string]*backend.ContainerStats{},
 		fleetPage:    fp,
 	}
 
@@ -492,7 +469,6 @@ func TestEditInstanceRenamesViaDisplayName(t *testing.T) {
 			},
 		},
 		sessionStore: NewSessionStore(),
-		stats:        map[string]*backend.ContainerStats{},
 		fleetPage:    fp,
 	}
 

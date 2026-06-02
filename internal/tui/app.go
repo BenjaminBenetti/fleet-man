@@ -7,12 +7,10 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
-	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	codespacesbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/codespaces"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
@@ -36,11 +34,10 @@ type model struct {
 	config *state.Config
 	err    error
 
-	// pstate is the persisted snapshot pushed by the server's Watch stream, and
-	// runtime is the live sidecar (agent/stats/sessions/...) keyed by
-	// "fleet/instance". In P2 Step 5 these are populated but NOT yet rendered
-	// (the View still reads m.st / m.stats / m.activity); the read-path flip is
-	// Steps 6–7.
+	// pstate is the persisted snapshot pushed by the server's Watch stream;
+	// runtime is the live sidecar (agent activity/stats/sessions/...) keyed by
+	// "fleet/instance". The fleet-list rows render agent activity + CPU/mem
+	// stats from runtime — the server owns those pollers now.
 	pstate  *fleetgrpc.State
 	runtime map[string]*fleetgrpc.InstanceRuntime
 
@@ -53,17 +50,6 @@ type model struct {
 	creating     map[string]bool // "fleet/instance" keys currently being created
 
 	backends map[fleet.BackendType]backend.Backend // one per backend type, lazily created
-	stats    map[string]*backend.ContainerStats    // containerID → stats
-	activity *ActivityTracker                      // agent working/waiting/idle detection
-
-	// reprovisioning dedupes in-flight Claude hook reinstall attempts
-	// per containerID. The capture loop fires every few seconds, and a
-	// reinstall on a slow backend can outlast one tick — without
-	// dedup we'd stack concurrent provisions for the same container.
-	// LoadOrStore inserts a sentinel; the goroutine clears it on exit.
-	// Pointer-typed because the bubbletea model is passed by value,
-	// which would otherwise copy the sync.Map's internal lock.
-	reprovisioning *sync.Map // containerID → struct{}
 
 	coderPresets        []string // available preset names (in-memory, from API)
 	coderFetchingParams bool     // true while fetching template parameters
@@ -139,19 +125,16 @@ func newModel() model {
 	agentSpinnerModel.Style = agentWorkingStyle
 
 	m := model{
-		creating:       make(map[string]bool),
-		backends:       make(map[fleet.BackendType]backend.Backend),
-		stats:          make(map[string]*backend.ContainerStats),
-		activity:       NewActivityTracker(),
-		runtime:        make(map[string]*fleetgrpc.InstanceRuntime),
-		reprovisioning: &sync.Map{},
-		portForwards:   portforward.NewManager(),
-		activeBrowser:  make(map[string]string),
-		control:        newControlRegistry(),
-		sessionStore:   NewSessionStore(),
-		spinner:        spinnerModel,
-		agentSpinner:   agentSpinnerModel,
-		inHostTmux:     os.Getenv("TMUX") != "",
+		creating:      make(map[string]bool),
+		backends:      make(map[fleet.BackendType]backend.Backend),
+		runtime:       make(map[string]*fleetgrpc.InstanceRuntime),
+		portForwards:  portforward.NewManager(),
+		activeBrowser: make(map[string]string),
+		control:       newControlRegistry(),
+		sessionStore:  NewSessionStore(),
+		spinner:       spinnerModel,
+		agentSpinner:  agentSpinnerModel,
+		inHostTmux:    os.Getenv("TMUX") != "",
 	}
 
 	// Create the fleet page (persistent — background handlers reference it)
@@ -373,83 +356,6 @@ func (m *model) instanceBackend(instance *fleet.Instance) backend.Backend {
 	return backendImpl
 }
 
-// containersByBackend groups running instances by their backend type.
-func (m *model) containersByBackend() map[fleet.BackendType]*backendGroup {
-	groups := make(map[fleet.BackendType]*backendGroup)
-	for _, f := range m.st.Fleets {
-		for _, instance := range f.Instances {
-			if instance.ContainerID == "" || instance.Status != fleet.StatusRunning {
-				continue
-			}
-			backendType := instance.Backend
-			if backendType == "" {
-				backendType = fleet.BackendDevcontainer
-			}
-			g, ok := groups[backendType]
-			if !ok {
-				g = &backendGroup{}
-				groups[backendType] = g
-			}
-			g.ids = append(g.ids, instance.ContainerID)
-		}
-	}
-	return groups
-}
-
-// reinstallMissingClaudeHooks scans the latest captures for the
-// "Claude hook script missing" signal and re-runs the provisioner
-// for any container that reports it. Fire-and-forget: each reinstall
-// runs in its own goroutine so the TUI message loop is never
-// blocked, and a sync.Map dedupes concurrent attempts per container
-// in case provisioning takes longer than the capture interval.
-//
-// Failures are non-fatal — the next capture tick will trigger
-// another attempt — but each failure is surfaced as a per-instance
-// warning so the user can spot a persistently-failing reinstall.
-func (m *model) reinstallMissingClaudeHooks(screens map[string]backend.AllSessions) {
-	if m.st == nil {
-		return
-	}
-	for cid, capture := range screens {
-		if !capture.OK || !capture.ClaudeHookMissing {
-			continue
-		}
-		fleetName, instance := m.findInstanceByContainerID(cid)
-		if instance == nil {
-			continue
-		}
-		if _, busy := m.reprovisioning.LoadOrStore(cid, struct{}{}); busy {
-			continue
-		}
-		backendImpl := m.instanceBackend(instance)
-		wsDir := instance.WorkspaceDir
-		instanceName := instance.Name
-		go func(id string) {
-			defer m.reprovisioning.Delete(id)
-			executor := agentdetect.NewBackendExecutor(backendImpl, wsDir)
-			if err := agentdetect.NewClaudeProvisioner(executor).Provision(); err != nil {
-				state.WriteWarn(fleetName, instanceName, fmt.Sprintf("claude hook reinstall failed: %v", err))
-			}
-		}(cid)
-	}
-}
-
-// findInstanceByContainerID returns the fleet name and instance for
-// the given containerID, or "", nil when no running instance matches.
-func (m *model) findInstanceByContainerID(containerID string) (string, *fleet.Instance) {
-	if m.st == nil {
-		return "", nil
-	}
-	for fleetName, f := range m.st.Fleets {
-		for _, instance := range f.Instances {
-			if instance.ContainerID == containerID {
-				return fleetName, instance
-			}
-		}
-	}
-	return "", nil
-}
-
 // ===========================================
 // Session Discovery
 // ===========================================
@@ -479,80 +385,6 @@ func (m *model) refreshInstanceSessions(ref InstanceRef) tea.Cmd {
 }
 
 // ===========================================
-// Stats
-// ===========================================
-
-// fetchAllStatsCmd creates a command that fetches stats from all backends concurrently.
-func (m model) fetchAllStatsCmd(delay bool) tea.Cmd {
-	groups := m.containersByBackend()
-	if len(groups) == 0 {
-		return fetchStatsCmd(nil, nil, delay)
-	}
-
-	type fetchInput struct {
-		instanceBackend backend.Backend
-		ids             []string
-	}
-	var inputs []fetchInput
-	for backendType, g := range groups {
-		inputs = append(inputs, fetchInput{
-			instanceBackend: m.backendFor(backendType),
-			ids:             g.ids,
-		})
-	}
-
-	// If only one backend type, use the simple path
-	if len(inputs) == 1 {
-		return fetchStatsCmd(inputs[0].instanceBackend, inputs[0].ids, delay)
-	}
-
-	// Multiple backend types: fetch concurrently and merge
-	return func() tea.Msg {
-		if delay {
-			time.Sleep(3 * time.Second)
-		}
-
-		allStats := make(map[string]*backend.ContainerStats)
-		allScreens := make(map[string]backend.AllSessions)
-		allProbes := make(map[string]string)
-		var allIDs []string
-
-		type result struct {
-			stats   map[string]*backend.ContainerStats
-			screens map[string]backend.AllSessions
-			probes  map[string]string
-			ids     []string
-		}
-
-		ch := make(chan result, len(inputs))
-		for _, input := range inputs {
-			go func(instanceBackend backend.Backend, ids []string) {
-				stats, _ := instanceBackend.Stats(ids)
-				screens := backend.CaptureAllSessionsForAll(instanceBackend, ids)
-				probes := backend.AgentToolProbes(instanceBackend, ids)
-				ch <- result{stats, screens, probes, ids}
-			}(input.instanceBackend, input.ids)
-		}
-
-		for range inputs {
-			r := <-ch
-			for k, v := range r.stats {
-				allStats[k] = v
-			}
-			for k, v := range r.screens {
-				allScreens[k] = v
-			}
-			for k, v := range r.probes {
-				allProbes[k] = v
-			}
-			allIDs = append(allIDs, r.ids...)
-		}
-
-		return statsMsg{stats: allStats, screens: allScreens, probes: allProbes, containerIDs: allIDs}
-	}
-}
-
-// ===========================================
 // Bubbletea Lifecycle
 // ===========================================
 
@@ -561,7 +393,6 @@ func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.spinner.Tick,
 		m.agentSpinner.Tick,
-		m.fetchAllStatsCmd(false),
 		m.sessionDiscoveryLoop(),
 		layoutTickCmd(),
 		checkUpdateCmd(),
@@ -697,16 +528,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The watcher reconnects on its own; nothing rendered from the stream
 		// yet in Step 5, so this is a no-op (do not crash on a dropped stream).
 		return m, spinCmd
-
-	case statsMsg:
-		if msg.stats != nil {
-			m.stats = msg.stats
-		}
-		if msg.screens != nil {
-			m.activity.Update(msg.screens, msg.probes, msg.containerIDs, time.Now())
-			m.reinstallMissingClaudeHooks(msg.screens)
-		}
-		return m, tea.Batch(spinCmd, m.fetchAllStatsCmd(true))
 
 	case updateCheckMsg:
 		if msg.latestVersion != "" {

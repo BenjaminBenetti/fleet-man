@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -173,6 +175,29 @@ func statsActivityPass(h *hub) {
 		if it.workspaceDir != "" {
 			branchByKey[runtimeKey(it.fleetName, it.instance)] = gitutil.BranchName(it.workspaceDir)
 		}
+	}
+
+	// Re-install a missing Claude hook server-side (moved off the TUI's capture
+	// poll). Fire-and-forget, dedup'd per container so a slow provision doesn't
+	// stack across 3s ticks. Failures are surfaced as a per-instance warning
+	// (the same ~/.fleet/logs/*.warn file the TUI reads).
+	for _, it := range items {
+		c, ok := captures[it.containerID]
+		if !ok || !c.OK || !c.ClaudeHookMissing {
+			continue
+		}
+		if _, busy := h.reprovisioning.LoadOrStore(it.containerID, struct{}{}); busy {
+			continue
+		}
+		b := backendutil.NewForInstance(it.inst, false)
+		cid, wsDir, fleetName, instanceName := it.containerID, it.workspaceDir, it.fleetName, it.instance
+		go func() {
+			defer h.reprovisioning.Delete(cid)
+			executor := agentdetect.NewBackendExecutor(b, wsDir)
+			if err := agentdetect.NewClaudeProvisioner(executor).Provision(); err != nil {
+				state.WriteWarn(fleetName, instanceName, fmt.Sprintf("claude hook reinstall failed: %v", err))
+			}
+		}()
 	}
 
 	now := time.Now()

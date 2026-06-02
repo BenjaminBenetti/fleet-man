@@ -105,10 +105,10 @@ var (
 
 	// Port forward dialog
 	portForwardBox = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("39")).
-				Padding(1, 2).
-				Width(55)
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("39")).
+			Padding(1, 2).
+			Width(55)
 
 	portForwardStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("42"))
@@ -122,7 +122,7 @@ var (
 				Bold(true)
 
 	newSessionStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("241"))
+			Foreground(lipgloss.Color("241"))
 
 	// Keybindings dialog
 	keybindingsDialogBox = lipgloss.NewStyle().

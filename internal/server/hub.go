@@ -35,6 +35,12 @@ type hub struct {
 	// runtimeEdge fires (non-blocking) when runtimeWanted flips false->true, so
 	// the live-status poller can do an immediate pass instead of waiting a tick.
 	runtimeEdge chan struct{}
+
+	// reprovisioning dedupes in-flight Claude-hook reinstall attempts per
+	// containerID (the capture loop fires every few seconds; a reinstall on a
+	// slow backend can outlast one tick). Accessed only from the stats/activity
+	// poller goroutine + its reinstall goroutines, so its own locking suffices.
+	reprovisioning sync.Map
 }
 
 func newHub() *hub {

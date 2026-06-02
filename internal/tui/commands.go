@@ -41,13 +41,6 @@ type pollCreatingTickMsg struct{}
 // clearing any stale characters left behind by tmux pane resizes.
 type forceRepaintTickMsg struct{}
 
-type statsMsg struct {
-	stats        map[string]*backend.ContainerStats
-	screens      map[string]backend.AllSessions // containerID → per-session captures (multi-session aware)
-	probes       map[string]string              // containerID → detected tool name (from ps aux)
-	containerIDs []string                       // containers that were probed (for staleness detection)
-}
-
 // Commands
 
 func pollCreatingCmd() tea.Cmd {
@@ -67,21 +60,6 @@ func forceRepaintCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg {
 		return forceRepaintTickMsg{}
 	})
-}
-
-func fetchStatsCmd(instanceBackend backend.Backend, ids []string, delay bool) tea.Cmd {
-	return func() tea.Msg {
-		if delay {
-			time.Sleep(3 * time.Second)
-		}
-		if len(ids) == 0 {
-			return statsMsg{}
-		}
-		stats, _ := instanceBackend.Stats(ids)
-		screens := backend.CaptureAllSessionsForAll(instanceBackend, ids)
-		probes := backend.AgentToolProbes(instanceBackend, ids)
-		return statsMsg{stats: stats, screens: screens, probes: probes, containerIDs: ids}
-	}
 }
 
 // operationDoneMsg is sent when a background instance operation completes.
