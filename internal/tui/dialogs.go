@@ -1636,9 +1636,9 @@ func (fleetPage *fleetPage) updateCloneInstance(m *model, msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// saveCloneInstance validates the destination name, pre-creates the
-// destination instance record with StatusCloning so the TUI can render
-// progress, and spawns the detached _clone-instance subprocess.
+// saveCloneInstance validates the destination name and dispatches a server-side
+// CloneInstance job (which pre-creates the StatusCloning record and copies the
+// source's settings); the TUI tracks progress via reload() + pollCreating.
 func (fleetPage *fleetPage) saveCloneInstance(m *model) tea.Cmd {
 	destName := strings.TrimSpace(fleetPage.textInput.Value())
 	if destName == "" {
