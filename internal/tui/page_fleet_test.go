@@ -6,7 +6,6 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -28,15 +27,9 @@ func TestUpdateNormalStopShortcutStopsRunningInstance(t *testing.T) {
 
 	calledFleet := ""
 	calledInstance := ""
-	restore := stubToggleInstance(func(fleetName, instanceName string) (*instanceops.Result, error) {
+	restore := stubToggleInstance(func(fleetName, instanceName string) {
 		calledFleet = fleetName
 		calledInstance = instanceName
-		return &instanceops.Result{
-			FleetName:    fleetName,
-			InstanceName: instanceName,
-			Status:       fleet.StatusStopped,
-			Changed:      true,
-		}, nil
 	})
 	defer restore()
 
@@ -70,14 +63,7 @@ func TestUpdateNormalStopShortcutStartsStoppedInstance(t *testing.T) {
 		fleetPage: fp,
 	}
 
-	restore := stubToggleInstance(func(fleetName, instanceName string) (*instanceops.Result, error) {
-		return &instanceops.Result{
-			FleetName:    fleetName,
-			InstanceName: instanceName,
-			Status:       fleet.StatusRunning,
-			Changed:      true,
-		}, nil
-	})
+	restore := stubToggleInstance(func(fleetName, instanceName string) {})
 	defer restore()
 
 	cmd := fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
@@ -98,9 +84,8 @@ func TestUpdateNormalStopShortcutRequiresInstanceRow(t *testing.T) {
 	m := &model{fleetPage: fp}
 
 	called := false
-	restore := stubToggleInstance(func(fleetName, instanceName string) (*instanceops.Result, error) {
+	restore := stubToggleInstance(func(fleetName, instanceName string) {
 		called = true
-		return nil, nil
 	})
 	defer restore()
 
@@ -121,9 +106,8 @@ func TestUpdateNormalStopShortcutSkipsCreatingInstance(t *testing.T) {
 	m := &model{fleetPage: fp}
 
 	called := false
-	restore := stubToggleInstance(func(fleetName, instanceName string) (*instanceops.Result, error) {
+	restore := stubToggleInstance(func(fleetName, instanceName string) {
 		called = true
-		return nil, nil
 	})
 	defer restore()
 
@@ -448,11 +432,21 @@ func TestViewFleetListNoAgentIndicatorForStoppedInstance(t *testing.T) {
 	}
 }
 
-func stubToggleInstance(fn func(fleetName, instanceName string) (*instanceops.Result, error)) func() {
-	prev := toggleInstanceStatus
-	toggleInstanceStatus = fn
+// stubToggleInstance stubs both lifecycle seams the 's' shortcut dispatches
+// (start/stop are separate server jobs now); record fires with the fleet +
+// instance whenever either is invoked.
+func stubToggleInstance(record func(fleetName, instanceName string)) func() {
+	prevStart, prevStop := startInstanceRemote, stopInstanceRemote
+	startInstanceRemote = func(fleetName, instanceName string) error {
+		record(fleetName, instanceName)
+		return nil
+	}
+	stopInstanceRemote = func(fleetName, instanceName string) error {
+		record(fleetName, instanceName)
+		return nil
+	}
 	return func() {
-		toggleInstanceStatus = prev
+		startInstanceRemote, stopInstanceRemote = prevStart, prevStop
 	}
 }
 

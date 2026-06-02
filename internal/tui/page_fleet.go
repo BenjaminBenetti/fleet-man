@@ -13,8 +13,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/devcontainersetup"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
-	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -26,7 +24,6 @@ import (
 // Fleet Page
 // ===========================================
 
-var toggleInstanceStatus = instanceops.ToggleInstance
 var resolveWorkspaceBranch = gitutil.BranchName
 
 // fleetPage holds fleet-list-specific state.
@@ -531,16 +528,21 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				break
 			}
 
+			// Start/stop run as server jobs. Flip an optimistic in-memory
+			// transitional status for the spinner (NOT persisted — the server owns
+			// the transition and the persisted status); operationDoneMsg reload()s
+			// the authoritative result.
+			fleetName, instName := r.fleetName, r.instance.Name
+			var cmd tea.Cmd
 			if r.instance.Status == fleet.StatusRunning {
 				r.instance.Status = fleet.StatusStopping
+				cmd = stopInstanceCmd(fleetName, instName)
 			} else if r.instance.Status == fleet.StatusStopped {
 				r.instance.Status = fleet.StatusStarting
+				cmd = startInstanceCmd(fleetName, instName)
 			}
-			_ = state.Save(m.st)
 			fleetPage.buildRows(m)
-
-			fleetName, instName := r.fleetName, r.instance.Name
-			return toggleInstanceCmd(fleetName, instName)
+			return cmd
 
 		case "d":
 			r := fleetPage.currentRow()

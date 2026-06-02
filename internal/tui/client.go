@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"google.golang.org/grpc"
 )
 
 // client.go is the TUI's write seam onto the fleet server. The synchronous
@@ -35,23 +37,143 @@ var (
 	mutConn   *fleetclient.Conn
 )
 
+// dialMutation lazily dials (and caches) the shared mutation connection.
+func dialMutation(ctx context.Context) (*fleetclient.Conn, error) {
+	mutConnMu.Lock()
+	defer mutConnMu.Unlock()
+	if mutConn == nil {
+		conn, err := fleetclient.Dial(ctx)
+		if err != nil {
+			return nil, err
+		}
+		mutConn = conn
+	}
+	return mutConn, nil
+}
+
 // mutate dials (or reuses) the mutation connection and runs fn against the
 // service client under a bounded context.
 func mutate(fn func(context.Context, fleetgrpc.FleetServiceClient) error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), mutationTimeout)
 	defer cancel()
-
-	mutConnMu.Lock()
-	defer mutConnMu.Unlock()
-
-	if mutConn == nil {
-		conn, err := fleetclient.Dial(ctx)
-		if err != nil {
-			return err
-		}
-		mutConn = conn
+	conn, err := dialMutation(ctx)
+	if err != nil {
+		return err
 	}
-	return fn(ctx, mutConn.Service())
+	return fn(ctx, conn.Service())
+}
+
+// jobStream is the client view of a server job's event stream.
+type jobStream = grpc.ServerStreamingClient[fleetgrpc.JobEvent]
+
+// awaitJobStart opens a job stream and returns once the mandatory JobStarted
+// arrives (which the server emits only AFTER it has pre-created the record), so
+// a pre-create rejection (AlreadyExists / NotFound) surfaces synchronously. The
+// job then runs detached server-side; the caller tracks it via reload() +
+// pollCreating + the Watch stream. The stream is cancelled on return — that only
+// detaches THIS watcher, it does not stop the job.
+func awaitJobStart(open func(context.Context, fleetgrpc.FleetServiceClient) (jobStream, error)) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conn, err := dialMutation(ctx)
+	if err != nil {
+		return err
+	}
+	stream, err := open(ctx, conn.Service())
+	if err != nil {
+		return err
+	}
+	_, err = stream.Recv() // JobStarted, or the pre-create error
+	return err
+}
+
+// awaitJobDone opens a job stream and drains it to the terminal JobDone,
+// returning the failure error (if any) and non-fatal warnings. Used for the
+// fast lifecycle jobs (start / stop / destroy) where the TUI waits for the
+// result before refreshing.
+func awaitJobDone(open func(context.Context, fleetgrpc.FleetServiceClient) (jobStream, error)) ([]string, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conn, err := dialMutation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stream, err := open(ctx, conn.Service())
+	if err != nil {
+		return nil, err
+	}
+	for {
+		ev, err := stream.Recv()
+		if err != nil {
+			return nil, err
+		}
+		if d := ev.GetDone(); d != nil {
+			if !d.GetSuccess() {
+				return d.GetWarnings(), fmt.Errorf("%s", d.GetError())
+			}
+			return d.GetWarnings(), nil
+		}
+	}
+}
+
+// createInstanceRemote dispatches a CreateInstance job and returns once it has
+// started (record pre-created server-side).
+var createInstanceRemote = func(fleetName, instanceName, remote, branch string, backendType fleet.BackendType) error {
+	return awaitJobStart(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (jobStream, error) {
+		req := &fleetgrpc.CreateInstanceRequest{
+			Fleet:    fleetName,
+			Instance: instanceName,
+			Backend:  backendStringToProto(string(backendType)),
+		}
+		if remote != "" {
+			req.Remote = &remote
+		}
+		if branch != "" {
+			req.Branch = &branch
+		}
+		return svc.CreateInstance(ctx, req)
+	})
+}
+
+// cloneInstanceRemote dispatches a CloneInstance job (the server copies the
+// source's config/backend/tag/color/branch) and returns once it has started.
+var cloneInstanceRemote = func(fleetName, srcInstance, destInstance string) error {
+	return awaitJobStart(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (jobStream, error) {
+		return svc.CloneInstance(ctx, &fleetgrpc.CloneInstanceRequest{
+			Fleet:          fleetName,
+			SourceInstance: srcInstance,
+			NewInstance:    destInstance,
+		})
+	})
+}
+
+// startInstanceRemote / stopInstanceRemote run a fast lifecycle job to
+// completion.
+var startInstanceRemote = func(fleetName, instanceName string) error {
+	_, err := awaitJobDone(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (jobStream, error) {
+		return svc.StartInstance(ctx, &fleetgrpc.StartInstanceRequest{Fleet: fleetName, Instance: instanceName})
+	})
+	return err
+}
+
+var stopInstanceRemote = func(fleetName, instanceName string) error {
+	_, err := awaitJobDone(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (jobStream, error) {
+		return svc.StopInstance(ctx, &fleetgrpc.StopInstanceRequest{Fleet: fleetName, Instance: instanceName})
+	})
+	return err
+}
+
+// destroyInstanceRemote tears down one instance (destroyFleet=false) or the
+// whole fleet (destroyFleet=true), to completion.
+var destroyInstanceRemote = func(fleetName, instanceName string, destroyFleet bool) error {
+	_, err := awaitJobDone(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (jobStream, error) {
+		req := &fleetgrpc.DestroyInstanceRequest{Fleet: fleetName, DestroyFleet: destroyFleet}
+		if instanceName != "" {
+			req.Instance = &instanceName
+		}
+		return svc.DestroyInstance(ctx, req)
+	})
+	return err
 }
 
 // closeMutationConn tears down the mutation connection. Called from Run() after

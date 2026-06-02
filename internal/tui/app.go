@@ -695,18 +695,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case instanceCreateErrMsg:
+		// The dispatch (or the server's pre-create) failed, so there is no
+		// half-created record for the client to annotate — the server owns
+		// failure status for any record it did create. Just clear the optimistic
+		// "creating" marker, refresh, and surface the error.
 		key := msg.fleet + "/" + msg.instance
 		delete(m.creating, key)
-		st, _ := state.Load()
-		if st != nil {
-			if f, ok := st.Fleets[msg.fleet]; ok {
-				if instance, err := f.GetInstance(msg.instance); err == nil {
-					instance.Status = fleet.StatusFailed
-					instance.Error = msg.err.Error()
-					_ = state.Save(st)
-				}
-			}
-		}
 		m.reload()
 		m.message = fmt.Sprintf("Failed to create %s: %v", key, msg.err)
 
@@ -874,6 +868,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case instanceSpawnedMsg:
+		// The server pre-created the record; pull it into view (the TUI still
+		// renders from m.st) and start polling it to running.
+		m.reload()
+		if m.fleetPage != nil {
+			m.fleetPage.buildRows(&m)
+		}
 		extraCmds = append(extraCmds, pollCreatingCmd())
 
 	case groupCycleMsg:

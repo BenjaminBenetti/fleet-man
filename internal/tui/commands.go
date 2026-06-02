@@ -3,17 +3,14 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	coderbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/coder"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 
@@ -70,84 +67,55 @@ type operationDoneMsg struct {
 	err      error
 }
 
-// toggleInstanceCmd runs stop/start in the background.
-func toggleInstanceCmd(fleetName, instanceName string) tea.Cmd {
-	toggle := toggleInstanceStatus // capture for goroutine
+// startInstanceCmd / stopInstanceCmd run a start/stop job on the server and
+// report completion. The server owns the transition (instanceops) and the
+// persisted status; the TUI flips an optimistic in-memory status at the call
+// site for the spinner and reload()s the authoritative result on completion.
+func startInstanceCmd(fleetName, instanceName string) tea.Cmd {
 	return func() tea.Msg {
-		result, err := toggle(fleetName, instanceName)
-		if err != nil {
+		if err := startInstanceRemote(fleetName, instanceName); err != nil {
 			return operationDoneMsg{fleetName, instanceName, "", err}
 		}
-		key := fleetName + "/" + instanceName
-		var msg string
-		switch result.Status {
-		case fleet.StatusStopped:
-			msg = fmt.Sprintf("Stopped %s", key)
-		case fleet.StatusRunning:
-			msg = fmt.Sprintf("Started %s", key)
-		default:
-			msg = fmt.Sprintf("Instance %s is %s", key, result.Status)
-		}
-		return operationDoneMsg{fleetName, instanceName, msg, nil}
+		return operationDoneMsg{fleetName, instanceName, fmt.Sprintf("Started %s/%s", fleetName, instanceName), nil}
 	}
 }
 
-// deleteInstanceCmd runs instance deletion in the background.
-func deleteInstanceCmd(instanceBackend backend.Backend, fleetName, instanceName, containerID, wsDir string, pf *portforward.Manager) tea.Cmd {
+func stopInstanceCmd(fleetName, instanceName string) tea.Cmd {
 	return func() tea.Msg {
-		start := time.Now()
+		if err := stopInstanceRemote(fleetName, instanceName); err != nil {
+			return operationDoneMsg{fleetName, instanceName, "", err}
+		}
+		return operationDoneMsg{fleetName, instanceName, fmt.Sprintf("Stopped %s/%s", fleetName, instanceName), nil}
+	}
+}
+
+// deleteInstanceCmd tears down an instance via a server job. Port forwards are
+// the TUI's own (the server doesn't manage them), so they're removed here first.
+func deleteInstanceCmd(fleetName, instanceName string, pf *portforward.Manager) tea.Cmd {
+	return func() tea.Msg {
 		pf.RemoveAll(fleetName + "/" + instanceName)
-		_ = instanceBackend.Down(containerID)
-		if wsDir != "" {
-			_ = os.RemoveAll(wsDir)
+		if err := destroyInstanceRemote(fleetName, instanceName, false); err != nil {
+			return operationDoneMsg{fleetName, instanceName, "", err}
 		}
-		st, err := state.Load()
-		if err == nil {
-			if f, ok := st.Fleets[fleetName]; ok {
-				_ = f.RemoveInstance(instanceName)
-				_ = state.Save(st)
-			}
-		}
-		flog.Info("instance deleted", "fleet", fleetName, "instance", instanceName, "ms", flog.MillisSince(start))
-		key := fleetName + "/" + instanceName
-		return operationDoneMsg{fleetName, instanceName, fmt.Sprintf("Removed %s", key), nil}
+		return operationDoneMsg{fleetName, instanceName, fmt.Sprintf("Removed %s/%s", fleetName, instanceName), nil}
 	}
 }
 
-// deleteFleetCmd runs fleet destruction in the background.
-func deleteFleetCmd(backends map[fleet.BackendType]backend.Backend, fleetName string, instances []*fleet.Instance, pf *portforward.Manager) tea.Cmd {
-	// Snapshot what we need — don't capture model
-	type target struct {
-		instanceBackend backend.Backend
-		name            string
-		containerID     string
-		workspaceDir    string
-	}
-	var targets []target
-	for _, instance := range instances {
-		backendType := instance.Backend
-		if backendType == "" {
-			backendType = fleet.BackendDevcontainer
-		}
-		targets = append(targets, target{backends[backendType], instance.Name, instance.ContainerID, instance.WorkspaceDir})
+// deleteFleetCmd tears down every instance in the fleet plus the fleet record
+// via a single server job (destroy_fleet). TUI-owned port forwards are removed
+// here first.
+func deleteFleetCmd(fleetName string, instances []*fleet.Instance, pf *portforward.Manager) tea.Cmd {
+	names := make([]string, len(instances))
+	for i, instance := range instances {
+		names[i] = instance.Name
 	}
 	return func() tea.Msg {
-		start := time.Now()
-		for _, instanceTarget := range targets {
-			pf.RemoveAll(fleetName + "/" + instanceTarget.name)
-			if instanceTarget.instanceBackend != nil {
-				_ = instanceTarget.instanceBackend.Down(instanceTarget.containerID)
-			}
-			if instanceTarget.workspaceDir != "" {
-				_ = os.RemoveAll(instanceTarget.workspaceDir)
-			}
+		for _, name := range names {
+			pf.RemoveAll(fleetName + "/" + name)
 		}
-		st, err := state.Load()
-		if err == nil {
-			delete(st.Fleets, fleetName)
-			_ = state.Save(st)
+		if err := destroyInstanceRemote(fleetName, "", true); err != nil {
+			return operationDoneMsg{fleetName, "", "", err}
 		}
-		flog.Info("fleet destroyed", "fleet", fleetName, "instances", len(targets), "ms", flog.MillisSince(start))
 		return operationDoneMsg{fleetName, "", fmt.Sprintf("Removed fleet %s", fleetName), nil}
 	}
 }
@@ -253,71 +221,32 @@ func logsCommand(instanceBackend backend.Backend, fleetName string, instance *fl
 	return exec.Command("sh", "-c", script)
 }
 
-// createInstanceCmd spawns the hidden _create-instance subcommand as a
-// detached child process to provision an instance asynchronously.
-// branch selects the git ref to check out; an empty string uses the
-// repository's default branch.
-func createInstanceCmd(fleetName, instanceName, remoteURL, branch string, backendType fleet.BackendType) tea.Cmd {
+// createInstanceCmd dispatches a CreateInstance job to the server, which
+// pre-creates the StatusCreating record (no client-side state write — the #63
+// fix) and provisions in a server-owned goroutine. The cmd returns once the job
+// has started; pollCreating + reload track it to running.
+func createInstanceCmd(fleetName, instanceName, remoteURL, branch, color string, backendType fleet.BackendType) tea.Cmd {
 	return func() tea.Msg {
-		self, err := os.Executable()
-		if err != nil {
-			return instanceCreateErrMsg{fleetName, instanceName, fmt.Errorf("os.Executable: %w", err)}
+		if err := createInstanceRemote(fleetName, instanceName, remoteURL, branch, backendType); err != nil {
+			return instanceCreateErrMsg{fleetName, instanceName, err}
 		}
-
-		args := []string{"_create-instance", fleetName, instanceName, remoteURL, "--backend", string(backendType)}
-		if branch != "" {
-			args = append(args, "--branch", branch)
+		// CreateInstance doesn't carry the UI color; once the record exists
+		// (the job has started) apply it as instance metadata.
+		if color != "" {
+			_ = setInstanceMetadataRemote(fleetName, instanceName, nil, &color, nil)
 		}
-		cmd := exec.Command(self, args...)
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-
-		// Log output for debugging
-		logDir := filepath.Join(state.FleetDir(), "logs")
-		_ = os.MkdirAll(logDir, 0755)
-		logFile, err := os.Create(filepath.Join(logDir, fleetName+"-"+instanceName+".log"))
-		if err == nil {
-			cmd.Stdout = logFile
-			cmd.Stderr = logFile
-		}
-
-		if err := cmd.Start(); err != nil {
-			return instanceCreateErrMsg{fleetName, instanceName, fmt.Errorf("spawn: %w", err)}
-		}
-
-		flog.Info("instance create dispatched", "fleet", fleetName, "instance", instanceName, "backend", backendType, "branch", branch)
-		// Detach: do not call cmd.Wait(). The child runs independently.
 		return instanceSpawnedMsg{fleetName, instanceName}
 	}
 }
 
-// cloneInstanceCmd spawns the hidden _clone-instance subcommand as a
-// detached child to clone an instance asynchronously. The destination
-// instance record must already exist in state with StatusCloning so
-// the TUI can render progress while the docker commit + run runs.
+// cloneInstanceCmd dispatches a CloneInstance job. The server copies the
+// source's config/backend/tag/color/branch and pre-creates the StatusCloning
+// record, then clones in a server-owned goroutine.
 func cloneInstanceCmd(fleetName, srcInstance, destInstance string) tea.Cmd {
 	return func() tea.Msg {
-		self, err := os.Executable()
-		if err != nil {
-			return instanceCreateErrMsg{fleetName, destInstance, fmt.Errorf("os.Executable: %w", err)}
+		if err := cloneInstanceRemote(fleetName, srcInstance, destInstance); err != nil {
+			return instanceCreateErrMsg{fleetName, destInstance, err}
 		}
-
-		args := []string{"_clone-instance", fleetName, srcInstance, destInstance}
-		cmd := exec.Command(self, args...)
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-
-		logDir := filepath.Join(state.FleetDir(), "logs")
-		_ = os.MkdirAll(logDir, 0755)
-		logFile, err := os.Create(filepath.Join(logDir, fleetName+"-"+destInstance+".log"))
-		if err == nil {
-			cmd.Stdout = logFile
-			cmd.Stderr = logFile
-		}
-
-		if err := cmd.Start(); err != nil {
-			return instanceCreateErrMsg{fleetName, destInstance, fmt.Errorf("spawn: %w", err)}
-		}
-
-		flog.Info("instance clone dispatched", "fleet", fleetName, "src", srcInstance, "instance", destInstance)
 		return instanceSpawnedMsg{fleetName, destInstance}
 	}
 }
