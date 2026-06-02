@@ -17,16 +17,17 @@ import (
 // removed concurrently and there is nothing to mark. The state.Load error is
 // returned so a truly broken state file surfaces as a hard failure.
 func markInstanceRunning(fleetName, instanceName, containerID string) error {
-	st, err := state.Load()
-	if err != nil {
-		return err
-	}
-	if f, ok := st.Fleets[fleetName]; ok {
-		if instance, err := f.GetInstance(instanceName); err == nil {
-			instance.ContainerID = containerID
-			instance.Status = fleet.StatusRunning
-			instance.Error = ""
+	// Atomic RMW (load fresh, mutate just this instance, save) so the long
+	// provisioning steps that ran before this point can't have their concurrent
+	// writers clobbered, and we can't clobber them.
+	return state.Update(func(st *state.State) error {
+		if f, ok := st.Fleets[fleetName]; ok {
+			if instance, err := f.GetInstance(instanceName); err == nil {
+				instance.ContainerID = containerID
+				instance.Status = fleet.StatusRunning
+				instance.Error = ""
+			}
 		}
-	}
-	return state.Save(st)
+		return nil
+	})
 }

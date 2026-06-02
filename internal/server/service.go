@@ -23,13 +23,13 @@ type service struct {
 
 	startedAt time.Time
 	hub       *hub
+	jobs      *jobManager
 
-	// muWrite serializes the synchronous state mutations (mutations.go) so two
-	// concurrent mutation RPCs can't lost-update each other through the
-	// load→apply→save cycle. This is a server-scoped fix for the issue #63 race
-	// class; the full authoritative in-memory model (which removes the disk
-	// round-trip entirely) lands in Phase 4. config.json writes (config.go) share
-	// the same lock.
+	// muWrite serializes config.json writes (config.go SetConfig), which have no
+	// package-level lock of their own. State.json mutations no longer use this —
+	// they go through state.Update (mutations.go + the provisioning jobs), whose
+	// package lock serializes every state writer in the process (the issue #63
+	// fix). The two files are independent, so separate locks are fine.
 	muWrite sync.Mutex
 
 	shutdownOnce sync.Once
@@ -37,7 +37,7 @@ type service struct {
 }
 
 func newService() *service {
-	return &service{startedAt: time.Now(), hub: newHub(), shutdownCh: make(chan struct{})}
+	return &service{startedAt: time.Now(), hub: newHub(), jobs: newJobManager(), shutdownCh: make(chan struct{})}
 }
 
 // Hello is the authoritative version handshake. It reports the server's
@@ -64,7 +64,7 @@ func (s *service) GetState(_ context.Context, _ *fleetgrpc.GetStateRequest) (*fl
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load state: %v", err)
 	}
-	return &fleetgrpc.GetStateReply{State: stateToProto(st)}, nil
+	return &fleetgrpc.GetStateReply{State: stateToProto(st), ActiveJobs: s.jobs.summaries()}, nil
 }
 
 // Shutdown asks the server to stop. Phase 1 has no jobs, so a drain is

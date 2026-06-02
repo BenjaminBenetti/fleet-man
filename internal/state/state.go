@@ -28,7 +28,42 @@ type State struct {
 func Load() (*State, error) {
 	mu.Lock()
 	defer mu.Unlock()
+	return loadLocked()
+}
 
+// Save writes the state to disk.
+func Save(s *State) error {
+	mu.Lock()
+	defer mu.Unlock()
+	return saveLocked(s)
+}
+
+// Update performs an ATOMIC read-modify-write: it holds the package lock across
+// the whole Load -> fn -> Save cycle, so concurrent writers in this process
+// (e.g. several server-side provisioning jobs marking different instances
+// running at once) cannot lost-update each other by interleaving their
+// load/save the way separate Load+Save calls can. fn mutates the loaded *State
+// in place; if it returns an error the state is NOT saved and the error is
+// propagated verbatim (so callers can return coded errors from inside fn).
+//
+// This is the in-process half of the issue #63 fix; the cross-process half is
+// routing every writer through the single fleet server.
+func Update(fn func(*State) error) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	s, err := loadLocked()
+	if err != nil {
+		return err
+	}
+	if err := fn(s); err != nil {
+		return err
+	}
+	return saveLocked(s)
+}
+
+// loadLocked is Load's body; callers must already hold mu.
+func loadLocked() (*State, error) {
 	s := &State{Fleets: make(map[string]*fleet.Fleet)}
 
 	data, err := os.ReadFile(StatePath())
@@ -53,11 +88,8 @@ func Load() (*State, error) {
 	return s, nil
 }
 
-// Save writes the state to disk.
-func Save(s *State) error {
-	mu.Lock()
-	defer mu.Unlock()
-
+// saveLocked is Save's body; callers must already hold mu.
+func saveLocked(s *State) error {
 	if err := os.MkdirAll(FleetDir(), 0755); err != nil {
 		return fmt.Errorf("creating fleet dir: %w", err)
 	}

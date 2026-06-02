@@ -25,20 +25,21 @@ import (
 // the result, and broadcasts it. apply must return an already-coded
 // status.Error on failure (it is returned to the client verbatim).
 func (s *service) mutate(apply func(*state.State) error) (*fleetgrpc.State, error) {
-	s.muWrite.Lock()
-	defer s.muWrite.Unlock()
-
-	st, err := state.Load()
+	var snapshot *fleetgrpc.State
+	// state.Update holds the state lock across the whole load->apply->save, so
+	// these sync mutations are mutually serialized AND serialized against the
+	// provisioning jobs (which write via the same state.Update) — no interleaved
+	// lost updates within the server process (the issue #63 class).
+	err := state.Update(func(st *state.State) error {
+		if err := apply(st); err != nil {
+			return err
+		}
+		snapshot = stateToProto(st)
+		return nil
+	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "load state: %v", err)
-	}
-	if err := apply(st); err != nil {
 		return nil, err
 	}
-	if err := state.Save(st); err != nil {
-		return nil, status.Errorf(codes.Internal, "save state: %v", err)
-	}
-	snapshot := stateToProto(st)
 	// Push the new snapshot onto the hub loop so Watch subscribers don't wait for
 	// the next state-poller tick. Best-effort: if the hub has stopped (shutdown)
 	// the mutation still persisted, so we don't fail the RPC.
