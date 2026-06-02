@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	codespacesbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/codespaces"
@@ -34,6 +35,14 @@ type model struct {
 	st     *state.State
 	config *state.Config
 	err    error
+
+	// pstate is the persisted snapshot pushed by the server's Watch stream, and
+	// runtime is the live sidecar (agent/stats/sessions/...) keyed by
+	// "fleet/instance". In P2 Step 5 these are populated but NOT yet rendered
+	// (the View still reads m.st / m.stats / m.activity); the read-path flip is
+	// Steps 6–7.
+	pstate  *fleetgrpc.State
+	runtime map[string]*fleetgrpc.InstanceRuntime
 
 	// Page routing
 	currentPage Page
@@ -134,6 +143,7 @@ func newModel() model {
 		backends:       make(map[fleet.BackendType]backend.Backend),
 		stats:          make(map[string]*backend.ContainerStats),
 		activity:       NewActivityTracker(),
+		runtime:        make(map[string]*fleetgrpc.InstanceRuntime),
 		reprovisioning: &sync.Map{},
 		portForwards:   portforward.NewManager(),
 		activeBrowser:  make(map[string]string),
@@ -664,6 +674,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// 3. Shared-only messages — return early
 	switch msg := msg.(type) {
+	case stateChangedMsg:
+		// P2 Step 5: cache only — the View still renders from m.st. The
+		// persisted read-path flip to m.pstate is Step 6.
+		m.pstate = msg.state
+		return m, spinCmd
+
+	case runtimeChangedMsg:
+		// P2 Step 5: cache only (merge by key). The live read-path flip to
+		// m.runtime is Step 7.
+		for _, r := range msg.runtime {
+			m.runtime[rtKey(r.GetFleet(), r.GetInstance())] = r
+		}
+		return m, spinCmd
+
+	case watchBrowserOpenMsg:
+		// No-op in P2 (control stays TUI-side per the plan's Decision 2; this
+		// wiring exists for P3).
+		return m, spinCmd
+
+	case watchErrMsg, watchClosedMsg:
+		// The watcher reconnects on its own; nothing rendered from the stream
+		// yet in Step 5, so this is a no-op (do not crash on a dropped stream).
+		return m, spinCmd
+
 	case statsMsg:
 		if msg.stats != nil {
 			m.stats = msg.stats
@@ -1131,7 +1165,16 @@ func Run() error {
 	}
 
 	program := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	// Subscribe to the fleet server's Watch stream for the TUI's lifetime,
+	// injecting events into the program. In P2 Step 5 these only populate the
+	// m.pstate / m.runtime caches; the View still renders from the legacy fields
+	// until the read-path flip (Steps 6–7).
+	watchCtx, watchCancel := context.WithCancel(context.Background())
+	go runWatchStream(watchCtx, program)
+
 	finalModel, err := program.Run()
+	watchCancel()
 	flog.Info("fleet TUI stopped", "ms", flog.MillisSince(start))
 
 	if clipCancel != nil {
