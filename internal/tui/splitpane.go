@@ -415,14 +415,15 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 	// Use composite key (instanceName/groupID) for state persistence
 	// to ensure isolation between instances with the same group ID.
 	stateKey := computeGroupKey(groupSnapshot.InstanceName, groupSnapshot.GroupID)
-	st.GroupLayouts[stateKey] = state.GroupLayout{
+	layout := state.GroupLayout{
 		GroupID:      groupSnapshot.GroupID,
 		InstanceName: groupSnapshot.InstanceName,
 		Sessions:     groupSnapshot.Sessions,
 		Layout:       groupSnapshot.Layout,
 		PaneCount:    groupSnapshot.PaneCount,
 	}
-	_ = state.Save(st)
+	st.GroupLayouts[stateKey] = layout
+	_ = setGroupLayoutRemote(layout)
 }
 
 // restoreGroupCmd recreates outer tmux panes for a saved session group.

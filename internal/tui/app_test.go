@@ -178,6 +178,13 @@ func TestUpdateSettingsEnterEditingDotfiles(t *testing.T) {
 func TestUpdateSettingsEditingSavesOnEnter(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
+	// The settings page persists through the server's SetConfig RPC now; stub the
+	// seam to the legacy disk write so this test still exercises "edit -> persist"
+	// without standing up a server.
+	origSetConfig := setConfigRemote
+	setConfigRemote = func(c *state.Config) error { return state.SaveConfig(c) }
+	defer func() { setConfigRemote = origSetConfig }()
+
 	si := textinput.New()
 	si.CharLimit = 256
 

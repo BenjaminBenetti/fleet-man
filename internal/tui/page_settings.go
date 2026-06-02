@@ -235,7 +235,7 @@ func (settingsPage *settingsPage) toggleTmuxVimKeys(m *model) {
 	current := m.config.GeneralSettings.TmuxVimKeysEnabled()
 	next := !current
 	m.config.GeneralSettings.TmuxVimKeys = &next
-	if err := state.SaveConfig(m.config); err != nil {
+	if err := setConfigRemote(m.config); err != nil {
 		m.config.GeneralSettings.TmuxVimKeys = &current
 		m.message = fmt.Sprintf("Failed to save settings: %v", err)
 		return
@@ -255,7 +255,7 @@ func (settingsPage *settingsPage) toggleShowHelpText(m *model) {
 	current := m.config.GeneralSettings.ShowHelpTextEnabled()
 	next := !current
 	m.config.GeneralSettings.ShowHelpText = &next
-	if err := state.SaveConfig(m.config); err != nil {
+	if err := setConfigRemote(m.config); err != nil {
 		m.config.GeneralSettings.ShowHelpText = &current
 		m.message = fmt.Sprintf("Failed to save settings: %v", err)
 		return
@@ -278,7 +278,7 @@ func (settingsPage *settingsPage) toggleBrowserAutoSwitch(m *model) {
 	current := m.config.BrowserSettings.AutoSwitchEnabled()
 	next := !current
 	m.config.BrowserSettings.AutoSwitch = &next
-	if err := state.SaveConfig(m.config); err != nil {
+	if err := setConfigRemote(m.config); err != nil {
 		m.config.BrowserSettings.AutoSwitch = &current
 		m.message = fmt.Sprintf("Failed to save settings: %v", err)
 		return
@@ -301,7 +301,7 @@ func (settingsPage *settingsPage) toggleBrowserMultiple(m *model) {
 	current := m.config.BrowserSettings.MultipleBrowsersPerFleetEnabled()
 	next := !current
 	m.config.BrowserSettings.MultipleBrowsersPerFleet = &next
-	if err := state.SaveConfig(m.config); err != nil {
+	if err := setConfigRemote(m.config); err != nil {
 		m.config.BrowserSettings.MultipleBrowsersPerFleet = &current
 		m.message = fmt.Sprintf("Failed to save settings: %v", err)
 		return
@@ -319,7 +319,7 @@ func (settingsPage *settingsPage) toggleAutoInstall(m *model) {
 		m.config = state.DefaultConfig()
 	}
 	m.config.DotfilesSettings.AutoInstall = !m.config.DotfilesSettings.AutoInstall
-	if err := state.SaveConfig(m.config); err != nil {
+	if err := setConfigRemote(m.config); err != nil {
 		m.config.DotfilesSettings.AutoInstall = !m.config.DotfilesSettings.AutoInstall
 		m.message = fmt.Sprintf("Failed to save settings: %v", err)
 		return
@@ -346,7 +346,7 @@ func (settingsPage *settingsPage) cycleCoderPreset(m *model, direction int) {
 	}
 	idx = (idx + direction + len(m.coderPresets)) % len(m.coderPresets)
 	m.config.CoderSettings.Preset = m.coderPresets[idx]
-	if err := state.SaveConfig(m.config); err != nil {
+	if err := setConfigRemote(m.config); err != nil {
 		m.config.CoderSettings.Preset = current
 		m.message = fmt.Sprintf("Failed to save settings: %v", err)
 		return
@@ -370,7 +370,7 @@ func (settingsPage *settingsPage) cycleCodespacesMachine(m *model, direction int
 	idx = (idx + direction + len(m.codespaceMachines)) % len(m.codespaceMachines)
 	selected := m.codespaceMachines[idx]
 	m.config.CodespacesSettings.Machine = selected.Name
-	if err := state.SaveConfig(m.config); err != nil {
+	if err := setConfigRemote(m.config); err != nil {
 		m.config.CodespacesSettings.Machine = current
 		m.message = fmt.Sprintf("Failed to save settings: %v", err)
 		return
@@ -611,7 +611,7 @@ func (settingsPage *settingsPage) updateSettingsEditing(m *model, msg tea.Msg) t
 				}
 			}
 
-			if err := state.SaveConfig(m.config); err != nil {
+			if err := setConfigRemote(m.config); err != nil {
 				m.message = fmt.Sprintf("Failed to save settings: %v", err)
 			} else if cmd == nil {
 				m.message = "Saved"

@@ -36,7 +36,7 @@ func (fleetPage *fleetPage) updateConfirmDelete(m *model, msg tea.Msg) tea.Cmd {
 				// Empty fleet, just remove it
 				delete(m.st.Fleets, fleetPage.dialogFleet)
 				delete(fleetPage.collapsed, fleetPage.dialogFleet)
-				_ = state.Save(m.st)
+				_ = destroyFleetRemote(fleetPage.dialogFleet)
 				fleetPage.buildRows(m)
 				m.message = fmt.Sprintf("Removed fleet %s", fleetPage.dialogFleet)
 			} else {
@@ -84,7 +84,7 @@ func (fleetPage *fleetPage) updateConfirmDeleteFleetWarn(m *model, msg tea.Msg) 
 			} else if ok {
 				delete(m.st.Fleets, fleetPage.dialogFleet)
 				delete(fleetPage.collapsed, fleetPage.dialogFleet)
-				_ = state.Save(m.st)
+				_ = destroyFleetRemote(fleetPage.dialogFleet)
 				fleetPage.buildRows(m)
 				m.message = fmt.Sprintf("Removed fleet %s", fleetPage.dialogFleet)
 			}
@@ -218,7 +218,7 @@ func (fleetPage *fleetPage) chooseBrowserLaunch(m *model, preferFleetLaunch bool
 
 	prefer := preferFleetLaunch
 	f.Settings.PreferFleetLaunch = &prefer
-	_ = state.Save(m.st)
+	_ = setFleetSettingsRemote(fleetName, f.Settings)
 
 	instance, err := f.GetInstance(fleetPage.dialogInst)
 	if err != nil || instance.Status != fleet.StatusRunning {
@@ -616,7 +616,7 @@ func (fleetPage *fleetPage) submitAddInstance(m *model) tea.Cmd {
 
 	if m.config != nil {
 		m.config.DefaultBackend = string(backendType)
-		_ = state.SaveConfig(m.config)
+		_ = setConfigRemote(m.config)
 	}
 
 	key := fleetName + "/" + name
@@ -748,7 +748,7 @@ func (fleetPage *fleetPage) saveInstanceEdits(m *model) tea.Cmd {
 	}
 	instance.DisplayName = displayName
 	instance.Color = color
-	_ = state.Save(m.st)
+	_ = setInstanceMetadataRemote(fleetPage.dialogFleet, fleetPage.dialogInst, &displayName, &color, nil)
 
 	fleetPage.buildRows(m)
 	fleetPage.mode = viewNormal
@@ -804,7 +804,7 @@ func (fleetPage *fleetPage) saveTagInstance(m *model) tea.Cmd {
 	if ok {
 		if instance, err := f.GetInstance(fleetPage.dialogInst); err == nil {
 			instance.Tag = tag
-			_ = state.Save(m.st)
+			_ = setInstanceMetadataRemote(fleetPage.dialogFleet, fleetPage.dialogInst, nil, nil, &tag)
 		}
 	}
 
@@ -981,7 +981,7 @@ func (fleetPage *fleetPage) handleDevcontainerInspected(m *model, msg devcontain
 // branch.
 func (fleetPage *fleetPage) addPendingFleet(m *model) {
 	m.st.GetOrCreateFleet(fleetPage.dialogPendingFleetName, fleetPage.dialogPendingRepoURL)
-	_ = state.Save(m.st)
+	_ = createFleetRemote(fleetPage.dialogPendingFleetName, fleetPage.dialogPendingRepoURL)
 	fleetPage.buildRows(m)
 }
 
@@ -1345,7 +1345,7 @@ func (fleetPage *fleetPage) saveFleetEdits(m *model) tea.Cmd {
 	preferFleetLaunch := fleetPage.dialogPreferFleetLaunch
 	f.Settings.PreferFleetLaunch = &preferFleetLaunch
 	f.Settings.HomeDir = strings.TrimSpace(fleetPage.homedirInput.Value())
-	_ = state.Save(m.st)
+	_ = setFleetSettingsRemote(fleetPage.dialogFleet, f.Settings)
 
 	fleetPage.mode = viewNormal
 	fleetPage.blurDialogFields()

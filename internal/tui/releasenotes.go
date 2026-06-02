@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -78,7 +77,7 @@ func (m *model) lastSeenVersion() string {
 func (m *model) dismissReleaseNotes() {
 	if m.st != nil {
 		m.st.LastSeenVersion = m.releaseNotesVersion
-		_ = state.Save(m.st)
+		_ = setLastSeenVersionRemote(m.releaseNotesVersion)
 	}
 	m.releaseNotesVersion = ""
 	m.releaseNotesBody = ""

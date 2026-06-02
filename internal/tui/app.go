@@ -270,7 +270,6 @@ func (m *model) pruneSavedGroupsForInstance(ref InstanceRef) {
 	if len(live) == 0 {
 		return
 	}
-	changed := false
 	for key, savedLayout := range m.fleetPage.savedGroups {
 		if savedLayout.InstanceName != ref.Instance {
 			continue
@@ -278,11 +277,8 @@ func (m *model) pruneSavedGroupsForInstance(ref InstanceRef) {
 		if !live[savedLayout.GroupID] {
 			delete(m.fleetPage.savedGroups, key)
 			delete(m.st.GroupLayouts, key)
-			changed = true
+			_ = deleteGroupLayoutRemote(savedLayout.InstanceName, savedLayout.GroupID)
 		}
-	}
-	if changed {
-		_ = state.Save(m.st)
 	}
 }
 
@@ -299,16 +295,12 @@ func (m *model) pruneOrphanedSavedGroups() {
 			live[instance.Name] = true
 		}
 	}
-	changed := false
 	for key, savedLayout := range m.fleetPage.savedGroups {
 		if !live[savedLayout.InstanceName] {
 			delete(m.fleetPage.savedGroups, key)
 			delete(m.st.GroupLayouts, key)
-			changed = true
+			_ = deleteGroupLayoutRemote(savedLayout.InstanceName, savedLayout.GroupID)
 		}
-	}
-	if changed {
-		_ = state.Save(m.st)
 	}
 }
 
@@ -593,7 +585,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.config.CoderSettings.Preset == "" && len(m.coderPresets) > 0 {
 			m.config.CoderSettings.Preset = m.coderPresets[0]
 		}
-		_ = state.SaveConfig(m.config)
+		_ = setConfigRemote(m.config)
 		m.message = fmt.Sprintf("Loaded %d parameters, %d presets", len(newParams), len(m.coderPresets))
 		return m, spinCmd
 
@@ -605,7 +597,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.codespaceMachines = msg.machines
 		if m.config != nil && m.config.CodespacesSettings.Machine == "" && len(m.codespaceMachines) > 0 {
 			m.config.CodespacesSettings.Machine = m.codespaceMachines[0].Name
-			_ = state.SaveConfig(m.config)
+			_ = setConfigRemote(m.config)
 		}
 		return m, spinCmd
 
@@ -804,7 +796,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delete(fleetPage.savedGroups, key)
 			if m.st != nil && m.st.GroupLayouts != nil {
 				delete(m.st.GroupLayouts, key)
-				_ = state.Save(m.st)
+				_ = deleteGroupLayoutRemote(msg.ref.Instance, msg.groupID)
 			}
 		}
 		// Tear down the split only when the deletion targets the very
@@ -1006,6 +998,10 @@ func Run() error {
 	// files it created. The registry pointer in m is shared with the program's
 	// copy of the model, so this Closes the same servers the loop was draining.
 	m.control.shutdown()
+
+	// Release the mutation connection (the Watch connection is closed by its own
+	// goroutine when watchCtx is cancelled above).
+	closeMutationConn()
 
 	// If the user just performed a successful auto-update, replace
 	// the current process with the freshly installed binary. Doing
