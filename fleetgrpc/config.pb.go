@@ -181,18 +181,108 @@ func (x *DotfilesSettings) GetInstallScript() string {
 	return ""
 }
 
-type CoderSettings struct {
+// CoderParameter mirrors internal/state.CoderParameter — one Coder template
+// parameter binding. name+value are always present; the remaining fields are
+// template-derived metadata (JSON `,omitempty`) and so are optional.
+type CoderParameter struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Template      *string                `protobuf:"bytes,1,opt,name=template,proto3,oneof" json:"template,omitempty"`
-	Preset        *string                `protobuf:"bytes,2,opt,name=preset,proto3,oneof" json:"preset,omitempty"`
-	Parameters    map[string]string      `protobuf:"bytes,3,rep,name=parameters,proto3" json:"parameters,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"` // may contain ${GIT_URL}, ${GIT_BRANCH}, ${INSTANCE_NAME}
+	DefaultValue  *string                `protobuf:"bytes,3,opt,name=default_value,json=defaultValue,proto3,oneof" json:"default_value,omitempty"`
+	DisplayName   *string                `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3,oneof" json:"display_name,omitempty"`
+	Description   *string                `protobuf:"bytes,5,opt,name=description,proto3,oneof" json:"description,omitempty"`
+	Type          *string                `protobuf:"bytes,6,opt,name=type,proto3,oneof" json:"type,omitempty"` // "string", "number"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CoderParameter) Reset() {
+	*x = CoderParameter{}
+	mi := &file_config_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CoderParameter) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CoderParameter) ProtoMessage() {}
+
+func (x *CoderParameter) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CoderParameter.ProtoReflect.Descriptor instead.
+func (*CoderParameter) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *CoderParameter) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CoderParameter) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+func (x *CoderParameter) GetDefaultValue() string {
+	if x != nil && x.DefaultValue != nil {
+		return *x.DefaultValue
+	}
+	return ""
+}
+
+func (x *CoderParameter) GetDisplayName() string {
+	if x != nil && x.DisplayName != nil {
+		return *x.DisplayName
+	}
+	return ""
+}
+
+func (x *CoderParameter) GetDescription() string {
+	if x != nil && x.Description != nil {
+		return *x.Description
+	}
+	return ""
+}
+
+func (x *CoderParameter) GetType() string {
+	if x != nil && x.Type != nil {
+		return *x.Type
+	}
+	return ""
+}
+
+type CoderSettings struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Template *string                `protobuf:"bytes,1,opt,name=template,proto3,oneof" json:"template,omitempty"`
+	Preset   *string                `protobuf:"bytes,2,opt,name=preset,proto3,oneof" json:"preset,omitempty"`
+	// Mirrors []CoderParameter — a rich list (value + template metadata), NOT a
+	// name->value map: the TUI re-renders default/display/description/type after a
+	// fetch, so those must round-trip through SetConfig without loss.
+	Parameters    []*CoderParameter `protobuf:"bytes,3,rep,name=parameters,proto3" json:"parameters,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CoderSettings) Reset() {
 	*x = CoderSettings{}
-	mi := &file_config_proto_msgTypes[3]
+	mi := &file_config_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -204,7 +294,7 @@ func (x *CoderSettings) String() string {
 func (*CoderSettings) ProtoMessage() {}
 
 func (x *CoderSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[3]
+	mi := &file_config_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -217,7 +307,7 @@ func (x *CoderSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CoderSettings.ProtoReflect.Descriptor instead.
 func (*CoderSettings) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{3}
+	return file_config_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CoderSettings) GetTemplate() string {
@@ -234,7 +324,7 @@ func (x *CoderSettings) GetPreset() string {
 	return ""
 }
 
-func (x *CoderSettings) GetParameters() map[string]string {
+func (x *CoderSettings) GetParameters() []*CoderParameter {
 	if x != nil {
 		return x.Parameters
 	}
@@ -252,7 +342,7 @@ type CodespacesSettings struct {
 
 func (x *CodespacesSettings) Reset() {
 	*x = CodespacesSettings{}
-	mi := &file_config_proto_msgTypes[4]
+	mi := &file_config_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -264,7 +354,7 @@ func (x *CodespacesSettings) String() string {
 func (*CodespacesSettings) ProtoMessage() {}
 
 func (x *CodespacesSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[4]
+	mi := &file_config_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -277,7 +367,7 @@ func (x *CodespacesSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodespacesSettings.ProtoReflect.Descriptor instead.
 func (*CodespacesSettings) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{4}
+	return file_config_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CodespacesSettings) GetMachine() string {
@@ -301,16 +391,21 @@ func (x *CodespacesSettings) GetDevcontainerPath() string {
 	return ""
 }
 
+// BrowserSettings mirrors internal/state.BrowserSettings. Both fields are
+// *bool tri-states in Go (nil defaults to false), so optional preserves the
+// nil-vs-explicit-false distinction the profile-layout / prompt-suppression
+// logic branches on.
 type BrowserSettings struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Command       *string                `protobuf:"bytes,1,opt,name=command,proto3,oneof" json:"command,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                    protoimpl.MessageState `protogen:"open.v1"`
+	MultipleBrowsersPerFleet *bool                  `protobuf:"varint,1,opt,name=multiple_browsers_per_fleet,json=multipleBrowsersPerFleet,proto3,oneof" json:"multiple_browsers_per_fleet,omitempty"`
+	AutoSwitch               *bool                  `protobuf:"varint,2,opt,name=auto_switch,json=autoSwitch,proto3,oneof" json:"auto_switch,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *BrowserSettings) Reset() {
 	*x = BrowserSettings{}
-	mi := &file_config_proto_msgTypes[5]
+	mi := &file_config_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -322,7 +417,7 @@ func (x *BrowserSettings) String() string {
 func (*BrowserSettings) ProtoMessage() {}
 
 func (x *BrowserSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[5]
+	mi := &file_config_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -335,14 +430,21 @@ func (x *BrowserSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BrowserSettings.ProtoReflect.Descriptor instead.
 func (*BrowserSettings) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{5}
+	return file_config_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *BrowserSettings) GetCommand() string {
-	if x != nil && x.Command != nil {
-		return *x.Command
+func (x *BrowserSettings) GetMultipleBrowsersPerFleet() bool {
+	if x != nil && x.MultipleBrowsersPerFleet != nil {
+		return *x.MultipleBrowsersPerFleet
 	}
-	return ""
+	return false
+}
+
+func (x *BrowserSettings) GetAutoSwitch() bool {
+	if x != nil && x.AutoSwitch != nil {
+		return *x.AutoSwitch
+	}
+	return false
 }
 
 type Config struct {
@@ -362,7 +464,7 @@ type Config struct {
 
 func (x *Config) Reset() {
 	*x = Config{}
-	mi := &file_config_proto_msgTypes[6]
+	mi := &file_config_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -374,7 +476,7 @@ func (x *Config) String() string {
 func (*Config) ProtoMessage() {}
 
 func (x *Config) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[6]
+	mi := &file_config_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -387,7 +489,7 @@ func (x *Config) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Config.ProtoReflect.Descriptor instead.
 func (*Config) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{6}
+	return file_config_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Config) GetGeneral() *GeneralSettings {
@@ -447,7 +549,7 @@ type GetConfigRequest struct {
 
 func (x *GetConfigRequest) Reset() {
 	*x = GetConfigRequest{}
-	mi := &file_config_proto_msgTypes[7]
+	mi := &file_config_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -459,7 +561,7 @@ func (x *GetConfigRequest) String() string {
 func (*GetConfigRequest) ProtoMessage() {}
 
 func (x *GetConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[7]
+	mi := &file_config_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -472,7 +574,7 @@ func (x *GetConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConfigRequest.ProtoReflect.Descriptor instead.
 func (*GetConfigRequest) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{7}
+	return file_config_proto_rawDescGZIP(), []int{8}
 }
 
 type GetConfigReply struct {
@@ -484,7 +586,7 @@ type GetConfigReply struct {
 
 func (x *GetConfigReply) Reset() {
 	*x = GetConfigReply{}
-	mi := &file_config_proto_msgTypes[8]
+	mi := &file_config_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -496,7 +598,7 @@ func (x *GetConfigReply) String() string {
 func (*GetConfigReply) ProtoMessage() {}
 
 func (x *GetConfigReply) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[8]
+	mi := &file_config_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -509,7 +611,7 @@ func (x *GetConfigReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConfigReply.ProtoReflect.Descriptor instead.
 func (*GetConfigReply) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{8}
+	return file_config_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *GetConfigReply) GetConfig() *Config {
@@ -530,7 +632,7 @@ type SetConfigRequest struct {
 
 func (x *SetConfigRequest) Reset() {
 	*x = SetConfigRequest{}
-	mi := &file_config_proto_msgTypes[9]
+	mi := &file_config_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -542,7 +644,7 @@ func (x *SetConfigRequest) String() string {
 func (*SetConfigRequest) ProtoMessage() {}
 
 func (x *SetConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[9]
+	mi := &file_config_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -555,7 +657,7 @@ func (x *SetConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetConfigRequest.ProtoReflect.Descriptor instead.
 func (*SetConfigRequest) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{9}
+	return file_config_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *SetConfigRequest) GetConfig() *Config {
@@ -574,7 +676,7 @@ type SetConfigReply struct {
 
 func (x *SetConfigReply) Reset() {
 	*x = SetConfigReply{}
-	mi := &file_config_proto_msgTypes[10]
+	mi := &file_config_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -586,7 +688,7 @@ func (x *SetConfigReply) String() string {
 func (*SetConfigReply) ProtoMessage() {}
 
 func (x *SetConfigReply) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[10]
+	mi := &file_config_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -599,7 +701,7 @@ func (x *SetConfigReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetConfigReply.ProtoReflect.Descriptor instead.
 func (*SetConfigReply) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{10}
+	return file_config_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *SetConfigReply) GetConfig() *Config {
@@ -626,16 +728,24 @@ const file_config_proto_rawDesc = "" +
 	"\x04repo\x18\x02 \x01(\tH\x00R\x04repo\x88\x01\x01\x12*\n" +
 	"\x0einstall_script\x18\x03 \x01(\tH\x01R\rinstallScript\x88\x01\x01B\a\n" +
 	"\x05_repoB\x11\n" +
-	"\x0f_install_script\"\xee\x01\n" +
+	"\x0f_install_script\"\x88\x02\n" +
+	"\x0eCoderParameter\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\x12(\n" +
+	"\rdefault_value\x18\x03 \x01(\tH\x00R\fdefaultValue\x88\x01\x01\x12&\n" +
+	"\fdisplay_name\x18\x04 \x01(\tH\x01R\vdisplayName\x88\x01\x01\x12%\n" +
+	"\vdescription\x18\x05 \x01(\tH\x02R\vdescription\x88\x01\x01\x12\x17\n" +
+	"\x04type\x18\x06 \x01(\tH\x03R\x04type\x88\x01\x01B\x10\n" +
+	"\x0e_default_valueB\x0f\n" +
+	"\r_display_nameB\x0e\n" +
+	"\f_descriptionB\a\n" +
+	"\x05_type\"\xa0\x01\n" +
 	"\rCoderSettings\x12\x1f\n" +
 	"\btemplate\x18\x01 \x01(\tH\x00R\btemplate\x88\x01\x01\x12\x1b\n" +
-	"\x06preset\x18\x02 \x01(\tH\x01R\x06preset\x88\x01\x01\x12H\n" +
+	"\x06preset\x18\x02 \x01(\tH\x01R\x06preset\x88\x01\x01\x129\n" +
 	"\n" +
-	"parameters\x18\x03 \x03(\v2(.fleetgrpc.CoderSettings.ParametersEntryR\n" +
-	"parameters\x1a=\n" +
-	"\x0fParametersEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\v\n" +
+	"parameters\x18\x03 \x03(\v2\x19.fleetgrpc.CoderParameterR\n" +
+	"parametersB\v\n" +
 	"\t_templateB\t\n" +
 	"\a_preset\"\xc0\x01\n" +
 	"\x12CodespacesSettings\x12\x1d\n" +
@@ -645,11 +755,13 @@ const file_config_proto_rawDesc = "" +
 	"\n" +
 	"\b_machineB\x0f\n" +
 	"\r_idle_timeoutB\x14\n" +
-	"\x12_devcontainer_path\"<\n" +
-	"\x0fBrowserSettings\x12\x1d\n" +
-	"\acommand\x18\x01 \x01(\tH\x00R\acommand\x88\x01\x01B\n" +
-	"\n" +
-	"\b_command\"\x93\x03\n" +
+	"\x12_devcontainer_path\"\xab\x01\n" +
+	"\x0fBrowserSettings\x12B\n" +
+	"\x1bmultiple_browsers_per_fleet\x18\x01 \x01(\bH\x00R\x18multipleBrowsersPerFleet\x88\x01\x01\x12$\n" +
+	"\vauto_switch\x18\x02 \x01(\bH\x01R\n" +
+	"autoSwitch\x88\x01\x01B\x1e\n" +
+	"\x1c_multiple_browsers_per_fleetB\x0e\n" +
+	"\f_auto_switch\"\x93\x03\n" +
 	"\x06Config\x124\n" +
 	"\ageneral\x18\x01 \x01(\v2\x1a.fleetgrpc.GeneralSettingsR\ageneral\x12.\n" +
 	"\x05agent\x18\x02 \x01(\v2\x18.fleetgrpc.AgentSettingsR\x05agent\x127\n" +
@@ -685,29 +797,29 @@ var file_config_proto_goTypes = []any{
 	(*GeneralSettings)(nil),    // 0: fleetgrpc.GeneralSettings
 	(*AgentSettings)(nil),      // 1: fleetgrpc.AgentSettings
 	(*DotfilesSettings)(nil),   // 2: fleetgrpc.DotfilesSettings
-	(*CoderSettings)(nil),      // 3: fleetgrpc.CoderSettings
-	(*CodespacesSettings)(nil), // 4: fleetgrpc.CodespacesSettings
-	(*BrowserSettings)(nil),    // 5: fleetgrpc.BrowserSettings
-	(*Config)(nil),             // 6: fleetgrpc.Config
-	(*GetConfigRequest)(nil),   // 7: fleetgrpc.GetConfigRequest
-	(*GetConfigReply)(nil),     // 8: fleetgrpc.GetConfigReply
-	(*SetConfigRequest)(nil),   // 9: fleetgrpc.SetConfigRequest
-	(*SetConfigReply)(nil),     // 10: fleetgrpc.SetConfigReply
-	nil,                        // 11: fleetgrpc.CoderSettings.ParametersEntry
+	(*CoderParameter)(nil),     // 3: fleetgrpc.CoderParameter
+	(*CoderSettings)(nil),      // 4: fleetgrpc.CoderSettings
+	(*CodespacesSettings)(nil), // 5: fleetgrpc.CodespacesSettings
+	(*BrowserSettings)(nil),    // 6: fleetgrpc.BrowserSettings
+	(*Config)(nil),             // 7: fleetgrpc.Config
+	(*GetConfigRequest)(nil),   // 8: fleetgrpc.GetConfigRequest
+	(*GetConfigReply)(nil),     // 9: fleetgrpc.GetConfigReply
+	(*SetConfigRequest)(nil),   // 10: fleetgrpc.SetConfigRequest
+	(*SetConfigReply)(nil),     // 11: fleetgrpc.SetConfigReply
 	(BackendType)(0),           // 12: fleetgrpc.BackendType
 }
 var file_config_proto_depIdxs = []int32{
-	11, // 0: fleetgrpc.CoderSettings.parameters:type_name -> fleetgrpc.CoderSettings.ParametersEntry
+	3,  // 0: fleetgrpc.CoderSettings.parameters:type_name -> fleetgrpc.CoderParameter
 	0,  // 1: fleetgrpc.Config.general:type_name -> fleetgrpc.GeneralSettings
 	1,  // 2: fleetgrpc.Config.agent:type_name -> fleetgrpc.AgentSettings
 	2,  // 3: fleetgrpc.Config.dotfiles:type_name -> fleetgrpc.DotfilesSettings
-	3,  // 4: fleetgrpc.Config.coder:type_name -> fleetgrpc.CoderSettings
-	4,  // 5: fleetgrpc.Config.codespaces:type_name -> fleetgrpc.CodespacesSettings
-	5,  // 6: fleetgrpc.Config.browser:type_name -> fleetgrpc.BrowserSettings
+	4,  // 4: fleetgrpc.Config.coder:type_name -> fleetgrpc.CoderSettings
+	5,  // 5: fleetgrpc.Config.codespaces:type_name -> fleetgrpc.CodespacesSettings
+	6,  // 6: fleetgrpc.Config.browser:type_name -> fleetgrpc.BrowserSettings
 	12, // 7: fleetgrpc.Config.default_backend:type_name -> fleetgrpc.BackendType
-	6,  // 8: fleetgrpc.GetConfigReply.config:type_name -> fleetgrpc.Config
-	6,  // 9: fleetgrpc.SetConfigRequest.config:type_name -> fleetgrpc.Config
-	6,  // 10: fleetgrpc.SetConfigReply.config:type_name -> fleetgrpc.Config
+	7,  // 8: fleetgrpc.GetConfigReply.config:type_name -> fleetgrpc.Config
+	7,  // 9: fleetgrpc.SetConfigRequest.config:type_name -> fleetgrpc.Config
+	7,  // 10: fleetgrpc.SetConfigReply.config:type_name -> fleetgrpc.Config
 	11, // [11:11] is the sub-list for method output_type
 	11, // [11:11] is the sub-list for method input_type
 	11, // [11:11] is the sub-list for extension type_name
@@ -726,6 +838,7 @@ func file_config_proto_init() {
 	file_config_proto_msgTypes[3].OneofWrappers = []any{}
 	file_config_proto_msgTypes[4].OneofWrappers = []any{}
 	file_config_proto_msgTypes[5].OneofWrappers = []any{}
+	file_config_proto_msgTypes[6].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

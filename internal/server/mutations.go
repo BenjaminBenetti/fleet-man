@@ -1,0 +1,212 @@
+package server
+
+import (
+	"context"
+
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// mutations.go implements the synchronous (non-job) state mutations from the
+// FleetService contract. Each is a fast load→apply→save cycle serialized by
+// s.muWrite so concurrent mutations can't lost-update each other. On success the
+// new snapshot is pushed to the hub (so Watch subscribers see the change
+// immediately instead of waiting up to one state-poller tick) and returned in
+// the MutationReply so the caller stays consistent without a follow-up GetState.
+//
+// CONTRACT NOTE: none of these write InstanceStatus — transitional statuses are
+// owned by server-side jobs (Phase 4), by design, so a stray client mutation
+// can't re-introduce the issue #63 race.
+
+// mutate runs apply against a freshly-loaded State under the write lock, persists
+// the result, and broadcasts it. apply must return an already-coded
+// status.Error on failure (it is returned to the client verbatim).
+func (s *service) mutate(apply func(*state.State) error) (*fleetgrpc.State, error) {
+	s.muWrite.Lock()
+	defer s.muWrite.Unlock()
+
+	st, err := state.Load()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load state: %v", err)
+	}
+	if err := apply(st); err != nil {
+		return nil, err
+	}
+	if err := state.Save(st); err != nil {
+		return nil, status.Errorf(codes.Internal, "save state: %v", err)
+	}
+	snapshot := stateToProto(st)
+	// Push the new snapshot onto the hub loop so Watch subscribers don't wait for
+	// the next state-poller tick. Best-effort: if the hub has stopped (shutdown)
+	// the mutation still persisted, so we don't fail the RPC.
+	s.hub.post(func(h *hub) { h.setState(snapshot) })
+	return snapshot, nil
+}
+
+// CreateFleet adds (or returns the existing) fleet — GetOrCreateFleet semantics.
+func (s *service) CreateFleet(_ context.Context, req *fleetgrpc.CreateFleetRequest) (*fleetgrpc.MutationReply, error) {
+	if req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "fleet name required")
+	}
+	snapshot, err := s.mutate(func(st *state.State) error {
+		st.GetOrCreateFleet(req.GetName(), req.GetRemote())
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &fleetgrpc.MutationReply{State: snapshot}, nil
+}
+
+// DestroyFleet removes a fleet RECORD. It rejects fleets that still have
+// instances (those must be torn down via DestroyInstance first) so the record
+// never outlives — or orphans — live containers. Removing an already-absent
+// fleet is a no-op success (idempotent).
+func (s *service) DestroyFleet(_ context.Context, req *fleetgrpc.DestroyFleetRequest) (*fleetgrpc.MutationReply, error) {
+	snapshot, err := s.mutate(func(st *state.State) error {
+		f, ok := st.Fleets[req.GetName()]
+		if !ok {
+			return nil
+		}
+		if len(f.Instances) > 0 {
+			return status.Errorf(codes.FailedPrecondition,
+				"fleet %q still has %d instance(s); destroy them before removing the fleet", req.GetName(), len(f.Instances))
+		}
+		delete(st.Fleets, req.GetName())
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &fleetgrpc.MutationReply{State: snapshot}, nil
+}
+
+// SetFleetSettings replaces a fleet's settings wholesale (the caller sends the
+// full FleetSettings, preserving tri-state presence such as PreferFleetLaunch).
+func (s *service) SetFleetSettings(_ context.Context, req *fleetgrpc.SetFleetSettingsRequest) (*fleetgrpc.MutationReply, error) {
+	snapshot, err := s.mutate(func(st *state.State) error {
+		f, ok := st.Fleets[req.GetFleet()]
+		if !ok {
+			return status.Errorf(codes.NotFound, "fleet %q not found", req.GetFleet())
+		}
+		f.Settings = protoFleetSettingsToLegacy(req.GetSettings())
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &fleetgrpc.MutationReply{State: snapshot}, nil
+}
+
+// SetInstanceMetadata updates user-facing labels (display name, color, tag)
+// without touching resources. Only the fields present in the request are
+// changed; an explicit empty string (e.g. clearing a tag) is distinguished from
+// "leave unchanged" by the proto presence bit.
+func (s *service) SetInstanceMetadata(_ context.Context, req *fleetgrpc.SetInstanceMetadataRequest) (*fleetgrpc.MutationReply, error) {
+	snapshot, err := s.mutate(func(st *state.State) error {
+		f, ok := st.Fleets[req.GetFleet()]
+		if !ok {
+			return status.Errorf(codes.NotFound, "fleet %q not found", req.GetFleet())
+		}
+		inst, err := f.GetInstance(req.GetInstance())
+		if err != nil {
+			return status.Errorf(codes.NotFound, "instance %q not found in fleet %q", req.GetInstance(), req.GetFleet())
+		}
+		if req.DisplayName != nil {
+			inst.DisplayName = req.GetDisplayName()
+		}
+		if req.Color != nil {
+			inst.Color = req.GetColor()
+		}
+		if req.Tag != nil {
+			inst.Tag = req.GetTag()
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &fleetgrpc.MutationReply{State: snapshot}, nil
+}
+
+// SetGroupLayout persists a tmux pane layout. The state map key is the composite
+// computeGroupKey(instanceName, groupID), which the server derives here from the
+// layout's own fields (see groupLayoutKey).
+func (s *service) SetGroupLayout(_ context.Context, req *fleetgrpc.SetGroupLayoutRequest) (*fleetgrpc.MutationReply, error) {
+	gl := req.GetLayout()
+	if gl == nil {
+		return nil, status.Error(codes.InvalidArgument, "layout required")
+	}
+	snapshot, err := s.mutate(func(st *state.State) error {
+		if st.GroupLayouts == nil {
+			st.GroupLayouts = make(map[string]state.GroupLayout)
+		}
+		st.GroupLayouts[groupLayoutKey(gl.GetInstanceName(), gl.GetGroupId())] = state.GroupLayout{
+			GroupID:      gl.GetGroupId(),
+			InstanceName: gl.GetInstanceName(),
+			Sessions:     gl.GetSessions(),
+			Layout:       gl.GetLayout(),
+			PaneCount:    int(gl.GetPaneCount()),
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &fleetgrpc.MutationReply{State: snapshot}, nil
+}
+
+// DeleteGroupLayout removes a persisted layout. Deleting an absent key is a
+// no-op success.
+func (s *service) DeleteGroupLayout(_ context.Context, req *fleetgrpc.DeleteGroupLayoutRequest) (*fleetgrpc.MutationReply, error) {
+	snapshot, err := s.mutate(func(st *state.State) error {
+		delete(st.GroupLayouts, groupLayoutKey(req.GetInstanceName(), req.GetGroupId()))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &fleetgrpc.MutationReply{State: snapshot}, nil
+}
+
+// SetLastSeenVersion records the release-notes version the user has seen.
+func (s *service) SetLastSeenVersion(_ context.Context, req *fleetgrpc.SetLastSeenVersionRequest) (*fleetgrpc.MutationReply, error) {
+	snapshot, err := s.mutate(func(st *state.State) error {
+		st.LastSeenVersion = req.GetVersion()
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &fleetgrpc.MutationReply{State: snapshot}, nil
+}
+
+// groupLayoutKey mirrors the TUI's computeGroupKey(instanceName, groupID): the
+// composite state-map key that isolates layouts across instances sharing a
+// group id.
+func groupLayoutKey(instanceName, groupID string) string {
+	return instanceName + "/" + groupID
+}
+
+// protoFleetSettingsToLegacy maps a proto FleetSettings back to the legacy
+// struct. The three mount flags are plain bools; HomeDir maps from the optional
+// string (empty when unset); PreferFleetLaunch preserves the nil-vs-set
+// tri-state.
+func protoFleetSettingsToLegacy(ps *fleetgrpc.FleetSettings) fleet.FleetSettings {
+	s := fleet.FleetSettings{}
+	if ps == nil {
+		return s
+	}
+	s.ClaudeCodeMount = ps.GetClaudeCodeMount()
+	s.CodexMount = ps.GetCodexMount()
+	s.GhMount = ps.GetGhMount()
+	s.HomeDir = ps.GetHomeDir()
+	if ps.PreferFleetLaunch != nil {
+		v := ps.GetPreferFleetLaunch()
+		s.PreferFleetLaunch = &v
+	}
+	return s
+}

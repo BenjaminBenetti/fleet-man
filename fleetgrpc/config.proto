@@ -38,10 +38,25 @@ message DotfilesSettings {
   optional string install_script = 3;
 }
 
+// CoderParameter mirrors internal/state.CoderParameter — one Coder template
+// parameter binding. name+value are always present; the remaining fields are
+// template-derived metadata (JSON `,omitempty`) and so are optional.
+message CoderParameter {
+  string name = 1;
+  string value = 2; // may contain ${GIT_URL}, ${GIT_BRANCH}, ${INSTANCE_NAME}
+  optional string default_value = 3;
+  optional string display_name = 4;
+  optional string description = 5;
+  optional string type = 6; // "string", "number"
+}
+
 message CoderSettings {
   optional string template = 1;
   optional string preset = 2;
-  map<string, string> parameters = 3;
+  // Mirrors []CoderParameter — a rich list (value + template metadata), NOT a
+  // name->value map: the TUI re-renders default/display/description/type after a
+  // fetch, so those must round-trip through SetConfig without loss.
+  repeated CoderParameter parameters = 3;
 }
 
 message CodespacesSettings {
@@ -50,8 +65,13 @@ message CodespacesSettings {
   optional string devcontainer_path = 3;
 }
 
+// BrowserSettings mirrors internal/state.BrowserSettings. Both fields are
+// *bool tri-states in Go (nil defaults to false), so optional preserves the
+// nil-vs-explicit-false distinction the profile-layout / prompt-suppression
+// logic branches on.
 message BrowserSettings {
-  optional string command = 1;
+  optional bool multiple_browsers_per_fleet = 1;
+  optional bool auto_switch = 2;
 }
 
 message Config {

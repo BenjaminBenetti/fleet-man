@@ -24,6 +24,14 @@ type service struct {
 	startedAt time.Time
 	hub       *hub
 
+	// muWrite serializes the synchronous state mutations (mutations.go) so two
+	// concurrent mutation RPCs can't lost-update each other through the
+	// load→apply→save cycle. This is a server-scoped fix for the issue #63 race
+	// class; the full authoritative in-memory model (which removes the disk
+	// round-trip entirely) lands in Phase 4. config.json writes (config.go) share
+	// the same lock.
+	muWrite sync.Mutex
+
 	shutdownOnce sync.Once
 	shutdownCh   chan struct{}
 }
