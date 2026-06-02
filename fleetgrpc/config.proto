@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package fleetgrpc;
+
+import "domain.proto";
+
+option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
+
+// =====================================================================
+// CONFIG (config.json) — owned by the server for the single-writer guarantee
+// =====================================================================
+//
+// Config mirrors internal/state.Config. It is folded into the server's
+// single-writer ownership so config.json gets the SAME atomic temp+fsync+rename
+// persistence and no torn-write/lost-update exposure (the #63 bug class). The
+// TUI settings page mutates via SetConfig; the create job reads it server-side.
+//
+// CARVE-OUT: the pre-launch tmux-keybind read in cli/root.go runs BEFORE any
+// server exists (to build the tmux session that LAUNCHES the TUI), so it stays a
+// pure local config.json read via a pure package, NOT an RPC (chicken-and-egg).
+
+message GeneralSettings {
+  // Tri-state *bool in Go (nil defaults to true). optional preserves that.
+  optional bool tmux_vim_keys = 1;
+  optional bool show_help_text = 2;
+}
+
+message AgentSettings {
+  // String enum in Go (e.g. "claude"); kept a plain string to avoid coupling the
+  // contract to the agent-tool list, which the server validates against its own
+  // allowlist (DefaultConfig forces "claude" when unknown/empty).
+  string tool_selection = 1;
+}
+
+message DotfilesSettings {
+  bool auto_install = 1;
+  optional string repo = 2;
+  optional string install_script = 3;
+}
+
+message CoderSettings {
+  optional string template = 1;
+  optional string preset = 2;
+  map<string, string> parameters = 3;
+}
+
+message CodespacesSettings {
+  optional string machine = 1;
+  optional string idle_timeout = 2;
+  optional string devcontainer_path = 3;
+}
+
+message BrowserSettings {
+  optional string command = 1;
+}
+
+message Config {
+  GeneralSettings general = 1;
+  AgentSettings agent = 2;
+  DotfilesSettings dotfiles = 3;
+  CoderSettings coder = 4;
+  CodespacesSettings codespaces = 5;
+  BrowserSettings browser = 6;
+  // Feeds CreateInstanceRequest's UNSPECIFIED-backend resolution. UNSPECIFIED
+  // means "no default recorded" (-> DEVCONTAINER).
+  BackendType default_backend = 7;
+
+  reserved 8 to 20;
+}
+
+message GetConfigRequest {}
+
+message GetConfigReply {
+  Config config = 1;
+}
+
+// SetConfig replaces the whole Config (the settings page sends the full edited
+// Config). Returns the post-mutation Config so the caller stays consistent.
+message SetConfigRequest {
+  Config config = 1;
+}
+
+message SetConfigReply {
+  Config config = 1;
+}

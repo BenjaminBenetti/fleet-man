@@ -55,6 +55,7 @@ func NewRootCmd() *cobra.Command {
 		newLandingPageCmd(),
 		newLaunchCmd(),
 		newVersionCmd(),
+		newServerCmd(),
 	)
 
 	return root

@@ -1,0 +1,31 @@
+# buf v2 codegen config. Generates Go message + gRPC stubs into the in-repo
+# fleetgrpc package (which shares the main go.mod). Generated files are CHECKED
+# IN; CI does NOT run buf (the build stays codegen-free, matching how the repo
+# has zero codegen today).
+#
+# Toolchain (install once, pinned to the versions matching go.mod):
+#   go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10
+#   go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+# Both must be on PATH (they install to $(go env GOPATH)/bin).
+#
+# Each .proto sets go_package to ".../fleetgrpc;fleetgrpc", so with
+# paths=source_relative the generated <name>.pb.go / <name>_grpc.pb.go land
+# NEXT TO their .proto in fleetgrpc/.
+#
+# Regenerate from the repo root (after a proto change):
+#   PATH="$PATH:$(go env GOPATH)/bin" buf generate fleetgrpc
+# (a `make proto` target wraps this.)
+version: v2
+plugins:
+  # Message types. Local plugin (go-installed) so generation is hermetic and
+  # needs no remote plugin execution; swap to `remote: buf.build/protocolbuffers/go:v1.36.10`
+  # if you'd rather not install protoc-gen-go locally.
+  - local: protoc-gen-go
+    out: fleetgrpc
+    opt:
+      - paths=source_relative
+  # gRPC service stubs.
+  - local: protoc-gen-go-grpc
+    out: fleetgrpc
+    opt:
+      - paths=source_relative

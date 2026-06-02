@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package fleetgrpc;
+
+import "control.proto";
+import "watch.proto";
+import "jobs.proto";
+import "config.proto";
+import "exec.proto";
+
+option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
+
+// =====================================================================
+// SERVICE
+// =====================================================================
+
+// FleetService is the single contract for CLI + TUI clients. It is designed
+// transport-agnostically: served over a unix socket today (~/.fleet/fleet.sock)
+// with NO localhost/uds assumptions, so the SAME service can be exposed over
+// TCP+TLS for a remote TUI later. All inputs identify resources by name
+// (fleet/instance), never by host-local paths.
+service FleetService {
+  // ---- Lifecycle / handshake ----
+  rpc Hello(HelloRequest) returns (HelloReply);
+  rpc Shutdown(ShutdownRequest) returns (ShutdownReply);
+
+  // GetState is the one-stop snapshot of everything the TUI renders (persisted
+  // State + live runtime + active jobs).
+  rpc GetState(GetStateRequest) returns (GetStateReply);
+
+  // Watch is the server-streaming subscription that replaces TUI polling and its
+  // direct backend/filesystem access. Emits Events until the client cancels or
+  // the server shuts down.
+  rpc Watch(WatchRequest) returns (stream Event);
+
+  // ---- Jobs: each streams JobEvents; first event carries job_id ----
+  rpc CreateInstance(CreateInstanceRequest) returns (stream JobEvent);
+  rpc DestroyInstance(DestroyInstanceRequest) returns (stream JobEvent);
+  rpc StartInstance(StartInstanceRequest) returns (stream JobEvent);
+  rpc StopInstance(StopInstanceRequest) returns (stream JobEvent);
+  rpc CloneInstance(CloneInstanceRequest) returns (stream JobEvent);
+
+  // ---- Synchronous (non-job) state mutations ----
+  rpc CreateFleet(CreateFleetRequest) returns (MutationReply);
+  rpc DestroyFleet(DestroyFleetRequest) returns (MutationReply);
+  rpc SetFleetSettings(SetFleetSettingsRequest) returns (MutationReply);
+  rpc SetInstanceMetadata(SetInstanceMetadataRequest) returns (MutationReply);
+  rpc SetGroupLayout(SetGroupLayoutRequest) returns (MutationReply);
+  rpc DeleteGroupLayout(DeleteGroupLayoutRequest) returns (MutationReply);
+  rpc SetLastSeenVersion(SetLastSeenVersionRequest) returns (MutationReply);
+
+  // ---- Config (server-owned config.json) ----
+  rpc GetConfig(GetConfigRequest) returns (GetConfigReply);
+  rpc SetConfig(SetConfigRequest) returns (SetConfigReply);
+
+  // ---- Interactive backend operations ----
+  rpc Exec(stream ExecIn) returns (stream ExecOut);
+  rpc ResolveExecCommand(ResolveExecCommandRequest) returns (ResolveExecCommandReply);
+  rpc Logs(LogsRequest) returns (stream LogLine);
+  rpc PortForward(PortForwardRequest) returns (PortForwardReply);
+}

@@ -1,0 +1,102 @@
+syntax = "proto3";
+
+package fleetgrpc;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
+
+// =====================================================================
+// EXEC / LOGS / PORTFORWARD — interactive backend operations
+// =====================================================================
+//
+// These cover the client commands that run a command inside a container (cli
+// exec/shell/logs/portforward, the tmux session_* commands, the TUI
+// sessions/splitpane layers). The server owns all backend access; clients drive
+// it over these RPCs.
+
+// Exec is a bidi stream for running a command inside an instance's container and
+// piping stdin/stdout/stderr. The FIRST ExecIn MUST carry `start`; subsequent
+// ExecIn carry stdin bytes (or resize). The server replies with ExecOut frames
+// and a terminal `exit`.
+//
+// TTY CARVE-OUT: for interactive TTY attach (`fleet shell`, the TUI's tea.Exec),
+// piping a full PTY over gRPC for a LOCAL user is wasteful — the terminal is on
+// the client. For those, use ResolveExecCommand: the SERVER returns the
+// ready-to-exec argv and the CLIENT execs it locally to inherit the user's TTY.
+// Client-local exec for TTY attach is a PERMITTED client-host action, NOT a
+// boundary violation.
+message ExecIn {
+  oneof msg {
+    ExecStart start = 1;
+    bytes stdin = 2;
+    ExecResize resize = 3;
+  }
+}
+
+message ExecStart {
+  string fleet = 1;
+  string instance = 2;
+  repeated string argv = 3;
+  bool tty = 4;
+  map<string, string> env = 5;
+}
+
+message ExecResize {
+  uint32 rows = 1;
+  uint32 cols = 2;
+}
+
+message ExecOut {
+  oneof msg {
+    bytes stdout = 1;
+    bytes stderr = 2;
+    ExecExit exit = 3;
+  }
+}
+
+message ExecExit {
+  int32 code = 1;
+  optional string error = 2;
+}
+
+// ResolveExecCommand returns the argv the server would exec to reach the instance
+// interactively, so the CLIENT can exec it locally and inherit the user's TTY.
+message ResolveExecCommandRequest {
+  string fleet = 1;
+  string instance = 2;
+  // command to run inside; empty means "interactive login shell".
+  repeated string argv = 3;
+}
+
+message ResolveExecCommandReply {
+  // argv[0] is the program (e.g. devcontainer/docker/ssh); the client execs this
+  // directly with inherited stdio.
+  repeated string argv = 1;
+  map<string, string> env = 2;
+}
+
+message LogsRequest {
+  string fleet = 1;
+  string instance = 2;
+  bool follow = 3;
+  optional int32 tail = 4;
+}
+
+message LogLine {
+  string line = 1;
+  google.protobuf.Timestamp at = 2;
+}
+
+// PortForward returns a host-side command descriptor for forwarding a port; the
+// client runs it. A descriptor RPC (not a data-plane proxy) to match the existing
+// backend.PortForwardCommand idiom.
+message PortForwardRequest {
+  string fleet = 1;
+  string instance = 2;
+  int32 port = 3;
+}
+
+message PortForwardReply {
+  repeated string argv = 1;
+}

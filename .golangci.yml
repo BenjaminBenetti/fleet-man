@@ -1,0 +1,35 @@
+# golangci-lint config (v2). Phase 1 groundwork: it enforces the client/server
+# import boundary for the one fully-migrated client package (internal/fleetclient)
+# via depguard. The internal/cli and internal/tui globs are added in Phase 5,
+# once the last server-only import is removed from each. CI wiring (a
+# golangci-lint step in .github/workflows/unit.yml) is a follow-up.
+version: "2"
+linters:
+  default: none
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        # Client code must reach the system through the fleet server (fleetgrpc),
+        # never by importing the server-only internals directly. This is what
+        # keeps a remote client possible.
+        client:
+          files:
+            - "**/internal/fleetclient/**"
+            # Added in Phase 5 once fully migrated:
+            # - "**/internal/cli/**"
+            # - "**/internal/tui/**"
+          deny:
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/state
+              desc: client code must go through the fleet server (fleetgrpc), not internal/state
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/backend
+              desc: client code must not touch backends directly; use fleetgrpc RPCs/jobs
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/create
+              desc: provisioning is a server-side job; call fleetgrpc.CreateInstance
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/control
+              desc: the server owns control sockets; clients receive control events over Watch
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/flog
+              desc: the event log is server-owned; clients do not write fleet.log
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/server
+              desc: client code must not import the server; talk to it via fleetgrpc over fleetclient

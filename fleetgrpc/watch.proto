@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package fleetgrpc;
+
+import "domain.proto";
+import "runtime.proto";
+import "jobs.proto";
+
+option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
+
+// =====================================================================
+// WATCH — the server-streaming subscription that replaces the TUI's polling
+// (~60s live-status, ~3s stats/activity, ~1s sessions) AND its direct
+// backend/filesystem access.
+// =====================================================================
+
+// WatchRequest opens a subscription.
+//
+// include_initial_state: emit one StateChanged snapshot, one RuntimeChanged
+// snapshot (if subscribe_runtime), and one JobStarted per in-flight job up
+// front — all taken in the SAME model-loop turn that registers the subscriber,
+// so they reflect every mutation up to that instant and arrive before any live
+// event.
+//
+// subscribe_runtime: opt in to the high-frequency InstanceRuntime stream
+// (RuntimeChanged). The server only runs the expensive backend pollers (stats,
+// agent probe, session list) while at least one subscriber wants runtime, so a
+// plain `fleet ls`-style client leaves it false and the server stays quiet.
+//
+// reattach_job_ids: re-attach to specific jobs after a client restart. With
+// include_initial_state the server advertises all in-flight jobs via JobStarted
+// anyway, so this is optional convenience.
+message WatchRequest {
+  bool include_initial_state = 1;
+  bool subscribe_runtime = 2;
+  repeated string reattach_job_ids = 3;
+}
+
+// Event is the single Watch stream item. A oneof models the taxonomy so the
+// stream is one ordered channel and the client switches on the active field.
+//
+// StateChanged carries authoritative PERSISTED snapshots (replacing state.Load
+// polling) and is CONFLATABLE — for a slow consumer the server overwrites the
+// pending snapshot with the newest full State rather than dropping it, so a slow
+// TUI can never permanently desync.
+//
+// RuntimeChanged carries the high-frequency LIVE deltas (agent activity, stats,
+// sessions, ports), kept SEPARATE from StateChanged so a 3s stat tick doesn't
+// resend the whole persisted State. Only sent when subscribe_runtime is set.
+//
+// The Job* variants surface job activity to a watcher that did not itself start
+// the job. JobStarted is here (not only on the job RPC) so a Watch-only client
+// learns a job's identity/kind/target/started_at.
+//
+// BrowserOpen is pushed when the server's per-instance control listener receives
+// a browser.open envelope from inside a container; the SERVER owns the control
+// socket and resolves the URL, the CLIENT execs its local browser — the correct
+// split for the remote-TUI goal.
+message Event {
+  oneof kind {
+    StateChanged state_changed = 1;
+    JobStarted job_started = 2;
+    JobProgress job_progress = 3;
+    JobLog job_log = 4;
+    JobDone job_done = 5;
+    BrowserOpen browser_open = 6;
+    RuntimeChanged runtime_changed = 7;
+  }
+}
+
+// StateChanged is pushed whenever the authoritative PERSISTED model mutates. It
+// carries the full State (simple, race-free for a small model) so the client
+// never reconciles partial deltas — directly replacing state.Load reloads.
+message StateChanged {
+  State state = 1;
+}
+
+// RuntimeChanged carries refreshed live runtime for one or more instances. Like
+// StateChanged it is conflatable (the server coalesces per-instance updates for
+// a slow consumer). May carry a single instance (a 3s stat tick) or the full set
+// (the initial snapshot).
+message RuntimeChanged {
+  repeated InstanceRuntime runtime = 1;
+}
+
+// BrowserOpen asks the receiving client to open a URL in its local browser. The
+// server computes url + the customization hints the TUI's browser layer used
+// (data dir / profile) so the client just launches the browser.
+message BrowserOpen {
+  string url = 1;
+  optional string data_dir = 2;
+  // fleet/instance label which workspace requested the open.
+  string fleet = 3;
+  string instance = 4;
+}

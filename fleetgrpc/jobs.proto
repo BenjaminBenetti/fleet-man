@@ -1,0 +1,201 @@
+syntax = "proto3";
+
+package fleetgrpc;
+
+import "google/protobuf/timestamp.proto";
+import "domain.proto";
+
+option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
+
+// =====================================================================
+// JOBS — server-side, survive client death, re-attachable via job_id
+// =====================================================================
+
+// JobKind tags what a job is doing so a re-attaching watcher knows the shape of
+// progress to expect.
+enum JobKind {
+  JOB_KIND_UNSPECIFIED = 0;
+  JOB_KIND_CREATE_INSTANCE = 1;
+  JOB_KIND_DESTROY_INSTANCE = 2;
+  JOB_KIND_START_INSTANCE = 3;
+  JOB_KIND_STOP_INSTANCE = 4;
+  JOB_KIND_CLONE_INSTANCE = 5;
+}
+
+// JobStep enumerates the discrete provisioning/lifecycle steps (create.Run /
+// instanceops / destroy). A typed enum lets the TUI render a stable progress
+// checklist; DONE marks terminal success.
+enum JobStep {
+  JOB_STEP_UNSPECIFIED = 0;
+  JOB_STEP_VALIDATE_BACKEND = 1;
+  JOB_STEP_BUILD_BACKEND = 2;
+  JOB_STEP_GIT_CLONE = 3;
+  JOB_STEP_RESOLVE_MOUNTS = 4;
+  JOB_STEP_CONTROL_MOUNT = 5;
+  JOB_STEP_BACKEND_UP = 6;
+  JOB_STEP_STAGE_FLEET_LAUNCH = 7;
+  JOB_STEP_STAGE_FLEET_RC = 8;
+  JOB_STEP_APPLY_MOUNT_SYMLINKS = 9;
+  JOB_STEP_INSTALL_DOTFILES = 10;
+  JOB_STEP_RUN_STARTUP_SCRIPTS = 11;
+  JOB_STEP_INSTALL_CLAUDE_HOOKS = 12;
+  JOB_STEP_COPY_WORKSPACE = 13;     // clone-only
+  JOB_STEP_BACKEND_CLONE = 14;      // clone-only
+  JOB_STEP_BACKEND_DOWN = 15;       // destroy / stop
+  JOB_STEP_REMOVE_WORKSPACE = 16;   // destroy (os.RemoveAll workspaceDir)
+  JOB_STEP_BACKEND_START = 17;      // start
+  JOB_STEP_MARK_RUNNING = 18;
+  JOB_STEP_DONE = 19;
+}
+
+// LogLevel classifies a JobLog line. WARN replaces the legacy non-fatal
+// state.WriteWarn surface (the TUI's old .warn-file polling): warnings now flow
+// inline on the job/Watch stream.
+enum LogLevel {
+  LOG_LEVEL_UNSPECIFIED = 0;
+  LOG_LEVEL_INFO = 1;
+  LOG_LEVEL_WARN = 2;
+  LOG_LEVEL_ERROR = 3;
+}
+
+// JobSummary describes an in-flight (or just-completed) job so a watcher that did
+// NOT launch the job can LEARN its job_id and re-attach. Carried on
+// GetStateReply and the initial Watch snapshot.
+message JobSummary {
+  string job_id = 1;
+  JobKind kind = 2;
+  string fleet = 3;
+  string instance = 4;
+  JobStep current_step = 5;
+  google.protobuf.Timestamp started_at = 6;
+}
+
+// JobEvent is one item of a job RPC's server stream. CONTRACT: the FIRST event on
+// every job stream MUST be a `started` so a client whose process dies can later
+// re-attach via Watch.reattach_job_ids. The terminal event is always a `done`.
+// job_id is carried ONCE here, on the envelope, and is authoritative; the inner
+// payloads do NOT repeat it.
+message JobEvent {
+  string job_id = 1;
+
+  oneof event {
+    JobStarted started = 2;
+    JobProgress progress = 3;
+    JobLog log = 4;
+    JobDone done = 5;
+  }
+}
+
+// JobStarted is the mandatory first event. It carries its own job_id so it is
+// self-describing when surfaced via Event (watch.proto), whose oneof has no
+// job_id envelope. Echoes kind + target + start time for labeling.
+message JobStarted {
+  string job_id = 1;
+  JobKind kind = 2;
+  string fleet = 3;
+  string instance = 4;
+  google.protobuf.Timestamp started_at = 5;
+}
+
+// JobProgress reports advancing through a JobStep. step_done marks the step
+// complete (vs just-entered) so the TUI can tick a checklist. percent is
+// optional (most steps aren't quantifiable).
+message JobProgress {
+  JobStep step = 1;
+  string message = 2;
+  bool step_done = 3;
+  optional float percent = 4;
+}
+
+// JobLog carries raw log output (tee'd git clone / devcontainer up /
+// startup-script stdout). level distinguishes the non-fatal WARNING surface
+// from info/error.
+message JobLog {
+  LogLevel level = 1;
+  string line = 2;
+  google.protobuf.Timestamp at = 3;
+}
+
+// JobDone is the terminal event. success=false carries the failure message
+// persisted as Instance.error (setFailed). instance is the final authoritative
+// record (e.g. ContainerID + RUNNING) so the client can update without a
+// follow-up GetState. ms is wall-clock duration. warnings are non-fatal
+// warnings from a SUCCESSFUL job (also persisted to Instance.warnings).
+//
+// DESTROY NOTE: for destroy / destroy_fleet the record is gone, so `instance` is
+// omitted; success=true even if some teardown failed (best-effort): those are
+// JobLog{WARN} + warnings, and the record is removed regardless.
+//
+// TERMINAL-TRUTH NOTE: the authoritative terminal state is the StateChanged
+// snapshot (always shows RUNNING/FAILED); the job stream is best-effort progress
+// UI, so a reaped/missed JobDone is harmless.
+message JobDone {
+  bool success = 1;
+  optional string error = 2;
+  Instance instance = 3;
+  int64 ms = 4;
+  repeated string warnings = 5;
+}
+
+// =====================================================================
+// JOB REQUEST MESSAGES
+// =====================================================================
+
+// CreateInstanceRequest mirrors the inputs to create.Run / cli up. The server is
+// AUTHORITATIVE: it pre-creates the StatusCreating record itself (no client-side
+// state write — this is what eliminates the #63 client-write race), runs the
+// job, and streams JobEvents.
+//
+// BACKEND RESOLUTION: when backend == UNSPECIFIED the server resolves it (since
+// ParseBackendType rejects empty today): use config.json DefaultBackend if set
+// and valid, else BACKEND_TYPE_DEVCONTAINER. config.json is server-owned (see
+// config.proto), so this source is part of the contract, not hidden fs access.
+message CreateInstanceRequest {
+  string fleet = 1;
+  string instance = 2;
+  // git URL; optional — for an existing fleet the server resolves it from the
+  // fleet record.
+  optional string remote = 3;
+  BackendType backend = 4;
+  optional string branch = 5;
+  bool verbose = 6;
+}
+
+// DestroyInstanceRequest destroys a single instance, or (destroy_fleet=true)
+// tears down EVERY instance in the fleet and removes the fleet record in one
+// job: down each container (BACKEND_DOWN), os.RemoveAll each workspace
+// (REMOVE_WORKSPACE), then remove the record. Best-effort: container/workspace
+// failures are JobLog{WARN} + JobDone.warnings and the record is removed anyway.
+message DestroyInstanceRequest {
+  string fleet = 1;
+  optional string instance = 2;
+  bool destroy_fleet = 3;
+}
+
+message StartInstanceRequest {
+  string fleet = 1;
+  string instance = 2;
+}
+
+message StopInstanceRequest {
+  string fleet = 1;
+  string instance = 2;
+}
+
+// CloneInstanceRequest clones a running source instance into a new one.
+//
+// COPY CONTRACT (authoritative — reproduces cli/clone.go + tui/dialogs.go): the
+// server READS the source record and copies Config, Backend, Tag, Color, and
+// Branch into the new instance; DisplayName is set from new_display_name
+// (falling back to new_instance); Status starts as CLONING. The optional
+// override fields override the copied Tag/Color/Branch without clobbering the
+// rest; absent override == use the source value.
+message CloneInstanceRequest {
+  string fleet = 1;
+  string source_instance = 2;
+  string new_instance = 3;
+  optional string new_display_name = 4;
+  optional string tag_override = 5;
+  optional string color_override = 6;
+  optional string branch_override = 7;
+}
