@@ -11,10 +11,19 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// updateCheckInterval controls how often the TUI re-checks GitHub for a
+// newer release while running. Many users leave fleet open indefinitely,
+// so a one-shot check at startup would never surface updates for them.
+const updateCheckInterval = 10 * time.Minute
+
 // updateCheckMsg is sent when the background update check completes.
 type updateCheckMsg struct {
 	latestVersion string // empty if no update or error
 }
+
+// updateCheckTickMsg fires every updateCheckInterval and triggers another
+// background update check.
+type updateCheckTickMsg struct{}
 
 // updateInstalledMsg is sent after the install script finishes.
 //
@@ -67,6 +76,13 @@ func checkUpdateCmd() tea.Cmd {
 
 		return updateCheckMsg{}
 	}
+}
+
+// updateCheckPollCmd schedules the next periodic update check.
+func updateCheckPollCmd() tea.Cmd {
+	return tea.Tick(updateCheckInterval, func(time.Time) tea.Msg {
+		return updateCheckTickMsg{}
+	})
 }
 
 // performUpdateCmd runs the install script via tea.ExecProcess and, on

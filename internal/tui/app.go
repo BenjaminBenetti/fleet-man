@@ -555,6 +555,7 @@ func (m model) Init() tea.Cmd {
 		m.sessionDiscoveryLoop(),
 		layoutTickCmd(),
 		checkUpdateCmd(),
+		updateCheckPollCmd(),
 		checkReleaseNotesCmd(m.lastSeenVersion()),
 		forceRepaintCmd(),
 		// Probe live state right away so a fleet started after a long
@@ -695,6 +696,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateAvailable = msg.latestVersion
 		}
 		return m, spinCmd
+
+	case updateCheckTickMsg:
+		// Re-check for updates and re-arm the periodic tick so users who
+		// leave fleet open get notified about releases published mid-session.
+		return m, tea.Batch(spinCmd, checkUpdateCmd(), updateCheckPollCmd())
 
 	case releaseNotesMsg:
 		// Only surface the overlay when there's an actual body to show;
