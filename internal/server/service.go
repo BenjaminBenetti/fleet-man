@@ -22,13 +22,14 @@ type service struct {
 	fleetgrpc.UnimplementedFleetServiceServer
 
 	startedAt time.Time
+	hub       *hub
 
 	shutdownOnce sync.Once
 	shutdownCh   chan struct{}
 }
 
 func newService() *service {
-	return &service{startedAt: time.Now(), shutdownCh: make(chan struct{})}
+	return &service{startedAt: time.Now(), hub: newHub(), shutdownCh: make(chan struct{})}
 }
 
 // Hello is the authoritative version handshake. It reports the server's

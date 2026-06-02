@@ -60,6 +60,21 @@ func Serve(ctx context.Context) error {
 	}
 
 	svc := newService()
+
+	// Start the hub (the broadcast-model owner) and the state poller (the
+	// non-authoritative source of truth that re-Loads state.json) on a context
+	// cancelled at shutdown. Cancelling stops hub.run, which closes hub.done so
+	// in-flight Watch pumps return — otherwise GracefulStop would block on a
+	// long-lived Watch stream.
+	hubCtx, cancelHub := context.WithCancel(ctx)
+	defer cancelHub()
+	go svc.hub.run(hubCtx)
+	go runStatePoller(hubCtx, svc.hub)
+	// Runtime pollers (live status / stats+activity / sessions). Gated on a
+	// runtime subscriber, so they stay idle until a TUI connects with
+	// subscribe_runtime — no backend traffic for plain `fleet ls`.
+	startRuntimePollers(hubCtx, svc.hub)
+
 	grpcServer := grpc.NewServer()
 	fleetgrpc.RegisterFleetServiceServer(grpcServer, svc)
 
@@ -74,9 +89,11 @@ func Serve(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		flog.Info("fleet server stopping (signal)", "pid", os.Getpid())
+		cancelHub()
 		grpcServer.GracefulStop()
 	case <-svc.shutdownCh:
 		flog.Info("fleet server stopping (Shutdown RPC)", "pid", os.Getpid())
+		cancelHub()
 		grpcServer.GracefulStop()
 	case err := <-serveErr:
 		if err != nil {
