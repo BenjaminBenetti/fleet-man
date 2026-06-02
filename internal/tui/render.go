@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/charmbracelet/lipgloss"
@@ -77,6 +78,24 @@ func agentToolLabel(tool state.AgentTool) string {
 	case state.AgentToolGemini:
 		return "Gemini"
 	case state.AgentToolCopilot:
+		return "Copilot"
+	default:
+		return "Claude Code"
+	}
+}
+
+// agentToolLabelProto is agentToolLabel for the proto AgentTool enum from the
+// server's runtime sidecar. The label is only rendered for a detected, active
+// agent; UNSPECIFIED/NONE fall through to the default.
+func agentToolLabelProto(tool fleetgrpc.AgentTool) string {
+	switch tool {
+	case fleetgrpc.AgentTool_AGENT_TOOL_CODEX:
+		return "Codex"
+	case fleetgrpc.AgentTool_AGENT_TOOL_CLAUDE:
+		return "Claude Code"
+	case fleetgrpc.AgentTool_AGENT_TOOL_GEMINI:
+		return "Gemini"
+	case fleetgrpc.AgentTool_AGENT_TOOL_COPILOT:
 		return "Copilot"
 	default:
 		return "Claude Code"

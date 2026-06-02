@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -322,12 +323,15 @@ func TestViewFleetListShowsAgentWorkingIndicator(t *testing.T) {
 		config: &state.Config{
 			AgentSettings: state.AgentSettings{ToolSelection: state.AgentToolClaude},
 		},
-		activity: testTracker(
-			map[string]agentdetect.State{"abc123": agentdetect.StateWorking},
-			map[string]state.AgentTool{"abc123": state.AgentToolClaude},
-		),
+		runtime: map[string]*fleetgrpc.InstanceRuntime{
+			"alpha/agent-1": {
+				Fleet:         "alpha",
+				Instance:      "agent-1",
+				AgentTool:     fleetgrpc.AgentTool_AGENT_TOOL_CLAUDE,
+				AgentActivity: fleetgrpc.AgentActivity_AGENT_ACTIVITY_WORKING,
+			},
+		},
 		sessionStore: NewSessionStore(),
-		stats:        map[string]*backend.ContainerStats{},
 		fleetPage:    fp,
 	}
 
@@ -363,12 +367,15 @@ func TestViewFleetListShowsAgentWaitingIndicator(t *testing.T) {
 		config: &state.Config{
 			AgentSettings: state.AgentSettings{ToolSelection: state.AgentToolClaude},
 		},
-		activity: testTracker(
-			map[string]agentdetect.State{"abc123": agentdetect.StateWaiting},
-			map[string]state.AgentTool{"abc123": state.AgentToolClaude},
-		),
+		runtime: map[string]*fleetgrpc.InstanceRuntime{
+			"alpha/agent-1": {
+				Fleet:         "alpha",
+				Instance:      "agent-1",
+				AgentTool:     fleetgrpc.AgentTool_AGENT_TOOL_CLAUDE,
+				AgentActivity: fleetgrpc.AgentActivity_AGENT_ACTIVITY_WAITING,
+			},
+		},
 		sessionStore: NewSessionStore(),
-		stats:        map[string]*backend.ContainerStats{},
 		fleetPage:    fp,
 	}
 

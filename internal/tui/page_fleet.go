@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/devcontainersetup"
@@ -1130,18 +1130,22 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			// non-transitional render branch.
 			throbber := agentOffStyle.Render("○")
 			agentStr := ""
-			if instance.Status == fleet.StatusRunning && m.activity != nil {
-				tool := m.activity.Tool(instance.ContainerID)
-				label := agentToolLabel(tool)
-				switch m.activity.State(instance.ContainerID) {
-				case agentdetect.StateWorking:
+			if instance.Status == fleet.StatusRunning {
+				// Live agent state comes from the server's runtime sidecar
+				// (P2 Step 7). A missing entry / UNSPECIFIED activity renders as
+				// "○ idle" (same as NOT_RUNNING), so a running row shows idle
+				// immediately, before the first runtime push lands.
+				rt := m.runtime[rtKey(r.fleetName, instance.Name)]
+				label := agentToolLabelProto(rt.GetAgentTool())
+				switch rt.GetAgentActivity() {
+				case fleetgrpc.AgentActivity_AGENT_ACTIVITY_WORKING:
 					agentStr = agentWorkingStyle.Render(fmt.Sprintf("  ▶ %s", label))
 					if len(m.agentSpinner.Spinner.Frames) > 0 {
 						throbber = strings.TrimRight(m.agentSpinner.View(), "\n")
 					} else {
 						throbber = agentWorkingStyle.Render("✻")
 					}
-				case agentdetect.StateWaiting:
+				case fleetgrpc.AgentActivity_AGENT_ACTIVITY_WAITING:
 					agentStr = agentWaitingStyle.Render(fmt.Sprintf("  ⏸ %s", label))
 					throbber = agentWaitingStyle.Render("○")
 				default:
@@ -1190,8 +1194,8 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				)
 			} else {
 				statsStr := ""
-				if s, ok := m.stats[instance.ContainerID]; ok {
-					statsStr = dimStyle.Render(fmt.Sprintf("  %4.0f mcpu  %6.1f MB", s.CPUMillicores, s.MemoryMB))
+				if s := m.runtime[rtKey(r.fleetName, instance.Name)].GetStats(); s != nil {
+					statsStr = dimStyle.Render(fmt.Sprintf("  %4.0f mcpu  %6.1f MB", s.GetCpuMillicores(), s.GetMemoryMb()))
 				}
 
 				line = fmt.Sprintf("%s    %s %s%s%s%s",
@@ -1245,11 +1249,15 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 
 	var totalCPU float64
 	var totalMem float64
-	for _, s := range m.stats {
-		totalCPU += s.CPUMillicores
-		totalMem += s.MemoryMB
+	statsCount := 0
+	for _, rt := range m.runtime {
+		if s := rt.GetStats(); s != nil {
+			totalCPU += s.GetCpuMillicores()
+			totalMem += s.GetMemoryMb()
+			statsCount++
+		}
 	}
-	if len(m.stats) > 0 {
+	if statsCount > 0 {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("  Total: %.0f mcpu  %.1f MB", totalCPU, totalMem)))
 		b.WriteString("\n")
 	}
