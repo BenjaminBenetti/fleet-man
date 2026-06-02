@@ -9,6 +9,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -126,7 +127,7 @@ func sessionDiscoveryCmd(
 			wg.Add(1)
 			go func(instanceBackend backend.Backend, wsDir string, ref InstanceRef) {
 				defer wg.Done()
-				cmd := instanceBackend.ExecCommand(wsDir, []string{
+				cmd := instanceBackend.ExecCommandQuiet(wsDir, []string{
 					"sh", "-c",
 					`tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}" 2>/dev/null`,
 				})
@@ -161,7 +162,7 @@ func ensureSessionsLoaded(m *model, instanceBackend backend.Backend, workspaceDi
 	if m.sessionStore.HasDiscovery(ref) {
 		return
 	}
-	cmd := instanceBackend.ExecCommand(workspaceDir, []string{
+	cmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
 		"sh", "-c",
 		`tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}" 2>/dev/null`,
 	})
@@ -177,7 +178,7 @@ func ensureSessionsLoaded(m *model, instanceBackend backend.Backend, workspaceDi
 // inside the container and parses the output into tmuxSession structs.
 func listSessionsCmd(instanceBackend backend.Backend, workspaceDir string, ref InstanceRef) tea.Cmd {
 	return func() tea.Msg {
-		cmd := instanceBackend.ExecCommand(workspaceDir, []string{
+		cmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
 			"sh", "-c",
 			`tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}" 2>/dev/null`,
 		})
@@ -198,11 +199,34 @@ func createSessionCmd(instanceBackend backend.Backend, workspaceDir string, ref 
 			"sh", "-c",
 			tmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s 2>/dev/null`, shQuote(sessionName)),
 		})
+		start := time.Now()
 		if err := cmd.Run(); err != nil {
+			flog.Error("session create failed", "fleet", ref.Fleet, "instance", ref.Instance, "session", sessionName, "ms", flog.MillisSince(start), "err", err)
 			return sessionCreatedMsg{ref: ref, err: err}
 		}
+		flog.Info("session created", "fleet", ref.Fleet, "instance", ref.Instance, "session", sessionName, "ms", flog.MillisSince(start))
 		return sessionCreatedMsg{ref: ref}
 	}
+}
+
+// logSessionOpen records a TUI session being opened, including the raw shell
+// command run inside the container and how it is surfaced: "attach" (suspends
+// the TUI, runs in the foreground), "split" (a tmux split pane), or "terminal"
+// (a separate terminal emulator). These paths run the command outside the
+// backend.Cmd wrapper, so they are instrumented here by hand. Only "attach"
+// has a matching close event (logSessionClose) and therefore a duration; split
+// panes and external terminals detach and keep running, so they are logged
+// without one. The command is the inner command (what runs in the container),
+// not the backend's exec wrapper.
+func logSessionOpen(mode, fleetName, instanceName, sessionName, command string) {
+	flog.Info("session opened", "fleet", fleetName, "instance", instanceName, "session", sessionName, "mode", mode, "cmd", command)
+}
+
+// logSessionClose records a foreground session attach ending, with how long it
+// was attached. Called from the tea.ExecProcess completion callback, which
+// fires when the user detaches or the shell exits.
+func logSessionClose(fleetName, instanceName, sessionName string, start time.Time) {
+	flog.Info("session closed", "fleet", fleetName, "instance", instanceName, "session", sessionName, "ms", flog.MillisSince(start))
 }
 
 // renameSessionCmd execs `tmux rename-session -t <old> <new>` inside
@@ -213,9 +237,11 @@ func renameSessionCmd(instanceBackend backend.Backend, workspaceDir string, ref 
 			"sh", "-c",
 			fmt.Sprintf(`tmux rename-session -t %s %s 2>/dev/null`, shQuote(oldName), shQuote(newName)),
 		})
+		start := time.Now()
 		if err := cmd.Run(); err != nil {
 			return sessionRenamedMsg{ref: ref, oldName: oldName, newName: newName, err: err}
 		}
+		flog.Info("session renamed", "fleet", ref.Fleet, "instance", ref.Instance, "from", oldName, "to", newName, "ms", flog.MillisSince(start))
 		return sessionRenamedMsg{ref: ref, oldName: oldName, newName: newName}
 	}
 }
@@ -228,8 +254,9 @@ func renameGroupCmd(instanceBackend backend.Backend, workspaceDir string, ref In
 	newPrefix := sanitizedInstance + groupSep + newGroupID
 
 	return func() tea.Msg {
+		start := time.Now()
 		// List all sessions in the container.
-		listCmd := instanceBackend.ExecCommand(workspaceDir, []string{
+		listCmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
 			"sh", "-c",
 			`tmux list-sessions -F "#{session_name}" 2>/dev/null`,
 		})
@@ -258,6 +285,7 @@ func renameGroupCmd(instanceBackend backend.Backend, workspaceDir string, ref In
 		if lastErr != nil {
 			return sessionRenamedMsg{ref: ref, oldName: oldPrefix, newName: newPrefix, err: lastErr}
 		}
+		flog.Info("session group renamed", "fleet", ref.Fleet, "instance", ref.Instance, "from", oldPrefix, "to", newPrefix, "ms", flog.MillisSince(start))
 		return sessionRenamedMsg{ref: ref, oldName: oldPrefix, newName: newPrefix}
 	}
 }
@@ -269,9 +297,11 @@ func deleteSessionCmd(instanceBackend backend.Backend, workspaceDir string, ref 
 			"sh", "-c",
 			fmt.Sprintf(`tmux kill-session -t %s 2>/dev/null`, shQuote(sessionName)),
 		})
+		start := time.Now()
 		if err := cmd.Run(); err != nil {
 			return sessionDeletedMsg{ref: ref, sessionName: sessionName, err: err}
 		}
+		flog.Info("session killed", "fleet", ref.Fleet, "instance", ref.Instance, "session", sessionName, "ms", flog.MillisSince(start))
 		return sessionDeletedMsg{ref: ref, sessionName: sessionName}
 	}
 }
@@ -282,8 +312,9 @@ func deleteGroupSessionsCmd(instanceBackend backend.Backend, workspaceDir string
 	prefix := sanitizedInstance + groupSep + groupID
 
 	return func() tea.Msg {
+		start := time.Now()
 		// List all sessions in the container.
-		listCmd := instanceBackend.ExecCommand(workspaceDir, []string{
+		listCmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
 			"sh", "-c",
 			`tmux list-sessions -F "#{session_name}" 2>/dev/null`,
 		})
@@ -310,6 +341,7 @@ func deleteGroupSessionsCmd(instanceBackend backend.Backend, workspaceDir string
 		if lastErr != nil {
 			return sessionDeletedMsg{ref: ref, sessionName: prefix, groupID: groupID, err: lastErr}
 		}
+		flog.Info("session group killed", "fleet", ref.Fleet, "instance", ref.Instance, "group", groupID, "ms", flog.MillisSince(start))
 		return sessionDeletedMsg{ref: ref, sessionName: prefix, groupID: groupID}
 	}
 }

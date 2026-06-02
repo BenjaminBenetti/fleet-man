@@ -2,9 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/spf13/cobra"
 )
 
@@ -39,10 +41,13 @@ Examples:
 				dotfiles.TmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s`, dotfiles.ShQuote(sessionName)),
 			})
 
+			start := time.Now()
 			if err := createCmd.Run(); err != nil {
+				flog.Error("session create failed", "instance", args[0], "session", sessionName, "ms", flog.MillisSince(start), "err", err)
 				return fmt.Errorf("failed to create session %q: %w", sessionName, err)
 			}
 
+			flog.Info("session created", "instance", args[0], "session", sessionName, "ms", flog.MillisSince(start))
 			fmt.Printf("Created tmux session %q in instance %s\n", sessionName, args[0])
 			return nil
 		},

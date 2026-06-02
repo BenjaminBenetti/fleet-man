@@ -10,8 +10,10 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
 // DevcontainerBackend implements backend.Backend using the devcontainer
@@ -168,19 +170,37 @@ func devcontainerEnv(base []string) ([]string, error) {
 	}
 }
 
-// Exec runs `devcontainer exec` in the given workspace folder.
+// Exec runs `devcontainer exec` in the given workspace folder, logging a
+// single timed "container exec" event when it completes.
 func (devcontainerBackend *DevcontainerBackend) Exec(workspaceDir string, command []string) error {
-	args := execArgs(workspaceDir, command)
-	cmd := exec.Command("devcontainer", args...)
+	cmd := devcontainerBackend.rawExec(workspaceDir, command)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	start := time.Now()
+	err := cmd.Run()
+	flog.ContainerExec("devcontainer", workspaceDir, command, time.Since(start), err)
+	return err
 }
 
-// ExecCommand returns an unstarted *exec.Cmd for running a command
-// inside a workspace via `devcontainer exec`.
-func (devcontainerBackend *DevcontainerBackend) ExecCommand(workspaceDir string, command []string) *exec.Cmd {
+// ExecCommand returns an unstarted *backend.Cmd for running a command inside
+// a workspace via `devcontainer exec`. Because *Cmd shadows the run methods,
+// it logs a single timed "container exec" event when the caller runs it via
+// Run/Output/CombinedOutput. Hot polling loops should use ExecCommandQuiet.
+func (devcontainerBackend *DevcontainerBackend) ExecCommand(workspaceDir string, command []string) *backend.Cmd {
+	return backend.NewCmd(devcontainerBackend.rawExec(workspaceDir, command), func(d time.Duration, err error) {
+		flog.ContainerExec("devcontainer", workspaceDir, command, d, err)
+	})
+}
+
+// ExecCommandQuiet is ExecCommand without any event-log entries.
+func (devcontainerBackend *DevcontainerBackend) ExecCommandQuiet(workspaceDir string, command []string) *backend.Cmd {
+	return backend.NewCmd(devcontainerBackend.rawExec(workspaceDir, command), nil)
+}
+
+// rawExec builds the underlying `devcontainer exec` *exec.Cmd shared by
+// ExecCommand and ExecCommandQuiet.
+func (devcontainerBackend *DevcontainerBackend) rawExec(workspaceDir string, command []string) *exec.Cmd {
 	args := execArgs(workspaceDir, command)
 	return exec.Command("devcontainer", args...)
 }

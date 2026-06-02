@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
 var mu sync.Mutex
@@ -84,6 +85,7 @@ func (s *State) GetOrCreateFleet(name, remote string) *fleet.Fleet {
 		Instances: make([]*fleet.Instance, 0),
 	}
 	s.Fleets[name] = newFleet
+	flog.Info("fleet created", "fleet", name, "remote", remote)
 	return newFleet
 }
 

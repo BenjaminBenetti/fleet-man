@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
 // CoderBackend implements backend.Backend using the Coder CLI.
@@ -148,21 +149,37 @@ func (coderBackend *CoderBackend) Start(containerID string) error {
 	return nil
 }
 
-// Exec runs an interactive command inside a Coder workspace via SSH.
+// Exec runs an interactive command inside a Coder workspace via SSH, logging
+// a single timed "container exec" event when it completes.
 func (coderBackend *CoderBackend) Exec(workspaceDir string, command []string) error {
-	name := coderWorkspaceName(workspaceDir)
-	target := coderBackend.resolveSSHTarget(name)
-	args := sshArgs(target, command)
-	cmd := exec.Command("coder", args...)
+	cmd := coderBackend.rawExec(workspaceDir, command)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	start := time.Now()
+	err := cmd.Run()
+	flog.ContainerExec("coder", workspaceDir, command, time.Since(start), err)
+	return err
 }
 
-// ExecCommand returns an unstarted *exec.Cmd for running a command
-// inside a Coder workspace via SSH.
-func (coderBackend *CoderBackend) ExecCommand(workspaceDir string, command []string) *exec.Cmd {
+// ExecCommand returns an unstarted *backend.Cmd for running a command inside
+// a Coder workspace via SSH. Because *Cmd shadows the run methods, it logs a
+// single timed "container exec" event when the caller runs it via
+// Run/Output/CombinedOutput. Hot polling loops should use ExecCommandQuiet.
+func (coderBackend *CoderBackend) ExecCommand(workspaceDir string, command []string) *backend.Cmd {
+	return backend.NewCmd(coderBackend.rawExec(workspaceDir, command), func(d time.Duration, err error) {
+		flog.ContainerExec("coder", workspaceDir, command, d, err)
+	})
+}
+
+// ExecCommandQuiet is ExecCommand without any event-log entries.
+func (coderBackend *CoderBackend) ExecCommandQuiet(workspaceDir string, command []string) *backend.Cmd {
+	return backend.NewCmd(coderBackend.rawExec(workspaceDir, command), nil)
+}
+
+// rawExec builds the underlying `coder ssh` *exec.Cmd shared by ExecCommand
+// and ExecCommandQuiet.
+func (coderBackend *CoderBackend) rawExec(workspaceDir string, command []string) *exec.Cmd {
 	name := coderWorkspaceName(workspaceDir)
 	target := coderBackend.resolveSSHTarget(name)
 	args := sshArgs(target, command)
