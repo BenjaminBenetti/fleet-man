@@ -212,8 +212,10 @@ func splitWindowWithRetry(args []string) (string, error) {
 // Selects the TUI pane first so kill-pane -a removes the right targets
 // regardless of which pane currently has focus.
 func killAllSplitPanes() {
-	_ = exec.Command("tmux", "select-pane", "-t", ":.0").Run()
-	_ = exec.Command("tmux", "kill-pane", "-a").Run()
+	// Chain both commands into a single tmux invocation (`;` is tmux's
+	// command separator when passed as its own argument) to halve the
+	// subprocess spawns.
+	_ = exec.Command("tmux", "select-pane", "-t", ":.0", ";", "kill-pane", "-a").Run()
 }
 
 // bindHostCloseKeys binds Ctrl+Q and Ctrl+O on the outer tmux root
@@ -458,18 +460,26 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 			return splitPaneMsg{restoreSeq: restoreSeq, err: fmt.Errorf("os.Executable: %w", err)}
 		}
 
-		// Query the inner tmux for all sessions in this group.
-		listCmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
-			"sh", "-c",
-			`tmux list-sessions -F "#{session_name}" 2>/dev/null`,
-		})
-		out, _ := listCmd.Output()
-
 		var savedSnapshot *savedGroup
 		if sg, ok := fleetPage.savedGroups[key]; ok {
 			savedSnapshot = &sg
 		}
-		sessions := restoreSessionNames(string(out), prefix, savedOrder, savedSnapshot, sanitized)
+
+		// Only query the inner tmux when there's no saved snapshot. The
+		// snapshot (kept fresh by the 250ms layout tick) is the source of
+		// truth for restore — restoreSessionNames ignores the discovered
+		// list whenever savedSnapshot != nil — so on the common
+		// session-switch path we skip the ~2-3s devcontainer exec entirely.
+		var discovered string
+		if savedSnapshot == nil {
+			listCmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
+				"sh", "-c",
+				`tmux list-sessions -F "#{session_name}" 2>/dev/null`,
+			})
+			out, _ := listCmd.Output()
+			discovered = string(out)
+		}
+		sessions := restoreSessionNames(discovered, prefix, savedOrder, savedSnapshot, sanitized)
 		if len(sessions) == 0 {
 			if _, ok := fleetPage.savedGroups[key]; !ok {
 				return splitPaneMsg{restoreSeq: restoreSeq, err: fmt.Errorf("no sessions found for group %s", groupID)}
@@ -538,20 +548,37 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 		// -T`. The pre-tag closes the race deterministically.
 		paneSlots := listPaneSlots()
 		var ranCmds []string
+		// Batch the per-pane tag + respawn (and the final focus) into one
+		// chained tmux invocation (`;` is tmux's command separator). This
+		// collapses ~2N+1 subprocess spawns into a single one. tmux runs the
+		// chained commands in order, so each pane is still tagged
+		// (select-pane -T) before it's respawned — the ordering
+		// derivePersistableSnapshot relies on (see Phase 3 note above).
+		var batch []string
+		appendCmd := func(parts ...string) {
+			if len(batch) > 0 {
+				batch = append(batch, ";")
+			}
+			batch = append(batch, parts...)
+		}
 		for i, sessName := range sessions {
 			if i >= len(paneSlots) {
 				break
 			}
 			paneID := paneSlots[i]
-			tagPaneTitle(paneID, sessName)
 			shellCmd := fmt.Sprintf("%s shell %s --session %s", self, qualifiedName, sessName)
 			ranCmds = append(ranCmds, shellCmd)
 			script := shellCmd + `; __rc=$?; if [ $__rc -ne 0 ]; then echo; echo "exited with code $__rc — closing in 3s"; sleep 3; fi; exit $__rc`
-			_ = exec.Command("tmux", "respawn-pane", "-k", "-t", paneID, "sh", "-c", script).Run()
+			if sessName != "" {
+				appendCmd("select-pane", "-t", paneID, "-T", sessName)
+			}
+			appendCmd("respawn-pane", "-k", "-t", paneID, "sh", "-c", script)
 		}
-
 		if firstPaneID != "" {
-			_ = exec.Command("tmux", "select-pane", "-t", firstPaneID).Run()
+			appendCmd("select-pane", "-t", firstPaneID)
+		}
+		if len(batch) > 0 {
+			_ = exec.Command("tmux", batch...).Run()
 		}
 
 		// Force a repaint after a brief delay to avoid blank/corrupted
