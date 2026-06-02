@@ -435,6 +435,20 @@ func (s *service) DestroyInstance(req *fleetgrpc.DestroyInstanceRequest, stream 
 		return status.Error(codes.InvalidArgument, "instance is required unless destroy_fleet is set")
 	}
 
+	// Validate the target exists so a typo'd / stale name fails fast (the CLI
+	// surfaces this as a non-zero exit) rather than a silent best-effort no-op.
+	if st, err := state.Load(); err == nil {
+		f, ok := st.Fleets[fleetName]
+		if !ok {
+			return status.Errorf(codes.NotFound, "fleet %q not found", fleetName)
+		}
+		if !req.GetDestroyFleet() {
+			if _, err := f.GetInstance(req.GetInstance()); err != nil {
+				return status.Errorf(codes.NotFound, "instance %q not found in fleet %q", req.GetInstance(), fleetName)
+			}
+		}
+	}
+
 	target := req.GetInstance()
 	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_DESTROY_INSTANCE, fleetName, target, time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {

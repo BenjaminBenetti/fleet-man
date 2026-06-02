@@ -1,14 +1,12 @@
 package cli
 
 import (
+	"context"
 	"fmt"
-	"os"
-	"time"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
-	"github.com/BenjaminBenetti/fleet-man/internal/flog"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc"
 )
 
 func newDestroyCmd() *cobra.Command {
@@ -19,38 +17,23 @@ func newDestroyCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fleetName := args[0]
 
-			st, err := state.Load()
-			if err != nil {
-				return err
-			}
-
-			f, ok := st.Fleets[fleetName]
-			if !ok {
-				return fmt.Errorf("fleet %q not found", fleetName)
-			}
-
-			start := time.Now()
-			for _, instance := range f.Instances {
-				fmt.Printf("Stopping %s/%s...\n", fleetName, instance.Name)
-				instanceBackend := backendutil.New(instance.Backend, false)
-				if err := instanceBackend.Down(instance.ContainerID); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: failed to remove container for %s: %v\n", instance.Name, err)
-				}
-				if instance.WorkspaceDir != "" {
-					if err := os.RemoveAll(instance.WorkspaceDir); err != nil {
-						fmt.Fprintf(os.Stderr, "warning: failed to remove workspace for %s: %v\n", instance.Name, err)
-					}
+			// Snapshot the instance count for the summary message (server-read).
+			count := 0
+			if st, err := fetchFleetState(cmd.Context()); err == nil {
+				if f := st.GetFleets()[fleetName]; f != nil {
+					count = len(f.GetInstances())
 				}
 			}
 
-			delete(st.Fleets, fleetName)
-
-			if err := state.Save(st); err != nil {
+			// One destroy_fleet job: down every container, remove every workspace,
+			// then remove the fleet record. Errors NotFound for a missing fleet.
+			if err := runInstanceJob(cmd.Context(), func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error) {
+				return svc.DestroyInstance(ctx, &fleetgrpc.DestroyInstanceRequest{Fleet: fleetName, DestroyFleet: true})
+			}); err != nil {
 				return err
 			}
 
-			flog.Info("fleet destroyed", "fleet", fleetName, "instances", len(f.Instances), "ms", flog.MillisSince(start))
-			fmt.Printf("Fleet %s destroyed (%d instances removed).\n", fleetName, len(f.Instances))
+			fmt.Printf("Fleet %s destroyed (%d instances removed).\n", fleetName, count)
 			return nil
 		},
 	}
