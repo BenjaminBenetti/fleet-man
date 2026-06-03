@@ -4,12 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
-	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/spf13/cobra"
 )
 
@@ -32,7 +29,7 @@ Examples:
   fleet read-session my-fleet/agent-1 task-session --scrollback 200`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _, _, instance, err := resolveInstance(args[0], "")
+			target, _, _, instance, err := resolveInstance(args[0], "")
 			if err != nil {
 				return err
 			}
@@ -61,17 +58,16 @@ Examples:
 				"sh", "-c",
 				fmt.Sprintf(`tmux capture-pane -p %s-t %s`, startFlag, dotfiles.ShQuote(sessionName)),
 			}
-			captureCmd := sessionExecCommand(instance, readCmd)
+			captureCmd, err := sessionExecCommand(target.Fleet, target.Instance, readCmd)
+			if err != nil {
+				return fmt.Errorf("failed to read session %q: %w", sessionName, err)
+			}
 			captureCmd.Stdout = readSessionStdout
 			captureCmd.Stderr = readSessionStderr
 
-			start := time.Now()
-			err = captureCmd.Run()
-			if err != nil {
-				flog.Error("session read failed", "instance", args[0], "session", sessionName, "cmd", strings.Join(readCmd, " "), "ms", flog.MillisSince(start), "err", err)
+			if err := captureCmd.Run(); err != nil {
 				return fmt.Errorf("failed to read session %q: %w", sessionName, err)
 			}
-			flog.Info("session read", "instance", args[0], "session", sessionName, "cmd", strings.Join(readCmd, " "), "ms", flog.MillisSince(start))
 
 			return nil
 		},

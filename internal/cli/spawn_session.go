@@ -2,11 +2,9 @@ package cli
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/spf13/cobra"
 )
 
@@ -24,7 +22,7 @@ Examples:
   fleet spawn-session my-fleet/agent-1 task-session`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _, _, instance, err := resolveInstance(args[0], "")
+			target, _, _, instance, err := resolveInstance(args[0], "")
 			if err != nil {
 				return err
 			}
@@ -36,18 +34,18 @@ Examples:
 			}
 
 			// Create a detached tmux session with the specified name.
-			createCmd := sessionExecCommand(instance, []string{
+			createCmd, err := sessionExecCommand(target.Fleet, target.Instance, []string{
 				"sh", "-c",
 				dotfiles.TmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s`, dotfiles.ShQuote(sessionName)),
 			})
-
-			start := time.Now()
-			if err := createCmd.Run(); err != nil {
-				flog.Error("session create failed", "instance", args[0], "session", sessionName, "ms", flog.MillisSince(start), "err", err)
+			if err != nil {
 				return fmt.Errorf("failed to create session %q: %w", sessionName, err)
 			}
 
-			flog.Info("session created", "instance", args[0], "session", sessionName, "ms", flog.MillisSince(start))
+			if err := createCmd.Run(); err != nil {
+				return fmt.Errorf("failed to create session %q: %w", sessionName, err)
+			}
+
 			fmt.Printf("Created tmux session %q in instance %s\n", sessionName, args[0])
 			return nil
 		},
