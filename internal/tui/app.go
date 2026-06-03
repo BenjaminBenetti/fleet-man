@@ -193,13 +193,17 @@ func newModel() model {
 // expanded instances. It does NOT rebuild rows — the active page
 // is responsible for that.
 func (m *model) reload() {
-	st, err := state.Load()
+	// Persisted state + config come from the server now (GetState/GetConfig), not
+	// from reading state.json/config.json directly — the TUI no longer touches
+	// the files the server owns. The Watch stream keeps m.st fresh between
+	// reloads (see the stateChangedMsg handler).
+	st, err := fetchStateLegacy()
 	if err != nil {
 		m.err = err
 		return
 	}
 
-	config, err := state.LoadConfig()
+	config, err := fetchConfigLegacy()
 	if err != nil {
 		m.err = err
 		return
@@ -498,9 +502,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// 3. Shared-only messages — return early
 	switch msg := msg.(type) {
 	case stateChangedMsg:
-		// P2 Step 5: cache only — the View still renders from m.st. The
-		// persisted read-path flip to m.pstate is Step 6.
+		// Read-path flip: the server's persisted snapshot drives the render
+		// model. Convert to the legacy *state.State the views still read from,
+		// keep control listeners in step, and rebuild the row list. A
+		// StateChanged only fires on an actual change (the hub diffs it), so this
+		// is not per-tick churn.
 		m.pstate = msg.state
+		if msg.state != nil {
+			m.st = protoStateToLegacy(msg.state)
+			if m.control != nil {
+				m.control.syncRunning(m.st)
+			}
+			if m.fleetPage != nil {
+				m.fleetPage.buildRows(&m)
+			}
+		}
 		return m, spinCmd
 
 	case runtimeChangedMsg:
