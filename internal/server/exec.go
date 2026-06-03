@@ -104,6 +104,21 @@ func (s *service) Logs(req *fleetgrpc.LogsRequest, stream fleetgrpc.FleetService
 	return nil
 }
 
+// ResolveLogsCommand returns the argv of the host-side command that prints the
+// instance's container runtime logs (backend.LogsCommand). The client embeds it
+// in its own pager script and runs it locally — the analog of ResolveExecCommand
+// for the TUI's `l` logs view, which needs the command string (not the Logs
+// stream) so it can interleave the host-side creation log + a "press Enter"
+// pause in one shell.
+func (s *service) ResolveLogsCommand(_ context.Context, req *fleetgrpc.ResolveLogsCommandRequest) (*fleetgrpc.ResolveLogsCommandReply, error) {
+	inst, err := resolveServerInstance(req.GetFleet(), req.GetInstance())
+	if err != nil {
+		return nil, err
+	}
+	cmd := backendutil.NewForInstance(inst, false).LogsCommand(inst.ContainerID, false)
+	return &fleetgrpc.ResolveLogsCommandReply{Argv: cmd.Args}, nil
+}
+
 // PortForward returns the argv of the host-side command that forwards
 // local_port -> remote_port for the instance (the client runs it).
 func (s *service) PortForward(_ context.Context, req *fleetgrpc.PortForwardRequest) (*fleetgrpc.PortForwardReply, error) {

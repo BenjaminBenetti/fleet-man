@@ -145,7 +145,6 @@ func (fleetPage *fleetPage) updateConfirmBrowserSwitch(m *model, msg tea.Msg) te
 			}
 
 			dataDir := browserDataDir(fleetName, instanceName, multipleBrowsersPerFleet(m))
-			instanceBackend := m.instanceBackend(instance)
 			instanceKey := fleetName + "/" + instanceName
 
 			// Switch the dialog into "in-flight" mode; the renderer
@@ -154,7 +153,7 @@ func (fleetPage *fleetPage) updateConfirmBrowserSwitch(m *model, msg tea.Msg) te
 			// clears the flag and the mode.
 			fleetPage.dialogBrowserSwitching = true
 			m.message = ""
-			return switchBrowserCmd(m.portForwards, instanceBackend, instance, instanceKey, dataDir, f.Settings.PreferFleetLaunchEnabled(), "")
+			return switchBrowserCmd(m.portForwards, instance, instanceKey, dataDir, f.Settings.PreferFleetLaunchEnabled(), "")
 		}
 	}
 	return nil
@@ -243,12 +242,11 @@ func (fleetPage *fleetPage) updateConfirmDeleteSession(m *model, msg tea.Msg) te
 			if err != nil {
 				break
 			}
-			instanceBackend := m.instanceBackend(instance)
 			sanitized := SanitizeSessionName(instance.Name)
 			if fleetPage.dialogGroupID != "" && isGroupedSession(sanitized, fleetPage.dialogSession) {
-				return deleteGroupSessionsCmd(instanceBackend, instance.WorkspaceDir, ref, sanitized, fleetPage.dialogGroupID)
+				return deleteGroupSessionsCmd(ref, sanitized, fleetPage.dialogGroupID)
 			}
-			return deleteSessionCmd(instanceBackend, instance.WorkspaceDir, ref, fleetPage.dialogSession)
+			return deleteSessionCmd(ref, fleetPage.dialogSession)
 
 		case "n", "N", "esc", "q", "Q", "ctrl+c":
 			fleetPage.mode = viewNormal
@@ -1414,8 +1412,20 @@ func (fleetPage *fleetPage) addPortForward(m *model, key string) tea.Cmd {
 		return nil
 	}
 
-	instanceBackend := m.instanceBackend(&fleet.Instance{Backend: fleetPage.instanceBackendType(m)})
-	if err := m.portForwards.Add(key, local, remote, instanceBackend.PortForwardCommand, fleetPage.pfContainerID, instanceBackend.ResolveHostname); err != nil {
+	// The server owns backend access: it returns the forward command argv and
+	// the client runs it. A nil ResolveFunc skips the in-process direct-host
+	// fast path (the server resolves hostnames), matching the CLI's behaviour.
+	argv, err := portForwardArgvTUI(fleetPage.dialogFleet, fleetPage.dialogInst, local, remote)
+	if err != nil {
+		m.message = err.Error()
+		return nil
+	}
+	if len(argv) == 0 {
+		m.message = "server returned no port-forward command"
+		return nil
+	}
+	cmdFn := func(_ string, _, _ int) *exec.Cmd { return exec.Command(argv[0], argv[1:]...) }
+	if err := m.portForwards.Add(key, local, remote, cmdFn, fleetPage.pfContainerID, nil); err != nil {
 		m.message = err.Error()
 		return nil
 	}
@@ -1520,17 +1530,6 @@ func (fleetPage *fleetPage) updateCodespacesLimit(m *model, msg tea.Msg) tea.Cmd
 // Port Forward Helpers
 // ===========================================
 
-// instanceBackendType returns the backend type for the instance currently
-// being managed in the port forward dialog.
-func (fleetPage *fleetPage) instanceBackendType(m *model) fleet.BackendType {
-	if f, ok := m.st.Fleets[fleetPage.dialogFleet]; ok {
-		if instance, err := f.GetInstance(fleetPage.dialogInst); err == nil {
-			return instance.Backend
-		}
-	}
-	return fleet.BackendDevcontainer
-}
-
 // ===========================================
 // Session Dialogs
 // ===========================================
@@ -1597,8 +1596,7 @@ func (fleetPage *fleetPage) saveCreateSession(m *model) tea.Cmd {
 	fleetPage.mode = viewNormal
 	fleetPage.blurDialogFields()
 	m.message = fmt.Sprintf("Creating session %s...", name)
-	instanceBackend := m.instanceBackend(instance)
-	return createSessionCmd(instanceBackend, instance.WorkspaceDir, ref, fullName)
+	return createSessionCmd(ref, fullName)
 }
 
 // updateCloneInstance handles the single-text-input dialog that asks
@@ -1749,10 +1747,9 @@ func (fleetPage *fleetPage) saveRenameSession(m *model) tea.Cmd {
 
 	fleetPage.mode = viewNormal
 	fleetPage.blurDialogFields()
-	instanceBackend := m.instanceBackend(instance)
 
 	if isGrouped {
-		return renameGroupCmd(instanceBackend, instance.WorkspaceDir, ref, sanitized, oldGID, newName)
+		return renameGroupCmd(ref, sanitized, oldGID, newName)
 	}
-	return renameSessionCmd(instanceBackend, instance.WorkspaceDir, ref, oldName, newName)
+	return renameSessionCmd(ref, oldName, newName)
 }

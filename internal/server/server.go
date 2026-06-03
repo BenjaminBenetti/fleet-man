@@ -75,6 +75,22 @@ func Serve(ctx context.Context) error {
 	// subscribe_runtime — no backend traffic for plain `fleet ls`.
 	startRuntimePollers(hubCtx, svc.hub)
 
+	// Control-socket listeners: the server owns every running instance's control
+	// socket and turns received browser.open envelopes (from an in-container
+	// `fleet launch` TUI) into BrowserOpen events the connected client execs
+	// locally. Runs unconditionally (cheap: only running instances get a
+	// listener) and tears down when hubCtx is cancelled.
+	controlReg := newControlRegistry(func(fleetName, instanceName, url string) {
+		svc.hub.post(func(h *hub) {
+			h.broadcastBrowserOpen(&fleetgrpc.BrowserOpen{
+				Url:      url,
+				Fleet:    fleetName,
+				Instance: instanceName,
+			})
+		})
+	})
+	go controlReg.run(hubCtx)
+
 	grpcServer := grpc.NewServer()
 	fleetgrpc.RegisterFleetServiceServer(grpcServer, svc)
 

@@ -102,3 +102,87 @@ message PortForwardRequest {
 message PortForwardReply {
   repeated string argv = 1;
 }
+
+// ResolveLogsCommand returns the host-side command argv the server would run to
+// show an instance's container runtime logs. The client embeds it in its own
+// pager script (cat the creation log, then the runtime logs) and runs it
+// locally — the analog of ResolveExecCommand for the `l` logs view.
+message ResolveLogsCommandRequest {
+  string fleet = 1;
+  string instance = 2;
+}
+
+message ResolveLogsCommandReply {
+  repeated string argv = 1;
+}
+
+// =====================================================================
+// CODER TEMPLATE PARAMETERS — read the Coder API server-side
+// =====================================================================
+
+// GetCoderTemplateParams fetches a Coder template's active-version rich
+// parameters + preset names (the TUI's coder settings dialog used to call the
+// coder backend's REST helpers directly). The server owns backend access.
+message GetCoderTemplateParamsRequest {
+  string template = 1;
+}
+
+// CoderRichParameter is the subset of a Coder rich parameter the TUI renders /
+// stores (mirrors internal/backend/coder.RichParameter, minus options/required/
+// mutable which the settings dialog doesn't use).
+message CoderRichParameter {
+  string name = 1;
+  string display_name = 2;
+  string description = 3;
+  string type = 4;
+  string default_value = 5;
+}
+
+message GetCoderTemplateParamsReply {
+  repeated CoderRichParameter parameters = 1;
+  repeated string presets = 2;
+}
+
+// =====================================================================
+// BROWSER — the container-side half of `fleet`'s host browser feature
+// =====================================================================
+//
+// The host browser process (Chrome) stays on the CLIENT; everything that
+// touches the container — installing/starting the privoxy proxy, reading the
+// workspace devcontainer.json customization, staging + running the Fleet Launch
+// landing-page server — is owned by the SERVER and driven through these RPCs.
+
+// GetBrowserConfig reads the workspace's devcontainer.json fleet customization
+// so the TUI can decide whether to show the launch chooser (both an initial URL
+// and a landing page are configured).
+message GetBrowserConfigRequest {
+  string fleet = 1;
+  string instance = 2;
+}
+
+message GetBrowserConfigReply {
+  // initial_url is customizations.fleet.browser.initialUrl ("" if unset).
+  string initial_url = 1;
+  // has_landing is true when a Fleet Launch landing page is configured.
+  bool has_landing = 2;
+}
+
+// PrepareBrowser does all the container-side work for a browser open: ensure the
+// privoxy proxy is installed + running, then resolve the page to open —
+// honouring an explicit target_url, else the devcontainer.json initialUrl /
+// Fleet Launch landing page (starting the landing-page server when chosen) /
+// the default. It returns the URL the client's browser should open.
+message PrepareBrowserRequest {
+  string fleet = 1;
+  string instance = 2;
+  // prefer_fleet_launch is the fleet's resolved PreferFleetLaunch setting (the
+  // tie-breaker when both an initial URL and a landing page are configured).
+  bool prefer_fleet_launch = 3;
+  // target_url, when set, is used verbatim (a control-socket browser.open
+  // request already chose the URL) and config/landing resolution is skipped.
+  optional string target_url = 4;
+}
+
+message PrepareBrowserReply {
+  string initial_url = 1;
+}

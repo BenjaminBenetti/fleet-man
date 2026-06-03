@@ -56,6 +56,14 @@ service FleetService {
   // ---- Interactive backend operations ----
   rpc Exec(stream ExecIn) returns (stream ExecOut);
   rpc ResolveExecCommand(ResolveExecCommandRequest) returns (ResolveExecCommandReply);
+  rpc ResolveLogsCommand(ResolveLogsCommandRequest) returns (ResolveLogsCommandReply);
   rpc Logs(LogsRequest) returns (stream LogLine);
   rpc PortForward(PortForwardRequest) returns (PortForwardReply);
+
+  // ---- Coder template parameters (Coder API, read server-side) ----
+  rpc GetCoderTemplateParams(GetCoderTemplateParamsRequest) returns (GetCoderTemplateParamsReply);
+
+  // ---- Browser (container-side half of the host browser feature) ----
+  rpc GetBrowserConfig(GetBrowserConfigRequest) returns (GetBrowserConfigReply);
+  rpc PrepareBrowser(PrepareBrowserRequest) returns (PrepareBrowserReply);
 }

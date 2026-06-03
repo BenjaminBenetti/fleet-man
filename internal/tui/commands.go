@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/backend"
-	coderbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/coder"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
@@ -121,26 +119,22 @@ func deleteFleetCmd(fleetName string, instances []*fleet.Instance, pf *portforwa
 }
 
 // coderParamsFetchedMsg is sent when template parameter fetching completes.
+// params/presets come from the server's GetCoderTemplateParams RPC (the server
+// owns Coder-API access now).
 type coderParamsFetchedMsg struct {
-	params  []coderbackend.RichParameter
-	presets []coderbackend.Preset
+	params  []coderRichParam
+	presets []string
 	err     error
 }
 
-// fetchCoderParamsCmd fetches template parameters and presets asynchronously.
+// fetchCoderParamsCmd fetches template parameters and presets asynchronously via
+// the server.
 func fetchCoderParamsCmd(templateName string) tea.Cmd {
 	return func() tea.Msg {
-		versionID, err := coderbackend.FetchActiveVersionID(templateName)
+		params, presets, err := getCoderTemplateParamsRemote(templateName)
 		if err != nil {
 			return coderParamsFetchedMsg{err: err}
 		}
-
-		params, err := coderbackend.FetchRichParameters(versionID)
-		if err != nil {
-			return coderParamsFetchedMsg{err: err}
-		}
-
-		presets, _ := coderbackend.FetchPresets(versionID)
 		return coderParamsFetchedMsg{params: params, presets: presets}
 	}
 }
@@ -199,7 +193,7 @@ func repoFromRemote(remoteURL string) string {
 // then appends container runtime logs for running instances.
 // Output is always followed by a "press Enter" prompt so the user
 // has time to read before the TUI redraws.
-func logsCommand(instanceBackend backend.Backend, fleetName string, instance *fleet.Instance) *exec.Cmd {
+func logsCommand(fleetName string, instance *fleet.Instance) *exec.Cmd {
 	logPath := filepath.Join(fleetpaths.Dir(), "logs", fleetName+"-"+instance.Name+".log")
 	creationLog := fmt.Sprintf("cat %q 2>/dev/null", logPath)
 
@@ -208,12 +202,18 @@ func logsCommand(instanceBackend backend.Backend, fleetName string, instance *fl
 	case fleet.StatusFailed, fleet.StatusCreating:
 		inner = fmt.Sprintf("%s || echo 'No creation log found.'", creationLog)
 	default:
-		// Show creation log, then container runtime logs.
-		logsCmd := instanceBackend.LogsCommand(instance.ContainerID, false)
-		inner = fmt.Sprintf(
-			"%s; echo; echo '=== Container runtime logs ==='; echo; %s",
-			creationLog, logsCmd.String(),
-		)
+		// Show creation log, then container runtime logs. The runtime-logs argv
+		// is resolved by the server (it owns backend access); embed it in the
+		// pager script. A resolve failure degrades to just the creation log.
+		argv, err := resolveLogsArgv(fleetName, instance.Name)
+		if err != nil || len(argv) == 0 {
+			inner = fmt.Sprintf("%s || echo 'No creation log found.'", creationLog)
+		} else {
+			inner = fmt.Sprintf(
+				"%s; echo; echo '=== Container runtime logs ==='; echo; %s",
+				creationLog, strings.Join(argv, " "),
+			)
+		}
 	}
 
 	// Wrap in a shell that pauses after the output.

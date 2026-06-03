@@ -149,6 +149,15 @@ func cloneRuntime(r *fleetgrpc.InstanceRuntime) *fleetgrpc.InstanceRuntime {
 	return proto.Clone(r).(*fleetgrpc.InstanceRuntime)
 }
 
+// broadcastBrowserOpen fans a control-socket browser.open out to every
+// subscriber. Discrete events (each open matters), so queued in order rather
+// than conflated. Runs on the hub loop.
+func (h *hub) broadcastBrowserOpen(ev *fleetgrpc.BrowserOpen) {
+	for sub := range h.subs {
+		sub.enqueueBrowserOpen(ev)
+	}
+}
+
 func runtimeKey(fleetName, instance string) string { return fleetName + "/" + instance }
 
 // subscriber is one Watch stream's conflating buffer. pendingState keeps the
@@ -163,6 +172,10 @@ type subscriber struct {
 	mu             sync.Mutex
 	pendingState   *fleetgrpc.State
 	pendingRuntime map[string]*fleetgrpc.InstanceRuntime
+	// pendingBrowserOpen queues control-socket browser.open events in order.
+	// Unlike state/runtime these are discrete (each open matters), so they are
+	// NOT conflated — they accumulate until drained.
+	pendingBrowserOpen []*fleetgrpc.BrowserOpen
 
 	notify chan struct{}
 }
@@ -198,8 +211,16 @@ func (s *subscriber) enqueueRuntime(items []*fleetgrpc.InstanceRuntime) {
 	s.signal()
 }
 
-// drain takes the pending state + runtime out of the buffer for sending.
-func (s *subscriber) drain() (*fleetgrpc.State, []*fleetgrpc.InstanceRuntime) {
+func (s *subscriber) enqueueBrowserOpen(ev *fleetgrpc.BrowserOpen) {
+	s.mu.Lock()
+	s.pendingBrowserOpen = append(s.pendingBrowserOpen, ev)
+	s.mu.Unlock()
+	s.signal()
+}
+
+// drain takes the pending state + runtime + browser-opens out of the buffer for
+// sending.
+func (s *subscriber) drain() (*fleetgrpc.State, []*fleetgrpc.InstanceRuntime, []*fleetgrpc.BrowserOpen) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.pendingState
@@ -212,5 +233,7 @@ func (s *subscriber) drain() (*fleetgrpc.State, []*fleetgrpc.InstanceRuntime) {
 		}
 		s.pendingRuntime = make(map[string]*fleetgrpc.InstanceRuntime)
 	}
-	return st, rt
+	bo := s.pendingBrowserOpen
+	s.pendingBrowserOpen = nil
+	return st, rt, bo
 }

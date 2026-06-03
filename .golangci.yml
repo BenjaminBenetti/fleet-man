@@ -1,8 +1,8 @@
-# golangci-lint config (v2). Phase 1 groundwork: it enforces the client/server
-# import boundary for the one fully-migrated client package (internal/fleetclient)
-# via depguard. The internal/cli and internal/tui globs are added in Phase 5,
-# once the last server-only import is removed from each. CI wiring (a
-# golangci-lint step in .github/workflows/unit.yml) is a follow-up.
+# golangci-lint config (v2). It enforces the client/server import boundary via
+# depguard: the thin clients (internal/fleetclient, internal/cli, internal/tui)
+# must reach the system through the fleet server (fleetgrpc), never by importing
+# the server-only internals (state/backend/create/control/flog/server) directly.
+# CI runs it via a golangci-lint step in .github/workflows/unit.yml.
 version: "2"
 linters:
   default: none
@@ -18,15 +18,18 @@ linters:
           files:
             - "**/internal/fleetclient/**"
             - "**/internal/cli/**"
+            - "**/internal/tui/**"
             # internal/cli/server.go is the fleetd entrypoint — it alone may
             # import internal/server.
             - "!**/internal/cli/server.go"
-            # Test fixtures may seed state.json directly (session_commands_test).
+            # Test fixtures may seed state.json directly / pass legacy state
+            # structs through aliases (e.g. browser_test, page_fleet_test).
             - "!**/*_test.go"
-            # internal/tui joins once its render path is off the legacy state
-            # structs and its sessions/browser/control move onto the RPCs.
-            # NOTE: the internal/backend deny prefix-matches internal/backendutil,
-            # so clients can't construct backends either — they use the RPCs.
+            # NOTE: the internal/backend deny prefix-matches internal/backendutil
+            # AND internal/backend/{coder,codespaces,devcontainer}, so clients
+            # can't construct backends either — they drive them via fleetgrpc RPCs
+            # (ResolveExecCommand / Logs / PortForward / GetCoderTemplateParams /
+            # GetBrowserConfig / PrepareBrowser) and the Watch BrowserOpen event.
           deny:
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/state
               desc: client code must go through the fleet server (fleetgrpc), not internal/state

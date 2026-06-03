@@ -19,28 +19,32 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	FleetService_Hello_FullMethodName               = "/fleetgrpc.FleetService/Hello"
-	FleetService_Shutdown_FullMethodName            = "/fleetgrpc.FleetService/Shutdown"
-	FleetService_GetState_FullMethodName            = "/fleetgrpc.FleetService/GetState"
-	FleetService_Watch_FullMethodName               = "/fleetgrpc.FleetService/Watch"
-	FleetService_CreateInstance_FullMethodName      = "/fleetgrpc.FleetService/CreateInstance"
-	FleetService_DestroyInstance_FullMethodName     = "/fleetgrpc.FleetService/DestroyInstance"
-	FleetService_StartInstance_FullMethodName       = "/fleetgrpc.FleetService/StartInstance"
-	FleetService_StopInstance_FullMethodName        = "/fleetgrpc.FleetService/StopInstance"
-	FleetService_CloneInstance_FullMethodName       = "/fleetgrpc.FleetService/CloneInstance"
-	FleetService_CreateFleet_FullMethodName         = "/fleetgrpc.FleetService/CreateFleet"
-	FleetService_DestroyFleet_FullMethodName        = "/fleetgrpc.FleetService/DestroyFleet"
-	FleetService_SetFleetSettings_FullMethodName    = "/fleetgrpc.FleetService/SetFleetSettings"
-	FleetService_SetInstanceMetadata_FullMethodName = "/fleetgrpc.FleetService/SetInstanceMetadata"
-	FleetService_SetGroupLayout_FullMethodName      = "/fleetgrpc.FleetService/SetGroupLayout"
-	FleetService_DeleteGroupLayout_FullMethodName   = "/fleetgrpc.FleetService/DeleteGroupLayout"
-	FleetService_SetLastSeenVersion_FullMethodName  = "/fleetgrpc.FleetService/SetLastSeenVersion"
-	FleetService_GetConfig_FullMethodName           = "/fleetgrpc.FleetService/GetConfig"
-	FleetService_SetConfig_FullMethodName           = "/fleetgrpc.FleetService/SetConfig"
-	FleetService_Exec_FullMethodName                = "/fleetgrpc.FleetService/Exec"
-	FleetService_ResolveExecCommand_FullMethodName  = "/fleetgrpc.FleetService/ResolveExecCommand"
-	FleetService_Logs_FullMethodName                = "/fleetgrpc.FleetService/Logs"
-	FleetService_PortForward_FullMethodName         = "/fleetgrpc.FleetService/PortForward"
+	FleetService_Hello_FullMethodName                  = "/fleetgrpc.FleetService/Hello"
+	FleetService_Shutdown_FullMethodName               = "/fleetgrpc.FleetService/Shutdown"
+	FleetService_GetState_FullMethodName               = "/fleetgrpc.FleetService/GetState"
+	FleetService_Watch_FullMethodName                  = "/fleetgrpc.FleetService/Watch"
+	FleetService_CreateInstance_FullMethodName         = "/fleetgrpc.FleetService/CreateInstance"
+	FleetService_DestroyInstance_FullMethodName        = "/fleetgrpc.FleetService/DestroyInstance"
+	FleetService_StartInstance_FullMethodName          = "/fleetgrpc.FleetService/StartInstance"
+	FleetService_StopInstance_FullMethodName           = "/fleetgrpc.FleetService/StopInstance"
+	FleetService_CloneInstance_FullMethodName          = "/fleetgrpc.FleetService/CloneInstance"
+	FleetService_CreateFleet_FullMethodName            = "/fleetgrpc.FleetService/CreateFleet"
+	FleetService_DestroyFleet_FullMethodName           = "/fleetgrpc.FleetService/DestroyFleet"
+	FleetService_SetFleetSettings_FullMethodName       = "/fleetgrpc.FleetService/SetFleetSettings"
+	FleetService_SetInstanceMetadata_FullMethodName    = "/fleetgrpc.FleetService/SetInstanceMetadata"
+	FleetService_SetGroupLayout_FullMethodName         = "/fleetgrpc.FleetService/SetGroupLayout"
+	FleetService_DeleteGroupLayout_FullMethodName      = "/fleetgrpc.FleetService/DeleteGroupLayout"
+	FleetService_SetLastSeenVersion_FullMethodName     = "/fleetgrpc.FleetService/SetLastSeenVersion"
+	FleetService_GetConfig_FullMethodName              = "/fleetgrpc.FleetService/GetConfig"
+	FleetService_SetConfig_FullMethodName              = "/fleetgrpc.FleetService/SetConfig"
+	FleetService_Exec_FullMethodName                   = "/fleetgrpc.FleetService/Exec"
+	FleetService_ResolveExecCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveExecCommand"
+	FleetService_ResolveLogsCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveLogsCommand"
+	FleetService_Logs_FullMethodName                   = "/fleetgrpc.FleetService/Logs"
+	FleetService_PortForward_FullMethodName            = "/fleetgrpc.FleetService/PortForward"
+	FleetService_GetCoderTemplateParams_FullMethodName = "/fleetgrpc.FleetService/GetCoderTemplateParams"
+	FleetService_GetBrowserConfig_FullMethodName       = "/fleetgrpc.FleetService/GetBrowserConfig"
+	FleetService_PrepareBrowser_FullMethodName         = "/fleetgrpc.FleetService/PrepareBrowser"
 )
 
 // FleetServiceClient is the client API for FleetService service.
@@ -83,8 +87,14 @@ type FleetServiceClient interface {
 	// ---- Interactive backend operations ----
 	Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecIn, ExecOut], error)
 	ResolveExecCommand(ctx context.Context, in *ResolveExecCommandRequest, opts ...grpc.CallOption) (*ResolveExecCommandReply, error)
+	ResolveLogsCommand(ctx context.Context, in *ResolveLogsCommandRequest, opts ...grpc.CallOption) (*ResolveLogsCommandReply, error)
 	Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error)
 	PortForward(ctx context.Context, in *PortForwardRequest, opts ...grpc.CallOption) (*PortForwardReply, error)
+	// ---- Coder template parameters (Coder API, read server-side) ----
+	GetCoderTemplateParams(ctx context.Context, in *GetCoderTemplateParamsRequest, opts ...grpc.CallOption) (*GetCoderTemplateParamsReply, error)
+	// ---- Browser (container-side half of the host browser feature) ----
+	GetBrowserConfig(ctx context.Context, in *GetBrowserConfigRequest, opts ...grpc.CallOption) (*GetBrowserConfigReply, error)
+	PrepareBrowser(ctx context.Context, in *PrepareBrowserRequest, opts ...grpc.CallOption) (*PrepareBrowserReply, error)
 }
 
 type fleetServiceClient struct {
@@ -352,6 +362,16 @@ func (c *fleetServiceClient) ResolveExecCommand(ctx context.Context, in *Resolve
 	return out, nil
 }
 
+func (c *fleetServiceClient) ResolveLogsCommand(ctx context.Context, in *ResolveLogsCommandRequest, opts ...grpc.CallOption) (*ResolveLogsCommandReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveLogsCommandReply)
+	err := c.cc.Invoke(ctx, FleetService_ResolveLogsCommand_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[7], FleetService_Logs_FullMethodName, cOpts...)
@@ -375,6 +395,36 @@ func (c *fleetServiceClient) PortForward(ctx context.Context, in *PortForwardReq
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PortForwardReply)
 	err := c.cc.Invoke(ctx, FleetService_PortForward_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) GetCoderTemplateParams(ctx context.Context, in *GetCoderTemplateParamsRequest, opts ...grpc.CallOption) (*GetCoderTemplateParamsReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCoderTemplateParamsReply)
+	err := c.cc.Invoke(ctx, FleetService_GetCoderTemplateParams_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) GetBrowserConfig(ctx context.Context, in *GetBrowserConfigRequest, opts ...grpc.CallOption) (*GetBrowserConfigReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBrowserConfigReply)
+	err := c.cc.Invoke(ctx, FleetService_GetBrowserConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) PrepareBrowser(ctx context.Context, in *PrepareBrowserRequest, opts ...grpc.CallOption) (*PrepareBrowserReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrepareBrowserReply)
+	err := c.cc.Invoke(ctx, FleetService_PrepareBrowser_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -421,8 +471,14 @@ type FleetServiceServer interface {
 	// ---- Interactive backend operations ----
 	Exec(grpc.BidiStreamingServer[ExecIn, ExecOut]) error
 	ResolveExecCommand(context.Context, *ResolveExecCommandRequest) (*ResolveExecCommandReply, error)
+	ResolveLogsCommand(context.Context, *ResolveLogsCommandRequest) (*ResolveLogsCommandReply, error)
 	Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error
 	PortForward(context.Context, *PortForwardRequest) (*PortForwardReply, error)
+	// ---- Coder template parameters (Coder API, read server-side) ----
+	GetCoderTemplateParams(context.Context, *GetCoderTemplateParamsRequest) (*GetCoderTemplateParamsReply, error)
+	// ---- Browser (container-side half of the host browser feature) ----
+	GetBrowserConfig(context.Context, *GetBrowserConfigRequest) (*GetBrowserConfigReply, error)
+	PrepareBrowser(context.Context, *PrepareBrowserRequest) (*PrepareBrowserReply, error)
 	mustEmbedUnimplementedFleetServiceServer()
 }
 
@@ -493,11 +549,23 @@ func (UnimplementedFleetServiceServer) Exec(grpc.BidiStreamingServer[ExecIn, Exe
 func (UnimplementedFleetServiceServer) ResolveExecCommand(context.Context, *ResolveExecCommandRequest) (*ResolveExecCommandReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ResolveExecCommand not implemented")
 }
+func (UnimplementedFleetServiceServer) ResolveLogsCommand(context.Context, *ResolveLogsCommandRequest) (*ResolveLogsCommandReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResolveLogsCommand not implemented")
+}
 func (UnimplementedFleetServiceServer) Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error {
 	return status.Errorf(codes.Unimplemented, "method Logs not implemented")
 }
 func (UnimplementedFleetServiceServer) PortForward(context.Context, *PortForwardRequest) (*PortForwardReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PortForward not implemented")
+}
+func (UnimplementedFleetServiceServer) GetCoderTemplateParams(context.Context, *GetCoderTemplateParamsRequest) (*GetCoderTemplateParamsReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCoderTemplateParams not implemented")
+}
+func (UnimplementedFleetServiceServer) GetBrowserConfig(context.Context, *GetBrowserConfigRequest) (*GetBrowserConfigReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBrowserConfig not implemented")
+}
+func (UnimplementedFleetServiceServer) PrepareBrowser(context.Context, *PrepareBrowserRequest) (*PrepareBrowserReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PrepareBrowser not implemented")
 }
 func (UnimplementedFleetServiceServer) mustEmbedUnimplementedFleetServiceServer() {}
 func (UnimplementedFleetServiceServer) testEmbeddedByValue()                      {}
@@ -827,6 +895,24 @@ func _FleetService_ResolveExecCommand_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FleetService_ResolveLogsCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveLogsCommandRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ResolveLogsCommand(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ResolveLogsCommand_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ResolveLogsCommand(ctx, req.(*ResolveLogsCommandRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_Logs_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(LogsRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -852,6 +938,60 @@ func _FleetService_PortForward_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FleetServiceServer).PortForward(ctx, req.(*PortForwardRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_GetCoderTemplateParams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCoderTemplateParamsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).GetCoderTemplateParams(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_GetCoderTemplateParams_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).GetCoderTemplateParams(ctx, req.(*GetCoderTemplateParamsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_GetBrowserConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBrowserConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).GetBrowserConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_GetBrowserConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).GetBrowserConfig(ctx, req.(*GetBrowserConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_PrepareBrowser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareBrowserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).PrepareBrowser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_PrepareBrowser_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).PrepareBrowser(ctx, req.(*PrepareBrowserRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -916,8 +1056,24 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _FleetService_ResolveExecCommand_Handler,
 		},
 		{
+			MethodName: "ResolveLogsCommand",
+			Handler:    _FleetService_ResolveLogsCommand_Handler,
+		},
+		{
 			MethodName: "PortForward",
 			Handler:    _FleetService_PortForward_Handler,
+		},
+		{
+			MethodName: "GetCoderTemplateParams",
+			Handler:    _FleetService_GetCoderTemplateParams_Handler,
+		},
+		{
+			MethodName: "GetBrowserConfig",
+			Handler:    _FleetService_GetBrowserConfig_Handler,
+		},
+		{
+			MethodName: "PrepareBrowser",
+			Handler:    _FleetService_PrepareBrowser_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

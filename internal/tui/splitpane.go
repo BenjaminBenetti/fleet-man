@@ -432,12 +432,20 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *configutil.State) {
 // Each discovered session gets its own pane via `fleet shell --session`.
 func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance *fleet.Instance, groupID string) tea.Cmd {
 	restoreSeq := fleetPage.beginGroupRestore(groupID)
-	instanceBackend := m.instanceBackend(instance)
 	instanceName := instance.Name
 	qualifiedName := fleetName + "/" + instanceName
-	workspaceDir := instance.WorkspaceDir
 	sanitized := SanitizeSessionName(instanceName)
 	prefix := sanitized + groupSep + groupID
+
+	// The live session list comes from the server runtime (it polls tmux for all
+	// running instances), captured here on the Update goroutine and passed into
+	// the closure as newline-delimited names — the same shape the old `tmux
+	// list-sessions` exec produced, which restoreSessionNames filters by prefix.
+	var runtimeNames []string
+	for _, s := range m.runtimeSessions(InstanceRef{Fleet: fleetName, Instance: instanceName}) {
+		runtimeNames = append(runtimeNames, s.Name)
+	}
+	sessionList := strings.Join(runtimeNames, "\n")
 
 	// Grab saved layout if available.
 	key := computeGroupKey(instanceName, groupID)
@@ -459,18 +467,11 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 			return splitPaneMsg{restoreSeq: restoreSeq, err: fmt.Errorf("os.Executable: %w", err)}
 		}
 
-		// Query the inner tmux for all sessions in this group.
-		listCmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
-			"sh", "-c",
-			`tmux list-sessions -F "#{session_name}" 2>/dev/null`,
-		})
-		out, _ := listCmd.Output()
-
 		var savedSnapshot *savedGroup
 		if sg, ok := fleetPage.savedGroups[key]; ok {
 			savedSnapshot = &sg
 		}
-		sessions := restoreSessionNames(string(out), prefix, savedOrder, savedSnapshot, sanitized)
+		sessions := restoreSessionNames(sessionList, prefix, savedOrder, savedSnapshot, sanitized)
 		if len(sessions) == 0 {
 			if _, ok := fleetPage.savedGroups[key]; !ok {
 				return splitPaneMsg{restoreSeq: restoreSeq, err: fmt.Errorf("no sessions found for group %s", groupID)}

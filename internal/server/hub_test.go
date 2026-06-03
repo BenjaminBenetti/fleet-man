@@ -26,11 +26,11 @@ func TestSubscriberStateConflation(t *testing.T) {
 	s.enqueueState(&fleetgrpc.State{LastSeenVersion: proto.String("v1")})
 	s.enqueueState(&fleetgrpc.State{LastSeenVersion: proto.String("v2")})
 
-	st, _ := s.drain()
+	st, _, _ := s.drain()
 	if st.GetLastSeenVersion() != "v2" {
 		t.Fatalf("conflation: want newest v2, got %q", st.GetLastSeenVersion())
 	}
-	if again, _ := s.drain(); again != nil {
+	if again, _, _ := s.drain(); again != nil {
 		t.Fatalf("want nil state after drain, got %v", again)
 	}
 }
@@ -43,7 +43,7 @@ func TestSubscriberRuntimeConflationByKey(t *testing.T) {
 	// A different instance survives independently.
 	s.enqueueRuntime([]*fleetgrpc.InstanceRuntime{{Fleet: "f", Instance: "j", LiveStatus: fleetgrpc.LiveContainerStatus_LIVE_CONTAINER_STATUS_RUNNING}})
 
-	_, rt := s.drain()
+	_, rt, _ := s.drain()
 	if len(rt) != 2 {
 		t.Fatalf("want 2 keyed entries, got %d", len(rt))
 	}
@@ -74,13 +74,13 @@ func TestHubSetStateBroadcastsAndDedups(t *testing.T) {
 	h.post(func(h *hub) { h.setState(&fleetgrpc.State{LastSeenVersion: proto.String("v1")}) })
 	drainSync(t, h)
 
-	st, _ := sub.drain()
+	st, _, _ := sub.drain()
 	if st.GetLastSeenVersion() != "v1" {
 		t.Fatalf("want broadcast v1, got %q", st.GetLastSeenVersion())
 	}
 	// After draining the single broadcast, the dedup'd second setState left
 	// nothing pending.
-	if again, _ := sub.drain(); again != nil {
+	if again, _, _ := sub.drain(); again != nil {
 		t.Fatalf("dedup: want no second broadcast, got %v", again)
 	}
 }
@@ -106,7 +106,7 @@ func TestHubBackpressureDoesNotBlock(t *testing.T) {
 	}
 	drainSync(t, h)
 
-	st, _ := fast.drain()
+	st, _, _ := fast.drain()
 	if st == nil {
 		t.Fatal("fast subscriber received nothing")
 	}

@@ -762,6 +762,514 @@ func (x *PortForwardReply) GetArgv() []string {
 	return nil
 }
 
+// ResolveLogsCommand returns the host-side command argv the server would run to
+// show an instance's container runtime logs. The client embeds it in its own
+// pager script (cat the creation log, then the runtime logs) and runs it
+// locally — the analog of ResolveExecCommand for the `l` logs view.
+type ResolveLogsCommandRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Fleet         string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	Instance      string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveLogsCommandRequest) Reset() {
+	*x = ResolveLogsCommandRequest{}
+	mi := &file_exec_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveLogsCommandRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveLogsCommandRequest) ProtoMessage() {}
+
+func (x *ResolveLogsCommandRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveLogsCommandRequest.ProtoReflect.Descriptor instead.
+func (*ResolveLogsCommandRequest) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ResolveLogsCommandRequest) GetFleet() string {
+	if x != nil {
+		return x.Fleet
+	}
+	return ""
+}
+
+func (x *ResolveLogsCommandRequest) GetInstance() string {
+	if x != nil {
+		return x.Instance
+	}
+	return ""
+}
+
+type ResolveLogsCommandReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Argv          []string               `protobuf:"bytes,1,rep,name=argv,proto3" json:"argv,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveLogsCommandReply) Reset() {
+	*x = ResolveLogsCommandReply{}
+	mi := &file_exec_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveLogsCommandReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveLogsCommandReply) ProtoMessage() {}
+
+func (x *ResolveLogsCommandReply) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveLogsCommandReply.ProtoReflect.Descriptor instead.
+func (*ResolveLogsCommandReply) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ResolveLogsCommandReply) GetArgv() []string {
+	if x != nil {
+		return x.Argv
+	}
+	return nil
+}
+
+// GetCoderTemplateParams fetches a Coder template's active-version rich
+// parameters + preset names (the TUI's coder settings dialog used to call the
+// coder backend's REST helpers directly). The server owns backend access.
+type GetCoderTemplateParamsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Template      string                 `protobuf:"bytes,1,opt,name=template,proto3" json:"template,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCoderTemplateParamsRequest) Reset() {
+	*x = GetCoderTemplateParamsRequest{}
+	mi := &file_exec_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCoderTemplateParamsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCoderTemplateParamsRequest) ProtoMessage() {}
+
+func (x *GetCoderTemplateParamsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCoderTemplateParamsRequest.ProtoReflect.Descriptor instead.
+func (*GetCoderTemplateParamsRequest) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *GetCoderTemplateParamsRequest) GetTemplate() string {
+	if x != nil {
+		return x.Template
+	}
+	return ""
+}
+
+// CoderRichParameter is the subset of a Coder rich parameter the TUI renders /
+// stores (mirrors internal/backend/coder.RichParameter, minus options/required/
+// mutable which the settings dialog doesn't use).
+type CoderRichParameter struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	DisplayName   string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Type          string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`
+	DefaultValue  string                 `protobuf:"bytes,5,opt,name=default_value,json=defaultValue,proto3" json:"default_value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CoderRichParameter) Reset() {
+	*x = CoderRichParameter{}
+	mi := &file_exec_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CoderRichParameter) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CoderRichParameter) ProtoMessage() {}
+
+func (x *CoderRichParameter) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CoderRichParameter.ProtoReflect.Descriptor instead.
+func (*CoderRichParameter) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *CoderRichParameter) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CoderRichParameter) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *CoderRichParameter) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *CoderRichParameter) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *CoderRichParameter) GetDefaultValue() string {
+	if x != nil {
+		return x.DefaultValue
+	}
+	return ""
+}
+
+type GetCoderTemplateParamsReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Parameters    []*CoderRichParameter  `protobuf:"bytes,1,rep,name=parameters,proto3" json:"parameters,omitempty"`
+	Presets       []string               `protobuf:"bytes,2,rep,name=presets,proto3" json:"presets,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCoderTemplateParamsReply) Reset() {
+	*x = GetCoderTemplateParamsReply{}
+	mi := &file_exec_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCoderTemplateParamsReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCoderTemplateParamsReply) ProtoMessage() {}
+
+func (x *GetCoderTemplateParamsReply) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCoderTemplateParamsReply.ProtoReflect.Descriptor instead.
+func (*GetCoderTemplateParamsReply) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *GetCoderTemplateParamsReply) GetParameters() []*CoderRichParameter {
+	if x != nil {
+		return x.Parameters
+	}
+	return nil
+}
+
+func (x *GetCoderTemplateParamsReply) GetPresets() []string {
+	if x != nil {
+		return x.Presets
+	}
+	return nil
+}
+
+// GetBrowserConfig reads the workspace's devcontainer.json fleet customization
+// so the TUI can decide whether to show the launch chooser (both an initial URL
+// and a landing page are configured).
+type GetBrowserConfigRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Fleet         string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	Instance      string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetBrowserConfigRequest) Reset() {
+	*x = GetBrowserConfigRequest{}
+	mi := &file_exec_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetBrowserConfigRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetBrowserConfigRequest) ProtoMessage() {}
+
+func (x *GetBrowserConfigRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetBrowserConfigRequest.ProtoReflect.Descriptor instead.
+func (*GetBrowserConfigRequest) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *GetBrowserConfigRequest) GetFleet() string {
+	if x != nil {
+		return x.Fleet
+	}
+	return ""
+}
+
+func (x *GetBrowserConfigRequest) GetInstance() string {
+	if x != nil {
+		return x.Instance
+	}
+	return ""
+}
+
+type GetBrowserConfigReply struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// initial_url is customizations.fleet.browser.initialUrl ("" if unset).
+	InitialUrl string `protobuf:"bytes,1,opt,name=initial_url,json=initialUrl,proto3" json:"initial_url,omitempty"`
+	// has_landing is true when a Fleet Launch landing page is configured.
+	HasLanding    bool `protobuf:"varint,2,opt,name=has_landing,json=hasLanding,proto3" json:"has_landing,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetBrowserConfigReply) Reset() {
+	*x = GetBrowserConfigReply{}
+	mi := &file_exec_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetBrowserConfigReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetBrowserConfigReply) ProtoMessage() {}
+
+func (x *GetBrowserConfigReply) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetBrowserConfigReply.ProtoReflect.Descriptor instead.
+func (*GetBrowserConfigReply) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *GetBrowserConfigReply) GetInitialUrl() string {
+	if x != nil {
+		return x.InitialUrl
+	}
+	return ""
+}
+
+func (x *GetBrowserConfigReply) GetHasLanding() bool {
+	if x != nil {
+		return x.HasLanding
+	}
+	return false
+}
+
+// PrepareBrowser does all the container-side work for a browser open: ensure the
+// privoxy proxy is installed + running, then resolve the page to open —
+// honouring an explicit target_url, else the devcontainer.json initialUrl /
+// Fleet Launch landing page (starting the landing-page server when chosen) /
+// the default. It returns the URL the client's browser should open.
+type PrepareBrowserRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Fleet    string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	Instance string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
+	// prefer_fleet_launch is the fleet's resolved PreferFleetLaunch setting (the
+	// tie-breaker when both an initial URL and a landing page are configured).
+	PreferFleetLaunch bool `protobuf:"varint,3,opt,name=prefer_fleet_launch,json=preferFleetLaunch,proto3" json:"prefer_fleet_launch,omitempty"`
+	// target_url, when set, is used verbatim (a control-socket browser.open
+	// request already chose the URL) and config/landing resolution is skipped.
+	TargetUrl     *string `protobuf:"bytes,4,opt,name=target_url,json=targetUrl,proto3,oneof" json:"target_url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrepareBrowserRequest) Reset() {
+	*x = PrepareBrowserRequest{}
+	mi := &file_exec_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareBrowserRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareBrowserRequest) ProtoMessage() {}
+
+func (x *PrepareBrowserRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareBrowserRequest.ProtoReflect.Descriptor instead.
+func (*PrepareBrowserRequest) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *PrepareBrowserRequest) GetFleet() string {
+	if x != nil {
+		return x.Fleet
+	}
+	return ""
+}
+
+func (x *PrepareBrowserRequest) GetInstance() string {
+	if x != nil {
+		return x.Instance
+	}
+	return ""
+}
+
+func (x *PrepareBrowserRequest) GetPreferFleetLaunch() bool {
+	if x != nil {
+		return x.PreferFleetLaunch
+	}
+	return false
+}
+
+func (x *PrepareBrowserRequest) GetTargetUrl() string {
+	if x != nil && x.TargetUrl != nil {
+		return *x.TargetUrl
+	}
+	return ""
+}
+
+type PrepareBrowserReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InitialUrl    string                 `protobuf:"bytes,1,opt,name=initial_url,json=initialUrl,proto3" json:"initial_url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrepareBrowserReply) Reset() {
+	*x = PrepareBrowserReply{}
+	mi := &file_exec_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareBrowserReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareBrowserReply) ProtoMessage() {}
+
+func (x *PrepareBrowserReply) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareBrowserReply.ProtoReflect.Descriptor instead.
+func (*PrepareBrowserReply) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *PrepareBrowserReply) GetInitialUrl() string {
+	if x != nil {
+		return x.InitialUrl
+	}
+	return ""
+}
+
 var File_exec_proto protoreflect.FileDescriptor
 
 const file_exec_proto_rawDesc = "" +
@@ -822,7 +1330,43 @@ const file_exec_proto_rawDesc = "" +
 	"\vremote_port\x18\x04 \x01(\x05R\n" +
 	"remotePort\"&\n" +
 	"\x10PortForwardReply\x12\x12\n" +
-	"\x04argv\x18\x01 \x03(\tR\x04argvB:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
+	"\x04argv\x18\x01 \x03(\tR\x04argv\"M\n" +
+	"\x19ResolveLogsCommandRequest\x12\x14\n" +
+	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
+	"\binstance\x18\x02 \x01(\tR\binstance\"-\n" +
+	"\x17ResolveLogsCommandReply\x12\x12\n" +
+	"\x04argv\x18\x01 \x03(\tR\x04argv\";\n" +
+	"\x1dGetCoderTemplateParamsRequest\x12\x1a\n" +
+	"\btemplate\x18\x01 \x01(\tR\btemplate\"\xa6\x01\n" +
+	"\x12CoderRichParameter\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
+	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x12\n" +
+	"\x04type\x18\x04 \x01(\tR\x04type\x12#\n" +
+	"\rdefault_value\x18\x05 \x01(\tR\fdefaultValue\"v\n" +
+	"\x1bGetCoderTemplateParamsReply\x12=\n" +
+	"\n" +
+	"parameters\x18\x01 \x03(\v2\x1d.fleetgrpc.CoderRichParameterR\n" +
+	"parameters\x12\x18\n" +
+	"\apresets\x18\x02 \x03(\tR\apresets\"K\n" +
+	"\x17GetBrowserConfigRequest\x12\x14\n" +
+	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
+	"\binstance\x18\x02 \x01(\tR\binstance\"Y\n" +
+	"\x15GetBrowserConfigReply\x12\x1f\n" +
+	"\vinitial_url\x18\x01 \x01(\tR\n" +
+	"initialUrl\x12\x1f\n" +
+	"\vhas_landing\x18\x02 \x01(\bR\n" +
+	"hasLanding\"\xac\x01\n" +
+	"\x15PrepareBrowserRequest\x12\x14\n" +
+	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
+	"\binstance\x18\x02 \x01(\tR\binstance\x12.\n" +
+	"\x13prefer_fleet_launch\x18\x03 \x01(\bR\x11preferFleetLaunch\x12\"\n" +
+	"\n" +
+	"target_url\x18\x04 \x01(\tH\x00R\ttargetUrl\x88\x01\x01B\r\n" +
+	"\v_target_url\"6\n" +
+	"\x13PrepareBrowserReply\x12\x1f\n" +
+	"\vinitial_url\x18\x01 \x01(\tR\n" +
+	"initialUrlB:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
 
 var (
 	file_exec_proto_rawDescOnce sync.Once
@@ -836,35 +1380,45 @@ func file_exec_proto_rawDescGZIP() []byte {
 	return file_exec_proto_rawDescData
 }
 
-var file_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_exec_proto_goTypes = []any{
-	(*ExecIn)(nil),                    // 0: fleetgrpc.ExecIn
-	(*ExecStart)(nil),                 // 1: fleetgrpc.ExecStart
-	(*ExecResize)(nil),                // 2: fleetgrpc.ExecResize
-	(*ExecOut)(nil),                   // 3: fleetgrpc.ExecOut
-	(*ExecExit)(nil),                  // 4: fleetgrpc.ExecExit
-	(*ResolveExecCommandRequest)(nil), // 5: fleetgrpc.ResolveExecCommandRequest
-	(*ResolveExecCommandReply)(nil),   // 6: fleetgrpc.ResolveExecCommandReply
-	(*LogsRequest)(nil),               // 7: fleetgrpc.LogsRequest
-	(*LogLine)(nil),                   // 8: fleetgrpc.LogLine
-	(*PortForwardRequest)(nil),        // 9: fleetgrpc.PortForwardRequest
-	(*PortForwardReply)(nil),          // 10: fleetgrpc.PortForwardReply
-	nil,                               // 11: fleetgrpc.ExecStart.EnvEntry
-	nil,                               // 12: fleetgrpc.ResolveExecCommandReply.EnvEntry
-	(*timestamppb.Timestamp)(nil),     // 13: google.protobuf.Timestamp
+	(*ExecIn)(nil),                        // 0: fleetgrpc.ExecIn
+	(*ExecStart)(nil),                     // 1: fleetgrpc.ExecStart
+	(*ExecResize)(nil),                    // 2: fleetgrpc.ExecResize
+	(*ExecOut)(nil),                       // 3: fleetgrpc.ExecOut
+	(*ExecExit)(nil),                      // 4: fleetgrpc.ExecExit
+	(*ResolveExecCommandRequest)(nil),     // 5: fleetgrpc.ResolveExecCommandRequest
+	(*ResolveExecCommandReply)(nil),       // 6: fleetgrpc.ResolveExecCommandReply
+	(*LogsRequest)(nil),                   // 7: fleetgrpc.LogsRequest
+	(*LogLine)(nil),                       // 8: fleetgrpc.LogLine
+	(*PortForwardRequest)(nil),            // 9: fleetgrpc.PortForwardRequest
+	(*PortForwardReply)(nil),              // 10: fleetgrpc.PortForwardReply
+	(*ResolveLogsCommandRequest)(nil),     // 11: fleetgrpc.ResolveLogsCommandRequest
+	(*ResolveLogsCommandReply)(nil),       // 12: fleetgrpc.ResolveLogsCommandReply
+	(*GetCoderTemplateParamsRequest)(nil), // 13: fleetgrpc.GetCoderTemplateParamsRequest
+	(*CoderRichParameter)(nil),            // 14: fleetgrpc.CoderRichParameter
+	(*GetCoderTemplateParamsReply)(nil),   // 15: fleetgrpc.GetCoderTemplateParamsReply
+	(*GetBrowserConfigRequest)(nil),       // 16: fleetgrpc.GetBrowserConfigRequest
+	(*GetBrowserConfigReply)(nil),         // 17: fleetgrpc.GetBrowserConfigReply
+	(*PrepareBrowserRequest)(nil),         // 18: fleetgrpc.PrepareBrowserRequest
+	(*PrepareBrowserReply)(nil),           // 19: fleetgrpc.PrepareBrowserReply
+	nil,                                   // 20: fleetgrpc.ExecStart.EnvEntry
+	nil,                                   // 21: fleetgrpc.ResolveExecCommandReply.EnvEntry
+	(*timestamppb.Timestamp)(nil),         // 22: google.protobuf.Timestamp
 }
 var file_exec_proto_depIdxs = []int32{
 	1,  // 0: fleetgrpc.ExecIn.start:type_name -> fleetgrpc.ExecStart
 	2,  // 1: fleetgrpc.ExecIn.resize:type_name -> fleetgrpc.ExecResize
-	11, // 2: fleetgrpc.ExecStart.env:type_name -> fleetgrpc.ExecStart.EnvEntry
+	20, // 2: fleetgrpc.ExecStart.env:type_name -> fleetgrpc.ExecStart.EnvEntry
 	4,  // 3: fleetgrpc.ExecOut.exit:type_name -> fleetgrpc.ExecExit
-	12, // 4: fleetgrpc.ResolveExecCommandReply.env:type_name -> fleetgrpc.ResolveExecCommandReply.EnvEntry
-	13, // 5: fleetgrpc.LogLine.at:type_name -> google.protobuf.Timestamp
-	6,  // [6:6] is the sub-list for method output_type
-	6,  // [6:6] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	21, // 4: fleetgrpc.ResolveExecCommandReply.env:type_name -> fleetgrpc.ResolveExecCommandReply.EnvEntry
+	22, // 5: fleetgrpc.LogLine.at:type_name -> google.protobuf.Timestamp
+	14, // 6: fleetgrpc.GetCoderTemplateParamsReply.parameters:type_name -> fleetgrpc.CoderRichParameter
+	7,  // [7:7] is the sub-list for method output_type
+	7,  // [7:7] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_exec_proto_init() }
@@ -884,13 +1438,14 @@ func file_exec_proto_init() {
 	}
 	file_exec_proto_msgTypes[4].OneofWrappers = []any{}
 	file_exec_proto_msgTypes[7].OneofWrappers = []any{}
+	file_exec_proto_msgTypes[18].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_exec_proto_rawDesc), len(file_exec_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
