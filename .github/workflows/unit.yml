@@ -22,5 +22,16 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # Enforces the client/server import boundary (depguard, .golangci.yml).
+      # Pinned to the version validated locally; the install script matches the
+      # v2 config schema. Currently scoped to internal/fleetclient; the
+      # internal/cli and internal/tui globs join as their backend access moves
+      # onto the Exec/Logs/PortForward RPCs (Phase 5).
+      - name: golangci-lint (import boundary)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.11.4
+          "$(go env GOPATH)/bin/golangci-lint" run ./...
+
       - name: go test
         run: go test ./...

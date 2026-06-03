@@ -17,9 +17,14 @@ linters:
         client:
           files:
             - "**/internal/fleetclient/**"
-            # Added in Phase 5 once fully migrated:
-            # - "**/internal/cli/**"
-            # - "**/internal/tui/**"
+            # Phase 5 extends this to internal/cli/** and internal/tui/** once
+            # their backend access moves onto the Exec/Logs/PortForward RPCs and
+            # (TUI) the render path is off the legacy state structs. The CLI glob
+            # also needs `- "!**/internal/cli/server.go"` (the fleetd entrypoint
+            # may import internal/server) and `- "!**/*_test.go"` (fixtures seed
+            # state directly). NOTE: the internal/backend deny prefix-matches
+            # internal/backendutil too, so clients can't construct backends
+            # either — they must use the RPCs.
           deny:
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/state
               desc: client code must go through the fleet server (fleetgrpc), not internal/state
