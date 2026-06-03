@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bufio"
 	"context"
+	"io"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
@@ -9,6 +11,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // exec.go implements the interactive-backend RPCs that let clients reach a
@@ -51,6 +54,54 @@ func (s *service) ResolveExecCommand(_ context.Context, req *fleetgrpc.ResolveEx
 		Argv: cmd.Args,
 		Env:  envSliceToMap(cmd.Env),
 	}, nil
+}
+
+// Logs streams an instance's container logs to the client. The server runs the
+// backend's logs command and forwards stdout+stderr line-by-line as LogLine.
+// follow keeps the stream open until the client cancels; the process is killed
+// when the client goes away.
+func (s *service) Logs(req *fleetgrpc.LogsRequest, stream fleetgrpc.FleetService_LogsServer) error {
+	inst, err := resolveServerInstance(req.GetFleet(), req.GetInstance())
+	if err != nil {
+		return err
+	}
+	cmd := backendutil.NewForInstance(inst, false).LogsCommand(inst.ContainerID, req.GetFollow())
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+	if err := cmd.Start(); err != nil {
+		return status.Errorf(codes.Internal, "start logs: %v", err)
+	}
+
+	ctx := stream.Context()
+	finished := make(chan struct{})
+	// Kill the logs process if the client disconnects (e.g. cancels a --follow).
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = cmd.Process.Kill()
+		case <-finished:
+		}
+	}()
+	// Reap the process and close the pipe so the scanner below sees EOF.
+	go func() {
+		_ = cmd.Wait()
+		_ = pw.Close()
+		close(finished)
+	}()
+
+	sc := bufio.NewScanner(pr)
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for sc.Scan() {
+		if err := stream.Send(&fleetgrpc.LogLine{Line: sc.Text(), At: timestamppb.Now()}); err != nil {
+			_ = cmd.Process.Kill()
+			return err
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return nil
 }
 
 // envSliceToMap converts a "K=V" env slice to the proto map. A nil slice (the

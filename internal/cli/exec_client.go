@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 
@@ -51,6 +52,36 @@ func runResolvedExec(ctx context.Context, fleetName, instanceName string, argv [
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return c.Run()
+}
+
+// logsStdout is the sink for streamLogs, overridable in tests.
+var logsStdout io.Writer = os.Stdout
+
+// streamLogs opens the server's Logs stream and prints each line.
+func streamLogs(ctx context.Context, fleetName, instanceName string, follow bool) error {
+	conn, err := fleetclient.Dial(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	stream, err := conn.Service().Logs(ctx, &fleetgrpc.LogsRequest{
+		Fleet:    fleetName,
+		Instance: instanceName,
+		Follow:   follow,
+	})
+	if err != nil {
+		return err
+	}
+	for {
+		line, err := stream.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(logsStdout, line.GetLine())
+	}
 }
 
 // mergeExecEnv layers the server-supplied env over the client's own. Nil/empty

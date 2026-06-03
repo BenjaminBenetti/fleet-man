@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/spf13/cobra"
 )
 
@@ -13,13 +13,12 @@ func newLogsCmd() *cobra.Command {
 		Short: "Show logs for an instance",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _, _, instance, err := resolveInstance(args[0], "")
+			target, err := fleet.Resolve(args[0], "")
 			if err != nil {
 				return err
 			}
-
-			instanceBackend := backendutil.New(instance.Backend, false)
-			return instanceBackend.Logs(instance.ContainerID, follow)
+			// The server runs the backend logs command and streams it back.
+			return streamLogs(cmd.Context(), target.Fleet, target.Instance, follow)
 		},
 	}
 
