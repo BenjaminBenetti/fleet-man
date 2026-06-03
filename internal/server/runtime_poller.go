@@ -65,6 +65,13 @@ func (h *hub) applyRuntime(ups []runtimeUpdate) {
 	h.broadcastRuntime(changed)
 }
 
+// probeLiveStatus reports one instance's backend live status. It is a package
+// var so the persisted-status reconciliation in liveStatusPass is unit-testable
+// without a real backend.
+var probeLiveStatus = func(inst *fleet.Instance) backend.LiveStatus {
+	return backendutil.NewForInstance(inst, false).Status(inst.ContainerID)
+}
+
 // liveStatusPoller probes each instance's backend live status (running/stopped/
 // missing/unknown) for the runtime sidecar AND reconciles the persisted
 // running<->stopped status when a conclusive probe diverges from it (e.g. a
@@ -107,8 +114,7 @@ func liveStatusPass(h *hub) {
 			if inst.Status != fleet.StatusRunning && inst.Status != fleet.StatusStopped {
 				continue
 			}
-			b := backendutil.NewForInstance(inst, false)
-			live := b.Status(inst.ContainerID)
+			live := probeLiveStatus(inst)
 			ls := liveStatusToProto(live)
 			ups = append(ups, runtimeUpdate{fleetName, inst.Name, func(r *fleetgrpc.InstanceRuntime) {
 				r.LiveStatus = ls
