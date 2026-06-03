@@ -17,6 +17,11 @@ var (
 		BorderForeground(lipgloss.Color("63")).
 		Padding(0, 1)
 
+	// Scrollbar (settings page viewport)
+	scrollbarThumbStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
+	scrollbarTrackStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	scrollbarArrowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
+
 	// Fleet header
 	fleetExpandedStyle = lipgloss.NewStyle().
 				Bold(true).

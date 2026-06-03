@@ -11,6 +11,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/doctor"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ===========================================
@@ -62,9 +63,18 @@ type settingsPage struct {
 	// itemRowYs maps item ID -> terminal Y where the item's first line
 	// is rendered. itemHeights maps item ID -> number of lines the item
 	// occupies. Both are populated during View() so mouse clicks can be
-	// mapped back to the item under the cursor.
+	// mapped back to the item under the cursor. Only currently-visible
+	// (un-scrolled-off) items get an itemRowYs entry.
 	itemRowYs   map[int]int
 	itemHeights map[int]int
+
+	// scrollOffset is the index of the first content line shown in the
+	// scrolling viewport. The mouse wheel adjusts it directly; View()
+	// clamps it each render. lastViewCursor is the cursor position at the
+	// previous render, used to chase the selection only when it actually
+	// moves (so a wheel scroll isn't yanked back to the cursor).
+	scrollOffset   int
+	lastViewCursor int
 }
 
 // newSettingsPage creates a new settings page with default state.
@@ -72,9 +82,10 @@ func newSettingsPage() *settingsPage {
 	input := textinput.New()
 	input.CharLimit = 256
 	return &settingsPage{
-		input:       input,
-		itemRowYs:   make(map[int]int),
-		itemHeights: make(map[int]int),
+		input:          input,
+		itemRowYs:      make(map[int]int),
+		itemHeights:    make(map[int]int),
+		lastViewCursor: -1,
 	}
 }
 
@@ -662,22 +673,31 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		box = box.Width(m.width - 2)
 	}
 
-	ruleWidth := 28
+	// Reserve the last scrollbarCols columns of the box content for the
+	// scrollbar (a gap column + the bar itself). Rows are wrapped to the
+	// remaining contentWidth so a long value can't slip under the bar.
+	const scrollbarCols = 2
+	innerWidth := 28
 	if m.width > 0 {
-		ruleWidth = max(1, m.width-2-box.GetHorizontalFrameSize())
+		innerWidth = max(1, m.width-2-box.GetHorizontalFrameSize())
 	}
+	contentWidth := max(1, innerWidth-scrollbarCols)
 
 	var listContent strings.Builder
 	currentItem := settingsPage.settingsCursorItem(m)
 
-	// Record where each settings row lands on screen so mouse clicks
-	// can resolve back to a cursor index. The box adds a top border
-	// before its content, hence +1.
+	// itemLineStart maps item ID -> the line index (within listContent)
+	// where the item begins. After the scroll offset is known this is
+	// converted to an on-screen Y for the visible items so mouse clicks
+	// resolve back to a cursor index.
 	clear(settingsPage.itemRowYs)
 	clear(settingsPage.itemHeights)
-	firstContentY := strings.Count(b.String(), "\n") + 1
+	itemLineStart := make(map[int]int)
 	recordRow := func(item int, content string) {
-		settingsPage.itemRowYs[item] = firstContentY + strings.Count(listContent.String(), "\n")
+		// Constrain the row to the content width; a long value wraps onto
+		// continuation lines rather than overflowing the fixed-width box.
+		content = lipgloss.NewStyle().Width(contentWidth).Render(content)
+		itemLineStart[item] = strings.Count(listContent.String(), "\n")
 		settingsPage.itemHeights[item] = 1 + strings.Count(content, "\n")
 		listContent.WriteString(content)
 	}
@@ -689,7 +709,7 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 
 		listContent.WriteString(fleetExpandedStyle.Render(section.Title))
 		listContent.WriteString("\n")
-		listContent.WriteString(dimStyle.Render(strings.Repeat("─", ruleWidth)))
+		listContent.WriteString(dimStyle.Render(strings.Repeat("─", contentWidth)))
 		listContent.WriteString("\n\n")
 
 		switch section.Title {
@@ -850,35 +870,132 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		listContent.WriteString("\n\n")
 	}
 
-	b.WriteString(box.Render(strings.TrimRight(listContent.String(), "\n")))
-	b.WriteString("\n")
-
+	// Assemble everything that renders below the box first, so its height
+	// can be subtracted when sizing the scrolling viewport.
+	var tail strings.Builder
 	if settingsPage.showKeybindings {
-		b.WriteString("\n")
-		b.WriteString(keybindingsDialogBox.Render(settingsPage.renderKeybindingsDialog()))
-		b.WriteString("\n")
+		tail.WriteString("\n")
+		tail.WriteString(keybindingsDialogBox.Render(settingsPage.renderKeybindingsDialog()))
+		tail.WriteString("\n")
 	}
-
 	if currentItem >= settingsItemCoderParamBase && currentItem < settingsItemToolStatusBase {
-		b.WriteString(dimStyle.Render("  Variables: ${GIT_URL} = fleet repo URL, ${GIT_BRANCH} = git branch (blank = default), ${INSTANCE_NAME} = workspace name"))
-		b.WriteString("\n")
+		tail.WriteString(dimStyle.Render("  Variables: ${GIT_URL} = fleet repo URL, ${GIT_BRANCH} = git branch (blank = default), ${INSTANCE_NAME} = workspace name"))
+		tail.WriteString("\n")
 	}
-
 	if m.message != "" {
-		b.WriteString(messageStyle.Render(m.message))
-		b.WriteString("\n")
+		tail.WriteString(messageStyle.Render(m.message))
+		tail.WriteString("\n")
 	}
-
 	if settingsPage.editing {
-		b.WriteString(renderHelp(m.width, []string{
+		tail.WriteString(renderHelp(m.width, []string{
 			"enter: save", "esc: cancel",
 		}))
 	} else {
-		b.WriteString(renderHelp(m.width, []string{
+		tail.WriteString(renderHelp(m.width, []string{
 			"j/k: navigate", "left/right: cycle", "enter: edit", "esc: back", "ctrl+c: quit",
 		}))
 	}
 
+	// The box adds a top border before its content, hence +1.
+	firstContentY := strings.Count(b.String(), "\n") + 1
+	lines := strings.Split(strings.TrimRight(listContent.String(), "\n"), "\n")
+	totalLines := len(lines)
+
+	// Size the viewport to whatever vertical space is left after the head,
+	// the box borders, and the tail. With no known height (e.g. tests) the
+	// whole list is shown.
+	viewHeight := totalLines
+	if m.height > 0 {
+		head := strings.Count(b.String(), "\n")
+		avail := m.height - head - 2 - lipgloss.Height(tail.String())
+		viewHeight = max(3, avail)
+	}
+	if viewHeight > totalLines {
+		viewHeight = totalLines
+	}
+
+	// Chase the selection only when it moved (keyboard nav or a click); a
+	// plain re-render after a wheel scroll leaves the viewport where it is.
+	offset := settingsPage.scrollOffset
+	if settingsPage.cursor != settingsPage.lastViewCursor {
+		if start, ok := itemLineStart[currentItem]; ok {
+			end := start + settingsPage.itemHeights[currentItem] - 1
+			if start < offset {
+				offset = start
+			}
+			if end > offset+viewHeight-1 {
+				offset = end - viewHeight + 1
+			}
+		}
+	}
+	settingsPage.lastViewCursor = settingsPage.cursor
+	offset = max(0, min(offset, totalLines-viewHeight))
+	settingsPage.scrollOffset = offset
+
+	// Map the visible items to on-screen Y for mouse hit-testing.
+	visibleEnd := offset + viewHeight
+	for item, start := range itemLineStart {
+		if start >= offset && start < visibleEnd {
+			settingsPage.itemRowYs[item] = firstContentY + (start - offset)
+		}
+	}
+
+	visible := strings.Join(lines[offset:visibleEnd], "\n")
+	if totalLines > viewHeight {
+		// Pad the content to a stable width and lay the scrollbar down its
+		// right edge.
+		content := lipgloss.NewStyle().Width(contentWidth).Render(visible)
+		bar := renderScrollbar(viewHeight, totalLines, offset)
+		visible = lipgloss.JoinHorizontal(lipgloss.Top, content, " ", bar)
+	}
+
+	b.WriteString(box.Render(visible))
+	b.WriteString("\n")
+	b.WriteString(tail.String())
+
+	return b.String()
+}
+
+// renderScrollbar draws a vertical scrollbar viewHeight rows tall for a list
+// of total lines currently scrolled to offset. The first and last rows are
+// up/down arrows; the thumb between them is sized and positioned to reflect
+// the visible fraction.
+func renderScrollbar(viewHeight, total, offset int) string {
+	track := viewHeight
+	arrow := false
+	if viewHeight >= 3 {
+		track = viewHeight - 2 // reserve a row for each arrow
+		arrow = true
+	}
+
+	thumb := min(max(1, track*viewHeight/total), track)
+	thumbPos := 0
+	if maxOffset := total - viewHeight; maxOffset > 0 {
+		thumbPos = offset * (track - thumb) / maxOffset
+	}
+
+	var b strings.Builder
+	for i := range viewHeight {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		switch {
+		case arrow && i == 0:
+			b.WriteString(scrollbarArrowStyle.Render("▲"))
+		case arrow && i == viewHeight-1:
+			b.WriteString(scrollbarArrowStyle.Render("▼"))
+		default:
+			row := i
+			if arrow {
+				row = i - 1
+			}
+			if row >= thumbPos && row < thumbPos+thumb {
+				b.WriteString(scrollbarThumbStyle.Render("█"))
+			} else {
+				b.WriteString(scrollbarTrackStyle.Render("░"))
+			}
+		}
+	}
 	return b.String()
 }
 

@@ -334,6 +334,7 @@ func (m model) Init() tea.Cmd {
 		m.agentSpinner.Tick,
 		layoutTickCmd(),
 		checkUpdateCmd(),
+		updateCheckPollCmd(),
 		checkReleaseNotesCmd(m.lastSeenVersion()),
 		forceRepaintCmd(),
 		// Live container status AND tmux session discovery are the server's job
@@ -368,9 +369,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// (on the fleet list and settings pages) and is then translated to
 	// a key event so existing keyboard handlers do the rest: clicks on
 	// instance rows fire Space (expand/collapse sessions), every other
-	// click fires Enter. Other mouse events (motion, wheel, release,
-	// other buttons) are dropped: page handlers only know about KeyMsgs.
+	// click fires Enter. The wheel scrolls the settings viewport. Other
+	// mouse events (motion, release, other buttons) are dropped: page
+	// handlers only know about KeyMsgs.
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+		// Mouse wheel scrolls the settings viewport directly.
+		if mouseMsg.Button == tea.MouseButtonWheelUp || mouseMsg.Button == tea.MouseButtonWheelDown {
+			if page, ok := m.currentPage.(*settingsPage); ok && !page.editing {
+				const wheelStep = 3
+				if mouseMsg.Button == tea.MouseButtonWheelUp {
+					page.scrollOffset -= wheelStep
+				} else {
+					page.scrollOffset += wheelStep
+				}
+				if page.scrollOffset < 0 {
+					page.scrollOffset = 0
+				}
+			}
+			return m, nil
+		}
 		if mouseMsg.Action == tea.MouseActionPress && mouseMsg.Button == tea.MouseButtonLeft {
 			synthesizedKey := tea.KeyMsg{Type: tea.KeyEnter}
 			hit := false
@@ -502,6 +519,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateAvailable = msg.latestVersion
 		}
 		return m, spinCmd
+
+	case updateCheckTickMsg:
+		// Re-check for updates and re-arm the periodic tick so users who
+		// leave fleet open get notified about releases published mid-session.
+		return m, tea.Batch(spinCmd, checkUpdateCmd(), updateCheckPollCmd())
 
 	case releaseNotesMsg:
 		// Only surface the overlay when there's an actual body to show;
