@@ -66,10 +66,11 @@ func (h *hub) applyRuntime(ups []runtimeUpdate) {
 }
 
 // liveStatusPoller probes each instance's backend live status (running/stopped/
-// missing/unknown) for the runtime sidecar ONLY — it never writes state.json
-// (the TUI's live_status.go still owns the persisted running<->stopped flip in
-// P2). Runs on the 60s tick and immediately on the false->true gate edge so a
-// freshly-subscribed TUI gets a live_status hint without waiting a minute.
+// missing/unknown) for the runtime sidecar AND reconciles the persisted
+// running<->stopped status when a conclusive probe diverges from it (e.g. a
+// container the user stopped/started outside fleet). Runs on the 60s tick and
+// immediately on the false->true gate edge so a freshly-subscribed TUI gets a
+// live_status hint without waiting a minute.
 func liveStatusPoller(ctx context.Context, h *hub) {
 	ticker := time.NewTicker(liveStatusInterval)
 	defer ticker.Stop()
@@ -95,6 +96,9 @@ func liveStatusPass(h *hub) {
 		return
 	}
 	var ups []runtimeUpdate
+	// reconcile["fleet/instance"] = desired persisted status, for the conclusive
+	// running<->stopped divergences detected this pass.
+	reconcile := make(map[string]fleet.InstanceStatus)
 	for fleetName, f := range st.Fleets {
 		for _, inst := range f.Instances {
 			if inst.ContainerID == "" {
@@ -104,10 +108,53 @@ func liveStatusPass(h *hub) {
 				continue
 			}
 			b := backendutil.NewForInstance(inst, false)
-			ls := liveStatusToProto(b.Status(inst.ContainerID))
+			live := b.Status(inst.ContainerID)
+			ls := liveStatusToProto(live)
 			ups = append(ups, runtimeUpdate{fleetName, inst.Name, func(r *fleetgrpc.InstanceRuntime) {
 				r.LiveStatus = ls
 			}})
+			// Only conclusive running/stopped probes reconcile the persisted
+			// status; unknown/missing leave it as-is (matches the legacy TUI rule).
+			switch live {
+			case backend.LiveStatusRunning:
+				if inst.Status != fleet.StatusRunning {
+					reconcile[fleetName+"/"+inst.Name] = fleet.StatusRunning
+				}
+			case backend.LiveStatusStopped:
+				if inst.Status != fleet.StatusStopped {
+					reconcile[fleetName+"/"+inst.Name] = fleet.StatusStopped
+				}
+			}
+		}
+	}
+	if len(reconcile) > 0 {
+		_ = state.Update(func(st *state.State) error {
+			for _, f := range st.Fleets {
+				for _, inst := range f.Instances {
+					desired, ok := reconcile[f.Name+"/"+inst.Name]
+					if !ok {
+						continue
+					}
+					// Re-check under the lock: skip if a job transitioned it out of
+					// running/stopped since the probe.
+					if inst.Status != fleet.StatusRunning && inst.Status != fleet.StatusStopped {
+						continue
+					}
+					if inst.Status != desired {
+						inst.Status = desired
+						if desired == fleet.StatusRunning {
+							inst.Error = ""
+						}
+					}
+				}
+			}
+			return nil
+		})
+		// Broadcast the reconciled snapshot promptly (the 1s state poller would
+		// also catch it, but Watch subscribers shouldn't wait a tick).
+		if reloaded, lerr := state.Load(); lerr == nil {
+			snapshot := stateToProto(reloaded)
+			h.post(func(h *hub) { h.setState(snapshot) })
 		}
 	}
 	if len(ups) > 0 {
