@@ -14,12 +14,13 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	codespacesbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/codespaces"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -30,8 +31,8 @@ import (
 // ===========================================
 
 type model struct {
-	st     *state.State
-	config *state.Config
+	st     *configutil.State
+	config *configutil.Config
 	err    error
 
 	// pstate is the persisted snapshot pushed by the server's Watch stream;
@@ -156,7 +157,7 @@ func newModel() model {
 	}
 	// On first-ever startup, check for required binaries and show results
 	// if anything is missing. "First startup" = the ~/.fleet/ dir doesn't exist.
-	if _, err := os.Stat(state.FleetDir()); os.IsNotExist(err) {
+	if _, err := os.Stat(fleetpaths.Dir()); os.IsNotExist(err) {
 		result := deps.Check()
 		if deps.HasMissing(result) {
 			m.currentPage = newDepsCheckPage(result)
@@ -501,7 +502,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case stateChangedMsg:
 		// Read-path flip: the server's persisted snapshot drives the render
-		// model. Convert to the legacy *state.State the views still read from,
+		// model. Convert to the legacy *configutil.State the views still read from,
 		// keep control listeners in step, and rebuild the row list. A
 		// StateChanged only fires on an actual change (the hub diffs it), so this
 		// is not per-tick churn.
@@ -570,7 +571,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinCmd
 		}
 		if m.config == nil {
-			m.config = state.DefaultConfig()
+			m.config = configutil.DefaultConfig()
 		}
 		// Merge parameters: keep existing user-set values, add new ones with defaults
 		existing := make(map[string]string)
@@ -579,10 +580,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				existing[param.Name] = param.Value
 			}
 		}
-		var newParams []state.CoderParameter
+		var newParams []configutil.CoderParameter
 		for _, fetchedParam := range msg.params {
 			existingValue := existing[fetchedParam.Name]
-			newParams = append(newParams, state.CoderParameter{
+			newParams = append(newParams, configutil.CoderParameter{
 				Name:         fetchedParam.Name,
 				Value:        existingValue,
 				DefaultValue: fetchedParam.DefaultValue,
@@ -822,7 +823,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						switch instance.Status {
 						case fleet.StatusRunning:
 							delete(m.creating, key)
-							warnPath := state.WarnPath(fleetName, instName)
+							warnPath := fleetpaths.WarnPath(fleetName, instName)
 							if warnData, err := os.ReadFile(warnPath); err == nil {
 								_ = os.Remove(warnPath)
 								firstLine := strings.SplitN(strings.TrimSpace(string(warnData)), "\n", 2)[0]

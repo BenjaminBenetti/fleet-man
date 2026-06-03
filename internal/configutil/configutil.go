@@ -17,3 +17,35 @@ import "github.com/BenjaminBenetti/fleet-man/internal/state"
 func LoadConfig() (*state.Config, error) {
 	return state.LoadConfig()
 }
+
+// DefaultConfig returns a config with defaults applied.
+func DefaultConfig() *Config { return state.DefaultConfig() }
+
+// The persisted/config model TYPES are re-exported as aliases so client code
+// (internal/tui) can name them without importing internal/state directly — the
+// depguard boundary forbids that import, but the boundary's intent is to stop
+// clients from ACCESSING state/backends (Load/Save/exec), which they no longer
+// do (they go through the server's RPCs). The struct shapes are just DTOs the
+// client fills from the server's snapshot. (A later cleanup can render straight
+// from the fleetgrpc proto types and retire these.)
+type (
+	Config             = state.Config
+	GeneralSettings    = state.GeneralSettings
+	AgentSettings      = state.AgentSettings
+	DotfilesSettings   = state.DotfilesSettings
+	CoderSettings      = state.CoderSettings
+	CoderParameter     = state.CoderParameter
+	CodespacesSettings = state.CodespacesSettings
+	BrowserSettings    = state.BrowserSettings
+	AgentTool          = state.AgentTool
+	State              = state.State
+	GroupLayout        = state.GroupLayout
+)
+
+// AgentTool values, re-exported alongside the type alias.
+const (
+	AgentToolCodex   = state.AgentToolCodex
+	AgentToolClaude  = state.AgentToolClaude
+	AgentToolGemini  = state.AgentToolGemini
+	AgentToolCopilot = state.AgentToolCopilot
+)

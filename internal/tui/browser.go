@@ -15,10 +15,10 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/landingpage"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -591,9 +591,9 @@ const browserDataDirName = ".browser"
 // lets two browsers run concurrently for the same fleet.
 func browserDataDir(fleetName, instanceName string, multiplePerFleet bool) string {
 	if multiplePerFleet {
-		return filepath.Join(state.WorkspacesDir(), fleetName, instanceName, browserDataDirName)
+		return filepath.Join(fleetpaths.WorkspacesDir(), fleetName, instanceName, browserDataDirName)
 	}
-	return filepath.Join(state.WorkspacesDir(), fleetName, browserDataDirName)
+	return filepath.Join(fleetpaths.WorkspacesDir(), fleetName, browserDataDirName)
 }
 
 // existingBrowserPID returns the PID of a Chrome process that currently

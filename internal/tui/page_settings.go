@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agent"
+	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/doctor"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -106,29 +106,29 @@ func (settingsPage *settingsPage) View(m *model) string {
 // settingsSection defines a titled group of settings rows that can be
 // conditionally shown based on tool availability.
 type settingsSection struct {
-	Title string                           // section header text
-	Tool  string                           // required tool binary; "" = always visible
-	Items func(config *state.Config) []int // returns navigable item IDs for this section
+	Title string                                // section header text
+	Tool  string                                // required tool binary; "" = always visible
+	Items func(config *configutil.Config) []int // returns navigable item IDs for this section
 }
 
 // settingsSections lists all settings sections in display order.
 var settingsSections = []settingsSection{
 	{
 		Title: "General",
-		Items: func(_ *state.Config) []int {
+		Items: func(_ *configutil.Config) []int {
 			return []int{settingsItemTmuxVimKeys, settingsItemShowHelpText, settingsItemUpdate}
 		},
 	},
 	{
 		Title: "Dotfiles",
-		Items: func(_ *state.Config) []int {
+		Items: func(_ *configutil.Config) []int {
 			return []int{settingsItemDotfilesRepo, settingsItemDotfilesScript, settingsItemDotfilesAutoInstall, settingsItemDotfilesSetup}
 		},
 	},
 	{
 		Title: "Coder",
 		Tool:  "coder",
-		Items: func(config *state.Config) []int {
+		Items: func(config *configutil.Config) []int {
 			items := []int{settingsItemCoderTemplate, settingsItemCoderPreset}
 			if config != nil {
 				for i := range config.CoderSettings.Parameters {
@@ -141,13 +141,13 @@ var settingsSections = []settingsSection{
 	{
 		Title: "Codespaces",
 		Tool:  "gh",
-		Items: func(_ *state.Config) []int {
+		Items: func(_ *configutil.Config) []int {
 			return []int{settingsItemCodespacesMachine}
 		},
 	},
 	{
 		Title: "Browser",
-		Items: func(config *state.Config) []int {
+		Items: func(config *configutil.Config) []int {
 			items := []int{settingsItemBrowserMultiple}
 			// Auto-switch only applies in shared-profile mode — in
 			// per-instance mode there is no "switch" to suppress.
@@ -159,7 +159,7 @@ var settingsSections = []settingsSection{
 	},
 	{
 		Title: "Tool Status",
-		Items: func(_ *state.Config) []int {
+		Items: func(_ *configutil.Config) []int {
 			items := make([]int, toolStatusCount)
 			for i := range items {
 				items[i] = settingsItemToolStatusBase + i
@@ -169,7 +169,7 @@ var settingsSections = []settingsSection{
 	},
 	{
 		Title: "Help",
-		Items: func(_ *state.Config) []int {
+		Items: func(_ *configutil.Config) []int {
 			return []int{settingsItemDoctor, settingsItemKeybindings}
 		},
 	},
@@ -230,7 +230,7 @@ func (settingsPage *settingsPage) settingsItemCount(m *model) int {
 // toggleTmuxVimKeys toggles the tmux vim keys setting.
 func (settingsPage *settingsPage) toggleTmuxVimKeys(m *model) {
 	if m.config == nil {
-		m.config = state.DefaultConfig()
+		m.config = configutil.DefaultConfig()
 	}
 	current := m.config.GeneralSettings.TmuxVimKeysEnabled()
 	next := !current
@@ -250,7 +250,7 @@ func (settingsPage *settingsPage) toggleTmuxVimKeys(m *model) {
 // toggleShowHelpText flips the show-help-text preference and saves.
 func (settingsPage *settingsPage) toggleShowHelpText(m *model) {
 	if m.config == nil {
-		m.config = state.DefaultConfig()
+		m.config = configutil.DefaultConfig()
 	}
 	current := m.config.GeneralSettings.ShowHelpTextEnabled()
 	next := !current
@@ -273,7 +273,7 @@ func (settingsPage *settingsPage) toggleShowHelpText(m *model) {
 // silently.
 func (settingsPage *settingsPage) toggleBrowserAutoSwitch(m *model) {
 	if m.config == nil {
-		m.config = state.DefaultConfig()
+		m.config = configutil.DefaultConfig()
 	}
 	current := m.config.BrowserSettings.AutoSwitchEnabled()
 	next := !current
@@ -296,7 +296,7 @@ func (settingsPage *settingsPage) toggleBrowserAutoSwitch(m *model) {
 // single profile under <fleet>/.browser.
 func (settingsPage *settingsPage) toggleBrowserMultiple(m *model) {
 	if m.config == nil {
-		m.config = state.DefaultConfig()
+		m.config = configutil.DefaultConfig()
 	}
 	current := m.config.BrowserSettings.MultipleBrowsersPerFleetEnabled()
 	next := !current
@@ -316,7 +316,7 @@ func (settingsPage *settingsPage) toggleBrowserMultiple(m *model) {
 // toggleAutoInstall toggles the dotfiles auto-install setting.
 func (settingsPage *settingsPage) toggleAutoInstall(m *model) {
 	if m.config == nil {
-		m.config = state.DefaultConfig()
+		m.config = configutil.DefaultConfig()
 	}
 	m.config.DotfilesSettings.AutoInstall = !m.config.DotfilesSettings.AutoInstall
 	if err := setConfigRemote(m.config); err != nil {
@@ -538,7 +538,7 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 // enterSettingsEditing activates text editing for the current setting.
 func (settingsPage *settingsPage) enterSettingsEditing(m *model) tea.Cmd {
 	if m.config == nil {
-		m.config = state.DefaultConfig()
+		m.config = configutil.DefaultConfig()
 	}
 
 	item := settingsPage.settingsCursorItem(m)
@@ -586,7 +586,7 @@ func (settingsPage *settingsPage) updateSettingsEditing(m *model, msg tea.Msg) t
 		case tea.KeyEnter:
 			value := strings.TrimSpace(settingsPage.input.Value())
 			if m.config == nil {
-				m.config = state.DefaultConfig()
+				m.config = configutil.DefaultConfig()
 			}
 
 			item := settingsPage.settingsCursorItem(m)
@@ -654,7 +654,7 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 
 	config := m.config
 	if config == nil {
-		config = state.DefaultConfig()
+		config = configutil.DefaultConfig()
 	}
 
 	box := listBox

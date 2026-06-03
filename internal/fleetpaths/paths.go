@@ -43,3 +43,16 @@ func SpawnLockPath() string {
 func VersionFilePath() string {
 	return filepath.Join(Dir(), "server.version")
 }
+
+// WorkspacesDir is the base directory for instance workspace clones. Mirrors
+// internal/state.WorkspacesDir; lives here too so client code (which must not
+// import internal/state) can derive workspace paths.
+func WorkspacesDir() string {
+	return filepath.Join(Dir(), "workspaces")
+}
+
+// WarnPath is the host-side warning file for a single instance (the TUI banners
+// its first line after creation). Mirrors internal/state.WarnPath.
+func WarnPath(fleetName, instanceName string) string {
+	return filepath.Join(Dir(), "logs", fleetName+"-"+instanceName+".warn")
+}

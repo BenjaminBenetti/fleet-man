@@ -11,8 +11,8 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	coderbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/coder"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -200,7 +200,7 @@ func repoFromRemote(remoteURL string) string {
 // Output is always followed by a "press Enter" prompt so the user
 // has time to read before the TUI redraws.
 func logsCommand(instanceBackend backend.Backend, fleetName string, instance *fleet.Instance) *exec.Cmd {
-	logPath := filepath.Join(state.FleetDir(), "logs", fleetName+"-"+instance.Name+".log")
+	logPath := filepath.Join(fleetpaths.Dir(), "logs", fleetName+"-"+instance.Name+".log")
 	creationLog := fmt.Sprintf("cat %q 2>/dev/null", logPath)
 
 	var inner string

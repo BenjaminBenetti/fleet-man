@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc"
 )
 
@@ -233,7 +233,7 @@ var setInstanceMetadataRemote = func(fleetName, instance string, displayName, co
 }
 
 // setGroupLayoutRemote persists one tmux pane layout.
-var setGroupLayoutRemote = func(gl state.GroupLayout) error {
+var setGroupLayoutRemote = func(gl configutil.GroupLayout) error {
 	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
 		_, err := svc.SetGroupLayout(ctx, &fleetgrpc.SetGroupLayoutRequest{Layout: &fleetgrpc.GroupLayout{
 			GroupId:      gl.GroupID,
@@ -267,7 +267,7 @@ var setLastSeenVersionRemote = func(version string) error {
 
 // setConfigRemote replaces the whole config (the settings page sends the full
 // edited Config).
-var setConfigRemote = func(c *state.Config) error {
+var setConfigRemote = func(c *configutil.Config) error {
 	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
 		_, err := svc.SetConfig(ctx, &fleetgrpc.SetConfigRequest{Config: configToProto(c)})
 		return err
@@ -296,7 +296,7 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 	return ps
 }
 
-func configToProto(c *state.Config) *fleetgrpc.Config {
+func configToProto(c *configutil.Config) *fleetgrpc.Config {
 	if c == nil {
 		return &fleetgrpc.Config{}
 	}
@@ -388,7 +388,7 @@ func strp(s string) *string { return &s }
 
 // --- Read path: server snapshot -> legacy render model -----------------------
 //
-// The TUI still renders from the legacy *state.State / *state.Config, but it now
+// The TUI still renders from the legacy *configutil.State / *configutil.Config, but it now
 // SOURCES them from the server (GetState/GetConfig + the Watch stream) rather
 // than reading state.json/config.json off disk. These proto->legacy converters
 // are the inverse of the ones above + internal/server/convert.go; they retire
@@ -396,7 +396,7 @@ func strp(s string) *string { return &s }
 
 // fetchStateLegacy pulls the authoritative persisted state from the server and
 // converts it to the legacy model. Package var so tests can stub it.
-var fetchStateLegacy = func() (*state.State, error) {
+var fetchStateLegacy = func() (*configutil.State, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), mutationTimeout)
 	defer cancel()
 	conn, err := dialMutation(ctx)
@@ -411,7 +411,7 @@ var fetchStateLegacy = func() (*state.State, error) {
 }
 
 // fetchConfigLegacy pulls the config from the server and converts it.
-var fetchConfigLegacy = func() (*state.Config, error) {
+var fetchConfigLegacy = func() (*configutil.Config, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), mutationTimeout)
 	defer cancel()
 	conn, err := dialMutation(ctx)
@@ -425,10 +425,10 @@ var fetchConfigLegacy = func() (*state.Config, error) {
 	return protoConfigToLegacy(reply.GetConfig()), nil
 }
 
-func protoStateToLegacy(ps *fleetgrpc.State) *state.State {
-	st := &state.State{
+func protoStateToLegacy(ps *fleetgrpc.State) *configutil.State {
+	st := &configutil.State{
 		Fleets:       make(map[string]*fleet.Fleet),
-		GroupLayouts: make(map[string]state.GroupLayout),
+		GroupLayouts: make(map[string]configutil.GroupLayout),
 	}
 	if ps == nil {
 		return st
@@ -437,7 +437,7 @@ func protoStateToLegacy(ps *fleetgrpc.State) *state.State {
 		st.Fleets[name] = protoFleetToLegacy(pf)
 	}
 	for key, pgl := range ps.GetGroupLayouts() {
-		st.GroupLayouts[key] = state.GroupLayout{
+		st.GroupLayouts[key] = configutil.GroupLayout{
 			GroupID:      pgl.GetGroupId(),
 			InstanceName: pgl.GetInstanceName(),
 			Sessions:     pgl.GetSessions(),
@@ -531,8 +531,8 @@ func backendProtoToString(b fleetgrpc.BackendType) string {
 	}
 }
 
-func protoConfigToLegacy(pc *fleetgrpc.Config) *state.Config {
-	c := state.DefaultConfig()
+func protoConfigToLegacy(pc *fleetgrpc.Config) *configutil.Config {
+	c := configutil.DefaultConfig()
 	if pc == nil {
 		return c
 	}
@@ -547,7 +547,7 @@ func protoConfigToLegacy(pc *fleetgrpc.Config) *state.Config {
 		}
 	}
 	if a := pc.GetAgent(); a != nil && a.GetToolSelection() != "" {
-		c.AgentSettings.ToolSelection = state.AgentTool(a.GetToolSelection())
+		c.AgentSettings.ToolSelection = configutil.AgentTool(a.GetToolSelection())
 	}
 	if d := pc.GetDotfiles(); d != nil {
 		c.DotfilesSettings.AutoInstall = d.GetAutoInstall()
@@ -558,7 +558,7 @@ func protoConfigToLegacy(pc *fleetgrpc.Config) *state.Config {
 		c.CoderSettings.Template = cd.GetTemplate()
 		c.CoderSettings.Preset = cd.GetPreset()
 		for _, p := range cd.GetParameters() {
-			c.CoderSettings.Parameters = append(c.CoderSettings.Parameters, state.CoderParameter{
+			c.CoderSettings.Parameters = append(c.CoderSettings.Parameters, configutil.CoderParameter{
 				Name:         p.GetName(),
 				Value:        p.GetValue(),
 				DefaultValue: p.GetDefaultValue(),

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -380,7 +380,7 @@ func derivePersistableSnapshot(activeGroup ActiveGroup, panes []paneByPosition, 
 // in pane index order to preserve the session-to-position mapping. When
 // st is non-nil the layout is also mirrored into state.json so it
 // survives a fleet restart.
-func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
+func (fleetPage *fleetPage) saveCurrentGroupLayout(st *configutil.State) {
 	if fleetPage.activeGroup.Empty() {
 		return
 	}
@@ -410,12 +410,12 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 		return
 	}
 	if st.GroupLayouts == nil {
-		st.GroupLayouts = make(map[string]state.GroupLayout)
+		st.GroupLayouts = make(map[string]configutil.GroupLayout)
 	}
 	// Use composite key (instanceName/groupID) for state persistence
 	// to ensure isolation between instances with the same group ID.
 	stateKey := computeGroupKey(groupSnapshot.InstanceName, groupSnapshot.GroupID)
-	layout := state.GroupLayout{
+	layout := configutil.GroupLayout{
 		GroupID:      groupSnapshot.GroupID,
 		InstanceName: groupSnapshot.InstanceName,
 		Sessions:     groupSnapshot.Sessions,
