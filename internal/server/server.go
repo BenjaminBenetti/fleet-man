@@ -88,7 +88,7 @@ func Serve(ctx context.Context) error {
 				Instance: instanceName,
 			})
 		})
-	})
+	}, svc.hub.hasSubscribers)
 	go controlReg.run(hubCtx)
 
 	grpcServer := grpc.NewServer()

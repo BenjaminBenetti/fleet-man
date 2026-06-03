@@ -54,7 +54,7 @@ func TestControlSyncRoundTrip(t *testing.T) {
 		case events <- openEvent{f, i, url}:
 		default:
 		}
-	})
+	}, nil)
 	defer r.shutdown()
 
 	r.syncRunning(fabricatedRunningState(fleetName, instanceName))
@@ -115,7 +115,7 @@ func TestControlShutdownFullBuffer(t *testing.T) {
 		case events <- openEvent{f, i, url}:
 		default:
 		}
-	})
+	}, nil)
 
 	r.syncRunning(fabricatedRunningState(fleetName, instanceName))
 	socketPath := state.ControlSocketPath(fleetName, instanceName)
@@ -158,7 +158,7 @@ func TestControlSyncIdempotent(t *testing.T) {
 	)
 	key := fleetName + "/" + instanceName
 
-	r := newControlRegistry(func(string, string, string) {})
+	r := newControlRegistry(func(string, string, string) {}, nil)
 	defer r.shutdown()
 
 	st := fabricatedRunningState(fleetName, instanceName)
@@ -173,6 +173,41 @@ func TestControlSyncIdempotent(t *testing.T) {
 	}
 	if len(r.servers) != 1 {
 		t.Fatalf("server count = %d, want 1", len(r.servers))
+	}
+}
+
+// TestCtrlGate verifies the subscriber gate: with no browser-capable client
+// attached, a tick tears every control socket down so an in-container `fleet
+// launch` reports "not connected to host fleet" rather than succeeding into the
+// void (integration test 510). (Short name keeps the temp-HOME socket path under
+// the unix sun_path limit.)
+func TestCtrlGate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	const (
+		fleetName    = "alpha"
+		instanceName = "i1"
+	)
+	key := fleetName + "/" + instanceName
+
+	attached := true
+	r := newControlRegistry(func(string, string, string) {}, func() bool { return attached })
+	defer r.shutdown()
+
+	r.syncRunning(fabricatedRunningState(fleetName, instanceName))
+	socketPath := state.ControlSocketPath(fleetName, instanceName)
+	if !waitForSocket(t, socketPath, 2*time.Second) {
+		t.Fatalf("control socket %q never appeared", socketPath)
+	}
+
+	// Client detaches → the next tick must drop every listener + socket file.
+	attached = false
+	r.tick()
+	if _, ok := r.servers[key]; ok {
+		t.Fatalf("control server for %q still present after the gate closed", key)
+	}
+	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
+		t.Fatalf("control socket %q still exists after the gate closed", socketPath)
 	}
 }
 

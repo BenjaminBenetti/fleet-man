@@ -38,25 +38,34 @@ type controlRegistry struct {
 	// serveConn, whose goroutine Close waits on).
 	onOpen func(fleetName, instanceName, url string)
 
+	// gated reports whether to keep control sockets open at all: only while a
+	// browser-capable client (a TUI / Watch subscriber) is attached. With no
+	// consumer, the sockets are torn down so an in-container `fleet launch`
+	// reports "not connected to host fleet" instead of succeeding into the void.
+	gated func() bool
+
 	mu      sync.Mutex
 	servers map[string]*control.Server // key: "<fleet>/<instance>"
 }
 
 // newControlRegistry creates an empty registry. onOpen is invoked per received
-// browser.open envelope.
-func newControlRegistry(onOpen func(fleetName, instanceName, url string)) *controlRegistry {
+// browser.open envelope; gated decides whether any sockets should be open (nil
+// means always on).
+func newControlRegistry(onOpen func(fleetName, instanceName, url string), gated func() bool) *controlRegistry {
 	return &controlRegistry{
 		onOpen:  onOpen,
+		gated:   gated,
 		servers: make(map[string]*control.Server),
 	}
 }
 
 // run reconciles listeners on a ticker until ctx is cancelled, then tears them
-// all down. Listener start is best-effort (a Listen failure leaves that instance
+// all down. While no client is attached (gated()==false) it keeps every socket
+// closed. Listener start is best-effort (a Listen failure leaves that instance
 // without host-side control until the next sync).
 func (r *controlRegistry) run(ctx context.Context) {
 	defer r.shutdown()
-	r.syncOnce()
+	r.tick()
 	ticker := time.NewTicker(controlSyncInterval)
 	defer ticker.Stop()
 	for {
@@ -64,9 +73,19 @@ func (r *controlRegistry) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			r.syncOnce()
+			r.tick()
 		}
 	}
+}
+
+// tick syncs listeners against the running instances when a client is attached,
+// or tears them all down when none is.
+func (r *controlRegistry) tick() {
+	if r.gated != nil && !r.gated() {
+		r.shutdown()
+		return
+	}
+	r.syncOnce()
 }
 
 // syncOnce loads state and reconciles the listener set. A load error keeps the

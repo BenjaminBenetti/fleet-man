@@ -32,6 +32,12 @@ type hub struct {
 	// runtimeWanted is true while at least one subscriber asked for runtime;
 	// the runtime pollers read it lock-free to gate their expensive work.
 	runtimeWanted atomic.Bool
+	// hasSubs is true while at least one Watch subscriber (a TUI) is attached.
+	// The control-socket listeners are gated on it (control.go): with no client
+	// able to act on a browser.open, the server keeps no control sockets open, so
+	// an in-container `fleet launch` correctly reports "not connected to host
+	// fleet" rather than silently succeeding into the void. Read lock-free.
+	hasSubs atomic.Bool
 	// runtimeEdge fires (non-blocking) when runtimeWanted flips false->true, so
 	// the live-status poller can do an immediate pass instead of waiting a tick.
 	runtimeEdge chan struct{}
@@ -111,6 +117,15 @@ func (h *hub) recomputeRuntimeWanted() {
 		default:
 		}
 	}
+	// Any attached subscriber is a TUI (CLI uses unary GetState, not Watch), so
+	// this tracks "a browser-capable client is connected" for the control gate.
+	h.hasSubs.Store(len(h.subs) > 0)
+}
+
+// hasSubscribers reports whether any Watch subscriber (a TUI) is currently
+// attached. Read lock-free; gates the control-socket listeners.
+func (h *hub) hasSubscribers() bool {
+	return h.hasSubs.Load()
 }
 
 // setState replaces the persisted snapshot and broadcasts it if it actually
