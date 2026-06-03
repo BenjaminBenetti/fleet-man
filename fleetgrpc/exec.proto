@@ -90,11 +90,13 @@ message LogLine {
 
 // PortForward returns a host-side command descriptor for forwarding a port; the
 // client runs it. A descriptor RPC (not a data-plane proxy) to match the existing
-// backend.PortForwardCommand idiom.
+// backend.PortForwardCommand idiom, which tunnels local_port on the host to
+// remote_port inside the container.
 message PortForwardRequest {
   string fleet = 1;
   string instance = 2;
-  int32 port = 3;
+  int32 local_port = 3;
+  int32 remote_port = 4;
 }
 
 message PortForwardReply {

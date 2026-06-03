@@ -648,12 +648,14 @@ func (x *LogLine) GetAt() *timestamppb.Timestamp {
 
 // PortForward returns a host-side command descriptor for forwarding a port; the
 // client runs it. A descriptor RPC (not a data-plane proxy) to match the existing
-// backend.PortForwardCommand idiom.
+// backend.PortForwardCommand idiom, which tunnels local_port on the host to
+// remote_port inside the container.
 type PortForwardRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Fleet         string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
 	Instance      string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
-	Port          int32                  `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
+	LocalPort     int32                  `protobuf:"varint,3,opt,name=local_port,json=localPort,proto3" json:"local_port,omitempty"`
+	RemotePort    int32                  `protobuf:"varint,4,opt,name=remote_port,json=remotePort,proto3" json:"remote_port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -702,9 +704,16 @@ func (x *PortForwardRequest) GetInstance() string {
 	return ""
 }
 
-func (x *PortForwardRequest) GetPort() int32 {
+func (x *PortForwardRequest) GetLocalPort() int32 {
 	if x != nil {
-		return x.Port
+		return x.LocalPort
+	}
+	return 0
+}
+
+func (x *PortForwardRequest) GetRemotePort() int32 {
+	if x != nil {
+		return x.RemotePort
 	}
 	return 0
 }
@@ -804,11 +813,14 @@ const file_exec_proto_rawDesc = "" +
 	"\x05_tail\"I\n" +
 	"\aLogLine\x12\x12\n" +
 	"\x04line\x18\x01 \x01(\tR\x04line\x12*\n" +
-	"\x02at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x02at\"Z\n" +
+	"\x02at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x02at\"\x86\x01\n" +
 	"\x12PortForwardRequest\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
-	"\binstance\x18\x02 \x01(\tR\binstance\x12\x12\n" +
-	"\x04port\x18\x03 \x01(\x05R\x04port\"&\n" +
+	"\binstance\x18\x02 \x01(\tR\binstance\x12\x1d\n" +
+	"\n" +
+	"local_port\x18\x03 \x01(\x05R\tlocalPort\x12\x1f\n" +
+	"\vremote_port\x18\x04 \x01(\x05R\n" +
+	"remotePort\"&\n" +
 	"\x10PortForwardReply\x12\x12\n" +
 	"\x04argv\x18\x01 \x03(\tR\x04argvB:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
 

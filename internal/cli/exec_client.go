@@ -54,6 +54,26 @@ func runResolvedExec(ctx context.Context, fleetName, instanceName string, argv [
 	return c.Run()
 }
 
+// portForwardArgv resolves the host-side port-forward command (local->remote)
+// from the server; the caller runs it.
+func portForwardArgv(ctx context.Context, fleetName, instanceName string, localPort, remotePort int) ([]string, error) {
+	conn, err := fleetclient.Dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	reply, err := conn.Service().PortForward(ctx, &fleetgrpc.PortForwardRequest{
+		Fleet:      fleetName,
+		Instance:   instanceName,
+		LocalPort:  int32(localPort),
+		RemotePort: int32(remotePort),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return reply.GetArgv(), nil
+}
+
 // logsStdout is the sink for streamLogs, overridable in tests.
 var logsStdout io.Writer = os.Stdout
 

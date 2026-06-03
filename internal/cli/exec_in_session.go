@@ -25,7 +25,7 @@ Examples:
   fleet exec-in-session my-fleet/agent-1 task-session "npm test"`,
 		Args: cobra.MinimumNArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			target, _, _, instance, err := resolveInstance(args[0], "")
+			target, instance, err := resolveInstance(args[0], "")
 			if err != nil {
 				return err
 			}

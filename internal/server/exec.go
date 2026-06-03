@@ -104,6 +104,17 @@ func (s *service) Logs(req *fleetgrpc.LogsRequest, stream fleetgrpc.FleetService
 	return nil
 }
 
+// PortForward returns the argv of the host-side command that forwards
+// local_port -> remote_port for the instance (the client runs it).
+func (s *service) PortForward(_ context.Context, req *fleetgrpc.PortForwardRequest) (*fleetgrpc.PortForwardReply, error) {
+	inst, err := resolveServerInstance(req.GetFleet(), req.GetInstance())
+	if err != nil {
+		return nil, err
+	}
+	cmd := backendutil.NewForInstance(inst, false).PortForwardCommand(inst.ContainerID, int(req.GetLocalPort()), int(req.GetRemotePort()))
+	return &fleetgrpc.PortForwardReply{Argv: cmd.Args}, nil
+}
+
 // envSliceToMap converts a "K=V" env slice to the proto map. A nil slice (the
 // common case — the command inherits the process environment) yields nil, so a
 // local client that runs the argv likewise inherits its own environment.

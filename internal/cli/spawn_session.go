@@ -22,7 +22,7 @@ Examples:
   fleet spawn-session my-fleet/agent-1 task-session`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			target, _, _, instance, err := resolveInstance(args[0], "")
+			target, instance, err := resolveInstance(args[0], "")
 			if err != nil {
 				return err
 			}
