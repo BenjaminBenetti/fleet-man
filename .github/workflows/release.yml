@@ -3,7 +3,12 @@ name: Release
 on:
   push:
     tags:
+      # Stable release, e.g. v1.2.3 — published and marked "Latest".
       - "v[0-9]+.[0-9]+.[0-9]+"
+      # Beta release, e.g. v1.2.3-beta — published the same way but NOT marked
+      # "Latest" (so `install.sh`, which hits /releases/latest, keeps the stable
+      # line), and the public landing page is not redeployed to the beta version.
+      - "v[0-9]+.[0-9]+.[0-9]+-beta"
 
 permissions:
   contents: write
@@ -39,13 +44,26 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # A -beta tag publishes a normal release but marks it as a pre-release
+          # and NOT "Latest", so the default install (install.sh -> /releases/latest,
+          # which excludes pre-releases) keeps getting the stable line. A stable
+          # tag is unchanged: gh's default "Latest" handling applies.
+          extra_args=""
+          case "${GITHUB_REF_NAME}" in
+            *-beta) extra_args="--prerelease --latest=false" ;;
+          esac
+
           gh release create "${GITHUB_REF_NAME}" \
             --title "Fleet ${GITHUB_REF_NAME}" \
             --generate-notes \
+            ${extra_args} \
             dist/*
 
   pages:
     needs: release
+    # Beta releases must not become the public-facing version: skip the landing
+    # page redeploy so the site keeps advertising the latest stable.
+    if: ${{ !endsWith(github.ref_name, '-beta') }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
