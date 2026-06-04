@@ -2,6 +2,19 @@
 
 npm install -g @devcontainers/cli
 
+# Build-time toolchain for the Makefile targets:
+#   - protoc-gen-go / protoc-gen-go-grpc + buf  -> `make proto` / `make proto-check`
+#   - golangci-lint                             -> `make lint` (import boundary)
+# Each install is guarded so this stays cheap on container restarts. Versions
+# match the pins in the Makefile and .github/workflows/unit.yml so local and CI
+# agree. buf installs with GOTOOLCHAIN=auto so a buf release that needs a newer
+# Go than this image still builds.
+GOBIN="$(go env GOPATH)/bin"
+command -v protoc-gen-go      >/dev/null 2>&1 || go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+command -v protoc-gen-go-grpc >/dev/null 2>&1 || go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+command -v buf                >/dev/null 2>&1 || GOTOOLCHAIN=auto go install github.com/bufbuild/buf/cmd/buf@latest
+command -v golangci-lint      >/dev/null 2>&1 || curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "${GOBIN}" v2.11.4
+
 # Docker-in-Docker fix: The container may default to iptables-legacy, but the host
 # kernel might only support nf_tables. Detect the mismatch and switch if needed.
 #

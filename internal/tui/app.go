@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/admiralskill"
 	"github.com/BenjaminBenetti/fleet-man/internal/codespaceerr"
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
@@ -876,6 +877,13 @@ func sortedFleetNames(fleets map[string]*fleet.Fleet) []string {
 
 // Run starts the TUI.
 func Run() error {
+	// Install (or refresh) the Fleet Admiral skill into ~/.claude/skills so the
+	// user's coding agent can orchestrate fleet. Best-effort and hash-gated:
+	// it's a cheap no-op once installed. The error is deliberately ignored — a
+	// skill-install hiccup must never block startup, and client code does not
+	// write the server-owned event log.
+	_ = admiralskill.EnsureInstalled()
+
 	m := newModel()
 
 	// Start clipboard buffer polling when running inside tmux.
