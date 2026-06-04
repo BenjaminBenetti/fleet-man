@@ -3,12 +3,12 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/spf13/cobra"
@@ -56,7 +56,7 @@ func newPortForwardAddCmd() *cobra.Command {
 		Long:  "Forward one or more local ports to ports inside an instance.\nRuns until interrupted with Ctrl+C.",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			target, _, _, instance, err := resolveInstance(args[0], "")
+			target, instance, err := resolveInstance(args[0], "")
 			if err != nil {
 				return err
 			}
@@ -64,16 +64,31 @@ func newPortForwardAddCmd() *cobra.Command {
 				return fmt.Errorf("instance %s/%s is not running (status: %s)", target.Fleet, target.Instance, instance.Status)
 			}
 
-			instanceBackend := backendutil.New(instance.Backend, false)
 			manager := portforward.NewManager()
 			key := target.Fleet + "/" + target.Instance
+			// The server owns backend access: it returns the forward command argv
+			// (the client runs it). We don't probe ResolveHostname (always use the
+			// forward command), so the direct-connect fast path for coder/codespaces
+			// is skipped — the command path still forwards correctly.
+			noDirectHost := func(string) (string, bool) { return "", false }
 
 			for _, mapping := range args[1:] {
 				local, remote, err := parsePortMappingArg(mapping)
 				if err != nil {
+					manager.Shutdown()
 					return err
 				}
-				if err := manager.Add(key, local, remote, instanceBackend.PortForwardCommand, instance.ContainerID, instanceBackend.ResolveHostname); err != nil {
+				argv, err := portForwardArgv(cmd.Context(), target.Fleet, target.Instance, local, remote)
+				if err != nil {
+					manager.Shutdown()
+					return err
+				}
+				if len(argv) == 0 {
+					manager.Shutdown()
+					return fmt.Errorf("server returned no port-forward command for %s/%s", target.Fleet, target.Instance)
+				}
+				cmdFn := func(_ string, _, _ int) *exec.Cmd { return exec.Command(argv[0], argv[1:]...) }
+				if err := manager.Add(key, local, remote, cmdFn, instance.ContainerID, noDirectHost); err != nil {
 					manager.Shutdown()
 					return err
 				}

@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package fleetgrpc;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
+
+// =====================================================================
+// LIVE / EPHEMERAL RUNTIME MODEL
+// =====================================================================
+//
+// This file models the data the TUI renders per instance that is NOT persisted
+// to state.json — it is computed by the SERVER from live backend probes at the
+// cadences the old TUI used to poll itself (live container status ~60s; stats +
+// agent activity ~3s; tmux sessions ~1s for expanded rows). Under the
+// client/server split the thin TUI can no longer touch backends directly, so
+// the server owns these probes and pushes the results via GetState (snapshot)
+// and Watch's RuntimeChanged event (deltas).
+//
+// It is a SIDECAR to the persisted Instance (domain.proto), keyed by the same
+// (fleet, instance), rather than fields on Instance — because Instance is
+// persisted verbatim and this data is ephemeral + high-frequency.
+
+// LiveContainerStatus mirrors internal/backend.LiveStatus — the raw result of a
+// live backend probe (docker inspect / coder / codespaces). Distinct from the
+// persisted InstanceStatus: the server reconciles only RUNNING<->STOPPED into
+// the persisted status, but the raw probe (incl. MISSING/UNKNOWN) is richer and
+// surfaced here so the TUI can show "missing"/"probe failed" without forcing a
+// persisted status flip.
+enum LiveContainerStatus {
+  LIVE_CONTAINER_STATUS_UNSPECIFIED = 0;  // not yet probed
+  LIVE_CONTAINER_STATUS_RUNNING = 1;
+  LIVE_CONTAINER_STATUS_STOPPED = 2;
+  LIVE_CONTAINER_STATUS_MISSING = 3;      // deleted out-of-band
+  LIVE_CONTAINER_STATUS_UNKNOWN = 4;      // transient probe failure (preserve persisted)
+}
+
+// AgentTool identifies which coding agent the server detected running inside the
+// instance (backend.AgentToolProbe / internal/agentdetect). NONE means a probe
+// ran and found no agent; UNSPECIFIED means not-yet-probed.
+enum AgentTool {
+  AGENT_TOOL_UNSPECIFIED = 0;
+  AGENT_TOOL_NONE = 1;
+  AGENT_TOOL_CLAUDE = 2;
+  AGENT_TOOL_CODEX = 3;
+  AGENT_TOOL_GEMINI = 4;
+  AGENT_TOOL_COPILOT = 5;
+}
+
+// AgentActivity mirrors internal/agentdetect.State — the three-state activity
+// indicator (the throbber) for a detected agent.
+enum AgentActivity {
+  AGENT_ACTIVITY_UNSPECIFIED = 0;  // not yet determined
+  AGENT_ACTIVITY_NOT_RUNNING = 1;  // no agent process detected
+  AGENT_ACTIVITY_WORKING = 2;      // actively producing output
+  AGENT_ACTIVITY_WAITING = 3;      // alive but idle / awaiting input
+}
+
+// ContainerStats mirrors internal/backend.ContainerStats (the dim mcpu/MB in the
+// instance row).
+message ContainerStats {
+  double cpu_millicores = 1;
+  double memory_mb = 2;
+}
+
+// TmuxSession mirrors a discovered tmux session (tui/sessions.go tmuxSession:
+// `tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}"`).
+// Live per-instance discovery, only populated for running/expanded instances.
+message TmuxSession {
+  string name = 1;
+  int32 windows = 2;
+  bool attached = 3;
+}
+
+// ForwardedPort describes an active port-forward the server set up for the
+// instance (the ⇄ local:remote labels). Named ForwardedPort, NOT PortForward,
+// to avoid colliding with the PortForward RPC family in exec.proto.
+message ForwardedPort {
+  int32 local_port = 1;
+  int32 remote_port = 2;
+  optional string label = 3;
+}
+
+// InstanceRuntime is the live view of ONE instance: everything the TUI renders
+// that isn't persisted. Keyed by (fleet, instance) so the client joins it to the
+// persisted Instance of the same name. Any sub-field may be zero/absent until
+// its first probe completes (e.g. stats unset before the first Stats() call).
+message InstanceRuntime {
+  string fleet = 1;
+  string instance = 2;
+
+  // Raw backend probe, vs the reconciled persisted Instance.status.
+  LiveContainerStatus live_status = 3;
+
+  // "Is a coding agent running, and what is it doing": which tool + its
+  // activity. Together these drive the per-row throbber + agent label.
+  AgentTool agent_tool = 4;
+  AgentActivity agent_activity = 5;
+
+  // CPU/memory. Absent (nil message) until first probed.
+  ContainerStats stats = 6;
+
+  // Live tmux sessions inside the container (populated for running/expanded
+  // instances). The persisted pane layout is GroupLayout in domain.proto;
+  // this is the live session list.
+  repeated TmuxSession sessions = 7;
+
+  // Active port-forwards (the ⇄ labels).
+  repeated ForwardedPort forwarded_ports = 8;
+
+  // Actual git branch resolved from the workspace (resolveWorkspaceBranch) —
+  // live because the user may switch branches inside the instance; distinct
+  // from the persisted REQUESTED Instance.branch. Optional: absent when there
+  // is no local workspace (cloud backends) or it hasn't been resolved yet.
+  optional string current_branch = 9;
+
+  // When the server last refreshed this snapshot.
+  google.protobuf.Timestamp updated_at = 10;
+
+  reserved 11 to 20;
+}

@@ -2,25 +2,20 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
-	"github.com/BenjaminBenetti/fleet-man/internal/backend"
-	codespacesbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/codespaces"
-	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
-	"github.com/BenjaminBenetti/fleet-man/internal/control"
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/codespaceerr"
+	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -31,9 +26,16 @@ import (
 // ===========================================
 
 type model struct {
-	st     *state.State
-	config *state.Config
+	st     *configutil.State
+	config *configutil.Config
 	err    error
+
+	// pstate is the persisted snapshot pushed by the server's Watch stream;
+	// runtime is the live sidecar (agent activity/stats/sessions/...) keyed by
+	// "fleet/instance". The fleet-list rows render agent activity + CPU/mem
+	// stats from runtime — the server owns those pollers now.
+	pstate  *fleetgrpc.State
+	runtime map[string]*fleetgrpc.InstanceRuntime
 
 	// Page routing
 	currentPage Page
@@ -42,19 +44,6 @@ type model struct {
 	spinner      spinner.Model
 	agentSpinner spinner.Model   // pulse throbber rendered next to running agents' instance names
 	creating     map[string]bool // "fleet/instance" keys currently being created
-
-	backends map[fleet.BackendType]backend.Backend // one per backend type, lazily created
-	stats    map[string]*backend.ContainerStats    // containerID → stats
-	activity *ActivityTracker                      // agent working/waiting/idle detection
-
-	// reprovisioning dedupes in-flight Claude hook reinstall attempts
-	// per containerID. The capture loop fires every few seconds, and a
-	// reinstall on a slow backend can outlast one tick — without
-	// dedup we'd stack concurrent provisions for the same container.
-	// LoadOrStore inserts a sentinel; the goroutine clears it on exit.
-	// Pointer-typed because the bubbletea model is passed by value,
-	// which would otherwise copy the sync.Map's internal lock.
-	reprovisioning *sync.Map // containerID → struct{}
 
 	coderPresets        []string // available preset names (in-memory, from API)
 	coderFetchingParams bool     // true while fetching template parameters
@@ -75,12 +64,6 @@ type model struct {
 	// must switch the browser over rather than forward the URL into the
 	// wrong-proxied existing process. Populated on every successful browser open.
 	activeBrowser map[string]string
-
-	// control owns one control-socket listener per running instance and
-	// funnels received envelopes (e.g. an in-instance `fleet launch` TUI's
-	// "browser.open" requests) into a channel the Update loop drains. Its
-	// listener set is kept in step with the running instances by reload().
-	control *controlRegistry
 
 	// Per-instance session state: discovery, expansion, last-active
 	// session. All three are owned by the SessionStore so every read
@@ -130,18 +113,14 @@ func newModel() model {
 	agentSpinnerModel.Style = agentWorkingStyle
 
 	m := model{
-		creating:       make(map[string]bool),
-		backends:       make(map[fleet.BackendType]backend.Backend),
-		stats:          make(map[string]*backend.ContainerStats),
-		activity:       NewActivityTracker(),
-		reprovisioning: &sync.Map{},
-		portForwards:   portforward.NewManager(),
-		activeBrowser:  make(map[string]string),
-		control:        newControlRegistry(),
-		sessionStore:   NewSessionStore(),
-		spinner:        spinnerModel,
-		agentSpinner:   agentSpinnerModel,
-		inHostTmux:     os.Getenv("TMUX") != "",
+		creating:      make(map[string]bool),
+		runtime:       make(map[string]*fleetgrpc.InstanceRuntime),
+		portForwards:  portforward.NewManager(),
+		activeBrowser: make(map[string]string),
+		sessionStore:  NewSessionStore(),
+		spinner:       spinnerModel,
+		agentSpinner:  agentSpinnerModel,
+		inHostTmux:    os.Getenv("TMUX") != "",
 	}
 
 	// Create the fleet page (persistent — background handlers reference it)
@@ -163,7 +142,7 @@ func newModel() model {
 	}
 	// On first-ever startup, check for required binaries and show results
 	// if anything is missing. "First startup" = the ~/.fleet/ dir doesn't exist.
-	if _, err := os.Stat(state.FleetDir()); os.IsNotExist(err) {
+	if _, err := os.Stat(fleetpaths.Dir()); os.IsNotExist(err) {
 		result := deps.Check()
 		if deps.HasMissing(result) {
 			m.currentPage = newDepsCheckPage(result)
@@ -200,13 +179,17 @@ func newModel() model {
 // expanded instances. It does NOT rebuild rows — the active page
 // is responsible for that.
 func (m *model) reload() {
-	st, err := state.Load()
+	// Persisted state + config come from the server now (GetState/GetConfig), not
+	// from reading state.json/config.json directly — the TUI no longer touches
+	// the files the server owns. The Watch stream keeps m.st fresh between
+	// reloads (see the stateChangedMsg handler).
+	st, err := fetchStateLegacy()
 	if err != nil {
 		m.err = err
 		return
 	}
 
-	config, err := state.LoadConfig()
+	config, err := fetchConfigLegacy()
 	if err != nil {
 		m.err = err
 		return
@@ -216,12 +199,9 @@ func (m *model) reload() {
 	m.config = config
 	m.err = nil
 
-	// Keep the control-socket listeners in step with the running set: start
-	// listeners for newly-running instances, drop them for stopped/gone ones.
-	// Idempotent, so funnelling every state refresh through here is cheap.
-	if m.control != nil {
-		m.control.syncRunning(st)
-	}
+	// (The control-socket listeners live on the server now — it owns every
+	// running instance's socket and pushes browser.open as a Watch BrowserOpen
+	// event; see watchBrowserOpenMsg.)
 
 	// Auto-collapse expanded instances that are no longer running
 	for _, ref := range m.sessionStore.ExpandedRefs() {
@@ -277,7 +257,6 @@ func (m *model) pruneSavedGroupsForInstance(ref InstanceRef) {
 	if len(live) == 0 {
 		return
 	}
-	changed := false
 	for key, savedLayout := range m.fleetPage.savedGroups {
 		if savedLayout.InstanceName != ref.Instance {
 			continue
@@ -285,11 +264,8 @@ func (m *model) pruneSavedGroupsForInstance(ref InstanceRef) {
 		if !live[savedLayout.GroupID] {
 			delete(m.fleetPage.savedGroups, key)
 			delete(m.st.GroupLayouts, key)
-			changed = true
+			_ = deleteGroupLayoutRemote(savedLayout.InstanceName, savedLayout.GroupID)
 		}
-	}
-	if changed {
-		_ = state.Save(m.st)
 	}
 }
 
@@ -306,35 +282,18 @@ func (m *model) pruneOrphanedSavedGroups() {
 			live[instance.Name] = true
 		}
 	}
-	changed := false
 	for key, savedLayout := range m.fleetPage.savedGroups {
 		if !live[savedLayout.InstanceName] {
 			delete(m.fleetPage.savedGroups, key)
 			delete(m.st.GroupLayouts, key)
-			changed = true
+			_ = deleteGroupLayoutRemote(savedLayout.InstanceName, savedLayout.GroupID)
 		}
 	}
-	if changed {
-		_ = state.Save(m.st)
-	}
 }
 
 // ===========================================
-// Backend Helpers
+// Helpers
 // ===========================================
-
-// backendFor returns the cached backend for the given type, creating it lazily.
-func (m *model) backendFor(backendType fleet.BackendType) backend.Backend {
-	if backendType == "" {
-		backendType = fleet.BackendDevcontainer
-	}
-	if instanceBackend, ok := m.backends[backendType]; ok {
-		return instanceBackend
-	}
-	instanceBackend := backendutil.New(backendType, false)
-	m.backends[backendType] = instanceBackend
-	return instanceBackend
-}
 
 // firstFleetRepo returns the "owner/repo" string for the first fleet's
 // remote URL, or "" if no fleets exist. Used to query GitHub APIs.
@@ -350,196 +309,18 @@ func (m *model) firstFleetRepo() string {
 	return ""
 }
 
-// instanceBackend returns the backend for the given instance's backend type.
-// For codespaces, it registers the real codespace name so that exec calls
-// use the correct name instead of deriving from the workspace path.
-func (m *model) instanceBackend(instance *fleet.Instance) backend.Backend {
-	backendImpl := m.backendFor(instance.Backend)
-	if instance.Backend == fleet.BackendCodespaces && instance.ContainerID != "" {
-		if csb, ok := backendImpl.(*codespacesbackend.CodespacesBackend); ok {
-			csb.RegisterName(instance.WorkspaceDir, instance.ContainerID)
-		}
-	}
-	return backendImpl
-}
-
-// containersByBackend groups running instances by their backend type.
-func (m *model) containersByBackend() map[fleet.BackendType]*backendGroup {
-	groups := make(map[fleet.BackendType]*backendGroup)
-	for _, f := range m.st.Fleets {
-		for _, instance := range f.Instances {
-			if instance.ContainerID == "" || instance.Status != fleet.StatusRunning {
-				continue
-			}
-			backendType := instance.Backend
-			if backendType == "" {
-				backendType = fleet.BackendDevcontainer
-			}
-			g, ok := groups[backendType]
-			if !ok {
-				g = &backendGroup{}
-				groups[backendType] = g
-			}
-			g.ids = append(g.ids, instance.ContainerID)
-		}
-	}
-	return groups
-}
-
-// reinstallMissingClaudeHooks scans the latest captures for the
-// "Claude hook script missing" signal and re-runs the provisioner
-// for any container that reports it. Fire-and-forget: each reinstall
-// runs in its own goroutine so the TUI message loop is never
-// blocked, and a sync.Map dedupes concurrent attempts per container
-// in case provisioning takes longer than the capture interval.
-//
-// Failures are non-fatal — the next capture tick will trigger
-// another attempt — but each failure is surfaced as a per-instance
-// warning so the user can spot a persistently-failing reinstall.
-func (m *model) reinstallMissingClaudeHooks(screens map[string]backend.AllSessions) {
-	if m.st == nil {
-		return
-	}
-	for cid, capture := range screens {
-		if !capture.OK || !capture.ClaudeHookMissing {
-			continue
-		}
-		fleetName, instance := m.findInstanceByContainerID(cid)
-		if instance == nil {
-			continue
-		}
-		if _, busy := m.reprovisioning.LoadOrStore(cid, struct{}{}); busy {
-			continue
-		}
-		backendImpl := m.instanceBackend(instance)
-		wsDir := instance.WorkspaceDir
-		instanceName := instance.Name
-		go func(id string) {
-			defer m.reprovisioning.Delete(id)
-			executor := agentdetect.NewBackendExecutor(backendImpl, wsDir)
-			if err := agentdetect.NewClaudeProvisioner(executor).Provision(); err != nil {
-				state.WriteWarn(fleetName, instanceName, fmt.Sprintf("claude hook reinstall failed: %v", err))
-			}
-		}(cid)
-	}
-}
-
-// findInstanceByContainerID returns the fleet name and instance for
-// the given containerID, or "", nil when no running instance matches.
-func (m *model) findInstanceByContainerID(containerID string) (string, *fleet.Instance) {
-	if m.st == nil {
-		return "", nil
-	}
-	for fleetName, f := range m.st.Fleets {
-		for _, instance := range f.Instances {
-			if instance.ContainerID == containerID {
-				return fleetName, instance
-			}
-		}
-	}
-	return "", nil
-}
-
 // ===========================================
 // Session Discovery
 // ===========================================
 
-// sessionDiscoveryLoop returns a tea.Cmd that lists tmux sessions for
-// expanded instances on a 1-second cycle.
-func (m model) sessionDiscoveryLoop() tea.Cmd {
-	return sessionDiscoveryCmd(m.backends, m.sessionStore.ExpandedRefs(), m.st.Fleets)
-}
-
-// refreshInstanceSessions returns a tea.Cmd that re-lists tmux sessions
-// for the given ref (if expanded). Used after split pane creation,
-// group switching, and session creation to keep the UI in sync.
+// refreshInstanceSessions refreshes the given ref's session list from the
+// server runtime (the server polls tmux for every running instance). It runs
+// synchronously and returns nil — kept returning a tea.Cmd so the (now
+// runtime-sourced) call sites after split-pane creation / group switching /
+// session ops stay unchanged.
 func (m *model) refreshInstanceSessions(ref InstanceRef) tea.Cmd {
-	if !ref.Valid() || !m.sessionStore.IsExpanded(ref) {
-		return nil
-	}
-	f, ok := m.st.Fleets[ref.Fleet]
-	if !ok {
-		return nil
-	}
-	instance, err := f.GetInstance(ref.Instance)
-	if err != nil {
-		return nil
-	}
-	return listSessionsCmd(m.instanceBackend(instance), instance.WorkspaceDir, ref)
-}
-
-// ===========================================
-// Stats
-// ===========================================
-
-// fetchAllStatsCmd creates a command that fetches stats from all backends concurrently.
-func (m model) fetchAllStatsCmd(delay bool) tea.Cmd {
-	groups := m.containersByBackend()
-	if len(groups) == 0 {
-		return fetchStatsCmd(nil, nil, delay)
-	}
-
-	type fetchInput struct {
-		instanceBackend backend.Backend
-		ids             []string
-	}
-	var inputs []fetchInput
-	for backendType, g := range groups {
-		inputs = append(inputs, fetchInput{
-			instanceBackend: m.backendFor(backendType),
-			ids:             g.ids,
-		})
-	}
-
-	// If only one backend type, use the simple path
-	if len(inputs) == 1 {
-		return fetchStatsCmd(inputs[0].instanceBackend, inputs[0].ids, delay)
-	}
-
-	// Multiple backend types: fetch concurrently and merge
-	return func() tea.Msg {
-		if delay {
-			time.Sleep(3 * time.Second)
-		}
-
-		allStats := make(map[string]*backend.ContainerStats)
-		allScreens := make(map[string]backend.AllSessions)
-		allProbes := make(map[string]string)
-		var allIDs []string
-
-		type result struct {
-			stats   map[string]*backend.ContainerStats
-			screens map[string]backend.AllSessions
-			probes  map[string]string
-			ids     []string
-		}
-
-		ch := make(chan result, len(inputs))
-		for _, input := range inputs {
-			go func(instanceBackend backend.Backend, ids []string) {
-				stats, _ := instanceBackend.Stats(ids)
-				screens := backend.CaptureAllSessionsForAll(instanceBackend, ids)
-				probes := backend.AgentToolProbes(instanceBackend, ids)
-				ch <- result{stats, screens, probes, ids}
-			}(input.instanceBackend, input.ids)
-		}
-
-		for range inputs {
-			r := <-ch
-			for k, v := range r.stats {
-				allStats[k] = v
-			}
-			for k, v := range r.screens {
-				allScreens[k] = v
-			}
-			for k, v := range r.probes {
-				allProbes[k] = v
-			}
-			allIDs = append(allIDs, r.ids...)
-		}
-
-		return statsMsg{stats: allStats, screens: allScreens, probes: allProbes, containerIDs: allIDs}
-	}
+	m.refreshSessionsFromRuntime(ref)
+	return nil
 }
 
 // ===========================================
@@ -551,23 +332,17 @@ func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.spinner.Tick,
 		m.agentSpinner.Tick,
-		m.fetchAllStatsCmd(false),
-		m.sessionDiscoveryLoop(),
 		layoutTickCmd(),
 		checkUpdateCmd(),
 		updateCheckPollCmd(),
 		checkReleaseNotesCmd(m.lastSeenVersion()),
 		forceRepaintCmd(),
-		// Probe live state right away so a fleet started after a long
-		// idle (e.g. overnight) reflects containers that stopped while
-		// fleet was offline before the user even sees the list. The
-		// periodic tick that follows handles drift during the session.
-		refreshLiveStatusCmd(collectLiveStatusProbes(m.st)),
-		liveStatusPollCmd(),
-		// Drain control-socket events from in-instance senders (the listeners
-		// themselves were started by the reload() inside newModel()). The
-		// model-level Update re-arms this waiter after each event.
-		waitForControlEventCmd(m.control.events),
+		// Live container status AND tmux session discovery are the server's job
+		// now: it probes live status on the Watch subscribe edge + every 60s and
+		// polls sessions ~1s, pushing both via Watch (StateChanged / RuntimeChanged).
+		// The TUI renders sessions from the cached runtime — no client-side polling.
+		// browser.open from in-container senders arrives as a Watch BrowserOpen
+		// event (the server owns the control sockets); see watchBrowserOpenMsg.
 		m.currentPage.Init(&m),
 	}
 	if len(m.creating) > 0 {
@@ -681,15 +456,63 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// 3. Shared-only messages — return early
 	switch msg := msg.(type) {
-	case statsMsg:
-		if msg.stats != nil {
-			m.stats = msg.stats
+	case stateChangedMsg:
+		// Read-path flip: the server's persisted snapshot drives the render
+		// model. Convert to the legacy *configutil.State the views still read
+		// from, and rebuild the row list. A StateChanged only fires on an actual
+		// change (the hub diffs it), so this is not per-tick churn.
+		m.pstate = msg.state
+		if msg.state != nil {
+			m.st = protoStateToLegacy(msg.state)
+			if m.fleetPage != nil {
+				m.fleetPage.buildRows(&m)
+			}
 		}
-		if msg.screens != nil {
-			m.activity.Update(msg.screens, msg.probes, msg.containerIDs, time.Now())
-			m.reinstallMissingClaudeHooks(msg.screens)
+		return m, spinCmd
+
+	case runtimeChangedMsg:
+		// Cache the live runtime (merge by key), then refresh every expanded
+		// instance's session list from it — the server polls tmux for all running
+		// instances (~1s) and pushes it here, replacing the TUI's old client-side
+		// session-discovery loop. Rebuild rows so the live data (agent activity,
+		// stats, session list) renders.
+		for _, r := range msg.runtime {
+			m.runtime[rtKey(r.GetFleet(), r.GetInstance())] = r
 		}
-		return m, tea.Batch(spinCmd, m.fetchAllStatsCmd(true))
+		for _, ref := range m.sessionStore.ExpandedRefs() {
+			m.refreshSessionsFromRuntime(ref)
+		}
+		m.sessionStore.PruneStaleLastActive()
+		if m.fleetPage != nil {
+			m.fleetPage.buildRows(&m)
+			// On the same ~1s cadence the old session-discovery tick ran on:
+			// keep the split-pane layout snapshot honest against tmux-binding
+			// mutations, and detect panes the user closed via an outer-tmux
+			// binding (which bypasses fleet's handlers).
+			fp := m.fleetPage
+			if fp.splitPaneID != "" && !fp.activeGroup.Empty() && splitOpen() {
+				fp.saveCurrentGroupLayout(m.st)
+			}
+			if fp.splitPaneID != "" && !splitOpen() {
+				unbindHostSplitKeys()
+				fp.clearSplit()
+			}
+		}
+		return m, spinCmd
+
+	case watchBrowserOpenMsg:
+		// An in-container sender (e.g. a `fleet launch` TUI) asked the host to
+		// open a URL; the server resolved it and pushed it over Watch. Open it in
+		// the proxied local browser for the originating instance.
+		if msg.url != "" && msg.fleet != "" && msg.instance != "" {
+			return m, tea.Batch(spinCmd, m.openControlBrowserCmd(msg.fleet+"/"+msg.instance, msg.url))
+		}
+		return m, spinCmd
+
+	case watchErrMsg, watchClosedMsg:
+		// The watcher reconnects on its own; nothing rendered from the stream
+		// yet in Step 5, so this is a no-op (do not crash on a dropped stream).
+		return m, spinCmd
 
 	case updateCheckMsg:
 		if msg.latestVersion != "" {
@@ -731,7 +554,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinCmd
 		}
 		if m.config == nil {
-			m.config = state.DefaultConfig()
+			m.config = configutil.DefaultConfig()
 		}
 		// Merge parameters: keep existing user-set values, add new ones with defaults
 		existing := make(map[string]string)
@@ -740,10 +563,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				existing[param.Name] = param.Value
 			}
 		}
-		var newParams []state.CoderParameter
+		var newParams []configutil.CoderParameter
 		for _, fetchedParam := range msg.params {
 			existingValue := existing[fetchedParam.Name]
-			newParams = append(newParams, state.CoderParameter{
+			newParams = append(newParams, configutil.CoderParameter{
 				Name:         fetchedParam.Name,
 				Value:        existingValue,
 				DefaultValue: fetchedParam.DefaultValue,
@@ -754,13 +577,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.config.CoderSettings.Parameters = newParams
 		m.coderPresets = nil
-		for _, preset := range msg.presets {
-			m.coderPresets = append(m.coderPresets, preset.Name)
-		}
+		m.coderPresets = append(m.coderPresets, msg.presets...)
 		if m.config.CoderSettings.Preset == "" && len(m.coderPresets) > 0 {
 			m.config.CoderSettings.Preset = m.coderPresets[0]
 		}
-		_ = state.SaveConfig(m.config)
+		_ = setConfigRemote(m.config)
 		m.message = fmt.Sprintf("Loaded %d parameters, %d presets", len(newParams), len(m.coderPresets))
 		return m, spinCmd
 
@@ -772,46 +593,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.codespaceMachines = msg.machines
 		if m.config != nil && m.config.CodespacesSettings.Machine == "" && len(m.codespaceMachines) > 0 {
 			m.config.CodespacesSettings.Machine = m.codespaceMachines[0].Name
-			_ = state.SaveConfig(m.config)
+			_ = setConfigRemote(m.config)
 		}
 		return m, spinCmd
-
-	case liveStatusTickMsg:
-		// Rearm the periodic refresh and kick off a probe pass over
-		// the current snapshot of instances. Probe goroutines run
-		// independently and feed back via liveStatusMsg.
-		return m, tea.Batch(
-			spinCmd,
-			refreshLiveStatusCmd(collectLiveStatusProbes(m.st)),
-			liveStatusPollCmd(),
-		)
-
-	case liveStatusMsg:
-		// Reconcile persisted state with what each backend reports.
-		// applyLiveStatuses writes through to disk when anything
-		// changed; reload() then refreshes the in-memory view so the
-		// fleet page renders the corrected statuses on the next draw.
-		if applyLiveStatuses(m.st, msg.updates) {
-			m.reload()
-		}
-		return m, spinCmd
-
-	case controlEventMsg:
-		// An in-instance sender (e.g. a `fleet launch` TUI) wrote an Envelope
-		// to that instance's control socket. Dispatch by type, then re-arm the
-		// waiter so the single in-flight command keeps draining the channel.
-		// msg is already the concrete controlEventMsg here (the switch binds
-		// it), so convert it to the underlying controlEvent directly.
-		event := controlEvent(msg)
-		var cmd tea.Cmd
-		switch event.env.Type {
-		case control.TypeOpenBrowser:
-			var payload control.OpenBrowserPayload
-			if json.Unmarshal(event.env.Payload, &payload) == nil && payload.URL != "" {
-				cmd = m.openControlBrowserCmd(event.instanceKey, payload.URL)
-			}
-		}
-		return m, tea.Batch(cmd, waitForControlEventCmd(m.control.events))
 
 	case forceRepaintTickMsg:
 		// Scrub artifacts left by outer-tmux pane resizes without
@@ -849,18 +633,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		extraCmds = append(extraCmds, layoutTickCmd())
 
-	case sessionDiscoveryMsg:
-		if msg.discovered != nil {
-			for ref, sessions := range msg.discovered {
-				m.sessionStore.SetDiscovery(ref, sessions)
-			}
-			m.sessionStore.PruneStaleLastActive()
-			for ref := range msg.discovered {
-				m.pruneSavedGroupsForInstance(ref)
-			}
-		}
-		extraCmds = append(extraCmds, m.sessionDiscoveryLoop())
-
 	case operationDoneMsg:
 		m.reload()
 		if msg.err != nil {
@@ -870,18 +642,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case instanceCreateErrMsg:
+		// The dispatch (or the server's pre-create) failed, so there is no
+		// half-created record for the client to annotate — the server owns
+		// failure status for any record it did create. Just clear the optimistic
+		// "creating" marker, refresh, and surface the error.
 		key := msg.fleet + "/" + msg.instance
 		delete(m.creating, key)
-		st, _ := state.Load()
-		if st != nil {
-			if f, ok := st.Fleets[msg.fleet]; ok {
-				if instance, err := f.GetInstance(msg.instance); err == nil {
-					instance.Status = fleet.StatusFailed
-					instance.Error = msg.err.Error()
-					_ = state.Save(st)
-				}
-			}
-		}
 		m.reload()
 		m.message = fmt.Sprintf("Failed to create %s: %v", key, msg.err)
 
@@ -898,17 +664,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = fmt.Sprintf("failed to do tmux split pane: %v", msg.err)
 		}
 		if msg.paneID != "" {
-			// Log "session opened" only for direct (splitPaneCmd) opens, which
-			// run the command in the pane with no `fleet shell` subprocess.
-			// Group restores (restoreSeq != 0) spawn `fleet shell` per pane,
-			// and that process logs its own open/close — logging here too
-			// would duplicate it. splitOpenedAt/splitViaRestore pair with the
-			// "session closed" log in clearSplit.
+			// splitOpenedAt/splitViaRestore are retained for the layout-snapshot
+			// bookkeeping in clearSplit (the per-session event log moved to the
+			// server, which owns ~/.fleet/fleet.log).
 			fleetPage.splitOpenedAt = time.Now()
 			fleetPage.splitViaRestore = msg.restoreSeq != 0
-			if !fleetPage.splitViaRestore {
-				logSessionOpen("split", msg.ref.Fleet, msg.ref.Instance, msg.session, msg.command)
-			}
 			fleetPage.splitPaneID = msg.paneID
 			fleetPage.splitRef = msg.ref
 			fleetPage.splitSession = msg.session
@@ -918,27 +678,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			extraCmds = append(extraCmds, m.refreshInstanceSessions(msg.ref))
 		}
 
-	case sessionsMsg:
-		if msg.err != nil {
-			m.sessionStore.SetDiscoveryError(msg.ref, msg.err)
-		} else {
-			m.sessionStore.SetDiscovery(msg.ref, msg.sessions)
-			m.pruneSavedGroupsForInstance(msg.ref)
-		}
-
 	case sessionCreatedMsg:
 		if msg.err != nil {
 			m.message = fmt.Sprintf("Failed to create session: %v", msg.err)
 		} else {
 			m.message = "Session created"
 		}
-		if m.sessionStore.IsExpanded(msg.ref) {
-			if f, ok := m.st.Fleets[msg.ref.Fleet]; ok {
-				if instance, err := f.GetInstance(msg.ref.Instance); err == nil {
-					extraCmds = append(extraCmds, listSessionsCmd(m.instanceBackend(instance), instance.WorkspaceDir, msg.ref))
-				}
-			}
-		}
+		// The new session appears on the next ~1s runtime tick; nudge from the
+		// current runtime cache so the list reflects what's already known.
+		m.refreshSessionsFromRuntime(msg.ref)
 
 	case sessionRenamedMsg:
 		if msg.err != nil {
@@ -946,13 +694,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.message = fmt.Sprintf("Renamed session %s → %s", msg.oldName, msg.newName)
 		}
-		if m.sessionStore.IsExpanded(msg.ref) {
-			if f, ok := m.st.Fleets[msg.ref.Fleet]; ok {
-				if instance, err := f.GetInstance(msg.ref.Instance); err == nil {
-					extraCmds = append(extraCmds, listSessionsCmd(m.instanceBackend(instance), instance.WorkspaceDir, msg.ref))
-				}
-			}
-		}
+		m.refreshSessionsFromRuntime(msg.ref)
 
 	case sessionDeletedMsg:
 		if msg.err != nil {
@@ -971,7 +713,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delete(fleetPage.savedGroups, key)
 			if m.st != nil && m.st.GroupLayouts != nil {
 				delete(m.st.GroupLayouts, key)
-				_ = state.Save(m.st)
+				_ = deleteGroupLayoutRemote(msg.ref.Instance, msg.groupID)
 			}
 		}
 		// Tear down the split only when the deletion targets the very
@@ -987,13 +729,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			fleetPage.clearSplit()
 		}
-		if m.sessionStore.IsExpanded(msg.ref) {
-			if f, ok := m.st.Fleets[msg.ref.Fleet]; ok {
-				if instance, err := f.GetInstance(msg.ref.Instance); err == nil {
-					extraCmds = append(extraCmds, listSessionsCmd(m.instanceBackend(instance), instance.WorkspaceDir, msg.ref))
-				}
-			}
-		}
+		m.refreshSessionsFromRuntime(msg.ref)
 
 	case pollCreatingTickMsg:
 		if len(m.creating) > 0 {
@@ -1009,7 +745,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						switch instance.Status {
 						case fleet.StatusRunning:
 							delete(m.creating, key)
-							warnPath := state.WarnPath(fleetName, instName)
+							warnPath := fleetpaths.WarnPath(fleetName, instName)
 							if warnData, err := os.ReadFile(warnPath); err == nil {
 								_ = os.Remove(warnPath)
 								firstLine := strings.SplitN(strings.TrimSpace(string(warnData)), "\n", 2)[0]
@@ -1021,17 +757,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						case fleet.StatusFailed:
 							delete(m.creating, key)
 							fleetPage := m.fleetPage
-							if instance.Backend == fleet.BackendCodespaces && strings.HasPrefix(instance.Error, codespacesbackend.ErrPrefixAuthScope) {
+							if instance.Backend == fleet.BackendCodespaces && strings.HasPrefix(instance.Error, codespaceerr.AuthScope) {
 								fleetPage.mode = viewCodespacesAuth
 								fleetPage.dialogFleet = fleetName
 								fleetPage.dialogInst = instName
 								m.message = ""
-							} else if instance.Backend == fleet.BackendCodespaces && strings.HasPrefix(instance.Error, codespacesbackend.ErrPrefixMachine) {
+							} else if instance.Backend == fleet.BackendCodespaces && strings.HasPrefix(instance.Error, codespaceerr.Machine) {
 								fleetPage.mode = viewCodespacesMachine
 								fleetPage.dialogFleet = fleetName
 								fleetPage.dialogInst = instName
 								m.message = ""
-							} else if instance.Backend == fleet.BackendCodespaces && strings.HasPrefix(instance.Error, codespacesbackend.ErrPrefixLimit) {
+							} else if instance.Backend == fleet.BackendCodespaces && strings.HasPrefix(instance.Error, codespaceerr.Limit) {
 								fleetPage.mode = viewCodespacesLimit
 								fleetPage.dialogFleet = fleetName
 								fleetPage.dialogInst = instName
@@ -1049,6 +785,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case instanceSpawnedMsg:
+		// The server pre-created the record; pull it into view (the TUI still
+		// renders from m.st) and start polling it to running.
+		m.reload()
+		if m.fleetPage != nil {
+			m.fleetPage.buildRows(&m)
+		}
 		extraCmds = append(extraCmds, pollCreatingCmd())
 
 	case groupCycleMsg:
@@ -1134,8 +876,6 @@ func sortedFleetNames(fleets map[string]*fleet.Fleet) []string {
 
 // Run starts the TUI.
 func Run() error {
-	start := time.Now()
-	flog.Info("fleet TUI started")
 	m := newModel()
 
 	// Start clipboard buffer polling when running inside tmux.
@@ -1153,17 +893,27 @@ func Run() error {
 	}
 
 	program := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	// Subscribe to the fleet server's Watch stream for the TUI's lifetime,
+	// injecting events into the program. In P2 Step 5 these only populate the
+	// m.pstate / m.runtime caches; the View still renders from the legacy fields
+	// until the read-path flip (Steps 6–7).
+	watchCtx, watchCancel := context.WithCancel(context.Background())
+	go runWatchStream(watchCtx, program)
+
 	finalModel, err := program.Run()
-	flog.Info("fleet TUI stopped", "ms", flog.MillisSince(start))
+	watchCancel()
 
 	if clipCancel != nil {
 		clipCancel()
 	}
 
-	// Tear down every control-socket listener so the host releases the socket
-	// files it created. The registry pointer in m is shared with the program's
-	// copy of the model, so this Closes the same servers the loop was draining.
-	m.control.shutdown()
+	// (The control-socket listeners live on the server now; nothing host-side to
+	// tear down. The TUI session-lifecycle log moved to the server's fleet.log.)
+
+	// Release the mutation connection (the Watch connection is closed by its own
+	// goroutine when watchCtx is cancelled above).
+	closeMutationConn()
 
 	// If the user just performed a successful auto-update, replace
 	// the current process with the freshly installed binary. Doing

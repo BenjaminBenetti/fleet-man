@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -68,15 +68,18 @@ func isTransitional(s fleet.InstanceStatus) bool {
 }
 
 // agentToolLabel returns a human-readable label for the given agent tool.
-func agentToolLabel(tool state.AgentTool) string {
+// agentToolLabelProto maps the proto AgentTool enum from the
+// server's runtime sidecar. The label is only rendered for a detected, active
+// agent; UNSPECIFIED/NONE fall through to the default.
+func agentToolLabelProto(tool fleetgrpc.AgentTool) string {
 	switch tool {
-	case state.AgentToolCodex:
+	case fleetgrpc.AgentTool_AGENT_TOOL_CODEX:
 		return "Codex"
-	case state.AgentToolClaude:
+	case fleetgrpc.AgentTool_AGENT_TOOL_CLAUDE:
 		return "Claude Code"
-	case state.AgentToolGemini:
+	case fleetgrpc.AgentTool_AGENT_TOOL_GEMINI:
 		return "Gemini"
-	case state.AgentToolCopilot:
+	case fleetgrpc.AgentTool_AGENT_TOOL_COPILOT:
 		return "Copilot"
 	default:
 		return "Claude Code"

@@ -12,15 +12,15 @@ import (
 // secondary one. The failure itself (with timing) is logged by the caller
 // (Run / RunClone), so setFailed does not log.
 func setFailed(fleetName, instanceName string, origErr error) {
-	st, err := state.Load()
-	if err != nil {
-		return
-	}
-	if f, ok := st.Fleets[fleetName]; ok {
-		if instance, err := f.GetInstance(instanceName); err == nil {
-			instance.Status = fleet.StatusFailed
-			instance.Error = origErr.Error()
+	// Atomic RMW so a concurrent provisioning job marking a different instance
+	// running cannot clobber this failure annotation (or vice versa).
+	_ = state.Update(func(st *state.State) error {
+		if f, ok := st.Fleets[fleetName]; ok {
+			if instance, err := f.GetInstance(instanceName); err == nil {
+				instance.Status = fleet.StatusFailed
+				instance.Error = origErr.Error()
+			}
 		}
-	}
-	_ = state.Save(st)
+		return nil
+	})
 }

@@ -1,0 +1,36 @@
+# buf v2 module config. This directory is the proto module root: the fleetgrpc
+# contract is split across domain/runtime/jobs/watch/control/config/exec/service
+# .proto (all package fleetgrpc), which import each other by relative path and
+# import google/protobuf/timestamp.proto — buf resolves the well-known-types it
+# vendors (no system protoc / no protobuf include path needed).
+#
+# Regeneration (NOT run by CI — generated *.pb.go are checked in):
+#   buf generate            # from the repo root, using ../buf.gen.yaml
+# or, with the gen config beside the module:
+#   buf generate fleetgrpc
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  # STANDARD is kept (it still catches enum-zero-value / field-naming issues),
+  # except for five rules that collide with deliberate contract decisions:
+  except:
+    # Package is `fleetgrpc`, not `fleetgrpc.v1`: a single in-repo contract that
+    # is version-LOCKED via the Hello handshake (client & server are the same
+    # binary), so proto-package versioning buys nothing here.
+    - PACKAGE_VERSION_SUFFIX
+    # The buf module root IS fleetgrpc/, so the files sit at "." relative to it;
+    # satisfying this rule would require a fleetgrpc/fleetgrpc/ nesting.
+    - PACKAGE_DIRECTORY_MATCH
+    # Job RPCs intentionally share `stream JobEvent`; the synchronous mutations
+    # intentionally share `MutationReply`. That sharing is the design.
+    - RPC_REQUEST_RESPONSE_UNIQUE
+    # `Reply` suffix + shared stream response types (JobEvent / Event) by design.
+    - RPC_RESPONSE_STANDARD_NAME
+    # Exec uses ExecIn/ExecOut bidi framing rather than ExecRequest/ExecResponse.
+    - RPC_REQUEST_STANDARD_NAME
+breaking:
+  use:
+    - FILE

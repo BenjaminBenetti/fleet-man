@@ -2,43 +2,46 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestListIncludesBranchColumnAndValues(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	sp := func(s string) *string { return &s }
 
-	st := &state.State{
-		Fleets: map[string]*fleet.Fleet{
+	// Inject a canned snapshot through the server seam so the test doesn't need
+	// a live fleet server (Phase 1 routes list through fleetclient.Dial+GetState).
+	st := &fleetgrpc.State{
+		Fleets: map[string]*fleetgrpc.Fleet{
 			"alpha": {
 				Name: "alpha",
-				Instances: []*fleet.Instance{
+				Instances: []*fleetgrpc.Instance{
 					{
 						Name:         "agent-1",
-						ContainerID:  "abc123456789999",
-						WorkspaceDir: "/workspace/alpha/agent-1",
-						CreatedAt:    time.Unix(0, 0),
-						Status:       fleet.StatusRunning,
+						ContainerId:  sp("abc123456789999"),
+						WorkspaceDir: sp("/workspace/alpha/agent-1"),
+						CreatedAt:    timestamppb.New(time.Unix(0, 0)),
+						Status:       fleetgrpc.InstanceStatus_INSTANCE_STATUS_RUNNING,
 					},
 					{
 						Name:         "agent-2",
-						ContainerID:  "def987654321000",
-						WorkspaceDir: "/workspace/alpha/agent-2",
-						CreatedAt:    time.Unix(0, 0),
-						Status:       fleet.StatusStopped,
+						ContainerId:  sp("def987654321000"),
+						WorkspaceDir: sp("/workspace/alpha/agent-2"),
+						CreatedAt:    timestamppb.New(time.Unix(0, 0)),
+						Status:       fleetgrpc.InstanceStatus_INSTANCE_STATUS_STOPPED,
 					},
 				},
 			},
 		},
 	}
-	if err := state.Save(st); err != nil {
-		t.Fatalf("state.Save() error = %v", err)
-	}
+	prevFetch := fetchFleetState
+	fetchFleetState = func(context.Context) (*fleetgrpc.State, error) { return st, nil }
+	defer func() { fetchFleetState = prevFetch }()
 
 	var out bytes.Buffer
 	prevOutput := listOutput

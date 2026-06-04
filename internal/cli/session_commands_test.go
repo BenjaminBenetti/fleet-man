@@ -84,10 +84,10 @@ func useHostTmux(t *testing.T) string {
 	tmuxDir := t.TempDir()
 
 	prevExec := sessionExecCommand
-	sessionExecCommand = func(_ *fleet.Instance, args []string) *exec.Cmd {
+	sessionExecCommand = func(_, _ string, args []string) (*exec.Cmd, error) {
 		c := exec.Command(args[0], args[1:]...)
 		c.Env = tmuxIsolatedEnv(tmuxDir)
-		return c
+		return c, nil
 	}
 	t.Cleanup(func() {
 		sessionExecCommand = prevExec

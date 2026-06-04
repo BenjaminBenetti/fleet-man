@@ -89,10 +89,10 @@ func TestUpdateSettingsNavUpDown(t *testing.T) {
 	sp := newSettingsPage()
 	fp := newFleetPage()
 	m := &model{
-		config:          state.DefaultConfig(),
-		toolStatus:   allToolsFound(),
-		currentPage:  sp,
-		fleetPage:    fp,
+		config:      state.DefaultConfig(),
+		toolStatus:  allToolsFound(),
+		currentPage: sp,
+		fleetPage:   fp,
 	}
 	sp.cursor = settingsPositionOf(sp, m, settingsItemTmuxVimKeys)
 
@@ -158,10 +158,10 @@ func TestUpdateSettingsEnterEditingDotfiles(t *testing.T) {
 	sp := newSettingsPage()
 	fp := newFleetPage()
 	m := &model{
-		config:          state.DefaultConfig(),
-		toolStatus:   allToolsFound(),
-		currentPage:  sp,
-		fleetPage:    fp,
+		config:      state.DefaultConfig(),
+		toolStatus:  allToolsFound(),
+		currentPage: sp,
+		fleetPage:   fp,
 	}
 	sp.cursor = settingsPositionOf(sp, m, settingsItemDotfilesRepo)
 
@@ -178,6 +178,13 @@ func TestUpdateSettingsEnterEditingDotfiles(t *testing.T) {
 func TestUpdateSettingsEditingSavesOnEnter(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
+	// The settings page persists through the server's SetConfig RPC now; stub the
+	// seam to the legacy disk write so this test still exercises "edit -> persist"
+	// without standing up a server.
+	origSetConfig := setConfigRemote
+	setConfigRemote = func(c *state.Config) error { return state.SaveConfig(c) }
+	defer func() { setConfigRemote = origSetConfig }()
+
 	si := textinput.New()
 	si.CharLimit = 256
 
@@ -187,10 +194,10 @@ func TestUpdateSettingsEditingSavesOnEnter(t *testing.T) {
 	}
 	fp := newFleetPage()
 	m := &model{
-		config:          state.DefaultConfig(),
-		toolStatus:   allToolsFound(),
-		currentPage:  sp,
-		fleetPage:    fp,
+		config:      state.DefaultConfig(),
+		toolStatus:  allToolsFound(),
+		currentPage: sp,
+		fleetPage:   fp,
 	}
 	sp.cursor = settingsPositionOf(sp, m, settingsItemDotfilesRepo)
 	sp.input.SetValue("https://github.com/user/dotfiles")
@@ -227,10 +234,10 @@ func TestUpdateSettingsEditingCancelsOnEsc(t *testing.T) {
 	}
 	fp := newFleetPage()
 	m := &model{
-		config:          config,
-		toolStatus:   allToolsFound(),
-		currentPage:  sp,
-		fleetPage:    fp,
+		config:      config,
+		toolStatus:  allToolsFound(),
+		currentPage: sp,
+		fleetPage:   fp,
 	}
 	sp.cursor = settingsPositionOf(sp, m, settingsItemDotfilesRepo)
 	sp.input.SetValue("changed")

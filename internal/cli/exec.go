@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/spf13/cobra"
 )
 
@@ -11,13 +11,13 @@ func newExecCmd() *cobra.Command {
 		Short: "Execute a command inside an instance",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _, _, instance, err := resolveInstance(args[0], "")
+			target, err := fleet.Resolve(args[0], "")
 			if err != nil {
 				return err
 			}
-
-			instanceBackend := backendutil.NewForInstance(instance, false)
-			return instanceBackend.Exec(instance.WorkspaceDir, args[1:])
+			// The server resolves the backend exec argv; we run it locally with
+			// inherited stdio (the TTY carve-out — no direct backend access).
+			return runResolvedExec(cmd.Context(), target.Fleet, target.Instance, args[1:])
 		},
 	}
 }

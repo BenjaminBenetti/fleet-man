@@ -3,8 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/spf13/cobra"
 )
 
@@ -14,12 +13,13 @@ func newStatusCmd() *cobra.Command {
 		Short: "Show fleet-wide status summary",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := state.Load()
+			st, err := fetchFleetState(cmd.Context())
 			if err != nil {
 				return err
 			}
 
-			if len(st.Fleets) == 0 {
+			fleets := st.GetFleets()
+			if len(fleets) == 0 {
 				fmt.Println("No fleets. Use 'fleet up <name>' to create an instance.")
 				return nil
 			}
@@ -29,17 +29,17 @@ func newStatusCmd() *cobra.Command {
 			stopped := 0
 			other := 0
 
-			for name, f := range st.Fleets {
+			for name, f := range fleets {
 				fleetRunning := 0
 				fleetStopped := 0
 				fleetOther := 0
-				for _, instance := range f.Instances {
+				for _, instance := range f.GetInstances() {
 					totalInstances++
-					switch instance.Status {
-					case fleet.StatusRunning:
+					switch instance.GetStatus() {
+					case fleetgrpc.InstanceStatus_INSTANCE_STATUS_RUNNING:
 						fleetRunning++
 						running++
-					case fleet.StatusStopped:
+					case fleetgrpc.InstanceStatus_INSTANCE_STATUS_STOPPED:
 						fleetStopped++
 						stopped++
 					default:
@@ -47,10 +47,10 @@ func newStatusCmd() *cobra.Command {
 						other++
 					}
 				}
-				fmt.Printf("%s: %d instances (%s) — %s\n", name, len(f.Instances), formatStatusCounts(fleetRunning, fleetStopped, fleetOther), f.Remote)
+				fmt.Printf("%s: %d instances (%s) — %s\n", name, len(f.GetInstances()), formatStatusCounts(fleetRunning, fleetStopped, fleetOther), f.GetRemote())
 			}
 
-			fmt.Printf("\nTotal: %d fleets, %d instances (%s)\n", len(st.Fleets), totalInstances, formatStatusCounts(running, stopped, other))
+			fmt.Printf("\nTotal: %d fleets, %d instances (%s)\n", len(fleets), totalInstances, formatStatusCounts(running, stopped, other))
 			return nil
 		},
 	}

@@ -3,17 +3,14 @@ package tui
 import (
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/devcontainersetup"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/inspector"
 	devcontainercheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/devcontainer"
 	homedircheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/homedir"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -36,21 +33,21 @@ func (fleetPage *fleetPage) updateConfirmDelete(m *model, msg tea.Msg) tea.Cmd {
 				// Empty fleet, just remove it
 				delete(m.st.Fleets, fleetPage.dialogFleet)
 				delete(fleetPage.collapsed, fleetPage.dialogFleet)
-				_ = state.Save(m.st)
+				_ = destroyFleetRemote(fleetPage.dialogFleet)
 				fleetPage.buildRows(m)
 				m.message = fmt.Sprintf("Removed fleet %s", fleetPage.dialogFleet)
 			} else {
-				// Instance-level delete (async with transitional status)
+				// Instance-level delete runs as a server job. Flip an optimistic
+				// in-memory Deleting status for the spinner (NOT persisted — the
+				// server owns the teardown and the record removal).
 				f, ok := m.st.Fleets[fleetPage.dialogFleet]
 				if ok {
 					instance, err := f.GetInstance(fleetPage.dialogInst)
 					if err == nil {
 						instance.Status = fleet.StatusDeleting
-						_ = state.Save(m.st)
 						fleetPage.buildRows(m)
 						fleetPage.mode = viewNormal
-						instanceBackend := m.instanceBackend(instance)
-						return deleteInstanceCmd(instanceBackend, fleetPage.dialogFleet, fleetPage.dialogInst, instance.ContainerID, instance.WorkspaceDir, m.portForwards)
+						return deleteInstanceCmd(fleetPage.dialogFleet, fleetPage.dialogInst, m.portForwards)
 					}
 				}
 			}
@@ -75,16 +72,15 @@ func (fleetPage *fleetPage) updateConfirmDeleteFleetWarn(m *model, msg tea.Msg) 
 			f, ok := m.st.Fleets[fleetPage.dialogFleet]
 			if ok && len(f.Instances) > 0 {
 				for _, instance := range f.Instances {
-					instance.Status = fleet.StatusDeleting
+					instance.Status = fleet.StatusDeleting // optimistic, in-memory only
 				}
-				_ = state.Save(m.st)
 				fleetPage.buildRows(m)
 				fleetPage.mode = viewNormal
-				return deleteFleetCmd(m.backends, fleetPage.dialogFleet, f.Instances, m.portForwards)
+				return deleteFleetCmd(fleetPage.dialogFleet, f.Instances, m.portForwards)
 			} else if ok {
 				delete(m.st.Fleets, fleetPage.dialogFleet)
 				delete(fleetPage.collapsed, fleetPage.dialogFleet)
-				_ = state.Save(m.st)
+				_ = destroyFleetRemote(fleetPage.dialogFleet)
 				fleetPage.buildRows(m)
 				m.message = fmt.Sprintf("Removed fleet %s", fleetPage.dialogFleet)
 			}
@@ -149,7 +145,6 @@ func (fleetPage *fleetPage) updateConfirmBrowserSwitch(m *model, msg tea.Msg) te
 			}
 
 			dataDir := browserDataDir(fleetName, instanceName, multipleBrowsersPerFleet(m))
-			instanceBackend := m.instanceBackend(instance)
 			instanceKey := fleetName + "/" + instanceName
 
 			// Switch the dialog into "in-flight" mode; the renderer
@@ -158,7 +153,7 @@ func (fleetPage *fleetPage) updateConfirmBrowserSwitch(m *model, msg tea.Msg) te
 			// clears the flag and the mode.
 			fleetPage.dialogBrowserSwitching = true
 			m.message = ""
-			return switchBrowserCmd(m.portForwards, instanceBackend, instance, instanceKey, dataDir, f.Settings.PreferFleetLaunchEnabled(), "")
+			return switchBrowserCmd(m.portForwards, instance, instanceKey, dataDir, f.Settings.PreferFleetLaunchEnabled(), "")
 		}
 	}
 	return nil
@@ -218,7 +213,7 @@ func (fleetPage *fleetPage) chooseBrowserLaunch(m *model, preferFleetLaunch bool
 
 	prefer := preferFleetLaunch
 	f.Settings.PreferFleetLaunch = &prefer
-	_ = state.Save(m.st)
+	_ = setFleetSettingsRemote(fleetName, f.Settings)
 
 	instance, err := f.GetInstance(fleetPage.dialogInst)
 	if err != nil || instance.Status != fleet.StatusRunning {
@@ -247,12 +242,11 @@ func (fleetPage *fleetPage) updateConfirmDeleteSession(m *model, msg tea.Msg) te
 			if err != nil {
 				break
 			}
-			instanceBackend := m.instanceBackend(instance)
 			sanitized := SanitizeSessionName(instance.Name)
 			if fleetPage.dialogGroupID != "" && isGroupedSession(sanitized, fleetPage.dialogSession) {
-				return deleteGroupSessionsCmd(instanceBackend, instance.WorkspaceDir, ref, sanitized, fleetPage.dialogGroupID)
+				return deleteGroupSessionsCmd(ref, sanitized, fleetPage.dialogGroupID)
 			}
-			return deleteSessionCmd(instanceBackend, instance.WorkspaceDir, ref, fleetPage.dialogSession)
+			return deleteSessionCmd(ref, fleetPage.dialogSession)
 
 		case "n", "N", "esc", "q", "Q", "ctrl+c":
 			fleetPage.mode = viewNormal
@@ -599,34 +593,21 @@ func (fleetPage *fleetPage) submitAddInstance(m *model) tea.Cmd {
 
 	branch := strings.TrimSpace(fleetPage.branchInput.Value())
 
-	wsDir := filepath.Join(state.WorkspacesDir(), fleetName, name, fleetName)
-	instance := &fleet.Instance{
-		Name:         name,
-		DisplayName:  name,
-		Config:       ".devcontainer/devcontainer.json",
-		WorkspaceDir: wsDir,
-		CreatedAt:    time.Now(),
-		Status:       fleet.StatusCreating,
-		Backend:      backendType,
-		Color:        color,
-		Branch:       branch,
-	}
-	_ = f.AddInstance(instance)
-	_ = state.Save(m.st)
-
+	// Record the chosen backend as the new default. The instance record itself
+	// is pre-created server-side by the CreateInstance job (no client-side state
+	// write — the #63 fix); instanceSpawnedMsg reload()s it into view.
 	if m.config != nil {
 		m.config.DefaultBackend = string(backendType)
-		_ = state.SaveConfig(m.config)
+		_ = setConfigRemote(m.config)
 	}
 
 	key := fleetName + "/" + name
 	m.creating[key] = true
-	fleetPage.buildRows(m)
 	fleetPage.mode = viewNormal
 	fleetPage.blurDialogFields()
 	m.message = fmt.Sprintf("Creating %s (%s)...", key, backendTypeLabel(backendType))
 
-	return createInstanceCmd(fleetName, name, f.Remote, branch, backendType)
+	return createInstanceCmd(fleetName, name, f.Remote, branch, color, backendType)
 }
 
 func (fleetPage *fleetPage) cancelAddInstance(m *model) tea.Cmd {
@@ -748,7 +729,7 @@ func (fleetPage *fleetPage) saveInstanceEdits(m *model) tea.Cmd {
 	}
 	instance.DisplayName = displayName
 	instance.Color = color
-	_ = state.Save(m.st)
+	_ = setInstanceMetadataRemote(fleetPage.dialogFleet, fleetPage.dialogInst, &displayName, &color, nil)
 
 	fleetPage.buildRows(m)
 	fleetPage.mode = viewNormal
@@ -804,7 +785,7 @@ func (fleetPage *fleetPage) saveTagInstance(m *model) tea.Cmd {
 	if ok {
 		if instance, err := f.GetInstance(fleetPage.dialogInst); err == nil {
 			instance.Tag = tag
-			_ = state.Save(m.st)
+			_ = setInstanceMetadataRemote(fleetPage.dialogFleet, fleetPage.dialogInst, nil, nil, &tag)
 		}
 	}
 
@@ -981,7 +962,7 @@ func (fleetPage *fleetPage) handleDevcontainerInspected(m *model, msg devcontain
 // branch.
 func (fleetPage *fleetPage) addPendingFleet(m *model) {
 	m.st.GetOrCreateFleet(fleetPage.dialogPendingFleetName, fleetPage.dialogPendingRepoURL)
-	_ = state.Save(m.st)
+	_ = createFleetRemote(fleetPage.dialogPendingFleetName, fleetPage.dialogPendingRepoURL)
 	fleetPage.buildRows(m)
 }
 
@@ -1345,7 +1326,7 @@ func (fleetPage *fleetPage) saveFleetEdits(m *model) tea.Cmd {
 	preferFleetLaunch := fleetPage.dialogPreferFleetLaunch
 	f.Settings.PreferFleetLaunch = &preferFleetLaunch
 	f.Settings.HomeDir = strings.TrimSpace(fleetPage.homedirInput.Value())
-	_ = state.Save(m.st)
+	_ = setFleetSettingsRemote(fleetPage.dialogFleet, f.Settings)
 
 	fleetPage.mode = viewNormal
 	fleetPage.blurDialogFields()
@@ -1431,8 +1412,20 @@ func (fleetPage *fleetPage) addPortForward(m *model, key string) tea.Cmd {
 		return nil
 	}
 
-	instanceBackend := m.instanceBackend(&fleet.Instance{Backend: fleetPage.instanceBackendType(m)})
-	if err := m.portForwards.Add(key, local, remote, instanceBackend.PortForwardCommand, fleetPage.pfContainerID, instanceBackend.ResolveHostname); err != nil {
+	// The server owns backend access: it returns the forward command argv and
+	// the client runs it. A nil ResolveFunc skips the in-process direct-host
+	// fast path (the server resolves hostnames), matching the CLI's behaviour.
+	argv, err := portForwardArgvTUI(fleetPage.dialogFleet, fleetPage.dialogInst, local, remote)
+	if err != nil {
+		m.message = err.Error()
+		return nil
+	}
+	if len(argv) == 0 {
+		m.message = "server returned no port-forward command"
+		return nil
+	}
+	cmdFn := func(_ string, _, _ int) *exec.Cmd { return exec.Command(argv[0], argv[1:]...) }
+	if err := m.portForwards.Add(key, local, remote, cmdFn, fleetPage.pfContainerID, nil); err != nil {
 		m.message = err.Error()
 		return nil
 	}
@@ -1537,17 +1530,6 @@ func (fleetPage *fleetPage) updateCodespacesLimit(m *model, msg tea.Msg) tea.Cmd
 // Port Forward Helpers
 // ===========================================
 
-// instanceBackendType returns the backend type for the instance currently
-// being managed in the port forward dialog.
-func (fleetPage *fleetPage) instanceBackendType(m *model) fleet.BackendType {
-	if f, ok := m.st.Fleets[fleetPage.dialogFleet]; ok {
-		if instance, err := f.GetInstance(fleetPage.dialogInst); err == nil {
-			return instance.Backend
-		}
-	}
-	return fleet.BackendDevcontainer
-}
-
 // ===========================================
 // Session Dialogs
 // ===========================================
@@ -1614,8 +1596,7 @@ func (fleetPage *fleetPage) saveCreateSession(m *model) tea.Cmd {
 	fleetPage.mode = viewNormal
 	fleetPage.blurDialogFields()
 	m.message = fmt.Sprintf("Creating session %s...", name)
-	instanceBackend := m.instanceBackend(instance)
-	return createSessionCmd(instanceBackend, instance.WorkspaceDir, ref, fullName)
+	return createSessionCmd(ref, fullName)
 }
 
 // updateCloneInstance handles the single-text-input dialog that asks
@@ -1653,9 +1634,9 @@ func (fleetPage *fleetPage) updateCloneInstance(m *model, msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// saveCloneInstance validates the destination name, pre-creates the
-// destination instance record with StatusCloning so the TUI can render
-// progress, and spawns the detached _clone-instance subprocess.
+// saveCloneInstance validates the destination name and dispatches a server-side
+// CloneInstance job (which pre-creates the StatusCloning record and copies the
+// source's settings); the TUI tracks progress via reload() + pollCreating.
 func (fleetPage *fleetPage) saveCloneInstance(m *model) tea.Cmd {
 	destName := strings.TrimSpace(fleetPage.textInput.Value())
 	if destName == "" {
@@ -1675,8 +1656,7 @@ func (fleetPage *fleetPage) saveCloneInstance(m *model) tea.Cmd {
 		fleetPage.blurDialogFields()
 		return nil
 	}
-	src, err := f.GetInstance(srcName)
-	if err != nil {
+	if _, err := f.GetInstance(srcName); err != nil {
 		m.message = fmt.Sprintf("Source instance %s/%s not found", fleetName, srcName)
 		fleetPage.mode = viewNormal
 		fleetPage.blurDialogFields()
@@ -1689,25 +1669,11 @@ func (fleetPage *fleetPage) saveCloneInstance(m *model) tea.Cmd {
 		return nil
 	}
 
-	wsDir := filepath.Join(state.WorkspacesDir(), fleetName, destName, fleetName)
-	instance := &fleet.Instance{
-		Name:         destName,
-		DisplayName:  destName,
-		Config:       src.Config,
-		WorkspaceDir: wsDir,
-		CreatedAt:    time.Now(),
-		Status:       fleet.StatusCloning,
-		Backend:      src.Backend,
-		Tag:          src.Tag,
-		Color:        src.Color,
-		Branch:       src.Branch,
-	}
-	_ = f.AddInstance(instance)
-	_ = state.Save(m.st)
-
+	// The destination record is pre-created server-side by the CloneInstance job
+	// (which copies the source's config/backend/tag/color/branch); no client
+	// write. instanceSpawnedMsg reload()s it into view.
 	key := fleetName + "/" + destName
 	m.creating[key] = true
-	fleetPage.buildRows(m)
 	fleetPage.mode = viewNormal
 	fleetPage.blurDialogFields()
 	m.message = fmt.Sprintf("Cloning %s/%s -> %s...", fleetName, srcName, destName)
@@ -1781,10 +1747,9 @@ func (fleetPage *fleetPage) saveRenameSession(m *model) tea.Cmd {
 
 	fleetPage.mode = viewNormal
 	fleetPage.blurDialogFields()
-	instanceBackend := m.instanceBackend(instance)
 
 	if isGrouped {
-		return renameGroupCmd(instanceBackend, instance.WorkspaceDir, ref, sanitized, oldGID, newName)
+		return renameGroupCmd(ref, sanitized, oldGID, newName)
 	}
-	return renameSessionCmd(instanceBackend, instance.WorkspaceDir, ref, oldName, newName)
+	return renameSessionCmd(ref, oldName, newName)
 }

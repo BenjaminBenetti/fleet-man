@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -382,7 +382,7 @@ func derivePersistableSnapshot(activeGroup ActiveGroup, panes []paneByPosition, 
 // in pane index order to preserve the session-to-position mapping. When
 // st is non-nil the layout is also mirrored into state.json so it
 // survives a fleet restart.
-func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
+func (fleetPage *fleetPage) saveCurrentGroupLayout(st *configutil.State) {
 	if fleetPage.activeGroup.Empty() {
 		return
 	}
@@ -412,19 +412,20 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 		return
 	}
 	if st.GroupLayouts == nil {
-		st.GroupLayouts = make(map[string]state.GroupLayout)
+		st.GroupLayouts = make(map[string]configutil.GroupLayout)
 	}
 	// Use composite key (instanceName/groupID) for state persistence
 	// to ensure isolation between instances with the same group ID.
 	stateKey := computeGroupKey(groupSnapshot.InstanceName, groupSnapshot.GroupID)
-	st.GroupLayouts[stateKey] = state.GroupLayout{
+	layout := configutil.GroupLayout{
 		GroupID:      groupSnapshot.GroupID,
 		InstanceName: groupSnapshot.InstanceName,
 		Sessions:     groupSnapshot.Sessions,
 		Layout:       groupSnapshot.Layout,
 		PaneCount:    groupSnapshot.PaneCount,
 	}
-	_ = state.Save(st)
+	st.GroupLayouts[stateKey] = layout
+	_ = setGroupLayoutRemote(layout)
 }
 
 // restoreGroupCmd recreates outer tmux panes for a saved session group.
@@ -433,12 +434,20 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(st *state.State) {
 // Each discovered session gets its own pane via `fleet shell --session`.
 func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance *fleet.Instance, groupID string) tea.Cmd {
 	restoreSeq := fleetPage.beginGroupRestore(groupID)
-	instanceBackend := m.instanceBackend(instance)
 	instanceName := instance.Name
 	qualifiedName := fleetName + "/" + instanceName
-	workspaceDir := instance.WorkspaceDir
 	sanitized := SanitizeSessionName(instanceName)
 	prefix := sanitized + groupSep + groupID
+
+	// The live session list comes from the server runtime (it polls tmux for all
+	// running instances), captured here on the Update goroutine and passed into
+	// the closure as newline-delimited names — the same shape the old `tmux
+	// list-sessions` exec produced, which restoreSessionNames filters by prefix.
+	var runtimeNames []string
+	for _, s := range m.runtimeSessions(InstanceRef{Fleet: fleetName, Instance: instanceName}) {
+		runtimeNames = append(runtimeNames, s.Name)
+	}
+	sessionList := strings.Join(runtimeNames, "\n")
 
 	// Grab saved layout if available.
 	key := computeGroupKey(instanceName, groupID)
@@ -464,20 +473,16 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 		if sg, ok := fleetPage.savedGroups[key]; ok {
 			savedSnapshot = &sg
 		}
-
-		// Only query the inner tmux when there's no saved snapshot. The
-		// snapshot (kept fresh by the 250ms layout tick) is the source of
-		// truth for restore — restoreSessionNames ignores the discovered
-		// list whenever savedSnapshot != nil — so on the common
-		// session-switch path we skip the ~2-3s devcontainer exec entirely.
-		var discovered string
+		// Only consult the discovered session list when there's no saved
+		// snapshot. The snapshot (kept fresh by the 250ms layout tick) is the
+		// source of truth for restore — restoreSessionNames ignores the
+		// discovered list whenever savedSnapshot != nil — so the common
+		// session-switch path skips it. When needed, the list comes from the
+		// server runtime (sessionList, captured above) rather than a client-side
+		// container exec, so there's no slow devcontainer round-trip either way.
+		discovered := ""
 		if savedSnapshot == nil {
-			listCmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
-				"sh", "-c",
-				`tmux list-sessions -F "#{session_name}" 2>/dev/null`,
-			})
-			out, _ := listCmd.Output()
-			discovered = string(out)
+			discovered = sessionList
 		}
 		sessions := restoreSessionNames(discovered, prefix, savedOrder, savedSnapshot, sanitized)
 		if len(sessions) == 0 {

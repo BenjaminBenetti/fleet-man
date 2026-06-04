@@ -1,14 +1,13 @@
 package cli
 
 import (
+	"context"
 	"fmt"
-	"path/filepath"
-	"time"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/create"
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc"
 )
 
 func newUpCmd() *cobra.Command {
@@ -33,17 +32,19 @@ func newUpCmd() *cobra.Command {
 				return err
 			}
 
-			st, err := state.Load()
-			if err != nil {
-				return err
-			}
-
-			// Determine the remote URL
+			// Resolve the remote URL: explicit --repo wins; otherwise reuse the
+			// fleet's recorded remote (read via the server) and finally fall back
+			// to the cwd's git remote for a brand-new fleet. The server pre-creates
+			// the StatusCreating record and provisions — no client-side state write
+			// (the #63 fix; concurrent `fleet up` now serialize through the server).
 			remoteURL := repoFlag
 			if remoteURL == "" {
-				if f, ok := st.Fleets[target.Fleet]; ok {
-					remoteURL = f.Remote
-				} else {
+				if st, serr := fetchFleetState(cmd.Context()); serr == nil {
+					if f := st.GetFleets()[target.Fleet]; f != nil {
+						remoteURL = f.GetRemote()
+					}
+				}
+				if remoteURL == "" {
 					remoteURL, err = fleet.RemoteURLFromCwd()
 					if err != nil {
 						return fmt.Errorf("could not determine repo URL: %w", err)
@@ -51,45 +52,34 @@ func newUpCmd() *cobra.Command {
 				}
 			}
 
-			f := st.GetOrCreateFleet(target.Fleet, remoteURL)
-
-			// Check if instance already exists
-			if _, err := f.GetInstance(target.Instance); err == nil {
-				return fmt.Errorf("instance %s/%s already exists", target.Fleet, target.Instance)
-			}
-
-			// Pre-create instance in state with "creating" status
-			wsDir := filepath.Join(state.WorkspacesDir(), target.Fleet, target.Instance, target.Fleet)
-			instance := &fleet.Instance{
-				Name:         target.Instance,
-				DisplayName:  target.Instance,
-				Config:       ".devcontainer/devcontainer.json",
-				WorkspaceDir: wsDir,
-				CreatedAt:    time.Now(),
-				Status:       fleet.StatusCreating,
-				Backend:      backendType,
-				Branch:       branchFlag,
-			}
-			if err := f.AddInstance(instance); err != nil {
-				return err
-			}
-			if err := state.Save(st); err != nil {
-				return err
-			}
-
 			fmt.Printf("Creating %s/%s (backend: %s)...\n", target.Fleet, target.Instance, backendType)
-			if err := create.Run(target.Fleet, target.Instance, remoteURL, branchFlag, true, backendType); err != nil {
+
+			req := &fleetgrpc.CreateInstanceRequest{
+				Fleet:    target.Fleet,
+				Instance: target.Instance,
+				Backend:  backendTypeToProto(backendType),
+				Verbose:  true,
+			}
+			if remoteURL != "" {
+				req.Remote = &remoteURL
+			}
+			if branchFlag != "" {
+				req.Branch = &branchFlag
+			}
+			if err := runInstanceJob(cmd.Context(), func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error) {
+				return svc.CreateInstance(ctx, req)
+			}); err != nil {
 				return err
 			}
 
-			// Reload state to get the updated container ID
-			st, err = state.Load()
-			if err != nil {
-				return err
-			}
-			if f, ok := st.Fleets[target.Fleet]; ok {
-				if instance, err := f.GetInstance(target.Instance); err == nil {
-					fmt.Printf("Instance %s/%s is running (container: %s)\n", target.Fleet, target.Instance, instance.ContainerID[:min(12, len(instance.ContainerID))])
+			if st, serr := fetchFleetState(cmd.Context()); serr == nil {
+				if f := st.GetFleets()[target.Fleet]; f != nil {
+					for _, inst := range f.GetInstances() {
+						if inst.GetName() == target.Instance {
+							cid := inst.GetContainerId()
+							fmt.Printf("Instance %s/%s is running (container: %s)\n", target.Fleet, target.Instance, cid[:min(12, len(cid))])
+						}
+					}
 				}
 			}
 			return nil

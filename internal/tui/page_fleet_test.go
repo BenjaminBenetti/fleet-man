@@ -4,25 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
-	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-// testTracker returns an ActivityTracker pre-loaded with specific states/tools.
-func testTracker(states map[string]agentdetect.State, tools map[string]state.AgentTool) *ActivityTracker {
-	t := NewActivityTracker()
-	for k, v := range states {
-		t.states[k] = v
-	}
-	for k, v := range tools {
-		t.tools[k] = v
-	}
-	return t
-}
 
 func TestUpdateNormalStopShortcutStopsRunningInstance(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -41,15 +27,9 @@ func TestUpdateNormalStopShortcutStopsRunningInstance(t *testing.T) {
 
 	calledFleet := ""
 	calledInstance := ""
-	restore := stubToggleInstance(func(fleetName, instanceName string) (*instanceops.Result, error) {
+	restore := stubToggleInstance(func(fleetName, instanceName string) {
 		calledFleet = fleetName
 		calledInstance = instanceName
-		return &instanceops.Result{
-			FleetName:    fleetName,
-			InstanceName: instanceName,
-			Status:       fleet.StatusStopped,
-			Changed:      true,
-		}, nil
 	})
 	defer restore()
 
@@ -83,14 +63,7 @@ func TestUpdateNormalStopShortcutStartsStoppedInstance(t *testing.T) {
 		fleetPage: fp,
 	}
 
-	restore := stubToggleInstance(func(fleetName, instanceName string) (*instanceops.Result, error) {
-		return &instanceops.Result{
-			FleetName:    fleetName,
-			InstanceName: instanceName,
-			Status:       fleet.StatusRunning,
-			Changed:      true,
-		}, nil
-	})
+	restore := stubToggleInstance(func(fleetName, instanceName string) {})
 	defer restore()
 
 	cmd := fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
@@ -111,9 +84,8 @@ func TestUpdateNormalStopShortcutRequiresInstanceRow(t *testing.T) {
 	m := &model{fleetPage: fp}
 
 	called := false
-	restore := stubToggleInstance(func(fleetName, instanceName string) (*instanceops.Result, error) {
+	restore := stubToggleInstance(func(fleetName, instanceName string) {
 		called = true
-		return nil, nil
 	})
 	defer restore()
 
@@ -134,9 +106,8 @@ func TestUpdateNormalStopShortcutSkipsCreatingInstance(t *testing.T) {
 	m := &model{fleetPage: fp}
 
 	called := false
-	restore := stubToggleInstance(func(fleetName, instanceName string) (*instanceops.Result, error) {
+	restore := stubToggleInstance(func(fleetName, instanceName string) {
 		called = true
-		return nil, nil
 	})
 	defer restore()
 
@@ -169,7 +140,6 @@ func TestViewFleetListShowsBranchItemForInstance(t *testing.T) {
 			},
 		},
 		sessionStore: NewSessionStore(),
-		stats:        map[string]*backend.ContainerStats{},
 		fleetPage:    fp,
 	}
 
@@ -286,7 +256,6 @@ func TestViewFleetListOmitsBranchItemWhenBranchIsUnavailable(t *testing.T) {
 			},
 		},
 		sessionStore: NewSessionStore(),
-		stats:        map[string]*backend.ContainerStats{},
 		fleetPage:    fp,
 	}
 
@@ -322,12 +291,15 @@ func TestViewFleetListShowsAgentWorkingIndicator(t *testing.T) {
 		config: &state.Config{
 			AgentSettings: state.AgentSettings{ToolSelection: state.AgentToolClaude},
 		},
-		activity: testTracker(
-			map[string]agentdetect.State{"abc123": agentdetect.StateWorking},
-			map[string]state.AgentTool{"abc123": state.AgentToolClaude},
-		),
+		runtime: map[string]*fleetgrpc.InstanceRuntime{
+			"alpha/agent-1": {
+				Fleet:         "alpha",
+				Instance:      "agent-1",
+				AgentTool:     fleetgrpc.AgentTool_AGENT_TOOL_CLAUDE,
+				AgentActivity: fleetgrpc.AgentActivity_AGENT_ACTIVITY_WORKING,
+			},
+		},
 		sessionStore: NewSessionStore(),
-		stats:        map[string]*backend.ContainerStats{},
 		fleetPage:    fp,
 	}
 
@@ -363,12 +335,15 @@ func TestViewFleetListShowsAgentWaitingIndicator(t *testing.T) {
 		config: &state.Config{
 			AgentSettings: state.AgentSettings{ToolSelection: state.AgentToolClaude},
 		},
-		activity: testTracker(
-			map[string]agentdetect.State{"abc123": agentdetect.StateWaiting},
-			map[string]state.AgentTool{"abc123": state.AgentToolClaude},
-		),
+		runtime: map[string]*fleetgrpc.InstanceRuntime{
+			"alpha/agent-1": {
+				Fleet:         "alpha",
+				Instance:      "agent-1",
+				AgentTool:     fleetgrpc.AgentTool_AGENT_TOOL_CLAUDE,
+				AgentActivity: fleetgrpc.AgentActivity_AGENT_ACTIVITY_WAITING,
+			},
+		},
 		sessionStore: NewSessionStore(),
-		stats:        map[string]*backend.ContainerStats{},
 		fleetPage:    fp,
 	}
 
@@ -404,12 +379,7 @@ func TestViewFleetListShowsAgentOffIndicator(t *testing.T) {
 		config: &state.Config{
 			AgentSettings: state.AgentSettings{ToolSelection: state.AgentToolClaude},
 		},
-		activity: testTracker(
-			map[string]agentdetect.State{"abc123": agentdetect.StateNotRunning},
-			nil,
-		),
 		sessionStore: NewSessionStore(),
-		stats:        map[string]*backend.ContainerStats{},
 		fleetPage:    fp,
 	}
 
@@ -448,9 +418,7 @@ func TestViewFleetListNoAgentIndicatorForStoppedInstance(t *testing.T) {
 		config: &state.Config{
 			AgentSettings: state.AgentSettings{ToolSelection: state.AgentToolClaude},
 		},
-		activity:     NewActivityTracker(),
 		sessionStore: NewSessionStore(),
-		stats:        map[string]*backend.ContainerStats{},
 		fleetPage:    fp,
 	}
 
@@ -464,11 +432,21 @@ func TestViewFleetListNoAgentIndicatorForStoppedInstance(t *testing.T) {
 	}
 }
 
-func stubToggleInstance(fn func(fleetName, instanceName string) (*instanceops.Result, error)) func() {
-	prev := toggleInstanceStatus
-	toggleInstanceStatus = fn
+// stubToggleInstance stubs both lifecycle seams the 's' shortcut dispatches
+// (start/stop are separate server jobs now); record fires with the fleet +
+// instance whenever either is invoked.
+func stubToggleInstance(record func(fleetName, instanceName string)) func() {
+	prevStart, prevStop := startInstanceRemote, stopInstanceRemote
+	startInstanceRemote = func(fleetName, instanceName string) error {
+		record(fleetName, instanceName)
+		return nil
+	}
+	stopInstanceRemote = func(fleetName, instanceName string) error {
+		record(fleetName, instanceName)
+		return nil
+	}
 	return func() {
-		toggleInstanceStatus = prev
+		startInstanceRemote, stopInstanceRemote = prevStart, prevStop
 	}
 }
 
@@ -485,7 +463,6 @@ func TestEditInstanceRenamesViaDisplayName(t *testing.T) {
 			},
 		},
 		sessionStore: NewSessionStore(),
-		stats:        map[string]*backend.ContainerStats{},
 		fleetPage:    fp,
 	}
 

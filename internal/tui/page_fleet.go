@@ -1,20 +1,18 @@
 package tui
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os/exec"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
-	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/devcontainersetup"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
-	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -26,7 +24,6 @@ import (
 // Fleet Page
 // ===========================================
 
-var toggleInstanceStatus = instanceops.ToggleInstance
 var resolveWorkspaceBranch = gitutil.BranchName
 
 // fleetPage holds fleet-list-specific state.
@@ -141,14 +138,8 @@ func (fleetPage *fleetPage) finishGroupRestore(seq int) bool {
 // whenever the split is closed (user toggle, external kill, restore
 // teardown) so a future open starts from a known-empty state.
 func (fleetPage *fleetPage) clearSplit() {
-	// A non-empty paneID means a split was actually open, so this is a real
-	// session close (toggle shut, switched away, deleted, or the pane was
-	// closed externally) — log it with how long it was open. Skip it for
-	// restore-backed splits: their `fleet shell` panes log their own close,
-	// so logging here would duplicate it.
-	if fleetPage.splitPaneID != "" && !fleetPage.splitViaRestore {
-		logSessionClose(fleetPage.splitRef.Fleet, fleetPage.splitRef.Instance, fleetPage.splitSession, fleetPage.splitOpenedAt)
-	}
+	// (The per-session open/close event log moved to the server, which owns
+	// ~/.fleet/fleet.log; the split bookkeeping below is host-side only.)
 	fleetPage.splitPaneID = ""
 	fleetPage.splitRef = InstanceRef{}
 	fleetPage.splitSession = ""
@@ -167,37 +158,16 @@ func (fleetPage *fleetPage) Init(m *model) tea.Cmd {
 // Update dispatches messages to the appropriate handler based on the
 // current view mode.
 func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
-	// Fleet-specific async messages that need row rebuilds
+	// Fleet-specific async messages that need row rebuilds. (Session-list
+	// refresh + the split-layout snapshot / external-kill detection ride the
+	// runtimeChangedMsg handler in the model-level Update now — the server pushes
+	// session changes on the runtime stream, replacing the old client poll.)
 	switch msg.(type) {
-	case sessionDiscoveryMsg:
-		fleetPage.buildRows(m)
-		// While a split is open, re-snapshot the active group's tmux
-		// layout into savedGroups on every tick. This keeps the map
-		// honest against mutations that bypass fleet's handlers —
-		// %/" adds new panes via a tmux binding, mouse drag resizes,
-		// Ctrl+Q/O closes without notifying fleet. The save is
-		// diff-gated so idle ticks don't hit disk.
-		if fleetPage.splitPaneID != "" && !fleetPage.activeGroup.Empty() && splitOpen() {
-			fleetPage.saveCurrentGroupLayout(m.st)
-		}
-		// Detect when panes were killed externally. savedGroups already
-		// holds the pre-kill snapshot from the tick before, so clearing
-		// transient fields here loses nothing.
-		if fleetPage.splitPaneID != "" && !splitOpen() {
-			unbindHostSplitKeys()
-			fleetPage.clearSplit()
-		}
-		return nil
-
 	case operationDoneMsg:
 		fleetPage.buildRows(m)
 		return nil
 
 	case instanceCreateErrMsg:
-		fleetPage.buildRows(m)
-		return nil
-
-	case sessionsMsg:
 		fleetPage.buildRows(m)
 		return nil
 
@@ -483,9 +453,11 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 						fleetPage.buildRows(m)
 					} else {
 						m.sessionStore.SetExpanded(ref, true)
+						// Discovery comes from the server runtime cache (the server
+						// polls tmux for all running instances); read it now and
+						// rebuild so the session list shows immediately.
+						m.refreshSessionsFromRuntime(ref)
 						fleetPage.buildRows(m)
-						b := m.instanceBackend(r.instance)
-						return listSessionsCmd(b, r.instance.WorkspaceDir, ref)
 					}
 				case rowSession, rowNewSession, rowSettings:
 					return fleetPage.handleEnter(m)
@@ -531,16 +503,21 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				break
 			}
 
+			// Start/stop run as server jobs. Flip an optimistic in-memory
+			// transitional status for the spinner (NOT persisted — the server owns
+			// the transition and the persisted status); operationDoneMsg reload()s
+			// the authoritative result.
+			fleetName, instName := r.fleetName, r.instance.Name
+			var cmd tea.Cmd
 			if r.instance.Status == fleet.StatusRunning {
 				r.instance.Status = fleet.StatusStopping
+				cmd = stopInstanceCmd(fleetName, instName)
 			} else if r.instance.Status == fleet.StatusStopped {
 				r.instance.Status = fleet.StatusStarting
+				cmd = startInstanceCmd(fleetName, instName)
 			}
-			_ = state.Save(m.st)
 			fleetPage.buildRows(m)
-
-			fleetName, instName := r.fleetName, r.instance.Name
-			return toggleInstanceCmd(fleetName, instName)
+			return cmd
 
 		case "d":
 			r := fleetPage.currentRow()
@@ -651,10 +628,12 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				break
 			}
 			shellCmd := freshShellCommand(m.config)
-			cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
-			logSessionOpen("terminal", fleetPage.currentFleetName(), instance.Name, "", strings.Join(shellCmd, " "))
-			err := openInTerminal(cmd.Args)
+			cmd, err := resolveExecCmd(fleetPage.currentFleetName(), instance.Name, shellCmd)
 			if err != nil {
+				m.message = fmt.Sprintf("Could not open terminal: %v", err)
+				break
+			}
+			if err := openInTerminal(cmd.Args); err != nil {
 				m.message = fmt.Sprintf("Could not open terminal: %v", err)
 			} else {
 				m.message = fmt.Sprintf("Opened terminal for %s", instance.GetDisplayName())
@@ -668,17 +647,19 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			}
 			r := fleetPage.rows[fleetPage.cursor]
 			var codeCmd *exec.Cmd
+			// Each backend opens VS Code with a local CLI; no container access is
+			// needed, so these are computed client-side (no internal/backend) —
+			// the editor URI/args are pure and small enough to inline.
 			switch instance.Backend {
 			case fleet.BackendCoder:
-				codeCmd = exec.Command("coder", backendutil.CoderOpenVSCodeArgs(instance.ContainerID)...)
+				codeCmd = exec.Command("coder", "open", "vscode", instance.ContainerID)
 			case fleet.BackendCodespaces:
 				codeCmd = exec.Command("gh", "codespace", "code", "-c", instance.ContainerID)
 			default:
-				uri, ok := m.instanceBackend(instance).EditorURI(instance.WorkspaceDir, r.fleetName)
-				if !ok {
-					m.message = "Editor integration not supported by this backend"
-					break
-				}
+				// Devcontainer: VS Code's dev-container remote URI (hex of the host
+				// workspace path + the in-container /workspaces/<project> folder).
+				uri := fmt.Sprintf("vscode-remote://dev-container+%s/workspaces/%s",
+					hex.EncodeToString([]byte(instance.WorkspaceDir)), r.fleetName)
 				codeCmd = exec.Command("code", "--folder-uri", uri)
 			}
 			if codeCmd != nil {
@@ -695,7 +676,9 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "Select an instance"
 				break
 			}
-			if !m.instanceBackend(instance).SupportsClone() {
+			// Only the devcontainer backend supports clone (coder/codespaces don't);
+			// "" defaults to devcontainer. Pure check — no backend construction.
+			if instance.Backend != fleet.BackendDevcontainer && instance.Backend != "" {
 				m.message = fmt.Sprintf("Clone not supported by %s backend", instance.Backend)
 				break
 			}
@@ -746,7 +729,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			}
 			r := fleetPage.rows[fleetPage.cursor]
 			return tea.ExecProcess(
-				logsCommand(m.instanceBackend(instance), r.fleetName, instance),
+				logsCommand(r.fleetName, instance),
 				func(err error) tea.Msg { return execDoneMsg{err} },
 			)
 
@@ -849,24 +832,24 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 			cols, rows := tmuxWindowSize()
 			cols = cols * 70 / 100
 			shellCmd := ShellCommandForSession(m.config, sessionName, cols, rows, true)
-			cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
-			// The "session opened" event for split panes is logged centrally
-			// in the splitPaneMsg handler (covers grouped + ungrouped opens).
-			return splitPaneCmd(fleetPage.splitPaneID, sessRef, sessionName, groupID, cmd.Cmd)
+			cmd, err := resolveExecCmd(r.fleetName, instance.Name, shellCmd)
+			if err != nil {
+				m.message = fmt.Sprintf("Could not open session: %v", err)
+				return nil
+			}
+			return splitPaneCmd(fleetPage.splitPaneID, sessRef, sessionName, groupID, cmd)
 		}
 		shellCmd := ShellCommandForSession(m.config, sessionName, m.width, m.height, false)
-		cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
+		cmd, err := resolveExecCmd(r.fleetName, instance.Name, shellCmd)
+		if err != nil {
+			m.message = fmt.Sprintf("Could not open session: %v", err)
+			return nil
+		}
 		banner := renderGradient(nameToBanner(instance.GetDisplayName()))
 		banner += "\n  " + dimStyle.Render("ctrl+q/ctrl+o to detach (session persists)")
-		sessFleet, sessInstance := r.fleetName, instance.Name
-		start := time.Now()
-		logSessionOpen("attach", sessFleet, sessInstance, sessionName, strings.Join(shellCmd, " "))
 		return tea.ExecProcess(
-			execWithBannerCmd(banner, cmd.Cmd),
-			func(err error) tea.Msg {
-				logSessionClose(sessFleet, sessInstance, sessionName, start)
-				return execDoneMsg{err}
-			},
+			execWithBannerCmd(banner, cmd),
+			func(err error) tea.Msg { return execDoneMsg{err} },
 		)
 
 	case rowInstance:
@@ -902,18 +885,16 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		m.sessionStore.SetLastActive(instRef, lastSession{sessionName: sessionName})
 
 		shellCmd := ShellCommandForSession(m.config, sessionName, m.width, m.height, false)
-		cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
+		cmd, err := resolveExecCmd(instFleetName, instance.Name, shellCmd)
+		if err != nil {
+			m.message = fmt.Sprintf("Could not open session: %v", err)
+			return nil
+		}
 		banner := renderGradient(nameToBanner(instance.GetDisplayName()))
 		banner += "\n  " + dimStyle.Render("ctrl+q/ctrl+o to detach (session persists)")
-		instName := instance.Name
-		start := time.Now()
-		logSessionOpen("attach", instFleetName, instName, sessionName, strings.Join(shellCmd, " "))
 		return tea.ExecProcess(
-			execWithBannerCmd(banner, cmd.Cmd),
-			func(err error) tea.Msg {
-				logSessionClose(instFleetName, instName, sessionName, start)
-				return execDoneMsg{err}
-			},
+			execWithBannerCmd(banner, cmd),
+			func(err error) tea.Msg { return execDoneMsg{err} },
 		)
 	}
 
@@ -1130,18 +1111,22 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			// non-transitional render branch.
 			throbber := agentOffStyle.Render("○")
 			agentStr := ""
-			if instance.Status == fleet.StatusRunning && m.activity != nil {
-				tool := m.activity.Tool(instance.ContainerID)
-				label := agentToolLabel(tool)
-				switch m.activity.State(instance.ContainerID) {
-				case agentdetect.StateWorking:
+			if instance.Status == fleet.StatusRunning {
+				// Live agent state comes from the server's runtime sidecar
+				// (P2 Step 7). A missing entry / UNSPECIFIED activity renders as
+				// "○ idle" (same as NOT_RUNNING), so a running row shows idle
+				// immediately, before the first runtime push lands.
+				rt := m.runtime[rtKey(r.fleetName, instance.Name)]
+				label := agentToolLabelProto(rt.GetAgentTool())
+				switch rt.GetAgentActivity() {
+				case fleetgrpc.AgentActivity_AGENT_ACTIVITY_WORKING:
 					agentStr = agentWorkingStyle.Render(fmt.Sprintf("  ▶ %s", label))
 					if len(m.agentSpinner.Spinner.Frames) > 0 {
 						throbber = strings.TrimRight(m.agentSpinner.View(), "\n")
 					} else {
 						throbber = agentWorkingStyle.Render("✻")
 					}
-				case agentdetect.StateWaiting:
+				case fleetgrpc.AgentActivity_AGENT_ACTIVITY_WAITING:
 					agentStr = agentWaitingStyle.Render(fmt.Sprintf("  ⏸ %s", label))
 					throbber = agentWaitingStyle.Render("○")
 				default:
@@ -1190,8 +1175,8 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				)
 			} else {
 				statsStr := ""
-				if s, ok := m.stats[instance.ContainerID]; ok {
-					statsStr = dimStyle.Render(fmt.Sprintf("  %4.0f mcpu  %6.1f MB", s.CPUMillicores, s.MemoryMB))
+				if s := m.runtime[rtKey(r.fleetName, instance.Name)].GetStats(); s != nil {
+					statsStr = dimStyle.Render(fmt.Sprintf("  %4.0f mcpu  %6.1f MB", s.GetCpuMillicores(), s.GetMemoryMb()))
 				}
 
 				line = fmt.Sprintf("%s    %s %s%s%s%s",
@@ -1245,11 +1230,15 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 
 	var totalCPU float64
 	var totalMem float64
-	for _, s := range m.stats {
-		totalCPU += s.CPUMillicores
-		totalMem += s.MemoryMB
+	statsCount := 0
+	for _, rt := range m.runtime {
+		if s := rt.GetStats(); s != nil {
+			totalCPU += s.GetCpuMillicores()
+			totalMem += s.GetMemoryMb()
+			statsCount++
+		}
 	}
-	if len(m.stats) > 0 {
+	if statsCount > 0 {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("  Total: %.0f mcpu  %.1f MB", totalCPU, totalMem)))
 		b.WriteString("\n")
 	}
@@ -1739,21 +1728,31 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 	ref := InstanceRef{Fleet: fleetName, Instance: instance.Name}
 	sanitized := SanitizeSessionName(instance.Name)
 
-	// The session discovery loop only runs for expanded instances, so
-	// hitting enter on a collapsed row with no lastActive entry would
-	// otherwise always spawn a new group. Load sessions on demand here
-	// so we can attach to an existing one when available.
-	ensureSessionsLoaded(m, m.instanceBackend(instance), instance.WorkspaceDir, ref)
+	// Discovery is sourced from the server runtime; hitting enter on a collapsed
+	// row with no lastActive entry would otherwise always spawn a new group.
+	// Populate from the runtime cache on demand so we can attach to an existing
+	// session when available.
+	ensureSessionsLoaded(m, ref)
+
+	// splitSessionCmd resolves the session shell argv (server-side) and builds a
+	// split-pane command, surfacing a resolve error as a status message.
+	splitSessionCmd := func(sessionName, groupID string) tea.Cmd {
+		cols, rows := tmuxWindowSize()
+		cols = cols * 70 / 100
+		shellCmd := ShellCommandForSession(m.config, sessionName, cols, rows, true)
+		cmd, err := resolveExecCmd(fleetName, instance.Name, shellCmd)
+		if err != nil {
+			m.message = fmt.Sprintf("Could not open session: %v", err)
+			return nil
+		}
+		return splitPaneCmd(fleetPage.splitPaneID, ref, sessionName, groupID, cmd)
+	}
 
 	if last, ok := m.sessionStore.LastActive(ref); ok {
 		if last.groupID != "" {
 			return fleetPage.restoreGroupCmd(m, fleetName, instance, last.groupID)
 		}
-		cols, rows := tmuxWindowSize()
-		cols = cols * 70 / 100
-		shellCmd := ShellCommandForSession(m.config, last.sessionName, cols, rows, true)
-		cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
-		return splitPaneCmd(fleetPage.splitPaneID, ref, last.sessionName, last.groupID, cmd.Cmd)
+		return splitSessionCmd(last.sessionName, last.groupID)
 	}
 
 	if groups := m.sessionStore.Groups(ref); len(groups) > 0 {
@@ -1762,20 +1761,12 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 		if g.GroupID != "" && isGroupedSession(sanitized, rootName) {
 			return fleetPage.restoreGroupCmd(m, fleetName, instance, g.GroupID)
 		}
-		cols, rows := tmuxWindowSize()
-		cols = cols * 70 / 100
-		shellCmd := ShellCommandForSession(m.config, rootName, cols, rows, true)
-		cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
-		return splitPaneCmd(fleetPage.splitPaneID, ref, rootName, g.GroupID, cmd.Cmd)
+		return splitSessionCmd(rootName, g.GroupID)
 	}
 
 	newGroupID := randomHex(3)
 	sessName := groupSessionName(sanitized, newGroupID)
-	cols, rows := tmuxWindowSize()
-	cols = cols * 70 / 100
-	shellCmd := ShellCommandForSession(m.config, sessName, cols, rows, true)
-	cmd := m.instanceBackend(instance).ExecCommand(instance.WorkspaceDir, shellCmd)
-	return splitPaneCmd(fleetPage.splitPaneID, ref, sessName, newGroupID, cmd.Cmd)
+	return splitSessionCmd(sessName, newGroupID)
 }
 
 // cycleSessionGroup moves the visual selection to the next or previous

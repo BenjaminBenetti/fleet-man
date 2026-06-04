@@ -3,11 +3,9 @@ package cli
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/spf13/cobra"
 )
 
@@ -27,7 +25,7 @@ Examples:
   fleet exec-in-session my-fleet/agent-1 task-session "npm test"`,
 		Args: cobra.MinimumNArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _, _, instance, err := resolveInstance(args[0], "")
+			target, instance, err := resolveInstance(args[0], "")
 			if err != nil {
 				return err
 			}
@@ -41,17 +39,18 @@ Examples:
 
 			// Send the command to the tmux session via send-keys
 			// followed by Enter so the shell executes it.
-			execCmd := sessionExecCommand(instance, []string{
+			execCmd, err := sessionExecCommand(target.Fleet, target.Instance, []string{
 				"sh", "-c",
 				fmt.Sprintf(`tmux send-keys -t %s %s Enter`, dotfiles.ShQuote(sessionName), dotfiles.ShQuote(command)),
 			})
+			if err != nil {
+				return fmt.Errorf("failed to execute command in session %q: %w", sessionName, err)
+			}
 
-			start := time.Now()
 			if err := execCmd.Run(); err != nil {
 				return fmt.Errorf("failed to execute command in session %q: %w", sessionName, err)
 			}
 
-			flog.Info("session exec", "instance", args[0], "session", sessionName, "cmd", command, "ms", flog.MillisSince(start))
 			fmt.Printf("Executed command in session %q of instance %s\n", sessionName, args[0])
 			return nil
 		},

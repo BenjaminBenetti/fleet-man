@@ -83,6 +83,10 @@ fleet up my-project/agent-3
 - Docker
 - [devcontainer CLI](https://github.com/devcontainers/cli) (`npm install -g @devcontainers/cli`)
 
+## Development
+
+Building from source, tests, and the protobuf workflow: see [DEVELOPMENT.md](DEVELOPMENT.md).
+
 ## Windows WSL Setup
 
 Fleet is a Linux CLI, but it can run on Windows through WSL2. The confirmed

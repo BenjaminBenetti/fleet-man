@@ -1,0 +1,132 @@
+syntax = "proto3";
+
+package fleetgrpc;
+
+import "google/protobuf/timestamp.proto";
+import "domain.proto";
+import "runtime.proto";
+import "jobs.proto";
+
+option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
+
+// =====================================================================
+// LIFECYCLE / HANDSHAKE
+// =====================================================================
+
+// HelloRequest carries the client's compiled-in version. The handshake is the
+// AUTHORITATIVE version check.
+message HelloRequest {
+  string client_version = 1;
+}
+
+// HelloReply carries the server's authoritative version plus liveness hints.
+//
+// VERSION POLICY: only a client STRICTLY NEWER than the running server relaunches
+// it (drain + relaunch under the single-winner lock); an OLDER client degrades to
+// a clear "server is newer, upgrade your client" error (it cannot produce a newer
+// server). A dev build (empty version) is treated as always-compatible.
+message HelloReply {
+  string server_version = 1;
+
+  // pid is a HOST-LOCAL hint, usable only by a LOCAL client for restart
+  // confirmation. A REMOTE client gets a meaningless pid and MUST rely on
+  // server_version + started_at to detect a restart — keeping the contract free
+  // of localhost assumptions.
+  int64 pid = 2;
+
+  google.protobuf.Timestamp started_at = 3;
+}
+
+// ShutdownRequest asks the server to drain in-flight jobs and exit. drain=true
+// (the version-upgrade path) waits for running jobs to finish before exiting;
+// drain=false is reserved (force-exit). reason is free-form for the event log.
+message ShutdownRequest {
+  bool drain = 1;
+  optional string reason = 2;
+}
+
+// ShutdownReply confirms acceptance and reports how many jobs will be drained
+// (snapshotted in the same model-loop turn that flips to draining), so the
+// caller can show progress.
+message ShutdownReply {
+  bool accepted = 1;
+  int32 draining_jobs = 2;
+}
+
+message GetStateRequest {}
+
+// GetStateReply is the one-stop snapshot of EVERYTHING the TUI renders:
+//   state   — persisted: what fleets/instances exist + their recorded status
+//   runtime — live: agent running?/stats/sessions/ports/live container status
+//   active_jobs — in-flight jobs (for progress + re-attach)
+message GetStateReply {
+  State state = 1;
+  repeated InstanceRuntime runtime = 2;
+  repeated JobSummary active_jobs = 3;
+}
+
+// =====================================================================
+// SYNCHRONOUS (NON-JOB) STATE MUTATIONS (from the state-io map)
+// Fast single-writer mutations — unary RPCs, not jobs. Each returns the
+// resulting State so callers stay consistent without a separate GetState; Watch
+// subscribers also get a StateChanged.
+// =====================================================================
+
+// CreateFleet adds a fleet (GetOrCreateFleet). Idempotent: returns the existing
+// fleet if present.
+message CreateFleetRequest {
+  string name = 1;
+  string remote = 2;
+}
+
+// DestroyFleet removes the fleet RECORD only (no container teardown — that is
+// DestroyInstance with destroy_fleet). The server REJECTS this when live
+// instances remain, to prevent orphaned containers.
+message DestroyFleetRequest {
+  string name = 1;
+}
+
+// SetFleetSettings replaces a fleet's mount/home/launch settings. Sending the
+// full FleetSettings keeps presence semantics (e.g. prefer_fleet_launch
+// tri-state) intact.
+message SetFleetSettingsRequest {
+  string fleet = 1;
+  FleetSettings settings = 2;
+}
+
+// SetInstanceMetadata updates user-facing labels without touching resources
+// (RENAME display_name+color, TAG tag). Fields are optional so a caller updates
+// one without clobbering the others; an explicit empty string (clear tag) is
+// sent via the presence bit.
+message SetInstanceMetadataRequest {
+  string fleet = 1;
+  string instance = 2;
+  optional string display_name = 3;
+  optional string color = 4;
+  optional string tag = 5;
+}
+
+// SetGroupLayout persists a tmux pane layout (SAVE_GROUP_LAYOUT). The state map
+// is keyed by computeGroupKey(instance_name, group_id); the server derives that
+// composite key from the GroupLayout's own fields.
+message SetGroupLayoutRequest {
+  GroupLayout layout = 1;
+}
+
+// DeleteGroupLayout removes a persisted layout (the delete(st.GroupLayouts, key)
+// sites when a group/instance is gone). The server derives the same composite
+// key and removes the entry — without this, deleted-pane layouts would resurrect.
+message DeleteGroupLayoutRequest {
+  string instance_name = 1;
+  string group_id = 2;
+}
+
+// SetLastSeenVersion records the release-notes version the user has seen.
+message SetLastSeenVersionRequest {
+  string version = 1;
+}
+
+// Generic reply for the synchronous mutations: the post-mutation State.
+message MutationReply {
+  State state = 1;
+}

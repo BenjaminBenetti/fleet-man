@@ -1,0 +1,185 @@
+syntax = "proto3";
+
+// Package fleetgrpc is the single source of truth for the fleet client/server
+// contract: the .proto, the generated stubs, AND hand-written PURE domain
+// methods (in *_domain.go). Proto types ARE the domain model — the messages in
+// this file REPLACE internal/fleet + internal/state structs.
+//
+// File layout (all package fleetgrpc, one buf module):
+//   domain.proto    — persisted model (this file): Instance/Fleet/State + their enums
+//   runtime.proto   — live/ephemeral model: InstanceRuntime + stats/sessions/ports
+//   jobs.proto      — job events + job request messages
+//   watch.proto     — Watch subscription: Event/StateChanged/RuntimeChanged/BrowserOpen
+//   control.proto   — Hello/Shutdown/GetState + synchronous state mutations
+//   config.proto    — server-owned config.json
+//   exec.proto      — interactive backend ops (Exec/Logs/PortForward)
+//   service.proto   — the FleetService that ties them together
+package fleetgrpc;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
+
+// =====================================================================
+// PERSISTED-MODEL ENUMS
+// =====================================================================
+
+// InstanceStatus mirrors internal/fleet.InstanceStatus (a Go string enum). The
+// zero value is UNSPECIFIED so an unset/garbage status is never silently read
+// as a real lifecycle state — the server treats UNSPECIFIED as "needs
+// reconciliation" rather than accidentally meaning "creating".
+//
+// CONTRACT: transitional statuses (CREATING, CLONING, DELETING, STOPPING,
+// STARTING) are set ONLY by the SERVER when a job begins; clients MUST NOT
+// write status (no SetInstanceStatus RPC exists, by design). The TUI renders
+// optimistic transitions from JobStarted/JobProgress, never by writing status
+// itself — this prevents a stray client-side status write from re-introducing
+// the issue #63 class of state-file race.
+enum InstanceStatus {
+  INSTANCE_STATUS_UNSPECIFIED = 0;
+  INSTANCE_STATUS_CREATING = 1;
+  INSTANCE_STATUS_CLONING = 2;
+  INSTANCE_STATUS_RUNNING = 3;
+  INSTANCE_STATUS_STOPPED = 4;
+  INSTANCE_STATUS_FAILED = 5;
+  INSTANCE_STATUS_STOPPING = 6;
+  INSTANCE_STATUS_STARTING = 7;
+  INSTANCE_STATUS_DELETING = 8;
+}
+
+// BackendType mirrors internal/fleet.BackendType. Zero value UNSPECIFIED is
+// meaningful: the Go JSON tag is `backend,omitempty`, so a fleet created before
+// backends were tracked has none recorded. UNSPECIFIED carries that "not
+// recorded / use default" intent (see CreateInstanceRequest.backend for how the
+// server resolves UNSPECIFIED into a concrete backend).
+enum BackendType {
+  BACKEND_TYPE_UNSPECIFIED = 0;
+  BACKEND_TYPE_DEVCONTAINER = 1;
+  BACKEND_TYPE_CODER = 2;
+  BACKEND_TYPE_CODESPACES = 3;
+}
+
+// =====================================================================
+// PERSISTED DOMAIN MESSAGES (proto-types-are-the-model)
+// =====================================================================
+
+// Instance mirrors internal/fleet.Instance field-for-field. This is the
+// PERSISTED record (written verbatim to state.json by the server's hand-written
+// legacy-JSON mapper). Live/ephemeral data the TUI renders (agent activity,
+// stats, sessions, ...) is deliberately NOT here — it lives in the
+// InstanceRuntime sidecar (runtime.proto), keyed by the same (fleet, instance).
+//
+// PRESENCE RULES (`optional`): a scalar is `optional` when empty-string/zero
+// must be distinguishable from "unset" because the code branches on `== ""`.
+message Instance {
+  // Stable identifier (container names, workspace paths, tmux prefixes, CLI
+  // lookups). Always present.
+  string name = 1;
+
+  // User-facing label. JSON display_name,omitempty. GetDisplayName falls back
+  // to Name only when truly empty, so empty-vs-unset matters — optional.
+  optional string display_name = 2;
+
+  // Filled by markInstanceRunning. Code branches on `== ""` (not provisioned)
+  // across backend/lifecycle — optional. Legacy JSON tag is NOT omitempty, so
+  // the persistence mapper always emits it (empty string when unset).
+  optional string container_id = 3;
+
+  // Path to .devcontainer/devcontainer.json. Empty-vs-unset matters for cloud
+  // backends with no local config — optional. Legacy tag NOT omitempty.
+  optional string config = 4;
+
+  // Absolute path to the git clone. Empty for cloud backends before/without a
+  // local checkout — optional. Legacy tag NOT omitempty.
+  optional string workspace_dir = 5;
+
+  // Go time.Time <-> Timestamp. MAPPING CONTRACT: a Go zero time maps to a nil
+  // Timestamp and back; the legacy JSON always serializes created_at (zero time
+  // as "0001-01-01T00:00:00Z"), so the mapper preserves that exact byte form.
+  google.protobuf.Timestamp created_at = 6;
+
+  // Never omitempty in Go; always carried. Plain enum.
+  InstanceStatus status = 7;
+
+  // JSON error,omitempty. Cleared to "" on success, set on failure — optional.
+  optional string error = 8;
+
+  // JSON backend,omitempty. UNSPECIFIED already encodes "not recorded", so the
+  // enum's zero value carries presence (proto3 enums can't use `optional`).
+  BackendType backend = 9;
+
+  // JSON tag,omitempty. Can be explicitly cleared to "" (TAG sets empty to
+  // clear), so "" vs unset is distinct — optional.
+  optional string tag = 10;
+
+  // UI hint, JSON color,omitempty. Empty-vs-unset distinguishes "no color
+  // chosen" from "default" — optional.
+  optional string color = 11;
+
+  // JSON branch,omitempty. Empty means "default branch"; the clone path
+  // branches on it — optional. (This is the REQUESTED branch; the live resolved
+  // HEAD is InstanceRuntime.current_branch.)
+  optional string branch = 12;
+
+  // The last job's NON-FATAL warnings (mount/dotfiles/hook/startup failures).
+  // NOT in legacy state.json — a NEW field replacing the persisted
+  // ~/.fleet/logs/<fleet>-<instance>.warn file. The server sets it when a job
+  // finishes with warnings and clears it on the next successful create/start,
+  // so a TUI attaching AFTER the job finished still banners the warnings from a
+  // plain GetState/Watch snapshot (no dependency on the job-stream TTL).
+  repeated string warnings = 13;
+
+  // Reserved for forward/back compat across the version skew Hello tolerates.
+  reserved 14 to 30;
+}
+
+// FleetSettings mirrors internal/fleet.FleetSettings. The three *Mount flags are
+// plain bool: their Go JSON tags are `...,omitempty`, so an explicit-false mount
+// is OMITTED from state.json and reads back false — on disk false == "never
+// set" BY DESIGN (both mean "no mount"). HomeDir empty means "not yet known"
+// (resolver branches on it) — optional. PreferFleetLaunch is a *bool tri-state
+// (nil/false/true) — optional bool so absence (never asked) is distinct from
+// explicit false (initialUrl wins) and true (launch wins).
+message FleetSettings {
+  bool claude_code_mount = 1;
+  bool codex_mount = 2;
+  bool gh_mount = 3;
+  optional string home_dir = 4;
+  optional bool prefer_fleet_launch = 5;
+}
+
+// Fleet mirrors internal/fleet.Fleet. Settings is a NESTED message (not inlined)
+// so FleetSettings' tri-state presence stays self-contained; a nil Settings ==
+// zero settings. Instances ([]*Instance) -> repeated.
+message Fleet {
+  string name = 1;
+  string remote = 2;
+  FleetSettings settings = 3;
+  repeated Instance instances = 4;
+
+  reserved 5 to 15;
+}
+
+// GroupLayout mirrors internal/state.GroupLayout (a tmux pane layout snapshot,
+// the ONE piece of tmux state that IS persisted). The State map key is the
+// composite computeGroupKey(instance_name, group_id) (splitpane.go), which the
+// server derives from these fields — so SetGroupLayout/DeleteGroupLayout senders
+// only supply the layout's own fields.
+message GroupLayout {
+  string group_id = 1;
+  string instance_name = 2;
+  repeated string sessions = 3;
+  string layout = 4;
+  int32 pane_count = 5;
+}
+
+// State mirrors internal/state.State — the canonical PERSISTED model the server
+// owns. Fleets/GroupLayouts are Go maps -> proto map<>. LastSeenVersion empty
+// means "never recorded" (release-notes logic branches on it) — optional.
+message State {
+  map<string, Fleet> fleets = 1;
+  map<string, GroupLayout> group_layouts = 2;
+  optional string last_seen_version = 3;
+
+  reserved 4 to 15;
+}

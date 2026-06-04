@@ -8,9 +8,9 @@ import (
 	"os/exec"
 	"syscall"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/doctor"
 	"github.com/BenjaminBenetti/fleet-man/internal/platform"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -44,9 +44,7 @@ func NewRootCmd() *cobra.Command {
 		newCodeCmd(),
 		newLogsCmd(),
 		newStatusCmd(),
-		newCreateInstanceCmd(),
 		newCloneCmd(),
-		newCloneInstanceCmd(),
 		newPortForwardCmd(),
 		newShellCmd(),
 		newSpawnSessionCmd(),
@@ -55,6 +53,7 @@ func NewRootCmd() *cobra.Command {
 		newLandingPageCmd(),
 		newLaunchCmd(),
 		newVersionCmd(),
+		newServerCmd(),
 	)
 
 	return root
@@ -98,7 +97,7 @@ func relaunchInTmux() error {
 		";", "set", "-g", "mouse", "on",
 	}
 
-	config, _ := state.LoadConfig()
+	config, _ := configutil.LoadConfig()
 	if config == nil || config.GeneralSettings.TmuxVimKeysEnabled() {
 		setupArgs = append(setupArgs,
 			";", "bind-key", "h", "if", "-F", "#{pane_at_left}", "", "select-pane -L",

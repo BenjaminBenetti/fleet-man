@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,36 +30,14 @@ const bothTargetsDevcontainer = `{
   } }
 }`
 
-// TestBothBrowserTargets verifies detection of "both initialUrl and a
-// landing page are configured", plus the returned URL.
-func TestBothBrowserTargets(t *testing.T) {
-	t.Run("both", func(t *testing.T) {
-		dir := t.TempDir()
-		writeWorkspaceDevcontainer(t, dir, bothTargetsDevcontainer)
-		url, both := bothBrowserTargets(dir)
-		if !both || url != "https://example.com" {
-			t.Fatalf("got (%q, %v), want (%q, true)", url, both, "https://example.com")
-		}
-	})
-	t.Run("only url", func(t *testing.T) {
-		dir := t.TempDir()
-		writeWorkspaceDevcontainer(t, dir, `{"customizations":{"fleet":{"browser":{"initialUrl":"https://x"}}}}`)
-		if _, both := bothBrowserTargets(dir); both {
-			t.Fatalf("both = true, want false (only url)")
-		}
-	})
-	t.Run("only landing", func(t *testing.T) {
-		dir := t.TempDir()
-		writeWorkspaceDevcontainer(t, dir, `{"customizations":{"fleet":{"fleetLaunch":{"sites":[{"title":"A","url":"u"}]}}}}`)
-		if _, both := bothBrowserTargets(dir); both {
-			t.Fatalf("both = true, want false (only landing)")
-		}
-	})
-	t.Run("missing config", func(t *testing.T) {
-		if _, both := bothBrowserTargets(t.TempDir()); both {
-			t.Fatalf("both = true, want false (no devcontainer.json)")
-		}
-	})
+// stubBrowserConfig replaces the GetBrowserConfig RPC seam so the chooser-dialog
+// tests don't need a running server. The actual devcontainer.json parsing lives
+// in the server (internal/server/browser.go + the devcontainer package).
+func stubBrowserConfig(t *testing.T, initialURL string, hasLanding bool) {
+	t.Helper()
+	orig := fetchBrowserConfig
+	fetchBrowserConfig = func(string, string) (string, bool, error) { return initialURL, hasLanding, nil }
+	t.Cleanup(func() { fetchBrowserConfig = orig })
 }
 
 // TestBeginBrowserOpenPromptsWhenUnset verifies the chooser dialog opens
@@ -68,10 +45,9 @@ func TestBothBrowserTargets(t *testing.T) {
 // workspace configures both targets.
 func TestBeginBrowserOpenPromptsWhenUnset(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	dir := t.TempDir()
-	writeWorkspaceDevcontainer(t, dir, bothTargetsDevcontainer)
+	stubBrowserConfig(t, "https://example.com", true)
 
-	inst := &fleet.Instance{Name: "i1", Status: fleet.StatusRunning, WorkspaceDir: dir}
+	inst := &fleet.Instance{Name: "i1", Status: fleet.StatusRunning, WorkspaceDir: t.TempDir()}
 	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{inst}}
 	fp := newFleetPage()
 	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
@@ -105,7 +81,6 @@ func TestChooseBrowserLaunchPersists(t *testing.T) {
 		m := &model{
 			st:        &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}},
 			fleetPage: fp,
-			backends:  map[fleet.BackendType]backend.Backend{},
 		}
 
 		fp.updateChooseBrowserLaunch(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key)})
@@ -127,15 +102,13 @@ func TestChooseBrowserLaunchPersists(t *testing.T) {
 // enter saves false.
 func TestChooseBrowserLaunchCursorEnter(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	dir := t.TempDir()
-	writeWorkspaceDevcontainer(t, dir, bothTargetsDevcontainer)
-	inst := &fleet.Instance{Name: "i1", Status: fleet.StatusRunning, WorkspaceDir: dir}
+	stubBrowserConfig(t, "https://example.com", true)
+	inst := &fleet.Instance{Name: "i1", Status: fleet.StatusRunning, WorkspaceDir: t.TempDir()}
 	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{inst}}
 	fp := newFleetPage()
 	m := &model{
 		st:        &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}},
 		fleetPage: fp,
-		backends:  map[fleet.BackendType]backend.Backend{},
 	}
 
 	// Open the chooser; cursor defaults to Fleet Launch (row 0).
@@ -153,36 +126,6 @@ func TestChooseBrowserLaunchCursorEnter(t *testing.T) {
 
 	if !f.Settings.PreferFleetLaunchSet() || f.Settings.PreferFleetLaunchEnabled() {
 		t.Fatalf("enter on Initial URL: PreferFleetLaunch = %v, want set+false", f.Settings.PreferFleetLaunch)
-	}
-}
-
-// TestShouldUseLandingPage covers the precedence between a configured
-// browser.initialUrl and the Fleet Launch landing page, gated by the
-// fleet's PreferFleetLaunch setting.
-func TestShouldUseLandingPage(t *testing.T) {
-	cases := []struct {
-		name              string
-		hasURL            bool
-		hasLanding        bool
-		preferFleetLaunch bool
-		want              bool
-	}{
-		{"neither configured", false, false, false, false},
-		{"neither, prefer on", false, false, true, false},
-		{"only url", true, false, false, false},
-		{"only url, prefer on", true, false, true, false},
-		{"only landing", false, true, false, true},
-		{"only landing, prefer on", false, true, true, true},
-		{"both, prefer off -> url wins", true, true, false, false},
-		{"both, prefer on -> landing wins", true, true, true, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := shouldUseLandingPage(tc.hasURL, tc.hasLanding, tc.preferFleetLaunch); got != tc.want {
-				t.Errorf("shouldUseLandingPage(url=%v, landing=%v, prefer=%v) = %v, want %v",
-					tc.hasURL, tc.hasLanding, tc.preferFleetLaunch, got, tc.want)
-			}
-		})
 	}
 }
 

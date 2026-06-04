@@ -4,12 +4,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/backend"
-	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -24,23 +21,90 @@ type tmuxSession struct {
 	Attached bool
 }
 
-// sessionDiscovery holds discovered sessions for a single instance.
+// sessionDiscovery holds the discovered sessions for a single instance, cached
+// in the SessionStore. Sourced from the server runtime now (not a direct tmux
+// exec); err is retained for stores that record a failed read.
 type sessionDiscovery struct {
 	sessions  []tmuxSession
 	err       error
 	fetchedAt time.Time
 }
 
-// ===========================================
-// Messages
-// ===========================================
-
-// sessionsMsg is sent after listing tmux sessions inside a container.
-type sessionsMsg struct {
-	ref      InstanceRef
-	sessions []tmuxSession
-	err      error
+// splitInstanceKey splits a "<fleet>/<instance>" key on the first separator.
+// Returns ok=false for a key with no separator.
+func splitInstanceKey(key string) (fleetName, instanceName string, ok bool) {
+	for i := 0; i < len(key); i++ {
+		if key[i] == '/' {
+			return key[:i], key[i+1:], true
+		}
+	}
+	return "", "", false
 }
+
+// ===========================================
+// Discovery (sourced from the server runtime)
+// ===========================================
+//
+// The server polls tmux sessions for every running instance (~1s) and pushes
+// them on the runtime sidecar (InstanceRuntime.Sessions). The TUI no longer
+// execs tmux to list sessions itself — it reads the cached runtime. Live updates
+// arrive via runtimeChangedMsg; on-demand reads (expand, post-op refresh) read
+// the same cache synchronously.
+
+// runtimeSessions converts the cached runtime session list for ref into the
+// TUI's tmuxSession slice. Returns nil when no runtime is cached yet.
+func (m *model) runtimeSessions(ref InstanceRef) []tmuxSession {
+	r := m.runtime[rtKey(ref.Fleet, ref.Instance)]
+	if r == nil {
+		return nil
+	}
+	return protoSessionsToLegacy(r.GetSessions())
+}
+
+func protoSessionsToLegacy(in []*fleetgrpc.TmuxSession) []tmuxSession {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]tmuxSession, 0, len(in))
+	for _, s := range in {
+		out = append(out, tmuxSession{
+			Name:     s.GetName(),
+			Windows:  int(s.GetWindows()),
+			Attached: s.GetAttached(),
+		})
+	}
+	return out
+}
+
+// refreshSessionsFromRuntime updates the session store for ref from the cached
+// runtime, then prunes saved layouts whose groups no longer exist. Synchronous;
+// safe to call on the Update goroutine. A no-op for an unexpanded ref.
+func (m *model) refreshSessionsFromRuntime(ref InstanceRef) {
+	if !ref.Valid() || !m.sessionStore.IsExpanded(ref) {
+		return
+	}
+	m.sessionStore.SetDiscovery(ref, m.runtimeSessions(ref))
+	m.pruneSavedGroupsForInstance(ref)
+}
+
+// ensureSessionsLoaded synchronously populates the session store for ref from
+// the runtime when it has not been loaded yet. Needed before opening a session
+// from a row that was never expanded, so the attach-vs-new decision can see
+// existing tmux sessions instead of always spawning a new group.
+func ensureSessionsLoaded(m *model, ref InstanceRef) {
+	if m.sessionStore.HasDiscovery(ref) {
+		return
+	}
+	m.sessionStore.SetDiscovery(ref, m.runtimeSessions(ref))
+}
+
+// ===========================================
+// Mutating session commands (exec via the server)
+// ===========================================
+//
+// Create / rename / delete mutate tmux inside the container, so they resolve the
+// exec argv from the server and run it locally (the P5 boundary). The UI reflects
+// the change on the next ~1s runtime tick (or the synchronous post-op refresh).
 
 // sessionCreatedMsg is sent after creating a new tmux session.
 type sessionCreatedMsg struct {
@@ -64,220 +128,75 @@ type sessionDeletedMsg struct {
 	err         error
 }
 
-// sessionDiscoveryMsg carries discovered sessions for expanded instances.
-type sessionDiscoveryMsg struct {
-	discovered map[InstanceRef][]tmuxSession
-}
-
-// sessionDiscoveryCmd lists tmux sessions for all expanded, running
-// instances. Runs on a 1-second loop to detect external session
-// creation/destruction.
-func sessionDiscoveryCmd(
-	backends map[fleet.BackendType]backend.Backend,
-	expanded []InstanceRef,
-	fleets map[string]*fleet.Fleet,
-) tea.Cmd {
-	type target struct {
-		ref          InstanceRef
-		workspaceDir string
-		backendType  fleet.BackendType
-	}
-	expandedSet := make(map[InstanceRef]bool, len(expanded))
-	for _, ref := range expanded {
-		expandedSet[ref] = true
-	}
-	var targets []target
-	for _, f := range fleets {
-		for _, instance := range f.Instances {
-			if instance.Status != fleet.StatusRunning || instance.ContainerID == "" {
-				continue
-			}
-			backendType := instance.Backend
-			if backendType == "" {
-				backendType = fleet.BackendDevcontainer
-			}
-			ref := InstanceRef{Fleet: f.Name, Instance: instance.Name}
-			if !expandedSet[ref] {
-				continue
-			}
-			targets = append(targets, target{
-				ref:          ref,
-				workspaceDir: instance.WorkspaceDir,
-				backendType:  backendType,
-			})
-		}
-	}
-
+// createSessionCmd ensures tmux is installed (matching the interactive shell
+// path) and then creates a detached session inside the container.
+func createSessionCmd(ref InstanceRef, sessionName string) tea.Cmd {
 	return func() tea.Msg {
-		time.Sleep(1 * time.Second)
-
-		if len(targets) == 0 {
-			return sessionDiscoveryMsg{}
-		}
-
-		discovered := make(map[InstanceRef][]tmuxSession)
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-
-		for _, t := range targets {
-			instanceBackend := backends[t.backendType]
-			if instanceBackend == nil {
-				continue
-			}
-			wg.Add(1)
-			go func(instanceBackend backend.Backend, wsDir string, ref InstanceRef) {
-				defer wg.Done()
-				cmd := instanceBackend.ExecCommandQuiet(wsDir, []string{
-					"sh", "-c",
-					`tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}" 2>/dev/null`,
-				})
-				out, err := cmd.Output()
-				if err != nil {
-					// tmux exits with an error when no sessions exist
-					// (server not running). Record an empty list so
-					// stale sessions are cleared from the UI.
-					mu.Lock()
-					discovered[ref] = nil
-					mu.Unlock()
-					return
-				}
-				sessions := parseTmuxSessions(string(out))
-				mu.Lock()
-				discovered[ref] = sessions
-				mu.Unlock()
-			}(instanceBackend, t.workspaceDir, t.ref)
-		}
-
-		wg.Wait()
-		return sessionDiscoveryMsg{discovered: discovered}
-	}
-}
-
-// ensureSessionsLoaded synchronously populates the session store for
-// ref when it has not been loaded yet. Needed before opening an
-// instance session from a row that was never expanded, so the
-// attach-vs-new decision can see existing tmux sessions instead of
-// always spawning a new group.
-func ensureSessionsLoaded(m *model, instanceBackend backend.Backend, workspaceDir string, ref InstanceRef) {
-	if m.sessionStore.HasDiscovery(ref) {
-		return
-	}
-	cmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
-		"sh", "-c",
-		`tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}" 2>/dev/null`,
-	})
-	out, err := cmd.Output()
-	if err != nil {
-		m.sessionStore.SetDiscoveryError(ref, err)
-		return
-	}
-	m.sessionStore.SetDiscovery(ref, parseTmuxSessions(string(out)))
-}
-
-// listSessionsCmd returns a tea.Cmd that execs `tmux list-sessions`
-// inside the container and parses the output into tmuxSession structs.
-func listSessionsCmd(instanceBackend backend.Backend, workspaceDir string, ref InstanceRef) tea.Cmd {
-	return func() tea.Msg {
-		cmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
-			"sh", "-c",
-			`tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}" 2>/dev/null`,
-		})
-		out, err := cmd.Output()
-		if err != nil {
-			return sessionsMsg{ref: ref, err: err}
-		}
-		sessions := parseTmuxSessions(string(out))
-		return sessionsMsg{ref: ref, sessions: sessions}
-	}
-}
-
-// createSessionCmd ensures tmux is installed (matching the interactive
-// shell path) and then creates a detached session inside the container.
-func createSessionCmd(instanceBackend backend.Backend, workspaceDir string, ref InstanceRef, sessionName string) tea.Cmd {
-	return func() tea.Msg {
-		cmd := instanceBackend.ExecCommand(workspaceDir, []string{
+		cmd, err := resolveExecCmd(ref.Fleet, ref.Instance, []string{
 			"sh", "-c",
 			tmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s 2>/dev/null`, shQuote(sessionName)),
 		})
-		start := time.Now()
-		if err := cmd.Run(); err != nil {
-			flog.Error("session create failed", "fleet", ref.Fleet, "instance", ref.Instance, "session", sessionName, "ms", flog.MillisSince(start), "err", err)
+		if err != nil {
 			return sessionCreatedMsg{ref: ref, err: err}
 		}
-		flog.Info("session created", "fleet", ref.Fleet, "instance", ref.Instance, "session", sessionName, "ms", flog.MillisSince(start))
+		if err := cmd.Run(); err != nil {
+			return sessionCreatedMsg{ref: ref, err: err}
+		}
 		return sessionCreatedMsg{ref: ref}
 	}
 }
 
-// logSessionOpen records a TUI session being opened, including the raw shell
-// command run inside the container and how it is surfaced: "attach" (suspends
-// the TUI, runs in the foreground), "split" (a tmux split pane), or "terminal"
-// (a separate terminal emulator). These paths run the command outside the
-// backend.Cmd wrapper, so they are instrumented here by hand. Only "attach"
-// has a matching close event (logSessionClose) and therefore a duration; split
-// panes and external terminals detach and keep running, so they are logged
-// without one. The command is the inner command (what runs in the container),
-// not the backend's exec wrapper.
-func logSessionOpen(mode, fleetName, instanceName, sessionName, command string) {
-	flog.Info("session opened", "fleet", fleetName, "instance", instanceName, "session", sessionName, "mode", mode, "cmd", command)
-}
-
-// logSessionClose records a foreground session attach ending, with how long it
-// was attached. Called from the tea.ExecProcess completion callback, which
-// fires when the user detaches or the shell exits.
-func logSessionClose(fleetName, instanceName, sessionName string, start time.Time) {
-	flog.Info("session closed", "fleet", fleetName, "instance", instanceName, "session", sessionName, "ms", flog.MillisSince(start))
-}
-
-// renameSessionCmd execs `tmux rename-session -t <old> <new>` inside
-// the container.
-func renameSessionCmd(instanceBackend backend.Backend, workspaceDir string, ref InstanceRef, oldName, newName string) tea.Cmd {
+// renameSessionCmd execs `tmux rename-session -t <old> <new>` in the container.
+func renameSessionCmd(ref InstanceRef, oldName, newName string) tea.Cmd {
 	return func() tea.Msg {
-		cmd := instanceBackend.ExecCommand(workspaceDir, []string{
+		cmd, err := resolveExecCmd(ref.Fleet, ref.Instance, []string{
 			"sh", "-c",
 			fmt.Sprintf(`tmux rename-session -t %s %s 2>/dev/null`, shQuote(oldName), shQuote(newName)),
 		})
-		start := time.Now()
+		if err != nil {
+			return sessionRenamedMsg{ref: ref, oldName: oldName, newName: newName, err: err}
+		}
 		if err := cmd.Run(); err != nil {
 			return sessionRenamedMsg{ref: ref, oldName: oldName, newName: newName, err: err}
 		}
-		flog.Info("session renamed", "fleet", ref.Fleet, "instance", ref.Instance, "from", oldName, "to", newName, "ms", flog.MillisSince(start))
 		return sessionRenamedMsg{ref: ref, oldName: oldName, newName: newName}
 	}
 }
 
-// renameGroupCmd renames all sessions in a group. It lists sessions
-// matching the old group prefix, then renames each one by swapping the
-// old group ID for the new one.
-func renameGroupCmd(instanceBackend backend.Backend, workspaceDir string, ref InstanceRef, sanitizedInstance, oldGroupID, newGroupID string) tea.Cmd {
+// renameGroupCmd renames all sessions in a group: it lists sessions matching the
+// old group prefix, then renames each by swapping the old group ID for the new.
+func renameGroupCmd(ref InstanceRef, sanitizedInstance, oldGroupID, newGroupID string) tea.Cmd {
 	oldPrefix := sanitizedInstance + groupSep + oldGroupID
 	newPrefix := sanitizedInstance + groupSep + newGroupID
 
 	return func() tea.Msg {
-		start := time.Now()
-		// List all sessions in the container.
-		listCmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
+		listCmd, err := resolveExecCmd(ref.Fleet, ref.Instance, []string{
 			"sh", "-c",
 			`tmux list-sessions -F "#{session_name}" 2>/dev/null`,
 		})
+		if err != nil {
+			return sessionRenamedMsg{ref: ref, oldName: oldPrefix, newName: newPrefix, err: err}
+		}
 		out, err := listCmd.Output()
 		if err != nil {
 			return sessionRenamedMsg{ref: ref, oldName: oldPrefix, newName: newPrefix, err: err}
 		}
 
-		// Rename each session that matches the old group prefix.
 		var lastErr error
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			name := strings.TrimSpace(line)
 			if name == "" || !strings.HasPrefix(name, oldPrefix) {
 				continue
 			}
-			// Swap prefix: instance~oldGID~suffix → instance~newGID~suffix
 			renamed := newPrefix + name[len(oldPrefix):]
-			cmd := instanceBackend.ExecCommand(workspaceDir, []string{
+			cmd, err := resolveExecCmd(ref.Fleet, ref.Instance, []string{
 				"sh", "-c",
 				fmt.Sprintf(`tmux rename-session -t %s %s 2>/dev/null`, shQuote(name), shQuote(renamed)),
 			})
+			if err != nil {
+				lastErr = err
+				continue
+			}
 			if err := cmd.Run(); err != nil {
 				lastErr = err
 			}
@@ -285,55 +204,59 @@ func renameGroupCmd(instanceBackend backend.Backend, workspaceDir string, ref In
 		if lastErr != nil {
 			return sessionRenamedMsg{ref: ref, oldName: oldPrefix, newName: newPrefix, err: lastErr}
 		}
-		flog.Info("session group renamed", "fleet", ref.Fleet, "instance", ref.Instance, "from", oldPrefix, "to", newPrefix, "ms", flog.MillisSince(start))
 		return sessionRenamedMsg{ref: ref, oldName: oldPrefix, newName: newPrefix}
 	}
 }
 
 // deleteSessionCmd kills a single tmux session inside the container.
-func deleteSessionCmd(instanceBackend backend.Backend, workspaceDir string, ref InstanceRef, sessionName string) tea.Cmd {
+func deleteSessionCmd(ref InstanceRef, sessionName string) tea.Cmd {
 	return func() tea.Msg {
-		cmd := instanceBackend.ExecCommand(workspaceDir, []string{
+		cmd, err := resolveExecCmd(ref.Fleet, ref.Instance, []string{
 			"sh", "-c",
 			fmt.Sprintf(`tmux kill-session -t %s 2>/dev/null`, shQuote(sessionName)),
 		})
-		start := time.Now()
+		if err != nil {
+			return sessionDeletedMsg{ref: ref, sessionName: sessionName, err: err}
+		}
 		if err := cmd.Run(); err != nil {
 			return sessionDeletedMsg{ref: ref, sessionName: sessionName, err: err}
 		}
-		flog.Info("session killed", "fleet", ref.Fleet, "instance", ref.Instance, "session", sessionName, "ms", flog.MillisSince(start))
 		return sessionDeletedMsg{ref: ref, sessionName: sessionName}
 	}
 }
 
-// deleteGroupSessionsCmd kills all tmux sessions belonging to a group.
-// It lists sessions matching the group prefix and kills each one.
-func deleteGroupSessionsCmd(instanceBackend backend.Backend, workspaceDir string, ref InstanceRef, sanitizedInstance, groupID string) tea.Cmd {
+// deleteGroupSessionsCmd kills all tmux sessions belonging to a group: it lists
+// sessions matching the group prefix and kills each one.
+func deleteGroupSessionsCmd(ref InstanceRef, sanitizedInstance, groupID string) tea.Cmd {
 	prefix := sanitizedInstance + groupSep + groupID
 
 	return func() tea.Msg {
-		start := time.Now()
-		// List all sessions in the container.
-		listCmd := instanceBackend.ExecCommandQuiet(workspaceDir, []string{
+		listCmd, err := resolveExecCmd(ref.Fleet, ref.Instance, []string{
 			"sh", "-c",
 			`tmux list-sessions -F "#{session_name}" 2>/dev/null`,
 		})
+		if err != nil {
+			return sessionDeletedMsg{ref: ref, sessionName: prefix, groupID: groupID, err: err}
+		}
 		out, err := listCmd.Output()
 		if err != nil {
 			return sessionDeletedMsg{ref: ref, sessionName: prefix, groupID: groupID, err: err}
 		}
 
-		// Kill each session that matches the group prefix.
 		var lastErr error
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			name := strings.TrimSpace(line)
 			if name == "" || !strings.HasPrefix(name, prefix) {
 				continue
 			}
-			cmd := instanceBackend.ExecCommand(workspaceDir, []string{
+			cmd, err := resolveExecCmd(ref.Fleet, ref.Instance, []string{
 				"sh", "-c",
 				fmt.Sprintf(`tmux kill-session -t %s 2>/dev/null`, shQuote(name)),
 			})
+			if err != nil {
+				lastErr = err
+				continue
+			}
 			if err := cmd.Run(); err != nil {
 				lastErr = err
 			}
@@ -341,7 +264,6 @@ func deleteGroupSessionsCmd(instanceBackend backend.Backend, workspaceDir string
 		if lastErr != nil {
 			return sessionDeletedMsg{ref: ref, sessionName: prefix, groupID: groupID, err: lastErr}
 		}
-		flog.Info("session group killed", "fleet", ref.Fleet, "instance", ref.Instance, "group", groupID, "ms", flog.MillisSince(start))
 		return sessionDeletedMsg{ref: ref, sessionName: prefix, groupID: groupID}
 	}
 }
@@ -350,13 +272,10 @@ func deleteGroupSessionsCmd(instanceBackend backend.Backend, workspaceDir string
 // Helpers
 // ===========================================
 
-// sessionStillExists checks whether a lastSession reference is still
-// valid against the current list of discovered tmux sessions. For
-// grouped sessions it looks for any session with the group prefix;
-// for ungrouped sessions it matches the exact name.
+// sessionStillExists checks whether a lastSession reference is still valid
+// against the current list of discovered tmux sessions.
 func sessionStillExists(last lastSession, sessions []tmuxSession) bool {
 	if last.groupID != "" {
-		// Group session: check if any session has the group prefix.
 		for _, session := range sessions {
 			if strings.Contains(session.Name, groupSep+last.groupID) {
 				return true
@@ -372,34 +291,7 @@ func sessionStillExists(last lastSession, sessions []tmuxSession) bool {
 	return false
 }
 
-// parseTmuxSessions parses the output of `tmux list-sessions -F
-// "#{session_name}:#{session_windows}:#{session_attached}"` into
-// a slice of tmuxSession.
-func parseTmuxSessions(output string) []tmuxSession {
-	var sessions []tmuxSession
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, ":", 3)
-		if len(parts) < 1 || parts[0] == "" {
-			continue
-		}
-		session := tmuxSession{Name: parts[0]}
-		if len(parts) >= 2 {
-			session.Windows, _ = strconv.Atoi(parts[1])
-		}
-		if len(parts) >= 3 {
-			session.Attached = parts[2] == "1"
-		}
-		sessions = append(sessions, session)
-	}
-	return sessions
-}
-
-// nextSessionName generates an auto-incrementing session name like
-// "session-2", "session-3", etc. based on existing sessions.
+// nextSessionName generates an auto-incrementing session name like "session-2".
 func nextSessionName(existing []tmuxSession) string {
 	maxN := 1
 	for _, session := range existing {

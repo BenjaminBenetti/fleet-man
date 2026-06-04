@@ -1,0 +1,45 @@
+# golangci-lint config (v2). It enforces the client/server import boundary via
+# depguard: the thin clients (internal/fleetclient, internal/cli, internal/tui)
+# must reach the system through the fleet server (fleetgrpc), never by importing
+# the server-only internals (state/backend/create/control/flog/server) directly.
+# CI runs it via a golangci-lint step in .github/workflows/unit.yml.
+version: "2"
+linters:
+  default: none
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        # Client code must reach the system through the fleet server (fleetgrpc),
+        # never by importing the server-only internals directly. This is what
+        # keeps a remote client possible.
+        client:
+          files:
+            - "**/internal/fleetclient/**"
+            - "**/internal/cli/**"
+            - "**/internal/tui/**"
+            # internal/cli/server.go is the fleetd entrypoint — it alone may
+            # import internal/server.
+            - "!**/internal/cli/server.go"
+            # Test fixtures may seed state.json directly / pass legacy state
+            # structs through aliases (e.g. browser_test, page_fleet_test).
+            - "!**/*_test.go"
+            # NOTE: the internal/backend deny prefix-matches internal/backendutil
+            # AND internal/backend/{coder,codespaces,devcontainer}, so clients
+            # can't construct backends either — they drive them via fleetgrpc RPCs
+            # (ResolveExecCommand / Logs / PortForward / GetCoderTemplateParams /
+            # GetBrowserConfig / PrepareBrowser) and the Watch BrowserOpen event.
+          deny:
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/state
+              desc: client code must go through the fleet server (fleetgrpc), not internal/state
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/backend
+              desc: client code must not touch backends directly; use fleetgrpc RPCs/jobs
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/create
+              desc: provisioning is a server-side job; call fleetgrpc.CreateInstance
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/control
+              desc: the server owns control sockets; clients receive control events over Watch
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/flog
+              desc: the event log is server-owned; clients do not write fleet.log
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/server
+              desc: client code must not import the server; talk to it via fleetgrpc over fleetclient
