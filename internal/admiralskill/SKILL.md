@@ -62,6 +62,23 @@ if you need to act on it programmatically.
 an instance and inherits your terminal (e.g. `fleet exec api go test ./...`). Use
 this when you don't need anything persistent.
 
+> **Passing flags to your command — use `--`.** `fleet` parses flags *before* the
+> command you want to run, so any `-x` / `--flag` belonging to that command is
+> otherwise swallowed by fleet itself and you get `Error: unknown flag: --foo`.
+> Put a `--` after the instance (and session) arguments; everything after it is
+> passed through verbatim:
+>
+> ```bash
+> fleet exec <instance> -- git log --oneline          # NOT: fleet exec <instance> git log --oneline
+> fleet exec-in-session <instance> <session> -- npm test --watch
+> ```
+>
+> This bites the common cases — `-la`, `--oneline`, `-f`, `-n 5`. For
+> `exec-in-session` you can equivalently quote the whole command as a single
+> argument (`... <session> "npm test --watch"`), since it joins the remaining
+> args into one string before sending them; for `fleet exec`, prefer `--` so the
+> command's arguments stay as separate argv elements.
+
 **Drive an agent (or any long-lived process) via sessions.** This is the
 non-interactive loop for working with a coding agent inside an instance:
 
@@ -87,6 +104,8 @@ read the session to see what it's doing or asking.
   snapshot of its current screen, not a stream.
 - An instance must be `running` to exec into it or use its sessions; `start` a
   `stopped` one first.
+- `fleet` parses its own flags first: separate the command you want to run with
+  `--` (see "Passing flags to your command") or its flags will be intercepted.
 
 ## Command reference
 
@@ -103,12 +122,12 @@ INTROSPECTION
   fleet status                  # fleet-wide summary counts
   fleet list [fleet]            # per-instance table (name, status, branch, ...)
 
-EXECUTION
-  fleet exec <name> <cmd...>    # run a one-off command in an instance
+EXECUTION  (use `--` before a command that has its own flags)
+  fleet exec <name> -- <cmd...>           # e.g. fleet exec api -- git log --oneline
 
 SESSIONS (interact with an agent / long-lived process in an instance)
   fleet spawn-session <instance> <session>
-  fleet exec-in-session <instance> <session> "<cmd>"
+  fleet exec-in-session <instance> <session> -- <cmd...>   # or quote: "<cmd>"
   fleet read-session <instance> <session> [--scrollback N]   # 0 = screen, N = last N, -1 = all
 
 ADDRESSING
