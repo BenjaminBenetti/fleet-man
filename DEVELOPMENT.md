@@ -1,15 +1,7 @@
 # Development
 
-Command reference for building and testing fleet-man.
-
-## Prerequisites
-
-- Go 1.25+
-- Docker (to run instances / the integration suite)
-- [`buf`](https://github.com/bufbuild/buf) — only to regenerate gRPC stubs:
-  `go install github.com/bufbuild/buf/cmd/buf@latest`
-- [`golangci-lint`](https://golangci-lint.run) — only to run the lint target:
-  `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`
+Command reference for building and testing fleet-man. The devcontainer ships the
+full toolchain (Go, Docker, buf, golangci-lint).
 
 ## Build
 
