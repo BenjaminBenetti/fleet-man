@@ -1,2 +1,4 @@
-# Ignore Built Binaries 
+# Ignore Built Binaries
 /main
+/fleet
+/bin/
