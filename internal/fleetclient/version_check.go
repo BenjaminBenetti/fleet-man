@@ -13,51 +13,76 @@ import (
 )
 
 // reconcileServer enforces the version/freshness policy against the server we
-// just connected to, returning whether it relaunched the server (so the caller
-// can re-settle its connection onto the new process).
-//
-//   - DEV client (no compiled-in version): version strings can't tell us whether
-//     a PRE-EXISTING server runs the freshly-built code, so we fall back to the
-//     binary's mtime: if this executable is newer than the server's start time,
-//     the server is stale and we replace it. This makes local dev fool-proof —
-//     every rebuild's first command transparently gets a fresh server — WITHOUT
-//     thrashing (an unchanged binary, or a server we just spawned, is left
-//     alone, so repeated/concurrent commands don't restart needlessly). A remote
-//     server can't be relaunched.
-//   - VERSIONED client: same version is fine; a strictly-newer client relaunches
-//     a too-old LOCAL server; an older client (or any remote mismatch) errors.
+// just connected to, returning whether it relaunched it (so the caller can
+// re-settle its connection onto the new process). The decision is delegated to
+// the pure, table-tested decideReconcile; this only performs the chosen action.
 func reconcileServer(ctx context.Context, ep Endpoint, svc fleetgrpc.FleetServiceClient, reply *fleetgrpc.HelloReply, spawned bool) (restarted bool, err error) {
 	cv := version.Version
 	sv := reply.GetServerVersion()
+	// Binary-mtime staleness only matters for a dev client; skip the stat otherwise.
+	stale := cv == "" && serverIsStale(reply)
 
-	if cv == "" { // dev client: use binary freshness instead of version strings
-		// A server we just spawned is, by definition, the current binary.
-		if spawned || !ep.IsLocal() {
-			return false, nil
-		}
-		if !serverIsStale(reply) {
-			return false, nil
-		}
+	switch action, decErr := decideReconcile(cv, sv, ep.IsLocal(), spawned, stale); action {
+	case actionRestart:
 		if err := restartServer(ctx, ep, svc); err != nil {
 			return false, err
 		}
 		return true, nil
+	case actionError:
+		return false, decErr
+	default:
+		return false, nil
+	}
+}
+
+// reconcileAction is the pure policy decision computed by decideReconcile.
+type reconcileAction int
+
+const (
+	actionNone    reconcileAction = iota // the running server is acceptable as-is
+	actionRestart                        // a LOCAL server must be drained + relaunched
+	actionError                          // incompatible; cannot reconcile
+)
+
+// decideReconcile is the version/freshness policy expressed as a pure function,
+// so every case is unit-testable without spawning a process. cv is this client's
+// compiled-in version ("" = a dev build); sv is the server's reported version
+// ("" = a dev build); isLocal = the server runs on this host; spawned = WE just
+// started it; stale = (dev client only) this binary postdates the server's start.
+//
+//   - DEV client: ignore versions entirely — restart a local, pre-existing
+//     server only when this freshly-built binary postdates it. This holds even
+//     against a VERSIONED server, since one machine both tests dev builds and
+//     runs the release, so build-time is the only reliable signal.
+//   - VERSIONED client: a server reporting NO version is a dev build — replace it
+//     locally, error on a remote one. The same numeric core is fine (a
+//     pre-release counts as its release; see versionCore). A strictly-older local
+//     server is replaced; a newer one (or any remote version mismatch) errors.
+func decideReconcile(cv, sv string, isLocal, spawned, stale bool) (reconcileAction, error) {
+	if cv == "" { // dev client
+		if spawned || !isLocal || !stale {
+			return actionNone, nil
+		}
+		return actionRestart, nil
 	}
 
 	// Versioned client.
-	if sv == "" || cv == sv {
-		return false, nil
+	if sv == "" { // server is a dev build (or pre-version)
+		if !isLocal {
+			return actionError, fmt.Errorf("fleet server is a dev build but client is %s — restart the server", cv)
+		}
+		return actionRestart, nil
 	}
-	if !ep.IsLocal() {
-		return false, fmt.Errorf("fleet server is %s but client is %s — upgrade your client", sv, cv)
+	if versionCore(cv) == versionCore(sv) {
+		return actionNone, nil
+	}
+	if !isLocal {
+		return actionError, fmt.Errorf("fleet server is %s but client is %s — upgrade your client", sv, cv)
 	}
 	if versionLess(sv, cv) { // server older than this client
-		if err := restartServer(ctx, ep, svc); err != nil {
-			return false, err
-		}
-		return true, nil
+		return actionRestart, nil
 	}
-	return false, fmt.Errorf("fleet server is newer (%s) than this client (%s) — upgrade your client", sv, cv)
+	return actionError, fmt.Errorf("fleet server is newer (%s) than this client (%s) — upgrade your client", sv, cv)
 }
 
 // serverIsStale reports whether the running server predates this client binary —
@@ -124,12 +149,25 @@ func restartReason() string {
 
 func strptr(s string) *string { return &s }
 
-// versionLess reports whether version a is strictly older than b. Both are
-// dotted numeric versions with an optional leading 'v' (e.g. v1.2.3). A
-// non-numeric component falls back to a string compare for that position.
+// versionCore strips an optional leading 'v' and any pre-release/build suffix
+// (everything from the first '-'), leaving the dotted numeric core: so
+// "v1.2.3-beta" and "v1.2.3" both yield "1.2.3". This keeps a pre-release from
+// being treated as a different — or "newer" — version than its release.
+func versionCore(v string) string {
+	v = strings.TrimPrefix(v, "v")
+	if i := strings.IndexByte(v, '-'); i >= 0 {
+		v = v[:i]
+	}
+	return v
+}
+
+// versionLess reports whether version a is strictly older than b, comparing only
+// their numeric cores — pre-release/build suffixes are ignored (see versionCore),
+// so v1.2.3-beta and v1.2.3 are NOT ordered relative to each other. A non-numeric
+// component falls back to a string compare for that position.
 func versionLess(a, b string) bool {
-	as := strings.Split(strings.TrimPrefix(a, "v"), ".")
-	bs := strings.Split(strings.TrimPrefix(b, "v"), ".")
+	as := strings.Split(versionCore(a), ".")
+	bs := strings.Split(versionCore(b), ".")
 	for i := 0; i < len(as) || i < len(bs); i++ {
 		var ai, bi string
 		if i < len(as) {
