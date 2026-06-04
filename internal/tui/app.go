@@ -16,7 +16,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
-	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -880,10 +879,10 @@ func sortedFleetNames(fleets map[string]*fleet.Fleet) []string {
 func Run() error {
 	// Install (or refresh) the Fleet Admiral skill into ~/.claude/skills so the
 	// user's coding agent can orchestrate fleet. Best-effort and hash-gated:
-	// it's a cheap no-op once installed, and a failure must never block startup.
-	if err := admiralskill.EnsureInstalled(); err != nil {
-		flog.Warn("tui: Fleet Admiral skill install skipped", "err", err)
-	}
+	// it's a cheap no-op once installed. The error is deliberately ignored — a
+	// skill-install hiccup must never block startup, and client code does not
+	// write the server-owned event log.
+	_ = admiralskill.EnsureInstalled()
 
 	m := newModel()
 

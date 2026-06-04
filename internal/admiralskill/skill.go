@@ -21,8 +21,6 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
-
-	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
 // ===========================================
@@ -57,14 +55,14 @@ var skillContent []byte
 // EnsureInstalled writes the Fleet Admiral skill into ~/.claude/skills if it is
 // missing or out of date, and is a cheap no-op otherwise.
 //
-// It is best-effort: every failure is logged and returned, never propagated as a
-// fatal startup error — a skill-install hiccup must never stop `fleet` from
-// running. Callers on the startup path should log the error (if any) and carry
-// on.
+// It is best-effort: any failure is returned, never propagated as a fatal
+// startup error — a skill-install hiccup must never stop `fleet` from running.
+// This package is client-side (it runs on client startup), so it deliberately
+// does not log via the server-owned event log; it just returns the error and
+// lets the caller decide. The startup caller swallows it.
 func EnsureInstalled() error {
 	dir, err := skillDir()
 	if err != nil {
-		flog.Warn("admiralskill: cannot resolve skills dir", "err", err)
 		return err
 	}
 
@@ -76,7 +74,6 @@ func EnsureInstalled() error {
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		flog.Warn("admiralskill: mkdir failed", "dir", dir, "err", err)
 		return err
 	}
 
@@ -84,16 +81,9 @@ func EnsureInstalled() error {
 	// the hash is absent/stale and we simply rewrite next startup — the SKILL.md
 	// is never recorded as current until it is actually on disk.
 	if err := os.WriteFile(filepath.Join(dir, skillFile), skillContent, 0o644); err != nil {
-		flog.Warn("admiralskill: write SKILL.md failed", "dir", dir, "err", err)
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, hashFile), []byte(want), 0o644); err != nil {
-		flog.Warn("admiralskill: write hash failed", "dir", dir, "err", err)
-		return err
-	}
-
-	flog.Info("admiralskill: installed Fleet Admiral skill", "dir", dir)
-	return nil
+	return os.WriteFile(filepath.Join(dir, hashFile), []byte(want), 0o644)
 }
 
 // ===========================================
