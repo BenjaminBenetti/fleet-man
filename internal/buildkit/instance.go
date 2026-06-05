@@ -62,16 +62,20 @@ func probeScript() string {
 	)
 }
 
-// configureScript (re)creates the shared remote builder and makes it the
+// configureScript (re)creates the shared remote builder and selects it as the
 // default. The remote driver speaks gRPC straight to the buildkitd unix socket
-// at containerSocketPath (no in-instance daemon involved). Remove-then-create
-// keeps it idempotent across re-runs (clone inherits a prior builder; restart
-// re-runs config). The `|| true` on rm tolerates a first run where the builder
-// does not exist yet.
+// at containerSocketPath (no in-instance daemon involved); the endpoint is the
+// documented positional ENDPOINT argument to `buildx create` (not a
+// --driver-opt). `use` is a separate command so the endpoint is never adjacent
+// to a boolean flag. Remove-then-create keeps it idempotent across re-runs
+// (clone inherits a prior builder; restart re-runs config); the `|| true` on rm
+// tolerates a first run where the builder does not exist yet. The `&&` ensures a
+// failed create propagates a non-zero exit (so the caller can warn) rather than
+// being masked by a successful `use`.
 func configureScript() string {
 	return fmt.Sprintf(
-		`docker buildx rm %s >/dev/null 2>&1 || true; docker buildx create --name %s --driver remote --use unix://%s`,
-		builderName, builderName, containerSocketPath,
+		`docker buildx rm %s >/dev/null 2>&1 || true; docker buildx create --name %s --driver remote unix://%s && docker buildx use %s`,
+		builderName, builderName, containerSocketPath, builderName,
 	)
 }
 

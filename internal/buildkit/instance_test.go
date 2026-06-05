@@ -55,8 +55,8 @@ func TestProbeAndConfigureScripts(t *testing.T) {
 	for _, want := range []string{
 		"docker buildx rm " + builderName,
 		"docker buildx create --name " + builderName,
-		"--driver remote",
-		"--use unix://" + containerSocketPath,
+		"--driver remote unix://" + containerSocketPath,
+		"docker buildx use " + builderName,
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("configureScript missing %q: %s", want, cfg)

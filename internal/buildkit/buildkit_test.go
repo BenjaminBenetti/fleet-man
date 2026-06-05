@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -154,6 +155,85 @@ func TestEnsureSharedServerReusesWhenRunning(t *testing.T) {
 	}
 	if hasCall(calls, "run") || hasCall(calls, "start") {
 		t.Fatalf("running container should be reused, not run/started: %v", calls)
+	}
+}
+
+func TestSharedDirRejectsTraversal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, bad := range []string{"", "..", "../../etc", "a/b", `a\b`, "foo/../bar"} {
+		if _, err := SharedDir(bad); err == nil {
+			t.Errorf("SharedDir(%q) should be rejected", bad)
+		}
+	}
+	if dir, err := SharedDir("alpha"); err != nil || dir != state.BuildkitDir("alpha") {
+		t.Errorf("SharedDir(alpha) = %q, %v; want %q, nil", dir, err, state.BuildkitDir("alpha"))
+	}
+}
+
+func TestEnsureSharedServerSocketTimeoutNonFatal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubDocker(t, func(args []string) (string, error) {
+		if args[0] == "inspect" {
+			return "", fmt.Errorf("No such object") // absent -> create
+		}
+		return "", nil
+	})
+	stubWaitForSocket(t, fmt.Errorf("timed out"))
+
+	dir, err := EnsureSharedServer("alpha")
+	if err != nil {
+		t.Fatalf("socket-wait timeout must be non-fatal, got %v", err)
+	}
+	if dir != state.BuildkitDir("alpha") {
+		t.Fatalf("dir = %q, want %q", dir, state.BuildkitDir("alpha"))
+	}
+}
+
+// TestEnsureSharedServerConcurrentRunsOnce verifies the per-fleet lock + stateful
+// reuse means two concurrent creates in the same fleet issue exactly one
+// `docker run` and both succeed (neither loses its socket mount to a name race).
+func TestEnsureSharedServerConcurrentRunsOnce(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var mu sync.Mutex
+	created := false
+	runCount := 0
+	stubDocker(t, func(args []string) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch args[0] {
+		case "inspect":
+			if created {
+				return "true", nil // exists & running
+			}
+			return "", fmt.Errorf("No such object")
+		case "run":
+			runCount++
+			created = true
+		}
+		return "", nil
+	})
+	stubWaitForSocket(t, nil)
+
+	var wg sync.WaitGroup
+	errs := make([]error, 4)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = EnsureSharedServer("concurrent-fleet")
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("EnsureSharedServer call %d: %v", i, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if runCount != 1 {
+		t.Fatalf("docker run issued %d times, want exactly 1", runCount)
 	}
 }
 

@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
@@ -107,12 +108,37 @@ var waitForSocket = func(path string, timeout time.Duration) error {
 	}
 }
 
+// ensureLocks serializes EnsureSharedServer per fleet so concurrent instance
+// creates in the same fleet don't both `docker run` the one shared container and
+// have the loser fail on a name conflict (losing its socket mount). Keyed per
+// fleet so a slow first-time image pull for one fleet never blocks instance
+// creation in another.
+var ensureLocks sync.Map // fleetName -> *sync.Mutex
+
+func fleetLock(fleetName string) *sync.Mutex {
+	m, _ := ensureLocks.LoadOrStore(fleetName, &sync.Mutex{})
+	return m.(*sync.Mutex)
+}
+
 // ContainerName is the docker container name for a fleet's shared buildkit
 // server. Sanitized so arbitrary fleet names yield a valid, collision-resistant
 // docker name; the fleet/-buildkit affixes namespace it away from instance
 // containers and other fleets.
 func ContainerName(fleetName string) string {
 	return "fleet-" + backend.SanitizeName(fleetName, fleetNameMaxLen) + "-buildkit"
+}
+
+// SharedDir returns the validated host .buildkit directory for a fleet. It
+// refuses fleet names that would let the path escape the workspaces root:
+// EnsureSharedServer creates this path (os.MkdirAll, 0777) and teardown removes
+// it (os.RemoveAll), so a traversing name like "../../x" must never reach those
+// calls. Container names go through SanitizeName separately, so this guards the
+// filesystem side specifically.
+func SharedDir(fleetName string) (string, error) {
+	if fleetName == "" || strings.ContainsAny(fleetName, `/\`) || strings.Contains(fleetName, "..") {
+		return "", fmt.Errorf("invalid fleet name %q for buildkit dir", fleetName)
+	}
+	return state.BuildkitDir(fleetName), nil
 }
 
 // InstanceMount returns the bind mount that exposes the fleet's buildkit socket
@@ -169,7 +195,17 @@ func dockerRunArgs(fleetName string) []string {
 // Callers MUST only invoke this for backends that SupportsCustomMounts; cloud
 // backends cannot reach a host docker daemon.
 func EnsureSharedServer(fleetName string) (string, error) {
-	dir := state.BuildkitDir(fleetName)
+	// Serialize per fleet so two concurrent creates in the same fleet don't both
+	// `docker run` the shared container (the loser would fail on a name conflict
+	// and silently lose its socket mount).
+	lock := fleetLock(fleetName)
+	lock.Lock()
+	defer lock.Unlock()
+
+	dir, err := SharedDir(fleetName)
+	if err != nil {
+		return "", err
+	}
 	if err := ensureDir(dir); err != nil {
 		return "", fmt.Errorf("create buildkit dir: %w", err)
 	}
@@ -182,8 +218,6 @@ func EnsureSharedServer(fleetName string) (string, error) {
 	switch {
 	case exists && running:
 		flog.Info("buildkit server reused", "fleet", fleetName, "container", name)
-		ensureSocketPerms(fleetName, name) // best-effort; converge if a prior fix-up failed
-		return dir, nil
 	case exists && !running:
 		if out, err := runDocker("start", name); err != nil {
 			return "", fmt.Errorf("start buildkit server: %w (%s)", err, out)
@@ -191,14 +225,25 @@ func EnsureSharedServer(fleetName string) (string, error) {
 		flog.Info("buildkit server started", "fleet", fleetName, "container", name)
 	default:
 		if out, err := runDocker(dockerRunArgs(fleetName)...); err != nil {
-			return "", fmt.Errorf("run buildkit server: %w (%s)", err, out)
+			// A concurrent (cross-process) or manual create may have won the
+			// name race; if the container exists now, treat it as success and
+			// fall through to the socket wait. Only a genuine failure aborts.
+			if _, exists2 := inspectState(name); !exists2 {
+				return "", fmt.Errorf("run buildkit server: %w (%s)", err, out)
+			}
+			flog.Info("buildkit server already present", "fleet", fleetName, "container", name)
+		} else {
+			flog.Info("buildkit server created", "fleet", fleetName, "container", name)
 		}
-		flog.Info("buildkit server created", "fleet", fleetName, "container", name)
 	}
 
+	// All paths converge here: wait for buildkitd to create its socket, then
+	// relax its permissions so an instance's non-root user can connect. The
+	// reuse path waits too — a "running" container may have just been revived by
+	// the restart policy and not yet recreated the socket. Non-fatal: the mount
+	// still works once the socket appears; instance buildx config fails soft
+	// until then.
 	if err := waitForSocket(hostSocketPath(fleetName), socketWaitTimeout); err != nil {
-		// Non-fatal: the mount still works once the socket appears; instance
-		// buildx config will simply fail-soft until then.
 		flog.Warn("buildkit socket not ready", "fleet", fleetName, "err", err)
 		return dir, nil
 	}

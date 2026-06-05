@@ -58,6 +58,33 @@ var jobRunStop = func(fleetName, instanceName string) error {
 	return err
 }
 
+// stopBuildkitServer is the buildkit teardown seam (a package var so the destroy
+// paths can be exercised in tests without docker).
+var stopBuildkitServer = buildkit.StopSharedServer
+
+// teardownFleetBuildkit removes a fleet's shared buildkit server and cache
+// directory when the fleet had the feature enabled. Best-effort: every failure
+// becomes a warning, never an abort. Shared by the destroy job and the
+// DestroyFleet RPC so a fleet's buildkit resources are reclaimed no matter which
+// delete path runs (destroy_fleet=true vs. removing an already-empty fleet).
+func teardownFleetBuildkit(fleetName string, enabled bool) []string {
+	if !enabled {
+		return nil
+	}
+	var warnings []string
+	if err := stopBuildkitServer(fleetName); err != nil {
+		warnings = append(warnings, fmt.Sprintf("stop buildkit server: %v", err))
+	}
+	dir, err := buildkit.SharedDir(fleetName)
+	if err != nil {
+		return append(warnings, fmt.Sprintf("buildkit dir: %v", err))
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		warnings = append(warnings, fmt.Sprintf("remove buildkit dir %s: %v", dir, err))
+	}
+	return warnings
+}
+
 // jobDownInstance tears down one provisioned instance's container. Best-effort:
 // a backend failure is returned so the caller can WARN, but teardown proceeds.
 var jobDownInstance = func(inst *fleet.Instance) error {
@@ -498,15 +525,7 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 	// Fleet-level teardown: once every instance is down, remove the fleet's
 	// shared buildkit container and its cache directory. Single-instance
 	// destroys leave the server up — its other instances may still use it.
-	// Best-effort, so failures surface as warnings rather than aborting.
-	if destroyFleet && buildkitEnabled {
-		if err := buildkit.StopSharedServer(fleetName); err != nil {
-			warnings = append(warnings, fmt.Sprintf("stop buildkit server: %v", err))
-		}
-		if err := os.RemoveAll(state.BuildkitDir(fleetName)); err != nil {
-			warnings = append(warnings, fmt.Sprintf("remove buildkit dir %s: %v", state.BuildkitDir(fleetName), err))
-		}
-	}
+	warnings = append(warnings, teardownFleetBuildkit(fleetName, destroyFleet && buildkitEnabled)...)
 
 	_ = state.Update(func(st *state.State) error {
 		f, ok := st.Fleets[fleetName]
