@@ -24,6 +24,12 @@ service FleetService {
   rpc Hello(HelloRequest) returns (HelloReply);
   rpc Shutdown(ShutdownRequest) returns (ShutdownReply);
 
+  // FleetTUIConnected is sent ONCE when a TUI opens (not by CLI commands): a
+  // hook for once-per-open, fire-and-forget server-side state reconciliation
+  // (e.g. re-ensuring configured shared buildkit servers after an external
+  // kill / reboot). Kept off Hello so a burst of CLI Hellos can't trigger it.
+  rpc FleetTUIConnected(FleetTUIConnectedRequest) returns (FleetTUIConnectedReply);
+
   // GetState is the one-stop snapshot of everything the TUI renders (persisted
   // State + live runtime + active jobs).
   rpc GetState(GetStateRequest) returns (GetStateReply);

@@ -53,6 +53,19 @@ message ShutdownReply {
   int32 draining_jobs = 2;
 }
 
+// FleetTUIConnectedRequest signals that a TUI client has just opened (sent once
+// per TUI launch, NOT per CLI command — CLI invocations only Hello). The server
+// uses it as a hook for once-per-open, fire-and-forget state reconciliation —
+// today: re-ensuring any configured shared buildkit servers that were killed
+// externally / lost to a host reboot while no instance lifecycle action would
+// have revived them. Empty by design; it is a pure nudge. Multiple TUIs may
+// send it concurrently, so the server coalesces the work.
+message FleetTUIConnectedRequest {}
+
+// FleetTUIConnectedReply is intentionally empty: the reconciliation is
+// fire-and-forget on the server, so the client does not wait on its outcome.
+message FleetTUIConnectedReply {}
+
 message GetStateRequest {}
 
 // GetStateReply is the one-stop snapshot of EVERYTHING the TUI renders:
