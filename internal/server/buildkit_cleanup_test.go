@@ -34,9 +34,10 @@ func seedBuildkitFleet(t *testing.T, instances ...*fleet.Instance) {
 	}
 }
 
-// TestDestroyInstanceFleetTearsDownBuildkit verifies that destroying the whole
-// fleet stops the shared server and removes its .buildkit directory.
-func TestDestroyInstanceFleetTearsDownBuildkit(t *testing.T) {
+// TestDestroyInstanceFleetStopsBuildkitKeepsCache verifies that destroying the
+// whole fleet stops (removes) the shared server container but PRESERVES the
+// .buildkit cache directory so a future fleet of the same name warms from it.
+func TestDestroyInstanceFleetStopsBuildkitKeepsCache(t *testing.T) {
 	isolateFleetDir(t)
 	called := stubStopBuildkit(t)
 	seedBuildkitFleet(t, &fleet.Instance{Name: "i1"})
@@ -46,8 +47,8 @@ func TestDestroyInstanceFleetTearsDownBuildkit(t *testing.T) {
 	if !*called {
 		t.Fatalf("StopSharedServer not called on destroy_fleet")
 	}
-	if _, err := os.Stat(state.BuildkitDir("alpha")); !os.IsNotExist(err) {
-		t.Fatalf("buildkit dir not removed on destroy_fleet: %v", err)
+	if _, err := os.Stat(state.BuildkitDir("alpha")); err != nil {
+		t.Fatalf("buildkit cache dir should persist across destroy_fleet, got: %v", err)
 	}
 }
 
@@ -69,10 +70,11 @@ func TestDestroyInstanceSingleLeavesBuildkit(t *testing.T) {
 	}
 }
 
-// TestDestroyFleetTearsDownBuildkit verifies the synchronous DestroyFleet RPC
-// (used by the TUI to remove an already-empty fleet) also reclaims the buildkit
-// server — previously it bypassed the job-based destroy() cleanup.
-func TestDestroyFleetTearsDownBuildkit(t *testing.T) {
+// TestDestroyFleetStopsBuildkitKeepsCache verifies the synchronous DestroyFleet
+// RPC (used by the TUI to remove an already-empty fleet) also stops the shared
+// server container — previously it bypassed the job-based cleanup and orphaned
+// it — while preserving the cache directory.
+func TestDestroyFleetStopsBuildkitKeepsCache(t *testing.T) {
 	isolateFleetDir(t)
 	called := stubStopBuildkit(t)
 	seedBuildkitFleet(t) // empty fleet
@@ -84,7 +86,7 @@ func TestDestroyFleetTearsDownBuildkit(t *testing.T) {
 	if !*called {
 		t.Fatalf("StopSharedServer not called on DestroyFleet")
 	}
-	if _, err := os.Stat(state.BuildkitDir("alpha")); !os.IsNotExist(err) {
-		t.Fatalf("buildkit dir not removed on DestroyFleet: %v", err)
+	if _, err := os.Stat(state.BuildkitDir("alpha")); err != nil {
+		t.Fatalf("buildkit cache dir should persist across DestroyFleet, got: %v", err)
 	}
 }

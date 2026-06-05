@@ -62,27 +62,24 @@ var jobRunStop = func(fleetName, instanceName string) error {
 // paths can be exercised in tests without docker).
 var stopBuildkitServer = buildkit.StopSharedServer
 
-// teardownFleetBuildkit removes a fleet's shared buildkit server and cache
-// directory when the fleet had the feature enabled. Best-effort: every failure
-// becomes a warning, never an abort. Shared by the destroy job and the
-// DestroyFleet RPC so a fleet's buildkit resources are reclaimed no matter which
-// delete path runs (destroy_fleet=true vs. removing an already-empty fleet).
+// teardownFleetBuildkit removes a fleet's shared buildkit CONTAINER when the
+// fleet had the feature enabled, so it doesn't orphan or (given its
+// restart=unless-stopped policy) auto-restart after the fleet is gone. It
+// deliberately LEAVES the .buildkit cache directory on disk: a shared build
+// cache is the whole point of the feature, so it should persist across a fleet
+// teardown and warm the next instance created for a fleet of the same name —
+// exactly like the persisted .claude/.codex/.config/gh mount dirs already do.
+// Best-effort: a failure becomes a warning, never an abort. Shared by the
+// destroy job and the DestroyFleet RPC so the container is reclaimed no matter
+// which delete path runs (destroy_fleet=true vs. removing an already-empty fleet).
 func teardownFleetBuildkit(fleetName string, enabled bool) []string {
 	if !enabled {
 		return nil
 	}
-	var warnings []string
 	if err := stopBuildkitServer(fleetName); err != nil {
-		warnings = append(warnings, fmt.Sprintf("stop buildkit server: %v", err))
+		return []string{fmt.Sprintf("stop buildkit server: %v", err)}
 	}
-	dir, err := buildkit.SharedDir(fleetName)
-	if err != nil {
-		return append(warnings, fmt.Sprintf("buildkit dir: %v", err))
-	}
-	if err := os.RemoveAll(dir); err != nil {
-		warnings = append(warnings, fmt.Sprintf("remove buildkit dir %s: %v", dir, err))
-	}
-	return warnings
+	return nil
 }
 
 // jobDownInstance tears down one provisioned instance's container. Best-effort:

@@ -227,16 +227,17 @@ setup_launch_test() {
 # the settings-driven code paths without driving the TUI.
 #
 # Usage:
-#   seed_fleet_settings <fleet_name> <claude:true|false> <codex:true|false> <homedir> [<gh:true|false>]
+#   seed_fleet_settings <fleet_name> <claude:true|false> <codex:true|false> <homedir> [<gh:true|false>] [<buildkit:true|false>]
 #
-# gh defaults to false so older callers that pre-date the GhMount setting
-# keep working unchanged.
+# gh and buildkit default to false so older callers that pre-date those
+# settings keep working unchanged.
 seed_fleet_settings() {
   local fleet_name="$1"
   local claude="${2:-false}"
   local codex="${3:-false}"
   local homedir="${4:-/home/node}"
   local gh="${5:-false}"
+  local buildkit="${6:-false}"
   mkdir -p "${HOME}/.fleet"
   cat > "${HOME}/.fleet/state.json" <<EOF
 {
@@ -248,6 +249,7 @@ seed_fleet_settings() {
         "claudeCodeMount": ${claude},
         "codexMount": ${codex},
         "ghMount": ${gh},
+        "buildkitServer": ${buildkit},
         "homeDir": "${homedir}"
       },
       "instances": []
@@ -324,6 +326,32 @@ teardown_test() {
     if [ -n "${stale}" ]; then
       docker rm -f ${stale} >/dev/null 2>&1 || true
     fi
+  fi
+
+  # Sweep any shared buildkit servers (named fleet-<fleet>-buildkit). They
+  # carry --restart unless-stopped, so a test that crashed before `fleet
+  # destroy` ran must not leave one to auto-restart across runs. The
+  # per-fleet `destroy` above already removes them on the happy path; this
+  # is the crash-recovery backstop.
+  if command -v docker >/dev/null 2>&1; then
+    local bk
+    bk=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^fleet-.*-buildkit$' || true)
+    if [ -n "${bk}" ]; then
+      docker rm -f ${bk} >/dev/null 2>&1 || true
+    fi
+  fi
+
+  # A privileged buildkit server writes a ROOT-owned cache into the
+  # bind-mounted .buildkit/cache dir. Fleet deliberately keeps that cache
+  # across `destroy` (it's the point of a shared cache), but the test harness
+  # wants a pristine ~/.fleet between tests and runs as a non-root user — so
+  # reclaim ownership via a throwaway root container before the wipe. The
+  # buildkit image is guaranteed present whenever such root-owned files exist
+  # (they were written by a buildkit server that already pulled it).
+  if command -v docker >/dev/null 2>&1 && [ -d "${HOME}/.fleet" ] \
+    && find "${HOME}/.fleet" ! -user "$(id -un)" -print -quit 2>/dev/null | grep -q .; then
+    docker run --rm --entrypoint chown -v "${HOME}/.fleet:/reclaim" \
+      moby/buildkit:latest -R "$(id -u):$(id -g)" /reclaim >/dev/null 2>&1 || true
   fi
 
   rm -rf "${HOME}/.fleet"
