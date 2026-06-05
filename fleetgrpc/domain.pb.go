@@ -365,8 +365,15 @@ type FleetSettings struct {
 	GhMount           bool                   `protobuf:"varint,3,opt,name=gh_mount,json=ghMount,proto3" json:"gh_mount,omitempty"`
 	HomeDir           *string                `protobuf:"bytes,4,opt,name=home_dir,json=homeDir,proto3,oneof" json:"home_dir,omitempty"`
 	PreferFleetLaunch *bool                  `protobuf:"varint,5,opt,name=prefer_fleet_launch,json=preferFleetLaunch,proto3,oneof" json:"prefer_fleet_launch,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// buildkit_server enables a shared moby/buildkit container for the fleet
+	// whose unix socket (under ~/.fleet/workspaces/<fleet>/.buildkit/) is
+	// bind-mounted into every instance, giving all instances one shared build
+	// cache. Plain bool (default off): false == "never set" == disabled, like
+	// the *Mount flags. Honored only on backends that SupportsCustomMounts()
+	// (devcontainer); cloud backends silently skip it.
+	BuildkitServer bool `protobuf:"varint,6,opt,name=buildkit_server,json=buildkitServer,proto3" json:"buildkit_server,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *FleetSettings) Reset() {
@@ -430,6 +437,13 @@ func (x *FleetSettings) GetHomeDir() string {
 func (x *FleetSettings) GetPreferFleetLaunch() bool {
 	if x != nil && x.PreferFleetLaunch != nil {
 		return *x.PreferFleetLaunch
+	}
+	return false
+}
+
+func (x *FleetSettings) GetBuildkitServer() bool {
+	if x != nil {
+		return x.BuildkitServer
 	}
 	return false
 }
@@ -677,14 +691,15 @@ const file_domain_proto_rawDesc = "" +
 	"\x06_errorB\x06\n" +
 	"\x04_tagB\b\n" +
 	"\x06_colorB\t\n" +
-	"\a_branchJ\x04\b\x0e\x10\x1f\"\xf1\x01\n" +
+	"\a_branchJ\x04\b\x0e\x10\x1f\"\x9a\x02\n" +
 	"\rFleetSettings\x12*\n" +
 	"\x11claude_code_mount\x18\x01 \x01(\bR\x0fclaudeCodeMount\x12\x1f\n" +
 	"\vcodex_mount\x18\x02 \x01(\bR\n" +
 	"codexMount\x12\x19\n" +
 	"\bgh_mount\x18\x03 \x01(\bR\aghMount\x12\x1e\n" +
 	"\bhome_dir\x18\x04 \x01(\tH\x00R\ahomeDir\x88\x01\x01\x123\n" +
-	"\x13prefer_fleet_launch\x18\x05 \x01(\bH\x01R\x11preferFleetLaunch\x88\x01\x01B\v\n" +
+	"\x13prefer_fleet_launch\x18\x05 \x01(\bH\x01R\x11preferFleetLaunch\x88\x01\x01\x12'\n" +
+	"\x0fbuildkit_server\x18\x06 \x01(\bR\x0ebuildkitServerB\v\n" +
 	"\t_home_dirB\x16\n" +
 	"\x14_prefer_fleet_launch\"\xa2\x01\n" +
 	"\x05Fleet\x12\x12\n" +

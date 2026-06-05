@@ -1056,6 +1056,7 @@ const (
 	editFleetRowClaude = iota
 	editFleetRowCodex
 	editFleetRowGh
+	editFleetRowBuildkit
 	editFleetRowHomeDir
 	editFleetRowPreferFleetLaunch
 	editFleetRowCount
@@ -1118,6 +1119,7 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.dialogClaudeMount = f.Settings.ClaudeCodeMount
 	fleetPage.dialogCodexMount = f.Settings.CodexMount
 	fleetPage.dialogGhMount = f.Settings.GhMount
+	fleetPage.dialogBuildkitServer = f.Settings.BuildkitServer
 	fleetPage.dialogPreferFleetLaunch = f.Settings.PreferFleetLaunchEnabled()
 	fleetPage.dialogRow = editFleetRowClaude
 	fleetPage.dialogDetecting = false
@@ -1192,7 +1194,7 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 
 	// Toggle / character input is row-specific.
 	switch fleetPage.dialogRow {
-	case editFleetRowClaude, editFleetRowCodex, editFleetRowGh, editFleetRowPreferFleetLaunch:
+	case editFleetRowClaude, editFleetRowCodex, editFleetRowGh, editFleetRowBuildkit, editFleetRowPreferFleetLaunch:
 		switch keyMsg.String() {
 		case " ", "left", "right", "h", "l", "x":
 			return fleetPage.toggleEditFleetRow(m)
@@ -1233,6 +1235,10 @@ func (fleetPage *fleetPage) toggleEditFleetRow(m *model) tea.Cmd {
 	case editFleetRowGh:
 		fleetPage.dialogGhMount = !fleetPage.dialogGhMount
 		turnedOn = fleetPage.dialogGhMount
+	case editFleetRowBuildkit:
+		// Not a home-dir mount, so no detection to kick off — just flip it.
+		fleetPage.dialogBuildkitServer = !fleetPage.dialogBuildkitServer
+		return nil
 	case editFleetRowPreferFleetLaunch:
 		// Not a mount, so no home-dir detection to kick off — just flip it.
 		fleetPage.dialogPreferFleetLaunch = !fleetPage.dialogPreferFleetLaunch
@@ -1323,6 +1329,7 @@ func (fleetPage *fleetPage) saveFleetEdits(m *model) tea.Cmd {
 	f.Settings.ClaudeCodeMount = fleetPage.dialogClaudeMount
 	f.Settings.CodexMount = fleetPage.dialogCodexMount
 	f.Settings.GhMount = fleetPage.dialogGhMount
+	f.Settings.BuildkitServer = fleetPage.dialogBuildkitServer
 	preferFleetLaunch := fleetPage.dialogPreferFleetLaunch
 	f.Settings.PreferFleetLaunch = &preferFleetLaunch
 	f.Settings.HomeDir = strings.TrimSpace(fleetPage.homedirInput.Value())

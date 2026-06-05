@@ -204,6 +204,7 @@ func protoFleetSettingsToLegacy(ps *fleetgrpc.FleetSettings) fleet.FleetSettings
 	s.ClaudeCodeMount = ps.GetClaudeCodeMount()
 	s.CodexMount = ps.GetCodexMount()
 	s.GhMount = ps.GetGhMount()
+	s.BuildkitServer = ps.GetBuildkitServer()
 	s.HomeDir = ps.GetHomeDir()
 	if ps.PreferFleetLaunch != nil {
 		v := ps.GetPreferFleetLaunch()

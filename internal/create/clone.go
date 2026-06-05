@@ -114,6 +114,14 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) (err er
 		}
 	}
 
+	// Bind the fleet's shared buildkit socket into the clone too (ensuring the
+	// server is up), so the clone shares the same build cache. Non-fatal.
+	if mount, ok, err := prepareBuildkitMount(instanceBackend, fleetName); err != nil {
+		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("buildkit server: %v", err))
+	} else if ok {
+		resolvedMounts.Mounts = append(resolvedMounts.Mounts, mount)
+	}
+
 	result, err := instanceBackend.Clone(src.ContainerID, destWorkspaceDir, resolvedMounts.Mounts)
 	if err != nil {
 		setFailed(fleetName, destInstance, err)
@@ -138,6 +146,14 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) (err er
 	// Non-fatal: surface as a warning if it fails.
 	if err := applyMountSymlinks(instanceBackend, destWorkspaceDir, resolvedMounts.Symlinks); err != nil {
 		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("setting up agentic mount symlinks: %v", err))
+	}
+
+	// Re-point the clone's docker buildx at the fleet's shared buildkit server.
+	// The committed image may carry the source's builder config; the
+	// remove-then-create in ConfigureInstanceBuildx makes this idempotent.
+	// Non-fatal, and a silent no-op without docker/buildx.
+	if err := configureBuildkit(instanceBackend, fleetName, destWorkspaceDir); err != nil {
+		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("configure buildkit buildx: %v", err))
 	}
 
 	if err := markInstanceRunning(fleetName, destInstance, result.ContainerID); err != nil {

@@ -12,6 +12,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/buildkit"
 	"github.com/BenjaminBenetti/fleet-man/internal/create"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
@@ -468,8 +469,13 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 		inst               *fleet.Instance
 	}
 	var targets []target
+	// buildkitEnabled is read from the live record before mutation so a
+	// destroy_fleet can tear down the fleet's shared buildkit server after its
+	// instances are down. Only meaningful when destroyFleet is set.
+	var buildkitEnabled bool
 	if st, err := state.Load(); err == nil {
 		if f, ok := st.Fleets[fleetName]; ok {
+			buildkitEnabled = f.Settings.BuildkitServer
 			for _, inst := range f.Instances {
 				if destroyFleet || inst.Name == instanceName {
 					targets = append(targets, target{name: inst.Name, workspaceDir: inst.WorkspaceDir, inst: inst})
@@ -486,6 +492,19 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 			if err := os.RemoveAll(t.workspaceDir); err != nil {
 				warnings = append(warnings, fmt.Sprintf("remove workspace %s: %v", t.workspaceDir, err))
 			}
+		}
+	}
+
+	// Fleet-level teardown: once every instance is down, remove the fleet's
+	// shared buildkit container and its cache directory. Single-instance
+	// destroys leave the server up — its other instances may still use it.
+	// Best-effort, so failures surface as warnings rather than aborting.
+	if destroyFleet && buildkitEnabled {
+		if err := buildkit.StopSharedServer(fleetName); err != nil {
+			warnings = append(warnings, fmt.Sprintf("stop buildkit server: %v", err))
+		}
+		if err := os.RemoveAll(state.BuildkitDir(fleetName)); err != nil {
+			warnings = append(warnings, fmt.Sprintf("remove buildkit dir %s: %v", state.BuildkitDir(fleetName), err))
 		}
 	}
 

@@ -37,6 +37,8 @@ linters:
               desc: client code must not touch backends directly; use fleetgrpc RPCs/jobs
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/create
               desc: provisioning is a server-side job; call fleetgrpc.CreateInstance
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/buildkit
+              desc: the shared buildkit server is server-side provisioning; clients only flip FleetSettings.BuildkitServer via fleetgrpc
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/control
               desc: the server owns control sockets; clients receive control events over Watch
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/flog

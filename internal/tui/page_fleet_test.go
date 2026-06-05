@@ -622,6 +622,44 @@ func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
 	}
 }
 
+// TestEditFleetSavesBuildkitServer verifies the "Buildkit server"
+// checkbox toggles and persists to FleetSettings on submit, and that
+// toggling it does NOT kick off home-dir detection (it is not a mount).
+func TestEditFleetSavesBuildkitServer(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	f := &fleet.Fleet{Name: "alpha"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{
+		st:        &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}},
+		fleetPage: fp,
+	}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if fp.dialogBuildkitServer {
+		t.Fatalf("expected BuildkitServer off by default")
+	}
+
+	for fp.dialogRow != editFleetRowBuildkit {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
+	if !fp.dialogBuildkitServer {
+		t.Fatalf("toggle did not set dialogBuildkitServer")
+	}
+	// Buildkit is not a home-dir mount, so toggling it must not start detection.
+	if fp.dialogDetecting {
+		t.Fatalf("buildkit toggle should not kick off home-dir detection")
+	}
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if !f.Settings.BuildkitServer {
+		t.Fatalf("Settings.BuildkitServer = %v, want true", f.Settings.BuildkitServer)
+	}
+}
+
 // TestEditFleetHomedirDetectedFillsEmptyInput verifies the success
 // path of auto-detection: when the result arrives and the user has
 // not typed anything, the home-dir input is populated.
@@ -963,6 +1001,14 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 		t.Fatal("l should toggle selected gh row")
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if fp.dialogRow != editFleetRowBuildkit {
+		t.Fatalf("dialogRow = %d, want buildkit row", fp.dialogRow)
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if !fp.dialogBuildkitServer {
+		t.Fatal("l should toggle selected buildkit row")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	if fp.dialogRow != editFleetRowHomeDir {
 		t.Fatalf("dialogRow = %d, want home-dir row", fp.dialogRow)
 	}
@@ -980,6 +1026,10 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 	}
 
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if fp.dialogRow != editFleetRowBuildkit {
+		t.Fatalf("dialogRow = %d, want buildkit row after inactive k", fp.dialogRow)
+	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	if fp.dialogRow != editFleetRowGh {
 		t.Fatalf("dialogRow = %d, want gh row after inactive k", fp.dialogRow)

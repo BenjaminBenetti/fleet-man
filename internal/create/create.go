@@ -106,6 +106,16 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 		}
 	}
 
+	// When the fleet enables a shared buildkit server, ensure its container is
+	// running and bind its socket directory into the instance so docker buildx
+	// can use the fleet-wide build cache. Non-fatal: a failure to start the
+	// server just means this instance builds without the shared cache.
+	if mount, ok, err := prepareBuildkitMount(instanceBackend, fleetName); err != nil {
+		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("buildkit server: %v", err))
+	} else if ok {
+		resolvedMounts.Mounts = append(resolvedMounts.Mounts, mount)
+	}
+
 	result, err := instanceBackend.Up(wsDir, resolvedMounts.Mounts)
 	if err != nil {
 		setFailed(fleetName, instanceName, err)
@@ -135,6 +145,13 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 	// warning and keep going.
 	if err := applyMountSymlinks(instanceBackend, wsDir, resolvedMounts.Symlinks); err != nil {
 		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("setting up agentic mount symlinks: %v", err))
+	}
+
+	// Point the instance's docker buildx at the fleet's shared buildkit server
+	// (when enabled). A silent no-op for images without docker/buildx, and
+	// non-fatal otherwise — the instance is usable regardless of buildx wiring.
+	if err := configureBuildkit(instanceBackend, fleetName, wsDir); err != nil {
+		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("configure buildkit buildx: %v", err))
 	}
 
 	// Auto-install dotfiles. A failure here is non-fatal — the instance

@@ -45,6 +45,7 @@ type fleetPage struct {
 	dialogClaudeMount       bool
 	dialogCodexMount        bool
 	dialogGhMount           bool
+	dialogBuildkitServer    bool
 	dialogPreferFleetLaunch bool
 	dialogDetecting         bool // true while a homedir auto-detect cmd is in flight
 
@@ -1452,7 +1453,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 		}
 
 		dialog := fmt.Sprintf(
-			"%s\n\n  %s %s\n%s%s %s\n%s%s %s\n%s%s %s\n%s%s %s\n%s%s %s\n\n  %s\n\n%s",
+			"%s\n\n  %s %s\n%s%s %s\n%s%s %s\n%s%s %s\n%s%s %s\n%s%s %s\n%s%s %s\n\n  %s\n\n%s",
 			dialogTitle.Render("Edit fleet"),
 			dialogLabel.Render("Fleet:    "),
 			fleetExpandedStyle.Render(fleetPage.dialogFleet),
@@ -1465,6 +1466,9 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			rowMarker(editFleetRowGh),
 			checkbox(fleetPage.dialogGhMount),
 			dialogLabel.Render("GitHub CLI mount"),
+			rowMarker(editFleetRowBuildkit),
+			checkbox(fleetPage.dialogBuildkitServer),
+			dialogLabel.Render("Buildkit server"),
 			rowMarker(editFleetRowHomeDir),
 			dialogLabel.Render("Home dir: "),
 			homedirField,

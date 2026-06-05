@@ -102,6 +102,7 @@ func TestSetFleetSettingsPreservesPresence(t *testing.T) {
 		Settings: &fleetgrpc.FleetSettings{
 			ClaudeCodeMount:   true,
 			GhMount:           true,
+			BuildkitServer:    true,
 			HomeDir:           ptr("/home/vscode"),
 			PreferFleetLaunch: &prefer,
 		},
@@ -113,12 +114,18 @@ func TestSetFleetSettingsPreservesPresence(t *testing.T) {
 	if !got.GetClaudeCodeMount() || got.GetCodexMount() || !got.GetGhMount() || got.GetHomeDir() != "/home/vscode" {
 		t.Fatalf("settings mismatch: %v", got)
 	}
+	if !got.GetBuildkitServer() {
+		t.Fatalf("BuildkitServer lost in reply: %v", got)
+	}
 
 	// Verify the persisted tri-state survives (PreferFleetLaunch set to true).
 	st, _ := state.Load()
 	s := st.Fleets["alpha"].Settings
 	if s.PreferFleetLaunch == nil || !*s.PreferFleetLaunch {
 		t.Fatalf("PreferFleetLaunch tri-state lost: %+v", s)
+	}
+	if !s.BuildkitServer {
+		t.Fatalf("BuildkitServer not persisted: %+v", s)
 	}
 
 	// Unknown fleet -> NotFound.

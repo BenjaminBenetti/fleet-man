@@ -78,3 +78,22 @@ func TestFleetSettingsToProtoPreservesTriState(t *testing.T) {
 		t.Fatalf("home dir: %q", got.GetHomeDir())
 	}
 }
+
+// TestFleetSettingsBuildkitServerRoundTrip checks the BuildkitServer bool
+// survives both client converters (legacy->proto and proto->legacy).
+func TestFleetSettingsBuildkitServerRoundTrip(t *testing.T) {
+	// Off by default -> false on the wire.
+	if fleetSettingsToProto(fleet.FleetSettings{}).GetBuildkitServer() {
+		t.Fatalf("unset BuildkitServer should be false on the wire")
+	}
+	// Enabled survives legacy->proto.
+	ps := fleetSettingsToProto(fleet.FleetSettings{BuildkitServer: true})
+	if !ps.GetBuildkitServer() {
+		t.Fatalf("BuildkitServer lost in fleetSettingsToProto")
+	}
+	// And proto->legacy.
+	back := protoFleetToLegacy(&fleetgrpc.Fleet{Name: "alpha", Settings: ps})
+	if !back.Settings.BuildkitServer {
+		t.Fatalf("BuildkitServer lost in protoFleetToLegacy: %+v", back.Settings)
+	}
+}
