@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -9,6 +10,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"google.golang.org/grpc"
 )
+
+// tuiConnectedOnce ensures the server's FleetTUIConnected hook fires exactly
+// once per TUI process — on the first successful Watch open — rather than on
+// every reconnect. "Once per TUI opening" is the contract; the server coalesces
+// across multiple TUIs anyway.
+var tuiConnectedOnce sync.Once
 
 // Watch-stream messages injected into the bubbletea loop by the watcher
 // goroutine. In P2 Step 5 these only populate the m.pstate / m.runtime caches;
@@ -75,6 +82,16 @@ func watchOnce(ctx context.Context, program *tea.Program) bool {
 		program.Send(watchErrMsg{err: err})
 		return false
 	}
+
+	// A successful Watch open means the TUI has connected to a live server.
+	// Nudge the server's once-per-open reconciliation, on a separate goroutine
+	// so the bounded RPC never stalls this event pump, and only once per launch
+	// (not on reconnects). The error is intentionally dropped: this is a pure
+	// best-effort nudge, the SERVER logs the reconcile's own outcome, and a
+	// failed nudge means the server is unreachable — already surfaced to the
+	// user via watchErrMsg. (Client code also must not write the server-owned
+	// event log, per the import boundary.)
+	tuiConnectedOnce.Do(func() { go func() { _ = notifyTUIConnectedRemote() }() })
 
 	for {
 		ev, err := stream.Recv()

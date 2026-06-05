@@ -68,6 +68,10 @@ func Serve(ctx context.Context) error {
 	// long-lived Watch stream.
 	hubCtx, cancelHub := context.WithCancel(ctx)
 	defer cancelHub()
+	// Background work spawned by RPC handlers (e.g. the TUI-connect buildkit
+	// reconcile) derives from hubCtx so it stops on shutdown. Set before Serve
+	// starts accepting RPCs, so no handler observes the zero value.
+	svc.bgCtx = hubCtx
 	go svc.hub.run(hubCtx)
 	go runStatePoller(hubCtx, svc.hub)
 	// Runtime pollers (live status / stats+activity / sessions). Gated on a

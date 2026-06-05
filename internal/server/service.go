@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -25,6 +26,13 @@ type service struct {
 	hub       *hub
 	jobs      *jobManager
 
+	// bgCtx is cancelled at server shutdown (set to the serve loop's hubCtx in
+	// server.go). Background work spawned by RPC handlers — e.g. the TUI-connect
+	// buildkit reconcile — derives from it so it stops promptly on shutdown
+	// rather than orphaning. Defaults to context.Background() for tests that use
+	// newService() without a running serve loop.
+	bgCtx context.Context
+
 	// muWrite serializes config.json writes (config.go SetConfig), which have no
 	// package-level lock of their own. State.json mutations no longer use this —
 	// they go through state.Update (mutations.go + the provisioning jobs), whose
@@ -34,11 +42,20 @@ type service struct {
 
 	shutdownOnce sync.Once
 	shutdownCh   chan struct{}
+
+	// buildkitReconciling coalesces the TUI-connect buildkit re-ensure so that
+	// several TUIs opening at once trigger one sweep, not one per client.
+	buildkitReconciling atomic.Bool
 }
 
 func newService() *service {
-	return &service{startedAt: time.Now(), hub: newHub(), jobs: newJobManager(), shutdownCh: make(chan struct{})}
+	return &service{startedAt: time.Now(), hub: newHub(), jobs: newJobManager(), shutdownCh: make(chan struct{}), bgCtx: context.Background()}
 }
+
+// reconcileTimeout bounds the TUI-connect buildkit reconcile so a slow/wedged
+// docker daemon can't keep the coalescing flag held indefinitely (which would
+// lock out future reconciles). It also frees the flag on shutdown via bgCtx.
+const reconcileTimeout = 3 * time.Minute
 
 // Hello is the authoritative version handshake. It reports the server's
 // compiled-in version plus host-local liveness hints (pid, start time).
@@ -48,6 +65,50 @@ func (s *service) Hello(_ context.Context, _ *fleetgrpc.HelloRequest) (*fleetgrp
 		Pid:           int64(os.Getpid()),
 		StartedAt:     timestamppb.New(s.startedAt),
 	}, nil
+}
+
+// FleetTUIConnected is sent once when a TUI opens (CLI commands never send it).
+// It kicks off fire-and-forget, once-per-open state reconciliation and returns
+// immediately — the client does not wait on the outcome.
+func (s *service) FleetTUIConnected(_ context.Context, _ *fleetgrpc.FleetTUIConnectedRequest) (*fleetgrpc.FleetTUIConnectedReply, error) {
+	s.onTUIConnected()
+	return &fleetgrpc.FleetTUIConnectedReply{}, nil
+}
+
+// onTUIConnected runs the once-per-connect, fire-and-forget reconciliation in a
+// background goroutine. Today it re-ensures configured shared buildkit servers
+// (recovering from an external kill / reboot).
+//
+// Coalesced via an atomic flag so N TUIs connecting simultaneously run the sweep
+// once, not N times. NOTE the in-flight sweep reflects state as of WHEN IT
+// STARTED: a setting toggled mid-sweep is not picked up by a coalesced late
+// arrival until the sweep finishes and a subsequent TUI connects. That's
+// acceptable here — it mirrors the rest of the feature, where a settings change
+// only takes effect on the next instance create/clone/start.
+//
+// The flag is released when the sweep completes OR when reconcileTimeout elapses
+// OR on shutdown (bgCtx) — released even if a docker call inside the sweep is
+// wedged, so a broken daemon can never permanently lock out future reconciles
+// (the inner sweep goroutine may then outlive this one, but it dies with the
+// process and does no harm).
+func (s *service) onTUIConnected() {
+	if !s.buildkitReconciling.CompareAndSwap(false, true) {
+		return // a reconcile is already in flight; it covers this connect
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(s.bgCtx, reconcileTimeout)
+		defer cancel()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			ensureConfiguredBuildkitServers(ctx)
+		}()
+		select {
+		case <-done:
+		case <-ctx.Done(): // timeout or shutdown
+		}
+		s.buildkitReconciling.Store(false)
+	}()
 }
 
 // GetState returns the full snapshot the TUI/CLI render.

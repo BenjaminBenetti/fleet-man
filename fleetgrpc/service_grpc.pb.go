@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	FleetService_Hello_FullMethodName                  = "/fleetgrpc.FleetService/Hello"
 	FleetService_Shutdown_FullMethodName               = "/fleetgrpc.FleetService/Shutdown"
+	FleetService_FleetTUIConnected_FullMethodName      = "/fleetgrpc.FleetService/FleetTUIConnected"
 	FleetService_GetState_FullMethodName               = "/fleetgrpc.FleetService/GetState"
 	FleetService_Watch_FullMethodName                  = "/fleetgrpc.FleetService/Watch"
 	FleetService_CreateInstance_FullMethodName         = "/fleetgrpc.FleetService/CreateInstance"
@@ -60,6 +61,11 @@ type FleetServiceClient interface {
 	// ---- Lifecycle / handshake ----
 	Hello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloReply, error)
 	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownReply, error)
+	// FleetTUIConnected is sent ONCE when a TUI opens (not by CLI commands): a
+	// hook for once-per-open, fire-and-forget server-side state reconciliation
+	// (e.g. re-ensuring configured shared buildkit servers after an external
+	// kill / reboot). Kept off Hello so a burst of CLI Hellos can't trigger it.
+	FleetTUIConnected(ctx context.Context, in *FleetTUIConnectedRequest, opts ...grpc.CallOption) (*FleetTUIConnectedReply, error)
 	// GetState is the one-stop snapshot of everything the TUI renders (persisted
 	// State + live runtime + active jobs).
 	GetState(ctx context.Context, in *GetStateRequest, opts ...grpc.CallOption) (*GetStateReply, error)
@@ -119,6 +125,16 @@ func (c *fleetServiceClient) Shutdown(ctx context.Context, in *ShutdownRequest, 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ShutdownReply)
 	err := c.cc.Invoke(ctx, FleetService_Shutdown_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) FleetTUIConnected(ctx context.Context, in *FleetTUIConnectedRequest, opts ...grpc.CallOption) (*FleetTUIConnectedReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FleetTUIConnectedReply)
+	err := c.cc.Invoke(ctx, FleetService_FleetTUIConnected_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -444,6 +460,11 @@ type FleetServiceServer interface {
 	// ---- Lifecycle / handshake ----
 	Hello(context.Context, *HelloRequest) (*HelloReply, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownReply, error)
+	// FleetTUIConnected is sent ONCE when a TUI opens (not by CLI commands): a
+	// hook for once-per-open, fire-and-forget server-side state reconciliation
+	// (e.g. re-ensuring configured shared buildkit servers after an external
+	// kill / reboot). Kept off Hello so a burst of CLI Hellos can't trigger it.
+	FleetTUIConnected(context.Context, *FleetTUIConnectedRequest) (*FleetTUIConnectedReply, error)
 	// GetState is the one-stop snapshot of everything the TUI renders (persisted
 	// State + live runtime + active jobs).
 	GetState(context.Context, *GetStateRequest) (*GetStateReply, error)
@@ -494,6 +515,9 @@ func (UnimplementedFleetServiceServer) Hello(context.Context, *HelloRequest) (*H
 }
 func (UnimplementedFleetServiceServer) Shutdown(context.Context, *ShutdownRequest) (*ShutdownReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Shutdown not implemented")
+}
+func (UnimplementedFleetServiceServer) FleetTUIConnected(context.Context, *FleetTUIConnectedRequest) (*FleetTUIConnectedReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FleetTUIConnected not implemented")
 }
 func (UnimplementedFleetServiceServer) GetState(context.Context, *GetStateRequest) (*GetStateReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetState not implemented")
@@ -620,6 +644,24 @@ func _FleetService_Shutdown_Handler(srv interface{}, ctx context.Context, dec fu
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FleetServiceServer).Shutdown(ctx, req.(*ShutdownRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_FleetTUIConnected_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FleetTUIConnectedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).FleetTUIConnected(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_FleetTUIConnected_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).FleetTUIConnected(ctx, req.(*FleetTUIConnectedRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1010,6 +1052,10 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Shutdown",
 			Handler:    _FleetService_Shutdown_Handler,
+		},
+		{
+			MethodName: "FleetTUIConnected",
+			Handler:    _FleetService_FleetTUIConnected_Handler,
 		},
 		{
 			MethodName: "GetState",

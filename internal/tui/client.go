@@ -205,6 +205,18 @@ var destroyFleetRemote = func(name string) error {
 	})
 }
 
+// notifyTUIConnectedRemote tells the server a TUI has opened so it can run its
+// once-per-open state reconciliation (e.g. re-ensuring configured buildkit
+// servers). Fire-and-forget: the server returns immediately and does the work
+// in the background, and any error here is irrelevant to the TUI — it is a
+// best-effort nudge, sent once per launch (see watch.go).
+var notifyTUIConnectedRemote = func() error {
+	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
+		_, err := svc.FleetTUIConnected(ctx, &fleetgrpc.FleetTUIConnectedRequest{})
+		return err
+	})
+}
+
 // setFleetSettingsRemote replaces a fleet's settings (full FleetSettings,
 // preserving tri-state presence).
 var setFleetSettingsRemote = func(fleetName string, s fleet.FleetSettings) error {
