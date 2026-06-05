@@ -12,6 +12,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/buildkit"
 	"github.com/BenjaminBenetti/fleet-man/internal/create"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
@@ -55,6 +56,30 @@ var jobRunStart = func(fleetName, instanceName string) error {
 var jobRunStop = func(fleetName, instanceName string) error {
 	_, err := instanceops.StopInstance(fleetName, instanceName)
 	return err
+}
+
+// stopBuildkitServer is the buildkit teardown seam (a package var so the destroy
+// paths can be exercised in tests without docker).
+var stopBuildkitServer = buildkit.StopSharedServer
+
+// teardownFleetBuildkit removes a fleet's shared buildkit CONTAINER when the
+// fleet had the feature enabled, so it doesn't orphan or (given its
+// restart=unless-stopped policy) auto-restart after the fleet is gone. It
+// deliberately LEAVES the .buildkit cache directory on disk: a shared build
+// cache is the whole point of the feature, so it should persist across a fleet
+// teardown and warm the next instance created for a fleet of the same name —
+// exactly like the persisted .claude/.codex/.config/gh mount dirs already do.
+// Best-effort: a failure becomes a warning, never an abort. Shared by the
+// destroy job and the DestroyFleet RPC so the container is reclaimed no matter
+// which delete path runs (destroy_fleet=true vs. removing an already-empty fleet).
+func teardownFleetBuildkit(fleetName string, enabled bool) []string {
+	if !enabled {
+		return nil
+	}
+	if err := stopBuildkitServer(fleetName); err != nil {
+		return []string{fmt.Sprintf("stop buildkit server: %v", err)}
+	}
+	return nil
 }
 
 // jobDownInstance tears down one provisioned instance's container. Best-effort:
@@ -468,8 +493,13 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 		inst               *fleet.Instance
 	}
 	var targets []target
+	// buildkitEnabled is read from the live record before mutation so a
+	// destroy_fleet can tear down the fleet's shared buildkit server after its
+	// instances are down. Only meaningful when destroyFleet is set.
+	var buildkitEnabled bool
 	if st, err := state.Load(); err == nil {
 		if f, ok := st.Fleets[fleetName]; ok {
+			buildkitEnabled = f.Settings.BuildkitServer
 			for _, inst := range f.Instances {
 				if destroyFleet || inst.Name == instanceName {
 					targets = append(targets, target{name: inst.Name, workspaceDir: inst.WorkspaceDir, inst: inst})
@@ -488,6 +518,11 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 			}
 		}
 	}
+
+	// Fleet-level teardown: once every instance is down, remove the fleet's
+	// shared buildkit container and its cache directory. Single-instance
+	// destroys leave the server up — its other instances may still use it.
+	warnings = append(warnings, teardownFleetBuildkit(fleetName, destroyFleet && buildkitEnabled)...)
 
 	_ = state.Update(func(st *state.State) error {
 		f, ok := st.Fleets[fleetName]

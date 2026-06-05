@@ -52,6 +52,7 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 		ClaudeCodeMount: s.ClaudeCodeMount,
 		CodexMount:      s.CodexMount,
 		GhMount:         s.GhMount,
+		BuildkitServer:  s.BuildkitServer,
 	}
 	if s.HomeDir != "" {
 		ps.HomeDir = strptr(s.HomeDir)

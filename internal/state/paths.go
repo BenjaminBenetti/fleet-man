@@ -31,6 +31,16 @@ func WarnPath(fleetName, instanceName string) string {
 	return filepath.Join(FleetDir(), "logs", fleetName+"-"+instanceName+".warn")
 }
 
+// BuildkitDir returns the per-fleet host directory that holds the shared
+// buildkit server's unix socket and build cache. It lives next to (not inside)
+// the per-instance workspace clones — like the agentic mount dirs — so it
+// survives instance churn and is shared by every instance in the fleet. The
+// buildkit container bind-mounts this directory and creates buildkitd.sock
+// inside it; instances bind-mount it read-write to reach that socket.
+func BuildkitDir(fleetName string) string {
+	return filepath.Join(WorkspacesDir(), fleetName, ".buildkit")
+}
+
 // ControlDir returns the host directory bind-mounted into an instance to
 // carry the control socket. It is per-instance (not per-fleet) so the host
 // can tell which instance a received message came from, and it lives under

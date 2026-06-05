@@ -31,6 +31,21 @@ type FleetSettings struct {
 	// config.yml.
 	GhMount bool `json:"ghMount,omitempty"`
 
+	// BuildkitServer enables a shared moby/buildkit container for this fleet.
+	// When set, instance provisioning ensures one buildkit container per fleet
+	// whose unix socket lives at ~/.fleet/workspaces/<fleet>/.buildkit/ and is
+	// bind-mounted into every instance; each instance's docker buildx is then
+	// pointed at it (a "remote" builder) so all instances share one build
+	// cache. Plain bool (default off), matching the *Mount flags: false ==
+	// "never set" == disabled.
+	//
+	// This declares intent only. At provisioning time it is honored solely on
+	// backends that report SupportsCustomMounts()==true (devcontainer); cloud
+	// backends silently skip it. Even on a supporting backend, setup is
+	// best-effort: if docker or buildx is absent inside an instance the
+	// configuration is skipped without error (the instance stays usable).
+	BuildkitServer bool `json:"buildkitServer,omitempty"`
+
 	// HomeDir is the absolute path inside the container that should be
 	// treated as the home directory when computing mount targets — e.g.
 	// "/home/vscode" so a Claude Code mount lands at "/home/vscode/.claude".

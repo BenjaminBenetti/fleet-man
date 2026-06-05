@@ -146,6 +146,13 @@ message FleetSettings {
   bool gh_mount = 3;
   optional string home_dir = 4;
   optional bool prefer_fleet_launch = 5;
+  // buildkit_server enables a shared moby/buildkit container for the fleet
+  // whose unix socket (under ~/.fleet/workspaces/<fleet>/.buildkit/) is
+  // bind-mounted into every instance, giving all instances one shared build
+  // cache. Plain bool (default off): false == "never set" == disabled, like
+  // the *Mount flags. Honored only on backends that SupportsCustomMounts()
+  // (devcontainer); cloud backends silently skip it.
+  bool buildkit_server = 6;
 }
 
 // Fleet mirrors internal/fleet.Fleet. Settings is a NESTED message (not inlined)

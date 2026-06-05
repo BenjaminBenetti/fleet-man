@@ -5,6 +5,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -67,6 +68,17 @@ func (s *service) CreateFleet(_ context.Context, req *fleetgrpc.CreateFleetReque
 // never outlives — or orphans — live containers. Removing an already-absent
 // fleet is a no-op success (idempotent).
 func (s *service) DestroyFleet(_ context.Context, req *fleetgrpc.DestroyFleetRequest) (*fleetgrpc.MutationReply, error) {
+	// Read the buildkit setting BEFORE the record is deleted. DestroyFleet only
+	// removes an EMPTY fleet, so its shared buildkit server (kept alive by the
+	// earlier single-instance destroys) would otherwise be orphaned here — the
+	// destroy_fleet job path tears it down, but this synchronous path must too.
+	buildkitEnabled := false
+	if st, err := state.Load(); err == nil {
+		if f, ok := st.Fleets[req.GetName()]; ok {
+			buildkitEnabled = f.Settings.BuildkitServer
+		}
+	}
+
 	snapshot, err := s.mutate(func(st *state.State) error {
 		f, ok := st.Fleets[req.GetName()]
 		if !ok {
@@ -81,6 +93,12 @@ func (s *service) DestroyFleet(_ context.Context, req *fleetgrpc.DestroyFleetReq
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// Best-effort fleet-level buildkit teardown (no warning channel on this
+	// synchronous RPC, so surface failures to the event log).
+	for _, w := range teardownFleetBuildkit(req.GetName(), buildkitEnabled) {
+		flog.Warn("destroy fleet buildkit teardown", "fleet", req.GetName(), "warn", w)
 	}
 	return &fleetgrpc.MutationReply{State: snapshot}, nil
 }
@@ -204,6 +222,7 @@ func protoFleetSettingsToLegacy(ps *fleetgrpc.FleetSettings) fleet.FleetSettings
 	s.ClaudeCodeMount = ps.GetClaudeCodeMount()
 	s.CodexMount = ps.GetCodexMount()
 	s.GhMount = ps.GetGhMount()
+	s.BuildkitServer = ps.GetBuildkitServer()
 	s.HomeDir = ps.GetHomeDir()
 	if ps.PreferFleetLaunch != nil {
 		v := ps.GetPreferFleetLaunch()

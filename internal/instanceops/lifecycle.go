@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/buildkit"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -87,6 +89,18 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 		var homeDir string
 		if f, ok := st.Fleets[fleetName]; ok {
 			homeDir = f.Settings.HomeDir
+			// Re-ensure the fleet's shared buildkit server in case the host
+			// rebooted (or it was manually removed) while this instance was
+			// stopped. Gated to local-docker backends (those that honor custom
+			// mounts); cloud backends can't reach a host docker daemon. The
+			// instance's own buildx config persists across stop/start, so only
+			// the server container needs reviving. Best-effort: a failure just
+			// means no shared cache this session.
+			if f.Settings.BuildkitServer && backendutil.New(instance.Backend, false).SupportsCustomMounts() {
+				if _, err := buildkit.EnsureSharedServer(fleetName); err != nil {
+					state.WriteWarn(fleetName, instanceName, fmt.Sprintf("buildkit server: %v", err))
+				}
+			}
 		}
 		postStartHook(fleetName, instance, homeDir)
 	default:
