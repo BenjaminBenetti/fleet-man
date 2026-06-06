@@ -276,22 +276,30 @@ func StopSharedServer(fleetName string) error {
 // create can't start a server we're about to wipe; the re-ensure runs after the
 // lock is released (EnsureSharedServer takes it again).
 func DeleteCache(fleetName string) error {
-	if err := func() error {
+	var wipeErr error
+	func() {
 		lock := fleetLock(fleetName)
 		lock.Lock()
 		defer lock.Unlock()
 		name := ContainerName(fleetName)
 		if out, err := runDocker("rm", "-f", name); err != nil && !strings.Contains(out, "No such container") {
-			return fmt.Errorf("stop buildkit server: %w (%s)", err, out)
+			wipeErr = fmt.Errorf("stop buildkit server: %w (%s)", err, out)
+			return
 		}
-		return removeSharedDir(fleetName)
-	}(); err != nil {
-		return err
+		wipeErr = removeSharedDir(fleetName)
+	}()
+
+	// Always bring the server back, even if the wipe partially failed: the
+	// container was already removed above, so skipping the restart would leave
+	// the fleet with no build server at all.
+	_, ensureErr := EnsureSharedServer(fleetName)
+	if wipeErr != nil {
+		return fmt.Errorf("clear buildkit cache: %w", wipeErr)
+	}
+	if ensureErr != nil {
+		return fmt.Errorf("restart buildkit server after cache clear: %w", ensureErr)
 	}
 	flog.Info("buildkit cache cleared", "fleet", fleetName)
-	if _, err := EnsureSharedServer(fleetName); err != nil {
-		return fmt.Errorf("restart buildkit server after cache clear: %w", err)
-	}
 	return nil
 }
 

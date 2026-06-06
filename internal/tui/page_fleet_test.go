@@ -796,6 +796,25 @@ func TestEditFleetDeleteCacheButtonFlow(t *testing.T) {
 	}
 }
 
+// TestEditFleetDeleteCacheError surfaces the failure path: a failed wipe clears
+// the in-flight flag and reports the error to the user.
+func TestEditFleetDeleteCacheError(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	fp := newFleetPage()
+	fp.dialogFleet = "alpha"
+	fp.dialogDeletingCache = true
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha"}}}, fleetPage: fp}
+
+	fp.handleDeleteCacheDone(m, deleteCacheDoneMsg{fleet: "alpha", err: errors.New("docker daemon unavailable")})
+
+	if fp.dialogDeletingCache {
+		t.Fatal("deletingCache should clear even on error")
+	}
+	if !strings.Contains(m.message, "docker daemon unavailable") {
+		t.Fatalf("message = %q, want it to surface the error", m.message)
+	}
+}
+
 // TestEditFleetDeleteCacheConfirmEscCancels verifies esc cancels an armed
 // confirm without closing the dialog or wiping.
 func TestEditFleetDeleteCacheConfirmEscCancels(t *testing.T) {

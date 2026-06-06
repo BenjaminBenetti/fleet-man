@@ -1737,7 +1737,9 @@ func (fleetPage *fleetPage) renderDeleteCacheButton(m *model) string {
 	case fleetPage.dialogDeletingCache:
 		label = m.spinner.View() + " Clearing…"
 	case fleetPage.dialogDeleteCacheConfirm:
-		label = "Delete cache? enter=yes"
+		// Kept short so the row fits the 46-col dialog; the footer hint spells
+		// out enter=confirm / esc=cancel.
+		label = "Delete cache?"
 	default:
 		label = "Delete cache"
 	}
@@ -1761,9 +1763,9 @@ func (fleetPage *fleetPage) editFleetHint() string {
 	case editFleetRowBuildkit:
 		if fleetPage.dialogBuildkitButtonFocused {
 			if fleetPage.dialogDeleteCacheConfirm {
-				return "[enter] Confirm wipe  [esc] Cancel"
+				return "[enter] Confirm delete  [esc] Cancel"
 			}
-			return "[enter] Delete cache  [h/←] Back"
+			return "[enter] Delete cache  [h/←] Back  [esc] Close"
 		}
 		if fleetPage.dialogBuildkitServer {
 			return "[space] Toggle  [l/→] Delete-cache button  [j/k] Select"

@@ -1084,14 +1084,20 @@ func (fleetPage *fleetPage) visibleEditFleetRows() []int {
 // wrapping, and resets the per-row sub-state (button focus / delete confirm).
 func (fleetPage *fleetPage) moveEditFleetRow(delta int) {
 	rows := fleetPage.visibleEditFleetRows()
-	idx := 0
+	idx, found := 0, false
 	for i, r := range rows {
 		if r == fleetPage.dialogRow {
-			idx = i
+			idx, found = i, true
 			break
 		}
 	}
-	fleetPage.dialogRow = rows[(idx+delta+len(rows))%len(rows)]
+	if found {
+		fleetPage.dialogRow = rows[(idx+delta+len(rows))%len(rows)]
+	} else {
+		// The current row is no longer visible (e.g. its section collapsed under
+		// the cursor) — recover by landing on the first visible row.
+		fleetPage.dialogRow = rows[0]
+	}
 	fleetPage.dialogBuildkitButtonFocused = false
 	fleetPage.dialogDeleteCacheConfirm = false
 	fleetPage.syncEditFleetFocus()
@@ -1282,11 +1288,13 @@ func (fleetPage *fleetPage) updateBuildkitRow(m *model, keyMsg tea.KeyMsg) tea.C
 	}
 	switch keyMsg.String() {
 	case " ", "x":
+		// Toggling is a different action than confirming a delete, so always
+		// disarm the confirm.
+		fleetPage.dialogDeleteCacheConfirm = false
 		cmd := fleetPage.toggleEditFleetRow(m)
 		if !fleetPage.dialogBuildkitServer {
-			// No server → no button; drop any button focus / armed confirm.
+			// No server → no button; drop button focus too.
 			fleetPage.dialogBuildkitButtonFocused = false
-			fleetPage.dialogDeleteCacheConfirm = false
 		}
 		return cmd
 	case "right", "l":
@@ -1515,6 +1523,10 @@ func (fleetPage *fleetPage) closeEditFleet(_ *model) {
 	fleetPage.mode = viewNormal
 	fleetPage.dialogDeleteCacheConfirm = false
 	fleetPage.dialogBuildkitButtonFocused = false
+	// Clear the in-flight flag too: a wipe RPC may still be running, but its
+	// deleteCacheDoneMsg is matched on fleet name and only updates the message,
+	// so the dialog must not reopen showing a stale "Clearing…" spinner.
+	fleetPage.dialogDeletingCache = false
 	fleetPage.blurDialogFields()
 }
 

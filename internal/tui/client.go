@@ -205,11 +205,12 @@ var destroyFleetRemote = func(name string) error {
 	})
 }
 
-// deleteCacheTimeout bounds the buildkit cache-wipe RPC. It is longer than the
-// ordinary mutationTimeout because the server stops the container, removes the
-// cache, and restarts the server (which waits for the new socket) — seconds of
-// work, not the sub-second a normal mutation takes.
-const deleteCacheTimeout = 60 * time.Second
+// deleteCacheTimeout bounds the buildkit cache-wipe RPC. It is much longer than
+// the ordinary mutationTimeout because the server stops the container, removes
+// the cache, and restarts the server — which on first run may pull the
+// moby/buildkit image and then waits up to ~15s for the new socket. 120s keeps
+// the common case from timing out before the server reports success.
+const deleteCacheTimeout = 120 * time.Second
 
 // deleteBuildkitCacheRemote asks the server to wipe a fleet's shared build cache
 // and restart the (empty) buildkit server. Uses its own longer deadline.
