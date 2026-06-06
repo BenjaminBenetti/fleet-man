@@ -30,7 +30,6 @@ jobs:
 
       - name: Verify docker
         run: |
-          exit 2
           docker version
           docker info
 
