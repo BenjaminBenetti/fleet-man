@@ -77,6 +77,23 @@ fleet up my-project/agent-3
 | `r` | Refresh |
 | `q` | Quit |
 
+## MCP Server
+
+The fleet daemon also runs an [MCP](https://modelcontextprotocol.io) server over
+Streamable HTTP, so AI agents (and any MCP client) can drive fleet
+programmatically. It starts automatically with the daemon — no extra command.
+
+- It binds `127.0.0.1:6012`, or the next free port if 6012 is taken.
+- The active port is written to `~/.fleet/mcp.port`, so clients can discover the
+  endpoint. The URL is `http://127.0.0.1:<port>`.
+
+Tools mirror the non-interactive CLI: `fleet_list`, `fleet_status`,
+`fleet_version`, `fleet_logs`, `fleet_up`, `fleet_start`, `fleet_stop`,
+`fleet_down`, `fleet_destroy_fleet`, `fleet_clone`, `fleet_exec`, and the tmux
+session tools `fleet_session_spawn` / `fleet_session_exec` / `fleet_session_read`.
+Interactive, open-ended commands (`fleet shell`, log following) are intentionally
+not exposed.
+
 ## Requirements
 
 - Linux, including Ubuntu on WSL2

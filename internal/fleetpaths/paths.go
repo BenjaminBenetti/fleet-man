@@ -44,6 +44,15 @@ func VersionFilePath() string {
 	return filepath.Join(Dir(), "server.version")
 }
 
+// McpPortPath records the TCP port the server's MCP (Model Context Protocol)
+// HTTP server bound to. Like VersionFilePath it is a non-authoritative discovery
+// file the server writes on startup and removes on shutdown, so a user or
+// program can find the MCP endpoint when the default port (6012) was taken and
+// the server had to fall back to the next free one.
+func McpPortPath() string {
+	return filepath.Join(Dir(), "mcp.port")
+}
+
 // WorkspacesDir is the base directory for instance workspace clones. Mirrors
 // internal/state.WorkspacesDir; lives here too so client code (which must not
 // import internal/state) can derive workspace paths.
