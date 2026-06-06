@@ -12,6 +12,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/sys/unix"
 )
 
 // splitPaneMsg is sent after a tmux split-window command completes.
@@ -23,6 +24,20 @@ type splitPaneMsg struct {
 	command    string      // command(s) launched in the pane(s); for the event log
 	restoreSeq int         // async restore token; zero means not a group restore
 	err        error
+}
+
+// currentTermSize reads the TUI's own pty dimensions via ioctl (TIOCGWINSZ on
+// stdout) — the authoritative size of the terminal bubbletea renders into, and
+// exactly what bubbletea's SIGWINCH handler reads. This is the fleet *pane*
+// size (not the whole tmux window), so it stays correct even when the TUI is
+// only occupying part of a split window. Returns (cols, rows) or (0, 0) on
+// failure.
+func currentTermSize() (int, int) {
+	ws, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ)
+	if err != nil || ws == nil {
+		return 0, 0
+	}
+	return int(ws.Col), int(ws.Row)
 }
 
 // tmuxWindowSize queries the host tmux for the current window dimensions.
