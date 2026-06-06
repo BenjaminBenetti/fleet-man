@@ -6,8 +6,9 @@ name: Integration Tests (Windows / WSL)
 # integration suite the Linux job runs.
 
 on:
-  pull_request:
-    branches: [main]
+# Disable - way to slow! Bigger runner?   
+#  pull_request:
+#    branches: [main]
 
 jobs:
   integration-wsl:
