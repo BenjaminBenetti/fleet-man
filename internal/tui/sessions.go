@@ -113,11 +113,19 @@ type sessionCreatedMsg struct {
 }
 
 // sessionRenamedMsg is sent after renaming a tmux session.
+//
+// oldGroupID/newGroupID are set only when a grouped session was renamed (the
+// group ID itself changes, so every session in the group is reprefixed). They
+// let the handler migrate in-memory state — savedGroups, the active group, the
+// open split, and last-active — off the old group ID so a stale entry can't
+// resurface as a duplicate row or strand the shell on a vanished session.
 type sessionRenamedMsg struct {
-	ref     InstanceRef
-	oldName string
-	newName string
-	err     error
+	ref        InstanceRef
+	oldName    string
+	newName    string
+	oldGroupID string
+	newGroupID string
+	err        error
 }
 
 // sessionDeletedMsg is sent after killing a tmux session (or group of sessions).
@@ -202,9 +210,9 @@ func renameGroupCmd(ref InstanceRef, sanitizedInstance, oldGroupID, newGroupID s
 			}
 		}
 		if lastErr != nil {
-			return sessionRenamedMsg{ref: ref, oldName: oldPrefix, newName: newPrefix, err: lastErr}
+			return sessionRenamedMsg{ref: ref, oldName: oldPrefix, newName: newPrefix, oldGroupID: oldGroupID, newGroupID: newGroupID, err: lastErr}
 		}
-		return sessionRenamedMsg{ref: ref, oldName: oldPrefix, newName: newPrefix}
+		return sessionRenamedMsg{ref: ref, oldName: oldPrefix, newName: newPrefix, oldGroupID: oldGroupID, newGroupID: newGroupID}
 	}
 }
 

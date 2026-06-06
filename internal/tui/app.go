@@ -270,6 +270,107 @@ func (m *model) pruneSavedGroupsForInstance(ref InstanceRef) {
 	}
 }
 
+// migrateRenamedSession rewrites the in-memory references that pointed at a
+// just-renamed session so they track the new name. Renaming a grouped session
+// changes the group ID, reprefixing every session in the group; without this
+// migration the old group ID lingers in savedGroups (and gets re-persisted by
+// the layout tick because activeGroup still names it), resurfacing as a
+// duplicate row on the next TUI start and stranding the split on a session
+// that no longer exists. Only called for a successful rename.
+func (m *model) migrateRenamedSession(msg sessionRenamedMsg) {
+	if m.fleetPage == nil || !msg.ref.Valid() {
+		return
+	}
+	fleetPage := m.fleetPage
+	sanitized := SanitizeSessionName(msg.ref.Instance)
+
+	if msg.oldGroupID != "" {
+		oldPrefix := sanitized + groupSep + msg.oldGroupID
+		newPrefix := sanitized + groupSep + msg.newGroupID
+		m.migrateSavedGroup(msg.ref, msg.oldGroupID, msg.newGroupID, oldPrefix, newPrefix)
+
+		if fleetPage.activeGroup == (ActiveGroup{Ref: msg.ref, GroupID: msg.oldGroupID}) {
+			fleetPage.activeGroup.GroupID = msg.newGroupID
+			if fleetPage.splitPaneID != "" {
+				unbindHostSplitKeys()
+				bindHostSplitKeys(msg.ref.Key(), msg.newGroupID)
+			}
+		}
+		if fleetPage.splitRef == msg.ref && strings.HasPrefix(fleetPage.splitSession, oldPrefix) {
+			fleetPage.splitSession = newPrefix + fleetPage.splitSession[len(oldPrefix):]
+		}
+		if last, ok := m.sessionStore.LastActive(msg.ref); ok && last.groupID == msg.oldGroupID {
+			last.groupID = msg.newGroupID
+			if strings.HasPrefix(last.sessionName, oldPrefix) {
+				last.sessionName = newPrefix + last.sessionName[len(oldPrefix):]
+			}
+			m.sessionStore.SetLastActive(msg.ref, last)
+		}
+		return
+	}
+
+	// Ungrouped rename: the pseudo group ID equals the session name, so the
+	// active group and last-active entry track the name directly.
+	if fleetPage.splitRef == msg.ref && fleetPage.splitSession == msg.oldName {
+		fleetPage.splitSession = msg.newName
+	}
+	if fleetPage.activeGroup == (ActiveGroup{Ref: msg.ref, GroupID: msg.oldName}) {
+		fleetPage.activeGroup.GroupID = msg.newName
+	}
+	if last, ok := m.sessionStore.LastActive(msg.ref); ok && last.sessionName == msg.oldName {
+		last.sessionName = msg.newName
+		if last.groupID == msg.oldName {
+			last.groupID = msg.newName
+		}
+		m.sessionStore.SetLastActive(msg.ref, last)
+	}
+}
+
+// migrateSavedGroup re-keys a persisted group layout from oldGroupID to
+// newGroupID, rewriting the group ID and the session-name prefixes, and
+// mirrors the move into state.json and the server. A no-op when no saved
+// layout exists for the old group ID.
+func (m *model) migrateSavedGroup(ref InstanceRef, oldGroupID, newGroupID, oldPrefix, newPrefix string) {
+	oldKey := computeGroupKey(ref.Instance, oldGroupID)
+	sg, ok := m.fleetPage.savedGroups[oldKey]
+	if !ok {
+		return
+	}
+	sessions := make([]string, len(sg.Sessions))
+	for i, name := range sg.Sessions {
+		if strings.HasPrefix(name, oldPrefix) {
+			sessions[i] = newPrefix + name[len(oldPrefix):]
+		} else {
+			sessions[i] = name
+		}
+	}
+	sg.GroupID = newGroupID
+	sg.Sessions = sessions
+
+	delete(m.fleetPage.savedGroups, oldKey)
+	newKey := computeGroupKey(ref.Instance, newGroupID)
+	m.fleetPage.savedGroups[newKey] = sg
+
+	if m.st != nil && m.st.GroupLayouts != nil {
+		delete(m.st.GroupLayouts, oldKey)
+		m.st.GroupLayouts[newKey] = configutil.GroupLayout{
+			GroupID:      sg.GroupID,
+			InstanceName: sg.InstanceName,
+			Sessions:     sg.Sessions,
+			Layout:       sg.Layout,
+			PaneCount:    sg.PaneCount,
+		}
+	}
+	_ = deleteGroupLayoutRemote(ref.Instance, oldGroupID)
+	_ = setGroupLayoutRemote(configutil.GroupLayout{
+		GroupID:      sg.GroupID,
+		InstanceName: sg.InstanceName,
+		Sessions:     sg.Sessions,
+		Layout:       sg.Layout,
+		PaneCount:    sg.PaneCount,
+	})
+}
+
 // pruneOrphanedSavedGroups drops saved layout entries whose instance no
 // longer exists in state (e.g. the instance was deleted while fleet
 // wasn't running). Called once at startup.
@@ -727,6 +828,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = fmt.Sprintf("Failed to rename session: %v", msg.err)
 		} else {
 			m.message = fmt.Sprintf("Renamed session %s → %s", msg.oldName, msg.newName)
+			// Migrate before refreshing: the refresh prunes saved groups whose
+			// ID is no longer live, so the re-keyed entry must already sit under
+			// the new group ID for prune to treat it as live and keep it.
+			m.migrateRenamedSession(msg)
 		}
 		m.refreshSessionsFromRuntime(msg.ref)
 
