@@ -1712,7 +1712,7 @@ func (fleetPage *fleetPage) editFleetHint() string {
 	if fleetPage.dialogFieldActive {
 		return "[enter] Save  [esc] Discard edit"
 	}
-	return "[j/k] Select  [h/l/space] Toggle  [enter] Edit  [q/esc] Close · saved instantly"
+	return "[j/k] Select  [h/l/space] Toggle  [enter] Edit  [q/esc] Save & Close"
 }
 
 func (fleetPage *fleetPage) portForwardHint() string {
