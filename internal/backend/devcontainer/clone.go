@@ -33,6 +33,7 @@ const (
 type inspectedContainer struct {
 	Mounts []struct {
 		Type        string `json:"Type"`
+		Name        string `json:"Name"`
 		Source      string `json:"Source"`
 		Destination string `json:"Destination"`
 	} `json:"Mounts"`
@@ -266,6 +267,26 @@ func newCloneImageTag() (string, error) {
 		return "", err
 	}
 	return "fleet-clone-" + hex.EncodeToString(randomBytes[:]) + ":latest", nil
+}
+
+// volumesForContainer returns the names of the docker volumes a container
+// mounts, read from `docker inspect` before the container is removed.
+// Covers both named volumes (a devcontainer.json `type=volume` mount or a
+// feature such as docker-in-docker) and anonymous ones; both outlive
+// `docker rm` and would otherwise leak after an instance is destroyed.
+// Returns nil when the container cannot be inspected.
+func volumesForContainer(containerID string) []string {
+	inspected, err := inspectContainer(containerID)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, mount := range inspected.Mounts {
+		if mount.Type == "volume" && mount.Name != "" {
+			names = append(names, mount.Name)
+		}
+	}
+	return names
 }
 
 // cloneImageForContainer returns the fleet.clone.image label value for a

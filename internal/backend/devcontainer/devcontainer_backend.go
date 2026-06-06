@@ -239,11 +239,30 @@ func (devcontainerBackend *DevcontainerBackend) pruneStaleContainers(workspaceDi
 // callers actually need.
 func (devcontainerBackend *DevcontainerBackend) Down(containerID string) error {
 	cloneImage := cloneImageForContainer(containerID)
+	// Capture the container's volumes before removing it — `docker inspect`
+	// no longer reports them once the container is gone.
+	volumes := volumesForContainer(containerID)
 
 	cmd := exec.Command("docker", "rm", "-f", containerID)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return err
+	}
+
+	// Remove the volumes the container mounted. `docker rm` leaves named
+	// volumes behind, so an instance whose devcontainer declared a
+	// `type=volume` mount (or pulled in a feature like docker-in-docker)
+	// would otherwise leak a volume on every teardown. Docker refuses to
+	// delete a volume still referenced by another container, so anything
+	// shared with a sibling instance survives — only this instance's own
+	// volumes go. Best-effort: a failure leaks a volume but the container
+	// (what callers need gone) is already removed.
+	for _, vol := range volumes {
+		rmCmd := exec.Command("docker", "volume", "rm", vol)
+		if rmOut, err := rmCmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to remove volume %s: %v\n%s\n",
+				vol, err, strings.TrimSpace(string(rmOut)))
+		}
 	}
 
 	if cloneImage != "" {
