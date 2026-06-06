@@ -3,7 +3,8 @@
 # one is present. Three uses:
 #   --no-daemon : image build time — fail the build if a tool is missing
 #                 (dockerd isn't running yet, so skip the daemon check).
-#   --smoke     : CI — also prove Docker-in-Docker works by running hello-world.
+#   --smoke     : also prove Docker-in-Docker works by running hello-world
+#                 (for local/manual use — CI never runs this privileged image).
 #   (no args)   : by hand inside the container, to sanity-check the environment.
 set -uo pipefail
 
@@ -20,15 +21,19 @@ done
 
 fail=0
 
-# report NAME CMD [ARGS...] — print NAME + first line of `CMD ARGS`, or MISSING.
+# report NAME CMD [ARGS...] — print NAME + first line of `CMD ARGS`, or mark it
+# failed. Runs the full command and checks its exit status, so a missing binary
+# OR a missing subcommand/plugin (e.g. `docker buildx` when the plugin isn't
+# installed) is caught — not just whether the first word is on PATH.
 report() {
   local name="$1"; shift
-  if ! command -v "$1" >/dev/null 2>&1; then
-    printf '  %-20s MISSING\n' "${name}"
+  local out
+  if ! out="$("$@" 2>&1)"; then
+    printf '  %-20s MISSING/FAILED\n' "${name}"
     fail=1
     return
   fi
-  printf '  %-20s %s\n' "${name}" "$("$@" 2>&1 | head -n1)"
+  printf '  %-20s %s\n' "${name}" "$(printf '%s\n' "${out}" | head -n1)"
 }
 
 echo "fleet QA toolchain:"
