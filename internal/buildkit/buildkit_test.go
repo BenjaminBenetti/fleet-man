@@ -3,6 +3,7 @@ package buildkit
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -234,6 +235,47 @@ func TestEnsureSharedServerConcurrentRunsOnce(t *testing.T) {
 	defer mu.Unlock()
 	if runCount != 1 {
 		t.Fatalf("docker run issued %d times, want exactly 1", runCount)
+	}
+}
+
+func TestDeleteCacheWipesAndRestarts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var calls [][]string
+	stubDocker(t, func(args []string) (string, error) {
+		calls = append(calls, args)
+		if args[0] == "inspect" {
+			return "", fmt.Errorf("No such object") // absent → restart docker-runs
+		}
+		return "", nil
+	})
+	stubWaitForSocket(t, nil)
+
+	// Seed a cache dir with a marker blob to prove it gets wiped.
+	dir := state.BuildkitDir("alpha")
+	if err := os.MkdirAll(filepath.Join(dir, "cache"), 0o777); err != nil {
+		t.Fatalf("seed cache dir: %v", err)
+	}
+	marker := filepath.Join(dir, "cache", "old-blob")
+	if err := os.WriteFile(marker, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("seed marker: %v", err)
+	}
+
+	if err := DeleteCache("alpha"); err != nil {
+		t.Fatalf("DeleteCache: %v", err)
+	}
+
+	if !hasCall(calls, "rm") {
+		t.Fatalf("expected docker rm (stop), calls=%v", calls)
+	}
+	if !hasCall(calls, "run") {
+		t.Fatalf("expected docker run (restart), calls=%v", calls)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("stale cache blob not removed: %v", err)
+	}
+	// The server is restarted, so the dir is recreated (empty).
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("buildkit dir should be recreated after restart: %v", err)
 	}
 }
 

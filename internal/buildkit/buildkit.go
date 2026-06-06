@@ -267,6 +267,54 @@ func StopSharedServer(fleetName string) error {
 	return nil
 }
 
+// DeleteCache wipes a fleet's shared build cache and restarts the server empty:
+// it stops/removes the buildkit container, deletes the .buildkit directory
+// (including buildkitd's root-owned cache), then re-ensures the server so it
+// comes back with a fresh cache. Serialized per fleet and idempotent.
+//
+// The stop+remove happen under the per-fleet lock so a concurrent instance
+// create can't start a server we're about to wipe; the re-ensure runs after the
+// lock is released (EnsureSharedServer takes it again).
+func DeleteCache(fleetName string) error {
+	if err := func() error {
+		lock := fleetLock(fleetName)
+		lock.Lock()
+		defer lock.Unlock()
+		name := ContainerName(fleetName)
+		if out, err := runDocker("rm", "-f", name); err != nil && !strings.Contains(out, "No such container") {
+			return fmt.Errorf("stop buildkit server: %w (%s)", err, out)
+		}
+		return removeSharedDir(fleetName)
+	}(); err != nil {
+		return err
+	}
+	flog.Info("buildkit cache cleared", "fleet", fleetName)
+	if _, err := EnsureSharedServer(fleetName); err != nil {
+		return fmt.Errorf("restart buildkit server after cache clear: %w", err)
+	}
+	return nil
+}
+
+// removeSharedDir deletes a fleet's .buildkit directory. A plain os.RemoveAll
+// works when nothing root-owned is present; buildkitd's cache (written as root
+// in the privileged container) defeats a user-context rm, so on failure it
+// falls back to a throwaway root container that removes the dir.
+func removeSharedDir(fleetName string) error {
+	dir, err := SharedDir(fleetName)
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(dir); err == nil {
+		return nil
+	}
+	parent := filepath.Dir(dir)
+	base := filepath.Base(dir)
+	if out, err := runDocker("run", "--rm", "--entrypoint", "rm", "-v", parent+":/work", image, "-rf", "/work/"+base); err != nil {
+		return fmt.Errorf("remove buildkit dir %s: %w (%s)", dir, err, out)
+	}
+	return nil
+}
+
 // inspectState reports whether a container exists and whether it is running.
 // `docker inspect` exits non-zero for a missing container, which we map to
 // exists=false.

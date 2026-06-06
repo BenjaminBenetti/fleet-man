@@ -66,6 +66,18 @@ message FleetTUIConnectedRequest {}
 // fire-and-forget on the server, so the client does not wait on its outcome.
 message FleetTUIConnectedReply {}
 
+// DeleteBuildkitCacheRequest asks the server to wipe a fleet's shared build
+// cache: stop the buildkit container, delete ~/.fleet/workspaces/<fleet>/
+// .buildkit (incl. the root-owned cache), then restart the server empty. It is
+// a synchronous action (takes a few seconds), so the client shows progress and
+// uses a longer deadline than ordinary mutations.
+message DeleteBuildkitCacheRequest {
+  string fleet = 1;
+}
+
+// DeleteBuildkitCacheReply is empty: success is signalled by a nil error.
+message DeleteBuildkitCacheReply {}
+
 message GetStateRequest {}
 
 // GetStateReply is the one-stop snapshot of EVERYTHING the TUI renders:

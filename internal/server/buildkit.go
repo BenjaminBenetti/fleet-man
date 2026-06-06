@@ -3,12 +3,32 @@ package server
 import (
 	"context"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/buildkit"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+// deleteBuildkitCache is the cache-wipe seam (a package var so the RPC handler
+// can be tested without docker).
+var deleteBuildkitCache = buildkit.DeleteCache
+
+// DeleteBuildkitCache wipes a fleet's shared build cache and restarts the empty
+// server. Synchronous: it returns only once the cache is gone and the server is
+// back (or an error). The client uses a longer deadline for this call.
+func (s *service) DeleteBuildkitCache(_ context.Context, req *fleetgrpc.DeleteBuildkitCacheRequest) (*fleetgrpc.DeleteBuildkitCacheReply, error) {
+	if req.GetFleet() == "" {
+		return nil, status.Error(codes.InvalidArgument, "fleet is required")
+	}
+	if err := deleteBuildkitCache(req.GetFleet()); err != nil {
+		return nil, status.Errorf(codes.Internal, "delete buildkit cache: %v", err)
+	}
+	return &fleetgrpc.DeleteBuildkitCacheReply{}, nil
+}
 
 // ensureBuildkitServer is the re-ensure seam (a package var so the TUI-connect
 // sweep can be exercised in tests without docker). Mirrors stopBuildkitServer in

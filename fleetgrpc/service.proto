@@ -50,6 +50,11 @@ service FleetService {
   rpc CreateFleet(CreateFleetRequest) returns (MutationReply);
   rpc DestroyFleet(DestroyFleetRequest) returns (MutationReply);
   rpc SetFleetSettings(SetFleetSettingsRequest) returns (MutationReply);
+
+  // DeleteBuildkitCache wipes a fleet's shared build cache and restarts the
+  // (empty) buildkit server. A synchronous host-docker action — clients use a
+  // longer deadline and show progress.
+  rpc DeleteBuildkitCache(DeleteBuildkitCacheRequest) returns (DeleteBuildkitCacheReply);
   rpc SetInstanceMetadata(SetInstanceMetadataRequest) returns (MutationReply);
   rpc SetGroupLayout(SetGroupLayoutRequest) returns (MutationReply);
   rpc DeleteGroupLayout(DeleteGroupLayoutRequest) returns (MutationReply);
