@@ -600,21 +600,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case forceRepaintTickMsg:
 		// Scrub artifacts left by outer-tmux pane resizes without
-		// flicker. A synthetic WindowSizeMsg (with the current
-		// dimensions so no app-level resize happens) causes
-		// bubbletea's renderer to invalidate its per-line cache; on
-		// the next flush every tracked line is rewritten with
-		// EraseLineRight appended, scrubbing stale chars inside the
-		// TUI's bounds. The trailing EraseScreenBelow escape that
-		// View() tacks onto the last line then clears everything
-		// beneath the TUI — and because that escape is part of the
-		// view string, the clear lands in the same atomic buffer
-		// flush as the redraw, so the terminal never sees a blank
-		// frame (unlike tea.ClearScreen which writes the erase
-		// ahead of the next render tick).
+		// flicker, AND self-heal a stale window size. We emit a
+		// synthetic WindowSizeMsg carrying the *actual* current pty
+		// dimensions (read via ioctl, exactly what bubbletea's own
+		// SIGWINCH handler reads) rather than the cached m.width/
+		// m.height.
+		//
+		// Why the live read matters: opening/closing sessions and
+		// restoring layouts fires a burst of pane resizes, and SIGWINCH
+		// does not queue — the burst coalesces, so bubbletea can read
+		// the pty at an intermediate moment and never get a fresh
+		// signal for the final settled geometry. That left m.width
+		// stale (too wide), so the TUI rendered lines wider than the
+		// pane and tmux wrapped them — garbled output that only a
+		// manual divider drag (a fresh SIGWINCH) corrected. Reading the
+		// true size here recovers within one tick with no manual drag.
+		// When the size is unchanged this is a pure repaint.
+		//
+		// The repaint itself: the WindowSizeMsg invalidates bubbletea's
+		// per-line cache; on the next flush every tracked line is
+		// rewritten with EraseLineRight appended, scrubbing stale chars
+		// inside the TUI's bounds. The trailing EraseScreenBelow escape
+		// that View() tacks onto the last line then clears everything
+		// beneath the TUI — and because that escape is part of the view
+		// string, the clear lands in the same atomic buffer flush as
+		// the redraw, so the terminal never sees a blank frame (unlike
+		// tea.ClearScreen which writes the erase ahead of the next
+		// render tick).
+		w, h := currentTermSize()
+		if w == 0 || h == 0 {
+			w, h = m.width, m.height
+		}
 		return m, tea.Batch(
 			spinCmd,
-			func() tea.Msg { return tea.WindowSizeMsg{Width: m.width, Height: m.height} },
+			func() tea.Msg { return tea.WindowSizeMsg{Width: w, Height: h} },
 			forceRepaintCmd(),
 		)
 	}
