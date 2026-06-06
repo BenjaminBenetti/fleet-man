@@ -268,13 +268,18 @@ func StopSharedServer(fleetName string) error {
 }
 
 // DeleteCache wipes a fleet's shared build cache and restarts the server empty:
-// it stops/removes the buildkit container, deletes the .buildkit directory
-// (including buildkitd's root-owned cache), then re-ensures the server so it
-// comes back with a fresh cache. Serialized per fleet and idempotent.
+// it stops/removes the buildkit container, clears the .buildkit directory's
+// CONTENTS (including buildkitd's root-owned cache), then re-ensures the server
+// so it comes back with a fresh cache. Serialized per fleet and idempotent.
 //
-// The stop+remove happen under the per-fleet lock so a concurrent instance
-// create can't start a server we're about to wipe; the re-ensure runs after the
-// lock is released (EnsureSharedServer takes it again).
+// It deliberately keeps the .buildkit DIRECTORY itself (only its contents go):
+// running instances bind-mount that directory, and removing+recreating it would
+// orphan their mounts — the new socket would live in a different inode invisible
+// inside the instance, leaving its buildx builder "inactive".
+//
+// The stop+clear happen under the per-fleet lock so a concurrent instance create
+// can't start a server we're about to wipe; the re-ensure runs after the lock is
+// released (EnsureSharedServer takes it again).
 func DeleteCache(fleetName string) error {
 	var wipeErr error
 	func() {
@@ -286,7 +291,7 @@ func DeleteCache(fleetName string) error {
 			wipeErr = fmt.Errorf("stop buildkit server: %w (%s)", err, out)
 			return
 		}
-		wipeErr = removeSharedDir(fleetName)
+		wipeErr = clearSharedDir(fleetName)
 	}()
 
 	// Always bring the server back, even if the wipe partially failed: the
@@ -303,22 +308,39 @@ func DeleteCache(fleetName string) error {
 	return nil
 }
 
-// removeSharedDir deletes a fleet's .buildkit directory. A plain os.RemoveAll
-// works when nothing root-owned is present; buildkitd's cache (written as root
-// in the privileged container) defeats a user-context rm, so on failure it
-// falls back to a throwaway root container that removes the dir.
-func removeSharedDir(fleetName string) error {
+// clearSharedDir wipes the CONTENTS of a fleet's .buildkit directory but keeps
+// the directory itself, so running instances' bind mounts of it stay valid (see
+// DeleteCache). A plain per-entry os.RemoveAll works when nothing root-owned is
+// present; buildkitd's cache (written as root in the privileged container)
+// defeats a user-context rm, so on failure it falls back to a throwaway root
+// container that clears the contents (never the dir).
+func clearSharedDir(fleetName string) error {
 	dir, err := SharedDir(fleetName)
 	if err != nil {
 		return err
 	}
-	if err := os.RemoveAll(dir); err == nil {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	cleared := true
+	for _, e := range entries {
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			cleared = false
+			break
+		}
+	}
+	if cleared {
 		return nil
 	}
-	parent := filepath.Dir(dir)
-	base := filepath.Base(dir)
-	if out, err := runDocker("run", "--rm", "--entrypoint", "rm", "-v", parent+":/work", image, "-rf", "/work/"+base); err != nil {
-		return fmt.Errorf("remove buildkit dir %s: %w (%s)", dir, err, out)
+	// Root-owned cache → clear the contents (NOT the dir) via a throwaway root
+	// container, preserving the .buildkit inode for instance bind mounts.
+	if out, err := runDocker("run", "--rm", "--entrypoint", "sh", "-v", dir+":/work", image,
+		"-c", "rm -rf /work/* /work/.[!.]* /work/..?* 2>/dev/null; true"); err != nil {
+		return fmt.Errorf("clear buildkit dir %s: %w (%s)", dir, err, out)
 	}
 	return nil
 }
