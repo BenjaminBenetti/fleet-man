@@ -56,10 +56,19 @@ func McpPortPath() string {
 // McpTokenPath holds the bearer token a client must send to the MCP HTTP server.
 // The TCP port is reachable by any local user, so (unlike the 0600 unix socket)
 // the port alone is not an access boundary; the token file is written 0600 so
-// only the owning user can read it, restoring per-user access. Written on
-// startup, removed on shutdown.
+// only the owning user can read it, restoring per-user access. It is generated
+// once and reused across restarts (persistent), so env vars and mcp.json files
+// that reference it stay valid.
 func McpTokenPath() string {
 	return filepath.Join(Dir(), "mcp.token")
+}
+
+// McpEnvPath is a sourceable shell snippet (FLEET_MCP_PORT/URL/TOKEN exports)
+// the server refreshes on startup. ~/.bashrc sources it so MCP client configs
+// (mcp.json) can reference ${FLEET_MCP_URL} / ${FLEET_MCP_TOKEN}. Written 0600
+// because it embeds the token.
+func McpEnvPath() string {
+	return filepath.Join(Dir(), "mcp.env")
 }
 
 // WorkspacesDir is the base directory for instance workspace clones. Mirrors

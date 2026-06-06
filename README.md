@@ -89,7 +89,34 @@ programmatically. It starts automatically with the daemon — no extra command.
 - Requests must carry `Authorization: Bearer <token>`, where the token is read
   from `~/.fleet/mcp.token`. The loopback port is reachable by any local user,
   so the token (file mode `0600`, same-user only) is the access boundary —
-  matching the daemon's unix socket.
+  matching the daemon's unix socket. The token is generated once and reused
+  across restarts.
+
+For convenience the server also writes `~/.fleet/mcp.env` (mode `0600`) with the
+endpoint as shell exports, and wires `~/.bashrc` to source it, so new shells get:
+
+```bash
+FLEET_MCP_PORT=6012
+FLEET_MCP_URL=http://127.0.0.1:6012
+FLEET_MCP_TOKEN=<token>
+```
+
+An MCP client config (`mcp.json`) can then reference them directly:
+
+```json
+{
+  "mcpServers": {
+    "fleet": {
+      "type": "http",
+      "url": "${FLEET_MCP_URL}",
+      "headers": { "Authorization": "Bearer ${FLEET_MCP_TOKEN}" }
+    }
+  }
+}
+```
+
+(zsh users: add `[ -f "$HOME/.fleet/mcp.env" ] && . "$HOME/.fleet/mcp.env"` to
+`~/.zshrc`.)
 
 Tools mirror the non-interactive CLI: `fleet_list`, `fleet_status`,
 `fleet_version`, `fleet_logs`, `fleet_up`, `fleet_start`, `fleet_stop`,

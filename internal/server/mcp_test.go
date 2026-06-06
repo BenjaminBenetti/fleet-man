@@ -269,3 +269,51 @@ func TestMCPRequiresBearerToken(t *testing.T) {
 		t.Fatalf("valid token rejected with 401")
 	}
 }
+
+// TestMCPTokenPersistsAndEnvInjected verifies the token survives a restart and
+// that mcp.env + the ~/.bashrc source line are written for mcp.json convenience.
+func TestMCPTokenPersistsAndEnvInjected(t *testing.T) {
+	isolateFleetDir(t)
+	if err := os.MkdirAll(fleetpaths.Dir(), 0o700); err != nil {
+		t.Fatalf("mkdir fleet dir: %v", err)
+	}
+
+	srv1, port1 := startMCPServer(newService())
+	if srv1 == nil {
+		t.Fatal("startMCPServer returned nil")
+	}
+	tok1, _ := os.ReadFile(fleetpaths.McpTokenPath())
+	_ = srv1.Shutdown(context.Background())
+
+	// Env snippet exports the live endpoint + token.
+	env, err := os.ReadFile(fleetpaths.McpEnvPath())
+	if err != nil {
+		t.Fatalf("read mcp.env: %v", err)
+	}
+	for _, want := range []string{
+		"export FLEET_MCP_PORT=" + strconv.Itoa(port1),
+		"export FLEET_MCP_URL=http://127.0.0.1:" + strconv.Itoa(port1),
+		"export FLEET_MCP_TOKEN=" + strings.TrimSpace(string(tok1)),
+	} {
+		if !strings.Contains(string(env), want) {
+			t.Fatalf("mcp.env missing %q:\n%s", want, env)
+		}
+	}
+
+	// ~/.bashrc is wired to source it.
+	bashrc, err := os.ReadFile(os.Getenv("HOME") + "/.bashrc")
+	if err != nil || !strings.Contains(string(bashrc), mcpBashrcMarker) {
+		t.Fatalf("~/.bashrc not wired to source mcp.env (err=%v): %s", err, bashrc)
+	}
+
+	// A second start reuses the same token.
+	srv2, _ := startMCPServer(newService())
+	if srv2 == nil {
+		t.Fatal("second startMCPServer returned nil")
+	}
+	defer func() { _ = srv2.Shutdown(context.Background()) }()
+	tok2, _ := os.ReadFile(fleetpaths.McpTokenPath())
+	if strings.TrimSpace(string(tok1)) != strings.TrimSpace(string(tok2)) || len(tok2) == 0 {
+		t.Fatalf("token not persisted across restart: %q vs %q", tok1, tok2)
+	}
+}

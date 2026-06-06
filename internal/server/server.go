@@ -115,8 +115,9 @@ func Serve(ctx context.Context) error {
 			if err := mcpHTTP.Shutdown(sctx); err != nil {
 				_ = mcpHTTP.Close()
 			}
+			// Remove only the liveness hint. The token and env snippet persist
+			// across restarts so configured MCP clients (mcp.json) keep working.
 			_ = os.Remove(fleetpaths.McpPortPath())
-			_ = os.Remove(fleetpaths.McpTokenPath())
 		}()
 	}
 

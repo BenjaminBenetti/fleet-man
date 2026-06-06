@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -62,24 +63,19 @@ const mcpSessionTimeout = 30 * time.Minute
 // `fleet` CLI/TUI.
 func startMCPServer(svc *service) (*http.Server, int) {
 	// The token gates access: the TCP port is reachable by any local user, so
-	// (unlike the 0600 unix socket) it is not itself a boundary. Written 0600 so
-	// only the owning user can read it. If we can't establish it, disable MCP
-	// rather than expose unauthenticated fleet-control tools across the user
-	// boundary.
-	token, err := newMCPToken()
+	// (unlike the 0600 unix socket) it is not itself a boundary. Stored 0600 so
+	// only the owning user can read it, and reused across restarts so env vars /
+	// mcp.json stay valid. If we can't establish it, disable MCP rather than
+	// expose unauthenticated fleet-control tools across the user boundary.
+	token, err := loadOrCreateMCPToken()
 	if err != nil {
 		flog.Error("mcp token", "err", err)
-		return nil, 0
-	}
-	if err := os.WriteFile(fleetpaths.McpTokenPath(), []byte(token), 0o600); err != nil {
-		flog.Error("write mcp.token", "err", err)
 		return nil, 0
 	}
 
 	lis, port, err := listenMCP(mcpDefaultPort)
 	if err != nil {
 		flog.Error("mcp listen", "err", err)
-		_ = os.Remove(fleetpaths.McpTokenPath())
 		return nil, 0
 	}
 
@@ -98,6 +94,12 @@ func startMCPServer(svc *service) (*http.Server, int) {
 		flog.Warn("write mcp.port", "err", err)
 	}
 
+	// Publish the endpoint as a sourceable env snippet and wire ~/.bashrc to it,
+	// so MCP client configs (mcp.json) can reference ${FLEET_MCP_URL} /
+	// ${FLEET_MCP_TOKEN} without copying the rotating port or the secret by hand.
+	writeMCPEnv(port, token)
+	ensureBashrcSourcesMCPEnv()
+
 	go func() {
 		if err := httpServer.Serve(lis); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			flog.Error("mcp serve", "err", err)
@@ -114,6 +116,69 @@ func newMCPToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// loadOrCreateMCPToken reuses the persisted token if present (so env vars and
+// mcp.json stay valid across restarts), otherwise mints and persists a new one.
+func loadOrCreateMCPToken() (string, error) {
+	if data, err := os.ReadFile(fleetpaths.McpTokenPath()); err == nil {
+		if t := strings.TrimSpace(string(data)); t != "" {
+			return t, nil
+		}
+	}
+	token, err := newMCPToken()
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(fleetpaths.McpTokenPath(), []byte(token), 0o600); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// mcpBashrcMarker is grep'd against ~/.bashrc to detect a prior wire-in, so the
+// source block is appended at most once (mirrors internal/fleetlaunch).
+const mcpBashrcMarker = ".fleet/mcp.env"
+
+// writeMCPEnv refreshes ~/.fleet/mcp.env with the live endpoint as exports.
+// 0600 because it embeds the token. Best-effort: a failure just means clients
+// fall back to reading mcp.port / mcp.token directly.
+func writeMCPEnv(port int, token string) {
+	content := fmt.Sprintf(`# Written by fleet-man on MCP server startup; sourced from ~/.bashrc.
+# MCP clients (mcp.json) can use ${FLEET_MCP_URL} and Authorization: Bearer ${FLEET_MCP_TOKEN}.
+export FLEET_MCP_PORT=%d
+export FLEET_MCP_URL=http://127.0.0.1:%d
+export FLEET_MCP_TOKEN=%s
+`, port, port, token)
+	if err := os.WriteFile(fleetpaths.McpEnvPath(), []byte(content), 0o600); err != nil {
+		flog.Warn("write mcp.env", "err", err)
+	}
+}
+
+// ensureBashrcSourcesMCPEnv appends a marker-guarded block to ~/.bashrc that
+// sources mcp.env when present, so new shells (and the MCP clients launched from
+// them) pick up FLEET_MCP_* automatically. Idempotent and best-effort; mirrors
+// the in-container wire-in in internal/fleetlaunch.
+func ensureBashrcSourcesMCPEnv() {
+	home := os.Getenv("HOME")
+	if home == "" {
+		return
+	}
+	bashrc := filepath.Join(home, ".bashrc")
+	if data, err := os.ReadFile(bashrc); err == nil && strings.Contains(string(data), mcpBashrcMarker) {
+		return // already wired (or hand-edited in)
+	}
+	block := "\n# Added by fleet-man — export the MCP endpoint env when the server is up.\n" +
+		`[ -f "$HOME/.fleet/mcp.env" ] && . "$HOME/.fleet/mcp.env"` + "\n"
+	f, err := os.OpenFile(bashrc, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		flog.Warn("wire mcp.env into .bashrc", "err", err)
+		return
+	}
+	defer f.Close()
+	if _, err := f.WriteString(block); err != nil {
+		flog.Warn("wire mcp.env into .bashrc", "err", err)
+	}
 }
 
 // mcpAuth requires every MCP request to carry "Authorization: Bearer <token>"
