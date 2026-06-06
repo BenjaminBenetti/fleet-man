@@ -53,6 +53,15 @@ func McpPortPath() string {
 	return filepath.Join(Dir(), "mcp.port")
 }
 
+// McpTokenPath holds the bearer token a client must send to the MCP HTTP server.
+// The TCP port is reachable by any local user, so (unlike the 0600 unix socket)
+// the port alone is not an access boundary; the token file is written 0600 so
+// only the owning user can read it, restoring per-user access. Written on
+// startup, removed on shutdown.
+func McpTokenPath() string {
+	return filepath.Join(Dir(), "mcp.token")
+}
+
 // WorkspacesDir is the base directory for instance workspace clones. Mirrors
 // internal/state.WorkspacesDir; lives here too so client code (which must not
 // import internal/state) can derive workspace paths.

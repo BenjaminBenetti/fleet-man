@@ -116,6 +116,7 @@ func Serve(ctx context.Context) error {
 				_ = mcpHTTP.Close()
 			}
 			_ = os.Remove(fleetpaths.McpPortPath())
+			_ = os.Remove(fleetpaths.McpTokenPath())
 		}()
 	}
 

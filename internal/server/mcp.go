@@ -2,12 +2,16 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -57,9 +61,25 @@ const mcpSessionTimeout = 30 * time.Minute
 // rather than aborting the daemon, so a port-exhausted host still gets a working
 // `fleet` CLI/TUI.
 func startMCPServer(svc *service) (*http.Server, int) {
+	// The token gates access: the TCP port is reachable by any local user, so
+	// (unlike the 0600 unix socket) it is not itself a boundary. Written 0600 so
+	// only the owning user can read it. If we can't establish it, disable MCP
+	// rather than expose unauthenticated fleet-control tools across the user
+	// boundary.
+	token, err := newMCPToken()
+	if err != nil {
+		flog.Error("mcp token", "err", err)
+		return nil, 0
+	}
+	if err := os.WriteFile(fleetpaths.McpTokenPath(), []byte(token), 0o600); err != nil {
+		flog.Error("write mcp.token", "err", err)
+		return nil, 0
+	}
+
 	lis, port, err := listenMCP(mcpDefaultPort)
 	if err != nil {
 		flog.Error("mcp listen", "err", err)
+		_ = os.Remove(fleetpaths.McpTokenPath())
 		return nil, 0
 	}
 
@@ -68,7 +88,7 @@ func startMCPServer(svc *service) (*http.Server, int) {
 		func(*http.Request) *mcp.Server { return mcpSrv },
 		&mcp.StreamableHTTPOptions{SessionTimeout: mcpSessionTimeout},
 	)
-	httpServer := &http.Server{Handler: handler}
+	httpServer := &http.Server{Handler: mcpAuth(token, handler)}
 
 	// Record the port AFTER the bind so the file always names the real port.
 	// Best-effort (like writeVersionFile): a write failure just means clients
@@ -85,6 +105,32 @@ func startMCPServer(svc *service) (*http.Server, int) {
 	}()
 	flog.Info("mcp server started", "port", port)
 	return httpServer, port
+}
+
+// newMCPToken returns a fresh high-entropy bearer token (256 bits, hex).
+func newMCPToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// mcpAuth requires every MCP request to carry "Authorization: Bearer <token>"
+// (constant-time compared). This is the access boundary for the loopback TCP
+// endpoint: only a process that can read ~/.fleet/mcp.token (0600, so same-user
+// only) knows the token, matching the unix socket's per-user protection.
+func mcpAuth(token string, next http.Handler) http.Handler {
+	want := []byte("Bearer " + token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := []byte(strings.TrimSpace(r.Header.Get("Authorization")))
+		if subtle.ConstantTimeCompare(got, want) != 1 {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // listenMCP binds the MCP HTTP server to the first free 127.0.0.1 port at or

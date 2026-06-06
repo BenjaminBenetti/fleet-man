@@ -438,12 +438,10 @@ func (s *service) mcpExec(ctx context.Context, _ *mcp.CallToolRequest, in FleetE
 	cctx, cancel := mergeCtx(s.bgCtx, ctx)
 	defer cancel()
 	var outBuf, errBuf bytes.Buffer
-	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir, in.Command)
+	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir, in.Command).Cmd
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
-	stop := killOnCancel(cctx, cmd.Cmd)
-	defer stop()
-	runErr := cmd.Run()
+	runErr := runCmd(cctx, cmd)
 	exitCode := 0
 	if runErr != nil {
 		// A non-zero exit is reported as data, not a tool error; only a genuine
@@ -567,22 +565,36 @@ func (s *service) runningInstance(fleetName, instanceName string) (*fleet.Instan
 // dotfiles.ShQuote before building the snippet. The command is killed if ctx is
 // cancelled (daemon shutdown / session close).
 func runContainerShell(ctx context.Context, inst *fleet.Instance, snippet string) (string, error) {
-	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir, []string{"sh", "-c", snippet})
-	stop := killOnCancel(ctx, cmd.Cmd)
-	defer stop()
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir, []string{"sh", "-c", snippet}).Cmd
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	err := runCmd(ctx, cmd)
+	return buf.String(), err
 }
 
-// killOnCancel kills cmd's process when ctx is done, until the returned stop is
-// called. It lets one-shot exec/session commands honor cancellation even though
-// the backend builds plain (non-context) exec.Commands.
-func killOnCancel(ctx context.Context, cmd *exec.Cmd) (stop func() bool) {
-	return context.AfterFunc(ctx, func() {
-		if cmd.Process != nil {
+// runCmd runs cmd, killing its process if ctx is cancelled (daemon shutdown /
+// session close). The kill watcher is started AFTER Start sets cmd.Process, and
+// an already-cancelled ctx is rejected before Start, so a cancellation can never
+// race a process into existence unkilled (the bounded-teardown contract). The
+// caller sets cmd.Stdout/Stderr before calling.
+func runCmd(ctx context.Context, cmd *exec.Cmd) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
 			_ = cmd.Process.Kill()
+		case <-done:
 		}
-	})
+	}()
+	return cmd.Wait()
 }
 
 // mcpErr strips the gRPC status wrapper ("rpc error: code = ... desc = ...")

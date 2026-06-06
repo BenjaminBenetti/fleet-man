@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -216,5 +217,55 @@ func TestStartMCPServerWritesPortFile(t *testing.T) {
 	}
 	if strings.TrimSpace(string(data)) != strconv.Itoa(port) {
 		t.Fatalf("mcp.port = %q, want %d", string(data), port)
+	}
+}
+
+// TestMCPRequiresBearerToken verifies the loopback endpoint rejects requests
+// without the token and accepts them with it — the per-user access boundary.
+func TestMCPRequiresBearerToken(t *testing.T) {
+	isolateFleetDir(t)
+	if err := os.MkdirAll(fleetpaths.Dir(), 0o700); err != nil {
+		t.Fatalf("mkdir fleet dir: %v", err)
+	}
+	httpSrv, port := startMCPServer(newService())
+	if httpSrv == nil {
+		t.Fatal("startMCPServer returned nil")
+	}
+	defer func() { _ = httpSrv.Shutdown(context.Background()) }()
+
+	tokenBytes, err := os.ReadFile(fleetpaths.McpTokenPath())
+	if err != nil {
+		t.Fatalf("read mcp.token: %v", err)
+	}
+	token := strings.TrimSpace(string(tokenBytes))
+	if len(token) < 32 {
+		t.Fatalf("token too short: %q", token)
+	}
+
+	url := "http://127.0.0.1:" + strconv.Itoa(port)
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
+	post := func(auth string) int {
+		req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if code := post(""); code != http.StatusUnauthorized {
+		t.Fatalf("no token: got %d, want 401", code)
+	}
+	if code := post("Bearer wrong-token"); code != http.StatusUnauthorized {
+		t.Fatalf("wrong token: got %d, want 401", code)
+	}
+	if code := post("Bearer " + token); code == http.StatusUnauthorized {
+		t.Fatalf("valid token rejected with 401")
 	}
 }

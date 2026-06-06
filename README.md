@@ -86,6 +86,10 @@ programmatically. It starts automatically with the daemon — no extra command.
 - It binds `127.0.0.1:6012`, or the next free port if 6012 is taken.
 - The active port is written to `~/.fleet/mcp.port`, so clients can discover the
   endpoint. The URL is `http://127.0.0.1:<port>`.
+- Requests must carry `Authorization: Bearer <token>`, where the token is read
+  from `~/.fleet/mcp.token`. The loopback port is reachable by any local user,
+  so the token (file mode `0600`, same-user only) is the access boundary —
+  matching the daemon's unix socket.
 
 Tools mirror the non-interactive CLI: `fleet_list`, `fleet_status`,
 `fleet_version`, `fleet_logs`, `fleet_up`, `fleet_start`, `fleet_stop`,
