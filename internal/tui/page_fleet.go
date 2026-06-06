@@ -47,6 +47,12 @@ type fleetPage struct {
 	dialogGhMount           bool
 	dialogBuildkitServer    bool
 	dialogPreferFleetLaunch bool
+	// dialogPreferFleetLaunchSet tracks whether PreferFleetLaunch should be
+	// persisted as an explicit value. It starts true only if the fleet already
+	// had a value, and flips true when the user toggles that row — so the
+	// instant-save path never collapses a "never asked" (nil) PreferFleetLaunch
+	// into an explicit false just because the user edited an unrelated setting.
+	dialogPreferFleetLaunchSet bool
 	dialogDetecting         bool // true while a homedir auto-detect cmd is in flight
 
 	// dialogBrowserSwitching is true while the switch-browser dialog
@@ -198,8 +204,7 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return nil
 
 	case homedirDetectedMsg:
-		fleetPage.handleHomedirDetected(msg.(homedirDetectedMsg))
-		return nil
+		return fleetPage.handleHomedirDetected(m, msg.(homedirDetectedMsg))
 
 	case devcontainerInspectedMsg:
 		return fleetPage.handleDevcontainerInspected(m, msg.(devcontainerInspectedMsg))
@@ -1705,9 +1710,9 @@ func (fleetPage *fleetPage) textDialogHint(action string) string {
 
 func (fleetPage *fleetPage) editFleetHint() string {
 	if fleetPage.dialogFieldActive {
-		return "[enter] Save  [esc] Done editing  [ctrl+c] Cancel"
+		return "[enter] Save  [esc] Discard edit"
 	}
-	return "[j/k] Select  [h/l/space] Toggle  [enter] Edit/Save  [q/esc] Cancel"
+	return "[j/k] Select  [h/l/space] Toggle  [enter] Edit  [q/esc] Close · saved instantly"
 }
 
 func (fleetPage *fleetPage) portForwardHint() string {

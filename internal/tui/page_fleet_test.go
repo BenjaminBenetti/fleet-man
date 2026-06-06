@@ -539,11 +539,22 @@ func TestEditInstanceRejectsEmptyName(t *testing.T) {
 	}
 }
 
-// TestEditFleetTogglesAndSavesSettings verifies that pressing 'e' on a
-// fleet header opens the edit-fleet dialog, that space toggles a row's
-// boolean, and that enter persists the new settings to the fleet.
+// stubFleetSettingsSave makes the instant-save RPC a no-op for tests: the dialog
+// mutates m.st in-memory before calling it, so a nil return means "saved" with
+// no real RPC and no revert.
+func stubFleetSettingsSave(t *testing.T) {
+	t.Helper()
+	orig := setFleetSettingsRemote
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) error { return nil }
+	t.Cleanup(func() { setFleetSettingsRemote = orig })
+}
+
+// TestEditFleetTogglesAndSavesSettings verifies that pressing 'e' on a fleet
+// header opens the edit-fleet dialog and that toggling a row's boolean persists
+// it IMMEDIATELY (instant-save), with esc just closing the already-saved dialog.
 func TestEditFleetTogglesAndSavesSettings(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{}}
 	fp := newFleetPage()
@@ -568,7 +579,8 @@ func TestEditFleetTogglesAndSavesSettings(t *testing.T) {
 		t.Fatalf("expected mounts off by default; got claude=%v codex=%v", fp.dialogClaudeMount, fp.dialogCodexMount)
 	}
 
-	// Toggle Claude (cursor starts on row 0), move down, toggle Codex.
+	// Toggle Claude (cursor starts on row 0), move down, toggle Codex — each
+	// toggle saves instantly.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
@@ -576,22 +588,23 @@ func TestEditFleetTogglesAndSavesSettings(t *testing.T) {
 	if !fp.dialogClaudeMount || !fp.dialogCodexMount {
 		t.Fatalf("after toggles: claude=%v codex=%v, want both true", fp.dialogClaudeMount, fp.dialogCodexMount)
 	}
-
-	// Submit.
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
-
-	if fp.mode != viewNormal {
-		t.Fatalf("mode after enter = %v, want viewNormal", fp.mode)
-	}
+	// Instant-save: already persisted, no submit needed.
 	if !f.Settings.ClaudeCodeMount || !f.Settings.CodexMount {
-		t.Fatalf("settings not persisted: %+v", f.Settings)
+		t.Fatalf("settings not persisted instantly: %+v", f.Settings)
+	}
+
+	// Esc just closes the (already-saved) dialog.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if fp.mode != viewNormal {
+		t.Fatalf("mode after esc = %v, want viewNormal", fp.mode)
 	}
 }
 
 // TestEditFleetSavesPreferFleetLaunch verifies the "Prefer Fleet Launch"
-// checkbox toggles and persists to FleetSettings on submit.
+// checkbox toggles and persists to FleetSettings instantly.
 func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha"}
 	fp := newFleetPage()
@@ -606,7 +619,8 @@ func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
 		t.Fatalf("expected PreferFleetLaunch off by default")
 	}
 
-	// Navigate to the Prefer Fleet Launch row (last row) and toggle it.
+	// Navigate to the Prefer Fleet Launch row (last row) and toggle it — this
+	// saves instantly.
 	for fp.dialogRow != editFleetRowPreferFleetLaunch {
 		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 	}
@@ -615,10 +629,8 @@ func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
 		t.Fatalf("toggle did not set dialogPreferFleetLaunch")
 	}
 
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
-
 	if !f.Settings.PreferFleetLaunchEnabled() {
-		t.Fatalf("Settings.PreferFleetLaunch = %v, want enabled", f.Settings.PreferFleetLaunch)
+		t.Fatalf("Settings.PreferFleetLaunch = %v, want enabled (instant-save)", f.Settings.PreferFleetLaunch)
 	}
 }
 
@@ -627,6 +639,7 @@ func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
 // toggling it does NOT kick off home-dir detection (it is not a mount).
 func TestEditFleetSavesBuildkitServer(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha"}
 	fp := newFleetPage()
@@ -652,11 +665,9 @@ func TestEditFleetSavesBuildkitServer(t *testing.T) {
 	if fp.dialogDetecting {
 		t.Fatalf("buildkit toggle should not kick off home-dir detection")
 	}
-
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
-
+	// Instant-save: persisted on toggle, no submit step.
 	if !f.Settings.BuildkitServer {
-		t.Fatalf("Settings.BuildkitServer = %v, want true", f.Settings.BuildkitServer)
+		t.Fatalf("Settings.BuildkitServer = %v, want true (instant-save)", f.Settings.BuildkitServer)
 	}
 }
 
@@ -665,6 +676,7 @@ func TestEditFleetSavesBuildkitServer(t *testing.T) {
 // not typed anything, the home-dir input is populated.
 func TestEditFleetHomedirDetectedFillsEmptyInput(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha", Remote: "git@example.com:org/repo.git"}
 	fp := newFleetPage()
@@ -680,7 +692,7 @@ func TestEditFleetHomedirDetectedFillsEmptyInput(t *testing.T) {
 		t.Fatalf("expected dialogDetecting to be true after toggle-on")
 	}
 
-	fp.handleHomedirDetected(homedirDetectedMsg{fleetName: "alpha", homeDir: "/home/node"})
+	fp.handleHomedirDetected(m, homedirDetectedMsg{fleetName: "alpha", homeDir: "/home/node"})
 
 	if fp.dialogDetecting {
 		t.Fatalf("dialogDetecting still true after result arrived")
@@ -695,6 +707,7 @@ func TestEditFleetHomedirDetectedFillsEmptyInput(t *testing.T) {
 // something into the home-dir field.
 func TestEditFleetHomedirDetectedRespectsUserInput(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha", Remote: "git@example.com:org/repo.git"}
 	fp := newFleetPage()
@@ -708,7 +721,7 @@ func TestEditFleetHomedirDetectedRespectsUserInput(t *testing.T) {
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle Claude → kicks detect
 	fp.homedirInput.SetValue("/custom/path")              // simulate user typing while detect runs
 
-	fp.handleHomedirDetected(homedirDetectedMsg{fleetName: "alpha", homeDir: "/home/node"})
+	fp.handleHomedirDetected(m, homedirDetectedMsg{fleetName: "alpha", homeDir: "/home/node"})
 
 	if got := fp.homedirInput.Value(); got != "/custom/path" {
 		t.Fatalf("homedirInput = %q, want unchanged %q", got, "/custom/path")
@@ -721,6 +734,7 @@ func TestEditFleetHomedirDetectedRespectsUserInput(t *testing.T) {
 // has cross-talk.
 func TestEditFleetHomedirDetectedIgnoresStaleFleet(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha", Remote: "git@example.com:org/repo.git"}
 	fp := newFleetPage()
@@ -735,7 +749,7 @@ func TestEditFleetHomedirDetectedIgnoresStaleFleet(t *testing.T) {
 
 	// Result for a different fleet — must be ignored, and must not
 	// clear our in-flight flag.
-	fp.handleHomedirDetected(homedirDetectedMsg{fleetName: "beta", homeDir: "/wrong"})
+	fp.handleHomedirDetected(m, homedirDetectedMsg{fleetName: "beta", homeDir: "/wrong"})
 
 	if got := fp.homedirInput.Value(); got != "" {
 		t.Fatalf("homedirInput = %q, want empty", got)
@@ -745,10 +759,12 @@ func TestEditFleetHomedirDetectedIgnoresStaleFleet(t *testing.T) {
 	}
 }
 
-// TestEditFleetSavesHomedir verifies the home-dir text field is
-// persisted to FleetSettings when the user submits the dialog.
+// TestEditFleetSavesHomedir verifies the home-dir text field is persisted to
+// FleetSettings when the user commits the edit (Enter within the field), under
+// the instant-save model.
 func TestEditFleetSavesHomedir(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha", Remote: "git@example.com:org/repo.git"}
 	fp := newFleetPage()
@@ -759,18 +775,30 @@ func TestEditFleetSavesHomedir(t *testing.T) {
 	}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	// Navigate to the Home dir row and open the field.
+	for fp.dialogRow != editFleetRowHomeDir {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // activate field
+	if !fp.dialogFieldActive {
+		t.Fatal("expected home-dir field active after enter")
+	}
 	fp.homedirInput.SetValue("/opt/agent")
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // commit → instant-save
 
+	if fp.dialogFieldActive {
+		t.Fatal("field should be inactive after commit")
+	}
 	if f.Settings.HomeDir != "/opt/agent" {
 		t.Fatalf("Settings.HomeDir = %q, want %q", f.Settings.HomeDir, "/opt/agent")
 	}
 }
 
-// TestEditFleetEscDiscardsChanges verifies that pressing esc abandons
-// pending toggles without modifying the fleet's saved settings.
-func TestEditFleetEscDiscardsChanges(t *testing.T) {
+// TestEditFleetEscKeepsInstantSaves verifies the instant-save contract: a toggle
+// persists immediately, and esc just closes the dialog WITHOUT discarding it.
+func TestEditFleetEscKeepsInstantSaves(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{}}
 	fp := newFleetPage()
@@ -783,14 +811,14 @@ func TestEditFleetEscDiscardsChanges(t *testing.T) {
 	}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle claude on
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle claude on → saved now
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})   // just closes
 
 	if fp.mode != viewNormal {
 		t.Fatalf("mode after esc = %v, want viewNormal", fp.mode)
 	}
-	if f.Settings.ClaudeCodeMount {
-		t.Fatalf("ClaudeCodeMount = true, expected esc to discard the toggle")
+	if !f.Settings.ClaudeCodeMount {
+		t.Fatalf("ClaudeCodeMount = false; instant-save toggle must persist through esc")
 	}
 }
 
@@ -974,6 +1002,7 @@ func TestAddInstanceDialogVimKeysRespectActiveField(t *testing.T) {
 func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
+	stubFleetSettingsSave(t)
 	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{}}
 	fp := newFleetPage()
 	fp.mode = viewEditFleet

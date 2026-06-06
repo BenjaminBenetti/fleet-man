@@ -1121,6 +1121,7 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.dialogGhMount = f.Settings.GhMount
 	fleetPage.dialogBuildkitServer = f.Settings.BuildkitServer
 	fleetPage.dialogPreferFleetLaunch = f.Settings.PreferFleetLaunchEnabled()
+	fleetPage.dialogPreferFleetLaunchSet = f.Settings.PreferFleetLaunchSet()
 	fleetPage.dialogRow = editFleetRowClaude
 	fleetPage.dialogDetecting = false
 	fleetPage.dialogFieldActive = false
@@ -1134,27 +1135,33 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	return nil
 }
 
-// updateEditFleet handles the edit-fleet dialog: arrow-key navigation
-// between rows, space/x toggling the mount checkboxes, character keys
-// editing the home-dir text input, enter committing, esc cancelling.
+// updateEditFleet handles the edit-fleet dialog. The dialog is INSTANT-SAVE
+// (like the settings page): every toggle and every committed home-dir edit
+// persists immediately, so there is no explicit "save" key — esc/q just closes,
+// and a per-change RPC failure is reverted in place.
 func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return nil
 	}
 
+	// Home-dir text-editing sub-mode.
 	if fleetPage.dialogFieldActive {
 		switch keyMsg.String() {
 		case "enter":
-			return fleetPage.saveFleetEdits(m)
+			// Commit the typed value (instant-save) and leave editing.
+			cmd := fleetPage.commitHomedir(m)
+			fleetPage.dialogFieldActive = false
+			fleetPage.syncEditFleetFocus()
+			return cmd
 		case "esc":
+			// Discard the uncommitted edit; restore the persisted value.
+			fleetPage.restoreHomedir(m)
 			fleetPage.dialogFieldActive = false
 			fleetPage.syncEditFleetFocus()
 			return nil
 		case "ctrl+c":
-			fleetPage.mode = viewNormal
-			fleetPage.blurDialogFields()
-			m.message = "Cancelled"
+			fleetPage.closeEditFleet(m)
 			return nil
 		}
 		if fleetPage.dialogRow == editFleetRowHomeDir {
@@ -1162,47 +1169,38 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.homedirInput, cmd = fleetPage.homedirInput.Update(msg)
 			return cmd
 		}
+		return nil
 	}
 
 	switch keyMsg.String() {
-	case "enter":
-		if fleetPage.dialogRow == editFleetRowHomeDir {
-			fleetPage.dialogFieldActive = true
-			fleetPage.syncEditFleetFocus()
-			return fleetPage.homedirInput.Cursor.BlinkCmd()
-		}
-		return fleetPage.saveFleetEdits(m)
-
 	case "up", "k":
-		fleetPage.dialogFieldActive = false
 		fleetPage.dialogRow = (fleetPage.dialogRow - 1 + editFleetRowCount) % editFleetRowCount
 		fleetPage.syncEditFleetFocus()
 		return nil
 
 	case "down", "j", "tab":
-		fleetPage.dialogFieldActive = false
 		fleetPage.dialogRow = (fleetPage.dialogRow + 1) % editFleetRowCount
 		fleetPage.syncEditFleetFocus()
 		return nil
 
 	case "esc", "q", "Q", "ctrl+c":
-		fleetPage.mode = viewNormal
-		fleetPage.blurDialogFields()
-		m.message = "Cancelled"
+		fleetPage.closeEditFleet(m)
 		return nil
 	}
 
-	// Toggle / character input is row-specific.
+	// Row-specific actions.
 	switch fleetPage.dialogRow {
 	case editFleetRowClaude, editFleetRowCodex, editFleetRowGh, editFleetRowBuildkit, editFleetRowPreferFleetLaunch:
+		// space/x and h/l/enter all toggle (instant-save), matching the
+		// settings page.
 		switch keyMsg.String() {
-		case " ", "left", "right", "h", "l", "x":
+		case " ", "left", "right", "h", "l", "x", "enter":
 			return fleetPage.toggleEditFleetRow(m)
 		}
 		return nil
 	case editFleetRowHomeDir:
 		switch keyMsg.String() {
-		case " ":
+		case "enter", " ":
 			fleetPage.dialogFieldActive = true
 			fleetPage.syncEditFleetFocus()
 			return fleetPage.homedirInput.Cursor.BlinkCmd()
@@ -1219,40 +1217,51 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// toggleEditFleetRow flips the boolean for the currently focused
-// checkbox row. When a mount is being turned on it may also kick off
-// auto-detection of the container's home directory so the user does
-// not have to type it themselves.
+// toggleEditFleetRow flips the boolean for the currently focused checkbox row
+// and persists it immediately (reverting the flip if the save fails). When a
+// home-dir mount is turned on it may also kick off auto-detection of the
+// container's home directory.
 func (fleetPage *fleetPage) toggleEditFleetRow(m *model) tea.Cmd {
 	turnedOn := false
+	var revert func()
 	switch fleetPage.dialogRow {
 	case editFleetRowClaude:
 		fleetPage.dialogClaudeMount = !fleetPage.dialogClaudeMount
 		turnedOn = fleetPage.dialogClaudeMount
+		revert = func() { fleetPage.dialogClaudeMount = !fleetPage.dialogClaudeMount }
 	case editFleetRowCodex:
 		fleetPage.dialogCodexMount = !fleetPage.dialogCodexMount
 		turnedOn = fleetPage.dialogCodexMount
+		revert = func() { fleetPage.dialogCodexMount = !fleetPage.dialogCodexMount }
 	case editFleetRowGh:
 		fleetPage.dialogGhMount = !fleetPage.dialogGhMount
 		turnedOn = fleetPage.dialogGhMount
+		revert = func() { fleetPage.dialogGhMount = !fleetPage.dialogGhMount }
 	case editFleetRowBuildkit:
-		// Not a home-dir mount, so no detection to kick off — just flip it.
 		fleetPage.dialogBuildkitServer = !fleetPage.dialogBuildkitServer
-		return nil
+		revert = func() { fleetPage.dialogBuildkitServer = !fleetPage.dialogBuildkitServer }
 	case editFleetRowPreferFleetLaunch:
-		// Not a mount, so no home-dir detection to kick off — just flip it.
 		fleetPage.dialogPreferFleetLaunch = !fleetPage.dialogPreferFleetLaunch
+		// The user explicitly chose a value, so it must now persist.
+		fleetPage.dialogPreferFleetLaunchSet = true
+		revert = func() { fleetPage.dialogPreferFleetLaunch = !fleetPage.dialogPreferFleetLaunch }
+	default:
 		return nil
 	}
-	if !turnedOn {
+
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		if revert != nil {
+			revert()
+		}
+		m.message = fmt.Sprintf("Failed to save: %v", err)
 		return nil
 	}
-	f, ok := m.st.Fleets[fleetPage.dialogFleet]
-	if !ok {
-		return nil
-	}
-	if fleetPage.shouldKickHomedirDetect(f) {
-		return fleetPage.startHomedirDetect(f)
+
+	// On enabling a home-dir mount with no home dir recorded yet, auto-detect it.
+	if turnedOn {
+		if f, ok := m.st.Fleets[fleetPage.dialogFleet]; ok && fleetPage.shouldKickHomedirDetect(f) {
+			return fleetPage.startHomedirDetect(f)
+		}
 	}
 	return nil
 }
@@ -1281,26 +1290,31 @@ func (fleetPage *fleetPage) startHomedirDetect(f *fleet.Fleet) tea.Cmd {
 	return detectHomedirCmd(f.Name, f.Remote, "")
 }
 
-// handleHomedirDetected applies the result of an auto-detection. The
-// guard checks ensure stale results — from a fleet the user has since
-// closed, or arriving after the user has already typed a value —
-// never overwrite live state.
-func (fleetPage *fleetPage) handleHomedirDetected(msg homedirDetectedMsg) {
+// handleHomedirDetected applies the result of an auto-detection and (instant
+// save) persists the detected value. The guard checks ensure stale results —
+// from a fleet the user has since closed, or arriving after the user has
+// already typed a value — never overwrite live state.
+func (fleetPage *fleetPage) handleHomedirDetected(m *model, msg homedirDetectedMsg) tea.Cmd {
 	// Always clear the in-flight flag for *this* fleet so the spinner
 	// stops, even when the result is not applied.
 	if fleetPage.dialogFleet == msg.fleetName {
 		fleetPage.dialogDetecting = false
 	}
 	if msg.err != nil || msg.homeDir == "" {
-		return
+		return nil
 	}
 	if fleetPage.mode != viewEditFleet || fleetPage.dialogFleet != msg.fleetName {
-		return
+		return nil
 	}
 	if strings.TrimSpace(fleetPage.homedirInput.Value()) != "" {
-		return
+		return nil
 	}
 	fleetPage.homedirInput.SetValue(msg.homeDir)
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		fleetPage.restoreHomedir(m)
+		m.message = fmt.Sprintf("Failed to save: %v", err)
+	}
+	return nil
 }
 
 // syncEditFleetFocus moves the cursor blink to the home-dir input only
@@ -1314,31 +1328,62 @@ func (fleetPage *fleetPage) syncEditFleetFocus() {
 	}
 }
 
-// saveFleetEdits commits the dialog's mount toggles + home-dir to the
-// fleet's persisted settings and closes the dialog. Existing instances
-// are not retroactively re-mounted; the new settings apply to the next
-// instance provisioned on a supporting backend.
-func (fleetPage *fleetPage) saveFleetEdits(m *model) tea.Cmd {
+// persistFleetSettings writes the dialog's current state to the fleet record
+// and saves it through the server (instant-save). On RPC failure it reverts the
+// fleet record to its prior settings and returns the error so the caller can
+// undo its optimistic change too. Existing instances are not retroactively
+// re-mounted; settings apply to the next instance provisioned on a supporting
+// backend.
+//
+// PreferFleetLaunch is only written when the fleet already had a value or the
+// user toggled it this session (dialogPreferFleetLaunchSet) — so editing an
+// unrelated setting never collapses a "never asked" (nil) into explicit false.
+func (fleetPage *fleetPage) persistFleetSettings(m *model) error {
 	f, ok := m.st.Fleets[fleetPage.dialogFleet]
 	if !ok {
-		fleetPage.mode = viewNormal
-		fleetPage.blurDialogFields()
-		m.message = fmt.Sprintf("Fleet %s not found", fleetPage.dialogFleet)
-		return nil
+		return fmt.Errorf("fleet %s not found", fleetPage.dialogFleet)
 	}
+	prev := f.Settings
 	f.Settings.ClaudeCodeMount = fleetPage.dialogClaudeMount
 	f.Settings.CodexMount = fleetPage.dialogCodexMount
 	f.Settings.GhMount = fleetPage.dialogGhMount
 	f.Settings.BuildkitServer = fleetPage.dialogBuildkitServer
-	preferFleetLaunch := fleetPage.dialogPreferFleetLaunch
-	f.Settings.PreferFleetLaunch = &preferFleetLaunch
+	if fleetPage.dialogPreferFleetLaunchSet {
+		preferFleetLaunch := fleetPage.dialogPreferFleetLaunch
+		f.Settings.PreferFleetLaunch = &preferFleetLaunch
+	}
 	f.Settings.HomeDir = strings.TrimSpace(fleetPage.homedirInput.Value())
-	_ = setFleetSettingsRemote(fleetPage.dialogFleet, f.Settings)
 
+	if err := setFleetSettingsRemote(fleetPage.dialogFleet, f.Settings); err != nil {
+		f.Settings = prev
+		return err
+	}
+	return nil
+}
+
+// commitHomedir persists the current home-dir input value (instant-save),
+// restoring the input to the saved value if the save fails.
+func (fleetPage *fleetPage) commitHomedir(m *model) tea.Cmd {
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		fleetPage.restoreHomedir(m)
+		m.message = fmt.Sprintf("Failed to save: %v", err)
+	}
+	return nil
+}
+
+// restoreHomedir resets the home-dir input to the fleet's persisted value (used
+// to discard an uncommitted edit or undo a failed save).
+func (fleetPage *fleetPage) restoreHomedir(m *model) {
+	if f, ok := m.st.Fleets[fleetPage.dialogFleet]; ok {
+		fleetPage.homedirInput.SetValue(f.Settings.HomeDir)
+	}
+}
+
+// closeEditFleet closes the dialog. Instant-save means there is nothing to
+// commit on close — every change was persisted as it was made.
+func (fleetPage *fleetPage) closeEditFleet(_ *model) {
 	fleetPage.mode = viewNormal
 	fleetPage.blurDialogFields()
-	m.message = fmt.Sprintf("Updated %s settings", f.Name)
-	return nil
 }
 
 // ===========================================
