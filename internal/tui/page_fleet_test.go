@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -635,8 +636,29 @@ func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
 	}
 }
 
-// TestEditFleetSavesBuildkitServer verifies the "Buildkit server"
-// checkbox toggles and persists to FleetSettings on submit, and that
+// navigateToBuildkitRow opens (assumes already open) the dialog's Caching
+// section and lands the cursor on the Buildkit row.
+func navigateToBuildkitRow(t *testing.T, fp *fleetPage, m *model) {
+	t.Helper()
+	guard := 0
+	for fp.dialogRow != editFleetRowCaching {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+		if guard++; guard > 20 {
+			t.Fatal("never reached Caching header")
+		}
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // expand
+	if !fp.dialogCachingExpanded {
+		t.Fatal("Caching section should expand on l")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown}) // into Buildkit row
+	if fp.dialogRow != editFleetRowBuildkit {
+		t.Fatalf("dialogRow = %d, want buildkit row", fp.dialogRow)
+	}
+}
+
+// TestEditFleetSavesBuildkitServer verifies the "Buildkit server" checkbox
+// (inside the Caching section) toggles and persists instantly, and that
 // toggling it does NOT kick off home-dir detection (it is not a mount).
 func TestEditFleetSavesBuildkitServer(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -655,9 +677,7 @@ func TestEditFleetSavesBuildkitServer(t *testing.T) {
 		t.Fatalf("expected BuildkitServer off by default")
 	}
 
-	for fp.dialogRow != editFleetRowBuildkit {
-		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
-	}
+	navigateToBuildkitRow(t, fp, m)
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
 	if !fp.dialogBuildkitServer {
 		t.Fatalf("toggle did not set dialogBuildkitServer")
@@ -669,6 +689,135 @@ func TestEditFleetSavesBuildkitServer(t *testing.T) {
 	// Instant-save: persisted on toggle, no submit step.
 	if !f.Settings.BuildkitServer {
 		t.Fatalf("Settings.BuildkitServer = %v, want true (instant-save)", f.Settings.BuildkitServer)
+	}
+}
+
+// TestEditFleetCachingExpandCollapse verifies the Caching section starts
+// collapsed (hiding the Buildkit row) and expands/collapses with l/h.
+func TestEditFleetCachingExpandCollapse(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+	f := &fleet.Fleet{Name: "alpha"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if fp.dialogCachingExpanded {
+		t.Fatal("Caching should start collapsed")
+	}
+	if slices.Contains(fp.visibleEditFleetRows(), editFleetRowBuildkit) {
+		t.Fatal("Buildkit row should be hidden while Caching is collapsed")
+	}
+	for fp.dialogRow != editFleetRowCaching {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if !fp.dialogCachingExpanded || !slices.Contains(fp.visibleEditFleetRows(), editFleetRowBuildkit) {
+		t.Fatal("l should expand Caching and reveal the Buildkit row")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if fp.dialogCachingExpanded {
+		t.Fatal("h should collapse Caching")
+	}
+}
+
+// TestEditFleetDeleteCacheButtonHiddenWhenOff verifies the Delete-cache button
+// is not reachable while Buildkit is disabled.
+func TestEditFleetDeleteCacheButtonHiddenWhenOff(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+	f := &fleet.Fleet{Name: "alpha"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToBuildkitRow(t, fp, m) // buildkit is OFF
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if fp.dialogBuildkitButtonFocused {
+		t.Fatal("l must not focus the delete-cache button when Buildkit is off")
+	}
+}
+
+// TestEditFleetDeleteCacheButtonFlow drives the full button interaction:
+// focus → arm confirm → wipe (async) → done.
+func TestEditFleetDeleteCacheButtonFlow(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	var deleted string
+	origDel := deleteBuildkitCacheRemote
+	deleteBuildkitCacheRemote = func(fleetName string) error { deleted = fleetName; return nil }
+	t.Cleanup(func() { deleteBuildkitCacheRemote = origDel })
+
+	f := &fleet.Fleet{Name: "alpha"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToBuildkitRow(t, fp, m)
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // enable buildkit → button appears
+	if !fp.dialogBuildkitServer {
+		t.Fatal("buildkit not enabled")
+	}
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // focus button
+	if !fp.dialogBuildkitButtonFocused {
+		t.Fatal("l should focus the delete-cache button")
+	}
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // arm inline confirm
+	if !fp.dialogDeleteCacheConfirm || fp.dialogDeletingCache {
+		t.Fatalf("first enter should only arm confirm; confirm=%v deleting=%v", fp.dialogDeleteCacheConfirm, fp.dialogDeletingCache)
+	}
+
+	cmd := fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // confirm → wipe
+	if fp.dialogDeleteCacheConfirm {
+		t.Fatal("confirm should clear once the wipe starts")
+	}
+	if !fp.dialogDeletingCache {
+		t.Fatal("deletingCache should be set while the wipe runs")
+	}
+	if cmd == nil {
+		t.Fatal("expected a delete-cache command")
+	}
+	done, ok := cmd().(deleteCacheDoneMsg)
+	if !ok {
+		t.Fatal("delete cmd did not return deleteCacheDoneMsg")
+	}
+	if deleted != "alpha" {
+		t.Fatalf("delete RPC called for %q, want alpha", deleted)
+	}
+	fp.handleDeleteCacheDone(m, done)
+	if fp.dialogDeletingCache {
+		t.Fatal("deletingCache should clear after the wipe completes")
+	}
+}
+
+// TestEditFleetDeleteCacheConfirmEscCancels verifies esc cancels an armed
+// confirm without closing the dialog or wiping.
+func TestEditFleetDeleteCacheConfirmEscCancels(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+	f := &fleet.Fleet{Name: "alpha"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToBuildkitRow(t, fp, m)
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})                    // enable
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // focus button
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})                    // arm confirm
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc}) // cancel confirm
+	if fp.dialogDeleteCacheConfirm {
+		t.Fatal("esc should cancel the armed confirm")
+	}
+	if fp.mode != viewEditFleet {
+		t.Fatal("esc on an armed confirm should NOT close the dialog")
 	}
 }
 
@@ -1116,6 +1265,7 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 		fleetPage: fp,
 	}
 
+	// j moves down through the flat rows; l toggles the focused checkbox.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	if fp.dialogRow != editFleetRowCodex {
 		t.Fatalf("dialogRow = %d, want codex row", fp.dialogRow)
@@ -1133,22 +1283,15 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 		t.Fatal("l should toggle selected gh row")
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	if fp.dialogRow != editFleetRowBuildkit {
-		t.Fatalf("dialogRow = %d, want buildkit row", fp.dialogRow)
-	}
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	if !fp.dialogBuildkitServer {
-		t.Fatal("l should toggle selected buildkit row")
-	}
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	if fp.dialogRow != editFleetRowHomeDir {
 		t.Fatalf("dialogRow = %d, want home-dir row", fp.dialogRow)
 	}
+
+	// Enter activates the home-dir field; typing routes into it; esc discards.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if !fp.dialogFieldActive {
 		t.Fatal("enter on home-dir row should activate text field")
 	}
-
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	if got := fp.homedirInput.Value(); got != "k" {
 		t.Fatalf("active home-dir input = %q, want k", got)
@@ -1156,12 +1299,12 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 	if fp.dialogRow != editFleetRowHomeDir {
 		t.Fatalf("dialogRow moved while home-dir active: got %d", fp.dialogRow)
 	}
-
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	if fp.dialogRow != editFleetRowBuildkit {
-		t.Fatalf("dialogRow = %d, want buildkit row after inactive k", fp.dialogRow)
+	if fp.dialogFieldActive {
+		t.Fatal("esc should leave the home-dir field")
 	}
+
+	// k now navigates UP (field inactive): home-dir → gh → codex.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	if fp.dialogRow != editFleetRowGh {
 		t.Fatalf("dialogRow = %d, want gh row after inactive k", fp.dialogRow)

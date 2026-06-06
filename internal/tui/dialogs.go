@@ -1056,11 +1056,46 @@ const (
 	editFleetRowClaude = iota
 	editFleetRowCodex
 	editFleetRowGh
-	editFleetRowBuildkit
 	editFleetRowHomeDir
 	editFleetRowPreferFleetLaunch
+	editFleetRowCaching  // collapsible section header
+	editFleetRowBuildkit // child of Caching; only navigable when expanded
 	editFleetRowCount
 )
+
+// visibleEditFleetRows returns the edit-fleet dialog's navigable rows in display
+// order. The Buildkit row only appears while the Caching section is expanded.
+func (fleetPage *fleetPage) visibleEditFleetRows() []int {
+	rows := []int{
+		editFleetRowClaude,
+		editFleetRowCodex,
+		editFleetRowGh,
+		editFleetRowHomeDir,
+		editFleetRowPreferFleetLaunch,
+		editFleetRowCaching,
+	}
+	if fleetPage.dialogCachingExpanded {
+		rows = append(rows, editFleetRowBuildkit)
+	}
+	return rows
+}
+
+// moveEditFleetRow moves the dialog cursor by delta within the visible rows,
+// wrapping, and resets the per-row sub-state (button focus / delete confirm).
+func (fleetPage *fleetPage) moveEditFleetRow(delta int) {
+	rows := fleetPage.visibleEditFleetRows()
+	idx := 0
+	for i, r := range rows {
+		if r == fleetPage.dialogRow {
+			idx = i
+			break
+		}
+	}
+	fleetPage.dialogRow = rows[(idx+delta+len(rows))%len(rows)]
+	fleetPage.dialogBuildkitButtonFocused = false
+	fleetPage.dialogDeleteCacheConfirm = false
+	fleetPage.syncEditFleetFocus()
+}
 
 // homedirDetectedMsg is delivered when an asynchronous home-directory
 // detection cmd completes. The fleetName lets the receiver discard
@@ -1125,6 +1160,10 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.dialogRow = editFleetRowClaude
 	fleetPage.dialogDetecting = false
 	fleetPage.dialogFieldActive = false
+	fleetPage.dialogCachingExpanded = false
+	fleetPage.dialogBuildkitButtonFocused = false
+	fleetPage.dialogDeleteCacheConfirm = false
+	fleetPage.dialogDeletingCache = false
 
 	fleetPage.homedirInput.SetValue(f.Settings.HomeDir)
 	fleetPage.homedirInput.Blur()
@@ -1174,23 +1213,26 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 
 	switch keyMsg.String() {
 	case "up", "k":
-		fleetPage.dialogRow = (fleetPage.dialogRow - 1 + editFleetRowCount) % editFleetRowCount
-		fleetPage.syncEditFleetFocus()
+		fleetPage.moveEditFleetRow(-1)
 		return nil
 
 	case "down", "j", "tab":
-		fleetPage.dialogRow = (fleetPage.dialogRow + 1) % editFleetRowCount
-		fleetPage.syncEditFleetFocus()
+		fleetPage.moveEditFleetRow(1)
 		return nil
 
 	case "esc", "q", "Q", "ctrl+c":
+		// An armed delete-cache confirm is cancelled first, not the dialog.
+		if fleetPage.dialogDeleteCacheConfirm {
+			fleetPage.dialogDeleteCacheConfirm = false
+			return nil
+		}
 		fleetPage.closeEditFleet(m)
 		return nil
 	}
 
 	// Row-specific actions.
 	switch fleetPage.dialogRow {
-	case editFleetRowClaude, editFleetRowCodex, editFleetRowGh, editFleetRowBuildkit, editFleetRowPreferFleetLaunch:
+	case editFleetRowClaude, editFleetRowCodex, editFleetRowGh, editFleetRowPreferFleetLaunch:
 		// space/x and h/l/enter all toggle (instant-save), matching the
 		// settings page.
 		switch keyMsg.String() {
@@ -1198,6 +1240,18 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 			return fleetPage.toggleEditFleetRow(m)
 		}
 		return nil
+	case editFleetRowCaching:
+		switch keyMsg.String() {
+		case " ", "enter":
+			fleetPage.dialogCachingExpanded = !fleetPage.dialogCachingExpanded
+		case "right", "l":
+			fleetPage.dialogCachingExpanded = true
+		case "left", "h":
+			fleetPage.dialogCachingExpanded = false
+		}
+		return nil
+	case editFleetRowBuildkit:
+		return fleetPage.updateBuildkitRow(m, keyMsg)
 	case editFleetRowHomeDir:
 		switch keyMsg.String() {
 		case "enter", " ":
@@ -1213,6 +1267,75 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.homedirInput, inputCmd = fleetPage.homedirInput.Update(msg)
 			return tea.Batch(blinkCmd, inputCmd)
 		}
+	}
+	return nil
+}
+
+// updateBuildkitRow handles the Buildkit server row inside the expanded Caching
+// section: space/x toggles the setting (instant-save); when enabled, →/l focuses
+// the [Delete cache] button and ←/h returns to the toggle; Enter on the button
+// arms an inline confirm, and a second Enter performs the wipe asynchronously.
+func (fleetPage *fleetPage) updateBuildkitRow(m *model, keyMsg tea.KeyMsg) tea.Cmd {
+	// Ignore mutating keys while a wipe is in flight (navigation already ran).
+	if fleetPage.dialogDeletingCache {
+		return nil
+	}
+	switch keyMsg.String() {
+	case " ", "x":
+		cmd := fleetPage.toggleEditFleetRow(m)
+		if !fleetPage.dialogBuildkitServer {
+			// No server → no button; drop any button focus / armed confirm.
+			fleetPage.dialogBuildkitButtonFocused = false
+			fleetPage.dialogDeleteCacheConfirm = false
+		}
+		return cmd
+	case "right", "l":
+		if fleetPage.dialogBuildkitServer {
+			fleetPage.dialogBuildkitButtonFocused = true
+		}
+		return nil
+	case "left", "h":
+		fleetPage.dialogBuildkitButtonFocused = false
+		fleetPage.dialogDeleteCacheConfirm = false
+		return nil
+	case "enter":
+		if fleetPage.dialogBuildkitButtonFocused && fleetPage.dialogBuildkitServer {
+			if !fleetPage.dialogDeleteCacheConfirm {
+				fleetPage.dialogDeleteCacheConfirm = true // first Enter: arm confirm
+				return nil
+			}
+			fleetPage.dialogDeleteCacheConfirm = false // second Enter: do it
+			fleetPage.dialogDeletingCache = true
+			return deleteCacheCmd(fleetPage.dialogFleet)
+		}
+		// Toggle focused → toggle the setting.
+		return fleetPage.toggleEditFleetRow(m)
+	}
+	return nil
+}
+
+// deleteCacheDoneMsg reports the outcome of a buildkit cache wipe.
+type deleteCacheDoneMsg struct {
+	fleet string
+	err   error
+}
+
+// deleteCacheCmd runs the cache-wipe RPC off the UI loop and reports the result.
+func deleteCacheCmd(fleetName string) tea.Cmd {
+	return func() tea.Msg {
+		return deleteCacheDoneMsg{fleet: fleetName, err: deleteBuildkitCacheRemote(fleetName)}
+	}
+}
+
+// handleDeleteCacheDone clears the in-flight flag and surfaces the outcome.
+func (fleetPage *fleetPage) handleDeleteCacheDone(m *model, msg deleteCacheDoneMsg) tea.Cmd {
+	if fleetPage.dialogFleet == msg.fleet {
+		fleetPage.dialogDeletingCache = false
+	}
+	if msg.err != nil {
+		m.message = fmt.Sprintf("Delete cache failed: %v", msg.err)
+	} else {
+		m.message = "Build cache cleared"
 	}
 	return nil
 }
@@ -1390,6 +1513,8 @@ func (fleetPage *fleetPage) restoreHomedir(m *model) {
 // commit on close — every change was persisted as it was made.
 func (fleetPage *fleetPage) closeEditFleet(_ *model) {
 	fleetPage.mode = viewNormal
+	fleetPage.dialogDeleteCacheConfirm = false
+	fleetPage.dialogBuildkitButtonFocused = false
 	fleetPage.blurDialogFields()
 }
 
