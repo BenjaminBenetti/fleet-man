@@ -40,6 +40,17 @@ func stubBrowserConfig(t *testing.T, initialURL string, hasLanding bool) {
 	t.Cleanup(func() { fetchBrowserConfig = orig })
 }
 
+// stubSetFleetSettings replaces the SetFleetSettings RPC seam with a no-op so
+// the chooser-dialog tests exercise only the in-memory setting flip. Without it,
+// chooseBrowserLaunch would call the real seam, which dials (and auto-spawns) a
+// fleet server — in a test binary that re-execs the suite and fork-bombs.
+func stubSetFleetSettings(t *testing.T) {
+	t.Helper()
+	orig := setFleetSettingsRemote
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) error { return nil }
+	t.Cleanup(func() { setFleetSettingsRemote = orig })
+}
+
 // TestBeginBrowserOpenPromptsWhenUnset verifies the chooser dialog opens
 // (rather than launching) when the fleet has no saved preference and the
 // workspace configures both targets.
@@ -65,6 +76,7 @@ func TestBeginBrowserOpenPromptsWhenUnset(t *testing.T) {
 // and closes the dialog.
 func TestChooseBrowserLaunchPersists(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubSetFleetSettings(t)
 
 	for _, tc := range []struct {
 		key  string
@@ -103,6 +115,7 @@ func TestChooseBrowserLaunchPersists(t *testing.T) {
 func TestChooseBrowserLaunchCursorEnter(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	stubBrowserConfig(t, "https://example.com", true)
+	stubSetFleetSettings(t)
 	inst := &fleet.Instance{Name: "i1", Status: fleet.StatusRunning, WorkspaceDir: t.TempDir()}
 	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{inst}}
 	fp := newFleetPage()

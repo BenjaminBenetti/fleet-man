@@ -2,6 +2,7 @@ package fleetclient
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -40,6 +41,16 @@ func ensureServerLocal(ctx context.Context, ep Endpoint) error {
 // startServerProcess fork-execs `fleet server` detached, so it outlives the
 // client that spawned it.
 func startServerProcess() error {
+	// Refuse to spawn from a Go test binary. We spawn by re-execing our own
+	// executable with "server"; under `go test` os.Executable() is the test
+	// binary, which ignores that arg and re-runs the whole suite — each new
+	// process auto-spawns again, a fork bomb that exhausts memory. A test that
+	// needs the server should start a real one or stub the dialing seam; it must
+	// never auto-spawn itself. (flag.Lookup("test.v") is non-nil only in a test
+	// binary, so this is a no-op in the real fleet binary.)
+	if flag.Lookup("test.v") != nil {
+		return fmt.Errorf("refusing to auto-spawn fleet server from a test binary")
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return err
