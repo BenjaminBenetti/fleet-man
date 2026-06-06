@@ -828,12 +828,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = fmt.Sprintf("Failed to rename session: %v", msg.err)
 		} else {
 			m.message = fmt.Sprintf("Renamed session %s → %s", msg.oldName, msg.newName)
-			// Migrate before refreshing: the refresh prunes saved groups whose
-			// ID is no longer live, so the re-keyed entry must already sit under
-			// the new group ID for prune to treat it as live and keep it.
 			m.migrateRenamedSession(msg)
 		}
-		m.refreshSessionsFromRuntime(msg.ref)
+		// Refresh the discovery cache but skip pruning: the runtime cache
+		// may still contain old session names until the next poll, so
+		// pruneSavedGroupsForInstance would incorrectly treat the newly
+		// re-keyed group as not-live and delete it. The next periodic
+		// runtime update will prune any truly dead groups.
+		if msg.ref.Valid() && m.sessionStore.IsExpanded(msg.ref) {
+			m.sessionStore.SetDiscovery(msg.ref, m.runtimeSessions(msg.ref))
+		}
 
 	case sessionDeletedMsg:
 		if msg.err != nil {
