@@ -337,9 +337,12 @@ func clearSharedDir(fleetName string) error {
 		return nil
 	}
 	// Root-owned cache → clear the contents (NOT the dir) via a throwaway root
-	// container, preserving the .buildkit inode for instance bind mounts.
-	if out, err := runDocker("run", "--rm", "--entrypoint", "sh", "-v", dir+":/work", image,
-		"-c", "rm -rf /work/* /work/.[!.]* /work/..?* 2>/dev/null; true"); err != nil {
+	// container, preserving the .buildkit inode for instance bind mounts. `find
+	// -exec rm` (vs a shell glob) avoids "no match" noise AND propagates a real
+	// failure as a non-zero exit, so a partial wipe is reported rather than
+	// masked.
+	if out, err := runDocker("run", "--rm", "--entrypoint", "find", "-v", dir+":/work", image,
+		"/work", "-mindepth", "1", "-maxdepth", "1", "-exec", "rm", "-rf", "{}", ";"); err != nil {
 		return fmt.Errorf("clear buildkit dir %s: %w (%s)", dir, err, out)
 	}
 	return nil

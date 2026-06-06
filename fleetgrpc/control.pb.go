@@ -330,10 +330,12 @@ func (*FleetTUIConnectedReply) Descriptor() ([]byte, []int) {
 }
 
 // DeleteBuildkitCacheRequest asks the server to wipe a fleet's shared build
-// cache: stop the buildkit container, delete ~/.fleet/workspaces/<fleet>/
-// .buildkit (incl. the root-owned cache), then restart the server empty. It is
-// a synchronous action (takes a few seconds), so the client shows progress and
-// uses a longer deadline than ordinary mutations.
+// cache: stop the buildkit container, clear the CONTENTS of
+// ~/.fleet/workspaces/<fleet>/.buildkit (incl. the root-owned cache) while
+// KEEPING the directory itself so running instances' bind mounts stay valid,
+// then restart the server empty. It is a synchronous action (takes a few
+// seconds), so the client shows progress and uses a longer deadline than
+// ordinary mutations.
 type DeleteBuildkitCacheRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Fleet         string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`

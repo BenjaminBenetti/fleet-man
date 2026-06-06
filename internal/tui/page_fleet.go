@@ -1771,8 +1771,11 @@ func (fleetPage *fleetPage) editFleetHint() string {
 			return "[space] Toggle  [l/→] Delete-cache button  [j/k] Select"
 		}
 		return "[space] Toggle  [j/k] Select  [q/esc] Save & Close"
+	case editFleetRowHomeDir:
+		return "[enter] Edit  [j/k] Select  [q/esc] Save & Close"
 	}
-	return "[j/k] Select  [h/l/space] Toggle  [enter] Edit  [q/esc] Save & Close"
+	// Flat checkbox rows: Enter/space/h/l all toggle (instant-save).
+	return "[j/k] Select  [space/enter/h/l] Toggle  [q/esc] Save & Close"
 }
 
 func (fleetPage *fleetPage) portForwardHint() string {
