@@ -19,6 +19,21 @@ func Dir() string {
 	return filepath.Join(os.Getenv("HOME"), ".fleet")
 }
 
+// EnsureDir creates ~/.fleet if it does not exist, returning its path. The
+// server's Serve does the same on startup, but the CLIENT needs the directory
+// to exist BEFORE that — it opens the spawn lock file there to serialize the
+// very spawn that would start the server. O_CREATE makes the lock file, not its
+// parent, so on a machine that has never run fleet (no ~/.fleet yet) the client
+// would otherwise fail with ENOENT before it could spawn the server at all.
+// 0700 matches the perms Serve uses.
+func EnsureDir() (string, error) {
+	dir := Dir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
 // SocketPath is the unix domain socket the fleet server listens on and clients
 // dial. Host-local and per-user.
 func SocketPath() string {

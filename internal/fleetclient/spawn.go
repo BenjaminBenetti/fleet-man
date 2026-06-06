@@ -92,6 +92,13 @@ func pingOK(ep Endpoint) bool {
 // acquireSpawnLock takes the spawn lock, waiting (bounded) for another client
 // that is mid-spawn. The returned *os.File must stay open to hold the lock.
 func acquireSpawnLock(ctx context.Context) (*os.File, error) {
+	// Ensure ~/.fleet exists first: on a machine that has never run fleet the
+	// directory is absent, and O_CREATE below makes the lock file but not its
+	// parent — so without this the first command on a fresh install fails with
+	// ENOENT before it can spawn the server.
+	if _, err := fleetpaths.EnsureDir(); err != nil {
+		return nil, fmt.Errorf("create fleet dir: %w", err)
+	}
 	f, err := os.OpenFile(fleetpaths.SpawnLockPath(), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
