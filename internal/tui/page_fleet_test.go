@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -539,11 +541,22 @@ func TestEditInstanceRejectsEmptyName(t *testing.T) {
 	}
 }
 
-// TestEditFleetTogglesAndSavesSettings verifies that pressing 'e' on a
-// fleet header opens the edit-fleet dialog, that space toggles a row's
-// boolean, and that enter persists the new settings to the fleet.
+// stubFleetSettingsSave makes the instant-save RPC a no-op for tests: the dialog
+// mutates m.st in-memory before calling it, so a nil return means "saved" with
+// no real RPC and no revert.
+func stubFleetSettingsSave(t *testing.T) {
+	t.Helper()
+	orig := setFleetSettingsRemote
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) error { return nil }
+	t.Cleanup(func() { setFleetSettingsRemote = orig })
+}
+
+// TestEditFleetTogglesAndSavesSettings verifies that pressing 'e' on a fleet
+// header opens the edit-fleet dialog and that toggling a row's boolean persists
+// it IMMEDIATELY (instant-save), with esc just closing the already-saved dialog.
 func TestEditFleetTogglesAndSavesSettings(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{}}
 	fp := newFleetPage()
@@ -568,7 +581,8 @@ func TestEditFleetTogglesAndSavesSettings(t *testing.T) {
 		t.Fatalf("expected mounts off by default; got claude=%v codex=%v", fp.dialogClaudeMount, fp.dialogCodexMount)
 	}
 
-	// Toggle Claude (cursor starts on row 0), move down, toggle Codex.
+	// Toggle Claude (cursor starts on row 0), move down, toggle Codex — each
+	// toggle saves instantly.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
@@ -576,22 +590,23 @@ func TestEditFleetTogglesAndSavesSettings(t *testing.T) {
 	if !fp.dialogClaudeMount || !fp.dialogCodexMount {
 		t.Fatalf("after toggles: claude=%v codex=%v, want both true", fp.dialogClaudeMount, fp.dialogCodexMount)
 	}
-
-	// Submit.
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
-
-	if fp.mode != viewNormal {
-		t.Fatalf("mode after enter = %v, want viewNormal", fp.mode)
-	}
+	// Instant-save: already persisted, no submit needed.
 	if !f.Settings.ClaudeCodeMount || !f.Settings.CodexMount {
-		t.Fatalf("settings not persisted: %+v", f.Settings)
+		t.Fatalf("settings not persisted instantly: %+v", f.Settings)
+	}
+
+	// Esc just closes the (already-saved) dialog.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if fp.mode != viewNormal {
+		t.Fatalf("mode after esc = %v, want viewNormal", fp.mode)
 	}
 }
 
 // TestEditFleetSavesPreferFleetLaunch verifies the "Prefer Fleet Launch"
-// checkbox toggles and persists to FleetSettings on submit.
+// checkbox toggles and persists to FleetSettings instantly.
 func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha"}
 	fp := newFleetPage()
@@ -606,7 +621,8 @@ func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
 		t.Fatalf("expected PreferFleetLaunch off by default")
 	}
 
-	// Navigate to the Prefer Fleet Launch row (last row) and toggle it.
+	// Navigate to the Prefer Fleet Launch row (last row) and toggle it — this
+	// saves instantly.
 	for fp.dialogRow != editFleetRowPreferFleetLaunch {
 		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 	}
@@ -615,18 +631,38 @@ func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
 		t.Fatalf("toggle did not set dialogPreferFleetLaunch")
 	}
 
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
-
 	if !f.Settings.PreferFleetLaunchEnabled() {
-		t.Fatalf("Settings.PreferFleetLaunch = %v, want enabled", f.Settings.PreferFleetLaunch)
+		t.Fatalf("Settings.PreferFleetLaunch = %v, want enabled (instant-save)", f.Settings.PreferFleetLaunch)
 	}
 }
 
-// TestEditFleetSavesBuildkitServer verifies the "Buildkit server"
-// checkbox toggles and persists to FleetSettings on submit, and that
+// navigateToBuildkitRow opens (assumes already open) the dialog's Caching
+// section and lands the cursor on the Buildkit row.
+func navigateToBuildkitRow(t *testing.T, fp *fleetPage, m *model) {
+	t.Helper()
+	guard := 0
+	for fp.dialogRow != editFleetRowCaching {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+		if guard++; guard > 20 {
+			t.Fatal("never reached Caching header")
+		}
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // expand
+	if !fp.dialogCachingExpanded {
+		t.Fatal("Caching section should expand on l")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown}) // into Buildkit row
+	if fp.dialogRow != editFleetRowBuildkit {
+		t.Fatalf("dialogRow = %d, want buildkit row", fp.dialogRow)
+	}
+}
+
+// TestEditFleetSavesBuildkitServer verifies the "Buildkit server" checkbox
+// (inside the Caching section) toggles and persists instantly, and that
 // toggling it does NOT kick off home-dir detection (it is not a mount).
 func TestEditFleetSavesBuildkitServer(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha"}
 	fp := newFleetPage()
@@ -641,9 +677,7 @@ func TestEditFleetSavesBuildkitServer(t *testing.T) {
 		t.Fatalf("expected BuildkitServer off by default")
 	}
 
-	for fp.dialogRow != editFleetRowBuildkit {
-		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
-	}
+	navigateToBuildkitRow(t, fp, m)
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
 	if !fp.dialogBuildkitServer {
 		t.Fatalf("toggle did not set dialogBuildkitServer")
@@ -652,11 +686,157 @@ func TestEditFleetSavesBuildkitServer(t *testing.T) {
 	if fp.dialogDetecting {
 		t.Fatalf("buildkit toggle should not kick off home-dir detection")
 	}
-
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
-
+	// Instant-save: persisted on toggle, no submit step.
 	if !f.Settings.BuildkitServer {
-		t.Fatalf("Settings.BuildkitServer = %v, want true", f.Settings.BuildkitServer)
+		t.Fatalf("Settings.BuildkitServer = %v, want true (instant-save)", f.Settings.BuildkitServer)
+	}
+}
+
+// TestEditFleetCachingExpandCollapse verifies the Caching section starts
+// collapsed (hiding the Buildkit row) and expands/collapses with l/h.
+func TestEditFleetCachingExpandCollapse(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+	f := &fleet.Fleet{Name: "alpha"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if fp.dialogCachingExpanded {
+		t.Fatal("Caching should start collapsed")
+	}
+	if slices.Contains(fp.visibleEditFleetRows(), editFleetRowBuildkit) {
+		t.Fatal("Buildkit row should be hidden while Caching is collapsed")
+	}
+	for fp.dialogRow != editFleetRowCaching {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if !fp.dialogCachingExpanded || !slices.Contains(fp.visibleEditFleetRows(), editFleetRowBuildkit) {
+		t.Fatal("l should expand Caching and reveal the Buildkit row")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if fp.dialogCachingExpanded {
+		t.Fatal("h should collapse Caching")
+	}
+}
+
+// TestEditFleetDeleteCacheButtonHiddenWhenOff verifies the Delete-cache button
+// is not reachable while Buildkit is disabled.
+func TestEditFleetDeleteCacheButtonHiddenWhenOff(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+	f := &fleet.Fleet{Name: "alpha"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToBuildkitRow(t, fp, m) // buildkit is OFF
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if fp.dialogBuildkitButtonFocused {
+		t.Fatal("l must not focus the delete-cache button when Buildkit is off")
+	}
+}
+
+// TestEditFleetDeleteCacheButtonFlow drives the full button interaction:
+// focus → arm confirm → wipe (async) → done.
+func TestEditFleetDeleteCacheButtonFlow(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	var deleted string
+	origDel := deleteBuildkitCacheRemote
+	deleteBuildkitCacheRemote = func(fleetName string) error { deleted = fleetName; return nil }
+	t.Cleanup(func() { deleteBuildkitCacheRemote = origDel })
+
+	f := &fleet.Fleet{Name: "alpha"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToBuildkitRow(t, fp, m)
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // enable buildkit → button appears
+	if !fp.dialogBuildkitServer {
+		t.Fatal("buildkit not enabled")
+	}
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // focus button
+	if !fp.dialogBuildkitButtonFocused {
+		t.Fatal("l should focus the delete-cache button")
+	}
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // arm inline confirm
+	if !fp.dialogDeleteCacheConfirm || fp.dialogDeletingCache {
+		t.Fatalf("first enter should only arm confirm; confirm=%v deleting=%v", fp.dialogDeleteCacheConfirm, fp.dialogDeletingCache)
+	}
+
+	cmd := fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // confirm → wipe
+	if fp.dialogDeleteCacheConfirm {
+		t.Fatal("confirm should clear once the wipe starts")
+	}
+	if !fp.dialogDeletingCache {
+		t.Fatal("deletingCache should be set while the wipe runs")
+	}
+	if cmd == nil {
+		t.Fatal("expected a delete-cache command")
+	}
+	done, ok := cmd().(deleteCacheDoneMsg)
+	if !ok {
+		t.Fatal("delete cmd did not return deleteCacheDoneMsg")
+	}
+	if deleted != "alpha" {
+		t.Fatalf("delete RPC called for %q, want alpha", deleted)
+	}
+	fp.handleDeleteCacheDone(m, done)
+	if fp.dialogDeletingCache {
+		t.Fatal("deletingCache should clear after the wipe completes")
+	}
+}
+
+// TestEditFleetDeleteCacheError surfaces the failure path: a failed wipe clears
+// the in-flight flag and reports the error to the user.
+func TestEditFleetDeleteCacheError(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	fp := newFleetPage()
+	fp.dialogFleet = "alpha"
+	fp.dialogDeletingCache = true
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha"}}}, fleetPage: fp}
+
+	fp.handleDeleteCacheDone(m, deleteCacheDoneMsg{fleet: "alpha", err: errors.New("docker daemon unavailable")})
+
+	if fp.dialogDeletingCache {
+		t.Fatal("deletingCache should clear even on error")
+	}
+	if !strings.Contains(m.message, "docker daemon unavailable") {
+		t.Fatalf("message = %q, want it to surface the error", m.message)
+	}
+}
+
+// TestEditFleetDeleteCacheConfirmEscCancels verifies esc cancels an armed
+// confirm without closing the dialog or wiping.
+func TestEditFleetDeleteCacheConfirmEscCancels(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+	f := &fleet.Fleet{Name: "alpha"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToBuildkitRow(t, fp, m)
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})                    // enable
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // focus button
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})                    // arm confirm
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc}) // cancel confirm
+	if fp.dialogDeleteCacheConfirm {
+		t.Fatal("esc should cancel the armed confirm")
+	}
+	if fp.mode != viewEditFleet {
+		t.Fatal("esc on an armed confirm should NOT close the dialog")
 	}
 }
 
@@ -665,6 +845,7 @@ func TestEditFleetSavesBuildkitServer(t *testing.T) {
 // not typed anything, the home-dir input is populated.
 func TestEditFleetHomedirDetectedFillsEmptyInput(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha", Remote: "git@example.com:org/repo.git"}
 	fp := newFleetPage()
@@ -680,7 +861,7 @@ func TestEditFleetHomedirDetectedFillsEmptyInput(t *testing.T) {
 		t.Fatalf("expected dialogDetecting to be true after toggle-on")
 	}
 
-	fp.handleHomedirDetected(homedirDetectedMsg{fleetName: "alpha", homeDir: "/home/node"})
+	fp.handleHomedirDetected(m, homedirDetectedMsg{fleetName: "alpha", homeDir: "/home/node"})
 
 	if fp.dialogDetecting {
 		t.Fatalf("dialogDetecting still true after result arrived")
@@ -695,6 +876,7 @@ func TestEditFleetHomedirDetectedFillsEmptyInput(t *testing.T) {
 // something into the home-dir field.
 func TestEditFleetHomedirDetectedRespectsUserInput(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha", Remote: "git@example.com:org/repo.git"}
 	fp := newFleetPage()
@@ -708,7 +890,7 @@ func TestEditFleetHomedirDetectedRespectsUserInput(t *testing.T) {
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle Claude → kicks detect
 	fp.homedirInput.SetValue("/custom/path")              // simulate user typing while detect runs
 
-	fp.handleHomedirDetected(homedirDetectedMsg{fleetName: "alpha", homeDir: "/home/node"})
+	fp.handleHomedirDetected(m, homedirDetectedMsg{fleetName: "alpha", homeDir: "/home/node"})
 
 	if got := fp.homedirInput.Value(); got != "/custom/path" {
 		t.Fatalf("homedirInput = %q, want unchanged %q", got, "/custom/path")
@@ -721,6 +903,7 @@ func TestEditFleetHomedirDetectedRespectsUserInput(t *testing.T) {
 // has cross-talk.
 func TestEditFleetHomedirDetectedIgnoresStaleFleet(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha", Remote: "git@example.com:org/repo.git"}
 	fp := newFleetPage()
@@ -735,7 +918,7 @@ func TestEditFleetHomedirDetectedIgnoresStaleFleet(t *testing.T) {
 
 	// Result for a different fleet — must be ignored, and must not
 	// clear our in-flight flag.
-	fp.handleHomedirDetected(homedirDetectedMsg{fleetName: "beta", homeDir: "/wrong"})
+	fp.handleHomedirDetected(m, homedirDetectedMsg{fleetName: "beta", homeDir: "/wrong"})
 
 	if got := fp.homedirInput.Value(); got != "" {
 		t.Fatalf("homedirInput = %q, want empty", got)
@@ -745,10 +928,12 @@ func TestEditFleetHomedirDetectedIgnoresStaleFleet(t *testing.T) {
 	}
 }
 
-// TestEditFleetSavesHomedir verifies the home-dir text field is
-// persisted to FleetSettings when the user submits the dialog.
+// TestEditFleetSavesHomedir verifies the home-dir text field is persisted to
+// FleetSettings when the user commits the edit (Enter within the field), under
+// the instant-save model.
 func TestEditFleetSavesHomedir(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha", Remote: "git@example.com:org/repo.git"}
 	fp := newFleetPage()
@@ -759,18 +944,30 @@ func TestEditFleetSavesHomedir(t *testing.T) {
 	}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	// Navigate to the Home dir row and open the field.
+	for fp.dialogRow != editFleetRowHomeDir {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // activate field
+	if !fp.dialogFieldActive {
+		t.Fatal("expected home-dir field active after enter")
+	}
 	fp.homedirInput.SetValue("/opt/agent")
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // commit → instant-save
 
+	if fp.dialogFieldActive {
+		t.Fatal("field should be inactive after commit")
+	}
 	if f.Settings.HomeDir != "/opt/agent" {
 		t.Fatalf("Settings.HomeDir = %q, want %q", f.Settings.HomeDir, "/opt/agent")
 	}
 }
 
-// TestEditFleetEscDiscardsChanges verifies that pressing esc abandons
-// pending toggles without modifying the fleet's saved settings.
-func TestEditFleetEscDiscardsChanges(t *testing.T) {
+// TestEditFleetEscKeepsInstantSaves verifies the instant-save contract: a toggle
+// persists immediately, and esc just closes the dialog WITHOUT discarding it.
+func TestEditFleetEscKeepsInstantSaves(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
 
 	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{}}
 	fp := newFleetPage()
@@ -783,14 +980,116 @@ func TestEditFleetEscDiscardsChanges(t *testing.T) {
 	}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle claude on
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle claude on → saved now
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})   // just closes
 
 	if fp.mode != viewNormal {
 		t.Fatalf("mode after esc = %v, want viewNormal", fp.mode)
 	}
-	if f.Settings.ClaudeCodeMount {
-		t.Fatalf("ClaudeCodeMount = true, expected esc to discard the toggle")
+	if !f.Settings.ClaudeCodeMount {
+		t.Fatalf("ClaudeCodeMount = false; instant-save toggle must persist through esc")
+	}
+}
+
+// TestEditFleetPreservesPFLNilOnUnrelatedEdit verifies instant-save does NOT
+// collapse a "never asked" (nil) PreferFleetLaunch into an explicit value when
+// the user edits an unrelated setting.
+func TestEditFleetPreservesPFLNilOnUnrelatedEdit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	f := &fleet.Fleet{Name: "alpha"} // PreferFleetLaunch nil (never asked)
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle Claude (unrelated)
+
+	if !f.Settings.ClaudeCodeMount {
+		t.Fatal("claude mount not persisted")
+	}
+	if f.Settings.PreferFleetLaunch != nil {
+		t.Fatalf("PreferFleetLaunch collapsed to %v on unrelated edit; want nil", *f.Settings.PreferFleetLaunch)
+	}
+}
+
+// TestEditFleetPFLSetFlagRevertedOnSaveFailure guards the tri-state invariant
+// across a FAILED PreferFleetLaunch toggle: the set-flag must revert so a later
+// unrelated (successful) save does not collapse the nil tri-state.
+func TestEditFleetPFLSetFlagRevertedOnSaveFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	failNext := false
+	orig := setFleetSettingsRemote
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) error {
+		if failNext {
+			return errors.New("simulated save failure")
+		}
+		return nil
+	}
+	t.Cleanup(func() { setFleetSettingsRemote = orig })
+
+	f := &fleet.Fleet{Name: "alpha"} // PreferFleetLaunch nil
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	for fp.dialogRow != editFleetRowPreferFleetLaunch {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+
+	// Toggle PFL with a save that fails — must revert both the value and the flag.
+	failNext = true
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
+	failNext = false
+	if fp.dialogPreferFleetLaunch {
+		t.Fatal("dialogPreferFleetLaunch should revert after a failed save")
+	}
+	if fp.dialogPreferFleetLaunchSet {
+		t.Fatal("dialogPreferFleetLaunchSet should revert to false after a failed save")
+	}
+
+	// An unrelated, successful edit must still leave the nil tri-state intact.
+	fp.dialogRow = editFleetRowClaude
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
+	if !f.Settings.ClaudeCodeMount {
+		t.Fatal("claude mount not persisted")
+	}
+	if f.Settings.PreferFleetLaunch != nil {
+		t.Fatalf("PreferFleetLaunch collapsed to %v after a failed PFL toggle; want nil", *f.Settings.PreferFleetLaunch)
+	}
+}
+
+// TestEditFleetHomedirEscDiscards verifies that esc inside the home-dir field
+// discards the uncommitted edit and restores the saved value (instant-save only
+// commits on Enter).
+func TestEditFleetHomedirEscDiscards(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	f := &fleet.Fleet{Name: "alpha", Settings: fleet.FleetSettings{HomeDir: "/home/node"}}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	for fp.dialogRow != editFleetRowHomeDir {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // activate field
+	fp.homedirInput.SetValue("/opt/agent")                // uncommitted edit
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})   // discard
+
+	if fp.dialogFieldActive {
+		t.Fatal("field should be inactive after esc")
+	}
+	if got := fp.homedirInput.Value(); got != "/home/node" {
+		t.Fatalf("home-dir input = %q after esc-discard, want restored %q", got, "/home/node")
+	}
+	if f.Settings.HomeDir != "/home/node" {
+		t.Fatalf("Settings.HomeDir = %q, want unchanged %q", f.Settings.HomeDir, "/home/node")
 	}
 }
 
@@ -974,6 +1273,7 @@ func TestAddInstanceDialogVimKeysRespectActiveField(t *testing.T) {
 func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
+	stubFleetSettingsSave(t)
 	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{}}
 	fp := newFleetPage()
 	fp.mode = viewEditFleet
@@ -984,6 +1284,7 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 		fleetPage: fp,
 	}
 
+	// j moves down through the flat rows; l toggles the focused checkbox.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	if fp.dialogRow != editFleetRowCodex {
 		t.Fatalf("dialogRow = %d, want codex row", fp.dialogRow)
@@ -1001,22 +1302,15 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 		t.Fatal("l should toggle selected gh row")
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	if fp.dialogRow != editFleetRowBuildkit {
-		t.Fatalf("dialogRow = %d, want buildkit row", fp.dialogRow)
-	}
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	if !fp.dialogBuildkitServer {
-		t.Fatal("l should toggle selected buildkit row")
-	}
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	if fp.dialogRow != editFleetRowHomeDir {
 		t.Fatalf("dialogRow = %d, want home-dir row", fp.dialogRow)
 	}
+
+	// Enter activates the home-dir field; typing routes into it; esc discards.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if !fp.dialogFieldActive {
 		t.Fatal("enter on home-dir row should activate text field")
 	}
-
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	if got := fp.homedirInput.Value(); got != "k" {
 		t.Fatalf("active home-dir input = %q, want k", got)
@@ -1024,12 +1318,12 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 	if fp.dialogRow != editFleetRowHomeDir {
 		t.Fatalf("dialogRow moved while home-dir active: got %d", fp.dialogRow)
 	}
-
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	if fp.dialogRow != editFleetRowBuildkit {
-		t.Fatalf("dialogRow = %d, want buildkit row after inactive k", fp.dialogRow)
+	if fp.dialogFieldActive {
+		t.Fatal("esc should leave the home-dir field")
 	}
+
+	// k now navigates UP (field inactive): home-dir → gh → codex.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	if fp.dialogRow != editFleetRowGh {
 		t.Fatalf("dialogRow = %d, want gh row after inactive k", fp.dialogRow)

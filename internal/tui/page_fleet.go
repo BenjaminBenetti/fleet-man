@@ -47,6 +47,18 @@ type fleetPage struct {
 	dialogGhMount           bool
 	dialogBuildkitServer    bool
 	dialogPreferFleetLaunch bool
+	// dialogPreferFleetLaunchSet tracks whether PreferFleetLaunch should be
+	// persisted as an explicit value. It starts true only if the fleet already
+	// had a value, and flips true when the user toggles that row — so the
+	// instant-save path never collapses a "never asked" (nil) PreferFleetLaunch
+	// into an explicit false just because the user edited an unrelated setting.
+	dialogPreferFleetLaunchSet bool
+
+	// Caching section (edit-fleet dialog) state.
+	dialogCachingExpanded       bool // ▼ Caching expanded, revealing the Buildkit row
+	dialogBuildkitButtonFocused bool // horizontal sub-cursor: on the [Delete cache] button vs the toggle
+	dialogDeleteCacheConfirm    bool // inline confirm armed (first Enter on the button)
+	dialogDeletingCache         bool // a cache-wipe RPC is in flight
 	dialogDetecting         bool // true while a homedir auto-detect cmd is in flight
 
 	// dialogBrowserSwitching is true while the switch-browser dialog
@@ -198,8 +210,10 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return nil
 
 	case homedirDetectedMsg:
-		fleetPage.handleHomedirDetected(msg.(homedirDetectedMsg))
-		return nil
+		return fleetPage.handleHomedirDetected(m, msg.(homedirDetectedMsg))
+
+	case deleteCacheDoneMsg:
+		return fleetPage.handleDeleteCacheDone(m, msg.(deleteCacheDoneMsg))
 
 	case devcontainerInspectedMsg:
 		return fleetPage.handleDevcontainerInspected(m, msg.(devcontainerInspectedMsg))
@@ -1420,65 +1434,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 
 	case viewEditFleet:
 		b.WriteString("\n")
-		rowMarker := func(r int) string {
-			if fleetPage.dialogRow == r {
-				return cursorStyle.Render("> ")
-			}
-			return "  "
-		}
-		checkbox := func(on bool) string {
-			if on {
-				return "[x]"
-			}
-			return "[ ]"
-		}
-
-		// Home-dir field: text input when focused, dim static text
-		// otherwise. Append a spinner + status when an auto-detect is
-		// running so the user knows the field will fill in soon (or
-		// can be safely typed over to discard the result).
-		var homedirField string
-		if fleetPage.dialogFieldActive && fleetPage.dialogRow == editFleetRowHomeDir {
-			homedirField = fleetPage.homedirInput.View()
-		} else {
-			value := fleetPage.homedirInput.Value()
-			if value == "" {
-				homedirField = dimStyle.Render("(unset — defaults to /home/vscode)")
-			} else {
-				homedirField = value
-			}
-		}
-		if fleetPage.dialogDetecting {
-			homedirField = homedirField + " " + m.spinner.View() + dimStyle.Render(" detecting home dir...")
-		}
-
-		dialog := fmt.Sprintf(
-			"%s\n\n  %s %s\n%s%s %s\n%s%s %s\n%s%s %s\n%s%s %s\n%s%s %s\n%s%s %s\n\n  %s\n\n%s",
-			dialogTitle.Render("Edit fleet"),
-			dialogLabel.Render("Fleet:    "),
-			fleetExpandedStyle.Render(fleetPage.dialogFleet),
-			rowMarker(editFleetRowClaude),
-			checkbox(fleetPage.dialogClaudeMount),
-			dialogLabel.Render("Claude Code mount"),
-			rowMarker(editFleetRowCodex),
-			checkbox(fleetPage.dialogCodexMount),
-			dialogLabel.Render("Codex mount"),
-			rowMarker(editFleetRowGh),
-			checkbox(fleetPage.dialogGhMount),
-			dialogLabel.Render("GitHub CLI mount"),
-			rowMarker(editFleetRowBuildkit),
-			checkbox(fleetPage.dialogBuildkitServer),
-			dialogLabel.Render("Buildkit server"),
-			rowMarker(editFleetRowHomeDir),
-			dialogLabel.Render("Home dir: "),
-			homedirField,
-			rowMarker(editFleetRowPreferFleetLaunch),
-			checkbox(fleetPage.dialogPreferFleetLaunch),
-			dialogLabel.Render("Prefer Fleet Launch"),
-			dimStyle.Render("Mounts apply on supported backends only"),
-			dialogHint.Render(fleetPage.editFleetHint()),
-		)
-		b.WriteString(dialogBox.Render(dialog))
+		b.WriteString(dialogBox.Render(fleetPage.renderEditFleet(m)))
 		b.WriteString("\n")
 
 	case viewTagInstance:
@@ -1703,11 +1659,123 @@ func (fleetPage *fleetPage) textDialogHint(action string) string {
 	return "[enter] Edit  [q/esc] Cancel"
 }
 
+// renderEditFleet builds the edit-fleet dialog body from the currently visible
+// rows. Instant-save means there is no explicit save row — toggles persist as
+// they're made and esc/q just closes.
+func (fleetPage *fleetPage) renderEditFleet(m *model) string {
+	marker := func(row int) string {
+		if fleetPage.dialogRow == row {
+			return cursorStyle.Render("> ")
+		}
+		return "  "
+	}
+	checkbox := func(on bool) string {
+		if on {
+			return "[x]"
+		}
+		return "[ ]"
+	}
+
+	var d strings.Builder
+	d.WriteString(dialogTitle.Render("Edit fleet"))
+	d.WriteString("\n\n")
+	d.WriteString("  " + dialogLabel.Render("Fleet:    ") + " " + fleetExpandedStyle.Render(fleetPage.dialogFleet) + "\n")
+
+	for _, row := range fleetPage.visibleEditFleetRows() {
+		switch row {
+		case editFleetRowClaude:
+			d.WriteString(marker(row) + checkbox(fleetPage.dialogClaudeMount) + " " + dialogLabel.Render("Claude Code mount"))
+		case editFleetRowCodex:
+			d.WriteString(marker(row) + checkbox(fleetPage.dialogCodexMount) + " " + dialogLabel.Render("Codex mount"))
+		case editFleetRowGh:
+			d.WriteString(marker(row) + checkbox(fleetPage.dialogGhMount) + " " + dialogLabel.Render("GitHub CLI mount"))
+		case editFleetRowHomeDir:
+			// Text input when focused, dim static text otherwise; append a
+			// spinner + status while an auto-detect runs.
+			var field string
+			if fleetPage.dialogFieldActive && fleetPage.dialogRow == editFleetRowHomeDir {
+				field = fleetPage.homedirInput.View()
+			} else if v := fleetPage.homedirInput.Value(); v == "" {
+				field = dimStyle.Render("(unset — defaults to /home/vscode)")
+			} else {
+				field = v
+			}
+			if fleetPage.dialogDetecting {
+				field += " " + m.spinner.View() + dimStyle.Render(" detecting home dir...")
+			}
+			d.WriteString(marker(row) + dialogLabel.Render("Home dir: ") + " " + field)
+		case editFleetRowPreferFleetLaunch:
+			d.WriteString(marker(row) + checkbox(fleetPage.dialogPreferFleetLaunch) + " " + dialogLabel.Render("Prefer Fleet Launch"))
+		case editFleetRowCaching:
+			arrow := "▶ "
+			if fleetPage.dialogCachingExpanded {
+				arrow = "▼ "
+			}
+			d.WriteString(marker(row) + dialogLabel.Render(arrow+"Caching"))
+		case editFleetRowBuildkit:
+			// Indented one level under the Caching header.
+			line := marker(row) + "  " + checkbox(fleetPage.dialogBuildkitServer) + " " + dialogLabel.Render("Buildkit server")
+			if fleetPage.dialogBuildkitServer {
+				line += "   " + fleetPage.renderDeleteCacheButton(m)
+			}
+			d.WriteString(line)
+		}
+		d.WriteString("\n")
+	}
+
+	d.WriteString("\n  " + dimStyle.Render("Mounts apply on supported backends only") + "\n\n")
+	d.WriteString(dialogHint.Render(fleetPage.editFleetHint()))
+	return d.String()
+}
+
+// renderDeleteCacheButton renders the [Delete cache] button shown next to an
+// enabled Buildkit server. It reflects the in-flight / inline-confirm state and
+// is highlighted when the horizontal sub-cursor is on it.
+func (fleetPage *fleetPage) renderDeleteCacheButton(m *model) string {
+	var label string
+	switch {
+	case fleetPage.dialogDeletingCache:
+		label = m.spinner.View() + " Clearing…"
+	case fleetPage.dialogDeleteCacheConfirm:
+		// Kept short so the row fits the 46-col dialog; the footer hint spells
+		// out enter=confirm / esc=cancel.
+		label = "Delete cache?"
+	default:
+		label = "Delete cache"
+	}
+	text := "[ " + label + " ]"
+	if fleetPage.dialogBuildkitButtonFocused {
+		return selectedStyle.Render(text)
+	}
+	return dimStyle.Render(text)
+}
+
 func (fleetPage *fleetPage) editFleetHint() string {
 	if fleetPage.dialogFieldActive {
-		return "[enter] Save  [esc] Done editing  [ctrl+c] Cancel"
+		return "[enter] Save  [esc] Discard edit"
 	}
-	return "[j/k] Select  [h/l/space] Toggle  [enter] Edit/Save  [q/esc] Cancel"
+	switch fleetPage.dialogRow {
+	case editFleetRowCaching:
+		if fleetPage.dialogCachingExpanded {
+			return "[h/←] Collapse  [j/k] Select  [q/esc] Save & Close"
+		}
+		return "[l/→/space] Expand  [j/k] Select  [q/esc] Save & Close"
+	case editFleetRowBuildkit:
+		if fleetPage.dialogBuildkitButtonFocused {
+			if fleetPage.dialogDeleteCacheConfirm {
+				return "[enter] Confirm delete  [esc] Cancel"
+			}
+			return "[enter] Delete cache  [h/←] Back  [esc] Close"
+		}
+		if fleetPage.dialogBuildkitServer {
+			return "[space] Toggle  [l/→] Delete-cache button  [j/k] Select"
+		}
+		return "[space] Toggle  [j/k] Select  [q/esc] Save & Close"
+	case editFleetRowHomeDir:
+		return "[enter] Edit  [j/k] Select  [q/esc] Save & Close"
+	}
+	// Flat checkbox rows: Enter/space/h/l all toggle (instant-save).
+	return "[j/k] Select  [space/enter/h/l] Toggle  [q/esc] Save & Close"
 }
 
 func (fleetPage *fleetPage) portForwardHint() string {

@@ -3,12 +3,48 @@ package server
 import (
 	"context"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/buildkit"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+// deleteBuildkitCache is the cache-wipe seam (a package var so the RPC handler
+// can be tested without docker).
+var deleteBuildkitCache = buildkit.DeleteCache
+
+// DeleteBuildkitCache wipes a fleet's shared build cache and restarts the empty
+// server. Synchronous: it returns only once the cache is gone and the server is
+// back (or an error). The client uses a longer deadline for this call.
+func (s *service) DeleteBuildkitCache(_ context.Context, req *fleetgrpc.DeleteBuildkitCacheRequest) (*fleetgrpc.DeleteBuildkitCacheReply, error) {
+	fleetName := req.GetFleet()
+	if fleetName == "" {
+		return nil, status.Error(codes.InvalidArgument, "fleet is required")
+	}
+	// Guard: only wipe for a fleet that actually has the buildkit server enabled.
+	// Otherwise DeleteCache's restart step would spin up a server the fleet never
+	// asked for. (The TUI only shows the button when enabled; this protects
+	// direct/stale callers.)
+	st, err := state.Load()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load state: %v", err)
+	}
+	f, ok := st.Fleets[fleetName]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "fleet %q not found", fleetName)
+	}
+	if !f.Settings.BuildkitServer {
+		return nil, status.Errorf(codes.FailedPrecondition, "fleet %q does not have the buildkit server enabled", fleetName)
+	}
+	if err := deleteBuildkitCache(fleetName); err != nil {
+		return nil, status.Errorf(codes.Internal, "delete buildkit cache: %v", err)
+	}
+	return &fleetgrpc.DeleteBuildkitCacheReply{}, nil
+}
 
 // ensureBuildkitServer is the re-ensure seam (a package var so the TUI-connect
 // sweep can be exercised in tests without docker). Mirrors stopBuildkitServer in

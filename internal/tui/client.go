@@ -205,6 +205,26 @@ var destroyFleetRemote = func(name string) error {
 	})
 }
 
+// deleteCacheTimeout bounds the buildkit cache-wipe RPC. It is much longer than
+// the ordinary mutationTimeout because the server stops the container, removes
+// the cache, and restarts the server — which on first run may pull the
+// moby/buildkit image and then waits up to ~15s for the new socket. 120s keeps
+// the common case from timing out before the server reports success.
+const deleteCacheTimeout = 120 * time.Second
+
+// deleteBuildkitCacheRemote asks the server to wipe a fleet's shared build cache
+// and restart the (empty) buildkit server. Uses its own longer deadline.
+var deleteBuildkitCacheRemote = func(fleetName string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), deleteCacheTimeout)
+	defer cancel()
+	conn, err := dialMutation(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = conn.Service().DeleteBuildkitCache(ctx, &fleetgrpc.DeleteBuildkitCacheRequest{Fleet: fleetName})
+	return err
+}
+
 // notifyTUIConnectedRemote tells the server a TUI has opened so it can run its
 // once-per-open state reconciliation (e.g. re-ensuring configured buildkit
 // servers). Fire-and-forget: the server returns immediately and does the work

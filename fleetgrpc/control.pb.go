@@ -329,6 +329,94 @@ func (*FleetTUIConnectedReply) Descriptor() ([]byte, []int) {
 	return file_control_proto_rawDescGZIP(), []int{5}
 }
 
+// DeleteBuildkitCacheRequest asks the server to wipe a fleet's shared build
+// cache: stop the buildkit container, clear the CONTENTS of
+// ~/.fleet/workspaces/<fleet>/.buildkit (incl. the root-owned cache) while
+// KEEPING the directory itself so running instances' bind mounts stay valid,
+// then restart the server empty. It is a synchronous action (takes a few
+// seconds), so the client shows progress and uses a longer deadline than
+// ordinary mutations.
+type DeleteBuildkitCacheRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Fleet         string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteBuildkitCacheRequest) Reset() {
+	*x = DeleteBuildkitCacheRequest{}
+	mi := &file_control_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteBuildkitCacheRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteBuildkitCacheRequest) ProtoMessage() {}
+
+func (x *DeleteBuildkitCacheRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteBuildkitCacheRequest.ProtoReflect.Descriptor instead.
+func (*DeleteBuildkitCacheRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *DeleteBuildkitCacheRequest) GetFleet() string {
+	if x != nil {
+		return x.Fleet
+	}
+	return ""
+}
+
+// DeleteBuildkitCacheReply is empty: success is signalled by a nil error.
+type DeleteBuildkitCacheReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteBuildkitCacheReply) Reset() {
+	*x = DeleteBuildkitCacheReply{}
+	mi := &file_control_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteBuildkitCacheReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteBuildkitCacheReply) ProtoMessage() {}
+
+func (x *DeleteBuildkitCacheReply) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteBuildkitCacheReply.ProtoReflect.Descriptor instead.
+func (*DeleteBuildkitCacheReply) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{7}
+}
+
 type GetStateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -337,7 +425,7 @@ type GetStateRequest struct {
 
 func (x *GetStateRequest) Reset() {
 	*x = GetStateRequest{}
-	mi := &file_control_proto_msgTypes[6]
+	mi := &file_control_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -349,7 +437,7 @@ func (x *GetStateRequest) String() string {
 func (*GetStateRequest) ProtoMessage() {}
 
 func (x *GetStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[6]
+	mi := &file_control_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -362,7 +450,7 @@ func (x *GetStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStateRequest.ProtoReflect.Descriptor instead.
 func (*GetStateRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{6}
+	return file_control_proto_rawDescGZIP(), []int{8}
 }
 
 // GetStateReply is the one-stop snapshot of EVERYTHING the TUI renders:
@@ -381,7 +469,7 @@ type GetStateReply struct {
 
 func (x *GetStateReply) Reset() {
 	*x = GetStateReply{}
-	mi := &file_control_proto_msgTypes[7]
+	mi := &file_control_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -393,7 +481,7 @@ func (x *GetStateReply) String() string {
 func (*GetStateReply) ProtoMessage() {}
 
 func (x *GetStateReply) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[7]
+	mi := &file_control_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -406,7 +494,7 @@ func (x *GetStateReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStateReply.ProtoReflect.Descriptor instead.
 func (*GetStateReply) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{7}
+	return file_control_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *GetStateReply) GetState() *State {
@@ -442,7 +530,7 @@ type CreateFleetRequest struct {
 
 func (x *CreateFleetRequest) Reset() {
 	*x = CreateFleetRequest{}
-	mi := &file_control_proto_msgTypes[8]
+	mi := &file_control_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -454,7 +542,7 @@ func (x *CreateFleetRequest) String() string {
 func (*CreateFleetRequest) ProtoMessage() {}
 
 func (x *CreateFleetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[8]
+	mi := &file_control_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -467,7 +555,7 @@ func (x *CreateFleetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateFleetRequest.ProtoReflect.Descriptor instead.
 func (*CreateFleetRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{8}
+	return file_control_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *CreateFleetRequest) GetName() string {
@@ -496,7 +584,7 @@ type DestroyFleetRequest struct {
 
 func (x *DestroyFleetRequest) Reset() {
 	*x = DestroyFleetRequest{}
-	mi := &file_control_proto_msgTypes[9]
+	mi := &file_control_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -508,7 +596,7 @@ func (x *DestroyFleetRequest) String() string {
 func (*DestroyFleetRequest) ProtoMessage() {}
 
 func (x *DestroyFleetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[9]
+	mi := &file_control_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -521,7 +609,7 @@ func (x *DestroyFleetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DestroyFleetRequest.ProtoReflect.Descriptor instead.
 func (*DestroyFleetRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{9}
+	return file_control_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *DestroyFleetRequest) GetName() string {
@@ -544,7 +632,7 @@ type SetFleetSettingsRequest struct {
 
 func (x *SetFleetSettingsRequest) Reset() {
 	*x = SetFleetSettingsRequest{}
-	mi := &file_control_proto_msgTypes[10]
+	mi := &file_control_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -556,7 +644,7 @@ func (x *SetFleetSettingsRequest) String() string {
 func (*SetFleetSettingsRequest) ProtoMessage() {}
 
 func (x *SetFleetSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[10]
+	mi := &file_control_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -569,7 +657,7 @@ func (x *SetFleetSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetFleetSettingsRequest.ProtoReflect.Descriptor instead.
 func (*SetFleetSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{10}
+	return file_control_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *SetFleetSettingsRequest) GetFleet() string {
@@ -603,7 +691,7 @@ type SetInstanceMetadataRequest struct {
 
 func (x *SetInstanceMetadataRequest) Reset() {
 	*x = SetInstanceMetadataRequest{}
-	mi := &file_control_proto_msgTypes[11]
+	mi := &file_control_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -615,7 +703,7 @@ func (x *SetInstanceMetadataRequest) String() string {
 func (*SetInstanceMetadataRequest) ProtoMessage() {}
 
 func (x *SetInstanceMetadataRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[11]
+	mi := &file_control_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -628,7 +716,7 @@ func (x *SetInstanceMetadataRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetInstanceMetadataRequest.ProtoReflect.Descriptor instead.
 func (*SetInstanceMetadataRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{11}
+	return file_control_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *SetInstanceMetadataRequest) GetFleet() string {
@@ -678,7 +766,7 @@ type SetGroupLayoutRequest struct {
 
 func (x *SetGroupLayoutRequest) Reset() {
 	*x = SetGroupLayoutRequest{}
-	mi := &file_control_proto_msgTypes[12]
+	mi := &file_control_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -690,7 +778,7 @@ func (x *SetGroupLayoutRequest) String() string {
 func (*SetGroupLayoutRequest) ProtoMessage() {}
 
 func (x *SetGroupLayoutRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[12]
+	mi := &file_control_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -703,7 +791,7 @@ func (x *SetGroupLayoutRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetGroupLayoutRequest.ProtoReflect.Descriptor instead.
 func (*SetGroupLayoutRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{12}
+	return file_control_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *SetGroupLayoutRequest) GetLayout() *GroupLayout {
@@ -726,7 +814,7 @@ type DeleteGroupLayoutRequest struct {
 
 func (x *DeleteGroupLayoutRequest) Reset() {
 	*x = DeleteGroupLayoutRequest{}
-	mi := &file_control_proto_msgTypes[13]
+	mi := &file_control_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -738,7 +826,7 @@ func (x *DeleteGroupLayoutRequest) String() string {
 func (*DeleteGroupLayoutRequest) ProtoMessage() {}
 
 func (x *DeleteGroupLayoutRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[13]
+	mi := &file_control_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -751,7 +839,7 @@ func (x *DeleteGroupLayoutRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteGroupLayoutRequest.ProtoReflect.Descriptor instead.
 func (*DeleteGroupLayoutRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{13}
+	return file_control_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *DeleteGroupLayoutRequest) GetInstanceName() string {
@@ -778,7 +866,7 @@ type SetLastSeenVersionRequest struct {
 
 func (x *SetLastSeenVersionRequest) Reset() {
 	*x = SetLastSeenVersionRequest{}
-	mi := &file_control_proto_msgTypes[14]
+	mi := &file_control_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -790,7 +878,7 @@ func (x *SetLastSeenVersionRequest) String() string {
 func (*SetLastSeenVersionRequest) ProtoMessage() {}
 
 func (x *SetLastSeenVersionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[14]
+	mi := &file_control_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -803,7 +891,7 @@ func (x *SetLastSeenVersionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetLastSeenVersionRequest.ProtoReflect.Descriptor instead.
 func (*SetLastSeenVersionRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{14}
+	return file_control_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *SetLastSeenVersionRequest) GetVersion() string {
@@ -823,7 +911,7 @@ type MutationReply struct {
 
 func (x *MutationReply) Reset() {
 	*x = MutationReply{}
-	mi := &file_control_proto_msgTypes[15]
+	mi := &file_control_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -835,7 +923,7 @@ func (x *MutationReply) String() string {
 func (*MutationReply) ProtoMessage() {}
 
 func (x *MutationReply) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[15]
+	mi := &file_control_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -848,7 +936,7 @@ func (x *MutationReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MutationReply.ProtoReflect.Descriptor instead.
 func (*MutationReply) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{15}
+	return file_control_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *MutationReply) GetState() *State {
@@ -880,7 +968,10 @@ const file_control_proto_rawDesc = "" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12#\n" +
 	"\rdraining_jobs\x18\x02 \x01(\x05R\fdrainingJobs\"\x1a\n" +
 	"\x18FleetTUIConnectedRequest\"\x18\n" +
-	"\x16FleetTUIConnectedReply\"\x11\n" +
+	"\x16FleetTUIConnectedReply\"2\n" +
+	"\x1aDeleteBuildkitCacheRequest\x12\x14\n" +
+	"\x05fleet\x18\x01 \x01(\tR\x05fleet\"\x1a\n" +
+	"\x18DeleteBuildkitCacheReply\"\x11\n" +
 	"\x0fGetStateRequest\"\xa5\x01\n" +
 	"\rGetStateReply\x12&\n" +
 	"\x05state\x18\x01 \x01(\v2\x10.fleetgrpc.StateR\x05state\x124\n" +
@@ -926,7 +1017,7 @@ func file_control_proto_rawDescGZIP() []byte {
 	return file_control_proto_rawDescData
 }
 
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_control_proto_goTypes = []any{
 	(*HelloRequest)(nil),               // 0: fleetgrpc.HelloRequest
 	(*HelloReply)(nil),                 // 1: fleetgrpc.HelloReply
@@ -934,31 +1025,33 @@ var file_control_proto_goTypes = []any{
 	(*ShutdownReply)(nil),              // 3: fleetgrpc.ShutdownReply
 	(*FleetTUIConnectedRequest)(nil),   // 4: fleetgrpc.FleetTUIConnectedRequest
 	(*FleetTUIConnectedReply)(nil),     // 5: fleetgrpc.FleetTUIConnectedReply
-	(*GetStateRequest)(nil),            // 6: fleetgrpc.GetStateRequest
-	(*GetStateReply)(nil),              // 7: fleetgrpc.GetStateReply
-	(*CreateFleetRequest)(nil),         // 8: fleetgrpc.CreateFleetRequest
-	(*DestroyFleetRequest)(nil),        // 9: fleetgrpc.DestroyFleetRequest
-	(*SetFleetSettingsRequest)(nil),    // 10: fleetgrpc.SetFleetSettingsRequest
-	(*SetInstanceMetadataRequest)(nil), // 11: fleetgrpc.SetInstanceMetadataRequest
-	(*SetGroupLayoutRequest)(nil),      // 12: fleetgrpc.SetGroupLayoutRequest
-	(*DeleteGroupLayoutRequest)(nil),   // 13: fleetgrpc.DeleteGroupLayoutRequest
-	(*SetLastSeenVersionRequest)(nil),  // 14: fleetgrpc.SetLastSeenVersionRequest
-	(*MutationReply)(nil),              // 15: fleetgrpc.MutationReply
-	(*timestamppb.Timestamp)(nil),      // 16: google.protobuf.Timestamp
-	(*State)(nil),                      // 17: fleetgrpc.State
-	(*InstanceRuntime)(nil),            // 18: fleetgrpc.InstanceRuntime
-	(*JobSummary)(nil),                 // 19: fleetgrpc.JobSummary
-	(*FleetSettings)(nil),              // 20: fleetgrpc.FleetSettings
-	(*GroupLayout)(nil),                // 21: fleetgrpc.GroupLayout
+	(*DeleteBuildkitCacheRequest)(nil), // 6: fleetgrpc.DeleteBuildkitCacheRequest
+	(*DeleteBuildkitCacheReply)(nil),   // 7: fleetgrpc.DeleteBuildkitCacheReply
+	(*GetStateRequest)(nil),            // 8: fleetgrpc.GetStateRequest
+	(*GetStateReply)(nil),              // 9: fleetgrpc.GetStateReply
+	(*CreateFleetRequest)(nil),         // 10: fleetgrpc.CreateFleetRequest
+	(*DestroyFleetRequest)(nil),        // 11: fleetgrpc.DestroyFleetRequest
+	(*SetFleetSettingsRequest)(nil),    // 12: fleetgrpc.SetFleetSettingsRequest
+	(*SetInstanceMetadataRequest)(nil), // 13: fleetgrpc.SetInstanceMetadataRequest
+	(*SetGroupLayoutRequest)(nil),      // 14: fleetgrpc.SetGroupLayoutRequest
+	(*DeleteGroupLayoutRequest)(nil),   // 15: fleetgrpc.DeleteGroupLayoutRequest
+	(*SetLastSeenVersionRequest)(nil),  // 16: fleetgrpc.SetLastSeenVersionRequest
+	(*MutationReply)(nil),              // 17: fleetgrpc.MutationReply
+	(*timestamppb.Timestamp)(nil),      // 18: google.protobuf.Timestamp
+	(*State)(nil),                      // 19: fleetgrpc.State
+	(*InstanceRuntime)(nil),            // 20: fleetgrpc.InstanceRuntime
+	(*JobSummary)(nil),                 // 21: fleetgrpc.JobSummary
+	(*FleetSettings)(nil),              // 22: fleetgrpc.FleetSettings
+	(*GroupLayout)(nil),                // 23: fleetgrpc.GroupLayout
 }
 var file_control_proto_depIdxs = []int32{
-	16, // 0: fleetgrpc.HelloReply.started_at:type_name -> google.protobuf.Timestamp
-	17, // 1: fleetgrpc.GetStateReply.state:type_name -> fleetgrpc.State
-	18, // 2: fleetgrpc.GetStateReply.runtime:type_name -> fleetgrpc.InstanceRuntime
-	19, // 3: fleetgrpc.GetStateReply.active_jobs:type_name -> fleetgrpc.JobSummary
-	20, // 4: fleetgrpc.SetFleetSettingsRequest.settings:type_name -> fleetgrpc.FleetSettings
-	21, // 5: fleetgrpc.SetGroupLayoutRequest.layout:type_name -> fleetgrpc.GroupLayout
-	17, // 6: fleetgrpc.MutationReply.state:type_name -> fleetgrpc.State
+	18, // 0: fleetgrpc.HelloReply.started_at:type_name -> google.protobuf.Timestamp
+	19, // 1: fleetgrpc.GetStateReply.state:type_name -> fleetgrpc.State
+	20, // 2: fleetgrpc.GetStateReply.runtime:type_name -> fleetgrpc.InstanceRuntime
+	21, // 3: fleetgrpc.GetStateReply.active_jobs:type_name -> fleetgrpc.JobSummary
+	22, // 4: fleetgrpc.SetFleetSettingsRequest.settings:type_name -> fleetgrpc.FleetSettings
+	23, // 5: fleetgrpc.SetGroupLayoutRequest.layout:type_name -> fleetgrpc.GroupLayout
+	19, // 6: fleetgrpc.MutationReply.state:type_name -> fleetgrpc.State
 	7,  // [7:7] is the sub-list for method output_type
 	7,  // [7:7] is the sub-list for method input_type
 	7,  // [7:7] is the sub-list for extension type_name
@@ -975,14 +1068,14 @@ func file_control_proto_init() {
 	file_runtime_proto_init()
 	file_jobs_proto_init()
 	file_control_proto_msgTypes[2].OneofWrappers = []any{}
-	file_control_proto_msgTypes[11].OneofWrappers = []any{}
+	file_control_proto_msgTypes[13].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
