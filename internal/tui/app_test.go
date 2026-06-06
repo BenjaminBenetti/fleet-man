@@ -51,6 +51,49 @@ func TestUpdateSettingsEscReturnsToFleetList(t *testing.T) {
 	_ = cmd
 }
 
+// TestResumeMsgRedispatchesInnerAndReturnsCmd verifies the resumeMsg handler
+// (issue #88): after an execProcess child exits, the wrapped inner message is
+// dispatched through Update unchanged AND a command is returned (the mouse
+// re-enable batch). Without the handler the inner message would be dropped and
+// mouse tracking would stay dead.
+func TestResumeMsgRedispatchesInnerAndReturnsCmd(t *testing.T) {
+	m := model{
+		currentPage: newFleetPage(),
+		fleetPage:   newFleetPage(),
+		st:          &state.State{Fleets: map[string]*fleet.Fleet{}},
+	}
+
+	// Inner WindowSizeMsg has an observable model side-effect (width/height),
+	// so we can confirm the handler re-dispatched it rather than swallowing it.
+	next, cmd := m.Update(resumeMsg{inner: tea.WindowSizeMsg{Width: 123, Height: 45}})
+
+	nm, ok := next.(model)
+	if !ok {
+		t.Fatalf("Update returned %T, want model", next)
+	}
+	if nm.width != 123 || nm.height != 45 {
+		t.Fatalf("inner WindowSizeMsg not applied: width=%d height=%d", nm.width, nm.height)
+	}
+	if cmd == nil {
+		t.Fatalf("resumeMsg should return a command (mouse re-enable), got nil")
+	}
+}
+
+// TestResumeMsgNilInnerReturnsCmd verifies a resumeMsg with no inner message
+// still re-enables the mouse (returns a non-nil command).
+func TestResumeMsgNilInnerReturnsCmd(t *testing.T) {
+	m := model{
+		currentPage: newFleetPage(),
+		fleetPage:   newFleetPage(),
+		st:          &state.State{Fleets: map[string]*fleet.Fleet{}},
+	}
+
+	_, cmd := m.Update(resumeMsg{inner: nil})
+	if cmd == nil {
+		t.Fatalf("resumeMsg with nil inner should still return the mouse re-enable command")
+	}
+}
+
 func TestUpdateNormalWrapsCursorFromTopToBottom(t *testing.T) {
 	fp := newFleetPage()
 	fp.rows = []row{

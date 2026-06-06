@@ -366,6 +366,20 @@ func (m model) Init() tea.Cmd {
 // handled here and returned early. Mixed messages handle their shared
 // part then fall through. Everything else is forwarded to the active page.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// 0a. Resume after an execProcess child exited. bubbletea's
+	// RestoreTerminal does not re-enable mouse tracking, so re-assert it
+	// here, then dispatch the wrapped message through Update unchanged so
+	// callers see the same behaviour as a bare tea.ExecProcess callback.
+	// See execProcess / issue #88.
+	if resume, ok := msg.(resumeMsg); ok {
+		var next tea.Model = m
+		var cmd tea.Cmd
+		if resume.inner != nil {
+			next, cmd = m.Update(resume.inner)
+		}
+		return next, tea.Batch(tea.EnableMouseCellMotion, cmd)
+	}
+
 	// 0. Mouse — left-button press moves the cursor to the clicked row
 	// (on the fleet list and settings pages) and is then translated to
 	// a key event so existing keyboard handlers do the rest: clicks on

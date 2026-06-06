@@ -19,6 +19,29 @@ import (
 
 type execDoneMsg struct{ err error }
 
+// resumeMsg wraps the message produced by an execProcess callback so the
+// central Update handler can re-assert mouse tracking after the child exits.
+// inner is the message the original callback returned (may be nil); it is
+// dispatched through Update unchanged.
+type resumeMsg struct{ inner tea.Msg }
+
+// execProcess wraps tea.ExecProcess to re-enable mouse tracking once the
+// child process exits. bubbletea v1.3.10's RestoreTerminal restores
+// alt-screen, bracketed-paste and report-focus but NOT mouse mode, while
+// ReleaseTerminal unconditionally disables it — so without this every exec
+// permanently kills mouse support in the TUI (issue #88). The re-enable is
+// threaded through the callback (not batched alongside ExecProcess) so it
+// runs strictly after the program resumes, never racing the pause.
+func execProcess(c *exec.Cmd, fn tea.ExecCallback) tea.Cmd {
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		var inner tea.Msg
+		if fn != nil {
+			inner = fn(err)
+		}
+		return resumeMsg{inner: inner}
+	})
+}
+
 type instanceSpawnedMsg struct {
 	fleet    string
 	instance string

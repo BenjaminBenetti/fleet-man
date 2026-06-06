@@ -729,7 +729,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				break
 			}
 			r := fleetPage.rows[fleetPage.cursor]
-			return tea.ExecProcess(
+			return execProcess(
 				logsCommand(r.fleetName, instance),
 				func(err error) tea.Msg { return execDoneMsg{err} },
 			)
@@ -848,7 +848,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		}
 		banner := renderGradient(nameToBanner(instance.GetDisplayName()))
 		banner += "\n  " + dimStyle.Render("ctrl+q/ctrl+o to detach (session persists)")
-		return tea.ExecProcess(
+		return execProcess(
 			execWithBannerCmd(banner, cmd),
 			func(err error) tea.Msg { return execDoneMsg{err} },
 		)
@@ -893,7 +893,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		}
 		banner := renderGradient(nameToBanner(instance.GetDisplayName()))
 		banner += "\n  " + dimStyle.Render("ctrl+q/ctrl+o to detach (session persists)")
-		return tea.ExecProcess(
+		return execProcess(
 			execWithBannerCmd(banner, cmd),
 			func(err error) tea.Msg { return execDoneMsg{err} },
 		)

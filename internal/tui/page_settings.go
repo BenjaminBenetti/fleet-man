@@ -517,7 +517,7 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 					m.message = err.Error()
 					return nil
 				}
-				return tea.ExecProcess(cmd, func(err error) tea.Msg { return execDoneMsg{err} })
+				return execProcess(cmd, func(err error) tea.Msg { return execDoneMsg{err} })
 			}
 			if item == settingsItemKeybindings {
 				settingsPage.showKeybindings = true
@@ -529,7 +529,7 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 					m.message = err.Error()
 					return nil
 				}
-				return tea.ExecProcess(cmd, func(err error) tea.Msg { return execDoneMsg{err} })
+				return execProcess(cmd, func(err error) tea.Msg { return execDoneMsg{err} })
 			}
 			if item >= settingsItemToolStatusBase {
 				idx := item - settingsItemToolStatusBase
