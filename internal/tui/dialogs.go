@@ -1036,7 +1036,7 @@ func (fleetPage *fleetPage) updateAddFleetNoDevcontainer(m *model, msg tea.Msg) 
 		fleetPage.clearPendingFleet()
 		fleetPage.mode = viewNormal
 
-		return tea.ExecProcess(cmd, func(err error) tea.Msg { return execDoneMsg{err} })
+		return execProcess(cmd, func(err error) tea.Msg { return execDoneMsg{err} })
 
 	case "a", "A", "n", "N", "q", "Q", "esc", "ctrl+c", "enter":
 		fleetPage.mode = viewNormal
@@ -1484,7 +1484,7 @@ func (fleetPage *fleetPage) updateCodespacesAuth(m *model, msg tea.Msg) tea.Cmd 
 		case "enter":
 			fleetPage.mode = viewNormal
 			m.message = "Launching GitHub auth..."
-			return tea.ExecProcess(
+			return execProcess(
 				exec.Command("gh", "auth", "login", "-h", "github.com", "-s", "codespace"),
 				func(err error) tea.Msg {
 					if err != nil {
