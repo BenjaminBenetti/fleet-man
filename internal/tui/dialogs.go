@@ -1241,10 +1241,17 @@ func (fleetPage *fleetPage) toggleEditFleetRow(m *model) tea.Cmd {
 		fleetPage.dialogBuildkitServer = !fleetPage.dialogBuildkitServer
 		revert = func() { fleetPage.dialogBuildkitServer = !fleetPage.dialogBuildkitServer }
 	case editFleetRowPreferFleetLaunch:
+		prevSet := fleetPage.dialogPreferFleetLaunchSet
 		fleetPage.dialogPreferFleetLaunch = !fleetPage.dialogPreferFleetLaunch
 		// The user explicitly chose a value, so it must now persist.
 		fleetPage.dialogPreferFleetLaunchSet = true
-		revert = func() { fleetPage.dialogPreferFleetLaunch = !fleetPage.dialogPreferFleetLaunch }
+		// Revert BOTH the value and the set-flag on save failure — otherwise a
+		// failed toggle would leave dialogPreferFleetLaunchSet=true and a later
+		// unrelated save would collapse a "never asked" (nil) tri-state.
+		revert = func() {
+			fleetPage.dialogPreferFleetLaunch = !fleetPage.dialogPreferFleetLaunch
+			fleetPage.dialogPreferFleetLaunchSet = prevSet
+		}
 	default:
 		return nil
 	}

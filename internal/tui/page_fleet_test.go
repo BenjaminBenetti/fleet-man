@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -819,6 +820,108 @@ func TestEditFleetEscKeepsInstantSaves(t *testing.T) {
 	}
 	if !f.Settings.ClaudeCodeMount {
 		t.Fatalf("ClaudeCodeMount = false; instant-save toggle must persist through esc")
+	}
+}
+
+// TestEditFleetPreservesPFLNilOnUnrelatedEdit verifies instant-save does NOT
+// collapse a "never asked" (nil) PreferFleetLaunch into an explicit value when
+// the user edits an unrelated setting.
+func TestEditFleetPreservesPFLNilOnUnrelatedEdit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	f := &fleet.Fleet{Name: "alpha"} // PreferFleetLaunch nil (never asked)
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle Claude (unrelated)
+
+	if !f.Settings.ClaudeCodeMount {
+		t.Fatal("claude mount not persisted")
+	}
+	if f.Settings.PreferFleetLaunch != nil {
+		t.Fatalf("PreferFleetLaunch collapsed to %v on unrelated edit; want nil", *f.Settings.PreferFleetLaunch)
+	}
+}
+
+// TestEditFleetPFLSetFlagRevertedOnSaveFailure guards the tri-state invariant
+// across a FAILED PreferFleetLaunch toggle: the set-flag must revert so a later
+// unrelated (successful) save does not collapse the nil tri-state.
+func TestEditFleetPFLSetFlagRevertedOnSaveFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	failNext := false
+	orig := setFleetSettingsRemote
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) error {
+		if failNext {
+			return errors.New("simulated save failure")
+		}
+		return nil
+	}
+	t.Cleanup(func() { setFleetSettingsRemote = orig })
+
+	f := &fleet.Fleet{Name: "alpha"} // PreferFleetLaunch nil
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	for fp.dialogRow != editFleetRowPreferFleetLaunch {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+
+	// Toggle PFL with a save that fails — must revert both the value and the flag.
+	failNext = true
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
+	failNext = false
+	if fp.dialogPreferFleetLaunch {
+		t.Fatal("dialogPreferFleetLaunch should revert after a failed save")
+	}
+	if fp.dialogPreferFleetLaunchSet {
+		t.Fatal("dialogPreferFleetLaunchSet should revert to false after a failed save")
+	}
+
+	// An unrelated, successful edit must still leave the nil tri-state intact.
+	fp.dialogRow = editFleetRowClaude
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
+	if !f.Settings.ClaudeCodeMount {
+		t.Fatal("claude mount not persisted")
+	}
+	if f.Settings.PreferFleetLaunch != nil {
+		t.Fatalf("PreferFleetLaunch collapsed to %v after a failed PFL toggle; want nil", *f.Settings.PreferFleetLaunch)
+	}
+}
+
+// TestEditFleetHomedirEscDiscards verifies that esc inside the home-dir field
+// discards the uncommitted edit and restores the saved value (instant-save only
+// commits on Enter).
+func TestEditFleetHomedirEscDiscards(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	f := &fleet.Fleet{Name: "alpha", Settings: fleet.FleetSettings{HomeDir: "/home/node"}}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	for fp.dialogRow != editFleetRowHomeDir {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // activate field
+	fp.homedirInput.SetValue("/opt/agent")                // uncommitted edit
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})   // discard
+
+	if fp.dialogFieldActive {
+		t.Fatal("field should be inactive after esc")
+	}
+	if got := fp.homedirInput.Value(); got != "/home/node" {
+		t.Fatalf("home-dir input = %q after esc-discard, want restored %q", got, "/home/node")
+	}
+	if f.Settings.HomeDir != "/home/node" {
+		t.Fatalf("Settings.HomeDir = %q, want unchanged %q", f.Settings.HomeDir, "/home/node")
 	}
 }
 
