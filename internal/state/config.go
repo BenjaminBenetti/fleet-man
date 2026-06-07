@@ -16,6 +16,7 @@ type Config struct {
 	CoderSettings      CoderSettings      `json:"coder_settings"`
 	CodespacesSettings CodespacesSettings `json:"codespaces_settings"`
 	BrowserSettings    BrowserSettings    `json:"browser_settings"`
+	RemoteMcpSettings  RemoteMcpSettings  `json:"remote_mcp_settings"`
 	DefaultBackend     string             `json:"default_backend,omitempty"` // "devcontainer", "coder", or "codespaces"
 }
 
@@ -44,6 +45,8 @@ func (c *Config) applyDefaults() {
 
 	c.CoderSettings.Template = strings.TrimSpace(c.CoderSettings.Template)
 	c.CoderSettings.Preset = strings.TrimSpace(c.CoderSettings.Preset)
+
+	c.RemoteMcpSettings.GatewayURL = strings.TrimSpace(c.RemoteMcpSettings.GatewayURL)
 }
 
 // ConfigPath returns the path to the config file.

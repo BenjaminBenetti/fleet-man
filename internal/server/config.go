@@ -58,6 +58,10 @@ func configToProto(c *state.Config) *fleetgrpc.Config {
 		Coder:          &fleetgrpc.CoderSettings{},
 		Codespaces:     &fleetgrpc.CodespacesSettings{},
 		Browser:        &fleetgrpc.BrowserSettings{},
+		RemoteMcp: &fleetgrpc.RemoteMcpSettings{
+			Enabled:    c.RemoteMcpSettings.Enabled,
+			GatewayUrl: c.RemoteMcpSettings.GatewayURL,
+		},
 		DefaultBackend: backendToProto(fleet.BackendType(c.DefaultBackend)),
 	}
 
@@ -179,6 +183,11 @@ func protoConfigToLegacy(pc *fleetgrpc.Config) *state.Config {
 			v := b.GetAutoSwitch()
 			c.BrowserSettings.AutoSwitch = &v
 		}
+	}
+
+	if rm := pc.GetRemoteMcp(); rm != nil {
+		c.RemoteMcpSettings.Enabled = rm.GetEnabled()
+		c.RemoteMcpSettings.GatewayURL = rm.GetGatewayUrl()
 	}
 
 	c.DefaultBackend = backendProtoToString(pc.GetDefaultBackend())
