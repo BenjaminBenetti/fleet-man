@@ -59,6 +59,33 @@ func VersionFilePath() string {
 	return filepath.Join(Dir(), "server.version")
 }
 
+// McpPortPath records the TCP port the server's MCP (Model Context Protocol)
+// HTTP server bound to. Like VersionFilePath it is a non-authoritative discovery
+// file the server writes on startup and removes on shutdown, so a user or
+// program can find the MCP endpoint when the default port (6012) was taken and
+// the server had to fall back to the next free one.
+func McpPortPath() string {
+	return filepath.Join(Dir(), "mcp.port")
+}
+
+// McpTokenPath holds the bearer token a client must send to the MCP HTTP server.
+// The TCP port is reachable by any local user, so (unlike the 0600 unix socket)
+// the port alone is not an access boundary; the token file is written 0600 so
+// only the owning user can read it, restoring per-user access. It is generated
+// once and reused across restarts (persistent), so env vars and mcp.json files
+// that reference it stay valid.
+func McpTokenPath() string {
+	return filepath.Join(Dir(), "mcp.token")
+}
+
+// McpEnvPath is a sourceable shell snippet (FLEET_MCP_PORT/URL/TOKEN exports)
+// the server refreshes on startup. ~/.bashrc sources it so MCP client configs
+// (mcp.json) can reference ${FLEET_MCP_URL} / ${FLEET_MCP_TOKEN}. Written 0600
+// because it embeds the token.
+func McpEnvPath() string {
+	return filepath.Join(Dir(), "mcp.env")
+}
+
 // WorkspacesDir is the base directory for instance workspace clones. Mirrors
 // internal/state.WorkspacesDir; lives here too so client code (which must not
 // import internal/state) can derive workspace paths.

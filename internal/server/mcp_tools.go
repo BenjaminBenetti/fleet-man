@@ -1,0 +1,622 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os/exec"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/status"
+)
+
+// mcp_tools.go defines the fleet MCP tools: their typed inputs/outputs (the
+// jsonschema is inferred from the struct fields) and handlers. Each handler
+// reuses the in-process *service methods so MCP behaves identically to the gRPC
+// CLI path. A returned Go error becomes an MCP TOOL error (visible to the
+// model), not a transport error; a non-zero command exit is reported as data,
+// not an error.
+//
+// Names are flat and prefixed `fleet_` (the MCP spec restricts tool names to
+// [A-Za-z0-9_.-]). cwd-based fleet/instance inference — a host/client concept —
+// is dropped: tools take explicit fleet and instance arguments.
+
+// registerMCPTools wires every fleet tool onto srv.
+func registerMCPTools(srv *mcp.Server, s *service) {
+	// --- read ---
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_list",
+		Description: "List devcontainer instances across fleets. Optionally filter to one fleet.",
+	}, s.mcpList)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_status",
+		Description: "Summarize fleets and instance counts (running/stopped/other).",
+	}, s.mcpStatus)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_version",
+		Description: "Report the running fleet daemon version and liveness (pid, start time).",
+	}, s.mcpVersion)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_logs",
+		Description: "Return an instance's current container logs (non-following). Use tail to cap to the last N lines.",
+	}, s.mcpLogs)
+
+	// --- lifecycle ---
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_up",
+		Description: "Create (provision) a new instance in a fleet. Provide remote (git URL) when creating the first instance of a new fleet.",
+	}, s.mcpUp)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_start",
+		Description: "Start a previously stopped instance's container.",
+	}, s.mcpStart)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_stop",
+		Description: "Stop an instance's container, keeping the instance record.",
+	}, s.mcpStop)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_down",
+		Description: "Stop and remove a single instance: tears down its container, removes its workspace, and deletes the record.",
+	}, s.mcpDown)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_destroy_fleet",
+		Description: "Destroy an entire fleet: tears down every instance and removes the fleet record.",
+	}, s.mcpDestroyFleet)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_clone",
+		Description: "Clone an existing instance into a new one within the same fleet, preserving its container state.",
+	}, s.mcpClone)
+
+	// --- exec & sessions ---
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_exec",
+		Description: "Run a one-shot command inside a running instance and capture stdout, stderr, and exit code. Not for long-running or interactive commands.",
+	}, s.mcpExec)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_session_spawn",
+		Description: "Create a new detached tmux session inside a running instance.",
+	}, s.mcpSessionSpawn)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_session_exec",
+		Description: "Type a command into an existing tmux session (send-keys + Enter). Fire-and-forget; read the session afterwards to see output.",
+	}, s.mcpSessionExec)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_session_read",
+		Description: "Capture the current screen contents of a tmux session inside an instance.",
+	}, s.mcpSessionRead)
+}
+
+// --- shared shapes ---
+
+// mcpInstance is the JSON-friendly view of an instance returned by the read and
+// lifecycle tools. It surfaces the persisted record fields (no live git HEAD
+// lookup, which would shell out per instance); branch is the REQUESTED branch.
+type mcpInstance struct {
+	Fleet        string `json:"fleet"`
+	Instance     string `json:"instance"`
+	Status       string `json:"status"`
+	ContainerID  string `json:"container_id,omitempty"`
+	Backend      string `json:"backend,omitempty"`
+	Branch       string `json:"branch,omitempty"`
+	Tag          string `json:"tag,omitempty"`
+	WorkspaceDir string `json:"workspace_dir,omitempty"`
+	CreatedAt    string `json:"created_at,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+func toMCPInstance(fleetName string, inst *fleetgrpc.Instance) *mcpInstance {
+	if inst == nil {
+		return nil
+	}
+	m := &mcpInstance{
+		Fleet:        fleetName,
+		Instance:     inst.GetName(),
+		Status:       inst.GetStatus().Display(),
+		ContainerID:  inst.GetContainerId(),
+		Backend:      inst.GetBackend().Display(),
+		Branch:       inst.GetBranch(),
+		Tag:          inst.GetTag(),
+		WorkspaceDir: inst.GetWorkspaceDir(),
+		Error:        inst.GetError(),
+	}
+	if ts := inst.GetCreatedAt(); ts != nil {
+		m.CreatedAt = ts.AsTime().UTC().Format(time.RFC3339)
+	}
+	return m
+}
+
+// FleetJobOutput is the result of a lifecycle tool. Warnings are non-fatal
+// issues from an otherwise-successful job (e.g. a best-effort teardown step).
+type FleetJobOutput struct {
+	Success  bool         `json:"success"`
+	Instance *mcpInstance `json:"instance,omitempty"`
+	Warnings []string     `json:"warnings,omitempty"`
+}
+
+// jobResult turns a lifecycle outcome into a tool result: a failed job becomes a
+// tool error (any warnings folded into the message); a successful one returns
+// the final instance + warnings.
+func jobResult(fleetName string, final *fleetgrpc.Instance, warnings []string, err error) (*mcp.CallToolResult, FleetJobOutput, error) {
+	if err != nil {
+		if len(warnings) > 0 {
+			return nil, FleetJobOutput{}, fmt.Errorf("%w (warnings: %s)", mcpErr(err), strings.Join(warnings, "; "))
+		}
+		return nil, FleetJobOutput{}, mcpErr(err)
+	}
+	return nil, FleetJobOutput{Success: true, Instance: toMCPInstance(fleetName, final), Warnings: warnings}, nil
+}
+
+// FleetInstanceInput identifies one instance.
+type FleetInstanceInput struct {
+	Fleet    string `json:"fleet" jsonschema:"fleet name"`
+	Instance string `json:"instance" jsonschema:"instance name"`
+}
+
+// --- read tools ---
+
+type FleetListInput struct {
+	Fleet string `json:"fleet,omitempty" jsonschema:"optional fleet name to filter by; empty lists all fleets"`
+}
+
+type FleetListOutput struct {
+	Instances []mcpInstance `json:"instances"`
+}
+
+func (s *service) mcpList(ctx context.Context, _ *mcp.CallToolRequest, in FleetListInput) (*mcp.CallToolResult, FleetListOutput, error) {
+	reply, err := s.GetState(ctx, &fleetgrpc.GetStateRequest{})
+	if err != nil {
+		return nil, FleetListOutput{}, mcpErr(err)
+	}
+	out := FleetListOutput{Instances: []mcpInstance{}}
+	for _, name := range sortedFleetNames(reply.GetState()) {
+		if in.Fleet != "" && name != in.Fleet {
+			continue
+		}
+		f := reply.GetState().GetFleets()[name]
+		for _, inst := range f.GetInstances() {
+			out.Instances = append(out.Instances, *toMCPInstance(name, inst))
+		}
+	}
+	return nil, out, nil
+}
+
+type FleetStatusEntry struct {
+	Fleet   string `json:"fleet"`
+	Remote  string `json:"remote,omitempty"`
+	Total   int    `json:"total"`
+	Running int    `json:"running"`
+	Stopped int    `json:"stopped"`
+	Other   int    `json:"other"`
+}
+
+type FleetStatusOutput struct {
+	Fleets         []FleetStatusEntry `json:"fleets"`
+	TotalFleets    int                `json:"total_fleets"`
+	TotalInstances int                `json:"total_instances"`
+	Running        int                `json:"running"`
+	Stopped        int                `json:"stopped"`
+	Other          int                `json:"other"`
+}
+
+func (s *service) mcpStatus(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, FleetStatusOutput, error) {
+	reply, err := s.GetState(ctx, &fleetgrpc.GetStateRequest{})
+	if err != nil {
+		return nil, FleetStatusOutput{}, mcpErr(err)
+	}
+	out := FleetStatusOutput{Fleets: []FleetStatusEntry{}}
+	for _, name := range sortedFleetNames(reply.GetState()) {
+		f := reply.GetState().GetFleets()[name]
+		entry := FleetStatusEntry{Fleet: name, Remote: f.GetRemote()}
+		for _, inst := range f.GetInstances() {
+			entry.Total++
+			switch inst.GetStatus() {
+			case fleetgrpc.InstanceStatus_INSTANCE_STATUS_RUNNING:
+				entry.Running++
+			case fleetgrpc.InstanceStatus_INSTANCE_STATUS_STOPPED:
+				entry.Stopped++
+			default:
+				entry.Other++
+			}
+		}
+		out.Fleets = append(out.Fleets, entry)
+		out.TotalFleets++
+		out.TotalInstances += entry.Total
+		out.Running += entry.Running
+		out.Stopped += entry.Stopped
+		out.Other += entry.Other
+	}
+	return nil, out, nil
+}
+
+type FleetVersionOutput struct {
+	Version   string `json:"version"`
+	Pid       int64  `json:"pid"`
+	StartedAt string `json:"started_at,omitempty"`
+}
+
+func (s *service) mcpVersion(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, FleetVersionOutput, error) {
+	reply, err := s.Hello(ctx, &fleetgrpc.HelloRequest{})
+	if err != nil {
+		return nil, FleetVersionOutput{}, mcpErr(err)
+	}
+	out := FleetVersionOutput{Version: reply.GetServerVersion(), Pid: reply.GetPid()}
+	if ts := reply.GetStartedAt(); ts != nil {
+		out.StartedAt = ts.AsTime().UTC().Format(time.RFC3339)
+	}
+	return nil, out, nil
+}
+
+type FleetLogsInput struct {
+	Fleet    string `json:"fleet" jsonschema:"fleet name"`
+	Instance string `json:"instance" jsonschema:"instance name"`
+	Tail     int    `json:"tail,omitempty" jsonschema:"if > 0, return only the last N lines"`
+}
+
+type FleetLogsOutput struct {
+	Logs  string `json:"logs"`
+	Lines int    `json:"lines"`
+}
+
+func (s *service) mcpLogs(ctx context.Context, _ *mcp.CallToolRequest, in FleetLogsInput) (*mcp.CallToolResult, FleetLogsOutput, error) {
+	// follow=false: the backend logs command dumps existing logs then exits, so
+	// the collector sees EOF and Logs returns — a bounded, one-shot read.
+	c := &streamCollector[fleetgrpc.LogLine]{ctx: ctx}
+	if err := s.Logs(&fleetgrpc.LogsRequest{Fleet: in.Fleet, Instance: in.Instance, Follow: false}, c); err != nil {
+		return nil, FleetLogsOutput{}, mcpErr(err)
+	}
+	lines := make([]string, len(c.events))
+	for i, ll := range c.events {
+		lines[i] = ll.GetLine()
+	}
+	if in.Tail > 0 && len(lines) > in.Tail {
+		lines = lines[len(lines)-in.Tail:]
+	}
+	return nil, FleetLogsOutput{Logs: strings.Join(lines, "\n"), Lines: len(lines)}, nil
+}
+
+// --- lifecycle tools ---
+
+type FleetUpInput struct {
+	Fleet    string `json:"fleet" jsonschema:"fleet name"`
+	Instance string `json:"instance" jsonschema:"instance name"`
+	Remote   string `json:"remote,omitempty" jsonschema:"git remote URL; required only when creating the first instance of a new fleet"`
+	Branch   string `json:"branch,omitempty" jsonschema:"git branch to check out; defaults to the repository's default branch"`
+	Backend  string `json:"backend,omitempty" jsonschema:"backend type: devcontainer (default), coder, or codespaces"`
+}
+
+func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpInput) (*mcp.CallToolResult, FleetJobOutput, error) {
+	if in.Fleet == "" || in.Instance == "" {
+		return nil, FleetJobOutput{}, errors.New("fleet and instance are required")
+	}
+	backend := fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED
+	if in.Backend != "" {
+		bt, err := fleet.ParseBackendType(in.Backend)
+		if err != nil {
+			return nil, FleetJobOutput{}, err
+		}
+		backend = protoBackend(bt)
+	}
+	// Verbose is left false (unlike `fleet up`): MCP returns only the final
+	// JobDone result, never a live provisioning stream, so verbose output would
+	// just be discarded.
+	req := &fleetgrpc.CreateInstanceRequest{Fleet: in.Fleet, Instance: in.Instance, Backend: backend}
+	if in.Remote != "" {
+		req.Remote = &in.Remote
+	}
+	if in.Branch != "" {
+		req.Branch = &in.Branch
+	}
+	jctx, cancel := mergeCtx(s.bgCtx, ctx)
+	defer cancel()
+	final, warnings, err := runLifecycleJob(jctx, func(st grpc.ServerStreamingServer[fleetgrpc.JobEvent]) error {
+		return s.CreateInstance(req, st)
+	})
+	return jobResult(in.Fleet, final, warnings, err)
+}
+
+func (s *service) mcpStart(ctx context.Context, _ *mcp.CallToolRequest, in FleetInstanceInput) (*mcp.CallToolResult, FleetJobOutput, error) {
+	if in.Fleet == "" || in.Instance == "" {
+		return nil, FleetJobOutput{}, errors.New("fleet and instance are required")
+	}
+	jctx, cancel := mergeCtx(s.bgCtx, ctx)
+	defer cancel()
+	final, warnings, err := runLifecycleJob(jctx, func(st grpc.ServerStreamingServer[fleetgrpc.JobEvent]) error {
+		return s.StartInstance(&fleetgrpc.StartInstanceRequest{Fleet: in.Fleet, Instance: in.Instance}, st)
+	})
+	return jobResult(in.Fleet, final, warnings, err)
+}
+
+func (s *service) mcpStop(ctx context.Context, _ *mcp.CallToolRequest, in FleetInstanceInput) (*mcp.CallToolResult, FleetJobOutput, error) {
+	if in.Fleet == "" || in.Instance == "" {
+		return nil, FleetJobOutput{}, errors.New("fleet and instance are required")
+	}
+	jctx, cancel := mergeCtx(s.bgCtx, ctx)
+	defer cancel()
+	final, warnings, err := runLifecycleJob(jctx, func(st grpc.ServerStreamingServer[fleetgrpc.JobEvent]) error {
+		return s.StopInstance(&fleetgrpc.StopInstanceRequest{Fleet: in.Fleet, Instance: in.Instance}, st)
+	})
+	return jobResult(in.Fleet, final, warnings, err)
+}
+
+func (s *service) mcpDown(ctx context.Context, _ *mcp.CallToolRequest, in FleetInstanceInput) (*mcp.CallToolResult, FleetJobOutput, error) {
+	if in.Fleet == "" || in.Instance == "" {
+		return nil, FleetJobOutput{}, errors.New("fleet and instance are required")
+	}
+	instance := in.Instance
+	jctx, cancel := mergeCtx(s.bgCtx, ctx)
+	defer cancel()
+	final, warnings, err := runLifecycleJob(jctx, func(st grpc.ServerStreamingServer[fleetgrpc.JobEvent]) error {
+		return s.DestroyInstance(&fleetgrpc.DestroyInstanceRequest{Fleet: in.Fleet, Instance: &instance}, st)
+	})
+	return jobResult(in.Fleet, final, warnings, err)
+}
+
+type FleetNameInput struct {
+	Fleet string `json:"fleet" jsonschema:"fleet name"`
+}
+
+func (s *service) mcpDestroyFleet(ctx context.Context, _ *mcp.CallToolRequest, in FleetNameInput) (*mcp.CallToolResult, FleetJobOutput, error) {
+	if in.Fleet == "" {
+		return nil, FleetJobOutput{}, errors.New("fleet is required")
+	}
+	jctx, cancel := mergeCtx(s.bgCtx, ctx)
+	defer cancel()
+	final, warnings, err := runLifecycleJob(jctx, func(st grpc.ServerStreamingServer[fleetgrpc.JobEvent]) error {
+		return s.DestroyInstance(&fleetgrpc.DestroyInstanceRequest{Fleet: in.Fleet, DestroyFleet: true}, st)
+	})
+	return jobResult(in.Fleet, final, warnings, err)
+}
+
+type FleetCloneInput struct {
+	Fleet       string `json:"fleet" jsonschema:"fleet name"`
+	Source      string `json:"source" jsonschema:"name of the existing instance to clone"`
+	Destination string `json:"destination" jsonschema:"name for the new cloned instance"`
+	DisplayName string `json:"display_name,omitempty" jsonschema:"optional display name for the clone"`
+	Tag         string `json:"tag,omitempty" jsonschema:"optional tag override for the clone"`
+	Color       string `json:"color,omitempty" jsonschema:"optional color override for the clone"`
+	Branch      string `json:"branch,omitempty" jsonschema:"optional branch override for the clone"`
+}
+
+func (s *service) mcpClone(ctx context.Context, _ *mcp.CallToolRequest, in FleetCloneInput) (*mcp.CallToolResult, FleetJobOutput, error) {
+	if in.Fleet == "" || in.Source == "" || in.Destination == "" {
+		return nil, FleetJobOutput{}, errors.New("fleet, source and destination are required")
+	}
+	req := &fleetgrpc.CloneInstanceRequest{Fleet: in.Fleet, SourceInstance: in.Source, NewInstance: in.Destination}
+	if in.DisplayName != "" {
+		req.NewDisplayName = &in.DisplayName
+	}
+	if in.Tag != "" {
+		req.TagOverride = &in.Tag
+	}
+	if in.Color != "" {
+		req.ColorOverride = &in.Color
+	}
+	if in.Branch != "" {
+		req.BranchOverride = &in.Branch
+	}
+	jctx, cancel := mergeCtx(s.bgCtx, ctx)
+	defer cancel()
+	final, warnings, err := runLifecycleJob(jctx, func(st grpc.ServerStreamingServer[fleetgrpc.JobEvent]) error {
+		return s.CloneInstance(req, st)
+	})
+	return jobResult(in.Fleet, final, warnings, err)
+}
+
+// --- exec & session tools ---
+
+type FleetExecInput struct {
+	Fleet    string   `json:"fleet" jsonschema:"fleet name"`
+	Instance string   `json:"instance" jsonschema:"instance name"`
+	Command  []string `json:"command" jsonschema:"command argv to run (not a shell string); e.g. [\"ls\", \"-la\"]"`
+}
+
+type FleetExecOutput struct {
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exit_code"`
+}
+
+func (s *service) mcpExec(ctx context.Context, _ *mcp.CallToolRequest, in FleetExecInput) (*mcp.CallToolResult, FleetExecOutput, error) {
+	if len(in.Command) == 0 {
+		return nil, FleetExecOutput{}, errors.New("command is required")
+	}
+	inst, err := s.runningInstance(in.Fleet, in.Instance)
+	if err != nil {
+		return nil, FleetExecOutput{}, err
+	}
+	// Kill the command if the daemon shuts down or the MCP session closes, so a
+	// hung command can't pin the request (and thus daemon teardown).
+	cctx, cancel := mergeCtx(s.bgCtx, ctx)
+	defer cancel()
+	var outBuf, errBuf bytes.Buffer
+	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir, in.Command).Cmd
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	runErr := runCmd(cctx, cmd)
+	exitCode := 0
+	if runErr != nil {
+		// A non-zero exit is reported as data, not a tool error; only a genuine
+		// failure to launch the command is an error.
+		var ee *exec.ExitError
+		if errors.As(runErr, &ee) {
+			exitCode = ee.ExitCode()
+		} else {
+			return nil, FleetExecOutput{}, fmt.Errorf("exec: %w", runErr)
+		}
+	}
+	return nil, FleetExecOutput{Stdout: outBuf.String(), Stderr: errBuf.String(), ExitCode: exitCode}, nil
+}
+
+type FleetSessionSpawnInput struct {
+	Fleet    string `json:"fleet" jsonschema:"fleet name"`
+	Instance string `json:"instance" jsonschema:"instance name"`
+	Session  string `json:"session" jsonschema:"name for the new tmux session"`
+}
+
+type FleetSessionMessageOutput struct {
+	Message string `json:"message"`
+}
+
+func (s *service) mcpSessionSpawn(ctx context.Context, _ *mcp.CallToolRequest, in FleetSessionSpawnInput) (*mcp.CallToolResult, FleetSessionMessageOutput, error) {
+	if in.Session == "" {
+		return nil, FleetSessionMessageOutput{}, errors.New("session is required")
+	}
+	inst, err := s.runningInstance(in.Fleet, in.Instance)
+	if err != nil {
+		return nil, FleetSessionMessageOutput{}, err
+	}
+	cctx, cancel := mergeCtx(s.bgCtx, ctx)
+	defer cancel()
+	snippet := dotfiles.TmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s`, dotfiles.ShQuote(in.Session))
+	if out, err := runContainerShell(cctx, inst, snippet); err != nil {
+		return nil, FleetSessionMessageOutput{}, fmt.Errorf("spawn session %q: %w: %s", in.Session, err, strings.TrimSpace(out))
+	}
+	return nil, FleetSessionMessageOutput{Message: fmt.Sprintf("created tmux session %q in %s/%s", in.Session, in.Fleet, in.Instance)}, nil
+}
+
+type FleetSessionExecInput struct {
+	Fleet    string `json:"fleet" jsonschema:"fleet name"`
+	Instance string `json:"instance" jsonschema:"instance name"`
+	Session  string `json:"session" jsonschema:"name of the existing tmux session"`
+	Command  string `json:"command" jsonschema:"command to type into the session's shell"`
+}
+
+func (s *service) mcpSessionExec(ctx context.Context, _ *mcp.CallToolRequest, in FleetSessionExecInput) (*mcp.CallToolResult, FleetSessionMessageOutput, error) {
+	if in.Session == "" || in.Command == "" {
+		return nil, FleetSessionMessageOutput{}, errors.New("session and command are required")
+	}
+	inst, err := s.runningInstance(in.Fleet, in.Instance)
+	if err != nil {
+		return nil, FleetSessionMessageOutput{}, err
+	}
+	cctx, cancel := mergeCtx(s.bgCtx, ctx)
+	defer cancel()
+	snippet := fmt.Sprintf(`tmux send-keys -t %s %s Enter`, dotfiles.ShQuote(in.Session), dotfiles.ShQuote(in.Command))
+	if out, err := runContainerShell(cctx, inst, snippet); err != nil {
+		return nil, FleetSessionMessageOutput{}, fmt.Errorf("exec in session %q: %w: %s", in.Session, err, strings.TrimSpace(out))
+	}
+	return nil, FleetSessionMessageOutput{Message: fmt.Sprintf("sent command to session %q; read the session to see output", in.Session)}, nil
+}
+
+type FleetSessionReadInput struct {
+	Fleet      string `json:"fleet" jsonschema:"fleet name"`
+	Instance   string `json:"instance" jsonschema:"instance name"`
+	Session    string `json:"session" jsonschema:"name of the tmux session to read"`
+	Scrollback int    `json:"scrollback,omitempty" jsonschema:"scrollback lines: 0 for the visible pane only, positive N for the last N history lines, negative for full history"`
+}
+
+type FleetSessionReadOutput struct {
+	Content string `json:"content"`
+}
+
+func (s *service) mcpSessionRead(ctx context.Context, _ *mcp.CallToolRequest, in FleetSessionReadInput) (*mcp.CallToolResult, FleetSessionReadOutput, error) {
+	if in.Session == "" {
+		return nil, FleetSessionReadOutput{}, errors.New("session is required")
+	}
+	inst, err := s.runningInstance(in.Fleet, in.Instance)
+	if err != nil {
+		return nil, FleetSessionReadOutput{}, err
+	}
+	cctx, cancel := mergeCtx(s.bgCtx, ctx)
+	defer cancel()
+	// Translate scrollback into tmux's -S start-line: negative => full history
+	// (-S -), positive => last N lines (-S -N), zero => visible pane only.
+	startFlag := ""
+	switch {
+	case in.Scrollback < 0:
+		startFlag = "-S - "
+	case in.Scrollback > 0:
+		startFlag = fmt.Sprintf("-S -%d ", in.Scrollback)
+	}
+	snippet := fmt.Sprintf(`tmux capture-pane -p %s-t %s`, startFlag, dotfiles.ShQuote(in.Session))
+	out, err := runContainerShell(cctx, inst, snippet)
+	if err != nil {
+		return nil, FleetSessionReadOutput{}, fmt.Errorf("read session %q: %w: %s", in.Session, err, strings.TrimSpace(out))
+	}
+	return nil, FleetSessionReadOutput{Content: out}, nil
+}
+
+// --- helpers ---
+
+// runningInstance resolves an instance and requires it to be running, returning
+// a clear tool error otherwise (exec and session ops need a live container).
+func (s *service) runningInstance(fleetName, instanceName string) (*fleet.Instance, error) {
+	inst, err := resolveServerInstance(fleetName, instanceName)
+	if err != nil {
+		return nil, mcpErr(err)
+	}
+	if inst.Status != fleet.StatusRunning {
+		return nil, fmt.Errorf("instance %s/%s is not running (status: %s)", fleetName, instanceName, inst.Status)
+	}
+	return inst, nil
+}
+
+// runContainerShell runs `sh -c <snippet>` inside the instance's container and
+// returns the combined output. Session callers shell-quote untrusted names via
+// dotfiles.ShQuote before building the snippet. The command is killed if ctx is
+// cancelled (daemon shutdown / session close).
+func runContainerShell(ctx context.Context, inst *fleet.Instance, snippet string) (string, error) {
+	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir, []string{"sh", "-c", snippet}).Cmd
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	err := runCmd(ctx, cmd)
+	return buf.String(), err
+}
+
+// runCmd runs cmd, killing its process if ctx is cancelled (daemon shutdown /
+// session close). The kill watcher is started AFTER Start sets cmd.Process, and
+// an already-cancelled ctx is rejected before Start, so a cancellation can never
+// race a process into existence unkilled (the bounded-teardown contract). The
+// caller sets cmd.Stdout/Stderr before calling.
+func runCmd(ctx context.Context, cmd *exec.Cmd) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = cmd.Process.Kill()
+		case <-done:
+		}
+	}()
+	return cmd.Wait()
+}
+
+// mcpErr strips the gRPC status wrapper ("rpc error: code = ... desc = ...")
+// from an in-process service error so the message an MCP client (and the model
+// reading it) sees is clean. Non-status errors pass through unchanged.
+func mcpErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if st, ok := status.FromError(err); ok {
+		return errors.New(st.Message())
+	}
+	return err
+}
+
+// sortedFleetNames returns the fleet names in deterministic order (map iteration
+// is random; the CLI doesn't sort, but a programmatic API should be stable).
+func sortedFleetNames(st *fleetgrpc.State) []string {
+	names := make([]string, 0, len(st.GetFleets()))
+	for name := range st.GetFleets() {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}

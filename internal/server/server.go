@@ -98,10 +98,33 @@ func Serve(ctx context.Context) error {
 	grpcServer := grpc.NewServer()
 	fleetgrpc.RegisterFleetServiceServer(grpcServer, svc)
 
+	// MCP HTTP server: a second listener exposing the non-interactive CLI subset
+	// as MCP tools (see mcp.go). Auxiliary to gRPC — startMCPServer returns
+	// (nil, 0) if it can't bind, in which case the daemon runs without MCP. The
+	// deferred Shutdown drains it and removes the port file on every return path,
+	// mirroring the version-file handling below.
+	mcpHTTP, mcpPort := startMCPServer(svc)
+	if mcpHTTP != nil {
+		defer func() {
+			// Bounded drain: an MCP tool wedged on a stuck backend (e.g. a hung
+			// docker exec) must not pin daemon teardown. Give in-flight requests a
+			// few seconds, then force-close so Serve always returns. Tool handlers
+			// also watch hubCtx (cancelled above), so they normally unblock first.
+			sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := mcpHTTP.Shutdown(sctx); err != nil {
+				_ = mcpHTTP.Close()
+			}
+			// Remove only the liveness hint. The token and env snippet persist
+			// across restarts so configured MCP clients (mcp.json) keep working.
+			_ = os.Remove(fleetpaths.McpPortPath())
+		}()
+	}
+
 	writeVersionFile()
 	defer func() { _ = os.Remove(fleetpaths.VersionFilePath()) }()
 
-	flog.Info("fleet server started", "pid", os.Getpid(), "socket", sock, "version", versionOrDev())
+	flog.Info("fleet server started", "pid", os.Getpid(), "socket", sock, "version", versionOrDev(), "mcpPort", mcpPort)
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- grpcServer.Serve(lis) }()

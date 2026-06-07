@@ -77,6 +77,54 @@ fleet up my-project/agent-3
 | `r` | Refresh |
 | `q` | Quit |
 
+## MCP Server
+
+The fleet daemon also runs an [MCP](https://modelcontextprotocol.io) server over
+Streamable HTTP, so AI agents (and any MCP client) can drive fleet
+programmatically. It starts automatically with the daemon — no extra command.
+
+- It binds `127.0.0.1:6012`, or the next free port if 6012 is taken.
+- The active port is written to `~/.fleet/mcp.port`, so clients can discover the
+  endpoint. The URL is `http://127.0.0.1:<port>`.
+- Requests must carry `Authorization: Bearer <token>`, where the token is read
+  from `~/.fleet/mcp.token`. The loopback port is reachable by any local user,
+  so the token (file mode `0600`, same-user only) is the access boundary —
+  matching the daemon's unix socket. The token is generated once and reused
+  across restarts.
+
+For convenience the server also writes `~/.fleet/mcp.env` (mode `0600`) with the
+endpoint as shell exports, and wires `~/.bashrc` to source it, so new shells get:
+
+```bash
+FLEET_MCP_PORT=6012
+FLEET_MCP_URL=http://127.0.0.1:6012
+FLEET_MCP_TOKEN=<token>
+```
+
+An MCP client config (`mcp.json`) can then reference them directly:
+
+```json
+{
+  "mcpServers": {
+    "fleet": {
+      "type": "http",
+      "url": "${FLEET_MCP_URL}",
+      "headers": { "Authorization": "Bearer ${FLEET_MCP_TOKEN}" }
+    }
+  }
+}
+```
+
+(zsh users: add `[ -f "$HOME/.fleet/mcp.env" ] && . "$HOME/.fleet/mcp.env"` to
+`~/.zshrc`.)
+
+Tools mirror the non-interactive CLI: `fleet_list`, `fleet_status`,
+`fleet_version`, `fleet_logs`, `fleet_up`, `fleet_start`, `fleet_stop`,
+`fleet_down`, `fleet_destroy_fleet`, `fleet_clone`, `fleet_exec`, and the tmux
+session tools `fleet_session_spawn` / `fleet_session_exec` / `fleet_session_read`.
+Interactive, open-ended commands (`fleet shell`, log following) are intentionally
+not exposed.
+
 ## Requirements
 
 - Linux, including Ubuntu on WSL2
