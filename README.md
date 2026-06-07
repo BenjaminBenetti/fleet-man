@@ -121,7 +121,8 @@ An MCP client config (`mcp.json`) can then reference them directly:
 Tools mirror the non-interactive CLI: `fleet_list`, `fleet_status`,
 `fleet_version`, `fleet_logs`, `fleet_up`, `fleet_start`, `fleet_stop`,
 `fleet_down`, `fleet_destroy_fleet`, `fleet_clone`, `fleet_exec`, and the tmux
-session tools `fleet_session_spawn` / `fleet_session_exec` / `fleet_session_read`.
+session tools `fleet_session_spawn` / `fleet_session_exec` / `fleet_session_read` /
+`fleet_session_list`.
 Interactive, open-ended commands (`fleet shell`, log following) are intentionally
 not exposed.
 

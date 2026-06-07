@@ -85,7 +85,10 @@ func parseTmuxSessionsProto(output string) []*fleetgrpc.TmuxSession {
 			s.Windows = int32(w)
 		}
 		if len(parts) >= 3 {
-			s.Attached = parts[2] == "1"
+			// session_attached is the client count, not a 0/1 flag; any positive
+			// count means a client is attached.
+			a, _ := strconv.Atoi(parts[2])
+			s.Attached = a > 0
 		}
 		sessions = append(sessions, s)
 	}
