@@ -53,9 +53,13 @@ func ConfigureInstanceDocker(b instanceExecer, workspaceDir, mirrorURL, hostPort
 // must be reachable (writable, absent-but-creatable, or via passwordless sudo).
 // docker-outside-of-docker (host socket, no local dockerd) and no-docker images
 // yield ABSENT. Always exits 0 and prints exactly one marker.
+//
+// dockerd is detected by scanning /proc/<pid>/comm rather than `pgrep` so the
+// probe works on minimal images that lack procps (/proc/<pid>/comm is
+// world-readable, so this works as a non-root user too).
 func probeScript() string {
 	return fmt.Sprintf(
-		`if command -v pgrep >/dev/null 2>&1 && pgrep -x dockerd >/dev/null 2>&1 && { [ -w /etc/docker ] || [ ! -e /etc/docker ] || { command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; }; }; then echo %s; else echo %s; fi`,
+		`d=0; for c in /proc/[0-9]*/comm; do [ -r "$c" ] && IFS= read -r n < "$c" && [ "$n" = dockerd ] && { d=1; break; }; done; if [ "$d" = 1 ] && { [ -w /etc/docker ] || [ ! -e /etc/docker ] || { command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; }; }; then echo %s; else echo %s; fi`,
 		probeMarkerPresent, probeMarkerAbsent,
 	)
 }
@@ -123,8 +127,15 @@ elif [ ! -s "$DAEMON" ]; then
 else
   exit 0
 fi
-PID=$(pgrep -x dockerd | head -n1)
-if [ -n "$PID" ]; then $SUDO kill -HUP "$PID" || true; fi
+# Reload dockerd so it picks up registry-mirrors + insecure-registries (both are
+# SIGHUP-reloadable, so no container-killing restart). Find the pid via /proc so
+# this works without procps/pgrep.
+for d in /proc/[0-9]*; do
+  if [ -r "$d/comm" ] && IFS= read -r n < "$d/comm" && [ "$n" = dockerd ]; then
+    $SUDO kill -HUP "${d##*/}" 2>/dev/null || true
+    break
+  fi
+done
 `
 	return fmt.Sprintf(tmpl, mirrorURL, hostPort)
 }

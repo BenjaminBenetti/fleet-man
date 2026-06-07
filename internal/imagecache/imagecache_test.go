@@ -192,7 +192,9 @@ func (f *fakeExecer) ExecCommand(workspaceDir string, command []string) *backend
 	joined := strings.Join(command, " ")
 	f.calls = append(f.calls, joined)
 	out := ""
-	if strings.Contains(joined, "pgrep -x dockerd") {
+	// The probe script is the one that prints the PRESENT/ABSENT markers; the
+	// configure script never does, so this distinguishes the two.
+	if strings.Contains(joined, probeMarkerPresent) {
 		out = f.probeOut
 	}
 	return backend.NewCmd(exec.Command("printf", "%s", out), nil)
@@ -209,7 +211,7 @@ func TestDockerdPresent(t *testing.T) {
 
 func TestProbeAndConfigureScripts(t *testing.T) {
 	probe := probeScript()
-	for _, want := range []string{"pgrep -x dockerd", "/etc/docker", probeMarkerPresent, probeMarkerAbsent} {
+	for _, want := range []string{"/proc/[0-9]*/comm", `[ "$n" = dockerd ]`, "/etc/docker", probeMarkerPresent, probeMarkerAbsent} {
 		if !strings.Contains(probe, want) {
 			t.Errorf("probeScript missing %q: %s", want, probe)
 		}
