@@ -58,6 +58,10 @@ const (
 	// connections are shed (closed) rather than each spawning a goroutine that
 	// lingers for the handshake timeout.
 	maxPendingHandshakes = 256
+	// reservationGrace bounds how long a claimed-but-never-bound session slot may
+	// linger before the reaper frees it. Longer than controlHandshakeTimeout so an
+	// in-progress handshake is never reaped; a backstop to explicit release.
+	reservationGrace = 2 * controlHandshakeTimeout
 	// shutdownTimeout bounds the public server drain on shutdown.
 	shutdownTimeout = 5 * time.Second
 )

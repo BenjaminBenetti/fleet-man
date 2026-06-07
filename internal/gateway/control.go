@@ -54,7 +54,7 @@ func (s *Server) handleControl(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	sess, reply, err := s.reg.claim(req)
+	sess, reply, isNew, err := s.reg.claim(req)
 	if err != nil {
 		// Best-effort tell the client why, then drop.
 		_ = tunnel.WriteFrame(conn, tunnel.RegisterReply{Error: err.Error()})
@@ -62,7 +62,12 @@ func (s *Server) handleControl(ctx context.Context, conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
+	// On any failure before bind, free a freshly-reserved slot so it doesn't count
+	// against the cap (a no-op for a reclaimed, already-bound session).
 	if err := tunnel.WriteFrame(conn, reply); err != nil {
+		if isNew {
+			s.reg.release(sess)
+		}
 		s.log.Warn("gateway: write register reply", "remote", remote, "err", err)
 		_ = conn.Close()
 		return
@@ -72,6 +77,9 @@ func (s *Server) handleControl(ctx context.Context, conn net.Conn) {
 
 	ym, err := tunnel.ServerSession(conn, s.yamuxLog())
 	if err != nil {
+		if isNew {
+			s.reg.release(sess)
+		}
 		s.log.Warn("gateway: yamux server", "remote", remote, "err", err)
 		_ = conn.Close()
 		return

@@ -27,8 +27,12 @@ type session struct {
 	publicID  string
 	publicURL string
 
+	// createdAt is when the session slot was reserved (at claim). Used by the
+	// reaper to evict a reservation whose handshake never completed (never bound).
+	createdAt time.Time
+
 	mu sync.Mutex
-	ym *yamux.Session // current live tunnel; replaced on reconnect (older one closed)
+	ym *yamux.Session // current live tunnel; nil until bind; replaced on reconnect
 	// closedAt is when the current tunnel was first observed closed (zero while
 	// live). The session — and its public URL — is RESERVED for a grace TTL after
 	// this, so a fleetd that drops and reconnects (with its secret) recovers the
@@ -53,15 +57,18 @@ func (s *session) currentYamux() *yamux.Session {
 	return s.ym
 }
 
-// reapable reports whether the session should be evicted: its tunnel is closed
-// AND has stayed closed past ttl. It lazily stamps closedAt on the first
-// observation of a closed tunnel, so the grace clock starts even if nothing else
-// noticed the disconnect.
+// reapable reports whether the session should be evicted. A bound session is
+// reaped once its tunnel has stayed closed past ttl (lazily stamping closedAt on
+// first observation, so the grace clock starts even if nothing else noticed the
+// disconnect). An UNBOUND reservation — claimed but whose handshake never reached
+// bind — is reaped once it is older than reservationGrace; this is only a backstop
+// (handshake failures release their reservation explicitly), but it guarantees a
+// slot can never be reserved forever.
 func (s *session) reapable(now time.Time, ttl time.Duration) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ym == nil {
-		return true // never bound (defensive; bound sessions always have a tunnel)
+		return now.Sub(s.createdAt) > reservationGrace
 	}
 	if !s.ym.IsClosed() {
 		return false
