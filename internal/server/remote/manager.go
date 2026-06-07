@@ -60,13 +60,24 @@ type Manager struct {
 	wake          chan struct{}      // size-1 nudge: Reconcile wakes the loop
 }
 
+// Option customizes a Manager. The production daemon uses none; the transport
+// seam (WithDialFunc) exists for tests and for future custom transports.
+type Option func(*Manager)
+
+// WithDialFunc overrides how the Manager opens the control connection to the
+// gateway (the default is a TLS dial verified against the system roots). Used by
+// integration tests to reach an in-process gateway with a test CA.
+func WithDialFunc(dial func(ctx context.Context, gatewayURL string) (net.Conn, error)) Option {
+	return func(m *Manager) { m.dial = dial }
+}
+
 // NewManager builds a Manager that reverse-proxies to the loopback MCP server on
 // mcpPort and reports status via publish (which must be safe to call from the
 // manager's goroutine — typically a hub.post). A zero mcpPort means the local
 // MCP server is not running, in which case the manager reports an error while
 // enabled rather than connecting.
-func NewManager(mcpPort int, clientVersion string, publish func(*fleetgrpc.RemoteMcpStatus)) *Manager {
-	return &Manager{
+func NewManager(mcpPort int, clientVersion string, publish func(*fleetgrpc.RemoteMcpStatus), opts ...Option) *Manager {
+	m := &Manager{
 		mcpPort:       mcpPort,
 		clientVersion: clientVersion,
 		publish:       publish,
@@ -74,6 +85,10 @@ func NewManager(mcpPort int, clientVersion string, publish func(*fleetgrpc.Remot
 		dial:          dialTLS,
 		wake:          make(chan struct{}, 1),
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // Reconcile records the desired config and nudges the supervisor. It is

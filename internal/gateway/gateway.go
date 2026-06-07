@@ -136,13 +136,16 @@ func (s *Server) Run(ctx context.Context) error {
 		_ = controlLn.Close()
 		return fmt.Errorf("gateway: listen public %s: %w", s.cfg.PublicAddr, err)
 	}
-	return s.serve(ctx, controlLn, publicLn)
+	return s.ServeListeners(ctx, controlLn, publicLn)
 }
 
-// serve runs the accept loops, reaper, and public HTTP server over already-bound
-// listeners until ctx is cancelled or the public server fails. Split from Run so
-// tests can supply ephemeral listeners.
-func (s *Server) serve(ctx context.Context, controlLn, publicLn net.Listener) error {
+// ServeListeners runs the accept loops, reaper, and public HTTP server over
+// already-bound listeners until ctx is cancelled or the public server fails. Run
+// is the usual entrypoint (it binds from Config); this is exposed for embedding
+// the gateway on caller-supplied listeners (e.g. socket activation) and for
+// integration tests that need ephemeral ports. The listeners must already carry
+// TLS (Run wraps them with the configured cert).
+func (s *Server) ServeListeners(ctx context.Context, controlLn, publicLn net.Listener) error {
 	defer controlLn.Close()
 
 	publicSrv := &http.Server{

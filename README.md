@@ -126,6 +126,84 @@ session tools `fleet_session_spawn` / `fleet_session_exec` / `fleet_session_read
 Interactive, open-ended commands (`fleet shell`, log following) are intentionally
 not exposed.
 
+## Remote MCP
+
+By default the MCP server is loopback-only. To let a **remote** agent drive your
+fleet, you can expose it through a **fleet gateway** — a small public relay you
+(or someone) runs. Your daemon dials *out* to the gateway (so it works behind
+NAT/firewalls) and the gateway routes inbound MCP requests back down that tunnel:
+
+```
+agent ──HTTPS──▶ fleet gateway ──reverse tunnel──▶ your fleetd ──▶ local MCP server
+```
+
+### Enable it (in the TUI)
+
+In **Settings → Fleet Remote (MCP)**:
+
+1. Set **Gateway URL** to the gateway's **control** endpoint, e.g.
+   `https://gateway.example.com:8443` (this is where the daemon dials out — the
+   gateway's `--control-addr`, default port `8443`; it is *not* the public
+   address agents use).
+2. Flip **Enabled** on.
+
+Once connected, the read-only **Public MCP URL** appears (e.g.
+`https://gateway.example.com/mcp/<id>`) — that is the address external tools use.
+The line shows the live connection state (connecting / connected / error).
+
+### Use it from a remote agent
+
+Point the remote MCP client at the Public MCP URL, with the **same bearer token**
+your daemon uses (from `~/.fleet/mcp.token`):
+
+```json
+{
+  "mcpServers": {
+    "fleet-remote": {
+      "type": "http",
+      "url": "https://gateway.example.com/mcp/<id>",
+      "headers": { "Authorization": "Bearer <token from ~/.fleet/mcp.token>" }
+    }
+  }
+}
+```
+
+### Running a gateway
+
+The gateway is the same binary: `fleet gateway`. It needs a **publicly-trusted**
+TLS certificate (e.g. from Let's Encrypt) so daemons can verify it against the
+system roots.
+
+```bash
+fleet gateway \
+  --public-url https://gateway.example.com \
+  --tls-cert /etc/fleet/tls/fullchain.pem \
+  --tls-key  /etc/fleet/tls/privkey.pem
+```
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--public-url` | (required) | External base URL agents use; session URLs are `<public-url>/mcp/<id>` |
+| `--tls-cert` / `--tls-key` | (required) | TLS certificate + key (PEM) |
+| `--public-addr` | `:443` | Address agents connect to (HTTPS) |
+| `--control-addr` | `:8443` | Address daemons dial in on (TLS) — this is what **Gateway URL** points at |
+| `--max-sessions` | `1024` | Cap on concurrent tunnels |
+
+Both ports must be reachable; expose `--public-addr` to agents and `--control-addr`
+to your daemons. A `GET /healthz` on the public listener returns `ok`.
+
+### Security model
+
+- **No gateway authentication.** Anyone can open a tunnel; the gateway just routes
+  bytes. Isolation comes from the **unguessable 256-bit id** in the public URL.
+- **The bearer token is the real access boundary.** The gateway forwards the
+  `Authorization` header untouched to your loopback MCP server, whose existing
+  token check gates every request. Treat the Public MCP URL as a capability, but
+  **the token is the secret** — share both only with agents you trust.
+- The id in the URL is *not* the reconnect credential: the daemon holds a separate
+  secret (never placed in the URL), so a URL holder cannot hijack your tunnel.
+- All gateway traffic is TLS; the daemon verifies the gateway's certificate.
+
 ## Requirements
 
 - Linux, including Ubuntu on WSL2

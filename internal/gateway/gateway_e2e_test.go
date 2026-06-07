@@ -82,7 +82,7 @@ func startTestGateway(t *testing.T, cert tls.Certificate, publicBase string) (*S
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = s.serve(ctx, controlLn, publicLn) }()
+	go func() { _ = s.ServeListeners(ctx, controlLn, publicLn) }()
 	return s, controlLn.Addr().String(), publicLn.Addr().String()
 }
 

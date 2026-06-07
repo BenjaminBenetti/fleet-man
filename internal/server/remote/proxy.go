@@ -31,14 +31,19 @@ func serveProxy(session *yamux.Session, mcpPort int) error {
 	// FlushInterval -1 flushes each write immediately, which SSE (text/event-stream)
 	// requires — otherwise events buffer and the stream stalls.
 	rp.FlushInterval = -1
-	// Present the loopback target as the Host so the local MCP server sees a
-	// same-origin request rather than the gateway's public host. The Authorization
-	// header is deliberately left untouched so the MCP bearer token reaches the
-	// loopback server's auth middleware — that token stays the real access gate.
+	// Set the Host to the loopback MCP target. This is REQUIRED, not cosmetic: the
+	// MCP SDK enables DNS-rebinding protection by default and returns 403 when the
+	// server is bound to loopback but the request's Host is not loopback — and an
+	// EMPTY Host counts as non-loopback (util.IsLoopback("")==false). A tunneled
+	// request would otherwise arrive with no meaningful Host and be rejected.
+	// Using the loopback target satisfies the check while still rejecting a
+	// genuinely foreign Host. The Authorization header is left untouched so the
+	// MCP bearer token reaches the loopback server's auth — that stays the real
+	// access gate.
 	orig := rp.Director
 	rp.Director = func(req *http.Request) {
 		orig(req)
-		req.Host = ""
+		req.Host = target.Host
 	}
 	// Peer resets / closed streams are normal tunnel churn, not server faults;
 	// discard the proxy's per-request error spam.
