@@ -80,6 +80,28 @@ message DeleteBuildkitCacheRequest {
 // DeleteBuildkitCacheReply is empty: success is signalled by a nil error.
 message DeleteBuildkitCacheReply {}
 
+// DeleteDebCacheRequest asks the server to wipe a fleet's shared deb (apt)
+// cache: remove the apt-cacher-ng container, clear the CONTENTS of
+// ~/.fleet/workspaces/<fleet>/.aptcache while keeping the directory, then
+// restart the server empty. Synchronous (a few seconds), like DeleteBuildkitCache.
+message DeleteDebCacheRequest {
+  string fleet = 1;
+}
+
+// DeleteDebCacheReply is empty: success is signalled by a nil error.
+message DeleteDebCacheReply {}
+
+// DeleteImageCacheRequest asks the server to wipe a fleet's shared docker image
+// (registry pull-through) cache: remove the registry container, clear the
+// CONTENTS of ~/.fleet/workspaces/<fleet>/.imgcache while keeping the directory,
+// then restart the server empty. Synchronous, like DeleteBuildkitCache.
+message DeleteImageCacheRequest {
+  string fleet = 1;
+}
+
+// DeleteImageCacheReply is empty: success is signalled by a nil error.
+message DeleteImageCacheReply {}
+
 message GetStateRequest {}
 
 // GetStateReply is the one-stop snapshot of EVERYTHING the TUI renders:

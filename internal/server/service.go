@@ -108,6 +108,8 @@ func (s *service) onTUIConnected() {
 		go func() {
 			defer close(done)
 			ensureConfiguredBuildkitServers(ctx)
+			ensureConfiguredDebCacheServers(ctx)
+			ensureConfiguredImageCacheServers(ctx)
 		}()
 		select {
 		case <-done:

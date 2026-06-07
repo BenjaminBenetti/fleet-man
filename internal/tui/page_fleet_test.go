@@ -735,7 +735,7 @@ func TestEditFleetDeleteCacheButtonHiddenWhenOff(t *testing.T) {
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 	navigateToBuildkitRow(t, fp, m) // buildkit is OFF
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	if fp.dialogBuildkitButtonFocused {
+	if fp.dialogCacheButtonFocused {
 		t.Fatal("l must not focus the delete-cache button when Buildkit is off")
 	}
 }
@@ -764,20 +764,20 @@ func TestEditFleetDeleteCacheButtonFlow(t *testing.T) {
 	}
 
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // focus button
-	if !fp.dialogBuildkitButtonFocused {
+	if !fp.dialogCacheButtonFocused {
 		t.Fatal("l should focus the delete-cache button")
 	}
 
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // arm inline confirm
-	if !fp.dialogDeleteCacheConfirm || fp.dialogDeletingCache {
-		t.Fatalf("first enter should only arm confirm; confirm=%v deleting=%v", fp.dialogDeleteCacheConfirm, fp.dialogDeletingCache)
+	if !fp.dialogDeleteCacheConfirm || fp.dialogDeleting {
+		t.Fatalf("first enter should only arm confirm; confirm=%v deleting=%v", fp.dialogDeleteCacheConfirm, fp.dialogDeleting)
 	}
 
 	cmd := fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // confirm → wipe
 	if fp.dialogDeleteCacheConfirm {
 		t.Fatal("confirm should clear once the wipe starts")
 	}
-	if !fp.dialogDeletingCache {
+	if !fp.dialogDeleting {
 		t.Fatal("deletingCache should be set while the wipe runs")
 	}
 	if cmd == nil {
@@ -791,7 +791,7 @@ func TestEditFleetDeleteCacheButtonFlow(t *testing.T) {
 		t.Fatalf("delete RPC called for %q, want alpha", deleted)
 	}
 	fp.handleDeleteCacheDone(m, done)
-	if fp.dialogDeletingCache {
+	if fp.dialogDeleting {
 		t.Fatal("deletingCache should clear after the wipe completes")
 	}
 }
@@ -802,12 +802,12 @@ func TestEditFleetDeleteCacheError(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	fp := newFleetPage()
 	fp.dialogFleet = "alpha"
-	fp.dialogDeletingCache = true
+	fp.dialogDeleting = true
 	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha"}}}, fleetPage: fp}
 
 	fp.handleDeleteCacheDone(m, deleteCacheDoneMsg{fleet: "alpha", err: errors.New("docker daemon unavailable")})
 
-	if fp.dialogDeletingCache {
+	if fp.dialogDeleting {
 		t.Fatal("deletingCache should clear even on error")
 	}
 	if !strings.Contains(m.message, "docker daemon unavailable") {
@@ -1688,4 +1688,82 @@ func TestPruneWithStaleRuntimeDeletesMigratedGroup(t *testing.T) {
 	// This confirms that calling prune with stale data is destructive.
 	// The fix in sessionRenamedMsg handler skips prune entirely, letting the
 	// next periodic runtime refresh (with fresh data) handle pruning safely.
+}
+
+// navigateToCacheRow expands the Caching section and moves the cursor onto the
+// given cache row (buildkit/deb/image), starting from a freshly opened dialog.
+func navigateToCacheRow(t *testing.T, fp *fleetPage, m *model, row int) {
+	t.Helper()
+	guard := 0
+	for fp.dialogRow != editFleetRowCaching {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+		if guard++; guard > 20 {
+			t.Fatal("never reached Caching header")
+		}
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // expand
+	guard = 0
+	for fp.dialogRow != row {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+		if guard++; guard > 20 {
+			t.Fatalf("never reached cache row %d", row)
+		}
+	}
+}
+
+// TestEditFleetSavesDebAndImageCache verifies the two new cache toggles persist
+// instantly through the shared Caching interaction model.
+func TestEditFleetSavesDebAndImageCache(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	f := &fleet.Fleet{Name: "alpha"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToCacheRow(t, fp, m, editFleetRowDebCache)
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
+	if !fp.dialogDebCache || !f.Settings.DebCacheServer {
+		t.Fatalf("deb cache toggle did not persist: dialog=%v saved=%v", fp.dialogDebCache, f.Settings.DebCacheServer)
+	}
+
+	navigateToCacheRow(t, fp, m, editFleetRowImageCache)
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
+	if !fp.dialogImageCache || !f.Settings.ImageCacheServer {
+		t.Fatalf("image cache toggle did not persist: dialog=%v saved=%v", fp.dialogImageCache, f.Settings.ImageCacheServer)
+	}
+}
+
+// TestDeleteCacheCmdDispatchesByKind verifies deleteCacheCmd calls the matching
+// per-cache delete RPC for each kind.
+func TestDeleteCacheCmdDispatchesByKind(t *testing.T) {
+	var bk, deb, img string
+	origBK, origDeb, origImg := deleteBuildkitCacheRemote, deleteDebCacheRemote, deleteImageCacheRemote
+	deleteBuildkitCacheRemote = func(f string) error { bk = f; return nil }
+	deleteDebCacheRemote = func(f string) error { deb = f; return nil }
+	deleteImageCacheRemote = func(f string) error { img = f; return nil }
+	t.Cleanup(func() {
+		deleteBuildkitCacheRemote, deleteDebCacheRemote, deleteImageCacheRemote = origBK, origDeb, origImg
+	})
+
+	cases := []struct {
+		kind cacheKind
+		got  *string
+	}{
+		{cacheBuildkit, &bk}, {cacheDeb, &deb}, {cacheImage, &img},
+	}
+	for _, c := range cases {
+		msg, ok := deleteCacheCmd(c.kind, "alpha")().(deleteCacheDoneMsg)
+		if !ok {
+			t.Fatalf("kind %d: cmd did not return deleteCacheDoneMsg", c.kind)
+		}
+		if msg.kind != c.kind || msg.err != nil {
+			t.Fatalf("kind %d: msg = %+v", c.kind, msg)
+		}
+		if *c.got != "alpha" {
+			t.Fatalf("kind %d: matching RPC not called (got %q)", c.kind, *c.got)
+		}
+	}
 }

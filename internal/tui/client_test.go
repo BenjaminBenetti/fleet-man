@@ -116,3 +116,23 @@ func TestFleetSettingsBuildkitServerRoundTrip(t *testing.T) {
 		t.Fatalf("BuildkitServer lost in protoFleetToLegacy: %+v", back.Settings)
 	}
 }
+
+// TestFleetSettingsCacheServersRoundTrip checks the deb/image cache bools survive
+// both client converters (legacy->proto and proto->legacy).
+func TestFleetSettingsCacheServersRoundTrip(t *testing.T) {
+	// Off by default -> false on the wire.
+	empty := fleetSettingsToProto(fleet.FleetSettings{})
+	if empty.GetDebCacheServer() || empty.GetImageCacheServer() {
+		t.Fatalf("unset cache servers should be false on the wire")
+	}
+	// Enabled survives legacy->proto.
+	ps := fleetSettingsToProto(fleet.FleetSettings{DebCacheServer: true, ImageCacheServer: true})
+	if !ps.GetDebCacheServer() || !ps.GetImageCacheServer() {
+		t.Fatalf("cache servers lost in fleetSettingsToProto")
+	}
+	// And proto->legacy.
+	back := protoFleetToLegacy(&fleetgrpc.Fleet{Name: "alpha", Settings: ps})
+	if !back.Settings.DebCacheServer || !back.Settings.ImageCacheServer {
+		t.Fatalf("cache servers lost in protoFleetToLegacy: %+v", back.Settings)
+	}
+}

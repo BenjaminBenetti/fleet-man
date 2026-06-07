@@ -46,6 +46,8 @@ type fleetPage struct {
 	dialogCodexMount        bool
 	dialogGhMount           bool
 	dialogBuildkitServer    bool
+	dialogDebCache          bool
+	dialogImageCache        bool
 	dialogPreferFleetLaunch bool
 	// dialogPreferFleetLaunchSet tracks whether PreferFleetLaunch should be
 	// persisted as an explicit value. It starts true only if the fleet already
@@ -54,11 +56,15 @@ type fleetPage struct {
 	// into an explicit false just because the user edited an unrelated setting.
 	dialogPreferFleetLaunchSet bool
 
-	// Caching section (edit-fleet dialog) state.
-	dialogCachingExpanded       bool // ▼ Caching expanded, revealing the Buildkit row
-	dialogBuildkitButtonFocused bool // horizontal sub-cursor: on the [Delete cache] button vs the toggle
-	dialogDeleteCacheConfirm    bool // inline confirm armed (first Enter on the button)
-	dialogDeletingCache         bool // a cache-wipe RPC is in flight
+	// Caching section (edit-fleet dialog) state. The buildkit, deb, and image
+	// cache rows share one interaction model (toggle + [Delete cache] button +
+	// inline confirm + in-flight spinner); the per-row sub-state below applies to
+	// whichever cache row currently has the dialog cursor.
+	dialogCachingExpanded    bool      // ▼ Caching expanded, revealing the cache rows
+	dialogCacheButtonFocused bool      // horizontal sub-cursor: on the [Delete cache] button vs the toggle
+	dialogDeleteCacheConfirm bool      // inline confirm armed (first Enter on the button)
+	dialogDeleting           bool      // a cache-wipe RPC is in flight
+	dialogDeletingKind       cacheKind // which cache the in-flight wipe targets (valid only while dialogDeleting)
 
 	// Custom mounts section (edit-fleet dialog) state.
 	dialogCustomMountsExpanded bool     // ▼ Custom mounts expanded, revealing per-mount rows + the add row
@@ -1732,12 +1738,11 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 			}
 			d.WriteString(marker(row) + dialogLabel.Render(arrow+"Caching"))
 		case editFleetRowBuildkit:
-			// Indented one level under the Caching header.
-			line := marker(row) + "  " + checkbox(fleetPage.dialogBuildkitServer) + " " + dialogLabel.Render("Buildkit server")
-			if fleetPage.dialogBuildkitServer {
-				line += "   " + fleetPage.renderDeleteCacheButton(m)
-			}
-			d.WriteString(line)
+			d.WriteString(marker(row) + fleetPage.renderCacheRow(m, cacheBuildkit, "Buildkit server"))
+		case editFleetRowDebCache:
+			d.WriteString(marker(row) + fleetPage.renderCacheRow(m, cacheDeb, "Deb package cache"))
+		case editFleetRowImageCache:
+			d.WriteString(marker(row) + fleetPage.renderCacheRow(m, cacheImage, "Docker image cache"))
 		default:
 			// Dynamic custom-mount child rows (existing mounts + the add row),
 			// indented one level under the Custom mounts header.
@@ -1793,15 +1798,30 @@ func (fleetPage *fleetPage) customMountFooter() string {
 	return dimStyle.Render("enter an absolute container path, e.g. /opt/data")
 }
 
+// renderCacheRow renders one cache row (checkbox + label, indented under the
+// Caching header) plus its [Delete cache] button when the cache is enabled. The
+// three cache rows (buildkit/deb/image) share this rendering.
+func (fleetPage *fleetPage) renderCacheRow(m *model, k cacheKind, label string) string {
+	box := "[ ]"
+	if fleetPage.cacheEnabled(k) {
+		box = "[x]"
+	}
+	line := "  " + box + " " + dialogLabel.Render(label)
+	if fleetPage.cacheEnabled(k) {
+		line += "   " + fleetPage.renderDeleteCacheButton(m, k)
+	}
+	return line
+}
+
 // renderDeleteCacheButton renders the [Delete cache] button shown next to an
-// enabled Buildkit server. It reflects the in-flight / inline-confirm state and
-// is highlighted when the horizontal sub-cursor is on it.
-func (fleetPage *fleetPage) renderDeleteCacheButton(m *model) string {
+// enabled cache. It reflects the in-flight / inline-confirm state for cache kind
+// k and is highlighted when the horizontal sub-cursor is on that row's button.
+func (fleetPage *fleetPage) renderDeleteCacheButton(m *model, k cacheKind) string {
 	var label string
 	switch {
-	case fleetPage.dialogDeletingCache:
+	case fleetPage.dialogDeleting && fleetPage.dialogDeletingKind == k:
 		label = m.spinner.View() + " Clearing…"
-	case fleetPage.dialogDeleteCacheConfirm:
+	case fleetPage.cacheRowFocused(k) && fleetPage.dialogDeleteCacheConfirm:
 		// Kept short so the row fits the 46-col dialog; the footer hint spells
 		// out enter=confirm / esc=cancel.
 		label = "Delete cache?"
@@ -1809,7 +1829,7 @@ func (fleetPage *fleetPage) renderDeleteCacheButton(m *model) string {
 		label = "Delete cache"
 	}
 	text := "[ " + label + " ]"
-	if fleetPage.dialogBuildkitButtonFocused {
+	if fleetPage.cacheRowFocused(k) && fleetPage.dialogCacheButtonFocused {
 		return selectedStyle.Render(text)
 	}
 	return dimStyle.Render(text)
@@ -1839,14 +1859,14 @@ func (fleetPage *fleetPage) editFleetHint() string {
 			return "[h/←] Collapse  [j/k] Select  [q/esc] Save & Close"
 		}
 		return "[l/→/space] Expand  [j/k] Select  [q/esc] Save & Close"
-	case editFleetRowBuildkit:
-		if fleetPage.dialogBuildkitButtonFocused {
+	case editFleetRowBuildkit, editFleetRowDebCache, editFleetRowImageCache:
+		if fleetPage.dialogCacheButtonFocused {
 			if fleetPage.dialogDeleteCacheConfirm {
 				return "[enter] Confirm delete  [esc] Cancel"
 			}
 			return "[enter] Delete cache  [h/←] Back  [esc] Close"
 		}
-		if fleetPage.dialogBuildkitServer {
+		if k, ok := cacheKindForRow(fleetPage.dialogRow); ok && fleetPage.cacheEnabled(k) {
 			return "[space] Toggle  [l/→] Delete-cache button  [j/k] Select"
 		}
 		return "[space] Toggle  [j/k] Select  [q/esc] Save & Close"

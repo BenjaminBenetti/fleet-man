@@ -41,6 +41,22 @@ func BuildkitDir(fleetName string) string {
 	return filepath.Join(WorkspacesDir(), fleetName, ".buildkit")
 }
 
+// DebCacheDir returns the per-fleet host directory that holds the shared deb
+// package cache (the apt-cacher-ng container's on-disk cache). Like BuildkitDir
+// it lives next to the per-instance workspace clones so it survives instance
+// churn, is shared by every instance in the fleet, and persists across fleet
+// teardown (warming the next fleet of the same name).
+func DebCacheDir(fleetName string) string {
+	return filepath.Join(WorkspacesDir(), fleetName, ".aptcache")
+}
+
+// ImageCacheDir returns the per-fleet host directory that holds the shared
+// docker image cache (the registry pull-through container's on-disk storage).
+// Same lifecycle/sharing rationale as BuildkitDir and DebCacheDir.
+func ImageCacheDir(fleetName string) string {
+	return filepath.Join(WorkspacesDir(), fleetName, ".imgcache")
+}
+
 // ControlDir returns the host directory bind-mounted into an instance to
 // carry the control socket. It is per-instance (not per-fleet) so the host
 // can tell which instance a received message came from, and it lives under
