@@ -86,6 +86,16 @@ func McpEnvPath() string {
 	return filepath.Join(Dir(), "mcp.env")
 }
 
+// GatewaySessionPath holds the sticky remote-MCP gateway session for this
+// daemon: the gateway-assigned session id + public URL + the gateway URL it was
+// issued for. fleetd writes it (0600) on a successful registration and reads it
+// on reconnect to request the SAME public URL. Like the other ~/.fleet discovery
+// files it is host-local and per-user; it embeds no secret (the session id is a
+// public capability the gateway minted, not an auth token).
+func GatewaySessionPath() string {
+	return filepath.Join(Dir(), "gateway_session.json")
+}
+
 // WorkspacesDir is the base directory for instance workspace clones. Mirrors
 // internal/state.WorkspacesDir; lives here too so client code (which must not
 // import internal/state) can derive workspace paths.

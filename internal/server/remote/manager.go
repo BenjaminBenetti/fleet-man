@@ -1,0 +1,261 @@
+// Package remote drives fleetd's side of the remote-MCP reverse tunnel: it dials
+// the user-configured fleet gateway, registers (sticky session id), and serves
+// the gateway's inbound MCP requests by reverse-proxying them to the loopback MCP
+// server. It is server-only (imported solely by internal/server) and additive —
+// the local MCP server in mcp.go is untouched; tunneled requests hit the same
+// loopback listener and the same bearer-token auth as local clients.
+//
+// The Manager is a single supervisor goroutine. Config changes arrive via
+// Reconcile (non-blocking, safe to call under the service's config lock) and the
+// loop reacts: connect when enabled, tear down when disabled, reconnect on drop
+// with jittered exponential backoff. Every state transition is published as a
+// fleetgrpc.RemoteMcpStatus so the TUI's settings page reflects it live.
+package remote
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"math/rand/v2"
+	"net"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/tunnel"
+)
+
+const (
+	// initialBackoff and maxBackoff bound the reconnect schedule. Full jitter is
+	// applied per sleep, and the schedule resets after an established connection.
+	initialBackoff = 500 * time.Millisecond
+	maxBackoff     = 60 * time.Second
+	// handshakeTimeout bounds the pre-yamux control exchange so a silent gateway
+	// can't wedge an attempt forever. yamux manages its own timeouts after.
+	handshakeTimeout = 15 * time.Second
+)
+
+// desiredState is the latest config the manager should converge to.
+type desiredState struct {
+	enabled    bool
+	gatewayURL string
+}
+
+// Manager supervises the outbound tunnel. Construct with NewManager and drive
+// with Run (once) + Reconcile (on every config change).
+type Manager struct {
+	mcpPort       int
+	clientVersion string
+	publish       func(*fleetgrpc.RemoteMcpStatus)
+	logOut        io.Writer
+
+	// dial is the transport seam (TLS in production); tests override it to reach
+	// an in-process gateway.
+	dial func(ctx context.Context, gatewayURL string) (net.Conn, error)
+
+	mu            sync.Mutex
+	desired       desiredState
+	attemptCancel context.CancelFunc // cancels the in-flight connect attempt, if any
+	wake          chan struct{}      // size-1 nudge: Reconcile wakes the loop
+}
+
+// NewManager builds a Manager that reverse-proxies to the loopback MCP server on
+// mcpPort and reports status via publish (which must be safe to call from the
+// manager's goroutine — typically a hub.post). A zero mcpPort means the local
+// MCP server is not running, in which case the manager reports an error while
+// enabled rather than connecting.
+func NewManager(mcpPort int, clientVersion string, publish func(*fleetgrpc.RemoteMcpStatus)) *Manager {
+	return &Manager{
+		mcpPort:       mcpPort,
+		clientVersion: clientVersion,
+		publish:       publish,
+		logOut:        io.Discard,
+		dial:          dialTLS,
+		wake:          make(chan struct{}, 1),
+	}
+}
+
+// Reconcile records the desired config and nudges the supervisor. It is
+// NON-BLOCKING: it sets state, cancels any in-flight attempt so it re-evaluates,
+// and signals the loop — so it is safe to call while holding other locks (e.g.
+// the service's config-write lock in SetConfig).
+func (m *Manager) Reconcile(enabled bool, gatewayURL string) {
+	m.mu.Lock()
+	m.desired = desiredState{enabled: enabled, gatewayURL: strings.TrimSpace(gatewayURL)}
+	cancel := m.attemptCancel
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel() // interrupt the current attempt so it picks up the new desired state
+	}
+	select {
+	case m.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Run is the supervisor loop. It blocks until ctx is cancelled (daemon
+// shutdown), so callers start it on a goroutine. Exactly one attempt is ever in
+// flight, so there is no reconnection storm.
+func (m *Manager) Run(ctx context.Context) {
+	backoff := initialBackoff
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		// Read the desired config AND install this attempt's cancel under ONE
+		// lock. They must be atomic: if they were separate, a Reconcile landing
+		// between them (the window is widened by the publish() below) would see no
+		// cancel installed and let the attempt run on with stale settings — even
+		// serving after a disable. With one lock, a Reconcile either precedes it
+		// (we read its fresh desired) or follows it (it sees our cancel and aborts
+		// this attempt).
+		attemptCtx, cancel := context.WithCancel(ctx)
+		m.mu.Lock()
+		d := m.desired
+		m.attemptCancel = cancel
+		m.mu.Unlock()
+
+		if !d.enabled || d.gatewayURL == "" {
+			cancel()
+			m.mu.Lock()
+			m.attemptCancel = nil
+			m.mu.Unlock()
+			m.publish(statusDisabled())
+			if !m.wait(ctx) {
+				return
+			}
+			backoff = initialBackoff
+			continue
+		}
+
+		m.publish(statusConnecting())
+		registered, err := m.connectAndServe(attemptCtx, d.gatewayURL)
+		cancel()
+
+		m.mu.Lock()
+		m.attemptCancel = nil
+		changed := m.desired != d
+		m.mu.Unlock()
+
+		if ctx.Err() != nil {
+			return
+		}
+		if changed {
+			// Desired config changed mid-attempt (Reconcile). Re-evaluate now
+			// with no backoff and no spurious error.
+			backoff = initialBackoff
+			continue
+		}
+		if registered {
+			// An established tunnel dropped (gateway restart / network). Reconnect
+			// promptly; the next iteration republishes CONNECTING.
+			backoff = initialBackoff
+		} else {
+			// Never connected this attempt — surface the failure while we back off.
+			m.publish(statusError(err))
+		}
+		if !m.sleep(ctx, jitter(backoff)) {
+			return
+		}
+		backoff = nextBackoff(backoff)
+	}
+}
+
+// connectAndServe runs one full attempt: dial, register, then serve the tunnel
+// until it drops or attemptCtx is cancelled. registered reports whether the
+// gateway accepted the registration (used to reset the backoff for an
+// established-then-dropped connection).
+func (m *Manager) connectAndServe(ctx context.Context, gatewayURL string) (registered bool, err error) {
+	if m.mcpPort == 0 {
+		return false, fmt.Errorf("local MCP server is not running")
+	}
+
+	conn, err := m.dial(ctx, gatewayURL)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+	// Close the conn on ctx cancel so the attempt aborts promptly at ANY stage:
+	// the handshake (which is bounded by conn deadlines, not ctx) as well as the
+	// serve loop (closing the conn under yamux makes serveProxy return).
+	// Idempotent with the defers and with session.Close below.
+	stopOnCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopOnCancel()
+
+	// Control handshake on the raw conn (before yamux), bounded by a deadline so
+	// a silent gateway can't hang the attempt.
+	_ = conn.SetDeadline(time.Now().Add(handshakeTimeout))
+	prev := loadSession(gatewayURL)
+	req := tunnel.RegisterRequest{SessionID: prev.SessionID, ClientVersion: m.clientVersion}
+	if err := tunnel.WriteFrame(conn, req); err != nil {
+		return false, fmt.Errorf("register write: %w", err)
+	}
+	var reply tunnel.RegisterReply
+	if err := tunnel.ReadFrame(conn, &reply); err != nil {
+		return false, fmt.Errorf("register read: %w", err)
+	}
+	_ = conn.SetDeadline(time.Time{}) // clear; yamux manages its own timeouts
+	if reply.Error != "" {
+		return false, fmt.Errorf("gateway refused registration: %s", reply.Error)
+	}
+
+	// Registered. Persist the sticky session and report the public URL.
+	registered = true
+	_ = saveSession(sessionFile{SessionID: reply.SessionID, PublicURL: reply.PublicURL, GatewayURL: gatewayURL})
+	m.publish(statusConnected(reply.PublicURL))
+
+	session, err := tunnel.ClientSession(conn, m.logOut)
+	if err != nil {
+		return registered, fmt.Errorf("yamux client: %w", err)
+	}
+	defer session.Close()
+	// serveProxy unblocks when the session/conn closes — on a peer drop, or when
+	// stopOnCancel closes the conn on ctx cancel (shutdown or Reconcile teardown).
+	return registered, serveProxy(session, m.mcpPort)
+}
+
+// wait blocks until a Reconcile nudge arrives or ctx is cancelled. It returns
+// false only on cancellation.
+func (m *Manager) wait(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-m.wake:
+		return true
+	}
+}
+
+// sleep waits for d, a Reconcile nudge, or cancellation. It returns false only
+// on cancellation (a nudge or timeout both mean "proceed").
+func (m *Manager) sleep(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-m.wake:
+		return true
+	case <-t.C:
+		return true
+	}
+}
+
+// nextBackoff doubles d up to maxBackoff.
+func nextBackoff(d time.Duration) time.Duration {
+	d *= 2
+	if d > maxBackoff {
+		return maxBackoff
+	}
+	return d
+}
+
+// jitter applies full jitter: a uniformly random duration in [0, d]. Spreads out
+// reconnect attempts so many fleetds don't thunder a recovering gateway.
+func jitter(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int64N(int64(d) + 1))
+}

@@ -1,0 +1,439 @@
+package remote
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
+	"github.com/BenjaminBenetti/fleet-man/internal/tunnel"
+)
+
+// --- unit tests ------------------------------------------------------------
+
+func TestGatewayAddress(t *testing.T) {
+	cases := []struct {
+		url, wantAddr, wantSNI string
+		wantErr                bool
+	}{
+		{url: "https://gw.example.com", wantAddr: "gw.example.com:443", wantSNI: "gw.example.com"},
+		{url: "https://gw.example.com:8443", wantAddr: "gw.example.com:8443", wantSNI: "gw.example.com"},
+		{url: "http://gw.example.com", wantErr: true},  // must be https
+		{url: "ftp://gw.example.com", wantErr: true},   // must be https
+		{url: "https://", wantErr: true},               // no host
+		{url: "://bad", wantErr: true},                 // unparseable
+	}
+	for _, c := range cases {
+		addr, sni, err := gatewayAddress(c.url)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("%q: want error, got addr=%q", c.url, addr)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%q: unexpected error %v", c.url, err)
+			continue
+		}
+		if addr != c.wantAddr || sni != c.wantSNI {
+			t.Errorf("%q: got (%q,%q), want (%q,%q)", c.url, addr, sni, c.wantAddr, c.wantSNI)
+		}
+	}
+}
+
+func TestNextBackoffCaps(t *testing.T) {
+	d := initialBackoff
+	for i := 0; i < 20; i++ {
+		d = nextBackoff(d)
+	}
+	if d != maxBackoff {
+		t.Fatalf("backoff should saturate at %v, got %v", maxBackoff, d)
+	}
+}
+
+func TestJitterBounds(t *testing.T) {
+	for i := 0; i < 1000; i++ {
+		j := jitter(time.Second)
+		if j < 0 || j > time.Second {
+			t.Fatalf("jitter out of [0,1s]: %v", j)
+		}
+	}
+	if jitter(0) != 0 {
+		t.Fatal("jitter(0) must be 0")
+	}
+}
+
+func TestSessionFileRoundTripAndStale(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := fleetpaths.EnsureDir(); err != nil {
+		t.Fatalf("ensure dir: %v", err)
+	}
+
+	in := sessionFile{SessionID: "sid1", PublicURL: "https://gw/mcp/sid1", GatewayURL: "https://gw"}
+	if err := saveSession(in); err != nil {
+		t.Fatalf("saveSession: %v", err)
+	}
+	// Same gateway URL -> returned.
+	if got := loadSession("https://gw"); got != in {
+		t.Fatalf("loadSession same gw: got %+v want %+v", got, in)
+	}
+	// Different gateway URL -> stale, ignored (zero value).
+	if got := loadSession("https://other"); got != (sessionFile{}) {
+		t.Fatalf("loadSession different gw should be zero, got %+v", got)
+	}
+	// Missing file -> zero value.
+	_ = os.Remove(filepath.Join(fleetpaths.Dir(), "gateway_session.json"))
+	if got := loadSession("https://gw"); got != (sessionFile{}) {
+		t.Fatalf("loadSession missing should be zero, got %+v", got)
+	}
+}
+
+// --- end-to-end over a real in-test TLS gateway ---------------------------
+
+// genTestTLS returns a self-signed cert valid for 127.0.0.1 plus a pool that
+// trusts it (the leaf is its own CA).
+func genTestTLS(t *testing.T) (tls.Certificate, *x509.CertPool) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("genkey: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "fleet-test-gateway"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:              []string{"localhost"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyDER, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("x509 keypair: %v", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(certPEM) {
+		t.Fatal("append cert to pool")
+	}
+	return cert, pool
+}
+
+func waitForState(t *testing.T, ch <-chan *fleetgrpc.RemoteMcpStatus, want fleetgrpc.RemoteMcpConn, timeout time.Duration) *fleetgrpc.RemoteMcpStatus {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case st := <-ch:
+			if st.GetState() == want {
+				return st
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for state %v", want)
+			return nil
+		}
+	}
+}
+
+// newManagerForTest builds a Manager whose dial reaches addr over TLS trusting
+// pool, with status pushed to the returned channel.
+func newManagerForTest(mcpPort int, addr string, pool *x509.CertPool) (*Manager, <-chan *fleetgrpc.RemoteMcpStatus) {
+	statusCh := make(chan *fleetgrpc.RemoteMcpStatus, 64)
+	m := NewManager(mcpPort, "vtest", func(st *fleetgrpc.RemoteMcpStatus) { statusCh <- st })
+	m.dial = func(ctx context.Context, _ string) (net.Conn, error) {
+		d := &tls.Dialer{Config: &tls.Config{RootCAs: pool, ServerName: "127.0.0.1"}}
+		return d.DialContext(ctx, "tcp", addr)
+	}
+	return m, statusCh
+}
+
+// TestManagerConnectsServesAndDisables drives the full lifecycle against a real
+// TLS gateway: CONNECTING -> CONNECTED (with the gateway's public URL), the
+// session is persisted, the tunnel actually serves a request, and disabling
+// tears it down to UNSPECIFIED.
+func TestManagerConnectsServesAndDisables(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cert, pool := genTestTLS(t)
+	mcp := newFakeMCP()
+	defer mcp.srv.Close()
+
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatalf("tls listen: %v", err)
+	}
+	defer ln.Close()
+
+	served := make(chan string, 1) // the auth header the tunnel delivered to the MCP server
+	gwDone := make(chan struct{})
+	defer close(gwDone)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var req tunnel.RegisterRequest
+		if err := tunnel.ReadFrame(conn, &req); err != nil {
+			return
+		}
+		_ = tunnel.WriteFrame(conn, tunnel.RegisterReply{SessionID: "sess-A", PublicURL: "https://gw/mcp/sess-A"})
+		sess, err := tunnel.ServerSession(conn, io.Discard)
+		if err != nil {
+			return
+		}
+		defer sess.Close()
+		// Prove the tunnel serves: issue a request back down it to the loopback MCP.
+		hc := gatewayHTTPClient(sess)
+		hreq, _ := http.NewRequest(http.MethodGet, "http://tunnel/echo", nil)
+		hreq.Header.Set("Authorization", "Bearer e2e")
+		if resp, err := hc.Do(hreq); err == nil {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			served <- string(b)
+		} else {
+			served <- "ERR:" + err.Error()
+		}
+		<-gwDone
+	}()
+
+	m, statusCh := newManagerForTest(mcp.port(t), ln.Addr().String(), pool)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx)
+
+	m.Reconcile(true, "https://gw.example.com")
+
+	connected := waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED, 5*time.Second)
+	if connected.GetPublicUrl() != "https://gw/mcp/sess-A" {
+		t.Fatalf("public url = %q, want https://gw/mcp/sess-A", connected.GetPublicUrl())
+	}
+
+	// The tunnel actually carried a request, auth header intact.
+	select {
+	case got := <-served:
+		if got != "Bearer e2e" {
+			t.Fatalf("tunnel served auth = %q, want %q", got, "Bearer e2e")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("gateway never served a request over the tunnel")
+	}
+
+	// Sticky session persisted for reconnect.
+	if s := loadSession("https://gw.example.com"); s.SessionID != "sess-A" || s.PublicURL != "https://gw/mcp/sess-A" {
+		t.Fatalf("session not persisted: %+v", s)
+	}
+
+	// Disable -> tears down to UNSPECIFIED.
+	m.Reconcile(false, "https://gw.example.com")
+	waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_UNSPECIFIED, 5*time.Second)
+}
+
+// TestManagerStickyReconnect verifies that after an established connection drops,
+// the manager reconnects supplying the previously-assigned session id so the
+// gateway can hand back the SAME public URL.
+func TestManagerStickyReconnect(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cert, pool := genTestTLS(t)
+	mcp := newFakeMCP()
+	defer mcp.srv.Close()
+
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatalf("tls listen: %v", err)
+	}
+	defer ln.Close()
+
+	regIDs := make(chan string, 8)
+	var conns atomic.Int32
+	gwDone := make(chan struct{})
+	defer close(gwDone)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				var req tunnel.RegisterRequest
+				if err := tunnel.ReadFrame(conn, &req); err != nil {
+					return
+				}
+				n := conns.Add(1)
+				regIDs <- req.SessionID
+				sid := req.SessionID
+				if sid == "" {
+					sid = "sticky-1"
+				}
+				if err := tunnel.WriteFrame(conn, tunnel.RegisterReply{SessionID: sid, PublicURL: "https://gw/mcp/" + sid}); err != nil {
+					return
+				}
+				if n == 1 {
+					return // drop immediately to force a sticky reconnect
+				}
+				sess, err := tunnel.ServerSession(conn, io.Discard)
+				if err != nil {
+					return
+				}
+				defer sess.Close()
+				<-gwDone
+			}(conn)
+		}
+	}()
+
+	m, statusCh := newManagerForTest(mcp.port(t), ln.Addr().String(), pool)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx)
+	m.Reconcile(true, "https://gw.example.com")
+
+	// First registration: no prior session id.
+	if got := waitForReg(t, regIDs, 5*time.Second); got != "" {
+		t.Fatalf("first registration session id = %q, want empty", got)
+	}
+	// Second registration (after the forced drop): the sticky id.
+	if got := waitForReg(t, regIDs, 5*time.Second); got != "sticky-1" {
+		t.Fatalf("reconnect registration session id = %q, want sticky-1", got)
+	}
+	// And it lands CONNECTED on the kept connection.
+	waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED, 5*time.Second)
+}
+
+func waitForReg(t *testing.T, ch <-chan string, timeout time.Duration) string {
+	t.Helper()
+	select {
+	case id := <-ch:
+		return id
+	case <-time.After(timeout):
+		t.Fatal("timed out waiting for a registration")
+		return ""
+	}
+}
+
+// TestManagerReconcileDisableConverges hammers Reconcile with interleaved
+// enable/disable toggles (exercising the desired/attemptCancel race the code
+// review flagged) and asserts the manager settles on UNSPECIFIED — i.e. a
+// disable is never left running a stale tunnel.
+func TestManagerReconcileDisableConverges(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cert, pool := genTestTLS(t)
+	mcp := newFakeMCP()
+	defer mcp.srv.Close()
+
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatalf("tls listen: %v", err)
+	}
+	defer ln.Close()
+
+	gwDone := make(chan struct{})
+	defer close(gwDone)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				var req tunnel.RegisterRequest
+				if err := tunnel.ReadFrame(conn, &req); err != nil {
+					return
+				}
+				if err := tunnel.WriteFrame(conn, tunnel.RegisterReply{SessionID: "s", PublicURL: "https://gw/mcp/s"}); err != nil {
+					return
+				}
+				sess, err := tunnel.ServerSession(conn, io.Discard)
+				if err != nil {
+					return
+				}
+				defer sess.Close()
+				<-gwDone
+			}(conn)
+		}
+	}()
+
+	m, statusCh := newManagerForTest(mcp.port(t), ln.Addr().String(), pool)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx)
+
+	for i := 0; i < 30; i++ {
+		m.Reconcile(true, "https://gw.example.com")
+		m.Reconcile(false, "https://gw.example.com")
+	}
+
+	// After the toggles settle, the LAST state observed must be UNSPECIFIED —
+	// the manager must not be left connected/connecting with the feature off.
+	last := drainUntilIdle(statusCh, 400*time.Millisecond, 5*time.Second)
+	if last != fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_UNSPECIFIED {
+		t.Fatalf("after disable toggles, settled on %v, want UNSPECIFIED", last)
+	}
+}
+
+// drainUntilIdle reads statuses until none arrive for `idle` (or `total`
+// elapses), returning the last state seen.
+func drainUntilIdle(ch <-chan *fleetgrpc.RemoteMcpStatus, idle, total time.Duration) fleetgrpc.RemoteMcpConn {
+	last := fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_UNSPECIFIED
+	idleTimer := time.NewTimer(idle)
+	defer idleTimer.Stop()
+	deadline := time.After(total)
+	for {
+		select {
+		case st := <-ch:
+			last = st.GetState()
+			if !idleTimer.Stop() {
+				<-idleTimer.C
+			}
+			idleTimer.Reset(idle)
+		case <-idleTimer.C:
+			return last
+		case <-deadline:
+			return last
+		}
+	}
+}
+
+// TestManagerErrorsWhenMcpDown reports an error (not a crash) when enabled but
+// the local MCP server isn't running (mcpPort == 0).
+func TestManagerErrorsWhenMcpDown(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	statusCh := make(chan *fleetgrpc.RemoteMcpStatus, 64)
+	m := NewManager(0, "vtest", func(st *fleetgrpc.RemoteMcpStatus) { statusCh <- st })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx)
+	m.Reconcile(true, "https://gw.example.com")
+
+	st := waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_ERROR, 5*time.Second)
+	if st.GetError() == "" {
+		t.Fatal("error status should carry a message")
+	}
+}

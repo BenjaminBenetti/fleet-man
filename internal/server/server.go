@@ -18,6 +18,8 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/server/remote"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	"google.golang.org/grpc"
 )
@@ -119,6 +121,22 @@ func Serve(ctx context.Context) error {
 			// across restarts so configured MCP clients (mcp.json) keep working.
 			_ = os.Remove(fleetpaths.McpPortPath())
 		}()
+	}
+
+	// Remote-MCP gateway tunnel: an outbound, OPT-IN connection that exposes the
+	// loopback MCP server to the internet through a remote fleet gateway. Like MCP
+	// itself it is auxiliary — the supervisor stays idle until the config enables
+	// it, and a connect failure only affects remote access, never the local
+	// daemon. It publishes its status (incl. the gateway-assigned Public MCP URL)
+	// through the hub so the TUI settings page reflects it live.
+	svc.remote = remote.NewManager(mcpPort, versionOrDev(), func(st *fleetgrpc.RemoteMcpStatus) {
+		svc.hub.post(func(h *hub) { h.broadcastRemoteMcpStatus(st) })
+	})
+	go svc.remote.Run(hubCtx)
+	if cfg, err := state.LoadConfig(); err == nil {
+		svc.remote.Reconcile(cfg.RemoteMcpSettings.Enabled, cfg.RemoteMcpSettings.GatewayURL)
+	} else {
+		flog.Warn("remote mcp: load config", "err", err)
 	}
 
 	writeVersionFile()
