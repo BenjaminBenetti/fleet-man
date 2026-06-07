@@ -123,15 +123,37 @@ func Serve(ctx context.Context) error {
 		}()
 	}
 
+	// Tunnel-facing gRPC server: exposes the SAME FleetService as the local unix
+	// socket, but gated by the MCP bearer token (the local socket stays auth-less).
+	// It is Served over an in-memory listener fed by the tunnel demux, so there is
+	// no extra port/socket; the gateway tunnels gRPC alongside MCP whenever both
+	// ends negotiate FeatureGRPC. Only wired when MCP is up (we have a port +
+	// token); enabling remote MCP in config exposes this too (one toggle).
+	var remoteOpts []remote.Option
+	if mcpPort != 0 {
+		if token, err := loadOrCreateMCPToken(); err == nil {
+			grpcLis := remote.NewChanListener()
+			authUnary, authStream := bearerAuthInterceptors(token)
+			tunnelGRPC := grpc.NewServer(grpc.ChainUnaryInterceptor(authUnary), grpc.ChainStreamInterceptor(authStream))
+			fleetgrpc.RegisterFleetServiceServer(tunnelGRPC, svc)
+			go func() { _ = tunnelGRPC.Serve(grpcLis) }()
+			defer tunnelGRPC.Stop()
+			remoteOpts = append(remoteOpts, remote.WithGRPCListener(grpcLis))
+		} else {
+			flog.Warn("remote grpc: load token", "err", err)
+		}
+	}
+
 	// Remote-MCP gateway tunnel: an outbound, OPT-IN connection that exposes the
-	// loopback MCP server to the internet through a remote fleet gateway. Like MCP
-	// itself it is auxiliary — the supervisor stays idle until the config enables
-	// it, and a connect failure only affects remote access, never the local
-	// daemon. It publishes its status (incl. the gateway-assigned Public MCP URL)
-	// through the hub so the TUI settings page reflects it live.
+	// loopback MCP server (and, when negotiated, the gRPC server above) to the
+	// internet through a remote fleet gateway. Like MCP itself it is auxiliary —
+	// the supervisor stays idle until the config enables it, and a connect failure
+	// only affects remote access, never the local daemon. It publishes its status
+	// (incl. the gateway-assigned Public MCP URL) through the hub so the TUI
+	// settings page reflects it live.
 	svc.remote = remote.NewManager(mcpPort, versionOrDev(), func(st *fleetgrpc.RemoteMcpStatus) {
 		svc.hub.post(func(h *hub) { h.broadcastRemoteMcpStatus(st) })
-	})
+	}, remoteOpts...)
 	go svc.remote.Run(hubCtx)
 	if cfg, err := state.LoadConfig(); err == nil {
 		svc.remote.Reconcile(cfg.RemoteMcpSettings.Enabled, cfg.RemoteMcpSettings.GatewayURL)
