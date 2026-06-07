@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
@@ -115,6 +116,7 @@ func TestNewMCPServerRegistersAllTools(t *testing.T) {
 		"fleet_up", "fleet_start", "fleet_stop", "fleet_down",
 		"fleet_destroy_fleet", "fleet_clone",
 		"fleet_exec", "fleet_session_spawn", "fleet_session_exec", "fleet_session_read",
+		"fleet_session_list",
 	}
 	for _, name := range want {
 		if !got[name] {
@@ -191,6 +193,74 @@ func TestMCPToolErrors(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatalf("want input-validation tool error for missing instance, got %q", toolText(res))
+	}
+}
+
+// TestParseMCPSessions covers the tmux list-sessions parser: field mapping,
+// the attached flag, epoch->RFC3339 rendering, colon-bearing names (name is the
+// trailing field), and skipping of blank/short/garbage lines.
+func TestParseMCPSessions(t *testing.T) {
+	const created = 1700000000
+	wantCreated := time.Unix(created, 0).UTC().Format(time.RFC3339)
+	output := strings.Join([]string{
+		"3:1:" + strconv.Itoa(created) + ":hello-world-test~i-spy", // 1 client -> attached
+		"4:10:" + strconv.Itoa(created) + ":multi-client",          // 10 clients -> attached
+		"1:0:" + strconv.Itoa(created) + ":plain",                  // detached
+		"2:0:0:zero-created",                                       // created 0 -> omitted
+		"1:0:notanint:bad-created",                                 // unparseable created -> omitted
+		"5:1:" + strconv.Itoa(created) + ":has:colons:in:name",     // ':' kept in name
+		"",                             // blank -> skipped
+		"  ",                           // whitespace -> skipped
+		"1:0:" + strconv.Itoa(created), // too few fields -> skipped
+	}, "\n")
+
+	got := parseMCPSessions(output)
+	want := []FleetSession{
+		{Session: "hello-world-test~i-spy", Windows: 3, CreatedAt: wantCreated, Attached: true},
+		{Session: "multi-client", Windows: 4, CreatedAt: wantCreated, Attached: true},
+		{Session: "plain", Windows: 1, CreatedAt: wantCreated, Attached: false},
+		{Session: "zero-created", Windows: 2, CreatedAt: "", Attached: false},
+		{Session: "bad-created", Windows: 1, CreatedAt: "", Attached: false},
+		{Session: "has:colons:in:name", Windows: 5, CreatedAt: wantCreated, Attached: true},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("parsed %d sessions, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("session[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	// Empty input yields a non-nil empty slice (JSON-marshals to [], not null) —
+	// the "no sessions => empty array" acceptance criterion.
+	empty := parseMCPSessions("")
+	if empty == nil || len(empty) != 0 {
+		t.Fatalf("empty input: want non-nil empty slice, got %#v", empty)
+	}
+}
+
+// TestMCPSessionListNotRunning asserts fleet_session_list rejects a stopped
+// instance with a clear "not running" tool error rather than shelling in.
+func TestMCPSessionListNotRunning(t *testing.T) {
+	isolateFleetDir(t)
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Instances: []*fleet.Instance{
+			{Name: "i1", Status: fleet.StatusStopped, Backend: fleet.BackendDevcontainer},
+		}},
+	}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cs := mcpConnect(t, newService())
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "fleet_session_list", Arguments: map[string]any{"fleet": "alpha", "instance": "i1"},
+	})
+	if err != nil {
+		t.Fatalf("transport error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(toolText(res), "not running") {
+		t.Fatalf("want 'not running' tool error, got IsError=%v text=%q", res.IsError, toolText(res))
 	}
 }
 

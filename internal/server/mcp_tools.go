@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,6 +94,10 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 		Name:        "fleet_session_read",
 		Description: "Capture the current screen contents of a tmux session inside an instance.",
 	}, s.mcpSessionRead)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_session_list",
+		Description: "List the tmux sessions inside a running instance (name, window count, creation time, attached). Returns an empty list when the instance has no sessions.",
+	}, s.mcpSessionList)
 }
 
 // --- shared shapes ---
@@ -543,6 +548,72 @@ func (s *service) mcpSessionRead(ctx context.Context, _ *mcp.CallToolRequest, in
 		return nil, FleetSessionReadOutput{}, fmt.Errorf("read session %q: %w: %s", in.Session, err, strings.TrimSpace(out))
 	}
 	return nil, FleetSessionReadOutput{Content: out}, nil
+}
+
+// fleetSessionListFormat lists every tmux session, one per line, as
+// `windows:attached:created:name`. session_name is placed LAST so a name
+// containing the ':' delimiter (tmux allows it) can't shift the fixed leading
+// fields — parseMCPSessions caps the split at 4 and keeps the remainder as the
+// name. `2>/dev/null` drops tmux's "no server running" stderr; the caller appends
+// `|| true` so that exit-1 (no sessions) collapses to empty output, not an error.
+const fleetSessionListFormat = `tmux list-sessions -F "#{session_windows}:#{session_attached}:#{session_created}:#{session_name}" 2>/dev/null`
+
+// FleetSession is the JSON-friendly view of one tmux session.
+type FleetSession struct {
+	Session   string `json:"session"`
+	Windows   int    `json:"windows"`
+	CreatedAt string `json:"created_at,omitempty"`
+	Attached  bool   `json:"attached"`
+}
+
+type FleetSessionListOutput struct {
+	Sessions []FleetSession `json:"sessions"`
+}
+
+// mcpSessionList enumerates the tmux sessions inside a running instance. A
+// running instance with no sessions yields an empty list (not an error); a
+// not-running instance is rejected up front by runningInstance.
+func (s *service) mcpSessionList(ctx context.Context, _ *mcp.CallToolRequest, in FleetInstanceInput) (*mcp.CallToolResult, FleetSessionListOutput, error) {
+	inst, err := s.runningInstance(in.Fleet, in.Instance)
+	if err != nil {
+		return nil, FleetSessionListOutput{}, err
+	}
+	cctx, cancel := mergeCtx(s.bgCtx, ctx)
+	defer cancel()
+	// `|| true` makes "no tmux server" (exit 1) a successful empty read; a genuine
+	// exec failure (e.g. the container vanished) still surfaces as a tool error.
+	out, err := runContainerShell(cctx, inst, fleetSessionListFormat+" || true")
+	if err != nil {
+		return nil, FleetSessionListOutput{}, fmt.Errorf("list sessions in %s/%s: %w: %s", in.Fleet, in.Instance, err, strings.TrimSpace(out))
+	}
+	return nil, FleetSessionListOutput{Sessions: parseMCPSessions(out)}, nil
+}
+
+// parseMCPSessions parses fleetSessionListFormat output into the MCP session
+// list. Blank/short lines are skipped; created (a Unix epoch) is rendered as
+// RFC3339 UTC to match the other MCP timestamps, or omitted if unparseable.
+func parseMCPSessions(output string) []FleetSession {
+	sessions := []FleetSession{}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 4)
+		if len(parts) < 4 || parts[3] == "" {
+			continue
+		}
+		windows, _ := strconv.Atoi(parts[0])
+		// session_attached is the CLIENT COUNT, not a 0/1 flag: any positive count
+		// means a client is attached; blank/unparseable counts as detached.
+		attached, _ := strconv.Atoi(parts[1])
+		sess := FleetSession{Session: parts[3], Windows: windows, Attached: attached > 0}
+		if created, err := strconv.ParseInt(parts[2], 10, 64); err == nil && created > 0 {
+			sess.CreatedAt = time.Unix(created, 0).UTC().Format(time.RFC3339)
+		}
+		sessions = append(sessions, sess)
+	}
+	return sessions
 }
 
 // --- helpers ---

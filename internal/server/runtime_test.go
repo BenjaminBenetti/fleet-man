@@ -50,10 +50,10 @@ func TestApplyRuntimeMergesFields(t *testing.T) {
 }
 
 func TestParseTmuxSessionsProto(t *testing.T) {
-	out := "main:2:1\nbg:1:0\n\nbad\n"
+	out := "main:2:1\nbg:1:0\nmulti:3:2\n\nbad\n"
 	sessions := parseTmuxSessionsProto(out)
-	if len(sessions) != 3 {
-		t.Fatalf("want 3 sessions (main, bg, bad), got %d", len(sessions))
+	if len(sessions) != 4 {
+		t.Fatalf("want 4 sessions (main, bg, multi, bad), got %d", len(sessions))
 	}
 	if sessions[0].GetName() != "main" || sessions[0].GetWindows() != 2 || !sessions[0].GetAttached() {
 		t.Fatalf("main parsed wrong: %+v", sessions[0])
@@ -61,7 +61,11 @@ func TestParseTmuxSessionsProto(t *testing.T) {
 	if sessions[1].GetAttached() {
 		t.Fatalf("bg should be unattached: %+v", sessions[1])
 	}
-	if sessions[2].GetName() != "bad" || sessions[2].GetWindows() != 0 {
-		t.Fatalf("bad (name-only) parsed wrong: %+v", sessions[2])
+	// session_attached is a client count: 2 attached clients -> attached.
+	if !sessions[2].GetAttached() || sessions[2].GetWindows() != 3 {
+		t.Fatalf("multi (2 clients) should be attached: %+v", sessions[2])
+	}
+	if sessions[3].GetName() != "bad" || sessions[3].GetWindows() != 0 {
+		t.Fatalf("bad (name-only) parsed wrong: %+v", sessions[3])
 	}
 }
