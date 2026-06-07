@@ -979,7 +979,13 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		tail.WriteString(keybindingsDialogBox.Render(settingsPage.renderKeybindingsDialog()))
 		tail.WriteString("\n")
 	}
-	if currentItem >= settingsItemCoderParamBase && currentItem < settingsItemToolStatusBase {
+	// Only the coder PARAMETER rows (value fields, which can interpolate the
+	// variables below) get this hint. Coder params occupy
+	// [settingsItemCoderParamBase, settingsItemCodespacesMachine); the upper
+	// bound must be settingsItemCodespacesMachine, not settingsItemToolStatusBase,
+	// or the hint also (wrongly) shows on the codespaces/browser/remote-mcp rows
+	// that sit in the 500/600/700 blocks below it.
+	if currentItem >= settingsItemCoderParamBase && currentItem < settingsItemCodespacesMachine {
 		tail.WriteString(dimStyle.Render("  Variables: ${GIT_URL} = fleet repo URL, ${GIT_BRANCH} = git branch (blank = default), ${INSTANCE_NAME} = workspace name"))
 		tail.WriteString("\n")
 	}

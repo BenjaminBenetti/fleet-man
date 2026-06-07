@@ -47,6 +47,30 @@ func TestSettingsSectionIncludesRemoteMcp(t *testing.T) {
 	}
 }
 
+// TestCoderVariablesHintScopedToCoderParams guards the footer hint range: the
+// "${GIT_URL}" coder-variables hint must show only on coder PARAMETER rows, not
+// on the codespaces/browser/remote-mcp rows that sit in the numeric blocks below
+// the coder-param range.
+func TestCoderVariablesHintScopedToCoderParams(t *testing.T) {
+	sp := newSettingsPage()
+	cfg := state.DefaultConfig()
+	cfg.RemoteMcpSettings.Enabled = true
+	cfg.CoderSettings.Parameters = []state.CoderParameter{{Name: "p1", Value: "v1"}}
+	m := &model{config: cfg, toolStatus: allToolsFound(), spinner: spinner.New()}
+
+	// Cursor on the Remote MCP gateway-URL row: NO coder-variables hint.
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteMcpGatewayURL)
+	if out := sp.viewSettings(m); strings.Contains(out, "${GIT_URL}") {
+		t.Fatal("coder-variables hint wrongly shown on a remote-mcp row")
+	}
+
+	// Cursor on a coder parameter row: hint IS shown.
+	sp.cursor = settingsPositionOf(sp, m, settingsItemCoderParamBase)
+	if out := sp.viewSettings(m); !strings.Contains(out, "${GIT_URL}") {
+		t.Fatal("coder-variables hint missing on a coder parameter row")
+	}
+}
+
 // TestRemoteMcpStatusValueRendersStates exercises the read-only status line for
 // each tunnel state the server can push.
 func TestRemoteMcpStatusValueRendersStates(t *testing.T) {
