@@ -54,6 +54,11 @@ type Manager struct {
 	// an in-process gateway.
 	dial func(ctx context.Context, gatewayURL string) (net.Conn, error)
 
+	// grpcLis, when set, enables tunneling the daemon's gRPC server alongside MCP:
+	// the Manager advertises FeatureGRPC, and on a gateway that negotiates it,
+	// demuxes tagged streams (grpc streams are pushed here). nil = MCP only.
+	grpcLis *ChanListener
+
 	mu            sync.Mutex
 	desired       desiredState
 	attemptCancel context.CancelFunc // cancels the in-flight connect attempt, if any
@@ -69,6 +74,23 @@ type Option func(*Manager)
 // integration tests to reach an in-process gateway with a test CA.
 func WithDialFunc(dial func(ctx context.Context, gatewayURL string) (net.Conn, error)) Option {
 	return func(m *Manager) { m.dial = dial }
+}
+
+// WithGRPCListener enables tunneling the daemon's gRPC server alongside MCP. lis
+// is fed demuxed gRPC streams and is Served by a gRPC server in the daemon (with
+// the bearer-token auth interceptor). Without this option the Manager tunnels
+// only MCP.
+func WithGRPCListener(lis *ChanListener) Option {
+	return func(m *Manager) { m.grpcLis = lis }
+}
+
+// features lists the tunnel capabilities this Manager requests in its
+// RegisterRequest. Only advertises FeatureGRPC when a gRPC listener is wired.
+func (m *Manager) features() []string {
+	if m.grpcLis != nil {
+		return []string{tunnel.FeatureGRPC}
+	}
+	return nil
 }
 
 // NewManager builds a Manager that reverse-proxies to the loopback MCP server on
@@ -203,7 +225,7 @@ func (m *Manager) connectAndServe(ctx context.Context, gatewayURL string) (regis
 	// a silent gateway can't hang the attempt.
 	_ = conn.SetDeadline(time.Now().Add(handshakeTimeout))
 	prev := loadSession(gatewayURL)
-	req := tunnel.RegisterRequest{SessionID: prev.SessionID, ClientVersion: m.clientVersion}
+	req := tunnel.RegisterRequest{SessionID: prev.SessionID, ClientVersion: m.clientVersion, Features: m.features()}
 	if err := tunnel.WriteFrame(conn, req); err != nil {
 		return false, fmt.Errorf("register write: %w", err)
 	}
@@ -226,8 +248,13 @@ func (m *Manager) connectAndServe(ctx context.Context, gatewayURL string) (regis
 		return registered, fmt.Errorf("yamux client: %w", err)
 	}
 	defer session.Close()
-	// serveProxy unblocks when the session/conn closes — on a peer drop, or when
-	// stopOnCancel closes the conn on ctx cancel (shutdown or Reconcile teardown).
+	// The serve loop unblocks when the session/conn closes — on a peer drop, or
+	// when stopOnCancel closes the conn on ctx cancel (shutdown / Reconcile
+	// teardown). Use the demuxing path only when the gateway negotiated gRPC AND
+	// we have a gRPC listener; otherwise the streams are untagged (legacy MCP).
+	if m.grpcLis != nil && tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC) {
+		return registered, serveTunnel(session, m.mcpPort, m.grpcLis)
+	}
 	return registered, serveProxy(session, m.mcpPort)
 }
 

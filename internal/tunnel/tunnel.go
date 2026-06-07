@@ -32,6 +32,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"slices"
 
 	"github.com/hashicorp/yamux"
 )
@@ -45,6 +46,11 @@ type RegisterRequest struct {
 	SessionID string `json:"session_id,omitempty"`
 	// ClientVersion is the fleetd version, for the gateway's logs/diagnostics.
 	ClientVersion string `json:"client_version,omitempty"`
+	// Features lists optional tunnel capabilities fleetd supports (e.g.
+	// FeatureGRPC). The gateway echoes back the subset it ALSO supports in
+	// RegisterReply.Features; both sides then only use a feature when it appears
+	// in that negotiated set. Absent (old fleetd) means the base MCP-only tunnel.
+	Features []string `json:"features,omitempty"`
 }
 
 // RegisterReply is the gateway's response. On success Error is empty, SessionID
@@ -54,6 +60,31 @@ type RegisterReply struct {
 	SessionID string `json:"session_id,omitempty"`
 	PublicURL string `json:"public_url,omitempty"`
 	Error     string `json:"error,omitempty"`
+	// Features is the negotiated set: the intersection of what fleetd requested
+	// and what the gateway supports. Absent (old gateway) means MCP-only.
+	Features []string `json:"features,omitempty"`
+}
+
+// FeatureGRPC negotiates tunneling the daemon's gRPC server alongside MCP. When
+// it is in the negotiated set, the gateway tags each opened stream (see tag.go)
+// and serves a /grpc/<id> route, and fleetd demuxes tagged streams.
+const FeatureGRPC = "grpc"
+
+// HasFeature reports whether features contains f.
+func HasFeature(features []string, f string) bool {
+	return slices.Contains(features, f)
+}
+
+// Negotiate returns the features present in BOTH requested and supported (the
+// set the gateway puts in RegisterReply.Features), preserving requested order.
+func Negotiate(requested, supported []string) []string {
+	var out []string
+	for _, r := range requested {
+		if HasFeature(supported, r) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // MaxFrameSize caps a control frame so a malicious or garbled peer cannot make
