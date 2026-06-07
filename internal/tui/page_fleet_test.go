@@ -827,9 +827,9 @@ func TestEditFleetDeleteCacheConfirmEscCancels(t *testing.T) {
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 	navigateToBuildkitRow(t, fp, m)
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})                    // enable
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})                     // enable
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // focus button
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})                    // arm confirm
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})                     // arm confirm
 
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc}) // cancel confirm
 	if fp.dialogDeleteCacheConfirm {
@@ -1493,4 +1493,199 @@ func TestUpdateNormalShiftJumpKeys(t *testing.T) {
 	if fp.cursor != 1 {
 		t.Fatalf("shift+up: cursor = %d, want 1", fp.cursor)
 	}
+}
+
+// TestMigrateRenamedSessionGroupedReKeysAndPreventsDuplicate covers the #100
+// fix: renaming a grouped session changes its group ID, so the saved layout,
+// active group, open split, and last-active must all move to the new ID.
+// Otherwise the stale ID lingers and buildRows renders it as a duplicate row
+// alongside the live renamed group.
+func TestMigrateRenamedSessionGroupedReKeysAndPreventsDuplicate(t *testing.T) {
+	prevSet, prevDel := setGroupLayoutRemote, deleteGroupLayoutRemote
+	setGroupLayoutRemote = func(state.GroupLayout) error { return nil }
+	deleteGroupLayoutRemote = func(string, string) error { return nil }
+	defer func() { setGroupLayoutRemote, deleteGroupLayoutRemote = prevSet, prevDel }()
+
+	ref := InstanceRef{Fleet: "repo", Instance: "alpha"}
+	inst := &fleet.Instance{Name: "alpha", Status: fleet.StatusRunning, ContainerID: "abc"}
+
+	fp := newFleetPage()
+	oldKey := computeGroupKey("alpha", "abc123")
+	fp.savedGroups[oldKey] = savedGroup{
+		GroupID:      "abc123",
+		InstanceName: "alpha",
+		Sessions:     []string{"alpha~abc123", "alpha~abc123~ff00"},
+		PaneCount:    2,
+	}
+	fp.activeGroup = ActiveGroup{Ref: ref, GroupID: "abc123"}
+	fp.splitRef = ref
+	fp.splitSession = "alpha~abc123"
+
+	store := NewSessionStore()
+	store.SetExpanded(ref, true)
+	// Live discovery already reflects the rename: sessions carry the new ID.
+	store.SetDiscovery(ref, []tmuxSession{{Name: "alpha~test"}, {Name: "alpha~test~ff00"}})
+	store.SetLastActive(ref, lastSession{sessionName: "alpha~abc123", groupID: "abc123"})
+
+	m := &model{
+		st: &state.State{
+			Fleets:       map[string]*fleet.Fleet{"repo": {Name: "repo", Instances: []*fleet.Instance{inst}}},
+			GroupLayouts: map[string]state.GroupLayout{oldKey: {GroupID: "abc123", InstanceName: "alpha", Sessions: []string{"alpha~abc123"}}},
+		},
+		fleetPage:    fp,
+		sessionStore: store,
+	}
+
+	m.migrateRenamedSession(sessionRenamedMsg{
+		ref:        ref,
+		oldName:    "alpha~abc123",
+		newName:    "alpha~test",
+		oldGroupID: "abc123",
+		newGroupID: "test",
+	})
+
+	newKey := computeGroupKey("alpha", "test")
+	if _, ok := fp.savedGroups[oldKey]; ok {
+		t.Fatal("saved group still keyed under old group ID after rename")
+	}
+	sg, ok := fp.savedGroups[newKey]
+	if !ok {
+		t.Fatal("saved group not re-keyed to new group ID")
+	}
+	if sg.GroupID != "test" {
+		t.Fatalf("saved group GroupID = %q, want test", sg.GroupID)
+	}
+	if !slices.Equal(sg.Sessions, []string{"alpha~test", "alpha~test~ff00"}) {
+		t.Fatalf("saved group Sessions = %#v, want reprefixed names", sg.Sessions)
+	}
+	if _, ok := m.st.GroupLayouts[oldKey]; ok {
+		t.Fatal("state group layout still keyed under old group ID")
+	}
+	if _, ok := m.st.GroupLayouts[newKey]; !ok {
+		t.Fatal("state group layout not re-keyed to new group ID")
+	}
+	if fp.activeGroup.GroupID != "test" {
+		t.Fatalf("activeGroup.GroupID = %q, want test", fp.activeGroup.GroupID)
+	}
+	if fp.splitSession != "alpha~test" {
+		t.Fatalf("splitSession = %q, want alpha~test", fp.splitSession)
+	}
+	if last, ok := store.LastActive(ref); !ok || last.groupID != "test" || last.sessionName != "alpha~test" {
+		t.Fatalf("lastActive = %#v, want {alpha~test test}", last)
+	}
+
+	// After migration the saved group is live, so prune keeps it and buildRows
+	// renders exactly one session row for the instance — no duplicate.
+	m.pruneSavedGroupsForInstance(ref)
+	fp.buildRows(m)
+	sessionRows := 0
+	for _, r := range fp.rows {
+		if r.kind == rowSession {
+			sessionRows++
+		}
+	}
+	if sessionRows != 1 {
+		t.Fatalf("got %d session rows after rename, want 1 (duplicate not prevented)", sessionRows)
+	}
+}
+
+// TestMigrateRenamedSessionUngroupedFollowsNewName covers the ungrouped path:
+// the pseudo group ID equals the session name, so the split and last-active
+// references must track the new name so the shell isn't stranded.
+func TestMigrateRenamedSessionUngroupedFollowsNewName(t *testing.T) {
+	ref := InstanceRef{Fleet: "repo", Instance: "alpha"}
+	fp := newFleetPage()
+	fp.activeGroup = ActiveGroup{Ref: ref, GroupID: "foo"}
+	fp.splitRef = ref
+	fp.splitSession = "foo"
+
+	store := NewSessionStore()
+	store.SetExpanded(ref, true)
+	store.SetLastActive(ref, lastSession{sessionName: "foo", groupID: "foo"})
+
+	m := &model{
+		st:           &state.State{Fleets: map[string]*fleet.Fleet{}},
+		fleetPage:    fp,
+		sessionStore: store,
+	}
+
+	m.migrateRenamedSession(sessionRenamedMsg{ref: ref, oldName: "foo", newName: "bar"})
+
+	if fp.splitSession != "bar" {
+		t.Fatalf("splitSession = %q, want bar", fp.splitSession)
+	}
+	if fp.activeGroup.GroupID != "bar" {
+		t.Fatalf("activeGroup.GroupID = %q, want bar", fp.activeGroup.GroupID)
+	}
+	if last, ok := store.LastActive(ref); !ok || last.sessionName != "bar" || last.groupID != "bar" {
+		t.Fatalf("lastActive = %#v, want {bar bar}", last)
+	}
+}
+
+// TestPruneWithStaleRuntimeDeletesMigratedGroup demonstrates the race condition
+// that the sessionRenamedMsg handler avoids by skipping prune. When the runtime
+// cache still has OLD session names (stale), pruneSavedGroupsForInstance treats
+// the newly re-keyed group as not-live and deletes it.
+func TestPruneWithStaleRuntimeDeletesMigratedGroup(t *testing.T) {
+	prevSet, prevDel := setGroupLayoutRemote, deleteGroupLayoutRemote
+	setGroupLayoutRemote = func(state.GroupLayout) error { return nil }
+	deleteGroupLayoutRemote = func(string, string) error { return nil }
+	defer func() { setGroupLayoutRemote, deleteGroupLayoutRemote = prevSet, prevDel }()
+
+	ref := InstanceRef{Fleet: "repo", Instance: "alpha"}
+	inst := &fleet.Instance{Name: "alpha", Status: fleet.StatusRunning, ContainerID: "abc"}
+
+	fp := newFleetPage()
+	oldKey := computeGroupKey("alpha", "abc123")
+	fp.savedGroups[oldKey] = savedGroup{
+		GroupID:      "abc123",
+		InstanceName: "alpha",
+		Sessions:     []string{"alpha~abc123", "alpha~abc123~ff00"},
+		PaneCount:    2,
+	}
+	fp.activeGroup = ActiveGroup{Ref: ref, GroupID: "abc123"}
+	fp.splitRef = ref
+	fp.splitSession = "alpha~abc123"
+
+	store := NewSessionStore()
+	store.SetExpanded(ref, true)
+	// Stale discovery: still has the OLD session names.
+	store.SetDiscovery(ref, []tmuxSession{{Name: "alpha~abc123"}, {Name: "alpha~abc123~ff00"}})
+	store.SetLastActive(ref, lastSession{sessionName: "alpha~abc123", groupID: "abc123"})
+
+	m := &model{
+		st: &state.State{
+			Fleets:       map[string]*fleet.Fleet{"repo": {Name: "repo", Instances: []*fleet.Instance{inst}}},
+			GroupLayouts: map[string]state.GroupLayout{oldKey: {GroupID: "abc123", InstanceName: "alpha", Sessions: []string{"alpha~abc123"}}},
+		},
+		fleetPage:    fp,
+		sessionStore: store,
+	}
+
+	// Step 1: Migrate re-keys everything from oldGroupID to newGroupID.
+	m.migrateRenamedSession(sessionRenamedMsg{
+		ref:        ref,
+		oldName:    "alpha~abc123",
+		newName:    "alpha~test",
+		oldGroupID: "abc123",
+		newGroupID: "test",
+	})
+
+	newKey := computeGroupKey("alpha", "test")
+	if _, ok := fp.savedGroups[newKey]; !ok {
+		t.Fatal("precondition: saved group should exist under new key after migrate")
+	}
+
+	// Step 2: Prune with stale discovery — "test" is NOT in the live set
+	// because discovery still only has "abc123" sessions. This deletes the
+	// migrated group, which is exactly the bug the handler fix prevents.
+	m.pruneSavedGroupsForInstance(ref)
+
+	if _, ok := fp.savedGroups[newKey]; ok {
+		t.Fatal("expected prune with stale discovery to delete the migrated group (demonstrates the race)")
+	}
+
+	// This confirms that calling prune with stale data is destructive.
+	// The fix in sessionRenamedMsg handler skips prune entirely, letting the
+	// next periodic runtime refresh (with fresh data) handle pruning safely.
 }
