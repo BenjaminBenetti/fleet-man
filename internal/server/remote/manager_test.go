@@ -337,6 +337,90 @@ func waitForReg(t *testing.T, ch <-chan string, timeout time.Duration) string {
 	}
 }
 
+// TestManagerReconcileDisableConverges hammers Reconcile with interleaved
+// enable/disable toggles (exercising the desired/attemptCancel race the code
+// review flagged) and asserts the manager settles on UNSPECIFIED — i.e. a
+// disable is never left running a stale tunnel.
+func TestManagerReconcileDisableConverges(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cert, pool := genTestTLS(t)
+	mcp := newFakeMCP()
+	defer mcp.srv.Close()
+
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatalf("tls listen: %v", err)
+	}
+	defer ln.Close()
+
+	gwDone := make(chan struct{})
+	defer close(gwDone)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				var req tunnel.RegisterRequest
+				if err := tunnel.ReadFrame(conn, &req); err != nil {
+					return
+				}
+				if err := tunnel.WriteFrame(conn, tunnel.RegisterReply{SessionID: "s", PublicURL: "https://gw/mcp/s"}); err != nil {
+					return
+				}
+				sess, err := tunnel.ServerSession(conn, io.Discard)
+				if err != nil {
+					return
+				}
+				defer sess.Close()
+				<-gwDone
+			}(conn)
+		}
+	}()
+
+	m, statusCh := newManagerForTest(mcp.port(t), ln.Addr().String(), pool)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx)
+
+	for i := 0; i < 30; i++ {
+		m.Reconcile(true, "https://gw.example.com")
+		m.Reconcile(false, "https://gw.example.com")
+	}
+
+	// After the toggles settle, the LAST state observed must be UNSPECIFIED —
+	// the manager must not be left connected/connecting with the feature off.
+	last := drainUntilIdle(statusCh, 400*time.Millisecond, 5*time.Second)
+	if last != fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_UNSPECIFIED {
+		t.Fatalf("after disable toggles, settled on %v, want UNSPECIFIED", last)
+	}
+}
+
+// drainUntilIdle reads statuses until none arrive for `idle` (or `total`
+// elapses), returning the last state seen.
+func drainUntilIdle(ch <-chan *fleetgrpc.RemoteMcpStatus, idle, total time.Duration) fleetgrpc.RemoteMcpConn {
+	last := fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_UNSPECIFIED
+	idleTimer := time.NewTimer(idle)
+	defer idleTimer.Stop()
+	deadline := time.After(total)
+	for {
+		select {
+		case st := <-ch:
+			last = st.GetState()
+			if !idleTimer.Stop() {
+				<-idleTimer.C
+			}
+			idleTimer.Reset(idle)
+		case <-idleTimer.C:
+			return last
+		case <-deadline:
+			return last
+		}
+	}
+}
+
 // TestManagerErrorsWhenMcpDown reports an error (not a crash) when enabled but
 // the local MCP server isn't running (mcpPort == 0).
 func TestManagerErrorsWhenMcpDown(t *testing.T) {

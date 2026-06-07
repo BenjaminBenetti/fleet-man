@@ -104,11 +104,24 @@ func (m *Manager) Run(ctx context.Context) {
 			return
 		}
 
+		// Read the desired config AND install this attempt's cancel under ONE
+		// lock. They must be atomic: if they were separate, a Reconcile landing
+		// between them (the window is widened by the publish() below) would see no
+		// cancel installed and let the attempt run on with stale settings — even
+		// serving after a disable. With one lock, a Reconcile either precedes it
+		// (we read its fresh desired) or follows it (it sees our cancel and aborts
+		// this attempt).
+		attemptCtx, cancel := context.WithCancel(ctx)
 		m.mu.Lock()
 		d := m.desired
+		m.attemptCancel = cancel
 		m.mu.Unlock()
 
 		if !d.enabled || d.gatewayURL == "" {
+			cancel()
+			m.mu.Lock()
+			m.attemptCancel = nil
+			m.mu.Unlock()
 			m.publish(statusDisabled())
 			if !m.wait(ctx) {
 				return
@@ -118,11 +131,6 @@ func (m *Manager) Run(ctx context.Context) {
 		}
 
 		m.publish(statusConnecting())
-		attemptCtx, cancel := context.WithCancel(ctx)
-		m.mu.Lock()
-		m.attemptCancel = cancel
-		m.mu.Unlock()
-
 		registered, err := m.connectAndServe(attemptCtx, d.gatewayURL)
 		cancel()
 
@@ -169,6 +177,12 @@ func (m *Manager) connectAndServe(ctx context.Context, gatewayURL string) (regis
 		return false, err
 	}
 	defer conn.Close()
+	// Close the conn on ctx cancel so the attempt aborts promptly at ANY stage:
+	// the handshake (which is bounded by conn deadlines, not ctx) as well as the
+	// serve loop (closing the conn under yamux makes serveProxy return).
+	// Idempotent with the defers and with session.Close below.
+	stopOnCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopOnCancel()
 
 	// Control handshake on the raw conn (before yamux), bounded by a deadline so
 	// a silent gateway can't hang the attempt.
@@ -197,11 +211,8 @@ func (m *Manager) connectAndServe(ctx context.Context, gatewayURL string) (regis
 		return registered, fmt.Errorf("yamux client: %w", err)
 	}
 	defer session.Close()
-	// Closing the session on ctx cancel unblocks serveProxy promptly (shutdown or
-	// a Reconcile-driven teardown).
-	stop := context.AfterFunc(ctx, func() { _ = session.Close() })
-	defer stop()
-
+	// serveProxy unblocks when the session/conn closes — on a peer drop, or when
+	// stopOnCancel closes the conn on ctx cancel (shutdown or Reconcile teardown).
 	return registered, serveProxy(session, m.mcpPort)
 }
 
