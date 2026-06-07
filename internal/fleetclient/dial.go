@@ -8,7 +8,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Conn is a connected fleet client. Service() returns the gRPC client; callers
@@ -30,7 +29,7 @@ func (c *Conn) Close() error { return c.conn.Close() }
 // incompatible remote/newer one). For a remote endpoint it dials only.
 func Dial(ctx context.Context) (*Conn, error) {
 	ep := selectEndpoint()
-	conn, err := grpc.NewClient(ep.Target(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(ep.Target(), ep.DialOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("create client for %s: %w", ep, err)
 	}

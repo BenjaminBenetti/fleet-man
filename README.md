@@ -204,6 +204,38 @@ to your daemons. A `GET /healthz` on the public listener returns `ok`.
   secret (never placed in the URL), so a URL holder cannot hijack your tunnel.
 - All gateway traffic is TLS; the daemon verifies the gateway's certificate.
 
+### Remote control (gRPC)
+
+The same gateway tunnel can also carry the daemon's **gRPC** API, so a remote
+`fleet` client can drive your daemon directly — list/up/down, watch live status,
+stream logs, change config, and so on. It rides the **same tunnel and the same
+on/off toggle** as remote MCP (no separate setting); the gateway serves it at
+`https://<gateway>/grpc/<id>` (same id as the MCP URL, `/grpc` instead of `/mcp`).
+
+Point a `fleet` client at it with two env vars:
+
+```bash
+export FLEET_GATEWAY="https://gateway.example.com/grpc/<id>"
+export FLEET_TOKEN="<token from ~/.fleet/mcp.token>"   # omit on the same host as the daemon
+fleet ls          # …now talks to the REMOTE daemon
+```
+
+`FLEET_GATEWAY` takes precedence over `FLEET_SERVER` and the local socket; a remote
+endpoint is never auto-spawned, and a daemon/client version mismatch is a hard
+error.
+
+> ⚠️ **Security — this is full remote control.** The bearer token authorizes
+> *every* gRPC call, so the **same `~/.fleet/mcp.token` now grants full control of
+> your daemon over the internet** — not just the read-mostly MCP tools. The gateway
+> terminates TLS, so its operator can see your traffic and token (the same trust
+> model as remote MCP). Only enable this with a gateway you run or trust, and treat
+> the token as a high-value secret.
+
+> **Note:** interactive `fleet exec` (a remote shell) is **not yet supported** over
+> the gateway — it currently runs the command on the *client's* host. Every other
+> RPC works remotely today; remote interactive shell awaits a server-side `Exec`
+> handler.
+
 ## Requirements
 
 - Linux, including Ubuntu on WSL2

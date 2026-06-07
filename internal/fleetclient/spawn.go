@@ -13,7 +13,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // ensureServerLocal makes sure a local fleet server is reachable, spawning one
@@ -91,7 +90,7 @@ func waitReady(ctx context.Context, ep Endpoint, within time.Duration) error {
 func pingOK(ep Endpoint) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	conn, err := grpc.NewClient(ep.Target(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(ep.Target(), ep.DialOptions()...)
 	if err != nil {
 		return false
 	}
