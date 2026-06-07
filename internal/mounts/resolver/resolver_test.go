@@ -261,10 +261,11 @@ func TestResolveCreatesCustomMounts(t *testing.T) {
 	}
 }
 
-// TestResolveCustomMountsComeAfterManaged verifies the resolver appends custom
-// mounts after the managed ones so a colliding custom mount wins (last-wins),
-// the behavior the edit-fleet dialog documents.
-func TestResolveCustomMountsComeAfterManaged(t *testing.T) {
+// TestResolveCustomMountWinsCollision verifies that when a custom mount's
+// container path collides with a managed mount target, the resolver emits
+// exactly ONE mount for that path (no "Duplicate mount point" at provision
+// time) and it is the custom mount — the documented last-wins behavior.
+func TestResolveCustomMountWinsCollision(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -277,24 +278,18 @@ func TestResolveCustomMountsComeAfterManaged(t *testing.T) {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 
-	// Find the indices of the two mounts targeting /home/vscode/.claude.
-	var managedIdx, customIdx = -1, -1
-	for i, mount := range resolved.Mounts {
-		if mount.ContainerPath != "/home/vscode/.claude" {
-			continue
-		}
-		managedHost := filepath.Join(home, ".fleet", "workspaces", "epsilon", ".claude")
-		if mount.LocalPath == managedHost {
-			managedIdx = i
-		} else {
-			customIdx = i
+	var matches []string
+	for _, mount := range resolved.Mounts {
+		if mount.ContainerPath == "/home/vscode/.claude" {
+			matches = append(matches, mount.LocalPath)
 		}
 	}
-	if managedIdx == -1 || customIdx == -1 {
-		t.Fatalf("expected both managed and custom mounts for /home/vscode/.claude, got %+v", resolved.Mounts)
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly 1 mount for /home/vscode/.claude (last-wins dedup), got %d: %v", len(matches), matches)
 	}
-	if customIdx < managedIdx {
-		t.Errorf("custom mount (idx %d) should come after managed mount (idx %d) so it wins", customIdx, managedIdx)
+	wantCustomHost := filepath.Join(home, ".fleet", "workspaces", "epsilon", ".mnt", "home", "vscode", ".claude")
+	if matches[0] != wantCustomHost {
+		t.Errorf("colliding mount host = %q, want the custom mount %q", matches[0], wantCustomHost)
 	}
 }
 

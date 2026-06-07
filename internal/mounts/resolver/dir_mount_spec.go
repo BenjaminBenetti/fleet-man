@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -70,5 +71,32 @@ func dirMountSpecsFor(fleetSettings fleet.FleetSettings, containerHome string) [
 			containerPath: containerPath,
 		})
 	}
-	return specs
+
+	// Collapse duplicate container paths keeping the LAST spec. Two specs
+	// targeting the same container path would otherwise become two bind mounts
+	// with the same destination, which the devcontainer/Docker backend rejects
+	// outright ("Duplicate mount point"), failing the whole `fleet up`. Because
+	// custom mounts are appended after the managed ones, keeping the last spec
+	// makes a colliding custom mount win — the documented last-wins behavior —
+	// instead of crashing provisioning.
+	return dedupeSpecsByContainerPathKeepLast(specs)
+}
+
+// dedupeSpecsByContainerPathKeepLast returns specs with at most one entry per
+// containerPath, retaining the LAST occurrence of each and preserving the
+// relative order of the kept entries.
+func dedupeSpecsByContainerPathKeepLast(specs []dirMountSpec) []dirMountSpec {
+	seen := make(map[string]struct{}, len(specs))
+	kept := make([]dirMountSpec, 0, len(specs))
+	// Walk backwards so the first time we see a container path is its last
+	// occurrence; reverse at the end to restore forward order.
+	for i := len(specs) - 1; i >= 0; i-- {
+		if _, ok := seen[specs[i].containerPath]; ok {
+			continue
+		}
+		seen[specs[i].containerPath] = struct{}{}
+		kept = append(kept, specs[i])
+	}
+	slices.Reverse(kept)
+	return kept
 }
