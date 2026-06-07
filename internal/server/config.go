@@ -41,6 +41,15 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "reload config: %v", err)
 	}
+
+	// Converge the remote-MCP tunnel to the saved settings. Reconcile is
+	// non-blocking (it just records desired state and nudges the supervisor), so
+	// calling it while muWrite is held cannot deadlock. nil during tests that use
+	// newService() without a serve loop.
+	if s.remote != nil {
+		s.remote.Reconcile(saved.RemoteMcpSettings.Enabled, saved.RemoteMcpSettings.GatewayURL)
+	}
+
 	return &fleetgrpc.SetConfigReply{Config: configToProto(saved)}, nil
 }
 

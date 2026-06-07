@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/server/remote"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	"google.golang.org/grpc/codes"
@@ -25,6 +26,11 @@ type service struct {
 	startedAt time.Time
 	hub       *hub
 	jobs      *jobManager
+
+	// remote drives the outbound remote-MCP gateway tunnel. Set in server.go
+	// after the MCP listener binds (so it knows the loopback port); nil for tests
+	// that use newService() without a serve loop, so callers must nil-check.
+	remote *remote.Manager
 
 	// bgCtx is cancelled at server shutdown (set to the serve loop's hubCtx in
 	// server.go). Background work spawned by RPC handlers — e.g. the TUI-connect
