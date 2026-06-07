@@ -46,6 +46,20 @@ type FleetSettings struct {
 	// configuration is skipped without error (the instance stays usable).
 	BuildkitServer bool `json:"buildkitServer,omitempty"`
 
+	// CustomMounts is the list of user-defined shared directory mounts for
+	// the fleet. Each entry is an ABSOLUTE in-container path (e.g.
+	// "/opt/data"); the host side is derived as
+	// ~/.fleet/workspaces/<fleet>/.mnt/<path> and bind-mounted into every
+	// instance, so the directory is shared across all instances exactly like
+	// the *Mount toggles. Entries are validated/normalized (see
+	// NormalizeCustomMount) before persisting. When a custom mount's
+	// container path collides with a managed mount (Claude/Codex/Gh) the
+	// custom mount is resolved last and wins (see dirMountSpecsFor). Honored
+	// only on backends that report SupportsCustomMounts()==true
+	// (devcontainer); other backends silently skip them. Empty (the default)
+	// means no custom mounts.
+	CustomMounts []string `json:"customMounts,omitempty"`
+
 	// HomeDir is the absolute path inside the container that should be
 	// treated as the home directory when computing mount targets — e.g.
 	// "/home/vscode" so a Claude Code mount lands at "/home/vscode/.claude".

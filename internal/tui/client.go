@@ -318,6 +318,7 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 		CodexMount:      s.CodexMount,
 		GhMount:         s.GhMount,
 		BuildkitServer:  s.BuildkitServer,
+		CustomMounts:    s.CustomMounts,
 	}
 	if s.HomeDir != "" {
 		ps.HomeDir = &s.HomeDir
@@ -498,6 +499,7 @@ func protoFleetToLegacy(pf *fleetgrpc.Fleet) *fleet.Fleet {
 			CodexMount:      ps.GetCodexMount(),
 			GhMount:         ps.GetGhMount(),
 			BuildkitServer:  ps.GetBuildkitServer(),
+			CustomMounts:    ps.GetCustomMounts(),
 			HomeDir:         ps.GetHomeDir(),
 		}
 		if ps.PreferFleetLaunch != nil {

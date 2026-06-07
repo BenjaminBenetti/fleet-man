@@ -134,6 +134,56 @@ func TestSetFleetSettingsPreservesPresence(t *testing.T) {
 	}
 }
 
+// TestSetFleetSettingsCustomMounts verifies the server normalizes (cleans +
+// de-dups) valid custom mounts and rejects traversal/relative ones with
+// InvalidArgument — the authoritative trust boundary.
+func TestSetFleetSettingsCustomMounts(t *testing.T) {
+	isolateFleetDir(t)
+	svc := newService()
+	ctx := context.Background()
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha"}}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Valid list with a duplicate + trailing slash gets canonicalized.
+	reply, err := svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{
+		Fleet: "alpha",
+		Settings: &fleetgrpc.FleetSettings{
+			CustomMounts: []string{"/opt/data/", "/opt/data", "/var/cache"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SetFleetSettings: %v", err)
+	}
+	got := reply.GetState().GetFleets()["alpha"].GetSettings().GetCustomMounts()
+	want := []string{"/opt/data", "/var/cache"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("custom mounts = %v, want %v", got, want)
+	}
+
+	// A traversal entry is rejected before persisting.
+	if _, err := svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{
+		Fleet:    "alpha",
+		Settings: &fleetgrpc.FleetSettings{CustomMounts: []string{"/opt", "../../etc"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument for traversal mount, got %v", err)
+	}
+
+	// A relative entry is rejected too.
+	if _, err := svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{
+		Fleet:    "alpha",
+		Settings: &fleetgrpc.FleetSettings{CustomMounts: []string{"relative/path"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument for relative mount, got %v", err)
+	}
+
+	// The rejected updates left the previously-saved valid list intact.
+	st, _ := state.Load()
+	if mounts := st.Fleets["alpha"].Settings.CustomMounts; len(mounts) != 2 {
+		t.Fatalf("persisted custom mounts = %v, want the 2 valid entries", mounts)
+	}
+}
+
 func TestSetInstanceMetadataUpdatesOnlyProvidedFields(t *testing.T) {
 	isolateFleetDir(t)
 	svc := newService()

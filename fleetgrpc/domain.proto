@@ -153,6 +153,15 @@ message FleetSettings {
   // the *Mount flags. Honored only on backends that SupportsCustomMounts()
   // (devcontainer); cloud backends silently skip it.
   bool buildkit_server = 6;
+
+  // custom_mounts is the list of user-defined shared directory mounts for the
+  // fleet. Each entry is an ABSOLUTE in-container path (e.g. "/opt/data"); the
+  // host side is derived as ~/.fleet/workspaces/<fleet>/.mnt/<path> and is
+  // bind-mounted into every instance, so the directory is shared across all
+  // instances exactly like the *Mount toggles. repeated string: an empty list
+  // (the default) means no custom mounts. Honored only on backends that
+  // SupportsCustomMounts() (devcontainer); cloud backends silently skip them.
+  repeated string custom_mounts = 7;
 }
 
 // Fleet mirrors internal/fleet.Fleet. Settings is a NESTED message (not inlined)
