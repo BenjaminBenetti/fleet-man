@@ -118,3 +118,63 @@ func TestWatchPushesOnStateChange(t *testing.T) {
 		t.Fatalf("want pushed state v9, got %q", got)
 	}
 }
+
+// TestWatchStreamsRemoteMcpStatus validates the computed-field-over-Watch design:
+// the gateway-assigned Public MCP URL is delivered as a RemoteMcpStatus event
+// (never a Config field), and a subscriber with include_initial_state receives
+// the hub's cached status up front.
+func TestWatchStreamsRemoteMcpStatus(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	svc := newService()
+	go svc.hub.run(ctx)
+
+	// Seed the hub's cached tunnel status (what the tunnel manager will push in
+	// a later PR).
+	want := &fleetgrpc.RemoteMcpStatus{
+		State:     fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED,
+		PublicUrl: "https://gw.example.com/mcp/deadbeef",
+	}
+	synced := make(chan struct{})
+	svc.hub.post(func(h *hub) { h.broadcastRemoteMcpStatus(want); close(synced) })
+	<-synced
+
+	lis := bufconn.Listen(1 << 20)
+	gs := grpc.NewServer()
+	fleetgrpc.RegisterFleetServiceServer(gs, svc)
+	go func() { _ = gs.Serve(lis) }()
+	defer gs.Stop()
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	streamCtx, streamCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer streamCancel()
+	stream, err := fleetgrpc.NewFleetServiceClient(conn).Watch(streamCtx, &fleetgrpc.WatchRequest{IncludeInitialState: true})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+
+	// The initial snapshot may interleave StateChanged with the status; read
+	// until the RemoteMcpStatus event arrives.
+	for {
+		ev, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv before RemoteMcpStatus: %v", err)
+		}
+		if rm := ev.GetRemoteMcpStatus(); rm != nil {
+			if rm.GetState() != fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED || rm.GetPublicUrl() != want.GetPublicUrl() {
+				t.Fatalf("remote-mcp status mismatch: %v", rm)
+			}
+			return
+		}
+	}
+}

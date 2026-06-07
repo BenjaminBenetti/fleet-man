@@ -74,6 +74,19 @@ message BrowserSettings {
   optional bool auto_switch = 2;
 }
 
+// RemoteMcpSettings mirrors internal/state.RemoteMcpSettings — the user's intent
+// to expose this daemon's local MCP server to the internet through a remote fleet
+// gateway. These are the ONLY two persisted fields: enabled and gateway_url.
+//
+// The COMPUTED "Public MCP URL" the gateway assigns on connect is deliberately
+// NOT in Config — it is runtime state owned by the server and pushed to the TUI
+// via the Watch RemoteMcpStatus event (watch.proto). Keeping it out of Config is
+// what prevents the SetConfig-replaces-everything contract from clobbering it.
+message RemoteMcpSettings {
+  bool enabled = 1;
+  string gateway_url = 2;
+}
+
 message Config {
   GeneralSettings general = 1;
   AgentSettings agent = 2;
@@ -84,8 +97,9 @@ message Config {
   // Feeds CreateInstanceRequest's UNSPECIFIED-backend resolution. UNSPECIFIED
   // means "no default recorded" (-> DEVCONTAINER).
   BackendType default_backend = 7;
+  RemoteMcpSettings remote_mcp = 8;
 
-  reserved 8 to 20;
+  reserved 9 to 20;
 }
 
 message GetConfigRequest {}

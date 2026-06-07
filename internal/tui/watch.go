@@ -27,6 +27,7 @@ type runtimeChangedMsg struct{ runtime []*fleetgrpc.InstanceRuntime }
 type watchBrowserOpenMsg struct {
 	url, dataDir, fleet, instance string
 }
+type remoteMcpStatusMsg struct{ status *fleetgrpc.RemoteMcpStatus }
 type watchErrMsg struct{ err error }
 type watchClosedMsg struct{ err error }
 
@@ -112,6 +113,8 @@ func watchOnce(ctx context.Context, program *tea.Program) bool {
 				fleet:    bo.GetFleet(),
 				instance: bo.GetInstance(),
 			})
+		case *fleetgrpc.Event_RemoteMcpStatus:
+			program.Send(remoteMcpStatusMsg{status: k.RemoteMcpStatus})
 		default:
 			// Job* events are not consumed by the TUI in P2.
 		}

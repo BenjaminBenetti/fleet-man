@@ -231,6 +231,39 @@ func TestSaveConfigRoundTripAutoInstall(t *testing.T) {
 	}
 }
 
+func TestSaveConfigRoundTripRemoteMcp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	want := &Config{
+		AgentSettings:     AgentSettings{ToolSelection: AgentToolClaude},
+		RemoteMcpSettings: RemoteMcpSettings{Enabled: true, GatewayURL: "https://gateway.example.com"},
+	}
+
+	if err := SaveConfig(want); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	got, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if !got.RemoteMcpSettings.Enabled {
+		t.Fatal("RemoteMcpSettings.Enabled = false, want true")
+	}
+	if got.RemoteMcpSettings.GatewayURL != "https://gateway.example.com" {
+		t.Fatalf("GatewayURL = %q, want %q", got.RemoteMcpSettings.GatewayURL, "https://gateway.example.com")
+	}
+}
+
+func TestApplyDefaultsTrimsRemoteMcpGatewayURL(t *testing.T) {
+	c := &Config{RemoteMcpSettings: RemoteMcpSettings{GatewayURL: "  https://gateway.example.com\n"}}
+	c.applyDefaults()
+	if c.RemoteMcpSettings.GatewayURL != "https://gateway.example.com" {
+		t.Fatalf("GatewayURL not trimmed: %q", c.RemoteMcpSettings.GatewayURL)
+	}
+}
+
 func TestTmuxVimKeysDefaultsToTrue(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

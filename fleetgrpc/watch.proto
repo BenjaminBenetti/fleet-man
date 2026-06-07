@@ -56,6 +56,12 @@ message WatchRequest {
 // a browser.open envelope from inside a container; the SERVER owns the control
 // socket and resolves the URL, the CLIENT execs its local browser — the correct
 // split for the remote-TUI goal.
+//
+// RemoteMcpStatus carries the live state of the outbound MCP gateway tunnel,
+// including the gateway-assigned Public MCP URL. It is a server-owned, push-only
+// COMPUTED value (never a Config field), so the settings page renders whatever
+// the latest pushed status says without any SetConfig read-back. Conflatable
+// (newest status wins) and cached by the hub for the initial snapshot.
 message Event {
   oneof kind {
     StateChanged state_changed = 1;
@@ -65,7 +71,27 @@ message Event {
     JobDone job_done = 5;
     BrowserOpen browser_open = 6;
     RuntimeChanged runtime_changed = 7;
+    RemoteMcpStatus remote_mcp_status = 8;
   }
+}
+
+// RemoteMcpConn is the connection state of the outbound MCP gateway tunnel.
+enum RemoteMcpConn {
+  REMOTE_MCP_CONN_UNSPECIFIED = 0; // feature off / not connected (the default)
+  REMOTE_MCP_CONN_CONNECTING = 1; // enabled, dialing/registering with the gateway
+  REMOTE_MCP_CONN_CONNECTED = 2; // tunnel up; public_url is live
+  REMOTE_MCP_CONN_ERROR = 3; // enabled but the last attempt failed; error is set
+}
+
+// RemoteMcpStatus is the computed status the settings page shows after the user
+// enables remote MCP. public_url is the gateway-assigned Public MCP URL (only
+// meaningful when state is CONNECTED); error carries the last failure (when
+// state is ERROR). The tunnel itself lands in a later PR — for now this only
+// ever reports DISABLED, but the full push path is wired end to end.
+message RemoteMcpStatus {
+  RemoteMcpConn state = 1;
+  string public_url = 2;
+  string error = 3;
 }
 
 // StateChanged is pushed whenever the authoritative PERSISTED model mutates. It

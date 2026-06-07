@@ -29,6 +29,12 @@ type hub struct {
 	subs    map[*subscriber]struct{}
 	agent   *agentTracker // stateful agent-activity detection (owned by the loop)
 
+	// remoteMcp is the latest outbound-MCP-gateway tunnel status (owned by the
+	// loop). It is a computed, server-owned value pushed to clients via the Watch
+	// RemoteMcpStatus event and cached here so a newly-attached subscriber gets
+	// the current status in its initial snapshot. Defaults to DISABLED.
+	remoteMcp *fleetgrpc.RemoteMcpStatus
+
 	// runtimeWanted is true while at least one subscriber asked for runtime;
 	// the runtime pollers read it lock-free to gate their expensive work.
 	runtimeWanted atomic.Bool
@@ -58,6 +64,7 @@ func newHub() *hub {
 		subs:        make(map[*subscriber]struct{}),
 		agent:       newAgentTracker(),
 		runtimeEdge: make(chan struct{}, 1),
+		remoteMcp:   &fleetgrpc.RemoteMcpStatus{}, // state == UNSPECIFIED (not connected)
 	}
 }
 
@@ -173,6 +180,23 @@ func (h *hub) broadcastBrowserOpen(ev *fleetgrpc.BrowserOpen) {
 	}
 }
 
+// broadcastRemoteMcpStatus caches the latest outbound-MCP-tunnel status and fans
+// it out to every subscriber. Conflatable (newest status wins, like setState),
+// so a no-op transition is dropped and a slow consumer only ever sees the
+// current status. Runs on the hub loop.
+func (h *hub) broadcastRemoteMcpStatus(st *fleetgrpc.RemoteMcpStatus) {
+	if st == nil {
+		return
+	}
+	if proto.Equal(h.remoteMcp, st) {
+		return
+	}
+	h.remoteMcp = st
+	for sub := range h.subs {
+		sub.enqueueRemoteMcp(st)
+	}
+}
+
 func runtimeKey(fleetName, instance string) string { return fleetName + "/" + instance }
 
 // subscriber is one Watch stream's conflating buffer. pendingState keeps the
@@ -191,6 +215,9 @@ type subscriber struct {
 	// Unlike state/runtime these are discrete (each open matters), so they are
 	// NOT conflated — they accumulate until drained.
 	pendingBrowserOpen []*fleetgrpc.BrowserOpen
+	// pendingRemoteMcp is the newest outbound-MCP-tunnel status (conflated like
+	// pendingState — only the current status matters).
+	pendingRemoteMcp *fleetgrpc.RemoteMcpStatus
 
 	notify chan struct{}
 }
@@ -233,9 +260,16 @@ func (s *subscriber) enqueueBrowserOpen(ev *fleetgrpc.BrowserOpen) {
 	s.signal()
 }
 
-// drain takes the pending state + runtime + browser-opens out of the buffer for
-// sending.
-func (s *subscriber) drain() (*fleetgrpc.State, []*fleetgrpc.InstanceRuntime, []*fleetgrpc.BrowserOpen) {
+func (s *subscriber) enqueueRemoteMcp(st *fleetgrpc.RemoteMcpStatus) {
+	s.mu.Lock()
+	s.pendingRemoteMcp = st
+	s.mu.Unlock()
+	s.signal()
+}
+
+// drain takes the pending state + runtime + browser-opens + remote-MCP status
+// out of the buffer for sending.
+func (s *subscriber) drain() (*fleetgrpc.State, []*fleetgrpc.InstanceRuntime, []*fleetgrpc.BrowserOpen, *fleetgrpc.RemoteMcpStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.pendingState
@@ -250,5 +284,7 @@ func (s *subscriber) drain() (*fleetgrpc.State, []*fleetgrpc.InstanceRuntime, []
 	}
 	bo := s.pendingBrowserOpen
 	s.pendingBrowserOpen = nil
-	return st, rt, bo
+	rm := s.pendingRemoteMcp
+	s.pendingRemoteMcp = nil
+	return st, rt, bo, rm
 }

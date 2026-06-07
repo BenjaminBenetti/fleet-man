@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/agent"
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/doctor"
@@ -35,6 +36,9 @@ const (
 
 	settingsItemBrowserMultiple   = 600 // browser settings start here
 	settingsItemBrowserAutoSwitch = 601
+
+	settingsItemRemoteMcpEnabled    = 700 // fleet remote (MCP) settings start here
+	settingsItemRemoteMcpGatewayURL = 701
 
 	settingsItemToolStatusBase = 1000 // tool status rows start here
 	settingsItemDoctor         = 2000 // doctor action row
@@ -166,6 +170,15 @@ var settingsSections = []settingsSection{
 				items = append(items, settingsItemBrowserAutoSwitch)
 			}
 			return items
+		},
+	},
+	{
+		Title: "Fleet Remote (MCP)",
+		Items: func(_ *configutil.Config) []int {
+			// The computed Public MCP URL is rendered inline as a read-only
+			// status line (not navigable), so only the two editable settings
+			// are listed here.
+			return []int{settingsItemRemoteMcpEnabled, settingsItemRemoteMcpGatewayURL}
 		},
 	},
 	{
@@ -324,6 +337,28 @@ func (settingsPage *settingsPage) toggleBrowserMultiple(m *model) {
 	m.message = fmt.Sprintf("Multiple browsers per fleet set to %s", label)
 }
 
+// toggleRemoteMcpEnabled flips the "Enabled" preference for exposing this
+// daemon's MCP server through a remote fleet gateway, and saves. Reverts on a
+// save failure, mirroring the other toggles.
+func (settingsPage *settingsPage) toggleRemoteMcpEnabled(m *model) {
+	if m.config == nil {
+		m.config = configutil.DefaultConfig()
+	}
+	current := m.config.RemoteMcpSettings.Enabled
+	next := !current
+	m.config.RemoteMcpSettings.Enabled = next
+	if err := setConfigRemote(m.config); err != nil {
+		m.config.RemoteMcpSettings.Enabled = current
+		m.message = fmt.Sprintf("Failed to save settings: %v", err)
+		return
+	}
+	label := "off"
+	if next {
+		label = "on"
+	}
+	m.message = fmt.Sprintf("Remote MCP set to %s", label)
+}
+
 // toggleAutoInstall toggles the dotfiles auto-install setting.
 func (settingsPage *settingsPage) toggleAutoInstall(m *model) {
 	if m.config == nil {
@@ -401,6 +436,34 @@ func (settingsPage *settingsPage) codespacesMachineLabel(m *model) string {
 	return name
 }
 
+// remoteMcpStatusValue renders the read-only Public MCP URL / connection-state
+// line from the latest status the server pushed over Watch. The tunnel itself
+// lands in a later PR, so today this resolves to "not connected" once enabled;
+// the CONNECTING/CONNECTED/ERROR rendering is wired and ready for it.
+func remoteMcpStatusValue(m *model) string {
+	st := m.remoteMcpStatus
+	if st == nil {
+		return dimStyle.Render("(not connected)")
+	}
+	switch st.GetState() {
+	case fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED:
+		if url := st.GetPublicUrl(); url != "" {
+			return statusRunningStyle.Render("connected") + "  " + url
+		}
+		return statusRunningStyle.Render("connected")
+	case fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTING:
+		return m.spinner.View() + " connecting…"
+	case fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_ERROR:
+		msg := st.GetError()
+		if msg == "" {
+			msg = "connection failed"
+		}
+		return statusCreatingStyle.Render("error") + "  " + dimStyle.Render(msg)
+	default: // UNSPECIFIED / not yet connected
+		return dimStyle.Render("(not connected)")
+	}
+}
+
 // ===========================================
 // Update Handlers
 // ===========================================
@@ -453,6 +516,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleBrowserMultiple(m)
 			} else if item == settingsItemBrowserAutoSwitch {
 				settingsPage.toggleBrowserAutoSwitch(m)
+			} else if item == settingsItemRemoteMcpEnabled {
+				settingsPage.toggleRemoteMcpEnabled(m)
 			} else if item == settingsItemCoderPreset {
 				settingsPage.cycleCoderPreset(m, -1)
 			} else if item == settingsItemCodespacesMachine {
@@ -472,6 +537,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleBrowserMultiple(m)
 			} else if item == settingsItemBrowserAutoSwitch {
 				settingsPage.toggleBrowserAutoSwitch(m)
+			} else if item == settingsItemRemoteMcpEnabled {
+				settingsPage.toggleRemoteMcpEnabled(m)
 			} else if item == settingsItemCoderPreset {
 				settingsPage.cycleCoderPreset(m, 1)
 			} else if item == settingsItemCodespacesMachine {
@@ -499,6 +566,10 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			}
 			if item == settingsItemBrowserAutoSwitch {
 				settingsPage.toggleBrowserAutoSwitch(m)
+				return nil
+			}
+			if item == settingsItemRemoteMcpEnabled {
+				settingsPage.toggleRemoteMcpEnabled(m)
 				return nil
 			}
 			if item == settingsItemCoderPreset {
@@ -564,6 +635,9 @@ func (settingsPage *settingsPage) enterSettingsEditing(m *model) tea.Cmd {
 	case item == settingsItemCoderTemplate:
 		current = m.config.CoderSettings.Template
 		settingsPage.input.Placeholder = "template-name"
+	case item == settingsItemRemoteMcpGatewayURL:
+		current = m.config.RemoteMcpSettings.GatewayURL
+		settingsPage.input.Placeholder = "https://gateway.example.com"
 	case item >= settingsItemCoderParamBase && item < settingsItemCodespacesMachine:
 		idx := item - settingsItemCoderParamBase
 		if idx < len(m.config.CoderSettings.Parameters) {
@@ -607,6 +681,8 @@ func (settingsPage *settingsPage) updateSettingsEditing(m *model, msg tea.Msg) t
 				m.config.DotfilesSettings.RepoURL = value
 			case item == settingsItemDotfilesScript:
 				m.config.DotfilesSettings.InstallScript = value
+			case item == settingsItemRemoteMcpGatewayURL:
+				m.config.RemoteMcpSettings.GatewayURL = value
 			case item == settingsItemCoderTemplate:
 				oldTemplate := m.config.CoderSettings.Template
 				m.config.CoderSettings.Template = value
@@ -838,6 +914,31 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				recordRow(settingsItemBrowserAutoSwitch, settingsPage.renderSettingsRow(m, currentItem == settingsItemBrowserAutoSwitch, "Auto Switch", autoSwitchValue))
 			}
 
+		case "Fleet Remote (MCP)":
+			enabledValue := "[ off ]"
+			if config.RemoteMcpSettings.Enabled {
+				enabledValue = "[ on ]"
+			}
+			// Append a dim sub-line describing what the toggle does.
+			enabledValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Expose this fleet's MCP server to the internet via a fleet gateway")
+			recordRow(settingsItemRemoteMcpEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteMcpEnabled, "Enabled", enabledValue))
+			listContent.WriteString("\n")
+
+			gatewayValue := config.RemoteMcpSettings.GatewayURL
+			if gatewayValue == "" && !(settingsPage.editing && currentItem == settingsItemRemoteMcpGatewayURL) {
+				gatewayValue = dimStyle.Render("(not set)")
+			}
+			recordRow(settingsItemRemoteMcpGatewayURL, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteMcpGatewayURL, "Gateway URL", gatewayValue))
+
+			// The computed Public MCP URL is read-only (not navigable): it is the
+			// gateway-assigned address, delivered over Watch, that external tools
+			// use to reach this fleet. Only shown once the feature is enabled.
+			if config.RemoteMcpSettings.Enabled {
+				listContent.WriteString("\n")
+				row := settingsPage.renderSettingsRow(m, false, "Public MCP URL", remoteMcpStatusValue(m))
+				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(row))
+			}
+
 		case "Tool Status":
 			for i, tool := range m.toolStatus {
 				if i > 0 {
@@ -878,7 +979,13 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		tail.WriteString(keybindingsDialogBox.Render(settingsPage.renderKeybindingsDialog()))
 		tail.WriteString("\n")
 	}
-	if currentItem >= settingsItemCoderParamBase && currentItem < settingsItemToolStatusBase {
+	// Only the coder PARAMETER rows (value fields, which can interpolate the
+	// variables below) get this hint. Coder params occupy
+	// [settingsItemCoderParamBase, settingsItemCodespacesMachine); the upper
+	// bound must be settingsItemCodespacesMachine, not settingsItemToolStatusBase,
+	// or the hint also (wrongly) shows on the codespaces/browser/remote-mcp rows
+	// that sit in the 500/600/700 blocks below it.
+	if currentItem >= settingsItemCoderParamBase && currentItem < settingsItemCodespacesMachine {
 		tail.WriteString(dimStyle.Render("  Variables: ${GIT_URL} = fleet repo URL, ${GIT_BRANCH} = git branch (blank = default), ${INSTANCE_NAME} = workspace name"))
 		tail.WriteString("\n")
 	}

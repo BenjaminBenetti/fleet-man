@@ -97,3 +97,43 @@ func TestSetConfigRoundTripsFullConfig(t *testing.T) {
 		t.Fatalf("disk config lost rich coder params: %+v", loaded.CoderSettings.Parameters)
 	}
 }
+
+// TestSetConfigRoundTripsRemoteMcp guards the remote-MCP settings: enabled and
+// gateway_url must survive a SetConfig -> GetConfig round-trip and land on disk.
+// (The computed Public MCP URL is deliberately NOT a Config field — it travels
+// over the Watch RemoteMcpStatus event — so there is nothing to round-trip for
+// it here.)
+func TestSetConfigRoundTripsRemoteMcp(t *testing.T) {
+	isolateFleetDir(t)
+	svc := newService()
+	ctx := context.Background()
+
+	in := &fleetgrpc.Config{
+		Agent:     &fleetgrpc.AgentSettings{ToolSelection: "claude"},
+		RemoteMcp: &fleetgrpc.RemoteMcpSettings{Enabled: true, GatewayUrl: "https://gateway.example.com"},
+	}
+	if _, err := svc.SetConfig(ctx, &fleetgrpc.SetConfigRequest{Config: in}); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+
+	reply, err := svc.GetConfig(ctx, &fleetgrpc.GetConfigRequest{})
+	if err != nil {
+		t.Fatalf("GetConfig: %v", err)
+	}
+	rm := reply.GetConfig().GetRemoteMcp()
+	if !rm.GetEnabled() {
+		t.Fatalf("enabled lost on round-trip")
+	}
+	if rm.GetGatewayUrl() != "https://gateway.example.com" {
+		t.Fatalf("gateway_url mismatch: %q", rm.GetGatewayUrl())
+	}
+
+	// And the bytes on disk match what the legacy SaveConfig writes.
+	loaded, err := state.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !loaded.RemoteMcpSettings.Enabled || loaded.RemoteMcpSettings.GatewayURL != "https://gateway.example.com" {
+		t.Fatalf("disk config lost remote-mcp settings: %+v", loaded.RemoteMcpSettings)
+	}
+}

@@ -33,6 +33,11 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 				}
 				sub.enqueueRuntime(items)
 			}
+			// The current remote-MCP tunnel status, so the settings page shows
+			// the right state the moment it attaches (not gated on runtime).
+			if h.remoteMcp != nil {
+				sub.enqueueRemoteMcp(h.remoteMcp)
+			}
 		}
 		close(registered)
 	})
@@ -56,7 +61,7 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 			// complete.
 			return nil
 		case <-sub.notify:
-			st, rt, bo := sub.drain()
+			st, rt, bo, rm := sub.drain()
 			if st != nil {
 				ev := &fleetgrpc.Event{Kind: &fleetgrpc.Event_StateChanged{StateChanged: &fleetgrpc.StateChanged{State: st}}}
 				if err := stream.Send(ev); err != nil {
@@ -71,6 +76,12 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 			}
 			for _, b := range bo {
 				ev := &fleetgrpc.Event{Kind: &fleetgrpc.Event_BrowserOpen{BrowserOpen: b}}
+				if err := stream.Send(ev); err != nil {
+					return err
+				}
+			}
+			if rm != nil {
+				ev := &fleetgrpc.Event{Kind: &fleetgrpc.Event_RemoteMcpStatus{RemoteMcpStatus: rm}}
 				if err := stream.Send(ev); err != nil {
 					return err
 				}

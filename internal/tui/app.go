@@ -38,6 +38,11 @@ type model struct {
 	pstate  *fleetgrpc.State
 	runtime map[string]*fleetgrpc.InstanceRuntime
 
+	// remoteMcpStatus is the latest outbound-MCP-gateway tunnel status pushed by
+	// the server over Watch (connection state + the computed Public MCP URL). The
+	// settings page renders it read-only; nil means "no status received yet".
+	remoteMcpStatus *fleetgrpc.RemoteMcpStatus
+
 	// Page routing
 	currentPage Page
 	fleetPage   *fleetPage // persistent — has running state accessed by background message handlers
@@ -623,6 +628,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.url != "" && msg.fleet != "" && msg.instance != "" {
 			return m, tea.Batch(spinCmd, m.openControlBrowserCmd(msg.fleet+"/"+msg.instance, msg.url))
 		}
+		return m, spinCmd
+
+	case remoteMcpStatusMsg:
+		// The server pushed the current remote-MCP tunnel status (connection
+		// state + computed Public MCP URL). Cache it for the settings page to
+		// render; a redraw picks it up on the next frame.
+		m.remoteMcpStatus = msg.status
 		return m, spinCmd
 
 	case watchErrMsg, watchClosedMsg:

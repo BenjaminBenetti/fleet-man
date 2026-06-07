@@ -61,6 +61,25 @@ func TestConfigToProtoEncodesFullConfig(t *testing.T) {
 	}
 }
 
+// TestRemoteMcpConfigRoundTripClient checks the remote-MCP settings survive both
+// client converters, guarding against drift from the server's mappers.
+func TestRemoteMcpConfigRoundTripClient(t *testing.T) {
+	c := &state.Config{
+		AgentSettings:     state.AgentSettings{ToolSelection: state.AgentToolClaude},
+		RemoteMcpSettings: state.RemoteMcpSettings{Enabled: true, GatewayURL: "https://gateway.example.com"},
+	}
+
+	pc := configToProto(c)
+	if !pc.GetRemoteMcp().GetEnabled() || pc.GetRemoteMcp().GetGatewayUrl() != "https://gateway.example.com" {
+		t.Fatalf("configToProto lost remote-mcp: %v", pc.GetRemoteMcp())
+	}
+
+	back := protoConfigToLegacy(pc)
+	if !back.RemoteMcpSettings.Enabled || back.RemoteMcpSettings.GatewayURL != "https://gateway.example.com" {
+		t.Fatalf("protoConfigToLegacy lost remote-mcp: %+v", back.RemoteMcpSettings)
+	}
+}
+
 // TestFleetSettingsToProtoPreservesTriState checks the PreferFleetLaunch
 // nil-vs-set distinction survives the client converter.
 func TestFleetSettingsToProtoPreservesTriState(t *testing.T) {
