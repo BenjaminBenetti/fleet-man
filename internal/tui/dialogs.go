@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -341,9 +343,11 @@ func isDialogTextKey(msg tea.KeyMsg) bool {
 
 func (fleetPage *fleetPage) blurDialogFields() {
 	fleetPage.dialogFieldActive = false
+	fleetPage.dialogAddingMount = false
 	fleetPage.textInput.Blur()
 	fleetPage.branchInput.Blur()
 	fleetPage.homedirInput.Blur()
+	fleetPage.customMountInput.Blur()
 }
 
 func (fleetPage *fleetPage) activateTextInput() tea.Cmd {
@@ -1058,13 +1062,32 @@ const (
 	editFleetRowGh
 	editFleetRowHomeDir
 	editFleetRowPreferFleetLaunch
-	editFleetRowCaching  // collapsible section header
-	editFleetRowBuildkit // child of Caching; only navigable when expanded
+	editFleetRowCustomMounts // collapsible section header
+	editFleetRowCaching      // collapsible section header
+	editFleetRowBuildkit     // child of Caching; only navigable when expanded
 	editFleetRowCount
 )
 
+// editFleetRowCustomMountBase is the start of the dynamic custom-mount child
+// rows, placed well above the fixed row constants so the two never collide.
+// Row editFleetRowCustomMountBase+i is the i-th existing custom mount; the row
+// at base+len(customMounts) is the "+ Add mount" affordance.
+const editFleetRowCustomMountBase = 1000
+
+// isCustomMountChildRow reports whether row is one of the dynamic custom-mount
+// child rows (an existing mount or the "+ Add mount" row).
+func isCustomMountChildRow(row int) bool { return row >= editFleetRowCustomMountBase }
+
+// customMountAddRow returns the row id of the "+ Add mount" affordance, which
+// always sits just past the last existing custom mount.
+func (fleetPage *fleetPage) customMountAddRow() int {
+	return editFleetRowCustomMountBase + len(fleetPage.dialogCustomMounts)
+}
+
 // visibleEditFleetRows returns the edit-fleet dialog's navigable rows in display
-// order. The Buildkit row only appears while the Caching section is expanded.
+// order. The custom-mount child rows appear only while that section is expanded
+// (one per mount, then the add row); the Buildkit row only appears while the
+// Caching section is expanded.
 func (fleetPage *fleetPage) visibleEditFleetRows() []int {
 	rows := []int{
 		editFleetRowClaude,
@@ -1072,8 +1095,15 @@ func (fleetPage *fleetPage) visibleEditFleetRows() []int {
 		editFleetRowGh,
 		editFleetRowHomeDir,
 		editFleetRowPreferFleetLaunch,
-		editFleetRowCaching,
+		editFleetRowCustomMounts,
 	}
+	if fleetPage.dialogCustomMountsExpanded {
+		for i := range fleetPage.dialogCustomMounts {
+			rows = append(rows, editFleetRowCustomMountBase+i)
+		}
+		rows = append(rows, fleetPage.customMountAddRow())
+	}
+	rows = append(rows, editFleetRowCaching)
 	if fleetPage.dialogCachingExpanded {
 		rows = append(rows, editFleetRowBuildkit)
 	}
@@ -1170,6 +1200,12 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.dialogBuildkitButtonFocused = false
 	fleetPage.dialogDeleteCacheConfirm = false
 	fleetPage.dialogDeletingCache = false
+	fleetPage.dialogCustomMountsExpanded = false
+	fleetPage.dialogCustomMounts = slices.Clone(f.Settings.CustomMounts)
+	fleetPage.dialogAddingMount = false
+	fleetPage.dialogCustomMountErr = ""
+	fleetPage.customMountInput.SetValue("")
+	fleetPage.customMountInput.Blur()
 
 	fleetPage.homedirInput.SetValue(f.Settings.HomeDir)
 	fleetPage.homedirInput.Blur()
@@ -1217,6 +1253,26 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 		return nil
 	}
 
+	// Add-custom-mount text-editing sub-mode.
+	if fleetPage.dialogAddingMount {
+		switch keyMsg.String() {
+		case "enter":
+			return fleetPage.commitNewMount(m)
+		case "esc":
+			fleetPage.cancelAddMount()
+			return nil
+		case "ctrl+c":
+			fleetPage.closeEditFleet(m)
+			return nil
+		}
+		// Any other key edits the field; clear a stale validation error as the
+		// user types so the inline message tracks the current input.
+		fleetPage.dialogCustomMountErr = ""
+		var cmd tea.Cmd
+		fleetPage.customMountInput, cmd = fleetPage.customMountInput.Update(msg)
+		return cmd
+	}
+
 	switch keyMsg.String() {
 	case "up", "k":
 		fleetPage.moveEditFleetRow(-1)
@@ -1236,6 +1292,12 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 		return nil
 	}
 
+	// Dynamic custom-mount child rows (existing mounts + the add row) are
+	// handled separately since their row ids are not compile-time constants.
+	if isCustomMountChildRow(fleetPage.dialogRow) {
+		return fleetPage.updateCustomMountRow(m, keyMsg)
+	}
+
 	// Row-specific actions.
 	switch fleetPage.dialogRow {
 	case editFleetRowClaude, editFleetRowCodex, editFleetRowGh, editFleetRowPreferFleetLaunch:
@@ -1244,6 +1306,16 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 		switch keyMsg.String() {
 		case " ", "left", "right", "h", "l", "x", "enter":
 			return fleetPage.toggleEditFleetRow(m)
+		}
+		return nil
+	case editFleetRowCustomMounts:
+		switch keyMsg.String() {
+		case " ", "enter":
+			fleetPage.dialogCustomMountsExpanded = !fleetPage.dialogCustomMountsExpanded
+		case "right", "l":
+			fleetPage.dialogCustomMountsExpanded = true
+		case "left", "h":
+			fleetPage.dialogCustomMountsExpanded = false
 		}
 		return nil
 	case editFleetRowCaching:
@@ -1404,6 +1476,114 @@ func (fleetPage *fleetPage) toggleEditFleetRow(m *model) tea.Cmd {
 	return nil
 }
 
+// updateCustomMountRow handles a key press while the cursor is on one of the
+// dynamic custom-mount child rows: an existing mount (enter/x/d removes it,
+// instant-save) or the "+ Add mount" row (enter or the first typed character
+// opens the inline text input).
+func (fleetPage *fleetPage) updateCustomMountRow(m *model, keyMsg tea.KeyMsg) tea.Cmd {
+	idx := fleetPage.dialogRow - editFleetRowCustomMountBase
+	if idx == len(fleetPage.dialogCustomMounts) {
+		// The "+ Add mount" row.
+		switch keyMsg.String() {
+		case "enter", " ":
+			fleetPage.beginAddMount()
+			return fleetPage.customMountInput.Cursor.BlinkCmd()
+		}
+		// Start typing immediately, like the home-dir row does.
+		if isDialogTextKey(keyMsg) {
+			fleetPage.beginAddMount()
+			blinkCmd := fleetPage.customMountInput.Cursor.BlinkCmd()
+			var inputCmd tea.Cmd
+			fleetPage.customMountInput, inputCmd = fleetPage.customMountInput.Update(keyMsg)
+			return tea.Batch(blinkCmd, inputCmd)
+		}
+		return nil
+	}
+	// An existing mount row: enter/x/d removes it (instant-save).
+	switch keyMsg.String() {
+	case "enter", "x", "d":
+		return fleetPage.removeCustomMount(m, idx)
+	}
+	return nil
+}
+
+// beginAddMount enters the add-custom-mount text sub-mode with a blank input.
+func (fleetPage *fleetPage) beginAddMount() {
+	fleetPage.dialogAddingMount = true
+	fleetPage.dialogCustomMountErr = ""
+	fleetPage.customMountInput.SetValue("")
+	fleetPage.customMountInput.Focus()
+}
+
+// cancelAddMount leaves the add-custom-mount sub-mode, discarding the input.
+func (fleetPage *fleetPage) cancelAddMount() {
+	fleetPage.dialogAddingMount = false
+	fleetPage.dialogCustomMountErr = ""
+	fleetPage.customMountInput.SetValue("")
+	fleetPage.customMountInput.Blur()
+}
+
+// commitNewMount validates the typed path, appends it to the working list and
+// persists (instant-save). On a validation failure the inline error is set and
+// the sub-mode stays open so the user can fix the value; on an RPC failure the
+// optimistic append is reverted.
+func (fleetPage *fleetPage) commitNewMount(m *model) tea.Cmd {
+	norm, err := fleet.NormalizeCustomMount(fleetPage.customMountInput.Value())
+	if err != nil {
+		fleetPage.dialogCustomMountErr = err.Error()
+		return nil
+	}
+	// Last-wins collisions with managed mounts are allowed, but an exact repeat
+	// of an existing custom mount is a no-op — reject it with a clear message
+	// rather than silently dropping it.
+	if slices.Contains(fleetPage.dialogCustomMounts, norm) {
+		fleetPage.dialogCustomMountErr = fmt.Sprintf("%s is already mounted", norm)
+		return nil
+	}
+
+	prev := fleetPage.dialogCustomMounts
+	fleetPage.dialogCustomMounts = append(slices.Clone(prev), norm)
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		fleetPage.dialogCustomMounts = prev
+		m.message = fmt.Sprintf("Failed to save: %v", err)
+		return nil
+	}
+	// Leave the cursor on the (now shifted-down) add row so the user can keep
+	// adding mounts in a row.
+	fleetPage.dialogRow = fleetPage.customMountAddRow()
+	fleetPage.cancelAddMount()
+	return nil
+}
+
+// removeCustomMount drops the idx-th custom mount and persists (instant-save),
+// reverting on RPC failure and keeping the cursor in range afterward.
+func (fleetPage *fleetPage) removeCustomMount(m *model, idx int) tea.Cmd {
+	if idx < 0 || idx >= len(fleetPage.dialogCustomMounts) {
+		return nil
+	}
+	prev := fleetPage.dialogCustomMounts
+	fleetPage.dialogCustomMounts = slices.Delete(slices.Clone(prev), idx, idx+1)
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		fleetPage.dialogCustomMounts = prev
+		m.message = fmt.Sprintf("Failed to save: %v", err)
+		return nil
+	}
+	// Removing the last mount shrinks the visible row range; keep the cursor on
+	// a row that still exists (at most the add row).
+	if fleetPage.dialogRow > fleetPage.customMountAddRow() {
+		fleetPage.dialogRow = fleetPage.customMountAddRow()
+	}
+	return nil
+}
+
+// customMountHostPreview renders the host path a custom mount resolves to, for
+// display under the dialog. Mirrors the resolver's derivation
+// (~/.fleet/workspaces/<fleet>/.mnt/<path>) using the original container path.
+func customMountHostPreview(fleetName, containerPath string) string {
+	sub := strings.TrimPrefix(filepath.Clean(strings.TrimSpace(containerPath)), "/")
+	return filepath.Join("~/.fleet/workspaces", fleetName, ".mnt", sub)
+}
+
 // shouldKickHomedirDetect reports whether conditions are right to
 // trigger an auto-detection: at least one mount is enabled in the
 // current dialog state, the home-dir text input is empty, no detection
@@ -1486,6 +1666,7 @@ func (fleetPage *fleetPage) persistFleetSettings(m *model) error {
 	f.Settings.CodexMount = fleetPage.dialogCodexMount
 	f.Settings.GhMount = fleetPage.dialogGhMount
 	f.Settings.BuildkitServer = fleetPage.dialogBuildkitServer
+	f.Settings.CustomMounts = fleetPage.dialogCustomMounts
 	if fleetPage.dialogPreferFleetLaunchSet {
 		preferFleetLaunch := fleetPage.dialogPreferFleetLaunch
 		f.Settings.PreferFleetLaunch = &preferFleetLaunch

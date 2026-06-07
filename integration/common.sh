@@ -238,6 +238,13 @@ seed_fleet_settings() {
   local homedir="${4:-/home/node}"
   local gh="${5:-false}"
   local buildkit="${6:-false}"
+  # Optional 7th arg: a JSON array literal of custom mount container paths,
+  # e.g. '["/opt/data","/var/cache/shared"]'. Empty means no customMounts key.
+  local custom_mounts="${7:-}"
+  local custom_mounts_line=""
+  if [[ -n "${custom_mounts}" ]]; then
+    custom_mounts_line=$'\n        "customMounts": '"${custom_mounts}"','
+  fi
   mkdir -p "${HOME}/.fleet"
   cat > "${HOME}/.fleet/state.json" <<EOF
 {
@@ -245,7 +252,7 @@ seed_fleet_settings() {
     "${fleet_name}": {
       "name": "${fleet_name}",
       "remote": "${FIXTURE_REPO_URL}",
-      "settings": {
+      "settings": {${custom_mounts_line}
         "claudeCodeMount": ${claude},
         "codexMount": ${codex},
         "ghMount": ${gh},

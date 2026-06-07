@@ -106,12 +106,24 @@ func (s *service) DestroyFleet(_ context.Context, req *fleetgrpc.DestroyFleetReq
 // SetFleetSettings replaces a fleet's settings wholesale (the caller sends the
 // full FleetSettings, preserving tri-state presence such as PreferFleetLaunch).
 func (s *service) SetFleetSettings(_ context.Context, req *fleetgrpc.SetFleetSettingsRequest) (*fleetgrpc.MutationReply, error) {
+	settings := protoFleetSettingsToLegacy(req.GetSettings())
+	// Authoritative validation of user-supplied custom-mount paths: the TUI
+	// validates for UX, but the server is the trust boundary — a custom mount
+	// path becomes a host filesystem segment, so reject traversal/escape here
+	// before it ever reaches state.json. Normalize (clean + dedup) the list so
+	// what we persist is canonical.
+	normalizedMounts, err := fleet.NormalizeCustomMounts(settings.CustomMounts)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid custom mount: %v", err)
+	}
+	settings.CustomMounts = normalizedMounts
+
 	snapshot, err := s.mutate(func(st *state.State) error {
 		f, ok := st.Fleets[req.GetFleet()]
 		if !ok {
 			return status.Errorf(codes.NotFound, "fleet %q not found", req.GetFleet())
 		}
-		f.Settings = protoFleetSettingsToLegacy(req.GetSettings())
+		f.Settings = settings
 		return nil
 	})
 	if err != nil {
@@ -223,6 +235,7 @@ func protoFleetSettingsToLegacy(ps *fleetgrpc.FleetSettings) fleet.FleetSettings
 	s.CodexMount = ps.GetCodexMount()
 	s.GhMount = ps.GetGhMount()
 	s.BuildkitServer = ps.GetBuildkitServer()
+	s.CustomMounts = ps.GetCustomMounts()
 	s.HomeDir = ps.GetHomeDir()
 	if ps.PreferFleetLaunch != nil {
 		v := ps.GetPreferFleetLaunch()

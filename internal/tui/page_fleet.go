@@ -59,6 +59,13 @@ type fleetPage struct {
 	dialogBuildkitButtonFocused bool // horizontal sub-cursor: on the [Delete cache] button vs the toggle
 	dialogDeleteCacheConfirm    bool // inline confirm armed (first Enter on the button)
 	dialogDeletingCache         bool // a cache-wipe RPC is in flight
+
+	// Custom mounts section (edit-fleet dialog) state.
+	dialogCustomMountsExpanded bool     // ▼ Custom mounts expanded, revealing per-mount rows + the add row
+	dialogCustomMounts         []string // working copy of the fleet's custom mounts (instant-save)
+	dialogAddingMount          bool     // true while the "+ Add mount" text input is active
+	dialogCustomMountErr       string   // inline validation error shown under the add-mount input
+
 	dialogDetecting         bool // true while a homedir auto-detect cmd is in flight
 
 	// dialogBrowserSwitching is true while the switch-browser dialog
@@ -76,9 +83,10 @@ type fleetPage struct {
 	dialogPendingRepoURL   string
 	dialogPendingFleetName string
 
-	textInput    textinput.Model
-	branchInput  textinput.Model
-	homedirInput textinput.Model
+	textInput        textinput.Model
+	branchInput      textinput.Model
+	homedirInput     textinput.Model
+	customMountInput textinput.Model
 
 	pfCursor      int
 	pfContainerID string
@@ -116,13 +124,18 @@ func newFleetPage() *fleetPage {
 	homedirInput.Placeholder = "/home/vscode"
 	homedirInput.CharLimit = 256
 
+	customMountInput := textinput.New()
+	customMountInput.Placeholder = "/opt/data"
+	customMountInput.CharLimit = 256
+
 	return &fleetPage{
-		collapsed:    make(map[string]bool),
-		savedGroups:  make(map[string]savedGroup),
-		textInput:    nameInput,
-		branchInput:  branchInput,
-		homedirInput: homedirInput,
-		listRowY:     -1,
+		collapsed:        make(map[string]bool),
+		savedGroups:      make(map[string]savedGroup),
+		textInput:        nameInput,
+		branchInput:      branchInput,
+		homedirInput:     homedirInput,
+		customMountInput: customMountInput,
+		listRowY:         -1,
 	}
 }
 
@@ -1706,6 +1719,12 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 			d.WriteString(marker(row) + dialogLabel.Render("Home dir: ") + " " + field)
 		case editFleetRowPreferFleetLaunch:
 			d.WriteString(marker(row) + checkbox(fleetPage.dialogPreferFleetLaunch) + " " + dialogLabel.Render("Prefer Fleet Launch"))
+		case editFleetRowCustomMounts:
+			arrow := "▶ "
+			if fleetPage.dialogCustomMountsExpanded {
+				arrow = "▼ "
+			}
+			d.WriteString(marker(row) + dialogLabel.Render(fmt.Sprintf("%sCustom mounts (%d)", arrow, len(fleetPage.dialogCustomMounts))))
 		case editFleetRowCaching:
 			arrow := "▶ "
 			if fleetPage.dialogCachingExpanded {
@@ -1719,13 +1738,59 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 				line += "   " + fleetPage.renderDeleteCacheButton(m)
 			}
 			d.WriteString(line)
+		default:
+			// Dynamic custom-mount child rows (existing mounts + the add row),
+			// indented one level under the Custom mounts header.
+			d.WriteString(fleetPage.renderCustomMountRow(row, marker))
 		}
 		d.WriteString("\n")
 	}
 
+	if footer := fleetPage.customMountFooter(); footer != "" {
+		d.WriteString("\n  " + footer + "\n")
+	}
 	d.WriteString("\n  " + dimStyle.Render("Mounts apply on supported backends only") + "\n\n")
 	d.WriteString(dialogHint.Render(fleetPage.editFleetHint()))
 	return d.String()
+}
+
+// renderCustomMountRow renders one dynamic custom-mount child row: an existing
+// mount (with a [remove] affordance) or the "+ Add mount" row (which becomes an
+// inline text input while the add sub-mode is active).
+func (fleetPage *fleetPage) renderCustomMountRow(row int, marker func(int) string) string {
+	idx := row - editFleetRowCustomMountBase
+	if idx == len(fleetPage.dialogCustomMounts) {
+		// The "+ Add mount" row.
+		if fleetPage.dialogAddingMount {
+			return marker(row) + "  " + dialogLabel.Render("New mount: ") + fleetPage.customMountInput.View()
+		}
+		return marker(row) + "  " + dialogLabel.Render("+ Add mount")
+	}
+	return marker(row) + "  " + fleetPage.dialogCustomMounts[idx] + "   " + dimStyle.Render("[remove]")
+}
+
+// customMountFooter returns a context line shown beneath the dialog rows while
+// the cursor is on a custom-mount row: the resolved host path for an existing
+// mount or the in-progress add, plus a hint or inline validation error.
+func (fleetPage *fleetPage) customMountFooter() string {
+	if !isCustomMountChildRow(fleetPage.dialogRow) {
+		return ""
+	}
+	idx := fleetPage.dialogRow - editFleetRowCustomMountBase
+	if idx < len(fleetPage.dialogCustomMounts) {
+		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dialogFleet, fleetPage.dialogCustomMounts[idx]))
+	}
+	// The add row.
+	if !fleetPage.dialogAddingMount {
+		return ""
+	}
+	if fleetPage.dialogCustomMountErr != "" {
+		return errorStyle.Render("✗ " + fleetPage.dialogCustomMountErr)
+	}
+	if v := strings.TrimSpace(fleetPage.customMountInput.Value()); v != "" {
+		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dialogFleet, v))
+	}
+	return dimStyle.Render("enter an absolute container path, e.g. /opt/data")
 }
 
 // renderDeleteCacheButton renders the [Delete cache] button shown next to an
@@ -1754,7 +1819,21 @@ func (fleetPage *fleetPage) editFleetHint() string {
 	if fleetPage.dialogFieldActive {
 		return "[enter] Save  [esc] Discard edit"
 	}
+	if fleetPage.dialogAddingMount {
+		return "[enter] Add mount  [esc] Cancel"
+	}
+	if isCustomMountChildRow(fleetPage.dialogRow) {
+		if fleetPage.dialogRow == fleetPage.customMountAddRow() {
+			return "[enter] Add mount  [j/k] Select  [q/esc] Save & Close"
+		}
+		return "[enter/d] Remove  [j/k] Select  [q/esc] Save & Close"
+	}
 	switch fleetPage.dialogRow {
+	case editFleetRowCustomMounts:
+		if fleetPage.dialogCustomMountsExpanded {
+			return "[h/←] Collapse  [j/k] Select  [q/esc] Save & Close"
+		}
+		return "[l/→/space] Expand  [j/k] Select  [q/esc] Save & Close"
 	case editFleetRowCaching:
 		if fleetPage.dialogCachingExpanded {
 			return "[h/←] Collapse  [j/k] Select  [q/esc] Save & Close"

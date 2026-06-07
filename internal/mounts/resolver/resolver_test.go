@@ -216,6 +216,110 @@ func TestResolveCreatesGhMount(t *testing.T) {
 	}
 }
 
+// TestResolveCreatesCustomMounts verifies that each custom mount produces a
+// directory mount whose container path is the user-supplied path and whose host
+// path lives under the fleet's .mnt directory, with the host dir created.
+func TestResolveCreatesCustomMounts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	resolved, err := Resolve("delta", fleet.FleetSettings{
+		CustomMounts: []string{"/opt/data", "/var/cache/shared"},
+	})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if len(resolved.Symlinks) != 0 {
+		t.Errorf("len(Symlinks) = %d, want 0", len(resolved.Symlinks))
+	}
+
+	byContainerPath := map[string]string{}
+	for _, mount := range resolved.Mounts {
+		byContainerPath[mount.ContainerPath] = mount.LocalPath
+	}
+
+	wantData := filepath.Join(home, ".fleet", "workspaces", "delta", ".mnt", "opt", "data")
+	wantCache := filepath.Join(home, ".fleet", "workspaces", "delta", ".mnt", "var", "cache", "shared")
+
+	if got := byContainerPath["/opt/data"]; got != wantData {
+		t.Errorf("/opt/data host path = %q, want %q", got, wantData)
+	}
+	if got := byContainerPath["/var/cache/shared"]; got != wantCache {
+		t.Errorf("/var/cache/shared host path = %q, want %q", got, wantCache)
+	}
+
+	for _, hostPath := range []string{wantData, wantCache} {
+		info, err := os.Stat(hostPath)
+		if err != nil {
+			t.Errorf("expected host dir %s to exist: %v", hostPath, err)
+			continue
+		}
+		if !info.IsDir() {
+			t.Errorf("%s is not a directory", hostPath)
+		}
+	}
+}
+
+// TestResolveCustomMountsComeAfterManaged verifies the resolver appends custom
+// mounts after the managed ones so a colliding custom mount wins (last-wins),
+// the behavior the edit-fleet dialog documents.
+func TestResolveCustomMountsComeAfterManaged(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	resolved, err := Resolve("epsilon", fleet.FleetSettings{
+		ClaudeCodeMount: true,
+		// Deliberately collide with the managed Claude mount target.
+		CustomMounts: []string{"/home/vscode/.claude"},
+	})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	// Find the indices of the two mounts targeting /home/vscode/.claude.
+	var managedIdx, customIdx = -1, -1
+	for i, mount := range resolved.Mounts {
+		if mount.ContainerPath != "/home/vscode/.claude" {
+			continue
+		}
+		managedHost := filepath.Join(home, ".fleet", "workspaces", "epsilon", ".claude")
+		if mount.LocalPath == managedHost {
+			managedIdx = i
+		} else {
+			customIdx = i
+		}
+	}
+	if managedIdx == -1 || customIdx == -1 {
+		t.Fatalf("expected both managed and custom mounts for /home/vscode/.claude, got %+v", resolved.Mounts)
+	}
+	if customIdx < managedIdx {
+		t.Errorf("custom mount (idx %d) should come after managed mount (idx %d) so it wins", customIdx, managedIdx)
+	}
+}
+
+// TestResolveSkipsInvalidCustomMounts verifies the resolver defensively skips a
+// traversal entry that somehow reached state.json (e.g. hand-edited), never
+// building a host path that escapes the fleet's .mnt directory.
+func TestResolveSkipsInvalidCustomMounts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	resolved, err := Resolve("zeta", fleet.FleetSettings{
+		CustomMounts: []string{"/opt/data", "../../escape", "relative"},
+	})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if len(resolved.Mounts) != 1 {
+		t.Fatalf("len(Mounts) = %d, want 1 (only the valid entry): %+v", len(resolved.Mounts), resolved.Mounts)
+	}
+	if resolved.Mounts[0].ContainerPath != "/opt/data" {
+		t.Errorf("ContainerPath = %q, want /opt/data", resolved.Mounts[0].ContainerPath)
+	}
+}
+
 // TestResolveOnlyEnabledMountsAreReturned ensures disabled toggles do
 // not produce mounts, symlinks, or host-side artefacts.
 func TestResolveOnlyEnabledMountsAreReturned(t *testing.T) {
