@@ -78,6 +78,12 @@ func ControlSocketPath(fleetName, instanceName string) string {
 // non-fatal failures during instance creation, and a write failure here
 // must not itself fail the creation flow. Callers can assume the
 // function returns immediately and never panics.
+//
+// The logs directory is created first: it may not exist yet on a fresh
+// ~/.fleet, and without it the write would silently fail — which previously
+// made best-effort warnings (e.g. a cache-setup failure) invisible to the user.
 func WriteWarn(fleetName, instanceName, warning string) {
-	_ = os.WriteFile(WarnPath(fleetName, instanceName), []byte(warning), 0644)
+	p := WarnPath(fleetName, instanceName)
+	_ = os.MkdirAll(filepath.Dir(p), 0755)
+	_ = os.WriteFile(p, []byte(warning), 0644)
 }

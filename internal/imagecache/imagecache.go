@@ -254,11 +254,22 @@ func inspectState(name string) (running, exists bool) {
 	return strings.TrimSpace(out) == "true", true
 }
 
-// ensureDir creates path 0777 (and re-chmods an existing one): bind-mounted into
-// containers whose user UID differs from the host's. Lives under ~/.fleet.
+// ensureDir creates path 0777 so it is world-writable for the cache container's
+// (possibly different) UID through the bind mount. registry:2 does not chown its
+// storage dir, so the foreign-owner re-ensure case (see debcache.ensureDir)
+// doesn't bite here today — but the same tolerance is applied for safety: a
+// chmod failure on a pre-existing dir is benign (it was made world-writable on
+// first creation), while a failure on a freshly-created dir we own is real.
 func ensureDir(path string) error {
+	_, statErr := os.Stat(path) // nil => already existed before MkdirAll
 	if err := os.MkdirAll(path, 0777); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0777)
+	if err := os.Chmod(path, 0777); err != nil {
+		if statErr == nil {
+			return nil
+		}
+		return err
+	}
+	return nil
 }

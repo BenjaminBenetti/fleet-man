@@ -256,12 +256,28 @@ func inspectState(name string) (running, exists bool) {
 	return strings.TrimSpace(out) == "true", true
 }
 
-// ensureDir creates path 0777 (and re-chmods an existing one), matching the
-// mount resolver's convention: bind-mounted into containers whose user UID
-// differs from the host's. The dir lives under the user's private ~/.fleet tree.
+// ensureDir creates path 0777 so it is world-writable for the cache container's
+// (possibly different) UID through the bind mount. apt-cacher-ng chowns its
+// cache dir to its own in-container uid, so on a RE-ensure of a fleet of the
+// same name (the .aptcache dir is preserved across destroy) the dir is owned by
+// a foreign uid and a non-root host user cannot chmod it — that EPERM is benign
+// because the dir was already made world-writable when first created, so it is
+// tolerated for a pre-existing dir. A chmod failure on a freshly-created dir
+// (which we own) is still a real error.
 func ensureDir(path string) error {
+	_, statErr := os.Stat(path) // nil => already existed before MkdirAll
 	if err := os.MkdirAll(path, 0777); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0777)
+	if err := chmodDir(path, 0777); err != nil {
+		if statErr == nil {
+			return nil // pre-existing, possibly foreign-owned (apt-cacher-ng) — benign
+		}
+		return err
+	}
+	return nil
 }
+
+// chmodDir is a seam so the foreign-owned-dir (EPERM) tolerance can be tested
+// without root/docker.
+var chmodDir = os.Chmod

@@ -209,6 +209,33 @@ func TestStopSharedServer(t *testing.T) {
 	}
 }
 
+// TestEnsureDirToleratesForeignOwnedDir guards the re-create-after-destroy fix:
+// apt-cacher-ng chowns the preserved .aptcache dir to its own uid, so on a later
+// re-ensure a non-root host user can't chmod it (EPERM). ensureDir must treat
+// that as benign for a PRE-EXISTING dir (it was made world-writable on first
+// creation) but still surface a chmod failure on a freshly-created dir.
+func TestEnsureDirToleratesForeignOwnedDir(t *testing.T) {
+	orig := chmodDir
+	chmodDir = func(string, os.FileMode) error { return os.ErrPermission }
+	t.Cleanup(func() { chmodDir = orig })
+
+	// Pre-existing dir + chmod EPERM → tolerated (nil).
+	existing := filepath.Join(t.TempDir(), "aptcache")
+	if err := os.MkdirAll(existing, 0o777); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := ensureDir(existing); err != nil {
+		t.Fatalf("ensureDir on a pre-existing foreign-owned dir must tolerate chmod EPERM, got %v", err)
+	}
+
+	// Freshly-created dir + chmod EPERM → real error (we should own a dir we just
+	// made, so a failure here is genuine, not the foreign-owner case).
+	fresh := filepath.Join(t.TempDir(), "nope", "aptcache")
+	if err := ensureDir(fresh); err == nil {
+		t.Fatalf("ensureDir must surface a chmod failure on a freshly-created dir")
+	}
+}
+
 func inodeOf(t *testing.T, path string) uint64 {
 	t.Helper()
 	fi, err := os.Stat(path)
