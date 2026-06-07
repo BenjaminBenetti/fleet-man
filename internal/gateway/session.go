@@ -4,8 +4,10 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/tunnel"
 	"github.com/hashicorp/yamux"
 )
 
@@ -30,6 +32,13 @@ type session struct {
 	// createdAt is when the session slot was reserved (at claim). Used by the
 	// reaper to evict a reservation whose handshake never completed (never bound).
 	createdAt time.Time
+
+	// grpc reports whether THIS connection negotiated FeatureGRPC. When set, the
+	// gateway tags every stream it opens (TagMCP / TagGRPC) and serves the
+	// /grpc/<id> route; when clear (legacy fleetd), streams are untagged and only
+	// MCP is served. Atomic because it is set on the control goroutine and read on
+	// public-request goroutines, and re-set on reconnect.
+	grpc atomic.Bool
 
 	mu sync.Mutex
 	ym *yamux.Session // current live tunnel; nil until bind; replaced on reconnect
@@ -83,12 +92,25 @@ func (s *session) reapable(now time.Time, ttl time.Duration) bool {
 // open dials a fresh multiplexed stream to fleetd over the live tunnel. Each
 // inbound public request gets its own stream, so SSE and concurrent requests
 // never interleave.
-func (s *session) open() (net.Conn, error) {
+func (s *session) open(tag byte) (net.Conn, error) {
 	s.mu.Lock()
 	ym := s.ym
 	s.mu.Unlock()
 	if ym == nil {
 		return nil, errNoTunnel
 	}
-	return ym.Open()
+	conn, err := ym.Open()
+	if err != nil {
+		return nil, err
+	}
+	// When this connection negotiated gRPC, fleetd demuxes streams by a leading
+	// tag byte, so the gateway must write it as the first bytes of every stream.
+	// Legacy (un-negotiated) sessions get untagged streams (the old MCP wire).
+	if s.grpc.Load() {
+		if err := tunnel.WriteTag(conn, tag); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+	}
+	return conn, nil
 }

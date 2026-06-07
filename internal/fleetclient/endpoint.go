@@ -11,8 +11,11 @@ package fleetclient
 
 import (
 	"os"
+	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Endpoint abstracts WHERE the server is and HOW we reach it, so commands never
@@ -26,28 +29,60 @@ type Endpoint interface {
 	// whether auto-spawn / version-restart are permitted).
 	IsLocal() bool
 	String() string
+	// DialOptions are the grpc.DialOptions for this endpoint (transport creds, and
+	// for a gateway endpoint the CONNECT dialer + per-RPC token).
+	DialOptions() []grpc.DialOption
+}
+
+// insecureCreds is the transport for unix-socket / plain-TCP endpoints (and the
+// inner h2c of a gateway tunnel, whose outer TLS the dialer establishes).
+func insecureCreds() []grpc.DialOption {
+	return []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 }
 
 // localEndpoint is the per-user unix socket; auto-spawnable.
 type localEndpoint struct{ socket string }
 
-func (e localEndpoint) Target() string { return "unix://" + e.socket }
-func (e localEndpoint) IsLocal() bool  { return true }
-func (e localEndpoint) String() string { return "unix:" + e.socket }
+func (e localEndpoint) Target() string                  { return "unix://" + e.socket }
+func (e localEndpoint) IsLocal() bool                   { return true }
+func (e localEndpoint) String() string                  { return "unix:" + e.socket }
+func (e localEndpoint) DialOptions() []grpc.DialOption  { return insecureCreds() }
 
-// remoteEndpoint is a future TCP target (e.g. a remote TUI). Not auto-spawnable.
+// remoteEndpoint is a plain TCP target (e.g. a remote TUI). Not auto-spawnable.
 type remoteEndpoint struct{ addr string }
 
-func (e remoteEndpoint) Target() string { return "dns:///" + e.addr }
-func (e remoteEndpoint) IsLocal() bool  { return false }
-func (e remoteEndpoint) String() string { return e.addr }
+func (e remoteEndpoint) Target() string                 { return "dns:///" + e.addr }
+func (e remoteEndpoint) IsLocal() bool                  { return false }
+func (e remoteEndpoint) String() string                 { return e.addr }
+func (e remoteEndpoint) DialOptions() []grpc.DialOption { return insecureCreds() }
 
-// selectEndpoint picks the transport. FLEET_SERVER=host:port forces a remote
-// endpoint (no auto-spawn, version mismatch is a hard error); otherwise the
-// local auto-spawned unix socket.
+// selectEndpoint picks the transport, in precedence order:
+//   - FLEET_GATEWAY=https://gw/grpc/<id> → through a fleet gateway (the bearer
+//     token from FLEET_TOKEN, or ~/.fleet/mcp.token for a same-host user).
+//   - FLEET_SERVER=host:port → a plain remote TCP target.
+//   - otherwise → the local auto-spawned unix socket.
+//
+// Remote endpoints (gateway/server) are not auto-spawned and a version mismatch
+// is a hard error.
 func selectEndpoint() Endpoint {
+	if gw := os.Getenv("FLEET_GATEWAY"); gw != "" {
+		return gatewayEndpoint{rawURL: gw, token: gatewayToken()}
+	}
 	if addr := os.Getenv("FLEET_SERVER"); addr != "" {
 		return remoteEndpoint{addr: addr}
 	}
 	return localEndpoint{socket: fleetpaths.SocketPath()}
+}
+
+// gatewayToken resolves the bearer token for a gateway endpoint: FLEET_TOKEN, or
+// the on-disk MCP token (so a user on the same host as their daemon need only
+// supply the URL).
+func gatewayToken() string {
+	if t := os.Getenv("FLEET_TOKEN"); t != "" {
+		return strings.TrimSpace(t)
+	}
+	if data, err := os.ReadFile(fleetpaths.McpTokenPath()); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+	return ""
 }
