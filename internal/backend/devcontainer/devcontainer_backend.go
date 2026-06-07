@@ -98,6 +98,21 @@ func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string, mounts [
 	}
 	defer restore()
 
+	// Isolate the devcontainer CLI's scratch directory for this invocation.
+	// The CLI materialises its generated `updateUID.Dockerfile-<ver>` under a
+	// FIXED name in `$TMPDIR/devcontainercli-runner/`, writing a temp sibling
+	// and renaming it onto that path. Two concurrent `devcontainer up`
+	// processes that share one TMPDIR therefore collide on the rename and one
+	// dies with `ENOENT ... rename .../updateUID.Dockerfile-<ver>`. A
+	// per-invocation TMPDIR gives each process its own runner dir, so
+	// concurrent ups never race (guarded by integration test
+	// 600_concurrent_up_distinct, the #63 regression).
+	runnerTmp, err := os.MkdirTemp("", "fleet-devcontainer-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(runnerTmp)
+
 	args := []string{"up", "--workspace-folder", workspaceDir}
 	args, err = devcontainerUpArgs(args)
 	if err != nil {
@@ -110,7 +125,7 @@ func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string, mounts [
 	if err != nil {
 		return nil, err
 	}
-	cmd.Env = env
+	cmd.Env = withIsolatedTmp(env, runnerTmp)
 
 	// Capture stdout for JSON parsing, tee to os.Stdout so it appears
 	// in log files when run from the TUI background process.
@@ -154,6 +169,21 @@ func devcontainerUpArgs(base []string) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("invalid FLEET_DEVCONTAINER_UPDATE_REMOTE_USER_UID value %q (valid: default, never, on, off)", mode)
 	}
+}
+
+// withIsolatedTmp returns env with TMPDIR pointed at dir, replacing any
+// inherited TMPDIR. The devcontainer CLI (Node's os.tmpdir()) reads TMPDIR
+// first on Unix, so this redirects its `devcontainercli-runner` scratch into a
+// per-invocation directory — see Up for why that race-proofing matters.
+func withIsolatedTmp(env []string, dir string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		if strings.HasPrefix(e, "TMPDIR=") {
+			continue
+		}
+		out = append(out, e)
+	}
+	return append(out, "TMPDIR="+dir)
 }
 
 // devcontainerEnv applies BuildKit-related env tweaks based on the

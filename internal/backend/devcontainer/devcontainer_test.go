@@ -2,10 +2,48 @@ package devcontainer
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 )
+
+func TestWithIsolatedTmp(t *testing.T) {
+	tests := []struct {
+		name string
+		env  []string
+	}{
+		{name: "replaces inherited TMPDIR", env: []string{"PATH=/bin", "TMPDIR=/tmp", "HOME=/root"}},
+		{name: "appends when none inherited", env: []string{"PATH=/bin", "HOME=/root"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := withIsolatedTmp(tt.env, "/scratch/x")
+
+			if slices.Contains(got, "TMPDIR=/tmp") {
+				t.Fatalf("withIsolatedTmp kept inherited TMPDIR: %#v", got)
+			}
+			if !slices.Contains(got, "TMPDIR=/scratch/x") {
+				t.Fatalf("withIsolatedTmp missing override TMPDIR: %#v", got)
+			}
+			if !slices.Contains(got, "PATH=/bin") || !slices.Contains(got, "HOME=/root") {
+				t.Fatalf("withIsolatedTmp dropped unrelated env: %#v", got)
+			}
+
+			// Exactly one TMPDIR survives so the override is unambiguous.
+			n := 0
+			for _, e := range got {
+				if strings.HasPrefix(e, "TMPDIR=") {
+					n++
+				}
+			}
+			if n != 1 {
+				t.Fatalf("withIsolatedTmp produced %d TMPDIR entries, want 1: %#v", n, got)
+			}
+		})
+	}
+}
 
 func TestScreenCaptureZeroValue(t *testing.T) {
 	// A zero-value ScreenCapture should indicate failure (OK=false).

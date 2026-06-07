@@ -70,6 +70,11 @@ if [ -n "${failed_names}" ]; then
   info "retrying failed invocations sequentially"
   rc=0
   for n in ${failed_names}; do
+    # A failed concurrent attempt already pre-created the instance record
+    # server-side (StatusCreating, written before the devcontainer job runs),
+    # so a bare re-`up` is rejected with AlreadyExists and can never recover.
+    # Clear the partial record first so the sequential retry provisions clean.
+    "${FLEET_BIN}" destroy "${FIXTURE_REPO_NAME}/${n}" >/dev/null 2>&1 || true
     if ! fleet_up "${n}" >"${tmpdir}/retry_${n}.log" 2>&1; then
       rc=1
     fi
