@@ -39,6 +39,11 @@ func (s *Server) serveControl(ctx context.Context, ln net.Listener, sem chan str
 	}
 }
 
+// gatewayFeatures lists the optional tunnel features this gateway supports and
+// offers in the register handshake. fleetd advertises what IT supports; the
+// negotiated set is the intersection.
+var gatewayFeatures = []string{tunnel.FeatureGRPC}
+
 // handleControl performs the register handshake on conn, attaches the resulting
 // yamux session to the registry, and keeps the connection alive until the tunnel
 // closes (fleetd gone) or the gateway shuts down.
@@ -62,6 +67,13 @@ func (s *Server) handleControl(ctx context.Context, conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
+
+	// Negotiate optional tunnel features (gRPC). Only features BOTH ends support
+	// become active; an old fleetd (no Features) negotiates none — the tunnel stays
+	// MCP-only and untagged, preserving the existing wire.
+	reply.Features = tunnel.Negotiate(req.Features, gatewayFeatures)
+	sess.grpc.Store(tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC))
+
 	// On any failure before bind, free a freshly-reserved slot so it doesn't count
 	// against the cap (a no-op for a reclaimed, already-bound session).
 	if err := tunnel.WriteFrame(conn, reply); err != nil {
