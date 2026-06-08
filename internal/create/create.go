@@ -154,6 +154,18 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("configure buildkit buildx: %v", err))
 	}
 
+	// Wire the instance into the fleet's shared deb/image caches (when enabled):
+	// ensure each cache server, join the instance to the fleet's shared docker
+	// network, and write the in-instance apt/docker config. Network-based (no
+	// bind mount, so it runs here with result.ContainerID in scope), best-effort,
+	// and a silent no-op for instances lacking apt / a local dockerd.
+	if err := setupDebCache(instanceBackend, fleetName, result.ContainerID, wsDir); err != nil {
+		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("deb cache: %v", err))
+	}
+	if err := setupImageCache(instanceBackend, fleetName, result.ContainerID, wsDir); err != nil {
+		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("image cache: %v", err))
+	}
+
 	// Auto-install dotfiles. A failure here is non-fatal — the instance
 	// is still usable, so we mark it running and surface the error as a
 	// warning rather than blocking the whole creation.

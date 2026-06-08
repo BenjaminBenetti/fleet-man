@@ -225,6 +225,33 @@ var deleteBuildkitCacheRemote = func(fleetName string) error {
 	return err
 }
 
+// deleteDebCacheRemote asks the server to wipe a fleet's shared deb (apt) cache
+// and restart the (empty) server. Uses the same longer deadline as the buildkit
+// wipe (the server may pull the cache image and restart the container).
+var deleteDebCacheRemote = func(fleetName string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), deleteCacheTimeout)
+	defer cancel()
+	conn, err := dialMutation(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = conn.Service().DeleteDebCache(ctx, &fleetgrpc.DeleteDebCacheRequest{Fleet: fleetName})
+	return err
+}
+
+// deleteImageCacheRemote asks the server to wipe a fleet's shared docker image
+// cache and restart the (empty) server. Same longer deadline as above.
+var deleteImageCacheRemote = func(fleetName string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), deleteCacheTimeout)
+	defer cancel()
+	conn, err := dialMutation(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = conn.Service().DeleteImageCache(ctx, &fleetgrpc.DeleteImageCacheRequest{Fleet: fleetName})
+	return err
+}
+
 // notifyTUIConnectedRemote tells the server a TUI has opened so it can run its
 // once-per-open state reconciliation (e.g. re-ensuring configured buildkit
 // servers). Fire-and-forget: the server returns immediately and does the work
@@ -314,11 +341,13 @@ var setConfigRemote = func(c *configutil.Config) error {
 
 func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 	ps := &fleetgrpc.FleetSettings{
-		ClaudeCodeMount: s.ClaudeCodeMount,
-		CodexMount:      s.CodexMount,
-		GhMount:         s.GhMount,
-		BuildkitServer:  s.BuildkitServer,
-		CustomMounts:    s.CustomMounts,
+		ClaudeCodeMount:  s.ClaudeCodeMount,
+		CodexMount:       s.CodexMount,
+		GhMount:          s.GhMount,
+		BuildkitServer:   s.BuildkitServer,
+		CustomMounts:     s.CustomMounts,
+		DebCacheServer:   s.DebCacheServer,
+		ImageCacheServer: s.ImageCacheServer,
 	}
 	if s.HomeDir != "" {
 		ps.HomeDir = &s.HomeDir
@@ -495,12 +524,14 @@ func protoFleetToLegacy(pf *fleetgrpc.Fleet) *fleet.Fleet {
 	}
 	if ps := pf.GetSettings(); ps != nil {
 		f.Settings = fleet.FleetSettings{
-			ClaudeCodeMount: ps.GetClaudeCodeMount(),
-			CodexMount:      ps.GetCodexMount(),
-			GhMount:         ps.GetGhMount(),
-			BuildkitServer:  ps.GetBuildkitServer(),
-			CustomMounts:    ps.GetCustomMounts(),
-			HomeDir:         ps.GetHomeDir(),
+			ClaudeCodeMount:  ps.GetClaudeCodeMount(),
+			CodexMount:       ps.GetCodexMount(),
+			GhMount:          ps.GetGhMount(),
+			BuildkitServer:   ps.GetBuildkitServer(),
+			CustomMounts:     ps.GetCustomMounts(),
+			DebCacheServer:   ps.GetDebCacheServer(),
+			ImageCacheServer: ps.GetImageCacheServer(),
+			HomeDir:          ps.GetHomeDir(),
 		}
 		if ps.PreferFleetLaunch != nil {
 			v := ps.GetPreferFleetLaunch()

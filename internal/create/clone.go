@@ -156,6 +156,17 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) (err er
 		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("configure buildkit buildx: %v", err))
 	}
 
+	// Wire the clone into the fleet's shared deb/image caches the same way Run
+	// does (ensure server, join the fleet network, write in-instance config).
+	// The committed image may carry the source's apt/docker config; the writes
+	// are idempotent. Best-effort, silent no-op without apt / a local dockerd.
+	if err := setupDebCache(instanceBackend, fleetName, result.ContainerID, destWorkspaceDir); err != nil {
+		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("deb cache: %v", err))
+	}
+	if err := setupImageCache(instanceBackend, fleetName, result.ContainerID, destWorkspaceDir); err != nil {
+		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("image cache: %v", err))
+	}
+
 	if err := markInstanceRunning(fleetName, destInstance, result.ContainerID); err != nil {
 		return err
 	}

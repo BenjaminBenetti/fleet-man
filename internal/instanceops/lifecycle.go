@@ -6,8 +6,11 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/buildkit"
+	"github.com/BenjaminBenetti/fleet-man/internal/debcache"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetnet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/imagecache"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -96,9 +99,32 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 			// instance's own buildx config persists across stop/start, so only
 			// the server container needs reviving. Best-effort: a failure just
 			// means no shared cache this session.
-			if f.Settings.BuildkitServer && backendutil.New(instance.Backend, false).SupportsCustomMounts() {
+			supportsMounts := backendutil.New(instance.Backend, false).SupportsCustomMounts()
+			if f.Settings.BuildkitServer && supportsMounts {
 				if _, err := buildkit.EnsureSharedServer(fleetName); err != nil {
 					state.WriteWarn(fleetName, instanceName, fmt.Sprintf("buildkit server: %v", err))
+				}
+			}
+			// Deb/image caches: re-ensure the server AND reconnect the instance to
+			// the fleet network (the in-instance apt/docker config persists across
+			// stop/start, so only the server + network membership need reviving).
+			// The two steps are independent: ConnectInstance ensures the network
+			// itself and is idempotent, so a transient server-ensure failure must
+			// not skip the (cheap, best-effort) reconnect.
+			if f.Settings.DebCacheServer && supportsMounts {
+				if _, err := debcache.EnsureSharedServer(fleetName); err != nil {
+					state.WriteWarn(fleetName, instanceName, fmt.Sprintf("deb cache: %v", err))
+				}
+				if err := fleetnet.ConnectInstance(fleetName, instance.ContainerID); err != nil {
+					state.WriteWarn(fleetName, instanceName, fmt.Sprintf("deb cache network: %v", err))
+				}
+			}
+			if f.Settings.ImageCacheServer && supportsMounts {
+				if _, err := imagecache.EnsureSharedServer(fleetName); err != nil {
+					state.WriteWarn(fleetName, instanceName, fmt.Sprintf("image cache: %v", err))
+				}
+				if err := fleetnet.ConnectInstance(fleetName, instance.ContainerID); err != nil {
+					state.WriteWarn(fleetName, instanceName, fmt.Sprintf("image cache network: %v", err))
 				}
 			}
 		}

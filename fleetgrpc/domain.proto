@@ -162,6 +162,16 @@ message FleetSettings {
   // (the default) means no custom mounts. Honored only on backends that
   // SupportsCustomMounts() (devcontainer); cloud backends silently skip them.
   repeated string custom_mounts = 7;
+  // deb_cache_server enables a shared apt-cacher-ng container for the fleet so
+  // repeated `apt install` reuse cached .deb packages. Instances reach it over
+  // a shared per-fleet docker network and get an apt http-proxy drop-in. Plain
+  // bool (default off), honored only on SupportsCustomMounts() backends.
+  bool deb_cache_server = 8;
+  // image_cache_server enables a shared registry pull-through cache (a
+  // registry:2 mirror of Docker Hub) for the fleet so repeated `docker pull`
+  // don't re-download. Instances' own dockerd is pointed at the mirror. Plain
+  // bool (default off); only helps docker-in-docker instances.
+  bool image_cache_server = 9;
 }
 
 // Fleet mirrors internal/fleet.Fleet. Settings is a NESTED message (not inlined)

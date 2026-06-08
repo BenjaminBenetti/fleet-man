@@ -60,6 +60,34 @@ type FleetSettings struct {
 	// means no custom mounts.
 	CustomMounts []string `json:"customMounts,omitempty"`
 
+	// DebCacheServer enables a shared apt-cacher-ng container for this fleet so
+	// repeated `apt install` across the fleet's instances reuse downloaded
+	// .deb packages instead of re-fetching them. When set, instance
+	// provisioning ensures one cache container per fleet, joins every instance
+	// to a shared per-fleet docker network, and writes an apt http proxy config
+	// (/etc/apt/apt.conf.d/01fleet-proxy) pointing at the cache. Plain bool
+	// (default off), matching BuildkitServer.
+	//
+	// Intent only: honored on SupportsCustomMounts()==true backends; cloud
+	// backends silently skip it. Best-effort — instances without apt (or where
+	// apt.conf.d is not writable) are skipped without error. Caches only HTTP
+	// apt sources (the default Debian/Ubuntu archives); HTTPS sources go direct.
+	DebCacheServer bool `json:"debCacheServer,omitempty"`
+
+	// ImageCacheServer enables a shared registry pull-through cache (a
+	// `registry:2` mirror of Docker Hub) for this fleet so repeated
+	// `docker pull` of docker.io images don't re-download. When set, instance
+	// provisioning ensures one cache container per fleet, joins every instance
+	// to the shared per-fleet docker network, and points the instance's own
+	// dockerd at the mirror (registry-mirrors + insecure-registries in
+	// /etc/docker/daemon.json, then a SIGHUP reload). Plain bool (default off).
+	//
+	// Intent only and best-effort like the others. It only helps instances that
+	// run their OWN docker daemon (docker-in-docker); docker-outside-of-docker
+	// and no-docker instances are silently skipped. Only docker.io images are
+	// mirrored (that is all docker registry-mirrors ever applies to).
+	ImageCacheServer bool `json:"imageCacheServer,omitempty"`
+
 	// HomeDir is the absolute path inside the container that should be
 	// treated as the home directory when computing mount targets — e.g.
 	// "/home/vscode" so a Claude Code mount lands at "/home/vscode/.claude".

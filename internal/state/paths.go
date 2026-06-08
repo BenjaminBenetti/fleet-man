@@ -41,6 +41,22 @@ func BuildkitDir(fleetName string) string {
 	return filepath.Join(WorkspacesDir(), fleetName, ".buildkit")
 }
 
+// DebCacheDir returns the per-fleet host directory that holds the shared deb
+// package cache (the apt-cacher-ng container's on-disk cache). Like BuildkitDir
+// it lives next to the per-instance workspace clones so it survives instance
+// churn, is shared by every instance in the fleet, and persists across fleet
+// teardown (warming the next fleet of the same name).
+func DebCacheDir(fleetName string) string {
+	return filepath.Join(WorkspacesDir(), fleetName, ".aptcache")
+}
+
+// ImageCacheDir returns the per-fleet host directory that holds the shared
+// docker image cache (the registry pull-through container's on-disk storage).
+// Same lifecycle/sharing rationale as BuildkitDir and DebCacheDir.
+func ImageCacheDir(fleetName string) string {
+	return filepath.Join(WorkspacesDir(), fleetName, ".imgcache")
+}
+
 // ControlDir returns the host directory bind-mounted into an instance to
 // carry the control socket. It is per-instance (not per-fleet) so the host
 // can tell which instance a received message came from, and it lives under
@@ -62,6 +78,12 @@ func ControlSocketPath(fleetName, instanceName string) string {
 // non-fatal failures during instance creation, and a write failure here
 // must not itself fail the creation flow. Callers can assume the
 // function returns immediately and never panics.
+//
+// The logs directory is created first: it may not exist yet on a fresh
+// ~/.fleet, and without it the write would silently fail — which previously
+// made best-effort warnings (e.g. a cache-setup failure) invisible to the user.
 func WriteWarn(fleetName, instanceName, warning string) {
-	_ = os.WriteFile(WarnPath(fleetName, instanceName), []byte(warning), 0644)
+	p := WarnPath(fleetName, instanceName)
+	_ = os.MkdirAll(filepath.Dir(p), 0755)
+	_ = os.WriteFile(p, []byte(warning), 0644)
 }

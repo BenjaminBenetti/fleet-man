@@ -72,6 +72,8 @@ func (s *service) DestroyFleet(_ context.Context, req *fleetgrpc.DestroyFleetReq
 	// removes an EMPTY fleet, so its shared buildkit server (kept alive by the
 	// earlier single-instance destroys) would otherwise be orphaned here — the
 	// destroy_fleet job path tears it down, but this synchronous path must too.
+	// The deb/image cache + network teardown below is unconditional (idempotent),
+	// so a cache toggled off before destroy can't orphan its container/network.
 	buildkitEnabled := false
 	if st, err := state.Load(); err == nil {
 		if f, ok := st.Fleets[req.GetName()]; ok {
@@ -95,10 +97,16 @@ func (s *service) DestroyFleet(_ context.Context, req *fleetgrpc.DestroyFleetReq
 		return nil, err
 	}
 
-	// Best-effort fleet-level buildkit teardown (no warning channel on this
-	// synchronous RPC, so surface failures to the event log).
-	for _, w := range teardownFleetBuildkit(req.GetName(), buildkitEnabled) {
-		flog.Warn("destroy fleet buildkit teardown", "fleet", req.GetName(), "warn", w)
+	// Best-effort fleet-level cache teardown (no warning channel on this
+	// synchronous RPC, so surface failures to the event log). The network is
+	// removed last, after the cache containers, so docker doesn't refuse it for
+	// active endpoints.
+	teardownWarnings := teardownFleetBuildkit(req.GetName(), buildkitEnabled)
+	teardownWarnings = append(teardownWarnings, teardownFleetDebCache(req.GetName(), true)...)
+	teardownWarnings = append(teardownWarnings, teardownFleetImageCache(req.GetName(), true)...)
+	teardownWarnings = append(teardownWarnings, teardownFleetNetwork(req.GetName(), true)...)
+	for _, w := range teardownWarnings {
+		flog.Warn("destroy fleet cache teardown", "fleet", req.GetName(), "warn", w)
 	}
 	return &fleetgrpc.MutationReply{State: snapshot}, nil
 }
@@ -236,6 +244,8 @@ func protoFleetSettingsToLegacy(ps *fleetgrpc.FleetSettings) fleet.FleetSettings
 	s.GhMount = ps.GetGhMount()
 	s.BuildkitServer = ps.GetBuildkitServer()
 	s.CustomMounts = ps.GetCustomMounts()
+	s.DebCacheServer = ps.GetDebCacheServer()
+	s.ImageCacheServer = ps.GetImageCacheServer()
 	s.HomeDir = ps.GetHomeDir()
 	if ps.PreferFleetLaunch != nil {
 		v := ps.GetPreferFleetLaunch()
