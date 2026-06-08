@@ -3,8 +3,18 @@ package imagecache
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+)
+
+// Polling schedule for ConfigureInstanceDockerPolling. Declared as vars so tests
+// can shrink them. The first pollSyncAttempts probes run synchronously; the rest
+// run in the background until pollTimeout has elapsed since the first probe.
+var (
+	pollInterval     = 15 * time.Second
+	pollTimeout      = 5 * time.Minute
+	pollSyncAttempts = 3
 )
 
 // instanceExecer is the slice of backend.Backend this package needs to run
@@ -31,21 +41,89 @@ const (
 // never clobbers an existing file it can't safely merge.
 //
 // Callers should treat a returned error as non-fatal (warn and continue).
+//
+// This is the single-shot variant (probe once, give up if absent). New callers
+// generally want ConfigureInstanceDockerPolling, which tolerates a dind that has
+// not finished starting yet.
 func ConfigureInstanceDocker(b instanceExecer, workspaceDir, mirrorURL, hostPort string) error {
+	_, err := tryConfigureOnce(b, workspaceDir, mirrorURL, hostPort)
+	return err
+}
+
+// tryConfigureOnce runs ONE probe and, if an in-instance dockerd is present,
+// writes the mirror config. present reports whether a dockerd was found (configure
+// was attempted; err is the configure error if any). When present is false the
+// instance has no configurable dockerd yet (or at all) and err is any probe error
+// — the caller decides whether to retry or treat it as the documented "do nothing,
+// no error" skip.
+func tryConfigureOnce(b instanceExecer, workspaceDir, mirrorURL, hostPort string) (present bool, err error) {
 	out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", probeScript()}).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("probe dockerd: %w (%s)", err, strings.TrimSpace(string(out)))
+		return false, fmt.Errorf("probe dockerd: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	if !dockerdPresent(string(out)) {
-		// No in-instance dockerd to point at the mirror — silently skip.
-		return nil
+		return false, nil
 	}
-
 	out, err = b.ExecCommand(workspaceDir, []string{"sh", "-c", configureScript(mirrorURL, hostPort)}).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("configure docker registry mirror: %w (%s)", err, strings.TrimSpace(string(out)))
+		return true, fmt.Errorf("configure docker registry mirror: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-	return nil
+	return true, nil
+}
+
+// ConfigureInstanceDockerPolling points an instance's dockerd at the fleet's
+// shared image cache, tolerating a docker-in-docker daemon that has not finished
+// starting yet. It probes on a fixed schedule (pollInterval, up to pollTimeout):
+//
+//   - The first pollSyncAttempts probes run SYNCHRONOUSLY on the caller's
+//     goroutine, so a dind that comes up quickly — the common case — is wired up
+//     before the user starts working, keeping the mirror reload out of an active
+//     workflow.
+//   - If dockerd has still not appeared, the remaining probes run in a BACKGROUND
+//     goroutine ("rescue mode") until pollTimeout from the first probe. A reload
+//     there may land mid-workflow, which is acceptable for the rescue path.
+//
+// onResult is invoked exactly once with the terminal outcome: configured=true once
+// a dockerd was found (err is any configure error), or configured=false if none
+// appeared within the window (err is the last probe error, if any). It may run on
+// the caller's goroutine (a synchronous hit) or the background goroutine, so it
+// must be safe to call from either. Callers gate this on the image-cache feature
+// being enabled.
+func ConfigureInstanceDockerPolling(b instanceExecer, workspaceDir, mirrorURL, hostPort string, onResult func(configured bool, err error)) {
+	start := time.Now()
+	var lastErr error
+
+	// Synchronous phase.
+	for i := range pollSyncAttempts {
+		if i > 0 {
+			time.Sleep(pollInterval)
+		}
+		present, err := tryConfigureOnce(b, workspaceDir, mirrorURL, hostPort)
+		if present {
+			onResult(true, err)
+			return
+		}
+		if err != nil {
+			lastErr = err
+		}
+	}
+
+	// Background "rescue" phase.
+	go func() {
+		deadline := start.Add(pollTimeout)
+		for time.Now().Before(deadline) {
+			time.Sleep(pollInterval)
+			present, err := tryConfigureOnce(b, workspaceDir, mirrorURL, hostPort)
+			if present {
+				onResult(true, err)
+				return
+			}
+			if err != nil {
+				lastErr = err
+			}
+		}
+		onResult(false, lastErr)
+	}()
 }
 
 // probeScript reports whether the instance runs its own dockerd (docker-in-docker)

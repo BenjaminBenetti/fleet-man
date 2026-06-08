@@ -99,7 +99,8 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 			// instance's own buildx config persists across stop/start, so only
 			// the server container needs reviving. Best-effort: a failure just
 			// means no shared cache this session.
-			supportsMounts := backendutil.New(instance.Backend, false).SupportsCustomMounts()
+			execBackend := backendutil.New(instance.Backend, false)
+			supportsMounts := execBackend.SupportsCustomMounts()
 			if f.Settings.BuildkitServer && supportsMounts {
 				if _, err := buildkit.EnsureSharedServer(fleetName); err != nil {
 					state.WriteWarn(fleetName, instanceName, fmt.Sprintf("buildkit server: %v", err))
@@ -126,6 +127,22 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 				if err := fleetnet.ConnectInstance(fleetName, instance.ContainerID); err != nil {
 					state.WriteWarn(fleetName, instanceName, fmt.Sprintf("image cache network: %v", err))
 				}
+				// Re-point the instance's dockerd at the mirror on start too: the
+				// daemon.json write can be missed at create time (dind not up yet)
+				// or lost with the image, and the on-start path above only revives
+				// the server + network. Same sync-then-background poll as create;
+				// the merge is idempotent so re-running is safe.
+				imagecache.ConfigureInstanceDockerPolling(execBackend, instance.WorkspaceDir,
+					imagecache.MirrorURL(fleetName), imagecache.MirrorHostPort(fleetName),
+					func(configured bool, err error) {
+						switch {
+						case err != nil:
+							state.WriteWarn(fleetName, instanceName, fmt.Sprintf("image cache: %v", err))
+						case !configured:
+							flog.Info("image cache: no in-instance dockerd appeared within poll window; mirror not configured",
+								"fleet", fleetName, "instance", instanceName)
+						}
+					})
 			}
 		}
 		postStartHook(fleetName, instance, homeDir)

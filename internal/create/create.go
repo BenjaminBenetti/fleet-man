@@ -162,7 +162,7 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 	if err := setupDebCache(instanceBackend, fleetName, result.ContainerID, wsDir); err != nil {
 		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("deb cache: %v", err))
 	}
-	if err := setupImageCache(instanceBackend, fleetName, result.ContainerID, wsDir); err != nil {
+	if err := setupImageCache(instanceBackend, fleetName, instanceName, result.ContainerID, wsDir); err != nil {
 		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("image cache: %v", err))
 	}
 

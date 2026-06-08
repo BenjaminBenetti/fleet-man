@@ -163,7 +163,7 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) (err er
 	if err := setupDebCache(instanceBackend, fleetName, result.ContainerID, destWorkspaceDir); err != nil {
 		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("deb cache: %v", err))
 	}
-	if err := setupImageCache(instanceBackend, fleetName, result.ContainerID, destWorkspaceDir); err != nil {
+	if err := setupImageCache(instanceBackend, fleetName, destInstance, result.ContainerID, destWorkspaceDir); err != nil {
 		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("image cache: %v", err))
 	}
 

@@ -1,8 +1,11 @@
 package create
 
 import (
+	"fmt"
+
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetnet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/imagecache"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -16,7 +19,7 @@ import (
 // caller can surface a warning; best-effort and must NOT abort provisioning.
 // ConfigureInstanceDocker silently skips instances without their own dockerd
 // (docker-outside-of-docker / no docker), so an error here is a genuine failure.
-func setupImageCache(instanceBackend backend.Backend, fleetName, containerID, workspaceDir string) error {
+func setupImageCache(instanceBackend backend.Backend, fleetName, instanceName, containerID, workspaceDir string) error {
 	if !instanceBackend.SupportsCustomMounts() || !fleetImageCacheEnabled(fleetName) {
 		return nil
 	}
@@ -26,8 +29,32 @@ func setupImageCache(instanceBackend backend.Backend, fleetName, containerID, wo
 	if err := fleetnet.ConnectInstance(fleetName, containerID); err != nil {
 		return err
 	}
-	return imagecache.ConfigureInstanceDocker(instanceBackend, workspaceDir,
-		imagecache.MirrorURL(fleetName), imagecache.MirrorHostPort(fleetName))
+	// Point the instance's own dockerd at the mirror. A docker-in-docker daemon
+	// may not have finished starting yet, so poll rather than probe once: the
+	// first few probes run synchronously (so a fast dind is wired up before the
+	// user starts working), then a background rescue loop keeps trying for the
+	// rest of the window. Best-effort — an instance with no dockerd never
+	// configures, which is fine.
+	imagecache.ConfigureInstanceDockerPolling(instanceBackend, workspaceDir,
+		imagecache.MirrorURL(fleetName), imagecache.MirrorHostPort(fleetName),
+		imageCacheConfigureResult(fleetName, instanceName))
+	return nil
+}
+
+// imageCacheConfigureResult builds the ConfigureInstanceDockerPolling callback:
+// a configure failure becomes a TUI-visible warning, while never finding a
+// dockerd within the window is logged at info (it is the expected outcome for an
+// instance without its own dockerd, so it must not surface as a warning).
+func imageCacheConfigureResult(fleetName, instanceName string) func(bool, error) {
+	return func(configured bool, err error) {
+		switch {
+		case err != nil:
+			state.WriteWarn(fleetName, instanceName, fmt.Sprintf("image cache: %v", err))
+		case !configured:
+			flog.Info("image cache: no in-instance dockerd appeared within poll window; mirror not configured",
+				"fleet", fleetName, "instance", instanceName)
+		}
+	}
 }
 
 // fleetImageCacheEnabled reports whether the named fleet has the ImageCacheServer

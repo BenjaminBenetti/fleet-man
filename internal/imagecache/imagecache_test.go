@@ -6,8 +6,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -251,5 +253,112 @@ func TestConfigureInstanceDockerConfiguresWhenPresent(t *testing.T) {
 	}
 	if !strings.Contains(fe.calls[1], "registry-mirrors") {
 		t.Fatalf("configure call did not write the mirror config: %v", fe.calls[1])
+	}
+}
+
+// pollExecer is a concurrency-safe fake (the background phase calls ExecCommand
+// from a goroutine) whose probe reports ABSENT until presentAtProbe probes have
+// run, then PRESENT. presentAtProbe == 0 means dockerd never appears.
+type pollExecer struct {
+	mu             sync.Mutex
+	presentAtProbe int
+	probeCalls     int
+	configCalls    int
+}
+
+func (f *pollExecer) ExecCommand(workspaceDir string, command []string) *backend.Cmd {
+	joined := strings.Join(command, " ")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := ""
+	// Only the probe script prints the markers; the configure script does not.
+	if strings.Contains(joined, probeMarkerPresent) {
+		f.probeCalls++
+		if f.presentAtProbe != 0 && f.probeCalls >= f.presentAtProbe {
+			out = probeMarkerPresent
+		} else {
+			out = probeMarkerAbsent
+		}
+	} else {
+		f.configCalls++
+	}
+	return backend.NewCmd(exec.Command("printf", "%s", out), nil)
+}
+
+func (f *pollExecer) counts() (probes, configs int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.probeCalls, f.configCalls
+}
+
+// setPollTimings shrinks the polling schedule for fast tests and restores it.
+func setPollTimings(t *testing.T, interval, timeout time.Duration, sync int) {
+	t.Helper()
+	oi, ot, os := pollInterval, pollTimeout, pollSyncAttempts
+	pollInterval, pollTimeout, pollSyncAttempts = interval, timeout, sync
+	t.Cleanup(func() { pollInterval, pollTimeout, pollSyncAttempts = oi, ot, os })
+}
+
+// awaitResult runs ConfigureInstanceDockerPolling and returns its single
+// onResult outcome, failing if the callback never fires.
+func awaitResult(t *testing.T, fe *pollExecer) (configured bool, err error) {
+	t.Helper()
+	type res struct {
+		configured bool
+		err        error
+	}
+	ch := make(chan res, 1)
+	ConfigureInstanceDockerPolling(fe, "/ws", MirrorURL("alpha"), MirrorHostPort("alpha"),
+		func(configured bool, err error) { ch <- res{configured, err} })
+	select {
+	case r := <-ch:
+		return r.configured, r.err
+	case <-time.After(5 * time.Second):
+		t.Fatal("onResult never fired")
+		return false, nil
+	}
+}
+
+// TestConfigureInstanceDockerPollingSyncHit verifies a dockerd present on the
+// first probe is configured synchronously (probe + configure, no extra probes).
+func TestConfigureInstanceDockerPollingSyncHit(t *testing.T) {
+	setPollTimings(t, time.Millisecond, time.Second, 3)
+	fe := &pollExecer{presentAtProbe: 1}
+	configured, err := awaitResult(t, fe)
+	if !configured || err != nil {
+		t.Fatalf("sync hit = (%v, %v), want (true, nil)", configured, err)
+	}
+	if probes, configs := fe.counts(); probes != 1 || configs != 1 {
+		t.Fatalf("expected exactly 1 probe + 1 configure, got probes=%d configs=%d", probes, configs)
+	}
+}
+
+// TestConfigureInstanceDockerPollingBackgroundHit verifies that when dockerd does
+// not appear during the synchronous attempts, the background rescue loop keeps
+// probing and configures once it shows up.
+func TestConfigureInstanceDockerPollingBackgroundHit(t *testing.T) {
+	setPollTimings(t, time.Millisecond, 2*time.Second, 1)
+	fe := &pollExecer{presentAtProbe: 3} // absent for the sync probe, then appears
+	configured, err := awaitResult(t, fe)
+	if !configured || err != nil {
+		t.Fatalf("background hit = (%v, %v), want (true, nil)", configured, err)
+	}
+	if probes, configs := fe.counts(); probes < 3 || configs != 1 {
+		t.Fatalf("expected >=3 probes + 1 configure, got probes=%d configs=%d", probes, configs)
+	}
+}
+
+// TestConfigureInstanceDockerPollingGivesUp verifies that if no dockerd ever
+// appears the poll gives up after the timeout, reporting configured=false with no
+// error (the documented "no dockerd, do nothing" outcome) and never configuring.
+func TestConfigureInstanceDockerPollingGivesUp(t *testing.T) {
+	setPollTimings(t, time.Millisecond, 30*time.Millisecond, 1)
+	fe := &pollExecer{presentAtProbe: 0} // never present
+	configured, err := awaitResult(t, fe)
+	if configured || err != nil {
+		t.Fatalf("give up = (%v, %v), want (false, nil)", configured, err)
+	}
+	if _, configs := fe.counts(); configs != 0 {
+		t.Fatalf("expected no configure calls on give-up, got %d", configs)
 	}
 }
