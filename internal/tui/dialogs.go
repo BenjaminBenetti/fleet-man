@@ -1123,6 +1123,18 @@ func (fleetPage *fleetPage) cacheEnabled(k cacheKind) bool {
 	return false
 }
 
+// enabledCacheCount returns how many of the three caches (buildkit / deb / image)
+// are currently toggled on, for the count shown in the Caching section header.
+func (fleetPage *fleetPage) enabledCacheCount() int {
+	n := 0
+	for _, k := range []cacheKind{cacheBuildkit, cacheDeb, cacheImage} {
+		if fleetPage.cacheEnabled(k) {
+			n++
+		}
+	}
+	return n
+}
+
 // cacheRowFocused reports whether the dialog cursor is currently on the row for
 // cache kind k (used so the [Delete cache] button only highlights its own row).
 func (fleetPage *fleetPage) cacheRowFocused(k cacheKind) bool {
@@ -1176,6 +1188,7 @@ func (fleetPage *fleetPage) moveEditFleetRow(delta int) {
 	}
 	fleetPage.dialogCacheButtonFocused = false
 	fleetPage.dialogDeleteCacheConfirm = false
+	fleetPage.dialogMountRemoveConfirm = false
 	fleetPage.syncEditFleetFocus()
 }
 
@@ -1252,6 +1265,7 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.dialogCustomMounts = slices.Clone(f.Settings.CustomMounts)
 	fleetPage.dialogAddingMount = false
 	fleetPage.dialogCustomMountErr = ""
+	fleetPage.dialogMountRemoveConfirm = false
 	fleetPage.customMountInput.SetValue("")
 	fleetPage.customMountInput.Blur()
 
@@ -1331,9 +1345,14 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 		return nil
 
 	case "esc", "q", "Q", "ctrl+c":
-		// An armed delete-cache confirm is cancelled first, not the dialog.
+		// An armed confirm (delete-cache or remove-mount) is cancelled first,
+		// not the dialog.
 		if fleetPage.dialogDeleteCacheConfirm {
 			fleetPage.dialogDeleteCacheConfirm = false
+			return nil
+		}
+		if fleetPage.dialogMountRemoveConfirm {
+			fleetPage.dialogMountRemoveConfirm = false
 			return nil
 		}
 		fleetPage.closeEditFleet(m)
@@ -1584,9 +1603,18 @@ func (fleetPage *fleetPage) updateCustomMountRow(m *model, keyMsg tea.KeyMsg) te
 		}
 		return nil
 	}
-	// An existing mount row: enter/x/d removes it (instant-save).
+	// An existing mount row: removal is a two-step confirm (mirroring the
+	// Caching section's [Delete cache] button) so a stray Enter can't silently
+	// drop a mount. The first enter/x/d arms the inline "[remove?]" confirm; the
+	// second enter/x/d performs the removal (instant-save). Esc disarms it via
+	// the dialog's top-level esc handler, and any row move clears it.
 	switch keyMsg.String() {
 	case "enter", "x", "d":
+		if !fleetPage.dialogMountRemoveConfirm {
+			fleetPage.dialogMountRemoveConfirm = true // first press: arm confirm
+			return nil
+		}
+		fleetPage.dialogMountRemoveConfirm = false // second press: do it
 		return fleetPage.removeCustomMount(m, idx)
 	}
 	return nil

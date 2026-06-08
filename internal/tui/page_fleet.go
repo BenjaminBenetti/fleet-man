@@ -71,8 +71,9 @@ type fleetPage struct {
 	dialogCustomMounts         []string // working copy of the fleet's custom mounts (instant-save)
 	dialogAddingMount          bool     // true while the "+ Add mount" text input is active
 	dialogCustomMountErr       string   // inline validation error shown under the add-mount input
+	dialogMountRemoveConfirm   bool     // inline "[remove?]" confirm armed on the focused custom-mount row (mirrors the Caching [Delete cache] flow)
 
-	dialogDetecting         bool // true while a homedir auto-detect cmd is in flight
+	dialogDetecting bool // true while a homedir auto-detect cmd is in flight
 
 	// dialogBrowserSwitching is true while the switch-browser dialog
 	// has dispatched a kill+relaunch but the browserProxyMsg has not
@@ -1736,7 +1737,7 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 			if fleetPage.dialogCachingExpanded {
 				arrow = "▼ "
 			}
-			d.WriteString(marker(row) + dialogLabel.Render(arrow+"Caching"))
+			d.WriteString(marker(row) + dialogLabel.Render(fmt.Sprintf("%sCaching (%d)", arrow, fleetPage.enabledCacheCount())))
 		case editFleetRowBuildkit:
 			d.WriteString(marker(row) + fleetPage.renderCacheRow(m, cacheBuildkit, "Buildkit server"))
 		case editFleetRowDebCache:
@@ -1771,7 +1772,22 @@ func (fleetPage *fleetPage) renderCustomMountRow(row int, marker func(int) strin
 		}
 		return marker(row) + "  " + dialogLabel.Render("+ Add mount")
 	}
-	return marker(row) + "  " + fleetPage.dialogCustomMounts[idx] + "   " + dimStyle.Render("[remove]")
+	return marker(row) + "  " + fleetPage.dialogCustomMounts[idx] + "   " + fleetPage.renderRemoveMountButton(row)
+}
+
+// renderRemoveMountButton renders the [remove] affordance next to an existing
+// custom mount. It mirrors the Caching section's [Delete cache] button: dim when
+// its row is not focused, highlighted when focused, and shown as a highlighted
+// "[remove?]" once the inline confirm is armed.
+func (fleetPage *fleetPage) renderRemoveMountButton(row int) string {
+	focused := fleetPage.dialogRow == row
+	if focused && fleetPage.dialogMountRemoveConfirm {
+		return selectedStyle.Render("[remove?]")
+	}
+	if focused {
+		return selectedStyle.Render("[remove]")
+	}
+	return dimStyle.Render("[remove]")
 }
 
 // customMountFooter returns a context line shown beneath the dialog rows while
@@ -1845,6 +1861,9 @@ func (fleetPage *fleetPage) editFleetHint() string {
 	if isCustomMountChildRow(fleetPage.dialogRow) {
 		if fleetPage.dialogRow == fleetPage.customMountAddRow() {
 			return "[enter] Add mount  [j/k] Select  [q/esc] Save & Close"
+		}
+		if fleetPage.dialogMountRemoveConfirm {
+			return "[enter] Confirm remove  [esc] Cancel"
 		}
 		return "[enter/d] Remove  [j/k] Select  [q/esc] Save & Close"
 	}

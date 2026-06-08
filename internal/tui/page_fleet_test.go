@@ -1736,6 +1736,102 @@ func TestEditFleetSavesDebAndImageCache(t *testing.T) {
 	}
 }
 
+// navigateToCustomMountRow expands the Custom mounts section and moves the
+// cursor onto the idx-th existing mount row, from a freshly opened dialog.
+func navigateToCustomMountRow(t *testing.T, fp *fleetPage, m *model, idx int) {
+	t.Helper()
+	guard := 0
+	for fp.dialogRow != editFleetRowCustomMounts {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+		if guard++; guard > 20 {
+			t.Fatal("never reached Custom mounts header")
+		}
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // expand
+	want := editFleetRowCustomMountBase + idx
+	guard = 0
+	for fp.dialogRow != want {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+		if guard++; guard > 20 {
+			t.Fatalf("never reached custom-mount row %d", idx)
+		}
+	}
+}
+
+// TestEditFleetRemoveMountRequiresConfirm verifies the custom-mount [remove]
+// affordance is a two-step confirm (mirroring the Caching [Delete cache] flow):
+// the first Enter arms the confirm without removing, and the second Enter
+// performs the removal (instant-save).
+func TestEditFleetRemoveMountRequiresConfirm(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	f := &fleet.Fleet{Name: "alpha", Settings: fleet.FleetSettings{CustomMounts: []string{"/opt/data"}}}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToCustomMountRow(t, fp, m, 0)
+
+	// First Enter only arms the confirm — the mount must still be present.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !fp.dialogMountRemoveConfirm {
+		t.Fatal("first Enter should arm the remove confirm")
+	}
+	if len(fp.dialogCustomMounts) != 1 || len(f.Settings.CustomMounts) != 1 {
+		t.Fatalf("mount removed before confirm: dialog=%v saved=%v", fp.dialogCustomMounts, f.Settings.CustomMounts)
+	}
+
+	// Second Enter performs the removal and disarms.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if fp.dialogMountRemoveConfirm {
+		t.Fatal("confirm should disarm after removal")
+	}
+	if len(fp.dialogCustomMounts) != 0 || len(f.Settings.CustomMounts) != 0 {
+		t.Fatalf("mount not removed after confirm: dialog=%v saved=%v", fp.dialogCustomMounts, f.Settings.CustomMounts)
+	}
+}
+
+// TestEditFleetRemoveMountConfirmCancels verifies that Esc cancels an armed
+// remove confirm without removing the mount or closing the dialog, and that
+// moving the cursor off the row also disarms it.
+func TestEditFleetRemoveMountConfirmCancels(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	f := &fleet.Fleet{Name: "alpha", Settings: fleet.FleetSettings{CustomMounts: []string{"/opt/data", "/srv/cache"}}}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToCustomMountRow(t, fp, m, 0)
+
+	// Arm, then Esc cancels the confirm but keeps the dialog open and the mount.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if fp.dialogMountRemoveConfirm {
+		t.Fatal("Esc should cancel the armed confirm")
+	}
+	if fp.mode != viewEditFleet {
+		t.Fatal("Esc on an armed confirm must not close the dialog")
+	}
+	if len(fp.dialogCustomMounts) != 2 {
+		t.Fatalf("Esc removed a mount: %v", fp.dialogCustomMounts)
+	}
+
+	// Arm again, then a row move disarms it.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+	if fp.dialogMountRemoveConfirm {
+		t.Fatal("moving the cursor should disarm the confirm")
+	}
+	if len(fp.dialogCustomMounts) != 2 {
+		t.Fatalf("row move removed a mount: %v", fp.dialogCustomMounts)
+	}
+}
+
 // TestDeleteCacheCmdDispatchesByKind verifies deleteCacheCmd calls the matching
 // per-cache delete RPC for each kind.
 func TestDeleteCacheCmdDispatchesByKind(t *testing.T) {
