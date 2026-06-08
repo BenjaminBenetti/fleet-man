@@ -217,25 +217,20 @@ func (m *Manager) connectAndServe(ctx context.Context, gatewayURL string) (regis
 	}
 	defer conn.Close()
 	// Close the conn on ctx cancel so the attempt aborts promptly at ANY stage:
-	// the handshake (which is bounded by conn deadlines, not ctx) as well as the
-	// serve loop (closing the conn under yamux makes serveProxy return).
+	// the handshake (which tunnel.Handshake bounds with its own timeout) as well as
+	// the serve loop (closing the conn under yamux makes serveProxy return).
 	// Idempotent with the defers and with session.Close below.
 	stopOnCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stopOnCancel()
 
-	// Control handshake on the raw conn (before yamux), bounded by a deadline so
-	// a silent gateway can't hang the attempt.
-	_ = conn.SetDeadline(time.Now().Add(handshakeTimeout))
+	// Register handshake over the stream (before yamux), bounded by its own timeout
+	// (the StreamConn has no deadlines) so a silent gateway can't hang the attempt.
 	prev := loadSession(gatewayURL)
 	req := tunnel.RegisterRequest{SessionID: prev.SessionID, ClientVersion: m.clientVersion, Features: m.features()}
-	if err := tunnel.WriteFrame(conn, req); err != nil {
-		return false, fmt.Errorf("register write: %w", err)
+	reply, err := tunnel.Handshake(conn, req, handshakeTimeout)
+	if err != nil {
+		return false, fmt.Errorf("register handshake: %w", err)
 	}
-	var reply tunnel.RegisterReply
-	if err := tunnel.ReadFrame(conn, &reply); err != nil {
-		return false, fmt.Errorf("register read: %w", err)
-	}
-	_ = conn.SetDeadline(time.Time{}) // clear; yamux manages its own timeouts
 	if reply.Error != "" {
 		return false, fmt.Errorf("gateway refused registration: %s", reply.Error)
 	}

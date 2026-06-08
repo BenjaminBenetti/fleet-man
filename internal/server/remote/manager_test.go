@@ -26,26 +26,27 @@ import (
 
 // --- unit tests ------------------------------------------------------------
 
-func TestGatewayAddress(t *testing.T) {
+func TestGRPCTarget(t *testing.T) {
 	cases := []struct {
-		url, wantAddr, wantSNI string
-		wantErr                bool
+		url, wantTarget string
+		wantTLS         bool
+		wantErr         bool
 	}{
-		{url: "https://gw.example.com", wantAddr: "gw.example.com:443", wantSNI: "gw.example.com"},
-		{url: "https://gw.example.com:8443", wantAddr: "gw.example.com:8443", wantSNI: "gw.example.com"},
-		// http is accepted (plaintext, e.g. behind a TLS-terminating proxy):
-		// addr defaults to :80 and the SNI/serverName is empty (no TLS dial).
-		{url: "http://gw.example.com", wantAddr: "gw.example.com:80", wantSNI: ""},
-		{url: "http://gw.example.com:8080", wantAddr: "gw.example.com:8080", wantSNI: ""},
+		{url: "https://gw.example.com", wantTarget: "dns:///gw.example.com:443", wantTLS: true},
+		{url: "https://gw.example.com:50051", wantTarget: "dns:///gw.example.com:50051", wantTLS: true},
+		// http is accepted (plaintext h2c, e.g. behind a TLS-terminating proxy):
+		// target defaults to :80 and no TLS.
+		{url: "http://gw.example.com", wantTarget: "dns:///gw.example.com:80", wantTLS: false},
+		{url: "http://gw.example.com:8080", wantTarget: "dns:///gw.example.com:8080", wantTLS: false},
 		{url: "ftp://gw.example.com", wantErr: true}, // only http/https
 		{url: "https://", wantErr: true},             // no host
 		{url: "://bad", wantErr: true},               // unparseable
 	}
 	for _, c := range cases {
-		addr, sni, err := gatewayAddress(c.url)
+		target, useTLS, err := grpcTarget(c.url)
 		if c.wantErr {
 			if err == nil {
-				t.Errorf("%q: want error, got addr=%q", c.url, addr)
+				t.Errorf("%q: want error, got target=%q", c.url, target)
 			}
 			continue
 		}
@@ -53,8 +54,8 @@ func TestGatewayAddress(t *testing.T) {
 			t.Errorf("%q: unexpected error %v", c.url, err)
 			continue
 		}
-		if addr != c.wantAddr || sni != c.wantSNI {
-			t.Errorf("%q: got (%q,%q), want (%q,%q)", c.url, addr, sni, c.wantAddr, c.wantSNI)
+		if target != c.wantTarget || useTLS != c.wantTLS {
+			t.Errorf("%q: got (%q,%v), want (%q,%v)", c.url, target, useTLS, c.wantTarget, c.wantTLS)
 		}
 	}
 }

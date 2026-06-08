@@ -1,7 +1,6 @@
 package fleetclient
 
 import (
-	"bufio"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -10,28 +9,88 @@ import (
 	"strings"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
-// grpc_gateway.go dials the daemon's gRPC server THROUGH a fleet gateway, so a
+// grpc_gateway.go reaches a daemon's gRPC server THROUGH a fleet gateway, so a
 // remote `fleet` client can drive a daemon it cannot reach directly. The gateway
-// exposes a hijack+splice endpoint at <gw>/grpc/<id>; the dialer connects to the
-// gateway (TLS for an https URL, verified against the system roots; plaintext for
-// an http URL behind a TLS-terminating proxy), performs the CONNECT-style
-// handshake, and hands gRPC the resulting raw conn to run native HTTP/2 over.
-// Every RPC carries the MCP bearer token as metadata, which the daemon validates.
+// exposes a NATIVE gRPC endpoint (h2c, or h2 under TLS); this dials it as an
+// ordinary gRPC target — TLS verified against the OS system roots for https, or
+// plaintext h2c for http (TLS terminated upstream by a reverse proxy). Every RPC
+// carries two pieces of metadata: the daemon's session id as `fleet-session` (the
+// gateway reads it to route to the right tunnel) and the MCP bearer token as
+// `authorization` (the daemon validates it). The gateway only routes; the token
+// stays the real access boundary.
 //
 // This stays inside the fleetclient import boundary (stdlib + grpc only).
 
-// gatewayEndpoint reaches the daemon through a fleet gateway. rawURL is the public
-// gRPC URL the gateway minted (FLEET_GATEWAY); token is the MCP bearer token.
+// grpcSessionHeader is the gRPC metadata key carrying the target session id. It
+// MUST match the gateway's grpcSessionHeader (internal/gateway/grpc.go); the
+// import boundary forbids sharing the constant.
+const grpcSessionHeader = "fleet-session"
+
+// gatewayEndpoint reaches a daemon through a fleet gateway. Built (and validated)
+// by newGatewayEndpoint from a FLEET_GATEWAY URL.
 type gatewayEndpoint struct {
-	rawURL string
-	token  string
+	rawURL string // original FLEET_GATEWAY (carries no secret), for String()
+	target string // gRPC dial target, e.g. "dns:///gw.example.com:443"
+	useTLS bool   // https -> verified TLS; http -> plaintext h2c
+	id     string // the daemon's session id (the fleet-session routing key)
+	token  string // MCP bearer token
 }
 
-// Target is a dummy: the real address lives in the CONNECT dialer, but gRPC
-// requires a non-empty target.
-func (e gatewayEndpoint) Target() string { return "passthrough:///fleet-gateway" }
+// newGatewayEndpoint parses a FLEET_GATEWAY URL of the form
+// <scheme>://<host[:port]>/<id> (a trailing /grpc/<id> is also accepted). https
+// dials verified TLS; http dials plaintext h2c. The port defaults to 443 (https)
+// or 80 (http) when omitted.
+func newGatewayEndpoint(rawURL, token string) (gatewayEndpoint, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return gatewayEndpoint{}, fmt.Errorf("parse FLEET_GATEWAY: %w", err)
+	}
+	var useTLS bool
+	var defaultPort string
+	switch u.Scheme {
+	case "https":
+		useTLS, defaultPort = true, "443"
+	case "http":
+		useTLS, defaultPort = false, "80"
+	default:
+		return gatewayEndpoint{}, fmt.Errorf("FLEET_GATEWAY must be http or https, got %q", u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return gatewayEndpoint{}, fmt.Errorf("FLEET_GATEWAY has no host: %q", rawURL)
+	}
+	id := lastPathSegment(u.Path)
+	if id == "" {
+		return gatewayEndpoint{}, fmt.Errorf("FLEET_GATEWAY must include the session id, e.g. https://gw.example.com:50051/<id>")
+	}
+	port := u.Port()
+	if port == "" {
+		port = defaultPort
+	}
+	return gatewayEndpoint{
+		rawURL: rawURL,
+		target: "dns:///" + net.JoinHostPort(u.Hostname(), port),
+		useTLS: useTLS,
+		id:     id,
+		token:  token,
+	}, nil
+}
+
+// lastPathSegment returns the final non-empty path segment, so both "/<id>" and
+// "/grpc/<id>" yield "<id>".
+func lastPathSegment(p string) string {
+	p = strings.Trim(p, "/")
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+// Target is the gRPC dial target (the gateway's host:port).
+func (e gatewayEndpoint) Target() string { return e.target }
 
 // IsLocal is false — no auto-spawn / version-restart for a remote daemon.
 func (e gatewayEndpoint) IsLocal() bool { return false }
@@ -39,118 +98,35 @@ func (e gatewayEndpoint) IsLocal() bool { return false }
 // String is the gateway URL (which carries no secret).
 func (e gatewayEndpoint) String() string { return e.rawURL }
 
-// DialOptions wires the CONNECT dialer + the per-RPC bearer token. The inner
-// transport is insecure because any TLS terminates at (or before) the gateway —
-// the dialer establishes it for https, or it is plaintext for http; the gRPC
-// connection then runs h2c over the tunneled conn.
+// DialOptions wires the transport credentials (verified TLS for https, plaintext
+// h2c for http) plus per-RPC metadata: the fleet-session routing id (read by the
+// gateway) and the bearer token (validated by the daemon).
 func (e gatewayEndpoint) DialOptions() []grpc.DialOption {
-	return append(insecureCreds(),
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return dialGatewayConn(ctx, e.rawURL)
-		}),
-		grpc.WithPerRPCCredentials(bearerPerRPC{token: e.token}),
-	)
-}
-
-// dialGatewayConn dials the gateway (TLS for an https URL, verified against the
-// system roots; plaintext TCP for an http URL) and performs the /grpc/<id>
-// handshake: it sends a plain request to the path and expects "200 Connection
-// Established", after which the connection is a transparent byte pipe to the
-// daemon's gRPC server. The returned conn preserves any bytes the handshake
-// reader buffered.
-func dialGatewayConn(ctx context.Context, rawURL string) (net.Conn, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return nil, fmt.Errorf("parse FLEET_GATEWAY: %w", err)
-	}
-	// Reject an authority-less URL up front (mirroring the control dialer in
-	// internal/server/remote). Without this, an https URL with no host would have
-	// an empty hostname and fall through to the plaintext branch below — silently
-	// downgrading a URL the user wrote as https.
-	if u.Hostname() == "" {
-		return nil, fmt.Errorf("FLEET_GATEWAY has no host: %q", rawURL)
-	}
-	// serverName is the host for https (TLS SNI) and empty for http (plaintext).
-	var serverName, defaultPort string
-	switch u.Scheme {
-	case "https":
-		serverName, defaultPort = u.Hostname(), "443"
-	case "http":
-		serverName, defaultPort = "", "80"
-	default:
-		return nil, fmt.Errorf("FLEET_GATEWAY must be http or https, got %q", u.Scheme)
-	}
-	if u.Path == "" || u.Path == "/" {
-		return nil, fmt.Errorf("FLEET_GATEWAY must include the /grpc/<id> path")
-	}
-	host := u.Host
-	if u.Port() == "" {
-		host = net.JoinHostPort(u.Hostname(), defaultPort)
-	}
-
-	var conn net.Conn
-	if serverName != "" {
-		d := &tls.Dialer{Config: &tls.Config{ServerName: serverName, MinVersion: tls.VersionTLS12}}
-		conn, err = d.DialContext(ctx, "tcp", host)
+	var creds credentials.TransportCredentials
+	if e.useTLS {
+		creds = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
 	} else {
-		var d net.Dialer
-		conn, err = d.DialContext(ctx, "tcp", host)
+		creds = insecure.NewCredentials()
 	}
-	if err != nil {
-		return nil, fmt.Errorf("dial gateway %s: %w", host, err)
-	}
-	if c, err := gatewayHandshake(conn, host, u.Path); err != nil {
-		_ = conn.Close()
-		return nil, err
-	} else {
-		return c, nil
+	return []grpc.DialOption{
+		grpc.WithTransportCredentials(creds),
+		grpc.WithPerRPCCredentials(gatewayPerRPC{token: e.token, sessionID: e.id}),
 	}
 }
 
-// gatewayHandshake sends the tunnel request and reads the 200 response, returning
-// a conn that yields any post-header buffered bytes before the live stream.
-func gatewayHandshake(conn net.Conn, host, path string) (net.Conn, error) {
-	if _, err := fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\n\r\n", path, host); err != nil {
-		return nil, fmt.Errorf("gateway handshake write: %w", err)
-	}
-	br := bufio.NewReader(conn)
-	status, err := br.ReadString('\n')
-	if err != nil {
-		return nil, fmt.Errorf("gateway handshake read: %w", err)
-	}
-	if !strings.Contains(status, " 200 ") {
-		return nil, fmt.Errorf("gateway did not establish the tunnel (%s) — is the gateway up to date and the session live?", strings.TrimSpace(status))
-	}
-	for { // consume to the end of the response headers
-		line, err := br.ReadString('\n')
-		if err != nil {
-			return nil, fmt.Errorf("gateway handshake headers: %w", err)
-		}
-		if line == "\r\n" || line == "\n" {
-			break
-		}
-	}
-	// Reads go through br (draining any buffered bytes first); writes go straight
-	// to the conn.
-	return bufConn{Conn: conn, r: br}, nil
+// gatewayPerRPC attaches the routing id and bearer token to every RPC.
+// RequireTransportSecurity is false so the metadata also rides the plaintext h2c
+// transport (the token's exposure is the same gateway-trust model as before).
+type gatewayPerRPC struct {
+	token     string
+	sessionID string
 }
 
-// bufConn is a net.Conn whose Read drains a bufio.Reader (so handshake-buffered
-// bytes are not lost) before reading the underlying conn.
-type bufConn struct {
-	net.Conn
-	r *bufio.Reader
+func (g gatewayPerRPC) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
+	return map[string]string{
+		"authorization":   "Bearer " + g.token,
+		grpcSessionHeader: g.sessionID,
+	}, nil
 }
 
-func (c bufConn) Read(p []byte) (int, error) { return c.r.Read(p) }
-
-// bearerPerRPC attaches `authorization: Bearer <token>` to every RPC.
-type bearerPerRPC struct{ token string }
-
-func (b bearerPerRPC) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
-	return map[string]string{"authorization": "Bearer " + b.token}, nil
-}
-
-// RequireTransportSecurity is false: TLS terminates at the gateway, so the inner
-// gRPC transport is "insecure" from gRPC's point of view.
-func (b bearerPerRPC) RequireTransportSecurity() bool { return false }
+func (g gatewayPerRPC) RequireTransportSecurity() bool { return false }

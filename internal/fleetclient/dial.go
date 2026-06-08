@@ -28,7 +28,10 @@ func (c *Conn) Close() error { return c.conn.Close() }
 // version handshake (relaunching a too-old local server, or erroring on an
 // incompatible remote/newer one). For a remote endpoint it dials only.
 func Dial(ctx context.Context) (*Conn, error) {
-	ep := selectEndpoint()
+	ep, err := selectEndpoint()
+	if err != nil {
+		return nil, err
+	}
 	conn, err := grpc.NewClient(ep.Target(), ep.DialOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("create client for %s: %w", ep, err)

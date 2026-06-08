@@ -6,25 +6,36 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/tunnel"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
-// dial.go opens the outbound control connection to the gateway. fleetd is behind
-// NAT/firewall, so it always DIALS — the gateway never connects in.
+// dial.go opens fleetd's outbound registration to the gateway. fleetd is behind
+// NAT/firewall, so it always DIALS — it opens a gRPC bidi Register stream on the
+// gateway's gRPC endpoint and wraps it as a net.Conn (tunnel.StreamConn), over
+// which the register handshake and the yamux reverse tunnel then run (see
+// internal/tunnel). There is NO dedicated TCP control port; registration shares the
+// HTTP/2 gRPC endpoint, so the whole path is frontable by an L7 proxy.
 
-// gatewayAddress resolves a user-entered gateway URL to the TCP address to dial
-// and, for https, the TLS server name to verify. The URL must be http or https;
-// the port defaults to 443 for https and 80 for http when not given. serverName
-// is the host for https and EMPTY for http — an empty serverName is the signal
-// to dial plaintext (TLS is terminated upstream by a reverse proxy). It is split
-// out (and pure) so the URL handling is unit testable without a network.
-func gatewayAddress(gatewayURL string) (addr, serverName string, err error) {
+// registerStreamDesc matches the gateway's Register bidi method.
+var registerStreamDesc = &grpc.StreamDesc{ServerStreams: true, ClientStreams: true}
+
+// grpcTarget resolves a gateway URL to a gRPC dial target and whether to use TLS.
+// The URL must be http or https; the port defaults to 443 (https) or 80 (http).
+// https verifies the gateway against the OS system roots; http dials plaintext h2c
+// (TLS terminated upstream by a reverse proxy). Split out (and pure) so the URL
+// handling is unit-testable without a network.
+func grpcTarget(gatewayURL string) (target string, useTLS bool, err error) {
 	u, err := url.Parse(gatewayURL)
 	if err != nil {
-		return "", "", fmt.Errorf("parse gateway url: %w", err)
+		return "", false, fmt.Errorf("parse gateway url: %w", err)
 	}
 	host := u.Hostname()
 	if host == "" {
-		return "", "", fmt.Errorf("gateway url has no host: %q", gatewayURL)
+		return "", false, fmt.Errorf("gateway url has no host: %q", gatewayURL)
 	}
 	port := u.Port()
 	switch u.Scheme {
@@ -32,39 +43,42 @@ func gatewayAddress(gatewayURL string) (addr, serverName string, err error) {
 		if port == "" {
 			port = "443"
 		}
-		serverName = host
+		useTLS = true
 	case "http":
 		if port == "" {
 			port = "80"
 		}
-		serverName = "" // plaintext: TLS is terminated upstream
+		useTLS = false
 	default:
-		return "", "", fmt.Errorf("gateway url must be http or https, got %q", u.Scheme)
+		return "", false, fmt.Errorf("gateway url must be http or https, got %q", u.Scheme)
 	}
-	return net.JoinHostPort(host, port), serverName, nil
+	return "dns:///" + net.JoinHostPort(host, port), useTLS, nil
 }
 
-// dialGateway is the production transport seam (Manager.dial). For an https URL
-// it TLS-dials, verified against the OS system roots; for an http URL it dials
-// plaintext TCP (TLS terminated upstream by a reverse proxy). Tests override
-// Manager.dial to reach an in-process gateway.
+// dialGateway is the production transport seam (Manager.dial): it opens the gRPC
+// Register stream to the gateway and returns it as a net.Conn for the handshake +
+// yamux tunnel. https uses TLS verified against the system roots; http uses
+// plaintext h2c. Tests override Manager.dial to reach an in-process gateway.
 func dialGateway(ctx context.Context, gatewayURL string) (net.Conn, error) {
-	addr, serverName, err := gatewayAddress(gatewayURL)
+	target, useTLS, err := grpcTarget(gatewayURL)
 	if err != nil {
 		return nil, err
 	}
-	if serverName == "" {
-		var d net.Dialer
-		conn, err := d.DialContext(ctx, "tcp", addr)
-		if err != nil {
-			return nil, fmt.Errorf("dial gateway %s: %w", addr, err)
-		}
-		return conn, nil
+	var creds credentials.TransportCredentials
+	if useTLS {
+		creds = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+	} else {
+		creds = insecure.NewCredentials()
 	}
-	d := &tls.Dialer{Config: &tls.Config{ServerName: serverName, MinVersion: tls.VersionTLS12}}
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	cc, err := grpc.NewClient(target, grpc.WithTransportCredentials(creds))
 	if err != nil {
-		return nil, fmt.Errorf("dial gateway %s: %w", addr, err)
+		return nil, fmt.Errorf("gateway client: %w", err)
 	}
-	return conn, nil
+	stream, err := cc.NewStream(ctx, registerStreamDesc, tunnel.RegisterMethod, grpc.ForceCodec(tunnel.RawCodec{}))
+	if err != nil {
+		_ = cc.Close()
+		return nil, fmt.Errorf("open register stream: %w", err)
+	}
+	// Closing the conn tears the stream down by closing the whole client connection.
+	return tunnel.NewStreamConn(stream, func() { _ = cc.Close() }), nil
 }

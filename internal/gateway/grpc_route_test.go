@@ -1,39 +1,51 @@
 package gateway
 
 import (
-	"bufio"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/tunnel"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
-// testChanListener is a tiny in-memory net.Listener used by the simulated fleetd
-// to feed demuxed MCP streams to an http.Server.
-type testChanListener struct {
+// grpc_route_test.go covers the dedicated native-gRPC listener at the gateway
+// level: a real gRPC client reaches the gateway's gRPC port, the gateway routes by
+// the fleet-session header, and transparently proxies to a gRPC server standing in
+// for the daemon over a TagGRPC tunnel stream. It exercises BOTH transports — h2c
+// (plaintext) and h2 (TLS) — and the routing rejections. (The full real-FleetService
+// validation, incl. streaming/bidi/trailers, is in
+// internal/server/grpc_remote_e2e_test.go.)
+
+// streamListener is a net.Listener fed by Push, so a grpc.Server can Serve the
+// demuxed TagGRPC tunnel streams.
+type streamListener struct {
 	conns chan net.Conn
 	done  chan struct{}
 	once  sync.Once
 }
 
-func newTestChanListener() *testChanListener {
-	return &testChanListener{conns: make(chan net.Conn), done: make(chan struct{})}
+func newStreamListener() *streamListener {
+	return &streamListener{conns: make(chan net.Conn), done: make(chan struct{})}
 }
-func (l *testChanListener) push(c net.Conn) {
+func (l *streamListener) push(c net.Conn) {
 	select {
 	case l.conns <- c:
 	case <-l.done:
 		_ = c.Close()
 	}
 }
-func (l *testChanListener) Accept() (net.Conn, error) {
+func (l *streamListener) Accept() (net.Conn, error) {
 	select {
 	case c := <-l.conns:
 		return c, nil
@@ -41,38 +53,52 @@ func (l *testChanListener) Accept() (net.Conn, error) {
 		return nil, net.ErrClosed
 	}
 }
-func (l *testChanListener) Close() error   { l.once.Do(func() { close(l.done) }); return nil }
-func (l *testChanListener) Addr() net.Addr { return testAddr{} }
+func (l *streamListener) Close() error   { l.once.Do(func() { close(l.done) }); return nil }
+func (l *streamListener) Addr() net.Addr { return tunnelAddr{} }
 
-type testAddr struct{}
+type tunnelAddr struct{}
 
-func (testAddr) Network() string { return "test" }
-func (testAddr) String() string  { return "test" }
+func (tunnelAddr) Network() string { return "tunnel" }
+func (tunnelAddr) String() string  { return "tunnel" }
 
-// dialFleetdGRPC simulates a fleet daemon that NEGOTIATES gRPC and demuxes tagged
-// streams: TagMCP streams are served by an HTTP echo handler, TagGRPC streams are
-// raw byte-echoed (standing in for the native gRPC server). Returns the reply.
-func dialFleetdGRPC(t *testing.T, controlAddr string, pool *x509.CertPool) tunnel.RegisterReply {
+// rawEchoServer is a grpc.Server (raw codec) that echoes request frames — a
+// stand-in for the daemon's grpc.Server.
+func rawEchoServer() *grpc.Server {
+	srv := grpc.NewServer(grpc.ForceServerCodec(tunnel.RawCodec{}), grpc.UnknownServiceHandler(
+		func(_ any, ss grpc.ServerStream) error {
+			f := &tunnel.RawFrame{}
+			for {
+				if err := ss.RecvMsg(f); err != nil {
+					if err == io.EOF {
+						return nil
+					}
+					return err
+				}
+				if err := ss.SendMsg(f); err != nil {
+					return err
+				}
+			}
+		}))
+	return srv
+}
+
+// dialFleetdGRPC simulates a fleetd that negotiates gRPC over a TLS-verified
+// Register stream: it serves rawEchoServer over each demuxed TagGRPC stream.
+func dialFleetdGRPC(t *testing.T, grpcAddr string, pool *x509.CertPool) tunnel.RegisterReply {
 	t.Helper()
-	conn, err := tls.Dial("tcp", controlAddr, &tls.Config{RootCAs: pool, ServerName: "127.0.0.1"})
-	if err != nil {
-		t.Fatalf("dial control: %v", err)
-	}
+	conn := openRegisterStream(t, grpcAddr, credentials.NewTLS(&tls.Config{RootCAs: pool, ServerName: "127.0.0.1"}))
 	return registerFleetdGRPC(t, conn)
 }
 
-// dialFleetdGRPCPlain is dialFleetdGRPC over a PLAINTEXT control connection.
-func dialFleetdGRPCPlain(t *testing.T, controlAddr string) tunnel.RegisterReply {
+// dialFleetdGRPCPlain is dialFleetdGRPC over a plaintext (h2c) Register stream.
+func dialFleetdGRPCPlain(t *testing.T, grpcAddr string) tunnel.RegisterReply {
 	t.Helper()
-	conn, err := net.Dial("tcp", controlAddr)
-	if err != nil {
-		t.Fatalf("dial control: %v", err)
-	}
+	conn := openRegisterStream(t, grpcAddr, insecure.NewCredentials())
 	return registerFleetdGRPC(t, conn)
 }
 
-// registerFleetdGRPC performs the gRPC-negotiating handshake on an already-dialed
-// control conn (TLS or plain) and demuxes tagged streams.
+// registerFleetdGRPC performs the gRPC-negotiating handshake and serves a raw-echo
+// grpc.Server over each TagGRPC stream.
 func registerFleetdGRPC(t *testing.T, conn net.Conn) tunnel.RegisterReply {
 	t.Helper()
 	if err := tunnel.WriteFrame(conn, tunnel.RegisterRequest{Features: []string{tunnel.FeatureGRPC}}); err != nil {
@@ -90,14 +116,9 @@ func registerFleetdGRPC(t *testing.T, conn net.Conn) tunnel.RegisterReply {
 		t.Fatalf("client session: %v", err)
 	}
 
-	mcpLis := newTestChanListener()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, r.Header.Get("Authorization"))
-	})
-	mcpSrv := &http.Server{Handler: mux}
-	go func() { _ = mcpSrv.Serve(mcpLis) }()
-
+	lis := newStreamListener()
+	srv := rawEchoServer()
+	go func() { _ = srv.Serve(lis) }()
 	go func() {
 		for {
 			stream, err := sess.Accept()
@@ -106,167 +127,128 @@ func registerFleetdGRPC(t *testing.T, conn net.Conn) tunnel.RegisterReply {
 			}
 			go func(stream net.Conn) {
 				tag, err := tunnel.ReadTag(stream)
-				if err != nil {
+				if err != nil || tag != tunnel.TagGRPC {
 					_ = stream.Close()
 					return
 				}
-				switch tag {
-				case tunnel.TagMCP:
-					mcpLis.push(stream)
-				case tunnel.TagGRPC:
-					_, _ = io.Copy(stream, stream) // raw echo (stand-in for gRPC)
-				default:
-					_ = stream.Close()
-				}
+				lis.push(stream)
 			}(stream)
 		}
 	}()
 
-	t.Cleanup(func() {
-		_ = mcpSrv.Close()
-		_ = mcpLis.Close()
-		_ = sess.Close()
-		_ = conn.Close()
-	})
+	t.Cleanup(func() { srv.Stop(); _ = lis.Close(); _ = sess.Close(); _ = conn.Close() })
 	return reply
 }
 
-// TestGatewayGRPCRoute drives the new /grpc route end to end (on the gateway
-// side): negotiation, the hijack+200 handshake, a raw round-trip through the
-// splice, AND that MCP still works on the same negotiated (tagged) session.
+// grpcEcho dials the gateway's gRPC port and round-trips one raw frame for session
+// id, returning the echoed payload and any RPC error.
+func grpcEcho(t *testing.T, creds credentials.TransportCredentials, grpcAddr, id, payload string) (string, error) {
+	t.Helper()
+	conn, err := grpc.NewClient("dns:///"+grpcAddr,
+		grpc.WithTransportCredentials(creds),
+		grpc.WithDefaultCallOptions(grpc.ForceCodec(tunnel.RawCodec{})),
+	)
+	if err != nil {
+		t.Fatalf("grpc client: %v", err)
+	}
+	defer conn.Close()
+
+	ctx := context.Background()
+	if id != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, grpcSessionHeader, id)
+	}
+	cs, err := conn.NewStream(ctx, proxyStreamDesc, "/fleet.test/Echo")
+	if err != nil {
+		return "", err
+	}
+	if err := cs.SendMsg(&tunnel.RawFrame{Payload: []byte(payload)}); err != nil {
+		return "", err
+	}
+	if err := cs.CloseSend(); err != nil {
+		return "", err
+	}
+	out := &tunnel.RawFrame{}
+	if err := cs.RecvMsg(out); err != nil {
+		return "", err
+	}
+	return string(out.Payload), nil
+}
+
+func tlsCreds(pool *x509.CertPool) credentials.TransportCredentials {
+	return credentials.NewTLS(&tls.Config{RootCAs: pool, ServerName: "127.0.0.1"})
+}
+
+// TestGatewayGRPCRoute drives the gRPC port over TLS (h2): a frame routed by the
+// fleet-session header is proxied down the tunnel and echoed back.
 func TestGatewayGRPCRoute(t *testing.T) {
 	cert, pool := genTestTLS(t)
-	s, controlAddr, publicAddr := startTestGateway(t, cert, "https://gw.example.com")
+	s, _, grpcAddr := startTestGateway(t, cert, "https://gw.example.com")
 
-	reply := dialFleetdGRPC(t, controlAddr, pool)
+	reply := dialFleetdGRPC(t, grpcAddr, pool)
 	if !tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC) {
 		t.Fatalf("gateway did not negotiate grpc: features=%v", reply.Features)
 	}
 	id := publicIDOf(t, reply.PublicURL)
 	waitRegistered(t, s, id)
 
-	// gRPC route: hijack handshake, then a raw byte round-trip through the splice.
-	raw, err := tls.Dial("tcp", publicAddr, &tls.Config{RootCAs: pool, ServerName: "127.0.0.1"})
-	if err != nil {
-		t.Fatalf("dial public: %v", err)
-	}
-	defer raw.Close()
-	if _, err := fmt.Fprintf(raw, "GET /grpc/%s HTTP/1.1\r\nHost: gw\r\n\r\n", id); err != nil {
-		t.Fatalf("write grpc handshake: %v", err)
-	}
-	br := bufio.NewReader(raw)
-	status, err := br.ReadString('\n')
-	if err != nil || !strings.Contains(status, "200") {
-		t.Fatalf("grpc handshake status = %q err=%v, want 200", status, err)
-	}
-	for { // consume to end of headers (the blank line)
-		line, err := br.ReadString('\n')
-		if err != nil {
-			t.Fatalf("read headers: %v", err)
-		}
-		if line == "\r\n" || line == "\n" {
-			break
-		}
-	}
-	if _, err := io.WriteString(raw, "ping-grpc"); err != nil {
-		t.Fatalf("write through splice: %v", err)
-	}
-	got := make([]byte, len("ping-grpc"))
-	if _, err := io.ReadFull(br, got); err != nil {
-		t.Fatalf("read echo: %v", err)
-	}
-	if string(got) != "ping-grpc" {
-		t.Fatalf("grpc splice echo = %q, want ping-grpc", got)
-	}
-
-	// MCP still works on the SAME negotiated session (gateway writes TagMCP).
-	client := httpsClient(pool)
-	if body := getBody(t, client, "https://"+publicAddr+"/mcp/"+id+"/echo", "Bearer mcp-on-grpc"); body != "Bearer mcp-on-grpc" {
-		t.Fatalf("mcp on negotiated session = %q", body)
+	got, err := grpcEcho(t, tlsCreds(pool), grpcAddr, id, "hello")
+	if err != nil || got != "hello" {
+		t.Fatalf("grpc route over TLS = (%q, %v), want (hello, nil)", got, err)
 	}
 }
 
-// TestGatewayGRPCRoutePlainHTTP drives the /grpc hijack+splice over a fully
-// plaintext gateway (no TLS on control or public), proving the splice is
-// transport-agnostic and works behind a TLS-terminating reverse proxy.
+// TestGatewayGRPCRoutePlainHTTP drives the gRPC port over h2c (no TLS), the
+// reverse-proxy / TLS-terminated-upstream path.
 func TestGatewayGRPCRoutePlainHTTP(t *testing.T) {
-	s, controlAddr, publicAddr := startTestGatewayPlain(t, "http://gw.example.com")
+	s, _, grpcAddr := startTestGatewayPlain(t, "http://gw.example.com")
 
-	reply := dialFleetdGRPCPlain(t, controlAddr)
+	reply := dialFleetdGRPCPlain(t, grpcAddr)
 	if !tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC) {
 		t.Fatalf("gateway did not negotiate grpc: features=%v", reply.Features)
 	}
 	id := publicIDOf(t, reply.PublicURL)
 	waitRegistered(t, s, id)
 
-	raw, err := net.Dial("tcp", publicAddr)
-	if err != nil {
-		t.Fatalf("dial public: %v", err)
-	}
-	defer raw.Close()
-	if _, err := fmt.Fprintf(raw, "GET /grpc/%s HTTP/1.1\r\nHost: gw\r\n\r\n", id); err != nil {
-		t.Fatalf("write grpc handshake: %v", err)
-	}
-	br := bufio.NewReader(raw)
-	status, err := br.ReadString('\n')
-	if err != nil || !strings.Contains(status, "200") {
-		t.Fatalf("grpc handshake status = %q err=%v, want 200", status, err)
-	}
-	for { // consume to end of headers
-		line, err := br.ReadString('\n')
-		if err != nil {
-			t.Fatalf("read headers: %v", err)
-		}
-		if line == "\r\n" || line == "\n" {
-			break
-		}
-	}
-	if _, err := io.WriteString(raw, "ping-grpc"); err != nil {
-		t.Fatalf("write through splice: %v", err)
-	}
-	got := make([]byte, len("ping-grpc"))
-	if _, err := io.ReadFull(br, got); err != nil {
-		t.Fatalf("read echo: %v", err)
-	}
-	if string(got) != "ping-grpc" {
-		t.Fatalf("grpc splice echo = %q, want ping-grpc", got)
+	got, err := grpcEcho(t, insecure.NewCredentials(), grpcAddr, id, "plain")
+	if err != nil || got != "plain" {
+		t.Fatalf("grpc route over h2c = (%q, %v), want (plain, nil)", got, err)
 	}
 }
 
-// TestGatewayGRPCNotNegotiated confirms /grpc 404s when the session is a legacy
-// (MCP-only) fleetd that did not negotiate the feature.
+// TestGatewayGRPCMissingSession confirms a request with no fleet-session metadata
+// is rejected with InvalidArgument.
+func TestGatewayGRPCMissingSession(t *testing.T) {
+	_, _, grpcAddr := startTestGatewayPlain(t, "http://gw.example.com")
+	_, err := grpcEcho(t, insecure.NewCredentials(), grpcAddr, "", "x")
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("missing fleet-session -> %v, want InvalidArgument", err)
+	}
+}
+
+// TestGatewayGRPCUnknownSession confirms an unknown id is NotFound.
+func TestGatewayGRPCUnknownSession(t *testing.T) {
+	_, _, grpcAddr := startTestGatewayPlain(t, "http://gw.example.com")
+	_, err := grpcEcho(t, insecure.NewCredentials(), grpcAddr, strings.Repeat("b", 64), "x")
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("unknown session -> %v, want NotFound", err)
+	}
+}
+
+// TestGatewayGRPCNotNegotiated confirms the gRPC port rejects (NotFound) a legacy
+// session that did not negotiate FeatureGRPC.
 func TestGatewayGRPCNotNegotiated(t *testing.T) {
 	cert, pool := genTestTLS(t)
-	s, controlAddr, publicAddr := startTestGateway(t, cert, "https://gw.example.com")
+	s, _, grpcAddr := startTestGateway(t, cert, "https://gw.example.com")
 
-	reply := dialFleetd(t, controlAddr, pool, "") // sends no Features
+	reply := dialFleetd(t, grpcAddr, pool, "") // sends no Features
 	if len(reply.Features) != 0 {
 		t.Fatalf("legacy fleetd should negotiate no features, got %v", reply.Features)
 	}
 	id := publicIDOf(t, reply.PublicURL)
 	waitRegistered(t, s, id)
 
-	client := httpsClient(pool)
-	resp, err := client.Get("https://" + publicAddr + "/grpc/" + id)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("/grpc on a non-negotiated session -> %d, want 404", resp.StatusCode)
-	}
-}
-
-func TestGatewayGRPCUnknownSession404(t *testing.T) {
-	cert, pool := genTestTLS(t)
-	_, _, publicAddr := startTestGateway(t, cert, "https://gw.example.com")
-	client := httpsClient(pool)
-	resp, err := client.Get("https://" + publicAddr + "/grpc/" + strings.Repeat("b", 64))
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("/grpc unknown -> %d, want 404", resp.StatusCode)
+	_, err := grpcEcho(t, tlsCreds(pool), grpcAddr, id, "x")
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("/grpc on a non-negotiated session -> %v, want NotFound", err)
 	}
 }
