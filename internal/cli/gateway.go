@@ -37,6 +37,7 @@ func newGatewayCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&cfg.ControlAddr, "control-addr", ":8443", "address fleet daemons dial in on (TLS when a cert is set, else plain TCP)")
 	f.StringVar(&cfg.PublicAddr, "public-addr", ":443", "address MCP agents connect to (HTTPS when a cert is set, else HTTP)")
+	f.StringVar(&cfg.GRPCAddr, "grpc-addr", ":50051", "address for native gRPC (h2c when cert-less, h2 under TLS); empty disables remote gRPC")
 	f.StringVar(&cfg.PublicURL, "public-url", "", "external base URL agents use, e.g. https://gw.example.com or http://gw.example.com (required)")
 	f.StringVar(&cfg.TLSCert, "tls-cert", "", "path to the TLS certificate, PEM (optional; set with --tls-key to enable TLS)")
 	f.StringVar(&cfg.TLSKey, "tls-key", "", "path to the TLS private key, PEM (optional; set with --tls-cert to enable TLS)")

@@ -4,19 +4,22 @@
 // the remote-MCP feature.
 //
 // It is deliberately ISOLATED from the fleet daemon: it imports only the shared
-// wire protocol (internal/tunnel) and the standard library — never internal/server,
-// internal/state, internal/flog, or any other fleetd internal. The gateway has no
-// access to ~/.fleet and holds no fleet state; it only routes bytes.
+// wire protocol (internal/tunnel), the standard library, and google.golang.org/grpc
+// (to transparently proxy gRPC) — never internal/server, internal/state,
+// internal/flog, or any other fleetd internal. The gateway has no access to
+// ~/.fleet and holds no fleet state; it only routes bytes.
 //
-// # Two listeners
+// # Three listeners
 //
 //   - Control: fleetd dials in here and performs the internal/tunnel handshake,
 //     then the connection becomes a yamux session the gateway opens streams on.
 //     This is NOT an HTTP endpoint.
-//   - Public: remote MCP agents connect here at <public-url>/mcp/<id>. Each
-//     request is reverse-proxied down the matching tunnel.
+//   - Public: remote MCP agents connect here (HTTP/1.1) at <public-url>/mcp/<id>.
+//     Each request is reverse-proxied down the matching tunnel.
+//   - gRPC (grpc.go): native gRPC (HTTP/2) for remote `fleet` clients, routed by
+//     the fleet-session metadata header and reverse-proxied down the tunnel.
 //
-// Both listeners serve TLS when a cert+key are configured, or plain HTTP/TCP
+// All three serve TLS when a cert+key are configured, or plain HTTP/h2c/TCP
 // otherwise — the latter for deployment behind a TLS-terminating reverse proxy
 // (e.g. Kubernetes/Traefik), which is then responsible for the public TLS.
 //
@@ -40,6 +43,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"google.golang.org/grpc"
 )
 
 const (
@@ -76,6 +81,7 @@ const (
 type Config struct {
 	ControlAddr string // address fleetd dials in on (TLS or plain TCP). Default ":8443".
 	PublicAddr  string // address agents hit (HTTPS or HTTP). Default ":443".
+	GRPCAddr    string // address the native-gRPC (h2c) listener binds. Empty disables remote gRPC. CLI default ":50051".
 	PublicURL   string // external base URL agents use, e.g. "https://gw.example.com" or "http://gw.example.com". Required.
 	TLSCert     string // path to the TLS certificate (PEM). Optional; both TLSCert and TLSKey together enable TLS.
 	TLSKey      string // path to the TLS private key (PEM). Optional; both TLSCert and TLSKey together enable TLS.
@@ -150,7 +156,19 @@ func (s *Server) Run(ctx context.Context) error {
 		_ = controlLn.Close()
 		return fmt.Errorf("gateway: listen public %s: %w", s.cfg.PublicAddr, err)
 	}
-	return s.ServeListeners(ctx, controlLn, publicLn)
+	// The gRPC listener is always a PLAIN TCP listener — serveGRPC adds TLS itself
+	// via ServeTLS (so HTTP/2 ALPN is negotiated) or serves h2c when cert-less.
+	// Empty GRPCAddr disables remote gRPC entirely.
+	var grpcLn net.Listener
+	if s.cfg.GRPCAddr != "" {
+		grpcLn, err = net.Listen("tcp", s.cfg.GRPCAddr)
+		if err != nil {
+			_ = controlLn.Close()
+			_ = publicLn.Close()
+			return fmt.Errorf("gateway: listen grpc %s: %w", s.cfg.GRPCAddr, err)
+		}
+	}
+	return s.ServeListeners(ctx, controlLn, publicLn, grpcLn)
 }
 
 // listen binds addr, wrapping it in TLS when a cert is configured and using a
@@ -162,13 +180,14 @@ func (s *Server) listen(addr string) (net.Listener, error) {
 	return net.Listen("tcp", addr)
 }
 
-// ServeListeners runs the accept loops, reaper, and public HTTP server over
-// already-bound listeners until ctx is cancelled or the public server fails. Run
-// is the usual entrypoint (it binds from Config); this is exposed for embedding
-// the gateway on caller-supplied listeners (e.g. socket activation) and for
-// integration tests that need ephemeral ports. The listeners already carry their
-// transport: TLS when a cert is configured (Run wraps them), or plain TCP.
-func (s *Server) ServeListeners(ctx context.Context, controlLn, publicLn net.Listener) error {
+// ServeListeners runs the accept loops, reaper, and HTTP servers over already-bound
+// listeners until ctx is cancelled or a server fails. Run is the usual entrypoint
+// (it binds from Config); this is exposed for embedding the gateway on
+// caller-supplied listeners (e.g. socket activation) and for integration tests
+// that need ephemeral ports. controlLn and publicLn already carry their transport
+// (TLS when a cert is configured, else plain TCP); grpcLn must be a PLAIN listener
+// (serveGRPC adds TLS via ServeTLS, or serves h2c) and may be nil to disable gRPC.
+func (s *Server) ServeListeners(ctx context.Context, controlLn, publicLn, grpcLn net.Listener) error {
 	defer controlLn.Close()
 
 	publicSrv := &http.Server{
@@ -184,25 +203,36 @@ func (s *Server) ServeListeners(ctx context.Context, controlLn, publicLn net.Lis
 	go s.serveControl(ctx, controlLn, controlSem)
 	go s.runReaper(ctx)
 
-	errCh := make(chan error, 1)
+	// errCh collects fatal serve errors from the public and (optional) gRPC HTTP
+	// servers; either failing tears the gateway down.
+	errCh := make(chan error, 2)
 	go func() { errCh <- publicSrv.Serve(publicLn) }()
 
+	var grpcSrv *grpc.Server
+	if grpcLn != nil {
+		grpcSrv = s.newGRPCServer()
+		go func() { errCh <- s.serveGRPC(grpcSrv, grpcLn) }()
+	}
+
 	s.log.Info("fleet gateway started",
-		"control", s.cfg.ControlAddr, "public", s.cfg.PublicAddr, "public_url", s.cfg.PublicURL)
+		"control", s.cfg.ControlAddr, "public", s.cfg.PublicAddr, "grpc", s.cfg.GRPCAddr, "public_url", s.cfg.PublicURL)
 
 	select {
 	case <-ctx.Done():
 		sctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		_ = publicSrv.Shutdown(sctx)
+		if grpcSrv != nil {
+			grpcSrv.Stop()
+		}
 		_ = controlLn.Close()
 		s.log.Info("fleet gateway stopped")
 		return nil
 	case err := <-errCh:
-		if errors.Is(err, http.ErrServerClosed) {
+		if errors.Is(err, http.ErrServerClosed) || errors.Is(err, grpc.ErrServerStopped) {
 			return nil
 		}
-		return fmt.Errorf("gateway: public server: %w", err)
+		return fmt.Errorf("gateway: server: %w", err)
 	}
 }
 

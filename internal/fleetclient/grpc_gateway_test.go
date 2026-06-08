@@ -1,134 +1,82 @@
 package fleetclient
 
 import (
-	"context"
-	"io"
-	"net"
 	"strings"
 	"testing"
-	"time"
 )
 
-// stubGateway accepts one connection, consumes the HTTP request headers, replies
-// with statusLine + CRLFCRLF, then (if echo) echoes subsequent bytes.
-func stubGateway(t *testing.T, statusLine string, echo bool) net.Listener {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
+func TestNewGatewayEndpoint(t *testing.T) {
+	cases := []struct {
+		url        string
+		wantTarget string
+		wantTLS    bool
+		wantID     string
+		wantErr    bool
+	}{
+		// https defaults to :443, verified TLS; id is the last path segment.
+		{url: "https://gw.example.com/abc123", wantTarget: "dns:///gw.example.com:443", wantTLS: true, wantID: "abc123"},
+		// explicit gRPC port.
+		{url: "https://gw.example.com:50051/abc123", wantTarget: "dns:///gw.example.com:50051", wantTLS: true, wantID: "abc123"},
+		// http -> plaintext h2c, default :80.
+		{url: "http://gw.example.com/abc123", wantTarget: "dns:///gw.example.com:80", wantTLS: false, wantID: "abc123"},
+		// a /grpc/<id> path is also accepted (last segment wins).
+		{url: "https://gw.example.com:50051/grpc/abc123", wantTarget: "dns:///gw.example.com:50051", wantTLS: true, wantID: "abc123"},
+		{url: "ftp://gw/abc", wantErr: true},            // only http/https
+		{url: "https:///abc", wantErr: true},            // no host
+		{url: "https://gw.example.com", wantErr: true},  // no id path
+		{url: "https://gw.example.com/", wantErr: true}, // empty id
+		{url: "://bad", wantErr: true},                  // unparseable
 	}
-	go func() {
-		c, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer c.Close()
-		buf := make([]byte, 1024)
-		// Read until end of headers.
-		got := ""
-		for !strings.Contains(got, "\r\n\r\n") {
-			n, err := c.Read(buf)
-			if err != nil {
-				return
+	for _, c := range cases {
+		ep, err := newGatewayEndpoint(c.url, "tok")
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("%q: want error, got %+v", c.url, ep)
 			}
-			got += string(buf[:n])
+			continue
 		}
-		_, _ = io.WriteString(c, statusLine+"\r\n\r\n")
-		if echo {
-			_, _ = io.Copy(c, c)
+		if err != nil {
+			t.Errorf("%q: unexpected error %v", c.url, err)
+			continue
 		}
-	}()
-	t.Cleanup(func() { _ = ln.Close() })
-	return ln
-}
-
-func TestGatewayHandshakeRoundTrip(t *testing.T) {
-	ln := stubGateway(t, "HTTP/1.1 200 Connection Established", true)
-	raw, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	defer raw.Close()
-
-	conn, err := gatewayHandshake(raw, "gw", "/grpc/abc")
-	if err != nil {
-		t.Fatalf("handshake: %v", err)
-	}
-	if _, err := io.WriteString(conn, "hello-tunnel"); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	got := make([]byte, len("hello-tunnel"))
-	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, got); err != nil {
-		t.Fatalf("read echo: %v", err)
-	}
-	if string(got) != "hello-tunnel" {
-		t.Fatalf("echo = %q, want hello-tunnel", got)
-	}
-}
-
-func TestGatewayHandshakeNon200(t *testing.T) {
-	ln := stubGateway(t, "HTTP/1.1 404 Not Found", false)
-	raw, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	defer raw.Close()
-	if _, err := gatewayHandshake(raw, "gw", "/grpc/abc"); err == nil {
-		t.Fatal("non-200 handshake should error")
-	}
-}
-
-func TestDialGatewayConnBadURL(t *testing.T) {
-	ctx := context.Background()
-	for _, u := range []string{
-		"ftp://gw/grpc/x", // only http/https
-		"https://gw",      // missing /grpc/<id> path
-		"https://gw/",     // empty path
-		"http://gw",       // missing /grpc/<id> path (http)
-		"https:///grpc/x", // no host: must error, not fall through to plaintext
-		"://nope",         // unparseable
-	} {
-		if _, err := dialGatewayConn(ctx, u); err == nil {
-			t.Fatalf("dialGatewayConn(%q) should error", u)
+		if ep.target != c.wantTarget || ep.useTLS != c.wantTLS || ep.id != c.wantID {
+			t.Errorf("%q: got (target=%q tls=%v id=%q), want (%q %v %q)",
+				c.url, ep.target, ep.useTLS, ep.id, c.wantTarget, c.wantTLS, c.wantID)
+		}
+		if ep.token != "tok" {
+			t.Errorf("%q: token = %q, want tok", c.url, ep.token)
 		}
 	}
 }
 
-// TestDialGatewayConnHTTPPlaintext verifies an http:// gateway URL dials
-// plaintext (no TLS) and completes the /grpc handshake — the reverse-proxy /
-// TLS-terminated-upstream path.
-func TestDialGatewayConnHTTPPlaintext(t *testing.T) {
-	ln := stubGateway(t, "HTTP/1.1 200 Connection Established", true)
-	url := "http://" + ln.Addr().String() + "/grpc/abc"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	conn, err := dialGatewayConn(ctx, url)
+// TestGatewayPerRPCMetadata verifies every RPC carries the routing id and bearer
+// token, and that the creds are allowed over a plaintext transport.
+func TestGatewayPerRPCMetadata(t *testing.T) {
+	g := gatewayPerRPC{token: "secret", sessionID: "abc123"}
+	md, err := g.GetRequestMetadata(t.Context())
 	if err != nil {
-		t.Fatalf("dialGatewayConn(%q) over plain http: %v", url, err)
+		t.Fatalf("GetRequestMetadata: %v", err)
 	}
-	defer conn.Close()
-
-	if _, err := io.WriteString(conn, "hello-plain"); err != nil {
-		t.Fatalf("write: %v", err)
+	if md["authorization"] != "Bearer secret" {
+		t.Fatalf("authorization = %q, want Bearer secret", md["authorization"])
 	}
-	got := make([]byte, len("hello-plain"))
-	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.ReadFull(conn, got); err != nil {
-		t.Fatalf("read echo: %v", err)
+	if md[grpcSessionHeader] != "abc123" {
+		t.Fatalf("%s = %q, want abc123", grpcSessionHeader, md[grpcSessionHeader])
 	}
-	if string(got) != "hello-plain" {
-		t.Fatalf("echo = %q, want hello-plain", got)
+	if g.RequireTransportSecurity() {
+		t.Fatal("per-RPC creds must not require transport security (h2c plaintext path)")
 	}
 }
 
 func TestSelectEndpointGatewayPrecedence(t *testing.T) {
-	t.Setenv("FLEET_GATEWAY", "https://gw.example.com/grpc/abc123")
+	t.Setenv("FLEET_GATEWAY", "https://gw.example.com:50051/abc123")
 	t.Setenv("FLEET_SERVER", "1.2.3.4:9000") // gateway must win
 	t.Setenv("FLEET_TOKEN", "tok")
 
-	ep := selectEndpoint()
+	ep, err := selectEndpoint()
+	if err != nil {
+		t.Fatalf("selectEndpoint: %v", err)
+	}
 	ge, ok := ep.(gatewayEndpoint)
 	if !ok {
 		t.Fatalf("FLEET_GATEWAY should select a gatewayEndpoint, got %T", ep)
@@ -136,11 +84,20 @@ func TestSelectEndpointGatewayPrecedence(t *testing.T) {
 	if ep.IsLocal() {
 		t.Fatal("gateway endpoint must not be local (no auto-spawn)")
 	}
-	if ge.token != "tok" {
-		t.Fatalf("token = %q, want tok", ge.token)
+	if ge.token != "tok" || ge.id != "abc123" {
+		t.Fatalf("token=%q id=%q, want tok / abc123", ge.token, ge.id)
 	}
 	if !strings.Contains(ep.String(), "gw.example.com") || strings.Contains(ep.String(), "tok") {
 		t.Fatalf("String() should show the URL without the token: %q", ep.String())
+	}
+}
+
+// TestSelectEndpointBadGatewayErrors verifies a malformed FLEET_GATEWAY surfaces
+// an error rather than a silently-broken endpoint.
+func TestSelectEndpointBadGateway(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "ftp://nope")
+	if _, err := selectEndpoint(); err == nil {
+		t.Fatal("malformed FLEET_GATEWAY should error")
 	}
 }
 

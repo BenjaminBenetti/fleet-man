@@ -138,7 +138,7 @@ func remoteMCPStack(t *testing.T) (publicMCPURL, publicBase, token string, pool 
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = gw.ServeListeners(ctx, controlLn, publicLn) }()
+	go func() { _ = gw.ServeListeners(ctx, controlLn, publicLn, nil) }()
 
 	// Real fleetd tunnel manager, dialing the test gateway's control listener.
 	statusCh := make(chan *fleetgrpc.RemoteMcpStatus, 64)

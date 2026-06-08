@@ -57,22 +57,22 @@ func (e remoteEndpoint) String() string                 { return e.addr }
 func (e remoteEndpoint) DialOptions() []grpc.DialOption { return insecureCreds() }
 
 // selectEndpoint picks the transport, in precedence order:
-//   - FLEET_GATEWAY=https://gw/grpc/<id> (or http://… behind a TLS-terminating
+//   - FLEET_GATEWAY=https://gw:50051/<id> (or http://… behind a TLS-terminating
 //     proxy) → through a fleet gateway (the bearer token from FLEET_TOKEN, or
 //     ~/.fleet/mcp.token for a same-host user).
 //   - FLEET_SERVER=host:port → a plain remote TCP target.
 //   - otherwise → the local auto-spawned unix socket.
 //
-// Remote endpoints (gateway/server) are not auto-spawned and a version mismatch
-// is a hard error.
-func selectEndpoint() Endpoint {
+// It errors only when FLEET_GATEWAY is set but malformed. Remote endpoints
+// (gateway/server) are not auto-spawned and a version mismatch is a hard error.
+func selectEndpoint() (Endpoint, error) {
 	if gw := os.Getenv("FLEET_GATEWAY"); gw != "" {
-		return gatewayEndpoint{rawURL: gw, token: gatewayToken()}
+		return newGatewayEndpoint(gw, gatewayToken())
 	}
 	if addr := os.Getenv("FLEET_SERVER"); addr != "" {
-		return remoteEndpoint{addr: addr}
+		return remoteEndpoint{addr: addr}, nil
 	}
-	return localEndpoint{socket: fleetpaths.SocketPath()}
+	return localEndpoint{socket: fleetpaths.SocketPath()}, nil
 }
 
 // gatewayToken resolves the bearer token for a gateway endpoint: FLEET_TOKEN, or

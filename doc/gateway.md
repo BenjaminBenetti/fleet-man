@@ -26,20 +26,21 @@ it. So the gateway inverts the direction:
   `fleetd`.
 
 The single outbound connection is multiplexed with **[yamux](https://github.com/hashicorp/yamux)**,
-so many independent requests/streams ride over it concurrently. The gateway is
-otherwise a *dumb pipe* — it routes bytes and never inspects the payload, which
-is what lets it carry both HTTP (MCP) and native HTTP/2 (gRPC).
+so many independent requests/streams ride over it concurrently. The gateway holds
+no fleet state and never inspects the application payload — it terminates the
+inbound HTTP/MCP and HTTP/2/gRPC and reverse‑proxies each request down a tunnel
+stream to the daemon, which is the real server on the far end.
 
 ```
         Behind NAT / firewall                          Public internet
  ┌───────────────────────────────┐            ┌──────────────────────────┐
  │            fleetd             │            │       fleet gateway       │
  │                               │  dials out │                          │
- │  remote.Manager  ───────────────────────────▶  control listener       │
- │  (one TLS conn, yamux)        │  (TLS)     │  (:8443)                  │
+ │  remote.Manager  ───────────────────────────▶  control  (:8443)       │
+ │  (one TLS conn, yamux)        │  (TLS)     │                          │
  │                               │◀───────────────  pushes streams down   │
- │  loopback MCP  (127.0.0.1)    │            │  public listener (:443)  │◀── agents / remote `fleet`
- │  loopback gRPC (in‑memory)    │            │                          │
+ │  loopback MCP  (127.0.0.1)    │            │  public   (:443)  HTTP/1 │◀── MCP agents
+ │  tunnel gRPC server           │            │  grpc     (:50051) HTTP/2│◀── remote `fleet`
  └───────────────────────────────┘            └──────────────────────────┘
 ```
 
@@ -53,8 +54,8 @@ is what lets it carry both HTTP (MCP) and native HTTP/2 (gRPC).
 | **fleetd tunnel client** | `internal/server/remote` | `Manager` dials the gateway, registers, and serves inbound streams; `serveTunnel` demuxes them to MCP or gRPC. |
 | **fleetd MCP server** | `internal/server/mcp.go` | The loopback MCP server (`127.0.0.1:<port>`), bearer‑token gated. |
 | **fleetd gRPC server (tunnel)** | `internal/server` | A second `grpc.Server` (same `FleetService`) behind a bearer‑token interceptor, fed by the demux. The local unix‑socket server stays auth‑less. |
-| **The gateway** | `internal/gateway` | Two TLS listeners (control + public), the session registry, and the `/mcp` + `/grpc` routes. An **isolated module** — imports only `internal/tunnel`. |
-| **Remote `fleet` client** | `internal/fleetclient` | `gatewayEndpoint` + a CONNECT dialer that reaches the daemon's gRPC API through the gateway. |
+| **The gateway** | `internal/gateway` | Three listeners — control, public MCP (HTTP/1.1), and native gRPC (HTTP/2, `grpc.go`) — the session registry, the `/mcp` route, and a grpc transparent proxy. An **isolated module** — imports only `internal/tunnel`, the stdlib, and `google.golang.org/grpc` (no fleetd internals). |
+| **Remote `fleet` client** | `internal/fleetclient` | `gatewayEndpoint` — an ordinary gRPC dial to the gateway's gRPC listener, routing by the `fleet-session` metadata header. |
 
 ---
 
@@ -111,7 +112,7 @@ negotiated, every stream the gateway opens begins with a single **tag byte** so
 | Tag | Value | Meaning |
 |-----|-------|---------|
 | `TagMCP` | `0x00` | The stream carries an **HTTP request** for the loopback MCP server. |
-| `TagGRPC` | `0x01` | The stream carries a **raw native‑gRPC (HTTP/2)** connection to splice to the gRPC server. |
+| `TagGRPC` | `0x01` | The stream carries a **native‑gRPC (HTTP/2, h2c)** connection the gateway reverse‑proxies to the tunnel gRPC server. |
 
 The tag is written by the gateway as the *first bytes* of the stream, before any
 payload, so `fleetd` reads it immediately without guessing. On a legacy
@@ -180,48 +181,51 @@ server** does.
 ## 6. The gRPC connection path
 
 gRPC is HTTP/2, and its request *path* is the method name — so it can't be
-path‑routed like MCP. Instead the gateway tunnels the **whole gRPC connection**
-as raw bytes. The remote `fleet` client first does a small CONNECT‑style
-handshake to pick the session, then runs native gRPC over the resulting pipe.
+path‑routed like MCP. The gateway therefore serves gRPC on a **dedicated listener**
+(`--grpc-addr`, default `:50051`) that speaks native HTTP/2 (h2c when cert‑less,
+h2 via ALPN under TLS), and routes by a `fleet-session` **metadata header** instead
+of the path. That makes it a clean L7 gRPC endpoint a standard gRPC reverse proxy
+(e.g. Traefik) can front. The gateway is itself a **grpc‑go transparent proxy** here
+(`grpc.UnknownServiceHandler` + a raw passthrough codec — the well‑known grpc‑proxy
+pattern), forwarding each stream down a `TagGRPC` tunnel stream to the daemon's own
+`grpc.Server`. A grpc‑level proxy (not an `httputil.ReverseProxy`) is required so
+grpc‑go manages HTTP/2 framing and **trailers** (`grpc-status`) on both hops —
+including a *trailers‑only* error response, which an HTTP reverse proxy drops.
 
 ```
- remote `fleet`             gateway (proxy.go /grpc)        fleetd                tunnel gRPC server
+ remote `fleet`             gateway (grpc.go, :50051)        fleetd                tunnel gRPC server
     │                            │                            │                  (auth interceptor,
-    │  TLS dial gateway          │                            │                   FleetService)
-    │  GET /grpc/<id> ───────────▶ lookup session (404 if no  │                       │
-    │                            │  session / grpc not negot.)│                       │
-    │                            │  • session.Open() ──TagGRPC(0x01)──yamux stream──▶ serveTunnel
-    │                            │  • HIJACK the conn         │   reads tag → ChanListener ─▶ grpc.Server
-    │  ◀── "HTTP/1.1 200         │                            │                       │
-    │       Connection           │   ╔════════ raw splice ════╗                       │
-    │       Established"         │   ║ two io.Copy goroutines ║                       │
-    │                            │   ║ (byte‑transparent)     ║                       │
-    │  ── client h2 preface ─────────────────────────────────────────────────────────▶ (native h2)
-    │  ── RPCs (unary / server‑stream / BIDI) — metadata: Authorization: Bearer ─────▶ interceptor → FleetService
-    │  ◀──────────────────────── responses / streams ────────────────────────────────
+    │  native gRPC dial          │                            │                   FleetService)
+    │  RPC + metadata:           │                            │                       │
+    │   fleet-session: <id> ─────▶ route by header            │                       │
+    │   authorization: Bearer    │  (InvalidArgument no hdr / │                       │
+    │                            │   NotFound no session)     │                       │
+    │                            │  grpc proxy (raw codec) ──TagGRPC(0x01)──yamux──▶ serveTunnel
+    │                            │   per-session grpc.ClientConn  reads tag → ChanListener ─▶ grpc.Server
+    │  ◀──────────────────────── responses / streams / trailers (grpc-status) ─────────
 ```
 
 What each hop does:
 
-1. **Remote client** (`internal/fleetclient`): `FLEET_GATEWAY=https://gw/grpc/<id>`
-   selects a `gatewayEndpoint`. Its gRPC dialer TLS‑dials the gateway, sends
-   `GET /grpc/<id>`, and waits for `200 Connection Established`. It then hands the
-   raw conn to gRPC, which speaks **prior‑knowledge h2c** over it. Every RPC
-   carries `authorization: Bearer <token>` as metadata.
-2. **Gateway** matches `/grpc/{id}` (404 unless the session exists *and*
-   negotiated gRPC), opens a `TagGRPC` stream, **hijacks** the public connection,
-   replies `200`, and then runs a **raw byte splice** (two `io.Copy` goroutines)
-   between the agent's connection and the yamux stream. It never parses the h2
-   bytes.
+1. **Remote client** (`internal/fleetclient`): `FLEET_GATEWAY=https://gw:50051/<id>`
+   selects a `gatewayEndpoint`. It dials the gateway as an **ordinary gRPC target**
+   — verified TLS for `https` (system roots), or plaintext h2c for `http`. Every RPC
+   carries two metadata headers: `fleet-session: <id>` (routing) and
+   `authorization: Bearer <token>` (auth).
+2. **Gateway** reads `fleet-session` (`InvalidArgument` if absent; `NotFound` unless
+   the session exists *and* negotiated gRPC) and proxies the stream to a per‑session
+   `grpc.ClientConn` whose dialer opens a `TagGRPC` tunnel stream (h2c). It forwards
+   metadata, messages, and trailers verbatim, and re‑dials a fresh stream on the live
+   tunnel after a reconnect.
 3. **fleetd** reads the tag, pushes the stream to the **tunnel gRPC server** (via
    the `ChanListener`). That server runs the *same* `FleetService` as the local
-   unix socket but behind a **bearer‑token metadata interceptor**.
+   unix socket but behind a **bearer‑token metadata interceptor** — the gateway only
+   routes; `fleet-session` is not a credential.
 
-Because the splice is byte‑transparent, **all** of gRPC works unchanged — unary,
-server‑streaming (`Watch`, `Logs`, jobs), and **bidirectional streaming**
-(`Exec`). gRPC's half‑close, flow control, and trailers are in‑band HTTP/2 frames
-that ride through the splice untouched; teardown happens only when the whole
-connection ends, never per‑RPC.
+All of gRPC works through the reverse proxy — unary, server‑streaming (`Watch`,
+`Logs`, jobs), and **bidirectional streaming** (`Exec`). The proxy flushes per write
+(`FlushInterval: -1`) so streaming isn't buffered, and forwards HTTP/2 trailers
+(`grpc-status`) so per‑RPC status propagates.
 
 > **Note:** the gRPC API rides the *same* tunnel and the *same* on/off toggle as
 > MCP, and reuses the *same* bearer token. Enabling remote MCP exposes both.
@@ -282,12 +286,11 @@ The clients are symmetric: both the daemon control dialer
 accept `https://` (TLS dial, verified against the OS system roots) **or** `http://`
 (plain TCP dial), defaulting the port to 443/80 respectively.
 
-> ⚠️ **It must be an L4/TCP route, not an HTTP ingress.** The control listener is
-> not HTTP (framed handshake + yamux), and the public `/grpc/<id>` route hijacks the
-> connection to splice native HTTP/2. A standard L7 HTTP proxy breaks both. Use a TCP
-> route — e.g. Traefik `IngressRouteTCP` with TLS termination — for each port. See
-> the README's *Behind a TLS‑terminating reverse proxy* section for a concrete
-> example.
+> ⚠️ **The route type differs per listener.** Public MCP (HTTP/1.1) and gRPC
+> (native HTTP/2) are L7‑proxyable — a Traefik **HTTP** route and **gRPC** route
+> (h2c backend) respectively. The **control** listener is *not* HTTP (framed
+> handshake + yamux), so it needs an **L4/TCP** route (`IngressRouteTCP`). See the
+> README's *Behind a TLS‑terminating reverse proxy* section for concrete manifests.
 
 ---
 
@@ -308,12 +311,13 @@ accept `https://` (TLS dial, verified against the OS system roots) **or** `http:
 
 ```
                                  ┌──────────────────────── fleet gateway ───────────────────────┐
-   remote MCP agent  ──HTTPS──▶  │  public listener (:443)                                       │
-   (Claude, etc.)                │    /mcp/<id>   → ReverseProxy ─┐                               │
-                                 │    /grpc/<id>  → hijack+splice ┤                               │
-   remote `fleet`    ──HTTPS──▶  │                               │  session registry (id→tunnel) │
-   (FLEET_GATEWAY)               │  control listener (:8443) ◀───┼── fleetd dials in (TLS)        │
-                                 └───────────────────────────────┼───────────────────────────────┘
+   remote MCP agent  ──HTTP/1──▶ │  public listener (:443)  /mcp/<id> → ReverseProxy ─┐          │
+   (Claude, etc.)                │                                                    │          │
+   remote `fleet`    ──gRPC────▶ │  gRPC listener (:50051)  h2 + fleet-session ───────┤          │
+   (FLEET_GATEWAY)               │                          → ReverseProxy            │ registry │
+                                 │                                                    │ (id→tun) │
+                                 │  control listener (:8443) ◀────────────────────────┼── fleetd dials in
+                                 └────────────────────────────────────────────────────┼──────────┘
                                                                  │  one TLS conn, yamux,
                                                                  │  tagged streams
                                               ┌──────────────────▼───────────────────┐

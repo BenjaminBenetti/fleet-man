@@ -9,6 +9,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/tunnel"
 	"github.com/hashicorp/yamux"
+	"google.golang.org/grpc"
 )
 
 // errNoTunnel is returned by session.open when the session has no live tunnel
@@ -39,6 +40,14 @@ type session struct {
 	// MCP is served. Atomic because it is set on the control goroutine and read on
 	// public-request goroutines, and re-set on reconnect.
 	grpc atomic.Bool
+
+	// grpcCC is the lazily-built gRPC client connection the gRPC proxy uses to reach
+	// the daemon's grpc.Server over this session's tunnel (see grpcClientConn). Built
+	// once on first gRPC request; its custom dialer re-opens a TagGRPC stream on the
+	// live tunnel, so it survives reconnects.
+	grpcOnce  sync.Once
+	grpcCC    *grpc.ClientConn
+	grpcCCErr error
 
 	mu sync.Mutex
 	ym *yamux.Session // current live tunnel; nil until bind; replaced on reconnect

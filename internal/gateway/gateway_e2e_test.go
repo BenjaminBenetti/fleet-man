@@ -64,8 +64,9 @@ func genTestTLS(t *testing.T) (tls.Certificate, *x509.CertPool) {
 }
 
 // startTestGateway builds a Server with the given cert and starts it on ephemeral
-// control + public TLS listeners, returning their addresses.
-func startTestGateway(t *testing.T, cert tls.Certificate, publicBase string) (*Server, string, string) {
+// control + public TLS listeners plus a (plain) gRPC listener, returning their
+// addresses (control, public, grpc).
+func startTestGateway(t *testing.T, cert tls.Certificate, publicBase string) (*Server, string, string, string) {
 	t.Helper()
 	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	s := &Server{
@@ -82,15 +83,21 @@ func startTestGateway(t *testing.T, cert tls.Certificate, publicBase string) (*S
 	if err != nil {
 		t.Fatalf("public listen: %v", err)
 	}
+	// The gRPC listener is always plain — serveGRPC adds TLS via ServeTLS.
+	grpcLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("grpc listen: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = s.ServeListeners(ctx, controlLn, publicLn) }()
-	return s, controlLn.Addr().String(), publicLn.Addr().String()
+	go func() { _ = s.ServeListeners(ctx, controlLn, publicLn, grpcLn) }()
+	return s, controlLn.Addr().String(), publicLn.Addr().String(), grpcLn.Addr().String()
 }
 
-// startTestGatewayPlain is startTestGateway with NO TLS: both listeners are plain
-// TCP and tlsConfig is nil, exercising the HTTP-by-default / reverse-proxy path.
-func startTestGatewayPlain(t *testing.T, publicBase string) (*Server, string, string) {
+// startTestGatewayPlain is startTestGateway with NO TLS: all listeners are plain
+// TCP and tlsConfig is nil, exercising the HTTP-by-default / reverse-proxy path
+// (the gRPC listener then serves h2c).
+func startTestGatewayPlain(t *testing.T, publicBase string) (*Server, string, string, string) {
 	t.Helper()
 	s := &Server{
 		cfg:       Config{PublicURL: publicBase, MaxSessions: 64},
@@ -106,10 +113,14 @@ func startTestGatewayPlain(t *testing.T, publicBase string) (*Server, string, st
 	if err != nil {
 		t.Fatalf("public listen: %v", err)
 	}
+	grpcLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("grpc listen: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = s.ServeListeners(ctx, controlLn, publicLn) }()
-	return s, controlLn.Addr().String(), publicLn.Addr().String()
+	go func() { _ = s.ServeListeners(ctx, controlLn, publicLn, grpcLn) }()
+	return s, controlLn.Addr().String(), publicLn.Addr().String(), grpcLn.Addr().String()
 }
 
 // fleetdMCPHandler is fleetd's stand-in MCP server: it serves a few routes so the
@@ -219,7 +230,7 @@ func waitRegistered(t *testing.T, s *Server, publicID string) {
 
 func TestGatewayEndToEnd(t *testing.T) {
 	cert, pool := genTestTLS(t)
-	s, controlAddr, publicAddr := startTestGateway(t, cert, "https://gw.example.com")
+	s, controlAddr, publicAddr, _ := startTestGateway(t, cert, "https://gw.example.com")
 
 	reply := dialFleetd(t, controlAddr, pool, "")
 	id := publicIDOf(t, reply.PublicURL)
@@ -271,7 +282,7 @@ func TestGatewayEndToEnd(t *testing.T) {
 // reverse-proxy path — plain control handshake + yamux + plain public HTTP +
 // reverse-proxy routing + Authorization passthrough + SSE streaming.
 func TestGatewayEndToEndPlainHTTP(t *testing.T) {
-	s, controlAddr, publicAddr := startTestGatewayPlain(t, "http://gw.example.com")
+	s, controlAddr, publicAddr, _ := startTestGatewayPlain(t, "http://gw.example.com")
 
 	reply := dialFleetdPlain(t, controlAddr, "")
 	if !strings.HasPrefix(reply.PublicURL, "http://gw.example.com/mcp/") {
@@ -390,7 +401,7 @@ func writeCertKeyFiles(t *testing.T) (certPath, keyPath string) {
 
 func TestGatewayUnknownSession404(t *testing.T) {
 	cert, pool := genTestTLS(t)
-	_, _, publicAddr := startTestGateway(t, cert, "https://gw.example.com")
+	_, _, publicAddr, _ := startTestGateway(t, cert, "https://gw.example.com")
 	client := httpsClient(pool)
 	resp, err := client.Get("https://" + publicAddr + "/mcp/deadbeefdeadbeef")
 	if err != nil {
@@ -404,7 +415,7 @@ func TestGatewayUnknownSession404(t *testing.T) {
 
 func TestGatewayStickyReconnect(t *testing.T) {
 	cert, pool := genTestTLS(t)
-	s, controlAddr, _ := startTestGateway(t, cert, "https://gw.example.com")
+	s, controlAddr, _, _ := startTestGateway(t, cert, "https://gw.example.com")
 
 	reply1 := dialFleetd(t, controlAddr, pool, "")
 	waitRegistered(t, s, publicIDOf(t, reply1.PublicURL))

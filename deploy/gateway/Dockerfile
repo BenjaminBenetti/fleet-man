@@ -46,10 +46,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM gcr.io/distroless/static-debian12:latest
 COPY --from=build /out/fleet /usr/local/bin/fleet
 
-# :443 public listener (MCP agents + remote `fleet`); :8443 control listener (fleet
-# daemons dial in). Both serve TLS when a cert is configured, else plain HTTP/TCP
-# (for a TLS-terminating reverse proxy). A GET /healthz on the public listener
-# returns "ok".
-EXPOSE 443 8443
+# :443 public MCP listener (HTTP/1.1); :50051 native-gRPC listener (HTTP/2, for
+# remote `fleet`); :8443 control listener (fleet daemons dial in). All serve TLS
+# when a cert is configured, else plain HTTP/h2c/TCP (for a TLS-terminating reverse
+# proxy). A GET /healthz on the public listener returns "ok".
+EXPOSE 443 8443 50051
 
 ENTRYPOINT ["/usr/local/bin/fleet", "gateway"]
