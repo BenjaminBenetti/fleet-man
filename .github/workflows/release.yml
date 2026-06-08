@@ -151,6 +151,13 @@ jobs:
   gateway-image:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # The workflow-level concurrency group is "pages" and conceptually about the
+    # Pages deploy; give the image publish its own per-ref group so it's never
+    # cancelled mid-push (a cancel between build and push leaves ghcr with an
+    # incomplete image). Same reasoning as qa-image.yml.
+    concurrency:
+      group: gateway-image-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
