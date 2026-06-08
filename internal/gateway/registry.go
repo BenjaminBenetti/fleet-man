@@ -23,7 +23,7 @@ type registry struct {
 	mu         sync.Mutex
 	bySecret   map[string]*session
 	byPublic   map[string]*session
-	publicBase string // e.g. "https://gw.example.com" (no trailing slash)
+	publicBase string // e.g. "https://gw.example.com" or "http://gw.example.com" (no trailing slash)
 	max        int
 }
 

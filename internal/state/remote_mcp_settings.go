@@ -18,7 +18,8 @@ type RemoteMcpSettings struct {
 	Enabled bool `json:"enabled,omitempty"`
 
 	// GatewayURL is the fleet gateway to register with (e.g.
-	// "https://gateway.example.com"). Empty while Enabled means "enabled but
-	// not yet configured"; the tunnel manager treats that as a no-op.
+	// "https://gateway.example.com", or "http://gateway.example.com" when the
+	// gateway is fronted by a TLS-terminating proxy). Empty while Enabled means
+	// "enabled but not yet configured"; the tunnel manager treats that as a no-op.
 	GatewayURL string `json:"gateway_url,omitempty"`
 }

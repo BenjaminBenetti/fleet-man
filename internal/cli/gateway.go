@@ -22,9 +22,12 @@ func newGatewayCmd() *cobra.Command {
 		Short: "Run the fleet gateway (remote MCP relay)",
 		Long: "Run the fleet gateway: a public, operator-hosted server that relays remote\n" +
 			"MCP traffic to fleet daemons over a reverse tunnel. fleet daemons dial in on\n" +
-			"the control address; MCP agents connect over HTTPS at <public-url>/mcp/<id>.\n\n" +
-			"Requires a TLS certificate (use a publicly-trusted cert, e.g. from Let's\n" +
-			"Encrypt, so fleet daemons can verify it).",
+			"the control address; MCP agents connect at <public-url>/mcp/<id>.\n\n" +
+			"TLS is optional. Provide both --tls-cert and --tls-key to terminate TLS in\n" +
+			"the gateway (use a publicly-trusted cert, e.g. from Let's Encrypt, so fleet\n" +
+			"daemons can verify it). Omit both to serve plain HTTP — intended for running\n" +
+			"behind a TLS-terminating reverse proxy (e.g. Kubernetes/Traefik), which then\n" +
+			"presents the public cert. Set --public-url's scheme to match (https vs http).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return gateway.Serve(cmd.Context(), cfg)
@@ -32,11 +35,11 @@ func newGatewayCmd() *cobra.Command {
 	}
 
 	f := cmd.Flags()
-	f.StringVar(&cfg.ControlAddr, "control-addr", ":8443", "address fleet daemons dial in on (TLS)")
-	f.StringVar(&cfg.PublicAddr, "public-addr", ":443", "address MCP agents connect to (HTTPS)")
-	f.StringVar(&cfg.PublicURL, "public-url", "", "external base URL agents use, e.g. https://gw.example.com (required)")
-	f.StringVar(&cfg.TLSCert, "tls-cert", "", "path to the TLS certificate, PEM (required)")
-	f.StringVar(&cfg.TLSKey, "tls-key", "", "path to the TLS private key, PEM (required)")
+	f.StringVar(&cfg.ControlAddr, "control-addr", ":8443", "address fleet daemons dial in on (TLS when a cert is set, else plain TCP)")
+	f.StringVar(&cfg.PublicAddr, "public-addr", ":443", "address MCP agents connect to (HTTPS when a cert is set, else HTTP)")
+	f.StringVar(&cfg.PublicURL, "public-url", "", "external base URL agents use, e.g. https://gw.example.com or http://gw.example.com (required)")
+	f.StringVar(&cfg.TLSCert, "tls-cert", "", "path to the TLS certificate, PEM (optional; set with --tls-key to enable TLS)")
+	f.StringVar(&cfg.TLSKey, "tls-key", "", "path to the TLS private key, PEM (optional; set with --tls-cert to enable TLS)")
 	f.IntVar(&cfg.MaxSessions, "max-sessions", 0, "max concurrent tunnels (0 = default 1024)")
 
 	return cmd

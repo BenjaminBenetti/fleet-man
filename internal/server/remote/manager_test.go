@@ -33,10 +33,13 @@ func TestGatewayAddress(t *testing.T) {
 	}{
 		{url: "https://gw.example.com", wantAddr: "gw.example.com:443", wantSNI: "gw.example.com"},
 		{url: "https://gw.example.com:8443", wantAddr: "gw.example.com:8443", wantSNI: "gw.example.com"},
-		{url: "http://gw.example.com", wantErr: true},  // must be https
-		{url: "ftp://gw.example.com", wantErr: true},   // must be https
-		{url: "https://", wantErr: true},               // no host
-		{url: "://bad", wantErr: true},                 // unparseable
+		// http is accepted (plaintext, e.g. behind a TLS-terminating proxy):
+		// addr defaults to :80 and the SNI/serverName is empty (no TLS dial).
+		{url: "http://gw.example.com", wantAddr: "gw.example.com:80", wantSNI: ""},
+		{url: "http://gw.example.com:8080", wantAddr: "gw.example.com:8080", wantSNI: ""},
+		{url: "ftp://gw.example.com", wantErr: true}, // only http/https
+		{url: "https://", wantErr: true},             // no host
+		{url: "://bad", wantErr: true},               // unparseable
 	}
 	for _, c := range cases {
 		addr, sni, err := gatewayAddress(c.url)

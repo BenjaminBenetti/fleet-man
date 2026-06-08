@@ -17,6 +17,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +88,30 @@ func startTestGateway(t *testing.T, cert tls.Certificate, publicBase string) (*S
 	return s, controlLn.Addr().String(), publicLn.Addr().String()
 }
 
+// startTestGatewayPlain is startTestGateway with NO TLS: both listeners are plain
+// TCP and tlsConfig is nil, exercising the HTTP-by-default / reverse-proxy path.
+func startTestGatewayPlain(t *testing.T, publicBase string) (*Server, string, string) {
+	t.Helper()
+	s := &Server{
+		cfg:       Config{PublicURL: publicBase, MaxSessions: 64},
+		reg:       newRegistry(publicBase, 64),
+		tlsConfig: nil,
+		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	controlLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("control listen: %v", err)
+	}
+	publicLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("public listen: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = s.ServeListeners(ctx, controlLn, publicLn) }()
+	return s, controlLn.Addr().String(), publicLn.Addr().String()
+}
+
 // fleetdMCPHandler is fleetd's stand-in MCP server: it serves a few routes so the
 // test can assert routing, auth passthrough, and SSE streaming.
 func fleetdMCPHandler() http.Handler {
@@ -111,16 +137,34 @@ func fleetdMCPHandler() http.Handler {
 	return mux
 }
 
-// dialFleetd simulates a fleet daemon: it dials the control endpoint, performs
-// the tunnel handshake, and serves fleetdMCPHandler over the resulting yamux
-// session (exactly as fleetd's serveProxy does, but with a test handler). It
-// returns the gateway's reply. cleanup is registered on t.
+// dialFleetd simulates a fleet daemon over a TLS control connection: it dials the
+// control endpoint, performs the tunnel handshake, and serves fleetdMCPHandler
+// over the resulting yamux session (exactly as fleetd's serveProxy does, but with
+// a test handler). It returns the gateway's reply. cleanup is registered on t.
 func dialFleetd(t *testing.T, controlAddr string, pool *x509.CertPool, sessionID string) tunnel.RegisterReply {
 	t.Helper()
 	conn, err := tls.Dial("tcp", controlAddr, &tls.Config{RootCAs: pool, ServerName: "127.0.0.1"})
 	if err != nil {
 		t.Fatalf("dial control: %v", err)
 	}
+	return registerFleetd(t, conn, sessionID)
+}
+
+// dialFleetdPlain is dialFleetd over a PLAINTEXT control connection (no TLS), for
+// the reverse-proxy / TLS-terminated-upstream deployment.
+func dialFleetdPlain(t *testing.T, controlAddr, sessionID string) tunnel.RegisterReply {
+	t.Helper()
+	conn, err := net.Dial("tcp", controlAddr)
+	if err != nil {
+		t.Fatalf("dial control: %v", err)
+	}
+	return registerFleetd(t, conn, sessionID)
+}
+
+// registerFleetd performs the tunnel handshake on an already-dialed control conn
+// (TLS or plain) and serves the test MCP handler over the yamux session.
+func registerFleetd(t *testing.T, conn net.Conn, sessionID string) tunnel.RegisterReply {
+	t.Helper()
 	if err := tunnel.WriteFrame(conn, tunnel.RegisterRequest{SessionID: sessionID, ClientVersion: "vtest"}); err != nil {
 		t.Fatalf("write register: %v", err)
 	}
@@ -220,6 +264,128 @@ func TestGatewayEndToEnd(t *testing.T) {
 	if events != 5 {
 		t.Fatalf("got %d SSE events through the gateway, want 5", events)
 	}
+}
+
+// TestGatewayEndToEndPlainHTTP is TestGatewayEndToEnd with no TLS anywhere: a
+// plaintext control dial and a plain-HTTP public client. It proves the full
+// reverse-proxy path — plain control handshake + yamux + plain public HTTP +
+// reverse-proxy routing + Authorization passthrough + SSE streaming.
+func TestGatewayEndToEndPlainHTTP(t *testing.T) {
+	s, controlAddr, publicAddr := startTestGatewayPlain(t, "http://gw.example.com")
+
+	reply := dialFleetdPlain(t, controlAddr, "")
+	if !strings.HasPrefix(reply.PublicURL, "http://gw.example.com/mcp/") {
+		t.Fatalf("public URL = %q, want an http://…/mcp/<id> URL", reply.PublicURL)
+	}
+	id := publicIDOf(t, reply.PublicURL)
+	waitRegistered(t, s, id)
+
+	client := &http.Client{} // no TLS config
+	base := "http://" + publicAddr + "/mcp/" + id
+
+	if body := getBody(t, client, base, ""); body != "root" {
+		t.Fatalf("/mcp/<id> -> %q, want root", body)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, base+"/echo", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("echo: %v", err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(b) != "Bearer secret-token" {
+		t.Fatalf("auth not forwarded through plaintext tunnel: %q", b)
+	}
+
+	sseResp, err := client.Get(base + "/sse?n=5")
+	if err != nil {
+		t.Fatalf("sse: %v", err)
+	}
+	defer sseResp.Body.Close()
+	events := 0
+	sc := bufio.NewScanner(sseResp.Body)
+	for sc.Scan() {
+		if strings.HasPrefix(sc.Text(), "data: ") {
+			events++
+		}
+	}
+	if events != 5 {
+		t.Fatalf("got %d SSE events through the plaintext gateway, want 5", events)
+	}
+}
+
+// TestNewTLSOptional covers New()'s TLS gating: plain HTTP when no cert/key,
+// HTTPS when both are present, and an error when exactly one is given.
+func TestNewTLSOptional(t *testing.T) {
+	// Neither cert nor key -> plain HTTP (tlsConfig nil).
+	s, err := New(Config{PublicURL: "http://gw.example.com"})
+	if err != nil {
+		t.Fatalf("plain New: %v", err)
+	}
+	if s.tlsConfig != nil {
+		t.Fatal("no cert/key should leave tlsConfig nil (plain HTTP)")
+	}
+
+	// Exactly one of cert/key -> error (partial TLS config).
+	if _, err := New(Config{PublicURL: "https://gw", TLSCert: "/nope.pem"}); err == nil {
+		t.Fatal("--tls-cert without --tls-key should error")
+	}
+	if _, err := New(Config{PublicURL: "https://gw", TLSKey: "/nope.pem"}); err == nil {
+		t.Fatal("--tls-key without --tls-cert should error")
+	}
+
+	// Missing public URL -> error.
+	if _, err := New(Config{}); err == nil {
+		t.Fatal("missing --public-url should error")
+	}
+
+	// Both cert and key (real files) -> TLS enabled.
+	certPath, keyPath := writeCertKeyFiles(t)
+	s, err = New(Config{PublicURL: "https://gw.example.com", TLSCert: certPath, TLSKey: keyPath})
+	if err != nil {
+		t.Fatalf("TLS New: %v", err)
+	}
+	if s.tlsConfig == nil {
+		t.Fatal("cert+key should populate tlsConfig (HTTPS)")
+	}
+}
+
+// writeCertKeyFiles writes a throwaway self-signed cert + key to temp PEM files
+// and returns their paths, for exercising New()'s keypair loading.
+func writeCertKeyFiles(t *testing.T) (certPath, keyPath string) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("genkey: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "fleet-test-gateway"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	dir := t.TempDir()
+	certPath = filepath.Join(dir, "cert.pem")
+	keyPath = filepath.Join(dir, "key.pem")
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyDER, _ := x509.MarshalECPrivateKey(priv)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	return certPath, keyPath
 }
 
 func TestGatewayUnknownSession404(t *testing.T) {

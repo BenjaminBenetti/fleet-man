@@ -14,10 +14,11 @@ import (
 
 // grpc_gateway.go dials the daemon's gRPC server THROUGH a fleet gateway, so a
 // remote `fleet` client can drive a daemon it cannot reach directly. The gateway
-// exposes a hijack+splice endpoint at https://<gw>/grpc/<id>; the dialer TLS-dials
-// the gateway, performs the CONNECT-style handshake, and hands gRPC the resulting
-// raw conn to run native HTTP/2 over. Every RPC carries the MCP bearer token as
-// metadata, which the daemon validates.
+// exposes a hijack+splice endpoint at <gw>/grpc/<id>; the dialer connects to the
+// gateway (TLS for an https URL, verified against the system roots; plaintext for
+// an http URL behind a TLS-terminating proxy), performs the CONNECT-style
+// handshake, and hands gRPC the resulting raw conn to run native HTTP/2 over.
+// Every RPC carries the MCP bearer token as metadata, which the daemon validates.
 //
 // This stays inside the fleetclient import boundary (stdlib + grpc only).
 
@@ -39,8 +40,9 @@ func (e gatewayEndpoint) IsLocal() bool { return false }
 func (e gatewayEndpoint) String() string { return e.rawURL }
 
 // DialOptions wires the CONNECT dialer + the per-RPC bearer token. The inner
-// transport is insecure because TLS terminates at the gateway (the dialer
-// established it); the gRPC connection then runs h2c over the tunneled conn.
+// transport is insecure because any TLS terminates at (or before) the gateway —
+// the dialer establishes it for https, or it is plaintext for http; the gRPC
+// connection then runs h2c over the tunneled conn.
 func (e gatewayEndpoint) DialOptions() []grpc.DialOption {
 	return append(insecureCreds(),
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
@@ -50,28 +52,50 @@ func (e gatewayEndpoint) DialOptions() []grpc.DialOption {
 	)
 }
 
-// dialGatewayConn TLS-dials the gateway and performs the /grpc/<id> handshake: it
-// sends a plain request to the path and expects "200 Connection Established",
-// after which the connection is a transparent byte pipe to the daemon's gRPC
-// server. The returned conn preserves any bytes the handshake reader buffered.
+// dialGatewayConn dials the gateway (TLS for an https URL, verified against the
+// system roots; plaintext TCP for an http URL) and performs the /grpc/<id>
+// handshake: it sends a plain request to the path and expects "200 Connection
+// Established", after which the connection is a transparent byte pipe to the
+// daemon's gRPC server. The returned conn preserves any bytes the handshake
+// reader buffered.
 func dialGatewayConn(ctx context.Context, rawURL string) (net.Conn, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse FLEET_GATEWAY: %w", err)
 	}
-	if u.Scheme != "https" {
-		return nil, fmt.Errorf("FLEET_GATEWAY must be https, got %q", u.Scheme)
+	// Reject an authority-less URL up front (mirroring the control dialer in
+	// internal/server/remote). Without this, an https URL with no host would have
+	// an empty hostname and fall through to the plaintext branch below — silently
+	// downgrading a URL the user wrote as https.
+	if u.Hostname() == "" {
+		return nil, fmt.Errorf("FLEET_GATEWAY has no host: %q", rawURL)
 	}
-	host := u.Host
-	if u.Port() == "" {
-		host = net.JoinHostPort(u.Hostname(), "443")
+	// serverName is the host for https (TLS SNI) and empty for http (plaintext).
+	var serverName, defaultPort string
+	switch u.Scheme {
+	case "https":
+		serverName, defaultPort = u.Hostname(), "443"
+	case "http":
+		serverName, defaultPort = "", "80"
+	default:
+		return nil, fmt.Errorf("FLEET_GATEWAY must be http or https, got %q", u.Scheme)
 	}
 	if u.Path == "" || u.Path == "/" {
 		return nil, fmt.Errorf("FLEET_GATEWAY must include the /grpc/<id> path")
 	}
+	host := u.Host
+	if u.Port() == "" {
+		host = net.JoinHostPort(u.Hostname(), defaultPort)
+	}
 
-	d := &tls.Dialer{Config: &tls.Config{ServerName: u.Hostname(), MinVersion: tls.VersionTLS12}}
-	conn, err := d.DialContext(ctx, "tcp", host)
+	var conn net.Conn
+	if serverName != "" {
+		d := &tls.Dialer{Config: &tls.Config{ServerName: serverName, MinVersion: tls.VersionTLS12}}
+		conn, err = d.DialContext(ctx, "tcp", host)
+	} else {
+		var d net.Dialer
+		conn, err = d.DialContext(ctx, "tcp", host)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("dial gateway %s: %w", host, err)
 	}

@@ -37,15 +37,18 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -o /out/fleet ./cmd/fleet
 
 # distroless/static: just a static binary + CA roots (the daemon-facing TLS dial
-# and any outbound HTTPS need the system roots). The root (uid 0) variant is used
-# deliberately so the documented default ports — :443 (public) and :8443
-# (control) — bind out of the box; operators who don't need privileged ports can
-# pass --public-addr/--control-addr and drop the capability.
+# and any outbound HTTPS need the system roots; still useful in HTTP-only mode for
+# verifying upstreams). The root (uid 0) variant is used deliberately so the
+# documented default ports — :443 (public) and :8443 (control) — bind out of the
+# box; operators who don't need privileged ports (e.g. behind a reverse proxy that
+# terminates TLS, where the gateway runs cert-less on plain ports) can pass
+# --public-addr/--control-addr and drop the capability.
 FROM gcr.io/distroless/static-debian12:latest
 COPY --from=build /out/fleet /usr/local/bin/fleet
 
-# :443 public listener (HTTPS, MCP agents + remote `fleet`); :8443 control
-# listener (TLS, fleet daemons dial in). A GET /healthz on the public listener
+# :443 public listener (MCP agents + remote `fleet`); :8443 control listener (fleet
+# daemons dial in). Both serve TLS when a cert is configured, else plain HTTP/TCP
+# (for a TLS-terminating reverse proxy). A GET /healthz on the public listener
 # returns "ok".
 EXPOSE 443 8443
 

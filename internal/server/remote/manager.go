@@ -50,8 +50,9 @@ type Manager struct {
 	publish       func(*fleetgrpc.RemoteMcpStatus)
 	logOut        io.Writer
 
-	// dial is the transport seam (TLS in production); tests override it to reach
-	// an in-process gateway.
+	// dial is the transport seam: in production it TLS-dials an https gateway
+	// (verified against the system roots) or plaintext-dials an http one; tests
+	// override it to reach an in-process gateway.
 	dial func(ctx context.Context, gatewayURL string) (net.Conn, error)
 
 	// grpcLis, when set, enables tunneling the daemon's gRPC server alongside MCP:
@@ -70,8 +71,9 @@ type Manager struct {
 type Option func(*Manager)
 
 // WithDialFunc overrides how the Manager opens the control connection to the
-// gateway (the default is a TLS dial verified against the system roots). Used by
-// integration tests to reach an in-process gateway with a test CA.
+// gateway (the default dials TLS for an https gateway URL, verified against the
+// system roots, or plaintext TCP for an http one). Used by integration tests to
+// reach an in-process gateway with a test CA.
 func WithDialFunc(dial func(ctx context.Context, gatewayURL string) (net.Conn, error)) Option {
 	return func(m *Manager) { m.dial = dial }
 }
@@ -104,7 +106,7 @@ func NewManager(mcpPort int, clientVersion string, publish func(*fleetgrpc.Remot
 		clientVersion: clientVersion,
 		publish:       publish,
 		logOut:        io.Discard,
-		dial:          dialTLS,
+		dial:          dialGateway,
 		wake:          make(chan struct{}, 1),
 	}
 	for _, opt := range opts {

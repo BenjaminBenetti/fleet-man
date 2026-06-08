@@ -249,15 +249,45 @@ Security properties:
   appears in the URL, so a URL holder cannot re‑register the session.
 - **The local unix socket stays auth‑less** (same‑user, `0600`) — only the
   *tunnel‑facing* servers require the token.
-- **All tunnel traffic is TLS.** `fleetd` verifies the gateway's certificate when
-  it dials in (so use a publicly‑trusted cert), and agents/clients connect over
-  HTTPS. The gateway **terminates** TLS, however, so its operator can see the
-  plaintext traffic and the token — run a gateway you trust. Reusing the MCP token
-  for the gRPC path means that one secret now grants **full daemon control over
-  the internet**, so treat it accordingly.
+- **Public traffic is TLS — terminated either by the gateway or by a proxy in
+  front of it.** With `--tls-cert`/`--tls-key`, the gateway terminates TLS itself:
+  `fleetd` verifies its certificate on dial‑in (so use a publicly‑trusted cert) and
+  agents/clients connect over HTTPS. Without a cert, the gateway serves **plain
+  HTTP/TCP** and is meant to sit behind a TLS‑terminating reverse proxy (see
+  **Deployment modes** below). Either way the gateway sees plaintext traffic and the
+  token — run a gateway (and proxy) you trust. Reusing the MCP token for the gRPC
+  path means that one secret now grants **full daemon control over the internet**,
+  so treat it accordingly.
 - **DoS bounds:** a `MaxSessions` cap, a per‑connection handshake timeout, a
   load‑shedding control‑accept loop, and yamux flow control bound resource use on
   the unauthenticated public surface.
+
+---
+
+## 7a. Deployment modes: direct TLS vs. reverse proxy
+
+TLS on the listeners is **optional and all‑or‑nothing** (`gateway.New` rejects a
+lone cert or key):
+
+- **Direct TLS** (`--tls-cert` + `--tls-key`): the gateway wraps both listeners
+  with `tls.Listen`. This is the standalone mode — point a public DNS name at the
+  host, give it a publicly‑trusted cert, done.
+- **Reverse‑proxy / TLS‑terminated upstream** (no cert): the gateway uses plain
+  `net.Listen` on both ports and a proxy in front terminates TLS. Set
+  `--public-url` to the externally‑visible `https://…` (or `http://…`) the proxy
+  serves; the registry reflects that scheme back to clients verbatim.
+
+The clients are symmetric: both the daemon control dialer
+(`internal/server/remote`) and the remote `fleet` client (`internal/fleetclient`)
+accept `https://` (TLS dial, verified against the OS system roots) **or** `http://`
+(plain TCP dial), defaulting the port to 443/80 respectively.
+
+> ⚠️ **It must be an L4/TCP route, not an HTTP ingress.** The control listener is
+> not HTTP (framed handshake + yamux), and the public `/grpc/<id>` route hijacks the
+> connection to splice native HTTP/2. A standard L7 HTTP proxy breaks both. Use a TCP
+> route — e.g. Traefik `IngressRouteTCP` with TLS termination — for each port. See
+> the README's *Behind a TLS‑terminating reverse proxy* section for a concrete
+> example.
 
 ---
 

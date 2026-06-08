@@ -82,14 +82,44 @@ func TestGatewayHandshakeNon200(t *testing.T) {
 func TestDialGatewayConnBadURL(t *testing.T) {
 	ctx := context.Background()
 	for _, u := range []string{
-		"http://gw/grpc/x", // must be https
-		"https://gw",       // missing /grpc/<id> path
-		"https://gw/",      // empty path
-		"://nope",          // unparseable
+		"ftp://gw/grpc/x", // only http/https
+		"https://gw",      // missing /grpc/<id> path
+		"https://gw/",     // empty path
+		"http://gw",       // missing /grpc/<id> path (http)
+		"https:///grpc/x", // no host: must error, not fall through to plaintext
+		"://nope",         // unparseable
 	} {
 		if _, err := dialGatewayConn(ctx, u); err == nil {
 			t.Fatalf("dialGatewayConn(%q) should error", u)
 		}
+	}
+}
+
+// TestDialGatewayConnHTTPPlaintext verifies an http:// gateway URL dials
+// plaintext (no TLS) and completes the /grpc handshake — the reverse-proxy /
+// TLS-terminated-upstream path.
+func TestDialGatewayConnHTTPPlaintext(t *testing.T) {
+	ln := stubGateway(t, "HTTP/1.1 200 Connection Established", true)
+	url := "http://" + ln.Addr().String() + "/grpc/abc"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, err := dialGatewayConn(ctx, url)
+	if err != nil {
+		t.Fatalf("dialGatewayConn(%q) over plain http: %v", url, err)
+	}
+	defer conn.Close()
+
+	if _, err := io.WriteString(conn, "hello-plain"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got := make([]byte, len("hello-plain"))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.ReadFull(conn, got); err != nil {
+		t.Fatalf("read echo: %v", err)
+	}
+	if string(got) != "hello-plain" {
+		t.Fatalf("echo = %q, want hello-plain", got)
 	}
 }
 

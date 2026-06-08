@@ -43,10 +43,10 @@ func insecureCreds() []grpc.DialOption {
 // localEndpoint is the per-user unix socket; auto-spawnable.
 type localEndpoint struct{ socket string }
 
-func (e localEndpoint) Target() string                  { return "unix://" + e.socket }
-func (e localEndpoint) IsLocal() bool                   { return true }
-func (e localEndpoint) String() string                  { return "unix:" + e.socket }
-func (e localEndpoint) DialOptions() []grpc.DialOption  { return insecureCreds() }
+func (e localEndpoint) Target() string                 { return "unix://" + e.socket }
+func (e localEndpoint) IsLocal() bool                  { return true }
+func (e localEndpoint) String() string                 { return "unix:" + e.socket }
+func (e localEndpoint) DialOptions() []grpc.DialOption { return insecureCreds() }
 
 // remoteEndpoint is a plain TCP target (e.g. a remote TUI). Not auto-spawnable.
 type remoteEndpoint struct{ addr string }
@@ -57,8 +57,9 @@ func (e remoteEndpoint) String() string                 { return e.addr }
 func (e remoteEndpoint) DialOptions() []grpc.DialOption { return insecureCreds() }
 
 // selectEndpoint picks the transport, in precedence order:
-//   - FLEET_GATEWAY=https://gw/grpc/<id> → through a fleet gateway (the bearer
-//     token from FLEET_TOKEN, or ~/.fleet/mcp.token for a same-host user).
+//   - FLEET_GATEWAY=https://gw/grpc/<id> (or http://… behind a TLS-terminating
+//     proxy) → through a fleet gateway (the bearer token from FLEET_TOKEN, or
+//     ~/.fleet/mcp.token for a same-host user).
 //   - FLEET_SERVER=host:port → a plain remote TCP target.
 //   - otherwise → the local auto-spawned unix socket.
 //

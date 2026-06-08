@@ -58,6 +58,23 @@ func dialFleetdGRPC(t *testing.T, controlAddr string, pool *x509.CertPool) tunne
 	if err != nil {
 		t.Fatalf("dial control: %v", err)
 	}
+	return registerFleetdGRPC(t, conn)
+}
+
+// dialFleetdGRPCPlain is dialFleetdGRPC over a PLAINTEXT control connection.
+func dialFleetdGRPCPlain(t *testing.T, controlAddr string) tunnel.RegisterReply {
+	t.Helper()
+	conn, err := net.Dial("tcp", controlAddr)
+	if err != nil {
+		t.Fatalf("dial control: %v", err)
+	}
+	return registerFleetdGRPC(t, conn)
+}
+
+// registerFleetdGRPC performs the gRPC-negotiating handshake on an already-dialed
+// control conn (TLS or plain) and demuxes tagged streams.
+func registerFleetdGRPC(t *testing.T, conn net.Conn) tunnel.RegisterReply {
+	t.Helper()
 	if err := tunnel.WriteFrame(conn, tunnel.RegisterRequest{Features: []string{tunnel.FeatureGRPC}}); err != nil {
 		t.Fatalf("write register: %v", err)
 	}
@@ -166,6 +183,53 @@ func TestGatewayGRPCRoute(t *testing.T) {
 	client := httpsClient(pool)
 	if body := getBody(t, client, "https://"+publicAddr+"/mcp/"+id+"/echo", "Bearer mcp-on-grpc"); body != "Bearer mcp-on-grpc" {
 		t.Fatalf("mcp on negotiated session = %q", body)
+	}
+}
+
+// TestGatewayGRPCRoutePlainHTTP drives the /grpc hijack+splice over a fully
+// plaintext gateway (no TLS on control or public), proving the splice is
+// transport-agnostic and works behind a TLS-terminating reverse proxy.
+func TestGatewayGRPCRoutePlainHTTP(t *testing.T) {
+	s, controlAddr, publicAddr := startTestGatewayPlain(t, "http://gw.example.com")
+
+	reply := dialFleetdGRPCPlain(t, controlAddr)
+	if !tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC) {
+		t.Fatalf("gateway did not negotiate grpc: features=%v", reply.Features)
+	}
+	id := publicIDOf(t, reply.PublicURL)
+	waitRegistered(t, s, id)
+
+	raw, err := net.Dial("tcp", publicAddr)
+	if err != nil {
+		t.Fatalf("dial public: %v", err)
+	}
+	defer raw.Close()
+	if _, err := fmt.Fprintf(raw, "GET /grpc/%s HTTP/1.1\r\nHost: gw\r\n\r\n", id); err != nil {
+		t.Fatalf("write grpc handshake: %v", err)
+	}
+	br := bufio.NewReader(raw)
+	status, err := br.ReadString('\n')
+	if err != nil || !strings.Contains(status, "200") {
+		t.Fatalf("grpc handshake status = %q err=%v, want 200", status, err)
+	}
+	for { // consume to end of headers
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read headers: %v", err)
+		}
+		if line == "\r\n" || line == "\n" {
+			break
+		}
+	}
+	if _, err := io.WriteString(raw, "ping-grpc"); err != nil {
+		t.Fatalf("write through splice: %v", err)
+	}
+	got := make([]byte, len("ping-grpc"))
+	if _, err := io.ReadFull(br, got); err != nil {
+		t.Fatalf("read echo: %v", err)
+	}
+	if string(got) != "ping-grpc" {
+		t.Fatalf("grpc splice echo = %q, want ping-grpc", got)
 	}
 }
 
