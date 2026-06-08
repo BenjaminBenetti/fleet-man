@@ -94,19 +94,30 @@ func (s *Server) proxyGRPC(_ any, serverStream grpc.ServerStream) error {
 
 	// Pump both directions; whichever side finishes first drives teardown. The
 	// daemon's trailers (grpc-status) are copied back so the client sees the real
-	// status — including a trailers-only error.
+	// status — including a trailers-only error. Each chan is buffered (cap 1) and
+	// written exactly once, so a drained case simply blocks on the next iteration.
 	s2cErr := forwardServerToClient(serverStream, clientStream)
 	c2sErr := forwardClientToServer(clientStream, serverStream)
 	for range 2 {
 		select {
 		case err := <-s2cErr:
 			if err == io.EOF {
+				// Client half-closed; the daemon may still be responding, so keep
+				// pumping the other direction on the loop's second iteration.
 				_ = clientStream.CloseSend()
 			} else {
+				// Inbound copy failed. Cancel the upstream and WAIT for the response
+				// goroutine to unwind (clientCancel guarantees it) before returning,
+				// so it can't be mid-SendMsg on serverStream when the handler returns
+				// and gRPC finalizes the stream.
 				clientCancel()
+				<-c2sErr
 				return status.Errorf(codes.Internal, "proxy upstream: %v", err)
 			}
 		case err := <-c2sErr:
+			// The daemon's response direction ended — the RPC is done. The other
+			// goroutine only READS serverStream, so the deferred clientCancel unwinds
+			// it cleanly as the handler returns; no concurrent serverStream write.
 			serverStream.SetTrailer(clientStream.Trailer())
 			if err != io.EOF {
 				return err
