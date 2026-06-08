@@ -214,7 +214,25 @@ fleet gateway \
 Both ports must be reachable; expose `--public-addr` to agents and `--control-addr`
 to your daemons. A `GET /healthz` on the public listener returns `ok`.
 
-<<<<<<< Updated upstream
+#### Run it with Docker
+
+Every tagged release also publishes a gateway image to the GitHub Container
+Registry, so you don't have to build the binary yourself. It's the same
+`fleet gateway`, with the flags passed as `docker run` arguments:
+
+```bash
+docker run -d --name fleet-gateway \
+  -p 443:443 -p 8443:8443 \
+  -v /etc/fleet/tls:/tls:ro \
+  ghcr.io/benjaminbenetti/fleet-man/gateway:latest \
+  --public-url https://gateway.example.com \
+  --tls-cert /tls/fullchain.pem \
+  --tls-key  /tls/privkey.pem
+```
+
+Image tags track releases: `:latest` (newest stable), `:X.Y.Z`, and `:X.Y`.
+Images are multi-arch (`linux/amd64` + `linux/arm64`).
+
 ### Security model
 
 - **No gateway authentication.** Anyone can open a tunnel; the gateway just routes
@@ -226,58 +244,6 @@ to your daemons. A `GET /healthz` on the public listener returns `ok`.
 - The id in the URL is *not* the reconnect credential: the daemon holds a separate
   secret (never placed in the URL), so a URL holder cannot hijack your tunnel.
 - All gateway traffic is TLS; the daemon verifies the gateway's certificate.
-=======
-### Remote control (gRPC)
-
-The same gateway tunnel can also carry the daemon's **gRPC** API, so a remote
-`fleet` client can drive your daemon directly — list/up/down, watch live status,
-stream logs, change config, and so on. It rides the **same tunnel and the same
-on/off toggle** as remote MCP (no separate setting); the gateway serves it at
-`https://<gateway>/grpc/<id>` (same id as the MCP URL, `/grpc` instead of `/mcp`).
-
-Point a `fleet` client at it with two env vars:
-
-```bash
-export FLEET_GATEWAY="https://gateway.example.com/grpc/<id>"
-export FLEET_TOKEN="<token from ~/.fleet/mcp.token>"   # omit on the same host as the daemon
-fleet ls          # …now talks to the REMOTE daemon
-```
-
-`FLEET_GATEWAY` takes precedence over `FLEET_SERVER` and the local socket; a remote
-endpoint is never auto-spawned.
-
-> **Note:** every gRPC call works remotely *except* interactive `fleet exec` (a
-> remote shell), which currently runs on the client's host — that awaits a
-> server-side handler.
-
-## Environment Variables
-
-Variables fleet **reads** (set them to configure behavior):
-
-| Variable | Values / format | What it does |
-|----------|-----------------|--------------|
-| `FLEET_GATEWAY` | `https://gw/grpc/<id>` | Drive a *remote* daemon through a fleet gateway (full gRPC control). Takes precedence over `FLEET_SERVER` and the local socket. See [Remote MCP](#remote-mcp). |
-| `FLEET_TOKEN` | bearer token | Token for `FLEET_GATEWAY`. Defaults to `~/.fleet/mcp.token` on the daemon's own host. |
-| `FLEET_SERVER` | `host:port` | Drive a remote daemon over plain TCP (no gateway). |
-| `FLEET_DEVCONTAINER_BUILDKIT` | `auto` (default), `never` | BuildKit mode for Fleet-managed devcontainers. See [Devcontainer BuildKit](#devcontainer-buildkit). |
-| `FLEET_DEVCONTAINER_UPDATE_REMOTE_USER_UID` | `default`, `never`, `on`, `off` | Remote-user UID/GID rewrite mode. See [Devcontainer UID Rewrite](#devcontainer-uid-rewrite). |
-| `CODER_URL` | URL | Coder deployment URL (Coder backend). |
-| `CODER_SESSION_TOKEN` | token | Coder API token (Coder backend). |
-| `CODER_CONFIG_DIR` | path | Override the Coder CLI config dir. |
-
-Variables fleet **exports** for MCP clients (written to `~/.fleet/mcp.env`, sourced from `~/.bashrc`):
-
-| Variable | What it does |
-|----------|--------------|
-| `FLEET_MCP_URL` | The loopback MCP endpoint, `http://127.0.0.1:<port>`. |
-| `FLEET_MCP_TOKEN` | The MCP bearer token. |
-| `FLEET_MCP_PORT` | The MCP server's port. |
-
-Fleet also **respects** standard environment when present: `HOME` (the `~/.fleet`
-location), `TMUX` (enables split-pane mode when run inside tmux), `SSH_AUTH_SOCK`
-(forwarded into instances for SSH/git), and `WSL_DISTRO_NAME` / `WSL_INTEROP` /
-`WAYLAND_DISPLAY` (platform detection for clipboard and browser integration).
->>>>>>> Stashed changes
 
 ### Remote control (gRPC)
 
@@ -310,6 +276,34 @@ error.
 > the gateway — it currently runs the command on the *client's* host. Every other
 > RPC works remotely today; remote interactive shell awaits a server-side `Exec`
 > handler.
+
+## Environment Variables
+
+Variables fleet **reads** (set them to configure behavior):
+
+| Variable | Values / format | What it does |
+|----------|-----------------|--------------|
+| `FLEET_GATEWAY` | `https://gw/grpc/<id>` | Drive a *remote* daemon through a fleet gateway (full gRPC control). Takes precedence over `FLEET_SERVER` and the local socket. See [Remote MCP](#remote-mcp). |
+| `FLEET_TOKEN` | bearer token | Token for `FLEET_GATEWAY`. Defaults to `~/.fleet/mcp.token` on the daemon's own host. |
+| `FLEET_SERVER` | `host:port` | Drive a remote daemon over plain TCP (no gateway). |
+| `FLEET_DEVCONTAINER_BUILDKIT` | `auto` (default), `never` | BuildKit mode for Fleet-managed devcontainers. See [Devcontainer BuildKit](#devcontainer-buildkit). |
+| `FLEET_DEVCONTAINER_UPDATE_REMOTE_USER_UID` | `default`, `never`, `on`, `off` | Remote-user UID/GID rewrite mode. See [Devcontainer UID Rewrite](#devcontainer-uid-rewrite). |
+| `CODER_URL` | URL | Coder deployment URL (Coder backend). |
+| `CODER_SESSION_TOKEN` | token | Coder API token (Coder backend). |
+| `CODER_CONFIG_DIR` | path | Override the Coder CLI config dir. |
+
+Variables fleet **exports** for MCP clients (written to `~/.fleet/mcp.env`, sourced from `~/.bashrc`):
+
+| Variable | What it does |
+|----------|--------------|
+| `FLEET_MCP_URL` | The loopback MCP endpoint, `http://127.0.0.1:<port>`. |
+| `FLEET_MCP_TOKEN` | The MCP bearer token. |
+| `FLEET_MCP_PORT` | The MCP server's port. |
+
+Fleet also **respects** standard environment when present: `HOME` (the `~/.fleet`
+location), `TMUX` (enables split-pane mode when run inside tmux), `SSH_AUTH_SOCK`
+(forwarded into instances for SSH/git), and `WSL_DISTRO_NAME` / `WSL_INTEROP`
+/ `WAYLAND_DISPLAY` (platform detection for clipboard and browser integration).
 
 ## Requirements
 

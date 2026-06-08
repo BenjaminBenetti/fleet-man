@@ -1,0 +1,11 @@
+# Trim the build context for the gateway image (deploy/gateway/Dockerfile, built
+# from the repo root). Only cmd/ + internal/ + go.{mod,sum} are needed to build
+# the binary; everything below is dead weight or shouldn't enter the image build.
+.git
+dist
+_site
+web
+qa
+doc
+readme-image.png
+*.md
