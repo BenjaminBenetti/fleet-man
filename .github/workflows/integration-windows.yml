@@ -7,8 +7,8 @@ name: Integration Tests (Windows / WSL)
 
 on:
 # Disable - way to slow! Bigger runner?   
-#  pull_request:
-#    branches: [main]
+  pull_request:
+    branches: [never]
 
 jobs:
   integration-wsl:
