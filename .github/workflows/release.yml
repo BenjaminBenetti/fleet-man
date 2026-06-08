@@ -14,6 +14,8 @@ permissions:
   contents: write
   pages: write
   id-token: write
+  # Push the fleet-gateway image to the GitHub Container Registry.
+  packages: write
 
 concurrency:
   group: pages
@@ -140,3 +142,69 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # Build and publish the fleet-gateway image to ghcr alongside the release, so
+  # tagging a new version also ships a matching gateway image. The gateway is the
+  # same `fleet` binary run as `fleet gateway` (see deploy/gateway/Dockerfile).
+  # Independent of the `release` job — it has no `needs`, so a slow/failed binary
+  # release doesn't block the image and vice-versa.
+  gateway-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # Keep the image's Go in lockstep with the repo, exactly as qa-image.yml does.
+      - name: Resolve Go version from go.mod
+        id: go
+        run: echo "version=$(awk '/^go /{print $2; exit}' go.mod)" >> "$GITHUB_OUTPUT"
+
+      # ghcr image names must be lowercase; the owner (BenjaminBenetti) is not.
+      - name: Compute image name
+        id: img
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}/gateway" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.img.outputs.name }}
+          # SemVer tags strip the leading "v". A pre-release (-beta) gets only the
+          # full version tag — metadata-action skips {{major}}.{{minor}} and the
+          # moving "latest" tag for pre-releases (latest=auto), so betas never
+          # become the default `:latest` pull, mirroring the release job.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+          flavor: |
+            latest=auto
+
+      - name: Build and push (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./deploy/gateway/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GO_VERSION=${{ steps.go.outputs.version }}
+            VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
