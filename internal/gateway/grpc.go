@@ -37,30 +37,22 @@ const grpcSessionHeader = "fleet-session"
 // unary, server-streaming, client-streaming, and bidi alike.
 var proxyStreamDesc = &grpc.StreamDesc{ServerStreams: true, ClientStreams: true}
 
-// rawFrame is an opaque gRPC message: the proxy never decodes the payload, it just
-// forwards the bytes between the two streams.
-type rawFrame struct{ payload []byte }
-
-// rawCodec is a passthrough gRPC codec (frames are []byte), so the proxy forwards
-// messages without knowing any proto types.
-type rawCodec struct{}
-
-func (rawCodec) Marshal(v any) ([]byte, error)      { return v.(*rawFrame).payload, nil }
-func (rawCodec) Unmarshal(data []byte, v any) error { v.(*rawFrame).payload = data; return nil }
-func (rawCodec) Name() string                       { return "fleet-gateway-raw-proxy" }
-
 // newGRPCServer builds the gRPC server for the gRPC listener. grpc.Server speaks
 // h2c over a plain listener, or TLS+ALPN h2 when a cert is configured (via creds).
-// Every method hits proxyGRPC (no services are registered locally).
+// The fleetd Register method (tunnelServiceDesc) is handled locally; every OTHER
+// method hits proxyGRPC (remote-control RPCs routed to a daemon).
 func (s *Server) newGRPCServer() *grpc.Server {
 	opts := []grpc.ServerOption{
-		grpc.ForceServerCodec(rawCodec{}),
+		grpc.ForceServerCodec(tunnel.RawCodec{}),
 		grpc.UnknownServiceHandler(s.proxyGRPC),
+		grpc.MaxConcurrentStreams(maxConcurrentStreams),
 	}
 	if s.tlsConfig != nil {
 		opts = append(opts, grpc.Creds(credentials.NewTLS(s.tlsConfig.Clone())))
 	}
-	return grpc.NewServer(opts...)
+	srv := grpc.NewServer(opts...)
+	srv.RegisterService(&tunnelServiceDesc, s)
+	return srv
 }
 
 // serveGRPC serves the gRPC server on ln until the server is stopped.
@@ -136,7 +128,7 @@ func (s *session) grpcClientConn() (*grpc.ClientConn, error) {
 			grpc.WithContextDialer(func(_ context.Context, _ string) (net.Conn, error) {
 				return s.open(tunnel.TagGRPC)
 			}),
-			grpc.WithDefaultCallOptions(grpc.ForceCodec(rawCodec{})),
+			grpc.WithDefaultCallOptions(grpc.ForceCodec(tunnel.RawCodec{})),
 		)
 	})
 	return s.grpcCC, s.grpcCCErr
@@ -146,7 +138,7 @@ func (s *session) grpcClientConn() (*grpc.ClientConn, error) {
 func forwardServerToClient(src grpc.ServerStream, dst grpc.ClientStream) chan error {
 	ret := make(chan error, 1)
 	go func() {
-		f := &rawFrame{}
+		f := &tunnel.RawFrame{}
 		for {
 			if err := src.RecvMsg(f); err != nil {
 				ret <- err // io.EOF on a clean client half-close
@@ -166,7 +158,7 @@ func forwardServerToClient(src grpc.ServerStream, dst grpc.ClientStream) chan er
 func forwardClientToServer(src grpc.ClientStream, dst grpc.ServerStream) chan error {
 	ret := make(chan error, 1)
 	go func() {
-		f := &rawFrame{}
+		f := &tunnel.RawFrame{}
 		for i := 0; ; i++ {
 			if err := src.RecvMsg(f); err != nil {
 				ret <- err // io.EOF on clean end; a status error on rejection

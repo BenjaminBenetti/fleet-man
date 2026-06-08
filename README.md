@@ -163,10 +163,11 @@ agent ──HTTPS──▶ fleet gateway ──reverse tunnel──▶ your flee
 
 In **Settings → Fleet Remote (MCP)**:
 
-1. Set **Gateway URL** to the gateway's **control** endpoint, e.g.
-   `https://gateway.example.com:8443` (this is where the daemon dials out — the
-   gateway's `--control-addr`, default port `8443`; it is *not* the public
-   address agents use).
+1. Set **Gateway URL** to the gateway's **gRPC** endpoint, e.g.
+   `https://gateway.example.com:50051` (this is where the daemon registers and
+   dials out — the gateway's `--grpc-addr`, default port `50051`; behind a proxy
+   it's whatever host:port routes to that listener). It is *not* the public address
+   agents use.
 2. Flip **Enabled** on.
 
 Once connected, the read-only **Public MCP URL** appears (e.g.
@@ -209,25 +210,27 @@ fleet gateway \
 | `--public-url` | (required) | External base URL agents use; session URLs are `<public-url>/mcp/<id>`. Scheme (`https`/`http`) must match how the public endpoint is actually served |
 | `--tls-cert` / `--tls-key` | (optional) | TLS certificate + key (PEM). Provide **both** to serve HTTPS, or **neither** for plain HTTP behind a proxy. A lone cert or key is an error |
 | `--public-addr` | `:443` | MCP + `/healthz` listener — HTTP/1.1 (HTTPS when a cert is set, else HTTP) |
-| `--control-addr` | `:8443` | Address daemons dial in on (TLS when a cert is set, else plain TCP) — this is what **Gateway URL** points at |
-| `--grpc-addr` | `:50051` | Native gRPC listener — HTTP/2 (h2c when cert-less, h2 under TLS). Empty disables remote gRPC |
+| `--grpc-addr` | `:50051` | Native gRPC listener — HTTP/2 (h2c when cert-less, h2 under TLS). Hosts remote `fleet` control **and** fleetd registration. Empty disables both |
 | `--max-sessions` | `1024` | Cap on concurrent tunnels |
 
-All three ports must be reachable; expose `--public-addr` to MCP agents,
-`--grpc-addr` to remote `fleet` clients, and `--control-addr` to your daemons. A
+Two ports must be reachable: expose `--public-addr` to MCP agents and `--grpc-addr`
+to remote `fleet` clients **and your daemons** (they register over it). A
 `GET /healthz` on the public listener returns `ok`.
+
+> **There is no separate control port.** fleetd registers and carries its reverse
+> tunnel over a long-lived gRPC bidi stream on `--grpc-addr` (HTTP/2), so the whole
+> gateway is plain HTTP/HTTP-2 — no raw TCP.
 
 #### Behind a TLS-terminating reverse proxy
 
-The three listeners have **different** protocols, which decides how a proxy can
-front each:
+Both listeners are **L7** — there's no raw-TCP port anymore, so a standard HTTP/gRPC
+ingress fronts the entire gateway:
 
-- **`--public-addr` (MCP, HTTP/1.1)** → a normal Traefik **HTTP** `IngressRoute`
-  (L7, TLS-terminating) works.
-- **`--grpc-addr` (native gRPC, HTTP/2)** → a Traefik **gRPC** route (L7,
-  h2c backend) works — see [Traefik's gRPC guide](https://doc.traefik.io/traefik/user-guides/grpc/).
-- **`--control-addr` (framed handshake + yamux, *not* HTTP)** → must be an **L4/TCP**
-  route (`IngressRouteTCP`); an HTTP ingress can't proxy it.
+- **`--public-addr` (MCP, HTTP/1.1)** → a Traefik **HTTP** `IngressRoute` (TLS-terminating).
+- **`--grpc-addr` (gRPC, HTTP/2)** → a Traefik **gRPC** route (h2c backend) — see
+  [Traefik's gRPC guide](https://doc.traefik.io/traefik/user-guides/grpc/). This one
+  carries both remote `fleet` control RPCs **and** fleetd registration (the same
+  long-lived bidi stream).
 
 Run the gateway with **no** `--tls-cert`/`--tls-key` (plain HTTP/h2c) and let the
 proxy terminate TLS. For example:
@@ -244,7 +247,7 @@ spec:
       services: [{ name: fleet-gateway, port: 80 }]            # gateway --public-addr
   tls: { secretName: gateway-tls }
 ---
-# gRPC — L7 gRPC (h2c to the backend):
+# gRPC (remote control + fleetd registration) — L7 gRPC, h2c to the backend:
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata: { name: fleet-gateway-grpc }
@@ -254,23 +257,13 @@ spec:
     - match: Host(`grpc.gateway.example.com`)
       services: [{ name: fleet-gateway, port: 50051, scheme: h2c }] # gateway --grpc-addr
   tls: { secretName: gateway-tls }
----
-# Control — L4 TCP (not HTTP), TLS terminated at Traefik:
-apiVersion: traefik.io/v1alpha1
-kind: IngressRouteTCP
-metadata: { name: fleet-gateway-control }
-spec:
-  entryPoints: [fleetctl]                                        # a dedicated :8443 TCP entrypoint
-  routes:
-    - match: HostSNI(`gateway.example.com`)
-      services: [{ name: fleet-gateway, port: 8443 }]            # gateway --control-addr
-  tls: { secretName: gateway-tls }
 ```
 
 Set `--public-url https://gateway.example.com`; the daemon's **Gateway URL** is the
-control endpoint, e.g. `https://gateway.example.com:8443`. Clients verify TLS
-against the system roots at the proxy edge; the proxy speaks plain HTTP/h2c/TCP to
-the cert-less gateway, which can then bind unprivileged ports and needs no cert.
+gRPC endpoint, e.g. `https://grpc.gateway.example.com` (or `https://gateway.example.com:50051`
+without a proxy). Clients (and daemons) verify TLS against the system roots at the
+proxy edge; the proxy speaks plain HTTP/h2c to the cert-less gateway, which can then
+bind unprivileged ports and needs no cert.
 
 #### Run it with Docker
 
@@ -280,7 +273,7 @@ Registry, so you don't have to build the binary yourself. It's the same
 
 ```bash
 docker run -d --name fleet-gateway \
-  -p 443:443 -p 8443:8443 \
+  -p 443:443 -p 50051:50051 \
   -v /etc/fleet/tls:/tls:ro \
   ghcr.io/benjaminbenetti/fleet-man/gateway:latest \
   --public-url https://gateway.example.com \

@@ -22,8 +22,32 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/gateway"
 	"github.com/BenjaminBenetti/fleet-man/internal/server/remote"
+	"github.com/BenjaminBenetti/fleet-man/internal/tunnel"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
+
+// registerDialFunc returns a remote.Manager dial func that opens the gateway's
+// Register bidi stream over grpcAddr with the given transport creds and wraps it as
+// a net.Conn — the same thing remote.dialGateway does in production, but trusting
+// the test cert.
+func registerDialFunc(grpcAddr string, creds credentials.TransportCredentials) func(context.Context, string) (net.Conn, error) {
+	return func(ctx context.Context, _ string) (net.Conn, error) {
+		cc, err := grpc.NewClient("dns:///"+grpcAddr, grpc.WithTransportCredentials(creds))
+		if err != nil {
+			return nil, err
+		}
+		stream, err := cc.NewStream(ctx,
+			&grpc.StreamDesc{ServerStreams: true, ClientStreams: true},
+			tunnel.RegisterMethod, grpc.ForceCodec(tunnel.RawCodec{}))
+		if err != nil {
+			_ = cc.Close()
+			return nil, err
+		}
+		return tunnel.NewStreamConn(stream, func() { _ = cc.Close() }), nil
+	}
+}
 
 // mcp_remote_e2e_test.go is the full-stack integration test for the remote-MCP
 // feature: a REAL fleetd MCP server (loopback, bearer-gated, real fleet tools) is
@@ -120,16 +144,17 @@ func remoteMCPStack(t *testing.T) (publicMCPURL, publicBase, token string, pool 
 		t.Fatalf("load keypair: %v", err)
 	}
 	serverTLS := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
-	controlLn, err := tls.Listen("tcp", "127.0.0.1:0", serverTLS)
-	if err != nil {
-		t.Fatalf("control listen: %v", err)
-	}
-	t.Cleanup(func() { _ = controlLn.Close() })
 	publicLn, err := tls.Listen("tcp", "127.0.0.1:0", serverTLS)
 	if err != nil {
 		t.Fatalf("public listen: %v", err)
 	}
 	t.Cleanup(func() { _ = publicLn.Close() })
+	// The gRPC listener (plain — grpc.Creds adds TLS) hosts fleetd registration.
+	grpcLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("grpc listen: %v", err)
+	}
+	t.Cleanup(func() { _ = grpcLn.Close() })
 	publicBase = "https://" + publicLn.Addr().String()
 
 	gw, err := gateway.New(gateway.Config{PublicURL: publicBase, TLSCert: certPath, TLSKey: keyPath})
@@ -138,17 +163,14 @@ func remoteMCPStack(t *testing.T) (publicMCPURL, publicBase, token string, pool 
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = gw.ServeListeners(ctx, controlLn, publicLn, nil) }()
+	go func() { _ = gw.ServeListeners(ctx, publicLn, grpcLn) }()
 
-	// Real fleetd tunnel manager, dialing the test gateway's control listener.
+	// Real fleetd tunnel manager, registering over the gateway's gRPC endpoint.
 	statusCh := make(chan *fleetgrpc.RemoteMcpStatus, 64)
-	controlAddr := controlLn.Addr().String()
+	gwCreds := credentials.NewTLS(&tls.Config{RootCAs: pool, ServerName: "127.0.0.1"})
 	mgr := remote.NewManager(mcpPort, "e2e",
 		func(st *fleetgrpc.RemoteMcpStatus) { statusCh <- st },
-		remote.WithDialFunc(func(dctx context.Context, _ string) (net.Conn, error) {
-			d := &tls.Dialer{Config: &tls.Config{RootCAs: pool, ServerName: "127.0.0.1"}}
-			return d.DialContext(dctx, "tcp", controlAddr)
-		}),
+		remote.WithDialFunc(registerDialFunc(grpcLn.Addr().String(), gwCreds)),
 	)
 	go mgr.Run(ctx)
 	mgr.Reconcile(true, "https://gw.example.com")

@@ -34,15 +34,19 @@ stream to the daemon, which is the real server on the far end.
 ```
         Behind NAT / firewall                          Public internet
  ┌───────────────────────────────┐            ┌──────────────────────────┐
- │            fleetd             │            │       fleet gateway       │
- │                               │  dials out │                          │
- │  remote.Manager  ───────────────────────────▶  control  (:8443)       │
- │  (one TLS conn, yamux)        │  (TLS)     │                          │
- │                               │◀───────────────  pushes streams down   │
- │  loopback MCP  (127.0.0.1)    │            │  public   (:443)  HTTP/1 │◀── MCP agents
- │  tunnel gRPC server           │            │  grpc     (:50051) HTTP/2│◀── remote `fleet`
+ │            fleetd             │  dials out  │       fleet gateway       │
+ │  remote.Manager ──Register──────(gRPC bidi)─▶  grpc  (:50051) HTTP/2  │◀── remote `fleet`
+ │  (yamux over one bidi stream) │             │   • registration + tunnel │
+ │                               │◀──pushes streams down (yamux)──────────│
+ │  loopback MCP  (127.0.0.1)    │             │  public (:443)  HTTP/1   │◀── MCP agents
+ │  tunnel gRPC server           │             │                          │
  └───────────────────────────────┘            └──────────────────────────┘
 ```
+
+fleetd opens ONE long‑lived gRPC bidi stream (the `Register` method) and runs yamux
+over it; the gateway opens yamux sub‑streams back down that one HTTP/2 stream. There
+is no separate TCP control port — everything is HTTP/HTTP‑2, so an L7 proxy can front
+the whole gateway.
 
 ---
 
@@ -50,38 +54,46 @@ stream to the daemon, which is the real server on the far end.
 
 | Component | Package | Role |
 |-----------|---------|------|
-| **Shared tunnel protocol** | `internal/tunnel` | The register handshake (length‑prefixed JSON), the yamux session helpers, and the per‑stream **tag** byte. Imported by *both* ends. |
+| **Shared tunnel protocol** | `internal/tunnel` | The register handshake (length‑prefixed JSON), the yamux session helpers, the per‑stream **tag** byte, and the gRPC‑stream→`net.Conn` adapter (`StreamConn` + raw codec). Imported by *both* ends; depends only on stdlib + yamux. |
 | **fleetd tunnel client** | `internal/server/remote` | `Manager` dials the gateway, registers, and serves inbound streams; `serveTunnel` demuxes them to MCP or gRPC. |
 | **fleetd MCP server** | `internal/server/mcp.go` | The loopback MCP server (`127.0.0.1:<port>`), bearer‑token gated. |
 | **fleetd gRPC server (tunnel)** | `internal/server` | A second `grpc.Server` (same `FleetService`) behind a bearer‑token interceptor, fed by the demux. The local unix‑socket server stays auth‑less. |
-| **The gateway** | `internal/gateway` | Three listeners — control, public MCP (HTTP/1.1), and native gRPC (HTTP/2, `grpc.go`) — the session registry, the `/mcp` route, and a grpc transparent proxy. An **isolated module** — imports only `internal/tunnel`, the stdlib, and `google.golang.org/grpc` (no fleetd internals). |
+| **The gateway** | `internal/gateway` | Two listeners — public MCP (HTTP/1.1) and native gRPC (HTTP/2). The gRPC server hosts the transparent control proxy AND the fleetd `Register` method (`register.go`); plus the session registry and the `/mcp` route. An **isolated module** — imports only `internal/tunnel`, the stdlib, and `google.golang.org/grpc` (no fleetd internals). |
 | **Remote `fleet` client** | `internal/fleetclient` | `gatewayEndpoint` — an ordinary gRPC dial to the gateway's gRPC listener, routing by the `fleet-session` metadata header. |
 
 ---
 
-## 3. Registration (the control connection)
+## 3. Registration (over the gRPC tunnel stream)
 
-When the user enables remote MCP, `fleetd`'s `remote.Manager` dials the gateway's
-**control** listener and performs a tiny handshake on the raw TLS connection
-*before* yamux takes over:
+When the user enables remote MCP, `fleetd`'s `remote.Manager` opens a long‑lived
+gRPC **bidi** stream — the `Register` method (`tunnel.RegisterMethod`) on the
+gateway's gRPC endpoint. Both ends wrap that stream as a `net.Conn`
+(`tunnel.StreamConn`, a raw‑codec adapter), so the *exact same* handshake + yamux
+machinery runs over it as would over a TCP conn — there is no separate control port:
 
 ```
- fleetd (remote.Manager)                         gateway (control.go)
+ fleetd (remote.Manager)                         gateway (register.go)
       │                                                  │
-      │  TLS dial ───────────────────────────────────────▶  accept
+      │  open gRPC bidi  Register stream ─────────────────▶  handler runs
+      │  (TLS for https / h2c for http)                  │   wrap stream as net.Conn
       │                                                  │
-      │  RegisterRequest ─────────────────────────────────▶  claim a session
+      │  RegisterRequest frame ───────────────────────────▶  claim a session
       │   { session_id?, client_version, features:[grpc] }   • mint secret + publicID
       │                                                  │   • negotiate features
-      │  ◀───────────────────────────────────────  RegisterReply
+      │  ◀───────────────────────────────────────  RegisterReply frame
       │     { session_id, public_url, features:[grpc] }  │
       │                                                  │
-      │  ===== both wrap the SAME conn in yamux =====    │
+      │  ===== both wrap the SAME stream in yamux ====    │
       │   fleetd = yamux CLIENT      gateway = yamux SERVER
       │                                                  │
       │  ◀──────── gateway opens streams ────────────────│   (one per inbound request)
       │  ───────── fleetd accepts & serves ──────────────▶
 ```
+
+(Because HTTP/2 only lets the *client* open streams, fleetd opens this one bidi
+stream and yamux multiplexes the gateway's inbound requests back down it — yamux
+provides the reverse‑direction multiplexing HTTP/2 won't. The register handshake is
+JSON frames at the head of the stream; yamux owns the rest.)
 
 Key points:
 
@@ -262,9 +274,13 @@ Security properties:
   token — run a gateway (and proxy) you trust. Reusing the MCP token for the gRPC
   path means that one secret now grants **full daemon control over the internet**,
   so treat it accordingly.
-- **DoS bounds:** a `MaxSessions` cap, a per‑connection handshake timeout, a
-  load‑shedding control‑accept loop, and yamux flow control bound resource use on
-  the unauthenticated public surface.
+- **DoS bounds:** a `MaxSessions` cap (registration is rejected past it), a
+  per‑registration handshake timeout (a stream that never sends `RegisterRequest`
+  is dropped), a **pending‑handshake semaphore** sized `MaxSessions +
+  maxPendingHandshakes` that *sheds* (gRPC `ResourceExhausted`) excess concurrent
+  Register handlers before they can pile up, and a per‑connection
+  `MaxConcurrentStreams` cap. (HTTP/2 flow control bounds bytes‑per‑stream, not the
+  stream *count* — the semaphore is what bounds the count.)
 
 ---
 
@@ -273,24 +289,24 @@ Security properties:
 TLS on the listeners is **optional and all‑or‑nothing** (`gateway.New` rejects a
 lone cert or key):
 
-- **Direct TLS** (`--tls-cert` + `--tls-key`): the gateway wraps both listeners
-  with `tls.Listen`. This is the standalone mode — point a public DNS name at the
-  host, give it a publicly‑trusted cert, done.
-- **Reverse‑proxy / TLS‑terminated upstream** (no cert): the gateway uses plain
-  `net.Listen` on both ports and a proxy in front terminates TLS. Set
-  `--public-url` to the externally‑visible `https://…` (or `http://…`) the proxy
-  serves; the registry reflects that scheme back to clients verbatim.
+- **Direct TLS** (`--tls-cert` + `--tls-key`): the public listener is `tls.Listen`
+  and the gRPC server gets `grpc.Creds` (ALPN h2). Standalone mode — point a public
+  DNS name at the host, give it a publicly‑trusted cert, done.
+- **Reverse‑proxy / TLS‑terminated upstream** (no cert): the public listener is
+  plain `net.Listen` (HTTP/1.1) and the gRPC server serves **h2c**; a proxy in front
+  terminates TLS. Set `--public-url` to the externally‑visible `https://…` (or
+  `http://…`) the proxy serves; the registry reflects that scheme back verbatim.
 
-The clients are symmetric: both the daemon control dialer
-(`internal/server/remote`) and the remote `fleet` client (`internal/fleetclient`)
-accept `https://` (TLS dial, verified against the OS system roots) **or** `http://`
-(plain TCP dial), defaulting the port to 443/80 respectively.
+The clients are symmetric: both the daemon **registration** dialer
+(`internal/server/remote`, which opens the gRPC `Register` stream) and the remote
+`fleet` client (`internal/fleetclient`) accept `https://` (verified TLS against the
+OS system roots) **or** `http://` (plaintext h2c), defaulting the port to 443/80.
 
-> ⚠️ **The route type differs per listener.** Public MCP (HTTP/1.1) and gRPC
-> (native HTTP/2) are L7‑proxyable — a Traefik **HTTP** route and **gRPC** route
-> (h2c backend) respectively. The **control** listener is *not* HTTP (framed
-> handshake + yamux), so it needs an **L4/TCP** route (`IngressRouteTCP`). See the
-> README's *Behind a TLS‑terminating reverse proxy* section for concrete manifests.
+> ✅ **Both listeners are L7 — no raw TCP.** Public MCP (HTTP/1.1) fronts behind a
+> Traefik **HTTP** route; the gRPC listener (HTTP/2) — which carries remote control
+> **and** fleetd registration — fronts behind a Traefik **gRPC** route (h2c
+> backend). There is no L4/`IngressRouteTCP` requirement anymore. See the README's
+> *Behind a TLS‑terminating reverse proxy* section for concrete manifests.
 
 ---
 
@@ -313,13 +329,12 @@ accept `https://` (TLS dial, verified against the OS system roots) **or** `http:
                                  ┌──────────────────────── fleet gateway ───────────────────────┐
    remote MCP agent  ──HTTP/1──▶ │  public listener (:443)  /mcp/<id> → ReverseProxy ─┐          │
    (Claude, etc.)                │                                                    │          │
-   remote `fleet`    ──gRPC────▶ │  gRPC listener (:50051)  h2 + fleet-session ───────┤          │
-   (FLEET_GATEWAY)               │                          → ReverseProxy            │ registry │
-                                 │                                                    │ (id→tun) │
-                                 │  control listener (:8443) ◀────────────────────────┼── fleetd dials in
+   remote `fleet`    ──gRPC────▶ │  gRPC listener (:50051)                            │ registry │
+   (FLEET_GATEWAY)               │   • control RPC  h2 + fleet-session → proxy ───────┤ (id→tun) │
+                                 │   • Register     ◀──fleetd opens bidi stream───────┼── fleetd
                                  └────────────────────────────────────────────────────┼──────────┘
-                                                                 │  one TLS conn, yamux,
-                                                                 │  tagged streams
+                                                                 │  one gRPC bidi stream,
+                                                                 │  yamux, tagged streams
                                               ┌──────────────────▼───────────────────┐
                                               │                fleetd                 │
                                               │  remote.Manager → serveTunnel (demux) │

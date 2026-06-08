@@ -64,9 +64,9 @@ func (tunnelAddr) String() string  { return "tunnel" }
 // rawEchoServer is a grpc.Server (raw codec) that echoes request frames — a
 // stand-in for the daemon's grpc.Server.
 func rawEchoServer() *grpc.Server {
-	srv := grpc.NewServer(grpc.ForceServerCodec(rawCodec{}), grpc.UnknownServiceHandler(
+	srv := grpc.NewServer(grpc.ForceServerCodec(tunnel.RawCodec{}), grpc.UnknownServiceHandler(
 		func(_ any, ss grpc.ServerStream) error {
-			f := &rawFrame{}
+			f := &tunnel.RawFrame{}
 			for {
 				if err := ss.RecvMsg(f); err != nil {
 					if err == io.EOF {
@@ -82,24 +82,18 @@ func rawEchoServer() *grpc.Server {
 	return srv
 }
 
-// dialFleetdGRPC simulates a fleetd that negotiates gRPC over a TLS control conn:
-// it serves rawEchoServer over each demuxed TagGRPC stream.
-func dialFleetdGRPC(t *testing.T, controlAddr string, pool *x509.CertPool) tunnel.RegisterReply {
+// dialFleetdGRPC simulates a fleetd that negotiates gRPC over a TLS-verified
+// Register stream: it serves rawEchoServer over each demuxed TagGRPC stream.
+func dialFleetdGRPC(t *testing.T, grpcAddr string, pool *x509.CertPool) tunnel.RegisterReply {
 	t.Helper()
-	conn, err := tls.Dial("tcp", controlAddr, &tls.Config{RootCAs: pool, ServerName: "127.0.0.1"})
-	if err != nil {
-		t.Fatalf("dial control: %v", err)
-	}
+	conn := openRegisterStream(t, grpcAddr, credentials.NewTLS(&tls.Config{RootCAs: pool, ServerName: "127.0.0.1"}))
 	return registerFleetdGRPC(t, conn)
 }
 
-// dialFleetdGRPCPlain is dialFleetdGRPC over a PLAINTEXT control connection.
-func dialFleetdGRPCPlain(t *testing.T, controlAddr string) tunnel.RegisterReply {
+// dialFleetdGRPCPlain is dialFleetdGRPC over a plaintext (h2c) Register stream.
+func dialFleetdGRPCPlain(t *testing.T, grpcAddr string) tunnel.RegisterReply {
 	t.Helper()
-	conn, err := net.Dial("tcp", controlAddr)
-	if err != nil {
-		t.Fatalf("dial control: %v", err)
-	}
+	conn := openRegisterStream(t, grpcAddr, insecure.NewCredentials())
 	return registerFleetdGRPC(t, conn)
 }
 
@@ -152,7 +146,7 @@ func grpcEcho(t *testing.T, creds credentials.TransportCredentials, grpcAddr, id
 	t.Helper()
 	conn, err := grpc.NewClient("dns:///"+grpcAddr,
 		grpc.WithTransportCredentials(creds),
-		grpc.WithDefaultCallOptions(grpc.ForceCodec(rawCodec{})),
+		grpc.WithDefaultCallOptions(grpc.ForceCodec(tunnel.RawCodec{})),
 	)
 	if err != nil {
 		t.Fatalf("grpc client: %v", err)
@@ -167,17 +161,17 @@ func grpcEcho(t *testing.T, creds credentials.TransportCredentials, grpcAddr, id
 	if err != nil {
 		return "", err
 	}
-	if err := cs.SendMsg(&rawFrame{payload: []byte(payload)}); err != nil {
+	if err := cs.SendMsg(&tunnel.RawFrame{Payload: []byte(payload)}); err != nil {
 		return "", err
 	}
 	if err := cs.CloseSend(); err != nil {
 		return "", err
 	}
-	out := &rawFrame{}
+	out := &tunnel.RawFrame{}
 	if err := cs.RecvMsg(out); err != nil {
 		return "", err
 	}
-	return string(out.payload), nil
+	return string(out.Payload), nil
 }
 
 func tlsCreds(pool *x509.CertPool) credentials.TransportCredentials {
@@ -188,9 +182,9 @@ func tlsCreds(pool *x509.CertPool) credentials.TransportCredentials {
 // fleet-session header is proxied down the tunnel and echoed back.
 func TestGatewayGRPCRoute(t *testing.T) {
 	cert, pool := genTestTLS(t)
-	s, controlAddr, _, grpcAddr := startTestGateway(t, cert, "https://gw.example.com")
+	s, _, grpcAddr := startTestGateway(t, cert, "https://gw.example.com")
 
-	reply := dialFleetdGRPC(t, controlAddr, pool)
+	reply := dialFleetdGRPC(t, grpcAddr, pool)
 	if !tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC) {
 		t.Fatalf("gateway did not negotiate grpc: features=%v", reply.Features)
 	}
@@ -206,9 +200,9 @@ func TestGatewayGRPCRoute(t *testing.T) {
 // TestGatewayGRPCRoutePlainHTTP drives the gRPC port over h2c (no TLS), the
 // reverse-proxy / TLS-terminated-upstream path.
 func TestGatewayGRPCRoutePlainHTTP(t *testing.T) {
-	s, controlAddr, _, grpcAddr := startTestGatewayPlain(t, "http://gw.example.com")
+	s, _, grpcAddr := startTestGatewayPlain(t, "http://gw.example.com")
 
-	reply := dialFleetdGRPCPlain(t, controlAddr)
+	reply := dialFleetdGRPCPlain(t, grpcAddr)
 	if !tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC) {
 		t.Fatalf("gateway did not negotiate grpc: features=%v", reply.Features)
 	}
@@ -224,7 +218,7 @@ func TestGatewayGRPCRoutePlainHTTP(t *testing.T) {
 // TestGatewayGRPCMissingSession confirms a request with no fleet-session metadata
 // is rejected with InvalidArgument.
 func TestGatewayGRPCMissingSession(t *testing.T) {
-	_, _, _, grpcAddr := startTestGatewayPlain(t, "http://gw.example.com")
+	_, _, grpcAddr := startTestGatewayPlain(t, "http://gw.example.com")
 	_, err := grpcEcho(t, insecure.NewCredentials(), grpcAddr, "", "x")
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("missing fleet-session -> %v, want InvalidArgument", err)
@@ -233,7 +227,7 @@ func TestGatewayGRPCMissingSession(t *testing.T) {
 
 // TestGatewayGRPCUnknownSession confirms an unknown id is NotFound.
 func TestGatewayGRPCUnknownSession(t *testing.T) {
-	_, _, _, grpcAddr := startTestGatewayPlain(t, "http://gw.example.com")
+	_, _, grpcAddr := startTestGatewayPlain(t, "http://gw.example.com")
 	_, err := grpcEcho(t, insecure.NewCredentials(), grpcAddr, strings.Repeat("b", 64), "x")
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("unknown session -> %v, want NotFound", err)
@@ -244,9 +238,9 @@ func TestGatewayGRPCUnknownSession(t *testing.T) {
 // session that did not negotiate FeatureGRPC.
 func TestGatewayGRPCNotNegotiated(t *testing.T) {
 	cert, pool := genTestTLS(t)
-	s, controlAddr, _, grpcAddr := startTestGateway(t, cert, "https://gw.example.com")
+	s, _, grpcAddr := startTestGateway(t, cert, "https://gw.example.com")
 
-	reply := dialFleetd(t, controlAddr, pool, "") // sends no Features
+	reply := dialFleetd(t, grpcAddr, pool, "") // sends no Features
 	if len(reply.Features) != 0 {
 		t.Fatalf("legacy fleetd should negotiate no features, got %v", reply.Features)
 	}

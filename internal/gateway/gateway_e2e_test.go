@@ -24,6 +24,9 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/tunnel"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // genTestTLS returns a self-signed cert valid for 127.0.0.1 + a pool trusting it.
@@ -64,9 +67,9 @@ func genTestTLS(t *testing.T) (tls.Certificate, *x509.CertPool) {
 }
 
 // startTestGateway builds a Server with the given cert and starts it on ephemeral
-// control + public TLS listeners plus a (plain) gRPC listener, returning their
-// addresses (control, public, grpc).
-func startTestGateway(t *testing.T, cert tls.Certificate, publicBase string) (*Server, string, string, string) {
+// public (TLS) + gRPC (plain — grpc.Creds adds TLS) listeners, returning their
+// addresses (public, grpc). fleetd registers over the gRPC listener.
+func startTestGateway(t *testing.T, cert tls.Certificate, publicBase string) (*Server, string, string) {
 	t.Helper()
 	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	s := &Server{
@@ -75,39 +78,29 @@ func startTestGateway(t *testing.T, cert tls.Certificate, publicBase string) (*S
 		tlsConfig: tlsCfg,
 		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
-	controlLn, err := tls.Listen("tcp", "127.0.0.1:0", tlsCfg)
-	if err != nil {
-		t.Fatalf("control listen: %v", err)
-	}
 	publicLn, err := tls.Listen("tcp", "127.0.0.1:0", tlsCfg)
 	if err != nil {
 		t.Fatalf("public listen: %v", err)
 	}
-	// The gRPC listener is always plain — serveGRPC adds TLS via ServeTLS.
 	grpcLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("grpc listen: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = s.ServeListeners(ctx, controlLn, publicLn, grpcLn) }()
-	return s, controlLn.Addr().String(), publicLn.Addr().String(), grpcLn.Addr().String()
+	go func() { _ = s.ServeListeners(ctx, publicLn, grpcLn) }()
+	return s, publicLn.Addr().String(), grpcLn.Addr().String()
 }
 
 // startTestGatewayPlain is startTestGateway with NO TLS: all listeners are plain
-// TCP and tlsConfig is nil, exercising the HTTP-by-default / reverse-proxy path
-// (the gRPC listener then serves h2c).
-func startTestGatewayPlain(t *testing.T, publicBase string) (*Server, string, string, string) {
+// (the gRPC listener then serves h2c), exercising the reverse-proxy path.
+func startTestGatewayPlain(t *testing.T, publicBase string) (*Server, string, string) {
 	t.Helper()
 	s := &Server{
 		cfg:       Config{PublicURL: publicBase, MaxSessions: 64},
 		reg:       newRegistry(publicBase, 64),
 		tlsConfig: nil,
 		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
-	controlLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("control listen: %v", err)
 	}
 	publicLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -119,8 +112,8 @@ func startTestGatewayPlain(t *testing.T, publicBase string) (*Server, string, st
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = s.ServeListeners(ctx, controlLn, publicLn, grpcLn) }()
-	return s, controlLn.Addr().String(), publicLn.Addr().String(), grpcLn.Addr().String()
+	go func() { _ = s.ServeListeners(ctx, publicLn, grpcLn) }()
+	return s, publicLn.Addr().String(), grpcLn.Addr().String()
 }
 
 // fleetdMCPHandler is fleetd's stand-in MCP server: it serves a few routes so the
@@ -148,27 +141,40 @@ func fleetdMCPHandler() http.Handler {
 	return mux
 }
 
-// dialFleetd simulates a fleet daemon over a TLS control connection: it dials the
-// control endpoint, performs the tunnel handshake, and serves fleetdMCPHandler
-// over the resulting yamux session (exactly as fleetd's serveProxy does, but with
-// a test handler). It returns the gateway's reply. cleanup is registered on t.
-func dialFleetd(t *testing.T, controlAddr string, pool *x509.CertPool, sessionID string) tunnel.RegisterReply {
+// openRegisterStream opens the gateway's Register bidi stream (the gRPC endpoint)
+// and wraps it as a net.Conn, exactly as fleetd's dialGateway does.
+func openRegisterStream(t *testing.T, grpcAddr string, creds credentials.TransportCredentials) net.Conn {
 	t.Helper()
-	conn, err := tls.Dial("tcp", controlAddr, &tls.Config{RootCAs: pool, ServerName: "127.0.0.1"})
+	cc, err := grpc.NewClient("dns:///"+grpcAddr, grpc.WithTransportCredentials(creds))
 	if err != nil {
-		t.Fatalf("dial control: %v", err)
+		t.Fatalf("grpc client: %v", err)
 	}
+	stream, err := cc.NewStream(context.Background(),
+		&grpc.StreamDesc{ServerStreams: true, ClientStreams: true},
+		tunnel.RegisterMethod, grpc.ForceCodec(tunnel.RawCodec{}))
+	if err != nil {
+		_ = cc.Close()
+		t.Fatalf("open register stream: %v", err)
+	}
+	conn := tunnel.NewStreamConn(stream, func() { _ = cc.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+// dialFleetd simulates a fleet daemon over a TLS-verified Register stream: it opens
+// the gateway's gRPC Register stream, performs the tunnel handshake, and serves
+// fleetdMCPHandler over the resulting yamux session. It returns the gateway's reply.
+func dialFleetd(t *testing.T, grpcAddr string, pool *x509.CertPool, sessionID string) tunnel.RegisterReply {
+	t.Helper()
+	conn := openRegisterStream(t, grpcAddr, credentials.NewTLS(&tls.Config{RootCAs: pool, ServerName: "127.0.0.1"}))
 	return registerFleetd(t, conn, sessionID)
 }
 
-// dialFleetdPlain is dialFleetd over a PLAINTEXT control connection (no TLS), for
-// the reverse-proxy / TLS-terminated-upstream deployment.
-func dialFleetdPlain(t *testing.T, controlAddr, sessionID string) tunnel.RegisterReply {
+// dialFleetdPlain is dialFleetd over a plaintext (h2c) Register stream, for the
+// reverse-proxy / TLS-terminated-upstream deployment.
+func dialFleetdPlain(t *testing.T, grpcAddr, sessionID string) tunnel.RegisterReply {
 	t.Helper()
-	conn, err := net.Dial("tcp", controlAddr)
-	if err != nil {
-		t.Fatalf("dial control: %v", err)
-	}
+	conn := openRegisterStream(t, grpcAddr, insecure.NewCredentials())
 	return registerFleetd(t, conn, sessionID)
 }
 
@@ -230,9 +236,9 @@ func waitRegistered(t *testing.T, s *Server, publicID string) {
 
 func TestGatewayEndToEnd(t *testing.T) {
 	cert, pool := genTestTLS(t)
-	s, controlAddr, publicAddr, _ := startTestGateway(t, cert, "https://gw.example.com")
+	s, publicAddr, grpcAddr := startTestGateway(t, cert, "https://gw.example.com")
 
-	reply := dialFleetd(t, controlAddr, pool, "")
+	reply := dialFleetd(t, grpcAddr, pool, "")
 	id := publicIDOf(t, reply.PublicURL)
 	if strings.Contains(reply.PublicURL, reply.SessionID) {
 		t.Fatal("public URL must not contain the reclaim secret")
@@ -282,9 +288,9 @@ func TestGatewayEndToEnd(t *testing.T) {
 // reverse-proxy path — plain control handshake + yamux + plain public HTTP +
 // reverse-proxy routing + Authorization passthrough + SSE streaming.
 func TestGatewayEndToEndPlainHTTP(t *testing.T) {
-	s, controlAddr, publicAddr, _ := startTestGatewayPlain(t, "http://gw.example.com")
+	s, publicAddr, grpcAddr := startTestGatewayPlain(t, "http://gw.example.com")
 
-	reply := dialFleetdPlain(t, controlAddr, "")
+	reply := dialFleetdPlain(t, grpcAddr, "")
 	if !strings.HasPrefix(reply.PublicURL, "http://gw.example.com/mcp/") {
 		t.Fatalf("public URL = %q, want an http://…/mcp/<id> URL", reply.PublicURL)
 	}
@@ -401,7 +407,7 @@ func writeCertKeyFiles(t *testing.T) (certPath, keyPath string) {
 
 func TestGatewayUnknownSession404(t *testing.T) {
 	cert, pool := genTestTLS(t)
-	_, _, publicAddr, _ := startTestGateway(t, cert, "https://gw.example.com")
+	_, publicAddr, _ := startTestGateway(t, cert, "https://gw.example.com")
 	client := httpsClient(pool)
 	resp, err := client.Get("https://" + publicAddr + "/mcp/deadbeefdeadbeef")
 	if err != nil {
@@ -415,13 +421,13 @@ func TestGatewayUnknownSession404(t *testing.T) {
 
 func TestGatewayStickyReconnect(t *testing.T) {
 	cert, pool := genTestTLS(t)
-	s, controlAddr, _, _ := startTestGateway(t, cert, "https://gw.example.com")
+	s, _, grpcAddr := startTestGateway(t, cert, "https://gw.example.com")
 
-	reply1 := dialFleetd(t, controlAddr, pool, "")
+	reply1 := dialFleetd(t, grpcAddr, pool, "")
 	waitRegistered(t, s, publicIDOf(t, reply1.PublicURL))
 
 	// Reconnect presenting the secret -> the SAME public URL (sticky).
-	reply2 := dialFleetd(t, controlAddr, pool, reply1.SessionID)
+	reply2 := dialFleetd(t, grpcAddr, pool, reply1.SessionID)
 	if reply2.PublicURL != reply1.PublicURL {
 		t.Fatalf("sticky reconnect: got %q, want %q", reply2.PublicURL, reply1.PublicURL)
 	}

@@ -10,10 +10,12 @@
 //
 // # Connection lifecycle
 //
-//  1. fleetd dials the gateway (TLS) and writes ONE RegisterRequest control
-//     frame on the raw conn; the gateway replies with ONE RegisterReply frame.
-//     This length-prefixed JSON handshake happens BEFORE yamux is layered on, so
-//     registration stays a simple typed exchange.
+//  1. fleetd opens a gRPC bidi Register stream on the gateway's gRPC endpoint and
+//     wraps it as a net.Conn (StreamConn). It writes ONE RegisterRequest control
+//     frame; the gateway replies with ONE RegisterReply frame. This length-prefixed
+//     JSON handshake happens BEFORE yamux is layered on, so registration stays a
+//     simple typed exchange. (There is no dedicated TCP control port — the same
+//     handshake/yamux code runs over the stream-as-net.Conn.)
 //  2. Both sides then wrap the SAME conn in yamux (fleetd as client, gateway as
 //     server). The gateway opens one yamux stream per inbound MCP request; fleetd
 //     accepts each stream and serves it as a normal HTTP connection proxied to
@@ -67,8 +69,14 @@ type RegisterReply struct {
 
 // FeatureGRPC negotiates tunneling the daemon's gRPC server alongside MCP. When
 // it is in the negotiated set, the gateway tags each opened stream (see tag.go)
-// and serves a /grpc/<id> route, and fleetd demuxes tagged streams.
+// and serves the gRPC proxy route, and fleetd demuxes tagged streams.
 const FeatureGRPC = "grpc"
+
+// RegisterMethod is the gRPC full-method fleetd opens (a bidi stream) on the
+// gateway's gRPC port to register and carry the reverse tunnel. The gateway's
+// grpc.Server registers a matching service (ServiceName "fleet.gateway.Tunnel",
+// stream "Register"); both ends must agree on this string.
+const RegisterMethod = "/fleet.gateway.Tunnel/Register"
 
 // HasFeature reports whether features contains f.
 func HasFeature(features []string, f string) bool {
@@ -93,6 +101,10 @@ const MaxFrameSize = 64 << 10
 
 // ErrFrameTooLarge is returned when a frame exceeds MaxFrameSize.
 var ErrFrameTooLarge = errors.New("tunnel: control frame too large")
+
+// ErrHandshakeTimeout is returned by Handshake / ReadRegisterRequest when the
+// register exchange does not complete within the deadline.
+var ErrHandshakeTimeout = errors.New("tunnel: register handshake timed out")
 
 // WriteFrame writes v as a length-prefixed JSON control frame: a 4-byte
 // big-endian length followed by the JSON bytes.

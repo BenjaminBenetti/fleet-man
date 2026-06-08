@@ -115,16 +115,13 @@ func grpcStack(t *testing.T) (dial func(withToken bool) *grpc.ClientConn, token 
 		t.Fatalf("load keypair: %v", err)
 	}
 	serverTLS := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
-	controlLn, err := tls.Listen("tcp", "127.0.0.1:0", serverTLS)
-	if err != nil {
-		t.Fatalf("control listen: %v", err)
-	}
-	t.Cleanup(func() { _ = controlLn.Close() })
 	publicLn, err := tls.Listen("tcp", "127.0.0.1:0", serverTLS)
 	if err != nil {
 		t.Fatalf("public listen: %v", err)
 	}
 	t.Cleanup(func() { _ = publicLn.Close() })
+	// The gRPC listener (plain — grpc.Creds adds TLS) hosts BOTH the remote-control
+	// gRPC proxy AND fleetd registration (the Register bidi stream).
 	grpcLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("grpc listen: %v", err)
@@ -136,16 +133,15 @@ func grpcStack(t *testing.T) (dial func(withToken bool) *grpc.ClientConn, token 
 	if err != nil {
 		t.Fatalf("gateway.New: %v", err)
 	}
-	go func() { _ = gw.ServeListeners(ctx, controlLn, publicLn, grpcLn) }()
+	go func() { _ = gw.ServeListeners(ctx, publicLn, grpcLn) }()
 
-	// Real manager with the gRPC listener wired.
+	// Real manager registering over the gateway's gRPC endpoint, with the gRPC
+	// listener wired so the tunnel demuxes TagGRPC streams.
 	statusCh := make(chan *fleetgrpc.RemoteMcpStatus, 64)
-	controlAddr := controlLn.Addr().String()
+	gwCreds := credentials.NewTLS(&tls.Config{RootCAs: pool, ServerName: "127.0.0.1"})
 	mgr := remote.NewManager(mcpPort, "e2e",
 		func(st *fleetgrpc.RemoteMcpStatus) { statusCh <- st },
-		remote.WithDialFunc(func(dctx context.Context, _ string) (net.Conn, error) {
-			return (&tls.Dialer{Config: &tls.Config{RootCAs: pool, ServerName: "127.0.0.1"}}).DialContext(dctx, "tcp", controlAddr)
-		}),
+		remote.WithDialFunc(registerDialFunc(grpcLn.Addr().String(), gwCreds)),
 		remote.WithGRPCListener(grpcLis),
 	)
 	go mgr.Run(ctx)
