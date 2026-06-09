@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/agent"
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/doctor"
+	"github.com/aymanbagabas/go-osc52/v2"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -39,6 +41,8 @@ const (
 
 	settingsItemRemoteMcpEnabled    = 700 // fleet remote (MCP) settings start here
 	settingsItemRemoteMcpGatewayURL = 701
+	settingsItemRemoteMcpCopyLocal  = 702 // copy local mcp.json snippet to clipboard
+	settingsItemRemoteMcpCopyRemote = 703 // copy gateway mcp.json snippet to clipboard
 
 	settingsItemToolStatusBase = 1000 // tool status rows start here
 	settingsItemDoctor         = 2000 // doctor action row
@@ -173,12 +177,17 @@ var settingsSections = []settingsSection{
 		},
 	},
 	{
-		Title: "Fleet Remote (MCP)",
-		Items: func(_ *configutil.Config) []int {
-			// The computed Public MCP URL is rendered inline as a read-only
-			// status line (not navigable), so only the two editable settings
-			// are listed here.
-			return []int{settingsItemRemoteMcpEnabled, settingsItemRemoteMcpGatewayURL}
+		Title: "Fleet MCP",
+		Items: func(config *configutil.Config) []int {
+			// Copy actions come first. The remote-copy action only appears
+			// once the gateway tunnel is enabled. The computed Public MCP URL
+			// is rendered inline as a read-only status line (not navigable).
+			items := []int{settingsItemRemoteMcpCopyLocal}
+			if config != nil && config.RemoteMcpSettings.Enabled {
+				items = append(items, settingsItemRemoteMcpCopyRemote)
+			}
+			items = append(items, settingsItemRemoteMcpEnabled, settingsItemRemoteMcpGatewayURL)
+			return items
 		},
 	},
 	{
@@ -231,6 +240,20 @@ func (settingsPage *settingsPage) visibleItems(m *model) []int {
 		}
 	}
 	return items
+}
+
+// cursorToItem moves the cursor onto the given item ID if it is currently
+// visible, leaving it unchanged otherwise. Used after a toggle that inserts or
+// removes rows (e.g. enabling Remote MCP reveals "Copy remote MCP config") so
+// the selection stays on the same logical row instead of sliding when the
+// visible-items list changes length.
+func (settingsPage *settingsPage) cursorToItem(m *model, item int) {
+	for i, id := range settingsPage.visibleItems(m) {
+		if id == item {
+			settingsPage.cursor = i
+			return
+		}
+	}
 }
 
 // settingsCursorItem returns the item ID at the current cursor position.
@@ -352,6 +375,10 @@ func (settingsPage *settingsPage) toggleRemoteMcpEnabled(m *model) {
 		m.message = fmt.Sprintf("Failed to save settings: %v", err)
 		return
 	}
+	// Toggling shows/hides the "Copy remote MCP config" row above this one, which
+	// shifts the list. Re-pin the cursor on the enable/disable row so it doesn't
+	// slide onto a neighbouring row.
+	settingsPage.cursorToItem(m, settingsItemRemoteMcpEnabled)
 	label := "off"
 	if next {
 		label = "on"
@@ -464,6 +491,57 @@ func remoteMcpStatusValue(m *model) string {
 	}
 }
 
+// remoteMcpPublicURL returns the live gateway-assigned Public MCP URL, or ""
+// when the tunnel is not (yet) connected.
+func remoteMcpPublicURL(m *model) string {
+	if m.remoteMcpStatus == nil {
+		return ""
+	}
+	return m.remoteMcpStatus.GetPublicUrl()
+}
+
+// localMcpConfigJSON returns the mcp.json snippet for the loopback MCP server,
+// matching the README. It uses the ${FLEET_MCP_URL}/${FLEET_MCP_TOKEN} env vars
+// written to ~/.fleet/mcp.env so the snippet survives port changes.
+func localMcpConfigJSON() string {
+	return `{
+  "mcpServers": {
+    "fleet": {
+      "type": "http",
+      "url": "${FLEET_MCP_URL}",
+      "headers": { "Authorization": "Bearer ${FLEET_MCP_TOKEN}" }
+    }
+  }
+}`
+}
+
+// remoteMcpConfigJSON returns the mcp.json snippet for reaching this fleet
+// through the gateway, using the live gateway-assigned Public MCP URL. The
+// bearer token is left as a placeholder: a remote machine won't have
+// ~/.fleet/mcp.env, so the token must be pasted from ~/.fleet/mcp.token.
+func remoteMcpConfigJSON(publicURL string) string {
+	return fmt.Sprintf(`{
+  "mcpServers": {
+    "fleet-remote": {
+      "type": "http",
+      "url": %q,
+      "headers": { "Authorization": "Bearer <token from ~/.fleet/mcp.token>" }
+    }
+  }
+}`, publicURL)
+}
+
+// copyToClipboardCmd copies content to the terminal clipboard via OSC 52. We
+// write to stderr (not bubbletea's stdout renderer) to avoid interleaving with
+// a frame, and emit plain OSC 52: the TUI runs inside tmux with
+// `set-clipboard on`, so tmux consumes the sequence directly (no passthrough).
+func copyToClipboardCmd(content string) tea.Cmd {
+	return func() tea.Msg {
+		_, _ = osc52.New(content).WriteTo(os.Stderr)
+		return nil
+	}
+}
+
 // ===========================================
 // Update Handlers
 // ===========================================
@@ -571,6 +649,19 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			if item == settingsItemRemoteMcpEnabled {
 				settingsPage.toggleRemoteMcpEnabled(m)
 				return nil
+			}
+			if item == settingsItemRemoteMcpCopyLocal {
+				m.message = "Local MCP config copied to clipboard"
+				return copyToClipboardCmd(localMcpConfigJSON())
+			}
+			if item == settingsItemRemoteMcpCopyRemote {
+				url := remoteMcpPublicURL(m)
+				if url == "" {
+					m.message = "No public URL yet — connect to the gateway first"
+					return nil
+				}
+				m.message = "Remote MCP config copied to clipboard"
+				return copyToClipboardCmd(remoteMcpConfigJSON(url))
 			}
 			if item == settingsItemCoderPreset {
 				settingsPage.cycleCoderPreset(m, 1)
@@ -914,14 +1005,28 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				recordRow(settingsItemBrowserAutoSwitch, settingsPage.renderSettingsRow(m, currentItem == settingsItemBrowserAutoSwitch, "Auto Switch", autoSwitchValue))
 			}
 
-		case "Fleet Remote (MCP)":
+		case "Fleet MCP":
+			// Copy local config — the common task, so it leads the section.
+			recordRow(settingsItemRemoteMcpCopyLocal, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteMcpCopyLocal, "Copy local MCP config", dimStyle.Render("press enter to copy mcp.json for the loopback server")))
+
+			// Copy remote config — only meaningful once the tunnel is on.
+			if config.RemoteMcpSettings.Enabled {
+				listContent.WriteString("\n")
+				remoteHint := "press enter to copy mcp.json with the public URL"
+				if remoteMcpPublicURL(m) == "" {
+					remoteHint = "connect to the gateway first to get a public URL"
+				}
+				recordRow(settingsItemRemoteMcpCopyRemote, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteMcpCopyRemote, "Copy remote MCP config", dimStyle.Render(remoteHint)))
+			}
+			listContent.WriteString("\n")
+
 			enabledValue := "[ off ]"
 			if config.RemoteMcpSettings.Enabled {
 				enabledValue = "[ on ]"
 			}
 			// Append a dim sub-line describing what the toggle does.
 			enabledValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Expose this fleet's MCP server to the internet via a fleet gateway")
-			recordRow(settingsItemRemoteMcpEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteMcpEnabled, "Enabled", enabledValue))
+			recordRow(settingsItemRemoteMcpEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteMcpEnabled, "Enable Remote MCP", enabledValue))
 			listContent.WriteString("\n")
 
 			gatewayValue := config.RemoteMcpSettings.GatewayURL

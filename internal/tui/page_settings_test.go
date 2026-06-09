@@ -11,8 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// TestSettingsSectionIncludesRemoteMcp confirms the new "Fleet Remote (MCP)"
-// section is navigable (its two editable items appear) and that the read-only
+// TestSettingsSectionIncludesRemoteMcp confirms the "Fleet MCP" section is
+// navigable (copy actions + editable items appear) and that the read-only
 // Public MCP URL line renders once the feature is enabled.
 func TestSettingsSectionIncludesRemoteMcp(t *testing.T) {
 	sp := newSettingsPage()
@@ -25,22 +25,30 @@ func TestSettingsSectionIncludesRemoteMcp(t *testing.T) {
 	}
 
 	items := sp.visibleItems(m)
-	hasEnabled, hasURL := false, false
+	hasEnabled, hasURL, hasCopyLocal, hasCopyRemote := false, false, false, false
 	for _, id := range items {
 		switch id {
 		case settingsItemRemoteMcpEnabled:
 			hasEnabled = true
 		case settingsItemRemoteMcpGatewayURL:
 			hasURL = true
+		case settingsItemRemoteMcpCopyLocal:
+			hasCopyLocal = true
+		case settingsItemRemoteMcpCopyRemote:
+			hasCopyRemote = true
 		}
 	}
 	if !hasEnabled || !hasURL {
 		t.Fatalf("remote-mcp items missing from settings nav: enabled=%v url=%v", hasEnabled, hasURL)
 	}
+	// Copy-local is always present; copy-remote appears only when enabled (it is here).
+	if !hasCopyLocal || !hasCopyRemote {
+		t.Fatalf("copy actions missing from settings nav: local=%v remote=%v", hasCopyLocal, hasCopyRemote)
+	}
 
 	out := sp.viewSettings(m)
-	if !strings.Contains(out, "Fleet Remote (MCP)") {
-		t.Fatal("settings view missing the Fleet Remote (MCP) section header")
+	if !strings.Contains(out, "Fleet MCP") {
+		t.Fatal("settings view missing the Fleet MCP section header")
 	}
 	if !strings.Contains(out, "Public MCP URL") {
 		t.Fatal("settings view missing the computed Public MCP URL row when enabled")
@@ -134,6 +142,39 @@ func TestToggleRemoteMcpEnabledPersists(t *testing.T) {
 	}
 	if !loaded.RemoteMcpSettings.Enabled {
 		t.Fatal("toggle did not persist to disk")
+	}
+}
+
+// TestToggleRemoteMcpKeepsCursor confirms the selection stays on the
+// enable/disable row after toggling, even though doing so shows/hides the
+// "Copy remote MCP config" row above it and shifts the list.
+func TestToggleRemoteMcpKeepsCursor(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	origSetConfig := setConfigRemote
+	setConfigRemote = func(c *state.Config) error { return state.SaveConfig(c) }
+	defer func() { setConfigRemote = origSetConfig }()
+
+	sp := newSettingsPage()
+	m := &model{
+		config:      state.DefaultConfig(),
+		toolStatus:  allToolsFound(),
+		currentPage: sp,
+		fleetPage:   newFleetPage(),
+		spinner:     spinner.New(),
+	}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteMcpEnabled)
+
+	// Enable: the copy-remote row appears above, shifting the list.
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if got := sp.settingsCursorItem(m); got != settingsItemRemoteMcpEnabled {
+		t.Fatalf("cursor slid off the enable row after enabling: got item %d", got)
+	}
+
+	// Disable: the copy-remote row disappears, shifting the list back.
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if got := sp.settingsCursorItem(m); got != settingsItemRemoteMcpEnabled {
+		t.Fatalf("cursor slid off the enable row after disabling: got item %d", got)
 	}
 }
 
