@@ -1020,7 +1020,15 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 		" / _| |___ ___| |_\n" +
 		"|  _| / -_) -_)  _|\n" +
 		"|_| |_\\___\\___|\\___|"
-	b.WriteString(renderGradient(logo))
+	rendered := renderGradient(logo)
+	if ind := remoteIndicator(m); ind != "" {
+		// Float the signal glyph up-and-right off the top of the "t" by
+		// appending it to the logo's first line.
+		lines := strings.Split(rendered, "\n")
+		lines[0] = lines[0] + "    " + ind
+		rendered = strings.Join(lines, "\n")
+	}
+	b.WriteString(rendered)
 	if version.Version != "" {
 		b.WriteString(" " + dimStyle.Render(version.Version))
 	}
