@@ -44,7 +44,7 @@ func newLaunchCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&configPath, "config", "", "devcontainer.json to read (default: auto-detect in the current directory)")
+	cmd.Flags().StringVar(&configPath, "config", "", "devcontainer.json to read (default: auto-detect by searching the current directory, then each parent, for one with a customizations.fleet block)")
 
 	return cmd
 }

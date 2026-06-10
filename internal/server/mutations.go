@@ -75,8 +75,10 @@ func (s *service) DestroyFleet(_ context.Context, req *fleetgrpc.DestroyFleetReq
 	// The deb/image cache + network teardown below is unconditional (idempotent),
 	// so a cache toggled off before destroy can't orphan its container/network.
 	buildkitEnabled := false
+	existed := false
 	if st, err := state.Load(); err == nil {
 		if f, ok := st.Fleets[req.GetName()]; ok {
+			existed = true
 			buildkitEnabled = f.Settings.BuildkitServer
 		}
 	}
@@ -108,6 +110,9 @@ func (s *service) DestroyFleet(_ context.Context, req *fleetgrpc.DestroyFleetReq
 	for _, w := range teardownWarnings {
 		flog.Warn("destroy fleet cache teardown", "fleet", req.GetName(), "warn", w)
 	}
+	if existed {
+		flog.Info("fleet destroyed", "fleet", req.GetName())
+	}
 	return &fleetgrpc.MutationReply{State: snapshot}, nil
 }
 
@@ -137,6 +142,7 @@ func (s *service) SetFleetSettings(_ context.Context, req *fleetgrpc.SetFleetSet
 	if err != nil {
 		return nil, err
 	}
+	flog.Info("fleet settings updated", "fleet", req.GetFleet())
 	return &fleetgrpc.MutationReply{State: snapshot}, nil
 }
 
@@ -168,6 +174,7 @@ func (s *service) SetInstanceMetadata(_ context.Context, req *fleetgrpc.SetInsta
 	if err != nil {
 		return nil, err
 	}
+	flog.Info("instance metadata updated", "fleet", req.GetFleet(), "instance", req.GetInstance())
 	return &fleetgrpc.MutationReply{State: snapshot}, nil
 }
 

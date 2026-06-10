@@ -3,6 +3,7 @@ package devcontainer
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -239,6 +240,161 @@ func TestLoadFleetCustomizationsMalformedErrors(t *testing.T) {
 
 	if _, err := LoadFleetCustomizations(dir); err == nil {
 		t.Fatal("LoadFleetCustomizations on malformed JSON = nil, want error")
+	}
+}
+
+// TestLoadFleetCustomizationsUpwardInStartDir verifies the upward search
+// finds a config in the start directory itself, without climbing.
+func TestLoadFleetCustomizationsUpwardInStartDir(t *testing.T) {
+	dir := t.TempDir()
+	writeDevcontainer(t, dir, `{
+		"customizations": {
+			"fleet": { "browser": { "initialUrl": "http://localhost:3000" } }
+		}
+	}`)
+
+	fc, path, err := LoadFleetCustomizationsUpward(dir)
+	if err != nil {
+		t.Fatalf("LoadFleetCustomizationsUpward = %v, want nil", err)
+	}
+	if want := filepath.Join(dir, ".devcontainer", "devcontainer.json"); path != want {
+		t.Errorf("path = %q, want %q", path, want)
+	}
+	if got, want := fc.Browser.InitialURL, "http://localhost:3000"; got != want {
+		t.Errorf("InitialURL = %q, want %q", got, want)
+	}
+}
+
+// TestLoadFleetCustomizationsUpwardClimbs verifies the search walks up
+// through intermediate directories (with no devcontainer.json of their
+// own) to the project root's config — the `fleet launch`-from-a-subdir
+// case the function exists for.
+func TestLoadFleetCustomizationsUpwardClimbs(t *testing.T) {
+	root := t.TempDir()
+	writeDevcontainer(t, root, `{
+		"customizations": {
+			"fleet": {
+				"fleetLaunch": { "sites": [ { "title": "API", "url": "http://localhost:3000" } ] }
+			}
+		}
+	}`)
+
+	deep := filepath.Join(root, "src", "internal", "deep")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatalf("mkdir deep tree: %v", err)
+	}
+
+	fc, path, err := LoadFleetCustomizationsUpward(deep)
+	if err != nil {
+		t.Fatalf("LoadFleetCustomizationsUpward = %v, want nil", err)
+	}
+	if want := filepath.Join(root, ".devcontainer", "devcontainer.json"); path != want {
+		t.Errorf("path = %q, want %q", path, want)
+	}
+	if got := len(fc.FleetLaunch.Sites); got != 1 {
+		t.Fatalf("len(Sites) = %d, want 1", got)
+	}
+}
+
+// TestLoadFleetCustomizationsUpwardSkipsFleetlessConfig verifies that a
+// devcontainer.json WITHOUT a customizations.fleet block does not stop
+// the climb: the search continues to an ancestor that has one.
+func TestLoadFleetCustomizationsUpwardSkipsFleetlessConfig(t *testing.T) {
+	root := t.TempDir()
+	writeDevcontainer(t, root, `{
+		"customizations": {
+			"fleet": { "browser": { "initialUrl": "http://localhost:9999" } }
+		}
+	}`)
+
+	nested := filepath.Join(root, "nested-project")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	writeDevcontainer(t, nested, `{
+		"customizations": { "vscode": { "extensions": ["golang.go"] } }
+	}`)
+
+	fc, path, err := LoadFleetCustomizationsUpward(nested)
+	if err != nil {
+		t.Fatalf("LoadFleetCustomizationsUpward = %v, want nil", err)
+	}
+	if want := filepath.Join(root, ".devcontainer", "devcontainer.json"); path != want {
+		t.Errorf("path = %q, want %q", path, want)
+	}
+	if got, want := fc.Browser.InitialURL, "http://localhost:9999"; got != want {
+		t.Errorf("InitialURL = %q, want %q", got, want)
+	}
+}
+
+// TestLoadFleetCustomizationsUpwardEmptyFleetBlockStops verifies that an
+// explicitly present (but empty) fleet block stops the climb: presence
+// of the namespace, not configured content, is the stopping condition.
+func TestLoadFleetCustomizationsUpwardEmptyFleetBlockStops(t *testing.T) {
+	root := t.TempDir()
+	writeDevcontainer(t, root, `{
+		"customizations": {
+			"fleet": { "browser": { "initialUrl": "http://localhost:9999" } }
+		}
+	}`)
+
+	nested := filepath.Join(root, "nested-project")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	writeDevcontainer(t, nested, `{
+		"customizations": { "fleet": {} }
+	}`)
+
+	fc, path, err := LoadFleetCustomizationsUpward(nested)
+	if err != nil {
+		t.Fatalf("LoadFleetCustomizationsUpward = %v, want nil", err)
+	}
+	if want := filepath.Join(nested, ".devcontainer", "devcontainer.json"); path != want {
+		t.Errorf("path = %q, want %q", path, want)
+	}
+	if fc.Browser.InitialURL != "" {
+		t.Errorf("InitialURL = %q, want empty (nested empty fleet block wins)", fc.Browser.InitialURL)
+	}
+}
+
+// TestLoadFleetCustomizationsUpwardNotFound verifies that reaching the
+// filesystem root without finding a fleet-configured devcontainer.json
+// yields the zero value, an empty path, and no error.
+func TestLoadFleetCustomizationsUpwardNotFound(t *testing.T) {
+	fc, path, err := LoadFleetCustomizationsUpward(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadFleetCustomizationsUpward = %v, want nil", err)
+	}
+	if path != "" {
+		t.Errorf("path = %q, want empty", path)
+	}
+	if fc.Browser.InitialURL != "" || fc.FleetLaunch.Configured() {
+		t.Errorf("customizations = %+v, want zero value", fc)
+	}
+}
+
+// TestLoadFleetCustomizationsUpwardMalformedErrors verifies that a
+// malformed devcontainer.json on the way up is an error naming the file,
+// rather than being silently skipped in favour of an ancestor's config.
+func TestLoadFleetCustomizationsUpwardMalformedErrors(t *testing.T) {
+	root := t.TempDir()
+	writeDevcontainer(t, root, `{
+		"customizations": { "fleet": {} }
+	}`)
+
+	nested := filepath.Join(root, "nested-project")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	writeDevcontainer(t, nested, `{ "customizations": { "fleet": { `)
+
+	_, _, err := LoadFleetCustomizationsUpward(nested)
+	if err == nil {
+		t.Fatal("LoadFleetCustomizationsUpward over malformed JSON = nil, want error")
+	}
+	if want := filepath.Join(nested, ".devcontainer", "devcontainer.json"); !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q does not name the malformed file %q", err, want)
 	}
 }
 

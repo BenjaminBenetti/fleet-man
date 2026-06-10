@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Description: Re-opening the tag dialog with empty input clears the tag from the row and state.json.
+# Description: Re-opening the tag dialog with empty input clears the tag line from the expanded instance and from state.json.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -14,8 +14,9 @@ tui_wait_for "alpha"  15
 tui_wait_for "○ idle" 60
 
 # ===========================================
-# Step 1 — set a tag the test will later clear. The row must visibly
-# show "# wip" once saved.
+# Step 1 — set a tag the test will later clear. The tag renders on its
+# own line under the instance row, but only while the instance is
+# expanded, so expand alpha before asserting "# wip" is visible.
 # ===========================================
 TAG="wip"
 info "moving cursor to alpha"
@@ -30,7 +31,11 @@ sleep 0.3
 tui_send Enter
 tui_wait_for "Tagged itest-fleet/alpha: ${TAG}" 5
 tui_wait_for_absent "Tag instance" 5
-tui_assert_contains "# ${TAG}" "tag must render in row after save"
+
+info "expanding alpha"
+tui_send Space
+tui_wait_for "+ new session" 15
+tui_assert_contains "# ${TAG}" "tag must render under the expanded instance row after save"
 
 # state.json sanity — the tag field is "wip".
 tag_value=$(grep -oE '"tag"[[:space:]]*:[[:space:]]*"[^"]*"' "${HOME}/.fleet/state.json" | head -1 || true)
@@ -38,11 +43,12 @@ assert_contains "${tag_value}" "${TAG}" "tag should be in state.json after save"
 
 # ===========================================
 # Step 2 — re-open the dialog. The text input is prefilled with the
-# current tag (page_fleet.go:599 SetValue(inst.Tag)), so we backspace
+# current tag (SetValue(inst.Tag) in the 't' handler), so we backspace
 # every character to leave it empty, then submit.
 # ===========================================
-# Defensive cursor re-seat — after dialog close, cursor stays on alpha,
-# but small wiggle protects against any buildRows reorder edge cases.
+# Defensive cursor re-seat — after dialog close, cursor stays on alpha.
+# The j/k wiggle also exercises the cursor skipping the (non-selectable)
+# tag line that now sits directly under alpha.
 tui_send j
 sleep 0.2
 tui_send k
@@ -65,12 +71,13 @@ tui_wait_for "Cleared tag for itest-fleet/alpha" 5
 tui_wait_for_absent "Tag instance" 5
 
 # ===========================================
-# Step 3 — the row must no longer carry the "# wip" suffix. The status
-# message itself contains "wip" only via "Cleared tag for itest-fleet/
-# alpha" — which does NOT include the tag — so plain absence is safe.
+# Step 3 — the tag line must be gone even though the instance is still
+# expanded. The status message itself contains "wip" only via "Cleared
+# tag for itest-fleet/alpha" — which does NOT include the tag — so plain
+# absence is safe.
 # ===========================================
-info "verifying tag no longer rendered in row"
-tui_assert_not_contains "# ${TAG}" "tag suffix must be gone from row after clear"
+info "verifying tag line no longer rendered"
+tui_assert_not_contains "# ${TAG}" "tag line must be gone after clear"
 
 # state.json: tag field is the empty string.
 tag_value=$(grep -oE '"tag"[[:space:]]*:[[:space:]]*"[^"]*"' "${HOME}/.fleet/state.json" | head -1 || true)
@@ -79,7 +86,8 @@ if [ -n "${tag_value}" ]; then
   assert_contains "${tag_value}" '""' "tag should be empty in state.json after clear"
 fi
 
-# Persistence check — relaunch the TUI and verify the row stays clean.
+# Persistence check — relaunch the TUI, re-expand, and verify the tag
+# line stays gone.
 info "quitting TUI"
 tui_send q
 deadline=$(( $(date +%s) + 10 ))
@@ -93,6 +101,10 @@ info "respawning TUI"
 tui_spawn
 tui_wait_for "alpha"  15
 tui_wait_for "○ idle" 60
+tui_send j
+sleep 0.3
+tui_send Space
+tui_wait_for "+ new session" 15
 tui_assert_not_contains "# ${TAG}" "cleared tag must stay cleared after restart"
 
-pass "TUI tag-clear round-trip removes tag from row + state and persists"
+pass "TUI tag-clear round-trip removes the tag line + state and persists"

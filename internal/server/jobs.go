@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/debcache"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetnet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/imagecache"
 	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -263,8 +265,14 @@ func (j *job) closeSubs() {
 // runJob is the shared driver: emit JobStarted, run work (which may emit further
 // events via emit), emit JobDone, then unregister + close subscribers. It runs
 // in its own goroutine so it is not tied to the calling RPC's lifetime.
+//
+// Every job is also recorded in the event log (started, each warning, then
+// finished/failed) so fleet.log carries an operation-level trail for ALL
+// lifecycle jobs — including those whose work has no logging of its own.
 func (s *service) runJob(j *job, work func() (finalInstance *fleetgrpc.Instance, warnings []string, err error)) {
 	start := time.Now()
+	kind := jobKindName(j.summary.Kind)
+	flog.Info("job started", "job", j.summary.JobId, "kind", kind, "fleet", j.summary.Fleet, "instance", j.summary.Instance)
 	j.emit(&fleetgrpc.JobEvent{JobId: j.summary.JobId, Event: &fleetgrpc.JobEvent_Started{Started: &fleetgrpc.JobStarted{
 		JobId:     j.summary.JobId,
 		Kind:      j.summary.Kind,
@@ -274,6 +282,15 @@ func (s *service) runJob(j *job, work func() (finalInstance *fleetgrpc.Instance,
 	}}})
 
 	finalInstance, warnings, err := work()
+
+	for _, w := range warnings {
+		flog.Warn("job warning", "job", j.summary.JobId, "kind", kind, "fleet", j.summary.Fleet, "instance", j.summary.Instance, "warn", w)
+	}
+	if err != nil {
+		flog.Error("job failed", "job", j.summary.JobId, "kind", kind, "fleet", j.summary.Fleet, "instance", j.summary.Instance, "ms", flog.MillisSince(start), "err", err)
+	} else {
+		flog.Info("job finished", "job", j.summary.JobId, "kind", kind, "fleet", j.summary.Fleet, "instance", j.summary.Instance, "ms", flog.MillisSince(start))
+	}
 
 	done := &fleetgrpc.JobDone{
 		Success:  err == nil,
@@ -290,6 +307,12 @@ func (s *service) runJob(j *job, work func() (finalInstance *fleetgrpc.Instance,
 	// Nudge a fresh snapshot to Watch subscribers (the work already persisted via
 	// state.Update; this just avoids waiting for the next poller tick).
 	s.pushState()
+}
+
+// jobKindName renders a JobKind as a compact event-log value: "create_instance"
+// rather than the proto's "JOB_KIND_CREATE_INSTANCE".
+func jobKindName(k fleetgrpc.JobKind) string {
+	return strings.ToLower(strings.TrimPrefix(k.String(), "JOB_KIND_"))
 }
 
 // relay streams a job's events (history then live) to a gRPC server stream until

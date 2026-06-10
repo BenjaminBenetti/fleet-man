@@ -38,10 +38,12 @@ import (
 // socket.
 type Config struct {
 	// ConfigPath is the devcontainer.json to read. Empty means auto-detect by
-	// searching the current directory for .devcontainer/devcontainer.json or
-	// ./devcontainer.json (LoadFleetCustomizations(".")). A non-empty path is
-	// read directly (LoadFleetCustomizationsFromFile) and a missing file is an
-	// error.
+	// searching the current directory and then each parent directory for a
+	// .devcontainer/devcontainer.json or .devcontainer.json containing a
+	// customizations.fleet block (LoadFleetCustomizationsUpward(".")), so
+	// `fleet launch` works from anywhere inside the project tree. A non-empty
+	// path is read directly (LoadFleetCustomizationsFromFile) and a missing
+	// file is an error.
 	ConfigPath string
 	// SocketPath overrides the control socket the client dials. Empty means the
 	// standard container-side path (control.ContainerSocketPath). Tests set
@@ -68,12 +70,16 @@ func (c Config) socketPath() string {
 // the grid but reporting that opens won't work) so the user can still see what
 // is configured.
 func Run(cfg Config) error {
-	fl, err := loadCustomizations(cfg.ConfigPath)
+	fl, configPath, err := loadCustomizations(cfg.ConfigPath)
 	if err != nil {
 		return err
 	}
 	if !fl.FleetLaunch.Configured() {
-		fmt.Println("Fleet Launch has nothing to show: no links (fleetLaunch.sites) or apps (fleetLaunch.apps) are configured in this devcontainer.json.")
+		if configPath == "" {
+			fmt.Println("Fleet Launch has nothing to show: no devcontainer.json with a customizations.fleet block was found in the current directory or any parent.")
+		} else {
+			fmt.Printf("Fleet Launch has nothing to show: no links (fleetLaunch.sites) or apps (fleetLaunch.apps) are configured in %s.\n", configPath)
+		}
 		return nil
 	}
 
@@ -91,10 +97,15 @@ func Run(cfg Config) error {
 }
 
 // loadCustomizations reads the fleetLaunch configuration from an explicit path
-// when one is given, otherwise auto-detects it from the current directory.
-func loadCustomizations(configPath string) (devcontainer.FleetCustomizations, error) {
+// when one is given, otherwise auto-detects it by searching the current
+// directory and then each parent for a devcontainer.json containing a
+// customizations.fleet block — so `fleet launch` works from any subdirectory
+// of the project, not just its root. The returned path names the file the
+// configuration came from; it is empty when auto-detection found nothing.
+func loadCustomizations(configPath string) (devcontainer.FleetCustomizations, string, error) {
 	if configPath != "" {
-		return devcontainer.LoadFleetCustomizationsFromFile(configPath)
+		fl, err := devcontainer.LoadFleetCustomizationsFromFile(configPath)
+		return fl, configPath, err
 	}
-	return devcontainer.LoadFleetCustomizations(".")
+	return devcontainer.LoadFleetCustomizationsUpward(".")
 }

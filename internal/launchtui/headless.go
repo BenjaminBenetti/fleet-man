@@ -25,7 +25,7 @@ import (
 // section and an "Apps" section, each entry showing the title used to launch it
 // and its target. It needs no host connection. Backs `fleet launch list`.
 func List(cfg Config, w io.Writer) error {
-	fl, err := loadCustomizations(cfg.ConfigPath)
+	fl, _, err := loadCustomizations(cfg.ConfigPath)
 	if err != nil {
 		return err
 	}
@@ -83,7 +83,7 @@ func LaunchByName(cfg Config, name string, out io.Writer) error {
 		out = io.Discard
 	}
 
-	fl, err := loadCustomizations(cfg.ConfigPath)
+	fl, _, err := loadCustomizations(cfg.ConfigPath)
 	if err != nil {
 		return err
 	}
