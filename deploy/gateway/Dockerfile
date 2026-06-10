@@ -52,4 +52,8 @@ COPY --from=build /out/fleet /usr/local/bin/fleet
 # separate TCP control port. A GET /healthz on the public listener returns "ok".
 EXPOSE 443 50051
 
+# Configure via args to `docker run` (appended to the entrypoint) or via
+# FLEET_GATEWAY_<FLAG> environment variables (dashes as underscores, e.g.
+# FLEET_GATEWAY_PUBLIC_URL) — the latter suits Kubernetes manifests. Flags given
+# on the command line win over their environment variables.
 ENTRYPOINT ["/usr/local/bin/fleet", "gateway"]

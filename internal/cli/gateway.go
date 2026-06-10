@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/gateway"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // newGatewayCmd runs the fleet gateway: the remote, operator-hosted relay that
@@ -33,12 +36,16 @@ func newGatewayCmd() *cobra.Command {
 			"presents the public cert. Set --public-url's scheme to match (https vs http).\n\n" +
 			"Set --session-key (or FLEET_GATEWAY_SESSION_KEY) to a stable secret so fleet\n" +
 			"daemons keep their session URL across gateway restarts; without it each boot\n" +
-			"uses a random key and a restart hands every daemon a fresh URL.",
+			"uses a random key and a restart hands every daemon a fresh URL.\n\n" +
+			"Every flag can also be set via environment variable — FLEET_GATEWAY_<FLAG>\n" +
+			"with dashes as underscores (e.g. FLEET_GATEWAY_PUBLIC_URL,\n" +
+			"FLEET_GATEWAY_MAX_SESSIONS) — handy for the Docker image and Kubernetes.\n" +
+			"A flag given on the command line wins over its environment variable.",
 		Args: cobra.NoArgs,
+		PreRunE: func(cmd *cobra.Command, _ []string) error {
+			return applyGatewayEnv(cmd.Flags())
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if cfg.SessionKey == "" {
-				cfg.SessionKey = os.Getenv("FLEET_GATEWAY_SESSION_KEY")
-			}
 			return gateway.Serve(cmd.Context(), cfg)
 		},
 	}
@@ -54,4 +61,28 @@ func newGatewayCmd() *cobra.Command {
 	f.StringVar(&cfg.SessionKey, "session-key", "", "secret key signing session-resume tokens, so daemons keep their session URL across gateway restarts (empty = random per boot; FLEET_GATEWAY_SESSION_KEY is also read)")
 
 	return cmd
+}
+
+// applyGatewayEnv fills in any gateway flag not given on the command line from
+// its FLEET_GATEWAY_<FLAG> environment variable (dashes become underscores, e.g.
+// --public-url ← FLEET_GATEWAY_PUBLIC_URL), so the Docker image is configurable
+// in Kubernetes without rebuilding the args list (issue #135). Explicit flags
+// win; an env value that fails the flag's parser (e.g. a non-numeric
+// FLEET_GATEWAY_MAX_SESSIONS) is an error naming the variable.
+func applyGatewayEnv(fs *pflag.FlagSet) error {
+	var err error
+	fs.VisitAll(func(f *pflag.Flag) {
+		if err != nil || f.Changed || f.Name == "help" {
+			return
+		}
+		env := "FLEET_GATEWAY_" + strings.ReplaceAll(strings.ToUpper(f.Name), "-", "_")
+		val, ok := os.LookupEnv(env)
+		if !ok {
+			return
+		}
+		if setErr := fs.Set(f.Name, val); setErr != nil {
+			err = fmt.Errorf("invalid %s: %w", env, setErr)
+		}
+	})
+	return err
 }

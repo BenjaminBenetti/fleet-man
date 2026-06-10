@@ -60,25 +60,43 @@ workspace_dir, created_at, error), optionally filtered to one fleet. `fleet_vers
 the daemon's version and liveness. `fleet_logs` returns an instance's container
 logs (use `tail` to cap to the last N lines).
 
-**Manage instance lifecycle.** These block until the job finishes server-side
-(`fleet_up` provisions a devcontainer — expect minutes, not seconds) and return
-`{success, instance, warnings}`; a failed job surfaces as a tool error.
+**Manage instance lifecycle.** The slow, job-shaped tools — `fleet_up`,
+`fleet_clone`, `fleet_down`, `fleet_destroy_fleet` — are async-first: they
+return within seconds with `{job_id, done: false, instance}` while the job
+keeps running server-side. Kick off as many as you need (e.g. bulk-provision
+several instances), keep working, then poll `fleet_job_status {job_id}` until
+`state` leaves `running` — it reports `succeeded` (with `warnings` and the
+final `result` record) or `failed` (with `error`). The instance's `status` in
+`fleet_list` tells the same story (`creating → running`, or `failed` with
+`error`; teardown shows `deleting` until the record disappears). Pass
+`wait: true` to block until the job finishes instead — `fleet_up` provisions a
+devcontainer (expect minutes, not seconds), so only do that when your
+tool-call timeout allows it. A blocking call returns
+`{job_id, done: true, success, instance, warnings}`, and a failed blocking job
+surfaces as a tool error.
 
-- `fleet_up {fleet, instance, remote?, branch?, backend?}` creates and starts an
-  instance. `remote` (a git URL) is required only when creating the first
-  instance of a new fleet; after that the fleet's recorded remote is used.
+- `fleet_up {fleet, instance, remote?, branch?, backend?, wait?}` creates and
+  starts an instance. `remote` (a git URL) is required only when creating the
+  first instance of a new fleet; after that the fleet's recorded remote is used.
   `backend` selects where it runs: `devcontainer`, `coder`, or `codespaces`.
   Omitted, it falls back to the host's configured default backend
   (`devcontainer` out of the box) — the others need prior configuration, so
   leave it unset or pass `devcontainer` unless the user says otherwise.
 - `fleet_start` / `fleet_stop {fleet, instance}` resume / pause an instance.
-  Stop preserves the workspace; start brings it back.
-- `fleet_down {fleet, instance}` stops and removes a single instance.
-  `fleet_destroy_fleet {fleet}` removes a whole fleet and all its instances.
-  **Both are irreversible** and discard any uncommitted work in those instances.
-- `fleet_clone {fleet, source, destination, ...}` duplicates an instance,
-  keeping its installed state (optional `display_name`, `tag`, `color`,
-  `branch` overrides).
+  Stop preserves the workspace; start brings it back. These always block —
+  they finish in seconds.
+- `fleet_down {fleet, instance, wait?}` stops and removes a single instance.
+  `fleet_destroy_fleet {fleet, wait?}` removes a whole fleet and all its
+  instances. **Both are irreversible** and discard any uncommitted work in
+  those instances.
+- `fleet_clone {fleet, source, destination, ..., wait?}` duplicates an
+  instance, keeping its installed state (optional `display_name`, `tag`,
+  `color`, `branch` overrides).
+- `fleet_job_status {job_id}` reports a lifecycle job:
+  `{state: running|succeeded|failed, error?, warnings?, result?}`. A failed job
+  is data here (`state: "failed"`), not a tool error. An unknown `job_id`
+  (daemon restarted, or the result expired) is a tool error — fall back to the
+  instance's `status`/`error` in `fleet_list`.
 
 **Run a one-off command.** `fleet_exec {fleet, instance, command}` runs a
 command inside an instance and returns `{stdout, stderr, exit_code}`. `command`
@@ -116,10 +134,14 @@ the task as its prompt, then read the session to see what it's doing or asking.
 - Sessions are detached and survive between tool calls; reading one is a
   snapshot of its current screen, not a stream.
 - Errors come back as tool errors with a clear message (instance not found, not
-  running, job failed); the one exception is `fleet_exec`, where a non-zero
-  exit is ordinary result data.
+  running, blocking job failed); the exceptions are `fleet_exec`, where a
+  non-zero exit is ordinary result data, and `fleet_job_status`, where a failed
+  job is ordinary result data (`state: "failed"`).
 - Lifecycle `warnings` are non-fatal issues from an otherwise-successful job —
   surface them, don't treat them as failure.
+- When awaiting an async job, poll `fleet_job_status` every few seconds (a
+  `fleet_up` typically takes 1–3 minutes) rather than spinning; you can do
+  other work between polls.
 - If the `fleet_*` MCP tools are not available, the `fleet` CLI offers the same
   operations from the shell (`fleet --help`). The MCP server is registered in
   Claude Code automatically when the fleet TUI runs; a missing registration
@@ -138,13 +160,14 @@ INSPECT
   fleet_version                                     # daemon version/liveness
   fleet_logs {fleet, instance, tail?}               # container logs
 
-LIFECYCLE  (block until the job completes; up can take minutes)
-  fleet_up {fleet, instance, remote?, branch?, backend?}
-  fleet_start {fleet, instance}                     # resume a stopped instance
-  fleet_stop {fleet, instance}                      # pause, keep workspace
-  fleet_down {fleet, instance}                      # remove one instance      (irreversible)
-  fleet_destroy_fleet {fleet}                       # remove fleet + instances (irreversible)
-  fleet_clone {fleet, source, destination, display_name?, tag?, color?, branch?}
+LIFECYCLE  (async-first: returns {job_id, done:false} in seconds; wait:true blocks)
+  fleet_up {fleet, instance, remote?, branch?, backend?, wait?}
+  fleet_clone {fleet, source, destination, display_name?, tag?, color?, branch?, wait?}
+  fleet_down {fleet, instance, wait?}               # remove one instance      (irreversible)
+  fleet_destroy_fleet {fleet, wait?}                # remove fleet + instances (irreversible)
+  fleet_job_status {job_id}                         # poll: running | succeeded | failed
+  fleet_start {fleet, instance}                     # resume a stopped instance (blocks)
+  fleet_stop {fleet, instance}                      # pause, keep workspace     (blocks)
 
 EXECUTION
   fleet_exec {fleet, instance, command: [argv...]}  # one-shot; exit_code is data

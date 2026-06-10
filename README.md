@@ -234,6 +234,12 @@ fleet gateway \
 | `--max-sessions` | `1024` | Cap on concurrent tunnels |
 | `--session-key` | (random per boot) | Secret key signing the session-resume tokens daemons present on reconnect. Set it (or `FLEET_GATEWAY_SESSION_KEY`) so daemons keep the **same session URL across gateway restarts**; left unset, a restart hands every daemon a fresh URL |
 
+Every flag is also settable via environment variable — `FLEET_GATEWAY_<FLAG>` with
+dashes as underscores (e.g. `FLEET_GATEWAY_PUBLIC_URL`,
+`FLEET_GATEWAY_MAX_SESSIONS`) — which is handy for configuring the
+[Docker image](#run-it-with-docker) in Kubernetes. A flag given on the command
+line wins over its environment variable.
+
 Two ports must be reachable: expose `--public-addr` to MCP agents and `--grpc-addr`
 to remote `fleet` clients **and your daemons** (they register over it). A
 `GET /healthz` on the public listener returns `ok`.
@@ -290,7 +296,8 @@ bind unprivileged ports and needs no cert.
 
 Every tagged release also publishes a gateway image to the GitHub Container
 Registry, so you don't have to build the binary yourself. It's the same
-`fleet gateway`, with the flags passed as `docker run` arguments:
+`fleet gateway`, with the flags passed as `docker run` arguments (or as
+`FLEET_GATEWAY_*` environment variables — see the table above):
 
 ```bash
 docker run -d --name fleet-gateway \
