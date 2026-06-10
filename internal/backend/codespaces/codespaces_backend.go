@@ -290,6 +290,13 @@ func (codespacesBackend *CodespacesBackend) PortForwardCommand(containerID strin
 	return exec.Command("gh", "codespace", "ports", "forward", mapping, "-c", containerID)
 }
 
+// ForwardStdioCommand returns (nil, false): the gh CLI has no
+// single-connection stdio bridge, so callers fall back to
+// PortForwardCommand bound to a host-local port.
+func (codespacesBackend *CodespacesBackend) ForwardStdioCommand(containerID string, remotePort int) (*exec.Cmd, bool) {
+	return nil, false
+}
+
 // ResolveHostname returns ("", false) for GitHub Codespaces because they
 // are remote and not directly reachable by IP from the host.
 func (codespacesBackend *CodespacesBackend) ResolveHostname(containerID string) (string, bool) {

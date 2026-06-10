@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 )
 
 // exec_client.go is the TUI's seam onto the server's interactive-backend RPCs
-// (ResolveExecCommand / ResolveLogsCommand / PortForward) and the browser +
+// (ResolveExecCommand / ResolveLogsCommand / Forward) and the browser +
 // coder RPCs. The TUI no longer constructs a backend (the P5 boundary): the
 // server returns the argv it would run and the client execs it locally (the TTY
 // carve-out — local exec for attach is a permitted client-host action), or the
@@ -83,25 +84,19 @@ func mergeExecEnv(extra map[string]string) []string {
 	return env
 }
 
-// portForwardArgvTUI resolves the host-side port-forward command (local->remote)
-// from the server; the caller runs it via the portforward.Manager.
-var portForwardArgvTUI = func(fleetName, instanceName string, localPort, remotePort int) ([]string, error) {
+// forwardDialer returns a TargetDialer that tunnels one connection per call
+// over the server's Forward bidi stream (the port-forward data plane) to
+// remotePort inside the instance. It reuses the shared mutation connection;
+// the bounded ctx covers only the dial — each per-connection stream manages
+// its own lifetime.
+var forwardDialer = func(fleetName, instanceName string, remotePort int) (portforward.TargetDialer, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), execResolveTimeout)
 	defer cancel()
 	conn, err := dialMutation(ctx)
 	if err != nil {
 		return nil, err
 	}
-	reply, err := conn.Service().PortForward(ctx, &fleetgrpc.PortForwardRequest{
-		Fleet:      fleetName,
-		Instance:   instanceName,
-		LocalPort:  int32(localPort),
-		RemotePort: int32(remotePort),
-	})
-	if err != nil {
-		return nil, err
-	}
-	return reply.GetArgv(), nil
+	return portforward.NewGRPCTarget(conn.Service(), fleetName, instanceName, remotePort), nil
 }
 
 // resolveLogsArgv resolves the host-side container-logs command for the

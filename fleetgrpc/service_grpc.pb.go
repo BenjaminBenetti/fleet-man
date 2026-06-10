@@ -45,7 +45,7 @@ const (
 	FleetService_ResolveExecCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveExecCommand"
 	FleetService_ResolveLogsCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveLogsCommand"
 	FleetService_Logs_FullMethodName                   = "/fleetgrpc.FleetService/Logs"
-	FleetService_PortForward_FullMethodName            = "/fleetgrpc.FleetService/PortForward"
+	FleetService_Forward_FullMethodName                = "/fleetgrpc.FleetService/Forward"
 	FleetService_GetCoderTemplateParams_FullMethodName = "/fleetgrpc.FleetService/GetCoderTemplateParams"
 	FleetService_GetBrowserConfig_FullMethodName       = "/fleetgrpc.FleetService/GetBrowserConfig"
 	FleetService_PrepareBrowser_FullMethodName         = "/fleetgrpc.FleetService/PrepareBrowser"
@@ -107,7 +107,11 @@ type FleetServiceClient interface {
 	ResolveExecCommand(ctx context.Context, in *ResolveExecCommandRequest, opts ...grpc.CallOption) (*ResolveExecCommandReply, error)
 	ResolveLogsCommand(ctx context.Context, in *ResolveLogsCommandRequest, opts ...grpc.CallOption) (*ResolveLogsCommandReply, error)
 	Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error)
-	PortForward(ctx context.Context, in *PortForwardRequest, opts ...grpc.CallOption) (*PortForwardReply, error)
+	// Forward is the port-forward data plane: one bidi stream per forwarded TCP
+	// connection (first frame is the ForwardOpen header, the rest raw bytes).
+	// The client listens locally and pipes each accepted connection through this
+	// stream; the server bridges it to remote_port inside the instance.
+	Forward(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardChunk, ForwardChunk], error)
 	// ---- Coder template parameters (Coder API, read server-side) ----
 	GetCoderTemplateParams(ctx context.Context, in *GetCoderTemplateParamsRequest, opts ...grpc.CallOption) (*GetCoderTemplateParamsReply, error)
 	// ---- Browser (container-side half of the host browser feature) ----
@@ -449,15 +453,18 @@ func (c *fleetServiceClient) Logs(ctx context.Context, in *LogsRequest, opts ...
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_LogsClient = grpc.ServerStreamingClient[LogLine]
 
-func (c *fleetServiceClient) PortForward(ctx context.Context, in *PortForwardRequest, opts ...grpc.CallOption) (*PortForwardReply, error) {
+func (c *fleetServiceClient) Forward(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardChunk, ForwardChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PortForwardReply)
-	err := c.cc.Invoke(ctx, FleetService_PortForward_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[8], FleetService_Forward_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &grpc.GenericClientStream[ForwardChunk, ForwardChunk]{ClientStream: stream}
+	return x, nil
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_ForwardClient = grpc.BidiStreamingClient[ForwardChunk, ForwardChunk]
 
 func (c *fleetServiceClient) GetCoderTemplateParams(ctx context.Context, in *GetCoderTemplateParamsRequest, opts ...grpc.CallOption) (*GetCoderTemplateParamsReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -545,7 +552,11 @@ type FleetServiceServer interface {
 	ResolveExecCommand(context.Context, *ResolveExecCommandRequest) (*ResolveExecCommandReply, error)
 	ResolveLogsCommand(context.Context, *ResolveLogsCommandRequest) (*ResolveLogsCommandReply, error)
 	Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error
-	PortForward(context.Context, *PortForwardRequest) (*PortForwardReply, error)
+	// Forward is the port-forward data plane: one bidi stream per forwarded TCP
+	// connection (first frame is the ForwardOpen header, the rest raw bytes).
+	// The client listens locally and pipes each accepted connection through this
+	// stream; the server bridges it to remote_port inside the instance.
+	Forward(grpc.BidiStreamingServer[ForwardChunk, ForwardChunk]) error
 	// ---- Coder template parameters (Coder API, read server-side) ----
 	GetCoderTemplateParams(context.Context, *GetCoderTemplateParamsRequest) (*GetCoderTemplateParamsReply, error)
 	// ---- Browser (container-side half of the host browser feature) ----
@@ -639,8 +650,8 @@ func (UnimplementedFleetServiceServer) ResolveLogsCommand(context.Context, *Reso
 func (UnimplementedFleetServiceServer) Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error {
 	return status.Errorf(codes.Unimplemented, "method Logs not implemented")
 }
-func (UnimplementedFleetServiceServer) PortForward(context.Context, *PortForwardRequest) (*PortForwardReply, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method PortForward not implemented")
+func (UnimplementedFleetServiceServer) Forward(grpc.BidiStreamingServer[ForwardChunk, ForwardChunk]) error {
+	return status.Errorf(codes.Unimplemented, "method Forward not implemented")
 }
 func (UnimplementedFleetServiceServer) GetCoderTemplateParams(context.Context, *GetCoderTemplateParamsRequest) (*GetCoderTemplateParamsReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetCoderTemplateParams not implemented")
@@ -1080,23 +1091,12 @@ func _FleetService_Logs_Handler(srv interface{}, stream grpc.ServerStream) error
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_LogsServer = grpc.ServerStreamingServer[LogLine]
 
-func _FleetService_PortForward_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PortForwardRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(FleetServiceServer).PortForward(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: FleetService_PortForward_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FleetServiceServer).PortForward(ctx, req.(*PortForwardRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+func _FleetService_Forward_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(FleetServiceServer).Forward(&grpc.GenericServerStream[ForwardChunk, ForwardChunk]{ServerStream: stream})
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_ForwardServer = grpc.BidiStreamingServer[ForwardChunk, ForwardChunk]
 
 func _FleetService_GetCoderTemplateParams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetCoderTemplateParamsRequest)
@@ -1232,10 +1232,6 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _FleetService_ResolveLogsCommand_Handler,
 		},
 		{
-			MethodName: "PortForward",
-			Handler:    _FleetService_PortForward_Handler,
-		},
-		{
 			MethodName: "GetCoderTemplateParams",
 			Handler:    _FleetService_GetCoderTemplateParams_Handler,
 		},
@@ -1289,6 +1285,12 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "Logs",
 			Handler:       _FleetService_Logs_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "Forward",
+			Handler:       _FleetService_Forward_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "service.proto",

@@ -88,19 +88,30 @@ message LogLine {
   google.protobuf.Timestamp at = 2;
 }
 
-// PortForward returns a host-side command descriptor for forwarding a port; the
-// client runs it. A descriptor RPC (not a data-plane proxy) to match the existing
-// backend.PortForwardCommand idiom, which tunnels local_port on the host to
-// remote_port inside the container.
-message PortForwardRequest {
-  string fleet = 1;
-  string instance = 2;
-  int32 local_port = 3;
-  int32 remote_port = 4;
+// Forward is the port-forward DATA PLANE: one bidi stream per accepted TCP
+// connection. The CLIENT owns the listen half (an in-process TCP proxy on
+// local_port); the SERVER owns the bridge into the container; this stream is
+// the pipe between them — so forwarding holds even when the server is remote
+// (the old PortForward descriptor RPC assumed client host == server host).
+//
+// The FIRST client frame MUST carry `open` (fleet, instance, remote_port);
+// every subsequent frame (both directions) carries raw bytes in `data`.
+// Half-close maps naturally: the client ends its upload by closing its send
+// side (CloseSend); the server signals remote EOF by ending the stream.
+message ForwardChunk {
+  oneof msg {
+    ForwardOpen open = 1;
+    bytes data = 2;
+  }
 }
 
-message PortForwardReply {
-  repeated string argv = 1;
+// ForwardOpen is the setup header for one forwarded connection: which
+// instance to bridge into and the port to reach inside it. There is no
+// local_port — the listen side is entirely the client's business.
+message ForwardOpen {
+  string fleet = 1;
+  string instance = 2;
+  int32 remote_port = 3;
 }
 
 // ResolveLogsCommand returns the host-side command argv the server would run to
