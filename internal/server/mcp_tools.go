@@ -15,6 +15,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/tui"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
@@ -479,13 +480,18 @@ func (s *service) mcpSessionSpawn(ctx context.Context, _ *mcp.CallToolRequest, i
 	if err != nil {
 		return nil, FleetSessionMessageOutput{}, err
 	}
+	// Canonicalize to the TUI's group naming convention (<instance>~<name>),
+	// exactly like the CLI session commands — a bare-named session would
+	// surface as a pseudo-group in the TUI and splitting it would mint a
+	// duplicate real group with the same name.
+	sessionName := tui.ResolveSessionName(in.Instance, in.Session)
 	cctx, cancel := mergeCtx(s.bgCtx, ctx)
 	defer cancel()
-	snippet := dotfiles.TmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s`, dotfiles.ShQuote(in.Session))
+	snippet := dotfiles.TmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s`, dotfiles.ShQuote(sessionName))
 	if out, err := runContainerShell(cctx, inst, snippet); err != nil {
 		return nil, FleetSessionMessageOutput{}, fmt.Errorf("spawn session %q: %w: %s", in.Session, err, strings.TrimSpace(out))
 	}
-	return nil, FleetSessionMessageOutput{Message: fmt.Sprintf("created tmux session %q in %s/%s", in.Session, in.Fleet, in.Instance)}, nil
+	return nil, FleetSessionMessageOutput{Message: fmt.Sprintf("created tmux session %q in %s/%s", sessionName, in.Fleet, in.Instance)}, nil
 }
 
 type FleetSessionExecInput struct {
@@ -503,13 +509,16 @@ func (s *service) mcpSessionExec(ctx context.Context, _ *mcp.CallToolRequest, in
 	if err != nil {
 		return nil, FleetSessionMessageOutput{}, err
 	}
+	// Resolve the short name the agent uses to the same canonical session
+	// fleet_session_spawn created (no-op for already-canonical names).
+	sessionName := tui.ResolveSessionName(in.Instance, in.Session)
 	cctx, cancel := mergeCtx(s.bgCtx, ctx)
 	defer cancel()
-	snippet := fmt.Sprintf(`tmux send-keys -t %s %s Enter`, dotfiles.ShQuote(in.Session), dotfiles.ShQuote(in.Command))
+	snippet := fmt.Sprintf(`tmux send-keys -t %s %s Enter`, dotfiles.ShQuote(sessionName), dotfiles.ShQuote(in.Command))
 	if out, err := runContainerShell(cctx, inst, snippet); err != nil {
 		return nil, FleetSessionMessageOutput{}, fmt.Errorf("exec in session %q: %w: %s", in.Session, err, strings.TrimSpace(out))
 	}
-	return nil, FleetSessionMessageOutput{Message: fmt.Sprintf("sent command to session %q; read the session to see output", in.Session)}, nil
+	return nil, FleetSessionMessageOutput{Message: fmt.Sprintf("sent command to session %q; read the session to see output", sessionName)}, nil
 }
 
 type FleetSessionReadInput struct {
@@ -531,6 +540,8 @@ func (s *service) mcpSessionRead(ctx context.Context, _ *mcp.CallToolRequest, in
 	if err != nil {
 		return nil, FleetSessionReadOutput{}, err
 	}
+	// Same short-name resolution as fleet_session_spawn/exec.
+	sessionName := tui.ResolveSessionName(in.Instance, in.Session)
 	cctx, cancel := mergeCtx(s.bgCtx, ctx)
 	defer cancel()
 	// Translate scrollback into tmux's -S start-line: negative => full history
@@ -542,7 +553,7 @@ func (s *service) mcpSessionRead(ctx context.Context, _ *mcp.CallToolRequest, in
 	case in.Scrollback > 0:
 		startFlag = fmt.Sprintf("-S -%d ", in.Scrollback)
 	}
-	snippet := fmt.Sprintf(`tmux capture-pane -p %s-t %s`, startFlag, dotfiles.ShQuote(in.Session))
+	snippet := fmt.Sprintf(`tmux capture-pane -p %s-t %s`, startFlag, dotfiles.ShQuote(sessionName))
 	out, err := runContainerShell(cctx, inst, snippet)
 	if err != nil {
 		return nil, FleetSessionReadOutput{}, fmt.Errorf("read session %q: %w: %s", in.Session, err, strings.TrimSpace(out))
