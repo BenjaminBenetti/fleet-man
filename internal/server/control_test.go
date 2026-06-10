@@ -15,6 +15,11 @@ type openEvent struct {
 	fleet, instance, url string
 }
 
+// copyEvent is one decoded file.copy the registry forwarded via onCopy.
+type copyEvent struct {
+	fleet, instance, path, dest string
+}
+
 // waitForSocket polls path until it exists or the deadline passes.
 func waitForSocket(t *testing.T, path string, timeout time.Duration) bool {
 	t.Helper()
@@ -49,15 +54,15 @@ func TestControlSyncRoundTrip(t *testing.T) {
 	key := fleetName + "/" + instanceName
 
 	events := make(chan openEvent, 16)
-	copies := make(chan openEvent, 16)
+	copies := make(chan copyEvent, 16)
 	r := newControlRegistry(func(f, i, url string) {
 		select {
 		case events <- openEvent{f, i, url}:
 		default:
 		}
-	}, func(f, i, path string) {
+	}, func(f, i, path, dest string) {
 		select {
-		case copies <- openEvent{f, i, path}:
+		case copies <- copyEvent{f, i, path, dest}:
 		default:
 		}
 	}, nil)
@@ -96,9 +101,13 @@ func TestControlSyncRoundTrip(t *testing.T) {
 		t.Fatal("timed out waiting for browser.open on onOpen")
 	}
 
-	// A file.copy envelope on the same socket dispatches to onCopy.
-	const wantPath = "/workspaces/repo/bin/tool"
-	if err := client.CopyFile(wantPath); err != nil {
+	// A file.copy envelope on the same socket dispatches to onCopy, carrying
+	// the requested destination through verbatim.
+	const (
+		wantPath = "/workspaces/repo/bin/tool"
+		wantDest = "~/builds/tool"
+	)
+	if err := client.CopyFile(wantPath, wantDest); err != nil {
 		t.Fatalf("CopyFile: %v", err)
 	}
 	select {
@@ -106,8 +115,8 @@ func TestControlSyncRoundTrip(t *testing.T) {
 		if ev.fleet != fleetName || ev.instance != instanceName {
 			t.Errorf("copy event = (%q,%q), want (%q,%q)", ev.fleet, ev.instance, fleetName, instanceName)
 		}
-		if ev.url != wantPath {
-			t.Errorf("copy event path = %q, want %q", ev.url, wantPath)
+		if ev.path != wantPath || ev.dest != wantDest {
+			t.Errorf("copy event = (%q,%q), want (%q,%q)", ev.path, ev.dest, wantPath, wantDest)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for file.copy on onCopy")

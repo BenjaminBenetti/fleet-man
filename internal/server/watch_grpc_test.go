@@ -217,7 +217,7 @@ func TestWatchStreamsFileCopy(t *testing.T) {
 	// copies — discrete events must arrive in order, not conflated.
 	time.Sleep(100 * time.Millisecond)
 	svc.hub.post(func(h *hub) {
-		h.broadcastFileCopy(&fleetgrpc.FileCopy{Fleet: "alpha", Instance: "i1", Path: "/ws/bin/tool"})
+		h.broadcastFileCopy(&fleetgrpc.FileCopy{Fleet: "alpha", Instance: "i1", Path: "/ws/bin/tool", Dest: "~/builds/tool"})
 		h.broadcastFileCopy(&fleetgrpc.FileCopy{Fleet: "alpha", Instance: "i1", Path: "/ws/bin/tool2"})
 	})
 
@@ -232,6 +232,9 @@ func TestWatchStreamsFileCopy(t *testing.T) {
 		}
 		if fc.GetFleet() != "alpha" || fc.GetInstance() != "i1" || fc.GetPath() != wantPath {
 			t.Fatalf("FileCopy = %v, want alpha/i1 %s", fc, wantPath)
+		}
+		if wantPath == "/ws/bin/tool" && fc.GetDest() != "~/builds/tool" {
+			t.Fatalf("FileCopy dest = %q, want ~/builds/tool", fc.GetDest())
 		}
 	}
 }

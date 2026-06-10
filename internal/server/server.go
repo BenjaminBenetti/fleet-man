@@ -96,12 +96,13 @@ func Serve(ctx context.Context) error {
 				Instance: instanceName,
 			})
 		})
-	}, func(fleetName, instanceName, path string) {
+	}, func(fleetName, instanceName, path, dest string) {
 		svc.hub.post(func(h *hub) {
 			h.broadcastFileCopy(&fleetgrpc.FileCopy{
 				Fleet:    fleetName,
 				Instance: instanceName,
 				Path:     path,
+				Dest:     dest,
 			})
 		})
 	}, svc.hub.hasSubscribers)

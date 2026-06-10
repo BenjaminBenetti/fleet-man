@@ -8,4 +8,8 @@ type CopyFilePayload struct {
 	// resolves it against its own working directory before sending, so the
 	// host-side read needs no cwd context.
 	Path string `json:"path"`
+	// Dest is the optional destination on the user's machine; empty means the
+	// user's downloads folder. It is passed through verbatim — only the
+	// receiving client can interpret a path on its own filesystem.
+	Dest string `json:"dest,omitempty"`
 }

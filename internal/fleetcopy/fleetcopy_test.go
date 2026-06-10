@@ -40,7 +40,7 @@ func TestRequestSendsEnvelope(t *testing.T) {
 	}()
 
 	var out bytes.Buffer
-	if err := Request(Config{SocketPath: socket}, &out, file); err != nil {
+	if err := Request(Config{SocketPath: socket}, &out, file, "~/builds/tool"); err != nil {
 		t.Fatalf("Request: %v", err)
 	}
 	env := <-got
@@ -54,8 +54,11 @@ func TestRequestSendsEnvelope(t *testing.T) {
 	if payload.Path != file {
 		t.Fatalf("payload path = %q, want %q", payload.Path, file)
 	}
-	if !strings.Contains(out.String(), file) {
-		t.Fatalf("confirmation %q does not name the file", out.String())
+	if payload.Dest != "~/builds/tool" {
+		t.Fatalf("payload dest = %q, want ~/builds/tool (passed through verbatim)", payload.Dest)
+	}
+	if !strings.Contains(out.String(), file) || !strings.Contains(out.String(), "~/builds/tool") {
+		t.Fatalf("confirmation %q does not name the file and destination", out.String())
 	}
 }
 
@@ -66,10 +69,10 @@ func TestRequestErrors(t *testing.T) {
 	cfg := Config{SocketPath: filepath.Join(dir, "absent.sock")}
 
 	var out bytes.Buffer
-	if err := Request(cfg, &out, filepath.Join(dir, "ghost")); !os.IsNotExist(err) {
+	if err := Request(cfg, &out, filepath.Join(dir, "ghost"), ""); !os.IsNotExist(err) {
 		t.Fatalf("missing file: want IsNotExist, got %v", err)
 	}
-	if err := Request(cfg, &out, dir); err == nil || !strings.Contains(err.Error(), "directory") {
+	if err := Request(cfg, &out, dir, ""); err == nil || !strings.Contains(err.Error(), "directory") {
 		t.Fatalf("directory: want directory error, got %v", err)
 	}
 
@@ -77,7 +80,7 @@ func TestRequestErrors(t *testing.T) {
 	if err := os.WriteFile(file, []byte("bytes"), 0o755); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
-	if err := Request(cfg, &out, file); err == nil || !strings.Contains(err.Error(), "not connected to a host fleet") {
+	if err := Request(cfg, &out, file, ""); err == nil || !strings.Contains(err.Error(), "not connected to a host fleet") {
 		t.Fatalf("no listener: want not-connected error, got %v", err)
 	}
 }

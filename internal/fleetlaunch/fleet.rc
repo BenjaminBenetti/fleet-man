@@ -14,7 +14,7 @@
 # `fl <name>` launches one directly by (a unique prefix of) its name.
 alias fl='fleet launch'
 
-# fc — shorthand for Fleet Copy. `fc <path>` asks the host fleet to copy that
-# file out of this instance; it lands in the host user's downloads folder —
-# even when the deployment is fully remote.
+# fc — shorthand for Fleet Copy. `fc <path>` copies that file out of this
+# instance to your machine's downloads folder — even when the deployment is
+# fully remote; `fc <path> <dest>` drops it at dest on your machine instead.
 alias fc='fleet copy'

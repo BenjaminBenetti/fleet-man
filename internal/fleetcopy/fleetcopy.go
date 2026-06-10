@@ -33,10 +33,24 @@ func (c Config) socketPath() string {
 	return control.ContainerSocketPath
 }
 
+// InInstance reports whether this process runs inside a fleet instance, by the
+// presence of the control mount directory fleet bind-mounts into every
+// instance. The directory — not the socket file — is the right probe: the
+// socket only exists while a host TUI is attached, but the mount is there for
+// the instance's whole life, so command help can pick the in-instance form
+// even when no host is connected yet.
+func InInstance() bool {
+	fi, err := os.Stat(control.ContainerMountDir)
+	return err == nil && fi.IsDir()
+}
+
 // Request resolves the file locally (fast feedback on typos — the send itself
 // is fire-and-forget) and asks the host fleet to copy it out via the control
-// socket, exactly like `fleet launch` asks for a browser open.
-func Request(cfg Config, out io.Writer, path string) error {
+// socket, exactly like `fleet launch` asks for a browser open. dest is the
+// requested destination on the user's machine, passed through verbatim ("" =
+// the user's downloads folder) — only the receiving client can interpret a
+// path on its own filesystem.
+func Request(cfg Config, out io.Writer, path, dest string) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return err
@@ -54,12 +68,16 @@ func Request(cfg Config, out io.Writer, path string) error {
 
 	client, err := control.Dial(cfg.socketPath())
 	if err != nil {
-		return fmt.Errorf("not connected to a host fleet — the in-instance form needs a running fleet TUI on the host. From outside an instance, use `fleet copy [fleet/]instance:path [dest]`")
+		return fmt.Errorf("not connected to a host fleet — copying out of an instance needs a running fleet TUI on the host")
 	}
 	defer client.Close()
-	if err := client.CopyFile(abs); err != nil {
+	if err := client.CopyFile(abs, dest); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Asked the host fleet to copy %s — it will land in the host's downloads folder.\n", abs)
+	if dest != "" {
+		fmt.Fprintf(out, "Asked the host fleet to copy %s — it will land at %s on your machine.\n", abs, dest)
+	} else {
+		fmt.Fprintf(out, "Asked the host fleet to copy %s — it will land in your downloads folder.\n", abs)
+	}
 	return nil
 }

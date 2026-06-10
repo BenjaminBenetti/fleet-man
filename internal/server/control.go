@@ -39,8 +39,10 @@ type controlRegistry struct {
 	onOpen func(fleetName, instanceName, url string)
 
 	// onCopy is invoked for each decoded file.copy envelope, tagged with the
-	// originating instance. Same concurrency/non-blocking contract as onOpen.
-	onCopy func(fleetName, instanceName, path string)
+	// originating instance. dest is the requested destination on the user's
+	// machine ("" = downloads folder), passed through verbatim. Same
+	// concurrency/non-blocking contract as onOpen.
+	onCopy func(fleetName, instanceName, path, dest string)
 
 	// gated reports whether to keep control sockets open at all: only while a
 	// browser-capable client (a TUI / Watch subscriber) is attached. With no
@@ -55,7 +57,7 @@ type controlRegistry struct {
 // newControlRegistry creates an empty registry. onOpen is invoked per received
 // browser.open envelope, onCopy per file.copy envelope; gated decides whether
 // any sockets should be open (nil means always on).
-func newControlRegistry(onOpen func(fleetName, instanceName, url string), onCopy func(fleetName, instanceName, path string), gated func() bool) *controlRegistry {
+func newControlRegistry(onOpen func(fleetName, instanceName, url string), onCopy func(fleetName, instanceName, path, dest string), gated func() bool) *controlRegistry {
 	return &controlRegistry{
 		onOpen:  onOpen,
 		onCopy:  onCopy,
@@ -157,7 +159,7 @@ func (r *controlRegistry) syncRunning(st *state.State) {
 					return
 				}
 				if r.onCopy != nil {
-					r.onCopy(fName, iName, payload.Path)
+					r.onCopy(fName, iName, payload.Path, payload.Dest)
 				}
 			}
 		})

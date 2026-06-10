@@ -134,4 +134,9 @@ message FileCopy {
   // path is the absolute in-instance path of the file to copy (resolved by the
   // in-instance sender, so the server-side exec needs no cwd context).
   string path = 3;
+  // dest is the optional destination on the receiving client's machine; ""
+  // means the client's downloads folder. The client interprets it scp-style:
+  // absolute is used as-is, ~/ and relative paths resolve against the client
+  // user's home, and a directory keeps the source basename.
+  string dest = 4;
 }

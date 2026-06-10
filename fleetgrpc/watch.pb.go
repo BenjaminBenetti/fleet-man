@@ -615,7 +615,12 @@ type FileCopy struct {
 	Instance string `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
 	// path is the absolute in-instance path of the file to copy (resolved by the
 	// in-instance sender, so the server-side exec needs no cwd context).
-	Path          string `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
+	Path string `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
+	// dest is the optional destination on the receiving client's machine; ""
+	// means the client's downloads folder. The client interprets it scp-style:
+	// absolute is used as-is, ~/ and relative paths resolve against the client
+	// user's home, and a directory keeps the source basename.
+	Dest          string `protobuf:"bytes,4,opt,name=dest,proto3" json:"dest,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -671,6 +676,13 @@ func (x *FileCopy) GetPath() string {
 	return ""
 }
 
+func (x *FileCopy) GetDest() string {
+	if x != nil {
+		return x.Dest
+	}
+	return ""
+}
+
 var File_watch_proto protoreflect.FileDescriptor
 
 const file_watch_proto_rawDesc = "" +
@@ -707,11 +719,12 @@ const file_watch_proto_rawDesc = "" +
 	"\bdata_dir\x18\x02 \x01(\tH\x00R\adataDir\x88\x01\x01\x12\x14\n" +
 	"\x05fleet\x18\x03 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x04 \x01(\tR\binstanceB\v\n" +
-	"\t_data_dir\"P\n" +
+	"\t_data_dir\"d\n" +
 	"\bFileCopy\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12\x12\n" +
-	"\x04path\x18\x03 \x01(\tR\x04path*\x8a\x01\n" +
+	"\x04path\x18\x03 \x01(\tR\x04path\x12\x12\n" +
+	"\x04dest\x18\x04 \x01(\tR\x04dest*\x8a\x01\n" +
 	"\rRemoteMcpConn\x12\x1f\n" +
 	"\x1bREMOTE_MCP_CONN_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aREMOTE_MCP_CONN_CONNECTING\x10\x01\x12\x1d\n" +

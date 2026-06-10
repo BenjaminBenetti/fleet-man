@@ -633,12 +633,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case watchFileCopyMsg:
 		// An in-container `fleet copy` (fc) asked the host to copy a file out of
-		// the instance; pull it to the local downloads folder in the background.
+		// the instance; pull it to this machine in the background (the requested
+		// destination, or the downloads folder).
 		if msg.fleet == "" || msg.instance == "" || msg.path == "" {
 			return m, spinCmd
 		}
 		m.message = fmt.Sprintf("Copying %s from %s/%s...", msg.path, msg.fleet, msg.instance)
-		return m, tea.Batch(spinCmd, copyInstanceFileCmd(msg.fleet, msg.instance, msg.path))
+		return m, tea.Batch(spinCmd, copyInstanceFileCmd(msg.fleet, msg.instance, msg.path, msg.dest))
 
 	case fileCopyDoneMsg:
 		if msg.err != nil {

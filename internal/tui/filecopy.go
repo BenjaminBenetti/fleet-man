@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -30,9 +31,10 @@ type fileCopyDoneMsg struct {
 	err  error
 }
 
-// copyInstanceFileCmd pulls fleet/instance:path to the local downloads folder
-// off the UI thread.
-func copyInstanceFileCmd(fleetName, instanceName, path string) tea.Cmd {
+// copyInstanceFileCmd pulls fleet/instance:path to this machine off the UI
+// thread — to the requested destination when the in-instance sender named one,
+// the local downloads folder otherwise.
+func copyInstanceFileCmd(fleetName, instanceName, path, requestedDest string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), fileCopyTimeout)
 		defer cancel()
@@ -41,12 +43,36 @@ func copyInstanceFileCmd(fleetName, instanceName, path string) tea.Cmd {
 			return fileCopyDoneMsg{path: path, err: err}
 		}
 		defer conn.Close()
-		dest, _, err := fleetclient.CopyFileTo(ctx, conn.Service(), fleetName, instanceName, path, downloadsDir())
+		dest, _, err := fleetclient.CopyFileTo(ctx, conn.Service(), fleetName, instanceName, path, resolveRequestedDest(requestedDest))
 		if err != nil {
 			return fileCopyDoneMsg{path: path, err: err}
 		}
 		return fileCopyDoneMsg{path: path, dest: dest}
 	}
+}
+
+// resolveRequestedDest maps the dest string typed inside the instance onto
+// this machine's filesystem, scp-style: empty means the downloads folder, an
+// absolute path is used as-is, and `~/` or a relative path resolve against
+// this user's home — the instance's cwd means nothing here, so home is the
+// only sensible anchor (it is also what scp does for relative remote paths).
+func resolveRequestedDest(dest string) string {
+	if dest == "" {
+		return downloadsDir()
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return dest
+	}
+	switch {
+	case dest == "~":
+		return home
+	case strings.HasPrefix(dest, "~/"):
+		return filepath.Join(home, dest[2:])
+	case !filepath.IsAbs(dest):
+		return filepath.Join(home, dest)
+	}
+	return dest
 }
 
 // downloadsDir picks where fc-copied files land: ~/Downloads when it exists
