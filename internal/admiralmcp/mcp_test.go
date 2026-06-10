@@ -110,6 +110,27 @@ func TestEnsureInstalledRejectsGarbledPort(t *testing.T) {
 	}
 }
 
+// TestEnsureInstalledFailsFastOnUnreadablePort verifies a read failure that
+// is NOT absence (here: the port path is a directory) is a non-retryable
+// error — only "file doesn't exist yet" means the daemon isn't up.
+func TestEnsureInstalledFailsFastOnUnreadablePort(t *testing.T) {
+	home := withHome(t)
+	publishEndpoint(t, home, "6012", "tok")
+
+	portPath := filepath.Join(home, ".fleet", "mcp.port")
+	if err := os.Remove(portPath); err != nil {
+		t.Fatalf("remove port file: %v", err)
+	}
+	if err := os.Mkdir(portPath, 0o700); err != nil {
+		t.Fatalf("mkdir in place of port file: %v", err)
+	}
+
+	err := EnsureInstalled()
+	if err == nil || errors.Is(err, ErrNotReady) {
+		t.Fatalf("EnsureInstalled() with unreadable port = %v, want non-retryable error", err)
+	}
+}
+
 // TestEnsureInstalledCreatesConfig verifies a fresh install creates
 // ~/.claude.json (0600 — it embeds the bearer token) with the fleet server
 // entry pointing at the published endpoint.

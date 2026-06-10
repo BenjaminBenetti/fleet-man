@@ -165,8 +165,13 @@ func EnsureInstalledEventually(wait time.Duration) error {
 // real error.
 func localMCPEndpoint() (url, token string, err error) {
 	portRaw, err := os.ReadFile(fleetpaths.McpPortPath())
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
 		return "", "", fmt.Errorf("%w (%s)", ErrNotReady, fleetpaths.McpPortPath())
+	}
+	if err != nil {
+		// Anything but absence (permission denied, I/O error) is not "the
+		// daemon isn't up yet" — fail fast instead of retrying it away.
+		return "", "", err
 	}
 	portStr := strings.TrimSpace(string(portRaw))
 	if portStr == "" {
@@ -180,8 +185,11 @@ func localMCPEndpoint() (url, token string, err error) {
 	}
 
 	tokenRaw, err := os.ReadFile(fleetpaths.McpTokenPath())
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
 		return "", "", fmt.Errorf("%w (%s)", ErrNotReady, fleetpaths.McpTokenPath())
+	}
+	if err != nil {
+		return "", "", err
 	}
 	token = strings.TrimSpace(string(tokenRaw))
 	if token == "" {
