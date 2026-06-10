@@ -151,14 +151,25 @@ var jobDownInstance = func(inst *fleet.Instance) error {
 
 // --- job registry ---
 
+// finishedJobRetention bounds the finished-job registry (FIFO eviction). It
+// only needs to cover a reasonable polling window for async callers; a poller
+// that comes back later falls back to the instance record (fleet_list), which
+// holds the durable status/error.
+const finishedJobRetention = 256
+
 type jobManager struct {
 	seq    int64
 	mu     sync.Mutex
 	active map[string]*job
+	// finished retains terminal jobs (bounded by finishedJobRetention) so an
+	// async caller — e.g. the MCP fleet_job_status tool — can still read a job's
+	// outcome after it completes. finishedIDs is the FIFO eviction order.
+	finished    map[string]*job
+	finishedIDs []string
 }
 
 func newJobManager() *jobManager {
-	return &jobManager{active: make(map[string]*job)}
+	return &jobManager{active: make(map[string]*job), finished: make(map[string]*job)}
 }
 
 type job struct {
@@ -192,10 +203,29 @@ func (m *jobManager) finish(id string) {
 	m.mu.Lock()
 	j := m.active[id]
 	delete(m.active, id)
+	if j != nil {
+		m.finished[id] = j
+		m.finishedIDs = append(m.finishedIDs, id)
+		for len(m.finishedIDs) > finishedJobRetention {
+			delete(m.finished, m.finishedIDs[0])
+			m.finishedIDs = m.finishedIDs[1:]
+		}
+	}
 	m.mu.Unlock()
 	if j != nil {
 		j.closeSubs()
 	}
+}
+
+// get returns a job by id — in-flight or recently finished — or nil if unknown
+// (never started, evicted, or pre-dating a daemon restart).
+func (m *jobManager) get(id string) *job {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if j, ok := m.active[id]; ok {
+		return j
+	}
+	return m.finished[id]
 }
 
 // summaries snapshots the in-flight jobs for GetState/Watch.
@@ -260,6 +290,21 @@ func (j *job) closeSubs() {
 		close(ch)
 		delete(j.subs, ch)
 	}
+}
+
+// outcome returns the job's terminal JobDone, or nil while it is still running.
+func (j *job) outcome() *fleetgrpc.JobDone {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if !j.done {
+		return nil
+	}
+	for i := len(j.history) - 1; i >= 0; i-- {
+		if d := j.history[i].GetDone(); d != nil {
+			return d
+		}
+	}
+	return nil
 }
 
 // runJob is the shared driver: emit JobStarted, run work (which may emit further
@@ -381,13 +426,19 @@ func loadInstanceSnapshot(fleetName, instanceName string) *fleetgrpc.Instance {
 
 // --- RPC handlers ---
 
-// CreateInstance pre-creates the StatusCreating record server-side (this removes
-// the client-side pre-create write that drove issue #63), then runs the
-// provisioning job.
-func (s *service) CreateInstance(req *fleetgrpc.CreateInstanceRequest, stream fleetgrpc.FleetService_CreateInstanceServer) error {
+// Each lifecycle RPC below is split into a start*Job half (validate, pre-write
+// the transitional record, start the server-owned job goroutine) and a thin
+// streaming wrapper that relays the job's events. The split lets the MCP tools
+// start a job and return its handle immediately (async-first, issue #134)
+// while the gRPC path keeps streaming until JobDone.
+
+// startCreateInstanceJob pre-creates the StatusCreating record server-side
+// (this removes the client-side pre-create write that drove issue #63), then
+// starts the provisioning job.
+func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest) (*job, error) {
 	fleetName, instanceName := req.GetFleet(), req.GetInstance()
 	if fleetName == "" || instanceName == "" {
-		return status.Error(codes.InvalidArgument, "fleet and instance are required")
+		return nil, status.Error(codes.InvalidArgument, "fleet and instance are required")
 	}
 
 	backendType := s.resolveBackend(req.GetBackend())
@@ -422,7 +473,7 @@ func (s *service) CreateInstance(req *fleetgrpc.CreateInstanceRequest, stream fl
 		})
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	s.pushState()
 
@@ -431,17 +482,26 @@ func (s *service) CreateInstance(req *fleetgrpc.CreateInstanceRequest, stream fl
 		err := jobRunCreate(fleetName, instanceName, remote, req.GetBranch(), req.GetVerbose(), backendType)
 		return loadInstanceSnapshot(fleetName, instanceName), nil, err
 	})
+	return j, nil
+}
+
+// CreateInstance starts the provisioning job and relays its events.
+func (s *service) CreateInstance(req *fleetgrpc.CreateInstanceRequest, stream fleetgrpc.FleetService_CreateInstanceServer) error {
+	j, err := s.startCreateInstanceJob(req)
+	if err != nil {
+		return err
+	}
 	return relay(j, stream)
 }
 
-// CloneInstance pre-creates the StatusCloning destination record (copying the
-// source's Config/Backend/Tag/Color/Branch per the contract), then runs the
-// clone job.
-func (s *service) CloneInstance(req *fleetgrpc.CloneInstanceRequest, stream fleetgrpc.FleetService_CloneInstanceServer) error {
+// startCloneInstanceJob pre-creates the StatusCloning destination record
+// (copying the source's Config/Backend/Tag/Color/Branch per the contract), then
+// starts the clone job.
+func (s *service) startCloneInstanceJob(req *fleetgrpc.CloneInstanceRequest) (*job, error) {
 	fleetName := req.GetFleet()
 	srcName, destName := req.GetSourceInstance(), req.GetNewInstance()
 	if fleetName == "" || srcName == "" || destName == "" {
-		return status.Error(codes.InvalidArgument, "fleet, source_instance and new_instance are required")
+		return nil, status.Error(codes.InvalidArgument, "fleet, source_instance and new_instance are required")
 	}
 
 	wsDir := filepath.Join(state.WorkspacesDir(), fleetName, destName, fleetName)
@@ -485,7 +545,7 @@ func (s *service) CloneInstance(req *fleetgrpc.CloneInstanceRequest, stream flee
 		return f.AddInstance(dest)
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	s.pushState()
 
@@ -494,43 +554,69 @@ func (s *service) CloneInstance(req *fleetgrpc.CloneInstanceRequest, stream flee
 		err := jobRunClone(fleetName, srcName, destName, false)
 		return loadInstanceSnapshot(fleetName, destName), nil, err
 	})
+	return j, nil
+}
+
+// CloneInstance starts the clone job and relays its events.
+func (s *service) CloneInstance(req *fleetgrpc.CloneInstanceRequest, stream fleetgrpc.FleetService_CloneInstanceServer) error {
+	j, err := s.startCloneInstanceJob(req)
+	if err != nil {
+		return err
+	}
 	return relay(j, stream)
 }
 
-func (s *service) StartInstance(req *fleetgrpc.StartInstanceRequest, stream fleetgrpc.FleetService_StartInstanceServer) error {
+func (s *service) startStartInstanceJob(req *fleetgrpc.StartInstanceRequest) (*job, error) {
 	if req.GetFleet() == "" || req.GetInstance() == "" {
-		return status.Error(codes.InvalidArgument, "fleet and instance are required")
+		return nil, status.Error(codes.InvalidArgument, "fleet and instance are required")
 	}
 	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_START_INSTANCE, req.GetFleet(), req.GetInstance(), time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
 		err := jobRunStart(req.GetFleet(), req.GetInstance())
 		return loadInstanceSnapshot(req.GetFleet(), req.GetInstance()), nil, err
 	})
+	return j, nil
+}
+
+func (s *service) StartInstance(req *fleetgrpc.StartInstanceRequest, stream fleetgrpc.FleetService_StartInstanceServer) error {
+	j, err := s.startStartInstanceJob(req)
+	if err != nil {
+		return err
+	}
 	return relay(j, stream)
 }
 
-func (s *service) StopInstance(req *fleetgrpc.StopInstanceRequest, stream fleetgrpc.FleetService_StopInstanceServer) error {
+func (s *service) startStopInstanceJob(req *fleetgrpc.StopInstanceRequest) (*job, error) {
 	if req.GetFleet() == "" || req.GetInstance() == "" {
-		return status.Error(codes.InvalidArgument, "fleet and instance are required")
+		return nil, status.Error(codes.InvalidArgument, "fleet and instance are required")
 	}
 	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_STOP_INSTANCE, req.GetFleet(), req.GetInstance(), time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
 		err := jobRunStop(req.GetFleet(), req.GetInstance())
 		return loadInstanceSnapshot(req.GetFleet(), req.GetInstance()), nil, err
 	})
+	return j, nil
+}
+
+func (s *service) StopInstance(req *fleetgrpc.StopInstanceRequest, stream fleetgrpc.FleetService_StopInstanceServer) error {
+	j, err := s.startStopInstanceJob(req)
+	if err != nil {
+		return err
+	}
 	return relay(j, stream)
 }
 
-// DestroyInstance tears down one instance, or (destroy_fleet) every instance in
-// the fleet plus the fleet record. Best-effort: container/workspace failures
-// become warnings, and the record is removed regardless.
-func (s *service) DestroyInstance(req *fleetgrpc.DestroyInstanceRequest, stream fleetgrpc.FleetService_DestroyInstanceServer) error {
+// startDestroyInstanceJob validates the target, marks it deleting, and starts
+// the teardown job for one instance or (destroy_fleet) the whole fleet.
+// Best-effort: container/workspace failures become warnings, and the record is
+// removed regardless.
+func (s *service) startDestroyInstanceJob(req *fleetgrpc.DestroyInstanceRequest) (*job, error) {
 	fleetName := req.GetFleet()
 	if fleetName == "" {
-		return status.Error(codes.InvalidArgument, "fleet is required")
+		return nil, status.Error(codes.InvalidArgument, "fleet is required")
 	}
 	if !req.GetDestroyFleet() && req.GetInstance() == "" {
-		return status.Error(codes.InvalidArgument, "instance is required unless destroy_fleet is set")
+		return nil, status.Error(codes.InvalidArgument, "instance is required unless destroy_fleet is set")
 	}
 
 	// Validate the target exists so a typo'd / stale name fails fast (the CLI
@@ -538,20 +624,48 @@ func (s *service) DestroyInstance(req *fleetgrpc.DestroyInstanceRequest, stream 
 	if st, err := state.Load(); err == nil {
 		f, ok := st.Fleets[fleetName]
 		if !ok {
-			return status.Errorf(codes.NotFound, "fleet %q not found", fleetName)
+			return nil, status.Errorf(codes.NotFound, "fleet %q not found", fleetName)
 		}
 		if !req.GetDestroyFleet() {
 			if _, err := f.GetInstance(req.GetInstance()); err != nil {
-				return status.Errorf(codes.NotFound, "instance %q not found in fleet %q", req.GetInstance(), fleetName)
+				return nil, status.Errorf(codes.NotFound, "instance %q not found in fleet %q", req.GetInstance(), fleetName)
 			}
 		}
 	}
 
 	target := req.GetInstance()
+	// Mark the targets StatusDeleting server-side (the teardown sibling of the
+	// StatusCreating pre-write) so pollers — fleet_list, async MCP callers, the
+	// TUI — see the teardown in flight instead of a stale running/stopped
+	// status. Best-effort: the job removes the records regardless, so a failed
+	// mark only costs the transitional status.
+	_ = state.Update(func(st *state.State) error {
+		f, ok := st.Fleets[fleetName]
+		if !ok {
+			return nil
+		}
+		for _, inst := range f.Instances {
+			if req.GetDestroyFleet() || inst.Name == target {
+				inst.Status = fleet.StatusDeleting
+			}
+		}
+		return nil
+	})
+	s.pushState()
+
 	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_DESTROY_INSTANCE, fleetName, target, time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
 		return nil, s.destroy(fleetName, target, req.GetDestroyFleet()), nil
 	})
+	return j, nil
+}
+
+// DestroyInstance starts the teardown job and relays its events.
+func (s *service) DestroyInstance(req *fleetgrpc.DestroyInstanceRequest, stream fleetgrpc.FleetService_DestroyInstanceServer) error {
+	j, err := s.startDestroyInstanceJob(req)
+	if err != nil {
+		return err
+	}
 	return relay(j, stream)
 }
 

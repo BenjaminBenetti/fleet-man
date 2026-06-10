@@ -17,7 +17,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/tui"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
 )
 
@@ -31,6 +30,14 @@ import (
 // Names are flat and prefixed `fleet_` (the MCP spec restricts tool names to
 // [A-Za-z0-9_.-]). cwd-based fleet/instance inference — a host/client concept —
 // is dropped: tools take explicit fleet and instance arguments.
+//
+// The slow, job-shaped lifecycle tools (fleet_up, fleet_clone, fleet_down,
+// fleet_destroy_fleet) are ASYNC-FIRST (issue #134): they start the server-
+// owned job and return a {job_id, done:false} handle within seconds, instead of
+// blocking past the MCP client's tool-call timeout (provisioning takes
+// minutes). Completion, failure, and warnings are polled via fleet_job_status
+// (or fleet_list's status/error). wait:true opts back into blocking. fleet_start
+// and fleet_stop stay blocking — they finish in seconds.
 
 // registerMCPTools wires every fleet tool onto srv.
 func registerMCPTools(srv *mcp.Server, s *service) {
@@ -55,28 +62,32 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	// --- lifecycle ---
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_up",
-		Description: "Create (provision) a new instance in a fleet. Provide remote (git URL) when creating the first instance of a new fleet.",
+		Description: "Create (provision) a new instance in a fleet. Returns immediately with a job_id to poll via fleet_job_status (provisioning takes minutes); pass wait:true to block until done instead. Provide remote (git URL) when creating the first instance of a new fleet.",
 	}, s.mcpUp)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_start",
-		Description: "Start a previously stopped instance's container.",
+		Description: "Start a previously stopped instance's container. Blocks until started.",
 	}, s.mcpStart)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_stop",
-		Description: "Stop an instance's container, keeping the instance record.",
+		Description: "Stop an instance's container, keeping the instance record. Blocks until stopped.",
 	}, s.mcpStop)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_down",
-		Description: "Stop and remove a single instance: tears down its container, removes its workspace, and deletes the record.",
+		Description: "Stop and remove a single instance: tears down its container, removes its workspace, and deletes the record. Returns immediately with a job_id to poll via fleet_job_status; pass wait:true to block until done.",
 	}, s.mcpDown)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_destroy_fleet",
-		Description: "Destroy an entire fleet: tears down every instance and removes the fleet record.",
+		Description: "Destroy an entire fleet: tears down every instance and removes the fleet record. Returns immediately with a job_id to poll via fleet_job_status; pass wait:true to block until done.",
 	}, s.mcpDestroyFleet)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_clone",
-		Description: "Clone an existing instance into a new one within the same fleet, preserving its container state.",
+		Description: "Clone an existing instance into a new one within the same fleet, preserving its container state. Returns immediately with a job_id to poll via fleet_job_status; pass wait:true to block until done.",
 	}, s.mcpClone)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_job_status",
+		Description: "Report the state of a lifecycle job (running, succeeded, or failed) with its error and warnings. Poll this to await a job started by fleet_up, fleet_clone, fleet_down, or fleet_destroy_fleet.",
+	}, s.mcpJobStatus)
 
 	// --- exec & sessions ---
 	mcp.AddTool(srv, &mcp.Tool{
@@ -140,25 +151,44 @@ func toMCPInstance(fleetName string, inst *fleetgrpc.Instance) *mcpInstance {
 	return m
 }
 
-// FleetJobOutput is the result of a lifecycle tool. Warnings are non-fatal
-// issues from an otherwise-successful job (e.g. a best-effort teardown step).
+// FleetJobOutput is the result of a lifecycle tool. An async kickoff (the
+// default for fleet_up/fleet_clone/fleet_down/fleet_destroy_fleet) returns
+// done=false the moment the job starts: job_id is the handle to poll via
+// fleet_job_status, and instance is the transitional record (creating/cloning/
+// deleting; absent for fleet-wide jobs). A blocking call (wait:true, and always
+// fleet_start/fleet_stop) returns done=true with the final record. Warnings are
+// non-fatal issues from an otherwise-successful job (e.g. a best-effort
+// teardown step).
 type FleetJobOutput struct {
-	Success  bool         `json:"success"`
+	JobID    string       `json:"job_id,omitempty"`
+	Done     bool         `json:"done"`
+	Success  bool         `json:"success,omitempty"`
 	Instance *mcpInstance `json:"instance,omitempty"`
 	Warnings []string     `json:"warnings,omitempty"`
 }
 
-// jobResult turns a lifecycle outcome into a tool result: a failed job becomes a
-// tool error (any warnings folded into the message); a successful one returns
-// the final instance + warnings.
-func jobResult(fleetName string, final *fleetgrpc.Instance, warnings []string, err error) (*mcp.CallToolResult, FleetJobOutput, error) {
+// jobResult turns a completed lifecycle outcome into a tool result: a failed
+// job becomes a tool error (any warnings folded into the message); a successful
+// one returns the final instance + warnings.
+func jobResult(fleetName, jobID string, final *fleetgrpc.Instance, warnings []string, err error) (*mcp.CallToolResult, FleetJobOutput, error) {
 	if err != nil {
 		if len(warnings) > 0 {
 			return nil, FleetJobOutput{}, fmt.Errorf("%w (warnings: %s)", mcpErr(err), strings.Join(warnings, "; "))
 		}
 		return nil, FleetJobOutput{}, mcpErr(err)
 	}
-	return nil, FleetJobOutput{Success: true, Instance: toMCPInstance(fleetName, final), Warnings: warnings}, nil
+	return nil, FleetJobOutput{JobID: jobID, Done: true, Success: true, Instance: toMCPInstance(fleetName, final), Warnings: warnings}, nil
+}
+
+// asyncJobResult is the immediate return of an async lifecycle kickoff: the job
+// handle plus the instance's current transitional record (nil for fleet-wide
+// jobs, or if the job already removed the record). The caller discovers
+// completion by polling fleet_job_status {job_id} or fleet_list.
+func asyncJobResult(fleetName string, j *job) (*mcp.CallToolResult, FleetJobOutput, error) {
+	return nil, FleetJobOutput{
+		JobID:    j.summary.GetJobId(),
+		Instance: toMCPInstance(fleetName, loadInstanceSnapshot(fleetName, j.summary.GetInstance())),
+	}, nil
 }
 
 // FleetInstanceInput identifies one instance.
@@ -297,6 +327,7 @@ type FleetUpInput struct {
 	Remote   string `json:"remote,omitempty" jsonschema:"git remote URL; required only when creating the first instance of a new fleet"`
 	Branch   string `json:"branch,omitempty" jsonschema:"git branch to check out; defaults to the repository's default branch"`
 	Backend  string `json:"backend,omitempty" jsonschema:"backend type: devcontainer (default), coder, or codespaces"`
+	Wait     bool   `json:"wait,omitempty" jsonschema:"block until provisioning completes instead of returning a job handle immediately; provisioning takes minutes, so only set this with a generous tool-call timeout"`
 }
 
 func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpInput) (*mcp.CallToolResult, FleetJobOutput, error) {
@@ -321,65 +352,91 @@ func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpI
 	if in.Branch != "" {
 		req.Branch = &in.Branch
 	}
+	j, err := s.startCreateInstanceJob(req)
+	if err != nil {
+		return nil, FleetJobOutput{}, mcpErr(err)
+	}
+	if !in.Wait {
+		return asyncJobResult(in.Fleet, j)
+	}
 	jctx, cancel := mergeCtx(s.bgCtx, ctx)
 	defer cancel()
-	final, warnings, err := runLifecycleJob(jctx, func(st grpc.ServerStreamingServer[fleetgrpc.JobEvent]) error {
-		return s.CreateInstance(req, st)
-	})
-	return jobResult(in.Fleet, final, warnings, err)
+	final, warnings, err := awaitJob(jctx, j)
+	return jobResult(in.Fleet, j.summary.GetJobId(), final, warnings, err)
 }
 
 func (s *service) mcpStart(ctx context.Context, _ *mcp.CallToolRequest, in FleetInstanceInput) (*mcp.CallToolResult, FleetJobOutput, error) {
 	if in.Fleet == "" || in.Instance == "" {
 		return nil, FleetJobOutput{}, errors.New("fleet and instance are required")
 	}
+	j, err := s.startStartInstanceJob(&fleetgrpc.StartInstanceRequest{Fleet: in.Fleet, Instance: in.Instance})
+	if err != nil {
+		return nil, FleetJobOutput{}, mcpErr(err)
+	}
 	jctx, cancel := mergeCtx(s.bgCtx, ctx)
 	defer cancel()
-	final, warnings, err := runLifecycleJob(jctx, func(st grpc.ServerStreamingServer[fleetgrpc.JobEvent]) error {
-		return s.StartInstance(&fleetgrpc.StartInstanceRequest{Fleet: in.Fleet, Instance: in.Instance}, st)
-	})
-	return jobResult(in.Fleet, final, warnings, err)
+	final, warnings, err := awaitJob(jctx, j)
+	return jobResult(in.Fleet, j.summary.GetJobId(), final, warnings, err)
 }
 
 func (s *service) mcpStop(ctx context.Context, _ *mcp.CallToolRequest, in FleetInstanceInput) (*mcp.CallToolResult, FleetJobOutput, error) {
 	if in.Fleet == "" || in.Instance == "" {
 		return nil, FleetJobOutput{}, errors.New("fleet and instance are required")
 	}
+	j, err := s.startStopInstanceJob(&fleetgrpc.StopInstanceRequest{Fleet: in.Fleet, Instance: in.Instance})
+	if err != nil {
+		return nil, FleetJobOutput{}, mcpErr(err)
+	}
 	jctx, cancel := mergeCtx(s.bgCtx, ctx)
 	defer cancel()
-	final, warnings, err := runLifecycleJob(jctx, func(st grpc.ServerStreamingServer[fleetgrpc.JobEvent]) error {
-		return s.StopInstance(&fleetgrpc.StopInstanceRequest{Fleet: in.Fleet, Instance: in.Instance}, st)
-	})
-	return jobResult(in.Fleet, final, warnings, err)
+	final, warnings, err := awaitJob(jctx, j)
+	return jobResult(in.Fleet, j.summary.GetJobId(), final, warnings, err)
 }
 
-func (s *service) mcpDown(ctx context.Context, _ *mcp.CallToolRequest, in FleetInstanceInput) (*mcp.CallToolResult, FleetJobOutput, error) {
+type FleetDownInput struct {
+	Fleet    string `json:"fleet" jsonschema:"fleet name"`
+	Instance string `json:"instance" jsonschema:"instance name"`
+	Wait     bool   `json:"wait,omitempty" jsonschema:"block until the teardown completes instead of returning a job handle immediately"`
+}
+
+func (s *service) mcpDown(ctx context.Context, _ *mcp.CallToolRequest, in FleetDownInput) (*mcp.CallToolResult, FleetJobOutput, error) {
 	if in.Fleet == "" || in.Instance == "" {
 		return nil, FleetJobOutput{}, errors.New("fleet and instance are required")
 	}
 	instance := in.Instance
-	jctx, cancel := mergeCtx(s.bgCtx, ctx)
-	defer cancel()
-	final, warnings, err := runLifecycleJob(jctx, func(st grpc.ServerStreamingServer[fleetgrpc.JobEvent]) error {
-		return s.DestroyInstance(&fleetgrpc.DestroyInstanceRequest{Fleet: in.Fleet, Instance: &instance}, st)
-	})
-	return jobResult(in.Fleet, final, warnings, err)
-}
-
-type FleetNameInput struct {
-	Fleet string `json:"fleet" jsonschema:"fleet name"`
-}
-
-func (s *service) mcpDestroyFleet(ctx context.Context, _ *mcp.CallToolRequest, in FleetNameInput) (*mcp.CallToolResult, FleetJobOutput, error) {
-	if in.Fleet == "" {
-		return nil, FleetJobOutput{}, errors.New("fleet is required")
+	j, err := s.startDestroyInstanceJob(&fleetgrpc.DestroyInstanceRequest{Fleet: in.Fleet, Instance: &instance})
+	if err != nil {
+		return nil, FleetJobOutput{}, mcpErr(err)
+	}
+	if !in.Wait {
+		return asyncJobResult(in.Fleet, j)
 	}
 	jctx, cancel := mergeCtx(s.bgCtx, ctx)
 	defer cancel()
-	final, warnings, err := runLifecycleJob(jctx, func(st grpc.ServerStreamingServer[fleetgrpc.JobEvent]) error {
-		return s.DestroyInstance(&fleetgrpc.DestroyInstanceRequest{Fleet: in.Fleet, DestroyFleet: true}, st)
-	})
-	return jobResult(in.Fleet, final, warnings, err)
+	final, warnings, err := awaitJob(jctx, j)
+	return jobResult(in.Fleet, j.summary.GetJobId(), final, warnings, err)
+}
+
+type FleetDestroyFleetInput struct {
+	Fleet string `json:"fleet" jsonschema:"fleet name"`
+	Wait  bool   `json:"wait,omitempty" jsonschema:"block until the teardown completes instead of returning a job handle immediately"`
+}
+
+func (s *service) mcpDestroyFleet(ctx context.Context, _ *mcp.CallToolRequest, in FleetDestroyFleetInput) (*mcp.CallToolResult, FleetJobOutput, error) {
+	if in.Fleet == "" {
+		return nil, FleetJobOutput{}, errors.New("fleet is required")
+	}
+	j, err := s.startDestroyInstanceJob(&fleetgrpc.DestroyInstanceRequest{Fleet: in.Fleet, DestroyFleet: true})
+	if err != nil {
+		return nil, FleetJobOutput{}, mcpErr(err)
+	}
+	if !in.Wait {
+		return asyncJobResult(in.Fleet, j)
+	}
+	jctx, cancel := mergeCtx(s.bgCtx, ctx)
+	defer cancel()
+	final, warnings, err := awaitJob(jctx, j)
+	return jobResult(in.Fleet, j.summary.GetJobId(), final, warnings, err)
 }
 
 type FleetCloneInput struct {
@@ -390,6 +447,7 @@ type FleetCloneInput struct {
 	Tag         string `json:"tag,omitempty" jsonschema:"optional tag override for the clone"`
 	Color       string `json:"color,omitempty" jsonschema:"optional color override for the clone"`
 	Branch      string `json:"branch,omitempty" jsonschema:"optional branch override for the clone"`
+	Wait        bool   `json:"wait,omitempty" jsonschema:"block until the clone completes instead of returning a job handle immediately; cloning can take minutes"`
 }
 
 func (s *service) mcpClone(ctx context.Context, _ *mcp.CallToolRequest, in FleetCloneInput) (*mcp.CallToolResult, FleetJobOutput, error) {
@@ -409,12 +467,70 @@ func (s *service) mcpClone(ctx context.Context, _ *mcp.CallToolRequest, in Fleet
 	if in.Branch != "" {
 		req.BranchOverride = &in.Branch
 	}
+	j, err := s.startCloneInstanceJob(req)
+	if err != nil {
+		return nil, FleetJobOutput{}, mcpErr(err)
+	}
+	if !in.Wait {
+		return asyncJobResult(in.Fleet, j)
+	}
 	jctx, cancel := mergeCtx(s.bgCtx, ctx)
 	defer cancel()
-	final, warnings, err := runLifecycleJob(jctx, func(st grpc.ServerStreamingServer[fleetgrpc.JobEvent]) error {
-		return s.CloneInstance(req, st)
-	})
-	return jobResult(in.Fleet, final, warnings, err)
+	final, warnings, err := awaitJob(jctx, j)
+	return jobResult(in.Fleet, j.summary.GetJobId(), final, warnings, err)
+}
+
+type FleetJobStatusInput struct {
+	JobID string `json:"job_id" jsonschema:"job id returned by a lifecycle tool"`
+}
+
+// FleetJobStatusOutput reports one lifecycle job. State is running until the
+// job finishes, then succeeded or failed (with Error). Result is the final
+// instance record from the job, when it produced one. A failed job is DATA
+// here (state:"failed"), not a tool error — polling must be able to read the
+// failure.
+type FleetJobStatusOutput struct {
+	JobID     string       `json:"job_id"`
+	Kind      string       `json:"kind"`
+	Fleet     string       `json:"fleet"`
+	Instance  string       `json:"instance,omitempty"`
+	State     string       `json:"state"`
+	StartedAt string       `json:"started_at,omitempty"`
+	Ms        int64        `json:"ms,omitempty"`
+	Error     string       `json:"error,omitempty"`
+	Warnings  []string     `json:"warnings,omitempty"`
+	Result    *mcpInstance `json:"result,omitempty"`
+}
+
+func (s *service) mcpJobStatus(_ context.Context, _ *mcp.CallToolRequest, in FleetJobStatusInput) (*mcp.CallToolResult, FleetJobStatusOutput, error) {
+	if in.JobID == "" {
+		return nil, FleetJobStatusOutput{}, errors.New("job_id is required")
+	}
+	j := s.jobs.get(in.JobID)
+	if j == nil {
+		return nil, FleetJobStatusOutput{}, fmt.Errorf("job %q not found (it may pre-date a daemon restart, or its result expired); check the instance's status and error via fleet_list instead", in.JobID)
+	}
+	out := FleetJobStatusOutput{
+		JobID:    j.summary.GetJobId(),
+		Kind:     jobKindName(j.summary.GetKind()),
+		Fleet:    j.summary.GetFleet(),
+		Instance: j.summary.GetInstance(),
+		State:    "running",
+	}
+	if ts := j.summary.GetStartedAt(); ts != nil {
+		out.StartedAt = ts.AsTime().UTC().Format(time.RFC3339)
+	}
+	if d := j.outcome(); d != nil {
+		out.State = "succeeded"
+		if !d.GetSuccess() {
+			out.State = "failed"
+			out.Error = d.GetError()
+		}
+		out.Ms = d.GetMs()
+		out.Warnings = d.GetWarnings()
+		out.Result = toMCPInstance(j.summary.GetFleet(), d.GetInstance())
+	}
+	return nil, out, nil
 }
 
 // --- exec & session tools ---

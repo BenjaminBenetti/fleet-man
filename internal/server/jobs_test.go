@@ -217,6 +217,34 @@ func TestDestroyInstanceJobRemovesRecord(t *testing.T) {
 	}
 }
 
+// TestJobManagerFinishedRetention asserts a finished job stays resolvable by id
+// (for async pollers) until FIFO eviction pushes it out.
+func TestJobManagerFinishedRetention(t *testing.T) {
+	m := newJobManager()
+
+	first := m.start(fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, "f", "i0", time.Now())
+	firstID := first.summary.GetJobId()
+	if m.get(firstID) != first {
+		t.Fatalf("active job not resolvable by id")
+	}
+	m.finish(firstID)
+	if m.get(firstID) != first {
+		t.Fatalf("finished job should stay resolvable by id")
+	}
+	if len(m.summaries()) != 0 {
+		t.Fatalf("finished job must not be advertised as active")
+	}
+
+	// Filling the retention window evicts the oldest finished job.
+	for range finishedJobRetention {
+		j := m.start(fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, "f", "i", time.Now())
+		m.finish(j.summary.GetJobId())
+	}
+	if m.get(firstID) != nil {
+		t.Fatalf("oldest finished job should be evicted after %d newer ones", finishedJobRetention)
+	}
+}
+
 func TestActiveJobsSurfacedInGetState(t *testing.T) {
 	isolateFleetDir(t)
 	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
