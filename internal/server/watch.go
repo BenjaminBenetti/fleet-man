@@ -61,7 +61,7 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 			// complete.
 			return nil
 		case <-sub.notify:
-			st, rt, bo, rm := sub.drain()
+			st, rt, bo, fc, rm := sub.drain()
 			if st != nil {
 				ev := &fleetgrpc.Event{Kind: &fleetgrpc.Event_StateChanged{StateChanged: &fleetgrpc.StateChanged{State: st}}}
 				if err := stream.Send(ev); err != nil {
@@ -76,6 +76,12 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 			}
 			for _, b := range bo {
 				ev := &fleetgrpc.Event{Kind: &fleetgrpc.Event_BrowserOpen{BrowserOpen: b}}
+				if err := stream.Send(ev); err != nil {
+					return err
+				}
+			}
+			for _, f := range fc {
+				ev := &fleetgrpc.Event{Kind: &fleetgrpc.Event_FileCopy{FileCopy: f}}
 				if err := stream.Send(ev); err != nil {
 					return err
 				}

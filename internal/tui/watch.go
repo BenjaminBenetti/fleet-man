@@ -27,6 +27,9 @@ type runtimeChangedMsg struct{ runtime []*fleetgrpc.InstanceRuntime }
 type watchBrowserOpenMsg struct {
 	url, dataDir, fleet, instance string
 }
+type watchFileCopyMsg struct {
+	fleet, instance, path string
+}
 type remoteMcpStatusMsg struct{ status *fleetgrpc.RemoteMcpStatus }
 type watchErrMsg struct{ err error }
 type watchClosedMsg struct{ err error }
@@ -112,6 +115,13 @@ func watchOnce(ctx context.Context, program *tea.Program) bool {
 				dataDir:  bo.GetDataDir(),
 				fleet:    bo.GetFleet(),
 				instance: bo.GetInstance(),
+			})
+		case *fleetgrpc.Event_FileCopy:
+			fc := k.FileCopy
+			program.Send(watchFileCopyMsg{
+				fleet:    fc.GetFleet(),
+				instance: fc.GetInstance(),
+				path:     fc.GetPath(),
 			})
 		case *fleetgrpc.Event_RemoteMcpStatus:
 			program.Send(remoteMcpStatusMsg{status: k.RemoteMcpStatus})

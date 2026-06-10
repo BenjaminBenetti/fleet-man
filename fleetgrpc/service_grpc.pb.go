@@ -46,6 +46,7 @@ const (
 	FleetService_ResolveLogsCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveLogsCommand"
 	FleetService_Logs_FullMethodName                   = "/fleetgrpc.FleetService/Logs"
 	FleetService_PortForward_FullMethodName            = "/fleetgrpc.FleetService/PortForward"
+	FleetService_CopyFile_FullMethodName               = "/fleetgrpc.FleetService/CopyFile"
 	FleetService_GetCoderTemplateParams_FullMethodName = "/fleetgrpc.FleetService/GetCoderTemplateParams"
 	FleetService_GetBrowserConfig_FullMethodName       = "/fleetgrpc.FleetService/GetBrowserConfig"
 	FleetService_PrepareBrowser_FullMethodName         = "/fleetgrpc.FleetService/PrepareBrowser"
@@ -108,6 +109,9 @@ type FleetServiceClient interface {
 	ResolveLogsCommand(ctx context.Context, in *ResolveLogsCommandRequest, opts ...grpc.CallOption) (*ResolveLogsCommandReply, error)
 	Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error)
 	PortForward(ctx context.Context, in *PortForwardRequest, opts ...grpc.CallOption) (*PortForwardReply, error)
+	// CopyFile streams a single file out of an instance: first chunk is metadata,
+	// the rest are data. Backs `fleet copy` and the in-instance `fc` shorthand.
+	CopyFile(ctx context.Context, in *CopyFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CopyFileChunk], error)
 	// ---- Coder template parameters (Coder API, read server-side) ----
 	GetCoderTemplateParams(ctx context.Context, in *GetCoderTemplateParamsRequest, opts ...grpc.CallOption) (*GetCoderTemplateParamsReply, error)
 	// ---- Browser (container-side half of the host browser feature) ----
@@ -459,6 +463,25 @@ func (c *fleetServiceClient) PortForward(ctx context.Context, in *PortForwardReq
 	return out, nil
 }
 
+func (c *fleetServiceClient) CopyFile(ctx context.Context, in *CopyFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CopyFileChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[8], FleetService_CopyFile_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CopyFileRequest, CopyFileChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_CopyFileClient = grpc.ServerStreamingClient[CopyFileChunk]
+
 func (c *fleetServiceClient) GetCoderTemplateParams(ctx context.Context, in *GetCoderTemplateParamsRequest, opts ...grpc.CallOption) (*GetCoderTemplateParamsReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetCoderTemplateParamsReply)
@@ -546,6 +569,9 @@ type FleetServiceServer interface {
 	ResolveLogsCommand(context.Context, *ResolveLogsCommandRequest) (*ResolveLogsCommandReply, error)
 	Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error
 	PortForward(context.Context, *PortForwardRequest) (*PortForwardReply, error)
+	// CopyFile streams a single file out of an instance: first chunk is metadata,
+	// the rest are data. Backs `fleet copy` and the in-instance `fc` shorthand.
+	CopyFile(*CopyFileRequest, grpc.ServerStreamingServer[CopyFileChunk]) error
 	// ---- Coder template parameters (Coder API, read server-side) ----
 	GetCoderTemplateParams(context.Context, *GetCoderTemplateParamsRequest) (*GetCoderTemplateParamsReply, error)
 	// ---- Browser (container-side half of the host browser feature) ----
@@ -641,6 +667,9 @@ func (UnimplementedFleetServiceServer) Logs(*LogsRequest, grpc.ServerStreamingSe
 }
 func (UnimplementedFleetServiceServer) PortForward(context.Context, *PortForwardRequest) (*PortForwardReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PortForward not implemented")
+}
+func (UnimplementedFleetServiceServer) CopyFile(*CopyFileRequest, grpc.ServerStreamingServer[CopyFileChunk]) error {
+	return status.Errorf(codes.Unimplemented, "method CopyFile not implemented")
 }
 func (UnimplementedFleetServiceServer) GetCoderTemplateParams(context.Context, *GetCoderTemplateParamsRequest) (*GetCoderTemplateParamsReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetCoderTemplateParams not implemented")
@@ -1098,6 +1127,17 @@ func _FleetService_PortForward_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FleetService_CopyFile_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(CopyFileRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FleetServiceServer).CopyFile(m, &grpc.GenericServerStream[CopyFileRequest, CopyFileChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_CopyFileServer = grpc.ServerStreamingServer[CopyFileChunk]
+
 func _FleetService_GetCoderTemplateParams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetCoderTemplateParamsRequest)
 	if err := dec(in); err != nil {
@@ -1288,6 +1328,11 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Logs",
 			Handler:       _FleetService_Logs_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "CopyFile",
+			Handler:       _FleetService_CopyFile_Handler,
 			ServerStreams: true,
 		},
 	},

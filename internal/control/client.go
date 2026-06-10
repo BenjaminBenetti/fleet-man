@@ -78,6 +78,12 @@ func (c *Client) OpenBrowser(url string) error {
 	return c.Send(TypeOpenBrowser, OpenBrowserPayload{URL: url})
 }
 
+// CopyFile is a typed convenience over Send for TypeCopyFile: it asks the host
+// to copy the file at the absolute in-instance path out to the user's machine.
+func (c *Client) CopyFile(path string) error {
+	return c.Send(TypeCopyFile, CopyFilePayload{Path: path})
+}
+
 // Close closes the underlying connection. It is safe to call once; further
 // Sends will fail.
 func (c *Client) Close() error {

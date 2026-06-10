@@ -180,6 +180,15 @@ func (h *hub) broadcastBrowserOpen(ev *fleetgrpc.BrowserOpen) {
 	}
 }
 
+// broadcastFileCopy fans a control-socket file.copy out to every subscriber.
+// Discrete like browser opens (each request matters), so queued in order rather
+// than conflated. Runs on the hub loop.
+func (h *hub) broadcastFileCopy(ev *fleetgrpc.FileCopy) {
+	for sub := range h.subs {
+		sub.enqueueFileCopy(ev)
+	}
+}
+
 // broadcastRemoteMcpStatus caches the latest outbound-MCP-tunnel status and fans
 // it out to every subscriber. Conflatable (newest status wins, like setState),
 // so a no-op transition is dropped and a slow consumer only ever sees the
@@ -215,6 +224,9 @@ type subscriber struct {
 	// Unlike state/runtime these are discrete (each open matters), so they are
 	// NOT conflated — they accumulate until drained.
 	pendingBrowserOpen []*fleetgrpc.BrowserOpen
+	// pendingFileCopy queues control-socket file.copy events in order — discrete
+	// like pendingBrowserOpen (each copy request matters).
+	pendingFileCopy []*fleetgrpc.FileCopy
 	// pendingRemoteMcp is the newest outbound-MCP-tunnel status (conflated like
 	// pendingState — only the current status matters).
 	pendingRemoteMcp *fleetgrpc.RemoteMcpStatus
@@ -267,9 +279,16 @@ func (s *subscriber) enqueueRemoteMcp(st *fleetgrpc.RemoteMcpStatus) {
 	s.signal()
 }
 
-// drain takes the pending state + runtime + browser-opens + remote-MCP status
-// out of the buffer for sending.
-func (s *subscriber) drain() (*fleetgrpc.State, []*fleetgrpc.InstanceRuntime, []*fleetgrpc.BrowserOpen, *fleetgrpc.RemoteMcpStatus) {
+func (s *subscriber) enqueueFileCopy(ev *fleetgrpc.FileCopy) {
+	s.mu.Lock()
+	s.pendingFileCopy = append(s.pendingFileCopy, ev)
+	s.mu.Unlock()
+	s.signal()
+}
+
+// drain takes the pending state + runtime + browser-opens + file-copies +
+// remote-MCP status out of the buffer for sending.
+func (s *subscriber) drain() (*fleetgrpc.State, []*fleetgrpc.InstanceRuntime, []*fleetgrpc.BrowserOpen, []*fleetgrpc.FileCopy, *fleetgrpc.RemoteMcpStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.pendingState
@@ -284,7 +303,9 @@ func (s *subscriber) drain() (*fleetgrpc.State, []*fleetgrpc.InstanceRuntime, []
 	}
 	bo := s.pendingBrowserOpen
 	s.pendingBrowserOpen = nil
+	fc := s.pendingFileCopy
+	s.pendingFileCopy = nil
 	rm := s.pendingRemoteMcp
 	s.pendingRemoteMcp = nil
-	return st, rt, bo, rm
+	return st, rt, bo, fc, rm
 }

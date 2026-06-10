@@ -75,6 +75,9 @@ service FleetService {
   rpc ResolveLogsCommand(ResolveLogsCommandRequest) returns (ResolveLogsCommandReply);
   rpc Logs(LogsRequest) returns (stream LogLine);
   rpc PortForward(PortForwardRequest) returns (PortForwardReply);
+  // CopyFile streams a single file out of an instance: first chunk is metadata,
+  // the rest are data. Backs `fleet copy` and the in-instance `fc` shorthand.
+  rpc CopyFile(CopyFileRequest) returns (stream CopyFileChunk);
 
   // ---- Coder template parameters (Coder API, read server-side) ----
   rpc GetCoderTemplateParams(GetCoderTemplateParamsRequest) returns (GetCoderTemplateParamsReply);
