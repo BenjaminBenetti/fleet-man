@@ -45,7 +45,7 @@ func fakeTunnel(t *testing.T) *yamux.Session {
 }
 
 func TestRegistryClaimMintsDistinctUnguessableIDs(t *testing.T) {
-	r := newRegistry("https://gw.example.com", 16, testSigner(t, ""))
+	r := newRegistry("https://gw.example.com", "", 16, testSigner(t, ""))
 
 	s1, reply1, _, err := r.claim(tunnel.RegisterRequest{})
 	if err != nil {
@@ -77,7 +77,7 @@ func TestRegistryClaimMintsDistinctUnguessableIDs(t *testing.T) {
 }
 
 func TestRegistryReclaimReturnsSameURL(t *testing.T) {
-	r := newRegistry("https://gw", 16, testSigner(t, ""))
+	r := newRegistry("https://gw", "", 16, testSigner(t, ""))
 
 	s, reply, isNew, err := r.claim(tunnel.RegisterRequest{})
 	if err != nil {
@@ -120,7 +120,7 @@ func TestRegistryReclaimReturnsSameURL(t *testing.T) {
 // and reclaim alike — returns a session token the registry's own signer minted
 // for that session's ids.
 func TestRegistryRepliesCarrySessionToken(t *testing.T) {
-	r := newRegistry("https://gw", 16, testSigner(t, "k"))
+	r := newRegistry("https://gw", "", 16, testSigner(t, "k"))
 
 	s, reply, _, err := r.claim(tunnel.RegisterRequest{})
 	if err != nil {
@@ -150,14 +150,14 @@ func TestRegistryRepliesCarrySessionToken(t *testing.T) {
 // token alone.
 func TestRegistryTokenResurrectsSessionAcrossRestart(t *testing.T) {
 	const key = "stable-signing-key"
-	r1 := newRegistry("https://gw", 16, testSigner(t, key))
+	r1 := newRegistry("https://gw", "", 16, testSigner(t, key))
 	_, reply1, _, err := r1.claim(tunnel.RegisterRequest{})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 
 	// "Restart": a brand-new registry that knows nothing, with the same key.
-	r2 := newRegistry("https://gw", 16, testSigner(t, key))
+	r2 := newRegistry("https://gw", "", 16, testSigner(t, key))
 	s2, reply2, isNew, err := r2.claim(tunnel.RegisterRequest{
 		SessionID:    reply1.SessionID,
 		SessionToken: reply1.SessionToken,
@@ -188,13 +188,13 @@ func TestRegistryTokenResurrectsSessionAcrossRestart(t *testing.T) {
 // (rotated key, or the random per-boot default) is ignored — the daemon just
 // gets a fresh session, never an error.
 func TestRegistryTokenFromDifferentKeyMintsFresh(t *testing.T) {
-	r1 := newRegistry("https://gw", 16, testSigner(t, "key-a"))
+	r1 := newRegistry("https://gw", "", 16, testSigner(t, "key-a"))
 	_, reply1, _, err := r1.claim(tunnel.RegisterRequest{})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 
-	r2 := newRegistry("https://gw", 16, testSigner(t, "key-b"))
+	r2 := newRegistry("https://gw", "", 16, testSigner(t, "key-b"))
 	_, reply2, isNew, err := r2.claim(tunnel.RegisterRequest{
 		SessionID:    reply1.SessionID,
 		SessionToken: reply1.SessionToken,
@@ -215,14 +215,14 @@ func TestRegistryTokenFromDifferentKeyMintsFresh(t *testing.T) {
 // a slot like any other, so the MaxSessions cap still holds.
 func TestRegistryTokenResurrectionRespectsCapacity(t *testing.T) {
 	const key = "cap-key"
-	r1 := newRegistry("https://gw", 1, testSigner(t, key))
+	r1 := newRegistry("https://gw", "", 1, testSigner(t, key))
 	_, reply1, _, err := r1.claim(tunnel.RegisterRequest{})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 
 	// The "restarted" gateway is already full.
-	r2 := newRegistry("https://gw", 1, testSigner(t, key))
+	r2 := newRegistry("https://gw", "", 1, testSigner(t, key))
 	if _, _, _, err := r2.claim(tunnel.RegisterRequest{}); err != nil {
 		t.Fatalf("fill: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestRegistryTokenResurrectionRespectsCapacity(t *testing.T) {
 }
 
 func TestRegistryReclaimReplacesAndClosesOldTunnel(t *testing.T) {
-	r := newRegistry("https://gw", 16, testSigner(t, ""))
+	r := newRegistry("https://gw", "", 16, testSigner(t, ""))
 	s, reply, _, _ := r.claim(tunnel.RegisterRequest{})
 	old := fakeTunnel(t)
 	r.bind(s, old)
@@ -250,7 +250,7 @@ func TestRegistryReclaimReplacesAndClosesOldTunnel(t *testing.T) {
 }
 
 func TestRegistryCapacity(t *testing.T) {
-	r := newRegistry("https://gw", 1, testSigner(t, ""))
+	r := newRegistry("https://gw", "", 1, testSigner(t, ""))
 	s, _, _, err := r.claim(tunnel.RegisterRequest{})
 	if err != nil {
 		t.Fatalf("claim 1: %v", err)
@@ -266,7 +266,7 @@ func TestRegistryCapacity(t *testing.T) {
 // must hold even for concurrent FIRST-TIME claims that haven't bound yet, because
 // the slot is reserved (in bySecret) at claim, not at bind.
 func TestRegistryCapacityIsHardAtClaim(t *testing.T) {
-	r := newRegistry("https://gw", 1, testSigner(t, ""))
+	r := newRegistry("https://gw", "", 1, testSigner(t, ""))
 	if _, _, _, err := r.claim(tunnel.RegisterRequest{}); err != nil {
 		t.Fatalf("claim 1: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestRegistryCapacityIsHardAtClaim(t *testing.T) {
 // TestRegistryReleaseFreesReservation verifies a failed-handshake reservation is
 // freed (and frees the cap slot), while release is a no-op for a bound session.
 func TestRegistryReleaseFreesReservation(t *testing.T) {
-	r := newRegistry("https://gw", 1, testSigner(t, ""))
+	r := newRegistry("https://gw", "", 1, testSigner(t, ""))
 	s, _, isNew, _ := r.claim(tunnel.RegisterRequest{})
 	if !isNew {
 		t.Fatal("want new")
@@ -291,7 +291,7 @@ func TestRegistryReleaseFreesReservation(t *testing.T) {
 	}
 
 	// release is a no-op once bound.
-	r2 := newRegistry("https://gw", 16, testSigner(t, ""))
+	r2 := newRegistry("https://gw", "", 16, testSigner(t, ""))
 	bs, _, _, _ := r2.claim(tunnel.RegisterRequest{})
 	r2.bind(bs, fakeTunnel(t))
 	r2.release(bs)
@@ -303,7 +303,7 @@ func TestRegistryReleaseFreesReservation(t *testing.T) {
 // TestRegistryReapsAbandonedReservation verifies the reaper backstop frees a
 // reservation whose handshake never completed.
 func TestRegistryReapsAbandonedReservation(t *testing.T) {
-	r := newRegistry("https://gw", 16, testSigner(t, ""))
+	r := newRegistry("https://gw", "", 16, testSigner(t, ""))
 	s, _, _, _ := r.claim(tunnel.RegisterRequest{}) // never bound, never released
 	// Within the reservation grace: kept.
 	r.reap(s.createdAt.Add(reservationGrace/2), sessionTTL)
@@ -318,7 +318,7 @@ func TestRegistryReapsAbandonedReservation(t *testing.T) {
 }
 
 func TestRegistryReapHonorsGraceTTL(t *testing.T) {
-	r := newRegistry("https://gw", 16, testSigner(t, ""))
+	r := newRegistry("https://gw", "", 16, testSigner(t, ""))
 	const ttl = 5 * time.Minute
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 

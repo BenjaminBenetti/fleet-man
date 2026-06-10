@@ -90,9 +90,16 @@ func (s *Server) bindTunnel(ctx context.Context, conn net.Conn, remote string) e
 	}
 
 	// Negotiate optional tunnel features (gRPC). Only features BOTH ends support
-	// become active; an old fleetd (no Features) negotiates none.
+	// become active; an old fleetd (no Features) negotiates none. A daemon with
+	// remote fleet disabled does not request grpc, so none is negotiated and the
+	// gateway's gRPC route stays dead for this session — its Public GRPC URL is
+	// withheld accordingly.
 	reply.Features = tunnel.Negotiate(req.Features, gatewayFeatures)
-	sess.grpc.Store(tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC))
+	grpcOn := tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC)
+	sess.grpc.Store(grpcOn)
+	if !grpcOn {
+		reply.PublicGRPCURL = ""
+	}
 
 	if err := tunnel.WriteFrame(conn, reply); err != nil {
 		if isNew {

@@ -60,6 +60,27 @@ func TestGRPCTarget(t *testing.T) {
 	}
 }
 
+// TestFeaturesGatedOnFleetEnabled pins the "Enable Remote Fleet" gate: the grpc
+// tunnel feature is requested ONLY when a gRPC listener is wired AND the user
+// enabled remote fleet. Not requesting it is what keeps the gateway's gRPC
+// endpoint dead for this daemon — the gateway refuses to route fleet-session
+// RPCs for a session that did not negotiate grpc.
+func TestFeaturesGatedOnFleetEnabled(t *testing.T) {
+	discard := func(*fleetgrpc.RemoteMcpStatus) {}
+	withLis := NewManager(1, "v", discard, WithGRPCListener(NewChanListener()))
+	noLis := NewManager(1, "v", discard)
+
+	if got := withLis.features(desiredState{mcp: true, grpc: true}); !tunnel.HasFeature(got, tunnel.FeatureGRPC) {
+		t.Fatalf("fleet enabled + listener wired should request grpc, got %v", got)
+	}
+	if got := withLis.features(desiredState{mcp: true, grpc: false}); len(got) != 0 {
+		t.Fatalf("fleet disabled must request no features, got %v", got)
+	}
+	if got := noLis.features(desiredState{mcp: true, grpc: true}); len(got) != 0 {
+		t.Fatalf("no gRPC listener must request no features, got %v", got)
+	}
+}
+
 func TestNextBackoffCaps(t *testing.T) {
 	d := initialBackoff
 	for i := 0; i < 20; i++ {
@@ -207,7 +228,7 @@ func TestManagerConnectsServesAndDisables(t *testing.T) {
 		if err := tunnel.ReadFrame(conn, &req); err != nil {
 			return
 		}
-		_ = tunnel.WriteFrame(conn, tunnel.RegisterReply{SessionID: "sess-A", SessionToken: "tok-A", PublicURL: "https://gw/mcp/sess-A"})
+		_ = tunnel.WriteFrame(conn, tunnel.RegisterReply{SessionID: "sess-A", SessionToken: "tok-A", PublicURL: "https://gw/mcp/sess-A", PublicGRPCURL: "https://gw:50051/grpc/sess-A"})
 		sess, err := tunnel.ServerSession(conn, io.Discard)
 		if err != nil {
 			return
@@ -232,11 +253,15 @@ func TestManagerConnectsServesAndDisables(t *testing.T) {
 	defer cancel()
 	go m.Run(ctx)
 
-	m.Reconcile(true, "https://gw.example.com")
+	m.Reconcile(true, false, "https://gw.example.com")
 
 	connected := waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED, 5*time.Second)
 	if connected.GetPublicUrl() != "https://gw/mcp/sess-A" {
 		t.Fatalf("public url = %q, want https://gw/mcp/sess-A", connected.GetPublicUrl())
+	}
+	// The gateway-assigned Public GRPC URL rides the same status.
+	if connected.GetPublicGrpcUrl() != "https://gw:50051/grpc/sess-A" {
+		t.Fatalf("public grpc url = %q, want https://gw:50051/grpc/sess-A", connected.GetPublicGrpcUrl())
 	}
 
 	// The tunnel actually carried a request, auth header intact.
@@ -249,13 +274,14 @@ func TestManagerConnectsServesAndDisables(t *testing.T) {
 		t.Fatal("gateway never served a request over the tunnel")
 	}
 
-	// Sticky session (id + resume token) persisted for reconnect.
-	if s := loadSession("https://gw.example.com"); s.SessionID != "sess-A" || s.SessionToken != "tok-A" || s.PublicURL != "https://gw/mcp/sess-A" {
+	// Sticky session (id + resume token + URLs) persisted for reconnect.
+	if s := loadSession("https://gw.example.com"); s.SessionID != "sess-A" || s.SessionToken != "tok-A" ||
+		s.PublicURL != "https://gw/mcp/sess-A" || s.PublicGRPCURL != "https://gw:50051/grpc/sess-A" {
 		t.Fatalf("session not persisted: %+v", s)
 	}
 
 	// Disable -> tears down to UNSPECIFIED.
-	m.Reconcile(false, "https://gw.example.com")
+	m.Reconcile(false, false, "https://gw.example.com")
 	waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_UNSPECIFIED, 5*time.Second)
 }
 
@@ -316,7 +342,7 @@ func TestManagerStickyReconnect(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.Run(ctx)
-	m.Reconcile(true, "https://gw.example.com")
+	m.Reconcile(true, false, "https://gw.example.com")
 
 	// First registration: no prior session id or resume token.
 	if got := waitForReg(t, regs, 5*time.Second); got.SessionID != "" || got.SessionToken != "" {
@@ -391,8 +417,8 @@ func TestManagerReconcileDisableConverges(t *testing.T) {
 	go m.Run(ctx)
 
 	for i := 0; i < 30; i++ {
-		m.Reconcile(true, "https://gw.example.com")
-		m.Reconcile(false, "https://gw.example.com")
+		m.Reconcile(true, false, "https://gw.example.com")
+		m.Reconcile(false, false, "https://gw.example.com")
 	}
 
 	// After the toggles settle, the LAST state observed must be UNSPECIFIED —
@@ -435,7 +461,7 @@ func TestManagerErrorsWhenMcpDown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.Run(ctx)
-	m.Reconcile(true, "https://gw.example.com")
+	m.Reconcile(true, false, "https://gw.example.com")
 
 	st := waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_ERROR, 5*time.Second)
 	if st.GetError() == "" {

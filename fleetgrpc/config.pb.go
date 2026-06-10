@@ -448,17 +448,24 @@ func (x *BrowserSettings) GetAutoSwitch() bool {
 }
 
 // RemoteMcpSettings mirrors internal/state.RemoteMcpSettings — the user's intent
-// to expose this daemon's local MCP server to the internet through a remote fleet
-// gateway. These are the ONLY two persisted fields: enabled and gateway_url.
+// to expose this daemon's local MCP server (enabled) and/or its gRPC control
+// surface (fleet_enabled) to the internet through a remote fleet gateway. Both
+// ride the SAME tunnel to the same gateway_url; the two toggles are independent,
+// so a user can expose MCP, remote control, or both.
 //
-// The COMPUTED "Public MCP URL" the gateway assigns on connect is deliberately
-// NOT in Config — it is runtime state owned by the server and pushed to the TUI
-// via the Watch RemoteMcpStatus event (watch.proto). Keeping it out of Config is
-// what prevents the SetConfig-replaces-everything contract from clobbering it.
+// The COMPUTED "Public MCP URL" / "Public GRPC URL" the gateway assigns on
+// connect are deliberately NOT in Config — they are runtime state owned by the
+// server and pushed to the TUI via the Watch RemoteMcpStatus event (watch.proto).
+// Keeping them out of Config is what prevents the SetConfig-replaces-everything
+// contract from clobbering them.
 type RemoteMcpSettings struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Enabled       bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	GatewayUrl    string                 `protobuf:"bytes,2,opt,name=gateway_url,json=gatewayUrl,proto3" json:"gateway_url,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Enabled    bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	GatewayUrl string                 `protobuf:"bytes,2,opt,name=gateway_url,json=gatewayUrl,proto3" json:"gateway_url,omitempty"`
+	// fleet_enabled gates the gateway gRPC endpoint ("Enable Remote Fleet"): when
+	// false fleetd does not negotiate the grpc tunnel feature, so the gateway
+	// rejects any remote `fleet` control RPCs aimed at this daemon.
+	FleetEnabled  bool `protobuf:"varint,3,opt,name=fleet_enabled,json=fleetEnabled,proto3" json:"fleet_enabled,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -505,6 +512,13 @@ func (x *RemoteMcpSettings) GetGatewayUrl() string {
 		return x.GatewayUrl
 	}
 	return ""
+}
+
+func (x *RemoteMcpSettings) GetFleetEnabled() bool {
+	if x != nil {
+		return x.FleetEnabled
+	}
+	return false
 }
 
 type Config struct {
@@ -829,11 +843,12 @@ const file_config_proto_rawDesc = "" +
 	"\vauto_switch\x18\x02 \x01(\bH\x01R\n" +
 	"autoSwitch\x88\x01\x01B\x1e\n" +
 	"\x1c_multiple_browsers_per_fleetB\x0e\n" +
-	"\f_auto_switch\"N\n" +
+	"\f_auto_switch\"s\n" +
 	"\x11RemoteMcpSettings\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x1f\n" +
 	"\vgateway_url\x18\x02 \x01(\tR\n" +
-	"gatewayUrl\"\xd0\x03\n" +
+	"gatewayUrl\x12#\n" +
+	"\rfleet_enabled\x18\x03 \x01(\bR\ffleetEnabled\"\xd0\x03\n" +
 	"\x06Config\x124\n" +
 	"\ageneral\x18\x01 \x01(\v2\x1a.fleetgrpc.GeneralSettingsR\ageneral\x12.\n" +
 	"\x05agent\x18\x02 \x01(\v2\x18.fleetgrpc.AgentSettingsR\x05agent\x127\n" +

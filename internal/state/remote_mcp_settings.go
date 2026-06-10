@@ -1,16 +1,18 @@
 package state
 
 // RemoteMcpSettings holds the user's intent to expose this daemon's local MCP
-// server to the internet through a remote fleet gateway, so remote agents can
-// drive the fleet. The local MCP server itself (internal/server/mcp.go) is
-// unchanged and stays loopback-only; the gateway tunnel (a later PR) dials OUT
-// to GatewayURL and reverse-proxies inbound requests back to it.
+// server (Enabled) and/or its gRPC control surface (FleetEnabled) to the
+// internet through a remote fleet gateway. Both ride the SAME outbound tunnel to
+// GatewayURL; the two toggles are independent, so a user can expose MCP, remote
+// control, or both. The local MCP server itself (internal/server/mcp.go) is
+// unchanged and stays loopback-only; the gateway tunnel dials OUT to GatewayURL
+// and reverse-proxies inbound requests back to it.
 //
-// Only two fields are persisted here. The gateway-assigned "Public MCP URL" is
-// deliberately NOT stored: it is runtime state the server computes after it
-// connects and pushes to the TUI over the Watch stream (fleetgrpc.RemoteMcpStatus).
-// Keeping it out of Config is what stops SetConfig — which replaces the whole
-// Config — from clobbering it.
+// Only these fields are persisted here. The gateway-assigned "Public MCP URL" /
+// "Public GRPC URL" are deliberately NOT stored: they are runtime state the
+// server computes after it connects and pushes to the TUI over the Watch stream
+// (fleetgrpc.RemoteMcpStatus). Keeping them out of Config is what stops
+// SetConfig — which replaces the whole Config — from clobbering them.
 type RemoteMcpSettings struct {
 	// Enabled turns the remote-MCP gateway tunnel on. Plain bool (default
 	// off), matching the create-time *Mount flags: false == "never set" ==
@@ -22,4 +24,10 @@ type RemoteMcpSettings struct {
 	// gateway is fronted by a TLS-terminating proxy). Empty while Enabled means
 	// "enabled but not yet configured"; the tunnel manager treats that as a no-op.
 	GatewayURL string `json:"gateway_url,omitempty"`
+
+	// FleetEnabled ("Enable Remote Fleet") exposes the daemon's gRPC server
+	// through the gateway so a remote `fleet` binary can control this instance.
+	// When off, fleetd does not negotiate the grpc tunnel feature, so the
+	// gateway rejects any incoming gRPC commands aimed at this daemon.
+	FleetEnabled bool `json:"fleet_enabled,omitempty"`
 }

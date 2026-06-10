@@ -24,8 +24,14 @@ type registry struct {
 	bySecret   map[string]*session
 	byPublic   map[string]*session
 	publicBase string // e.g. "https://gw.example.com" or "http://gw.example.com" (no trailing slash)
-	max        int
-	signer     *tokenSigner // signs the session-resume token in every reply (see token.go)
+	// grpcBase is the external base URL of the gateway's gRPC endpoint
+	// (--public-grpc-url, no trailing slash). When set, every reply also carries
+	// the session's Public GRPC URL (<grpcBase>/grpc/<publicID>) — the address a
+	// remote `fleet` dials; fleetclient parses the trailing id back out as the
+	// fleet-session routing key. Empty = no gRPC URL is minted.
+	grpcBase string
+	max      int
+	signer   *tokenSigner // signs the session-resume token in every reply (see token.go)
 }
 
 // errAtCapacity is returned by claim when the session cap is reached. Since the
@@ -33,11 +39,12 @@ type registry struct {
 // guard against unbounded session creation.
 var errAtCapacity = errors.New("gateway at capacity")
 
-func newRegistry(publicBase string, max int, signer *tokenSigner) *registry {
+func newRegistry(publicBase, grpcBase string, max int, signer *tokenSigner) *registry {
 	return &registry{
 		bySecret:   make(map[string]*session),
 		byPublic:   make(map[string]*session),
 		publicBase: publicBase,
+		grpcBase:   grpcBase,
 		max:        max,
 		signer:     signer,
 	}
@@ -128,12 +135,20 @@ func (r *registry) claim(req tunnel.RegisterRequest) (s *session, reply tunnel.R
 // every time (claims and reclaims alike), so the daemon always ends up holding
 // a token signed with the gateway's current key — a rotated key self-heals on
 // the first successful reconnect.
+//
+// PublicGRPCURL is included whenever the gateway has a public gRPC base; the
+// register handler clears it again when the connection does not negotiate the
+// grpc feature, so an MCP-only daemon never sees a gRPC URL it can't serve.
 func (r *registry) reply(s *session) tunnel.RegisterReply {
-	return tunnel.RegisterReply{
+	reply := tunnel.RegisterReply{
 		SessionID:    s.secret,
 		PublicURL:    s.publicURL,
 		SessionToken: r.signer.mint(s.secret, s.publicID),
 	}
+	if r.grpcBase != "" {
+		reply.PublicGRPCURL = r.grpcBase + "/grpc/" + s.publicID
+	}
+	return reply
 }
 
 // bind installs the live tunnel on a claimed session and makes it routable. It

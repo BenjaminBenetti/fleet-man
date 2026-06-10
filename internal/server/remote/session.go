@@ -21,7 +21,11 @@ type sessionFile struct {
 	// token against its signing key and hand back the same public URL.
 	SessionToken string `json:"session_token,omitempty"`
 	PublicURL    string `json:"public_url"`
-	GatewayURL   string `json:"gateway_url"`
+	// PublicGRPCURL is the gateway-assigned Public GRPC URL from the last
+	// registration ("" when the grpc feature was not negotiated or the gateway
+	// has no --public-grpc-url). Recorded for parity with PublicURL.
+	PublicGRPCURL string `json:"public_grpc_url,omitempty"`
+	GatewayURL    string `json:"gateway_url"`
 }
 
 // loadSession returns the persisted session IF it was issued for gatewayURL. A

@@ -67,6 +67,11 @@ type RegisterRequest struct {
 type RegisterReply struct {
 	SessionID string `json:"session_id,omitempty"`
 	PublicURL string `json:"public_url,omitempty"`
+	// PublicGRPCURL is the address a remote `fleet` binary dials to control this
+	// daemon through the gateway (the "Public GRPC URL"). Only set when the grpc
+	// feature is negotiated AND the gateway is configured with a public gRPC base
+	// URL (--public-grpc-url); empty otherwise (incl. from an old gateway).
+	PublicGRPCURL string `json:"public_grpc_url,omitempty"`
 	// SessionToken is a JWT, signed with the gateway's session key, encoding
 	// this session's ids. fleetd persists it with the session id and presents
 	// both on reconnect, so the session (and its public URL) survives a gateway

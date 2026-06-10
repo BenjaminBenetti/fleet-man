@@ -75,16 +75,23 @@ message BrowserSettings {
 }
 
 // RemoteMcpSettings mirrors internal/state.RemoteMcpSettings — the user's intent
-// to expose this daemon's local MCP server to the internet through a remote fleet
-// gateway. These are the ONLY two persisted fields: enabled and gateway_url.
+// to expose this daemon's local MCP server (enabled) and/or its gRPC control
+// surface (fleet_enabled) to the internet through a remote fleet gateway. Both
+// ride the SAME tunnel to the same gateway_url; the two toggles are independent,
+// so a user can expose MCP, remote control, or both.
 //
-// The COMPUTED "Public MCP URL" the gateway assigns on connect is deliberately
-// NOT in Config — it is runtime state owned by the server and pushed to the TUI
-// via the Watch RemoteMcpStatus event (watch.proto). Keeping it out of Config is
-// what prevents the SetConfig-replaces-everything contract from clobbering it.
+// The COMPUTED "Public MCP URL" / "Public GRPC URL" the gateway assigns on
+// connect are deliberately NOT in Config — they are runtime state owned by the
+// server and pushed to the TUI via the Watch RemoteMcpStatus event (watch.proto).
+// Keeping them out of Config is what prevents the SetConfig-replaces-everything
+// contract from clobbering them.
 message RemoteMcpSettings {
   bool enabled = 1;
   string gateway_url = 2;
+  // fleet_enabled gates the gateway gRPC endpoint ("Enable Remote Fleet"): when
+  // false fleetd does not negotiate the grpc tunnel feature, so the gateway
+  // rejects any remote `fleet` control RPCs aimed at this daemon.
+  bool fleet_enabled = 3;
 }
 
 message Config {

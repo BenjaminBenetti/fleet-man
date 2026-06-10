@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -231,6 +232,70 @@ func TestGatewayGRPCUnknownSession(t *testing.T) {
 	_, err := grpcEcho(t, insecure.NewCredentials(), grpcAddr, strings.Repeat("b", 64), "x")
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("unknown session -> %v, want NotFound", err)
+	}
+}
+
+// startTestGatewayPlainGRPCBase is startTestGatewayPlain with a public gRPC base
+// configured (--public-grpc-url), for Public GRPC URL tests.
+func startTestGatewayPlainGRPCBase(t *testing.T, publicBase, grpcBase string) (*Server, string, string) {
+	t.Helper()
+	s := &Server{
+		cfg:       Config{PublicURL: publicBase, PublicGRPCURL: grpcBase, MaxSessions: 64},
+		reg:       newRegistry(publicBase, grpcBase, 64, testSigner(t, "")),
+		tlsConfig: nil,
+		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	publicLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("public listen: %v", err)
+	}
+	grpcLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("grpc listen: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = s.ServeListeners(ctx, publicLn, grpcLn) }()
+	return s, publicLn.Addr().String(), grpcLn.Addr().String()
+}
+
+// TestGatewayPublicGRPCURL verifies the Public GRPC URL contract: a gateway run
+// with --public-grpc-url hands <base>/grpc/<publicID> to a daemon that
+// negotiates the grpc feature, and withholds it from one that does not (remote
+// fleet disabled / legacy fleetd) — so a daemon is never shown a gRPC URL the
+// gateway would refuse to route for it.
+func TestGatewayPublicGRPCURL(t *testing.T) {
+	const grpcBase = "http://gw.example.com:50051"
+	_, _, grpcAddr := startTestGatewayPlainGRPCBase(t, "http://gw.example.com", grpcBase)
+
+	// grpc negotiated -> the reply carries the session's gRPC URL.
+	reply := dialFleetdGRPCPlain(t, grpcAddr)
+	if !tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC) {
+		t.Fatalf("gateway did not negotiate grpc: features=%v", reply.Features)
+	}
+	want := grpcBase + "/grpc/" + publicIDOf(t, reply.PublicURL)
+	if reply.PublicGRPCURL != want {
+		t.Fatalf("public grpc url = %q, want %q", reply.PublicGRPCURL, want)
+	}
+
+	// No grpc feature requested -> the gRPC URL is withheld.
+	legacy := dialFleetdPlain(t, grpcAddr, "")
+	if legacy.PublicGRPCURL != "" {
+		t.Fatalf("non-negotiated session got a public grpc url: %q", legacy.PublicGRPCURL)
+	}
+}
+
+// TestGatewayNoPublicGRPCURLWithoutBase confirms a gateway run WITHOUT
+// --public-grpc-url never mints a gRPC URL, even for a grpc-negotiating daemon.
+func TestGatewayNoPublicGRPCURLWithoutBase(t *testing.T) {
+	_, _, grpcAddr := startTestGatewayPlain(t, "http://gw.example.com")
+
+	reply := dialFleetdGRPCPlain(t, grpcAddr)
+	if !tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC) {
+		t.Fatalf("gateway did not negotiate grpc: features=%v", reply.Features)
+	}
+	if reply.PublicGRPCURL != "" {
+		t.Fatalf("gateway without a grpc base minted a public grpc url: %q", reply.PublicGRPCURL)
 	}
 }
 

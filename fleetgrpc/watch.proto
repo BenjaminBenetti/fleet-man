@@ -85,14 +85,17 @@ enum RemoteMcpConn {
 }
 
 // RemoteMcpStatus is the computed status the settings page shows after the user
-// enables remote MCP. public_url is the gateway-assigned Public MCP URL (only
-// meaningful when state is CONNECTED); error carries the last failure (when
-// state is ERROR). The tunnel itself lands in a later PR — for now this only
-// ever reports DISABLED, but the full push path is wired end to end.
+// enables remote MCP and/or remote fleet (both share the one gateway tunnel, so
+// one status describes them). public_url is the gateway-assigned Public MCP URL
+// and public_grpc_url the Public GRPC URL a remote `fleet` dials (each only
+// meaningful when state is CONNECTED; public_grpc_url is empty unless the grpc
+// feature was negotiated and the gateway runs with --public-grpc-url); error
+// carries the last failure (when state is ERROR).
 message RemoteMcpStatus {
   RemoteMcpConn state = 1;
   string public_url = 2;
   string error = 3;
+  string public_grpc_url = 4;
 }
 
 // StateChanged is pushed whenever the authoritative PERSISTED model mutates. It

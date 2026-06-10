@@ -43,6 +43,7 @@ const (
 	settingsItemRemoteMcpGatewayURL = 701
 	settingsItemRemoteMcpCopyLocal  = 702 // copy local mcp.json snippet to clipboard
 	settingsItemRemoteMcpCopyRemote = 703 // copy gateway mcp.json snippet to clipboard
+	settingsItemRemoteFleetEnabled  = 704 // expose the gRPC control surface through the gateway
 
 	settingsItemToolStatusBase = 1000 // tool status rows start here
 	settingsItemDoctor         = 2000 // doctor action row
@@ -180,13 +181,14 @@ var settingsSections = []settingsSection{
 		Title: "Fleet MCP",
 		Items: func(config *configutil.Config) []int {
 			// Copy actions come first. The remote-copy action only appears
-			// once the gateway tunnel is enabled. The computed Public MCP URL
-			// is rendered inline as a read-only status line (not navigable).
+			// once the gateway tunnel is enabled. The computed Public MCP URL /
+			// Public GRPC URL are rendered inline as read-only status lines
+			// (not navigable).
 			items := []int{settingsItemRemoteMcpCopyLocal}
 			if config != nil && config.RemoteMcpSettings.Enabled {
 				items = append(items, settingsItemRemoteMcpCopyRemote)
 			}
-			items = append(items, settingsItemRemoteMcpEnabled, settingsItemRemoteMcpGatewayURL)
+			items = append(items, settingsItemRemoteMcpEnabled, settingsItemRemoteFleetEnabled, settingsItemRemoteMcpGatewayURL)
 			return items
 		},
 	},
@@ -386,6 +388,30 @@ func (settingsPage *settingsPage) toggleRemoteMcpEnabled(m *model) {
 	m.message = fmt.Sprintf("Remote MCP set to %s", label)
 }
 
+// toggleRemoteFleetEnabled flips the "Enable Remote Fleet" preference — exposing
+// this daemon's gRPC control surface through the gateway so a remote `fleet`
+// binary can drive it — and saves. Reverts on a save failure, mirroring the
+// other toggles. Unlike the MCP toggle it inserts no navigable rows, so the
+// cursor needs no re-pin.
+func (settingsPage *settingsPage) toggleRemoteFleetEnabled(m *model) {
+	if m.config == nil {
+		m.config = configutil.DefaultConfig()
+	}
+	current := m.config.RemoteMcpSettings.FleetEnabled
+	next := !current
+	m.config.RemoteMcpSettings.FleetEnabled = next
+	if err := setConfigRemote(m.config); err != nil {
+		m.config.RemoteMcpSettings.FleetEnabled = current
+		m.message = fmt.Sprintf("Failed to save settings: %v", err)
+		return
+	}
+	label := "off"
+	if next {
+		label = "on"
+	}
+	m.message = fmt.Sprintf("Remote Fleet set to %s", label)
+}
+
 // toggleAutoInstall toggles the dotfiles auto-install setting.
 func (settingsPage *settingsPage) toggleAutoInstall(m *model) {
 	if m.config == nil {
@@ -500,6 +526,36 @@ func remoteMcpPublicURL(m *model) string {
 	return m.remoteMcpStatus.GetPublicUrl()
 }
 
+// remoteGrpcStatusValue renders the read-only Public GRPC URL line from the same
+// pushed tunnel status as remoteMcpStatusValue (one tunnel carries both traffic
+// kinds, so they share connection state). A connected tunnel with no gRPC URL
+// means the gateway withheld it — it is old, runs without --public-grpc-url, or
+// registered this session before remote fleet was enabled (the reconnect that
+// negotiates grpc refreshes it).
+func remoteGrpcStatusValue(m *model) string {
+	st := m.remoteMcpStatus
+	if st == nil {
+		return dimStyle.Render("(not connected)")
+	}
+	switch st.GetState() {
+	case fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED:
+		if url := st.GetPublicGrpcUrl(); url != "" {
+			return statusRunningStyle.Render("connected") + "  " + url
+		}
+		return statusRunningStyle.Render("connected") + "  " + dimStyle.Render("(gateway provided no public gRPC URL)")
+	case fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTING:
+		return m.spinner.View() + " connecting…"
+	case fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_ERROR:
+		msg := st.GetError()
+		if msg == "" {
+			msg = "connection failed"
+		}
+		return statusCreatingStyle.Render("error") + "  " + dimStyle.Render(msg)
+	default: // UNSPECIFIED / not yet connected
+		return dimStyle.Render("(not connected)")
+	}
+}
+
 // localMcpConfigJSON returns the mcp.json snippet for the loopback MCP server,
 // matching the README. It uses the ${FLEET_MCP_URL}/${FLEET_MCP_TOKEN} env vars
 // written to ~/.fleet/mcp.env so the snippet survives port changes.
@@ -596,6 +652,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleBrowserAutoSwitch(m)
 			} else if item == settingsItemRemoteMcpEnabled {
 				settingsPage.toggleRemoteMcpEnabled(m)
+			} else if item == settingsItemRemoteFleetEnabled {
+				settingsPage.toggleRemoteFleetEnabled(m)
 			} else if item == settingsItemCoderPreset {
 				settingsPage.cycleCoderPreset(m, -1)
 			} else if item == settingsItemCodespacesMachine {
@@ -617,6 +675,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleBrowserAutoSwitch(m)
 			} else if item == settingsItemRemoteMcpEnabled {
 				settingsPage.toggleRemoteMcpEnabled(m)
+			} else if item == settingsItemRemoteFleetEnabled {
+				settingsPage.toggleRemoteFleetEnabled(m)
 			} else if item == settingsItemCoderPreset {
 				settingsPage.cycleCoderPreset(m, 1)
 			} else if item == settingsItemCodespacesMachine {
@@ -648,6 +708,10 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			}
 			if item == settingsItemRemoteMcpEnabled {
 				settingsPage.toggleRemoteMcpEnabled(m)
+				return nil
+			}
+			if item == settingsItemRemoteFleetEnabled {
+				settingsPage.toggleRemoteFleetEnabled(m)
 				return nil
 			}
 			if item == settingsItemRemoteMcpCopyLocal {
@@ -1029,18 +1093,32 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			recordRow(settingsItemRemoteMcpEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteMcpEnabled, "Enable Remote MCP", enabledValue))
 			listContent.WriteString("\n")
 
+			fleetEnabledValue := "[ off ]"
+			if config.RemoteMcpSettings.FleetEnabled {
+				fleetEnabledValue = "[ on ]"
+			}
+			fleetEnabledValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Allow remote `fleet` binary to control this instance through the gateway public url")
+			recordRow(settingsItemRemoteFleetEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteFleetEnabled, "Enable Remote Fleet", fleetEnabledValue))
+			listContent.WriteString("\n")
+
 			gatewayValue := config.RemoteMcpSettings.GatewayURL
 			if gatewayValue == "" && !(settingsPage.editing && currentItem == settingsItemRemoteMcpGatewayURL) {
 				gatewayValue = dimStyle.Render("(not set)")
 			}
 			recordRow(settingsItemRemoteMcpGatewayURL, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteMcpGatewayURL, "Gateway URL", gatewayValue))
 
-			// The computed Public MCP URL is read-only (not navigable): it is the
-			// gateway-assigned address, delivered over Watch, that external tools
-			// use to reach this fleet. Only shown once the feature is enabled.
+			// The computed Public MCP URL / Public GRPC URL are read-only (not
+			// navigable): they are the gateway-assigned addresses, delivered over
+			// Watch, that external tools / a remote `fleet` use to reach this
+			// fleet. Each is only shown once its feature is enabled.
 			if config.RemoteMcpSettings.Enabled {
 				listContent.WriteString("\n")
 				row := settingsPage.renderSettingsRow(m, false, "Public MCP URL", remoteMcpStatusValue(m))
+				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(row))
+			}
+			if config.RemoteMcpSettings.FleetEnabled {
+				listContent.WriteString("\n")
+				row := settingsPage.renderSettingsRow(m, false, "Public GRPC URL", remoteGrpcStatusValue(m))
 				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(row))
 			}
 

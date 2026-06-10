@@ -90,13 +90,14 @@ const (
 // optional: provide BOTH to serve HTTPS/TLS on the listeners, or NEITHER to
 // serve plain HTTP (e.g. behind a TLS-terminating reverse proxy like Traefik).
 type Config struct {
-	PublicAddr  string // address MCP agents hit (HTTPS or HTTP). Default ":443".
-	GRPCAddr    string // address the native-gRPC (h2c/h2) listener binds; also where fleetd registers. Empty disables remote gRPC + registration. CLI default ":50051".
-	PublicURL   string // external base URL agents use, e.g. "https://gw.example.com" or "http://gw.example.com". Required.
-	TLSCert     string // path to the TLS certificate (PEM). Optional; both TLSCert and TLSKey together enable TLS.
-	TLSKey      string // path to the TLS private key (PEM). Optional; both TLSCert and TLSKey together enable TLS.
-	MaxSessions int    // cap on concurrent tunnels. Default 1024.
-	SessionKey  string // secret key signing session-resume tokens (token.go). Empty = a random per-boot key, so session URLs do not survive a gateway restart.
+	PublicAddr    string // address MCP agents hit (HTTPS or HTTP). Default ":443".
+	GRPCAddr      string // address the native-gRPC (h2c/h2) listener binds; also where fleetd registers. Empty disables remote gRPC + registration. CLI default ":50051".
+	PublicURL     string // external base URL agents use, e.g. "https://gw.example.com" or "http://gw.example.com". Required.
+	PublicGRPCURL string // external base URL remote `fleet` clients dial for the gRPC endpoint, e.g. "https://gw.example.com:50051". Empty = no Public GRPC URL is handed to daemons.
+	TLSCert       string // path to the TLS certificate (PEM). Optional; both TLSCert and TLSKey together enable TLS.
+	TLSKey        string // path to the TLS private key (PEM). Optional; both TLSCert and TLSKey together enable TLS.
+	MaxSessions   int    // cap on concurrent tunnels. Default 1024.
+	SessionKey    string // secret key signing session-resume tokens (token.go). Empty = a random per-boot key, so session URLs do not survive a gateway restart.
 }
 
 // Server is a configured gateway. Build with New, then Run. tlsConfig is nil when
@@ -138,6 +139,7 @@ func New(cfg Config) (*Server, error) {
 		cfg.MaxSessions = defaultMaxSessions
 	}
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
+	cfg.PublicGRPCURL = strings.TrimRight(strings.TrimSpace(cfg.PublicGRPCURL), "/")
 
 	signer, err := newTokenSigner(cfg.SessionKey)
 	if err != nil {
@@ -146,7 +148,7 @@ func New(cfg Config) (*Server, error) {
 
 	return &Server{
 		cfg:        cfg,
-		reg:        newRegistry(cfg.PublicURL, cfg.MaxSessions, signer),
+		reg:        newRegistry(cfg.PublicURL, cfg.PublicGRPCURL, cfg.MaxSessions, signer),
 		tlsConfig:  tlsConfig,
 		log:        slog.Default(),
 		pendingSem: make(chan struct{}, cfg.MaxSessions+maxPendingHandshakes),
