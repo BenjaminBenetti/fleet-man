@@ -392,3 +392,44 @@ func TestResolveSessionNamePassesThroughConformingNames(t *testing.T) {
 		t.Fatalf("ResolveSessionName foreign = %q, want %q", got, "agent-1~other~main")
 	}
 }
+
+// TestCliSpawnedSessionFormsRealGroup pins the CLI↔TUI naming contract
+// behind the session-duplication bug: a session created via
+// `fleet spawn-session <inst> main` must parse as a *real* group named
+// "main" (not a pseudo-group), and the pane session a split mints for
+// that group must land in the same group.
+func TestCliSpawnedSessionFormsRealGroup(t *testing.T) {
+	root := ResolveSessionName("agent-1", "main") // what spawn-session creates
+
+	groups := groupSessions("agent-1", []tmuxSession{{Name: root}})
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d: %#v", len(groups), groups)
+	}
+	if groups[0].GroupID != "main" {
+		t.Fatalf("GroupID = %q, want %q (pseudo-group would carry the full session name)", groups[0].GroupID, "main")
+	}
+
+	pane := NewGroupPaneSessionName("agent-1", groups[0].GroupID)
+	groups = groupSessions("agent-1", []tmuxSession{{Name: root}, {Name: pane}})
+	if len(groups) != 1 {
+		t.Fatalf("split duplicated the group: %#v", groups)
+	}
+	if len(groups[0].Sessions) != 2 {
+		t.Fatalf("group has %d sessions, want 2: %#v", len(groups[0].Sessions), groups[0])
+	}
+}
+
+// TestSplitBindGroupID covers the guard on the split-key rebinding: a
+// bare-named session's pseudo-group ID must never reach
+// `fleet shell --group`, while a real group's ID passes through.
+func TestSplitBindGroupID(t *testing.T) {
+	if got := splitBindGroupID("agent-1", "agent-1~abc123", "abc123"); got != "abc123" {
+		t.Fatalf("grouped session: got %q, want %q", got, "abc123")
+	}
+	if got := splitBindGroupID("agent-1", "agent-1~abc123~ff", "abc123"); got != "abc123" {
+		t.Fatalf("grouped pane session: got %q, want %q", got, "abc123")
+	}
+	if got := splitBindGroupID("agent-1", "main", "main"); got != "" {
+		t.Fatalf("bare session: got %q, want empty (pseudo-group ID must be stripped)", got)
+	}
+}

@@ -204,6 +204,21 @@ func isGroupedSession(sanitizedInstance, sessionName string) bool {
 	return ok
 }
 
+// splitBindGroupID returns the group ID that is safe to pass to
+// `fleet shell --group` when rebinding the outer tmux split keys after
+// attaching to sessionName. It mirrors the isGroupedSession guard the
+// attach path uses (page_fleet.go handleEnter): for a bare-named session
+// the groupID is a pseudo-group ID (the session name itself), and
+// passing it to --group would mint a <instance>~<name>~<hex> session — a
+// duplicate real group named after the bare session. Returning "" makes
+// a split start a fresh group instead.
+func splitBindGroupID(instanceName, sessionName, groupID string) string {
+	if !isGroupedSession(SanitizeSessionName(instanceName), sessionName) {
+		return ""
+	}
+	return groupID
+}
+
 // groupCycleMsg is sent after the debounce timer expires to confirm
 // a session group switch.
 type groupCycleMsg struct {

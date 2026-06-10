@@ -821,18 +821,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			fleetPage.splitSession = msg.session
 			fleetPage.activeGroup = ActiveGroup{Ref: msg.ref, GroupID: msg.groupID}
 			m.sessionStore.SetLastActive(msg.ref, lastSession{sessionName: msg.session, groupID: msg.groupID})
-			// Mirror the isGroupedSession guard the attach path uses
-			// (page_fleet.go handleEnter): for a bare-named session the
-			// groupID is a pseudo-group ID (the session name itself), and
-			// passing it to `fleet shell --group` would mint a new
-			// <instance>~<name>~<hex> session — a duplicate real group
-			// named after the bare session. Bind without a group instead
-			// so a split starts a fresh group.
-			splitGroupID := msg.groupID
-			if !isGroupedSession(SanitizeSessionName(msg.ref.Instance), msg.session) {
-				splitGroupID = ""
-			}
-			bindHostSplitKeys(msg.ref.Key(), splitGroupID)
+			bindHostSplitKeys(msg.ref.Key(), splitBindGroupID(msg.ref.Instance, msg.session, msg.groupID))
 			extraCmds = append(extraCmds, m.refreshInstanceSessions(msg.ref))
 		}
 
