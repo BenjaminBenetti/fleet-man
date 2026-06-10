@@ -39,21 +39,27 @@ while [ "${GRPC_PORT}" = "${PUBLIC_PORT}" ]; do GRPC_PORT="$(free_port)"; done
 GATEWAY_URL="http://127.0.0.1:${GRPC_PORT}"
 info "gateway public=127.0.0.1:${PUBLIC_PORT} grpc=127.0.0.1:${GRPC_PORT}"
 
-# 1. Enable remote MCP in config, pointing fleetd at the gateway's gRPC endpoint.
-#    fleetd reconciles this at startup and registers over the gRPC Register stream.
+# 1. Enable remote MCP AND remote fleet in config, pointing fleetd at the
+#    gateway's gRPC endpoint. fleetd reconciles this at startup and registers
+#    over the gRPC Register stream; without fleet_enabled it would not negotiate
+#    the grpc tunnel feature and the gateway would refuse remote control RPCs.
 cat > "${HOME}/.fleet/config.json" <<EOF
 {
   "remote_mcp_settings": {
     "enabled": true,
+    "fleet_enabled": true,
     "gateway_url": "${GATEWAY_URL}"
   }
 }
 EOF
 
 # 2. Start the gateway in the background, cert-less (plain HTTP public + h2c gRPC).
+#    --public-grpc-url makes the gateway hand grpc-negotiating daemons their
+#    Public GRPC URL — the exact FLEET_GATEWAY value used below.
 gw_log="${TEST_SCRATCH_DIR}/gateway.log"
 "${FLEET_BIN}" gateway \
   --public-url "http://127.0.0.1:${PUBLIC_PORT}" \
+  --public-grpc-url "${GATEWAY_URL}" \
   --public-addr "127.0.0.1:${PUBLIC_PORT}" \
   --grpc-addr "127.0.0.1:${GRPC_PORT}" \
   >"${gw_log}" 2>&1 &
@@ -87,12 +93,12 @@ done
 assert_file_exists "${session_file}"
 info "registered: $(cat "${session_file}")"
 
-# 5. Build FLEET_GATEWAY from the assigned session id (the segment after /mcp/).
-public_mcp_url=$(grep -oE '"public_url"[[:space:]]*:[[:space:]]*"[^"]+"' "${session_file}" | sed -E 's/.*"([^"]+)"$/\1/')
-[ -n "${public_mcp_url}" ] || fail "no public_url in session file"
-session_id="${public_mcp_url##*/mcp/}"
-{ [ -n "${session_id}" ] && [ "${session_id}" != "${public_mcp_url}" ]; } || fail "could not extract session id from ${public_mcp_url}"
-export FLEET_GATEWAY="${GATEWAY_URL}/${session_id}"
+# 5. FLEET_GATEWAY is the gateway-computed Public GRPC URL
+#    (<public-grpc-url>/grpc/<id>), persisted in the session file — exactly what
+#    the TUI shows the user to feed a remote fleet.
+public_grpc_url=$(grep -oE '"public_grpc_url"[[:space:]]*:[[:space:]]*"[^"]+"' "${session_file}" | sed -E 's/.*"([^"]+)"$/\1/')
+[ -n "${public_grpc_url}" ] || fail "no public_grpc_url in session file — gateway did not hand one out"
+export FLEET_GATEWAY="${public_grpc_url}"
 export FLEET_TOKEN="$(cat "${HOME}/.fleet/mcp.token")"
 info "FLEET_GATEWAY=${FLEET_GATEWAY}"
 
