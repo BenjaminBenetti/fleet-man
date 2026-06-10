@@ -5,6 +5,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -49,6 +50,11 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	if s.remote != nil {
 		s.remote.Reconcile(saved.RemoteMcpSettings.Enabled, saved.RemoteMcpSettings.GatewayURL)
 	}
+
+	// The remote-gateway fields are the ones whose effects outlive this RPC (the
+	// tunnel supervisor reacts to them), so call them out; the manager logs the
+	// resulting connection transitions itself.
+	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "gateway", saved.RemoteMcpSettings.GatewayURL)
 
 	return &fleetgrpc.SetConfigReply{Config: configToProto(saved)}, nil
 }
