@@ -72,6 +72,7 @@ message Event {
     BrowserOpen browser_open = 6;
     RuntimeChanged runtime_changed = 7;
     RemoteMcpStatus remote_mcp_status = 8;
+    FileCopy file_copy = 9;
   }
 }
 
@@ -118,4 +119,19 @@ message BrowserOpen {
   // fleet/instance label which workspace requested the open.
   string fleet = 3;
   string instance = 4;
+}
+
+// FileCopy asks the receiving client to pull a file out of an instance to its
+// local disk. Pushed when the server's per-instance control listener receives a
+// file.copy envelope from an in-container `fleet copy` (fc); the CLIENT then
+// fetches the bytes itself via the CopyFile RPC and writes them to its downloads
+// folder — the same control-socket → Watch → client-action split as BrowserOpen,
+// which is what makes fc work for fully remote deployments.
+message FileCopy {
+  // fleet/instance label which workspace requested the copy.
+  string fleet = 1;
+  string instance = 2;
+  // path is the absolute in-instance path of the file to copy (resolved by the
+  // in-instance sender, so the server-side exec needs no cwd context).
+  string path = 3;
 }

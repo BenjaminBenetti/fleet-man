@@ -44,4 +44,7 @@ const (
 	// TypeOpenBrowser asks the host to open (or navigate) its browser to a
 	// URL. Its payload is OpenBrowserPayload.
 	TypeOpenBrowser = "browser.open"
+	// TypeCopyFile asks the host to copy a file out of this instance to the
+	// host user's machine. Its payload is CopyFilePayload.
+	TypeCopyFile = "file.copy"
 )

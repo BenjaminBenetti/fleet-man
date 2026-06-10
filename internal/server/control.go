@@ -27,16 +27,20 @@ import (
 const controlSyncInterval = time.Second
 
 // controlRegistry owns one control.Server per running instance and forwards
-// every received Envelope to onOpen. syncRunning keeps the listener set in
-// lock-step with the running instances; shutdown tears them all down. All
-// operations are concurrency-safe (the registry is shared between the sync loop
-// and the per-server handler goroutines).
+// every received Envelope to the matching callback. syncRunning keeps the
+// listener set in lock-step with the running instances; shutdown tears them all
+// down. All operations are concurrency-safe (the registry is shared between the
+// sync loop and the per-server handler goroutines).
 type controlRegistry struct {
 	// onOpen is invoked for each decoded browser.open envelope, tagged with the
 	// originating instance. It MUST be safe for concurrent use (handlers run on
 	// multiple goroutines) and non-blocking (it runs inside control.Server's
 	// serveConn, whose goroutine Close waits on).
 	onOpen func(fleetName, instanceName, url string)
+
+	// onCopy is invoked for each decoded file.copy envelope, tagged with the
+	// originating instance. Same concurrency/non-blocking contract as onOpen.
+	onCopy func(fleetName, instanceName, path string)
 
 	// gated reports whether to keep control sockets open at all: only while a
 	// browser-capable client (a TUI / Watch subscriber) is attached. With no
@@ -49,11 +53,12 @@ type controlRegistry struct {
 }
 
 // newControlRegistry creates an empty registry. onOpen is invoked per received
-// browser.open envelope; gated decides whether any sockets should be open (nil
-// means always on).
-func newControlRegistry(onOpen func(fleetName, instanceName, url string), gated func() bool) *controlRegistry {
+// browser.open envelope, onCopy per file.copy envelope; gated decides whether
+// any sockets should be open (nil means always on).
+func newControlRegistry(onOpen func(fleetName, instanceName, url string), onCopy func(fleetName, instanceName, path string), gated func() bool) *controlRegistry {
 	return &controlRegistry{
 		onOpen:  onOpen,
+		onCopy:  onCopy,
 		gated:   gated,
 		servers: make(map[string]*control.Server),
 	}
@@ -137,15 +142,23 @@ func (r *controlRegistry) syncRunning(st *state.State) {
 		// NOT block — onOpen / the hub broadcast are non-blocking.
 		fName, iName := fleetName, instanceName
 		srv, err := control.Listen(socketPath, func(env control.Envelope) {
-			if env.Type != control.TypeOpenBrowser {
-				return
-			}
-			var payload control.OpenBrowserPayload
-			if json.Unmarshal(env.Payload, &payload) != nil || payload.URL == "" {
-				return
-			}
-			if r.onOpen != nil {
-				r.onOpen(fName, iName, payload.URL)
+			switch env.Type {
+			case control.TypeOpenBrowser:
+				var payload control.OpenBrowserPayload
+				if json.Unmarshal(env.Payload, &payload) != nil || payload.URL == "" {
+					return
+				}
+				if r.onOpen != nil {
+					r.onOpen(fName, iName, payload.URL)
+				}
+			case control.TypeCopyFile:
+				var payload control.CopyFilePayload
+				if json.Unmarshal(env.Payload, &payload) != nil || payload.Path == "" {
+					return
+				}
+				if r.onCopy != nil {
+					r.onCopy(fName, iName, payload.Path)
+				}
 			}
 		})
 		if err != nil {

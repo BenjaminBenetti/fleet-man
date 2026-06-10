@@ -80,6 +80,9 @@ service FleetService {
   // The client listens locally and pipes each accepted connection through this
   // stream; the server bridges it to remote_port inside the instance.
   rpc Forward(stream ForwardChunk) returns (stream ForwardChunk);
+  // CopyFile streams a single file out of an instance: first chunk is metadata,
+  // the rest are data. Backs `fleet copy` and the in-instance `fc` shorthand.
+  rpc CopyFile(CopyFileRequest) returns (stream CopyFileChunk);
 
   // ---- Coder template parameters (Coder API, read server-side) ----
   rpc GetCoderTemplateParams(GetCoderTemplateParamsRequest) returns (GetCoderTemplateParamsReply);

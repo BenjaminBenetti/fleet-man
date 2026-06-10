@@ -13,3 +13,8 @@
 # grid of this instance's configured links and apps; `fl list` prints them; and
 # `fl <name>` launches one directly by (a unique prefix of) its name.
 alias fl='fleet launch'
+
+# fc — shorthand for Fleet Copy. `fc <path>` asks the host fleet to copy that
+# file out of this instance; it lands in the host user's downloads folder —
+# even when the deployment is fully remote.
+alias fc='fleet copy'

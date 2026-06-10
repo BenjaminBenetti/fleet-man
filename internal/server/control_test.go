@@ -49,9 +49,15 @@ func TestControlSyncRoundTrip(t *testing.T) {
 	key := fleetName + "/" + instanceName
 
 	events := make(chan openEvent, 16)
+	copies := make(chan openEvent, 16)
 	r := newControlRegistry(func(f, i, url string) {
 		select {
 		case events <- openEvent{f, i, url}:
+		default:
+		}
+	}, func(f, i, path string) {
+		select {
+		case copies <- openEvent{f, i, path}:
 		default:
 		}
 	}, nil)
@@ -90,6 +96,23 @@ func TestControlSyncRoundTrip(t *testing.T) {
 		t.Fatal("timed out waiting for browser.open on onOpen")
 	}
 
+	// A file.copy envelope on the same socket dispatches to onCopy.
+	const wantPath = "/workspaces/repo/bin/tool"
+	if err := client.CopyFile(wantPath); err != nil {
+		t.Fatalf("CopyFile: %v", err)
+	}
+	select {
+	case ev := <-copies:
+		if ev.fleet != fleetName || ev.instance != instanceName {
+			t.Errorf("copy event = (%q,%q), want (%q,%q)", ev.fleet, ev.instance, fleetName, instanceName)
+		}
+		if ev.url != wantPath {
+			t.Errorf("copy event path = %q, want %q", ev.url, wantPath)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for file.copy on onCopy")
+	}
+
 	r.syncRunning(&state.State{Fleets: map[string]*fleet.Fleet{}})
 	if _, ok := r.servers[key]; ok {
 		t.Fatalf("registry still has server for stopped instance %q", key)
@@ -115,7 +138,7 @@ func TestControlShutdownFullBuffer(t *testing.T) {
 		case events <- openEvent{f, i, url}:
 		default:
 		}
-	}, nil)
+	}, nil, nil)
 
 	r.syncRunning(fabricatedRunningState(fleetName, instanceName))
 	socketPath := state.ControlSocketPath(fleetName, instanceName)
@@ -158,7 +181,7 @@ func TestControlSyncIdempotent(t *testing.T) {
 	)
 	key := fleetName + "/" + instanceName
 
-	r := newControlRegistry(func(string, string, string) {}, nil)
+	r := newControlRegistry(func(string, string, string) {}, nil, nil)
 	defer r.shutdown()
 
 	st := fabricatedRunningState(fleetName, instanceName)
@@ -191,7 +214,7 @@ func TestCtrlGate(t *testing.T) {
 	key := fleetName + "/" + instanceName
 
 	attached := true
-	r := newControlRegistry(func(string, string, string) {}, func() bool { return attached })
+	r := newControlRegistry(func(string, string, string) {}, nil, func() bool { return attached })
 	defer r.shutdown()
 
 	r.syncRunning(fabricatedRunningState(fleetName, instanceName))

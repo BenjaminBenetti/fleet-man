@@ -631,6 +631,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, spinCmd
 
+	case watchFileCopyMsg:
+		// An in-container `fleet copy` (fc) asked the host to copy a file out of
+		// the instance; pull it to the local downloads folder in the background.
+		if msg.fleet == "" || msg.instance == "" || msg.path == "" {
+			return m, spinCmd
+		}
+		m.message = fmt.Sprintf("Copying %s from %s/%s...", msg.path, msg.fleet, msg.instance)
+		return m, tea.Batch(spinCmd, copyInstanceFileCmd(msg.fleet, msg.instance, msg.path))
+
+	case fileCopyDoneMsg:
+		if msg.err != nil {
+			m.message = fmt.Sprintf("Copy of %s failed: %v", msg.path, msg.err)
+		} else {
+			m.message = fmt.Sprintf("Copied %s -> %s", msg.path, msg.dest)
+		}
+		return m, spinCmd
+
 	case remoteMcpStatusMsg:
 		// The server pushed the current remote-MCP tunnel status (connection
 		// state + computed Public MCP URL). Cache it for the settings page to

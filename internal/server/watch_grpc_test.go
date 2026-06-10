@@ -178,3 +178,60 @@ func TestWatchStreamsRemoteMcpStatus(t *testing.T) {
 		}
 	}
 }
+
+// TestWatchStreamsFileCopy verifies the fc plumbing's middle hop: a file.copy
+// broadcast (what the control registry posts when an in-container `fleet copy`
+// sends its envelope) is delivered to a Watch subscriber as a FileCopy event,
+// in order, tagged with the originating instance.
+func TestWatchStreamsFileCopy(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	svc := newService()
+	go svc.hub.run(ctx)
+
+	lis := bufconn.Listen(1 << 20)
+	gs := grpc.NewServer()
+	fleetgrpc.RegisterFleetServiceServer(gs, svc)
+	go func() { _ = gs.Serve(lis) }()
+	defer gs.Stop()
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	streamCtx, streamCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer streamCancel()
+	stream, err := fleetgrpc.NewFleetServiceClient(conn).Watch(streamCtx, &fleetgrpc.WatchRequest{})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+
+	// Give the server a moment to register the subscriber, then broadcast two
+	// copies — discrete events must arrive in order, not conflated.
+	time.Sleep(100 * time.Millisecond)
+	svc.hub.post(func(h *hub) {
+		h.broadcastFileCopy(&fleetgrpc.FileCopy{Fleet: "alpha", Instance: "i1", Path: "/ws/bin/tool"})
+		h.broadcastFileCopy(&fleetgrpc.FileCopy{Fleet: "alpha", Instance: "i1", Path: "/ws/bin/tool2"})
+	})
+
+	for _, wantPath := range []string{"/ws/bin/tool", "/ws/bin/tool2"} {
+		ev, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv: %v", err)
+		}
+		fc := ev.GetFileCopy()
+		if fc == nil {
+			t.Fatalf("want FileCopy event, got %v", ev)
+		}
+		if fc.GetFleet() != "alpha" || fc.GetInstance() != "i1" || fc.GetPath() != wantPath {
+			t.Fatalf("FileCopy = %v, want alpha/i1 %s", fc, wantPath)
+		}
+	}
+}

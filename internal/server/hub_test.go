@@ -26,11 +26,11 @@ func TestSubscriberStateConflation(t *testing.T) {
 	s.enqueueState(&fleetgrpc.State{LastSeenVersion: proto.String("v1")})
 	s.enqueueState(&fleetgrpc.State{LastSeenVersion: proto.String("v2")})
 
-	st, _, _, _ := s.drain()
+	st, _, _, _, _ := s.drain()
 	if st.GetLastSeenVersion() != "v2" {
 		t.Fatalf("conflation: want newest v2, got %q", st.GetLastSeenVersion())
 	}
-	if again, _, _, _ := s.drain(); again != nil {
+	if again, _, _, _, _ := s.drain(); again != nil {
 		t.Fatalf("want nil state after drain, got %v", again)
 	}
 }
@@ -43,7 +43,7 @@ func TestSubscriberRuntimeConflationByKey(t *testing.T) {
 	// A different instance survives independently.
 	s.enqueueRuntime([]*fleetgrpc.InstanceRuntime{{Fleet: "f", Instance: "j", LiveStatus: fleetgrpc.LiveContainerStatus_LIVE_CONTAINER_STATUS_RUNNING}})
 
-	_, rt, _, _ := s.drain()
+	_, rt, _, _, _ := s.drain()
 	if len(rt) != 2 {
 		t.Fatalf("want 2 keyed entries, got %d", len(rt))
 	}
@@ -74,13 +74,13 @@ func TestHubSetStateBroadcastsAndDedups(t *testing.T) {
 	h.post(func(h *hub) { h.setState(&fleetgrpc.State{LastSeenVersion: proto.String("v1")}) })
 	drainSync(t, h)
 
-	st, _, _, _ := sub.drain()
+	st, _, _, _, _ := sub.drain()
 	if st.GetLastSeenVersion() != "v1" {
 		t.Fatalf("want broadcast v1, got %q", st.GetLastSeenVersion())
 	}
 	// After draining the single broadcast, the dedup'd second setState left
 	// nothing pending.
-	if again, _, _, _ := sub.drain(); again != nil {
+	if again, _, _, _, _ := sub.drain(); again != nil {
 		t.Fatalf("dedup: want no second broadcast, got %v", again)
 	}
 }
@@ -106,7 +106,7 @@ func TestHubBackpressureDoesNotBlock(t *testing.T) {
 	}
 	drainSync(t, h)
 
-	st, _, _, _ := fast.drain()
+	st, _, _, _, _ := fast.drain()
 	if st == nil {
 		t.Fatal("fast subscriber received nothing")
 	}
@@ -123,11 +123,11 @@ func TestSubscriberRemoteMcpConflation(t *testing.T) {
 		PublicUrl: "https://gw/mcp/abc",
 	})
 
-	_, _, _, rm := s.drain()
+	_, _, _, _, rm := s.drain()
 	if rm.GetState() != fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED || rm.GetPublicUrl() != "https://gw/mcp/abc" {
 		t.Fatalf("conflation: want newest CONNECTED+url, got %v", rm)
 	}
-	if _, _, _, again := s.drain(); again != nil {
+	if _, _, _, _, again := s.drain(); again != nil {
 		t.Fatalf("want nil remote-mcp status after drain, got %v", again)
 	}
 }
@@ -156,11 +156,11 @@ func TestHubRemoteMcpStatusBroadcastsAndDedups(t *testing.T) {
 	})
 	drainSync(t, h)
 
-	_, _, _, rm := sub.drain()
+	_, _, _, _, rm := sub.drain()
 	if rm.GetPublicUrl() != "https://gw/mcp/xyz" {
 		t.Fatalf("want broadcast status, got %v", rm)
 	}
-	if _, _, _, again := sub.drain(); again != nil {
+	if _, _, _, _, again := sub.drain(); again != nil {
 		t.Fatalf("dedup: want no second broadcast, got %v", again)
 	}
 

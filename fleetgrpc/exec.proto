@@ -114,6 +114,36 @@ message ForwardOpen {
   int32 remote_port = 3;
 }
 
+// CopyFile streams one file out of an instance to the client (the `fleet copy` /
+// in-instance `fc` feature). The server reads the file through the backend (a
+// tar pipe over container exec, so metadata + bytes arrive in one exec) and
+// streams it back: the FIRST chunk carries `meta`, every following chunk carries
+// `data`. Only regular files are supported — a directory is an InvalidArgument.
+// Works unchanged over the remote gateway, which is the headline use case:
+// pulling a built binary out of a fully remote deployment onto the local machine.
+message CopyFileRequest {
+  string fleet = 1;
+  string instance = 2;
+  // path of the file inside the instance. A relative path resolves against the
+  // workspace folder (the backend exec working directory).
+  string path = 3;
+}
+
+message CopyFileChunk {
+  oneof msg {
+    CopyFileMeta meta = 1;
+    bytes data = 2;
+  }
+}
+
+message CopyFileMeta {
+  // name is the source file's basename — the default local filename.
+  string name = 1;
+  // mode is the source file's permission bits (so an executable stays runnable).
+  uint32 mode = 2;
+  int64 size = 3;
+}
+
 // ResolveLogsCommand returns the host-side command argv the server would run to
 // show an instance's container runtime logs. The client embeds it in its own
 // pager script (cat the creation log, then the runtime logs) and runs it

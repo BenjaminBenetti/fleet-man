@@ -84,14 +84,24 @@ func Serve(ctx context.Context) error {
 	// Control-socket listeners: the server owns every running instance's control
 	// socket and turns received browser.open envelopes (from an in-container
 	// `fleet launch` TUI) into BrowserOpen events the connected client execs
-	// locally. Runs unconditionally (cheap: only running instances get a
-	// listener) and tears down when hubCtx is cancelled.
+	// locally, and file.copy envelopes (from an in-container `fleet copy` / fc)
+	// into FileCopy events the connected client downloads from. Runs
+	// unconditionally (cheap: only running instances get a listener) and tears
+	// down when hubCtx is cancelled.
 	controlReg := newControlRegistry(func(fleetName, instanceName, url string) {
 		svc.hub.post(func(h *hub) {
 			h.broadcastBrowserOpen(&fleetgrpc.BrowserOpen{
 				Url:      url,
 				Fleet:    fleetName,
 				Instance: instanceName,
+			})
+		})
+	}, func(fleetName, instanceName, path string) {
+		svc.hub.post(func(h *hub) {
+			h.broadcastFileCopy(&fleetgrpc.FileCopy{
+				Fleet:    fleetName,
+				Instance: instanceName,
+				Path:     path,
 			})
 		})
 	}, svc.hub.hasSubscribers)
