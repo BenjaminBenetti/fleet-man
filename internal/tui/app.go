@@ -516,7 +516,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch page := m.currentPage.(type) {
 			case *fleetPage:
 				if page.mode == viewNormal && page.listRowY >= 0 {
-					if idx := mouseMsg.Y - page.listRowY; idx >= 0 && idx < len(page.rows) {
+					if idx := mouseMsg.Y - page.listRowY; idx >= 0 && idx < len(page.rows) && page.rows[idx].selectable() {
 						page.cursor = idx
 						hit = true
 						if page.rows[idx].kind == rowInstance {

@@ -795,6 +795,9 @@ func (fleetPage *fleetPage) saveTagInstance(m *model) tea.Cmd {
 
 	fleetPage.mode = viewNormal
 	fleetPage.blurDialogFields()
+	// The tag renders as its own row under an expanded instance, so the
+	// row list must be rebuilt for the change to show immediately.
+	fleetPage.buildRows(m)
 	if tag == "" {
 		m.message = fmt.Sprintf("Cleared tag for %s/%s", fleetPage.dialogFleet, fleetPage.dialogInst)
 	} else {
