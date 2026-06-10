@@ -234,8 +234,13 @@ func (m *Manager) Run(ctx context.Context) {
 // established-then-dropped connection).
 func (m *Manager) connectAndServe(ctx context.Context, d desiredState) (registered bool, err error) {
 	gatewayURL := d.gatewayURL
+	// The whole remote surface depends on the local MCP stack: the tunnel-facing
+	// gRPC server is only wired when MCP is up (its bearer token IS the MCP
+	// token), so with mcpPort == 0 even a remote-fleet-only tunnel could serve
+	// nothing. Fail the attempt — an explicit error in the settings page beats a
+	// "connected" tunnel that silently serves neither traffic kind.
 	if m.mcpPort == 0 {
-		return false, fmt.Errorf("local MCP server is not running")
+		return false, fmt.Errorf("local MCP server is not running (required for remote MCP and remote fleet)")
 	}
 
 	conn, err := m.dial(ctx, gatewayURL)
