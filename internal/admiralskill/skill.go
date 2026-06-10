@@ -4,9 +4,10 @@
 //
 // The skill is a single SKILL.md that teaches a coding agent to act as an
 // orchestrator: spinning up fleet instances and delegating work to the agents
-// inside them via the `fleet` CLI. It is embedded into the fleet binary at build
-// time (//go:embed) so deployment is just the binary — there is no separate
-// asset to ship.
+// inside them via fleet's MCP tools (registered in Claude Code by the
+// companion package internal/admiralmcp). It is embedded into the fleet binary
+// at build time (//go:embed) so deployment is just the binary — there is no
+// separate asset to ship.
 //
 // Installation is hash-gated to keep startup cheap: a .hash file alongside the
 // installed SKILL.md records the sha256 of the content that was written. On each

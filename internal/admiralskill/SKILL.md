@@ -1,17 +1,21 @@
 ---
 name: fleet-admiral
-description: Gives you instructions on how to use the fleet tool. Use this when you need to know how to use fleet
-or the user is asking you to interact with fleet in some way, especially in the case of kicking of multiple agents 
-in fleet instances.
+description: >-
+  Teaches you what fleet is and how to drive its MCP tools (fleet_list,
+  fleet_up, fleet_exec, fleet_session_spawn, ...). Use this when you need to
+  interact with fleet in any way, especially when kicking off coding agents
+  in fleet instances.
 ---
 
 # Fleet Admiral
 
 `fleet` manages a fleet of isolated dev instances — each a devcontainer with its
 own checkout of a repository — and can run a coding agent inside any of them.
-This skill gives you an understanding of what fleet is and how to drive its CLI,
-so you can put it to use however a task calls for. It does not prescribe a
-workflow: you decide how to apply these capabilities to what the user asks.
+fleet exposes its capabilities as MCP tools (the `fleet_*` tools from the
+`fleet` MCP server). This skill gives you an understanding of what fleet is and
+how to drive those tools, so you can put them to use however a task calls for.
+It does not prescribe a workflow: you decide how to apply these capabilities to
+what the user asks.
 
 ## Concepts
 
@@ -23,118 +27,131 @@ workflow: you decide how to apply these capabilities to what the user asks.
      └── instance C
 ```
 
-- **Fleet** — a group of instances tied to one repository. Derived from the repo
-  (its name comes from the repo URL basename).
+- **Fleet** — a group of instances tied to one repository. You name it when
+  you create its first instance (conventionally the repo basename, but any
+  name works); use `fleet_list`/`fleet_status` to find existing names rather
+  than deriving them from URLs.
 - **Instance** — one devcontainer: an isolated workspace you can run
   commands in, open in an editor, or run an agent inside. It has a lifecycle
-  (`creating → running ⇄ stopped → deleting`, plus `failed`).
+  (`creating → running ⇄ stopped → deleting`, plus `failed`; transitional
+  `cloning`, `starting`, and `stopping` can also appear in `fleet_list`).
 - **Session** — a named, *detached* tmux session inside an instance. Sessions are
   how you interact non-interactively with something long-lived in an instance
   (most importantly, a coding agent): you create the session, send keystrokes to
-  it, and read back its current screen. It persists across separate CLI calls
+  it, and read back its current screen. It persists across separate tool calls
   until you stop the instance or kill it.
 
 ## Addressing instances
 
-Most commands take an instance reference: `<fleet>/<instance>` 
+Tools that target an instance take explicit `fleet` and `instance` string
+parameters — there is no working-directory inference and no combined
+`fleet/instance` form. (Fleet-level tools take just `fleet`; `fleet_clone`
+names its instances `source` and `destination`.) Use `fleet_list` or
+`fleet_status` to discover the names when you don't know them.
 
-## What the CLI can do
+## What the tools can do
 
-**Inspect state.** `fleet status` prints fleet-wide summary counts;
-`fleet list [fleet]` prints a per-instance table (name, status, branch,
-container, created). Output is human-readable text, not JSON — parse the columns
-if you need to act on it programmatically.
+All tools return structured JSON — no text output to parse.
 
-**Manage instance lifecycle.**
+**Inspect state.** `fleet_status` summarizes every fleet (instance counts by
+running/stopped/other, plus the repo remote). `fleet_list` returns per-instance
+records (fleet, instance, status, branch, tag, backend, container_id,
+workspace_dir, created_at, error), optionally filtered to one fleet. `fleet_version` reports
+the daemon's version and liveness. `fleet_logs` returns an instance's container
+logs (use `tail` to cap to the last N lines).
 
-- `fleet up <name> [--repo URL] [--branch BRANCH] [--backend devcontainer|coder|codespaces]`
-  creates and starts an instance. The repo is resolved from `--repo`, the
-  fleet's recorded remote, or the current directory's git remote. `--backend`
-  selects where it runs (Docker devcontainer by default; also Coder or GitHub
-  Codespaces). Backends need to be configured, so unless specified by user, prefer devcontainer backend
-- `fleet start <name>` / `fleet stop <name>` resume / pause an instance. Stop
-  preserves the workspace; start brings it back.
-- `fleet down <name>` stops and removes a single instance. `fleet destroy <fleet>`
-  removes a whole fleet and all its instances. **Both are irreversible** and
-  discard any uncommitted work in those instances.
+**Manage instance lifecycle.** These block until the job finishes server-side
+(`fleet_up` provisions a devcontainer — expect minutes, not seconds) and return
+`{success, instance, warnings}`; a failed job surfaces as a tool error.
 
-**Run a one-off command.** `fleet exec <name> <command...>` runs a command inside
-an instance and inherits your terminal (e.g. `fleet exec api go test ./...`). Use
-this when you don't need anything persistent.
+- `fleet_up {fleet, instance, remote?, branch?, backend?}` creates and starts an
+  instance. `remote` (a git URL) is required only when creating the first
+  instance of a new fleet; after that the fleet's recorded remote is used.
+  `backend` selects where it runs: `devcontainer`, `coder`, or `codespaces`.
+  Omitted, it falls back to the host's configured default backend
+  (`devcontainer` out of the box) — the others need prior configuration, so
+  leave it unset or pass `devcontainer` unless the user says otherwise.
+- `fleet_start` / `fleet_stop {fleet, instance}` resume / pause an instance.
+  Stop preserves the workspace; start brings it back.
+- `fleet_down {fleet, instance}` stops and removes a single instance.
+  `fleet_destroy_fleet {fleet}` removes a whole fleet and all its instances.
+  **Both are irreversible** and discard any uncommitted work in those instances.
+- `fleet_clone {fleet, source, destination, ...}` duplicates an instance,
+  keeping its installed state (optional `display_name`, `tag`, `color`,
+  `branch` overrides).
 
-> **Passing flags to your command — use `--`.** `fleet` parses flags *before* the
-> command you want to run, so any `-x` / `--flag` belonging to that command is
-> otherwise swallowed by fleet itself and you get `Error: unknown flag: --foo`.
-> Put a `--` after the instance (and session) arguments; everything after it is
-> passed through verbatim:
->
-> ```bash
-> fleet exec <instance> -- git log --oneline          # NOT: fleet exec <instance> git log --oneline
-> fleet exec-in-session <instance> <session> -- npm test --watch
-> ```
->
-> This bites the common cases — `-la`, `--oneline`, `-f`, `-n 5`. For
-> `exec-in-session` you can equivalently quote the whole command as a single
-> argument (`... <session> "npm test --watch"`), since it joins the remaining
-> args into one string before sending them; for `fleet exec`, prefer `--` so the
-> command's arguments stay as separate argv elements.
+**Run a one-off command.** `fleet_exec {fleet, instance, command}` runs a
+command inside an instance and returns `{stdout, stderr, exit_code}`. `command`
+is an argv **array**, not a shell string — `["git", "log", "--oneline"]` — so
+there is no quoting or flag-parsing to worry about. A non-zero exit comes back
+as data, not a tool error: check `exit_code`. Not for long-running or
+interactive commands — use a session for those.
 
 **Drive an agent (or any long-lived process) via sessions.** This is the
 non-interactive loop for working with a coding agent inside an instance:
 
-```bash
-fleet spawn-session <instance> <session>                 # create a detached tmux session
-fleet exec-in-session <instance> <session> "<command>"   # type a command + Enter into it
-fleet read-session <instance> <session> [--scrollback N] # capture the session's screen
-```
+- `fleet_session_spawn {fleet, instance, session}` — create a detached tmux
+  session.
+- `fleet_session_exec {fleet, instance, session, command}` — type a command
+  (one shell string) into the session + Enter. Fire-and-forget: it sends
+  keystrokes and returns immediately, without waiting for the command.
+- `fleet_session_read {fleet, instance, session, scrollback?}` — capture the
+  session's screen. `scrollback`: `0` (default) = just the visible screen,
+  positive N = the last N history lines, negative = full history.
+- `fleet_session_list {fleet, instance}` — the instance's tmux sessions
+  (session, windows, created_at, attached).
 
 Session names are canonicalized to `<instance>~<name>` internally so the
 session appears as a regular session group in the fleet TUI — keep using the
-short name with these commands; they all resolve it the same way.
+short name with these tools (they all resolve it the same way);
+`fleet_session_list` reports the canonical names.
 
-`exec-in-session` sends keystrokes (it does not wait for completion), so to
-follow progress you read the session back. `read-session --scrollback N` returns
-the last N lines (`0` = just the visible screen, `-1` = full history). To put an
-agent to work, launch the agent in the session with the task as its prompt, then
-read the session to see what it's doing or asking.
+To put an agent to work, spawn a session, exec the agent's launch command with
+the task as its prompt, then read the session to see what it's doing or asking.
 
 ## Behaviors worth knowing
 
-- Commands return exit code `0` on success, non-zero on failure, and print
-  errors to stderr.
-- `exec`, `shell`, and the `*-session` commands attach to your TTY / send raw
-  keystrokes — they assume an interactive terminal model.
-- Sessions are detached and survive between CLI invocations; reading one is a
+- An instance must be `running` to exec into it or use its sessions;
+  `fleet_start` a `stopped` one first.
+- Sessions are detached and survive between tool calls; reading one is a
   snapshot of its current screen, not a stream.
-- An instance must be `running` to exec into it or use its sessions; `start` a
-  `stopped` one first.
-- `fleet` parses its own flags first: separate the command you want to run with
-  `--` (see "Passing flags to your command") or its flags will be intercepted.
+- Errors come back as tool errors with a clear message (instance not found, not
+  running, job failed); the one exception is `fleet_exec`, where a non-zero
+  exit is ordinary result data.
+- Lifecycle `warnings` are non-fatal issues from an otherwise-successful job —
+  surface them, don't treat them as failure.
+- If the `fleet_*` MCP tools are not available, the `fleet` CLI offers the same
+  operations from the shell (`fleet --help`). The MCP server is registered in
+  Claude Code automatically when the fleet TUI runs; a missing registration
+  usually means fleet hasn't been started yet, the current Claude Code session
+  predates the registration (the config is read at session start — a new
+  session picks it up), or fleet points at a remote daemon via
+  `FLEET_GATEWAY`/`FLEET_SERVER`, where registration is intentionally skipped
+  and the MCP config must be copied from the TUI settings page.
 
-## Command reference
+## Tool reference
 
 ```
-LIFECYCLE
-  fleet up <name> [--repo URL] [--branch BRANCH] [--backend devcontainer|coder|codespaces]
-  fleet start <name>            # resume a stopped instance
-  fleet stop <name>             # pause, keep workspace
-  fleet down <name>             # stop + remove one instance        (irreversible)
-  fleet destroy <fleet>         # remove a fleet and all instances  (irreversible)
-  fleet clone <src> <dst>       # duplicate an instance (keeps installed state)
+INSPECT
+  fleet_status                                      # per-fleet + total counts
+  fleet_list {fleet?}                               # instance records
+  fleet_version                                     # daemon version/liveness
+  fleet_logs {fleet, instance, tail?}               # container logs
 
-INTROSPECTION
-  fleet status                  # fleet-wide summary counts
-  fleet list [fleet]            # per-instance table (name, status, branch, ...)
+LIFECYCLE  (block until the job completes; up can take minutes)
+  fleet_up {fleet, instance, remote?, branch?, backend?}
+  fleet_start {fleet, instance}                     # resume a stopped instance
+  fleet_stop {fleet, instance}                      # pause, keep workspace
+  fleet_down {fleet, instance}                      # remove one instance      (irreversible)
+  fleet_destroy_fleet {fleet}                       # remove fleet + instances (irreversible)
+  fleet_clone {fleet, source, destination, display_name?, tag?, color?, branch?}
 
-EXECUTION  (use `--` before a command that has its own flags)
-  fleet exec <name> -- <cmd...>           # e.g. fleet exec api -- git log --oneline
+EXECUTION
+  fleet_exec {fleet, instance, command: [argv...]}  # one-shot; exit_code is data
 
-SESSIONS (interact with an agent / long-lived process in an instance)
-  fleet spawn-session <instance> <session>
-  fleet exec-in-session <instance> <session> -- <cmd...>   # or quote: "<cmd>"
-  fleet read-session <instance> <session> [--scrollback N]   # 0 = screen, N = last N, -1 = all
-
-ADDRESSING
-  <instance>           # when run inside the repo's directory (fleet inferred)
-  <fleet>/<instance>   # from anywhere
+SESSIONS  (interact with an agent / long-lived process in an instance)
+  fleet_session_spawn {fleet, instance, session}
+  fleet_session_exec {fleet, instance, session, command: "shell string"}
+  fleet_session_read {fleet, instance, session, scrollback?}   # 0 screen, N last N, <0 all
+  fleet_session_list {fleet, instance}
 ```

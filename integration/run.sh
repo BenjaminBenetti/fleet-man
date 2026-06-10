@@ -71,7 +71,26 @@ fi
 # run.sh does NOT judge results; it only aggregates this file at the end.
 FLEET_ITEST_RESULTS="$(mktemp)"
 export FLEET_ITEST_RESULTS
-trap 'rm -f "${FLEET_ITEST_RESULTS}"' EXIT
+
+# The TUI auto-registers the fleet MCP server in ~/.claude.json, so EVERY test
+# that spawns the TUI mutates the runner's real config (381 is just the one
+# that asserts on it). Snapshot it once and restore on suite exit, so a dev
+# running the suite locally gets their config back exactly as it was.
+CLAUDE_JSON="${HOME}/.claude.json"
+CLAUDE_JSON_SUITE_BAK=""
+if [ -f "${CLAUDE_JSON}" ]; then
+  CLAUDE_JSON_SUITE_BAK="$(mktemp)"
+  cp "${CLAUDE_JSON}" "${CLAUDE_JSON_SUITE_BAK}"
+fi
+_restore_claude_json() {
+  if [ -n "${CLAUDE_JSON_SUITE_BAK}" ] && [ -f "${CLAUDE_JSON_SUITE_BAK}" ]; then
+    mv "${CLAUDE_JSON_SUITE_BAK}" "${CLAUDE_JSON}"
+  else
+    rm -f "${CLAUDE_JSON}"
+  fi
+}
+
+trap 'rm -f "${FLEET_ITEST_RESULTS}"; _restore_claude_json' EXIT
 
 # Sourced common.sh in tests provides teardown_test — we need it here too.
 # shellcheck disable=SC1091

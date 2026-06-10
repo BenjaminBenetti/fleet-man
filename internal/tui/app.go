@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/admiralmcp"
 	"github.com/BenjaminBenetti/fleet-man/internal/admiralskill"
 	"github.com/BenjaminBenetti/fleet-man/internal/codespaceerr"
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
@@ -1037,6 +1038,14 @@ func Run() error {
 	// skill-install hiccup must never block startup, and client code does not
 	// write the server-owned event log.
 	_ = admiralskill.EnsureInstalled()
+
+	// Register the fleet MCP server in the user's Claude Code config
+	// (~/.claude.json) so an agent can actually CALL the tools that skill
+	// teaches. Backgrounded because on a cold start the endpoint files only
+	// appear once the auto-spawned daemon binds its MCP listener; the helper
+	// polls for them and gives up silently — same best-effort contract as the
+	// skill install, an MCP-install hiccup must never block (or slow) startup.
+	go admiralmcp.EnsureInstalledEventually(30 * time.Second)
 
 	m := newModel()
 
