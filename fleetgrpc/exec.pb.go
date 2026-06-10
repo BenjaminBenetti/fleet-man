@@ -646,34 +646,41 @@ func (x *LogLine) GetAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// PortForward returns a host-side command descriptor for forwarding a port; the
-// client runs it. A descriptor RPC (not a data-plane proxy) to match the existing
-// backend.PortForwardCommand idiom, which tunnels local_port on the host to
-// remote_port inside the container.
-type PortForwardRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Fleet         string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
-	Instance      string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
-	LocalPort     int32                  `protobuf:"varint,3,opt,name=local_port,json=localPort,proto3" json:"local_port,omitempty"`
-	RemotePort    int32                  `protobuf:"varint,4,opt,name=remote_port,json=remotePort,proto3" json:"remote_port,omitempty"`
+// Forward is the port-forward DATA PLANE: one bidi stream per accepted TCP
+// connection. The CLIENT owns the listen half (an in-process TCP proxy on
+// local_port); the SERVER owns the bridge into the container; this stream is
+// the pipe between them — so forwarding holds even when the server is remote
+// (the old PortForward descriptor RPC assumed client host == server host).
+//
+// The FIRST client frame MUST carry `open` (fleet, instance, remote_port);
+// every subsequent frame (both directions) carries raw bytes in `data`.
+// Half-close maps naturally: the client ends its upload by closing its send
+// side (CloseSend); the server signals remote EOF by ending the stream.
+type ForwardChunk struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Msg:
+	//
+	//	*ForwardChunk_Open
+	//	*ForwardChunk_Data
+	Msg           isForwardChunk_Msg `protobuf_oneof:"msg"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PortForwardRequest) Reset() {
-	*x = PortForwardRequest{}
+func (x *ForwardChunk) Reset() {
+	*x = ForwardChunk{}
 	mi := &file_exec_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PortForwardRequest) String() string {
+func (x *ForwardChunk) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PortForwardRequest) ProtoMessage() {}
+func (*ForwardChunk) ProtoMessage() {}
 
-func (x *PortForwardRequest) ProtoReflect() protoreflect.Message {
+func (x *ForwardChunk) ProtoReflect() protoreflect.Message {
 	mi := &file_exec_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -685,81 +692,113 @@ func (x *PortForwardRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PortForwardRequest.ProtoReflect.Descriptor instead.
-func (*PortForwardRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use ForwardChunk.ProtoReflect.Descriptor instead.
+func (*ForwardChunk) Descriptor() ([]byte, []int) {
 	return file_exec_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *PortForwardRequest) GetFleet() string {
+func (x *ForwardChunk) GetMsg() isForwardChunk_Msg {
+	if x != nil {
+		return x.Msg
+	}
+	return nil
+}
+
+func (x *ForwardChunk) GetOpen() *ForwardOpen {
+	if x != nil {
+		if x, ok := x.Msg.(*ForwardChunk_Open); ok {
+			return x.Open
+		}
+	}
+	return nil
+}
+
+func (x *ForwardChunk) GetData() []byte {
+	if x != nil {
+		if x, ok := x.Msg.(*ForwardChunk_Data); ok {
+			return x.Data
+		}
+	}
+	return nil
+}
+
+type isForwardChunk_Msg interface {
+	isForwardChunk_Msg()
+}
+
+type ForwardChunk_Open struct {
+	Open *ForwardOpen `protobuf:"bytes,1,opt,name=open,proto3,oneof"`
+}
+
+type ForwardChunk_Data struct {
+	Data []byte `protobuf:"bytes,2,opt,name=data,proto3,oneof"`
+}
+
+func (*ForwardChunk_Open) isForwardChunk_Msg() {}
+
+func (*ForwardChunk_Data) isForwardChunk_Msg() {}
+
+// ForwardOpen is the setup header for one forwarded connection: which
+// instance to bridge into and the port to reach inside it. There is no
+// local_port — the listen side is entirely the client's business.
+type ForwardOpen struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Fleet         string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	Instance      string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
+	RemotePort    int32                  `protobuf:"varint,3,opt,name=remote_port,json=remotePort,proto3" json:"remote_port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ForwardOpen) Reset() {
+	*x = ForwardOpen{}
+	mi := &file_exec_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ForwardOpen) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ForwardOpen) ProtoMessage() {}
+
+func (x *ForwardOpen) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ForwardOpen.ProtoReflect.Descriptor instead.
+func (*ForwardOpen) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ForwardOpen) GetFleet() string {
 	if x != nil {
 		return x.Fleet
 	}
 	return ""
 }
 
-func (x *PortForwardRequest) GetInstance() string {
+func (x *ForwardOpen) GetInstance() string {
 	if x != nil {
 		return x.Instance
 	}
 	return ""
 }
 
-func (x *PortForwardRequest) GetLocalPort() int32 {
-	if x != nil {
-		return x.LocalPort
-	}
-	return 0
-}
-
-func (x *PortForwardRequest) GetRemotePort() int32 {
+func (x *ForwardOpen) GetRemotePort() int32 {
 	if x != nil {
 		return x.RemotePort
 	}
 	return 0
-}
-
-type PortForwardReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Argv          []string               `protobuf:"bytes,1,rep,name=argv,proto3" json:"argv,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PortForwardReply) Reset() {
-	*x = PortForwardReply{}
-	mi := &file_exec_proto_msgTypes[10]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PortForwardReply) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PortForwardReply) ProtoMessage() {}
-
-func (x *PortForwardReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[10]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PortForwardReply.ProtoReflect.Descriptor instead.
-func (*PortForwardReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{10}
-}
-
-func (x *PortForwardReply) GetArgv() []string {
-	if x != nil {
-		return x.Argv
-	}
-	return nil
 }
 
 // CopyFile streams one file out of an instance to the client (the `fleet copy` /
@@ -1534,16 +1573,16 @@ const file_exec_proto_rawDesc = "" +
 	"\x05_tail\"I\n" +
 	"\aLogLine\x12\x12\n" +
 	"\x04line\x18\x01 \x01(\tR\x04line\x12*\n" +
-	"\x02at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x02at\"\x86\x01\n" +
-	"\x12PortForwardRequest\x12\x14\n" +
+	"\x02at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x02at\"Y\n" +
+	"\fForwardChunk\x12,\n" +
+	"\x04open\x18\x01 \x01(\v2\x16.fleetgrpc.ForwardOpenH\x00R\x04open\x12\x14\n" +
+	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\x05\n" +
+	"\x03msg\"`\n" +
+	"\vForwardOpen\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
-	"\binstance\x18\x02 \x01(\tR\binstance\x12\x1d\n" +
-	"\n" +
-	"local_port\x18\x03 \x01(\x05R\tlocalPort\x12\x1f\n" +
-	"\vremote_port\x18\x04 \x01(\x05R\n" +
-	"remotePort\"&\n" +
-	"\x10PortForwardReply\x12\x12\n" +
-	"\x04argv\x18\x01 \x03(\tR\x04argv\"W\n" +
+	"\binstance\x18\x02 \x01(\tR\binstance\x12\x1f\n" +
+	"\vremote_port\x18\x03 \x01(\x05R\n" +
+	"remotePort\"W\n" +
 	"\x0fCopyFileRequest\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12\x12\n" +
@@ -1616,8 +1655,8 @@ var file_exec_proto_goTypes = []any{
 	(*ResolveExecCommandReply)(nil),       // 6: fleetgrpc.ResolveExecCommandReply
 	(*LogsRequest)(nil),                   // 7: fleetgrpc.LogsRequest
 	(*LogLine)(nil),                       // 8: fleetgrpc.LogLine
-	(*PortForwardRequest)(nil),            // 9: fleetgrpc.PortForwardRequest
-	(*PortForwardReply)(nil),              // 10: fleetgrpc.PortForwardReply
+	(*ForwardChunk)(nil),                  // 9: fleetgrpc.ForwardChunk
+	(*ForwardOpen)(nil),                   // 10: fleetgrpc.ForwardOpen
 	(*CopyFileRequest)(nil),               // 11: fleetgrpc.CopyFileRequest
 	(*CopyFileChunk)(nil),                 // 12: fleetgrpc.CopyFileChunk
 	(*CopyFileMeta)(nil),                  // 13: fleetgrpc.CopyFileMeta
@@ -1641,13 +1680,14 @@ var file_exec_proto_depIdxs = []int32{
 	4,  // 3: fleetgrpc.ExecOut.exit:type_name -> fleetgrpc.ExecExit
 	24, // 4: fleetgrpc.ResolveExecCommandReply.env:type_name -> fleetgrpc.ResolveExecCommandReply.EnvEntry
 	25, // 5: fleetgrpc.LogLine.at:type_name -> google.protobuf.Timestamp
-	13, // 6: fleetgrpc.CopyFileChunk.meta:type_name -> fleetgrpc.CopyFileMeta
-	17, // 7: fleetgrpc.GetCoderTemplateParamsReply.parameters:type_name -> fleetgrpc.CoderRichParameter
-	8,  // [8:8] is the sub-list for method output_type
-	8,  // [8:8] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	10, // 6: fleetgrpc.ForwardChunk.open:type_name -> fleetgrpc.ForwardOpen
+	13, // 7: fleetgrpc.CopyFileChunk.meta:type_name -> fleetgrpc.CopyFileMeta
+	17, // 8: fleetgrpc.GetCoderTemplateParamsReply.parameters:type_name -> fleetgrpc.CoderRichParameter
+	9,  // [9:9] is the sub-list for method output_type
+	9,  // [9:9] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_exec_proto_init() }
@@ -1667,6 +1707,10 @@ func file_exec_proto_init() {
 	}
 	file_exec_proto_msgTypes[4].OneofWrappers = []any{}
 	file_exec_proto_msgTypes[7].OneofWrappers = []any{}
+	file_exec_proto_msgTypes[9].OneofWrappers = []any{
+		(*ForwardChunk_Open)(nil),
+		(*ForwardChunk_Data)(nil),
+	}
 	file_exec_proto_msgTypes[12].OneofWrappers = []any{
 		(*CopyFileChunk_Meta)(nil),
 		(*CopyFileChunk_Data)(nil),

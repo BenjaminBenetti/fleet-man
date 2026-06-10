@@ -98,6 +98,14 @@ type Backend interface {
 	// container/workspace. The process runs until killed by the caller.
 	PortForwardCommand(containerID string, localPort, remotePort int) *exec.Cmd
 
+	// ForwardStdioCommand returns an unstarted *exec.Cmd whose stdin/stdout
+	// bridge ONE connection to remotePort inside the container/workspace
+	// (no listening socket on the host). Used by the server's Forward data
+	// plane, which pipes the process's stdio over a gRPC stream. Returns
+	// (nil, false) when the backend has no stdio bridge; callers fall back
+	// to PortForwardCommand bound to a host-local port.
+	ForwardStdioCommand(containerID string, remotePort int) (*exec.Cmd, bool)
+
 	// ResolveHostname returns a hostname or IP address that is directly
 	// reachable from the host for the given container/workspace. When
 	// the second return value is true, callers can open direct TCP

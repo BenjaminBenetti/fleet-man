@@ -32,7 +32,26 @@ const bashrcMarker = ".fleet/fleet.rc"
 //go:embed fleet.rc
 var fleetRCContent string
 
-// EnsureFleetRC writes the embedded fleet.rc into the container at
+// renderFleetRC returns the fleet.rc content to stage into a container:
+// the embedded base rc plus a per-instance block exporting
+// FLEET_INSTANCE_NAME, so in-container tools can tell which instance
+// they are running in. The name is single-quoted with embedded quotes
+// escaped, so any name is safe to source. An empty name skips the
+// block, leaving the rc identical to the embedded base.
+func renderFleetRC(instanceName string) string {
+	if instanceName == "" {
+		return fleetRCContent
+	}
+	quoted := "'" + strings.ReplaceAll(instanceName, "'", `'\''`) + "'"
+	return fleetRCContent + fmt.Sprintf(`
+# FLEET_INSTANCE_NAME — the name of this fleet instance, so in-container
+# tools can tell which instance they're running in.
+export FLEET_INSTANCE_NAME=%s
+`, quoted)
+}
+
+// EnsureFleetRC writes the rendered fleet.rc (embedded base plus the
+// FLEET_INSTANCE_NAME export for instanceName) into the container at
 // <homeDir>/.fleet/fleet.rc and ensures the user's ~/.bashrc sources
 // it on shell startup. homeDir is the absolute path of the in-container
 // home (from FleetSettings.HomeDir); an empty string falls back to
@@ -47,7 +66,7 @@ var fleetRCContent string
 //     already present, so re-stages don't accumulate duplicates.
 //
 // All paths live in the user's home, so no sudo is needed.
-func EnsureFleetRC(instanceBackend backend.Backend, workspaceDir, homeDir string) error {
+func EnsureFleetRC(instanceBackend backend.Backend, workspaceDir, homeDir, instanceName string) error {
 	if homeDir == "" {
 		homeDir = DefaultHomeDir
 	}
@@ -60,7 +79,7 @@ func EnsureFleetRC(instanceBackend backend.Backend, workspaceDir, homeDir string
 	// the script literal.
 	write := fmt.Sprintf(`mkdir -p %s && cat > %s`, rcDir, target)
 	cmd := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", write})
-	cmd.Stdin = strings.NewReader(fleetRCContent)
+	cmd.Stdin = strings.NewReader(renderFleetRC(instanceName))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("write fleet.rc: %w (%s)", err, strings.TrimSpace(string(out)))
 	}

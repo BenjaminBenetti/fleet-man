@@ -26,7 +26,7 @@ const file_service_proto_rawDesc = "" +
 	"\n" +
 	"\rservice.proto\x12\tfleetgrpc\x1a\rcontrol.proto\x1a\vwatch.proto\x1a\n" +
 	"jobs.proto\x1a\fconfig.proto\x1a\n" +
-	"exec.proto2\xf0\x12\n" +
+	"exec.proto2\xe6\x12\n" +
 	"\fFleetService\x127\n" +
 	"\x05Hello\x12\x17.fleetgrpc.HelloRequest\x1a\x15.fleetgrpc.HelloReply\x12@\n" +
 	"\bShutdown\x12\x1a.fleetgrpc.ShutdownRequest\x1a\x18.fleetgrpc.ShutdownReply\x12[\n" +
@@ -53,8 +53,8 @@ const file_service_proto_rawDesc = "" +
 	"\x04Exec\x12\x11.fleetgrpc.ExecIn\x1a\x12.fleetgrpc.ExecOut(\x010\x01\x12^\n" +
 	"\x12ResolveExecCommand\x12$.fleetgrpc.ResolveExecCommandRequest\x1a\".fleetgrpc.ResolveExecCommandReply\x12^\n" +
 	"\x12ResolveLogsCommand\x12$.fleetgrpc.ResolveLogsCommandRequest\x1a\".fleetgrpc.ResolveLogsCommandReply\x124\n" +
-	"\x04Logs\x12\x16.fleetgrpc.LogsRequest\x1a\x12.fleetgrpc.LogLine0\x01\x12I\n" +
-	"\vPortForward\x12\x1d.fleetgrpc.PortForwardRequest\x1a\x1b.fleetgrpc.PortForwardReply\x12B\n" +
+	"\x04Logs\x12\x16.fleetgrpc.LogsRequest\x1a\x12.fleetgrpc.LogLine0\x01\x12?\n" +
+	"\aForward\x12\x17.fleetgrpc.ForwardChunk\x1a\x17.fleetgrpc.ForwardChunk(\x010\x01\x12B\n" +
 	"\bCopyFile\x12\x1a.fleetgrpc.CopyFileRequest\x1a\x18.fleetgrpc.CopyFileChunk0\x01\x12j\n" +
 	"\x16GetCoderTemplateParams\x12(.fleetgrpc.GetCoderTemplateParamsRequest\x1a&.fleetgrpc.GetCoderTemplateParamsReply\x12X\n" +
 	"\x10GetBrowserConfig\x12\".fleetgrpc.GetBrowserConfigRequest\x1a .fleetgrpc.GetBrowserConfigReply\x12R\n" +
@@ -87,7 +87,7 @@ var file_service_proto_goTypes = []any{
 	(*ResolveExecCommandRequest)(nil),     // 23: fleetgrpc.ResolveExecCommandRequest
 	(*ResolveLogsCommandRequest)(nil),     // 24: fleetgrpc.ResolveLogsCommandRequest
 	(*LogsRequest)(nil),                   // 25: fleetgrpc.LogsRequest
-	(*PortForwardRequest)(nil),            // 26: fleetgrpc.PortForwardRequest
+	(*ForwardChunk)(nil),                  // 26: fleetgrpc.ForwardChunk
 	(*CopyFileRequest)(nil),               // 27: fleetgrpc.CopyFileRequest
 	(*GetCoderTemplateParamsRequest)(nil), // 28: fleetgrpc.GetCoderTemplateParamsRequest
 	(*GetBrowserConfigRequest)(nil),       // 29: fleetgrpc.GetBrowserConfigRequest
@@ -108,11 +108,10 @@ var file_service_proto_goTypes = []any{
 	(*ResolveExecCommandReply)(nil),       // 44: fleetgrpc.ResolveExecCommandReply
 	(*ResolveLogsCommandReply)(nil),       // 45: fleetgrpc.ResolveLogsCommandReply
 	(*LogLine)(nil),                       // 46: fleetgrpc.LogLine
-	(*PortForwardReply)(nil),              // 47: fleetgrpc.PortForwardReply
-	(*CopyFileChunk)(nil),                 // 48: fleetgrpc.CopyFileChunk
-	(*GetCoderTemplateParamsReply)(nil),   // 49: fleetgrpc.GetCoderTemplateParamsReply
-	(*GetBrowserConfigReply)(nil),         // 50: fleetgrpc.GetBrowserConfigReply
-	(*PrepareBrowserReply)(nil),           // 51: fleetgrpc.PrepareBrowserReply
+	(*CopyFileChunk)(nil),                 // 47: fleetgrpc.CopyFileChunk
+	(*GetCoderTemplateParamsReply)(nil),   // 48: fleetgrpc.GetCoderTemplateParamsReply
+	(*GetBrowserConfigReply)(nil),         // 49: fleetgrpc.GetBrowserConfigReply
+	(*PrepareBrowserReply)(nil),           // 50: fleetgrpc.PrepareBrowserReply
 }
 var file_service_proto_depIdxs = []int32{
 	0,  // 0: fleetgrpc.FleetService.Hello:input_type -> fleetgrpc.HelloRequest
@@ -141,7 +140,7 @@ var file_service_proto_depIdxs = []int32{
 	23, // 23: fleetgrpc.FleetService.ResolveExecCommand:input_type -> fleetgrpc.ResolveExecCommandRequest
 	24, // 24: fleetgrpc.FleetService.ResolveLogsCommand:input_type -> fleetgrpc.ResolveLogsCommandRequest
 	25, // 25: fleetgrpc.FleetService.Logs:input_type -> fleetgrpc.LogsRequest
-	26, // 26: fleetgrpc.FleetService.PortForward:input_type -> fleetgrpc.PortForwardRequest
+	26, // 26: fleetgrpc.FleetService.Forward:input_type -> fleetgrpc.ForwardChunk
 	27, // 27: fleetgrpc.FleetService.CopyFile:input_type -> fleetgrpc.CopyFileRequest
 	28, // 28: fleetgrpc.FleetService.GetCoderTemplateParams:input_type -> fleetgrpc.GetCoderTemplateParamsRequest
 	29, // 29: fleetgrpc.FleetService.GetBrowserConfig:input_type -> fleetgrpc.GetBrowserConfigRequest
@@ -172,11 +171,11 @@ var file_service_proto_depIdxs = []int32{
 	44, // 54: fleetgrpc.FleetService.ResolveExecCommand:output_type -> fleetgrpc.ResolveExecCommandReply
 	45, // 55: fleetgrpc.FleetService.ResolveLogsCommand:output_type -> fleetgrpc.ResolveLogsCommandReply
 	46, // 56: fleetgrpc.FleetService.Logs:output_type -> fleetgrpc.LogLine
-	47, // 57: fleetgrpc.FleetService.PortForward:output_type -> fleetgrpc.PortForwardReply
-	48, // 58: fleetgrpc.FleetService.CopyFile:output_type -> fleetgrpc.CopyFileChunk
-	49, // 59: fleetgrpc.FleetService.GetCoderTemplateParams:output_type -> fleetgrpc.GetCoderTemplateParamsReply
-	50, // 60: fleetgrpc.FleetService.GetBrowserConfig:output_type -> fleetgrpc.GetBrowserConfigReply
-	51, // 61: fleetgrpc.FleetService.PrepareBrowser:output_type -> fleetgrpc.PrepareBrowserReply
+	26, // 57: fleetgrpc.FleetService.Forward:output_type -> fleetgrpc.ForwardChunk
+	47, // 58: fleetgrpc.FleetService.CopyFile:output_type -> fleetgrpc.CopyFileChunk
+	48, // 59: fleetgrpc.FleetService.GetCoderTemplateParams:output_type -> fleetgrpc.GetCoderTemplateParamsReply
+	49, // 60: fleetgrpc.FleetService.GetBrowserConfig:output_type -> fleetgrpc.GetBrowserConfigReply
+	50, // 61: fleetgrpc.FleetService.PrepareBrowser:output_type -> fleetgrpc.PrepareBrowserReply
 	31, // [31:62] is the sub-list for method output_type
 	0,  // [0:31] is the sub-list for method input_type
 	0,  // [0:0] is the sub-list for extension type_name

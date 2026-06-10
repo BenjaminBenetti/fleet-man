@@ -14,6 +14,7 @@ type rowKind int
 const (
 	rowFleetHeader rowKind = iota
 	rowInstance
+	rowInstanceTag
 	rowSession
 	rowNewSession
 	rowSettings
@@ -27,6 +28,12 @@ type row struct {
 	sessionName string // set when kind == rowSession or rowNewSession
 	groupID     string // set for grouped session rows
 	groupSize   int    // number of sessions in the group (for display)
+}
+
+// selectable reports whether the cursor may rest on this row. Instance
+// tag rows are display-only; navigation and mouse clicks skip them.
+func (r row) selectable() bool {
+	return r.kind != rowInstanceTag
 }
 
 // lastSession tracks the most recently used session for an instance,

@@ -95,8 +95,7 @@ type fleetPage struct {
 	homedirInput     textinput.Model
 	customMountInput textinput.Model
 
-	pfCursor      int
-	pfContainerID string
+	pfCursor int
 
 	splitPaneID     string
 	splitRef        InstanceRef // (fleet, instance) of the open split pane; zero when none
@@ -310,6 +309,9 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 				fleetPage.rows = append(fleetPage.rows, row{kind: rowInstance, fleetName: name, instance: instance})
 				ref := InstanceRef{Fleet: name, Instance: instance.Name}
 				if m.sessionStore.IsExpanded(ref) {
+					if instance.Tag != "" {
+						fleetPage.rows = append(fleetPage.rows, row{kind: rowInstanceTag, fleetName: name, instance: instance})
+					}
 					liveGroups := make(map[string]bool)
 					for _, g := range m.sessionStore.Groups(ref) {
 						liveGroups[g.GroupID] = true
@@ -339,6 +341,11 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 	}
 	if fleetPage.cursor >= len(fleetPage.rows) {
 		fleetPage.cursor = max(0, len(fleetPage.rows)-1)
+	}
+	// A rebuild can shift rows so the cursor lands on a display-only row
+	// (e.g. a tag line inserted above a session row); nudge it forward.
+	if r := fleetPage.currentRow(); r != nil && !r.selectable() {
+		fleetPage.moveCursor(1)
 	}
 }
 
@@ -381,12 +388,26 @@ func (fleetPage *fleetPage) currentRow() *row {
 	return &fleetPage.rows[fleetPage.cursor]
 }
 
-// moveCursor moves the cursor by delta, wrapping around.
+// moveCursor moves the cursor by delta rows, wrapping around and
+// skipping rows the cursor may not rest on (e.g. instance tag lines).
 func (fleetPage *fleetPage) moveCursor(delta int) {
-	if len(fleetPage.rows) == 0 || delta == 0 {
+	n := len(fleetPage.rows)
+	if n == 0 || delta == 0 {
 		return
 	}
-	fleetPage.cursor = (fleetPage.cursor + delta + len(fleetPage.rows)) % len(fleetPage.rows)
+	step := 1
+	if delta < 0 {
+		step = -1
+		delta = -delta
+	}
+	for ; delta > 0; delta-- {
+		for range n {
+			fleetPage.cursor = (fleetPage.cursor + step + n) % n
+			if fleetPage.rows[fleetPage.cursor].selectable() {
+				break
+			}
+		}
+	}
 }
 
 // moveCursorToInstance moves the cursor to the next (delta > 0) or previous
@@ -781,7 +802,6 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.mode = viewPortForward
 			fleetPage.dialogFleet = fleetPage.currentFleetName()
 			fleetPage.dialogInst = instance.Name
-			fleetPage.pfContainerID = instance.ContainerID
 			fleetPage.pfCursor = 0
 			fleetPage.textInput.SetValue("")
 			fleetPage.textInput.Placeholder = "local:remote (e.g. 8080:80)"
@@ -1230,16 +1250,19 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				if pfLabel := m.portForwards.FormatLabels(pfKey); pfLabel != "" {
 					line += portForwardStyle.Render("  ⇄ " + pfLabel)
 				}
-
-				if instance.Tag != "" {
-					line += dimStyle.Render("  # " + instance.Tag)
-				}
 			}
 
 			if maxW := m.width - 4; maxW > 0 && lipgloss.Width(line) > maxW {
 				line = ansi.Truncate(line, maxW-1, "…")
 			}
 
+			listContent.WriteString(line)
+			listContent.WriteString("\n")
+		} else if r.kind == rowInstanceTag {
+			line := fmt.Sprintf("%s        %s", cursor, dimStyle.Render("# "+r.instance.Tag))
+			if maxW := m.width - 4; maxW > 0 && lipgloss.Width(line) > maxW {
+				line = ansi.Truncate(line, maxW-1, "…")
+			}
 			listContent.WriteString(line)
 			listContent.WriteString("\n")
 		} else {

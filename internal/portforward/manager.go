@@ -8,7 +8,9 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
-// Manager tracks active port forward processes per instance.
+// Manager tracks active in-process port forward proxies per instance. Each
+// forward is a local TCP listener whose accepted connections are tunnelled
+// to the target via a TargetDialer (one dial per connection).
 type Manager struct {
 	mu       sync.Mutex
 	forwards map[string][]*Forward // key: "fleet/instance"
@@ -21,10 +23,9 @@ func NewManager() *Manager {
 	}
 }
 
-// Add starts a new port forward for the given instance. If resolve is
-// non-nil and returns a reachable hostname, an in-process TCP proxy is
-// used. Otherwise it falls back to spawning a process via factory.
-func (m *Manager) Add(key string, localPort, remotePort int, factory CmdFactory, containerID string, resolve ResolveFunc) error {
+// Add starts a new port forward for the given instance: a local listener on
+// localPort whose connections are tunnelled to the target via dial.
+func (m *Manager) Add(key string, localPort, remotePort int, dial TargetDialer) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -34,50 +35,25 @@ func (m *Manager) Add(key string, localPort, remotePort int, factory CmdFactory,
 		}
 	}
 
-	if err := m.addForwardLocked(key, localPort, remotePort, factory, containerID, resolve, false); err != nil {
+	if err := m.addForwardLocked(key, localPort, remotePort, dial, false); err != nil {
 		return err
 	}
 	flog.Info("port-forward started", "key", key, "localPort", localPort, "remotePort", remotePort)
 	return nil
 }
 
-// addForwardLocked starts a forward on localPort and records it under
-// key. It first tries an in-process TCP proxy via resolve, then falls
-// back to spawning an external process via factory. When browserProxy
-// is true the recorded Forward is marked as a browser proxy.
+// addForwardLocked starts a forward on localPort and records it under key.
+// When browserProxy is true the recorded Forward is marked as a browser
+// proxy.
 //
 // The caller must hold m.mu; addForwardLocked does not lock.
-func (m *Manager) addForwardLocked(key string, localPort, remotePort int, factory CmdFactory, containerID string, resolve ResolveFunc, browserProxy bool) error {
-	// Try in-process proxy via ResolveHostname.
-	if resolve != nil {
-		if hostname, ok := resolve(containerID); ok {
-			fwd, err := startProxy(localPort, hostname, remotePort)
-			if err != nil {
-				return fmt.Errorf("start proxy %d->%d: %w", localPort, remotePort, err)
-			}
-			fwd.BrowserProxy = browserProxy
-			m.forwards[key] = append(m.forwards[key], fwd)
-			return nil
-		}
+func (m *Manager) addForwardLocked(key string, localPort, remotePort int, dial TargetDialer, browserProxy bool) error {
+	fwd, err := startProxy(localPort, remotePort, dial)
+	if err != nil {
+		return fmt.Errorf("start proxy %d->%d: %w", localPort, remotePort, err)
 	}
-
-	// Fallback: spawn an external process.
-	cmd := factory(containerID, localPort, remotePort)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start port forward %d->%d: %w", localPort, remotePort, err)
-	}
-
-	fwd := &Forward{
-		LocalPort:    localPort,
-		RemotePort:   remotePort,
-		BrowserProxy: browserProxy,
-		cmd:          cmd,
-	}
+	fwd.BrowserProxy = browserProxy
 	m.forwards[key] = append(m.forwards[key], fwd)
-
-	// Reap the process in the background so it doesn't become a zombie.
-	go cmd.Wait() //nolint:errcheck
-
 	return nil
 }
 
@@ -98,7 +74,7 @@ func (m *Manager) FindBrowserProxy(key string) (int, bool) {
 // AddBrowserProxy creates a port forward marked as a browser proxy,
 // automatically selecting an available local port. It returns the
 // chosen local port on success.
-func (m *Manager) AddBrowserProxy(key string, remotePort int, factory CmdFactory, containerID string, resolve ResolveFunc) (int, error) {
+func (m *Manager) AddBrowserProxy(key string, remotePort int, dial TargetDialer) (int, error) {
 	// Grab an ephemeral port from the OS.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -110,7 +86,7 @@ func (m *Manager) AddBrowserProxy(key string, remotePort int, factory CmdFactory
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := m.addForwardLocked(key, localPort, remotePort, factory, containerID, resolve, true); err != nil {
+	if err := m.addForwardLocked(key, localPort, remotePort, dial, true); err != nil {
 		return 0, err
 	}
 	flog.Info("browser proxy started", "key", key, "localPort", localPort, "remotePort", remotePort)

@@ -133,11 +133,13 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) (err er
 	// inherits whatever the source had — which may be stale if the host
 	// has been updated since the source was staged. EnsureFresh skips
 	// when the binary already matches; EnsureFleetRC always rewrites,
-	// which is cheap (small file, one exec). Non-fatal like in Run.
+	// which is cheap (small file, one exec) and also re-stamps
+	// FLEET_INSTANCE_NAME with the clone's own name rather than the
+	// source's. Non-fatal like in Run.
 	if _, err := fleetlaunch.EnsureFresh(instanceBackend, destWorkspaceDir, nil); err != nil {
 		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("stage fleet-launch: %v", err))
 	}
-	if err := fleetlaunch.EnsureFleetRC(instanceBackend, destWorkspaceDir, homeDirForFleet(fleetName)); err != nil {
+	if err := fleetlaunch.EnsureFleetRC(instanceBackend, destWorkspaceDir, homeDirForFleet(fleetName), destInstance); err != nil {
 		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("stage fleet.rc: %v", err))
 	}
 

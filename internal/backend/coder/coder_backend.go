@@ -253,6 +253,13 @@ func (coderBackend *CoderBackend) PortForwardCommand(containerID string, localPo
 	return exec.Command("coder", "port-forward", target, mapping)
 }
 
+// ForwardStdioCommand returns (nil, false): the coder CLI has no
+// single-connection stdio bridge, so callers fall back to
+// PortForwardCommand bound to a host-local port.
+func (coderBackend *CoderBackend) ForwardStdioCommand(containerID string, remotePort int) (*exec.Cmd, bool) {
+	return nil, false
+}
+
 // ResolveHostname returns ("", false) for Coder workspaces because they
 // are remote and not directly reachable by IP from the host.
 func (coderBackend *CoderBackend) ResolveHostname(containerID string) (string, bool) {

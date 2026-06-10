@@ -25,7 +25,7 @@ var postStartHook = func(fleetName string, instance *fleet.Instance, homeDir str
 	if _, err := fleetlaunch.EnsureFresh(instanceBackend, instance.WorkspaceDir, nil); err != nil {
 		state.WriteWarn(fleetName, instance.Name, fmt.Sprintf("stage fleet-launch: %v", err))
 	}
-	if err := fleetlaunch.EnsureFleetRC(instanceBackend, instance.WorkspaceDir, homeDir); err != nil {
+	if err := fleetlaunch.EnsureFleetRC(instanceBackend, instance.WorkspaceDir, homeDir, instance.Name); err != nil {
 		state.WriteWarn(fleetName, instance.Name, fmt.Sprintf("stage fleet.rc: %v", err))
 	}
 }
