@@ -88,6 +88,10 @@ fleet exec-in-session <instance> <session> "<command>"   # type a command + Ente
 fleet read-session <instance> <session> [--scrollback N] # capture the session's screen
 ```
 
+Session names are canonicalized to `<instance>~<name>` internally so the
+session appears as a regular session group in the fleet TUI — keep using the
+short name with these commands; they all resolve it the same way.
+
 `exec-in-session` sends keystrokes (it does not wait for completion), so to
 follow progress you read the session back. `read-session --scrollback N` returns
 the last N lines (`0` = just the visible screen, `-1` = full history). To put an

@@ -1963,7 +1963,7 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 	}
 
 	newGroupID := randomHex(3)
-	sessName := groupSessionName(sanitized, newGroupID)
+	sessName := GroupSessionName(sanitized, newGroupID)
 	return splitSessionCmd(sessName, newGroupID)
 }
 

@@ -193,8 +193,29 @@ func TestSpawnSession_CreatesSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tmux ls failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "demo:") {
-		t.Fatalf("tmux ls did not list 'demo' session:\n%s", out)
+	// spawn-session canonicalizes names to the TUI group convention
+	// (<instance>~<name>) so the session shows up as a regular group.
+	if !strings.Contains(out, "agent-1~demo:") {
+		t.Fatalf("tmux ls did not list 'agent-1~demo' session:\n%s", out)
+	}
+}
+
+func TestSpawnSession_AcceptsCanonicalName(t *testing.T) {
+	target := seedState(t, fleet.StatusRunning)
+	tmuxDir := useHostTmux(t)
+
+	// A name that already follows the <instance>~<group> convention must
+	// pass through unchanged, not get double-prefixed.
+	if err := run(t, newSpawnSessionCmd(), target, "agent-1~demo"); err != nil {
+		t.Fatalf("spawn-session returned error: %v", err)
+	}
+
+	out, err := hostTmux(t, tmuxDir, "ls")
+	if err != nil {
+		t.Fatalf("tmux ls failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "agent-1~demo:") || strings.Contains(out, "agent-1~agent-1~") {
+		t.Fatalf("expected exactly 'agent-1~demo', got:\n%s", out)
 	}
 }
 

@@ -360,3 +360,35 @@ func TestRestoreSessionNamesUsesSavedLayoutOverLiveDiscovery(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveSessionNameCanonicalizesBareNames(t *testing.T) {
+	// A short, user/agent-supplied name becomes the root session of a
+	// group named after it — the same name the TUI's create-session
+	// dialog would mint.
+	if got := ResolveSessionName("agent-1", "main"); got != "agent-1~main" {
+		t.Fatalf("ResolveSessionName bare = %q, want %q", got, "agent-1~main")
+	}
+	// Instance names are sanitized the same way the TUI sanitizes them.
+	if got := ResolveSessionName("my.fleet/agent", "main"); got != "my-fleet-agent~main" {
+		t.Fatalf("ResolveSessionName sanitized instance = %q, want %q", got, "my-fleet-agent~main")
+	}
+	// The session name itself is sanitized too.
+	if got := ResolveSessionName("agent-1", "my.task"); got != "agent-1~my-task" {
+		t.Fatalf("ResolveSessionName sanitized name = %q, want %q", got, "agent-1~my-task")
+	}
+}
+
+func TestResolveSessionNamePassesThroughConformingNames(t *testing.T) {
+	// Root and pane names that already follow the convention for this
+	// instance must not be double-prefixed.
+	for _, name := range []string{"agent-1~a1b2c3", "agent-1~a1b2c3~ff", "agent-1~main"} {
+		if got := ResolveSessionName("agent-1", name); got != name {
+			t.Fatalf("ResolveSessionName(%q) = %q, want unchanged", name, got)
+		}
+	}
+	// A name conforming to a *different* instance's convention is not a
+	// group of this instance — it gets canonicalized under this instance.
+	if got := ResolveSessionName("agent-1", "other~main"); got != "agent-1~other~main" {
+		t.Fatalf("ResolveSessionName foreign = %q, want %q", got, "agent-1~other~main")
+	}
+}

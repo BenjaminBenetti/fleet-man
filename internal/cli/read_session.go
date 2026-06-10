@@ -7,6 +7,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -34,7 +35,9 @@ Examples:
 				return err
 			}
 
-			sessionName := args[1]
+			// Same canonicalization as spawn-session, so the short name an
+			// agent created with still targets the right session.
+			sessionName := tui.ResolveSessionName(target.Instance, args[1])
 
 			if instance.Status != fleet.StatusRunning {
 				return fmt.Errorf("instance %s is not running (status: %s)", args[0], instance.Status)
