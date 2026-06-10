@@ -97,14 +97,44 @@ func savedGroupSessionNames(sg savedGroup, sanitizedInstance string) []string {
 		seen[name] = true
 	}
 	if len(sessions) == 0 {
-		sessions = append(sessions, groupSessionName(sanitizedInstance, sg.GroupID))
+		sessions = append(sessions, GroupSessionName(sanitizedInstance, sg.GroupID))
 	}
 	return sessions
 }
 
-// groupSessionName builds a session name for the root session of a new group.
-func groupSessionName(sanitizedInstance, groupID string) string {
+// GroupSessionName builds the root session name for a group:
+// <instance>~<groupID>. Exported because the CLI (fleet shell,
+// spawn-session, …) must mint names with the exact same convention the
+// TUI parses — a session created outside it surfaces as a pseudo-group
+// and splits then duplicate it (see ResolveSessionName).
+func GroupSessionName(sanitizedInstance, groupID string) string {
 	return sanitizedInstance + groupSep + groupID
+}
+
+// NewGroupRootSessionName mints the root session name for a brand-new
+// group with a random group ID.
+func NewGroupRootSessionName(sanitizedInstance string) string {
+	return GroupSessionName(sanitizedInstance, randomHex(3))
+}
+
+// NewGroupPaneSessionName mints a session name for an additional pane in
+// an existing group: <instance>~<groupID>~<hex>.
+func NewGroupPaneSessionName(sanitizedInstance, groupID string) string {
+	return GroupSessionName(sanitizedInstance, groupID) + groupSep + randomHex(2)
+}
+
+// ResolveSessionName maps a user-supplied session name to its canonical
+// grouped form for the given instance. Names that already follow the
+// convention pass through unchanged; anything else becomes the root
+// session of a group named after it: <instance>~<name>. This keeps the
+// short names agents use with spawn-session/exec-in-session/read-session
+// pointing at the same session the TUI manages.
+func ResolveSessionName(instanceName, name string) string {
+	sanitized := SanitizeSessionName(instanceName)
+	if isGroupedSession(sanitized, name) {
+		return name
+	}
+	return GroupSessionName(sanitized, SanitizeSessionName(name))
 }
 
 // parseGroupID extracts the group ID from a session name, if it follows
@@ -172,6 +202,21 @@ func groupSessions(sanitizedInstance string, sessions []tmuxSession) []sessionGr
 func isGroupedSession(sanitizedInstance, sessionName string) bool {
 	_, ok := parseGroupID(sanitizedInstance, sessionName)
 	return ok
+}
+
+// splitBindGroupID returns the group ID that is safe to pass to
+// `fleet shell --group` when rebinding the outer tmux split keys after
+// attaching to sessionName. It mirrors the isGroupedSession guard the
+// attach path uses (page_fleet.go handleEnter): for a bare-named session
+// the groupID is a pseudo-group ID (the session name itself), and
+// passing it to --group would mint a <instance>~<name>~<hex> session — a
+// duplicate real group named after the bare session. Returning "" makes
+// a split start a fresh group instead.
+func splitBindGroupID(instanceName, sessionName, groupID string) string {
+	if !isGroupedSession(SanitizeSessionName(instanceName), sessionName) {
+		return ""
+	}
+	return groupID
 }
 
 // groupCycleMsg is sent after the debounce timer expires to confirm

@@ -360,3 +360,76 @@ func TestRestoreSessionNamesUsesSavedLayoutOverLiveDiscovery(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveSessionNameCanonicalizesBareNames(t *testing.T) {
+	// A short, user/agent-supplied name becomes the root session of a
+	// group named after it — the same name the TUI's create-session
+	// dialog would mint.
+	if got := ResolveSessionName("agent-1", "main"); got != "agent-1~main" {
+		t.Fatalf("ResolveSessionName bare = %q, want %q", got, "agent-1~main")
+	}
+	// Instance names are sanitized the same way the TUI sanitizes them.
+	if got := ResolveSessionName("my.fleet/agent", "main"); got != "my-fleet-agent~main" {
+		t.Fatalf("ResolveSessionName sanitized instance = %q, want %q", got, "my-fleet-agent~main")
+	}
+	// The session name itself is sanitized too.
+	if got := ResolveSessionName("agent-1", "my.task"); got != "agent-1~my-task" {
+		t.Fatalf("ResolveSessionName sanitized name = %q, want %q", got, "agent-1~my-task")
+	}
+}
+
+func TestResolveSessionNamePassesThroughConformingNames(t *testing.T) {
+	// Root and pane names that already follow the convention for this
+	// instance must not be double-prefixed.
+	for _, name := range []string{"agent-1~a1b2c3", "agent-1~a1b2c3~ff", "agent-1~main"} {
+		if got := ResolveSessionName("agent-1", name); got != name {
+			t.Fatalf("ResolveSessionName(%q) = %q, want unchanged", name, got)
+		}
+	}
+	// A name conforming to a *different* instance's convention is not a
+	// group of this instance — it gets canonicalized under this instance.
+	if got := ResolveSessionName("agent-1", "other~main"); got != "agent-1~other~main" {
+		t.Fatalf("ResolveSessionName foreign = %q, want %q", got, "agent-1~other~main")
+	}
+}
+
+// TestCliSpawnedSessionFormsRealGroup pins the CLI↔TUI naming contract
+// behind the session-duplication bug: a session created via
+// `fleet spawn-session <inst> main` must parse as a *real* group named
+// "main" (not a pseudo-group), and the pane session a split mints for
+// that group must land in the same group.
+func TestCliSpawnedSessionFormsRealGroup(t *testing.T) {
+	root := ResolveSessionName("agent-1", "main") // what spawn-session creates
+
+	groups := groupSessions("agent-1", []tmuxSession{{Name: root}})
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d: %#v", len(groups), groups)
+	}
+	if groups[0].GroupID != "main" {
+		t.Fatalf("GroupID = %q, want %q (pseudo-group would carry the full session name)", groups[0].GroupID, "main")
+	}
+
+	pane := NewGroupPaneSessionName("agent-1", groups[0].GroupID)
+	groups = groupSessions("agent-1", []tmuxSession{{Name: root}, {Name: pane}})
+	if len(groups) != 1 {
+		t.Fatalf("split duplicated the group: %#v", groups)
+	}
+	if len(groups[0].Sessions) != 2 {
+		t.Fatalf("group has %d sessions, want 2: %#v", len(groups[0].Sessions), groups[0])
+	}
+}
+
+// TestSplitBindGroupID covers the guard on the split-key rebinding: a
+// bare-named session's pseudo-group ID must never reach
+// `fleet shell --group`, while a real group's ID passes through.
+func TestSplitBindGroupID(t *testing.T) {
+	if got := splitBindGroupID("agent-1", "agent-1~abc123", "abc123"); got != "abc123" {
+		t.Fatalf("grouped session: got %q, want %q", got, "abc123")
+	}
+	if got := splitBindGroupID("agent-1", "agent-1~abc123~ff", "abc123"); got != "abc123" {
+		t.Fatalf("grouped pane session: got %q, want %q", got, "abc123")
+	}
+	if got := splitBindGroupID("agent-1", "main", "main"); got != "" {
+		t.Fatalf("bare session: got %q, want empty (pseudo-group ID must be stripped)", got)
+	}
+}

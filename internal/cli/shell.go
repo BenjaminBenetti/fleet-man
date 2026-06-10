@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -41,18 +39,16 @@ existing group, or --session to reconnect to a specific named session.`,
 			var sessionName string
 			switch {
 			case sessionFlag != "":
-				// Reconnect to a specific existing session.
-				sessionName = sessionFlag
+				// Reconnect to a specific existing session. Short names are
+				// canonicalized so `--session foo` reaches the same session
+				// `spawn-session <inst> foo` created.
+				sessionName = tui.ResolveSessionName(target.Instance, sessionFlag)
 			case groupFlag != "":
 				// Add a new pane to an existing group.
-				var suffix [2]byte
-				_, _ = rand.Read(suffix[:])
-				sessionName = sanitized + "~" + groupFlag + "~" + hex.EncodeToString(suffix[:])
+				sessionName = tui.NewGroupPaneSessionName(sanitized, groupFlag)
 			default:
 				// Create a new group (root session).
-				var suffix [3]byte
-				_, _ = rand.Read(suffix[:])
-				sessionName = sanitized + "~" + hex.EncodeToString(suffix[:])
+				sessionName = tui.NewGroupRootSessionName(sanitized)
 			}
 
 			// Tag the outer tmux pane with the session name so the TUI can read

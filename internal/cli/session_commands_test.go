@@ -13,6 +13,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -193,8 +194,29 @@ func TestSpawnSession_CreatesSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tmux ls failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "demo:") {
-		t.Fatalf("tmux ls did not list 'demo' session:\n%s", out)
+	// spawn-session canonicalizes names to the TUI group convention
+	// (<instance>~<name>) so the session shows up as a regular group.
+	if !strings.Contains(out, "agent-1~demo:") {
+		t.Fatalf("tmux ls did not list 'agent-1~demo' session:\n%s", out)
+	}
+}
+
+func TestSpawnSession_AcceptsCanonicalName(t *testing.T) {
+	target := seedState(t, fleet.StatusRunning)
+	tmuxDir := useHostTmux(t)
+
+	// A name that already follows the <instance>~<group> convention must
+	// pass through unchanged, not get double-prefixed.
+	if err := run(t, newSpawnSessionCmd(), target, "agent-1~demo"); err != nil {
+		t.Fatalf("spawn-session returned error: %v", err)
+	}
+
+	out, err := hostTmux(t, tmuxDir, "ls")
+	if err != nil {
+		t.Fatalf("tmux ls failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "agent-1~demo:") || strings.Contains(out, "agent-1~agent-1~") {
+		t.Fatalf("expected exactly 'agent-1~demo', got:\n%s", out)
 	}
 }
 
@@ -392,4 +414,58 @@ func countLines(s, prefix string) int {
 		}
 	}
 	return n
+}
+
+// TestSpawnSession_TUISplitDoesNotDuplicateSession is the regression test
+// for the session-duplication bug: spawn-session used to create a
+// bare-named session ("main") that the TUI surfaced as a pseudo-group
+// whose ID is the session name. Pressing the split key then ran
+// `fleet shell <inst> --group main`, which minted "agent-1~main~<hex>" —
+// a *real* group named "main", duplicating the spawned session in the UI.
+//
+// fleet shell itself needs an interactive TTY plus a server to resolve
+// the exec argv, so this test replays its --group branch (the session
+// name mint, via the same tui helper shell.go calls) against the same
+// tmux server spawn-session wrote to, then asserts everything landed in
+// one group.
+func TestSpawnSession_TUISplitDoesNotDuplicateSession(t *testing.T) {
+	target := seedState(t, fleet.StatusRunning)
+	tmuxDir := useHostTmux(t)
+
+	// 1. An agent creates a session via the CLI.
+	if err := run(t, newSpawnSessionCmd(), target, "main"); err != nil {
+		t.Fatalf("spawn-session: %v", err)
+	}
+
+	// 2. The user attaches in the TUI and presses the split key: the
+	// rebound key runs `fleet shell agent-1 --group main`, which creates
+	// a new pane session named by NewGroupPaneSessionName.
+	sanitized := tui.SanitizeSessionName("agent-1")
+	paneSession := tui.NewGroupPaneSessionName(sanitized, "main")
+	if out, err := hostTmux(t, tmuxDir, "new-session", "-d", "-s", paneSession); err != nil {
+		t.Fatalf("create pane session: %v\n%s", err, out)
+	}
+
+	// 3. Both sessions must belong to the single group "main" of this
+	// instance. Pre-fix, the bare "main" session fails the prefix check
+	// and showed up as a second, duplicate group.
+	out, err := hostTmux(t, tmuxDir, "ls", "-F", "#{session_name}")
+	if err != nil {
+		t.Fatalf("tmux ls failed: %v\n%s", err, out)
+	}
+	var names []string
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		if line != "" {
+			names = append(names, line)
+		}
+	}
+	if len(names) != 2 {
+		t.Fatalf("expected exactly 2 sessions (group root + split pane), got %d:\n%s", len(names), out)
+	}
+	groupRoot := "agent-1~main"
+	for _, name := range names {
+		if !strings.HasPrefix(name, groupRoot) {
+			t.Fatalf("session %q does not belong to group %q — duplicate group regression:\n%s", name, groupRoot, out)
+		}
+	}
 }

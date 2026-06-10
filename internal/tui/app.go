@@ -821,7 +821,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			fleetPage.splitSession = msg.session
 			fleetPage.activeGroup = ActiveGroup{Ref: msg.ref, GroupID: msg.groupID}
 			m.sessionStore.SetLastActive(msg.ref, lastSession{sessionName: msg.session, groupID: msg.groupID})
-			bindHostSplitKeys(msg.ref.Key(), msg.groupID)
+			bindHostSplitKeys(msg.ref.Key(), splitBindGroupID(msg.ref.Instance, msg.session, msg.groupID))
 			extraCmds = append(extraCmds, m.refreshInstanceSessions(msg.ref))
 		}
 

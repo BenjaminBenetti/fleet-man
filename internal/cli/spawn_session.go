@@ -5,6 +5,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -27,7 +28,12 @@ Examples:
 				return err
 			}
 
-			sessionName := args[1]
+			// Canonicalize to the TUI's group naming convention
+			// (<instance>~<name>) so the session shows up as a regular
+			// session group — a bare-named session would surface as a
+			// pseudo-group and splitting it from the TUI would mint a
+			// duplicate real group with the same name.
+			sessionName := tui.ResolveSessionName(target.Instance, args[1])
 
 			if instance.Status != fleet.StatusRunning {
 				return fmt.Errorf("instance %s is not running (status: %s)", args[0], instance.Status)

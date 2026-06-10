@@ -2083,7 +2083,7 @@ func (fleetPage *fleetPage) saveCreateSession(m *model) tea.Cmd {
 	}
 
 	sanitized := SanitizeSessionName(instance.Name)
-	fullName := groupSessionName(sanitized, name)
+	fullName := GroupSessionName(sanitized, name)
 
 	fleetPage.mode = viewNormal
 	fleetPage.blurDialogFields()
