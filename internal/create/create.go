@@ -135,7 +135,7 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 	// shells can source fleet-aware aliases. Respects the fleet's
 	// HomeDir setting; empty falls back to fleetlaunch.DefaultHomeDir.
 	// Non-fatal for the same reason as the binary stage.
-	if err := fleetlaunch.EnsureFleetRC(instanceBackend, wsDir, homeDirForFleet(fleetName)); err != nil {
+	if err := fleetlaunch.EnsureFleetRC(instanceBackend, wsDir, homeDirForFleet(fleetName), instanceName); err != nil {
 		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("stage fleet.rc: %v", err))
 	}
 
