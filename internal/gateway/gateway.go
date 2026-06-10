@@ -31,7 +31,11 @@
 // comes from the unguessable 256-bit public id in the URL, and the real access
 // boundary remains the MCP bearer token, which the gateway forwards untouched to
 // fleetd's loopback MCP server. The reclaim credential (the tunnel "secret") is
-// kept out of the public URL so URL holders cannot hijack a tunnel.
+// kept out of the public URL so URL holders cannot hijack a tunnel. Every
+// registration also returns a session-resume token — a JWT over the session's
+// ids signed with the gateway's session key (--session-key) — which fleetd
+// presents on reconnect so its session URL stays stable even across gateway
+// restarts (see token.go).
 package gateway
 
 import (
@@ -92,6 +96,7 @@ type Config struct {
 	TLSCert     string // path to the TLS certificate (PEM). Optional; both TLSCert and TLSKey together enable TLS.
 	TLSKey      string // path to the TLS private key (PEM). Optional; both TLSCert and TLSKey together enable TLS.
 	MaxSessions int    // cap on concurrent tunnels. Default 1024.
+	SessionKey  string // secret key signing session-resume tokens (token.go). Empty = a random per-boot key, so session URLs do not survive a gateway restart.
 }
 
 // Server is a configured gateway. Build with New, then Run. tlsConfig is nil when
@@ -134,9 +139,14 @@ func New(cfg Config) (*Server, error) {
 	}
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 
+	signer, err := newTokenSigner(cfg.SessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("gateway: session token key: %w", err)
+	}
+
 	return &Server{
 		cfg:        cfg,
-		reg:        newRegistry(cfg.PublicURL, cfg.MaxSessions),
+		reg:        newRegistry(cfg.PublicURL, cfg.MaxSessions, signer),
 		tlsConfig:  tlsConfig,
 		log:        slog.Default(),
 		pendingSem: make(chan struct{}, cfg.MaxSessions+maxPendingHandshakes),
@@ -212,6 +222,9 @@ func (s *Server) ServeListeners(ctx context.Context, publicLn, grpcLn net.Listen
 
 	s.log.Info("fleet gateway started",
 		"public", s.cfg.PublicAddr, "grpc", s.cfg.GRPCAddr, "public_url", s.cfg.PublicURL)
+	if s.cfg.SessionKey == "" {
+		s.log.Warn("gateway: no --session-key set; session URLs will not survive a gateway restart")
+	}
 
 	select {
 	case <-ctx.Done():

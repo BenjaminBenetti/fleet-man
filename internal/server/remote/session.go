@@ -10,12 +10,18 @@ import (
 // session.go persists the sticky gateway session so that, across reconnects and
 // daemon restarts, fleetd asks the gateway for the SAME public URL. The file
 // (~/.fleet/gateway_session.json, 0600) records the assigned session id, the
-// public URL, and the gateway URL it was issued for.
+// gateway-signed session token, the public URL, and the gateway URL it was
+// issued for.
 
 type sessionFile struct {
-	SessionID  string `json:"session_id"`
-	PublicURL  string `json:"public_url"`
-	GatewayURL string `json:"gateway_url"`
+	SessionID string `json:"session_id"`
+	// SessionToken is the gateway-signed session-resume JWT from the last
+	// successful registration (opaque to fleetd). Presented on reconnect so a
+	// RESTARTED gateway — which no longer knows SessionID — can verify the
+	// token against its signing key and hand back the same public URL.
+	SessionToken string `json:"session_token,omitempty"`
+	PublicURL    string `json:"public_url"`
+	GatewayURL   string `json:"gateway_url"`
 }
 
 // loadSession returns the persisted session IF it was issued for gatewayURL. A

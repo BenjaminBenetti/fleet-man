@@ -11,6 +11,17 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
+// testSigner returns a tokenSigner on key (a random per-boot key when empty),
+// failing the test instead of returning an error.
+func testSigner(t *testing.T, key string) *tokenSigner {
+	t.Helper()
+	s, err := newTokenSigner(key)
+	if err != nil {
+		t.Fatalf("new token signer: %v", err)
+	}
+	return s
+}
+
 // fakeTunnel returns a live yamux session (the gateway/server end) backed by an
 // in-memory pipe, so registry tests can bind real sessions without a network.
 func fakeTunnel(t *testing.T) *yamux.Session {
@@ -34,7 +45,7 @@ func fakeTunnel(t *testing.T) *yamux.Session {
 }
 
 func TestRegistryClaimMintsDistinctUnguessableIDs(t *testing.T) {
-	r := newRegistry("https://gw.example.com", 16)
+	r := newRegistry("https://gw.example.com", 16, testSigner(t, ""))
 
 	s1, reply1, _, err := r.claim(tunnel.RegisterRequest{})
 	if err != nil {
@@ -66,7 +77,7 @@ func TestRegistryClaimMintsDistinctUnguessableIDs(t *testing.T) {
 }
 
 func TestRegistryReclaimReturnsSameURL(t *testing.T) {
-	r := newRegistry("https://gw", 16)
+	r := newRegistry("https://gw", 16, testSigner(t, ""))
 
 	s, reply, isNew, err := r.claim(tunnel.RegisterRequest{})
 	if err != nil {
@@ -105,8 +116,123 @@ func TestRegistryReclaimReturnsSameURL(t *testing.T) {
 	}
 }
 
+// TestRegistryRepliesCarrySessionToken verifies every successful claim — fresh
+// and reclaim alike — returns a session token the registry's own signer minted
+// for that session's ids.
+func TestRegistryRepliesCarrySessionToken(t *testing.T) {
+	r := newRegistry("https://gw", 16, testSigner(t, "k"))
+
+	s, reply, _, err := r.claim(tunnel.RegisterRequest{})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	claims, ok := r.signer.verify(reply.SessionToken)
+	if !ok {
+		t.Fatal("fresh claim must return a verifiable session token")
+	}
+	if claims.Secret != s.secret || claims.PublicID != s.publicID {
+		t.Fatal("token claims must carry the session's ids")
+	}
+
+	// An in-memory reclaim returns a (fresh) token too.
+	_, reply2, _, err := r.claim(tunnel.RegisterRequest{SessionID: reply.SessionID})
+	if err != nil {
+		t.Fatalf("reclaim: %v", err)
+	}
+	if c2, ok := r.signer.verify(reply2.SessionToken); !ok || c2.Secret != s.secret {
+		t.Fatal("reclaim must return a verifiable token for the same session")
+	}
+}
+
+// TestRegistryTokenResurrectsSessionAcrossRestart is the stable-URL property of
+// issue #120: a fresh registry (a restarted gateway) holding the SAME signing
+// key resurrects a session — same secret, same public URL — from the session
+// token alone.
+func TestRegistryTokenResurrectsSessionAcrossRestart(t *testing.T) {
+	const key = "stable-signing-key"
+	r1 := newRegistry("https://gw", 16, testSigner(t, key))
+	_, reply1, _, err := r1.claim(tunnel.RegisterRequest{})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	// "Restart": a brand-new registry that knows nothing, with the same key.
+	r2 := newRegistry("https://gw", 16, testSigner(t, key))
+	s2, reply2, isNew, err := r2.claim(tunnel.RegisterRequest{
+		SessionID:    reply1.SessionID,
+		SessionToken: reply1.SessionToken,
+	})
+	if err != nil {
+		t.Fatalf("resurrect claim: %v", err)
+	}
+	if reply2.PublicURL != reply1.PublicURL || reply2.SessionID != reply1.SessionID {
+		t.Fatalf("resurrected session changed: url %q -> %q, id changed=%v",
+			reply1.PublicURL, reply2.PublicURL, reply2.SessionID != reply1.SessionID)
+	}
+	if !isNew {
+		t.Fatal("a resurrected session is a new reservation (must be releasable on a failed handshake)")
+	}
+
+	// A second registration with the same token (e.g. a duplicate dial) reclaims
+	// the now-live entry rather than minting another.
+	s3, reply3, isNew3, err := r2.claim(tunnel.RegisterRequest{SessionToken: reply1.SessionToken})
+	if err != nil {
+		t.Fatalf("duplicate resurrect: %v", err)
+	}
+	if isNew3 || s3 != s2 || reply3.PublicURL != reply1.PublicURL {
+		t.Fatal("a second token claim must reclaim the resurrected session in memory")
+	}
+}
+
+// TestRegistryTokenFromDifferentKeyMintsFresh: a token signed under another key
+// (rotated key, or the random per-boot default) is ignored — the daemon just
+// gets a fresh session, never an error.
+func TestRegistryTokenFromDifferentKeyMintsFresh(t *testing.T) {
+	r1 := newRegistry("https://gw", 16, testSigner(t, "key-a"))
+	_, reply1, _, err := r1.claim(tunnel.RegisterRequest{})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	r2 := newRegistry("https://gw", 16, testSigner(t, "key-b"))
+	_, reply2, isNew, err := r2.claim(tunnel.RegisterRequest{
+		SessionID:    reply1.SessionID,
+		SessionToken: reply1.SessionToken,
+	})
+	if err != nil {
+		t.Fatalf("claim with foreign token: %v", err)
+	}
+	if !isNew || reply2.PublicURL == reply1.PublicURL {
+		t.Fatal("a token under a different key must mint a FRESH session")
+	}
+	// And the fresh reply's token is signed with the new key (self-healing).
+	if _, ok := r2.signer.verify(reply2.SessionToken); !ok {
+		t.Fatal("fresh reply must carry a token under the current key")
+	}
+}
+
+// TestRegistryTokenResurrectionRespectsCapacity: a resurrected session occupies
+// a slot like any other, so the MaxSessions cap still holds.
+func TestRegistryTokenResurrectionRespectsCapacity(t *testing.T) {
+	const key = "cap-key"
+	r1 := newRegistry("https://gw", 1, testSigner(t, key))
+	_, reply1, _, err := r1.claim(tunnel.RegisterRequest{})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	// The "restarted" gateway is already full.
+	r2 := newRegistry("https://gw", 1, testSigner(t, key))
+	if _, _, _, err := r2.claim(tunnel.RegisterRequest{}); err != nil {
+		t.Fatalf("fill: %v", err)
+	}
+	if _, _, _, err := r2.claim(tunnel.RegisterRequest{SessionToken: reply1.SessionToken}); err != errAtCapacity {
+		t.Fatalf("resurrection past the cap: want errAtCapacity, got %v", err)
+	}
+}
+
 func TestRegistryReclaimReplacesAndClosesOldTunnel(t *testing.T) {
-	r := newRegistry("https://gw", 16)
+	r := newRegistry("https://gw", 16, testSigner(t, ""))
 	s, reply, _, _ := r.claim(tunnel.RegisterRequest{})
 	old := fakeTunnel(t)
 	r.bind(s, old)
@@ -124,7 +250,7 @@ func TestRegistryReclaimReplacesAndClosesOldTunnel(t *testing.T) {
 }
 
 func TestRegistryCapacity(t *testing.T) {
-	r := newRegistry("https://gw", 1)
+	r := newRegistry("https://gw", 1, testSigner(t, ""))
 	s, _, _, err := r.claim(tunnel.RegisterRequest{})
 	if err != nil {
 		t.Fatalf("claim 1: %v", err)
@@ -140,7 +266,7 @@ func TestRegistryCapacity(t *testing.T) {
 // must hold even for concurrent FIRST-TIME claims that haven't bound yet, because
 // the slot is reserved (in bySecret) at claim, not at bind.
 func TestRegistryCapacityIsHardAtClaim(t *testing.T) {
-	r := newRegistry("https://gw", 1)
+	r := newRegistry("https://gw", 1, testSigner(t, ""))
 	if _, _, _, err := r.claim(tunnel.RegisterRequest{}); err != nil {
 		t.Fatalf("claim 1: %v", err)
 	}
@@ -153,7 +279,7 @@ func TestRegistryCapacityIsHardAtClaim(t *testing.T) {
 // TestRegistryReleaseFreesReservation verifies a failed-handshake reservation is
 // freed (and frees the cap slot), while release is a no-op for a bound session.
 func TestRegistryReleaseFreesReservation(t *testing.T) {
-	r := newRegistry("https://gw", 1)
+	r := newRegistry("https://gw", 1, testSigner(t, ""))
 	s, _, isNew, _ := r.claim(tunnel.RegisterRequest{})
 	if !isNew {
 		t.Fatal("want new")
@@ -165,7 +291,7 @@ func TestRegistryReleaseFreesReservation(t *testing.T) {
 	}
 
 	// release is a no-op once bound.
-	r2 := newRegistry("https://gw", 16)
+	r2 := newRegistry("https://gw", 16, testSigner(t, ""))
 	bs, _, _, _ := r2.claim(tunnel.RegisterRequest{})
 	r2.bind(bs, fakeTunnel(t))
 	r2.release(bs)
@@ -177,7 +303,7 @@ func TestRegistryReleaseFreesReservation(t *testing.T) {
 // TestRegistryReapsAbandonedReservation verifies the reaper backstop frees a
 // reservation whose handshake never completed.
 func TestRegistryReapsAbandonedReservation(t *testing.T) {
-	r := newRegistry("https://gw", 16)
+	r := newRegistry("https://gw", 16, testSigner(t, ""))
 	s, _, _, _ := r.claim(tunnel.RegisterRequest{}) // never bound, never released
 	// Within the reservation grace: kept.
 	r.reap(s.createdAt.Add(reservationGrace/2), sessionTTL)
@@ -192,7 +318,7 @@ func TestRegistryReapsAbandonedReservation(t *testing.T) {
 }
 
 func TestRegistryReapHonorsGraceTTL(t *testing.T) {
-	r := newRegistry("https://gw", 16)
+	r := newRegistry("https://gw", 16, testSigner(t, ""))
 	const ttl = 5 * time.Minute
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 

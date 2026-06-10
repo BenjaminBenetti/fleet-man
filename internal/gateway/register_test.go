@@ -22,7 +22,7 @@ import (
 func TestGatewayRegisterFloodShed(t *testing.T) {
 	s := &Server{
 		cfg:        Config{PublicURL: "http://gw.example.com", MaxSessions: 64},
-		reg:        newRegistry("http://gw.example.com", 64),
+		reg:        newRegistry("http://gw.example.com", 64, testSigner(t, "")),
 		log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		pendingSem: make(chan struct{}, 2), // tiny cap for the test
 	}
@@ -105,5 +105,57 @@ func TestGatewayReconnectAfterDrop(t *testing.T) {
 	}
 	if r2.SessionID != r1.SessionID {
 		t.Fatalf("reconnect secret changed %q -> %q", r1.SessionID, r2.SessionID)
+	}
+}
+
+// TestGatewayRestartStableURL exercises issue #120 over the real Register
+// transport: a daemon that registered against one gateway reconnects to a
+// RESTARTED gateway (a fresh instance sharing the --session-key) presenting the
+// session token from its first reply, and recovers the SAME public URL. A
+// restarted gateway with a DIFFERENT key hands out a fresh URL instead.
+func TestGatewayRestartStableURL(t *testing.T) {
+	cert, pool := genTestTLS(t)
+	const key = "stable-session-key"
+
+	// First boot: register fresh.
+	_, _, grpcAddr1 := startTestGatewayKeyed(t, cert, "https://gw.example.com", key)
+	conn1 := openRegisterStream(t, grpcAddr1, tlsCreds(pool))
+	r1, err := tunnel.Handshake(conn1, tunnel.RegisterRequest{ClientVersion: "v"}, 5*time.Second)
+	if err != nil || r1.Error != "" {
+		t.Fatalf("handshake 1: err=%v reply.Error=%q", err, r1.Error)
+	}
+	if r1.SessionToken == "" {
+		t.Fatal("registration must return a session token")
+	}
+	_ = conn1.Close()
+
+	// "Restart": an entirely new gateway instance (empty registry), same key.
+	_, _, grpcAddr2 := startTestGatewayKeyed(t, cert, "https://gw.example.com", key)
+	conn2 := openRegisterStream(t, grpcAddr2, tlsCreds(pool))
+	r2, err := tunnel.Handshake(conn2, tunnel.RegisterRequest{
+		SessionID:     r1.SessionID,
+		SessionToken:  r1.SessionToken,
+		ClientVersion: "v",
+	}, 5*time.Second)
+	if err != nil || r2.Error != "" {
+		t.Fatalf("handshake 2: err=%v reply.Error=%q", err, r2.Error)
+	}
+	if r2.PublicURL != r1.PublicURL || r2.SessionID != r1.SessionID {
+		t.Fatalf("session must survive the restart: url %q -> %q", r1.PublicURL, r2.PublicURL)
+	}
+
+	// A restart with a DIFFERENT key cannot verify the token: fresh URL.
+	_, _, grpcAddr3 := startTestGatewayKeyed(t, cert, "https://gw.example.com", "rotated-key")
+	conn3 := openRegisterStream(t, grpcAddr3, tlsCreds(pool))
+	r3, err := tunnel.Handshake(conn3, tunnel.RegisterRequest{
+		SessionID:     r1.SessionID,
+		SessionToken:  r1.SessionToken,
+		ClientVersion: "v",
+	}, 5*time.Second)
+	if err != nil || r3.Error != "" {
+		t.Fatalf("handshake 3: err=%v reply.Error=%q", err, r3.Error)
+	}
+	if r3.PublicURL == r1.PublicURL {
+		t.Fatal("a gateway with a different key must NOT honor the token")
 	}
 }

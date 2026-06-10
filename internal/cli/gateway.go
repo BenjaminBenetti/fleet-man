@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+
 	"github.com/BenjaminBenetti/fleet-man/internal/gateway"
 	"github.com/spf13/cobra"
 )
@@ -28,9 +30,15 @@ func newGatewayCmd() *cobra.Command {
 			"the gateway (use a publicly-trusted cert, e.g. from Let's Encrypt, so fleet\n" +
 			"daemons can verify it). Omit both to serve plain HTTP — intended for running\n" +
 			"behind a TLS-terminating reverse proxy (e.g. Kubernetes/Traefik), which then\n" +
-			"presents the public cert. Set --public-url's scheme to match (https vs http).",
+			"presents the public cert. Set --public-url's scheme to match (https vs http).\n\n" +
+			"Set --session-key (or FLEET_GATEWAY_SESSION_KEY) to a stable secret so fleet\n" +
+			"daemons keep their session URL across gateway restarts; without it each boot\n" +
+			"uses a random key and a restart hands every daemon a fresh URL.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if cfg.SessionKey == "" {
+				cfg.SessionKey = os.Getenv("FLEET_GATEWAY_SESSION_KEY")
+			}
 			return gateway.Serve(cmd.Context(), cfg)
 		},
 	}
@@ -42,6 +50,7 @@ func newGatewayCmd() *cobra.Command {
 	f.StringVar(&cfg.TLSCert, "tls-cert", "", "path to the TLS certificate, PEM (optional; set with --tls-key to enable TLS)")
 	f.StringVar(&cfg.TLSKey, "tls-key", "", "path to the TLS private key, PEM (optional; set with --tls-cert to enable TLS)")
 	f.IntVar(&cfg.MaxSessions, "max-sessions", 0, "max concurrent tunnels (0 = default 1024)")
+	f.StringVar(&cfg.SessionKey, "session-key", "", "secret key signing session-resume tokens, so daemons keep their session URL across gateway restarts (empty = random per boot; FLEET_GATEWAY_SESSION_KEY is also read)")
 
 	return cmd
 }

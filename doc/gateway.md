@@ -78,10 +78,12 @@ machinery runs over it as would over a TCP conn — there is no separate control
       │  (TLS for https / h2c for http)                  │   wrap stream as net.Conn
       │                                                  │
       │  RegisterRequest frame ───────────────────────────▶  claim a session
-      │   { session_id?, client_version, features:[grpc] }   • mint secret + publicID
+      │   { session_id?, session_token?,                 │   • mint secret + publicID
+      │     client_version, features:[grpc] }            │     (or resurrect from token)
       │                                                  │   • negotiate features
       │  ◀───────────────────────────────────────  RegisterReply frame
-      │     { session_id, public_url, features:[grpc] }  │
+      │     { session_id, session_token,                 │
+      │       public_url, features:[grpc] }              │
       │                                                  │
       │  ===== both wrap the SAME stream in yamux ====    │
       │   fleetd = yamux CLIENT      gateway = yamux SERVER
@@ -105,6 +107,15 @@ Key points:
   The secret is **never** placed in the URL, so a holder of the URL cannot hijack
   the tunnel. A disconnected session is held for a grace TTL (~10 min) before the
   reaper frees its URL.
+
+- **Stable URLs across gateway restarts.** The reply also carries a
+  **session‑resume token**: a JWT over the session's two ids, HMAC‑signed with the
+  gateway's `--session-key` (`token.go`). The daemon persists it next to the
+  secret and presents it on reconnect; a **restarted** gateway — whose in‑memory
+  registry is empty — verifies the signature and *resurrects* the session under
+  its original ids, so the public URL survives the restart. Without
+  `--session-key` the signing key is random per boot and a restart hands out
+  fresh URLs (the pre‑token behavior).
 
 - **Feature negotiation.** `fleetd` advertises the capabilities it supports
   (`features: ["grpc"]`); the gateway replies with the **intersection** of what
@@ -263,6 +274,11 @@ Security properties:
   streams, but **every request without a valid token is rejected** by `fleetd`.
 - **No hijack.** The reconnect *secret* is distinct from the public id and never
   appears in the URL, so a URL holder cannot re‑register the session.
+- **The session‑resume token is a bearer reclaim capability.** It is returned
+  only on the register stream and stored by the daemon at `0600`; whoever holds
+  it (or the `--session-key` that signs it) can claim that session's URL. The
+  verifier pins the algorithm (HS256, constant‑time compare) and requires the
+  claim ids to be exactly 256‑bit hex before they touch the registry or a URL.
 - **The local unix socket stays auth‑less** (same‑user, `0600`) — only the
   *tunnel‑facing* servers require the token.
 - **Public traffic is TLS — terminated either by the gateway or by a proxy in
@@ -313,7 +329,9 @@ OS system roots) **or** `http://` (plaintext h2c), defaulting the port to 443/80
 ## 8. Lifecycle & resilience
 
 - **Reconnect.** If the tunnel drops, `remote.Manager` reconnects with jittered
-  exponential backoff, resending its secret so the gateway re‑binds the same URL.
+  exponential backoff, resending its secret (and the signed session‑resume token)
+  so the gateway re‑binds the same URL — even when the drop was the gateway
+  itself restarting, provided it runs with a stable `--session-key`.
 - **Reaping.** The gateway holds a disconnected session (URL reserved) for a grace
   TTL, then a reaper frees it — so a `kill -9`'d daemon's URL is released, but a
   brief network blip keeps the URL stable.
