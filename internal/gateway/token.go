@@ -66,10 +66,15 @@ func newTokenSigner(key string) (*tokenSigner, error) {
 	return &tokenSigner{key: b}, nil
 }
 
-// mint signs a session-resume token for a session's ids.
+// mint signs a session-resume token for a session's ids. It returns "" if the
+// claims fail to marshal — impossible for today's strings + int64, but should a
+// future field make it possible, registration must degrade to "no token" (the
+// session URL just won't survive a restart) rather than sign garbage.
 func (t *tokenSigner) mint(secret, publicID string) string {
-	// Marshaling a struct of strings + int64 cannot fail.
-	claims, _ := json.Marshal(sessionClaims{Secret: secret, PublicID: publicID, IssuedAt: time.Now().Unix()})
+	claims, err := json.Marshal(sessionClaims{Secret: secret, PublicID: publicID, IssuedAt: time.Now().Unix()})
+	if err != nil {
+		return ""
+	}
 	signingInput := sessionTokenHeader + "." + base64.RawURLEncoding.EncodeToString(claims)
 	return signingInput + "." + t.sign(signingInput)
 }
