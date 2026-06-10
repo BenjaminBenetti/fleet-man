@@ -205,6 +205,136 @@ func TestBuildRowsShowsSavedGroupWithoutLiveSessions(t *testing.T) {
 	}
 }
 
+func tagTestModel(fp *fleetPage, inst *fleet.Instance, expanded bool) *model {
+	store := NewSessionStore()
+	if expanded {
+		store.SetExpanded(InstanceRef{Fleet: "alpha", Instance: inst.Name}, true)
+	}
+	return &model{
+		st: &state.State{
+			Fleets: map[string]*fleet.Fleet{
+				"alpha": {Name: "alpha", Instances: []*fleet.Instance{inst}},
+			},
+		},
+		sessionStore: store,
+		fleetPage:    fp,
+	}
+}
+
+func TestBuildRowsInsertsTagRowUnderExpandedInstance(t *testing.T) {
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning, Tag: "refactor auth"}
+	fp := newFleetPage()
+	m := tagTestModel(fp, inst, true)
+
+	fp.buildRows(m)
+
+	kinds := make([]rowKind, len(fp.rows))
+	for i, r := range fp.rows {
+		kinds[i] = r.kind
+	}
+	want := []rowKind{rowFleetHeader, rowInstance, rowInstanceTag, rowNewSession, rowSettings}
+	if !slices.Equal(kinds, want) {
+		t.Fatalf("row kinds = %v, want %v", kinds, want)
+	}
+}
+
+func TestBuildRowsOmitsTagRowWhenNotExpanded(t *testing.T) {
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning, Tag: "refactor auth"}
+	fp := newFleetPage()
+	m := tagTestModel(fp, inst, false)
+
+	fp.buildRows(m)
+
+	for _, r := range fp.rows {
+		if r.kind == rowInstanceTag {
+			t.Fatalf("tag row present for collapsed instance: %#v", fp.rows)
+		}
+	}
+}
+
+func TestBuildRowsOmitsTagRowWhenTagEmpty(t *testing.T) {
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
+	fp := newFleetPage()
+	m := tagTestModel(fp, inst, true)
+
+	fp.buildRows(m)
+
+	for _, r := range fp.rows {
+		if r.kind == rowInstanceTag {
+			t.Fatalf("tag row present for untagged instance: %#v", fp.rows)
+		}
+	}
+}
+
+func TestMoveCursorSkipsTagRow(t *testing.T) {
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning, Tag: "refactor auth"}
+	fp := newFleetPage()
+	fp.rows = []row{
+		{kind: rowFleetHeader, fleetName: "alpha"},
+		{kind: rowInstance, fleetName: "alpha", instance: inst},
+		{kind: rowInstanceTag, fleetName: "alpha", instance: inst},
+		{kind: rowNewSession, fleetName: "alpha", instance: inst},
+		{kind: rowSettings},
+	}
+
+	fp.cursor = 1
+	fp.moveCursor(1)
+	if fp.cursor != 3 {
+		t.Fatalf("cursor = %d after moving down, want 3 (tag row skipped)", fp.cursor)
+	}
+
+	fp.moveCursor(-1)
+	if fp.cursor != 1 {
+		t.Fatalf("cursor = %d after moving up, want 1 (tag row skipped)", fp.cursor)
+	}
+}
+
+func TestBuildRowsNudgesCursorOffTagRow(t *testing.T) {
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning, Tag: "refactor auth"}
+	fp := newFleetPage()
+	m := tagTestModel(fp, inst, true)
+
+	// Index 2 becomes the tag row once buildRows inserts it.
+	fp.cursor = 2
+	fp.buildRows(m)
+
+	if fp.rows[fp.cursor].kind == rowInstanceTag {
+		t.Fatalf("cursor resting on tag row at index %d", fp.cursor)
+	}
+	if fp.cursor != 3 {
+		t.Fatalf("cursor = %d, want 3 (nudged to next selectable row)", fp.cursor)
+	}
+}
+
+func TestViewFleetListRendersTagOnOwnLine(t *testing.T) {
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning, Tag: "refactor auth"}
+	fp := newFleetPage()
+	m := tagTestModel(fp, inst, true)
+	fp.buildRows(m)
+
+	view := fp.viewFleetList(m)
+	if !strings.Contains(view, "# refactor auth") {
+		t.Fatalf("view missing tag line:\n%s", view)
+	}
+	for line := range strings.SplitSeq(view, "\n") {
+		if strings.Contains(line, "agent-1") && strings.Contains(line, "refactor auth") {
+			t.Fatalf("tag rendered on the instance line: %q", line)
+		}
+	}
+}
+
+func TestViewFleetListHidesTagWhenNotExpanded(t *testing.T) {
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning, Tag: "refactor auth"}
+	fp := newFleetPage()
+	m := tagTestModel(fp, inst, false)
+	fp.buildRows(m)
+
+	view := fp.viewFleetList(m)
+	if strings.Contains(view, "refactor auth") {
+		t.Fatalf("tag visible for collapsed instance:\n%s", view)
+	}
+}
+
 func TestPruneSavedGroupsKeepsSavedGroupWhenDiscoveryIsEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

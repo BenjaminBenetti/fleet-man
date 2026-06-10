@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Description: After tagging an instance, the tag is rendered in the instance row and survives a TUI restart.
+# Description: After tagging an instance, the tag renders on its own line under the expanded instance row, stays hidden while collapsed, and survives a TUI restart.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -41,12 +41,12 @@ tui_wait_for "Tagged itest-fleet/alpha: release-blocker" 5
 tui_wait_for_absent "Tag instance" 5
 
 # ===========================================
-# 1. The tag must be rendered in the row. page_fleet renders it as
-#    `  # <tag>` appended to the instance line. Capture once and assert
-#    on the literal token — the dim style does not change the substring.
+# 1. While the instance is collapsed (sessions hidden) the tag must NOT
+#    render anywhere — it only shows on its own line under an expanded
+#    instance.
 # ===========================================
-info "asserting tag visible in row"
-tui_assert_contains "# release-blocker" "tag should be rendered in instance row after save"
+info "asserting tag hidden while collapsed"
+tui_assert_not_contains "# release-blocker" "tag must stay hidden while instance is collapsed"
 
 # Persistence in state.json — same contract as test 210, kept here so
 # this test is self-contained.
@@ -54,7 +54,20 @@ tag_value=$(grep -oE '"tag"[[:space:]]*:[[:space:]]*"[^"]*"' "${HOME}/.fleet/sta
 assert_contains "${tag_value}" "release-blocker" "tag missing from state.json after save"
 
 # ===========================================
-# 2. Quit + relaunch the TUI; the tag must still render.
+# 2. Expand the instance; the tag renders as a dim `# <tag>` line
+#    directly under the instance row. Capture once and assert on the
+#    literal token — the dim style does not change the substring.
+# ===========================================
+info "expanding alpha"
+tui_send Space
+tui_wait_for "+ new session" 15
+
+info "asserting tag visible while expanded"
+tui_assert_contains "# release-blocker" "tag should render under the expanded instance row"
+
+# ===========================================
+# 3. Quit + relaunch the TUI; expansion resets, so the tag is hidden
+#    again until the instance is re-expanded.
 # ===========================================
 info "quitting TUI"
 tui_send q
@@ -74,7 +87,16 @@ tui_spawn
 tui_wait_for "alpha" 15
 tui_wait_for "○ idle" 60
 
-info "asserting tag visible after relaunch"
-tui_assert_contains "# release-blocker" "tag should still render after TUI relaunch"
+info "asserting tag hidden after relaunch (instance starts collapsed)"
+tui_assert_not_contains "# release-blocker" "tag must stay hidden after relaunch while collapsed"
 
-pass "TUI tag is rendered in the row and persists across restart"
+info "expanding alpha after relaunch"
+tui_send j
+sleep 0.3
+tui_send Space
+tui_wait_for "+ new session" 15
+
+info "asserting tag visible after relaunch + expand"
+tui_assert_contains "# release-blocker" "tag should still render after TUI relaunch once expanded"
+
+pass "TUI tag renders under the expanded row, hides when collapsed, and persists across restart"
