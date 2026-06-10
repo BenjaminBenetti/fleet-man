@@ -334,6 +334,35 @@ OS system roots) **or** `http://` (plaintext h2c), defaulting the port to 443/80
 
 ---
 
+## 7b. Configuration: flags and environment variables
+
+Every `fleet gateway` flag is also settable via environment variable —
+`FLEET_GATEWAY_<FLAG>` with dashes as underscores — so the Docker image is
+configurable from a Kubernetes manifest's `env:` without rebuilding the args
+list. The full set:
+
+| Flag | Env var | Default | Purpose |
+|------|---------|---------|---------|
+| `--public-url` | `FLEET_GATEWAY_PUBLIC_URL` | (required) | External base URL agents use; session URLs are `<public-url>/mcp/<id>`. Scheme (`https`/`http`) must match how the public endpoint is actually served |
+| `--public-grpc-url` | `FLEET_GATEWAY_PUBLIC_GRPC_URL` | (optional) | External base URL of the gRPC endpoint remote `fleet` clients dial, e.g. `https://gw.example.com:50051`. Daemons that enable **Remote Fleet** are handed `<public-grpc-url>/grpc/<id>` as their Public GRPC URL (the `FLEET_GATEWAY` value). Unset = no URL is computed |
+| `--public-addr` | `FLEET_GATEWAY_PUBLIC_ADDR` | `:443` | MCP + `/healthz` listener — HTTP/1.1 (HTTPS when a cert is set, else HTTP) |
+| `--grpc-addr` | `FLEET_GATEWAY_GRPC_ADDR` | `:50051` | Native gRPC listener — HTTP/2 (h2c when cert-less, h2 under TLS). Hosts remote `fleet` control **and** fleetd registration. Empty disables both |
+| `--tls-cert` | `FLEET_GATEWAY_TLS_CERT` | (optional) | Path to the TLS certificate (PEM). Set with `--tls-key` to enable TLS — see [§7a](#7a-deployment-modes-direct-tls-vs-reverse-proxy) |
+| `--tls-key` | `FLEET_GATEWAY_TLS_KEY` | (optional) | Path to the TLS private key (PEM). Set with `--tls-cert` to enable TLS |
+| `--max-sessions` | `FLEET_GATEWAY_MAX_SESSIONS` | `1024` | Cap on concurrent tunnels |
+| `--session-key` | `FLEET_GATEWAY_SESSION_KEY` | (random per boot) | Secret key signing the session-resume tokens daemons present on reconnect. Set it so daemons keep the **same session URL across gateway restarts**; left unset, a restart hands every daemon a fresh URL |
+
+Semantics (a `PreRunE` on the gateway command fills any flag not given on the
+command line from its variable, through the flag's own parser):
+
+- A flag given on the command line **wins** over its environment variable.
+- An **empty** env value counts as set — `FLEET_GATEWAY_GRPC_ADDR=""` disables
+  the gRPC listener, same as `--grpc-addr ""`.
+- A value the flag's parser rejects errors out naming the variable:
+  `invalid FLEET_GATEWAY_MAX_SESSIONS: …`.
+
+---
+
 ## 8. Lifecycle & resilience
 
 - **Reconnect.** If the tunnel drops, `remote.Manager` reconnects with jittered
