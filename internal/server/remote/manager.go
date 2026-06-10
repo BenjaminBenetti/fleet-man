@@ -238,7 +238,12 @@ func (m *Manager) connectAndServe(ctx context.Context, gatewayURL string) (regis
 	// Register handshake over the stream (before yamux), bounded by its own timeout
 	// (the StreamConn has no deadlines) so a silent gateway can't hang the attempt.
 	prev := loadSession(gatewayURL)
-	req := tunnel.RegisterRequest{SessionID: prev.SessionID, ClientVersion: m.clientVersion, Features: m.features()}
+	req := tunnel.RegisterRequest{
+		SessionID:     prev.SessionID,
+		SessionToken:  prev.SessionToken,
+		ClientVersion: m.clientVersion,
+		Features:      m.features(),
+	}
 	reply, err := tunnel.Handshake(conn, req, handshakeTimeout)
 	if err != nil {
 		return false, fmt.Errorf("register handshake: %w", err)
@@ -247,9 +252,15 @@ func (m *Manager) connectAndServe(ctx context.Context, gatewayURL string) (regis
 		return false, fmt.Errorf("gateway refused registration: %s", reply.Error)
 	}
 
-	// Registered. Persist the sticky session and report the public URL.
+	// Registered. Persist the sticky session (id + resume token) and report the
+	// public URL.
 	registered = true
-	_ = saveSession(sessionFile{SessionID: reply.SessionID, PublicURL: reply.PublicURL, GatewayURL: gatewayURL})
+	_ = saveSession(sessionFile{
+		SessionID:    reply.SessionID,
+		SessionToken: reply.SessionToken,
+		PublicURL:    reply.PublicURL,
+		GatewayURL:   gatewayURL,
+	})
 	flog.Info("remote gateway connected", "gateway", gatewayURL, "publicURL", reply.PublicURL)
 	m.publish(statusConnected(reply.PublicURL))
 

@@ -46,6 +46,12 @@ type RegisterRequest struct {
 	// SessionID, when non-empty, asks the gateway to re-use a prior session's
 	// public URL (sticky reconnect). Empty requests a fresh one.
 	SessionID string `json:"session_id,omitempty"`
+	// SessionToken, when non-empty, is the gateway-signed session token from a
+	// previous RegisterReply. A gateway that does not recognize SessionID
+	// (typically because it restarted and lost its in-memory registry) verifies
+	// the token's signature against its session key and, on success, resurrects
+	// the session under its ORIGINAL public URL instead of minting a fresh one.
+	SessionToken string `json:"session_token,omitempty"`
 	// ClientVersion is the fleetd version, for the gateway's logs/diagnostics.
 	ClientVersion string `json:"client_version,omitempty"`
 	// Features lists optional tunnel capabilities fleetd supports (e.g.
@@ -61,7 +67,13 @@ type RegisterRequest struct {
 type RegisterReply struct {
 	SessionID string `json:"session_id,omitempty"`
 	PublicURL string `json:"public_url,omitempty"`
-	Error     string `json:"error,omitempty"`
+	// SessionToken is a JWT, signed with the gateway's session key, encoding
+	// this session's ids. fleetd persists it with the session id and presents
+	// both on reconnect, so the session (and its public URL) survives a gateway
+	// restart when the gateway runs with a stable --session-key. Empty from an
+	// old gateway.
+	SessionToken string `json:"session_token,omitempty"`
+	Error        string `json:"error,omitempty"`
 	// Features is the negotiated set: the intersection of what fleetd requested
 	// and what the gateway supports. Absent (old gateway) means MCP-only.
 	Features []string `json:"features,omitempty"`

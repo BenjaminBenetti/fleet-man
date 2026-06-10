@@ -88,7 +88,7 @@ func TestSessionFileRoundTripAndStale(t *testing.T) {
 		t.Fatalf("ensure dir: %v", err)
 	}
 
-	in := sessionFile{SessionID: "sid1", PublicURL: "https://gw/mcp/sid1", GatewayURL: "https://gw"}
+	in := sessionFile{SessionID: "sid1", SessionToken: "jwt1", PublicURL: "https://gw/mcp/sid1", GatewayURL: "https://gw"}
 	if err := saveSession(in); err != nil {
 		t.Fatalf("saveSession: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestManagerConnectsServesAndDisables(t *testing.T) {
 		if err := tunnel.ReadFrame(conn, &req); err != nil {
 			return
 		}
-		_ = tunnel.WriteFrame(conn, tunnel.RegisterReply{SessionID: "sess-A", PublicURL: "https://gw/mcp/sess-A"})
+		_ = tunnel.WriteFrame(conn, tunnel.RegisterReply{SessionID: "sess-A", SessionToken: "tok-A", PublicURL: "https://gw/mcp/sess-A"})
 		sess, err := tunnel.ServerSession(conn, io.Discard)
 		if err != nil {
 			return
@@ -249,8 +249,8 @@ func TestManagerConnectsServesAndDisables(t *testing.T) {
 		t.Fatal("gateway never served a request over the tunnel")
 	}
 
-	// Sticky session persisted for reconnect.
-	if s := loadSession("https://gw.example.com"); s.SessionID != "sess-A" || s.PublicURL != "https://gw/mcp/sess-A" {
+	// Sticky session (id + resume token) persisted for reconnect.
+	if s := loadSession("https://gw.example.com"); s.SessionID != "sess-A" || s.SessionToken != "tok-A" || s.PublicURL != "https://gw/mcp/sess-A" {
 		t.Fatalf("session not persisted: %+v", s)
 	}
 
@@ -274,7 +274,7 @@ func TestManagerStickyReconnect(t *testing.T) {
 	}
 	defer ln.Close()
 
-	regIDs := make(chan string, 8)
+	regs := make(chan tunnel.RegisterRequest, 8)
 	var conns atomic.Int32
 	gwDone := make(chan struct{})
 	defer close(gwDone)
@@ -291,12 +291,12 @@ func TestManagerStickyReconnect(t *testing.T) {
 					return
 				}
 				n := conns.Add(1)
-				regIDs <- req.SessionID
+				regs <- req
 				sid := req.SessionID
 				if sid == "" {
 					sid = "sticky-1"
 				}
-				if err := tunnel.WriteFrame(conn, tunnel.RegisterReply{SessionID: sid, PublicURL: "https://gw/mcp/" + sid}); err != nil {
+				if err := tunnel.WriteFrame(conn, tunnel.RegisterReply{SessionID: sid, SessionToken: "tok-sticky", PublicURL: "https://gw/mcp/" + sid}); err != nil {
 					return
 				}
 				if n == 1 {
@@ -318,26 +318,27 @@ func TestManagerStickyReconnect(t *testing.T) {
 	go m.Run(ctx)
 	m.Reconcile(true, "https://gw.example.com")
 
-	// First registration: no prior session id.
-	if got := waitForReg(t, regIDs, 5*time.Second); got != "" {
-		t.Fatalf("first registration session id = %q, want empty", got)
+	// First registration: no prior session id or resume token.
+	if got := waitForReg(t, regs, 5*time.Second); got.SessionID != "" || got.SessionToken != "" {
+		t.Fatalf("first registration carried id=%q token=%q, want both empty", got.SessionID, got.SessionToken)
 	}
-	// Second registration (after the forced drop): the sticky id.
-	if got := waitForReg(t, regIDs, 5*time.Second); got != "sticky-1" {
-		t.Fatalf("reconnect registration session id = %q, want sticky-1", got)
+	// Second registration (after the forced drop): the sticky id AND the cached
+	// session token from the first reply.
+	if got := waitForReg(t, regs, 5*time.Second); got.SessionID != "sticky-1" || got.SessionToken != "tok-sticky" {
+		t.Fatalf("reconnect registration carried id=%q token=%q, want sticky-1/tok-sticky", got.SessionID, got.SessionToken)
 	}
 	// And it lands CONNECTED on the kept connection.
 	waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED, 5*time.Second)
 }
 
-func waitForReg(t *testing.T, ch <-chan string, timeout time.Duration) string {
+func waitForReg(t *testing.T, ch <-chan tunnel.RegisterRequest, timeout time.Duration) tunnel.RegisterRequest {
 	t.Helper()
 	select {
-	case id := <-ch:
-		return id
+	case req := <-ch:
+		return req
 	case <-time.After(timeout):
 		t.Fatal("timed out waiting for a registration")
-		return ""
+		return tunnel.RegisterRequest{}
 	}
 }
 

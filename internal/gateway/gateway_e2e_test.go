@@ -70,11 +70,17 @@ func genTestTLS(t *testing.T) (tls.Certificate, *x509.CertPool) {
 // public (TLS) + gRPC (plain — grpc.Creds adds TLS) listeners, returning their
 // addresses (public, grpc). fleetd registers over the gRPC listener.
 func startTestGateway(t *testing.T, cert tls.Certificate, publicBase string) (*Server, string, string) {
+	return startTestGatewayKeyed(t, cert, publicBase, "")
+}
+
+// startTestGatewayKeyed is startTestGateway with an explicit session key, for
+// restart tests that need two gateway instances sharing a token-signing key.
+func startTestGatewayKeyed(t *testing.T, cert tls.Certificate, publicBase, sessionKey string) (*Server, string, string) {
 	t.Helper()
 	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	s := &Server{
-		cfg:       Config{PublicURL: publicBase, MaxSessions: 64},
-		reg:       newRegistry(publicBase, 64),
+		cfg:       Config{PublicURL: publicBase, MaxSessions: 64, SessionKey: sessionKey},
+		reg:       newRegistry(publicBase, 64, testSigner(t, sessionKey)),
 		tlsConfig: tlsCfg,
 		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -98,7 +104,7 @@ func startTestGatewayPlain(t *testing.T, publicBase string) (*Server, string, st
 	t.Helper()
 	s := &Server{
 		cfg:       Config{PublicURL: publicBase, MaxSessions: 64},
-		reg:       newRegistry(publicBase, 64),
+		reg:       newRegistry(publicBase, 64, testSigner(t, "")),
 		tlsConfig: nil,
 		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}

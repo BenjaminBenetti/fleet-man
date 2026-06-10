@@ -222,6 +222,7 @@ fleet gateway \
 | `--public-addr` | `:443` | MCP + `/healthz` listener — HTTP/1.1 (HTTPS when a cert is set, else HTTP) |
 | `--grpc-addr` | `:50051` | Native gRPC listener — HTTP/2 (h2c when cert-less, h2 under TLS). Hosts remote `fleet` control **and** fleetd registration. Empty disables both |
 | `--max-sessions` | `1024` | Cap on concurrent tunnels |
+| `--session-key` | (random per boot) | Secret key signing the session-resume tokens daemons present on reconnect. Set it (or `FLEET_GATEWAY_SESSION_KEY`) so daemons keep the **same session URL across gateway restarts**; left unset, a restart hands every daemon a fresh URL |
 
 Two ports must be reachable: expose `--public-addr` to MCP agents and `--grpc-addr`
 to remote `fleet` clients **and your daemons** (they register over it). A
@@ -307,6 +308,11 @@ then serves plain HTTP.
   **the token is the secret** — share both only with agents you trust.
 - The id in the URL is *not* the reconnect credential: the daemon holds a separate
   secret (never placed in the URL), so a URL holder cannot hijack your tunnel.
+- **Session-resume tokens are bearer reclaim capabilities.** Each registration
+  returns a JWT signed with `--session-key`; the daemon stores it (mode `0600`,
+  next to the secret) and presents it on reconnect, which is what keeps the URL
+  stable across gateway restarts. Anyone holding the token can claim that session,
+  so guard the signing key like any other server secret.
 - The public connection is TLS when the gateway holds a cert (the daemon verifies
   it against the system roots), or when a reverse proxy terminates TLS in front of
   it. Running the gateway itself on plain HTTP is only safe behind such a proxy (or
