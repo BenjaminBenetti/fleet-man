@@ -112,6 +112,16 @@ programmatically. It starts automatically with the daemon — no extra command.
   matching the daemon's unix socket. The token is generated once and reused
   across restarts.
 
+**Claude Code needs no setup:** launching the fleet TUI registers the server in
+`~/.claude.json` as the user-scope `fleet` entry (URL and token included) and
+re-syncs it on every launch, so a daemon restart that lands on a new port heals
+itself. It also installs the **Fleet Admiral** skill (`~/.claude/skills/fleet-admiral`),
+which teaches the agent how to drive these tools. (Local daemons only: when
+`FLEET_GATEWAY`/`FLEET_SERVER` point the TUI at a remote daemon, registration
+is skipped — point Claude Code at the Public MCP URL from the settings page
+instead, see [Remote MCP](#remote-mcp). Registration is best-effort and never
+blocks startup.) The snippet below is for other MCP clients or manual setups.
+
 For convenience the server also writes `~/.fleet/mcp.env` (mode `0600`) with the
 endpoint as shell exports, and wires `~/.bashrc` to source it, so new shells get:
 
