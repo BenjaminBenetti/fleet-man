@@ -35,6 +35,14 @@ func TestGatewayEnvFillsUnsetFlags(t *testing.T) {
 	}
 }
 
+func TestGatewayEnvFillsPublicGRPCURL(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY_PUBLIC_GRPC_URL", "https://gw.example.com:50051")
+
+	if got := gatewayFlagAfterEnv(t, nil, "public-grpc-url"); got != "https://gw.example.com:50051" {
+		t.Errorf("public-grpc-url = %q, want env value", got)
+	}
+}
+
 func TestGatewayFlagWinsOverEnv(t *testing.T) {
 	t.Setenv("FLEET_GATEWAY_PUBLIC_URL", "https://from-env.example.com")
 
