@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/tunnel"
 )
 
@@ -138,6 +139,10 @@ func (m *Manager) Reconcile(enabled bool, gatewayURL string) {
 // flight, so there is no reconnection storm.
 func (m *Manager) Run(ctx context.Context) {
 	backoff := initialBackoff
+	// prev is the last desired config recorded in the event log, so config
+	// transitions (enable/disable/URL change) log once — not per attempt of the
+	// steady-state reconnect loop.
+	var prev desiredState
 	for {
 		if ctx.Err() != nil {
 			return
@@ -155,6 +160,11 @@ func (m *Manager) Run(ctx context.Context) {
 		d := m.desired
 		m.attemptCancel = cancel
 		m.mu.Unlock()
+
+		if d != prev {
+			logDesiredChange(prev, d)
+			prev = d
+		}
 
 		if !d.enabled || d.gatewayURL == "" {
 			cancel()
@@ -190,9 +200,11 @@ func (m *Manager) Run(ctx context.Context) {
 		if registered {
 			// An established tunnel dropped (gateway restart / network). Reconnect
 			// promptly; the next iteration republishes CONNECTING.
+			flog.Warn("remote gateway tunnel dropped; reconnecting", "gateway", d.gatewayURL, "err", err)
 			backoff = initialBackoff
 		} else {
 			// Never connected this attempt — surface the failure while we back off.
+			flog.Warn("remote gateway connect failed", "gateway", d.gatewayURL, "err", err)
 			m.publish(statusError(err))
 		}
 		if !m.sleep(ctx, jitter(backoff)) {
@@ -238,6 +250,7 @@ func (m *Manager) connectAndServe(ctx context.Context, gatewayURL string) (regis
 	// Registered. Persist the sticky session and report the public URL.
 	registered = true
 	_ = saveSession(sessionFile{SessionID: reply.SessionID, PublicURL: reply.PublicURL, GatewayURL: gatewayURL})
+	flog.Info("remote gateway connected", "gateway", gatewayURL, "publicURL", reply.PublicURL)
 	m.publish(statusConnected(reply.PublicURL))
 
 	session, err := tunnel.ClientSession(conn, m.logOut)
@@ -253,6 +266,22 @@ func (m *Manager) connectAndServe(ctx context.Context, gatewayURL string) (regis
 		return registered, serveTunnel(session, m.mcpPort, m.grpcLis)
 	}
 	return registered, serveProxy(session, m.mcpPort)
+}
+
+// logDesiredChange records a remote-gateway config transition in the event log:
+// enabled, reconfigured (URL change while enabled), or disabled. A change that
+// never turns the tunnel on (e.g. enabled with an empty URL) logs nothing.
+func logDesiredChange(prev, d desiredState) {
+	prevOn := prev.enabled && prev.gatewayURL != ""
+	on := d.enabled && d.gatewayURL != ""
+	switch {
+	case on && !prevOn:
+		flog.Info("remote gateway enabled", "gateway", d.gatewayURL)
+	case on && prevOn:
+		flog.Info("remote gateway reconfigured", "gateway", d.gatewayURL)
+	case prevOn:
+		flog.Info("remote gateway disabled")
+	}
 }
 
 // wait blocks until a Reconcile nudge arrives or ctx is cancelled. It returns

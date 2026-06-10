@@ -1,10 +1,11 @@
 // Package flog is fleet-man's application-wide event log.
 //
 // Major lifecycle actions across the codebase — fleet and instance
-// create/destroy, instance start/stop/clone, session create/kill/rename,
-// port-forwards, browser opens, TUI start/stop — and every command run
-// against a container write structured records here so the whole system's
-// behavior can be traced from one place: ~/.fleet/fleet.log.
+// create/destroy, instance start/stop/clone, server-side jobs, session
+// create/kill/rename, port-forwards, browser opens, TUI start/stop, the
+// remote-gateway tunnel's connects/drops — and every command run against a
+// container write structured records here so the whole system's behavior can
+// be traced from one place: ~/.fleet/fleet.log.
 //
 // This is deliberately distinct from the per-instance creation logs under
 // ~/.fleet/logs/<fleet>-<instance>.log, which capture a single instance's
@@ -96,7 +97,8 @@ func initLogger() {
 //
 // Keep keys consistent across call sites so the log stays greppable. The
 // conventional keys are: fleet, instance, session, backend, container,
-// branch, remote, from, to, port, ms, and err.
+// branch, remote, from, to, port, ms, err, job, kind, warn, gateway, and
+// publicURL.
 func Info(msg string, args ...any)  { L().Info(msg, args...) }
 func Warn(msg string, args ...any)  { L().Warn(msg, args...) }
 func Error(msg string, args ...any) { L().Error(msg, args...) }
