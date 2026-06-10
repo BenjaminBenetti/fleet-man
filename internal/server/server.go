@@ -155,19 +155,20 @@ func Serve(ctx context.Context) error {
 		}
 	}
 
-	// Remote-MCP gateway tunnel: an outbound, OPT-IN connection that exposes the
-	// loopback MCP server (and, when negotiated, the gRPC server above) to the
-	// internet through a remote fleet gateway. Like MCP itself it is auxiliary —
-	// the supervisor stays idle until the config enables it, and a connect failure
-	// only affects remote access, never the local daemon. It publishes its status
-	// (incl. the gateway-assigned Public MCP URL) through the hub so the TUI
-	// settings page reflects it live.
+	// Remote gateway tunnel: an outbound, OPT-IN connection that exposes the
+	// loopback MCP server ("Enable Remote MCP") and/or the gRPC server above
+	// ("Enable Remote Fleet") to the internet through a remote fleet gateway.
+	// Like MCP itself it is auxiliary — the supervisor stays idle until the
+	// config enables a traffic kind, and a connect failure only affects remote
+	// access, never the local daemon. It publishes its status (incl. the
+	// gateway-assigned Public MCP URL / Public GRPC URL) through the hub so the
+	// TUI settings page reflects it live.
 	svc.remote = remote.NewManager(mcpPort, versionOrDev(), func(st *fleetgrpc.RemoteMcpStatus) {
 		svc.hub.post(func(h *hub) { h.broadcastRemoteMcpStatus(st) })
 	}, remoteOpts...)
 	go svc.remote.Run(hubCtx)
 	if cfg, err := state.LoadConfig(); err == nil {
-		svc.remote.Reconcile(cfg.RemoteMcpSettings.Enabled, cfg.RemoteMcpSettings.GatewayURL)
+		svc.remote.Reconcile(cfg.RemoteMcpSettings.Enabled, cfg.RemoteMcpSettings.FleetEnabled, cfg.RemoteMcpSettings.GatewayURL)
 	} else {
 		flog.Warn("remote mcp: load config", "err", err)
 	}

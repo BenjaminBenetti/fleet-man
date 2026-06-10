@@ -66,17 +66,23 @@ func TestConfigToProtoEncodesFullConfig(t *testing.T) {
 func TestRemoteMcpConfigRoundTripClient(t *testing.T) {
 	c := &state.Config{
 		AgentSettings:     state.AgentSettings{ToolSelection: state.AgentToolClaude},
-		RemoteMcpSettings: state.RemoteMcpSettings{Enabled: true, GatewayURL: "https://gateway.example.com"},
+		RemoteMcpSettings: state.RemoteMcpSettings{Enabled: true, GatewayURL: "https://gateway.example.com", FleetEnabled: true},
 	}
 
 	pc := configToProto(c)
 	if !pc.GetRemoteMcp().GetEnabled() || pc.GetRemoteMcp().GetGatewayUrl() != "https://gateway.example.com" {
 		t.Fatalf("configToProto lost remote-mcp: %v", pc.GetRemoteMcp())
 	}
+	if !pc.GetRemoteMcp().GetFleetEnabled() {
+		t.Fatalf("configToProto lost fleet_enabled: %v", pc.GetRemoteMcp())
+	}
 
 	back := protoConfigToLegacy(pc)
 	if !back.RemoteMcpSettings.Enabled || back.RemoteMcpSettings.GatewayURL != "https://gateway.example.com" {
 		t.Fatalf("protoConfigToLegacy lost remote-mcp: %+v", back.RemoteMcpSettings)
+	}
+	if !back.RemoteMcpSettings.FleetEnabled {
+		t.Fatalf("protoConfigToLegacy lost fleet_enabled: %+v", back.RemoteMcpSettings)
 	}
 }
 

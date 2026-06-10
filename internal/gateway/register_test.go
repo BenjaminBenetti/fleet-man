@@ -22,7 +22,7 @@ import (
 func TestGatewayRegisterFloodShed(t *testing.T) {
 	s := &Server{
 		cfg:        Config{PublicURL: "http://gw.example.com", MaxSessions: 64},
-		reg:        newRegistry("http://gw.example.com", 64, testSigner(t, "")),
+		reg:        newRegistry("http://gw.example.com", "", 64, testSigner(t, "")),
 		log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		pendingSem: make(chan struct{}, 2), // tiny cap for the test
 	}

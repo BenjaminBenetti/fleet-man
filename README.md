@@ -178,11 +178,20 @@ In **Settings → Fleet Remote (MCP)**:
    dials out — the gateway's `--grpc-addr`, default port `50051`; behind a proxy
    it's whatever host:port routes to that listener). It is *not* the public address
    agents use.
-2. Flip **Enabled** on.
+2. Flip **Enable Remote MCP** on.
 
 Once connected, the read-only **Public MCP URL** appears (e.g.
 `https://gateway.example.com/mcp/<id>`) — that is the address external tools use.
 The line shows the live connection state (connecting / connected / error).
+
+A second, independent toggle — **Enable Remote Fleet** — exposes the daemon's
+**gRPC control surface** through the same gateway, so a remote `fleet` binary can
+drive this instance (see [Remote control](#remote-control-grpc)). With it off,
+fleetd never negotiates the gRPC tunnel feature, so the gateway rejects any
+incoming gRPC commands aimed at the daemon. With it on, a read-only **Public GRPC
+URL** appears under the Public MCP URL (computed by the gateway from its
+`--public-grpc-url` flag) — that value is what you feed another `fleet` as
+`FLEET_GATEWAY`. The toggles are independent: expose MCP, remote control, or both.
 
 ### Use it from a remote agent
 
@@ -218,6 +227,7 @@ fleet gateway \
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `--public-url` | (required) | External base URL agents use; session URLs are `<public-url>/mcp/<id>`. Scheme (`https`/`http`) must match how the public endpoint is actually served |
+| `--public-grpc-url` | (optional) | External base URL of the gRPC endpoint remote `fleet` clients dial, e.g. `https://gateway.example.com:50051`. Daemons that enable **Remote Fleet** are handed `<public-grpc-url>/grpc/<id>` as their **Public GRPC URL** (shown in the TUI, used as `FLEET_GATEWAY`). Unset = no URL is computed |
 | `--tls-cert` / `--tls-key` | (optional) | TLS certificate + key (PEM). Provide **both** to serve HTTPS, or **neither** for plain HTTP behind a proxy. A lone cert or key is an error |
 | `--public-addr` | `:443` | MCP + `/healthz` listener — HTTP/1.1 (HTTPS when a cert is set, else HTTP) |
 | `--grpc-addr` | `:50051` | Native gRPC listener — HTTP/2 (h2c when cert-less, h2 under TLS). Hosts remote `fleet` control **and** fleetd registration. Empty disables both |
@@ -322,15 +332,20 @@ then serves plain HTTP.
 
 The same gateway tunnel can also carry the daemon's **gRPC** API, so a remote
 `fleet` client can drive your daemon directly — list/up/down, watch live status,
-stream logs, change config, and so on. It rides the **same tunnel and the same
-on/off toggle** as remote MCP (no separate setting). The gateway serves native
-gRPC on its dedicated `--grpc-addr` listener (default `:50051`); the client dials
-it as an ordinary gRPC endpoint and sends the daemon's session id (the same id as
-in the MCP URL) as the `fleet-session` metadata header, so the gateway can route.
+stream logs, change config, and so on. It rides the **same tunnel** as remote MCP
+but has its **own toggle**: flip **Enable Remote Fleet** in Settings → Fleet MCP
+(independent of Enable Remote MCP, so you can expose MCP, remote control, or
+both). The gateway serves native gRPC on its dedicated `--grpc-addr` listener
+(default `:50051`); the client dials it as an ordinary gRPC endpoint and sends the
+daemon's session id (the same id as in the MCP URL) as the `fleet-session`
+metadata header, so the gateway can route.
 
 Point a `fleet` client at it with two env vars — the URL is the gRPC endpoint plus
-the session id (the gateway's `--grpc-addr`, or whatever host:port your reverse
-proxy exposes for gRPC):
+the session id. When the gateway runs with `--public-grpc-url`, the settings page
+shows this exact value as the **Public GRPC URL** (e.g.
+`https://gateway.example.com:50051/grpc/<id>`); otherwise compose it from the
+gateway's `--grpc-addr` (or whatever host:port your reverse proxy exposes for
+gRPC) plus the session id:
 
 ```bash
 export FLEET_GATEWAY="https://gateway.example.com:50051/<id>"

@@ -371,8 +371,9 @@ func configToProto(c *configutil.Config) *fleetgrpc.Config {
 		Codespaces:     &fleetgrpc.CodespacesSettings{},
 		Browser:        &fleetgrpc.BrowserSettings{},
 		RemoteMcp: &fleetgrpc.RemoteMcpSettings{
-			Enabled:    c.RemoteMcpSettings.Enabled,
-			GatewayUrl: c.RemoteMcpSettings.GatewayURL,
+			Enabled:      c.RemoteMcpSettings.Enabled,
+			GatewayUrl:   c.RemoteMcpSettings.GatewayURL,
+			FleetEnabled: c.RemoteMcpSettings.FleetEnabled,
 		},
 		DefaultBackend: backendStringToProto(c.DefaultBackend),
 	}
@@ -657,6 +658,7 @@ func protoConfigToLegacy(pc *fleetgrpc.Config) *configutil.Config {
 	if rm := pc.GetRemoteMcp(); rm != nil {
 		c.RemoteMcpSettings.Enabled = rm.GetEnabled()
 		c.RemoteMcpSettings.GatewayURL = rm.GetGatewayUrl()
+		c.RemoteMcpSettings.FleetEnabled = rm.GetFleetEnabled()
 	}
 	c.DefaultBackend = backendProtoToString(pc.GetDefaultBackend())
 	return c

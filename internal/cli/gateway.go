@@ -47,6 +47,7 @@ func newGatewayCmd() *cobra.Command {
 	f.StringVar(&cfg.PublicAddr, "public-addr", ":443", "address MCP agents connect to (HTTPS when a cert is set, else HTTP)")
 	f.StringVar(&cfg.GRPCAddr, "grpc-addr", ":50051", "address for native gRPC + fleetd registration (h2c when cert-less, h2 under TLS); empty disables both")
 	f.StringVar(&cfg.PublicURL, "public-url", "", "external base URL agents use, e.g. https://gw.example.com or http://gw.example.com (required)")
+	f.StringVar(&cfg.PublicGRPCURL, "public-grpc-url", "", "external base URL of the gRPC endpoint that remote `fleet` clients dial, e.g. https://gw.example.com:50051; daemons that enable remote fleet are handed <public-grpc-url>/grpc/<id> as their Public GRPC URL (empty = none)")
 	f.StringVar(&cfg.TLSCert, "tls-cert", "", "path to the TLS certificate, PEM (optional; set with --tls-key to enable TLS)")
 	f.StringVar(&cfg.TLSKey, "tls-key", "", "path to the TLS private key, PEM (optional; set with --tls-cert to enable TLS)")
 	f.IntVar(&cfg.MaxSessions, "max-sessions", 0, "max concurrent tunnels (0 = default 1024)")

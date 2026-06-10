@@ -65,7 +65,8 @@ the whole gateway.
 
 ## 3. Registration (over the gRPC tunnel stream)
 
-When the user enables remote MCP, `fleetd`'s `remote.Manager` opens a long‑lived
+When the user enables remote MCP (or remote fleet — either toggle brings the
+tunnel up), `fleetd`'s `remote.Manager` opens a long‑lived
 gRPC **bidi** stream — the `Register` method (`tunnel.RegisterMethod`) on the
 gateway's gRPC endpoint. Both ends wrap that stream as a `net.Conn`
 (`tunnel.StreamConn`, a raw‑codec adapter), so the *exact same* handshake + yamux
@@ -250,8 +251,15 @@ All of gRPC works through the reverse proxy — unary, server‑streaming (`Watc
 (`FlushInterval: -1`) so streaming isn't buffered, and forwards HTTP/2 trailers
 (`grpc-status`) so per‑RPC status propagates.
 
-> **Note:** the gRPC API rides the *same* tunnel and the *same* on/off toggle as
-> MCP, and reuses the *same* bearer token. Enabling remote MCP exposes both.
+> **Note:** the gRPC API rides the *same* tunnel as MCP and reuses the *same*
+> bearer token, but has its **own toggle** — **Enable Remote Fleet**. fleetd only
+> advertises the `grpc` tunnel feature when that setting is on; without the
+> negotiated feature the gateway answers every `fleet-session` RPC for the session
+> with `NotFound`, and fleetd closes any `TagGRPC` stream regardless. The two
+> toggles are independent: a user can expose MCP, remote control, or both.
+> When the gateway runs with `--public-grpc-url`, a grpc‑negotiating daemon is
+> also handed its **Public GRPC URL** (`<public-grpc-url>/grpc/<publicID>`) in the
+> register reply — the exact `FLEET_GATEWAY` value, surfaced read‑only in the TUI.
 
 ---
 
@@ -336,8 +344,9 @@ OS system roots) **or** `http://` (plaintext h2c), defaulting the port to 443/80
   TTL, then a reaper frees it — so a `kill -9`'d daemon's URL is released, but a
   brief network blip keeps the URL stable.
 - **Status.** `fleetd` publishes the live connection state and the assigned public
-  URL over its Watch stream, so the TUI's settings page shows it in real time. The
-  computed Public MCP URL is *never* stored in config — only pushed over Watch.
+  URLs (MCP, and gRPC when negotiated) over its Watch stream, so the TUI's settings
+  page shows them in real time. The computed Public MCP URL / Public GRPC URL are
+  *never* stored in config — only pushed over Watch.
 
 ---
 

@@ -371,15 +371,18 @@ func (*Event_RemoteMcpStatus) isEvent_Kind() {}
 func (*Event_FileCopy) isEvent_Kind() {}
 
 // RemoteMcpStatus is the computed status the settings page shows after the user
-// enables remote MCP. public_url is the gateway-assigned Public MCP URL (only
-// meaningful when state is CONNECTED); error carries the last failure (when
-// state is ERROR). The tunnel itself lands in a later PR — for now this only
-// ever reports DISABLED, but the full push path is wired end to end.
+// enables remote MCP and/or remote fleet (both share the one gateway tunnel, so
+// one status describes them). public_url is the gateway-assigned Public MCP URL
+// and public_grpc_url the Public GRPC URL a remote `fleet` dials (each only
+// meaningful when state is CONNECTED; public_grpc_url is empty unless the grpc
+// feature was negotiated and the gateway runs with --public-grpc-url); error
+// carries the last failure (when state is ERROR).
 type RemoteMcpStatus struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	State         RemoteMcpConn          `protobuf:"varint,1,opt,name=state,proto3,enum=fleetgrpc.RemoteMcpConn" json:"state,omitempty"`
 	PublicUrl     string                 `protobuf:"bytes,2,opt,name=public_url,json=publicUrl,proto3" json:"public_url,omitempty"`
 	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	PublicGrpcUrl string                 `protobuf:"bytes,4,opt,name=public_grpc_url,json=publicGrpcUrl,proto3" json:"public_grpc_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -431,6 +434,13 @@ func (x *RemoteMcpStatus) GetPublicUrl() string {
 func (x *RemoteMcpStatus) GetError() string {
 	if x != nil {
 		return x.Error
+	}
+	return ""
+}
+
+func (x *RemoteMcpStatus) GetPublicGrpcUrl() string {
+	if x != nil {
+		return x.PublicGrpcUrl
 	}
 	return ""
 }
@@ -704,12 +714,13 @@ const file_watch_proto_rawDesc = "" +
 	"\x0fruntime_changed\x18\a \x01(\v2\x19.fleetgrpc.RuntimeChangedH\x00R\x0eruntimeChanged\x12H\n" +
 	"\x11remote_mcp_status\x18\b \x01(\v2\x1a.fleetgrpc.RemoteMcpStatusH\x00R\x0fremoteMcpStatus\x122\n" +
 	"\tfile_copy\x18\t \x01(\v2\x13.fleetgrpc.FileCopyH\x00R\bfileCopyB\x06\n" +
-	"\x04kind\"v\n" +
+	"\x04kind\"\x9e\x01\n" +
 	"\x0fRemoteMcpStatus\x12.\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x18.fleetgrpc.RemoteMcpConnR\x05state\x12\x1d\n" +
 	"\n" +
 	"public_url\x18\x02 \x01(\tR\tpublicUrl\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"6\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\x12&\n" +
+	"\x0fpublic_grpc_url\x18\x04 \x01(\tR\rpublicGrpcUrl\"6\n" +
 	"\fStateChanged\x12&\n" +
 	"\x05state\x18\x01 \x01(\v2\x10.fleetgrpc.StateR\x05state\"F\n" +
 	"\x0eRuntimeChanged\x124\n" +

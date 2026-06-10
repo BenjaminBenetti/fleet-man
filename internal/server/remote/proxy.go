@@ -56,19 +56,37 @@ func serveProxy(session *yamux.Session, mcpPort int) error {
 	return srv.Serve(session)
 }
 
+// serveReject parks on a session that may serve NOTHING (remote fleet only, but
+// the gateway did not negotiate gRPC): every stream the gateway pushes is closed
+// unanswered. Keeping the session itself open preserves the sticky registration
+// until the user re-enables a traffic kind. Returns when the session errors.
+func serveReject(session *yamux.Session) error {
+	for {
+		stream, err := session.Accept()
+		if err != nil {
+			return err
+		}
+		_ = stream.Close()
+	}
+}
+
 // serveTunnel serves a session whose streams are TAG-prefixed (FeatureGRPC
 // negotiated): it reads each stream's tag and routes it. MCP streams feed a local
-// http.Server; gRPC streams feed grpcLis (the daemon's tunnel-facing gRPC server,
-// which is shared across reconnects and NOT closed here). Returns when the
-// session errors.
-func serveTunnel(session *yamux.Session, mcpPort int, grpcLis *ChanListener) error {
-	mcpLis := NewChanListener()
-	mcpSrv := &http.Server{Handler: mcpReverseProxy(mcpPort)}
-	// Closing the server closes mcpLis (so its Accept unblocks) and drops the
-	// per-connection MCP requests; grpcLis is NOT closed — it outlives this
-	// connection so reconnects reuse the same gRPC server.
-	defer mcpSrv.Close()
-	go func() { _ = mcpSrv.Serve(mcpLis) }()
+// http.Server — unless remote MCP is disabled (mcpOn false: a remote-fleet-only
+// tunnel), in which case they are rejected; gRPC streams feed grpcLis (the
+// daemon's tunnel-facing gRPC server, which is shared across reconnects and NOT
+// closed here). Returns when the session errors.
+func serveTunnel(session *yamux.Session, mcpPort int, grpcLis *ChanListener, mcpOn bool) error {
+	var mcpLis *ChanListener
+	if mcpOn {
+		mcpLis = NewChanListener()
+		mcpSrv := &http.Server{Handler: mcpReverseProxy(mcpPort)}
+		// Closing the server closes mcpLis (so its Accept unblocks) and drops the
+		// per-connection MCP requests; grpcLis is NOT closed — it outlives this
+		// connection so reconnects reuse the same gRPC server.
+		defer mcpSrv.Close()
+		go func() { _ = mcpSrv.Serve(mcpLis) }()
+	}
 
 	for {
 		stream, err := session.Accept()
@@ -80,18 +98,19 @@ func serveTunnel(session *yamux.Session, mcpPort int, grpcLis *ChanListener) err
 }
 
 // dispatchStream reads the leading tag byte and routes the (tag-stripped) stream
-// to the MCP or gRPC listener. An unreadable tag or unknown value closes the
-// stream without disturbing the others.
+// to the MCP or gRPC listener. A nil listener means that traffic kind is
+// disabled, so its streams are rejected. An unreadable tag or unknown value
+// closes the stream without disturbing the others.
 func dispatchStream(stream net.Conn, mcpLis, grpcLis *ChanListener) {
 	tag, err := tunnel.ReadTag(stream)
 	if err != nil {
 		_ = stream.Close()
 		return
 	}
-	switch tag {
-	case tunnel.TagMCP:
+	switch {
+	case tag == tunnel.TagMCP && mcpLis != nil:
 		mcpLis.Push(stream)
-	case tunnel.TagGRPC:
+	case tag == tunnel.TagGRPC && grpcLis != nil:
 		grpcLis.Push(stream)
 	default:
 		_ = stream.Close()

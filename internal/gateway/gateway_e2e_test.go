@@ -80,7 +80,7 @@ func startTestGatewayKeyed(t *testing.T, cert tls.Certificate, publicBase, sessi
 	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	s := &Server{
 		cfg:       Config{PublicURL: publicBase, MaxSessions: 64, SessionKey: sessionKey},
-		reg:       newRegistry(publicBase, 64, testSigner(t, sessionKey)),
+		reg:       newRegistry(publicBase, "", 64, testSigner(t, sessionKey)),
 		tlsConfig: tlsCfg,
 		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -104,7 +104,7 @@ func startTestGatewayPlain(t *testing.T, publicBase string) (*Server, string, st
 	t.Helper()
 	s := &Server{
 		cfg:       Config{PublicURL: publicBase, MaxSessions: 64},
-		reg:       newRegistry(publicBase, 64, testSigner(t, "")),
+		reg:       newRegistry(publicBase, "", 64, testSigner(t, "")),
 		tlsConfig: nil,
 		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}

@@ -43,18 +43,18 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 		return nil, status.Errorf(codes.Internal, "reload config: %v", err)
 	}
 
-	// Converge the remote-MCP tunnel to the saved settings. Reconcile is
+	// Converge the remote-gateway tunnel to the saved settings. Reconcile is
 	// non-blocking (it just records desired state and nudges the supervisor), so
 	// calling it while muWrite is held cannot deadlock. nil during tests that use
 	// newService() without a serve loop.
 	if s.remote != nil {
-		s.remote.Reconcile(saved.RemoteMcpSettings.Enabled, saved.RemoteMcpSettings.GatewayURL)
+		s.remote.Reconcile(saved.RemoteMcpSettings.Enabled, saved.RemoteMcpSettings.FleetEnabled, saved.RemoteMcpSettings.GatewayURL)
 	}
 
 	// The remote-gateway fields are the ones whose effects outlive this RPC (the
 	// tunnel supervisor reacts to them), so call them out; the manager logs the
 	// resulting connection transitions itself.
-	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "gateway", saved.RemoteMcpSettings.GatewayURL)
+	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "remoteFleet", saved.RemoteMcpSettings.FleetEnabled, "gateway", saved.RemoteMcpSettings.GatewayURL)
 
 	return &fleetgrpc.SetConfigReply{Config: configToProto(saved)}, nil
 }
@@ -74,8 +74,9 @@ func configToProto(c *state.Config) *fleetgrpc.Config {
 		Codespaces:     &fleetgrpc.CodespacesSettings{},
 		Browser:        &fleetgrpc.BrowserSettings{},
 		RemoteMcp: &fleetgrpc.RemoteMcpSettings{
-			Enabled:    c.RemoteMcpSettings.Enabled,
-			GatewayUrl: c.RemoteMcpSettings.GatewayURL,
+			Enabled:      c.RemoteMcpSettings.Enabled,
+			GatewayUrl:   c.RemoteMcpSettings.GatewayURL,
+			FleetEnabled: c.RemoteMcpSettings.FleetEnabled,
 		},
 		DefaultBackend: backendToProto(fleet.BackendType(c.DefaultBackend)),
 	}
@@ -203,6 +204,7 @@ func protoConfigToLegacy(pc *fleetgrpc.Config) *state.Config {
 	if rm := pc.GetRemoteMcp(); rm != nil {
 		c.RemoteMcpSettings.Enabled = rm.GetEnabled()
 		c.RemoteMcpSettings.GatewayURL = rm.GetGatewayUrl()
+		c.RemoteMcpSettings.FleetEnabled = rm.GetFleetEnabled()
 	}
 
 	c.DefaultBackend = backendProtoToString(pc.GetDefaultBackend())

@@ -110,7 +110,7 @@ func TestSetConfigRoundTripsRemoteMcp(t *testing.T) {
 
 	in := &fleetgrpc.Config{
 		Agent:     &fleetgrpc.AgentSettings{ToolSelection: "claude"},
-		RemoteMcp: &fleetgrpc.RemoteMcpSettings{Enabled: true, GatewayUrl: "https://gateway.example.com"},
+		RemoteMcp: &fleetgrpc.RemoteMcpSettings{Enabled: true, GatewayUrl: "https://gateway.example.com", FleetEnabled: true},
 	}
 	if _, err := svc.SetConfig(ctx, &fleetgrpc.SetConfigRequest{Config: in}); err != nil {
 		t.Fatalf("SetConfig: %v", err)
@@ -127,6 +127,9 @@ func TestSetConfigRoundTripsRemoteMcp(t *testing.T) {
 	if rm.GetGatewayUrl() != "https://gateway.example.com" {
 		t.Fatalf("gateway_url mismatch: %q", rm.GetGatewayUrl())
 	}
+	if !rm.GetFleetEnabled() {
+		t.Fatalf("fleet_enabled lost on round-trip")
+	}
 
 	// And the bytes on disk match what the legacy SaveConfig writes.
 	loaded, err := state.LoadConfig()
@@ -135,5 +138,8 @@ func TestSetConfigRoundTripsRemoteMcp(t *testing.T) {
 	}
 	if !loaded.RemoteMcpSettings.Enabled || loaded.RemoteMcpSettings.GatewayURL != "https://gateway.example.com" {
 		t.Fatalf("disk config lost remote-mcp settings: %+v", loaded.RemoteMcpSettings)
+	}
+	if !loaded.RemoteMcpSettings.FleetEnabled {
+		t.Fatalf("disk config lost fleet_enabled: %+v", loaded.RemoteMcpSettings)
 	}
 }
