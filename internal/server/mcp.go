@@ -230,10 +230,10 @@ func newMCPServer(svc *service) *mcp.Server {
 
 // streamCollector is an in-process gRPC server stream that captures every Send
 // into a slice instead of writing to a real transport. It lets the MCP tools
-// call the streaming service handlers (CreateInstance, Logs, ...) directly and
-// collect their emitted events synchronously. The embedded grpc.ServerStream is
-// nil — the handlers only ever call Send and Context, so the other
-// ServerStream methods (SetHeader/RecvMsg/...) are never invoked.
+// call the streaming service handlers (Logs, ...) directly and collect their
+// emitted events synchronously. The embedded grpc.ServerStream is nil — the
+// handlers only ever call Send and Context, so the other ServerStream methods
+// (SetHeader/RecvMsg/...) are never invoked.
 type streamCollector[T any] struct {
 	grpc.ServerStream
 	ctx    context.Context
@@ -243,32 +243,46 @@ type streamCollector[T any] struct {
 func (c *streamCollector[T]) Send(ev *T) error         { c.events = append(c.events, ev); return nil }
 func (c *streamCollector[T]) Context() context.Context { return c.ctx }
 
-// runLifecycleJob drives one server-streaming lifecycle RPC (CreateInstance,
-// StartInstance, ...) to completion in-process and returns its single result:
-// the final instance record, any non-fatal warnings, and an error if the job
-// failed or never produced a JobDone.
-//
-// The lifecycle handlers block until the job emits JobDone (relay forwards
-// history+live events until the terminal one), so this call is synchronous with
-// respect to job completion. The job itself runs in a server-owned goroutine and
-// is decoupled from ctx: if ctx is cancelled the handler returns early but the
-// job keeps running server-side (matching the gRPC path).
-func runLifecycleJob(ctx context.Context, open func(grpc.ServerStreamingServer[fleetgrpc.JobEvent]) error) (final *fleetgrpc.Instance, warnings []string, err error) {
-	c := &streamCollector[fleetgrpc.JobEvent]{ctx: ctx}
-	// A non-nil error here is a pre-job gRPC status (InvalidArgument/NotFound/
-	// AlreadyExists) returned before any JobDone was produced.
-	if rpcErr := open(c); rpcErr != nil {
-		return nil, nil, rpcErr
-	}
-	for _, ev := range c.events {
+// awaitJob blocks until j emits its JobDone (or ctx is cancelled) and returns
+// the job's single result: the final instance record, any non-fatal warnings,
+// and an error if the job failed. The job runs in a server-owned goroutine
+// decoupled from ctx — cancellation abandons the WAIT, never the job (matching
+// the gRPC path, where a dropped stream leaves the job running).
+func awaitJob(ctx context.Context, j *job) (final *fleetgrpc.Instance, warnings []string, err error) {
+	hist, ch := j.subscribe()
+	for _, ev := range hist {
 		if d := ev.GetDone(); d != nil {
-			if !d.GetSuccess() {
-				return d.GetInstance(), d.GetWarnings(), errors.New(d.GetError())
-			}
-			return d.GetInstance(), d.GetWarnings(), nil
+			return doneOutcome(d)
 		}
 	}
-	return nil, nil, errors.New("job ended without a result")
+	if ch == nil {
+		// A terminal history without a JobDone violates the jobs.proto contract;
+		// surface it rather than hanging.
+		return nil, nil, errors.New("job ended without a result")
+	}
+	defer j.unsubscribe(ch)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case ev, ok := <-ch:
+			if !ok {
+				return nil, nil, errors.New("job ended without a result")
+			}
+			if d := ev.GetDone(); d != nil {
+				return doneOutcome(d)
+			}
+		}
+	}
+}
+
+// doneOutcome unpacks a JobDone into awaitJob's result shape: a failed job
+// becomes an error carrying the job's message.
+func doneOutcome(d *fleetgrpc.JobDone) (*fleetgrpc.Instance, []string, error) {
+	if !d.GetSuccess() {
+		return d.GetInstance(), d.GetWarnings(), errors.New(d.GetError())
+	}
+	return d.GetInstance(), d.GetWarnings(), nil
 }
 
 // mergeCtx returns a context cancelled when EITHER input is cancelled, plus a
