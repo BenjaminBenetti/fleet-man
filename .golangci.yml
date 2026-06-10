@@ -28,7 +28,7 @@ linters:
             # NOTE: the internal/backend deny prefix-matches internal/backendutil
             # AND internal/backend/{coder,codespaces,devcontainer}, so clients
             # can't construct backends either — they drive them via fleetgrpc RPCs
-            # (ResolveExecCommand / Logs / PortForward / GetCoderTemplateParams /
+            # (ResolveExecCommand / Logs / Forward / GetCoderTemplateParams /
             # GetBrowserConfig / PrepareBrowser) and the Watch BrowserOpen event.
           deny:
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/state

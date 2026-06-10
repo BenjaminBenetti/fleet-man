@@ -466,6 +466,16 @@ func (devcontainerBackend *DevcontainerBackend) PortForwardCommand(containerID s
 	return exec.Command("sh", "-c", script)
 }
 
+// ForwardStdioCommand returns an unstarted *exec.Cmd that bridges one
+// connection to remotePort inside the container: socat pipes the docker
+// exec's stdin/stdout to a TCP connection opened from within the
+// container's own network namespace, so it works regardless of whether
+// the container's IP is reachable from the host.
+func (devcontainerBackend *DevcontainerBackend) ForwardStdioCommand(containerID string, remotePort int) (*exec.Cmd, bool) {
+	return exec.Command("docker", "exec", "-i", containerID,
+		"socat", "STDIO", fmt.Sprintf("TCP:localhost:%d", remotePort)), true
+}
+
 // Status reports the live state of a docker container by reading
 // `docker inspect --format {{.State.Status}}`. Maps docker's
 // fine-grained states into the coarser backend.LiveStatus enum:

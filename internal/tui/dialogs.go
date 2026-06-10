@@ -155,7 +155,7 @@ func (fleetPage *fleetPage) updateConfirmBrowserSwitch(m *model, msg tea.Msg) te
 			// clears the flag and the mode.
 			fleetPage.dialogBrowserSwitching = true
 			m.message = ""
-			return switchBrowserCmd(m.portForwards, instance, instanceKey, dataDir, f.Settings.PreferFleetLaunchEnabled(), "")
+			return switchBrowserCmd(m.portForwards, instanceKey, dataDir, f.Settings.PreferFleetLaunchEnabled(), "")
 		}
 	}
 	return nil
@@ -1907,20 +1907,15 @@ func (fleetPage *fleetPage) addPortForward(m *model, key string) tea.Cmd {
 		return nil
 	}
 
-	// The server owns backend access: it returns the forward command argv and
-	// the client runs it. A nil ResolveFunc skips the in-process direct-host
-	// fast path (the server resolves hostnames), matching the CLI's behaviour.
-	argv, err := portForwardArgvTUI(fleetPage.dialogFleet, fleetPage.dialogInst, local, remote)
+	// The server owns backend access: each accepted connection is tunnelled
+	// to the instance over the server's Forward stream (the data plane), so
+	// the forward works even against a remote server.
+	dial, err := forwardDialer(fleetPage.dialogFleet, fleetPage.dialogInst, remote)
 	if err != nil {
 		m.message = err.Error()
 		return nil
 	}
-	if len(argv) == 0 {
-		m.message = "server returned no port-forward command"
-		return nil
-	}
-	cmdFn := func(_ string, _, _ int) *exec.Cmd { return exec.Command(argv[0], argv[1:]...) }
-	if err := m.portForwards.Add(key, local, remote, cmdFn, fleetPage.pfContainerID, nil); err != nil {
+	if err := m.portForwards.Add(key, local, remote, dial); err != nil {
 		m.message = err.Error()
 		return nil
 	}

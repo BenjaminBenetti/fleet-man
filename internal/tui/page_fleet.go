@@ -95,8 +95,7 @@ type fleetPage struct {
 	homedirInput     textinput.Model
 	customMountInput textinput.Model
 
-	pfCursor      int
-	pfContainerID string
+	pfCursor int
 
 	splitPaneID     string
 	splitRef        InstanceRef // (fleet, instance) of the open split pane; zero when none
@@ -803,7 +802,6 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.mode = viewPortForward
 			fleetPage.dialogFleet = fleetPage.currentFleetName()
 			fleetPage.dialogInst = instance.Name
-			fleetPage.pfContainerID = instance.ContainerID
 			fleetPage.pfCursor = 0
 			fleetPage.textInput.SetValue("")
 			fleetPage.textInput.Placeholder = "local:remote (e.g. 8080:80)"

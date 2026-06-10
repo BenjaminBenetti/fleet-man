@@ -157,3 +157,14 @@ func TestDevcontainerUpArgsUpdateRemoteUserUID(t *testing.T) {
 		})
 	}
 }
+
+func TestForwardStdioCommandArgv(t *testing.T) {
+	cmd, ok := New().ForwardStdioCommand("cid123", 8080)
+	if !ok {
+		t.Fatalf("devcontainer backend should support a stdio bridge")
+	}
+	want := []string{"docker", "exec", "-i", "cid123", "socat", "STDIO", "TCP:localhost:8080"}
+	if !slices.Equal(cmd.Args, want) {
+		t.Fatalf("argv = %v, want %v", cmd.Args, want)
+	}
+}

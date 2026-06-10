@@ -5,19 +5,28 @@ import (
 	"io"
 	"net"
 	"sync"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
 // startProxy opens a TCP listener on localPort and proxies each accepted
-// connection to hostname:remotePort. All goroutines stop when the
-// listener is closed.
-func startProxy(localPort int, hostname string, remotePort int) (*Forward, error) {
+// connection to a target opened via dial. Accepting stops when the listener
+// is closed; live connections are tracked on the Forward so stopForward can
+// kill them too.
+func startProxy(localPort, remotePort int, dial TargetDialer) (*Forward, error) {
 	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", localPort))
 	if err != nil {
 		return nil, err
 	}
 
-	target := net.JoinHostPort(hostname, fmt.Sprintf("%d", remotePort))
 	done := make(chan struct{})
+	fwd := &Forward{
+		LocalPort:  localPort,
+		RemotePort: remotePort,
+		listener:   ln,
+		done:       done,
+		conns:      newConnSet(),
+	}
 
 	go func() {
 		defer close(done)
@@ -26,22 +35,22 @@ func startProxy(localPort int, hostname string, remotePort int) (*Forward, error
 			if err != nil {
 				return // listener closed
 			}
-			go proxy(conn, target)
+			fwd.conns.add(conn)
+			go func() {
+				defer fwd.conns.remove(conn)
+				proxy(conn, dial)
+			}()
 		}
 	}()
 
-	return &Forward{
-		LocalPort:  localPort,
-		RemotePort: remotePort,
-		listener:   ln,
-		done:       done,
-	}, nil
+	return fwd, nil
 }
 
-// proxy pipes data between a local connection and a remote target.
-func proxy(local net.Conn, target string) {
-	remote, err := net.Dial("tcp", target)
+// proxy pipes data between a local connection and a freshly dialed target.
+func proxy(local net.Conn, dial TargetDialer) {
+	remote, err := dial()
 	if err != nil {
+		flog.Warn("port-forward: dial target", "err", err)
 		local.Close()
 		return
 	}
@@ -52,20 +61,24 @@ func proxy(local net.Conn, target string) {
 	go func() {
 		defer wg.Done()
 		io.Copy(remote, local)
-		if tcpConn, ok := remote.(*net.TCPConn); ok {
-			tcpConn.CloseWrite()
-		}
+		closeWrite(remote)
 	}()
 
 	go func() {
 		defer wg.Done()
 		io.Copy(local, remote)
-		if tcpConn, ok := local.(*net.TCPConn); ok {
-			tcpConn.CloseWrite()
-		}
+		closeWrite(local)
 	}()
 
 	wg.Wait()
 	local.Close()
 	remote.Close()
+}
+
+// closeWrite half-closes c's write side when supported, so the peer sees EOF
+// while its remaining replies drain.
+func closeWrite(c io.Closer) {
+	if cw, ok := c.(closeWriter); ok {
+		_ = cw.CloseWrite()
+	}
 }
