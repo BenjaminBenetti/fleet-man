@@ -2,10 +2,13 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
+	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/tunnel"
+	"github.com/hashicorp/yamux"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -79,17 +82,35 @@ func (s *Server) proxyGRPC(_ any, serverStream grpc.ServerStream) error {
 	if sess == nil || !sess.grpc.Load() {
 		return status.Error(codes.NotFound, "unknown session or gRPC not available")
 	}
+	// Fail fast — with a clear, retryable status — while the tunnel is KNOWN down
+	// (dropped and not yet re-bound). WaitForReady below only rides out the client
+	// conn's redial of a LIVE tunnel; waiting here, with nothing to dial, would
+	// just burn the caller's whole deadline and surface a confusing
+	// DeadlineExceeded instead of "retry shortly".
+	if ym := sess.currentYamux(); ym == nil || ym.IsClosed() {
+		return errTunnelReconnecting
+	}
 	cc, err := sess.grpcClientConn()
 	if err != nil {
+		// grpc.NewClient failure is config-level (no I/O happens at build time),
+		// but translate defensively in case a tunnel error ever threads through.
+		if terr := translateTunnelErr(err); terr != err {
+			return terr
+		}
 		return status.Errorf(codes.Unavailable, "tunnel unavailable: %v", err)
 	}
 
 	// Forward all inbound metadata (incl. authorization) to the daemon.
 	clientCtx, clientCancel := context.WithCancel(metadata.NewOutgoingContext(serverStream.Context(), md.Copy()))
 	defer clientCancel()
-	clientStream, err := cc.NewStream(clientCtx, proxyStreamDesc, fullMethod)
+	// WaitForReady rides out a brief tunnel bounce: right after a reconnect the
+	// conn may still be mid-redial (see resetGRPCBackoff), and without it the RPC
+	// would fail fast on the stale TRANSIENT_FAILURE subchannel. The wait is
+	// bounded by the caller's own deadline (clientCtx derives from the inbound
+	// stream's context).
+	clientStream, err := cc.NewStream(clientCtx, proxyStreamDesc, fullMethod, grpc.WaitForReady(true))
 	if err != nil {
-		return err
+		return translateTunnelErr(err)
 	}
 
 	// Pump both directions; whichever side finishes first drives teardown. The
@@ -112,6 +133,11 @@ func (s *Server) proxyGRPC(_ any, serverStream grpc.ServerStream) error {
 				// and gRPC finalizes the stream.
 				clientCancel()
 				<-c2sErr
+				if terr := translateTunnelErr(err); terr != err {
+					// The send to the daemon died with the tunnel: report the
+					// transport blip, not an opaque internal proxy error.
+					return terr
+				}
 				return status.Errorf(codes.Internal, "proxy upstream: %v", err)
 			}
 		case err := <-c2sErr:
@@ -120,7 +146,9 @@ func (s *Server) proxyGRPC(_ any, serverStream grpc.ServerStream) error {
 			// it cleanly as the handler returns; no concurrent serverStream write.
 			serverStream.SetTrailer(clientStream.Trailer())
 			if err != io.EOF {
-				return err
+				// A daemon status passes through untouched; only an error from the
+				// gateway↔daemon transport itself is rewritten (tunnel died mid-RPC).
+				return translateTunnelErr(err)
 			}
 			return nil
 		}
@@ -132,17 +160,85 @@ func (s *Server) proxyGRPC(_ any, serverStream grpc.ServerStream) error {
 // daemon's grpc.Server over the tunnel. One per session: its custom dialer opens a
 // TagGRPC stream on the live tunnel (re-dialing after a reconnect), and h2c rides
 // that stream. The raw codec makes every RPC a byte passthrough.
+//
+// Built under s.mu: grpc.NewClient performs no I/O — the dialer closure only runs
+// later, on connect attempts from other goroutines — so no dial ever happens while
+// the lock is held. Holding mu (rather than a sync.Once) is what lets
+// resetGRPCBackoff and closeGRPC read the conn without racing the lazy build.
 func (s *session) grpcClientConn() (*grpc.ClientConn, error) {
-	s.grpcOnce.Do(func() {
-		s.grpcCC, s.grpcCCErr = grpc.NewClient("passthrough:///fleet-tunnel",
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-			grpc.WithContextDialer(func(_ context.Context, _ string) (net.Conn, error) {
-				return s.open(tunnel.TagGRPC)
-			}),
-			grpc.WithDefaultCallOptions(grpc.ForceCodec(tunnel.RawCodec{})),
-		)
-	})
-	return s.grpcCC, s.grpcCCErr
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.grpcCC != nil {
+		return s.grpcCC, nil
+	}
+	cc, err := grpc.NewClient("passthrough:///fleet-tunnel",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(_ context.Context, _ string) (net.Conn, error) {
+			return s.open(tunnel.TagGRPC)
+		}),
+		grpc.WithDefaultCallOptions(grpc.ForceCodec(tunnel.RawCodec{})),
+	)
+	if err != nil {
+		return nil, err
+	}
+	s.grpcCC = cc
+	return cc, nil
+}
+
+// resetGRPCBackoff kicks the session's cached gRPC client connection (if any) out
+// of its connect backoff. Called by registry.bind once a fresh tunnel is
+// installed: the conn's backoff was armed against the OLD, dead tunnel (each
+// failed redial escalates it, up to ~2 minutes) and would otherwise outlive the
+// tunnel it timed out against — leaving remote RPCs fail-fasting long after the
+// daemon has reconnected.
+func (s *session) resetGRPCBackoff() {
+	s.mu.Lock()
+	cc := s.grpcCC
+	s.mu.Unlock()
+	if cc != nil {
+		cc.ResetConnectBackoff()
+	}
+}
+
+// closeGRPC closes and clears the session's cached gRPC client connection (if
+// any). Called when the session is reaped: a reaped session object is never
+// resurrected (a secret/token reclaim past the TTL mints a NEW session), so an
+// unclosed conn would leak its redial loop forever.
+func (s *session) closeGRPC() {
+	s.mu.Lock()
+	cc := s.grpcCC
+	s.grpcCC = nil
+	s.mu.Unlock()
+	if cc != nil {
+		_ = cc.Close()
+	}
+}
+
+// errTunnelReconnecting is the user-facing status for failures of the
+// gateway↔daemon transport itself. Unavailable marks it retryable, and the
+// message says what to do — unlike the raw dial error ("transport: Error while
+// dialing: session shutdown") it replaces, which reads like a fleet outage.
+var errTunnelReconnecting = status.Error(codes.Unavailable,
+	"fleet daemon is reconnecting to the gateway — retry shortly")
+
+// translateTunnelErr maps failures of the gateway↔daemon transport into
+// errTunnelReconnecting, and passes every other error through untouched — the
+// daemon's own gRPC statuses (errors that arrived OVER the tunnel) must reach
+// the client unmodified. Classification is by sentinel (errNoTunnel,
+// yamux.ErrSessionShutdown) plus substring, because grpc-go flattens dial errors
+// into status text (there is no wrapped cause left to errors.Is against).
+func translateTunnelErr(err error) error {
+	if err == nil || err == io.EOF {
+		return err
+	}
+	if errors.Is(err, errNoTunnel) || errors.Is(err, yamux.ErrSessionShutdown) {
+		return errTunnelReconnecting
+	}
+	msg := err.Error()
+	if strings.Contains(msg, yamux.ErrSessionShutdown.Error()) || strings.Contains(msg, errNoTunnel.Error()) {
+		return errTunnelReconnecting
+	}
+	return err
 }
 
 // forwardServerToClient copies inbound (external client) messages to the daemon.

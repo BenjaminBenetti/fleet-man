@@ -165,6 +165,13 @@ func (r *registry) bind(s *session, ym *yamux.Session) {
 	if old != nil && old != ym {
 		_ = old.Close()
 	}
+
+	// The session's cached gRPC client conn may be sitting in connect backoff
+	// armed against the old, dead tunnel (up to ~2 minutes after repeated failed
+	// redials). That backoff must not outlive the tunnel it timed out against:
+	// kick the conn so it redials the fresh tunnel immediately — setYamux above
+	// already installed it, so the redial lands on the live session.
+	s.resetGRPCBackoff()
 }
 
 // release frees a reservation whose handshake failed before bind. It only removes
@@ -194,13 +201,23 @@ func (r *registry) lookup(publicID string) *session {
 // after the window is the URL freed.
 func (r *registry) reap(now time.Time, ttl time.Duration) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	// Iterate bySecret (the superset): it holds bound sessions AND unbound
 	// reservations, both of which reapable() can evict.
+	var evicted []*session
 	for secret, s := range r.bySecret {
 		if s.reapable(now, ttl) {
 			delete(r.bySecret, secret)
 			delete(r.byPublic, s.publicID)
+			evicted = append(evicted, s)
 		}
+	}
+	r.mu.Unlock()
+
+	// Close each evicted session's cached gRPC client conn (outside the registry
+	// lock). A reaped session object is never resurrected — a reclaim past the
+	// TTL mints a NEW session — so an unclosed conn would keep redialing the dead
+	// tunnel (and leak its goroutines) forever.
+	for _, s := range evicted {
+		s.closeGRPC()
 	}
 }
