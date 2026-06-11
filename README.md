@@ -377,6 +377,25 @@ h2c with no TLS in front of it (a trusted private network).
 > RPC works remotely today; remote interactive shell awaits a server-side `Exec`
 > handler.
 
+### Fleet Armada (multiple remote fleets)
+
+Instead of juggling `FLEET_GATEWAY`/`FLEET_TOKEN` by hand, register remote fleets
+once in **Settings → Fleet Armada**: press **+ Remote Fleet**, paste the gateway
+URL and the remote's bearer token, and fleet runs a connection test before
+saving. Each registered remote shows a live connection status (pinged while the
+settings page is open) and a `[ delete ]` button (press twice to confirm).
+
+The main page's list border carries an **Armada selector**
+(`╭─ Armada [ local ] ───╮`). Select it — keyboard or mouse — to open a dropdown
+of `local` + every registered remote, and pick one to **switch the TUI live**:
+the connection, fleet list, sessions, and shells all retarget to the chosen
+daemon. Registering a remote never switches to it; every boot starts on `local`
+unless `FLEET_GATEWAY` is set.
+
+The registry is stored on your own machine at `~/.fleet/armada.json` (mode
+`0600` — it holds bearer tokens) and always round-trips through your **local**
+daemon, even while the TUI is connected to a remote fleet.
+
 ## Environment Variables
 
 Variables fleet **reads** (set them to configure behavior):

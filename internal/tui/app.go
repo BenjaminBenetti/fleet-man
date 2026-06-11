@@ -45,6 +45,21 @@ type model struct {
 	// settings page renders it read-only; nil means "no status received yet".
 	remoteMcpStatus *fleetgrpc.RemoteMcpStatus
 
+	// Fleet Armada: the registry of remote fleets (loaded from the LOCAL
+	// daemon — see armada_client.go), the latest ping outcome per remote URL,
+	// and whether the settings-page status-sweep tick is armed (guards against
+	// stacking a second tick loop on settings re-entry).
+	armadaRemotes   []configutil.ArmadaRemote
+	armadaStatus    map[string]armadaStatus
+	armadaTickArmed bool
+
+	// bootGateway/bootToken capture FLEET_GATEWAY/FLEET_TOKEN as they were at
+	// startup. A runtime armada switch rewrites the env vars, so these preserve
+	// the boot remote (and its token) as a dropdown entry the user can switch
+	// back to even when it isn't registered.
+	bootGateway string
+	bootToken   string
+
 	// Page routing
 	currentPage Page
 	fleetPage   *fleetPage // persistent — has running state accessed by background message handlers
@@ -143,6 +158,9 @@ func newModel() model {
 		spinner:       spinnerModel,
 		agentSpinner:  agentSpinnerModel,
 		inHostTmux:    os.Getenv("TMUX") != "",
+		armadaStatus:  make(map[string]armadaStatus),
+		bootGateway:   os.Getenv("FLEET_GATEWAY"),
+		bootToken:     os.Getenv("FLEET_TOKEN"),
 	}
 
 	// Create the fleet page (persistent — background handlers reference it)
@@ -467,6 +485,9 @@ func (m model) Init() tea.Cmd {
 		// browser.open from in-container senders arrives as a Watch BrowserOpen
 		// event (the server owns the control sockets); see watchBrowserOpenMsg.
 		m.currentPage.Init(&m),
+		// The armada registry feeds the main-page selector dropdown, so it
+		// loads at boot, not just when the settings page opens.
+		fetchArmadaCmd(),
 	}
 	if len(m.creating) > 0 {
 		cmds = append(cmds, pollCreatingCmd())
@@ -530,9 +551,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			hit := false
 			switch page := m.currentPage.(type) {
 			case *fleetPage:
+				// The Armada selector lives ON the list box's top border line;
+				// a click inside the label's column span focuses it and the
+				// synthesized Enter opens the dropdown.
+				if page.mode == viewNormal && page.armadaY >= 0 && mouseMsg.Y == page.armadaY &&
+					mouseMsg.X >= page.armadaX0 && mouseMsg.X < page.armadaX1 {
+					page.armadaFocused = true
+					hit = true
+					break
+				}
 				if page.mode == viewNormal && page.listRowY >= 0 {
 					if idx := mouseMsg.Y - page.listRowY; idx >= 0 && idx < len(page.rows) && page.rows[idx].selectable() {
 						page.cursor = idx
+						page.armadaFocused = false
 						hit = true
 						if page.rows[idx].kind == rowInstance {
 							synthesizedKey = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
@@ -675,6 +706,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The watcher reconnects on its own; nothing rendered from the stream
 		// yet in Step 5, so this is a no-op (do not crash on a dropped stream).
 		return m, spinCmd
+
+	case armadaLoadedMsg, armadaPingTickMsg, armadaPingResultMsg,
+		armadaTestResultMsg, armadaSaveResultMsg, armadaSwitchedMsg:
+		// Fleet Armada messages are model-level: the registry and per-remote
+		// statuses outlive page switches (the main-page selector needs them
+		// too), so they are not forwarded to the active page.
+		return m, tea.Batch(spinCmd, m.handleArmadaMsg(msg))
 
 	case updateCheckMsg:
 		if msg.latestVersion != "" {
@@ -1099,11 +1137,11 @@ func Run() error {
 	program := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	// Subscribe to the fleet server's Watch stream for the TUI's lifetime,
-	// injecting events into the program. In P2 Step 5 these only populate the
-	// m.pstate / m.runtime caches; the View still renders from the legacy fields
-	// until the read-path flip (Steps 6–7).
+	// injecting events into the program. Started via watchCtl so an armada
+	// switch can bounce the stream onto a new endpoint; cancelling watchCtx
+	// stops the current stream and any bounced successor.
 	watchCtx, watchCancel := context.WithCancel(context.Background())
-	go runWatchStream(watchCtx, program)
+	startWatchStream(watchCtx, program)
 
 	finalModel, err := program.Run()
 	watchCancel()

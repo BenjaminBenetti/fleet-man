@@ -96,6 +96,9 @@ func TestResumeMsgNilInnerReturnsCmd(t *testing.T) {
 	}
 }
 
+// TestUpdateNormalWrapsCursorFromTopToBottom verifies the navigation cycle
+// through the Armada selector: up from the top row focuses the selector (the
+// cursor leaves the rows), and a second up lands on the bottom row.
 func TestUpdateNormalWrapsCursorFromTopToBottom(t *testing.T) {
 	fp := newFleetPage()
 	fp.rows = []row{
@@ -107,12 +110,22 @@ func TestUpdateNormalWrapsCursorFromTopToBottom(t *testing.T) {
 	m := &model{fleetPage: fp}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyUp})
+	if !fp.armadaFocused {
+		t.Fatalf("up from the top row should focus the Armada selector")
+	}
 
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyUp})
+	if fp.armadaFocused {
+		t.Fatalf("up from the Armada selector should unfocus it")
+	}
 	if fp.cursor != len(fp.rows)-1 {
 		t.Fatalf("cursor = %d, want %d", fp.cursor, len(fp.rows)-1)
 	}
 }
 
+// TestUpdateNormalWrapsCursorFromBottomToTop verifies the inverse cycle: down
+// from the bottom row focuses the Armada selector, and a second down lands on
+// the top row.
 func TestUpdateNormalWrapsCursorFromBottomToTop(t *testing.T) {
 	fp := newFleetPage()
 	fp.rows = []row{
@@ -124,7 +137,14 @@ func TestUpdateNormalWrapsCursorFromBottomToTop(t *testing.T) {
 	m := &model{fleetPage: fp}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyDown})
+	if !fp.armadaFocused {
+		t.Fatalf("down from the bottom row should focus the Armada selector")
+	}
 
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyDown})
+	if fp.armadaFocused {
+		t.Fatalf("down from the Armada selector should unfocus it")
+	}
 	if fp.cursor != 0 {
 		t.Fatalf("cursor = %d, want 0", fp.cursor)
 	}

@@ -173,6 +173,40 @@ const (
 )
 
 // updateChooseBrowserLaunch handles the dialog shown the first time the
+// updateArmadaSelect handles the Armada dropdown (opened from the selector on
+// the list box's top border): j/k move, enter switches the TUI's active fleetd
+// connection to the chosen entry, esc cancels. Selecting the current entry is
+// a no-op — registration and selection are deliberately separate.
+func (fleetPage *fleetPage) updateArmadaSelect(m *model, msg tea.Msg) tea.Cmd {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return nil
+	}
+	entries := m.armadaEntries()
+	n := len(entries)
+	switch keyMsg.String() {
+	case "esc", "q", "ctrl+c":
+		fleetPage.mode = viewNormal
+		return nil
+	case "up", "k":
+		fleetPage.armadaDialogRow = (fleetPage.armadaDialogRow - 1 + n) % n
+		return nil
+	case "down", "j", "tab":
+		fleetPage.armadaDialogRow = (fleetPage.armadaDialogRow + 1) % n
+		return nil
+	case "enter", " ":
+		fleetPage.mode = viewNormal
+		fleetPage.armadaFocused = false
+		entry := entries[min(fleetPage.armadaDialogRow, n-1)]
+		if entry.current {
+			m.message = "Already connected to " + entry.label
+			return nil
+		}
+		return m.switchArmada(entry)
+	}
+	return nil
+}
+
 // browser is opened on a fleet whose workspace configures both an
 // initialUrl and a Fleet Launch landing page. Navigation matches the rest
 // of fleet — j/k or arrows move the cursor, enter/space chooses the

@@ -29,4 +29,5 @@ const (
 	viewConfirmDeleteSession
 	viewConfirmBrowserSwitch
 	viewChooseBrowserLaunch
+	viewArmadaSelect
 )

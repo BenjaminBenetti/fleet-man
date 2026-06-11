@@ -11,11 +11,61 @@ import (
 	"google.golang.org/grpc"
 )
 
-// tuiConnectedOnce ensures the server's FleetTUIConnected hook fires exactly
-// once per TUI process — on the first successful Watch open — rather than on
-// every reconnect. "Once per TUI opening" is the contract; the server coalesces
-// across multiple TUIs anyway.
-var tuiConnectedOnce sync.Once
+// watchCtl coordinates the watch-stream goroutine's lifetime so the armada
+// switch can bounce it onto a new endpoint: cancel the current stream's ctx,
+// then start a fresh goroutine whose Dial re-reads the (swapped) env vars. It
+// also owns the once-per-CONNECTION FleetTUIConnected nudge — fired on the
+// first successful Watch open after each start/bounce, not on reconnects, so
+// each daemon the TUI lands on gets its reconcile nudge exactly once.
+var watchCtl struct {
+	mu                sync.Mutex
+	parent            context.Context
+	program           *tea.Program
+	cancel            context.CancelFunc
+	notifiedConnected bool
+}
+
+// startWatchStream starts the watch goroutine for the TUI's lifetime.
+// Cancelling parent (Run() does, after program.Run returns) stops it and any
+// bounced successor.
+func startWatchStream(parent context.Context, program *tea.Program) {
+	watchCtl.mu.Lock()
+	defer watchCtl.mu.Unlock()
+	watchCtl.parent = parent
+	watchCtl.program = program
+	watchCtl.notifiedConnected = false
+	ctx, cancel := context.WithCancel(parent)
+	watchCtl.cancel = cancel
+	go runWatchStream(ctx, program)
+}
+
+// bounceWatchStream kills the current watch stream and starts a fresh one,
+// which dials whatever endpoint the env vars now select. No-op when the
+// stream was never started (tests).
+func bounceWatchStream() {
+	watchCtl.mu.Lock()
+	defer watchCtl.mu.Unlock()
+	if watchCtl.cancel == nil {
+		return
+	}
+	watchCtl.cancel()
+	watchCtl.notifiedConnected = false
+	ctx, cancel := context.WithCancel(watchCtl.parent)
+	watchCtl.cancel = cancel
+	go runWatchStream(ctx, watchCtl.program)
+}
+
+// notifyTUIConnectedOnce fires the server's FleetTUIConnected hook on the
+// first successful Watch open of the current connection (see watchCtl).
+func notifyTUIConnectedOnce() {
+	watchCtl.mu.Lock()
+	already := watchCtl.notifiedConnected
+	watchCtl.notifiedConnected = true
+	watchCtl.mu.Unlock()
+	if !already {
+		go func() { _ = notifyTUIConnectedRemote() }()
+	}
+}
 
 // Watch-stream messages injected into the bubbletea loop by the watcher
 // goroutine. In P2 Step 5 these only populate the m.pstate / m.runtime caches;
@@ -89,13 +139,13 @@ func watchOnce(ctx context.Context, program *tea.Program) bool {
 
 	// A successful Watch open means the TUI has connected to a live server.
 	// Nudge the server's once-per-open reconciliation, on a separate goroutine
-	// so the bounded RPC never stalls this event pump, and only once per launch
-	// (not on reconnects). The error is intentionally dropped: this is a pure
-	// best-effort nudge, the SERVER logs the reconcile's own outcome, and a
-	// failed nudge means the server is unreachable — already surfaced to the
-	// user via watchErrMsg. (Client code also must not write the server-owned
-	// event log, per the import boundary.)
-	tuiConnectedOnce.Do(func() { go func() { _ = notifyTUIConnectedRemote() }() })
+	// so the bounded RPC never stalls this event pump, and only once per
+	// connection (not on reconnects; re-armed by an armada switch). The error
+	// is intentionally dropped: this is a pure best-effort nudge, the SERVER
+	// logs the reconcile's own outcome, and a failed nudge means the server is
+	// unreachable — already surfaced to the user via watchErrMsg. (Client code
+	// also must not write the server-owned event log, per the import boundary.)
+	notifyTUIConnectedOnce()
 
 	for {
 		ev, err := stream.Recv()
