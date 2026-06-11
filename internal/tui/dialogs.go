@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	devcontainercheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/devcontainer"
 	homedircheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/homedir"
 	tea "github.com/charmbracelet/bubbletea"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 // ===========================================
@@ -902,9 +905,11 @@ type devcontainerInspectedMsg struct {
 	err             error
 }
 
-// inspectDevcontainerCmd runs a shallow clone and a devcontainer-check
-// in a background goroutine. The Repo handle is closed before the
-// message is returned so the temp clone never outlives the command.
+// inspectDevcontainerCmd asks the SERVER to clone the repo and check for a
+// devcontainer config, in a background goroutine. Inspection runs on the
+// daemon's host — the machine that will actually clone at provision time — so
+// a remote TUI gets the verdict of the daemon's git credentials, not its own
+// (issue #141 note 5).
 //
 // A clone failure surfaces with err set so the caller can report it
 // rather than blindly assuming the repo lacks a devcontainer — an
@@ -913,17 +918,39 @@ type devcontainerInspectedMsg struct {
 // before being offered a setup workflow.
 func inspectDevcontainerCmd(fleetName, remoteURL string) tea.Cmd {
 	return func() tea.Msg {
-		repo, err := inspector.Open(remoteURL, "")
-		if err != nil {
-			return devcontainerInspectedMsg{fleetName: fleetName, err: err}
+		reply, err := inspectRepoRemote(remoteURL, "", false)
+		if grpcstatus.Code(err) == grpccodes.Unimplemented {
+			// Compatibility fallback for daemons that predate InspectRepo:
+			// clone + check locally like the TUI always used to.
+			return inspectDevcontainerLocal(fleetName, remoteURL)
 		}
-		defer repo.Close()
-		present, err := devcontainercheck.Present(repo)
+		if err != nil {
+			// Unwrap the status so the user sees the clone error itself, not
+			// the "rpc error: code = ..." framing around it.
+			return devcontainerInspectedMsg{fleetName: fleetName, err: errors.New(grpcstatus.Convert(err).Message())}
+		}
 		return devcontainerInspectedMsg{
 			fleetName:       fleetName,
-			hasDevcontainer: present,
-			err:             err,
+			hasDevcontainer: reply.GetHasDevcontainer(),
 		}
+	}
+}
+
+// inspectDevcontainerLocal is the pre-InspectRepo behavior — a shallow clone
+// with THIS process's credentials — kept only as the compatibility fallback
+// above. The Repo handle is closed before the message is returned so the temp
+// clone never outlives the command.
+func inspectDevcontainerLocal(fleetName, remoteURL string) tea.Msg {
+	repo, err := inspector.Open(remoteURL, "")
+	if err != nil {
+		return devcontainerInspectedMsg{fleetName: fleetName, err: err}
+	}
+	defer repo.Close()
+	present, err := devcontainercheck.Present(repo)
+	return devcontainerInspectedMsg{
+		fleetName:       fleetName,
+		hasDevcontainer: present,
+		err:             err,
 	}
 }
 
@@ -1204,26 +1231,44 @@ type homedirDetectedMsg struct {
 	err       error
 }
 
-// detectHomedirCmd opens an inspector handle for the fleet's remote
-// and runs the home-dir check against it in a background goroutine.
-// The handle is closed before the message is returned so the temp
-// clone never outlives the command.
+// detectHomedirCmd asks the SERVER to clone the fleet's remote and run the
+// home-dir check, in a background goroutine. Detection runs on the daemon's
+// host (issue #141 note 5) — deliberately so: the check may docker-pull the
+// devcontainer image, and the daemon's docker is the one provisioning uses.
 //
 // Errors are surfaced as part of homedirDetectedMsg; the caller
 // treats them the same as a successful empty result (spinner stops,
 // nothing populated) because failure is expected (no devcontainer.json,
 // missing docker, network blocked, …) and the user can always type a
-// path manually.
+// path manually. A reply with an empty homeDir is the server's "no hint"
+// answer and maps to the same outcome — handleHomedirDetected ignores it.
 func detectHomedirCmd(fleetName, remoteURL, branch string) tea.Cmd {
 	return func() tea.Msg {
-		repo, err := inspector.Open(remoteURL, branch)
+		reply, err := inspectRepoRemote(remoteURL, branch, true)
+		if grpcstatus.Code(err) == grpccodes.Unimplemented {
+			// Compatibility fallback for daemons that predate InspectRepo:
+			// clone + detect locally like the TUI always used to.
+			return detectHomedirLocal(fleetName, remoteURL, branch)
+		}
 		if err != nil {
 			return homedirDetectedMsg{fleetName: fleetName, err: err}
 		}
-		defer repo.Close()
-		homeDir, err := homedircheck.Detect(repo)
-		return homedirDetectedMsg{fleetName: fleetName, homeDir: homeDir, err: err}
+		return homedirDetectedMsg{fleetName: fleetName, homeDir: reply.GetHomeDir()}
 	}
+}
+
+// detectHomedirLocal is the pre-InspectRepo behavior — a local clone + check
+// with THIS process's credentials/docker — kept only as the compatibility
+// fallback above. The handle is closed before the message is returned so the
+// temp clone never outlives the command.
+func detectHomedirLocal(fleetName, remoteURL, branch string) tea.Msg {
+	repo, err := inspector.Open(remoteURL, branch)
+	if err != nil {
+		return homedirDetectedMsg{fleetName: fleetName, err: err}
+	}
+	defer repo.Close()
+	homeDir, err := homedircheck.Detect(repo)
+	return homedirDetectedMsg{fleetName: fleetName, homeDir: homeDir, err: err}
 }
 
 // openEditFleetDialog opens the edit-fleet dialog for the fleet at the
