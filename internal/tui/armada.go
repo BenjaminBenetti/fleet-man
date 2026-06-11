@@ -538,7 +538,6 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 		fleetPage.savedGroups = make(map[string]savedGroup)
 		fleetPage.collapsed = make(map[string]bool)
 		fleetPage.cursor = 0
-		fleetPage.armadaFocused = false
 		fleetPage.buildRows(m)
 	}
 

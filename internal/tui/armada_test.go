@@ -425,14 +425,11 @@ func TestArmadaSelectorMouseClickOpensDropdown(t *testing.T) {
 		Y:      fp.armadaY,
 	}
 	next, _ := m.Update(click)
-	nm := next.(model)
-	if !nm.fleetPage.armadaFocused && nm.fleetPage.mode != viewArmadaSelect {
-		t.Fatalf("click on the selector should focus it and open the dropdown (focused=%v mode=%v)",
-			nm.fleetPage.armadaFocused, nm.fleetPage.mode)
+	if next.(model).fleetPage.mode != viewArmadaSelect {
+		t.Fatalf("click on the selector should open the dropdown, mode = %v", next.(model).fleetPage.mode)
 	}
 
-	// A click well outside the label span must NOT focus the selector.
-	fp.armadaFocused = false
+	// A click well outside the label span must NOT open the selector.
 	fp.mode = viewNormal
 	miss := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: fp.armadaX1 + 5, Y: fp.armadaY}
 	next, _ = m.Update(miss)

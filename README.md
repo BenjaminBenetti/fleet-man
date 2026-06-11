@@ -94,6 +94,7 @@ fleet up my-project/agent-3
 | `d` | Delete instance/fleet |
 | `c` | Open VS Code |
 | `l` | View logs |
+| `A` | Switch armada (remote fleet) |
 | `r` | Refresh |
 | `q` | Quit |
 
@@ -386,8 +387,9 @@ saving. Each registered remote shows a live connection status (pinged while the
 settings page is open) and a `[ delete ]` button (press twice to confirm).
 
 The main page's list border carries an **Armada selector**
-(`╭─ Armada [ local ] ───╮`). Select it — keyboard or mouse — to open a dropdown
-of `local` + every registered remote, and pick one to **switch the TUI live**:
+(`╭─ Armada [ local ] ───╮`). Open it with the **`A`** key or by clicking the
+label to get a dropdown of `local` + every registered remote, and pick one to
+**switch the TUI live**:
 the connection, fleet list, sessions, and shells all retarget to the chosen
 daemon. Registering a remote never switches to it; every boot starts on `local`
 unless `FLEET_GATEWAY` (or `FLEET_SERVER`) is set, in which case that boot

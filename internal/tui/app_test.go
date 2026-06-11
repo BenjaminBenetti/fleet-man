@@ -96,9 +96,9 @@ func TestResumeMsgNilInnerReturnsCmd(t *testing.T) {
 	}
 }
 
-// TestUpdateNormalWrapsCursorFromTopToBottom verifies the navigation cycle
-// through the Armada selector: up from the top row focuses the selector (the
-// cursor leaves the rows), and a second up lands on the bottom row.
+// TestUpdateNormalWrapsCursorFromTopToBottom verifies k/up from the top row
+// wraps to the bottom row. The Armada selector is OUTSIDE this cycle (opened
+// by the `A` key), so row navigation and its wrap behaviour are unchanged.
 func TestUpdateNormalWrapsCursorFromTopToBottom(t *testing.T) {
 	fp := newFleetPage()
 	fp.rows = []row{
@@ -110,22 +110,14 @@ func TestUpdateNormalWrapsCursorFromTopToBottom(t *testing.T) {
 	m := &model{fleetPage: fp}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyUp})
-	if !fp.armadaFocused {
-		t.Fatalf("up from the top row should focus the Armada selector")
-	}
 
-	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyUp})
-	if fp.armadaFocused {
-		t.Fatalf("up from the Armada selector should unfocus it")
-	}
 	if fp.cursor != len(fp.rows)-1 {
 		t.Fatalf("cursor = %d, want %d", fp.cursor, len(fp.rows)-1)
 	}
 }
 
-// TestUpdateNormalWrapsCursorFromBottomToTop verifies the inverse cycle: down
-// from the bottom row focuses the Armada selector, and a second down lands on
-// the top row.
+// TestUpdateNormalWrapsCursorFromBottomToTop verifies j/down from the bottom
+// row wraps to the top row (Armada selector stays out of the row cycle).
 func TestUpdateNormalWrapsCursorFromBottomToTop(t *testing.T) {
 	fp := newFleetPage()
 	fp.rows = []row{
@@ -137,16 +129,30 @@ func TestUpdateNormalWrapsCursorFromBottomToTop(t *testing.T) {
 	m := &model{fleetPage: fp}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyDown})
-	if !fp.armadaFocused {
-		t.Fatalf("down from the bottom row should focus the Armada selector")
-	}
 
-	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyDown})
-	if fp.armadaFocused {
-		t.Fatalf("down from the Armada selector should unfocus it")
-	}
 	if fp.cursor != 0 {
 		t.Fatalf("cursor = %d, want 0", fp.cursor)
+	}
+}
+
+// TestArmadaKeyOpensDropdown verifies the dedicated `A` key opens the Armada
+// dropdown without disturbing the row cursor.
+func TestArmadaKeyOpensDropdown(t *testing.T) {
+	fp := newFleetPage()
+	fp.rows = []row{
+		{kind: rowFleetHeader, fleetName: "alpha"},
+		{kind: rowSettings},
+	}
+	fp.cursor = 0
+	m := &model{fleetPage: fp, armadaStatus: make(map[string]armadaStatus)}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+
+	if fp.mode != viewArmadaSelect {
+		t.Fatalf("`A` should open the armada dropdown, mode = %v", fp.mode)
+	}
+	if fp.cursor != 0 {
+		t.Fatalf("`A` must not move the row cursor, cursor = %d", fp.cursor)
 	}
 }
 

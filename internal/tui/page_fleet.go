@@ -115,13 +115,12 @@ type fleetPage struct {
 	// row index. -1 means "not yet rendered" or "no clickable rows".
 	listRowY int
 
-	// Armada selector: a navigable target embedded in the list box's TOP
-	// BORDER line ("╭─ Armada [ local ] ──╮"), one step above the first row
-	// in the navigation cycle. armadaFocused is its keyboard focus;
-	// armadaDialogRow is the dropdown cursor while mode == viewArmadaSelect.
-	// armadaY + armadaX0/armadaX1 record the label's on-screen position and
-	// column span during View() for mouse hit-testing (-1 = not rendered).
-	armadaFocused   bool
+	// Armada selector: a target embedded in the list box's TOP BORDER line
+	// ("╭─ Armada [ local ] ──╮"), opened by the `A` key or a mouse click on
+	// the label (it sits outside the j/k row cycle). armadaDialogRow is the
+	// dropdown cursor while mode == viewArmadaSelect. armadaY + armadaX0/X1
+	// record the label's on-screen position and column span during View() for
+	// mouse hit-testing (-1 = not rendered).
 	armadaDialogRow int
 	armadaY         int
 	armadaX0        int
@@ -403,26 +402,6 @@ func (fleetPage *fleetPage) currentRow() *row {
 	return &fleetPage.rows[fleetPage.cursor]
 }
 
-// firstSelectable returns the index of the first selectable row (-1 if none).
-func (fleetPage *fleetPage) firstSelectable() int {
-	for i, r := range fleetPage.rows {
-		if r.selectable() {
-			return i
-		}
-	}
-	return -1
-}
-
-// lastSelectable returns the index of the last selectable row (-1 if none).
-func (fleetPage *fleetPage) lastSelectable() int {
-	for i := len(fleetPage.rows) - 1; i >= 0; i-- {
-		if fleetPage.rows[i].selectable() {
-			return i
-		}
-	}
-	return -1
-}
-
 // openArmadaSelect opens the armada dropdown with the cursor on the current
 // connection, refreshing the remotes' status indicators.
 func (fleetPage *fleetPage) openArmadaSelect(m *model) tea.Cmd {
@@ -520,50 +499,23 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 	case tea.KeyMsg:
 		m.message = ""
 
-		// The Armada selector (on the list box's top border) holds focus: it
-		// sits one step above the first row in the navigation cycle, and the
-		// single-letter row actions don't apply while it's focused.
-		if fleetPage.armadaFocused {
-			switch msg.String() {
-			case "q", "ctrl+c", "ctrl+q":
-				m.quitting = true
-				return tea.Quit
-			case "up", "k":
-				fleetPage.armadaFocused = false
-				if i := fleetPage.lastSelectable(); i >= 0 {
-					fleetPage.cursor = i
-				}
-			case "down", "j":
-				fleetPage.armadaFocused = false
-				if i := fleetPage.firstSelectable(); i >= 0 {
-					fleetPage.cursor = i
-				}
-			case "enter", " ":
-				return fleetPage.openArmadaSelect(m)
-			case "esc":
-				fleetPage.armadaFocused = false
-			}
-			return nil
-		}
-
 		switch msg.String() {
 		case "q", "ctrl+c", "ctrl+q":
 			m.quitting = true
 			return tea.Quit
 
 		case "up", "k":
-			if fleetPage.cursor == fleetPage.firstSelectable() {
-				fleetPage.armadaFocused = true
-			} else {
-				fleetPage.moveCursor(-1)
-			}
+			fleetPage.moveCursor(-1)
 
 		case "down", "j":
-			if fleetPage.cursor == fleetPage.lastSelectable() {
-				fleetPage.armadaFocused = true
-			} else {
-				fleetPage.moveCursor(1)
-			}
+			fleetPage.moveCursor(1)
+
+		// The Armada selector lives on the list box's top border, outside the
+		// j/k row cycle (so row navigation and its wrap behaviour are
+		// unchanged). A dedicated key opens its dropdown; the mouse synthesizes
+		// the same key when the border label is clicked.
+		case "A":
+			return fleetPage.openArmadaSelect(m)
 
 		case "shift+up", "K":
 			fleetPage.moveCursorToInstance(-1)
@@ -1068,7 +1020,7 @@ func (fleetPage *fleetPage) renderArmadaBorder(m *model, width int) string {
 	labelWidth := lipgloss.Width(label)
 
 	styledLabel := label
-	if fleetPage.armadaFocused || fleetPage.mode == viewArmadaSelect {
+	if fleetPage.mode == viewArmadaSelect {
 		styledLabel = selectedStyle.Render(label)
 	}
 
@@ -1079,19 +1031,16 @@ func (fleetPage *fleetPage) renderArmadaBorder(m *model, width int) string {
 }
 
 func (fleetPage *fleetPage) contextualHelpKeys(m *model) []string {
-	if fleetPage.armadaFocused {
-		return []string{"enter: switch armada", "j/k: navigate", "q: quit"}
-	}
 	r := fleetPage.currentRow()
 	if r == nil {
-		return []string{"n: new fleet", "q: quit"}
+		return []string{"n: new fleet", "A: armada", "q: quit"}
 	}
 
 	switch r.kind {
 	case rowFleetHeader:
 		return []string{
 			"j/k: navigate", "space/enter: expand/collapse", "e: edit fleet",
-			"a: add instance", "n: new fleet", "d: delete fleet", "r: refresh", "q: quit",
+			"a: add instance", "n: new fleet", "d: delete fleet", "A: armada", "r: refresh", "q: quit",
 		}
 
 	case rowInstance:
@@ -1189,8 +1138,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 	}
 
 	for i, r := range fleetPage.rows {
-		// While the Armada selector holds focus, no row shows the cursor.
-		isSelected := i == fleetPage.cursor && !fleetPage.armadaFocused
+		isSelected := i == fleetPage.cursor
 		cursor := "  "
 		if isSelected {
 			cursor = cursorStyle.Render("> ")

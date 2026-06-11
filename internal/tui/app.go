@@ -568,18 +568,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch page := m.currentPage.(type) {
 			case *fleetPage:
 				// The Armada selector lives ON the list box's top border line;
-				// a click inside the label's column span focuses it and the
-				// synthesized Enter opens the dropdown.
+				// a click inside the label's column span opens the dropdown by
+				// synthesizing the same `A` key the keyboard path uses.
 				if page.mode == viewNormal && page.armadaY >= 0 && mouseMsg.Y == page.armadaY &&
 					mouseMsg.X >= page.armadaX0 && mouseMsg.X < page.armadaX1 {
-					page.armadaFocused = true
+					synthesizedKey = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}}
 					hit = true
 					break
 				}
 				if page.mode == viewNormal && page.listRowY >= 0 {
 					if idx := mouseMsg.Y - page.listRowY; idx >= 0 && idx < len(page.rows) && page.rows[idx].selectable() {
 						page.cursor = idx
-						page.armadaFocused = false
 						hit = true
 						if page.rows[idx].kind == rowInstance {
 							synthesizedKey = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
