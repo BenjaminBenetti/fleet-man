@@ -134,9 +134,21 @@ func NewManager(mcpPort int, clientVersion string, publish func(*fleetgrpc.Remot
 // control). It is NON-BLOCKING: it sets state, cancels any in-flight attempt so
 // it re-evaluates, and signals the loop — so it is safe to call while holding
 // other locks (e.g. the service's config-write lock in SetConfig).
+//
+// An UNCHANGED desired state is a strict no-op. SetConfig calls Reconcile on
+// EVERY config save, and most saves don't touch the remote settings — those
+// must not bounce an established tunnel, because for a remote client (TUI over
+// FLEET_GATEWAY) that tunnel carries the SetConfig RPC's own reply: cancelling
+// the attempt would tear down the yamux session mid-RPC and the client would
+// see its successful save fail with an Unavailable/EOF.
 func (m *Manager) Reconcile(mcpEnabled, fleetEnabled bool, gatewayURL string) {
+	next := desiredState{mcp: mcpEnabled, grpc: fleetEnabled, gatewayURL: strings.TrimSpace(gatewayURL)}
 	m.mu.Lock()
-	m.desired = desiredState{mcp: mcpEnabled, grpc: fleetEnabled, gatewayURL: strings.TrimSpace(gatewayURL)}
+	if next == m.desired {
+		m.mu.Unlock()
+		return // no change — leave the current attempt (and its tunnel) alone
+	}
+	m.desired = next
 	cancel := m.attemptCancel
 	m.mu.Unlock()
 	if cancel != nil {

@@ -11,10 +11,13 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/agent"
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/doctor"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/aymanbagabas/go-osc52/v2"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ===========================================
@@ -84,6 +87,56 @@ type settingsPage struct {
 	// moves (so a wheel scroll isn't yanked back to the cursor).
 	scrollOffset   int
 	lastViewCursor int
+
+	// serverRemote snapshots the remote-gateway settings as last known to be on
+	// the server (taken when the page opens, refreshed after each successful
+	// save). It tells a real save failure apart from the EXPECTED tunnel bounce:
+	// saving a CHANGED remote config from a remote client (FLEET_GATEWAY) tears
+	// down the very tunnel the reply rides on, so the RPC reports Unavailable
+	// even though the save succeeded server-side.
+	serverRemote remoteSettingsSnapshot
+}
+
+// remoteSettingsSnapshot is a comparable copy of the RemoteMcpSettings fields
+// that drive the gateway tunnel (the fields whose change makes the server
+// bounce it). Declared locally because the TUI must not import internal/state
+// and configutil doesn't alias the RemoteMcpSettings type.
+type remoteSettingsSnapshot struct {
+	mcpEnabled   bool
+	fleetEnabled bool
+	gatewayURL   string
+}
+
+// snapshotRemoteSettings extracts the tunnel-relevant settings from config.
+func snapshotRemoteSettings(config *configutil.Config) remoteSettingsSnapshot {
+	if config == nil {
+		return remoteSettingsSnapshot{}
+	}
+	return remoteSettingsSnapshot{
+		mcpEnabled:   config.RemoteMcpSettings.Enabled,
+		fleetEnabled: config.RemoteMcpSettings.FleetEnabled,
+		gatewayURL:   config.RemoteMcpSettings.GatewayURL,
+	}
+}
+
+// remoteSettingsSavedMsg replaces "Failed to save settings" when the failure is
+// just the expected tunnel bounce (see remoteSaveBounced).
+const remoteSettingsSavedMsg = "Settings saved — remote connection restarting to apply them"
+
+// remoteSaveBounced reports whether a setConfigRemote error is the expected
+// side effect of changing the remote-gateway settings from a remote client:
+// the save itself succeeded, but applying it restarted the tunnel carrying the
+// RPC's reply, so the client saw Unavailable. True only when all three hold:
+// the gRPC code is Unavailable, this client is remote (FLEET_GATEWAY /
+// FLEET_SERVER), and the attempted save actually changed the remote settings
+// relative to the last server config we know of — an unchanged remote config
+// never bounces the tunnel (the server's Reconcile is a no-op), so Unavailable
+// then is a genuine failure.
+func (settingsPage *settingsPage) remoteSaveBounced(m *model, err error) bool {
+	if status.Code(err) != codes.Unavailable || !fleetclient.IsRemote() {
+		return false
+	}
+	return snapshotRemoteSettings(m.config) != settingsPage.serverRemote
 }
 
 // newSettingsPage creates a new settings page with default state.
@@ -100,6 +153,9 @@ func newSettingsPage() *settingsPage {
 
 // Init is called when the settings page becomes active.
 func (settingsPage *settingsPage) Init(m *model) tea.Cmd {
+	// Baseline for remoteSaveBounced: the page opens showing the server's
+	// config, so its remote settings are what the server currently runs with.
+	settingsPage.serverRemote = snapshotRemoteSettings(m.config)
 	return nil
 }
 
@@ -373,10 +429,18 @@ func (settingsPage *settingsPage) toggleRemoteMcpEnabled(m *model) {
 	next := !current
 	m.config.RemoteMcpSettings.Enabled = next
 	if err := setConfigRemote(m.config); err != nil {
+		if settingsPage.remoteSaveBounced(m, err) {
+			// Saved server-side; the error was the tunnel restarting under us.
+			settingsPage.serverRemote = snapshotRemoteSettings(m.config)
+			settingsPage.cursorToItem(m, settingsItemRemoteMcpEnabled)
+			m.message = remoteSettingsSavedMsg
+			return
+		}
 		m.config.RemoteMcpSettings.Enabled = current
 		m.message = fmt.Sprintf("Failed to save settings: %v", err)
 		return
 	}
+	settingsPage.serverRemote = snapshotRemoteSettings(m.config)
 	// Toggling shows/hides the "Copy remote MCP config" row above this one, which
 	// shifts the list. Re-pin the cursor on the enable/disable row so it doesn't
 	// slide onto a neighbouring row.
@@ -401,10 +465,17 @@ func (settingsPage *settingsPage) toggleRemoteFleetEnabled(m *model) {
 	next := !current
 	m.config.RemoteMcpSettings.FleetEnabled = next
 	if err := setConfigRemote(m.config); err != nil {
+		if settingsPage.remoteSaveBounced(m, err) {
+			// Saved server-side; the error was the tunnel restarting under us.
+			settingsPage.serverRemote = snapshotRemoteSettings(m.config)
+			m.message = remoteSettingsSavedMsg
+			return
+		}
 		m.config.RemoteMcpSettings.FleetEnabled = current
 		m.message = fmt.Sprintf("Failed to save settings: %v", err)
 		return
 	}
+	settingsPage.serverRemote = snapshotRemoteSettings(m.config)
 	label := "off"
 	if next {
 		label = "on"
@@ -854,9 +925,19 @@ func (settingsPage *settingsPage) updateSettingsEditing(m *model, msg tea.Msg) t
 			}
 
 			if err := setConfigRemote(m.config); err != nil {
-				m.message = fmt.Sprintf("Failed to save settings: %v", err)
-			} else if cmd == nil {
-				m.message = "Saved"
+				if settingsPage.remoteSaveBounced(m, err) {
+					// Editing the Gateway URL from a remote client: the save
+					// landed, then restarting the tunnel killed the reply.
+					settingsPage.serverRemote = snapshotRemoteSettings(m.config)
+					m.message = remoteSettingsSavedMsg
+				} else {
+					m.message = fmt.Sprintf("Failed to save settings: %v", err)
+				}
+			} else {
+				settingsPage.serverRemote = snapshotRemoteSettings(m.config)
+				if cmd == nil {
+					m.message = "Saved"
+				}
 			}
 			settingsPage.editing = false
 			settingsPage.input.Blur()

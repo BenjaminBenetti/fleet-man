@@ -368,6 +368,85 @@ func waitForReg(t *testing.T, ch <-chan tunnel.RegisterRequest, timeout time.Dur
 	}
 }
 
+// TestManagerReconcileIdempotentKeepsTunnel pins the no-op Reconcile: SetConfig
+// calls Reconcile on EVERY config save, and a save that does not change the
+// remote settings must NOT bounce an established tunnel — for a remote client
+// that tunnel carries the SetConfig RPC's own reply (issue #141). After the
+// manager is CONNECTED, a Reconcile with identical values (modulo URL
+// whitespace, which Reconcile trims) must produce no re-registration at the
+// gateway and no status transition away from CONNECTED.
+func TestManagerReconcileIdempotentKeepsTunnel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cert, pool := genTestTLS(t)
+	mcp := newFakeMCP()
+	defer mcp.srv.Close()
+
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatalf("tls listen: %v", err)
+	}
+	defer ln.Close()
+
+	regs := make(chan tunnel.RegisterRequest, 8)
+	gwDone := make(chan struct{})
+	defer close(gwDone)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				var req tunnel.RegisterRequest
+				if err := tunnel.ReadFrame(conn, &req); err != nil {
+					return
+				}
+				regs <- req
+				if err := tunnel.WriteFrame(conn, tunnel.RegisterReply{SessionID: "s", PublicURL: "https://gw/mcp/s"}); err != nil {
+					return
+				}
+				sess, err := tunnel.ServerSession(conn, io.Discard)
+				if err != nil {
+					return
+				}
+				defer sess.Close()
+				<-gwDone // hold the session open until the test ends
+			}(conn)
+		}
+	}()
+
+	m, statusCh := newManagerForTest(mcp.port(t), ln.Addr().String(), pool)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx)
+
+	m.Reconcile(true, false, "https://gw.example.com")
+	waitForReg(t, regs, 5*time.Second)
+	waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED, 5*time.Second)
+
+	// Same desired state — what SetConfig does for the common "saved an
+	// unrelated setting" case. The padded URL pins that the comparison happens
+	// AFTER TrimSpace, matching what Reconcile stores.
+	m.Reconcile(true, false, "  https://gw.example.com  ")
+
+	// The established tunnel must stay up: no new registration and no status
+	// transition away from CONNECTED within the observation window.
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case req := <-regs:
+			t.Fatalf("idempotent Reconcile bounced the tunnel: new registration %+v", req)
+		case st := <-statusCh:
+			if st.GetState() != fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED {
+				t.Fatalf("idempotent Reconcile changed status to %v", st.GetState())
+			}
+		case <-deadline:
+			return
+		}
+	}
+}
+
 // TestManagerReconcileDisableConverges hammers Reconcile with interleaved
 // enable/disable toggles (exercising the desired/attemptCancel race the code
 // review flagged) and asserts the manager settles on UNSPECIFIED — i.e. a
