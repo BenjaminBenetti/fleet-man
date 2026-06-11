@@ -1033,15 +1033,15 @@ func (fleetPage *fleetPage) renderArmadaBorder(m *model, width int) string {
 func (fleetPage *fleetPage) contextualHelpKeys(m *model) []string {
 	r := fleetPage.currentRow()
 	if r == nil {
-		return []string{"n: new fleet", "A: armada", "q: quit"}
+		return withArmadaHint([]string{"n: new fleet", "q: quit"})
 	}
 
 	switch r.kind {
 	case rowFleetHeader:
-		return []string{
+		return withArmadaHint([]string{
 			"j/k: navigate", "space/enter: expand/collapse", "e: edit fleet",
-			"a: add instance", "n: new fleet", "d: delete fleet", "A: armada", "r: refresh", "q: quit",
-		}
+			"a: add instance", "n: new fleet", "d: delete fleet", "r: refresh", "q: quit",
+		})
 
 	case rowInstance:
 		keys := []string{"j/k: navigate"}
@@ -1067,7 +1067,7 @@ func (fleetPage *fleetPage) contextualHelpKeys(m *model) []string {
 				keys = append(keys, "r: refresh", "q: quit")
 			}
 		}
-		return keys
+		return withArmadaHint(keys)
 
 	case rowSession:
 		keys := []string{
@@ -1077,22 +1077,40 @@ func (fleetPage *fleetPage) contextualHelpKeys(m *model) []string {
 		if m.inHostTmux && fleetPage.splitRef.Valid() && !fleetPage.activeGroup.Empty() {
 			keys = append(keys[:len(keys)-1], "pgup/pgdn: cycle groups", "q: quit")
 		}
-		return keys
+		return withArmadaHint(keys)
 
 	case rowNewSession:
-		return []string{
+		return withArmadaHint([]string{
 			"j/k: navigate", "space/enter/e: create session",
 			"a: new session", "q: quit",
-		}
+		})
 
 	case rowSettings:
-		return []string{
+		return withArmadaHint([]string{
 			"j/k: navigate", "space/enter/e: open settings",
 			"n: new fleet", "q: quit",
-		}
+		})
 	}
 
-	return []string{"q: quit"}
+	return withArmadaHint([]string{"q: quit"})
+}
+
+// withArmadaHint inserts the global "A: armada" hint just before a trailing
+// "q: quit" (the `A` key opens the armada selector from every fleet-list row),
+// unless it's already present.
+func withArmadaHint(keys []string) []string {
+	for _, k := range keys {
+		if k == "A: armada" {
+			return keys
+		}
+	}
+	if n := len(keys); n > 0 && keys[n-1] == "q: quit" {
+		out := make([]string, 0, n+1)
+		out = append(out, keys[:n-1]...)
+		out = append(out, "A: armada", "q: quit")
+		return out
+	}
+	return append(keys, "A: armada")
 }
 
 // ===========================================
