@@ -9,11 +9,13 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/charmbracelet/x/term v0.2.2
+	github.com/creack/pty v1.1.24
 	github.com/gin-gonic/gin v1.12.0
 	github.com/hashicorp/yamux v0.1.2
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/muesli/termenv v0.16.0
 	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.9
 	golang.org/x/sys v0.42.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
@@ -57,7 +59,6 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
-	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect

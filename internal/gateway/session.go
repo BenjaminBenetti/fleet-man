@@ -41,14 +41,6 @@ type session struct {
 	// public-request goroutines, and re-set on reconnect.
 	grpc atomic.Bool
 
-	// grpcCC is the lazily-built gRPC client connection the gRPC proxy uses to reach
-	// the daemon's grpc.Server over this session's tunnel (see grpcClientConn). Built
-	// once on first gRPC request; its custom dialer re-opens a TagGRPC stream on the
-	// live tunnel, so it survives reconnects.
-	grpcOnce  sync.Once
-	grpcCC    *grpc.ClientConn
-	grpcCCErr error
-
 	mu sync.Mutex
 	ym *yamux.Session // current live tunnel; nil until bind; replaced on reconnect
 	// closedAt is when the current tunnel was first observed closed (zero while
@@ -56,6 +48,13 @@ type session struct {
 	// this, so a fleetd that drops and reconnects (with its secret) recovers the
 	// same URL. The reaper frees it only once the TTL elapses with no reconnect.
 	closedAt time.Time
+	// grpcCC is the lazily-built gRPC client connection the gRPC proxy uses to reach
+	// the daemon's grpc.Server over this session's tunnel (see grpcClientConn). Built
+	// once on first gRPC request; its custom dialer re-opens a TagGRPC stream on the
+	// live tunnel, so it survives reconnects. Guarded by mu — NOT a sync.Once — so
+	// bind() can read it to reset its connect backoff after a reconnect (see
+	// resetGRPCBackoff) without racing the lazy build.
+	grpcCC *grpc.ClientConn
 }
 
 // setYamux installs ym as the live tunnel and returns the one it replaced (nil on

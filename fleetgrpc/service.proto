@@ -7,6 +7,7 @@ import "watch.proto";
 import "jobs.proto";
 import "config.proto";
 import "exec.proto";
+import "inspect.proto";
 
 option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
 
@@ -83,6 +84,13 @@ service FleetService {
   // CopyFile streams a single file out of an instance: first chunk is metadata,
   // the rest are data. Backs `fleet copy` and the in-instance `fc` shorthand.
   rpc CopyFile(CopyFileRequest) returns (stream CopyFileChunk);
+
+  // ---- Repo inspection (server-side clone + checks) ----
+  // InspectRepo shallow-clones remote_url on the DAEMON's host and reports
+  // devcontainer presence (and optionally the detected container home dir).
+  // Inspection runs where provisioning runs, so the verdict is authoritative
+  // for local and remote clients alike.
+  rpc InspectRepo(InspectRepoRequest) returns (InspectRepoReply);
 
   // ---- Coder template parameters (Coder API, read server-side) ----
   rpc GetCoderTemplateParams(GetCoderTemplateParamsRequest) returns (GetCoderTemplateParamsReply);

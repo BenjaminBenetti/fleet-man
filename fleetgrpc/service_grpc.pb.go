@@ -47,6 +47,7 @@ const (
 	FleetService_Logs_FullMethodName                   = "/fleetgrpc.FleetService/Logs"
 	FleetService_Forward_FullMethodName                = "/fleetgrpc.FleetService/Forward"
 	FleetService_CopyFile_FullMethodName               = "/fleetgrpc.FleetService/CopyFile"
+	FleetService_InspectRepo_FullMethodName            = "/fleetgrpc.FleetService/InspectRepo"
 	FleetService_GetCoderTemplateParams_FullMethodName = "/fleetgrpc.FleetService/GetCoderTemplateParams"
 	FleetService_GetBrowserConfig_FullMethodName       = "/fleetgrpc.FleetService/GetBrowserConfig"
 	FleetService_PrepareBrowser_FullMethodName         = "/fleetgrpc.FleetService/PrepareBrowser"
@@ -116,6 +117,12 @@ type FleetServiceClient interface {
 	// CopyFile streams a single file out of an instance: first chunk is metadata,
 	// the rest are data. Backs `fleet copy` and the in-instance `fc` shorthand.
 	CopyFile(ctx context.Context, in *CopyFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CopyFileChunk], error)
+	// ---- Repo inspection (server-side clone + checks) ----
+	// InspectRepo shallow-clones remote_url on the DAEMON's host and reports
+	// devcontainer presence (and optionally the detected container home dir).
+	// Inspection runs where provisioning runs, so the verdict is authoritative
+	// for local and remote clients alike.
+	InspectRepo(ctx context.Context, in *InspectRepoRequest, opts ...grpc.CallOption) (*InspectRepoReply, error)
 	// ---- Coder template parameters (Coder API, read server-side) ----
 	GetCoderTemplateParams(ctx context.Context, in *GetCoderTemplateParamsRequest, opts ...grpc.CallOption) (*GetCoderTemplateParamsReply, error)
 	// ---- Browser (container-side half of the host browser feature) ----
@@ -489,6 +496,16 @@ func (c *fleetServiceClient) CopyFile(ctx context.Context, in *CopyFileRequest, 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_CopyFileClient = grpc.ServerStreamingClient[CopyFileChunk]
 
+func (c *fleetServiceClient) InspectRepo(ctx context.Context, in *InspectRepoRequest, opts ...grpc.CallOption) (*InspectRepoReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InspectRepoReply)
+	err := c.cc.Invoke(ctx, FleetService_InspectRepo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) GetCoderTemplateParams(ctx context.Context, in *GetCoderTemplateParamsRequest, opts ...grpc.CallOption) (*GetCoderTemplateParamsReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetCoderTemplateParamsReply)
@@ -583,6 +600,12 @@ type FleetServiceServer interface {
 	// CopyFile streams a single file out of an instance: first chunk is metadata,
 	// the rest are data. Backs `fleet copy` and the in-instance `fc` shorthand.
 	CopyFile(*CopyFileRequest, grpc.ServerStreamingServer[CopyFileChunk]) error
+	// ---- Repo inspection (server-side clone + checks) ----
+	// InspectRepo shallow-clones remote_url on the DAEMON's host and reports
+	// devcontainer presence (and optionally the detected container home dir).
+	// Inspection runs where provisioning runs, so the verdict is authoritative
+	// for local and remote clients alike.
+	InspectRepo(context.Context, *InspectRepoRequest) (*InspectRepoReply, error)
 	// ---- Coder template parameters (Coder API, read server-side) ----
 	GetCoderTemplateParams(context.Context, *GetCoderTemplateParamsRequest) (*GetCoderTemplateParamsReply, error)
 	// ---- Browser (container-side half of the host browser feature) ----
@@ -681,6 +704,9 @@ func (UnimplementedFleetServiceServer) Forward(grpc.BidiStreamingServer[ForwardC
 }
 func (UnimplementedFleetServiceServer) CopyFile(*CopyFileRequest, grpc.ServerStreamingServer[CopyFileChunk]) error {
 	return status.Errorf(codes.Unimplemented, "method CopyFile not implemented")
+}
+func (UnimplementedFleetServiceServer) InspectRepo(context.Context, *InspectRepoRequest) (*InspectRepoReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method InspectRepo not implemented")
 }
 func (UnimplementedFleetServiceServer) GetCoderTemplateParams(context.Context, *GetCoderTemplateParamsRequest) (*GetCoderTemplateParamsReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetCoderTemplateParams not implemented")
@@ -1138,6 +1164,24 @@ func _FleetService_CopyFile_Handler(srv interface{}, stream grpc.ServerStream) e
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_CopyFileServer = grpc.ServerStreamingServer[CopyFileChunk]
 
+func _FleetService_InspectRepo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InspectRepoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).InspectRepo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_InspectRepo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).InspectRepo(ctx, req.(*InspectRepoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_GetCoderTemplateParams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetCoderTemplateParamsRequest)
 	if err := dec(in); err != nil {
@@ -1270,6 +1314,10 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResolveLogsCommand",
 			Handler:    _FleetService_ResolveLogsCommand_Handler,
+		},
+		{
+			MethodName: "InspectRepo",
+			Handler:    _FleetService_InspectRepo_Handler,
 		},
 		{
 			MethodName: "GetCoderTemplateParams",

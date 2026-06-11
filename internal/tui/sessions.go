@@ -102,9 +102,25 @@ func ensureSessionsLoaded(m *model, ref InstanceRef) {
 // Mutating session commands (exec via the server)
 // ===========================================
 //
-// Create / rename / delete mutate tmux inside the container, so they resolve the
-// exec argv from the server and run it locally (the P5 boundary). The UI reflects
-// the change on the next ~1s runtime tick (or the synchronous post-op refresh).
+// Create / rename / delete mutate tmux inside the container through
+// runInstanceCommand (exec_client.go): a local daemon resolves the exec argv
+// and runs it locally (the P5 boundary), a remote one streams over the Exec
+// RPC. The UI reflects the change on the next ~1s runtime tick (or the
+// synchronous post-op refresh).
+
+// runSessionScript runs a shell one-liner inside ref's container and folds a
+// non-zero exit into the returned error — matching the semantics of the old
+// local cmd.Run()/cmd.Output() call sites these commands were built on.
+func runSessionScript(ref InstanceRef, script string) (string, error) {
+	out, code, err := runInstanceCommand(ref.Fleet, ref.Instance, []string{"sh", "-c", script})
+	if err != nil {
+		return out, err
+	}
+	if code != 0 {
+		return out, fmt.Errorf("exit status %d", code)
+	}
+	return out, nil
+}
 
 // sessionCreatedMsg is sent after creating a new tmux session.
 type sessionCreatedMsg struct {
@@ -140,14 +156,8 @@ type sessionDeletedMsg struct {
 // path) and then creates a detached session inside the container.
 func createSessionCmd(ref InstanceRef, sessionName string) tea.Cmd {
 	return func() tea.Msg {
-		cmd, err := resolveExecCmd(ref.Fleet, ref.Instance, []string{
-			"sh", "-c",
-			tmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s 2>/dev/null`, shQuote(sessionName)),
-		})
-		if err != nil {
-			return sessionCreatedMsg{ref: ref, err: err}
-		}
-		if err := cmd.Run(); err != nil {
+		script := tmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s 2>/dev/null`, shQuote(sessionName))
+		if _, err := runSessionScript(ref, script); err != nil {
 			return sessionCreatedMsg{ref: ref, err: err}
 		}
 		return sessionCreatedMsg{ref: ref}
@@ -157,14 +167,8 @@ func createSessionCmd(ref InstanceRef, sessionName string) tea.Cmd {
 // renameSessionCmd execs `tmux rename-session -t <old> <new>` in the container.
 func renameSessionCmd(ref InstanceRef, oldName, newName string) tea.Cmd {
 	return func() tea.Msg {
-		cmd, err := resolveExecCmd(ref.Fleet, ref.Instance, []string{
-			"sh", "-c",
-			fmt.Sprintf(`tmux rename-session -t %s %s 2>/dev/null`, shQuote(oldName), shQuote(newName)),
-		})
-		if err != nil {
-			return sessionRenamedMsg{ref: ref, oldName: oldName, newName: newName, err: err}
-		}
-		if err := cmd.Run(); err != nil {
+		script := fmt.Sprintf(`tmux rename-session -t %s %s 2>/dev/null`, shQuote(oldName), shQuote(newName))
+		if _, err := runSessionScript(ref, script); err != nil {
 			return sessionRenamedMsg{ref: ref, oldName: oldName, newName: newName, err: err}
 		}
 		return sessionRenamedMsg{ref: ref, oldName: oldName, newName: newName}
@@ -178,34 +182,20 @@ func renameGroupCmd(ref InstanceRef, sanitizedInstance, oldGroupID, newGroupID s
 	newPrefix := sanitizedInstance + groupSep + newGroupID
 
 	return func() tea.Msg {
-		listCmd, err := resolveExecCmd(ref.Fleet, ref.Instance, []string{
-			"sh", "-c",
-			`tmux list-sessions -F "#{session_name}" 2>/dev/null`,
-		})
-		if err != nil {
-			return sessionRenamedMsg{ref: ref, oldName: oldPrefix, newName: newPrefix, err: err}
-		}
-		out, err := listCmd.Output()
+		out, err := runSessionScript(ref, `tmux list-sessions -F "#{session_name}" 2>/dev/null`)
 		if err != nil {
 			return sessionRenamedMsg{ref: ref, oldName: oldPrefix, newName: newPrefix, err: err}
 		}
 
 		var lastErr error
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 			name := strings.TrimSpace(line)
 			if name == "" || !strings.HasPrefix(name, oldPrefix) {
 				continue
 			}
 			renamed := newPrefix + name[len(oldPrefix):]
-			cmd, err := resolveExecCmd(ref.Fleet, ref.Instance, []string{
-				"sh", "-c",
-				fmt.Sprintf(`tmux rename-session -t %s %s 2>/dev/null`, shQuote(name), shQuote(renamed)),
-			})
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			if err := cmd.Run(); err != nil {
+			script := fmt.Sprintf(`tmux rename-session -t %s %s 2>/dev/null`, shQuote(name), shQuote(renamed))
+			if _, err := runSessionScript(ref, script); err != nil {
 				lastErr = err
 			}
 		}
@@ -219,14 +209,8 @@ func renameGroupCmd(ref InstanceRef, sanitizedInstance, oldGroupID, newGroupID s
 // deleteSessionCmd kills a single tmux session inside the container.
 func deleteSessionCmd(ref InstanceRef, sessionName string) tea.Cmd {
 	return func() tea.Msg {
-		cmd, err := resolveExecCmd(ref.Fleet, ref.Instance, []string{
-			"sh", "-c",
-			fmt.Sprintf(`tmux kill-session -t %s 2>/dev/null`, shQuote(sessionName)),
-		})
-		if err != nil {
-			return sessionDeletedMsg{ref: ref, sessionName: sessionName, err: err}
-		}
-		if err := cmd.Run(); err != nil {
+		script := fmt.Sprintf(`tmux kill-session -t %s 2>/dev/null`, shQuote(sessionName))
+		if _, err := runSessionScript(ref, script); err != nil {
 			return sessionDeletedMsg{ref: ref, sessionName: sessionName, err: err}
 		}
 		return sessionDeletedMsg{ref: ref, sessionName: sessionName}
@@ -239,33 +223,19 @@ func deleteGroupSessionsCmd(ref InstanceRef, sanitizedInstance, groupID string) 
 	prefix := sanitizedInstance + groupSep + groupID
 
 	return func() tea.Msg {
-		listCmd, err := resolveExecCmd(ref.Fleet, ref.Instance, []string{
-			"sh", "-c",
-			`tmux list-sessions -F "#{session_name}" 2>/dev/null`,
-		})
-		if err != nil {
-			return sessionDeletedMsg{ref: ref, sessionName: prefix, groupID: groupID, err: err}
-		}
-		out, err := listCmd.Output()
+		out, err := runSessionScript(ref, `tmux list-sessions -F "#{session_name}" 2>/dev/null`)
 		if err != nil {
 			return sessionDeletedMsg{ref: ref, sessionName: prefix, groupID: groupID, err: err}
 		}
 
 		var lastErr error
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 			name := strings.TrimSpace(line)
 			if name == "" || !strings.HasPrefix(name, prefix) {
 				continue
 			}
-			cmd, err := resolveExecCmd(ref.Fleet, ref.Instance, []string{
-				"sh", "-c",
-				fmt.Sprintf(`tmux kill-session -t %s 2>/dev/null`, shQuote(name)),
-			})
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			if err := cmd.Run(); err != nil {
+			script := fmt.Sprintf(`tmux kill-session -t %s 2>/dev/null`, shQuote(name))
+			if _, err := runSessionScript(ref, script); err != nil {
 				lastErr = err
 			}
 		}

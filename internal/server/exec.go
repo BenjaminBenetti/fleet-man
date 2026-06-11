@@ -20,7 +20,7 @@ import (
 // ResolveExecCommand is the TTY carve-out (exec.proto): the server returns the
 // argv it WOULD run (built by the backend), and the LOCAL client execs it itself
 // so the user's terminal is inherited. Exec (bidi) — for a remote client with no
-// local backend — is not implemented yet.
+// local backend — lives in exec_stream.go.
 
 // resolveServerInstance loads the persisted record for fleet/instance, mapping
 // absence to a clear NotFound (so a typo'd target fails fast for the client).

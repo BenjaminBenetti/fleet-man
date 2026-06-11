@@ -75,6 +75,14 @@ func selectEndpoint() (Endpoint, error) {
 	return localEndpoint{socket: fleetpaths.SocketPath()}, nil
 }
 
+// IsRemote reports whether the client is pointed at a remote daemon
+// (FLEET_GATEWAY or FLEET_SERVER set) rather than the local auto-spawned
+// socket. Client-host concerns — dependency checks, the local-exec TTY
+// carve-out — only apply when this is false.
+func IsRemote() bool {
+	return os.Getenv("FLEET_GATEWAY") != "" || os.Getenv("FLEET_SERVER") != ""
+}
+
 // gatewayToken resolves the bearer token for a gateway endpoint: FLEET_TOKEN, or
 // the on-disk MCP token (so a user on the same host as their daemon need only
 // supply the URL).

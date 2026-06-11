@@ -8,6 +8,7 @@ import (
 	"os/exec"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/execstream"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 )
 
@@ -16,6 +17,11 @@ import (
 // returns the argv it would exec, and the client runs it locally so the user's
 // terminal (TTY) is inherited — the permitted client-host action for interactive
 // attach. Reused by exec/shell/session commands.
+//
+// That local-exec TTY carve-out only holds for a LOCAL daemon. Against a remote
+// one (FLEET_GATEWAY / FLEET_SERVER) the resolved argv references binaries and
+// containers on the daemon's host, so interactive attach streams the terminal
+// over the Exec bidi RPC instead (runRemoteShell → internal/execstream).
 
 // resolveExecArgv asks the server for the argv (+ env) to run argv inside the
 // instance. A package var so tests can stub the whole RPC.
@@ -52,6 +58,34 @@ func runResolvedExec(ctx context.Context, fleetName, instanceName string, argv [
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return c.Run()
+}
+
+// runRemoteShell attaches the caller's terminal to argv inside the instance by
+// streaming over the Exec bidi RPC — the remote-daemon counterpart of the TTY
+// carve-out. A non-zero remote exit surfaces the same way the local path's
+// *exec.ExitError does: as an "exit status N" error (main exits 1 either way).
+func runRemoteShell(ctx context.Context, fleetName, instanceName string, argv []string) error {
+	conn, err := fleetclient.Dial(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	code, err := execstream.Run(ctx, conn.Service(), execstream.Options{
+		Fleet:    fleetName,
+		Instance: instanceName,
+		Argv:     argv,
+		TTY:      true,
+		Stdin:    os.Stdin,
+		Stdout:   os.Stdout,
+		Stderr:   os.Stderr,
+	})
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("exit status %d", code)
+	}
+	return nil
 }
 
 // logsStdout is the sink for streamLogs, overridable in tests.

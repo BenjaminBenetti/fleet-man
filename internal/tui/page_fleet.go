@@ -684,7 +684,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				break
 			}
 			shellCmd := freshShellCommand(m.config)
-			cmd, err := resolveExecCmd(fleetPage.currentFleetName(), instance.Name, shellCmd)
+			cmd, err := attachExecCmd(fleetPage.currentFleetName(), instance.Name, shellCmd)
 			if err != nil {
 				m.message = fmt.Sprintf("Could not open terminal: %v", err)
 				break
@@ -887,7 +887,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 			cols, rows := tmuxWindowSize()
 			cols = cols * 70 / 100
 			shellCmd := ShellCommandForSession(m.config, sessionName, cols, rows, true)
-			cmd, err := resolveExecCmd(r.fleetName, instance.Name, shellCmd)
+			cmd, err := attachExecCmd(r.fleetName, instance.Name, shellCmd)
 			if err != nil {
 				m.message = fmt.Sprintf("Could not open session: %v", err)
 				return nil
@@ -895,7 +895,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 			return splitPaneCmd(fleetPage.splitPaneID, sessRef, sessionName, groupID, cmd)
 		}
 		shellCmd := ShellCommandForSession(m.config, sessionName, m.width, m.height, false)
-		cmd, err := resolveExecCmd(r.fleetName, instance.Name, shellCmd)
+		cmd, err := attachExecCmd(r.fleetName, instance.Name, shellCmd)
 		if err != nil {
 			m.message = fmt.Sprintf("Could not open session: %v", err)
 			return nil
@@ -940,7 +940,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		m.sessionStore.SetLastActive(instRef, lastSession{sessionName: sessionName})
 
 		shellCmd := ShellCommandForSession(m.config, sessionName, m.width, m.height, false)
-		cmd, err := resolveExecCmd(instFleetName, instance.Name, shellCmd)
+		cmd, err := attachExecCmd(instFleetName, instance.Name, shellCmd)
 		if err != nil {
 			m.message = fmt.Sprintf("Could not open session: %v", err)
 			return nil
@@ -1961,7 +1961,7 @@ func (fleetPage *fleetPage) openInstanceSession(m *model, fleetName string, inst
 		cols, rows := tmuxWindowSize()
 		cols = cols * 70 / 100
 		shellCmd := ShellCommandForSession(m.config, sessionName, cols, rows, true)
-		cmd, err := resolveExecCmd(fleetName, instance.Name, shellCmd)
+		cmd, err := attachExecCmd(fleetName, instance.Name, shellCmd)
 		if err != nil {
 			m.message = fmt.Sprintf("Could not open session: %v", err)
 			return nil

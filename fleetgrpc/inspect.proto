@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package fleetgrpc;
+
+option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
+
+// =====================================================================
+// INSPECT — server-side repo inspection
+// =====================================================================
+//
+// Repo inspection (devcontainer presence, container home-dir detection) runs
+// where provisioning runs: the daemon's host owns the git credentials and
+// docker access the checks depend on. A client-side clone probes the WRONG
+// machine for a remote client — it fails without the daemon's credentials and
+// can false-positive when the client has repo access but the daemon doesn't.
+
+message InspectRepoRequest {
+  // remote_url is the git remote to shallow-clone for inspection.
+  string remote_url = 1;
+  // branch optionally pins the branch to inspect (repo default when empty).
+  string branch = 2;
+  // detect_home_dir additionally runs container home-dir detection, which may
+  // pull the devcontainer image (slow). Devcontainer presence is always
+  // checked.
+  bool detect_home_dir = 3;
+}
+
+message InspectRepoReply {
+  // has_devcontainer reports whether the repo declares a devcontainer.json in
+  // any location the devcontainer CLI recognises.
+  bool has_devcontainer = 1;
+  // home_dir is the detected container home directory (e.g. "/home/vscode").
+  // Empty when detection was not requested or produced no user hint — the
+  // caller falls back to manual entry.
+  string home_dir = 2;
+}

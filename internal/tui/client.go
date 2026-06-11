@@ -252,6 +252,33 @@ var deleteImageCacheRemote = func(fleetName string) error {
 	return err
 }
 
+// inspectRepoTimeout bounds one InspectRepo RPC. Deliberately MUCH longer than
+// mutationTimeout (5s): the server shallow-clones the repo (its own clone
+// timeout is 90s) and, when detectHomeDir is set, may shell out to docker and
+// pull the devcontainer image to read its USER directive — minutes on a cold
+// cache. These calls run inside tea.Cmd goroutines, not the Update loop, so
+// the long wait never blocks the UI.
+const inspectRepoTimeout = 5 * time.Minute
+
+// inspectRepoRemote asks the SERVER to clone + inspect remoteURL (devcontainer
+// presence, and optionally the container home dir). Inspection must run where
+// provisioning runs — the daemon's host owns the git credentials and docker
+// daemon `fleet up` will use — so the verdict is authoritative for local and
+// remote TUIs alike (issue #141 note 5). Package var so tests can stub it.
+var inspectRepoRemote = func(remoteURL, branch string, detectHomeDir bool) (*fleetgrpc.InspectRepoReply, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), inspectRepoTimeout)
+	defer cancel()
+	conn, err := dialMutation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return conn.Service().InspectRepo(ctx, &fleetgrpc.InspectRepoRequest{
+		RemoteUrl:     remoteURL,
+		Branch:        branch,
+		DetectHomeDir: detectHomeDir,
+	})
+}
+
 // notifyTUIConnectedRemote tells the server a TUI has opened so it can run its
 // once-per-open state reconciliation (e.g. re-ensuring configured buildkit
 // servers). Fire-and-forget: the server returns immediately and does the work
@@ -364,12 +391,12 @@ func configToProto(c *configutil.Config) *fleetgrpc.Config {
 		return &fleetgrpc.Config{}
 	}
 	pc := &fleetgrpc.Config{
-		General:        &fleetgrpc.GeneralSettings{},
-		Agent:          &fleetgrpc.AgentSettings{ToolSelection: string(c.AgentSettings.ToolSelection)},
-		Dotfiles:       &fleetgrpc.DotfilesSettings{AutoInstall: c.DotfilesSettings.AutoInstall},
-		Coder:          &fleetgrpc.CoderSettings{},
-		Codespaces:     &fleetgrpc.CodespacesSettings{},
-		Browser:        &fleetgrpc.BrowserSettings{},
+		General:    &fleetgrpc.GeneralSettings{},
+		Agent:      &fleetgrpc.AgentSettings{ToolSelection: string(c.AgentSettings.ToolSelection)},
+		Dotfiles:   &fleetgrpc.DotfilesSettings{AutoInstall: c.DotfilesSettings.AutoInstall},
+		Coder:      &fleetgrpc.CoderSettings{},
+		Codespaces: &fleetgrpc.CodespacesSettings{},
+		Browser:    &fleetgrpc.BrowserSettings{},
 		RemoteMcp: &fleetgrpc.RemoteMcpSettings{
 			Enabled:      c.RemoteMcpSettings.Enabled,
 			GatewayUrl:   c.RemoteMcpSettings.GatewayURL,

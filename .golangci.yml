@@ -19,6 +19,8 @@ linters:
             - "**/internal/fleetclient/**"
             - "**/internal/cli/**"
             - "**/internal/tui/**"
+            # The streaming-exec client (shared by cli + tui) is client code too.
+            - "**/internal/execstream/**"
             # internal/cli/server.go is the fleetd entrypoint — it alone may
             # import internal/server.
             - "!**/internal/cli/server.go"
