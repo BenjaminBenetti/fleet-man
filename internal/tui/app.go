@@ -16,6 +16,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -105,6 +106,20 @@ type model struct {
 	height   int
 }
 
+// needsDepsCheck reports whether the first-startup dependency check should
+// run. "First startup" = the ~/.fleet/ dir doesn't exist. The check is a
+// local-daemon concern — deps like docker/devcontainer/tmux only matter on
+// the machine where fleetd runs — so it is skipped entirely for a remote
+// endpoint (FLEET_GATEWAY / FLEET_SERVER), where no local daemon is spawned
+// and ~/.fleet/ never appears.
+func needsDepsCheck() bool {
+	if fleetclient.IsRemote() {
+		return false
+	}
+	_, err := os.Stat(fleetpaths.Dir())
+	return os.IsNotExist(err)
+}
+
 // newModel creates and initialises the top-level model, including all
 // page instances and their initial state.
 func newModel() model {
@@ -148,8 +163,8 @@ func newModel() model {
 		unbindDefaultSplitKeys()
 	}
 	// On first-ever startup, check for required binaries and show results
-	// if anything is missing. "First startup" = the ~/.fleet/ dir doesn't exist.
-	if _, err := os.Stat(fleetpaths.Dir()); os.IsNotExist(err) {
+	// if anything is missing.
+	if needsDepsCheck() {
 		result := deps.Check()
 		if deps.HasMissing(result) {
 			m.currentPage = newDepsCheckPage(result)

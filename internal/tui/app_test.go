@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
@@ -293,5 +295,39 @@ func TestUpdateSettingsEditingCancelsOnEsc(t *testing.T) {
 	}
 	if m.config.DotfilesSettings.RepoURL != "original" {
 		t.Fatalf("RepoURL = %q, want %q (should not have changed)", m.config.DotfilesSettings.RepoURL, "original")
+	}
+}
+
+func TestNeedsDepsCheck(t *testing.T) {
+	// Point HOME at an empty dir so ~/.fleet doesn't exist ("first startup"),
+	// and clear any ambient remote-endpoint env from the test environment.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_SERVER", "")
+
+	if !needsDepsCheck() {
+		t.Fatal("needsDepsCheck() = false on first startup with a local endpoint, want true")
+	}
+
+	// Remote endpoints never run the local deps check — the deps live on the
+	// machine where fleetd runs, not on the client host.
+	t.Setenv("FLEET_GATEWAY", "https://gw.example:50051/abc")
+	if needsDepsCheck() {
+		t.Fatal("needsDepsCheck() = true with FLEET_GATEWAY set, want false")
+	}
+
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_SERVER", "remote:50051")
+	if needsDepsCheck() {
+		t.Fatal("needsDepsCheck() = true with FLEET_SERVER set, want false")
+	}
+
+	// Once ~/.fleet exists it is no longer first startup.
+	t.Setenv("FLEET_SERVER", "")
+	if err := os.MkdirAll(filepath.Join(os.Getenv("HOME"), ".fleet"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if needsDepsCheck() {
+		t.Fatal("needsDepsCheck() = true after ~/.fleet exists, want false")
 	}
 }
