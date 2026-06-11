@@ -49,13 +49,23 @@ const (
 	settingsItemRemoteMcpCopyRemote = 703 // copy gateway mcp.json snippet to clipboard
 	settingsItemRemoteFleetEnabled  = 704 // expose the gRPC control surface through the gateway
 
-	settingsItemArmadaBase = 800 // fleet armada: registered remotes at base + i
-	settingsItemArmadaAdd  = 990 // fleet armada: the "+ Remote Fleet" button (after the list)
+	// Fleet armada: the "+ Remote Fleet" button has a fixed id; registered
+	// remotes get base+i. The base is placed FAR above every other block (and
+	// the tool-status/doctor blocks) so an unbounded number of registered
+	// remotes can never collide with another item — armada IDs are matched by
+	// dedicated checks that run before the `>= settingsItemToolStatusBase`
+	// catch-all, so being above 1000 is fine.
+	settingsItemArmadaAdd  = 800
+	settingsItemArmadaBase = 100000
 
 	settingsItemToolStatusBase = 1000 // tool status rows start here
 	settingsItemDoctor         = 2000 // doctor action row
 	settingsItemKeybindings    = 2001 // keybindings dialog row
 )
+
+// isArmadaRemoteItem reports whether an item ID is one of the registered-remote
+// rows (base+i). Open-ended: nothing else lives at or above the armada base.
+func isArmadaRemoteItem(item int) bool { return item >= settingsItemArmadaBase }
 
 // toolStatusCount is the number of rows rendered in the Tool Status
 // section. Must match the length of deps.CheckTools().
@@ -766,7 +776,7 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 
 		case "left", "h":
 			item := settingsPage.settingsCursorItem(m)
-			if item >= settingsItemArmadaBase && item < settingsItemArmadaAdd {
+			if isArmadaRemoteItem(item) {
 				// Back off the [ delete ] button onto the row itself.
 				settingsPage.armadaDeleteFocused = false
 				settingsPage.armadaDeleteConfirm = false
@@ -795,7 +805,7 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 
 		case "right", "l":
 			item := settingsPage.settingsCursorItem(m)
-			if item >= settingsItemArmadaBase && item < settingsItemArmadaAdd {
+			if isArmadaRemoteItem(item) {
 				// Focus the row's [ delete ] button (cache-clear UX pattern).
 				settingsPage.armadaDeleteFocused = true
 				return nil
@@ -826,7 +836,7 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			if item == settingsItemArmadaAdd {
 				return settingsPage.beginArmadaAdd(m)
 			}
-			if item >= settingsItemArmadaBase && item < settingsItemArmadaAdd {
+			if isArmadaRemoteItem(item) {
 				return settingsPage.enterArmadaRemoteRow(m, item-settingsItemArmadaBase)
 			}
 			if item == settingsItemTmuxVimKeys {
@@ -1502,7 +1512,7 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		tail.WriteString(dimStyle.Render("  Variables: ${GIT_URL} = fleet repo URL, ${GIT_BRANCH} = git branch (blank = default), ${INSTANCE_NAME} = workspace name"))
 		tail.WriteString("\n")
 	}
-	if currentItem >= settingsItemArmadaBase && currentItem < settingsItemArmadaAdd && settingsPage.armadaAddStage == armadaAddNone {
+	if isArmadaRemoteItem(currentItem) && settingsPage.armadaAddStage == armadaAddNone {
 		tail.WriteString(dimStyle.Render("  enter: ping now  right/l: focus [ delete ]  enter twice on [ delete ]: remove"))
 		tail.WriteString("\n")
 	}

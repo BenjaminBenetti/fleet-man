@@ -72,3 +72,32 @@ func TestLocalServerStaysAuthLess(t *testing.T) {
 		t.Fatalf("local Hello without a token must succeed: %v", err)
 	}
 }
+
+// TestTunnelDeniesArmadaEvenWithToken confirms the fleet-armada registry RPCs
+// are refused over the tunnel-facing server even with a valid token: the
+// registry holds OTHER fleets' bearer tokens and must never be reachable
+// remotely. The same RPCs must still work on the auth-less local server.
+func TestTunnelDeniesArmadaEvenWithToken(t *testing.T) {
+	const token = "test-token-123"
+	authUnary, authStream := bearerAuthInterceptors(token)
+	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(authUnary), grpc.ChainStreamInterceptor(authStream))
+	fleetgrpc.RegisterFleetServiceServer(gs, newService())
+	client := dialBuf(t, gs)
+
+	withToken := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
+	if _, err := client.GetArmada(withToken, &fleetgrpc.GetArmadaRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("GetArmada over tunnel WITH token: want PermissionDenied, got %v", err)
+	}
+	if _, err := client.SetArmada(withToken, &fleetgrpc.SetArmadaRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("SetArmada over tunnel WITH token: want PermissionDenied, got %v", err)
+	}
+
+	// The same RPCs are served on the auth-less local server.
+	isolateFleetDir(t)
+	local := grpc.NewServer()
+	fleetgrpc.RegisterFleetServiceServer(local, newService())
+	localClient := dialBuf(t, local)
+	if _, err := localClient.GetArmada(context.Background(), &fleetgrpc.GetArmadaRequest{}); err != nil {
+		t.Fatalf("GetArmada on the local server must succeed: %v", err)
+	}
+}

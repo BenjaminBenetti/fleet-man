@@ -390,7 +390,8 @@ The main page's list border carries an **Armada selector**
 of `local` + every registered remote, and pick one to **switch the TUI live**:
 the connection, fleet list, sessions, and shells all retarget to the chosen
 daemon. Registering a remote never switches to it; every boot starts on `local`
-unless `FLEET_GATEWAY` is set.
+unless `FLEET_GATEWAY` (or `FLEET_SERVER`) is set, in which case that boot
+endpoint appears in the dropdown as `(env)`.
 
 The registry is stored on your own machine at `~/.fleet/armada.json` (mode
 `0600` — it holds bearer tokens) and always round-trips through your **local**

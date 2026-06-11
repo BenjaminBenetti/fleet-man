@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	tea "github.com/charmbracelet/bubbletea"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -84,10 +85,22 @@ type armadaSaveResultMsg struct {
 	err        error
 }
 
-// armadaSwitchedMsg delivers the post-switch state/config reload.
+// armadaSwitchedMsg delivers the post-switch state/config reload. gen is the
+// connection generation the reload was started for, so a late reply from an
+// abandoned switch can be discarded.
 type armadaSwitchedMsg struct {
 	label  string
+	gen    int
 	st     *configutil.State
+	config *configutil.Config
+	err    error
+}
+
+// armadaConfigLoadedMsg delivers a config refetch triggered when the new
+// daemon's first Watch state arrives after a switch whose synchronous reload
+// had failed (slow endpoint).
+type armadaConfigLoadedMsg struct {
+	gen    int
 	config *configutil.Config
 	err    error
 }
@@ -135,18 +148,28 @@ func saveArmadaCmd(remotes []configutil.ArmadaRemote, action string, removedIdx 
 
 // switchReloadCmd refetches state + config over the NEW endpoint after a
 // switch. Runs in a tea.Cmd goroutine: dialing an unreachable remote takes
-// seconds and must not stall the Update loop.
-func switchReloadCmd(label string) tea.Cmd {
+// seconds and must not stall the Update loop. gen tags the result so a reply
+// from a superseded switch is dropped.
+func switchReloadCmd(label string, gen int) tea.Cmd {
 	return func() tea.Msg {
 		st, err := fetchStateLegacy()
 		if err != nil {
-			return armadaSwitchedMsg{label: label, err: err}
+			return armadaSwitchedMsg{label: label, gen: gen, err: err}
 		}
 		config, err := fetchConfigLegacy()
 		if err != nil {
-			return armadaSwitchedMsg{label: label, err: err}
+			return armadaSwitchedMsg{label: label, gen: gen, err: err}
 		}
-		return armadaSwitchedMsg{label: label, st: st, config: config}
+		return armadaSwitchedMsg{label: label, gen: gen, st: st, config: config}
+	}
+}
+
+// reloadConfigCmd refetches just the config over the current endpoint, gen
+// tagged so a reply from a superseded connection is dropped.
+func reloadConfigCmd(gen int) tea.Cmd {
+	return func() tea.Msg {
+		config, err := fetchConfigLegacy()
+		return armadaConfigLoadedMsg{gen: gen, config: config, err: err}
 	}
 }
 
@@ -226,39 +249,115 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 		return nil
 
 	case armadaSwitchedMsg:
+		// A switch made after this reload was dispatched bumped the generation;
+		// a late reply from the abandoned switch must not clobber the current
+		// connection's state.
+		if msg.gen != m.watchGen {
+			return nil
+		}
 		if msg.err != nil {
-			// The new endpoint isn't answering (yet). Keep the error visible;
-			// the Watch stream keeps retrying and pushes state when it lands,
-			// and the user can switch back via the selector at any time.
-			m.err = msg.err
-			m.message = fmt.Sprintf("Switched to %s — not reachable yet: %v", msg.label, msg.err)
+			// The new endpoint isn't answering yet (slow remote, or a local
+			// auto-spawn still coming up). Don't set the sticky m.err banner —
+			// the bounced Watch stream keeps retrying and pushes IncludeInitial
+			// state when it lands, and the user can switch back at any time.
+			m.message = fmt.Sprintf("Switched to %s — waiting for it to come online…", msg.label)
 			return nil
 		}
 		m.st = msg.st
 		m.config = msg.config
+		m.armadaConfigPending = false
 		m.err = nil
+		m.resumeCreatingFromState()
 		m.hydrateSavedGroups()
 		m.pruneOrphanedSavedGroups()
 		if m.fleetPage != nil {
 			m.fleetPage.buildRows(m)
 		}
 		m.message = fmt.Sprintf("Switched to %s", msg.label)
-		return nil
+		return m.postSwitchFetchCmd()
+
+	case armadaConfigLoadedMsg:
+		// Late config refetch after a slow switch (see armadaConfigPending).
+		if msg.gen != m.watchGen || msg.err != nil || msg.config == nil {
+			return nil
+		}
+		m.config = msg.config
+		return m.postSwitchFetchCmd()
 	}
 	return nil
 }
 
-// pingAllArmadaCmd marks every registered remote as pinging and probes them
-// concurrently. Remotes already mid-ping are skipped so overlapping sweeps
-// (tick + manual) don't double-probe.
-func (m *model) pingAllArmadaCmd() tea.Cmd {
+// resumeCreatingFromState repopulates m.creating from the freshly fetched
+// state, mirroring newModel's startup logic so the new daemon's in-progress
+// instances are tracked to completion.
+func (m *model) resumeCreatingFromState() {
+	if m.st == nil {
+		return
+	}
+	for fleetName, f := range m.st.Fleets {
+		for _, instance := range f.Instances {
+			if instance.Status == fleet.StatusCreating || instance.Status == fleet.StatusCloning {
+				m.creating[fleetName+"/"+instance.Name] = true
+			}
+		}
+	}
+}
+
+// postSwitchFetchCmd re-runs the daemon-derived auto-fetches a fresh boot would
+// (Coder template params, codespace machine types) plus the creating-poll, so
+// the new daemon's config drives the settings page instead of the old one's
+// stale lists.
+func (m *model) postSwitchFetchCmd() tea.Cmd {
 	var cmds []tea.Cmd
+	if len(m.creating) > 0 {
+		cmds = append(cmds, pollCreatingCmd())
+	}
+	if m.config != nil && m.config.CoderSettings.Template != "" {
+		m.coderFetchingParams = true
+		cmds = append(cmds, fetchCoderParamsCmd(m.config.CoderSettings.Template))
+	}
+	if repo := m.firstFleetRepo(); repo != "" {
+		m.codespaceFetchingMachines = true
+		cmds = append(cmds, fetchCodespaceMachinesCmd(repo))
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
+}
+
+// pingAllArmadaCmd marks every pingable remote (registered remotes plus an
+// unregistered gateway boot remote) as pinging and probes them concurrently.
+// Remotes already mid-ping are skipped so overlapping sweeps (tick + manual)
+// don't double-probe.
+func (m *model) pingAllArmadaCmd() tea.Cmd {
+	type target struct{ url, token string }
+	var targets []target
 	for _, r := range m.armadaRemotes {
-		if m.armadaStatus[r.URL].state == armadaStatusPinging {
+		targets = append(targets, target{r.URL, r.Token})
+	}
+	// The gateway boot remote shows in the dropdown as "(env)" even when not
+	// registered, so give it a status too.
+	if m.bootGateway != "" {
+		registered := false
+		for _, r := range m.armadaRemotes {
+			if r.URL == m.bootGateway {
+				registered = true
+				break
+			}
+		}
+		if !registered {
+			targets = append(targets, target{m.bootGateway, m.bootToken})
+		}
+	}
+
+	var cmds []tea.Cmd
+	for _, t := range targets {
+		if m.armadaStatus[t.url].state == armadaStatusPinging {
 			continue
 		}
-		m.armadaStatus[r.URL] = armadaStatus{state: armadaStatusPinging}
-		cmds = append(cmds, pingArmadaCmd(r.URL, r.Token))
+		m.armadaStatus[t.url] = armadaStatus{state: armadaStatusPinging}
+		cmds = append(cmds, pingArmadaCmd(t.url, t.token))
 	}
 	if len(cmds) == 0 {
 		return nil
@@ -287,39 +386,70 @@ func armadaPingErrText(err error) string {
 // Armada selector entries + live switch
 // ===========================================
 
-// armadaEntry is one row of the main-page Armada dropdown.
+// armadaEntry is one row of the main-page Armada dropdown. Exactly one of url
+// (a gateway) / server (a plain FLEET_SERVER target) is set for a remote; both
+// empty means local.
 type armadaEntry struct {
 	label   string
-	url     string // "" = local
+	url     string // gateway URL ("" unless a gateway entry)
 	token   string
+	server  string // FLEET_SERVER host:port ("" unless a plain-TCP entry)
 	current bool
 }
 
+// key uniquely identifies the endpoint an entry points at, matching
+// armadaCurrentKey()'s encoding so "is this the active connection?" is a
+// string compare.
+func (e armadaEntry) key() string {
+	switch {
+	case e.url != "":
+		return e.url
+	case e.server != "":
+		return "server:" + e.server
+	default:
+		return ""
+	}
+}
+
 // armadaEntries builds the dropdown: local first, then every registered
-// remote, then — when the TUI was booted with FLEET_GATEWAY pointing at an
-// unregistered remote — that boot remote, so the current selection is always
-// in the list.
+// remote, then — when the TUI was booted pointing at an UNREGISTERED remote
+// (FLEET_GATEWAY or FLEET_SERVER) — that boot remote, so the current selection
+// is always present and selectable.
 func (m *model) armadaEntries() []armadaEntry {
-	current := armadaCurrentURL()
-	entries := []armadaEntry{{label: "local", current: current == ""}}
-	bootSeen := false
+	current := armadaCurrentKey()
+	entries := []armadaEntry{{label: "local"}}
+	bootGatewaySeen := false
 	for _, r := range m.armadaRemotes {
 		if r.URL == m.bootGateway {
-			bootSeen = true
+			bootGatewaySeen = true
 		}
-		entries = append(entries, armadaEntry{label: r.URL, url: r.URL, token: r.Token, current: r.URL == current})
+		entries = append(entries, armadaEntry{label: r.URL, url: r.URL, token: r.Token})
 	}
-	if m.bootGateway != "" && !bootSeen {
-		entries = append(entries, armadaEntry{label: m.bootGateway + " (env)", url: m.bootGateway, token: m.bootToken, current: m.bootGateway == current})
+	if m.bootGateway != "" && !bootGatewaySeen {
+		entries = append(entries, armadaEntry{label: m.bootGateway + " (env)", url: m.bootGateway, token: m.bootToken})
+	}
+	if m.bootServer != "" {
+		// FLEET_SERVER targets aren't registrable (no token / gateway), so the
+		// boot value is the only way to represent or return to one.
+		entries = append(entries, armadaEntry{label: m.bootServer + " (env)", server: m.bootServer})
+	}
+	for i := range entries {
+		entries[i].current = entries[i].key() == current
 	}
 	return entries
 }
 
-// armadaCurrentURL is the gateway URL of the active connection ("" = local).
-// Read from the env because the env IS the switch mechanism — it stays
-// correct whether the connection came from boot or a runtime switch.
-func armadaCurrentURL() string {
-	return os.Getenv("FLEET_GATEWAY")
+// armadaCurrentKey identifies the active connection from the live env (the env
+// IS the switch mechanism, so it's correct whether the connection came from
+// boot or a runtime switch). "" = local.
+func armadaCurrentKey() string {
+	if gw := os.Getenv("FLEET_GATEWAY"); gw != "" {
+		return gw
+	}
+	if srv := os.Getenv("FLEET_SERVER"); srv != "" {
+		return "server:" + srv
+	}
+	return ""
 }
 
 // armadaCurrentLabel names the active connection for the border selector.
@@ -341,53 +471,77 @@ func armadaCurrentLabel() string {
 func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	fleetPage := m.fleetPage
 
-	// 1. Split panes run child processes attached to the old daemon.
-	if fleetPage != nil && fleetPage.splitPaneID != "" {
-		killAllSplitPanes()
-		unbindHostSplitKeys()
-		fleetPage.clearSplit()
+	// 1. The env vars are the single switch point: every fleetclient.Dial
+	// re-reads them, IsRemote() follows, and `fleet shell` children spawned
+	// from here on inherit them. Swap them FIRST so any RPC that re-dials
+	// during the teardown below targets the NEW endpoint, never the old one.
+	switch {
+	case entry.url != "":
+		_ = os.Setenv("FLEET_GATEWAY", entry.url)
+		_ = os.Setenv("FLEET_TOKEN", entry.token)
+		_ = os.Unsetenv("FLEET_SERVER")
+	case entry.server != "":
+		_ = os.Setenv("FLEET_SERVER", entry.server)
+		_ = os.Unsetenv("FLEET_GATEWAY")
+		_ = os.Unsetenv("FLEET_TOKEN")
+	default: // local
+		_ = os.Unsetenv("FLEET_GATEWAY")
+		_ = os.Unsetenv("FLEET_SERVER")
+		_ = os.Unsetenv("FLEET_TOKEN")
 	}
 
-	// 2. Port-forward listeners (and browser proxies riding them) hold dialer
+	// 2. Split panes run child processes attached to the old daemon. Bump the
+	// restore sequence so an in-flight group restore's splitPaneMsg is rejected
+	// (it would otherwise bind a pane to the old fleet and persist its layout).
+	if fleetPage != nil {
+		fleetPage.restoreSeq++
+		if fleetPage.splitPaneID != "" {
+			killAllSplitPanes()
+			unbindHostSplitKeys()
+			fleetPage.clearSplit()
+		}
+	}
+
+	// 3. Port-forward listeners (and browser proxies riding them) hold dialer
 	// closures over the old connection.
 	m.portForwards.Shutdown()
 	m.activeBrowser = make(map[string]string)
 
-	// 3. Drop the cached mutation conn; the next RPC re-dials with the new env.
+	// 4. Drop the cached mutation conn; the next RPC re-dials with the new env
+	// (set in step 1). dialMutation no longer holds its lock across Dial, so
+	// this can't freeze the Update loop behind a slow in-flight dial.
 	closeMutationConn()
 
-	// 4. The env vars are the single switch point: every fleetclient.Dial
-	// re-reads them, IsRemote() follows, and `fleet shell` children spawned
-	// from here on inherit them.
-	if entry.url == "" {
-		_ = os.Unsetenv("FLEET_GATEWAY")
-		_ = os.Unsetenv("FLEET_SERVER")
-		_ = os.Unsetenv("FLEET_TOKEN")
-	} else {
-		_ = os.Setenv("FLEET_GATEWAY", entry.url)
-		_ = os.Setenv("FLEET_TOKEN", entry.token)
-		_ = os.Unsetenv("FLEET_SERVER")
-	}
+	// 5. Reconnect the Watch stream to the new endpoint and adopt the new
+	// connection generation, so events still in flight from the OLD stream are
+	// dropped instead of repainting the just-switched caches.
+	m.watchGen = bounceWatchStream()
 
-	// 5. Reconnect the Watch stream to the new endpoint (re-arms the
-	// once-per-connection FleetTUIConnected nudge).
-	bounceWatchStream()
-
-	// 6. Blank every daemon-derived cache so nothing from the old fleet
-	// lingers (m.runtime merges by key and would otherwise keep stale rows).
+	// 6. Blank every daemon-derived cache so nothing from the old fleet lingers
+	// (m.runtime merges by key and would otherwise keep stale rows; m.config
+	// must not leak the old daemon's settings into the new daemon's settings
+	// page / saves). The reload (or the Watch initial state) repopulates them.
 	m.st = &configutil.State{}
 	m.pstate = nil
+	m.config = configutil.DefaultConfig()
+	m.armadaConfigPending = true
 	clear(m.runtime)
 	clear(m.creating)
 	m.remoteMcpStatus = nil
+	m.coderPresets = nil
+	m.codespaceMachines = nil
+	m.coderFetchingParams = false
+	m.codespaceFetchingMachines = false
 	m.sessionStore = NewSessionStore()
+	m.err = nil
 	if fleetPage != nil {
 		fleetPage.savedGroups = make(map[string]savedGroup)
 		fleetPage.collapsed = make(map[string]bool)
 		fleetPage.cursor = 0
+		fleetPage.armadaFocused = false
 		fleetPage.buildRows(m)
 	}
 
 	m.message = fmt.Sprintf("Switching to %s…", entry.label)
-	return switchReloadCmd(entry.label)
+	return switchReloadCmd(entry.label, m.watchGen)
 }

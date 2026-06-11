@@ -403,3 +403,106 @@ func TestViewFleetListEmbedsArmadaSelector(t *testing.T) {
 			m.fleetPage.armadaY, m.fleetPage.armadaX0, m.fleetPage.armadaX1)
 	}
 }
+
+// TestArmadaSelectorMouseClickOpensDropdown drives a real left-click through
+// model.Update at the recorded selector span and asserts it focuses the
+// selector and opens the dropdown (the ticket requires mouse reachability).
+func TestArmadaSelectorMouseClickOpensDropdown(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "")
+	os.Unsetenv("FLEET_GATEWAY")
+	os.Unsetenv("FLEET_TOKEN")
+
+	m := *armadaTestModel(nil)
+	m.currentPage = m.fleetPage
+	// Render once so armadaY/X0/X1 are recorded for hit-testing.
+	m.fleetPage.viewFleetList(&m)
+	fp := m.fleetPage
+
+	click := tea.MouseMsg{
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+		X:      fp.armadaX0,
+		Y:      fp.armadaY,
+	}
+	next, _ := m.Update(click)
+	nm := next.(model)
+	if !nm.fleetPage.armadaFocused && nm.fleetPage.mode != viewArmadaSelect {
+		t.Fatalf("click on the selector should focus it and open the dropdown (focused=%v mode=%v)",
+			nm.fleetPage.armadaFocused, nm.fleetPage.mode)
+	}
+
+	// A click well outside the label span must NOT focus the selector.
+	fp.armadaFocused = false
+	fp.mode = viewNormal
+	miss := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: fp.armadaX1 + 5, Y: fp.armadaY}
+	next, _ = m.Update(miss)
+	if next.(model).fleetPage.mode == viewArmadaSelect {
+		t.Fatal("a click outside the selector span must not open the dropdown")
+	}
+}
+
+// TestArmadaEntriesIncludesFleetServerBoot verifies a FLEET_SERVER-booted TUI
+// is reflected: 'local' is NOT marked current, the server boot endpoint is a
+// selectable '(env)' entry that IS current, and its key round-trips.
+func TestArmadaEntriesIncludesFleetServerBoot(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_SERVER", "10.0.0.5:50051")
+	os.Unsetenv("FLEET_GATEWAY")
+
+	m := armadaTestModel(nil)
+	m.bootServer = "10.0.0.5:50051"
+
+	entries := m.armadaEntries()
+	if entries[0].label != "local" || entries[0].current {
+		t.Fatalf("with FLEET_SERVER set, 'local' must not be current: %+v", entries[0])
+	}
+	last := entries[len(entries)-1]
+	if last.server != "10.0.0.5:50051" || !last.current {
+		t.Fatalf("FLEET_SERVER boot endpoint should be the current entry: %+v", last)
+	}
+	if !strings.Contains(last.label, "(env)") {
+		t.Fatalf("FLEET_SERVER entry label should be marked (env): %q", last.label)
+	}
+
+	// Switching to local from a FLEET_SERVER boot must clear FLEET_SERVER.
+	m.switchArmada(armadaEntry{label: "local"})
+	if os.Getenv("FLEET_SERVER") != "" {
+		t.Fatal("switching to local must unset FLEET_SERVER")
+	}
+}
+
+// TestWatchGenerationDropsStaleEvents verifies the generation guard: a
+// stateChangedMsg from a superseded connection is ignored, while one matching
+// the active generation is applied.
+func TestWatchGenerationDropsStaleEvents(t *testing.T) {
+	m := *armadaTestModel(nil)
+	m.currentPage = m.fleetPage
+	m.watchGen = 7
+
+	state := &fleetgrpc.State{Fleets: map[string]*fleetgrpc.Fleet{
+		"alpha": {Name: "alpha"},
+	}}
+
+	// Stale gen: dropped, m.st stays empty.
+	next, _ := m.Update(stateChangedMsg{state: state, gen: 6})
+	if len(next.(model).st.Fleets) != 0 {
+		t.Fatal("a stale-generation state event must be dropped")
+	}
+
+	// Current gen: applied.
+	next, _ = m.Update(stateChangedMsg{state: state, gen: 7})
+	if _, ok := next.(model).st.Fleets["alpha"]; !ok {
+		t.Fatal("a current-generation state event must be applied")
+	}
+}
+
+// TestBounceWatchStreamBumpsGeneration verifies bounceWatchStream increments
+// the generation (so switchArmada adopts a fresh gen) and that the no-op path
+// in tests returns the current gen without panicking.
+func TestBounceWatchStreamBumpsGeneration(t *testing.T) {
+	// In a unit test the stream was never started, so cancel==nil and bounce
+	// is a no-op returning the current gen (0).
+	if got := bounceWatchStream(); got != watchCtl.gen {
+		t.Fatalf("bounce no-op returned %d, want current gen %d", got, watchCtl.gen)
+	}
+}

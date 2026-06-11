@@ -69,14 +69,18 @@ func LoadArmada() (*Armada, error) {
 }
 
 // SaveArmada writes the armada registry to disk, 0600 because it carries
-// bearer tokens.
+// bearer tokens. The write is atomic (temp file + rename) so a concurrent
+// reader (GetArmada serves clients without a read lock) never observes a
+// torn/partial file, and a crash mid-write can't leave the token store
+// truncated. The rename also re-applies 0600 to any pre-existing file.
 func SaveArmada(a *Armada) error {
 	if a == nil {
 		a = &Armada{}
 	}
 	a.applyDefaults()
 
-	if err := os.MkdirAll(FleetDir(), 0755); err != nil {
+	dir := FleetDir()
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("creating fleet dir: %w", err)
 	}
 
@@ -85,8 +89,26 @@ func SaveArmada(a *Armada) error {
 		return fmt.Errorf("marshaling armada: %w", err)
 	}
 
-	if err := os.WriteFile(ArmadaPath(), data, 0600); err != nil {
+	tmp, err := os.CreateTemp(dir, ".armada-*.json.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp armada file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod temp armada file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
 		return fmt.Errorf("writing armada file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing temp armada file: %w", err)
+	}
+	if err := os.Rename(tmpName, ArmadaPath()); err != nil {
+		return fmt.Errorf("replacing armada file: %w", err)
 	}
 
 	return nil
