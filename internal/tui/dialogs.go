@@ -571,10 +571,9 @@ func (fleetPage *fleetPage) submitAddInstance(m *model) tea.Cmd {
 		fleetPage.blurDialogFields()
 		return nil
 	}
+	// Keep the dialog open so the user can correct the name in place.
 	if err := fleet.ValidateInstanceName(name); err != nil {
 		m.message = err.Error()
-		fleetPage.mode = viewNormal
-		fleetPage.blurDialogFields()
 		return nil
 	}
 
@@ -2190,10 +2189,9 @@ func (fleetPage *fleetPage) saveCloneInstance(m *model) tea.Cmd {
 		fleetPage.blurDialogFields()
 		return nil
 	}
+	// Keep the dialog open so the user can correct the name in place.
 	if err := fleet.ValidateInstanceName(destName); err != nil {
 		m.message = err.Error()
-		fleetPage.mode = viewNormal
-		fleetPage.blurDialogFields()
 		return nil
 	}
 

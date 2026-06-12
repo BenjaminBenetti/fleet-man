@@ -180,6 +180,16 @@ func TestCloneInstanceRejectsSpaceInName(t *testing.T) {
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("want InvalidArgument, got %v", err)
 	}
+
+	// The optional new display name follows the same rule.
+	stream, err = client.CloneInstance(context.Background(), &fleetgrpc.CloneInstanceRequest{Fleet: "alpha", SourceInstance: "i1", NewInstance: "i2", NewDisplayName: ptr("i 2")})
+	if err != nil {
+		t.Fatalf("CloneInstance call: %v", err)
+	}
+	_, err = stream.Recv()
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument, got %v", err)
+	}
 }
 
 func TestStartStopJobs(t *testing.T) {
