@@ -6,8 +6,9 @@ import "time"
 //
 // Name is the stable identifier used for container names, workspace paths,
 // tmux session prefixes, and CLI lookups — it never changes after creation.
-// DisplayName is the user-facing label shown in the TUI; it may be edited
-// freely without touching any underlying resources.
+// DisplayName is the user-facing label shown in the TUI; editing it never
+// touches underlying resources, but like Name it must satisfy
+// ValidateInstanceName.
 type Instance struct {
 	Name         string         `json:"name"`
 	DisplayName  string         `json:"display_name,omitempty"`

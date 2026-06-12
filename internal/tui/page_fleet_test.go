@@ -671,6 +671,38 @@ func TestEditInstanceRejectsEmptyName(t *testing.T) {
 	}
 }
 
+func TestEditInstanceRejectsNameWithSpaces(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	inst := &fleet.Instance{Name: "agent-1", DisplayName: "agent-1", Status: fleet.StatusRunning}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowInstance, fleetName: "alpha", instance: inst}}
+	m := &model{
+		st: &state.State{
+			Fleets: map[string]*fleet.Fleet{
+				"alpha": {Name: "alpha", Instances: []*fleet.Instance{inst}},
+			},
+		},
+		fleetPage: fp,
+	}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	// Activate the name field, then submit a value containing a space.
+	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyEnter})
+	fp.textInput.SetValue("auth fix")
+	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if inst.DisplayName != "agent-1" {
+		t.Fatalf("DisplayName = %q, want unchanged %q", inst.DisplayName, "agent-1")
+	}
+	if !strings.Contains(m.message, "must not contain spaces") {
+		t.Fatalf("message = %q, want spaces rejection message", m.message)
+	}
+	if fp.mode != viewAddInstance {
+		t.Fatalf("dialog closed prematurely; mode = %v", fp.mode)
+	}
+}
+
 // stubFleetSettingsSave makes the instant-save RPC a no-op for tests: the dialog
 // mutates m.st in-memory before calling it, so a nil return means "saved" with
 // no real RPC and no revert.

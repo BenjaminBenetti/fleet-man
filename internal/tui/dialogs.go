@@ -604,6 +604,11 @@ func (fleetPage *fleetPage) submitAddInstance(m *model) tea.Cmd {
 		fleetPage.blurDialogFields()
 		return nil
 	}
+	// Keep the dialog open so the user can correct the name in place.
+	if err := fleet.ValidateInstanceName(name); err != nil {
+		m.message = err.Error()
+		return nil
+	}
 
 	fleetName := fleetPage.dialogFleet
 	f, ok := m.st.Fleets[fleetName]
@@ -760,6 +765,10 @@ func (fleetPage *fleetPage) saveInstanceEdits(m *model) tea.Cmd {
 	displayName := strings.TrimSpace(fleetPage.textInput.Value())
 	if displayName == "" {
 		m.message = "Name cannot be empty"
+		return nil
+	}
+	if err := fleet.ValidateInstanceName(displayName); err != nil {
+		m.message = err.Error()
 		return nil
 	}
 
@@ -2211,6 +2220,11 @@ func (fleetPage *fleetPage) saveCloneInstance(m *model) tea.Cmd {
 		m.message = "Name cannot be empty"
 		fleetPage.mode = viewNormal
 		fleetPage.blurDialogFields()
+		return nil
+	}
+	// Keep the dialog open so the user can correct the name in place.
+	if err := fleet.ValidateInstanceName(destName); err != nil {
+		m.message = err.Error()
 		return nil
 	}
 

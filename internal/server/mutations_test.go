@@ -225,6 +225,36 @@ func TestSetInstanceMetadataUpdatesOnlyProvidedFields(t *testing.T) {
 	}
 }
 
+func TestSetInstanceMetadataRejectsDisplayNameWithSpaces(t *testing.T) {
+	isolateFleetDir(t)
+	svc := newService()
+	ctx := context.Background()
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Instances: []*fleet.Instance{{Name: "i1", DisplayName: "orig"}}},
+	}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	_, err := svc.SetInstanceMetadata(ctx, &fleetgrpc.SetInstanceMetadataRequest{
+		Fleet: "alpha", Instance: "i1", DisplayName: ptr("new name"),
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument, got %v", err)
+	}
+	st, _ := state.Load()
+	if got := st.Fleets["alpha"].Instances[0].DisplayName; got != "orig" {
+		t.Fatalf("DisplayName = %q, want unchanged %q", got, "orig")
+	}
+
+	// An explicit empty string clears the override (falls back to Name) and
+	// must stay allowed.
+	if _, err := svc.SetInstanceMetadata(ctx, &fleetgrpc.SetInstanceMetadataRequest{
+		Fleet: "alpha", Instance: "i1", DisplayName: ptr(""),
+	}); err != nil {
+		t.Fatalf("clear display name: %v", err)
+	}
+}
+
 func TestGroupLayoutSetAndDelete(t *testing.T) {
 	isolateFleetDir(t)
 	svc := newService()
