@@ -12,6 +12,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // armadaTestModel builds a model with the pieces the armada paths touch. The
@@ -394,7 +395,9 @@ func TestViewFleetListEmbedsArmadaSelector(t *testing.T) {
 	os.Unsetenv("FLEET_TOKEN")
 
 	m := armadaTestModel(nil)
-	out := m.fleetPage.viewFleetList(m)
+	// "Armada" wears a per-character gradient, so strip ANSI before matching the
+	// visible border text (what the terminal actually shows).
+	out := ansi.Strip(m.fleetPage.viewFleetList(m))
 	if !strings.Contains(out, "Armada [ local ]") {
 		t.Fatal("fleet list view missing the Armada border selector")
 	}

@@ -1073,13 +1073,20 @@ func (fleetPage *fleetPage) renderArmadaBorder(m *model, width int) string {
 	if lipgloss.Width(name) > maxName {
 		name = ansi.Truncate(name, maxName, "…")
 	}
+	// labelWidth drives layout + mouse hit-testing, so measure the PLAIN text;
+	// the ANSI styling applied below doesn't change the visible width.
 	label := " Armada [ " + name + " ] "
 	labelWidth := lipgloss.Width(label)
 
-	styledLabel := label
+	// "Armada" wears the same light-cyan→deep-blue gradient as the "fleet" logo
+	// header. The brackets + current-connection name follow the border colour,
+	// switching to the selection highlight while the selector is focused / open.
+	rest := " [ " + name + " ] "
+	restStyle := borderStyle
 	if fleetPage.armadaFocused || fleetPage.mode == viewArmadaSelect {
-		styledLabel = selectedStyle.Render(label)
+		restStyle = selectedStyle
 	}
+	styledLabel := " " + renderGradient("Armada") + restStyle.Render(rest)
 
 	fleetPage.armadaX0 = 3
 	fleetPage.armadaX1 = 3 + labelWidth
