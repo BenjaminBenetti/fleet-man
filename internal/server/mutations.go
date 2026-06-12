@@ -149,8 +149,15 @@ func (s *service) SetFleetSettings(_ context.Context, req *fleetgrpc.SetFleetSet
 // SetInstanceMetadata updates user-facing labels (display name, color, tag)
 // without touching resources. Only the fields present in the request are
 // changed; an explicit empty string (e.g. clearing a tag) is distinguished from
-// "leave unchanged" by the proto presence bit.
+// "leave unchanged" by the proto presence bit. A non-empty display name (the
+// rename path) must satisfy fleet.ValidateInstanceName; an empty one clears
+// the override so the instance falls back to its immutable Name.
 func (s *service) SetInstanceMetadata(_ context.Context, req *fleetgrpc.SetInstanceMetadataRequest) (*fleetgrpc.MutationReply, error) {
+	if req.DisplayName != nil && req.GetDisplayName() != "" {
+		if err := fleet.ValidateInstanceName(req.GetDisplayName()); err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+	}
 	snapshot, err := s.mutate(func(st *state.State) error {
 		f, ok := st.Fleets[req.GetFleet()]
 		if !ok {

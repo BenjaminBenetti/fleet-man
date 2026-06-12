@@ -440,6 +440,9 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest) (
 	if fleetName == "" || instanceName == "" {
 		return nil, status.Error(codes.InvalidArgument, "fleet and instance are required")
 	}
+	if err := fleet.ValidateInstanceName(instanceName); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 
 	backendType := s.resolveBackend(req.GetBackend())
 	wsDir := filepath.Join(state.WorkspacesDir(), fleetName, instanceName, fleetName)
@@ -502,6 +505,9 @@ func (s *service) startCloneInstanceJob(req *fleetgrpc.CloneInstanceRequest) (*j
 	srcName, destName := req.GetSourceInstance(), req.GetNewInstance()
 	if fleetName == "" || srcName == "" || destName == "" {
 		return nil, status.Error(codes.InvalidArgument, "fleet, source_instance and new_instance are required")
+	}
+	if err := fleet.ValidateInstanceName(destName); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	wsDir := filepath.Join(state.WorkspacesDir(), fleetName, destName, fleetName)

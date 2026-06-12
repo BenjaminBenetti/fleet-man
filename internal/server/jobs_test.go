@@ -142,6 +142,46 @@ func TestCreateInstanceRejectsDuplicate(t *testing.T) {
 	}
 }
 
+func TestCreateInstanceRejectsSpaceInName(t *testing.T) {
+	isolateFleetDir(t)
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Remote: "git@x:a.git"},
+	}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, client, cleanup := newTestServer(t)
+	defer cleanup()
+
+	stream, err := client.CreateInstance(context.Background(), &fleetgrpc.CreateInstanceRequest{Fleet: "alpha", Instance: "my agent"})
+	if err != nil {
+		t.Fatalf("CreateInstance call: %v", err)
+	}
+	_, err = stream.Recv()
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument, got %v", err)
+	}
+}
+
+func TestCloneInstanceRejectsSpaceInName(t *testing.T) {
+	isolateFleetDir(t)
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Remote: "git@x:a.git", Instances: []*fleet.Instance{{Name: "i1"}}},
+	}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, client, cleanup := newTestServer(t)
+	defer cleanup()
+
+	stream, err := client.CloneInstance(context.Background(), &fleetgrpc.CloneInstanceRequest{Fleet: "alpha", SourceInstance: "i1", NewInstance: "i 2"})
+	if err != nil {
+		t.Fatalf("CloneInstance call: %v", err)
+	}
+	_, err = stream.Recv()
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument, got %v", err)
+	}
+}
+
 func TestStartStopJobs(t *testing.T) {
 	isolateFleetDir(t)
 	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
