@@ -335,7 +335,12 @@ func TestRestoreSessionNamesTopsUpIncompleteLiveDiscovery(t *testing.T) {
 	}
 }
 
-func TestRestoreSessionNamesUsesSavedLayoutOverLiveDiscovery(t *testing.T) {
+func TestRestoreSessionNamesAppendsLiveSessionsMissingFromSnapshot(t *testing.T) {
+	// Issue #158: another TUI on the same daemon added a pane after this
+	// TUI's snapshot was taken. The snapshot still drives order and
+	// recreate-if-dead (ff00 is kept even though discovery doesn't list
+	// it), but live group sessions missing from the snapshot are appended
+	// so the other TUI's pane is restored too.
 	sg := savedGroup{
 		GroupID:      "abc123",
 		InstanceName: "alpha",
@@ -344,19 +349,77 @@ func TestRestoreSessionNamesUsesSavedLayoutOverLiveDiscovery(t *testing.T) {
 	}
 
 	got := restoreSessionNames(
-		"alpha~abc123\nalpha~abc123~stale\n",
+		"alpha~abc123\nalpha~abc123~3421\nalpha~other\n",
 		"alpha~abc123",
 		nil,
 		&sg,
 		"alpha",
 	)
-	want := []string{"alpha~abc123", "alpha~abc123~ff00"}
+	want := []string{"alpha~abc123", "alpha~abc123~ff00", "alpha~abc123~3421"}
 	if len(got) != len(want) {
 		t.Fatalf("len = %d, want %d: %#v", len(got), len(want), got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("session[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestSnapshotMatchesRuntime covers the issue #158 stale-view guard: a
+// snapshot may only be persisted when its session set is exactly the set
+// of live inner-tmux sessions for the group.
+func TestSnapshotMatchesRuntime(t *testing.T) {
+	snapshot := savedGroup{
+		GroupID:      "abc123",
+		InstanceName: "alpha",
+		Sessions:     []string{"alpha~abc123", "alpha~abc123~ff00"},
+		PaneCount:    2,
+	}
+
+	cases := []struct {
+		name string
+		live []tmuxSession
+		want bool
+	}{
+		{
+			name: "exact match, order ignored",
+			live: []tmuxSession{{Name: "alpha~abc123~ff00"}, {Name: "alpha~abc123"}},
+			want: true,
+		},
+		{
+			name: "sessions from other groups and bare names are ignored",
+			live: []tmuxSession{
+				{Name: "alpha~abc123"},
+				{Name: "alpha~abc123~ff00"},
+				{Name: "alpha~other"},
+				{Name: "unrelated"},
+			},
+			want: true,
+		},
+		{
+			name: "runtime has a group session the snapshot lacks (other TUI added a pane)",
+			live: []tmuxSession{
+				{Name: "alpha~abc123"},
+				{Name: "alpha~abc123~ff00"},
+				{Name: "alpha~abc123~3421"},
+			},
+			want: false,
+		},
+		{
+			name: "snapshot has a session the runtime lacks (dead session / poll lag)",
+			live: []tmuxSession{{Name: "alpha~abc123"}},
+			want: false,
+		},
+		{
+			name: "no runtime cached",
+			live: nil,
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		if got := snapshotMatchesRuntime(snapshot, tc.live); got != tc.want {
+			t.Errorf("%s: snapshotMatchesRuntime = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

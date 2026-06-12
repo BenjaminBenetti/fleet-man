@@ -965,14 +965,14 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 			rowGroup := ActiveGroup{Ref: sessRef, GroupID: groupID}
 			// Same instance + same group → toggle split closed.
 			if fleetPage.splitPaneID != "" && fleetPage.splitRef == sessRef && groupID != "" && fleetPage.activeGroup == rowGroup {
-				fleetPage.saveCurrentGroupLayout(m.st)
+				fleetPage.saveCurrentGroupLayout(m)
 				killAllSplitPanes()
 				unbindHostSplitKeys()
 				fleetPage.clearSplit()
 				return nil
 			}
 			if fleetPage.splitPaneID != "" && !fleetPage.activeGroup.Empty() {
-				fleetPage.saveCurrentGroupLayout(m.st)
+				fleetPage.saveCurrentGroupLayout(m)
 				killAllSplitPanes()
 			}
 			fleetPage.activeGroup = rowGroup
@@ -1019,7 +1019,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 				fleetPage.clearSplit()
 			}
 			if fleetPage.splitPaneID != "" && fleetPage.splitRef == instRef {
-				fleetPage.saveCurrentGroupLayout(m.st)
+				fleetPage.saveCurrentGroupLayout(m)
 				killAllSplitPanes()
 				unbindHostSplitKeys()
 				fleetPage.clearSplit()
@@ -2254,7 +2254,7 @@ func (fleetPage *fleetPage) commitGroupCycle(m *model) tea.Cmd {
 		return nil
 	}
 
-	fleetPage.saveCurrentGroupLayout(m.st)
+	fleetPage.saveCurrentGroupLayout(m)
 	killAllSplitPanes()
 
 	fleetPage.activeGroup = target

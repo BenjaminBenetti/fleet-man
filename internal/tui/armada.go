@@ -272,7 +272,7 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 		m.armadaConfigPending = false
 		m.err = nil
 		m.resumeCreatingFromState()
-		m.hydrateSavedGroups()
+		m.reconcileSavedGroups()
 		m.pruneOrphanedSavedGroups()
 		if m.fleetPage != nil {
 			m.fleetPage.buildRows(m)
