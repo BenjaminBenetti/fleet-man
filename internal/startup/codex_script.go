@@ -56,7 +56,7 @@ case "$(uname -m)" in
     ;;
 esac
 
-scratch=$(mktemp -d)
+scratch=$(mktemp -d) || exit 1
 trap 'rm -rf "$scratch"' EXIT
 
 attempt=1
