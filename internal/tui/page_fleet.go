@@ -74,6 +74,18 @@ type fleetPage struct {
 	dialogCustomMountErr       string   // inline validation error shown under the add-mount input
 	dialogMountRemoveConfirm   bool     // inline "[remove?]" confirm armed on the focused custom-mount row (mirrors the Caching [Delete cache] flow)
 
+	// Layouts section (edit-fleet dialog) state. The preset creation/edit flow
+	// itself lives in lpFlow while mode == viewLayoutPreset.
+	dialogLayoutsExpanded     bool                 // ▼ Layouts expanded, revealing per-preset rows + the add row
+	dialogLayoutPresets       []fleet.LayoutPreset // working copy of the fleet's layout presets (instant-save)
+	dialogPresetRemoveConfirm bool                 // inline "[remove?]" confirm armed on the focused preset row
+	lpFlow                    *layoutPresetFlow    // open preset creation/edit flow (nil unless mode == viewLayoutPreset)
+
+	// New-session dialog template cycling: the fleet's presets snapshotted at
+	// dialog open, and the Tab-cycled selection (-1 = none, a plain session).
+	dialogPresets   []fleet.LayoutPreset
+	dialogPresetIdx int
+
 	dialogDetecting bool // true while a homedir auto-detect cmd is in flight
 
 	// dialogBrowserSwitching is true while the switch-browser dialog
@@ -290,6 +302,8 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.updateArmadaSelect(m, msg)
 	case viewCreateSession:
 		return fleetPage.updateCreateSession(m, msg)
+	case viewLayoutPreset:
+		return fleetPage.updateLayoutPreset(m, msg)
 	case viewRenameSession:
 		return fleetPage.updateRenameSession(m, msg)
 	case viewCloneInstance:
@@ -708,13 +722,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 					m.message = "Instance must be running to create sessions"
 					break
 				}
-				fleetPage.mode = viewCreateSession
-				fleetPage.dialogFleet = r.fleetName
-				fleetPage.dialogInst = instance.Name
-				fleetPage.textInput.SetValue("")
-				fleetPage.textInput.Placeholder = "session-name (or empty for auto)"
-				fleetPage.textInput.CharLimit = 64
-				return fleetPage.activateTextInput()
+				return fleetPage.openCreateSessionDialog(m, r.fleetName, instance)
 			}
 			fleetName := fleetPage.currentFleetName()
 			if fleetName == "" {
@@ -938,14 +946,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		fleetPage.buildRows(m)
 
 	case rowNewSession:
-		instance := r.instance
-		fleetPage.mode = viewCreateSession
-		fleetPage.dialogFleet = r.fleetName
-		fleetPage.dialogInst = instance.Name
-		fleetPage.textInput.SetValue("")
-		fleetPage.textInput.Placeholder = "session-name (or empty for auto)"
-		fleetPage.textInput.CharLimit = 64
-		return fleetPage.activateTextInput()
+		return fleetPage.openCreateSessionDialog(m, r.fleetName, r.instance)
 
 	case rowSession:
 		instance := r.instance
@@ -1651,6 +1652,11 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 		b.WriteString(dialogBox.Render(fleetPage.renderEditFleet(m)))
 		b.WriteString("\n")
 
+	case viewLayoutPreset:
+		b.WriteString("\n")
+		b.WriteString(dialogBox.Render(fleetPage.renderLayoutPresetDialog()))
+		b.WriteString("\n")
+
 	case viewTagInstance:
 		b.WriteString("\n")
 		dialog := fmt.Sprintf(
@@ -1745,15 +1751,28 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 
 	case viewCreateSession:
 		b.WriteString("\n")
-		dialog := fmt.Sprintf(
-			"%s\n\n%s %s\n%s %s\n\n%s",
+		hint := fleetPage.textDialogHint("Create (empty for auto-name)")
+		body := fmt.Sprintf(
+			"%s\n\n%s %s\n%s %s",
 			dialogTitle.Render("New session"),
 			dialogLabel.Render("Instance:"),
 			fleetExpandedStyle.Render(fleetPage.dialogFleet+"/"+fleetPage.dialogInst),
 			dialogLabel.Render("Name:    "),
 			fleetPage.textInput.View(),
-			dialogHint.Render(fleetPage.textDialogHint("Create (empty for auto-name)")),
 		)
+		// Template line, only when the fleet has layout presets to cycle.
+		if len(fleetPage.dialogPresets) > 0 {
+			var tmpl string
+			if idx := fleetPage.dialogPresetIdx; idx >= 0 && idx < len(fleetPage.dialogPresets) {
+				p := fleetPage.dialogPresets[idx]
+				tmpl = selectedStyle.Render(fmt.Sprintf("%s (%s)", p.Name, paneCountLabel(p.PaneCount())))
+			} else {
+				tmpl = dimStyle.Render("(none)")
+			}
+			body += fmt.Sprintf("\n%s %s", dialogLabel.Render("Template:"), tmpl)
+			hint = "[tab] Cycle template  " + hint
+		}
+		dialog := fmt.Sprintf("%s\n\n%s", body, dialogHint.Render(hint))
 		b.WriteString(dialogBox.Render(dialog))
 		b.WriteString("\n")
 
@@ -1950,6 +1969,12 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 			d.WriteString(marker(row) + dialogLabel.Render("Home dir: ") + " " + field)
 		case editFleetRowPreferFleetLaunch:
 			d.WriteString(marker(row) + checkbox(fleetPage.dialogPreferFleetLaunch) + " " + dialogLabel.Render("Prefer Fleet Launch"))
+		case editFleetRowLayouts:
+			arrow := "▶ "
+			if fleetPage.dialogLayoutsExpanded {
+				arrow = "▼ "
+			}
+			d.WriteString(marker(row) + dialogLabel.Render(fmt.Sprintf("%sLayouts (%d)", arrow, len(fleetPage.dialogLayoutPresets))))
 		case editFleetRowCustomMounts:
 			arrow := "▶ "
 			if fleetPage.dialogCustomMountsExpanded {
@@ -1969,9 +1994,13 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 		case editFleetRowImageCache:
 			d.WriteString(marker(row) + fleetPage.renderCacheRow(m, cacheImage, "Docker image cache"))
 		default:
-			// Dynamic custom-mount child rows (existing mounts + the add row),
-			// indented one level under the Custom mounts header.
-			d.WriteString(fleetPage.renderCustomMountRow(row, marker))
+			// Dynamic child rows, indented one level under their section
+			// header: layout presets or custom mounts.
+			if isLayoutPresetChildRow(row) {
+				d.WriteString(fleetPage.renderLayoutPresetRow(row, marker))
+			} else {
+				d.WriteString(fleetPage.renderCustomMountRow(row, marker))
+			}
 		}
 		d.WriteString("\n")
 	}
@@ -1997,6 +2026,32 @@ func (fleetPage *fleetPage) renderCustomMountRow(row int, marker func(int) strin
 		return marker(row) + "  " + dialogLabel.Render("+ Add mount")
 	}
 	return marker(row) + "  " + fleetPage.dialogCustomMounts[idx] + "   " + fleetPage.renderRemoveMountButton(row)
+}
+
+// renderLayoutPresetRow renders one dynamic layout-preset child row: an
+// existing preset (name + pane count, with a [remove] affordance) or the
+// "+ Layout Preset" row that starts the capture flow.
+func (fleetPage *fleetPage) renderLayoutPresetRow(row int, marker func(int) string) string {
+	idx := row - editFleetRowLayoutPresetBase
+	if idx == len(fleetPage.dialogLayoutPresets) {
+		return marker(row) + "  " + dialogLabel.Render("+ Layout Preset")
+	}
+	p := fleetPage.dialogLayoutPresets[idx]
+	label := fmt.Sprintf("%s (%s)", p.Name, paneCountLabel(p.PaneCount()))
+	return marker(row) + "  " + label + "   " + fleetPage.renderRemovePresetButton(row)
+}
+
+// renderRemovePresetButton renders the [remove] affordance next to an existing
+// layout preset, mirroring renderRemoveMountButton's three states.
+func (fleetPage *fleetPage) renderRemovePresetButton(row int) string {
+	focused := fleetPage.dialogRow == row
+	if focused && fleetPage.dialogPresetRemoveConfirm {
+		return selectedStyle.Render("[remove?]")
+	}
+	if focused {
+		return selectedStyle.Render("[remove]")
+	}
+	return dimStyle.Render("[remove]")
 }
 
 // renderRemoveMountButton renders the [remove] affordance next to an existing
@@ -2091,9 +2146,23 @@ func (fleetPage *fleetPage) editFleetHint() string {
 		}
 		return "[enter/d] Remove  [j/k] Select  [q/esc] Save & Close"
 	}
+	if isLayoutPresetChildRow(fleetPage.dialogRow) {
+		if fleetPage.dialogRow == fleetPage.layoutPresetAddRow() {
+			return "[enter] New preset  [j/k] Select  [q/esc] Save & Close"
+		}
+		if fleetPage.dialogPresetRemoveConfirm {
+			return "[d] Confirm remove  [esc] Cancel"
+		}
+		return "[enter] Edit  [d] Remove  [j/k] Select  [q/esc] Save & Close"
+	}
 	switch fleetPage.dialogRow {
 	case editFleetRowCustomMounts:
 		if fleetPage.dialogCustomMountsExpanded {
+			return "[h/←] Collapse  [j/k] Select  [q/esc] Save & Close"
+		}
+		return "[l/→/space] Expand  [j/k] Select  [q/esc] Save & Close"
+	case editFleetRowLayouts:
+		if fleetPage.dialogLayoutsExpanded {
 			return "[h/←] Collapse  [j/k] Select  [q/esc] Save & Close"
 		}
 		return "[l/→/space] Expand  [j/k] Select  [q/esc] Save & Close"

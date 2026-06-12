@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -161,6 +162,57 @@ func createSessionCmd(ref InstanceRef, sessionName string) tea.Cmd {
 			return sessionCreatedMsg{ref: ref, err: err}
 		}
 		return sessionCreatedMsg{ref: ref}
+	}
+}
+
+// presetSessionsCreatedMsg is sent after creating a session group from a
+// layout preset (issue #150). On success the handler records the group's
+// saved layout so opening the group restores the preset's pane geometry.
+type presetSessionsCreatedMsg struct {
+	ref      InstanceRef
+	groupID  string
+	sessions []string // position-ordered session names (slot i = pane i)
+	layout   string   // the preset's tmux layout string ("" = default stacking)
+	err      error
+}
+
+// buildPresetSessionScript builds the in-container one-liner that mints a
+// preset's tmux sessions and types each pane's startup command into its
+// session. Steps are chained with && so a failure (e.g. a name collision on
+// the first new-session) stops the script instead of minting a partial group
+// silently. send-keys targets use "=<name>:" — exact session match (the
+// group's pane names extend the root name, so prefix matching would be
+// ambiguous) and the trailing ":" makes it a session target; a bare "=<name>"
+// fails target-pane parsing ("can't find pane") on tmux 3.x. -l sends the
+// command literally so key names inside it (e.g. "Enter") are not interpreted.
+func buildPresetSessionScript(sessions []string, commands []string) string {
+	var b strings.Builder
+	b.WriteString(tmuxEnsureInstalled)
+	for i, name := range sessions {
+		if i > 0 {
+			b.WriteString(" && ")
+		}
+		fmt.Fprintf(&b, `tmux new-session -d -s %s 2>/dev/null`, shQuote(name))
+		if i < len(commands) && commands[i] != "" {
+			target := shQuote("=" + name + ":")
+			fmt.Fprintf(&b, ` && tmux send-keys -t %s -l %s && tmux send-keys -t %s Enter`,
+				target, shQuote(commands[i]), target)
+		}
+	}
+	return b.String()
+}
+
+// createSessionGroupFromPresetCmd creates every session of a preset-backed
+// group inside the container (running each pane's startup command) and reports
+// the outcome; the handler persists the group layout on success.
+func createSessionGroupFromPresetCmd(ref InstanceRef, groupID string, sessions []string, preset fleet.LayoutPreset) tea.Cmd {
+	script := buildPresetSessionScript(sessions, preset.PaneCommands)
+	layout := preset.Layout
+	return func() tea.Msg {
+		if _, err := runSessionScript(ref, script); err != nil {
+			return presetSessionsCreatedMsg{ref: ref, groupID: groupID, err: err}
+		}
+		return presetSessionsCreatedMsg{ref: ref, groupID: groupID, sessions: sessions, layout: layout}
 	}
 }
 

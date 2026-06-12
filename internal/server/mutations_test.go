@@ -185,6 +185,71 @@ func TestSetFleetSettingsCustomMounts(t *testing.T) {
 	}
 }
 
+// TestSetFleetSettingsLayoutPresets verifies layout presets round-trip through
+// the RPC + state.json (name, layout string, per-pane commands — including the
+// empty "plain shell" command) and that the server rejects invalid lists with
+// InvalidArgument, like custom mounts.
+func TestSetFleetSettingsLayoutPresets(t *testing.T) {
+	isolateFleetDir(t)
+	svc := newService()
+	ctx := context.Background()
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha"}}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	layout := "a0c2,208x58,0,0{104x58,0,0,0,103x58,105,0[103x29,105,0,1,103x28,105,30,2]}"
+	reply, err := svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{
+		Fleet: "alpha",
+		Settings: &fleetgrpc.FleetSettings{
+			LayoutPresets: []*fleetgrpc.LayoutPreset{
+				{Name: " app-run ", Layout: layout, PaneCommands: []string{"npm run dev", ""}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SetFleetSettings: %v", err)
+	}
+	got := reply.GetState().GetFleets()["alpha"].GetSettings().GetLayoutPresets()
+	if len(got) != 1 || got[0].GetName() != "app-run" || got[0].GetLayout() != layout {
+		t.Fatalf("presets in reply = %v", got)
+	}
+	if cmds := got[0].GetPaneCommands(); len(cmds) != 2 || cmds[0] != "npm run dev" || cmds[1] != "" {
+		t.Fatalf("pane commands = %v", got[0].GetPaneCommands())
+	}
+
+	// Persisted through the legacy state.json mapper.
+	st, _ := state.Load()
+	presets := st.Fleets["alpha"].Settings.LayoutPresets
+	if len(presets) != 1 || presets[0].Name != "app-run" || presets[0].Layout != layout || len(presets[0].PaneCommands) != 2 {
+		t.Fatalf("persisted presets = %+v", presets)
+	}
+
+	// Duplicate names are rejected before persisting.
+	if _, err := svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{
+		Fleet: "alpha",
+		Settings: &fleetgrpc.FleetSettings{LayoutPresets: []*fleetgrpc.LayoutPreset{
+			{Name: "x", PaneCommands: []string{""}},
+			{Name: "x", PaneCommands: []string{""}},
+		}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument for duplicate preset names, got %v", err)
+	}
+
+	// A pane-less preset is rejected.
+	if _, err := svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{
+		Fleet:    "alpha",
+		Settings: &fleetgrpc.FleetSettings{LayoutPresets: []*fleetgrpc.LayoutPreset{{Name: "x"}}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument for pane-less preset, got %v", err)
+	}
+
+	// The rejected updates left the valid preset intact.
+	st, _ = state.Load()
+	if presets := st.Fleets["alpha"].Settings.LayoutPresets; len(presets) != 1 || presets[0].Name != "app-run" {
+		t.Fatalf("persisted presets after rejects = %+v", presets)
+	}
+}
+
 func TestSetInstanceMetadataUpdatesOnlyProvidedFields(t *testing.T) {
 	isolateFleetDir(t)
 	svc := newService()

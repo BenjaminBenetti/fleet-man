@@ -1135,6 +1135,7 @@ const (
 	editFleetRowAuggie
 	editFleetRowHomeDir
 	editFleetRowPreferFleetLaunch
+	editFleetRowLayouts      // collapsible section header (issue #150)
 	editFleetRowCustomMounts // collapsible section header
 	editFleetRowCaching      // collapsible section header
 	editFleetRowBuildkit     // child of Caching; only navigable when expanded
@@ -1149,14 +1150,31 @@ const (
 // at base+len(customMounts) is the "+ Add mount" affordance.
 const editFleetRowCustomMountBase = 1000
 
+// editFleetRowLayoutPresetBase is the start of the dynamic layout-preset child
+// rows, a second dynamic band above the custom-mount one. Row base+i is the
+// i-th existing preset; the row at base+len(presets) is "+ Layout Preset".
+const editFleetRowLayoutPresetBase = 2000
+
 // isCustomMountChildRow reports whether row is one of the dynamic custom-mount
 // child rows (an existing mount or the "+ Add mount" row).
-func isCustomMountChildRow(row int) bool { return row >= editFleetRowCustomMountBase }
+func isCustomMountChildRow(row int) bool {
+	return row >= editFleetRowCustomMountBase && row < editFleetRowLayoutPresetBase
+}
+
+// isLayoutPresetChildRow reports whether row is one of the dynamic
+// layout-preset child rows (an existing preset or the "+ Layout Preset" row).
+func isLayoutPresetChildRow(row int) bool { return row >= editFleetRowLayoutPresetBase }
 
 // customMountAddRow returns the row id of the "+ Add mount" affordance, which
 // always sits just past the last existing custom mount.
 func (fleetPage *fleetPage) customMountAddRow() int {
 	return editFleetRowCustomMountBase + len(fleetPage.dialogCustomMounts)
+}
+
+// layoutPresetAddRow returns the row id of the "+ Layout Preset" affordance,
+// which always sits just past the last existing preset.
+func (fleetPage *fleetPage) layoutPresetAddRow() int {
+	return editFleetRowLayoutPresetBase + len(fleetPage.dialogLayoutPresets)
 }
 
 // cacheKind identifies one of the three caches that share the Caching section's
@@ -1227,8 +1245,15 @@ func (fleetPage *fleetPage) visibleEditFleetRows() []int {
 		editFleetRowAuggie,
 		editFleetRowHomeDir,
 		editFleetRowPreferFleetLaunch,
-		editFleetRowCustomMounts,
+		editFleetRowLayouts,
 	}
+	if fleetPage.dialogLayoutsExpanded {
+		for i := range fleetPage.dialogLayoutPresets {
+			rows = append(rows, editFleetRowLayoutPresetBase+i)
+		}
+		rows = append(rows, fleetPage.layoutPresetAddRow())
+	}
+	rows = append(rows, editFleetRowCustomMounts)
 	if fleetPage.dialogCustomMountsExpanded {
 		for i := range fleetPage.dialogCustomMounts {
 			rows = append(rows, editFleetRowCustomMountBase+i)
@@ -1263,6 +1288,7 @@ func (fleetPage *fleetPage) moveEditFleetRow(delta int) {
 	fleetPage.dialogCacheButtonFocused = false
 	fleetPage.dialogDeleteCacheConfirm = false
 	fleetPage.dialogMountRemoveConfirm = false
+	fleetPage.dialogPresetRemoveConfirm = false
 	fleetPage.syncEditFleetFocus()
 }
 
@@ -1361,6 +1387,10 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.dialogMountRemoveConfirm = false
 	fleetPage.customMountInput.SetValue("")
 	fleetPage.customMountInput.Blur()
+	fleetPage.dialogLayoutsExpanded = false
+	fleetPage.dialogLayoutPresets = slices.Clone(f.Settings.LayoutPresets)
+	fleetPage.dialogPresetRemoveConfirm = false
+	fleetPage.lpFlow = nil
 
 	fleetPage.homedirInput.SetValue(f.Settings.HomeDir)
 	fleetPage.homedirInput.Blur()
@@ -1448,6 +1478,10 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.dialogMountRemoveConfirm = false
 			return nil
 		}
+		if fleetPage.dialogPresetRemoveConfirm {
+			fleetPage.dialogPresetRemoveConfirm = false
+			return nil
+		}
 		fleetPage.closeEditFleet(m)
 		return nil
 	}
@@ -1456,6 +1490,11 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 	// handled separately since their row ids are not compile-time constants.
 	if isCustomMountChildRow(fleetPage.dialogRow) {
 		return fleetPage.updateCustomMountRow(m, keyMsg)
+	}
+	// Likewise the dynamic layout-preset child rows (existing presets + the
+	// "+ Layout Preset" row).
+	if isLayoutPresetChildRow(fleetPage.dialogRow) {
+		return fleetPage.updateLayoutPresetRow(m, keyMsg)
 	}
 
 	// Row-specific actions.
@@ -1476,6 +1515,16 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.dialogCustomMountsExpanded = true
 		case "left", "h":
 			fleetPage.dialogCustomMountsExpanded = false
+		}
+		return nil
+	case editFleetRowLayouts:
+		switch keyMsg.String() {
+		case " ", "enter":
+			fleetPage.dialogLayoutsExpanded = !fleetPage.dialogLayoutsExpanded
+		case "right", "l":
+			fleetPage.dialogLayoutsExpanded = true
+		case "left", "h":
+			fleetPage.dialogLayoutsExpanded = false
 		}
 		return nil
 	case editFleetRowCaching:
@@ -1717,6 +1766,57 @@ func (fleetPage *fleetPage) updateCustomMountRow(m *model, keyMsg tea.KeyMsg) te
 	return nil
 }
 
+// updateLayoutPresetRow handles a key press while the cursor is on one of the
+// dynamic layout-preset child rows: an existing preset (enter opens the
+// preview/command editor, x/d removes it behind a two-step confirm) or the
+// "+ Layout Preset" row (enter starts the capture flow).
+func (fleetPage *fleetPage) updateLayoutPresetRow(m *model, keyMsg tea.KeyMsg) tea.Cmd {
+	idx := fleetPage.dialogRow - editFleetRowLayoutPresetBase
+	if idx == len(fleetPage.dialogLayoutPresets) {
+		// The "+ Layout Preset" row.
+		switch keyMsg.String() {
+		case "enter", " ":
+			fleetPage.openLayoutPresetCreate(m)
+		}
+		return nil
+	}
+	switch keyMsg.String() {
+	case "enter", "e":
+		fleetPage.dialogPresetRemoveConfirm = false
+		fleetPage.openLayoutPresetEdit(idx)
+		return nil
+	case "x", "d":
+		// Two-step confirm, mirroring the custom-mount [remove?] flow. Esc
+		// disarms via the dialog's top-level esc handler; row moves clear it.
+		if !fleetPage.dialogPresetRemoveConfirm {
+			fleetPage.dialogPresetRemoveConfirm = true
+			return nil
+		}
+		fleetPage.dialogPresetRemoveConfirm = false
+		return fleetPage.removeLayoutPreset(m, idx)
+	}
+	return nil
+}
+
+// removeLayoutPreset drops the idx-th preset and persists (instant-save),
+// reverting on RPC failure and keeping the cursor in range afterward.
+func (fleetPage *fleetPage) removeLayoutPreset(m *model, idx int) tea.Cmd {
+	if idx < 0 || idx >= len(fleetPage.dialogLayoutPresets) {
+		return nil
+	}
+	prev := fleetPage.dialogLayoutPresets
+	fleetPage.dialogLayoutPresets = slices.Delete(slices.Clone(prev), idx, idx+1)
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		fleetPage.dialogLayoutPresets = prev
+		m.message = fmt.Sprintf("Failed to save: %v", err)
+		return nil
+	}
+	if fleetPage.dialogRow > fleetPage.layoutPresetAddRow() {
+		fleetPage.dialogRow = fleetPage.layoutPresetAddRow()
+	}
+	return nil
+}
+
 // beginAddMount enters the add-custom-mount text sub-mode with a blank input.
 func (fleetPage *fleetPage) beginAddMount() {
 	fleetPage.dialogAddingMount = true
@@ -1878,6 +1978,7 @@ func (fleetPage *fleetPage) persistFleetSettings(m *model) error {
 	f.Settings.AuggieMount = fleetPage.dialogAuggieMount
 	f.Settings.BuildkitServer = fleetPage.dialogBuildkitServer
 	f.Settings.CustomMounts = fleetPage.dialogCustomMounts
+	f.Settings.LayoutPresets = fleetPage.dialogLayoutPresets
 	f.Settings.DebCacheServer = fleetPage.dialogDebCache
 	f.Settings.ImageCacheServer = fleetPage.dialogImageCache
 	if fleetPage.dialogPreferFleetLaunchSet {
@@ -2120,9 +2221,50 @@ func (fleetPage *fleetPage) updateCodespacesLimit(m *model, msg tea.Msg) tea.Cmd
 // ===========================================
 
 // updateCreateSession handles the dialog for creating a new tmux session.
+// openCreateSessionDialog opens the new-session dialog for an instance,
+// snapshotting the fleet's layout presets for Tab cycling (none selected by
+// default — a plain single session).
+func (fleetPage *fleetPage) openCreateSessionDialog(m *model, fleetName string, instance *fleet.Instance) tea.Cmd {
+	fleetPage.mode = viewCreateSession
+	fleetPage.dialogFleet = fleetName
+	fleetPage.dialogInst = instance.Name
+	fleetPage.dialogPresets = nil
+	if f, ok := m.st.Fleets[fleetName]; ok {
+		fleetPage.dialogPresets = f.Settings.LayoutPresets
+	}
+	fleetPage.dialogPresetIdx = -1
+	fleetPage.textInput.SetValue("")
+	fleetPage.textInput.Placeholder = "session-name (or empty for auto)"
+	fleetPage.textInput.CharLimit = 64
+	return fleetPage.activateTextInput()
+}
+
+// cyclePresetTemplate steps the new-session dialog's template selection:
+// -1 (none) → preset 0 → … → preset N-1 → back to none, mirroring how the
+// add-instance dialog Tab-cycles backends.
+func (fleetPage *fleetPage) cyclePresetTemplate(direction int) {
+	n := len(fleetPage.dialogPresets)
+	if n == 0 {
+		return
+	}
+	// Shift the -1..n-1 range to 0..n and cycle modulo n+1.
+	fleetPage.dialogPresetIdx = (fleetPage.dialogPresetIdx+1+direction+n+1)%(n+1) - 1
+}
+
 func (fleetPage *fleetPage) updateCreateSession(m *model, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Tab cycles the layout-preset template in both navigation and
+		// text-entry states (the dialog's only text field never uses Tab).
+		switch msg.String() {
+		case "tab":
+			fleetPage.cyclePresetTemplate(1)
+			return nil
+		case "shift+tab":
+			fleetPage.cyclePresetTemplate(-1)
+			return nil
+		}
+
 		if fleetPage.dialogFieldActive {
 			switch msg.String() {
 			case "enter":
@@ -2177,6 +2319,21 @@ func (fleetPage *fleetPage) saveCreateSession(m *model) tea.Cmd {
 
 	sanitized := SanitizeSessionName(instance.Name)
 	fullName := GroupSessionName(sanitized, name)
+
+	// A template was Tab-selected: mint the whole group — one session per
+	// pane, the user's name as the group ID — and run each pane's command.
+	if fleetPage.dialogPresetIdx >= 0 && fleetPage.dialogPresetIdx < len(fleetPage.dialogPresets) {
+		preset := fleetPage.dialogPresets[fleetPage.dialogPresetIdx]
+		sessions := make([]string, 0, preset.PaneCount())
+		sessions = append(sessions, fullName)
+		for i := 1; i < preset.PaneCount(); i++ {
+			sessions = append(sessions, NewGroupPaneSessionName(sanitized, name))
+		}
+		fleetPage.mode = viewNormal
+		fleetPage.blurDialogFields()
+		m.message = fmt.Sprintf("Creating session %s from %s...", name, preset.Name)
+		return createSessionGroupFromPresetCmd(ref, name, sessions, preset)
+	}
 
 	fleetPage.mode = viewNormal
 	fleetPage.blurDialogFields()

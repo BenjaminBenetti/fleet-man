@@ -178,6 +178,27 @@ message FleetSettings {
   // auto-install startup script. Plain bool like the other *Mount flags:
   // false == "never set" == disabled.
   bool auggie_mount = 10;
+  // layout_presets is the fleet's list of saved session-layout templates
+  // (issue #150). repeated message: an empty list (the default) means no
+  // presets. Names are unique within the list (the server normalizes and
+  // rejects duplicates, like custom_mounts).
+  repeated LayoutPreset layout_presets = 11;
+}
+
+// LayoutPreset mirrors internal/fleet.LayoutPreset — a saved pane-layout
+// template the user can apply when creating a new session (Tab in the
+// new-session dialog). It is captured FROM a live session group: layout is the
+// outer-tmux window_layout string the group save/restore mechanism already
+// persists (GroupLayout.layout; leaf 0 is the fleet TUI pane), and
+// pane_commands holds one bash command per NON-TUI pane in position order (top
+// then left — the same ordering GroupLayout.sessions uses), "" meaning a plain
+// shell. len(pane_commands) IS the pane count; an empty layout string means "no
+// captured geometry" and restores as the default stacked split, exactly like a
+// GroupLayout with no layout.
+message LayoutPreset {
+  string name = 1;
+  string layout = 2;
+  repeated string pane_commands = 3;
 }
 
 // Fleet mirrors internal/fleet.Fleet. Settings is a NESTED message (not inlined)

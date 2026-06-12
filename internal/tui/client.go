@@ -394,6 +394,7 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 		CustomMounts:     s.CustomMounts,
 		DebCacheServer:   s.DebCacheServer,
 		ImageCacheServer: s.ImageCacheServer,
+		LayoutPresets:    layoutPresetsToProto(s.LayoutPresets),
 	}
 	if s.HomeDir != "" {
 		ps.HomeDir = &s.HomeDir
@@ -403,6 +404,36 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 		ps.PreferFleetLaunch = &v
 	}
 	return ps
+}
+
+func layoutPresetsToProto(in []fleet.LayoutPreset) []*fleetgrpc.LayoutPreset {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*fleetgrpc.LayoutPreset, 0, len(in))
+	for _, p := range in {
+		out = append(out, &fleetgrpc.LayoutPreset{
+			Name:         p.Name,
+			Layout:       p.Layout,
+			PaneCommands: p.PaneCommands,
+		})
+	}
+	return out
+}
+
+func protoLayoutPresetsToLegacy(in []*fleetgrpc.LayoutPreset) []fleet.LayoutPreset {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]fleet.LayoutPreset, 0, len(in))
+	for _, p := range in {
+		out = append(out, fleet.LayoutPreset{
+			Name:         p.GetName(),
+			Layout:       p.GetLayout(),
+			PaneCommands: p.GetPaneCommands(),
+		})
+	}
+	return out
 }
 
 func configToProto(c *configutil.Config) *fleetgrpc.Config {
@@ -579,6 +610,7 @@ func protoFleetToLegacy(pf *fleetgrpc.Fleet) *fleet.Fleet {
 			CustomMounts:     ps.GetCustomMounts(),
 			DebCacheServer:   ps.GetDebCacheServer(),
 			ImageCacheServer: ps.GetImageCacheServer(),
+			LayoutPresets:    protoLayoutPresetsToLegacy(ps.GetLayoutPresets()),
 			HomeDir:          ps.GetHomeDir(),
 		}
 		if ps.PreferFleetLaunch != nil {

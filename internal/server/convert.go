@@ -57,6 +57,7 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 		CustomMounts:     s.CustomMounts,
 		DebCacheServer:   s.DebCacheServer,
 		ImageCacheServer: s.ImageCacheServer,
+		LayoutPresets:    layoutPresetsToProto(s.LayoutPresets),
 	}
 	if s.HomeDir != "" {
 		ps.HomeDir = strptr(s.HomeDir)
@@ -65,6 +66,21 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 		ps.PreferFleetLaunch = boolptr(*s.PreferFleetLaunch)
 	}
 	return ps
+}
+
+func layoutPresetsToProto(in []fleet.LayoutPreset) []*fleetgrpc.LayoutPreset {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*fleetgrpc.LayoutPreset, 0, len(in))
+	for _, p := range in {
+		out = append(out, &fleetgrpc.LayoutPreset{
+			Name:         p.Name,
+			Layout:       p.Layout,
+			PaneCommands: p.PaneCommands,
+		})
+	}
+	return out
 }
 
 func instanceToProto(i *fleet.Instance) *fleetgrpc.Instance {
