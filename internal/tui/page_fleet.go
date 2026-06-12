@@ -45,6 +45,7 @@ type fleetPage struct {
 	dialogClaudeMount       bool
 	dialogCodexMount        bool
 	dialogGhMount           bool
+	dialogAuggieMount       bool
 	dialogBuildkitServer    bool
 	dialogDebCache          bool
 	dialogImageCache        bool
@@ -1740,6 +1741,8 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 			d.WriteString(marker(row) + checkbox(fleetPage.dialogCodexMount) + " " + dialogLabel.Render("Codex mount"))
 		case editFleetRowGh:
 			d.WriteString(marker(row) + checkbox(fleetPage.dialogGhMount) + " " + dialogLabel.Render("GitHub CLI mount"))
+		case editFleetRowAuggie:
+			d.WriteString(marker(row) + checkbox(fleetPage.dialogAuggieMount) + " " + dialogLabel.Render("Auggie mount"))
 		case editFleetRowHomeDir:
 			// Text input when focused, dim static text otherwise; append a
 			// spinner + status while an auto-detect runs.

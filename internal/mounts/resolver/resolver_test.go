@@ -216,6 +216,44 @@ func TestResolveCreatesGhMount(t *testing.T) {
 	}
 }
 
+// TestResolveCreatesAuggieMount verifies that enabling AuggieMount produces
+// a directory mount at <containerHome>/.augment backed by a host dir under
+// the fleet's mount root, and that no symlinks are involved (Auggie's state
+// dir — session.json + settings.json — is self-contained).
+func TestResolveCreatesAuggieMount(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	resolved, err := Resolve("delta", fleet.FleetSettings{AuggieMount: true})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if len(resolved.Symlinks) != 0 {
+		t.Errorf("len(Symlinks) = %d, want 0", len(resolved.Symlinks))
+	}
+	if len(resolved.Mounts) != 1 {
+		t.Fatalf("len(Mounts) = %d, want 1", len(resolved.Mounts))
+	}
+
+	wantHost := filepath.Join(home, ".fleet", "workspaces", "delta", ".augment")
+	mount := resolved.Mounts[0]
+	if mount.LocalPath != wantHost {
+		t.Errorf("LocalPath = %q, want %q", mount.LocalPath, wantHost)
+	}
+	if mount.ContainerPath != "/home/vscode/.augment" {
+		t.Errorf("ContainerPath = %q, want %q", mount.ContainerPath, "/home/vscode/.augment")
+	}
+
+	info, err := os.Stat(wantHost)
+	if err != nil {
+		t.Fatalf("expected host dir %s to exist: %v", wantHost, err)
+	}
+	if !info.IsDir() {
+		t.Errorf("%s is not a directory", wantHost)
+	}
+}
+
 // TestResolveCreatesCustomMounts verifies that each custom mount produces a
 // directory mount whose container path is the user-supplied path and whose host
 // path lives under the fleet's .mnt directory, with the host dir created.

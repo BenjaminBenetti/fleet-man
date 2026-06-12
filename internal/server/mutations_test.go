@@ -102,6 +102,7 @@ func TestSetFleetSettingsPreservesPresence(t *testing.T) {
 		Settings: &fleetgrpc.FleetSettings{
 			ClaudeCodeMount:   true,
 			GhMount:           true,
+			AuggieMount:       true,
 			BuildkitServer:    true,
 			HomeDir:           ptr("/home/vscode"),
 			PreferFleetLaunch: &prefer,
@@ -111,7 +112,7 @@ func TestSetFleetSettingsPreservesPresence(t *testing.T) {
 		t.Fatalf("SetFleetSettings: %v", err)
 	}
 	got := reply.GetState().GetFleets()["alpha"].GetSettings()
-	if !got.GetClaudeCodeMount() || got.GetCodexMount() || !got.GetGhMount() || got.GetHomeDir() != "/home/vscode" {
+	if !got.GetClaudeCodeMount() || got.GetCodexMount() || !got.GetGhMount() || !got.GetAuggieMount() || got.GetHomeDir() != "/home/vscode" {
 		t.Fatalf("settings mismatch: %v", got)
 	}
 	if !got.GetBuildkitServer() {

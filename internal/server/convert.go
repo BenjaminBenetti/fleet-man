@@ -52,6 +52,7 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 		ClaudeCodeMount:  s.ClaudeCodeMount,
 		CodexMount:       s.CodexMount,
 		GhMount:          s.GhMount,
+		AuggieMount:      s.AuggieMount,
 		BuildkitServer:   s.BuildkitServer,
 		CustomMounts:     s.CustomMounts,
 		DebCacheServer:   s.DebCacheServer,

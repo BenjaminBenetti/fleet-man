@@ -390,8 +390,14 @@ type FleetSettings struct {
 	// don't re-download. Instances' own dockerd is pointed at the mirror. Plain
 	// bool (default off); only helps docker-in-docker instances.
 	ImageCacheServer bool `protobuf:"varint,9,opt,name=image_cache_server,json=imageCacheServer,proto3" json:"image_cache_server,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// auggie_mount enables the shared ~/.fleet/workspaces/<fleet>/.augment
+	// host directory bind-mounted into every instance (Auggie — the Augment
+	// Code CLI — keeps its login session and settings there) plus the Auggie
+	// auto-install startup script. Plain bool like the other *Mount flags:
+	// false == "never set" == disabled.
+	AuggieMount   bool `protobuf:"varint,10,opt,name=auggie_mount,json=auggieMount,proto3" json:"auggie_mount,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *FleetSettings) Reset() {
@@ -483,6 +489,13 @@ func (x *FleetSettings) GetDebCacheServer() bool {
 func (x *FleetSettings) GetImageCacheServer() bool {
 	if x != nil {
 		return x.ImageCacheServer
+	}
+	return false
+}
+
+func (x *FleetSettings) GetAuggieMount() bool {
+	if x != nil {
+		return x.AuggieMount
 	}
 	return false
 }
@@ -730,7 +743,7 @@ const file_domain_proto_rawDesc = "" +
 	"\x06_errorB\x06\n" +
 	"\x04_tagB\b\n" +
 	"\x06_colorB\t\n" +
-	"\a_branchJ\x04\b\x0e\x10\x1f\"\x97\x03\n" +
+	"\a_branchJ\x04\b\x0e\x10\x1f\"\xba\x03\n" +
 	"\rFleetSettings\x12*\n" +
 	"\x11claude_code_mount\x18\x01 \x01(\bR\x0fclaudeCodeMount\x12\x1f\n" +
 	"\vcodex_mount\x18\x02 \x01(\bR\n" +
@@ -741,7 +754,9 @@ const file_domain_proto_rawDesc = "" +
 	"\x0fbuildkit_server\x18\x06 \x01(\bR\x0ebuildkitServer\x12#\n" +
 	"\rcustom_mounts\x18\a \x03(\tR\fcustomMounts\x12(\n" +
 	"\x10deb_cache_server\x18\b \x01(\bR\x0edebCacheServer\x12,\n" +
-	"\x12image_cache_server\x18\t \x01(\bR\x10imageCacheServerB\v\n" +
+	"\x12image_cache_server\x18\t \x01(\bR\x10imageCacheServer\x12!\n" +
+	"\fauggie_mount\x18\n" +
+	" \x01(\bR\vauggieMountB\v\n" +
 	"\t_home_dirB\x16\n" +
 	"\x14_prefer_fleet_launch\"\xa2\x01\n" +
 	"\x05Fleet\x12\x12\n" +

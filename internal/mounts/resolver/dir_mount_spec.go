@@ -52,6 +52,13 @@ func dirMountSpecsFor(fleetSettings fleet.FleetSettings, containerHome string) [
 			containerPath: containerHome + "/.config/gh",
 		})
 	}
+	if fleetSettings.AuggieMount {
+		specs = append(specs, dirMountSpec{
+			name:          "Auggie",
+			hostSubdir:    ".augment",
+			containerPath: containerHome + "/.augment",
+		})
+	}
 
 	// User-defined custom mounts come AFTER the managed ones so that, when a
 	// custom mount's container path collides with a managed target, the custom
