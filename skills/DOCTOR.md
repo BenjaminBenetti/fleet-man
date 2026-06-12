@@ -332,7 +332,7 @@ done
 Fleet-man can detect and display which coding agent is running inside instances. These are all **optional** — do not report missing agents as issues.
 
 ```bash
-for agent in claude codex gemini copilot; do
+for agent in claude codex auggie gemini copilot; do
   if command -v "$agent" > /dev/null 2>&1; then
     echo "FOUND: $agent"
   fi
@@ -342,6 +342,7 @@ done
 If the user wants to install one:
 - **Claude Code:** `npm install -g @anthropic-ai/claude-code`
 - **Codex:** `npm install -g @openai/codex`
+- **Auggie (Augment Code):** `npm install -g @augmentcode/auggie`
 - **Gemini:** See Google's latest CLI install instructions
 - **Copilot:** `gh extension install github/gh-copilot`
 
