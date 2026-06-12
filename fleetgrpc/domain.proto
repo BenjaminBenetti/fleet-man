@@ -172,6 +172,12 @@ message FleetSettings {
   // don't re-download. Instances' own dockerd is pointed at the mirror. Plain
   // bool (default off); only helps docker-in-docker instances.
   bool image_cache_server = 9;
+  // auggie_mount enables the shared ~/.fleet/workspaces/<fleet>/.augment
+  // host directory bind-mounted into every instance (Auggie — the Augment
+  // Code CLI — keeps its login session and settings there) plus the Auggie
+  // auto-install startup script. Plain bool like the other *Mount flags:
+  // false == "never set" == disabled.
+  bool auggie_mount = 10;
 }
 
 // Fleet mirrors internal/fleet.Fleet. Settings is a NESTED message (not inlined)

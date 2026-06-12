@@ -31,6 +31,15 @@ type FleetSettings struct {
 	// config.yml.
 	GhMount bool `json:"ghMount,omitempty"`
 
+	// AuggieMount enables a shared host directory at
+	// ~/.fleet/workspaces/<fleet>/.augment that is bind-mounted into every
+	// instance of this fleet at <containerHome>/.augment. Used to share
+	// Auggie (the Augment Code CLI) login/state across instances and across
+	// sessions: the directory holds session.json (auth token) and
+	// settings.json. Like ClaudeCodeMount and CodexMount it also enables the
+	// Auggie auto-install startup script.
+	AuggieMount bool `json:"auggieMount,omitempty"`
+
 	// BuildkitServer enables a shared moby/buildkit container for this fleet.
 	// When set, instance provisioning ensures one buildkit container per fleet
 	// whose unix socket lives at ~/.fleet/workspaces/<fleet>/.buildkit/ and is

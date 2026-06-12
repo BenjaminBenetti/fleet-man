@@ -1132,6 +1132,7 @@ const (
 	editFleetRowClaude = iota
 	editFleetRowCodex
 	editFleetRowGh
+	editFleetRowAuggie
 	editFleetRowHomeDir
 	editFleetRowPreferFleetLaunch
 	editFleetRowCustomMounts // collapsible section header
@@ -1223,6 +1224,7 @@ func (fleetPage *fleetPage) visibleEditFleetRows() []int {
 		editFleetRowClaude,
 		editFleetRowCodex,
 		editFleetRowGh,
+		editFleetRowAuggie,
 		editFleetRowHomeDir,
 		editFleetRowPreferFleetLaunch,
 		editFleetRowCustomMounts,
@@ -1339,6 +1341,7 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.dialogClaudeMount = f.Settings.ClaudeCodeMount
 	fleetPage.dialogCodexMount = f.Settings.CodexMount
 	fleetPage.dialogGhMount = f.Settings.GhMount
+	fleetPage.dialogAuggieMount = f.Settings.AuggieMount
 	fleetPage.dialogBuildkitServer = f.Settings.BuildkitServer
 	fleetPage.dialogDebCache = f.Settings.DebCacheServer
 	fleetPage.dialogImageCache = f.Settings.ImageCacheServer
@@ -1457,7 +1460,7 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 
 	// Row-specific actions.
 	switch fleetPage.dialogRow {
-	case editFleetRowClaude, editFleetRowCodex, editFleetRowGh, editFleetRowPreferFleetLaunch:
+	case editFleetRowClaude, editFleetRowCodex, editFleetRowGh, editFleetRowAuggie, editFleetRowPreferFleetLaunch:
 		// space/x and h/l/enter all toggle (instant-save), matching the
 		// settings page.
 		switch keyMsg.String() {
@@ -1628,6 +1631,10 @@ func (fleetPage *fleetPage) toggleEditFleetRow(m *model) tea.Cmd {
 		fleetPage.dialogGhMount = !fleetPage.dialogGhMount
 		turnedOn = fleetPage.dialogGhMount
 		revert = func() { fleetPage.dialogGhMount = !fleetPage.dialogGhMount }
+	case editFleetRowAuggie:
+		fleetPage.dialogAuggieMount = !fleetPage.dialogAuggieMount
+		turnedOn = fleetPage.dialogAuggieMount
+		revert = func() { fleetPage.dialogAuggieMount = !fleetPage.dialogAuggieMount }
 	case editFleetRowBuildkit:
 		fleetPage.dialogBuildkitServer = !fleetPage.dialogBuildkitServer
 		revert = func() { fleetPage.dialogBuildkitServer = !fleetPage.dialogBuildkitServer }
@@ -1798,7 +1805,7 @@ func (fleetPage *fleetPage) shouldKickHomedirDetect(f *fleet.Fleet) bool {
 	if strings.TrimSpace(fleetPage.homedirInput.Value()) != "" {
 		return false
 	}
-	if !fleetPage.dialogClaudeMount && !fleetPage.dialogCodexMount && !fleetPage.dialogGhMount {
+	if !fleetPage.dialogClaudeMount && !fleetPage.dialogCodexMount && !fleetPage.dialogGhMount && !fleetPage.dialogAuggieMount {
 		return false
 	}
 	return strings.TrimSpace(f.Remote) != ""
@@ -1868,6 +1875,7 @@ func (fleetPage *fleetPage) persistFleetSettings(m *model) error {
 	f.Settings.ClaudeCodeMount = fleetPage.dialogClaudeMount
 	f.Settings.CodexMount = fleetPage.dialogCodexMount
 	f.Settings.GhMount = fleetPage.dialogGhMount
+	f.Settings.AuggieMount = fleetPage.dialogAuggieMount
 	f.Settings.BuildkitServer = fleetPage.dialogBuildkitServer
 	f.Settings.CustomMounts = fleetPage.dialogCustomMounts
 	f.Settings.DebCacheServer = fleetPage.dialogDebCache

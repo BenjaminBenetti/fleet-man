@@ -256,6 +256,7 @@ func protoFleetSettingsToLegacy(ps *fleetgrpc.FleetSettings) fleet.FleetSettings
 	s.ClaudeCodeMount = ps.GetClaudeCodeMount()
 	s.CodexMount = ps.GetCodexMount()
 	s.GhMount = ps.GetGhMount()
+	s.AuggieMount = ps.GetAuggieMount()
 	s.BuildkitServer = ps.GetBuildkitServer()
 	s.CustomMounts = ps.GetCustomMounts()
 	s.DebCacheServer = ps.GetDebCacheServer()

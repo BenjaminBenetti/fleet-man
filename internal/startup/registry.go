@@ -7,9 +7,9 @@ import "github.com/BenjaminBenetti/fleet-man/internal/fleet"
 // associated install script contributes exactly one Script; toggles
 // without an associated script are silently skipped.
 //
-// The order is fixed (Claude Code first, Codex second) so users get
-// deterministic log filenames and stable run-ordering across instance
-// creations within the same fleet.
+// The order is fixed (Claude Code first, Codex second, Auggie third) so
+// users get deterministic log filenames and stable run-ordering across
+// instance creations within the same fleet.
 func ScriptsFor(settings fleet.FleetSettings) []Script {
 	var scripts []Script
 	if settings.ClaudeCodeMount {
@@ -17,6 +17,9 @@ func ScriptsFor(settings fleet.FleetSettings) []Script {
 	}
 	if settings.CodexMount {
 		scripts = append(scripts, codexScript())
+	}
+	if settings.AuggieMount {
+		scripts = append(scripts, auggieScript())
 	}
 	return scripts
 }

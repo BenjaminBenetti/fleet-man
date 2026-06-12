@@ -1464,6 +1464,14 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 		t.Fatal("l should toggle selected gh row")
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if fp.dialogRow != editFleetRowAuggie {
+		t.Fatalf("dialogRow = %d, want auggie row", fp.dialogRow)
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if !fp.dialogAuggieMount {
+		t.Fatal("l should toggle selected auggie row")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	if fp.dialogRow != editFleetRowHomeDir {
 		t.Fatalf("dialogRow = %d, want home-dir row", fp.dialogRow)
 	}
@@ -1485,14 +1493,14 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 		t.Fatal("esc should leave the home-dir field")
 	}
 
-	// k now navigates UP (field inactive): home-dir → gh → codex.
+	// k now navigates UP (field inactive): home-dir → auggie → gh.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	if fp.dialogRow != editFleetRowGh {
-		t.Fatalf("dialogRow = %d, want gh row after inactive k", fp.dialogRow)
+	if fp.dialogRow != editFleetRowAuggie {
+		t.Fatalf("dialogRow = %d, want auggie row after inactive k", fp.dialogRow)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	if fp.dialogRow != editFleetRowCodex {
-		t.Fatalf("dialogRow = %d, want codex row after second inactive k", fp.dialogRow)
+	if fp.dialogRow != editFleetRowGh {
+		t.Fatalf("dialogRow = %d, want gh row after second inactive k", fp.dialogRow)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if fp.mode != viewNormal {

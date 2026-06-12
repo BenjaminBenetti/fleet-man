@@ -227,10 +227,10 @@ setup_launch_test() {
 # the settings-driven code paths without driving the TUI.
 #
 # Usage:
-#   seed_fleet_settings <fleet_name> <claude:true|false> <codex:true|false> <homedir> [<gh:true|false>] [<buildkit:true|false>]
+#   seed_fleet_settings <fleet_name> <claude:true|false> <codex:true|false> <homedir> [<gh:true|false>] [<buildkit:true|false>] [<custom_mounts>] [<auggie:true|false>]
 #
-# gh and buildkit default to false so older callers that pre-date those
-# settings keep working unchanged.
+# gh, buildkit, and auggie default to false so older callers that pre-date
+# those settings keep working unchanged.
 seed_fleet_settings() {
   local fleet_name="$1"
   local claude="${2:-false}"
@@ -241,6 +241,7 @@ seed_fleet_settings() {
   # Optional 7th arg: a JSON array literal of custom mount container paths,
   # e.g. '["/opt/data","/var/cache/shared"]'. Empty means no customMounts key.
   local custom_mounts="${7:-}"
+  local auggie="${8:-false}"
   local custom_mounts_line=""
   if [[ -n "${custom_mounts}" ]]; then
     custom_mounts_line=$'\n        "customMounts": '"${custom_mounts}"','
@@ -256,6 +257,7 @@ seed_fleet_settings() {
         "claudeCodeMount": ${claude},
         "codexMount": ${codex},
         "ghMount": ${gh},
+        "auggieMount": ${auggie},
         "buildkitServer": ${buildkit},
         "homeDir": "${homedir}"
       },
