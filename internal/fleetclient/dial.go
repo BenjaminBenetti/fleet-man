@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	"google.golang.org/grpc"
 )
@@ -32,6 +33,18 @@ func Dial(ctx context.Context) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	return dialEndpoint(ctx, ep)
+}
+
+// DialLocal connects to the LOCAL daemon's unix socket regardless of
+// FLEET_GATEWAY/FLEET_SERVER, auto-spawning it when needed. It backs the
+// fleet-armada registry RPCs, which always live on the user's own machine even
+// while the main connection points at a remote fleet.
+func DialLocal(ctx context.Context) (*Conn, error) {
+	return dialEndpoint(ctx, localEndpoint{socket: fleetpaths.SocketPath()})
+}
+
+func dialEndpoint(ctx context.Context, ep Endpoint) (*Conn, error) {
 	conn, err := grpc.NewClient(ep.Target(), ep.DialOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("create client for %s: %w", ep, err)

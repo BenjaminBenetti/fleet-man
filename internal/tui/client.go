@@ -37,17 +37,35 @@ var (
 	mutConn   *fleetclient.Conn
 )
 
-// dialMutation lazily dials (and caches) the shared mutation connection.
+// dialMutation lazily dials (and caches) the shared mutation connection. The
+// actual Dial runs OUTSIDE mutConnMu — Dial can block for seconds (a failing
+// remote Hello, or the local spawn/version-restart path) and closeMutationConn
+// now runs inside the bubbletea Update loop during an armada switch, so holding
+// the lock across Dial would freeze the whole UI. We double-check the cache
+// after dialing and, if another goroutine won the race (or a switch closed the
+// conn under us), discard our connection and use the installed one.
 func dialMutation(ctx context.Context) (*fleetclient.Conn, error) {
 	mutConnMu.Lock()
-	defer mutConnMu.Unlock()
-	if mutConn == nil {
-		conn, err := fleetclient.Dial(ctx)
-		if err != nil {
-			return nil, err
-		}
-		mutConn = conn
+	if mutConn != nil {
+		conn := mutConn
+		mutConnMu.Unlock()
+		return conn, nil
 	}
+	mutConnMu.Unlock()
+
+	conn, err := fleetclient.Dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	mutConnMu.Lock()
+	defer mutConnMu.Unlock()
+	if mutConn != nil {
+		// Lost the race; keep the already-installed conn and drop ours.
+		_ = conn.Close()
+		return mutConn, nil
+	}
+	mutConn = conn
 	return mutConn, nil
 }
 

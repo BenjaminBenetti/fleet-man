@@ -41,6 +41,8 @@ const (
 	FleetService_SetLastSeenVersion_FullMethodName     = "/fleetgrpc.FleetService/SetLastSeenVersion"
 	FleetService_GetConfig_FullMethodName              = "/fleetgrpc.FleetService/GetConfig"
 	FleetService_SetConfig_FullMethodName              = "/fleetgrpc.FleetService/SetConfig"
+	FleetService_GetArmada_FullMethodName              = "/fleetgrpc.FleetService/GetArmada"
+	FleetService_SetArmada_FullMethodName              = "/fleetgrpc.FleetService/SetArmada"
 	FleetService_Exec_FullMethodName                   = "/fleetgrpc.FleetService/Exec"
 	FleetService_ResolveExecCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveExecCommand"
 	FleetService_ResolveLogsCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveLogsCommand"
@@ -104,6 +106,12 @@ type FleetServiceClient interface {
 	// ---- Config (server-owned config.json) ----
 	GetConfig(ctx context.Context, in *GetConfigRequest, opts ...grpc.CallOption) (*GetConfigReply, error)
 	SetConfig(ctx context.Context, in *SetConfigRequest, opts ...grpc.CallOption) (*SetConfigReply, error)
+	// ---- Fleet Armada (the registry of remote fleets, armada.json) ----
+	// Always served by the user's LOCAL daemon: the TUI routes these over a
+	// dedicated local dial even while its main connection points at a remote
+	// fleet (see armada.proto).
+	GetArmada(ctx context.Context, in *GetArmadaRequest, opts ...grpc.CallOption) (*GetArmadaReply, error)
+	SetArmada(ctx context.Context, in *SetArmadaRequest, opts ...grpc.CallOption) (*SetArmadaReply, error)
 	// ---- Interactive backend operations ----
 	Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecIn, ExecOut], error)
 	ResolveExecCommand(ctx context.Context, in *ResolveExecCommandRequest, opts ...grpc.CallOption) (*ResolveExecCommandReply, error)
@@ -412,6 +420,26 @@ func (c *fleetServiceClient) SetConfig(ctx context.Context, in *SetConfigRequest
 	return out, nil
 }
 
+func (c *fleetServiceClient) GetArmada(ctx context.Context, in *GetArmadaRequest, opts ...grpc.CallOption) (*GetArmadaReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetArmadaReply)
+	err := c.cc.Invoke(ctx, FleetService_GetArmada_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) SetArmada(ctx context.Context, in *SetArmadaRequest, opts ...grpc.CallOption) (*SetArmadaReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetArmadaReply)
+	err := c.cc.Invoke(ctx, FleetService_SetArmada_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecIn, ExecOut], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[6], FleetService_Exec_FullMethodName, cOpts...)
@@ -587,6 +615,12 @@ type FleetServiceServer interface {
 	// ---- Config (server-owned config.json) ----
 	GetConfig(context.Context, *GetConfigRequest) (*GetConfigReply, error)
 	SetConfig(context.Context, *SetConfigRequest) (*SetConfigReply, error)
+	// ---- Fleet Armada (the registry of remote fleets, armada.json) ----
+	// Always served by the user's LOCAL daemon: the TUI routes these over a
+	// dedicated local dial even while its main connection points at a remote
+	// fleet (see armada.proto).
+	GetArmada(context.Context, *GetArmadaRequest) (*GetArmadaReply, error)
+	SetArmada(context.Context, *SetArmadaRequest) (*SetArmadaReply, error)
 	// ---- Interactive backend operations ----
 	Exec(grpc.BidiStreamingServer[ExecIn, ExecOut]) error
 	ResolveExecCommand(context.Context, *ResolveExecCommandRequest) (*ResolveExecCommandReply, error)
@@ -686,6 +720,12 @@ func (UnimplementedFleetServiceServer) GetConfig(context.Context, *GetConfigRequ
 }
 func (UnimplementedFleetServiceServer) SetConfig(context.Context, *SetConfigRequest) (*SetConfigReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetConfig not implemented")
+}
+func (UnimplementedFleetServiceServer) GetArmada(context.Context, *GetArmadaRequest) (*GetArmadaReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetArmada not implemented")
+}
+func (UnimplementedFleetServiceServer) SetArmada(context.Context, *SetArmadaRequest) (*SetArmadaReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetArmada not implemented")
 }
 func (UnimplementedFleetServiceServer) Exec(grpc.BidiStreamingServer[ExecIn, ExecOut]) error {
 	return status.Errorf(codes.Unimplemented, "method Exec not implemented")
@@ -1092,6 +1132,42 @@ func _FleetService_SetConfig_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FleetService_GetArmada_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetArmadaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).GetArmada(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_GetArmada_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).GetArmada(ctx, req.(*GetArmadaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_SetArmada_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetArmadaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).SetArmada(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_SetArmada_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).SetArmada(ctx, req.(*SetArmadaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_Exec_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(FleetServiceServer).Exec(&grpc.GenericServerStream[ExecIn, ExecOut]{ServerStream: stream})
 }
@@ -1306,6 +1382,14 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetConfig",
 			Handler:    _FleetService_SetConfig_Handler,
+		},
+		{
+			MethodName: "GetArmada",
+			Handler:    _FleetService_GetArmada_Handler,
+		},
+		{
+			MethodName: "SetArmada",
+			Handler:    _FleetService_SetArmada_Handler,
 		},
 		{
 			MethodName: "ResolveExecCommand",

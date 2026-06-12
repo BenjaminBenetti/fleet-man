@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package fleetgrpc;
 
+import "armada.proto";
 import "control.proto";
 import "watch.proto";
 import "jobs.proto";
@@ -69,6 +70,13 @@ service FleetService {
   // ---- Config (server-owned config.json) ----
   rpc GetConfig(GetConfigRequest) returns (GetConfigReply);
   rpc SetConfig(SetConfigRequest) returns (SetConfigReply);
+
+  // ---- Fleet Armada (the registry of remote fleets, armada.json) ----
+  // Always served by the user's LOCAL daemon: the TUI routes these over a
+  // dedicated local dial even while its main connection points at a remote
+  // fleet (see armada.proto).
+  rpc GetArmada(GetArmadaRequest) returns (GetArmadaReply);
+  rpc SetArmada(SetArmadaRequest) returns (SetArmadaReply);
 
   // ---- Interactive backend operations ----
   rpc Exec(stream ExecIn) returns (stream ExecOut);

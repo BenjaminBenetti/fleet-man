@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package fleetgrpc;
+
+option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
+
+// =====================================================================
+// FLEET ARMADA (armada.json) — the LOCAL daemon's registry of remote fleets
+// =====================================================================
+//
+// The armada is the user's registry of remote fleetd connections (gateway URL +
+// bearer token) the TUI can switch between at runtime. It is client-side data
+// that lives on the user's own machine: the TUI always sends Get/SetArmada to
+// the LOCAL daemon, even while its main connection points at a remote fleet —
+// a remote daemon has no business holding the registry of OTHER fleets.
+//
+// Deliberately NOT part of message Config: SetConfig replaces the whole Config,
+// so an older client's settings save would silently wipe a Config-resident
+// list, and a remote-connected TUI's SetConfig would write the registry to the
+// wrong machine's config.json. Dedicated messages + RPCs avoid both.
+
+// ArmadaRemote is one registered remote fleet: where its gateway is and the
+// bearer token that authenticates to the daemon behind it.
+message ArmadaRemote {
+  // FLEET_GATEWAY-style URL: <scheme>://<host[:port]>/<session-id>.
+  string url = 1;
+  // MCP bearer token; validated by the remote daemon, never by the gateway.
+  string token = 2;
+}
+
+message GetArmadaRequest {}
+
+message GetArmadaReply {
+  repeated ArmadaRemote remotes = 1;
+}
+
+// SetArmada replaces the whole registry (the settings page sends the full
+// edited list). Returns the post-save list so the caller picks up the server's
+// normalization.
+message SetArmadaRequest {
+  repeated ArmadaRemote remotes = 1;
+}
+
+message SetArmadaReply {
+  repeated ArmadaRemote remotes = 1;
+}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -48,10 +49,23 @@ const (
 	settingsItemRemoteMcpCopyRemote = 703 // copy gateway mcp.json snippet to clipboard
 	settingsItemRemoteFleetEnabled  = 704 // expose the gRPC control surface through the gateway
 
+	// Fleet armada: the "+ Remote Fleet" button has a fixed id; registered
+	// remotes get base+i. The base is placed FAR above every other block (and
+	// the tool-status/doctor blocks) so an unbounded number of registered
+	// remotes can never collide with another item — armada IDs are matched by
+	// dedicated checks that run before the `>= settingsItemToolStatusBase`
+	// catch-all, so being above 1000 is fine.
+	settingsItemArmadaAdd  = 800
+	settingsItemArmadaBase = 100000
+
 	settingsItemToolStatusBase = 1000 // tool status rows start here
 	settingsItemDoctor         = 2000 // doctor action row
 	settingsItemKeybindings    = 2001 // keybindings dialog row
 )
+
+// isArmadaRemoteItem reports whether an item ID is one of the registered-remote
+// rows (base+i). Open-ended: nothing else lives at or above the armada base.
+func isArmadaRemoteItem(item int) bool { return item >= settingsItemArmadaBase }
 
 // toolStatusCount is the number of rows rendered in the Tool Status
 // section. Must match the length of deps.CheckTools().
@@ -95,7 +109,27 @@ type settingsPage struct {
 	// down the very tunnel the reply rides on, so the RPC reports Unavailable
 	// even though the save succeeded server-side.
 	serverRemote remoteSettingsSnapshot
+
+	// Fleet Armada section state. The add flow ("+ Remote Fleet") walks
+	// URL → token → connection test through the shared text input; the delete
+	// button mirrors the edit-fleet cache-clear pattern (horizontal sub-cursor
+	// + two-press armed confirm, reset on every cursor move).
+	armadaAddStage      armadaAddStage
+	armadaAddURL        string // committed URL while the token stage is active
+	armadaDeleteFocused bool   // sub-cursor on the [ delete ] button of the current remote row
+	armadaDeleteConfirm bool   // "[ delete? ]" armed (first enter on the button)
+	armadaBusy          bool   // an add/delete persistence RPC is in flight
 }
+
+// armadaAddStage is the "+ Remote Fleet" flow's state machine.
+type armadaAddStage int
+
+const (
+	armadaAddNone    armadaAddStage = iota
+	armadaAddURLIn                  // typing the gateway URL
+	armadaAddTokenIn                // typing the bearer token (masked)
+	armadaAddTesting                // connection test (then save) in flight
+)
 
 // remoteSettingsSnapshot is a comparable copy of the RemoteMcpSettings fields
 // that drive the gateway tunnel (the fields whose change makes the server
@@ -156,7 +190,15 @@ func (settingsPage *settingsPage) Init(m *model) tea.Cmd {
 	// Baseline for remoteSaveBounced: the page opens showing the server's
 	// config, so its remote settings are what the server currently runs with.
 	settingsPage.serverRemote = snapshotRemoteSettings(m.config)
-	return nil
+	// Refresh the armada registry and start the status-sweep tick that keeps
+	// the per-remote connection indicators live while the page is open. The
+	// armed-flag guard stops a re-entered page from stacking a second loop.
+	cmds := []tea.Cmd{fetchArmadaCmd()}
+	if !m.armadaTickArmed {
+		m.armadaTickArmed = true
+		cmds = append(cmds, armadaPingTickCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update dispatches settings page messages to the appropriate handler.
@@ -166,6 +208,9 @@ func (settingsPage *settingsPage) Update(m *model, msg tea.Msg) tea.Cmd {
 	}
 	if settingsPage.editing {
 		return settingsPage.updateSettingsEditing(m, msg)
+	}
+	if settingsPage.armadaAddStage != armadaAddNone {
+		return settingsPage.updateArmadaAdd(m, msg)
 	}
 	return settingsPage.updateSettingsNav(m, msg)
 }
@@ -182,32 +227,32 @@ func (settingsPage *settingsPage) View(m *model) string {
 // settingsSection defines a titled group of settings rows that can be
 // conditionally shown based on tool availability.
 type settingsSection struct {
-	Title string                                // section header text
-	Tool  string                                // required tool binary; "" = always visible
-	Items func(config *configutil.Config) []int // returns navigable item IDs for this section
+	Title string               // section header text
+	Tool  string               // required tool binary; "" = always visible
+	Items func(m *model) []int // returns navigable item IDs for this section
 }
 
 // settingsSections lists all settings sections in display order.
 var settingsSections = []settingsSection{
 	{
 		Title: "General",
-		Items: func(_ *configutil.Config) []int {
+		Items: func(_ *model) []int {
 			return []int{settingsItemTmuxVimKeys, settingsItemShowHelpText, settingsItemUpdate}
 		},
 	},
 	{
 		Title: "Dotfiles",
-		Items: func(_ *configutil.Config) []int {
+		Items: func(_ *model) []int {
 			return []int{settingsItemDotfilesRepo, settingsItemDotfilesScript, settingsItemDotfilesAutoInstall, settingsItemDotfilesSetup}
 		},
 	},
 	{
 		Title: "Coder",
 		Tool:  "coder",
-		Items: func(config *configutil.Config) []int {
+		Items: func(m *model) []int {
 			items := []int{settingsItemCoderTemplate, settingsItemCoderPreset}
-			if config != nil {
-				for i := range config.CoderSettings.Parameters {
+			if m.config != nil {
+				for i := range m.config.CoderSettings.Parameters {
 					items = append(items, settingsItemCoderParamBase+i)
 				}
 			}
@@ -217,17 +262,17 @@ var settingsSections = []settingsSection{
 	{
 		Title: "Codespaces",
 		Tool:  "gh",
-		Items: func(_ *configutil.Config) []int {
+		Items: func(_ *model) []int {
 			return []int{settingsItemCodespacesMachine}
 		},
 	},
 	{
 		Title: "Browser",
-		Items: func(config *configutil.Config) []int {
+		Items: func(m *model) []int {
 			items := []int{settingsItemBrowserMultiple}
 			// Auto-switch only applies in shared-profile mode — in
 			// per-instance mode there is no "switch" to suppress.
-			if config != nil && !config.BrowserSettings.MultipleBrowsersPerFleetEnabled() {
+			if m.config != nil && !m.config.BrowserSettings.MultipleBrowsersPerFleetEnabled() {
 				items = append(items, settingsItemBrowserAutoSwitch)
 			}
 			return items
@@ -235,13 +280,13 @@ var settingsSections = []settingsSection{
 	},
 	{
 		Title: "Fleet MCP",
-		Items: func(config *configutil.Config) []int {
+		Items: func(m *model) []int {
 			// Copy actions come first. The remote-copy action only appears
 			// once the gateway tunnel is enabled. The computed Public MCP URL /
 			// Public GRPC URL are rendered inline as read-only status lines
 			// (not navigable).
 			items := []int{settingsItemRemoteMcpCopyLocal}
-			if config != nil && config.RemoteMcpSettings.Enabled {
+			if m.config != nil && m.config.RemoteMcpSettings.Enabled {
 				items = append(items, settingsItemRemoteMcpCopyRemote)
 			}
 			items = append(items, settingsItemRemoteMcpEnabled, settingsItemRemoteFleetEnabled, settingsItemRemoteMcpGatewayURL)
@@ -249,8 +294,22 @@ var settingsSections = []settingsSection{
 		},
 	},
 	{
+		Title: "Fleet Armada",
+		Items: func(m *model) []int {
+			// One row per registered remote fleet, then the add button below
+			// the list. The registry lives on the model (loaded from the LOCAL
+			// daemon), not in config — see armada_client.go.
+			items := make([]int, 0, len(m.armadaRemotes)+1)
+			for i := range m.armadaRemotes {
+				items = append(items, settingsItemArmadaBase+i)
+			}
+			items = append(items, settingsItemArmadaAdd)
+			return items
+		},
+	},
+	{
 		Title: "Tool Status",
-		Items: func(_ *configutil.Config) []int {
+		Items: func(_ *model) []int {
 			items := make([]int, toolStatusCount)
 			for i := range items {
 				items[i] = settingsItemToolStatusBase + i
@@ -260,7 +319,7 @@ var settingsSections = []settingsSection{
 	},
 	{
 		Title: "Help",
-		Items: func(_ *configutil.Config) []int {
+		Items: func(_ *model) []int {
 			return []int{settingsItemDoctor, settingsItemKeybindings}
 		},
 	},
@@ -290,7 +349,7 @@ func (settingsPage *settingsPage) visibleItems(m *model) []int {
 		if !settingsPage.sectionVisible(m, section) {
 			continue
 		}
-		for _, id := range section.Items(m.config) {
+		for _, id := range section.Items(m) {
 			if id == settingsItemUpdate && m.updateAvailable == "" {
 				continue
 			}
@@ -703,14 +762,26 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 
 		case "up", "k":
 			settingsPage.cursor = (settingsPage.cursor - 1 + count) % count
+			// Leaving a remote-fleet row resets its delete sub-cursor, exactly
+			// like the edit-fleet cache rows.
+			settingsPage.armadaDeleteFocused = false
+			settingsPage.armadaDeleteConfirm = false
 			return nil
 
 		case "down", "j":
 			settingsPage.cursor = (settingsPage.cursor + 1) % count
+			settingsPage.armadaDeleteFocused = false
+			settingsPage.armadaDeleteConfirm = false
 			return nil
 
 		case "left", "h":
 			item := settingsPage.settingsCursorItem(m)
+			if isArmadaRemoteItem(item) {
+				// Back off the [ delete ] button onto the row itself.
+				settingsPage.armadaDeleteFocused = false
+				settingsPage.armadaDeleteConfirm = false
+				return nil
+			}
 			if item == settingsItemTmuxVimKeys {
 				settingsPage.toggleTmuxVimKeys(m)
 			} else if item == settingsItemShowHelpText {
@@ -734,6 +805,11 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 
 		case "right", "l":
 			item := settingsPage.settingsCursorItem(m)
+			if isArmadaRemoteItem(item) {
+				// Focus the row's [ delete ] button (cache-clear UX pattern).
+				settingsPage.armadaDeleteFocused = true
+				return nil
+			}
 			if item == settingsItemTmuxVimKeys {
 				settingsPage.toggleTmuxVimKeys(m)
 			} else if item == settingsItemShowHelpText {
@@ -757,6 +833,12 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 
 		case "enter", " ":
 			item := settingsPage.settingsCursorItem(m)
+			if item == settingsItemArmadaAdd {
+				return settingsPage.beginArmadaAdd(m)
+			}
+			if isArmadaRemoteItem(item) {
+				return settingsPage.enterArmadaRemoteRow(m, item-settingsItemArmadaBase)
+			}
 			if item == settingsItemTmuxVimKeys {
 				settingsPage.toggleTmuxVimKeys(m)
 				return nil
@@ -887,6 +969,157 @@ func (settingsPage *settingsPage) enterSettingsEditing(m *model) tea.Cmd {
 	settingsPage.input.Focus()
 	settingsPage.input.CursorEnd()
 	return settingsPage.input.Cursor.BlinkCmd()
+}
+
+// ===========================================
+// Fleet Armada handlers
+// ===========================================
+
+// beginArmadaAdd starts the "+ Remote Fleet" flow at the URL stage.
+func (settingsPage *settingsPage) beginArmadaAdd(m *model) tea.Cmd {
+	if settingsPage.armadaBusy {
+		return nil
+	}
+	settingsPage.armadaAddStage = armadaAddURLIn
+	settingsPage.armadaAddURL = ""
+	settingsPage.input.Placeholder = "https://gateway.example.com/<session-id>"
+	settingsPage.input.EchoMode = textinput.EchoNormal
+	settingsPage.input.SetValue("")
+	settingsPage.input.Focus()
+	return settingsPage.input.Cursor.BlinkCmd()
+}
+
+// cancelArmadaAdd resets the add flow and restores the shared input.
+func (settingsPage *settingsPage) cancelArmadaAdd() {
+	settingsPage.armadaAddStage = armadaAddNone
+	settingsPage.armadaAddURL = ""
+	settingsPage.input.SetValue("")
+	settingsPage.input.EchoMode = textinput.EchoNormal
+	settingsPage.input.Blur()
+}
+
+// enterArmadaRemoteRow handles enter/space on a registered remote's row: on
+// the row itself it re-pings the remote; on the focused [ delete ] button it
+// arms the confirm, then removes the remote on the second press.
+func (settingsPage *settingsPage) enterArmadaRemoteRow(m *model, idx int) tea.Cmd {
+	if idx < 0 || idx >= len(m.armadaRemotes) || settingsPage.armadaBusy {
+		return nil
+	}
+	remote := m.armadaRemotes[idx]
+
+	if settingsPage.armadaDeleteFocused {
+		if !settingsPage.armadaDeleteConfirm {
+			settingsPage.armadaDeleteConfirm = true
+			return nil
+		}
+		settingsPage.armadaBusy = true
+		next := slices.Delete(slices.Clone(m.armadaRemotes), idx, idx+1)
+		return saveArmadaCmd(next, "removed", idx)
+	}
+
+	// Plain enter on the row: probe it again right now.
+	m.armadaStatus[remote.URL] = armadaStatus{state: armadaStatusPinging}
+	return pingArmadaCmd(remote.URL, remote.Token)
+}
+
+// updateArmadaAdd handles input while the "+ Remote Fleet" flow is active.
+func (settingsPage *settingsPage) updateArmadaAdd(m *model, msg tea.Msg) tea.Cmd {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		var cmd tea.Cmd
+		settingsPage.input, cmd = settingsPage.input.Update(msg)
+		return cmd
+	}
+
+	// While the connection test runs, only quitting is allowed; the result
+	// message finishes (or fails) the flow.
+	if settingsPage.armadaAddStage == armadaAddTesting {
+		switch keyMsg.String() {
+		case "ctrl+c", "ctrl+q":
+			m.quitting = true
+			return tea.Quit
+		}
+		return nil
+	}
+
+	switch keyMsg.Type {
+	case tea.KeyEnter:
+		switch settingsPage.armadaAddStage {
+		case armadaAddURLIn:
+			url := strings.TrimSpace(settingsPage.input.Value())
+			if url == "" {
+				m.message = "Enter the remote fleet's gateway URL"
+				return nil
+			}
+			for _, r := range m.armadaRemotes {
+				if r.URL == url {
+					m.message = "That remote fleet is already registered"
+					return nil
+				}
+			}
+			settingsPage.armadaAddURL = url
+			settingsPage.armadaAddStage = armadaAddTokenIn
+			settingsPage.input.SetValue("")
+			settingsPage.input.Placeholder = "bearer token (~/.fleet/mcp.token on the remote)"
+			settingsPage.input.EchoMode = textinput.EchoPassword
+			return settingsPage.input.Cursor.BlinkCmd()
+
+		case armadaAddTokenIn:
+			token := strings.TrimSpace(settingsPage.input.Value())
+			if token == "" {
+				m.message = "Enter the remote fleet's bearer token"
+				return nil
+			}
+			settingsPage.armadaAddStage = armadaAddTesting
+			settingsPage.input.Blur()
+			settingsPage.input.EchoMode = textinput.EchoNormal
+			m.message = ""
+			return testArmadaRemoteCmd(settingsPage.armadaAddURL, token)
+		}
+		return nil
+
+	case tea.KeyEsc:
+		settingsPage.cancelArmadaAdd()
+		m.message = "Cancelled"
+		return nil
+	}
+
+	var cmd tea.Cmd
+	settingsPage.input, cmd = settingsPage.input.Update(msg)
+	return cmd
+}
+
+// armadaStatusValue renders one remote's connection indicator from the latest
+// ping outcome.
+func armadaStatusValue(m *model, url string) string {
+	st := m.armadaStatus[url]
+	switch st.state {
+	case armadaStatusConnected:
+		return statusRunningStyle.Render("connected")
+	case armadaStatusPinging:
+		return m.spinner.View() + " pinging…"
+	case armadaStatusError:
+		return statusCreatingStyle.Render("error") + "  " + dimStyle.Render(st.err)
+	default:
+		return dimStyle.Render("(status unknown)")
+	}
+}
+
+// renderArmadaDeleteButton renders a remote row's [ delete ] button with the
+// focus/armed states of the cache-clear pattern.
+func (settingsPage *settingsPage) renderArmadaDeleteButton(m *model, rowActive bool) string {
+	focused := rowActive && settingsPage.armadaDeleteFocused
+	label := "[ delete ]"
+	if settingsPage.armadaBusy && focused {
+		return m.spinner.View() + " removing…"
+	}
+	if focused && settingsPage.armadaDeleteConfirm {
+		label = "[ delete? ]"
+	}
+	if focused {
+		return selectedStyle.Render(label)
+	}
+	return dimStyle.Render(label)
 }
 
 // updateSettingsEditing handles input while editing a text field.
@@ -1203,6 +1436,32 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(row))
 			}
 
+		case "Fleet Armada":
+			// One row per registered remote: URL + live ping status +
+			// [ delete ] button (cache-clear UX), then the add button.
+			for i, remote := range m.armadaRemotes {
+				item := settingsItemArmadaBase + i
+				active := currentItem == item
+				value := remote.URL + "  " + armadaStatusValue(m, remote.URL) + "  " + settingsPage.renderArmadaDeleteButton(m, active)
+				recordRow(item, settingsPage.renderSettingsRow(m, active, fmt.Sprintf("Remote %d", i+1), value))
+				listContent.WriteString("\n")
+			}
+
+			addActive := currentItem == settingsItemArmadaAdd
+			var addValue string
+			switch {
+			case addActive && settingsPage.armadaAddStage == armadaAddURLIn:
+				addValue = "URL: " + settingsPage.input.View()
+			case addActive && settingsPage.armadaAddStage == armadaAddTokenIn:
+				addValue = "Token: " + settingsPage.input.View()
+			case addActive && settingsPage.armadaAddStage == armadaAddTesting:
+				addValue = m.spinner.View() + " testing connection…"
+			default:
+				addValue = dimStyle.Render("press enter to register a remote fleet")
+			}
+			addValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Registered fleets can be switched to from the main page's Armada selector")
+			recordRow(settingsItemArmadaAdd, settingsPage.renderSettingsRow(m, addActive, "+ Remote Fleet", addValue))
+
 		case "Tool Status":
 			for i, tool := range m.toolStatus {
 				if i > 0 {
@@ -1253,11 +1512,19 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		tail.WriteString(dimStyle.Render("  Variables: ${GIT_URL} = fleet repo URL, ${GIT_BRANCH} = git branch (blank = default), ${INSTANCE_NAME} = workspace name"))
 		tail.WriteString("\n")
 	}
+	if isArmadaRemoteItem(currentItem) && settingsPage.armadaAddStage == armadaAddNone {
+		tail.WriteString(dimStyle.Render("  enter: ping now  right/l: focus [ delete ]  enter twice on [ delete ]: remove"))
+		tail.WriteString("\n")
+	}
 	if m.message != "" {
 		tail.WriteString(messageStyle.Render(m.message))
 		tail.WriteString("\n")
 	}
-	if settingsPage.editing {
+	if settingsPage.armadaAddStage == armadaAddURLIn || settingsPage.armadaAddStage == armadaAddTokenIn {
+		tail.WriteString(renderHelp(m.width, []string{
+			"enter: next", "esc: cancel",
+		}))
+	} else if settingsPage.editing {
 		tail.WriteString(renderHelp(m.width, []string{
 			"enter: save", "esc: cancel",
 		}))

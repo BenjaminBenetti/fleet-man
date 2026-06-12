@@ -40,6 +40,7 @@ type (
 	AgentTool          = state.AgentTool
 	State              = state.State
 	GroupLayout        = state.GroupLayout
+	ArmadaRemote       = state.ArmadaRemote
 )
 
 // AgentTool values, re-exported alongside the type alias.

@@ -43,6 +43,7 @@ func keybindingsData() []keybindingGroup {
 				{"C", "Clone instance"},
 				{"o", "Open external terminal"},
 				{"l", "View logs"},
+				{"A", "Switch armada (remote fleet)"},
 				{"r", "Refresh / rename session"},
 			},
 		},

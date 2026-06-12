@@ -46,20 +46,12 @@ tui_wait_for "○ idle" 180
 tui_assert_contains "alpha" "alpha row missing after create"
 
 # ===========================================
-# Move cursor back to the fleet header
-# ===========================================
-# At this point rows are [header, alpha, settings]; pressing `k` three
-# times from any row lands us on the fleet header (wraps if needed).
-tui_send k
-sleep 0.3
-tui_send k
-sleep 0.3
-tui_send k
-sleep 0.3
-
-# ===========================================
 # Create the second instance "beta"
 # ===========================================
+# Creating the first instance leaves the cursor on the fleet header (it was
+# pressed from the header, which stays row 0), so `a` adds another instance to
+# the fleet directly. A fixed count of `k` presses no longer reliably re-seats
+# now that the Armada selector is a navigation stop above the header.
 info "Creating second instance: beta"
 tui_send a
 tui_wait_for "instance-name" 5
