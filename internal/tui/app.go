@@ -579,6 +579,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if page.mode == viewNormal && page.listRowY >= 0 {
 					if idx := mouseMsg.Y - page.listRowY; idx >= 0 && idx < len(page.rows) && page.rows[idx].selectable() {
 						page.cursor = idx
+						// Clicking a row takes focus off the Armada selector, so
+						// the synthesized Space/Enter acts on the clicked row
+						// rather than (re)opening the dropdown.
+						page.armadaFocused = false
 						hit = true
 						if page.rows[idx].kind == rowInstance {
 							synthesizedKey = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}

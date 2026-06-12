@@ -2,8 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
+	"os/exec"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
@@ -388,13 +392,15 @@ func armadaPingErrText(err error) string {
 
 // armadaEntry is one row of the main-page Armada dropdown. Exactly one of url
 // (a gateway) / server (a plain FLEET_SERVER target) is set for a remote; both
-// empty means local.
+// empty means local. displayName is the short, user-facing name (hostname,
+// disambiguated by session id when two entries share a host).
 type armadaEntry struct {
-	label   string
-	url     string // gateway URL ("" unless a gateway entry)
-	token   string
-	server  string // FLEET_SERVER host:port ("" unless a plain-TCP entry)
-	current bool
+	displayName string
+	url         string // gateway URL ("" unless a gateway entry)
+	token       string
+	server      string // FLEET_SERVER host:port ("" unless a plain-TCP entry)
+	env         bool   // an unregistered boot endpoint (shown with "(env)")
+	current     bool
 }
 
 // key uniquely identifies the endpoint an entry points at, matching
@@ -411,32 +417,122 @@ func (e armadaEntry) key() string {
 	}
 }
 
+// host returns the hostname an entry points at ("" for local). A gateway URL
+// yields its host; a FLEET_SERVER target yields its host (port dropped).
+// Hostnames are case-insensitive, so the result is lower-cased — both for the
+// display and so collision counting treats differently-cased hosts as one.
+func (e armadaEntry) host() string {
+	if e.url != "" {
+		if u, err := url.Parse(e.url); err == nil && u.Hostname() != "" {
+			return strings.ToLower(u.Hostname())
+		}
+		return e.url
+	}
+	if e.server != "" {
+		if h, _, err := net.SplitHostPort(e.server); err == nil && h != "" {
+			return strings.ToLower(h)
+		}
+		return strings.ToLower(e.server)
+	}
+	return ""
+}
+
+// sessionID8 returns the first 8 characters of a gateway URL's session id (the
+// last path segment), used to disambiguate two gateways on the same host.
+func (e armadaEntry) sessionID8() string {
+	if e.url == "" {
+		return ""
+	}
+	u, err := url.Parse(e.url)
+	if err != nil {
+		return ""
+	}
+	seg := strings.Trim(u.Path, "/")
+	if i := strings.LastIndex(seg, "/"); i >= 0 {
+		seg = seg[i+1:]
+	}
+	if len(seg) > 8 {
+		seg = seg[:8]
+	}
+	return seg
+}
+
 // armadaEntries builds the dropdown: local first, then every registered
 // remote, then — when the TUI was booted pointing at an UNREGISTERED remote
 // (FLEET_GATEWAY or FLEET_SERVER) — that boot remote, so the current selection
-// is always present and selectable.
+// is always present and selectable. Each entry's displayName is its hostname,
+// suffixed with " - <sid8>" when another entry shares the same host.
 func (m *model) armadaEntries() []armadaEntry {
 	current := armadaCurrentKey()
-	entries := []armadaEntry{{label: "local"}}
+	entries := []armadaEntry{{}} // local
 	bootGatewaySeen := false
 	for _, r := range m.armadaRemotes {
 		if r.URL == m.bootGateway {
 			bootGatewaySeen = true
 		}
-		entries = append(entries, armadaEntry{label: r.URL, url: r.URL, token: r.Token})
+		entries = append(entries, armadaEntry{url: r.URL, token: r.Token})
 	}
 	if m.bootGateway != "" && !bootGatewaySeen {
-		entries = append(entries, armadaEntry{label: m.bootGateway + " (env)", url: m.bootGateway, token: m.bootToken})
+		entries = append(entries, armadaEntry{url: m.bootGateway, token: m.bootToken, env: true})
 	}
 	if m.bootServer != "" {
 		// FLEET_SERVER targets aren't registrable (no token / gateway), so the
 		// boot value is the only way to represent or return to one.
-		entries = append(entries, armadaEntry{label: m.bootServer + " (env)", server: m.bootServer})
+		entries = append(entries, armadaEntry{server: m.bootServer, env: true})
+	}
+
+	// Count hosts so entries sharing one can be disambiguated by session id.
+	hostCounts := map[string]int{}
+	for _, e := range entries {
+		if h := e.host(); h != "" {
+			hostCounts[h]++
+		}
 	}
 	for i := range entries {
 		entries[i].current = entries[i].key() == current
+		entries[i].displayName = armadaDisplayName(entries[i], hostCounts)
 	}
 	return entries
+}
+
+// armadaDisplayName renders the short name for an entry: "local" for the local
+// daemon, otherwise the hostname — suffixed with " - <sid8>" when another entry
+// shares the host, and with " (env)" for an unregistered boot endpoint.
+func armadaDisplayName(e armadaEntry, hostCounts map[string]int) string {
+	h := e.host()
+	if h == "" {
+		return "local"
+	}
+	name := h
+	if hostCounts[h] > 1 {
+		if sid := e.sessionID8(); sid != "" {
+			name = h + " - " + sid
+		}
+	}
+	if e.env {
+		name += " (env)"
+	}
+	return name
+}
+
+// armadaCurrentDisplay is the active connection's short name for the border
+// selector (matching its dropdown entry).
+func (m *model) armadaCurrentDisplay() string {
+	for _, e := range m.armadaEntries() {
+		if e.current {
+			return e.displayName
+		}
+	}
+	// The live connection isn't in the registry (e.g. its entry was just
+	// deleted while connected) — show its hostname straight from the env rather
+	// than wrongly claiming "local".
+	if gw := os.Getenv("FLEET_GATEWAY"); gw != "" {
+		return (armadaEntry{url: gw}).host()
+	}
+	if srv := os.Getenv("FLEET_SERVER"); srv != "" {
+		return (armadaEntry{server: srv}).host()
+	}
+	return "local"
 }
 
 // armadaCurrentKey identifies the active connection from the live env (the env
@@ -450,17 +546,6 @@ func armadaCurrentKey() string {
 		return "server:" + srv
 	}
 	return ""
-}
-
-// armadaCurrentLabel names the active connection for the border selector.
-func armadaCurrentLabel() string {
-	if gw := os.Getenv("FLEET_GATEWAY"); gw != "" {
-		return gw
-	}
-	if srv := os.Getenv("FLEET_SERVER"); srv != "" {
-		return srv
-	}
-	return "local"
 }
 
 // switchArmada retargets the TUI onto entry's daemon: tear down everything
@@ -489,6 +574,12 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 		_ = os.Unsetenv("FLEET_SERVER")
 		_ = os.Unsetenv("FLEET_TOKEN")
 	}
+	// Mirror the swap into the tmux server environment so split-pane / bound-key
+	// `fleet shell` children — which tmux spawns from ITS environment, not this
+	// process's live os.Environ() — connect to the new daemon too. Without this
+	// a switched session opens a shell against the OLD/local daemon and fails to
+	// resolve the new fleet ("fleet not found").
+	syncTmuxArmadaEnv(m)
 
 	// 2. Split panes run child processes attached to the old daemon. Bump the
 	// restore sequence so an in-flight group restore's splitPaneMsg is rejected
@@ -538,9 +629,28 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 		fleetPage.savedGroups = make(map[string]savedGroup)
 		fleetPage.collapsed = make(map[string]bool)
 		fleetPage.cursor = 0
+		fleetPage.armadaFocused = false
 		fleetPage.buildRows(m)
 	}
 
-	m.message = fmt.Sprintf("Switching to %s…", entry.label)
-	return switchReloadCmd(entry.label, m.watchGen)
+	m.message = fmt.Sprintf("Switching to %s…", entry.displayName)
+	return switchReloadCmd(entry.displayName, m.watchGen)
+}
+
+// syncTmuxArmadaEnv mirrors the FLEET_GATEWAY/FLEET_TOKEN/FLEET_SERVER env onto
+// the tmux server's global environment so panes tmux spawns AFTER a switch
+// (split-window, the bound %/" keys) inherit the new connection. tmux captures
+// its environment at session start, so an in-process os.Setenv alone never
+// reaches these children. No-op when not running inside tmux.
+func syncTmuxArmadaEnv(m *model) {
+	if !m.inHostTmux {
+		return
+	}
+	for _, name := range []string{"FLEET_GATEWAY", "FLEET_TOKEN", "FLEET_SERVER"} {
+		if v := os.Getenv(name); v != "" {
+			_ = exec.Command("tmux", "set-environment", "-g", name, v).Run()
+		} else {
+			_ = exec.Command("tmux", "set-environment", "-gu", name).Run()
+		}
+	}
 }

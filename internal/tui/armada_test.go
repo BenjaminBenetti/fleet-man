@@ -302,17 +302,17 @@ func TestArmadaEntriesIncludesLocalRegisteredAndBoot(t *testing.T) {
 	if len(entries) != 3 {
 		t.Fatalf("got %d entries, want 3 (local + registered + boot): %+v", len(entries), entries)
 	}
-	if entries[0].label != "local" || entries[0].url != "" || entries[0].current {
+	if entries[0].displayName != "local" || entries[0].url != "" || entries[0].current {
 		t.Fatalf("entry 0 should be non-current local: %+v", entries[0])
 	}
-	if entries[1].url != "https://gw.example.com/abc" || entries[1].current {
-		t.Fatalf("entry 1 should be the non-current registered remote: %+v", entries[1])
+	if entries[1].url != "https://gw.example.com/abc" || entries[1].current || entries[1].displayName != "gw.example.com" {
+		t.Fatalf("entry 1 should be the non-current registered remote shown by hostname: %+v", entries[1])
 	}
 	if entries[2].url != "https://boot.example.com/xyz" || !entries[2].current || entries[2].token != "boot-token" {
 		t.Fatalf("entry 2 should be the current boot remote: %+v", entries[2])
 	}
-	if !strings.Contains(entries[2].label, "(env)") {
-		t.Fatalf("boot entry label should be marked (env): %q", entries[2].label)
+	if entries[2].displayName != "boot.example.com (env)" {
+		t.Fatalf("boot entry should display hostname + (env): %q", entries[2].displayName)
 	}
 
 	// A registered remote that matches the boot URL must not be duplicated.
@@ -332,7 +332,7 @@ func TestSwitchArmadaSwapsEnvAndClearsCaches(t *testing.T) {
 	m.runtime["alpha/inst"] = nil
 	m.creating["alpha/inst"] = true
 
-	cmd := m.switchArmada(armadaEntry{label: "local"})
+	cmd := m.switchArmada(armadaEntry{displayName: "local"})
 	if cmd == nil {
 		t.Fatal("switch should return the reload command")
 	}
@@ -343,7 +343,7 @@ func TestSwitchArmadaSwapsEnvAndClearsCaches(t *testing.T) {
 		t.Fatal("daemon-derived caches must be cleared on switch")
 	}
 
-	cmd = m.switchArmada(armadaEntry{label: "https://new.example.com/new", url: "https://new.example.com/new", token: "new-token"})
+	cmd = m.switchArmada(armadaEntry{displayName: "new.example.com", url: "https://new.example.com/new", token: "new-token"})
 	if cmd == nil {
 		t.Fatal("switch should return the reload command")
 	}
@@ -450,21 +450,98 @@ func TestArmadaEntriesIncludesFleetServerBoot(t *testing.T) {
 	m.bootServer = "10.0.0.5:50051"
 
 	entries := m.armadaEntries()
-	if entries[0].label != "local" || entries[0].current {
+	if entries[0].displayName != "local" || entries[0].current {
 		t.Fatalf("with FLEET_SERVER set, 'local' must not be current: %+v", entries[0])
 	}
 	last := entries[len(entries)-1]
 	if last.server != "10.0.0.5:50051" || !last.current {
 		t.Fatalf("FLEET_SERVER boot endpoint should be the current entry: %+v", last)
 	}
-	if !strings.Contains(last.label, "(env)") {
-		t.Fatalf("FLEET_SERVER entry label should be marked (env): %q", last.label)
+	if last.displayName != "10.0.0.5 (env)" {
+		t.Fatalf("FLEET_SERVER entry should display host + (env): %q", last.displayName)
 	}
 
 	// Switching to local from a FLEET_SERVER boot must clear FLEET_SERVER.
-	m.switchArmada(armadaEntry{label: "local"})
+	m.switchArmada(armadaEntry{displayName: "local"})
 	if os.Getenv("FLEET_SERVER") != "" {
 		t.Fatal("switching to local must unset FLEET_SERVER")
+	}
+}
+
+// TestArmadaDisplayNameHostnameAndCollision verifies entries are shown by
+// hostname, and that two gateways on the SAME host are disambiguated by the
+// first 8 characters of their session id (and the border matches).
+func TestArmadaDisplayNameHostnameAndCollision(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "https://fleet.cluster.bbenetti.ca/grpc/8e7d1f0aa9")
+	os.Unsetenv("FLEET_SERVER")
+	m := armadaTestModel(nil)
+	m.bootGateway = "https://fleet.cluster.bbenetti.ca/grpc/8e7d1f0aa9"
+	m.armadaRemotes = []configutil.ArmadaRemote{
+		{URL: "https://other.example.com/abc123", Token: "t1"},
+		// Same host as the boot gateway → both must carry the sid suffix.
+		{URL: "https://fleet.cluster.bbenetti.ca/grpc/c4ba2200ff", Token: "t2"},
+	}
+
+	byHost := map[string]string{} // url -> displayName
+	for _, e := range m.armadaEntries() {
+		byHost[e.url] = e.displayName
+	}
+	if got := byHost["https://other.example.com/abc123"]; got != "other.example.com" {
+		t.Fatalf("unique host should show bare hostname, got %q", got)
+	}
+	if got := byHost["https://fleet.cluster.bbenetti.ca/grpc/c4ba2200ff"]; got != "fleet.cluster.bbenetti.ca - c4ba2200" {
+		t.Fatalf("colliding host should show host - sid8, got %q", got)
+	}
+	// The boot gateway shares the host AND is the env entry → host - sid8 (env).
+	if got := byHost["https://fleet.cluster.bbenetti.ca/grpc/8e7d1f0aa9"]; got != "fleet.cluster.bbenetti.ca - 8e7d1f0a (env)" {
+		t.Fatalf("colliding env host should show host - sid8 (env), got %q", got)
+	}
+
+	// The top-border display matches the current connection's dropdown name.
+	if got := m.armadaCurrentDisplay(); got != "fleet.cluster.bbenetti.ca - 8e7d1f0a (env)" {
+		t.Fatalf("border display should match the current entry, got %q", got)
+	}
+}
+
+// TestArmadaNavCycle verifies the selector is part of the j/k cycle: up from the
+// top row focuses it, up again wraps to the bottom row, and down from the
+// selector returns to the top row.
+func TestArmadaNavCycle(t *testing.T) {
+	fp := newFleetPage()
+	fp.rows = []row{
+		{kind: rowFleetHeader, fleetName: "alpha"},
+		{kind: rowInstance, fleetName: "alpha"},
+		{kind: rowSettings},
+	}
+	fp.cursor = 0
+	m := &model{fleetPage: fp, armadaStatus: make(map[string]armadaStatus)}
+
+	// Up from the top row focuses the selector.
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyUp})
+	if !fp.armadaFocused {
+		t.Fatal("up from the top row should focus the Armada selector")
+	}
+	// Up again wraps to the bottom row.
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyUp})
+	if fp.armadaFocused || fp.cursor != 2 {
+		t.Fatalf("up from the selector should wrap to the bottom row, focused=%v cursor=%d", fp.armadaFocused, fp.cursor)
+	}
+	// Down from the bottom row focuses the selector again.
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyDown})
+	if !fp.armadaFocused {
+		t.Fatal("down from the bottom row should focus the Armada selector")
+	}
+	// Down from the selector returns to the top row.
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyDown})
+	if fp.armadaFocused || fp.cursor != 0 {
+		t.Fatalf("down from the selector should land on the top row, focused=%v cursor=%d", fp.armadaFocused, fp.cursor)
+	}
+	// Enter while focused opens the dropdown (mode flips; the ping cmd may be
+	// nil when no remotes are registered).
+	fp.armadaFocused = true
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if fp.mode != viewArmadaSelect {
+		t.Fatalf("enter on the focused selector should open the dropdown, mode=%v", fp.mode)
 	}
 }
 

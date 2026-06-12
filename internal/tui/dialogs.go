@@ -197,7 +197,7 @@ func (fleetPage *fleetPage) updateArmadaSelect(m *model, msg tea.Msg) tea.Cmd {
 		fleetPage.mode = viewNormal
 		entry := entries[min(fleetPage.armadaDialogRow, n-1)]
 		if entry.current {
-			m.message = "Already connected to " + entry.label
+			m.message = "Already connected to " + entry.displayName
 			return nil
 		}
 		return m.switchArmada(entry)

@@ -96,9 +96,9 @@ func TestResumeMsgNilInnerReturnsCmd(t *testing.T) {
 	}
 }
 
-// TestUpdateNormalWrapsCursorFromTopToBottom verifies k/up from the top row
-// wraps to the bottom row. The Armada selector is OUTSIDE this cycle (opened
-// by the `A` key), so row navigation and its wrap behaviour are unchanged.
+// TestUpdateNormalWrapsCursorFromTopToBottom verifies the navigation cycle
+// through the Armada selector: up from the top row focuses the selector, and a
+// second up wraps to the bottom row.
 func TestUpdateNormalWrapsCursorFromTopToBottom(t *testing.T) {
 	fp := newFleetPage()
 	fp.rows = []row{
@@ -110,14 +110,18 @@ func TestUpdateNormalWrapsCursorFromTopToBottom(t *testing.T) {
 	m := &model{fleetPage: fp}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyUp})
-
-	if fp.cursor != len(fp.rows)-1 {
-		t.Fatalf("cursor = %d, want %d", fp.cursor, len(fp.rows)-1)
+	if !fp.armadaFocused {
+		t.Fatal("up from the top row should focus the Armada selector")
+	}
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyUp})
+	if fp.armadaFocused || fp.cursor != len(fp.rows)-1 {
+		t.Fatalf("up from the selector should wrap to the bottom row, focused=%v cursor=%d", fp.armadaFocused, fp.cursor)
 	}
 }
 
-// TestUpdateNormalWrapsCursorFromBottomToTop verifies j/down from the bottom
-// row wraps to the top row (Armada selector stays out of the row cycle).
+// TestUpdateNormalWrapsCursorFromBottomToTop verifies the inverse cycle: down
+// from the bottom row focuses the Armada selector, then a second down lands on
+// the top row.
 func TestUpdateNormalWrapsCursorFromBottomToTop(t *testing.T) {
 	fp := newFleetPage()
 	fp.rows = []row{
@@ -129,9 +133,12 @@ func TestUpdateNormalWrapsCursorFromBottomToTop(t *testing.T) {
 	m := &model{fleetPage: fp}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyDown})
-
-	if fp.cursor != 0 {
-		t.Fatalf("cursor = %d, want 0", fp.cursor)
+	if !fp.armadaFocused {
+		t.Fatal("down from the bottom row should focus the Armada selector")
+	}
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyDown})
+	if fp.armadaFocused || fp.cursor != 0 {
+		t.Fatalf("down from the selector should land on the top row, focused=%v cursor=%d", fp.armadaFocused, fp.cursor)
 	}
 }
 

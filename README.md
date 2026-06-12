@@ -387,13 +387,18 @@ saving. Each registered remote shows a live connection status (pinged while the
 settings page is open) and a `[ delete ]` button (press twice to confirm).
 
 The main page's list border carries an **Armada selector**
-(`╭─ Armada [ local ] ───╮`). Open it with the **`A`** key or by clicking the
-label to get a dropdown of `local` + every registered remote, and pick one to
-**switch the TUI live**:
-the connection, fleet list, sessions, and shells all retarget to the chosen
-daemon. Registering a remote never switches to it; every boot starts on `local`
-unless `FLEET_GATEWAY` (or `FLEET_SERVER`) is set, in which case that boot
-endpoint appears in the dropdown as `(env)`.
+(`╭─ Armada [ local ] ───╮`). It is part of the normal `j`/`k` (and arrow-key)
+navigation — cycle up past the top row to land on it (continuing up wraps to the
+bottom of the list) — or jump straight to it with the **`A`** key or a mouse
+click. Selecting it opens a dropdown of `local` + every registered remote; pick
+one to **switch the TUI live**: the connection, fleet list, sessions, and shells
+all retarget to the chosen daemon. Registering a remote never switches to it;
+every boot starts on `local` unless `FLEET_GATEWAY` (or `FLEET_SERVER`) is set,
+in which case that boot endpoint appears in the dropdown as `(env)`.
+
+Remotes are shown by **hostname** rather than the full gateway URL; if two
+registered fleets live on the same host, they're disambiguated by the first 8
+characters of their session id (`fleet.example.com - 8e7d1f0a`).
 
 The registry is stored on your own machine at `~/.fleet/armada.json` (mode
 `0600` — it holds bearer tokens) and always round-trips through your **local**

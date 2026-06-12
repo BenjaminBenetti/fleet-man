@@ -116,11 +116,14 @@ type fleetPage struct {
 	listRowY int
 
 	// Armada selector: a target embedded in the list box's TOP BORDER line
-	// ("╭─ Armada [ local ] ──╮"), opened by the `A` key or a mouse click on
-	// the label (it sits outside the j/k row cycle). armadaDialogRow is the
-	// dropdown cursor while mode == viewArmadaSelect. armadaY + armadaX0/X1
-	// record the label's on-screen position and column span during View() for
-	// mouse hit-testing (-1 = not rendered).
+	// ("╭─ Armada [ local ] ──╮"). It is part of the j/k navigation cycle as a
+	// virtual stop ABOVE the first row: armadaFocused is true while the cursor
+	// is on it (up from the top row focuses it; up again wraps to the bottom).
+	// Enter/Space (or the `A` key, or a mouse click) opens the dropdown.
+	// armadaDialogRow is the dropdown cursor while mode == viewArmadaSelect.
+	// armadaY + armadaX0/X1 record the label's on-screen position and column
+	// span during View() for mouse hit-testing (-1 = not rendered).
+	armadaFocused   bool
 	armadaDialogRow int
 	armadaY         int
 	armadaX0        int
@@ -402,6 +405,26 @@ func (fleetPage *fleetPage) currentRow() *row {
 	return &fleetPage.rows[fleetPage.cursor]
 }
 
+// firstSelectable returns the index of the first selectable row (-1 if none).
+func (fleetPage *fleetPage) firstSelectable() int {
+	for i, r := range fleetPage.rows {
+		if r.selectable() {
+			return i
+		}
+	}
+	return -1
+}
+
+// lastSelectable returns the index of the last selectable row (-1 if none).
+func (fleetPage *fleetPage) lastSelectable() int {
+	for i := len(fleetPage.rows) - 1; i >= 0; i-- {
+		if fleetPage.rows[i].selectable() {
+			return i
+		}
+	}
+	return -1
+}
+
 // openArmadaSelect opens the armada dropdown with the cursor on the current
 // connection, refreshing the remotes' status indicators.
 func (fleetPage *fleetPage) openArmadaSelect(m *model) tea.Cmd {
@@ -499,21 +522,57 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 	case tea.KeyMsg:
 		m.message = ""
 
+		// The Armada selector is a virtual nav stop ABOVE the first row. While
+		// it holds focus, j/k move off it (k wraps to the bottom row, j drops to
+		// the top row) and enter/space/A open its dropdown; the per-row letter
+		// actions don't apply, so they're ignored.
+		if fleetPage.armadaFocused {
+			switch msg.String() {
+			case "q", "ctrl+c", "ctrl+q":
+				m.quitting = true
+				return tea.Quit
+			case "up", "k":
+				fleetPage.armadaFocused = false
+				if i := fleetPage.lastSelectable(); i >= 0 {
+					fleetPage.cursor = i
+				}
+			case "down", "j":
+				fleetPage.armadaFocused = false
+				if i := fleetPage.firstSelectable(); i >= 0 {
+					fleetPage.cursor = i
+				}
+			case "enter", " ", "A":
+				return fleetPage.openArmadaSelect(m)
+			case "esc":
+				fleetPage.armadaFocused = false
+			}
+			return nil
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c", "ctrl+q":
 			m.quitting = true
 			return tea.Quit
 
 		case "up", "k":
-			fleetPage.moveCursor(-1)
+			// Up from the top row focuses the Armada selector (one stop above
+			// the list); otherwise move within the rows.
+			if fleetPage.cursor == fleetPage.firstSelectable() {
+				fleetPage.armadaFocused = true
+			} else {
+				fleetPage.moveCursor(-1)
+			}
 
 		case "down", "j":
-			fleetPage.moveCursor(1)
+			// Down from the bottom row wraps up to the Armada selector.
+			if fleetPage.cursor == fleetPage.lastSelectable() {
+				fleetPage.armadaFocused = true
+			} else {
+				fleetPage.moveCursor(1)
+			}
 
-		// The Armada selector lives on the list box's top border, outside the
-		// j/k row cycle (so row navigation and its wrap behaviour are
-		// unchanged). A dedicated key opens its dropdown; the mouse synthesizes
-		// the same key when the border label is clicked.
+		// A dedicated key opens the Armada dropdown from any row; the mouse
+		// synthesizes the same key when the border label is clicked.
 		case "A":
 			return fleetPage.openArmadaSelect(m)
 
@@ -995,8 +1054,6 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 // Help Keys
 // ===========================================
 
-// contextualHelpKeys returns the help bar entries relevant to the
-// currently selected row and its state.
 // renderArmadaBorder draws the list box's top border line with the Armada
 // selector embedded: ╭─ Armada [ local ] ───╮. The line is hand-composed to
 // the box's exact rendered width (lipgloss has no border-title API) in the
@@ -1005,7 +1062,7 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 func (fleetPage *fleetPage) renderArmadaBorder(m *model, width int) string {
 	borderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
 
-	name := armadaCurrentLabel()
+	name := m.armadaCurrentDisplay()
 	frame := " Armada [  ] "
 	// Corners + 2 leading dashes + at least 2 trailing dashes must survive.
 	maxName := width - 6 - lipgloss.Width(frame)
@@ -1020,7 +1077,7 @@ func (fleetPage *fleetPage) renderArmadaBorder(m *model, width int) string {
 	labelWidth := lipgloss.Width(label)
 
 	styledLabel := label
-	if fleetPage.mode == viewArmadaSelect {
+	if fleetPage.armadaFocused || fleetPage.mode == viewArmadaSelect {
 		styledLabel = selectedStyle.Render(label)
 	}
 
@@ -1031,6 +1088,9 @@ func (fleetPage *fleetPage) renderArmadaBorder(m *model, width int) string {
 }
 
 func (fleetPage *fleetPage) contextualHelpKeys(m *model) []string {
+	if fleetPage.armadaFocused {
+		return []string{"enter/space: switch armada", "j/k: navigate", "q: quit"}
+	}
 	r := fleetPage.currentRow()
 	if r == nil {
 		return withArmadaHint([]string{"n: new fleet", "q: quit"})
@@ -1156,7 +1216,8 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 	}
 
 	for i, r := range fleetPage.rows {
-		isSelected := i == fleetPage.cursor
+		// While the Armada selector holds focus, no row shows the cursor.
+		isSelected := i == fleetPage.cursor && !fleetPage.armadaFocused
 		cursor := "  "
 		if isSelected {
 			cursor = cursorStyle.Render("> ")
@@ -1775,9 +1836,9 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				suffix += "  " + dimStyle.Render("(current)")
 			}
 			if fleetPage.armadaDialogRow == i {
-				opts.WriteString(cursorStyle.Render("> ") + selectedStyle.Render(e.label) + suffix)
+				opts.WriteString(cursorStyle.Render("> ") + selectedStyle.Render(e.displayName) + suffix)
 			} else {
-				opts.WriteString("  " + dialogLabel.Render(e.label) + suffix)
+				opts.WriteString("  " + dialogLabel.Render(e.displayName) + suffix)
 			}
 			opts.WriteString("\n")
 		}
