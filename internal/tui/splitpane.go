@@ -509,15 +509,40 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 	// watch reconcile) — reading it inside the closure below would race.
 	// Saved session order (from pane titles) preserves the exact
 	// pane-to-session mapping.
+	//
+	// The server's persisted copy (m.st, kept fresh by the Watch stream)
+	// is preferred over this TUI's savedGroups cache. The cache can lag
+	// behind another TUI's writes — e.g. while this group was exempt
+	// from the watch reconcile as this TUI's open split — and restoring
+	// from a stale session list resurrects killed sessions via
+	// new-session -A (issue #158). The group being restored is never the
+	// one currently open here (toggle-close handles that), and local
+	// saves write m.st synchronously, so the server copy is
+	// fresher-or-equal for any group reaching this path.
 	key := computeGroupKey(instanceName, groupID)
 	savedLayout := ""
 	var savedOrder []string
 	var savedSnapshot *savedGroup
-	if sg, ok := fleetPage.savedGroups[key]; ok {
-		savedSnapshot = &sg
-		savedLayout = sg.Layout
-		if len(sg.Sessions) > 0 {
-			savedOrder = sg.Sessions
+	if m.st != nil {
+		if gl, ok := m.st.GroupLayouts[key]; ok {
+			savedSnapshot = &savedGroup{
+				GroupID:      gl.GroupID,
+				InstanceName: gl.InstanceName,
+				Sessions:     gl.Sessions,
+				Layout:       gl.Layout,
+				PaneCount:    gl.PaneCount,
+			}
+		}
+	}
+	if savedSnapshot == nil {
+		if sg, ok := fleetPage.savedGroups[key]; ok {
+			savedSnapshot = &sg
+		}
+	}
+	if savedSnapshot != nil {
+		savedLayout = savedSnapshot.Layout
+		if len(savedSnapshot.Sessions) > 0 {
+			savedOrder = savedSnapshot.Sessions
 		}
 	}
 
@@ -670,27 +695,25 @@ func restoreSessionNames(discovered, prefix string, savedOrder []string, savedSn
 
 	// A saved layout drives the restore: it records the pane count and
 	// session-to-pane order the user left behind. Each restored `fleet
-	// shell --session` uses tmux new-session -A, so the named session is
-	// attached if it survived or recreated if it did not. Snapshot
-	// sessions are kept even when live discovery doesn't list them —
-	// Linux and WSL can report different stale/live inner tmux sets
-	// during restart, and recreate-if-dead is the point of the snapshot.
-	// Live group sessions missing from the snapshot ARE appended, though:
-	// another TUI connected to the same fleetd may have added panes since
-	// this TUI last looked (issue #158).
+	// shell --session` uses tmux new-session -A (attach-or-create), so
+	// restoring a name that is no longer alive CREATES it. That
+	// recreate-if-dead is wanted in exactly one case: the whole group
+	// died together (fleet/instance restart — no live group session
+	// remains), where the snapshot is the only record of the panes to
+	// bring back. When the group still has live sessions, a snapshot
+	// entry missing from the live set was deliberately killed — a
+	// restart would have killed the survivors too — and recreating it
+	// resurrects a ghost pane that the layout tick then persists as
+	// real state (issue #158). So with a live group the snapshot only
+	// contributes pane order, and the live set decides membership:
+	// dead entries are dropped and live extras (panes added by another
+	// TUI) are appended, exactly like the savedOrder path below.
 	if savedSnapshot != nil {
-		sessions := savedGroupSessionNames(*savedSnapshot, sanitized)
-		seen := make(map[string]bool, len(sessions))
-		for _, s := range sessions {
-			seen[s] = true
+		ordered := savedGroupSessionNames(*savedSnapshot, sanitized)
+		if len(live) == 0 {
+			return ordered
 		}
-		for _, name := range liveOrder {
-			if !seen[name] {
-				sessions = append(sessions, name)
-				seen[name] = true
-			}
-		}
-		return sessions
+		savedOrder = ordered
 	}
 
 	// Use saved order if available, filtering to sessions that still
