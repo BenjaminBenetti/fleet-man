@@ -18,10 +18,11 @@ func TestBuildPresetSessionScript(t *testing.T) {
 	if !strings.Contains(script, `tmux new-session -d -s 'inst~dev~a1' 2>/dev/null`) {
 		t.Fatalf("missing pane new-session: %s", script)
 	}
-	// The first pane's command is typed literally then submitted; the exact
-	// (=, colon-terminated) session target prevents tmux prefix-matching from
-	// hitting inst~dev~a1.
-	if !strings.Contains(script, `tmux send-keys -t '=inst~dev:' -l 'npm run dev'`) {
+	// The first pane's command is typed literally (-l) after a "--" flag
+	// terminator (so a leading-dash command isn't parsed as a flag) then
+	// submitted; the exact (=, colon-terminated) session target prevents tmux
+	// prefix-matching from hitting inst~dev~a1.
+	if !strings.Contains(script, `tmux send-keys -t '=inst~dev:' -l -- 'npm run dev'`) {
 		t.Fatalf("missing literal send-keys: %s", script)
 	}
 	if !strings.Contains(script, `tmux send-keys -t '=inst~dev:' Enter`) {

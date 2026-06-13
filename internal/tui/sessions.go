@@ -184,7 +184,10 @@ type presetSessionsCreatedMsg struct {
 // group's pane names extend the root name, so prefix matching would be
 // ambiguous) and the trailing ":" makes it a session target; a bare "=<name>"
 // fails target-pane parsing ("can't find pane") on tmux 3.x. -l sends the
-// command literally so key names inside it (e.g. "Enter") are not interpreted.
+// command literally so key names inside it (e.g. "Enter") are not interpreted,
+// and the "--" terminates send-keys' own flag parsing so a command beginning
+// with "-" (e.g. "-rf ...") is not mistaken for a flag (which would fail the
+// step and abort the whole && chain).
 func buildPresetSessionScript(sessions []string, commands []string) string {
 	var b strings.Builder
 	b.WriteString(tmuxEnsureInstalled)
@@ -195,7 +198,7 @@ func buildPresetSessionScript(sessions []string, commands []string) string {
 		fmt.Fprintf(&b, `tmux new-session -d -s %s 2>/dev/null`, shQuote(name))
 		if i < len(commands) && commands[i] != "" {
 			target := shQuote("=" + name + ":")
-			fmt.Fprintf(&b, ` && tmux send-keys -t %s -l %s && tmux send-keys -t %s Enter`,
+			fmt.Fprintf(&b, ` && tmux send-keys -t %s -l -- %s && tmux send-keys -t %s Enter`,
 				target, shQuote(commands[i]), target)
 		}
 	}
