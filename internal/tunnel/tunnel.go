@@ -82,6 +82,10 @@ type RegisterReply struct {
 	// Features is the negotiated set: the intersection of what fleetd requested
 	// and what the gateway supports. Absent (old gateway) means MCP-only.
 	Features []string `json:"features,omitempty"`
+	// GatewayVersion is the gateway's build version, for diagnostics: fleetd
+	// surfaces it to remote TUIs (over RemoteMcpStatus) so the whole control
+	// chain's versions are visible. Empty from an old gateway predating the field.
+	GatewayVersion string `json:"gateway_version,omitempty"`
 }
 
 // FeatureGRPC negotiates tunneling the daemon's gRPC server alongside MCP. When

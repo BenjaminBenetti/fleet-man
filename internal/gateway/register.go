@@ -101,6 +101,10 @@ func (s *Server) bindTunnel(ctx context.Context, conn net.Conn, remote string) e
 		reply.PublicGRPCURL = ""
 	}
 
+	// Echo the gateway's build version so fleetd can surface it (over
+	// RemoteMcpStatus) to remote TUIs for control-chain version diagnostics.
+	reply.GatewayVersion = s.cfg.Version
+
 	if err := tunnel.WriteFrame(conn, reply); err != nil {
 		if isNew {
 			s.reg.release(sess)

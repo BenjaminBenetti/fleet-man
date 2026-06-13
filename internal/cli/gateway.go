@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/gateway"
+	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -46,6 +47,9 @@ func newGatewayCmd() *cobra.Command {
 			return applyGatewayEnv(cmd.Flags())
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// The gateway binary is the fleet binary, built with the same version
+			// ldflags; pass that through so it can report its version to daemons.
+			cfg.Version = version.Version
 			return gateway.Serve(cmd.Context(), cfg)
 		},
 	}

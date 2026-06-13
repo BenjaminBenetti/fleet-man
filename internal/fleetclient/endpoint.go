@@ -83,6 +83,14 @@ func IsRemote() bool {
 	return os.Getenv("FLEET_GATEWAY") != "" || os.Getenv("FLEET_SERVER") != ""
 }
 
+// IsGateway reports whether the client reaches the daemon THROUGH a fleet
+// gateway (FLEET_GATEWAY set), as opposed to a direct remote TCP target
+// (FLEET_SERVER) or the local socket. Only a gateway connection has a gateway
+// version to show in the control chain.
+func IsGateway() bool {
+	return os.Getenv("FLEET_GATEWAY") != ""
+}
+
 // gatewayToken resolves the bearer token for a gateway endpoint: FLEET_TOKEN, or
 // the on-disk MCP token (so a user on the same host as their daemon need only
 // supply the URL).

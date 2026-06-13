@@ -45,6 +45,12 @@ type model struct {
 	// settings page renders it read-only; nil means "no status received yet".
 	remoteMcpStatus *fleetgrpc.RemoteMcpStatus
 
+	// serverVersion is the connected daemon's build version, learned from the
+	// Hello handshake on each (re)connect (see serverInfoMsg). Empty until the
+	// first connect, or for a dev-build daemon. Rendered in the header's
+	// control-chain version string (see versionChain).
+	serverVersion string
+
 	// Fleet Armada: the registry of remote fleets (loaded from the LOCAL
 	// daemon — see armada_client.go), the latest ping outcome per remote URL,
 	// and whether the settings-page status-sweep tick is armed (guards against
@@ -754,6 +760,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// state + computed Public MCP URL). Cache it for the settings page to
 		// render; a redraw picks it up on the next frame.
 		m.remoteMcpStatus = msg.status
+		return m, spinCmd
+
+	case serverInfoMsg:
+		if msg.gen != m.watchGen {
+			return m, spinCmd
+		}
+		// The daemon's version learned at (re)connect; render it in the header's
+		// control-chain version string.
+		m.serverVersion = msg.serverVersion
 		return m, spinCmd
 
 	case watchErrMsg, watchClosedMsg:

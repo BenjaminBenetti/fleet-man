@@ -14,12 +14,18 @@ import (
 // Conn is a connected fleet client. Service() returns the gRPC client; callers
 // never see the socket, address, or transport.
 type Conn struct {
-	conn *grpc.ClientConn
-	svc  fleetgrpc.FleetServiceClient
+	conn          *grpc.ClientConn
+	svc           fleetgrpc.FleetServiceClient
+	serverVersion string
 }
 
 // Service returns the fleet service client for issuing RPCs.
 func (c *Conn) Service() fleetgrpc.FleetServiceClient { return c.svc }
+
+// ServerVersion returns the daemon's build version, learned from the Hello
+// handshake run at Dial time (the daemon reached THROUGH a gateway, when remote,
+// so this is fleetd's version, not the gateway's). Empty for a dev-build daemon.
+func (c *Conn) ServerVersion() string { return c.serverVersion }
 
 // Close releases the underlying connection.
 func (c *Conn) Close() error { return c.conn.Close() }
@@ -90,7 +96,7 @@ func dialEndpoint(ctx context.Context, ep Endpoint) (*Conn, error) {
 			return nil, fmt.Errorf("fleet server unreachable after restart: %w", err)
 		}
 	}
-	return &Conn{conn: conn, svc: svc}, nil
+	return &Conn{conn: conn, svc: svc, serverVersion: reply.GetServerVersion()}, nil
 }
 
 func hello(ctx context.Context, svc fleetgrpc.FleetServiceClient) (*fleetgrpc.HelloReply, error) {

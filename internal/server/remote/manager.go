@@ -294,8 +294,8 @@ func (m *Manager) connectAndServe(ctx context.Context, d desiredState) (register
 		PublicGRPCURL: reply.PublicGRPCURL,
 		GatewayURL:    gatewayURL,
 	})
-	flog.Info("remote gateway connected", "gateway", gatewayURL, "publicURL", reply.PublicURL, "publicGrpcURL", reply.PublicGRPCURL)
-	m.publish(statusConnected(reply.PublicURL, reply.PublicGRPCURL))
+	flog.Info("remote gateway connected", "gateway", gatewayURL, "publicURL", reply.PublicURL, "publicGrpcURL", reply.PublicGRPCURL, "gatewayVersion", reply.GatewayVersion)
+	m.publish(statusConnected(reply.PublicURL, reply.PublicGRPCURL, reply.GatewayVersion))
 
 	session, err := tunnel.ClientSession(conn, m.logOut)
 	if err != nil {
