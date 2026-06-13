@@ -34,9 +34,9 @@ func versionChain(m *model) string {
 		if gw == "" {
 			gw = "?"
 		}
-		return versionLabel(version.Version) + versionArrow + gw + versionArrow + versionLabel(m.serverVersion)
+		return joinVersions(versionLabel(version.Version), gw, versionLabel(m.serverVersion))
 	case fleetclient.IsRemote():
-		return versionLabel(version.Version) + versionArrow + versionLabel(m.serverVersion)
+		return joinVersions(versionLabel(version.Version), versionLabel(m.serverVersion))
 	default:
 		// Local daemon. Collapse to the TUI version alone when the daemon
 		// matches (or hasn't answered yet) — preserving the old header exactly,
@@ -45,8 +45,26 @@ func versionChain(m *model) string {
 		if m.serverVersion == "" || m.serverVersion == version.Version {
 			return version.Version
 		}
-		return versionLabel(version.Version) + versionArrow + versionLabel(m.serverVersion)
+		return joinVersions(versionLabel(version.Version), versionLabel(m.serverVersion))
 	}
+}
+
+// joinVersions renders the chain hops as "a → b → c", but collapses a chain
+// whose hops are ALL identical to "<version> xN" (e.g. tui == gateway == fleetd
+// all on v1.0.19-beta renders "v1.0.19-beta x3") — when every hop is in lockstep
+// the arrow form is just noise. A single hop renders bare (no "x1").
+func joinVersions(hops ...string) string {
+	allSame := len(hops) > 1
+	for _, h := range hops[1:] {
+		if h != hops[0] {
+			allSame = false
+			break
+		}
+	}
+	if allSame {
+		return fmt.Sprintf("%s x%d", hops[0], len(hops))
+	}
+	return strings.Join(hops, versionArrow)
 }
 
 // versionLabel maps an empty (unset, dev-build) version to "dev" so a chain hop

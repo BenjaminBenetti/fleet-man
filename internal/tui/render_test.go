@@ -47,6 +47,23 @@ func TestVersionChain(t *testing.T) {
 			want: "v1.3.0 → v1.2.5 → v1.2.0",
 		},
 		{
+			name:    "gateway all three identical collapses to xN",
+			gateway: "http://gw.example/abc",
+			tui:     "v1.0.19-beta", fleetd: "v1.0.19-beta", gw: "v1.0.19-beta", gwStatusPresent: true,
+			want: "v1.0.19-beta x3",
+		},
+		{
+			name:    "gateway two ends match but gateway differs stays expanded",
+			gateway: "http://gw.example/abc",
+			tui:     "v1.0.19-beta", fleetd: "v1.0.19-beta", gw: "v1.0.18-beta", gwStatusPresent: true,
+			want: "v1.0.19-beta → v1.0.18-beta → v1.0.19-beta",
+		},
+		{
+			name:   "remote server both identical collapses to xN",
+			server: "host:50051",
+			tui:    "v1.0.19-beta", fleetd: "v1.0.19-beta", want: "v1.0.19-beta x2",
+		},
+		{
 			name:    "old gateway (no version, nil status) shows ? for the unknown hop",
 			gateway: "http://gw.example/abc",
 			tui:     "v1.3.0", fleetd: "v1.2.0", gwStatusPresent: false,
