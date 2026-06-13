@@ -210,7 +210,7 @@ func newModel() model {
 	// Rehydrate saved pane layouts from disk so group restores after
 	// a fleet restart use the exact geometry the user left behind,
 	// then drop any layouts whose instance no longer exists.
-	m.hydrateSavedGroups()
+	m.reconcileSavedGroups()
 	m.pruneOrphanedSavedGroups()
 
 	// Resume tracking any instances still in "creating" state from a previous session
@@ -270,18 +270,41 @@ func (m *model) reload() {
 	}
 }
 
-// hydrateSavedGroups copies persisted pane layouts from state.json into
-// the fleet page's in-memory map. Called once at startup so subsequent
-// group restores use the layout geometry the user left behind rather
-// than falling back to the default placeholder split.
-func (m *model) hydrateSavedGroups() {
+// reconcileSavedGroups mirrors the server's persisted pane layouts into
+// the fleet page's in-memory map. Called at startup (and after an armada
+// switch) for the initial hydration, and again on every Watch state
+// change so layouts written by another TUI connected to the same fleetd
+// show up here without a restart (issue #158). Replace semantics: keys
+// the server no longer has are dropped, so deletions propagate too.
+//
+// The one exception is the group currently open in this TUI's split:
+// its outer tmux is the live source of truth for what THIS view shows,
+// and overwriting its cache entry from the server would defeat
+// saveCurrentGroupLayout's diff gate.
+func (m *model) reconcileSavedGroups() {
 	if m.st == nil || m.fleetPage == nil {
 		return
 	}
+	fleetPage := m.fleetPage
+	activeKey := ""
+	if fleetPage.splitPaneID != "" && !fleetPage.activeGroup.Empty() {
+		activeKey = computeGroupKey(fleetPage.activeGroup.Ref.Instance, fleetPage.activeGroup.GroupID)
+	}
+	for key := range fleetPage.savedGroups {
+		if key == activeKey {
+			continue
+		}
+		if _, ok := m.st.GroupLayouts[key]; !ok {
+			delete(fleetPage.savedGroups, key)
+		}
+	}
 	for stateKey, layout := range m.st.GroupLayouts {
+		if stateKey == activeKey {
+			continue
+		}
 		// Use the stateKey (instanceName/groupID) directly as the
 		// savedGroups map key to maintain instance isolation.
-		m.fleetPage.savedGroups[stateKey] = savedGroup{
+		fleetPage.savedGroups[stateKey] = savedGroup{
 			GroupID:      layout.GroupID,
 			InstanceName: layout.InstanceName,
 			Sessions:     layout.Sessions,
@@ -667,6 +690,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pstate = msg.state
 		if msg.state != nil {
 			m.st = protoStateToLegacy(msg.state)
+			// Pull pane layouts written by other TUIs on the same daemon
+			// into the local cache before rebuilding rows (which render
+			// group sizes from it) — see issue #158.
+			m.reconcileSavedGroups()
 			if m.fleetPage != nil {
 				m.fleetPage.buildRows(&m)
 			}
@@ -704,7 +731,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// binding (which bypasses fleet's handlers).
 			fp := m.fleetPage
 			if fp.splitPaneID != "" && !fp.activeGroup.Empty() && splitOpen() {
-				fp.saveCurrentGroupLayout(m.st)
+				fp.saveCurrentGroupLayout(&m)
 			}
 			if fp.splitPaneID != "" && !splitOpen() {
 				unbindHostSplitKeys()
@@ -903,7 +930,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// free. Always reschedule so the tick keeps firing.
 		fleetPage := m.fleetPage
 		if fleetPage != nil && fleetPage.splitPaneID != "" && !fleetPage.activeGroup.Empty() && splitOpen() {
-			fleetPage.saveCurrentGroupLayout(m.st)
+			fleetPage.saveCurrentGroupLayout(&m)
 		}
 		extraCmds = append(extraCmds, layoutTickCmd())
 
@@ -1109,7 +1136,7 @@ func (m model) View() string {
 		// with a truncated single-pane record.
 		fleetPage := m.fleetPage
 		if fleetPage.splitPaneID != "" {
-			fleetPage.saveCurrentGroupLayout(m.st)
+			fleetPage.saveCurrentGroupLayout(&m)
 			killAllSplitPanes()
 			fleetPage.splitPaneID = ""
 			fleetPage.restoringGroupID = ""

@@ -364,3 +364,67 @@ func TestNeedsDepsCheck(t *testing.T) {
 		t.Fatal("needsDepsCheck() = true after ~/.fleet exists, want false")
 	}
 }
+
+// TestReconcileSavedGroupsMirrorsServerState covers the issue #158 cache
+// reconcile: server layouts (written by another TUI on the same daemon)
+// replace the local cache — adds, updates, AND deletes — except the group
+// currently open in this TUI's split, whose outer tmux is live truth.
+func TestReconcileSavedGroupsMirrorsServerState(t *testing.T) {
+	ref := InstanceRef{Fleet: "repo", Instance: "alpha"}
+	activeKey := computeGroupKey("alpha", "dog")
+	updatedKey := computeGroupKey("alpha", "cat")
+	vanishedKey := computeGroupKey("alpha", "old")
+	newKey := computeGroupKey("beta", "fish")
+
+	fp := newFleetPage()
+	fp.splitPaneID = "%5"
+	fp.activeGroup = ActiveGroup{Ref: ref, GroupID: "dog"}
+	fp.savedGroups[activeKey] = savedGroup{
+		GroupID: "dog", InstanceName: "alpha",
+		Sessions: []string{"alpha~dog", "alpha~dog~ff00"}, PaneCount: 2,
+	}
+	fp.savedGroups[updatedKey] = savedGroup{
+		GroupID: "cat", InstanceName: "alpha",
+		Sessions: []string{"alpha~cat"}, PaneCount: 1,
+	}
+	fp.savedGroups[vanishedKey] = savedGroup{
+		GroupID: "old", InstanceName: "alpha",
+		Sessions: []string{"alpha~old"}, PaneCount: 1,
+	}
+
+	m := &model{
+		st: &state.State{
+			GroupLayouts: map[string]state.GroupLayout{
+				// The server has a NEWER copy of the active group (the other
+				// TUI added a pane) — but this TUI's open split owns it.
+				activeKey:  {GroupID: "dog", InstanceName: "alpha", Sessions: []string{"alpha~dog", "alpha~dog~ff00", "alpha~dog~3421"}, PaneCount: 3},
+				updatedKey: {GroupID: "cat", InstanceName: "alpha", Sessions: []string{"alpha~cat", "alpha~cat~aa11"}, PaneCount: 2},
+				newKey:     {GroupID: "fish", InstanceName: "beta", Sessions: []string{"beta~fish"}, PaneCount: 1},
+			},
+		},
+		fleetPage: fp,
+	}
+
+	m.reconcileSavedGroups()
+
+	if got := fp.savedGroups[activeKey]; got.PaneCount != 2 {
+		t.Fatalf("active-open group PaneCount = %d, want 2 (local view owns it)", got.PaneCount)
+	}
+	if got := fp.savedGroups[updatedKey]; got.PaneCount != 2 || len(got.Sessions) != 2 {
+		t.Fatalf("updated group = %#v, want the server's 2-session copy", got)
+	}
+	if _, ok := fp.savedGroups[vanishedKey]; ok {
+		t.Fatal("group deleted on the server still present in the local cache")
+	}
+	if got, ok := fp.savedGroups[newKey]; !ok || got.GroupID != "fish" {
+		t.Fatalf("group added on the server missing from the local cache: %#v", got)
+	}
+
+	// With the split closed nothing is exempt: the active group's entry
+	// now mirrors the server too.
+	fp.splitPaneID = ""
+	m.reconcileSavedGroups()
+	if got := fp.savedGroups[activeKey]; got.PaneCount != 3 {
+		t.Fatalf("after split close, group PaneCount = %d, want 3 (server copy)", got.PaneCount)
+	}
+}

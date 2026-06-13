@@ -309,7 +309,10 @@ func TestDerivePersistableSnapshotBailsWithNoPanes(t *testing.T) {
 	}
 }
 
-func TestRestoreSessionNamesTopsUpIncompleteLiveDiscovery(t *testing.T) {
+func TestRestoreSessionNamesRecreatesAllWhenGroupFullyDead(t *testing.T) {
+	// Fleet/instance restart: no live session remains for the group, so
+	// the snapshot is the only record of the panes — recreate all of
+	// them (new-session -A) in saved order.
 	sg := savedGroup{
 		GroupID:      "abc123",
 		InstanceName: "alpha",
@@ -318,7 +321,7 @@ func TestRestoreSessionNamesTopsUpIncompleteLiveDiscovery(t *testing.T) {
 	}
 
 	got := restoreSessionNames(
-		"alpha~abc123\n",
+		"",
 		"alpha~abc123",
 		sg.Sessions,
 		&sg,
@@ -335,7 +338,12 @@ func TestRestoreSessionNamesTopsUpIncompleteLiveDiscovery(t *testing.T) {
 	}
 }
 
-func TestRestoreSessionNamesUsesSavedLayoutOverLiveDiscovery(t *testing.T) {
+func TestRestoreSessionNamesDropsDeadSessionsWhenGroupAlive(t *testing.T) {
+	// Issue #158: the group still has a live session, so a snapshot
+	// entry missing from the live set was deliberately killed (a restart
+	// would have killed the survivor too). It must NOT be recreated —
+	// new-session -A would resurrect it as a ghost pane that the layout
+	// tick then persists as real state.
 	sg := savedGroup{
 		GroupID:      "abc123",
 		InstanceName: "alpha",
@@ -344,19 +352,105 @@ func TestRestoreSessionNamesUsesSavedLayoutOverLiveDiscovery(t *testing.T) {
 	}
 
 	got := restoreSessionNames(
-		"alpha~abc123\nalpha~abc123~stale\n",
+		"alpha~abc123\n",
+		"alpha~abc123",
+		sg.Sessions,
+		&sg,
+		"alpha",
+	)
+	want := []string{"alpha~abc123"}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d: %#v", len(got), len(want), got)
+	}
+	if got[0] != want[0] {
+		t.Fatalf("session[0] = %q, want %q", got[0], want[0])
+	}
+}
+
+func TestRestoreSessionNamesMergesSnapshotWithLiveGroup(t *testing.T) {
+	// Issue #158: with the group alive, the snapshot contributes pane
+	// order but the live set decides membership. Another TUI killed ff00
+	// (dropped, not resurrected) and added 3421 (appended); sessions
+	// outside the group prefix are ignored.
+	sg := savedGroup{
+		GroupID:      "abc123",
+		InstanceName: "alpha",
+		Sessions:     []string{"alpha~abc123", "alpha~abc123~ff00"},
+		PaneCount:    2,
+	}
+
+	got := restoreSessionNames(
+		"alpha~abc123\nalpha~abc123~3421\nalpha~other\n",
 		"alpha~abc123",
 		nil,
 		&sg,
 		"alpha",
 	)
-	want := []string{"alpha~abc123", "alpha~abc123~ff00"}
+	want := []string{"alpha~abc123", "alpha~abc123~3421"}
 	if len(got) != len(want) {
 		t.Fatalf("len = %d, want %d: %#v", len(got), len(want), got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("session[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestSnapshotMatchesRuntime covers the issue #158 stale-view guard: a
+// snapshot may only be persisted when its session set is exactly the set
+// of live inner-tmux sessions for the group.
+func TestSnapshotMatchesRuntime(t *testing.T) {
+	snapshot := savedGroup{
+		GroupID:      "abc123",
+		InstanceName: "alpha",
+		Sessions:     []string{"alpha~abc123", "alpha~abc123~ff00"},
+		PaneCount:    2,
+	}
+
+	cases := []struct {
+		name string
+		live []tmuxSession
+		want bool
+	}{
+		{
+			name: "exact match, order ignored",
+			live: []tmuxSession{{Name: "alpha~abc123~ff00"}, {Name: "alpha~abc123"}},
+			want: true,
+		},
+		{
+			name: "sessions from other groups and bare names are ignored",
+			live: []tmuxSession{
+				{Name: "alpha~abc123"},
+				{Name: "alpha~abc123~ff00"},
+				{Name: "alpha~other"},
+				{Name: "unrelated"},
+			},
+			want: true,
+		},
+		{
+			name: "runtime has a group session the snapshot lacks (other TUI added a pane)",
+			live: []tmuxSession{
+				{Name: "alpha~abc123"},
+				{Name: "alpha~abc123~ff00"},
+				{Name: "alpha~abc123~3421"},
+			},
+			want: false,
+		},
+		{
+			name: "snapshot has a session the runtime lacks (dead session / poll lag)",
+			live: []tmuxSession{{Name: "alpha~abc123"}},
+			want: false,
+		},
+		{
+			name: "no runtime cached",
+			live: nil,
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		if got := snapshotMatchesRuntime(snapshot, tc.live); got != tc.want {
+			t.Errorf("%s: snapshotMatchesRuntime = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
