@@ -54,6 +54,9 @@ func versionChain(m *model) string {
 // all on v1.0.19-beta renders "v1.0.19-beta x3") — when every hop is in lockstep
 // the arrow form is just noise. A single hop renders bare (no "x1").
 func joinVersions(hops ...string) string {
+	if len(hops) == 0 {
+		return ""
+	}
 	allSame := len(hops) > 1
 	for _, h := range hops[1:] {
 		if h != hops[0] {

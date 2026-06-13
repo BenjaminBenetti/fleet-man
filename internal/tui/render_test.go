@@ -97,3 +97,20 @@ func TestVersionChain(t *testing.T) {
 		})
 	}
 }
+
+// TestJoinVersionsEdges covers joinVersions directly for the degenerate arg
+// counts the chain callers never hit but which must not panic or emit "x1".
+func TestJoinVersionsEdges(t *testing.T) {
+	if got := joinVersions(); got != "" {
+		t.Fatalf("joinVersions() = %q, want empty (and no panic)", got)
+	}
+	if got := joinVersions("v1"); got != "v1" {
+		t.Fatalf("joinVersions(single) = %q, want bare \"v1\" (not \"v1 x1\")", got)
+	}
+	if got := joinVersions("v1", "v1"); got != "v1 x2" {
+		t.Fatalf("joinVersions(two same) = %q, want \"v1 x2\"", got)
+	}
+	if got := joinVersions("v1", "v2"); got != "v1 → v2" {
+		t.Fatalf("joinVersions(two diff) = %q, want \"v1 → v2\"", got)
+	}
+}
