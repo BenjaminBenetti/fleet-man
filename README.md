@@ -2,7 +2,7 @@
 
 A CLI/TUI tool for managing fleets of devcontainers. Spawn, name, exec into, and manage multiple devcontainer instances easily
 
-![fleet-man screenshot](readme-image.png)
+![fleet-man screenshot](fleet-showcase.png)
 
 ## Contents
 
