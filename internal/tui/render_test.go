@@ -47,6 +47,23 @@ func TestVersionChain(t *testing.T) {
 			want: "v1.3.0 → v1.2.5 → v1.2.0",
 		},
 		{
+			name:    "gateway all three identical collapses to xN",
+			gateway: "http://gw.example/abc",
+			tui:     "v1.0.19-beta", fleetd: "v1.0.19-beta", gw: "v1.0.19-beta", gwStatusPresent: true,
+			want: "v1.0.19-beta x3",
+		},
+		{
+			name:    "gateway two ends match but gateway differs stays expanded",
+			gateway: "http://gw.example/abc",
+			tui:     "v1.0.19-beta", fleetd: "v1.0.19-beta", gw: "v1.0.18-beta", gwStatusPresent: true,
+			want: "v1.0.19-beta → v1.0.18-beta → v1.0.19-beta",
+		},
+		{
+			name:   "remote server both identical collapses to xN",
+			server: "host:50051",
+			tui:    "v1.0.19-beta", fleetd: "v1.0.19-beta", want: "v1.0.19-beta x2",
+		},
+		{
 			name:    "old gateway (no version, nil status) shows ? for the unknown hop",
 			gateway: "http://gw.example/abc",
 			tui:     "v1.3.0", fleetd: "v1.2.0", gwStatusPresent: false,
@@ -78,5 +95,22 @@ func TestVersionChain(t *testing.T) {
 				t.Fatalf("versionChain = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestJoinVersionsEdges covers joinVersions directly for the degenerate arg
+// counts the chain callers never hit but which must not panic or emit "x1".
+func TestJoinVersionsEdges(t *testing.T) {
+	if got := joinVersions(); got != "" {
+		t.Fatalf("joinVersions() = %q, want empty (and no panic)", got)
+	}
+	if got := joinVersions("v1"); got != "v1" {
+		t.Fatalf("joinVersions(single) = %q, want bare \"v1\" (not \"v1 x1\")", got)
+	}
+	if got := joinVersions("v1", "v1"); got != "v1 x2" {
+		t.Fatalf("joinVersions(two same) = %q, want \"v1 x2\"", got)
+	}
+	if got := joinVersions("v1", "v2"); got != "v1 → v2" {
+		t.Fatalf("joinVersions(two diff) = %q, want \"v1 → v2\"", got)
 	}
 }
