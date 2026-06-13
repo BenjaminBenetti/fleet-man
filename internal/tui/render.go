@@ -6,8 +6,57 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
+	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// versionArrow separates hops in the control-chain version string.
+const versionArrow = " → "
+
+// versionChain renders the build versions of every hop in the control chain so
+// version skew (a stale TUI, gateway, or daemon) is visible at a glance:
+//
+//   - local daemon, versions match (the common case — fleetd auto-upgrades to
+//     the client): just "<tui>" (unchanged from the old single-version header;
+//     a dev build with no version still renders nothing).
+//   - local daemon, versions differ: "<tui> → <fleetd>".
+//   - remote via a gateway: "<tui> → <gateway> → <fleetd>".
+//   - remote via FLEET_SERVER (no gateway): "<tui> → <fleetd>".
+//
+// An empty gateway version (an old gateway predating the version field, or the
+// status not yet received) renders as "?" so the unknown hop stands out rather
+// than being masked.
+func versionChain(m *model) string {
+	switch {
+	case fleetclient.IsGateway():
+		gw := m.remoteMcpStatus.GetGatewayVersion()
+		if gw == "" {
+			gw = "?"
+		}
+		return versionLabel(version.Version) + versionArrow + gw + versionArrow + versionLabel(m.serverVersion)
+	case fleetclient.IsRemote():
+		return versionLabel(version.Version) + versionArrow + versionLabel(m.serverVersion)
+	default:
+		// Local daemon. Collapse to the TUI version alone when the daemon
+		// matches (or hasn't answered yet) — preserving the old header exactly,
+		// including rendering nothing for a versionless dev build — and only
+		// expand to show the daemon version when they actually diverge.
+		if m.serverVersion == "" || m.serverVersion == version.Version {
+			return version.Version
+		}
+		return versionLabel(version.Version) + versionArrow + versionLabel(m.serverVersion)
+	}
+}
+
+// versionLabel maps an empty (unset, dev-build) version to "dev" so a chain hop
+// always renders a token.
+func versionLabel(v string) string {
+	if v == "" {
+		return "dev"
+	}
+	return v
+}
 
 func renderHelp(width int, helpKeys []string) string {
 	maxW := width

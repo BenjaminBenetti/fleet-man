@@ -109,6 +109,14 @@ type remoteMcpStatusMsg struct {
 	status *fleetgrpc.RemoteMcpStatus
 	gen    int
 }
+
+// serverInfoMsg carries the daemon version learned at Dial time (Hello
+// handshake), sent on every successful (re)connect so the header can render the
+// control-chain versions.
+type serverInfoMsg struct {
+	serverVersion string
+	gen           int
+}
 type watchErrMsg struct{ err error }
 type watchClosedMsg struct{ err error }
 
@@ -157,6 +165,11 @@ func watchOnce(ctx context.Context, program *tea.Program, gen int) bool {
 		return false
 	}
 	defer conn.Close()
+
+	// Surface the daemon's version (from Dial's Hello handshake) so the header
+	// can render the control-chain versions. Reached through the gateway when
+	// remote, so this is always fleetd's version.
+	program.Send(serverInfoMsg{serverVersion: conn.ServerVersion(), gen: gen})
 
 	stream, err := conn.Service().Watch(ctx, &fleetgrpc.WatchRequest{
 		IncludeInitialState: true,

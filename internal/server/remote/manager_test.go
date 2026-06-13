@@ -228,7 +228,7 @@ func TestManagerConnectsServesAndDisables(t *testing.T) {
 		if err := tunnel.ReadFrame(conn, &req); err != nil {
 			return
 		}
-		_ = tunnel.WriteFrame(conn, tunnel.RegisterReply{SessionID: "sess-A", SessionToken: "tok-A", PublicURL: "https://gw/mcp/sess-A", PublicGRPCURL: "https://gw:50051/grpc/sess-A"})
+		_ = tunnel.WriteFrame(conn, tunnel.RegisterReply{SessionID: "sess-A", SessionToken: "tok-A", PublicURL: "https://gw/mcp/sess-A", PublicGRPCURL: "https://gw:50051/grpc/sess-A", GatewayVersion: "gw-7.0.0"})
 		sess, err := tunnel.ServerSession(conn, io.Discard)
 		if err != nil {
 			return
@@ -262,6 +262,11 @@ func TestManagerConnectsServesAndDisables(t *testing.T) {
 	// The gateway-assigned Public GRPC URL rides the same status.
 	if connected.GetPublicGrpcUrl() != "https://gw:50051/grpc/sess-A" {
 		t.Fatalf("public grpc url = %q, want https://gw:50051/grpc/sess-A", connected.GetPublicGrpcUrl())
+	}
+	// The gateway's reported build version rides the same status (so a remote
+	// TUI can show the control-chain versions).
+	if connected.GetGatewayVersion() != "gw-7.0.0" {
+		t.Fatalf("gateway version = %q, want gw-7.0.0", connected.GetGatewayVersion())
 	}
 
 	// The tunnel actually carried a request, auth header intact.

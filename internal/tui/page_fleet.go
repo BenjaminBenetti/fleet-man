@@ -13,7 +13,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/devcontainersetup"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
-	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -1203,8 +1202,8 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 		rendered = strings.Join(lines, "\n")
 	}
 	b.WriteString(rendered)
-	if version.Version != "" {
-		b.WriteString(" " + dimStyle.Render(version.Version))
+	if chain := versionChain(m); chain != "" {
+		b.WriteString(" " + dimStyle.Render(chain))
 	}
 	if m.updateAvailable != "" {
 		b.WriteString("  " + updateStyle.Render(fmt.Sprintf("A new version: %s is available ⚡ Settings to update", m.updateAvailable)))

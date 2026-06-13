@@ -98,6 +98,7 @@ type Config struct {
 	TLSKey        string // path to the TLS private key (PEM). Optional; both TLSCert and TLSKey together enable TLS.
 	MaxSessions   int    // cap on concurrent tunnels. Default 1024.
 	SessionKey    string // secret key signing session-resume tokens (token.go). Empty = a random per-boot key, so session URLs do not survive a gateway restart.
+	Version       string // gateway build version, echoed to fleetd in the register reply for diagnostics. Empty = unset (dev build).
 }
 
 // Server is a configured gateway. Build with New, then Run. tlsConfig is nil when

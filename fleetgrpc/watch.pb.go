@@ -383,8 +383,13 @@ type RemoteMcpStatus struct {
 	PublicUrl     string                 `protobuf:"bytes,2,opt,name=public_url,json=publicUrl,proto3" json:"public_url,omitempty"`
 	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
 	PublicGrpcUrl string                 `protobuf:"bytes,4,opt,name=public_grpc_url,json=publicGrpcUrl,proto3" json:"public_grpc_url,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// gateway_version is the build version the gateway reported in its register
+	// reply (empty from an old gateway that predates the field, or while not
+	// CONNECTED). Surfaced so a remote TUI can render the version of every hop in
+	// the control chain (tui -> gateway -> fleetd) and spot version skew.
+	GatewayVersion string `protobuf:"bytes,5,opt,name=gateway_version,json=gatewayVersion,proto3" json:"gateway_version,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RemoteMcpStatus) Reset() {
@@ -441,6 +446,13 @@ func (x *RemoteMcpStatus) GetError() string {
 func (x *RemoteMcpStatus) GetPublicGrpcUrl() string {
 	if x != nil {
 		return x.PublicGrpcUrl
+	}
+	return ""
+}
+
+func (x *RemoteMcpStatus) GetGatewayVersion() string {
+	if x != nil {
+		return x.GatewayVersion
 	}
 	return ""
 }
@@ -714,13 +726,14 @@ const file_watch_proto_rawDesc = "" +
 	"\x0fruntime_changed\x18\a \x01(\v2\x19.fleetgrpc.RuntimeChangedH\x00R\x0eruntimeChanged\x12H\n" +
 	"\x11remote_mcp_status\x18\b \x01(\v2\x1a.fleetgrpc.RemoteMcpStatusH\x00R\x0fremoteMcpStatus\x122\n" +
 	"\tfile_copy\x18\t \x01(\v2\x13.fleetgrpc.FileCopyH\x00R\bfileCopyB\x06\n" +
-	"\x04kind\"\x9e\x01\n" +
+	"\x04kind\"\xc7\x01\n" +
 	"\x0fRemoteMcpStatus\x12.\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x18.fleetgrpc.RemoteMcpConnR\x05state\x12\x1d\n" +
 	"\n" +
 	"public_url\x18\x02 \x01(\tR\tpublicUrl\x12\x14\n" +
 	"\x05error\x18\x03 \x01(\tR\x05error\x12&\n" +
-	"\x0fpublic_grpc_url\x18\x04 \x01(\tR\rpublicGrpcUrl\"6\n" +
+	"\x0fpublic_grpc_url\x18\x04 \x01(\tR\rpublicGrpcUrl\x12'\n" +
+	"\x0fgateway_version\x18\x05 \x01(\tR\x0egatewayVersion\"6\n" +
 	"\fStateChanged\x12&\n" +
 	"\x05state\x18\x01 \x01(\v2\x10.fleetgrpc.StateR\x05state\"F\n" +
 	"\x0eRuntimeChanged\x124\n" +

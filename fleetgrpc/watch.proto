@@ -96,6 +96,11 @@ message RemoteMcpStatus {
   string public_url = 2;
   string error = 3;
   string public_grpc_url = 4;
+  // gateway_version is the build version the gateway reported in its register
+  // reply (empty from an old gateway that predates the field, or while not
+  // CONNECTED). Surfaced so a remote TUI can render the version of every hop in
+  // the control chain (tui -> gateway -> fleetd) and spot version skew.
+  string gateway_version = 5;
 }
 
 // StateChanged is pushed whenever the authoritative PERSISTED model mutates. It

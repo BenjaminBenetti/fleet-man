@@ -289,6 +289,36 @@ func TestGatewayEndToEnd(t *testing.T) {
 	}
 }
 
+// TestGatewayReportsVersionInRegisterReply verifies the gateway echoes its
+// configured build version in the register reply, so fleetd can surface it to
+// remote TUIs for control-chain version diagnostics. An unset version yields an
+// empty field (how an old gateway predating the feature already behaves).
+func TestGatewayReportsVersionInRegisterReply(t *testing.T) {
+	const publicBase = "http://gw.example.com"
+	s := &Server{
+		cfg:       Config{PublicURL: publicBase, MaxSessions: 64, Version: "gw-9.9.9"},
+		reg:       newRegistry(publicBase, "", 64, testSigner(t, "")),
+		tlsConfig: nil,
+		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	publicLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("public listen: %v", err)
+	}
+	grpcLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("grpc listen: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = s.ServeListeners(ctx, publicLn, grpcLn) }()
+
+	reply := dialFleetdPlain(t, grpcLn.Addr().String(), "")
+	if reply.GatewayVersion != "gw-9.9.9" {
+		t.Fatalf("RegisterReply.GatewayVersion = %q, want gw-9.9.9", reply.GatewayVersion)
+	}
+}
+
 // TestGatewayEndToEndPlainHTTP is TestGatewayEndToEnd with no TLS anywhere: a
 // plaintext control dial and a plain-HTTP public client. It proves the full
 // reverse-proxy path — plain control handshake + yamux + plain public HTTP +
