@@ -341,7 +341,7 @@ done
 
 If the user wants to install one:
 - **Claude Code:** `npm install -g @anthropic-ai/claude-code`
-- **Codex:** `npm install -g @openai/codex`
+- **Codex:** `npm install -g @openai/codex` (with node), or the static binary from https://github.com/openai/codex/releases (no node needed; the official install.sh needs gawk — it breaks on mawk-default images)
 - **Auggie (Augment Code):** `npm install -g @augmentcode/auggie`
 - **Gemini:** See Google's latest CLI install instructions
 - **Copilot:** `gh extension install github/gh-copilot`
