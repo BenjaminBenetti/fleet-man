@@ -31,6 +31,12 @@ type fleetPage struct {
 	cursor    int
 	collapsed map[string]bool
 
+	// focusedFleet, when non-empty, names the single fleet shown in focus
+	// mode. All other fleets are hidden from the list, the help bar is hidden,
+	// the "settings" row becomes "[ leave focus ]", and q/esc leave focus
+	// instead of quitting (focus behaves like a dialog).
+	focusedFleet string
+
 	mode                    viewMode
 	dialogFleet             string
 	dialogInst              string
@@ -324,16 +330,30 @@ func (fleetPage *fleetPage) View(m *model) string {
 
 // buildRows rebuilds the navigable row list from the current state.
 func (fleetPage *fleetPage) buildRows(m *model) {
-	wasOnSettings := false
-	if r := fleetPage.currentRow(); r != nil && r.kind == rowSettings {
-		wasOnSettings = true
+	// Remember whether the cursor sat on the trailing action row (settings or
+	// its focus-mode replacement) so it stays pinned there across the rebuild.
+	wasOnActionRow := false
+	if r := fleetPage.currentRow(); r != nil && (r.kind == rowSettings || r.kind == rowLeaveFocus) {
+		wasOnActionRow = true
 	}
 
 	fleetPage.rows = nil
 
+	// A focused fleet that no longer exists (deleted while focused) drops focus
+	// so the list doesn't render empty.
+	if fleetPage.focusedFleet != "" {
+		if _, ok := m.st.Fleets[fleetPage.focusedFleet]; !ok {
+			fleetPage.focusedFleet = ""
+		}
+	}
+
 	names := sortedFleetNames(m.st.Fleets)
 
 	for _, name := range names {
+		// Focus mode renders only the focused fleet; everything else is hidden.
+		if fleetPage.focusedFleet != "" && name != fleetPage.focusedFleet {
+			continue
+		}
 		f := m.st.Fleets[name]
 		fleetPage.rows = append(fleetPage.rows, row{kind: rowFleetHeader, fleetName: name})
 		if !fleetPage.collapsed[name] {
@@ -367,8 +387,12 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 			}
 		}
 	}
-	fleetPage.rows = append(fleetPage.rows, row{kind: rowSettings})
-	if wasOnSettings {
+	if fleetPage.focusedFleet != "" {
+		fleetPage.rows = append(fleetPage.rows, row{kind: rowLeaveFocus})
+	} else {
+		fleetPage.rows = append(fleetPage.rows, row{kind: rowSettings})
+	}
+	if wasOnActionRow {
 		fleetPage.cursor = len(fleetPage.rows) - 1
 	}
 	if fleetPage.cursor >= len(fleetPage.rows) {
@@ -378,6 +402,48 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 	// (e.g. a tag line inserted above a session row); nudge it forward.
 	if r := fleetPage.currentRow(); r != nil && !r.selectable() {
 		fleetPage.moveCursor(1)
+	}
+}
+
+// enterFocus switches the list into focus mode for the named fleet, hiding all
+// other fleets and parking the cursor on the focused fleet's header.
+func (fleetPage *fleetPage) enterFocus(m *model, name string) {
+	if name == "" {
+		return
+	}
+	if _, ok := m.st.Fleets[name]; !ok {
+		return
+	}
+	fleetPage.focusedFleet = name
+	fleetPage.armadaFocused = false
+	fleetPage.buildRows(m)
+	fleetPage.cursorToFleetHeader(name)
+	m.message = ""
+}
+
+// leaveFocus exits focus mode and restores the cursor to the fleet that was
+// focused so the user keeps their place in the full list. It also drops any
+// Armada-selector focus so the row cursor is visible again afterwards.
+func (fleetPage *fleetPage) leaveFocus(m *model) {
+	if fleetPage.focusedFleet == "" {
+		return
+	}
+	name := fleetPage.focusedFleet
+	fleetPage.focusedFleet = ""
+	fleetPage.armadaFocused = false
+	fleetPage.buildRows(m)
+	fleetPage.cursorToFleetHeader(name)
+	m.message = ""
+}
+
+// cursorToFleetHeader points the cursor at the named fleet's header row, if it
+// is present in the current row list.
+func (fleetPage *fleetPage) cursorToFleetHeader(name string) {
+	for i, r := range fleetPage.rows {
+		if r.kind == rowFleetHeader && r.fleetName == name {
+			fleetPage.cursor = i
+			return
+		}
 	}
 }
 
@@ -499,7 +565,7 @@ func (fleetPage *fleetPage) moveCursorToInstance(delta int) {
 // currentFleetName returns the fleet name for the row at the cursor.
 func (fleetPage *fleetPage) currentFleetName() string {
 	r := fleetPage.currentRow()
-	if r == nil || r.kind == rowSettings {
+	if r == nil || r.kind == rowSettings || r.kind == rowLeaveFocus {
 		return ""
 	}
 	return r.fleetName
@@ -543,7 +609,14 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 		// actions don't apply, so they're ignored.
 		if fleetPage.armadaFocused {
 			switch msg.String() {
-			case "q", "ctrl+c", "ctrl+q":
+			case "ctrl+c", "ctrl+q":
+				m.quitting = true
+				return tea.Quit
+			case "q":
+				if fleetPage.focusedFleet != "" {
+					fleetPage.leaveFocus(m)
+					return nil
+				}
 				m.quitting = true
 				return tea.Quit
 			case "up", "k":
@@ -559,15 +632,33 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			case "enter", " ", "A":
 				return fleetPage.openArmadaSelect(m)
 			case "esc":
+				// esc leaves focus (like a dialog) when focused — mirroring q —
+				// otherwise it just drops the Armada selector focus.
+				if fleetPage.focusedFleet != "" {
+					fleetPage.leaveFocus(m)
+					return nil
+				}
 				fleetPage.armadaFocused = false
 			}
 			return nil
 		}
 
 		switch msg.String() {
-		case "q", "ctrl+c", "ctrl+q":
+		case "ctrl+c", "ctrl+q":
 			m.quitting = true
 			return tea.Quit
+
+		case "q", "esc":
+			// Focus mode treats q/esc like a dialog: they leave focus rather
+			// than quitting. Outside focus mode q quits and esc is a no-op.
+			if fleetPage.focusedFleet != "" {
+				fleetPage.leaveFocus(m)
+				return nil
+			}
+			if msg.String() == "q" {
+				m.quitting = true
+				return tea.Quit
+			}
 
 		case "up", "k":
 			// Up from the top row focuses the Armada selector (one stop above
@@ -624,7 +715,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 						m.refreshSessionsFromRuntime(ref)
 						fleetPage.buildRows(m)
 					}
-				case rowSession, rowNewSession, rowSettings:
+				case rowSession, rowNewSession, rowSettings, rowLeaveFocus:
 					return fleetPage.handleEnter(m)
 				}
 			}
@@ -686,7 +777,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 
 		case "d":
 			r := fleetPage.currentRow()
-			if r == nil || r.kind == rowSettings || r.kind == rowNewSession {
+			if r == nil || r.kind == rowSettings || r.kind == rowLeaveFocus || r.kind == rowNewSession {
 				break
 			}
 			if r.kind == rowSession {
@@ -893,6 +984,20 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			)
 
 		case "f":
+			// Focus mode hides every fleet but the selected one. Toggles off if
+			// already focused; works from any row belonging to a fleet.
+			if fleetPage.focusedFleet != "" {
+				fleetPage.leaveFocus(m)
+				break
+			}
+			name := fleetPage.currentFleetName()
+			if name == "" {
+				m.message = "Select a fleet to focus"
+				break
+			}
+			fleetPage.enterFocus(m, name)
+
+		case "p":
 			_, instance := fleetPage.selectedInstance(m)
 			if instance == nil {
 				m.message = "Select an instance"
@@ -939,6 +1044,9 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 	case rowSettings:
 		m.toolStatus = deps.CheckTools()
 		return m.ChangeRoute(routeSettings)
+
+	case rowLeaveFocus:
+		fleetPage.leaveFocus(m)
 
 	case rowFleetHeader:
 		name := r.fleetName
@@ -1096,7 +1204,19 @@ func (fleetPage *fleetPage) renderArmadaBorder(m *model, width int) string {
 	return borderStyle.Render("╭──") + styledLabel + borderStyle.Render(strings.Repeat("─", rightDashes)+"╮")
 }
 
+// contextualHelpKeys returns the footer hints for the current row, adding a
+// "f: focus" discovery hint on any fleet row. (Focus mode itself hides the help
+// bar, so there are no in-focus hints to render.)
 func (fleetPage *fleetPage) contextualHelpKeys(m *model) []string {
+	keys := fleetPage.contextualHelpKeysBase(m)
+	// The Armada selector swallows its own keys, so 'f' does nothing there.
+	if !fleetPage.armadaFocused && fleetPage.currentFleetName() != "" {
+		keys = insertHelpHintBefore(keys, "q: quit", "f: focus")
+	}
+	return keys
+}
+
+func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 	if fleetPage.armadaFocused {
 		return []string{"enter/space: switch armada", "j/k: navigate", "q: quit"}
 	}
@@ -1120,7 +1240,7 @@ func (fleetPage *fleetPage) contextualHelpKeys(m *model) []string {
 				keys = append(keys,
 					"space: show sessions", "enter: open shell", "e: edit",
 					"s: stop", "a: new session", "d: delete", "t: tag",
-					"f: port-forward", "b: browser", "c: code", "C: clone", "o: terminal", "l: logs",
+					"p: port-forward", "b: browser", "c: code", "C: clone", "o: terminal", "l: logs",
 					"r: refresh", "q: quit",
 				)
 			case r.instance.Status == fleet.StatusStopped:
@@ -1162,6 +1282,21 @@ func (fleetPage *fleetPage) contextualHelpKeys(m *model) []string {
 	}
 
 	return withArmadaHint([]string{"q: quit"})
+}
+
+// insertHelpHintBefore inserts item just before the first occurrence of anchor,
+// or appends it when anchor is absent.
+func insertHelpHintBefore(keys []string, anchor, item string) []string {
+	for i, k := range keys {
+		if k == anchor {
+			out := make([]string, 0, len(keys)+1)
+			out = append(out, keys[:i]...)
+			out = append(out, item)
+			out = append(out, keys[i:]...)
+			return out
+		}
+	}
+	return append(keys, item)
 }
 
 // withArmadaHint inserts the global "A: armada" hint just before a trailing
@@ -1423,6 +1558,9 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			listContent.WriteString("\n")
 		} else {
 			label := "settings"
+			if r.kind == rowLeaveFocus {
+				label = "[ leave focus ]"
+			}
 			if isSelected {
 				listContent.WriteString(fmt.Sprintf("%s%s", cursor, selectedStyle.Render(label)))
 			} else {
@@ -1907,7 +2045,10 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 		b.WriteString("\n")
 	}
 
-	if m.config == nil || m.config.GeneralSettings.ShowHelpTextEnabled() {
+	// Focus mode hides the help bar entirely (like turning help text off) —
+	// it's focus mode, after all.
+	showHelp := m.config == nil || m.config.GeneralSettings.ShowHelpTextEnabled()
+	if showHelp && fleetPage.focusedFleet == "" {
 		b.WriteString(renderHelp(m.width, fleetPage.contextualHelpKeys(m)))
 	}
 
