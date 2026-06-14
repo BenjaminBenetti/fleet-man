@@ -12,10 +12,13 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
-// provision.go holds the provisioning steps shared by Run (create), RunClone,
-// and RunRebuild so the three paths stay in lock-step: resolveProvisionMounts
+// provision.go holds the provisioning steps shared by Run (create) and
+// RunRebuild so those two paths stay in lock-step: resolveProvisionMounts
 // assembles the mounts handed to the backend's Up/Rebuild, and finishProvision
-// runs everything that has to happen once the container exists.
+// runs everything that has to happen once the container exists. RunClone does
+// NOT use finishProvision — a clone inherits its source's dotfiles/startup
+// effects via the committed image and deliberately must not re-run them — though
+// it mirrors the same mount + re-stage steps inline (see clone.go).
 
 // resolveProvisionMounts assembles the bind mounts for a provisioning run: the
 // fleet's custom mounts, the per-instance control directory (so the host TUI
