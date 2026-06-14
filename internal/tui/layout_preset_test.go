@@ -161,6 +161,118 @@ func TestLayoutPresetFocusCycleIncludesSaveUngated(t *testing.T) {
 	}
 }
 
+// twoByTwoFlow builds a flow whose session panes form a 2x2 grid (plus the TUI
+// pane on the left), so spatial navigation has both rows and columns to move
+// between. Slots (position order, top-then-left): 0=TL, 1=TR, 2=BL, 3=BR.
+func twoByTwoFlow() *layoutPresetFlow {
+	lp := &layoutPresetFlow{editIdx: -1}
+	lp.rects = []layoutRect{
+		{x: 0, y: 0, w: 30, h: 20},  // TUI pane (leaf 0)
+		{x: 31, y: 0, w: 34, h: 10}, // top-left
+		{x: 66, y: 0, w: 34, h: 10}, // top-right
+		{x: 31, y: 11, w: 34, h: 9}, // bottom-left
+		{x: 66, y: 11, w: 34, h: 9}, // bottom-right
+	}
+	lp.order = orderRectsByPosition(lp.rects)
+	lp.commands = make([]string, 4)
+	return lp
+}
+
+func TestSpatialNavStaysInColumnAndRow(t *testing.T) {
+	lp := twoByTwoFlow()
+
+	// Down from top-left must reach bottom-left (same column), not top-right.
+	lp.focus = 1 // slot 0 (TL)
+	lp.navVertical(1)
+	if lp.focusedSlot() != 2 {
+		t.Fatalf("down from TL → slot %d, want 2 (BL)", lp.focusedSlot())
+	}
+
+	// Right from top-left must reach top-right (same row).
+	lp.focus = 1 // slot 0 (TL)
+	lp.navHorizontal(1)
+	if lp.focusedSlot() != 1 {
+		t.Fatalf("right from TL → slot %d, want 1 (TR)", lp.focusedSlot())
+	}
+
+	// Down from top-right → bottom-right.
+	lp.focus = 2 // slot 1 (TR)
+	lp.navVertical(1)
+	if lp.focusedSlot() != 3 {
+		t.Fatalf("down from TR → slot %d, want 3 (BR)", lp.focusedSlot())
+	}
+
+	// Up from bottom-left → top-left.
+	lp.focus = 3 // slot 2 (BL)
+	lp.navVertical(-1)
+	if lp.focusedSlot() != 0 {
+		t.Fatalf("up from BL → slot %d, want 0 (TL)", lp.focusedSlot())
+	}
+
+	// Left from bottom-right → bottom-left.
+	lp.focus = 4 // slot 3 (BR)
+	lp.navHorizontal(-1)
+	if lp.focusedSlot() != 2 {
+		t.Fatalf("left from BR → slot %d, want 2 (BL)", lp.focusedSlot())
+	}
+}
+
+func TestSpatialNavRegionTransitions(t *testing.T) {
+	lp := twoByTwoFlow()
+
+	// Name → down → top-left pane.
+	lp.focus = lpFocusName
+	lp.navVertical(1)
+	if lp.focusedSlot() != 0 {
+		t.Fatalf("name down → slot %d, want 0 (TL)", lp.focusedSlot())
+	}
+
+	// Up from a top-row pane → name.
+	lp.focus = 1 // TL
+	lp.navVertical(-1)
+	if lp.focus != lpFocusName {
+		t.Fatalf("up from TL → focus %d, want name", lp.focus)
+	}
+
+	// Down from bottom-right (no pane below) → save (right-side button).
+	lp.focus = 4 // BR
+	lp.navVertical(1)
+	if lp.focus != lp.focusConfirm() {
+		t.Fatalf("down from BR → focus %d, want save", lp.focus)
+	}
+
+	// Down from bottom-left → cancel (left-side button).
+	lp.focus = 3 // BL
+	lp.navVertical(1)
+	if lp.focus != lp.focusCancel() {
+		t.Fatalf("down from BL → focus %d, want cancel", lp.focus)
+	}
+
+	// Cancel ↔ save via horizontal.
+	lp.focus = lp.focusCancel()
+	lp.navHorizontal(1)
+	if lp.focus != lp.focusConfirm() {
+		t.Fatalf("right from cancel → focus %d, want save", lp.focus)
+	}
+	lp.navHorizontal(-1)
+	if lp.focus != lp.focusCancel() {
+		t.Fatalf("left from save → focus %d, want cancel", lp.focus)
+	}
+
+	// Up from save → bottom-right pane (nearest its side).
+	lp.focus = lp.focusConfirm()
+	lp.navVertical(-1)
+	if lp.focusedSlot() != 3 {
+		t.Fatalf("up from save → slot %d, want 3 (BR)", lp.focusedSlot())
+	}
+	// Up from cancel → bottom-left pane.
+	lp.focus = lp.focusCancel()
+	lp.navVertical(-1)
+	if lp.focusedSlot() != 2 {
+		t.Fatalf("up from cancel → slot %d, want 2 (BL)", lp.focusedSlot())
+	}
+}
+
 func TestAdvanceAfterCommand(t *testing.T) {
 	lp := &layoutPresetFlow{editIdx: -1}
 	lp.initEditStage("", 3, "dev", nil)

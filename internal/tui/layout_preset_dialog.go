@@ -334,30 +334,32 @@ func (fleetPage *fleetPage) updateLayoutPresetEdit(m *model, lp *layoutPresetFlo
 		fleetPage.closeLayoutPresetFlow()
 		return nil
 
+	// Arrow / hjkl keys move spatially over the preview's regions (name above,
+	// the pane grid in the middle, the buttons below) so a multi-column layout
+	// navigates the way it looks — "down" stays in a column instead of walking
+	// to the next pane in position order. Tab keeps the flat cycle.
 	case "up", "k":
-		lp.moveFocus(-1)
+		lp.navVertical(-1)
 		return nil
 
-	case "down", "j", "tab":
-		lp.moveFocus(1)
+	case "down", "j":
+		lp.navVertical(1)
 		return nil
 
 	case "left", "h":
-		// Between the buttons, left/right move sideways; on panes they step
-		// through the slots (position order, so this walks the layout).
-		if lp.focus == lp.focusConfirm() {
-			lp.focus = lp.focusCancel()
-		} else if lp.focusedSlot() > 0 {
-			lp.focus--
-		}
+		lp.navHorizontal(-1)
 		return nil
 
 	case "right", "l":
-		if lp.focus == lp.focusCancel() {
-			lp.focus = lp.focusConfirm()
-		} else if s := lp.focusedSlot(); s >= 0 && s < lp.paneCount()-1 {
-			lp.focus++
-		}
+		lp.navHorizontal(1)
+		return nil
+
+	case "tab":
+		lp.moveFocus(1)
+		return nil
+
+	case "shift+tab":
+		lp.moveFocus(-1)
 		return nil
 
 	case "enter", " ":
@@ -387,10 +389,137 @@ func (fleetPage *fleetPage) updateLayoutPresetEdit(m *model, lp *layoutPresetFlo
 
 // moveFocus steps through the focus stops (name → panes → cancel → save),
 // wrapping. The save button is always reachable — assigning per-pane commands
-// is optional, so there is no gating.
+// is optional, so there is no gating. Bound to Tab; the arrow/hjkl keys use the
+// spatial navigation below instead.
 func (lp *layoutPresetFlow) moveFocus(delta int) {
 	maxFocus := lp.focusConfirm()
 	lp.focus = (lp.focus + delta + maxFocus + 1) % (maxFocus + 1)
+}
+
+// The preview is laid out as three stacked regions — the name row on top, the
+// pane grid in the middle, the cancel/save buttons on the bottom — so spatial
+// navigation treats them in that vertical order and moves between panes by
+// their on-screen geometry rather than their flat position-order index.
+
+// slotCenter returns the screen-space center of the pane at slot (in the
+// captured layout's cell coordinates).
+func (lp *layoutPresetFlow) slotCenter(slot int) (int, int) {
+	r := lp.rects[lp.order[slot]]
+	return r.x + r.w/2, r.y + r.h/2
+}
+
+// windowWidth is the captured layout's full width (max right edge), used to
+// decide which button a downward move from a pane lands on.
+func (lp *layoutPresetFlow) windowWidth() int {
+	w := 0
+	for _, r := range lp.rects {
+		w = max(w, r.x+r.w)
+	}
+	return w
+}
+
+// paneInDir returns the slot of the best pane in direction (dx, dy) from slot s
+// — strictly in that direction, preferring panes aligned on the cross axis — or
+// -1 when there is none. (dy>0 is down, dx>0 is right.)
+func (lp *layoutPresetFlow) paneInDir(s, dx, dy int) int {
+	cx, cy := lp.slotCenter(s)
+	best, bestScore := -1, 0
+	for slot := range lp.order {
+		if slot == s {
+			continue
+		}
+		nx, ny := lp.slotCenter(slot)
+		if dy > 0 && ny <= cy || dy < 0 && ny >= cy {
+			continue
+		}
+		if dx > 0 && nx <= cx || dx < 0 && nx >= cx {
+			continue
+		}
+		// Distance along the move axis, plus a heavy penalty for drifting on
+		// the cross axis so neighbors in the same row/column win.
+		var score int
+		if dy != 0 {
+			score = absInt(ny-cy) + 2*absInt(nx-cx)
+		} else {
+			score = absInt(nx-cx) + 2*absInt(ny-cy)
+		}
+		if best == -1 || score < bestScore {
+			best, bestScore = slot, score
+		}
+	}
+	return best
+}
+
+// bottomPaneForButton returns the bottom-most pane nearest the given button's
+// side (save → right, cancel → left), where an upward move from a button lands.
+func (lp *layoutPresetFlow) bottomPaneForButton(button int) int {
+	wantRight := button == lp.focusConfirm()
+	best := 0
+	bx, by := lp.slotCenter(0)
+	for slot := 1; slot < lp.paneCount(); slot++ {
+		cx, cy := lp.slotCenter(slot)
+		better := cy > by || (cy == by && (wantRight && cx > bx || !wantRight && cx < bx))
+		if better {
+			best, bx, by = slot, cx, cy
+		}
+	}
+	return best
+}
+
+// navVertical moves the focus up (dir<0) or down (dir>0) across the regions:
+// name → pane grid → buttons, wrapping at the ends.
+func (lp *layoutPresetFlow) navVertical(dir int) {
+	switch {
+	case lp.focus == lpFocusName:
+		if dir > 0 {
+			lp.focus = 1 // top-left pane (slot 0, position order)
+		} else {
+			lp.focus = lp.focusCancel() // wrap up to the buttons
+		}
+	case lp.focusedSlot() >= 0:
+		if next := lp.paneInDir(lp.focusedSlot(), 0, dir); next >= 0 {
+			lp.focus = 1 + next
+		} else if dir > 0 {
+			// No pane below: drop to the button under this pane's column.
+			cx, _ := lp.slotCenter(lp.focusedSlot())
+			if cx*2 >= lp.windowWidth() {
+				lp.focus = lp.focusConfirm()
+			} else {
+				lp.focus = lp.focusCancel()
+			}
+		} else {
+			lp.focus = lpFocusName
+		}
+	default: // on a button
+		if dir > 0 {
+			lp.focus = lpFocusName // wrap down to the name row
+		} else {
+			lp.focus = 1 + lp.bottomPaneForButton(lp.focus)
+		}
+	}
+}
+
+// navHorizontal moves left (dir<0) or right (dir>0): between adjacent panes in
+// the grid, or between the cancel and save buttons. The name row is a single
+// full-width field, so horizontal movement there is a no-op.
+func (lp *layoutPresetFlow) navHorizontal(dir int) {
+	switch {
+	case lp.focusedSlot() >= 0:
+		if next := lp.paneInDir(lp.focusedSlot(), dir, 0); next >= 0 {
+			lp.focus = 1 + next
+		}
+	case lp.focus == lp.focusCancel() && dir > 0:
+		lp.focus = lp.focusConfirm()
+	case lp.focus == lp.focusConfirm() && dir < 0:
+		lp.focus = lp.focusCancel()
+	}
+}
+
+func absInt(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // advanceAfterCommand moves the focus to the next pane after a command is set,
