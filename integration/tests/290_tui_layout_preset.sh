@@ -54,16 +54,19 @@ tui_assert_contains "alpha / src" "source session candidate missing"
 
 info "capturing the session and assigning the pane command"
 tui_send Enter
-# The gating text wraps inside the 50-col dialog box — match a one-line prefix.
-tui_wait_for "Assign startup commands" 5
+# Edit stage: focus starts on pane 1; [ save ] is always offered (no gating).
+tui_wait_for "pane 1:" 5
+tui_assert_contains "[ save ]" "save button should always be shown"
 tui_send Enter
 tui_wait_for "Pane 1 command:" 5
 tui_send_text "echo preset-pane-ready"
 sleep 0.3
 tui_send Enter
-tui_wait_for "[ create ]" 5
+# Single pane: setting its command advances focus to [ save ].
+tui_wait_for "[ save ]" 5
+sleep 0.3
 
-info "creating the preset"
+info "saving the preset"
 tui_send Enter
 tui_wait_for "Layouts (1)" 10
 tui_assert_contains "src (1 pane)" "saved preset row missing"

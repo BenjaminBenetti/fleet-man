@@ -13,9 +13,10 @@ import (
 // layout_preset_dialog.go implements the layout-preset creation/edit flow
 // (issue #150), opened from the edit-fleet dialog's Layouts section. Creation
 // is two stages: pick a live session group to capture (its saved outer-tmux
-// layout is the template geometry), then assign a startup command to every
-// pane in a navigable preview and name the preset. Editing an existing preset
-// reuses stage two with the commands pre-assigned.
+// layout is the template geometry), then in a navigable preview optionally set
+// a startup command per pane (an empty one is a plain shell), name the preset,
+// and save. Editing an existing preset reuses stage two with its commands
+// pre-filled.
 
 type layoutPresetStage int
 
@@ -55,7 +56,6 @@ type layoutPresetFlow struct {
 	rects          []layoutRect // parsed leaves; rects[0] is the TUI pane
 	order          []int        // rect index per slot, position-sorted
 	commands       []string     // per-slot startup command ("" = plain shell)
-	assigned       []bool       // per-slot: the user confirmed this pane's command
 	focus          int
 	editingName    bool
 	nameBeforeEdit string // restored when a name edit is escaped
@@ -79,13 +79,15 @@ func (lp *layoutPresetFlow) focusedSlot() int {
 	return -1
 }
 
-func (lp *layoutPresetFlow) allAssigned() bool {
-	for _, a := range lp.assigned {
-		if !a {
-			return false
-		}
+// paneCommandFlags reports, per slot, whether the pane has a non-empty startup
+// command — drives the ✓ marker in the preview. A pane with no command just
+// opens a plain shell, so assigning commands is never required to save.
+func (lp *layoutPresetFlow) paneCommandFlags() []bool {
+	flags := make([]bool, len(lp.commands))
+	for i, c := range lp.commands {
+		flags[i] = c != ""
 	}
-	return true
+	return flags
 }
 
 // openLayoutPresetCreate opens the flow at the pick stage. Returns false (with
@@ -116,7 +118,7 @@ func (fleetPage *fleetPage) openLayoutPresetEdit(idx int) {
 		stage:   lpStageEdit,
 		editIdx: idx,
 	}
-	lp.initEditStage(preset.Layout, preset.PaneCount(), preset.Name, slices.Clone(preset.PaneCommands), true)
+	lp.initEditStage(preset.Layout, preset.PaneCount(), preset.Name, slices.Clone(preset.PaneCommands))
 	fleetPage.lpFlow = lp
 	fleetPage.mode = viewLayoutPreset
 }
@@ -162,7 +164,7 @@ func (fleetPage *fleetPage) collectLayoutPresetCandidates(m *model, fleetName st
 // count. When the layout fails to parse — or disagrees with the pane count —
 // the geometry falls back to the synthesized stack that applying a layout-less
 // preset would actually produce, so the preview never lies about the result.
-func (lp *layoutPresetFlow) initEditStage(layout string, paneCount int, name string, commands []string, preAssigned bool) {
+func (lp *layoutPresetFlow) initEditStage(layout string, paneCount int, name string, commands []string) {
 	if paneCount < 1 {
 		paneCount = 1
 	}
@@ -185,12 +187,6 @@ func (lp *layoutPresetFlow) initEditStage(layout string, paneCount int, name str
 		commands = resized
 	}
 	lp.commands = commands
-	lp.assigned = make([]bool, paneCount)
-	if preAssigned {
-		for i := range lp.assigned {
-			lp.assigned[i] = true
-		}
-	}
 
 	lp.nameInput = textinput.New()
 	lp.nameInput.Placeholder = "preset-name"
@@ -276,7 +272,7 @@ func (fleetPage *fleetPage) updateLayoutPresetPick(lp *layoutPresetFlow, keyMsg 
 	case "enter", " ":
 		c := lp.candidates[lp.pickCursor]
 		name := uniquePresetName(c.groupName, fleetPage.dialogLayoutPresets, -1)
-		lp.initEditStage(c.layout, c.paneCount, name, nil, false)
+		lp.initEditStage(c.layout, c.paneCount, name, nil)
 	case "esc", "q", "Q", "ctrl+c":
 		fleetPage.closeLayoutPresetFlow()
 	}
@@ -314,11 +310,10 @@ func (fleetPage *fleetPage) updateLayoutPresetEdit(m *model, lp *layoutPresetFlo
 		case "enter":
 			if slot >= 0 {
 				lp.commands[slot] = strings.TrimSpace(lp.cmdInput.Value())
-				lp.assigned[slot] = true
 			}
 			lp.editingCmd = false
 			lp.cmdInput.Blur()
-			lp.advanceToNextUnassigned()
+			lp.advanceAfterCommand()
 			return nil
 		case "esc":
 			lp.editingCmd = false
@@ -358,7 +353,7 @@ func (fleetPage *fleetPage) updateLayoutPresetEdit(m *model, lp *layoutPresetFlo
 		return nil
 
 	case "right", "l":
-		if lp.focus == lp.focusCancel() && lp.confirmVisible() {
+		if lp.focus == lp.focusCancel() {
 			lp.focus = lp.focusConfirm()
 		} else if s := lp.focusedSlot(); s >= 0 && s < lp.paneCount()-1 {
 			lp.focus++
@@ -390,29 +385,22 @@ func (fleetPage *fleetPage) updateLayoutPresetEdit(m *model, lp *layoutPresetFlo
 	return nil
 }
 
-// confirmVisible reports whether the [create]/[save] button is shown: every
-// pane must have been assigned a command first (the issue's gating text).
-func (lp *layoutPresetFlow) confirmVisible() bool { return lp.allAssigned() }
-
-// moveFocus steps through the visible focus stops (name → panes → buttons),
-// wrapping, and skipping the confirm button while it is hidden.
+// moveFocus steps through the focus stops (name → panes → cancel → save),
+// wrapping. The save button is always reachable — assigning per-pane commands
+// is optional, so there is no gating.
 func (lp *layoutPresetFlow) moveFocus(delta int) {
-	maxFocus := lp.focusCancel()
-	if lp.confirmVisible() {
-		maxFocus = lp.focusConfirm()
-	}
+	maxFocus := lp.focusConfirm()
 	lp.focus = (lp.focus + delta + maxFocus + 1) % (maxFocus + 1)
 }
 
-// advanceToNextUnassigned moves the focus to the next pane the user has not
-// yet visited; once all are assigned it lands on the confirm button, so the
-// happy path is enter → type command → enter, repeated, then enter to create.
-func (lp *layoutPresetFlow) advanceToNextUnassigned() {
-	for i := range lp.assigned {
-		if !lp.assigned[i] {
-			lp.focus = 1 + i
-			return
-		}
+// advanceAfterCommand moves the focus to the next pane after a command is set,
+// so the happy path is enter → type command → enter, repeated; on the last
+// pane it lands on the save button. Walking to save is just a convenience —
+// the user can move to it (or cancel) with the arrow keys at any time.
+func (lp *layoutPresetFlow) advanceAfterCommand() {
+	if s := lp.focusedSlot(); s >= 0 && s < lp.paneCount()-1 {
+		lp.focus = 1 + s + 1
+		return
 	}
 	lp.focus = lp.focusConfirm()
 }
@@ -443,7 +431,7 @@ func (fleetPage *fleetPage) activateLayoutPresetFocus(m *model, lp *layoutPreset
 	case lp.focus == lp.focusCancel():
 		fleetPage.closeLayoutPresetFlow()
 		return nil
-	case lp.focus == lp.focusConfirm() && lp.confirmVisible():
+	case lp.focus == lp.focusConfirm():
 		return fleetPage.commitLayoutPreset(m, lp)
 	}
 	return nil
@@ -561,25 +549,21 @@ func (lp *layoutPresetFlow) renderEditStage() string {
 	}
 	d.WriteString(marker(lp.focus == lpFocusName) + dialogLabel.Render("Name: ") + nameField + "\n\n")
 
-	// The layout preview.
+	// The layout preview. The ✓ marks panes that carry a startup command.
 	width, height := previewDims(lp.rects)
-	d.WriteString(renderLayoutPreview(lp.rects, lp.order, lp.focusedSlot(), lp.assigned, width, height))
+	d.WriteString(renderLayoutPreview(lp.rects, lp.order, lp.focusedSlot(), lp.paneCommandFlags(), width, height))
 	d.WriteString("\n")
 
 	// Context line under the preview: the focused pane's command (or the
-	// in-progress edit).
+	// in-progress edit). A pane with no command just opens a plain shell.
 	switch {
 	case lp.editingCmd:
 		d.WriteString("\n" + dialogLabel.Render(fmt.Sprintf("Pane %d command: ", lp.focusedSlot()+1)) + lp.cmdInput.View() + "\n")
 	case lp.focusedSlot() >= 0:
 		slot := lp.focusedSlot()
-		cmd := lp.commands[slot]
-		switch {
-		case !lp.assigned[slot]:
-			d.WriteString("\n" + dimStyle.Render(fmt.Sprintf("pane %d: unassigned — enter to set its command", slot+1)) + "\n")
-		case cmd == "":
-			d.WriteString("\n" + dimStyle.Render(fmt.Sprintf("pane %d: plain shell", slot+1)) + "\n")
-		default:
+		if cmd := lp.commands[slot]; cmd == "" {
+			d.WriteString("\n" + dimStyle.Render(fmt.Sprintf("pane %d: plain shell — enter to set a command", slot+1)) + "\n")
+		} else {
 			d.WriteString("\n" + dimStyle.Render(fmt.Sprintf("pane %d: ", slot+1)) + dialogLabel.Render(cmd) + "\n")
 		}
 	default:
@@ -590,29 +574,21 @@ func (lp *layoutPresetFlow) renderEditStage() string {
 		d.WriteString(errorStyle.Render("✗ "+lp.errMsg) + "\n")
 	}
 
-	// Button row, per the issue: until every pane is assigned the right-hand
-	// side explains what is missing instead of offering [create].
+	// Button row: cancel and save, both arrow-navigable. Saving is allowed at
+	// any time — per-pane commands are optional (an empty one is a plain shell).
 	cancel := "[ cancel ]"
 	if lp.focus == lp.focusCancel() {
 		cancel = selectedStyle.Render(cancel)
 	} else {
 		cancel = dimStyle.Render(cancel)
 	}
-	var right string
-	if !lp.confirmVisible() {
-		right = dimStyle.Render("Assign startup commands to all panels to continue")
+	save := "[ save ]"
+	if lp.focus == lp.focusConfirm() {
+		save = selectedStyle.Render(save)
 	} else {
-		label := "[ create ]"
-		if lp.editIdx >= 0 {
-			label = "[ save ]"
-		}
-		if lp.focus == lp.focusConfirm() {
-			right = selectedStyle.Render(label)
-		} else {
-			right = dimStyle.Render(label)
-		}
+		save = dimStyle.Render(save)
 	}
-	d.WriteString("\n" + cancel + "       " + right + "\n")
+	d.WriteString("\n" + cancel + "                       " + save + "\n")
 
 	d.WriteString(dialogHint.Render(lp.editStageHint()))
 	return d.String()
@@ -623,10 +599,10 @@ func (lp *layoutPresetFlow) editStageHint() string {
 		return "[enter] Done  [esc] Done  [ctrl+c] Cancel"
 	}
 	if lp.editingCmd {
-		return "[enter] Assign  [esc] Back  [ctrl+c] Cancel"
+		return "[enter] Set  [esc] Back  [ctrl+c] Cancel"
 	}
 	if lp.focusedSlot() >= 0 {
 		return "[enter] Set command  [j/k/h/l] Navigate  [q/esc] Cancel"
 	}
-	return "[enter] Activate  [j/k] Navigate  [q/esc] Cancel"
+	return "[enter] Select  [j/k/h/l] Navigate  [q/esc] Cancel"
 }

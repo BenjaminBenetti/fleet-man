@@ -99,7 +99,7 @@ func TestInitEditStageFallsBackOnPaneCountMismatch(t *testing.T) {
 	lp := &layoutPresetFlow{editIdx: -1}
 	// sampleLayout has 2 session panes; claiming 3 must drop the geometry and
 	// synthesize a 3-pane stack so the preview matches what apply would do.
-	lp.initEditStage(sampleLayout, 3, "dev", nil, false)
+	lp.initEditStage(sampleLayout, 3, "dev", nil)
 	if lp.layout != "" {
 		t.Fatalf("mismatched layout kept: %q", lp.layout)
 	}
@@ -110,7 +110,7 @@ func TestInitEditStageFallsBackOnPaneCountMismatch(t *testing.T) {
 
 func TestInitEditStageParsesMatchingLayout(t *testing.T) {
 	lp := &layoutPresetFlow{editIdx: -1}
-	lp.initEditStage(sampleLayout, 2, "dev", nil, false)
+	lp.initEditStage(sampleLayout, 2, "dev", nil)
 	if lp.layout != sampleLayout {
 		t.Fatalf("layout dropped: %q", lp.layout)
 	}
@@ -123,59 +123,56 @@ func TestInitEditStageParsesMatchingLayout(t *testing.T) {
 	if lp.focus != 1 {
 		t.Fatalf("focus = %d, want first pane", lp.focus)
 	}
-	if lp.allAssigned() {
-		t.Fatal("new capture must start unassigned")
-	}
 }
 
-func TestInitEditStagePreAssignsExistingPreset(t *testing.T) {
+func TestInitEditStageCarriesOverExistingCommands(t *testing.T) {
 	lp := &layoutPresetFlow{editIdx: 0}
-	lp.initEditStage(sampleLayout, 2, "dev", []string{"htop", ""}, true)
-	if !lp.allAssigned() {
-		t.Fatal("editing an existing preset must start fully assigned")
-	}
+	lp.initEditStage(sampleLayout, 2, "dev", []string{"htop", ""})
 	if lp.commands[0] != "htop" || lp.commands[1] != "" {
 		t.Fatalf("commands not carried over: %v", lp.commands)
 	}
+	// The ✓ marks panes carrying a command; the empty pane is a plain shell.
+	flags := lp.paneCommandFlags()
+	if !flags[0] || flags[1] {
+		t.Fatalf("paneCommandFlags = %v, want [true false]", flags)
+	}
 }
 
-func TestLayoutPresetFlowFocusSkipsHiddenConfirm(t *testing.T) {
+func TestLayoutPresetFocusCycleIncludesSaveUngated(t *testing.T) {
 	lp := &layoutPresetFlow{editIdx: -1}
-	lp.initEditStage("", 2, "dev", nil, false)
+	lp.initEditStage("", 2, "dev", nil)
 
-	// Unassigned: cycle name(0) → pane1(1) → pane2(2) → cancel(3) → name(0).
+	// Cycle name(0) → pane1(1) → pane2(2) → cancel(3) → save(4) → name(0).
+	// The save stop is always present — no gating on assigning commands.
 	lp.focus = lpFocusName
 	seen := []int{}
-	for range 4 {
+	for range 5 {
 		lp.moveFocus(1)
 		seen = append(seen, lp.focus)
 	}
-	want := []int{1, 2, 3, 0}
+	want := []int{1, 2, 3, 4, 0}
 	for i := range want {
 		if seen[i] != want[i] {
-			t.Fatalf("unassigned cycle = %v, want %v", seen, want)
+			t.Fatalf("focus cycle = %v, want %v", seen, want)
 		}
 	}
-
-	// Fully assigned: the confirm stop (4) joins the cycle.
-	lp.assigned[0], lp.assigned[1] = true, true
-	lp.focus = lp.focusCancel()
-	lp.moveFocus(1)
-	if lp.focus != lp.focusConfirm() {
-		t.Fatalf("focus = %d, want confirm %d", lp.focus, lp.focusConfirm())
+	if lp.focusConfirm() != 4 {
+		t.Fatalf("focusConfirm = %d, want 4", lp.focusConfirm())
 	}
 }
 
-func TestAdvanceToNextUnassigned(t *testing.T) {
+func TestAdvanceAfterCommand(t *testing.T) {
 	lp := &layoutPresetFlow{editIdx: -1}
-	lp.initEditStage("", 3, "dev", nil, false)
-	lp.assigned[0] = true
-	lp.advanceToNextUnassigned()
+	lp.initEditStage("", 3, "dev", nil)
+	// From pane 1 (focus=1) → pane 2 (focus=2).
+	lp.focus = 1
+	lp.advanceAfterCommand()
 	if lp.focusedSlot() != 1 {
 		t.Fatalf("slot = %d, want 1", lp.focusedSlot())
 	}
-	lp.assigned[1], lp.assigned[2] = true, true
-	lp.advanceToNextUnassigned()
+	// From the last pane → save.
+	lp.focus = lp.paneCount() // focus on last pane (slot paneCount-1)
+	lp.advanceAfterCommand()
 	if lp.focus != lp.focusConfirm() {
 		t.Fatalf("focus = %d, want confirm", lp.focus)
 	}
