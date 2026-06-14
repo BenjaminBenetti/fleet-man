@@ -58,6 +58,8 @@ const (
 	settingsItemArmadaAdd  = 800
 	settingsItemArmadaBase = 100000
 
+	settingsItemDaemonRestart = 900 // "Restart daemon" action row (below the tool-status band)
+
 	settingsItemToolStatusBase = 1000 // tool status rows start here
 	settingsItemDoctor         = 2000 // doctor action row
 	settingsItemKeybindings    = 2001 // keybindings dialog row
@@ -227,9 +229,10 @@ func (settingsPage *settingsPage) View(m *model) string {
 // settingsSection defines a titled group of settings rows that can be
 // conditionally shown based on tool availability.
 type settingsSection struct {
-	Title string               // section header text
-	Tool  string               // required tool binary; "" = always visible
-	Items func(m *model) []int // returns navigable item IDs for this section
+	Title   string               // section header text
+	Tool    string               // required tool binary; "" = always visible
+	Visible func(m *model) bool  // extra visibility gate; nil = always (subject to Tool)
+	Items   func(m *model) []int // returns navigable item IDs for this section
 }
 
 // settingsSections lists all settings sections in display order.
@@ -318,6 +321,16 @@ var settingsSections = []settingsSection{
 		},
 	},
 	{
+		// Only meaningful for a local TUI: the restart relaunches the LOCAL
+		// daemon from the current binary. A remote TUI (FLEET_GATEWAY/
+		// FLEET_SERVER) can't relaunch the daemon it talks to, so hide it.
+		Title:   "Fleet Daemon",
+		Visible: func(_ *model) bool { return !fleetclient.IsRemote() },
+		Items: func(_ *model) []int {
+			return []int{settingsItemDaemonRestart}
+		},
+	},
+	{
 		Title: "Help",
 		Items: func(_ *model) []int {
 			return []int{settingsItemDoctor, settingsItemKeybindings}
@@ -331,6 +344,9 @@ var settingsSections = []settingsSection{
 
 // sectionVisible reports whether a settings section should be shown.
 func (settingsPage *settingsPage) sectionVisible(m *model, section settingsSection) bool {
+	if section.Visible != nil && !section.Visible(m) {
+		return false
+	}
 	if section.Tool == "" {
 		return true
 	}
@@ -901,6 +917,14 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			if item == settingsItemKeybindings {
 				settingsPage.showKeybindings = true
 				return nil
+			}
+			if item == settingsItemDaemonRestart {
+				if m.daemonRestarting {
+					return nil // already in flight; ignore repeat presses
+				}
+				m.daemonRestarting = true
+				m.message = "Restarting fleet daemon…"
+				return restartDaemonCmd()
 			}
 			if item == settingsItemDotfilesSetup {
 				cmd, err := agent.CommandWithPrompt(dotfilesSetupPrompt)
@@ -1477,6 +1501,19 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				itemID := settingsItemToolStatusBase + i
 				recordRow(itemID, settingsPage.renderSettingsRow(m, currentItem == itemID, tool.Name, value))
 			}
+
+		case "Fleet Daemon":
+			var daemonValue string
+			if m.daemonRestarting {
+				daemonValue = m.spinner.View() + " restarting…"
+			} else {
+				ver := m.serverVersion
+				if ver == "" {
+					ver = "dev build"
+				}
+				daemonValue = statusRunningStyle.Render(ver) + "  " + dimStyle.Render("press enter to relaunch fleetd from this TUI's binary")
+			}
+			recordRow(settingsItemDaemonRestart, settingsPage.renderSettingsRow(m, currentItem == settingsItemDaemonRestart, "Restart daemon", daemonValue))
 
 		case "Help":
 			agentName, _, agentErr := doctor.FindAgent()

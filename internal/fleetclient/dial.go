@@ -50,6 +50,24 @@ func DialLocal(ctx context.Context) (*Conn, error) {
 	return dialEndpoint(ctx, localEndpoint{socket: fleetpaths.SocketPath()})
 }
 
+// RestartLocalServer stops the running local fleet daemon and relaunches it from
+// the current binary — the same drain-and-respawn mechanic the version handshake
+// uses, exposed for a manual "restart daemon" action in the TUI. It always
+// targets the local unix socket regardless of FLEET_GATEWAY/FLEET_SERVER (a
+// remote daemon can't be relaunched from here); if no daemon is running it simply
+// starts a fresh one. Safe under racing clients: the relaunch is serialized by
+// the spawn lock.
+func RestartLocalServer(ctx context.Context) error {
+	ep := localEndpoint{socket: fleetpaths.SocketPath()}
+	conn, err := grpc.NewClient(ep.Target(), ep.DialOptions()...)
+	if err != nil {
+		return fmt.Errorf("create client for %s: %w", ep, err)
+	}
+	defer conn.Close()
+	svc := fleetgrpc.NewFleetServiceClient(conn)
+	return restartServer(ctx, ep, svc, "user requested restart from the TUI")
+}
+
 func dialEndpoint(ctx context.Context, ep Endpoint) (*Conn, error) {
 	conn, err := grpc.NewClient(ep.Target(), ep.DialOptions()...)
 	if err != nil {

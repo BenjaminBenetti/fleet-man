@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -52,6 +53,70 @@ func TestSettingsSectionIncludesRemoteMcp(t *testing.T) {
 	}
 	if !strings.Contains(out, "Public MCP URL") {
 		t.Fatal("settings view missing the computed Public MCP URL row when enabled")
+	}
+}
+
+// TestDaemonSectionLocalOnly confirms the "Fleet Daemon" / restart action shows
+// for a local TUI but is hidden when the TUI is pointed at a remote daemon (it
+// can't relaunch a remote process).
+func TestDaemonSectionLocalOnly(t *testing.T) {
+	sp := newSettingsPage()
+	m := &model{
+		config:     state.DefaultConfig(),
+		toolStatus: allToolsFound(),
+		spinner:    spinner.New(),
+	}
+
+	// Local (no FLEET_GATEWAY/FLEET_SERVER): the restart row is navigable and rendered.
+	if !slices.Contains(sp.visibleItems(m), settingsItemDaemonRestart) {
+		t.Fatal("local TUI: Restart daemon row missing from settings nav")
+	}
+	out := sp.viewSettings(m)
+	if !strings.Contains(out, "Fleet Daemon") || !strings.Contains(out, "Restart daemon") {
+		t.Fatal("local TUI: settings view missing the Fleet Daemon section / restart row")
+	}
+
+	// Remote: the section is hidden.
+	t.Setenv("FLEET_GATEWAY", "https://gw.example/abc")
+	if slices.Contains(sp.visibleItems(m), settingsItemDaemonRestart) {
+		t.Fatal("remote TUI: Restart daemon row must be hidden")
+	}
+	if strings.Contains(sp.viewSettings(m), "Fleet Daemon") {
+		t.Fatal("remote TUI: Fleet Daemon section header must be hidden")
+	}
+}
+
+// TestDaemonRestartActionInFlight confirms pressing enter on the restart row arms
+// the in-flight flag (so the view shows a spinner) and returns a command, and
+// that a repeat press while in flight is ignored.
+func TestDaemonRestartActionInFlight(t *testing.T) {
+	sp := newSettingsPage()
+	m := &model{
+		config:      state.DefaultConfig(),
+		toolStatus:  allToolsFound(),
+		currentPage: sp,
+		fleetPage:   newFleetPage(),
+		spinner:     spinner.New(),
+	}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemDaemonRestart)
+	if sp.cursor < 0 {
+		t.Fatal("Restart daemon row not found")
+	}
+
+	cmd := sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.daemonRestarting {
+		t.Fatal("enter on Restart daemon should set daemonRestarting")
+	}
+	if cmd == nil {
+		t.Fatal("enter on Restart daemon should return a restart command")
+	}
+	if !strings.Contains(sp.viewSettings(m), "restarting") {
+		t.Fatal("in-flight restart should render a 'restarting' spinner row")
+	}
+
+	// A second press while the restart is in flight must be a no-op (no new cmd).
+	if cmd := sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Fatal("repeat enter while restarting should be ignored")
 	}
 }
 
