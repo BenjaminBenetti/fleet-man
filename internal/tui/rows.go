@@ -18,6 +18,7 @@ const (
 	rowSession
 	rowNewSession
 	rowSettings
+	rowLeaveFocus
 )
 
 // row represents a single navigable row in the TUI.
