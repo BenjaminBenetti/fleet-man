@@ -78,6 +78,7 @@ type fleetPage struct {
 	// itself lives in lpFlow while mode == viewLayoutPreset.
 	dialogLayoutsExpanded     bool                 // ▼ Layouts expanded, revealing per-preset rows + the add row
 	dialogLayoutPresets       []fleet.LayoutPreset // working copy of the fleet's layout presets (instant-save)
+	dialogPresetRemoveFocused bool                 // horizontal sub-cursor: on the [remove] button vs the preset row (mirrors dialogCacheButtonFocused)
 	dialogPresetRemoveConfirm bool                 // inline "[remove?]" confirm armed on the focused preset row
 	lpFlow                    *layoutPresetFlow    // open preset creation/edit flow (nil unless mode == viewLayoutPreset)
 
@@ -2042,9 +2043,12 @@ func (fleetPage *fleetPage) renderLayoutPresetRow(row int, marker func(int) stri
 }
 
 // renderRemovePresetButton renders the [remove] affordance next to an existing
-// layout preset, mirroring renderRemoveMountButton's three states.
+// layout preset. Like the Caching section's [Delete cache] button it is only
+// highlighted when the horizontal sub-cursor is on it (dialogPresetRemoveFocused
+// on this row) — selecting the row alone leaves it dim, so it never looks armed
+// before the user arrows onto it.
 func (fleetPage *fleetPage) renderRemovePresetButton(row int) string {
-	focused := fleetPage.dialogRow == row
+	focused := fleetPage.dialogRow == row && fleetPage.dialogPresetRemoveFocused
 	if focused && fleetPage.dialogPresetRemoveConfirm {
 		return selectedStyle.Render("[remove?]")
 	}
@@ -2150,10 +2154,13 @@ func (fleetPage *fleetPage) editFleetHint() string {
 		if fleetPage.dialogRow == fleetPage.layoutPresetAddRow() {
 			return "[enter] New preset  [j/k] Select  [q/esc] Save & Close"
 		}
-		if fleetPage.dialogPresetRemoveConfirm {
-			return "[d] Confirm remove  [esc] Cancel"
+		if fleetPage.dialogPresetRemoveFocused {
+			if fleetPage.dialogPresetRemoveConfirm {
+				return "[enter] Confirm remove  [esc] Cancel"
+			}
+			return "[enter] Remove  [h/←] Back  [esc] Close"
 		}
-		return "[enter] Edit  [d] Remove  [j/k] Select  [q/esc] Save & Close"
+		return "[enter] Edit  [l/→] Remove button  [j/k] Select  [q/esc] Save & Close"
 	}
 	switch fleetPage.dialogRow {
 	case editFleetRowCustomMounts:

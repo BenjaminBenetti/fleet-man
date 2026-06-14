@@ -1288,6 +1288,7 @@ func (fleetPage *fleetPage) moveEditFleetRow(delta int) {
 	fleetPage.dialogCacheButtonFocused = false
 	fleetPage.dialogDeleteCacheConfirm = false
 	fleetPage.dialogMountRemoveConfirm = false
+	fleetPage.dialogPresetRemoveFocused = false
 	fleetPage.dialogPresetRemoveConfirm = false
 	fleetPage.syncEditFleetFocus()
 }
@@ -1389,6 +1390,7 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.customMountInput.Blur()
 	fleetPage.dialogLayoutsExpanded = false
 	fleetPage.dialogLayoutPresets = slices.Clone(f.Settings.LayoutPresets)
+	fleetPage.dialogPresetRemoveFocused = false
 	fleetPage.dialogPresetRemoveConfirm = false
 	fleetPage.lpFlow = nil
 
@@ -1767,9 +1769,11 @@ func (fleetPage *fleetPage) updateCustomMountRow(m *model, keyMsg tea.KeyMsg) te
 }
 
 // updateLayoutPresetRow handles a key press while the cursor is on one of the
-// dynamic layout-preset child rows: an existing preset (enter opens the
-// preview/command editor, x/d removes it behind a two-step confirm) or the
-// "+ Layout Preset" row (enter starts the capture flow).
+// dynamic layout-preset child rows. An existing preset row works exactly like a
+// Caching cache row: the row's primary action (Enter) opens the editor, and the
+// [remove] button is a horizontal sub-cursor reached with →/l — Enter there
+// arms a "[remove?]" confirm, a second Enter performs the removal, and ←/h
+// returns to the row. The "+ Layout Preset" row just starts the capture flow.
 func (fleetPage *fleetPage) updateLayoutPresetRow(m *model, keyMsg tea.KeyMsg) tea.Cmd {
 	idx := fleetPage.dialogRow - editFleetRowLayoutPresetBase
 	if idx == len(fleetPage.dialogLayoutPresets) {
@@ -1781,19 +1785,25 @@ func (fleetPage *fleetPage) updateLayoutPresetRow(m *model, keyMsg tea.KeyMsg) t
 		return nil
 	}
 	switch keyMsg.String() {
-	case "enter", "e":
+	case "right", "l":
+		fleetPage.dialogPresetRemoveFocused = true
+		return nil
+	case "left", "h":
+		fleetPage.dialogPresetRemoveFocused = false
 		fleetPage.dialogPresetRemoveConfirm = false
+		return nil
+	case "enter", " ":
+		if fleetPage.dialogPresetRemoveFocused {
+			if !fleetPage.dialogPresetRemoveConfirm {
+				fleetPage.dialogPresetRemoveConfirm = true // first Enter: arm confirm
+				return nil
+			}
+			fleetPage.dialogPresetRemoveConfirm = false // second Enter: remove
+			return fleetPage.removeLayoutPreset(m, idx)
+		}
+		// Row focused (not the remove button) → open the editor.
 		fleetPage.openLayoutPresetEdit(idx)
 		return nil
-	case "x", "d":
-		// Two-step confirm, mirroring the custom-mount [remove?] flow. Esc
-		// disarms via the dialog's top-level esc handler; row moves clear it.
-		if !fleetPage.dialogPresetRemoveConfirm {
-			fleetPage.dialogPresetRemoveConfirm = true
-			return nil
-		}
-		fleetPage.dialogPresetRemoveConfirm = false
-		return fleetPage.removeLayoutPreset(m, idx)
 	}
 	return nil
 }
