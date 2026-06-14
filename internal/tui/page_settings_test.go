@@ -1,6 +1,10 @@
 package tui
 
 import (
+	"encoding/base64"
+	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,9 +16,44 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// capturedClipboard runs a copyToClipboardCmd-style command, capturing the OSC
+// 52 sequence it writes to os.Stderr, and returns the decoded clipboard payload.
+// It is how the copy tests assert WHAT was copied (not just that a copy fired).
+func capturedClipboard(t *testing.T, cmd tea.Cmd) string {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("nil command: nothing was copied")
+	}
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	cmd() // writes ESC ] 52 ; c ; <base64> BEL
+	_ = w.Close()
+	os.Stderr = orig
+
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(out)
+	i := strings.LastIndex(raw, ";")
+	if i < 0 {
+		t.Fatalf("not an OSC 52 sequence: %q", raw)
+	}
+	payload := strings.TrimRight(raw[i+1:], "\x07")
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("decode OSC 52 payload %q: %v", payload, err)
+	}
+	return string(decoded)
+}
+
 // TestSettingsSectionIncludesRemoteMcp confirms the "Fleet MCP" section is
-// navigable (copy actions + editable items appear) and that the read-only
-// Public MCP URL line renders once the feature is enabled.
+// navigable (copy actions + editable items appear) and that the navigable
+// Public MCP URL copy row renders once the feature is enabled.
 func TestSettingsSectionIncludesRemoteMcp(t *testing.T) {
 	sp := newSettingsPage()
 	cfg := state.DefaultConfig()
@@ -121,8 +160,8 @@ func TestDaemonRestartActionInFlight(t *testing.T) {
 }
 
 // TestSettingsSectionIncludesRemoteFleet confirms the "Enable Remote Fleet"
-// toggle is navigable right under "Enable Remote MCP", and that the read-only
-// Public GRPC URL line renders once the feature is enabled.
+// toggle is navigable right under "Enable Remote MCP", and that the navigable
+// Public GRPC URL copy row renders once the feature is enabled.
 func TestSettingsSectionIncludesRemoteFleet(t *testing.T) {
 	sp := newSettingsPage()
 	cfg := state.DefaultConfig()
@@ -160,6 +199,197 @@ func TestSettingsSectionIncludesRemoteFleet(t *testing.T) {
 	// MCP stays off here, so its computed URL row must NOT render.
 	if strings.Contains(out, "Public MCP URL") {
 		t.Fatal("Public MCP URL row rendered while remote MCP is disabled")
+	}
+}
+
+// TestSettingsCopyRowsAppearWithRemoteSurfaces confirms the navigable copy rows
+// — Public MCP URL, Public GRPC URL, Bearer Token — appear exactly when their
+// backing surface is enabled. Each URL is gated on its own feature; the bearer
+// token rides along whenever EITHER surface is on (it pairs with both URLs).
+func TestSettingsCopyRowsAppearWithRemoteSurfaces(t *testing.T) {
+	has := func(items []int, want int) bool { return slices.Contains(items, want) }
+
+	// Nothing enabled: no copy rows at all. A wide width keeps the row value on
+	// one line (so the [ Copy Bearer Token ] affordance isn't word-wrapped); no
+	// height means the whole list renders without a scrolling viewport.
+	sp := newSettingsPage()
+	m := &model{config: state.DefaultConfig(), toolStatus: allToolsFound(), spinner: spinner.New(), width: 120}
+	items := sp.visibleItems(m)
+	if has(items, settingsItemRemoteMcpPublicURL) || has(items, settingsItemRemoteGrpcPublicURL) || has(items, settingsItemRemoteMcpToken) {
+		t.Fatal("copy rows must be hidden while both remote surfaces are off")
+	}
+
+	// MCP only: Public MCP URL + Bearer Token, but not Public GRPC URL.
+	m.config.RemoteMcpSettings.Enabled = true
+	items = sp.visibleItems(m)
+	if !has(items, settingsItemRemoteMcpPublicURL) || !has(items, settingsItemRemoteMcpToken) {
+		t.Fatal("MCP enabled: Public MCP URL + Bearer Token rows should be navigable")
+	}
+	if has(items, settingsItemRemoteGrpcPublicURL) {
+		t.Fatal("MCP enabled (fleet off): Public GRPC URL row must stay hidden")
+	}
+
+	// Fleet only: Public GRPC URL + Bearer Token, but not Public MCP URL.
+	m.config.RemoteMcpSettings.Enabled = false
+	m.config.RemoteMcpSettings.FleetEnabled = true
+	items = sp.visibleItems(m)
+	if !has(items, settingsItemRemoteGrpcPublicURL) || !has(items, settingsItemRemoteMcpToken) {
+		t.Fatal("Fleet enabled: Public GRPC URL + Bearer Token rows should be navigable")
+	}
+	if has(items, settingsItemRemoteMcpPublicURL) {
+		t.Fatal("Fleet enabled (MCP off): Public MCP URL row must stay hidden")
+	}
+
+	// The Bearer Token row renders its [ Copy Bearer Token ] affordance.
+	if out := sp.viewSettings(m); !strings.Contains(out, "[ Copy Bearer Token ]") || !strings.Contains(out, "Bearer Token") {
+		t.Fatal("view missing the Bearer Token copy row")
+	}
+}
+
+// TestCopyPublicURLCommands confirms enter on a Public URL copy row copies the
+// RAW gateway URL (the MCP row copies PublicUrl, the GRPC row copies
+// PublicGrpcUrl — not each other's URL, not the JSON config snippet), and that
+// with no URL assigned it no-ops with a guidance message instead.
+func TestCopyPublicURLCommands(t *testing.T) {
+	sp := newSettingsPage()
+	cfg := state.DefaultConfig()
+	cfg.RemoteMcpSettings.Enabled = true
+	cfg.RemoteMcpSettings.FleetEnabled = true
+	m := &model{config: cfg, toolStatus: allToolsFound(), currentPage: sp, fleetPage: newFleetPage(), spinner: spinner.New()}
+
+	// No status yet: enter on either URL row copies nothing and explains why.
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteMcpPublicURL)
+	if cmd := sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Fatal("enter on Public MCP URL with no URL should not copy")
+	}
+	if !strings.Contains(m.message, "No public MCP URL") {
+		t.Fatalf("missing MCP guidance message, got %q", m.message)
+	}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteGrpcPublicURL)
+	if cmd := sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Fatal("enter on Public GRPC URL with no URL should not copy")
+	}
+	if !strings.Contains(m.message, "No public GRPC URL") {
+		t.Fatalf("missing GRPC guidance message, got %q", m.message)
+	}
+
+	// Connected with distinct assigned URLs: each row copies its own raw URL.
+	const mcpURL = "https://gw.example.com/mcp/abc123"
+	const grpcURL = "https://gw.example.com:50051/grpc/abc123"
+	m.remoteMcpStatus = &fleetgrpc.RemoteMcpStatus{
+		State:         fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED,
+		PublicUrl:     mcpURL,
+		PublicGrpcUrl: grpcURL,
+	}
+
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteMcpPublicURL)
+	if got := capturedClipboard(t, sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})); got != mcpURL {
+		t.Fatalf("Public MCP URL copied %q, want the raw URL %q", got, mcpURL)
+	}
+	if !strings.Contains(m.message, "Public MCP URL copied") {
+		t.Fatalf("missing MCP copy confirmation, got %q", m.message)
+	}
+
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteGrpcPublicURL)
+	if got := capturedClipboard(t, sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})); got != grpcURL {
+		t.Fatalf("Public GRPC URL copied %q, want the raw gRPC URL %q", got, grpcURL)
+	}
+	if !strings.Contains(m.message, "Public GRPC URL copied") {
+		t.Fatalf("missing GRPC copy confirmation, got %q", m.message)
+	}
+}
+
+// TestCopyBearerToken confirms the Bearer Token row copies the daemon's MCP
+// token VALUE (trimmed) when one exists and reports its absence otherwise.
+func TestCopyBearerToken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("FLEET_TOKEN", "") // force the on-disk path
+
+	sp := newSettingsPage()
+	cfg := state.DefaultConfig()
+	cfg.RemoteMcpSettings.Enabled = true
+	m := &model{config: cfg, toolStatus: allToolsFound(), currentPage: sp, fleetPage: newFleetPage(), spinner: spinner.New()}
+
+	// No token file: enter reports the missing token and returns no command.
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteMcpToken)
+	if cmd := sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Fatal("enter on Bearer Token without a token should not copy")
+	}
+	if !strings.Contains(m.message, "No bearer token") {
+		t.Fatalf("missing absent-token message, got %q", m.message)
+	}
+
+	// Write the token (with surrounding whitespace): enter copies the trimmed value.
+	if err := os.MkdirAll(filepath.Join(home, ".fleet"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".fleet", "mcp.token"), []byte("s3cr3t-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteMcpToken)
+	if got := capturedClipboard(t, sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})); got != "s3cr3t-token" {
+		t.Fatalf("Bearer token copied %q, want trimmed %q", got, "s3cr3t-token")
+	}
+	if !strings.Contains(m.message, "Bearer token copied") {
+		t.Fatalf("missing copy confirmation, got %q", m.message)
+	}
+}
+
+// TestCopyRowsClickable drives a real left-click through model.Update at each
+// copy row's recorded Y and asserts it fires the copy — covering the ticket's
+// "copy on click" requirement and the recordRow hit-testing the URL rows now
+// depend on (they were read-only, non-clickable status lines before).
+func TestCopyRowsClickable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("FLEET_TOKEN", "")
+	if err := os.MkdirAll(filepath.Join(home, ".fleet"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".fleet", "mcp.token"), []byte("tok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sp := newSettingsPage()
+	cfg := state.DefaultConfig()
+	cfg.RemoteMcpSettings.Enabled = true
+	cfg.RemoteMcpSettings.FleetEnabled = true
+	m := model{
+		config:      cfg,
+		toolStatus:  allToolsFound(),
+		currentPage: sp,
+		fleetPage:   newFleetPage(),
+		spinner:     spinner.New(),
+		width:       120, // wide enough that rows don't wrap; no height => full render
+		remoteMcpStatus: &fleetgrpc.RemoteMcpStatus{
+			State:         fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED,
+			PublicUrl:     "https://gw.example.com/mcp/abc123",
+			PublicGrpcUrl: "https://gw.example.com:50051/grpc/abc123",
+		},
+	}
+
+	// Render once so itemRowYs is populated for mouse hit-testing.
+	sp.viewSettings(&m)
+
+	cases := []struct {
+		id   int
+		want string
+	}{
+		{settingsItemRemoteMcpPublicURL, "Public MCP URL copied"},
+		{settingsItemRemoteGrpcPublicURL, "Public GRPC URL copied"},
+		{settingsItemRemoteMcpToken, "Bearer token copied"},
+	}
+	for _, tc := range cases {
+		y, ok := sp.itemRowYs[tc.id]
+		if !ok {
+			t.Fatalf("row %d not recorded for mouse hit-testing", tc.id)
+		}
+		click := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 4, Y: y}
+		next, _ := m.Update(click)
+		if got := next.(model).message; !strings.Contains(got, tc.want) {
+			t.Fatalf("click on row %d: message %q, want substring %q", tc.id, got, tc.want)
+		}
 	}
 }
 
