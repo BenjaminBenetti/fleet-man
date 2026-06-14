@@ -136,6 +136,15 @@ func focusLogo() string {
 		if !ok {
 			continue
 		}
+		// Pad every row of the glyph to its widest row so a short or missing
+		// row contributes the glyph's full width of spaces — otherwise later
+		// glyphs would shift left on those rows and break the word's alignment.
+		width := 0
+		for _, line := range glyph {
+			if len(line) > width {
+				width = len(line)
+			}
+		}
 		gap := "  " // even gap keeps the next glyph on the quadrant grid
 		if i == 0 {
 			gap = ""
@@ -144,6 +153,9 @@ func focusLogo() string {
 			line := ""
 			if r < len(glyph) {
 				line = glyph[r]
+			}
+			if len(line) < width {
+				line += strings.Repeat(" ", width-len(line))
 			}
 			cols[r] += gap + line
 		}

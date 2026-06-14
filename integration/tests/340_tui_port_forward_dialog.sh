@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Description: TUI 'f' opens the port-forward dialog on running instances, validates input, and closes on esc; refuses on stopped instances.
+# Description: TUI 'p' opens the port-forward dialog on running instances, validates input, and closes on esc; refuses on stopped instances.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -14,24 +14,25 @@ tui_wait_for "alpha"  15
 tui_wait_for "○ idle" 60
 
 # ===========================================
-# 'f' on the fleet header has no instance selected — defensive UX
-# prints "Select an instance" instead of opening the dialog.
+# 'p' on the fleet header has no instance selected — defensive UX
+# prints "Select an instance" instead of opening the dialog. ('f' is the
+# focus-mode key now; port-forward moved to 'p'.)
 # ===========================================
-info "pressing 'f' on fleet header (no instance selected)"
-tui_send f
+info "pressing 'p' on fleet header (no instance selected)"
+tui_send p
 tui_wait_for "Select an instance" 5
 # Make sure the dialog did NOT open.
 tui_assert_not_contains "local:remote" "port-forward dialog should not open without an instance"
 
 # ===========================================
-# Move cursor to alpha and press 'f' to open the dialog.
+# Move cursor to alpha and press 'p' to open the dialog.
 # ===========================================
 info "moving cursor to alpha"
 tui_send j
 sleep 0.3
 
-info "pressing 'f' to open port-forward dialog"
-tui_send f
+info "pressing 'p' to open port-forward dialog"
+tui_send p
 tui_wait_for "local:remote" 5
 
 # ===========================================
@@ -73,9 +74,9 @@ tui_send s
 tui_wait_for "Stopped itest-fleet/alpha" 20
 tui_wait_for "stopped" 5
 
-info "pressing 'f' on a stopped instance"
-tui_send f
+info "pressing 'p' on a stopped instance"
+tui_send p
 tui_wait_for "Instance must be running to port-forward" 5
 tui_assert_not_contains "local:remote" "port-forward dialog should not open on stopped instance"
 
-pass "TUI 'f' port-forward dialog gating + validation"
+pass "TUI 'p' port-forward dialog gating + validation"
