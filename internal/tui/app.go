@@ -92,6 +92,8 @@ type model struct {
 	coderPresets        []string // available preset names (in-memory, from API)
 	coderFetchingParams bool     // true while fetching template parameters
 
+	daemonRestarting bool // true while the settings "Restart daemon" action is in flight
+
 	codespaceMachines         []codespaceMachine // available machine types (from GitHub API)
 	codespaceFetchingMachines bool               // true while fetching machine types
 
@@ -843,6 +845,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingExecArgs = msg.args
 		m.quitting = true
 		return m, tea.Quit
+
+	case daemonRestartedMsg:
+		m.daemonRestarting = false
+		if msg.err != nil {
+			m.message = fmt.Sprintf("Failed to restart daemon: %v", msg.err)
+		} else {
+			m.message = "Fleet daemon restarted"
+		}
+		return m, spinCmd
 
 	case coderParamsFetchedMsg:
 		m.coderFetchingParams = false

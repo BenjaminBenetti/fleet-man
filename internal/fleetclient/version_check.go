@@ -3,6 +3,7 @@ package fleetclient
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -18,10 +19,12 @@ import (
 func reconcileServer(ctx context.Context, ep Endpoint, svc fleetgrpc.FleetServiceClient, reply *fleetgrpc.HelloReply, spawned bool) (restarted bool, err error) {
 	cv := version.Version
 	sv := reply.GetServerVersion()
+	// Binary-mtime staleness only matters for a dev client; skip the stat otherwise.
+	stale := cv == "" && serverIsStale(reply)
 
-	switch action, decErr := decideReconcile(cv, sv, ep.IsLocal(), spawned); action {
+	switch action, decErr := decideReconcile(cv, sv, ep.IsLocal(), spawned, stale); action {
 	case actionRestart:
-		if err := restartServer(ctx, ep, svc); err != nil {
+		if err := restartServer(ctx, ep, svc, restartReason()); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -45,20 +48,19 @@ const (
 // so every case is unit-testable without spawning a process. cv is this client's
 // compiled-in version ("" = a dev build); sv is the server's reported version
 // ("" = a dev build); isLocal = the server runs on this host; spawned = WE just
-// started it.
+// started it; stale = (dev client only) this binary postdates the server's start.
 //
-//   - DEV client: ignore versions entirely — always relaunch a local,
-//     pre-existing server so it picks up freshly-built code. Restarting is cheap,
-//     so we do it unconditionally rather than guess at staleness, guaranteeing
-//     the local server never runs stale code. This holds even against a VERSIONED
-//     server, since one machine both tests dev builds and runs the release.
+//   - DEV client: ignore versions entirely — restart a local, pre-existing
+//     server only when this freshly-built binary postdates it. This holds even
+//     against a VERSIONED server, since one machine both tests dev builds and
+//     runs the release, so build-time is the only reliable signal.
 //   - VERSIONED client: a server reporting NO version is a dev build — replace it
 //     locally, error on a remote one. The same numeric core is fine (a
 //     pre-release counts as its release; see versionCore). A strictly-older local
 //     server is replaced; a newer one (or any remote version mismatch) errors.
-func decideReconcile(cv, sv string, isLocal, spawned bool) (reconcileAction, error) {
+func decideReconcile(cv, sv string, isLocal, spawned, stale bool) (reconcileAction, error) {
 	if cv == "" { // dev client
-		if spawned || !isLocal {
+		if spawned || !isLocal || !stale {
 			return actionNone, nil
 		}
 		return actionRestart, nil
@@ -83,11 +85,34 @@ func decideReconcile(cv, sv string, isLocal, spawned bool) (reconcileAction, err
 	return actionError, fmt.Errorf("fleet server is newer (%s) than this client (%s) — upgrade your client", sv, cv)
 }
 
+// serverIsStale reports whether the running server predates this client binary —
+// i.e. the binary was (re)built after the server started, so the server is
+// running old code. Used only for dev builds. On any uncertainty it returns
+// false (leave the server alone) rather than risk thrashing, EXCEPT when the
+// server reports no start time, which we treat as stale.
+func serverIsStale(reply *fleetgrpc.HelloReply) bool {
+	started := reply.GetStartedAt()
+	if started == nil {
+		return true
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	fi, err := os.Stat(self)
+	if err != nil {
+		return false
+	}
+	return fi.ModTime().After(started.AsTime())
+}
+
 // restartServer drains the running server and relaunches it from the current
 // binary, under the single-winner spawn lock so racing clients cause exactly one
 // restart at a time. It is a pure mechanic — the decision to restart belongs to
-// reconcileServer.
-func restartServer(ctx context.Context, ep Endpoint, svc fleetgrpc.FleetServiceClient) error {
+// reconcileServer (the version handshake) or to an explicit caller like
+// RestartLocalServer (the manual "restart daemon" action). reason is logged by
+// the server in its shutdown event.
+func restartServer(ctx context.Context, ep Endpoint, svc fleetgrpc.FleetServiceClient, reason string) error {
 	lockFD, err := acquireSpawnLock(ctx)
 	if err != nil {
 		return err
@@ -100,7 +125,7 @@ func restartServer(ctx context.Context, ep Endpoint, svc fleetgrpc.FleetServiceC
 	sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	_, _ = svc.Shutdown(sctx, &fleetgrpc.ShutdownRequest{
 		Drain:  true,
-		Reason: strptr(restartReason()),
+		Reason: strptr(reason),
 	})
 	cancel()
 
@@ -119,7 +144,7 @@ func restartServer(ctx context.Context, ep Endpoint, svc fleetgrpc.FleetServiceC
 
 func restartReason() string {
 	if version.Version == "" {
-		return "dev client: relaunching local server from freshly-built binary"
+		return "dev client: replacing stale server with freshly-built binary"
 	}
 	return fmt.Sprintf("client %s newer than server", version.Version)
 }

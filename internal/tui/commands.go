@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 
@@ -138,6 +140,21 @@ func deleteFleetCmd(fleetName string, instances []*fleet.Instance, pf *portforwa
 			return operationDoneMsg{fleetName, "", "", err}
 		}
 		return operationDoneMsg{fleetName, "", fmt.Sprintf("Removed fleet %s", fleetName), nil}
+	}
+}
+
+// daemonRestartedMsg is sent when the settings "Restart daemon" action finishes.
+type daemonRestartedMsg struct{ err error }
+
+// restartDaemonCmd stops the local fleet daemon and relaunches it from the TUI's
+// current binary (the same mechanic the version handshake uses). It runs on its
+// own background context so the restart isn't cancelled mid-flight, and is
+// bounded by the drain/spawn timeouts inside RestartLocalServer.
+func restartDaemonCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		return daemonRestartedMsg{err: fleetclient.RestartLocalServer(ctx)}
 	}
 }
 
