@@ -53,37 +53,6 @@ func fleetNamesInRows(fp *fleetPage) map[string]bool {
 }
 
 // ===========================================
-// Logo
-// ===========================================
-
-func TestFocusLogoIsCompactBlockArt(t *testing.T) {
-	logo := focusLogo()
-	lines := strings.Split(logo, "\n")
-	if len(lines) != 3 {
-		t.Fatalf("focus logo height = %d lines, want 3:\n%s", len(lines), logo)
-	}
-	// The standard banner is taller — focus mode must reclaim vertical space.
-	standard := "  __ _         _\n / _| |___ ___| |_\n|  _| / -_) -_)  _|\n|_| |_\\___\\___|\\___|"
-	if std := strings.Count(standard, "\n") + 1; len(lines) >= std {
-		t.Fatalf("focus logo (%d lines) is not shorter than the standard logo (%d lines)", len(lines), std)
-	}
-	// It should be drawn from quadrant block glyphs, not ASCII.
-	if !strings.ContainsAny(logo, "▀▄█▌▐▖▗▘▙▚▛▜▝▞▟") {
-		t.Fatalf("focus logo is not built from quadrant block characters:\n%s", logo)
-	}
-}
-
-func TestQuadrantArtConvertsBitmap(t *testing.T) {
-	if got := quadrantArt([]string{"##", "##"}); got != "█" {
-		t.Fatalf("full 2x2 cell = %q, want █", got)
-	}
-	// TL + BR set => the ▚ diagonal glyph.
-	if got := quadrantArt([]string{"# ", " #"}); got != "▚" {
-		t.Fatalf("diagonal cell = %q, want ▚", got)
-	}
-}
-
-// ===========================================
 // Entering / leaving
 // ===========================================
 
@@ -294,12 +263,22 @@ func TestPortForwardMovedToPKey(t *testing.T) {
 // View + help
 // ===========================================
 
-func TestViewSwapsLogoAndSettingsRowInFocus(t *testing.T) {
-	m, fp := newFocusModel()
+// tallBanner is a distinctive slice of the standard ASCII "fleet" logo, used to
+// confirm the banner is unchanged by focus mode.
+const tallBanner = "|_| |_"
+
+func TestViewSwapsSettingsRowAndHidesHelpInFocus(t *testing.T) {
+	m, fp := newFocusModel() // m.config == nil ⇒ help bar shown by default
 
 	normal := fp.viewFleetList(m)
 	if !strings.Contains(normal, "settings") {
 		t.Fatalf("normal view should show the settings row")
+	}
+	if !strings.Contains(normal, "navigate") {
+		t.Fatalf("normal view should show the help bar")
+	}
+	if !strings.Contains(normal, tallBanner) {
+		t.Fatalf("normal view should show the standard banner")
 	}
 
 	fp.enterFocus(m, "alpha")
@@ -310,16 +289,20 @@ func TestViewSwapsLogoAndSettingsRowInFocus(t *testing.T) {
 	if strings.Contains(focused, "settings") {
 		t.Fatalf("focus view should not show the settings row:\n%s", focused)
 	}
-	// The compact logo's first row appears; the tall ASCII banner's stems do not.
-	if strings.Contains(focused, "|_| |_") {
-		t.Fatalf("focus view should not render the tall ASCII banner")
+	// Focus mode hides the help bar...
+	if strings.Contains(focused, "navigate") {
+		t.Fatalf("focus view should hide the help bar:\n%s", focused)
+	}
+	// ...but leaves the banner exactly as it was (logo is unchanged).
+	if !strings.Contains(focused, tallBanner) {
+		t.Fatalf("focus view should keep the standard banner unchanged:\n%s", focused)
 	}
 }
 
-func TestContextualHelpReflectsFocusState(t *testing.T) {
+func TestContextualHelpAdvertisesFocusAndMovedPortForward(t *testing.T) {
 	m, fp := newFocusModel()
 
-	// On a fleet header, not focused: "f: focus" offered, port-forward is 'p'.
+	// On a fleet header, not focused: "f: focus" offered.
 	help := strings.Join(fp.contextualHelpKeys(m), " | ")
 	if !strings.Contains(help, "f: focus") {
 		t.Fatalf("fleet-row help should advertise 'f: focus': %s", help)
@@ -334,15 +317,5 @@ func TestContextualHelpReflectsFocusState(t *testing.T) {
 	ihelp := strings.Join(fp.contextualHelpKeys(m), " | ")
 	if !strings.Contains(ihelp, "p: port-forward") || strings.Contains(ihelp, "f: port-forward") {
 		t.Fatalf("instance help should move port-forward to 'p': %s", ihelp)
-	}
-
-	// In focus mode: q/esc advertised as leaving focus rather than quitting.
-	fp.enterFocus(m, "alpha")
-	fhelp := strings.Join(fp.contextualHelpKeys(m), " | ")
-	if !strings.Contains(fhelp, "q/esc: leave focus") {
-		t.Fatalf("focus-mode help should advertise 'q/esc: leave focus': %s", fhelp)
-	}
-	if strings.Contains(fhelp, "q: quit") {
-		t.Fatalf("focus-mode help should not advertise 'q: quit': %s", fhelp)
 	}
 }

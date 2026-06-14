@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Description: TUI 'f' enters focus mode — the tall banner collapses to the compact
-# "Fleet" logo and the "settings" row becomes "[ leave focus ]"; esc, q, and the
-# leave-focus row all exit focus (focus behaves like a dialog for q/esc).
+# Description: TUI 'f' enters focus mode — the "settings" row becomes
+# "[ leave focus ]" and the help bar is hidden; esc, q, and the leave-focus row
+# all exit focus (focus behaves like a dialog for q/esc).
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -16,30 +16,29 @@ tui_wait_for "alpha"  15
 tui_wait_for "○ idle" 60
 
 # ===========================================
-# Baseline: the tall ASCII banner and the "settings" row are present.
+# Baseline: the "settings" row and the help bar are visible.
 # ===========================================
-tui_assert_contains "|_| |_" "tall fleet banner should be visible before focus"
 tui_assert_contains "settings" "settings row should be visible before focus"
+tui_assert_contains "navigate" "help bar should be visible before focus"
 
 # ===========================================
-# 'f' on the fleet enters focus mode: the banner collapses (the tall
-# banner's distinctive bottom row disappears) and "settings" becomes
-# "[ leave focus ]".
+# 'f' on the fleet enters focus mode: "settings" becomes "[ leave focus ]" and
+# the help bar is hidden.
 # ===========================================
 info "pressing 'f' to enter focus mode"
 tui_send f
 tui_wait_for "leave focus" 5
 tui_assert_not_contains "settings" "settings row should be hidden in focus mode"
-tui_assert_not_contains "|_| |_" "tall banner should be replaced by the compact logo in focus mode"
+tui_wait_for_absent "navigate" 5
 
 # ===========================================
-# esc leaves focus (dialog-like) and restores the normal page.
+# esc leaves focus (dialog-like) and restores the normal page + help bar.
 # ===========================================
 info "pressing esc to leave focus"
 tui_send Escape
 tui_wait_for "settings" 5
+tui_wait_for "navigate" 5
 tui_wait_for_absent "leave focus" 5
-tui_assert_contains "|_| |_" "tall banner should return after leaving focus"
 
 # ===========================================
 # 'q' leaves focus too — it must NOT quit the TUI.

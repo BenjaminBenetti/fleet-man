@@ -32,9 +32,9 @@ type fleetPage struct {
 	collapsed map[string]bool
 
 	// focusedFleet, when non-empty, names the single fleet shown in focus
-	// mode. All other fleets are hidden from the list, the banner collapses to
-	// the compact "Fleet" logo, the "settings" row becomes "[ leave focus ]",
-	// and q/esc leave focus instead of quitting (focus behaves like a dialog).
+	// mode. All other fleets are hidden from the list, the help bar is hidden,
+	// the "settings" row becomes "[ leave focus ]", and q/esc leave focus
+	// instead of quitting (focus behaves like a dialog).
 	focusedFleet string
 
 	mode                    viewMode
@@ -1204,15 +1204,11 @@ func (fleetPage *fleetPage) renderArmadaBorder(m *model, width int) string {
 	return borderStyle.Render("╭──") + styledLabel + borderStyle.Render(strings.Repeat("─", rightDashes)+"╮")
 }
 
-// contextualHelpKeys returns the footer hints for the current row, layered with
-// focus-mode adjustments: outside focus mode a "f: focus" hint is offered on any
-// fleet row, and inside focus mode the trailing "q: quit" becomes
-// "q/esc: leave focus" since q/esc leave focus rather than quitting.
+// contextualHelpKeys returns the footer hints for the current row, adding a
+// "f: focus" discovery hint on any fleet row. (Focus mode itself hides the help
+// bar, so there are no in-focus hints to render.)
 func (fleetPage *fleetPage) contextualHelpKeys(m *model) []string {
 	keys := fleetPage.contextualHelpKeysBase(m)
-	if fleetPage.focusedFleet != "" {
-		return replaceHelpHint(keys, "q: quit", "q/esc: leave focus")
-	}
 	// The Armada selector swallows its own keys, so 'f' does nothing there.
 	if !fleetPage.armadaFocused && fleetPage.currentFleetName() != "" {
 		keys = insertHelpHintBefore(keys, "q: quit", "f: focus")
@@ -1283,28 +1279,9 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 			"j/k: navigate", "space/enter/e: open settings",
 			"n: new fleet", "q: quit",
 		})
-
-	case rowLeaveFocus:
-		return withArmadaHint([]string{
-			"j/k: navigate", "space/enter: leave focus", "q: quit",
-		})
 	}
 
 	return withArmadaHint([]string{"q: quit"})
-}
-
-// replaceHelpHint swaps the first occurrence of old with replacement, returning
-// the keys unchanged if old is absent.
-func replaceHelpHint(keys []string, old, replacement string) []string {
-	out := make([]string, len(keys))
-	copy(out, keys)
-	for i, k := range out {
-		if k == old {
-			out[i] = replacement
-			break
-		}
-	}
-	return out
 }
 
 // insertHelpHintBefore inserts item just before the first occurrence of anchor,
@@ -1353,10 +1330,6 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 		" / _| |___ ___| |_\n" +
 		"|  _| / -_) -_)  _|\n" +
 		"|_| |_\\___\\___|\\___|"
-	if fleetPage.focusedFleet != "" {
-		// Focus mode collapses the banner to the compact "Fleet" block logo.
-		logo = focusLogo()
-	}
 	rendered := renderGradient(logo)
 	if ind := remoteIndicator(m); ind != "" {
 		// Float the signal glyph up-and-right off the top of the "t" by
@@ -2072,7 +2045,10 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 		b.WriteString("\n")
 	}
 
-	if m.config == nil || m.config.GeneralSettings.ShowHelpTextEnabled() {
+	// Focus mode hides the help bar entirely (like turning help text off) —
+	// it's focus mode, after all.
+	showHelp := m.config == nil || m.config.GeneralSettings.ShowHelpTextEnabled()
+	if showHelp && fleetPage.focusedFleet == "" {
 		b.WriteString(renderHelp(m.width, fleetPage.contextualHelpKeys(m)))
 	}
 
