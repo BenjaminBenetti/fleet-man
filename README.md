@@ -7,6 +7,26 @@ utilize the `fleet-admiral` skill (auto added to your claude code on install).
 ---
 ![fleet-man screenshot](fleet-showcase.png)
 
+
+## What problem does `fleet` solve? 
+
+I made this tool to solve my own problem, and hopefully yours as well. 
+I wanted a tool that allowed the following.
+
+1. Running unlimited parallel agents that don't step on each other. I mean 
+this in a way beyond the `git worktree` I don't want ports to step on each 
+other, I don't want one agent deleting the whole computer to step on another agent. I want full isolation. 
+2. Use my claude code (or any agent you want) subscription at the subscription 
+price! Many similar tools exist to this, but require you to pay API rates. This 
+tool just uses terminals so you will never need to pay API rates.
+3. Not need to constantly setup new environments for agents. Environments need 
+automated setup.
+4. Give me a one screen dashboard to manage all my agents, including knowing 
+when they need attention.
+
+`fleet` solves all these problems. I use it every day. A few other senior developers at my company use it every day. You should use it every day! 
+
+
 ## Contents
 
 - [Install](#install)
