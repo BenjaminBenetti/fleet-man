@@ -103,3 +103,12 @@ func gatewayToken() string {
 	}
 	return ""
 }
+
+// BearerToken resolves the bearer token used to authenticate to a fleet daemon:
+// FLEET_TOKEN if set, else the on-disk MCP token (~/.fleet/mcp.token). It is the
+// same secret the MCP HTTP server and the remote-fleet gRPC surface accept, so
+// callers (e.g. the Settings page) can hand it out for copy-paste setup of
+// remote clients. Returns "" when neither source yields a token.
+func BearerToken() string {
+	return gatewayToken()
+}

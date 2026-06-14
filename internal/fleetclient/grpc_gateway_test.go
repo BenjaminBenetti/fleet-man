@@ -1,6 +1,8 @@
 package fleetclient
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -105,5 +107,35 @@ func TestGatewayTokenFromEnv(t *testing.T) {
 	t.Setenv("FLEET_TOKEN", "  env-token  ")
 	if got := gatewayToken(); got != "env-token" {
 		t.Fatalf("gatewayToken() = %q, want trimmed env-token", got)
+	}
+}
+
+// TestBearerToken confirms the exported token resolver's precedence: FLEET_TOKEN
+// wins, otherwise the on-disk ~/.fleet/mcp.token (trimmed), otherwise empty.
+func TestBearerToken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Neither source present → empty.
+	t.Setenv("FLEET_TOKEN", "")
+	if got := BearerToken(); got != "" {
+		t.Fatalf("no sources: want empty, got %q", got)
+	}
+
+	// On-disk token is read and trimmed.
+	if err := os.MkdirAll(filepath.Join(home, ".fleet"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".fleet", "mcp.token"), []byte("  file-token  \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := BearerToken(); got != "file-token" {
+		t.Fatalf("on-disk: want %q, got %q", "file-token", got)
+	}
+
+	// FLEET_TOKEN overrides the file.
+	t.Setenv("FLEET_TOKEN", " env-token ")
+	if got := BearerToken(); got != "env-token" {
+		t.Fatalf("env override: want %q, got %q", "env-token", got)
 	}
 }

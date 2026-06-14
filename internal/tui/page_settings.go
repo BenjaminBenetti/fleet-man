@@ -48,6 +48,9 @@ const (
 	settingsItemRemoteMcpCopyLocal  = 702 // copy local mcp.json snippet to clipboard
 	settingsItemRemoteMcpCopyRemote = 703 // copy gateway mcp.json snippet to clipboard
 	settingsItemRemoteFleetEnabled  = 704 // expose the gRPC control surface through the gateway
+	settingsItemRemoteMcpPublicURL  = 705 // copy the gateway-assigned public MCP URL
+	settingsItemRemoteGrpcPublicURL = 706 // copy the gateway-assigned public gRPC URL
+	settingsItemRemoteMcpToken      = 707 // copy the bearer token (~/.fleet/mcp.token)
 
 	// Fleet armada: the "+ Remote Fleet" button has a fixed id; registered
 	// remotes get base+i. The base is placed FAR above every other block (and
@@ -68,6 +71,18 @@ const (
 // isArmadaRemoteItem reports whether an item ID is one of the registered-remote
 // rows (base+i). Open-ended: nothing else lives at or above the armada base.
 func isArmadaRemoteItem(item int) bool { return item >= settingsItemArmadaBase }
+
+// isCopyRow reports whether an item ID is a Fleet MCP copy action — a row whose
+// enter copies to the clipboard rather than editing or cycling a value. Used to
+// show the right footer hint and nothing else.
+func isCopyRow(item int) bool {
+	switch item {
+	case settingsItemRemoteMcpCopyLocal, settingsItemRemoteMcpCopyRemote,
+		settingsItemRemoteMcpPublicURL, settingsItemRemoteGrpcPublicURL, settingsItemRemoteMcpToken:
+		return true
+	}
+	return false
+}
 
 // toolStatusCount is the number of rows rendered in the Tool Status
 // section. Must match the length of deps.CheckTools().
@@ -285,14 +300,25 @@ var settingsSections = []settingsSection{
 		Title: "Fleet MCP",
 		Items: func(m *model) []int {
 			// Copy actions come first. The remote-copy action only appears
-			// once the gateway tunnel is enabled. The computed Public MCP URL /
-			// Public GRPC URL are rendered inline as read-only status lines
-			// (not navigable).
+			// once the gateway tunnel is enabled. The Public MCP URL / Public
+			// GRPC URL rows are navigable so enter/click copies the
+			// gateway-assigned address; each appears only once its feature is
+			// enabled. The Bearer Token copy row joins them whenever either
+			// remote surface is on — it's the secret those URLs pair with.
 			items := []int{settingsItemRemoteMcpCopyLocal}
 			if m.config != nil && m.config.RemoteMcpSettings.Enabled {
 				items = append(items, settingsItemRemoteMcpCopyRemote)
 			}
 			items = append(items, settingsItemRemoteMcpEnabled, settingsItemRemoteFleetEnabled, settingsItemRemoteMcpGatewayURL)
+			if m.config != nil && m.config.RemoteMcpSettings.Enabled {
+				items = append(items, settingsItemRemoteMcpPublicURL)
+			}
+			if m.config != nil && m.config.RemoteMcpSettings.FleetEnabled {
+				items = append(items, settingsItemRemoteGrpcPublicURL)
+			}
+			if m.config != nil && (m.config.RemoteMcpSettings.Enabled || m.config.RemoteMcpSettings.FleetEnabled) {
+				items = append(items, settingsItemRemoteMcpToken)
+			}
 			return items
 		},
 	},
@@ -530,8 +556,11 @@ func (settingsPage *settingsPage) toggleRemoteMcpEnabled(m *model) {
 // toggleRemoteFleetEnabled flips the "Enable Remote Fleet" preference — exposing
 // this daemon's gRPC control surface through the gateway so a remote `fleet`
 // binary can drive it — and saves. Reverts on a save failure, mirroring the
-// other toggles. Unlike the MCP toggle it inserts no navigable rows, so the
-// cursor needs no re-pin.
+// other toggles. Toggling this shows/hides the Public GRPC URL and Bearer Token
+// rows, but both sit BELOW this toggle in the Fleet MCP section, so this row's
+// index is preserved and no cursor re-pin is needed — unlike the MCP toggle,
+// whose Copy-remote row sits ABOVE it. Re-pin (cursorToItem) if that ordering
+// ever changes.
 func (settingsPage *settingsPage) toggleRemoteFleetEnabled(m *model) {
 	if m.config == nil {
 		m.config = configutil.DefaultConfig()
@@ -635,7 +664,7 @@ func (settingsPage *settingsPage) codespacesMachineLabel(m *model) string {
 	return name
 }
 
-// remoteMcpStatusValue renders the read-only Public MCP URL / connection-state
+// remoteMcpStatusValue renders the Public MCP URL / connection-state
 // line from the latest status the server pushed over Watch. The tunnel itself
 // lands in a later PR, so today this resolves to "not connected" once enabled;
 // the CONNECTING/CONNECTED/ERROR rendering is wired and ready for it.
@@ -672,7 +701,16 @@ func remoteMcpPublicURL(m *model) string {
 	return m.remoteMcpStatus.GetPublicUrl()
 }
 
-// remoteGrpcStatusValue renders the read-only Public GRPC URL line from the same
+// remoteGrpcPublicURL returns the live gateway-assigned Public GRPC URL, or ""
+// when the tunnel is not (yet) connected or the gateway withheld it.
+func remoteGrpcPublicURL(m *model) string {
+	if m.remoteMcpStatus == nil {
+		return ""
+	}
+	return m.remoteMcpStatus.GetPublicGrpcUrl()
+}
+
+// remoteGrpcStatusValue renders the Public GRPC URL line from the same
 // pushed tunnel status as remoteMcpStatusValue (one tunnel carries both traffic
 // kinds, so they share connection state). A connected tunnel with no gRPC URL
 // means the gateway withheld it — it is old, runs without --public-grpc-url, or
@@ -895,6 +933,33 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				}
 				m.message = "Remote MCP config copied to clipboard"
 				return copyToClipboardCmd(remoteMcpConfigJSON(url))
+			}
+			if item == settingsItemRemoteMcpPublicURL {
+				url := remoteMcpPublicURL(m)
+				if url == "" {
+					m.message = "No public MCP URL yet — connect to the gateway first"
+					return nil
+				}
+				m.message = "Public MCP URL copied to clipboard"
+				return copyToClipboardCmd(url)
+			}
+			if item == settingsItemRemoteGrpcPublicURL {
+				url := remoteGrpcPublicURL(m)
+				if url == "" {
+					m.message = "No public GRPC URL yet — connect to the gateway first"
+					return nil
+				}
+				m.message = "Public GRPC URL copied to clipboard"
+				return copyToClipboardCmd(url)
+			}
+			if item == settingsItemRemoteMcpToken {
+				token := fleetclient.BearerToken()
+				if token == "" {
+					m.message = "No bearer token found (set FLEET_TOKEN or ~/.fleet/mcp.token)"
+					return nil
+				}
+				m.message = "Bearer token copied to clipboard"
+				return copyToClipboardCmd(token)
 			}
 			if item == settingsItemCoderPreset {
 				settingsPage.cycleCoderPreset(m, 1)
@@ -1445,19 +1510,34 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			}
 			recordRow(settingsItemRemoteMcpGatewayURL, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteMcpGatewayURL, "Gateway URL", gatewayValue))
 
-			// The computed Public MCP URL / Public GRPC URL are read-only (not
-			// navigable): they are the gateway-assigned addresses, delivered over
-			// Watch, that external tools / a remote `fleet` use to reach this
-			// fleet. Each is only shown once its feature is enabled.
+			// The Public MCP URL / Public GRPC URL rows show the live tunnel
+			// status (state + gateway-assigned address) and are navigable so
+			// enter/click copies the raw URL — see updateSettingsNav. Each appears
+			// only once its feature is enabled. The Bearer Token row below copies
+			// the shared secret (~/.fleet/mcp.token) those URLs authenticate with.
+			// Each URL row advertises its copy action inline (matching the copy
+			// rows above) only when there's actually a URL to copy; otherwise the
+			// status value already explains why (e.g. "(not connected)").
 			if config.RemoteMcpSettings.Enabled {
 				listContent.WriteString("\n")
-				row := settingsPage.renderSettingsRow(m, false, "Public MCP URL", remoteMcpStatusValue(m))
-				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(row))
+				mcpValue := remoteMcpStatusValue(m)
+				if remoteMcpPublicURL(m) != "" {
+					mcpValue += "  " + dimStyle.Render("press enter to copy")
+				}
+				recordRow(settingsItemRemoteMcpPublicURL, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteMcpPublicURL, "Public MCP URL", mcpValue))
 			}
 			if config.RemoteMcpSettings.FleetEnabled {
 				listContent.WriteString("\n")
-				row := settingsPage.renderSettingsRow(m, false, "Public GRPC URL", remoteGrpcStatusValue(m))
-				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(row))
+				grpcValue := remoteGrpcStatusValue(m)
+				if remoteGrpcPublicURL(m) != "" {
+					grpcValue += "  " + dimStyle.Render("press enter to copy")
+				}
+				recordRow(settingsItemRemoteGrpcPublicURL, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteGrpcPublicURL, "Public GRPC URL", grpcValue))
+			}
+			if config.RemoteMcpSettings.Enabled || config.RemoteMcpSettings.FleetEnabled {
+				listContent.WriteString("\n")
+				tokenValue := "[ Copy Bearer Token ]  " + dimStyle.Render("press enter to copy the daemon bearer token")
+				recordRow(settingsItemRemoteMcpToken, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteMcpToken, "Bearer Token", tokenValue))
 			}
 
 		case "Fleet Armada":
@@ -1551,6 +1631,12 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 	}
 	if isArmadaRemoteItem(currentItem) && settingsPage.armadaAddStage == armadaAddNone {
 		tail.WriteString(dimStyle.Render("  enter: ping now  right/l: focus [ delete ]  enter twice on [ delete ]: remove"))
+		tail.WriteString("\n")
+	}
+	// Copy rows act on enter (not edit/cycle), so spell that out — the generic
+	// footer's "enter: edit / left/right: cycle" doesn't apply to them.
+	if isCopyRow(currentItem) {
+		tail.WriteString(dimStyle.Render("  enter: copy to clipboard"))
 		tail.WriteString("\n")
 	}
 	if m.message != "" {
