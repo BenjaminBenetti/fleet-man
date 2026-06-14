@@ -114,7 +114,7 @@ func TestNewMCPServerRegistersAllTools(t *testing.T) {
 	want := []string{
 		"fleet_list", "fleet_status", "fleet_version", "fleet_logs",
 		"fleet_up", "fleet_start", "fleet_stop", "fleet_down",
-		"fleet_destroy_fleet", "fleet_clone", "fleet_job_status",
+		"fleet_destroy_fleet", "fleet_clone", "fleet_rebuild", "fleet_job_status",
 		"fleet_exec", "fleet_session_spawn", "fleet_session_exec", "fleet_session_read",
 		"fleet_session_list",
 	}

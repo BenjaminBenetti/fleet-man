@@ -13,6 +13,7 @@ func TestInstanceStatusDisplay(t *testing.T) {
 		InstanceStatus_INSTANCE_STATUS_STOPPING:    "stopping",
 		InstanceStatus_INSTANCE_STATUS_STARTING:    "starting",
 		InstanceStatus_INSTANCE_STATUS_DELETING:    "deleting",
+		InstanceStatus_INSTANCE_STATUS_REBUILDING:  "rebuilding",
 	}
 	for status, want := range cases {
 		if got := status.Display(); got != want {

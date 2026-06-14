@@ -67,20 +67,46 @@ func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string
 	return user
 }
 
-// Up runs `devcontainer up` for the given workspace folder. Any mounts
+// Up provisions a devcontainer for the given workspace folder.
+func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string, mounts []backend.Mount) (*backend.UpResult, error) {
+	return devcontainerBackend.up(workspaceDir, mounts, nil)
+}
+
+// Rebuild recreates the workspace's container in place by re-running
+// `devcontainer up --remove-existing-container`: the existing container is
+// removed and a fresh one is provisioned from the (possibly edited)
+// devcontainer.json / Dockerfile. The host-side workspace bind mount is
+// preserved, so uncommitted work in the checkout survives; the new container
+// gets a new ID, returned in UpResult. containerID is unused — the devcontainer
+// CLI matches the container by workspace-folder label (and up's
+// pruneStaleContainers already drops it), so --remove-existing-container is the
+// belt-and-braces signal of rebuild intent. A future "full" rebuild could add
+// --build-no-cache to force a from-scratch image build.
+func (devcontainerBackend *DevcontainerBackend) Rebuild(_, workspaceDir string, mounts []backend.Mount) (*backend.UpResult, error) {
+	return devcontainerBackend.up(workspaceDir, mounts, []string{"--remove-existing-container"})
+}
+
+// SupportsRebuild reports true: the devcontainer backend can recreate a
+// container in place from its workspace folder.
+func (devcontainerBackend *DevcontainerBackend) SupportsRebuild() bool {
+	return true
+}
+
+// up runs `devcontainer up` for the given workspace folder. Any mounts
 // in the slice are translated into `--mount type=bind,source=L,target=C`
 // flags so they appear inside the container alongside the SSH agent
-// socket and the workspace itself.
+// socket and the workspace itself. extraArgs are passed through verbatim to
+// the `up` subcommand (Rebuild uses it for --remove-existing-container).
 //
 // When the workspace's devcontainer.json declares its own mount at the
 // same container path as one of the fleet-supplied mounts, the user's
 // entry is temporarily stripped from the file before launching the
-// devcontainer CLI and restored once Up returns. Without this, docker
+// devcontainer CLI and restored once up returns. Without this, docker
 // rejects the resulting `docker run` invocation with "Duplicate mount
 // point" and the instance enters StatusFailed. Fleet's mount wins by
 // design — the user's per-fleet agent state should override whatever
 // the repo's devcontainer.json was pointing at.
-func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string, mounts []backend.Mount) (*backend.UpResult, error) {
+func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts []backend.Mount, extraArgs []string) (*backend.UpResult, error) {
 	// Drop any docker container still labelled with this workspace
 	// folder before provisioning. The devcontainer CLI matches existing
 	// containers by `devcontainer.local_folder=<wsDir>` and silently
@@ -114,6 +140,7 @@ func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string, mounts [
 	defer os.RemoveAll(runnerTmp)
 
 	args := []string{"up", "--workspace-folder", workspaceDir}
+	args = append(args, extraArgs...)
 	args, err = devcontainerUpArgs(args)
 	if err != nil {
 		return nil, err

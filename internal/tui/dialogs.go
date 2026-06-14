@@ -67,6 +67,39 @@ func (fleetPage *fleetPage) updateConfirmDelete(m *model, msg tea.Msg) tea.Cmd {
 	return nil
 }
 
+// updateConfirmRebuild handles the instance rebuild confirmation dialog.
+// Rebuild recreates the container in place (preserving the workspace), so it is
+// a single-step confirm — no double warning like fleet delete.
+func (fleetPage *fleetPage) updateConfirmRebuild(m *model, msg tea.Msg) tea.Cmd {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "y", "Y", "enter":
+			// Rebuild runs as a server job. Flip an optimistic in-memory
+			// Rebuilding status for the spinner (NOT persisted — the server owns
+			// the reprovision and the persisted status); operationDoneMsg reload()s
+			// the authoritative result.
+			f, ok := m.st.Fleets[fleetPage.dialogFleet]
+			if ok {
+				instance, err := f.GetInstance(fleetPage.dialogInst)
+				if err == nil {
+					instance.Status = fleet.StatusRebuilding
+					fleetPage.buildRows(m)
+					fleetPage.mode = viewNormal
+					return rebuildInstanceCmd(fleetPage.dialogFleet, fleetPage.dialogInst)
+				}
+			}
+			fleetPage.mode = viewNormal
+
+		case "n", "N", "esc", "q", "Q", "ctrl+c":
+			fleetPage.mode = viewNormal
+			fleetPage.blurDialogFields()
+			m.message = "Cancelled"
+		}
+	}
+	return nil
+}
+
 // updateConfirmDeleteFleetWarn handles the double-confirm dialog for
 // fleets with running instances.
 func (fleetPage *fleetPage) updateConfirmDeleteFleetWarn(m *model, msg tea.Msg) tea.Cmd {

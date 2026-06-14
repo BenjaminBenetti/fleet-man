@@ -276,6 +276,8 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 	switch fleetPage.mode {
 	case viewConfirmDelete:
 		return fleetPage.updateConfirmDelete(m, msg)
+	case viewConfirmRebuild:
+		return fleetPage.updateConfirmRebuild(m, msg)
 	case viewConfirmDeleteFleetWarn:
 		return fleetPage.updateConfirmDeleteFleetWarn(m, msg)
 	case viewAddInstance:
@@ -944,6 +946,30 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.textInput.CharLimit = 64
 			return fleetPage.activateTextInput()
 
+		case "R":
+			_, instance := fleetPage.selectedInstance(m)
+			if instance == nil {
+				m.message = "Select an instance"
+				break
+			}
+			// Coder workspaces have no rebuild primitive; devcontainer ("" defaults
+			// to devcontainer) and codespaces do. Pure check — no backend construction.
+			if instance.Backend == fleet.BackendCoder {
+				m.message = fmt.Sprintf("Rebuild not supported by %s backend", instance.Backend)
+				break
+			}
+			if isTransitional(instance.Status) {
+				m.message = fmt.Sprintf("Instance %s/%s is %s", fleetPage.currentFleetName(), instance.Name, instance.Status)
+				break
+			}
+			if instance.ContainerID == "" {
+				m.message = "Instance has not finished provisioning; nothing to rebuild yet"
+				break
+			}
+			fleetPage.mode = viewConfirmRebuild
+			fleetPage.dialogFleet = fleetPage.currentFleetName()
+			fleetPage.dialogInst = instance.Name
+
 		case "b":
 			_, instance := fleetPage.selectedInstance(m)
 			if instance == nil {
@@ -1240,13 +1266,13 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 				keys = append(keys,
 					"space: show sessions", "enter: open shell", "e: edit",
 					"s: stop", "a: new session", "d: delete", "t: tag",
-					"p: port-forward", "b: browser", "c: code", "C: clone", "o: terminal", "l: logs",
+					"p: port-forward", "b: browser", "c: code", "C: clone", "R: rebuild", "o: terminal", "l: logs",
 					"r: refresh", "q: quit",
 				)
 			case r.instance.Status == fleet.StatusStopped:
 				keys = append(keys,
 					"enter: open shell", "e: edit", "s: start",
-					"a: new session", "d: delete", "t: tag", "r: refresh", "q: quit",
+					"a: new session", "d: delete", "t: tag", "R: rebuild", "r: refresh", "q: quit",
 				)
 			case r.instance.Status == fleet.StatusFailed:
 				keys = append(keys, "d: delete", "r: refresh", "q: quit")
@@ -1630,6 +1656,18 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 		dialog := fmt.Sprintf(
 			"%s\n\n%s\n\n%s",
 			dialogTitle.Render(title),
+			dialogLabel.Render(body),
+			dialogHint.Render("[y] Yes  [n/q/esc] No"),
+		)
+		b.WriteString(dialogBox.Render(dialog))
+		b.WriteString("\n")
+
+	case viewConfirmRebuild:
+		b.WriteString("\n")
+		body := fmt.Sprintf("Rebuild %s/%s? This recreates the container from its devcontainer config. Your workspace — the git checkout and any uncommitted changes — is preserved.", fleetPage.dialogFleet, fleetPage.dialogInst)
+		dialog := fmt.Sprintf(
+			"%s\n\n%s\n\n%s",
+			dialogTitle.Render("Rebuild instance"),
 			dialogLabel.Render(body),
 			dialogHint.Render("[y] Yes  [n/q/esc] No"),
 		)

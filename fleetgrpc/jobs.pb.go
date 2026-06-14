@@ -33,6 +33,7 @@ const (
 	JobKind_JOB_KIND_START_INSTANCE   JobKind = 3
 	JobKind_JOB_KIND_STOP_INSTANCE    JobKind = 4
 	JobKind_JOB_KIND_CLONE_INSTANCE   JobKind = 5
+	JobKind_JOB_KIND_REBUILD_INSTANCE JobKind = 6
 )
 
 // Enum value maps for JobKind.
@@ -44,6 +45,7 @@ var (
 		3: "JOB_KIND_START_INSTANCE",
 		4: "JOB_KIND_STOP_INSTANCE",
 		5: "JOB_KIND_CLONE_INSTANCE",
+		6: "JOB_KIND_REBUILD_INSTANCE",
 	}
 	JobKind_value = map[string]int32{
 		"JOB_KIND_UNSPECIFIED":      0,
@@ -52,6 +54,7 @@ var (
 		"JOB_KIND_START_INSTANCE":   3,
 		"JOB_KIND_STOP_INSTANCE":    4,
 		"JOB_KIND_CLONE_INSTANCE":   5,
+		"JOB_KIND_REBUILD_INSTANCE": 6,
 	}
 )
 
@@ -968,6 +971,67 @@ func (x *StartInstanceRequest) GetInstance() string {
 	return ""
 }
 
+// RebuildInstanceRequest recreates one instance's container in place. The
+// backend tears down and reprovisions the container (devcontainer: `devcontainer
+// up --remove-existing-container`; codespaces: `gh codespace rebuild`) while
+// PRESERVING the workspace — the git checkout, uncommitted edits, and mounted
+// state survive. Fleet then re-runs the post-Up provisioning (fleet-launch
+// staging, dotfiles, startup scripts, Claude hooks) so the fresh container is
+// equivalent to a freshly created one. Backends whose runtime has no rebuild
+// primitive (coder) reject the job. Unlike destroy, the record is kept and
+// flips back to RUNNING (or FAILED) on completion.
+type RebuildInstanceRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Fleet         string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	Instance      string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RebuildInstanceRequest) Reset() {
+	*x = RebuildInstanceRequest{}
+	mi := &file_jobs_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RebuildInstanceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RebuildInstanceRequest) ProtoMessage() {}
+
+func (x *RebuildInstanceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_jobs_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RebuildInstanceRequest.ProtoReflect.Descriptor instead.
+func (*RebuildInstanceRequest) Descriptor() ([]byte, []int) {
+	return file_jobs_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RebuildInstanceRequest) GetFleet() string {
+	if x != nil {
+		return x.Fleet
+	}
+	return ""
+}
+
+func (x *RebuildInstanceRequest) GetInstance() string {
+	if x != nil {
+		return x.Instance
+	}
+	return ""
+}
+
 type StopInstanceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Fleet         string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
@@ -978,7 +1042,7 @@ type StopInstanceRequest struct {
 
 func (x *StopInstanceRequest) Reset() {
 	*x = StopInstanceRequest{}
-	mi := &file_jobs_proto_msgTypes[9]
+	mi := &file_jobs_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -990,7 +1054,7 @@ func (x *StopInstanceRequest) String() string {
 func (*StopInstanceRequest) ProtoMessage() {}
 
 func (x *StopInstanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_jobs_proto_msgTypes[9]
+	mi := &file_jobs_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1003,7 +1067,7 @@ func (x *StopInstanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopInstanceRequest.ProtoReflect.Descriptor instead.
 func (*StopInstanceRequest) Descriptor() ([]byte, []int) {
-	return file_jobs_proto_rawDescGZIP(), []int{9}
+	return file_jobs_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *StopInstanceRequest) GetFleet() string {
@@ -1043,7 +1107,7 @@ type CloneInstanceRequest struct {
 
 func (x *CloneInstanceRequest) Reset() {
 	*x = CloneInstanceRequest{}
-	mi := &file_jobs_proto_msgTypes[10]
+	mi := &file_jobs_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1055,7 +1119,7 @@ func (x *CloneInstanceRequest) String() string {
 func (*CloneInstanceRequest) ProtoMessage() {}
 
 func (x *CloneInstanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_jobs_proto_msgTypes[10]
+	mi := &file_jobs_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1068,7 +1132,7 @@ func (x *CloneInstanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloneInstanceRequest.ProtoReflect.Descriptor instead.
 func (*CloneInstanceRequest) Descriptor() ([]byte, []int) {
-	return file_jobs_proto_rawDescGZIP(), []int{10}
+	return file_jobs_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *CloneInstanceRequest) GetFleet() string {
@@ -1184,6 +1248,9 @@ const file_jobs_proto_rawDesc = "" +
 	"\t_instance\"H\n" +
 	"\x14StartInstanceRequest\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
+	"\binstance\x18\x02 \x01(\tR\binstance\"J\n" +
+	"\x16RebuildInstanceRequest\x12\x14\n" +
+	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\"G\n" +
 	"\x13StopInstanceRequest\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
@@ -1199,14 +1266,15 @@ const file_jobs_proto_rawDesc = "" +
 	"\x11_new_display_nameB\x0f\n" +
 	"\r_tag_overrideB\x11\n" +
 	"\x0f_color_overrideB\x12\n" +
-	"\x10_branch_override*\xb6\x01\n" +
+	"\x10_branch_override*\xd5\x01\n" +
 	"\aJobKind\x12\x18\n" +
 	"\x14JOB_KIND_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18JOB_KIND_CREATE_INSTANCE\x10\x01\x12\x1d\n" +
 	"\x19JOB_KIND_DESTROY_INSTANCE\x10\x02\x12\x1b\n" +
 	"\x17JOB_KIND_START_INSTANCE\x10\x03\x12\x1a\n" +
 	"\x16JOB_KIND_STOP_INSTANCE\x10\x04\x12\x1b\n" +
-	"\x17JOB_KIND_CLONE_INSTANCE\x10\x05*\xca\x04\n" +
+	"\x17JOB_KIND_CLONE_INSTANCE\x10\x05\x12\x1d\n" +
+	"\x19JOB_KIND_REBUILD_INSTANCE\x10\x06*\xca\x04\n" +
 	"\aJobStep\x12\x18\n" +
 	"\x14JOB_STEP_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19JOB_STEP_VALIDATE_BACKEND\x10\x01\x12\x1a\n" +
@@ -1248,7 +1316,7 @@ func file_jobs_proto_rawDescGZIP() []byte {
 }
 
 var file_jobs_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_jobs_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_jobs_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_jobs_proto_goTypes = []any{
 	(JobKind)(0),                   // 0: fleetgrpc.JobKind
 	(JobStep)(0),                   // 1: fleetgrpc.JobStep
@@ -1262,27 +1330,28 @@ var file_jobs_proto_goTypes = []any{
 	(*CreateInstanceRequest)(nil),  // 9: fleetgrpc.CreateInstanceRequest
 	(*DestroyInstanceRequest)(nil), // 10: fleetgrpc.DestroyInstanceRequest
 	(*StartInstanceRequest)(nil),   // 11: fleetgrpc.StartInstanceRequest
-	(*StopInstanceRequest)(nil),    // 12: fleetgrpc.StopInstanceRequest
-	(*CloneInstanceRequest)(nil),   // 13: fleetgrpc.CloneInstanceRequest
-	(*timestamppb.Timestamp)(nil),  // 14: google.protobuf.Timestamp
-	(*Instance)(nil),               // 15: fleetgrpc.Instance
-	(BackendType)(0),               // 16: fleetgrpc.BackendType
+	(*RebuildInstanceRequest)(nil), // 12: fleetgrpc.RebuildInstanceRequest
+	(*StopInstanceRequest)(nil),    // 13: fleetgrpc.StopInstanceRequest
+	(*CloneInstanceRequest)(nil),   // 14: fleetgrpc.CloneInstanceRequest
+	(*timestamppb.Timestamp)(nil),  // 15: google.protobuf.Timestamp
+	(*Instance)(nil),               // 16: fleetgrpc.Instance
+	(BackendType)(0),               // 17: fleetgrpc.BackendType
 }
 var file_jobs_proto_depIdxs = []int32{
 	0,  // 0: fleetgrpc.JobSummary.kind:type_name -> fleetgrpc.JobKind
 	1,  // 1: fleetgrpc.JobSummary.current_step:type_name -> fleetgrpc.JobStep
-	14, // 2: fleetgrpc.JobSummary.started_at:type_name -> google.protobuf.Timestamp
+	15, // 2: fleetgrpc.JobSummary.started_at:type_name -> google.protobuf.Timestamp
 	5,  // 3: fleetgrpc.JobEvent.started:type_name -> fleetgrpc.JobStarted
 	6,  // 4: fleetgrpc.JobEvent.progress:type_name -> fleetgrpc.JobProgress
 	7,  // 5: fleetgrpc.JobEvent.log:type_name -> fleetgrpc.JobLog
 	8,  // 6: fleetgrpc.JobEvent.done:type_name -> fleetgrpc.JobDone
 	0,  // 7: fleetgrpc.JobStarted.kind:type_name -> fleetgrpc.JobKind
-	14, // 8: fleetgrpc.JobStarted.started_at:type_name -> google.protobuf.Timestamp
+	15, // 8: fleetgrpc.JobStarted.started_at:type_name -> google.protobuf.Timestamp
 	1,  // 9: fleetgrpc.JobProgress.step:type_name -> fleetgrpc.JobStep
 	2,  // 10: fleetgrpc.JobLog.level:type_name -> fleetgrpc.LogLevel
-	14, // 11: fleetgrpc.JobLog.at:type_name -> google.protobuf.Timestamp
-	15, // 12: fleetgrpc.JobDone.instance:type_name -> fleetgrpc.Instance
-	16, // 13: fleetgrpc.CreateInstanceRequest.backend:type_name -> fleetgrpc.BackendType
+	15, // 11: fleetgrpc.JobLog.at:type_name -> google.protobuf.Timestamp
+	16, // 12: fleetgrpc.JobDone.instance:type_name -> fleetgrpc.Instance
+	17, // 13: fleetgrpc.CreateInstanceRequest.backend:type_name -> fleetgrpc.BackendType
 	14, // [14:14] is the sub-list for method output_type
 	14, // [14:14] is the sub-list for method input_type
 	14, // [14:14] is the sub-list for extension type_name
@@ -1306,14 +1375,14 @@ func file_jobs_proto_init() {
 	file_jobs_proto_msgTypes[5].OneofWrappers = []any{}
 	file_jobs_proto_msgTypes[6].OneofWrappers = []any{}
 	file_jobs_proto_msgTypes[7].OneofWrappers = []any{}
-	file_jobs_proto_msgTypes[10].OneofWrappers = []any{}
+	file_jobs_proto_msgTypes[11].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_jobs_proto_rawDesc), len(file_jobs_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

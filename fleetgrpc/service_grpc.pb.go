@@ -29,6 +29,7 @@ const (
 	FleetService_StartInstance_FullMethodName          = "/fleetgrpc.FleetService/StartInstance"
 	FleetService_StopInstance_FullMethodName           = "/fleetgrpc.FleetService/StopInstance"
 	FleetService_CloneInstance_FullMethodName          = "/fleetgrpc.FleetService/CloneInstance"
+	FleetService_RebuildInstance_FullMethodName        = "/fleetgrpc.FleetService/RebuildInstance"
 	FleetService_CreateFleet_FullMethodName            = "/fleetgrpc.FleetService/CreateFleet"
 	FleetService_DestroyFleet_FullMethodName           = "/fleetgrpc.FleetService/DestroyFleet"
 	FleetService_SetFleetSettings_FullMethodName       = "/fleetgrpc.FleetService/SetFleetSettings"
@@ -86,6 +87,7 @@ type FleetServiceClient interface {
 	StartInstance(ctx context.Context, in *StartInstanceRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[JobEvent], error)
 	StopInstance(ctx context.Context, in *StopInstanceRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[JobEvent], error)
 	CloneInstance(ctx context.Context, in *CloneInstanceRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[JobEvent], error)
+	RebuildInstance(ctx context.Context, in *RebuildInstanceRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[JobEvent], error)
 	// ---- Synchronous (non-job) state mutations ----
 	CreateFleet(ctx context.Context, in *CreateFleetRequest, opts ...grpc.CallOption) (*MutationReply, error)
 	DestroyFleet(ctx context.Context, in *DestroyFleetRequest, opts ...grpc.CallOption) (*MutationReply, error)
@@ -300,6 +302,25 @@ func (c *fleetServiceClient) CloneInstance(ctx context.Context, in *CloneInstanc
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_CloneInstanceClient = grpc.ServerStreamingClient[JobEvent]
 
+func (c *fleetServiceClient) RebuildInstance(ctx context.Context, in *RebuildInstanceRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[JobEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[6], FleetService_RebuildInstance_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[RebuildInstanceRequest, JobEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_RebuildInstanceClient = grpc.ServerStreamingClient[JobEvent]
+
 func (c *fleetServiceClient) CreateFleet(ctx context.Context, in *CreateFleetRequest, opts ...grpc.CallOption) (*MutationReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MutationReply)
@@ -442,7 +463,7 @@ func (c *fleetServiceClient) SetArmada(ctx context.Context, in *SetArmadaRequest
 
 func (c *fleetServiceClient) Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecIn, ExecOut], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[6], FleetService_Exec_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[7], FleetService_Exec_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -475,7 +496,7 @@ func (c *fleetServiceClient) ResolveLogsCommand(ctx context.Context, in *Resolve
 
 func (c *fleetServiceClient) Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[7], FleetService_Logs_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[8], FleetService_Logs_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -494,7 +515,7 @@ type FleetService_LogsClient = grpc.ServerStreamingClient[LogLine]
 
 func (c *fleetServiceClient) Forward(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardChunk, ForwardChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[8], FleetService_Forward_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[9], FleetService_Forward_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -507,7 +528,7 @@ type FleetService_ForwardClient = grpc.BidiStreamingClient[ForwardChunk, Forward
 
 func (c *fleetServiceClient) CopyFile(ctx context.Context, in *CopyFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CopyFileChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[9], FleetService_CopyFile_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[10], FleetService_CopyFile_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -595,6 +616,7 @@ type FleetServiceServer interface {
 	StartInstance(*StartInstanceRequest, grpc.ServerStreamingServer[JobEvent]) error
 	StopInstance(*StopInstanceRequest, grpc.ServerStreamingServer[JobEvent]) error
 	CloneInstance(*CloneInstanceRequest, grpc.ServerStreamingServer[JobEvent]) error
+	RebuildInstance(*RebuildInstanceRequest, grpc.ServerStreamingServer[JobEvent]) error
 	// ---- Synchronous (non-job) state mutations ----
 	CreateFleet(context.Context, *CreateFleetRequest) (*MutationReply, error)
 	DestroyFleet(context.Context, *DestroyFleetRequest) (*MutationReply, error)
@@ -684,6 +706,9 @@ func (UnimplementedFleetServiceServer) StopInstance(*StopInstanceRequest, grpc.S
 }
 func (UnimplementedFleetServiceServer) CloneInstance(*CloneInstanceRequest, grpc.ServerStreamingServer[JobEvent]) error {
 	return status.Errorf(codes.Unimplemented, "method CloneInstance not implemented")
+}
+func (UnimplementedFleetServiceServer) RebuildInstance(*RebuildInstanceRequest, grpc.ServerStreamingServer[JobEvent]) error {
+	return status.Errorf(codes.Unimplemented, "method RebuildInstance not implemented")
 }
 func (UnimplementedFleetServiceServer) CreateFleet(context.Context, *CreateFleetRequest) (*MutationReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateFleet not implemented")
@@ -915,6 +940,17 @@ func _FleetService_CloneInstance_Handler(srv interface{}, stream grpc.ServerStre
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_CloneInstanceServer = grpc.ServerStreamingServer[JobEvent]
+
+func _FleetService_RebuildInstance_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(RebuildInstanceRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FleetServiceServer).RebuildInstance(m, &grpc.GenericServerStream[RebuildInstanceRequest, JobEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_RebuildInstanceServer = grpc.ServerStreamingServer[JobEvent]
 
 func _FleetService_CreateFleet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateFleetRequest)
@@ -1445,6 +1481,11 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "CloneInstance",
 			Handler:       _FleetService_CloneInstance_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "RebuildInstance",
+			Handler:       _FleetService_RebuildInstance_Handler,
 			ServerStreams: true,
 		},
 		{

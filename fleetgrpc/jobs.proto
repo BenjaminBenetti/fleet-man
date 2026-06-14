@@ -20,6 +20,7 @@ enum JobKind {
   JOB_KIND_START_INSTANCE = 3;
   JOB_KIND_STOP_INSTANCE = 4;
   JOB_KIND_CLONE_INSTANCE = 5;
+  JOB_KIND_REBUILD_INSTANCE = 6;
 }
 
 // JobStep enumerates the discrete provisioning/lifecycle steps (create.Run /
@@ -173,6 +174,20 @@ message DestroyInstanceRequest {
 }
 
 message StartInstanceRequest {
+  string fleet = 1;
+  string instance = 2;
+}
+
+// RebuildInstanceRequest recreates one instance's container in place. The
+// backend tears down and reprovisions the container (devcontainer: `devcontainer
+// up --remove-existing-container`; codespaces: `gh codespace rebuild`) while
+// PRESERVING the workspace — the git checkout, uncommitted edits, and mounted
+// state survive. Fleet then re-runs the post-Up provisioning (fleet-launch
+// staging, dotfiles, startup scripts, Claude hooks) so the fresh container is
+// equivalent to a freshly created one. Backends whose runtime has no rebuild
+// primitive (coder) reject the job. Unlike destroy, the record is kept and
+// flips back to RUNNING (or FAILED) on completion.
+message RebuildInstanceRequest {
   string fleet = 1;
   string instance = 2;
 }

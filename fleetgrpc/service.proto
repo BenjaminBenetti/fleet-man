@@ -47,6 +47,7 @@ service FleetService {
   rpc StartInstance(StartInstanceRequest) returns (stream JobEvent);
   rpc StopInstance(StopInstanceRequest) returns (stream JobEvent);
   rpc CloneInstance(CloneInstanceRequest) returns (stream JobEvent);
+  rpc RebuildInstance(RebuildInstanceRequest) returns (stream JobEvent);
 
   // ---- Synchronous (non-job) state mutations ----
   rpc CreateFleet(CreateFleetRequest) returns (MutationReply);

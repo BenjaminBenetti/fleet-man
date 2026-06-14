@@ -120,6 +120,8 @@ func renderStatus(s fleet.InstanceStatus) string {
 		return statusCreatingStyle.Render("starting")
 	case fleet.StatusDeleting:
 		return statusCreatingStyle.Render("deleting")
+	case fleet.StatusRebuilding:
+		return statusCreatingStyle.Render("rebuilding")
 	case fleet.StatusFailed:
 		return errorStyle.Render("failed")
 	default:
@@ -131,7 +133,7 @@ func renderStatus(s fleet.InstanceStatus) string {
 // background operation (shown with a spinner on the instance row).
 func isTransitional(s fleet.InstanceStatus) bool {
 	switch s {
-	case fleet.StatusCreating, fleet.StatusCloning, fleet.StatusStopping, fleet.StatusStarting, fleet.StatusDeleting:
+	case fleet.StatusCreating, fleet.StatusCloning, fleet.StatusStopping, fleet.StatusStarting, fleet.StatusDeleting, fleet.StatusRebuilding:
 		return true
 	}
 	return false

@@ -39,6 +39,30 @@ type Backend interface {
 	// primitives live outside fleet-man's control.
 	SupportsClone() bool
 
+	// Rebuild tears down the instance's existing container and provisions a
+	// fresh one in place, PRESERVING the workspace: the host-side bind mount
+	// (devcontainer) or the codespace's persisted code survives, so uncommitted
+	// edits are not lost. It is the way to pick up an edited devcontainer.json /
+	// Dockerfile without recreating the instance from scratch.
+	//
+	// containerID identifies the existing container/workspace (the codespace
+	// name for the codespaces backend; unused by devcontainer, which matches by
+	// workspace-folder label). mounts carry the same caller-supplied bind mounts
+	// as Up and must be re-applied so the rebuilt container keeps its control
+	// socket / shared-cache / agent-state mounts; backends returning false from
+	// SupportsCustomMounts ignore them.
+	//
+	// Returns the same UpResult shape as Up so callers can persist the new
+	// ContainerID (it CHANGES for devcontainer; it is stable for codespaces).
+	// Backends that cannot rebuild return false from SupportsRebuild and an
+	// error from Rebuild.
+	Rebuild(containerID, workspaceDir string, mounts []Mount) (*UpResult, error)
+
+	// SupportsRebuild reports whether this backend implements Rebuild. Callers
+	// should check this before offering a rebuild action; managed backends whose
+	// runtime exposes no rebuild primitive (coder) report false.
+	SupportsRebuild() bool
+
 	// Down stops and removes a container permanently.
 	Down(containerID string) error
 
