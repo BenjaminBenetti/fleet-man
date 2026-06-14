@@ -115,6 +115,14 @@ type model struct {
 	// across instances that share a session or group name.
 	sessionStore *SessionStore
 
+	// recentGroupLayouts stamps group-layout keys recorded ahead of session
+	// discovery (a group minted from a layout preset records its layout the
+	// moment the sessions are created, up to ~1s before the server's session
+	// poll sees them). pruneSavedGroupsForInstance skips keys younger than
+	// the grace window so a runtime push from that gap cannot delete the
+	// just-recorded layout as "not live".
+	recentGroupLayouts map[string]time.Time
+
 	// Split pane mode: when fleet runs inside a host tmux session,
 	// pressing enter opens the instance shell in a right-side pane
 	// instead of suspending the TUI.
@@ -171,18 +179,19 @@ func newModel() model {
 	agentSpinnerModel.Style = agentWorkingStyle
 
 	m := model{
-		creating:      make(map[string]bool),
-		runtime:       make(map[string]*fleetgrpc.InstanceRuntime),
-		portForwards:  portforward.NewManager(),
-		activeBrowser: make(map[string]string),
-		sessionStore:  NewSessionStore(),
-		spinner:       spinnerModel,
-		agentSpinner:  agentSpinnerModel,
-		inHostTmux:    os.Getenv("TMUX") != "",
-		armadaStatus:  make(map[string]armadaStatus),
-		bootGateway:   os.Getenv("FLEET_GATEWAY"),
-		bootToken:     os.Getenv("FLEET_TOKEN"),
-		bootServer:    os.Getenv("FLEET_SERVER"),
+		creating:           make(map[string]bool),
+		runtime:            make(map[string]*fleetgrpc.InstanceRuntime),
+		portForwards:       portforward.NewManager(),
+		activeBrowser:      make(map[string]string),
+		sessionStore:       NewSessionStore(),
+		recentGroupLayouts: make(map[string]time.Time),
+		spinner:            spinnerModel,
+		agentSpinner:       agentSpinnerModel,
+		inHostTmux:         os.Getenv("TMUX") != "",
+		armadaStatus:       make(map[string]armadaStatus),
+		bootGateway:        os.Getenv("FLEET_GATEWAY"),
+		bootToken:          os.Getenv("FLEET_TOKEN"),
+		bootServer:         os.Getenv("FLEET_SERVER"),
 	}
 
 	// Create the fleet page (persistent — background handlers reference it)
@@ -346,12 +355,58 @@ func (m *model) pruneSavedGroupsForInstance(ref InstanceRef) {
 		if savedLayout.InstanceName != ref.Instance {
 			continue
 		}
+		// A layout recorded moments ago (preset-backed creation) may predate
+		// the discovery snapshot that is about to judge it; give the server's
+		// session poll time to catch up before treating it as dead.
+		if recordedAt, ok := m.recentGroupLayouts[key]; ok {
+			if time.Since(recordedAt) < groupLayoutPruneGrace {
+				continue
+			}
+			delete(m.recentGroupLayouts, key)
+		}
 		if !live[savedLayout.GroupID] {
 			delete(m.fleetPage.savedGroups, key)
 			delete(m.st.GroupLayouts, key)
 			_ = deleteGroupLayoutRemote(savedLayout.InstanceName, savedLayout.GroupID)
 		}
 	}
+}
+
+// groupLayoutPruneGrace is how long a freshly recorded group layout is immune
+// from pruning while the server's ~1s session poll catches up to sessions the
+// TUI just created.
+const groupLayoutPruneGrace = 15 * time.Second
+
+// recordPresetGroupLayout persists the saved-group snapshot for a group just
+// minted from a layout preset — the same bookkeeping saveCurrentGroupLayout
+// does for a live split — so opening the new session restores the preset's
+// pane geometry and session-to-pane mapping.
+func (m *model) recordPresetGroupLayout(msg presetSessionsCreatedMsg) {
+	key := computeGroupKey(msg.ref.Instance, msg.groupID)
+	m.fleetPage.savedGroups[key] = savedGroup{
+		GroupID:      msg.groupID,
+		InstanceName: msg.ref.Instance,
+		Sessions:     msg.sessions,
+		Layout:       msg.layout,
+		PaneCount:    len(msg.sessions),
+	}
+	m.recentGroupLayouts[key] = time.Now()
+
+	if m.st == nil {
+		return
+	}
+	if m.st.GroupLayouts == nil {
+		m.st.GroupLayouts = make(map[string]configutil.GroupLayout)
+	}
+	layout := configutil.GroupLayout{
+		GroupID:      msg.groupID,
+		InstanceName: msg.ref.Instance,
+		Sessions:     msg.sessions,
+		Layout:       msg.layout,
+		PaneCount:    len(msg.sessions),
+	}
+	m.st.GroupLayouts[key] = layout
+	_ = setGroupLayoutRemote(layout)
 }
 
 // migrateRenamedSession rewrites the in-memory references that pointed at a
@@ -1002,6 +1057,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// The new session appears on the next ~1s runtime tick; nudge from the
 		// current runtime cache so the list reflects what's already known.
+		m.refreshSessionsFromRuntime(msg.ref)
+
+	case presetSessionsCreatedMsg:
+		if msg.err != nil {
+			m.message = fmt.Sprintf("Failed to create session: %v", msg.err)
+		} else {
+			m.message = fmt.Sprintf("Session %s created (%s)", msg.groupID, paneCountLabel(len(msg.sessions)))
+			m.recordPresetGroupLayout(msg)
+		}
 		m.refreshSessionsFromRuntime(msg.ref)
 
 	case sessionRenamedMsg:

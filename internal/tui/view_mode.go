@@ -25,6 +25,7 @@ const (
 	viewCodespacesLimit
 	viewCodespacesMachine
 	viewCreateSession
+	viewLayoutPreset
 	viewRenameSession
 	viewConfirmDeleteSession
 	viewConfirmBrowserSwitch

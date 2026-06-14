@@ -106,6 +106,14 @@ type FleetSettings struct {
 	// back to "/home/vscode" if it stays empty at provisioning time.
 	HomeDir string `json:"homeDir,omitempty"`
 
+	// LayoutPresets is the fleet's list of saved session-layout templates
+	// (issue #150). Each preset pairs a captured outer-tmux pane layout with
+	// per-pane startup commands; the new-session dialog Tab-cycles them and
+	// applies the selection at creation time. Entries are validated/normalized
+	// (see NormalizeLayoutPresets) before persisting. Empty (the default)
+	// means no presets.
+	LayoutPresets []LayoutPreset `json:"layoutPresets,omitempty"`
+
 	// PreferFleetLaunch controls which page the built-in browser opens to
 	// when a workspace's devcontainer.json configures BOTH a
 	// customizations.fleet.browser.initialUrl AND a fleetLaunch block.

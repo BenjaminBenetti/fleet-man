@@ -130,6 +130,13 @@ func (s *service) SetFleetSettings(_ context.Context, req *fleetgrpc.SetFleetSet
 		return nil, status.Errorf(codes.InvalidArgument, "invalid custom mount: %v", err)
 	}
 	settings.CustomMounts = normalizedMounts
+	// Same trust boundary for layout presets: reject empty/duplicate names and
+	// pane-less presets here so a malformed list never reaches state.json.
+	normalizedPresets, err := fleet.NormalizeLayoutPresets(settings.LayoutPresets)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid layout preset: %v", err)
+	}
+	settings.LayoutPresets = normalizedPresets
 
 	snapshot, err := s.mutate(func(st *state.State) error {
 		f, ok := st.Fleets[req.GetFleet()]
@@ -261,10 +268,28 @@ func protoFleetSettingsToLegacy(ps *fleetgrpc.FleetSettings) fleet.FleetSettings
 	s.CustomMounts = ps.GetCustomMounts()
 	s.DebCacheServer = ps.GetDebCacheServer()
 	s.ImageCacheServer = ps.GetImageCacheServer()
+	s.LayoutPresets = protoLayoutPresetsToLegacy(ps.GetLayoutPresets())
 	s.HomeDir = ps.GetHomeDir()
 	if ps.PreferFleetLaunch != nil {
 		v := ps.GetPreferFleetLaunch()
 		s.PreferFleetLaunch = &v
 	}
 	return s
+}
+
+// protoLayoutPresetsToLegacy maps the repeated proto LayoutPreset back to the
+// legacy slice (nil for an empty list, matching the `,omitempty` JSON tag).
+func protoLayoutPresetsToLegacy(in []*fleetgrpc.LayoutPreset) []fleet.LayoutPreset {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]fleet.LayoutPreset, 0, len(in))
+	for _, p := range in {
+		out = append(out, fleet.LayoutPreset{
+			Name:         p.GetName(),
+			Layout:       p.GetLayout(),
+			PaneCommands: p.GetPaneCommands(),
+		})
+	}
+	return out
 }

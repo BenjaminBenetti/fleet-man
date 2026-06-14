@@ -958,6 +958,140 @@ func TestEditFleetDeleteCacheButtonFlow(t *testing.T) {
 	}
 }
 
+// navigateToFirstPresetRow opens the Layouts section and lands the cursor on
+// the first existing preset row.
+func navigateToFirstPresetRow(t *testing.T, fp *fleetPage, m *model) {
+	t.Helper()
+	guard := 0
+	for fp.dialogRow != editFleetRowLayouts {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
+		if guard++; guard > 20 {
+			t.Fatal("never reached Layouts header")
+		}
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // expand
+	if !fp.dialogLayoutsExpanded {
+		t.Fatal("Layouts section should expand on l")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown}) // into the first preset row
+	if fp.dialogRow != editFleetRowLayoutPresetBase {
+		t.Fatalf("dialogRow = %d, want first preset row", fp.dialogRow)
+	}
+}
+
+// TestEditFleetPresetRemoveButtonFlow verifies the [remove] button on a preset
+// row behaves like the Caching [Delete cache] button: dim until the →/l
+// sub-cursor lands on it, Enter there arms a confirm, and a second Enter
+// removes — so selecting the row alone never looks armed.
+func TestEditFleetPresetRemoveButtonFlow(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	f := &fleet.Fleet{Name: "alpha", Settings: fleet.FleetSettings{
+		LayoutPresets: []fleet.LayoutPreset{{Name: "app-run", PaneCommands: []string{"htop"}}},
+	}}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToFirstPresetRow(t, fp, m)
+
+	// Selecting the row must NOT focus (or arm) the remove button.
+	if fp.dialogPresetRemoveFocused {
+		t.Fatal("remove button should not be focused just by selecting the row")
+	}
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // → focus the button
+	if !fp.dialogPresetRemoveFocused {
+		t.Fatal("l should focus the remove button")
+	}
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // first enter: arm
+	if !fp.dialogPresetRemoveConfirm {
+		t.Fatal("first enter on the remove button should arm the confirm")
+	}
+	if len(fp.dialogLayoutPresets) != 1 {
+		t.Fatalf("preset removed before confirm: %d", len(fp.dialogLayoutPresets))
+	}
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // second enter: remove
+	if len(fp.dialogLayoutPresets) != 0 {
+		t.Fatalf("preset not removed after confirm: %d", len(fp.dialogLayoutPresets))
+	}
+}
+
+// TestEditFleetPresetRowEnterEdits verifies Enter on a preset row (sub-cursor
+// not on [remove]) opens the editor, and ←/h clears the remove sub-cursor.
+func TestEditFleetPresetRowEnterEdits(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	f := &fleet.Fleet{Name: "alpha", Settings: fleet.FleetSettings{
+		LayoutPresets: []fleet.LayoutPreset{{Name: "app-run", PaneCommands: []string{"htop"}}},
+	}}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToFirstPresetRow(t, fp, m)
+
+	// → then ← clears the sub-cursor back to the row.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if fp.dialogPresetRemoveFocused {
+		t.Fatal("h should clear the remove sub-cursor")
+	}
+
+	// Enter on the row (not the button) opens the editor.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if fp.mode != viewLayoutPreset || fp.lpFlow == nil {
+		t.Fatalf("enter on the preset row should open the editor; mode=%v lpFlow=%v", fp.mode, fp.lpFlow)
+	}
+}
+
+// TestCreateSessionBlankNameWithTemplateUsesTemplateName verifies that creating
+// a session from a selected template with no name typed defaults the session
+// name to the template's name (not the generic "session-N").
+func TestCreateSessionBlankNameWithTemplateUsesTemplateName(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{{Name: "i1"}}}
+	fp := newFleetPage()
+	fp.dialogFleet = "alpha"
+	fp.dialogInst = "i1"
+	fp.dialogPresets = []fleet.LayoutPreset{{Name: "app-run", PaneCommands: []string{"htop", "top"}}}
+	fp.dialogPresetIdx = 0
+	fp.textInput.SetValue("") // no name entered
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp, sessionStore: NewSessionStore()}
+
+	cmd := fp.saveCreateSession(m)
+	if cmd == nil {
+		t.Fatal("expected a create command")
+	}
+	if !strings.Contains(m.message, "app-run") || strings.Contains(m.message, "session-") {
+		t.Fatalf("blank name with a template should default to the template name; message=%q", m.message)
+	}
+}
+
+// TestCreateSessionBlankNameNoTemplateAutoNames verifies the existing behavior
+// is unchanged when no template is selected: a blank name auto-generates one.
+func TestCreateSessionBlankNameNoTemplateAutoNames(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{{Name: "i1"}}}
+	fp := newFleetPage()
+	fp.dialogFleet = "alpha"
+	fp.dialogInst = "i1"
+	fp.dialogPresetIdx = -1 // no template selected
+	fp.textInput.SetValue("")
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp, sessionStore: NewSessionStore()}
+
+	fp.saveCreateSession(m)
+	if !strings.Contains(m.message, "session-") {
+		t.Fatalf("blank name without a template should auto-name; message=%q", m.message)
+	}
+}
+
 // TestEditFleetDeleteCacheError surfaces the failure path: a failed wipe clears
 // the in-flight flag and reports the error to the user.
 func TestEditFleetDeleteCacheError(t *testing.T) {
