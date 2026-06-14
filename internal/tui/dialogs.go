@@ -2309,8 +2309,20 @@ func (fleetPage *fleetPage) updateCreateSession(m *model, msg tea.Msg) tea.Cmd {
 func (fleetPage *fleetPage) saveCreateSession(m *model) tea.Cmd {
 	name := strings.TrimSpace(fleetPage.textInput.Value())
 	ref := InstanceRef{Fleet: fleetPage.dialogFleet, Instance: fleetPage.dialogInst}
+
+	// Resolve the Tab-selected template (if any) up front so an empty name can
+	// default to the template's name rather than the generic "session-N".
+	var preset *fleet.LayoutPreset
+	if fleetPage.dialogPresetIdx >= 0 && fleetPage.dialogPresetIdx < len(fleetPage.dialogPresets) {
+		preset = &fleetPage.dialogPresets[fleetPage.dialogPresetIdx]
+	}
+
 	if name == "" {
-		name = nextSessionName(m.sessionStore.Sessions(ref))
+		if preset != nil {
+			name = preset.Name // default to the template's name
+		} else {
+			name = nextSessionName(m.sessionStore.Sessions(ref))
+		}
 	}
 	name = SanitizeSessionName(name)
 
@@ -2331,9 +2343,8 @@ func (fleetPage *fleetPage) saveCreateSession(m *model) tea.Cmd {
 	fullName := GroupSessionName(sanitized, name)
 
 	// A template was Tab-selected: mint the whole group — one session per
-	// pane, the user's name as the group ID — and run each pane's command.
-	if fleetPage.dialogPresetIdx >= 0 && fleetPage.dialogPresetIdx < len(fleetPage.dialogPresets) {
-		preset := fleetPage.dialogPresets[fleetPage.dialogPresetIdx]
+	// pane, the resolved name as the group ID — and run each pane's command.
+	if preset != nil {
 		sessions := make([]string, 0, preset.PaneCount())
 		sessions = append(sessions, fullName)
 		for i := 1; i < preset.PaneCount(); i++ {
@@ -2342,7 +2353,7 @@ func (fleetPage *fleetPage) saveCreateSession(m *model) tea.Cmd {
 		fleetPage.mode = viewNormal
 		fleetPage.blurDialogFields()
 		m.message = fmt.Sprintf("Creating session %s from %s...", name, preset.Name)
-		return createSessionGroupFromPresetCmd(ref, name, sessions, preset)
+		return createSessionGroupFromPresetCmd(ref, name, sessions, *preset)
 	}
 
 	fleetPage.mode = viewNormal

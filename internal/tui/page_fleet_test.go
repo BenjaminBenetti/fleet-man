@@ -1051,6 +1051,47 @@ func TestEditFleetPresetRowEnterEdits(t *testing.T) {
 	}
 }
 
+// TestCreateSessionBlankNameWithTemplateUsesTemplateName verifies that creating
+// a session from a selected template with no name typed defaults the session
+// name to the template's name (not the generic "session-N").
+func TestCreateSessionBlankNameWithTemplateUsesTemplateName(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{{Name: "i1"}}}
+	fp := newFleetPage()
+	fp.dialogFleet = "alpha"
+	fp.dialogInst = "i1"
+	fp.dialogPresets = []fleet.LayoutPreset{{Name: "app-run", PaneCommands: []string{"htop", "top"}}}
+	fp.dialogPresetIdx = 0
+	fp.textInput.SetValue("") // no name entered
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp, sessionStore: NewSessionStore()}
+
+	cmd := fp.saveCreateSession(m)
+	if cmd == nil {
+		t.Fatal("expected a create command")
+	}
+	if !strings.Contains(m.message, "app-run") || strings.Contains(m.message, "session-") {
+		t.Fatalf("blank name with a template should default to the template name; message=%q", m.message)
+	}
+}
+
+// TestCreateSessionBlankNameNoTemplateAutoNames verifies the existing behavior
+// is unchanged when no template is selected: a blank name auto-generates one.
+func TestCreateSessionBlankNameNoTemplateAutoNames(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{{Name: "i1"}}}
+	fp := newFleetPage()
+	fp.dialogFleet = "alpha"
+	fp.dialogInst = "i1"
+	fp.dialogPresetIdx = -1 // no template selected
+	fp.textInput.SetValue("")
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp, sessionStore: NewSessionStore()}
+
+	fp.saveCreateSession(m)
+	if !strings.Contains(m.message, "session-") {
+		t.Fatalf("blank name without a template should auto-name; message=%q", m.message)
+	}
+}
+
 // TestEditFleetDeleteCacheError surfaces the failure path: a failed wipe clears
 // the in-flight flag and reports the error to the user.
 func TestEditFleetDeleteCacheError(t *testing.T) {

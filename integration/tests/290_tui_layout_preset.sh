@@ -89,11 +89,11 @@ tui_send j
 sleep 0.3
 tui_send a
 tui_wait_for "Template:" 5
-tui_assert_contains "(none)" "template should default to none"
+tui_assert_contains "[ none ]" "template should default to the bracketed [ none ] cycle option"
 
 info "Tab-selecting the preset and naming the session"
 tui_send Tab
-tui_wait_for "src (1 pane)" 5
+tui_wait_for "[ src ]" 5
 tui_send_text "fromtpl"
 sleep 0.3
 tui_send Enter

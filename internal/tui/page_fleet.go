@@ -1761,14 +1761,15 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			dialogLabel.Render("Name:    "),
 			fleetPage.textInput.View(),
 		)
-		// Template line, only when the fleet has layout presets to cycle.
+		// Template line, only when the fleet has layout presets to cycle. Shown
+		// as a bracketed cycle option ([ none ] / [ name ]) like the backend
+		// selector, with the chosen template highlighted.
 		if len(fleetPage.dialogPresets) > 0 {
 			var tmpl string
 			if idx := fleetPage.dialogPresetIdx; idx >= 0 && idx < len(fleetPage.dialogPresets) {
-				p := fleetPage.dialogPresets[idx]
-				tmpl = selectedStyle.Render(fmt.Sprintf("%s (%s)", p.Name, paneCountLabel(p.PaneCount())))
+				tmpl = selectedStyle.Render(fmt.Sprintf("[ %s ]", fleetPage.dialogPresets[idx].Name))
 			} else {
-				tmpl = dimStyle.Render("(none)")
+				tmpl = dimStyle.Render("[ none ]")
 			}
 			body += fmt.Sprintf("\n%s %s", dialogLabel.Render("Template:"), tmpl)
 			hint = "[tab] Cycle template  " + hint
