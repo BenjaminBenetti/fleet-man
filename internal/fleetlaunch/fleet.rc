@@ -14,7 +14,14 @@
 # `fl <name>` launches one directly by (a unique prefix of) its name.
 alias fl='fleet launch'
 
-# fc — shorthand for Fleet Copy. `fc <path>` copies that file out of this
-# instance to your machine's downloads folder — even when the deployment is
-# fully remote; `fc <path> <dest>` drops it at dest on your machine instead.
+# fc — shorthand for Fleet Copy, scp-style and bidirectional. A plain path is a
+# file on your machine (where the fleet TUI runs); `:path` is a file in THIS
+# instance; `[fleet/]instance:path` is any instance in your fleet. Direction
+# follows which side is which — all of these work even on a fully remote
+# deployment:
+#   fc :build/out ~/Downloads/   copy this instance's file to your machine
+#   fc report.csv :/tmp/         copy a file from your machine into this instance
+#   fc :out.bin other:/tmp/      copy this instance's file into another instance
+# With a single `:`/instance source (e.g. `fc :build/out`) the file lands in
+# your downloads folder.
 alias fc='fleet copy'

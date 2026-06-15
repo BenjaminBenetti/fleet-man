@@ -819,20 +819,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.watchGen {
 			return m, spinCmd
 		}
-		// An in-container `fleet copy` (fc) asked the host to copy a file out of
-		// the instance; pull it to this machine in the background (the requested
-		// destination, or the downloads folder).
-		if msg.fleet == "" || msg.instance == "" || msg.path == "" {
+		// An in-container `fleet copy` (fc) delegated a copy to this TUI; run it
+		// against the host fleet in the background, with this machine as local.
+		if msg.fleet == "" || msg.instance == "" || msg.src == "" {
 			return m, spinCmd
 		}
-		m.message = fmt.Sprintf("Copying %s from %s/%s...", msg.path, msg.fleet, msg.instance)
-		return m, tea.Batch(spinCmd, copyInstanceFileCmd(msg.fleet, msg.instance, msg.path, msg.dest))
+		m.message = fmt.Sprintf("Copying %s -> %s...", msg.src, copyDstLabel(msg.dst))
+		return m, tea.Batch(spinCmd, copyForInstanceCmd(msg.fleet, msg.instance, msg.src, msg.dst))
 
 	case fileCopyDoneMsg:
 		if msg.err != nil {
-			m.message = fmt.Sprintf("Copy of %s failed: %v", msg.path, msg.err)
+			m.message = fmt.Sprintf("Copy of %s failed: %v", msg.src, msg.err)
 		} else {
-			m.message = fmt.Sprintf("Copied %s -> %s", msg.path, msg.dest)
+			m.message = fmt.Sprintf("Copied %s -> %s", msg.src, msg.dest)
 		}
 		return m, spinCmd
 

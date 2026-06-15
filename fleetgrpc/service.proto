@@ -93,6 +93,10 @@ service FleetService {
   // CopyFile streams a single file out of an instance: first chunk is metadata,
   // the rest are data. Backs `fleet copy` and the in-instance `fc` shorthand.
   rpc CopyFile(CopyFileRequest) returns (stream CopyFileChunk);
+  // CopyInto streams a single file INTO an instance — the reverse of CopyFile.
+  // Client-streaming: first chunk is the open header, the rest are data. Backs
+  // the scp-style upload (and instance→instance relay) direction of `fleet copy`.
+  rpc CopyInto(stream CopyIntoChunk) returns (CopyIntoReply);
 
   // ---- Repo inspection (server-side clone + checks) ----
   // InspectRepo shallow-clones remote_url on the DAEMON's host and reports

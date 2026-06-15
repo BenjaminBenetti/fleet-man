@@ -144,6 +144,48 @@ message CopyFileMeta {
   int64 size = 3;
 }
 
+// CopyInto streams one file INTO an instance — the reverse of CopyFile, the
+// other half of scp-style `fleet copy`. It is CLIENT-streaming: the FIRST chunk
+// MUST carry `open` (which instance, the destination, and the file's
+// name/mode/size); every following chunk carries `data`. The server resolves the
+// destination inside the container (an existing directory keeps the source
+// basename; otherwise `dest` is the target path) and writes the bytes through
+// the backend with a single `tar -xf -` exec — the mirror of CopyFile's
+// `tar -chf -` read — preserving the file mode. Works unchanged over the remote
+// gateway: pushing a local file into a fully remote deployment.
+message CopyIntoChunk {
+  oneof msg {
+    CopyIntoOpen open = 1;
+    bytes data = 2;
+  }
+}
+
+message CopyIntoOpen {
+  string fleet = 1;
+  string instance = 2;
+  // dest is the destination path inside the instance. A relative path resolves
+  // against the workspace folder (the backend exec working directory). When it
+  // names (or is) an existing directory the file keeps `name`; otherwise dest is
+  // the full target path. Empty means the workspace folder.
+  string dest = 3;
+  // name is the source file's basename — used when dest resolves to a directory.
+  string name = 4;
+  // mode is the file's permission bits to set on the written file (the perm bits
+  // are honoured; a 0 mode defaults to 0644). setuid/setgid/sticky are stripped.
+  uint32 mode = 5;
+  // size is the source file's byte count — needed up front for the tar header,
+  // and enforced as a hard cap so a truncated or oversized stream fails cleanly
+  // rather than leaving a partial file.
+  int64 size = 6;
+}
+
+message CopyIntoReply {
+  // path is the final absolute path written inside the instance.
+  string path = 1;
+  // written is the number of file bytes received and written.
+  int64 written = 2;
+}
+
 // ResolveLogsCommand returns the host-side command argv the server would run to
 // show an instance's container runtime logs. The client embeds it in its own
 // pager script (cat the creation log, then the runtime logs) and runs it

@@ -78,11 +78,11 @@ func (c *Client) OpenBrowser(url string) error {
 	return c.Send(TypeOpenBrowser, OpenBrowserPayload{URL: url})
 }
 
-// CopyFile is a typed convenience over Send for TypeCopyFile: it asks the host
-// to copy the file at the absolute in-instance path out to the user's machine —
-// to dest there when given, the user's downloads folder otherwise.
-func (c *Client) CopyFile(path, dest string) error {
-	return c.Send(TypeCopyFile, CopyFilePayload{Path: path, Dest: dest})
+// CopyFile is a typed convenience over Send for TypeCopyFile: it asks the
+// connected host TUI to perform a scp-style copy between src and dst (endpoints
+// as typed inside the instance). An empty dst is the download shorthand.
+func (c *Client) CopyFile(src, dst string) error {
+	return c.Send(TypeCopyFile, CopyFilePayload{Src: src, Dst: dst})
 }
 
 // Close closes the underlying connection. It is safe to call once; further

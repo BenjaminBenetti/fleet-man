@@ -1,0 +1,250 @@
+package fleetclient
+
+import (
+	"context"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
+)
+
+// fakeCopyServer is an in-memory FleetService exposing just CopyFile + CopyInto,
+// so the generic engine can be driven through every direction over the REAL
+// generated streaming code without a backend/container. Files are keyed
+// "fleet/instance:path"; a CopyInto stores the bytes back as a readable file so
+// instance→instance relays round-trip.
+type fakeCopyServer struct {
+	fleetgrpc.UnimplementedFleetServiceServer
+	mu    sync.Mutex
+	files map[string]fakeFile
+	intos []capturedInto
+}
+
+type fakeFile struct {
+	name string
+	mode uint32
+	data []byte
+}
+
+type capturedInto struct {
+	fleet, instance, dest, name string
+	mode                        uint32
+	size                        int64
+	data                        []byte
+}
+
+func newFakeCopyServer() *fakeCopyServer { return &fakeCopyServer{files: map[string]fakeFile{}} }
+
+func fileKey(fleet, instance, path string) string { return fleet + "/" + instance + ":" + path }
+
+func (f *fakeCopyServer) CopyFile(req *fleetgrpc.CopyFileRequest, stream grpc.ServerStreamingServer[fleetgrpc.CopyFileChunk]) error {
+	f.mu.Lock()
+	file, ok := f.files[fileKey(req.GetFleet(), req.GetInstance(), req.GetPath())]
+	f.mu.Unlock()
+	if !ok {
+		return status.Errorf(codes.NotFound, "no file %s", req.GetPath())
+	}
+	if err := stream.Send(&fleetgrpc.CopyFileChunk{Msg: &fleetgrpc.CopyFileChunk_Meta{Meta: &fleetgrpc.CopyFileMeta{
+		Name: file.name, Mode: file.mode, Size: int64(len(file.data)),
+	}}}); err != nil {
+		return err
+	}
+	return stream.Send(&fleetgrpc.CopyFileChunk{Msg: &fleetgrpc.CopyFileChunk_Data{Data: file.data}})
+}
+
+func (f *fakeCopyServer) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoChunk, fleetgrpc.CopyIntoReply]) error {
+	first, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	open := first.GetOpen()
+	if open == nil {
+		return status.Error(codes.InvalidArgument, "first chunk must be open")
+	}
+	var data []byte
+	for {
+		chunk, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		data = append(data, chunk.GetData()...)
+	}
+	// Resolve a final path the way the real server would for the common cases:
+	// a trailing-slash dest (or empty) keeps the source name; else dest is it.
+	dest := open.GetDest()
+	finalPath := dest
+	if dest == "" || strings.HasSuffix(dest, "/") {
+		finalPath = strings.TrimRight(dest, "/") + "/" + open.GetName()
+	}
+	f.mu.Lock()
+	f.intos = append(f.intos, capturedInto{
+		fleet: open.GetFleet(), instance: open.GetInstance(), dest: dest,
+		name: open.GetName(), mode: open.GetMode(), size: open.GetSize(), data: data,
+	})
+	f.files[fileKey(open.GetFleet(), open.GetInstance(), finalPath)] = fakeFile{
+		name: open.GetName(), mode: open.GetMode(), data: data,
+	}
+	f.mu.Unlock()
+	return stream.SendAndClose(&fleetgrpc.CopyIntoReply{Path: finalPath, Written: int64(len(data))})
+}
+
+// dialFake stands the fake server up over bufconn and returns a client.
+func dialFake(t *testing.T, srv *fakeCopyServer) fleetgrpc.FleetServiceClient {
+	t.Helper()
+	lis := bufconn.Listen(1 << 20)
+	gs := grpc.NewServer()
+	fleetgrpc.RegisterFleetServiceServer(gs, srv)
+	go func() { _ = gs.Serve(lis) }()
+	t.Cleanup(gs.Stop)
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return fleetgrpc.NewFleetServiceClient(conn)
+}
+
+// passthroughPolicy treats local paths as absolute as-is, keeping the source
+// name for an empty/trailing-slash dest — enough to exercise the engine.
+type passthroughPolicy struct{}
+
+func (passthroughPolicy) ResolveSrc(path string) string { return path }
+func (passthroughPolicy) ResolveDest(dest, name string) (string, error) {
+	if dest == "" {
+		return name, nil
+	}
+	if strings.HasSuffix(dest, "/") {
+		return filepath.Join(dest, name), nil
+	}
+	return dest, nil
+}
+
+func TestCopyUploadLocalToInstance(t *testing.T) {
+	srv := newFakeCopyServer()
+	client := dialFake(t, srv)
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "tool")
+	if err := os.WriteFile(src, []byte("hello world"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Copy(context.Background(), client,
+		ResolvedEndpoint{Local: true, Path: src},
+		ResolvedEndpoint{Fleet: "f", Instance: "i", Path: "/dst/"},
+		passthroughPolicy{})
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	if len(srv.intos) != 1 {
+		t.Fatalf("want 1 CopyInto, got %d", len(srv.intos))
+	}
+	got := srv.intos[0]
+	if got.name != "tool" || string(got.data) != "hello world" || got.size != 11 || got.dest != "/dst/" {
+		t.Fatalf("CopyInto open = %+v, want name=tool data=hello world size=11 dest=/dst/", got)
+	}
+	if got.mode&0o777 != 0o755 {
+		t.Fatalf("mode = %o, want 0755", got.mode)
+	}
+	if res.DestPath != "/dst/tool" || res.Written != 11 {
+		t.Fatalf("result = %+v, want /dst/tool 11", res)
+	}
+}
+
+func TestCopyDownloadInstanceToLocal(t *testing.T) {
+	srv := newFakeCopyServer()
+	srv.files[fileKey("f", "i", "/bin/tool")] = fakeFile{name: "tool", mode: 0o755, data: []byte("payload")}
+	client := dialFake(t, srv)
+
+	dir := t.TempDir()
+	res, err := Copy(context.Background(), client,
+		ResolvedEndpoint{Fleet: "f", Instance: "i", Path: "/bin/tool"},
+		ResolvedEndpoint{Local: true, Path: dir + "/"},
+		passthroughPolicy{})
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	wantPath := filepath.Join(dir, "tool")
+	if res.DestPath != wantPath || res.Written != 7 {
+		t.Fatalf("result = %+v, want %s 7", res, wantPath)
+	}
+	data, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(data) != "payload" {
+		t.Fatalf("downloaded %q, want payload", data)
+	}
+	fi, _ := os.Stat(wantPath)
+	if fi.Mode().Perm() != 0o755 {
+		t.Fatalf("mode = %o, want 0755", fi.Mode().Perm())
+	}
+}
+
+func TestCopyRelayInstanceToInstance(t *testing.T) {
+	srv := newFakeCopyServer()
+	srv.files[fileKey("f", "i1", "/a/out.bin")] = fakeFile{name: "out.bin", mode: 0o644, data: []byte("relayed")}
+	client := dialFake(t, srv)
+
+	res, err := Copy(context.Background(), client,
+		ResolvedEndpoint{Fleet: "f", Instance: "i1", Path: "/a/out.bin"},
+		ResolvedEndpoint{Fleet: "f", Instance: "i2", Path: "/tmp/"},
+		passthroughPolicy{})
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	if len(srv.intos) != 1 {
+		t.Fatalf("want 1 CopyInto, got %d", len(srv.intos))
+	}
+	got := srv.intos[0]
+	if got.instance != "i2" || got.name != "out.bin" || string(got.data) != "relayed" {
+		t.Fatalf("relayed CopyInto = %+v, want i2 out.bin relayed", got)
+	}
+	if res.DestPath != "/tmp/out.bin" || res.Written != 7 {
+		t.Fatalf("result = %+v, want /tmp/out.bin 7", res)
+	}
+}
+
+func TestCopyLocalToLocal(t *testing.T) {
+	srv := newFakeCopyServer()
+	client := dialFake(t, srv)
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.txt")
+	dst := filepath.Join(dir, "b.txt")
+	if err := os.WriteFile(src, []byte("local copy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Copy(context.Background(), client,
+		ResolvedEndpoint{Local: true, Path: src},
+		ResolvedEndpoint{Local: true, Path: dst},
+		passthroughPolicy{})
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	if res.DestPath != dst || res.Written != 10 {
+		t.Fatalf("result = %+v, want %s 10", res, dst)
+	}
+	data, _ := os.ReadFile(dst)
+	if string(data) != "local copy" {
+		t.Fatalf("copied %q, want local copy", data)
+	}
+}

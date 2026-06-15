@@ -50,6 +50,7 @@ const (
 	FleetService_Logs_FullMethodName                   = "/fleetgrpc.FleetService/Logs"
 	FleetService_Forward_FullMethodName                = "/fleetgrpc.FleetService/Forward"
 	FleetService_CopyFile_FullMethodName               = "/fleetgrpc.FleetService/CopyFile"
+	FleetService_CopyInto_FullMethodName               = "/fleetgrpc.FleetService/CopyInto"
 	FleetService_InspectRepo_FullMethodName            = "/fleetgrpc.FleetService/InspectRepo"
 	FleetService_GetCoderTemplateParams_FullMethodName = "/fleetgrpc.FleetService/GetCoderTemplateParams"
 	FleetService_GetBrowserConfig_FullMethodName       = "/fleetgrpc.FleetService/GetBrowserConfig"
@@ -127,6 +128,10 @@ type FleetServiceClient interface {
 	// CopyFile streams a single file out of an instance: first chunk is metadata,
 	// the rest are data. Backs `fleet copy` and the in-instance `fc` shorthand.
 	CopyFile(ctx context.Context, in *CopyFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CopyFileChunk], error)
+	// CopyInto streams a single file INTO an instance — the reverse of CopyFile.
+	// Client-streaming: first chunk is the open header, the rest are data. Backs
+	// the scp-style upload (and instance→instance relay) direction of `fleet copy`.
+	CopyInto(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CopyIntoChunk, CopyIntoReply], error)
 	// ---- Repo inspection (server-side clone + checks) ----
 	// InspectRepo shallow-clones remote_url on the DAEMON's host and reports
 	// devcontainer presence (and optionally the detected container home dir).
@@ -545,6 +550,19 @@ func (c *fleetServiceClient) CopyFile(ctx context.Context, in *CopyFileRequest, 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_CopyFileClient = grpc.ServerStreamingClient[CopyFileChunk]
 
+func (c *fleetServiceClient) CopyInto(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CopyIntoChunk, CopyIntoReply], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[11], FleetService_CopyInto_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CopyIntoChunk, CopyIntoReply]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_CopyIntoClient = grpc.ClientStreamingClient[CopyIntoChunk, CopyIntoReply]
+
 func (c *fleetServiceClient) InspectRepo(ctx context.Context, in *InspectRepoRequest, opts ...grpc.CallOption) (*InspectRepoReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(InspectRepoReply)
@@ -656,6 +674,10 @@ type FleetServiceServer interface {
 	// CopyFile streams a single file out of an instance: first chunk is metadata,
 	// the rest are data. Backs `fleet copy` and the in-instance `fc` shorthand.
 	CopyFile(*CopyFileRequest, grpc.ServerStreamingServer[CopyFileChunk]) error
+	// CopyInto streams a single file INTO an instance — the reverse of CopyFile.
+	// Client-streaming: first chunk is the open header, the rest are data. Backs
+	// the scp-style upload (and instance→instance relay) direction of `fleet copy`.
+	CopyInto(grpc.ClientStreamingServer[CopyIntoChunk, CopyIntoReply]) error
 	// ---- Repo inspection (server-side clone + checks) ----
 	// InspectRepo shallow-clones remote_url on the DAEMON's host and reports
 	// devcontainer presence (and optionally the detected container home dir).
@@ -769,6 +791,9 @@ func (UnimplementedFleetServiceServer) Forward(grpc.BidiStreamingServer[ForwardC
 }
 func (UnimplementedFleetServiceServer) CopyFile(*CopyFileRequest, grpc.ServerStreamingServer[CopyFileChunk]) error {
 	return status.Errorf(codes.Unimplemented, "method CopyFile not implemented")
+}
+func (UnimplementedFleetServiceServer) CopyInto(grpc.ClientStreamingServer[CopyIntoChunk, CopyIntoReply]) error {
+	return status.Errorf(codes.Unimplemented, "method CopyInto not implemented")
 }
 func (UnimplementedFleetServiceServer) InspectRepo(context.Context, *InspectRepoRequest) (*InspectRepoReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InspectRepo not implemented")
@@ -1276,6 +1301,13 @@ func _FleetService_CopyFile_Handler(srv interface{}, stream grpc.ServerStream) e
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_CopyFileServer = grpc.ServerStreamingServer[CopyFileChunk]
 
+func _FleetService_CopyInto_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(FleetServiceServer).CopyInto(&grpc.GenericServerStream[CopyIntoChunk, CopyIntoReply]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_CopyIntoServer = grpc.ClientStreamingServer[CopyIntoChunk, CopyIntoReply]
+
 func _FleetService_InspectRepo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(InspectRepoRequest)
 	if err := dec(in); err != nil {
@@ -1509,6 +1541,11 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "CopyFile",
 			Handler:       _FleetService_CopyFile_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "CopyInto",
+			Handler:       _FleetService_CopyInto_Handler,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "service.proto",

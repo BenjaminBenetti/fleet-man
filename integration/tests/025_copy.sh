@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Description: `fleet copy instance:path` pulls a file out of the container, preserving content and mode.
+# Description: `fleet copy` is bidirectional scp-style — out of, into, and between instances, preserving content and mode.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -49,5 +49,43 @@ set -e
 if [ "${rc}" -eq 0 ]; then
   fail "expected non-zero exit copying a directory, got 0"
 fi
+
+# ---- the reverse direction: copy a local file INTO an instance ----
+
+info "fleet copy <local> alpha:/tmp/up.bin uploads into the instance, keeping mode"
+printf 'uploaded-bytes' > "${workdir}/up.bin"
+chmod 755 "${workdir}/up.bin"
+"${FLEET_BIN}" copy "${workdir}/up.bin" "${FIXTURE_REPO_NAME}/alpha:/tmp/up.bin"
+assert_equals "uploaded-bytes" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/up.bin)" "uploaded file content"
+assert_equals "755" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- stat -c '%a' /tmp/up.bin)" "uploaded file keeps its mode"
+
+info "fleet copy into an instance directory keeps the source basename"
+"${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- mkdir -p /tmp/updir
+"${FLEET_BIN}" copy "${workdir}/up.bin" "${FIXTURE_REPO_NAME}/alpha:/tmp/updir/"
+assert_equals "uploaded-bytes" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/updir/up.bin)" "directory upload basename"
+
+info "fleet copy into a non-existent instance directory fails"
+set +e
+"${FLEET_BIN}" copy "${workdir}/up.bin" "${FIXTURE_REPO_NAME}/alpha:/tmp/no-such-dir/" >/dev/null 2>&1
+rc=$?
+set -e
+if [ "${rc}" -eq 0 ]; then
+  fail "expected non-zero exit uploading into a missing directory, got 0"
+fi
+
+info "fleet copy of a missing local file fails"
+set +e
+"${FLEET_BIN}" copy "${workdir}/ghost-local" "${FIXTURE_REPO_NAME}/alpha:/tmp/ghost" >/dev/null 2>&1
+rc=$?
+set -e
+if [ "${rc}" -eq 0 ]; then
+  fail "expected non-zero exit uploading a missing local file, got 0"
+fi
+
+# ---- instance → instance (the relay path) ----
+
+info "fleet copy alpha:path alpha:path2 relays between two instance paths"
+"${FLEET_BIN}" copy "${FIXTURE_REPO_NAME}/alpha:/tmp/up.bin" "${FIXTURE_REPO_NAME}/alpha:/tmp/relayed.bin"
+assert_equals "uploaded-bytes" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/relayed.bin)" "relayed file content"
 
 pass "copy"

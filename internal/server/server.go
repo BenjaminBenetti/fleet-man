@@ -85,9 +85,9 @@ func Serve(ctx context.Context) error {
 	// socket and turns received browser.open envelopes (from an in-container
 	// `fleet launch` TUI) into BrowserOpen events the connected client execs
 	// locally, and file.copy envelopes (from an in-container `fleet copy` / fc)
-	// into FileCopy events the connected client downloads from. Runs
-	// unconditionally (cheap: only running instances get a listener) and tears
-	// down when hubCtx is cancelled.
+	// into FileCopy events the connected client performs the scp-style copy for.
+	// Runs unconditionally (cheap: only running instances get a listener) and
+	// tears down when hubCtx is cancelled.
 	controlReg := newControlRegistry(func(fleetName, instanceName, url string) {
 		svc.hub.post(func(h *hub) {
 			h.broadcastBrowserOpen(&fleetgrpc.BrowserOpen{
@@ -96,13 +96,13 @@ func Serve(ctx context.Context) error {
 				Instance: instanceName,
 			})
 		})
-	}, func(fleetName, instanceName, path, dest string) {
+	}, func(fleetName, instanceName, src, dst string) {
 		svc.hub.post(func(h *hub) {
 			h.broadcastFileCopy(&fleetgrpc.FileCopy{
 				Fleet:    fleetName,
 				Instance: instanceName,
-				Path:     path,
-				Dest:     dest,
+				Src:      src,
+				Dst:      dst,
 			})
 		})
 	}, svc.hub.hasSubscribers)

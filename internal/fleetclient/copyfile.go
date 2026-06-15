@@ -1,93 +1,30 @@
 package fleetclient
 
 import (
-	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 )
 
-// CopyFileTo pulls fleet/instance:srcPath from the server (the CopyFile RPC)
-// and writes it to dest on the local machine. dest may be an existing
-// directory (or end in a path separator), in which case the file keeps its
-// source basename inside it; an existing destination file is overwritten —
-// scp semantics, so re-copying an iterated build always lands in the same
-// place. The bytes go to a temp file in the destination directory first and
-// are renamed into place on success, so a half-finished copy never replaces a
-// previous good one. Returns the final local path and the bytes written.
-func CopyFileTo(ctx context.Context, svc fleetgrpc.FleetServiceClient, fleetName, instanceName, srcPath, dest string) (string, int64, error) {
-	stream, err := svc.CopyFile(ctx, &fleetgrpc.CopyFileRequest{
-		Fleet:    fleetName,
-		Instance: instanceName,
-		Path:     srcPath,
-	})
-	if err != nil {
-		return "", 0, err
-	}
+// copyfile.go holds the host CLI's local-path policy for `fleet copy`: a process
+// run directly on a machine resolves local paths relative to its own cwd. The
+// in-instance form's policy (the human's home / downloads folder) lives in the
+// TUI, which runs the delegated copy. Both implement CopyLocalPolicy so the one
+// engine in copyengine.go serves both.
 
-	// The first chunk must be the meta frame (name/mode/size).
-	first, err := stream.Recv()
-	if err != nil {
-		return "", 0, err
-	}
-	meta := first.GetMeta()
-	if meta == nil {
-		return "", 0, fmt.Errorf("copy %s/%s:%s: server sent no file metadata", fleetName, instanceName, srcPath)
-	}
+// HostLocalPolicy resolves local paths for a `fleet` process run directly on a
+// machine: a source is read as given (relative to the cwd), and a destination
+// follows scp's rule that an empty or directory dest keeps the source basename.
+type HostLocalPolicy struct{}
 
-	destPath, err := ResolveCopyDest(dest, meta.GetName())
-	if err != nil {
-		return "", 0, err
-	}
+// ResolveSrc returns the source path unchanged — the os layer resolves a
+// relative path against the process cwd, which is what the user means.
+func (HostLocalPolicy) ResolveSrc(path string) string { return path }
 
-	mode := os.FileMode(meta.GetMode()).Perm()
-	if mode == 0 {
-		mode = 0o644
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(destPath), "."+filepath.Base(destPath)+".fleetcopy-*")
-	if err != nil {
-		return "", 0, err
-	}
-	defer func() {
-		// Best-effort cleanup on every early-error path; succeeds-into-rename
-		// leaves nothing for these to do.
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-	}()
-	if err := tmp.Chmod(mode); err != nil {
-		return "", 0, err
-	}
-
-	var written int64
-	for {
-		chunk, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", 0, err
-		}
-		data := chunk.GetData()
-		if len(data) == 0 {
-			continue
-		}
-		n, err := tmp.Write(data)
-		written += int64(n)
-		if err != nil {
-			return "", 0, err
-		}
-	}
-	if err := tmp.Close(); err != nil {
-		return "", 0, err
-	}
-	if err := os.Rename(tmp.Name(), destPath); err != nil {
-		return "", 0, err
-	}
-	return destPath, written, nil
+// ResolveDest applies ResolveCopyDest (cwd-relative, scp dest semantics).
+func (HostLocalPolicy) ResolveDest(dest, srcName string) (string, error) {
+	return ResolveCopyDest(dest, srcName)
 }
 
 // ResolveCopyDest resolves the local destination path for a copied file named
