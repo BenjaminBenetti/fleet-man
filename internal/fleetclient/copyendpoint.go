@@ -1,6 +1,7 @@
 package fleetclient
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -34,8 +35,10 @@ type CopyEndpoint struct {
 
 // ParseCopyEndpoint classifies a `fleet copy` argument, scp-style:
 //
-//   - a leading '/', '.' or '~' always forces a LOCAL path (so a local filename
-//     containing a colon is still reachable, spelled "./name:with:colon"),
+//   - a leading '/', '.' or '~', or a platform-absolute path (so a Windows
+//     "C:\file" is local, not an instance named "C"), always forces a LOCAL path
+//     (a local filename containing a colon is still reachable, spelled
+//     "./name:with:colon"),
 //   - ":path" (empty prefix, non-empty path) is the CURRENT instance (SELF),
 //   - "[fleet/]instance:path" is a named INSTANCE,
 //   - anything else — including a malformed instance ref or an empty path after
@@ -43,7 +46,7 @@ type CopyEndpoint struct {
 //     plain "no such file" rather than a confusing parse error.
 func ParseCopyEndpoint(arg string) CopyEndpoint {
 	i := strings.Index(arg, ":")
-	if i < 0 || strings.HasPrefix(arg, "/") || strings.HasPrefix(arg, ".") || strings.HasPrefix(arg, "~") {
+	if i < 0 || strings.HasPrefix(arg, "/") || strings.HasPrefix(arg, ".") || strings.HasPrefix(arg, "~") || filepath.IsAbs(arg) {
 		return CopyEndpoint{Kind: CopyLocal, Path: arg}
 	}
 	path := arg[i+1:]

@@ -93,30 +93,33 @@ func uploadLocalToInstance(ctx context.Context, svc fleetgrpc.FleetServiceClient
 	if err != nil {
 		return CopyResult{}, err
 	}
-	if err := stream.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Open{Open: &fleetgrpc.CopyIntoOpen{
+
+	// A Send error (notably io.EOF) only means the server closed the stream — it
+	// is NOT the real failure. Stop sending and let CloseAndRecv surface the
+	// server's actual status (e.g. "destination directory does not exist").
+	sendErr := stream.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Open{Open: &fleetgrpc.CopyIntoOpen{
 		Fleet:    dst.Fleet,
 		Instance: dst.Instance,
 		Dest:     dst.Path,
 		Name:     filepath.Base(srcPath),
 		Mode:     uint32(fi.Mode().Perm()),
 		Size:     fi.Size(),
-	}}}); err != nil {
-		return CopyResult{}, err
-	}
-
-	buf := make([]byte, copyChunkSize)
-	for {
-		n, readErr := f.Read(buf)
-		if n > 0 {
-			if err := stream.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Data{Data: buf[:n]}}); err != nil {
-				return CopyResult{}, err
+	}}})
+	if sendErr == nil {
+		buf := make([]byte, copyChunkSize)
+		for {
+			n, readErr := f.Read(buf)
+			if n > 0 {
+				if sendErr = stream.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Data{Data: buf[:n]}}); sendErr != nil {
+					break
+				}
 			}
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return CopyResult{}, readErr
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				return CopyResult{}, readErr
+			}
 		}
 	}
 	reply, err := stream.CloseAndRecv()
@@ -222,30 +225,26 @@ func relayInstanceToInstance(ctx context.Context, svc fleetgrpc.FleetServiceClie
 	if err != nil {
 		return CopyResult{}, err
 	}
-	if err := in.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Open{Open: &fleetgrpc.CopyIntoOpen{
+	// As in uploadLocalToInstance, a Send error (incl. io.EOF) just means the
+	// destination stream closed; CloseAndRecv carries the real status.
+	sendErr := in.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Open{Open: &fleetgrpc.CopyIntoOpen{
 		Fleet:    dst.Fleet,
 		Instance: dst.Instance,
 		Dest:     dst.Path,
 		Name:     meta.GetName(),
 		Mode:     meta.GetMode(),
 		Size:     meta.GetSize(),
-	}}}); err != nil {
-		return CopyResult{}, err
-	}
-	for {
-		chunk, err := out.Recv()
-		if err == io.EOF {
+	}}})
+	for sendErr == nil {
+		chunk, recvErr := out.Recv()
+		if recvErr == io.EOF {
 			break
 		}
-		if err != nil {
-			return CopyResult{}, err
+		if recvErr != nil {
+			return CopyResult{}, recvErr
 		}
-		data := chunk.GetData()
-		if len(data) == 0 {
-			continue
-		}
-		if err := in.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Data{Data: data}}); err != nil {
-			return CopyResult{}, err
+		if data := chunk.GetData(); len(data) > 0 {
+			sendErr = in.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Data{Data: data}})
 		}
 	}
 	reply, err := in.CloseAndRecv()
