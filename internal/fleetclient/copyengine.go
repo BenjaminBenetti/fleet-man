@@ -255,8 +255,10 @@ func relayInstanceToInstance(ctx context.Context, svc fleetgrpc.FleetServiceClie
 }
 
 // copyLocalToLocal copies one local file to another on the orchestrator's disk —
-// the degenerate case where neither endpoint is an instance. The bytes are
-// streamed (not slurped) so a large file does not balloon memory.
+// the degenerate case where neither endpoint is an instance. Bytes are streamed
+// (not slurped) so a large file doesn't balloon memory, and written through a
+// temp file renamed into place on success, so a failed copy never leaves a
+// partial — matching the atomicity of the instance directions.
 func copyLocalToLocal(srcPath, dstTyped string, policy CopyLocalPolicy) (CopyResult, error) {
 	in, err := os.Open(srcPath)
 	if err != nil {
@@ -274,20 +276,27 @@ func copyLocalToLocal(srcPath, dstTyped string, policy CopyLocalPolicy) (CopyRes
 	if err != nil {
 		return CopyResult{}, err
 	}
-	out, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fi.Mode().Perm())
+
+	tmp, err := os.CreateTemp(filepath.Dir(destPath), "."+filepath.Base(destPath)+".fleetcopy-*")
 	if err != nil {
 		return CopyResult{}, err
 	}
-	written, copyErr := io.Copy(out, in)
-	if copyErr == nil {
-		// Set the mode explicitly so it is preserved even when overwriting.
-		copyErr = out.Chmod(fi.Mode().Perm())
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}()
+	if err := tmp.Chmod(fi.Mode().Perm()); err != nil {
+		return CopyResult{}, err
 	}
-	if closeErr := out.Close(); copyErr == nil {
-		copyErr = closeErr
+	written, err := io.Copy(tmp, in)
+	if err != nil {
+		return CopyResult{}, err
 	}
-	if copyErr != nil {
-		return CopyResult{}, copyErr
+	if err := tmp.Close(); err != nil {
+		return CopyResult{}, err
+	}
+	if err := os.Rename(tmp.Name(), destPath); err != nil {
+		return CopyResult{}, err
 	}
 	return CopyResult{DestPath: destPath, Written: written}, nil
 }
