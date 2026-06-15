@@ -44,7 +44,8 @@ const (
 	// TypeOpenBrowser asks the host to open (or navigate) its browser to a
 	// URL. Its payload is OpenBrowserPayload.
 	TypeOpenBrowser = "browser.open"
-	// TypeCopyFile asks the host to copy a file out of this instance to the
-	// host user's machine. Its payload is CopyFilePayload.
+	// TypeCopyFile asks the connected host TUI to perform a scp-style copy
+	// between two endpoints (out of, into, or between instances) on this
+	// instance's behalf. Its payload is CopyFilePayload.
 	TypeCopyFile = "file.copy"
 )

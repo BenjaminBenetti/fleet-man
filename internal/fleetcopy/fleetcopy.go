@@ -1,17 +1,19 @@
-// Package fleetcopy is the in-instance half of `fleet copy` (alias fc): it
-// asks the HOST fleet to copy a file out of this instance onto the user's
-// machine. Like the `fleet launch` TUI (internal/launchtui), the in-container
-// process cannot reach the user's disk itself, so it writes a file.copy
-// envelope to the control socket fleet bind-mounts into the instance; the
-// server turns it into a Watch FileCopy event and the connected fleet TUI
-// pulls the bytes over the CopyFile RPC into its local downloads folder.
+// Package fleetcopy is the in-instance half of scp-style `fleet copy` (alias
+// fc): it asks the connected HOST fleet TUI to perform a copy between two
+// endpoints on the in-container caller's behalf. Like the `fleet launch` TUI
+// (internal/launchtui), the in-container process cannot reach the host fleetd
+// over gRPC — only the control socket fleet bind-mounts into the instance — so
+// it writes a file.copy envelope naming the two endpoints; the server turns it
+// into a Watch FileCopy event and the connected TUI runs the generic copy engine
+// against the host fleet (with its own disk as the "local" side). This is what
+// lets `fc` reach the user's machine even when the instance is fully remote, and
+// lets it copy between sibling instances of the user's fleet.
 package fleetcopy
 
 import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
 )
@@ -44,40 +46,26 @@ func InInstance() bool {
 	return err == nil && fi.IsDir()
 }
 
-// Request resolves the file locally (fast feedback on typos — the send itself
-// is fire-and-forget) and asks the host fleet to copy it out via the control
-// socket, exactly like `fleet launch` asks for a browser open. dest is the
-// requested destination on the user's machine, passed through verbatim ("" =
-// the user's downloads folder) — only the receiving client can interpret a
-// path on its own filesystem.
-func Request(cfg Config, out io.Writer, path, dest string) error {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return err
-	}
-	fi, err := os.Stat(abs)
-	if err != nil {
-		return err
-	}
-	if fi.IsDir() {
-		return fmt.Errorf("%s is a directory — only single files can be copied", path)
-	}
-	if !fi.Mode().IsRegular() {
-		return fmt.Errorf("%s is not a regular file", path)
-	}
-
+// Request asks the connected host fleet TUI to copy from src to dst (endpoints
+// as typed inside the instance), passed through verbatim over the control
+// socket. It is a pure signal — fire-and-forget, like `fleet launch` asking for
+// a browser open: the in-container process can resolve neither the user's-machine
+// paths nor the host fleet's instances, so it does not validate the endpoints;
+// the TUI performs the copy and surfaces any error there. An empty dst is the
+// download shorthand (deliver to the user's downloads folder).
+func Request(cfg Config, out io.Writer, src, dst string) error {
 	client, err := control.Dial(cfg.socketPath())
 	if err != nil {
-		return fmt.Errorf("not connected to a host fleet — copying out of an instance needs a running fleet TUI on the host")
+		return fmt.Errorf("not connected to a host fleet — `fc` needs a running fleet TUI on the host")
 	}
 	defer client.Close()
-	if err := client.CopyFile(abs, dest); err != nil {
+	if err := client.CopyFile(src, dst); err != nil {
 		return err
 	}
-	if dest != "" {
-		fmt.Fprintf(out, "Asked the host fleet to copy %s — it will land at %s on your machine.\n", abs, dest)
+	if dst != "" {
+		fmt.Fprintf(out, "Asked the host fleet to copy %s -> %s (approve it in your fleet TUI if it touches your machine).\n", src, dst)
 	} else {
-		fmt.Fprintf(out, "Asked the host fleet to copy %s — it will land in your downloads folder.\n", abs)
+		fmt.Fprintf(out, "Asked the host fleet to copy %s — it will land in your downloads folder once approved in your fleet TUI.\n", src)
 	}
 	return nil
 }

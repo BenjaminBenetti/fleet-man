@@ -1,39 +1,46 @@
 package cli
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 )
 
-func TestSplitCopySource(t *testing.T) {
+// TestResolveHostEndpoint covers the host-form endpoint resolution: a plain path
+// stays local, an explicit fleet/instance passes through, and `:path` (self) is
+// rejected because a host invocation has no current instance. A bare instance
+// (which infers the fleet from the cwd git remote) is exercised by integration
+// tests, not here.
+func TestResolveHostEndpoint(t *testing.T) {
 	cases := []struct {
-		arg        string
-		wantTarget string
-		wantPath   string
-		wantOK     bool
+		arg  string
+		want fleetclient.ResolvedEndpoint
 	}{
-		{"alpha:bin/tool", "alpha", "bin/tool", true},
-		{"myfleet/alpha:/abs/path", "myfleet/alpha", "/abs/path", true},
-		{"alpha:/path/with:colon", "alpha", "/path/with:colon", true},
-		// Plain paths — the in-instance form.
-		{"bin/tool", "", "", false},
-		{"/abs/path", "", "", false},
-		{"./weird:name", "", "", false},
-		{"../up:name", "", "", false},
-		{"~/home:file", "", "", false},
-		// Malformed instance references.
-		{":path", "", "", false},
-		{"alpha:", "", "", false},
-		{"a/b/c:path", "", "", false},
-		{"/alpha:path", "", "", false},
-		{"alpha/:path", "", "", false},
+		{"./tool", fleetclient.ResolvedEndpoint{Local: true, Path: "./tool"}},
+		{"/abs/tool", fleetclient.ResolvedEndpoint{Local: true, Path: "/abs/tool"}},
+		{"tool.txt", fleetclient.ResolvedEndpoint{Local: true, Path: "tool.txt"}},
+		{"", fleetclient.ResolvedEndpoint{Local: true, Path: ""}},
+		{"myfleet/alpha:/bin/tool", fleetclient.ResolvedEndpoint{Fleet: "myfleet", Instance: "alpha", Path: "/bin/tool"}},
+		{"myfleet/alpha:rel/path", fleetclient.ResolvedEndpoint{Fleet: "myfleet", Instance: "alpha", Path: "rel/path"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.arg, func(t *testing.T) {
-			target, path, ok := splitCopySource(tc.arg)
-			if target != tc.wantTarget || path != tc.wantPath || ok != tc.wantOK {
-				t.Errorf("splitCopySource(%q) = (%q,%q,%v), want (%q,%q,%v)",
-					tc.arg, target, path, ok, tc.wantTarget, tc.wantPath, tc.wantOK)
+			got, err := resolveHostEndpoint(tc.arg)
+			if err != nil {
+				t.Fatalf("resolveHostEndpoint(%q): %v", tc.arg, err)
+			}
+			if got != tc.want {
+				t.Errorf("resolveHostEndpoint(%q) = %+v, want %+v", tc.arg, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestResolveHostEndpointRejectsSelf confirms `:path` errors on a host, where
+// there is no current instance to mean.
+func TestResolveHostEndpointRejectsSelf(t *testing.T) {
+	if _, err := resolveHostEndpoint(":build/tool"); err == nil || !strings.Contains(err.Error(), "inside") {
+		t.Fatalf("self on host: want error mentioning inside-an-instance, got %v", err)
 	}
 }

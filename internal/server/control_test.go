@@ -17,7 +17,7 @@ type openEvent struct {
 
 // copyEvent is one decoded file.copy the registry forwarded via onCopy.
 type copyEvent struct {
-	fleet, instance, path, dest string
+	fleet, instance, src, dst string
 }
 
 // waitForSocket polls path until it exists or the deadline passes.
@@ -60,9 +60,9 @@ func TestControlSyncRoundTrip(t *testing.T) {
 		case events <- openEvent{f, i, url}:
 		default:
 		}
-	}, func(f, i, path, dest string) {
+	}, func(f, i, src, dst string) {
 		select {
-		case copies <- copyEvent{f, i, path, dest}:
+		case copies <- copyEvent{f, i, src, dst}:
 		default:
 		}
 	}, nil)
@@ -102,12 +102,12 @@ func TestControlSyncRoundTrip(t *testing.T) {
 	}
 
 	// A file.copy envelope on the same socket dispatches to onCopy, carrying
-	// the requested destination through verbatim.
+	// the two endpoints through verbatim.
 	const (
-		wantPath = "/workspaces/repo/bin/tool"
-		wantDest = "~/builds/tool"
+		wantSrc = ":bin/tool"
+		wantDst = "~/builds/tool"
 	)
-	if err := client.CopyFile(wantPath, wantDest); err != nil {
+	if err := client.CopyFile(wantSrc, wantDst); err != nil {
 		t.Fatalf("CopyFile: %v", err)
 	}
 	select {
@@ -115,8 +115,8 @@ func TestControlSyncRoundTrip(t *testing.T) {
 		if ev.fleet != fleetName || ev.instance != instanceName {
 			t.Errorf("copy event = (%q,%q), want (%q,%q)", ev.fleet, ev.instance, fleetName, instanceName)
 		}
-		if ev.path != wantPath || ev.dest != wantDest {
-			t.Errorf("copy event = (%q,%q), want (%q,%q)", ev.path, ev.dest, wantPath, wantDest)
+		if ev.src != wantSrc || ev.dst != wantDst {
+			t.Errorf("copy event = (%q,%q), want (%q,%q)", ev.src, ev.dst, wantSrc, wantDst)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for file.copy on onCopy")

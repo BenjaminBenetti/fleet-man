@@ -129,22 +129,28 @@ message BrowserOpen {
   string instance = 4;
 }
 
-// FileCopy asks the receiving client to pull a file out of an instance to its
-// local disk. Pushed when the server's per-instance control listener receives a
-// file.copy envelope from an in-container `fleet copy` (fc); the CLIENT then
-// fetches the bytes itself via the CopyFile RPC and writes them to its downloads
-// folder — the same control-socket → Watch → client-action split as BrowserOpen,
-// which is what makes fc work for fully remote deployments.
+// FileCopy asks the receiving client (the connected TUI) to PERFORM a scp-style
+// copy on the in-container sender's behalf. Pushed when the server's per-instance
+// control listener receives a file.copy envelope from an in-container `fleet
+// copy` (fc): the in-instance process cannot reach the host fleetd over gRPC
+// (only the control socket is bind-mounted), so it delegates the whole copy to
+// the TUI, which runs the generic copy engine against the host fleet with its
+// own disk as the "local" side. Same control-socket → Watch → client-action
+// split as BrowserOpen, which is what makes fc work for fully remote deployments.
+//
+// src and dst are the two scp endpoints AS TYPED inside the instance, verbatim.
+// Each is either `[fleet/]instance:path` (an instance), a plain path (a file on
+// the TUI machine — the human's disk), or `:path` (the CURRENT instance: the TUI
+// substitutes the originating fleet/instance below). Direction is inferred from
+// which side is local vs an instance.
 message FileCopy {
-  // fleet/instance label which workspace requested the copy.
+  // fleet/instance label of the instance that requested the copy. Also the value
+  // the TUI substitutes for a `:path` (self) endpoint in src/dst.
   string fleet = 1;
   string instance = 2;
-  // path is the absolute in-instance path of the file to copy (resolved by the
-  // in-instance sender, so the server-side exec needs no cwd context).
-  string path = 3;
-  // dest is the optional destination on the receiving client's machine; ""
-  // means the client's downloads folder. The client interprets it scp-style:
-  // absolute is used as-is, ~/ and relative paths resolve against the client
-  // user's home, and a directory keeps the source basename.
-  string dest = 4;
+  // src is the source endpoint as typed inside the instance.
+  string src = 3;
+  // dst is the destination endpoint as typed inside the instance. Empty is the
+  // 1-arg download shorthand: the TUI delivers to its downloads folder.
+  string dst = 4;
 }

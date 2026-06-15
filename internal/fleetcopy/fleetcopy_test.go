@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"net"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,15 +11,11 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
 )
 
-// TestRequestSendsEnvelope round-trips the in-instance form against a fake
-// host listener: the sent envelope is a file.copy naming the absolute path.
+// TestRequestSendsEnvelope round-trips the in-instance form against a fake host
+// listener: the sent envelope is a file.copy naming the two endpoints verbatim,
+// as typed inside the instance (no local resolution — it is a pure signal).
 func TestRequestSendsEnvelope(t *testing.T) {
 	dir := t.TempDir()
-	file := filepath.Join(dir, "tool")
-	if err := os.WriteFile(file, []byte("bytes"), 0o755); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-
 	socket := filepath.Join(dir, "fleet.sock")
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
@@ -40,7 +35,7 @@ func TestRequestSendsEnvelope(t *testing.T) {
 	}()
 
 	var out bytes.Buffer
-	if err := Request(Config{SocketPath: socket}, &out, file, "~/builds/tool"); err != nil {
+	if err := Request(Config{SocketPath: socket}, &out, ":build/tool", "~/builds/tool"); err != nil {
 		t.Fatalf("Request: %v", err)
 	}
 	env := <-got
@@ -51,36 +46,64 @@ func TestRequestSendsEnvelope(t *testing.T) {
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
 		t.Fatalf("payload: %v", err)
 	}
-	if payload.Path != file {
-		t.Fatalf("payload path = %q, want %q", payload.Path, file)
+	if payload.Src != ":build/tool" {
+		t.Fatalf("payload src = %q, want :build/tool (verbatim)", payload.Src)
 	}
-	if payload.Dest != "~/builds/tool" {
-		t.Fatalf("payload dest = %q, want ~/builds/tool (passed through verbatim)", payload.Dest)
+	if payload.Dst != "~/builds/tool" {
+		t.Fatalf("payload dst = %q, want ~/builds/tool (verbatim)", payload.Dst)
 	}
-	if !strings.Contains(out.String(), file) || !strings.Contains(out.String(), "~/builds/tool") {
-		t.Fatalf("confirmation %q does not name the file and destination", out.String())
+	if !strings.Contains(out.String(), ":build/tool") || !strings.Contains(out.String(), "~/builds/tool") {
+		t.Fatalf("confirmation %q does not name the endpoints", out.String())
 	}
 }
 
-// TestRequestErrors covers the fast local failures: a missing file, a
-// directory, and no host listener.
-func TestRequestErrors(t *testing.T) {
+// TestRequestDownloadShorthand confirms the 1-arg form sends an empty dst and
+// the confirmation mentions the downloads folder.
+func TestRequestDownloadShorthand(t *testing.T) {
+	dir := t.TempDir()
+	socket := filepath.Join(dir, "fleet.sock")
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	got := make(chan control.Envelope, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var env control.Envelope
+		_ = json.NewDecoder(conn).Decode(&env)
+		got <- env
+	}()
+
+	var out bytes.Buffer
+	if err := Request(Config{SocketPath: socket}, &out, ":out.bin", ""); err != nil {
+		t.Fatalf("Request: %v", err)
+	}
+	var payload control.CopyFilePayload
+	if err := json.Unmarshal((<-got).Payload, &payload); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if payload.Src != ":out.bin" || payload.Dst != "" {
+		t.Fatalf("payload = %+v, want src=:out.bin dst empty", payload)
+	}
+	if !strings.Contains(out.String(), "downloads folder") {
+		t.Fatalf("confirmation %q does not mention the downloads folder", out.String())
+	}
+}
+
+// TestRequestNoListener covers the only failure Request still reports locally:
+// no host TUI connected. It no longer stats the source (which may be a file on
+// the user's machine, unreachable from in-container) — that is the host TUI's job.
+func TestRequestNoListener(t *testing.T) {
 	dir := t.TempDir()
 	cfg := Config{SocketPath: filepath.Join(dir, "absent.sock")}
 
 	var out bytes.Buffer
-	if err := Request(cfg, &out, filepath.Join(dir, "ghost"), ""); !os.IsNotExist(err) {
-		t.Fatalf("missing file: want IsNotExist, got %v", err)
-	}
-	if err := Request(cfg, &out, dir, ""); err == nil || !strings.Contains(err.Error(), "directory") {
-		t.Fatalf("directory: want directory error, got %v", err)
-	}
-
-	file := filepath.Join(dir, "tool")
-	if err := os.WriteFile(file, []byte("bytes"), 0o755); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	if err := Request(cfg, &out, file, ""); err == nil || !strings.Contains(err.Error(), "not connected to a host fleet") {
+	if err := Request(cfg, &out, ":tool", ""); err == nil || !strings.Contains(err.Error(), "not connected to a host fleet") {
 		t.Fatalf("no listener: want not-connected error, got %v", err)
 	}
 }

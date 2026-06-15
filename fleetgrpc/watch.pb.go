@@ -624,25 +624,31 @@ func (x *BrowserOpen) GetInstance() string {
 	return ""
 }
 
-// FileCopy asks the receiving client to pull a file out of an instance to its
-// local disk. Pushed when the server's per-instance control listener receives a
-// file.copy envelope from an in-container `fleet copy` (fc); the CLIENT then
-// fetches the bytes itself via the CopyFile RPC and writes them to its downloads
-// folder — the same control-socket → Watch → client-action split as BrowserOpen,
-// which is what makes fc work for fully remote deployments.
+// FileCopy asks the receiving client (the connected TUI) to PERFORM a scp-style
+// copy on the in-container sender's behalf. Pushed when the server's per-instance
+// control listener receives a file.copy envelope from an in-container `fleet
+// copy` (fc): the in-instance process cannot reach the host fleetd over gRPC
+// (only the control socket is bind-mounted), so it delegates the whole copy to
+// the TUI, which runs the generic copy engine against the host fleet with its
+// own disk as the "local" side. Same control-socket → Watch → client-action
+// split as BrowserOpen, which is what makes fc work for fully remote deployments.
+//
+// src and dst are the two scp endpoints AS TYPED inside the instance, verbatim.
+// Each is either `[fleet/]instance:path` (an instance), a plain path (a file on
+// the TUI machine — the human's disk), or `:path` (the CURRENT instance: the TUI
+// substitutes the originating fleet/instance below). Direction is inferred from
+// which side is local vs an instance.
 type FileCopy struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// fleet/instance label which workspace requested the copy.
+	// fleet/instance label of the instance that requested the copy. Also the value
+	// the TUI substitutes for a `:path` (self) endpoint in src/dst.
 	Fleet    string `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
 	Instance string `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
-	// path is the absolute in-instance path of the file to copy (resolved by the
-	// in-instance sender, so the server-side exec needs no cwd context).
-	Path string `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
-	// dest is the optional destination on the receiving client's machine; ""
-	// means the client's downloads folder. The client interprets it scp-style:
-	// absolute is used as-is, ~/ and relative paths resolve against the client
-	// user's home, and a directory keeps the source basename.
-	Dest          string `protobuf:"bytes,4,opt,name=dest,proto3" json:"dest,omitempty"`
+	// src is the source endpoint as typed inside the instance.
+	Src string `protobuf:"bytes,3,opt,name=src,proto3" json:"src,omitempty"`
+	// dst is the destination endpoint as typed inside the instance. Empty is the
+	// 1-arg download shorthand: the TUI delivers to its downloads folder.
+	Dst           string `protobuf:"bytes,4,opt,name=dst,proto3" json:"dst,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -691,16 +697,16 @@ func (x *FileCopy) GetInstance() string {
 	return ""
 }
 
-func (x *FileCopy) GetPath() string {
+func (x *FileCopy) GetSrc() string {
 	if x != nil {
-		return x.Path
+		return x.Src
 	}
 	return ""
 }
 
-func (x *FileCopy) GetDest() string {
+func (x *FileCopy) GetDst() string {
 	if x != nil {
-		return x.Dest
+		return x.Dst
 	}
 	return ""
 }
@@ -743,12 +749,12 @@ const file_watch_proto_rawDesc = "" +
 	"\bdata_dir\x18\x02 \x01(\tH\x00R\adataDir\x88\x01\x01\x12\x14\n" +
 	"\x05fleet\x18\x03 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x04 \x01(\tR\binstanceB\v\n" +
-	"\t_data_dir\"d\n" +
+	"\t_data_dir\"`\n" +
 	"\bFileCopy\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
-	"\binstance\x18\x02 \x01(\tR\binstance\x12\x12\n" +
-	"\x04path\x18\x03 \x01(\tR\x04path\x12\x12\n" +
-	"\x04dest\x18\x04 \x01(\tR\x04dest*\x8a\x01\n" +
+	"\binstance\x18\x02 \x01(\tR\binstance\x12\x10\n" +
+	"\x03src\x18\x03 \x01(\tR\x03src\x12\x10\n" +
+	"\x03dst\x18\x04 \x01(\tR\x03dst*\x8a\x01\n" +
 	"\rRemoteMcpConn\x12\x1f\n" +
 	"\x1bREMOTE_MCP_CONN_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aREMOTE_MCP_CONN_CONNECTING\x10\x01\x12\x1d\n" +

@@ -217,11 +217,14 @@ func TestWatchStreamsFileCopy(t *testing.T) {
 	// copies — discrete events must arrive in order, not conflated.
 	time.Sleep(100 * time.Millisecond)
 	svc.hub.post(func(h *hub) {
-		h.broadcastFileCopy(&fleetgrpc.FileCopy{Fleet: "alpha", Instance: "i1", Path: "/ws/bin/tool", Dest: "~/builds/tool"})
-		h.broadcastFileCopy(&fleetgrpc.FileCopy{Fleet: "alpha", Instance: "i1", Path: "/ws/bin/tool2"})
+		h.broadcastFileCopy(&fleetgrpc.FileCopy{Fleet: "alpha", Instance: "i1", Src: ":bin/tool", Dst: "~/builds/tool"})
+		h.broadcastFileCopy(&fleetgrpc.FileCopy{Fleet: "alpha", Instance: "i1", Src: "report.csv", Dst: ":/tmp/"})
 	})
 
-	for _, wantPath := range []string{"/ws/bin/tool", "/ws/bin/tool2"} {
+	for _, want := range []struct{ src, dst string }{
+		{":bin/tool", "~/builds/tool"},
+		{"report.csv", ":/tmp/"},
+	} {
 		ev, err := stream.Recv()
 		if err != nil {
 			t.Fatalf("Recv: %v", err)
@@ -230,11 +233,8 @@ func TestWatchStreamsFileCopy(t *testing.T) {
 		if fc == nil {
 			t.Fatalf("want FileCopy event, got %v", ev)
 		}
-		if fc.GetFleet() != "alpha" || fc.GetInstance() != "i1" || fc.GetPath() != wantPath {
-			t.Fatalf("FileCopy = %v, want alpha/i1 %s", fc, wantPath)
-		}
-		if wantPath == "/ws/bin/tool" && fc.GetDest() != "~/builds/tool" {
-			t.Fatalf("FileCopy dest = %q, want ~/builds/tool", fc.GetDest())
+		if fc.GetFleet() != "alpha" || fc.GetInstance() != "i1" || fc.GetSrc() != want.src || fc.GetDst() != want.dst {
+			t.Fatalf("FileCopy = %v, want alpha/i1 src=%s dst=%s", fc, want.src, want.dst)
 		}
 	}
 }
