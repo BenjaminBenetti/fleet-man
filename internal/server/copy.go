@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path"
 	"strings"
+	"sync/atomic"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
@@ -281,12 +282,17 @@ func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoC
 	return stream.SendAndClose(&fleetgrpc.CopyIntoReply{Path: finalPath, Written: open.GetSize()})
 }
 
+// copyIntoSeq makes the temp name below unique within this process regardless of
+// the RNG, so two concurrent uploads into one directory never collide even if
+// crypto/rand degrades (a failed Read would otherwise leave the bytes zeroed).
+var copyIntoSeq atomic.Uint64
+
 // copyIntoTempName returns a hidden, unique basename to extract an upload into
 // before the atomic rename onto its real destination.
 func copyIntoTempName() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
-	return fmt.Sprintf(".fleetcopy-%x", b[:])
+	return fmt.Sprintf(".fleetcopy-%d-%x", copyIntoSeq.Add(1), b[:])
 }
 
 // moveContainerFile renames from→to within dir inside the instance — the atomic
