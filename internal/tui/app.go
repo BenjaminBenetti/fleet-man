@@ -139,6 +139,12 @@ type model struct {
 	releaseNotesVersion string
 	releaseNotesBody    string
 
+	// Delegated-copy confirmation: an in-container `fc` that touches a host path
+	// is queued here until the human allows/denies it; copySessionAllow remembers
+	// instances the human cleared for the lifetime of this TUI. See copyconfirm.go.
+	pendingCopyConfirms []copyRequest
+	copySessionAllow    map[string]bool
+
 	// Pending exec after quit: after a successful update the TUI
 	// quits, then Run() replaces the current process with the new
 	// fleet binary via syscall.Exec so the new fleet is NOT nested
@@ -191,6 +197,7 @@ func newModel() model {
 		agentSpinner:       agentSpinnerModel,
 		inHostTmux:         os.Getenv("TMUX") != "",
 		armadaStatus:       make(map[string]armadaStatus),
+		copySessionAllow:   make(map[string]bool),
 		bootGateway:        os.Getenv("FLEET_GATEWAY"),
 		bootToken:          os.Getenv("FLEET_TOKEN"),
 		bootServer:         os.Getenv("FLEET_SERVER"),
@@ -737,6 +744,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// 2.6 Delegated-copy confirmation — while a host-touching `fc` is pending it
+	// swallows all key input: allow/deny resolves it, every other key is ignored
+	// so it can't fall through to the active page. See copyconfirm.go.
+	if m.copyConfirmShowing() {
+		if key, ok := msg.(tea.KeyMsg); ok {
+			return m, tea.Batch(spinCmd, m.resolveCopyConfirm(key.String()))
+		}
+	}
+
 	// 3. Shared-only messages — return early
 	switch msg := msg.(type) {
 	case stateChangedMsg:
@@ -819,13 +835,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.watchGen {
 			return m, spinCmd
 		}
-		// An in-container `fleet copy` (fc) delegated a copy to this TUI; run it
-		// against the host fleet in the background, with this machine as local.
+		// An in-container `fleet copy` (fc) delegated a copy to this TUI. A copy
+		// that touches a host path is gated behind a confirmation (unless the
+		// instance is session-allowed); one purely between instances runs straight
+		// away. See copyconfirm.go.
 		if msg.fleet == "" || msg.instance == "" || msg.src == "" {
 			return m, spinCmd
 		}
-		m.message = fmt.Sprintf("Copying %s -> %s...", msg.src, copyDstLabel(msg.dst))
-		return m, tea.Batch(spinCmd, copyForInstanceCmd(msg.fleet, msg.instance, msg.src, msg.dst))
+		cmd := m.requestCopy(copyRequest{fleet: msg.fleet, instance: msg.instance, src: msg.src, dst: msg.dst})
+		return m, tea.Batch(spinCmd, cmd)
 
 	case fileCopyDoneMsg:
 		if msg.err != nil {
@@ -1250,6 +1268,10 @@ func (m model) View() string {
 	// Release notes overlay takes over the whole screen, centered.
 	if m.releaseNotesShowing() {
 		return m.viewReleaseNotes() + "\x1b[0J"
+	}
+	// Delegated-copy confirmation overlay (host-touching `fc`).
+	if m.copyConfirmShowing() {
+		return m.viewCopyConfirm() + "\x1b[0J"
 	}
 	return m.currentPage.View(&m) + "\x1b[0J"
 }
