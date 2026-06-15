@@ -284,6 +284,17 @@ func (coderBackend *CoderBackend) Clone(sourceContainerID, destWorkspaceDir stri
 	return nil, fmt.Errorf("coder backend does not support cloning")
 }
 
+// SupportsRebuild reports false: Coder workspaces are managed by a remote
+// control plane that exposes no in-place container rebuild primitive.
+func (coderBackend *CoderBackend) SupportsRebuild() bool {
+	return false
+}
+
+// Rebuild is unsupported for Coder workspaces.
+func (coderBackend *CoderBackend) Rebuild(containerID, workspaceDir string, mounts []backend.Mount) (*backend.UpResult, error) {
+	return nil, fmt.Errorf("coder backend does not support rebuild")
+}
+
 // Status reports the live state of a Coder workspace by reading
 // `coder list`'s LatestBuild.Status. Lifecycle: running/started →
 // running; stopped/canceled → stopped; transitional builds (starting,

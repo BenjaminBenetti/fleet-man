@@ -321,6 +321,49 @@ func (codespacesBackend *CodespacesBackend) Clone(sourceContainerID, destWorkspa
 	return nil, fmt.Errorf("codespaces backend does not support cloning")
 }
 
+// SupportsRebuild reports true: `gh codespace rebuild` recreates the dev
+// container inside an existing codespace.
+func (codespacesBackend *CodespacesBackend) SupportsRebuild() bool {
+	return true
+}
+
+// Rebuild recreates the dev container inside the codespace via
+// `gh codespace rebuild`. The codespace VM and its name are unchanged and the
+// user's code is preserved by GitHub — only the container is rebuilt — so the
+// returned UpResult carries the same containerID. mounts are ignored (the gh
+// CLI cannot inject host bind mounts). After triggering the rebuild we wait for
+// the codespace to report Available again and regenerate the SSH config (the
+// fresh container may present new connection details), mirroring Up. A future
+// "full" rebuild could pass --full to also drop cached Docker images.
+func (codespacesBackend *CodespacesBackend) Rebuild(containerID, workspaceDir string, _ []backend.Mount) (*backend.UpResult, error) {
+	if containerID == "" {
+		return nil, fmt.Errorf("codespaces rebuild requires a codespace name")
+	}
+
+	cmd := exec.Command("gh", "codespace", "rebuild", "-c", containerID)
+	var stderrBuf strings.Builder
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("gh codespace rebuild failed: %w\nstderr: %s", err, strings.TrimSpace(stderrBuf.String()))
+	}
+
+	// Wait for the rebuild to settle back to Available before reporting success,
+	// then refresh cached connection info. generateSSHConfig is best-effort
+	// (methods fall back to `gh codespace ssh` if it fails), as in Up.
+	if err := codespacesBackend.waitForState(containerID, "Available", 5*time.Minute); err != nil {
+		return nil, err
+	}
+	codespacesBackend.nameCache[workspaceDir] = containerID
+	_, _ = codespacesBackend.generateSSHConfig(containerID, workspaceDir)
+
+	return &backend.UpResult{
+		Outcome:               "success",
+		ContainerID:           containerID,
+		RemoteUser:            "codespace",
+		RemoteWorkspaceFolder: "/workspaces",
+	}, nil
+}
+
 // Status reports the live state of a GitHub Codespace via
 // `gh codespace view`. GitHub's lifecycle: Available → running;
 // Shutdown/Archived → stopped (the most common drift the live probe

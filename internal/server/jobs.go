@@ -63,6 +63,10 @@ var jobRunStop = func(fleetName, instanceName string) error {
 	return err
 }
 
+var jobRunRebuild = func(fleetName, instanceName string) error {
+	return create.RunRebuild(fleetName, instanceName, false)
+}
+
 // stopBuildkitServer is the buildkit teardown seam (a package var so the destroy
 // paths can be exercised in tests without docker).
 var stopBuildkitServer = buildkit.StopSharedServer
@@ -615,6 +619,81 @@ func (s *service) StopInstance(req *fleetgrpc.StopInstanceRequest, stream fleetg
 		return err
 	}
 	return relay(j, stream)
+}
+
+// startRebuildInstanceJob validates the target, refuses fast when the backend
+// has no rebuild primitive or the instance is mid-transition, marks it
+// StatusRebuilding, and starts the in-place reprovision job. The record is kept
+// (unlike destroy) and flips back to running/failed on completion.
+func (s *service) startRebuildInstanceJob(req *fleetgrpc.RebuildInstanceRequest) (*job, error) {
+	fleetName, instanceName := req.GetFleet(), req.GetInstance()
+	if fleetName == "" || instanceName == "" {
+		return nil, status.Error(codes.InvalidArgument, "fleet and instance are required")
+	}
+
+	// Validate the target AND mark it StatusRebuilding in a single state.Update
+	// so the check and the transitional-status pre-write are atomic: a second
+	// concurrent rebuild (or a stop/destroy) can't slip past the guard in the
+	// window between a separate read and write. This mirrors how
+	// startCreateInstanceJob / startCloneInstanceJob validate-then-mark under one
+	// lock. A typo / unsupported backend / mid-flight instance fails fast with a
+	// clear gRPC error (state.Update propagates the closure's error) rather than
+	// a failed job. The pre-write is the in-place sibling of the StatusCreating
+	// pre-write, so pollers — fleet_list, async MCP callers, the TUI — see the
+	// rebuild in flight instead of a stale running status.
+	err := state.Update(func(st *state.State) error {
+		f, ok := st.Fleets[fleetName]
+		if !ok {
+			return status.Errorf(codes.NotFound, "fleet %q not found", fleetName)
+		}
+		inst, err := f.GetInstance(instanceName)
+		if err != nil {
+			return status.Errorf(codes.NotFound, "instance %q not found in fleet %q", instanceName, fleetName)
+		}
+		if isTransitionalStatus(inst.Status) {
+			return status.Errorf(codes.FailedPrecondition, "instance %s/%s is %s; wait for it to settle before rebuilding", fleetName, instanceName, inst.Status)
+		}
+		// SupportsRebuild is a pure capability check, so construct by type
+		// (no RegisterName / SSH-config file I/O under the state lock).
+		if !backendutil.New(inst.Backend, false).SupportsRebuild() {
+			return status.Errorf(codes.FailedPrecondition, "backend %q does not support rebuild", inst.Backend)
+		}
+		inst.Status = fleet.StatusRebuilding
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.pushState()
+
+	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_REBUILD_INSTANCE, fleetName, instanceName, time.Now())
+	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
+		err := jobRunRebuild(fleetName, instanceName)
+		return loadInstanceSnapshot(fleetName, instanceName), nil, err
+	})
+	return j, nil
+}
+
+// RebuildInstance starts the in-place rebuild job and relays its events.
+func (s *service) RebuildInstance(req *fleetgrpc.RebuildInstanceRequest, stream fleetgrpc.FleetService_RebuildInstanceServer) error {
+	j, err := s.startRebuildInstanceJob(req)
+	if err != nil {
+		return err
+	}
+	return relay(j, stream)
+}
+
+// isTransitionalStatus reports whether a status reflects an in-flight lifecycle
+// job, so a second mutating job (e.g. rebuild) can refuse to pile on. Mirrors
+// the TUI's isTransitional check, kept server-side so CLI/MCP get the same
+// guard.
+func isTransitionalStatus(s fleet.InstanceStatus) bool {
+	switch s {
+	case fleet.StatusCreating, fleet.StatusCloning, fleet.StatusStopping,
+		fleet.StatusStarting, fleet.StatusDeleting, fleet.StatusRebuilding:
+		return true
+	}
+	return false
 }
 
 // startDestroyInstanceJob validates the target, marks it deleting, and starts

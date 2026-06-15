@@ -12,6 +12,7 @@ type viewMode int
 const (
 	viewNormal viewMode = iota
 	viewConfirmDelete
+	viewConfirmRebuild
 	viewConfirmDeleteFleetWarn
 	viewAddInstance
 	viewCloneInstance

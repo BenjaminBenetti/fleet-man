@@ -242,6 +242,106 @@ func TestStartStopJobs(t *testing.T) {
 	}
 }
 
+func TestRebuildInstanceJob(t *testing.T) {
+	isolateFleetDir(t)
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Instances: []*fleet.Instance{{Name: "i1", Status: fleet.StatusRunning, ContainerID: "c1"}}},
+	}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	orig := jobRunRebuild
+	// Simulate create.RunRebuild's success path: a new container id, running.
+	jobRunRebuild = func(f, i string) error {
+		return state.Update(func(st *state.State) error {
+			inst, _ := st.Fleets[f].GetInstance(i)
+			inst.ContainerID = "c2"
+			inst.Status = fleet.StatusRunning
+			return nil
+		})
+	}
+	defer func() { jobRunRebuild = orig }()
+
+	_, client, cleanup := newTestServer(t)
+	defer cleanup()
+
+	stream, err := client.RebuildInstance(context.Background(), &fleetgrpc.RebuildInstanceRequest{Fleet: "alpha", Instance: "i1"})
+	if err != nil {
+		t.Fatalf("RebuildInstance: %v", err)
+	}
+	evs := drainJob(t, stream)
+	if k := evs[0].GetStarted().GetKind(); k != fleetgrpc.JobKind_JOB_KIND_REBUILD_INSTANCE {
+		t.Fatalf("first event kind = %v, want REBUILD_INSTANCE", k)
+	}
+	if d := evs[len(evs)-1].GetDone(); d == nil || !d.GetSuccess() {
+		t.Fatalf("rebuild not done-success: %v", evs)
+	}
+	st, _ := state.Load()
+	inst, _ := st.Fleets["alpha"].GetInstance("i1")
+	if inst.Status != fleet.StatusRunning || inst.ContainerID != "c2" {
+		t.Fatalf("instance not running with new container after rebuild: %+v", inst)
+	}
+}
+
+func TestRebuildInstanceRejectsUnsupportedBackend(t *testing.T) {
+	isolateFleetDir(t)
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Instances: []*fleet.Instance{
+			{Name: "i1", Status: fleet.StatusRunning, ContainerID: "c1", Backend: fleet.BackendCoder},
+		}},
+	}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, client, cleanup := newTestServer(t)
+	defer cleanup()
+
+	stream, err := client.RebuildInstance(context.Background(), &fleetgrpc.RebuildInstanceRequest{Fleet: "alpha", Instance: "i1"})
+	if err != nil {
+		t.Fatalf("RebuildInstance call: %v", err)
+	}
+	if _, err = stream.Recv(); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("want FailedPrecondition for coder backend, got %v", err)
+	}
+}
+
+func TestRebuildInstanceRejectsTransitional(t *testing.T) {
+	isolateFleetDir(t)
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Instances: []*fleet.Instance{{Name: "i1", Status: fleet.StatusCreating}}},
+	}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, client, cleanup := newTestServer(t)
+	defer cleanup()
+
+	stream, err := client.RebuildInstance(context.Background(), &fleetgrpc.RebuildInstanceRequest{Fleet: "alpha", Instance: "i1"})
+	if err != nil {
+		t.Fatalf("RebuildInstance call: %v", err)
+	}
+	if _, err = stream.Recv(); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("want FailedPrecondition for mid-transition instance, got %v", err)
+	}
+}
+
+func TestRebuildInstanceRejectsMissing(t *testing.T) {
+	isolateFleetDir(t)
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha"},
+	}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, client, cleanup := newTestServer(t)
+	defer cleanup()
+
+	stream, err := client.RebuildInstance(context.Background(), &fleetgrpc.RebuildInstanceRequest{Fleet: "alpha", Instance: "nope"})
+	if err != nil {
+		t.Fatalf("RebuildInstance call: %v", err)
+	}
+	if _, err = stream.Recv(); status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound for missing instance, got %v", err)
+	}
+}
+
 func TestDestroyInstanceJobRemovesRecord(t *testing.T) {
 	isolateFleetDir(t)
 	wsDir := t.TempDir()

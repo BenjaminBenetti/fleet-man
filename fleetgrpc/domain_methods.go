@@ -30,6 +30,8 @@ func (s InstanceStatus) Display() string {
 		return "starting"
 	case InstanceStatus_INSTANCE_STATUS_DELETING:
 		return "deleting"
+	case InstanceStatus_INSTANCE_STATUS_REBUILDING:
+		return "rebuilding"
 	default:
 		return "unknown"
 	}

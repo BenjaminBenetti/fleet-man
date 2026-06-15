@@ -112,6 +112,19 @@ func stopInstanceCmd(fleetName, instanceName string) tea.Cmd {
 	}
 }
 
+// rebuildInstanceCmd recreates an instance's container in place via a server
+// job and reports completion. Like start/stop, the TUI flips an optimistic
+// in-memory Rebuilding status at the call site for the spinner and reload()s the
+// authoritative result on completion.
+func rebuildInstanceCmd(fleetName, instanceName string) tea.Cmd {
+	return func() tea.Msg {
+		if err := rebuildInstanceRemote(fleetName, instanceName); err != nil {
+			return operationDoneMsg{fleetName, instanceName, "", err}
+		}
+		return operationDoneMsg{fleetName, instanceName, fmt.Sprintf("Rebuilt %s/%s", fleetName, instanceName), nil}
+	}
+}
+
 // deleteInstanceCmd tears down an instance via a server job. Port forwards are
 // the TUI's own (the server doesn't manage them), so they're removed here first.
 func deleteInstanceCmd(fleetName, instanceName string, pf *portforward.Manager) tea.Cmd {

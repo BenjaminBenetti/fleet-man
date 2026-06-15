@@ -145,6 +145,8 @@ func statusToProto(s fleet.InstanceStatus) fleetgrpc.InstanceStatus {
 		return fleetgrpc.InstanceStatus_INSTANCE_STATUS_STARTING
 	case fleet.StatusDeleting:
 		return fleetgrpc.InstanceStatus_INSTANCE_STATUS_DELETING
+	case fleet.StatusRebuilding:
+		return fleetgrpc.InstanceStatus_INSTANCE_STATUS_REBUILDING
 	default:
 		return fleetgrpc.InstanceStatus_INSTANCE_STATUS_UNSPECIFIED
 	}

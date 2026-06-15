@@ -30,11 +30,11 @@ option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
 // reconciliation" rather than accidentally meaning "creating".
 //
 // CONTRACT: transitional statuses (CREATING, CLONING, DELETING, STOPPING,
-// STARTING) are set ONLY by the SERVER when a job begins; clients MUST NOT
-// write status (no SetInstanceStatus RPC exists, by design). The TUI renders
-// optimistic transitions from JobStarted/JobProgress, never by writing status
-// itself — this prevents a stray client-side status write from re-introducing
-// the issue #63 class of state-file race.
+// STARTING, REBUILDING) are set ONLY by the SERVER when a job begins; clients
+// MUST NOT write status (no SetInstanceStatus RPC exists, by design). The TUI
+// renders optimistic transitions from JobStarted/JobProgress, never by writing
+// status itself — this prevents a stray client-side status write from
+// re-introducing the issue #63 class of state-file race.
 enum InstanceStatus {
   INSTANCE_STATUS_UNSPECIFIED = 0;
   INSTANCE_STATUS_CREATING = 1;
@@ -45,6 +45,7 @@ enum InstanceStatus {
   INSTANCE_STATUS_STOPPING = 6;
   INSTANCE_STATUS_STARTING = 7;
   INSTANCE_STATUS_DELETING = 8;
+  INSTANCE_STATUS_REBUILDING = 9;
 }
 
 // BackendType mirrors internal/fleet.BackendType. Zero value UNSPECIFIED is

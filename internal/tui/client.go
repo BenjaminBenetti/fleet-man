@@ -181,6 +181,16 @@ var stopInstanceRemote = func(fleetName, instanceName string) error {
 	return err
 }
 
+// rebuildInstanceRemote recreates an instance's container in place, to
+// completion. Slower than start/stop (it reprovisions), so it shares the same
+// long-lived job stream as create/clone.
+var rebuildInstanceRemote = func(fleetName, instanceName string) error {
+	_, err := awaitJobDone(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (jobStream, error) {
+		return svc.RebuildInstance(ctx, &fleetgrpc.RebuildInstanceRequest{Fleet: fleetName, Instance: instanceName})
+	})
+	return err
+}
+
 // destroyInstanceRemote tears down one instance (destroyFleet=false) or the
 // whole fleet (destroyFleet=true), to completion.
 var destroyInstanceRemote = func(fleetName, instanceName string, destroyFleet bool) error {
@@ -662,6 +672,8 @@ func statusProtoToLegacy(s fleetgrpc.InstanceStatus) fleet.InstanceStatus {
 		return fleet.StatusStarting
 	case fleetgrpc.InstanceStatus_INSTANCE_STATUS_DELETING:
 		return fleet.StatusDeleting
+	case fleetgrpc.InstanceStatus_INSTANCE_STATUS_REBUILDING:
+		return fleet.StatusRebuilding
 	default:
 		return ""
 	}

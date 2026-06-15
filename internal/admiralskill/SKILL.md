@@ -61,9 +61,9 @@ the daemon's version and liveness. `fleet_logs` returns an instance's container
 logs (use `tail` to cap to the last N lines).
 
 **Manage instance lifecycle.** The slow, job-shaped tools — `fleet_up`,
-`fleet_clone`, `fleet_down`, `fleet_destroy_fleet` — are async-first: they
-return within seconds with `{job_id, done: false, instance}` while the job
-keeps running server-side. Kick off as many as you need (e.g. bulk-provision
+`fleet_clone`, `fleet_rebuild`, `fleet_down`, `fleet_destroy_fleet` — are
+async-first: they return within seconds with `{job_id, done: false, instance}`
+while the job keeps running server-side. Kick off as many as you need (e.g. bulk-provision
 several instances), keep working, then poll `fleet_job_status {job_id}` until
 `state` leaves `running` — it reports `succeeded` (with `warnings` and the
 final `result` record) or `failed` (with `error`). The instance's `status` in
@@ -92,6 +92,10 @@ surfaces as a tool error.
 - `fleet_clone {fleet, source, destination, ..., wait?}` duplicates an
   instance, keeping its installed state (optional `display_name`, `tag`,
   `color`, `branch` overrides).
+- `fleet_rebuild {fleet, instance, wait?}` recreates an instance's container in
+  place (e.g. after its devcontainer config changed), **preserving the
+  workspace** — the git checkout and uncommitted edits survive. Only the
+  `devcontainer` and `codespaces` backends support it; `coder` does not.
 - `fleet_job_status {job_id}` reports a lifecycle job:
   `{state: running|succeeded|failed, error?, warnings?, result?}`. A failed job
   is data here (`state: "failed"`), not a tool error. An unknown `job_id`
@@ -163,6 +167,7 @@ INSPECT
 LIFECYCLE  (async-first: returns {job_id, done:false} in seconds; wait:true blocks)
   fleet_up {fleet, instance, remote?, branch?, backend?, wait?}
   fleet_clone {fleet, source, destination, display_name?, tag?, color?, branch?, wait?}
+  fleet_rebuild {fleet, instance, wait?}            # recreate container, keep workspace (devcontainer/codespaces)
   fleet_down {fleet, instance, wait?}               # remove one instance      (irreversible)
   fleet_destroy_fleet {fleet, wait?}                # remove fleet + instances (irreversible)
   fleet_job_status {job_id}                         # poll: running | succeeded | failed

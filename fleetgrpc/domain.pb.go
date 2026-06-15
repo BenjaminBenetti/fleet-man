@@ -43,11 +43,11 @@ const (
 // reconciliation" rather than accidentally meaning "creating".
 //
 // CONTRACT: transitional statuses (CREATING, CLONING, DELETING, STOPPING,
-// STARTING) are set ONLY by the SERVER when a job begins; clients MUST NOT
-// write status (no SetInstanceStatus RPC exists, by design). The TUI renders
-// optimistic transitions from JobStarted/JobProgress, never by writing status
-// itself — this prevents a stray client-side status write from re-introducing
-// the issue #63 class of state-file race.
+// STARTING, REBUILDING) are set ONLY by the SERVER when a job begins; clients
+// MUST NOT write status (no SetInstanceStatus RPC exists, by design). The TUI
+// renders optimistic transitions from JobStarted/JobProgress, never by writing
+// status itself — this prevents a stray client-side status write from
+// re-introducing the issue #63 class of state-file race.
 type InstanceStatus int32
 
 const (
@@ -60,6 +60,7 @@ const (
 	InstanceStatus_INSTANCE_STATUS_STOPPING    InstanceStatus = 6
 	InstanceStatus_INSTANCE_STATUS_STARTING    InstanceStatus = 7
 	InstanceStatus_INSTANCE_STATUS_DELETING    InstanceStatus = 8
+	InstanceStatus_INSTANCE_STATUS_REBUILDING  InstanceStatus = 9
 )
 
 // Enum value maps for InstanceStatus.
@@ -74,6 +75,7 @@ var (
 		6: "INSTANCE_STATUS_STOPPING",
 		7: "INSTANCE_STATUS_STARTING",
 		8: "INSTANCE_STATUS_DELETING",
+		9: "INSTANCE_STATUS_REBUILDING",
 	}
 	InstanceStatus_value = map[string]int32{
 		"INSTANCE_STATUS_UNSPECIFIED": 0,
@@ -85,6 +87,7 @@ var (
 		"INSTANCE_STATUS_STOPPING":    6,
 		"INSTANCE_STATUS_STARTING":    7,
 		"INSTANCE_STATUS_DELETING":    8,
+		"INSTANCE_STATUS_REBUILDING":  9,
 	}
 )
 
@@ -868,7 +871,7 @@ const file_domain_proto_rawDesc = "" +
 	"\x11GroupLayoutsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12,\n" +
 	"\x05value\x18\x02 \x01(\v2\x16.fleetgrpc.GroupLayoutR\x05value:\x028\x01B\x14\n" +
-	"\x12_last_seen_versionJ\x04\b\x04\x10\x10*\x9c\x02\n" +
+	"\x12_last_seen_versionJ\x04\b\x04\x10\x10*\xbc\x02\n" +
 	"\x0eInstanceStatus\x12\x1f\n" +
 	"\x1bINSTANCE_STATUS_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18INSTANCE_STATUS_CREATING\x10\x01\x12\x1b\n" +
@@ -878,7 +881,8 @@ const file_domain_proto_rawDesc = "" +
 	"\x16INSTANCE_STATUS_FAILED\x10\x05\x12\x1c\n" +
 	"\x18INSTANCE_STATUS_STOPPING\x10\x06\x12\x1c\n" +
 	"\x18INSTANCE_STATUS_STARTING\x10\a\x12\x1c\n" +
-	"\x18INSTANCE_STATUS_DELETING\x10\b*\x7f\n" +
+	"\x18INSTANCE_STATUS_DELETING\x10\b\x12\x1e\n" +
+	"\x1aINSTANCE_STATUS_REBUILDING\x10\t*\x7f\n" +
 	"\vBackendType\x12\x1c\n" +
 	"\x18BACKEND_TYPE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19BACKEND_TYPE_DEVCONTAINER\x10\x01\x12\x16\n" +

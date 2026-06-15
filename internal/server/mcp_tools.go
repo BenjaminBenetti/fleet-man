@@ -85,6 +85,10 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 		Description: "Clone an existing instance into a new one within the same fleet, preserving its container state. Returns immediately with a job_id to poll via fleet_job_status; pass wait:true to block until done.",
 	}, s.mcpClone)
 	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_rebuild",
+		Description: "Rebuild an instance's container in place (e.g. after editing its devcontainer config), preserving the workspace — the git checkout and uncommitted edits survive. Only devcontainer and codespaces backends support rebuild; coder does not. Returns immediately with a job_id to poll via fleet_job_status; pass wait:true to block until done.",
+	}, s.mcpRebuild)
+	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_job_status",
 		Description: "Report the state of a lifecycle job (running, succeeded, or failed) with its error and warnings. Poll this to await a job started by fleet_up, fleet_clone, fleet_down, or fleet_destroy_fleet.",
 	}, s.mcpJobStatus)
@@ -468,6 +472,29 @@ func (s *service) mcpClone(ctx context.Context, _ *mcp.CallToolRequest, in Fleet
 		req.BranchOverride = &in.Branch
 	}
 	j, err := s.startCloneInstanceJob(req)
+	if err != nil {
+		return nil, FleetJobOutput{}, mcpErr(err)
+	}
+	if !in.Wait {
+		return asyncJobResult(in.Fleet, j)
+	}
+	jctx, cancel := mergeCtx(s.bgCtx, ctx)
+	defer cancel()
+	final, warnings, err := awaitJob(jctx, j)
+	return jobResult(in.Fleet, j.summary.GetJobId(), final, warnings, err)
+}
+
+type FleetRebuildInput struct {
+	Fleet    string `json:"fleet" jsonschema:"fleet name"`
+	Instance string `json:"instance" jsonschema:"instance name"`
+	Wait     bool   `json:"wait,omitempty" jsonschema:"block until the rebuild completes instead of returning a job handle immediately; rebuilding can take minutes"`
+}
+
+func (s *service) mcpRebuild(ctx context.Context, _ *mcp.CallToolRequest, in FleetRebuildInput) (*mcp.CallToolResult, FleetJobOutput, error) {
+	if in.Fleet == "" || in.Instance == "" {
+		return nil, FleetJobOutput{}, errors.New("fleet and instance are required")
+	}
+	j, err := s.startRebuildInstanceJob(&fleetgrpc.RebuildInstanceRequest{Fleet: in.Fleet, Instance: in.Instance})
 	if err != nil {
 		return nil, FleetJobOutput{}, mcpErr(err)
 	}
