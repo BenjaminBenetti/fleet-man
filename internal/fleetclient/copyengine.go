@@ -144,7 +144,14 @@ func downloadInstanceToLocal(ctx context.Context, svc fleetgrpc.FleetServiceClie
 		return CopyResult{}, fmt.Errorf("copy %s/%s:%s: server sent no file metadata", src.Fleet, src.Instance, src.Path)
 	}
 
-	destPath, err := policy.ResolveDest(dstTyped, meta.GetName())
+	// The default local filename comes from the server; reduce it to a bare
+	// basename so a malicious/compromised server cannot steer a directory dest
+	// into an arbitrary path on this machine (e.g. name "../../.ssh/authorized_keys").
+	name := filepath.Base(meta.GetName())
+	if name == "." || name == ".." || name == string(filepath.Separator) {
+		return CopyResult{}, fmt.Errorf("copy %s/%s:%s: server sent an invalid file name %q", src.Fleet, src.Instance, src.Path, meta.GetName())
+	}
+	destPath, err := policy.ResolveDest(dstTyped, name)
 	if err != nil {
 		return CopyResult{}, err
 	}
@@ -249,9 +256,15 @@ func relayInstanceToInstance(ctx context.Context, svc fleetgrpc.FleetServiceClie
 }
 
 // copyLocalToLocal copies one local file to another on the orchestrator's disk —
-// the degenerate case where neither endpoint is an instance.
+// the degenerate case where neither endpoint is an instance. The bytes are
+// streamed (not slurped) so a large file does not balloon memory.
 func copyLocalToLocal(srcPath, dstTyped string, policy CopyLocalPolicy) (CopyResult, error) {
-	fi, err := os.Stat(srcPath)
+	in, err := os.Open(srcPath)
+	if err != nil {
+		return CopyResult{}, err
+	}
+	defer in.Close()
+	fi, err := in.Stat()
 	if err != nil {
 		return CopyResult{}, err
 	}
@@ -262,14 +275,22 @@ func copyLocalToLocal(srcPath, dstTyped string, policy CopyLocalPolicy) (CopyRes
 	if err != nil {
 		return CopyResult{}, err
 	}
-	data, err := os.ReadFile(srcPath)
+	out, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fi.Mode().Perm())
 	if err != nil {
 		return CopyResult{}, err
 	}
-	if err := os.WriteFile(destPath, data, fi.Mode().Perm()); err != nil {
-		return CopyResult{}, err
+	written, copyErr := io.Copy(out, in)
+	if copyErr == nil {
+		// Set the mode explicitly so it is preserved even when overwriting.
+		copyErr = out.Chmod(fi.Mode().Perm())
 	}
-	return CopyResult{DestPath: destPath, Written: int64(len(data))}, nil
+	if closeErr := out.Close(); copyErr == nil {
+		copyErr = closeErr
+	}
+	if copyErr != nil {
+		return CopyResult{}, copyErr
+	}
+	return CopyResult{DestPath: destPath, Written: written}, nil
 }
 
 // requireRegularFile rejects a local source that is a directory or special file —

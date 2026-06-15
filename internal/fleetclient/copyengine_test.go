@@ -199,6 +199,31 @@ func TestCopyDownloadInstanceToLocal(t *testing.T) {
 	}
 }
 
+// TestCopyDownloadSanitizesServerName ensures a malicious server-provided file
+// name cannot steer a directory destination outside it: the name is reduced to a
+// basename, so a traversal name lands inside the destination directory.
+func TestCopyDownloadSanitizesServerName(t *testing.T) {
+	srv := newFakeCopyServer()
+	srv.files[fileKey("f", "i", "/evil")] = fakeFile{name: "../../../etc/passwd", mode: 0o644, data: []byte("x")}
+	client := dialFake(t, srv)
+
+	dir := t.TempDir()
+	res, err := Copy(context.Background(), client,
+		ResolvedEndpoint{Fleet: "f", Instance: "i", Path: "/evil"},
+		ResolvedEndpoint{Local: true, Path: dir + "/"},
+		passthroughPolicy{})
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	want := filepath.Join(dir, "passwd")
+	if res.DestPath != want {
+		t.Fatalf("traversal name not contained: DestPath = %q, want %q", res.DestPath, want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("file not written inside dest dir: %v", err)
+	}
+}
+
 func TestCopyRelayInstanceToInstance(t *testing.T) {
 	srv := newFakeCopyServer()
 	srv.files[fileKey("f", "i1", "/a/out.bin")] = fakeFile{name: "out.bin", mode: 0o644, data: []byte("relayed")}

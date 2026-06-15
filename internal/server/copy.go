@@ -293,7 +293,9 @@ func copyIntoTempName() string {
 // publish step that replaces any existing destination only once the upload is
 // fully written.
 func (s *service) moveContainerFile(inst *fleet.Instance, dir, from, to string) error {
-	cmd := copyIntoExecCommand(inst, []string{"mv", "-f", path.Join(dir, from), path.Join(dir, to)})
+	// `--` so a destination basename beginning with '-' is treated as a path,
+	// not an mv flag.
+	cmd := copyIntoExecCommand(inst, []string{"mv", "-f", "--", path.Join(dir, from), path.Join(dir, to)})
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -308,7 +310,7 @@ func (s *service) moveContainerFile(inst *fleet.Instance, dir, from, to string) 
 // removeContainerFile best-effort deletes a leftover temp file inside the
 // instance after a failed upload.
 func (s *service) removeContainerFile(inst *fleet.Instance, dir, name string) {
-	_ = copyIntoExecCommand(inst, []string{"rm", "-f", path.Join(dir, name)}).Run()
+	_ = copyIntoExecCommand(inst, []string{"rm", "-f", "--", path.Join(dir, name)}).Run()
 }
 
 // resolveCopyIntoDest resolves the destination dir + final basename inside the
