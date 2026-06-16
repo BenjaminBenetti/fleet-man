@@ -64,6 +64,12 @@ info "fleet copy into an instance directory keeps the source basename"
 "${FLEET_BIN}" copy "${workdir}/up.bin" "${FIXTURE_REPO_NAME}/alpha:/tmp/updir/"
 assert_equals "uploaded-bytes" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/updir/up.bin)" "directory upload basename"
 
+info "the host: prefix names the host machine (same as a plain path on the host)"
+"${FLEET_BIN}" copy "host:${workdir}/up.bin" "${FIXTURE_REPO_NAME}/alpha:/tmp/hostpfx.bin"
+assert_equals "uploaded-bytes" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/hostpfx.bin)" "host: prefix upload content"
+"${FLEET_BIN}" copy "${FIXTURE_REPO_NAME}/alpha:/tmp/hostpfx.bin" "host:${workdir}/from-host-pfx.bin"
+assert_equals "uploaded-bytes" "$(cat "${workdir}/from-host-pfx.bin")" "host: prefix download content"
+
 info "fleet copy into a non-existent instance directory fails"
 set +e
 "${FLEET_BIN}" copy "${workdir}/up.bin" "${FIXTURE_REPO_NAME}/alpha:/tmp/no-such-dir/" >/dev/null 2>&1

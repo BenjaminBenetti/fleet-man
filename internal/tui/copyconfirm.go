@@ -28,10 +28,20 @@ func (r copyRequest) instanceKey() string { return r.fleet + "/" + r.instance }
 
 // copyTouchesHost reports whether either endpoint is a path on this (the host)
 // machine — the only case that needs confirmation. A copy purely between
-// instances never reads or writes the human's disk.
+// instances never reads or writes the human's disk. The host machine is named
+// `host:`; an empty dst (the 1-arg download shorthand → downloads folder) also
+// writes here, and a bare local path is treated as host-side defensively (the
+// in-instance `fc` rewrites its own this-instance plain paths to `:` self).
 func copyTouchesHost(src, dst string) bool {
-	return fleetclient.ParseCopyEndpoint(src).Kind == fleetclient.CopyLocal ||
-		fleetclient.ParseCopyEndpoint(dst).Kind == fleetclient.CopyLocal
+	return endpointIsHost(src) || endpointIsHost(dst)
+}
+
+func endpointIsHost(arg string) bool {
+	switch fleetclient.ParseCopyEndpoint(arg).Kind {
+	case fleetclient.CopyHost, fleetclient.CopyLocal:
+		return true
+	}
+	return false
 }
 
 // copyConfirmShowing reports whether a host-copy confirmation is pending.
@@ -96,13 +106,13 @@ func (m *model) startConfirmedCopy(req copyRequest) tea.Cmd {
 // copy would read or write — the whole reason the prompt exists.
 func copyConfirmHostEffects(req copyRequest) []string {
 	var effects []string
-	if fleetclient.ParseCopyEndpoint(req.src).Kind == fleetclient.CopyLocal {
+	if endpointIsHost(req.src) {
 		effects = append(effects, "reads "+req.src+" on THIS machine")
 	}
 	switch {
 	case req.dst == "":
 		effects = append(effects, "writes to your downloads folder on THIS machine")
-	case fleetclient.ParseCopyEndpoint(req.dst).Kind == fleetclient.CopyLocal:
+	case endpointIsHost(req.dst):
 		effects = append(effects, "writes "+req.dst+" on THIS machine")
 	}
 	return effects

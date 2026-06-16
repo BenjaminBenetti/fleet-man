@@ -82,6 +82,9 @@ func resolveTUIEndpoint(arg, origFleet, origInstance string) fleetclient.Resolve
 		}
 		return fleetclient.ResolvedEndpoint{Fleet: fleetName, Instance: ep.Instance, Path: ep.Path}
 	default:
+		// CopyHost is this (the host TUI's) machine; CopyLocal shouldn't reach here
+		// (the in-instance `fc` rewrites its plain paths to `:` self endpoints), but
+		// fall back to the host's disk for it too — the empty 1-arg dst lands here.
 		return fleetclient.ResolvedEndpoint{Local: true, Path: ep.Path}
 	}
 }
