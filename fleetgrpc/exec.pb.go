@@ -801,11 +801,11 @@ func (x *ForwardOpen) GetRemotePort() int32 {
 	return 0
 }
 
-// CopyFile streams one file out of an instance to the client (the `fleet copy` /
-// in-instance `fc` feature). The server reads the file through the backend (a
-// tar pipe over container exec, so metadata + bytes arrive in one exec) and
-// streams it back: the FIRST chunk carries `meta`, every following chunk carries
-// `data`. Only regular files are supported — a directory is an InvalidArgument.
+// CopyFile streams a file OR directory out of an instance to the client (the
+// `fleet copy` / in-instance `fc` feature). The server reads through the backend
+// (a tar pipe over container exec) and streams it back: the FIRST chunk carries
+// `meta`, every following chunk carries `data`. For a file the data is the raw
+// bytes; for a directory (meta.is_dir) it is a tar the client extracts in Go.
 // Works unchanged over the remote gateway, which is the headline use case:
 // pulling a built binary out of a fully remote deployment onto the local machine.
 type CopyFileRequest struct {
@@ -954,11 +954,18 @@ func (*CopyFileChunk_Data) isCopyFileChunk_Msg() {}
 
 type CopyFileMeta struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// name is the source file's basename — the default local filename.
+	// name is the source's basename — the default local name.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// mode is the source file's permission bits (so an executable stays runnable).
-	Mode          uint32 `protobuf:"varint,2,opt,name=mode,proto3" json:"mode,omitempty"`
-	Size          int64  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	// Unused when is_dir.
+	Mode uint32 `protobuf:"varint,2,opt,name=mode,proto3" json:"mode,omitempty"`
+	// size is the file's byte count. Unused when is_dir.
+	Size int64 `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	// is_dir marks a recursive directory copy: the data frames then carry a tar of
+	// the directory (`tar -C <path> -cf - .`) instead of raw file bytes, and the
+	// client extracts it in Go — skipping symlinks/special files and the `./` root
+	// entry, sanitizing entry names. mode/size are unused.
+	IsDir         bool `protobuf:"varint,4,opt,name=is_dir,json=isDir,proto3" json:"is_dir,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1014,15 +1021,22 @@ func (x *CopyFileMeta) GetSize() int64 {
 	return 0
 }
 
-// CopyInto streams one file INTO an instance — the reverse of CopyFile, the
-// other half of scp-style `fleet copy`. It is CLIENT-streaming: the FIRST chunk
-// MUST carry `open` (which instance, the destination, and the file's
-// name/mode/size); every following chunk carries `data`. The server resolves the
-// destination inside the container (an existing directory keeps the source
-// basename; otherwise `dest` is the target path) and writes the bytes through
-// the backend with a single `tar -xf -` exec — the mirror of CopyFile's
-// `tar -chf -` read — preserving the file mode. Works unchanged over the remote
-// gateway: pushing a local file into a fully remote deployment.
+func (x *CopyFileMeta) GetIsDir() bool {
+	if x != nil {
+		return x.IsDir
+	}
+	return false
+}
+
+// CopyInto streams a file OR directory INTO an instance — the reverse of
+// CopyFile, the other half of scp-style `fleet copy`. It is CLIENT-streaming: the
+// FIRST chunk MUST carry `open` (which instance, the destination, and the
+// source's name/mode/size or is_dir); every following chunk carries `data`. The
+// server resolves the destination inside the container and writes through the
+// backend with a `tar -xf -` exec. For a file the data is the raw bytes (written
+// atomically via a temp name + rename); for a directory (open.is_dir) it is a tar
+// of the directory's contents extracted in place. Works unchanged over the remote
+// gateway: pushing a local file or tree into a fully remote deployment.
 type CopyIntoChunk struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Msg:
@@ -1118,11 +1132,19 @@ type CopyIntoOpen struct {
 	Name string `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
 	// mode is the file's permission bits to set on the written file (the perm bits
 	// are honoured; a 0 mode defaults to 0644). setuid/setgid/sticky are stripped.
+	// Unused when is_dir.
 	Mode uint32 `protobuf:"varint,5,opt,name=mode,proto3" json:"mode,omitempty"`
 	// size is the source file's byte count — needed up front for the tar header,
 	// and enforced as a hard cap so a truncated or oversized stream fails cleanly
-	// rather than leaving a partial file.
-	Size          int64 `protobuf:"varint,6,opt,name=size,proto3" json:"size,omitempty"`
+	// rather than leaving a partial file. Unused when is_dir.
+	Size int64 `protobuf:"varint,6,opt,name=size,proto3" json:"size,omitempty"`
+	// is_dir marks a recursive directory copy: the data frames then carry a tar of
+	// the directory's CONTENTS (entries relative to the dir root, no symlinks or
+	// special files, built by the client in Go), and the server resolves a target
+	// directory and extracts it there with `tar -xf -` (an in-place merge, like
+	// `cp -r`). mode/size are unused. NOT supported on the codespaces backend (its
+	// exec PTY can silently corrupt a binary tar) — a FailedPrecondition there.
+	IsDir         bool `protobuf:"varint,7,opt,name=is_dir,json=isDir,proto3" json:"is_dir,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1197,6 +1219,13 @@ func (x *CopyIntoOpen) GetSize() int64 {
 		return x.Size
 	}
 	return 0
+}
+
+func (x *CopyIntoOpen) GetIsDir() bool {
+	if x != nil {
+		return x.IsDir
+	}
+	return false
 }
 
 type CopyIntoReply struct {
@@ -1829,22 +1858,24 @@ const file_exec_proto_rawDesc = "" +
 	"\rCopyFileChunk\x12-\n" +
 	"\x04meta\x18\x01 \x01(\v2\x17.fleetgrpc.CopyFileMetaH\x00R\x04meta\x12\x14\n" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\x05\n" +
-	"\x03msg\"J\n" +
+	"\x03msg\"a\n" +
 	"\fCopyFileMeta\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04mode\x18\x02 \x01(\rR\x04mode\x12\x12\n" +
-	"\x04size\x18\x03 \x01(\x03R\x04size\"[\n" +
+	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x15\n" +
+	"\x06is_dir\x18\x04 \x01(\bR\x05isDir\"[\n" +
 	"\rCopyIntoChunk\x12-\n" +
 	"\x04open\x18\x01 \x01(\v2\x17.fleetgrpc.CopyIntoOpenH\x00R\x04open\x12\x14\n" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\x05\n" +
-	"\x03msg\"\x90\x01\n" +
+	"\x03msg\"\xa7\x01\n" +
 	"\fCopyIntoOpen\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12\x12\n" +
 	"\x04dest\x18\x03 \x01(\tR\x04dest\x12\x12\n" +
 	"\x04name\x18\x04 \x01(\tR\x04name\x12\x12\n" +
 	"\x04mode\x18\x05 \x01(\rR\x04mode\x12\x12\n" +
-	"\x04size\x18\x06 \x01(\x03R\x04size\"=\n" +
+	"\x04size\x18\x06 \x01(\x03R\x04size\x12\x15\n" +
+	"\x06is_dir\x18\a \x01(\bR\x05isDir\"=\n" +
 	"\rCopyIntoReply\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\awritten\x18\x02 \x01(\x03R\awritten\"M\n" +

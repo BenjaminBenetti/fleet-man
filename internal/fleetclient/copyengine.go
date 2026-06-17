@@ -1,6 +1,7 @@
 package fleetclient
 
 import (
+	"archive/tar"
 	"context"
 	"fmt"
 	"io"
@@ -80,6 +81,9 @@ func uploadLocalToInstance(ctx context.Context, svc fleetgrpc.FleetServiceClient
 	if err != nil {
 		return CopyResult{}, err
 	}
+	if fi.IsDir() {
+		return uploadDirToInstance(ctx, svc, srcPath, dst)
+	}
 	if err := requireRegularFile(srcPath, fi); err != nil {
 		return CopyResult{}, err
 	}
@@ -129,6 +133,42 @@ func uploadLocalToInstance(ctx context.Context, svc fleetgrpc.FleetServiceClient
 	return CopyResult{DestPath: reply.GetPath(), Written: reply.GetWritten()}, nil
 }
 
+// uploadDirToInstance streams a tar of srcDir's contents into dst over CopyInto
+// (open.is_dir). The tar is built in Go (skipping symlinks/specials and the root)
+// and the server extracts it in place. As with the file path, a Send error is
+// the server closing — CloseAndRecv carries the real status.
+func uploadDirToInstance(ctx context.Context, svc fleetgrpc.FleetServiceClient, srcPath string, dst ResolvedEndpoint) (CopyResult, error) {
+	stream, err := svc.CopyInto(ctx)
+	if err != nil {
+		return CopyResult{}, err
+	}
+	sendErr := stream.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Open{Open: &fleetgrpc.CopyIntoOpen{
+		Fleet:    dst.Fleet,
+		Instance: dst.Instance,
+		Dest:     dst.Path,
+		Name:     filepath.Base(srcPath),
+		IsDir:    true,
+	}}})
+	var written int64
+	if sendErr == nil {
+		tw := tar.NewWriter(copyChunkWriter{send: func(b []byte) error {
+			return stream.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Data{Data: b}})
+		}})
+		written, sendErr = writeTarTreeFromWalk(tw, srcPath)
+		if sendErr == nil {
+			sendErr = tw.Close()
+		}
+	}
+	reply, recvErr := stream.CloseAndRecv()
+	if recvErr != nil {
+		return CopyResult{}, recvErr
+	}
+	if sendErr != nil && sendErr != io.EOF {
+		return CopyResult{}, sendErr
+	}
+	return CopyResult{DestPath: reply.GetPath(), Written: written}, nil
+}
+
 // downloadInstanceToLocal pulls src over the CopyFile RPC and writes it to the
 // path the policy resolves for the source basename. The bytes go to a temp file
 // in the destination directory first and are renamed into place on success, so a
@@ -158,6 +198,24 @@ func downloadInstanceToLocal(ctx context.Context, svc fleetgrpc.FleetServiceClie
 	if err != nil {
 		return CopyResult{}, err
 	}
+
+	if meta.GetIsDir() {
+		// The remaining data frames are a tar of the directory; extract it under
+		// destPath in Go, skipping symlinks/specials and sanitizing entry names.
+		r := &copyChunkReader{recv: func() ([]byte, error) {
+			chunk, err := stream.Recv()
+			if err != nil {
+				return nil, err
+			}
+			return chunk.GetData(), nil
+		}}
+		written, err := extractTarTree(r, destPath)
+		if err != nil {
+			return CopyResult{}, err
+		}
+		return CopyResult{DestPath: destPath, Written: written}, nil
+	}
+
 	mode := os.FileMode(meta.GetMode()).Perm()
 	if mode == 0 {
 		mode = 0o644
@@ -205,8 +263,10 @@ func downloadInstanceToLocal(ctx context.Context, svc fleetgrpc.FleetServiceClie
 }
 
 // relayInstanceToInstance copies between two instances without touching local
-// disk: the source's CopyFile stream is pumped straight into the destination's
-// CopyInto stream, with the source meta (name/mode/size) seeding the open header.
+// disk: the source's CopyFile stream feeds the destination's CopyInto stream,
+// with the source meta seeding the open header. A file is pumped raw; a directory
+// (meta.is_dir) is transformed in Go through filterTarTree, so the destination
+// receives the same clean (no symlinks/specials/root) tar the upload path builds.
 func relayInstanceToInstance(ctx context.Context, svc fleetgrpc.FleetServiceClient, src, dst ResolvedEndpoint) (CopyResult, error) {
 	out, err := svc.CopyFile(ctx, &fleetgrpc.CopyFileRequest{Fleet: src.Fleet, Instance: src.Instance, Path: src.Path})
 	if err != nil {
@@ -234,44 +294,79 @@ func relayInstanceToInstance(ctx context.Context, svc fleetgrpc.FleetServiceClie
 		Name:     meta.GetName(),
 		Mode:     meta.GetMode(),
 		Size:     meta.GetSize(),
+		IsDir:    meta.GetIsDir(),
 	}}})
-	for sendErr == nil {
-		chunk, recvErr := out.Recv()
-		if recvErr == io.EOF {
-			break
+
+	if meta.GetIsDir() {
+		if sendErr == nil {
+			r := &copyChunkReader{recv: func() ([]byte, error) {
+				chunk, err := out.Recv()
+				if err != nil {
+					return nil, err
+				}
+				return chunk.GetData(), nil
+			}}
+			tw := tar.NewWriter(copyChunkWriter{send: func(b []byte) error {
+				return in.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Data{Data: b}})
+			}})
+			_, sendErr = filterTarTree(tw, tar.NewReader(r))
+			if sendErr == nil {
+				sendErr = tw.Close()
+			}
 		}
-		if recvErr != nil {
-			return CopyResult{}, recvErr
-		}
-		if data := chunk.GetData(); len(data) > 0 {
-			sendErr = in.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Data{Data: data}})
+	} else {
+		for sendErr == nil {
+			chunk, recvErr := out.Recv()
+			if recvErr == io.EOF {
+				break
+			}
+			if recvErr != nil {
+				return CopyResult{}, recvErr
+			}
+			if data := chunk.GetData(); len(data) > 0 {
+				sendErr = in.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Data{Data: data}})
+			}
 		}
 	}
-	reply, err := in.CloseAndRecv()
-	if err != nil {
-		return CopyResult{}, err
+
+	reply, recvErr := in.CloseAndRecv()
+	if recvErr != nil {
+		return CopyResult{}, recvErr
+	}
+	if sendErr != nil && sendErr != io.EOF {
+		return CopyResult{}, sendErr
 	}
 	return CopyResult{DestPath: reply.GetPath(), Written: reply.GetWritten()}, nil
 }
 
 // copyLocalToLocal copies one local file to another on the orchestrator's disk —
-// the degenerate case where neither endpoint is an instance. Bytes are streamed
-// (not slurped) so a large file doesn't balloon memory, and written through a
-// temp file renamed into place on success, so a failed copy never leaves a
-// partial — matching the atomicity of the instance directions.
+// the degenerate case where neither endpoint is an instance. A regular file is
+// streamed through a temp file renamed into place (atomic); a directory is copied
+// recursively in place (non-atomic, like the instance directions).
 func copyLocalToLocal(srcPath, dstTyped string, policy CopyLocalPolicy) (CopyResult, error) {
+	fi, err := os.Stat(srcPath)
+	if err != nil {
+		return CopyResult{}, err
+	}
+	if fi.IsDir() {
+		destPath, err := policy.ResolveDest(dstTyped, filepath.Base(srcPath))
+		if err != nil {
+			return CopyResult{}, err
+		}
+		written, err := copyTreeLocal(srcPath, destPath)
+		if err != nil {
+			return CopyResult{}, err
+		}
+		return CopyResult{DestPath: destPath, Written: written}, nil
+	}
+	if err := requireRegularFile(srcPath, fi); err != nil {
+		return CopyResult{}, err
+	}
 	in, err := os.Open(srcPath)
 	if err != nil {
 		return CopyResult{}, err
 	}
 	defer in.Close()
-	fi, err := in.Stat()
-	if err != nil {
-		return CopyResult{}, err
-	}
-	if err := requireRegularFile(srcPath, fi); err != nil {
-		return CopyResult{}, err
-	}
 	destPath, err := policy.ResolveDest(dstTyped, filepath.Base(srcPath))
 	if err != nil {
 		return CopyResult{}, err
@@ -301,12 +396,10 @@ func copyLocalToLocal(srcPath, dstTyped string, policy CopyLocalPolicy) (CopyRes
 	return CopyResult{DestPath: destPath, Written: written}, nil
 }
 
-// requireRegularFile rejects a local source that is a directory or special file —
-// only single regular files can be copied, matching the instance side.
+// requireRegularFile rejects a local source that is a special file (named pipe,
+// device, socket). Directories are handled separately and never reach here; a
+// symlink is followed by the os.Stat the callers already did.
 func requireRegularFile(path string, fi os.FileInfo) error {
-	if fi.IsDir() {
-		return fmt.Errorf("%s is a directory — only single files can be copied", path)
-	}
 	if !fi.Mode().IsRegular() {
 		return fmt.Errorf("%s is not a regular file", path)
 	}

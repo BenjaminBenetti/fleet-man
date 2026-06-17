@@ -57,6 +57,13 @@ func (s *service) CopyFile(req *fleetgrpc.CopyFileRequest, stream grpc.ServerStr
 		return status.Errorf(codes.InvalidArgument, "invalid file path %q", filePath)
 	}
 
+	// A directory source is a recursive copy: stream a tar of its contents that
+	// the client extracts in Go. Everything else falls through to the single-file
+	// path below (a missing path also falls through, so tar reports NotFound).
+	if s.probeContainerDir(inst, filePath) {
+		return s.copyDirOut(inst, req, filePath, base, stream)
+	}
+
 	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir,
 		[]string{"tar", "-chf", "-", "-C", path.Dir(filePath), base})
 	var stderr bytes.Buffer
@@ -160,6 +167,85 @@ func streamTarFile(filePath string, r io.Reader, send func(*fleetgrpc.CopyFileCh
 	}
 }
 
+// copyDirOut streams a tar of the directory at filePath to the client (meta with
+// is_dir, then raw tar data). The client extracts it in Go — skipping
+// symlinks/special files and the `./` root, sanitizing entry names — so the
+// server side stays a plain `tar -C <dir> -cf - .` with no -h (internal symlinks
+// are archived as links, never followed). Refused on the codespaces backend,
+// whose exec PTY mangles binary tar.
+func (s *service) copyDirOut(inst *fleet.Instance, req *fleetgrpc.CopyFileRequest, filePath, base string, stream grpc.ServerStreamingServer[fleetgrpc.CopyFileChunk]) error {
+	if inst.Backend == fleet.BackendCodespaces {
+		return status.Errorf(codes.FailedPrecondition, "copying a directory is not supported on the codespaces backend")
+	}
+	if err := stream.Send(&fleetgrpc.CopyFileChunk{Msg: &fleetgrpc.CopyFileChunk_Meta{Meta: &fleetgrpc.CopyFileMeta{
+		Name:  base,
+		IsDir: true,
+	}}}); err != nil {
+		return err
+	}
+
+	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir,
+		[]string{"tar", "-C", filePath, "-cf", "-", "."})
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return status.Errorf(codes.Internal, "pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return status.Errorf(codes.Internal, "start copy: %v", err)
+	}
+
+	ctx := stream.Context()
+	finished := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = cmd.Process.Kill()
+		case <-finished:
+		}
+	}()
+
+	streamErr := streamRawTar(stdout, stream.Send)
+	if streamErr != nil {
+		_ = cmd.Process.Kill()
+	}
+	_, _ = io.Copy(io.Discard, stdout)
+	waitErr := cmd.Wait()
+	close(finished)
+
+	if streamErr != nil {
+		return streamErr
+	}
+	if waitErr != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return status.Errorf(codes.Internal, "read %q in %s/%s: %s", filePath, req.GetFleet(), req.GetInstance(), msg)
+		}
+		return status.Errorf(codes.Internal, "read %q in %s/%s: %v", filePath, req.GetFleet(), req.GetInstance(), waitErr)
+	}
+	return nil
+}
+
+// streamRawTar forwards the raw bytes on r as CopyFileChunk data frames — the
+// directory case, where the bytes are an opaque tar the client decodes.
+func streamRawTar(r io.Reader, send func(*fleetgrpc.CopyFileChunk) error) error {
+	buf := make([]byte, copyChunkSize)
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			if err := send(&fleetgrpc.CopyFileChunk{Msg: &fleetgrpc.CopyFileChunk_Data{Data: buf[:n]}}); err != nil {
+				return err
+			}
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return status.Errorf(codes.Internal, "read tar: %v", readErr)
+		}
+	}
+}
+
 // copyIntoExecCommand builds the host-side container exec used by CopyInto.
 // Package var so tests can stub the whole backend layer (mirrors
 // exec_stream.go's buildExecCommand). ExecCommandQuiet because the handler
@@ -192,6 +278,9 @@ func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoC
 	}
 	if inst.Status != fleet.StatusRunning {
 		return status.Errorf(codes.FailedPrecondition, "instance %s/%s is not running", open.GetFleet(), open.GetInstance())
+	}
+	if open.GetIsDir() {
+		return s.copyDirInto(inst, open, stream)
 	}
 	if err := validateCopyName(open.GetName()); err != nil {
 		return err
@@ -280,6 +369,134 @@ func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoC
 		finalPath = path.Join(inst.WorkspaceDir, finalDir, finalName)
 	}
 	return stream.SendAndClose(&fleetgrpc.CopyIntoReply{Path: finalPath, Written: open.GetSize()})
+}
+
+// copyDirInto extracts the client's tar of directory contents into the instance.
+// It resolves a target directory (an existing dest is copied INTO; otherwise dest
+// IS the directory), creates it, and pipes the data to `tar -xf - -C <dir>` — an
+// in-place merge (cp -r semantics), NOT atomic: a failed extract can leave a
+// partial tree. A broken client stream or a non-zero tar fails the RPC loudly.
+// Refused on the codespaces backend, whose exec PTY can silently corrupt the tar.
+func (s *service) copyDirInto(inst *fleet.Instance, open *fleetgrpc.CopyIntoOpen, stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoChunk, fleetgrpc.CopyIntoReply]) error {
+	if inst.Backend == fleet.BackendCodespaces {
+		return status.Errorf(codes.FailedPrecondition, "copying a directory is not supported on the codespaces backend")
+	}
+	if err := validateCopyName(open.GetName()); err != nil {
+		return err
+	}
+	targetRoot, err := s.resolveCopyIntoDirDest(inst, open.GetDest(), open.GetName())
+	if err != nil {
+		return err
+	}
+	if err := s.mkdirContainerDir(inst, targetRoot); err != nil {
+		return err
+	}
+
+	cmd := copyIntoExecCommand(inst, []string{"tar", "-xf", "-", "-C", targetRoot})
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return status.Errorf(codes.Internal, "pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return status.Errorf(codes.Internal, "start copy: %v", err)
+	}
+
+	ctx := stream.Context()
+	finished := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = cmd.Process.Kill()
+			_ = stdin.Close()
+		case <-finished:
+		}
+	}()
+
+	written, pumpErr := pumpCopyIntoData(stdin, stream)
+	_ = stdin.Close()
+	waitErr := cmd.Wait()
+	close(finished)
+
+	if pumpErr != nil || waitErr != nil {
+		_ = cmd.Process.Kill()
+		tarMsg := strings.TrimSpace(stderr.String())
+		if tarMsg != "" {
+			return status.Errorf(codes.Internal, "extract into %s/%s: %s", open.GetFleet(), open.GetInstance(), tarMsg)
+		}
+		if pumpErr != nil {
+			return status.Errorf(codes.Internal, "extract into %s/%s: %v", open.GetFleet(), open.GetInstance(), pumpErr)
+		}
+		return status.Errorf(codes.Internal, "extract into %s/%s: %v", open.GetFleet(), open.GetInstance(), waitErr)
+	}
+
+	finalPath := targetRoot
+	if !path.IsAbs(finalPath) {
+		finalPath = path.Join(inst.WorkspaceDir, targetRoot)
+	}
+	return stream.SendAndClose(&fleetgrpc.CopyIntoReply{Path: finalPath, Written: written})
+}
+
+// resolveCopyIntoDirDest resolves the target directory inside the container for a
+// recursive copy: an empty dest puts the tree at <workspace>/name; an existing
+// directory dest is copied INTO (dest/name); otherwise dest IS the directory to
+// create. The target's parent must already exist (matching cp -r), else NotFound.
+func (s *service) resolveCopyIntoDirDest(inst *fleet.Instance, dest, name string) (string, error) {
+	var targetRoot string
+	switch {
+	case dest == "":
+		targetRoot = name
+	case s.probeContainerDir(inst, dest):
+		targetRoot = path.Join(dest, name)
+	default:
+		targetRoot = dest
+	}
+	parent := path.Dir(targetRoot)
+	if parent != "." && parent != "/" && !s.probeContainerDir(inst, parent) {
+		return "", status.Errorf(codes.NotFound, "destination directory %q does not exist", parent)
+	}
+	return targetRoot, nil
+}
+
+// mkdirContainerDir creates dir (and only its missing leaf — the parent is
+// checked separately) inside the instance; `-p` makes it idempotent for the
+// merge-into-existing case.
+func (s *service) mkdirContainerDir(inst *fleet.Instance, dir string) error {
+	cmd := copyIntoExecCommand(inst, []string{"mkdir", "-p", "--", dir})
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return status.Errorf(codes.Internal, "create %q: %s", dir, msg)
+		}
+		return status.Errorf(codes.Internal, "create %q: %v", dir, err)
+	}
+	return nil
+}
+
+// pumpCopyIntoData drains the client's data chunks straight into w (the tar
+// extract's stdin), returning the bytes written and the first stream/write error.
+func pumpCopyIntoData(w io.Writer, stream copyIntoChunkReceiver) (int64, error) {
+	var n int64
+	for {
+		chunk, err := stream.Recv()
+		if err == io.EOF {
+			return n, nil
+		}
+		if err != nil {
+			return n, err
+		}
+		data := chunk.GetData()
+		if len(data) == 0 {
+			continue
+		}
+		m, werr := w.Write(data)
+		n += int64(m)
+		if werr != nil {
+			return n, werr
+		}
+	}
 }
 
 // copyIntoSeq makes the temp name below unique within this process regardless of
