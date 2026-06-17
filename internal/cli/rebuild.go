@@ -14,7 +14,7 @@ func newRebuildCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "rebuild <name>",
 		Aliases: []string{"rb"},
-		Short:   "Rebuild an instance's container in place (preserves the workspace)",
+		Short:   "Rebuild an instance's container",
 		Long: "Tear down and reprovision an instance's container without recreating the instance — " +
 			"handy after editing devcontainer.json. The workspace (git checkout and uncommitted edits) " +
 			"is preserved. Only backends with a rebuild primitive are supported (devcontainer, codespaces).",

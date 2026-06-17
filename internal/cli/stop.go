@@ -11,7 +11,7 @@ import (
 func newStopCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "stop <name>",
-		Short: "Stop a devcontainer instance without removing it",
+		Short: "Stop an instance without removing it",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target, err := fleet.Resolve(args[0], "")

@@ -10,7 +10,7 @@ import (
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show fleet-wide status summary",
+		Short: "Show fleet status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := fetchFleetState(cmd.Context())

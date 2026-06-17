@@ -109,7 +109,7 @@ func newPortForwardRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "remove <instance> <local-port>",
 		Aliases: []string{"rm"},
-		Short:   "Remove a port forward (for use with TUI-managed forwards)",
+		Short:   "Remove a port forward",
 		Long:    "Note: CLI-started forwards run in the foreground and are stopped with Ctrl+C.\nThis command is primarily for scripting and will list active TUI forwards.",
 		Args:    cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {

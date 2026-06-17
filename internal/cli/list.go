@@ -40,7 +40,7 @@ func newListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list [fleet]",
 		Aliases: []string{"ls"},
-		Short:   "List devcontainer instances",
+		Short:   "List instances",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := fetchFleetState(cmd.Context())

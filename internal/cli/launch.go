@@ -23,7 +23,7 @@ func newLaunchCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "launch [name|list]",
-		Short: "Open the in-instance Fleet Launch grid (or list/launch its links and apps)",
+		Short: "Open an instance's links and apps",
 		Long: "Open a terminal UI, inside an instance, that lists the links and apps " +
 			"configured in customizations.fleet.fleetLaunch and drives the host browser " +
 			"to them over the control socket fleet mounts into the instance.\n\n" +
