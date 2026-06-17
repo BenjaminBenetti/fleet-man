@@ -41,15 +41,6 @@ if [ -e "${workdir}/nope" ]; then
   fail "failed copy must not leave a destination file"
 fi
 
-info "fleet copy of a directory fails"
-set +e
-"${FLEET_BIN}" copy "${FIXTURE_REPO_NAME}/alpha:/tmp" "${workdir}/dir-nope" >/dev/null 2>&1
-rc=$?
-set -e
-if [ "${rc}" -eq 0 ]; then
-  fail "expected non-zero exit copying a directory, got 0"
-fi
-
 # ---- the reverse direction: copy a local file INTO an instance ----
 
 info "fleet copy <local> alpha:/tmp/up.bin uploads into the instance, keeping mode"
@@ -63,6 +54,12 @@ info "fleet copy into an instance directory keeps the source basename"
 "${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- mkdir -p /tmp/updir
 "${FLEET_BIN}" copy "${workdir}/up.bin" "${FIXTURE_REPO_NAME}/alpha:/tmp/updir/"
 assert_equals "uploaded-bytes" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/updir/up.bin)" "directory upload basename"
+
+info "the host: prefix names the host machine (same as a plain path on the host)"
+"${FLEET_BIN}" copy "host:${workdir}/up.bin" "${FIXTURE_REPO_NAME}/alpha:/tmp/hostpfx.bin"
+assert_equals "uploaded-bytes" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/hostpfx.bin)" "host: prefix upload content"
+"${FLEET_BIN}" copy "${FIXTURE_REPO_NAME}/alpha:/tmp/hostpfx.bin" "host:${workdir}/from-host-pfx.bin"
+assert_equals "uploaded-bytes" "$(cat "${workdir}/from-host-pfx.bin")" "host: prefix download content"
 
 info "fleet copy into a non-existent instance directory fails"
 set +e
@@ -87,5 +84,24 @@ fi
 info "fleet copy alpha:path alpha:path2 relays between two instance paths"
 "${FLEET_BIN}" copy "${FIXTURE_REPO_NAME}/alpha:/tmp/up.bin" "${FIXTURE_REPO_NAME}/alpha:/tmp/relayed.bin"
 assert_equals "uploaded-bytes" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/relayed.bin)" "relayed file content"
+
+# ---- recursive directory copy (all four directions) ----
+
+info "upload a directory tree into the instance"
+mkdir -p "${workdir}/tree/sub"
+printf 'top' > "${workdir}/tree/top.txt"
+printf 'nested' > "${workdir}/tree/sub/nested.txt"
+"${FLEET_BIN}" copy "${workdir}/tree" "${FIXTURE_REPO_NAME}/alpha:/tmp/uptree"
+assert_equals "top" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/uptree/top.txt)" "uploaded dir top file"
+assert_equals "nested" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/uptree/sub/nested.txt)" "uploaded dir nested file"
+
+info "download a directory tree out of the instance"
+"${FLEET_BIN}" copy "${FIXTURE_REPO_NAME}/alpha:/tmp/uptree" "${workdir}/downtree"
+assert_equals "top" "$(cat "${workdir}/downtree/top.txt")" "downloaded dir top file"
+assert_equals "nested" "$(cat "${workdir}/downtree/sub/nested.txt")" "downloaded dir nested file"
+
+info "relay a directory tree between two instance paths"
+"${FLEET_BIN}" copy "${FIXTURE_REPO_NAME}/alpha:/tmp/uptree" "${FIXTURE_REPO_NAME}/alpha:/tmp/relaytree"
+assert_equals "nested" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/relaytree/sub/nested.txt)" "relayed dir nested file"
 
 pass "copy"

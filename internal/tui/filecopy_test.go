@@ -69,6 +69,9 @@ func TestResolveTUIEndpoint(t *testing.T) {
 		{":build/out", fleetclient.ResolvedEndpoint{Fleet: "myfleet", Instance: "self", Path: "build/out"}},
 		{"other:/tmp/x", fleetclient.ResolvedEndpoint{Fleet: "myfleet", Instance: "other", Path: "/tmp/x"}},
 		{"two/other:/tmp/x", fleetclient.ResolvedEndpoint{Fleet: "two", Instance: "other", Path: "/tmp/x"}},
+		// host: (and, defensively, a bare path) resolve to this machine's disk.
+		{"host:report.csv", fleetclient.ResolvedEndpoint{Local: true, Path: "report.csv"}},
+		{"host:/tmp/x", fleetclient.ResolvedEndpoint{Local: true, Path: "/tmp/x"}},
 		{"report.csv", fleetclient.ResolvedEndpoint{Local: true, Path: "report.csv"}},
 	}
 	for _, tc := range cases {

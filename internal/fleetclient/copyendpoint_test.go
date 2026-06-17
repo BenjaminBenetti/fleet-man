@@ -14,6 +14,12 @@ func TestParseCopyEndpoint(t *testing.T) {
 		// Self references (the current instance).
 		{":path", CopyEndpoint{Kind: CopySelf, Path: "path"}},
 		{":bin/tool", CopyEndpoint{Kind: CopySelf, Path: "bin/tool"}},
+		// Host references (the machine where the TUI runs).
+		{"host:/tmp/x", CopyEndpoint{Kind: CopyHost, Path: "/tmp/x"}},
+		{"host:report.csv", CopyEndpoint{Kind: CopyHost, Path: "report.csv"}},
+		{"host:~/Downloads/", CopyEndpoint{Kind: CopyHost, Path: "~/Downloads/"}},
+		// A fleet literally named "host" still works via the slash form.
+		{"host/inst:/p", CopyEndpoint{Kind: CopyInstance, Fleet: "host", Instance: "inst", Path: "/p"}},
 		// Plain local paths — a leading /, . or ~ always forces local.
 		{"bin/tool", CopyEndpoint{Kind: CopyLocal, Path: "bin/tool"}},
 		{"/abs/path", CopyEndpoint{Kind: CopyLocal, Path: "/abs/path"}},

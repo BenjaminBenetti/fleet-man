@@ -90,8 +90,8 @@ func TestRequestDownloadShorthand(t *testing.T) {
 	if payload.Src != ":out.bin" || payload.Dst != "" {
 		t.Fatalf("payload = %+v, want src=:out.bin dst empty", payload)
 	}
-	if !strings.Contains(out.String(), "downloads folder") {
-		t.Fatalf("confirmation %q does not mention the downloads folder", out.String())
+	if !strings.Contains(out.String(), "downloads") {
+		t.Fatalf("confirmation %q does not mention downloads", out.String())
 	}
 }
 

@@ -114,11 +114,11 @@ message ForwardOpen {
   int32 remote_port = 3;
 }
 
-// CopyFile streams one file out of an instance to the client (the `fleet copy` /
-// in-instance `fc` feature). The server reads the file through the backend (a
-// tar pipe over container exec, so metadata + bytes arrive in one exec) and
-// streams it back: the FIRST chunk carries `meta`, every following chunk carries
-// `data`. Only regular files are supported — a directory is an InvalidArgument.
+// CopyFile streams a file OR directory out of an instance to the client (the
+// `fleet copy` / in-instance `fc` feature). The server reads through the backend
+// (a tar pipe over container exec) and streams it back: the FIRST chunk carries
+// `meta`, every following chunk carries `data`. For a file the data is the raw
+// bytes; for a directory (meta.is_dir) it is a tar the client extracts in Go.
 // Works unchanged over the remote gateway, which is the headline use case:
 // pulling a built binary out of a fully remote deployment onto the local machine.
 message CopyFileRequest {
@@ -137,22 +137,29 @@ message CopyFileChunk {
 }
 
 message CopyFileMeta {
-  // name is the source file's basename — the default local filename.
+  // name is the source's basename — the default local name.
   string name = 1;
   // mode is the source file's permission bits (so an executable stays runnable).
+  // Unused when is_dir.
   uint32 mode = 2;
+  // size is the file's byte count. Unused when is_dir.
   int64 size = 3;
+  // is_dir marks a recursive directory copy: the data frames then carry a tar of
+  // the directory (`tar -C <path> -cf - .`) instead of raw file bytes, and the
+  // client extracts it in Go — skipping symlinks/special files and the `./` root
+  // entry, sanitizing entry names. mode/size are unused.
+  bool is_dir = 4;
 }
 
-// CopyInto streams one file INTO an instance — the reverse of CopyFile, the
-// other half of scp-style `fleet copy`. It is CLIENT-streaming: the FIRST chunk
-// MUST carry `open` (which instance, the destination, and the file's
-// name/mode/size); every following chunk carries `data`. The server resolves the
-// destination inside the container (an existing directory keeps the source
-// basename; otherwise `dest` is the target path) and writes the bytes through
-// the backend with a single `tar -xf -` exec — the mirror of CopyFile's
-// `tar -chf -` read — preserving the file mode. Works unchanged over the remote
-// gateway: pushing a local file into a fully remote deployment.
+// CopyInto streams a file OR directory INTO an instance — the reverse of
+// CopyFile, the other half of scp-style `fleet copy`. It is CLIENT-streaming: the
+// FIRST chunk MUST carry `open` (which instance, the destination, and the
+// source's name/mode/size or is_dir); every following chunk carries `data`. The
+// server resolves the destination inside the container and writes through the
+// backend with a `tar -xf -` exec. For a file the data is the raw bytes (written
+// atomically via a temp name + rename); for a directory (open.is_dir) it is a tar
+// of the directory's contents extracted in place. Works unchanged over the remote
+// gateway: pushing a local file or tree into a fully remote deployment.
 message CopyIntoChunk {
   oneof msg {
     CopyIntoOpen open = 1;
@@ -172,11 +179,19 @@ message CopyIntoOpen {
   string name = 4;
   // mode is the file's permission bits to set on the written file (the perm bits
   // are honoured; a 0 mode defaults to 0644). setuid/setgid/sticky are stripped.
+  // Unused when is_dir.
   uint32 mode = 5;
   // size is the source file's byte count — needed up front for the tar header,
   // and enforced as a hard cap so a truncated or oversized stream fails cleanly
-  // rather than leaving a partial file.
+  // rather than leaving a partial file. Unused when is_dir.
   int64 size = 6;
+  // is_dir marks a recursive directory copy: the data frames then carry a tar of
+  // the directory's CONTENTS (entries relative to the dir root, no symlinks or
+  // special files, built by the client in Go), and the server resolves a target
+  // directory and extracts it there with `tar -xf -` (an in-place merge, like
+  // `cp -r`). mode/size are unused. NOT supported on the codespaces backend (its
+  // exec PTY can silently corrupt a binary tar) — a FailedPrecondition there.
+  bool is_dir = 7;
 }
 
 message CopyIntoReply {

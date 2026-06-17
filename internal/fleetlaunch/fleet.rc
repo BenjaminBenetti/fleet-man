@@ -15,13 +15,14 @@
 alias fl='fleet launch'
 
 # fc — shorthand for Fleet Copy, scp-style and bidirectional. A plain path is a
-# file on your machine (where the fleet TUI runs); `:path` is a file in THIS
-# instance; `[fleet/]instance:path` is any instance in your fleet. Direction
-# follows which side is which — all of these work even on a fully remote
-# deployment:
-#   fc :build/out ~/Downloads/   copy this instance's file to your machine
-#   fc report.csv :/tmp/         copy a file from your machine into this instance
-#   fc :out.bin other:/tmp/      copy this instance's file into another instance
-# With a single `:`/instance source (e.g. `fc :build/out`) the file lands in
-# your downloads folder.
+# file in THIS instance (relative to your cwd); `host:path` is a file on your
+# machine (where the fleet TUI runs); `[fleet/]instance:path` is any instance in
+# your fleet. Direction follows which side is which — all work even on a fully
+# remote deployment:
+#   fc ./build/out host:~/Downloads/   copy this instance's file to your machine
+#   fc host:report.csv /tmp/           copy a file from your machine into this instance
+#   fc ./out.bin other:/tmp/           copy this instance's file into another instance
+# With a single non-host source (e.g. `fc ./build/out`) the file lands in your
+# downloads folder. A copy that touches your machine asks for confirmation in
+# the fleet TUI.
 alias fc='fleet copy'

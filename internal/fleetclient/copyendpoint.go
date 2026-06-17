@@ -7,22 +7,29 @@ import (
 )
 
 // copyendpoint.go classifies the two arguments of a scp-style `fleet copy`. An
-// endpoint is one of three kinds; direction is inferred from which side is local
-// vs an instance. The parser is shared by the CLI (host form) and is mirrored by
-// the in-instance form, so a path means the same thing everywhere.
+// endpoint is one of a few kinds; direction is inferred from which side is which.
+// The parser is shared by the CLI (host form) and the in-instance form, so a
+// path means the same thing everywhere: a plain path is local to the machine the
+// command runs on (the host for `fleet copy`, the instance for in-instance `fc`),
+// and `host:` is the explicit way to reach the host from inside an instance.
 
 // CopyEndpointKind classifies one side of a copy.
 type CopyEndpointKind int
 
 const (
-	// CopyLocal is a plain path on the orchestrating client's own disk.
+	// CopyLocal is a plain path on the machine the command runs on (cwd-relative).
+	// For `fleet copy` that's the host; for in-instance `fc` it's that instance.
 	CopyLocal CopyEndpointKind = iota
 	// CopyInstance is `[fleet/]instance:path` — a path inside a named instance.
 	CopyInstance
-	// CopySelf is `:path` — a path inside the CURRENT instance. Only meaningful
-	// in the in-instance form, where the originating instance is known; the host
-	// form rejects it (there is no "current" instance).
+	// CopySelf is `:path` — a path inside the CURRENT instance (workspace-relative).
+	// Only meaningful in the in-instance form, where the originating instance is
+	// known; the host form rejects it (there is no "current" instance).
 	CopySelf
+	// CopyHost is `host:path` — a path on the HOST machine (where the fleet TUI
+	// runs). It is how an in-instance `fc` reaches the human's disk; on the host
+	// itself it is the same machine as a plain path.
+	CopyHost
 )
 
 // CopyEndpoint is one parsed side of a copy.
@@ -39,6 +46,7 @@ type CopyEndpoint struct {
 //     "C:\file" is local, not an instance named "C"), always forces a LOCAL path
 //     (a local filename containing a colon is still reachable, spelled
 //     "./name:with:colon"),
+//   - "host:path" is the HOST machine,
 //   - ":path" (empty prefix, non-empty path) is the CURRENT instance (SELF),
 //   - "[fleet/]instance:path" is a named INSTANCE,
 //   - anything else — including a malformed instance ref or an empty path after
@@ -55,6 +63,9 @@ func ParseCopyEndpoint(arg string) CopyEndpoint {
 	}
 	if i == 0 {
 		return CopyEndpoint{Kind: CopySelf, Path: path}
+	}
+	if arg[:i] == "host" {
+		return CopyEndpoint{Kind: CopyHost, Path: path}
 	}
 	parts := strings.Split(arg[:i], "/")
 	if len(parts) > 2 || slices.Contains(parts, "") {

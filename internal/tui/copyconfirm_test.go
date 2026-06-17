@@ -10,11 +10,12 @@ func TestCopyTouchesHost(t *testing.T) {
 		src, dst string
 		want     bool
 	}{
-		{"report.csv", "alpha:/tmp/", true}, // local source (upload from host)
-		{"alpha:/out", "./here", true},      // local dest (download to host)
-		{":out.bin", "", true},              // download shorthand → host downloads
-		{":out", "other:/tmp/", false},      // self → another instance, no host path
-		{"a:x", "b:y", false},               // instance → instance
+		{"host:report.csv", "alpha:/tmp/", true}, // host source (upload from host)
+		{"alpha:/out", "host:/here", true},       // host dest (download to host)
+		{":out.bin", "", true},                   // download shorthand → host downloads
+		{"plain.txt", "alpha:/tmp/", true},       // bare path treated as host (defensive)
+		{":out", "other:/tmp/", false},           // self → another instance, no host path
+		{"a:x", "b:y", false},                    // instance → instance
 	}
 	for _, tc := range cases {
 		if got := copyTouchesHost(tc.src, tc.dst); got != tc.want {
@@ -35,7 +36,7 @@ func TestRequestCopyGating(t *testing.T) {
 	}
 
 	// A host-touching copy is queued for confirmation.
-	if cmd := m.requestCopy(copyRequest{fleet: "f", instance: "i", src: "secret.txt", dst: ":/tmp/"}); cmd != nil {
+	if cmd := m.requestCopy(copyRequest{fleet: "f", instance: "i", src: "host:secret.txt", dst: ":/tmp/"}); cmd != nil {
 		t.Fatal("host-touching copy should queue (nil cmd), not run")
 	}
 	if !m.copyConfirmShowing() || len(m.pendingCopyConfirms) != 1 {
@@ -44,7 +45,7 @@ func TestRequestCopyGating(t *testing.T) {
 
 	// Once the instance is session-allowed, host-touching copies run immediately.
 	m.copySessionAllow["f/i"] = true
-	if cmd := m.requestCopy(copyRequest{fleet: "f", instance: "i", src: "x.txt", dst: ":/tmp/"}); cmd == nil {
+	if cmd := m.requestCopy(copyRequest{fleet: "f", instance: "i", src: "host:x.txt", dst: ":/tmp/"}); cmd == nil {
 		t.Fatal("session-allowed host copy should run immediately")
 	}
 	if len(m.pendingCopyConfirms) != 1 {
@@ -54,7 +55,7 @@ func TestRequestCopyGating(t *testing.T) {
 
 func TestResolveCopyConfirmAllowOnce(t *testing.T) {
 	m := &model{copySessionAllow: map[string]bool{}}
-	m.requestCopy(copyRequest{fleet: "f", instance: "i", src: "a.txt", dst: ":/tmp/"})
+	m.requestCopy(copyRequest{fleet: "f", instance: "i", src: "host:a.txt", dst: ":/tmp/"})
 
 	if cmd := m.resolveCopyConfirm("a"); cmd == nil {
 		t.Fatal("allow-once should return a copy command")
@@ -69,9 +70,9 @@ func TestResolveCopyConfirmAllowOnce(t *testing.T) {
 
 func TestResolveCopyConfirmSessionDrainsSameInstance(t *testing.T) {
 	m := &model{copySessionAllow: map[string]bool{}}
-	m.requestCopy(copyRequest{fleet: "f", instance: "i", src: "a.txt", dst: ":/tmp/"})
-	m.requestCopy(copyRequest{fleet: "f", instance: "i", src: "b.txt", dst: ":/tmp/"})
-	m.requestCopy(copyRequest{fleet: "f", instance: "j", src: "c.txt", dst: ":/tmp/"})
+	m.requestCopy(copyRequest{fleet: "f", instance: "i", src: "host:a.txt", dst: ":/tmp/"})
+	m.requestCopy(copyRequest{fleet: "f", instance: "i", src: "host:b.txt", dst: ":/tmp/"})
+	m.requestCopy(copyRequest{fleet: "f", instance: "j", src: "host:c.txt", dst: ":/tmp/"})
 
 	if cmd := m.resolveCopyConfirm("s"); cmd == nil {
 		t.Fatal("session allow should return command(s) to run")
@@ -87,7 +88,7 @@ func TestResolveCopyConfirmSessionDrainsSameInstance(t *testing.T) {
 
 func TestResolveCopyConfirmDeny(t *testing.T) {
 	m := &model{copySessionAllow: map[string]bool{}}
-	m.requestCopy(copyRequest{fleet: "f", instance: "i", src: "a.txt", dst: ":/tmp/"})
+	m.requestCopy(copyRequest{fleet: "f", instance: "i", src: "host:a.txt", dst: ":/tmp/"})
 
 	if cmd := m.resolveCopyConfirm("d"); cmd != nil {
 		t.Fatal("deny should not return a copy command")
