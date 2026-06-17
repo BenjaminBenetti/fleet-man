@@ -27,30 +27,24 @@ import (
 // The HELP text is tailored to where the command runs.
 func newCopyCmd() *cobra.Command {
 	use := "copy <src> <dst>"
-	short := "Copy a file to, from, or between fleet instances, scp-style"
-	long := "Copy a single file between your machine and a fleet instance — or between\n" +
-		"two instances — scp-style. A plain path is a file on this machine\n" +
-		"(cwd-relative); `[fleet/]instance:path` is a file inside an instance (reachable\n" +
-		"even on a remote fleet). Direction follows which side is which:\n\n" +
-		"  fleet copy alpha:bin/tool ./tool         # download out of an instance\n" +
-		"  fleet copy ./tool alpha:/usr/local/bin/  # upload into an instance\n" +
-		"  fleet copy alpha:a beta:b                # copy between two instances\n\n" +
-		"A relative instance path resolves against the workspace folder; a directory\n" +
-		"destination keeps the source's name. Given a single instance source the file\n" +
-		"downloads to the current directory."
+	short := "Copy files to, from, and between instances"
+	long := "Copy a file or directory between your machine and an instance, or between two\n" +
+		"instances. A plain path is local (cwd-relative); [fleet/]instance:path is a\n" +
+		"file inside an instance. Direction follows which side is which.\n\n" +
+		"  fleet copy alpha:bin/tool ./tool         download from an instance\n" +
+		"  fleet copy ./tool alpha:/usr/local/bin/  upload to an instance\n" +
+		"  fleet copy alpha:a beta:b                between two instances\n\n" +
+		"A relative instance path is relative to the workspace folder; a directory\n" +
+		"destination keeps the source name. A lone instance source downloads to the cwd."
 	if fleetcopy.InInstance() {
-		short = "Copy a file to or from this instance via your fleet TUI (shorthand: fc)"
-		long = "Copy a single file between THIS instance and your machine — or another\n" +
-			"instance — scp-style. The copy is performed by the fleet TUI on your machine,\n" +
-			"so it works even when this instance lives on a remote server.\n\n" +
-			"A plain path is a file in THIS instance (cwd-relative); `host:path` is a file\n" +
-			"on your machine (where the TUI runs); `[fleet/]instance:path` is any instance\n" +
-			"in your fleet:\n\n" +
-			"  fc ./build/out host:~/Downloads/   # copy this instance's file to your machine\n" +
-			"  fc host:report.csv /tmp/           # copy a file from your machine into this instance\n" +
-			"  fc ./out.bin other:/tmp/           # copy this instance's file into another instance\n\n" +
-			"Given a single non-host source the file lands in your downloads folder. A copy\n" +
-			"that touches your machine asks for confirmation in the fleet TUI."
+		long = "Copy a file or directory between this instance and your machine, or another\n" +
+			"instance. A plain path is in this instance (cwd-relative); host:path is on\n" +
+			"your machine; [fleet/]instance:path is any instance in your fleet.\n\n" +
+			"  fc ./build/out host:~/Downloads/  this instance -> your machine\n" +
+			"  fc host:report.csv /tmp/          your machine  -> this instance\n" +
+			"  fc ./out.bin other:/tmp/          this instance -> another instance\n\n" +
+			"A lone source downloads to your downloads folder. A copy that touches your\n" +
+			"machine asks for confirmation in the fleet TUI."
 	}
 
 	return &cobra.Command{
@@ -119,7 +113,7 @@ func requireDownloadSource(src, dst string) error {
 	}
 	switch fleetclient.ParseCopyEndpoint(src).Kind {
 	case fleetclient.CopyLocal, fleetclient.CopyHost:
-		return fmt.Errorf("a destination is required: %q is a path on your machine, so name where it should go (e.g. an instance:/path)", src)
+		return fmt.Errorf("destination required: %q is on your machine", src)
 	}
 	return nil
 }
@@ -158,7 +152,7 @@ func resolveHostEndpoint(arg string) (fleetclient.ResolvedEndpoint, error) {
 	case fleetclient.CopyLocal, fleetclient.CopyHost:
 		return fleetclient.ResolvedEndpoint{Local: true, Path: ep.Path}, nil
 	case fleetclient.CopySelf:
-		return fleetclient.ResolvedEndpoint{}, fmt.Errorf("`:path` means the current instance and only works inside one — name the fleet/instance instead (got %q)", arg)
+		return fleetclient.ResolvedEndpoint{}, fmt.Errorf("`:path` only works inside an instance (got %q)", arg)
 	default:
 		if ep.Fleet != "" {
 			return fleetclient.ResolvedEndpoint{Fleet: ep.Fleet, Instance: ep.Instance, Path: ep.Path}, nil

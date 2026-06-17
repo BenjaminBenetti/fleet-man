@@ -63,9 +63,9 @@ func Request(cfg Config, out io.Writer, src, dst string) error {
 		return err
 	}
 	if dst != "" {
-		fmt.Fprintf(out, "Asked the host fleet to copy %s -> %s (approve it in your fleet TUI if it touches your machine).\n", src, dst)
+		fmt.Fprintf(out, "Copying %s -> %s\n", src, dst)
 	} else {
-		fmt.Fprintf(out, "Asked the host fleet to copy %s — it will land in your downloads folder once approved in your fleet TUI.\n", src)
+		fmt.Fprintf(out, "Copying %s -> downloads\n", src)
 	}
 	return nil
 }
