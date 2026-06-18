@@ -95,6 +95,7 @@ const (
 	AgentTool_AGENT_TOOL_CODEX       AgentTool = 3
 	AgentTool_AGENT_TOOL_GEMINI      AgentTool = 4
 	AgentTool_AGENT_TOOL_COPILOT     AgentTool = 5
+	AgentTool_AGENT_TOOL_AUGGIE      AgentTool = 6
 )
 
 // Enum value maps for AgentTool.
@@ -106,6 +107,7 @@ var (
 		3: "AGENT_TOOL_CODEX",
 		4: "AGENT_TOOL_GEMINI",
 		5: "AGENT_TOOL_COPILOT",
+		6: "AGENT_TOOL_AUGGIE",
 	}
 	AgentTool_value = map[string]int32{
 		"AGENT_TOOL_UNSPECIFIED": 0,
@@ -114,6 +116,7 @@ var (
 		"AGENT_TOOL_CODEX":       3,
 		"AGENT_TOOL_GEMINI":      4,
 		"AGENT_TOOL_COPILOT":     5,
+		"AGENT_TOOL_AUGGIE":      6,
 	}
 )
 
@@ -551,14 +554,15 @@ const file_runtime_proto_rawDesc = "" +
 	"\x1dLIVE_CONTAINER_STATUS_RUNNING\x10\x01\x12!\n" +
 	"\x1dLIVE_CONTAINER_STATUS_STOPPED\x10\x02\x12!\n" +
 	"\x1dLIVE_CONTAINER_STATUS_MISSING\x10\x03\x12!\n" +
-	"\x1dLIVE_CONTAINER_STATUS_UNKNOWN\x10\x04*\x98\x01\n" +
+	"\x1dLIVE_CONTAINER_STATUS_UNKNOWN\x10\x04*\xaf\x01\n" +
 	"\tAgentTool\x12\x1a\n" +
 	"\x16AGENT_TOOL_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fAGENT_TOOL_NONE\x10\x01\x12\x15\n" +
 	"\x11AGENT_TOOL_CLAUDE\x10\x02\x12\x14\n" +
 	"\x10AGENT_TOOL_CODEX\x10\x03\x12\x15\n" +
 	"\x11AGENT_TOOL_GEMINI\x10\x04\x12\x16\n" +
-	"\x12AGENT_TOOL_COPILOT\x10\x05*\x87\x01\n" +
+	"\x12AGENT_TOOL_COPILOT\x10\x05\x12\x15\n" +
+	"\x11AGENT_TOOL_AUGGIE\x10\x06*\x87\x01\n" +
 	"\rAgentActivity\x12\x1e\n" +
 	"\x1aAGENT_ACTIVITY_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aAGENT_ACTIVITY_NOT_RUNNING\x10\x01\x12\x1a\n" +

@@ -6,7 +6,7 @@ import "strings"
 // a container. It runs a single `ps` scan, excludes the probe's own
 // process group to avoid self-matching, and checks every command-line
 // field against all tool names at once. Priority order: claude,
-// copilot, codex, gemini.
+// copilot, codex, gemini, auggie.
 //
 // The matching pattern (^|/)t($|[-./]) recognises:
 //   - standalone binaries: `claude`, `/usr/local/bin/claude`
@@ -20,11 +20,12 @@ import "strings"
 const ToolProbeScript = `MY_PGID=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' \t\n\r')
 ps -eo pid,pgid,args --no-headers 2>/dev/null | awk -v pgid="$MY_PGID" '
 BEGIN {
-  n = 4
+  n = 5
   tools[1] = "claude"
   tools[2] = "copilot"
   tools[3] = "codex"
   tools[4] = "gemini"
+  tools[5] = "auggie"
 }
 $2 == pgid { next }
 {

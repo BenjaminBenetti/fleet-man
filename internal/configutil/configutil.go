@@ -49,4 +49,5 @@ const (
 	AgentToolClaude  = state.AgentToolClaude
 	AgentToolGemini  = state.AgentToolGemini
 	AgentToolCopilot = state.AgentToolCopilot
+	AgentToolAuggie  = state.AgentToolAuggie
 )

@@ -46,6 +46,7 @@ enum AgentTool {
   AGENT_TOOL_CODEX = 3;
   AGENT_TOOL_GEMINI = 4;
   AGENT_TOOL_COPILOT = 5;
+  AGENT_TOOL_AUGGIE = 6;
 }
 
 // AgentActivity mirrors internal/agentdetect.State — the three-state activity

@@ -502,7 +502,7 @@ func (devcontainerBackend *DevcontainerBackend) CaptureAllSessions(containerID s
 	return backend.AllSessions{
 		Sessions:          sessions,
 		ExtraFiles:        files,
-		ClaudeHookMissing: hookMissing,
+		HookScriptMissing: hookMissing,
 		OK:                true,
 	}
 }

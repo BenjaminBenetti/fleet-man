@@ -12,11 +12,12 @@ const sessionMarker = "\x1eFLEET_SESSION_8f4a2b1c\x1e"
 // payload type so the parser knows which map the body belongs to.
 const fileMarker = "\x1eFLEET_FILE_8f4a2b1c\x1e"
 
-// hookMissingMarker is emitted by CaptureAllScript when the Claude
-// state-detection hook script is not present (or not executable) in
-// the container. The host uses this signal to re-install the script
-// — without it, fleet-man's Claude detector silently sticks at
-// "waiting" because Claude has no way to write the state file.
+// hookMissingMarker is emitted by CaptureAllScript when any fleet-man
+// state-detection hook script (Claude Code's or auggie's) is not
+// present (or not executable) in the container. The host uses this
+// signal to re-install the scripts — without them, the corresponding
+// hook detector silently sticks at "waiting" because the agent has no
+// way to write its state file.
 const hookMissingMarker = "\x1eFLEET_HOOK_MISSING_8f4a2b1c\x1e"
 
 // CaptureAllScript runs every per-container read fleet-man needs in a
@@ -24,12 +25,13 @@ const hookMissingMarker = "\x1eFLEET_HOOK_MISSING_8f4a2b1c\x1e"
 //
 //  1. List tmux sessions and capture each pane's visible content.
 //  2. Cat any /tmp/fleet-man/*-state files written by in-container
-//     hook scripts (today: Claude Code's fleet-man-state-hook).
-//  3. Verify the Claude state-detection hook script is still present
-//     in $HOME, emitting a marker line when it is not so the host can
-//     re-provision it. The path matches FleetManScriptSuffix in the
-//     agentdetect package; the literal is duplicated here because the
-//     backend package cannot import agentdetect.
+//     hook scripts (Claude Code's and auggie's state-hook scripts).
+//  3. Verify the state-detection hook scripts (Claude Code's and
+//     auggie's) are still present in $HOME, emitting a marker line when
+//     either is not so the host can re-provision them. The paths match
+//     FleetManScriptSuffix / AuggieScriptSuffix in the agentdetect
+//     package; the literals are duplicated here because the backend
+//     package cannot import agentdetect.
 //
 // Each block is preceded by a marker line so the Go side can
 // demultiplex back into typed maps. The script is tolerant of
@@ -49,7 +51,7 @@ for f in /tmp/fleet-man/*-state; do
   printf '\036FLEET_FILE_8f4a2b1c\036%s\n' "$f"
   cat "$f" 2>/dev/null || true
 done
-if [ ! -x "$HOME/.fleet/scripts/claude-state-hook.sh" ]; then
+if [ ! -x "$HOME/.fleet/scripts/claude-state-hook.sh" ] || [ ! -x "$HOME/.fleet/scripts/auggie-state-hook.sh" ]; then
   printf '\036FLEET_HOOK_MISSING_8f4a2b1c\036\n'
 fi
 `
@@ -59,8 +61,9 @@ fi
 //
 //   - sessions:    tmux sessionName → ScreenCapture
 //   - files:       containerPath    → file contents
-//   - hookMissing: true when the Claude hook-script absence marker
-//     was present in the output (default false: assume
+//   - hookMissing: true when the hook-script absence marker was
+//     present in the output, i.e. a fleet-man hook script (Claude
+//     Code's or auggie's) is missing (default false: assume
 //     installed unless we have direct evidence otherwise,
 //     so a parse with no markers does not trigger
 //     unnecessary re-provisioning)

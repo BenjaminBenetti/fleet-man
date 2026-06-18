@@ -153,6 +153,8 @@ func agentToolLabelProto(tool fleetgrpc.AgentTool) string {
 		return "Gemini"
 	case fleetgrpc.AgentTool_AGENT_TOOL_COPILOT:
 		return "Copilot"
+	case fleetgrpc.AgentTool_AGENT_TOOL_AUGGIE:
+		return "Auggie"
 	default:
 		return "Claude Code"
 	}

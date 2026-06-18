@@ -48,6 +48,7 @@ func TestLoadConfigPreservesValidToolSelections(t *testing.T) {
 		{name: "claude", tool: AgentToolClaude},
 		{name: "gemini", tool: AgentToolGemini},
 		{name: "copilot", tool: AgentToolCopilot},
+		{name: "auggie", tool: AgentToolAuggie},
 	}
 
 	for _, tt := range tests {
