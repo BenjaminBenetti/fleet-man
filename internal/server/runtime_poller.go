@@ -32,7 +32,14 @@ const (
 // different backends would reuse one backend and the poller would drive the
 // wrong CLI.
 func backendCacheKey(inst *fleet.Instance) string {
-	return string(inst.Backend) + "\x00" + inst.ContainerID
+	return backendCacheKeyFor(inst.Backend, inst.ContainerID)
+}
+
+// backendCacheKeyFor builds the cache key from a backend type + container ID,
+// for call sites that have those without a *fleet.Instance (e.g. routing a
+// stats fetch back to the owning container's cached backend).
+func backendCacheKeyFor(bt fleet.BackendType, containerID string) string {
+	return string(bt) + "\x00" + containerID
 }
 
 // backendFor returns a cached Backend for inst, keyed by (backend type,
@@ -262,35 +269,45 @@ func statsActivityPass(h *hub) {
 	branchByKey := make(map[string]string, len(items))
 	expectedIDs := make([]string, 0, len(items))
 
-	// Fetch stats for all containers in one call per backend. The devcontainer
-	// backend turns this into a single `docker stats --no-stream <id...>`; that
-	// call blocks ~1s in dockerd by design, so issuing it per instance
-	// serialized the whole pass (N seconds for N instances). One call covers
-	// them all. The SSH backends fan out internally regardless.
+	// Fetch container stats, grouped by backend type. Each container keeps its
+	// own cached backend (backendByKey) because some backends carry per-instance
+	// state — codespaces registers a native-SSH config per instance, so routing a
+	// container's stats through a *different* instance's backend silently
+	// downgrades it to the slower `gh codespace ssh` path.
+	backendByKey := make(map[string]backend.Backend, len(items))
 	statsIDs := make(map[fleet.BackendType][]string)
-	statsBackend := make(map[fleet.BackendType]backend.Backend)
 	for _, it := range items {
+		backendByKey[backendCacheKey(it.inst)] = h.backendFor(it.inst)
 		statsIDs[it.inst.Backend] = append(statsIDs[it.inst.Backend], it.containerID)
-		statsBackend[it.inst.Backend] = h.backendFor(it.inst)
 	}
-	for bt := range statsIDs {
-		ids := statsIDs[bt]
-		b := statsBackend[bt]
-		m, err := b.Stats(ids)
-		if err != nil && len(ids) > 1 {
-			// `docker stats --no-stream` fails for the WHOLE batch (non-zero
-			// exit, no output) if any one requested container was removed since
-			// state was read — which would blank stats for every instance this
-			// tick. Retry per container, concurrently, so a single casualty is
-			// isolated and the rest still report (the SSH backends already
-			// isolate internally, so this path is devcontainer-only in practice).
-			m, _ = backend.ConcurrentStats(ids, func(id string) (*backend.ContainerStats, error) {
-				single, serr := b.Stats([]string{id})
-				if serr != nil {
-					return nil, serr
-				}
-				return single[id], nil
-			})
+	for bt, ids := range statsIDs {
+		// fetchOwn fetches one container's stats through its OWN backend.
+		fetchOwn := func(id string) (*backend.ContainerStats, error) {
+			single, err := backendByKey[backendCacheKeyFor(bt, id)].Stats([]string{id})
+			if err != nil {
+				return nil, err
+			}
+			return single[id], nil
+		}
+		var m map[string]*backend.ContainerStats
+		if bt == fleet.BackendDevcontainer {
+			// devcontainer Stats is a single stateless `docker stats --no-stream
+			// <ids...>`; that call blocks ~1s in dockerd by design, so issue #156
+			// asks for ONE invocation across all containers rather than per
+			// instance. Any devcontainer backend serves the whole batch. On error
+			// — the batch fails entirely if one container was removed since state
+			// was read — fall back to per-container (concurrent) so a single
+			// casualty doesn't blank every instance this tick.
+			var err error
+			m, err = backendByKey[backendCacheKeyFor(bt, ids[0])].Stats(ids)
+			if err != nil && len(ids) > 1 {
+				m, _ = backend.ConcurrentStats(ids, fetchOwn)
+			}
+		} else {
+			// SSH backends (codespaces/coder) fan out per container internally and
+			// carry per-instance state, so route each id to its own backend,
+			// concurrently — no batching benefit to preserve, native-SSH retained.
+			m, _ = backend.ConcurrentStats(ids, fetchOwn)
 		}
 		for id, s := range m {
 			if s != nil {
