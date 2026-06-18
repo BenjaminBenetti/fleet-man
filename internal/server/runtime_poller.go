@@ -260,12 +260,28 @@ func statsActivityPass(h *hub) {
 		statsIDs[it.inst.Backend] = append(statsIDs[it.inst.Backend], it.containerID)
 		statsBackend[it.inst.Backend] = h.backendFor(it.inst)
 	}
-	for bt, ids := range statsIDs {
-		if m, err := statsBackend[bt].Stats(ids); err == nil {
-			for id, s := range m {
-				if s != nil {
-					statsByID[id] = s
+	for bt := range statsIDs {
+		ids := statsIDs[bt]
+		b := statsBackend[bt]
+		m, err := b.Stats(ids)
+		if err != nil && len(ids) > 1 {
+			// `docker stats --no-stream` fails for the WHOLE batch (non-zero
+			// exit, no output) if any one requested container was removed since
+			// state was read — which would blank stats for every instance this
+			// tick. Retry per container, concurrently, so a single casualty is
+			// isolated and the rest still report (the SSH backends already
+			// isolate internally, so this path is devcontainer-only in practice).
+			m, _ = backend.ConcurrentStats(ids, func(id string) (*backend.ContainerStats, error) {
+				single, serr := b.Stats([]string{id})
+				if serr != nil {
+					return nil, serr
 				}
+				return single[id], nil
+			})
+		}
+		for id, s := range m {
+			if s != nil {
+				statsByID[id] = s
 			}
 		}
 	}
