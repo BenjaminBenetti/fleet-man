@@ -26,39 +26,49 @@ const (
 	sessionsPollInterval  = time.Second
 )
 
-// backendFor returns a cached Backend for inst, keyed by container ID, building
-// one on first use. Reusing the instance across poll ticks lets the backend's
-// internal caches survive — notably the devcontainer container-user lookup,
-// which a fresh-backend-per-tick always missed, re-running a `docker exec`
-// probe every pass.
+// backendCacheKey identifies a cached backend. ContainerID alone is not unique
+// across backend types (a Coder workspace and a Codespace can share a name), so
+// the backend type is part of the key — otherwise two same-named instances on
+// different backends would reuse one backend and the poller would drive the
+// wrong CLI.
+func backendCacheKey(inst *fleet.Instance) string {
+	return string(inst.Backend) + "\x00" + inst.ContainerID
+}
+
+// backendFor returns a cached Backend for inst, keyed by (backend type,
+// container ID), building one on first use. Reusing the instance across poll
+// ticks lets the backend's internal caches survive — notably the devcontainer
+// container-user lookup, which a fresh-backend-per-tick always missed,
+// re-running a `docker exec` probe every pass.
 func (h *hub) backendFor(inst *fleet.Instance) backend.Backend {
+	key := backendCacheKey(inst)
 	h.backendsMu.Lock()
 	defer h.backendsMu.Unlock()
 	if h.backends == nil {
 		h.backends = make(map[string]backend.Backend)
 	}
-	if b, ok := h.backends[inst.ContainerID]; ok {
+	if b, ok := h.backends[key]; ok {
 		return b
 	}
 	b := backendutil.NewForInstance(inst, false)
-	h.backends[inst.ContainerID] = b
+	h.backends[key] = b
 	return b
 }
 
-// pruneBackends drops cached backends whose container is no longer in the
-// active set (stopped, removed, or rebuilt to a new ID), bounding the cache to
-// the currently running instances. Called once per stats tick with the live
-// container IDs.
-func (h *hub) pruneBackends(activeIDs []string) {
-	active := make(map[string]struct{}, len(activeIDs))
-	for _, id := range activeIDs {
-		active[id] = struct{}{}
+// pruneBackends drops cached backends whose instance is no longer in the active
+// set (stopped, removed, or rebuilt to a new container ID), bounding the cache
+// to the currently running instances. Called once per stats tick with the live
+// cache keys (see backendCacheKey).
+func (h *hub) pruneBackends(activeKeys []string) {
+	active := make(map[string]struct{}, len(activeKeys))
+	for _, k := range activeKeys {
+		active[k] = struct{}{}
 	}
 	h.backendsMu.Lock()
 	defer h.backendsMu.Unlock()
-	for id := range h.backends {
-		if _, ok := active[id]; !ok {
-			delete(h.backends, id)
+	for k := range h.backends {
+		if _, ok := active[k]; !ok {
+			delete(h.backends, k)
 		}
 	}
 }
@@ -286,6 +296,7 @@ func statsActivityPass(h *hub) {
 		}
 	}
 
+	activeKeys := make([]string, 0, len(items))
 	for _, it := range items {
 		b := h.backendFor(it.inst)
 		captures[it.containerID] = b.CaptureAllSessions(it.containerID)
@@ -293,14 +304,15 @@ func statsActivityPass(h *hub) {
 			probes[it.containerID] = tool
 		}
 		expectedIDs = append(expectedIDs, it.containerID)
+		activeKeys = append(activeKeys, backendCacheKey(it.inst))
 		if it.workspaceDir != "" {
 			branchByKey[runtimeKey(it.fleetName, it.instance)] = gitutil.BranchName(it.workspaceDir)
 		}
 	}
-	// Bound the backend cache to the containers running this pass (stops/rebuilds
+	// Bound the backend cache to the instances running this pass (stops/rebuilds
 	// drop out). The stats pass owns this since it already enumerates every
-	// running container each tick.
-	h.pruneBackends(expectedIDs)
+	// running instance each tick.
+	h.pruneBackends(activeKeys)
 
 	// Re-install a missing Claude hook server-side (moved off the TUI's capture
 	// poll). Fire-and-forget, dedup'd per container so a slow provision doesn't

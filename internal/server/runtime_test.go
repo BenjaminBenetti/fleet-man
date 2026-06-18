@@ -77,27 +77,36 @@ func TestParseTmuxSessionsProto(t *testing.T) {
 func TestBackendForCachesAndPrunes(t *testing.T) {
 	h := newHub()
 	// state.Load() hands the pollers a fresh *fleet.Instance every tick, so the
-	// cache must key on ContainerID, not pointer identity. aNextTick is a
-	// distinct value with the same ContainerID, standing in for the next tick's
-	// reload.
+	// cache must key on identity (backend type + ContainerID), not pointer.
+	// aNextTick is a distinct value with the same identity as a — the next
+	// tick's reload — and must resolve to the same cached backend.
 	a := &fleet.Instance{Name: "a", Backend: fleet.BackendDevcontainer, ContainerID: "ca"}
 	aNextTick := &fleet.Instance{Name: "a", Backend: fleet.BackendDevcontainer, ContainerID: "ca"}
 	b := &fleet.Instance{Name: "b", Backend: fleet.BackendDevcontainer, ContainerID: "cb"}
+	// Same ContainerID as a but a different backend type: a Coder workspace and a
+	// Codespace can share a name, so this must NOT collide with a.
+	coderSameID := &fleet.Instance{Name: "a", Backend: fleet.BackendCoder, ContainerID: "ca"}
 
 	if h.backendFor(a) != h.backendFor(aNextTick) {
-		t.Fatal("backendFor returned a fresh backend for the same container ID across distinct instance values")
+		t.Fatal("backendFor returned a fresh backend for the same instance across distinct values")
+	}
+	if h.backendFor(a) == h.backendFor(coderSameID) {
+		t.Fatal("backendFor reused one backend for instances sharing a ContainerID but differing by backend type")
 	}
 	_ = h.backendFor(b)
-	if len(h.backends) != 2 {
-		t.Fatalf("want 2 cached backends, got %d", len(h.backends))
+	if len(h.backends) != 3 {
+		t.Fatalf("want 3 cached backends, got %d", len(h.backends))
 	}
 
-	// "cb" stopped: only "ca" is still running this pass.
-	h.pruneBackends([]string{"ca"})
-	if _, ok := h.backends["cb"]; ok {
-		t.Fatal("pruneBackends kept a backend whose container is no longer running")
+	// Only a is still running this pass; b and the coder instance dropped out.
+	h.pruneBackends([]string{backendCacheKey(a)})
+	if _, ok := h.backends[backendCacheKey(a)]; !ok {
+		t.Fatal("pruneBackends evicted a still-running instance's backend")
 	}
-	if _, ok := h.backends["ca"]; !ok {
-		t.Fatal("pruneBackends evicted a still-running container's backend")
+	if _, ok := h.backends[backendCacheKey(b)]; ok {
+		t.Fatal("pruneBackends kept a backend whose instance is no longer running")
+	}
+	if _, ok := h.backends[backendCacheKey(coderSameID)]; ok {
+		t.Fatal("pruneBackends kept a backend whose instance is no longer running")
 	}
 }

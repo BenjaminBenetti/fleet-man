@@ -35,7 +35,12 @@ func New(opts ...Option) *DevcontainerBackend {
 }
 
 // containerUser returns the non-root user inside the container, caching
-// the result to avoid a docker exec round-trip on every poll.
+// the result to avoid a docker exec round-trip on every poll. Only a
+// non-empty answer is cached: an empty probe (a just-started container with
+// no tmux socket and no /home/<user> yet, or a transient exec failure) must be
+// re-probed next call so it self-heals. Caching "" would, now that the backend
+// is reused across poll ticks, pin every later exec to root forever and hide
+// the real user's tmux sessions.
 func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string) string {
 	devcontainerBackend.userCacheMu.Lock()
 	if cached, ok := devcontainerBackend.userCache[containerID]; ok {
@@ -61,9 +66,12 @@ func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string
 		user = strings.TrimSpace(string(out))
 	}
 
-	devcontainerBackend.userCacheMu.Lock()
-	devcontainerBackend.userCache[containerID] = user
-	devcontainerBackend.userCacheMu.Unlock()
+	// Cache only a real answer; leave a miss uncached so the next poll re-probes.
+	if user != "" {
+		devcontainerBackend.userCacheMu.Lock()
+		devcontainerBackend.userCache[containerID] = user
+		devcontainerBackend.userCacheMu.Unlock()
+	}
 	return user
 }
 
