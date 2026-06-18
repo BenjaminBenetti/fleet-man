@@ -1323,6 +1323,8 @@ func (fleetPage *fleetPage) moveEditFleetRow(delta int) {
 	fleetPage.dialogMountRemoveConfirm = false
 	fleetPage.dialogPresetRemoveFocused = false
 	fleetPage.dialogPresetRemoveConfirm = false
+	fleetPage.dialogPresetMoveFocused = false
+	fleetPage.dialogPresetMoving = false
 	fleetPage.syncEditFleetFocus()
 }
 
@@ -1425,6 +1427,8 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.dialogLayoutPresets = slices.Clone(f.Settings.LayoutPresets)
 	fleetPage.dialogPresetRemoveFocused = false
 	fleetPage.dialogPresetRemoveConfirm = false
+	fleetPage.dialogPresetMoveFocused = false
+	fleetPage.dialogPresetMoving = false
 	fleetPage.lpFlow = nil
 
 	fleetPage.homedirInput.SetValue(f.Settings.HomeDir)
@@ -1491,6 +1495,13 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 		var cmd tea.Cmd
 		fleetPage.customMountInput, cmd = fleetPage.customMountInput.Update(msg)
 		return cmd
+	}
+
+	// Layout-preset reorder sub-mode: up/down drag the focused preset instead of
+	// moving the dialog cursor, so it must be handled before the generic
+	// navigation below.
+	if fleetPage.dialogPresetMoving {
+		return fleetPage.updatePresetMove(m, keyMsg)
 	}
 
 	switch keyMsg.String() {
@@ -1817,15 +1828,36 @@ func (fleetPage *fleetPage) updateLayoutPresetRow(m *model, keyMsg tea.KeyMsg) t
 		}
 		return nil
 	}
+	// Horizontal sub-cursor over the row's buttons: row → [remove] → [move].
 	switch keyMsg.String() {
 	case "right", "l":
-		fleetPage.dialogPresetRemoveFocused = true
+		switch {
+		case fleetPage.dialogPresetMoveFocused:
+			// Already at the rightmost button.
+		case fleetPage.dialogPresetRemoveFocused:
+			fleetPage.dialogPresetRemoveFocused = false
+			fleetPage.dialogPresetRemoveConfirm = false
+			fleetPage.dialogPresetMoveFocused = true
+		default:
+			fleetPage.dialogPresetRemoveFocused = true
+		}
 		return nil
 	case "left", "h":
-		fleetPage.dialogPresetRemoveFocused = false
-		fleetPage.dialogPresetRemoveConfirm = false
+		switch {
+		case fleetPage.dialogPresetMoveFocused:
+			fleetPage.dialogPresetMoveFocused = false
+			fleetPage.dialogPresetRemoveFocused = true
+		case fleetPage.dialogPresetRemoveFocused:
+			fleetPage.dialogPresetRemoveFocused = false
+			fleetPage.dialogPresetRemoveConfirm = false
+		}
 		return nil
 	case "enter", " ":
+		if fleetPage.dialogPresetMoveFocused {
+			// Start the reorder sub-mode; up/down now drag this preset.
+			fleetPage.dialogPresetMoving = true
+			return nil
+		}
 		if fleetPage.dialogPresetRemoveFocused {
 			if !fleetPage.dialogPresetRemoveConfirm {
 				fleetPage.dialogPresetRemoveConfirm = true // first Enter: arm confirm
@@ -1834,10 +1866,57 @@ func (fleetPage *fleetPage) updateLayoutPresetRow(m *model, keyMsg tea.KeyMsg) t
 			fleetPage.dialogPresetRemoveConfirm = false // second Enter: remove
 			return fleetPage.removeLayoutPreset(m, idx)
 		}
-		// Row focused (not the remove button) → open the editor.
+		// Row focused (no button) → open the editor.
 		fleetPage.openLayoutPresetEdit(idx)
 		return nil
 	}
+	return nil
+}
+
+// updatePresetMove handles keys while the preset reorder sub-mode is active
+// (entered with Enter on the [move] button). up/k and down/j drag the focused
+// preset one slot, persisting on each swap (instant-save); any other navigation
+// key — Enter, esc, q, h/l — commits the new order by leaving the sub-mode.
+func (fleetPage *fleetPage) updatePresetMove(m *model, keyMsg tea.KeyMsg) tea.Cmd {
+	switch keyMsg.String() {
+	case "up", "k":
+		return fleetPage.movePreset(m, -1)
+	case "down", "j":
+		return fleetPage.movePreset(m, 1)
+	case "ctrl+c":
+		fleetPage.closeEditFleet(m)
+		return nil
+	default:
+		// Enter/space/esc/q/h/l (and anything else) leave the reorder sub-mode,
+		// keeping the cursor on the [move] button of the preset's new position.
+		fleetPage.dialogPresetMoving = false
+		return nil
+	}
+}
+
+// movePreset swaps the focused preset with its neighbour delta slots away and
+// persists the new order (instant-save), reverting on RPC failure. The dialog
+// cursor follows the moved row so the user can keep dragging. Reordering the
+// LayoutPresets slice is exactly what changes the layout-cycling order.
+func (fleetPage *fleetPage) movePreset(m *model, delta int) tea.Cmd {
+	idx := fleetPage.dialogRow - editFleetRowLayoutPresetBase
+	target := idx + delta
+	if idx < 0 || idx >= len(fleetPage.dialogLayoutPresets) {
+		return nil
+	}
+	if target < 0 || target >= len(fleetPage.dialogLayoutPresets) {
+		return nil // already at an edge — nothing to do
+	}
+	prev := fleetPage.dialogLayoutPresets
+	next := slices.Clone(prev)
+	next[idx], next[target] = next[target], next[idx]
+	fleetPage.dialogLayoutPresets = next
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		fleetPage.dialogLayoutPresets = prev
+		m.message = fmt.Sprintf("Failed to save: %v", err)
+		return nil
+	}
+	fleetPage.dialogRow = editFleetRowLayoutPresetBase + target
 	return nil
 }
 
@@ -2061,6 +2140,8 @@ func (fleetPage *fleetPage) closeEditFleet(_ *model) {
 	fleetPage.mode = viewNormal
 	fleetPage.dialogDeleteCacheConfirm = false
 	fleetPage.dialogCacheButtonFocused = false
+	fleetPage.dialogPresetMoveFocused = false
+	fleetPage.dialogPresetMoving = false
 	// Clear the in-flight flag too: a wipe RPC may still be running, but its
 	// deleteCacheDoneMsg is matched on fleet name and only updates the message,
 	// so the dialog must not reopen showing a stale "Clearing…" spinner.

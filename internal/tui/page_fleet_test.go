@@ -1051,6 +1051,128 @@ func TestEditFleetPresetRowEnterEdits(t *testing.T) {
 	}
 }
 
+// presetNames extracts the ordered names of the working preset list, the order
+// that drives layout cycling.
+func presetNames(presets []fleet.LayoutPreset) []string {
+	names := make([]string, len(presets))
+	for i, p := range presets {
+		names[i] = p.Name
+	}
+	return names
+}
+
+// TestEditFleetPresetMoveReorders verifies the [move] button: →/l reaches it
+// past [remove], Enter starts the reorder sub-mode, and j/k then drag the
+// focused preset (cursor following it), changing the persisted cycling order.
+func TestEditFleetPresetMoveReorders(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	f := &fleet.Fleet{Name: "alpha", Settings: fleet.FleetSettings{
+		LayoutPresets: []fleet.LayoutPreset{
+			{Name: "a", PaneCommands: []string{"htop"}},
+			{Name: "b", PaneCommands: []string{"top"}},
+			{Name: "c", PaneCommands: []string{"vi"}},
+		},
+	}}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToFirstPresetRow(t, fp, m) // cursor on "a"
+
+	// →/l walks the sub-cursor row → [remove] → [move].
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if !fp.dialogPresetRemoveFocused {
+		t.Fatal("first l should focus the remove button")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if !fp.dialogPresetMoveFocused || fp.dialogPresetRemoveFocused {
+		t.Fatalf("second l should focus the move button; move=%v remove=%v", fp.dialogPresetMoveFocused, fp.dialogPresetRemoveFocused)
+	}
+
+	// Enter starts the reorder sub-mode (does NOT open the editor).
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !fp.dialogPresetMoving {
+		t.Fatal("enter on the move button should start the reorder sub-mode")
+	}
+	if fp.mode != viewEditFleet {
+		t.Fatalf("enter on the move button must not open the editor; mode=%v", fp.mode)
+	}
+
+	// Drag "a" down one slot; the cursor follows it to the new position.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if got := presetNames(fp.dialogLayoutPresets); !slices.Equal(got, []string{"b", "a", "c"}) {
+		t.Fatalf("after one down move, order = %v, want [b a c]", got)
+	}
+	if fp.dialogRow != editFleetRowLayoutPresetBase+1 {
+		t.Fatalf("cursor should follow the moved preset to slot 1; dialogRow=%d", fp.dialogRow)
+	}
+	if !fp.dialogPresetMoving {
+		t.Fatal("still dragging — the sub-mode should stay active across moves")
+	}
+
+	// Drag it down once more: [b c a].
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if got := presetNames(fp.dialogLayoutPresets); !slices.Equal(got, []string{"b", "c", "a"}) {
+		t.Fatalf("after second down move, order = %v, want [b c a]", got)
+	}
+
+	// Enter commits by leaving the sub-mode; the reordered list is persisted.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if fp.dialogPresetMoving {
+		t.Fatal("enter should leave the reorder sub-mode")
+	}
+	if got := presetNames(f.Settings.LayoutPresets); !slices.Equal(got, []string{"b", "c", "a"}) {
+		t.Fatalf("persisted order = %v, want [b c a]", got)
+	}
+}
+
+// TestEditFleetPresetMoveAtTopEdgeNoop verifies dragging the first preset up is
+// a no-op (it stays put) and does not exit the reorder sub-mode.
+func TestEditFleetPresetMoveAtTopEdgeNoop(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	f := &fleet.Fleet{Name: "alpha", Settings: fleet.FleetSettings{
+		LayoutPresets: []fleet.LayoutPreset{
+			{Name: "a", PaneCommands: []string{"htop"}},
+			{Name: "b", PaneCommands: []string{"top"}},
+		},
+	}}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToFirstPresetRow(t, fp, m) // cursor on "a" (top)
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // [remove]
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // [move]
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})                     // start moving
+
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyUp}) // up at the top edge
+	if got := presetNames(fp.dialogLayoutPresets); !slices.Equal(got, []string{"a", "b"}) {
+		t.Fatalf("up at the top edge should be a no-op; order = %v", got)
+	}
+	if fp.dialogRow != editFleetRowLayoutPresetBase {
+		t.Fatalf("cursor should stay on the top preset; dialogRow=%d", fp.dialogRow)
+	}
+	if !fp.dialogPresetMoving {
+		t.Fatal("an edge no-op must not leave the reorder sub-mode")
+	}
+
+	// esc leaves the sub-mode without closing the dialog.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if fp.dialogPresetMoving {
+		t.Fatal("esc should leave the reorder sub-mode")
+	}
+	if fp.mode != viewEditFleet {
+		t.Fatalf("esc while dragging should not close the dialog; mode=%v", fp.mode)
+	}
+}
+
 // TestCreateSessionBlankNameWithTemplateUsesTemplateName verifies that creating
 // a session from a selected template with no name typed defaults the session
 // name to the template's name (not the generic "session-N").
