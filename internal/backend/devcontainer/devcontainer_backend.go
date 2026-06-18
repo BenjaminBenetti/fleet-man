@@ -340,12 +340,81 @@ func (devcontainerBackend *DevcontainerBackend) Stop(containerID string) error {
 	return cmd.Run()
 }
 
-// Start starts an existing container by ID.
+// Start starts an existing container by ID and then fires the devcontainer
+// postStartCommand lifecycle hook so a resumed instance behaves like one
+// brought up by any other devcontainer tool (issue #179). A bare `docker
+// start` leaves postStartCommand un-run because docker knows nothing about
+// devcontainer lifecycle, so we follow it with `devcontainer
+// run-user-commands` (see runPostStart). The post-start step is best-effort:
+// the container is already running, so a hook failure is logged rather than
+// reverting the instance to stopped and desyncing fleet's state from docker.
 func (devcontainerBackend *DevcontainerBackend) Start(containerID string) error {
 	cmd := exec.Command("docker", "start", containerID)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	devcontainerBackend.runPostStart(containerID)
+	return nil
+}
+
+// runPostStart re-runs the devcontainer postStartCommand (and postAttachCommand)
+// for a just-started container via `devcontainer run-user-commands`. That
+// subcommand re-runs only the lifecycle commands whose markers are stale
+// relative to the container's start time — postStart and postAttach — while
+// leaving the create-time commands (onCreate/updateContent/postCreate)
+// untouched, because their markers are pinned to the unchanged container
+// creation time. It never recreates the container, so the instance keeps its
+// identity (unlike `up`, which could rebuild on config drift).
+//
+// The workspace folder is recovered from the container's
+// `devcontainer.local_folder` label — the same label the CLI stamps at `up`
+// time — so Start needs only the container ID. Best-effort: a missing label or
+// a non-zero exit is logged (output already teed to fleet.log) and swallowed,
+// since the container is running regardless.
+func (devcontainerBackend *DevcontainerBackend) runPostStart(containerID string) {
+	workspaceDir := workspaceFolderForContainer(containerID)
+	if workspaceDir == "" {
+		flog.Warn("devcontainer post-start skipped: container has no workspace-folder label", "container", containerID)
+		return
+	}
+
+	cmd := exec.Command("devcontainer", runUserCommandsArgs(workspaceDir)...)
+	// Tee output to the process stdio so the postStart script's output (and
+	// any failure detail) reaches the log file under the TUI's background
+	// process, exactly like up().
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	start := time.Now()
+	if err := cmd.Run(); err != nil {
+		flog.Warn("devcontainer post-start failed", "container", containerID, "workspace", workspaceDir, "ms", flog.MillisSince(start), "err", err)
+		return
+	}
+	flog.Info("devcontainer post-start ran", "container", containerID, "workspace", workspaceDir, "ms", flog.MillisSince(start))
+}
+
+// runUserCommandsArgs builds the `devcontainer run-user-commands` argument list
+// for a just-started workspace, threading the SSH agent socket through with
+// --remote-env so a postStart hook that talks to git/ssh sees the same agent
+// the workspace was created with — mirroring devcontainer exec.
+func runUserCommandsArgs(workspaceDir string) []string {
+	args := []string{"run-user-commands", "--workspace-folder", workspaceDir}
+	args = append(args, sshExecArgs()...)
+	return args
+}
+
+// workspaceFolderForContainer returns the host workspace folder a container was
+// provisioned from, read from the `devcontainer.local_folder` label the CLI
+// stamps at `up` time (and that Clone re-applies to cloned containers). Returns
+// "" when the inspect fails or the label is absent.
+func workspaceFolderForContainer(containerID string) string {
+	inspected, err := inspectContainer(containerID)
+	if err != nil || inspected.Config.Labels == nil {
+		return ""
+	}
+	return inspected.Config.Labels[devcontainerLocalFolderLabel]
 }
 
 // Stats returns CPU and memory usage for the given container IDs.

@@ -13,7 +13,13 @@
   "privileged": true,
   // Use 'forwardPorts' to make a list of ports inside the container available locally.
   // "forwardPorts": [],
-  "postStartCommand": "bash ${containerWorkspaceFolder}/.devcontainer/setup.sh",
+  // Object form runs each entry in parallel. `setup` is the real provisioning
+  // step; `timestamp` appends the UTC time to /tmp/fleet-poststart.log on every
+  // postStart so you can confirm the hook re-fires on each `fleet start` (#179).
+  "postStartCommand": {
+    "setup": "bash ${containerWorkspaceFolder}/.devcontainer/setup.sh",
+    "timestamp": "date -u >> /tmp/fleet-poststart.log"
+  },
   // Configure tool-specific properties.
   // "customizations": {},
   // Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
