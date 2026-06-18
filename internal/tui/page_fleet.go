@@ -85,6 +85,8 @@ type fleetPage struct {
 	dialogLayoutPresets       []fleet.LayoutPreset // working copy of the fleet's layout presets (instant-save)
 	dialogPresetRemoveFocused bool                 // horizontal sub-cursor: on the [remove] button vs the preset row (mirrors dialogCacheButtonFocused)
 	dialogPresetRemoveConfirm bool                 // inline "[remove?]" confirm armed on the focused preset row
+	dialogPresetMoveFocused   bool                 // horizontal sub-cursor: on the [move] button (right of [remove])
+	dialogPresetMoving        bool                 // reorder sub-mode: j/k drag the focused preset up/down (instant-save)
 	lpFlow                    *layoutPresetFlow    // open preset creation/edit flow (nil unless mode == viewLayoutPreset)
 
 	// New-session dialog template cycling: the fleet's presets snapshotted at
@@ -2218,7 +2220,7 @@ func (fleetPage *fleetPage) renderLayoutPresetRow(row int, marker func(int) stri
 	}
 	p := fleetPage.dialogLayoutPresets[idx]
 	label := fmt.Sprintf("%s (%s)", p.Name, paneCountLabel(p.PaneCount()))
-	return marker(row) + "  " + label + "   " + fleetPage.renderRemovePresetButton(row)
+	return marker(row) + "  " + label + "   " + fleetPage.renderRemovePresetButton(row) + " " + fleetPage.renderMovePresetButton(row)
 }
 
 // renderRemovePresetButton renders the [remove] affordance next to an existing
@@ -2235,6 +2237,21 @@ func (fleetPage *fleetPage) renderRemovePresetButton(row int) string {
 		return selectedStyle.Render("[remove]")
 	}
 	return dimStyle.Render("[remove]")
+}
+
+// renderMovePresetButton renders the [move] affordance to the right of [remove].
+// It is dim unless the horizontal sub-cursor is on it; once the user presses
+// Enter to start dragging, it shows a highlighted "[moving]" so it is obvious
+// that j/k now reorder the preset rather than navigate the dialog.
+func (fleetPage *fleetPage) renderMovePresetButton(row int) string {
+	focused := fleetPage.dialogRow == row && fleetPage.dialogPresetMoveFocused
+	if focused && fleetPage.dialogPresetMoving {
+		return selectedStyle.Render("[moving]")
+	}
+	if focused {
+		return selectedStyle.Render("[move]")
+	}
+	return dimStyle.Render("[move]")
 }
 
 // renderRemoveMountButton renders the [remove] affordance next to an existing
@@ -2333,13 +2350,19 @@ func (fleetPage *fleetPage) editFleetHint() string {
 		if fleetPage.dialogRow == fleetPage.layoutPresetAddRow() {
 			return "[enter] New preset  [j/k] Select  [q/esc] Save & Close"
 		}
+		if fleetPage.dialogPresetMoving {
+			return "[j/k] Move  [enter/esc] Done"
+		}
+		if fleetPage.dialogPresetMoveFocused {
+			return "[enter] Move  [h/←] Back  [esc] Close"
+		}
 		if fleetPage.dialogPresetRemoveFocused {
 			if fleetPage.dialogPresetRemoveConfirm {
 				return "[enter] Confirm remove  [esc] Cancel"
 			}
-			return "[enter] Remove  [h/←] Back  [esc] Close"
+			return "[enter] Remove  [l/→] Move  [h/←] Back  [esc] Close"
 		}
-		return "[enter] Edit  [l/→] Remove button  [j/k] Select  [q/esc] Save & Close"
+		return "[enter] Edit  [l/→] Buttons  [j/k] Select  [q/esc] Save & Close"
 	}
 	switch fleetPage.dialogRow {
 	case editFleetRowCustomMounts:
