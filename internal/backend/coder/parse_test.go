@@ -17,6 +17,7 @@ func TestParseToolProbeOutput(t *testing.T) {
 		{"copilot", "copilot\n", "copilot", true},
 		{"codex", "codex\n", "codex", true},
 		{"gemini", "gemini\n", "gemini", true},
+		{"auggie", "auggie\n", "auggie", true},
 		{"no-agent", "-\n", "", true},
 		{"empty", "", "", false},
 	}
