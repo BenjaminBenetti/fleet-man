@@ -40,6 +40,8 @@ func agentToolToProto(t state.AgentTool) fleetgrpc.AgentTool {
 		return fleetgrpc.AgentTool_AGENT_TOOL_GEMINI
 	case state.AgentToolCopilot:
 		return fleetgrpc.AgentTool_AGENT_TOOL_COPILOT
+	case state.AgentToolAuggie:
+		return fleetgrpc.AgentTool_AGENT_TOOL_AUGGIE
 	default:
 		return fleetgrpc.AgentTool_AGENT_TOOL_UNSPECIFIED
 	}

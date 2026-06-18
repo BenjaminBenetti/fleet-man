@@ -8,6 +8,7 @@ const (
 	AgentToolClaude  AgentTool = "claude"
 	AgentToolGemini  AgentTool = "gemini"
 	AgentToolCopilot AgentTool = "copilot"
+	AgentToolAuggie  AgentTool = "auggie"
 )
 
 // validAgentTools enumerates the set of recognised agent tools so unknown
@@ -17,4 +18,5 @@ var validAgentTools = map[AgentTool]struct{}{
 	AgentToolClaude:  {},
 	AgentToolGemini:  {},
 	AgentToolCopilot: {},
+	AgentToolAuggie:  {},
 }
