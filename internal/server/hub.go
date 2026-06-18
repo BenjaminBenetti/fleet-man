@@ -55,13 +55,13 @@ type hub struct {
 	// poller goroutine + its reinstall goroutines, so its own locking suffices.
 	reprovisioning sync.Map
 
-	// backends caches one Backend per running container (keyed by ContainerID)
-	// so the runtime pollers reuse it across ticks instead of constructing a
-	// fresh one every pass. Reuse is what makes the devcontainer backend's
-	// per-container user lookup cache effective: a fresh backend each tick always
-	// missed it, re-running a `docker exec ... stat` user probe on every pass.
-	// Accessed from the poller goroutines (not the hub loop), so guarded by its
-	// own mutex. See backendFor / pruneBackends.
+	// backends caches one Backend per running instance (keyed by backend type +
+	// container ID; see backendCacheKey) so the runtime pollers reuse it across
+	// ticks instead of constructing a fresh one every pass. Reuse is what makes
+	// the devcontainer backend's per-container user lookup cache effective: a
+	// fresh backend each tick always missed it, re-running a `docker exec ...
+	// stat` user probe on every pass. Accessed from the poller goroutines (not
+	// the hub loop), so guarded by its own mutex. See backendFor / pruneBackends.
 	backendsMu sync.Mutex
 	backends   map[string]backend.Backend
 }

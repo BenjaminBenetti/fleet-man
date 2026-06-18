@@ -250,6 +250,9 @@ func statsActivityPass(h *hub) {
 		}
 	}
 	if len(items) == 0 {
+		// No running instances: every cached backend is now stale (the prune in
+		// the main path below never runs on this branch).
+		h.pruneBackends(nil)
 		return
 	}
 
