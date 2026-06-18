@@ -76,11 +76,16 @@ func TestParseTmuxSessionsProto(t *testing.T) {
 // and that pruneBackends evicts containers no longer running.
 func TestBackendForCachesAndPrunes(t *testing.T) {
 	h := newHub()
+	// state.Load() hands the pollers a fresh *fleet.Instance every tick, so the
+	// cache must key on ContainerID, not pointer identity. aNextTick is a
+	// distinct value with the same ContainerID, standing in for the next tick's
+	// reload.
 	a := &fleet.Instance{Name: "a", Backend: fleet.BackendDevcontainer, ContainerID: "ca"}
+	aNextTick := &fleet.Instance{Name: "a", Backend: fleet.BackendDevcontainer, ContainerID: "ca"}
 	b := &fleet.Instance{Name: "b", Backend: fleet.BackendDevcontainer, ContainerID: "cb"}
 
-	if h.backendFor(a) != h.backendFor(a) {
-		t.Fatal("backendFor returned a fresh backend for the same container ID")
+	if h.backendFor(a) != h.backendFor(aNextTick) {
+		t.Fatal("backendFor returned a fresh backend for the same container ID across distinct instance values")
 	}
 	_ = h.backendFor(b)
 	if len(h.backends) != 2 {
