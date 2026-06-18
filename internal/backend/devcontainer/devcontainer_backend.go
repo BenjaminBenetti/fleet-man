@@ -438,6 +438,25 @@ func (devcontainerBackend *DevcontainerBackend) CaptureAllSessions(containerID s
 	}
 }
 
+// ListSessions lists tmux sessions inside the container with a direct
+// `docker exec`, bypassing the devcontainer CLI's Node cold start (the session
+// poller runs every second, where that cold start dominated CPU). It runs as
+// the container's non-root user — the owner of fleet's tmux sessions — reusing
+// the cached user lookup, exactly as CaptureAllSessions does. Returns "" on
+// exec failure (e.g. no tmux server), which the caller reads as "no sessions".
+func (devcontainerBackend *DevcontainerBackend) ListSessions(containerID string) string {
+	args := []string{"exec"}
+	if user := devcontainerBackend.containerUser(containerID); user != "" {
+		args = append(args, "-u", user)
+	}
+	args = append(args, containerID, "sh", "-c", backend.ListSessionsScript)
+	out, err := exec.Command("docker", args...).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
 // AgentToolProbe detects which agent tool is running inside a container.
 func (devcontainerBackend *DevcontainerBackend) AgentToolProbe(containerID string) (string, bool) {
 	args := []string{"exec"}

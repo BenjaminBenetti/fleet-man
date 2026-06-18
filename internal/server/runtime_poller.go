@@ -21,11 +21,47 @@ import (
 // existing (h.runtimeWanted), so with no TUI connected the server stays quiet —
 // `fleet ls` (GetState) never opens Watch, so nothing here runs.
 const (
-	liveStatusInterval     = time.Minute
-	statsActivityInterval  = 3 * time.Second
-	sessionsPollInterval   = time.Second
-	tmuxListSessionsFormat = `tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}" 2>/dev/null`
+	liveStatusInterval    = time.Minute
+	statsActivityInterval = 3 * time.Second
+	sessionsPollInterval  = time.Second
 )
+
+// backendFor returns a cached Backend for inst, keyed by container ID, building
+// one on first use. Reusing the instance across poll ticks lets the backend's
+// internal caches survive — notably the devcontainer container-user lookup,
+// which a fresh-backend-per-tick always missed, re-running a `docker exec`
+// probe every pass.
+func (h *hub) backendFor(inst *fleet.Instance) backend.Backend {
+	h.backendsMu.Lock()
+	defer h.backendsMu.Unlock()
+	if h.backends == nil {
+		h.backends = make(map[string]backend.Backend)
+	}
+	if b, ok := h.backends[inst.ContainerID]; ok {
+		return b
+	}
+	b := backendutil.NewForInstance(inst, false)
+	h.backends[inst.ContainerID] = b
+	return b
+}
+
+// pruneBackends drops cached backends whose container is no longer in the
+// active set (stopped, removed, or rebuilt to a new ID), bounding the cache to
+// the currently running instances. Called once per stats tick with the live
+// container IDs.
+func (h *hub) pruneBackends(activeIDs []string) {
+	active := make(map[string]struct{}, len(activeIDs))
+	for _, id := range activeIDs {
+		active[id] = struct{}{}
+	}
+	h.backendsMu.Lock()
+	defer h.backendsMu.Unlock()
+	for id := range h.backends {
+		if _, ok := active[id]; !ok {
+			delete(h.backends, id)
+		}
+	}
+}
 
 // startRuntimePollers launches the three live-runtime pollers. Each populates
 // only its own InstanceRuntime fields and broadcasts changed entries.
@@ -213,13 +249,29 @@ func statsActivityPass(h *hub) {
 	branchByKey := make(map[string]string, len(items))
 	expectedIDs := make([]string, 0, len(items))
 
+	// Fetch stats for all containers in one call per backend. The devcontainer
+	// backend turns this into a single `docker stats --no-stream <id...>`; that
+	// call blocks ~1s in dockerd by design, so issuing it per instance
+	// serialized the whole pass (N seconds for N instances). One call covers
+	// them all. The SSH backends fan out internally regardless.
+	statsIDs := make(map[fleet.BackendType][]string)
+	statsBackend := make(map[fleet.BackendType]backend.Backend)
 	for _, it := range items {
-		b := backendutil.NewForInstance(it.inst, false)
-		if m, err := b.Stats([]string{it.containerID}); err == nil {
-			if s := m[it.containerID]; s != nil {
-				statsByID[it.containerID] = s
+		statsIDs[it.inst.Backend] = append(statsIDs[it.inst.Backend], it.containerID)
+		statsBackend[it.inst.Backend] = h.backendFor(it.inst)
+	}
+	for bt, ids := range statsIDs {
+		if m, err := statsBackend[bt].Stats(ids); err == nil {
+			for id, s := range m {
+				if s != nil {
+					statsByID[id] = s
+				}
 			}
 		}
+	}
+
+	for _, it := range items {
+		b := h.backendFor(it.inst)
 		captures[it.containerID] = b.CaptureAllSessions(it.containerID)
 		if tool, ok := b.AgentToolProbe(it.containerID); ok {
 			probes[it.containerID] = tool
@@ -229,6 +281,10 @@ func statsActivityPass(h *hub) {
 			branchByKey[runtimeKey(it.fleetName, it.instance)] = gitutil.BranchName(it.workspaceDir)
 		}
 	}
+	// Bound the backend cache to the containers running this pass (stops/rebuilds
+	// drop out). The stats pass owns this since it already enumerates every
+	// running container each tick.
+	h.pruneBackends(expectedIDs)
 
 	// Re-install a missing Claude hook server-side (moved off the TUI's capture
 	// poll). Fire-and-forget, dedup'd per container so a slow provision doesn't
@@ -242,7 +298,7 @@ func statsActivityPass(h *hub) {
 		if _, busy := h.reprovisioning.LoadOrStore(it.containerID, struct{}{}); busy {
 			continue
 		}
-		b := backendutil.NewForInstance(it.inst, false)
+		b := h.backendFor(it.inst)
 		cid, wsDir, fleetName, instanceName := it.containerID, it.workspaceDir, it.fleetName, it.instance
 		go func() {
 			defer h.reprovisioning.Delete(cid)
@@ -311,15 +367,12 @@ func sessionsPass(h *hub) {
 			if inst.ContainerID == "" || inst.Status != fleet.StatusRunning {
 				continue
 			}
-			b := backendutil.NewForInstance(inst, false)
-			cmd := b.ExecCommandQuiet(inst.WorkspaceDir, []string{"sh", "-c", tmuxListSessionsFormat})
-			out, err := cmd.Output()
-			var sessions []*fleetgrpc.TmuxSession
-			if err == nil {
-				// tmux exits non-zero when no server is running; that simply
-				// means "no sessions", which clears any stale list.
-				sessions = parseTmuxSessionsProto(string(out))
-			}
+			// ListSessions execs directly against the container ID (no
+			// devcontainer Node cold start) and returns "" on failure — which,
+			// like a tmux server that isn't running, parses to an empty list and
+			// clears any stale sessions.
+			b := h.backendFor(inst)
+			sessions := parseTmuxSessionsProto(b.ListSessions(inst.ContainerID))
 			results = append(results, result{fleetName, inst.Name, sessions})
 		}
 	}

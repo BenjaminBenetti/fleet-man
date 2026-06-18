@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 )
 
 // TestApplyRuntimeMergesFields verifies the field-merge invariant: a poller that
@@ -67,5 +68,31 @@ func TestParseTmuxSessionsProto(t *testing.T) {
 	}
 	if sessions[3].GetName() != "bad" || sessions[3].GetWindows() != 0 {
 		t.Fatalf("bad (name-only) parsed wrong: %+v", sessions[3])
+	}
+}
+
+// TestBackendForCachesAndPrunes verifies the runtime pollers reuse one backend
+// per container across ticks (so the devcontainer user-lookup cache survives)
+// and that pruneBackends evicts containers no longer running.
+func TestBackendForCachesAndPrunes(t *testing.T) {
+	h := newHub()
+	a := &fleet.Instance{Name: "a", Backend: fleet.BackendDevcontainer, ContainerID: "ca"}
+	b := &fleet.Instance{Name: "b", Backend: fleet.BackendDevcontainer, ContainerID: "cb"}
+
+	if h.backendFor(a) != h.backendFor(a) {
+		t.Fatal("backendFor returned a fresh backend for the same container ID")
+	}
+	_ = h.backendFor(b)
+	if len(h.backends) != 2 {
+		t.Fatalf("want 2 cached backends, got %d", len(h.backends))
+	}
+
+	// "cb" stopped: only "ca" is still running this pass.
+	h.pruneBackends([]string{"ca"})
+	if _, ok := h.backends["cb"]; ok {
+		t.Fatal("pruneBackends kept a backend whose container is no longer running")
+	}
+	if _, ok := h.backends["ca"]; !ok {
+		t.Fatal("pruneBackends evicted a still-running container's backend")
 	}
 }

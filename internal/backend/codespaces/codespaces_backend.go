@@ -259,6 +259,16 @@ func (codespacesBackend *CodespacesBackend) CaptureAllSessions(containerID strin
 	}
 }
 
+// ListSessions lists tmux sessions inside a codespace over a single SSH round
+// trip (same path as CaptureAllSessions). Returns "" on failure.
+func (codespacesBackend *CodespacesBackend) ListSessions(containerID string) string {
+	out, err := codespacesBackend.sshCommand(containerID, []string{backend.ListSessionsScript}, false).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
 // AgentToolProbe detects which agent tool is running inside a codespace.
 func (codespacesBackend *CodespacesBackend) AgentToolProbe(containerID string) (string, bool) {
 	cmd := codespacesBackend.sshCommand(containerID, []string{backend.ToolProbeScript}, false)
