@@ -131,13 +131,17 @@ func finishProvision(instanceBackend backend.Backend, fleetName, instanceName, w
 	// non-fatal — the instance is still usable.
 	runStartupScripts(instanceBackend, wsDir, fleetName, instanceName)
 
-	// Install Claude Code state-detection hooks. Runs after the startup scripts
-	// so any per-fleet Claude Code install above has had a chance to land before
-	// we drop our hooks alongside it. Non-fatal: the per-instance Detector falls
-	// back to a safe default. We always install (regardless of which agent the
-	// user actually runs) because the cost of unused hooks is negligible.
+	// Install the agent state-detection hooks (Claude Code, auggie). Runs after
+	// the startup scripts so any per-fleet agent install above has had a chance
+	// to land before we drop our hooks alongside it. Non-fatal: the per-instance
+	// Detector falls back to a safe default. We always install (regardless of
+	// which agent the user actually runs) because the cost of unused hooks is
+	// negligible.
 	executor := agentdetect.NewBackendExecutor(instanceBackend, wsDir)
 	if err := agentdetect.NewClaudeProvisioner(executor).Provision(); err != nil {
 		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("claude hook install failed: %v", err))
+	}
+	if err := agentdetect.NewAuggieProvisioner(executor).Provision(); err != nil {
+		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("auggie hook install failed: %v", err))
 	}
 }

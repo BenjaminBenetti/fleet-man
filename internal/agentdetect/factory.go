@@ -16,6 +16,8 @@ func NewDetector(tool state.AgentTool) Detector {
 	switch tool {
 	case state.AgentToolClaude:
 		return NewClaudeHookDetector()
+	case state.AgentToolAuggie:
+		return NewAuggieHookDetector()
 	default:
 		return NewTmuxPaneChangeDetector()
 	}

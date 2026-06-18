@@ -254,7 +254,7 @@ func (codespacesBackend *CodespacesBackend) CaptureAllSessions(containerID strin
 	return backend.AllSessions{
 		Sessions:          sessions,
 		ExtraFiles:        files,
-		ClaudeHookMissing: hookMissing,
+		HookScriptMissing: hookMissing,
 		OK:                true,
 	}
 }

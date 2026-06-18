@@ -230,13 +230,15 @@ func statsActivityPass(h *hub) {
 		}
 	}
 
-	// Re-install a missing Claude hook server-side (moved off the TUI's capture
+	// Re-install missing agent hooks server-side (moved off the TUI's capture
 	// poll). Fire-and-forget, dedup'd per container so a slow provision doesn't
-	// stack across 3s ticks. Failures are surfaced as a per-instance warning
-	// (the same ~/.fleet/logs/*.warn file the TUI reads).
+	// stack across 3s ticks. Both the Claude and auggie hook scripts are dropped
+	// together at create time and the capture marker fires when either is gone,
+	// so we re-provision both (each is idempotent). Failures are surfaced as a
+	// per-instance warning (the same ~/.fleet/logs/*.warn file the TUI reads).
 	for _, it := range items {
 		c, ok := captures[it.containerID]
-		if !ok || !c.OK || !c.ClaudeHookMissing {
+		if !ok || !c.OK || !c.HookScriptMissing {
 			continue
 		}
 		if _, busy := h.reprovisioning.LoadOrStore(it.containerID, struct{}{}); busy {
@@ -249,6 +251,9 @@ func statsActivityPass(h *hub) {
 			executor := agentdetect.NewBackendExecutor(b, wsDir)
 			if err := agentdetect.NewClaudeProvisioner(executor).Provision(); err != nil {
 				state.WriteWarn(fleetName, instanceName, fmt.Sprintf("claude hook reinstall failed: %v", err))
+			}
+			if err := agentdetect.NewAuggieProvisioner(executor).Provision(); err != nil {
+				state.WriteWarn(fleetName, instanceName, fmt.Sprintf("auggie hook reinstall failed: %v", err))
 			}
 		}()
 	}
