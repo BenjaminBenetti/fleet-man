@@ -1,5 +1,11 @@
 package backend
 
+// ListSessionsScript lists the live tmux sessions in the
+// "name:windows:attached" format the runtime session poller parses. tmux
+// exits non-zero when no server is running; 2>/dev/null swallows that so the
+// caller simply observes empty output ("no sessions") rather than an error.
+const ListSessionsScript = `tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}" 2>/dev/null`
+
 // AllSessions holds the per-container snapshot collected in a single
 // shell invocation: tmux pane captures, plus auxiliary state files
 // produced by tool-specific in-container hooks (Claude Code's

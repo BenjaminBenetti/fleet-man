@@ -107,6 +107,15 @@ type Backend interface {
 	// without knowing their names in advance.
 	CaptureAllSessions(containerID string) AllSessions
 
+	// ListSessions lists the live tmux sessions inside a container, returning
+	// the raw `tmux list-sessions` output (see ListSessionsScript) for the
+	// caller to parse. Unlike ExecCommand/ExecCommandQuiet — which resolve the
+	// container from a workspace folder and, on the devcontainer backend, pay a
+	// Node CLI cold start per call — this execs directly against the container
+	// ID, making it cheap enough to run on the 1s session poll. Returns "" on
+	// any exec failure, which the caller treats as "no sessions".
+	ListSessions(containerID string) string
+
 	// AgentToolProbe detects which agent tool (if any) is running
 	// inside a container. Returns (tool, true) on success,
 	// ("", false) on probe failure.

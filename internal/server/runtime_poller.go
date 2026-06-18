@@ -21,11 +21,64 @@ import (
 // existing (h.runtimeWanted), so with no TUI connected the server stays quiet —
 // `fleet ls` (GetState) never opens Watch, so nothing here runs.
 const (
-	liveStatusInterval     = time.Minute
-	statsActivityInterval  = 3 * time.Second
-	sessionsPollInterval   = time.Second
-	tmuxListSessionsFormat = `tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_attached}" 2>/dev/null`
+	liveStatusInterval    = time.Minute
+	statsActivityInterval = 3 * time.Second
+	sessionsPollInterval  = time.Second
 )
+
+// backendCacheKey identifies a cached backend. ContainerID alone is not unique
+// across backend types (a Coder workspace and a Codespace can share a name), so
+// the backend type is part of the key — otherwise two same-named instances on
+// different backends would reuse one backend and the poller would drive the
+// wrong CLI.
+func backendCacheKey(inst *fleet.Instance) string {
+	return backendCacheKeyFor(inst.Backend, inst.ContainerID)
+}
+
+// backendCacheKeyFor builds the cache key from a backend type + container ID,
+// for call sites that have those without a *fleet.Instance (e.g. routing a
+// stats fetch back to the owning container's cached backend).
+func backendCacheKeyFor(bt fleet.BackendType, containerID string) string {
+	return string(bt) + "\x00" + containerID
+}
+
+// backendFor returns a cached Backend for inst, keyed by (backend type,
+// container ID), building one on first use. Reusing the instance across poll
+// ticks lets the backend's internal caches survive — notably the devcontainer
+// container-user lookup, which a fresh-backend-per-tick always missed,
+// re-running a `docker exec` probe every pass.
+func (h *hub) backendFor(inst *fleet.Instance) backend.Backend {
+	key := backendCacheKey(inst)
+	h.backendsMu.Lock()
+	defer h.backendsMu.Unlock()
+	if h.backends == nil {
+		h.backends = make(map[string]backend.Backend)
+	}
+	if b, ok := h.backends[key]; ok {
+		return b
+	}
+	b := backendutil.NewForInstance(inst, false)
+	h.backends[key] = b
+	return b
+}
+
+// pruneBackends drops cached backends whose instance is no longer in the active
+// set (stopped, removed, or rebuilt to a new container ID), bounding the cache
+// to the currently running instances. Called once per stats tick with the live
+// cache keys (see backendCacheKey).
+func (h *hub) pruneBackends(activeKeys []string) {
+	active := make(map[string]struct{}, len(activeKeys))
+	for _, k := range activeKeys {
+		active[k] = struct{}{}
+	}
+	h.backendsMu.Lock()
+	defer h.backendsMu.Unlock()
+	for k := range h.backends {
+		if _, ok := active[k]; !ok {
+			delete(h.backends, k)
+		}
+	}
+}
 
 // startRuntimePollers launches the three live-runtime pollers. Each populates
 // only its own InstanceRuntime fields and broadcasts changed entries.
@@ -204,6 +257,9 @@ func statsActivityPass(h *hub) {
 		}
 	}
 	if len(items) == 0 {
+		// No running instances: every cached backend is now stale (the prune in
+		// the main path below never runs on this branch).
+		h.pruneBackends(nil)
 		return
 	}
 
@@ -213,22 +269,70 @@ func statsActivityPass(h *hub) {
 	branchByKey := make(map[string]string, len(items))
 	expectedIDs := make([]string, 0, len(items))
 
+	// Fetch container stats, grouped by backend type. Each container keeps its
+	// own cached backend (backendByKey) because some backends carry per-instance
+	// state — codespaces registers a native-SSH config per instance, so routing a
+	// container's stats through a *different* instance's backend silently
+	// downgrades it to the slower `gh codespace ssh` path.
+	backendByKey := make(map[string]backend.Backend, len(items))
+	statsIDs := make(map[fleet.BackendType][]string)
 	for _, it := range items {
-		b := backendutil.NewForInstance(it.inst, false)
-		if m, err := b.Stats([]string{it.containerID}); err == nil {
-			if s := m[it.containerID]; s != nil {
-				statsByID[it.containerID] = s
+		backendByKey[backendCacheKey(it.inst)] = h.backendFor(it.inst)
+		statsIDs[it.inst.Backend] = append(statsIDs[it.inst.Backend], it.containerID)
+	}
+	for bt, ids := range statsIDs {
+		// fetchOwn fetches one container's stats through its OWN backend.
+		fetchOwn := func(id string) (*backend.ContainerStats, error) {
+			single, err := backendByKey[backendCacheKeyFor(bt, id)].Stats([]string{id})
+			if err != nil {
+				return nil, err
+			}
+			return single[id], nil
+		}
+		var m map[string]*backend.ContainerStats
+		if bt == fleet.BackendDevcontainer {
+			// devcontainer Stats is a single stateless `docker stats --no-stream
+			// <ids...>`; that call blocks ~1s in dockerd by design, so issue #156
+			// asks for ONE invocation across all containers rather than per
+			// instance. Any devcontainer backend serves the whole batch. On error
+			// — the batch fails entirely if one container was removed since state
+			// was read — fall back to per-container (concurrent) so a single
+			// casualty doesn't blank every instance this tick.
+			var err error
+			m, err = backendByKey[backendCacheKeyFor(bt, ids[0])].Stats(ids)
+			if err != nil && len(ids) > 1 {
+				m, _ = backend.ConcurrentStats(ids, fetchOwn)
+			}
+		} else {
+			// SSH backends (codespaces/coder) fan out per container internally and
+			// carry per-instance state, so route each id to its own backend,
+			// concurrently — no batching benefit to preserve, native-SSH retained.
+			m, _ = backend.ConcurrentStats(ids, fetchOwn)
+		}
+		for id, s := range m {
+			if s != nil {
+				statsByID[id] = s
 			}
 		}
+	}
+
+	activeKeys := make([]string, 0, len(items))
+	for _, it := range items {
+		b := h.backendFor(it.inst)
 		captures[it.containerID] = b.CaptureAllSessions(it.containerID)
 		if tool, ok := b.AgentToolProbe(it.containerID); ok {
 			probes[it.containerID] = tool
 		}
 		expectedIDs = append(expectedIDs, it.containerID)
+		activeKeys = append(activeKeys, backendCacheKey(it.inst))
 		if it.workspaceDir != "" {
 			branchByKey[runtimeKey(it.fleetName, it.instance)] = gitutil.BranchName(it.workspaceDir)
 		}
 	}
+	// Bound the backend cache to the instances running this pass (stops/rebuilds
+	// drop out). The stats pass owns this since it already enumerates every
+	// running instance each tick.
+	h.pruneBackends(activeKeys)
 
 	// Re-install missing agent hooks server-side (moved off the TUI's capture
 	// poll). Fire-and-forget, dedup'd per container so a slow provision doesn't
@@ -244,7 +348,7 @@ func statsActivityPass(h *hub) {
 		if _, busy := h.reprovisioning.LoadOrStore(it.containerID, struct{}{}); busy {
 			continue
 		}
-		b := backendutil.NewForInstance(it.inst, false)
+		b := h.backendFor(it.inst)
 		cid, wsDir, fleetName, instanceName := it.containerID, it.workspaceDir, it.fleetName, it.instance
 		go func() {
 			defer h.reprovisioning.Delete(cid)
@@ -316,15 +420,12 @@ func sessionsPass(h *hub) {
 			if inst.ContainerID == "" || inst.Status != fleet.StatusRunning {
 				continue
 			}
-			b := backendutil.NewForInstance(inst, false)
-			cmd := b.ExecCommandQuiet(inst.WorkspaceDir, []string{"sh", "-c", tmuxListSessionsFormat})
-			out, err := cmd.Output()
-			var sessions []*fleetgrpc.TmuxSession
-			if err == nil {
-				// tmux exits non-zero when no server is running; that simply
-				// means "no sessions", which clears any stale list.
-				sessions = parseTmuxSessionsProto(string(out))
-			}
+			// ListSessions execs directly against the container ID (no
+			// devcontainer Node cold start) and returns "" on failure — which,
+			// like a tmux server that isn't running, parses to an empty list and
+			// clears any stale sessions.
+			b := h.backendFor(inst)
+			sessions := parseTmuxSessionsProto(b.ListSessions(inst.ContainerID))
 			results = append(results, result{fleetName, inst.Name, sessions})
 		}
 	}

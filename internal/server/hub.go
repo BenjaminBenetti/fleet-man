@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -53,6 +54,16 @@ type hub struct {
 	// slow backend can outlast one tick). Accessed only from the stats/activity
 	// poller goroutine + its reinstall goroutines, so its own locking suffices.
 	reprovisioning sync.Map
+
+	// backends caches one Backend per running instance (keyed by backend type +
+	// container ID; see backendCacheKey) so the runtime pollers reuse it across
+	// ticks instead of constructing a fresh one every pass. Reuse is what makes
+	// the devcontainer backend's per-container user lookup cache effective: a
+	// fresh backend each tick always missed it, re-running a `docker exec ...
+	// stat` user probe on every pass. Accessed from the poller goroutines (not
+	// the hub loop), so guarded by its own mutex. See backendFor / pruneBackends.
+	backendsMu sync.Mutex
+	backends   map[string]backend.Backend
 }
 
 func newHub() *hub {

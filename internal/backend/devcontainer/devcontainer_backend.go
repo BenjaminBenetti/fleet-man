@@ -35,7 +35,12 @@ func New(opts ...Option) *DevcontainerBackend {
 }
 
 // containerUser returns the non-root user inside the container, caching
-// the result to avoid a docker exec round-trip on every poll.
+// the result to avoid a docker exec round-trip on every poll. Only a
+// non-empty answer is cached: an empty probe (a just-started container with
+// no tmux socket and no /home/<user> yet, or a transient exec failure) must be
+// re-probed next call so it self-heals. Caching "" would, now that the backend
+// is reused across poll ticks, pin every later exec to root forever and hide
+// the real user's tmux sessions.
 func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string) string {
 	devcontainerBackend.userCacheMu.Lock()
 	if cached, ok := devcontainerBackend.userCache[containerID]; ok {
@@ -61,9 +66,12 @@ func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string
 		user = strings.TrimSpace(string(out))
 	}
 
-	devcontainerBackend.userCacheMu.Lock()
-	devcontainerBackend.userCache[containerID] = user
-	devcontainerBackend.userCacheMu.Unlock()
+	// Cache only a real answer; leave a miss uncached so the next poll re-probes.
+	if user != "" {
+		devcontainerBackend.userCacheMu.Lock()
+		devcontainerBackend.userCache[containerID] = user
+		devcontainerBackend.userCacheMu.Unlock()
+	}
 	return user
 }
 
@@ -505,6 +513,25 @@ func (devcontainerBackend *DevcontainerBackend) CaptureAllSessions(containerID s
 		HookScriptMissing: hookMissing,
 		OK:                true,
 	}
+}
+
+// ListSessions lists tmux sessions inside the container with a direct
+// `docker exec`, bypassing the devcontainer CLI's Node cold start (the session
+// poller runs every second, where that cold start dominated CPU). It runs as
+// the container's non-root user — the owner of fleet's tmux sessions — reusing
+// the cached user lookup, exactly as CaptureAllSessions does. Returns "" on
+// exec failure (e.g. no tmux server), which the caller reads as "no sessions".
+func (devcontainerBackend *DevcontainerBackend) ListSessions(containerID string) string {
+	args := []string{"exec"}
+	if user := devcontainerBackend.containerUser(containerID); user != "" {
+		args = append(args, "-u", user)
+	}
+	args = append(args, containerID, "sh", "-c", backend.ListSessionsScript)
+	out, err := exec.Command("docker", args...).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
 }
 
 // AgentToolProbe detects which agent tool is running inside a container.

@@ -232,6 +232,18 @@ func (coderBackend *CoderBackend) CaptureAllSessions(containerID string) backend
 	}
 }
 
+// ListSessions lists tmux sessions inside a Coder workspace over a single SSH
+// round trip. coder ssh wraps everything after -- in a shell invocation, so the
+// script is passed directly (as CaptureAllSessions does). Returns "" on failure.
+func (coderBackend *CoderBackend) ListSessions(containerID string) string {
+	target := coderBackend.resolveSSHTarget(containerID)
+	out, err := exec.Command("coder", sshArgs(target, []string{backend.ListSessionsScript})...).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
 // AgentToolProbe detects which agent tool is running inside a Coder workspace.
 func (coderBackend *CoderBackend) AgentToolProbe(containerID string) (string, bool) {
 	// coder ssh wraps everything after -- in a shell invocation, so we
