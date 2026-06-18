@@ -158,6 +158,29 @@ func TestDevcontainerUpArgsUpdateRemoteUserUID(t *testing.T) {
 	}
 }
 
+func TestRunUserCommandsArgs(t *testing.T) {
+	t.Run("without ssh agent", func(t *testing.T) {
+		t.Setenv("SSH_AUTH_SOCK", "")
+		got := runUserCommandsArgs("/ws/alpha")
+		want := []string{"run-user-commands", "--workspace-folder", "/ws/alpha"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("runUserCommandsArgs() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("with ssh agent threads remote-env", func(t *testing.T) {
+		t.Setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+		got := runUserCommandsArgs("/ws/alpha")
+		want := []string{
+			"run-user-commands", "--workspace-folder", "/ws/alpha",
+			"--remote-env", "SSH_AUTH_SOCK=" + containerSSHSocketPath,
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("runUserCommandsArgs() = %#v, want %#v", got, want)
+		}
+	})
+}
+
 func TestForwardStdioCommandArgv(t *testing.T) {
 	cmd, ok := New().ForwardStdioCommand("cid123", 8080)
 	if !ok {
