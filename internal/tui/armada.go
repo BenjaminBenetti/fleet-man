@@ -585,8 +585,8 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	// restore sequence so an in-flight group restore's splitPaneMsg is rejected
 	// (it would otherwise bind a pane to the old fleet and persist its layout).
 	if fleetPage != nil {
-		fleetPage.restoreSeq++
-		if fleetPage.splitPaneID != "" {
+		fleetPage.split.restoreSeq++
+		if fleetPage.split.paneID != "" {
 			killAllSplitPanes()
 			unbindHostSplitKeys()
 			fleetPage.clearSplit()
@@ -629,7 +629,7 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 		fleetPage.savedGroups = make(map[string]savedGroup)
 		fleetPage.collapsed = make(map[string]bool)
 		fleetPage.cursor = 0
-		fleetPage.armadaFocused = false
+		fleetPage.armadaSel.focused = false
 		fleetPage.buildRows(m)
 	}
 
@@ -653,4 +653,99 @@ func syncTmuxArmadaEnv(m *model) {
 			_ = exec.Command("tmux", "set-environment", "-gu", name).Run()
 		}
 	}
+}
+
+// updateArmadaSelect handles the Armada dropdown (opened from the selector on
+// the list box's top border): j/k move, enter switches the TUI's active fleetd
+// connection to the chosen entry, esc cancels. Selecting the current entry is
+// a no-op — registration and selection are deliberately separate.
+func (fleetPage *fleetPage) updateArmadaSelect(m *model, msg tea.Msg) tea.Cmd {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return nil
+	}
+	entries := m.armadaEntries()
+	n := len(entries)
+	switch keyMsg.String() {
+	case "esc", "q", "ctrl+c":
+		fleetPage.mode = viewNormal
+		return nil
+	case "up", "k":
+		fleetPage.armadaSel.dialogRow = (fleetPage.armadaSel.dialogRow - 1 + n) % n
+		return nil
+	case "down", "j", "tab":
+		fleetPage.armadaSel.dialogRow = (fleetPage.armadaSel.dialogRow + 1) % n
+		return nil
+	case "enter", " ":
+		fleetPage.mode = viewNormal
+		entry := entries[min(fleetPage.armadaSel.dialogRow, n-1)]
+		if entry.current {
+			m.message = "Already connected to " + entry.displayName
+			return nil
+		}
+		return m.switchArmada(entry)
+	}
+	return nil
+}
+
+// armadaSelectState is the Armada selector embedded in the list box's TOP
+// BORDER line ("╭─ Armada [ local ] ──╮"). It is part of the j/k navigation
+// cycle as a virtual stop ABOVE the first row: focused is true while the
+// cursor is on it (up from the top row focuses it; up again wraps to the
+// bottom). Enter/Space (or `A`, or a mouse click) opens the dropdown.
+// dialogRow is the dropdown cursor while mode == viewArmadaSelect. y + x0/x1
+// record the label's on-screen position and column span during View() for
+// mouse hit-testing (-1 = not rendered).
+type armadaSelectState struct {
+	focused   bool
+	dialogRow int
+	y         int
+	x0        int
+	x1        int
+}
+
+func (fleetPage *fleetPage) renderArmadaSelectDialog(m *model) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	entries := m.armadaEntries()
+	var opts strings.Builder
+	for i, e := range entries {
+		suffix := ""
+		if e.url != "" {
+			suffix = "  " + armadaStatusValue(m, e.url)
+		}
+		if e.current {
+			suffix += "  " + dimStyle.Render("(current)")
+		}
+		if fleetPage.armadaSel.dialogRow == i {
+			opts.WriteString(cursorStyle.Render("> ") + selectedStyle.Render(e.displayName) + suffix)
+		} else {
+			opts.WriteString("  " + dialogLabel.Render(e.displayName) + suffix)
+		}
+		opts.WriteString("\n")
+	}
+	dialog := fmt.Sprintf(
+		"%s\n\n%s\n\n%s",
+		dialogTitle.Render("Switch armada"),
+		strings.TrimRight(opts.String(), "\n"),
+		dialogHint.Render("[j/k] Select  [enter/space] Switch  [q/esc] Cancel"),
+	)
+	b.WriteString(dialogBox.Render(dialog))
+	b.WriteString("\n")
+
+	return b.String()
+}
+
+// openArmadaSelect opens the armada dropdown with the cursor on the current
+// connection, refreshing the remotes' status indicators.
+func (fleetPage *fleetPage) openArmadaSelect(m *model) tea.Cmd {
+	fleetPage.mode = viewArmadaSelect
+	fleetPage.armadaSel.dialogRow = 0
+	for i, e := range m.armadaEntries() {
+		if e.current {
+			fleetPage.armadaSel.dialogRow = i
+			break
+		}
+	}
+	return m.pingAllArmadaCmd()
 }

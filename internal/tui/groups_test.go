@@ -295,7 +295,7 @@ func TestDerivePersistableSnapshotBailsOnDuplicateTitle(t *testing.T) {
 func TestDerivePersistableSnapshotBailsWithoutActiveGroup(t *testing.T) {
 	panes := []paneByPosition{{title: "alpha~abc123"}}
 	if _, ok := derivePersistableSnapshot(ActiveGroup{}, panes, "L"); ok {
-		t.Fatal("expected ok=false when activeGroup is empty")
+		t.Fatal("expected ok=false when split.activeGroup is empty")
 	}
 }
 

@@ -88,8 +88,8 @@ func TestChooseBrowserLaunchPersists(t *testing.T) {
 		f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{inst}}
 		fp := newFleetPage()
 		fp.mode = viewChooseBrowserLaunch
-		fp.dialogFleet = "alpha"
-		fp.dialogInst = "i1"
+		fp.dlg.fleet = "alpha"
+		fp.dlg.inst = "i1"
 		m := &model{
 			st:        &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}},
 			fleetPage: fp,
@@ -126,14 +126,14 @@ func TestChooseBrowserLaunchCursorEnter(t *testing.T) {
 
 	// Open the chooser; cursor defaults to Fleet Launch (row 0).
 	fp.beginBrowserOpen(m, inst, "alpha")
-	if fp.dialogRow != chooseBrowserRowFleetLaunch {
-		t.Fatalf("default dialogRow = %d, want Fleet Launch", fp.dialogRow)
+	if fp.dlg.row != chooseBrowserRowFleetLaunch {
+		t.Fatalf("default dialogRow = %d, want Fleet Launch", fp.dlg.row)
 	}
 
 	// Move down to Initial URL and choose it with enter.
 	fp.updateChooseBrowserLaunch(m, tea.KeyMsg{Type: tea.KeyDown})
-	if fp.dialogRow != chooseBrowserRowInitialURL {
-		t.Fatalf("after down, dialogRow = %d, want Initial URL", fp.dialogRow)
+	if fp.dlg.row != chooseBrowserRowInitialURL {
+		t.Fatalf("after down, dialogRow = %d, want Initial URL", fp.dlg.row)
 	}
 	fp.updateChooseBrowserLaunch(m, tea.KeyMsg{Type: tea.KeyEnter})
 

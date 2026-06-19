@@ -45,7 +45,7 @@ type lpCandidate struct {
 // fleetPage only while mode == viewLayoutPreset and is rebuilt on every open.
 type layoutPresetFlow struct {
 	stage   layoutPresetStage
-	editIdx int // index into dialogLayoutPresets being edited; -1 = creating
+	editIdx int // index into editFleet.layoutPresets being edited; -1 = creating
 
 	// Pick stage.
 	candidates []lpCandidate
@@ -93,7 +93,7 @@ func (lp *layoutPresetFlow) paneCommandFlags() []bool {
 // openLayoutPresetCreate opens the flow at the pick stage. Returns false (with
 // a user message) when the fleet has no active sessions to capture from.
 func (fleetPage *fleetPage) openLayoutPresetCreate(m *model) bool {
-	candidates := fleetPage.collectLayoutPresetCandidates(m, fleetPage.dialogFleet)
+	candidates := fleetPage.collectLayoutPresetCandidates(m, fleetPage.dlg.fleet)
 	if len(candidates) == 0 {
 		m.message = "No active sessions to capture a layout from"
 		return false
@@ -110,10 +110,10 @@ func (fleetPage *fleetPage) openLayoutPresetCreate(m *model) bool {
 // openLayoutPresetEdit opens the flow directly at the edit stage for the idx-th
 // existing preset in the dialog's working copy.
 func (fleetPage *fleetPage) openLayoutPresetEdit(idx int) {
-	if idx < 0 || idx >= len(fleetPage.dialogLayoutPresets) {
+	if idx < 0 || idx >= len(fleetPage.editFleet.layoutPresets) {
 		return
 	}
-	preset := fleetPage.dialogLayoutPresets[idx]
+	preset := fleetPage.editFleet.layoutPresets[idx]
 	lp := &layoutPresetFlow{
 		stage:   lpStageEdit,
 		editIdx: idx,
@@ -271,7 +271,7 @@ func (fleetPage *fleetPage) updateLayoutPresetPick(lp *layoutPresetFlow, keyMsg 
 		lp.pickCursor = (lp.pickCursor + 1) % len(lp.candidates)
 	case "enter", " ":
 		c := lp.candidates[lp.pickCursor]
-		name := uniquePresetName(c.groupName, fleetPage.dialogLayoutPresets, -1)
+		name := uniquePresetName(c.groupName, fleetPage.editFleet.layoutPresets, -1)
 		lp.initEditStage(c.layout, c.paneCount, name, nil)
 	case "esc", "q", "Q", "ctrl+c":
 		fleetPage.closeLayoutPresetFlow()
@@ -576,7 +576,7 @@ func (fleetPage *fleetPage) commitLayoutPreset(m *model, lp *layoutPresetFlow) t
 		lp.focus = lpFocusName
 		return nil
 	}
-	for i, p := range fleetPage.dialogLayoutPresets {
+	for i, p := range fleetPage.editFleet.layoutPresets {
 		if i != lp.editIdx && p.Name == name {
 			lp.errMsg = fmt.Sprintf("a preset named %q already exists", name)
 			lp.focus = lpFocusName
@@ -590,7 +590,7 @@ func (fleetPage *fleetPage) commitLayoutPreset(m *model, lp *layoutPresetFlow) t
 		PaneCommands: slices.Clone(lp.commands),
 	}
 
-	prev := fleetPage.dialogLayoutPresets
+	prev := fleetPage.editFleet.layoutPresets
 	next := slices.Clone(prev)
 	savedIdx := lp.editIdx
 	if savedIdx >= 0 && savedIdx < len(next) {
@@ -599,17 +599,17 @@ func (fleetPage *fleetPage) commitLayoutPreset(m *model, lp *layoutPresetFlow) t
 		next = append(next, preset)
 		savedIdx = len(next) - 1
 	}
-	fleetPage.dialogLayoutPresets = next
+	fleetPage.editFleet.layoutPresets = next
 	if err := fleetPage.persistFleetSettings(m); err != nil {
-		fleetPage.dialogLayoutPresets = prev
+		fleetPage.editFleet.layoutPresets = prev
 		m.message = fmt.Sprintf("Failed to save: %v", err)
 		return nil
 	}
 
 	fleetPage.lpFlow = nil
 	fleetPage.mode = viewEditFleet
-	fleetPage.dialogLayoutsExpanded = true
-	fleetPage.dialogRow = editFleetRowLayoutPresetBase + savedIdx
+	fleetPage.editFleet.layoutsExpanded = true
+	fleetPage.dlg.row = editFleetRowLayoutPresetBase + savedIdx
 	return nil
 }
 
@@ -734,4 +734,12 @@ func (lp *layoutPresetFlow) editStageHint() string {
 		return "[enter] Set command  [j/k/h/l] Navigate  [q/esc] Cancel"
 	}
 	return "[enter] Select  [j/k/h/l] Navigate  [q/esc] Cancel"
+}
+func (fleetPage *fleetPage) renderLayoutPresetOverlay(m *model) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(dialogBox.Render(fleetPage.renderLayoutPresetDialog()))
+	b.WriteString("\n")
+
+	return b.String()
 }
