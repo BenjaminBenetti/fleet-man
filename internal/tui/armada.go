@@ -735,3 +735,17 @@ func (fleetPage *fleetPage) renderArmadaSelectDialog(m *model) string {
 
 	return b.String()
 }
+
+// openArmadaSelect opens the armada dropdown with the cursor on the current
+// connection, refreshing the remotes' status indicators.
+func (fleetPage *fleetPage) openArmadaSelect(m *model) tea.Cmd {
+	fleetPage.mode = viewArmadaSelect
+	fleetPage.armadaSel.dialogRow = 0
+	for i, e := range m.armadaEntries() {
+		if e.current {
+			fleetPage.armadaSel.dialogRow = i
+			break
+		}
+	}
+	return m.pingAllArmadaCmd()
+}

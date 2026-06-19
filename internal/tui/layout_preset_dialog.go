@@ -735,3 +735,11 @@ func (lp *layoutPresetFlow) editStageHint() string {
 	}
 	return "[enter] Select  [j/k/h/l] Navigate  [q/esc] Cancel"
 }
+func (fleetPage *fleetPage) renderLayoutPresetOverlay(m *model) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(dialogBox.Render(fleetPage.renderLayoutPresetDialog()))
+	b.WriteString("\n")
+
+	return b.String()
+}

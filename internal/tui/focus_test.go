@@ -216,7 +216,7 @@ func TestArmadaFocusedQLeavesFocusAndClearsArmada(t *testing.T) {
 		t.Fatalf("'q' should have left focus mode")
 	}
 	if fp.armadaSel.focused {
-		t.Fatalf("leaving focus must clear armadaFocused so the row cursor is visible again")
+		t.Fatalf("leaving focus must clear armadaSel.focused so the row cursor is visible again")
 	}
 }
 
@@ -229,7 +229,7 @@ func TestArmadaFocusedEscLeavesFocus(t *testing.T) {
 		t.Fatalf("esc on the armada selector in focus mode should leave focus (same as q)")
 	}
 	if fp.armadaSel.focused {
-		t.Fatalf("leaving focus must clear armadaFocused")
+		t.Fatalf("leaving focus must clear armadaSel.focused")
 	}
 }
 

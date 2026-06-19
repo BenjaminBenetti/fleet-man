@@ -737,7 +737,7 @@ func TestEditFleetTogglesAndSavesSettings(t *testing.T) {
 		t.Fatalf("mode = %v, want viewEditFleet", fp.mode)
 	}
 	if fp.dlg.fleet != "alpha" {
-		t.Fatalf("dialogFleet = %q, want %q", fp.dlg.fleet, "alpha")
+		t.Fatalf("dlg.fleet = %q, want %q", fp.dlg.fleet, "alpha")
 	}
 	if fp.editFleet.claudeMount || fp.editFleet.codexMount {
 		t.Fatalf("expected mounts off by default; got claude=%v codex=%v", fp.editFleet.claudeMount, fp.editFleet.codexMount)
@@ -790,7 +790,7 @@ func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
 	if !fp.editFleet.preferFleetLaunch {
-		t.Fatalf("toggle did not set dialogPreferFleetLaunch")
+		t.Fatalf("toggle did not set editFleet.preferFleetLaunch")
 	}
 
 	if !f.Settings.PreferFleetLaunchEnabled() {
@@ -1463,10 +1463,10 @@ func TestEditFleetPFLSetFlagRevertedOnSaveFailure(t *testing.T) {
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
 	failNext = false
 	if fp.editFleet.preferFleetLaunch {
-		t.Fatal("dialogPreferFleetLaunch should revert after a failed save")
+		t.Fatal("editFleet.preferFleetLaunch should revert after a failed save")
 	}
 	if fp.editFleet.preferFleetLaunchSet {
-		t.Fatal("dialogPreferFleetLaunchSet should revert to false after a failed save")
+		t.Fatal("editFleet.preferFleetLaunchSet should revert to false after a failed save")
 	}
 
 	// An unrelated, successful edit must still leave the nil tri-state intact.
