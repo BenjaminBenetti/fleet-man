@@ -41,37 +41,37 @@ func TestBuildPresetSessionScript(t *testing.T) {
 
 func TestCyclePresetTemplateWrapsThroughNone(t *testing.T) {
 	page := newFleetPage()
-	page.dialogPresets = []fleet.LayoutPreset{
+	page.newSession.presets = []fleet.LayoutPreset{
 		{Name: "a", PaneCommands: []string{""}},
 		{Name: "b", PaneCommands: []string{""}},
 	}
-	page.dialogPresetIdx = -1
+	page.newSession.presetIdx = -1
 
 	want := []int{0, 1, -1, 0}
 	for i, w := range want {
 		page.cyclePresetTemplate(1)
-		if page.dialogPresetIdx != w {
-			t.Fatalf("step %d: idx = %d, want %d", i, page.dialogPresetIdx, w)
+		if page.newSession.presetIdx != w {
+			t.Fatalf("step %d: idx = %d, want %d", i, page.newSession.presetIdx, w)
 		}
 	}
 	// And backwards from 0 → -1 → 1.
-	page.dialogPresetIdx = 0
+	page.newSession.presetIdx = 0
 	page.cyclePresetTemplate(-1)
-	if page.dialogPresetIdx != -1 {
-		t.Fatalf("backward from 0: idx = %d, want -1", page.dialogPresetIdx)
+	if page.newSession.presetIdx != -1 {
+		t.Fatalf("backward from 0: idx = %d, want -1", page.newSession.presetIdx)
 	}
 	page.cyclePresetTemplate(-1)
-	if page.dialogPresetIdx != 1 {
-		t.Fatalf("backward from -1: idx = %d, want 1", page.dialogPresetIdx)
+	if page.newSession.presetIdx != 1 {
+		t.Fatalf("backward from -1: idx = %d, want 1", page.newSession.presetIdx)
 	}
 }
 
 func TestCyclePresetTemplateNoPresetsIsNoop(t *testing.T) {
 	page := newFleetPage()
-	page.dialogPresetIdx = -1
+	page.newSession.presetIdx = -1
 	page.cyclePresetTemplate(1)
-	if page.dialogPresetIdx != -1 {
-		t.Fatalf("idx = %d, want -1", page.dialogPresetIdx)
+	if page.newSession.presetIdx != -1 {
+		t.Fatalf("idx = %d, want -1", page.newSession.presetIdx)
 	}
 }
 

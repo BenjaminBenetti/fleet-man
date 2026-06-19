@@ -601,11 +601,11 @@ func TestEditInstanceRenamesViaDisplayName(t *testing.T) {
 	// Press 'e' on the instance row to open the edit dialog.
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 
-	if fp.mode != viewAddInstance || !fp.dialogEditing {
-		t.Fatalf("mode = %v, editing = %v; want viewAddInstance in edit mode", fp.mode, fp.dialogEditing)
+	if fp.mode != viewAddInstance || !fp.addInst.editing {
+		t.Fatalf("mode = %v, editing = %v; want viewAddInstance in edit mode", fp.mode, fp.addInst.editing)
 	}
-	if fp.dialogRow != addInstanceRowName {
-		t.Fatalf("dialogRow = %d, want addInstanceRowName (%d)", fp.dialogRow, addInstanceRowName)
+	if fp.dlg.row != addInstanceRowName {
+		t.Fatalf("dialogRow = %d, want addInstanceRowName (%d)", fp.dlg.row, addInstanceRowName)
 	}
 	if got := fp.textInput.Value(); got != "agent-1" {
 		t.Fatalf("prefilled input = %q, want %q", got, "agent-1")
@@ -613,7 +613,7 @@ func TestEditInstanceRenamesViaDisplayName(t *testing.T) {
 
 	// First Enter activates the name field, then type and submit with another Enter.
 	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if !fp.dialogFieldActive {
+	if !fp.dlg.fieldActive {
 		t.Fatalf("expected name field to activate after first enter")
 	}
 	fp.textInput.SetValue("auth-fix")
@@ -736,11 +736,11 @@ func TestEditFleetTogglesAndSavesSettings(t *testing.T) {
 	if fp.mode != viewEditFleet {
 		t.Fatalf("mode = %v, want viewEditFleet", fp.mode)
 	}
-	if fp.dialogFleet != "alpha" {
-		t.Fatalf("dialogFleet = %q, want %q", fp.dialogFleet, "alpha")
+	if fp.dlg.fleet != "alpha" {
+		t.Fatalf("dialogFleet = %q, want %q", fp.dlg.fleet, "alpha")
 	}
-	if fp.dialogClaudeMount || fp.dialogCodexMount {
-		t.Fatalf("expected mounts off by default; got claude=%v codex=%v", fp.dialogClaudeMount, fp.dialogCodexMount)
+	if fp.editFleet.claudeMount || fp.editFleet.codexMount {
+		t.Fatalf("expected mounts off by default; got claude=%v codex=%v", fp.editFleet.claudeMount, fp.editFleet.codexMount)
 	}
 
 	// Toggle Claude (cursor starts on row 0), move down, toggle Codex — each
@@ -749,8 +749,8 @@ func TestEditFleetTogglesAndSavesSettings(t *testing.T) {
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
 
-	if !fp.dialogClaudeMount || !fp.dialogCodexMount {
-		t.Fatalf("after toggles: claude=%v codex=%v, want both true", fp.dialogClaudeMount, fp.dialogCodexMount)
+	if !fp.editFleet.claudeMount || !fp.editFleet.codexMount {
+		t.Fatalf("after toggles: claude=%v codex=%v, want both true", fp.editFleet.claudeMount, fp.editFleet.codexMount)
 	}
 	// Instant-save: already persisted, no submit needed.
 	if !f.Settings.ClaudeCodeMount || !f.Settings.CodexMount {
@@ -779,17 +779,17 @@ func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
 	}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	if fp.dialogPreferFleetLaunch {
+	if fp.editFleet.preferFleetLaunch {
 		t.Fatalf("expected PreferFleetLaunch off by default")
 	}
 
 	// Navigate to the Prefer Fleet Launch row (last row) and toggle it — this
 	// saves instantly.
-	for fp.dialogRow != editFleetRowPreferFleetLaunch {
+	for fp.dlg.row != editFleetRowPreferFleetLaunch {
 		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
-	if !fp.dialogPreferFleetLaunch {
+	if !fp.editFleet.preferFleetLaunch {
 		t.Fatalf("toggle did not set dialogPreferFleetLaunch")
 	}
 
@@ -803,19 +803,19 @@ func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
 func navigateToBuildkitRow(t *testing.T, fp *fleetPage, m *model) {
 	t.Helper()
 	guard := 0
-	for fp.dialogRow != editFleetRowCaching {
+	for fp.dlg.row != editFleetRowCaching {
 		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 		if guard++; guard > 20 {
 			t.Fatal("never reached Caching header")
 		}
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // expand
-	if !fp.dialogCachingExpanded {
+	if !fp.editFleet.cachingExpanded {
 		t.Fatal("Caching section should expand on l")
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown}) // into Buildkit row
-	if fp.dialogRow != editFleetRowBuildkit {
-		t.Fatalf("dialogRow = %d, want buildkit row", fp.dialogRow)
+	if fp.dlg.row != editFleetRowBuildkit {
+		t.Fatalf("dialogRow = %d, want buildkit row", fp.dlg.row)
 	}
 }
 
@@ -835,17 +835,17 @@ func TestEditFleetSavesBuildkitServer(t *testing.T) {
 	}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	if fp.dialogBuildkitServer {
+	if fp.editFleet.buildkitServer {
 		t.Fatalf("expected BuildkitServer off by default")
 	}
 
 	navigateToBuildkitRow(t, fp, m)
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
-	if !fp.dialogBuildkitServer {
+	if !fp.editFleet.buildkitServer {
 		t.Fatalf("toggle did not set dialogBuildkitServer")
 	}
 	// Buildkit is not a home-dir mount, so toggling it must not start detection.
-	if fp.dialogDetecting {
+	if fp.editFleet.detecting {
 		t.Fatalf("buildkit toggle should not kick off home-dir detection")
 	}
 	// Instant-save: persisted on toggle, no submit step.
@@ -865,21 +865,21 @@ func TestEditFleetCachingExpandCollapse(t *testing.T) {
 	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	if fp.dialogCachingExpanded {
+	if fp.editFleet.cachingExpanded {
 		t.Fatal("Caching should start collapsed")
 	}
 	if slices.Contains(fp.visibleEditFleetRows(), editFleetRowBuildkit) {
 		t.Fatal("Buildkit row should be hidden while Caching is collapsed")
 	}
-	for fp.dialogRow != editFleetRowCaching {
+	for fp.dlg.row != editFleetRowCaching {
 		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	if !fp.dialogCachingExpanded || !slices.Contains(fp.visibleEditFleetRows(), editFleetRowBuildkit) {
+	if !fp.editFleet.cachingExpanded || !slices.Contains(fp.visibleEditFleetRows(), editFleetRowBuildkit) {
 		t.Fatal("l should expand Caching and reveal the Buildkit row")
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
-	if fp.dialogCachingExpanded {
+	if fp.editFleet.cachingExpanded {
 		t.Fatal("h should collapse Caching")
 	}
 }
@@ -897,7 +897,7 @@ func TestEditFleetDeleteCacheButtonHiddenWhenOff(t *testing.T) {
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 	navigateToBuildkitRow(t, fp, m) // buildkit is OFF
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	if fp.dialogCacheButtonFocused {
+	if fp.editFleet.cacheButtonFocused {
 		t.Fatal("l must not focus the delete-cache button when Buildkit is off")
 	}
 }
@@ -921,25 +921,25 @@ func TestEditFleetDeleteCacheButtonFlow(t *testing.T) {
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 	navigateToBuildkitRow(t, fp, m)
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // enable buildkit → button appears
-	if !fp.dialogBuildkitServer {
+	if !fp.editFleet.buildkitServer {
 		t.Fatal("buildkit not enabled")
 	}
 
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // focus button
-	if !fp.dialogCacheButtonFocused {
+	if !fp.editFleet.cacheButtonFocused {
 		t.Fatal("l should focus the delete-cache button")
 	}
 
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // arm inline confirm
-	if !fp.dialogDeleteCacheConfirm || fp.dialogDeleting {
-		t.Fatalf("first enter should only arm confirm; confirm=%v deleting=%v", fp.dialogDeleteCacheConfirm, fp.dialogDeleting)
+	if !fp.editFleet.deleteCacheConfirm || fp.editFleet.deleting {
+		t.Fatalf("first enter should only arm confirm; confirm=%v deleting=%v", fp.editFleet.deleteCacheConfirm, fp.editFleet.deleting)
 	}
 
 	cmd := fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // confirm → wipe
-	if fp.dialogDeleteCacheConfirm {
+	if fp.editFleet.deleteCacheConfirm {
 		t.Fatal("confirm should clear once the wipe starts")
 	}
-	if !fp.dialogDeleting {
+	if !fp.editFleet.deleting {
 		t.Fatal("deletingCache should be set while the wipe runs")
 	}
 	if cmd == nil {
@@ -953,7 +953,7 @@ func TestEditFleetDeleteCacheButtonFlow(t *testing.T) {
 		t.Fatalf("delete RPC called for %q, want alpha", deleted)
 	}
 	fp.handleDeleteCacheDone(m, done)
-	if fp.dialogDeleting {
+	if fp.editFleet.deleting {
 		t.Fatal("deletingCache should clear after the wipe completes")
 	}
 }
@@ -963,19 +963,19 @@ func TestEditFleetDeleteCacheButtonFlow(t *testing.T) {
 func navigateToFirstPresetRow(t *testing.T, fp *fleetPage, m *model) {
 	t.Helper()
 	guard := 0
-	for fp.dialogRow != editFleetRowLayouts {
+	for fp.dlg.row != editFleetRowLayouts {
 		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 		if guard++; guard > 20 {
 			t.Fatal("never reached Layouts header")
 		}
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // expand
-	if !fp.dialogLayoutsExpanded {
+	if !fp.editFleet.layoutsExpanded {
 		t.Fatal("Layouts section should expand on l")
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown}) // into the first preset row
-	if fp.dialogRow != editFleetRowLayoutPresetBase {
-		t.Fatalf("dialogRow = %d, want first preset row", fp.dialogRow)
+	if fp.dlg.row != editFleetRowLayoutPresetBase {
+		t.Fatalf("dialogRow = %d, want first preset row", fp.dlg.row)
 	}
 }
 
@@ -998,26 +998,26 @@ func TestEditFleetPresetRemoveButtonFlow(t *testing.T) {
 	navigateToFirstPresetRow(t, fp, m)
 
 	// Selecting the row must NOT focus (or arm) the remove button.
-	if fp.dialogPresetRemoveFocused {
+	if fp.editFleet.presetRemoveFocused {
 		t.Fatal("remove button should not be focused just by selecting the row")
 	}
 
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // → focus the button
-	if !fp.dialogPresetRemoveFocused {
+	if !fp.editFleet.presetRemoveFocused {
 		t.Fatal("l should focus the remove button")
 	}
 
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // first enter: arm
-	if !fp.dialogPresetRemoveConfirm {
+	if !fp.editFleet.presetRemoveConfirm {
 		t.Fatal("first enter on the remove button should arm the confirm")
 	}
-	if len(fp.dialogLayoutPresets) != 1 {
-		t.Fatalf("preset removed before confirm: %d", len(fp.dialogLayoutPresets))
+	if len(fp.editFleet.layoutPresets) != 1 {
+		t.Fatalf("preset removed before confirm: %d", len(fp.editFleet.layoutPresets))
 	}
 
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // second enter: remove
-	if len(fp.dialogLayoutPresets) != 0 {
-		t.Fatalf("preset not removed after confirm: %d", len(fp.dialogLayoutPresets))
+	if len(fp.editFleet.layoutPresets) != 0 {
+		t.Fatalf("preset not removed after confirm: %d", len(fp.editFleet.layoutPresets))
 	}
 }
 
@@ -1040,7 +1040,7 @@ func TestEditFleetPresetRowEnterEdits(t *testing.T) {
 	// → then ← clears the sub-cursor back to the row.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
-	if fp.dialogPresetRemoveFocused {
+	if fp.editFleet.presetRemoveFocused {
 		t.Fatal("h should clear the remove sub-cursor")
 	}
 
@@ -1084,17 +1084,17 @@ func TestEditFleetPresetMoveReorders(t *testing.T) {
 
 	// →/l walks the sub-cursor row → [remove] → [move].
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	if !fp.dialogPresetRemoveFocused {
+	if !fp.editFleet.presetRemoveFocused {
 		t.Fatal("first l should focus the remove button")
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	if !fp.dialogPresetMoveFocused || fp.dialogPresetRemoveFocused {
-		t.Fatalf("second l should focus the move button; move=%v remove=%v", fp.dialogPresetMoveFocused, fp.dialogPresetRemoveFocused)
+	if !fp.editFleet.presetMoveFocused || fp.editFleet.presetRemoveFocused {
+		t.Fatalf("second l should focus the move button; move=%v remove=%v", fp.editFleet.presetMoveFocused, fp.editFleet.presetRemoveFocused)
 	}
 
 	// Enter starts the reorder sub-mode (does NOT open the editor).
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if !fp.dialogPresetMoving {
+	if !fp.editFleet.presetMoving {
 		t.Fatal("enter on the move button should start the reorder sub-mode")
 	}
 	if fp.mode != viewEditFleet {
@@ -1103,25 +1103,25 @@ func TestEditFleetPresetMoveReorders(t *testing.T) {
 
 	// Drag "a" down one slot; the cursor follows it to the new position.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	if got := presetNames(fp.dialogLayoutPresets); !slices.Equal(got, []string{"b", "a", "c"}) {
+	if got := presetNames(fp.editFleet.layoutPresets); !slices.Equal(got, []string{"b", "a", "c"}) {
 		t.Fatalf("after one down move, order = %v, want [b a c]", got)
 	}
-	if fp.dialogRow != editFleetRowLayoutPresetBase+1 {
-		t.Fatalf("cursor should follow the moved preset to slot 1; dialogRow=%d", fp.dialogRow)
+	if fp.dlg.row != editFleetRowLayoutPresetBase+1 {
+		t.Fatalf("cursor should follow the moved preset to slot 1; dialogRow=%d", fp.dlg.row)
 	}
-	if !fp.dialogPresetMoving {
+	if !fp.editFleet.presetMoving {
 		t.Fatal("still dragging — the sub-mode should stay active across moves")
 	}
 
 	// Drag it down once more: [b c a].
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	if got := presetNames(fp.dialogLayoutPresets); !slices.Equal(got, []string{"b", "c", "a"}) {
+	if got := presetNames(fp.editFleet.layoutPresets); !slices.Equal(got, []string{"b", "c", "a"}) {
 		t.Fatalf("after second down move, order = %v, want [b c a]", got)
 	}
 
 	// Enter commits by leaving the sub-mode; the reordered list is persisted.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if fp.dialogPresetMoving {
+	if fp.editFleet.presetMoving {
 		t.Fatal("enter should leave the reorder sub-mode")
 	}
 	if got := presetNames(f.Settings.LayoutPresets); !slices.Equal(got, []string{"b", "c", "a"}) {
@@ -1153,19 +1153,19 @@ func TestEditFleetPresetMoveAtTopEdgeNoop(t *testing.T) {
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})                     // start moving
 
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyUp}) // up at the top edge
-	if got := presetNames(fp.dialogLayoutPresets); !slices.Equal(got, []string{"a", "b"}) {
+	if got := presetNames(fp.editFleet.layoutPresets); !slices.Equal(got, []string{"a", "b"}) {
 		t.Fatalf("up at the top edge should be a no-op; order = %v", got)
 	}
-	if fp.dialogRow != editFleetRowLayoutPresetBase {
-		t.Fatalf("cursor should stay on the top preset; dialogRow=%d", fp.dialogRow)
+	if fp.dlg.row != editFleetRowLayoutPresetBase {
+		t.Fatalf("cursor should stay on the top preset; dialogRow=%d", fp.dlg.row)
 	}
-	if !fp.dialogPresetMoving {
+	if !fp.editFleet.presetMoving {
 		t.Fatal("an edge no-op must not leave the reorder sub-mode")
 	}
 
 	// esc leaves the sub-mode without closing the dialog.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
-	if fp.dialogPresetMoving {
+	if fp.editFleet.presetMoving {
 		t.Fatal("esc should leave the reorder sub-mode")
 	}
 	if fp.mode != viewEditFleet {
@@ -1180,10 +1180,10 @@ func TestCreateSessionBlankNameWithTemplateUsesTemplateName(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{{Name: "i1"}}}
 	fp := newFleetPage()
-	fp.dialogFleet = "alpha"
-	fp.dialogInst = "i1"
-	fp.dialogPresets = []fleet.LayoutPreset{{Name: "app-run", PaneCommands: []string{"htop", "top"}}}
-	fp.dialogPresetIdx = 0
+	fp.dlg.fleet = "alpha"
+	fp.dlg.inst = "i1"
+	fp.newSession.presets = []fleet.LayoutPreset{{Name: "app-run", PaneCommands: []string{"htop", "top"}}}
+	fp.newSession.presetIdx = 0
 	fp.textInput.SetValue("") // no name entered
 	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp, sessionStore: NewSessionStore()}
 
@@ -1202,9 +1202,9 @@ func TestCreateSessionBlankNameNoTemplateAutoNames(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{{Name: "i1"}}}
 	fp := newFleetPage()
-	fp.dialogFleet = "alpha"
-	fp.dialogInst = "i1"
-	fp.dialogPresetIdx = -1 // no template selected
+	fp.dlg.fleet = "alpha"
+	fp.dlg.inst = "i1"
+	fp.newSession.presetIdx = -1 // no template selected
 	fp.textInput.SetValue("")
 	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp, sessionStore: NewSessionStore()}
 
@@ -1219,13 +1219,13 @@ func TestCreateSessionBlankNameNoTemplateAutoNames(t *testing.T) {
 func TestEditFleetDeleteCacheError(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	fp := newFleetPage()
-	fp.dialogFleet = "alpha"
-	fp.dialogDeleting = true
+	fp.dlg.fleet = "alpha"
+	fp.editFleet.deleting = true
 	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha"}}}, fleetPage: fp}
 
 	fp.handleDeleteCacheDone(m, deleteCacheDoneMsg{fleet: "alpha", err: errors.New("docker daemon unavailable")})
 
-	if fp.dialogDeleting {
+	if fp.editFleet.deleting {
 		t.Fatal("deletingCache should clear even on error")
 	}
 	if !strings.Contains(m.message, "docker daemon unavailable") {
@@ -1250,7 +1250,7 @@ func TestEditFleetDeleteCacheConfirmEscCancels(t *testing.T) {
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})                     // arm confirm
 
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc}) // cancel confirm
-	if fp.dialogDeleteCacheConfirm {
+	if fp.editFleet.deleteCacheConfirm {
 		t.Fatal("esc should cancel the armed confirm")
 	}
 	if fp.mode != viewEditFleet {
@@ -1275,13 +1275,13 @@ func TestEditFleetHomedirDetectedFillsEmptyInput(t *testing.T) {
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle Claude → kicks detect
-	if !fp.dialogDetecting {
+	if !fp.editFleet.detecting {
 		t.Fatalf("expected dialogDetecting to be true after toggle-on")
 	}
 
 	fp.handleHomedirDetected(m, homedirDetectedMsg{fleetName: "alpha", homeDir: "/home/node"})
 
-	if fp.dialogDetecting {
+	if fp.editFleet.detecting {
 		t.Fatalf("dialogDetecting still true after result arrived")
 	}
 	if got := fp.homedirInput.Value(); got != "/home/node" {
@@ -1341,7 +1341,7 @@ func TestEditFleetHomedirDetectedIgnoresStaleFleet(t *testing.T) {
 	if got := fp.homedirInput.Value(); got != "" {
 		t.Fatalf("homedirInput = %q, want empty", got)
 	}
-	if !fp.dialogDetecting {
+	if !fp.editFleet.detecting {
 		t.Fatalf("dialogDetecting cleared by stale-fleet result; should remain true")
 	}
 }
@@ -1363,17 +1363,17 @@ func TestEditFleetSavesHomedir(t *testing.T) {
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 	// Navigate to the Home dir row and open the field.
-	for fp.dialogRow != editFleetRowHomeDir {
+	for fp.dlg.row != editFleetRowHomeDir {
 		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // activate field
-	if !fp.dialogFieldActive {
+	if !fp.dlg.fieldActive {
 		t.Fatal("expected home-dir field active after enter")
 	}
 	fp.homedirInput.SetValue("/opt/agent")
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // commit → instant-save
 
-	if fp.dialogFieldActive {
+	if fp.dlg.fieldActive {
 		t.Fatal("field should be inactive after commit")
 	}
 	if f.Settings.HomeDir != "/opt/agent" {
@@ -1454,7 +1454,7 @@ func TestEditFleetPFLSetFlagRevertedOnSaveFailure(t *testing.T) {
 	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	for fp.dialogRow != editFleetRowPreferFleetLaunch {
+	for fp.dlg.row != editFleetRowPreferFleetLaunch {
 		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 	}
 
@@ -1462,15 +1462,15 @@ func TestEditFleetPFLSetFlagRevertedOnSaveFailure(t *testing.T) {
 	failNext = true
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
 	failNext = false
-	if fp.dialogPreferFleetLaunch {
+	if fp.editFleet.preferFleetLaunch {
 		t.Fatal("dialogPreferFleetLaunch should revert after a failed save")
 	}
-	if fp.dialogPreferFleetLaunchSet {
+	if fp.editFleet.preferFleetLaunchSet {
 		t.Fatal("dialogPreferFleetLaunchSet should revert to false after a failed save")
 	}
 
 	// An unrelated, successful edit must still leave the nil tri-state intact.
-	fp.dialogRow = editFleetRowClaude
+	fp.dlg.row = editFleetRowClaude
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
 	if !f.Settings.ClaudeCodeMount {
 		t.Fatal("claude mount not persisted")
@@ -1493,14 +1493,14 @@ func TestEditFleetHomedirEscDiscards(t *testing.T) {
 	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	for fp.dialogRow != editFleetRowHomeDir {
+	for fp.dlg.row != editFleetRowHomeDir {
 		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // activate field
 	fp.homedirInput.SetValue("/opt/agent")                // uncommitted edit
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})   // discard
 
-	if fp.dialogFieldActive {
+	if fp.dlg.fieldActive {
 		t.Fatal("field should be inactive after esc")
 	}
 	if got := fp.homedirInput.Value(); got != "/home/node" {
@@ -1524,8 +1524,8 @@ func TestAddFleetInspectedPresentAddsFleet(t *testing.T) {
 	}
 
 	fp.mode = viewAddFleetInspecting
-	fp.dialogPendingFleetName = "alpha"
-	fp.dialogPendingRepoURL = "git@example.com:org/alpha.git"
+	fp.addFleet.pendingFleetName = "alpha"
+	fp.addFleet.pendingRepoURL = "git@example.com:org/alpha.git"
 
 	fp.handleDevcontainerInspected(m, devcontainerInspectedMsg{
 		fleetName:       "alpha",
@@ -1538,8 +1538,8 @@ func TestAddFleetInspectedPresentAddsFleet(t *testing.T) {
 	if _, ok := m.st.Fleets["alpha"]; !ok {
 		t.Fatalf("expected fleet alpha to be persisted")
 	}
-	if fp.dialogPendingFleetName != "" || fp.dialogPendingRepoURL != "" {
-		t.Fatalf("pending fields not cleared: %q %q", fp.dialogPendingFleetName, fp.dialogPendingRepoURL)
+	if fp.addFleet.pendingFleetName != "" || fp.addFleet.pendingRepoURL != "" {
+		t.Fatalf("pending fields not cleared: %q %q", fp.addFleet.pendingFleetName, fp.addFleet.pendingRepoURL)
 	}
 }
 
@@ -1556,8 +1556,8 @@ func TestAddFleetInspectedMissingShowsDialog(t *testing.T) {
 	}
 
 	fp.mode = viewAddFleetInspecting
-	fp.dialogPendingFleetName = "alpha"
-	fp.dialogPendingRepoURL = "git@example.com:org/alpha.git"
+	fp.addFleet.pendingFleetName = "alpha"
+	fp.addFleet.pendingRepoURL = "git@example.com:org/alpha.git"
 
 	fp.handleDevcontainerInspected(m, devcontainerInspectedMsg{
 		fleetName:       "alpha",
@@ -1572,8 +1572,8 @@ func TestAddFleetInspectedMissingShowsDialog(t *testing.T) {
 	}
 	// Pending fields must survive — the no-devcontainer dialog reads
 	// them to know which fleet to add/launch the agent for.
-	if fp.dialogPendingFleetName != "alpha" {
-		t.Fatalf("pending fleet name dropped: %q", fp.dialogPendingFleetName)
+	if fp.addFleet.pendingFleetName != "alpha" {
+		t.Fatalf("pending fleet name dropped: %q", fp.addFleet.pendingFleetName)
 	}
 }
 
@@ -1590,8 +1590,8 @@ func TestAddFleetNoDevcontainerAbortDoesNotPersist(t *testing.T) {
 			fleetPage: fp,
 		}
 		fp.mode = viewAddFleetNoDevcontainer
-		fp.dialogPendingFleetName = "alpha"
-		fp.dialogPendingRepoURL = "git@example.com:org/alpha.git"
+		fp.addFleet.pendingFleetName = "alpha"
+		fp.addFleet.pendingRepoURL = "git@example.com:org/alpha.git"
 
 		var keyMsg tea.KeyMsg
 		switch key {
@@ -1611,7 +1611,7 @@ func TestAddFleetNoDevcontainerAbortDoesNotPersist(t *testing.T) {
 		if _, ok := m.st.Fleets["alpha"]; ok {
 			t.Fatalf("key %q: fleet was added by Abort path", key)
 		}
-		if fp.dialogPendingFleetName != "" {
+		if fp.addFleet.pendingFleetName != "" {
 			t.Fatalf("key %q: pending fields not cleared", key)
 		}
 	}
@@ -1629,8 +1629,8 @@ func TestAddFleetInspectStaleResultDropped(t *testing.T) {
 		fleetPage: fp,
 	}
 	fp.mode = viewAddFleetInspecting
-	fp.dialogPendingFleetName = "beta"
-	fp.dialogPendingRepoURL = "git@example.com:org/beta.git"
+	fp.addFleet.pendingFleetName = "beta"
+	fp.addFleet.pendingRepoURL = "git@example.com:org/beta.git"
 
 	// Result is for "alpha" — must not mutate state or change the mode.
 	fp.handleDevcontainerInspected(m, devcontainerInspectedMsg{
@@ -1649,11 +1649,11 @@ func TestAddFleetInspectStaleResultDropped(t *testing.T) {
 func TestAddInstanceDialogVimKeysRespectActiveField(t *testing.T) {
 	fp := newFleetPage()
 	fp.mode = viewAddInstance
-	fp.dialogFleet = "alpha"
-	fp.dialogBackend = fleet.BackendDevcontainer
-	fp.dialogColor = instanceColorWhite
-	fp.dialogRow = addInstanceRowName
-	fp.dialogFieldActive = true
+	fp.dlg.fleet = "alpha"
+	fp.addInst.backend = fleet.BackendDevcontainer
+	fp.addInst.color = instanceColorWhite
+	fp.dlg.row = addInstanceRowName
+	fp.dlg.fieldActive = true
 	fp.textInput.Focus()
 	m := &model{}
 
@@ -1661,26 +1661,26 @@ func TestAddInstanceDialogVimKeysRespectActiveField(t *testing.T) {
 	if got := fp.textInput.Value(); got != "k" {
 		t.Fatalf("active name input = %q, want k", got)
 	}
-	if fp.dialogRow != addInstanceRowName {
-		t.Fatalf("dialogRow moved while input active: got %d", fp.dialogRow)
+	if fp.dlg.row != addInstanceRowName {
+		t.Fatalf("dialogRow moved while input active: got %d", fp.dlg.row)
 	}
 
 	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyEsc})
-	if fp.dialogFieldActive {
+	if fp.dlg.fieldActive {
 		t.Fatal("dialogFieldActive should be false after esc from active field")
 	}
 
 	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	if fp.dialogRow != addInstanceRowBranch {
-		t.Fatalf("dialogRow = %d, want branch row", fp.dialogRow)
+	if fp.dlg.row != addInstanceRowBranch {
+		t.Fatalf("dialogRow = %d, want branch row", fp.dlg.row)
 	}
 	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	if fp.dialogRow != addInstanceRowColor {
-		t.Fatalf("dialogRow = %d, want color row", fp.dialogRow)
+	if fp.dlg.row != addInstanceRowColor {
+		t.Fatalf("dialogRow = %d, want color row", fp.dlg.row)
 	}
 	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	if fp.dialogColor != "red" {
-		t.Fatalf("dialogColor = %q, want red after l", fp.dialogColor)
+	if fp.addInst.color != "red" {
+		t.Fatalf("dialogColor = %q, want red after l", fp.addInst.color)
 	}
 	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if fp.mode != viewNormal {
@@ -1695,8 +1695,8 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 	f := &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{}}
 	fp := newFleetPage()
 	fp.mode = viewEditFleet
-	fp.dialogFleet = "alpha"
-	fp.dialogRow = editFleetRowClaude
+	fp.dlg.fleet = "alpha"
+	fp.dlg.row = editFleetRowClaude
 	m := &model{
 		st:        &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}},
 		fleetPage: fp,
@@ -1704,59 +1704,59 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 
 	// j moves down through the flat rows; l toggles the focused checkbox.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	if fp.dialogRow != editFleetRowCodex {
-		t.Fatalf("dialogRow = %d, want codex row", fp.dialogRow)
+	if fp.dlg.row != editFleetRowCodex {
+		t.Fatalf("dialogRow = %d, want codex row", fp.dlg.row)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	if !fp.dialogCodexMount {
+	if !fp.editFleet.codexMount {
 		t.Fatal("l should toggle selected codex row")
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	if fp.dialogRow != editFleetRowGh {
-		t.Fatalf("dialogRow = %d, want gh row", fp.dialogRow)
+	if fp.dlg.row != editFleetRowGh {
+		t.Fatalf("dialogRow = %d, want gh row", fp.dlg.row)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	if !fp.dialogGhMount {
+	if !fp.editFleet.ghMount {
 		t.Fatal("l should toggle selected gh row")
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	if fp.dialogRow != editFleetRowAuggie {
-		t.Fatalf("dialogRow = %d, want auggie row", fp.dialogRow)
+	if fp.dlg.row != editFleetRowAuggie {
+		t.Fatalf("dialogRow = %d, want auggie row", fp.dlg.row)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	if !fp.dialogAuggieMount {
+	if !fp.editFleet.auggieMount {
 		t.Fatal("l should toggle selected auggie row")
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	if fp.dialogRow != editFleetRowHomeDir {
-		t.Fatalf("dialogRow = %d, want home-dir row", fp.dialogRow)
+	if fp.dlg.row != editFleetRowHomeDir {
+		t.Fatalf("dialogRow = %d, want home-dir row", fp.dlg.row)
 	}
 
 	// Enter activates the home-dir field; typing routes into it; esc discards.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if !fp.dialogFieldActive {
+	if !fp.dlg.fieldActive {
 		t.Fatal("enter on home-dir row should activate text field")
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	if got := fp.homedirInput.Value(); got != "k" {
 		t.Fatalf("active home-dir input = %q, want k", got)
 	}
-	if fp.dialogRow != editFleetRowHomeDir {
-		t.Fatalf("dialogRow moved while home-dir active: got %d", fp.dialogRow)
+	if fp.dlg.row != editFleetRowHomeDir {
+		t.Fatalf("dialogRow moved while home-dir active: got %d", fp.dlg.row)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
-	if fp.dialogFieldActive {
+	if fp.dlg.fieldActive {
 		t.Fatal("esc should leave the home-dir field")
 	}
 
 	// k now navigates UP (field inactive): home-dir → auggie → gh.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	if fp.dialogRow != editFleetRowAuggie {
-		t.Fatalf("dialogRow = %d, want auggie row after inactive k", fp.dialogRow)
+	if fp.dlg.row != editFleetRowAuggie {
+		t.Fatalf("dialogRow = %d, want auggie row after inactive k", fp.dlg.row)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	if fp.dialogRow != editFleetRowGh {
-		t.Fatalf("dialogRow = %d, want gh row after second inactive k", fp.dialogRow)
+	if fp.dlg.row != editFleetRowGh {
+		t.Fatalf("dialogRow = %d, want gh row after second inactive k", fp.dlg.row)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if fp.mode != viewNormal {
@@ -1943,9 +1943,9 @@ func TestMigrateRenamedSessionGroupedReKeysAndPreventsDuplicate(t *testing.T) {
 		Sessions:     []string{"alpha~abc123", "alpha~abc123~ff00"},
 		PaneCount:    2,
 	}
-	fp.activeGroup = ActiveGroup{Ref: ref, GroupID: "abc123"}
-	fp.splitRef = ref
-	fp.splitSession = "alpha~abc123"
+	fp.split.activeGroup = ActiveGroup{Ref: ref, GroupID: "abc123"}
+	fp.split.ref = ref
+	fp.split.session = "alpha~abc123"
 
 	store := NewSessionStore()
 	store.SetExpanded(ref, true)
@@ -1990,11 +1990,11 @@ func TestMigrateRenamedSessionGroupedReKeysAndPreventsDuplicate(t *testing.T) {
 	if _, ok := m.st.GroupLayouts[newKey]; !ok {
 		t.Fatal("state group layout not re-keyed to new group ID")
 	}
-	if fp.activeGroup.GroupID != "test" {
-		t.Fatalf("activeGroup.GroupID = %q, want test", fp.activeGroup.GroupID)
+	if fp.split.activeGroup.GroupID != "test" {
+		t.Fatalf("activeGroup.GroupID = %q, want test", fp.split.activeGroup.GroupID)
 	}
-	if fp.splitSession != "alpha~test" {
-		t.Fatalf("splitSession = %q, want alpha~test", fp.splitSession)
+	if fp.split.session != "alpha~test" {
+		t.Fatalf("splitSession = %q, want alpha~test", fp.split.session)
 	}
 	if last, ok := store.LastActive(ref); !ok || last.groupID != "test" || last.sessionName != "alpha~test" {
 		t.Fatalf("lastActive = %#v, want {alpha~test test}", last)
@@ -2021,9 +2021,9 @@ func TestMigrateRenamedSessionGroupedReKeysAndPreventsDuplicate(t *testing.T) {
 func TestMigrateRenamedSessionUngroupedFollowsNewName(t *testing.T) {
 	ref := InstanceRef{Fleet: "repo", Instance: "alpha"}
 	fp := newFleetPage()
-	fp.activeGroup = ActiveGroup{Ref: ref, GroupID: "foo"}
-	fp.splitRef = ref
-	fp.splitSession = "foo"
+	fp.split.activeGroup = ActiveGroup{Ref: ref, GroupID: "foo"}
+	fp.split.ref = ref
+	fp.split.session = "foo"
 
 	store := NewSessionStore()
 	store.SetExpanded(ref, true)
@@ -2037,11 +2037,11 @@ func TestMigrateRenamedSessionUngroupedFollowsNewName(t *testing.T) {
 
 	m.migrateRenamedSession(sessionRenamedMsg{ref: ref, oldName: "foo", newName: "bar"})
 
-	if fp.splitSession != "bar" {
-		t.Fatalf("splitSession = %q, want bar", fp.splitSession)
+	if fp.split.session != "bar" {
+		t.Fatalf("splitSession = %q, want bar", fp.split.session)
 	}
-	if fp.activeGroup.GroupID != "bar" {
-		t.Fatalf("activeGroup.GroupID = %q, want bar", fp.activeGroup.GroupID)
+	if fp.split.activeGroup.GroupID != "bar" {
+		t.Fatalf("activeGroup.GroupID = %q, want bar", fp.split.activeGroup.GroupID)
 	}
 	if last, ok := store.LastActive(ref); !ok || last.sessionName != "bar" || last.groupID != "bar" {
 		t.Fatalf("lastActive = %#v, want {bar bar}", last)
@@ -2069,9 +2069,9 @@ func TestPruneWithStaleRuntimeDeletesMigratedGroup(t *testing.T) {
 		Sessions:     []string{"alpha~abc123", "alpha~abc123~ff00"},
 		PaneCount:    2,
 	}
-	fp.activeGroup = ActiveGroup{Ref: ref, GroupID: "abc123"}
-	fp.splitRef = ref
-	fp.splitSession = "alpha~abc123"
+	fp.split.activeGroup = ActiveGroup{Ref: ref, GroupID: "abc123"}
+	fp.split.ref = ref
+	fp.split.session = "alpha~abc123"
 
 	store := NewSessionStore()
 	store.SetExpanded(ref, true)
@@ -2121,7 +2121,7 @@ func TestPruneWithStaleRuntimeDeletesMigratedGroup(t *testing.T) {
 func navigateToCacheRow(t *testing.T, fp *fleetPage, m *model, row int) {
 	t.Helper()
 	guard := 0
-	for fp.dialogRow != editFleetRowCaching {
+	for fp.dlg.row != editFleetRowCaching {
 		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 		if guard++; guard > 20 {
 			t.Fatal("never reached Caching header")
@@ -2129,7 +2129,7 @@ func navigateToCacheRow(t *testing.T, fp *fleetPage, m *model, row int) {
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // expand
 	guard = 0
-	for fp.dialogRow != row {
+	for fp.dlg.row != row {
 		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 		if guard++; guard > 20 {
 			t.Fatalf("never reached cache row %d", row)
@@ -2151,14 +2151,14 @@ func TestEditFleetSavesDebAndImageCache(t *testing.T) {
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 	navigateToCacheRow(t, fp, m, editFleetRowDebCache)
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
-	if !fp.dialogDebCache || !f.Settings.DebCacheServer {
-		t.Fatalf("deb cache toggle did not persist: dialog=%v saved=%v", fp.dialogDebCache, f.Settings.DebCacheServer)
+	if !fp.editFleet.debCache || !f.Settings.DebCacheServer {
+		t.Fatalf("deb cache toggle did not persist: dialog=%v saved=%v", fp.editFleet.debCache, f.Settings.DebCacheServer)
 	}
 
 	navigateToCacheRow(t, fp, m, editFleetRowImageCache)
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
-	if !fp.dialogImageCache || !f.Settings.ImageCacheServer {
-		t.Fatalf("image cache toggle did not persist: dialog=%v saved=%v", fp.dialogImageCache, f.Settings.ImageCacheServer)
+	if !fp.editFleet.imageCache || !f.Settings.ImageCacheServer {
+		t.Fatalf("image cache toggle did not persist: dialog=%v saved=%v", fp.editFleet.imageCache, f.Settings.ImageCacheServer)
 	}
 }
 
@@ -2167,7 +2167,7 @@ func TestEditFleetSavesDebAndImageCache(t *testing.T) {
 func navigateToCustomMountRow(t *testing.T, fp *fleetPage, m *model, idx int) {
 	t.Helper()
 	guard := 0
-	for fp.dialogRow != editFleetRowCustomMounts {
+	for fp.dlg.row != editFleetRowCustomMounts {
 		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 		if guard++; guard > 20 {
 			t.Fatal("never reached Custom mounts header")
@@ -2176,7 +2176,7 @@ func navigateToCustomMountRow(t *testing.T, fp *fleetPage, m *model, idx int) {
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // expand
 	want := editFleetRowCustomMountBase + idx
 	guard = 0
-	for fp.dialogRow != want {
+	for fp.dlg.row != want {
 		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 		if guard++; guard > 20 {
 			t.Fatalf("never reached custom-mount row %d", idx)
@@ -2202,20 +2202,20 @@ func TestEditFleetRemoveMountRequiresConfirm(t *testing.T) {
 
 	// First Enter only arms the confirm — the mount must still be present.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if !fp.dialogMountRemoveConfirm {
+	if !fp.editFleet.mountRemoveConfirm {
 		t.Fatal("first Enter should arm the remove confirm")
 	}
-	if len(fp.dialogCustomMounts) != 1 || len(f.Settings.CustomMounts) != 1 {
-		t.Fatalf("mount removed before confirm: dialog=%v saved=%v", fp.dialogCustomMounts, f.Settings.CustomMounts)
+	if len(fp.editFleet.customMounts) != 1 || len(f.Settings.CustomMounts) != 1 {
+		t.Fatalf("mount removed before confirm: dialog=%v saved=%v", fp.editFleet.customMounts, f.Settings.CustomMounts)
 	}
 
 	// Second Enter performs the removal and disarms.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if fp.dialogMountRemoveConfirm {
+	if fp.editFleet.mountRemoveConfirm {
 		t.Fatal("confirm should disarm after removal")
 	}
-	if len(fp.dialogCustomMounts) != 0 || len(f.Settings.CustomMounts) != 0 {
-		t.Fatalf("mount not removed after confirm: dialog=%v saved=%v", fp.dialogCustomMounts, f.Settings.CustomMounts)
+	if len(fp.editFleet.customMounts) != 0 || len(f.Settings.CustomMounts) != 0 {
+		t.Fatalf("mount not removed after confirm: dialog=%v saved=%v", fp.editFleet.customMounts, f.Settings.CustomMounts)
 	}
 }
 
@@ -2237,24 +2237,24 @@ func TestEditFleetRemoveMountConfirmCancels(t *testing.T) {
 	// Arm, then Esc cancels the confirm but keeps the dialog open and the mount.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})
-	if fp.dialogMountRemoveConfirm {
+	if fp.editFleet.mountRemoveConfirm {
 		t.Fatal("Esc should cancel the armed confirm")
 	}
 	if fp.mode != viewEditFleet {
 		t.Fatal("Esc on an armed confirm must not close the dialog")
 	}
-	if len(fp.dialogCustomMounts) != 2 {
-		t.Fatalf("Esc removed a mount: %v", fp.dialogCustomMounts)
+	if len(fp.editFleet.customMounts) != 2 {
+		t.Fatalf("Esc removed a mount: %v", fp.editFleet.customMounts)
 	}
 
 	// Arm again, then a row move disarms it.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
-	if fp.dialogMountRemoveConfirm {
+	if fp.editFleet.mountRemoveConfirm {
 		t.Fatal("moving the cursor should disarm the confirm")
 	}
-	if len(fp.dialogCustomMounts) != 2 {
-		t.Fatalf("row move removed a mount: %v", fp.dialogCustomMounts)
+	if len(fp.editFleet.customMounts) != 2 {
+		t.Fatalf("row move removed a mount: %v", fp.editFleet.customMounts)
 	}
 }
 

@@ -110,12 +110,12 @@ func TestUpdateNormalWrapsCursorFromTopToBottom(t *testing.T) {
 	m := &model{fleetPage: fp}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyUp})
-	if !fp.armadaFocused {
+	if !fp.armadaSel.focused {
 		t.Fatal("up from the top row should focus the Armada selector")
 	}
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyUp})
-	if fp.armadaFocused || fp.cursor != len(fp.rows)-1 {
-		t.Fatalf("up from the selector should wrap to the bottom row, focused=%v cursor=%d", fp.armadaFocused, fp.cursor)
+	if fp.armadaSel.focused || fp.cursor != len(fp.rows)-1 {
+		t.Fatalf("up from the selector should wrap to the bottom row, focused=%v cursor=%d", fp.armadaSel.focused, fp.cursor)
 	}
 }
 
@@ -133,12 +133,12 @@ func TestUpdateNormalWrapsCursorFromBottomToTop(t *testing.T) {
 	m := &model{fleetPage: fp}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyDown})
-	if !fp.armadaFocused {
+	if !fp.armadaSel.focused {
 		t.Fatal("down from the bottom row should focus the Armada selector")
 	}
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyDown})
-	if fp.armadaFocused || fp.cursor != 0 {
-		t.Fatalf("down from the selector should land on the top row, focused=%v cursor=%d", fp.armadaFocused, fp.cursor)
+	if fp.armadaSel.focused || fp.cursor != 0 {
+		t.Fatalf("down from the selector should land on the top row, focused=%v cursor=%d", fp.armadaSel.focused, fp.cursor)
 	}
 }
 
@@ -377,8 +377,8 @@ func TestReconcileSavedGroupsMirrorsServerState(t *testing.T) {
 	newKey := computeGroupKey("beta", "fish")
 
 	fp := newFleetPage()
-	fp.splitPaneID = "%5"
-	fp.activeGroup = ActiveGroup{Ref: ref, GroupID: "dog"}
+	fp.split.paneID = "%5"
+	fp.split.activeGroup = ActiveGroup{Ref: ref, GroupID: "dog"}
 	fp.savedGroups[activeKey] = savedGroup{
 		GroupID: "dog", InstanceName: "alpha",
 		Sessions: []string{"alpha~dog", "alpha~dog~ff00"}, PaneCount: 2,
@@ -422,7 +422,7 @@ func TestReconcileSavedGroupsMirrorsServerState(t *testing.T) {
 
 	// With the split closed nothing is exempt: the active group's entry
 	// now mirrors the server too.
-	fp.splitPaneID = ""
+	fp.split.paneID = ""
 	m.reconcileSavedGroups()
 	if got := fp.savedGroups[activeKey]; got.PaneCount != 3 {
 		t.Fatalf("after split close, group PaneCount = %d, want 3 (server copy)", got.PaneCount)

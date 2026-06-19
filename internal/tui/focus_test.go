@@ -205,7 +205,7 @@ func TestArmadaFocusedQLeavesFocusAndClearsArmada(t *testing.T) {
 	fp.enterFocus(m, "alpha")
 	// 'k' from the focused header parks focus on the Armada selector.
 	fp.updateNormal(m, key('k'))
-	if !fp.armadaFocused {
+	if !fp.armadaSel.focused {
 		t.Fatalf("expected armada selector to take focus after 'k'")
 	}
 	cmd := fp.updateNormal(m, key('q'))
@@ -215,7 +215,7 @@ func TestArmadaFocusedQLeavesFocusAndClearsArmada(t *testing.T) {
 	if fp.focusedFleet != "" {
 		t.Fatalf("'q' should have left focus mode")
 	}
-	if fp.armadaFocused {
+	if fp.armadaSel.focused {
 		t.Fatalf("leaving focus must clear armadaFocused so the row cursor is visible again")
 	}
 }
@@ -228,7 +228,7 @@ func TestArmadaFocusedEscLeavesFocus(t *testing.T) {
 	if fp.focusedFleet != "" {
 		t.Fatalf("esc on the armada selector in focus mode should leave focus (same as q)")
 	}
-	if fp.armadaFocused {
+	if fp.armadaSel.focused {
 		t.Fatalf("leaving focus must clear armadaFocused")
 	}
 }

@@ -104,9 +104,9 @@ func (fleetPage *fleetPage) beginBrowserOpen(m *model, instance *fleet.Instance,
 	if f, ok := m.st.Fleets[fleetName]; ok && !f.Settings.PreferFleetLaunchSet() {
 		if initialURL, hasLanding, err := fetchBrowserConfig(fleetName, instance.Name); err == nil && initialURL != "" && hasLanding {
 			fleetPage.mode = viewChooseBrowserLaunch
-			fleetPage.dialogFleet = fleetName
-			fleetPage.dialogInst = instance.Name
-			fleetPage.dialogRow = chooseBrowserRowFleetLaunch
+			fleetPage.dlg.fleet = fleetName
+			fleetPage.dlg.inst = instance.Name
+			fleetPage.dlg.row = chooseBrowserRowFleetLaunch
 			return nil
 		}
 	}
@@ -134,8 +134,8 @@ func (fleetPage *fleetPage) startBrowser(m *model, instance *fleet.Instance, fle
 			return switchBrowserCmd(m.portForwards, instanceKey, dataDir, preferFleetLaunch, "")
 		}
 		fleetPage.mode = viewConfirmBrowserSwitch
-		fleetPage.dialogFleet = fleetName
-		fleetPage.dialogInst = instance.Name
+		fleetPage.dlg.fleet = fleetName
+		fleetPage.dlg.inst = instance.Name
 		return nil
 	}
 	m.message = fmt.Sprintf("Starting browser proxy for %s...", instance.GetDisplayName())

@@ -367,7 +367,7 @@ func TestUpdateArmadaSelectSwitchesOnEnter(t *testing.T) {
 
 	// Enter on "local" (current): no switch, dropdown closes.
 	fp.mode = viewArmadaSelect
-	fp.armadaDialogRow = 0
+	fp.armadaSel.dialogRow = 0
 	if cmd := fp.updateArmadaSelect(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
 		t.Fatal("selecting the current entry must not switch")
 	}
@@ -377,7 +377,7 @@ func TestUpdateArmadaSelectSwitchesOnEnter(t *testing.T) {
 
 	// Enter on the registered remote: switches (env swapped).
 	fp.mode = viewArmadaSelect
-	fp.armadaDialogRow = 1
+	fp.armadaSel.dialogRow = 1
 	if cmd := fp.updateArmadaSelect(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
 		t.Fatal("selecting another entry should return the switch command")
 	}
@@ -401,9 +401,9 @@ func TestViewFleetListEmbedsArmadaSelector(t *testing.T) {
 	if !strings.Contains(out, "Armada [ local ]") {
 		t.Fatal("fleet list view missing the Armada border selector")
 	}
-	if m.fleetPage.armadaY < 0 || m.fleetPage.armadaX1 <= m.fleetPage.armadaX0 {
+	if m.fleetPage.armadaSel.y < 0 || m.fleetPage.armadaSel.x1 <= m.fleetPage.armadaSel.x0 {
 		t.Fatalf("armada hit-test span not recorded: y=%d x0=%d x1=%d",
-			m.fleetPage.armadaY, m.fleetPage.armadaX0, m.fleetPage.armadaX1)
+			m.fleetPage.armadaSel.y, m.fleetPage.armadaSel.x0, m.fleetPage.armadaSel.x1)
 	}
 }
 
@@ -424,8 +424,8 @@ func TestArmadaSelectorMouseClickOpensDropdown(t *testing.T) {
 	click := tea.MouseMsg{
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
-		X:      fp.armadaX0,
-		Y:      fp.armadaY,
+		X:      fp.armadaSel.x0,
+		Y:      fp.armadaSel.y,
 	}
 	next, _ := m.Update(click)
 	if next.(model).fleetPage.mode != viewArmadaSelect {
@@ -434,7 +434,7 @@ func TestArmadaSelectorMouseClickOpensDropdown(t *testing.T) {
 
 	// A click well outside the label span must NOT open the selector.
 	fp.mode = viewNormal
-	miss := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: fp.armadaX1 + 5, Y: fp.armadaY}
+	miss := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: fp.armadaSel.x1 + 5, Y: fp.armadaSel.y}
 	next, _ = m.Update(miss)
 	if next.(model).fleetPage.mode == viewArmadaSelect {
 		t.Fatal("a click outside the selector span must not open the dropdown")
@@ -521,27 +521,27 @@ func TestArmadaNavCycle(t *testing.T) {
 
 	// Up from the top row focuses the selector.
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyUp})
-	if !fp.armadaFocused {
+	if !fp.armadaSel.focused {
 		t.Fatal("up from the top row should focus the Armada selector")
 	}
 	// Up again wraps to the bottom row.
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyUp})
-	if fp.armadaFocused || fp.cursor != 2 {
-		t.Fatalf("up from the selector should wrap to the bottom row, focused=%v cursor=%d", fp.armadaFocused, fp.cursor)
+	if fp.armadaSel.focused || fp.cursor != 2 {
+		t.Fatalf("up from the selector should wrap to the bottom row, focused=%v cursor=%d", fp.armadaSel.focused, fp.cursor)
 	}
 	// Down from the bottom row focuses the selector again.
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyDown})
-	if !fp.armadaFocused {
+	if !fp.armadaSel.focused {
 		t.Fatal("down from the bottom row should focus the Armada selector")
 	}
 	// Down from the selector returns to the top row.
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyDown})
-	if fp.armadaFocused || fp.cursor != 0 {
-		t.Fatalf("down from the selector should land on the top row, focused=%v cursor=%d", fp.armadaFocused, fp.cursor)
+	if fp.armadaSel.focused || fp.cursor != 0 {
+		t.Fatalf("down from the selector should land on the top row, focused=%v cursor=%d", fp.armadaSel.focused, fp.cursor)
 	}
 	// Enter while focused opens the dropdown (mode flips; the ping cmd may be
 	// nil when no remotes are registered).
-	fp.armadaFocused = true
+	fp.armadaSel.focused = true
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if fp.mode != viewArmadaSelect {
 		t.Fatalf("enter on the focused selector should open the dropdown, mode=%v", fp.mode)

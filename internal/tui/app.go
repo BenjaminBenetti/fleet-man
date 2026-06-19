@@ -311,8 +311,8 @@ func (m *model) reconcileSavedGroups() {
 	}
 	fleetPage := m.fleetPage
 	activeKey := ""
-	if fleetPage.splitPaneID != "" && !fleetPage.activeGroup.Empty() {
-		activeKey = computeGroupKey(fleetPage.activeGroup.Ref.Instance, fleetPage.activeGroup.GroupID)
+	if fleetPage.split.paneID != "" && !fleetPage.split.activeGroup.Empty() {
+		activeKey = computeGroupKey(fleetPage.split.activeGroup.Ref.Instance, fleetPage.split.activeGroup.GroupID)
 	}
 	for key := range fleetPage.savedGroups {
 		if key == activeKey {
@@ -437,15 +437,15 @@ func (m *model) migrateRenamedSession(msg sessionRenamedMsg) {
 		newPrefix := sanitized + groupSep + msg.newGroupID
 		m.migrateSavedGroup(msg.ref, msg.oldGroupID, msg.newGroupID, oldPrefix, newPrefix)
 
-		if fleetPage.activeGroup == (ActiveGroup{Ref: msg.ref, GroupID: msg.oldGroupID}) {
-			fleetPage.activeGroup.GroupID = msg.newGroupID
-			if fleetPage.splitPaneID != "" {
+		if fleetPage.split.activeGroup == (ActiveGroup{Ref: msg.ref, GroupID: msg.oldGroupID}) {
+			fleetPage.split.activeGroup.GroupID = msg.newGroupID
+			if fleetPage.split.paneID != "" {
 				unbindHostSplitKeys()
 				bindHostSplitKeys(msg.ref.Key(), msg.newGroupID)
 			}
 		}
-		if fleetPage.splitRef == msg.ref && strings.HasPrefix(fleetPage.splitSession, oldPrefix) {
-			fleetPage.splitSession = newPrefix + fleetPage.splitSession[len(oldPrefix):]
+		if fleetPage.split.ref == msg.ref && strings.HasPrefix(fleetPage.split.session, oldPrefix) {
+			fleetPage.split.session = newPrefix + fleetPage.split.session[len(oldPrefix):]
 		}
 		if last, ok := m.sessionStore.LastActive(msg.ref); ok && last.groupID == msg.oldGroupID {
 			last.groupID = msg.newGroupID
@@ -459,11 +459,11 @@ func (m *model) migrateRenamedSession(msg sessionRenamedMsg) {
 
 	// Ungrouped rename: the pseudo group ID equals the session name, so the
 	// active group and last-active entry track the name directly.
-	if fleetPage.splitRef == msg.ref && fleetPage.splitSession == msg.oldName {
-		fleetPage.splitSession = msg.newName
+	if fleetPage.split.ref == msg.ref && fleetPage.split.session == msg.oldName {
+		fleetPage.split.session = msg.newName
 	}
-	if fleetPage.activeGroup == (ActiveGroup{Ref: msg.ref, GroupID: msg.oldName}) {
-		fleetPage.activeGroup.GroupID = msg.newName
+	if fleetPage.split.activeGroup == (ActiveGroup{Ref: msg.ref, GroupID: msg.oldName}) {
+		fleetPage.split.activeGroup.GroupID = msg.newName
 	}
 	if last, ok := m.sessionStore.LastActive(msg.ref); ok && last.sessionName == msg.oldName {
 		last.sessionName = msg.newName
@@ -663,8 +663,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// The Armada selector lives ON the list box's top border line;
 				// a click inside the label's column span opens the dropdown by
 				// synthesizing the same `A` key the keyboard path uses.
-				if page.mode == viewNormal && page.armadaY >= 0 && mouseMsg.Y == page.armadaY &&
-					mouseMsg.X >= page.armadaX0 && mouseMsg.X < page.armadaX1 {
+				if page.mode == viewNormal && page.armadaSel.y >= 0 && mouseMsg.Y == page.armadaSel.y &&
+					mouseMsg.X >= page.armadaSel.x0 && mouseMsg.X < page.armadaSel.x1 {
 					synthesizedKey = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}}
 					hit = true
 					break
@@ -675,7 +675,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						// Clicking a row takes focus off the Armada selector, so
 						// the synthesized Space/Enter acts on the clicked row
 						// rather than (re)opening the dropdown.
-						page.armadaFocused = false
+						page.armadaSel.focused = false
 						hit = true
 						if page.rows[idx].kind == rowInstance {
 							synthesizedKey = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
@@ -809,10 +809,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// mutations, and detect panes the user closed via an outer-tmux
 			// binding (which bypasses fleet's handlers).
 			fp := m.fleetPage
-			if fp.splitPaneID != "" && !fp.activeGroup.Empty() && splitOpen() {
+			if fp.split.paneID != "" && !fp.split.activeGroup.Empty() && splitOpen() {
 				fp.saveCurrentGroupLayout(&m)
 			}
-			if fp.splitPaneID != "" && !splitOpen() {
+			if fp.split.paneID != "" && !splitOpen() {
 				unbindHostSplitKeys()
 				fp.clearSplit()
 			}
@@ -1027,7 +1027,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// can't race ahead of the save. The diff gate makes idle ticks
 		// free. Always reschedule so the tick keeps firing.
 		fleetPage := m.fleetPage
-		if fleetPage != nil && fleetPage.splitPaneID != "" && !fleetPage.activeGroup.Empty() && splitOpen() {
+		if fleetPage != nil && fleetPage.split.paneID != "" && !fleetPage.split.activeGroup.Empty() && splitOpen() {
 			fleetPage.saveCurrentGroupLayout(&m)
 		}
 		extraCmds = append(extraCmds, layoutTickCmd())
@@ -1066,12 +1066,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// splitOpenedAt/splitViaRestore are retained for the layout-snapshot
 			// bookkeeping in clearSplit (the per-session event log moved to the
 			// server, which owns ~/.fleet/fleet.log).
-			fleetPage.splitOpenedAt = time.Now()
-			fleetPage.splitViaRestore = msg.restoreSeq != 0
-			fleetPage.splitPaneID = msg.paneID
-			fleetPage.splitRef = msg.ref
-			fleetPage.splitSession = msg.session
-			fleetPage.activeGroup = ActiveGroup{Ref: msg.ref, GroupID: msg.groupID}
+			fleetPage.split.openedAt = time.Now()
+			fleetPage.split.viaRestore = msg.restoreSeq != 0
+			fleetPage.split.paneID = msg.paneID
+			fleetPage.split.ref = msg.ref
+			fleetPage.split.session = msg.session
+			fleetPage.split.activeGroup = ActiveGroup{Ref: msg.ref, GroupID: msg.groupID}
 			m.sessionStore.SetLastActive(msg.ref, lastSession{sessionName: msg.session, groupID: msg.groupID})
 			bindHostSplitKeys(msg.ref.Key(), splitBindGroupID(msg.ref.Instance, msg.session, msg.groupID))
 			extraCmds = append(extraCmds, m.refreshInstanceSessions(msg.ref))
@@ -1135,11 +1135,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Tear down the split only when the deletion targets the very
 		// group/session we're attached to — must match instance too,
 		// since group IDs are not unique across instances.
-		deletedActive := fleetPage.splitRef == msg.ref &&
-			(fleetPage.splitSession == msg.sessionName ||
-				(msg.groupID != "" && fleetPage.activeGroup.GroupID == msg.groupID))
+		deletedActive := fleetPage.split.ref == msg.ref &&
+			(fleetPage.split.session == msg.sessionName ||
+				(msg.groupID != "" && fleetPage.split.activeGroup.GroupID == msg.groupID))
 		if deletedActive {
-			if fleetPage.splitPaneID != "" {
+			if fleetPage.split.paneID != "" {
 				killAllSplitPanes()
 				unbindHostSplitKeys()
 			}
@@ -1175,18 +1175,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							fleetPage := m.fleetPage
 							if instance.Backend == fleet.BackendCodespaces && strings.HasPrefix(instance.Error, codespaceerr.AuthScope) {
 								fleetPage.mode = viewCodespacesAuth
-								fleetPage.dialogFleet = fleetName
-								fleetPage.dialogInst = instName
+								fleetPage.dlg.fleet = fleetName
+								fleetPage.dlg.inst = instName
 								m.message = ""
 							} else if instance.Backend == fleet.BackendCodespaces && strings.HasPrefix(instance.Error, codespaceerr.Machine) {
 								fleetPage.mode = viewCodespacesMachine
-								fleetPage.dialogFleet = fleetName
-								fleetPage.dialogInst = instName
+								fleetPage.dlg.fleet = fleetName
+								fleetPage.dlg.inst = instName
 								m.message = ""
 							} else if instance.Backend == fleet.BackendCodespaces && strings.HasPrefix(instance.Error, codespaceerr.Limit) {
 								fleetPage.mode = viewCodespacesLimit
-								fleetPage.dialogFleet = fleetName
-								fleetPage.dialogInst = instName
+								fleetPage.dlg.fleet = fleetName
+								fleetPage.dlg.inst = instName
 								m.message = ""
 							} else {
 								m.message = fmt.Sprintf("Failed to create %s: %s", key, instance.Error)
@@ -1211,7 +1211,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case groupCycleMsg:
 		fleetPage := m.fleetPage
-		if msg.seq == fleetPage.debounceSeq && !fleetPage.pendingGroup.Empty() {
+		if msg.seq == fleetPage.split.debounceSeq && !fleetPage.split.pendingGroup.Empty() {
 			cmd := fleetPage.commitGroupCycle(&m)
 			extraCmds = append(extraCmds, cmd)
 		}
@@ -1242,11 +1242,11 @@ func (m model) View() string {
 		// layout (1 pane, TUI only) and overwrites the correct save
 		// with a truncated single-pane record.
 		fleetPage := m.fleetPage
-		if fleetPage.splitPaneID != "" {
+		if fleetPage.split.paneID != "" {
 			fleetPage.saveCurrentGroupLayout(&m)
 			killAllSplitPanes()
-			fleetPage.splitPaneID = ""
-			fleetPage.restoringGroupID = ""
+			fleetPage.split.paneID = ""
+			fleetPage.split.restoringGroupID = ""
 		}
 		m.portForwards.Shutdown()
 		if m.inHostTmux {

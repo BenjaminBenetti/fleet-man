@@ -585,8 +585,8 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	// restore sequence so an in-flight group restore's splitPaneMsg is rejected
 	// (it would otherwise bind a pane to the old fleet and persist its layout).
 	if fleetPage != nil {
-		fleetPage.restoreSeq++
-		if fleetPage.splitPaneID != "" {
+		fleetPage.split.restoreSeq++
+		if fleetPage.split.paneID != "" {
 			killAllSplitPanes()
 			unbindHostSplitKeys()
 			fleetPage.clearSplit()
@@ -629,7 +629,7 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 		fleetPage.savedGroups = make(map[string]savedGroup)
 		fleetPage.collapsed = make(map[string]bool)
 		fleetPage.cursor = 0
-		fleetPage.armadaFocused = false
+		fleetPage.armadaSel.focused = false
 		fleetPage.buildRows(m)
 	}
 

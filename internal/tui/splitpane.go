@@ -426,7 +426,7 @@ func snapshotMatchesRuntime(snapshot savedGroup, liveSessions []tmuxSession) boo
 // m.st is non-nil the layout is also mirrored into the server state so
 // it survives a fleet restart.
 func (fleetPage *fleetPage) saveCurrentGroupLayout(m *model) {
-	if fleetPage.activeGroup.Empty() {
+	if fleetPage.split.activeGroup.Empty() {
 		return
 	}
 	if fleetPage.restoreInProgress() {
@@ -434,7 +434,7 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(m *model) {
 	}
 
 	groupSnapshot, ok := derivePersistableSnapshot(
-		fleetPage.activeGroup,
+		fleetPage.split.activeGroup,
 		listPanesByPosition(),
 		tmuxLayoutString(),
 	)
@@ -457,7 +457,7 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(m *model) {
 	// by the other TUI (and the two would then ping-pong). Skip without
 	// updating the diff-gate cache so a legitimate local change (whose
 	// runtime echo lags by up to ~1s) is retried on a later tick.
-	if !snapshotMatchesRuntime(groupSnapshot, m.runtimeSessions(fleetPage.activeGroup.Ref)) {
+	if !snapshotMatchesRuntime(groupSnapshot, m.runtimeSessions(fleetPage.split.activeGroup.Ref)) {
 		return
 	}
 	fleetPage.savedGroups[key] = groupSnapshot

@@ -29,30 +29,30 @@ func (fleetPage *fleetPage) updateConfirmDelete(m *model, msg tea.Msg) tea.Cmd {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "y", "Y", "enter":
-			if fleetPage.dialogInst == "" {
+			if fleetPage.dlg.inst == "" {
 				// Fleet-level delete — check if it has instances for double confirm
-				if f, ok := m.st.Fleets[fleetPage.dialogFleet]; ok && len(f.Instances) > 0 {
+				if f, ok := m.st.Fleets[fleetPage.dlg.fleet]; ok && len(f.Instances) > 0 {
 					fleetPage.mode = viewConfirmDeleteFleetWarn
 					return nil
 				}
 				// Empty fleet, just remove it
-				delete(m.st.Fleets, fleetPage.dialogFleet)
-				delete(fleetPage.collapsed, fleetPage.dialogFleet)
-				_ = destroyFleetRemote(fleetPage.dialogFleet)
+				delete(m.st.Fleets, fleetPage.dlg.fleet)
+				delete(fleetPage.collapsed, fleetPage.dlg.fleet)
+				_ = destroyFleetRemote(fleetPage.dlg.fleet)
 				fleetPage.buildRows(m)
-				m.message = fmt.Sprintf("Removed fleet %s", fleetPage.dialogFleet)
+				m.message = fmt.Sprintf("Removed fleet %s", fleetPage.dlg.fleet)
 			} else {
 				// Instance-level delete runs as a server job. Flip an optimistic
 				// in-memory Deleting status for the spinner (NOT persisted — the
 				// server owns the teardown and the record removal).
-				f, ok := m.st.Fleets[fleetPage.dialogFleet]
+				f, ok := m.st.Fleets[fleetPage.dlg.fleet]
 				if ok {
-					instance, err := f.GetInstance(fleetPage.dialogInst)
+					instance, err := f.GetInstance(fleetPage.dlg.inst)
 					if err == nil {
 						instance.Status = fleet.StatusDeleting
 						fleetPage.buildRows(m)
 						fleetPage.mode = viewNormal
-						return deleteInstanceCmd(fleetPage.dialogFleet, fleetPage.dialogInst, m.portForwards)
+						return deleteInstanceCmd(fleetPage.dlg.fleet, fleetPage.dlg.inst, m.portForwards)
 					}
 				}
 			}
@@ -79,14 +79,14 @@ func (fleetPage *fleetPage) updateConfirmRebuild(m *model, msg tea.Msg) tea.Cmd 
 			// Rebuilding status for the spinner (NOT persisted — the server owns
 			// the reprovision and the persisted status); operationDoneMsg reload()s
 			// the authoritative result.
-			f, ok := m.st.Fleets[fleetPage.dialogFleet]
+			f, ok := m.st.Fleets[fleetPage.dlg.fleet]
 			if ok {
-				instance, err := f.GetInstance(fleetPage.dialogInst)
+				instance, err := f.GetInstance(fleetPage.dlg.inst)
 				if err == nil {
 					instance.Status = fleet.StatusRebuilding
 					fleetPage.buildRows(m)
 					fleetPage.mode = viewNormal
-					return rebuildInstanceCmd(fleetPage.dialogFleet, fleetPage.dialogInst)
+					return rebuildInstanceCmd(fleetPage.dlg.fleet, fleetPage.dlg.inst)
 				}
 			}
 			fleetPage.mode = viewNormal
@@ -107,20 +107,20 @@ func (fleetPage *fleetPage) updateConfirmDeleteFleetWarn(m *model, msg tea.Msg) 
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "y", "Y", "enter":
-			f, ok := m.st.Fleets[fleetPage.dialogFleet]
+			f, ok := m.st.Fleets[fleetPage.dlg.fleet]
 			if ok && len(f.Instances) > 0 {
 				for _, instance := range f.Instances {
 					instance.Status = fleet.StatusDeleting // optimistic, in-memory only
 				}
 				fleetPage.buildRows(m)
 				fleetPage.mode = viewNormal
-				return deleteFleetCmd(fleetPage.dialogFleet, f.Instances, m.portForwards)
+				return deleteFleetCmd(fleetPage.dlg.fleet, f.Instances, m.portForwards)
 			} else if ok {
-				delete(m.st.Fleets, fleetPage.dialogFleet)
-				delete(fleetPage.collapsed, fleetPage.dialogFleet)
-				_ = destroyFleetRemote(fleetPage.dialogFleet)
+				delete(m.st.Fleets, fleetPage.dlg.fleet)
+				delete(fleetPage.collapsed, fleetPage.dlg.fleet)
+				_ = destroyFleetRemote(fleetPage.dlg.fleet)
 				fleetPage.buildRows(m)
-				m.message = fmt.Sprintf("Removed fleet %s", fleetPage.dialogFleet)
+				m.message = fmt.Sprintf("Removed fleet %s", fleetPage.dlg.fleet)
 			}
 			fleetPage.mode = viewNormal
 
@@ -145,7 +145,7 @@ func (fleetPage *fleetPage) updateConfirmDeleteFleetWarn(m *model, msg tea.Msg) 
 func (fleetPage *fleetPage) updateConfirmBrowserSwitch(m *model, msg tea.Msg) tea.Cmd {
 	// While the kill+relaunch is in flight, swallow input so the user
 	// can't double-trigger the flow.
-	if fleetPage.dialogBrowserSwitching {
+	if fleetPage.browserDlg.switching {
 		return nil
 	}
 
@@ -161,8 +161,8 @@ func (fleetPage *fleetPage) updateConfirmBrowserSwitch(m *model, msg tea.Msg) te
 		// matches the issue spec, so we treat unrecognised keys as
 		// "proceed" rather than swallowing them.
 		default:
-			fleetName := fleetPage.dialogFleet
-			instanceName := fleetPage.dialogInst
+			fleetName := fleetPage.dlg.fleet
+			instanceName := fleetPage.dlg.inst
 
 			f, ok := m.st.Fleets[fleetName]
 			if !ok {
@@ -189,7 +189,7 @@ func (fleetPage *fleetPage) updateConfirmBrowserSwitch(m *model, msg tea.Msg) te
 			// will draw the spinner. The cmd does the kill + relaunch
 			// in the background and the resulting browserProxyMsg
 			// clears the flag and the mode.
-			fleetPage.dialogBrowserSwitching = true
+			fleetPage.browserDlg.switching = true
 			m.message = ""
 			return switchBrowserCmd(m.portForwards, instanceKey, dataDir, f.Settings.PreferFleetLaunchEnabled(), "")
 		}
@@ -221,14 +221,14 @@ func (fleetPage *fleetPage) updateArmadaSelect(m *model, msg tea.Msg) tea.Cmd {
 		fleetPage.mode = viewNormal
 		return nil
 	case "up", "k":
-		fleetPage.armadaDialogRow = (fleetPage.armadaDialogRow - 1 + n) % n
+		fleetPage.armadaSel.dialogRow = (fleetPage.armadaSel.dialogRow - 1 + n) % n
 		return nil
 	case "down", "j", "tab":
-		fleetPage.armadaDialogRow = (fleetPage.armadaDialogRow + 1) % n
+		fleetPage.armadaSel.dialogRow = (fleetPage.armadaSel.dialogRow + 1) % n
 		return nil
 	case "enter", " ":
 		fleetPage.mode = viewNormal
-		entry := entries[min(fleetPage.armadaDialogRow, n-1)]
+		entry := entries[min(fleetPage.armadaSel.dialogRow, n-1)]
 		if entry.current {
 			m.message = "Already connected to " + entry.displayName
 			return nil
@@ -256,13 +256,13 @@ func (fleetPage *fleetPage) updateChooseBrowserLaunch(m *model, msg tea.Msg) tea
 		m.message = "Cancelled"
 		return nil
 	case "up", "k":
-		fleetPage.dialogRow = (fleetPage.dialogRow - 1 + chooseBrowserRowCount) % chooseBrowserRowCount
+		fleetPage.dlg.row = (fleetPage.dlg.row - 1 + chooseBrowserRowCount) % chooseBrowserRowCount
 		return nil
 	case "down", "j", "tab":
-		fleetPage.dialogRow = (fleetPage.dialogRow + 1) % chooseBrowserRowCount
+		fleetPage.dlg.row = (fleetPage.dlg.row + 1) % chooseBrowserRowCount
 		return nil
 	case "enter", " ":
-		return fleetPage.chooseBrowserLaunch(m, fleetPage.dialogRow == chooseBrowserRowFleetLaunch)
+		return fleetPage.chooseBrowserLaunch(m, fleetPage.dlg.row == chooseBrowserRowFleetLaunch)
 	case "f", "F":
 		return fleetPage.chooseBrowserLaunch(m, true)
 	case "u", "U":
@@ -274,7 +274,7 @@ func (fleetPage *fleetPage) updateChooseBrowserLaunch(m *model, msg tea.Msg) tea
 // chooseBrowserLaunch persists the browser-start preference for the fleet
 // and proceeds with the launch using it.
 func (fleetPage *fleetPage) chooseBrowserLaunch(m *model, preferFleetLaunch bool) tea.Cmd {
-	fleetName := fleetPage.dialogFleet
+	fleetName := fleetPage.dlg.fleet
 	f, ok := m.st.Fleets[fleetName]
 	if !ok {
 		fleetPage.mode = viewNormal
@@ -286,7 +286,7 @@ func (fleetPage *fleetPage) chooseBrowserLaunch(m *model, preferFleetLaunch bool
 	f.Settings.PreferFleetLaunch = &prefer
 	_ = setFleetSettingsRemote(fleetName, f.Settings)
 
-	instance, err := f.GetInstance(fleetPage.dialogInst)
+	instance, err := f.GetInstance(fleetPage.dlg.inst)
 	if err != nil || instance.Status != fleet.StatusRunning {
 		fleetPage.mode = viewNormal
 		m.message = "Instance must be running to open browser"
@@ -304,20 +304,20 @@ func (fleetPage *fleetPage) updateConfirmDeleteSession(m *model, msg tea.Msg) te
 		switch msg.String() {
 		case "y", "Y", "enter":
 			fleetPage.mode = viewNormal
-			ref := InstanceRef{Fleet: fleetPage.dialogFleet, Instance: fleetPage.dialogInst}
-			f, ok := m.st.Fleets[fleetPage.dialogFleet]
+			ref := InstanceRef{Fleet: fleetPage.dlg.fleet, Instance: fleetPage.dlg.inst}
+			f, ok := m.st.Fleets[fleetPage.dlg.fleet]
 			if !ok {
 				break
 			}
-			instance, err := f.GetInstance(fleetPage.dialogInst)
+			instance, err := f.GetInstance(fleetPage.dlg.inst)
 			if err != nil {
 				break
 			}
 			sanitized := SanitizeSessionName(instance.Name)
-			if fleetPage.dialogGroupID != "" && isGroupedSession(sanitized, fleetPage.dialogSession) {
-				return deleteGroupSessionsCmd(ref, sanitized, fleetPage.dialogGroupID)
+			if fleetPage.dlg.groupID != "" && isGroupedSession(sanitized, fleetPage.dlg.session) {
+				return deleteGroupSessionsCmd(ref, sanitized, fleetPage.dlg.groupID)
 			}
-			return deleteSessionCmd(ref, fleetPage.dialogSession)
+			return deleteSessionCmd(ref, fleetPage.dlg.session)
 
 		case "n", "N", "esc", "q", "Q", "ctrl+c":
 			fleetPage.mode = viewNormal
@@ -411,8 +411,8 @@ func isDialogTextKey(msg tea.KeyMsg) bool {
 }
 
 func (fleetPage *fleetPage) blurDialogFields() {
-	fleetPage.dialogFieldActive = false
-	fleetPage.dialogAddingMount = false
+	fleetPage.dlg.fieldActive = false
+	fleetPage.editFleet.addingMount = false
 	fleetPage.textInput.Blur()
 	fleetPage.branchInput.Blur()
 	fleetPage.homedirInput.Blur()
@@ -420,13 +420,13 @@ func (fleetPage *fleetPage) blurDialogFields() {
 }
 
 func (fleetPage *fleetPage) activateTextInput() tea.Cmd {
-	fleetPage.dialogFieldActive = true
+	fleetPage.dlg.fieldActive = true
 	fleetPage.textInput.Focus()
 	return fleetPage.textInput.Cursor.BlinkCmd()
 }
 
 func (fleetPage *fleetPage) deactivateTextInput() {
-	fleetPage.dialogFieldActive = false
+	fleetPage.dlg.fieldActive = false
 	fleetPage.textInput.Blur()
 }
 
@@ -463,19 +463,19 @@ func (fleetPage *fleetPage) openEditInstanceDialog(m *model) tea.Cmd {
 	}
 
 	fleetPage.mode = viewAddInstance
-	fleetPage.dialogEditing = true
-	fleetPage.dialogFleet = f.Name
-	fleetPage.dialogInst = instance.Name
-	fleetPage.dialogBackend = instance.Backend
-	if fleetPage.dialogBackend == "" {
-		fleetPage.dialogBackend = fleet.BackendDevcontainer
+	fleetPage.addInst.editing = true
+	fleetPage.dlg.fleet = f.Name
+	fleetPage.dlg.inst = instance.Name
+	fleetPage.addInst.backend = instance.Backend
+	if fleetPage.addInst.backend == "" {
+		fleetPage.addInst.backend = fleet.BackendDevcontainer
 	}
-	fleetPage.dialogColor = instance.Color
-	if fleetPage.dialogColor == "" {
-		fleetPage.dialogColor = instanceColorWhite
+	fleetPage.addInst.color = instance.Color
+	if fleetPage.addInst.color == "" {
+		fleetPage.addInst.color = instanceColorWhite
 	}
-	fleetPage.dialogRow = addInstanceRowName
-	fleetPage.dialogFieldActive = false
+	fleetPage.dlg.row = addInstanceRowName
+	fleetPage.dlg.fieldActive = false
 	fleetPage.textInput.SetValue(instance.GetDisplayName())
 	fleetPage.branchInput.SetValue(instance.Branch)
 	fleetPage.syncAddInstanceFocus()
@@ -486,12 +486,12 @@ func (fleetPage *fleetPage) openEditInstanceDialog(m *model) tea.Cmd {
 func (fleetPage *fleetPage) updateAddInstance(m *model, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if fleetPage.dialogFieldActive {
+		if fleetPage.dlg.fieldActive {
 			switch msg.String() {
 			case "enter":
 				return fleetPage.submitAddInstance(m)
 			case "esc":
-				fleetPage.dialogFieldActive = false
+				fleetPage.dlg.fieldActive = false
 				fleetPage.syncAddInstanceFocus()
 				return nil
 			case "ctrl+c":
@@ -502,63 +502,63 @@ func (fleetPage *fleetPage) updateAddInstance(m *model, msg tea.Msg) tea.Cmd {
 
 		switch msg.String() {
 		case "enter":
-			if fleetPage.dialogRow == addInstanceRowName || (fleetPage.dialogRow == addInstanceRowBranch && !fleetPage.dialogEditing) {
+			if fleetPage.dlg.row == addInstanceRowName || (fleetPage.dlg.row == addInstanceRowBranch && !fleetPage.addInst.editing) {
 				return fleetPage.activateAddInstanceField()
 			}
 			return fleetPage.submitAddInstance(m)
 
 		case "tab":
-			if fleetPage.dialogEditing {
+			if fleetPage.addInst.editing {
 				return nil
 			}
 			opts := fleetPage.availableBackendTypes(m)
 			if len(opts) > 1 {
-				fleetPage.dialogBackend = nextBackendType(fleetPage.dialogBackend, 1, opts)
+				fleetPage.addInst.backend = nextBackendType(fleetPage.addInst.backend, 1, opts)
 			}
 			return nil
 
 		case "shift+tab":
-			fleetPage.dialogColor = nextInstanceColor(fleetPage.dialogColor, 1)
+			fleetPage.addInst.color = nextInstanceColor(fleetPage.addInst.color, 1)
 			return nil
 
 		case "up":
-			fleetPage.dialogFieldActive = false
-			fleetPage.dialogRow = fleetPage.prevAddInstanceRow(fleetPage.dialogRow)
+			fleetPage.dlg.fieldActive = false
+			fleetPage.dlg.row = fleetPage.prevAddInstanceRow(fleetPage.dlg.row)
 			fleetPage.syncAddInstanceFocus()
 			return nil
 
 		case "down":
-			fleetPage.dialogFieldActive = false
-			fleetPage.dialogRow = fleetPage.nextAddInstanceRow(fleetPage.dialogRow)
+			fleetPage.dlg.fieldActive = false
+			fleetPage.dlg.row = fleetPage.nextAddInstanceRow(fleetPage.dlg.row)
 			fleetPage.syncAddInstanceFocus()
 			return nil
 
 		case "left":
-			if fleetPage.dialogRow == addInstanceRowDeploy && !fleetPage.dialogEditing {
+			if fleetPage.dlg.row == addInstanceRowDeploy && !fleetPage.addInst.editing {
 				opts := fleetPage.availableBackendTypes(m)
 				if len(opts) > 1 {
-					fleetPage.dialogBackend = nextBackendType(fleetPage.dialogBackend, -1, opts)
+					fleetPage.addInst.backend = nextBackendType(fleetPage.addInst.backend, -1, opts)
 				}
 				return nil
 			}
-			if fleetPage.dialogRow == addInstanceRowColor {
-				fleetPage.dialogColor = nextInstanceColor(fleetPage.dialogColor, -1)
+			if fleetPage.dlg.row == addInstanceRowColor {
+				fleetPage.addInst.color = nextInstanceColor(fleetPage.addInst.color, -1)
 				return nil
 			}
 
 		case "right", " ":
-			if msg.String() == " " && (fleetPage.dialogRow == addInstanceRowName || (fleetPage.dialogRow == addInstanceRowBranch && !fleetPage.dialogEditing)) {
+			if msg.String() == " " && (fleetPage.dlg.row == addInstanceRowName || (fleetPage.dlg.row == addInstanceRowBranch && !fleetPage.addInst.editing)) {
 				return fleetPage.activateAddInstanceField()
 			}
-			if fleetPage.dialogRow == addInstanceRowDeploy && !fleetPage.dialogEditing {
+			if fleetPage.dlg.row == addInstanceRowDeploy && !fleetPage.addInst.editing {
 				opts := fleetPage.availableBackendTypes(m)
 				if len(opts) > 1 {
-					fleetPage.dialogBackend = nextBackendType(fleetPage.dialogBackend, 1, opts)
+					fleetPage.addInst.backend = nextBackendType(fleetPage.addInst.backend, 1, opts)
 				}
 				return nil
 			}
-			if fleetPage.dialogRow == addInstanceRowColor {
-				fleetPage.dialogColor = nextInstanceColor(fleetPage.dialogColor, 1)
+			if fleetPage.dlg.row == addInstanceRowColor {
+				fleetPage.addInst.color = nextInstanceColor(fleetPage.addInst.color, 1)
 				return nil
 			}
 
@@ -567,44 +567,44 @@ func (fleetPage *fleetPage) updateAddInstance(m *model, msg tea.Msg) tea.Cmd {
 		}
 
 		if isDialogUpKey(msg.String()) {
-			fleetPage.dialogFieldActive = false
-			fleetPage.dialogRow = fleetPage.prevAddInstanceRow(fleetPage.dialogRow)
+			fleetPage.dlg.fieldActive = false
+			fleetPage.dlg.row = fleetPage.prevAddInstanceRow(fleetPage.dlg.row)
 			fleetPage.syncAddInstanceFocus()
 			return nil
 		}
 		if isDialogDownKey(msg.String()) {
-			fleetPage.dialogFieldActive = false
-			fleetPage.dialogRow = fleetPage.nextAddInstanceRow(fleetPage.dialogRow)
+			fleetPage.dlg.fieldActive = false
+			fleetPage.dlg.row = fleetPage.nextAddInstanceRow(fleetPage.dlg.row)
 			fleetPage.syncAddInstanceFocus()
 			return nil
 		}
 		if isDialogLeftKey(msg.String()) {
-			if fleetPage.dialogRow == addInstanceRowDeploy && !fleetPage.dialogEditing {
+			if fleetPage.dlg.row == addInstanceRowDeploy && !fleetPage.addInst.editing {
 				opts := fleetPage.availableBackendTypes(m)
 				if len(opts) > 1 {
-					fleetPage.dialogBackend = nextBackendType(fleetPage.dialogBackend, -1, opts)
+					fleetPage.addInst.backend = nextBackendType(fleetPage.addInst.backend, -1, opts)
 				}
 				return nil
 			}
-			if fleetPage.dialogRow == addInstanceRowColor {
-				fleetPage.dialogColor = nextInstanceColor(fleetPage.dialogColor, -1)
+			if fleetPage.dlg.row == addInstanceRowColor {
+				fleetPage.addInst.color = nextInstanceColor(fleetPage.addInst.color, -1)
 				return nil
 			}
 		}
 		if isDialogRightKey(msg.String()) {
-			if fleetPage.dialogRow == addInstanceRowDeploy && !fleetPage.dialogEditing {
+			if fleetPage.dlg.row == addInstanceRowDeploy && !fleetPage.addInst.editing {
 				opts := fleetPage.availableBackendTypes(m)
 				if len(opts) > 1 {
-					fleetPage.dialogBackend = nextBackendType(fleetPage.dialogBackend, 1, opts)
+					fleetPage.addInst.backend = nextBackendType(fleetPage.addInst.backend, 1, opts)
 				}
 				return nil
 			}
-			if fleetPage.dialogRow == addInstanceRowColor {
-				fleetPage.dialogColor = nextInstanceColor(fleetPage.dialogColor, 1)
+			if fleetPage.dlg.row == addInstanceRowColor {
+				fleetPage.addInst.color = nextInstanceColor(fleetPage.addInst.color, 1)
 				return nil
 			}
 		}
-		if isDialogTextKey(msg) && (fleetPage.dialogRow == addInstanceRowName || (fleetPage.dialogRow == addInstanceRowBranch && !fleetPage.dialogEditing)) {
+		if isDialogTextKey(msg) && (fleetPage.dlg.row == addInstanceRowName || (fleetPage.dlg.row == addInstanceRowBranch && !fleetPage.addInst.editing)) {
 			return fleetPage.activateAddInstanceFieldWithMsg(msg)
 		}
 	}
@@ -613,7 +613,7 @@ func (fleetPage *fleetPage) updateAddInstance(m *model, msg tea.Msg) tea.Cmd {
 }
 
 func (fleetPage *fleetPage) updateActiveAddInstanceField(msg tea.Msg) tea.Cmd {
-	switch fleetPage.dialogRow {
+	switch fleetPage.dlg.row {
 	case addInstanceRowName:
 		var cmd tea.Cmd
 		fleetPage.textInput, cmd = fleetPage.textInput.Update(msg)
@@ -627,7 +627,7 @@ func (fleetPage *fleetPage) updateActiveAddInstanceField(msg tea.Msg) tea.Cmd {
 }
 
 func (fleetPage *fleetPage) submitAddInstance(m *model) tea.Cmd {
-	if fleetPage.dialogEditing {
+	if fleetPage.addInst.editing {
 		return fleetPage.saveInstanceEdits(m)
 	}
 	name := strings.TrimSpace(fleetPage.textInput.Value())
@@ -643,7 +643,7 @@ func (fleetPage *fleetPage) submitAddInstance(m *model) tea.Cmd {
 		return nil
 	}
 
-	fleetName := fleetPage.dialogFleet
+	fleetName := fleetPage.dlg.fleet
 	f, ok := m.st.Fleets[fleetName]
 	if !ok {
 		m.message = fmt.Sprintf("Fleet %s not found", fleetName)
@@ -659,12 +659,12 @@ func (fleetPage *fleetPage) submitAddInstance(m *model) tea.Cmd {
 		return nil
 	}
 
-	backendType := fleetPage.dialogBackend
+	backendType := fleetPage.addInst.backend
 	if backendType == "" {
 		backendType = fleet.BackendDevcontainer
 	}
 
-	color := fleetPage.dialogColor
+	color := fleetPage.addInst.color
 	if color == instanceColorWhite {
 		color = ""
 	}
@@ -690,7 +690,7 @@ func (fleetPage *fleetPage) submitAddInstance(m *model) tea.Cmd {
 
 func (fleetPage *fleetPage) cancelAddInstance(m *model) tea.Cmd {
 	fleetPage.mode = viewNormal
-	fleetPage.dialogEditing = false
+	fleetPage.addInst.editing = false
 	fleetPage.blurDialogFields()
 	m.message = "Cancelled"
 	return nil
@@ -701,8 +701,8 @@ func (fleetPage *fleetPage) cancelAddInstance(m *model) tea.Cmd {
 // the branch input is immutable so it never receives focus; the name
 // input edits DisplayName and stays focusable.
 func (fleetPage *fleetPage) syncAddInstanceFocus() {
-	nameFocus := fleetPage.dialogFieldActive && fleetPage.dialogRow == addInstanceRowName
-	branchFocus := fleetPage.dialogFieldActive && fleetPage.dialogRow == addInstanceRowBranch && !fleetPage.dialogEditing
+	nameFocus := fleetPage.dlg.fieldActive && fleetPage.dlg.row == addInstanceRowName
+	branchFocus := fleetPage.dlg.fieldActive && fleetPage.dlg.row == addInstanceRowBranch && !fleetPage.addInst.editing
 
 	if nameFocus {
 		fleetPage.textInput.Focus()
@@ -718,17 +718,17 @@ func (fleetPage *fleetPage) syncAddInstanceFocus() {
 }
 
 func (fleetPage *fleetPage) activateAddInstanceField() tea.Cmd {
-	fleetPage.dialogFieldActive = true
+	fleetPage.dlg.fieldActive = true
 	fleetPage.syncAddInstanceFocus()
-	switch fleetPage.dialogRow {
+	switch fleetPage.dlg.row {
 	case addInstanceRowName:
 		return fleetPage.textInput.Cursor.BlinkCmd()
 	case addInstanceRowBranch:
-		if !fleetPage.dialogEditing {
+		if !fleetPage.addInst.editing {
 			return fleetPage.branchInput.Cursor.BlinkCmd()
 		}
 	}
-	fleetPage.dialogFieldActive = false
+	fleetPage.dlg.fieldActive = false
 	fleetPage.syncAddInstanceFocus()
 	return nil
 }
@@ -744,7 +744,7 @@ func (fleetPage *fleetPage) activateAddInstanceFieldWithMsg(msg tea.Msg) tea.Cmd
 // they describe how the workspace was originally provisioned and cannot
 // be retroactively changed without recreating the instance.
 func (fleetPage *fleetPage) addInstanceRowEnabled(row int) bool {
-	if !fleetPage.dialogEditing {
+	if !fleetPage.addInst.editing {
 		return true
 	}
 	return row == addInstanceRowName || row == addInstanceRowColor
@@ -778,20 +778,20 @@ func (fleetPage *fleetPage) prevAddInstanceRow(current int) int {
 // instance and closes the dialog. The underlying Name is immutable; the
 // name input writes to DisplayName instead.
 func (fleetPage *fleetPage) saveInstanceEdits(m *model) tea.Cmd {
-	f, ok := m.st.Fleets[fleetPage.dialogFleet]
+	f, ok := m.st.Fleets[fleetPage.dlg.fleet]
 	if !ok {
 		fleetPage.mode = viewNormal
-		fleetPage.dialogEditing = false
+		fleetPage.addInst.editing = false
 		fleetPage.blurDialogFields()
-		m.message = fmt.Sprintf("Fleet %s not found", fleetPage.dialogFleet)
+		m.message = fmt.Sprintf("Fleet %s not found", fleetPage.dlg.fleet)
 		return nil
 	}
-	instance, err := f.GetInstance(fleetPage.dialogInst)
+	instance, err := f.GetInstance(fleetPage.dlg.inst)
 	if err != nil {
 		fleetPage.mode = viewNormal
-		fleetPage.dialogEditing = false
+		fleetPage.addInst.editing = false
 		fleetPage.blurDialogFields()
-		m.message = fmt.Sprintf("Instance %s/%s not found", fleetPage.dialogFleet, fleetPage.dialogInst)
+		m.message = fmt.Sprintf("Instance %s/%s not found", fleetPage.dlg.fleet, fleetPage.dlg.inst)
 		return nil
 	}
 
@@ -805,19 +805,19 @@ func (fleetPage *fleetPage) saveInstanceEdits(m *model) tea.Cmd {
 		return nil
 	}
 
-	color := fleetPage.dialogColor
+	color := fleetPage.addInst.color
 	if color == instanceColorWhite {
 		color = ""
 	}
 	instance.DisplayName = displayName
 	instance.Color = color
-	_ = setInstanceMetadataRemote(fleetPage.dialogFleet, fleetPage.dialogInst, &displayName, &color, nil)
+	_ = setInstanceMetadataRemote(fleetPage.dlg.fleet, fleetPage.dlg.inst, &displayName, &color, nil)
 
 	fleetPage.buildRows(m)
 	fleetPage.mode = viewNormal
-	fleetPage.dialogEditing = false
+	fleetPage.addInst.editing = false
 	fleetPage.blurDialogFields()
-	m.message = fmt.Sprintf("Updated %s/%s", fleetPage.dialogFleet, fleetPage.dialogInst)
+	m.message = fmt.Sprintf("Updated %s/%s", fleetPage.dlg.fleet, fleetPage.dlg.inst)
 	return nil
 }
 
@@ -829,7 +829,7 @@ func (fleetPage *fleetPage) saveInstanceEdits(m *model) tea.Cmd {
 func (fleetPage *fleetPage) updateTagInstance(m *model, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if fleetPage.dialogFieldActive {
+		if fleetPage.dlg.fieldActive {
 			switch msg.String() {
 			case "enter":
 				return fleetPage.saveTagInstance(m)
@@ -863,11 +863,11 @@ func (fleetPage *fleetPage) updateTagInstance(m *model, msg tea.Msg) tea.Cmd {
 func (fleetPage *fleetPage) saveTagInstance(m *model) tea.Cmd {
 	tag := strings.TrimSpace(fleetPage.textInput.Value())
 
-	f, ok := m.st.Fleets[fleetPage.dialogFleet]
+	f, ok := m.st.Fleets[fleetPage.dlg.fleet]
 	if ok {
-		if instance, err := f.GetInstance(fleetPage.dialogInst); err == nil {
+		if instance, err := f.GetInstance(fleetPage.dlg.inst); err == nil {
 			instance.Tag = tag
-			_ = setInstanceMetadataRemote(fleetPage.dialogFleet, fleetPage.dialogInst, nil, nil, &tag)
+			_ = setInstanceMetadataRemote(fleetPage.dlg.fleet, fleetPage.dlg.inst, nil, nil, &tag)
 		}
 	}
 
@@ -877,9 +877,9 @@ func (fleetPage *fleetPage) saveTagInstance(m *model) tea.Cmd {
 	// row list must be rebuilt for the change to show immediately.
 	fleetPage.buildRows(m)
 	if tag == "" {
-		m.message = fmt.Sprintf("Cleared tag for %s/%s", fleetPage.dialogFleet, fleetPage.dialogInst)
+		m.message = fmt.Sprintf("Cleared tag for %s/%s", fleetPage.dlg.fleet, fleetPage.dlg.inst)
 	} else {
-		m.message = fmt.Sprintf("Tagged %s/%s: %s", fleetPage.dialogFleet, fleetPage.dialogInst, tag)
+		m.message = fmt.Sprintf("Tagged %s/%s: %s", fleetPage.dlg.fleet, fleetPage.dlg.inst, tag)
 	}
 	return nil
 }
@@ -905,7 +905,7 @@ func (fleetPage *fleetPage) cancelTextDialog(m *model) tea.Cmd {
 func (fleetPage *fleetPage) updateAddFleet(m *model, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if fleetPage.dialogFieldActive {
+		if fleetPage.dlg.fieldActive {
 			switch msg.String() {
 			case "enter":
 				return fleetPage.saveAddFleet(m)
@@ -958,8 +958,8 @@ func (fleetPage *fleetPage) saveAddFleet(m *model) tea.Cmd {
 		return nil
 	}
 
-	fleetPage.dialogPendingRepoURL = repoURL
-	fleetPage.dialogPendingFleetName = fleetName
+	fleetPage.addFleet.pendingRepoURL = repoURL
+	fleetPage.addFleet.pendingFleetName = fleetName
 	fleetPage.mode = viewAddFleetInspecting
 	fleetPage.blurDialogFields()
 	m.message = fmt.Sprintf("Inspecting %s...", repoURL)
@@ -1041,7 +1041,7 @@ func inspectDevcontainerLocal(fleetName, remoteURL string) tea.Msg {
 // Stale results from a dialog the user has already abandoned are
 // dropped silently.
 func (fleetPage *fleetPage) handleDevcontainerInspected(m *model, msg devcontainerInspectedMsg) tea.Cmd {
-	if fleetPage.mode != viewAddFleetInspecting || fleetPage.dialogPendingFleetName != msg.fleetName {
+	if fleetPage.mode != viewAddFleetInspecting || fleetPage.addFleet.pendingFleetName != msg.fleetName {
 		return nil
 	}
 
@@ -1054,7 +1054,7 @@ func (fleetPage *fleetPage) handleDevcontainerInspected(m *model, msg devcontain
 
 	if msg.hasDevcontainer {
 		fleetPage.addPendingFleet(m)
-		m.message = fmt.Sprintf("Added fleet %s", fleetPage.dialogPendingFleetName)
+		m.message = fmt.Sprintf("Added fleet %s", fleetPage.addFleet.pendingFleetName)
 		fleetPage.clearPendingFleet()
 		fleetPage.mode = viewNormal
 		return nil
@@ -1070,8 +1070,8 @@ func (fleetPage *fleetPage) handleDevcontainerInspected(m *model, msg devcontain
 // "user picked Setup → optimistically add then hand off to agent"
 // branch.
 func (fleetPage *fleetPage) addPendingFleet(m *model) {
-	m.st.GetOrCreateFleet(fleetPage.dialogPendingFleetName, fleetPage.dialogPendingRepoURL)
-	_ = createFleetRemote(fleetPage.dialogPendingFleetName, fleetPage.dialogPendingRepoURL)
+	m.st.GetOrCreateFleet(fleetPage.addFleet.pendingFleetName, fleetPage.addFleet.pendingRepoURL)
+	_ = createFleetRemote(fleetPage.addFleet.pendingFleetName, fleetPage.addFleet.pendingRepoURL)
 	fleetPage.buildRows(m)
 }
 
@@ -1080,8 +1080,8 @@ func (fleetPage *fleetPage) addPendingFleet(m *model) {
 // values are not load-bearing after the dialog closes; resetting them
 // keeps a future open-this-dialog-again from seeing stale data.
 func (fleetPage *fleetPage) clearPendingFleet() {
-	fleetPage.dialogPendingRepoURL = ""
-	fleetPage.dialogPendingFleetName = ""
+	fleetPage.addFleet.pendingRepoURL = ""
+	fleetPage.addFleet.pendingFleetName = ""
 }
 
 // ===========================================
@@ -1125,8 +1125,8 @@ func (fleetPage *fleetPage) updateAddFleetNoDevcontainer(m *model, msg tea.Msg) 
 	}
 	switch keyMsg.String() {
 	case "s", "S":
-		repoURL := fleetPage.dialogPendingRepoURL
-		fleetName := fleetPage.dialogPendingFleetName
+		repoURL := fleetPage.addFleet.pendingRepoURL
+		fleetName := fleetPage.addFleet.pendingFleetName
 
 		cmd, err := devcontainersetup.Command(repoURL)
 		if err != nil {
@@ -1201,13 +1201,13 @@ func isLayoutPresetChildRow(row int) bool { return row >= editFleetRowLayoutPres
 // customMountAddRow returns the row id of the "+ Add mount" affordance, which
 // always sits just past the last existing custom mount.
 func (fleetPage *fleetPage) customMountAddRow() int {
-	return editFleetRowCustomMountBase + len(fleetPage.dialogCustomMounts)
+	return editFleetRowCustomMountBase + len(fleetPage.editFleet.customMounts)
 }
 
 // layoutPresetAddRow returns the row id of the "+ Layout Preset" affordance,
 // which always sits just past the last existing preset.
 func (fleetPage *fleetPage) layoutPresetAddRow() int {
-	return editFleetRowLayoutPresetBase + len(fleetPage.dialogLayoutPresets)
+	return editFleetRowLayoutPresetBase + len(fleetPage.editFleet.layoutPresets)
 }
 
 // cacheKind identifies one of the three caches that share the Caching section's
@@ -1238,11 +1238,11 @@ func cacheKindForRow(row int) (cacheKind, bool) {
 func (fleetPage *fleetPage) cacheEnabled(k cacheKind) bool {
 	switch k {
 	case cacheBuildkit:
-		return fleetPage.dialogBuildkitServer
+		return fleetPage.editFleet.buildkitServer
 	case cacheDeb:
-		return fleetPage.dialogDebCache
+		return fleetPage.editFleet.debCache
 	case cacheImage:
-		return fleetPage.dialogImageCache
+		return fleetPage.editFleet.imageCache
 	}
 	return false
 }
@@ -1262,7 +1262,7 @@ func (fleetPage *fleetPage) enabledCacheCount() int {
 // cacheRowFocused reports whether the dialog cursor is currently on the row for
 // cache kind k (used so the [Delete cache] button only highlights its own row).
 func (fleetPage *fleetPage) cacheRowFocused(k cacheKind) bool {
-	rk, ok := cacheKindForRow(fleetPage.dialogRow)
+	rk, ok := cacheKindForRow(fleetPage.dlg.row)
 	return ok && rk == k
 }
 
@@ -1280,21 +1280,21 @@ func (fleetPage *fleetPage) visibleEditFleetRows() []int {
 		editFleetRowPreferFleetLaunch,
 		editFleetRowLayouts,
 	}
-	if fleetPage.dialogLayoutsExpanded {
-		for i := range fleetPage.dialogLayoutPresets {
+	if fleetPage.editFleet.layoutsExpanded {
+		for i := range fleetPage.editFleet.layoutPresets {
 			rows = append(rows, editFleetRowLayoutPresetBase+i)
 		}
 		rows = append(rows, fleetPage.layoutPresetAddRow())
 	}
 	rows = append(rows, editFleetRowCustomMounts)
-	if fleetPage.dialogCustomMountsExpanded {
-		for i := range fleetPage.dialogCustomMounts {
+	if fleetPage.editFleet.customMountsExpanded {
+		for i := range fleetPage.editFleet.customMounts {
 			rows = append(rows, editFleetRowCustomMountBase+i)
 		}
 		rows = append(rows, fleetPage.customMountAddRow())
 	}
 	rows = append(rows, editFleetRowCaching)
-	if fleetPage.dialogCachingExpanded {
+	if fleetPage.editFleet.cachingExpanded {
 		rows = append(rows, editFleetRowBuildkit, editFleetRowDebCache, editFleetRowImageCache)
 	}
 	return rows
@@ -1306,25 +1306,25 @@ func (fleetPage *fleetPage) moveEditFleetRow(delta int) {
 	rows := fleetPage.visibleEditFleetRows()
 	idx, found := 0, false
 	for i, r := range rows {
-		if r == fleetPage.dialogRow {
+		if r == fleetPage.dlg.row {
 			idx, found = i, true
 			break
 		}
 	}
 	if found {
-		fleetPage.dialogRow = rows[(idx+delta+len(rows))%len(rows)]
+		fleetPage.dlg.row = rows[(idx+delta+len(rows))%len(rows)]
 	} else {
 		// The current row is no longer visible (e.g. its section collapsed under
 		// the cursor) — recover by landing on the first visible row.
-		fleetPage.dialogRow = rows[0]
+		fleetPage.dlg.row = rows[0]
 	}
-	fleetPage.dialogCacheButtonFocused = false
-	fleetPage.dialogDeleteCacheConfirm = false
-	fleetPage.dialogMountRemoveConfirm = false
-	fleetPage.dialogPresetRemoveFocused = false
-	fleetPage.dialogPresetRemoveConfirm = false
-	fleetPage.dialogPresetMoveFocused = false
-	fleetPage.dialogPresetMoving = false
+	fleetPage.editFleet.cacheButtonFocused = false
+	fleetPage.editFleet.deleteCacheConfirm = false
+	fleetPage.editFleet.mountRemoveConfirm = false
+	fleetPage.editFleet.presetRemoveFocused = false
+	fleetPage.editFleet.presetRemoveConfirm = false
+	fleetPage.editFleet.presetMoveFocused = false
+	fleetPage.editFleet.presetMoving = false
 	fleetPage.syncEditFleetFocus()
 }
 
@@ -1399,36 +1399,36 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	}
 
 	fleetPage.mode = viewEditFleet
-	fleetPage.dialogFleet = f.Name
-	fleetPage.dialogClaudeMount = f.Settings.ClaudeCodeMount
-	fleetPage.dialogCodexMount = f.Settings.CodexMount
-	fleetPage.dialogGhMount = f.Settings.GhMount
-	fleetPage.dialogAuggieMount = f.Settings.AuggieMount
-	fleetPage.dialogBuildkitServer = f.Settings.BuildkitServer
-	fleetPage.dialogDebCache = f.Settings.DebCacheServer
-	fleetPage.dialogImageCache = f.Settings.ImageCacheServer
-	fleetPage.dialogPreferFleetLaunch = f.Settings.PreferFleetLaunchEnabled()
-	fleetPage.dialogPreferFleetLaunchSet = f.Settings.PreferFleetLaunchSet()
-	fleetPage.dialogRow = editFleetRowClaude
-	fleetPage.dialogDetecting = false
-	fleetPage.dialogFieldActive = false
-	fleetPage.dialogCachingExpanded = false
-	fleetPage.dialogCacheButtonFocused = false
-	fleetPage.dialogDeleteCacheConfirm = false
-	fleetPage.dialogDeleting = false
-	fleetPage.dialogCustomMountsExpanded = false
-	fleetPage.dialogCustomMounts = slices.Clone(f.Settings.CustomMounts)
-	fleetPage.dialogAddingMount = false
-	fleetPage.dialogCustomMountErr = ""
-	fleetPage.dialogMountRemoveConfirm = false
+	fleetPage.dlg.fleet = f.Name
+	fleetPage.editFleet.claudeMount = f.Settings.ClaudeCodeMount
+	fleetPage.editFleet.codexMount = f.Settings.CodexMount
+	fleetPage.editFleet.ghMount = f.Settings.GhMount
+	fleetPage.editFleet.auggieMount = f.Settings.AuggieMount
+	fleetPage.editFleet.buildkitServer = f.Settings.BuildkitServer
+	fleetPage.editFleet.debCache = f.Settings.DebCacheServer
+	fleetPage.editFleet.imageCache = f.Settings.ImageCacheServer
+	fleetPage.editFleet.preferFleetLaunch = f.Settings.PreferFleetLaunchEnabled()
+	fleetPage.editFleet.preferFleetLaunchSet = f.Settings.PreferFleetLaunchSet()
+	fleetPage.dlg.row = editFleetRowClaude
+	fleetPage.editFleet.detecting = false
+	fleetPage.dlg.fieldActive = false
+	fleetPage.editFleet.cachingExpanded = false
+	fleetPage.editFleet.cacheButtonFocused = false
+	fleetPage.editFleet.deleteCacheConfirm = false
+	fleetPage.editFleet.deleting = false
+	fleetPage.editFleet.customMountsExpanded = false
+	fleetPage.editFleet.customMounts = slices.Clone(f.Settings.CustomMounts)
+	fleetPage.editFleet.addingMount = false
+	fleetPage.editFleet.customMountErr = ""
+	fleetPage.editFleet.mountRemoveConfirm = false
 	fleetPage.customMountInput.SetValue("")
 	fleetPage.customMountInput.Blur()
-	fleetPage.dialogLayoutsExpanded = false
-	fleetPage.dialogLayoutPresets = slices.Clone(f.Settings.LayoutPresets)
-	fleetPage.dialogPresetRemoveFocused = false
-	fleetPage.dialogPresetRemoveConfirm = false
-	fleetPage.dialogPresetMoveFocused = false
-	fleetPage.dialogPresetMoving = false
+	fleetPage.editFleet.layoutsExpanded = false
+	fleetPage.editFleet.layoutPresets = slices.Clone(f.Settings.LayoutPresets)
+	fleetPage.editFleet.presetRemoveFocused = false
+	fleetPage.editFleet.presetRemoveConfirm = false
+	fleetPage.editFleet.presetMoveFocused = false
+	fleetPage.editFleet.presetMoving = false
 	fleetPage.lpFlow = nil
 
 	fleetPage.homedirInput.SetValue(f.Settings.HomeDir)
@@ -1451,25 +1451,25 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 	}
 
 	// Home-dir text-editing sub-mode.
-	if fleetPage.dialogFieldActive {
+	if fleetPage.dlg.fieldActive {
 		switch keyMsg.String() {
 		case "enter":
 			// Commit the typed value (instant-save) and leave editing.
 			cmd := fleetPage.commitHomedir(m)
-			fleetPage.dialogFieldActive = false
+			fleetPage.dlg.fieldActive = false
 			fleetPage.syncEditFleetFocus()
 			return cmd
 		case "esc":
 			// Discard the uncommitted edit; restore the persisted value.
 			fleetPage.restoreHomedir(m)
-			fleetPage.dialogFieldActive = false
+			fleetPage.dlg.fieldActive = false
 			fleetPage.syncEditFleetFocus()
 			return nil
 		case "ctrl+c":
 			fleetPage.closeEditFleet(m)
 			return nil
 		}
-		if fleetPage.dialogRow == editFleetRowHomeDir {
+		if fleetPage.dlg.row == editFleetRowHomeDir {
 			var cmd tea.Cmd
 			fleetPage.homedirInput, cmd = fleetPage.homedirInput.Update(msg)
 			return cmd
@@ -1478,7 +1478,7 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 	}
 
 	// Add-custom-mount text-editing sub-mode.
-	if fleetPage.dialogAddingMount {
+	if fleetPage.editFleet.addingMount {
 		switch keyMsg.String() {
 		case "enter":
 			return fleetPage.commitNewMount(m)
@@ -1491,7 +1491,7 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 		}
 		// Any other key edits the field; clear a stale validation error as the
 		// user types so the inline message tracks the current input.
-		fleetPage.dialogCustomMountErr = ""
+		fleetPage.editFleet.customMountErr = ""
 		var cmd tea.Cmd
 		fleetPage.customMountInput, cmd = fleetPage.customMountInput.Update(msg)
 		return cmd
@@ -1500,7 +1500,7 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 	// Layout-preset reorder sub-mode: up/down drag the focused preset instead of
 	// moving the dialog cursor, so it must be handled before the generic
 	// navigation below.
-	if fleetPage.dialogPresetMoving {
+	if fleetPage.editFleet.presetMoving {
 		return fleetPage.updatePresetMove(m, keyMsg)
 	}
 
@@ -1516,16 +1516,16 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 	case "esc", "q", "Q", "ctrl+c":
 		// An armed confirm (delete-cache or remove-mount) is cancelled first,
 		// not the dialog.
-		if fleetPage.dialogDeleteCacheConfirm {
-			fleetPage.dialogDeleteCacheConfirm = false
+		if fleetPage.editFleet.deleteCacheConfirm {
+			fleetPage.editFleet.deleteCacheConfirm = false
 			return nil
 		}
-		if fleetPage.dialogMountRemoveConfirm {
-			fleetPage.dialogMountRemoveConfirm = false
+		if fleetPage.editFleet.mountRemoveConfirm {
+			fleetPage.editFleet.mountRemoveConfirm = false
 			return nil
 		}
-		if fleetPage.dialogPresetRemoveConfirm {
-			fleetPage.dialogPresetRemoveConfirm = false
+		if fleetPage.editFleet.presetRemoveConfirm {
+			fleetPage.editFleet.presetRemoveConfirm = false
 			return nil
 		}
 		fleetPage.closeEditFleet(m)
@@ -1534,17 +1534,17 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 
 	// Dynamic custom-mount child rows (existing mounts + the add row) are
 	// handled separately since their row ids are not compile-time constants.
-	if isCustomMountChildRow(fleetPage.dialogRow) {
+	if isCustomMountChildRow(fleetPage.dlg.row) {
 		return fleetPage.updateCustomMountRow(m, keyMsg)
 	}
 	// Likewise the dynamic layout-preset child rows (existing presets + the
 	// "+ Layout Preset" row).
-	if isLayoutPresetChildRow(fleetPage.dialogRow) {
+	if isLayoutPresetChildRow(fleetPage.dlg.row) {
 		return fleetPage.updateLayoutPresetRow(m, keyMsg)
 	}
 
 	// Row-specific actions.
-	switch fleetPage.dialogRow {
+	switch fleetPage.dlg.row {
 	case editFleetRowClaude, editFleetRowCodex, editFleetRowGh, editFleetRowAuggie, editFleetRowPreferFleetLaunch:
 		// space/x and h/l/enter all toggle (instant-save), matching the
 		// settings page.
@@ -1556,31 +1556,31 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 	case editFleetRowCustomMounts:
 		switch keyMsg.String() {
 		case " ", "enter":
-			fleetPage.dialogCustomMountsExpanded = !fleetPage.dialogCustomMountsExpanded
+			fleetPage.editFleet.customMountsExpanded = !fleetPage.editFleet.customMountsExpanded
 		case "right", "l":
-			fleetPage.dialogCustomMountsExpanded = true
+			fleetPage.editFleet.customMountsExpanded = true
 		case "left", "h":
-			fleetPage.dialogCustomMountsExpanded = false
+			fleetPage.editFleet.customMountsExpanded = false
 		}
 		return nil
 	case editFleetRowLayouts:
 		switch keyMsg.String() {
 		case " ", "enter":
-			fleetPage.dialogLayoutsExpanded = !fleetPage.dialogLayoutsExpanded
+			fleetPage.editFleet.layoutsExpanded = !fleetPage.editFleet.layoutsExpanded
 		case "right", "l":
-			fleetPage.dialogLayoutsExpanded = true
+			fleetPage.editFleet.layoutsExpanded = true
 		case "left", "h":
-			fleetPage.dialogLayoutsExpanded = false
+			fleetPage.editFleet.layoutsExpanded = false
 		}
 		return nil
 	case editFleetRowCaching:
 		switch keyMsg.String() {
 		case " ", "enter":
-			fleetPage.dialogCachingExpanded = !fleetPage.dialogCachingExpanded
+			fleetPage.editFleet.cachingExpanded = !fleetPage.editFleet.cachingExpanded
 		case "right", "l":
-			fleetPage.dialogCachingExpanded = true
+			fleetPage.editFleet.cachingExpanded = true
 		case "left", "h":
-			fleetPage.dialogCachingExpanded = false
+			fleetPage.editFleet.cachingExpanded = false
 		}
 		return nil
 	case editFleetRowBuildkit:
@@ -1592,12 +1592,12 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 	case editFleetRowHomeDir:
 		switch keyMsg.String() {
 		case "enter", " ":
-			fleetPage.dialogFieldActive = true
+			fleetPage.dlg.fieldActive = true
 			fleetPage.syncEditFleetFocus()
 			return fleetPage.homedirInput.Cursor.BlinkCmd()
 		}
 		if isDialogTextKey(keyMsg) {
-			fleetPage.dialogFieldActive = true
+			fleetPage.dlg.fieldActive = true
 			fleetPage.syncEditFleetFocus()
 			blinkCmd := fleetPage.homedirInput.Cursor.BlinkCmd()
 			var inputCmd tea.Cmd
@@ -1617,39 +1617,39 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 func (fleetPage *fleetPage) updateCacheRow(m *model, keyMsg tea.KeyMsg, k cacheKind) tea.Cmd {
 	// Ignore mutating keys while ANY wipe is in flight (navigation already ran),
 	// so a second wipe can't be started before the first reports back.
-	if fleetPage.dialogDeleting {
+	if fleetPage.editFleet.deleting {
 		return nil
 	}
 	switch keyMsg.String() {
 	case " ", "x":
 		// Toggling is a different action than confirming a delete, so always
 		// disarm the confirm.
-		fleetPage.dialogDeleteCacheConfirm = false
+		fleetPage.editFleet.deleteCacheConfirm = false
 		cmd := fleetPage.toggleEditFleetRow(m)
 		if !fleetPage.cacheEnabled(k) {
 			// No server → no button; drop button focus too.
-			fleetPage.dialogCacheButtonFocused = false
+			fleetPage.editFleet.cacheButtonFocused = false
 		}
 		return cmd
 	case "right", "l":
 		if fleetPage.cacheEnabled(k) {
-			fleetPage.dialogCacheButtonFocused = true
+			fleetPage.editFleet.cacheButtonFocused = true
 		}
 		return nil
 	case "left", "h":
-		fleetPage.dialogCacheButtonFocused = false
-		fleetPage.dialogDeleteCacheConfirm = false
+		fleetPage.editFleet.cacheButtonFocused = false
+		fleetPage.editFleet.deleteCacheConfirm = false
 		return nil
 	case "enter":
-		if fleetPage.dialogCacheButtonFocused && fleetPage.cacheEnabled(k) {
-			if !fleetPage.dialogDeleteCacheConfirm {
-				fleetPage.dialogDeleteCacheConfirm = true // first Enter: arm confirm
+		if fleetPage.editFleet.cacheButtonFocused && fleetPage.cacheEnabled(k) {
+			if !fleetPage.editFleet.deleteCacheConfirm {
+				fleetPage.editFleet.deleteCacheConfirm = true // first Enter: arm confirm
 				return nil
 			}
-			fleetPage.dialogDeleteCacheConfirm = false // second Enter: do it
-			fleetPage.dialogDeleting = true
-			fleetPage.dialogDeletingKind = k
-			return deleteCacheCmd(k, fleetPage.dialogFleet)
+			fleetPage.editFleet.deleteCacheConfirm = false // second Enter: do it
+			fleetPage.editFleet.deleting = true
+			fleetPage.editFleet.deletingKind = k
+			return deleteCacheCmd(k, fleetPage.dlg.fleet)
 		}
 		// Toggle focused → toggle the setting.
 		return fleetPage.toggleEditFleetRow(m)
@@ -1683,8 +1683,8 @@ func deleteCacheCmd(k cacheKind, fleetName string) tea.Cmd {
 
 // handleDeleteCacheDone clears the in-flight flag and surfaces the outcome.
 func (fleetPage *fleetPage) handleDeleteCacheDone(m *model, msg deleteCacheDoneMsg) tea.Cmd {
-	if fleetPage.dialogFleet == msg.fleet && fleetPage.dialogDeletingKind == msg.kind {
-		fleetPage.dialogDeleting = false
+	if fleetPage.dlg.fleet == msg.fleet && fleetPage.editFleet.deletingKind == msg.kind {
+		fleetPage.editFleet.deleting = false
 	}
 	if msg.err != nil {
 		m.message = fmt.Sprintf("Delete cache failed: %v", msg.err)
@@ -1713,43 +1713,43 @@ func cacheClearedMessage(k cacheKind) string {
 func (fleetPage *fleetPage) toggleEditFleetRow(m *model) tea.Cmd {
 	turnedOn := false
 	var revert func()
-	switch fleetPage.dialogRow {
+	switch fleetPage.dlg.row {
 	case editFleetRowClaude:
-		fleetPage.dialogClaudeMount = !fleetPage.dialogClaudeMount
-		turnedOn = fleetPage.dialogClaudeMount
-		revert = func() { fleetPage.dialogClaudeMount = !fleetPage.dialogClaudeMount }
+		fleetPage.editFleet.claudeMount = !fleetPage.editFleet.claudeMount
+		turnedOn = fleetPage.editFleet.claudeMount
+		revert = func() { fleetPage.editFleet.claudeMount = !fleetPage.editFleet.claudeMount }
 	case editFleetRowCodex:
-		fleetPage.dialogCodexMount = !fleetPage.dialogCodexMount
-		turnedOn = fleetPage.dialogCodexMount
-		revert = func() { fleetPage.dialogCodexMount = !fleetPage.dialogCodexMount }
+		fleetPage.editFleet.codexMount = !fleetPage.editFleet.codexMount
+		turnedOn = fleetPage.editFleet.codexMount
+		revert = func() { fleetPage.editFleet.codexMount = !fleetPage.editFleet.codexMount }
 	case editFleetRowGh:
-		fleetPage.dialogGhMount = !fleetPage.dialogGhMount
-		turnedOn = fleetPage.dialogGhMount
-		revert = func() { fleetPage.dialogGhMount = !fleetPage.dialogGhMount }
+		fleetPage.editFleet.ghMount = !fleetPage.editFleet.ghMount
+		turnedOn = fleetPage.editFleet.ghMount
+		revert = func() { fleetPage.editFleet.ghMount = !fleetPage.editFleet.ghMount }
 	case editFleetRowAuggie:
-		fleetPage.dialogAuggieMount = !fleetPage.dialogAuggieMount
-		turnedOn = fleetPage.dialogAuggieMount
-		revert = func() { fleetPage.dialogAuggieMount = !fleetPage.dialogAuggieMount }
+		fleetPage.editFleet.auggieMount = !fleetPage.editFleet.auggieMount
+		turnedOn = fleetPage.editFleet.auggieMount
+		revert = func() { fleetPage.editFleet.auggieMount = !fleetPage.editFleet.auggieMount }
 	case editFleetRowBuildkit:
-		fleetPage.dialogBuildkitServer = !fleetPage.dialogBuildkitServer
-		revert = func() { fleetPage.dialogBuildkitServer = !fleetPage.dialogBuildkitServer }
+		fleetPage.editFleet.buildkitServer = !fleetPage.editFleet.buildkitServer
+		revert = func() { fleetPage.editFleet.buildkitServer = !fleetPage.editFleet.buildkitServer }
 	case editFleetRowDebCache:
-		fleetPage.dialogDebCache = !fleetPage.dialogDebCache
-		revert = func() { fleetPage.dialogDebCache = !fleetPage.dialogDebCache }
+		fleetPage.editFleet.debCache = !fleetPage.editFleet.debCache
+		revert = func() { fleetPage.editFleet.debCache = !fleetPage.editFleet.debCache }
 	case editFleetRowImageCache:
-		fleetPage.dialogImageCache = !fleetPage.dialogImageCache
-		revert = func() { fleetPage.dialogImageCache = !fleetPage.dialogImageCache }
+		fleetPage.editFleet.imageCache = !fleetPage.editFleet.imageCache
+		revert = func() { fleetPage.editFleet.imageCache = !fleetPage.editFleet.imageCache }
 	case editFleetRowPreferFleetLaunch:
-		prevSet := fleetPage.dialogPreferFleetLaunchSet
-		fleetPage.dialogPreferFleetLaunch = !fleetPage.dialogPreferFleetLaunch
+		prevSet := fleetPage.editFleet.preferFleetLaunchSet
+		fleetPage.editFleet.preferFleetLaunch = !fleetPage.editFleet.preferFleetLaunch
 		// The user explicitly chose a value, so it must now persist.
-		fleetPage.dialogPreferFleetLaunchSet = true
+		fleetPage.editFleet.preferFleetLaunchSet = true
 		// Revert BOTH the value and the set-flag on save failure — otherwise a
-		// failed toggle would leave dialogPreferFleetLaunchSet=true and a later
+		// failed toggle would leave editFleet.preferFleetLaunchSet=true and a later
 		// unrelated save would collapse a "never asked" (nil) tri-state.
 		revert = func() {
-			fleetPage.dialogPreferFleetLaunch = !fleetPage.dialogPreferFleetLaunch
-			fleetPage.dialogPreferFleetLaunchSet = prevSet
+			fleetPage.editFleet.preferFleetLaunch = !fleetPage.editFleet.preferFleetLaunch
+			fleetPage.editFleet.preferFleetLaunchSet = prevSet
 		}
 	default:
 		return nil
@@ -1765,7 +1765,7 @@ func (fleetPage *fleetPage) toggleEditFleetRow(m *model) tea.Cmd {
 
 	// On enabling a home-dir mount with no home dir recorded yet, auto-detect it.
 	if turnedOn {
-		if f, ok := m.st.Fleets[fleetPage.dialogFleet]; ok && fleetPage.shouldKickHomedirDetect(f) {
+		if f, ok := m.st.Fleets[fleetPage.dlg.fleet]; ok && fleetPage.shouldKickHomedirDetect(f) {
 			return fleetPage.startHomedirDetect(f)
 		}
 	}
@@ -1777,8 +1777,8 @@ func (fleetPage *fleetPage) toggleEditFleetRow(m *model) tea.Cmd {
 // instant-save) or the "+ Add mount" row (enter or the first typed character
 // opens the inline text input).
 func (fleetPage *fleetPage) updateCustomMountRow(m *model, keyMsg tea.KeyMsg) tea.Cmd {
-	idx := fleetPage.dialogRow - editFleetRowCustomMountBase
-	if idx == len(fleetPage.dialogCustomMounts) {
+	idx := fleetPage.dlg.row - editFleetRowCustomMountBase
+	if idx == len(fleetPage.editFleet.customMounts) {
 		// The "+ Add mount" row.
 		switch keyMsg.String() {
 		case "enter", " ":
@@ -1802,11 +1802,11 @@ func (fleetPage *fleetPage) updateCustomMountRow(m *model, keyMsg tea.KeyMsg) te
 	// the dialog's top-level esc handler, and any row move clears it.
 	switch keyMsg.String() {
 	case "enter", "x", "d":
-		if !fleetPage.dialogMountRemoveConfirm {
-			fleetPage.dialogMountRemoveConfirm = true // first press: arm confirm
+		if !fleetPage.editFleet.mountRemoveConfirm {
+			fleetPage.editFleet.mountRemoveConfirm = true // first press: arm confirm
 			return nil
 		}
-		fleetPage.dialogMountRemoveConfirm = false // second press: do it
+		fleetPage.editFleet.mountRemoveConfirm = false // second press: do it
 		return fleetPage.removeCustomMount(m, idx)
 	}
 	return nil
@@ -1819,8 +1819,8 @@ func (fleetPage *fleetPage) updateCustomMountRow(m *model, keyMsg tea.KeyMsg) te
 // arms a "[remove?]" confirm, a second Enter performs the removal, and ←/h
 // returns to the row. The "+ Layout Preset" row just starts the capture flow.
 func (fleetPage *fleetPage) updateLayoutPresetRow(m *model, keyMsg tea.KeyMsg) tea.Cmd {
-	idx := fleetPage.dialogRow - editFleetRowLayoutPresetBase
-	if idx == len(fleetPage.dialogLayoutPresets) {
+	idx := fleetPage.dlg.row - editFleetRowLayoutPresetBase
+	if idx == len(fleetPage.editFleet.layoutPresets) {
 		// The "+ Layout Preset" row.
 		switch keyMsg.String() {
 		case "enter", " ":
@@ -1832,38 +1832,38 @@ func (fleetPage *fleetPage) updateLayoutPresetRow(m *model, keyMsg tea.KeyMsg) t
 	switch keyMsg.String() {
 	case "right", "l":
 		switch {
-		case fleetPage.dialogPresetMoveFocused:
+		case fleetPage.editFleet.presetMoveFocused:
 			// Already at the rightmost button.
-		case fleetPage.dialogPresetRemoveFocused:
-			fleetPage.dialogPresetRemoveFocused = false
-			fleetPage.dialogPresetRemoveConfirm = false
-			fleetPage.dialogPresetMoveFocused = true
+		case fleetPage.editFleet.presetRemoveFocused:
+			fleetPage.editFleet.presetRemoveFocused = false
+			fleetPage.editFleet.presetRemoveConfirm = false
+			fleetPage.editFleet.presetMoveFocused = true
 		default:
-			fleetPage.dialogPresetRemoveFocused = true
+			fleetPage.editFleet.presetRemoveFocused = true
 		}
 		return nil
 	case "left", "h":
 		switch {
-		case fleetPage.dialogPresetMoveFocused:
-			fleetPage.dialogPresetMoveFocused = false
-			fleetPage.dialogPresetRemoveFocused = true
-		case fleetPage.dialogPresetRemoveFocused:
-			fleetPage.dialogPresetRemoveFocused = false
-			fleetPage.dialogPresetRemoveConfirm = false
+		case fleetPage.editFleet.presetMoveFocused:
+			fleetPage.editFleet.presetMoveFocused = false
+			fleetPage.editFleet.presetRemoveFocused = true
+		case fleetPage.editFleet.presetRemoveFocused:
+			fleetPage.editFleet.presetRemoveFocused = false
+			fleetPage.editFleet.presetRemoveConfirm = false
 		}
 		return nil
 	case "enter", " ":
-		if fleetPage.dialogPresetMoveFocused {
+		if fleetPage.editFleet.presetMoveFocused {
 			// Start the reorder sub-mode; up/down now drag this preset.
-			fleetPage.dialogPresetMoving = true
+			fleetPage.editFleet.presetMoving = true
 			return nil
 		}
-		if fleetPage.dialogPresetRemoveFocused {
-			if !fleetPage.dialogPresetRemoveConfirm {
-				fleetPage.dialogPresetRemoveConfirm = true // first Enter: arm confirm
+		if fleetPage.editFleet.presetRemoveFocused {
+			if !fleetPage.editFleet.presetRemoveConfirm {
+				fleetPage.editFleet.presetRemoveConfirm = true // first Enter: arm confirm
 				return nil
 			}
-			fleetPage.dialogPresetRemoveConfirm = false // second Enter: remove
+			fleetPage.editFleet.presetRemoveConfirm = false // second Enter: remove
 			return fleetPage.removeLayoutPreset(m, idx)
 		}
 		// Row focused (no button) → open the editor.
@@ -1889,7 +1889,7 @@ func (fleetPage *fleetPage) updatePresetMove(m *model, keyMsg tea.KeyMsg) tea.Cm
 	default:
 		// Enter/space/esc/q/h/l (and anything else) leave the reorder sub-mode,
 		// keeping the cursor on the [move] button of the preset's new position.
-		fleetPage.dialogPresetMoving = false
+		fleetPage.editFleet.presetMoving = false
 		return nil
 	}
 }
@@ -1899,58 +1899,58 @@ func (fleetPage *fleetPage) updatePresetMove(m *model, keyMsg tea.KeyMsg) tea.Cm
 // cursor follows the moved row so the user can keep dragging. Reordering the
 // LayoutPresets slice is exactly what changes the layout-cycling order.
 func (fleetPage *fleetPage) movePreset(m *model, delta int) tea.Cmd {
-	idx := fleetPage.dialogRow - editFleetRowLayoutPresetBase
+	idx := fleetPage.dlg.row - editFleetRowLayoutPresetBase
 	target := idx + delta
-	if idx < 0 || idx >= len(fleetPage.dialogLayoutPresets) {
+	if idx < 0 || idx >= len(fleetPage.editFleet.layoutPresets) {
 		return nil
 	}
-	if target < 0 || target >= len(fleetPage.dialogLayoutPresets) {
+	if target < 0 || target >= len(fleetPage.editFleet.layoutPresets) {
 		return nil // already at an edge — nothing to do
 	}
-	prev := fleetPage.dialogLayoutPresets
+	prev := fleetPage.editFleet.layoutPresets
 	next := slices.Clone(prev)
 	next[idx], next[target] = next[target], next[idx]
-	fleetPage.dialogLayoutPresets = next
+	fleetPage.editFleet.layoutPresets = next
 	if err := fleetPage.persistFleetSettings(m); err != nil {
-		fleetPage.dialogLayoutPresets = prev
+		fleetPage.editFleet.layoutPresets = prev
 		m.message = fmt.Sprintf("Failed to save: %v", err)
 		return nil
 	}
-	fleetPage.dialogRow = editFleetRowLayoutPresetBase + target
+	fleetPage.dlg.row = editFleetRowLayoutPresetBase + target
 	return nil
 }
 
 // removeLayoutPreset drops the idx-th preset and persists (instant-save),
 // reverting on RPC failure and keeping the cursor in range afterward.
 func (fleetPage *fleetPage) removeLayoutPreset(m *model, idx int) tea.Cmd {
-	if idx < 0 || idx >= len(fleetPage.dialogLayoutPresets) {
+	if idx < 0 || idx >= len(fleetPage.editFleet.layoutPresets) {
 		return nil
 	}
-	prev := fleetPage.dialogLayoutPresets
-	fleetPage.dialogLayoutPresets = slices.Delete(slices.Clone(prev), idx, idx+1)
+	prev := fleetPage.editFleet.layoutPresets
+	fleetPage.editFleet.layoutPresets = slices.Delete(slices.Clone(prev), idx, idx+1)
 	if err := fleetPage.persistFleetSettings(m); err != nil {
-		fleetPage.dialogLayoutPresets = prev
+		fleetPage.editFleet.layoutPresets = prev
 		m.message = fmt.Sprintf("Failed to save: %v", err)
 		return nil
 	}
-	if fleetPage.dialogRow > fleetPage.layoutPresetAddRow() {
-		fleetPage.dialogRow = fleetPage.layoutPresetAddRow()
+	if fleetPage.dlg.row > fleetPage.layoutPresetAddRow() {
+		fleetPage.dlg.row = fleetPage.layoutPresetAddRow()
 	}
 	return nil
 }
 
 // beginAddMount enters the add-custom-mount text sub-mode with a blank input.
 func (fleetPage *fleetPage) beginAddMount() {
-	fleetPage.dialogAddingMount = true
-	fleetPage.dialogCustomMountErr = ""
+	fleetPage.editFleet.addingMount = true
+	fleetPage.editFleet.customMountErr = ""
 	fleetPage.customMountInput.SetValue("")
 	fleetPage.customMountInput.Focus()
 }
 
 // cancelAddMount leaves the add-custom-mount sub-mode, discarding the input.
 func (fleetPage *fleetPage) cancelAddMount() {
-	fleetPage.dialogAddingMount = false
-	fleetPage.dialogCustomMountErr = ""
+	fleetPage.editFleet.addingMount = false
+	fleetPage.editFleet.customMountErr = ""
 	fleetPage.customMountInput.SetValue("")
 	fleetPage.customMountInput.Blur()
 }
@@ -1962,27 +1962,27 @@ func (fleetPage *fleetPage) cancelAddMount() {
 func (fleetPage *fleetPage) commitNewMount(m *model) tea.Cmd {
 	norm, err := fleet.NormalizeCustomMount(fleetPage.customMountInput.Value())
 	if err != nil {
-		fleetPage.dialogCustomMountErr = err.Error()
+		fleetPage.editFleet.customMountErr = err.Error()
 		return nil
 	}
 	// Last-wins collisions with managed mounts are allowed, but an exact repeat
 	// of an existing custom mount is a no-op — reject it with a clear message
 	// rather than silently dropping it.
-	if slices.Contains(fleetPage.dialogCustomMounts, norm) {
-		fleetPage.dialogCustomMountErr = fmt.Sprintf("%s is already mounted", norm)
+	if slices.Contains(fleetPage.editFleet.customMounts, norm) {
+		fleetPage.editFleet.customMountErr = fmt.Sprintf("%s is already mounted", norm)
 		return nil
 	}
 
-	prev := fleetPage.dialogCustomMounts
-	fleetPage.dialogCustomMounts = append(slices.Clone(prev), norm)
+	prev := fleetPage.editFleet.customMounts
+	fleetPage.editFleet.customMounts = append(slices.Clone(prev), norm)
 	if err := fleetPage.persistFleetSettings(m); err != nil {
-		fleetPage.dialogCustomMounts = prev
+		fleetPage.editFleet.customMounts = prev
 		m.message = fmt.Sprintf("Failed to save: %v", err)
 		return nil
 	}
 	// Leave the cursor on the (now shifted-down) add row so the user can keep
 	// adding mounts in a row.
-	fleetPage.dialogRow = fleetPage.customMountAddRow()
+	fleetPage.dlg.row = fleetPage.customMountAddRow()
 	fleetPage.cancelAddMount()
 	return nil
 }
@@ -1990,20 +1990,20 @@ func (fleetPage *fleetPage) commitNewMount(m *model) tea.Cmd {
 // removeCustomMount drops the idx-th custom mount and persists (instant-save),
 // reverting on RPC failure and keeping the cursor in range afterward.
 func (fleetPage *fleetPage) removeCustomMount(m *model, idx int) tea.Cmd {
-	if idx < 0 || idx >= len(fleetPage.dialogCustomMounts) {
+	if idx < 0 || idx >= len(fleetPage.editFleet.customMounts) {
 		return nil
 	}
-	prev := fleetPage.dialogCustomMounts
-	fleetPage.dialogCustomMounts = slices.Delete(slices.Clone(prev), idx, idx+1)
+	prev := fleetPage.editFleet.customMounts
+	fleetPage.editFleet.customMounts = slices.Delete(slices.Clone(prev), idx, idx+1)
 	if err := fleetPage.persistFleetSettings(m); err != nil {
-		fleetPage.dialogCustomMounts = prev
+		fleetPage.editFleet.customMounts = prev
 		m.message = fmt.Sprintf("Failed to save: %v", err)
 		return nil
 	}
 	// Removing the last mount shrinks the visible row range; keep the cursor on
 	// a row that still exists (at most the add row).
-	if fleetPage.dialogRow > fleetPage.customMountAddRow() {
-		fleetPage.dialogRow = fleetPage.customMountAddRow()
+	if fleetPage.dlg.row > fleetPage.customMountAddRow() {
+		fleetPage.dlg.row = fleetPage.customMountAddRow()
 	}
 	return nil
 }
@@ -2021,13 +2021,13 @@ func customMountHostPreview(fleetName, containerPath string) string {
 // current dialog state, the home-dir text input is empty, no detection
 // is already in flight, and the fleet has a remote URL we can clone.
 func (fleetPage *fleetPage) shouldKickHomedirDetect(f *fleet.Fleet) bool {
-	if fleetPage.dialogDetecting {
+	if fleetPage.editFleet.detecting {
 		return false
 	}
 	if strings.TrimSpace(fleetPage.homedirInput.Value()) != "" {
 		return false
 	}
-	if !fleetPage.dialogClaudeMount && !fleetPage.dialogCodexMount && !fleetPage.dialogGhMount && !fleetPage.dialogAuggieMount {
+	if !fleetPage.editFleet.claudeMount && !fleetPage.editFleet.codexMount && !fleetPage.editFleet.ghMount && !fleetPage.editFleet.auggieMount {
 		return false
 	}
 	return strings.TrimSpace(f.Remote) != ""
@@ -2036,7 +2036,7 @@ func (fleetPage *fleetPage) shouldKickHomedirDetect(f *fleet.Fleet) bool {
 // startHomedirDetect marks detection as in flight and returns the cmd
 // that performs the actual clone+inspect work in the background.
 func (fleetPage *fleetPage) startHomedirDetect(f *fleet.Fleet) tea.Cmd {
-	fleetPage.dialogDetecting = true
+	fleetPage.editFleet.detecting = true
 	return detectHomedirCmd(f.Name, f.Remote, "")
 }
 
@@ -2047,13 +2047,13 @@ func (fleetPage *fleetPage) startHomedirDetect(f *fleet.Fleet) tea.Cmd {
 func (fleetPage *fleetPage) handleHomedirDetected(m *model, msg homedirDetectedMsg) tea.Cmd {
 	// Always clear the in-flight flag for *this* fleet so the spinner
 	// stops, even when the result is not applied.
-	if fleetPage.dialogFleet == msg.fleetName {
-		fleetPage.dialogDetecting = false
+	if fleetPage.dlg.fleet == msg.fleetName {
+		fleetPage.editFleet.detecting = false
 	}
 	if msg.err != nil || msg.homeDir == "" {
 		return nil
 	}
-	if fleetPage.mode != viewEditFleet || fleetPage.dialogFleet != msg.fleetName {
+	if fleetPage.mode != viewEditFleet || fleetPage.dlg.fleet != msg.fleetName {
 		return nil
 	}
 	if strings.TrimSpace(fleetPage.homedirInput.Value()) != "" {
@@ -2071,7 +2071,7 @@ func (fleetPage *fleetPage) handleHomedirDetected(m *model, msg homedirDetectedM
 // when that row is the currently selected row. Other rows have no
 // editable text so the input must blur to avoid a stray cursor.
 func (fleetPage *fleetPage) syncEditFleetFocus() {
-	if fleetPage.dialogFieldActive && fleetPage.dialogRow == editFleetRowHomeDir {
+	if fleetPage.dlg.fieldActive && fleetPage.dlg.row == editFleetRowHomeDir {
 		fleetPage.homedirInput.Focus()
 	} else {
 		fleetPage.homedirInput.Blur()
@@ -2086,30 +2086,30 @@ func (fleetPage *fleetPage) syncEditFleetFocus() {
 // backend.
 //
 // PreferFleetLaunch is only written when the fleet already had a value or the
-// user toggled it this session (dialogPreferFleetLaunchSet) — so editing an
+// user toggled it this session (editFleet.preferFleetLaunchSet) — so editing an
 // unrelated setting never collapses a "never asked" (nil) into explicit false.
 func (fleetPage *fleetPage) persistFleetSettings(m *model) error {
-	f, ok := m.st.Fleets[fleetPage.dialogFleet]
+	f, ok := m.st.Fleets[fleetPage.dlg.fleet]
 	if !ok {
-		return fmt.Errorf("fleet %s not found", fleetPage.dialogFleet)
+		return fmt.Errorf("fleet %s not found", fleetPage.dlg.fleet)
 	}
 	prev := f.Settings
-	f.Settings.ClaudeCodeMount = fleetPage.dialogClaudeMount
-	f.Settings.CodexMount = fleetPage.dialogCodexMount
-	f.Settings.GhMount = fleetPage.dialogGhMount
-	f.Settings.AuggieMount = fleetPage.dialogAuggieMount
-	f.Settings.BuildkitServer = fleetPage.dialogBuildkitServer
-	f.Settings.CustomMounts = fleetPage.dialogCustomMounts
-	f.Settings.LayoutPresets = fleetPage.dialogLayoutPresets
-	f.Settings.DebCacheServer = fleetPage.dialogDebCache
-	f.Settings.ImageCacheServer = fleetPage.dialogImageCache
-	if fleetPage.dialogPreferFleetLaunchSet {
-		preferFleetLaunch := fleetPage.dialogPreferFleetLaunch
+	f.Settings.ClaudeCodeMount = fleetPage.editFleet.claudeMount
+	f.Settings.CodexMount = fleetPage.editFleet.codexMount
+	f.Settings.GhMount = fleetPage.editFleet.ghMount
+	f.Settings.AuggieMount = fleetPage.editFleet.auggieMount
+	f.Settings.BuildkitServer = fleetPage.editFleet.buildkitServer
+	f.Settings.CustomMounts = fleetPage.editFleet.customMounts
+	f.Settings.LayoutPresets = fleetPage.editFleet.layoutPresets
+	f.Settings.DebCacheServer = fleetPage.editFleet.debCache
+	f.Settings.ImageCacheServer = fleetPage.editFleet.imageCache
+	if fleetPage.editFleet.preferFleetLaunchSet {
+		preferFleetLaunch := fleetPage.editFleet.preferFleetLaunch
 		f.Settings.PreferFleetLaunch = &preferFleetLaunch
 	}
 	f.Settings.HomeDir = strings.TrimSpace(fleetPage.homedirInput.Value())
 
-	if err := setFleetSettingsRemote(fleetPage.dialogFleet, f.Settings); err != nil {
+	if err := setFleetSettingsRemote(fleetPage.dlg.fleet, f.Settings); err != nil {
 		f.Settings = prev
 		return err
 	}
@@ -2129,7 +2129,7 @@ func (fleetPage *fleetPage) commitHomedir(m *model) tea.Cmd {
 // restoreHomedir resets the home-dir input to the fleet's persisted value (used
 // to discard an uncommitted edit or undo a failed save).
 func (fleetPage *fleetPage) restoreHomedir(m *model) {
-	if f, ok := m.st.Fleets[fleetPage.dialogFleet]; ok {
+	if f, ok := m.st.Fleets[fleetPage.dlg.fleet]; ok {
 		fleetPage.homedirInput.SetValue(f.Settings.HomeDir)
 	}
 }
@@ -2138,14 +2138,14 @@ func (fleetPage *fleetPage) restoreHomedir(m *model) {
 // commit on close — every change was persisted as it was made.
 func (fleetPage *fleetPage) closeEditFleet(_ *model) {
 	fleetPage.mode = viewNormal
-	fleetPage.dialogDeleteCacheConfirm = false
-	fleetPage.dialogCacheButtonFocused = false
-	fleetPage.dialogPresetMoveFocused = false
-	fleetPage.dialogPresetMoving = false
+	fleetPage.editFleet.deleteCacheConfirm = false
+	fleetPage.editFleet.cacheButtonFocused = false
+	fleetPage.editFleet.presetMoveFocused = false
+	fleetPage.editFleet.presetMoving = false
 	// Clear the in-flight flag too: a wipe RPC may still be running, but its
 	// deleteCacheDoneMsg is matched on fleet name and only updates the message,
 	// so the dialog must not reopen showing a stale "Clearing…" spinner.
-	fleetPage.dialogDeleting = false
+	fleetPage.editFleet.deleting = false
 	fleetPage.blurDialogFields()
 }
 
@@ -2155,11 +2155,11 @@ func (fleetPage *fleetPage) closeEditFleet(_ *model) {
 
 // updatePortForward handles the port forward management dialog.
 func (fleetPage *fleetPage) updatePortForward(m *model, msg tea.Msg) tea.Cmd {
-	key := fleetPage.dialogFleet + "/" + fleetPage.dialogInst
+	key := fleetPage.dlg.fleet + "/" + fleetPage.dlg.inst
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if fleetPage.dialogFieldActive {
+		if fleetPage.dlg.fieldActive {
 			switch msg.String() {
 			case "enter":
 				return fleetPage.addPortForward(m, key)
@@ -2230,7 +2230,7 @@ func (fleetPage *fleetPage) addPortForward(m *model, key string) tea.Cmd {
 	// The server owns backend access: each accepted connection is tunnelled
 	// to the instance over the server's Forward stream (the data plane), so
 	// the forward works even against a remote server.
-	dial, err := forwardDialer(fleetPage.dialogFleet, fleetPage.dialogInst, remote)
+	dial, err := forwardDialer(fleetPage.dlg.fleet, fleetPage.dlg.inst, remote)
 	if err != nil {
 		m.message = err.Error()
 		return nil
@@ -2241,7 +2241,7 @@ func (fleetPage *fleetPage) addPortForward(m *model, key string) tea.Cmd {
 	}
 
 	fleetPage.textInput.SetValue("")
-	m.message = fmt.Sprintf("Forwarding localhost:%d -> %s:%d", local, fleetPage.dialogInst, remote)
+	m.message = fmt.Sprintf("Forwarding localhost:%d -> %s:%d", local, fleetPage.dlg.inst, remote)
 	return nil
 }
 
@@ -2250,7 +2250,7 @@ func (fleetPage *fleetPage) closePortForward(m *model, key string) tea.Cmd {
 	fleetPage.blurDialogFields()
 	fwds := m.portForwards.List(key)
 	if len(fwds) > 0 {
-		m.message = fmt.Sprintf("%d port forward(s) active on %s", len(fwds), fleetPage.dialogInst)
+		m.message = fmt.Sprintf("%d port forward(s) active on %s", len(fwds), fleetPage.dlg.inst)
 	} else {
 		m.message = ""
 	}
@@ -2350,13 +2350,13 @@ func (fleetPage *fleetPage) updateCodespacesLimit(m *model, msg tea.Msg) tea.Cmd
 // default — a plain single session).
 func (fleetPage *fleetPage) openCreateSessionDialog(m *model, fleetName string, instance *fleet.Instance) tea.Cmd {
 	fleetPage.mode = viewCreateSession
-	fleetPage.dialogFleet = fleetName
-	fleetPage.dialogInst = instance.Name
-	fleetPage.dialogPresets = nil
+	fleetPage.dlg.fleet = fleetName
+	fleetPage.dlg.inst = instance.Name
+	fleetPage.newSession.presets = nil
 	if f, ok := m.st.Fleets[fleetName]; ok {
-		fleetPage.dialogPresets = f.Settings.LayoutPresets
+		fleetPage.newSession.presets = f.Settings.LayoutPresets
 	}
-	fleetPage.dialogPresetIdx = -1
+	fleetPage.newSession.presetIdx = -1
 	fleetPage.textInput.SetValue("")
 	fleetPage.textInput.Placeholder = "session-name (or empty for auto)"
 	fleetPage.textInput.CharLimit = 64
@@ -2367,12 +2367,12 @@ func (fleetPage *fleetPage) openCreateSessionDialog(m *model, fleetName string, 
 // -1 (none) → preset 0 → … → preset N-1 → back to none, mirroring how the
 // add-instance dialog Tab-cycles backends.
 func (fleetPage *fleetPage) cyclePresetTemplate(direction int) {
-	n := len(fleetPage.dialogPresets)
+	n := len(fleetPage.newSession.presets)
 	if n == 0 {
 		return
 	}
 	// Shift the -1..n-1 range to 0..n and cycle modulo n+1.
-	fleetPage.dialogPresetIdx = (fleetPage.dialogPresetIdx+1+direction+n+1)%(n+1) - 1
+	fleetPage.newSession.presetIdx = (fleetPage.newSession.presetIdx+1+direction+n+1)%(n+1) - 1
 }
 
 func (fleetPage *fleetPage) updateCreateSession(m *model, msg tea.Msg) tea.Cmd {
@@ -2389,7 +2389,7 @@ func (fleetPage *fleetPage) updateCreateSession(m *model, msg tea.Msg) tea.Cmd {
 			return nil
 		}
 
-		if fleetPage.dialogFieldActive {
+		if fleetPage.dlg.fieldActive {
 			switch msg.String() {
 			case "enter":
 				return fleetPage.saveCreateSession(m)
@@ -2422,13 +2422,13 @@ func (fleetPage *fleetPage) updateCreateSession(m *model, msg tea.Msg) tea.Cmd {
 
 func (fleetPage *fleetPage) saveCreateSession(m *model) tea.Cmd {
 	name := strings.TrimSpace(fleetPage.textInput.Value())
-	ref := InstanceRef{Fleet: fleetPage.dialogFleet, Instance: fleetPage.dialogInst}
+	ref := InstanceRef{Fleet: fleetPage.dlg.fleet, Instance: fleetPage.dlg.inst}
 
 	// Resolve the Tab-selected template (if any) up front so an empty name can
 	// default to the template's name rather than the generic "session-N".
 	var preset *fleet.LayoutPreset
-	if fleetPage.dialogPresetIdx >= 0 && fleetPage.dialogPresetIdx < len(fleetPage.dialogPresets) {
-		preset = &fleetPage.dialogPresets[fleetPage.dialogPresetIdx]
+	if fleetPage.newSession.presetIdx >= 0 && fleetPage.newSession.presetIdx < len(fleetPage.newSession.presets) {
+		preset = &fleetPage.newSession.presets[fleetPage.newSession.presetIdx]
 	}
 
 	if name == "" {
@@ -2440,13 +2440,13 @@ func (fleetPage *fleetPage) saveCreateSession(m *model) tea.Cmd {
 	}
 	name = SanitizeSessionName(name)
 
-	f, ok := m.st.Fleets[fleetPage.dialogFleet]
+	f, ok := m.st.Fleets[fleetPage.dlg.fleet]
 	if !ok {
 		fleetPage.mode = viewNormal
 		fleetPage.blurDialogFields()
 		return nil
 	}
-	instance, err := f.GetInstance(fleetPage.dialogInst)
+	instance, err := f.GetInstance(fleetPage.dlg.inst)
 	if err != nil {
 		fleetPage.mode = viewNormal
 		fleetPage.blurDialogFields()
@@ -2477,12 +2477,12 @@ func (fleetPage *fleetPage) saveCreateSession(m *model) tea.Cmd {
 }
 
 // updateCloneInstance handles the single-text-input dialog that asks
-// the user for a destination instance name when cloning. dialogFleet
-// and dialogInst hold the source instance's identifiers.
+// the user for a destination instance name when cloning. dlg.fleet
+// and dlg.inst hold the source instance's identifiers.
 func (fleetPage *fleetPage) updateCloneInstance(m *model, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if fleetPage.dialogFieldActive {
+		if fleetPage.dlg.fieldActive {
 			switch msg.String() {
 			case "enter":
 				return fleetPage.saveCloneInstance(m)
@@ -2528,8 +2528,8 @@ func (fleetPage *fleetPage) saveCloneInstance(m *model) tea.Cmd {
 		return nil
 	}
 
-	fleetName := fleetPage.dialogFleet
-	srcName := fleetPage.dialogInst
+	fleetName := fleetPage.dlg.fleet
+	srcName := fleetPage.dlg.inst
 
 	f, ok := m.st.Fleets[fleetName]
 	if !ok {
@@ -2567,7 +2567,7 @@ func (fleetPage *fleetPage) saveCloneInstance(m *model) tea.Cmd {
 func (fleetPage *fleetPage) updateRenameSession(m *model, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if fleetPage.dialogFieldActive {
+		if fleetPage.dlg.fieldActive {
 			switch msg.String() {
 			case "enter":
 				return fleetPage.saveRenameSession(m)
@@ -2608,15 +2608,15 @@ func (fleetPage *fleetPage) saveRenameSession(m *model) tea.Cmd {
 	}
 	newName = SanitizeSessionName(newName)
 
-	ref := InstanceRef{Fleet: fleetPage.dialogFleet, Instance: fleetPage.dialogInst}
+	ref := InstanceRef{Fleet: fleetPage.dlg.fleet, Instance: fleetPage.dlg.inst}
 
-	f, ok := m.st.Fleets[fleetPage.dialogFleet]
+	f, ok := m.st.Fleets[fleetPage.dlg.fleet]
 	if !ok {
 		fleetPage.mode = viewNormal
 		fleetPage.blurDialogFields()
 		return nil
 	}
-	instance, err := f.GetInstance(fleetPage.dialogInst)
+	instance, err := f.GetInstance(fleetPage.dlg.inst)
 	if err != nil {
 		fleetPage.mode = viewNormal
 		fleetPage.blurDialogFields()
@@ -2624,7 +2624,7 @@ func (fleetPage *fleetPage) saveRenameSession(m *model) tea.Cmd {
 	}
 
 	sanitized := SanitizeSessionName(instance.Name)
-	oldName := fleetPage.dialogSession
+	oldName := fleetPage.dlg.session
 	oldGID, isGrouped := parseGroupID(sanitized, oldName)
 
 	fleetPage.mode = viewNormal
