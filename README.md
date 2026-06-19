@@ -1,7 +1,6 @@
 # fleet-man
 
-A CLI/TUI tool for managing fleets of agents each insdie there own isolated devcontainers. This tool enables hugly parallel development, especially if you 
-utilize the `fleet-admiral` skill (auto added to your claude code on install). 
+A CLI/TUI tool for managing fleets of agents each inside there own isolated devcontainers. This tool enables hugly parallel development, especially if you utilize the `fleet-admiral` skill (auto added to your claude code on install). 
 
 ![fleet-man close up](fleet-closeup.png)
 ---
