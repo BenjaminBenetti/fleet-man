@@ -10,7 +10,6 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
-	"github.com/BenjaminBenetti/fleet-man/internal/devcontainersetup"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -69,100 +68,6 @@ type fleetPage struct {
 	armadaSel armadaSelectState // Armada selector widget (border label + dropdown)
 }
 
-// dialogContext is the scratch every dialog reuses: which fleet/instance/
-// session the action targets, the dialog's row cursor, and whether a text
-// field is being edited. Only one dialog is open at a time (fleetPage.mode),
-// so opening one stomps the previous one's context — that is by design.
-type dialogContext struct {
-	fleet       string
-	inst        string
-	session     string
-	groupID     string
-	row         int
-	fieldActive bool
-}
-
-// addInstanceState holds the add/edit-instance form's non-shared fields (the
-// target fleet/instance live in fleetPage.dlg).
-type addInstanceState struct {
-	backend fleet.BackendType
-	color   string
-	editing bool
-}
-
-// editFleetState holds the edit-fleet settings dialog: the shared-mount and
-// caching toggles plus the collapsible Caching / Custom-mounts / Layouts
-// sections. Every change is instant-saved; the layout-preset capture flow
-// itself lives in fleetPage.lpFlow while mode == viewLayoutPreset.
-type editFleetState struct {
-	claudeMount       bool
-	codexMount        bool
-	ghMount           bool
-	auggieMount       bool
-	buildkitServer    bool
-	debCache          bool
-	imageCache        bool
-	preferFleetLaunch bool
-	// preferFleetLaunchSet tracks whether PreferFleetLaunch should be
-	// persisted as an explicit value. It starts true only if the fleet already
-	// had a value, and flips true when the user toggles that row — so the
-	// instant-save path never collapses a "never asked" (nil) PreferFleetLaunch
-	// into an explicit false just because the user edited an unrelated setting.
-	preferFleetLaunchSet bool
-
-	// Caching section. The buildkit, deb, and image cache rows share one
-	// interaction model (toggle + [Delete cache] button + inline confirm +
-	// in-flight spinner); the per-row sub-state below applies to whichever
-	// cache row currently has the dialog cursor.
-	cachingExpanded    bool      // ▼ Caching expanded, revealing the cache rows
-	cacheButtonFocused bool      // horizontal sub-cursor: on the [Delete cache] button vs the toggle
-	deleteCacheConfirm bool      // inline confirm armed (first Enter on the button)
-	deleting           bool      // a cache-wipe RPC is in flight
-	deletingKind       cacheKind // which cache the in-flight wipe targets (valid only while deleting)
-
-	// Custom mounts section.
-	customMountsExpanded bool     // ▼ Custom mounts expanded, revealing per-mount rows + the add row
-	customMounts         []string // working copy of the fleet's custom mounts (instant-save)
-	addingMount          bool     // true while the "+ Add mount" text input is active
-	customMountErr       string   // inline validation error shown under the add-mount input
-	mountRemoveConfirm   bool     // inline "[remove?]" confirm armed on the focused custom-mount row (mirrors the Caching [Delete cache] flow)
-
-	// Layouts section.
-	layoutsExpanded     bool                 // ▼ Layouts expanded, revealing per-preset rows + the add row
-	layoutPresets       []fleet.LayoutPreset // working copy of the fleet's layout presets (instant-save)
-	presetRemoveFocused bool                 // horizontal sub-cursor: on the [remove] button vs the preset row (mirrors cacheButtonFocused)
-	presetRemoveConfirm bool                 // inline "[remove?]" confirm armed on the focused preset row
-	presetMoveFocused   bool                 // horizontal sub-cursor: on the [move] button (right of [remove])
-	presetMoving        bool                 // reorder sub-mode: j/k drag the focused preset up/down (instant-save)
-
-	detecting bool // true while a homedir auto-detect cmd is in flight
-}
-
-// addFleetState holds the new-fleet flow's pending fields, carried across the
-// asynchronous devcontainer inspection so the inspect-result handler can fall
-// through into either adding the fleet or showing the no-devcontainer prompt
-// without re-asking the user.
-type addFleetState struct {
-	pendingRepoURL   string
-	pendingFleetName string
-}
-
-// createSessionState holds the new-session dialog's preset templating: the
-// fleet's presets snapshotted at dialog open and the Tab-cycled selection
-// (-1 = none, a plain session).
-type createSessionState struct {
-	presets   []fleet.LayoutPreset
-	presetIdx int
-}
-
-// browserDialogState holds the switch-browser dialog's in-flight flag: true
-// while the dialog has dispatched a kill+relaunch but the browserProxyMsg has
-// not yet returned, so the body can swap to a spinner during the SIGTERM
-// grace period.
-type browserDialogState struct {
-	switching bool
-}
-
 // splitState holds the open split pane plus the session-group restore
 // bookkeeping. ref qualifies activeGroup so two groups sharing an ID across
 // instances cannot alias.
@@ -178,22 +83,6 @@ type splitState struct {
 	debounceSeq      int
 	restoringGroupID string
 	restoreSeq       int
-}
-
-// armadaSelectState is the Armada selector embedded in the list box's TOP
-// BORDER line ("╭─ Armada [ local ] ──╮"). It is part of the j/k navigation
-// cycle as a virtual stop ABOVE the first row: focused is true while the
-// cursor is on it (up from the top row focuses it; up again wraps to the
-// bottom). Enter/Space (or `A`, or a mouse click) opens the dropdown.
-// dialogRow is the dropdown cursor while mode == viewArmadaSelect. y + x0/x1
-// record the label's on-screen position and column span during View() for
-// mouse hit-testing (-1 = not rendered).
-type armadaSelectState struct {
-	focused   bool
-	dialogRow int
-	y         int
-	x0        int
-	x1        int
 }
 
 // newFleetPage creates a new fleet page with default state.
@@ -1684,446 +1573,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 		b.WriteString("\n")
 	}
 
-	// Dialog overlay
-	switch fleetPage.mode {
-	case viewConfirmDelete:
-		b.WriteString("\n")
-		var title, body string
-		if fleetPage.dlg.inst == "" {
-			count := 0
-			if f, ok := m.st.Fleets[fleetPage.dlg.fleet]; ok {
-				count = len(f.Instances)
-			}
-			title = "Delete fleet"
-			body = fmt.Sprintf("Remove fleet %s and all %d instance(s)? This will stop all containers and delete all workspaces.", fleetPage.dlg.fleet, count)
-		} else {
-			title = "Delete instance"
-			body = fmt.Sprintf("Remove %s/%s? This will stop the container and delete the workspace.", fleetPage.dlg.fleet, fleetPage.dlg.inst)
-		}
-		dialog := fmt.Sprintf(
-			"%s\n\n%s\n\n%s",
-			dialogTitle.Render(title),
-			dialogLabel.Render(body),
-			dialogHint.Render("[y] Yes  [n/q/esc] No"),
-		)
-		b.WriteString(dialogBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewConfirmRebuild:
-		b.WriteString("\n")
-		body := fmt.Sprintf("Rebuild %s/%s? This recreates the container from its devcontainer config. Your workspace — the git checkout and any uncommitted changes — is preserved.", fleetPage.dlg.fleet, fleetPage.dlg.inst)
-		dialog := fmt.Sprintf(
-			"%s\n\n%s\n\n%s",
-			dialogTitle.Render("Rebuild instance"),
-			dialogLabel.Render(body),
-			dialogHint.Render("[y] Yes  [n/q/esc] No"),
-		)
-		b.WriteString(dialogBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewConfirmDeleteFleetWarn:
-		b.WriteString("\n")
-		count := 0
-		if f, ok := m.st.Fleets[fleetPage.dlg.fleet]; ok {
-			count = len(f.Instances)
-		}
-		warnDialog := fmt.Sprintf(
-			"%s\n\n%s\n\n%s\n\n%s",
-			warnBanner.Render("  !! WARNING !!  "),
-			dialogLabel.Render(fmt.Sprintf(
-				"You are about to destroy fleet %s with %d running instance(s).\nAll containers will be stopped and all workspace data will be permanently deleted.",
-				fleetPage.dlg.fleet, count,
-			)),
-			errorStyle.Render("This action cannot be undone."),
-			dialogHint.Render("[y] Confirm destroy  [n/q/esc] Cancel"),
-		)
-		b.WriteString(warnBox.Render(warnDialog))
-		b.WriteString("\n")
-
-	case viewAddInstance:
-		b.WriteString("\n")
-		backendType := fleetPage.addInst.backend
-		if backendType == "" {
-			backendType = fleet.BackendDevcontainer
-		}
-		colorName := fleetPage.addInst.color
-		if colorName == "" {
-			colorName = instanceColorWhite
-		}
-
-		var title, hint, nameField, branchField, deployField string
-		if fleetPage.addInst.editing {
-			title = "Edit instance"
-			if fleetPage.dlg.fieldActive {
-				hint = "[enter] Save  [esc] Done editing  [ctrl+c] Cancel"
-			} else {
-				hint = "[j/k] Select  [h/l/space] Cycle color  [shift+tab] Color  [enter] Edit/Save  [q/esc] Cancel"
-			}
-			nameField = fleetPage.textInput.View()
-			branchDisplay := fleetPage.branchInput.Value()
-			if branchDisplay == "" {
-				branchDisplay = "default"
-			}
-			branchField = dimStyle.Render(branchDisplay)
-			deployField = dimStyle.Render(fmt.Sprintf("[ %s ]", backendTypeLabel(backendType)))
-		} else {
-			title = "New instance"
-			if fleetPage.dlg.fieldActive {
-				hint = "[enter] Create  [esc] Done editing  [ctrl+c] Cancel"
-			} else {
-				hint = "[j/k] Select  [h/l/space] Cycle  [shift+tab] Color  [enter] Edit/Create  [q/esc] Cancel"
-				if len(fleetPage.availableBackendTypes(m)) > 1 {
-					hint = "[j/k] Select  [h/l/space/tab] Cycle  [shift+tab] Color  [enter] Edit/Create  [q/esc] Cancel"
-				}
-			}
-			nameField = fleetPage.textInput.View()
-			branchField = fleetPage.branchInput.View()
-			deployField = fmt.Sprintf("[ %s ]", backendTypeLabel(backendType))
-		}
-
-		rowMarker := func(r int) string {
-			if !fleetPage.addInstanceRowEnabled(r) {
-				return "  "
-			}
-			if fleetPage.dlg.row == r {
-				return cursorStyle.Render("> ")
-			}
-			return "  "
-		}
-
-		colorPreview := instanceColorStyle(colorName).Render(colorName)
-		dialog := fmt.Sprintf(
-			"%s\n\n  %s %s\n%s%s %s\n%s%s %s\n%s%s [ %s ]\n%s%s %s\n\n%s",
-			dialogTitle.Render(title),
-			dialogLabel.Render("Fleet:  "),
-			fleetExpandedStyle.Render(fleetPage.dlg.fleet),
-			rowMarker(addInstanceRowName),
-			dialogLabel.Render("Name:   "),
-			nameField,
-			rowMarker(addInstanceRowBranch),
-			dialogLabel.Render("Branch: "),
-			branchField,
-			rowMarker(addInstanceRowColor),
-			dialogLabel.Render("Color:  "),
-			colorPreview,
-			rowMarker(addInstanceRowDeploy),
-			dialogLabel.Render("Deploy: "),
-			deployField,
-			dialogHint.Render(hint),
-		)
-		b.WriteString(dialogBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewAddFleet:
-		b.WriteString("\n")
-		dialog := fmt.Sprintf(
-			"%s\n\n%s %s\n\n%s",
-			dialogTitle.Render("New fleet"),
-			dialogLabel.Render("Repo:"),
-			fleetPage.textInput.View(),
-			dialogHint.Render(fleetPage.textDialogHint("Add")),
-		)
-		b.WriteString(dialogBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewAddFleetInspecting:
-		b.WriteString("\n")
-		dialog := fmt.Sprintf(
-			"%s\n\n%s %s\n\n%s %s\n\n%s",
-			dialogTitle.Render("New fleet"),
-			dialogLabel.Render("Repo: "),
-			fleetExpandedStyle.Render(fleetPage.addFleet.pendingRepoURL),
-			m.spinner.View(),
-			dialogLabel.Render("Inspecting for devcontainer.json..."),
-			dialogHint.Render("[q/esc] Cancel"),
-		)
-		b.WriteString(dialogBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewAddFleetNoDevcontainer:
-		b.WriteString("\n")
-		agentName, _, agentErr := devcontainersetup.FindAgent()
-		var setupLine string
-		if agentErr != nil {
-			setupLine = statusCreatingStyle.Render("no agent found") +
-				"  " + dimStyle.Render("install claude, codex, gemini, or copilot to use Setup")
-		} else {
-			setupLine = statusRunningStyle.Render(agentName) +
-				"  " + dimStyle.Render("will clone the repo and walk you through configuration")
-		}
-		dialog := fmt.Sprintf(
-			"%s\n\n%s\n\n%s %s\n\n%s\n\n%s\n\n%s",
-			warnBanner.Render("  No devcontainer.json found  "),
-			dialogLabel.Render(
-				"This repository has no .devcontainer/devcontainer.json.\n"+
-					"fleet-man needs one before it can provision instances.",
-			),
-			dialogLabel.Render("Repo:"),
-			fleetExpandedStyle.Render(fleetPage.addFleet.pendingRepoURL),
-			dialogLabel.Render("Setup agent: ")+setupLine,
-			dialogLabel.Render(
-				"[a] Abort — do not add the fleet (default)\n"+
-					"[s] Setup — add the fleet now and launch a guided agent to write the devcontainer",
-			),
-			dialogHint.Render("[a/q/enter/esc] Abort  [s] Setup"),
-		)
-		b.WriteString(warnBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewEditFleet:
-		b.WriteString("\n")
-		b.WriteString(dialogBox.Render(fleetPage.renderEditFleet(m)))
-		b.WriteString("\n")
-
-	case viewLayoutPreset:
-		b.WriteString("\n")
-		b.WriteString(dialogBox.Render(fleetPage.renderLayoutPresetDialog()))
-		b.WriteString("\n")
-
-	case viewTagInstance:
-		b.WriteString("\n")
-		dialog := fmt.Sprintf(
-			"%s\n\n%s %s\n%s %s\n\n%s",
-			dialogTitle.Render("Tag instance"),
-			dialogLabel.Render("Instance:"),
-			fleetExpandedStyle.Render(fleetPage.dlg.fleet+"/"+fleetPage.dlg.inst),
-			dialogLabel.Render("Tag:     "),
-			fleetPage.textInput.View(),
-			dialogHint.Render(fleetPage.textDialogHint("Save")),
-		)
-		b.WriteString(dialogBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewPortForward:
-		b.WriteString("\n")
-		pfKey := fleetPage.dlg.fleet + "/" + fleetPage.dlg.inst
-		fwds := m.portForwards.List(pfKey)
-
-		var fwdLines strings.Builder
-		if len(fwds) == 0 {
-			fwdLines.WriteString(dimStyle.Render("  No active forwards"))
-		} else {
-			for i, f := range fwds {
-				pfCursor := "  "
-				if i == fleetPage.pfCursor {
-					pfCursor = cursorStyle.Render("> ")
-				}
-				fwdLines.WriteString(fmt.Sprintf("%s%s\n",
-					pfCursor,
-					portForwardStyle.Render(f.Label()),
-				))
-			}
-		}
-
-		dialog := fmt.Sprintf(
-			"%s\n\n%s %s\n\n%s\n\n%s %s\n\n%s",
-			dialogTitle.Render("Port forwards"),
-			dialogLabel.Render("Instance:"),
-			fleetExpandedStyle.Render(fleetPage.dlg.fleet+"/"+fleetPage.dlg.inst),
-			strings.TrimRight(fwdLines.String(), "\n"),
-			dialogLabel.Render("Add:"),
-			fleetPage.textInput.View(),
-			dialogHint.Render(fleetPage.portForwardHint()),
-		)
-		b.WriteString(portForwardBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewCodespacesAuth:
-		b.WriteString("\n")
-		dialog := fmt.Sprintf(
-			"%s\n\n%s\n\n%s\n\n%s",
-			warnBanner.Render("  GitHub Auth Required  "),
-			dialogLabel.Render(
-				"GitHub CLI authentication with the \"codespace\" scope is\n"+
-					"required. Press Enter to log in and grant the required scope.",
-			),
-			dimStyle.Render("gh auth login -h github.com -s codespace"),
-			dialogHint.Render("[enter] Authenticate  [q/esc] Cancel"),
-		)
-		b.WriteString(warnBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewCodespacesMachine:
-		b.WriteString("\n")
-		dialog := fmt.Sprintf(
-			"%s\n\n%s\n\n%s",
-			warnBanner.Render("  Machine Type Required  "),
-			dialogLabel.Render(
-				"GitHub Codespaces requires a machine type but none is\n"+
-					"configured. Press Enter to open Settings and set one.",
-			),
-			dialogHint.Render("[enter] Open Settings  [q/esc] Cancel"),
-		)
-		b.WriteString(warnBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewCodespacesLimit:
-		b.WriteString("\n")
-		dialog := fmt.Sprintf(
-			"%s\n\n%s\n\n%s",
-			warnBanner.Render("  Codespace Limit Reached  "),
-			dialogLabel.Render(
-				"You have started the maximum number of Codespaces.\n"+
-					"Please stop some before creating a new instance,\n"+
-					"or use a different instance backend.",
-			),
-			dialogHint.Render("[enter/q/esc] Dismiss"),
-		)
-		b.WriteString(warnBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewCreateSession:
-		b.WriteString("\n")
-		hint := fleetPage.textDialogHint("Create (empty for auto-name)")
-		body := fmt.Sprintf(
-			"%s\n\n%s %s\n%s %s",
-			dialogTitle.Render("New session"),
-			dialogLabel.Render("Instance:"),
-			fleetExpandedStyle.Render(fleetPage.dlg.fleet+"/"+fleetPage.dlg.inst),
-			dialogLabel.Render("Name:    "),
-			fleetPage.textInput.View(),
-		)
-		// Template line, only when the fleet has layout presets to cycle. Shown
-		// as a bracketed cycle option ([ none ] / [ name ]) like the backend
-		// selector, with the chosen template highlighted.
-		if len(fleetPage.newSession.presets) > 0 {
-			var tmpl string
-			if idx := fleetPage.newSession.presetIdx; idx >= 0 && idx < len(fleetPage.newSession.presets) {
-				tmpl = selectedStyle.Render(fmt.Sprintf("[ %s ]", fleetPage.newSession.presets[idx].Name))
-			} else {
-				tmpl = dimStyle.Render("[ none ]")
-			}
-			body += fmt.Sprintf("\n%s %s", dialogLabel.Render("Template:"), tmpl)
-			hint = "[tab] Cycle template  " + hint
-		}
-		dialog := fmt.Sprintf("%s\n\n%s", body, dialogHint.Render(hint))
-		b.WriteString(dialogBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewCloneInstance:
-		b.WriteString("\n")
-		dialog := fmt.Sprintf(
-			"%s\n\n%s %s\n%s %s\n\n%s",
-			dialogTitle.Render("Clone instance"),
-			dialogLabel.Render("Source:     "),
-			fleetExpandedStyle.Render(fleetPage.dlg.fleet+"/"+fleetPage.dlg.inst),
-			dialogLabel.Render("Destination:"),
-			fleetPage.textInput.View(),
-			dialogHint.Render(fleetPage.textDialogHint("Clone")),
-		)
-		b.WriteString(dialogBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewRenameSession:
-		b.WriteString("\n")
-		dialog := fmt.Sprintf(
-			"%s\n\n%s %s\n%s %s\n%s %s\n\n%s",
-			dialogTitle.Render("Rename session"),
-			dialogLabel.Render("Instance:"),
-			fleetExpandedStyle.Render(fleetPage.dlg.fleet+"/"+fleetPage.dlg.inst),
-			dialogLabel.Render("Current: "),
-			sessionStyle.Render(fleetPage.dlg.session),
-			dialogLabel.Render("New:     "),
-			fleetPage.textInput.View(),
-			dialogHint.Render(fleetPage.textDialogHint("Rename")),
-		)
-		b.WriteString(dialogBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewConfirmDeleteSession:
-		b.WriteString("\n")
-		displayName := fleetPage.dlg.session
-		if fleetPage.dlg.groupID != "" {
-			displayName = fleetPage.dlg.groupID
-		}
-		dialog := fmt.Sprintf(
-			"%s\n\n%s\n\n%s",
-			dialogTitle.Render("Delete session"),
-			dialogLabel.Render(fmt.Sprintf("Remove session %s from %s/%s?",
-				displayName, fleetPage.dlg.fleet, fleetPage.dlg.inst)),
-			dialogHint.Render("[y] Yes  [n/q/esc] No"),
-		)
-		b.WriteString(dialogBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewConfirmBrowserSwitch:
-		b.WriteString("\n")
-		var dialog string
-		if fleetPage.browserDlg.switching {
-			dialog = fmt.Sprintf(
-				"%s\n\n%s %s",
-				dialogTitle.Render("Switch browser"),
-				m.spinner.View(),
-				dialogLabel.Render(fmt.Sprintf(
-					"Switching browser to %s/%s...",
-					fleetPage.dlg.fleet, fleetPage.dlg.inst,
-				)),
-			)
-		} else {
-			dialog = fmt.Sprintf(
-				"%s\n\n%s\n\n%s\n\n%s",
-				dialogTitle.Render("Switch browser"),
-				dialogLabel.Render(fmt.Sprintf(
-					"Another browser is running. Switch it to %s/%s?",
-					fleetPage.dlg.fleet, fleetPage.dlg.inst,
-				)),
-				dimStyle.Render("For two at once: Settings → Browser → Multiple Browsers (separate profiles per instance)."),
-				dialogHint.Render("[Y/enter] Yes (default)  [n/q/esc] No"),
-			)
-		}
-		b.WriteString(dialogBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewArmadaSelect:
-		b.WriteString("\n")
-		entries := m.armadaEntries()
-		var opts strings.Builder
-		for i, e := range entries {
-			suffix := ""
-			if e.url != "" {
-				suffix = "  " + armadaStatusValue(m, e.url)
-			}
-			if e.current {
-				suffix += "  " + dimStyle.Render("(current)")
-			}
-			if fleetPage.armadaSel.dialogRow == i {
-				opts.WriteString(cursorStyle.Render("> ") + selectedStyle.Render(e.displayName) + suffix)
-			} else {
-				opts.WriteString("  " + dialogLabel.Render(e.displayName) + suffix)
-			}
-			opts.WriteString("\n")
-		}
-		dialog := fmt.Sprintf(
-			"%s\n\n%s\n\n%s",
-			dialogTitle.Render("Switch armada"),
-			strings.TrimRight(opts.String(), "\n"),
-			dialogHint.Render("[j/k] Select  [enter/space] Switch  [q/esc] Cancel"),
-		)
-		b.WriteString(dialogBox.Render(dialog))
-		b.WriteString("\n")
-
-	case viewChooseBrowserLaunch:
-		b.WriteString("\n")
-		// Cursor-selectable option line: "> " marker + pink highlight on
-		// the focused row, matching the fleet list's selection style.
-		optLine := func(r int, label string) string {
-			if fleetPage.dlg.row == r {
-				return cursorStyle.Render("> ") + selectedStyle.Render(label)
-			}
-			return "  " + dialogLabel.Render(label)
-		}
-		dialog := fmt.Sprintf(
-			"%s\n\n%s\n\n%s\n%s\n\n%s\n\n%s",
-			dialogTitle.Render("Choose browser start page"),
-			dialogLabel.Render("This project configures both a Fleet Launch landing page and an initialUrl. Which should the browser open?"),
-			optLine(chooseBrowserRowFleetLaunch, "[f] Fleet Launch"),
-			optLine(chooseBrowserRowInitialURL, "[u] Initial URL"),
-			dimStyle.Render("Selection will be saved to fleet settings"),
-			dialogHint.Render("[j/k] Select  [enter/space] Choose  [f/u] Shortcut  [q/esc] Cancel"),
-		)
-		b.WriteString(dialogBox.Render(dialog))
-		b.WriteString("\n")
-	}
+	b.WriteString(fleetPage.viewActiveDialog(m))
 
 	if m.message != "" {
 		b.WriteString(messageStyle.Render(m.message))
@@ -2139,320 +1589,6 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 
 	return b.String()
 }
-
-func (fleetPage *fleetPage) textDialogHint(action string) string {
-	if fleetPage.dlg.fieldActive {
-		return fmt.Sprintf("[enter] %s  [esc] Done editing  [ctrl+c] Cancel", action)
-	}
-	return "[enter] Edit  [q/esc] Cancel"
-}
-
-// renderEditFleet builds the edit-fleet dialog body from the currently visible
-// rows. Instant-save means there is no explicit save row — toggles persist as
-// they're made and esc/q just closes.
-func (fleetPage *fleetPage) renderEditFleet(m *model) string {
-	marker := func(row int) string {
-		if fleetPage.dlg.row == row {
-			return cursorStyle.Render("> ")
-		}
-		return "  "
-	}
-	checkbox := func(on bool) string {
-		if on {
-			return "[x]"
-		}
-		return "[ ]"
-	}
-
-	var d strings.Builder
-	d.WriteString(dialogTitle.Render("Edit fleet"))
-	d.WriteString("\n\n")
-	d.WriteString("  " + dialogLabel.Render("Fleet:    ") + " " + fleetExpandedStyle.Render(fleetPage.dlg.fleet) + "\n")
-
-	for _, row := range fleetPage.visibleEditFleetRows() {
-		switch row {
-		case editFleetRowClaude:
-			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.claudeMount) + " " + dialogLabel.Render("Claude Code mount"))
-		case editFleetRowCodex:
-			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.codexMount) + " " + dialogLabel.Render("Codex mount"))
-		case editFleetRowGh:
-			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.ghMount) + " " + dialogLabel.Render("GitHub CLI mount"))
-		case editFleetRowAuggie:
-			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.auggieMount) + " " + dialogLabel.Render("Auggie mount"))
-		case editFleetRowHomeDir:
-			// Text input when focused, dim static text otherwise; append a
-			// spinner + status while an auto-detect runs.
-			var field string
-			if fleetPage.dlg.fieldActive && fleetPage.dlg.row == editFleetRowHomeDir {
-				field = fleetPage.homedirInput.View()
-			} else if v := fleetPage.homedirInput.Value(); v == "" {
-				field = dimStyle.Render("(unset — defaults to /home/vscode)")
-			} else {
-				field = v
-			}
-			if fleetPage.editFleet.detecting {
-				field += " " + m.spinner.View() + dimStyle.Render(" detecting home dir...")
-			}
-			d.WriteString(marker(row) + dialogLabel.Render("Home dir: ") + " " + field)
-		case editFleetRowPreferFleetLaunch:
-			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.preferFleetLaunch) + " " + dialogLabel.Render("Prefer Fleet Launch"))
-		case editFleetRowLayouts:
-			arrow := "▶ "
-			if fleetPage.editFleet.layoutsExpanded {
-				arrow = "▼ "
-			}
-			d.WriteString(marker(row) + dialogLabel.Render(fmt.Sprintf("%sLayouts (%d)", arrow, len(fleetPage.editFleet.layoutPresets))))
-		case editFleetRowCustomMounts:
-			arrow := "▶ "
-			if fleetPage.editFleet.customMountsExpanded {
-				arrow = "▼ "
-			}
-			d.WriteString(marker(row) + dialogLabel.Render(fmt.Sprintf("%sCustom mounts (%d)", arrow, len(fleetPage.editFleet.customMounts))))
-		case editFleetRowCaching:
-			arrow := "▶ "
-			if fleetPage.editFleet.cachingExpanded {
-				arrow = "▼ "
-			}
-			d.WriteString(marker(row) + dialogLabel.Render(fmt.Sprintf("%sCaching (%d)", arrow, fleetPage.enabledCacheCount())))
-		case editFleetRowBuildkit:
-			d.WriteString(marker(row) + fleetPage.renderCacheRow(m, cacheBuildkit, "Buildkit server"))
-		case editFleetRowDebCache:
-			d.WriteString(marker(row) + fleetPage.renderCacheRow(m, cacheDeb, "Deb package cache"))
-		case editFleetRowImageCache:
-			d.WriteString(marker(row) + fleetPage.renderCacheRow(m, cacheImage, "Docker image cache"))
-		default:
-			// Dynamic child rows, indented one level under their section
-			// header: layout presets or custom mounts.
-			if isLayoutPresetChildRow(row) {
-				d.WriteString(fleetPage.renderLayoutPresetRow(row, marker))
-			} else {
-				d.WriteString(fleetPage.renderCustomMountRow(row, marker))
-			}
-		}
-		d.WriteString("\n")
-	}
-
-	if footer := fleetPage.customMountFooter(); footer != "" {
-		d.WriteString("\n  " + footer + "\n")
-	}
-	d.WriteString("\n  " + dimStyle.Render("Mounts apply on supported backends only") + "\n\n")
-	d.WriteString(dialogHint.Render(fleetPage.editFleetHint()))
-	return d.String()
-}
-
-// renderCustomMountRow renders one dynamic custom-mount child row: an existing
-// mount (with a [remove] affordance) or the "+ Add mount" row (which becomes an
-// inline text input while the add sub-mode is active).
-func (fleetPage *fleetPage) renderCustomMountRow(row int, marker func(int) string) string {
-	idx := row - editFleetRowCustomMountBase
-	if idx == len(fleetPage.editFleet.customMounts) {
-		// The "+ Add mount" row.
-		if fleetPage.editFleet.addingMount {
-			return marker(row) + "  " + dialogLabel.Render("New mount: ") + fleetPage.customMountInput.View()
-		}
-		return marker(row) + "  " + dialogLabel.Render("+ Add mount")
-	}
-	return marker(row) + "  " + fleetPage.editFleet.customMounts[idx] + "   " + fleetPage.renderRemoveMountButton(row)
-}
-
-// renderLayoutPresetRow renders one dynamic layout-preset child row: an
-// existing preset (name + pane count, with a [remove] affordance) or the
-// "+ Layout Preset" row that starts the capture flow.
-func (fleetPage *fleetPage) renderLayoutPresetRow(row int, marker func(int) string) string {
-	idx := row - editFleetRowLayoutPresetBase
-	if idx == len(fleetPage.editFleet.layoutPresets) {
-		return marker(row) + "  " + dialogLabel.Render("+ Layout Preset")
-	}
-	p := fleetPage.editFleet.layoutPresets[idx]
-	label := fmt.Sprintf("%s (%s)", p.Name, paneCountLabel(p.PaneCount()))
-	return marker(row) + "  " + label + "   " + fleetPage.renderRemovePresetButton(row) + " " + fleetPage.renderMovePresetButton(row)
-}
-
-// renderRemovePresetButton renders the [remove] affordance next to an existing
-// layout preset. Like the Caching section's [Delete cache] button it is only
-// highlighted when the horizontal sub-cursor is on it (dialogPresetRemoveFocused
-// on this row) — selecting the row alone leaves it dim, so it never looks armed
-// before the user arrows onto it.
-func (fleetPage *fleetPage) renderRemovePresetButton(row int) string {
-	focused := fleetPage.dlg.row == row && fleetPage.editFleet.presetRemoveFocused
-	if focused && fleetPage.editFleet.presetRemoveConfirm {
-		return selectedStyle.Render("[remove?]")
-	}
-	if focused {
-		return selectedStyle.Render("[remove]")
-	}
-	return dimStyle.Render("[remove]")
-}
-
-// renderMovePresetButton renders the [move] affordance to the right of [remove].
-// It is dim unless the horizontal sub-cursor is on it; once the user presses
-// Enter to start dragging, it shows a highlighted "[moving]" so it is obvious
-// that j/k now reorder the preset rather than navigate the dialog.
-func (fleetPage *fleetPage) renderMovePresetButton(row int) string {
-	focused := fleetPage.dlg.row == row && fleetPage.editFleet.presetMoveFocused
-	if focused && fleetPage.editFleet.presetMoving {
-		return selectedStyle.Render("[moving]")
-	}
-	if focused {
-		return selectedStyle.Render("[move]")
-	}
-	return dimStyle.Render("[move]")
-}
-
-// renderRemoveMountButton renders the [remove] affordance next to an existing
-// custom mount. It mirrors the Caching section's [Delete cache] button: dim when
-// its row is not focused, highlighted when focused, and shown as a highlighted
-// "[remove?]" once the inline confirm is armed.
-func (fleetPage *fleetPage) renderRemoveMountButton(row int) string {
-	focused := fleetPage.dlg.row == row
-	if focused && fleetPage.editFleet.mountRemoveConfirm {
-		return selectedStyle.Render("[remove?]")
-	}
-	if focused {
-		return selectedStyle.Render("[remove]")
-	}
-	return dimStyle.Render("[remove]")
-}
-
-// customMountFooter returns a context line shown beneath the dialog rows while
-// the cursor is on a custom-mount row: the resolved host path for an existing
-// mount or the in-progress add, plus a hint or inline validation error.
-func (fleetPage *fleetPage) customMountFooter() string {
-	if !isCustomMountChildRow(fleetPage.dlg.row) {
-		return ""
-	}
-	idx := fleetPage.dlg.row - editFleetRowCustomMountBase
-	if idx < len(fleetPage.editFleet.customMounts) {
-		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dlg.fleet, fleetPage.editFleet.customMounts[idx]))
-	}
-	// The add row.
-	if !fleetPage.editFleet.addingMount {
-		return ""
-	}
-	if fleetPage.editFleet.customMountErr != "" {
-		return errorStyle.Render("✗ " + fleetPage.editFleet.customMountErr)
-	}
-	if v := strings.TrimSpace(fleetPage.customMountInput.Value()); v != "" {
-		return dimStyle.Render("host: " + customMountHostPreview(fleetPage.dlg.fleet, v))
-	}
-	return dimStyle.Render("enter an absolute container path, e.g. /opt/data")
-}
-
-// renderCacheRow renders one cache row (checkbox + label, indented under the
-// Caching header) plus its [Delete cache] button when the cache is enabled. The
-// three cache rows (buildkit/deb/image) share this rendering.
-func (fleetPage *fleetPage) renderCacheRow(m *model, k cacheKind, label string) string {
-	box := "[ ]"
-	if fleetPage.cacheEnabled(k) {
-		box = "[x]"
-	}
-	line := "  " + box + " " + dialogLabel.Render(label)
-	if fleetPage.cacheEnabled(k) {
-		line += "   " + fleetPage.renderDeleteCacheButton(m, k)
-	}
-	return line
-}
-
-// renderDeleteCacheButton renders the [Delete cache] button shown next to an
-// enabled cache. It reflects the in-flight / inline-confirm state for cache kind
-// k and is highlighted when the horizontal sub-cursor is on that row's button.
-func (fleetPage *fleetPage) renderDeleteCacheButton(m *model, k cacheKind) string {
-	var label string
-	switch {
-	case fleetPage.editFleet.deleting && fleetPage.editFleet.deletingKind == k:
-		label = m.spinner.View() + " Clearing…"
-	case fleetPage.cacheRowFocused(k) && fleetPage.editFleet.deleteCacheConfirm:
-		// Kept short so the row fits the 46-col dialog; the footer hint spells
-		// out enter=confirm / esc=cancel.
-		label = "Delete cache?"
-	default:
-		label = "Delete cache"
-	}
-	text := "[ " + label + " ]"
-	if fleetPage.cacheRowFocused(k) && fleetPage.editFleet.cacheButtonFocused {
-		return selectedStyle.Render(text)
-	}
-	return dimStyle.Render(text)
-}
-
-func (fleetPage *fleetPage) editFleetHint() string {
-	if fleetPage.dlg.fieldActive {
-		return "[enter] Save  [esc] Discard edit"
-	}
-	if fleetPage.editFleet.addingMount {
-		return "[enter] Add mount  [esc] Cancel"
-	}
-	if isCustomMountChildRow(fleetPage.dlg.row) {
-		if fleetPage.dlg.row == fleetPage.customMountAddRow() {
-			return "[enter] Add mount  [j/k] Select  [q/esc] Save & Close"
-		}
-		if fleetPage.editFleet.mountRemoveConfirm {
-			return "[enter] Confirm remove  [esc] Cancel"
-		}
-		return "[enter/d] Remove  [j/k] Select  [q/esc] Save & Close"
-	}
-	if isLayoutPresetChildRow(fleetPage.dlg.row) {
-		if fleetPage.dlg.row == fleetPage.layoutPresetAddRow() {
-			return "[enter] New preset  [j/k] Select  [q/esc] Save & Close"
-		}
-		if fleetPage.editFleet.presetMoving {
-			return "[j/k] Move  [enter/esc] Done"
-		}
-		if fleetPage.editFleet.presetMoveFocused {
-			return "[enter] Move  [h/←] Back  [esc] Close"
-		}
-		if fleetPage.editFleet.presetRemoveFocused {
-			if fleetPage.editFleet.presetRemoveConfirm {
-				return "[enter] Confirm remove  [esc] Cancel"
-			}
-			return "[enter] Remove  [l/→] Move  [h/←] Back  [esc] Close"
-		}
-		return "[enter] Edit  [l/→] Buttons  [j/k] Select  [q/esc] Save & Close"
-	}
-	switch fleetPage.dlg.row {
-	case editFleetRowCustomMounts:
-		if fleetPage.editFleet.customMountsExpanded {
-			return "[h/←] Collapse  [j/k] Select  [q/esc] Save & Close"
-		}
-		return "[l/→/space] Expand  [j/k] Select  [q/esc] Save & Close"
-	case editFleetRowLayouts:
-		if fleetPage.editFleet.layoutsExpanded {
-			return "[h/←] Collapse  [j/k] Select  [q/esc] Save & Close"
-		}
-		return "[l/→/space] Expand  [j/k] Select  [q/esc] Save & Close"
-	case editFleetRowCaching:
-		if fleetPage.editFleet.cachingExpanded {
-			return "[h/←] Collapse  [j/k] Select  [q/esc] Save & Close"
-		}
-		return "[l/→/space] Expand  [j/k] Select  [q/esc] Save & Close"
-	case editFleetRowBuildkit, editFleetRowDebCache, editFleetRowImageCache:
-		if fleetPage.editFleet.cacheButtonFocused {
-			if fleetPage.editFleet.deleteCacheConfirm {
-				return "[enter] Confirm delete  [esc] Cancel"
-			}
-			return "[enter] Delete cache  [h/←] Back  [esc] Close"
-		}
-		if k, ok := cacheKindForRow(fleetPage.dlg.row); ok && fleetPage.cacheEnabled(k) {
-			return "[space] Toggle  [l/→] Delete-cache button  [j/k] Select"
-		}
-		return "[space] Toggle  [j/k] Select  [q/esc] Save & Close"
-	case editFleetRowHomeDir:
-		return "[enter] Edit  [j/k] Select  [q/esc] Save & Close"
-	}
-	// Flat checkbox rows: Enter/space/h/l all toggle (instant-save).
-	return "[j/k] Select  [space/enter/h/l] Toggle  [q/esc] Save & Close"
-}
-
-func (fleetPage *fleetPage) portForwardHint() string {
-	if fleetPage.dlg.fieldActive {
-		return "[enter] Add  [esc] List  [ctrl+c] Close"
-	}
-	return "[j/k] Navigate  [d] Delete selected  [enter] Edit add field  [q/esc] Close"
-}
-
-// ===========================================
-// Session Management
-// ===========================================
 
 // openInstanceSession opens a split pane for the given instance, reusing
 // the last active session when available.
@@ -2589,22 +1725,61 @@ func (fleetPage *fleetPage) commitGroupCycle(m *model) tea.Cmd {
 // Backend Helpers
 // ===========================================
 
-// availableBackendTypes returns the subset of backend types whose
-// required CLI tool is found on the system.
-func (fleetPage *fleetPage) availableBackendTypes(m *model) []fleet.BackendType {
-	var out []fleet.BackendType
-	for _, backendType := range allBackendTypes {
-		bin := backendToolRequirements[backendType]
-		if bin == "" {
-			out = append(out, backendType)
-			continue
-		}
-		for _, t := range m.toolStatus {
-			if t.Binary == bin && t.Found {
-				out = append(out, backendType)
-				break
-			}
-		}
+// viewActiveDialog renders the active dialog overlay appended below the
+// fleet list. It returns "" when no dialog is open (mode == viewNormal).
+func (fleetPage *fleetPage) viewActiveDialog(m *model) string {
+	switch fleetPage.mode {
+	case viewConfirmDelete:
+		return fleetPage.renderConfirmDeleteDialog(m)
+	case viewConfirmRebuild:
+		return fleetPage.renderConfirmRebuildDialog(m)
+	case viewConfirmDeleteFleetWarn:
+		return fleetPage.renderConfirmDeleteFleetWarnDialog(m)
+	case viewAddInstance:
+		return fleetPage.renderAddInstanceDialog(m)
+	case viewAddFleet:
+		return fleetPage.renderAddFleetDialog(m)
+	case viewAddFleetInspecting:
+		return fleetPage.renderAddFleetInspectingDialog(m)
+	case viewAddFleetNoDevcontainer:
+		return fleetPage.renderAddFleetNoDevcontainerDialog(m)
+	case viewEditFleet:
+		return fleetPage.renderEditFleetDialog(m)
+	case viewLayoutPreset:
+		return fleetPage.renderLayoutPresetOverlay(m)
+	case viewTagInstance:
+		return fleetPage.renderTagInstanceDialog(m)
+	case viewPortForward:
+		return fleetPage.renderPortForwardDialog(m)
+	case viewCodespacesAuth:
+		return fleetPage.renderCodespacesAuthDialog(m)
+	case viewCodespacesMachine:
+		return fleetPage.renderCodespacesMachineDialog(m)
+	case viewCodespacesLimit:
+		return fleetPage.renderCodespacesLimitDialog(m)
+	case viewCreateSession:
+		return fleetPage.renderCreateSessionDialog(m)
+	case viewCloneInstance:
+		return fleetPage.renderCloneInstanceDialog(m)
+	case viewRenameSession:
+		return fleetPage.renderRenameSessionDialog(m)
+	case viewConfirmDeleteSession:
+		return fleetPage.renderConfirmDeleteSessionDialog(m)
+	case viewConfirmBrowserSwitch:
+		return fleetPage.renderConfirmBrowserSwitchDialog(m)
+	case viewArmadaSelect:
+		return fleetPage.renderArmadaSelectDialog(m)
+	case viewChooseBrowserLaunch:
+		return fleetPage.renderChooseBrowserLaunchDialog(m)
 	}
-	return out
+	return ""
+}
+
+func (fleetPage *fleetPage) renderLayoutPresetOverlay(m *model) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(dialogBox.Render(fleetPage.renderLayoutPresetDialog()))
+	b.WriteString("\n")
+
+	return b.String()
 }

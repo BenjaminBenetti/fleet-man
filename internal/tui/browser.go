@@ -368,3 +368,199 @@ func multipleBrowsersPerFleet(m *model) bool {
 	}
 	return m.config.BrowserSettings.MultipleBrowsersPerFleetEnabled()
 }
+
+// updateConfirmBrowserSwitch handles the prompt shown when the user asks
+// to open a browser for an instance but another browser is already
+// running against the same user-data-dir. Default action is "yes,
+// switch": Chrome's singleton lock means the existing process must be
+// killed before a fresh launch with this instance's proxy can succeed.
+//
+// Once the user confirms, the dialog stays open but its body swaps to a
+// "Switching..." spinner — the kill+relaunch cmd runs asynchronously and
+// the dialog is torn down when browserProxyMsg returns.
+func (fleetPage *fleetPage) updateConfirmBrowserSwitch(m *model, msg tea.Msg) tea.Cmd {
+	// While the kill+relaunch is in flight, swallow input so the user
+	// can't double-trigger the flow.
+	if fleetPage.browserDlg.switching {
+		return nil
+	}
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "n", "N", "esc", "q", "Q", "ctrl+c":
+			fleetPage.mode = viewNormal
+			m.message = "Cancelled"
+			return nil
+
+		// Anything else (y/Y/enter/space) confirms — default-yes
+		// matches the issue spec, so we treat unrecognised keys as
+		// "proceed" rather than swallowing them.
+		default:
+			fleetName := fleetPage.dlg.fleet
+			instanceName := fleetPage.dlg.inst
+
+			f, ok := m.st.Fleets[fleetName]
+			if !ok {
+				fleetPage.mode = viewNormal
+				m.message = "Fleet no longer exists"
+				return nil
+			}
+			instance, err := f.GetInstance(instanceName)
+			if err != nil {
+				fleetPage.mode = viewNormal
+				m.message = fmt.Sprintf("Instance no longer exists: %v", err)
+				return nil
+			}
+			if instance.Status != fleet.StatusRunning {
+				fleetPage.mode = viewNormal
+				m.message = "Instance must be running to open browser"
+				return nil
+			}
+
+			dataDir := browserDataDir(fleetName, instanceName, multipleBrowsersPerFleet(m))
+			instanceKey := fleetName + "/" + instanceName
+
+			// Switch the dialog into "in-flight" mode; the renderer
+			// will draw the spinner. The cmd does the kill + relaunch
+			// in the background and the resulting browserProxyMsg
+			// clears the flag and the mode.
+			fleetPage.browserDlg.switching = true
+			m.message = ""
+			return switchBrowserCmd(m.portForwards, instanceKey, dataDir, f.Settings.PreferFleetLaunchEnabled(), "")
+		}
+	}
+	return nil
+}
+
+// chooseBrowserRow identifies a selectable option in the
+// choose-browser-launch dialog.
+const (
+	chooseBrowserRowFleetLaunch = iota
+	chooseBrowserRowInitialURL
+	chooseBrowserRowCount
+)
+
+// updateChooseBrowserLaunch handles the dialog shown the first time the
+// browser is opened on a fleet whose workspace configures both an
+// initialUrl and a Fleet Launch landing page. Navigation matches the rest
+// of fleet — j/k or arrows move the cursor, enter/space chooses the
+// selected row — and the [f]/[u] shortcuts jump straight to a choice. The
+// answer is saved as the fleet's PreferFleetLaunch setting and the browser
+// then launches.
+func (fleetPage *fleetPage) updateChooseBrowserLaunch(m *model, msg tea.Msg) tea.Cmd {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return nil
+	}
+	switch keyMsg.String() {
+	case "esc", "q", "Q", "ctrl+c":
+		fleetPage.mode = viewNormal
+		m.message = "Cancelled"
+		return nil
+	case "up", "k":
+		fleetPage.dlg.row = (fleetPage.dlg.row - 1 + chooseBrowserRowCount) % chooseBrowserRowCount
+		return nil
+	case "down", "j", "tab":
+		fleetPage.dlg.row = (fleetPage.dlg.row + 1) % chooseBrowserRowCount
+		return nil
+	case "enter", " ":
+		return fleetPage.chooseBrowserLaunch(m, fleetPage.dlg.row == chooseBrowserRowFleetLaunch)
+	case "f", "F":
+		return fleetPage.chooseBrowserLaunch(m, true)
+	case "u", "U":
+		return fleetPage.chooseBrowserLaunch(m, false)
+	}
+	return nil
+}
+
+// chooseBrowserLaunch persists the browser-start preference for the fleet
+// and proceeds with the launch using it.
+func (fleetPage *fleetPage) chooseBrowserLaunch(m *model, preferFleetLaunch bool) tea.Cmd {
+	fleetName := fleetPage.dlg.fleet
+	f, ok := m.st.Fleets[fleetName]
+	if !ok {
+		fleetPage.mode = viewNormal
+		m.message = "Fleet no longer exists"
+		return nil
+	}
+
+	prefer := preferFleetLaunch
+	f.Settings.PreferFleetLaunch = &prefer
+	_ = setFleetSettingsRemote(fleetName, f.Settings)
+
+	instance, err := f.GetInstance(fleetPage.dlg.inst)
+	if err != nil || instance.Status != fleet.StatusRunning {
+		fleetPage.mode = viewNormal
+		m.message = "Instance must be running to open browser"
+		return nil
+	}
+
+	fleetPage.mode = viewNormal
+	return fleetPage.startBrowser(m, instance, fleetName)
+}
+
+// browserDialogState holds the switch-browser dialog's in-flight flag: true
+// while the dialog has dispatched a kill+relaunch but the browserProxyMsg has
+// not yet returned, so the body can swap to a spinner during the SIGTERM
+// grace period.
+type browserDialogState struct {
+	switching bool
+}
+
+func (fleetPage *fleetPage) renderConfirmBrowserSwitchDialog(m *model) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	var dialog string
+	if fleetPage.browserDlg.switching {
+		dialog = fmt.Sprintf(
+			"%s\n\n%s %s",
+			dialogTitle.Render("Switch browser"),
+			m.spinner.View(),
+			dialogLabel.Render(fmt.Sprintf(
+				"Switching browser to %s/%s...",
+				fleetPage.dlg.fleet, fleetPage.dlg.inst,
+			)),
+		)
+	} else {
+		dialog = fmt.Sprintf(
+			"%s\n\n%s\n\n%s\n\n%s",
+			dialogTitle.Render("Switch browser"),
+			dialogLabel.Render(fmt.Sprintf(
+				"Another browser is running. Switch it to %s/%s?",
+				fleetPage.dlg.fleet, fleetPage.dlg.inst,
+			)),
+			dimStyle.Render("For two at once: Settings → Browser → Multiple Browsers (separate profiles per instance)."),
+			dialogHint.Render("[Y/enter] Yes (default)  [n/q/esc] No"),
+		)
+	}
+	b.WriteString(dialogBox.Render(dialog))
+	b.WriteString("\n")
+
+	return b.String()
+}
+
+func (fleetPage *fleetPage) renderChooseBrowserLaunchDialog(m *model) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	// Cursor-selectable option line: "> " marker + pink highlight on
+	// the focused row, matching the fleet list's selection style.
+	optLine := func(r int, label string) string {
+		if fleetPage.dlg.row == r {
+			return cursorStyle.Render("> ") + selectedStyle.Render(label)
+		}
+		return "  " + dialogLabel.Render(label)
+	}
+	dialog := fmt.Sprintf(
+		"%s\n\n%s\n\n%s\n%s\n\n%s\n\n%s",
+		dialogTitle.Render("Choose browser start page"),
+		dialogLabel.Render("This project configures both a Fleet Launch landing page and an initialUrl. Which should the browser open?"),
+		optLine(chooseBrowserRowFleetLaunch, "[f] Fleet Launch"),
+		optLine(chooseBrowserRowInitialURL, "[u] Initial URL"),
+		dimStyle.Render("Selection will be saved to fleet settings"),
+		dialogHint.Render("[j/k] Select  [enter/space] Choose  [f/u] Shortcut  [q/esc] Cancel"),
+	)
+	b.WriteString(dialogBox.Render(dialog))
+	b.WriteString("\n")
+	return b.String()
+}
