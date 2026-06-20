@@ -134,25 +134,37 @@ type scheduledFire struct {
 // except for the lastFired bookkeeping, so it is unit-tested directly.
 func dueSchedules(fleets map[string]*fleet.Fleet, now time.Time, lastFired map[string]time.Time) []scheduledFire {
 	minute := now.Truncate(time.Minute)
+	current := make(map[string]struct{})
 	var out []scheduledFire
 	for name, f := range fleets {
 		if f == nil {
 			continue
 		}
 		for _, t := range f.Settings.Triggers {
-			if t.Type != fleet.TriggerSchedule || t.Cron == "" {
+			if t.Type != fleet.TriggerSchedule {
+				continue
+			}
+			key := name + "\x00" + t.Name
+			current[key] = struct{}{}
+			if t.Cron == "" {
 				continue
 			}
 			sched, err := fleet.ParseCron(t.Cron)
 			if err != nil || !sched.Matches(now) {
 				continue
 			}
-			key := name + "\x00" + t.Name
 			if last, ok := lastFired[key]; ok && !last.Before(minute) {
 				continue // already fired this minute
 			}
 			lastFired[key] = minute
 			out = append(out, scheduledFire{fleet: name, trigger: t})
+		}
+	}
+	// Drop lastFired entries for triggers that no longer exist (deleted, renamed,
+	// or changed type) so the map can't grow without bound on a long-running daemon.
+	for k := range lastFired {
+		if _, ok := current[k]; !ok {
+			delete(lastFired, k)
 		}
 	}
 	return out

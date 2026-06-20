@@ -45,6 +45,28 @@ func TestDueSchedulesFiresOncePerMinute(t *testing.T) {
 	}
 }
 
+func TestDueSchedulesPrunesStaleLastFired(t *testing.T) {
+	now := time.Date(2026, 6, 22, 9, 0, 30, 0, time.UTC) // Monday 09:00
+	fleets := scheduleFleet([]fleet.Trigger{
+		{Name: "match", Type: fleet.TriggerSchedule, AgentNames: []string{"a"}, Cron: "0 9 * * 1"},
+	}, []fleet.Agent{{Name: "a"}})
+
+	lastFired := map[string]time.Time{}
+	dueSchedules(fleets, now, lastFired)
+	if _, ok := lastFired["alpha\x00match"]; !ok {
+		t.Fatal("expected lastFired entry for the fired trigger")
+	}
+	// A stale entry (trigger that no longer exists) plus the live one.
+	lastFired["alpha\x00deleted"] = now
+	dueSchedules(fleets, now.Add(time.Minute), lastFired)
+	if _, ok := lastFired["alpha\x00deleted"]; ok {
+		t.Fatal("stale lastFired entry should have been pruned")
+	}
+	if _, ok := lastFired["alpha\x00match"]; !ok {
+		t.Fatal("live trigger's lastFired entry must be kept")
+	}
+}
+
 func TestAgentsForTrigger(t *testing.T) {
 	f := &fleet.Fleet{Settings: fleet.FleetSettings{Agents: []fleet.Agent{{Name: "a"}, {Name: "b"}}}}
 	got := agentsForTrigger(f, fleet.Trigger{AgentNames: []string{"b", "ghost", "a"}})
