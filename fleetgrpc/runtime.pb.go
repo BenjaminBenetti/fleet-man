@@ -256,14 +256,18 @@ func (PrSignal) EnumDescriptor() ([]byte, []int) {
 }
 
 // PrReviewState is the aggregate review decision across an instance's open PRs,
-// driving the "[Changes Requested | Approved]" element. UNSPECIFIED means no
-// decision has landed yet, in which case the TUI hides that element.
+// driving the review element of the auto tag. For an open PR it is always one of
+// the three concrete states: APPROVED ("Accepted", green) when every PR is
+// approved, CHANGES_REQUESTED ("Changes Requested", red) when any PR needs work,
+// UNDER_REVIEW ("Under Review", yellow) otherwise. UNSPECIFIED is the zero value
+// (no PRs) and renders nothing.
 type PrReviewState int32
 
 const (
 	PrReviewState_PR_REVIEW_STATE_UNSPECIFIED       PrReviewState = 0
 	PrReviewState_PR_REVIEW_STATE_APPROVED          PrReviewState = 1
 	PrReviewState_PR_REVIEW_STATE_CHANGES_REQUESTED PrReviewState = 2
+	PrReviewState_PR_REVIEW_STATE_UNDER_REVIEW      PrReviewState = 3
 )
 
 // Enum value maps for PrReviewState.
@@ -272,11 +276,13 @@ var (
 		0: "PR_REVIEW_STATE_UNSPECIFIED",
 		1: "PR_REVIEW_STATE_APPROVED",
 		2: "PR_REVIEW_STATE_CHANGES_REQUESTED",
+		3: "PR_REVIEW_STATE_UNDER_REVIEW",
 	}
 	PrReviewState_value = map[string]int32{
 		"PR_REVIEW_STATE_UNSPECIFIED":       0,
 		"PR_REVIEW_STATE_APPROVED":          1,
 		"PR_REVIEW_STATE_CHANGES_REQUESTED": 2,
+		"PR_REVIEW_STATE_UNDER_REVIEW":      3,
 	}
 )
 
@@ -874,11 +880,12 @@ const file_runtime_proto_rawDesc = "" +
 	"\x15PR_SIGNAL_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fPR_SIGNAL_GREEN\x10\x01\x12\x14\n" +
 	"\x10PR_SIGNAL_YELLOW\x10\x02\x12\x11\n" +
-	"\rPR_SIGNAL_RED\x10\x03*u\n" +
+	"\rPR_SIGNAL_RED\x10\x03*\x97\x01\n" +
 	"\rPrReviewState\x12\x1f\n" +
 	"\x1bPR_REVIEW_STATE_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18PR_REVIEW_STATE_APPROVED\x10\x01\x12%\n" +
-	"!PR_REVIEW_STATE_CHANGES_REQUESTED\x10\x02B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
+	"!PR_REVIEW_STATE_CHANGES_REQUESTED\x10\x02\x12 \n" +
+	"\x1cPR_REVIEW_STATE_UNDER_REVIEW\x10\x03B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
 
 var (
 	file_runtime_proto_rawDescOnce sync.Once

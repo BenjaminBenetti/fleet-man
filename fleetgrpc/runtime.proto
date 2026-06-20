@@ -93,12 +93,16 @@ enum PrSignal {
 }
 
 // PrReviewState is the aggregate review decision across an instance's open PRs,
-// driving the "[Changes Requested | Approved]" element. UNSPECIFIED means no
-// decision has landed yet, in which case the TUI hides that element.
+// driving the review element of the auto tag. For an open PR it is always one of
+// the three concrete states: APPROVED ("Accepted", green) when every PR is
+// approved, CHANGES_REQUESTED ("Changes Requested", red) when any PR needs work,
+// UNDER_REVIEW ("Under Review", yellow) otherwise. UNSPECIFIED is the zero value
+// (no PRs) and renders nothing.
 enum PrReviewState {
   PR_REVIEW_STATE_UNSPECIFIED = 0;
   PR_REVIEW_STATE_APPROVED = 1;
   PR_REVIEW_STATE_CHANGES_REQUESTED = 2;
+  PR_REVIEW_STATE_UNDER_REVIEW = 3;
 }
 
 // PrRef identifies one open PR so the TUI can navigate to it (open in a

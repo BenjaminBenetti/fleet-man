@@ -53,12 +53,14 @@ func (m *model) instanceAutoTag(fleetName, instance string, selected bool) strin
 	}
 	segments = append(segments, segment{label, prSignalStyle(ps.GetPrSignal())})
 
-	// Review indicator: only when a decision has landed.
+	// Review indicator: one of the three concrete states for an open PR.
 	switch ps.GetReview() {
 	case fleetgrpc.PrReviewState_PR_REVIEW_STATE_CHANGES_REQUESTED:
 		segments = append(segments, segment{"Changes Requested", prRedStyle})
 	case fleetgrpc.PrReviewState_PR_REVIEW_STATE_APPROVED:
-		segments = append(segments, segment{"Approved", prGreenStyle})
+		segments = append(segments, segment{"Accepted", prGreenStyle})
+	case fleetgrpc.PrReviewState_PR_REVIEW_STATE_UNDER_REVIEW:
+		segments = append(segments, segment{"Under Review", prYellowStyle})
 	}
 
 	// Checks indicator: only when the PRs have any checks.

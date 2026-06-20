@@ -59,7 +59,7 @@ func TestInstanceAutoTag_Format(t *testing.T) {
 	}
 	m := autoTagModel(newFleetPage(), inst, true, ps)
 	got := m.instanceAutoTag("alpha", "agent-1", false)
-	for _, want := range []string{"PR", "Approved", "Checks 3/3"} {
+	for _, want := range []string{"PR", "Accepted", "Checks 3/3"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("auto tag %q missing %q", got, want)
 		}
@@ -86,8 +86,8 @@ func TestInstanceAutoTag_MultiplePRsAndChangesRequested(t *testing.T) {
 			t.Errorf("auto tag %q missing %q", got, want)
 		}
 	}
-	if strings.Contains(got, "Approved") {
-		t.Errorf("changes-requested tag should not contain Approved: %q", got)
+	if strings.Contains(got, "Accepted") || strings.Contains(got, "Under Review") {
+		t.Errorf("changes-requested tag should not contain Accepted/Under Review: %q", got)
 	}
 }
 
@@ -105,7 +105,7 @@ func TestInstanceAutoTag_HidesReviewAndChecksWhenAbsent(t *testing.T) {
 	if !strings.Contains(got, "PR") {
 		t.Errorf("auto tag %q missing PR indicator", got)
 	}
-	if strings.Contains(got, "Approved") || strings.Contains(got, "Changes Requested") {
+	if strings.Contains(got, "Accepted") || strings.Contains(got, "Changes Requested") || strings.Contains(got, "Under Review") {
 		t.Errorf("review element should be hidden: %q", got)
 	}
 	if strings.Contains(got, "Checks") {
@@ -219,7 +219,7 @@ func TestViewFleetListRendersAutoTag(t *testing.T) {
 	fp.buildRows(m)
 
 	view := fp.viewFleetList(m)
-	for _, want := range []string{"PRx2", "Approved", "Checks 5/8"} {
+	for _, want := range []string{"PRx2", "Accepted", "Checks 5/8"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}

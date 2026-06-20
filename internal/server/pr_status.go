@@ -136,7 +136,8 @@ func aggregatePRStatus(prs []ghPR) *fleetgrpc.PrStatus {
 
 	var passed, total int
 	anyFail, anyPending := false, false
-	anyChangesRequested, anyApproved := false, false
+	anyChangesRequested := false
+	allApproved := true // every PR carries an APPROVED decision
 	allClean := true
 
 	refs := make([]*fleetgrpc.PrRef, 0, len(prs))
@@ -160,8 +161,12 @@ func aggregatePRStatus(prs []ghPR) *fleetgrpc.PrStatus {
 		switch strings.ToUpper(pr.ReviewDecision) {
 		case "CHANGES_REQUESTED":
 			anyChangesRequested = true
+			allApproved = false
 		case "APPROVED":
-			anyApproved = true
+			// counts toward allApproved
+		default:
+			// REVIEW_REQUIRED, "", or anything else => not (yet) approved.
+			allApproved = false
 		}
 		if strings.ToUpper(pr.MergeStateStatus) != "CLEAN" {
 			allClean = false
@@ -179,12 +184,14 @@ func aggregatePRStatus(prs []ghPR) *fleetgrpc.PrStatus {
 		prSignal = fleetgrpc.PrSignal_PR_SIGNAL_GREEN
 	}
 
-	// Review element: changes-requested wins over approved; neither => hidden.
-	review := fleetgrpc.PrReviewState_PR_REVIEW_STATE_UNSPECIFIED
+	// Review element: changes-requested (red) wins; else "Accepted" (green) only
+	// when every PR is approved; otherwise the work is still under review
+	// (yellow). An open PR therefore always shows one of the three.
+	review := fleetgrpc.PrReviewState_PR_REVIEW_STATE_UNDER_REVIEW
 	switch {
 	case anyChangesRequested:
 		review = fleetgrpc.PrReviewState_PR_REVIEW_STATE_CHANGES_REQUESTED
-	case anyApproved:
+	case allApproved:
 		review = fleetgrpc.PrReviewState_PR_REVIEW_STATE_APPROVED
 	}
 
