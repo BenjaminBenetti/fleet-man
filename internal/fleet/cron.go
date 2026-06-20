@@ -63,7 +63,9 @@ func ParseCron(spec string) (CronSchedule, error) {
 	if err != nil {
 		return CronSchedule{}, fmt.Errorf("month field: %w", err)
 	}
-	dow, err := parseCronField(fields[4], 0, 6)
+	// Day-of-week accepts 0-7 (both 0 and 7 are Sunday); parseCronField folds 7
+	// into 0 after expansion so a range like 5-7 (Fri-Sun) parses correctly.
+	dow, err := parseCronField(fields[4], 0, 7)
 	if err != nil {
 		return CronSchedule{}, fmt.Errorf("day-of-week field: %w", err)
 	}
@@ -111,6 +113,15 @@ func parseCronField(field string, min, max int) (cronField, error) {
 	}
 	if len(vals) == 0 {
 		return cronField{}, fmt.Errorf("no values in field %q", field)
+	}
+	// Day-of-week (the only field parsed with max 7) treats 7 as Sunday: fold it
+	// into 0 AFTER range/list expansion, so "5-7" yields {5,6,0} rather than
+	// being rejected as a descending "5-0" range.
+	if max == 7 {
+		if vals[7] {
+			vals[0] = true
+		}
+		delete(vals, 7)
 	}
 	return cronField{vals: vals}, nil
 }
@@ -170,16 +181,14 @@ func parseCronPart(part string, min, max int, vals map[int]bool) error {
 	return nil
 }
 
-// cronAtoi parses a single field value, mapping day-of-week 7 to 0 (Sunday) and
-// enforcing the field's [min, max] bounds.
+// cronAtoi parses a single field value and enforces the field's [min, max]
+// bounds. Day-of-week's max is 7 (Sunday written as either 0 or 7); the 7→0
+// fold happens in parseCronField after expansion, not here, so ranges ending in
+// 7 keep their ascending order.
 func cronAtoi(s string, min, max int) (int, error) {
 	v, err := strconv.Atoi(strings.TrimSpace(s))
 	if err != nil {
 		return 0, fmt.Errorf("invalid number %q", s)
-	}
-	// Day-of-week Sunday may be written as 7; normalize to 0.
-	if min == 0 && max == 6 && v == 7 {
-		v = 0
 	}
 	if v < min || v > max {
 		return 0, fmt.Errorf("value %d out of range [%d-%d]", v, min, max)

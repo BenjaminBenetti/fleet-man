@@ -35,7 +35,10 @@ func TestParseCronValid(t *testing.T) {
 		"0 9-17 * * 1-5",
 		"0,30 * * * *",
 		"5 4 1 1 *",
-		"0 0 * * 7", // Sunday as 7
+		"0 0 * * 7",   // Sunday as 7
+		"0 0 * * 5-7", // Fri-Sun range ending in 7
+		"0 0 * * 6-7", // Sat-Sun
+		"0 0 * * 0-7", // every day
 		"0-59/10 * * * *",
 	}
 	for _, c := range cases {
@@ -59,7 +62,14 @@ func TestCronMatches(t *testing.T) {
 	}
 
 	sat := time.Date(2026, 6, 20, 9, 30, 0, 0, time.UTC) // Saturday 09:30
+	sun := time.Date(2026, 6, 21, 0, 0, 0, 0, time.UTC)  // Sunday 00:00
 	mon := time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC)  // Monday 09:00
+
+	// Day-of-week range ending in 7 (Sunday) must match Fri/Sat/Sun, not be
+	// rejected as a descending range.
+	mustMatch("30 9 * * 5-7", sat, true) // Saturday is in 5-7 (Fri-Sun)
+	mustMatch("0 0 * * 5-7", sun, true)  // Sunday (7≡0) is in 5-7
+	mustMatch("0 9 * * 5-7", mon, false) // Monday is not
 
 	mustMatch("* * * * *", sat, true)
 	mustMatch("30 9 * * *", sat, true)
