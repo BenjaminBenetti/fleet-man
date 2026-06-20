@@ -34,6 +34,10 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 		}
 		f := m.st.Fleets[name]
 		fleetPage.rows = append(fleetPage.rows, row{kind: rowFleetHeader, fleetName: name})
+		if !fleetPage.collapsed[name] && fleetPage.automationMode[name] {
+			fleetPage.appendAutomationRows(name, f)
+			continue
+		}
 		if !fleetPage.collapsed[name] {
 			for _, instance := range f.Instances {
 				fleetPage.rows = append(fleetPage.rows, row{kind: rowInstance, fleetName: name, instance: instance})
@@ -159,6 +163,48 @@ func (fleetPage *fleetPage) appendSavedGroupRows(fleetName string, instance *fle
 			groupSize:   savedGroupPaneCount(group),
 		})
 	}
+}
+
+// appendAutomationRows emits a fleet's automation view: a collapsible triggers
+// group and a collapsible agents group, each with its items and a trailing
+// "+ add" action row. Mirrors the instance/session row structure so navigation,
+// cursor nudging, and rendering reuse the same machinery.
+func (fleetPage *fleetPage) appendAutomationRows(name string, f *fleet.Fleet) {
+	fleetPage.rows = append(fleetPage.rows, row{kind: rowAutomationTriggers, fleetName: name})
+	if !fleetPage.triggersCollapsed(name) {
+		for i := range f.Settings.Triggers {
+			fleetPage.rows = append(fleetPage.rows, row{kind: rowTrigger, fleetName: name, autoIdx: i})
+		}
+		fleetPage.rows = append(fleetPage.rows, row{kind: rowNewTrigger, fleetName: name})
+	}
+	fleetPage.rows = append(fleetPage.rows, row{kind: rowAutomationAgents, fleetName: name})
+	if !fleetPage.agentsCollapsed(name) {
+		for i := range f.Settings.Agents {
+			fleetPage.rows = append(fleetPage.rows, row{kind: rowAgent, fleetName: name, autoIdx: i})
+		}
+		fleetPage.rows = append(fleetPage.rows, row{kind: rowNewAgent, fleetName: name})
+	}
+}
+
+func (fleetPage *fleetPage) triggersCollapsed(fleet string) bool {
+	return fleetPage.autoCollapsed["trig:"+fleet]
+}
+
+func (fleetPage *fleetPage) agentsCollapsed(fleet string) bool {
+	return fleetPage.autoCollapsed["agent:"+fleet]
+}
+
+// toggleAutomationMode flips the named fleet between its instance view and its
+// automation view, parking the cursor on the fleet header so the toggle target
+// stays in sight.
+func (fleetPage *fleetPage) toggleAutomationMode(m *model, name string) {
+	if name == "" {
+		return
+	}
+	fleetPage.automationMode[name] = !fleetPage.automationMode[name]
+	fleetPage.tagSelected = false
+	fleetPage.buildRows(m)
+	fleetPage.cursorToFleetHeader(name)
 }
 
 func (fleetPage *fleetPage) savedGroupsForInstance(instanceName string) []savedGroup {

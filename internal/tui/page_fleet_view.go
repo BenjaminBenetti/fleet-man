@@ -165,11 +165,19 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				style = fleetCollapsedStyle
 			}
 
-			count := 0
-			if f, ok := m.st.Fleets[r.fleetName]; ok {
-				count = len(f.Instances)
+			// The fleet header carries a mode-toggle "button" (issue #188): the
+			// instance view shows the instance count plus an [automations] switch;
+			// the automation view shows an [instances] switch. 'm' toggles it.
+			var suffix string
+			if fleetPage.automationMode[r.fleetName] {
+				suffix = dimStyle.Render(" [instances]")
+			} else {
+				count := 0
+				if f, ok := m.st.Fleets[r.fleetName]; ok {
+					count = len(f.Instances)
+				}
+				suffix = dimStyle.Render(fmt.Sprintf(" (%d) [automations]", count))
 			}
-			suffix := dimStyle.Render(fmt.Sprintf(" (%d)", count))
 
 			if isSelected {
 				listContent.WriteString(fmt.Sprintf("%s%s%s",
@@ -354,6 +362,13 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			}
 			listContent.WriteString(line)
 			listContent.WriteString("\n")
+		} else if isAutomationRow(r.kind) {
+			line := fleetPage.renderAutomationRow(m, r, cursor, isSelected)
+			if maxW := m.width - 4; maxW > 0 && lipgloss.Width(line) > maxW {
+				line = ansi.Truncate(line, maxW-1, "…")
+			}
+			listContent.WriteString(line)
+			listContent.WriteString("\n")
 		} else {
 			label := "settings"
 			if r.kind == rowLeaveFocus {
@@ -460,6 +475,10 @@ func (fleetPage *fleetPage) viewActiveDialog(m *model) string {
 		return fleetPage.renderCodespacesLimitDialog(m)
 	case viewCreateSession:
 		return fleetPage.renderCreateSessionDialog(m)
+	case viewAutomationTrigger:
+		return fleetPage.renderAutomationTriggerDialog(m)
+	case viewAutomationAgent:
+		return fleetPage.renderAutomationAgentDialog(m)
 	case viewCloneInstance:
 		return fleetPage.renderCloneInstanceDialog(m)
 	case viewRenameSession:

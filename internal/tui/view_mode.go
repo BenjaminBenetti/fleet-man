@@ -33,4 +33,6 @@ const (
 	viewChooseBrowserLaunch
 	viewArmadaSelect
 	viewChoosePR
+	viewAutomationTrigger
+	viewAutomationAgent
 )
