@@ -53,6 +53,17 @@ var (
 	statusCreatingStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("214"))
 
+	// Auto-tag (PR status) signal colours, reusing the running/creating/error
+	// palette: green = good, yellow = in-progress/neutral, red = needs attention.
+	prGreenStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("42"))
+
+	prYellowStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214"))
+
+	prRedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196"))
+
 	// Agent tool indicator
 	agentWorkingStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("42")).

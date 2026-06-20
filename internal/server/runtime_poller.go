@@ -86,6 +86,7 @@ func startRuntimePollers(ctx context.Context, h *hub) {
 	go liveStatusPoller(ctx, h)
 	go statsActivityPoller(ctx, h)
 	go sessionsPoller(ctx, h)
+	go prStatusPoller(ctx, h)
 }
 
 // runtimeUpdate is one instance's field mutation, applied on the hub loop.
