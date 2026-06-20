@@ -80,6 +80,10 @@ func Serve(ctx context.Context) error {
 	// runtime subscriber, so they stay idle until a TUI connects with
 	// subscribe_runtime — no backend traffic for plain `fleet ls`.
 	startRuntimePollers(hubCtx, svc.hub)
+	// Automation scheduler (issue #188): fires Schedule triggers and reaps idle
+	// agents. Runs unconditionally — cron triggers must fire even when no TUI is
+	// connected — and stops on shutdown via hubCtx.
+	go svc.runScheduler(hubCtx)
 
 	// Control-socket listeners: the server owns every running instance's control
 	// socket and turns received browser.open envelopes (from an in-container
