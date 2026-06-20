@@ -200,10 +200,18 @@ func (s *service) serviceWatched(ctx context.Context, sched *scheduler, st *stat
 			launchAutomationCommand(ctx, s, w, inst)
 			w.launched = true
 			w.lastActive = now
+			// Non-tmux agents are fire-and-forget: once launched there is no idle
+			// state to watch, so stop tracking them (otherwise the watch set would
+			// grow without bound).
+			if !w.tmux {
+				delete(sched.watched, k)
+			}
 			continue
 		}
 		if !w.tmux {
-			continue // non-tmux agents are fire-and-forget; never idle-reaped
+			// A non-tmux agent is dropped at launch above; never idle-reap one.
+			delete(sched.watched, k)
+			continue
 		}
 
 		activity, ok := automationActivity(s, w, inst, now)

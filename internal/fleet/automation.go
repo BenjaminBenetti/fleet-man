@@ -281,15 +281,28 @@ func NormalizeTriggers(in []Trigger, agents []Agent) ([]Trigger, error) {
 }
 
 // SubstituteAgentCommand expands the ${PROMPT} and ${SYS_PROMPT} placeholders in
-// an agent command. ${SYS_PROMPT} is expanded first and ${PROMPT} second; a
-// ${PROMPT} appearing inside the system prompt text is therefore NOT re-expanded
-// (the system prompt is substituted before the prompt pass runs, but the prompt
-// pass only scans the original command's ${PROMPT} occurrences... ) — to keep
-// that guarantee we expand in a single pass via a replacer.
+// an agent command, replacing each with a SINGLE-QUOTE-ESCAPED value so the
+// substitution cannot break out of the surrounding quotes. The placeholders are
+// expected to be wrapped in single quotes, as the default command is:
+//
+//	claude --system-prompt '${SYS_PROMPT}'
+//
+// Any single quote in a value is rewritten to '\” so a prompt containing a quote
+// (or, once webhook delivery lands, arbitrary external event text) stays a
+// literal argument instead of injecting shell syntax. Both placeholders expand
+// in a single pass, so a ${PROMPT} appearing inside the system-prompt text is not
+// re-expanded.
 func SubstituteAgentCommand(command, prompt, systemPrompt string) string {
 	r := strings.NewReplacer(
-		"${SYS_PROMPT}", systemPrompt,
-		"${PROMPT}", prompt,
+		"${SYS_PROMPT}", shellSingleQuoteEscape(systemPrompt),
+		"${PROMPT}", shellSingleQuoteEscape(prompt),
 	)
 	return r.Replace(command)
+}
+
+// shellSingleQuoteEscape rewrites single quotes so a value is safe to embed
+// inside a single-quoted shell string: each ' becomes '\” (close the quote,
+// emit an escaped quote, reopen the quote).
+func shellSingleQuoteEscape(s string) string {
+	return strings.ReplaceAll(s, "'", `'\''`)
 }

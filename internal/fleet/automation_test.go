@@ -138,4 +138,12 @@ func TestSubstituteAgentCommand(t *testing.T) {
 	if got != want {
 		t.Errorf("re-expansion guard: got %q, want %q", got, want)
 	}
+
+	// A single quote in a value must be escaped so it can't break out of the
+	// surrounding single quotes.
+	got = SubstituteAgentCommand(`claude --system-prompt '${SYS_PROMPT}'`, "", "it's fine; rm -rf /")
+	want = `claude --system-prompt 'it'\''s fine; rm -rf /'`
+	if got != want {
+		t.Errorf("quote-escape: got %q, want %q", got, want)
+	}
 }

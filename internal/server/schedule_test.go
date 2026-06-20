@@ -188,6 +188,26 @@ func TestServiceWatchedNonTmuxNotReaped(t *testing.T) {
 	}
 }
 
+func TestServiceWatchedNonTmuxDroppedAfterLaunch(t *testing.T) {
+	rec := stubAutomationSeams(t)
+	s := &service{}
+	now := time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC)
+	sched := newWatchedScheduler(now, false) // non-tmux, not yet launched
+
+	// First running tick: launch once, then drop from the watch set (fire-and-
+	// forget) so it can't accumulate or be idle-reaped.
+	s.serviceWatched(context.Background(), sched, watchedState(fleet.StatusRunning), now)
+	if len(rec.launched) != 1 {
+		t.Fatalf("expected one launch, got %v", rec.launched)
+	}
+	if _, still := sched.watched["alpha/agent-1"]; still {
+		t.Fatal("non-tmux agent should be dropped from the watch set after launch")
+	}
+	if len(rec.reaped) != 0 {
+		t.Fatalf("non-tmux agent must not be reaped: %v", rec.reaped)
+	}
+}
+
 func TestServiceWatchedDropsGoneInstance(t *testing.T) {
 	stubAutomationSeams(t)
 	s := &service{}
