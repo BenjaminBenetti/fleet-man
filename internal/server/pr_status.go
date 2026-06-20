@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -243,12 +244,21 @@ func (h *hub) probePRStatus(b backend.Backend, workspaceDir string) (*fleetgrpc.
 // runProbeWithTimeout runs cmd to completion, capturing stdout, and kills it if
 // it overruns timeout. It drives the embedded raw *exec.Cmd directly (Start +
 // Wait) so it can interrupt a hung process — Output() offers no deadline.
+//
+// The probe is placed in its own process group so a timeout kills the WHOLE
+// tree: the backend's exec spawns helpers (devcontainer -> docker exec) that
+// inherit our stdout pipe, and killing only the direct child leaves those
+// holding the pipe's write end open, which wedges Wait until they exit on their
+// own. WaitDelay is a backstop that force-closes the pipes if a stray
+// descendant escapes the group.
 func runProbeWithTimeout(cmd *backend.Cmd, timeout time.Duration) ([]byte, error) {
 	raw := cmd.Cmd
 	var buf bytes.Buffer
 	raw.Stdout = &buf
 	// Stderr stays nil -> /dev/null; the script already redirects gh's own
 	// diagnostics, and we only care about the JSON on stdout.
+	raw.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	raw.WaitDelay = 3 * time.Second
 	if err := raw.Start(); err != nil {
 		return nil, err
 	}
@@ -262,7 +272,8 @@ func runProbeWithTimeout(cmd *backend.Cmd, timeout time.Duration) ([]byte, error
 		return buf.Bytes(), nil
 	case <-time.After(timeout):
 		if raw.Process != nil {
-			_ = raw.Process.Kill()
+			// Negative pid signals the whole process group (see above).
+			_ = syscall.Kill(-raw.Process.Pid, syscall.SIGKILL)
 		}
 		<-done
 		return nil, fmt.Errorf("pr status probe timed out after %s", timeout)

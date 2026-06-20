@@ -1,10 +1,37 @@
 package server
 
 import (
+	"os/exec"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 )
+
+func TestRunProbeWithTimeout_CapturesOutput(t *testing.T) {
+	cmd := backend.NewCmd(exec.Command("sh", "-c", `printf 'hello\nworld\n'`), nil)
+	out, err := runProbeWithTimeout(cmd, 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "hello\nworld" {
+		t.Fatalf("output = %q, want \"hello\\nworld\"", got)
+	}
+}
+
+func TestRunProbeWithTimeout_KillsOnTimeout(t *testing.T) {
+	cmd := backend.NewCmd(exec.Command("sh", "-c", "sleep 30"), nil)
+	start := time.Now()
+	if _, err := runProbeWithTimeout(cmd, 150*time.Millisecond); err == nil {
+		t.Fatalf("expected a timeout error, got nil")
+	}
+	// The kill must happen promptly, not after the full sleep.
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("timeout took %v, expected it to fire near 150ms", elapsed)
+	}
+}
 
 func TestClassifyCheck(t *testing.T) {
 	tests := []struct {
