@@ -267,6 +267,26 @@ func TestBuildRowsClearsStaleSelection(t *testing.T) {
 	}
 }
 
+func TestIsBrowsableURL(t *testing.T) {
+	for _, u := range []string{"https://github.com/o/r/pull/1", "http://localhost:3000"} {
+		if !isBrowsableURL(u) {
+			t.Errorf("%q should be browsable", u)
+		}
+	}
+	for _, u := range []string{"file:///etc/passwd", "javascript:alert(1)", "ftp://x", "", "not a url"} {
+		if isBrowsableURL(u) {
+			t.Errorf("%q should be rejected", u)
+		}
+	}
+}
+
+func TestOpenExternalURLRefusesNonHTTP(t *testing.T) {
+	// Must return an error WITHOUT launching anything for a non-http scheme.
+	if err := openExternalURL("javascript:alert(1)"); err == nil {
+		t.Errorf("expected refusal for a non-http(s) URL")
+	}
+}
+
 func TestOpenExternalURLCommand(t *testing.T) {
 	cmd, err := openExternalURLCommand("https://github.com/o/r/pull/7")
 	if err != nil {
