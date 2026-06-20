@@ -276,12 +276,26 @@ func runProbeWithTimeout(cmd *backend.Cmd, timeout time.Duration) ([]byte, error
 		}
 		return buf.Bytes(), nil
 	case <-time.After(timeout):
-		if raw.Process != nil {
-			// Negative pid signals the whole process group (see above).
-			_ = syscall.Kill(-raw.Process.Pid, syscall.SIGKILL)
+		// Re-check done non-blockingly before signalling: the goroutine's Wait()
+		// may have reaped the process right at the deadline, and a reaped PID can
+		// be reused — group-killing it could then hit an unrelated process. While
+		// Wait() has NOT returned, the process is unreaped, so its PID/pgid can't
+		// have been reused and the group kill is safe.
+		select {
+		case err := <-done:
+			if err != nil {
+				return nil, err
+			}
+			return buf.Bytes(), nil
+		default:
+			if raw.Process != nil {
+				// Negative pid signals the whole process group (see above), so
+				// children that inherited our stdout pipe die too.
+				_ = syscall.Kill(-raw.Process.Pid, syscall.SIGKILL)
+			}
+			<-done
+			return nil, fmt.Errorf("pr status probe timed out after %s", timeout)
 		}
-		<-done
-		return nil, fmt.Errorf("pr status probe timed out after %s", timeout)
 	}
 }
 
@@ -332,6 +346,14 @@ func prStatusPass(h *hub) {
 	for fleetName, f := range st.Fleets {
 		for _, inst := range f.Instances {
 			if inst.ContainerID == "" || inst.Status != fleet.StatusRunning {
+				continue
+			}
+			// A workspace dir is required to scope the probe: the backend's exec
+			// resolves it to the in-container workspace folder, which is where the
+			// script's `find` runs. Without it the script would run in the
+			// container's default cwd (often /) and scan the whole filesystem, so
+			// skip — the instance simply gets no auto-tag (graceful degrade).
+			if inst.WorkspaceDir == "" {
 				continue
 			}
 			items = append(items, item{fleetName, inst.Name, inst.WorkspaceDir, inst})
