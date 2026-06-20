@@ -26,20 +26,20 @@ func ref(n int32, url, title string) *fleetgrpc.PrRef {
 	return &fleetgrpc.PrRef{Number: n, Url: url, Title: title}
 }
 
-// cursorOnInstance builds an expanded-instance model with the given PrStatus and
-// parks the cursor on the instance row.
-func cursorOnInstance(t *testing.T, inst *fleet.Instance, ps *fleetgrpc.PrStatus) (*fleetPage, *model) {
+// cursorOnInlinePR builds an expanded-instance model with the given PrStatus and
+// parks the cursor on the child row that carries the inline PR status.
+func cursorOnInlinePR(t *testing.T, inst *fleet.Instance, ps *fleetgrpc.PrStatus) (*fleetPage, *model) {
 	t.Helper()
 	fp := newFleetPage()
 	m := autoTagModel(fp, inst, true, ps)
 	fp.buildRows(m)
 	for i, r := range fp.rows {
-		if r.kind == rowInstance {
+		if r.prStatusInline {
 			fp.cursor = i
 			return fp, m
 		}
 	}
-	t.Fatalf("no instance row built")
+	t.Fatalf("no inline-PR row built")
 	return nil, nil
 }
 
@@ -53,44 +53,50 @@ func TestInstanceAutoTagSelectedIsBracketed(t *testing.T) {
 	if !strings.Contains(sel, "PR") || !strings.Contains(sel, "Checks 1/1") {
 		t.Fatalf("selected auto tag missing content: %q", sel)
 	}
-	// Unselected has no brackets.
 	if un := m.instanceAutoTag("alpha", "agent-1", false); strings.Contains(un, "[") {
 		t.Fatalf("unselected auto tag should not be bracketed: %q", un)
 	}
 }
 
-func TestAutoTagNavigable(t *testing.T) {
-	running := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
-	withPR := autoTagModel(newFleetPage(), running, true, prStatusWithRefs(ref(1, "https://x/pull/1", "t")))
-	if !withPR.autoTagNavigable("alpha", running) {
-		t.Errorf("instance with an open PR should be navigable")
-	}
+func TestRowInlinePRRefs(t *testing.T) {
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
+	m := autoTagModel(newFleetPage(), inst, true, prStatusWithRefs(ref(1, "https://x/pull/1", "t")))
 
-	noPR := autoTagModel(newFleetPage(), running, true, nil)
-	if noPR.autoTagNavigable("alpha", running) {
-		t.Errorf("instance with no PR status should not be navigable")
+	inlineRow := row{kind: rowNewSession, fleetName: "alpha", instance: inst, prStatusInline: true}
+	if got := m.rowInlinePRRefs(inlineRow); len(got) != 1 {
+		t.Errorf("inline row should expose 1 PR ref, got %d", len(got))
 	}
+	// Same row without the inline flag carries nothing.
+	plainRow := row{kind: rowNewSession, fleetName: "alpha", instance: inst}
+	if got := m.rowInlinePRRefs(plainRow); got != nil {
+		t.Errorf("non-inline row should expose no refs, got %d", len(got))
+	}
+	// Inline flag but no PR status -> nothing.
+	noPR := autoTagModel(newFleetPage(), inst, true, nil)
+	if got := noPR.rowInlinePRRefs(inlineRow); got != nil {
+		t.Errorf("inline row with no PR status should expose no refs")
+	}
+}
 
-	// A user-set tag takes the slot, so the auto tag is not navigable.
-	tagged := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning, Tag: "wip"}
-	withTag := autoTagModel(newFleetPage(), tagged, true, prStatusWithRefs(ref(1, "https://x/pull/1", "t")))
-	if withTag.autoTagNavigable("alpha", tagged) {
-		t.Errorf("user-tagged instance should not be navigable")
+func TestSelectedInlinePR(t *testing.T) {
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
+	fp, m := cursorOnInlinePR(t, inst, prStatusWithRefs(ref(7, "https://x/pull/7", "t")))
+	if len(fp.selectedInlinePR(m)) != 1 {
+		t.Errorf("cursor on the inline-PR row should expose its refs")
 	}
-	if withTag.autoTagNavigable("alpha", nil) {
-		t.Errorf("nil instance should not be navigable")
+	// Move the cursor up to the instance row: no inline PR there.
+	fp.cursor--
+	if fp.rows[fp.cursor].kind != rowInstance {
+		t.Fatalf("expected the instance row above the inline-PR row")
 	}
-
-	// Collapsed: the tag row isn't on screen, so it isn't navigable.
-	collapsed := autoTagModel(newFleetPage(), running, false, prStatusWithRefs(ref(1, "https://x/pull/1", "t")))
-	if collapsed.autoTagNavigable("alpha", running) {
-		t.Errorf("collapsed instance should not be navigable (tag row hidden)")
+	if fp.selectedInlinePR(m) != nil {
+		t.Errorf("instance row carries no inline PR status")
 	}
 }
 
 func TestOpenSelectedPR_Single(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
-	fp, m := cursorOnInstance(t, inst, prStatusWithRefs(ref(42, "https://x/pull/42", "fix")))
+	fp, m := cursorOnInlinePR(t, inst, prStatusWithRefs(ref(42, "https://x/pull/42", "fix")))
 	cmd := fp.openSelectedPR(m)
 	if cmd == nil {
 		t.Fatalf("expected a command to open the single PR")
@@ -105,7 +111,7 @@ func TestOpenSelectedPR_Single(t *testing.T) {
 
 func TestOpenSelectedPR_Multiple(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
-	fp, m := cursorOnInstance(t, inst, prStatusWithRefs(
+	fp, m := cursorOnInlinePR(t, inst, prStatusWithRefs(
 		ref(1, "https://x/pull/1", "a"), ref(2, "https://x/pull/2", "b")))
 	if cmd := fp.openSelectedPR(m); cmd != nil {
 		t.Errorf("multiple PRs should open a chooser (nil cmd), got non-nil")
@@ -120,7 +126,15 @@ func TestOpenSelectedPR_Multiple(t *testing.T) {
 
 func TestOpenSelectedPR_None(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
-	fp, m := cursorOnInstance(t, inst, nil)
+	fp := newFleetPage()
+	m := autoTagModel(fp, inst, true, nil)
+	fp.buildRows(m)
+	// Park on the "+ new session" row (no inline PR since there's no PR status).
+	for i, r := range fp.rows {
+		if r.kind == rowNewSession {
+			fp.cursor = i
+		}
+	}
 	if cmd := fp.openSelectedPR(m); cmd != nil {
 		t.Errorf("no PRs should yield no command")
 	}
@@ -138,10 +152,10 @@ func TestChoosePRDialogNavigation(t *testing.T) {
 	fp.mode = viewChoosePR
 
 	key := func(s string) tea.KeyMsg {
-		if s == "down" {
+		switch s {
+		case "down":
 			return tea.KeyMsg{Type: tea.KeyDown}
-		}
-		if s == "up" {
+		case "up":
 			return tea.KeyMsg{Type: tea.KeyUp}
 		}
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
@@ -164,7 +178,6 @@ func TestChoosePRDialogNavigation(t *testing.T) {
 		t.Errorf("enter should close the dialog, mode = %v", fp.mode)
 	}
 
-	// esc closes without opening.
 	fp.mode = viewChoosePR
 	if cmd := fp.updateChoosePR(m, tea.KeyMsg{Type: tea.KeyEsc}); cmd != nil {
 		t.Errorf("esc should not open anything")
@@ -174,58 +187,65 @@ func TestChoosePRDialogNavigation(t *testing.T) {
 	}
 }
 
-func TestKeySelectDeselectAutoTag(t *testing.T) {
+func TestKeySelectDeselectInlinePR(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
-	fp, m := cursorOnInstance(t, inst, prStatusWithRefs(ref(1, "https://x/pull/1", "t")))
+	fp, m := cursorOnInlinePR(t, inst, prStatusWithRefs(ref(1, "https://x/pull/1", "t")))
 
 	runes := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
 
-	fp.Update(m, runes('l')) // select
+	fp.Update(m, runes('l'))
 	if !fp.tagSelected {
-		t.Fatalf("l should select the auto tag")
+		t.Fatalf("l should select the inline PR status")
 	}
-	fp.Update(m, runes('h')) // deselect
+	fp.Update(m, runes('h'))
 	if fp.tagSelected {
-		t.Fatalf("h should deselect the auto tag")
+		t.Fatalf("h should deselect")
 	}
-	fp.Update(m, tea.KeyMsg{Type: tea.KeyRight}) // arrow select
+	fp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
 	if !fp.tagSelected {
-		t.Fatalf("right should select the auto tag")
+		t.Fatalf("right should select")
 	}
-	fp.Update(m, tea.KeyMsg{Type: tea.KeyLeft}) // arrow deselect
+	fp.Update(m, tea.KeyMsg{Type: tea.KeyLeft})
 	if fp.tagSelected {
-		t.Fatalf("left should deselect the auto tag")
+		t.Fatalf("left should deselect")
 	}
 }
 
 func TestKeySelectClearedByVerticalMove(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
-	fp, m := cursorOnInstance(t, inst, prStatusWithRefs(ref(1, "https://x/pull/1", "t")))
+	fp, m := cursorOnInlinePR(t, inst, prStatusWithRefs(ref(1, "https://x/pull/1", "t")))
 	fp.tagSelected = true
-	fp.Update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}) // down
+	fp.Update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}) // up to instance row
 	if fp.tagSelected {
-		t.Fatalf("vertical move should clear the tag selection")
+		t.Fatalf("vertical move should clear the selection")
 	}
 }
 
-func TestKeyLOnNonNavigableInstanceDoesNotSelect(t *testing.T) {
+func TestKeyLWithoutInlinePRDoesNotSelect(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
-	fp, m := cursorOnInstance(t, inst, nil) // no PR status
+	fp := newFleetPage()
+	m := autoTagModel(fp, inst, true, nil) // no PR status anywhere
+	fp.buildRows(m)
+	for i, r := range fp.rows {
+		if r.kind == rowNewSession {
+			fp.cursor = i
+		}
+	}
 	fp.Update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if fp.tagSelected {
-		t.Fatalf("l on an instance without a navigable auto tag must not select")
+		t.Fatalf("l on a row without an inline PR must not select")
 	}
 }
 
 func TestBuildRowsClearsStaleSelection(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
-	fp, m := cursorOnInstance(t, inst, prStatusWithRefs(ref(1, "https://x/pull/1", "t")))
+	fp, m := cursorOnInlinePR(t, inst, prStatusWithRefs(ref(1, "https://x/pull/1", "t")))
 	fp.tagSelected = true
 	// PR closes: clear the runtime PR status, rebuild — selection must drop.
 	m.runtime[rtKey("alpha", "agent-1")] = &fleetgrpc.InstanceRuntime{Fleet: "alpha", Instance: "agent-1"}
 	fp.buildRows(m)
 	if fp.tagSelected {
-		t.Fatalf("buildRows should clear selection once the auto tag is no longer navigable")
+		t.Fatalf("buildRows should clear selection once the inline PR is gone")
 	}
 }
 

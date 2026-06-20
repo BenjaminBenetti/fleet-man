@@ -5,10 +5,9 @@ import (
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
-	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // auto_tag_nav.go makes the auto tag interactive: horizontally selecting an
@@ -21,29 +20,30 @@ func (m *model) instancePRRefs(fleetName, instance string) []*fleetgrpc.PrRef {
 	return m.runtime[rtKey(fleetName, instance)].GetPrStatus().GetPrs()
 }
 
-// autoTagNavigable reports whether the instance currently shows a navigable auto
-// tag: it is expanded (so the tag row is actually visible), has no user-set tag
-// (which would take the slot instead), and has at least one open PR. Gating on
-// expansion keeps the selection in sync with what's on screen — collapsing an
-// instance drops any selection via buildRows.
-func (m *model) autoTagNavigable(fleetName string, inst *fleet.Instance) bool {
-	if inst == nil || inst.Tag != "" {
-		return false
-	}
-	if !m.sessionStore.IsExpanded(InstanceRef{Fleet: fleetName, Instance: inst.Name}) {
-		return false
-	}
-	return len(m.instancePRRefs(fleetName, inst.Name)) > 0
-}
-
-// openSelectedPR opens the PR for the cursor's instance — directly when there is
-// one, or via the chooser dialog when there are several.
-func (fleetPage *fleetPage) openSelectedPR(m *model) tea.Cmd {
-	_, instance := fleetPage.selectedInstance(m)
-	if instance == nil {
+// rowInlinePRRefs returns the open PRs for a row that carries the inline PR
+// status (the first child row of an expanded, untagged instance), or nil. This
+// is where the auto tag lives now, so it is the unit the cursor selects.
+func (m *model) rowInlinePRRefs(r row) []*fleetgrpc.PrRef {
+	if !r.prStatusInline || r.instance == nil {
 		return nil
 	}
-	refs := m.instancePRRefs(fleetPage.currentFleetName(), instance.Name)
+	return m.instancePRRefs(r.fleetName, r.instance.Name)
+}
+
+// selectedInlinePR returns the PRs of the inline PR status under the cursor, or
+// nil when the cursor isn't on a row carrying one.
+func (fleetPage *fleetPage) selectedInlinePR(m *model) []*fleetgrpc.PrRef {
+	r := fleetPage.currentRow()
+	if r == nil {
+		return nil
+	}
+	return m.rowInlinePRRefs(*r)
+}
+
+// openSelectedPR opens the PR for the inline status under the cursor — directly
+// when there is one, or via the chooser dialog when there are several.
+func (fleetPage *fleetPage) openSelectedPR(m *model) tea.Cmd {
+	refs := fleetPage.selectedInlinePR(m)
 	switch len(refs) {
 	case 0:
 		return nil

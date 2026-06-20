@@ -39,11 +39,14 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 				fleetPage.rows = append(fleetPage.rows, row{kind: rowInstance, fleetName: name, instance: instance})
 				ref := InstanceRef{Fleet: name, Instance: instance.Name}
 				if m.sessionStore.IsExpanded(ref) {
-					// The tag slot shows the user-set tag, or — when none is set —
-					// the computed "auto tag" (PR status), if there is one.
-					if instance.Tag != "" || m.instanceAutoTag(name, instance.Name, false) != "" {
+					// A user-set tag gets its own line under the instance name. The
+					// PR-status auto tag instead rides the first child row's status
+					// column (handled after the child rows are built, below), so the
+					// two never share a line.
+					if instance.Tag != "" {
 						fleetPage.rows = append(fleetPage.rows, row{kind: rowInstanceTag, fleetName: name, instance: instance})
 					}
+					childStart := len(fleetPage.rows)
 					liveGroups := make(map[string]bool)
 					for _, g := range m.sessionStore.Groups(ref) {
 						liveGroups[g.GroupID] = true
@@ -63,6 +66,12 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 						fleetName: name,
 						instance:  instance,
 					})
+					// Attach the PR status to the first child row (first session, or
+					// "+ new session" when there are none) when no user tag occupies
+					// the slot — it renders as a second status line under the status.
+					if instance.Tag == "" && m.instanceAutoTag(name, instance.Name, false) != "" {
+						fleetPage.rows[childStart].prStatusInline = true
+					}
 				}
 			}
 		}
@@ -84,12 +93,11 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 		fleetPage.moveCursor(1)
 	}
 
-	// Drop a stale auto-tag selection if the cursor no longer sits on an
-	// instance whose auto tag is navigable (e.g. its PR just closed).
-	if fleetPage.tagSelected {
-		if _, inst := fleetPage.selectedInstance(m); !m.autoTagNavigable(fleetPage.currentFleetName(), inst) {
-			fleetPage.tagSelected = false
-		}
+	// Drop a stale auto-tag selection if the cursor no longer sits on a row whose
+	// inline PR status is navigable (e.g. the PR closed, or a rebuild moved the
+	// cursor off the row carrying it).
+	if fleetPage.tagSelected && len(fleetPage.selectedInlinePR(m)) == 0 {
+		fleetPage.tagSelected = false
 	}
 }
 

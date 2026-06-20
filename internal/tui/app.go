@@ -674,12 +674,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					switch {
 					case idx < 0 || idx >= len(page.rows):
 						// outside the row list
-					case page.rows[idx].kind == rowInstanceTag && idx > 0 &&
-						page.rows[idx-1].kind == rowInstance &&
-						m.autoTagNavigable(page.rows[idx].fleetName, page.rows[idx].instance):
-						// Clicking the PR auto tag selects its instance's tag and
-						// opens the PR (Enter is synthesized into the selected path).
-						page.cursor = idx - 1
+					case mouseMsg.X >= prStatusClickColumn &&
+						len(m.rowInlinePRRefs(page.rows[idx])) > 0:
+						// Clicking the inline PR status (the right of a child row, past
+						// the label) selects it and opens the PR — Enter is synthesized
+						// into the tag-selected path.
+						page.cursor = idx
 						page.armadaSel.focused = false
 						page.tagSelected = true
 						hit = true

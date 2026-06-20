@@ -418,11 +418,10 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			return nil
 
 		case "right", "l":
-			// Horizontally select the instance's auto tag (PR status) so enter
-			// opens the PR. No-op when there is no navigable auto tag (so l on a
-			// plain instance does nothing rather than something surprising).
-			_, instance := fleetPage.selectedInstance(m)
-			if instance != nil && m.autoTagNavigable(fleetPage.currentFleetName(), instance) {
+			// Select the inline PR status on the current row (the auto tag rides
+			// the first child row of an expanded instance) so enter opens the PR.
+			// No-op when the cursor isn't on a row carrying a navigable PR status.
+			if len(fleetPage.selectedInlinePR(m)) > 0 {
 				fleetPage.tagSelected = true
 			}
 
@@ -643,6 +642,13 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 		return withArmadaHint([]string{"n: new fleet", "q: quit"})
 	}
 
+	// A selected inline PR status puts the row in a focused sub-mode (the cursor
+	// always sits on the PR-carrying child row while selected): only the
+	// PR-navigation keys apply.
+	if fleetPage.tagSelected {
+		return withArmadaHint([]string{"enter: open PR", "←/h: deselect", "j/k: navigate", "q: quit"})
+	}
+
 	switch r.kind {
 	case rowFleetHeader:
 		return withArmadaHint([]string{
@@ -651,18 +657,10 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 		})
 
 	case rowInstance:
-		// When the auto tag is selected the row is in a focused sub-mode: only
-		// the PR-navigation keys apply.
-		if fleetPage.tagSelected {
-			return withArmadaHint([]string{"enter: open PR", "←/h: deselect", "j/k: navigate", "q: quit"})
-		}
 		keys := []string{"j/k: navigate"}
 		if r.instance != nil {
 			switch {
 			case r.instance.Status == fleet.StatusRunning:
-				if m.autoTagNavigable(r.fleetName, r.instance) {
-					keys = append(keys, "→/l: select PR")
-				}
 				keys = append(keys,
 					"space: show sessions", "enter: open shell", "e: edit",
 					"s: stop", "a: new session", "d: delete", "t: tag",
@@ -685,20 +683,26 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 		return withArmadaHint(keys)
 
 	case rowSession:
-		keys := []string{
-			"j/k: navigate", "space/enter/e: connect",
-			"a: new session", "d: delete session", "r: rename", "q: quit",
+		keys := []string{"j/k: navigate"}
+		if len(m.rowInlinePRRefs(*r)) > 0 {
+			keys = append(keys, "→/l: select PR")
 		}
+		keys = append(keys,
+			"space/enter/e: connect",
+			"a: new session", "d: delete session", "r: rename", "q: quit",
+		)
 		if m.inHostTmux && fleetPage.split.ref.Valid() && !fleetPage.split.activeGroup.Empty() {
 			keys = append(keys[:len(keys)-1], "pgup/pgdn: cycle groups", "q: quit")
 		}
 		return withArmadaHint(keys)
 
 	case rowNewSession:
-		return withArmadaHint([]string{
-			"j/k: navigate", "space/enter/e: create session",
-			"a: new session", "q: quit",
-		})
+		keys := []string{"j/k: navigate"}
+		if len(m.rowInlinePRRefs(*r)) > 0 {
+			keys = append(keys, "→/l: select PR")
+		}
+		keys = append(keys, "space/enter/e: create session", "a: new session", "q: quit")
+		return withArmadaHint(keys)
 
 	case rowSettings:
 		return withArmadaHint([]string{
