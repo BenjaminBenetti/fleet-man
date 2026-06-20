@@ -279,9 +279,11 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 
 			// Truncate (with an ellipsis) before padding so a long name can't push
 			// the status column right and knock the PR-status second line below it
-			// out of alignment.
+			// out of alignment. Pad by VISUAL width (lipgloss.Width), not fmt's
+			// rune count, so a name with wide runes (CJK / emoji) still lands the
+			// status at exactly instanceStatusCol.
 			name := ansi.Truncate(instance.GetDisplayName(), instanceNameWidth, "…")
-			nameRaw := fmt.Sprintf("%-*s", instanceNameWidth, name)
+			nameRaw := name + strings.Repeat(" ", max(0, instanceNameWidth-lipgloss.Width(name)))
 			var arrowStyled, nameStyled string
 			switch {
 			case isSelected && instanceColorHasCustom(instance.Color):

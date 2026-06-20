@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Description: Pressing `l` on a running instance shows its logs and Enter returns to the TUI.
+# Description: Pressing `L` on a running instance shows its logs and Enter returns to the TUI.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -14,7 +14,7 @@ tui_wait_for "alpha"  15
 tui_wait_for "○ idle" 60
 
 # ===========================================
-# Move to alpha and press `l`. tea.ExecProcess suspends the TUI and runs
+# Move to alpha and press `L`. tea.ExecProcess suspends the TUI and runs
 # a wrapper shell script that cats the creation log + container runtime
 # logs, then waits on `read _` for an Enter keypress before returning.
 # ===========================================
@@ -22,8 +22,8 @@ info "moving cursor to alpha"
 tui_send j
 sleep 0.3
 
-info "pressing 'l' to view logs"
-tui_send l
+info "pressing 'L' to view logs"
+tui_send L
 
 # The wrapper script always ends with this prompt — match on it as the
 # canonical "logs view is up" signal.
@@ -45,4 +45,4 @@ tui_wait_for_absent "--- Press Enter to return ---" 10
 tui_wait_for "alpha" 15
 tui_wait_for "○ idle" 60
 
-pass "TUI 'l' shows instance logs and dismisses on Enter"
+pass "TUI 'L' shows instance logs and dismisses on Enter"
