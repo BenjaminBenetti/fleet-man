@@ -183,11 +183,8 @@ func (fleetPage *fleetPage) updateAutomationTrigger(m *model, msg tea.Msg) tea.C
 		return fleetPage.triggerRowEnter(m)
 	case " ":
 		return fleetPage.triggerRowToggle(m)
-	case "left", "h":
-		fleetPage.triggerRowCycle(-1)
-		return nil
-	case "right", "l":
-		fleetPage.triggerRowCycle(1)
+	case "left", "h", "right", "l":
+		fleetPage.triggerRowCycle()
 		return nil
 	}
 
@@ -245,15 +242,15 @@ func (fleetPage *fleetPage) triggerRowToggle(m *model) tea.Cmd {
 	return fleetPage.triggerRowEnter(m)
 }
 
-func (fleetPage *fleetPage) triggerRowCycle(direction int) {
+// triggerRowCycle handles h/l on a selector row. Both selectors are two-valued,
+// so direction is immaterial — left and right just flip to the other option.
+func (fleetPage *fleetPage) triggerRowCycle() {
 	st := &fleetPage.triggerDlg
 	switch st.row {
 	case trigRowType:
 		fleetPage.cycleTriggerType()
 	case trigRowFilterType:
 		fleetPage.cycleFilterType()
-	case trigRowSave:
-		_ = direction // selectors only; nothing else cycles
 	}
 }
 
