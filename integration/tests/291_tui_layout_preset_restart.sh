@@ -34,7 +34,9 @@ tui_send k
 sleep 0.3
 tui_send e
 tui_wait_for "Edit fleet" 5
-for _ in 1 2 3 4 5 6; do tui_send j; sleep 0.1; done
+# From the dialog's top row (the collapsed Agents header, issue #184), Layouts
+# is 4 rows down: Agents → GitHub CLI → Home dir → Prefer Fleet Launch → Layouts.
+for _ in 1 2 3 4; do tui_send j; sleep 0.1; done
 tui_send l
 tui_wait_for "+ Layout Preset" 5
 tui_send j
@@ -91,7 +93,8 @@ tui_wait_for "Edit fleet" 5
 tui_assert_contains "Layouts (1)" "preset count lost after restart — the layout preset did not persist"
 
 info "expanding Layouts to confirm the preset row survived"
-for _ in 1 2 3 4 5 6; do tui_send j; sleep 0.1; done
+# Layouts is 4 rows below the collapsed Agents header (issue #184).
+for _ in 1 2 3 4; do tui_send j; sleep 0.1; done
 tui_send l
 sleep 0.5
 tui_assert_contains "src (1 pane)" "preset row missing after restart"

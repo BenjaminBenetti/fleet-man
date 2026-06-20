@@ -43,7 +43,9 @@ tui_wait_for "Edit fleet" 5
 tui_assert_contains "Layouts (0)" "Layouts section header missing"
 
 info "expanding Layouts and starting preset creation"
-for _ in 1 2 3 4 5 6; do tui_send j; sleep 0.1; done
+# From the dialog's top row (the collapsed Agents header, issue #184), Layouts
+# is 4 rows down: Agents → GitHub CLI → Home dir → Prefer Fleet Launch → Layouts.
+for _ in 1 2 3 4; do tui_send j; sleep 0.1; done
 tui_send l
 tui_wait_for "+ Layout Preset" 5
 tui_send j
