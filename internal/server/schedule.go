@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -45,6 +46,11 @@ var (
 	// minutes").
 	automationIdleTimeout = 2 * time.Minute
 )
+
+// maxAutomationProbeConcurrency bounds how many agent activity probes run at
+// once per tick, so a large watch set fans out without spawning an unbounded
+// number of concurrent container execs.
+const maxAutomationProbeConcurrency = 8
 
 // watchedAgent tracks one automation-spawned instance from creation through
 // launch to idle reaping.
@@ -189,8 +195,21 @@ func agentsForTrigger(f *fleet.Fleet, t fleet.Trigger) []fleet.Agent {
 }
 
 // serviceWatched advances every tracked agent: launch its command once running,
-// reap it once idle (tmux mode only), and drop it once gone.
+// reap it once idle (tmux mode only), and drop it once gone. The per-agent
+// activity probe is a potentially slow exec, so the probes run concurrently
+// (bounded) — a large watch set can't stall the scheduler tick. All map
+// mutations and reap decisions stay on this single goroutine; only the probes
+// fan out, and each touches just its own detector + instance (and the
+// mutex-guarded backendFor), so they are race-free.
 func (s *service) serviceWatched(ctx context.Context, sched *scheduler, st *state.State, now time.Time) {
+	// Phase 1 (sequential): lifecycle. Drop gone/failed, launch on running, drop
+	// fire-and-forget agents. Collect the launched tmux agents needing a probe.
+	type pendingCheck struct {
+		key  string
+		w    *watchedAgent
+		inst *fleet.Instance
+	}
+	var checks []pendingCheck
 	for k, w := range sched.watched {
 		inst := findInstance(st, w.fleet, w.instance)
 		if inst == nil {
@@ -225,19 +244,43 @@ func (s *service) serviceWatched(ctx context.Context, sched *scheduler, st *stat
 			delete(sched.watched, k)
 			continue
 		}
+		checks = append(checks, pendingCheck{key: k, w: w, inst: inst})
+	}
 
-		activity, ok := automationActivity(s, w, inst, now)
-		if !ok {
+	// Phase 2 (concurrent, bounded): probe each agent's activity.
+	type probeResult struct {
+		state agentdetect.State
+		ok    bool
+	}
+	results := make([]probeResult, len(checks))
+	sem := make(chan struct{}, maxAutomationProbeConcurrency)
+	var wg sync.WaitGroup
+	for i := range checks {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			activity, ok := automationActivity(s, checks[i].w, checks[i].inst, now)
+			results[i] = probeResult{state: activity, ok: ok}
+		}(i)
+	}
+	wg.Wait()
+
+	// Phase 3 (sequential): apply activity + reap idle agents.
+	for i, c := range checks {
+		r := results[i]
+		if !r.ok {
 			continue // transient capture failure — don't reset activity or reap
 		}
-		if activity == agentdetect.StateWorking {
-			w.lastActive = now
+		if r.state == agentdetect.StateWorking {
+			c.w.lastActive = now
 			continue
 		}
-		if now.Sub(w.lastActive) >= automationIdleTimeout {
-			flog.Info("automation: reaping idle agent", "fleet", w.fleet, "instance", w.instance, "idle", now.Sub(w.lastActive).Round(time.Second).String())
-			reapAutomationInstance(s, w.fleet, w.instance)
-			delete(sched.watched, k)
+		if now.Sub(c.w.lastActive) >= automationIdleTimeout {
+			flog.Info("automation: reaping idle agent", "fleet", c.w.fleet, "instance", c.w.instance, "idle", now.Sub(c.w.lastActive).Round(time.Second).String())
+			reapAutomationInstance(s, c.w.fleet, c.w.instance)
+			delete(sched.watched, c.key)
 		}
 	}
 }

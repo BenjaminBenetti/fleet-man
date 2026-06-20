@@ -230,6 +230,37 @@ func TestServiceWatchedNonTmuxDroppedAfterLaunch(t *testing.T) {
 	}
 }
 
+func TestServiceWatchedConcurrentProbesReapAll(t *testing.T) {
+	rec := stubAutomationSeams(t)
+	rec.activity = func(time.Time) (agentdetect.State, bool) { return agentdetect.StateWaiting, true }
+	s := &service{}
+	t0 := time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC)
+
+	// Several idle tmux agents probed concurrently must all reap, with the watch
+	// set fully drained (no double-count / drop under the fan-out).
+	const n = 5
+	sched := newScheduler()
+	insts := make([]*fleet.Instance, 0, n)
+	for i := 0; i < n; i++ {
+		name := automationInstanceName("agent", t0.Add(time.Duration(i)*time.Second))
+		insts = append(insts, &fleet.Instance{Name: name, Status: fleet.StatusRunning, ContainerID: "c"})
+		sched.watched["alpha/"+name] = &watchedAgent{
+			fleet: "alpha", instance: name, tmux: true, launched: true,
+			spawnedAt: t0, lastActive: t0,
+			detector: agentdetect.NewTmuxPaneChangeDetector(),
+		}
+	}
+	st := &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha", Instances: insts}}}
+
+	s.serviceWatched(context.Background(), sched, st, t0.Add(automationIdleTimeout))
+	if len(rec.reaped) != n {
+		t.Fatalf("expected %d reaps, got %d (%v)", n, len(rec.reaped), rec.reaped)
+	}
+	if len(sched.watched) != 0 {
+		t.Fatalf("watch set should be drained, still has %d", len(sched.watched))
+	}
+}
+
 func TestServiceWatchedDropsGoneInstance(t *testing.T) {
 	stubAutomationSeams(t)
 	s := &service{}

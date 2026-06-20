@@ -126,7 +126,9 @@ func TestNormalizeTriggersDuplicateAndRefs(t *testing.T) {
 }
 
 func TestSubstituteAgentCommand(t *testing.T) {
-	got := SubstituteAgentCommand(`claude --system-prompt '${SYS_PROMPT}' '${PROMPT}'`, "do the thing", "be helpful")
+	// Values are substituted FULLY shell-quoted, so placeholders are written
+	// bare (no surrounding quotes).
+	got := SubstituteAgentCommand(`claude --system-prompt ${SYS_PROMPT} ${PROMPT}`, "do the thing", "be helpful")
 	want := `claude --system-prompt 'be helpful' 'do the thing'`
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -134,16 +136,16 @@ func TestSubstituteAgentCommand(t *testing.T) {
 	// A ${PROMPT} that appears inside the system prompt text must not be
 	// re-expanded by the prompt pass.
 	got = SubstituteAgentCommand(`x ${SYS_PROMPT} ${PROMPT}`, "P", "contains ${PROMPT} literally")
-	want = `x contains ${PROMPT} literally P`
+	want = `x 'contains ${PROMPT} literally' 'P'`
 	if got != want {
 		t.Errorf("re-expansion guard: got %q, want %q", got, want)
 	}
 
-	// A single quote in a value must be escaped so it can't break out of the
-	// surrounding single quotes.
-	got = SubstituteAgentCommand(`claude --system-prompt '${SYS_PROMPT}'`, "", "it's fine; rm -rf /")
-	want = `claude --system-prompt 'it'\''s fine; rm -rf /'`
+	// A bare (unquoted) placeholder must still be safe: shell metacharacters in
+	// the value stay literal, never injecting a second command.
+	got = SubstituteAgentCommand(`echo ${PROMPT}`, "it's fine; rm -rf /", "")
+	want = `echo 'it'\''s fine; rm -rf /'`
 	if got != want {
-		t.Errorf("quote-escape: got %q, want %q", got, want)
+		t.Errorf("inject-guard: got %q, want %q", got, want)
 	}
 }

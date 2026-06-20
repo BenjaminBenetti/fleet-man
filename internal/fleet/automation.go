@@ -15,11 +15,13 @@ import (
 // them.
 
 // DefaultAgentCommand is the initial command offered for a new automation
-// agent. ${SYS_PROMPT} and ${PROMPT} are substituted at trigger time; the user
-// need not use either placeholder. The trailing spaces leave the cursor past
-// the system-prompt flag so a user who prefers to append the prompt inline can
-// just keep typing.
-const DefaultAgentCommand = "claude --system-prompt '${SYS_PROMPT}'  "
+// agent. ${SYS_PROMPT} and ${PROMPT} are substituted at trigger time with a
+// fully shell-quoted value (see SubstituteAgentCommand), so the placeholders are
+// deliberately NOT wrapped in quotes here — adding your own quotes would
+// double-quote the value. The user need not use either placeholder. The trailing
+// spaces leave the cursor past the system-prompt flag so a user who prefers to
+// append the prompt inline can just keep typing.
+const DefaultAgentCommand = "claude --system-prompt ${SYS_PROMPT}  "
 
 // maxAutomationListLen bounds a fleet's trigger / agent lists so a corrupt or
 // hostile settings write cannot mint an absurd number of entries (mirrors the
@@ -281,28 +283,28 @@ func NormalizeTriggers(in []Trigger, agents []Agent) ([]Trigger, error) {
 }
 
 // SubstituteAgentCommand expands the ${PROMPT} and ${SYS_PROMPT} placeholders in
-// an agent command, replacing each with a SINGLE-QUOTE-ESCAPED value so the
-// substitution cannot break out of the surrounding quotes. The placeholders are
-// expected to be wrapped in single quotes, as the default command is:
+// an agent command, replacing each with a FULLY SHELL-QUOTED value: the
+// substituted text is wrapped in single quotes (with any embedded ' escaped), so
+// it becomes a single literal argument no matter how the placeholder was used in
+// the command. That makes it safe in every context — bare (the default uses a
+// bare ${SYS_PROMPT}) or already inside other syntax (e.g. `echo ${PROMPT}`) —
+// so a prompt containing shell metacharacters (or, once webhook delivery lands,
+// arbitrary external event text) cannot inject shell syntax. Because the value
+// is self-quoting, callers must NOT wrap the placeholder in their own quotes.
 //
-//	claude --system-prompt '${SYS_PROMPT}'
-//
-// Any single quote in a value is rewritten to '\” so a prompt containing a quote
-// (or, once webhook delivery lands, arbitrary external event text) stays a
-// literal argument instead of injecting shell syntax. Both placeholders expand
-// in a single pass, so a ${PROMPT} appearing inside the system-prompt text is not
-// re-expanded.
+// Both placeholders expand in a single pass, so a ${PROMPT} appearing inside the
+// substituted system-prompt text is not re-expanded.
 func SubstituteAgentCommand(command, prompt, systemPrompt string) string {
 	r := strings.NewReplacer(
-		"${SYS_PROMPT}", shellSingleQuoteEscape(systemPrompt),
-		"${PROMPT}", shellSingleQuoteEscape(prompt),
+		"${SYS_PROMPT}", shellQuote(systemPrompt),
+		"${PROMPT}", shellQuote(prompt),
 	)
 	return r.Replace(command)
 }
 
-// shellSingleQuoteEscape rewrites single quotes so a value is safe to embed
-// inside a single-quoted shell string: each ' becomes '\” (close the quote,
-// emit an escaped quote, reopen the quote).
-func shellSingleQuoteEscape(s string) string {
-	return strings.ReplaceAll(s, "'", `'\''`)
+// shellQuote wraps a value in single quotes so it is a single literal shell
+// argument, escaping any embedded single quote as the standard close-escape-reopen
+// sequence.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
