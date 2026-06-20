@@ -211,6 +211,24 @@ func TestKeySelectDeselectInlinePR(t *testing.T) {
 	}
 }
 
+func TestKeySpaceOpensPRWhenSelected(t *testing.T) {
+	// In the PR sub-mode, space/tab must open the PR like enter — not connect to
+	// the session the cursor happens to sit on.
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
+	fp, m := cursorOnInlinePR(t, inst, prStatusWithRefs(ref(5, "https://x/pull/5", "t")))
+	fp.tagSelected = true
+	cmd := fp.Update(m, tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+	if cmd == nil {
+		t.Fatalf("space in the PR sub-mode should open the PR (non-nil cmd)")
+	}
+	if !strings.Contains(m.message, "5") {
+		t.Errorf("space should open PR #5; message = %q", m.message)
+	}
+	if fp.mode != viewNormal {
+		t.Errorf("single PR should not open the chooser, mode = %v", fp.mode)
+	}
+}
+
 func TestKeySelectClearedByVerticalMove(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
 	fp, m := cursorOnInlinePR(t, inst, prStatusWithRefs(ref(1, "https://x/pull/1", "t")))

@@ -106,6 +106,12 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.moveCursorToInstance(1)
 
 		case " ", "tab":
+			// In the PR-selection sub-mode the cursor sits on a child row whose
+			// normal space/tab action would connect/create a session; intercept it
+			// to open the PR, matching enter and the focused help text.
+			if fleetPage.tagSelected {
+				return fleetPage.openSelectedPR(m)
+			}
 			if r := fleetPage.currentRow(); r != nil {
 				switch r.kind {
 				case rowFleetHeader:

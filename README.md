@@ -119,7 +119,9 @@ fleet up my-project/agent-3
 | `d` | Delete instance/fleet |
 | `c` | Open VS Code |
 | `R` | Rebuild instance (preserves workspace) |
-| `l` | View logs |
+| `L` | View logs |
+| `→/l`, `←/h` | Select / deselect the PR-status auto tag |
+| `enter` (on PR status) | Open the PR in a browser |
 | `A` | Switch armada (remote fleet) |
 | `r` | Refresh |
 | `q` | Quit |
