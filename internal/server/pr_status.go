@@ -44,12 +44,15 @@ const (
 
 // prProbeScript runs inside the container with the workspace folder as its cwd
 // (the backend's ExecCommand resolves that). For the workspace repo and every
-// nested subrepo it emits `gh pr list ... --json ...` — a JSON array of the open
-// PRs on that repo's current branch. The arrays are concatenated on stdout and
-// read back with a streaming json.Decoder, so their exact whitespace/formatting
-// doesn't matter. It prints a sentinel and exits 0 when gh is absent or not
-// logged in, so the server can distinguish "degrade quietly" from a transient
-// exec failure.
+// nested subrepo it finds the open PRs on the current branch (gh pr list) and
+// then emits the FULL detail of each via `gh pr view <n> --json ...` — one JSON
+// object per PR. gh pr view is used (not gh pr list's --json) because gh pr
+// list's statusCheckRollup is capped at the first 100 checks, while gh pr view
+// paginates the rollup and returns every check. The objects are concatenated on
+// stdout and read back with a streaming json.Decoder, so their exact
+// whitespace/formatting doesn't matter. It prints a sentinel and exits 0 when gh
+// is absent or not logged in, so the server can distinguish "degrade quietly"
+// from a transient exec failure.
 const prProbeScript = `
 command -v gh >/dev/null 2>&1 || { printf '%s\n' "FLEET_NO_GH"; exit 0; }
 gh auth status >/dev/null 2>&1 || { printf '%s\n' "FLEET_NO_AUTH"; exit 0; }
@@ -61,8 +64,12 @@ find . -maxdepth 5 -name node_modules -prune -o -name .git -prune -print 2>/dev/
   br=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null) || continue
   [ -z "$br" ] && continue
   [ "$br" = "HEAD" ] && continue
-  ( cd "$dir" && gh pr list --state open --head "$br" \
-      --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,url,title 2>/dev/null )
+  ( cd "$dir" || exit 0
+    for num in $(gh pr list --state open --head "$br" --json number --jq '.[].number' 2>/dev/null); do
+      gh pr view "$num" \
+        --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,url,title 2>/dev/null
+    done
+  )
 done
 `
 
@@ -216,16 +223,16 @@ func aggregatePRStatus(prs []ghPR) *fleetgrpc.PrStatus {
 	}
 }
 
-// parsePRProbeOutput turns the probe's stdout — one `gh pr list --json` array
-// per repo, concatenated — into a PrStatus. A nil result means "no auto-tag" (gh
-// unavailable, or no open PRs) and clears any prior status. The gh-missing /
+// parsePRProbeOutput turns the probe's stdout — one `gh pr view --json` object
+// per open PR, concatenated — into a PrStatus. A nil result means "no auto-tag"
+// (gh unavailable, or no open PRs) and clears any prior status. The gh-missing /
 // no-auth sentinels and the empty case all map to nil. A streaming json.Decoder
-// reads successive arrays regardless of their interleaving whitespace; malformed
+// reads successive objects regardless of their interleaving whitespace; malformed
 // trailing noise stops the scan without discarding what parsed cleanly.
 func parsePRProbeOutput(out string) *fleetgrpc.PrStatus {
 	// Match the sentinels by PREFIX, not Contains: the script emits one as the
 	// sole output (before any JSON, then exits), while real output is a JSON
-	// array starting with '['. A prefix check can't be tripped by a sentinel
+	// object starting with '{'. A prefix check can't be tripped by a sentinel
 	// string that happens to appear inside PR JSON (a branch name, check name…).
 	trimmed := strings.TrimSpace(out)
 	if strings.HasPrefix(trimmed, prNoGHSentinel) || strings.HasPrefix(trimmed, prNoAuthSentinel) {
@@ -234,14 +241,12 @@ func parsePRProbeOutput(out string) *fleetgrpc.PrStatus {
 	var prs []ghPR
 	dec := json.NewDecoder(strings.NewReader(out))
 	for {
-		var batch []ghPR
-		if err := dec.Decode(&batch); err != nil {
+		var p ghPR
+		if err := dec.Decode(&p); err != nil {
 			break // io.EOF on clean exhaustion, or unexpected noise.
 		}
-		for _, p := range batch {
-			if strings.EqualFold(p.State, "OPEN") {
-				prs = append(prs, p)
-			}
+		if strings.EqualFold(p.State, "OPEN") {
+			prs = append(prs, p)
 		}
 	}
 	return aggregatePRStatus(prs)
