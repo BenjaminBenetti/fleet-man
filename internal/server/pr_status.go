@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -250,19 +249,22 @@ func (h *hub) probePRStatus(b backend.Backend, workspaceDir string) (*fleetgrpc.
 // it overruns timeout. It drives the embedded raw *exec.Cmd directly (Start +
 // Wait) so it can interrupt a hung process — Output() offers no deadline.
 //
-// The probe is placed in its own process group so a timeout kills the WHOLE
-// tree: the backend's exec spawns helpers (devcontainer -> docker exec) that
-// inherit our stdout pipe, and killing only the direct child leaves those
-// holding the pipe's write end open, which wedges Wait until they exit on their
-// own. WaitDelay is a backstop that force-closes the pipes if a stray
-// descendant escapes the group.
+// On timeout it uses raw.Process.Kill() rather than a raw syscall.Kill on the
+// numeric pid: os.Process refuses to signal a pid it has already reaped
+// (returning ErrProcessDone under its internal lock), so it can never race
+// Wait() into signalling a REUSED pid. It signals only the direct child, but
+// that is sufficient here — WaitDelay handles the case where a helper the child
+// spawned (devcontainer -> docker exec) inherited our stdout pipe and would
+// otherwise keep it open: after the delay Go force-closes the pipe and Wait
+// returns, and the orphaned helper exits on its next write (EOF/SIGPIPE). This
+// keeps the fix self-contained, avoiding a context.Context thread through the
+// Backend.ExecCommand interface.
 func runProbeWithTimeout(cmd *backend.Cmd, timeout time.Duration) ([]byte, error) {
 	raw := cmd.Cmd
 	var buf bytes.Buffer
 	raw.Stdout = &buf
 	// Stderr stays nil -> /dev/null; the script already redirects gh's own
 	// diagnostics, and we only care about the JSON on stdout.
-	raw.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	raw.WaitDelay = 3 * time.Second
 	if err := raw.Start(); err != nil {
 		return nil, err
@@ -276,26 +278,11 @@ func runProbeWithTimeout(cmd *backend.Cmd, timeout time.Duration) ([]byte, error
 		}
 		return buf.Bytes(), nil
 	case <-time.After(timeout):
-		// Re-check done non-blockingly before signalling: the goroutine's Wait()
-		// may have reaped the process right at the deadline, and a reaped PID can
-		// be reused — group-killing it could then hit an unrelated process. While
-		// Wait() has NOT returned, the process is unreaped, so its PID/pgid can't
-		// have been reused and the group kill is safe.
-		select {
-		case err := <-done:
-			if err != nil {
-				return nil, err
-			}
-			return buf.Bytes(), nil
-		default:
-			if raw.Process != nil {
-				// Negative pid signals the whole process group (see above), so
-				// children that inherited our stdout pipe die too.
-				_ = syscall.Kill(-raw.Process.Pid, syscall.SIGKILL)
-			}
-			<-done
-			return nil, fmt.Errorf("pr status probe timed out after %s", timeout)
+		if raw.Process != nil {
+			_ = raw.Process.Kill()
 		}
+		<-done
+		return nil, fmt.Errorf("pr status probe timed out after %s", timeout)
 	}
 }
 
