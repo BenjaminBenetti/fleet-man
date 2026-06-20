@@ -39,7 +39,9 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 				fleetPage.rows = append(fleetPage.rows, row{kind: rowInstance, fleetName: name, instance: instance})
 				ref := InstanceRef{Fleet: name, Instance: instance.Name}
 				if m.sessionStore.IsExpanded(ref) {
-					if instance.Tag != "" {
+					// The tag slot shows the user-set tag, or — when none is set —
+					// the computed "auto tag" (PR status), if there is one.
+					if instance.Tag != "" || m.instanceAutoTag(name, instance.Name) != "" {
 						fleetPage.rows = append(fleetPage.rows, row{kind: rowInstanceTag, fleetName: name, instance: instance})
 					}
 					liveGroups := make(map[string]bool)

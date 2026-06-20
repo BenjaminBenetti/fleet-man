@@ -279,7 +279,14 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			listContent.WriteString(line)
 			listContent.WriteString("\n")
 		} else if r.kind == rowInstanceTag {
-			line := fmt.Sprintf("%s        %s", cursor, dimStyle.Render("# "+r.instance.Tag))
+			// User-set tag takes the slot; otherwise the auto tag (PR status).
+			var content string
+			if r.instance.Tag != "" {
+				content = dimStyle.Render("# " + r.instance.Tag)
+			} else {
+				content = m.instanceAutoTag(r.fleetName, r.instance.Name)
+			}
+			line := fmt.Sprintf("%s        %s", cursor, content)
 			if maxW := m.width - 4; maxW > 0 && lipgloss.Width(line) > maxW {
 				line = ansi.Truncate(line, maxW-1, "…")
 			}

@@ -83,6 +83,47 @@ message ForwardedPort {
   optional string label = 3;
 }
 
+// PrSignal is the three-state colour shared by the auto-tag indicators:
+// green = good, yellow = in-progress/neutral, red = needs attention.
+enum PrSignal {
+  PR_SIGNAL_UNSPECIFIED = 0;
+  PR_SIGNAL_GREEN = 1;
+  PR_SIGNAL_YELLOW = 2;
+  PR_SIGNAL_RED = 3;
+}
+
+// PrReviewState is the aggregate review decision across an instance's open PRs,
+// driving the "[Changes Requested | Approved]" element. UNSPECIFIED means no
+// decision has landed yet, in which case the TUI hides that element.
+enum PrReviewState {
+  PR_REVIEW_STATE_UNSPECIFIED = 0;
+  PR_REVIEW_STATE_APPROVED = 1;
+  PR_REVIEW_STATE_CHANGES_REQUESTED = 2;
+}
+
+// PrStatus is the aggregated GitHub pull-request state for an instance's
+// workspace repo PLUS any nested subrepos, computed by running `gh` inside the
+// container. It drives the "auto tag" the TUI renders in the tag slot when an
+// instance has no user-set tag. It is absent (nil) when gh is missing or
+// unauthenticated inside the instance, or when no PR is open — the TUI then
+// shows no auto-tag, preserving today's behaviour.
+message PrStatus {
+  // Open PRs counted across the workspace repo and every subrepo. The PR
+  // indicator renders "PR" for 1 and "PRxN" for N>1; 0 means no auto-tag.
+  int32 open_count = 1;
+  // Colour for the [PR]/[PRxN] indicator: green when every PR is mergeable,
+  // red on any check failure or changes-requested, yellow otherwise.
+  PrSignal pr_signal = 2;
+  // The [Changes Requested | Approved] element (UNSPECIFIED hides it).
+  PrReviewState review = 3;
+  // Successful + total checks summed across all open PRs (the "x/x").
+  int32 checks_passed = 4;
+  int32 checks_total = 5;
+  // Colour for the [Checks x/x] indicator: green when all passed, red on any
+  // failure, yellow while any are still pending.
+  PrSignal checks_signal = 6;
+}
+
 // InstanceRuntime is the live view of ONE instance: everything the TUI renders
 // that isn't persisted. Keyed by (fleet, instance) so the client joins it to the
 // persisted Instance of the same name. Any sub-field may be zero/absent until
@@ -119,5 +160,10 @@ message InstanceRuntime {
   // When the server last refreshed this snapshot.
   google.protobuf.Timestamp updated_at = 10;
 
-  reserved 11 to 20;
+  // Aggregated GitHub PR state — the "auto tag" shown when the instance has no
+  // user-set tag. nil until first probed, or when gh is unavailable / no PR is
+  // open (see PrStatus).
+  PrStatus pr_status = 11;
+
+  reserved 12 to 20;
 }
