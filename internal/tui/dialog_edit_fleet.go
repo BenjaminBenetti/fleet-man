@@ -16,10 +16,11 @@ import (
 
 // editFleetRow identifies a focusable row in the edit-fleet dialog.
 const (
-	editFleetRowClaude = iota
-	editFleetRowCodex
+	editFleetRowAgents = iota // collapsible section header (issue #184)
+	editFleetRowClaude        // child of Agents; only navigable when expanded
+	editFleetRowCodex         // child of Agents; only navigable when expanded
+	editFleetRowAuggie        // child of Agents; only navigable when expanded
 	editFleetRowGh
-	editFleetRowAuggie
 	editFleetRowHomeDir
 	editFleetRowPreferFleetLaunch
 	editFleetRowLayouts      // collapsible section header (issue #150)
@@ -113,6 +114,24 @@ func (fleetPage *fleetPage) enabledCacheCount() int {
 	return n
 }
 
+// enabledAgentCount returns how many of the agent-tool mounts (Claude / Codex /
+// Auggie) are currently toggled on, for the count shown in the Agents section
+// header. GitHub CLI is intentionally excluded — it is a supporting tool, not a
+// coding agent, and stays a top-level mount row (issue #184).
+func (fleetPage *fleetPage) enabledAgentCount() int {
+	n := 0
+	for _, on := range []bool{
+		fleetPage.editFleet.claudeMount,
+		fleetPage.editFleet.codexMount,
+		fleetPage.editFleet.auggieMount,
+	} {
+		if on {
+			n++
+		}
+	}
+	return n
+}
+
 // cacheRowFocused reports whether the dialog cursor is currently on the row for
 // cache kind k (used so the [Delete cache] button only highlights its own row).
 func (fleetPage *fleetPage) cacheRowFocused(k cacheKind) bool {
@@ -121,19 +140,21 @@ func (fleetPage *fleetPage) cacheRowFocused(k cacheKind) bool {
 }
 
 // visibleEditFleetRows returns the edit-fleet dialog's navigable rows in display
-// order. The custom-mount child rows appear only while that section is expanded
-// (one per mount, then the add row); the Buildkit row only appears while the
-// Caching section is expanded.
+// order. The agent-tool rows (Claude / Codex / Auggie) appear only while the
+// Agents section is expanded; the custom-mount child rows appear only while that
+// section is expanded (one per mount, then the add row); the Buildkit row only
+// appears while the Caching section is expanded.
 func (fleetPage *fleetPage) visibleEditFleetRows() []int {
-	rows := []int{
-		editFleetRowClaude,
-		editFleetRowCodex,
+	rows := []int{editFleetRowAgents}
+	if fleetPage.editFleet.agentsExpanded {
+		rows = append(rows, editFleetRowClaude, editFleetRowCodex, editFleetRowAuggie)
+	}
+	rows = append(rows,
 		editFleetRowGh,
-		editFleetRowAuggie,
 		editFleetRowHomeDir,
 		editFleetRowPreferFleetLaunch,
 		editFleetRowLayouts,
-	}
+	)
 	if fleetPage.editFleet.layoutsExpanded {
 		for i := range fleetPage.editFleet.layoutPresets {
 			rows = append(rows, editFleetRowLayoutPresetBase+i)
@@ -263,7 +284,8 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.editFleet.imageCache = f.Settings.ImageCacheServer
 	fleetPage.editFleet.preferFleetLaunch = f.Settings.PreferFleetLaunchEnabled()
 	fleetPage.editFleet.preferFleetLaunchSet = f.Settings.PreferFleetLaunchSet()
-	fleetPage.dlg.row = editFleetRowClaude
+	fleetPage.dlg.row = editFleetRowAgents
+	fleetPage.editFleet.agentsExpanded = false
 	fleetPage.editFleet.detecting = false
 	fleetPage.dlg.fieldActive = false
 	fleetPage.editFleet.cachingExpanded = false
@@ -405,6 +427,16 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 		switch keyMsg.String() {
 		case " ", "left", "right", "h", "l", "x", "enter":
 			return fleetPage.toggleEditFleetRow(m)
+		}
+		return nil
+	case editFleetRowAgents:
+		switch keyMsg.String() {
+		case " ", "enter":
+			fleetPage.editFleet.agentsExpanded = !fleetPage.editFleet.agentsExpanded
+		case "right", "l":
+			fleetPage.editFleet.agentsExpanded = true
+		case "left", "h":
+			fleetPage.editFleet.agentsExpanded = false
 		}
 		return nil
 	case editFleetRowCustomMounts:
@@ -1008,10 +1040,15 @@ func (fleetPage *fleetPage) closeEditFleet(_ *model) {
 // ===========================================
 
 // editFleetState holds the edit-fleet settings dialog: the shared-mount and
-// caching toggles plus the collapsible Caching / Custom-mounts / Layouts
-// sections. Every change is instant-saved; the layout-preset capture flow
-// itself lives in fleetPage.lpFlow while mode == viewLayoutPreset.
+// caching toggles plus the collapsible Agents / Caching / Custom-mounts /
+// Layouts sections. Every change is instant-saved; the layout-preset capture
+// flow itself lives in fleetPage.lpFlow while mode == viewLayoutPreset.
 type editFleetState struct {
+	// Agents section. The coding-agent mounts (Claude / Codex / Auggie) live
+	// under a collapsible "Agents" header (issue #184); GitHub CLI stays a
+	// top-level mount row since it is a supporting tool, not a coding agent.
+	agentsExpanded bool // ▼ Agents expanded, revealing the agent-tool rows
+
 	claudeMount       bool
 	codexMount        bool
 	ghMount           bool
@@ -1079,14 +1116,20 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 
 	for _, row := range fleetPage.visibleEditFleetRows() {
 		switch row {
+		case editFleetRowAgents:
+			arrow := "▶ "
+			if fleetPage.editFleet.agentsExpanded {
+				arrow = "▼ "
+			}
+			d.WriteString(marker(row) + dialogLabel.Render(fmt.Sprintf("%sAgents (%d)", arrow, fleetPage.enabledAgentCount())))
 		case editFleetRowClaude:
-			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.claudeMount) + " " + dialogLabel.Render("Claude Code mount"))
+			d.WriteString(marker(row) + "  " + checkbox(fleetPage.editFleet.claudeMount) + " " + dialogLabel.Render("Claude Code mount"))
 		case editFleetRowCodex:
-			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.codexMount) + " " + dialogLabel.Render("Codex mount"))
+			d.WriteString(marker(row) + "  " + checkbox(fleetPage.editFleet.codexMount) + " " + dialogLabel.Render("Codex mount"))
+		case editFleetRowAuggie:
+			d.WriteString(marker(row) + "  " + checkbox(fleetPage.editFleet.auggieMount) + " " + dialogLabel.Render("Auggie mount"))
 		case editFleetRowGh:
 			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.ghMount) + " " + dialogLabel.Render("GitHub CLI mount"))
-		case editFleetRowAuggie:
-			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.auggieMount) + " " + dialogLabel.Render("Auggie mount"))
 		case editFleetRowHomeDir:
 			// Text input when focused, dim static text otherwise; append a
 			// spinner + status while an auto-detect runs.
@@ -1318,6 +1361,11 @@ func (fleetPage *fleetPage) editFleetHint() string {
 		return "[enter] Edit  [l/→] Buttons  [j/k] Select  [q/esc] Save & Close"
 	}
 	switch fleetPage.dlg.row {
+	case editFleetRowAgents:
+		if fleetPage.editFleet.agentsExpanded {
+			return "[h/←] Collapse  [j/k] Select  [q/esc] Save & Close"
+		}
+		return "[l/→/space] Expand  [j/k] Select  [q/esc] Save & Close"
 	case editFleetRowCustomMounts:
 		if fleetPage.editFleet.customMountsExpanded {
 			return "[h/←] Collapse  [j/k] Select  [q/esc] Save & Close"
