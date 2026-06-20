@@ -670,12 +670,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 				if page.mode == viewNormal && page.listRowY >= 0 {
-					if idx := mouseMsg.Y - page.listRowY; idx >= 0 && idx < len(page.rows) && page.rows[idx].selectable() {
+					idx := mouseMsg.Y - page.listRowY
+					switch {
+					case idx < 0 || idx >= len(page.rows):
+						// outside the row list
+					case mouseMsg.X >= prStatusClickColumn &&
+						m.width-5 > instanceStatusCol &&
+						len(m.rowInlinePRRefs(page.rows[idx])) > 0:
+						// Clicking the inline PR status (the right of a child row, past
+						// the label) selects it and opens the PR — Enter is synthesized
+						// into the tag-selected path. The width guard skips the click
+						// when the terminal is too narrow for the PR status to have
+						// rendered (it would otherwise be truncated off-screen).
+						page.cursor = idx
+						page.armadaSel.focused = false
+						page.tagSelected = true
+						hit = true
+					case page.rows[idx].selectable():
 						page.cursor = idx
 						// Clicking a row takes focus off the Armada selector, so
 						// the synthesized Space/Enter acts on the clicked row
 						// rather than (re)opening the dropdown.
 						page.armadaSel.focused = false
+						page.tagSelected = false
 						hit = true
 						if page.rows[idx].kind == rowInstance {
 							synthesizedKey = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
@@ -1165,7 +1182,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							if warnData, err := os.ReadFile(warnPath); err == nil {
 								_ = os.Remove(warnPath)
 								firstLine := strings.SplitN(strings.TrimSpace(string(warnData)), "\n", 2)[0]
-								m.message = fmt.Sprintf("Instance %s is running — %s (press l for details)", key, firstLine)
+								m.message = fmt.Sprintf("Instance %s is running — %s (press L for details)", key, firstLine)
 							} else {
 								m.message = fmt.Sprintf("Instance %s is running (container: %s)",
 									key, instance.ContainerID[:min(12, len(instance.ContainerID))])

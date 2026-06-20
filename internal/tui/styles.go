@@ -55,6 +55,8 @@ var (
 
 	// Auto-tag (PR status) signal colours, reusing the running/creating/error
 	// palette: green = good, yellow = in-progress/neutral, red = needs attention.
+	// Grey de-emphasises the pending/in-progress states (review "Pending" and
+	// pending checks) to cut visual noise.
 	prGreenStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("42"))
 
@@ -63,6 +65,9 @@ var (
 
 	prRedStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("196"))
+
+	prGrayStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240"))
 
 	// Agent tool indicator
 	agentWorkingStyle = lipgloss.NewStyle().

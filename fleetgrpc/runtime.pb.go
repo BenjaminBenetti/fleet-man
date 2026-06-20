@@ -256,14 +256,18 @@ func (PrSignal) EnumDescriptor() ([]byte, []int) {
 }
 
 // PrReviewState is the aggregate review decision across an instance's open PRs,
-// driving the "[Changes Requested | Approved]" element. UNSPECIFIED means no
-// decision has landed yet, in which case the TUI hides that element.
+// driving the review element of the auto tag. For an open PR it is always one of
+// the three concrete states: APPROVED ("Accepted", green) when every PR is
+// approved, CHANGES_REQUESTED ("Rejected", red) when any PR needs work, PENDING
+// ("Pending", grey) otherwise. UNSPECIFIED is the zero value (no PRs) and
+// renders nothing.
 type PrReviewState int32
 
 const (
 	PrReviewState_PR_REVIEW_STATE_UNSPECIFIED       PrReviewState = 0
 	PrReviewState_PR_REVIEW_STATE_APPROVED          PrReviewState = 1
 	PrReviewState_PR_REVIEW_STATE_CHANGES_REQUESTED PrReviewState = 2
+	PrReviewState_PR_REVIEW_STATE_PENDING           PrReviewState = 3
 )
 
 // Enum value maps for PrReviewState.
@@ -272,11 +276,13 @@ var (
 		0: "PR_REVIEW_STATE_UNSPECIFIED",
 		1: "PR_REVIEW_STATE_APPROVED",
 		2: "PR_REVIEW_STATE_CHANGES_REQUESTED",
+		3: "PR_REVIEW_STATE_PENDING",
 	}
 	PrReviewState_value = map[string]int32{
 		"PR_REVIEW_STATE_UNSPECIFIED":       0,
 		"PR_REVIEW_STATE_APPROVED":          1,
 		"PR_REVIEW_STATE_CHANGES_REQUESTED": 2,
+		"PR_REVIEW_STATE_PENDING":           3,
 	}
 )
 
@@ -487,6 +493,68 @@ func (x *ForwardedPort) GetLabel() string {
 	return ""
 }
 
+// PrRef identifies one open PR so the TUI can navigate to it (open in a
+// browser) and label it in the multi-PR chooser dialog.
+type PrRef struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Number        int32                  `protobuf:"varint,1,opt,name=number,proto3" json:"number,omitempty"`
+	Url           string                 `protobuf:"bytes,2,opt,name=url,proto3" json:"url,omitempty"`
+	Title         string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrRef) Reset() {
+	*x = PrRef{}
+	mi := &file_runtime_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrRef) ProtoMessage() {}
+
+func (x *PrRef) ProtoReflect() protoreflect.Message {
+	mi := &file_runtime_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrRef.ProtoReflect.Descriptor instead.
+func (*PrRef) Descriptor() ([]byte, []int) {
+	return file_runtime_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *PrRef) GetNumber() int32 {
+	if x != nil {
+		return x.Number
+	}
+	return 0
+}
+
+func (x *PrRef) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *PrRef) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
 // PrStatus is the aggregated GitHub pull-request state for an instance's
 // workspace repo PLUS any nested subrepos, computed by running `gh` inside the
 // container. It drives the "auto tag" the TUI renders in the tag slot when an
@@ -508,14 +576,18 @@ type PrStatus struct {
 	ChecksTotal  int32 `protobuf:"varint,5,opt,name=checks_total,json=checksTotal,proto3" json:"checks_total,omitempty"`
 	// Colour for the [Checks x/x] indicator: green when all passed, red on any
 	// failure, yellow while any are still pending.
-	ChecksSignal  PrSignal `protobuf:"varint,6,opt,name=checks_signal,json=checksSignal,proto3,enum=fleetgrpc.PrSignal" json:"checks_signal,omitempty"`
+	ChecksSignal PrSignal `protobuf:"varint,6,opt,name=checks_signal,json=checksSignal,proto3,enum=fleetgrpc.PrSignal" json:"checks_signal,omitempty"`
+	// The open PRs themselves, so the TUI can open one in a browser (or present a
+	// chooser when there is more than one). Order follows discovery (workspace
+	// repo first, then subrepos).
+	Prs           []*PrRef `protobuf:"bytes,7,rep,name=prs,proto3" json:"prs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PrStatus) Reset() {
 	*x = PrStatus{}
-	mi := &file_runtime_proto_msgTypes[3]
+	mi := &file_runtime_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -527,7 +599,7 @@ func (x *PrStatus) String() string {
 func (*PrStatus) ProtoMessage() {}
 
 func (x *PrStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_proto_msgTypes[3]
+	mi := &file_runtime_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -540,7 +612,7 @@ func (x *PrStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrStatus.ProtoReflect.Descriptor instead.
 func (*PrStatus) Descriptor() ([]byte, []int) {
-	return file_runtime_proto_rawDescGZIP(), []int{3}
+	return file_runtime_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *PrStatus) GetOpenCount() int32 {
@@ -585,6 +657,13 @@ func (x *PrStatus) GetChecksSignal() PrSignal {
 	return PrSignal_PR_SIGNAL_UNSPECIFIED
 }
 
+func (x *PrStatus) GetPrs() []*PrRef {
+	if x != nil {
+		return x.Prs
+	}
+	return nil
+}
+
 // InstanceRuntime is the live view of ONE instance: everything the TUI renders
 // that isn't persisted. Keyed by (fleet, instance) so the client joins it to the
 // persisted Instance of the same name. Any sub-field may be zero/absent until
@@ -624,7 +703,7 @@ type InstanceRuntime struct {
 
 func (x *InstanceRuntime) Reset() {
 	*x = InstanceRuntime{}
-	mi := &file_runtime_proto_msgTypes[4]
+	mi := &file_runtime_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -636,7 +715,7 @@ func (x *InstanceRuntime) String() string {
 func (*InstanceRuntime) ProtoMessage() {}
 
 func (x *InstanceRuntime) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_proto_msgTypes[4]
+	mi := &file_runtime_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -649,7 +728,7 @@ func (x *InstanceRuntime) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstanceRuntime.ProtoReflect.Descriptor instead.
 func (*InstanceRuntime) Descriptor() ([]byte, []int) {
-	return file_runtime_proto_rawDescGZIP(), []int{4}
+	return file_runtime_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *InstanceRuntime) GetFleet() string {
@@ -747,7 +826,11 @@ const file_runtime_proto_rawDesc = "" +
 	"\vremote_port\x18\x02 \x01(\x05R\n" +
 	"remotePort\x12\x19\n" +
 	"\x05label\x18\x03 \x01(\tH\x00R\x05label\x88\x01\x01B\b\n" +
-	"\x06_label\"\x8f\x02\n" +
+	"\x06_label\"G\n" +
+	"\x05PrRef\x12\x16\n" +
+	"\x06number\x18\x01 \x01(\x05R\x06number\x12\x10\n" +
+	"\x03url\x18\x02 \x01(\tR\x03url\x12\x14\n" +
+	"\x05title\x18\x03 \x01(\tR\x05title\"\xb3\x02\n" +
 	"\bPrStatus\x12\x1d\n" +
 	"\n" +
 	"open_count\x18\x01 \x01(\x05R\topenCount\x120\n" +
@@ -755,7 +838,8 @@ const file_runtime_proto_rawDesc = "" +
 	"\x06review\x18\x03 \x01(\x0e2\x18.fleetgrpc.PrReviewStateR\x06review\x12#\n" +
 	"\rchecks_passed\x18\x04 \x01(\x05R\fchecksPassed\x12!\n" +
 	"\fchecks_total\x18\x05 \x01(\x05R\vchecksTotal\x128\n" +
-	"\rchecks_signal\x18\x06 \x01(\x0e2\x13.fleetgrpc.PrSignalR\fchecksSignal\"\xd4\x04\n" +
+	"\rchecks_signal\x18\x06 \x01(\x0e2\x13.fleetgrpc.PrSignalR\fchecksSignal\x12\"\n" +
+	"\x03prs\x18\a \x03(\v2\x10.fleetgrpc.PrRefR\x03prs\"\xd4\x04\n" +
 	"\x0fInstanceRuntime\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12?\n" +
@@ -796,11 +880,12 @@ const file_runtime_proto_rawDesc = "" +
 	"\x15PR_SIGNAL_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fPR_SIGNAL_GREEN\x10\x01\x12\x14\n" +
 	"\x10PR_SIGNAL_YELLOW\x10\x02\x12\x11\n" +
-	"\rPR_SIGNAL_RED\x10\x03*u\n" +
+	"\rPR_SIGNAL_RED\x10\x03*\x92\x01\n" +
 	"\rPrReviewState\x12\x1f\n" +
 	"\x1bPR_REVIEW_STATE_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18PR_REVIEW_STATE_APPROVED\x10\x01\x12%\n" +
-	"!PR_REVIEW_STATE_CHANGES_REQUESTED\x10\x02B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
+	"!PR_REVIEW_STATE_CHANGES_REQUESTED\x10\x02\x12\x1b\n" +
+	"\x17PR_REVIEW_STATE_PENDING\x10\x03B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
 
 var (
 	file_runtime_proto_rawDescOnce sync.Once
@@ -815,7 +900,7 @@ func file_runtime_proto_rawDescGZIP() []byte {
 }
 
 var file_runtime_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_runtime_proto_goTypes = []any{
 	(LiveContainerStatus)(0),      // 0: fleetgrpc.LiveContainerStatus
 	(AgentTool)(0),                // 1: fleetgrpc.AgentTool
@@ -825,27 +910,29 @@ var file_runtime_proto_goTypes = []any{
 	(*ContainerStats)(nil),        // 5: fleetgrpc.ContainerStats
 	(*TmuxSession)(nil),           // 6: fleetgrpc.TmuxSession
 	(*ForwardedPort)(nil),         // 7: fleetgrpc.ForwardedPort
-	(*PrStatus)(nil),              // 8: fleetgrpc.PrStatus
-	(*InstanceRuntime)(nil),       // 9: fleetgrpc.InstanceRuntime
-	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
+	(*PrRef)(nil),                 // 8: fleetgrpc.PrRef
+	(*PrStatus)(nil),              // 9: fleetgrpc.PrStatus
+	(*InstanceRuntime)(nil),       // 10: fleetgrpc.InstanceRuntime
+	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
 }
 var file_runtime_proto_depIdxs = []int32{
 	3,  // 0: fleetgrpc.PrStatus.pr_signal:type_name -> fleetgrpc.PrSignal
 	4,  // 1: fleetgrpc.PrStatus.review:type_name -> fleetgrpc.PrReviewState
 	3,  // 2: fleetgrpc.PrStatus.checks_signal:type_name -> fleetgrpc.PrSignal
-	0,  // 3: fleetgrpc.InstanceRuntime.live_status:type_name -> fleetgrpc.LiveContainerStatus
-	1,  // 4: fleetgrpc.InstanceRuntime.agent_tool:type_name -> fleetgrpc.AgentTool
-	2,  // 5: fleetgrpc.InstanceRuntime.agent_activity:type_name -> fleetgrpc.AgentActivity
-	5,  // 6: fleetgrpc.InstanceRuntime.stats:type_name -> fleetgrpc.ContainerStats
-	6,  // 7: fleetgrpc.InstanceRuntime.sessions:type_name -> fleetgrpc.TmuxSession
-	7,  // 8: fleetgrpc.InstanceRuntime.forwarded_ports:type_name -> fleetgrpc.ForwardedPort
-	10, // 9: fleetgrpc.InstanceRuntime.updated_at:type_name -> google.protobuf.Timestamp
-	8,  // 10: fleetgrpc.InstanceRuntime.pr_status:type_name -> fleetgrpc.PrStatus
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	8,  // 3: fleetgrpc.PrStatus.prs:type_name -> fleetgrpc.PrRef
+	0,  // 4: fleetgrpc.InstanceRuntime.live_status:type_name -> fleetgrpc.LiveContainerStatus
+	1,  // 5: fleetgrpc.InstanceRuntime.agent_tool:type_name -> fleetgrpc.AgentTool
+	2,  // 6: fleetgrpc.InstanceRuntime.agent_activity:type_name -> fleetgrpc.AgentActivity
+	5,  // 7: fleetgrpc.InstanceRuntime.stats:type_name -> fleetgrpc.ContainerStats
+	6,  // 8: fleetgrpc.InstanceRuntime.sessions:type_name -> fleetgrpc.TmuxSession
+	7,  // 9: fleetgrpc.InstanceRuntime.forwarded_ports:type_name -> fleetgrpc.ForwardedPort
+	11, // 10: fleetgrpc.InstanceRuntime.updated_at:type_name -> google.protobuf.Timestamp
+	9,  // 11: fleetgrpc.InstanceRuntime.pr_status:type_name -> fleetgrpc.PrStatus
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_runtime_proto_init() }
@@ -854,14 +941,14 @@ func file_runtime_proto_init() {
 		return
 	}
 	file_runtime_proto_msgTypes[2].OneofWrappers = []any{}
-	file_runtime_proto_msgTypes[4].OneofWrappers = []any{}
+	file_runtime_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_runtime_proto_rawDesc), len(file_runtime_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

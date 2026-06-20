@@ -108,7 +108,7 @@ func TestAggregatePRStatus(t *testing.T) {
 			}},
 			// Not CLEAN (checks still running) => PR indicator yellow, not green.
 			wantOpen: 1, wantPRSig: fleetgrpc.PrSignal_PR_SIGNAL_YELLOW,
-			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_UNSPECIFIED,
+			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_PENDING,
 			wantPassed: 1, wantTotal: 2, wantCheckSig: fleetgrpc.PrSignal_PR_SIGNAL_YELLOW,
 		},
 		{
@@ -138,7 +138,7 @@ func TestAggregatePRStatus(t *testing.T) {
 				StatusCheckRollup: []ghCheck{passCheck()},
 			}},
 			wantOpen: 1, wantPRSig: fleetgrpc.PrSignal_PR_SIGNAL_YELLOW,
-			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_UNSPECIFIED,
+			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_PENDING,
 			wantPassed: 1, wantTotal: 1, wantCheckSig: fleetgrpc.PrSignal_PR_SIGNAL_GREEN,
 		},
 		{
@@ -152,7 +152,7 @@ func TestAggregatePRStatus(t *testing.T) {
 					StatusCheckRollup: []ghCheck{failCheck(), passCheck()}},
 			},
 			wantOpen: 3, wantPRSig: fleetgrpc.PrSignal_PR_SIGNAL_RED,
-			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_APPROVED,
+			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_PENDING,
 			wantPassed: 4, wantTotal: 5, wantCheckSig: fleetgrpc.PrSignal_PR_SIGNAL_RED,
 		},
 		{
@@ -166,7 +166,7 @@ func TestAggregatePRStatus(t *testing.T) {
 			// PR signal (all CLEAN) and checks signal (a pending check) are
 			// computed independently.
 			wantOpen: 2, wantPRSig: fleetgrpc.PrSignal_PR_SIGNAL_GREEN,
-			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_UNSPECIFIED,
+			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_PENDING,
 			wantPassed: 1, wantTotal: 2, wantCheckSig: fleetgrpc.PrSignal_PR_SIGNAL_YELLOW,
 		},
 		{
@@ -188,6 +188,30 @@ func TestAggregatePRStatus(t *testing.T) {
 			},
 			wantOpen: 2, wantPRSig: fleetgrpc.PrSignal_PR_SIGNAL_RED,
 			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_CHANGES_REQUESTED,
+			wantPassed: 2, wantTotal: 2, wantCheckSig: fleetgrpc.PrSignal_PR_SIGNAL_GREEN,
+		},
+		{
+			name: "every PR approved -> Accepted",
+			prs: []ghPR{
+				{State: "OPEN", MergeStateStatus: "CLEAN", ReviewDecision: "APPROVED",
+					StatusCheckRollup: []ghCheck{passCheck()}},
+				{State: "OPEN", MergeStateStatus: "CLEAN", ReviewDecision: "APPROVED",
+					StatusCheckRollup: []ghCheck{passCheck()}},
+			},
+			wantOpen: 2, wantPRSig: fleetgrpc.PrSignal_PR_SIGNAL_GREEN,
+			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_APPROVED,
+			wantPassed: 2, wantTotal: 2, wantCheckSig: fleetgrpc.PrSignal_PR_SIGNAL_GREEN,
+		},
+		{
+			name: "one approved, one still under review -> Under Review (not all approved)",
+			prs: []ghPR{
+				{State: "OPEN", MergeStateStatus: "CLEAN", ReviewDecision: "APPROVED",
+					StatusCheckRollup: []ghCheck{passCheck()}},
+				{State: "OPEN", MergeStateStatus: "BLOCKED", ReviewDecision: "REVIEW_REQUIRED",
+					StatusCheckRollup: []ghCheck{passCheck()}},
+			},
+			wantOpen: 2, wantPRSig: fleetgrpc.PrSignal_PR_SIGNAL_YELLOW,
+			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_PENDING,
 			wantPassed: 2, wantTotal: 2, wantCheckSig: fleetgrpc.PrSignal_PR_SIGNAL_GREEN,
 		},
 	}
@@ -238,8 +262,8 @@ func TestParsePRProbeOutput_Sentinels(t *testing.T) {
 func TestParsePRProbeOutput_SentinelStringInsideJSONIsNotDegrade(t *testing.T) {
 	// A check name (or branch, title, …) that coincidentally contains a sentinel
 	// string must NOT silently disable the probe — the real output is a JSON
-	// array, so only a leading sentinel counts as "degrade".
-	out := `[{"number":3,"state":"OPEN","mergeStateStatus":"UNSTABLE","reviewDecision":"","statusCheckRollup":[{"name":"FLEET_NO_GH-smoke","status":"COMPLETED","conclusion":"SUCCESS"}]}]`
+	// object, so only a leading sentinel counts as "degrade".
+	out := `{"number":3,"state":"OPEN","mergeStateStatus":"UNSTABLE","reviewDecision":"","statusCheckRollup":[{"name":"FLEET_NO_GH-smoke","status":"COMPLETED","conclusion":"SUCCESS"}]}`
 	got := parsePRProbeOutput(out)
 	if got == nil {
 		t.Fatalf("parsePRProbeOutput degraded to nil on a sentinel substring inside JSON")
@@ -249,23 +273,21 @@ func TestParsePRProbeOutput_SentinelStringInsideJSONIsNotDegrade(t *testing.T) {
 	}
 }
 
-func TestParsePRProbeOutput_ConcatenatedArrays(t *testing.T) {
-	// Two repos' `gh pr list --json` arrays concatenated: the workspace repo
-	// (one approved, all-green PR) and a subrepo (one failing-check PR). The
-	// second array is pretty-printed to prove whitespace doesn't matter.
-	out := `[{"number":12,"state":"OPEN","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}]
-[
-  {
-    "number": 7,
-    "state": "OPEN",
-    "mergeStateStatus": "UNSTABLE",
-    "reviewDecision": "",
-    "statusCheckRollup": [
-      {"status": "COMPLETED", "conclusion": "FAILURE"},
-      {"state": "SUCCESS"}
-    ]
-  }
-]
+func TestParsePRProbeOutput_ConcatenatedObjects(t *testing.T) {
+	// Two `gh pr view --json` objects concatenated (workspace repo + a subrepo):
+	// one approved all-green PR and one failing-check PR. The second is
+	// pretty-printed to prove whitespace between objects doesn't matter.
+	out := `{"number":12,"state":"OPEN","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}
+{
+  "number": 7,
+  "state": "OPEN",
+  "mergeStateStatus": "UNSTABLE",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+    {"status": "COMPLETED", "conclusion": "FAILURE"},
+    {"state": "SUCCESS"}
+  ]
+}
 `
 	got := parsePRProbeOutput(out)
 	if got == nil {
@@ -285,17 +307,20 @@ func TestParsePRProbeOutput_ConcatenatedArrays(t *testing.T) {
 	}
 }
 
-func TestParsePRProbeOutput_EmptyArraysAndClosed(t *testing.T) {
-	// A repo with no PRs emits `[]`; a repo whose only PR is closed contributes
-	// nothing. Combined => no open PRs => nil.
-	out := "[]\n[{\"number\":1,\"state\":\"CLOSED\",\"mergeStateStatus\":\"CLEAN\",\"statusCheckRollup\":[]}]\n[]\n"
-	if got := parsePRProbeOutput(out); got != nil {
-		t.Errorf("parsePRProbeOutput = %+v, want nil (no open PRs)", got)
+func TestParsePRProbeOutput_EmptyAndClosed(t *testing.T) {
+	// No open PRs => the script emits nothing => nil. A closed PR (filtered by
+	// state) also contributes nothing.
+	if got := parsePRProbeOutput(""); got != nil {
+		t.Errorf("empty output = %+v, want nil", got)
+	}
+	closed := `{"number":1,"state":"CLOSED","mergeStateStatus":"CLEAN","statusCheckRollup":[]}`
+	if got := parsePRProbeOutput(closed); got != nil {
+		t.Errorf("closed-only output = %+v, want nil (no open PRs)", got)
 	}
 
-	// Same but with one genuinely open PR mixed in.
-	out2 := "[]\n[{\"number\":2,\"state\":\"OPEN\",\"mergeStateStatus\":\"CLEAN\",\"reviewDecision\":\"APPROVED\",\"statusCheckRollup\":[{\"status\":\"COMPLETED\",\"conclusion\":\"SUCCESS\"}]}]\n"
-	got := parsePRProbeOutput(out2)
+	// A closed object followed by a genuinely open one => one open PR.
+	out := closed + "\n" + `{"number":2,"state":"OPEN","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}` + "\n"
+	got := parsePRProbeOutput(out)
 	if got == nil {
 		t.Fatalf("parsePRProbeOutput returned nil, want one open PR")
 	}

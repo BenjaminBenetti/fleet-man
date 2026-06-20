@@ -37,13 +37,30 @@ func autoTagModel(fp *fleetPage, inst *fleet.Instance, expanded bool, ps *fleetg
 func TestInstanceAutoTag_NoStatus(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
 	m := autoTagModel(newFleetPage(), inst, true, nil)
-	if got := m.instanceAutoTag("alpha", "agent-1"); got != "" {
+	if got := m.instanceAutoTag("alpha", "agent-1", false); got != "" {
 		t.Fatalf("auto tag with no runtime = %q, want empty", got)
 	}
 	// Probed, but no open PRs.
 	m = autoTagModel(newFleetPage(), inst, true, &fleetgrpc.PrStatus{OpenCount: 0})
-	if got := m.instanceAutoTag("alpha", "agent-1"); got != "" {
+	if got := m.instanceAutoTag("alpha", "agent-1", false); got != "" {
 		t.Fatalf("auto tag with zero open PRs = %q, want empty", got)
+	}
+}
+
+func TestPrChecksStyleGraysPending(t *testing.T) {
+	// Pending checks are de-emphasised to grey; pass/fail keep green/red.
+	if prChecksStyle(fleetgrpc.PrSignal_PR_SIGNAL_YELLOW).GetForeground() != prGrayStyle.GetForeground() {
+		t.Errorf("pending (yellow) checks should render in grey")
+	}
+	if prChecksStyle(fleetgrpc.PrSignal_PR_SIGNAL_GREEN).GetForeground() != prGreenStyle.GetForeground() {
+		t.Errorf("passing checks should stay green")
+	}
+	if prChecksStyle(fleetgrpc.PrSignal_PR_SIGNAL_RED).GetForeground() != prRedStyle.GetForeground() {
+		t.Errorf("failing checks should stay red")
+	}
+	// The PR indicator itself keeps yellow for its pending state.
+	if prSignalStyle(fleetgrpc.PrSignal_PR_SIGNAL_YELLOW).GetForeground() != prYellowStyle.GetForeground() {
+		t.Errorf("the PR indicator should keep yellow, not grey")
 	}
 }
 
@@ -58,8 +75,8 @@ func TestInstanceAutoTag_Format(t *testing.T) {
 		ChecksSignal: fleetgrpc.PrSignal_PR_SIGNAL_GREEN,
 	}
 	m := autoTagModel(newFleetPage(), inst, true, ps)
-	got := m.instanceAutoTag("alpha", "agent-1")
-	for _, want := range []string{"PR", "Approved", "Checks 3/3"} {
+	got := m.instanceAutoTag("alpha", "agent-1", false)
+	for _, want := range []string{"PR", "Accepted", "Checks 3/3"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("auto tag %q missing %q", got, want)
 		}
@@ -80,14 +97,14 @@ func TestInstanceAutoTag_MultiplePRsAndChangesRequested(t *testing.T) {
 		ChecksSignal: fleetgrpc.PrSignal_PR_SIGNAL_RED,
 	}
 	m := autoTagModel(newFleetPage(), inst, true, ps)
-	got := m.instanceAutoTag("alpha", "agent-1")
-	for _, want := range []string{"PRx3", "Changes Requested", "Checks 4/6"} {
+	got := m.instanceAutoTag("alpha", "agent-1", false)
+	for _, want := range []string{"PRx3", "Rejected", "Checks 4/6"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("auto tag %q missing %q", got, want)
 		}
 	}
-	if strings.Contains(got, "Approved") {
-		t.Errorf("changes-requested tag should not contain Approved: %q", got)
+	if strings.Contains(got, "Accepted") || strings.Contains(got, "Pending") {
+		t.Errorf("rejected tag should not contain Accepted/Pending: %q", got)
 	}
 }
 
@@ -101,11 +118,11 @@ func TestInstanceAutoTag_HidesReviewAndChecksWhenAbsent(t *testing.T) {
 		ChecksTotal: 0,
 	}
 	m := autoTagModel(newFleetPage(), inst, true, ps)
-	got := m.instanceAutoTag("alpha", "agent-1")
+	got := m.instanceAutoTag("alpha", "agent-1", false)
 	if !strings.Contains(got, "PR") {
 		t.Errorf("auto tag %q missing PR indicator", got)
 	}
-	if strings.Contains(got, "Approved") || strings.Contains(got, "Changes Requested") {
+	if strings.Contains(got, "Accepted") || strings.Contains(got, "Rejected") || strings.Contains(got, "Pending") {
 		t.Errorf("review element should be hidden: %q", got)
 	}
 	if strings.Contains(got, "Checks") {
@@ -113,7 +130,7 @@ func TestInstanceAutoTag_HidesReviewAndChecksWhenAbsent(t *testing.T) {
 	}
 }
 
-func TestBuildRowsInsertsAutoTagRowWhenNoUserTag(t *testing.T) {
+func TestBuildRowsMarksFirstChildForInlineAutoTagWhenNoUserTag(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning} // no user tag
 	ps := &fleetgrpc.PrStatus{OpenCount: 1, PrSignal: fleetgrpc.PrSignal_PR_SIGNAL_GREEN}
 	fp := newFleetPage()
@@ -121,14 +138,72 @@ func TestBuildRowsInsertsAutoTagRowWhenNoUserTag(t *testing.T) {
 
 	fp.buildRows(m)
 
-	found := false
+	// The PR-status auto tag rides the first child row's status column rather
+	// than a dedicated row, so no rowInstanceTag is inserted and the first child
+	// (here "+ new session", since there are no sessions) is marked inline.
 	for _, r := range fp.rows {
 		if r.kind == rowInstanceTag {
-			found = true
+			t.Fatalf("auto tag should not get its own row when there's no user tag: %#v", fp.rows)
 		}
 	}
-	if !found {
-		t.Fatalf("auto-tag row not inserted: %#v", fp.rows)
+	marked := 0
+	firstChildInline := false
+	for _, r := range fp.rows {
+		if r.prStatusInline {
+			marked++
+			if r.kind == rowNewSession {
+				firstChildInline = true
+			}
+		}
+	}
+	if marked != 1 {
+		t.Fatalf("want exactly one inline-PR-status row, got %d: %#v", marked, fp.rows)
+	}
+	if !firstChildInline {
+		t.Fatalf("first child row (+ new session) should carry the inline PR status: %#v", fp.rows)
+	}
+}
+
+func TestBuildRowsMarksFirstSessionRowInlineWithPRStatus(t *testing.T) {
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning, ContainerID: "abc"}
+	ps := &fleetgrpc.PrStatus{OpenCount: 1, PrSignal: fleetgrpc.PrSignal_PR_SIGNAL_GREEN}
+	fp := newFleetPage()
+	fp.savedGroups[computeGroupKey("agent-1", "abc123")] = savedGroup{
+		GroupID: "g-a", InstanceName: "agent-1",
+		Sessions: []string{"g-a", "g-a~ff00"}, PaneCount: 2,
+	}
+	store := NewSessionStore()
+	ref := InstanceRef{Fleet: "alpha", Instance: "agent-1"}
+	store.SetExpanded(ref, true)
+	store.SetDiscovery(ref, nil)
+	m := &model{
+		st:           &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha", Instances: []*fleet.Instance{inst}}}},
+		sessionStore: store,
+		fleetPage:    fp,
+		runtime:      map[string]*fleetgrpc.InstanceRuntime{rtKey("alpha", "agent-1"): {Fleet: "alpha", Instance: "agent-1", PrStatus: ps}},
+	}
+
+	fp.buildRows(m)
+
+	// The first child row is the session/group row; it — and only it — carries
+	// the inline PR status, not the "+ new session" row below it.
+	var firstChild *row
+	for i := range fp.rows {
+		if fp.rows[i].kind == rowSession || fp.rows[i].kind == rowNewSession {
+			firstChild = &fp.rows[i]
+			break
+		}
+	}
+	if firstChild == nil || firstChild.kind != rowSession {
+		t.Fatalf("expected first child to be a session row: %#v", fp.rows)
+	}
+	if !firstChild.prStatusInline {
+		t.Fatalf("first session row should carry the inline PR status: %#v", fp.rows)
+	}
+	for _, r := range fp.rows {
+		if r.kind == rowNewSession && r.prStatusInline {
+			t.Fatalf("+ new session should not carry the inline PR status when a session exists")
+		}
 	}
 }
 
@@ -161,7 +236,7 @@ func TestViewFleetListRendersAutoTag(t *testing.T) {
 	fp.buildRows(m)
 
 	view := fp.viewFleetList(m)
-	for _, want := range []string{"PRx2", "Approved", "Checks 5/8"} {
+	for _, want := range []string{"PRx2", "Accepted", "Checks 5/8"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
