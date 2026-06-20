@@ -267,6 +267,48 @@ func TestBuildRowsClearsStaleSelection(t *testing.T) {
 	}
 }
 
+func TestMouseClickOnInlinePROpensPR(t *testing.T) {
+	// A left-click on the inline PR status column selects it AND opens the PR:
+	// the mouse handler leaves synthesizedKey at its default (Enter), which the
+	// tag-selected path turns into openSelectedPR.
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
+	fp := newFleetPage()
+	mp := autoTagModel(fp, inst, true, prStatusWithRefs(ref(99, "https://x/pull/99", "fix")))
+	m := *mp
+	m.currentPage = fp
+	m.width = 90
+	fp.buildRows(&m)
+	fp.viewFleetList(&m) // records listRowY
+
+	rowIdx := -1
+	for i, r := range fp.rows {
+		if r.prStatusInline {
+			rowIdx = i
+		}
+	}
+	if rowIdx < 0 {
+		t.Fatal("no inline-PR row built")
+	}
+	if fp.listRowY < 0 {
+		t.Fatalf("listRowY not recorded")
+	}
+
+	click := tea.MouseMsg{
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+		X:      prStatusClickColumn,
+		Y:      fp.listRowY + rowIdx,
+	}
+	next, _ := m.Update(click)
+	nm := next.(model)
+	if !nm.fleetPage.tagSelected {
+		t.Errorf("click on the inline PR should select it")
+	}
+	if !strings.Contains(nm.message, "99") {
+		t.Errorf("click should open PR #99 (message %q)", nm.message)
+	}
+}
+
 func TestIsBrowsableURL(t *testing.T) {
 	for _, u := range []string{"https://github.com/o/r/pull/1", "http://localhost:3000"} {
 		if !isBrowsableURL(u) {
