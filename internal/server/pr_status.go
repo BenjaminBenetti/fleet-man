@@ -184,10 +184,10 @@ func aggregatePRStatus(prs []ghPR) *fleetgrpc.PrStatus {
 		prSignal = fleetgrpc.PrSignal_PR_SIGNAL_GREEN
 	}
 
-	// Review element: changes-requested (red) wins; else "Accepted" (green) only
-	// when every PR is approved; otherwise the work is still under review
-	// (yellow). An open PR therefore always shows one of the three.
-	review := fleetgrpc.PrReviewState_PR_REVIEW_STATE_UNDER_REVIEW
+	// Review element: changes-requested ("Rejected", red) wins; else "Accepted"
+	// (green) only when every PR is approved; otherwise "Pending" (grey). An open
+	// PR therefore always shows one of the three.
+	review := fleetgrpc.PrReviewState_PR_REVIEW_STATE_PENDING
 	switch {
 	case anyChangesRequested:
 		review = fleetgrpc.PrReviewState_PR_REVIEW_STATE_CHANGES_REQUESTED

@@ -47,6 +47,23 @@ func TestInstanceAutoTag_NoStatus(t *testing.T) {
 	}
 }
 
+func TestPrChecksStyleGraysPending(t *testing.T) {
+	// Pending checks are de-emphasised to grey; pass/fail keep green/red.
+	if prChecksStyle(fleetgrpc.PrSignal_PR_SIGNAL_YELLOW).GetForeground() != prGrayStyle.GetForeground() {
+		t.Errorf("pending (yellow) checks should render in grey")
+	}
+	if prChecksStyle(fleetgrpc.PrSignal_PR_SIGNAL_GREEN).GetForeground() != prGreenStyle.GetForeground() {
+		t.Errorf("passing checks should stay green")
+	}
+	if prChecksStyle(fleetgrpc.PrSignal_PR_SIGNAL_RED).GetForeground() != prRedStyle.GetForeground() {
+		t.Errorf("failing checks should stay red")
+	}
+	// The PR indicator itself keeps yellow for its pending state.
+	if prSignalStyle(fleetgrpc.PrSignal_PR_SIGNAL_YELLOW).GetForeground() != prYellowStyle.GetForeground() {
+		t.Errorf("the PR indicator should keep yellow, not grey")
+	}
+}
+
 func TestInstanceAutoTag_Format(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
 	ps := &fleetgrpc.PrStatus{
@@ -81,13 +98,13 @@ func TestInstanceAutoTag_MultiplePRsAndChangesRequested(t *testing.T) {
 	}
 	m := autoTagModel(newFleetPage(), inst, true, ps)
 	got := m.instanceAutoTag("alpha", "agent-1", false)
-	for _, want := range []string{"PRx3", "Changes Requested", "Checks 4/6"} {
+	for _, want := range []string{"PRx3", "Rejected", "Checks 4/6"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("auto tag %q missing %q", got, want)
 		}
 	}
-	if strings.Contains(got, "Accepted") || strings.Contains(got, "Under Review") {
-		t.Errorf("changes-requested tag should not contain Accepted/Under Review: %q", got)
+	if strings.Contains(got, "Accepted") || strings.Contains(got, "Pending") {
+		t.Errorf("rejected tag should not contain Accepted/Pending: %q", got)
 	}
 }
 
@@ -105,7 +122,7 @@ func TestInstanceAutoTag_HidesReviewAndChecksWhenAbsent(t *testing.T) {
 	if !strings.Contains(got, "PR") {
 		t.Errorf("auto tag %q missing PR indicator", got)
 	}
-	if strings.Contains(got, "Accepted") || strings.Contains(got, "Changes Requested") || strings.Contains(got, "Under Review") {
+	if strings.Contains(got, "Accepted") || strings.Contains(got, "Rejected") || strings.Contains(got, "Pending") {
 		t.Errorf("review element should be hidden: %q", got)
 	}
 	if strings.Contains(got, "Checks") {

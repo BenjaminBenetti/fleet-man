@@ -108,7 +108,7 @@ func TestAggregatePRStatus(t *testing.T) {
 			}},
 			// Not CLEAN (checks still running) => PR indicator yellow, not green.
 			wantOpen: 1, wantPRSig: fleetgrpc.PrSignal_PR_SIGNAL_YELLOW,
-			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_UNDER_REVIEW,
+			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_PENDING,
 			wantPassed: 1, wantTotal: 2, wantCheckSig: fleetgrpc.PrSignal_PR_SIGNAL_YELLOW,
 		},
 		{
@@ -138,7 +138,7 @@ func TestAggregatePRStatus(t *testing.T) {
 				StatusCheckRollup: []ghCheck{passCheck()},
 			}},
 			wantOpen: 1, wantPRSig: fleetgrpc.PrSignal_PR_SIGNAL_YELLOW,
-			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_UNDER_REVIEW,
+			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_PENDING,
 			wantPassed: 1, wantTotal: 1, wantCheckSig: fleetgrpc.PrSignal_PR_SIGNAL_GREEN,
 		},
 		{
@@ -152,7 +152,7 @@ func TestAggregatePRStatus(t *testing.T) {
 					StatusCheckRollup: []ghCheck{failCheck(), passCheck()}},
 			},
 			wantOpen: 3, wantPRSig: fleetgrpc.PrSignal_PR_SIGNAL_RED,
-			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_UNDER_REVIEW,
+			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_PENDING,
 			wantPassed: 4, wantTotal: 5, wantCheckSig: fleetgrpc.PrSignal_PR_SIGNAL_RED,
 		},
 		{
@@ -166,7 +166,7 @@ func TestAggregatePRStatus(t *testing.T) {
 			// PR signal (all CLEAN) and checks signal (a pending check) are
 			// computed independently.
 			wantOpen: 2, wantPRSig: fleetgrpc.PrSignal_PR_SIGNAL_GREEN,
-			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_UNDER_REVIEW,
+			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_PENDING,
 			wantPassed: 1, wantTotal: 2, wantCheckSig: fleetgrpc.PrSignal_PR_SIGNAL_YELLOW,
 		},
 		{
@@ -211,7 +211,7 @@ func TestAggregatePRStatus(t *testing.T) {
 					StatusCheckRollup: []ghCheck{passCheck()}},
 			},
 			wantOpen: 2, wantPRSig: fleetgrpc.PrSignal_PR_SIGNAL_YELLOW,
-			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_UNDER_REVIEW,
+			wantReview: fleetgrpc.PrReviewState_PR_REVIEW_STATE_PENDING,
 			wantPassed: 2, wantTotal: 2, wantCheckSig: fleetgrpc.PrSignal_PR_SIGNAL_GREEN,
 		},
 	}

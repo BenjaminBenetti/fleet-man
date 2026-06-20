@@ -14,7 +14,7 @@ import (
 // `gh` inside the instance (see internal/server/pr_status.go) and pushed over
 // the runtime sidecar; this file only formats it.
 
-// prSignalStyle maps a PrSignal colour to its lipgloss style.
+// prSignalStyle maps a PrSignal colour to its lipgloss style (PR indicator).
 func prSignalStyle(sig fleetgrpc.PrSignal) lipgloss.Style {
 	switch sig {
 	case fleetgrpc.PrSignal_PR_SIGNAL_GREEN:
@@ -26,10 +26,23 @@ func prSignalStyle(sig fleetgrpc.PrSignal) lipgloss.Style {
 	}
 }
 
+// prChecksStyle is like prSignalStyle but de-emphasises the pending (yellow)
+// state to grey, since pending checks are the noisiest, least-actionable state.
+func prChecksStyle(sig fleetgrpc.PrSignal) lipgloss.Style {
+	switch sig {
+	case fleetgrpc.PrSignal_PR_SIGNAL_GREEN:
+		return prGreenStyle
+	case fleetgrpc.PrSignal_PR_SIGNAL_RED:
+		return prRedStyle
+	default: // YELLOW (pending) / UNSPECIFIED
+		return prGrayStyle
+	}
+}
+
 // instanceAutoTag renders the auto tag for an instance, or "" when there is
 // nothing to show — gh is unavailable inside the instance, no PR is open, or the
-// status hasn't been probed yet. The format is "[PR|PRxN] [Changes Requested |
-// Approved] [Checks x/x]", each element coloured and shown only when it applies.
+// status hasn't been probed yet. The format is "[PR|PRxN] [Rejected | Accepted |
+// Pending] [Checks x/x]", each element coloured and shown only when it applies.
 //
 // When selected (horizontally, via →/l), the whole tag is drawn as one chunk in
 // the pink selection colour wrapped in [ ], so it reads as a single navigable
@@ -53,21 +66,23 @@ func (m *model) instanceAutoTag(fleetName, instance string, selected bool) strin
 	}
 	segments = append(segments, segment{label, prSignalStyle(ps.GetPrSignal())})
 
-	// Review indicator: one of the three concrete states for an open PR.
+	// Review indicator: one of the three concrete states for an open PR. Pending
+	// is grey to keep the in-progress state quiet.
 	switch ps.GetReview() {
 	case fleetgrpc.PrReviewState_PR_REVIEW_STATE_CHANGES_REQUESTED:
-		segments = append(segments, segment{"Changes Requested", prRedStyle})
+		segments = append(segments, segment{"Rejected", prRedStyle})
 	case fleetgrpc.PrReviewState_PR_REVIEW_STATE_APPROVED:
 		segments = append(segments, segment{"Accepted", prGreenStyle})
-	case fleetgrpc.PrReviewState_PR_REVIEW_STATE_UNDER_REVIEW:
-		segments = append(segments, segment{"Under Review", prYellowStyle})
+	case fleetgrpc.PrReviewState_PR_REVIEW_STATE_PENDING:
+		segments = append(segments, segment{"Pending", prGrayStyle})
 	}
 
-	// Checks indicator: only when the PRs have any checks.
+	// Checks indicator: only when the PRs have any checks. Pending checks render
+	// grey (prChecksStyle) rather than yellow to reduce noise.
 	if ps.GetChecksTotal() > 0 {
 		segments = append(segments, segment{
 			fmt.Sprintf("Checks %d/%d", ps.GetChecksPassed(), ps.GetChecksTotal()),
-			prSignalStyle(ps.GetChecksSignal()),
+			prChecksStyle(ps.GetChecksSignal()),
 		})
 	}
 
