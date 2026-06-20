@@ -208,7 +208,12 @@ func aggregatePRStatus(prs []ghPR) *fleetgrpc.PrStatus {
 // reads successive arrays regardless of their interleaving whitespace; malformed
 // trailing noise stops the scan without discarding what parsed cleanly.
 func parsePRProbeOutput(out string) *fleetgrpc.PrStatus {
-	if strings.Contains(out, prNoGHSentinel) || strings.Contains(out, prNoAuthSentinel) {
+	// Match the sentinels by PREFIX, not Contains: the script emits one as the
+	// sole output (before any JSON, then exits), while real output is a JSON
+	// array starting with '['. A prefix check can't be tripped by a sentinel
+	// string that happens to appear inside PR JSON (a branch name, check name…).
+	trimmed := strings.TrimSpace(out)
+	if strings.HasPrefix(trimmed, prNoGHSentinel) || strings.HasPrefix(trimmed, prNoAuthSentinel) {
 		return nil
 	}
 	var prs []ghPR
@@ -281,9 +286,14 @@ func runProbeWithTimeout(cmd *backend.Cmd, timeout time.Duration) ([]byte, error
 }
 
 // prStatusPoller fires the gh probe across running instances on the slow
-// prStatusInterval cadence, and immediately when a TUI first subscribes (the
-// runtime-wanted false->true edge) so the auto-tag appears without a long wait.
-// Like the other runtime pollers it does nothing while no TUI is connected.
+// prStatusInterval cadence, plus once on the runtime-wanted false->true edge so
+// the auto-tag appears shortly after a TUI first subscribes rather than after a
+// full interval. The edge is detected on the next gate tick (within
+// prStatusGatePoll) rather than via h.runtimeEdge, which is single-consumer
+// (owned by liveStatusPoller); a few seconds' latency on a status line that
+// refreshes every prStatusInterval is an acceptable trade for not reworking that
+// channel into a broadcast. Like the other runtime pollers it does nothing while
+// no TUI is connected.
 func prStatusPoller(ctx context.Context, h *hub) {
 	ticker := time.NewTicker(prStatusGatePoll)
 	defer ticker.Stop()

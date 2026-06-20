@@ -235,6 +235,20 @@ func TestParsePRProbeOutput_Sentinels(t *testing.T) {
 	}
 }
 
+func TestParsePRProbeOutput_SentinelStringInsideJSONIsNotDegrade(t *testing.T) {
+	// A check name (or branch, title, …) that coincidentally contains a sentinel
+	// string must NOT silently disable the probe — the real output is a JSON
+	// array, so only a leading sentinel counts as "degrade".
+	out := `[{"number":3,"state":"OPEN","mergeStateStatus":"UNSTABLE","reviewDecision":"","statusCheckRollup":[{"name":"FLEET_NO_GH-smoke","status":"COMPLETED","conclusion":"SUCCESS"}]}]`
+	got := parsePRProbeOutput(out)
+	if got == nil {
+		t.Fatalf("parsePRProbeOutput degraded to nil on a sentinel substring inside JSON")
+	}
+	if got.GetOpenCount() != 1 {
+		t.Errorf("OpenCount = %d, want 1", got.GetOpenCount())
+	}
+}
+
 func TestParsePRProbeOutput_ConcatenatedArrays(t *testing.T) {
 	// Two repos' `gh pr list --json` arrays concatenated: the workspace repo
 	// (one approved, all-green PR) and a subrepo (one failing-check PR). The
