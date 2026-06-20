@@ -76,6 +76,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 		case "up", "k":
 			// Up from the top row focuses the Armada selector (one stop above
 			// the list); otherwise move within the rows.
+			fleetPage.tagSelected = false
 			if fleetPage.cursor == fleetPage.firstSelectable() {
 				fleetPage.armadaSel.focused = true
 			} else {
@@ -84,6 +85,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 
 		case "down", "j":
 			// Down from the bottom row wraps up to the Armada selector.
+			fleetPage.tagSelected = false
 			if fleetPage.cursor == fleetPage.lastSelectable() {
 				fleetPage.armadaSel.focused = true
 			} else {
@@ -96,9 +98,11 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			return fleetPage.openArmadaSelect(m)
 
 		case "shift+up", "K":
+			fleetPage.tagSelected = false
 			fleetPage.moveCursorToInstance(-1)
 
 		case "shift+down", "J":
+			fleetPage.tagSelected = false
 			fleetPage.moveCursorToInstance(1)
 
 		case " ", "tab":
@@ -276,6 +280,11 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			}
 
 		case "enter":
+			// A selected auto tag intercepts enter to open the PR; otherwise the
+			// row's normal action runs.
+			if fleetPage.tagSelected {
+				return fleetPage.openSelectedPR(m)
+			}
 			return fleetPage.handleEnter(m)
 
 		case "e":
@@ -408,7 +417,19 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.deactivateTextInput()
 			return nil
 
-		case "l":
+		case "right", "l":
+			// Horizontally select the instance's auto tag (PR status) so enter
+			// opens the PR. No-op when there is no navigable auto tag (so l on a
+			// plain instance does nothing rather than something surprising).
+			_, instance := fleetPage.selectedInstance(m)
+			if instance != nil && m.autoTagNavigable(fleetPage.currentFleetName(), instance) {
+				fleetPage.tagSelected = true
+			}
+
+		case "left", "h":
+			fleetPage.tagSelected = false
+
+		case "L":
 			_, instance := fleetPage.selectedInstance(m)
 			if instance == nil {
 				m.message = "Select an instance"
@@ -630,14 +651,22 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 		})
 
 	case rowInstance:
+		// When the auto tag is selected the row is in a focused sub-mode: only
+		// the PR-navigation keys apply.
+		if fleetPage.tagSelected {
+			return withArmadaHint([]string{"enter: open PR", "←/h: deselect", "j/k: navigate", "q: quit"})
+		}
 		keys := []string{"j/k: navigate"}
 		if r.instance != nil {
 			switch {
 			case r.instance.Status == fleet.StatusRunning:
+				if m.autoTagNavigable(r.fleetName, r.instance) {
+					keys = append(keys, "→/l: select PR")
+				}
 				keys = append(keys,
 					"space: show sessions", "enter: open shell", "e: edit",
 					"s: stop", "a: new session", "d: delete", "t: tag",
-					"p: port-forward", "b: browser", "c: code", "C: clone", "R: rebuild", "o: terminal", "l: logs",
+					"p: port-forward", "b: browser", "c: code", "C: clone", "R: rebuild", "o: terminal", "L: logs",
 					"r: refresh", "q: quit",
 				)
 			case r.instance.Status == fleet.StatusStopped:

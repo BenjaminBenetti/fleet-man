@@ -32,4 +32,5 @@ const (
 	viewConfirmBrowserSwitch
 	viewChooseBrowserLaunch
 	viewArmadaSelect
+	viewChoosePR
 )

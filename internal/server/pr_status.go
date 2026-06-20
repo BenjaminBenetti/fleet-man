@@ -62,7 +62,7 @@ find . -maxdepth 5 -name node_modules -prune -o -name .git -prune -print 2>/dev/
   [ -z "$br" ] && continue
   [ "$br" = "HEAD" ] && continue
   ( cd "$dir" && gh pr list --state open --head "$br" \
-      --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup 2>/dev/null )
+      --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,url,title 2>/dev/null )
 done
 `
 
@@ -77,6 +77,8 @@ type ghPR struct {
 	MergeStateStatus  string    `json:"mergeStateStatus"` // CLEAN | BLOCKED | BEHIND | UNSTABLE | DIRTY | DRAFT | UNKNOWN | ...
 	ReviewDecision    string    `json:"reviewDecision"`   // APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | ""
 	StatusCheckRollup []ghCheck `json:"statusCheckRollup"`
+	URL               string    `json:"url"`
+	Title             string    `json:"title"`
 }
 
 // ghCheck mirrors one element of statusCheckRollup. A CheckRun carries
@@ -137,7 +139,13 @@ func aggregatePRStatus(prs []ghPR) *fleetgrpc.PrStatus {
 	anyChangesRequested, anyApproved := false, false
 	allClean := true
 
+	refs := make([]*fleetgrpc.PrRef, 0, len(prs))
 	for _, pr := range prs {
+		refs = append(refs, &fleetgrpc.PrRef{
+			Number: int32(pr.Number),
+			Url:    pr.URL,
+			Title:  pr.Title,
+		})
 		for _, c := range pr.StatusCheckRollup {
 			total++
 			switch classifyCheck(c) {
@@ -197,6 +205,7 @@ func aggregatePRStatus(prs []ghPR) *fleetgrpc.PrStatus {
 		ChecksPassed: int32(passed),
 		ChecksTotal:  int32(total),
 		ChecksSignal: checksSignal,
+		Prs:          refs,
 	}
 }
 

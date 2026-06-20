@@ -101,6 +101,14 @@ enum PrReviewState {
   PR_REVIEW_STATE_CHANGES_REQUESTED = 2;
 }
 
+// PrRef identifies one open PR so the TUI can navigate to it (open in a
+// browser) and label it in the multi-PR chooser dialog.
+message PrRef {
+  int32 number = 1;
+  string url = 2;
+  string title = 3;
+}
+
 // PrStatus is the aggregated GitHub pull-request state for an instance's
 // workspace repo PLUS any nested subrepos, computed by running `gh` inside the
 // container. It drives the "auto tag" the TUI renders in the tag slot when an
@@ -122,6 +130,10 @@ message PrStatus {
   // Colour for the [Checks x/x] indicator: green when all passed, red on any
   // failure, yellow while any are still pending.
   PrSignal checks_signal = 6;
+  // The open PRs themselves, so the TUI can open one in a browser (or present a
+  // chooser when there is more than one). Order follows discovery (workspace
+  // repo first, then subrepos).
+  repeated PrRef prs = 7;
 }
 
 // InstanceRuntime is the live view of ONE instance: everything the TUI renders

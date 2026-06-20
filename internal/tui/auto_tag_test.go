@@ -37,12 +37,12 @@ func autoTagModel(fp *fleetPage, inst *fleet.Instance, expanded bool, ps *fleetg
 func TestInstanceAutoTag_NoStatus(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
 	m := autoTagModel(newFleetPage(), inst, true, nil)
-	if got := m.instanceAutoTag("alpha", "agent-1"); got != "" {
+	if got := m.instanceAutoTag("alpha", "agent-1", false); got != "" {
 		t.Fatalf("auto tag with no runtime = %q, want empty", got)
 	}
 	// Probed, but no open PRs.
 	m = autoTagModel(newFleetPage(), inst, true, &fleetgrpc.PrStatus{OpenCount: 0})
-	if got := m.instanceAutoTag("alpha", "agent-1"); got != "" {
+	if got := m.instanceAutoTag("alpha", "agent-1", false); got != "" {
 		t.Fatalf("auto tag with zero open PRs = %q, want empty", got)
 	}
 }
@@ -58,7 +58,7 @@ func TestInstanceAutoTag_Format(t *testing.T) {
 		ChecksSignal: fleetgrpc.PrSignal_PR_SIGNAL_GREEN,
 	}
 	m := autoTagModel(newFleetPage(), inst, true, ps)
-	got := m.instanceAutoTag("alpha", "agent-1")
+	got := m.instanceAutoTag("alpha", "agent-1", false)
 	for _, want := range []string{"PR", "Approved", "Checks 3/3"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("auto tag %q missing %q", got, want)
@@ -80,7 +80,7 @@ func TestInstanceAutoTag_MultiplePRsAndChangesRequested(t *testing.T) {
 		ChecksSignal: fleetgrpc.PrSignal_PR_SIGNAL_RED,
 	}
 	m := autoTagModel(newFleetPage(), inst, true, ps)
-	got := m.instanceAutoTag("alpha", "agent-1")
+	got := m.instanceAutoTag("alpha", "agent-1", false)
 	for _, want := range []string{"PRx3", "Changes Requested", "Checks 4/6"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("auto tag %q missing %q", got, want)
@@ -101,7 +101,7 @@ func TestInstanceAutoTag_HidesReviewAndChecksWhenAbsent(t *testing.T) {
 		ChecksTotal: 0,
 	}
 	m := autoTagModel(newFleetPage(), inst, true, ps)
-	got := m.instanceAutoTag("alpha", "agent-1")
+	got := m.instanceAutoTag("alpha", "agent-1", false)
 	if !strings.Contains(got, "PR") {
 		t.Errorf("auto tag %q missing PR indicator", got)
 	}

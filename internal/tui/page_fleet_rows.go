@@ -41,7 +41,7 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 				if m.sessionStore.IsExpanded(ref) {
 					// The tag slot shows the user-set tag, or — when none is set —
 					// the computed "auto tag" (PR status), if there is one.
-					if instance.Tag != "" || m.instanceAutoTag(name, instance.Name) != "" {
+					if instance.Tag != "" || m.instanceAutoTag(name, instance.Name, false) != "" {
 						fleetPage.rows = append(fleetPage.rows, row{kind: rowInstanceTag, fleetName: name, instance: instance})
 					}
 					liveGroups := make(map[string]bool)
@@ -82,6 +82,14 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 	// (e.g. a tag line inserted above a session row); nudge it forward.
 	if r := fleetPage.currentRow(); r != nil && !r.selectable() {
 		fleetPage.moveCursor(1)
+	}
+
+	// Drop a stale auto-tag selection if the cursor no longer sits on an
+	// instance whose auto tag is navigable (e.g. its PR just closed).
+	if fleetPage.tagSelected {
+		if _, inst := fleetPage.selectedInstance(m); !m.autoTagNavigable(fleetPage.currentFleetName(), inst) {
+			fleetPage.tagSelected = false
+		}
 	}
 }
 

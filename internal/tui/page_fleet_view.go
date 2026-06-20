@@ -284,7 +284,11 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			if r.instance.Tag != "" {
 				content = dimStyle.Render("# " + r.instance.Tag)
 			} else {
-				content = m.instanceAutoTag(r.fleetName, r.instance.Name)
+				// The tag row follows its instance row, so it is selected when the
+				// cursor sits on that instance (i-1) and the tag is horizontally
+				// selected.
+				selected := fleetPage.tagSelected && i > 0 && fleetPage.cursor == i-1
+				content = m.instanceAutoTag(r.fleetName, r.instance.Name, selected)
 			}
 			line := fmt.Sprintf("%s        %s", cursor, content)
 			if maxW := m.width - 4; maxW > 0 && lipgloss.Width(line) > maxW {
@@ -410,6 +414,8 @@ func (fleetPage *fleetPage) viewActiveDialog(m *model) string {
 		return fleetPage.renderArmadaSelectDialog(m)
 	case viewChooseBrowserLaunch:
 		return fleetPage.renderChooseBrowserLaunchDialog(m)
+	case viewChoosePR:
+		return fleetPage.renderChoosePRDialog(m)
 	}
 	return ""
 }

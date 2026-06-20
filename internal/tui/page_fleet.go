@@ -38,7 +38,14 @@ type fleetPage struct {
 	addFleet   addFleetState      // new-fleet URL → inspect flow
 	newSession createSessionState // new-session preset templating
 	browserDlg browserDialogState // switch-browser dialog
+	choosePR   choosePRState      // multi-PR chooser (open which PR?)
 	lpFlow     *layoutPresetFlow  // open preset creation/edit flow (nil unless mode == viewLayoutPreset)
+
+	// tagSelected is true when the cursor's instance has its auto-tag (PR status)
+	// horizontally selected — →/l selects it (drawn pink in [ ]), ←/h deselects,
+	// enter opens the PR. Meaningful only while the cursor is on an instance row
+	// whose auto-tag is navigable; cleared on any vertical cursor move.
+	tagSelected bool
 
 	textInput        textinput.Model
 	branchInput      textinput.Model
@@ -135,6 +142,12 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		}
 		return nil
 
+	case externalURLOpenedMsg:
+		if u := msg.(externalURLOpenedMsg); u.err != nil {
+			m.message = fmt.Sprintf("Could not open browser: %v", u.err)
+		}
+		return nil
+
 	case homedirDetectedMsg:
 		return fleetPage.handleHomedirDetected(m, msg.(homedirDetectedMsg))
 
@@ -179,6 +192,8 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.updateConfirmBrowserSwitch(m, msg)
 	case viewChooseBrowserLaunch:
 		return fleetPage.updateChooseBrowserLaunch(m, msg)
+	case viewChoosePR:
+		return fleetPage.updateChoosePR(m, msg)
 	case viewArmadaSelect:
 		return fleetPage.updateArmadaSelect(m, msg)
 	case viewCreateSession:

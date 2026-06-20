@@ -670,12 +670,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 				if page.mode == viewNormal && page.listRowY >= 0 {
-					if idx := mouseMsg.Y - page.listRowY; idx >= 0 && idx < len(page.rows) && page.rows[idx].selectable() {
+					idx := mouseMsg.Y - page.listRowY
+					switch {
+					case idx < 0 || idx >= len(page.rows):
+						// outside the row list
+					case page.rows[idx].kind == rowInstanceTag && idx > 0 &&
+						page.rows[idx-1].kind == rowInstance &&
+						m.autoTagNavigable(page.rows[idx].fleetName, page.rows[idx].instance):
+						// Clicking the PR auto tag selects its instance's tag and
+						// opens the PR (Enter is synthesized into the selected path).
+						page.cursor = idx - 1
+						page.armadaSel.focused = false
+						page.tagSelected = true
+						hit = true
+					case page.rows[idx].selectable():
 						page.cursor = idx
 						// Clicking a row takes focus off the Armada selector, so
 						// the synthesized Space/Enter acts on the clicked row
 						// rather than (re)opening the dropdown.
 						page.armadaSel.focused = false
+						page.tagSelected = false
 						hit = true
 						if page.rows[idx].kind == rowInstance {
 							synthesizedKey = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}

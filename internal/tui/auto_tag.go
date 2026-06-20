@@ -30,34 +30,56 @@ func prSignalStyle(sig fleetgrpc.PrSignal) lipgloss.Style {
 // nothing to show — gh is unavailable inside the instance, no PR is open, or the
 // status hasn't been probed yet. The format is "[PR|PRxN] [Changes Requested |
 // Approved] [Checks x/x]", each element coloured and shown only when it applies.
-func (m *model) instanceAutoTag(fleetName, instance string) string {
+//
+// When selected (horizontally, via →/l), the whole tag is drawn as one chunk in
+// the pink selection colour wrapped in [ ], so it reads as a single navigable
+// unit rather than three separately-coloured indicators.
+func (m *model) instanceAutoTag(fleetName, instance string, selected bool) string {
 	ps := m.runtime[rtKey(fleetName, instance)].GetPrStatus()
 	if ps == nil || ps.GetOpenCount() == 0 {
 		return ""
 	}
 
-	parts := make([]string, 0, 3)
+	type segment struct {
+		text  string
+		style lipgloss.Style
+	}
+	segments := make([]segment, 0, 3)
 
 	// PR indicator: "PR" for a single open PR, "PRxN" for N>1.
 	label := "PR"
 	if n := ps.GetOpenCount(); n > 1 {
 		label = fmt.Sprintf("PRx%d", n)
 	}
-	parts = append(parts, prSignalStyle(ps.GetPrSignal()).Render(label))
+	segments = append(segments, segment{label, prSignalStyle(ps.GetPrSignal())})
 
 	// Review indicator: only when a decision has landed.
 	switch ps.GetReview() {
 	case fleetgrpc.PrReviewState_PR_REVIEW_STATE_CHANGES_REQUESTED:
-		parts = append(parts, prRedStyle.Render("Changes Requested"))
+		segments = append(segments, segment{"Changes Requested", prRedStyle})
 	case fleetgrpc.PrReviewState_PR_REVIEW_STATE_APPROVED:
-		parts = append(parts, prGreenStyle.Render("Approved"))
+		segments = append(segments, segment{"Approved", prGreenStyle})
 	}
 
 	// Checks indicator: only when the PRs have any checks.
 	if ps.GetChecksTotal() > 0 {
-		checks := fmt.Sprintf("Checks %d/%d", ps.GetChecksPassed(), ps.GetChecksTotal())
-		parts = append(parts, prSignalStyle(ps.GetChecksSignal()).Render(checks))
+		segments = append(segments, segment{
+			fmt.Sprintf("Checks %d/%d", ps.GetChecksPassed(), ps.GetChecksTotal()),
+			prSignalStyle(ps.GetChecksSignal()),
+		})
 	}
 
+	if selected {
+		plain := make([]string, len(segments))
+		for i, s := range segments {
+			plain[i] = s.text
+		}
+		return selectedStyle.Render("[" + strings.Join(plain, "  ") + "]")
+	}
+
+	parts := make([]string, len(segments))
+	for i, s := range segments {
+		parts[i] = s.style.Render(s.text)
+	}
 	return strings.Join(parts, "  ")
 }
