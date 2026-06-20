@@ -29,6 +29,10 @@ type row struct {
 	sessionName string // set when kind == rowSession or rowNewSession
 	groupID     string // set for grouped session rows
 	groupSize   int    // number of sessions in the group (for display)
+	// prStatusInline marks the first child row of an expanded instance that has
+	// no user tag, telling the renderer to show the instance's PR-status auto tag
+	// at the status column on this row (a "second status line"). See buildRows.
+	prStatusInline bool
 }
 
 // selectable reports whether the cursor may rest on this row. Instance

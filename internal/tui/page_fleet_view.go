@@ -10,6 +10,57 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+const (
+	// instanceNameWidth is the fixed cell width of an instance's name on its row.
+	// The name is padded to this width — and truncated with an ellipsis when it
+	// runs longer — so the status column never shifts. That keeps the PR-status
+	// "second status line" (see the rowInstanceTag render) lined up directly under
+	// the main status word regardless of how long the instance name is.
+	instanceNameWidth = 22
+
+	// instanceStatusCol is the column where the status word starts on an instance
+	// row, and the indent the PR-status second line is rendered at so it sits
+	// under that status. It is the sum of the row's fixed prefix cells: cursor(2)
+	// + gap(4) + arrow(2) + throbber(1) + gap(1) + name + gap(1).
+	instanceStatusCol = 2 + 4 + 2 + 1 + 1 + instanceNameWidth + 1
+
+	// sessionLabelCol is the column an instance child row's label starts at:
+	// cursor(2) + the 8-space child indent (the "%s        %s" child-row format).
+	sessionLabelCol = 2 + 8
+
+	// sessionInlineLabelWidth is the label field width on the first child row when
+	// it also carries the inline PR status. Sized (with a 1-space gap) so the PR
+	// status lands at instanceStatusCol — directly under the instance status. It
+	// equals instanceNameWidth because a child label and an instance name happen
+	// to start at the same column.
+	sessionInlineLabelWidth = instanceStatusCol - sessionLabelCol - 1
+)
+
+// renderChildRowLine renders an instance child row (a session/group row or the
+// "+ new session" row): the cursor, the 8-space child indent, and the styled
+// label. When the row carries the inline PR status (the first child of an
+// expanded instance with no user tag), the label is truncated with an ellipsis
+// to a fixed width and the instance's PR-status auto tag is appended at the
+// status column — a "second status line" that lines up under the instance status
+// and that a long label can never overrun. The returned line has no trailing
+// newline; callers append it.
+func (m *model) renderChildRowLine(cursor, label string, style lipgloss.Style, r row) string {
+	if r.prStatusInline {
+		if pr := m.instanceAutoTag(r.fleetName, r.instance.Name); pr != "" {
+			field := ansi.Truncate(label, sessionInlineLabelWidth, "…")
+			// Pad the (possibly truncated) label out to its field width, plus a
+			// one-space separator, so the PR status starts at instanceStatusCol.
+			gap := sessionInlineLabelWidth - lipgloss.Width(field) + 1
+			line := fmt.Sprintf("%s        %s%s%s", cursor, style.Render(field), strings.Repeat(" ", gap), pr)
+			if maxW := m.width - 4; maxW > 0 && lipgloss.Width(line) > maxW {
+				line = ansi.Truncate(line, maxW-1, "…")
+			}
+			return line
+		}
+	}
+	return fmt.Sprintf("%s        %s", cursor, style.Render(label))
+}
+
 // renderArmadaBorder draws the list box's top border line with the Armada
 // selector embedded: ╭─ Armada [ local ] ───╮. The line is hand-composed to
 // the box's exact rendered width (lipgloss has no border-title API) in the
@@ -149,19 +200,18 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				label = fmt.Sprintf("%s %s", icon, r.sessionName)
 			}
 			if isSelected {
-				listContent.WriteString(fmt.Sprintf("%s        %s", cursor, selectedStyle.Render(label)))
-			} else {
-				listContent.WriteString(fmt.Sprintf("%s        %s", cursor, style.Render(label)))
+				style = selectedStyle
 			}
+			listContent.WriteString(m.renderChildRowLine(cursor, label, style, r))
 			listContent.WriteString("\n")
 
 		} else if r.kind == rowNewSession {
 			label := "+ new session"
+			style := newSessionStyle
 			if isSelected {
-				listContent.WriteString(fmt.Sprintf("%s        %s", cursor, selectedStyle.Render(label)))
-			} else {
-				listContent.WriteString(fmt.Sprintf("%s        %s", cursor, newSessionStyle.Render(label)))
+				style = selectedStyle
 			}
+			listContent.WriteString(m.renderChildRowLine(cursor, label, style, r))
 			listContent.WriteString("\n")
 
 		} else if r.kind == rowInstance {
@@ -217,7 +267,11 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				}
 			}
 
-			nameRaw := fmt.Sprintf("%-22s", instance.GetDisplayName())
+			// Truncate (with an ellipsis) before padding so a long name can't push
+			// the status column right and knock the PR-status second line below it
+			// out of alignment.
+			name := ansi.Truncate(instance.GetDisplayName(), instanceNameWidth, "…")
+			nameRaw := fmt.Sprintf("%-*s", instanceNameWidth, name)
 			var arrowStyled, nameStyled string
 			switch {
 			case isSelected && instanceColorHasCustom(instance.Color):
@@ -279,14 +333,10 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			listContent.WriteString(line)
 			listContent.WriteString("\n")
 		} else if r.kind == rowInstanceTag {
-			// User-set tag takes the slot; otherwise the auto tag (PR status).
-			var content string
-			if r.instance.Tag != "" {
-				content = dimStyle.Render("# " + r.instance.Tag)
-			} else {
-				content = m.instanceAutoTag(r.fleetName, r.instance.Name)
-			}
-			line := fmt.Sprintf("%s        %s", cursor, content)
+			// A user-set tag on its own line under the instance name. (The PR-status
+			// auto tag rides the first child row's status column instead — see
+			// buildRows and renderChildRowLine.)
+			line := fmt.Sprintf("%s        %s", cursor, dimStyle.Render("# "+r.instance.Tag))
 			if maxW := m.width - 4; maxW > 0 && lipgloss.Width(line) > maxW {
 				line = ansi.Truncate(line, maxW-1, "…")
 			}
