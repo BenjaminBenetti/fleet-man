@@ -58,6 +58,8 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 		DebCacheServer:   s.DebCacheServer,
 		ImageCacheServer: s.ImageCacheServer,
 		LayoutPresets:    layoutPresetsToProto(s.LayoutPresets),
+		Agents:           agentsToProto(s.Agents),
+		Triggers:         triggersToProto(s.Triggers),
 	}
 	if s.HomeDir != "" {
 		ps.HomeDir = strptr(s.HomeDir)
@@ -66,6 +68,45 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 		ps.PreferFleetLaunch = boolptr(*s.PreferFleetLaunch)
 	}
 	return ps
+}
+
+func agentsToProto(in []fleet.Agent) []*fleetgrpc.Agent {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*fleetgrpc.Agent, 0, len(in))
+	for _, a := range in {
+		out = append(out, &fleetgrpc.Agent{
+			Name:         a.Name,
+			Command:      a.Command,
+			TmuxMode:     a.TmuxMode,
+			SystemPrompt: a.SystemPrompt,
+			Backend:      backendToProto(a.Backend),
+		})
+	}
+	return out
+}
+
+func triggersToProto(in []fleet.Trigger) []*fleetgrpc.Trigger {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*fleetgrpc.Trigger, 0, len(in))
+	for _, t := range in {
+		out = append(out, &fleetgrpc.Trigger{
+			Name:        t.Name,
+			Type:        string(t.Type),
+			AgentNames:  t.AgentNames,
+			Prompt:      t.Prompt,
+			Cron:        t.Cron,
+			WebhookName: t.WebhookName,
+			FilterType:  string(t.FilterType),
+			Regex:       t.Regex,
+			JsonPath:    t.JSONPath,
+			JsonValue:   t.JSONValue,
+		})
+	}
+	return out
 }
 
 func layoutPresetsToProto(in []fleet.LayoutPreset) []*fleetgrpc.LayoutPreset {

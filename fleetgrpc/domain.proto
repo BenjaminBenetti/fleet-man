@@ -184,6 +184,17 @@ message FleetSettings {
   // presets. Names are unique within the list (the server normalizes and
   // rejects duplicates, like custom_mounts).
   repeated LayoutPreset layout_presets = 11;
+
+  // agents is the fleet's list of automation agent definitions (issue #188).
+  // repeated message; names unique within the list (server normalizes). An
+  // empty list (the default) means no agents.
+  repeated Agent agents = 12;
+
+  // triggers is the fleet's list of automation trigger definitions (issue
+  // #188), each firing one or more agents (by name) on a schedule or webhook
+  // event. repeated message; names unique within the list (server normalizes
+  // against the agent set). An empty list (the default) means no triggers.
+  repeated Trigger triggers = 13;
 }
 
 // LayoutPreset mirrors internal/fleet.LayoutPreset — a saved pane-layout
@@ -200,6 +211,38 @@ message LayoutPreset {
   string name = 1;
   string layout = 2;
   repeated string pane_commands = 3;
+}
+
+// Agent mirrors internal/fleet.Agent — an automation worker definition (issue
+// #188). command may contain the ${PROMPT}/${SYS_PROMPT} placeholders. tmux_mode
+// is a plain bool whose user-facing default is ON (the new-agent dialog sets it
+// and it is always persisted explicitly). backend reuses Instance.backend's enum
+// (UNSPECIFIED -> devcontainer at normalization).
+message Agent {
+  string name = 1;
+  string command = 2;
+  bool tmux_mode = 3;
+  string system_prompt = 4;
+  BackendType backend = 5;
+}
+
+// Trigger mirrors internal/fleet.Trigger — an automation trigger (issue #188).
+// type is the string-valued TriggerType ("schedule" | "webhook"); filter_type is
+// the string-valued WebhookFilterType ("regex" | "jsonpath"). Schedule triggers
+// use cron; webhook triggers use webhook_name + filter_type + the matching
+// fields. agent_names references Agents by name. The string-valued enums match
+// the Go model's string types, so the wire mapping is a plain string copy.
+message Trigger {
+  string name = 1;
+  string type = 2;
+  repeated string agent_names = 3;
+  string prompt = 4;
+  string cron = 5;
+  string webhook_name = 6;
+  string filter_type = 7;
+  string regex = 8;
+  string json_path = 9;
+  string json_value = 10;
 }
 
 // Fleet mirrors internal/fleet.Fleet. Settings is a NESTED message (not inlined)
