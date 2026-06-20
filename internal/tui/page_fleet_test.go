@@ -743,8 +743,10 @@ func TestEditFleetTogglesAndSavesSettings(t *testing.T) {
 		t.Fatalf("expected mounts off by default; got claude=%v codex=%v", fp.editFleet.claudeMount, fp.editFleet.codexMount)
 	}
 
-	// Toggle Claude (cursor starts on row 0), move down, toggle Codex — each
+	// The agent mounts live under the collapsible Agents group (issue #184):
+	// expand it, land on Claude and toggle, move down to Codex and toggle — each
 	// toggle saves instantly.
+	navigateToClaudeRow(t, fp, m)
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
@@ -795,6 +797,29 @@ func TestEditFleetSavesPreferFleetLaunch(t *testing.T) {
 
 	if !f.Settings.PreferFleetLaunchEnabled() {
 		t.Fatalf("Settings.PreferFleetLaunch = %v, want enabled (instant-save)", f.Settings.PreferFleetLaunch)
+	}
+}
+
+// navigateToClaudeRow expands the Agents section (assumes the dialog is already
+// open, cursor on the Agents header) and lands the cursor on the Claude Code
+// mount row. The agent-tool mounts moved into a collapsible Agents group in
+// issue #184, so they are no longer reachable until that group is expanded.
+func navigateToClaudeRow(t *testing.T, fp *fleetPage, m *model) {
+	t.Helper()
+	guard := 0
+	for fp.dlg.row != editFleetRowAgents {
+		fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyUp})
+		if guard++; guard > 20 {
+			t.Fatal("never reached Agents header")
+		}
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // expand
+	if !fp.editFleet.agentsExpanded {
+		t.Fatal("Agents section should expand on l")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown}) // into Claude row
+	if fp.dlg.row != editFleetRowClaude {
+		t.Fatalf("dialogRow = %d, want claude row", fp.dlg.row)
 	}
 }
 
@@ -881,6 +906,41 @@ func TestEditFleetCachingExpandCollapse(t *testing.T) {
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
 	if fp.editFleet.cachingExpanded {
 		t.Fatal("h should collapse Caching")
+	}
+}
+
+// TestEditFleetAgentsExpandCollapse verifies the Agents section starts collapsed
+// (hiding the agent-tool rows), opens with the cursor on its header, expands /
+// collapses with l/h, and leaves GitHub CLI as a top-level row (issue #184).
+func TestEditFleetAgentsExpandCollapse(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+	f := &fleet.Fleet{Name: "alpha"}
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "alpha"}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
+
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if fp.editFleet.agentsExpanded {
+		t.Fatal("Agents should start collapsed")
+	}
+	if fp.dlg.row != editFleetRowAgents {
+		t.Fatalf("dialogRow = %d, want Agents header on open", fp.dlg.row)
+	}
+	if slices.Contains(fp.visibleEditFleetRows(), editFleetRowClaude) {
+		t.Fatal("Claude row should be hidden while Agents is collapsed")
+	}
+	// GitHub CLI is a top-level row, navigable regardless of the Agents state.
+	if !slices.Contains(fp.visibleEditFleetRows(), editFleetRowGh) {
+		t.Fatal("GitHub CLI mount should remain a top-level row")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if !fp.editFleet.agentsExpanded || !slices.Contains(fp.visibleEditFleetRows(), editFleetRowClaude) {
+		t.Fatal("l should expand Agents and reveal the Claude row")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if fp.editFleet.agentsExpanded {
+		t.Fatal("h should collapse Agents")
 	}
 }
 
@@ -1274,6 +1334,7 @@ func TestEditFleetHomedirDetectedFillsEmptyInput(t *testing.T) {
 	}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToClaudeRow(t, fp, m)
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle Claude → kicks detect
 	if !fp.editFleet.detecting {
 		t.Fatalf("expected dialogDetecting to be true after toggle-on")
@@ -1305,6 +1366,7 @@ func TestEditFleetHomedirDetectedRespectsUserInput(t *testing.T) {
 	}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToClaudeRow(t, fp, m)
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle Claude → kicks detect
 	fp.homedirInput.SetValue("/custom/path")              // simulate user typing while detect runs
 
@@ -1332,6 +1394,7 @@ func TestEditFleetHomedirDetectedIgnoresStaleFleet(t *testing.T) {
 	}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToClaudeRow(t, fp, m)
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace})
 
 	// Result for a different fleet — must be ignored, and must not
@@ -1398,6 +1461,7 @@ func TestEditFleetEscKeepsInstantSaves(t *testing.T) {
 	}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToClaudeRow(t, fp, m)
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle claude on → saved now
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEsc})   // just closes
 
@@ -1422,6 +1486,7 @@ func TestEditFleetPreservesPFLNilOnUnrelatedEdit(t *testing.T) {
 	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}}, fleetPage: fp}
 
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	navigateToClaudeRow(t, fp, m)
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeySpace}) // toggle Claude (unrelated)
 
 	if !f.Settings.ClaudeCodeMount {
@@ -1696,13 +1761,22 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 	fp := newFleetPage()
 	fp.mode = viewEditFleet
 	fp.dlg.fleet = "alpha"
-	fp.dlg.row = editFleetRowClaude
+	fp.dlg.row = editFleetRowAgents
 	m := &model{
 		st:        &state.State{Fleets: map[string]*fleet.Fleet{"alpha": f}},
 		fleetPage: fp,
 	}
 
-	// j moves down through the flat rows; l toggles the focused checkbox.
+	// Expand the Agents group so its agent-tool rows become navigable; j moves
+	// down through them, then on to the flat rows; l toggles the focused checkbox.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}) // expand Agents
+	if !fp.editFleet.agentsExpanded {
+		t.Fatal("l should expand the Agents group")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if fp.dlg.row != editFleetRowClaude {
+		t.Fatalf("dialogRow = %d, want claude row", fp.dlg.row)
+	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	if fp.dlg.row != editFleetRowCodex {
 		t.Fatalf("dialogRow = %d, want codex row", fp.dlg.row)
@@ -1712,20 +1786,20 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 		t.Fatal("l should toggle selected codex row")
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	if fp.dlg.row != editFleetRowGh {
-		t.Fatalf("dialogRow = %d, want gh row", fp.dlg.row)
-	}
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	if !fp.editFleet.ghMount {
-		t.Fatal("l should toggle selected gh row")
-	}
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	if fp.dlg.row != editFleetRowAuggie {
 		t.Fatalf("dialogRow = %d, want auggie row", fp.dlg.row)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if !fp.editFleet.auggieMount {
 		t.Fatal("l should toggle selected auggie row")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if fp.dlg.row != editFleetRowGh {
+		t.Fatalf("dialogRow = %d, want gh row", fp.dlg.row)
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if !fp.editFleet.ghMount {
+		t.Fatal("l should toggle selected gh row")
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	if fp.dlg.row != editFleetRowHomeDir {
@@ -1749,14 +1823,14 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 		t.Fatal("esc should leave the home-dir field")
 	}
 
-	// k now navigates UP (field inactive): home-dir → auggie → gh.
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	if fp.dlg.row != editFleetRowAuggie {
-		t.Fatalf("dialogRow = %d, want auggie row after inactive k", fp.dlg.row)
-	}
+	// k now navigates UP (field inactive): home-dir → gh → auggie.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	if fp.dlg.row != editFleetRowGh {
-		t.Fatalf("dialogRow = %d, want gh row after second inactive k", fp.dlg.row)
+		t.Fatalf("dialogRow = %d, want gh row after inactive k", fp.dlg.row)
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if fp.dlg.row != editFleetRowAuggie {
+		t.Fatalf("dialogRow = %d, want auggie row after second inactive k", fp.dlg.row)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if fp.mode != viewNormal {
