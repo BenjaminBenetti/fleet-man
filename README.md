@@ -25,7 +25,6 @@ when they need attention.
 
 `fleet` solves all these problems. I use it every day. A few other senior developers at my company use it every day. You should use it every day! 
 
-
 ## Contents
 
 - [Install](#install)
