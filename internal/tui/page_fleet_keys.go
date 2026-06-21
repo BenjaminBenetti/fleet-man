@@ -206,11 +206,8 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			if r == nil || r.kind == rowSettings || r.kind == rowLeaveFocus || r.kind == rowNewSession {
 				break
 			}
-			if r.kind == rowTrigger {
-				return fleetPage.deleteTrigger(m, r.fleetName, r.autoIdx)
-			}
-			if r.kind == rowAgent {
-				return fleetPage.deleteAgent(m, r.fleetName, r.autoIdx)
+			if r.kind == rowTrigger || r.kind == rowAgent {
+				return fleetPage.openConfirmDeleteAutomation(m, r)
 			}
 			if r.kind == rowAutomationTriggers || r.kind == rowAutomationAgents || r.kind == rowNewTrigger || r.kind == rowNewAgent {
 				break
@@ -238,6 +235,15 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			if r == nil {
 				m.message = "No fleet selected"
 				break
+			}
+			// In a fleet's automation view, 'a' adds a trigger or an agent
+			// (depending on which group the cursor sits in) rather than an
+			// instance, which would make no sense here.
+			if kind, ok := fleetPage.automationAddTarget(r); ok {
+				if kind == rowAgent {
+					return fleetPage.openAddAgentDialog(m, r.fleetName)
+				}
+				return fleetPage.openAddTriggerDialog(m, r.fleetName)
 			}
 			if r.kind == rowInstance || r.kind == rowSession || r.kind == rowNewSession {
 				instance := r.instance
@@ -735,22 +741,32 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 	switch r.kind {
 	case rowFleetHeader:
 		toggle := "m: automations"
+		addHint := "a: add instance"
 		if fleetPage.automationMode[r.fleetName] {
 			toggle = "m: instances"
+			addHint = "a: add trigger"
 		}
 		return withArmadaHint([]string{
 			"j/k: navigate", "→/l: select", "space/enter: expand/collapse", toggle, "e: edit fleet",
-			"a: add instance", "n: new fleet", "d: delete fleet", "r: refresh", "q: quit",
+			addHint, "n: new fleet", "d: delete fleet", "r: refresh", "q: quit",
 		})
 
 	case rowAutomationTriggers, rowAutomationAgents:
+		noun := "trigger"
+		if r.kind == rowAutomationAgents {
+			noun = "agent"
+		}
 		return withArmadaHint([]string{
-			"j/k: navigate", "space/enter: expand/collapse", "m: instances", "q: quit",
+			"j/k: navigate", "space/enter: expand/collapse", "a: add " + noun, "m: instances", "q: quit",
 		})
 
 	case rowTrigger, rowAgent:
+		noun := "trigger"
+		if r.kind == rowAgent {
+			noun = "agent"
+		}
 		return withArmadaHint([]string{
-			"j/k: navigate", "enter/e: edit", "d: delete", "m: instances", "q: quit",
+			"j/k: navigate", "enter/e: edit", "a: add " + noun, "d: delete", "m: instances", "q: quit",
 		})
 
 	case rowNewTrigger, rowNewAgent:

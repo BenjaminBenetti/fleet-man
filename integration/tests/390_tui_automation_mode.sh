@@ -52,6 +52,18 @@ tui_assert_contains "+ add agent" "add-agent action row missing"
 tui_assert_contains "[instances]" "automation view should offer the [instances] toggle"
 
 # ===========================================
+# 'a' opens the add dialog for the group the cursor is in (not the add-instance
+# workflow). The cursor sits on the fleet header right after entering automation
+# mode, where 'a' adds a trigger. esc cancels, leaving the cursor on the header.
+# ===========================================
+info "pressing 'a' on the header opens the add-trigger dialog"
+tui_send a
+tui_wait_for "New trigger" 5
+tui_send Escape
+sleep 0.3
+tui_wait_for "+ add trigger" 5
+
+# ===========================================
 # Add an agent. From the fleet header the rows are: header, triggers,
 # + add trigger, agents, + add agent — four 'j' reach "+ add agent".
 # ===========================================
@@ -73,6 +85,26 @@ for _ in 1 2 3 4; do tui_send j; sleep 0.15; done
 tui_send Enter         # save
 tui_wait_for "agents (1)" 10
 tui_assert_contains "builder" "saved agent row should be visible"
+
+# ===========================================
+# 'd' on a trigger/agent confirms before deleting (rather than deleting
+# immediately). The cursor lands on the "builder" agent row after the save.
+# ===========================================
+info "pressing 'd' on the agent opens a confirm dialog"
+tui_send d
+tui_wait_for "Delete agent" 5
+tui_assert_contains "builder" "confirm prompt should name the agent"
+
+info "cancelling with 'n' keeps the agent"
+tui_send n
+sleep 0.3
+tui_wait_for "agents (1)" 5
+
+info "confirming with 'y' deletes the agent"
+tui_send d
+tui_wait_for "Delete agent" 5
+tui_send y
+tui_wait_for "agents (0)" 10
 
 # ===========================================
 # 'm' toggles back to the instance view.

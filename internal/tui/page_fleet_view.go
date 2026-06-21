@@ -503,6 +503,8 @@ func (fleetPage *fleetPage) viewActiveDialog(m *model) string {
 		return fleetPage.renderRenameSessionDialog(m)
 	case viewConfirmDeleteSession:
 		return fleetPage.renderConfirmDeleteSessionDialog(m)
+	case viewConfirmDeleteAutomation:
+		return fleetPage.renderConfirmDeleteAutomationDialog(m)
 	case viewConfirmBrowserSwitch:
 		return fleetPage.renderConfirmBrowserSwitchDialog(m)
 	case viewArmadaSelect:

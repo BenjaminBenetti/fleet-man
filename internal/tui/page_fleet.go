@@ -76,6 +76,7 @@ type fleetPage struct {
 	autoCollapsed map[string]bool
 	triggerDlg    automationTriggerState // add/edit-trigger dialog
 	agentDlg      automationAgentState   // add/edit-agent dialog
+	autoDel       autoDeleteState        // pending trigger/agent delete (viewConfirmDeleteAutomation)
 }
 
 // newFleetPage creates a new fleet page with default state.
@@ -219,6 +220,8 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.updateAutomationTrigger(m, msg)
 	case viewAutomationAgent:
 		return fleetPage.updateAutomationAgent(m, msg)
+	case viewConfirmDeleteAutomation:
+		return fleetPage.updateConfirmDeleteAutomation(m, msg)
 	case viewLayoutPreset:
 		return fleetPage.updateLayoutPreset(m, msg)
 	case viewRenameSession:

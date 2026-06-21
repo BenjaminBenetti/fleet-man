@@ -35,4 +35,5 @@ const (
 	viewChoosePR
 	viewAutomationTrigger
 	viewAutomationAgent
+	viewConfirmDeleteAutomation
 )

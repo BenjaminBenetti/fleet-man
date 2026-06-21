@@ -163,6 +163,143 @@ func TestDeleteAgentBlockedWhenReferenced(t *testing.T) {
 	}
 }
 
+// cursorToKind parks the cursor on the first row of the given kind.
+func cursorToKind(t *testing.T, fp *fleetPage, k rowKind) {
+	t.Helper()
+	for i, r := range fp.rows {
+		if r.kind == k {
+			fp.cursor = i
+			return
+		}
+	}
+	t.Fatalf("no row of kind %v in %v", k, rowKinds(fp))
+}
+
+// automationModelWithItems builds a fleet in automation mode carrying one agent
+// ("builder") and one schedule trigger ("nightly") that does NOT reference it,
+// so deletes aren't blocked by the reference guard.
+func automationModelWithItems(t *testing.T) (*model, *fleetPage) {
+	t.Helper()
+	m, fp := newAutomationModel(t)
+	f := m.st.Fleets["alpha"]
+	f.Settings.Agents = []fleet.Agent{{Name: "builder", Backend: fleet.BackendDevcontainer}}
+	f.Settings.Triggers = []fleet.Trigger{{Name: "nightly", Type: fleet.TriggerSchedule, Cron: "0 0 * * *"}}
+	fp.toggleAutomationMode(m, "alpha")
+	return m, fp
+}
+
+func TestAddKeyOpensTriggerDialogInTriggersGroup(t *testing.T) {
+	m, fp := automationModelWithItems(t)
+	for _, k := range []rowKind{rowAutomationTriggers, rowTrigger, rowNewTrigger} {
+		cursorToKind(t, fp, k)
+		fp.Update(m, key('a'))
+		if fp.mode != viewAutomationTrigger {
+			t.Fatalf("a on %v should open the add-trigger dialog, mode=%v", k, fp.mode)
+		}
+		fp.mode = viewNormal
+	}
+}
+
+func TestAddKeyOpensAgentDialogInAgentsGroup(t *testing.T) {
+	m, fp := automationModelWithItems(t)
+	for _, k := range []rowKind{rowAutomationAgents, rowAgent, rowNewAgent} {
+		cursorToKind(t, fp, k)
+		fp.Update(m, key('a'))
+		if fp.mode != viewAutomationAgent {
+			t.Fatalf("a on %v should open the add-agent dialog, mode=%v", k, fp.mode)
+		}
+		fp.mode = viewNormal
+	}
+}
+
+func TestAddKeyOnHeaderInAutomationModeAddsTrigger(t *testing.T) {
+	m, fp := automationModelWithItems(t)
+	cursorToFleetHeaderHelper(t, fp)
+	fp.Update(m, key('a'))
+	if fp.mode != viewAutomationTrigger {
+		t.Fatalf("a on the header in automation mode should add a trigger, mode=%v", fp.mode)
+	}
+}
+
+func TestAddKeyOnHeaderInInstanceModeDoesNotAddTrigger(t *testing.T) {
+	// In the instance view, 'a' must NOT route into the trigger dialog — it
+	// belongs to the add-instance path (whatever that resolves to here).
+	m, fp := newAutomationModel(t)
+	cursorToFleetHeaderHelper(t, fp)
+	fp.Update(m, key('a'))
+	if fp.mode == viewAutomationTrigger {
+		t.Fatal("a on the header in instance mode must not open the add-trigger dialog")
+	}
+}
+
+func TestDeleteTriggerAsksToConfirm(t *testing.T) {
+	m, fp := automationModelWithItems(t)
+	cursorToKind(t, fp, rowTrigger)
+
+	fp.Update(m, key('d'))
+	if fp.mode != viewConfirmDeleteAutomation {
+		t.Fatalf("d on a trigger should open the confirm dialog, mode=%v", fp.mode)
+	}
+	if len(m.st.Fleets["alpha"].Settings.Triggers) != 1 {
+		t.Fatal("the trigger must not be deleted before the user confirms")
+	}
+	if fp.autoDel.kind != rowTrigger || fp.autoDel.name != "nightly" {
+		t.Fatalf("confirm target wrong: %+v", fp.autoDel)
+	}
+
+	fp.Update(m, key('y'))
+	if len(m.st.Fleets["alpha"].Settings.Triggers) != 0 {
+		t.Fatal("y should delete the trigger")
+	}
+	if fp.mode != viewNormal {
+		t.Fatalf("dialog should close after confirm, mode=%v", fp.mode)
+	}
+}
+
+func TestDeleteAgentConfirmCancelKeepsIt(t *testing.T) {
+	m, fp := automationModelWithItems(t)
+	cursorToKind(t, fp, rowAgent)
+
+	fp.Update(m, key('d'))
+	if fp.mode != viewConfirmDeleteAutomation || fp.autoDel.kind != rowAgent {
+		t.Fatalf("d on an agent should open the confirm dialog for it, mode=%v target=%+v", fp.mode, fp.autoDel)
+	}
+
+	fp.Update(m, key('n'))
+	if len(m.st.Fleets["alpha"].Settings.Agents) != 1 {
+		t.Fatal("n should cancel — the agent must survive")
+	}
+	if fp.mode != viewNormal {
+		t.Fatalf("dialog should close after cancel, mode=%v", fp.mode)
+	}
+}
+
+func TestDeleteReferencedAgentSkipsConfirm(t *testing.T) {
+	// A referenced agent is refused up front: no confirm dialog, no deletion.
+	m, fp := newAutomationModel(t)
+	f := m.st.Fleets["alpha"]
+	f.Settings.Agents = []fleet.Agent{{Name: "a", Backend: fleet.BackendDevcontainer}}
+	f.Settings.Triggers = []fleet.Trigger{{Name: "t", Type: fleet.TriggerSchedule, AgentNames: []string{"a"}, Cron: "* * * * *"}}
+	fp.toggleAutomationMode(m, "alpha")
+	cursorToKind(t, fp, rowAgent)
+
+	fp.Update(m, key('d'))
+	if fp.mode != viewNormal {
+		t.Fatalf("a referenced agent must not open the confirm dialog, mode=%v", fp.mode)
+	}
+	if len(f.Settings.Agents) != 1 {
+		t.Fatal("a referenced agent must not be deleted")
+	}
+	if !strings.Contains(m.message, "used by trigger") {
+		t.Fatalf("expected a 'used by trigger' message, got %q", m.message)
+	}
+}
+
+func cursorToFleetHeaderHelper(t *testing.T, fp *fleetPage) {
+	t.Helper()
+	cursorToKind(t, fp, rowFleetHeader)
+}
+
 func TestHeaderToggleButtonMouseClick(t *testing.T) {
 	mp, fp := newAutomationModel(t)
 	m := *mp

@@ -205,13 +205,9 @@ func (fleetPage *fleetPage) deleteAgent(m *model, fleetName string, idx int) tea
 		return nil
 	}
 	name := f.Settings.Agents[idx].Name
-	for _, t := range f.Settings.Triggers {
-		for _, an := range t.AgentNames {
-			if an == name {
-				m.message = fmt.Sprintf("Agent %q is used by trigger %q — remove it there first", name, t.Name)
-				return nil
-			}
-		}
+	if t := agentReferencedBy(f, name); t != "" {
+		m.message = fmt.Sprintf("Agent %q is used by trigger %q — remove it there first", name, t)
+		return nil
 	}
 	newSettings := f.Settings
 	newSettings.Agents = removeAgentAt(f.Settings.Agents, idx)
@@ -221,6 +217,81 @@ func (fleetPage *fleetPage) deleteAgent(m *model, fleetName string, idx int) tea
 	}
 	m.message = fmt.Sprintf("Deleted agent %q", name)
 	return nil
+}
+
+// agentReferencedBy returns the name of a trigger that fires the named agent, or
+// "" if none. A referenced agent can't be deleted — doing so would orphan the
+// trigger (which the server rejects wholesale).
+func agentReferencedBy(f *fleet.Fleet, agentName string) string {
+	for _, t := range f.Settings.Triggers {
+		for _, an := range t.AgentNames {
+			if an == agentName {
+				return t.Name
+			}
+		}
+	}
+	return ""
+}
+
+// autoDeleteState records the trigger/agent a confirm dialog
+// (viewConfirmDeleteAutomation) will delete on yes. kind is rowTrigger or
+// rowAgent; name is snapshotted for the prompt text.
+type autoDeleteState struct {
+	kind  rowKind
+	fleet string
+	idx   int
+	name  string
+}
+
+// openConfirmDeleteAutomation arms the trigger/agent delete confirmation for the
+// item under the cursor. A referenced agent is refused up front — no point
+// confirming a delete the server would reject (mirrors deleteAgent's guard).
+func (fleetPage *fleetPage) openConfirmDeleteAutomation(m *model, r *row) tea.Cmd {
+	f, ok := m.st.Fleets[r.fleetName]
+	if !ok {
+		return nil
+	}
+	var name string
+	switch r.kind {
+	case rowTrigger:
+		if r.autoIdx < 0 || r.autoIdx >= len(f.Settings.Triggers) {
+			return nil
+		}
+		name = f.Settings.Triggers[r.autoIdx].Name
+	case rowAgent:
+		if r.autoIdx < 0 || r.autoIdx >= len(f.Settings.Agents) {
+			return nil
+		}
+		name = f.Settings.Agents[r.autoIdx].Name
+		if t := agentReferencedBy(f, name); t != "" {
+			m.message = fmt.Sprintf("Agent %q is used by trigger %q — remove it there first", name, t)
+			return nil
+		}
+	default:
+		return nil
+	}
+	fleetPage.autoDel = autoDeleteState{kind: r.kind, fleet: r.fleetName, idx: r.autoIdx, name: name}
+	fleetPage.mode = viewConfirmDeleteAutomation
+	return nil
+}
+
+// automationAddTarget reports which automation item 'a' should add for the given
+// row — rowTrigger or rowAgent — and whether the row is in a fleet's automation
+// view at all. The triggers group (its header, items, and "+ add" row) adds a
+// trigger; the agents group adds an agent; a fleet header in automation mode
+// defaults to a trigger (the first group). Returns ok=false elsewhere.
+func (fleetPage *fleetPage) automationAddTarget(r *row) (rowKind, bool) {
+	switch r.kind {
+	case rowAutomationTriggers, rowTrigger, rowNewTrigger:
+		return rowTrigger, true
+	case rowAutomationAgents, rowAgent, rowNewAgent:
+		return rowAgent, true
+	case rowFleetHeader:
+		if fleetPage.automationMode[r.fleetName] {
+			return rowTrigger, true
+		}
+	}
+	return rowFleetHeader, false
 }
 
 // removeTriggerAt / removeAgentAt return a NEW slice with the element at idx
