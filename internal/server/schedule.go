@@ -45,11 +45,12 @@ var (
 	// before its instance is torn down (issue #188: "inactive for more than 2
 	// minutes").
 	automationIdleTimeout = 2 * time.Minute
-	// automationPromptDelay is how long to wait after starting a tmux-mode
-	// agent before typing the prompt into it, giving the agent's REPL time to
-	// come up so the keystrokes are not dropped. Best-effort (a fixed delay is
-	// imperfect, but agents like Claude Code start within a few seconds).
-	automationPromptDelay = 5 * time.Second
+	// automationPromptMaxWait caps how long the launch waits for a tmux-mode
+	// agent's TUI to finish booting (its pane to stop changing) before typing the
+	// prompt. A fixed delay drops the prompt when the agent (e.g. Claude Code,
+	// especially with MCP servers) is slow to come up, so the launch polls for
+	// readiness and only falls back to this cap if the pane never settles.
+	automationPromptMaxWait = 30 * time.Second
 )
 
 // maxAutomationProbeConcurrency bounds how many agent activity probes run at
@@ -425,8 +426,23 @@ func buildTmuxLaunchScript(sessionName, agentCommand, prompt string, sendPrompt 
 	fmt.Fprintf(&b, "tmux send-keys -t %s -l -- %s\n", sess, dotfiles.ShQuote(agentCommand))
 	fmt.Fprintf(&b, "tmux send-keys -t %s Enter\n", sess)
 	if sendPrompt && prompt != "" {
-		fmt.Fprintf(&b, "sleep %d\n", int(automationPromptDelay.Seconds()))
+		// Wait for the agent's TUI to settle (boot finished, idle waiting for
+		// input) before typing the prompt: poll the pane until its captured text
+		// is unchanged for two consecutive seconds, capped at
+		// automationPromptMaxWait. capture-pane -p returns text only (no cursor),
+		// so a blinking cursor doesn't defeat the "stable" check. A fixed delay
+		// drops the prompt when a slow agent like Claude Code isn't ready yet.
+		fmt.Fprintf(&b, "__fp=''; __fs=0; __fi=0\n")
+		fmt.Fprintf(&b, "while [ \"$__fi\" -lt %d ]; do\n", int(automationPromptMaxWait.Seconds()))
+		fmt.Fprintf(&b, "sleep 1; __fi=$((__fi+1))\n")
+		fmt.Fprintf(&b, "__fc=$(tmux capture-pane -t %s -p 2>/dev/null)\n", sess)
+		fmt.Fprintf(&b, "if [ -n \"$__fc\" ] && [ \"$__fc\" = \"$__fp\" ]; then __fs=$((__fs+1)); [ \"$__fs\" -ge 2 ] && break; else __fs=0; fi\n")
+		fmt.Fprintf(&b, "__fp=$__fc\n")
+		fmt.Fprintf(&b, "done\n")
+		// Type the prompt, then submit with a separate Enter after a short gap so
+		// the agent registers the text before the newline submits it.
 		fmt.Fprintf(&b, "tmux send-keys -t %s -l -- %s\n", sess, dotfiles.ShQuote(prompt))
+		fmt.Fprintf(&b, "sleep 1\n")
 		fmt.Fprintf(&b, "tmux send-keys -t %s Enter\n", sess)
 	}
 	return b.String()
