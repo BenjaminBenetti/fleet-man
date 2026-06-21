@@ -171,11 +171,18 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			// the button — see app.go) toggles it. We record the button's absolute
 			// column span here so the click handler can hit-test it.
 			var suffix, toggleText string
+			// The toggle button highlights (pink) when the header's right-hand
+			// element is selected via →/l, mirroring the inline PR status; the
+			// instance count stays dim either way.
+			toggleStyle := dimStyle
+			if isSelected && fleetPage.rightSelected {
+				toggleStyle = selectedStyle
+			}
 			// Columns before the suffix: cursor(2) + arrow(2) + name width.
 			labelStart := listContentXOffset + 4 + lipgloss.Width(r.fleetName)
 			if fleetPage.automationMode[r.fleetName] {
 				toggleText = "[instances]"
-				suffix = dimStyle.Render(" " + toggleText)
+				suffix = dimStyle.Render(" ") + toggleStyle.Render(toggleText)
 				labelStart += 1 // a single leading space precedes the label
 			} else {
 				count := 0
@@ -184,7 +191,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				}
 				countPart := fmt.Sprintf(" (%d) ", count)
 				toggleText = "[automations]"
-				suffix = dimStyle.Render(countPart + toggleText)
+				suffix = dimStyle.Render(countPart) + toggleStyle.Render(toggleText)
 				labelStart += lipgloss.Width(countPart)
 			}
 			fleetPage.rows[i].toggleX0 = labelStart
@@ -231,7 +238,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			if isSelected {
 				style = selectedStyle
 			}
-			listContent.WriteString(m.renderChildRowLine(cursor, label, style, r, isSelected && fleetPage.tagSelected))
+			listContent.WriteString(m.renderChildRowLine(cursor, label, style, r, isSelected && fleetPage.rightSelected))
 			listContent.WriteString("\n")
 
 		} else if r.kind == rowNewSession {
@@ -240,7 +247,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			if isSelected {
 				style = selectedStyle
 			}
-			listContent.WriteString(m.renderChildRowLine(cursor, label, style, r, isSelected && fleetPage.tagSelected))
+			listContent.WriteString(m.renderChildRowLine(cursor, label, style, r, isSelected && fleetPage.rightSelected))
 			listContent.WriteString("\n")
 
 		} else if r.kind == rowInstance {

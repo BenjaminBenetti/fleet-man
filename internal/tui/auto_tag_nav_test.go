@@ -194,19 +194,19 @@ func TestKeySelectDeselectInlinePR(t *testing.T) {
 	runes := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
 
 	fp.Update(m, runes('l'))
-	if !fp.tagSelected {
+	if !fp.rightSelected {
 		t.Fatalf("l should select the inline PR status")
 	}
 	fp.Update(m, runes('h'))
-	if fp.tagSelected {
+	if fp.rightSelected {
 		t.Fatalf("h should deselect")
 	}
 	fp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
-	if !fp.tagSelected {
+	if !fp.rightSelected {
 		t.Fatalf("right should select")
 	}
 	fp.Update(m, tea.KeyMsg{Type: tea.KeyLeft})
-	if fp.tagSelected {
+	if fp.rightSelected {
 		t.Fatalf("left should deselect")
 	}
 }
@@ -216,7 +216,7 @@ func TestKeySpaceOpensPRWhenSelected(t *testing.T) {
 	// the session the cursor happens to sit on.
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
 	fp, m := cursorOnInlinePR(t, inst, prStatusWithRefs(ref(5, "https://x/pull/5", "t")))
-	fp.tagSelected = true
+	fp.rightSelected = true
 	cmd := fp.Update(m, tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 	if cmd == nil {
 		t.Fatalf("space in the PR sub-mode should open the PR (non-nil cmd)")
@@ -232,9 +232,9 @@ func TestKeySpaceOpensPRWhenSelected(t *testing.T) {
 func TestKeySelectClearedByVerticalMove(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
 	fp, m := cursorOnInlinePR(t, inst, prStatusWithRefs(ref(1, "https://x/pull/1", "t")))
-	fp.tagSelected = true
+	fp.rightSelected = true
 	fp.Update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}) // up to instance row
-	if fp.tagSelected {
+	if fp.rightSelected {
 		t.Fatalf("vertical move should clear the selection")
 	}
 }
@@ -250,7 +250,7 @@ func TestKeyLWithoutInlinePRDoesNotSelect(t *testing.T) {
 		}
 	}
 	fp.Update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	if fp.tagSelected {
+	if fp.rightSelected {
 		t.Fatalf("l on a row without an inline PR must not select")
 	}
 }
@@ -258,11 +258,11 @@ func TestKeyLWithoutInlinePRDoesNotSelect(t *testing.T) {
 func TestBuildRowsClearsStaleSelection(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
 	fp, m := cursorOnInlinePR(t, inst, prStatusWithRefs(ref(1, "https://x/pull/1", "t")))
-	fp.tagSelected = true
+	fp.rightSelected = true
 	// PR closes: clear the runtime PR status, rebuild — selection must drop.
 	m.runtime[rtKey("alpha", "agent-1")] = &fleetgrpc.InstanceRuntime{Fleet: "alpha", Instance: "agent-1"}
 	fp.buildRows(m)
-	if fp.tagSelected {
+	if fp.rightSelected {
 		t.Fatalf("buildRows should clear selection once the inline PR is gone")
 	}
 }
@@ -301,7 +301,7 @@ func TestMouseClickOnInlinePROpensPR(t *testing.T) {
 	}
 	next, _ := m.Update(click)
 	nm := next.(model)
-	if !nm.fleetPage.tagSelected {
+	if !nm.fleetPage.rightSelected {
 		t.Errorf("click on the inline PR should select it")
 	}
 	if !strings.Contains(nm.message, "99") {

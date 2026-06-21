@@ -97,11 +97,11 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 		fleetPage.moveCursor(1)
 	}
 
-	// Drop a stale auto-tag selection if the cursor no longer sits on a row whose
-	// inline PR status is navigable (e.g. the PR closed, or a rebuild moved the
+	// Drop a stale right-hand selection if the cursor no longer sits on a row with
+	// a selectable right-hand element (e.g. a PR closed, or a rebuild moved the
 	// cursor off the row carrying it).
-	if fleetPage.tagSelected && len(fleetPage.selectedInlinePR(m)) == 0 {
-		fleetPage.tagSelected = false
+	if fleetPage.rightSelected && !fleetPage.currentRowHasRightElement(m) {
+		fleetPage.rightSelected = false
 	}
 }
 
@@ -202,7 +202,7 @@ func (fleetPage *fleetPage) toggleAutomationMode(m *model, name string) {
 		return
 	}
 	fleetPage.automationMode[name] = !fleetPage.automationMode[name]
-	fleetPage.tagSelected = false
+	fleetPage.rightSelected = false
 	fleetPage.buildRows(m)
 	fleetPage.cursorToFleetHeader(name)
 }
@@ -226,6 +226,18 @@ func (fleetPage *fleetPage) currentRow() *row {
 		return nil
 	}
 	return &fleetPage.rows[fleetPage.cursor]
+}
+
+// currentRowHasRightElement reports whether the cursor row carries a right-hand
+// element that →/l can select and enter can activate: a fleet header's
+// [automations]/[instances] mode toggle, or an expanded instance's inline PR
+// status.
+func (fleetPage *fleetPage) currentRowHasRightElement(m *model) bool {
+	r := fleetPage.currentRow()
+	if r == nil {
+		return false
+	}
+	return r.kind == rowFleetHeader || len(m.rowInlinePRRefs(*r)) > 0
 }
 
 // firstSelectable returns the index of the first selectable row (-1 if none).

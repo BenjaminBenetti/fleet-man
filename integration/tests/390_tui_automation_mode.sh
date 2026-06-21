@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Description: TUI automation mode (issue #188) — 'm' toggles a fleet between its
-# instance view and its automation view (triggers + agents groups). Adding an
-# agent through the dialog persists it and shows it in the agents group, and 'm'
-# toggles back to the instance view.
+# Description: TUI automation mode (issue #188) — 'm' (or selecting the header's
+# [automations]/[instances] toggle with →/l and pressing enter) flips a fleet
+# between its instance view and its automation view (triggers + agents groups).
+# Adding an agent through the dialog persists it and shows it in the agents
+# group, and 'm' toggles back to the instance view.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -19,6 +20,24 @@ tui_wait_for "alpha" 15
 # Instance view shows the [automations] toggle button.
 # ===========================================
 tui_assert_contains "[automations]" "fleet header should offer the [automations] toggle"
+
+# ===========================================
+# Keyboard selection: →/l focuses the header toggle and enter activates it,
+# flipping to the automation view; a second enter flips back. (The cursor starts
+# on the fleet header.)
+# ===========================================
+info "selecting the toggle with 'l' and pressing enter to enter automation mode"
+tui_send l
+sleep 0.2
+tui_send Enter
+tui_wait_for "[instances]" 5
+tui_assert_contains "triggers" "selecting the toggle + enter should open the automation view"
+
+info "pressing enter again to flip back to the instance view"
+tui_send Enter
+tui_wait_for "[automations]" 5
+tui_assert_contains "alpha" "a second enter should return to the instance view"
+tui_send h   # deselect the toggle before the rest of the flow
 
 # ===========================================
 # 'm' switches the fleet to automation view: triggers + agents groups, the

@@ -684,7 +684,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						// rendered (it would otherwise be truncated off-screen).
 						page.cursor = idx
 						page.armadaSel.focused = false
-						page.tagSelected = true
+						page.rightSelected = true
 						hit = true
 					case page.rows[idx].kind == rowFleetHeader &&
 						page.rows[idx].toggleX1 > page.rows[idx].toggleX0 &&
@@ -695,7 +695,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						// than collapsing the fleet like a click elsewhere on the row.
 						page.cursor = idx
 						page.armadaSel.focused = false
-						page.tagSelected = false
+						page.rightSelected = false
 						synthesizedKey = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}}
 						hit = true
 					case page.rows[idx].selectable():
@@ -704,7 +704,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						// the synthesized Space/Enter acts on the clicked row
 						// rather than (re)opening the dropdown.
 						page.armadaSel.focused = false
-						page.tagSelected = false
+						page.rightSelected = false
 						hit = true
 						if page.rows[idx].kind == rowInstance {
 							synthesizedKey = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}

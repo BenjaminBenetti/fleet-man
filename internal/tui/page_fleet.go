@@ -41,11 +41,13 @@ type fleetPage struct {
 	choosePR   choosePRState      // multi-PR chooser (open which PR?)
 	lpFlow     *layoutPresetFlow  // open preset creation/edit flow (nil unless mode == viewLayoutPreset)
 
-	// tagSelected is true when the cursor's instance has its auto-tag (PR status)
-	// horizontally selected — →/l selects it (drawn pink in [ ]), ←/h deselects,
-	// enter opens the PR. Meaningful only while the cursor is on an instance row
-	// whose auto-tag is navigable; cleared on any vertical cursor move.
-	tagSelected bool
+	// rightSelected is true when the cursor row's right-hand element is
+	// horizontally selected — →/l selects it (drawn pink), ←/h deselects, enter
+	// activates it. Two row kinds carry such an element: an instance's PR-status
+	// auto tag (enter opens the PR) and a fleet header's [automations]/[instances]
+	// mode toggle (enter flips automation mode). Cleared on any vertical cursor
+	// move. See currentRowHasRightElement / activateRightSelection.
+	rightSelected bool
 
 	textInput        textinput.Model
 	branchInput      textinput.Model
