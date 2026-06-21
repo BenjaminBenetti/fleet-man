@@ -40,6 +40,13 @@ type row struct {
 	// autoIdx indexes the fleet's Settings.Triggers (rowTrigger) or
 	// Settings.Agents (rowAgent) — the automation item this row renders/edits.
 	autoIdx int
+	// toggleX0/toggleX1 record the absolute terminal column span of the
+	// [automations]/[instances] mode-toggle button on a rowFleetHeader (set
+	// during View). A left click landing in [toggleX0, toggleX1) toggles the
+	// fleet's automation mode instead of collapsing it. toggleX1 == toggleX0
+	// means "no button here".
+	toggleX0 int
+	toggleX1 int
 	// prStatusInline marks the first child row of an expanded instance that has
 	// no user tag, telling the renderer to show the instance's PR-status auto tag
 	// at the status column on this row (a "second status line"). See buildRows.

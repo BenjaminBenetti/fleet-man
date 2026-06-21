@@ -7,6 +7,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // newAutomationModel builds a one-fleet model ("alpha", no instances) with rows
@@ -162,6 +163,47 @@ func TestDeleteAgentBlockedWhenReferenced(t *testing.T) {
 	fp.deleteAgent(m, "alpha", 0)
 	if len(f.Settings.Agents) != 0 {
 		t.Fatalf("agent should be deletable once unreferenced: %+v", f.Settings.Agents)
+	}
+}
+
+func TestHeaderToggleButtonMouseClick(t *testing.T) {
+	mp, fp := newAutomationModel(t)
+	m := *mp
+	m.currentPage = fp
+
+	// Render once so the fleet header's toggle-button span + listRowY are recorded.
+	fp.viewFleetList(&m)
+	if fp.rows[0].kind != rowFleetHeader || fp.rows[0].toggleX1 <= fp.rows[0].toggleX0 {
+		t.Fatalf("toggle button span not recorded on the fleet header: %+v", fp.rows[0])
+	}
+
+	// A click inside the [automations] button toggles the fleet into automation mode.
+	click := tea.MouseMsg{
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+		X:      fp.rows[0].toggleX0,
+		Y:      fp.listRowY,
+	}
+	next, _ := m.Update(click)
+	if !next.(model).fleetPage.automationMode["alpha"] {
+		t.Fatal("clicking the [automations] button should toggle automation mode on")
+	}
+
+	// A click elsewhere on the header (before the button) must NOT toggle — it
+	// collapses the fleet like a normal header click.
+	mp2, fp2 := newAutomationModel(t)
+	m2 := *mp2
+	m2.currentPage = fp2
+	fp2.viewFleetList(&m2)
+	miss := tea.MouseMsg{
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+		X:      listContentXOffset, // the cursor column, far left of the button
+		Y:      fp2.listRowY,
+	}
+	next2, _ := m2.Update(miss)
+	if next2.(model).fleetPage.automationMode["alpha"] {
+		t.Fatal("a click outside the button span must not toggle automation mode")
 	}
 }
 

@@ -167,17 +167,28 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 
 			// The fleet header carries a mode-toggle "button" (issue #188): the
 			// instance view shows the instance count plus an [automations] switch;
-			// the automation view shows an [instances] switch. 'm' toggles it.
-			var suffix string
+			// the automation view shows an [instances] switch. 'm' (or a click on
+			// the button — see app.go) toggles it. We record the button's absolute
+			// column span here so the click handler can hit-test it.
+			var suffix, toggleText string
+			// Columns before the suffix: cursor(2) + arrow(2) + name width.
+			labelStart := listContentXOffset + 4 + lipgloss.Width(r.fleetName)
 			if fleetPage.automationMode[r.fleetName] {
-				suffix = dimStyle.Render(" [instances]")
+				toggleText = "[instances]"
+				suffix = dimStyle.Render(" " + toggleText)
+				labelStart += 1 // a single leading space precedes the label
 			} else {
 				count := 0
 				if f, ok := m.st.Fleets[r.fleetName]; ok {
 					count = len(f.Instances)
 				}
-				suffix = dimStyle.Render(fmt.Sprintf(" (%d) [automations]", count))
+				countPart := fmt.Sprintf(" (%d) ", count)
+				toggleText = "[automations]"
+				suffix = dimStyle.Render(countPart + toggleText)
+				labelStart += lipgloss.Width(countPart)
 			}
+			fleetPage.rows[i].toggleX0 = labelStart
+			fleetPage.rows[i].toggleX1 = labelStart + lipgloss.Width(toggleText)
 
 			if isSelected {
 				listContent.WriteString(fmt.Sprintf("%s%s%s",
