@@ -1,0 +1,5 @@
+{
+  "name": "fleet-man automation fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "postCreateCommand": "sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends tmux && mkdir -p $HOME/.local/bin && printf '#!/bin/sh\\necho AGENT_RAN $* > /tmp/automation_agent_out\\nexec sleep 600\\n' > $HOME/.local/bin/claude && chmod +x $HOME/.local/bin/claude && echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> $HOME/.bashrc"
+}

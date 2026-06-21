@@ -87,17 +87,19 @@ func newScheduler() *scheduler {
 	}
 }
 
-// runScheduler is the automation loop; it returns when ctx is cancelled.
+// runScheduler is the automation loop; it returns when ctx is cancelled. It
+// ticks once immediately so a trigger whose cron matches the current minute
+// fires promptly on daemon start instead of waiting up to a full interval.
 func (s *service) runScheduler(ctx context.Context) {
 	sched := newScheduler()
 	ticker := time.NewTicker(scheduleTickInterval)
 	defer ticker.Stop()
 	for {
+		s.schedulerTick(ctx, sched, time.Now())
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.schedulerTick(ctx, sched, time.Now())
 		}
 	}
 }
@@ -367,14 +369,26 @@ var createAutomationInstance = func(s *service, fleetName string, ag fleet.Agent
 var launchAutomationCommand = func(ctx context.Context, s *service, w *watchedAgent, inst *fleet.Instance) {
 	session := tui.ResolveSessionName(inst.Name, "agent")
 	command := fleet.SubstituteAgentCommand(w.command, w.prompt, w.systemPrompt)
-	script := dotfiles.TmuxEnsureInstalled +
-		fmt.Sprintf("tmux new-session -d -s %s %s", dotfiles.ShQuote(session), dotfiles.ShQuote(command))
+	script := buildAgentLaunchScript(session, command)
 	b := s.hub.backendFor(inst)
 	go func() {
 		if out, err := b.RunScript(inst.ContainerID, script); err != nil {
 			flog.Error("automation: launch agent failed", "instance", inst.Name, "err", err, "out", strings.TrimSpace(out))
 		}
 	}()
+}
+
+// buildAgentLaunchScript builds the in-container snippet that brings up the agent
+// in a fresh tmux session. The command runs via an INTERACTIVE bash (`bash -ic`):
+// tmux otherwise runs a new-session command through a bare `sh -c`, which doesn't
+// source ~/.bashrc, so an agent like Claude (installed under ~/.local/bin and
+// added to PATH only in .bashrc) isn't found and the session dies instantly. The
+// interactive shell sources .bashrc and has the agent on PATH — the same
+// environment the user's own session shell has.
+func buildAgentLaunchScript(sessionName, command string) string {
+	launch := "bash -ic " + dotfiles.ShQuote(command)
+	return dotfiles.TmuxEnsureInstalled +
+		fmt.Sprintf("tmux new-session -d -s %s %s", dotfiles.ShQuote(sessionName), dotfiles.ShQuote(launch))
 }
 
 // automationActivity reports a watched agent's current activity, choosing the

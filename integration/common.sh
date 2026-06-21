@@ -36,6 +36,13 @@ FIXTURE_AGENT_SRC="${INTEGRATION_DIR}/fixture-agent"
 # in-instance launcher has something to list / resolve.
 FIXTURE_LAUNCH_SRC="${INTEGRATION_DIR}/fixture-launch"
 
+# Alternate fixture whose postCreate installs a fake `claude` under
+# ~/.local/bin (on PATH only via .bashrc, mimicking the real install) that
+# records its args to /tmp/automation_agent_out. The automation scheduler test
+# opts into it via setup_automation_test to verify a fired trigger actually
+# launches the agent with the prompt.
+FIXTURE_AUTOMATION_SRC="${INTEGRATION_DIR}/fixture-automation"
+
 # Test scratch dir created fresh per test.
 TEST_SCRATCH_DIR="${TEST_SCRATCH_DIR:-/tmp/fleet-man-itest}"
 
@@ -210,6 +217,13 @@ setup_test() {
 # they need.
 setup_agent_test() {
   FIXTURE_SRC="${FIXTURE_AGENT_SRC}" setup_test
+}
+
+# setup_automation_test prepares a clean environment whose fixture installs a
+# fake `claude` (see FIXTURE_AUTOMATION_SRC) so the automation scheduler test can
+# verify an agent actually launches with its prompt.
+setup_automation_test() {
+  FIXTURE_SRC="${FIXTURE_AUTOMATION_SRC}" setup_test
 }
 
 # setup_launch_test prepares a clean environment whose fixture

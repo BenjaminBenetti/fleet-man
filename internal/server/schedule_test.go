@@ -242,6 +242,30 @@ func TestSchedulerTickKeepsWatchAfterFiring(t *testing.T) {
 	}
 }
 
+func TestBuildAgentLaunchScript(t *testing.T) {
+	// The substituted command (prompt already inside it) must run via an
+	// interactive bash so ~/.bashrc is sourced and the agent (e.g. ~/.local/bin/
+	// claude) is found — a bare tmux `sh -c` does not source it and the session
+	// dies instantly.
+	cmd := fleet.SubstituteAgentCommand(fleet.DefaultAgentCommand, "do it", "be terse")
+	script := buildAgentLaunchScript("inst~agent", cmd)
+	for _, want := range []string{
+		"tmux new-session -d -s 'inst~agent'",
+		"bash -ic ",
+		// Both prompts are carried by the command (single-quote-escaped); no
+		// send-keys.
+		"be terse",
+		"do it",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("launch script missing %q\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "send-keys") {
+		t.Fatalf("launch should not use send-keys anymore:\n%s", script)
+	}
+}
+
 func TestServiceWatchedConcurrentProbesReapAll(t *testing.T) {
 	rec := stubAutomationSeams(t)
 	rec.activity = func(time.Time) (agentdetect.State, bool) { return agentdetect.StateWaiting, true }
