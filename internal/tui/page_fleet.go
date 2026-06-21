@@ -127,6 +127,9 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 	// runtimeChangedMsg handler in the model-level Update now — the server pushes
 	// session changes on the runtime stream, replacing the old client poll.)
 	switch msg.(type) {
+	case editorFinishedMsg:
+		return fleetPage.applyEditorResult(m, msg.(editorFinishedMsg))
+
 	case operationDoneMsg:
 		fleetPage.buildRows(m)
 		return nil
