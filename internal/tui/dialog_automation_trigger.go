@@ -468,8 +468,8 @@ func (fleetPage *fleetPage) renderAutomationTriggerDialog(m *model) string {
 		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowWebhookName), dialogLabel.Render("Webhook:"), field(trigRowWebhookName, st.webhookName, "name (appended to gateway URL)"))
 		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowFilterType), dialogLabel.Render("Filter: "), selectorLabel(filterTypeLabel(st.filterType)))
 		if st.filterType == fleet.WebhookFilterJSONPath {
-			fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowJSONPath), dialogLabel.Render("JSON path:"), field(trigRowJSONPath, st.jsonPath, "$.action"))
-			fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowJSONValue), dialogLabel.Render("JSON value:"), field(trigRowJSONValue, st.jsonValue, "opened"))
+			fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowJSONPath), dialogLabel.Render("JSON path:"), field(trigRowJSONPath, st.jsonPath, "e.g. $.action (required)"))
+			fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowJSONValue), dialogLabel.Render("JSON value:"), field(trigRowJSONValue, st.jsonValue, "e.g. opened"))
 		} else {
 			fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowRegex), dialogLabel.Render("Regex:  "), field(trigRowRegex, st.regex, "event body must match"))
 		}

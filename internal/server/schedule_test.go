@@ -230,6 +230,53 @@ func TestServiceWatchedNonTmuxDroppedAfterLaunch(t *testing.T) {
 	}
 }
 
+func TestSchedulerTickKeepsWatchAfterFiring(t *testing.T) {
+	// Regression: schedulerTick used the pre-fire state snapshot for
+	// serviceWatched, so the just-created instance wasn't visible and the watch
+	// entry was deleted the same tick — the agent never launched.
+	rec := stubAutomationSeams(t)
+
+	st := &state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Remote: "file:///x", Settings: fleet.FleetSettings{
+			Agents:   []fleet.Agent{{Name: "echoer", TmuxMode: true, Backend: fleet.BackendDevcontainer}},
+			Triggers: []fleet.Trigger{{Name: "t", Type: fleet.TriggerSchedule, AgentNames: []string{"echoer"}, Cron: "* * * * *", Prompt: "hi"}},
+		}},
+	}}
+
+	origLoad := scheduleLoadState
+	scheduleLoadState = func() (*state.State, error) { return st, nil }
+	origCreate := createAutomationInstance
+	// Mimic startCreateInstanceJob: synchronously add a StatusCreating record.
+	createAutomationInstance = func(_ *service, fleetName string, _ fleet.Agent, _ time.Time) (string, error) {
+		st.Fleets[fleetName].Instances = append(st.Fleets[fleetName].Instances,
+			&fleet.Instance{Name: "echoer-inst", Status: fleet.StatusCreating, ContainerID: "c1"})
+		return "echoer-inst", nil
+	}
+	t.Cleanup(func() { scheduleLoadState = origLoad; createAutomationInstance = origCreate })
+
+	s := &service{}
+	sched := newScheduler()
+	now := time.Date(2026, 6, 22, 9, 0, 30, 0, time.UTC)
+
+	// Tick 1: fires + creates the (Creating) instance. The watch entry must
+	// survive — not be deleted by serviceWatched running on stale state.
+	s.schedulerTick(context.Background(), sched, now)
+	w, ok := sched.watched["alpha/echoer-inst"]
+	if !ok {
+		t.Fatal("watch entry must survive the firing tick")
+	}
+	if w.launched || len(rec.launched) != 0 {
+		t.Fatal("agent must not launch while the instance is still Creating")
+	}
+
+	// Tick 2 (same minute → no re-fire): instance now Running → agent launches.
+	st.Fleets["alpha"].Instances[0].Status = fleet.StatusRunning
+	s.schedulerTick(context.Background(), sched, now.Add(10*time.Second))
+	if len(rec.launched) != 1 || rec.launched[0] != "echoer-inst" {
+		t.Fatalf("agent should launch once the instance is running, got %v", rec.launched)
+	}
+}
+
 func TestBuildTmuxLaunchScript(t *testing.T) {
 	// Default-style command (no ${PROMPT}): the prompt must be typed in as a
 	// SEPARATE send-keys line after the agent starts — otherwise the agent never

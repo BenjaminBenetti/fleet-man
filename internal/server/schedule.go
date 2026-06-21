@@ -102,13 +102,18 @@ func (s *service) runScheduler(ctx context.Context) {
 	}
 }
 
+// scheduleLoadState loads the persisted state for the scheduler. It is a seam so
+// tests can drive schedulerTick deterministically.
+var scheduleLoadState = state.Load
+
 // schedulerTick fires due triggers and services watched agents for one tick.
 func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.Time) {
-	st, err := state.Load()
+	st, err := scheduleLoadState()
 	if err != nil {
 		flog.Warn("automation: load state failed", "err", err)
 		return
 	}
+	fired := false
 	for _, due := range dueSchedules(st.Fleets, now, sched.lastFired) {
 		for _, ag := range agentsForTrigger(st.Fleets[due.fleet], due.trigger) {
 			instName, err := createAutomationInstance(s, due.fleet, ag, now)
@@ -129,6 +134,17 @@ func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.
 				detector:     agentdetect.NewTmuxPaneChangeDetector(),
 			}
 			sched.watched[w.key()] = w
+			fired = true
+		}
+	}
+	// createAutomationInstance writes the new StatusCreating record synchronously,
+	// but the snapshot loaded above predates it — so reload before servicing the
+	// watch set, otherwise findInstance can't see a just-created instance and the
+	// watch entry is dropped the same tick it was added (and the agent never
+	// launches).
+	if fired {
+		if reloaded, err := scheduleLoadState(); err == nil {
+			st = reloaded
 		}
 	}
 	s.serviceWatched(ctx, sched, st, now)
