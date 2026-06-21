@@ -404,6 +404,15 @@ type FleetSettings struct {
 	// presets. Names are unique within the list (the server normalizes and
 	// rejects duplicates, like custom_mounts).
 	LayoutPresets []*LayoutPreset `protobuf:"bytes,11,rep,name=layout_presets,json=layoutPresets,proto3" json:"layout_presets,omitempty"`
+	// agents is the fleet's list of automation agent definitions (issue #188).
+	// repeated message; names unique within the list (server normalizes). An
+	// empty list (the default) means no agents.
+	Agents []*Agent `protobuf:"bytes,12,rep,name=agents,proto3" json:"agents,omitempty"`
+	// triggers is the fleet's list of automation trigger definitions (issue
+	// #188), each firing one or more agents (by name) on a schedule or webhook
+	// event. repeated message; names unique within the list (server normalizes
+	// against the agent set). An empty list (the default) means no triggers.
+	Triggers      []*Trigger `protobuf:"bytes,13,rep,name=triggers,proto3" json:"triggers,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -515,6 +524,20 @@ func (x *FleetSettings) GetLayoutPresets() []*LayoutPreset {
 	return nil
 }
 
+func (x *FleetSettings) GetAgents() []*Agent {
+	if x != nil {
+		return x.Agents
+	}
+	return nil
+}
+
+func (x *FleetSettings) GetTriggers() []*Trigger {
+	if x != nil {
+		return x.Triggers
+	}
+	return nil
+}
+
 // LayoutPreset mirrors internal/fleet.LayoutPreset — a saved pane-layout
 // template the user can apply when creating a new session (Tab in the
 // new-session dialog). It is captured FROM a live session group: layout is the
@@ -585,6 +608,201 @@ func (x *LayoutPreset) GetPaneCommands() []string {
 	return nil
 }
 
+// Agent mirrors internal/fleet.Agent — an automation worker definition (issue
+// #188). command may contain the ${PROMPT}/${SYS_PROMPT} placeholders. tmux_mode
+// is a plain bool whose user-facing default is ON (the new-agent dialog sets it
+// and it is always persisted explicitly). backend reuses Instance.backend's enum
+// (UNSPECIFIED -> devcontainer at normalization).
+type Agent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Command       string                 `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
+	SystemPrompt  string                 `protobuf:"bytes,4,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
+	Backend       BackendType            `protobuf:"varint,5,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Agent) Reset() {
+	*x = Agent{}
+	mi := &file_domain_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Agent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Agent) ProtoMessage() {}
+
+func (x *Agent) ProtoReflect() protoreflect.Message {
+	mi := &file_domain_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Agent.ProtoReflect.Descriptor instead.
+func (*Agent) Descriptor() ([]byte, []int) {
+	return file_domain_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Agent) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Agent) GetCommand() string {
+	if x != nil {
+		return x.Command
+	}
+	return ""
+}
+
+func (x *Agent) GetSystemPrompt() string {
+	if x != nil {
+		return x.SystemPrompt
+	}
+	return ""
+}
+
+func (x *Agent) GetBackend() BackendType {
+	if x != nil {
+		return x.Backend
+	}
+	return BackendType_BACKEND_TYPE_UNSPECIFIED
+}
+
+// Trigger mirrors internal/fleet.Trigger — an automation trigger (issue #188).
+// type is the string-valued TriggerType ("schedule" | "webhook"); filter_type is
+// the string-valued WebhookFilterType ("regex" | "jsonpath"). Schedule triggers
+// use cron; webhook triggers use webhook_name + filter_type + the matching
+// fields. agent_names references Agents by name. The string-valued enums match
+// the Go model's string types, so the wire mapping is a plain string copy.
+type Trigger struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Type          string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
+	AgentNames    []string               `protobuf:"bytes,3,rep,name=agent_names,json=agentNames,proto3" json:"agent_names,omitempty"`
+	Prompt        string                 `protobuf:"bytes,4,opt,name=prompt,proto3" json:"prompt,omitempty"`
+	Cron          string                 `protobuf:"bytes,5,opt,name=cron,proto3" json:"cron,omitempty"`
+	WebhookName   string                 `protobuf:"bytes,6,opt,name=webhook_name,json=webhookName,proto3" json:"webhook_name,omitempty"`
+	FilterType    string                 `protobuf:"bytes,7,opt,name=filter_type,json=filterType,proto3" json:"filter_type,omitempty"`
+	Regex         string                 `protobuf:"bytes,8,opt,name=regex,proto3" json:"regex,omitempty"`
+	JsonPath      string                 `protobuf:"bytes,9,opt,name=json_path,json=jsonPath,proto3" json:"json_path,omitempty"`
+	JsonValue     string                 `protobuf:"bytes,10,opt,name=json_value,json=jsonValue,proto3" json:"json_value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Trigger) Reset() {
+	*x = Trigger{}
+	mi := &file_domain_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Trigger) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Trigger) ProtoMessage() {}
+
+func (x *Trigger) ProtoReflect() protoreflect.Message {
+	mi := &file_domain_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Trigger.ProtoReflect.Descriptor instead.
+func (*Trigger) Descriptor() ([]byte, []int) {
+	return file_domain_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *Trigger) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Trigger) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *Trigger) GetAgentNames() []string {
+	if x != nil {
+		return x.AgentNames
+	}
+	return nil
+}
+
+func (x *Trigger) GetPrompt() string {
+	if x != nil {
+		return x.Prompt
+	}
+	return ""
+}
+
+func (x *Trigger) GetCron() string {
+	if x != nil {
+		return x.Cron
+	}
+	return ""
+}
+
+func (x *Trigger) GetWebhookName() string {
+	if x != nil {
+		return x.WebhookName
+	}
+	return ""
+}
+
+func (x *Trigger) GetFilterType() string {
+	if x != nil {
+		return x.FilterType
+	}
+	return ""
+}
+
+func (x *Trigger) GetRegex() string {
+	if x != nil {
+		return x.Regex
+	}
+	return ""
+}
+
+func (x *Trigger) GetJsonPath() string {
+	if x != nil {
+		return x.JsonPath
+	}
+	return ""
+}
+
+func (x *Trigger) GetJsonValue() string {
+	if x != nil {
+		return x.JsonValue
+	}
+	return ""
+}
+
 // Fleet mirrors internal/fleet.Fleet. Settings is a NESTED message (not inlined)
 // so FleetSettings' tri-state presence stays self-contained; a nil Settings ==
 // zero settings. Instances ([]*Instance) -> repeated.
@@ -600,7 +818,7 @@ type Fleet struct {
 
 func (x *Fleet) Reset() {
 	*x = Fleet{}
-	mi := &file_domain_proto_msgTypes[3]
+	mi := &file_domain_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -612,7 +830,7 @@ func (x *Fleet) String() string {
 func (*Fleet) ProtoMessage() {}
 
 func (x *Fleet) ProtoReflect() protoreflect.Message {
-	mi := &file_domain_proto_msgTypes[3]
+	mi := &file_domain_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -625,7 +843,7 @@ func (x *Fleet) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Fleet.ProtoReflect.Descriptor instead.
 func (*Fleet) Descriptor() ([]byte, []int) {
-	return file_domain_proto_rawDescGZIP(), []int{3}
+	return file_domain_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Fleet) GetName() string {
@@ -674,7 +892,7 @@ type GroupLayout struct {
 
 func (x *GroupLayout) Reset() {
 	*x = GroupLayout{}
-	mi := &file_domain_proto_msgTypes[4]
+	mi := &file_domain_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -686,7 +904,7 @@ func (x *GroupLayout) String() string {
 func (*GroupLayout) ProtoMessage() {}
 
 func (x *GroupLayout) ProtoReflect() protoreflect.Message {
-	mi := &file_domain_proto_msgTypes[4]
+	mi := &file_domain_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -699,7 +917,7 @@ func (x *GroupLayout) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GroupLayout.ProtoReflect.Descriptor instead.
 func (*GroupLayout) Descriptor() ([]byte, []int) {
-	return file_domain_proto_rawDescGZIP(), []int{4}
+	return file_domain_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GroupLayout) GetGroupId() string {
@@ -751,7 +969,7 @@ type State struct {
 
 func (x *State) Reset() {
 	*x = State{}
-	mi := &file_domain_proto_msgTypes[5]
+	mi := &file_domain_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -763,7 +981,7 @@ func (x *State) String() string {
 func (*State) ProtoMessage() {}
 
 func (x *State) ProtoReflect() protoreflect.Message {
-	mi := &file_domain_proto_msgTypes[5]
+	mi := &file_domain_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -776,7 +994,7 @@ func (x *State) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use State.ProtoReflect.Descriptor instead.
 func (*State) Descriptor() ([]byte, []int) {
-	return file_domain_proto_rawDescGZIP(), []int{5}
+	return file_domain_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *State) GetFleets() map[string]*Fleet {
@@ -828,7 +1046,7 @@ const file_domain_proto_rawDesc = "" +
 	"\x06_errorB\x06\n" +
 	"\x04_tagB\b\n" +
 	"\x06_colorB\t\n" +
-	"\a_branchJ\x04\b\x0e\x10\x1f\"\xfa\x03\n" +
+	"\a_branchJ\x04\b\x0e\x10\x1f\"\xd4\x04\n" +
 	"\rFleetSettings\x12*\n" +
 	"\x11claude_code_mount\x18\x01 \x01(\bR\x0fclaudeCodeMount\x12\x1f\n" +
 	"\vcodex_mount\x18\x02 \x01(\bR\n" +
@@ -842,13 +1060,35 @@ const file_domain_proto_rawDesc = "" +
 	"\x12image_cache_server\x18\t \x01(\bR\x10imageCacheServer\x12!\n" +
 	"\fauggie_mount\x18\n" +
 	" \x01(\bR\vauggieMount\x12>\n" +
-	"\x0elayout_presets\x18\v \x03(\v2\x17.fleetgrpc.LayoutPresetR\rlayoutPresetsB\v\n" +
+	"\x0elayout_presets\x18\v \x03(\v2\x17.fleetgrpc.LayoutPresetR\rlayoutPresets\x12(\n" +
+	"\x06agents\x18\f \x03(\v2\x10.fleetgrpc.AgentR\x06agents\x12.\n" +
+	"\btriggers\x18\r \x03(\v2\x12.fleetgrpc.TriggerR\btriggersB\v\n" +
 	"\t_home_dirB\x16\n" +
 	"\x14_prefer_fleet_launch\"_\n" +
 	"\fLayoutPreset\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06layout\x18\x02 \x01(\tR\x06layout\x12#\n" +
-	"\rpane_commands\x18\x03 \x03(\tR\fpaneCommands\"\xa2\x01\n" +
+	"\rpane_commands\x18\x03 \x03(\tR\fpaneCommands\"\x92\x01\n" +
+	"\x05Agent\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\acommand\x18\x02 \x01(\tR\acommand\x12#\n" +
+	"\rsystem_prompt\x18\x04 \x01(\tR\fsystemPrompt\x120\n" +
+	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackendJ\x04\b\x03\x10\x04\"\x94\x02\n" +
+	"\aTrigger\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1f\n" +
+	"\vagent_names\x18\x03 \x03(\tR\n" +
+	"agentNames\x12\x16\n" +
+	"\x06prompt\x18\x04 \x01(\tR\x06prompt\x12\x12\n" +
+	"\x04cron\x18\x05 \x01(\tR\x04cron\x12!\n" +
+	"\fwebhook_name\x18\x06 \x01(\tR\vwebhookName\x12\x1f\n" +
+	"\vfilter_type\x18\a \x01(\tR\n" +
+	"filterType\x12\x14\n" +
+	"\x05regex\x18\b \x01(\tR\x05regex\x12\x1b\n" +
+	"\tjson_path\x18\t \x01(\tR\bjsonPath\x12\x1d\n" +
+	"\n" +
+	"json_value\x18\n" +
+	" \x01(\tR\tjsonValue\"\xa2\x01\n" +
 	"\x05Fleet\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06remote\x18\x02 \x01(\tR\x06remote\x124\n" +
@@ -902,36 +1142,41 @@ func file_domain_proto_rawDescGZIP() []byte {
 }
 
 var file_domain_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_domain_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_domain_proto_goTypes = []any{
 	(InstanceStatus)(0),           // 0: fleetgrpc.InstanceStatus
 	(BackendType)(0),              // 1: fleetgrpc.BackendType
 	(*Instance)(nil),              // 2: fleetgrpc.Instance
 	(*FleetSettings)(nil),         // 3: fleetgrpc.FleetSettings
 	(*LayoutPreset)(nil),          // 4: fleetgrpc.LayoutPreset
-	(*Fleet)(nil),                 // 5: fleetgrpc.Fleet
-	(*GroupLayout)(nil),           // 6: fleetgrpc.GroupLayout
-	(*State)(nil),                 // 7: fleetgrpc.State
-	nil,                           // 8: fleetgrpc.State.FleetsEntry
-	nil,                           // 9: fleetgrpc.State.GroupLayoutsEntry
-	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
+	(*Agent)(nil),                 // 5: fleetgrpc.Agent
+	(*Trigger)(nil),               // 6: fleetgrpc.Trigger
+	(*Fleet)(nil),                 // 7: fleetgrpc.Fleet
+	(*GroupLayout)(nil),           // 8: fleetgrpc.GroupLayout
+	(*State)(nil),                 // 9: fleetgrpc.State
+	nil,                           // 10: fleetgrpc.State.FleetsEntry
+	nil,                           // 11: fleetgrpc.State.GroupLayoutsEntry
+	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
 }
 var file_domain_proto_depIdxs = []int32{
-	10, // 0: fleetgrpc.Instance.created_at:type_name -> google.protobuf.Timestamp
+	12, // 0: fleetgrpc.Instance.created_at:type_name -> google.protobuf.Timestamp
 	0,  // 1: fleetgrpc.Instance.status:type_name -> fleetgrpc.InstanceStatus
 	1,  // 2: fleetgrpc.Instance.backend:type_name -> fleetgrpc.BackendType
 	4,  // 3: fleetgrpc.FleetSettings.layout_presets:type_name -> fleetgrpc.LayoutPreset
-	3,  // 4: fleetgrpc.Fleet.settings:type_name -> fleetgrpc.FleetSettings
-	2,  // 5: fleetgrpc.Fleet.instances:type_name -> fleetgrpc.Instance
-	8,  // 6: fleetgrpc.State.fleets:type_name -> fleetgrpc.State.FleetsEntry
-	9,  // 7: fleetgrpc.State.group_layouts:type_name -> fleetgrpc.State.GroupLayoutsEntry
-	5,  // 8: fleetgrpc.State.FleetsEntry.value:type_name -> fleetgrpc.Fleet
-	6,  // 9: fleetgrpc.State.GroupLayoutsEntry.value:type_name -> fleetgrpc.GroupLayout
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	5,  // 4: fleetgrpc.FleetSettings.agents:type_name -> fleetgrpc.Agent
+	6,  // 5: fleetgrpc.FleetSettings.triggers:type_name -> fleetgrpc.Trigger
+	1,  // 6: fleetgrpc.Agent.backend:type_name -> fleetgrpc.BackendType
+	3,  // 7: fleetgrpc.Fleet.settings:type_name -> fleetgrpc.FleetSettings
+	2,  // 8: fleetgrpc.Fleet.instances:type_name -> fleetgrpc.Instance
+	10, // 9: fleetgrpc.State.fleets:type_name -> fleetgrpc.State.FleetsEntry
+	11, // 10: fleetgrpc.State.group_layouts:type_name -> fleetgrpc.State.GroupLayoutsEntry
+	7,  // 11: fleetgrpc.State.FleetsEntry.value:type_name -> fleetgrpc.Fleet
+	8,  // 12: fleetgrpc.State.GroupLayoutsEntry.value:type_name -> fleetgrpc.GroupLayout
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_domain_proto_init() }
@@ -941,14 +1186,14 @@ func file_domain_proto_init() {
 	}
 	file_domain_proto_msgTypes[0].OneofWrappers = []any{}
 	file_domain_proto_msgTypes[1].OneofWrappers = []any{}
-	file_domain_proto_msgTypes[5].OneofWrappers = []any{}
+	file_domain_proto_msgTypes[7].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_domain_proto_rawDesc), len(file_domain_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

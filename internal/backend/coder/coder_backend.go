@@ -244,6 +244,16 @@ func (coderBackend *CoderBackend) ListSessions(containerID string) string {
 	return string(out)
 }
 
+// RunScript runs an arbitrary script directly inside the Coder workspace over a
+// single SSH round trip (coder ssh wraps everything after -- in a shell, so the
+// script is passed directly, as CaptureAllSessions does). Returns the combined
+// output and a non-nil error when the exec itself fails.
+func (coderBackend *CoderBackend) RunScript(containerID, script string) (string, error) {
+	target := coderBackend.resolveSSHTarget(containerID)
+	out, err := exec.Command("coder", sshArgs(target, []string{script})...).CombinedOutput()
+	return string(out), err
+}
+
 // AgentToolProbe detects which agent tool is running inside a Coder workspace.
 func (coderBackend *CoderBackend) AgentToolProbe(containerID string) (string, bool) {
 	// coder ssh wraps everything after -- in a shell invocation, so we

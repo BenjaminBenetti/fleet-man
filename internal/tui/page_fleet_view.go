@@ -165,11 +165,30 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				style = fleetCollapsedStyle
 			}
 
-			count := 0
-			if f, ok := m.st.Fleets[r.fleetName]; ok {
-				count = len(f.Instances)
+			// The fleet header carries a mode-toggle "button" (issue #188): the
+			// instance view shows the instance count plus an [automations] switch;
+			// the automation view shows an [instances] switch. 'm' (or a click on
+			// the button — see app.go) toggles it. We record the button's absolute
+			// column span here so the click handler can hit-test it.
+			var suffix, toggleText string
+			// Columns before the suffix: cursor(2) + arrow(2) + name width.
+			labelStart := listContentXOffset + 4 + lipgloss.Width(r.fleetName)
+			if fleetPage.automationMode[r.fleetName] {
+				toggleText = "[instances]"
+				suffix = dimStyle.Render(" " + toggleText)
+				labelStart += 1 // a single leading space precedes the label
+			} else {
+				count := 0
+				if f, ok := m.st.Fleets[r.fleetName]; ok {
+					count = len(f.Instances)
+				}
+				countPart := fmt.Sprintf(" (%d) ", count)
+				toggleText = "[automations]"
+				suffix = dimStyle.Render(countPart + toggleText)
+				labelStart += lipgloss.Width(countPart)
 			}
-			suffix := dimStyle.Render(fmt.Sprintf(" (%d)", count))
+			fleetPage.rows[i].toggleX0 = labelStart
+			fleetPage.rows[i].toggleX1 = labelStart + lipgloss.Width(toggleText)
 
 			if isSelected {
 				listContent.WriteString(fmt.Sprintf("%s%s%s",
@@ -354,6 +373,13 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			}
 			listContent.WriteString(line)
 			listContent.WriteString("\n")
+		} else if isAutomationRow(r.kind) {
+			line := fleetPage.renderAutomationRow(m, r, cursor, isSelected)
+			if maxW := m.width - 4; maxW > 0 && lipgloss.Width(line) > maxW {
+				line = ansi.Truncate(line, maxW-1, "…")
+			}
+			listContent.WriteString(line)
+			listContent.WriteString("\n")
 		} else {
 			label := "settings"
 			if r.kind == rowLeaveFocus {
@@ -460,6 +486,10 @@ func (fleetPage *fleetPage) viewActiveDialog(m *model) string {
 		return fleetPage.renderCodespacesLimitDialog(m)
 	case viewCreateSession:
 		return fleetPage.renderCreateSessionDialog(m)
+	case viewAutomationTrigger:
+		return fleetPage.renderAutomationTriggerDialog(m)
+	case viewAutomationAgent:
+		return fleetPage.renderAutomationAgentDialog(m)
 	case viewCloneInstance:
 		return fleetPage.renderCloneInstanceDialog(m)
 	case viewRenameSession:

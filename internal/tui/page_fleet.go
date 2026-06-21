@@ -63,6 +63,17 @@ type fleetPage struct {
 	listRowY int
 
 	armadaSel armadaSelectState // Armada selector widget (border label + dropdown)
+
+	// automationMode[fleet] is true when that fleet renders its automation view
+	// (collapsible triggers + agents groups) instead of its instance list
+	// (issue #188). Toggled with 'm'; persists across route changes like the
+	// rest of fleetPage.
+	automationMode map[string]bool
+	// autoCollapsed holds the collapse state of the per-fleet automation groups,
+	// keyed "trig:<fleet>" / "agent:<fleet>"; an absent key == expanded.
+	autoCollapsed map[string]bool
+	triggerDlg    automationTriggerState // add/edit-trigger dialog
+	agentDlg      automationAgentState   // add/edit-agent dialog
 }
 
 // newFleetPage creates a new fleet page with default state.
@@ -92,6 +103,10 @@ func newFleetPage() *fleetPage {
 		customMountInput: customMountInput,
 		listRowY:         -1,
 		armadaSel:        armadaSelectState{y: -1},
+		automationMode:   make(map[string]bool),
+		autoCollapsed:    make(map[string]bool),
+		triggerDlg:       automationTriggerState{input: newAutomationInput()},
+		agentDlg:         automationAgentState{input: newAutomationInput()},
 	}
 }
 
@@ -198,6 +213,10 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.updateArmadaSelect(m, msg)
 	case viewCreateSession:
 		return fleetPage.updateCreateSession(m, msg)
+	case viewAutomationTrigger:
+		return fleetPage.updateAutomationTrigger(m, msg)
+	case viewAutomationAgent:
+		return fleetPage.updateAutomationAgent(m, msg)
 	case viewLayoutPreset:
 		return fleetPage.updateLayoutPreset(m, msg)
 	case viewRenameSession:

@@ -114,6 +114,21 @@ type FleetSettings struct {
 	// means no presets.
 	LayoutPresets []LayoutPreset `json:"layoutPresets,omitempty"`
 
+	// Agents is the fleet's list of automation agent definitions (issue #188).
+	// An Agent describes how an automation worker is launched (command + tmux
+	// mode + system prompt + backend); Triggers reference agents by name. The
+	// list is validated/normalized (see NormalizeAgents) before persisting.
+	// Empty (the default) means no agents. Surfaced in the TUI's automation
+	// view.
+	Agents []Agent `json:"agents,omitempty"`
+
+	// Triggers is the fleet's list of automation trigger definitions (issue
+	// #188). A Trigger fires its referenced Agents (with a prompt) on a
+	// schedule or webhook event. Validated/normalized against Agents (see
+	// NormalizeTriggers) before persisting. Empty (the default) means no
+	// triggers.
+	Triggers []Trigger `json:"triggers,omitempty"`
+
 	// PreferFleetLaunch controls which page the built-in browser opens to
 	// when a workspace's devcontainer.json configures BOTH a
 	// customizations.fleet.browser.initialUrl AND a fleetLaunch block.

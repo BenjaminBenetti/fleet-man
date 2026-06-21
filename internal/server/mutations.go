@@ -137,6 +137,19 @@ func (s *service) SetFleetSettings(_ context.Context, req *fleetgrpc.SetFleetSet
 		return nil, status.Errorf(codes.InvalidArgument, "invalid layout preset: %v", err)
 	}
 	settings.LayoutPresets = normalizedPresets
+	// Automation (issue #188): validate agents first so trigger validation can
+	// resolve the agent names each trigger references. Both are the server's
+	// trust boundary before the lists reach state.json.
+	normalizedAgents, err := fleet.NormalizeAgents(settings.Agents)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid automation agent: %v", err)
+	}
+	settings.Agents = normalizedAgents
+	normalizedTriggers, err := fleet.NormalizeTriggers(settings.Triggers, settings.Agents)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid automation trigger: %v", err)
+	}
+	settings.Triggers = normalizedTriggers
 
 	snapshot, err := s.mutate(func(st *state.State) error {
 		f, ok := st.Fleets[req.GetFleet()]
@@ -269,12 +282,56 @@ func protoFleetSettingsToLegacy(ps *fleetgrpc.FleetSettings) fleet.FleetSettings
 	s.DebCacheServer = ps.GetDebCacheServer()
 	s.ImageCacheServer = ps.GetImageCacheServer()
 	s.LayoutPresets = protoLayoutPresetsToLegacy(ps.GetLayoutPresets())
+	s.Agents = protoAgentsToLegacy(ps.GetAgents())
+	s.Triggers = protoTriggersToLegacy(ps.GetTriggers())
 	s.HomeDir = ps.GetHomeDir()
 	if ps.PreferFleetLaunch != nil {
 		v := ps.GetPreferFleetLaunch()
 		s.PreferFleetLaunch = &v
 	}
 	return s
+}
+
+// protoAgentsToLegacy maps the repeated proto Agent back to the legacy slice
+// (nil for an empty list, matching the `,omitempty` JSON tag).
+func protoAgentsToLegacy(in []*fleetgrpc.Agent) []fleet.Agent {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]fleet.Agent, 0, len(in))
+	for _, a := range in {
+		out = append(out, fleet.Agent{
+			Name:         a.GetName(),
+			Command:      a.GetCommand(),
+			SystemPrompt: a.GetSystemPrompt(),
+			Backend:      fleet.BackendType(backendProtoToString(a.GetBackend())),
+		})
+	}
+	return out
+}
+
+// protoTriggersToLegacy maps the repeated proto Trigger back to the legacy
+// slice (nil for an empty list).
+func protoTriggersToLegacy(in []*fleetgrpc.Trigger) []fleet.Trigger {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]fleet.Trigger, 0, len(in))
+	for _, t := range in {
+		out = append(out, fleet.Trigger{
+			Name:        t.GetName(),
+			Type:        fleet.TriggerType(t.GetType()),
+			AgentNames:  t.GetAgentNames(),
+			Prompt:      t.GetPrompt(),
+			Cron:        t.GetCron(),
+			WebhookName: t.GetWebhookName(),
+			FilterType:  fleet.WebhookFilterType(t.GetFilterType()),
+			Regex:       t.GetRegex(),
+			JSONPath:    t.GetJsonPath(),
+			JSONValue:   t.GetJsonValue(),
+		})
+	}
+	return out
 }
 
 // protoLayoutPresetsToLegacy maps the repeated proto LayoutPreset back to the

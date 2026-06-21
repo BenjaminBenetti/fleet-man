@@ -5,9 +5,28 @@ on:
     branches: [main]
 
 jobs:
-  integration:
+  # The suite is sharded by test-number range across parallel runners so the
+  # SLOWEST shard — not the whole 80+-test suite — sets the wall-clock. Each
+  # shard runs integration/run.sh with FLEET_ITEST_RANGE; run.sh filters to the
+  # tests whose numeric filename prefix falls in [START, END). The open-ended
+  # "600-" shard catches any future high-numbered tests so none are dropped.
+  integration-shard:
+    name: integration ${{ matrix.range }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      # Run every shard to completion even if one fails — we want the full
+      # pass/fail picture across the suite, not a first-failure abort.
+      fail-fast: false
+      matrix:
+        range:
+          - "0-100"
+          - "100-200"
+          - "200-300"
+          - "300-400"
+          - "400-500"
+          - "500-600"
+          - "600-"
     steps:
       - uses: actions/checkout@v5
 
@@ -39,4 +58,23 @@ jobs:
       - name: Run integration tests
         env:
           FLEET_BIN: /usr/local/bin/fleet
+          FLEET_ITEST_RANGE: ${{ matrix.range }}
         run: ./integration/run.sh
+
+  # Single aggregate check: green only when every shard passed. Preserves one
+  # stable "integration" status name for branch protection / the review loop,
+  # independent of how many shards the matrix expands to.
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    needs: [integration-shard]
+    if: ${{ always() }}
+    steps:
+      - name: Verify all shards passed
+        run: |
+          result="${{ needs.integration-shard.result }}"
+          echo "integration shard matrix result: ${result}"
+          if [ "${result}" != "success" ]; then
+            echo "::error::one or more integration shards failed (result=${result})"
+            exit 1
+          fi

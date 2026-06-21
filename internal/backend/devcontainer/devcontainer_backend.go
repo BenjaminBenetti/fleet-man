@@ -534,6 +534,21 @@ func (devcontainerBackend *DevcontainerBackend) ListSessions(containerID string)
 	return string(out)
 }
 
+// RunScript runs an arbitrary script directly inside the container as the
+// container's non-root session user via `docker exec` — the same direct path
+// CaptureAllSessions/ListSessions use, bypassing the devcontainer Node CLI. A
+// tmux session created here lands under that user's socket, exactly where the
+// session poller (also -u that user) reads, so it surfaces in the TUI.
+func (devcontainerBackend *DevcontainerBackend) RunScript(containerID, script string) (string, error) {
+	args := []string{"exec"}
+	if user := devcontainerBackend.containerUser(containerID); user != "" {
+		args = append(args, "-u", user)
+	}
+	args = append(args, containerID, "sh", "-c", script)
+	out, err := exec.Command("docker", args...).CombinedOutput()
+	return string(out), err
+}
+
 // AgentToolProbe detects which agent tool is running inside a container.
 func (devcontainerBackend *DevcontainerBackend) AgentToolProbe(containerID string) (string, bool) {
 	args := []string{"exec"}

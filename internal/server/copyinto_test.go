@@ -110,11 +110,16 @@ func seedCopyIntoInstance(t *testing.T, ws string) {
 
 func sendCopyInto(t *testing.T, stream fleetgrpc.FleetService_CopyIntoClient, open *fleetgrpc.CopyIntoOpen, body string) (*fleetgrpc.CopyIntoReply, error) {
 	t.Helper()
-	if err := stream.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Open{Open: open}}); err != nil {
+	// gRPC client-streaming idiom: when the server rejects an early message and
+	// closes the stream, an in-flight Send returns io.EOF rather than the RPC
+	// status. Don't treat that EOF as the result — fall through to CloseAndRecv,
+	// which surfaces the real server status (e.g. NotFound). Bailing on the EOF
+	// here races the server's rejection and flakes (want NotFound, got EOF).
+	if err := stream.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Open{Open: open}}); err != nil && err != io.EOF {
 		return nil, err
 	}
 	if body != "" {
-		if err := stream.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Data{Data: []byte(body)}}); err != nil {
+		if err := stream.Send(&fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Data{Data: []byte(body)}}); err != nil && err != io.EOF {
 			return nil, err
 		}
 	}

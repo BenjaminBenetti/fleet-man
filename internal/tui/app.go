@@ -686,6 +686,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						page.armadaSel.focused = false
 						page.tagSelected = true
 						hit = true
+					case page.rows[idx].kind == rowFleetHeader &&
+						page.rows[idx].toggleX1 > page.rows[idx].toggleX0 &&
+						mouseMsg.X >= page.rows[idx].toggleX0 && mouseMsg.X < page.rows[idx].toggleX1:
+						// Clicking the [automations]/[instances] button on a fleet
+						// header toggles that fleet's automation mode (issue #188),
+						// synthesizing the same `m` the keyboard path uses — rather
+						// than collapsing the fleet like a click elsewhere on the row.
+						page.cursor = idx
+						page.armadaSel.focused = false
+						page.tagSelected = false
+						synthesizedKey = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}}
+						hit = true
 					case page.rows[idx].selectable():
 						page.cursor = idx
 						// Clicking a row takes focus off the Armada selector, so

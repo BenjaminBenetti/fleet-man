@@ -405,6 +405,8 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 		DebCacheServer:   s.DebCacheServer,
 		ImageCacheServer: s.ImageCacheServer,
 		LayoutPresets:    layoutPresetsToProto(s.LayoutPresets),
+		Agents:           agentsToProto(s.Agents),
+		Triggers:         triggersToProto(s.Triggers),
 	}
 	if s.HomeDir != "" {
 		ps.HomeDir = &s.HomeDir
@@ -426,6 +428,82 @@ func layoutPresetsToProto(in []fleet.LayoutPreset) []*fleetgrpc.LayoutPreset {
 			Name:         p.Name,
 			Layout:       p.Layout,
 			PaneCommands: p.PaneCommands,
+		})
+	}
+	return out
+}
+
+func agentsToProto(in []fleet.Agent) []*fleetgrpc.Agent {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*fleetgrpc.Agent, 0, len(in))
+	for _, a := range in {
+		out = append(out, &fleetgrpc.Agent{
+			Name:         a.Name,
+			Command:      a.Command,
+			SystemPrompt: a.SystemPrompt,
+			Backend:      backendStringToProto(string(a.Backend)),
+		})
+	}
+	return out
+}
+
+func protoAgentsToLegacy(in []*fleetgrpc.Agent) []fleet.Agent {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]fleet.Agent, 0, len(in))
+	for _, a := range in {
+		out = append(out, fleet.Agent{
+			Name:         a.GetName(),
+			Command:      a.GetCommand(),
+			SystemPrompt: a.GetSystemPrompt(),
+			Backend:      fleet.BackendType(backendProtoToString(a.GetBackend())),
+		})
+	}
+	return out
+}
+
+func triggersToProto(in []fleet.Trigger) []*fleetgrpc.Trigger {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*fleetgrpc.Trigger, 0, len(in))
+	for _, t := range in {
+		out = append(out, &fleetgrpc.Trigger{
+			Name:        t.Name,
+			Type:        string(t.Type),
+			AgentNames:  t.AgentNames,
+			Prompt:      t.Prompt,
+			Cron:        t.Cron,
+			WebhookName: t.WebhookName,
+			FilterType:  string(t.FilterType),
+			Regex:       t.Regex,
+			JsonPath:    t.JSONPath,
+			JsonValue:   t.JSONValue,
+		})
+	}
+	return out
+}
+
+func protoTriggersToLegacy(in []*fleetgrpc.Trigger) []fleet.Trigger {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]fleet.Trigger, 0, len(in))
+	for _, t := range in {
+		out = append(out, fleet.Trigger{
+			Name:        t.GetName(),
+			Type:        fleet.TriggerType(t.GetType()),
+			AgentNames:  t.GetAgentNames(),
+			Prompt:      t.GetPrompt(),
+			Cron:        t.GetCron(),
+			WebhookName: t.GetWebhookName(),
+			FilterType:  fleet.WebhookFilterType(t.GetFilterType()),
+			Regex:       t.GetRegex(),
+			JSONPath:    t.GetJsonPath(),
+			JSONValue:   t.GetJsonValue(),
 		})
 	}
 	return out
@@ -621,6 +699,8 @@ func protoFleetToLegacy(pf *fleetgrpc.Fleet) *fleet.Fleet {
 			DebCacheServer:   ps.GetDebCacheServer(),
 			ImageCacheServer: ps.GetImageCacheServer(),
 			LayoutPresets:    protoLayoutPresetsToLegacy(ps.GetLayoutPresets()),
+			Agents:           protoAgentsToLegacy(ps.GetAgents()),
+			Triggers:         protoTriggersToLegacy(ps.GetTriggers()),
 			HomeDir:          ps.GetHomeDir(),
 		}
 		if ps.PreferFleetLaunch != nil {
