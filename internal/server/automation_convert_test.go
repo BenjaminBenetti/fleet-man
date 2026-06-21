@@ -17,15 +17,13 @@ func TestFleetSettingsAutomationRoundTrip(t *testing.T) {
 			{
 				Name:         "builder",
 				Command:      "claude --system-prompt '${SYS_PROMPT}' '${PROMPT}'",
-				TmuxMode:     true,
 				SystemPrompt: "be precise",
 				Backend:      fleet.BackendDevcontainer,
 			},
 			{
-				Name:     "noTmux",
-				Command:  "echo hi",
-				TmuxMode: false,
-				Backend:  fleet.BackendCoder,
+				Name:    "noTmux",
+				Command: "echo hi",
+				Backend: fleet.BackendCoder,
 			},
 		},
 		Triggers: []fleet.Trigger{

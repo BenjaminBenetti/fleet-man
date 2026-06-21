@@ -63,9 +63,6 @@ func TestAddAgentThenTrigger(t *testing.T) {
 
 	// Add an agent via the dialog state + save path.
 	fp.openAddAgentDialog(m, "alpha")
-	if !fp.agentDlg.tmuxMode {
-		t.Fatal("new agent should default to tmux mode ON")
-	}
 	if fp.agentDlg.command == "" {
 		t.Fatal("new agent command should default to a non-empty value")
 	}
@@ -210,7 +207,7 @@ func TestHeaderToggleButtonMouseClick(t *testing.T) {
 func TestAutomationViewRenders(t *testing.T) {
 	m, fp := newAutomationModel(t)
 	f := m.st.Fleets["alpha"]
-	f.Settings.Agents = []fleet.Agent{{Name: "builder", TmuxMode: true, Backend: fleet.BackendDevcontainer}}
+	f.Settings.Agents = []fleet.Agent{{Name: "builder", Backend: fleet.BackendDevcontainer}}
 	f.Settings.Triggers = []fleet.Trigger{{Name: "nightly", Type: fleet.TriggerSchedule, AgentNames: []string{"builder"}, Cron: "0 0 * * *"}}
 	fp.toggleAutomationMode(m, "alpha")
 

@@ -137,9 +137,6 @@ func triggerSummary(t fleet.Trigger) string {
 func agentSummary(f *fleet.Fleet, a fleet.Agent) string {
 	n := triggerCountForAgent(f, a.Name)
 	parts := []string{backendTypeLabel(a.Backend)}
-	if a.TmuxMode {
-		parts = append(parts, "tmux")
-	}
 	suffix := "s"
 	if n == 1 {
 		suffix = ""

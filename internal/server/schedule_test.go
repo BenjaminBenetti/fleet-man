@@ -132,12 +132,11 @@ func watchedState(status fleet.InstanceStatus) *state.State {
 	}}
 }
 
-func newWatchedScheduler(now time.Time, tmux bool) *scheduler {
+func newWatchedScheduler(now time.Time) *scheduler {
 	sched := newScheduler()
 	sched.watched["alpha/agent-1"] = &watchedAgent{
-		fleet: "alpha", instance: "agent-1", tmux: tmux,
+		fleet: "alpha", instance: "agent-1",
 		spawnedAt: now, lastActive: now,
-		detector: agentdetect.NewTmuxPaneChangeDetector(),
 	}
 	return sched
 }
@@ -146,7 +145,7 @@ func TestServiceWatchedLaunchesWhenRunning(t *testing.T) {
 	rec := stubAutomationSeams(t)
 	s := &service{}
 	now := time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC)
-	sched := newWatchedScheduler(now, true)
+	sched := newWatchedScheduler(now)
 
 	// Still creating → no launch.
 	s.serviceWatched(context.Background(), sched, watchedState(fleet.StatusCreating), now)
@@ -168,7 +167,7 @@ func TestServiceWatchedReapsIdle(t *testing.T) {
 	rec := stubAutomationSeams(t)
 	s := &service{}
 	t0 := time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC)
-	sched := newWatchedScheduler(t0, true)
+	sched := newWatchedScheduler(t0)
 	sched.watched["alpha/agent-1"].launched = true
 	st := watchedState(fleet.StatusRunning)
 
@@ -196,40 +195,6 @@ func TestServiceWatchedReapsIdle(t *testing.T) {
 	}
 }
 
-func TestServiceWatchedNonTmuxNotReaped(t *testing.T) {
-	rec := stubAutomationSeams(t)
-	rec.activity = func(time.Time) (agentdetect.State, bool) { return agentdetect.StateWaiting, true }
-	s := &service{}
-	t0 := time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC)
-	sched := newWatchedScheduler(t0, false) // non-tmux
-	sched.watched["alpha/agent-1"].launched = true
-
-	s.serviceWatched(context.Background(), sched, watchedState(fleet.StatusRunning), t0.Add(time.Hour))
-	if len(rec.reaped) != 0 {
-		t.Fatalf("non-tmux agents must never be idle-reaped: %v", rec.reaped)
-	}
-}
-
-func TestServiceWatchedNonTmuxDroppedAfterLaunch(t *testing.T) {
-	rec := stubAutomationSeams(t)
-	s := &service{}
-	now := time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC)
-	sched := newWatchedScheduler(now, false) // non-tmux, not yet launched
-
-	// First running tick: launch once, then drop from the watch set (fire-and-
-	// forget) so it can't accumulate or be idle-reaped.
-	s.serviceWatched(context.Background(), sched, watchedState(fleet.StatusRunning), now)
-	if len(rec.launched) != 1 {
-		t.Fatalf("expected one launch, got %v", rec.launched)
-	}
-	if _, still := sched.watched["alpha/agent-1"]; still {
-		t.Fatal("non-tmux agent should be dropped from the watch set after launch")
-	}
-	if len(rec.reaped) != 0 {
-		t.Fatalf("non-tmux agent must not be reaped: %v", rec.reaped)
-	}
-}
-
 func TestSchedulerTickKeepsWatchAfterFiring(t *testing.T) {
 	// Regression: schedulerTick used the pre-fire state snapshot for
 	// serviceWatched, so the just-created instance wasn't visible and the watch
@@ -238,7 +203,7 @@ func TestSchedulerTickKeepsWatchAfterFiring(t *testing.T) {
 
 	st := &state.State{Fleets: map[string]*fleet.Fleet{
 		"alpha": {Name: "alpha", Remote: "file:///x", Settings: fleet.FleetSettings{
-			Agents:   []fleet.Agent{{Name: "echoer", TmuxMode: true, Backend: fleet.BackendDevcontainer}},
+			Agents:   []fleet.Agent{{Name: "echoer", Backend: fleet.BackendDevcontainer}},
 			Triggers: []fleet.Trigger{{Name: "t", Type: fleet.TriggerSchedule, AgentNames: []string{"echoer"}, Cron: "* * * * *", Prompt: "hi"}},
 		}},
 	}}
@@ -277,45 +242,14 @@ func TestSchedulerTickKeepsWatchAfterFiring(t *testing.T) {
 	}
 }
 
-func TestBuildTmuxLaunchScript(t *testing.T) {
-	// Default-style command (no ${PROMPT}): the prompt must be typed in as a
-	// SEPARATE send-keys line after the agent starts — otherwise the agent never
-	// gets prompted and no work begins (the reported bug).
-	script := buildTmuxLaunchScript("alpha~agent", "claude --system-prompt 'be terse'", "do the task", true)
-	for _, want := range []string{
-		"tmux new-session -d -s 'alpha~agent'",
-		"send-keys -t 'alpha~agent' -l -- 'claude --system-prompt '\\''be terse'\\'''",
-		"capture-pane -t 'alpha~agent' -p", // readiness poll, not a fixed delay
-		"send-keys -t 'alpha~agent' -l -- 'do the task'",
-	} {
-		if !strings.Contains(script, want) {
-			t.Fatalf("launch script missing %q\n%s", want, script)
-		}
-	}
-	// Two literal sends (agent command + prompt), each followed by a bare Enter.
-	if n := strings.Count(script, "-l --"); n != 2 {
-		t.Fatalf("expected 2 literal send-keys (command + prompt), got %d:\n%s", n, script)
-	}
-	if n := strings.Count(script, "Enter\n"); n != 2 {
-		t.Fatalf("expected 2 Enter submits, got %d:\n%s", n, script)
-	}
-
-	// When the command already embeds ${PROMPT}, the prompt is NOT re-sent (no
-	// readiness poll, no separate prompt send).
-	noResend := buildTmuxLaunchScript("alpha~agent", "claude -p 'do the task'", "do the task", false)
-	if strings.Contains(noResend, "capture-pane") || strings.Count(noResend, "-l --") != 1 {
-		t.Fatalf("prompt must not be sent separately when the command embeds it:\n%s", noResend)
-	}
-}
-
 func TestServiceWatchedConcurrentProbesReapAll(t *testing.T) {
 	rec := stubAutomationSeams(t)
 	rec.activity = func(time.Time) (agentdetect.State, bool) { return agentdetect.StateWaiting, true }
 	s := &service{}
 	t0 := time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC)
 
-	// Several idle tmux agents probed concurrently must all reap, with the watch
-	// set fully drained (no double-count / drop under the fan-out).
+	// Several idle agents probed concurrently must all reap, with the watch set
+	// fully drained (no double-count / drop under the fan-out).
 	const n = 5
 	sched := newScheduler()
 	insts := make([]*fleet.Instance, 0, n)
@@ -323,9 +257,8 @@ func TestServiceWatchedConcurrentProbesReapAll(t *testing.T) {
 		name := automationInstanceName("agent", t0.Add(time.Duration(i)*time.Second))
 		insts = append(insts, &fleet.Instance{Name: name, Status: fleet.StatusRunning, ContainerID: "c"})
 		sched.watched["alpha/"+name] = &watchedAgent{
-			fleet: "alpha", instance: name, tmux: true, launched: true,
+			fleet: "alpha", instance: name, launched: true,
 			spawnedAt: t0, lastActive: t0,
-			detector: agentdetect.NewTmuxPaneChangeDetector(),
 		}
 	}
 	st := &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha", Instances: insts}}}
@@ -343,7 +276,7 @@ func TestServiceWatchedDropsGoneInstance(t *testing.T) {
 	stubAutomationSeams(t)
 	s := &service{}
 	now := time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC)
-	sched := newWatchedScheduler(now, true)
+	sched := newWatchedScheduler(now)
 
 	// Instance not present in state (destroyed) → dropped from the watch set.
 	s.serviceWatched(context.Background(), sched, &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha"}}}, now)

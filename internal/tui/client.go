@@ -442,7 +442,6 @@ func agentsToProto(in []fleet.Agent) []*fleetgrpc.Agent {
 		out = append(out, &fleetgrpc.Agent{
 			Name:         a.Name,
 			Command:      a.Command,
-			TmuxMode:     a.TmuxMode,
 			SystemPrompt: a.SystemPrompt,
 			Backend:      backendStringToProto(string(a.Backend)),
 		})
@@ -459,7 +458,6 @@ func protoAgentsToLegacy(in []*fleetgrpc.Agent) []fleet.Agent {
 		out = append(out, fleet.Agent{
 			Name:         a.GetName(),
 			Command:      a.GetCommand(),
-			TmuxMode:     a.GetTmuxMode(),
 			SystemPrompt: a.GetSystemPrompt(),
 			Backend:      fleet.BackendType(backendProtoToString(a.GetBackend())),
 		})

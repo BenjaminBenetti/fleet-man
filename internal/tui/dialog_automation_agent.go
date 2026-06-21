@@ -11,13 +11,13 @@ import (
 
 // dialog_automation_agent.go is the add/edit-agent modal (issue #188). An agent
 // defines how an automation worker is launched: a command (with ${PROMPT}/
-// ${SYS_PROMPT} placeholders), tmux mode, a system prompt, and an env backend.
+// ${SYS_PROMPT} placeholders), a system prompt, and an env backend. The command
+// always runs in a tmux session so the user can open it in the TUI and watch.
 
 // agentRow identifies a focusable field in the agent dialog.
 const (
 	agentRowName = iota
 	agentRowCommand
-	agentRowTmux
 	agentRowSystemPrompt
 	agentRowBackend
 	agentRowSave
@@ -36,7 +36,6 @@ type automationAgentState struct {
 
 	name         string
 	command      string
-	tmuxMode     bool
 	systemPrompt string
 	backend      fleet.BackendType
 	errMsg       string
@@ -44,8 +43,8 @@ type automationAgentState struct {
 
 // openAddAgentDialog opens the agent editor for a new agent. The command field
 // defaults to the most recently defined agent's command (the issue's "remember
-// the last value" behavior), falling back to fleet.DefaultAgentCommand; tmux
-// mode defaults ON; backend defaults to the user's default backend.
+// the last value" behavior), falling back to fleet.DefaultAgentCommand; backend
+// defaults to the user's default backend.
 func (fleetPage *fleetPage) openAddAgentDialog(m *model, fleetName string) tea.Cmd {
 	command := fleet.DefaultAgentCommand
 	if agents := fleetAgents(m, fleetName); len(agents) > 0 {
@@ -60,7 +59,6 @@ func (fleetPage *fleetPage) openAddAgentDialog(m *model, fleetName string) tea.C
 		editIdx:   -1,
 		input:     fleetPage.agentDlg.input,
 		command:   command,
-		tmuxMode:  true,
 		backend:   backend,
 	}
 	fleetPage.mode = viewAutomationAgent
@@ -87,7 +85,6 @@ func (fleetPage *fleetPage) openEditAgentDialog(m *model, fleetName string, idx 
 		input:        fleetPage.agentDlg.input,
 		name:         a.Name,
 		command:      a.Command,
-		tmuxMode:     a.TmuxMode,
 		systemPrompt: a.SystemPrompt,
 		backend:      backend,
 	}
@@ -128,25 +125,15 @@ func (fleetPage *fleetPage) updateAutomationAgent(m *model, msg tea.Msg) tea.Cmd
 	case "down", "j", "tab":
 		st.row = (st.row + 1) % agentRowCount
 		return nil
-	case "enter":
-		return fleetPage.agentRowEnter(m)
-	case " ":
-		if st.row == agentRowTmux {
-			st.tmuxMode = !st.tmuxMode
-			return nil
-		}
+	case "enter", " ":
 		return fleetPage.agentRowEnter(m)
 	case "left", "h":
-		if st.row == agentRowTmux {
-			st.tmuxMode = !st.tmuxMode
-		} else if st.row == agentRowBackend {
+		if st.row == agentRowBackend {
 			st.backend = nextBackendType(st.backend, -1, allBackendTypes)
 		}
 		return nil
 	case "right", "l":
-		if st.row == agentRowTmux {
-			st.tmuxMode = !st.tmuxMode
-		} else if st.row == agentRowBackend {
+		if st.row == agentRowBackend {
 			st.backend = nextBackendType(st.backend, 1, allBackendTypes)
 		}
 		return nil
@@ -170,8 +157,6 @@ func (fleetPage *fleetPage) agentRowEnter(m *model) tea.Cmd {
 	switch st.row {
 	case agentRowName, agentRowCommand, agentRowSystemPrompt:
 		return fleetPage.activateAgentField()
-	case agentRowTmux:
-		st.tmuxMode = !st.tmuxMode
 	case agentRowBackend:
 		st.backend = nextBackendType(st.backend, 1, allBackendTypes)
 	case agentRowSave:
@@ -233,7 +218,6 @@ func (fleetPage *fleetPage) saveAutomationAgent(m *model) tea.Cmd {
 	candidate := fleet.Agent{
 		Name:         st.name,
 		Command:      st.command,
-		TmuxMode:     st.tmuxMode,
 		SystemPrompt: st.systemPrompt,
 		Backend:      st.backend,
 	}
@@ -325,16 +309,10 @@ func (fleetPage *fleetPage) renderAutomationAgentDialog(m *model) string {
 		return value
 	}
 
-	tmux := "[ ] off"
-	if st.tmuxMode {
-		tmux = "[x] on"
-	}
-
 	var body strings.Builder
 	fmt.Fprintf(&body, "%s\n\n", dialogTitle.Render(title))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowName), dialogLabel.Render("Name:    "), field(agentRowName, st.name, "agent-name"))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowCommand), dialogLabel.Render("Command: "), field(agentRowCommand, st.command, fleet.DefaultAgentCommand))
-	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowTmux), dialogLabel.Render("Tmux:    "), tmux)
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowSystemPrompt), dialogLabel.Render("Sys prompt:"), field(agentRowSystemPrompt, st.systemPrompt, "(optional, injected into ${SYS_PROMPT})"))
 	fmt.Fprintf(&body, "%s%s [ %s ]\n", marker(agentRowBackend), dialogLabel.Render("Backend: "), backendTypeLabel(st.backend))
 	fmt.Fprintf(&body, "%s%s\n", marker(agentRowSave), saveButtonLabel(st.row == agentRowSave))

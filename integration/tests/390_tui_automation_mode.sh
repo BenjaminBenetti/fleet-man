@@ -40,7 +40,7 @@ info "opening the add-agent dialog"
 for _ in 1 2 3 4; do tui_send j; sleep 0.15; done
 tui_send Enter
 tui_wait_for "New agent" 5
-tui_assert_contains "Tmux:" "agent dialog should expose the tmux toggle"
+tui_assert_contains "Backend:" "agent dialog should expose the backend selector"
 
 info "typing an agent name and saving"
 tui_send Enter         # activate the Name field

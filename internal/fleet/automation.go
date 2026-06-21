@@ -15,13 +15,12 @@ import (
 // them.
 
 // DefaultAgentCommand is the initial command offered for a new automation
-// agent. ${SYS_PROMPT} and ${PROMPT} are substituted at trigger time with a
-// fully shell-quoted value (see SubstituteAgentCommand), so the placeholders are
-// deliberately NOT wrapped in quotes here — adding your own quotes would
-// double-quote the value. The user need not use either placeholder. The trailing
-// spaces leave the cursor past the system-prompt flag so a user who prefers to
-// append the prompt inline can just keep typing.
-const DefaultAgentCommand = "claude --system-prompt ${SYS_PROMPT}  "
+// agent. Passing the prompt as Claude's positional argument starts a live,
+// watchable Claude session that immediately works on the prompt — no separate
+// keystroke injection needed. ${SYS_PROMPT}/${PROMPT} are substituted at trigger
+// time (single-quote-escaped, see SubstituteAgentCommand), so the placeholders
+// are wrapped in single quotes here.
+const DefaultAgentCommand = "claude --system-prompt '${SYS_PROMPT}' '${PROMPT}'"
 
 // maxAutomationListLen bounds a fleet's trigger / agent lists so a corrupt or
 // hostile settings write cannot mint an absurd number of entries (mirrors the
@@ -62,18 +61,15 @@ type Agent struct {
 	// referenced by triggers.
 	Name string `json:"name"`
 
-	// Command is the shell command that starts the agent. It may contain the
-	// ${PROMPT} and ${SYS_PROMPT} placeholders, substituted at trigger time
-	// with the trigger's prompt and this agent's SystemPrompt respectively.
-	// Empty falls back to DefaultAgentCommand at normalization time.
+	// Command is the shell command that starts the agent, run in a fresh tmux
+	// session (so the user can open it in the TUI and watch the agent work). It
+	// may contain the ${PROMPT} and ${SYS_PROMPT} placeholders, substituted at
+	// trigger time with the trigger's prompt and this agent's SystemPrompt
+	// respectively — wrap them in single quotes (the default does). Empty falls
+	// back to DefaultAgentCommand at normalization time. The agent's instance is
+	// torn down after the agent goes inactive for longer than the automation idle
+	// timeout.
 	Command string `json:"command,omitempty"`
-
-	// TmuxMode runs Command in a fresh tmux session and sends the prompt via
-	// send-keys, so the user can open the session in the TUI and watch the
-	// agent work. Default ON (the new-agent dialog sets it). With TmuxMode on,
-	// the agent's instance is torn down after the agent goes inactive for
-	// longer than the automation idle timeout.
-	TmuxMode bool `json:"tmuxMode"`
 
 	// SystemPrompt steers the agent; it is injected into the ${SYS_PROMPT}
 	// placeholder of Command.
@@ -124,10 +120,6 @@ type Trigger struct {
 	// JSONValue is the value the JSONPath selection must equal to fire.
 	JSONValue string `json:"jsonValue,omitempty"`
 }
-
-// TmuxEnabled reports whether the agent runs in a tmux session. (Plain accessor
-// kept for symmetry with the rest of the model and to centralize the default.)
-func (a Agent) TmuxEnabled() bool { return a.TmuxMode }
 
 // NormalizeAgent validates a single agent and returns its canonical form: the
 // name is trimmed and must be non-empty, an empty command falls back to the
@@ -283,28 +275,27 @@ func NormalizeTriggers(in []Trigger, agents []Agent) ([]Trigger, error) {
 }
 
 // SubstituteAgentCommand expands the ${PROMPT} and ${SYS_PROMPT} placeholders in
-// an agent command, replacing each with a FULLY SHELL-QUOTED value: the
-// substituted text is wrapped in single quotes (with any embedded ' escaped), so
-// it becomes a single literal argument no matter how the placeholder was used in
-// the command. That makes it safe in every context — bare (the default uses a
-// bare ${SYS_PROMPT}) or already inside other syntax (e.g. `echo ${PROMPT}`) —
-// so a prompt containing shell metacharacters (or, once webhook delivery lands,
-// arbitrary external event text) cannot inject shell syntax. Because the value
-// is self-quoting, callers must NOT wrap the placeholder in their own quotes.
+// an agent command, replacing each with a SINGLE-QUOTE-ESCAPED value (any
+// embedded ' becomes the close-escape-reopen sequence) so it is safe inside the
+// single quotes the placeholders are expected to be wrapped in — as the default
+// command (`... '${SYS_PROMPT}' '${PROMPT}'`) is. A prompt containing a quote or
+// shell metacharacters therefore stays literal rather than injecting shell
+// syntax. Wrapping a placeholder in single quotes is the caller's responsibility
+// (the default does); an unquoted placeholder is not made safe.
 //
 // Both placeholders expand in a single pass, so a ${PROMPT} appearing inside the
 // substituted system-prompt text is not re-expanded.
 func SubstituteAgentCommand(command, prompt, systemPrompt string) string {
 	r := strings.NewReplacer(
-		"${SYS_PROMPT}", shellQuote(systemPrompt),
-		"${PROMPT}", shellQuote(prompt),
+		"${SYS_PROMPT}", shellSingleQuoteEscape(systemPrompt),
+		"${PROMPT}", shellSingleQuoteEscape(prompt),
 	)
 	return r.Replace(command)
 }
 
-// shellQuote wraps a value in single quotes so it is a single literal shell
-// argument, escaping any embedded single quote as the standard close-escape-reopen
-// sequence.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+// shellSingleQuoteEscape rewrites single quotes so a value is safe inside a
+// single-quoted shell string: each ' becomes '\” (close the quote, emit an
+// escaped quote, reopen the quote).
+func shellSingleQuoteEscape(s string) string {
+	return strings.ReplaceAll(s, "'", `'\''`)
 }

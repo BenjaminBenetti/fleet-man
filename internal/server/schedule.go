@@ -23,11 +23,14 @@ import (
 //
 //  1. fires due Schedule triggers, spawning a normal fleet instance per
 //     referenced agent (they appear in the TUI like any other instance);
-//  2. once that instance is running, launches the agent's command — in a tmux
-//     session (default) so the user can open it in the TUI, with the trigger
-//     prompt + agent system prompt substituted into ${PROMPT}/${SYS_PROMPT};
-//  3. reaps tmux-mode agents that go idle for longer than the idle timeout,
-//     detected with the same screen-diff mechanism the TUI shows.
+//  2. once that instance is running, launches the agent's command in a fresh
+//     tmux session (so the user can open it in the TUI), with the trigger prompt
+//     + agent system prompt substituted into ${PROMPT}/${SYS_PROMPT} — the prompt
+//     rides the command itself (e.g. `claude ... '${PROMPT}'`), so no keystroke
+//     injection is needed;
+//  3. reaps agents that go idle for longer than the idle timeout, using the same
+//     agent-state detector factory the rest of the app uses (Claude/Auggie hooks,
+//     screen-diff fallback).
 //
 // Webhook triggers are modeled but not delivered here — wiring the gateway
 // endpoint is explicitly out of scope for issue #188.
@@ -41,16 +44,9 @@ var (
 	// services watched agents. ~30s comfortably samples every minute-granular
 	// cron minute at least once while staying cheap.
 	scheduleTickInterval = 30 * time.Second
-	// automationIdleTimeout is how long a tmux-mode agent may stay inactive
-	// before its instance is torn down (issue #188: "inactive for more than 2
-	// minutes").
+	// automationIdleTimeout is how long an agent may stay inactive before its
+	// instance is torn down (issue #188: "inactive for more than 2 minutes").
 	automationIdleTimeout = 2 * time.Minute
-	// automationPromptMaxWait caps how long the launch waits for a tmux-mode
-	// agent's TUI to finish booting (its pane to stop changing) before typing the
-	// prompt. A fixed delay drops the prompt when the agent (e.g. Claude Code,
-	// especially with MCP servers) is slow to come up, so the launch polls for
-	// readiness and only falls back to this cap if the pane never settles.
-	automationPromptMaxWait = 30 * time.Second
 )
 
 // maxAutomationProbeConcurrency bounds how many agent activity probes run at
@@ -66,11 +62,14 @@ type watchedAgent struct {
 	command      string
 	prompt       string
 	systemPrompt string
-	tmux         bool
 	spawnedAt    time.Time
 	lastActive   time.Time
 	launched     bool
-	detector     *agentdetect.TmuxPaneChangeDetector
+	// detector + detectorTool are the per-agent activity detector, chosen by the
+	// shared agentdetect factory from the probed tool (Claude/Auggie hooks, or the
+	// screen-diff fallback). Lazily created/replaced in automationActivity.
+	detector     agentdetect.Detector
+	detectorTool state.AgentTool
 }
 
 func (w *watchedAgent) key() string { return w.fleet + "/" + w.instance }
@@ -129,10 +128,8 @@ func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.
 				command:      ag.Command,
 				prompt:       due.trigger.Prompt,
 				systemPrompt: ag.SystemPrompt,
-				tmux:         ag.TmuxMode,
 				spawnedAt:    now,
 				lastActive:   now,
-				detector:     agentdetect.NewTmuxPaneChangeDetector(),
 			}
 			sched.watched[w.key()] = w
 			fired = true
@@ -253,17 +250,6 @@ func (s *service) serviceWatched(ctx context.Context, sched *scheduler, st *stat
 			launchAutomationCommand(ctx, s, w, inst)
 			w.launched = true
 			w.lastActive = now
-			// Non-tmux agents are fire-and-forget: once launched there is no idle
-			// state to watch, so stop tracking them (otherwise the watch set would
-			// grow without bound).
-			if !w.tmux {
-				delete(sched.watched, k)
-			}
-			continue
-		}
-		if !w.tmux {
-			// A non-tmux agent is dropped at launch above; never idle-reap one.
-			delete(sched.watched, k)
 			continue
 		}
 		checks = append(checks, pendingCheck{key: k, w: w, inst: inst})
@@ -366,98 +352,53 @@ var createAutomationInstance = func(s *service, fleetName string, ag fleet.Agent
 	return instName, nil
 }
 
-// launchAutomationCommand runs the agent's command inside its (running)
-// instance: a detached tmux session the user can open in the TUI (tmux mode), or
-// a detached background process (non-tmux).
+// launchAutomationCommand starts the agent's command in a fresh tmux session
+// inside its (running) instance, so it's viewable in the TUI. Both ${SYS_PROMPT}
+// and ${PROMPT} are substituted into the command (the default passes the prompt
+// as the agent's positional argument), so the command itself brings up a live
+// agent already working on the prompt — no keystroke injection, no readiness
+// polling.
 //
-// In tmux mode the prompt is delivered the way issue #188 specifies — "the
-// PROMPT will be sent via tmux send keys": the agent command (with ${SYS_PROMPT}
-// substituted) starts the agent, then the trigger prompt is typed into it as a
-// SEPARATE send-keys line. That is what makes the default command —
-// `claude --system-prompt '${SYS_PROMPT}'`, which has no ${PROMPT} — actually do
-// work: the prompt is typed into the running agent rather than relying on a
-// ${PROMPT} placeholder the default doesn't contain. If the command DOES embed
-// ${PROMPT} the prompt is substituted there instead and not re-sent.
-//
-// The tmux script runs in a goroutine because it sleeps (giving the agent's REPL
-// a moment to start before the prompt is typed) and must not stall the tick.
+// `tmux new-session -d -s X <cmd>` runs <cmd> as the session's process (tmux
+// hands it to sh -c). It execs straight against the container (RunScript) as the
+// session user — NOT the devcontainer Node CLI path, which from the daemon
+// silently produced no tmux server. Runs off the tick because TmuxEnsureInstalled
+// may apt-install tmux on first use.
 var launchAutomationCommand = func(ctx context.Context, s *service, w *watchedAgent, inst *fleet.Instance) {
-	// Exec straight against the container (RunScript), NOT the devcontainer Node
-	// CLI path (ExecCommand/runContainerShell): from the daemon's scheduler the
-	// Node CLI path silently produced no tmux server, whereas RunScript runs as
-	// the same session user the poller reads, so the agent's session reliably
-	// comes up and shows in the TUI.
-	b := s.hub.backendFor(inst)
-	if w.tmux {
-		session := tui.ResolveSessionName(inst.Name, "agent")
-		cmdHasPrompt := strings.Contains(w.command, "${PROMPT}")
-		command := fleet.SubstituteAgentCommand(w.command, w.prompt, w.systemPrompt)
-		script := buildTmuxLaunchScript(session, command, w.prompt, !cmdHasPrompt)
-		// The script sleeps to await REPL readiness before typing the prompt, so
-		// run it off the tick.
-		go func() {
-			if out, err := b.RunScript(inst.ContainerID, script); err != nil {
-				flog.Error("automation: launch tmux agent failed", "instance", inst.Name, "err", err, "out", strings.TrimSpace(out))
-			}
-		}()
-		return
-	}
-	// Non-tmux: run detached so the launch never blocks. There is no interactive
-	// session to type into, so a non-tmux agent must use the ${PROMPT} placeholder
-	// in its command to receive the prompt.
+	session := tui.ResolveSessionName(inst.Name, "agent")
 	command := fleet.SubstituteAgentCommand(w.command, w.prompt, w.systemPrompt)
-	detached := fmt.Sprintf(`nohup sh -lc %s >/tmp/fleet-automation.log 2>&1 &`, dotfiles.ShQuote(command))
-	if out, err := b.RunScript(inst.ContainerID, detached); err != nil {
-		flog.Error("automation: launch command failed", "instance", inst.Name, "err", err, "out", strings.TrimSpace(out))
-	}
+	script := dotfiles.TmuxEnsureInstalled +
+		fmt.Sprintf("tmux new-session -d -s %s %s", dotfiles.ShQuote(session), dotfiles.ShQuote(command))
+	b := s.hub.backendFor(inst)
+	go func() {
+		if out, err := b.RunScript(inst.ContainerID, script); err != nil {
+			flog.Error("automation: launch agent failed", "instance", inst.Name, "err", err, "out", strings.TrimSpace(out))
+		}
+	}()
 }
 
-// buildTmuxLaunchScript builds the in-container shell snippet that starts a
-// tmux-mode agent: ensure tmux, create the (detached) session, type the agent
-// command, then — when sendPrompt is set — wait for the agent's REPL to come up
-// and type the prompt into it. Text is sent with `send-keys -l` (literal) so a
-// prompt that happens to contain tmux key names ("Enter", "C-c", ...) is typed
-// verbatim, with a separate bare `Enter` to submit each line.
-func buildTmuxLaunchScript(sessionName, agentCommand, prompt string, sendPrompt bool) string {
-	sess := dotfiles.ShQuote(sessionName)
-	var b strings.Builder
-	b.WriteString(dotfiles.TmuxEnsureInstalled)
-	fmt.Fprintf(&b, "tmux new-session -d -s %s\n", sess)
-	fmt.Fprintf(&b, "tmux send-keys -t %s -l -- %s\n", sess, dotfiles.ShQuote(agentCommand))
-	fmt.Fprintf(&b, "tmux send-keys -t %s Enter\n", sess)
-	if sendPrompt && prompt != "" {
-		// Wait for the agent's TUI to settle (boot finished, idle waiting for
-		// input) before typing the prompt: poll the pane until its captured text
-		// is unchanged for two consecutive seconds, capped at
-		// automationPromptMaxWait. capture-pane -p returns text only (no cursor),
-		// so a blinking cursor doesn't defeat the "stable" check. A fixed delay
-		// drops the prompt when a slow agent like Claude Code isn't ready yet.
-		fmt.Fprintf(&b, "__fp=''; __fs=0; __fi=0\n")
-		fmt.Fprintf(&b, "while [ \"$__fi\" -lt %d ]; do\n", int(automationPromptMaxWait.Seconds()))
-		fmt.Fprintf(&b, "sleep 1; __fi=$((__fi+1))\n")
-		fmt.Fprintf(&b, "__fc=$(tmux capture-pane -t %s -p 2>/dev/null)\n", sess)
-		fmt.Fprintf(&b, "if [ -n \"$__fc\" ] && [ \"$__fc\" = \"$__fp\" ]; then __fs=$((__fs+1)); [ \"$__fs\" -ge 2 ] && break; else __fs=0; fi\n")
-		fmt.Fprintf(&b, "__fp=$__fc\n")
-		fmt.Fprintf(&b, "done\n")
-		// Type the prompt, then submit with a separate Enter after a short gap so
-		// the agent registers the text before the newline submits it.
-		fmt.Fprintf(&b, "tmux send-keys -t %s -l -- %s\n", sess, dotfiles.ShQuote(prompt))
-		fmt.Fprintf(&b, "sleep 1\n")
-		fmt.Fprintf(&b, "tmux send-keys -t %s Enter\n", sess)
-	}
-	return b.String()
-}
-
-// automationActivity reports a watched agent's current activity by diffing its
-// tmux screen (the same mechanism the TUI shows). The bool is false on a
-// transient capture failure, telling the caller to leave the agent untouched.
+// automationActivity reports a watched agent's current activity, choosing the
+// detector via the shared agentdetect factory from the probed tool — so Claude /
+// Auggie use their lifecycle hooks and other tools fall back to screen-diff,
+// identical to the live TUI path and improvable in one place. The bool is false
+// on a transient capture failure, telling the caller to leave the agent
+// untouched.
 var automationActivity = func(s *service, w *watchedAgent, inst *fleet.Instance, now time.Time) (agentdetect.State, bool) {
 	if inst.ContainerID == "" {
 		return agentdetect.StateNotRunning, false
 	}
-	caps := s.hub.backendFor(inst).CaptureAllSessions(inst.ContainerID)
+	b := s.hub.backendFor(inst)
+	caps := b.CaptureAllSessions(inst.ContainerID)
 	if !caps.OK {
 		return agentdetect.StateNotRunning, false
+	}
+	tool := state.AgentTool("")
+	if t, ok := b.AgentToolProbe(inst.ContainerID); ok {
+		tool = state.AgentTool(t)
+	}
+	if w.detector == nil || w.detectorTool != tool {
+		w.detector = agentdetect.NewDetector(tool)
+		w.detectorTool = tool
 	}
 	return w.detector.Detect(caps, now), true
 }

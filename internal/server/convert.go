@@ -79,7 +79,6 @@ func agentsToProto(in []fleet.Agent) []*fleetgrpc.Agent {
 		out = append(out, &fleetgrpc.Agent{
 			Name:         a.Name,
 			Command:      a.Command,
-			TmuxMode:     a.TmuxMode,
 			SystemPrompt: a.SystemPrompt,
 			Backend:      backendToProto(a.Backend),
 		})

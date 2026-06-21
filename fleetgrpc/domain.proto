@@ -221,9 +221,10 @@ message LayoutPreset {
 message Agent {
   string name = 1;
   string command = 2;
-  bool tmux_mode = 3;
   string system_prompt = 4;
   BackendType backend = 5;
+
+  reserved 3; // was tmux_mode (removed: agents always run in a tmux session)
 }
 
 // Trigger mirrors internal/fleet.Trigger — an automation trigger (issue #188).

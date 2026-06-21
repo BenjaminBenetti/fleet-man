@@ -303,7 +303,6 @@ func protoAgentsToLegacy(in []*fleetgrpc.Agent) []fleet.Agent {
 		out = append(out, fleet.Agent{
 			Name:         a.GetName(),
 			Command:      a.GetCommand(),
-			TmuxMode:     a.GetTmuxMode(),
 			SystemPrompt: a.GetSystemPrompt(),
 			Backend:      fleet.BackendType(backendProtoToString(a.GetBackend())),
 		})

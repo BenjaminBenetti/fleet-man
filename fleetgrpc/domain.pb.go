@@ -617,7 +617,6 @@ type Agent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Command       string                 `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
-	TmuxMode      bool                   `protobuf:"varint,3,opt,name=tmux_mode,json=tmuxMode,proto3" json:"tmux_mode,omitempty"`
 	SystemPrompt  string                 `protobuf:"bytes,4,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
 	Backend       BackendType            `protobuf:"varint,5,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -666,13 +665,6 @@ func (x *Agent) GetCommand() string {
 		return x.Command
 	}
 	return ""
-}
-
-func (x *Agent) GetTmuxMode() bool {
-	if x != nil {
-		return x.TmuxMode
-	}
-	return false
 }
 
 func (x *Agent) GetSystemPrompt() string {
@@ -1076,13 +1068,12 @@ const file_domain_proto_rawDesc = "" +
 	"\fLayoutPreset\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06layout\x18\x02 \x01(\tR\x06layout\x12#\n" +
-	"\rpane_commands\x18\x03 \x03(\tR\fpaneCommands\"\xa9\x01\n" +
+	"\rpane_commands\x18\x03 \x03(\tR\fpaneCommands\"\x92\x01\n" +
 	"\x05Agent\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
-	"\acommand\x18\x02 \x01(\tR\acommand\x12\x1b\n" +
-	"\ttmux_mode\x18\x03 \x01(\bR\btmuxMode\x12#\n" +
+	"\acommand\x18\x02 \x01(\tR\acommand\x12#\n" +
 	"\rsystem_prompt\x18\x04 \x01(\tR\fsystemPrompt\x120\n" +
-	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackend\"\x94\x02\n" +
+	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackendJ\x04\b\x03\x10\x04\"\x94\x02\n" +
 	"\aTrigger\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1f\n" +
