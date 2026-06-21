@@ -439,7 +439,7 @@ func loadInstanceSnapshot(fleetName, instanceName string) *fleetgrpc.Instance {
 // startCreateInstanceJob pre-creates the StatusCreating record server-side
 // (this removes the client-side pre-create write that drove issue #63), then
 // starts the provisioning job.
-func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest) (*job, error) {
+func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, automated bool) (*job, error) {
 	fleetName, instanceName := req.GetFleet(), req.GetInstance()
 	if fleetName == "" || instanceName == "" {
 		return nil, status.Error(codes.InvalidArgument, "fleet and instance are required")
@@ -477,6 +477,7 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest) (
 			Status:       fleet.StatusCreating,
 			Backend:      backendType,
 			Branch:       req.GetBranch(),
+			Automated:    automated,
 		})
 	})
 	if err != nil {
@@ -494,7 +495,7 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest) (
 
 // CreateInstance starts the provisioning job and relays its events.
 func (s *service) CreateInstance(req *fleetgrpc.CreateInstanceRequest, stream fleetgrpc.FleetService_CreateInstanceServer) error {
-	j, err := s.startCreateInstanceJob(req)
+	j, err := s.startCreateInstanceJob(req, false)
 	if err != nil {
 		return err
 	}

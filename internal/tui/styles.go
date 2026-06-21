@@ -44,6 +44,12 @@ var (
 	dimStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240"))
 
+	// automationMarkStyle colors the ⟳ marker on automation-spawned instances
+	// (issue #188): a calm cyan that reads as a distinct origin badge without
+	// competing with the status word or the agent indicators.
+	automationMarkStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("44"))
+
 	statusRunningStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("42"))
 

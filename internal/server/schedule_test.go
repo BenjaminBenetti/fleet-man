@@ -18,6 +18,38 @@ func scheduleFleet(triggers []fleet.Trigger, agents []fleet.Agent) map[string]*f
 	}
 }
 
+func TestCreateAutomationInstanceMarksAutomated(t *testing.T) {
+	// The real scheduler create path must persist Automated=true so the TUI can
+	// badge the instance. Stub the async provisioning job to a no-op so only the
+	// synchronous record creation is under test.
+	isolateFleetDir(t)
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha"},
+	}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	orig := jobRunCreate
+	jobRunCreate = func(string, string, string, string, bool, fleet.BackendType) error { return nil }
+	defer func() { jobRunCreate = orig }()
+
+	s, _, cleanup := newTestServer(t)
+	defer cleanup()
+
+	name, err := createAutomationInstance(s, "alpha", fleet.Agent{Name: "builder", Backend: fleet.BackendDevcontainer}, time.Now())
+	if err != nil {
+		t.Fatalf("createAutomationInstance: %v", err)
+	}
+
+	st, _ := state.Load()
+	inst, err := st.Fleets["alpha"].GetInstance(name)
+	if err != nil {
+		t.Fatalf("instance %q not found: %v", name, err)
+	}
+	if !inst.Automated {
+		t.Fatalf("scheduler-spawned instance should be marked Automated: %+v", inst)
+	}
+}
+
 func TestDueSchedulesFiresOncePerMinute(t *testing.T) {
 	// 2026-06-22 is a Monday at 09:00.
 	now := time.Date(2026, 6, 22, 9, 0, 30, 0, time.UTC)

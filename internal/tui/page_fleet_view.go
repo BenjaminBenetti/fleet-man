@@ -18,11 +18,17 @@ const (
 	// the main status word regardless of how long the instance name is.
 	instanceNameWidth = 22
 
+	// instanceAutoMarkWidth reserves a fixed 2-cell slot just before the instance
+	// name for the automation marker — the ⟳ glyph on automation-spawned instances
+	// (issue #188), blank otherwise — so names, and the status column, stay aligned
+	// whether or not a row carries the marker.
+	instanceAutoMarkWidth = 2
+
 	// instanceStatusCol is the column where the status word starts on an instance
 	// row, and the indent the PR-status second line is rendered at so it sits
 	// under that status. It is the sum of the row's fixed prefix cells: cursor(2)
-	// + gap(4) + arrow(2) + throbber(1) + gap(1) + name + gap(1).
-	instanceStatusCol = 2 + 4 + 2 + 1 + 1 + instanceNameWidth + 1
+	// + gap(4) + arrow(2) + throbber(1) + gap(1) + auto-mark(2) + name + gap(1).
+	instanceStatusCol = 2 + 4 + 2 + 1 + 1 + instanceAutoMarkWidth + instanceNameWidth + 1
 
 	// sessionLabelCol is the column an instance child row's label starts at:
 	// cursor(2) + the 8-space child indent (the "%s        %s" child-row format).
@@ -43,6 +49,10 @@ const (
 	// status begins, used to tell a click on the PR status apart from a click on
 	// the child row's session label.
 	prStatusClickColumn = listContentXOffset + instanceStatusCol
+
+	// automationMark is the glyph shown before an automation-spawned instance's
+	// name (issue #188) — a clockwise loop reading as "runs on a schedule".
+	automationMark = "⟳"
 )
 
 // renderChildRowLine renders an instance child row (a session/group row or the
@@ -327,7 +337,15 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				arrowStyled = arrow
 				nameStyled = nameRaw
 			}
-			paddedName := arrowStyled + throbber + " " + nameStyled
+			// Automation-spawned instances (issue #188) carry a ⟳ marker in the
+			// reserved auto-mark slot just before the name; user-created ones leave
+			// it blank. Both render to instanceAutoMarkWidth cells so names — and
+			// the status column — stay aligned regardless.
+			autoMark := strings.Repeat(" ", instanceAutoMarkWidth)
+			if instance.Automated {
+				autoMark = automationMarkStyle.Render(automationMark) + " "
+			}
+			paddedName := arrowStyled + throbber + " " + autoMark + nameStyled
 
 			backendIcon := "⬡"
 			switch instance.Backend {

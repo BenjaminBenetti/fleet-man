@@ -727,6 +727,7 @@ func protoInstanceToLegacy(pi *fleetgrpc.Instance) *fleet.Instance {
 		Tag:          pi.GetTag(),
 		Color:        pi.GetColor(),
 		Branch:       pi.GetBranch(),
+		Automated:    pi.GetAutomated(),
 	}
 	if ts := pi.GetCreatedAt(); ts != nil {
 		inst.CreatedAt = ts.AsTime()
