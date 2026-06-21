@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -151,11 +152,8 @@ func triggerCountForAgent(f *fleet.Fleet, name string) int {
 	}
 	n := 0
 	for _, t := range f.Settings.Triggers {
-		for _, an := range t.AgentNames {
-			if an == name {
-				n++
-				break
-			}
+		if slices.Contains(t.AgentNames, name) {
+			n++
 		}
 	}
 	return n
@@ -186,8 +184,11 @@ func (fleetPage *fleetPage) deleteTrigger(m *model, fleetName string, idx int) t
 		return nil
 	}
 	name := f.Settings.Triggers[idx].Name
-	newSettings := f.Settings
-	newSettings.Triggers = removeTriggerAt(f.Settings.Triggers, idx)
+	newSettings, err := fleet.DeleteTrigger(f.Settings, name)
+	if err != nil {
+		m.message = fmt.Sprintf("Delete failed: %v", err)
+		return nil
+	}
 	if err := fleetPage.persistAutomationSettings(m, fleetName, newSettings); err != nil {
 		m.message = fmt.Sprintf("Delete failed: %v", err)
 		return nil
@@ -196,53 +197,26 @@ func (fleetPage *fleetPage) deleteTrigger(m *model, fleetName string, idx int) t
 	return nil
 }
 
-// deleteAgent removes the agent at idx and persists. An agent still referenced
-// by a trigger is not deleted — the user is told to detach it first, so a delete
-// can never orphan a trigger (which the server would then reject wholesale).
+// deleteAgent removes the agent at idx and persists. fleet.DeleteAgent refuses
+// to delete an agent a trigger still references (which would orphan the trigger,
+// rejected by the server wholesale) — the user is told to detach it first.
 func (fleetPage *fleetPage) deleteAgent(m *model, fleetName string, idx int) tea.Cmd {
 	f, ok := m.st.Fleets[fleetName]
 	if !ok || idx < 0 || idx >= len(f.Settings.Agents) {
 		return nil
 	}
 	name := f.Settings.Agents[idx].Name
-	for _, t := range f.Settings.Triggers {
-		for _, an := range t.AgentNames {
-			if an == name {
-				m.message = fmt.Sprintf("Agent %q is used by trigger %q — remove it there first", name, t.Name)
-				return nil
-			}
-		}
+	newSettings, err := fleet.DeleteAgent(f.Settings, name)
+	if err != nil {
+		m.message = err.Error()
+		return nil
 	}
-	newSettings := f.Settings
-	newSettings.Agents = removeAgentAt(f.Settings.Agents, idx)
 	if err := fleetPage.persistAutomationSettings(m, fleetName, newSettings); err != nil {
 		m.message = fmt.Sprintf("Delete failed: %v", err)
 		return nil
 	}
 	m.message = fmt.Sprintf("Deleted agent %q", name)
 	return nil
-}
-
-// removeTriggerAt / removeAgentAt return a NEW slice with the element at idx
-// removed (never mutating the original, so persist's revert restores it).
-func removeTriggerAt(in []fleet.Trigger, idx int) []fleet.Trigger {
-	out := make([]fleet.Trigger, 0, len(in)-1)
-	out = append(out, in[:idx]...)
-	out = append(out, in[idx+1:]...)
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func removeAgentAt(in []fleet.Agent, idx int) []fleet.Agent {
-	out := make([]fleet.Agent, 0, len(in)-1)
-	out = append(out, in[:idx]...)
-	out = append(out, in[idx+1:]...)
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // fleetAgents returns the named fleet's automation agents (nil if none).

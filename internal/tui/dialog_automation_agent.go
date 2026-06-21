@@ -221,66 +221,35 @@ func (fleetPage *fleetPage) saveAutomationAgent(m *model) tea.Cmd {
 		SystemPrompt: st.systemPrompt,
 		Backend:      st.backend,
 	}
-	norm, err := fleet.NormalizeAgent(candidate)
-	if err != nil {
-		st.errMsg = err.Error()
-		return nil
-	}
 
 	f, ok := m.st.Fleets[st.fleetName]
 	if !ok {
 		return fleetPage.cancelAutomationAgent(m)
 	}
-	// Reject a duplicate name (against every other agent).
-	for i, a := range f.Settings.Agents {
-		if i != st.editIdx && a.Name == norm.Name {
-			st.errMsg = fmt.Sprintf("agent %q already exists", norm.Name)
-			return nil
-		}
-	}
 
-	newSettings := f.Settings
-	newAgents := append([]fleet.Agent(nil), f.Settings.Agents...)
-	if st.editIdx >= 0 && st.editIdx < len(newAgents) {
-		oldName := newAgents[st.editIdx].Name
-		newAgents[st.editIdx] = norm
-		// A rename must follow through to every trigger referencing the old
-		// name, or the server rejects the settings (unknown agent reference).
-		if oldName != norm.Name {
-			newSettings.Triggers = renameAgentInTriggers(f.Settings.Triggers, oldName, norm.Name)
-		}
+	// fleet.AddAgent/UpdateAgent own the shared invariants (normalize, reject a
+	// duplicate name, and — on rename — rewrite every trigger that references
+	// the old name so the server never sees a dangling reference).
+	var newSettings fleet.FleetSettings
+	var err error
+	if st.editIdx >= 0 && st.editIdx < len(f.Settings.Agents) {
+		oldName := f.Settings.Agents[st.editIdx].Name
+		newSettings, err = fleet.UpdateAgent(f.Settings, oldName, candidate)
 	} else {
-		newAgents = append(newAgents, norm)
+		newSettings, err = fleet.AddAgent(f.Settings, candidate)
 	}
-	newSettings.Agents = newAgents
+	if err != nil {
+		st.errMsg = err.Error()
+		return nil
+	}
 
 	if err := fleetPage.persistAutomationSettings(m, st.fleetName, newSettings); err != nil {
 		st.errMsg = err.Error()
 		return nil
 	}
 	fleetPage.mode = viewNormal
-	m.message = fmt.Sprintf("Saved agent %q", norm.Name)
+	m.message = fmt.Sprintf("Saved agent %q", strings.TrimSpace(candidate.Name))
 	return nil
-}
-
-// renameAgentInTriggers returns a deep copy of triggers with every reference to
-// oldName rewritten to newName (deep copy so the optimistic-revert in persist
-// never sees a mutated original).
-func renameAgentInTriggers(triggers []fleet.Trigger, oldName, newName string) []fleet.Trigger {
-	if len(triggers) == 0 {
-		return nil
-	}
-	out := make([]fleet.Trigger, len(triggers))
-	for i, t := range triggers {
-		t.AgentNames = append([]string(nil), t.AgentNames...)
-		for j, an := range t.AgentNames {
-			if an == oldName {
-				t.AgentNames[j] = newName
-			}
-		}
-		out[i] = t
-	}
-	return out
 }
 
 func (fleetPage *fleetPage) renderAutomationAgentDialog(m *model) string {

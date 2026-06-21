@@ -103,6 +103,12 @@ fleet up agent-1 --repo git@github.com:org/my-project.git
 
 # Reference an existing fleet from anywhere
 fleet up my-project/agent-3
+
+# Configure automation: agents (workers) and triggers (what fires them)
+fleet agent create my-project nightly-builder --system-prompt "Build and report"
+fleet trigger create my-project nightly --agent nightly-builder --cron "0 0 * * *" --prompt "Run the nightly build"
+fleet agent list my-project
+fleet trigger list my-project
 ```
 
 ## TUI Keybindings
@@ -180,8 +186,12 @@ An MCP client config (`mcp.json`) can then reference them directly:
 Tools mirror the non-interactive CLI: `fleet_list`, `fleet_status`,
 `fleet_version`, `fleet_logs`, `fleet_up`, `fleet_start`, `fleet_stop`,
 `fleet_down`, `fleet_destroy_fleet`, `fleet_clone`, `fleet_rebuild`, `fleet_exec`,
-and the tmux session tools `fleet_session_spawn` / `fleet_session_exec` /
-`fleet_session_read` / `fleet_session_list`.
+the tmux session tools `fleet_session_spawn` / `fleet_session_exec` /
+`fleet_session_read` / `fleet_session_list`, and the automation CRUD tools
+`fleet_automation_list`, `fleet_agent_create` / `fleet_agent_update` /
+`fleet_agent_delete`, and `fleet_trigger_create` / `fleet_trigger_update` /
+`fleet_trigger_delete` (mirroring the `fleet agent` and `fleet trigger` CLI
+commands).
 Interactive, open-ended commands (`fleet shell`, log following) are intentionally
 not exposed.
 
