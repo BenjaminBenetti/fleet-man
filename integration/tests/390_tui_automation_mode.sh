@@ -49,8 +49,8 @@ tui_send_text "builder"
 sleep 0.2
 tui_send Enter         # commit the name
 sleep 0.2
-# Name -> Command -> Tmux -> Sys prompt -> Backend -> [ Save ]: five 'j'.
-for _ in 1 2 3 4 5; do tui_send j; sleep 0.15; done
+# Name -> Command -> Sys prompt -> Backend -> [ Save ]: four 'j'.
+for _ in 1 2 3 4; do tui_send j; sleep 0.15; done
 tui_send Enter         # save
 tui_wait_for "agents (1)" 10
 tui_assert_contains "builder" "saved agent row should be visible"
