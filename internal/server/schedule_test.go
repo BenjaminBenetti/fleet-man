@@ -46,6 +46,27 @@ func TestDueSchedulesFiresOncePerMinute(t *testing.T) {
 	}
 }
 
+func TestDueSchedulesSkipsDisabled(t *testing.T) {
+	// 2026-06-22 09:00 is a Monday; both triggers match the minute, but the
+	// disabled one must never fire.
+	now := time.Date(2026, 6, 22, 9, 0, 30, 0, time.UTC)
+	fleets := scheduleFleet([]fleet.Trigger{
+		{Name: "on", Type: fleet.TriggerSchedule, AgentNames: []string{"a"}, Cron: "0 9 * * 1"},
+		{Name: "off", Type: fleet.TriggerSchedule, AgentNames: []string{"a"}, Cron: "0 9 * * 1", Disabled: true},
+	}, []fleet.Agent{{Name: "a"}})
+
+	lastFired := map[string]time.Time{}
+	due := dueSchedules(fleets, now, lastFired)
+	if len(due) != 1 || due[0].trigger.Name != "on" {
+		t.Fatalf("want only the enabled trigger to fire, got %+v", due)
+	}
+	// A disabled trigger should not even be recorded as fired, so re-enabling it
+	// later fires on the next matching minute rather than being suppressed.
+	if _, ok := lastFired["alpha\x00off"]; ok {
+		t.Fatal("disabled trigger should not record a lastFired entry")
+	}
+}
+
 func TestDueSchedulesPrunesStaleLastFired(t *testing.T) {
 	now := time.Date(2026, 6, 22, 9, 0, 30, 0, time.UTC) // Monday 09:00
 	fleets := scheduleFleet([]fleet.Trigger{

@@ -103,6 +103,7 @@ func triggersToProto(in []fleet.Trigger) []*fleetgrpc.Trigger {
 			Regex:       t.Regex,
 			JsonPath:    t.JSONPath,
 			JsonValue:   t.JSONValue,
+			Disabled:    t.Disabled,
 		})
 	}
 	return out

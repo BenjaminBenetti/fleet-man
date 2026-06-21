@@ -119,6 +119,12 @@ type Trigger struct {
 
 	// JSONValue is the value the JSONPath selection must equal to fire.
 	JSONValue string `json:"jsonValue,omitempty"`
+
+	// Disabled, when true, stops the trigger from firing: the scheduler skips it
+	// and webhook delivery (once wired) ignores it, but the definition is kept so
+	// it can be re-enabled. Defaults to false so a freshly-created trigger — and
+	// every trigger persisted before this field existed — fires as before.
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 // NormalizeAgent validates a single agent and returns its canonical form: the

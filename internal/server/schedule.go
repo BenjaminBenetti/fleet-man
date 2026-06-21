@@ -193,6 +193,9 @@ func dueSchedules(fleets map[string]*fleet.Fleet, now time.Time, lastFired map[s
 			}
 			key := name + "\x00" + t.Name
 			current[key] = struct{}{}
+			if t.Disabled {
+				continue // disabled triggers are kept but never fire
+			}
 			if t.Cron == "" {
 				continue
 			}

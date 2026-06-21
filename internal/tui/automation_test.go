@@ -144,6 +144,52 @@ func TestVisibleTriggerRowsByType(t *testing.T) {
 	}
 }
 
+func TestToggleTriggerDisabled(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	f := m.st.Fleets["alpha"]
+	f.Settings.Agents = []fleet.Agent{{Name: "a", Backend: fleet.BackendDevcontainer}}
+	f.Settings.Triggers = []fleet.Trigger{{Name: "nightly", Type: fleet.TriggerSchedule, AgentNames: []string{"a"}, Cron: "0 0 * * *"}}
+
+	fp.toggleTriggerDisabled(m, "alpha", 0)
+	if !m.st.Fleets["alpha"].Settings.Triggers[0].Disabled {
+		t.Fatal("trigger should be disabled after the first toggle")
+	}
+	fp.toggleTriggerDisabled(m, "alpha", 0)
+	if m.st.Fleets["alpha"].Settings.Triggers[0].Disabled {
+		t.Fatal("trigger should be enabled again after the second toggle")
+	}
+}
+
+// TestEditTriggerPreservesDisabled guards the footgun that editing a trigger
+// would silently re-enable it: the dialog rebuilds the Trigger from scratch, so
+// Disabled has to be loaded in and written back.
+func TestEditTriggerPreservesDisabled(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	f := m.st.Fleets["alpha"]
+	f.Settings.Agents = []fleet.Agent{{Name: "a", Backend: fleet.BackendDevcontainer}}
+	f.Settings.Triggers = []fleet.Trigger{{Name: "nightly", Type: fleet.TriggerSchedule, AgentNames: []string{"a"}, Cron: "0 0 * * *", Disabled: true}}
+
+	fp.openEditTriggerDialog(m, "alpha", 0)
+	if !fp.triggerDlg.disabled {
+		t.Fatal("edit dialog should load Disabled=true")
+	}
+	// Edit an unrelated field and save — Disabled must survive the round-trip.
+	fp.triggerDlg.prompt = "do the thing"
+	fp.saveAutomationTrigger(m)
+	if got := m.st.Fleets["alpha"].Settings.Triggers[0]; !got.Disabled || got.Prompt != "do the thing" {
+		t.Fatalf("edit dropped Disabled or prompt: %+v", got)
+	}
+
+	// The dialog's Enabled toggle flips it back on.
+	fp.openEditTriggerDialog(m, "alpha", 0)
+	fp.triggerDlg.row = trigRowEnabled
+	fp.toggleTriggerEnabled()
+	fp.saveAutomationTrigger(m)
+	if m.st.Fleets["alpha"].Settings.Triggers[0].Disabled {
+		t.Fatal("toggling Enabled in the dialog should re-enable the trigger")
+	}
+}
+
 func TestDeleteAgentBlockedWhenReferenced(t *testing.T) {
 	m, fp := newAutomationModel(t)
 	f := m.st.Fleets["alpha"]
