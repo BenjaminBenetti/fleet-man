@@ -24,7 +24,7 @@ import (
 // gatewayFeatures lists the optional tunnel features this gateway supports and
 // offers in the register handshake. fleetd advertises what IT supports; the
 // negotiated set is the intersection.
-var gatewayFeatures = []string{tunnel.FeatureGRPC}
+var gatewayFeatures = []string{tunnel.FeatureGRPC, tunnel.FeatureWebhook}
 
 // tunnelServiceDesc registers the Register bidi method on the gateway's grpc.Server.
 // Its ServiceName/StreamName compose to tunnel.RegisterMethod.
@@ -89,16 +89,21 @@ func (s *Server) bindTunnel(ctx context.Context, conn net.Conn, remote string) e
 		return err
 	}
 
-	// Negotiate optional tunnel features (gRPC). Only features BOTH ends support
-	// become active; an old fleetd (no Features) negotiates none. A daemon with
-	// remote fleet disabled does not request grpc, so none is negotiated and the
-	// gateway's gRPC route stays dead for this session — its Public GRPC URL is
-	// withheld accordingly.
+	// Negotiate optional tunnel features (gRPC, webhook). Only features BOTH ends
+	// support become active; an old fleetd (no Features) negotiates none. A daemon
+	// with a traffic kind disabled does not request its feature, so it is not
+	// negotiated and the matching gateway route stays dead for this session — its
+	// computed public URL is withheld accordingly.
 	reply.Features = tunnel.Negotiate(req.Features, gatewayFeatures)
 	grpcOn := tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC)
 	sess.grpc.Store(grpcOn)
 	if !grpcOn {
 		reply.PublicGRPCURL = ""
+	}
+	webhookOn := tunnel.HasFeature(reply.Features, tunnel.FeatureWebhook)
+	sess.webhook.Store(webhookOn)
+	if !webhookOn {
+		reply.PublicWebhookURL = ""
 	}
 
 	// Echo the gateway's build version so fleetd can surface it (over

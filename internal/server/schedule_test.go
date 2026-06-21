@@ -297,6 +297,76 @@ func TestServiceWatchedConcurrentProbesReapAll(t *testing.T) {
 	}
 }
 
+// TestFireWebhookBatchSpawns exercises the webhook critical path on the scheduler
+// goroutine: a delivered fire batch resolves the trigger's agents and registers
+// each as a watched instance (the same lifecycle scheduled triggers use).
+func TestFireWebhookBatchSpawns(t *testing.T) {
+	st := &state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{
+			Agents: []fleet.Agent{
+				{Name: "a", Command: "cmdA", SystemPrompt: "sysA", Backend: fleet.BackendDevcontainer},
+				{Name: "b", Command: "cmdB", Backend: fleet.BackendDevcontainer},
+			},
+		}},
+	}}
+	origLoad := scheduleLoadState
+	scheduleLoadState = func() (*state.State, error) { return st, nil }
+	origCreate := createAutomationInstance
+	var created []string
+	createAutomationInstance = func(_ *service, _ string, ag fleet.Agent, _ time.Time) (string, error) {
+		name := "inst-" + ag.Name
+		created = append(created, name)
+		return name, nil
+	}
+	t.Cleanup(func() { scheduleLoadState = origLoad; createAutomationInstance = origCreate })
+
+	s := &service{}
+	sched := newScheduler()
+	now := time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC)
+
+	// One trigger activating both agents, with a prompt.
+	trig := fleet.Trigger{Name: "ci", Type: fleet.TriggerWebhook, AgentNames: []string{"a", "b"}, WebhookName: "ci", Prompt: "go"}
+	s.fireWebhookBatch(sched, []webhookFire{{fleet: "alpha", trigger: trig}}, now)
+
+	if len(created) != 2 {
+		t.Fatalf("expected 2 instances created, got %v", created)
+	}
+	wa := sched.watched["alpha/inst-a"]
+	if wa == nil {
+		t.Fatal("agent a was not registered in the watch set")
+	}
+	if wa.command != "cmdA" || wa.systemPrompt != "sysA" || wa.prompt != "go" {
+		t.Fatalf("watched agent a carries the wrong fields: %+v", wa)
+	}
+	if sched.watched["alpha/inst-b"] == nil {
+		t.Fatal("agent b was not registered in the watch set")
+	}
+}
+
+// TestFireWebhookBatchSkipsMissingAgents confirms a fire whose trigger references
+// an agent that no longer exists is skipped (no crash, no watch entry), per fleet.
+func TestFireWebhookBatchSkipsMissingAgents(t *testing.T) {
+	st := &state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{Agents: nil}}, // no agents
+	}}
+	origLoad := scheduleLoadState
+	scheduleLoadState = func() (*state.State, error) { return st, nil }
+	origCreate := createAutomationInstance
+	createAutomationInstance = func(*service, string, fleet.Agent, time.Time) (string, error) {
+		t.Fatal("createAutomationInstance must not run when the trigger has no live agents")
+		return "", nil
+	}
+	t.Cleanup(func() { scheduleLoadState = origLoad; createAutomationInstance = origCreate })
+
+	s := &service{}
+	sched := newScheduler()
+	trig := fleet.Trigger{Name: "ci", Type: fleet.TriggerWebhook, AgentNames: []string{"gone"}, WebhookName: "ci"}
+	s.fireWebhookBatch(sched, []webhookFire{{fleet: "alpha", trigger: trig}}, time.Now())
+	if len(sched.watched) != 0 {
+		t.Fatalf("no watch entries expected, got %d", len(sched.watched))
+	}
+}
+
 func TestEnvDurationDefault(t *testing.T) {
 	const name = "FLEET_TEST_DURATION_KNOB"
 	def := 2 * time.Minute

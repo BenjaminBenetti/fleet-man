@@ -25,7 +25,11 @@ type sessionFile struct {
 	// registration ("" when the grpc feature was not negotiated or the gateway
 	// has no --public-grpc-url). Recorded for parity with PublicURL.
 	PublicGRPCURL string `json:"public_grpc_url,omitempty"`
-	GatewayURL    string `json:"gateway_url"`
+	// PublicWebhookURL is the gateway-assigned Public Webhook base URL from the
+	// last registration ("" when the webhook feature was not negotiated).
+	// Recorded for parity with PublicURL.
+	PublicWebhookURL string `json:"public_webhook_url,omitempty"`
+	GatewayURL       string `json:"gateway_url"`
 }
 
 // loadSession returns the persisted session IF it was issued for gatewayURL. A

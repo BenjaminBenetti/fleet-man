@@ -55,10 +55,11 @@ the whole gateway.
 | Component | Package | Role |
 |-----------|---------|------|
 | **Shared tunnel protocol** | `internal/tunnel` | The register handshake (length‑prefixed JSON), the yamux session helpers, the per‑stream **tag** byte, and the gRPC‑stream→`net.Conn` adapter (`StreamConn` + raw codec). Imported by *both* ends; depends only on stdlib + yamux. |
-| **fleetd tunnel client** | `internal/server/remote` | `Manager` dials the gateway, registers, and serves inbound streams; `serveTunnel` demuxes them to MCP or gRPC. |
+| **fleetd tunnel client** | `internal/server/remote` | `Manager` dials the gateway, registers, and serves inbound streams; `serveTunnel` demuxes them to the MCP, gRPC, or webhook server by tag. |
 | **fleetd MCP server** | `internal/server/mcp.go` | The loopback MCP server (`127.0.0.1:<port>`), bearer‑token gated. |
 | **fleetd gRPC server (tunnel)** | `internal/server` | A second `grpc.Server` (same `FleetService`) behind a bearer‑token interceptor, fed by the demux. The local unix‑socket server stays auth‑less. |
-| **The gateway** | `internal/gateway` | Two listeners — public MCP (HTTP/1.1) and native gRPC (HTTP/2). The gRPC server hosts the transparent control proxy AND the fleetd `Register` method (`register.go`); plus the session registry and the `/mcp` route. An **isolated module** — imports only `internal/tunnel`, the stdlib, and `google.golang.org/grpc` (no fleetd internals). |
+| **fleetd webhook receiver** | `internal/server/webhook.go` | An `http.Server` fed by the demux (`TagWebhook`) that routes an inbound `POST /<name>` to the matching automation webhook trigger(s) and fires their agents. **Unauthenticated** — the unguessable public URL is the capability, like the MCP proxy. |
+| **The gateway** | `internal/gateway` | Two listeners — public HTTP/1.1 (serving `/mcp/<id>` AND `/webhook/<id>/<name>`) and native gRPC (HTTP/2). The gRPC server hosts the transparent control proxy AND the fleetd `Register` method (`register.go`); plus the session registry. An **isolated module** — imports only `internal/tunnel`, the stdlib, and `google.golang.org/grpc` (no fleetd internals). |
 | **Remote `fleet` client** | `internal/fleetclient` | `gatewayEndpoint` — an ordinary gRPC dial to the gateway's gRPC listener, routing by the `fleet-session` metadata header. |
 
 ---

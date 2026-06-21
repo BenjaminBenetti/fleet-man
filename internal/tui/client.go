@@ -536,9 +536,10 @@ func configToProto(c *configutil.Config) *fleetgrpc.Config {
 		Codespaces: &fleetgrpc.CodespacesSettings{},
 		Browser:    &fleetgrpc.BrowserSettings{},
 		RemoteMcp: &fleetgrpc.RemoteMcpSettings{
-			Enabled:      c.RemoteMcpSettings.Enabled,
-			GatewayUrl:   c.RemoteMcpSettings.GatewayURL,
-			FleetEnabled: c.RemoteMcpSettings.FleetEnabled,
+			Enabled:        c.RemoteMcpSettings.Enabled,
+			GatewayUrl:     c.RemoteMcpSettings.GatewayURL,
+			FleetEnabled:   c.RemoteMcpSettings.FleetEnabled,
+			WebhookEnabled: c.RemoteMcpSettings.WebhookEnabled,
 		},
 		DefaultBackend: backendStringToProto(c.DefaultBackend),
 	}
@@ -830,6 +831,7 @@ func protoConfigToLegacy(pc *fleetgrpc.Config) *configutil.Config {
 		c.RemoteMcpSettings.Enabled = rm.GetEnabled()
 		c.RemoteMcpSettings.GatewayURL = rm.GetGatewayUrl()
 		c.RemoteMcpSettings.FleetEnabled = rm.GetFleetEnabled()
+		c.RemoteMcpSettings.WebhookEnabled = rm.GetWebhookEnabled()
 	}
 	c.DefaultBackend = backendProtoToString(pc.GetDefaultBackend())
 	return c

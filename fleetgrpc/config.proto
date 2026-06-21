@@ -92,6 +92,11 @@ message RemoteMcpSettings {
   // false fleetd does not negotiate the grpc tunnel feature, so the gateway
   // rejects any remote `fleet` control RPCs aimed at this daemon.
   bool fleet_enabled = 3;
+  // webhook_enabled gates the gateway webhook endpoint ("Enable Webhook"): when
+  // false fleetd does not negotiate the webhook tunnel feature, so the gateway
+  // does not serve <session-url>/webhook/<name> for this daemon. Independent of
+  // enabled/fleet_enabled — all three ride the SAME outbound tunnel.
+  bool webhook_enabled = 4;
 }
 
 message Config {
