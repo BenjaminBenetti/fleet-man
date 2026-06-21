@@ -67,6 +67,29 @@ if [ "${#tests[@]}" -eq 0 ]; then
   exit 2
 fi
 
+# Optional sharding: FLEET_ITEST_RANGE="START-END" keeps only tests whose
+# numeric filename prefix N satisfies START <= N < END (END exclusive so
+# hundred-boundaries don't double-run). An empty END means no upper bound, so
+# the top shard ("600-") always catches new high-numbered tests instead of
+# silently dropping them. CI fans the suite across matrix machines by range so
+# the slowest shard — not the whole suite — sets the wall-clock. An empty result
+# is a legitimately empty shard (exits 0), distinct from the empty-glob fatal above.
+if [ -n "${FLEET_ITEST_RANGE:-}" ]; then
+  range_start="10#${FLEET_ITEST_RANGE%-*}"
+  range_end="${FLEET_ITEST_RANGE#*-}"
+  shard=()
+  for test_file in "${tests[@]}"; do
+    prefix=$(basename "${test_file}" | grep -oE '^[0-9]+' || true)
+    [ -n "${prefix}" ] || continue
+    n="$((10#${prefix}))"
+    [ "${n}" -ge "$((range_start))" ] || continue
+    [ -z "${range_end}" ] || [ "${n}" -lt "$((10#${range_end}))" ] || continue
+    shard+=("${test_file}")
+  done
+  tests=("${shard[@]}")
+  say "Shard ${FLEET_ITEST_RANGE}: running ${#tests[@]} test(s)"
+fi
+
 # Shared results file — tests append one row each via common.sh helpers.
 # run.sh does NOT judge results; it only aggregates this file at the end.
 FLEET_ITEST_RESULTS="$(mktemp)"
