@@ -45,6 +45,11 @@ var (
 	// before its instance is torn down (issue #188: "inactive for more than 2
 	// minutes").
 	automationIdleTimeout = 2 * time.Minute
+	// automationPromptDelay is how long to wait after starting a tmux-mode
+	// agent before typing the prompt into it, giving the agent's REPL time to
+	// come up so the keystrokes are not dropped. Best-effort (a fixed delay is
+	// imperfect, but agents like Claude Code start within a few seconds).
+	automationPromptDelay = 5 * time.Second
 )
 
 // maxAutomationProbeConcurrency bounds how many agent activity probes run at
@@ -346,28 +351,61 @@ var createAutomationInstance = func(s *service, fleetName string, ag fleet.Agent
 
 // launchAutomationCommand runs the agent's command inside its (running)
 // instance: a detached tmux session the user can open in the TUI (tmux mode), or
-// a detached background process (non-tmux). ${PROMPT}/${SYS_PROMPT} are
-// substituted first.
+// a detached background process (non-tmux).
+//
+// In tmux mode the prompt is delivered the way issue #188 specifies — "the
+// PROMPT will be sent via tmux send keys": the agent command (with ${SYS_PROMPT}
+// substituted) starts the agent, then the trigger prompt is typed into it as a
+// SEPARATE send-keys line. That is what makes the default command —
+// `claude --system-prompt '${SYS_PROMPT}'`, which has no ${PROMPT} — actually do
+// work: the prompt is typed into the running agent rather than relying on a
+// ${PROMPT} placeholder the default doesn't contain. If the command DOES embed
+// ${PROMPT} the prompt is substituted there instead and not re-sent.
+//
+// The tmux script runs in a goroutine because it sleeps (giving the agent's REPL
+// a moment to start before the prompt is typed) and must not stall the tick.
 var launchAutomationCommand = func(ctx context.Context, s *service, w *watchedAgent, inst *fleet.Instance) {
-	command := fleet.SubstituteAgentCommand(w.command, w.prompt, w.systemPrompt)
 	if w.tmux {
 		session := tui.ResolveSessionName(inst.Name, "agent")
-		spawn := dotfiles.TmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s`, dotfiles.ShQuote(session))
-		if out, err := runContainerShell(ctx, inst, spawn); err != nil {
-			flog.Error("automation: spawn session failed", "instance", inst.Name, "err", err, "out", strings.TrimSpace(out))
-			return
-		}
-		send := fmt.Sprintf(`tmux send-keys -t %s %s Enter`, dotfiles.ShQuote(session), dotfiles.ShQuote(command))
-		if out, err := runContainerShell(ctx, inst, send); err != nil {
-			flog.Error("automation: send command failed", "instance", inst.Name, "err", err, "out", strings.TrimSpace(out))
-		}
+		cmdHasPrompt := strings.Contains(w.command, "${PROMPT}")
+		command := fleet.SubstituteAgentCommand(w.command, w.prompt, w.systemPrompt)
+		script := buildTmuxLaunchScript(session, command, w.prompt, !cmdHasPrompt)
+		go func() {
+			if out, err := runContainerShell(ctx, inst, script); err != nil {
+				flog.Error("automation: launch tmux agent failed", "instance", inst.Name, "err", err, "out", strings.TrimSpace(out))
+			}
+		}()
 		return
 	}
 	// Non-tmux: run detached so the scheduler tick never blocks on the agent.
+	// There is no interactive session to type into, so a non-tmux agent must use
+	// the ${PROMPT} placeholder in its command to receive the prompt.
+	command := fleet.SubstituteAgentCommand(w.command, w.prompt, w.systemPrompt)
 	detached := fmt.Sprintf(`nohup sh -lc %s >/tmp/fleet-automation.log 2>&1 &`, dotfiles.ShQuote(command))
 	if out, err := runContainerShell(ctx, inst, detached); err != nil {
 		flog.Error("automation: launch command failed", "instance", inst.Name, "err", err, "out", strings.TrimSpace(out))
 	}
+}
+
+// buildTmuxLaunchScript builds the in-container shell snippet that starts a
+// tmux-mode agent: ensure tmux, create the (detached) session, type the agent
+// command, then — when sendPrompt is set — wait for the agent's REPL to come up
+// and type the prompt into it. Text is sent with `send-keys -l` (literal) so a
+// prompt that happens to contain tmux key names ("Enter", "C-c", ...) is typed
+// verbatim, with a separate bare `Enter` to submit each line.
+func buildTmuxLaunchScript(sessionName, agentCommand, prompt string, sendPrompt bool) string {
+	sess := dotfiles.ShQuote(sessionName)
+	var b strings.Builder
+	b.WriteString(dotfiles.TmuxEnsureInstalled)
+	fmt.Fprintf(&b, "tmux new-session -d -s %s\n", sess)
+	fmt.Fprintf(&b, "tmux send-keys -t %s -l -- %s\n", sess, dotfiles.ShQuote(agentCommand))
+	fmt.Fprintf(&b, "tmux send-keys -t %s Enter\n", sess)
+	if sendPrompt && prompt != "" {
+		fmt.Fprintf(&b, "sleep %d\n", int(automationPromptDelay.Seconds()))
+		fmt.Fprintf(&b, "tmux send-keys -t %s -l -- %s\n", sess, dotfiles.ShQuote(prompt))
+		fmt.Fprintf(&b, "tmux send-keys -t %s Enter\n", sess)
+	}
+	return b.String()
 }
 
 // automationActivity reports a watched agent's current activity by diffing its

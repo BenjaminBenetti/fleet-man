@@ -230,6 +230,36 @@ func TestServiceWatchedNonTmuxDroppedAfterLaunch(t *testing.T) {
 	}
 }
 
+func TestBuildTmuxLaunchScript(t *testing.T) {
+	// Default-style command (no ${PROMPT}): the prompt must be typed in as a
+	// SEPARATE send-keys line after the agent starts — otherwise the agent never
+	// gets prompted and no work begins (the reported bug).
+	script := buildTmuxLaunchScript("alpha~agent", "claude --system-prompt 'be terse'", "do the task", true)
+	for _, want := range []string{
+		"tmux new-session -d -s 'alpha~agent'",
+		"send-keys -t 'alpha~agent' -l -- 'claude --system-prompt '\\''be terse'\\'''",
+		"sleep 5",
+		"send-keys -t 'alpha~agent' -l -- 'do the task'",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("launch script missing %q\n%s", want, script)
+		}
+	}
+	// Two literal sends (agent command + prompt), each followed by a bare Enter.
+	if n := strings.Count(script, "-l --"); n != 2 {
+		t.Fatalf("expected 2 literal send-keys (command + prompt), got %d:\n%s", n, script)
+	}
+	if n := strings.Count(script, "Enter\n"); n != 2 {
+		t.Fatalf("expected 2 Enter submits, got %d:\n%s", n, script)
+	}
+
+	// When the command already embeds ${PROMPT}, the prompt is NOT re-sent.
+	noResend := buildTmuxLaunchScript("alpha~agent", "claude -p 'do the task'", "do the task", false)
+	if strings.Contains(noResend, "sleep") || strings.Count(noResend, "-l --") != 1 {
+		t.Fatalf("prompt must not be sent separately when the command embeds it:\n%s", noResend)
+	}
+}
+
 func TestServiceWatchedConcurrentProbesReapAll(t *testing.T) {
 	rec := stubAutomationSeams(t)
 	rec.activity = func(time.Time) (agentdetect.State, bool) { return agentdetect.StateWaiting, true }
