@@ -365,24 +365,32 @@ var createAutomationInstance = func(s *service, fleetName string, ag fleet.Agent
 // The tmux script runs in a goroutine because it sleeps (giving the agent's REPL
 // a moment to start before the prompt is typed) and must not stall the tick.
 var launchAutomationCommand = func(ctx context.Context, s *service, w *watchedAgent, inst *fleet.Instance) {
+	// Exec straight against the container (RunScript), NOT the devcontainer Node
+	// CLI path (ExecCommand/runContainerShell): from the daemon's scheduler the
+	// Node CLI path silently produced no tmux server, whereas RunScript runs as
+	// the same session user the poller reads, so the agent's session reliably
+	// comes up and shows in the TUI.
+	b := s.hub.backendFor(inst)
 	if w.tmux {
 		session := tui.ResolveSessionName(inst.Name, "agent")
 		cmdHasPrompt := strings.Contains(w.command, "${PROMPT}")
 		command := fleet.SubstituteAgentCommand(w.command, w.prompt, w.systemPrompt)
 		script := buildTmuxLaunchScript(session, command, w.prompt, !cmdHasPrompt)
+		// The script sleeps to await REPL readiness before typing the prompt, so
+		// run it off the tick.
 		go func() {
-			if out, err := runContainerShell(ctx, inst, script); err != nil {
+			if out, err := b.RunScript(inst.ContainerID, script); err != nil {
 				flog.Error("automation: launch tmux agent failed", "instance", inst.Name, "err", err, "out", strings.TrimSpace(out))
 			}
 		}()
 		return
 	}
-	// Non-tmux: run detached so the scheduler tick never blocks on the agent.
-	// There is no interactive session to type into, so a non-tmux agent must use
-	// the ${PROMPT} placeholder in its command to receive the prompt.
+	// Non-tmux: run detached so the launch never blocks. There is no interactive
+	// session to type into, so a non-tmux agent must use the ${PROMPT} placeholder
+	// in its command to receive the prompt.
 	command := fleet.SubstituteAgentCommand(w.command, w.prompt, w.systemPrompt)
 	detached := fmt.Sprintf(`nohup sh -lc %s >/tmp/fleet-automation.log 2>&1 &`, dotfiles.ShQuote(command))
-	if out, err := runContainerShell(ctx, inst, detached); err != nil {
+	if out, err := b.RunScript(inst.ContainerID, detached); err != nil {
 		flog.Error("automation: launch command failed", "instance", inst.Name, "err", err, "out", strings.TrimSpace(out))
 	}
 }

@@ -121,6 +121,16 @@ type Backend interface {
 	// ("", false) on probe failure.
 	AgentToolProbe(containerID string) (string, bool)
 
+	// RunScript runs an arbitrary shell script directly inside the container as
+	// the session user, returning its combined output. Like
+	// ListSessions/CaptureAllSessions it execs straight against the container ID
+	// — no devcontainer Node CLI cold start and no workspace-folder resolution —
+	// which makes it the reliable path for non-interactive daemon-side container
+	// work (e.g. launching an automation agent's tmux session: a session created
+	// here lands under the same session user the poller reads, so it shows in the
+	// TUI). The error is non-nil when the exec itself fails.
+	RunScript(containerID, script string) (string, error)
+
 	// EditorURI returns a URI string that an editor (e.g. VS Code)
 	// can use to connect to this workspace. Returns ("", false) if
 	// editor integration is not supported by this backend.

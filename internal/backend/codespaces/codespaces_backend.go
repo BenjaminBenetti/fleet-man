@@ -269,6 +269,14 @@ func (codespacesBackend *CodespacesBackend) ListSessions(containerID string) str
 	return string(out)
 }
 
+// RunScript runs an arbitrary script directly inside the codespace over a single
+// SSH round trip (same path as CaptureAllSessions). Returns the combined output
+// and a non-nil error when the exec itself fails.
+func (codespacesBackend *CodespacesBackend) RunScript(containerID, script string) (string, error) {
+	out, err := codespacesBackend.sshCommand(containerID, []string{script}, false).CombinedOutput()
+	return string(out), err
+}
+
 // AgentToolProbe detects which agent tool is running inside a codespace.
 func (codespacesBackend *CodespacesBackend) AgentToolProbe(containerID string) (string, bool) {
 	cmd := codespacesBackend.sshCommand(containerID, []string{backend.ToolProbeScript}, false)
