@@ -58,6 +58,20 @@ func TestViewFleetListMarksAutomatedInstance(t *testing.T) {
 	}
 }
 
+// TestAutomationLabelColorsFollowInstancePattern locks the hierarchy to mirror
+// the instance view (fleet blue → instance white → session blue): the triggers/
+// agents group header is white (not blue), while trigger/agent items keep the
+// blue session color.
+func TestAutomationLabelColorsFollowInstancePattern(t *testing.T) {
+	blue := lipgloss.Color("39") // fleetExpandedStyle / sessionStyle foreground
+	if automationGroupStyle.GetForeground() == blue {
+		t.Error("triggers/agents group header should be white, not blue")
+	}
+	if sessionStyle.GetForeground() != blue {
+		t.Error("trigger/agent items use sessionStyle, expected to be blue (color 39)")
+	}
+}
+
 // TestProtoInstanceToLegacyCarriesAutomated guards the TUI-side half of the
 // instance wire mapping (the server-side half is covered in the server package).
 func TestProtoInstanceToLegacyCarriesAutomated(t *testing.T) {

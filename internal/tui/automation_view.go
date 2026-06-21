@@ -68,7 +68,7 @@ func (fleetPage *fleetPage) renderAutomationRow(m *model, r row, cursor string, 
 		if collapsed {
 			arrow = "▶ "
 		}
-		style := fleetExpandedStyle
+		style := automationGroupStyle
 		if isSelected {
 			style = selectedStyle
 		}

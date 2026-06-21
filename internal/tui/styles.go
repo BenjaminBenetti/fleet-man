@@ -151,6 +151,12 @@ var (
 	newSessionStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241"))
 
+	// Automation view group labels (triggers/agents). They mirror the instance
+	// view's hierarchy: fleet header blue, the group white like an instance name,
+	// and the trigger/agent items under it blue (sessionStyle) like sessions. Bold
+	// weight reads as a group header.
+	automationGroupStyle = lipgloss.NewStyle().Bold(true)
+
 	// Keybindings dialog
 	keybindingsDialogBox = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
