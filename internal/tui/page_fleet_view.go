@@ -18,17 +18,18 @@ const (
 	// the main status word regardless of how long the instance name is.
 	instanceNameWidth = 22
 
-	// instanceAutoMarkWidth reserves a fixed 2-cell slot just before the instance
-	// name for the automation marker — the ⟳ glyph on automation-spawned instances
-	// (issue #188), blank otherwise — so names, and the status column, stay aligned
-	// whether or not a row carries the marker.
+	// instanceAutoMarkWidth is the cell width the trailing automation marker
+	// (" ⟳", issue #188) occupies INSIDE the fixed-width name column on an
+	// automation-spawned instance row. The name is truncated this much shorter to
+	// make room, so the marker never widens the column or shifts the status word —
+	// and user-created rows keep their original, un-indented position.
 	instanceAutoMarkWidth = 2
 
 	// instanceStatusCol is the column where the status word starts on an instance
 	// row, and the indent the PR-status second line is rendered at so it sits
 	// under that status. It is the sum of the row's fixed prefix cells: cursor(2)
-	// + gap(4) + arrow(2) + throbber(1) + gap(1) + auto-mark(2) + name + gap(1).
-	instanceStatusCol = 2 + 4 + 2 + 1 + 1 + instanceAutoMarkWidth + instanceNameWidth + 1
+	// + gap(4) + arrow(2) + throbber(1) + gap(1) + name + gap(1).
+	instanceStatusCol = 2 + 4 + 2 + 1 + 1 + instanceNameWidth + 1
 
 	// sessionLabelCol is the column an instance child row's label starts at:
 	// cursor(2) + the 8-space child indent (the "%s        %s" child-row format).
@@ -313,39 +314,43 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				}
 			}
 
+			// Automation-spawned instances (issue #188) trail their name with a ⟳
+			// marker. It lives INSIDE the fixed-width name column — the name is
+			// truncated instanceAutoMarkWidth cells shorter to make room — so the
+			// marker never widens the column or shifts the status word, and
+			// user-created rows are not indented at all.
+			markerSuffix, nameBudget := "", instanceNameWidth
+			if instance.Automated {
+				markerSuffix = " " + automationMarkStyle.Render(automationMark)
+				nameBudget -= instanceAutoMarkWidth
+			}
+
 			// Truncate (with an ellipsis) before padding so a long name can't push
 			// the status column right and knock the PR-status second line below it
 			// out of alignment. Pad by VISUAL width (lipgloss.Width), not fmt's
 			// rune count, so a name with wide runes (CJK / emoji) still lands the
 			// status at exactly instanceStatusCol.
-			name := ansi.Truncate(instance.GetDisplayName(), instanceNameWidth, "…")
-			nameRaw := name + strings.Repeat(" ", max(0, instanceNameWidth-lipgloss.Width(name)))
+			name := ansi.Truncate(instance.GetDisplayName(), nameBudget, "…")
+			pad := strings.Repeat(" ", max(0, instanceNameWidth-lipgloss.Width(name)-lipgloss.Width(markerSuffix)))
 			var arrowStyled, nameStyled string
 			switch {
 			case isSelected && instanceColorHasCustom(instance.Color):
 				colorStyle := instanceColorStyle(instance.Color).Bold(true)
 				arrowStyled = colorStyle.Render(arrow)
-				nameStyled = colorStyle.Render(nameRaw)
+				nameStyled = colorStyle.Render(name)
 			case isSelected:
 				arrowStyled = selectedStyle.Render(arrow)
-				nameStyled = selectedStyle.Render(nameRaw)
+				nameStyled = selectedStyle.Render(name)
 			case instanceColorHasCustom(instance.Color):
 				colorStyle := instanceColorStyle(instance.Color)
 				arrowStyled = colorStyle.Render(arrow)
-				nameStyled = colorStyle.Render(nameRaw)
+				nameStyled = colorStyle.Render(name)
 			default:
 				arrowStyled = arrow
-				nameStyled = nameRaw
+				nameStyled = name
 			}
-			// Automation-spawned instances (issue #188) carry a ⟳ marker in the
-			// reserved auto-mark slot just before the name; user-created ones leave
-			// it blank. Both render to instanceAutoMarkWidth cells so names — and
-			// the status column — stay aligned regardless.
-			autoMark := strings.Repeat(" ", instanceAutoMarkWidth)
-			if instance.Automated {
-				autoMark = automationMarkStyle.Render(automationMark) + " "
-			}
-			paddedName := arrowStyled + throbber + " " + autoMark + nameStyled
+			// name + marker + padding together fill the fixed name column.
+			paddedName := arrowStyled + throbber + " " + nameStyled + markerSuffix + pad
 
 			backendIcon := "⬡"
 			switch instance.Backend {

@@ -8,14 +8,55 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
-// TestAutomationMarkFitsReservedSlot guards the alignment contract: the marker
-// plus its trailing space must render to exactly instanceAutoMarkWidth cells, or
-// the status column (and the PR-status second line) drifts on automated rows.
-func TestAutomationMarkFitsReservedSlot(t *testing.T) {
-	if w := lipgloss.Width(automationMark + " "); w != instanceAutoMarkWidth {
-		t.Fatalf("auto-mark %q renders %d cells, reserved slot is %d", automationMark, w, instanceAutoMarkWidth)
+// TestAutomatedMarkerKeepsStatusAligned proves the trailing ⟳ doesn't shift the
+// status column: an automated row and a differently-named manual row must land
+// "running" at the same column (the marker lives inside the fixed name column).
+func TestAutomatedMarkerKeepsStatusAligned(t *testing.T) {
+	auto := &fleet.Instance{Name: "robo-job", Status: fleet.StatusRunning, Automated: true}
+	manual := &fleet.Instance{Name: "a-longer-manual-name", Status: fleet.StatusRunning}
+	fp := newFleetPage()
+	m := &model{
+		st: &state.State{Fleets: map[string]*fleet.Fleet{
+			"alpha": {Name: "alpha", Instances: []*fleet.Instance{auto, manual}},
+		}},
+		sessionStore: NewSessionStore(),
+		fleetPage:    fp,
+		width:        120,
+	}
+	fp.buildRows(m)
+	view := fp.viewFleetList(m)
+
+	// Visual column (cell width), NOT byte index — the ⟳ is multi-byte, so a byte
+	// offset would differ even when the rendered columns line up.
+	statusCol := func(rowName string) int {
+		for _, ln := range strings.Split(view, "\n") {
+			if strings.Contains(ln, rowName) {
+				plain := ansi.Strip(ln)
+				if idx := strings.Index(plain, "running"); idx >= 0 {
+					return lipgloss.Width(plain[:idx])
+				}
+				return -1
+			}
+		}
+		t.Fatalf("row for %q not found:\n%s", rowName, view)
+		return -1
+	}
+	a, b := statusCol("robo-job"), statusCol("a-longer-manual-name")
+	if a < 0 || a != b {
+		t.Fatalf("status column misaligned: automated=%d manual=%d", a, b)
+	}
+}
+
+// TestAutomationMarkFitsNameColumn guards the alignment contract: the trailing
+// marker (a leading space + the glyph) must render to exactly
+// instanceAutoMarkWidth cells — the amount the name is truncated to make room —
+// or the status column (and the PR-status second line) drifts on automated rows.
+func TestAutomationMarkFitsNameColumn(t *testing.T) {
+	if w := lipgloss.Width(" " + automationMark); w != instanceAutoMarkWidth {
+		t.Fatalf("trailing auto-mark %q renders %d cells, name column reserves %d", automationMark, w, instanceAutoMarkWidth)
 	}
 }
 
