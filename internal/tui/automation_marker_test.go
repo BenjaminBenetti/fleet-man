@@ -51,11 +51,11 @@ func TestAutomatedMarkerKeepsStatusAligned(t *testing.T) {
 }
 
 // TestAutomationMarkFitsNameColumn guards the alignment contract: the trailing
-// marker (a leading space + the glyph) must render to exactly
+// marker (a space, the glyph, a space) must render to exactly
 // instanceAutoMarkWidth cells — the amount the name is truncated to make room —
 // or the status column (and the PR-status second line) drifts on automated rows.
 func TestAutomationMarkFitsNameColumn(t *testing.T) {
-	if w := lipgloss.Width(" " + automationMark); w != instanceAutoMarkWidth {
+	if w := lipgloss.Width(" " + automationMark + " "); w != instanceAutoMarkWidth {
 		t.Fatalf("trailing auto-mark %q renders %d cells, name column reserves %d", automationMark, w, instanceAutoMarkWidth)
 	}
 }

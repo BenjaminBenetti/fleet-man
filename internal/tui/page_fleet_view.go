@@ -19,11 +19,12 @@ const (
 	instanceNameWidth = 22
 
 	// instanceAutoMarkWidth is the cell width the trailing automation marker
-	// (" ⟳", issue #188) occupies INSIDE the fixed-width name column on an
-	// automation-spawned instance row. The name is truncated this much shorter to
+	// (" ⟳ " — a space on each side, issue #188) occupies INSIDE the fixed-width
+	// name column on an automation-spawned instance row. The trailing space keeps
+	// the glyph off the status word. The name is truncated this much shorter to
 	// make room, so the marker never widens the column or shifts the status word —
 	// and user-created rows keep their original, un-indented position.
-	instanceAutoMarkWidth = 2
+	instanceAutoMarkWidth = 3
 
 	// instanceStatusCol is the column where the status word starts on an instance
 	// row, and the indent the PR-status second line is rendered at so it sits
@@ -321,7 +322,8 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			// user-created rows are not indented at all.
 			markerSuffix, nameBudget := "", instanceNameWidth
 			if instance.Automated {
-				markerSuffix = " " + automationMarkStyle.Render(automationMark)
+				// A space on each side: one off the name, one off the status.
+				markerSuffix = " " + automationMarkStyle.Render(automationMark) + " "
 				nameBudget -= instanceAutoMarkWidth
 			}
 
