@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,12 +43,31 @@ import (
 var (
 	// scheduleTickInterval is how often the loop samples cron triggers and
 	// services watched agents. ~30s comfortably samples every minute-granular
-	// cron minute at least once while staying cheap.
-	scheduleTickInterval = 30 * time.Second
+	// cron minute at least once while staying cheap. Overridable via
+	// FLEET_AUTOMATION_TICK_INTERVAL (a Go duration) so the integration test can
+	// drive the spawn→launch→reap lifecycle in seconds instead of minutes.
+	scheduleTickInterval = envDurationDefault("FLEET_AUTOMATION_TICK_INTERVAL", 30*time.Second)
 	// automationIdleTimeout is how long an agent may stay inactive before its
 	// instance is torn down (issue #188: "inactive for more than 2 minutes").
-	automationIdleTimeout = 2 * time.Minute
+	// Overridable via FLEET_AUTOMATION_IDLE_TIMEOUT (a Go duration) for the same
+	// reason — production keeps the 2m default.
+	automationIdleTimeout = envDurationDefault("FLEET_AUTOMATION_IDLE_TIMEOUT", 2*time.Minute)
 )
+
+// envDurationDefault returns the Go duration parsed from the named env var, or
+// def when it is unset, blank, or unparseable (a non-positive value is also
+// rejected). These knobs exist only so the integration test can shorten the
+// scheduler's cadence and idle timeout to verify the full lifecycle quickly;
+// the daemon inherits the spawning client's environment (spawn.go), so setting
+// them before `fleet ls` reaches the scheduler.
+func envDurationDefault(name string, def time.Duration) time.Duration {
+	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return def
+}
 
 // maxAutomationProbeConcurrency bounds how many agent activity probes run at
 // once per tick, so a large watch set fans out without spawning an unbounded

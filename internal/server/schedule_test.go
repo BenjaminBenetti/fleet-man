@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -293,6 +294,35 @@ func TestServiceWatchedConcurrentProbesReapAll(t *testing.T) {
 	}
 	if len(sched.watched) != 0 {
 		t.Fatalf("watch set should be drained, still has %d", len(sched.watched))
+	}
+}
+
+func TestEnvDurationDefault(t *testing.T) {
+	const name = "FLEET_TEST_DURATION_KNOB"
+	def := 2 * time.Minute
+	cases := []struct {
+		val  string
+		set  bool
+		want time.Duration
+	}{
+		{set: false, want: def},             // unset → default
+		{val: "", set: true, want: def},     // blank → default
+		{val: "  ", set: true, want: def},   // whitespace → default
+		{val: "nope", set: true, want: def}, // unparseable → default
+		{val: "0s", set: true, want: def},   // non-positive → default
+		{val: "-5s", set: true, want: def},  // negative → default
+		{val: "20s", set: true, want: 20 * time.Second},
+		{val: "1m30s", set: true, want: 90 * time.Second},
+	}
+	for _, c := range cases {
+		if c.set {
+			t.Setenv(name, c.val)
+		} else {
+			os.Unsetenv(name)
+		}
+		if got := envDurationDefault(name, def); got != c.want {
+			t.Fatalf("envDurationDefault(%q set=%v) = %v, want %v", c.val, c.set, got, c.want)
+		}
 	}
 }
 
