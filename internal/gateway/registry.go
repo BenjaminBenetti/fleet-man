@@ -139,11 +139,18 @@ func (r *registry) claim(req tunnel.RegisterRequest) (s *session, reply tunnel.R
 // PublicGRPCURL is included whenever the gateway has a public gRPC base; the
 // register handler clears it again when the connection does not negotiate the
 // grpc feature, so an MCP-only daemon never sees a gRPC URL it can't serve.
+//
+// PublicWebhookURL is always computed from the public base — webhooks ride the
+// gateway's public HTTP listener (the same one that serves /mcp), so no separate
+// operator-configured base is needed (unlike gRPC's --public-grpc-url). The
+// register handler clears it when the connection does not negotiate the webhook
+// feature, so a daemon that didn't enable webhooks never sees a URL it can't serve.
 func (r *registry) reply(s *session) tunnel.RegisterReply {
 	reply := tunnel.RegisterReply{
-		SessionID:    s.secret,
-		PublicURL:    s.publicURL,
-		SessionToken: r.signer.mint(s.secret, s.publicID),
+		SessionID:        s.secret,
+		PublicURL:        s.publicURL,
+		PublicWebhookURL: r.publicBase + "/webhook/" + s.publicID,
+		SessionToken:     r.signer.mint(s.secret, s.publicID),
 	}
 	if r.grpcBase != "" {
 		reply.PublicGRPCURL = r.grpcBase + "/grpc/" + s.publicID

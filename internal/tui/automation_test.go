@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
@@ -130,11 +131,19 @@ func TestVisibleTriggerRowsByType(t *testing.T) {
 		t.Fatalf("schedule rows wrong: %v", rows)
 	}
 
+	// The webhook URL row shows only for webhook triggers.
+	if slices.Contains(rows, trigRowWebhookURL) {
+		t.Fatalf("schedule trigger should not show the webhook URL row: %v", rows)
+	}
+
 	st.triggerType = fleet.TriggerWebhook
 	st.filterType = fleet.WebhookFilterRegex
 	rows = fp.visibleTriggerRows(m)
 	if !slices.Contains(rows, trigRowRegex) || slices.Contains(rows, trigRowCron) || slices.Contains(rows, trigRowJSONPath) {
 		t.Fatalf("webhook+regex rows wrong: %v", rows)
+	}
+	if !slices.Contains(rows, trigRowWebhookURL) {
+		t.Fatalf("webhook trigger should show the URL row: %v", rows)
 	}
 
 	st.filterType = fleet.WebhookFilterJSONPath
@@ -190,6 +199,34 @@ func TestEditTriggerPreservesDisabled(t *testing.T) {
 	}
 }
 
+// TestTriggerWebhookURL confirms the dialog builds a copy-pasteable webhook URL
+// from the gateway-assigned base + the (escaped) name, and returns "" when either
+// piece is missing.
+func TestTriggerWebhookURL(t *testing.T) {
+	m, _ := newAutomationModel(t)
+
+	// No base URL yet (webhook not connected) → empty regardless of name.
+	if got := triggerWebhookURL(m, "deploy"); got != "" {
+		t.Fatalf("URL should be empty with no gateway base, got %q", got)
+	}
+
+	m.remoteMcpStatus = &fleetgrpc.RemoteMcpStatus{
+		State:            fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED,
+		PublicWebhookUrl: "https://gw.example.com/webhook/abc123",
+	}
+	if got, want := triggerWebhookURL(m, "deploy"), "https://gw.example.com/webhook/abc123/deploy"; got != want {
+		t.Fatalf("URL = %q, want %q", got, want)
+	}
+	// A name with a space is percent-escaped so the URL stays valid.
+	if got, want := triggerWebhookURL(m, "my hook"), "https://gw.example.com/webhook/abc123/my%20hook"; got != want {
+		t.Fatalf("escaped URL = %q, want %q", got, want)
+	}
+	// Empty name → empty (the row shows a hint instead).
+	if got := triggerWebhookURL(m, "  "); got != "" {
+		t.Fatalf("URL should be empty with a blank name, got %q", got)
+	}
+}
+
 func TestDeleteAgentBlockedWhenReferenced(t *testing.T) {
 	m, fp := newAutomationModel(t)
 	f := m.st.Fleets["alpha"]
@@ -207,6 +244,143 @@ func TestDeleteAgentBlockedWhenReferenced(t *testing.T) {
 	if len(f.Settings.Agents) != 0 {
 		t.Fatalf("agent should be deletable once unreferenced: %+v", f.Settings.Agents)
 	}
+}
+
+// cursorToKind parks the cursor on the first row of the given kind.
+func cursorToKind(t *testing.T, fp *fleetPage, k rowKind) {
+	t.Helper()
+	for i, r := range fp.rows {
+		if r.kind == k {
+			fp.cursor = i
+			return
+		}
+	}
+	t.Fatalf("no row of kind %v in %v", k, rowKinds(fp))
+}
+
+// automationModelWithItems builds a fleet in automation mode carrying one agent
+// ("builder") and one schedule trigger ("nightly") that does NOT reference it,
+// so deletes aren't blocked by the reference guard.
+func automationModelWithItems(t *testing.T) (*model, *fleetPage) {
+	t.Helper()
+	m, fp := newAutomationModel(t)
+	f := m.st.Fleets["alpha"]
+	f.Settings.Agents = []fleet.Agent{{Name: "builder", Backend: fleet.BackendDevcontainer}}
+	f.Settings.Triggers = []fleet.Trigger{{Name: "nightly", Type: fleet.TriggerSchedule, Cron: "0 0 * * *"}}
+	fp.toggleAutomationMode(m, "alpha")
+	return m, fp
+}
+
+func TestAddKeyOpensTriggerDialogInTriggersGroup(t *testing.T) {
+	m, fp := automationModelWithItems(t)
+	for _, k := range []rowKind{rowAutomationTriggers, rowTrigger, rowNewTrigger} {
+		cursorToKind(t, fp, k)
+		fp.Update(m, key('a'))
+		if fp.mode != viewAutomationTrigger {
+			t.Fatalf("a on %v should open the add-trigger dialog, mode=%v", k, fp.mode)
+		}
+		fp.mode = viewNormal
+	}
+}
+
+func TestAddKeyOpensAgentDialogInAgentsGroup(t *testing.T) {
+	m, fp := automationModelWithItems(t)
+	for _, k := range []rowKind{rowAutomationAgents, rowAgent, rowNewAgent} {
+		cursorToKind(t, fp, k)
+		fp.Update(m, key('a'))
+		if fp.mode != viewAutomationAgent {
+			t.Fatalf("a on %v should open the add-agent dialog, mode=%v", k, fp.mode)
+		}
+		fp.mode = viewNormal
+	}
+}
+
+func TestAddKeyOnHeaderInAutomationModeAddsTrigger(t *testing.T) {
+	m, fp := automationModelWithItems(t)
+	cursorToFleetHeaderHelper(t, fp)
+	fp.Update(m, key('a'))
+	if fp.mode != viewAutomationTrigger {
+		t.Fatalf("a on the header in automation mode should add a trigger, mode=%v", fp.mode)
+	}
+}
+
+func TestAddKeyOnHeaderInInstanceModeDoesNotAddTrigger(t *testing.T) {
+	// In the instance view, 'a' must NOT route into the trigger dialog — it
+	// belongs to the add-instance path (whatever that resolves to here).
+	m, fp := newAutomationModel(t)
+	cursorToFleetHeaderHelper(t, fp)
+	fp.Update(m, key('a'))
+	if fp.mode == viewAutomationTrigger {
+		t.Fatal("a on the header in instance mode must not open the add-trigger dialog")
+	}
+}
+
+func TestDeleteTriggerAsksToConfirm(t *testing.T) {
+	m, fp := automationModelWithItems(t)
+	cursorToKind(t, fp, rowTrigger)
+
+	fp.Update(m, key('d'))
+	if fp.mode != viewConfirmDeleteAutomation {
+		t.Fatalf("d on a trigger should open the confirm dialog, mode=%v", fp.mode)
+	}
+	if len(m.st.Fleets["alpha"].Settings.Triggers) != 1 {
+		t.Fatal("the trigger must not be deleted before the user confirms")
+	}
+	if fp.autoDel.kind != rowTrigger || fp.autoDel.name != "nightly" {
+		t.Fatalf("confirm target wrong: %+v", fp.autoDel)
+	}
+
+	fp.Update(m, key('y'))
+	if len(m.st.Fleets["alpha"].Settings.Triggers) != 0 {
+		t.Fatal("y should delete the trigger")
+	}
+	if fp.mode != viewNormal {
+		t.Fatalf("dialog should close after confirm, mode=%v", fp.mode)
+	}
+}
+
+func TestDeleteAgentConfirmCancelKeepsIt(t *testing.T) {
+	m, fp := automationModelWithItems(t)
+	cursorToKind(t, fp, rowAgent)
+
+	fp.Update(m, key('d'))
+	if fp.mode != viewConfirmDeleteAutomation || fp.autoDel.kind != rowAgent {
+		t.Fatalf("d on an agent should open the confirm dialog for it, mode=%v target=%+v", fp.mode, fp.autoDel)
+	}
+
+	fp.Update(m, key('n'))
+	if len(m.st.Fleets["alpha"].Settings.Agents) != 1 {
+		t.Fatal("n should cancel — the agent must survive")
+	}
+	if fp.mode != viewNormal {
+		t.Fatalf("dialog should close after cancel, mode=%v", fp.mode)
+	}
+}
+
+func TestDeleteReferencedAgentSkipsConfirm(t *testing.T) {
+	// A referenced agent is refused up front: no confirm dialog, no deletion.
+	m, fp := newAutomationModel(t)
+	f := m.st.Fleets["alpha"]
+	f.Settings.Agents = []fleet.Agent{{Name: "a", Backend: fleet.BackendDevcontainer}}
+	f.Settings.Triggers = []fleet.Trigger{{Name: "t", Type: fleet.TriggerSchedule, AgentNames: []string{"a"}, Cron: "* * * * *"}}
+	fp.toggleAutomationMode(m, "alpha")
+	cursorToKind(t, fp, rowAgent)
+
+	fp.Update(m, key('d'))
+	if fp.mode != viewNormal {
+		t.Fatalf("a referenced agent must not open the confirm dialog, mode=%v", fp.mode)
+	}
+	if len(f.Settings.Agents) != 1 {
+		t.Fatal("a referenced agent must not be deleted")
+	}
+	if !strings.Contains(m.message, "used by trigger") {
+		t.Fatalf("expected a 'used by trigger' message, got %q", m.message)
+	}
+}
+
+func cursorToFleetHeaderHelper(t *testing.T, fp *fleetPage) {
+	t.Helper()
+	cursorToKind(t, fp, rowFleetHeader)
 }
 
 func TestHeaderToggleButtonMouseClick(t *testing.T) {
@@ -229,7 +403,7 @@ func TestHeaderToggleButtonMouseClick(t *testing.T) {
 	}
 	next, _ := m.Update(click)
 	if !next.(model).fleetPage.automationMode["alpha"] {
-		t.Fatal("clicking the [automations] button should toggle automation mode on")
+		t.Fatal("clicking the ⟳ toggle should switch automation mode on")
 	}
 
 	// A click elsewhere on the header (before the button) must NOT toggle — it
@@ -258,7 +432,7 @@ func TestAutomationViewRenders(t *testing.T) {
 	fp.toggleAutomationMode(m, "alpha")
 
 	out := fp.viewFleetList(m)
-	for _, want := range []string{"[instances]", "triggers", "agents", "nightly", "builder", "+ add trigger", "+ add agent"} {
+	for _, want := range []string{"[ " + instancesMark + " ]", "triggers", "agents", "nightly", "builder", "+ add trigger", "+ add agent"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("automation view missing %q\n%s", want, out)
 		}

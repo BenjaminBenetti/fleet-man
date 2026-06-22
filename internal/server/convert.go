@@ -153,6 +153,9 @@ func instanceToProto(i *fleet.Instance) *fleetgrpc.Instance {
 	if i.Branch != "" {
 		pi.Branch = strptr(i.Branch)
 	}
+	if i.Automated {
+		pi.Automated = true
+	}
 	// Warnings is a new field with no legacy state.json source; left nil here
 	// (it gets populated by jobs starting in Phase 4).
 	return pi

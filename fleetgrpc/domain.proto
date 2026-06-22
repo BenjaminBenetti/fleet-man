@@ -130,6 +130,12 @@ message Instance {
   // plain GetState/Watch snapshot (no dependency on the job-stream TTL).
   repeated string warnings = 13;
 
+  // Automated marks an instance the automation scheduler spawned for a trigger
+  // (issue #188). Plain bool: false == "not automated" == user-created, like the
+  // FleetSettings *Mount flags — the zero value carries the common case, so no
+  // optional is needed.
+  bool automated = 31;
+
   // Reserved for forward/back compat across the version skew Hello tolerates.
   reserved 14 to 30;
 }

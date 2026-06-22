@@ -222,6 +222,18 @@ URL** appears under the Public MCP URL (computed by the gateway from its
 `--public-grpc-url` flag) — that value is what you feed another `fleet` as
 `FLEET_GATEWAY`. The toggles are independent: expose MCP, remote control, or both.
 
+A third, independent toggle — **Enable Webhook** — exposes this daemon's
+**automation webhook** endpoint through the same gateway. With it on, a read-only
+**Public Webhook URL** base appears (e.g. `https://gateway.example.com/webhook/<id>`),
+served on the gateway's public HTTP listener — no extra gateway flag needed. A
+remote system (CI, a SaaS webhook, `curl`) POSTs an event to
+`<public-webhook-url>/<name>`, where `<name>` is a [webhook trigger](#automation)
+you defined; the gateway relays it down the tunnel and fleetd fires that trigger's
+agents if the event passes the trigger's filter (a regex over the body, or a JSON
+path/value match). The trigger's create/edit dialog renders its full URL ready to
+paste into the remote system. With the toggle off, fleetd never negotiates the
+webhook feature, so the gateway 404s the route for this daemon.
+
 ### Use it from a remote agent
 
 Point the remote MCP client at the Public MCP URL, with the **same bearer token**

@@ -99,13 +99,15 @@ func TestNormalizeTriggerWebhook(t *testing.T) {
 func TestNormalizeTriggerErrors(t *testing.T) {
 	agents := map[string]struct{}{"build": {}}
 	bad := []Trigger{
-		{Name: "", Type: TriggerSchedule, AgentNames: []string{"build"}, Cron: "* * * * *"},  // empty name
-		{Name: "x", Type: TriggerSchedule, AgentNames: nil, Cron: "* * * * *"},               // no agents
-		{Name: "x", Type: TriggerSchedule, AgentNames: []string{"ghost"}, Cron: "* * * * *"}, // unknown agent
-		{Name: "x", Type: TriggerSchedule, AgentNames: []string{"build"}, Cron: "nope"},      // bad cron
-		{Name: "x", Type: "bogus", AgentNames: []string{"build"}},                            // bad type
-		{Name: "x", Type: TriggerWebhook, AgentNames: []string{"build"}, WebhookName: ""},    // empty webhook name
-		{Name: "x", Type: TriggerWebhook, AgentNames: []string{"build"}, WebhookName: "w"},   // missing filter type
+		{Name: "", Type: TriggerSchedule, AgentNames: []string{"build"}, Cron: "* * * * *"},                                                       // empty name
+		{Name: "x", Type: TriggerSchedule, AgentNames: nil, Cron: "* * * * *"},                                                                    // no agents
+		{Name: "x", Type: TriggerSchedule, AgentNames: []string{"ghost"}, Cron: "* * * * *"},                                                      // unknown agent
+		{Name: "x", Type: TriggerSchedule, AgentNames: []string{"build"}, Cron: "nope"},                                                           // bad cron
+		{Name: "x", Type: "bogus", AgentNames: []string{"build"}},                                                                                 // bad type
+		{Name: "x", Type: TriggerWebhook, AgentNames: []string{"build"}, WebhookName: ""},                                                         // empty webhook name
+		{Name: "x", Type: TriggerWebhook, AgentNames: []string{"build"}, WebhookName: "w"},                                                        // missing filter type
+		{Name: "x", Type: TriggerWebhook, AgentNames: []string{"build"}, WebhookName: "w", FilterType: WebhookFilterRegex, Regex: "("},            // bad regex
+		{Name: "x", Type: TriggerWebhook, AgentNames: []string{"build"}, WebhookName: "w", FilterType: WebhookFilterJSONPath, JSONPath: "$.a..b"}, // malformed json path
 	}
 	for i, tr := range bad {
 		if _, err := NormalizeTrigger(tr, agents); err == nil {

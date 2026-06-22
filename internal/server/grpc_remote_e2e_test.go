@@ -148,7 +148,7 @@ func grpcStack(t *testing.T) (dial func(withToken bool) *grpc.ClientConn, token 
 	// Both toggles on: remote MCP (the tunnel's base traffic) AND remote fleet
 	// (without which the grpc feature is no longer advertised, and every
 	// remote-control RPC under test here would be refused).
-	mgr.Reconcile(true, true, "https://gw.example.com")
+	mgr.Reconcile(true, true, false, "https://gw.example.com")
 
 	// Wait for CONNECTED and derive the session id from the MCP public URL.
 	var publicURL string

@@ -121,9 +121,10 @@ type Trigger struct {
 	JSONValue string `json:"jsonValue,omitempty"`
 
 	// Disabled, when true, stops the trigger from firing: the scheduler skips it
-	// and webhook delivery (once wired) ignores it, but the definition is kept so
-	// it can be re-enabled. Defaults to false so a freshly-created trigger — and
-	// every trigger persisted before this field existed — fires as before.
+	// (dueSchedules) and webhook delivery ignores it (collectWebhookFires), but
+	// the definition is kept so it can be re-enabled. Defaults to false so a
+	// freshly-created trigger — and every trigger persisted before this field
+	// existed — fires as before.
 	Disabled bool `json:"disabled,omitempty"`
 }
 
@@ -236,6 +237,9 @@ func NormalizeTrigger(t Trigger, agentNames map[string]struct{}) (Trigger, error
 			t.JSONPath = strings.TrimSpace(t.JSONPath)
 			if t.JSONPath == "" {
 				return Trigger{}, fmt.Errorf("trigger %q: webhook json path is empty", t.Name)
+			}
+			if err := ValidateJSONPath(t.JSONPath); err != nil {
+				return Trigger{}, fmt.Errorf("trigger %q: %w", t.Name, err)
 			}
 			t.JSONValue = strings.TrimSpace(t.JSONValue)
 			t.Regex = ""

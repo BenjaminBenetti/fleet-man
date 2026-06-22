@@ -20,11 +20,12 @@ import (
 //   - serveProxy (legacy / MCP-only gateway): every stream is an HTTP request,
 //     served by one http.Server over the whole session and reverse-proxied to the
 //     loopback MCP server.
-//   - serveTunnel (FeatureGRPC negotiated): every stream begins with a tag byte;
-//     fleetd reads it and dispatches — TagMCP streams go to the MCP http.Server,
-//     TagGRPC streams are spliced (as raw net.Conns) to the daemon's tunnel-facing
-//     gRPC server. One stream per request/connection means MCP requests, SSE, and
-//     native gRPC (incl. bidi) never interleave.
+//   - serveTunnel (FeatureGRPC and/or FeatureWebhook negotiated): every stream
+//     begins with a tag byte; fleetd reads it and dispatches — TagMCP streams go
+//     to the MCP http.Server, TagGRPC streams are spliced (as raw net.Conns) to
+//     the daemon's tunnel-facing gRPC server, TagWebhook streams go to the webhook
+//     receiver's http.Server. One stream per request/connection means MCP
+//     requests, SSE, native gRPC (incl. bidi), and webhooks never interleave.
 
 // mcpReverseProxy builds the reverse proxy to the loopback MCP server.
 func mcpReverseProxy(mcpPort int) http.Handler {
@@ -70,20 +71,22 @@ func serveReject(session *yamux.Session) error {
 	}
 }
 
-// serveTunnel serves a session whose streams are TAG-prefixed (FeatureGRPC
-// negotiated): it reads each stream's tag and routes it. MCP streams feed a local
-// http.Server — unless remote MCP is disabled (mcpOn false: a remote-fleet-only
-// tunnel), in which case they are rejected; gRPC streams feed grpcLis (the
-// daemon's tunnel-facing gRPC server, which is shared across reconnects and NOT
-// closed here). Returns when the session errors.
-func serveTunnel(session *yamux.Session, mcpPort int, grpcLis *ChanListener, mcpOn bool) error {
+// serveTunnel serves a session whose streams are TAG-prefixed (FeatureGRPC and/or
+// FeatureWebhook negotiated): it reads each stream's tag and routes it. MCP
+// streams feed a local http.Server — unless remote MCP is disabled (mcpOn false:
+// a remote-fleet/webhook-only tunnel), in which case they are rejected; gRPC
+// streams feed grpcLis and webhook streams feed webhookLis (both shared across
+// reconnects and NOT closed here). A nil grpcLis/webhookLis means that traffic
+// kind was not negotiated, so its streams are rejected. Returns when the session
+// errors.
+func serveTunnel(session *yamux.Session, mcpPort int, grpcLis, webhookLis *ChanListener, mcpOn bool) error {
 	var mcpLis *ChanListener
 	if mcpOn {
 		mcpLis = NewChanListener()
 		mcpSrv := &http.Server{Handler: mcpReverseProxy(mcpPort)}
 		// Closing the server closes mcpLis (so its Accept unblocks) and drops the
-		// per-connection MCP requests; grpcLis is NOT closed — it outlives this
-		// connection so reconnects reuse the same gRPC server.
+		// per-connection MCP requests; grpcLis/webhookLis are NOT closed — they
+		// outlive this connection so reconnects reuse the same servers.
 		defer mcpSrv.Close()
 		go func() { _ = mcpSrv.Serve(mcpLis) }()
 	}
@@ -93,15 +96,15 @@ func serveTunnel(session *yamux.Session, mcpPort int, grpcLis *ChanListener, mcp
 		if err != nil {
 			return err
 		}
-		go dispatchStream(stream, mcpLis, grpcLis)
+		go dispatchStream(stream, mcpLis, grpcLis, webhookLis)
 	}
 }
 
 // dispatchStream reads the leading tag byte and routes the (tag-stripped) stream
-// to the MCP or gRPC listener. A nil listener means that traffic kind is
+// to the MCP, gRPC, or webhook listener. A nil listener means that traffic kind is
 // disabled, so its streams are rejected. An unreadable tag or unknown value
 // closes the stream without disturbing the others.
-func dispatchStream(stream net.Conn, mcpLis, grpcLis *ChanListener) {
+func dispatchStream(stream net.Conn, mcpLis, grpcLis, webhookLis *ChanListener) {
 	tag, err := tunnel.ReadTag(stream)
 	if err != nil {
 		_ = stream.Close()
@@ -112,6 +115,8 @@ func dispatchStream(stream net.Conn, mcpLis, grpcLis *ChanListener) {
 		mcpLis.Push(stream)
 	case tag == tunnel.TagGRPC && grpcLis != nil:
 		grpcLis.Push(stream)
+	case tag == tunnel.TagWebhook && webhookLis != nil:
+		webhookLis.Push(stream)
 	default:
 		_ = stream.Close()
 	}

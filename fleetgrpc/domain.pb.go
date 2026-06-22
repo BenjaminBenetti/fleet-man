@@ -228,7 +228,12 @@ type Instance struct {
 	// finishes with warnings and clears it on the next successful create/start,
 	// so a TUI attaching AFTER the job finished still banners the warnings from a
 	// plain GetState/Watch snapshot (no dependency on the job-stream TTL).
-	Warnings      []string `protobuf:"bytes,13,rep,name=warnings,proto3" json:"warnings,omitempty"`
+	Warnings []string `protobuf:"bytes,13,rep,name=warnings,proto3" json:"warnings,omitempty"`
+	// Automated marks an instance the automation scheduler spawned for a trigger
+	// (issue #188). Plain bool: false == "not automated" == user-created, like the
+	// FleetSettings *Mount flags — the zero value carries the common case, so no
+	// optional is needed.
+	Automated     bool `protobuf:"varint,31,opt,name=automated,proto3" json:"automated,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -352,6 +357,13 @@ func (x *Instance) GetWarnings() []string {
 		return x.Warnings
 	}
 	return nil
+}
+
+func (x *Instance) GetAutomated() bool {
+	if x != nil {
+		return x.Automated
+	}
+	return false
 }
 
 // FleetSettings mirrors internal/fleet.FleetSettings. The three *Mount flags are
@@ -1033,7 +1045,7 @@ var File_domain_proto protoreflect.FileDescriptor
 
 const file_domain_proto_rawDesc = "" +
 	"\n" +
-	"\fdomain.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc7\x04\n" +
+	"\fdomain.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe5\x04\n" +
 	"\bInstance\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12&\n" +
 	"\fdisplay_name\x18\x02 \x01(\tH\x00R\vdisplayName\x88\x01\x01\x12&\n" +
@@ -1049,7 +1061,8 @@ const file_domain_proto_rawDesc = "" +
 	" \x01(\tH\x05R\x03tag\x88\x01\x01\x12\x19\n" +
 	"\x05color\x18\v \x01(\tH\x06R\x05color\x88\x01\x01\x12\x1b\n" +
 	"\x06branch\x18\f \x01(\tH\aR\x06branch\x88\x01\x01\x12\x1a\n" +
-	"\bwarnings\x18\r \x03(\tR\bwarningsB\x0f\n" +
+	"\bwarnings\x18\r \x03(\tR\bwarnings\x12\x1c\n" +
+	"\tautomated\x18\x1f \x01(\bR\tautomatedB\x0f\n" +
 	"\r_display_nameB\x0f\n" +
 	"\r_container_idB\t\n" +
 	"\a_configB\x10\n" +
