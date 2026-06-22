@@ -92,6 +92,15 @@ func (fleetPage *fleetPage) openEditAgentDialog(m *model, fleetName string, idx 
 	return nil
 }
 
+// rowCount is the number of navigable rows. Editing an existing agent is
+// instant-save and omits the Save row, so it stops one short of agentRowCount.
+func (st *automationAgentState) rowCount() int {
+	if st.editIdx >= 0 {
+		return agentRowSave
+	}
+	return agentRowCount
+}
+
 func (fleetPage *fleetPage) updateAutomationAgent(m *model, msg tea.Msg) tea.Cmd {
 	st := &fleetPage.agentDlg
 	key, ok := msg.(tea.KeyMsg)
@@ -103,6 +112,7 @@ func (fleetPage *fleetPage) updateAutomationAgent(m *model, msg tea.Msg) tea.Cmd
 		switch key.String() {
 		case "enter":
 			fleetPage.commitAgentField()
+			fleetPage.autosaveAgent(m)
 			return nil
 		case "esc":
 			st.fieldActive = false
@@ -120,21 +130,25 @@ func (fleetPage *fleetPage) updateAutomationAgent(m *model, msg tea.Msg) tea.Cmd
 	case "q", "esc", "ctrl+c":
 		return fleetPage.cancelAutomationAgent(m)
 	case "up", "k", "shift+tab":
-		st.row = (st.row - 1 + agentRowCount) % agentRowCount
+		n := st.rowCount()
+		st.row = (st.row - 1 + n) % n
 		return nil
 	case "down", "j", "tab":
-		st.row = (st.row + 1) % agentRowCount
+		n := st.rowCount()
+		st.row = (st.row + 1) % n
 		return nil
 	case "enter", " ":
 		return fleetPage.agentRowEnter(m)
 	case "left", "h":
 		if st.row == agentRowBackend {
 			st.backend = nextBackendType(st.backend, -1, allBackendTypes)
+			fleetPage.autosaveAgent(m)
 		}
 		return nil
 	case "right", "l":
 		if st.row == agentRowBackend {
 			st.backend = nextBackendType(st.backend, 1, allBackendTypes)
+			fleetPage.autosaveAgent(m)
 		}
 		return nil
 	}
@@ -165,6 +179,7 @@ func (fleetPage *fleetPage) agentRowEnter(m *model) tea.Cmd {
 		return editorCmd(editorTargetAgentSysPrompt, "sysprompt", st.systemPrompt)
 	case agentRowBackend:
 		st.backend = nextBackendType(st.backend, 1, allBackendTypes)
+		fleetPage.autosaveAgent(m)
 	case agentRowSave:
 		return fleetPage.saveAutomationAgent(m)
 	}
@@ -209,11 +224,75 @@ func (fleetPage *fleetPage) commitAgentField() {
 }
 
 func (fleetPage *fleetPage) cancelAutomationAgent(m *model) tea.Cmd {
-	fleetPage.agentDlg.fieldActive = false
-	fleetPage.agentDlg.input.Blur()
+	st := &fleetPage.agentDlg
+	st.fieldActive = false
+	st.input.Blur()
 	fleetPage.mode = viewNormal
-	m.message = "Cancelled"
+	// Editing is instant-save, so closing is just "done" — only a new (unsaved)
+	// agent is actually discarded. If an edit was left in an unsavable state, say
+	// so rather than closing silently (the last good state stayed on disk).
+	switch {
+	case st.editIdx < 0:
+		m.message = "Cancelled"
+	case fleetPage.agentFormError(m) != nil:
+		m.message = "Closed; last change not saved: " + fleetPage.agentFormError(m).Error()
+	default:
+		m.message = ""
+	}
 	return nil
+}
+
+// agentFormError returns the validation error the current form would hit if saved
+// now, without persisting — used on close to tell the user when an instant-save
+// edit was left unsavable. nil when it would save.
+func (fleetPage *fleetPage) agentFormError(m *model) error {
+	st := &fleetPage.agentDlg
+	f, ok := m.st.Fleets[st.fleetName]
+	if !ok || st.editIdx < 0 || st.editIdx >= len(f.Settings.Agents) {
+		return nil
+	}
+	oldName := f.Settings.Agents[st.editIdx].Name
+	_, err := fleet.UpdateAgent(f.Settings, oldName, fleetPage.agentCandidate())
+	return err
+}
+
+// agentCandidate builds a fleet.Agent from the current form state.
+func (fleetPage *fleetPage) agentCandidate() fleet.Agent {
+	st := &fleetPage.agentDlg
+	return fleet.Agent{
+		Name:         st.name,
+		Command:      st.command,
+		SystemPrompt: st.systemPrompt,
+		Backend:      st.backend,
+	}
+}
+
+// autosaveAgent persists the form immediately when editing an existing agent
+// (instant-save, like the settings page). It is a no-op for a new agent, whose
+// explicit Save button owns creation. A validation/RPC failure surfaces inline
+// and leaves the last-good persisted state intact (the in-memory revert lives in
+// persistAutomationSettings); a success clears the error. A successful rename
+// rewrites every trigger that referenced the old name (fleet.UpdateAgent).
+func (fleetPage *fleetPage) autosaveAgent(m *model) {
+	st := &fleetPage.agentDlg
+	if st.editIdx < 0 {
+		return
+	}
+	f, ok := m.st.Fleets[st.fleetName]
+	if !ok || st.editIdx >= len(f.Settings.Agents) {
+		return
+	}
+	oldName := f.Settings.Agents[st.editIdx].Name
+	newSettings, err := fleet.UpdateAgent(f.Settings, oldName, fleetPage.agentCandidate())
+	if err != nil {
+		st.errMsg = err.Error()
+		return
+	}
+	if err := fleetPage.persistAutomationSettings(m, st.fleetName, newSettings); err != nil {
+		st.errMsg = err.Error()
+		return
+	}
+	st.errMsg = ""
 }
 
 func (fleetPage *fleetPage) saveAutomationAgent(m *model) tea.Cmd {
@@ -221,12 +300,7 @@ func (fleetPage *fleetPage) saveAutomationAgent(m *model) tea.Cmd {
 	if st.fieldActive {
 		fleetPage.commitAgentField()
 	}
-	candidate := fleet.Agent{
-		Name:         st.name,
-		Command:      st.command,
-		SystemPrompt: st.systemPrompt,
-		Backend:      st.backend,
-	}
+	candidate := fleetPage.agentCandidate()
 
 	f, ok := m.st.Fleets[st.fleetName]
 	if !ok {
@@ -290,13 +364,16 @@ func (fleetPage *fleetPage) renderAutomationAgentDialog(m *model) string {
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowCommand), dialogLabel.Render("Command: "), field(agentRowCommand, st.command, fleet.DefaultAgentCommand))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowSystemPrompt), dialogLabel.Render("Sys prompt:"), promptFieldPreview(st.systemPrompt, "(optional, injected into ${SYS_PROMPT})"))
 	fmt.Fprintf(&body, "%s%s [ %s ]\n", marker(agentRowBackend), dialogLabel.Render("Backend: "), backendTypeLabel(st.backend))
-	fmt.Fprintf(&body, "%s%s\n", marker(agentRowSave), saveButtonLabel(st.row == agentRowSave))
+	// Editing instant-saves, so there is no Save row; a new agent keeps it.
+	if st.editIdx < 0 {
+		fmt.Fprintf(&body, "%s%s\n", marker(agentRowSave), saveButtonLabel(st.row == agentRowSave))
+	}
 
 	if st.errMsg != "" {
 		fmt.Fprintf(&body, "\n%s\n", errorStyle.Render(st.errMsg))
 	}
 	body.WriteString("\n")
-	body.WriteString(dialogHint.Render(automationHint(st.fieldActive, st.row == agentRowSystemPrompt)))
+	body.WriteString(dialogHint.Render(automationHint(st.fieldActive, st.row == agentRowSystemPrompt, st.editIdx >= 0)))
 
 	b.WriteString(dialogBox.Render(body.String()))
 	b.WriteString("\n")
@@ -311,14 +388,23 @@ func saveButtonLabel(selected bool) string {
 	return dimStyle.Render("[ Save ]")
 }
 
-// automationHint is the footer hint shared by the automation dialogs.
-// onEditorField promotes the "$EDITOR" affordance for the long free-text fields.
-func automationHint(fieldActive, onEditorField bool) string {
+// automationHint is the footer hint for the agent dialog. onEditorField promotes
+// the "$EDITOR" affordance for the long free-text fields. In edit mode every
+// change instant-saves, so the close key reads "Close" (nothing to cancel) and an
+// active field's enter reads "Save".
+func automationHint(fieldActive, onEditorField, isEdit bool) string {
 	if fieldActive {
+		if isEdit {
+			return "[enter] Save  [esc] Discard edit"
+		}
 		return "[enter] Done editing  [ctrl+c] Cancel"
 	}
-	if onEditorField {
-		return "[enter] Edit in $EDITOR  [j/k] Move  [q/esc] Cancel"
+	closeKey := "[q/esc] Cancel"
+	if isEdit {
+		closeKey = "[q/esc] Close"
 	}
-	return "[j/k] Move  [enter] Edit/Toggle  [h/l] Cycle  [q/esc] Cancel"
+	if onEditorField {
+		return "[enter] Edit in $EDITOR  [j/k] Move  " + closeKey
+	}
+	return "[j/k] Move  [enter] Edit/Toggle  [h/l] Cycle  " + closeKey
 }

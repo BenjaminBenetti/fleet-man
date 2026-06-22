@@ -117,15 +117,14 @@ func (fleetPage *fleetPage) openEditTriggerDialog(m *model, fleetName string, id
 }
 
 // visibleTriggerRows is the ordered list of currently-applicable field ids.
+// Order: Name, Type, Enabled, Prompt, then the type-specific rows (webhook:
+// name, filter, regex/json — schedule: cron), then the Agents list, then the
+// webhook URL (last, after Agents), then Save.
 func (fleetPage *fleetPage) visibleTriggerRows(m *model) []int {
 	st := &fleetPage.triggerDlg
-	rows := []int{trigRowName, trigRowType, trigRowEnabled}
-	for i := range fleetAgents(m, st.fleetName) {
-		rows = append(rows, trigRowAgentBase+i)
-	}
-	rows = append(rows, trigRowPrompt)
+	rows := []int{trigRowName, trigRowType, trigRowEnabled, trigRowPrompt}
 	if st.triggerType == fleet.TriggerWebhook {
-		rows = append(rows, trigRowWebhookName, trigRowWebhookURL, trigRowFilterType)
+		rows = append(rows, trigRowWebhookName, trigRowFilterType)
 		if st.filterType == fleet.WebhookFilterJSONPath {
 			rows = append(rows, trigRowJSONPath, trigRowJSONValue)
 		} else {
@@ -134,7 +133,19 @@ func (fleetPage *fleetPage) visibleTriggerRows(m *model) []int {
 	} else {
 		rows = append(rows, trigRowCron)
 	}
-	return append(rows, trigRowSave)
+	for i := range fleetAgents(m, st.fleetName) {
+		rows = append(rows, trigRowAgentBase+i)
+	}
+	if st.triggerType == fleet.TriggerWebhook {
+		rows = append(rows, trigRowWebhookURL)
+	}
+	// Editing an existing trigger is instant-save (like the settings page): every
+	// change persists immediately, so there is no Save row. A new trigger still
+	// needs an explicit Save to create it.
+	if st.editIdx < 0 {
+		rows = append(rows, trigRowSave)
+	}
+	return rows
 }
 
 func (fleetPage *fleetPage) moveTriggerRow(m *model, delta int) {
@@ -162,6 +173,7 @@ func (fleetPage *fleetPage) updateAutomationTrigger(m *model, msg tea.Msg) tea.C
 		switch key.String() {
 		case "enter":
 			fleetPage.commitTriggerField()
+			fleetPage.autosaveTrigger(m)
 			return nil
 		case "esc":
 			st.fieldActive = false
@@ -189,7 +201,7 @@ func (fleetPage *fleetPage) updateAutomationTrigger(m *model, msg tea.Msg) tea.C
 	case " ":
 		return fleetPage.triggerRowToggle(m)
 	case "left", "h", "right", "l":
-		fleetPage.triggerRowCycle()
+		fleetPage.triggerRowCycle(m)
 		return nil
 	}
 
@@ -223,11 +235,11 @@ func (fleetPage *fleetPage) triggerRowEnter(m *model) tea.Cmd {
 	case isTriggerTextRow(st.row):
 		return fleetPage.activateTriggerField()
 	case st.row == trigRowType:
-		fleetPage.cycleTriggerType()
+		fleetPage.cycleTriggerType(m)
 	case st.row == trigRowEnabled:
-		fleetPage.toggleTriggerEnabled()
+		fleetPage.toggleTriggerEnabled(m)
 	case st.row == trigRowFilterType:
-		fleetPage.cycleFilterType()
+		fleetPage.cycleFilterType(m)
 	case st.row == trigRowWebhookURL:
 		return fleetPage.copyTriggerWebhookURL(m)
 	case st.row >= trigRowAgentBase:
@@ -291,13 +303,13 @@ func (fleetPage *fleetPage) triggerRowToggle(m *model) tea.Cmd {
 		fleetPage.toggleTriggerAgent(m)
 		return nil
 	case st.row == trigRowType:
-		fleetPage.cycleTriggerType()
+		fleetPage.cycleTriggerType(m)
 		return nil
 	case st.row == trigRowEnabled:
-		fleetPage.toggleTriggerEnabled()
+		fleetPage.toggleTriggerEnabled(m)
 		return nil
 	case st.row == trigRowFilterType:
-		fleetPage.cycleFilterType()
+		fleetPage.cycleFilterType(m)
 		return nil
 	}
 	return fleetPage.triggerRowEnter(m)
@@ -305,24 +317,25 @@ func (fleetPage *fleetPage) triggerRowToggle(m *model) tea.Cmd {
 
 // triggerRowCycle handles h/l on a selector row. Both selectors are two-valued,
 // so direction is immaterial — left and right just flip to the other option.
-func (fleetPage *fleetPage) triggerRowCycle() {
+func (fleetPage *fleetPage) triggerRowCycle(m *model) {
 	st := &fleetPage.triggerDlg
 	switch st.row {
 	case trigRowType:
-		fleetPage.cycleTriggerType()
+		fleetPage.cycleTriggerType(m)
 	case trigRowEnabled:
-		fleetPage.toggleTriggerEnabled()
+		fleetPage.toggleTriggerEnabled(m)
 	case trigRowFilterType:
-		fleetPage.cycleFilterType()
+		fleetPage.cycleFilterType(m)
 	}
 }
 
-func (fleetPage *fleetPage) toggleTriggerEnabled() {
+func (fleetPage *fleetPage) toggleTriggerEnabled(m *model) {
 	st := &fleetPage.triggerDlg
 	st.disabled = !st.disabled
+	fleetPage.autosaveTrigger(m)
 }
 
-func (fleetPage *fleetPage) cycleTriggerType() {
+func (fleetPage *fleetPage) cycleTriggerType(m *model) {
 	st := &fleetPage.triggerDlg
 	if st.triggerType == fleet.TriggerSchedule {
 		st.triggerType = fleet.TriggerWebhook
@@ -331,9 +344,12 @@ func (fleetPage *fleetPage) cycleTriggerType() {
 	}
 	// The applicable rows changed; park the cursor back on the type selector.
 	st.row = trigRowType
+	// Quiet: a Schedule⇄Webhook switch makes the other type's required fields
+	// appear empty, so don't flash a validation error for that transient state.
+	fleetPage.autosaveTriggerQuiet(m)
 }
 
-func (fleetPage *fleetPage) cycleFilterType() {
+func (fleetPage *fleetPage) cycleFilterType(m *model) {
 	st := &fleetPage.triggerDlg
 	if st.filterType == fleet.WebhookFilterRegex {
 		st.filterType = fleet.WebhookFilterJSONPath
@@ -341,6 +357,8 @@ func (fleetPage *fleetPage) cycleFilterType() {
 		st.filterType = fleet.WebhookFilterRegex
 	}
 	st.row = trigRowFilterType
+	// Quiet: a Regex⇄json-path switch swaps in different required fields.
+	fleetPage.autosaveTriggerQuiet(m)
 }
 
 func (fleetPage *fleetPage) toggleTriggerAgent(m *model) {
@@ -355,6 +373,7 @@ func (fleetPage *fleetPage) toggleTriggerAgent(m *model) {
 		st.agentSel = map[string]bool{}
 	}
 	st.agentSel[name] = !st.agentSel[name]
+	fleetPage.autosaveTrigger(m)
 }
 
 func (fleetPage *fleetPage) activateTriggerField() tea.Cmd {
@@ -411,11 +430,102 @@ func (fleetPage *fleetPage) commitTriggerField() {
 }
 
 func (fleetPage *fleetPage) cancelAutomationTrigger(m *model) tea.Cmd {
-	fleetPage.triggerDlg.fieldActive = false
-	fleetPage.triggerDlg.input.Blur()
+	st := &fleetPage.triggerDlg
+	st.fieldActive = false
+	st.input.Blur()
 	fleetPage.mode = viewNormal
-	m.message = "Cancelled"
+	// Editing is instant-save, so closing is just "done" — only a new (unsaved)
+	// trigger is actually discarded. If an edit was left in an unsavable state,
+	// say so rather than closing silently (the last good state stayed on disk).
+	switch {
+	case st.editIdx < 0:
+		m.message = "Cancelled"
+	case fleetPage.triggerFormError(m) != nil:
+		m.message = "Closed; last change not saved: " + fleetPage.triggerFormError(m).Error()
+	default:
+		m.message = ""
+	}
 	return nil
+}
+
+// triggerCandidate builds a fleet.Trigger from the current form state, selecting
+// agents in the fleet's stored order so the output is stable.
+func (fleetPage *fleetPage) triggerCandidate(f *fleet.Fleet) fleet.Trigger {
+	st := &fleetPage.triggerDlg
+	var selected []string
+	for _, a := range f.Settings.Agents {
+		if st.agentSel[a.Name] {
+			selected = append(selected, a.Name)
+		}
+	}
+	return fleet.Trigger{
+		Name:        st.name,
+		Type:        st.triggerType,
+		Disabled:    st.disabled,
+		AgentNames:  selected,
+		Prompt:      st.prompt,
+		Cron:        st.cron,
+		WebhookName: st.webhookName,
+		FilterType:  st.filterType,
+		Regex:       st.regex,
+		JSONPath:    st.jsonPath,
+		JSONValue:   st.jsonValue,
+	}
+}
+
+// autosaveTrigger persists the form immediately when editing an existing trigger
+// (instant-save, like the settings page). It is a no-op for a new trigger, whose
+// explicit Save button owns creation. A validation/RPC failure surfaces inline
+// and leaves the last-good persisted state intact (the in-memory revert lives in
+// persistAutomationSettings); a success clears the error.
+func (fleetPage *fleetPage) autosaveTrigger(m *model) { fleetPage.autosaveTriggerImpl(m, false) }
+
+// autosaveTriggerQuiet is autosave for a structural selector switch (Type or
+// Filter), which legitimately leaves the now-required fields empty mid-edit. It
+// persists once the trigger validates but never flashes a validation error for
+// the incomplete intermediate state — it clears any stale error instead, since a
+// switch changes which fields even apply. The close-time check (triggerFormError)
+// is the backstop that still tells the user if they leave it unsavable.
+func (fleetPage *fleetPage) autosaveTriggerQuiet(m *model) { fleetPage.autosaveTriggerImpl(m, true) }
+
+func (fleetPage *fleetPage) autosaveTriggerImpl(m *model, quiet bool) {
+	st := &fleetPage.triggerDlg
+	if st.editIdx < 0 {
+		return
+	}
+	f, ok := m.st.Fleets[st.fleetName]
+	if !ok || st.editIdx >= len(f.Settings.Triggers) {
+		return
+	}
+	oldName := f.Settings.Triggers[st.editIdx].Name
+	newSettings, err := fleet.UpdateTrigger(f.Settings, oldName, fleetPage.triggerCandidate(f))
+	if err != nil {
+		if quiet {
+			st.errMsg = ""
+		} else {
+			st.errMsg = err.Error()
+		}
+		return
+	}
+	if err := fleetPage.persistAutomationSettings(m, st.fleetName, newSettings); err != nil {
+		st.errMsg = err.Error()
+		return
+	}
+	st.errMsg = ""
+}
+
+// triggerFormError returns the validation error the current form would hit if
+// saved now, without persisting — used on close to tell the user when an
+// instant-save edit was left in an unsavable state. nil when it would save.
+func (fleetPage *fleetPage) triggerFormError(m *model) error {
+	st := &fleetPage.triggerDlg
+	f, ok := m.st.Fleets[st.fleetName]
+	if !ok || st.editIdx < 0 || st.editIdx >= len(f.Settings.Triggers) {
+		return nil
+	}
+	oldName := f.Settings.Triggers[st.editIdx].Name
+	_, err := fleet.UpdateTrigger(f.Settings, oldName, fleetPage.triggerCandidate(f))
+	return err
 }
 
 func (fleetPage *fleetPage) saveAutomationTrigger(m *model) tea.Cmd {
@@ -429,27 +539,7 @@ func (fleetPage *fleetPage) saveAutomationTrigger(m *model) tea.Cmd {
 		return fleetPage.cancelAutomationTrigger(m)
 	}
 
-	// Collect selected agents in the fleet's agent order (stable output).
-	var selected []string
-	for _, a := range f.Settings.Agents {
-		if st.agentSel[a.Name] {
-			selected = append(selected, a.Name)
-		}
-	}
-
-	candidate := fleet.Trigger{
-		Name:        st.name,
-		Type:        st.triggerType,
-		Disabled:    st.disabled,
-		AgentNames:  selected,
-		Prompt:      st.prompt,
-		Cron:        st.cron,
-		WebhookName: st.webhookName,
-		FilterType:  st.filterType,
-		Regex:       st.regex,
-		JSONPath:    st.jsonPath,
-		JSONValue:   st.jsonValue,
-	}
+	candidate := fleetPage.triggerCandidate(f)
 
 	// fleet.AddTrigger/UpdateTrigger own the shared invariants (normalize
 	// against the fleet's agents and reject a duplicate name).
@@ -507,6 +597,20 @@ func (fleetPage *fleetPage) renderAutomationTriggerDialog(m *model) string {
 	fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowName), dialogLabel.Render("Name:   "), field(trigRowName, st.name, "trigger-name"))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowType), dialogLabel.Render("Type:   "), selectorLabel(triggerTypeLabel(st.triggerType)))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowEnabled), dialogLabel.Render("Enabled:"), selectorLabel(enabledLabel(st.disabled)))
+	fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowPrompt), dialogLabel.Render("Prompt: "), promptFieldPreview(st.prompt, "(fed to the agent via ${PROMPT})"))
+
+	if st.triggerType == fleet.TriggerWebhook {
+		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowWebhookName), dialogLabel.Render("Webhook:"), field(trigRowWebhookName, st.webhookName, "name (appended to gateway URL)"))
+		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowFilterType), dialogLabel.Render("Filter: "), selectorLabel(filterTypeLabel(st.filterType)))
+		if st.filterType == fleet.WebhookFilterJSONPath {
+			fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowJSONPath), dialogLabel.Render("JSON path:"), field(trigRowJSONPath, st.jsonPath, "e.g. $.action (required)"))
+			fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowJSONValue), dialogLabel.Render("JSON value:"), field(trigRowJSONValue, st.jsonValue, "e.g. opened"))
+		} else {
+			fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowRegex), dialogLabel.Render("Regex:  "), field(trigRowRegex, st.regex, "event body must match"))
+		}
+	} else {
+		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowCron), dialogLabel.Render("Cron:   "), field(trigRowCron, st.cron, "0 9 * * 1-5"))
+	}
 
 	// Agents multi-select.
 	body.WriteString(dialogLabel.Render("Agents: "))
@@ -522,29 +626,22 @@ func (fleetPage *fleetPage) renderAutomationTriggerDialog(m *model) string {
 		fmt.Fprintf(&body, "%s    %s %s\n", marker(trigRowAgentBase+i), box, a.Name)
 	}
 
-	fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowPrompt), dialogLabel.Render("Prompt: "), promptFieldPreview(st.prompt, "(fed to the agent via ${PROMPT})"))
-
+	// The webhook URL sits last (after Agents) — it is derived/copy-only, not a
+	// field the user fills in, so it reads as a footer to the form.
 	if st.triggerType == fleet.TriggerWebhook {
-		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowWebhookName), dialogLabel.Render("Webhook:"), field(trigRowWebhookName, st.webhookName, "name (appended to gateway URL)"))
 		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowWebhookURL), dialogLabel.Render("URL:    "), webhookURLDisplay(m, st.webhookName))
-		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowFilterType), dialogLabel.Render("Filter: "), selectorLabel(filterTypeLabel(st.filterType)))
-		if st.filterType == fleet.WebhookFilterJSONPath {
-			fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowJSONPath), dialogLabel.Render("JSON path:"), field(trigRowJSONPath, st.jsonPath, "e.g. $.action (required)"))
-			fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowJSONValue), dialogLabel.Render("JSON value:"), field(trigRowJSONValue, st.jsonValue, "e.g. opened"))
-		} else {
-			fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowRegex), dialogLabel.Render("Regex:  "), field(trigRowRegex, st.regex, "event body must match"))
-		}
-	} else {
-		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowCron), dialogLabel.Render("Cron:   "), field(trigRowCron, st.cron, "0 9 * * 1-5"))
 	}
 
-	fmt.Fprintf(&body, "%s%s\n", marker(trigRowSave), saveButtonLabel(st.row == trigRowSave))
+	// Editing instant-saves, so there is no Save row; a new trigger keeps it.
+	if st.editIdx < 0 {
+		fmt.Fprintf(&body, "%s%s\n", marker(trigRowSave), saveButtonLabel(st.row == trigRowSave))
+	}
 
 	if st.errMsg != "" {
 		fmt.Fprintf(&body, "\n%s\n", errorStyle.Render(st.errMsg))
 	}
 	body.WriteString("\n")
-	body.WriteString(dialogHint.Render(automationTriggerHint(st.fieldActive, st.row)))
+	body.WriteString(dialogHint.Render(automationTriggerHint(st.fieldActive, st.row, st.editIdx >= 0)))
 
 	b.WriteString(dialogBox.Render(body.String()))
 	b.WriteString("\n")
@@ -576,18 +673,28 @@ func filterTypeLabel(f fleet.WebhookFilterType) string {
 	return "regex"
 }
 
-func automationTriggerHint(fieldActive bool, row int) string {
+// automationTriggerHint is the footer hint for the trigger dialog. In edit mode
+// every change instant-saves, so the close key reads "Close" (nothing to cancel)
+// and an active field's enter reads "Save".
+func automationTriggerHint(fieldActive bool, row int, isEdit bool) string {
 	if fieldActive {
+		if isEdit {
+			return "[enter] Save  [esc] Discard edit"
+		}
 		return "[enter] Done editing  [ctrl+c] Cancel"
 	}
+	closeKey := "[q/esc] Cancel"
+	if isEdit {
+		closeKey = "[q/esc] Close"
+	}
 	if row == trigRowPrompt {
-		return "[enter] Edit in $EDITOR  [j/k] Move  [q/esc] Cancel"
+		return "[enter] Edit in $EDITOR  [j/k] Move  " + closeKey
 	}
 	if row >= trigRowAgentBase {
-		return "[j/k] Move  [space] Toggle agent  [enter] Edit/Cycle  [q/esc] Cancel"
+		return "[j/k] Move  [space] Toggle agent  [enter] Edit/Cycle  " + closeKey
 	}
 	if row == trigRowWebhookURL {
-		return "[j/k] Move  [enter] Copy URL  [q/esc] Cancel"
+		return "[j/k] Move  [enter] Copy URL  " + closeKey
 	}
-	return "[j/k] Move  [enter] Edit/Toggle  [h/l] Cycle  [q/esc] Cancel"
+	return "[j/k] Move  [enter] Edit/Toggle  [h/l] Cycle  " + closeKey
 }

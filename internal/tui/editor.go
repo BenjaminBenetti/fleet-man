@@ -33,8 +33,11 @@ type editorFinishedMsg struct {
 }
 
 // promptPreviewWidth caps the one-line preview an editor-backed field shows in
-// the dialog.
-const promptPreviewWidth = 40
+// the dialog. It is the total budget for the whole preview (first line +
+// "(N lines)" suffix), sized to fit the narrowest caller: the agent dialog's
+// "Sys prompt:" label leaves ~32 cols inside the 50-wide dialog box, so the
+// preview never wraps to a second line.
+const promptPreviewWidth = 32
 
 // resolveEditor returns the user's preferred editor command — $VISUAL, then
 // $EDITOR — falling back to vi (the universal default, always present).
@@ -107,8 +110,10 @@ func (fleetPage *fleetPage) applyEditorResult(m *model, msg editorFinishedMsg) t
 	switch msg.target {
 	case editorTargetAgentSysPrompt:
 		fleetPage.agentDlg.systemPrompt = msg.value
+		fleetPage.autosaveAgent(m)
 	case editorTargetTriggerPrompt:
 		fleetPage.triggerDlg.prompt = msg.value
+		fleetPage.autosaveTrigger(m)
 	}
 	return nil
 }
@@ -116,14 +121,24 @@ func (fleetPage *fleetPage) applyEditorResult(m *model, msg editorFinishedMsg) t
 // promptFieldPreview renders a one-line preview of an editor-backed field's
 // (possibly multi-line) value for the dialog: the first line, truncated, with a
 // dim line count when there is more than one line. Empty shows the placeholder.
+// The first line is truncated to leave room for the suffix so the whole preview
+// stays within promptPreviewWidth and never wraps to a second line.
 func promptFieldPreview(value, placeholder string) string {
 	if value == "" {
 		return dimStyle.Render(placeholder)
 	}
 	lines := strings.Split(value, "\n")
-	preview := ansi.Truncate(lines[0], promptPreviewWidth, "…")
+	suffix := ""
+	budget := promptPreviewWidth
 	if len(lines) > 1 {
-		preview += dimStyle.Render(fmt.Sprintf("  (%d lines)", len(lines)))
+		suffix = fmt.Sprintf("  (%d lines)", len(lines))
+		if budget -= len(suffix); budget < 1 {
+			budget = 1
+		}
+	}
+	preview := ansi.Truncate(lines[0], budget, "…")
+	if suffix != "" {
+		preview += dimStyle.Render(suffix)
 	}
 	return preview
 }
