@@ -320,7 +320,7 @@ func TestHeaderToggleButtonMouseClick(t *testing.T) {
 	}
 	next, _ := m.Update(click)
 	if !next.(model).fleetPage.automationMode["alpha"] {
-		t.Fatal("clicking the [automations] button should toggle automation mode on")
+		t.Fatal("clicking the ⟳ toggle should switch automation mode on")
 	}
 
 	// A click elsewhere on the header (before the button) must NOT toggle — it
@@ -349,7 +349,7 @@ func TestAutomationViewRenders(t *testing.T) {
 	fp.toggleAutomationMode(m, "alpha")
 
 	out := fp.viewFleetList(m)
-	for _, want := range []string{"[instances]", "triggers", "agents", "nightly", "builder", "+ add trigger", "+ add agent"} {
+	for _, want := range []string{"[ " + instancesMark + " ]", "triggers", "agents", "nightly", "builder", "+ add trigger", "+ add agent"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("automation view missing %q\n%s", want, out)
 		}

@@ -52,9 +52,16 @@ const (
 	// the child row's session label.
 	prStatusClickColumn = listContentXOffset + instanceStatusCol
 
-	// automationMark is the glyph shown before an automation-spawned instance's
-	// name (issue #188) — a clockwise loop reading as "runs on a schedule".
+	// automationMark is the automation motif (issue #188) — a clockwise loop
+	// reading as "runs on a schedule" — trailing automation-spawned instance names.
 	automationMark = "⟳"
+
+	// automationToggleMark / instancesMark are the mode-toggle button glyphs: ↻
+	// (instance view → switch to automation) and ☰ (automation view → switch to the
+	// instance list). ↻ is a lighter cycle arrow than automationMark's ⟳ — it sits
+	// better centered inside the [ ] button.
+	automationToggleMark = "↻"
+	instancesMark        = "☰"
 )
 
 // renderChildRowLine renders an instance child row (a session/group row or the
@@ -178,14 +185,14 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			}
 
 			// The fleet header carries a mode-toggle "button" (issue #188): the
-			// instance view shows the instance count plus an [automations] switch;
-			// the automation view shows an [instances] switch. 'm' (or a click on
-			// the button — see app.go) toggles it. We record the button's absolute
+			// instance view shows the instance count plus a [ ↻ ] switch (→ automation);
+			// the automation view shows a [ ☰ ] switch (→ instances). 'm' (or a click
+			// on the button — see app.go) toggles it. We record the button's absolute
 			// column span here so the click handler can hit-test it.
 			var suffix, toggleText string
-			// The toggle button highlights (pink) when the header's right-hand
-			// element is selected via →/l, mirroring the inline PR status; the
-			// instance count stays dim either way.
+			// The toggle icon highlights (pink) when the header's right-hand element
+			// is selected via →/l, mirroring the inline PR status; the instance count
+			// stays dim either way.
 			toggleStyle := dimStyle
 			if isSelected && fleetPage.rightSelected {
 				toggleStyle = selectedStyle
@@ -193,16 +200,16 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			// Columns before the suffix: cursor(2) + arrow(2) + name width.
 			labelStart := listContentXOffset + 4 + lipgloss.Width(r.fleetName)
 			if fleetPage.automationMode[r.fleetName] {
-				toggleText = "[instances]"
+				toggleText = "[ " + instancesMark + " ]"
 				suffix = dimStyle.Render(" ") + toggleStyle.Render(toggleText)
-				labelStart += 1 // a single leading space precedes the label
+				labelStart += 1 // a single leading space precedes the button
 			} else {
 				count := 0
 				if f, ok := m.st.Fleets[r.fleetName]; ok {
 					count = len(f.Instances)
 				}
 				countPart := fmt.Sprintf(" (%d) ", count)
-				toggleText = "[automations]"
+				toggleText = "[ " + automationToggleMark + " ]"
 				suffix = dimStyle.Render(countPart) + toggleStyle.Render(toggleText)
 				labelStart += lipgloss.Width(countPart)
 			}

@@ -41,7 +41,7 @@ type row struct {
 	// Settings.Agents (rowAgent) — the automation item this row renders/edits.
 	autoIdx int
 	// toggleX0/toggleX1 record the absolute terminal column span of the
-	// [automations]/[instances] mode-toggle button on a rowFleetHeader (set
+	// ⟳/☰ mode-toggle icon on a rowFleetHeader (set
 	// during View). A left click landing in [toggleX0, toggleX1) toggles the
 	// fleet's automation mode instead of collapsing it. toggleX1 == toggleX0
 	// means "no button here".

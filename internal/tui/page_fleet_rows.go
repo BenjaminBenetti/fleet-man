@@ -230,7 +230,7 @@ func (fleetPage *fleetPage) currentRow() *row {
 
 // currentRowHasRightElement reports whether the cursor row carries a right-hand
 // element that →/l can select and enter can activate: a fleet header's
-// [automations]/[instances] mode toggle, or an expanded instance's inline PR
+// ⟳/☰ mode toggle, or an expanded instance's inline PR
 // status.
 func (fleetPage *fleetPage) currentRowHasRightElement(m *model) bool {
 	r := fleetPage.currentRow()

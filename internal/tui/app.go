@@ -689,7 +689,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					case page.rows[idx].kind == rowFleetHeader &&
 						page.rows[idx].toggleX1 > page.rows[idx].toggleX0 &&
 						mouseMsg.X >= page.rows[idx].toggleX0 && mouseMsg.X < page.rows[idx].toggleX1:
-						// Clicking the [automations]/[instances] button on a fleet
+						// Clicking the ⟳/☰ button on a fleet
 						// header toggles that fleet's automation mode (issue #188),
 						// synthesizing the same `m` the keyboard path uses — rather
 						// than collapsing the fleet like a click elsewhere on the row.

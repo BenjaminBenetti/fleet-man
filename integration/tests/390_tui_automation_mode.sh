@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Description: TUI automation mode (issue #188) — 'm' (or selecting the header's
-# [automations]/[instances] toggle with →/l and pressing enter) flips a fleet
-# between its instance view and its automation view (triggers + agents groups).
-# Adding an agent through the dialog persists it and shows it in the agents
-# group, and 'm' toggles back to the instance view.
+# mode-toggle icon, ↻/☰, with →/l and pressing enter) flips a fleet between its
+# instance view and its automation view (triggers + agents groups). Adding an
+# agent through the dialog persists it and shows it in the agents group, and 'm'
+# toggles back to the instance view.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -17,9 +17,9 @@ tui_spawn
 tui_wait_for "alpha" 15
 
 # ===========================================
-# Instance view shows the [automations] toggle button.
+# Instance view shows the ↻ (→ automation) mode-toggle icon.
 # ===========================================
-tui_assert_contains "[automations]" "fleet header should offer the [automations] toggle"
+tui_assert_contains "↻" "fleet header should offer the ↻ automation toggle"
 
 # ===========================================
 # Keyboard selection: →/l focuses the header toggle and enter activates it,
@@ -30,18 +30,18 @@ info "selecting the toggle with 'l' and pressing enter to enter automation mode"
 tui_send l
 sleep 0.2
 tui_send Enter
-tui_wait_for "[instances]" 5
+tui_wait_for "☰" 5
 tui_assert_contains "triggers" "selecting the toggle + enter should open the automation view"
 
 info "pressing enter again to flip back to the instance view"
 tui_send Enter
-tui_wait_for "[automations]" 5
+tui_wait_for "↻" 5
 tui_assert_contains "alpha" "a second enter should return to the instance view"
 tui_send h   # deselect the toggle before the rest of the flow
 
 # ===========================================
 # 'm' switches the fleet to automation view: triggers + agents groups, the
-# "+ add" action rows, and the [instances] toggle.
+# "+ add" action rows, and the ☰ (→ instances) toggle.
 # ===========================================
 info "pressing 'm' to enter automation mode"
 tui_send m
@@ -49,7 +49,7 @@ tui_wait_for "triggers" 5
 tui_assert_contains "agents" "agents group header should be visible"
 tui_assert_contains "+ add trigger" "add-trigger action row missing"
 tui_assert_contains "+ add agent" "add-agent action row missing"
-tui_assert_contains "[instances]" "automation view should offer the [instances] toggle"
+tui_assert_contains "☰" "automation view should offer the ☰ instances toggle"
 
 # ===========================================
 # 'a' opens the add dialog for the group the cursor is in (not the add-instance
@@ -111,7 +111,7 @@ tui_wait_for "agents (0)" 10
 # ===========================================
 info "pressing 'm' to return to the instance view"
 tui_send m
-tui_wait_for "[automations]" 5
+tui_wait_for "↻" 5
 tui_assert_contains "alpha" "instance view should show the instance again"
 
 pass "TUI automation mode: toggle, add agent, toggle back"

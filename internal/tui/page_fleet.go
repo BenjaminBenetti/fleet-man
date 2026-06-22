@@ -44,7 +44,7 @@ type fleetPage struct {
 	// rightSelected is true when the cursor row's right-hand element is
 	// horizontally selected — →/l selects it (drawn pink), ←/h deselects, enter
 	// activates it. Two row kinds carry such an element: an instance's PR-status
-	// auto tag (enter opens the PR) and a fleet header's [automations]/[instances]
+	// auto tag (enter opens the PR) and a fleet header's ⟳/☰
 	// mode toggle (enter flips automation mode). Cleared on any vertical cursor
 	// move. See currentRowHasRightElement / activateRightSelection.
 	rightSelected bool

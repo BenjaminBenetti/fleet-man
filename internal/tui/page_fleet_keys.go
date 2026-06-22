@@ -453,7 +453,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 
 		case "right", "l":
 			// Select the current row's right-hand element — a fleet header's
-			// [automations]/[instances] mode toggle, or an expanded instance's
+			// ⟳/☰ mode toggle, or an expanded instance's
 			// inline PR status — so enter activates it. No-op on rows that carry
 			// no such element.
 			if fleetPage.currentRowHasRightElement(m) {
