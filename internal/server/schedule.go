@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"strings"
@@ -90,6 +91,34 @@ type watchedAgent struct {
 	// screen-diff fallback). Lazily created/replaced in automationActivity.
 	detector     agentdetect.Detector
 	detectorTool state.AgentTool
+	// event describes the trigger firing that spawned this agent. At launch its
+	// payload is written into the instance and a note pointing at that file is
+	// appended to the prompt, so the agent knows what fired it. Nil only if a
+	// future caller spawns an agent outside the trigger path.
+	event *triggerEvent
+}
+
+// triggerEvent carries the context of the trigger firing that spawned an agent:
+// what fired it (schedule vs webhook), when, and — for a webhook — the request
+// body. launchAutomationCommand materializes payload() into a file inside the
+// instance and tells the agent where to read it (appendEventPrompt), so the
+// agent can act on the actual event rather than the static prompt alone.
+type triggerEvent struct {
+	kind        fleet.TriggerType
+	triggerName string
+	firedAt     time.Time
+	webhookName string // webhook only
+	body        []byte // webhook request body; nil for schedule triggers
+}
+
+// payload returns the bytes written to the in-instance event file: the raw
+// webhook body for a webhook trigger, or the fire time for a schedule trigger
+// (which carries no external payload of its own).
+func (e *triggerEvent) payload() []byte {
+	if e.kind == fleet.TriggerWebhook {
+		return e.body
+	}
+	return []byte(e.firedAt.UTC().Format(time.RFC3339) + "\n")
 }
 
 func (w *watchedAgent) key() string { return w.fleet + "/" + w.instance }
@@ -115,11 +144,12 @@ const webhookFireBuffer = 64
 // webhookFire is a matched automation webhook event handed from the (concurrent)
 // webhook receiver to the scheduler goroutine, which spawns the trigger's agents.
 // The receiver has already evaluated the trigger's filter against the event body;
-// only the static trigger Prompt (not the body) feeds the agents, matching the
-// schedule path.
+// body carries that same payload through so each spawned agent can be handed the
+// event it fired on (written into its instance and referenced from the prompt).
 type webhookFire struct {
 	fleet   string
 	trigger fleet.Trigger
+	body    []byte
 }
 
 // runScheduler is the automation loop; it returns when ctx is cancelled. It
@@ -166,7 +196,7 @@ func (s *service) fireWebhookBatch(sched *scheduler, batch []webhookFire, now ti
 			flog.Warn("automation: webhook trigger has no live agents", "fleet", f.fleet, "trigger", f.trigger.Name)
 			continue
 		}
-		s.fireTriggerAgents(sched, f.fleet, f.trigger, agents, now)
+		s.fireTriggerAgents(sched, f.fleet, f.trigger, agents, now, f.body)
 	}
 }
 
@@ -184,7 +214,9 @@ func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.
 	fired := false
 	for _, due := range dueSchedules(st.Fleets, now, sched.lastFired) {
 		agents := agentsForTrigger(st.Fleets[due.fleet], due.trigger)
-		if s.fireTriggerAgents(sched, due.fleet, due.trigger, agents, now) {
+		// Schedule triggers carry no external payload — the event file gets the
+		// fire time (see triggerEvent.payload), so pass a nil body here.
+		if s.fireTriggerAgents(sched, due.fleet, due.trigger, agents, now, nil) {
 			fired = true
 		}
 	}
@@ -203,10 +235,12 @@ func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.
 
 // fireTriggerAgents spawns one instance per agent the trigger activates and
 // registers each in the watch set, returning whether anything was spawned (the
-// caller reloads state when so, see schedulerTick). Shared by the schedule path
-// and the webhook path; it only mutates sched.watched, so it MUST run on the
-// scheduler goroutine.
-func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger fleet.Trigger, agents []fleet.Agent, now time.Time) bool {
+// caller reloads state when so, see schedulerTick). body is the webhook request
+// payload (nil for schedule triggers); it rides each watched agent's event so
+// the launch can hand it to the agent. Shared by the schedule path and the
+// webhook path; it only mutates sched.watched, so it MUST run on the scheduler
+// goroutine.
+func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger fleet.Trigger, agents []fleet.Agent, now time.Time, body []byte) bool {
 	fired := false
 	for _, ag := range agents {
 		instName, err := createAutomationInstance(s, fleetName, ag, now)
@@ -223,6 +257,13 @@ func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger 
 			systemPrompt: ag.SystemPrompt,
 			spawnedAt:    now,
 			lastActive:   now,
+			event: &triggerEvent{
+				kind:        trigger.Type,
+				triggerName: trigger.Name,
+				firedAt:     now,
+				webhookName: trigger.WebhookName,
+				body:        body,
+			},
 		}
 		sched.watched[w.key()] = w
 		fired = true
@@ -451,14 +492,71 @@ var createAutomationInstance = func(s *service, fleetName string, ag fleet.Agent
 // may apt-install tmux on first use.
 var launchAutomationCommand = func(ctx context.Context, s *service, w *watchedAgent, inst *fleet.Instance) {
 	session := tui.ResolveSessionName(inst.Name, "agent")
-	command := fleet.SubstituteAgentCommand(w.command, w.prompt, w.systemPrompt)
+	prompt := w.prompt
+	var eventPath string
+	if w.event != nil {
+		eventPath = automationEventPath(w.event.firedAt)
+		prompt = appendEventPrompt(prompt, w.event, eventPath)
+	}
+	command := fleet.SubstituteAgentCommand(w.command, prompt, w.systemPrompt)
 	script := buildAgentLaunchScript(session, command)
 	b := s.hub.backendFor(inst)
 	go func() {
+		// Write the trigger payload into the instance BEFORE launching the agent,
+		// so the file the prompt points at already exists the moment the agent
+		// starts. Best-effort: a write failure still launches the agent (it just
+		// finds no event file) rather than dropping the whole run.
+		if w.event != nil {
+			if err := writeAutomationEventFile(inst, eventPath, w.event.payload()); err != nil {
+				flog.Warn("automation: write event file failed", "instance", inst.Name, "path", eventPath, "err", err)
+			}
+		}
 		if out, err := b.RunScript(inst.ContainerID, script); err != nil {
 			flog.Error("automation: launch agent failed", "instance", inst.Name, "err", err, "out", strings.TrimSpace(out))
 		}
 	}()
+}
+
+// automationEventPath is where a run's trigger payload is written inside its
+// instance. Each automation run gets a fresh container, so a single fixed-prefix,
+// time-stamped name never collides within one instance.
+func automationEventPath(firedAt time.Time) string {
+	return "/tmp/fleet-event-" + firedAt.UTC().Format("20060102T150405Z")
+}
+
+// appendEventPrompt appends a note to the agent prompt naming what fired the run
+// and where its payload was written, so the agent reads the actual event rather
+// than working from the static prompt alone. A blank prompt becomes just the note.
+func appendEventPrompt(prompt string, e *triggerEvent, path string) string {
+	var detail string
+	if e.kind == fleet.TriggerWebhook {
+		detail = fmt.Sprintf("Its payload has been written to %s in this instance — read that file for the event details.", path)
+	} else {
+		detail = fmt.Sprintf("The time it fired has been written to %s in this instance.", path)
+	}
+	note := fmt.Sprintf("This session was started automatically by the %q %s trigger. %s", e.triggerName, e.kind, detail)
+	if strings.TrimSpace(prompt) == "" {
+		return note
+	}
+	return prompt + "\n\n---\n" + note
+}
+
+// writeAutomationEventFile writes data to path inside the instance. It reuses the
+// fleet-copy exec seam (copyIntoExecCommand) and streams the payload as base64
+// over STDIN, decoded in-container — so a payload of any size avoids the argv
+// length limit a shell-embedded write would hit, arbitrary bytes survive intact,
+// and the base64 text stays clean over the codespaces backend's exec PTY (which
+// mangles raw binary). A package var so tests can stub the exec.
+var writeAutomationEventFile = func(inst *fleet.Instance, path string, data []byte) error {
+	cmd := copyIntoExecCommand(inst, []string{"sh", "-c", "base64 -d > " + dotfiles.ShQuote(path)})
+	cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString(data))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
+	}
+	return nil
 }
 
 // buildAgentLaunchScript builds the in-container snippet that brings up the agent
