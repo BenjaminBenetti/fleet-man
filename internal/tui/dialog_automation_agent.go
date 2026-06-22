@@ -229,13 +229,31 @@ func (fleetPage *fleetPage) cancelAutomationAgent(m *model) tea.Cmd {
 	st.input.Blur()
 	fleetPage.mode = viewNormal
 	// Editing is instant-save, so closing is just "done" — only a new (unsaved)
-	// agent is actually discarded.
-	if st.editIdx < 0 {
+	// agent is actually discarded. If an edit was left in an unsavable state, say
+	// so rather than closing silently (the last good state stayed on disk).
+	switch {
+	case st.editIdx < 0:
 		m.message = "Cancelled"
-	} else {
+	case fleetPage.agentFormError(m) != nil:
+		m.message = "Closed; last change not saved: " + fleetPage.agentFormError(m).Error()
+	default:
 		m.message = ""
 	}
 	return nil
+}
+
+// agentFormError returns the validation error the current form would hit if saved
+// now, without persisting — used on close to tell the user when an instant-save
+// edit was left unsavable. nil when it would save.
+func (fleetPage *fleetPage) agentFormError(m *model) error {
+	st := &fleetPage.agentDlg
+	f, ok := m.st.Fleets[st.fleetName]
+	if !ok || st.editIdx < 0 || st.editIdx >= len(f.Settings.Agents) {
+		return nil
+	}
+	oldName := f.Settings.Agents[st.editIdx].Name
+	_, err := fleet.UpdateAgent(f.Settings, oldName, fleetPage.agentCandidate())
+	return err
 }
 
 // agentCandidate builds a fleet.Agent from the current form state.

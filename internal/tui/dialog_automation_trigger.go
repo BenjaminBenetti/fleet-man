@@ -344,7 +344,9 @@ func (fleetPage *fleetPage) cycleTriggerType(m *model) {
 	}
 	// The applicable rows changed; park the cursor back on the type selector.
 	st.row = trigRowType
-	fleetPage.autosaveTrigger(m)
+	// Quiet: a Schedule⇄Webhook switch makes the other type's required fields
+	// appear empty, so don't flash a validation error for that transient state.
+	fleetPage.autosaveTriggerQuiet(m)
 }
 
 func (fleetPage *fleetPage) cycleFilterType(m *model) {
@@ -355,7 +357,8 @@ func (fleetPage *fleetPage) cycleFilterType(m *model) {
 		st.filterType = fleet.WebhookFilterRegex
 	}
 	st.row = trigRowFilterType
-	fleetPage.autosaveTrigger(m)
+	// Quiet: a Regex⇄json-path switch swaps in different required fields.
+	fleetPage.autosaveTriggerQuiet(m)
 }
 
 func (fleetPage *fleetPage) toggleTriggerAgent(m *model) {
@@ -432,10 +435,14 @@ func (fleetPage *fleetPage) cancelAutomationTrigger(m *model) tea.Cmd {
 	st.input.Blur()
 	fleetPage.mode = viewNormal
 	// Editing is instant-save, so closing is just "done" — only a new (unsaved)
-	// trigger is actually discarded.
-	if st.editIdx < 0 {
+	// trigger is actually discarded. If an edit was left in an unsavable state,
+	// say so rather than closing silently (the last good state stayed on disk).
+	switch {
+	case st.editIdx < 0:
 		m.message = "Cancelled"
-	} else {
+	case fleetPage.triggerFormError(m) != nil:
+		m.message = "Closed; last change not saved: " + fleetPage.triggerFormError(m).Error()
+	default:
 		m.message = ""
 	}
 	return nil
@@ -471,7 +478,17 @@ func (fleetPage *fleetPage) triggerCandidate(f *fleet.Fleet) fleet.Trigger {
 // explicit Save button owns creation. A validation/RPC failure surfaces inline
 // and leaves the last-good persisted state intact (the in-memory revert lives in
 // persistAutomationSettings); a success clears the error.
-func (fleetPage *fleetPage) autosaveTrigger(m *model) {
+func (fleetPage *fleetPage) autosaveTrigger(m *model) { fleetPage.autosaveTriggerImpl(m, false) }
+
+// autosaveTriggerQuiet is autosave for a structural selector switch (Type or
+// Filter), which legitimately leaves the now-required fields empty mid-edit. It
+// persists once the trigger validates but never flashes a validation error for
+// the incomplete intermediate state — it clears any stale error instead, since a
+// switch changes which fields even apply. The close-time check (triggerFormError)
+// is the backstop that still tells the user if they leave it unsavable.
+func (fleetPage *fleetPage) autosaveTriggerQuiet(m *model) { fleetPage.autosaveTriggerImpl(m, true) }
+
+func (fleetPage *fleetPage) autosaveTriggerImpl(m *model, quiet bool) {
 	st := &fleetPage.triggerDlg
 	if st.editIdx < 0 {
 		return
@@ -483,7 +500,11 @@ func (fleetPage *fleetPage) autosaveTrigger(m *model) {
 	oldName := f.Settings.Triggers[st.editIdx].Name
 	newSettings, err := fleet.UpdateTrigger(f.Settings, oldName, fleetPage.triggerCandidate(f))
 	if err != nil {
-		st.errMsg = err.Error()
+		if quiet {
+			st.errMsg = ""
+		} else {
+			st.errMsg = err.Error()
+		}
 		return
 	}
 	if err := fleetPage.persistAutomationSettings(m, st.fleetName, newSettings); err != nil {
@@ -491,6 +512,20 @@ func (fleetPage *fleetPage) autosaveTrigger(m *model) {
 		return
 	}
 	st.errMsg = ""
+}
+
+// triggerFormError returns the validation error the current form would hit if
+// saved now, without persisting — used on close to tell the user when an
+// instant-save edit was left in an unsavable state. nil when it would save.
+func (fleetPage *fleetPage) triggerFormError(m *model) error {
+	st := &fleetPage.triggerDlg
+	f, ok := m.st.Fleets[st.fleetName]
+	if !ok || st.editIdx < 0 || st.editIdx >= len(f.Settings.Triggers) {
+		return nil
+	}
+	oldName := f.Settings.Triggers[st.editIdx].Name
+	_, err := fleet.UpdateTrigger(f.Settings, oldName, fleetPage.triggerCandidate(f))
+	return err
 }
 
 func (fleetPage *fleetPage) saveAutomationTrigger(m *model) tea.Cmd {

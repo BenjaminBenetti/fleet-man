@@ -322,6 +322,87 @@ func TestEditAgentInstantSavesFieldCommit(t *testing.T) {
 	}
 }
 
+// TestEditTriggerTypeSwitchDoesNotFlashError: flipping Type while editing makes
+// the other type's required fields appear empty; that transient invalid state
+// must not flash a validation error, and must not persist over the last good one.
+func TestEditTriggerTypeSwitchDoesNotFlashError(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	seedTrigger(m) // valid schedule trigger "nightly"
+
+	fp.openEditTriggerDialog(m, "alpha", 0)
+	fp.triggerDlg.row = trigRowType
+	// Schedule → Webhook: webhook name/regex are still empty.
+	fp.updateAutomationTrigger(m, tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+
+	if fp.triggerDlg.errMsg != "" {
+		t.Fatalf("a structural type switch must not flash an error, got %q", fp.triggerDlg.errMsg)
+	}
+	if got := m.st.Fleets["alpha"].Settings.Triggers[0].Type; got != fleet.TriggerSchedule {
+		t.Fatalf("incomplete webhook must not persist; type = %q, want schedule", got)
+	}
+	if fp.mode != viewAutomationTrigger {
+		t.Fatal("dialog should stay open during a multi-step type switch")
+	}
+
+	// Completing the webhook fields then makes it persist.
+	fp.triggerDlg.webhookName = "deploy"
+	fp.triggerDlg.regex = ".*"
+	fp.autosaveTrigger(m)
+	if got := m.st.Fleets["alpha"].Settings.Triggers[0]; got.Type != fleet.TriggerWebhook || got.WebhookName != "deploy" {
+		t.Fatalf("completed webhook should persist: %+v", got)
+	}
+}
+
+// TestEditTriggerCloseSignalsUnsavedChange: closing an edit left in an unsavable
+// state warns the user rather than discarding silently, and keeps the last good
+// state on disk.
+func TestEditTriggerCloseSignalsUnsavedChange(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	seedTrigger(m)
+
+	fp.openEditTriggerDialog(m, "alpha", 0)
+	fp.triggerDlg.name = "" // invalid — never persists
+	fp.updateAutomationTrigger(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+
+	if !strings.Contains(m.message, "not saved") {
+		t.Fatalf("closing with an unsavable edit should warn, got %q", m.message)
+	}
+	if got := m.st.Fleets["alpha"].Settings.Triggers[0].Name; got != "nightly" {
+		t.Fatalf("last good state must remain on disk; name = %q", got)
+	}
+}
+
+// TestEditTriggerCloseQuietWhenClean: closing a valid edit says nothing (it was
+// already instant-saved).
+func TestEditTriggerCloseQuietWhenClean(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	seedTrigger(m)
+
+	fp.openEditTriggerDialog(m, "alpha", 0)
+	fp.updateAutomationTrigger(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if m.message != "" {
+		t.Fatalf("closing a clean edit should be silent, got %q", m.message)
+	}
+}
+
+// TestEditAgentCloseSignalsUnsavedChange mirrors the trigger close-signal for the
+// agent dialog (which has no structural switches but can still be left invalid).
+func TestEditAgentCloseSignalsUnsavedChange(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	m.st.Fleets["alpha"].Settings.Agents = []fleet.Agent{{Name: "builder", Command: "echo hi", Backend: fleet.BackendDevcontainer}}
+
+	fp.openEditAgentDialog(m, "alpha", 0)
+	fp.agentDlg.name = "" // invalid
+	fp.updateAutomationAgent(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+
+	if !strings.Contains(m.message, "not saved") {
+		t.Fatalf("closing with an unsavable agent edit should warn, got %q", m.message)
+	}
+	if got := m.st.Fleets["alpha"].Settings.Agents[0].Name; got != "builder" {
+		t.Fatalf("last good agent must remain on disk; name = %q", got)
+	}
+}
+
 // TestTriggerWebhookURL confirms the dialog builds a copy-pasteable webhook URL
 // from the gateway-assigned base + the (escaped) name, and returns "" when either
 // piece is missing.
