@@ -83,6 +83,24 @@ func TestServeWebhook_NoFilterMatchNoFire(t *testing.T) {
 	}
 }
 
+func TestServeWebhook_DisabledTriggerDoesNotFire(t *testing.T) {
+	s := newService()
+	st := webhookState(fleet.Trigger{
+		Name: "ci", Type: fleet.TriggerWebhook, AgentNames: []string{"a"},
+		WebhookName: "ci", FilterType: fleet.WebhookFilterRegex, Regex: ".*", Disabled: true,
+	})
+
+	// The body matches the filter, but the trigger is disabled: the name still
+	// exists (200, not 404) yet nothing fires.
+	w := postWebhook(t, s, st, "ci", `{"action":"opened"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a disabled trigger still exists); body=%q", w.Code, w.Body.String())
+	}
+	if b := drainBatch(s); b != nil {
+		t.Fatalf("a disabled trigger must not fire, got %+v", b)
+	}
+}
+
 func TestServeWebhook_UnknownName404(t *testing.T) {
 	s := newService()
 	st := webhookState(fleet.Trigger{

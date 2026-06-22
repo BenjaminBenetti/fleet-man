@@ -250,6 +250,10 @@ message Trigger {
   string regex = 8;
   string json_path = 9;
   string json_value = 10;
+  // disabled, when true, stops the trigger from firing (the scheduler skips it).
+  // proto3 default false means a missing field reads as enabled, so triggers
+  // written before this field existed keep firing.
+  bool disabled = 11;
 }
 
 // Fleet mirrors internal/fleet.Fleet. Settings is a NESTED message (not inlined)

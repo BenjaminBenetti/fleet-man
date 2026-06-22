@@ -482,6 +482,7 @@ func triggersToProto(in []fleet.Trigger) []*fleetgrpc.Trigger {
 			Regex:       t.Regex,
 			JsonPath:    t.JSONPath,
 			JsonValue:   t.JSONValue,
+			Disabled:    t.Disabled,
 		})
 	}
 	return out
@@ -504,6 +505,7 @@ func protoTriggersToLegacy(in []*fleetgrpc.Trigger) []fleet.Trigger {
 			Regex:       t.GetRegex(),
 			JSONPath:    t.GetJsonPath(),
 			JSONValue:   t.GetJsonValue(),
+			Disabled:    t.GetDisabled(),
 		})
 	}
 	return out

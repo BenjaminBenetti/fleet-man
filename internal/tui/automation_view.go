@@ -83,6 +83,8 @@ func (fleetPage *fleetPage) renderAutomationRow(m *model, r row, cursor string, 
 		style := sessionStyle
 		if isSelected {
 			style = selectedStyle
+		} else if t.Disabled {
+			style = dimStyle // a disabled trigger reads as inactive
 		}
 		return fmt.Sprintf("%s        %s%s", cursor, style.Render(t.Name), dimStyle.Render("  "+triggerSummary(*t)))
 
@@ -130,6 +132,9 @@ func triggerSummary(t fleet.Trigger) string {
 	if len(t.AgentNames) > 0 {
 		detail += "  →  " + strings.Join(t.AgentNames, ", ")
 	}
+	if t.Disabled {
+		detail += "  ·  disabled"
+	}
 	return detail
 }
 
@@ -174,6 +179,31 @@ func (fleetPage *fleetPage) persistAutomationSettings(m *model, fleetName string
 		return err
 	}
 	fleetPage.buildRows(m)
+	return nil
+}
+
+// toggleTriggerDisabled flips a trigger's enabled state from the list (the 's'
+// quick action) and persists. A defensive copy of the slice is mutated so the
+// optimistic-revert in persistAutomationSettings can restore the original.
+func (fleetPage *fleetPage) toggleTriggerDisabled(m *model, fleetName string, idx int) tea.Cmd {
+	f, ok := m.st.Fleets[fleetName]
+	if !ok || idx < 0 || idx >= len(f.Settings.Triggers) {
+		return nil
+	}
+	newSettings := f.Settings
+	newTriggers := append([]fleet.Trigger(nil), f.Settings.Triggers...)
+	newTriggers[idx].Disabled = !newTriggers[idx].Disabled
+	newSettings.Triggers = newTriggers
+	name, disabled := newTriggers[idx].Name, newTriggers[idx].Disabled
+	if err := fleetPage.persistAutomationSettings(m, fleetName, newSettings); err != nil {
+		m.message = fmt.Sprintf("Toggle failed: %v", err)
+		return nil
+	}
+	if disabled {
+		m.message = fmt.Sprintf("Disabled trigger %q", name)
+	} else {
+		m.message = fmt.Sprintf("Enabled trigger %q", name)
+	}
 	return nil
 }
 

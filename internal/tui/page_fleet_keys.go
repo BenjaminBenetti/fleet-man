@@ -170,6 +170,9 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 
 		case "s":
 			r := fleetPage.currentRow()
+			if r != nil && r.kind == rowTrigger {
+				return fleetPage.toggleTriggerDisabled(m, r.fleetName, r.autoIdx)
+			}
 			if r == nil || r.kind != rowInstance || r.instance == nil {
 				m.message = "Select an instance"
 				break
@@ -760,13 +763,14 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 			"j/k: navigate", "space/enter: expand/collapse", "a: add " + noun, "m: instances", "q: quit",
 		})
 
-	case rowTrigger, rowAgent:
-		noun := "trigger"
-		if r.kind == rowAgent {
-			noun = "agent"
-		}
+	case rowTrigger:
 		return withArmadaHint([]string{
-			"j/k: navigate", "enter/e: edit", "a: add " + noun, "d: delete", "m: instances", "q: quit",
+			"j/k: navigate", "enter/e: edit", "s: enable/disable", "a: add trigger", "d: delete", "m: instances", "q: quit",
+		})
+
+	case rowAgent:
+		return withArmadaHint([]string{
+			"j/k: navigate", "enter/e: edit", "a: add agent", "d: delete", "m: instances", "q: quit",
 		})
 
 	case rowNewTrigger, rowNewAgent:

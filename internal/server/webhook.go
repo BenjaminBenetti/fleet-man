@@ -112,6 +112,9 @@ func collectWebhookFires(st *state.State, name string, body []byte) (fires []web
 				continue
 			}
 			nameFound = true
+			if t.Disabled {
+				continue // a disabled trigger still exists (200, not 404) but never fires
+			}
 			if t.MatchesWebhook(body) {
 				fires = append(fires, webhookFire{fleet: fleetName, trigger: t})
 			}

@@ -22,6 +22,7 @@ import (
 const (
 	trigRowName = iota
 	trigRowType
+	trigRowEnabled
 	trigRowPrompt
 	trigRowCron
 	trigRowWebhookName
@@ -45,6 +46,7 @@ type automationTriggerState struct {
 
 	name        string
 	triggerType fleet.TriggerType
+	disabled    bool            // mirrors Trigger.Disabled; shown as an "Enabled" toggle
 	agentSel    map[string]bool // agent name -> activated by this trigger
 	prompt      string
 	cron        string
@@ -100,6 +102,7 @@ func (fleetPage *fleetPage) openEditTriggerDialog(m *model, fleetName string, id
 		input:       fleetPage.triggerDlg.input,
 		name:        t.Name,
 		triggerType: triggerType,
+		disabled:    t.Disabled,
 		agentSel:    sel,
 		prompt:      t.Prompt,
 		cron:        t.Cron,
@@ -116,7 +119,7 @@ func (fleetPage *fleetPage) openEditTriggerDialog(m *model, fleetName string, id
 // visibleTriggerRows is the ordered list of currently-applicable field ids.
 func (fleetPage *fleetPage) visibleTriggerRows(m *model) []int {
 	st := &fleetPage.triggerDlg
-	rows := []int{trigRowName, trigRowType}
+	rows := []int{trigRowName, trigRowType, trigRowEnabled}
 	for i := range fleetAgents(m, st.fleetName) {
 		rows = append(rows, trigRowAgentBase+i)
 	}
@@ -221,6 +224,8 @@ func (fleetPage *fleetPage) triggerRowEnter(m *model) tea.Cmd {
 		return fleetPage.activateTriggerField()
 	case st.row == trigRowType:
 		fleetPage.cycleTriggerType()
+	case st.row == trigRowEnabled:
+		fleetPage.toggleTriggerEnabled()
 	case st.row == trigRowFilterType:
 		fleetPage.cycleFilterType()
 	case st.row == trigRowWebhookURL:
@@ -288,6 +293,9 @@ func (fleetPage *fleetPage) triggerRowToggle(m *model) tea.Cmd {
 	case st.row == trigRowType:
 		fleetPage.cycleTriggerType()
 		return nil
+	case st.row == trigRowEnabled:
+		fleetPage.toggleTriggerEnabled()
+		return nil
 	case st.row == trigRowFilterType:
 		fleetPage.cycleFilterType()
 		return nil
@@ -302,9 +310,16 @@ func (fleetPage *fleetPage) triggerRowCycle() {
 	switch st.row {
 	case trigRowType:
 		fleetPage.cycleTriggerType()
+	case trigRowEnabled:
+		fleetPage.toggleTriggerEnabled()
 	case trigRowFilterType:
 		fleetPage.cycleFilterType()
 	}
+}
+
+func (fleetPage *fleetPage) toggleTriggerEnabled() {
+	st := &fleetPage.triggerDlg
+	st.disabled = !st.disabled
 }
 
 func (fleetPage *fleetPage) cycleTriggerType() {
@@ -425,6 +440,7 @@ func (fleetPage *fleetPage) saveAutomationTrigger(m *model) tea.Cmd {
 	candidate := fleet.Trigger{
 		Name:        st.name,
 		Type:        st.triggerType,
+		Disabled:    st.disabled,
 		AgentNames:  selected,
 		Prompt:      st.prompt,
 		Cron:        st.cron,
@@ -490,6 +506,7 @@ func (fleetPage *fleetPage) renderAutomationTriggerDialog(m *model) string {
 	fmt.Fprintf(&body, "%s\n\n", dialogTitle.Render(title))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowName), dialogLabel.Render("Name:   "), field(trigRowName, st.name, "trigger-name"))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowType), dialogLabel.Render("Type:   "), selectorLabel(triggerTypeLabel(st.triggerType)))
+	fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowEnabled), dialogLabel.Render("Enabled:"), selectorLabel(enabledLabel(st.disabled)))
 
 	// Agents multi-select.
 	body.WriteString(dialogLabel.Render("Agents: "))
@@ -541,6 +558,15 @@ func triggerTypeLabel(t fleet.TriggerType) string {
 		return "Webhook"
 	}
 	return "Schedule"
+}
+
+// enabledLabel renders the inverse of Trigger.Disabled — the dialog presents the
+// state as "Enabled" because that is how users think about it.
+func enabledLabel(disabled bool) string {
+	if disabled {
+		return "no"
+	}
+	return "yes"
 }
 
 func filterTypeLabel(f fleet.WebhookFilterType) string {

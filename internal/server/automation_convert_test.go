@@ -55,6 +55,7 @@ func TestFleetSettingsAutomationRoundTrip(t *testing.T) {
 				FilterType:  fleet.WebhookFilterJSONPath,
 				JSONPath:    "$.ref",
 				JSONValue:   "refs/heads/main",
+				Disabled:    true,
 			},
 		},
 	}

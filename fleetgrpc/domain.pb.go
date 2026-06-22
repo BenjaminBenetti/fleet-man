@@ -700,17 +700,21 @@ func (x *Agent) GetBackend() BackendType {
 // fields. agent_names references Agents by name. The string-valued enums match
 // the Go model's string types, so the wire mapping is a plain string copy.
 type Trigger struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Type          string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
-	AgentNames    []string               `protobuf:"bytes,3,rep,name=agent_names,json=agentNames,proto3" json:"agent_names,omitempty"`
-	Prompt        string                 `protobuf:"bytes,4,opt,name=prompt,proto3" json:"prompt,omitempty"`
-	Cron          string                 `protobuf:"bytes,5,opt,name=cron,proto3" json:"cron,omitempty"`
-	WebhookName   string                 `protobuf:"bytes,6,opt,name=webhook_name,json=webhookName,proto3" json:"webhook_name,omitempty"`
-	FilterType    string                 `protobuf:"bytes,7,opt,name=filter_type,json=filterType,proto3" json:"filter_type,omitempty"`
-	Regex         string                 `protobuf:"bytes,8,opt,name=regex,proto3" json:"regex,omitempty"`
-	JsonPath      string                 `protobuf:"bytes,9,opt,name=json_path,json=jsonPath,proto3" json:"json_path,omitempty"`
-	JsonValue     string                 `protobuf:"bytes,10,opt,name=json_value,json=jsonValue,proto3" json:"json_value,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Type        string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
+	AgentNames  []string               `protobuf:"bytes,3,rep,name=agent_names,json=agentNames,proto3" json:"agent_names,omitempty"`
+	Prompt      string                 `protobuf:"bytes,4,opt,name=prompt,proto3" json:"prompt,omitempty"`
+	Cron        string                 `protobuf:"bytes,5,opt,name=cron,proto3" json:"cron,omitempty"`
+	WebhookName string                 `protobuf:"bytes,6,opt,name=webhook_name,json=webhookName,proto3" json:"webhook_name,omitempty"`
+	FilterType  string                 `protobuf:"bytes,7,opt,name=filter_type,json=filterType,proto3" json:"filter_type,omitempty"`
+	Regex       string                 `protobuf:"bytes,8,opt,name=regex,proto3" json:"regex,omitempty"`
+	JsonPath    string                 `protobuf:"bytes,9,opt,name=json_path,json=jsonPath,proto3" json:"json_path,omitempty"`
+	JsonValue   string                 `protobuf:"bytes,10,opt,name=json_value,json=jsonValue,proto3" json:"json_value,omitempty"`
+	// disabled, when true, stops the trigger from firing (the scheduler skips it).
+	// proto3 default false means a missing field reads as enabled, so triggers
+	// written before this field existed keep firing.
+	Disabled      bool `protobuf:"varint,11,opt,name=disabled,proto3" json:"disabled,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -813,6 +817,13 @@ func (x *Trigger) GetJsonValue() string {
 		return x.JsonValue
 	}
 	return ""
+}
+
+func (x *Trigger) GetDisabled() bool {
+	if x != nil {
+		return x.Disabled
+	}
+	return false
 }
 
 // Fleet mirrors internal/fleet.Fleet. Settings is a NESTED message (not inlined)
@@ -1086,7 +1097,7 @@ const file_domain_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12#\n" +
 	"\rsystem_prompt\x18\x04 \x01(\tR\fsystemPrompt\x120\n" +
-	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackendJ\x04\b\x03\x10\x04\"\x94\x02\n" +
+	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackendJ\x04\b\x03\x10\x04\"\xb0\x02\n" +
 	"\aTrigger\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1f\n" +
@@ -1101,7 +1112,8 @@ const file_domain_proto_rawDesc = "" +
 	"\tjson_path\x18\t \x01(\tR\bjsonPath\x12\x1d\n" +
 	"\n" +
 	"json_value\x18\n" +
-	" \x01(\tR\tjsonValue\"\xa2\x01\n" +
+	" \x01(\tR\tjsonValue\x12\x1a\n" +
+	"\bdisabled\x18\v \x01(\bR\bdisabled\"\xa2\x01\n" +
 	"\x05Fleet\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06remote\x18\x02 \x01(\tR\x06remote\x124\n" +
