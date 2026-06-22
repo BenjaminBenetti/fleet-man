@@ -114,6 +114,36 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 		Name:        "fleet_session_list",
 		Description: "List the tmux sessions inside a running instance (name, window count, creation time, attached). Returns an empty list when the instance has no sessions.",
 	}, s.mcpSessionList)
+
+	// --- automation (agents & triggers) ---
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_automation_list",
+		Description: "Read a fleet's automation config: its agents (automation workers) and triggers (what fires them). Returns {agents, triggers}.",
+	}, s.mcpAutomationList)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_agent_create",
+		Description: "Create an automation agent in a fleet: a worker definition (launch command, system prompt, env backend) that triggers activate. Returns the fleet's resulting automation config.",
+	}, s.mcpAgentCreate)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_agent_update",
+		Description: "Update an existing automation agent. Only the fields you pass change (omit one to keep its current value); use new_name to rename (trigger references follow). Returns the resulting automation config.",
+	}, s.mcpAgentUpdate)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_agent_delete",
+		Description: "Delete an automation agent. Fails if a trigger still references it — detach it from that trigger first. Returns the resulting automation config.",
+	}, s.mcpAgentDelete)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_trigger_create",
+		Description: "Create an automation trigger in a fleet: it activates one or more agents (with a prompt) on a cron schedule or a gateway webhook event. Returns the fleet's resulting automation config.",
+	}, s.mcpTriggerCreate)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_trigger_update",
+		Description: "Update an existing automation trigger. Only the fields you pass change (omit one to keep its current value); use new_name to rename. Returns the resulting automation config.",
+	}, s.mcpTriggerUpdate)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_trigger_delete",
+		Description: "Delete an automation trigger. Returns the fleet's resulting automation config.",
+	}, s.mcpTriggerDelete)
 }
 
 // --- shared shapes ---

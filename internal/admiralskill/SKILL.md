@@ -131,6 +131,31 @@ short name with these tools (they all resolve it the same way);
 To put an agent to work, spawn a session, exec the agent's launch command with
 the task as its prompt, then read the session to see what it's doing or asking.
 
+**Configure automations.** A fleet can run unattended: **agents** are worker
+definitions (a launch command with `${PROMPT}`/`${SYS_PROMPT}` placeholders, a
+system prompt, an env backend) and **triggers** fire one or more agents — on a
+cron **schedule** or a gateway **webhook** event — each firing spins up a fresh
+instance that runs the agent. These tools let you set that up for the user.
+
+- `fleet_automation_list {fleet}` returns the fleet's `{agents, triggers}`.
+  Read it first before an update — updates are field-merges, so you send only
+  what changes.
+- `fleet_agent_create {fleet, name, command?, system_prompt?, backend?}` and
+  `fleet_agent_update {fleet, name, new_name?, command?, system_prompt?,
+  backend?}` (omit a field to keep it; `new_name` renames and rewrites the
+  triggers that reference it). `fleet_agent_delete {fleet, name}` refuses while
+  a trigger still references the agent — detach it first.
+- `fleet_trigger_create {fleet, name, type, agents[], prompt?, ...}` where
+  `type` is `schedule` (needs `cron`) or `webhook` (needs `webhook_name` +
+  `filter_type` `regex`/`jsonpath` and the matching `regex` or
+  `json_path`+`json_value`); `agents` names the agents it fires (each must
+  exist). `fleet_trigger_update` merges fields like the agent one;
+  `fleet_trigger_delete {fleet, name}` removes it.
+
+Every write returns the fleet's resulting `{agents, triggers}`. Names are
+unique per fleet; an invalid cron, an unknown agent reference, or a duplicate
+name comes back as a tool error.
+
 ## Behaviors worth knowing
 
 - An instance must be `running` to exec into it or use its sessions;
@@ -182,4 +207,13 @@ SESSIONS  (interact with an agent / long-lived process in an instance)
   fleet_session_exec {fleet, instance, session, command: "shell string"}
   fleet_session_read {fleet, instance, session, scrollback?}   # 0 screen, N last N, <0 all
   fleet_session_list {fleet, instance}
+
+AUTOMATION  (unattended agents fired by triggers; every write returns {agents, triggers})
+  fleet_automation_list {fleet}                                # read agents + triggers
+  fleet_agent_create {fleet, name, command?, system_prompt?, backend?}
+  fleet_agent_update {fleet, name, new_name?, command?, system_prompt?, backend?}   # omit a field to keep it
+  fleet_agent_delete {fleet, name}                             # fails if a trigger references it
+  fleet_trigger_create {fleet, name, type, agents:[...], prompt?, cron? | webhook_name?+filter_type?+regex?|json_path?+json_value?}
+  fleet_trigger_update {fleet, name, new_name?, type?, agents?, ...}                 # omit a field to keep it
+  fleet_trigger_delete {fleet, name}
 ```

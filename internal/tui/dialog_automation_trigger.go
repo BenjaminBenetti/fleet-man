@@ -435,37 +435,27 @@ func (fleetPage *fleetPage) saveAutomationTrigger(m *model) tea.Cmd {
 		JSONValue:   st.jsonValue,
 	}
 
-	agentNames := make(map[string]struct{}, len(f.Settings.Agents))
-	for _, a := range f.Settings.Agents {
-		agentNames[a.Name] = struct{}{}
+	// fleet.AddTrigger/UpdateTrigger own the shared invariants (normalize
+	// against the fleet's agents and reject a duplicate name).
+	var newSettings fleet.FleetSettings
+	var err error
+	if st.editIdx >= 0 && st.editIdx < len(f.Settings.Triggers) {
+		oldName := f.Settings.Triggers[st.editIdx].Name
+		newSettings, err = fleet.UpdateTrigger(f.Settings, oldName, candidate)
+	} else {
+		newSettings, err = fleet.AddTrigger(f.Settings, candidate)
 	}
-	norm, err := fleet.NormalizeTrigger(candidate, agentNames)
 	if err != nil {
 		st.errMsg = err.Error()
 		return nil
 	}
-	for i, t := range f.Settings.Triggers {
-		if i != st.editIdx && t.Name == norm.Name {
-			st.errMsg = fmt.Sprintf("trigger %q already exists", norm.Name)
-			return nil
-		}
-	}
-
-	newSettings := f.Settings
-	newTriggers := append([]fleet.Trigger(nil), f.Settings.Triggers...)
-	if st.editIdx >= 0 && st.editIdx < len(newTriggers) {
-		newTriggers[st.editIdx] = norm
-	} else {
-		newTriggers = append(newTriggers, norm)
-	}
-	newSettings.Triggers = newTriggers
 
 	if err := fleetPage.persistAutomationSettings(m, st.fleetName, newSettings); err != nil {
 		st.errMsg = err.Error()
 		return nil
 	}
 	fleetPage.mode = viewNormal
-	m.message = fmt.Sprintf("Saved trigger %q", norm.Name)
+	m.message = fmt.Sprintf("Saved trigger %q", strings.TrimSpace(candidate.Name))
 	return nil
 }
 
