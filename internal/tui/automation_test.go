@@ -192,10 +192,133 @@ func TestEditTriggerPreservesDisabled(t *testing.T) {
 	// The dialog's Enabled toggle flips it back on.
 	fp.openEditTriggerDialog(m, "alpha", 0)
 	fp.triggerDlg.row = trigRowEnabled
-	fp.toggleTriggerEnabled()
+	fp.toggleTriggerEnabled(m)
 	fp.saveAutomationTrigger(m)
 	if m.st.Fleets["alpha"].Settings.Triggers[0].Disabled {
 		t.Fatal("toggling Enabled in the dialog should re-enable the trigger")
+	}
+}
+
+// --- Instant-save: editing an existing agent/trigger persists on every change,
+// with no Save row; creating a new one still needs an explicit Save. ---
+
+func seedTrigger(m *model) *fleet.Fleet {
+	f := m.st.Fleets["alpha"]
+	f.Settings.Agents = []fleet.Agent{{Name: "a", Backend: fleet.BackendDevcontainer}}
+	f.Settings.Triggers = []fleet.Trigger{{Name: "nightly", Type: fleet.TriggerSchedule, AgentNames: []string{"a"}, Cron: "0 0 * * *"}}
+	return f
+}
+
+// TestTriggerSaveRowOnlyWhenCreating: the Save row exists for a new trigger and
+// is gone when editing (instant-save).
+func TestTriggerSaveRowOnlyWhenCreating(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	seedTrigger(m)
+
+	fp.openAddTriggerDialog(m, "alpha")
+	if !slices.Contains(fp.visibleTriggerRows(m), trigRowSave) {
+		t.Fatal("a new trigger must offer a Save row")
+	}
+	fp.openEditTriggerDialog(m, "alpha", 0)
+	if slices.Contains(fp.visibleTriggerRows(m), trigRowSave) {
+		t.Fatal("editing instant-saves; there must be no Save row")
+	}
+}
+
+// TestEditTriggerInstantSavesOnToggle: flipping Enabled while editing persists
+// immediately, without an explicit save, and leaves the dialog open.
+func TestEditTriggerInstantSavesOnToggle(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	seedTrigger(m)
+
+	fp.openEditTriggerDialog(m, "alpha", 0)
+	fp.triggerDlg.row = trigRowEnabled
+	fp.updateAutomationTrigger(m, tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+
+	if !m.st.Fleets["alpha"].Settings.Triggers[0].Disabled {
+		t.Fatal("toggling Enabled should instant-save Disabled=true")
+	}
+	if fp.mode != viewAutomationTrigger {
+		t.Fatal("dialog should stay open after an instant-save toggle")
+	}
+}
+
+// TestEditTriggerInstantSavesFieldCommit: committing an inline text edit (enter)
+// persists immediately even though there is no Save row.
+func TestEditTriggerInstantSavesFieldCommit(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	seedTrigger(m)
+
+	fp.openEditTriggerDialog(m, "alpha", 0)
+	fp.triggerDlg.row = trigRowName
+	fp.updateAutomationTrigger(m, tea.KeyMsg{Type: tea.KeyEnter}) // activate field
+	fp.triggerDlg.input.SetValue("renamed")
+	fp.updateAutomationTrigger(m, tea.KeyMsg{Type: tea.KeyEnter}) // commit → instant-save
+
+	if got := m.st.Fleets["alpha"].Settings.Triggers[0].Name; got != "renamed" {
+		t.Fatalf("name not instant-saved: %q", got)
+	}
+}
+
+// TestEditTriggerAutosaveValidationKeepsLastGood: an edit that fails validation
+// (here, an empty name) surfaces an error and never persists, so the last good
+// state survives.
+func TestEditTriggerAutosaveValidationKeepsLastGood(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	seedTrigger(m)
+
+	fp.openEditTriggerDialog(m, "alpha", 0)
+	fp.triggerDlg.name = ""
+	fp.autosaveTrigger(m)
+
+	if fp.triggerDlg.errMsg == "" {
+		t.Fatal("clearing the name should surface a validation error")
+	}
+	if got := m.st.Fleets["alpha"].Settings.Triggers[0].Name; got != "nightly" {
+		t.Fatalf("invalid edit must not persist; name = %q, want nightly", got)
+	}
+}
+
+// TestAgentSaveRowOnlyWhenCreating: the agent dialog shows a Save button (and
+// counts it as a navigable row) only when creating; editing instant-saves.
+func TestAgentSaveRowOnlyWhenCreating(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	m.st.Fleets["alpha"].Settings.Agents = []fleet.Agent{{Name: "builder", Command: "echo hi", Backend: fleet.BackendDevcontainer}}
+
+	fp.openAddAgentDialog(m, "alpha")
+	if fp.agentDlg.rowCount() != agentRowCount {
+		t.Fatalf("new agent rowCount = %d, want %d", fp.agentDlg.rowCount(), agentRowCount)
+	}
+	if !strings.Contains(fp.renderAutomationAgentDialog(m), "[ Save ]") {
+		t.Fatal("a new agent must show the Save button")
+	}
+
+	fp.openEditAgentDialog(m, "alpha", 0)
+	if fp.agentDlg.rowCount() != agentRowSave {
+		t.Fatalf("edit agent rowCount = %d, want %d (Save excluded)", fp.agentDlg.rowCount(), agentRowSave)
+	}
+	if strings.Contains(fp.renderAutomationAgentDialog(m), "[ Save ]") {
+		t.Fatal("editing instant-saves; the Save button must be gone")
+	}
+}
+
+// TestEditAgentInstantSavesFieldCommit: committing an inline command edit while
+// editing an agent persists immediately and keeps the dialog open.
+func TestEditAgentInstantSavesFieldCommit(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	m.st.Fleets["alpha"].Settings.Agents = []fleet.Agent{{Name: "builder", Command: "echo hi", Backend: fleet.BackendDevcontainer}}
+
+	fp.openEditAgentDialog(m, "alpha", 0)
+	fp.agentDlg.row = agentRowCommand
+	fp.updateAutomationAgent(m, tea.KeyMsg{Type: tea.KeyEnter}) // activate field
+	fp.agentDlg.input.SetValue("echo bye")
+	fp.updateAutomationAgent(m, tea.KeyMsg{Type: tea.KeyEnter}) // commit → instant-save
+
+	if got := m.st.Fleets["alpha"].Settings.Agents[0].Command; got != "echo bye" {
+		t.Fatalf("command not instant-saved: %q", got)
+	}
+	if fp.mode != viewAutomationAgent {
+		t.Fatal("dialog should stay open after an instant-save edit")
 	}
 }
 
