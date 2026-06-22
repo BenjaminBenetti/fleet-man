@@ -188,7 +188,9 @@ func (fleetPage *fleetPage) updateAutomationTrigger(m *model, msg tea.Msg) tea.C
 		return nil
 	}
 
-	if isDialogTextKey(key) && isTriggerTextRow(st.row) {
+	// A printable key activates an inline text field and feeds the key. The
+	// editor-backed prompt is excluded — it opens $EDITOR on enter instead.
+	if isDialogTextKey(key) && isTriggerTextRow(st.row) && st.row != trigRowPrompt {
 		blink := fleetPage.activateTriggerField()
 		var cmd tea.Cmd
 		st.input, cmd = st.input.Update(msg)
@@ -210,6 +212,9 @@ func isTriggerTextRow(row int) bool {
 func (fleetPage *fleetPage) triggerRowEnter(m *model) tea.Cmd {
 	st := &fleetPage.triggerDlg
 	switch {
+	case st.row == trigRowPrompt:
+		// The prompt is often many lines — edit it in $EDITOR, not inline.
+		return editorCmd(editorTargetTriggerPrompt, "prompt", st.prompt)
 	case isTriggerTextRow(st.row):
 		return fleetPage.activateTriggerField()
 	case st.row == trigRowType:
@@ -462,7 +467,7 @@ func (fleetPage *fleetPage) renderAutomationTriggerDialog(m *model) string {
 		fmt.Fprintf(&body, "%s    %s %s\n", marker(trigRowAgentBase+i), box, a.Name)
 	}
 
-	fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowPrompt), dialogLabel.Render("Prompt: "), field(trigRowPrompt, st.prompt, "(fed to the agent via ${PROMPT})"))
+	fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowPrompt), dialogLabel.Render("Prompt: "), promptFieldPreview(st.prompt, "(fed to the agent via ${PROMPT})"))
 
 	if st.triggerType == fleet.TriggerWebhook {
 		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowWebhookName), dialogLabel.Render("Webhook:"), field(trigRowWebhookName, st.webhookName, "name (appended to gateway URL)"))
@@ -509,6 +514,9 @@ func filterTypeLabel(f fleet.WebhookFilterType) string {
 func automationTriggerHint(fieldActive bool, row int) string {
 	if fieldActive {
 		return "[enter] Done editing  [ctrl+c] Cancel"
+	}
+	if row == trigRowPrompt {
+		return "[enter] Edit in $EDITOR  [j/k] Move  [q/esc] Cancel"
 	}
 	if row >= trigRowAgentBase {
 		return "[j/k] Move  [space] Toggle agent  [enter] Edit/Cycle  [q/esc] Cancel"

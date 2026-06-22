@@ -139,7 +139,10 @@ func (fleetPage *fleetPage) updateAutomationAgent(m *model, msg tea.Msg) tea.Cmd
 		return nil
 	}
 
-	if isDialogTextKey(key) && agentRowIsText(st.row) {
+	// A printable key activates an inline text field and feeds the key. The
+	// editor-backed system prompt is excluded — it opens $EDITOR on enter instead
+	// (inline typing makes no sense for many-line text).
+	if isDialogTextKey(key) && agentRowIsText(st.row) && st.row != agentRowSystemPrompt {
 		blink := fleetPage.activateAgentField()
 		var cmd tea.Cmd
 		st.input, cmd = st.input.Update(msg)
@@ -155,8 +158,11 @@ func agentRowIsText(row int) bool {
 func (fleetPage *fleetPage) agentRowEnter(m *model) tea.Cmd {
 	st := &fleetPage.agentDlg
 	switch st.row {
-	case agentRowName, agentRowCommand, agentRowSystemPrompt:
+	case agentRowName, agentRowCommand:
 		return fleetPage.activateAgentField()
+	case agentRowSystemPrompt:
+		// The system prompt is often many lines — edit it in $EDITOR, not inline.
+		return editorCmd(editorTargetAgentSysPrompt, "sysprompt", st.systemPrompt)
 	case agentRowBackend:
 		st.backend = nextBackendType(st.backend, 1, allBackendTypes)
 	case agentRowSave:
@@ -313,7 +319,7 @@ func (fleetPage *fleetPage) renderAutomationAgentDialog(m *model) string {
 	fmt.Fprintf(&body, "%s\n\n", dialogTitle.Render(title))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowName), dialogLabel.Render("Name:    "), field(agentRowName, st.name, "agent-name"))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowCommand), dialogLabel.Render("Command: "), field(agentRowCommand, st.command, fleet.DefaultAgentCommand))
-	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowSystemPrompt), dialogLabel.Render("Sys prompt:"), field(agentRowSystemPrompt, st.systemPrompt, "(optional, injected into ${SYS_PROMPT})"))
+	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowSystemPrompt), dialogLabel.Render("Sys prompt:"), promptFieldPreview(st.systemPrompt, "(optional, injected into ${SYS_PROMPT})"))
 	fmt.Fprintf(&body, "%s%s [ %s ]\n", marker(agentRowBackend), dialogLabel.Render("Backend: "), backendTypeLabel(st.backend))
 	fmt.Fprintf(&body, "%s%s\n", marker(agentRowSave), saveButtonLabel(st.row == agentRowSave))
 
@@ -321,7 +327,7 @@ func (fleetPage *fleetPage) renderAutomationAgentDialog(m *model) string {
 		fmt.Fprintf(&body, "\n%s\n", errorStyle.Render(st.errMsg))
 	}
 	body.WriteString("\n")
-	body.WriteString(dialogHint.Render(automationHint(st.fieldActive)))
+	body.WriteString(dialogHint.Render(automationHint(st.fieldActive, st.row == agentRowSystemPrompt)))
 
 	b.WriteString(dialogBox.Render(body.String()))
 	b.WriteString("\n")
@@ -337,9 +343,13 @@ func saveButtonLabel(selected bool) string {
 }
 
 // automationHint is the footer hint shared by the automation dialogs.
-func automationHint(fieldActive bool) string {
+// onEditorField promotes the "$EDITOR" affordance for the long free-text fields.
+func automationHint(fieldActive, onEditorField bool) string {
 	if fieldActive {
 		return "[enter] Done editing  [ctrl+c] Cancel"
+	}
+	if onEditorField {
+		return "[enter] Edit in $EDITOR  [j/k] Move  [q/esc] Cancel"
 	}
 	return "[j/k] Move  [enter] Edit/Toggle  [h/l] Cycle  [q/esc] Cancel"
 }

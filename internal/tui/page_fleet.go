@@ -41,11 +41,13 @@ type fleetPage struct {
 	choosePR   choosePRState      // multi-PR chooser (open which PR?)
 	lpFlow     *layoutPresetFlow  // open preset creation/edit flow (nil unless mode == viewLayoutPreset)
 
-	// tagSelected is true when the cursor's instance has its auto-tag (PR status)
-	// horizontally selected — →/l selects it (drawn pink in [ ]), ←/h deselects,
-	// enter opens the PR. Meaningful only while the cursor is on an instance row
-	// whose auto-tag is navigable; cleared on any vertical cursor move.
-	tagSelected bool
+	// rightSelected is true when the cursor row's right-hand element is
+	// horizontally selected — →/l selects it (drawn pink), ←/h deselects, enter
+	// activates it. Two row kinds carry such an element: an instance's PR-status
+	// auto tag (enter opens the PR) and a fleet header's ⟳/☰
+	// mode toggle (enter flips automation mode). Cleared on any vertical cursor
+	// move. See currentRowHasRightElement / activateRightSelection.
+	rightSelected bool
 
 	textInput        textinput.Model
 	branchInput      textinput.Model
@@ -74,6 +76,7 @@ type fleetPage struct {
 	autoCollapsed map[string]bool
 	triggerDlg    automationTriggerState // add/edit-trigger dialog
 	agentDlg      automationAgentState   // add/edit-agent dialog
+	autoDel       autoDeleteState        // pending trigger/agent delete (viewConfirmDeleteAutomation)
 }
 
 // newFleetPage creates a new fleet page with default state.
@@ -124,6 +127,9 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 	// runtimeChangedMsg handler in the model-level Update now — the server pushes
 	// session changes on the runtime stream, replacing the old client poll.)
 	switch msg.(type) {
+	case editorFinishedMsg:
+		return fleetPage.applyEditorResult(m, msg.(editorFinishedMsg))
+
 	case operationDoneMsg:
 		fleetPage.buildRows(m)
 		return nil
@@ -217,6 +223,8 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.updateAutomationTrigger(m, msg)
 	case viewAutomationAgent:
 		return fleetPage.updateAutomationAgent(m, msg)
+	case viewConfirmDeleteAutomation:
+		return fleetPage.updateConfirmDeleteAutomation(m, msg)
 	case viewLayoutPreset:
 		return fleetPage.updateLayoutPreset(m, msg)
 	case viewRenameSession:

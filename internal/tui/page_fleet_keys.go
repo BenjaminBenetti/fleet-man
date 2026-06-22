@@ -76,7 +76,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 		case "up", "k":
 			// Up from the top row focuses the Armada selector (one stop above
 			// the list); otherwise move within the rows.
-			fleetPage.tagSelected = false
+			fleetPage.rightSelected = false
 			if fleetPage.cursor == fleetPage.firstSelectable() {
 				fleetPage.armadaSel.focused = true
 			} else {
@@ -85,7 +85,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 
 		case "down", "j":
 			// Down from the bottom row wraps up to the Armada selector.
-			fleetPage.tagSelected = false
+			fleetPage.rightSelected = false
 			if fleetPage.cursor == fleetPage.lastSelectable() {
 				fleetPage.armadaSel.focused = true
 			} else {
@@ -98,19 +98,20 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			return fleetPage.openArmadaSelect(m)
 
 		case "shift+up", "K":
-			fleetPage.tagSelected = false
+			fleetPage.rightSelected = false
 			fleetPage.moveCursorToInstance(-1)
 
 		case "shift+down", "J":
-			fleetPage.tagSelected = false
+			fleetPage.rightSelected = false
 			fleetPage.moveCursorToInstance(1)
 
 		case " ", "tab":
-			// In the PR-selection sub-mode the cursor sits on a child row whose
-			// normal space/tab action would connect/create a session; intercept it
-			// to open the PR, matching enter and the focused help text.
-			if fleetPage.tagSelected {
-				return fleetPage.openSelectedPR(m)
+			// When a right-hand element is selected the cursor's normal space/tab
+			// action (connect/create a session, expand/collapse a header) is
+			// intercepted to activate that element instead — matching enter and the
+			// focused help text.
+			if fleetPage.rightSelected {
+				return fleetPage.activateRightSelection(m)
 			}
 			if r := fleetPage.currentRow(); r != nil {
 				switch r.kind {
@@ -205,11 +206,8 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			if r == nil || r.kind == rowSettings || r.kind == rowLeaveFocus || r.kind == rowNewSession {
 				break
 			}
-			if r.kind == rowTrigger {
-				return fleetPage.deleteTrigger(m, r.fleetName, r.autoIdx)
-			}
-			if r.kind == rowAgent {
-				return fleetPage.deleteAgent(m, r.fleetName, r.autoIdx)
+			if r.kind == rowTrigger || r.kind == rowAgent {
+				return fleetPage.openConfirmDeleteAutomation(m, r)
 			}
 			if r.kind == rowAutomationTriggers || r.kind == rowAutomationAgents || r.kind == rowNewTrigger || r.kind == rowNewAgent {
 				break
@@ -237,6 +235,15 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			if r == nil {
 				m.message = "No fleet selected"
 				break
+			}
+			// In a fleet's automation view, 'a' adds a trigger or an agent
+			// (depending on which group the cursor sits in) rather than an
+			// instance, which would make no sense here.
+			if kind, ok := fleetPage.automationAddTarget(r); ok {
+				if kind == rowAgent {
+					return fleetPage.openAddAgentDialog(m, r.fleetName)
+				}
+				return fleetPage.openAddTriggerDialog(m, r.fleetName)
 			}
 			if r.kind == rowInstance || r.kind == rowSession || r.kind == rowNewSession {
 				instance := r.instance
@@ -297,10 +304,11 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			}
 
 		case "enter":
-			// A selected auto tag intercepts enter to open the PR; otherwise the
-			// row's normal action runs.
-			if fleetPage.tagSelected {
-				return fleetPage.openSelectedPR(m)
+			// A selected right-hand element intercepts enter to activate itself
+			// (open the PR, or flip the mode toggle); otherwise the row's normal
+			// action runs.
+			if fleetPage.rightSelected {
+				return fleetPage.activateRightSelection(m)
 			}
 			return fleetPage.handleEnter(m)
 
@@ -444,15 +452,16 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			return nil
 
 		case "right", "l":
-			// Select the inline PR status on the current row (the auto tag rides
-			// the first child row of an expanded instance) so enter opens the PR.
-			// No-op when the cursor isn't on a row carrying a navigable PR status.
-			if len(fleetPage.selectedInlinePR(m)) > 0 {
-				fleetPage.tagSelected = true
+			// Select the current row's right-hand element — a fleet header's
+			// ⟳/☰ mode toggle, or an expanded instance's
+			// inline PR status — so enter activates it. No-op on rows that carry
+			// no such element.
+			if fleetPage.currentRowHasRightElement(m) {
+				fleetPage.rightSelected = true
 			}
 
 		case "left", "h":
-			fleetPage.tagSelected = false
+			fleetPage.rightSelected = false
 
 		case "L":
 			_, instance := fleetPage.selectedInstance(m)
@@ -673,6 +682,23 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 	return nil
 }
 
+// activateRightSelection runs the action of the selected right-hand element on
+// the cursor row: flipping automation mode on a fleet header (keeping the toggle
+// focused so enter flips back), or opening the PR on a PR-carrying child row.
+// Mirrors the row-kind split in currentRowHasRightElement.
+func (fleetPage *fleetPage) activateRightSelection(m *model) tea.Cmd {
+	r := fleetPage.currentRow()
+	if r == nil {
+		return nil
+	}
+	if r.kind == rowFleetHeader {
+		fleetPage.toggleAutomationMode(m, r.fleetName)
+		fleetPage.rightSelected = true // keep the toggle focused for repeat flips
+		return nil
+	}
+	return fleetPage.openSelectedPR(m)
+}
+
 // ===========================================
 // Help Keys
 // ===========================================
@@ -698,32 +724,49 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 		return withArmadaHint([]string{"n: new fleet", "q: quit"})
 	}
 
-	// A selected inline PR status puts the row in a focused sub-mode (the cursor
-	// always sits on the PR-carrying child row while selected): only the
-	// PR-navigation keys apply.
-	if fleetPage.tagSelected {
+	// A selected right-hand element puts the row in a focused sub-mode: only the
+	// activate/deselect keys apply. The two such elements are a fleet header's
+	// mode toggle and an instance's inline PR status.
+	if fleetPage.rightSelected {
+		if r.kind == rowFleetHeader {
+			action := "enter: automations"
+			if fleetPage.automationMode[r.fleetName] {
+				action = "enter: instances"
+			}
+			return withArmadaHint([]string{action, "←/h: deselect", "j/k: navigate", "q: quit"})
+		}
 		return withArmadaHint([]string{"enter: open PR", "←/h: deselect", "j/k: navigate", "q: quit"})
 	}
 
 	switch r.kind {
 	case rowFleetHeader:
 		toggle := "m: automations"
+		addHint := "a: add instance"
 		if fleetPage.automationMode[r.fleetName] {
 			toggle = "m: instances"
+			addHint = "a: add trigger"
 		}
 		return withArmadaHint([]string{
-			"j/k: navigate", "space/enter: expand/collapse", toggle, "e: edit fleet",
-			"a: add instance", "n: new fleet", "d: delete fleet", "r: refresh", "q: quit",
+			"j/k: navigate", "→/l: select", "space/enter: expand/collapse", toggle, "e: edit fleet",
+			addHint, "n: new fleet", "d: delete fleet", "r: refresh", "q: quit",
 		})
 
 	case rowAutomationTriggers, rowAutomationAgents:
+		noun := "trigger"
+		if r.kind == rowAutomationAgents {
+			noun = "agent"
+		}
 		return withArmadaHint([]string{
-			"j/k: navigate", "space/enter: expand/collapse", "m: instances", "q: quit",
+			"j/k: navigate", "space/enter: expand/collapse", "a: add " + noun, "m: instances", "q: quit",
 		})
 
 	case rowTrigger, rowAgent:
+		noun := "trigger"
+		if r.kind == rowAgent {
+			noun = "agent"
+		}
 		return withArmadaHint([]string{
-			"j/k: navigate", "enter/e: edit", "d: delete", "m: instances", "q: quit",
+			"j/k: navigate", "enter/e: edit", "a: add " + noun, "d: delete", "m: instances", "q: quit",
 		})
 
 	case rowNewTrigger, rowNewAgent:

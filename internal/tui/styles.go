@@ -44,6 +44,12 @@ var (
 	dimStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240"))
 
+	// automationMarkStyle colors the ⟳ marker on automation-spawned instances
+	// (issue #188): a calm cyan that reads as a distinct origin badge without
+	// competing with the status word or the agent indicators.
+	automationMarkStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("44"))
+
 	statusRunningStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("42"))
 
@@ -144,6 +150,12 @@ var (
 
 	newSessionStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241"))
+
+	// Automation view group labels (triggers/agents). They mirror the instance
+	// view's hierarchy: fleet header blue, the group white like an instance name,
+	// and the trigger/agent items under it blue (sessionStyle) like sessions. Bold
+	// weight reads as a group header.
+	automationGroupStyle = lipgloss.NewStyle().Bold(true)
 
 	// Keybindings dialog
 	keybindingsDialogBox = lipgloss.NewStyle().

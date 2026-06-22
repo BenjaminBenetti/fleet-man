@@ -356,7 +356,7 @@ func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpI
 	if in.Branch != "" {
 		req.Branch = &in.Branch
 	}
-	j, err := s.startCreateInstanceJob(req)
+	j, err := s.startCreateInstanceJob(req, false)
 	if err != nil {
 		return nil, FleetJobOutput{}, mcpErr(err)
 	}

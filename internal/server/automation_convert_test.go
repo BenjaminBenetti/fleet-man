@@ -7,6 +7,18 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 )
 
+// TestInstanceAutomatedFlagToProto guards the automation-origin marker (issue
+// #188) across the instance wire mapping: a scheduler-spawned instance must
+// carry Automated=true to the TUI, and a user-created one must stay false.
+func TestInstanceAutomatedFlagToProto(t *testing.T) {
+	if !instanceToProto(&fleet.Instance{Name: "x", Automated: true}).GetAutomated() {
+		t.Fatal("instanceToProto should carry Automated=true")
+	}
+	if instanceToProto(&fleet.Instance{Name: "x"}).GetAutomated() {
+		t.Fatal("a non-automated instance should map to automated=false")
+	}
+}
+
 // TestFleetSettingsAutomationRoundTrip guards the agents/triggers wire mapping:
 // a settings value carrying automation agents + triggers must survive
 // legacy -> proto -> legacy unchanged, so a SetFleetSettings round-trip never

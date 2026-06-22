@@ -149,6 +149,30 @@ func (fleetPage *fleetPage) updateConfirmDeleteSession(m *model, msg tea.Msg) te
 	return nil
 }
 
+// updateConfirmDeleteAutomation handles the trigger/agent deletion confirmation
+// dialog. The actual removal + persistence stays in deleteTrigger/deleteAgent;
+// this just gates them behind a yes.
+func (fleetPage *fleetPage) updateConfirmDeleteAutomation(m *model, msg tea.Msg) tea.Cmd {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return nil
+	}
+	switch keyMsg.String() {
+	case "y", "Y", "enter":
+		fleetPage.mode = viewNormal
+		d := fleetPage.autoDel
+		if d.kind == rowAgent {
+			return fleetPage.deleteAgent(m, d.fleet, d.idx)
+		}
+		return fleetPage.deleteTrigger(m, d.fleet, d.idx)
+
+	case "n", "N", "esc", "q", "Q", "ctrl+c":
+		fleetPage.mode = viewNormal
+		m.message = "Cancelled"
+	}
+	return nil
+}
+
 // ===========================================
 // Backend Type Helpers
 // ===========================================
@@ -214,6 +238,26 @@ func (fleetPage *fleetPage) renderConfirmDeleteFleetWarnDialog(m *model) string 
 		dialogHint.Render("[y] Confirm destroy  [n/q/esc] Cancel"),
 	)
 	b.WriteString(warnBox.Render(warnDialog))
+	b.WriteString("\n")
+
+	return b.String()
+}
+
+func (fleetPage *fleetPage) renderConfirmDeleteAutomationDialog(m *model) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	noun := "trigger"
+	if fleetPage.autoDel.kind == rowAgent {
+		noun = "agent"
+	}
+	dialog := fmt.Sprintf(
+		"%s\n\n%s\n\n%s",
+		dialogTitle.Render("Delete "+noun),
+		dialogLabel.Render(fmt.Sprintf("Remove %s %q from %s?",
+			noun, fleetPage.autoDel.name, fleetPage.autoDel.fleet)),
+		dialogHint.Render("[y] Yes  [n/q/esc] No"),
+	)
+	b.WriteString(dialogBox.Render(dialog))
 	b.WriteString("\n")
 
 	return b.String()

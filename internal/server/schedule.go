@@ -368,7 +368,7 @@ var createAutomationInstance = func(s *service, fleetName string, ag fleet.Agent
 		Fleet:    fleetName,
 		Instance: instName,
 		Backend:  backendToProto(ag.Backend),
-	}); err != nil {
+	}, true); err != nil {
 		return "", err
 	}
 	return instName, nil
