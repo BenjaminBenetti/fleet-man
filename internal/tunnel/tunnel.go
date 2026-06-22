@@ -72,6 +72,14 @@ type RegisterReply struct {
 	// feature is negotiated AND the gateway is configured with a public gRPC base
 	// URL (--public-grpc-url); empty otherwise (incl. from an old gateway).
 	PublicGRPCURL string `json:"public_grpc_url,omitempty"`
+	// PublicWebhookURL is the gateway-assigned base URL for this daemon's
+	// automation webhooks (<public-url>/webhook/<id>). A webhook trigger's full
+	// URL is this base + "/" + the trigger's webhook name. Only set when the
+	// webhook feature is negotiated; empty otherwise (incl. from an old gateway).
+	// Unlike PublicGRPCURL it rides the SAME public base as the MCP URL (the
+	// gateway serves webhooks on its public HTTP listener), so no separate
+	// gateway base URL is needed.
+	PublicWebhookURL string `json:"public_webhook_url,omitempty"`
 	// SessionToken is a JWT, signed with the gateway's session key, encoding
 	// this session's ids. fleetd persists it with the session id and presents
 	// both on reconnect, so the session (and its public URL) survives a gateway
@@ -92,6 +100,14 @@ type RegisterReply struct {
 // it is in the negotiated set, the gateway tags each opened stream (see tag.go)
 // and serves the gRPC proxy route, and fleetd demuxes tagged streams.
 const FeatureGRPC = "grpc"
+
+// FeatureWebhook negotiates tunneling the daemon's automation webhook receiver
+// alongside MCP. When it is in the negotiated set, the gateway tags each opened
+// stream (see tag.go), serves the public /webhook/<id>/<name> route, and mints a
+// PublicWebhookURL; fleetd demuxes TagWebhook streams to its webhook receiver.
+// Like FeatureGRPC it forces the tagged-stream wire, so either feature alone is
+// enough to switch the tunnel into demux mode.
+const FeatureWebhook = "webhook"
 
 // RegisterMethod is the gRPC full-method fleetd opens (a bidi stream) on the
 // gateway's gRPC port to register and carry the reverse tunnel. The gateway's

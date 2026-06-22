@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
@@ -130,17 +131,53 @@ func TestVisibleTriggerRowsByType(t *testing.T) {
 		t.Fatalf("schedule rows wrong: %v", rows)
 	}
 
+	// The webhook URL row shows only for webhook triggers.
+	if slices.Contains(rows, trigRowWebhookURL) {
+		t.Fatalf("schedule trigger should not show the webhook URL row: %v", rows)
+	}
+
 	st.triggerType = fleet.TriggerWebhook
 	st.filterType = fleet.WebhookFilterRegex
 	rows = fp.visibleTriggerRows(m)
 	if !slices.Contains(rows, trigRowRegex) || slices.Contains(rows, trigRowCron) || slices.Contains(rows, trigRowJSONPath) {
 		t.Fatalf("webhook+regex rows wrong: %v", rows)
 	}
+	if !slices.Contains(rows, trigRowWebhookURL) {
+		t.Fatalf("webhook trigger should show the URL row: %v", rows)
+	}
 
 	st.filterType = fleet.WebhookFilterJSONPath
 	rows = fp.visibleTriggerRows(m)
 	if !slices.Contains(rows, trigRowJSONPath) || !slices.Contains(rows, trigRowJSONValue) || slices.Contains(rows, trigRowRegex) {
 		t.Fatalf("webhook+jsonpath rows wrong: %v", rows)
+	}
+}
+
+// TestTriggerWebhookURL confirms the dialog builds a copy-pasteable webhook URL
+// from the gateway-assigned base + the (escaped) name, and returns "" when either
+// piece is missing.
+func TestTriggerWebhookURL(t *testing.T) {
+	m, _ := newAutomationModel(t)
+
+	// No base URL yet (webhook not connected) → empty regardless of name.
+	if got := triggerWebhookURL(m, "deploy"); got != "" {
+		t.Fatalf("URL should be empty with no gateway base, got %q", got)
+	}
+
+	m.remoteMcpStatus = &fleetgrpc.RemoteMcpStatus{
+		State:            fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED,
+		PublicWebhookUrl: "https://gw.example.com/webhook/abc123",
+	}
+	if got, want := triggerWebhookURL(m, "deploy"), "https://gw.example.com/webhook/abc123/deploy"; got != want {
+		t.Fatalf("URL = %q, want %q", got, want)
+	}
+	// A name with a space is percent-escaped so the URL stays valid.
+	if got, want := triggerWebhookURL(m, "my hook"), "https://gw.example.com/webhook/abc123/my%20hook"; got != want {
+		t.Fatalf("escaped URL = %q, want %q", got, want)
+	}
+	// Empty name → empty (the row shows a hint instead).
+	if got := triggerWebhookURL(m, "  "); got != "" {
+		t.Fatalf("URL should be empty with a blank name, got %q", got)
 	}
 }
 

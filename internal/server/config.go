@@ -48,13 +48,13 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	// calling it while muWrite is held cannot deadlock. nil during tests that use
 	// newService() without a serve loop.
 	if s.remote != nil {
-		s.remote.Reconcile(saved.RemoteMcpSettings.Enabled, saved.RemoteMcpSettings.FleetEnabled, saved.RemoteMcpSettings.GatewayURL)
+		s.remote.Reconcile(saved.RemoteMcpSettings.Enabled, saved.RemoteMcpSettings.FleetEnabled, saved.RemoteMcpSettings.WebhookEnabled, saved.RemoteMcpSettings.GatewayURL)
 	}
 
 	// The remote-gateway fields are the ones whose effects outlive this RPC (the
 	// tunnel supervisor reacts to them), so call them out; the manager logs the
 	// resulting connection transitions itself.
-	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "remoteFleet", saved.RemoteMcpSettings.FleetEnabled, "gateway", saved.RemoteMcpSettings.GatewayURL)
+	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "remoteFleet", saved.RemoteMcpSettings.FleetEnabled, "webhook", saved.RemoteMcpSettings.WebhookEnabled, "gateway", saved.RemoteMcpSettings.GatewayURL)
 
 	return &fleetgrpc.SetConfigReply{Config: configToProto(saved)}, nil
 }
@@ -67,16 +67,17 @@ func configToProto(c *state.Config) *fleetgrpc.Config {
 		return &fleetgrpc.Config{}
 	}
 	pc := &fleetgrpc.Config{
-		General:        &fleetgrpc.GeneralSettings{},
-		Agent:          &fleetgrpc.AgentSettings{ToolSelection: string(c.AgentSettings.ToolSelection)},
-		Dotfiles:       &fleetgrpc.DotfilesSettings{AutoInstall: c.DotfilesSettings.AutoInstall},
-		Coder:          &fleetgrpc.CoderSettings{},
-		Codespaces:     &fleetgrpc.CodespacesSettings{},
-		Browser:        &fleetgrpc.BrowserSettings{},
+		General:    &fleetgrpc.GeneralSettings{},
+		Agent:      &fleetgrpc.AgentSettings{ToolSelection: string(c.AgentSettings.ToolSelection)},
+		Dotfiles:   &fleetgrpc.DotfilesSettings{AutoInstall: c.DotfilesSettings.AutoInstall},
+		Coder:      &fleetgrpc.CoderSettings{},
+		Codespaces: &fleetgrpc.CodespacesSettings{},
+		Browser:    &fleetgrpc.BrowserSettings{},
 		RemoteMcp: &fleetgrpc.RemoteMcpSettings{
-			Enabled:      c.RemoteMcpSettings.Enabled,
-			GatewayUrl:   c.RemoteMcpSettings.GatewayURL,
-			FleetEnabled: c.RemoteMcpSettings.FleetEnabled,
+			Enabled:        c.RemoteMcpSettings.Enabled,
+			GatewayUrl:     c.RemoteMcpSettings.GatewayURL,
+			FleetEnabled:   c.RemoteMcpSettings.FleetEnabled,
+			WebhookEnabled: c.RemoteMcpSettings.WebhookEnabled,
 		},
 		DefaultBackend: backendToProto(fleet.BackendType(c.DefaultBackend)),
 	}
@@ -205,6 +206,7 @@ func protoConfigToLegacy(pc *fleetgrpc.Config) *state.Config {
 		c.RemoteMcpSettings.Enabled = rm.GetEnabled()
 		c.RemoteMcpSettings.GatewayURL = rm.GetGatewayUrl()
 		c.RemoteMcpSettings.FleetEnabled = rm.GetFleetEnabled()
+		c.RemoteMcpSettings.WebhookEnabled = rm.GetWebhookEnabled()
 	}
 
 	c.DefaultBackend = backendProtoToString(pc.GetDefaultBackend())

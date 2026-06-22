@@ -15,12 +15,13 @@ func statusConnecting() *fleetgrpc.RemoteMcpStatus {
 	return &fleetgrpc.RemoteMcpStatus{State: fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTING}
 }
 
-func statusConnected(publicURL, publicGRPCURL, gatewayVersion string) *fleetgrpc.RemoteMcpStatus {
+func statusConnected(publicURL, publicGRPCURL, publicWebhookURL, gatewayVersion string) *fleetgrpc.RemoteMcpStatus {
 	return &fleetgrpc.RemoteMcpStatus{
-		State:          fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED,
-		PublicUrl:      publicURL,
-		PublicGrpcUrl:  publicGRPCURL,
-		GatewayVersion: gatewayVersion,
+		State:            fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED,
+		PublicUrl:        publicURL,
+		PublicGrpcUrl:    publicGRPCURL,
+		PublicWebhookUrl: publicWebhookURL,
+		GatewayVersion:   gatewayVersion,
 	}
 }
 

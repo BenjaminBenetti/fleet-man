@@ -41,6 +41,13 @@ type session struct {
 	// public-request goroutines, and re-set on reconnect.
 	grpc atomic.Bool
 
+	// webhook reports whether THIS connection negotiated FeatureWebhook. When set,
+	// the gateway serves the /webhook/<id>/<name> route and tags every stream it
+	// opens (so fleetd can demux). Like grpc it forces the tagged-stream wire, so
+	// either feature alone switches the tunnel into tag-demux mode. Atomic for the
+	// same cross-goroutine reasons as grpc.
+	webhook atomic.Bool
+
 	mu sync.Mutex
 	ym *yamux.Session // current live tunnel; nil until bind; replaced on reconnect
 	// closedAt is when the current tunnel was first observed closed (zero while
@@ -111,10 +118,11 @@ func (s *session) open(tag byte) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	// When this connection negotiated gRPC, fleetd demuxes streams by a leading
-	// tag byte, so the gateway must write it as the first bytes of every stream.
-	// Legacy (un-negotiated) sessions get untagged streams (the old MCP wire).
-	if s.grpc.Load() {
+	// When this connection negotiated a tagging feature (gRPC or webhook), fleetd
+	// demuxes streams by a leading tag byte, so the gateway must write it as the
+	// first bytes of every stream. Legacy (un-negotiated) sessions get untagged
+	// streams (the old MCP wire).
+	if s.grpc.Load() || s.webhook.Load() {
 		if err := tunnel.WriteTag(conn, tag); err != nil {
 			_ = conn.Close()
 			return nil, err

@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"syscall"
 	"time"
@@ -138,14 +139,24 @@ func Serve(ctx context.Context) error {
 		}()
 	}
 
-	// Tunnel-facing gRPC server: exposes the SAME FleetService as the local unix
-	// socket, but gated by the MCP bearer token (the local socket stays auth-less).
-	// It is Served over an in-memory listener fed by the tunnel demux, so there is
-	// no extra port/socket; the gateway tunnels gRPC alongside MCP whenever both
-	// ends negotiate FeatureGRPC. Only wired when MCP is up (we have a port +
-	// token); enabling remote MCP in config exposes this too (one toggle).
+	// Tunnel-facing servers fed by the gateway tunnel demux (no extra port/socket):
+	//   - gRPC: the SAME FleetService as the local unix socket, but gated by the
+	//     MCP bearer token (the local socket stays auth-less). Tunneled whenever
+	//     both ends negotiate FeatureGRPC.
+	//   - webhook: the automation webhook receiver, UNauthenticated (the unguessable
+	//     public URL is the capability, like the MCP proxy). Tunneled whenever both
+	//     ends negotiate FeatureWebhook.
+	// Both ride the same tunnel and are only wired when MCP is up (we need its
+	// loopback port for the tunnel to come up at all). The webhook receiver, unlike
+	// gRPC, does NOT need the MCP token, so it is wired independently of it.
 	var remoteOpts []remote.Option
 	if mcpPort != 0 {
+		webhookLis := remote.NewChanListener()
+		webhookSrv := &http.Server{Handler: svc.webhookHandler()}
+		go func() { _ = webhookSrv.Serve(webhookLis) }()
+		defer webhookSrv.Close()
+		remoteOpts = append(remoteOpts, remote.WithWebhookListener(webhookLis))
+
 		if token, err := loadOrCreateMCPToken(); err == nil {
 			grpcLis := remote.NewChanListener()
 			authUnary, authStream := bearerAuthInterceptors(token)
@@ -172,7 +183,7 @@ func Serve(ctx context.Context) error {
 	}, remoteOpts...)
 	go svc.remote.Run(hubCtx)
 	if cfg, err := state.LoadConfig(); err == nil {
-		svc.remote.Reconcile(cfg.RemoteMcpSettings.Enabled, cfg.RemoteMcpSettings.FleetEnabled, cfg.RemoteMcpSettings.GatewayURL)
+		svc.remote.Reconcile(cfg.RemoteMcpSettings.Enabled, cfg.RemoteMcpSettings.FleetEnabled, cfg.RemoteMcpSettings.WebhookEnabled, cfg.RemoteMcpSettings.GatewayURL)
 	} else {
 		flog.Warn("remote mcp: load config", "err", err)
 	}
