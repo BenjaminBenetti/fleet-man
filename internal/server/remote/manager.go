@@ -37,19 +37,20 @@ const (
 	handshakeTimeout = 15 * time.Second
 )
 
-// desiredState is the latest config the manager should converge to. mcp and
-// grpc are the two independent exposure toggles ("Enable Remote MCP" / "Enable
-// Remote Fleet"); the tunnel connects while EITHER is on, and each gates its own
-// traffic kind on that shared tunnel.
+// desiredState is the latest config the manager should converge to. mcp, grpc
+// and webhook are the three independent exposure toggles ("Enable Remote MCP" /
+// "Enable Remote Fleet" / "Enable Webhook"); the tunnel connects while ANY is on,
+// and each gates its own traffic kind on that shared tunnel.
 type desiredState struct {
 	mcp        bool
 	grpc       bool
+	webhook    bool
 	gatewayURL string
 }
 
 // on reports whether the tunnel should be up at all.
 func (d desiredState) on() bool {
-	return (d.mcp || d.grpc) && d.gatewayURL != ""
+	return (d.mcp || d.grpc || d.webhook) && d.gatewayURL != ""
 }
 
 // Manager supervises the outbound tunnel. Construct with NewManager and drive
@@ -69,6 +70,11 @@ type Manager struct {
 	// the Manager advertises FeatureGRPC, and on a gateway that negotiates it,
 	// demuxes tagged streams (grpc streams are pushed here). nil = MCP only.
 	grpcLis *ChanListener
+
+	// webhookLis, when set, enables tunneling the daemon's automation webhook
+	// receiver: the Manager advertises FeatureWebhook, and on a gateway that
+	// negotiates it, demuxes TagWebhook streams to this listener. nil = no webhook.
+	webhookLis *ChanListener
 
 	mu            sync.Mutex
 	desired       desiredState
@@ -96,17 +102,29 @@ func WithGRPCListener(lis *ChanListener) Option {
 	return func(m *Manager) { m.grpcLis = lis }
 }
 
+// WithWebhookListener enables tunneling the daemon's automation webhook receiver.
+// lis is fed demuxed TagWebhook streams and is Served by an http.Server in the
+// daemon (the webhook receiver — unauthenticated, since the unguessable public
+// URL is the capability). Without this option the Manager tunnels no webhooks.
+func WithWebhookListener(lis *ChanListener) Option {
+	return func(m *Manager) { m.webhookLis = lis }
+}
+
 // features lists the tunnel capabilities this Manager requests in its
-// RegisterRequest for the attempt's desired state. FeatureGRPC is advertised
-// only when a gRPC listener is wired AND the user enabled remote fleet — NOT
-// negotiating the feature is what makes the gateway's gRPC endpoint dead for
-// this session (the gateway rejects fleet-session RPCs for it), so a disabled
-// daemon never sees incoming gRPC commands at all.
+// RegisterRequest for the attempt's desired state. Each feature is advertised
+// only when its listener is wired AND the user enabled that traffic kind — NOT
+// negotiating a feature is what makes the matching gateway endpoint dead for this
+// session (the gateway withholds its URL and 404s/​rejects requests for it), so a
+// disabled daemon never sees that traffic at all.
 func (m *Manager) features(d desiredState) []string {
+	var f []string
 	if m.grpcLis != nil && d.grpc {
-		return []string{tunnel.FeatureGRPC}
+		f = append(f, tunnel.FeatureGRPC)
 	}
-	return nil
+	if m.webhookLis != nil && d.webhook {
+		f = append(f, tunnel.FeatureWebhook)
+	}
+	return f
 }
 
 // NewManager builds a Manager that reverse-proxies to the loopback MCP server on
@@ -129,11 +147,12 @@ func NewManager(mcpPort int, clientVersion string, publish func(*fleetgrpc.Remot
 	return m
 }
 
-// Reconcile records the desired config and nudges the supervisor. mcpEnabled
-// and fleetEnabled are the two exposure toggles (remote MCP / remote fleet
-// control). It is NON-BLOCKING: it sets state, cancels any in-flight attempt so
-// it re-evaluates, and signals the loop — so it is safe to call while holding
-// other locks (e.g. the service's config-write lock in SetConfig).
+// Reconcile records the desired config and nudges the supervisor. mcpEnabled,
+// fleetEnabled and webhookEnabled are the three exposure toggles (remote MCP /
+// remote fleet control / automation webhooks). It is NON-BLOCKING: it sets state,
+// cancels any in-flight attempt so it re-evaluates, and signals the loop — so it
+// is safe to call while holding other locks (e.g. the service's config-write lock
+// in SetConfig).
 //
 // An UNCHANGED desired state is a strict no-op. SetConfig calls Reconcile on
 // EVERY config save, and most saves don't touch the remote settings — those
@@ -141,8 +160,8 @@ func NewManager(mcpPort int, clientVersion string, publish func(*fleetgrpc.Remot
 // FLEET_GATEWAY) that tunnel carries the SetConfig RPC's own reply: cancelling
 // the attempt would tear down the yamux session mid-RPC and the client would
 // see its successful save fail with an Unavailable/EOF.
-func (m *Manager) Reconcile(mcpEnabled, fleetEnabled bool, gatewayURL string) {
-	next := desiredState{mcp: mcpEnabled, grpc: fleetEnabled, gatewayURL: strings.TrimSpace(gatewayURL)}
+func (m *Manager) Reconcile(mcpEnabled, fleetEnabled, webhookEnabled bool, gatewayURL string) {
+	next := desiredState{mcp: mcpEnabled, grpc: fleetEnabled, webhook: webhookEnabled, gatewayURL: strings.TrimSpace(gatewayURL)}
 	m.mu.Lock()
 	if next == m.desired {
 		m.mu.Unlock()
@@ -246,13 +265,14 @@ func (m *Manager) Run(ctx context.Context) {
 // established-then-dropped connection).
 func (m *Manager) connectAndServe(ctx context.Context, d desiredState) (registered bool, err error) {
 	gatewayURL := d.gatewayURL
-	// The whole remote surface depends on the local MCP stack: the tunnel-facing
-	// gRPC server is only wired when MCP is up (its bearer token IS the MCP
-	// token), so with mcpPort == 0 even a remote-fleet-only tunnel could serve
-	// nothing. Fail the attempt — an explicit error in the settings page beats a
-	// "connected" tunnel that silently serves neither traffic kind.
+	// The whole remote surface depends on the local MCP stack: the tunnel comes up
+	// only when MCP is up (its loopback port is the tunnel's anchor, and the
+	// tunnel-facing gRPC server's bearer token IS the MCP token), so with
+	// mcpPort == 0 even a remote-fleet- or webhook-only tunnel could serve nothing.
+	// Fail the attempt — an explicit error in the settings page beats a
+	// "connected" tunnel that silently serves no traffic kind.
 	if m.mcpPort == 0 {
-		return false, fmt.Errorf("local MCP server is not running (required for remote MCP and remote fleet)")
+		return false, fmt.Errorf("local MCP server is not running (required for remote MCP, remote fleet, and webhooks)")
 	}
 
 	conn, err := m.dial(ctx, gatewayURL)
@@ -288,14 +308,15 @@ func (m *Manager) connectAndServe(ctx context.Context, d desiredState) (register
 	// public URLs.
 	registered = true
 	_ = saveSession(sessionFile{
-		SessionID:     reply.SessionID,
-		SessionToken:  reply.SessionToken,
-		PublicURL:     reply.PublicURL,
-		PublicGRPCURL: reply.PublicGRPCURL,
-		GatewayURL:    gatewayURL,
+		SessionID:        reply.SessionID,
+		SessionToken:     reply.SessionToken,
+		PublicURL:        reply.PublicURL,
+		PublicGRPCURL:    reply.PublicGRPCURL,
+		PublicWebhookURL: reply.PublicWebhookURL,
+		GatewayURL:       gatewayURL,
 	})
-	flog.Info("remote gateway connected", "gateway", gatewayURL, "publicURL", reply.PublicURL, "publicGrpcURL", reply.PublicGRPCURL, "gatewayVersion", reply.GatewayVersion)
-	m.publish(statusConnected(reply.PublicURL, reply.PublicGRPCURL, reply.GatewayVersion))
+	flog.Info("remote gateway connected", "gateway", gatewayURL, "publicURL", reply.PublicURL, "publicGrpcURL", reply.PublicGRPCURL, "publicWebhookURL", reply.PublicWebhookURL, "gatewayVersion", reply.GatewayVersion)
+	m.publish(statusConnected(reply.PublicURL, reply.PublicGRPCURL, reply.PublicWebhookURL, reply.GatewayVersion))
 
 	session, err := tunnel.ClientSession(conn, m.logOut)
 	if err != nil {
@@ -304,18 +325,27 @@ func (m *Manager) connectAndServe(ctx context.Context, d desiredState) (register
 	defer session.Close()
 	// The serve loop unblocks when the session/conn closes — on a peer drop, or
 	// when stopOnCancel closes the conn on ctx cancel (shutdown / Reconcile
-	// teardown). Use the demuxing path only when the gateway negotiated gRPC (only
-	// requested when remote fleet is enabled AND a gRPC listener is wired);
-	// otherwise the streams are untagged (legacy MCP wire). Either path serves a
+	// teardown). Use the demuxing path when the gateway negotiated gRPC and/or
+	// webhook (each only requested when its toggle is on AND its listener is
+	// wired); pass nil for a NON-negotiated kind so its streams are rejected.
+	// Otherwise the streams are untagged (legacy MCP wire). Either path serves a
 	// traffic kind only while its toggle is on — a toggle flip mid-connection
 	// lands here again via Reconcile's attempt cancel + reconnect.
-	if m.grpcLis != nil && tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC) {
-		return registered, serveTunnel(session, m.mcpPort, m.grpcLis, d.mcp)
+	grpcLis := m.grpcLis
+	if !tunnel.HasFeature(reply.Features, tunnel.FeatureGRPC) {
+		grpcLis = nil
+	}
+	webhookLis := m.webhookLis
+	if !tunnel.HasFeature(reply.Features, tunnel.FeatureWebhook) {
+		webhookLis = nil
+	}
+	if grpcLis != nil || webhookLis != nil {
+		return registered, serveTunnel(session, m.mcpPort, grpcLis, webhookLis, d.mcp)
 	}
 	if !d.mcp {
-		// Remote-fleet-only, but the gateway did not negotiate gRPC (old gateway).
-		// Nothing may be served: park on the session, closing every stream the
-		// gateway pushes, until it drops or the attempt is cancelled.
+		// Remote-fleet/webhook-only, but the gateway negotiated no tagging feature
+		// (old gateway). Nothing may be served: park on the session, closing every
+		// stream the gateway pushes, until it drops or the attempt is cancelled.
 		return registered, serveReject(session)
 	}
 	return registered, serveProxy(session, m.mcpPort)

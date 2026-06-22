@@ -30,4 +30,12 @@ type RemoteMcpSettings struct {
 	// When off, fleetd does not negotiate the grpc tunnel feature, so the
 	// gateway rejects any incoming gRPC commands aimed at this daemon.
 	FleetEnabled bool `json:"fleet_enabled,omitempty"`
+
+	// WebhookEnabled ("Enable Webhook") exposes this daemon's automation webhook
+	// endpoint through the gateway so a remote system can POST to
+	// <public-url>/webhook/<name> and fire a matching webhook trigger's agents.
+	// When off, fleetd does not negotiate the webhook tunnel feature, so the
+	// gateway does not serve the webhook route for this daemon. Independent of
+	// Enabled/FleetEnabled — all three ride the SAME outbound tunnel.
+	WebhookEnabled bool `json:"webhook_enabled,omitempty"`
 }

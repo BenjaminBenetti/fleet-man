@@ -231,6 +231,9 @@ func NormalizeTrigger(t Trigger, agentNames map[string]struct{}) (Trigger, error
 			if t.JSONPath == "" {
 				return Trigger{}, fmt.Errorf("trigger %q: webhook json path is empty", t.Name)
 			}
+			if err := ValidateJSONPath(t.JSONPath); err != nil {
+				return Trigger{}, fmt.Errorf("trigger %q: %w", t.Name, err)
+			}
 			t.JSONValue = strings.TrimSpace(t.JSONValue)
 			t.Regex = ""
 		default:

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -24,6 +25,7 @@ const (
 	trigRowPrompt
 	trigRowCron
 	trigRowWebhookName
+	trigRowWebhookURL
 	trigRowFilterType
 	trigRowRegex
 	trigRowJSONPath
@@ -120,7 +122,7 @@ func (fleetPage *fleetPage) visibleTriggerRows(m *model) []int {
 	}
 	rows = append(rows, trigRowPrompt)
 	if st.triggerType == fleet.TriggerWebhook {
-		rows = append(rows, trigRowWebhookName, trigRowFilterType)
+		rows = append(rows, trigRowWebhookName, trigRowWebhookURL, trigRowFilterType)
 		if st.filterType == fleet.WebhookFilterJSONPath {
 			rows = append(rows, trigRowJSONPath, trigRowJSONValue)
 		} else {
@@ -188,7 +190,9 @@ func (fleetPage *fleetPage) updateAutomationTrigger(m *model, msg tea.Msg) tea.C
 		return nil
 	}
 
-	if isDialogTextKey(key) && isTriggerTextRow(st.row) {
+	// A printable key activates an inline text field and feeds the key. The
+	// editor-backed prompt is excluded — it opens $EDITOR on enter instead.
+	if isDialogTextKey(key) && isTriggerTextRow(st.row) && st.row != trigRowPrompt {
 		blink := fleetPage.activateTriggerField()
 		var cmd tea.Cmd
 		st.input, cmd = st.input.Update(msg)
@@ -210,18 +214,67 @@ func isTriggerTextRow(row int) bool {
 func (fleetPage *fleetPage) triggerRowEnter(m *model) tea.Cmd {
 	st := &fleetPage.triggerDlg
 	switch {
+	case st.row == trigRowPrompt:
+		// The prompt is often many lines — edit it in $EDITOR, not inline.
+		return editorCmd(editorTargetTriggerPrompt, "prompt", st.prompt)
 	case isTriggerTextRow(st.row):
 		return fleetPage.activateTriggerField()
 	case st.row == trigRowType:
 		fleetPage.cycleTriggerType()
 	case st.row == trigRowFilterType:
 		fleetPage.cycleFilterType()
+	case st.row == trigRowWebhookURL:
+		return fleetPage.copyTriggerWebhookURL(m)
 	case st.row >= trigRowAgentBase:
 		fleetPage.toggleTriggerAgent(m)
 	case st.row == trigRowSave:
 		return fleetPage.saveAutomationTrigger(m)
 	}
 	return nil
+}
+
+// copyTriggerWebhookURL copies this webhook trigger's full gateway URL to the
+// clipboard. It needs both a live gateway-assigned base URL (webhook enabled +
+// tunnel connected) and a webhook name to form a complete address.
+func (fleetPage *fleetPage) copyTriggerWebhookURL(m *model) tea.Cmd {
+	url := triggerWebhookURL(m, fleetPage.triggerDlg.webhookName)
+	if url == "" {
+		if remoteWebhookBaseURL(m) == "" {
+			m.message = "No webhook URL yet — enable Webhook in Settings and connect to the gateway"
+		} else {
+			m.message = "Set a webhook name first"
+		}
+		return nil
+	}
+	m.message = "Webhook URL copied to clipboard"
+	return copyToClipboardCmd(url)
+}
+
+// triggerWebhookURL builds the full webhook URL for a trigger: the gateway-
+// assigned base + "/" + the (path-escaped) name. Empty when either piece is
+// missing. The name is escaped so a name with spaces/specials yields a valid,
+// copy-pasteable URL; fleetd percent-decodes it back to the raw name on delivery.
+func triggerWebhookURL(m *model, name string) string {
+	base := remoteWebhookBaseURL(m)
+	name = strings.TrimSpace(name)
+	if base == "" || name == "" {
+		return ""
+	}
+	return strings.TrimRight(base, "/") + "/" + url.PathEscape(name)
+}
+
+// webhookURLDisplay renders the URL row's value: the full copy-pasteable URL once
+// both the gateway base and a name exist, or a dim hint explaining what's still
+// missing. The base only appears once the user enabled Webhook in Settings AND
+// the gateway tunnel connected (it is a server-pushed computed value).
+func webhookURLDisplay(m *model, name string) string {
+	if remoteWebhookBaseURL(m) == "" {
+		return dimStyle.Render("(enable Webhook in Settings; the URL appears once the gateway connects)")
+	}
+	if strings.TrimSpace(name) == "" {
+		return dimStyle.Render("(set a webhook name above)")
+	}
+	return triggerWebhookURL(m, name) + "  " + dimStyle.Render("press enter to copy")
 }
 
 // triggerRowToggle is space: toggle an agent or cycle a selector; otherwise it
@@ -452,10 +505,11 @@ func (fleetPage *fleetPage) renderAutomationTriggerDialog(m *model) string {
 		fmt.Fprintf(&body, "%s    %s %s\n", marker(trigRowAgentBase+i), box, a.Name)
 	}
 
-	fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowPrompt), dialogLabel.Render("Prompt: "), field(trigRowPrompt, st.prompt, "(fed to the agent via ${PROMPT})"))
+	fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowPrompt), dialogLabel.Render("Prompt: "), promptFieldPreview(st.prompt, "(fed to the agent via ${PROMPT})"))
 
 	if st.triggerType == fleet.TriggerWebhook {
 		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowWebhookName), dialogLabel.Render("Webhook:"), field(trigRowWebhookName, st.webhookName, "name (appended to gateway URL)"))
+		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowWebhookURL), dialogLabel.Render("URL:    "), webhookURLDisplay(m, st.webhookName))
 		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowFilterType), dialogLabel.Render("Filter: "), selectorLabel(filterTypeLabel(st.filterType)))
 		if st.filterType == fleet.WebhookFilterJSONPath {
 			fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowJSONPath), dialogLabel.Render("JSON path:"), field(trigRowJSONPath, st.jsonPath, "e.g. $.action (required)"))
@@ -500,8 +554,14 @@ func automationTriggerHint(fieldActive bool, row int) string {
 	if fieldActive {
 		return "[enter] Done editing  [ctrl+c] Cancel"
 	}
+	if row == trigRowPrompt {
+		return "[enter] Edit in $EDITOR  [j/k] Move  [q/esc] Cancel"
+	}
 	if row >= trigRowAgentBase {
 		return "[j/k] Move  [space] Toggle agent  [enter] Edit/Cycle  [q/esc] Cancel"
+	}
+	if row == trigRowWebhookURL {
+		return "[j/k] Move  [enter] Copy URL  [q/esc] Cancel"
 	}
 	return "[j/k] Move  [enter] Edit/Toggle  [h/l] Cycle  [q/esc] Cancel"
 }

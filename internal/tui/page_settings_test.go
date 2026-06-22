@@ -496,6 +496,108 @@ func TestRemoteGrpcStatusValueRendersStates(t *testing.T) {
 // TestToggleRemoteFleetEnabledPersists confirms pressing enter on the Enable
 // Remote Fleet row flips the setting and persists it through the
 // setConfigRemote seam, leaving the MCP toggle untouched.
+// TestSettingsSectionIncludesRemoteWebhook confirms the "Enable Webhook" toggle
+// is navigable under the remote toggles and that the navigable Public Webhook URL
+// copy row renders once the feature is enabled.
+func TestSettingsSectionIncludesRemoteWebhook(t *testing.T) {
+	sp := newSettingsPage()
+	cfg := state.DefaultConfig()
+	cfg.RemoteMcpSettings.WebhookEnabled = true
+	m := &model{config: cfg, toolStatus: allToolsFound(), spinner: spinner.New(), width: 120}
+
+	items := sp.visibleItems(m)
+	if !slices.Contains(items, settingsItemRemoteWebhookEnabled) {
+		t.Fatal("webhook toggle missing from settings nav")
+	}
+	if !slices.Contains(items, settingsItemRemoteWebhookPublicURL) {
+		t.Fatal("Public Webhook URL row missing when webhook is enabled")
+	}
+
+	out := sp.viewSettings(m)
+	if !strings.Contains(out, "Enable Webhook") {
+		t.Fatal("settings view missing the Enable Webhook row")
+	}
+	if !strings.Contains(out, "Public Webhook URL") {
+		t.Fatal("settings view missing the computed Public Webhook URL row when enabled")
+	}
+
+	// Disabled: the URL row is hidden, the toggle stays.
+	m.config.RemoteMcpSettings.WebhookEnabled = false
+	items = sp.visibleItems(m)
+	if !slices.Contains(items, settingsItemRemoteWebhookEnabled) {
+		t.Fatal("webhook toggle should always be navigable")
+	}
+	if slices.Contains(items, settingsItemRemoteWebhookPublicURL) {
+		t.Fatal("Public Webhook URL row must be hidden while webhook is disabled")
+	}
+}
+
+// TestCopyRemoteWebhookURL confirms enter on the Public Webhook URL row copies the
+// raw gateway-assigned base URL, and no-ops with guidance when none is assigned.
+func TestCopyRemoteWebhookURL(t *testing.T) {
+	sp := newSettingsPage()
+	cfg := state.DefaultConfig()
+	cfg.RemoteMcpSettings.WebhookEnabled = true
+	m := &model{config: cfg, toolStatus: allToolsFound(), currentPage: sp, fleetPage: newFleetPage(), spinner: spinner.New()}
+
+	// No status yet: enter copies nothing and explains why.
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteWebhookPublicURL)
+	if cmd := sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Fatal("enter on Public Webhook URL with no URL should not copy")
+	}
+	if !strings.Contains(m.message, "No public webhook URL") {
+		t.Fatalf("missing webhook guidance message, got %q", m.message)
+	}
+
+	// Connected with an assigned URL: the row copies the raw base URL.
+	const webhookURL = "https://gw.example.com/webhook/abc123"
+	m.remoteMcpStatus = &fleetgrpc.RemoteMcpStatus{
+		State:            fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED,
+		PublicWebhookUrl: webhookURL,
+	}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteWebhookPublicURL)
+	if got := capturedClipboard(t, sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})); got != webhookURL {
+		t.Fatalf("Public Webhook URL copied %q, want the raw URL %q", got, webhookURL)
+	}
+	if !strings.Contains(m.message, "Public webhook URL copied") {
+		t.Fatalf("missing webhook copy confirmation, got %q", m.message)
+	}
+}
+
+// TestToggleRemoteWebhookEnabledPersists confirms pressing enter on the Enable
+// Webhook row flips the setting and persists it through the setConfigRemote seam,
+// without disturbing the other remote toggles.
+func TestToggleRemoteWebhookEnabledPersists(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	origSetConfig := setConfigRemote
+	setConfigRemote = func(c *state.Config) error { return state.SaveConfig(c) }
+	defer func() { setConfigRemote = origSetConfig }()
+
+	sp := newSettingsPage()
+	m := &model{config: state.DefaultConfig(), toolStatus: allToolsFound(), currentPage: sp, fleetPage: newFleetPage(), spinner: spinner.New()}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteWebhookEnabled)
+
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if !m.config.RemoteMcpSettings.WebhookEnabled {
+		t.Fatal("webhook enabled should be true after toggle")
+	}
+	if m.config.RemoteMcpSettings.Enabled || m.config.RemoteMcpSettings.FleetEnabled {
+		t.Fatal("toggling webhook must not flip the other remote surfaces")
+	}
+	loaded, err := state.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !loaded.RemoteMcpSettings.WebhookEnabled {
+		t.Fatal("toggle did not persist to disk")
+	}
+	if got := sp.settingsCursorItem(m); got != settingsItemRemoteWebhookEnabled {
+		t.Fatalf("cursor slid off the webhook toggle: got item %d", got)
+	}
+}
+
 func TestToggleRemoteFleetEnabledPersists(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

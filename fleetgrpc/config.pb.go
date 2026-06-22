@@ -465,9 +465,14 @@ type RemoteMcpSettings struct {
 	// fleet_enabled gates the gateway gRPC endpoint ("Enable Remote Fleet"): when
 	// false fleetd does not negotiate the grpc tunnel feature, so the gateway
 	// rejects any remote `fleet` control RPCs aimed at this daemon.
-	FleetEnabled  bool `protobuf:"varint,3,opt,name=fleet_enabled,json=fleetEnabled,proto3" json:"fleet_enabled,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	FleetEnabled bool `protobuf:"varint,3,opt,name=fleet_enabled,json=fleetEnabled,proto3" json:"fleet_enabled,omitempty"`
+	// webhook_enabled gates the gateway webhook endpoint ("Enable Webhook"): when
+	// false fleetd does not negotiate the webhook tunnel feature, so the gateway
+	// does not serve <session-url>/webhook/<name> for this daemon. Independent of
+	// enabled/fleet_enabled — all three ride the SAME outbound tunnel.
+	WebhookEnabled bool `protobuf:"varint,4,opt,name=webhook_enabled,json=webhookEnabled,proto3" json:"webhook_enabled,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RemoteMcpSettings) Reset() {
@@ -517,6 +522,13 @@ func (x *RemoteMcpSettings) GetGatewayUrl() string {
 func (x *RemoteMcpSettings) GetFleetEnabled() bool {
 	if x != nil {
 		return x.FleetEnabled
+	}
+	return false
+}
+
+func (x *RemoteMcpSettings) GetWebhookEnabled() bool {
+	if x != nil {
+		return x.WebhookEnabled
 	}
 	return false
 }
@@ -843,12 +855,13 @@ const file_config_proto_rawDesc = "" +
 	"\vauto_switch\x18\x02 \x01(\bH\x01R\n" +
 	"autoSwitch\x88\x01\x01B\x1e\n" +
 	"\x1c_multiple_browsers_per_fleetB\x0e\n" +
-	"\f_auto_switch\"s\n" +
+	"\f_auto_switch\"\x9c\x01\n" +
 	"\x11RemoteMcpSettings\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x1f\n" +
 	"\vgateway_url\x18\x02 \x01(\tR\n" +
 	"gatewayUrl\x12#\n" +
-	"\rfleet_enabled\x18\x03 \x01(\bR\ffleetEnabled\"\xd0\x03\n" +
+	"\rfleet_enabled\x18\x03 \x01(\bR\ffleetEnabled\x12'\n" +
+	"\x0fwebhook_enabled\x18\x04 \x01(\bR\x0ewebhookEnabled\"\xd0\x03\n" +
 	"\x06Config\x124\n" +
 	"\ageneral\x18\x01 \x01(\v2\x1a.fleetgrpc.GeneralSettingsR\ageneral\x12.\n" +
 	"\x05agent\x18\x02 \x01(\v2\x18.fleetgrpc.AgentSettingsR\x05agent\x127\n" +

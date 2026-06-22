@@ -107,9 +107,26 @@ func newScheduler() *scheduler {
 	}
 }
 
+// webhookFireBuffer is how many matched webhook events may queue between
+// scheduler drains before the receiver starts shedding (503). The scheduler
+// drains one per loop turn, so this only fills under a sustained burst.
+const webhookFireBuffer = 64
+
+// webhookFire is a matched automation webhook event handed from the (concurrent)
+// webhook receiver to the scheduler goroutine, which spawns the trigger's agents.
+// The receiver has already evaluated the trigger's filter against the event body;
+// only the static trigger Prompt (not the body) feeds the agents, matching the
+// schedule path.
+type webhookFire struct {
+	fleet   string
+	trigger fleet.Trigger
+}
+
 // runScheduler is the automation loop; it returns when ctx is cancelled. It
 // ticks once immediately so a trigger whose cron matches the current minute
-// fires promptly on daemon start instead of waiting up to a full interval.
+// fires promptly on daemon start instead of waiting up to a full interval, and
+// drains webhook fires between ticks so a delivered event spawns its agents
+// promptly. Both paths run on THIS goroutine, so sched's maps stay lock-free.
 func (s *service) runScheduler(ctx context.Context) {
 	sched := newScheduler()
 	ticker := time.NewTicker(scheduleTickInterval)
@@ -120,7 +137,36 @@ func (s *service) runScheduler(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case batch := <-s.webhookFires:
+			s.fireWebhookBatch(sched, batch, time.Now())
 		}
+	}
+}
+
+// fireWebhookBatch spawns the agents of every matched webhook trigger in a
+// request's batch, on the SCHEDULER goroutine (so it touches sched.watched
+// without locking, like the schedule path). The receiver already matched each
+// trigger's filter; here we just resolve each fleet's CURRENT agents (state may
+// have changed since delivery) and spawn them. The next loop iteration's
+// schedulerTick reloads state and services the freshly-watched agents (launch on
+// running, reap on idle), so webhook-spawned agents ride the exact same lifecycle
+// as scheduled ones.
+func (s *service) fireWebhookBatch(sched *scheduler, batch []webhookFire, now time.Time) {
+	if len(batch) == 0 {
+		return
+	}
+	st, err := scheduleLoadState()
+	if err != nil {
+		flog.Warn("automation: webhook load state failed", "err", err)
+		return
+	}
+	for _, f := range batch {
+		agents := agentsForTrigger(st.Fleets[f.fleet], f.trigger)
+		if len(agents) == 0 {
+			flog.Warn("automation: webhook trigger has no live agents", "fleet", f.fleet, "trigger", f.trigger.Name)
+			continue
+		}
+		s.fireTriggerAgents(sched, f.fleet, f.trigger, agents, now)
 	}
 }
 
@@ -137,23 +183,8 @@ func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.
 	}
 	fired := false
 	for _, due := range dueSchedules(st.Fleets, now, sched.lastFired) {
-		for _, ag := range agentsForTrigger(st.Fleets[due.fleet], due.trigger) {
-			instName, err := createAutomationInstance(s, due.fleet, ag, now)
-			if err != nil {
-				flog.Warn("automation: create instance failed", "fleet", due.fleet, "agent", ag.Name, "err", err)
-				continue
-			}
-			flog.Info("automation: trigger fired", "fleet", due.fleet, "trigger", due.trigger.Name, "agent", ag.Name, "instance", instName)
-			w := &watchedAgent{
-				fleet:        due.fleet,
-				instance:     instName,
-				command:      ag.Command,
-				prompt:       due.trigger.Prompt,
-				systemPrompt: ag.SystemPrompt,
-				spawnedAt:    now,
-				lastActive:   now,
-			}
-			sched.watched[w.key()] = w
+		agents := agentsForTrigger(st.Fleets[due.fleet], due.trigger)
+		if s.fireTriggerAgents(sched, due.fleet, due.trigger, agents, now) {
 			fired = true
 		}
 	}
@@ -168,6 +199,35 @@ func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.
 		}
 	}
 	s.serviceWatched(ctx, sched, st, now)
+}
+
+// fireTriggerAgents spawns one instance per agent the trigger activates and
+// registers each in the watch set, returning whether anything was spawned (the
+// caller reloads state when so, see schedulerTick). Shared by the schedule path
+// and the webhook path; it only mutates sched.watched, so it MUST run on the
+// scheduler goroutine.
+func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger fleet.Trigger, agents []fleet.Agent, now time.Time) bool {
+	fired := false
+	for _, ag := range agents {
+		instName, err := createAutomationInstance(s, fleetName, ag, now)
+		if err != nil {
+			flog.Warn("automation: create instance failed", "fleet", fleetName, "agent", ag.Name, "err", err)
+			continue
+		}
+		flog.Info("automation: trigger fired", "fleet", fleetName, "trigger", trigger.Name, "agent", ag.Name, "instance", instName)
+		w := &watchedAgent{
+			fleet:        fleetName,
+			instance:     instName,
+			command:      ag.Command,
+			prompt:       trigger.Prompt,
+			systemPrompt: ag.SystemPrompt,
+			spawnedAt:    now,
+			lastActive:   now,
+		}
+		sched.watched[w.key()] = w
+		fired = true
+	}
+	return fired
 }
 
 // scheduledFire is one trigger that should fire now.
@@ -368,7 +428,7 @@ var createAutomationInstance = func(s *service, fleetName string, ag fleet.Agent
 		Fleet:    fleetName,
 		Instance: instName,
 		Backend:  backendToProto(ag.Backend),
-	}); err != nil {
+	}, true); err != nil {
 		return "", err
 	}
 	return instName, nil

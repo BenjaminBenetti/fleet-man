@@ -22,6 +22,10 @@ type Instance struct {
 	Tag          string         `json:"tag,omitempty"`
 	Color        string         `json:"color,omitempty"`
 	Branch       string         `json:"branch,omitempty"`
+	// Automated marks an instance the automation scheduler spawned for a trigger
+	// (issue #188), as opposed to one a user created. Set once at creation and
+	// never cleared; the TUI shows a marker in front of its name.
+	Automated bool `json:"automated,omitempty"`
 }
 
 // GetDisplayName returns the user-facing label for the instance. Legacy

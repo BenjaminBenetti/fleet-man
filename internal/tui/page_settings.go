@@ -43,14 +43,16 @@ const (
 	settingsItemBrowserMultiple   = 600 // browser settings start here
 	settingsItemBrowserAutoSwitch = 601
 
-	settingsItemRemoteMcpEnabled    = 700 // fleet remote (MCP) settings start here
-	settingsItemRemoteMcpGatewayURL = 701
-	settingsItemRemoteMcpCopyLocal  = 702 // copy local mcp.json snippet to clipboard
-	settingsItemRemoteMcpCopyRemote = 703 // copy gateway mcp.json snippet to clipboard
-	settingsItemRemoteFleetEnabled  = 704 // expose the gRPC control surface through the gateway
-	settingsItemRemoteMcpPublicURL  = 705 // copy the gateway-assigned public MCP URL
-	settingsItemRemoteGrpcPublicURL = 706 // copy the gateway-assigned public gRPC URL
-	settingsItemRemoteMcpToken      = 707 // copy the bearer token (~/.fleet/mcp.token)
+	settingsItemRemoteMcpEnabled       = 700 // fleet remote (MCP) settings start here
+	settingsItemRemoteMcpGatewayURL    = 701
+	settingsItemRemoteMcpCopyLocal     = 702 // copy local mcp.json snippet to clipboard
+	settingsItemRemoteMcpCopyRemote    = 703 // copy gateway mcp.json snippet to clipboard
+	settingsItemRemoteFleetEnabled     = 704 // expose the gRPC control surface through the gateway
+	settingsItemRemoteMcpPublicURL     = 705 // copy the gateway-assigned public MCP URL
+	settingsItemRemoteGrpcPublicURL    = 706 // copy the gateway-assigned public gRPC URL
+	settingsItemRemoteMcpToken         = 707 // copy the bearer token (~/.fleet/mcp.token)
+	settingsItemRemoteWebhookEnabled   = 708 // expose the automation webhook endpoint through the gateway
+	settingsItemRemoteWebhookPublicURL = 709 // copy the gateway-assigned public webhook base URL
 
 	// Fleet armada: the "+ Remote Fleet" button has a fixed id; registered
 	// remotes get base+i. The base is placed FAR above every other block (and
@@ -78,7 +80,8 @@ func isArmadaRemoteItem(item int) bool { return item >= settingsItemArmadaBase }
 func isCopyRow(item int) bool {
 	switch item {
 	case settingsItemRemoteMcpCopyLocal, settingsItemRemoteMcpCopyRemote,
-		settingsItemRemoteMcpPublicURL, settingsItemRemoteGrpcPublicURL, settingsItemRemoteMcpToken:
+		settingsItemRemoteMcpPublicURL, settingsItemRemoteGrpcPublicURL, settingsItemRemoteMcpToken,
+		settingsItemRemoteWebhookPublicURL:
 		return true
 	}
 	return false
@@ -153,9 +156,10 @@ const (
 // bounce it). Declared locally because the TUI must not import internal/state
 // and configutil doesn't alias the RemoteMcpSettings type.
 type remoteSettingsSnapshot struct {
-	mcpEnabled   bool
-	fleetEnabled bool
-	gatewayURL   string
+	mcpEnabled     bool
+	fleetEnabled   bool
+	webhookEnabled bool
+	gatewayURL     string
 }
 
 // snapshotRemoteSettings extracts the tunnel-relevant settings from config.
@@ -164,9 +168,10 @@ func snapshotRemoteSettings(config *configutil.Config) remoteSettingsSnapshot {
 		return remoteSettingsSnapshot{}
 	}
 	return remoteSettingsSnapshot{
-		mcpEnabled:   config.RemoteMcpSettings.Enabled,
-		fleetEnabled: config.RemoteMcpSettings.FleetEnabled,
-		gatewayURL:   config.RemoteMcpSettings.GatewayURL,
+		mcpEnabled:     config.RemoteMcpSettings.Enabled,
+		fleetEnabled:   config.RemoteMcpSettings.FleetEnabled,
+		webhookEnabled: config.RemoteMcpSettings.WebhookEnabled,
+		gatewayURL:     config.RemoteMcpSettings.GatewayURL,
 	}
 }
 
@@ -309,12 +314,15 @@ var settingsSections = []settingsSection{
 			if m.config != nil && m.config.RemoteMcpSettings.Enabled {
 				items = append(items, settingsItemRemoteMcpCopyRemote)
 			}
-			items = append(items, settingsItemRemoteMcpEnabled, settingsItemRemoteFleetEnabled, settingsItemRemoteMcpGatewayURL)
+			items = append(items, settingsItemRemoteMcpEnabled, settingsItemRemoteFleetEnabled, settingsItemRemoteWebhookEnabled, settingsItemRemoteMcpGatewayURL)
 			if m.config != nil && m.config.RemoteMcpSettings.Enabled {
 				items = append(items, settingsItemRemoteMcpPublicURL)
 			}
 			if m.config != nil && m.config.RemoteMcpSettings.FleetEnabled {
 				items = append(items, settingsItemRemoteGrpcPublicURL)
+			}
+			if m.config != nil && m.config.RemoteMcpSettings.WebhookEnabled {
+				items = append(items, settingsItemRemoteWebhookPublicURL)
 			}
 			if m.config != nil && (m.config.RemoteMcpSettings.Enabled || m.config.RemoteMcpSettings.FleetEnabled) {
 				items = append(items, settingsItemRemoteMcpToken)
@@ -587,6 +595,38 @@ func (settingsPage *settingsPage) toggleRemoteFleetEnabled(m *model) {
 	m.message = fmt.Sprintf("Remote Fleet set to %s", label)
 }
 
+// toggleRemoteWebhookEnabled flips the "Enable Webhook" preference — exposing
+// this daemon's automation webhook endpoint through the gateway so remote systems
+// can POST events to <public-url>/webhook/<name> — and saves. Like the Remote
+// Fleet toggle it sits ABOVE the rows it reveals/hides (only the Public Webhook
+// URL row, further down), so this row's index is preserved and no cursor re-pin
+// is needed. Reverts on a failed save (unless the failure is the expected tunnel
+// bounce from a remote client).
+func (settingsPage *settingsPage) toggleRemoteWebhookEnabled(m *model) {
+	if m.config == nil {
+		m.config = configutil.DefaultConfig()
+	}
+	current := m.config.RemoteMcpSettings.WebhookEnabled
+	next := !current
+	m.config.RemoteMcpSettings.WebhookEnabled = next
+	if err := setConfigRemote(m.config); err != nil {
+		if settingsPage.remoteSaveBounced(m, err) {
+			settingsPage.serverRemote = snapshotRemoteSettings(m.config)
+			m.message = remoteSettingsSavedMsg
+			return
+		}
+		m.config.RemoteMcpSettings.WebhookEnabled = current
+		m.message = fmt.Sprintf("Failed to save settings: %v", err)
+		return
+	}
+	settingsPage.serverRemote = snapshotRemoteSettings(m.config)
+	label := "off"
+	if next {
+		label = "on"
+	}
+	m.message = fmt.Sprintf("Webhook set to %s", label)
+}
+
 // toggleAutoInstall toggles the dotfiles auto-install setting.
 func (settingsPage *settingsPage) toggleAutoInstall(m *model) {
 	if m.config == nil {
@@ -740,6 +780,45 @@ func remoteGrpcStatusValue(m *model) string {
 	}
 }
 
+// remoteWebhookBaseURL returns the live gateway-assigned Public Webhook base URL,
+// or "" when the tunnel is not (yet) connected or the gateway withheld it. The
+// full URL for a webhook trigger is this base + "/" + the trigger's webhook name.
+func remoteWebhookBaseURL(m *model) string {
+	if m.remoteMcpStatus == nil {
+		return ""
+	}
+	return m.remoteMcpStatus.GetPublicWebhookUrl()
+}
+
+// remoteWebhookStatusValue renders the Public Webhook URL line from the same
+// pushed tunnel status as remoteMcpStatusValue (one tunnel carries every traffic
+// kind, so they share connection state). A connected tunnel with no webhook URL
+// means the gateway withheld it — it is old, or registered this session before
+// webhooks were enabled (the reconnect that negotiates webhook refreshes it).
+func remoteWebhookStatusValue(m *model) string {
+	st := m.remoteMcpStatus
+	if st == nil {
+		return dimStyle.Render("(not connected)")
+	}
+	switch st.GetState() {
+	case fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED:
+		if url := st.GetPublicWebhookUrl(); url != "" {
+			return statusRunningStyle.Render("connected") + "  " + url
+		}
+		return statusRunningStyle.Render("connected") + "  " + dimStyle.Render("(gateway provided no public webhook URL)")
+	case fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTING:
+		return m.spinner.View() + " connecting…"
+	case fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_ERROR:
+		msg := st.GetError()
+		if msg == "" {
+			msg = "connection failed"
+		}
+		return statusCreatingStyle.Render("error") + "  " + dimStyle.Render(msg)
+	default: // UNSPECIFIED / not yet connected
+		return dimStyle.Render("(not connected)")
+	}
+}
+
 // localMcpConfigJSON returns the mcp.json snippet for the loopback MCP server,
 // matching the README. It uses the ${FLEET_MCP_URL}/${FLEET_MCP_TOKEN} env vars
 // written to ~/.fleet/mcp.env so the snippet survives port changes.
@@ -850,6 +929,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleRemoteMcpEnabled(m)
 			} else if item == settingsItemRemoteFleetEnabled {
 				settingsPage.toggleRemoteFleetEnabled(m)
+			} else if item == settingsItemRemoteWebhookEnabled {
+				settingsPage.toggleRemoteWebhookEnabled(m)
 			} else if item == settingsItemCoderPreset {
 				settingsPage.cycleCoderPreset(m, -1)
 			} else if item == settingsItemCodespacesMachine {
@@ -878,6 +959,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleRemoteMcpEnabled(m)
 			} else if item == settingsItemRemoteFleetEnabled {
 				settingsPage.toggleRemoteFleetEnabled(m)
+			} else if item == settingsItemRemoteWebhookEnabled {
+				settingsPage.toggleRemoteWebhookEnabled(m)
 			} else if item == settingsItemCoderPreset {
 				settingsPage.cycleCoderPreset(m, 1)
 			} else if item == settingsItemCodespacesMachine {
@@ -921,6 +1004,10 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleRemoteFleetEnabled(m)
 				return nil
 			}
+			if item == settingsItemRemoteWebhookEnabled {
+				settingsPage.toggleRemoteWebhookEnabled(m)
+				return nil
+			}
 			if item == settingsItemRemoteMcpCopyLocal {
 				m.message = "Local MCP config copied to clipboard"
 				return copyToClipboardCmd(localMcpConfigJSON())
@@ -950,6 +1037,15 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 					return nil
 				}
 				m.message = "Public GRPC URL copied to clipboard"
+				return copyToClipboardCmd(url)
+			}
+			if item == settingsItemRemoteWebhookPublicURL {
+				url := remoteWebhookBaseURL(m)
+				if url == "" {
+					m.message = "No public webhook URL yet — connect to the gateway first"
+					return nil
+				}
+				m.message = "Public webhook URL copied to clipboard"
 				return copyToClipboardCmd(url)
 			}
 			if item == settingsItemRemoteMcpToken {
@@ -1504,6 +1600,14 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			recordRow(settingsItemRemoteFleetEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteFleetEnabled, "Enable Remote Fleet", fleetEnabledValue))
 			listContent.WriteString("\n")
 
+			webhookEnabledValue := "[ off ]"
+			if config.RemoteMcpSettings.WebhookEnabled {
+				webhookEnabledValue = "[ on ]"
+			}
+			webhookEnabledValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Expose automation webhook triggers at the gateway public url so remote systems can fire them")
+			recordRow(settingsItemRemoteWebhookEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteWebhookEnabled, "Enable Webhook", webhookEnabledValue))
+			listContent.WriteString("\n")
+
 			gatewayValue := config.RemoteMcpSettings.GatewayURL
 			if gatewayValue == "" && !(settingsPage.editing && currentItem == settingsItemRemoteMcpGatewayURL) {
 				gatewayValue = dimStyle.Render("(not set)")
@@ -1533,6 +1637,14 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 					grpcValue += "  " + dimStyle.Render("press enter to copy")
 				}
 				recordRow(settingsItemRemoteGrpcPublicURL, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteGrpcPublicURL, "Public GRPC URL", grpcValue))
+			}
+			if config.RemoteMcpSettings.WebhookEnabled {
+				listContent.WriteString("\n")
+				webhookValue := remoteWebhookStatusValue(m)
+				if remoteWebhookBaseURL(m) != "" {
+					webhookValue += "  " + dimStyle.Render("press enter to copy base URL")
+				}
+				recordRow(settingsItemRemoteWebhookPublicURL, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteWebhookPublicURL, "Public Webhook URL", webhookValue))
 			}
 			if config.RemoteMcpSettings.Enabled || config.RemoteMcpSettings.FleetEnabled {
 				listContent.WriteString("\n")

@@ -18,6 +18,14 @@ const (
 	// the main status word regardless of how long the instance name is.
 	instanceNameWidth = 22
 
+	// instanceAutoMarkWidth is the cell width the trailing automation marker
+	// (" ⟳ " — a space on each side, issue #188) occupies INSIDE the fixed-width
+	// name column on an automation-spawned instance row. The trailing space keeps
+	// the glyph off the status word. The name is truncated this much shorter to
+	// make room, so the marker never widens the column or shifts the status word —
+	// and user-created rows keep their original, un-indented position.
+	instanceAutoMarkWidth = 3
+
 	// instanceStatusCol is the column where the status word starts on an instance
 	// row, and the indent the PR-status second line is rendered at so it sits
 	// under that status. It is the sum of the row's fixed prefix cells: cursor(2)
@@ -43,6 +51,17 @@ const (
 	// status begins, used to tell a click on the PR status apart from a click on
 	// the child row's session label.
 	prStatusClickColumn = listContentXOffset + instanceStatusCol
+
+	// automationMark is the automation motif (issue #188) — a clockwise loop
+	// reading as "runs on a schedule" — trailing automation-spawned instance names.
+	automationMark = "⟳"
+
+	// automationToggleMark / instancesMark are the mode-toggle button glyphs: ↻
+	// (instance view → switch to automation) and ☰ (automation view → switch to the
+	// instance list). ↻ is a lighter cycle arrow than automationMark's ⟳ — it sits
+	// better centered inside the [ ] button.
+	automationToggleMark = "↻"
+	instancesMark        = "☰"
 )
 
 // renderChildRowLine renders an instance child row (a session/group row or the
@@ -166,25 +185,32 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			}
 
 			// The fleet header carries a mode-toggle "button" (issue #188): the
-			// instance view shows the instance count plus an [automations] switch;
-			// the automation view shows an [instances] switch. 'm' (or a click on
-			// the button — see app.go) toggles it. We record the button's absolute
+			// instance view shows the instance count plus a [ ↻ ] switch (→ automation);
+			// the automation view shows a [ ☰ ] switch (→ instances). 'm' (or a click
+			// on the button — see app.go) toggles it. We record the button's absolute
 			// column span here so the click handler can hit-test it.
 			var suffix, toggleText string
+			// The toggle icon highlights (pink) when the header's right-hand element
+			// is selected via →/l, mirroring the inline PR status; the instance count
+			// stays dim either way.
+			toggleStyle := dimStyle
+			if isSelected && fleetPage.rightSelected {
+				toggleStyle = selectedStyle
+			}
 			// Columns before the suffix: cursor(2) + arrow(2) + name width.
 			labelStart := listContentXOffset + 4 + lipgloss.Width(r.fleetName)
 			if fleetPage.automationMode[r.fleetName] {
-				toggleText = "[instances]"
-				suffix = dimStyle.Render(" " + toggleText)
-				labelStart += 1 // a single leading space precedes the label
+				toggleText = "[ " + instancesMark + " ]"
+				suffix = dimStyle.Render(" ") + toggleStyle.Render(toggleText)
+				labelStart += 1 // a single leading space precedes the button
 			} else {
 				count := 0
 				if f, ok := m.st.Fleets[r.fleetName]; ok {
 					count = len(f.Instances)
 				}
 				countPart := fmt.Sprintf(" (%d) ", count)
-				toggleText = "[automations]"
-				suffix = dimStyle.Render(countPart + toggleText)
+				toggleText = "[ " + automationToggleMark + " ]"
+				suffix = dimStyle.Render(countPart) + toggleStyle.Render(toggleText)
 				labelStart += lipgloss.Width(countPart)
 			}
 			fleetPage.rows[i].toggleX0 = labelStart
@@ -231,7 +257,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			if isSelected {
 				style = selectedStyle
 			}
-			listContent.WriteString(m.renderChildRowLine(cursor, label, style, r, isSelected && fleetPage.tagSelected))
+			listContent.WriteString(m.renderChildRowLine(cursor, label, style, r, isSelected && fleetPage.rightSelected))
 			listContent.WriteString("\n")
 
 		} else if r.kind == rowNewSession {
@@ -240,7 +266,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			if isSelected {
 				style = selectedStyle
 			}
-			listContent.WriteString(m.renderChildRowLine(cursor, label, style, r, isSelected && fleetPage.tagSelected))
+			listContent.WriteString(m.renderChildRowLine(cursor, label, style, r, isSelected && fleetPage.rightSelected))
 			listContent.WriteString("\n")
 
 		} else if r.kind == rowInstance {
@@ -296,31 +322,44 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				}
 			}
 
+			// Automation-spawned instances (issue #188) trail their name with a ⟳
+			// marker. It lives INSIDE the fixed-width name column — the name is
+			// truncated instanceAutoMarkWidth cells shorter to make room — so the
+			// marker never widens the column or shifts the status word, and
+			// user-created rows are not indented at all.
+			markerSuffix, nameBudget := "", instanceNameWidth
+			if instance.Automated {
+				// A space on each side: one off the name, one off the status.
+				markerSuffix = " " + automationMarkStyle.Render(automationMark) + " "
+				nameBudget -= instanceAutoMarkWidth
+			}
+
 			// Truncate (with an ellipsis) before padding so a long name can't push
 			// the status column right and knock the PR-status second line below it
 			// out of alignment. Pad by VISUAL width (lipgloss.Width), not fmt's
 			// rune count, so a name with wide runes (CJK / emoji) still lands the
 			// status at exactly instanceStatusCol.
-			name := ansi.Truncate(instance.GetDisplayName(), instanceNameWidth, "…")
-			nameRaw := name + strings.Repeat(" ", max(0, instanceNameWidth-lipgloss.Width(name)))
+			name := ansi.Truncate(instance.GetDisplayName(), nameBudget, "…")
+			pad := strings.Repeat(" ", max(0, instanceNameWidth-lipgloss.Width(name)-lipgloss.Width(markerSuffix)))
 			var arrowStyled, nameStyled string
 			switch {
 			case isSelected && instanceColorHasCustom(instance.Color):
 				colorStyle := instanceColorStyle(instance.Color).Bold(true)
 				arrowStyled = colorStyle.Render(arrow)
-				nameStyled = colorStyle.Render(nameRaw)
+				nameStyled = colorStyle.Render(name)
 			case isSelected:
 				arrowStyled = selectedStyle.Render(arrow)
-				nameStyled = selectedStyle.Render(nameRaw)
+				nameStyled = selectedStyle.Render(name)
 			case instanceColorHasCustom(instance.Color):
 				colorStyle := instanceColorStyle(instance.Color)
 				arrowStyled = colorStyle.Render(arrow)
-				nameStyled = colorStyle.Render(nameRaw)
+				nameStyled = colorStyle.Render(name)
 			default:
 				arrowStyled = arrow
-				nameStyled = nameRaw
+				nameStyled = name
 			}
-			paddedName := arrowStyled + throbber + " " + nameStyled
+			// name + marker + padding together fill the fixed name column.
+			paddedName := arrowStyled + throbber + " " + nameStyled + markerSuffix + pad
 
 			backendIcon := "⬡"
 			switch instance.Backend {
@@ -496,6 +535,8 @@ func (fleetPage *fleetPage) viewActiveDialog(m *model) string {
 		return fleetPage.renderRenameSessionDialog(m)
 	case viewConfirmDeleteSession:
 		return fleetPage.renderConfirmDeleteSessionDialog(m)
+	case viewConfirmDeleteAutomation:
+		return fleetPage.renderConfirmDeleteAutomationDialog(m)
 	case viewConfirmBrowserSwitch:
 		return fleetPage.renderConfirmBrowserSwitchDialog(m)
 	case viewArmadaSelect:

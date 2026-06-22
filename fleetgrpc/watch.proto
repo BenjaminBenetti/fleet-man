@@ -101,6 +101,12 @@ message RemoteMcpStatus {
   // CONNECTED). Surfaced so a remote TUI can render the version of every hop in
   // the control chain (tui -> gateway -> fleetd) and spot version skew.
   string gateway_version = 5;
+  // public_webhook_url is the gateway-assigned base URL for this daemon's
+  // automation webhooks (<public-url>/webhook/<id>). A webhook trigger's full
+  // URL is this base + "/" + the trigger's webhook name. Only set when state is
+  // CONNECTED and the webhook feature was negotiated (the user enabled "Enable
+  // Webhook"); empty otherwise (incl. from an old gateway).
+  string public_webhook_url = 6;
 }
 
 // StateChanged is pushed whenever the authoritative PERSISTED model mutates. It

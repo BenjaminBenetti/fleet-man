@@ -81,6 +81,42 @@ func TestFeaturesGatedOnFleetEnabled(t *testing.T) {
 	}
 }
 
+// TestFeaturesGatedOnWebhookEnabled pins the "Enable Webhook" gate, mirroring the
+// grpc gate: the webhook feature is requested ONLY when a webhook listener is
+// wired AND the user enabled webhooks. The two features compose independently —
+// enabling both requests both.
+func TestFeaturesGatedOnWebhookEnabled(t *testing.T) {
+	discard := func(*fleetgrpc.RemoteMcpStatus) {}
+	webhookOnly := NewManager(1, "v", discard, WithWebhookListener(NewChanListener()))
+	both := NewManager(1, "v", discard, WithGRPCListener(NewChanListener()), WithWebhookListener(NewChanListener()))
+	noLis := NewManager(1, "v", discard)
+
+	if got := webhookOnly.features(desiredState{webhook: true}); !tunnel.HasFeature(got, tunnel.FeatureWebhook) {
+		t.Fatalf("webhook enabled + listener wired should request webhook, got %v", got)
+	}
+	if got := webhookOnly.features(desiredState{webhook: false}); len(got) != 0 {
+		t.Fatalf("webhook disabled must request no features, got %v", got)
+	}
+	if got := noLis.features(desiredState{webhook: true}); len(got) != 0 {
+		t.Fatalf("no webhook listener must request no features, got %v", got)
+	}
+	got := both.features(desiredState{grpc: true, webhook: true})
+	if !tunnel.HasFeature(got, tunnel.FeatureGRPC) || !tunnel.HasFeature(got, tunnel.FeatureWebhook) {
+		t.Fatalf("both enabled should request both features, got %v", got)
+	}
+}
+
+// TestDesiredOnWithWebhook confirms the tunnel comes up for a webhook-only daemon
+// (no remote MCP, no remote fleet) as long as a gateway URL is set.
+func TestDesiredOnWithWebhook(t *testing.T) {
+	if !(desiredState{webhook: true, gatewayURL: "https://gw"}).on() {
+		t.Fatal("webhook-only with a gateway URL should bring the tunnel up")
+	}
+	if (desiredState{webhook: true}).on() {
+		t.Fatal("webhook-only without a gateway URL must stay off")
+	}
+}
+
 func TestNextBackoffCaps(t *testing.T) {
 	d := initialBackoff
 	for i := 0; i < 20; i++ {
@@ -188,10 +224,11 @@ func waitForState(t *testing.T, ch <-chan *fleetgrpc.RemoteMcpStatus, want fleet
 }
 
 // newManagerForTest builds a Manager whose dial reaches addr over TLS trusting
-// pool, with status pushed to the returned channel.
-func newManagerForTest(mcpPort int, addr string, pool *x509.CertPool) (*Manager, <-chan *fleetgrpc.RemoteMcpStatus) {
+// pool, with status pushed to the returned channel. Extra options (e.g. a webhook
+// listener) compose on top.
+func newManagerForTest(mcpPort int, addr string, pool *x509.CertPool, opts ...Option) (*Manager, <-chan *fleetgrpc.RemoteMcpStatus) {
 	statusCh := make(chan *fleetgrpc.RemoteMcpStatus, 64)
-	m := NewManager(mcpPort, "vtest", func(st *fleetgrpc.RemoteMcpStatus) { statusCh <- st })
+	m := NewManager(mcpPort, "vtest", func(st *fleetgrpc.RemoteMcpStatus) { statusCh <- st }, opts...)
 	m.dial = func(ctx context.Context, _ string) (net.Conn, error) {
 		d := &tls.Dialer{Config: &tls.Config{RootCAs: pool, ServerName: "127.0.0.1"}}
 		return d.DialContext(ctx, "tcp", addr)
@@ -253,7 +290,7 @@ func TestManagerConnectsServesAndDisables(t *testing.T) {
 	defer cancel()
 	go m.Run(ctx)
 
-	m.Reconcile(true, false, "https://gw.example.com")
+	m.Reconcile(true, false, false, "https://gw.example.com")
 
 	connected := waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED, 5*time.Second)
 	if connected.GetPublicUrl() != "https://gw/mcp/sess-A" {
@@ -286,7 +323,7 @@ func TestManagerConnectsServesAndDisables(t *testing.T) {
 	}
 
 	// Disable -> tears down to UNSPECIFIED.
-	m.Reconcile(false, false, "https://gw.example.com")
+	m.Reconcile(false, false, false, "https://gw.example.com")
 	waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_UNSPECIFIED, 5*time.Second)
 }
 
@@ -347,7 +384,7 @@ func TestManagerStickyReconnect(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.Run(ctx)
-	m.Reconcile(true, false, "https://gw.example.com")
+	m.Reconcile(true, false, false, "https://gw.example.com")
 
 	// First registration: no prior session id or resume token.
 	if got := waitForReg(t, regs, 5*time.Second); got.SessionID != "" || got.SessionToken != "" {
@@ -360,6 +397,84 @@ func TestManagerStickyReconnect(t *testing.T) {
 	}
 	// And it lands CONNECTED on the kept connection.
 	waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED, 5*time.Second)
+}
+
+// TestManagerWebhookOnlyReconnect verifies a webhook-only daemon (no remote MCP,
+// no remote fleet) connects, re-requests the webhook feature on a forced
+// reconnect, and re-publishes the gateway-assigned Public Webhook URL — the
+// partial-feature-set reconnect path.
+func TestManagerWebhookOnlyReconnect(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cert, pool := genTestTLS(t)
+	mcp := newFakeMCP()
+	defer mcp.srv.Close()
+
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatalf("tls listen: %v", err)
+	}
+	defer ln.Close()
+
+	regs := make(chan tunnel.RegisterRequest, 8)
+	var conns atomic.Int32
+	gwDone := make(chan struct{})
+	defer close(gwDone)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				var req tunnel.RegisterRequest
+				if err := tunnel.ReadFrame(conn, &req); err != nil {
+					return
+				}
+				n := conns.Add(1)
+				regs <- req
+				// Negotiate webhook (echo it) and hand back a webhook URL, like the
+				// real gateway does for a webhook-enabled session.
+				reply := tunnel.RegisterReply{SessionID: "wh-1", SessionToken: "tok", PublicURL: "https://gw/mcp/wh-1"}
+				if tunnel.HasFeature(req.Features, tunnel.FeatureWebhook) {
+					reply.Features = []string{tunnel.FeatureWebhook}
+					reply.PublicWebhookURL = "https://gw/webhook/wh-1"
+				}
+				if err := tunnel.WriteFrame(conn, reply); err != nil {
+					return
+				}
+				if n == 1 {
+					return // drop to force a reconnect
+				}
+				sess, err := tunnel.ServerSession(conn, io.Discard)
+				if err != nil {
+					return
+				}
+				defer sess.Close()
+				<-gwDone
+			}(conn)
+		}
+	}()
+
+	m, statusCh := newManagerForTest(mcp.port(t), ln.Addr().String(), pool, WithWebhookListener(NewChanListener()))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx)
+	// Webhook-only: mcp=false, fleet=false, webhook=true.
+	m.Reconcile(false, false, true, "https://gw.example.com")
+
+	// Both registrations must request the webhook feature.
+	for i := range 2 {
+		got := waitForReg(t, regs, 5*time.Second)
+		if !tunnel.HasFeature(got.Features, tunnel.FeatureWebhook) {
+			t.Fatalf("registration %d did not request the webhook feature: %v", i+1, got.Features)
+		}
+	}
+	// And it lands CONNECTED with the webhook URL published.
+	st := waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED, 5*time.Second)
+	if st.GetPublicWebhookUrl() != "https://gw/webhook/wh-1" {
+		t.Fatalf("CONNECTED status missing the webhook URL, got %q", st.GetPublicWebhookUrl())
+	}
 }
 
 func waitForReg(t *testing.T, ch <-chan tunnel.RegisterRequest, timeout time.Duration) tunnel.RegisterRequest {
@@ -426,14 +541,14 @@ func TestManagerReconcileIdempotentKeepsTunnel(t *testing.T) {
 	defer cancel()
 	go m.Run(ctx)
 
-	m.Reconcile(true, false, "https://gw.example.com")
+	m.Reconcile(true, false, false, "https://gw.example.com")
 	waitForReg(t, regs, 5*time.Second)
 	waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED, 5*time.Second)
 
 	// Same desired state — what SetConfig does for the common "saved an
 	// unrelated setting" case. The padded URL pins that the comparison happens
 	// AFTER TrimSpace, matching what Reconcile stores.
-	m.Reconcile(true, false, "  https://gw.example.com  ")
+	m.Reconcile(true, false, false, "  https://gw.example.com  ")
 
 	// The established tunnel must stay up: no new registration and no status
 	// transition away from CONNECTED within the observation window.
@@ -501,8 +616,8 @@ func TestManagerReconcileDisableConverges(t *testing.T) {
 	go m.Run(ctx)
 
 	for i := 0; i < 30; i++ {
-		m.Reconcile(true, false, "https://gw.example.com")
-		m.Reconcile(false, false, "https://gw.example.com")
+		m.Reconcile(true, false, false, "https://gw.example.com")
+		m.Reconcile(false, false, false, "https://gw.example.com")
 	}
 
 	// After the toggles settle, the LAST state observed must be UNSPECIFIED —
@@ -545,7 +660,7 @@ func TestManagerErrorsWhenMcpDown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.Run(ctx)
-	m.Reconcile(true, false, "https://gw.example.com")
+	m.Reconcile(true, false, false, "https://gw.example.com")
 
 	st := waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_ERROR, 5*time.Second)
 	if st.GetError() == "" {

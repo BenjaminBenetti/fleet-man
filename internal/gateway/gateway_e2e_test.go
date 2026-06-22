@@ -289,6 +289,55 @@ func TestGatewayEndToEnd(t *testing.T) {
 	}
 }
 
+// TestGatewayWebhookGatedOnFeature pins the webhook route + URL to the per-session
+// webhook feature: a session that does not negotiate it gets no webhook URL and a
+// 404 on the /webhook route (indistinguishable from an unknown id), while a
+// session that does negotiate it is minted a webhook base URL on the public base.
+func TestGatewayWebhookGatedOnFeature(t *testing.T) {
+	cert, pool := genTestTLS(t)
+	s, publicAddr, grpcAddr := startTestGateway(t, cert, "https://gw.example.com")
+
+	// (a) No webhook feature: URL withheld, route 404s.
+	reply := dialFleetd(t, grpcAddr, pool, "")
+	if reply.PublicWebhookURL != "" {
+		t.Fatalf("a non-webhook session must not get a webhook URL, got %q", reply.PublicWebhookURL)
+	}
+	id := publicIDOf(t, reply.PublicURL)
+	waitRegistered(t, s, id)
+
+	client := httpsClient(pool)
+	resp, err := client.Post("https://"+publicAddr+"/webhook/"+id+"/ci", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("webhook POST: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("webhook route for a non-webhook session -> %d, want 404", resp.StatusCode)
+	}
+
+	// (b) Webhook feature negotiated: a webhook base URL is minted on the public base.
+	conn := openRegisterStream(t, grpcAddr, credentials.NewTLS(&tls.Config{RootCAs: pool, ServerName: "127.0.0.1"}))
+	if err := tunnel.WriteFrame(conn, tunnel.RegisterRequest{Features: []string{tunnel.FeatureWebhook}, ClientVersion: "vtest"}); err != nil {
+		t.Fatalf("write register: %v", err)
+	}
+	var wreply tunnel.RegisterReply
+	if err := tunnel.ReadFrame(conn, &wreply); err != nil {
+		t.Fatalf("read reply: %v", err)
+	}
+	if !strings.HasPrefix(wreply.PublicWebhookURL, "https://gw.example.com/webhook/") {
+		t.Fatalf("a webhook session should get a webhook URL, got %q", wreply.PublicWebhookURL)
+	}
+	if !tunnel.HasFeature(wreply.Features, tunnel.FeatureWebhook) {
+		t.Fatalf("webhook feature should be negotiated, got %v", wreply.Features)
+	}
+	// Complete the yamux handshake so the gateway binds (then tear down).
+	sess, err := tunnel.ClientSession(conn, io.Discard)
+	if err != nil {
+		t.Fatalf("client session: %v", err)
+	}
+	defer sess.Close()
+}
+
 // TestGatewayReportsVersionInRegisterReply verifies the gateway echoes its
 // configured build version in the register reply, so fleetd can surface it to
 // remote TUIs for control-chain version diagnostics. An unset version yields an

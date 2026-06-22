@@ -173,7 +173,7 @@ func remoteMCPStack(t *testing.T) (publicMCPURL, publicBase, token string, pool 
 		remote.WithDialFunc(registerDialFunc(grpcLn.Addr().String(), gwCreds)),
 	)
 	go mgr.Run(ctx)
-	mgr.Reconcile(true, false, "https://gw.example.com")
+	mgr.Reconcile(true, false, false, "https://gw.example.com")
 
 	// Wait for CONNECTED and the gateway-assigned public URL.
 	deadline := time.After(10 * time.Second)
