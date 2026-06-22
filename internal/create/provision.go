@@ -2,7 +2,6 @@ package create
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
@@ -111,17 +110,15 @@ func finishProvision(instanceBackend backend.Backend, fleetName, instanceName, w
 		state.WriteWarn(fleetName, instanceName, fmt.Sprintf("image cache: %v", err))
 	}
 
-	// Auto-install dotfiles. A failure here is non-fatal — the instance is still
-	// usable, so we surface the error as a warning rather than blocking.
+	// Auto-install dotfiles. Best-effort and bounded: a dotfiles install that
+	// hangs (e.g. a git clone stuck on an unreachable host) must not stall the
+	// whole instance creation, so installDotfiles kills each attempt after a
+	// timeout and retries a few times before giving up and letting the instance
+	// start anyway. A failure is surfaced as a warning rather than blocking.
 	config, _ := state.LoadConfig()
 	if config != nil && config.DotfilesSettings.AutoInstall {
 		if script := dotfiles.SetupScript(config); script != "" {
-			cmd := instanceBackend.ExecCommand(wsDir, []string{"sh", "-c", script})
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				detail := strings.TrimSpace(string(out))
-				state.WriteWarn(fleetName, instanceName, fmt.Sprintf("dotfiles install failed: %v\n%s", err, detail))
-			}
+			installDotfiles(instanceBackend, fleetName, instanceName, wsDir, script)
 		}
 	}
 
