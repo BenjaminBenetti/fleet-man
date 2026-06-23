@@ -99,7 +99,10 @@ func saveLocked(s *State) error {
 		return fmt.Errorf("marshaling state: %w", err)
 	}
 
-	if err := os.WriteFile(StatePath(), data, 0644); err != nil {
+	// Atomic write: the backup loop and the state poller read state.json without
+	// holding mu, so a plain os.WriteFile (O_TRUNC then write) could hand them a
+	// torn file. temp+rename guarantees they see the old or new file in full.
+	if err := atomicWriteFile(StatePath(), data, 0644); err != nil {
 		return fmt.Errorf("writing state file: %w", err)
 	}
 

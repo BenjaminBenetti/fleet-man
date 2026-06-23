@@ -90,7 +90,9 @@ func SaveConfig(c *Config) error {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
 
-	if err := os.WriteFile(ConfigPath(), data, 0644); err != nil {
+	// Atomic write (temp+rename): config.json is read unlocked by the backup loop,
+	// so a torn os.WriteFile is observable. See atomicWriteFile.
+	if err := atomicWriteFile(ConfigPath(), data, 0644); err != nil {
 		return fmt.Errorf("writing config file: %w", err)
 	}
 

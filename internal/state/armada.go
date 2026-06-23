@@ -89,26 +89,10 @@ func SaveArmada(a *Armada) error {
 		return fmt.Errorf("marshaling armada: %w", err)
 	}
 
-	tmp, err := os.CreateTemp(dir, ".armada-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("creating temp armada file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename succeeds
-
-	if err := tmp.Chmod(0600); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("chmod temp armada file: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
+	// 0600: the armada file embeds bearer tokens. atomicWriteFile keeps the
+	// temp+rename guarantee GetArmada relies on (it serves clients unlocked).
+	if err := atomicWriteFile(ArmadaPath(), data, 0600); err != nil {
 		return fmt.Errorf("writing armada file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing temp armada file: %w", err)
-	}
-	if err := os.Rename(tmpName, ArmadaPath()); err != nil {
-		return fmt.Errorf("replacing armada file: %w", err)
 	}
 
 	return nil

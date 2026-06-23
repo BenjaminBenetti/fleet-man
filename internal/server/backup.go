@@ -111,7 +111,7 @@ func writeBackup(now time.Time) (string, int, error) {
 	sources := backupSources()
 	// Skip entirely if there is nothing to capture, rather than emit an empty
 	// archive for the hour.
-	present := sources[:0:0]
+	present := make([]string, 0, len(sources))
 	for _, src := range sources {
 		if info, err := os.Stat(src); err == nil && info.Mode().IsRegular() {
 			present = append(present, src)
@@ -169,6 +169,14 @@ func writeBackup(now time.Time) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
+	if n == 0 {
+		// Every source vanished between the presence scan and the read. Honor the
+		// "writes nothing rather than an empty archive" contract: the deferred
+		// cleanup drops the temp file, and we remove the day dir if this call just
+		// created it (Remove no-ops when earlier-hour archives still live there).
+		_ = os.Remove(dir)
+		return "", 0, nil
+	}
 	if err := os.Chmod(tmpName, 0o600); err != nil {
 		return "", 0, err
 	}
@@ -183,12 +191,13 @@ func writeBackup(now time.Time) (string, int, error) {
 // between the stat above and here is skipped rather than failing the whole
 // snapshot.
 //
-// The header Size is taken from the bytes actually read, NOT from the stat: the
-// sources are rewritten live by this same daemon (state.Save/SaveConfig do an
-// in-place, non-atomic os.WriteFile of state.json/config.json), so a rewrite
-// landing between stat and read would leave hdr.Size != len(data) and make
-// tar.Writer fail the whole snapshot. Deriving Size from the read keeps the
-// header self-consistent — at worst we capture the old-or-new file in full.
+// The header Size is taken from the bytes actually read, NOT from the stat, so
+// the header always matches the archived bytes even if a source changes size
+// between the stat and the read — otherwise tar.Writer would fail the whole
+// snapshot (ErrWriteTooLong / "missed writing N bytes"). The captured CONTENTS
+// are kept whole by the writers: state.Save/SaveConfig write state.json/
+// config.json atomically (temp+rename, see state.atomicWriteFile), so a
+// concurrent rewrite yields the old or new file in full, never a torn one.
 func addFileToTar(tw *tar.Writer, path string) (bool, error) {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
