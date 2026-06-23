@@ -27,11 +27,24 @@ import (
 // proves the whole path — HTTPS → gateway /webhook route → TagWebhook tunnel
 // stream → fleetd demux → webhook receiver → trigger match → scheduler enqueue.
 
-// webhookStack stands up the full real stack with one webhook trigger ("ci",
-// regex `"action":"opened"`) and returns the gateway-minted public webhook base
-// URL, a cert pool trusting the gateway, and the service (whose webhookFires
+// webhookStack stands up the full real stack with the default webhook trigger
+// ("ci", regex `"action":"opened"`) and returns the gateway-minted public webhook
+// base URL, a cert pool trusting the gateway, and the service (whose webhookFires
 // channel the test drains to confirm a fire).
 func webhookStack(t *testing.T) (publicWebhookBase string, pool *x509.CertPool, svc *service) {
+	t.Helper()
+	return webhookStackWith(t, fleet.Trigger{
+		Name: "ci", Type: fleet.TriggerWebhook, AgentNames: []string{"a"},
+		WebhookName: "ci", FilterType: fleet.WebhookFilterRegex, Regex: `"action":"opened"`,
+	})
+}
+
+// webhookStackWith is webhookStack parameterized by the fleet "alpha" webhook
+// triggers, so a test can exercise the delivery stack with any filter (regex or
+// json-path). The triggers are the only thing that varies between webhook e2e
+// tests; everything below — MCP loopback, TLS gateway, and the fleetd TagWebhook
+// tunnel — is identical real machinery.
+func webhookStackWith(t *testing.T, triggers ...fleet.Trigger) (publicWebhookBase string, pool *x509.CertPool, svc *service) {
 	t.Helper()
 	isolateFleetDir(t)
 	if err := os.MkdirAll(fleetpaths.Dir(), 0o700); err != nil {
@@ -39,17 +52,14 @@ func webhookStack(t *testing.T) (publicWebhookBase string, pool *x509.CertPool, 
 	}
 
 	svc = newService()
-	// Stub the persisted state with a single webhook trigger. The receiver loads
+	// Stub the persisted state with the given webhook triggers. The receiver loads
 	// via scheduleLoadState, so this drives matching without touching disk.
 	origLoad := scheduleLoadState
 	scheduleLoadState = func() (*state.State, error) {
 		return &state.State{Fleets: map[string]*fleet.Fleet{
 			"alpha": {Name: "alpha", Settings: fleet.FleetSettings{
-				Agents: []fleet.Agent{{Name: "a"}},
-				Triggers: []fleet.Trigger{{
-					Name: "ci", Type: fleet.TriggerWebhook, AgentNames: []string{"a"},
-					WebhookName: "ci", FilterType: fleet.WebhookFilterRegex, Regex: `"action":"opened"`,
-				}},
+				Agents:   []fleet.Agent{{Name: "a"}},
+				Triggers: triggers,
 			}},
 		}}, nil
 	}
@@ -146,6 +156,63 @@ func TestWebhookDeliveryEndToEnd(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("event delivered but no trigger fire was enqueued")
+	}
+}
+
+// TestWebhookJSONPathDeliveryEndToEnd drives a JSON-PATH-filtered webhook trigger
+// through the WHOLE real stack (gateway -> TagWebhook tunnel -> fleetd receiver ->
+// matcher -> scheduler). The regex e2e above never exercises the json-path branch,
+// which — unlike regex matching raw bytes — must PARSE the delivered body as JSON,
+// so this is the only end-to-end proof that a json-path filter survives transport.
+// It asserts both directions against the same live stack: a body whose $.ref equals
+// the configured value fires, and a body where $.ref differs but an UNRELATED field
+// carries that value (so a raw-byte regex would wrongly match) does NOT — confirming
+// the filter routes on JSON structure, not substrings, end to end.
+func TestWebhookJSONPathDeliveryEndToEnd(t *testing.T) {
+	base, pool, svc := webhookStackWith(t, fleet.Trigger{
+		Name: "deploy", Type: fleet.TriggerWebhook, AgentNames: []string{"a"},
+		WebhookName: "deploy", FilterType: fleet.WebhookFilterJSONPath,
+		JSONPath: "$.ref", JSONValue: "refs/heads/main",
+	})
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "127.0.0.1"}}}
+
+	// Matching event: $.ref == "refs/heads/main" -> fires.
+	resp, err := client.Post(base+"/deploy", "application/json",
+		strings.NewReader(`{"ref":"refs/heads/main","after":"abc123"}`))
+	if err != nil {
+		t.Fatalf("POST matching json-path webhook through the tunnel: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching json-path webhook POST -> %d, want 200", resp.StatusCode)
+	}
+	select {
+	case batch := <-svc.webhookFires:
+		if len(batch) != 1 || batch[0].fleet != "alpha" || batch[0].trigger.Name != "deploy" {
+			t.Fatalf("unexpected fire batch through the tunnel: %+v", batch)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("matching json-path event delivered but no trigger fire was enqueued")
+	}
+
+	// Non-matching event: $.ref differs; the configured value appears only in an
+	// unrelated field, so a substring/regex would mis-fire but json-path must not.
+	// serveWebhook decides + enqueues BEFORE writing 200, so any fire is already
+	// buffered by the time the POST returns — a short drain window suffices.
+	resp2, err := client.Post(base+"/deploy", "application/json",
+		strings.NewReader(`{"ref":"refs/heads/dev","note":"refs/heads/main"}`))
+	if err != nil {
+		t.Fatalf("POST non-matching json-path webhook through the tunnel: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("non-matching json-path webhook POST -> %d, want 200 (name wired, filter didn't match)", resp2.StatusCode)
+	}
+	select {
+	case batch := <-svc.webhookFires:
+		t.Fatalf("json-path filter must not fire when $.ref differs, got %+v", batch)
+	case <-time.After(500 * time.Millisecond):
+		// expected: nothing enqueued
 	}
 }
 
