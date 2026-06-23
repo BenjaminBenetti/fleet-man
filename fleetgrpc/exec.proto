@@ -228,7 +228,7 @@ message TriggerLogsRequest {
 
 message TriggerLogsReply {
   // logs is every recorded event log concatenated (oldest first), each preceded
-  // by a "=== event-<timestamp>.log ===" separator. Empty when none recorded.
+  // by a "===== event-<timestamp>.log =====" separator. Empty when none recorded.
   string logs = 1;
   // count is how many event logs were concatenated.
   int32 count = 2;

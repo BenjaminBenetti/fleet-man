@@ -35,7 +35,7 @@ func WarnPath(fleetName, instanceName string) string {
 // TriggerLogsDir returns the host directory that holds an automation trigger's
 // recorded event logs: ~/.fleet/logs/<fleet>/trigger/<trigger>/. The daemon
 // writes one event-<timestamp>.log per firing here (keeping the most recent
-// few); the TriggerLogs RPC reads them back. Fleet and trigger names are reduced
+// 100); the TriggerLogs RPC reads them back. Fleet and trigger names are reduced
 // to safe single path segments so a crafted name cannot escape the logs tree —
 // the writer and the reader both go through here, so they always agree on the
 // same directory.

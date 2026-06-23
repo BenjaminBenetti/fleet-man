@@ -100,16 +100,60 @@ func TestTriggerLogRotation(t *testing.T) {
 	}
 }
 
-// TestUniqueTriggerLogPathNoOverwrite proves two firings in the same second each
-// get their own log file (a -N suffix) rather than clobbering one another.
+// TestUniqueTriggerLogPathNoOverwrite proves firings in the same second each get
+// their own log file rather than clobbering one another, AND that the on-disk
+// order matches firing order — the collision suffix must keep lexical filename
+// order chronological (eventLogNames/prune/read all sort by name).
 func TestUniqueTriggerLogPathNoOverwrite(t *testing.T) {
 	isolateFleetDir(t)
 	at := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
-	for i := 0; i < 3; i++ {
-		logTriggerEvent("alpha", &triggerEvent{kind: fleet.TriggerSchedule, triggerName: "burst", firedAt: at})
+	bodies := []string{"first-firing", "second-firing", "third-firing"}
+	for _, body := range bodies {
+		logTriggerEvent("alpha", &triggerEvent{
+			kind: fleet.TriggerWebhook, triggerName: "burst", webhookName: "ci", firedAt: at, body: []byte(body),
+		})
 	}
-	if names := eventLogNames(state.TriggerLogsDir("alpha", "burst")); len(names) != 3 {
+	dir := state.TriggerLogsDir("alpha", "burst")
+	if names := eventLogNames(dir); len(names) != 3 {
 		t.Fatalf("same-second firings produced %d logs, want 3: %v", len(names), names)
+	}
+	logs, _, err := readTriggerLogs("alpha", "burst")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	// Each body must appear, in firing order.
+	prev := -1
+	for _, body := range bodies {
+		idx := strings.Index(logs, body)
+		if idx < 0 {
+			t.Fatalf("body %q missing from logs:\n%s", body, logs)
+		}
+		if idx < prev {
+			t.Fatalf("same-second logs out of firing order (%q before a prior firing):\n%s", body, logs)
+		}
+		prev = idx
+	}
+}
+
+// TestTriggerLogPerms: the durable logs (which can hold webhook secrets) are
+// owner-only — 0600 files in a 0700 trigger dir.
+func TestTriggerLogPerms(t *testing.T) {
+	isolateFleetDir(t)
+	logTriggerEvent("alpha", &triggerEvent{kind: fleet.TriggerSchedule, triggerName: "nightly", firedAt: time.Now()})
+	dir := state.TriggerLogsDir("alpha", "nightly")
+	if fi, err := os.Stat(dir); err != nil {
+		t.Fatalf("stat dir: %v", err)
+	} else if perm := fi.Mode().Perm(); perm != 0o700 {
+		t.Errorf("trigger log dir perm = %o, want 700", perm)
+	}
+	names := eventLogNames(dir)
+	if len(names) != 1 {
+		t.Fatalf("want 1 log, got %v", names)
+	}
+	if fi, err := os.Stat(filepath.Join(dir, names[0])); err != nil {
+		t.Fatalf("stat file: %v", err)
+	} else if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Errorf("trigger log file perm = %o, want 600", perm)
 	}
 }
 

@@ -1444,7 +1444,7 @@ func (x *TriggerLogsRequest) GetTrigger() string {
 type TriggerLogsReply struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// logs is every recorded event log concatenated (oldest first), each preceded
-	// by a "=== event-<timestamp>.log ===" separator. Empty when none recorded.
+	// by a "===== event-<timestamp>.log =====" separator. Empty when none recorded.
 	Logs string `protobuf:"bytes,1,opt,name=logs,proto3" json:"logs,omitempty"`
 	// count is how many event logs were concatenated.
 	Count         int32 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`

@@ -46,12 +46,15 @@ const triggerEventLogKeep = 100
 // not part of the automation's critical path.
 var logTriggerEvent = func(fleetName string, ev *triggerEvent) {
 	dir := state.TriggerLogsDir(fleetName, ev.triggerName)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// 0700 dir / 0600 file: a webhook body can carry signatures or secrets, and
+	// these logs persist durably on the host (unlike the payload's previous home
+	// inside an ephemeral instance), so keep them readable only by the owner.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		flog.Warn("automation: trigger log mkdir failed", "fleet", fleetName, "trigger", ev.triggerName, "err", err)
 		return
 	}
 	path := uniqueTriggerLogPath(dir, ev.firedAt)
-	if err := os.WriteFile(path, triggerEventLogContent(ev), 0o644); err != nil {
+	if err := os.WriteFile(path, triggerEventLogContent(ev), 0o600); err != nil {
 		flog.Warn("automation: trigger log write failed", "fleet", fleetName, "trigger", ev.triggerName, "err", err)
 		return
 	}
@@ -78,17 +81,25 @@ func triggerEventLogContent(ev *triggerEvent) []byte {
 	return []byte(b.String())
 }
 
-// uniqueTriggerLogPath returns event-<UTC timestamp>.log in dir, suffixing -N
-// when a log with that second-granular name already exists (two webhook events
-// can fire within the same second), so no firing overwrites another.
+// uniqueTriggerLogPath returns event-<UTC timestamp>.log in dir, suffixing a
+// counter when a log with that second-granular name already exists (two webhook
+// events can fire within the same second), so no firing overwrites another.
+//
+// The counter is zero-padded and uses '_' as the separator on purpose: '_'
+// (0x5F) sorts AFTER '.' (0x2E), and zero-padding makes the counter sort
+// numerically, so lexical filename order stays chronological within a second
+// (event-<ts>.log < event-<ts>_0002.log < event-<ts>_0003.log < ...). That
+// matters because eventLogNames / pruneTriggerLogs / readTriggerLogs all order
+// by name — a naive "-N" suffix would sort the 2nd firing before the 1st and
+// "-10" before "-2", reversing the pager and mis-pruning at the 100-file edge.
 func uniqueTriggerLogPath(dir string, firedAt time.Time) string {
 	base := "event-" + firedAt.UTC().Format("20060102T150405Z")
 	path := filepath.Join(dir, base+".log")
-	for i := 2; i < 100000; i++ {
+	for i := 2; i < 10000; i++ {
 		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 			return path
 		}
-		path = filepath.Join(dir, fmt.Sprintf("%s-%d.log", base, i))
+		path = filepath.Join(dir, fmt.Sprintf("%s_%04d.log", base, i))
 	}
 	return path
 }
