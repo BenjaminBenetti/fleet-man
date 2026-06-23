@@ -85,6 +85,12 @@ service FleetService {
   rpc ResolveLogsCommand(ResolveLogsCommandRequest) returns (ResolveLogsCommandReply);
   rpc Logs(LogsRequest) returns (stream LogLine);
 
+  // TriggerLogs returns an automation trigger's recorded event logs (the
+  // payloads of its recent firings, concatenated for viewing). The daemon owns
+  // the log files (~/.fleet/logs/<fleet>/trigger/<trigger>/), so reading them
+  // over the service works unchanged when the daemon is remote.
+  rpc TriggerLogs(TriggerLogsRequest) returns (TriggerLogsReply);
+
   // Forward is the port-forward data plane: one bidi stream per forwarded TCP
   // connection (first frame is the ForwardOpen header, the rest raw bytes).
   // The client listens locally and pipes each accepted connection through this

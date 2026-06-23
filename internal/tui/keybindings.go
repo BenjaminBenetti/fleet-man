@@ -52,6 +52,17 @@ func keybindingsData() []keybindingGroup {
 			},
 		},
 		{
+			Title: "Automation (trigger / agent view)",
+			Entries: []keybindingEntry{
+				{"m", "Toggle automation / instance view"},
+				{"a", "Add trigger / agent"},
+				{"enter / e", "Edit trigger / agent"},
+				{"s", "Enable / disable trigger"},
+				{"L", "View trigger event logs"},
+				{"d", "Delete trigger / agent"},
+			},
+		},
+		{
 			Title: "Settings",
 			Entries: []keybindingEntry{
 				{"j / k", "Navigate up / down"},

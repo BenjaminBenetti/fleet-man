@@ -48,6 +48,7 @@ const (
 	FleetService_ResolveExecCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveExecCommand"
 	FleetService_ResolveLogsCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveLogsCommand"
 	FleetService_Logs_FullMethodName                   = "/fleetgrpc.FleetService/Logs"
+	FleetService_TriggerLogs_FullMethodName            = "/fleetgrpc.FleetService/TriggerLogs"
 	FleetService_Forward_FullMethodName                = "/fleetgrpc.FleetService/Forward"
 	FleetService_CopyFile_FullMethodName               = "/fleetgrpc.FleetService/CopyFile"
 	FleetService_CopyInto_FullMethodName               = "/fleetgrpc.FleetService/CopyInto"
@@ -120,6 +121,11 @@ type FleetServiceClient interface {
 	ResolveExecCommand(ctx context.Context, in *ResolveExecCommandRequest, opts ...grpc.CallOption) (*ResolveExecCommandReply, error)
 	ResolveLogsCommand(ctx context.Context, in *ResolveLogsCommandRequest, opts ...grpc.CallOption) (*ResolveLogsCommandReply, error)
 	Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error)
+	// TriggerLogs returns an automation trigger's recorded event logs (the
+	// payloads of its recent firings, concatenated for viewing). The daemon owns
+	// the log files (~/.fleet/logs/<fleet>/trigger/<trigger>/), so reading them
+	// over the service works unchanged when the daemon is remote.
+	TriggerLogs(ctx context.Context, in *TriggerLogsRequest, opts ...grpc.CallOption) (*TriggerLogsReply, error)
 	// Forward is the port-forward data plane: one bidi stream per forwarded TCP
 	// connection (first frame is the ForwardOpen header, the rest raw bytes).
 	// The client listens locally and pipes each accepted connection through this
@@ -518,6 +524,16 @@ func (c *fleetServiceClient) Logs(ctx context.Context, in *LogsRequest, opts ...
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_LogsClient = grpc.ServerStreamingClient[LogLine]
 
+func (c *fleetServiceClient) TriggerLogs(ctx context.Context, in *TriggerLogsRequest, opts ...grpc.CallOption) (*TriggerLogsReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TriggerLogsReply)
+	err := c.cc.Invoke(ctx, FleetService_TriggerLogs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) Forward(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardChunk, ForwardChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[9], FleetService_Forward_FullMethodName, cOpts...)
@@ -666,6 +682,11 @@ type FleetServiceServer interface {
 	ResolveExecCommand(context.Context, *ResolveExecCommandRequest) (*ResolveExecCommandReply, error)
 	ResolveLogsCommand(context.Context, *ResolveLogsCommandRequest) (*ResolveLogsCommandReply, error)
 	Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error
+	// TriggerLogs returns an automation trigger's recorded event logs (the
+	// payloads of its recent firings, concatenated for viewing). The daemon owns
+	// the log files (~/.fleet/logs/<fleet>/trigger/<trigger>/), so reading them
+	// over the service works unchanged when the daemon is remote.
+	TriggerLogs(context.Context, *TriggerLogsRequest) (*TriggerLogsReply, error)
 	// Forward is the port-forward data plane: one bidi stream per forwarded TCP
 	// connection (first frame is the ForwardOpen header, the rest raw bytes).
 	// The client listens locally and pipes each accepted connection through this
@@ -785,6 +806,9 @@ func (UnimplementedFleetServiceServer) ResolveLogsCommand(context.Context, *Reso
 }
 func (UnimplementedFleetServiceServer) Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error {
 	return status.Errorf(codes.Unimplemented, "method Logs not implemented")
+}
+func (UnimplementedFleetServiceServer) TriggerLogs(context.Context, *TriggerLogsRequest) (*TriggerLogsReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TriggerLogs not implemented")
 }
 func (UnimplementedFleetServiceServer) Forward(grpc.BidiStreamingServer[ForwardChunk, ForwardChunk]) error {
 	return status.Errorf(codes.Unimplemented, "method Forward not implemented")
@@ -1283,6 +1307,24 @@ func _FleetService_Logs_Handler(srv interface{}, stream grpc.ServerStream) error
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_LogsServer = grpc.ServerStreamingServer[LogLine]
 
+func _FleetService_TriggerLogs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TriggerLogsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).TriggerLogs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_TriggerLogs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).TriggerLogs(ctx, req.(*TriggerLogsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_Forward_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(FleetServiceServer).Forward(&grpc.GenericServerStream[ForwardChunk, ForwardChunk]{ServerStream: stream})
 }
@@ -1466,6 +1508,10 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResolveLogsCommand",
 			Handler:    _FleetService_ResolveLogsCommand_Handler,
+		},
+		{
+			MethodName: "TriggerLogs",
+			Handler:    _FleetService_TriggerLogs_Handler,
 		},
 		{
 			MethodName: "InspectRepo",

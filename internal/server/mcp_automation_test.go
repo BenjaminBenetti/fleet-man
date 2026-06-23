@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -192,5 +193,37 @@ func TestMCPAutomationPreservesOtherSettings(t *testing.T) {
 	}
 	if len(got.Agents) != 1 {
 		t.Errorf("agent not persisted: %+v", got.Agents)
+	}
+}
+
+// TestMCPTriggerLogs proves the fleet_trigger_logs tool returns a trigger's
+// recorded firings (read from the daemon's on-host log files).
+func TestMCPTriggerLogs(t *testing.T) {
+	cs := seedBareFleet(t) // isolates the fleet dir (HOME) the logs live under
+
+	// No firings yet → empty, count 0.
+	var empty TriggerLogsOutput
+	callJSON(t, cs, "fleet_trigger_logs", map[string]any{"fleet": "alpha", "trigger": "nightly"}, &empty)
+	if empty.Count != 0 || empty.Logs != "" {
+		t.Fatalf("empty history returned %+v", empty)
+	}
+
+	// Record a firing, then the tool reports it.
+	logTriggerEvent("alpha", &triggerEvent{
+		kind:        fleet.TriggerWebhook,
+		triggerName: "nightly",
+		firedAt:     time.Date(2026, 6, 23, 9, 0, 0, 0, time.UTC),
+		webhookName: "ci",
+		body:        []byte("event-payload"),
+	})
+	var out TriggerLogsOutput
+	callJSON(t, cs, "fleet_trigger_logs", map[string]any{"fleet": "alpha", "trigger": "nightly"}, &out)
+	if out.Count != 1 || !strings.Contains(out.Logs, "event-payload") {
+		t.Fatalf("trigger logs returned %+v", out)
+	}
+
+	// Missing args are a tool error.
+	if msg := callErr(t, cs, "fleet_trigger_logs", map[string]any{"fleet": "alpha"}); !strings.Contains(msg, "required") {
+		t.Errorf("missing-trigger error = %q", msg)
 	}
 }

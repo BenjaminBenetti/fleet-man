@@ -187,6 +187,41 @@ func TestTriggerList(t *testing.T) {
 	}
 }
 
+func TestTriggerLogs(t *testing.T) {
+	orig := triggerLogs
+	t.Cleanup(func() { triggerLogs = orig })
+	var gotFleet, gotTrigger string
+	triggerLogs = func(_ context.Context, f, tr string) (string, error) {
+		gotFleet, gotTrigger = f, tr
+		return "===== event-20260623T090000Z.log =====\nhello payload\n", nil
+	}
+
+	out, err := runCLI(t, "trigger", "logs", "alpha", "nightly")
+	if err != nil {
+		t.Fatalf("logs: %v", err)
+	}
+	if gotFleet != "alpha" || gotTrigger != "nightly" {
+		t.Errorf("fetched logs for %q/%q, want alpha/nightly", gotFleet, gotTrigger)
+	}
+	if !strings.Contains(out, "hello payload") {
+		t.Errorf("output missing payload:\n%s", out)
+	}
+}
+
+func TestTriggerLogsEmpty(t *testing.T) {
+	orig := triggerLogs
+	t.Cleanup(func() { triggerLogs = orig })
+	triggerLogs = func(context.Context, string, string) (string, error) { return "", nil }
+
+	out, err := runCLI(t, "trigger", "logs", "alpha", "nightly")
+	if err != nil {
+		t.Fatalf("logs: %v", err)
+	}
+	if !strings.Contains(out, "No events recorded") {
+		t.Errorf("empty history output = %q", out)
+	}
+}
+
 func TestTriggerAliases(t *testing.T) {
 	cmds := map[string]string{}
 	for _, c := range newTriggerCmd().Commands() {

@@ -214,6 +214,26 @@ message ResolveLogsCommandReply {
   repeated string argv = 1;
 }
 
+// TriggerLogs reads back an automation trigger's recorded event logs. Each time
+// a trigger fires, the daemon writes the firing's payload (the webhook body, or
+// the schedule fire-time) to a per-trigger log directory, keeping the most
+// recent 100. This returns them concatenated (oldest first), so a client can
+// inspect what fired an automation after the fact — the TUI's 'L' pager, the
+// `fleet trigger logs` CLI, and the fleet_trigger_logs MCP tool all read here.
+// A trigger that has never fired returns empty logs with count 0 (not an error).
+message TriggerLogsRequest {
+  string fleet = 1;
+  string trigger = 2;
+}
+
+message TriggerLogsReply {
+  // logs is every recorded event log concatenated (oldest first), each preceded
+  // by a "===== event-<timestamp>.log =====" separator. Empty when none recorded.
+  string logs = 1;
+  // count is how many event logs were concatenated.
+  int32 count = 2;
+}
+
 // =====================================================================
 // CODER TEMPLATE PARAMETERS — read the Coder API server-side
 // =====================================================================

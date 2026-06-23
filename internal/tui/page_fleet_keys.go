@@ -467,6 +467,11 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.rightSelected = false
 
 		case "L":
+			// On a trigger row, page its recorded event logs; otherwise the
+			// instance container/creation logs.
+			if r := fleetPage.currentRow(); r != nil && r.kind == rowTrigger {
+				return fleetPage.openTriggerLogs(m, r.fleetName, r.autoIdx)
+			}
 			_, instance := fleetPage.selectedInstance(m)
 			if instance == nil {
 				m.message = "Select an instance"
@@ -765,7 +770,7 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 
 	case rowTrigger:
 		return withArmadaHint([]string{
-			"j/k: navigate", "enter/e: edit", "s: enable/disable", "a: add trigger", "d: delete", "m: instances", "q: quit",
+			"j/k: navigate", "enter/e: edit", "s: enable/disable", "L: logs", "a: add trigger", "d: delete", "m: instances", "q: quit",
 		})
 
 	case rowAgent:

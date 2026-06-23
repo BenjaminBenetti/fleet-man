@@ -339,3 +339,30 @@ func (s *service) mcpTriggerDelete(ctx context.Context, _ *mcp.CallToolRequest, 
 	}
 	return nil, toMCPAutomation(settings), nil
 }
+
+// --- trigger event logs ---
+
+type FleetTriggerLogsInput struct {
+	Fleet   string `json:"fleet" jsonschema:"fleet name"`
+	Trigger string `json:"trigger" jsonschema:"trigger name"`
+}
+
+// TriggerLogsOutput is a trigger's recorded event logs, concatenated for reading.
+type TriggerLogsOutput struct {
+	// Logs is every recorded firing's payload concatenated (oldest first), each
+	// preceded by a separator header; empty when the trigger has fired nothing.
+	Logs string `json:"logs"`
+	// Count is how many event logs were concatenated.
+	Count int `json:"count"`
+}
+
+func (s *service) mcpTriggerLogs(_ context.Context, _ *mcp.CallToolRequest, in FleetTriggerLogsInput) (*mcp.CallToolResult, TriggerLogsOutput, error) {
+	if in.Fleet == "" || in.Trigger == "" {
+		return nil, TriggerLogsOutput{}, errors.New("fleet and trigger are required")
+	}
+	logs, count, err := readTriggerLogs(in.Fleet, in.Trigger)
+	if err != nil {
+		return nil, TriggerLogsOutput{}, mcpErr(err)
+	}
+	return nil, TriggerLogsOutput{Logs: logs, Count: count}, nil
+}

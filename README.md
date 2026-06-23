@@ -109,6 +109,7 @@ fleet agent create my-project nightly-builder --system-prompt "Build and report"
 fleet trigger create my-project nightly --agent nightly-builder --cron "0 0 * * *" --prompt "Run the nightly build"
 fleet agent list my-project
 fleet trigger list my-project
+fleet trigger logs my-project nightly   # inspect a trigger's recorded firings
 ```
 
 ## TUI Keybindings
@@ -125,7 +126,7 @@ fleet trigger list my-project
 | `d` | Delete instance/fleet |
 | `c` | Open VS Code |
 | `R` | Rebuild instance (preserves workspace) |
-| `L` | View logs |
+| `L` | View logs (instance logs, or a selected trigger's event logs in the automation view) |
 | `→/l`, `←/h` | Select / deselect the PR-status auto tag |
 | `enter` (on PR status) | Open the PR in a browser |
 | `A` | Switch armada (remote fleet) |
@@ -189,9 +190,9 @@ Tools mirror the non-interactive CLI: `fleet_list`, `fleet_status`,
 the tmux session tools `fleet_session_spawn` / `fleet_session_exec` /
 `fleet_session_read` / `fleet_session_list`, and the automation CRUD tools
 `fleet_automation_list`, `fleet_agent_create` / `fleet_agent_update` /
-`fleet_agent_delete`, and `fleet_trigger_create` / `fleet_trigger_update` /
-`fleet_trigger_delete` (mirroring the `fleet agent` and `fleet trigger` CLI
-commands).
+`fleet_agent_delete`, `fleet_trigger_create` / `fleet_trigger_update` /
+`fleet_trigger_delete`, and `fleet_trigger_logs` (mirroring the `fleet agent` and
+`fleet trigger` CLI commands).
 Interactive, open-ended commands (`fleet shell`, log following) are intentionally
 not exposed.
 

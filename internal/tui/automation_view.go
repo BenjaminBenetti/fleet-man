@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 
@@ -205,6 +207,49 @@ func (fleetPage *fleetPage) toggleTriggerDisabled(m *model, fleetName string, id
 		m.message = fmt.Sprintf("Enabled trigger %q", name)
 	}
 	return nil
+}
+
+// openTriggerLogs fetches a trigger's recorded event logs from the daemon and
+// opens them in `less` so the user can scroll and search (the 'L' action). The
+// logs are pulled over the service (they live on the daemon host, possibly
+// remote), written to a temp file, and paged; the temp file is removed once the
+// pager exits. An empty history or a fetch error surfaces as a status message
+// rather than launching an empty pager.
+func (fleetPage *fleetPage) openTriggerLogs(m *model, fleetName string, idx int) tea.Cmd {
+	f, ok := m.st.Fleets[fleetName]
+	if !ok {
+		return nil
+	}
+	t := triggerAt(f, idx)
+	if t == nil {
+		return nil
+	}
+	logs, err := triggerLogsRemote(fleetName, t.Name)
+	if err != nil {
+		m.message = fmt.Sprintf("Could not load trigger logs: %v", err)
+		return nil
+	}
+	if strings.TrimSpace(logs) == "" {
+		m.message = fmt.Sprintf("No events recorded for trigger %q", t.Name)
+		return nil
+	}
+	tmp, err := os.CreateTemp("", "fleet-trigger-log-*.log")
+	if err != nil {
+		m.message = fmt.Sprintf("Could not open trigger logs: %v", err)
+		return nil
+	}
+	path := tmp.Name()
+	_, writeErr := tmp.WriteString(logs)
+	closeErr := tmp.Close()
+	if writeErr != nil || closeErr != nil {
+		os.Remove(path)
+		m.message = "Could not open trigger logs: write failed"
+		return nil
+	}
+	return execProcess(exec.Command("less", path), func(err error) tea.Msg {
+		os.Remove(path)
+		return execDoneMsg{err}
+	})
 }
 
 // deleteTrigger removes the trigger at idx and persists.
