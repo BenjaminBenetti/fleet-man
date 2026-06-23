@@ -50,11 +50,6 @@ var (
 // $HOME, which tests rebind. Missing files are skipped at archive time, so a
 // pristine ~/.fleet that has not yet grown all of these is fine.
 func backupSources() []string {
-	// This set is exactly the files issue #205 calls out — fleetd's own durable
-	// state. armada.json lives in ~/.fleet too (and is now an atomicfile.Write
-	// writer), but is deliberately NOT here: it is the CLIENT's registry of
-	// remote fleetd connections to switch between, not this daemon's state, so it
-	// is out of fleetd's self-backup scope. Don't add it without revisiting that.
 	return []string{
 		state.ConfigPath(),              // config.json
 		fleetpaths.GatewaySessionPath(), // gateway_session.json
@@ -62,6 +57,7 @@ func backupSources() []string {
 		fleetpaths.McpPortPath(),        // mcp.port
 		fleetpaths.McpTokenPath(),       // mcp.token
 		state.StatePath(),               // state.json
+		state.ArmadaPath(),              // armada.json (remote-fleet registry; embeds bearer tokens)
 	}
 }
 
@@ -418,6 +414,7 @@ func (s *service) mcpRestoreBackup(_ context.Context, _ *mcp.CallToolRequest, _ 
 		Contents: []restoreBackupFile{
 			{Name: "config.json", Description: "user/global fleet configuration (settings, backends, remote-MCP/gateway config)."},
 			{Name: "state.json", Description: "the fleet & instance registry — fleetd's core durable state."},
+			{Name: "armada.json", Description: "registry of remote fleetd connections (gateway URL + bearer token per fleet) — SECRET."},
 			{Name: "gateway_session.json", Description: "sticky remote-MCP gateway session (session id + public URL)."},
 			{Name: "mcp.env", Description: "sourceable shell exports for the local MCP endpoint (FLEET_MCP_URL/PORT/TOKEN)."},
 			{Name: "mcp.port", Description: "TCP port the local MCP HTTP server bound to."},

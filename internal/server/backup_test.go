@@ -73,6 +73,7 @@ func TestWriteBackupRoundTrip(t *testing.T) {
 		"mcp.port":             "6012",
 		"mcp.token":            "secret-token",
 		"state.json":           `{"fleets":{}}`,
+		"armada.json":          `{"fleets":{}}`,
 	})
 
 	now := time.Date(2026, 6, 23, 14, 5, 0, 0, time.UTC)
@@ -80,8 +81,8 @@ func TestWriteBackupRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("writeBackup: %v", err)
 	}
-	if n != 6 {
-		t.Fatalf("captured %d files, want 6", n)
+	if n != 7 {
+		t.Fatalf("captured %d files, want 7", n)
 	}
 	wantPath := filepath.Join(backupBaseDir(), "2026-06-23", "14.tar.xz")
 	if path != wantPath {
@@ -103,6 +104,7 @@ func TestWriteBackupRoundTrip(t *testing.T) {
 		"mcp.port":             "6012",
 		"mcp.token":            "secret-token",
 		"state.json":           `{"fleets":{}}`,
+		"armada.json":          `{"fleets":{}}`,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("archive has %d entries, want %d: %v", len(got), len(want), keys(got))
@@ -332,8 +334,8 @@ func TestMcpRestoreBackupDocuments(t *testing.T) {
 	if out.BackupDir != base {
 		t.Errorf("BackupDir = %s, want %s", out.BackupDir, base)
 	}
-	if len(out.Contents) != 6 {
-		t.Errorf("documented %d files, want 6", len(out.Contents))
+	if len(out.Contents) != 7 {
+		t.Errorf("documented %d files, want 7", len(out.Contents))
 	}
 	if len(out.Procedure) == 0 {
 		t.Error("Procedure should not be empty")
