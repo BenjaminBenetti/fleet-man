@@ -175,7 +175,9 @@ func TestWriteBackupOverwritesSameHour(t *testing.T) {
 
 func TestPruneBackupsRetention(t *testing.T) {
 	writeFleetState(t, nil)
-	t.Setenv("FLEET_BACKUP_RETENTION", "720h") // force the default regardless of env
+	// Pin the window for the test and restore it after, so test order can't leak
+	// a mutated global to other tests.
+	defer func(prev time.Duration) { backupRetention = prev }(backupRetention)
 	backupRetention = 30 * 24 * time.Hour
 
 	base := backupBaseDir()
@@ -195,7 +197,13 @@ func TestPruneBackupsRetention(t *testing.T) {
 	mkArchive("2026-05-24", "08")                        // expired (before 12:00 cutoff)
 	mkArchive("2026-05-24", "15")                        // kept (after cutoff, same day)
 	mkArchive("2026-06-23", "11")                        // kept
-	// A non-backup directory should be left strictly alone.
+	// An expired day that ALSO holds a non-archive file: the archive is pruned but
+	// the day dir must survive (it isn't empty) and the foreign file is untouched.
+	mkArchive("2026-03-15", "09")
+	if err := os.WriteFile(filepath.Join(base, "2026-03-15", "README"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write day-dir foreign file: %v", err)
+	}
+	// A non-backup directory at the root should be left strictly alone.
 	if err := os.MkdirAll(filepath.Join(base, "notes"), 0o700); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
 	}
@@ -207,8 +215,8 @@ func TestPruneBackupsRetention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pruneBackups: %v", err)
 	}
-	if removed != 2 {
-		t.Fatalf("removed %d archives, want 2", removed)
+	if removed != 3 {
+		t.Fatalf("removed %d archives, want 3", removed)
 	}
 	// Fully-expired day directory is gone; partially-expired day survives with its
 	// kept hour; fresh day survives; foreign dir untouched.
@@ -217,6 +225,48 @@ func TestPruneBackupsRetention(t *testing.T) {
 	assertPresent(t, filepath.Join(base, "2026-05-24", "15.tar.xz"))
 	assertPresent(t, filepath.Join(base, "2026-06-23", "11.tar.xz"))
 	assertPresent(t, filepath.Join(base, "notes", "keep.txt"))
+	// Expired archive removed, but its day dir + foreign file remain.
+	assertAbsent(t, filepath.Join(base, "2026-03-15", "09.tar.xz"))
+	assertPresent(t, filepath.Join(base, "2026-03-15", "README"))
+}
+
+func TestPruneBackupsSweepsOrphanTempFiles(t *testing.T) {
+	writeFleetState(t, nil)
+	base := backupBaseDir()
+	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+
+	// A fresh day dir whose only content is an orphaned temp file (a snapshot
+	// crashed before its rename): the temp file is swept and the now-empty day dir
+	// removed — it isn't counted as a pruned archive.
+	orphanDay := filepath.Join(base, "2026-06-23")
+	if err := os.MkdirAll(orphanDay, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(orphanDay, ".backup-abc123.tar.xz.tmp"), []byte("partial"), 0o600); err != nil {
+		t.Fatalf("write temp: %v", err)
+	}
+	// A second day with a valid archive AND an orphan temp: temp swept, archive kept.
+	keepDay := filepath.Join(base, "2026-06-22")
+	if err := os.MkdirAll(keepDay, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(keepDay, "10.tar.xz"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(keepDay, ".backup-def456.tar.xz.tmp"), []byte("partial"), 0o600); err != nil {
+		t.Fatalf("write temp: %v", err)
+	}
+
+	removed, err := pruneBackups(now)
+	if err != nil {
+		t.Fatalf("pruneBackups: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed %d, want 0 (temp sweeps are not counted as pruned archives)", removed)
+	}
+	assertAbsent(t, orphanDay) // emptied by the sweep, then removed
+	assertAbsent(t, filepath.Join(keepDay, ".backup-def456.tar.xz.tmp"))
+	assertPresent(t, filepath.Join(keepDay, "10.tar.xz"))
 }
 
 func keys(m map[string]string) []string {

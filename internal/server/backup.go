@@ -180,6 +180,13 @@ func writeBackup(now time.Time) (string, int, error) {
 // is a flat bag of ~/.fleet files, not a directory tree). A file that vanished
 // between the stat above and here is skipped rather than failing the whole
 // snapshot.
+//
+// The header Size is taken from the bytes actually read, NOT from the stat: the
+// sources are rewritten live by this same daemon (state.Save/SaveConfig do an
+// in-place, non-atomic os.WriteFile of state.json/config.json), so a rewrite
+// landing between stat and read would leave hdr.Size != len(data) and make
+// tar.Writer fail the whole snapshot. Deriving Size from the read keeps the
+// header self-consistent — at worst we capture the old-or-new file in full.
 func addFileToTar(tw *tar.Writer, path string) (bool, error) {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
@@ -203,6 +210,7 @@ func addFileToTar(tw *tar.Writer, path string) (bool, error) {
 		return false, err
 	}
 	hdr.Name = filepath.Base(path)
+	hdr.Size = int64(len(data)) // must match the bytes written below
 	if err := tw.WriteHeader(hdr); err != nil {
 		return false, err
 	}
@@ -246,8 +254,18 @@ func pruneBackups(now time.Time) (int, error) {
 			if a.IsDir() {
 				continue
 			}
-			hourStr := strings.TrimSuffix(a.Name(), ".tar.xz")
-			if hourStr == a.Name() {
+			name := a.Name()
+			// Reclaim a temp file orphaned by a snapshot that crashed before its
+			// rename (the deferred cleanup never ran). Safe to delete here:
+			// snapshots are serial and the current tick's writeBackup has already
+			// finished by the time prune runs, so any *.tmp left is from a dead run.
+			// Left behind, it would also keep an otherwise-empty day dir alive.
+			if strings.HasPrefix(name, ".backup-") && strings.HasSuffix(name, ".tmp") {
+				_ = os.Remove(filepath.Join(dayPath, name))
+				continue
+			}
+			hourStr := strings.TrimSuffix(name, ".tar.xz")
+			if hourStr == name {
 				continue // not a .tar.xz archive
 			}
 			hour, err := strconv.Atoi(hourStr)
@@ -256,7 +274,7 @@ func pruneBackups(now time.Time) (int, error) {
 			}
 			when := dayStart.Add(time.Duration(hour) * time.Hour)
 			if when.Before(cutoff) {
-				if err := os.Remove(filepath.Join(dayPath, a.Name())); err == nil {
+				if err := os.Remove(filepath.Join(dayPath, name)); err == nil {
 					removed++
 				}
 			}
