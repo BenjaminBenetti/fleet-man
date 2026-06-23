@@ -214,6 +214,27 @@ func TestWebhookJSONPathDeliveryEndToEnd(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		// expected: nothing enqueued
 	}
+
+	// Malformed (non-JSON) event: the most transport-sensitive case — a json-path
+	// filter must PARSE the delivered body, so a body that survives the tunnel but
+	// isn't JSON resolves no path and fires nothing, yet the name is still wired so
+	// the receiver answers 200 (not 404). This exercises the decode-failure branch
+	// end to end, which a regex filter (raw-byte match) never reaches.
+	resp3, err := client.Post(base+"/deploy", "application/json",
+		strings.NewReader(`refs/heads/main not json at all`))
+	if err != nil {
+		t.Fatalf("POST malformed json-path webhook through the tunnel: %v", err)
+	}
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusOK {
+		t.Fatalf("malformed json-path webhook POST -> %d, want 200 (name wired, body unparseable)", resp3.StatusCode)
+	}
+	select {
+	case batch := <-svc.webhookFires:
+		t.Fatalf("json-path filter must not fire on an unparseable body, got %+v", batch)
+	case <-time.After(500 * time.Millisecond):
+		// expected: nothing enqueued
+	}
 }
 
 // TestWebhookUnknownName404 confirms an event for a name no trigger carries is
