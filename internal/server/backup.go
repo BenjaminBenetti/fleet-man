@@ -171,15 +171,16 @@ func writeBackup(now time.Time) (string, int, error) {
 	}
 	if n == 0 {
 		// Every source vanished between the presence scan and the read. Honor the
-		// "writes nothing rather than an empty archive" contract: the deferred
-		// cleanup drops the temp file, and we remove the day dir if this call just
-		// created it (Remove no-ops when earlier-hour archives still live there).
+		// "writes nothing rather than an empty archive" contract: drop the temp
+		// file FIRST (the deferred Remove only fires on return, after the dir
+		// removal below), then drop the day dir if this call just created it
+		// (Remove no-ops when earlier-hour archives still live there).
+		_ = os.Remove(tmpName)
 		_ = os.Remove(dir)
 		return "", 0, nil
 	}
-	if err := os.Chmod(tmpName, 0o600); err != nil {
-		return "", 0, err
-	}
+	// The temp file is already 0600 (os.CreateTemp) and rename preserves it, so
+	// the archive lands 0600 to protect the embedded mcp.token.
 	if err := os.Rename(tmpName, finalPath); err != nil {
 		return "", 0, err
 	}
@@ -195,9 +196,9 @@ func writeBackup(now time.Time) (string, int, error) {
 // the header always matches the archived bytes even if a source changes size
 // between the stat and the read — otherwise tar.Writer would fail the whole
 // snapshot (ErrWriteTooLong / "missed writing N bytes"). The captured CONTENTS
-// are kept whole by the writers: state.Save/SaveConfig write state.json/
-// config.json atomically (temp+rename, see state.atomicWriteFile), so a
-// concurrent rewrite yields the old or new file in full, never a torn one.
+// are kept whole by the writers: every backup source is now written via
+// atomicfile.Write (temp+rename), so a concurrent rewrite yields the old or new
+// file in full, never a torn one.
 func addFileToTar(tw *tar.Writer, path string) (bool, error) {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
@@ -229,6 +230,23 @@ func addFileToTar(tw *tar.Writer, path string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// parseArchiveHour reports whether name is a "<hour>.tar.xz" backup archive
+// (hour 0–23, as written by now.Format("15")), returning the parsed hour and
+// its original 2-digit string. It is the single definition of "what counts as
+// an archive" shared by pruneBackups and listBackupArchives, so the two can't
+// drift on it.
+func parseArchiveHour(name string) (hourStr string, hour int, ok bool) {
+	hourStr = strings.TrimSuffix(name, ".tar.xz")
+	if hourStr == name {
+		return "", 0, false // no .tar.xz suffix
+	}
+	h, err := strconv.Atoi(hourStr)
+	if err != nil || h < 0 || h > 23 {
+		return "", 0, false
+	}
+	return hourStr, h, true
 }
 
 // pruneBackups removes archives older than the retention window and any backup
@@ -275,13 +293,9 @@ func pruneBackups(now time.Time) (int, error) {
 				_ = os.Remove(filepath.Join(dayPath, name))
 				continue
 			}
-			hourStr := strings.TrimSuffix(name, ".tar.xz")
-			if hourStr == name {
+			_, hour, ok := parseArchiveHour(name)
+			if !ok {
 				continue // not a .tar.xz archive
-			}
-			hour, err := strconv.Atoi(hourStr)
-			if err != nil || hour < 0 || hour > 23 {
-				continue
 			}
 			when := dayStart.Add(time.Duration(hour) * time.Hour)
 			if when.Before(cutoff) {
@@ -361,11 +375,8 @@ func listBackupArchives() []restoreBackupArchive {
 			if a.IsDir() {
 				continue
 			}
-			hourStr := strings.TrimSuffix(a.Name(), ".tar.xz")
-			if hourStr == a.Name() {
-				continue
-			}
-			if h, err := strconv.Atoi(hourStr); err != nil || h < 0 || h > 23 {
+			hourStr, _, ok := parseArchiveHour(a.Name())
+			if !ok {
 				continue
 			}
 			out = append(out, restoreBackupArchive{

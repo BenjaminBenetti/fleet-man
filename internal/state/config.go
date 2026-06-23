@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/atomicfile"
 )
 
 // Config holds user preferences.
@@ -91,8 +93,8 @@ func SaveConfig(c *Config) error {
 	}
 
 	// Atomic write (temp+rename): config.json is read unlocked by the backup loop,
-	// so a torn os.WriteFile is observable. See atomicWriteFile.
-	if err := atomicWriteFile(ConfigPath(), data, 0644); err != nil {
+	// so a torn os.WriteFile is observable. See atomicfile.Write.
+	if err := atomicfile.Write(ConfigPath(), data, 0644); err != nil {
 		return fmt.Errorf("writing config file: %w", err)
 	}
 

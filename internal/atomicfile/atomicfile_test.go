@@ -1,4 +1,4 @@
-package state
+package atomicfile
 
 import (
 	"os"
@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-func TestAtomicWriteFileRoundTrip(t *testing.T) {
+func TestWriteRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "thing.json")
 
-	if err := atomicWriteFile(path, []byte("v1"), 0o600); err != nil {
+	if err := Write(path, []byte("v1"), 0o600); err != nil {
 		t.Fatalf("first write: %v", err)
 	}
 	if got, err := os.ReadFile(path); err != nil || string(got) != "v1" {
@@ -24,7 +24,7 @@ func TestAtomicWriteFileRoundTrip(t *testing.T) {
 	}
 
 	// Overwrite with new content + perms: rename replaces in place and re-applies perm.
-	if err := atomicWriteFile(path, []byte("v2-longer"), 0o644); err != nil {
+	if err := Write(path, []byte("v2-longer"), 0o644); err != nil {
 		t.Fatalf("second write: %v", err)
 	}
 	if got, err := os.ReadFile(path); err != nil || string(got) != "v2-longer" {
@@ -49,31 +49,11 @@ func TestAtomicWriteFileRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSaveStateAtomicNoTornReads asserts repeated Save/Load round-trips through
-// the atomic writer keep state.json well-formed and complete (the property the
-// backup loop relies on when it reads the file unlocked).
-func TestSaveStateAtomicNoTornReads(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	for i := range 5 {
-		if err := Save(&State{}); err != nil {
-			t.Fatalf("save %d: %v", i, err)
-		}
-		// An unlocked read (as the backup loop does) must always see a complete file.
-		data, err := os.ReadFile(StatePath())
-		if err != nil {
-			t.Fatalf("read %d: %v", i, err)
-		}
-		if len(data) == 0 || data[len(data)-1] != '}' {
-			t.Fatalf("state.json looks truncated on iter %d: %q", i, data)
-		}
-	}
-	// The atomic writer must not leave temp files in ~/.fleet.
-	entries, _ := os.ReadDir(FleetDir())
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".tmp") {
-			t.Errorf("leftover temp file in fleet dir: %s", e.Name())
-		}
+func TestWriteMissingParentDirErrors(t *testing.T) {
+	// The parent dir must already exist; a missing one surfaces as an error
+	// rather than silently creating it.
+	path := filepath.Join(t.TempDir(), "nope", "thing.json")
+	if err := Write(path, []byte("x"), 0o600); err == nil {
+		t.Fatal("expected error writing into a missing parent dir, got nil")
 	}
 }

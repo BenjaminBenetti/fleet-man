@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/atomicfile"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 )
 
@@ -65,5 +66,5 @@ func saveSession(s sessionFile) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(fleetpaths.GatewaySessionPath(), data, 0o600)
+	return atomicfile.Write(fleetpaths.GatewaySessionPath(), data, 0o600)
 }

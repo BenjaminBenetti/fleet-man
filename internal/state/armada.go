@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/atomicfile"
 )
 
 // Armada is the user's registry of remote fleetd connections (gateway URL +
@@ -91,7 +93,7 @@ func SaveArmada(a *Armada) error {
 
 	// 0600: the armada file embeds bearer tokens. atomicWriteFile keeps the
 	// temp+rename guarantee GetArmada relies on (it serves clients unlocked).
-	if err := atomicWriteFile(ArmadaPath(), data, 0600); err != nil {
+	if err := atomicfile.Write(ArmadaPath(), data, 0600); err != nil {
 		return fmt.Errorf("writing armada file: %w", err)
 	}
 
