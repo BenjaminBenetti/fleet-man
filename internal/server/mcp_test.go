@@ -118,7 +118,7 @@ func TestNewMCPServerRegistersAllTools(t *testing.T) {
 		"fleet_exec", "fleet_session_spawn", "fleet_session_exec", "fleet_session_read",
 		"fleet_session_list",
 		"fleet_automation_list", "fleet_agent_create", "fleet_agent_update", "fleet_agent_delete",
-		"fleet_trigger_create", "fleet_trigger_update", "fleet_trigger_delete",
+		"fleet_trigger_create", "fleet_trigger_update", "fleet_trigger_delete", "fleet_trigger_logs",
 	}
 	for _, name := range want {
 		if !got[name] {

@@ -47,6 +47,22 @@ var loadAutomation = func(ctx context.Context, fleetName string) (fleet.FleetSet
 	}, nil
 }
 
+// triggerLogs fetches a trigger's recorded event logs (its recent firings'
+// payloads, concatenated) from the daemon. A package var so the command test can
+// stub the server round-trip.
+var triggerLogs = func(ctx context.Context, fleetName, triggerName string) (string, error) {
+	conn, err := fleetclient.Dial(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	reply, err := conn.Service().TriggerLogs(ctx, &fleetgrpc.TriggerLogsRequest{Fleet: fleetName, Trigger: triggerName})
+	if err != nil {
+		return "", err
+	}
+	return reply.GetLogs(), nil
+}
+
 // mutateAutomation reads the named fleet's settings, applies fn to its
 // (domain) agent/trigger lists, and writes the result back — preserving every
 // other settings field. fn returns the modified settings (the shared fleet.*

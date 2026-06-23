@@ -241,6 +241,17 @@ func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.
 // webhook path; it only mutates sched.watched, so it MUST run on the scheduler
 // goroutine.
 func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger fleet.Trigger, agents []fleet.Agent, now time.Time, body []byte) bool {
+	// One event describes this firing; it's shared (read-only) by every agent the
+	// trigger spawns and recorded once to the trigger's on-host event log so the
+	// firing is debuggable after the instances are reaped (see trigger_logs.go).
+	ev := &triggerEvent{
+		kind:        trigger.Type,
+		triggerName: trigger.Name,
+		firedAt:     now,
+		webhookName: trigger.WebhookName,
+		body:        body,
+	}
+	logTriggerEvent(fleetName, ev)
 	fired := false
 	for _, ag := range agents {
 		instName, err := createAutomationInstance(s, fleetName, ag, now)
@@ -257,13 +268,7 @@ func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger 
 			systemPrompt: ag.SystemPrompt,
 			spawnedAt:    now,
 			lastActive:   now,
-			event: &triggerEvent{
-				kind:        trigger.Type,
-				triggerName: trigger.Name,
-				firedAt:     now,
-				webhookName: trigger.WebhookName,
-				body:        body,
-			},
+			event:        ev,
 		}
 		sched.watched[w.key()] = w
 		fired = true

@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
 )
@@ -29,6 +30,37 @@ func WorkspacesDir() string {
 // the path manually so all warnings end up in the same well-known place.
 func WarnPath(fleetName, instanceName string) string {
 	return filepath.Join(FleetDir(), "logs", fleetName+"-"+instanceName+".warn")
+}
+
+// TriggerLogsDir returns the host directory that holds an automation trigger's
+// recorded event logs: ~/.fleet/logs/<fleet>/trigger/<trigger>/. The daemon
+// writes one event-<timestamp>.log per firing here (keeping the most recent
+// few); the TriggerLogs RPC reads them back. Fleet and trigger names are reduced
+// to safe single path segments so a crafted name cannot escape the logs tree —
+// the writer and the reader both go through here, so they always agree on the
+// same directory.
+func TriggerLogsDir(fleetName, triggerName string) string {
+	return filepath.Join(FleetDir(), "logs", safeLogSegment(fleetName), "trigger", safeLogSegment(triggerName))
+}
+
+// safeLogSegment reduces name to one filesystem-safe path segment: it keeps
+// letters, digits, and -._, maps everything else to '_', and collapses the
+// empty / "." / ".." forms (which would escape or alias a directory) to "_".
+func safeLogSegment(name string) string {
+	out := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case r == '-', r == '_', r == '.':
+			return r
+		default:
+			return '_'
+		}
+	}, name)
+	if out == "" || out == "." || out == ".." {
+		return "_"
+	}
+	return out
 }
 
 // BuildkitDir returns the per-fleet host directory that holds the shared

@@ -151,6 +151,10 @@ instance that runs the agent. These tools let you set that up for the user.
   `json_path`+`json_value`); `agents` names the agents it fires (each must
   exist). `fleet_trigger_update` merges fields like the agent one;
   `fleet_trigger_delete {fleet, name}` removes it.
+- `fleet_trigger_logs {fleet, trigger}` returns `{logs, count}` — the recorded
+  payloads of the trigger's recent firings (webhook body or schedule fire-time),
+  concatenated oldest-first. Use it to debug what fired (or failed to fire) an
+  automation; the daemon keeps the last 100 firings per trigger.
 
 Every write returns the fleet's resulting `{agents, triggers}`. Names are
 unique per fleet; an invalid cron, an unknown agent reference, or a duplicate
@@ -216,4 +220,5 @@ AUTOMATION  (unattended agents fired by triggers; every write returns {agents, t
   fleet_trigger_create {fleet, name, type, agents:[...], prompt?, cron? | webhook_name?+filter_type?+regex?|json_path?+json_value?}
   fleet_trigger_update {fleet, name, new_name?, type?, agents?, ...}                 # omit a field to keep it
   fleet_trigger_delete {fleet, name}
+  fleet_trigger_logs {fleet, trigger}                          # recorded firing payloads (debug what fired it)
 ```

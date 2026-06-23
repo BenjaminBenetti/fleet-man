@@ -144,6 +144,10 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 		Name:        "fleet_trigger_delete",
 		Description: "Delete an automation trigger. Returns the fleet's resulting automation config.",
 	}, s.mcpTriggerDelete)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_trigger_logs",
+		Description: "Read an automation trigger's recorded event logs: the payloads of its recent firings (webhook body or schedule fire-time), captured on the daemon so you can debug what fired it. Returns {logs, count} with the firings concatenated, oldest first.",
+	}, s.mcpTriggerLogs)
 }
 
 // --- shared shapes ---

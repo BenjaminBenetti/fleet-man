@@ -27,6 +27,7 @@ func newTriggerCmd() *cobra.Command {
 		newTriggerCreateCmd(),
 		newTriggerEditCmd(),
 		newTriggerDeleteCmd(),
+		newTriggerLogsCmd(),
 	)
 	return cmd
 }
@@ -170,6 +171,29 @@ func newTriggerDeleteCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Deleted trigger %q in fleet %q\n", name, fleetName)
+			return nil
+		},
+	}
+}
+
+func newTriggerLogsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "logs <fleet> <name>",
+		Short: "Show a trigger's recorded event logs",
+		Long: "Show a trigger's recorded event logs: the payloads of its recent firings\n" +
+			"(webhook body or schedule fire-time). The last 100 firings are kept.",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fleetName, name := args[0], args[1]
+			logs, err := triggerLogs(cmd.Context(), fleetName, name)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(logs) == "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "No events recorded for trigger %q in fleet %q\n", name, fleetName)
+				return nil
+			}
+			fmt.Fprint(cmd.OutOrStdout(), logs)
 			return nil
 		},
 	}

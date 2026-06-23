@@ -331,6 +331,21 @@ var setFleetSettingsRemote = func(fleetName string, s fleet.FleetSettings) error
 	})
 }
 
+// triggerLogsRemote fetches a trigger's recorded event logs (its recent
+// firings' payloads, concatenated) from the daemon, for the 'L' pager.
+var triggerLogsRemote = func(fleetName, triggerName string) (string, error) {
+	var out string
+	err := mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
+		reply, err := svc.TriggerLogs(ctx, &fleetgrpc.TriggerLogsRequest{Fleet: fleetName, Trigger: triggerName})
+		if err != nil {
+			return err
+		}
+		out = reply.GetLogs()
+		return nil
+	})
+	return out, err
+}
+
 // setInstanceMetadataRemote updates user-facing labels. A nil field means
 // "leave unchanged"; a non-nil pointer (incl. to "") sets the value.
 var setInstanceMetadataRemote = func(fleetName, instance string, displayName, color, tag *string) error {
