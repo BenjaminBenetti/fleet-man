@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -63,11 +65,32 @@ func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fires, nameFound := collectWebhookFires(st, name, body)
+	fires, nameFound, jsonPathActive := collectWebhookFires(st, name, body)
 	if !nameFound {
 		// No trigger anywhere carries this name. Same 404 the gateway gives an
 		// unknown id, so a probe can't enumerate configured webhook names.
 		http.Error(w, "no webhook trigger with that name", http.StatusNotFound)
+		return
+	}
+
+	// A json-path filter can only evaluate a JSON body. The classic trap is
+	// GitHub's webhook default content type, application/x-www-form-urlencoded,
+	// which delivers the event as a `payload=<url-encoded-json>` form field
+	// rather than raw JSON — so json.Decode fails and the filter silently never
+	// matches (issue #207). We don't try to unwrap form encodings (their shape is
+	// sender-specific and not reliably recoverable); instead, when an active
+	// json-path trigger carries this name but the body isn't JSON, reject the
+	// delivery with 400. fleetd's response is reverse-proxied straight back to the
+	// sender, so the failure shows up in the sender's delivery dashboard (e.g.
+	// GitHub's "Recent Deliveries") instead of vanishing. Regex triggers match raw
+	// bytes and accept any body, so they are unaffected by this check.
+	//
+	// If a name carries BOTH a regex and a json-path trigger and a non-JSON body
+	// arrives, the 400 wins (nothing fires): returning 200 would hide the
+	// misconfiguration, and firing the regex trigger then returning 400 would
+	// double-fire it on the sender's retry.
+	if jsonPathActive && !bodyIsJSON(body) {
+		http.Error(w, "json-path webhook filter requires a JSON body; set the webhook content type to application/json", http.StatusBadRequest)
 		return
 	}
 
@@ -97,12 +120,14 @@ func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 // collectWebhookFires scans every fleet for webhook triggers named name and
-// returns the subset whose filter matches body, plus whether ANY trigger with
-// that name exists at all (to distinguish 404 from "matched nothing"). Firing all
+// returns the subset whose filter matches body, whether ANY trigger with that
+// name exists at all (to distinguish 404 from "matched nothing"), and whether any
+// ACTIVE (non-disabled) trigger with that name uses the json-path filter (so the
+// caller can reject a non-JSON body with 400 — see serveWebhook). Firing all
 // matches across all fleets is intentional: webhook names are per-fleet in the
 // model, so the same name can legitimately drive triggers in several fleets, and
 // the common single-match case degenerates to exactly one fire.
-func collectWebhookFires(st *state.State, name string, body []byte) (fires []webhookFire, nameFound bool) {
+func collectWebhookFires(st *state.State, name string, body []byte) (fires []webhookFire, nameFound, jsonPathActive bool) {
 	for fleetName, f := range st.Fleets {
 		if f == nil {
 			continue
@@ -115,12 +140,26 @@ func collectWebhookFires(st *state.State, name string, body []byte) (fires []web
 			if t.Disabled {
 				continue // a disabled trigger still exists (200, not 404) but never fires
 			}
+			if t.FilterType == fleet.WebhookFilterJSONPath {
+				jsonPathActive = true
+			}
 			if t.MatchesWebhook(body) {
 				fires = append(fires, webhookFire{fleet: fleetName, trigger: t, body: body})
 			}
 		}
 	}
-	return fires, nameFound
+	return fires, nameFound, jsonPathActive
+}
+
+// bodyIsJSON reports whether body decodes as a single JSON value — the same parse
+// MatchesWebhook's json-path filter performs (json.Decoder, so trailing
+// whitespace is fine and trailing junk is ignored, matching the matcher exactly).
+// It is used to reject a json-path delivery whose body isn't JSON, rather than let
+// the filter silently never match. The body is already size-bounded by the
+// MaxBytesReader in serveWebhook.
+func bodyIsJSON(body []byte) bool {
+	var v any
+	return json.NewDecoder(bytes.NewReader(body)).Decode(&v) == nil
 }
 
 // enqueueWebhookFires hands a request's matched events to the scheduler goroutine

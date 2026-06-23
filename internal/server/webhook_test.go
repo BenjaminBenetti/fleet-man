@@ -4,12 +4,20 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
+
+// formEncode wraps raw JSON the way GitHub's DEFAULT webhook content type
+// (application/x-www-form-urlencoded) delivers it: a single `payload=` form field
+// holding the url-encoded JSON. The result is NOT valid JSON.
+func formEncode(rawJSON string) string {
+	return "payload=" + url.QueryEscape(rawJSON)
+}
 
 // webhookState builds a state with the given webhook triggers under fleet
 // "alpha", all referencing a single agent "a".
@@ -257,6 +265,117 @@ func TestServeWebhook_SchedulerBusy503(t *testing.T) {
 	s.serveWebhook(w, req)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", w.Code)
+	}
+}
+
+// TestServeWebhook_JSONPathFormEncodedRejected is the issue #207 regression: a
+// json-path trigger receiving GitHub's default form-urlencoded delivery (which is
+// not JSON) is rejected with 400 — visible in the sender's delivery dashboard —
+// rather than silently never matching. Nothing fires.
+func TestServeWebhook_JSONPathFormEncodedRejected(t *testing.T) {
+	s := newService()
+	st := webhookState(fleet.Trigger{
+		Name: "pr", Type: fleet.TriggerWebhook, AgentNames: []string{"a"},
+		WebhookName: "pr", FilterType: fleet.WebhookFilterJSONPath,
+		JSONPath: "$.pull_request.user.login", JSONValue: "BenjaminBenetti",
+	})
+
+	// The selected value WOULD match if the body were raw JSON, but GitHub
+	// delivers it form-encoded by default.
+	body := formEncode(`{"pull_request":{"user":{"login":"BenjaminBenetti"}}}`)
+	w := postWebhook(t, s, st, "pr", body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (json-path filter needs a JSON body); body=%q", w.Code, w.Body.String())
+	}
+	if b := drainBatch(s); b != nil {
+		t.Fatalf("a rejected delivery must enqueue nothing, got %+v", b)
+	}
+}
+
+// TestServeWebhook_JSONPathNonJSONRejected covers any non-JSON body (not just
+// form encoding) hitting a json-path trigger: plain text is also a 400.
+func TestServeWebhook_JSONPathNonJSONRejected(t *testing.T) {
+	s := newService()
+	st := webhookState(fleet.Trigger{
+		Name: "deploy", Type: fleet.TriggerWebhook, AgentNames: []string{"a"},
+		WebhookName: "deploy", FilterType: fleet.WebhookFilterJSONPath,
+		JSONPath: "$.ref", JSONValue: "refs/heads/main",
+	})
+
+	w := postWebhook(t, s, st, "deploy", "not json at all")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for a non-JSON body; body=%q", w.Code, w.Body.String())
+	}
+	if b := drainBatch(s); b != nil {
+		t.Fatalf("a rejected delivery must enqueue nothing, got %+v", b)
+	}
+}
+
+// TestServeWebhook_RegexFormEncodedStillFires confirms regex filters are
+// unaffected by the json-body check: a regex matches the raw bytes of even a
+// form-encoded body and fires normally (200), because the json-path string
+// "BenjaminBenetti" survives url-encoding verbatim.
+func TestServeWebhook_RegexFormEncodedStillFires(t *testing.T) {
+	s := newService()
+	st := webhookState(fleet.Trigger{
+		Name: "pr", Type: fleet.TriggerWebhook, AgentNames: []string{"a"},
+		WebhookName: "pr", FilterType: fleet.WebhookFilterRegex, Regex: "BenjaminBenetti",
+	})
+
+	body := formEncode(`{"pull_request":{"user":{"login":"BenjaminBenetti"}}}`)
+	w := postWebhook(t, s, st, "pr", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (regex accepts any body); body=%q", w.Code, w.Body.String())
+	}
+	if b := drainBatch(s); len(b) != 1 || b[0].trigger.Name != "pr" {
+		t.Fatalf("expected the regex trigger to fire, got %+v", b)
+	}
+}
+
+// TestServeWebhook_MixedRegexAndJSONPathNonJSONRejected covers the documented
+// edge case: when one webhook name carries BOTH a regex and a json-path trigger
+// and a non-JSON body arrives, the 400 wins (the regex trigger does NOT fire) so
+// the json-path misconfiguration stays visible and a retry can't double-fire.
+func TestServeWebhook_MixedRegexAndJSONPathNonJSONRejected(t *testing.T) {
+	s := newService()
+	st := webhookState(
+		fleet.Trigger{
+			Name: "rx", Type: fleet.TriggerWebhook, AgentNames: []string{"a"},
+			WebhookName: "pr", FilterType: fleet.WebhookFilterRegex, Regex: ".*",
+		},
+		fleet.Trigger{
+			Name: "jp", Type: fleet.TriggerWebhook, AgentNames: []string{"a"},
+			WebhookName: "pr", FilterType: fleet.WebhookFilterJSONPath,
+			JSONPath: "$.action", JSONValue: "opened",
+		},
+	)
+
+	w := postWebhook(t, s, st, "pr", formEncode(`{"action":"opened"}`))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 when a json-path trigger shares the name; body=%q", w.Code, w.Body.String())
+	}
+	if b := drainBatch(s); b != nil {
+		t.Fatalf("the 400 must win — nothing fires, got %+v", b)
+	}
+}
+
+// TestServeWebhook_DisabledJSONPathDoesNotReject confirms a DISABLED json-path
+// trigger doesn't arm the json-body check: a non-JSON body is accepted (200, no
+// fire) because the disabled trigger isn't active.
+func TestServeWebhook_DisabledJSONPathDoesNotReject(t *testing.T) {
+	s := newService()
+	st := webhookState(fleet.Trigger{
+		Name: "pr", Type: fleet.TriggerWebhook, AgentNames: []string{"a"},
+		WebhookName: "pr", FilterType: fleet.WebhookFilterJSONPath,
+		JSONPath: "$.action", JSONValue: "opened", Disabled: true,
+	})
+
+	w := postWebhook(t, s, st, "pr", formEncode(`{"action":"opened"}`))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a disabled json-path trigger doesn't reject); body=%q", w.Code, w.Body.String())
+	}
+	if b := drainBatch(s); b != nil {
+		t.Fatalf("a disabled trigger must not fire, got %+v", b)
 	}
 }
 
