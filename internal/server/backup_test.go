@@ -116,6 +116,23 @@ func TestWriteBackupRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWriteBackupBucketsUTC(t *testing.T) {
+	writeFleetState(t, map[string]string{"state.json": "{}"})
+	// A wall-clock time in UTC+5: locally 2026-06-23 02:30, but 2026-06-22 21:30
+	// in UTC. The archive must bucket on UTC so a DST fall-back can't make two
+	// distinct instants collide on one local-hour file.
+	loc := time.FixedZone("UTC+5", 5*3600)
+	now := time.Date(2026, 6, 23, 2, 30, 0, 0, loc)
+	path, _, err := writeBackup(now)
+	if err != nil {
+		t.Fatalf("writeBackup: %v", err)
+	}
+	want := filepath.Join(backupBaseDir(), "2026-06-22", "21.tar.xz")
+	if path != want {
+		t.Fatalf("archive path = %s, want %s (UTC-bucketed)", path, want)
+	}
+}
+
 func TestWriteBackupSkipsMissingFiles(t *testing.T) {
 	// Only two of the six sources exist; the archive should hold exactly those.
 	writeFleetState(t, map[string]string{

@@ -23,8 +23,8 @@ import (
 // botched write, an errant `fleet destroy`, or a corrupted state.json can be
 // recovered from a recent point in time.
 //
-// Archives are written to ~/.fleet/backup/<date>/<hour>.tar.xz — one per clock
-// hour, bucketed by day. xz is used (the most-compressing of the common
+// Archives are written to ~/.fleet/backup/<date>/<hour>.tar.xz — one per UTC
+// clock hour, bucketed by day. xz is used (the most-compressing of the common
 // formats) but via the pure-Go writer, so the daemon needs no `xz` binary on
 // the host; the result still unpacks anywhere with the standard tools
 // (`tar -xJf <archive>`). Keying on <date>/<hour> makes the write idempotent:
@@ -122,13 +122,19 @@ func writeBackup(now time.Time) (string, int, error) {
 		return "", 0, nil
 	}
 
-	dir := filepath.Join(backupBaseDir(), now.Format("2006-01-02"))
+	// Bucket on UTC, not local wall-clock: a DST fall-back repeats the local
+	// 01:00–01:59 hour, and a local-time key would make the second pass overwrite
+	// the first 01.tar.xz — silently dropping an hour's backup. UTC hours are
+	// monotonic, so every hour gets its own archive. pruneBackups parses these
+	// names as UTC to match.
+	utc := now.UTC()
+	dir := filepath.Join(backupBaseDir(), utc.Format("2006-01-02"))
 	// 0700: the archive embeds mcp.token (a secret), so the whole backup tree is
 	// owner-only, matching how ~/.fleet itself is created.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", 0, err
 	}
-	finalPath := filepath.Join(dir, now.Format("15")+".tar.xz")
+	finalPath := filepath.Join(dir, utc.Format("15")+".tar.xz")
 
 	tmp, err := os.CreateTemp(dir, ".backup-*.tar.xz.tmp")
 	if err != nil {
@@ -273,7 +279,9 @@ func pruneBackups(now time.Time) (int, error) {
 		if !day.IsDir() {
 			continue
 		}
-		dayStart, err := time.ParseInLocation("2006-01-02", day.Name(), now.Location())
+		// Parse as UTC to match writeBackup's UTC bucketing, so the day-start
+		// instant lines up with how the archive was dated.
+		dayStart, err := time.Parse("2006-01-02", day.Name())
 		if err != nil {
 			continue // not a backup day dir
 		}
@@ -409,7 +417,7 @@ func (s *service) mcpRestoreBackup(_ context.Context, _ *mcp.CallToolRequest, _ 
 		Summary:     "fleetd snapshots its own state hourly. To restore one, stop every fleet process (the daemon especially) and unpack the chosen archive over " + fleetDir + ". This tool only documents that procedure — it restores nothing itself.",
 		BackupDir:   backupBaseDir(),
 		RestoreInto: fleetDir,
-		PathLayout:  "<backup_dir>/<date>/<hour>.tar.xz — one archive per clock hour (e.g. 2026-06-23/14.tar.xz), kept ~30 days.",
+		PathLayout:  "<backup_dir>/<date>/<hour>.tar.xz — one archive per UTC clock hour (e.g. 2026-06-23/14.tar.xz, where 14 is the UTC hour), kept ~30 days.",
 		Compression: "xz; each archive is a flat tar of the files below (base names, no directory tree), so it unpacks straight into the settings dir with `tar -xJf <archive> -C " + fleetDir + "`.",
 		Contents: []restoreBackupFile{
 			{Name: "config.json", Description: "user/global fleet configuration (settings, backends, remote-MCP/gateway config)."},
