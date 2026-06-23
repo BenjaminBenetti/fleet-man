@@ -50,6 +50,11 @@ var (
 // $HOME, which tests rebind. Missing files are skipped at archive time, so a
 // pristine ~/.fleet that has not yet grown all of these is fine.
 func backupSources() []string {
+	// This set is exactly the files issue #205 calls out — fleetd's own durable
+	// state. armada.json lives in ~/.fleet too (and is now an atomicfile.Write
+	// writer), but is deliberately NOT here: it is the CLIENT's registry of
+	// remote fleetd connections to switch between, not this daemon's state, so it
+	// is out of fleetd's self-backup scope. Don't add it without revisiting that.
 	return []string{
 		state.ConfigPath(),              // config.json
 		fleetpaths.GatewaySessionPath(), // gateway_session.json
@@ -173,10 +178,12 @@ func writeBackup(now time.Time) (string, int, error) {
 		// Every source vanished between the presence scan and the read. Honor the
 		// "writes nothing rather than an empty archive" contract: drop the temp
 		// file FIRST (the deferred Remove only fires on return, after the dir
-		// removal below), then drop the day dir if this call just created it
-		// (Remove no-ops when earlier-hour archives still live there).
+		// removals below), then drop the day dir and the backup root if this call
+		// just created them (each Remove no-ops when other entries still live
+		// there, e.g. earlier-hour archives or other days).
 		_ = os.Remove(tmpName)
 		_ = os.Remove(dir)
+		_ = os.Remove(backupBaseDir())
 		return "", 0, nil
 	}
 	// The temp file is already 0600 (os.CreateTemp) and rename preserves it, so

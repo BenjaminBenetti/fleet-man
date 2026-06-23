@@ -85,11 +85,6 @@ func Serve(ctx context.Context) error {
 	// agents. Runs unconditionally — cron triggers must fire even when no TUI is
 	// connected — and stops on shutdown via hubCtx.
 	go svc.runScheduler(hubCtx)
-	// State backup loop: snapshots ~/.fleet's durable state (config/state/mcp
-	// files) to ~/.fleet/backup/<date>/<hour>.tar.xz every hour and prunes
-	// archives older than the retention window. Unconditional and stops on
-	// shutdown via hubCtx.
-	go svc.runBackupLoop(hubCtx)
 
 	// Control-socket listeners: the server owns every running instance's control
 	// socket and turns received browser.open envelopes (from an in-container
@@ -143,6 +138,14 @@ func Serve(ctx context.Context) error {
 			_ = os.Remove(fleetpaths.McpPortPath())
 		}()
 	}
+
+	// State backup loop: snapshots ~/.fleet's durable state (config/state/mcp
+	// files) to ~/.fleet/backup/<date>/<hour>.tar.xz every hour and prunes
+	// archives older than the retention window. Unconditional and stops on
+	// shutdown via hubCtx. Launched AFTER startMCPServer so its immediate
+	// first-tick snapshot already sees the freshly-written mcp.port/token/env
+	// files instead of racing them.
+	go svc.runBackupLoop(hubCtx)
 
 	// Tunnel-facing servers fed by the gateway tunnel demux (no extra port/socket):
 	//   - gRPC: the SAME FleetService as the local unix socket, but gated by the
