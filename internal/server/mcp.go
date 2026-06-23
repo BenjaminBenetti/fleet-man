@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/atomicfile"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
@@ -90,7 +91,7 @@ func startMCPServer(svc *service) (*http.Server, int) {
 	// Best-effort (like writeVersionFile): a write failure just means clients
 	// fall back to probing from mcpDefaultPort. 0o600 matches the other
 	// per-user host-local discovery files in ~/.fleet.
-	if err := os.WriteFile(fleetpaths.McpPortPath(), []byte(strconv.Itoa(port)), 0o600); err != nil {
+	if err := atomicfile.Write(fleetpaths.McpPortPath(), []byte(strconv.Itoa(port)), 0o600); err != nil {
 		flog.Warn("write mcp.port", "err", err)
 	}
 
@@ -130,7 +131,7 @@ func loadOrCreateMCPToken() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(fleetpaths.McpTokenPath(), []byte(token), 0o600); err != nil {
+	if err := atomicfile.Write(fleetpaths.McpTokenPath(), []byte(token), 0o600); err != nil {
 		return "", err
 	}
 	return token, nil
@@ -150,7 +151,7 @@ export FLEET_MCP_PORT=%d
 export FLEET_MCP_URL=http://127.0.0.1:%d
 export FLEET_MCP_TOKEN=%s
 `, port, port, token)
-	if err := os.WriteFile(fleetpaths.McpEnvPath(), []byte(content), 0o600); err != nil {
+	if err := atomicfile.Write(fleetpaths.McpEnvPath(), []byte(content), 0o600); err != nil {
 		flog.Warn("write mcp.env", "err", err)
 	}
 }
