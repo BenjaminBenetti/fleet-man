@@ -311,6 +311,48 @@ func TestServeWebhook_JSONPathNonJSONRejected(t *testing.T) {
 	}
 }
 
+// TestServeWebhook_JSONPathEmptyBodyRejected covers an empty body hitting a
+// json-path trigger: bodyIsJSON("") is io.EOF -> false, so it's a 400 like any
+// other non-JSON body.
+func TestServeWebhook_JSONPathEmptyBodyRejected(t *testing.T) {
+	s := newService()
+	st := webhookState(fleet.Trigger{
+		Name: "deploy", Type: fleet.TriggerWebhook, AgentNames: []string{"a"},
+		WebhookName: "deploy", FilterType: fleet.WebhookFilterJSONPath,
+		JSONPath: "$.ref", JSONValue: "refs/heads/main",
+	})
+
+	w := postWebhook(t, s, st, "deploy", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for an empty body; body=%q", w.Code, w.Body.String())
+	}
+	if b := drainBatch(s); b != nil {
+		t.Fatalf("a rejected delivery must enqueue nothing, got %+v", b)
+	}
+}
+
+// TestServeWebhook_JSONPathValidJSONNoMatchAccepted is the don't-over-reject
+// boundary: a VALID JSON body whose selected value simply doesn't equal the
+// trigger's expected value is accepted (200, no fire) — only non-JSON bodies are
+// rejected with 400, never legitimate non-matching JSON deliveries.
+func TestServeWebhook_JSONPathValidJSONNoMatchAccepted(t *testing.T) {
+	s := newService()
+	st := webhookState(fleet.Trigger{
+		Name: "deploy", Type: fleet.TriggerWebhook, AgentNames: []string{"a"},
+		WebhookName: "deploy", FilterType: fleet.WebhookFilterJSONPath,
+		JSONPath: "$.ref", JSONValue: "refs/heads/main",
+	})
+
+	// Valid JSON, but $.ref is a different branch -> no match, yet still 200.
+	w := postWebhook(t, s, st, "deploy", `{"ref":"refs/heads/dev"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (valid non-matching JSON is not rejected); body=%q", w.Code, w.Body.String())
+	}
+	if b := drainBatch(s); b != nil {
+		t.Fatalf("a non-matching json-path filter must not fire, got %+v", b)
+	}
+}
+
 // TestServeWebhook_RegexFormEncodedStillFires confirms regex filters are
 // unaffected by the json-body check: a regex matches the raw bytes of even a
 // form-encoded body and fires normally (200), because the json-path string

@@ -88,7 +88,14 @@ func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 	// If a name carries BOTH a regex and a json-path trigger and a non-JSON body
 	// arrives, the 400 wins (nothing fires): returning 200 would hide the
 	// misconfiguration, and firing the regex trigger then returning 400 would
-	// double-fire it on the sender's retry.
+	// double-fire it on the sender's retry. Note this is keyed on the webhook NAME
+	// globally: jsonPathActive is OR'd across EVERY fleet (collectWebhookFires
+	// scans them all, since one name can drive triggers in several fleets), so a
+	// json-path trigger for this name in ANY fleet makes a non-JSON delivery 400 —
+	// even for a regex trigger of the same name in a DIFFERENT fleet. That cross-
+	// fleet blast radius is intended: a non-JSON delivery to a name any fleet
+	// treats as json-path is a misconfiguration worth surfacing loudly, not
+	// silently half-firing whichever same-named regex triggers happen to match.
 	if jsonPathActive && !bodyIsJSON(body) {
 		http.Error(w, "json-path webhook filter requires a JSON body; set the webhook content type to application/json", http.StatusBadRequest)
 		return
