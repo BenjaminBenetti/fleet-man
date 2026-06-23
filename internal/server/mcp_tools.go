@@ -58,6 +58,10 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 		Name:        "fleet_logs",
 		Description: "Return an instance's current container logs (non-following). Use tail to cap to the last N lines.",
 	}, s.mcpLogs)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_restore_backup",
+		Description: "Documentation only (restores nothing): explain where fleetd's hourly state backups live, list the archives that exist, describe what each contains, and give the manual restore procedure (stop fleetd, then unpack the chosen archive over ~/.fleet). Use this when asked to restore fleet state from a backup.",
+	}, s.mcpRestoreBackup)
 
 	// --- lifecycle ---
 	mcp.AddTool(srv, &mcp.Tool{

@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/ulikunitz/xz"
 )
 
@@ -285,4 +287,128 @@ func pruneBackups(now time.Time) (int, error) {
 		}
 	}
 	return removed, nil
+}
+
+// --- restore documentation (MCP tool) ---
+
+// fleet_restore_backup is intentionally a DOCUMENTATION-ONLY tool. fleetd owns
+// ~/.fleet and rewrites these files live, so a "restore" that the daemon
+// performed on itself would race its own writers; the only safe restore is to
+// stop the daemon and unpack an archive by hand. So this tool tells the calling
+// agent (fleet-admiral or similar) exactly where the archives are, what each one
+// holds, which ones exist, and the step-by-step manual procedure — and performs
+// no mutation itself.
+
+// restoreBackupArchive is one discovered backup archive, newest listed first.
+type restoreBackupArchive struct {
+	Path string `json:"path"` // absolute path to the .tar.xz
+	Date string `json:"date"` // <date> bucket, e.g. "2026-06-23"
+	Hour string `json:"hour"` // <hour> bucket, e.g. "14"
+}
+
+// restoreBackupFile documents one file captured in every archive.
+type restoreBackupFile struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// RestoreBackupOutput is the documentation returned by fleet_restore_backup.
+type RestoreBackupOutput struct {
+	Summary     string                 `json:"summary"`
+	BackupDir   string                 `json:"backup_dir"`   // absolute ~/.fleet/backup
+	RestoreInto string                 `json:"restore_into"` // absolute ~/.fleet
+	PathLayout  string                 `json:"path_layout"`
+	Compression string                 `json:"compression"`
+	Contents    []restoreBackupFile    `json:"contents"`
+	Available   []restoreBackupArchive `json:"available"`        // newest first; empty if none yet
+	Latest      string                 `json:"latest,omitempty"` // path of the newest archive
+	Procedure   []string               `json:"procedure"`        // ordered manual restore steps
+	Warning     string                 `json:"warning"`
+}
+
+// listBackupArchives walks ~/.fleet/backup and returns every <date>/<hour>.tar.xz
+// archive, newest first. Best-effort: unreadable or malformed entries are
+// skipped, and a missing backup dir simply yields an empty slice.
+func listBackupArchives() []restoreBackupArchive {
+	base := backupBaseDir()
+	days, err := os.ReadDir(base)
+	if err != nil {
+		return nil
+	}
+	var out []restoreBackupArchive
+	for _, day := range days {
+		if !day.IsDir() {
+			continue
+		}
+		if _, err := time.Parse("2006-01-02", day.Name()); err != nil {
+			continue // not a backup day dir
+		}
+		dayPath := filepath.Join(base, day.Name())
+		archives, err := os.ReadDir(dayPath)
+		if err != nil {
+			continue
+		}
+		for _, a := range archives {
+			if a.IsDir() {
+				continue
+			}
+			hourStr := strings.TrimSuffix(a.Name(), ".tar.xz")
+			if hourStr == a.Name() {
+				continue
+			}
+			if h, err := strconv.Atoi(hourStr); err != nil || h < 0 || h > 23 {
+				continue
+			}
+			out = append(out, restoreBackupArchive{
+				Path: filepath.Join(dayPath, a.Name()),
+				Date: day.Name(),
+				Hour: hourStr,
+			})
+		}
+	}
+	// Newest first: the path embeds zero-padded date then hour, so a reverse
+	// lexical sort on Path orders by time without parsing.
+	sort.Slice(out, func(i, j int) bool { return out[i].Path > out[j].Path })
+	return out
+}
+
+// mcpRestoreBackup returns the restore documentation. Read-only: it scans the
+// backup tree to list what exists but changes nothing.
+func (s *service) mcpRestoreBackup(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, RestoreBackupOutput, error) {
+	fleetDir := fleetpaths.Dir()
+	archives := listBackupArchives()
+	latest := ""
+	if len(archives) > 0 {
+		latest = archives[0].Path
+	}
+
+	out := RestoreBackupOutput{
+		Summary:     "fleetd snapshots its own state hourly. To restore one, stop every fleet process (the daemon especially) and unpack the chosen archive over " + fleetDir + ". This tool only documents that procedure — it restores nothing itself.",
+		BackupDir:   backupBaseDir(),
+		RestoreInto: fleetDir,
+		PathLayout:  "<backup_dir>/<date>/<hour>.tar.xz — one archive per clock hour (e.g. 2026-06-23/14.tar.xz), kept ~30 days.",
+		Compression: "xz; each archive is a flat tar of the files below (base names, no directory tree), so it unpacks straight into the settings dir with `tar -xJf <archive> -C " + fleetDir + "`.",
+		Contents: []restoreBackupFile{
+			{Name: "config.json", Description: "user/global fleet configuration (settings, backends, remote-MCP/gateway config)."},
+			{Name: "state.json", Description: "the fleet & instance registry — fleetd's core durable state."},
+			{Name: "gateway_session.json", Description: "sticky remote-MCP gateway session (session id + public URL)."},
+			{Name: "mcp.env", Description: "sourceable shell exports for the local MCP endpoint (FLEET_MCP_URL/PORT/TOKEN)."},
+			{Name: "mcp.port", Description: "TCP port the local MCP HTTP server bound to."},
+			{Name: "mcp.token", Description: "bearer token for the local MCP HTTP server — SECRET; treat the archive as sensitive."},
+		},
+		Available: archives,
+		Latest:    latest,
+		Procedure: []string{
+			"1. Stop every running fleet process so nothing rewrites " + fleetDir + " mid-restore — the daemon (`fleet server` / fleetd) above all, since it owns these files and keeps snapshotting them. Run `pkill -f 'fleet server'`, then `pkill -x fleet` for any client/TUI, and confirm none remain with `pgrep -af fleet` (an empty result).",
+			"2. Pick the archive to restore from `available` (newest first); `latest` is the most recent. Each is an absolute path to a <date>/<hour>.tar.xz.",
+			"3. (Recommended) Snapshot the current settings dir before overwriting, e.g. `cp -a " + fleetDir + " " + fleetDir + ".pre-restore`.",
+			"4. Unpack the archive over the settings dir: `tar -xJf <archive> -C " + fleetDir + "`. The archive holds base names only, so each file lands back at its original ~/.fleet/<file> path, overwriting the current copy.",
+			"5. Restart the daemon — run any `fleet` command (it auto-spawns fleetd) or start `fleet server` directly — then verify with the `fleet_version` and `fleet_status` tools.",
+		},
+		Warning: "Stop fleetd BEFORE unpacking. It rewrites these files continuously and snapshots hourly, so restoring under a live daemon can corrupt state.json or have your restore immediately overwritten. The archives contain mcp.token (a secret) — handle them accordingly.",
+	}
+	if len(archives) == 0 {
+		out.Summary = "No backups exist yet under " + out.BackupDir + " (the daemon writes the first within an hour of starting). " + out.Summary
+	}
+	return nil, out, nil
 }

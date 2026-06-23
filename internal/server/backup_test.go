@@ -2,10 +2,12 @@ package server
 
 import (
 	"archive/tar"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -267,6 +269,96 @@ func TestPruneBackupsSweepsOrphanTempFiles(t *testing.T) {
 	assertAbsent(t, orphanDay) // emptied by the sweep, then removed
 	assertAbsent(t, filepath.Join(keepDay, ".backup-def456.tar.xz.tmp"))
 	assertPresent(t, filepath.Join(keepDay, "10.tar.xz"))
+}
+
+func TestListBackupArchivesNewestFirst(t *testing.T) {
+	writeFleetState(t, nil)
+	base := backupBaseDir()
+	for _, a := range []struct{ day, hour string }{
+		{"2026-06-23", "09"},
+		{"2026-06-23", "14"},
+		{"2026-06-22", "23"},
+	} {
+		d := filepath.Join(base, a.day)
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(d, a.hour+".tar.xz"), []byte("x"), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	// A foreign file and an orphan temp must not appear in the listing.
+	if err := os.WriteFile(filepath.Join(base, "2026-06-23", "notes.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write foreign: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "2026-06-23", ".backup-x.tar.xz.tmp"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write temp: %v", err)
+	}
+
+	got := listBackupArchives()
+	want := []struct{ date, hour string }{
+		{"2026-06-23", "14"},
+		{"2026-06-23", "09"},
+		{"2026-06-22", "23"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d archives, want %d: %+v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i].Date != w.date || got[i].Hour != w.hour {
+			t.Errorf("archive %d = %s/%s, want %s/%s", i, got[i].Date, got[i].Hour, w.date, w.hour)
+		}
+	}
+}
+
+func TestMcpRestoreBackupDocuments(t *testing.T) {
+	home := writeFleetState(t, nil)
+	base := backupBaseDir()
+	d := filepath.Join(base, "2026-06-23")
+	if err := os.MkdirAll(d, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "14.tar.xz"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, out, err := (&service{}).mcpRestoreBackup(context.TODO(), nil, struct{}{})
+	if err != nil {
+		t.Fatalf("mcpRestoreBackup: %v", err)
+	}
+	if out.RestoreInto != filepath.Join(home, ".fleet") {
+		t.Errorf("RestoreInto = %s, want %s", out.RestoreInto, filepath.Join(home, ".fleet"))
+	}
+	if out.BackupDir != base {
+		t.Errorf("BackupDir = %s, want %s", out.BackupDir, base)
+	}
+	if len(out.Contents) != 6 {
+		t.Errorf("documented %d files, want 6", len(out.Contents))
+	}
+	if len(out.Procedure) == 0 {
+		t.Error("Procedure should not be empty")
+	}
+	if len(out.Available) != 1 || out.Latest != filepath.Join(d, "14.tar.xz") {
+		t.Errorf("Available=%+v Latest=%q, want the one seeded archive", out.Available, out.Latest)
+	}
+	// The procedure must lead with stopping the daemon.
+	if !strings.Contains(out.Procedure[0], "fleet server") {
+		t.Errorf("first step should stop the daemon, got %q", out.Procedure[0])
+	}
+}
+
+func TestMcpRestoreBackupNoBackups(t *testing.T) {
+	writeFleetState(t, nil) // ~/.fleet exists, no backup tree
+	_, out, err := (&service{}).mcpRestoreBackup(context.TODO(), nil, struct{}{})
+	if err != nil {
+		t.Fatalf("mcpRestoreBackup: %v", err)
+	}
+	if len(out.Available) != 0 || out.Latest != "" {
+		t.Errorf("expected no archives, got Available=%+v Latest=%q", out.Available, out.Latest)
+	}
+	if !strings.Contains(out.Summary, "No backups") {
+		t.Errorf("summary should note no backups exist, got %q", out.Summary)
+	}
 }
 
 func keys(m map[string]string) []string {

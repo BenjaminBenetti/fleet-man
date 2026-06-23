@@ -60,6 +60,13 @@ workspace_dir, created_at, error), optionally filtered to one fleet. `fleet_vers
 the daemon's version and liveness. `fleet_logs` returns an instance's container
 logs (use `tail` to cap to the last N lines).
 
+**Recover daemon state.** fleetd snapshots its own state (config, registry, MCP
+files) to `~/.fleet/backup/<date>/<hour>.tar.xz` every hour. `fleet_restore_backup`
+is documentation-only — it restores nothing — but tells you where those archives
+live, which ones exist, what each contains, and the manual procedure to restore
+one (the daemon must be stopped first, then the archive is unpacked over
+`~/.fleet`). Reach for it when asked to roll fleet state back to an earlier point.
+
 **Manage instance lifecycle.** The slow, job-shaped tools — `fleet_up`,
 `fleet_clone`, `fleet_rebuild`, `fleet_down`, `fleet_destroy_fleet` — are
 async-first: they return within seconds with `{job_id, done: false, instance}`
@@ -188,6 +195,7 @@ INSPECT
   fleet_list {fleet?}                               # instance records
   fleet_version                                     # daemon version/liveness
   fleet_logs {fleet, instance, tail?}               # container logs
+  fleet_restore_backup                              # docs only: where state backups are + how to restore
 
 LIFECYCLE  (async-first: returns {job_id, done:false} in seconds; wait:true blocks)
   fleet_up {fleet, instance, remote?, branch?, backend?, wait?}
