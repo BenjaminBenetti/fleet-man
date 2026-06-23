@@ -85,6 +85,11 @@ func Serve(ctx context.Context) error {
 	// agents. Runs unconditionally — cron triggers must fire even when no TUI is
 	// connected — and stops on shutdown via hubCtx.
 	go svc.runScheduler(hubCtx)
+	// State backup loop: snapshots ~/.fleet's durable state (config/state/mcp
+	// files) to ~/.fleet/backup/<date>/<hour>.tar.xz every hour and prunes
+	// archives older than the retention window. Unconditional and stops on
+	// shutdown via hubCtx.
+	go svc.runBackupLoop(hubCtx)
 
 	// Control-socket listeners: the server owns every running instance's control
 	// socket and turns received browser.open envelopes (from an in-container
