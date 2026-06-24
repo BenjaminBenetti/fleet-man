@@ -64,6 +64,7 @@ const (
 	settingsItemArmadaBase = 100000
 
 	settingsItemDaemonRestart = 900 // "Restart daemon" action row (below the tool-status band)
+	settingsItemDaemonLogs    = 901 // "Logs" level selector + fleet.log stream launcher
 
 	settingsItemToolStatusBase = 1000 // tool status rows start here
 	settingsItemDoctor         = 2000 // doctor action row
@@ -105,6 +106,11 @@ type settingsPage struct {
 	editing         bool
 	input           textinput.Model
 	showKeybindings bool
+
+	// logLevel is the index into daemonLogLevels selected on the Fleet Daemon
+	// "Logs" row. Ephemeral (resets to 0 = All each session); enter streams
+	// ~/.fleet/fleet.log filtered to that level and above.
+	logLevel int
 
 	// itemRowYs maps item ID -> terminal Y where the item's first line
 	// is rendered. itemHeights maps item ID -> number of lines the item
@@ -356,12 +362,13 @@ var settingsSections = []settingsSection{
 	},
 	{
 		// Only meaningful for a local TUI: the restart relaunches the LOCAL
-		// daemon from the current binary. A remote TUI (FLEET_GATEWAY/
-		// FLEET_SERVER) can't relaunch the daemon it talks to, so hide it.
+		// daemon from the current binary, and the log stream tails the LOCAL
+		// ~/.fleet/fleet.log off disk. A remote TUI (FLEET_GATEWAY/FLEET_SERVER)
+		// can't do either for the daemon it talks to, so hide the section.
 		Title:   "Fleet Daemon",
 		Visible: func(_ *model) bool { return !fleetclient.IsRemote() },
 		Items: func(_ *model) []int {
-			return []int{settingsItemDaemonRestart}
+			return []int{settingsItemDaemonLogs, settingsItemDaemonRestart}
 		},
 	},
 	{
@@ -668,6 +675,14 @@ func (settingsPage *settingsPage) cycleCoderPreset(m *model, direction int) {
 	m.message = fmt.Sprintf("Preset set to %s", m.config.CoderSettings.Preset)
 }
 
+// cycleDaemonLogLevel moves the Fleet Daemon "Logs" selection by direction,
+// clamped at the ends. It's a segmented control (All…Info shown at once), so it
+// clamps rather than wrapping, and the choice is purely in-memory — nothing is
+// persisted; enter launches the stream at the selected level.
+func (settingsPage *settingsPage) cycleDaemonLogLevel(direction int) {
+	settingsPage.logLevel = max(0, min(settingsPage.logLevel+direction, len(daemonLogLevels)-1))
+}
+
 // cycleCodespacesMachine cycles through available codespace machine types.
 func (settingsPage *settingsPage) cycleCodespacesMachine(m *model, direction int) {
 	if m.config == nil || len(m.codespaceMachines) == 0 {
@@ -935,6 +950,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.cycleCoderPreset(m, -1)
 			} else if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, -1)
+			} else if item == settingsItemDaemonLogs {
+				settingsPage.cycleDaemonLogLevel(-1)
 			}
 			return nil
 
@@ -965,6 +982,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.cycleCoderPreset(m, 1)
 			} else if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, 1)
+			} else if item == settingsItemDaemonLogs {
+				settingsPage.cycleDaemonLogLevel(1)
 			}
 			return nil
 
@@ -1078,6 +1097,14 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			if item == settingsItemKeybindings {
 				settingsPage.showKeybindings = true
 				return nil
+			}
+			if item == settingsItemDaemonLogs {
+				// Hand the terminal to a live `tail -f` of fleet.log filtered to the
+				// selected level (same screen-takeover mechanic as the doctor row).
+				return execProcess(
+					daemonLogStreamCommand(daemonLogLevels[settingsPage.logLevel]),
+					func(err error) tea.Msg { return execDoneMsg{err} },
+				)
 			}
 			if item == settingsItemDaemonRestart {
 				if m.daemonRestarting {
@@ -1695,6 +1722,23 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			}
 
 		case "Fleet Daemon":
+			// Logs level selector: every level bracketed, the active one
+			// highlighted. Enter on this row streams fleet.log at that level.
+			var seg strings.Builder
+			for i, lvl := range daemonLogLevels {
+				if i > 0 {
+					seg.WriteString(" ")
+				}
+				label := "[" + lvl.label + "]"
+				if i == settingsPage.logLevel {
+					seg.WriteString(selectedStyle.Render(label))
+				} else {
+					seg.WriteString(dimStyle.Render(label))
+				}
+			}
+			recordRow(settingsItemDaemonLogs, settingsPage.renderSettingsRow(m, currentItem == settingsItemDaemonLogs, "Logs", seg.String()))
+			listContent.WriteString("\n")
+
 			var daemonValue string
 			if m.daemonRestarting {
 				daemonValue = m.spinner.View() + " restarting…"
@@ -1749,6 +1793,12 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 	// footer's "enter: edit / left/right: cycle" doesn't apply to them.
 	if isCopyRow(currentItem) {
 		tail.WriteString(dimStyle.Render("  enter: copy to clipboard"))
+		tail.WriteString("\n")
+	}
+	// The Logs row streams on enter (not edit/cycle), so spell it out instead of
+	// the generic "enter: edit" footer.
+	if currentItem == settingsItemDaemonLogs {
+		tail.WriteString(dimStyle.Render("  left/right: choose level  enter: stream fleet.log (Ctrl-C to return)"))
 		tail.WriteString("\n")
 	}
 	if m.message != "" {

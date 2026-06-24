@@ -12,6 +12,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -272,6 +273,40 @@ func logsCommand(fleetName string, instance *fleet.Instance) *exec.Cmd {
 	// Wrap in a shell that pauses after the output.
 	script := fmt.Sprintf(`%s; echo; echo "--- Press Enter to return ---"; read _`, inner)
 	return exec.Command("sh", "-c", script)
+}
+
+// daemonLogLevel describes one entry in the settings "Logs" selector. grep is an
+// extended-regex matching that level and everything above it; an empty grep means
+// no filter (All).
+type daemonLogLevel struct {
+	label string
+	grep  string
+}
+
+// daemonLogLevels are the selectable minimum levels, in on-screen order: All,
+// Error, Warn, Info. fleetd writes slog text records ("level=ERROR" etc.), so
+// "and above" is just a wider alternation. The leading space anchors level= to
+// the field — it always follows the quoted time value — so a stray "level=ERROR"
+// inside a message value can't match.
+var daemonLogLevels = []daemonLogLevel{
+	{label: "All", grep: ""},
+	{label: "Error", grep: ` level=ERROR`},
+	{label: "Warn", grep: ` level=(ERROR|WARN)`},
+	{label: "Info", grep: ` level=(ERROR|WARN|INFO)`},
+}
+
+// daemonLogStreamCommand returns an *exec.Cmd that tails the fleetd event log
+// (~/.fleet/fleet.log) live, optionally filtered to a minimum level. It behaves
+// like `tail -f`: the user presses Ctrl-C to stop the stream and return to the
+// TUI. -F survives a log recreate, -n 200 shows recent context, and grep's
+// --line-buffered makes filtered lines appear promptly rather than block-buffered.
+func daemonLogStreamCommand(level daemonLogLevel) *exec.Cmd {
+	stream := fmt.Sprintf("tail -n 200 -F %q", flog.Path())
+	if level.grep != "" {
+		stream += fmt.Sprintf(" | grep --line-buffered -E '%s'", level.grep)
+	}
+	header := fmt.Sprintf("── fleet.log [%s] ─── Ctrl-C to return to fleet ───", level.label)
+	return exec.Command("sh", "-c", fmt.Sprintf("printf '%%s\\n\\n' %q; %s", header, stream))
 }
 
 // createInstanceCmd dispatches a CreateInstance job to the server, which
