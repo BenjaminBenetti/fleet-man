@@ -12,7 +12,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
-	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -301,7 +300,11 @@ var daemonLogLevels = []daemonLogLevel{
 // TUI. -F survives a log recreate, -n 200 shows recent context, and grep's
 // --line-buffered makes filtered lines appear promptly rather than block-buffered.
 func daemonLogStreamCommand(level daemonLogLevel) *exec.Cmd {
-	stream := fmt.Sprintf("tail -n 200 -F %q", flog.Path())
+	// ~/.fleet/fleet.log. Computed from fleetpaths rather than flog.Path() because
+	// the import-boundary lint bars clients (the TUI) from importing the
+	// server-owned flog package; the filename mirrors flog's logFileName.
+	path := filepath.Join(fleetpaths.Dir(), "fleet.log")
+	stream := fmt.Sprintf("tail -n 200 -F %q", path)
 	if level.grep != "" {
 		stream += fmt.Sprintf(" | grep --line-buffered -E '%s'", level.grep)
 	}

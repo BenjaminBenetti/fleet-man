@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
-	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -835,7 +835,7 @@ func TestDaemonLogsEnterStreams(t *testing.T) {
 // TestDaemonLogStreamCommand confirms the command tails fleet.log and filters to
 // the selected level and above (and not at all for All).
 func TestDaemonLogStreamCommand(t *testing.T) {
-	path := flog.Path()
+	path := filepath.Join(fleetpaths.Dir(), "fleet.log")
 	cases := []struct {
 		label string
 		grep  string // empty = expect no grep filter
