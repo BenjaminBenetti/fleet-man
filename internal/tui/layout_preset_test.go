@@ -12,11 +12,16 @@ func TestBuildPresetSessionScript(t *testing.T) {
 		[]string{"inst~dev", "inst~dev~a1"},
 		[]string{"npm run dev", ""},
 	)
-	if !strings.Contains(script, `tmux new-session -d -s 'inst~dev' 2>/dev/null`) {
+	// 2>&1 (not 2>/dev/null): a "duplicate session" reason must survive so the
+	// TUI can show it instead of a bare "exit status 1".
+	if !strings.Contains(script, `tmux new-session -d -s 'inst~dev' 2>&1`) {
 		t.Fatalf("missing root new-session: %s", script)
 	}
-	if !strings.Contains(script, `tmux new-session -d -s 'inst~dev~a1' 2>/dev/null`) {
+	if !strings.Contains(script, `tmux new-session -d -s 'inst~dev~a1' 2>&1`) {
 		t.Fatalf("missing pane new-session: %s", script)
+	}
+	if strings.Contains(script, "2>/dev/null tmux new-session") || strings.Contains(script, `new-session -d -s 'inst~dev' 2>/dev/null`) {
+		t.Fatalf("new-session still swallows stderr: %s", script)
 	}
 	// The first pane's command is typed literally (-l) after a "--" flag
 	// terminator (so a leading-dash command isn't parsed as a flag) then
@@ -29,13 +34,58 @@ func TestBuildPresetSessionScript(t *testing.T) {
 		t.Fatalf("missing Enter send-keys: %s", script)
 	}
 	// The empty second command must not produce a send-keys for that pane.
-	if strings.Contains(script, `'=inst~dev~a1:'`) {
+	if strings.Contains(script, `send-keys -t '=inst~dev~a1:'`) {
 		t.Fatalf("plain-shell pane got a send-keys: %s", script)
 	}
-	// Steps are &&-chained so a name collision aborts instead of minting a
+	// Steps are &&-chained so a later failure aborts instead of minting a
 	// partial group.
 	if !strings.Contains(script, "&&") {
 		t.Fatalf("steps not chained: %s", script)
+	}
+	// The root is created on its own and gated with `|| exit 1`, so a collision
+	// on the EXISTING root exits before the cleanup — a pre-existing session is
+	// never killed.
+	if !strings.Contains(script, `tmux new-session -d -s 'inst~dev' 2>&1 || exit 1`) {
+		t.Fatalf("root not gated with || exit 1: %s", script)
+	}
+	// A failure after the root exists tears down every session this run made,
+	// so a partial chain can't strand a root that collides forever on retry.
+	if !strings.Contains(script, `tmux kill-session -t '=inst~dev:' 2>/dev/null`) ||
+		!strings.Contains(script, `tmux kill-session -t '=inst~dev~a1:' 2>/dev/null`) {
+		t.Fatalf("missing partial-failure cleanup: %s", script)
+	}
+}
+
+// A single-pane plain-shell preset has nothing to run after the root, so it is
+// just the bare guarded new-session — no cleanup block (there is nothing to tear
+// down) and no stray `|| exit 1`/kill scaffolding.
+func TestBuildPresetSessionScriptSinglePaneNoCleanup(t *testing.T) {
+	script := buildPresetSessionScript([]string{"inst~dev"}, []string{""})
+	if !strings.Contains(script, `tmux new-session -d -s 'inst~dev' 2>&1`) {
+		t.Fatalf("missing root new-session: %s", script)
+	}
+	if strings.Contains(script, "kill-session") || strings.Contains(script, "exit 1") {
+		t.Fatalf("single bare session should have no cleanup scaffolding: %s", script)
+	}
+}
+
+func TestUniqueGroupName(t *testing.T) {
+	existing := []tmuxSession{
+		{Name: "inst~dev"},      // root of a live group "dev"
+		{Name: "inst~dev~a1b2"}, // a pane of the same group
+		{Name: "inst~dev-2"},    // a previously-suffixed group
+		{Name: "other"},         // ungrouped, ignored
+	}
+	if got := uniqueGroupName("inst", "dev", existing); got != "dev-3" {
+		t.Fatalf("got %q, want dev-3", got)
+	}
+	if got := uniqueGroupName("inst", "fresh", existing); got != "fresh" {
+		t.Fatalf("got %q, want fresh (unused name passes through)", got)
+	}
+	// A different instance's sessions never count against this instance.
+	other := []tmuxSession{{Name: "elsewhere~dev"}}
+	if got := uniqueGroupName("inst", "dev", other); got != "dev" {
+		t.Fatalf("got %q, want dev (other instance ignored)", got)
 	}
 }
 

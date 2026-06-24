@@ -111,13 +111,20 @@ func ensureSessionsLoaded(m *model, ref InstanceRef) {
 
 // runSessionScript runs a shell one-liner inside ref's container and folds a
 // non-zero exit into the returned error — matching the semantics of the old
-// local cmd.Run()/cmd.Output() call sites these commands were built on.
+// local cmd.Run()/cmd.Output() call sites these commands were built on. The
+// create scripts merge tmux's stderr into stdout (2>&1) so a captured reason
+// (e.g. "duplicate session: NAME") rides along here instead of being lost to a
+// bare "exit status 1" — the single biggest diagnosability win for the TUI,
+// which otherwise swallowed why a session failed to create.
 func runSessionScript(ref InstanceRef, script string) (string, error) {
 	out, code, err := runInstanceCommand(ref.Fleet, ref.Instance, []string{"sh", "-c", script})
 	if err != nil {
 		return out, err
 	}
 	if code != 0 {
+		if reason := strings.TrimSpace(out); reason != "" {
+			return out, fmt.Errorf("exit status %d: %s", code, reason)
+		}
 		return out, fmt.Errorf("exit status %d", code)
 	}
 	return out, nil
@@ -157,7 +164,10 @@ type sessionDeletedMsg struct {
 // path) and then creates a detached session inside the container.
 func createSessionCmd(ref InstanceRef, sessionName string) tea.Cmd {
 	return func() tea.Msg {
-		script := tmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s 2>/dev/null`, shQuote(sessionName))
+		// 2>&1 (not 2>/dev/null): on a name collision tmux exits 1 with
+		// "duplicate session: NAME" on stderr — keep it so runSessionScript can
+		// surface the reason instead of a bare "exit status 1".
+		script := tmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s 2>&1`, shQuote(sessionName))
 		if _, err := runSessionScript(ref, script); err != nil {
 			return sessionCreatedMsg{ref: ref, err: err}
 		}
@@ -178,30 +188,69 @@ type presetSessionsCreatedMsg struct {
 
 // buildPresetSessionScript builds the in-container one-liner that mints a
 // preset's tmux sessions and types each pane's startup command into its
-// session. Steps are chained with && so a failure (e.g. a name collision on
-// the first new-session) stops the script instead of minting a partial group
-// silently. send-keys targets use "=<name>:" — exact session match (the
-// group's pane names extend the root name, so prefix matching would be
-// ambiguous) and the trailing ":" makes it a session target; a bare "=<name>"
-// fails target-pane parsing ("can't find pane") on tmux 3.x. -l sends the
-// command literally so key names inside it (e.g. "Enter") are not interpreted,
-// and the "--" terminates send-keys' own flag parsing so a command beginning
-// with "-" (e.g. "-rf ...") is not mistaken for a flag (which would fail the
-// step and abort the whole && chain).
+// session.
+//
+// Shape:
+//
+//	tmux new-session -d -s ROOT 2>&1 || exit 1
+//	{ <root send-keys> && <pane new-sessions + send-keys> } || { <kill them all>; exit 1 }
+//
+// The root is created first and on its own: if THAT fails (e.g. the group name
+// already exists), the script exits immediately and the cleanup never runs, so a
+// pre-existing session is left untouched — never killed. Only once the root is
+// ours does the rest run; if any later step fails, the cleanup tears down every
+// session this run created (the root plus the random-suffixed panes — all names
+// unique to this attempt), so a partial chain can't strand a root that would
+// collide forever on retry. 2>&1 keeps tmux's failure reason (e.g. "duplicate
+// session: NAME") so runSessionScript can surface it instead of a bare "exit
+// status 1".
+//
+// send-keys targets use "=<name>:" — exact session match (the group's pane names
+// extend the root name, so prefix matching would be ambiguous) and the trailing
+// ":" makes it a session target; a bare "=<name>" fails target-pane parsing
+// ("can't find pane") on tmux 3.x. -l sends the command literally so key names
+// inside it (e.g. "Enter") are not interpreted, and the "--" terminates
+// send-keys' own flag parsing so a command beginning with "-" (e.g. "-rf ...")
+// is not mistaken for a flag.
 func buildPresetSessionScript(sessions []string, commands []string) string {
-	var b strings.Builder
-	b.WriteString(tmuxEnsureInstalled)
-	for i, name := range sessions {
-		if i > 0 {
-			b.WriteString(" && ")
-		}
-		fmt.Fprintf(&b, `tmux new-session -d -s %s 2>/dev/null`, shQuote(name))
-		if i < len(commands) && commands[i] != "" {
-			target := shQuote("=" + name + ":")
-			fmt.Fprintf(&b, ` && tmux send-keys -t %s -l -- %s && tmux send-keys -t %s Enter`,
-				target, shQuote(commands[i]), target)
+	if len(sessions) == 0 {
+		return ""
+	}
+	root := sessions[0]
+
+	sendKeys := func(name, command string) []string {
+		target := shQuote("=" + name + ":")
+		return []string{
+			fmt.Sprintf("tmux send-keys -t %s -l -- %s", target, shQuote(command)),
+			fmt.Sprintf("tmux send-keys -t %s Enter", target),
 		}
 	}
+
+	// Steps that run only after the root session exists.
+	var inner []string
+	if len(commands) > 0 && commands[0] != "" {
+		inner = append(inner, sendKeys(root, commands[0])...)
+	}
+	for i := 1; i < len(sessions); i++ {
+		inner = append(inner, fmt.Sprintf(`tmux new-session -d -s %s 2>&1`, shQuote(sessions[i])))
+		if i < len(commands) && commands[i] != "" {
+			inner = append(inner, sendKeys(sessions[i], commands[i])...)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(tmuxEnsureInstalled)
+	fmt.Fprintf(&b, `tmux new-session -d -s %s 2>&1`, shQuote(root))
+	if len(inner) == 0 {
+		return b.String()
+	}
+
+	kills := make([]string, 0, len(sessions))
+	for _, name := range sessions {
+		kills = append(kills, fmt.Sprintf("tmux kill-session -t %s 2>/dev/null", shQuote("="+name+":")))
+	}
+	fmt.Fprintf(&b, " || exit 1\n{ %s; } || { %s; exit 1; }",
+		strings.Join(inner, " && "), strings.Join(kills, "; "))
 	return b.String()
 }
 

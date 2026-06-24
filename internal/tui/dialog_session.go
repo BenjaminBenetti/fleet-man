@@ -123,6 +123,15 @@ func (fleetPage *fleetPage) saveCreateSession(m *model) tea.Cmd {
 	// A template was Tab-selected: mint the whole group — one session per
 	// pane, the resolved name as the group ID — and run each pane's command.
 	if preset != nil {
+		// The group root is named after the preset, so re-applying a preset (or
+		// a leftover from a prior failed apply) would collide on new-session and
+		// fail forever. Suffix to a free name (dev → dev-2) so the root is always
+		// creatable; load the runtime session list first so the check sees what's
+		// actually live.
+		ensureSessionsLoaded(m, ref)
+		name = uniqueGroupName(sanitized, name, m.sessionStore.Sessions(ref))
+		fullName = GroupSessionName(sanitized, name)
+
 		sessions := make([]string, 0, preset.PaneCount())
 		sessions = append(sessions, fullName)
 		for i := 1; i < preset.PaneCount(); i++ {
