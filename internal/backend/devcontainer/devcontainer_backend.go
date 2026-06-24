@@ -34,13 +34,15 @@ func New(opts ...Option) *DevcontainerBackend {
 	return devcontainerBackend
 }
 
-// containerUser returns the non-root user inside the container, caching
-// the result to avoid a docker exec round-trip on every poll. Only a
-// non-empty answer is cached: an empty probe (a just-started container with
-// no tmux socket and no /home/<user> yet, or a transient exec failure) must be
-// re-probed next call so it self-heals. Caching "" would, now that the backend
-// is reused across poll ticks, pin every later exec to root forever and hide
-// the real user's tmux sessions.
+// containerUser returns the user fleet's direct `docker exec -u` paths
+// (ListSessions, CaptureAllSessions, RunScript, AgentToolProbe) must act as so
+// they operate on the SAME tmux server as the `devcontainer exec` paths
+// (create/attach). That user is the devcontainer remoteUser — see
+// resolveContainerUser. The answer is cached to avoid re-resolving on every
+// poll. Only a non-empty answer is cached: an empty result (a just-started or
+// gone container, or a transient probe failure) must be re-resolved next call
+// so it self-heals. Caching "" would, now that the backend is reused across
+// poll ticks, pin every later exec to the wrong user forever.
 func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string) string {
 	devcontainerBackend.userCacheMu.Lock()
 	if cached, ok := devcontainerBackend.userCache[containerID]; ok {
@@ -49,22 +51,7 @@ func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string
 	}
 	devcontainerBackend.userCacheMu.Unlock()
 
-	// Pick the owner of an active tmux server socket directory.
-	// tmux creates /tmp/tmux-$UID/ for each user that runs a server,
-	// so this is the canonical signal for "which user holds fleet's
-	// sessions". The [1-9]* glob skips /tmp/tmux-0/ — a stale dir
-	// some images leave behind from a root-side init poke at tmux —
-	// because fleet's sessions never live under root. Fall back to
-	// the first /home/<user>/ owner when no tmux socket exists yet
-	// (brand-new container, first poll before any session).
-	cmd := exec.Command("docker", "exec", containerID, "sh", "-c",
-		`for d in /tmp/tmux-[1-9]*/; do [ -d "$d" ] && stat -c %U "$d" 2>/dev/null && exit; done; `+
-			`for d in /home/*/; do [ -d "$d" ] && stat -c %U "$d" 2>/dev/null && exit; done`)
-	out, err := cmd.Output()
-	user := ""
-	if err == nil {
-		user = strings.TrimSpace(string(out))
-	}
+	user := devcontainerBackend.resolveContainerUser(containerID)
 
 	// Cache only a real answer; leave a miss uncached so the next poll re-probes.
 	if user != "" {
@@ -73,6 +60,73 @@ func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string
 		devcontainerBackend.userCacheMu.Unlock()
 	}
 	return user
+}
+
+// resolveContainerUser determines who `devcontainer exec` operates as — the
+// devcontainer remoteUser — so the direct `docker exec -u` paths run as the
+// same user and share its tmux server. Resolving the authoritative user (rather
+// than guessing it from socket ownership) is what keeps create and list from
+// landing on different per-uid tmux sockets. Tries, cheapest-and-surest first:
+//
+//  1. remoteUser from the container's `devcontainer.metadata` label — the value
+//     the CLI itself stamped at `up` time. Pure `docker inspect`, no Node, so it
+//     is safe on the per-second poll path (and runs only on a cache miss).
+//  2. `devcontainer exec ... id -un` — ground truth, asked of the CLI directly,
+//     for the rare container whose metadata carries no remoteUser. One Node
+//     call, cached by the caller, never on the steady-state path. The env probe
+//     is disabled so the username is the only thing on stdout.
+//  3. the legacy ownership heuristic — last resort only.
+func (devcontainerBackend *DevcontainerBackend) resolveContainerUser(containerID string) string {
+	if user := remoteUserFromMetadata(containerID); user != "" {
+		return user
+	}
+	if user := devcontainerBackend.remoteUserViaExec(containerID); user != "" {
+		return user
+	}
+	return containerUserHeuristic(containerID)
+}
+
+// remoteUserViaExec asks the devcontainer CLI who it execs as. --default-user-env-probe
+// none skips the login-shell env capture (faster, and keeps a noisy ~/.bashrc
+// off stdout so the username is all that comes back).
+func (devcontainerBackend *DevcontainerBackend) remoteUserViaExec(containerID string) string {
+	workspaceDir := workspaceFolderForContainer(containerID)
+	if workspaceDir == "" {
+		return ""
+	}
+	out, err := exec.Command("devcontainer",
+		"exec", "--default-user-env-probe", "none", "--workspace-folder", workspaceDir,
+		"id", "-un").Output()
+	if err != nil {
+		return ""
+	}
+	// Take the last line and reject anything with whitespace: a username is a
+	// single token, so banner noise from a sourced profile can't masquerade as one.
+	out = bytes.TrimSpace(out)
+	if i := bytes.LastIndexByte(out, '\n'); i >= 0 {
+		out = bytes.TrimSpace(out[i+1:])
+	}
+	user := string(out)
+	if user == "" || strings.ContainsAny(user, " \t") {
+		return ""
+	}
+	return user
+}
+
+// containerUserHeuristic is the legacy last-resort guess: the owner of an active
+// non-root tmux socket dir, else the first /home/<user>. It is fragile — a
+// non-fleet user that happens to hold a tmux socket (e.g. an image's `app` user
+// running its own tmux) poisons it, which is exactly why the authoritative
+// remoteUser lookups in resolveContainerUser run first. tmux creates
+// /tmp/tmux-$UID/ per user; the [1-9]* glob skips /tmp/tmux-0/ (root).
+func containerUserHeuristic(containerID string) string {
+	out, err := exec.Command("docker", "exec", containerID, "sh", "-c",
+		`for d in /tmp/tmux-[1-9]*/; do [ -d "$d" ] && stat -c %U "$d" 2>/dev/null && exit; done; `+
+			`for d in /home/*/; do [ -d "$d" ] && stat -c %U "$d" 2>/dev/null && exit; done`).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // Up provisions a devcontainer for the given workspace folder.
