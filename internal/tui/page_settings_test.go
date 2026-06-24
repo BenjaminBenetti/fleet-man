@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
-	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -833,9 +833,12 @@ func TestDaemonLogsEnterStreams(t *testing.T) {
 }
 
 // TestDaemonLogStreamCommand confirms the command tails fleet.log and filters to
-// the selected level and above (and not at all for All).
+// the selected level and above (and not at all for All). The expected path comes
+// from flog.Path() (the server-owned canonical source, which *_test.go may import
+// even though the TUI may not) so a future rename of flog.logFileName fails here
+// loudly instead of letting the TUI silently tail a stale filename.
 func TestDaemonLogStreamCommand(t *testing.T) {
-	path := filepath.Join(fleetpaths.Dir(), "fleet.log")
+	path := flog.Path()
 	cases := []struct {
 		label string
 		grep  string // empty = expect no grep filter
@@ -860,6 +863,13 @@ func TestDaemonLogStreamCommand(t *testing.T) {
 		script := cmd.Args[2]
 		if !strings.Contains(script, path) {
 			t.Fatalf("%s: script should tail %q, got %q", tc.label, path, script)
+		}
+		// Guard the load-bearing flags called out in the doc comment.
+		if !strings.Contains(script, "tail -n 200 -F") {
+			t.Fatalf("%s: script should `tail -n 200 -F`, got %q", tc.label, script)
+		}
+		if !strings.Contains(script, "fleet.log ["+tc.label+"]") {
+			t.Fatalf("%s: script should print a header naming the level, got %q", tc.label, script)
 		}
 		if tc.grep == "" {
 			if strings.Contains(script, "grep") {

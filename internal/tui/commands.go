@@ -285,8 +285,10 @@ type daemonLogLevel struct {
 // daemonLogLevels are the selectable minimum levels, in on-screen order: All,
 // Error, Warn, Info. fleetd writes slog text records ("level=ERROR" etc.), so
 // "and above" is just a wider alternation. The leading space anchors level= to
-// the field — it always follows the quoted time value — so a stray "level=ERROR"
-// inside a message value can't match.
+// the start of the field (it always follows the quoted time value), which makes a
+// stray "level=ERROR" inside a message value unlikely to match — a space-separated
+// token inside a value still could, but the worst case is one extra line in a
+// transient view, not worth a stricter parse.
 var daemonLogLevels = []daemonLogLevel{
 	{label: "All", grep: ""},
 	{label: "Error", grep: ` level=ERROR`},
