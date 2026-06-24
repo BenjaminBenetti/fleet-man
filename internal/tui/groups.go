@@ -123,6 +123,24 @@ func NewGroupPaneSessionName(sanitizedInstance, groupID string) string {
 	return GroupSessionName(sanitizedInstance, groupID) + groupSep + randomHex(2)
 }
 
+// groupIDFor returns desired when no live group in the instance already uses it,
+// otherwise a fresh random id. Layout presets create their root under the
+// readable preset/typed name; honoring it keeps the group named that on first
+// apply, but a re-apply (or a leftover from a prior failed apply) falls back to
+// a random id so the root never collides forever on `tmux new-session` — the
+// reported "stuck, a restart doesn't help" bug, since the session lives in the
+// container. It deliberately does NOT auto-suffix (dev-2): that would prefix-
+// match a sibling group ("dev") in the prefix-based group ops (open/rename/
+// delete) — readable names for re-applies need boundary-aware matching first.
+func groupIDFor(sanitizedInstance, desired string, existing []tmuxSession) string {
+	for _, s := range existing {
+		if gid, ok := parseGroupID(sanitizedInstance, s.Name); ok && gid == desired {
+			return randomHex(3)
+		}
+	}
+	return desired
+}
+
 // ResolveSessionName maps a user-supplied session name to its canonical
 // grouped form for the given instance. Names that already follow the
 // convention pass through unchanged; anything else becomes the root
