@@ -70,6 +70,31 @@ func TestBuildPresetSessionScriptSinglePaneNoCleanup(t *testing.T) {
 	}
 }
 
+func TestGroupIDFor(t *testing.T) {
+	existing := []tmuxSession{
+		{Name: "inst~dev"},      // root of a live group "dev"
+		{Name: "inst~dev~a1b2"}, // a pane of the same group
+		{Name: "other"},         // ungrouped, ignored
+	}
+	// A free name is honored verbatim so the group reads as the preset/typed name.
+	if got := groupIDFor("inst", "fromtpl", existing); got != "fromtpl" {
+		t.Fatalf("got %q, want fromtpl (free name honored)", got)
+	}
+	// A taken name falls back to a random 6-char hex id — NOT a "dev-2" suffix
+	// (which would prefix-match the live "dev" group in prefix-based group ops).
+	got := groupIDFor("inst", "dev", existing)
+	if got == "dev" || got == "dev-2" {
+		t.Fatalf("got %q, want a random fallback id", got)
+	}
+	if len(got) != 6 {
+		t.Fatalf("fallback %q is not a 3-byte hex id", got)
+	}
+	// A different instance's sessions never count against this instance.
+	if got := groupIDFor("inst", "dev", []tmuxSession{{Name: "elsewhere~dev"}}); got != "dev" {
+		t.Fatalf("got %q, want dev (other instance ignored)", got)
+	}
+}
+
 func TestCyclePresetTemplateWrapsThroughNone(t *testing.T) {
 	page := newFleetPage()
 	page.newSession.presets = []fleet.LayoutPreset{

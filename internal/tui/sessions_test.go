@@ -25,6 +25,24 @@ func TestRunSessionScriptSurfacesReason(t *testing.T) {
 	}
 }
 
+// The TmuxEnsureInstalled "==> Installing tmux..." preamble (now on stdout via
+// 2>&1) must not bury the real reason: only the last non-empty line is surfaced.
+func TestRunSessionScriptDropsInstallPreamble(t *testing.T) {
+	orig := runInstanceCommand
+	defer func() { runInstanceCommand = orig }()
+
+	runInstanceCommand = func(_, _ string, _ []string) (string, int, error) {
+		return "==> Installing tmux...\nduplicate session: inst~dev\n", 1, nil
+	}
+	_, err := runSessionScript(InstanceRef{Fleet: "f", Instance: "inst"}, "ignored")
+	if err == nil || !strings.Contains(err.Error(), "duplicate session: inst~dev") {
+		t.Fatalf("reason not surfaced: %v", err)
+	}
+	if strings.Contains(err.Error(), "Installing tmux") {
+		t.Fatalf("install preamble leaked into error: %v", err)
+	}
+}
+
 // With no captured output the error is still the plain exit code (e.g. rename /
 // delete scripts that keep 2>/dev/null), not "exit status 1: ".
 func TestRunSessionScriptBareExitWhenSilent(t *testing.T) {

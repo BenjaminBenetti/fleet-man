@@ -115,19 +115,34 @@ func ensureSessionsLoaded(m *model, ref InstanceRef) {
 // create scripts merge tmux's stderr into stdout (2>&1) so a captured reason
 // (e.g. "duplicate session: NAME") rides along here instead of being lost to a
 // bare "exit status 1" — the single biggest diagnosability win for the TUI,
-// which otherwise swallowed why a session failed to create.
+// which otherwise swallowed why a session failed to create. Only the LAST
+// non-empty line is surfaced: that's the actual failing command's message,
+// dropping any TmuxEnsureInstalled "==> Installing tmux..." preamble (while
+// still surfacing a real "ERROR: failed to install tmux", which is the last
+// line in that case).
 func runSessionScript(ref InstanceRef, script string) (string, error) {
 	out, code, err := runInstanceCommand(ref.Fleet, ref.Instance, []string{"sh", "-c", script})
 	if err != nil {
 		return out, err
 	}
 	if code != 0 {
-		if reason := strings.TrimSpace(out); reason != "" {
+		if reason := lastNonEmptyLine(out); reason != "" {
 			return out, fmt.Errorf("exit status %d: %s", code, reason)
 		}
 		return out, fmt.Errorf("exit status %d", code)
 	}
 	return out, nil
+}
+
+// lastNonEmptyLine returns the last non-blank line of s (trimmed), or "".
+func lastNonEmptyLine(s string) string {
+	lines := strings.Split(s, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if t := strings.TrimSpace(lines[i]); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // sessionCreatedMsg is sent after creating a new tmux session.
@@ -199,10 +214,11 @@ type presetSessionsCreatedMsg struct {
 // already exists), the script exits immediately and the cleanup never runs, so a
 // pre-existing session is left untouched — never killed. Only once the root is
 // ours does the rest run; if any later step fails, the cleanup tears down the
-// root plus its panes. The caller mints the root under a fresh random group id,
-// so the whole "<inst>~<group>~*" namespace is this run's — the kills can only
-// hit sessions this run made, never a live group — and a partial chain can't
-// strand a root that would collide forever on retry. Every tmux step uses
+// root plus its panes by EXACT "=name:" target. The caller picked a group id
+// that was free (groupIDFor), so nothing pre-existed under "<inst>~<group>~*" —
+// the kills can only hit sessions this run made, never a live group — and a
+// partial chain can't strand a root that would collide forever on retry. Every
+// tmux step uses
 // 2>&1 so a failure at ANY step (not just new-session) keeps its reason (e.g.
 // "duplicate session: NAME") for runSessionScript to surface, instead of a bare
 // "exit status 1".
