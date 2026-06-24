@@ -22,57 +22,139 @@ type DevcontainerBackend struct {
 	verbose bool
 
 	userCache   map[string]string
+	userMissAt  map[string]time.Time // last failed user resolution, to throttle re-resolves
 	userCacheMu sync.Mutex
 }
 
+// userResolveRetryInterval throttles re-resolving a container whose user
+// couldn't be determined, so a persistently-unresolvable container can't make
+// the per-second poll re-spawn the resolution subprocesses every tick.
+const userResolveRetryInterval = 15 * time.Second
+
 // New creates a new DevcontainerBackend.
 func New(opts ...Option) *DevcontainerBackend {
-	devcontainerBackend := &DevcontainerBackend{userCache: make(map[string]string)}
+	devcontainerBackend := &DevcontainerBackend{
+		userCache:  make(map[string]string),
+		userMissAt: make(map[string]time.Time),
+	}
 	for _, opt := range opts {
 		opt(devcontainerBackend)
 	}
 	return devcontainerBackend
 }
 
-// containerUser returns the non-root user inside the container, caching
-// the result to avoid a docker exec round-trip on every poll. Only a
-// non-empty answer is cached: an empty probe (a just-started container with
-// no tmux socket and no /home/<user> yet, or a transient exec failure) must be
-// re-probed next call so it self-heals. Caching "" would, now that the backend
-// is reused across poll ticks, pin every later exec to root forever and hide
-// the real user's tmux sessions.
+// containerUser returns the user fleet's direct `docker exec -u` paths
+// (ListSessions, CaptureAllSessions, RunScript, AgentToolProbe) must act as so
+// they operate on the SAME tmux server as the `devcontainer exec` paths
+// (create/attach). That user is the devcontainer remoteUser — see
+// resolveContainerUser. The answer is cached to avoid re-resolving on every
+// poll. Only a non-empty answer is cached permanently: an empty result (a
+// just-started or gone container, or a transient probe failure) must be
+// re-resolved later so it self-heals, but re-resolution is throttled to
+// userResolveRetryInterval so a stuck container can't re-spawn the resolution
+// subprocesses every tick. Caching "" permanently would, now that the backend
+// is reused across poll ticks, pin every later exec to the wrong user forever.
 func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string) string {
 	devcontainerBackend.userCacheMu.Lock()
 	if cached, ok := devcontainerBackend.userCache[containerID]; ok {
 		devcontainerBackend.userCacheMu.Unlock()
 		return cached
 	}
+	if missAt, ok := devcontainerBackend.userMissAt[containerID]; ok && time.Since(missAt) < userResolveRetryInterval {
+		devcontainerBackend.userCacheMu.Unlock()
+		return ""
+	}
 	devcontainerBackend.userCacheMu.Unlock()
 
-	// Pick the owner of an active tmux server socket directory.
-	// tmux creates /tmp/tmux-$UID/ for each user that runs a server,
-	// so this is the canonical signal for "which user holds fleet's
-	// sessions". The [1-9]* glob skips /tmp/tmux-0/ — a stale dir
-	// some images leave behind from a root-side init poke at tmux —
-	// because fleet's sessions never live under root. Fall back to
-	// the first /home/<user>/ owner when no tmux socket exists yet
-	// (brand-new container, first poll before any session).
-	cmd := exec.Command("docker", "exec", containerID, "sh", "-c",
-		`for d in /tmp/tmux-[1-9]*/; do [ -d "$d" ] && stat -c %U "$d" 2>/dev/null && exit; done; `+
-			`for d in /home/*/; do [ -d "$d" ] && stat -c %U "$d" 2>/dev/null && exit; done`)
-	out, err := cmd.Output()
-	user := ""
-	if err == nil {
-		user = strings.TrimSpace(string(out))
-	}
+	user := devcontainerBackend.resolveContainerUser(containerID)
 
-	// Cache only a real answer; leave a miss uncached so the next poll re-probes.
+	devcontainerBackend.userCacheMu.Lock()
 	if user != "" {
-		devcontainerBackend.userCacheMu.Lock()
+		// Cache a real answer permanently; clear any prior miss.
 		devcontainerBackend.userCache[containerID] = user
-		devcontainerBackend.userCacheMu.Unlock()
+		delete(devcontainerBackend.userMissAt, containerID)
+	} else {
+		// Record the miss so the next ticks back off instead of re-resolving.
+		devcontainerBackend.userMissAt[containerID] = time.Now()
 	}
+	devcontainerBackend.userCacheMu.Unlock()
 	return user
+}
+
+// resolveContainerUser determines who `devcontainer exec` operates as — the
+// devcontainer remoteUser — so the direct `docker exec -u` paths run as the
+// same user and share its tmux server. Resolving the authoritative user (rather
+// than guessing it from socket ownership) is what keeps create and list from
+// landing on different per-uid tmux sockets. Tries, cheapest-and-surest first:
+//
+//  1. remoteUser from the container's `devcontainer.metadata` label — the value
+//     the CLI itself stamped at `up` time. Pure `docker inspect`, no Node, so it
+//     is safe on the per-second poll path (and runs only on a cache miss).
+//  2. `devcontainer exec ... id -un` — ground truth, asked of the CLI directly,
+//     for the rare container whose metadata carries no remoteUser. One Node
+//     call, cached by the caller, never on the steady-state path. The env probe
+//     is disabled so the username is the only thing on stdout.
+//  3. the legacy ownership heuristic — last resort only.
+//
+// The authoritative answers are sanity-checked: a metadata remoteUser that isn't
+// a usable runtime username (e.g. an unsubstituted "${localEnv:USER}") is
+// rejected so it can't be cached and route every `docker exec -u` to a user that
+// doesn't exist — re-creating the very bug this resolves.
+func (devcontainerBackend *DevcontainerBackend) resolveContainerUser(containerID string) string {
+	if user := remoteUserFromMetadata(containerID); looksLikeUsername(user) {
+		return user
+	}
+	if user := devcontainerBackend.remoteUserViaExec(containerID); looksLikeUsername(user) {
+		return user
+	}
+	return containerUserHeuristic(containerID)
+}
+
+// looksLikeUsername reports whether s is a plausible single-token Unix username:
+// non-empty, no whitespace, and free of shell-expansion leftovers like an
+// unsubstituted ${...} that a metadata template may carry.
+func looksLikeUsername(s string) bool {
+	return s != "" && !strings.ContainsAny(s, " \t\r\n") && !strings.Contains(s, "${")
+}
+
+// remoteUserViaExec asks the devcontainer CLI who it execs as. --default-user-env-probe
+// none skips the login-shell env capture (faster, and keeps a noisy ~/.bashrc
+// off stdout so the username is all that comes back).
+func (devcontainerBackend *DevcontainerBackend) remoteUserViaExec(containerID string) string {
+	workspaceDir := workspaceFolderForContainer(containerID)
+	if workspaceDir == "" {
+		return ""
+	}
+	out, err := exec.Command("devcontainer",
+		"exec", "--default-user-env-probe", "none", "--workspace-folder", workspaceDir,
+		"id", "-un").Output()
+	if err != nil {
+		return ""
+	}
+	// Take the last line: with --default-user-env-probe none the username is the
+	// only stdout, but this is belt-and-suspenders against a stray banner line.
+	// resolveContainerUser validates the token via looksLikeUsername.
+	out = bytes.TrimSpace(out)
+	if i := bytes.LastIndexByte(out, '\n'); i >= 0 {
+		out = bytes.TrimSpace(out[i+1:])
+	}
+	return string(out)
+}
+
+// containerUserHeuristic is the legacy last-resort guess: the owner of an active
+// non-root tmux socket dir, else the first /home/<user>. It is fragile — a
+// non-fleet user that happens to hold a tmux socket (e.g. an image's `app` user
+// running its own tmux) poisons it, which is exactly why the authoritative
+// remoteUser lookups in resolveContainerUser run first. tmux creates
+// /tmp/tmux-$UID/ per user; the [1-9]* glob skips /tmp/tmux-0/ (root).
+func containerUserHeuristic(containerID string) string {
+	out, err := exec.Command("docker", "exec", containerID, "sh", "-c",
+		`for d in /tmp/tmux-[1-9]*/; do [ -d "$d" ] && stat -c %U "$d" 2>/dev/null && exit; done; `+
+			`for d in /home/*/; do [ -d "$d" ] && stat -c %U "$d" 2>/dev/null && exit; done`).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // Up provisions a devcontainer for the given workspace folder.
