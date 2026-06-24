@@ -49,8 +49,10 @@ var (
 	logRotateHour = min(max(envIntDefault("FLEET_LOG_ROTATE_HOUR", 3), 0), 23)
 	// logRotateKeepDays is how many of the most recent daily logs to keep (today
 	// inclusive). After each rotation check, logs older than that window are
-	// pruned. Overridable via FLEET_LOG_ROTATE_KEEP_DAYS for tests.
-	logRotateKeepDays = envIntDefault("FLEET_LOG_ROTATE_KEEP_DAYS", 100)
+	// pruned. Overridable via FLEET_LOG_ROTATE_KEEP_DAYS for tests. Floored at 1
+	// so a 0 override can't push the cutoff into the future and prune the log just
+	// rotated; the smallest window keeps today alone.
+	logRotateKeepDays = max(envIntDefault("FLEET_LOG_ROTATE_KEEP_DAYS", 100), 1)
 	// logRotateInterval is how often the loop checks whether a rotation is due.
 	// A daily cut needs no fine granularity; ~15m lands the rotation within a
 	// quarter hour of 3am while keeping the check cheap. Overridable via

@@ -225,6 +225,35 @@ func TestPruneRotatedLogs(t *testing.T) {
 	}
 }
 
+// TestPruneRotatedLogsKeepsTodayAtMinWindow guards the smallest window: with
+// keepDays floored at 1, the cutoff must never reach today, so the log just
+// rotated survives while yesterday's is pruned.
+func TestPruneRotatedLogsKeepsTodayAtMinWindow(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	setRotateConfig(t, 3, 1)
+	dir := fleetdLogDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	now := time.Date(2026, 6, 24, 3, 0, 0, 0, time.Local)
+	today := now.Format("2006-01-02") + ".log"
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02") + ".log"
+	for _, n := range []string{today, yesterday} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", n, err)
+		}
+	}
+	if removed, err := pruneRotatedLogs(now); err != nil || removed != 1 {
+		t.Fatalf("prune: removed=%d err=%v, want 1", removed, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, today)); err != nil {
+		t.Fatalf("today's log was pruned: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, yesterday)); !os.IsNotExist(err) {
+		t.Fatalf("yesterday's log should be pruned: %v", err)
+	}
+}
+
 func TestPruneRotatedLogsNoDir(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	now := time.Date(2026, 6, 24, 3, 0, 0, 0, time.Local)
