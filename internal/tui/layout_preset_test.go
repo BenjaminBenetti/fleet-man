@@ -70,26 +70,6 @@ func TestBuildPresetSessionScriptSinglePaneNoCleanup(t *testing.T) {
 	}
 }
 
-func TestUniqueGroupName(t *testing.T) {
-	existing := []tmuxSession{
-		{Name: "inst~dev"},      // root of a live group "dev"
-		{Name: "inst~dev~a1b2"}, // a pane of the same group
-		{Name: "inst~dev-2"},    // a previously-suffixed group
-		{Name: "other"},         // ungrouped, ignored
-	}
-	if got := uniqueGroupName("inst", "dev", existing); got != "dev-3" {
-		t.Fatalf("got %q, want dev-3", got)
-	}
-	if got := uniqueGroupName("inst", "fresh", existing); got != "fresh" {
-		t.Fatalf("got %q, want fresh (unused name passes through)", got)
-	}
-	// A different instance's sessions never count against this instance.
-	other := []tmuxSession{{Name: "elsewhere~dev"}}
-	if got := uniqueGroupName("inst", "dev", other); got != "dev" {
-		t.Fatalf("got %q, want dev (other instance ignored)", got)
-	}
-}
-
 func TestCyclePresetTemplateWrapsThroughNone(t *testing.T) {
 	page := newFleetPage()
 	page.newSession.presets = []fleet.LayoutPreset{

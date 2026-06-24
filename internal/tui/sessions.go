@@ -199,10 +199,10 @@ type presetSessionsCreatedMsg struct {
 // already exists), the script exits immediately and the cleanup never runs, so a
 // pre-existing session is left untouched — never killed. Only once the root is
 // ours does the rest run; if any later step fails, the cleanup tears down the
-// root plus its panes. The caller picked the root name with uniqueGroupName, so
-// the whole "<inst>~<group>~*" namespace was free to begin with — the kills can
-// only hit sessions this run made, never a live group — and a partial chain
-// can't strand a root that would collide forever on retry. Every tmux step uses
+// root plus its panes. The caller mints the root under a fresh random group id,
+// so the whole "<inst>~<group>~*" namespace is this run's — the kills can only
+// hit sessions this run made, never a live group — and a partial chain can't
+// strand a root that would collide forever on retry. Every tmux step uses
 // 2>&1 so a failure at ANY step (not just new-session) keeps its reason (e.g.
 // "duplicate session: NAME") for runSessionScript to surface, instead of a bare
 // "exit status 1".

@@ -123,24 +123,26 @@ func (fleetPage *fleetPage) saveCreateSession(m *model) tea.Cmd {
 	// A template was Tab-selected: mint the whole group — one session per
 	// pane, the resolved name as the group ID — and run each pane's command.
 	if preset != nil {
-		// The group root is named after the preset, so re-applying a preset (or
-		// a leftover from a prior failed apply) would collide on new-session and
-		// fail forever. Suffix to a free name (dev → dev-2) so the root is always
-		// creatable; load the runtime session list first so the check sees what's
-		// actually live.
-		ensureSessionsLoaded(m, ref)
-		name = uniqueGroupName(sanitized, name, m.sessionStore.Sessions(ref))
-		fullName = GroupSessionName(sanitized, name)
+		// Mint the group under a FRESH RANDOM id (like a split group), not the
+		// preset name. A preset-derived root name re-collides forever on
+		// new-session once that group exists — the reported "stuck, restart
+		// doesn't help" bug, since the session lives in the container. A random
+		// id never collides on re-apply, and (unlike a readable suffix such as
+		// dev-2) can't prefix-match a sibling group in the prefix-based group ops
+		// (open/rename/delete). Readable/typed layout-group names need
+		// boundary-aware matching first — that's the deferred P1 prefix work.
+		groupID := randomHex(3)
+		fullName = GroupSessionName(sanitized, groupID)
 
 		sessions := make([]string, 0, preset.PaneCount())
 		sessions = append(sessions, fullName)
 		for i := 1; i < preset.PaneCount(); i++ {
-			sessions = append(sessions, NewGroupPaneSessionName(sanitized, name))
+			sessions = append(sessions, NewGroupPaneSessionName(sanitized, groupID))
 		}
 		fleetPage.mode = viewNormal
 		fleetPage.blurDialogFields()
-		m.message = fmt.Sprintf("Creating session %s from %s...", name, preset.Name)
-		return createSessionGroupFromPresetCmd(ref, name, sessions, *preset)
+		m.message = fmt.Sprintf("Creating session from %s...", preset.Name)
+		return createSessionGroupFromPresetCmd(ref, groupID, sessions, *preset)
 	}
 
 	fleetPage.mode = viewNormal

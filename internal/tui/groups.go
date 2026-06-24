@@ -3,7 +3,6 @@ package tui
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -122,31 +121,6 @@ func NewGroupRootSessionName(sanitizedInstance string) string {
 // an existing group: <instance>~<groupID>~<hex>.
 func NewGroupPaneSessionName(sanitizedInstance, groupID string) string {
 	return GroupSessionName(sanitizedInstance, groupID) + groupSep + randomHex(2)
-}
-
-// uniqueGroupName returns desired, or desired-2/-3/… when a group with that ID
-// already lives in the instance. Layout presets create their root under a FIXED,
-// preset-derived name; without this, re-applying a preset (or a leftover from a
-// prior failed apply) would collide on `tmux new-session` and fail forever with
-// "duplicate session". Suffixing keeps the readable preset name in the common
-// case while guaranteeing the root is free — mirroring uniquePresetName and the
-// auto-increment the single-session path intends.
-func uniqueGroupName(sanitizedInstance, desired string, existing []tmuxSession) string {
-	taken := make(map[string]bool, len(existing))
-	for _, s := range existing {
-		if gid, ok := parseGroupID(sanitizedInstance, s.Name); ok {
-			taken[gid] = true
-		}
-	}
-	if !taken[desired] {
-		return desired
-	}
-	for n := 2; ; n++ {
-		candidate := fmt.Sprintf("%s-%d", desired, n)
-		if !taken[candidate] {
-			return candidate
-		}
-	}
 }
 
 // ResolveSessionName maps a user-supplied session name to its canonical
