@@ -26,11 +26,12 @@ func TestBuildPresetSessionScript(t *testing.T) {
 	// The first pane's command is typed literally (-l) after a "--" flag
 	// terminator (so a leading-dash command isn't parsed as a flag) then
 	// submitted; the exact (=, colon-terminated) session target prevents tmux
-	// prefix-matching from hitting inst~dev~a1.
-	if !strings.Contains(script, `tmux send-keys -t '=inst~dev:' -l -- 'npm run dev'`) {
+	// prefix-matching from hitting inst~dev~a1. send-keys also merges stderr so a
+	// failure HERE (not just at new-session) surfaces its reason, not "exit 1".
+	if !strings.Contains(script, `tmux send-keys -t '=inst~dev:' -l -- 'npm run dev' 2>&1`) {
 		t.Fatalf("missing literal send-keys: %s", script)
 	}
-	if !strings.Contains(script, `tmux send-keys -t '=inst~dev:' Enter`) {
+	if !strings.Contains(script, `tmux send-keys -t '=inst~dev:' Enter 2>&1`) {
 		t.Fatalf("missing Enter send-keys: %s", script)
 	}
 	// The empty second command must not produce a send-keys for that pane.

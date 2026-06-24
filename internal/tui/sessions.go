@@ -198,12 +198,14 @@ type presetSessionsCreatedMsg struct {
 // The root is created first and on its own: if THAT fails (e.g. the group name
 // already exists), the script exits immediately and the cleanup never runs, so a
 // pre-existing session is left untouched — never killed. Only once the root is
-// ours does the rest run; if any later step fails, the cleanup tears down every
-// session this run created (the root plus the random-suffixed panes — all names
-// unique to this attempt), so a partial chain can't strand a root that would
-// collide forever on retry. 2>&1 keeps tmux's failure reason (e.g. "duplicate
-// session: NAME") so runSessionScript can surface it instead of a bare "exit
-// status 1".
+// ours does the rest run; if any later step fails, the cleanup tears down the
+// root plus its panes. The caller picked the root name with uniqueGroupName, so
+// the whole "<inst>~<group>~*" namespace was free to begin with — the kills can
+// only hit sessions this run made, never a live group — and a partial chain
+// can't strand a root that would collide forever on retry. Every tmux step uses
+// 2>&1 so a failure at ANY step (not just new-session) keeps its reason (e.g.
+// "duplicate session: NAME") for runSessionScript to surface, instead of a bare
+// "exit status 1".
 //
 // send-keys targets use "=<name>:" — exact session match (the group's pane names
 // extend the root name, so prefix matching would be ambiguous) and the trailing
@@ -221,8 +223,8 @@ func buildPresetSessionScript(sessions []string, commands []string) string {
 	sendKeys := func(name, command string) []string {
 		target := shQuote("=" + name + ":")
 		return []string{
-			fmt.Sprintf("tmux send-keys -t %s -l -- %s", target, shQuote(command)),
-			fmt.Sprintf("tmux send-keys -t %s Enter", target),
+			fmt.Sprintf("tmux send-keys -t %s -l -- %s 2>&1", target, shQuote(command)),
+			fmt.Sprintf("tmux send-keys -t %s Enter 2>&1", target),
 		}
 	}
 
