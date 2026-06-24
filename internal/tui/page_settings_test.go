@@ -4,12 +4,15 @@ import (
 	"encoding/base64"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -740,5 +743,178 @@ func TestRemoteMcpGatewayURLEditPersists(t *testing.T) {
 	}
 	if loaded.RemoteMcpSettings.GatewayURL != "https://gateway.example.com" {
 		t.Fatalf("persisted GatewayURL = %q", loaded.RemoteMcpSettings.GatewayURL)
+	}
+}
+
+// TestDaemonLogsRowLocalOnly confirms the "Logs" stream selector is navigable on
+// a local TUI (rendering its [All] [Error] [Warn] [Info] segments) and is hidden,
+// like the rest of the Fleet Daemon section, when the TUI is remote.
+func TestDaemonLogsRowLocalOnly(t *testing.T) {
+	sp := newSettingsPage()
+	m := &model{
+		config:     state.DefaultConfig(),
+		toolStatus: allToolsFound(),
+		spinner:    spinner.New(),
+	}
+
+	if !slices.Contains(sp.visibleItems(m), settingsItemDaemonLogs) {
+		t.Fatal("local TUI: Logs row missing from settings nav")
+	}
+	out := sp.viewSettings(m)
+	for _, want := range []string{"Logs", "[All]", "[Error]", "[Warn]", "[Info]"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("local TUI: Logs row should render %q, view was:\n%s", want, out)
+		}
+	}
+
+	t.Setenv("FLEET_GATEWAY", "https://gw.example/abc")
+	if slices.Contains(sp.visibleItems(m), settingsItemDaemonLogs) {
+		t.Fatal("remote TUI: Logs row must be hidden")
+	}
+}
+
+// TestDaemonLogsLevelCycleClamps confirms left/right (and vim h/l) move the level
+// selection and that it clamps at the ends rather than wrapping.
+func TestDaemonLogsLevelCycleClamps(t *testing.T) {
+	sp := newSettingsPage()
+	m := &model{
+		config:      state.DefaultConfig(),
+		toolStatus:  allToolsFound(),
+		currentPage: sp,
+		fleetPage:   newFleetPage(),
+		spinner:     spinner.New(),
+	}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemDaemonLogs)
+	if sp.cursor < 0 {
+		t.Fatal("Logs row not found")
+	}
+	if sp.logLevel != 0 {
+		t.Fatalf("default log level should be All (0), got %d", sp.logLevel)
+	}
+
+	// Left at the start clamps to All.
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if sp.logLevel != 0 {
+		t.Fatalf("left at All should clamp to 0, got %d", sp.logLevel)
+	}
+
+	// Walking right past the end clamps at the last level (Info).
+	last := len(daemonLogLevels) - 1
+	for range daemonLogLevels {
+		sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
+	}
+	if sp.logLevel != last {
+		t.Fatalf("right past Info should clamp to %d, got %d", last, sp.logLevel)
+	}
+
+	// vim 'h' steps back one.
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	if sp.logLevel != last-1 {
+		t.Fatalf("h should step back one level, got %d", sp.logLevel)
+	}
+}
+
+// TestDaemonLogsEnterStreams confirms pressing enter on the Logs row returns a
+// (screen-takeover) command rather than editing or cycling.
+func TestDaemonLogsEnterStreams(t *testing.T) {
+	sp := newSettingsPage()
+	m := &model{
+		config:      state.DefaultConfig(),
+		toolStatus:  allToolsFound(),
+		currentPage: sp,
+		fleetPage:   newFleetPage(),
+		spinner:     spinner.New(),
+	}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemDaemonLogs)
+	if sp.cursor < 0 {
+		t.Fatal("Logs row not found")
+	}
+	if cmd := sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+		t.Fatal("enter on Logs should return a stream command")
+	}
+}
+
+// TestDaemonLogStreamCommand confirms the command tails fleet.log and filters to
+// the selected level and above (and not at all for All). The expected path comes
+// from flog.Path() (the server-owned canonical source, which *_test.go may import
+// even though the TUI may not) so a future rename of flog.logFileName fails here
+// loudly instead of letting the TUI silently tail a stale filename.
+func TestDaemonLogStreamCommand(t *testing.T) {
+	path := flog.Path()
+	cases := []struct {
+		label string
+		grep  string // empty = expect no grep filter
+	}{
+		{"All", ""},
+		{"Error", " level=ERROR"},
+		{"Warn", " level=(ERROR|WARN)"},
+		{"Info", " level=(ERROR|WARN|INFO)"},
+	}
+	if len(cases) != len(daemonLogLevels) {
+		t.Fatalf("test expects %d levels, daemonLogLevels has %d", len(cases), len(daemonLogLevels))
+	}
+	for i, tc := range cases {
+		lvl := daemonLogLevels[i]
+		if lvl.label != tc.label {
+			t.Fatalf("level %d: expected label %q, got %q", i, tc.label, lvl.label)
+		}
+		cmd := daemonLogStreamCommand(lvl)
+		if len(cmd.Args) != 3 || cmd.Args[0] != "sh" || cmd.Args[1] != "-c" {
+			t.Fatalf("%s: expected `sh -c <script>`, got %v", tc.label, cmd.Args)
+		}
+		script := cmd.Args[2]
+		if !strings.Contains(script, path) {
+			t.Fatalf("%s: script should tail %q, got %q", tc.label, path, script)
+		}
+		// Guard the load-bearing flags called out in the doc comment.
+		if !strings.Contains(script, "tail -n 200 -F") {
+			t.Fatalf("%s: script should `tail -n 200 -F`, got %q", tc.label, script)
+		}
+		if !strings.Contains(script, "fleet.log ["+tc.label+"]") {
+			t.Fatalf("%s: script should print a header naming the level, got %q", tc.label, script)
+		}
+		if tc.grep == "" {
+			if strings.Contains(script, "grep") {
+				t.Fatalf("%s: script should not filter, got %q", tc.label, script)
+			}
+			continue
+		}
+		want := "grep --line-buffered -E '" + tc.grep + "'"
+		if !strings.Contains(script, want) {
+			t.Fatalf("%s: script should contain %q, got %q", tc.label, want, script)
+		}
+	}
+}
+
+// TestSilenceStreamInterrupt confirms both shapes of a Ctrl-C return are treated
+// as a clean exit — a 128+SIGINT exit code AND a signal death (the dash/bash
+// case) — while a genuine failure passes through, so a normal Ctrl-C return never
+// flashes "Command error" in the footer.
+func TestSilenceStreamInterrupt(t *testing.T) {
+	// Shells that expose a SIGINT-killed pipeline as a 128+SIGINT exit code.
+	if got := silenceStreamInterrupt(exec.Command("sh", "-c", "exit 130").Run()); got != nil {
+		t.Fatalf("exit 130 should be silenced, got %v", got)
+	}
+
+	// dash/bash under a terminal Ctrl-C: the child is terminated by SIGINT, which
+	// os/exec reports as a signal death (ExitCode() == -1). Drive it deterministically.
+	cmd := exec.Command("sh", "-c", "sleep 30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
+		t.Fatalf("signal: %v", err)
+	}
+	if got := silenceStreamInterrupt(cmd.Wait()); got != nil {
+		t.Fatalf("SIGINT-killed child should be silenced, got %v", got)
+	}
+
+	// A real non-zero exit is still surfaced.
+	if got := silenceStreamInterrupt(exec.Command("sh", "-c", "exit 1").Run()); got == nil {
+		t.Fatal("exit 1 should pass through as an error")
+	}
+	// A clean exit stays nil.
+	if got := silenceStreamInterrupt(nil); got != nil {
+		t.Fatalf("nil error should stay nil, got %v", got)
 	}
 }
