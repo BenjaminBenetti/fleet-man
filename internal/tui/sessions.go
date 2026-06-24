@@ -117,9 +117,10 @@ func ensureSessionsLoaded(m *model, ref InstanceRef) {
 // bare "exit status 1" — the single biggest diagnosability win for the TUI,
 // which otherwise swallowed why a session failed to create. Only the LAST
 // non-empty line is surfaced: that's the actual failing command's message,
-// dropping any TmuxEnsureInstalled "==> Installing tmux..." preamble (while
-// still surfacing a real "ERROR: failed to install tmux", which is the last
-// line in that case).
+// dropping any TmuxEnsureInstalled "==> Installing tmux..." preamble. (If the
+// install itself fails, TmuxEnsureInstalled falls through to `tmux new-session`,
+// which then fails with e.g. "tmux: not found" — that becomes the last line, so
+// a missing-tmux failure still reads usefully.)
 func runSessionScript(ref InstanceRef, script string) (string, error) {
 	out, code, err := runInstanceCommand(ref.Fleet, ref.Instance, []string{"sh", "-c", script})
 	if err != nil {
