@@ -43,11 +43,13 @@ import (
 var (
 	// logRotateHour is the local hour-of-day (0–23) at which fleet.log is cut.
 	// The spec is 3am; overridable via FLEET_LOG_ROTATE_HOUR so a test can target
-	// the current hour.
-	logRotateHour = envIntDefault("FLEET_LOG_ROTATE_HOUR", 3)
-	// logRotateKeepDays bounds how many days of dated logs are kept. Anything
-	// older than now-keepDays is pruned after each rotation check. Overridable via
-	// FLEET_LOG_ROTATE_KEEP_DAYS for tests.
+	// the current hour. Clamped to a real hour so a fat-fingered override (e.g.
+	// 25) can't make the "before the rotation hour" gate unsatisfiable and turn
+	// every check into a rotation.
+	logRotateHour = min(max(envIntDefault("FLEET_LOG_ROTATE_HOUR", 3), 0), 23)
+	// logRotateKeepDays is how many of the most recent daily logs to keep (today
+	// inclusive). After each rotation check, logs older than that window are
+	// pruned. Overridable via FLEET_LOG_ROTATE_KEEP_DAYS for tests.
 	logRotateKeepDays = envIntDefault("FLEET_LOG_ROTATE_KEEP_DAYS", 100)
 	// logRotateInterval is how often the loop checks whether a rotation is due.
 	// A daily cut needs no fine granularity; ~15m lands the rotation within a
@@ -229,21 +231,33 @@ func pruneRotatedLogs(now time.Time) (int, error) {
 		return 0, err
 	}
 
-	// Cut at the start of the day logRotateKeepDays days back: a log dated before
-	// it is more than keepDays days old and is removed; today's just-written log
-	// (and the keepDays days behind it) is kept.
-	cutoff := startOfDay(now).AddDate(0, 0, -logRotateKeepDays)
+	// Keep the most recent logRotateKeepDays days, today inclusive: the window
+	// starts keepDays-1 days before today, so a log dated before that start is
+	// outside the window and removed. With the default 100 that retains today plus
+	// the 99 days behind it — 100 daily logs.
+	cutoff := startOfDay(now).AddDate(0, 0, -(logRotateKeepDays - 1))
 	removed := 0
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		day, ok := parseRotatedLogDate(e.Name())
+		name := e.Name()
+		// Reclaim a temp file orphaned by a rotation that died before its rename
+		// (the deferred cleanup never ran). Safe here: rotation is serial and the
+		// current tick's copyTruncate has already finished by the time prune runs,
+		// so any .rotate-*.log.tmp left behind is from a dead run. Mirrors how
+		// pruneBackups sweeps its own orphaned .backup-*.tmp files; without it these
+		// would accumulate forever, since the date filter below skips them.
+		if strings.HasPrefix(name, ".rotate-") && strings.HasSuffix(name, ".log.tmp") {
+			_ = os.Remove(filepath.Join(dir, name))
+			continue
+		}
+		day, ok := parseRotatedLogDate(name)
 		if !ok {
 			continue
 		}
 		if day.Before(cutoff) {
-			if err := os.Remove(filepath.Join(dir, e.Name())); err == nil {
+			if err := os.Remove(filepath.Join(dir, name)); err == nil {
 				removed++
 			}
 		}

@@ -184,8 +184,8 @@ func TestPruneRotatedLogs(t *testing.T) {
 		return name
 	}
 	keep0 := dayLog(0)     // today
-	keep99 := dayLog(99)   // within window
-	keep100 := dayLog(100) // exactly at the cutoff day — kept
+	keep99 := dayLog(99)   // oldest still inside the 100-day window
+	drop100 := dayLog(100) // just outside the window — removed
 	drop101 := dayLog(101) // over the limit — removed
 	drop500 := dayLog(500) // well over — removed
 	// A non-matching file must be left strictly alone.
@@ -193,26 +193,35 @@ func TestPruneRotatedLogs(t *testing.T) {
 	if err := os.WriteFile(other, []byte("keep me"), 0o644); err != nil {
 		t.Fatalf("write notes: %v", err)
 	}
+	// A crash-orphaned rotation temp must be reclaimed (but not counted as a
+	// removed dated log).
+	orphan := filepath.Join(dir, ".rotate-987654.log.tmp")
+	if err := os.WriteFile(orphan, []byte("half-written"), 0o600); err != nil {
+		t.Fatalf("write orphan tmp: %v", err)
+	}
 
 	removed, err := pruneRotatedLogs(now)
 	if err != nil {
 		t.Fatalf("pruneRotatedLogs: %v", err)
 	}
-	if removed != 2 {
-		t.Fatalf("removed = %d, want 2", removed)
+	if removed != 3 {
+		t.Fatalf("removed = %d, want 3", removed)
 	}
-	for _, name := range []string{keep0, keep99, keep100} {
+	for _, name := range []string{keep0, keep99} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatalf("%s should be kept: %v", name, err)
 		}
 	}
-	for _, name := range []string{drop101, drop500} {
+	for _, name := range []string{drop100, drop101, drop500} {
 		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
 			t.Fatalf("%s should be removed: %v", name, err)
 		}
 	}
 	if _, err := os.Stat(other); err != nil {
 		t.Fatalf("non-log file removed: %v", err)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("orphaned rotate tmp not reclaimed: %v", err)
 	}
 }
 
