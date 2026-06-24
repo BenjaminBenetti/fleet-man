@@ -147,6 +147,13 @@ func Serve(ctx context.Context) error {
 	// files instead of racing them.
 	go svc.runBackupLoop(hubCtx)
 
+	// Log rotation loop: at 3am local it cuts the shared event log
+	// (~/.fleet/fleet.log) into ~/.fleet/logs/fleetd/<date>.log and prunes dated
+	// logs past the retention window, so the append-only trail every fleet process
+	// writes to can't grow without bound. Unconditional and stops on shutdown via
+	// hubCtx, like the backup loop above.
+	go svc.runLogRotateLoop(hubCtx)
+
 	// Tunnel-facing servers fed by the gateway tunnel demux (no extra port/socket):
 	//   - gRPC: the SAME FleetService as the local unix socket, but gated by the
 	//     MCP bearer token (the local socket stays auth-less). Tunneled whenever
