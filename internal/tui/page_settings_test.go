@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -881,5 +882,23 @@ func TestDaemonLogStreamCommand(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Fatalf("%s: script should contain %q, got %q", tc.label, want, script)
 		}
+	}
+}
+
+// TestSilenceStreamInterrupt confirms the Ctrl-C exit of a stream child (status
+// 130) is treated as a clean exit, while a genuine failure passes through — so a
+// normal Ctrl-C return doesn't flash "Command error" in the footer.
+func TestSilenceStreamInterrupt(t *testing.T) {
+	// 128 + SIGINT: the documented way to end the stream.
+	if got := silenceStreamInterrupt(exec.Command("sh", "-c", "exit 130").Run()); got != nil {
+		t.Fatalf("exit 130 (Ctrl-C) should be silenced, got %v", got)
+	}
+	// A real non-zero exit is still surfaced.
+	if got := silenceStreamInterrupt(exec.Command("sh", "-c", "exit 1").Run()); got == nil {
+		t.Fatal("exit 1 should pass through as an error")
+	}
+	// A clean exit stays nil.
+	if got := silenceStreamInterrupt(nil); got != nil {
+		t.Fatalf("nil error should stay nil, got %v", got)
 	}
 }

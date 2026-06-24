@@ -1101,10 +1101,7 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			if item == settingsItemDaemonLogs {
 				// Hand the terminal to a live `tail -f` of fleet.log filtered to the
 				// selected level (same screen-takeover mechanic as the doctor row).
-				return execProcess(
-					daemonLogStreamCommand(daemonLogLevels[settingsPage.logLevel]),
-					func(err error) tea.Msg { return execDoneMsg{err} },
-				)
+				return daemonLogStreamCmd(daemonLogLevels[settingsPage.logLevel])
 			}
 			if item == settingsItemDaemonRestart {
 				if m.daemonRestarting {

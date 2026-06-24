@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -312,6 +313,30 @@ func daemonLogStreamCommand(level daemonLogLevel) *exec.Cmd {
 	}
 	header := fmt.Sprintf("── fleet.log [%s] ─── Ctrl-C to return to fleet ───", level.label)
 	return exec.Command("sh", "-c", fmt.Sprintf("printf '%%s\\n\\n' %q; %s", header, stream))
+}
+
+// streamInterruptExitCode is the status a shell pipeline reports when killed by
+// SIGINT (128 + SIGINT) — i.e. the user pressed Ctrl-C to end the stream.
+const streamInterruptExitCode = 130
+
+// silenceStreamInterrupt nils out the expected Ctrl-C exit (status 130) of a
+// log-stream child so the shared execDoneMsg handler doesn't flash it in the
+// footer as "Command error: exit status 130"; any other failure passes through.
+func silenceStreamInterrupt(err error) error {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == streamInterruptExitCode {
+		return nil
+	}
+	return err
+}
+
+// daemonLogStreamCmd hands the terminal to a live fleet.log tail (see
+// daemonLogStreamCommand) and returns to the TUI when the user ends it. Ctrl-C —
+// the documented way to stop the stream — is treated as a clean exit.
+func daemonLogStreamCmd(level daemonLogLevel) tea.Cmd {
+	return execProcess(daemonLogStreamCommand(level), func(err error) tea.Msg {
+		return execDoneMsg{silenceStreamInterrupt(err)}
+	})
 }
 
 // createInstanceCmd dispatches a CreateInstance job to the server, which
