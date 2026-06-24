@@ -123,15 +123,28 @@ func (fleetPage *fleetPage) saveCreateSession(m *model) tea.Cmd {
 	// A template was Tab-selected: mint the whole group — one session per
 	// pane, the resolved name as the group ID — and run each pane's command.
 	if preset != nil {
+		// Keep the readable preset/typed name as the group id when it's free,
+		// else fall back to a fresh random id. A preset-derived root name
+		// re-collides forever on new-session once that group exists — the
+		// reported "stuck, restart doesn't help" bug, since the session lives in
+		// the container. Falling back to random (rather than auto-suffixing to
+		// dev-2) avoids minting a sibling whose name a prefix-based group op would
+		// match against "dev"; readable names for re-applies need boundary-aware
+		// matching first — the deferred P1 prefix work. Load the runtime list so
+		// the free check sees what's actually live.
+		ensureSessionsLoaded(m, ref)
+		groupID := groupIDFor(sanitized, name, m.sessionStore.Sessions(ref))
+		fullName = GroupSessionName(sanitized, groupID)
+
 		sessions := make([]string, 0, preset.PaneCount())
 		sessions = append(sessions, fullName)
 		for i := 1; i < preset.PaneCount(); i++ {
-			sessions = append(sessions, NewGroupPaneSessionName(sanitized, name))
+			sessions = append(sessions, NewGroupPaneSessionName(sanitized, groupID))
 		}
 		fleetPage.mode = viewNormal
 		fleetPage.blurDialogFields()
-		m.message = fmt.Sprintf("Creating session %s from %s...", name, preset.Name)
-		return createSessionGroupFromPresetCmd(ref, name, sessions, *preset)
+		m.message = fmt.Sprintf("Creating session %s from %s...", groupID, preset.Name)
+		return createSessionGroupFromPresetCmd(ref, groupID, sessions, *preset)
 	}
 
 	fleetPage.mode = viewNormal

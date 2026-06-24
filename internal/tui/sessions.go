@@ -111,16 +111,39 @@ func ensureSessionsLoaded(m *model, ref InstanceRef) {
 
 // runSessionScript runs a shell one-liner inside ref's container and folds a
 // non-zero exit into the returned error — matching the semantics of the old
-// local cmd.Run()/cmd.Output() call sites these commands were built on.
+// local cmd.Run()/cmd.Output() call sites these commands were built on. The
+// create scripts merge tmux's stderr into stdout (2>&1) so a captured reason
+// (e.g. "duplicate session: NAME") rides along here instead of being lost to a
+// bare "exit status 1" — the single biggest diagnosability win for the TUI,
+// which otherwise swallowed why a session failed to create. Only the LAST
+// non-empty line is surfaced: that's the actual failing command's message,
+// dropping any TmuxEnsureInstalled "==> Installing tmux..." preamble. (If the
+// install itself fails, TmuxEnsureInstalled falls through to `tmux new-session`,
+// which then fails with e.g. "tmux: not found" — that becomes the last line, so
+// a missing-tmux failure still reads usefully.)
 func runSessionScript(ref InstanceRef, script string) (string, error) {
 	out, code, err := runInstanceCommand(ref.Fleet, ref.Instance, []string{"sh", "-c", script})
 	if err != nil {
 		return out, err
 	}
 	if code != 0 {
+		if reason := lastNonEmptyLine(out); reason != "" {
+			return out, fmt.Errorf("exit status %d: %s", code, reason)
+		}
 		return out, fmt.Errorf("exit status %d", code)
 	}
 	return out, nil
+}
+
+// lastNonEmptyLine returns the last non-blank line of s (trimmed), or "".
+func lastNonEmptyLine(s string) string {
+	lines := strings.Split(s, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if t := strings.TrimSpace(lines[i]); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // sessionCreatedMsg is sent after creating a new tmux session.
@@ -157,7 +180,10 @@ type sessionDeletedMsg struct {
 // path) and then creates a detached session inside the container.
 func createSessionCmd(ref InstanceRef, sessionName string) tea.Cmd {
 	return func() tea.Msg {
-		script := tmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s 2>/dev/null`, shQuote(sessionName))
+		// 2>&1 (not 2>/dev/null): on a name collision tmux exits 1 with
+		// "duplicate session: NAME" on stderr — keep it so runSessionScript can
+		// surface the reason instead of a bare "exit status 1".
+		script := tmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s 2>&1`, shQuote(sessionName))
 		if _, err := runSessionScript(ref, script); err != nil {
 			return sessionCreatedMsg{ref: ref, err: err}
 		}
@@ -178,30 +204,72 @@ type presetSessionsCreatedMsg struct {
 
 // buildPresetSessionScript builds the in-container one-liner that mints a
 // preset's tmux sessions and types each pane's startup command into its
-// session. Steps are chained with && so a failure (e.g. a name collision on
-// the first new-session) stops the script instead of minting a partial group
-// silently. send-keys targets use "=<name>:" — exact session match (the
-// group's pane names extend the root name, so prefix matching would be
-// ambiguous) and the trailing ":" makes it a session target; a bare "=<name>"
-// fails target-pane parsing ("can't find pane") on tmux 3.x. -l sends the
-// command literally so key names inside it (e.g. "Enter") are not interpreted,
-// and the "--" terminates send-keys' own flag parsing so a command beginning
-// with "-" (e.g. "-rf ...") is not mistaken for a flag (which would fail the
-// step and abort the whole && chain).
+// session.
+//
+// Shape:
+//
+//	tmux new-session -d -s ROOT 2>&1 || exit 1
+//	{ <root send-keys> && <pane new-sessions + send-keys> } || { <kill them all>; exit 1 }
+//
+// The root is created first and on its own: if THAT fails (e.g. the group name
+// already exists), the script exits immediately and the cleanup never runs, so a
+// pre-existing session is left untouched — never killed. Only once the root is
+// ours does the rest run; if any later step fails, the cleanup tears down the
+// root plus its panes by EXACT "=name:" target. The caller picked a group id
+// that was free (groupIDFor), so nothing pre-existed under "<inst>~<group>~*" —
+// the kills can only hit sessions this run made, never a live group — and a
+// partial chain can't strand a root that would collide forever on retry. Every
+// tmux step uses
+// 2>&1 so a failure at ANY step (not just new-session) keeps its reason (e.g.
+// "duplicate session: NAME") for runSessionScript to surface, instead of a bare
+// "exit status 1".
+//
+// send-keys targets use "=<name>:" — exact session match (the group's pane names
+// extend the root name, so prefix matching would be ambiguous) and the trailing
+// ":" makes it a session target; a bare "=<name>" fails target-pane parsing
+// ("can't find pane") on tmux 3.x. -l sends the command literally so key names
+// inside it (e.g. "Enter") are not interpreted, and the "--" terminates
+// send-keys' own flag parsing so a command beginning with "-" (e.g. "-rf ...")
+// is not mistaken for a flag.
 func buildPresetSessionScript(sessions []string, commands []string) string {
-	var b strings.Builder
-	b.WriteString(tmuxEnsureInstalled)
-	for i, name := range sessions {
-		if i > 0 {
-			b.WriteString(" && ")
-		}
-		fmt.Fprintf(&b, `tmux new-session -d -s %s 2>/dev/null`, shQuote(name))
-		if i < len(commands) && commands[i] != "" {
-			target := shQuote("=" + name + ":")
-			fmt.Fprintf(&b, ` && tmux send-keys -t %s -l -- %s && tmux send-keys -t %s Enter`,
-				target, shQuote(commands[i]), target)
+	if len(sessions) == 0 {
+		return ""
+	}
+	root := sessions[0]
+
+	sendKeys := func(name, command string) []string {
+		target := shQuote("=" + name + ":")
+		return []string{
+			fmt.Sprintf("tmux send-keys -t %s -l -- %s 2>&1", target, shQuote(command)),
+			fmt.Sprintf("tmux send-keys -t %s Enter 2>&1", target),
 		}
 	}
+
+	// Steps that run only after the root session exists.
+	var inner []string
+	if len(commands) > 0 && commands[0] != "" {
+		inner = append(inner, sendKeys(root, commands[0])...)
+	}
+	for i := 1; i < len(sessions); i++ {
+		inner = append(inner, fmt.Sprintf(`tmux new-session -d -s %s 2>&1`, shQuote(sessions[i])))
+		if i < len(commands) && commands[i] != "" {
+			inner = append(inner, sendKeys(sessions[i], commands[i])...)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(tmuxEnsureInstalled)
+	fmt.Fprintf(&b, `tmux new-session -d -s %s 2>&1`, shQuote(root))
+	if len(inner) == 0 {
+		return b.String()
+	}
+
+	kills := make([]string, 0, len(sessions))
+	for _, name := range sessions {
+		kills = append(kills, fmt.Sprintf("tmux kill-session -t %s 2>/dev/null", shQuote("="+name+":")))
+	}
+	fmt.Fprintf(&b, " || exit 1\n{ %s; } || { %s; exit 1; }",
+		strings.Join(inner, " && "), strings.Join(kills, "; "))
 	return b.String()
 }
 
