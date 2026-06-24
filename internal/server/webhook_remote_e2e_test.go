@@ -216,22 +216,24 @@ func TestWebhookJSONPathDeliveryEndToEnd(t *testing.T) {
 	}
 
 	// Malformed (non-JSON) event: the most transport-sensitive case — a json-path
-	// filter must PARSE the delivered body, so a body that survives the tunnel but
-	// isn't JSON resolves no path and fires nothing, yet the name is still wired so
-	// the receiver answers 200 (not 404). This exercises the decode-failure branch
-	// end to end, which a regex filter (raw-byte match) never reaches.
+	// filter can only evaluate a JSON body, so a body that survives the tunnel but
+	// isn't JSON (e.g. GitHub's default form-urlencoded delivery) is rejected with
+	// 400 (issue #207) rather than silently never matching. The name is wired (so
+	// it's a 400, not a 404), nothing fires, and the 400 reverse-proxies back
+	// through the tunnel so the sender sees the failure. A regex filter (raw-byte
+	// match) never reaches this branch.
 	resp3, err := client.Post(base+"/deploy", "application/json",
 		strings.NewReader(`refs/heads/main not json at all`))
 	if err != nil {
 		t.Fatalf("POST malformed json-path webhook through the tunnel: %v", err)
 	}
 	resp3.Body.Close()
-	if resp3.StatusCode != http.StatusOK {
-		t.Fatalf("malformed json-path webhook POST -> %d, want 200 (name wired, body unparseable)", resp3.StatusCode)
+	if resp3.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malformed json-path webhook POST -> %d, want 400 (json-path needs a JSON body)", resp3.StatusCode)
 	}
 	select {
 	case batch := <-svc.webhookFires:
-		t.Fatalf("json-path filter must not fire on an unparseable body, got %+v", batch)
+		t.Fatalf("a rejected json-path body must fire nothing, got %+v", batch)
 	case <-time.After(500 * time.Millisecond):
 		// expected: nothing enqueued
 	}
