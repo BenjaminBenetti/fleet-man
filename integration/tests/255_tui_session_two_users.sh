@@ -13,12 +13,14 @@ itest_begin
 # or created sessions land on a socket the poll never reads.
 #
 # The old containerUser() guessed: first /tmp/tmux-[1-9]*/ owner, else first
-# /home/<user> owner. With /home/app sorting before /home/vscode — and app also
-# holding its own tmux socket below — that guess latches onto `app` and is cached
-# forever, so the (vscode) session fleet creates would never appear in the list.
-# The fix resolves the real remoteUser (vscode) from the devcontainer.metadata
-# label, so neither sort order nor socket timing can mislead it. This test fails
-# on the old code (session row never renders) and passes on the fix.
+# /home/<user> owner. The poison is timing: `app` brings up its tmux server and
+# the sleep below lets fleetd's poll resolve+cache the user from app's socket
+# (and, before any socket exists, the /home/app fallback that sorts ahead of
+# /home/vscode) BEFORE fleet's own vscode session socket exists. That cached
+# `app` then sticks, so the (vscode) session fleet creates is listed against
+# app's socket and never renders. The fix resolves the real remoteUser (vscode)
+# from the devcontainer.metadata label, so neither socket timing nor sort order
+# can mislead it. This test fails on the old code and passes on the fix.
 setup_twouser_test
 fleet_up alpha
 

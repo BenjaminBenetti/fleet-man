@@ -38,3 +38,20 @@ func TestRemoteUserFromMetadataJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestLooksLikeUsername(t *testing.T) {
+	valid := []string{"vscode", "root", "app", "node-dev", "user_1", "ubuntu"}
+	for _, s := range valid {
+		if !looksLikeUsername(s) {
+			t.Errorf("looksLikeUsername(%q) = false, want true", s)
+		}
+	}
+	// Empty, whitespace (banner noise), and unsubstituted templates must be
+	// rejected so they never get cached and routed to `docker exec -u`.
+	invalid := []string{"", "  ", "two words", "name\twith\ttab", "${localEnv:USER}", "${containerEnv:FOO}", "line1\nvscode"}
+	for _, s := range invalid {
+		if looksLikeUsername(s) {
+			t.Errorf("looksLikeUsername(%q) = true, want false", s)
+		}
+	}
+}

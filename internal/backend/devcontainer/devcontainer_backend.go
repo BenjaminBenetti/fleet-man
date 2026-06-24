@@ -22,12 +22,21 @@ type DevcontainerBackend struct {
 	verbose bool
 
 	userCache   map[string]string
+	userMissAt  map[string]time.Time // last failed user resolution, to throttle re-resolves
 	userCacheMu sync.Mutex
 }
 
+// userResolveRetryInterval throttles re-resolving a container whose user
+// couldn't be determined, so a persistently-unresolvable container can't make
+// the per-second poll re-spawn the resolution subprocesses every tick.
+const userResolveRetryInterval = 15 * time.Second
+
 // New creates a new DevcontainerBackend.
 func New(opts ...Option) *DevcontainerBackend {
-	devcontainerBackend := &DevcontainerBackend{userCache: make(map[string]string)}
+	devcontainerBackend := &DevcontainerBackend{
+		userCache:  make(map[string]string),
+		userMissAt: make(map[string]time.Time),
+	}
 	for _, opt := range opts {
 		opt(devcontainerBackend)
 	}
@@ -39,26 +48,36 @@ func New(opts ...Option) *DevcontainerBackend {
 // they operate on the SAME tmux server as the `devcontainer exec` paths
 // (create/attach). That user is the devcontainer remoteUser — see
 // resolveContainerUser. The answer is cached to avoid re-resolving on every
-// poll. Only a non-empty answer is cached: an empty result (a just-started or
-// gone container, or a transient probe failure) must be re-resolved next call
-// so it self-heals. Caching "" would, now that the backend is reused across
-// poll ticks, pin every later exec to the wrong user forever.
+// poll. Only a non-empty answer is cached permanently: an empty result (a
+// just-started or gone container, or a transient probe failure) must be
+// re-resolved later so it self-heals, but re-resolution is throttled to
+// userResolveRetryInterval so a stuck container can't re-spawn the resolution
+// subprocesses every tick. Caching "" permanently would, now that the backend
+// is reused across poll ticks, pin every later exec to the wrong user forever.
 func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string) string {
 	devcontainerBackend.userCacheMu.Lock()
 	if cached, ok := devcontainerBackend.userCache[containerID]; ok {
 		devcontainerBackend.userCacheMu.Unlock()
 		return cached
 	}
+	if missAt, ok := devcontainerBackend.userMissAt[containerID]; ok && time.Since(missAt) < userResolveRetryInterval {
+		devcontainerBackend.userCacheMu.Unlock()
+		return ""
+	}
 	devcontainerBackend.userCacheMu.Unlock()
 
 	user := devcontainerBackend.resolveContainerUser(containerID)
 
-	// Cache only a real answer; leave a miss uncached so the next poll re-probes.
+	devcontainerBackend.userCacheMu.Lock()
 	if user != "" {
-		devcontainerBackend.userCacheMu.Lock()
+		// Cache a real answer permanently; clear any prior miss.
 		devcontainerBackend.userCache[containerID] = user
-		devcontainerBackend.userCacheMu.Unlock()
+		delete(devcontainerBackend.userMissAt, containerID)
+	} else {
+		// Record the miss so the next ticks back off instead of re-resolving.
+		devcontainerBackend.userMissAt[containerID] = time.Now()
 	}
+	devcontainerBackend.userCacheMu.Unlock()
 	return user
 }
 
@@ -76,14 +95,26 @@ func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string
 //     call, cached by the caller, never on the steady-state path. The env probe
 //     is disabled so the username is the only thing on stdout.
 //  3. the legacy ownership heuristic — last resort only.
+//
+// The authoritative answers are sanity-checked: a metadata remoteUser that isn't
+// a usable runtime username (e.g. an unsubstituted "${localEnv:USER}") is
+// rejected so it can't be cached and route every `docker exec -u` to a user that
+// doesn't exist — re-creating the very bug this resolves.
 func (devcontainerBackend *DevcontainerBackend) resolveContainerUser(containerID string) string {
-	if user := remoteUserFromMetadata(containerID); user != "" {
+	if user := remoteUserFromMetadata(containerID); looksLikeUsername(user) {
 		return user
 	}
-	if user := devcontainerBackend.remoteUserViaExec(containerID); user != "" {
+	if user := devcontainerBackend.remoteUserViaExec(containerID); looksLikeUsername(user) {
 		return user
 	}
 	return containerUserHeuristic(containerID)
+}
+
+// looksLikeUsername reports whether s is a plausible single-token Unix username:
+// non-empty, no whitespace, and free of shell-expansion leftovers like an
+// unsubstituted ${...} that a metadata template may carry.
+func looksLikeUsername(s string) bool {
+	return s != "" && !strings.ContainsAny(s, " \t\r\n") && !strings.Contains(s, "${")
 }
 
 // remoteUserViaExec asks the devcontainer CLI who it execs as. --default-user-env-probe
@@ -100,17 +131,14 @@ func (devcontainerBackend *DevcontainerBackend) remoteUserViaExec(containerID st
 	if err != nil {
 		return ""
 	}
-	// Take the last line and reject anything with whitespace: a username is a
-	// single token, so banner noise from a sourced profile can't masquerade as one.
+	// Take the last line: with --default-user-env-probe none the username is the
+	// only stdout, but this is belt-and-suspenders against a stray banner line.
+	// resolveContainerUser validates the token via looksLikeUsername.
 	out = bytes.TrimSpace(out)
 	if i := bytes.LastIndexByte(out, '\n'); i >= 0 {
 		out = bytes.TrimSpace(out[i+1:])
 	}
-	user := string(out)
-	if user == "" || strings.ContainsAny(user, " \t") {
-		return ""
-	}
-	return user
+	return string(out)
 }
 
 // containerUserHeuristic is the legacy last-resort guess: the owner of an active
