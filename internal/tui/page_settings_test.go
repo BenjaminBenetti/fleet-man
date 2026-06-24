@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -885,14 +886,29 @@ func TestDaemonLogStreamCommand(t *testing.T) {
 	}
 }
 
-// TestSilenceStreamInterrupt confirms the Ctrl-C exit of a stream child (status
-// 130) is treated as a clean exit, while a genuine failure passes through — so a
-// normal Ctrl-C return doesn't flash "Command error" in the footer.
+// TestSilenceStreamInterrupt confirms both shapes of a Ctrl-C return are treated
+// as a clean exit — a 128+SIGINT exit code AND a signal death (the dash/bash
+// case) — while a genuine failure passes through, so a normal Ctrl-C return never
+// flashes "Command error" in the footer.
 func TestSilenceStreamInterrupt(t *testing.T) {
-	// 128 + SIGINT: the documented way to end the stream.
+	// Shells that expose a SIGINT-killed pipeline as a 128+SIGINT exit code.
 	if got := silenceStreamInterrupt(exec.Command("sh", "-c", "exit 130").Run()); got != nil {
-		t.Fatalf("exit 130 (Ctrl-C) should be silenced, got %v", got)
+		t.Fatalf("exit 130 should be silenced, got %v", got)
 	}
+
+	// dash/bash under a terminal Ctrl-C: the child is terminated by SIGINT, which
+	// os/exec reports as a signal death (ExitCode() == -1). Drive it deterministically.
+	cmd := exec.Command("sh", "-c", "sleep 30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
+		t.Fatalf("signal: %v", err)
+	}
+	if got := silenceStreamInterrupt(cmd.Wait()); got != nil {
+		t.Fatalf("SIGINT-killed child should be silenced, got %v", got)
+	}
+
 	// A real non-zero exit is still surfaced.
 	if got := silenceStreamInterrupt(exec.Command("sh", "-c", "exit 1").Run()); got == nil {
 		t.Fatal("exit 1 should pass through as an error")

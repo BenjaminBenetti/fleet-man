@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -315,17 +316,26 @@ func daemonLogStreamCommand(level daemonLogLevel) *exec.Cmd {
 	return exec.Command("sh", "-c", fmt.Sprintf("printf '%%s\\n\\n' %q; %s", header, stream))
 }
 
-// streamInterruptExitCode is the status a shell pipeline reports when killed by
-// SIGINT (128 + SIGINT) — i.e. the user pressed Ctrl-C to end the stream.
-const streamInterruptExitCode = 130
+// streamInterruptExitCode is the status some shells report when a pipeline is
+// killed by SIGINT (128 + SIGINT).
+const streamInterruptExitCode = 128 + int(syscall.SIGINT) // 130
 
-// silenceStreamInterrupt nils out the expected Ctrl-C exit (status 130) of a
-// log-stream child so the shared execDoneMsg handler doesn't flash it in the
-// footer as "Command error: exit status 130"; any other failure passes through.
+// silenceStreamInterrupt nils out the expected Ctrl-C termination of a log-stream
+// child so the shared execDoneMsg handler doesn't flash it in the footer as
+// "Command error: …"; any other failure passes through. Ctrl-C in a terminal
+// delivers SIGINT to the whole foreground group, and the parent sh surfaces that
+// two different ways: some shells exit with 128+SIGINT (130), but dash/bash are
+// themselves terminated by the signal, which os/exec reports as a signal death
+// (ExitCode() == -1) — both are the documented exit, so both are silenced.
 func silenceStreamInterrupt(err error) error {
 	var ee *exec.ExitError
-	if errors.As(err, &ee) && ee.ExitCode() == streamInterruptExitCode {
-		return nil
+	if errors.As(err, &ee) {
+		if ee.ExitCode() == streamInterruptExitCode {
+			return nil
+		}
+		if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() && ws.Signal() == syscall.SIGINT {
+			return nil
+		}
 	}
 	return err
 }
