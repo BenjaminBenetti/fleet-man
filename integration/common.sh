@@ -43,6 +43,12 @@ FIXTURE_LAUNCH_SRC="${INTEGRATION_DIR}/fixture-launch"
 # launches the agent with the prompt.
 FIXTURE_AUTOMATION_SRC="${INTEGRATION_DIR}/fixture-automation"
 
+# Alternate fixture whose postCreate adds a second container user `app` (with a
+# home dir that sorts before /home/vscode). Tests opt into it via
+# setup_twouser_test to prove the containerUser resolution picks the devcontainer
+# remoteUser regardless of which user holds a tmux socket / sorts first.
+FIXTURE_TWOUSER_SRC="${INTEGRATION_DIR}/fixture-twouser"
+
 # Test scratch dir created fresh per test.
 TEST_SCRATCH_DIR="${TEST_SCRATCH_DIR:-/tmp/fleet-man-itest}"
 
@@ -224,6 +230,14 @@ setup_agent_test() {
 # verify an agent actually launches with its prompt.
 setup_automation_test() {
   FIXTURE_SRC="${FIXTURE_AUTOMATION_SRC}" setup_test
+}
+
+# setup_twouser_test prepares a clean environment whose fixture provisions a
+# second container user (`app`) alongside the vscode remoteUser, so a test can
+# verify fleet's session listing resolves the remoteUser even when another user
+# holds a tmux socket. Identical to setup_test but uses the two-user fixture.
+setup_twouser_test() {
+  FIXTURE_SRC="${FIXTURE_TWOUSER_SRC}" setup_test
 }
 
 # setup_launch_test prepares a clean environment whose fixture

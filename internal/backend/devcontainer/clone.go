@@ -26,6 +26,10 @@ const cloneImageLabel = "fleet.clone.image"
 const (
 	devcontainerLocalFolderLabel = "devcontainer.local_folder"
 	devcontainerConfigFileLabel  = "devcontainer.config_file"
+	// devcontainerMetadataLabel holds the JSON array of merged devcontainer
+	// metadata (image + features + devcontainer.json) the CLI stamps at up
+	// time. Its remoteUser is the user `devcontainer exec` operates as.
+	devcontainerMetadataLabel = "devcontainer.metadata"
 )
 
 // inspectedContainer holds just the fields Clone needs from
@@ -151,6 +155,53 @@ func inspectContainer(containerID string) (*inspectedContainer, error) {
 		return nil, fmt.Errorf("docker inspect returned no entries")
 	}
 	return &inspected[0], nil
+}
+
+// remoteUserFromMetadata returns the devcontainer remoteUser recorded in the
+// container's devcontainer.metadata label, or "" when the container has no such
+// label / it carries no user. Pure `docker inspect`, so it is cheap enough for
+// the session poll path.
+func remoteUserFromMetadata(containerID string) string {
+	inspected, err := inspectContainer(containerID)
+	if err != nil || inspected.Config.Labels == nil {
+		return ""
+	}
+	return remoteUserFromMetadataJSON(inspected.Config.Labels[devcontainerMetadataLabel])
+}
+
+// remoteUserFromMetadataJSON extracts the effective remoteUser from a
+// devcontainer.metadata label value — the JSON array of merged metadata entries
+// (base image, then each feature, then the user's devcontainer.json last).
+// Scalars merge by array order with later entries winning, so the effective
+// user is the LAST non-empty remoteUser; absent any remoteUser it falls back to
+// the last non-empty containerUser (what the CLI itself defaults exec to).
+// Returns "" for an empty/unparseable label or one that names neither.
+func remoteUserFromMetadataJSON(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	var entries []struct {
+		RemoteUser    string `json:"remoteUser"`
+		ContainerUser string `json:"containerUser"`
+	}
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return ""
+	}
+	user := ""
+	for _, e := range entries {
+		if e.RemoteUser != "" {
+			user = e.RemoteUser
+		}
+	}
+	if user != "" {
+		return user
+	}
+	for _, e := range entries {
+		if e.ContainerUser != "" {
+			user = e.ContainerUser
+		}
+	}
+	return user
 }
 
 // rebaseConfigFileLabel computes the destination's

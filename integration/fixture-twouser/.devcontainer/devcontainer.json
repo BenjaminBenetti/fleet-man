@@ -1,0 +1,6 @@
+{
+  "name": "fleet-man two-user fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "remoteUser": "vscode",
+  "postCreateCommand": "sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends tmux && sudo useradd -m -u 4001 app"
+}
