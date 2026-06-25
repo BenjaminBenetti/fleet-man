@@ -117,9 +117,13 @@ type triggerEvent struct {
 
 // payload returns the bytes written to the in-instance event file: the body for
 // the body-bearing types (a webhook's request body, a bash probe's stdout), or
-// the fire time for a schedule trigger (which carries no external payload).
+// the fire time for a schedule trigger (which carries no external payload). An
+// empty body also falls back to the fire time — a bash probe that fires with no
+// stdout (e.g. `test -s file`), or an empty webhook POST, still leaves the agent a
+// meaningful event file (when it fired) rather than the empty one that
+// appendEventPrompt would otherwise point it at.
 func (e *triggerEvent) payload() []byte {
-	if e.kind == fleet.TriggerSchedule {
+	if e.kind == fleet.TriggerSchedule || len(e.body) == 0 {
 		return []byte(e.firedAt.UTC().Format(time.RFC3339) + "\n")
 	}
 	return e.body
@@ -698,12 +702,7 @@ var startBashProbe = func(s *service, fleetName string, trigger fleet.Trigger) {
 		defer cancel()
 		stdout, ok, err := runBashScript(ctx, trigger.Script)
 		if !ok {
-			// A clean non-zero exit just means the polled condition isn't met — the
-			// normal steady state for a frequent poll, so stay silent (logging it would
-			// spam a line every tick). An exec/timeout failure (not an *exec.ExitError)
-			// is a real problem worth surfacing.
-			var exitErr *exec.ExitError
-			if !errors.As(err, &exitErr) {
+			if probeFailureIsAlarming(ctx, err) {
 				flog.Warn("automation: bash trigger probe failed", "fleet", fleetName, "trigger", trigger.Name, "err", err)
 			}
 			return
@@ -717,6 +716,24 @@ var startBashProbe = func(s *service, fleetName string, trigger fleet.Trigger) {
 		case <-s.bgCtx.Done():
 		}
 	}()
+}
+
+// probeFailureIsAlarming reports whether a non-firing probe outcome deserves a
+// warning. A clean non-zero exit (the polled condition simply isn't met) is the
+// normal steady state of a frequent poll, so it stays silent — logging it would
+// spam a line every tick. But a TIMEOUT is alarming, and it must be detected via
+// the context deadline, NOT the error type: a timed-out command is SIGKILLed and
+// so ALSO surfaces as an *exec.ExitError ("signal: killed"), indistinguishable
+// from a clean non-zero exit by type alone. Any non-ExitError failure (couldn't
+// exec, or WaitDelay force-closed the pipes) is alarming too. A shutdown-driven
+// cancel (ctx.Err() == context.Canceled, not DeadlineExceeded) stays quiet — the
+// daemon is going down, not the script misbehaving.
+func probeFailureIsAlarming(ctx context.Context, err error) bool {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return true
+	}
+	var exitErr *exec.ExitError
+	return !errors.As(err, &exitErr)
 }
 
 // runBashScript runs a bash trigger's command on the fleet host and returns its

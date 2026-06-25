@@ -637,6 +637,42 @@ func TestRunBashScriptCapsOutput(t *testing.T) {
 	}
 }
 
+// TestProbeFailureIsAlarming pins the not-fired logging decision: a clean
+// non-zero exit (condition not met) is silent, but a timeout must warn even though
+// a SIGKILL'd timeout surfaces as an *exec.ExitError too — so the deadline, not the
+// error type, is what distinguishes it.
+func TestProbeFailureIsAlarming(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	exitErr := exec.Command("bash", "-c", "exit 1").Run() // a real *exec.ExitError
+	if exitErr == nil {
+		t.Fatal("expected a non-nil exit error from `exit 1`")
+	}
+
+	deadline, cancelD := context.WithDeadline(context.Background(), time.Unix(0, 0)) // already past
+	defer cancelD()
+	canceled, cancelC := context.WithCancel(context.Background())
+	cancelC()
+
+	cases := []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want bool
+	}{
+		{"clean non-zero exit stays silent", context.Background(), exitErr, false},
+		{"timeout warns (SIGKILL still surfaces as ExitError)", deadline, exitErr, true},
+		{"non-exit failure warns", context.Background(), errors.New("exec: \"bash\": not found"), true},
+		{"shutdown cancel stays silent", canceled, exitErr, false},
+	}
+	for _, c := range cases {
+		if got := probeFailureIsAlarming(c.ctx, c.err); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestEnvDurationDefault(t *testing.T) {
 	const name = "FLEET_TEST_DURATION_KNOB"
 	def := 2 * time.Minute

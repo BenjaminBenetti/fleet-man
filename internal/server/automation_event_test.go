@@ -30,6 +30,13 @@ func TestTriggerEventPayload(t *testing.T) {
 		t.Fatalf("bash payload = %q, want %q", got, out)
 	}
 
+	// Bash with no stdout (e.g. `test -s file`): fall back to the fire time so the
+	// agent's event file is never empty.
+	emptyBash := &triggerEvent{kind: fleet.TriggerBash, body: []byte{}, firedAt: now}
+	if got, want := string(emptyBash.payload()), "2026-06-22T09:30:15Z\n"; got != want {
+		t.Fatalf("empty bash payload = %q, want fire-time %q", got, want)
+	}
+
 	// Schedule: no external payload, so the fire time stands in.
 	sch := &triggerEvent{kind: fleet.TriggerSchedule, firedAt: now}
 	if got, want := string(sch.payload()), "2026-06-22T09:30:15Z\n"; got != want {
