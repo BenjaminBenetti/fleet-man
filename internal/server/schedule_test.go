@@ -444,7 +444,9 @@ func TestDueCronTriggersIncludesBash(t *testing.T) {
 }
 
 // TestSchedulerTickBashProbe confirms a due bash trigger is probed (off the tick)
-// rather than spawning an instance directly the way a schedule trigger does.
+// rather than spawning an instance directly the way a schedule trigger does — and
+// that a bash trigger whose agents no longer exist is NOT probed (the command has
+// side effects, so it must not run just to discard the result).
 func TestSchedulerTickBashProbe(t *testing.T) {
 	stubAutomationSeams(t) // serviceWatched runs against an empty watch set
 
@@ -453,6 +455,8 @@ func TestSchedulerTickBashProbe(t *testing.T) {
 			Agents: []fleet.Agent{{Name: "a", Backend: fleet.BackendDevcontainer}},
 			Triggers: []fleet.Trigger{
 				{Name: "poll", Type: fleet.TriggerBash, AgentNames: []string{"a"}, Cron: "* * * * *", Script: "true"},
+				// References a deleted agent -> no live agents -> must be skipped.
+				{Name: "orphan", Type: fleet.TriggerBash, AgentNames: []string{"ghost"}, Cron: "* * * * *", Script: "true"},
 			},
 		}},
 	}}

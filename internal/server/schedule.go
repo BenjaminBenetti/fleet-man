@@ -117,13 +117,13 @@ type triggerEvent struct {
 
 // payload returns the bytes written to the in-instance event file: the body for
 // the body-bearing types (a webhook's request body, a bash probe's stdout), or
-// the fire time for a schedule trigger (which carries no external payload). An
-// empty body also falls back to the fire time — a bash probe that fires with no
-// stdout (e.g. `test -s file`), or an empty webhook POST, still leaves the agent a
-// meaningful event file (when it fired) rather than the empty one that
-// appendEventPrompt would otherwise point it at.
+// the fire time for a schedule trigger (which carries no external payload). A bash
+// probe that fires with no stdout (e.g. `test -s file`) also falls back to the
+// fire time, so the agent gets a meaningful event file rather than the empty one
+// appendEventPrompt would otherwise point it at. The webhook path is left as-is —
+// an empty webhook body stays empty (changing it is out of scope here).
 func (e *triggerEvent) payload() []byte {
-	if e.kind == fleet.TriggerSchedule || len(e.body) == 0 {
+	if e.kind == fleet.TriggerSchedule || (e.kind == fleet.TriggerBash && len(e.body) == 0) {
 		return []byte(e.firedAt.UTC().Format(time.RFC3339) + "\n")
 	}
 	return e.body
@@ -258,16 +258,20 @@ func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.
 	}
 	fired := false
 	for _, due := range dueCronTriggers(st.Fleets, now, sched.lastFired) {
+		agents := agentsForTrigger(st.Fleets[due.fleet], due.trigger)
 		if due.trigger.Type == fleet.TriggerBash {
 			// A bash trigger's cron only schedules a poll — it fires its agents only
-			// if its command exits 0. Run the command OFF the tick (it may be slow or
-			// block); on a zero exit the probe hands the trigger back via triggerFires
-			// to spawn the agents (see startBashProbe). Nothing is spawned here, so
-			// `fired` stays as-is.
-			startBashProbe(s, due.fleet, due.trigger)
+			// if its command exits 0. Skip the probe entirely when no live agents
+			// would receive the fire: the command has side effects, so don't run it
+			// just to discard the result. (The set is re-resolved at fire time too.)
+			// Otherwise run the command OFF the tick (it may be slow or block); on a
+			// zero exit the probe hands the trigger back via triggerFires to spawn the
+			// agents (see startBashProbe). Nothing is spawned here, so `fired` stays.
+			if len(agents) > 0 {
+				startBashProbe(s, due.fleet, due.trigger)
+			}
 			continue
 		}
-		agents := agentsForTrigger(st.Fleets[due.fleet], due.trigger)
 		// Schedule triggers carry no external payload — the event file gets the
 		// fire time (see triggerEvent.payload), so pass a nil body here.
 		if s.fireTriggerAgents(sched, due.fleet, due.trigger, agents, now, nil) {
