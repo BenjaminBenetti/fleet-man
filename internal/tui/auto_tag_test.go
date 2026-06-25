@@ -73,6 +73,28 @@ func TestInstanceAutoTag_ClosedPurple(t *testing.T) {
 	}
 }
 
+func TestInstanceAutoTag_MultipleClosedPurple(t *testing.T) {
+	// Two closed/merged PRs (e.g. workspace repo + a subrepo) render "PRx2" in
+	// purple, matching the open "PRxN" convention and the multi-PR chooser.
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
+	ps := &fleetgrpc.PrStatus{
+		ClosedCount: 2,
+		PrSignal:    fleetgrpc.PrSignal_PR_SIGNAL_PURPLE,
+		Prs: []*fleetgrpc.PrRef{
+			{Number: 7, Url: "https://example.test/pr/7"},
+			{Number: 8, Url: "https://example.test/pr/8"},
+		},
+	}
+	m := autoTagModel(newFleetPage(), inst, true, ps)
+	got := m.instanceAutoTag("alpha", "agent-1", false)
+	if !strings.Contains(got, "PRx2") {
+		t.Errorf("two closed PRs should render PRx2, got %q", got)
+	}
+	if !strings.Contains(got, prPurpleStyle.Render("PRx2")) {
+		t.Errorf("PRx2 badge %q not rendered in the purple style", got)
+	}
+}
+
 func TestPrSignalStylePurple(t *testing.T) {
 	if prSignalStyle(fleetgrpc.PrSignal_PR_SIGNAL_PURPLE).GetForeground() != prPurpleStyle.GetForeground() {
 		t.Errorf("a closed/merged PR should render in purple")

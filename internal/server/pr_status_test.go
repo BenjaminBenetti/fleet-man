@@ -1,7 +1,9 @@
 package server
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +33,107 @@ func TestRunProbeWithTimeout_KillsOnTimeout(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("timeout took %v, expected it to fire near 150ms", elapsed)
 	}
+}
+
+// stubGHScript emulates the net output of the `gh` calls prProbeScript makes:
+// `gh auth status` succeeds, `gh pr list ... --jq '<STATE> <number>'` echoes the
+// lines in $GH_FAKE_PRLIST, and `gh pr view <n>` emits a MERGED PR object.
+const stubGHScript = `#!/bin/sh
+case "$1" in
+  auth) exit 0 ;;
+  pr)
+    case "$2" in
+      list) cat "$GH_FAKE_PRLIST" 2>/dev/null ; exit 0 ;;
+      view) printf '{"number":%s,"state":"MERGED","url":"https://example.test/%s","title":"old"}\n' "$3" "$3" ; exit 0 ;;
+    esac ;;
+esac
+exit 0
+`
+
+func gitInitOnBranch(t *testing.T, dir, branch string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.test",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.test")
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"checkout", "-q", "-b", branch},
+		{"commit", "-q", "--allow-empty", "-m", "init"},
+	} {
+		c := exec.Command("git", args...)
+		c.Dir, c.Env = dir, env
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+}
+
+// TestPRProbeScript_AlwaysExitsZero runs the real prProbeScript (with a stubbed
+// gh) over a multi-repo workspace whose repos have no open PR. It guards the QA
+// regression on issue #203: the no-PR path must exit 0 so probePRStatus treats a
+// completed probe as authoritative (clearing or setting the tag) rather than a
+// transient failure that discards stdout and freezes the prior tag. The earlier
+// `[ -n "$num" ] && gh pr view …` tail left the script's exit status at 1 when the
+// last repo find visited had no PR.
+func TestPRProbeScript_AlwaysExitsZero(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(stubGHScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	emptyList := filepath.Join(t.TempDir(), "empty")
+	closedList := filepath.Join(t.TempDir(), "closed")
+	if err := os.WriteFile(emptyList, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(closedList, []byte("MERGED 210\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runScript := func(t *testing.T, prList string) (string, error) {
+		// Two repos (top-level + nested subrepo), each on a no-PR branch, so the
+		// last repo find traverses also has no PR — the layout that regressed.
+		ws := t.TempDir()
+		gitInitOnBranch(t, ws, "feat-x")
+		gitInitOnBranch(t, filepath.Join(ws, "nested"), "feat-y")
+		cmd := exec.Command("sh", "-c", prProbeScript)
+		cmd.Dir = ws
+		cmd.Env = append(os.Environ(),
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"GH_FAKE_PRLIST="+prList)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	t.Run("no PRs => exit 0, no output", func(t *testing.T) {
+		out, err := runScript(t, emptyList)
+		if err != nil {
+			t.Fatalf("probe script exited non-zero on a no-PR workspace: %v\noutput: %q", err, out)
+		}
+		if got := parsePRProbeOutput(out); got != nil {
+			t.Errorf("no-PR workspace parsed to %+v, want nil (clears the tag)", got)
+		}
+	})
+
+	t.Run("closed PR => exit 0, emits the merged PR", func(t *testing.T) {
+		out, err := runScript(t, closedList)
+		if err != nil {
+			t.Fatalf("probe script exited non-zero: %v\noutput: %q", err, out)
+		}
+		got := parsePRProbeOutput(out)
+		if got == nil {
+			t.Fatalf("closed-PR workspace parsed to nil, want a purple tag (out=%q)", out)
+		}
+		// One MERGED PR per repo (both repos resolve the same stub list).
+		if got.GetPrSignal() != fleetgrpc.PrSignal_PR_SIGNAL_PURPLE || got.GetClosedCount() == 0 {
+			t.Errorf("got %+v, want PURPLE with ClosedCount>0", got)
+		}
+	})
 }
 
 func TestClassifyCheck(t *testing.T) {

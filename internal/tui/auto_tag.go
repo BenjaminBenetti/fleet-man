@@ -64,10 +64,16 @@ func (m *model) instanceAutoTag(fleetName, instance string, selected bool) strin
 	}
 	segments := make([]segment, 0, 3)
 
-	// PR indicator: "PR" for a single open PR, "PRxN" for N>1.
+	// PR indicator: "PR" for a single PR, "PRxN" for N>1. Counts open PRs, or the
+	// closed/merged ones when none are open (the purple tag), so the badge matches
+	// the chooser either way.
+	count := ps.GetOpenCount()
+	if count == 0 {
+		count = ps.GetClosedCount()
+	}
 	label := "PR"
-	if n := ps.GetOpenCount(); n > 1 {
-		label = fmt.Sprintf("PRx%d", n)
+	if count > 1 {
+		label = fmt.Sprintf("PRx%d", count)
 	}
 	segments = append(segments, segment{label, prSignalStyle(ps.GetPrSignal())})
 

@@ -51,7 +51,9 @@ const (
 // paginates the rollup and returns every check. When the branch has NO open PR,
 // it instead emits the most recent closed/merged PR (number/state/url/title
 // only — no check detail needed) so the tag persists in purple rather than
-// vanishing. The objects are concatenated on stdout and read back with a
+// vanishing. A single `gh pr list --state all` per repo covers both cases (so a
+// branch parked without an open PR costs no extra round-trip vs. the old
+// open-only query). The objects are concatenated on stdout and read back with a
 // streaming json.Decoder, so their exact whitespace/formatting doesn't matter.
 // It prints a sentinel and exits 0 when gh is absent or not logged in, so the
 // server can distinguish "degrade quietly" from a transient exec failure.
@@ -67,7 +69,10 @@ find . -maxdepth 5 -name node_modules -prune -o -name .git -prune -print 2>/dev/
   [ -z "$br" ] && continue
   [ "$br" = "HEAD" ] && continue
   ( cd "$dir" || exit 0
-    open=$(gh pr list --state open --head "$br" --json number --jq '.[].number' 2>/dev/null)
+    # One list call for the branch (gh's embedded --jq, so no standalone jq
+    # dependency): "<STATE> <number>" per PR, e.g. "OPEN 12" / "MERGED 7".
+    list=$(gh pr list --state all --head "$br" --json number,state --jq '.[] | "\(.state) \(.number)"' 2>/dev/null)
+    open=$(printf '%s\n' "$list" | awk '$1 == "OPEN" { print $2 }')
     if [ -n "$open" ]; then
       for num in $open; do
         gh pr view "$num" \
@@ -78,11 +83,20 @@ find . -maxdepth 5 -name node_modules -prune -o -name .git -prune -print 2>/dev/
       # any) so the indicator persists in purple instead of disappearing. The
       # highest PR number is unambiguously the newest, so pick it without relying
       # on gh's list ordering.
-      num=$(gh pr list --state all --head "$br" --json number,state --jq 'map(select(.state != "OPEN")) | sort_by(.number) | last | .number // empty' 2>/dev/null)
-      [ -n "$num" ] && gh pr view "$num" --json number,state,url,title 2>/dev/null
+      num=$(printf '%s\n' "$list" | awk '$1 != "OPEN" && $2 > max { max = $2 } END { if (max) print max }')
+      if [ -n "$num" ]; then
+        gh pr view "$num" --json number,state,url,title 2>/dev/null
+      fi
     fi
   )
 done
+# Always exit 0 once the scan completes: an empty result (a repo with no PRs) is a
+# valid probe outcome that should CLEAR the tag, not a transient failure. Without
+# this, a no-PR repo visited last by find leaves the loop's exit status at 1, and
+# probePRStatus would treat the whole probe as failed (ok=false) — discarding any
+# PR JSON already emitted and freezing the prior tag. A non-zero exit (ok=false,
+# keep prior) is reserved for genuine exec/timeout errors, which abort earlier.
+exit 0
 `
 
 // ghPR mirrors the subset of `gh pr list --json` fields the auto-tag needs.
