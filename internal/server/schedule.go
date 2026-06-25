@@ -679,7 +679,13 @@ var reapAutomationInstance = func(s *service, fleetName, instanceName string) {
 // parameter; the firing's timestamp is stamped at drain.)
 var startBashProbe = func(s *service, fleetName string, trigger fleet.Trigger) {
 	go func() {
-		bashProbeSem <- struct{}{}
+		// Acquire a concurrency slot, but bail promptly if the daemon is shutting
+		// down rather than waiting for a slot first.
+		select {
+		case bashProbeSem <- struct{}{}:
+		case <-s.bgCtx.Done():
+			return
+		}
 		defer func() { <-bashProbeSem }()
 
 		ctx, cancel := context.WithTimeout(s.bgCtx, bashProbeTimeout)

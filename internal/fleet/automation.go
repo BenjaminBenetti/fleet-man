@@ -43,7 +43,9 @@ const (
 	// arbitrary polling triggers where no webhook is available (e.g. checking an
 	// API, a queue, or a file). The command runs on the fleet host with the
 	// daemon's privileges, so it is author-supplied trusted config (like an
-	// Agent's command), not attacker-supplied input.
+	// Agent's command), not attacker-supplied input. On timeout only the command
+	// itself is killed, so the command should not leave background processes
+	// running — an orphaned one keeps running on the host until it exits.
 	TriggerBash TriggerType = "bash"
 )
 
