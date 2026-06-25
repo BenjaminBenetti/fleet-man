@@ -48,11 +48,15 @@ const (
 // then emits the FULL detail of each via `gh pr view <n> --json ...` — one JSON
 // object per PR. gh pr view is used (not gh pr list's --json) because gh pr
 // list's statusCheckRollup is capped at the first 100 checks, while gh pr view
-// paginates the rollup and returns every check. The objects are concatenated on
-// stdout and read back with a streaming json.Decoder, so their exact
-// whitespace/formatting doesn't matter. It prints a sentinel and exits 0 when gh
-// is absent or not logged in, so the server can distinguish "degrade quietly"
-// from a transient exec failure.
+// paginates the rollup and returns every check. When the branch has NO open PR,
+// it instead emits the most recent closed/merged PR (number/state/url/title
+// only — no check detail needed) so the tag persists in purple rather than
+// vanishing. A single `gh pr list --state all` per repo covers both cases (so a
+// branch parked without an open PR costs no extra round-trip vs. the old
+// open-only query). The objects are concatenated on stdout and read back with a
+// streaming json.Decoder, so their exact whitespace/formatting doesn't matter.
+// It prints a sentinel and exits 0 when gh is absent or not logged in, so the
+// server can distinguish "degrade quietly" from a transient exec failure.
 const prProbeScript = `
 command -v gh >/dev/null 2>&1 || { printf '%s\n' "FLEET_NO_GH"; exit 0; }
 gh auth status >/dev/null 2>&1 || { printf '%s\n' "FLEET_NO_AUTH"; exit 0; }
@@ -65,12 +69,40 @@ find . -maxdepth 5 -name node_modules -prune -o -name .git -prune -print 2>/dev/
   [ -z "$br" ] && continue
   [ "$br" = "HEAD" ] && continue
   ( cd "$dir" || exit 0
-    for num in $(gh pr list --state open --head "$br" --json number --jq '.[].number' 2>/dev/null); do
-      gh pr view "$num" \
-        --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,url,title 2>/dev/null
-    done
+    # One list call for the branch (gh's embedded --jq, so no standalone jq
+    # dependency): "<STATE> <number>" per PR, e.g. "OPEN 12" / "MERGED 7". The
+    # explicit --limit lifts gh's default 30-row cap so an open PR can't fall
+    # outside the window (and silently degrade to the purple tag) on a branch
+    # that's been the head of many PRs over its life.
+    list=$(gh pr list --state all --head "$br" --limit 100 --json number,state --jq '.[] | "\(.state) \(.number)"' 2>/dev/null)
+    # toupper() so the shell side is as case-defensive as the Go parser's
+    # strings.ToUpper: if gh ever stopped returning uppercase states, an open PR
+    # must still be classified open (not fall through to the purple closed tag).
+    open=$(printf '%s\n' "$list" | awk 'toupper($1) == "OPEN" { print $2 }')
+    if [ -n "$open" ]; then
+      for num in $open; do
+        gh pr view "$num" \
+          --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,url,title 2>/dev/null
+      done
+    else
+      # No open PR on this branch — surface the most recent closed/merged one (if
+      # any) so the indicator persists in purple instead of disappearing. The
+      # highest PR number is unambiguously the newest, so pick it without relying
+      # on gh's list ordering.
+      num=$(printf '%s\n' "$list" | awk 'toupper($1) != "OPEN" && $2 > max { max = $2 } END { if (max) print max }')
+      if [ -n "$num" ]; then
+        gh pr view "$num" --json number,state,url,title 2>/dev/null
+      fi
+    fi
   )
 done
+# Always exit 0 once the scan completes: an empty result (a repo with no PRs) is a
+# valid probe outcome that should CLEAR the tag, not a transient failure. Without
+# this, a no-PR repo visited last by find leaves the loop's exit status at 1, and
+# probePRStatus would treat the whole probe as failed (ok=false) — discarding any
+# PR JSON already emitted and freezing the prior tag. A non-zero exit (ok=false,
+# keep prior) is reserved for genuine exec/timeout errors, which abort earlier.
+exit 0
 `
 
 // ghPR mirrors the subset of `gh pr list --json` fields the auto-tag needs.
@@ -134,8 +166,9 @@ func classifyCheck(c ghCheck) checkResult {
 	}
 }
 
-// aggregatePRStatus folds the open PRs across an instance's repos into the
-// PrStatus the TUI renders. Returns nil when there are no open PRs (no auto-tag).
+// aggregatePRStatus folds the open PRs across an instance's repos into the live
+// green/yellow/red PrStatus the TUI renders. Returns nil when there are no open
+// PRs — the caller then falls back to closedPRStatus for the purple closed tag.
 func aggregatePRStatus(prs []ghPR) *fleetgrpc.PrStatus {
 	if len(prs) == 0 {
 		return nil
@@ -224,10 +257,12 @@ func aggregatePRStatus(prs []ghPR) *fleetgrpc.PrStatus {
 }
 
 // parsePRProbeOutput turns the probe's stdout — one `gh pr view --json` object
-// per open PR, concatenated — into a PrStatus. A nil result means "no auto-tag"
-// (gh unavailable, or no open PRs) and clears any prior status. The gh-missing /
-// no-auth sentinels and the empty case all map to nil. A streaming json.Decoder
-// reads successive objects regardless of their interleaving whitespace; malformed
+// per PR, concatenated — into a PrStatus. Open PRs drive the live green/yellow/red
+// tag and take priority; only when there are none does a closed/merged PR drive
+// the persistent purple tag. A nil result means "no auto-tag" (gh unavailable, or
+// the branch never had a PR) and clears any prior status. The gh-missing / no-auth
+// sentinels and the empty case all map to nil. A streaming json.Decoder reads
+// successive objects regardless of their interleaving whitespace; malformed
 // trailing noise stops the scan without discarding what parsed cleanly.
 func parsePRProbeOutput(out string) *fleetgrpc.PrStatus {
 	// Match the sentinels by PREFIX, not Contains: the script emits one as the
@@ -238,18 +273,56 @@ func parsePRProbeOutput(out string) *fleetgrpc.PrStatus {
 	if strings.HasPrefix(trimmed, prNoGHSentinel) || strings.HasPrefix(trimmed, prNoAuthSentinel) {
 		return nil
 	}
-	var prs []ghPR
+	var open, closed []ghPR
 	dec := json.NewDecoder(strings.NewReader(out))
 	for {
 		var p ghPR
 		if err := dec.Decode(&p); err != nil {
 			break // io.EOF on clean exhaustion, or unexpected noise.
 		}
-		if strings.EqualFold(p.State, "OPEN") {
-			prs = append(prs, p)
+		switch strings.ToUpper(p.State) {
+		case "OPEN":
+			open = append(open, p)
+		case "CLOSED", "MERGED":
+			closed = append(closed, p)
 		}
 	}
-	return aggregatePRStatus(prs)
+	// Open PRs win: their live status is the actionable one. Fall back to the
+	// closed/merged tag only when nothing is open.
+	if s := aggregatePRStatus(open); s != nil {
+		return s
+	}
+	return closedPRStatus(closed)
+}
+
+// closedPRStatus builds the persistent purple "PR" tag shown when a branch has no
+// open PR but DID have one that's since closed or merged. It keeps the tag
+// visible — so a finished instance is distinguishable from one that never had a
+// PR — and carries the closed PRs' refs so the tag stays clickable. Returns nil
+// when there are no closed/merged PRs either (the branch never had one).
+//
+// Note the per-repo counting: the probe emits only the single most-recent
+// closed/merged PR PER repo, so ClosedCount is the number of repos with a
+// closed-but-no-open PR (rendered "PRxN"), NOT the total closed PRs in any one
+// repo's history. This deliberately differs from open_count, which sums every
+// open PR — a branch's closed-PR history would otherwise inflate the badge.
+func closedPRStatus(closed []ghPR) *fleetgrpc.PrStatus {
+	if len(closed) == 0 {
+		return nil
+	}
+	refs := make([]*fleetgrpc.PrRef, 0, len(closed))
+	for _, pr := range closed {
+		refs = append(refs, &fleetgrpc.PrRef{
+			Number: int32(pr.Number),
+			Url:    pr.URL,
+			Title:  pr.Title,
+		})
+	}
+	return &fleetgrpc.PrStatus{
+		ClosedCount: int32(len(closed)),
+		PrSignal:    fleetgrpc.PrSignal_PR_SIGNAL_PURPLE,
+		Prs:         refs,
+	}
 }
 
 // probePRStatus runs the gh probe inside the instance and parses the result.

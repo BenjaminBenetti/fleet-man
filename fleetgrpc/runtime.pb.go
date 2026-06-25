@@ -201,8 +201,10 @@ func (AgentActivity) EnumDescriptor() ([]byte, []int) {
 	return file_runtime_proto_rawDescGZIP(), []int{2}
 }
 
-// PrSignal is the three-state colour shared by the auto-tag indicators:
-// green = good, yellow = in-progress/neutral, red = needs attention.
+// PrSignal is the colour shared by the auto-tag indicators: green = good,
+// yellow = in-progress/neutral, red = needs attention, purple = the PR is closed
+// or merged (kept visible so a finished instance is distinguishable from one that
+// never had a PR), matching GitHub's own closed/merged colour.
 type PrSignal int32
 
 const (
@@ -210,6 +212,7 @@ const (
 	PrSignal_PR_SIGNAL_GREEN       PrSignal = 1
 	PrSignal_PR_SIGNAL_YELLOW      PrSignal = 2
 	PrSignal_PR_SIGNAL_RED         PrSignal = 3
+	PrSignal_PR_SIGNAL_PURPLE      PrSignal = 4
 )
 
 // Enum value maps for PrSignal.
@@ -219,12 +222,14 @@ var (
 		1: "PR_SIGNAL_GREEN",
 		2: "PR_SIGNAL_YELLOW",
 		3: "PR_SIGNAL_RED",
+		4: "PR_SIGNAL_PURPLE",
 	}
 	PrSignal_value = map[string]int32{
 		"PR_SIGNAL_UNSPECIFIED": 0,
 		"PR_SIGNAL_GREEN":       1,
 		"PR_SIGNAL_YELLOW":      2,
 		"PR_SIGNAL_RED":         3,
+		"PR_SIGNAL_PURPLE":      4,
 	}
 )
 
@@ -559,12 +564,14 @@ func (x *PrRef) GetTitle() string {
 // workspace repo PLUS any nested subrepos, computed by running `gh` inside the
 // container. It drives the "auto tag" the TUI renders in the tag slot when an
 // instance has no user-set tag. It is absent (nil) when gh is missing or
-// unauthenticated inside the instance, or when no PR is open — the TUI then
-// shows no auto-tag, preserving today's behaviour.
+// unauthenticated inside the instance, or when the branch never had a PR at all.
+// When a branch's only PR(s) are closed or merged, it stays present (open_count
+// 0, closed_count > 0) so the tag persists in purple rather than vanishing.
 type PrStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Open PRs counted across the workspace repo and every subrepo. The PR
-	// indicator renders "PR" for 1 and "PRxN" for N>1; 0 means no auto-tag.
+	// indicator renders "PR" for 1 and "PRxN" for N>1; 0 means no OPEN PR (the tag
+	// is then driven by closed_count, if any).
 	OpenCount int32 `protobuf:"varint,1,opt,name=open_count,json=openCount,proto3" json:"open_count,omitempty"`
 	// Colour for the [PR]/[PRxN] indicator: green when every PR is mergeable,
 	// red on any check failure or changes-requested, yellow otherwise.
@@ -577,10 +584,19 @@ type PrStatus struct {
 	// Colour for the [Checks x/x] indicator: green when all passed, red on any
 	// failure, yellow while any are still pending.
 	ChecksSignal PrSignal `protobuf:"varint,6,opt,name=checks_signal,json=checksSignal,proto3,enum=fleetgrpc.PrSignal" json:"checks_signal,omitempty"`
-	// The open PRs themselves, so the TUI can open one in a browser (or present a
+	// The PRs themselves, so the TUI can open one in a browser (or present a
 	// chooser when there is more than one). Order follows discovery (workspace
-	// repo first, then subrepos).
-	Prs           []*PrRef `protobuf:"bytes,7,rep,name=prs,proto3" json:"prs,omitempty"`
+	// repo first, then subrepos). These are the OPEN PRs when open_count > 0,
+	// otherwise the closed/merged PRs backing the purple tag.
+	Prs []*PrRef `protobuf:"bytes,7,rep,name=prs,proto3" json:"prs,omitempty"`
+	// Closed or merged PRs, set only when NO PR is open (open_count 0). It keeps
+	// the tag visible in purple — matching GitHub's closed/merged colour — so a
+	// finished instance stays distinguishable from one that never had a PR. This
+	// counts the most-recent closed/merged PR PER repo (so it's the number of repos
+	// with a closed-but-no-open PR), unlike open_count which sums every open PR.
+	// Open PRs always take priority; when both exist the open status is shown and
+	// this stays 0.
+	ClosedCount   int32 `protobuf:"varint,8,opt,name=closed_count,json=closedCount,proto3" json:"closed_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -662,6 +678,13 @@ func (x *PrStatus) GetPrs() []*PrRef {
 		return x.Prs
 	}
 	return nil
+}
+
+func (x *PrStatus) GetClosedCount() int32 {
+	if x != nil {
+		return x.ClosedCount
+	}
+	return 0
 }
 
 // InstanceRuntime is the live view of ONE instance: everything the TUI renders
@@ -830,7 +853,7 @@ const file_runtime_proto_rawDesc = "" +
 	"\x05PrRef\x12\x16\n" +
 	"\x06number\x18\x01 \x01(\x05R\x06number\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\x12\x14\n" +
-	"\x05title\x18\x03 \x01(\tR\x05title\"\xb3\x02\n" +
+	"\x05title\x18\x03 \x01(\tR\x05title\"\xd6\x02\n" +
 	"\bPrStatus\x12\x1d\n" +
 	"\n" +
 	"open_count\x18\x01 \x01(\x05R\topenCount\x120\n" +
@@ -839,7 +862,8 @@ const file_runtime_proto_rawDesc = "" +
 	"\rchecks_passed\x18\x04 \x01(\x05R\fchecksPassed\x12!\n" +
 	"\fchecks_total\x18\x05 \x01(\x05R\vchecksTotal\x128\n" +
 	"\rchecks_signal\x18\x06 \x01(\x0e2\x13.fleetgrpc.PrSignalR\fchecksSignal\x12\"\n" +
-	"\x03prs\x18\a \x03(\v2\x10.fleetgrpc.PrRefR\x03prs\"\xd4\x04\n" +
+	"\x03prs\x18\a \x03(\v2\x10.fleetgrpc.PrRefR\x03prs\x12!\n" +
+	"\fclosed_count\x18\b \x01(\x05R\vclosedCount\"\xd4\x04\n" +
 	"\x0fInstanceRuntime\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12?\n" +
@@ -875,12 +899,13 @@ const file_runtime_proto_rawDesc = "" +
 	"\x1aAGENT_ACTIVITY_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aAGENT_ACTIVITY_NOT_RUNNING\x10\x01\x12\x1a\n" +
 	"\x16AGENT_ACTIVITY_WORKING\x10\x02\x12\x1a\n" +
-	"\x16AGENT_ACTIVITY_WAITING\x10\x03*c\n" +
+	"\x16AGENT_ACTIVITY_WAITING\x10\x03*y\n" +
 	"\bPrSignal\x12\x19\n" +
 	"\x15PR_SIGNAL_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fPR_SIGNAL_GREEN\x10\x01\x12\x14\n" +
 	"\x10PR_SIGNAL_YELLOW\x10\x02\x12\x11\n" +
-	"\rPR_SIGNAL_RED\x10\x03*\x92\x01\n" +
+	"\rPR_SIGNAL_RED\x10\x03\x12\x14\n" +
+	"\x10PR_SIGNAL_PURPLE\x10\x04*\x92\x01\n" +
 	"\rPrReviewState\x12\x1f\n" +
 	"\x1bPR_REVIEW_STATE_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18PR_REVIEW_STATE_APPROVED\x10\x01\x12%\n" +

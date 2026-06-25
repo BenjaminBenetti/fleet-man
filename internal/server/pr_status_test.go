@@ -1,7 +1,9 @@
 package server
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +33,137 @@ func TestRunProbeWithTimeout_KillsOnTimeout(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("timeout took %v, expected it to fire near 150ms", elapsed)
 	}
+}
+
+// stubGHScript emulates the net output of the `gh` calls prProbeScript makes:
+// `gh auth status` succeeds and `gh pr list ... --jq '<STATE> <number>'` echoes
+// the lines in $GH_FAKE_PRLIST. `gh pr view <n>` mirrors which path called it:
+// the open path requests statusCheckRollup, so the stub reports state OPEN; the
+// closed fallback requests only number,state,url,title, so it reports MERGED.
+// That lets a test prove which branch the script's awk classification took.
+const stubGHScript = `#!/bin/sh
+case "$1" in
+  auth) exit 0 ;;
+  pr)
+    case "$2" in
+      list) cat "$GH_FAKE_PRLIST" 2>/dev/null ; exit 0 ;;
+      view)
+        state=MERGED
+        case "$*" in *statusCheckRollup*) state=OPEN ;; esac
+        printf '{"number":%s,"state":"%s","url":"https://example.test/%s","title":"x"}\n' "$3" "$state" "$3"
+        exit 0 ;;
+    esac ;;
+esac
+exit 0
+`
+
+func gitInitOnBranch(t *testing.T, dir, branch string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.test",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.test")
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"checkout", "-q", "-b", branch},
+		{"commit", "-q", "--allow-empty", "-m", "init"},
+	} {
+		c := exec.Command("git", args...)
+		c.Dir, c.Env = dir, env
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+}
+
+// TestPRProbeScript_AlwaysExitsZero runs the real prProbeScript (with a stubbed
+// gh) over a multi-repo workspace whose repos have no open PR. It guards the QA
+// regression on issue #203: the no-PR path must exit 0 so probePRStatus treats a
+// completed probe as authoritative (clearing or setting the tag) rather than a
+// transient failure that discards stdout and freezes the prior tag. The earlier
+// `[ -n "$num" ] && gh pr view …` tail left the script's exit status at 1 when the
+// last repo find visited had no PR.
+func TestPRProbeScript_AlwaysExitsZero(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(stubGHScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	emptyList := filepath.Join(t.TempDir(), "empty")
+	closedList := filepath.Join(t.TempDir(), "closed")
+	if err := os.WriteFile(emptyList, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(closedList, []byte("MERGED 210\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runScript := func(t *testing.T, prList string) (string, error) {
+		// Two repos (top-level + nested subrepo), each on a no-PR branch, so the
+		// last repo find traverses also has no PR — the layout that regressed.
+		ws := t.TempDir()
+		gitInitOnBranch(t, ws, "feat-x")
+		gitInitOnBranch(t, filepath.Join(ws, "nested"), "feat-y")
+		cmd := exec.Command("sh", "-c", prProbeScript)
+		cmd.Dir = ws
+		cmd.Env = append(os.Environ(),
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"GH_FAKE_PRLIST="+prList)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	t.Run("no PRs => exit 0, no output", func(t *testing.T) {
+		out, err := runScript(t, emptyList)
+		if err != nil {
+			t.Fatalf("probe script exited non-zero on a no-PR workspace: %v\noutput: %q", err, out)
+		}
+		if got := parsePRProbeOutput(out); got != nil {
+			t.Errorf("no-PR workspace parsed to %+v, want nil (clears the tag)", got)
+		}
+	})
+
+	t.Run("closed PR => exit 0, emits the merged PR", func(t *testing.T) {
+		out, err := runScript(t, closedList)
+		if err != nil {
+			t.Fatalf("probe script exited non-zero: %v\noutput: %q", err, out)
+		}
+		got := parsePRProbeOutput(out)
+		if got == nil {
+			t.Fatalf("closed-PR workspace parsed to nil, want a purple tag (out=%q)", out)
+		}
+		// One MERGED PR per repo (both repos resolve the same stub list).
+		if got.GetPrSignal() != fleetgrpc.PrSignal_PR_SIGNAL_PURPLE || got.GetClosedCount() == 0 {
+			t.Errorf("got %+v, want PURPLE with ClosedCount>0", got)
+		}
+	})
+
+	t.Run("lowercase state still classified open (toupper)", func(t *testing.T) {
+		// Defensive: if gh ever returned a non-uppercase state, the awk must still
+		// classify an open PR as open rather than letting it fall through to the
+		// purple closed fallback. The stub's `pr view` emits MERGED, so a fall-
+		// through would wrongly surface a purple tag.
+		lowerList := filepath.Join(t.TempDir(), "lower")
+		if err := os.WriteFile(lowerList, []byte("open 216\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, err := runScript(t, lowerList)
+		if err != nil {
+			t.Fatalf("probe script exited non-zero: %v\noutput: %q", err, out)
+		}
+		got := parsePRProbeOutput(out)
+		if got == nil || got.GetOpenCount() == 0 {
+			t.Errorf("a lowercase \"open\" PR must take the open path (full detail), "+
+				"not fall through to the purple closed fallback; got %+v (out=%q)", got, out)
+		}
+		if got.GetClosedCount() != 0 {
+			t.Errorf("lowercase open PR wrongly classified as closed: %+v", got)
+		}
+	})
 }
 
 func TestClassifyCheck(t *testing.T) {
@@ -307,24 +440,64 @@ func TestParsePRProbeOutput_ConcatenatedObjects(t *testing.T) {
 	}
 }
 
-func TestParsePRProbeOutput_EmptyAndClosed(t *testing.T) {
-	// No open PRs => the script emits nothing => nil. A closed PR (filtered by
-	// state) also contributes nothing.
+func TestParsePRProbeOutput_Empty(t *testing.T) {
+	// No PRs at all => the script emits nothing => nil (the branch never had a PR).
 	if got := parsePRProbeOutput(""); got != nil {
 		t.Errorf("empty output = %+v, want nil", got)
 	}
-	closed := `{"number":1,"state":"CLOSED","mergeStateStatus":"CLEAN","statusCheckRollup":[]}`
-	if got := parsePRProbeOutput(closed); got != nil {
-		t.Errorf("closed-only output = %+v, want nil (no open PRs)", got)
-	}
+}
 
-	// A closed object followed by a genuinely open one => one open PR.
-	out := closed + "\n" + `{"number":2,"state":"OPEN","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}` + "\n"
-	got := parsePRProbeOutput(out)
+func TestParsePRProbeOutput_ClosedPersistsPurple(t *testing.T) {
+	// A branch whose only PR is closed/merged keeps a persistent purple tag (issue
+	// #203) rather than vanishing — open_count 0, closed_count > 0, the closed PR
+	// kept as a ref so the tag stays clickable.
+	for _, tc := range []struct {
+		name, state string
+	}{
+		{"closed", "CLOSED"},
+		{"merged", "MERGED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := `{"number":1,"state":"` + tc.state + `","url":"https://example.test/pr/1","title":"old work"}`
+			got := parsePRProbeOutput(out)
+			if got == nil {
+				t.Fatalf("%s-only output = nil, want a purple tag", tc.state)
+			}
+			if got.GetOpenCount() != 0 {
+				t.Errorf("OpenCount = %d, want 0", got.GetOpenCount())
+			}
+			if got.GetClosedCount() != 1 {
+				t.Errorf("ClosedCount = %d, want 1", got.GetClosedCount())
+			}
+			if got.GetPrSignal() != fleetgrpc.PrSignal_PR_SIGNAL_PURPLE {
+				t.Errorf("PrSignal = %v, want PURPLE", got.GetPrSignal())
+			}
+			if n := len(got.GetPrs()); n != 1 {
+				t.Fatalf("len(Prs) = %d, want 1 (kept clickable)", n)
+			}
+			if got.GetPrs()[0].GetNumber() != 1 {
+				t.Errorf("Prs[0].Number = %d, want 1", got.GetPrs()[0].GetNumber())
+			}
+		})
+	}
+}
+
+func TestParsePRProbeOutput_OpenWinsOverClosed(t *testing.T) {
+	// An open PR (workspace repo) and a closed one (a subrepo) => the open status
+	// wins; the closed one neither shows nor inflates closed_count.
+	closed := `{"number":1,"state":"CLOSED","url":"https://example.test/pr/1","title":"old"}`
+	open := `{"number":2,"state":"OPEN","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}`
+	got := parsePRProbeOutput(closed + "\n" + open + "\n")
 	if got == nil {
 		t.Fatalf("parsePRProbeOutput returned nil, want one open PR")
 	}
 	if got.GetOpenCount() != 1 {
 		t.Errorf("OpenCount = %d, want 1", got.GetOpenCount())
+	}
+	if got.GetClosedCount() != 0 {
+		t.Errorf("ClosedCount = %d, want 0 (open takes priority)", got.GetClosedCount())
+	}
+	if got.GetPrSignal() != fleetgrpc.PrSignal_PR_SIGNAL_GREEN {
+		t.Errorf("PrSignal = %v, want GREEN (the open PR)", got.GetPrSignal())
 	}
 }

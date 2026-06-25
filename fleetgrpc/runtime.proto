@@ -83,13 +83,16 @@ message ForwardedPort {
   optional string label = 3;
 }
 
-// PrSignal is the three-state colour shared by the auto-tag indicators:
-// green = good, yellow = in-progress/neutral, red = needs attention.
+// PrSignal is the colour shared by the auto-tag indicators: green = good,
+// yellow = in-progress/neutral, red = needs attention, purple = the PR is closed
+// or merged (kept visible so a finished instance is distinguishable from one that
+// never had a PR), matching GitHub's own closed/merged colour.
 enum PrSignal {
   PR_SIGNAL_UNSPECIFIED = 0;
   PR_SIGNAL_GREEN = 1;
   PR_SIGNAL_YELLOW = 2;
   PR_SIGNAL_RED = 3;
+  PR_SIGNAL_PURPLE = 4;
 }
 
 // PrReviewState is the aggregate review decision across an instance's open PRs,
@@ -117,11 +120,13 @@ message PrRef {
 // workspace repo PLUS any nested subrepos, computed by running `gh` inside the
 // container. It drives the "auto tag" the TUI renders in the tag slot when an
 // instance has no user-set tag. It is absent (nil) when gh is missing or
-// unauthenticated inside the instance, or when no PR is open — the TUI then
-// shows no auto-tag, preserving today's behaviour.
+// unauthenticated inside the instance, or when the branch never had a PR at all.
+// When a branch's only PR(s) are closed or merged, it stays present (open_count
+// 0, closed_count > 0) so the tag persists in purple rather than vanishing.
 message PrStatus {
   // Open PRs counted across the workspace repo and every subrepo. The PR
-  // indicator renders "PR" for 1 and "PRxN" for N>1; 0 means no auto-tag.
+  // indicator renders "PR" for 1 and "PRxN" for N>1; 0 means no OPEN PR (the tag
+  // is then driven by closed_count, if any).
   int32 open_count = 1;
   // Colour for the [PR]/[PRxN] indicator: green when every PR is mergeable,
   // red on any check failure or changes-requested, yellow otherwise.
@@ -134,10 +139,19 @@ message PrStatus {
   // Colour for the [Checks x/x] indicator: green when all passed, red on any
   // failure, yellow while any are still pending.
   PrSignal checks_signal = 6;
-  // The open PRs themselves, so the TUI can open one in a browser (or present a
+  // The PRs themselves, so the TUI can open one in a browser (or present a
   // chooser when there is more than one). Order follows discovery (workspace
-  // repo first, then subrepos).
+  // repo first, then subrepos). These are the OPEN PRs when open_count > 0,
+  // otherwise the closed/merged PRs backing the purple tag.
   repeated PrRef prs = 7;
+  // Closed or merged PRs, set only when NO PR is open (open_count 0). It keeps
+  // the tag visible in purple — matching GitHub's closed/merged colour — so a
+  // finished instance stays distinguishable from one that never had a PR. This
+  // counts the most-recent closed/merged PR PER repo (so it's the number of repos
+  // with a closed-but-no-open PR), unlike open_count which sums every open PR.
+  // Open PRs always take priority; when both exist the open status is shown and
+  // this stays 0.
+  int32 closed_count = 8;
 }
 
 // InstanceRuntime is the live view of ONE instance: everything the TUI renders

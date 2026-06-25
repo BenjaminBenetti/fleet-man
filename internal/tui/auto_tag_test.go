@@ -47,6 +47,60 @@ func TestInstanceAutoTag_NoStatus(t *testing.T) {
 	}
 }
 
+func TestInstanceAutoTag_ClosedPurple(t *testing.T) {
+	// A branch whose only PR is closed/merged keeps a persistent purple "PR" badge
+	// (issue #203): open_count 0 but closed_count > 0. It shows just "PR" — no
+	// review/checks — in the purple style, and stays distinct from "no PR ever".
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
+	ps := &fleetgrpc.PrStatus{
+		ClosedCount: 1,
+		PrSignal:    fleetgrpc.PrSignal_PR_SIGNAL_PURPLE,
+		Prs:         []*fleetgrpc.PrRef{{Number: 7, Url: "https://example.test/pr/7", Title: "done"}},
+	}
+	m := autoTagModel(newFleetPage(), inst, true, ps)
+	got := m.instanceAutoTag("alpha", "agent-1", false)
+	if !strings.Contains(got, "PR") {
+		t.Fatalf("closed PR tag %q missing PR badge", got)
+	}
+	for _, unwanted := range []string{"Accepted", "Rejected", "Pending", "Checks", "PRx"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("closed PR tag should be a bare PR badge, got %q (has %q)", got, unwanted)
+		}
+	}
+	// The badge renders in the purple style.
+	if !strings.Contains(got, prPurpleStyle.Render("PR")) {
+		t.Errorf("closed PR badge %q not rendered in the purple style", got)
+	}
+}
+
+func TestInstanceAutoTag_MultipleClosedPurple(t *testing.T) {
+	// Two closed/merged PRs (e.g. workspace repo + a subrepo) render "PRx2" in
+	// purple, matching the open "PRxN" convention and the multi-PR chooser.
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
+	ps := &fleetgrpc.PrStatus{
+		ClosedCount: 2,
+		PrSignal:    fleetgrpc.PrSignal_PR_SIGNAL_PURPLE,
+		Prs: []*fleetgrpc.PrRef{
+			{Number: 7, Url: "https://example.test/pr/7"},
+			{Number: 8, Url: "https://example.test/pr/8"},
+		},
+	}
+	m := autoTagModel(newFleetPage(), inst, true, ps)
+	got := m.instanceAutoTag("alpha", "agent-1", false)
+	if !strings.Contains(got, "PRx2") {
+		t.Errorf("two closed PRs should render PRx2, got %q", got)
+	}
+	if !strings.Contains(got, prPurpleStyle.Render("PRx2")) {
+		t.Errorf("PRx2 badge %q not rendered in the purple style", got)
+	}
+}
+
+func TestPrSignalStylePurple(t *testing.T) {
+	if prSignalStyle(fleetgrpc.PrSignal_PR_SIGNAL_PURPLE).GetForeground() != prPurpleStyle.GetForeground() {
+		t.Errorf("a closed/merged PR should render in purple")
+	}
+}
+
 func TestPrChecksStyleGraysPending(t *testing.T) {
 	// Pending checks are de-emphasised to grey; pass/fail keep green/red.
 	if prChecksStyle(fleetgrpc.PrSignal_PR_SIGNAL_YELLOW).GetForeground() != prGrayStyle.GetForeground() {
@@ -240,6 +294,34 @@ func TestViewFleetListRendersAutoTag(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestViewFleetListRendersClosedPurpleTag(t *testing.T) {
+	// End-to-end: a closed-only PrStatus still marks the first child row inline and
+	// surfaces the purple PR badge in the rendered list (issue #203) — the indicator
+	// no longer vanishes when the PR closes.
+	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning}
+	ps := &fleetgrpc.PrStatus{
+		ClosedCount: 1,
+		PrSignal:    fleetgrpc.PrSignal_PR_SIGNAL_PURPLE,
+		Prs:         []*fleetgrpc.PrRef{{Number: 7, Url: "https://example.test/pr/7", Title: "done"}},
+	}
+	fp := newFleetPage()
+	m := autoTagModel(fp, inst, true, ps)
+	fp.buildRows(m)
+
+	inlineMarked := false
+	for _, r := range fp.rows {
+		if r.prStatusInline {
+			inlineMarked = true
+		}
+	}
+	if !inlineMarked {
+		t.Fatalf("closed PR should still mark an inline-PR-status row: %#v", fp.rows)
+	}
+	if view := fp.viewFleetList(m); !strings.Contains(view, "PR") {
+		t.Fatalf("rendered list missing the persistent closed PR badge:\n%s", view)
 	}
 }
 
