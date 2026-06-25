@@ -1,5 +1,7 @@
 package state
 
+import "strings"
+
 // RemoteMcpSettings holds the user's intent to expose this daemon's local MCP
 // server (Enabled) and/or its gRPC control surface (FleetEnabled) to the
 // internet through a remote fleet gateway. Both ride the SAME outbound tunnel to
@@ -38,4 +40,15 @@ type RemoteMcpSettings struct {
 	// gateway does not serve the webhook route for this daemon. Independent of
 	// Enabled/FleetEnabled — all three ride the SAME outbound tunnel.
 	WebhookEnabled bool `json:"webhook_enabled,omitempty"`
+}
+
+// TunnelDesired reports whether the outbound gateway tunnel should be up: any of
+// the three remote surfaces (MCP / gRPC / webhook) is enabled AND a gateway URL
+// is configured. It mirrors the manager's desiredState.on()
+// (internal/server/remote/manager.go) so the TUI's remote-connection indicator
+// lights exactly when the tunnel will actually dial — without a gateway URL the
+// tunnel is a documented no-op, so the indicator stays dark rather than showing
+// a misleading "connecting" state forever.
+func (s RemoteMcpSettings) TunnelDesired() bool {
+	return (s.Enabled || s.FleetEnabled || s.WebhookEnabled) && strings.TrimSpace(s.GatewayURL) != ""
 }

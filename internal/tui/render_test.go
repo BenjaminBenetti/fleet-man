@@ -10,11 +10,13 @@ import (
 
 // TestRemoteIndicator covers the "wifi"-style remote-connection glyph: it must
 // appear when ANY of the three remote surfaces (MCP, gRPC, webhook) is enabled —
-// not just MCP (issue #199) — and stay hidden when all are off. It is green once
-// the shared tunnel is CONNECTED and red otherwise.
+// not just MCP (issue #199) — and stay hidden when all are off or no gateway URL
+// is configured (so it never shows a misleading "connecting" red when the tunnel
+// is a no-op). It is green once the shared tunnel is CONNECTED and red otherwise.
 func TestRemoteIndicator(t *testing.T) {
 	green := statusRunningStyle.Render("·))")
 	red := errorStyle.Render("·))")
+	const gw = "https://gateway.example.com"
 
 	connected := &fleetgrpc.RemoteMcpStatus{State: fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED}
 	connecting := &fleetgrpc.RemoteMcpStatus{State: fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTING}
@@ -28,28 +30,33 @@ func TestRemoteIndicator(t *testing.T) {
 		{name: "nil config hides indicator", cfg: nil, want: ""},
 		{name: "all remote surfaces off hides indicator", cfg: &state.Config{}, want: ""},
 		{
-			name: "mcp enabled, connected -> green",
+			name: "enabled but no gateway url hides indicator",
 			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{Enabled: true}},
+			status: connecting, want: "",
+		},
+		{
+			name: "mcp enabled, connected -> green",
+			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{Enabled: true, GatewayURL: gw}},
 			status: connected, want: green,
 		},
 		{
 			name: "grpc (fleet) enabled, connected -> green",
-			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{FleetEnabled: true}},
+			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{FleetEnabled: true, GatewayURL: gw}},
 			status: connected, want: green,
 		},
 		{
 			name: "webhook enabled, connected -> green",
-			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{WebhookEnabled: true}},
+			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{WebhookEnabled: true, GatewayURL: gw}},
 			status: connected, want: green,
 		},
 		{
 			name: "enabled but connecting -> red",
-			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{WebhookEnabled: true}},
+			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{WebhookEnabled: true, GatewayURL: gw}},
 			status: connecting, want: red,
 		},
 		{
 			name: "enabled but no status yet -> red",
-			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{FleetEnabled: true}},
+			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{FleetEnabled: true, GatewayURL: gw}},
 			status: nil, want: red,
 		},
 	}
