@@ -222,6 +222,23 @@ func isGroupedSession(sanitizedInstance, sessionName string) bool {
 	return ok
 }
 
+// sessionInGroup reports whether sessionName belongs to group groupID of the
+// given instance: its root (<inst>~<gid>) or one of its panes
+// (<inst>~<gid>~<suffix>).
+//
+// This is the boundary-aware membership test every group operation
+// (open/restore/rename/delete) must use. The naive alternative —
+// strings.HasPrefix(name, <inst>~<gid>) — also matches a sibling group whose
+// ID merely has this group's ID as a string prefix: group "dog" swallows
+// "dog-2" and "dog-2~ff00", which is exactly the reported bug where opening
+// "dog" shows the panes of both "dog" and "dog-2". parseGroupID splits on the
+// group separator, so it draws the group boundary correctly where a raw string
+// prefix does not.
+func sessionInGroup(sanitizedInstance, sessionName, groupID string) bool {
+	gid, ok := parseGroupID(sanitizedInstance, sessionName)
+	return ok && gid == groupID
+}
+
 // splitBindGroupID returns the group ID that is safe to pass to
 // `fleet shell --group` when rebinding the outer tmux split keys after
 // attaching to sessionName. It mirrors the isGroupedSession guard the

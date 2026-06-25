@@ -322,7 +322,7 @@ func TestRestoreSessionNamesRecreatesAllWhenGroupFullyDead(t *testing.T) {
 
 	got := restoreSessionNames(
 		"",
-		"alpha~abc123",
+		"abc123",
 		sg.Sessions,
 		&sg,
 		"alpha",
@@ -353,7 +353,7 @@ func TestRestoreSessionNamesDropsDeadSessionsWhenGroupAlive(t *testing.T) {
 
 	got := restoreSessionNames(
 		"alpha~abc123\n",
-		"alpha~abc123",
+		"abc123",
 		sg.Sessions,
 		&sg,
 		"alpha",
@@ -381,7 +381,7 @@ func TestRestoreSessionNamesMergesSnapshotWithLiveGroup(t *testing.T) {
 
 	got := restoreSessionNames(
 		"alpha~abc123\nalpha~abc123~3421\nalpha~other\n",
-		"alpha~abc123",
+		"abc123",
 		nil,
 		&sg,
 		"alpha",
