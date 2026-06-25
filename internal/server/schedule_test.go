@@ -624,6 +624,17 @@ func TestRunBashScriptCapsOutput(t *testing.T) {
 	if len(out) != maxBashOutputSize {
 		t.Fatalf("captured %d bytes, want it capped at %d", len(out), maxBashOutputSize)
 	}
+
+	// stderr feeds only the failure log, so it gets a much smaller cap — a verbose
+	// stderr on a failing probe must not bloat the error/log line.
+	_, ok, err = runBashScript(context.Background(),
+		"yes x | head -c "+strconv.Itoa(2*maxBashStderrSize)+" >&2; exit 1")
+	if ok || err == nil {
+		t.Fatalf("non-zero exit: want failure, got ok=%v err=%v", ok, err)
+	}
+	if len(err.Error()) > maxBashStderrSize+256 { // +256 slack for the wrapping prefix
+		t.Fatalf("error carries %d bytes of stderr, want it capped near %d", len(err.Error()), maxBashStderrSize)
+	}
 }
 
 func TestEnvDurationDefault(t *testing.T) {

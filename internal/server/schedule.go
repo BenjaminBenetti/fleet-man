@@ -170,12 +170,18 @@ type triggerFire struct {
 // regardless.
 var bashProbeTimeout = envDurationDefault("FLEET_AUTOMATION_BASH_TIMEOUT", 50*time.Second)
 
-// maxBashOutputSize caps how many bytes of a probe's stdout/stderr are retained.
-// The stdout becomes the event payload (copied into the agent's instance and
+// maxBashOutputSize caps how many bytes of a probe's stdout are retained. The
+// stdout becomes the event payload (copied into the agent's instance and
 // persisted to the trigger log), so an unbounded capture would let a runaway
 // script (`yes`, a huge `curl`) OOM the daemon. Mirrors the webhook path's
 // maxWebhookBodySize bound; output past it is discarded (see cappedBuffer).
 const maxBashOutputSize = 1 << 20
+
+// maxBashStderrSize caps a probe's captured stderr. Unlike stdout, stderr is not
+// the payload — it is only folded into the error logged when a probe fails — so it
+// gets a much smaller cap, enough to diagnose a failure without letting verbose
+// stderr bloat a single log line.
+const maxBashStderrSize = 4 << 10
 
 // maxBashProbeConcurrency bounds how many bash trigger commands run at once, so a
 // burst of due bash triggers can't spawn an unbounded number of host processes.
@@ -734,8 +740,10 @@ var runBashScript = func(ctx context.Context, script string) (stdout []byte, exi
 	// Bound the captured output so a runaway script can't OOM the daemon. Writes
 	// past the cap are discarded, so the command still drains its pipe and runs to
 	// completion (the exit code, not the output length, decides whether it fires).
+	// stdout is the payload (1 MiB cap); stderr only feeds a failure log, so it
+	// gets a much smaller cap — enough to diagnose, never enough to bloat a log line.
 	out := &cappedBuffer{limit: maxBashOutputSize}
-	errBuf := &cappedBuffer{limit: maxBashOutputSize}
+	errBuf := &cappedBuffer{limit: maxBashStderrSize}
 	cmd.Stdout = out
 	cmd.Stderr = errBuf
 	err = cmd.Run()
