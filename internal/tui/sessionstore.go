@@ -198,7 +198,7 @@ func (s *SessionStore) PruneStaleLastActive() {
 			delete(s.lastActive, ref)
 			continue
 		}
-		if !sessionStillExists(last, d.sessions) {
+		if !sessionStillExists(SanitizeSessionName(ref.Instance), last, d.sessions) {
 			delete(s.lastActive, ref)
 		}
 	}

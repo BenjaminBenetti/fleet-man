@@ -372,8 +372,7 @@ func derivePersistableSnapshot(activeGroup ActiveGroup, panes []paneByPosition, 
 		if p.title == "" {
 			return savedGroup{}, false
 		}
-		parsedGID, ok := parseGroupID(sanitized, p.title)
-		if !ok || parsedGID != groupID {
+		if !sessionInGroup(sanitized, p.title, groupID) {
 			return savedGroup{}, false
 		}
 		if seen[p.title] {
@@ -402,7 +401,7 @@ func snapshotMatchesRuntime(snapshot savedGroup, liveSessions []tmuxSession) boo
 	sanitized := SanitizeSessionName(snapshot.InstanceName)
 	live := make(map[string]bool)
 	for _, s := range liveSessions {
-		if gid, ok := parseGroupID(sanitized, s.Name); ok && gid == snapshot.GroupID {
+		if sessionInGroup(sanitized, s.Name, snapshot.GroupID) {
 			live[s.Name] = true
 		}
 	}
@@ -492,12 +491,11 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 	instanceName := instance.Name
 	qualifiedName := fleetName + "/" + instanceName
 	sanitized := SanitizeSessionName(instanceName)
-	prefix := sanitized + groupSep + groupID
 
 	// The live session list comes from the server runtime (it polls tmux for all
 	// running instances), captured here on the Update goroutine and passed into
 	// the closure as newline-delimited names — the same shape the old `tmux
-	// list-sessions` exec produced, which restoreSessionNames filters by prefix.
+	// list-sessions` exec produced, which restoreSessionNames filters by group.
 	var runtimeNames []string
 	for _, s := range m.runtimeSessions(InstanceRef{Fleet: fleetName, Instance: instanceName}) {
 		runtimeNames = append(runtimeNames, s.Name)
@@ -552,7 +550,7 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 			return splitPaneMsg{restoreSeq: restoreSeq, err: fmt.Errorf("os.Executable: %w", err)}
 		}
 
-		sessions := restoreSessionNames(sessionList, prefix, savedOrder, savedSnapshot, sanitized)
+		sessions := restoreSessionNames(sessionList, groupID, savedOrder, savedSnapshot, sanitized)
 		if len(sessions) == 0 {
 			if _, ok := fleetPage.savedGroups[key]; !ok {
 				return splitPaneMsg{restoreSeq: restoreSeq, err: fmt.Errorf("no sessions found for group %s", groupID)}
@@ -681,13 +679,16 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 	}
 }
 
-func restoreSessionNames(discovered, prefix string, savedOrder []string, savedSnapshot *savedGroup, sanitized string) []string {
-	// Build a set of live sessions for validation.
+func restoreSessionNames(discovered, groupID string, savedOrder []string, savedSnapshot *savedGroup, sanitized string) []string {
+	// Build a set of live sessions for validation. Membership is
+	// boundary-aware (sessionInGroup, not a raw string prefix) so a sibling
+	// group whose ID has this group's ID as a prefix — e.g. "dog-2" when
+	// restoring "dog" — does not leak its sessions in as extra panes.
 	live := make(map[string]bool)
 	var liveOrder []string
 	for _, line := range strings.Split(strings.TrimSpace(discovered), "\n") {
 		name := strings.TrimSpace(line)
-		if name != "" && strings.HasPrefix(name, prefix) {
+		if name != "" && sessionInGroup(sanitized, name, groupID) {
 			live[name] = true
 			liveOrder = append(liveOrder, name)
 		}

@@ -313,7 +313,10 @@ func renameGroupCmd(ref InstanceRef, sanitizedInstance, oldGroupID, newGroupID s
 		var lastErr error
 		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 			name := strings.TrimSpace(line)
-			if name == "" || !strings.HasPrefix(name, oldPrefix) {
+			// Boundary-aware: only rename sessions actually in oldGroupID, so a
+			// sibling group whose ID has oldGroupID as a prefix (e.g. "dog-2"
+			// vs "dog") is left untouched.
+			if name == "" || !sessionInGroup(sanitizedInstance, name, oldGroupID) {
 				continue
 			}
 			renamed := newPrefix + name[len(oldPrefix):]
@@ -354,7 +357,10 @@ func deleteGroupSessionsCmd(ref InstanceRef, sanitizedInstance, groupID string) 
 		var lastErr error
 		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 			name := strings.TrimSpace(line)
-			if name == "" || !strings.HasPrefix(name, prefix) {
+			// Boundary-aware: only kill sessions actually in groupID. A raw
+			// prefix match would also kill a sibling group whose ID has this
+			// one as a prefix (deleting "dog" would wrongly kill "dog-2").
+			if name == "" || !sessionInGroup(sanitizedInstance, name, groupID) {
 				continue
 			}
 			script := fmt.Sprintf(`tmux kill-session -t %s 2>/dev/null`, shQuote(name))
@@ -375,14 +381,21 @@ func deleteGroupSessionsCmd(ref InstanceRef, sanitizedInstance, groupID string) 
 
 // sessionStillExists checks whether a lastSession reference is still valid
 // against the current list of discovered tmux sessions.
-func sessionStillExists(last lastSession, sessions []tmuxSession) bool {
+//
+// For a real group the match is boundary-aware (sessionInGroup): the group is
+// alive if any of its sessions survives. The old test —
+// strings.Contains(name, "~"+groupID) — was both too loose (group "dog" stayed
+// "alive" because "alpha~dog-2" contains "~dog") and too tight (a pseudo-group
+// whose ID is a bare ad-hoc name like "foo" never matched, since "foo" has no
+// "~foo" substring). When the grouped match finds nothing we fall through to an
+// exact session-name check, which keeps that ad-hoc-session case working.
+func sessionStillExists(sanitizedInstance string, last lastSession, sessions []tmuxSession) bool {
 	if last.groupID != "" {
 		for _, session := range sessions {
-			if strings.Contains(session.Name, groupSep+last.groupID) {
+			if sessionInGroup(sanitizedInstance, session.Name, last.groupID) {
 				return true
 			}
 		}
-		return false
 	}
 	for _, session := range sessions {
 		if session.Name == last.sessionName {

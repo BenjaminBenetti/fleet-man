@@ -444,12 +444,12 @@ func (m *model) migrateRenamedSession(msg sessionRenamedMsg) {
 				bindHostSplitKeys(msg.ref.Key(), msg.newGroupID)
 			}
 		}
-		if fleetPage.split.ref == msg.ref && strings.HasPrefix(fleetPage.split.session, oldPrefix) {
+		if fleetPage.split.ref == msg.ref && sessionInGroup(sanitized, fleetPage.split.session, msg.oldGroupID) {
 			fleetPage.split.session = newPrefix + fleetPage.split.session[len(oldPrefix):]
 		}
 		if last, ok := m.sessionStore.LastActive(msg.ref); ok && last.groupID == msg.oldGroupID {
 			last.groupID = msg.newGroupID
-			if strings.HasPrefix(last.sessionName, oldPrefix) {
+			if sessionInGroup(sanitized, last.sessionName, msg.oldGroupID) {
 				last.sessionName = newPrefix + last.sessionName[len(oldPrefix):]
 			}
 			m.sessionStore.SetLastActive(msg.ref, last)
@@ -484,9 +484,10 @@ func (m *model) migrateSavedGroup(ref InstanceRef, oldGroupID, newGroupID, oldPr
 	if !ok {
 		return
 	}
+	sanitized := SanitizeSessionName(ref.Instance)
 	sessions := make([]string, len(sg.Sessions))
 	for i, name := range sg.Sessions {
-		if strings.HasPrefix(name, oldPrefix) {
+		if sessionInGroup(sanitized, name, oldGroupID) {
 			sessions[i] = newPrefix + name[len(oldPrefix):]
 		} else {
 			sessions[i] = name

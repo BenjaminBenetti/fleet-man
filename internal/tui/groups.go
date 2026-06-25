@@ -129,9 +129,11 @@ func NewGroupPaneSessionName(sanitizedInstance, groupID string) string {
 // apply, but a re-apply (or a leftover from a prior failed apply) falls back to
 // a random id so the root never collides forever on `tmux new-session` — the
 // reported "stuck, a restart doesn't help" bug, since the session lives in the
-// container. It deliberately does NOT auto-suffix (dev-2): that would prefix-
-// match a sibling group ("dev") in the prefix-based group ops (open/rename/
-// delete) — readable names for re-applies need boundary-aware matching first.
+// container. It falls back to a random id rather than an auto-suffixed readable
+// name (dev-2): a random id is the minimal collision-free choice and keeps this
+// path simple. (The group ops now match on the group boundary — sessionInGroup,
+// not a raw string prefix — so an auto-suffixed sibling would no longer be
+// swallowed; readable auto-suffixing is therefore a safe possible future change.)
 func groupIDFor(sanitizedInstance, desired string, existing []tmuxSession) string {
 	for _, s := range existing {
 		if gid, ok := parseGroupID(sanitizedInstance, s.Name); ok && gid == desired {
@@ -220,6 +222,23 @@ func groupSessions(sanitizedInstance string, sessions []tmuxSession) []sessionGr
 func isGroupedSession(sanitizedInstance, sessionName string) bool {
 	_, ok := parseGroupID(sanitizedInstance, sessionName)
 	return ok
+}
+
+// sessionInGroup reports whether sessionName belongs to group groupID of the
+// given instance: its root (<inst>~<gid>) or one of its panes
+// (<inst>~<gid>~<suffix>).
+//
+// This is the boundary-aware membership test every group operation
+// (open/restore/rename/delete) must use. The naive alternative —
+// strings.HasPrefix(name, <inst>~<gid>) — also matches a sibling group whose
+// ID merely has this group's ID as a string prefix: group "dog" swallows
+// "dog-2" and "dog-2~ff00", which is exactly the reported bug where opening
+// "dog" shows the panes of both "dog" and "dog-2". parseGroupID splits on the
+// group separator, so it draws the group boundary correctly where a raw string
+// prefix does not.
+func sessionInGroup(sanitizedInstance, sessionName, groupID string) bool {
+	gid, ok := parseGroupID(sanitizedInstance, sessionName)
+	return ok && gid == groupID
 }
 
 // splitBindGroupID returns the group ID that is safe to pass to
