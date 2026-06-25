@@ -44,9 +44,10 @@ type RemoteMcpSettings struct {
 
 // TunnelDesired reports whether the outbound gateway tunnel should be up: any of
 // the three remote surfaces (MCP / gRPC / webhook) is enabled AND a gateway URL
-// is configured. It mirrors the manager's desiredState.on()
-// (internal/server/remote/manager.go) so the TUI's remote-connection indicator
-// lights exactly when the tunnel will actually dial — without a gateway URL the
+// is configured. It is the single source of truth for that predicate — the
+// manager's desiredState.on() (internal/server/remote/manager.go) delegates here
+// for the dial decision, and the TUI's remote-connection indicator uses it to
+// light exactly when the tunnel will actually dial. Without a gateway URL the
 // tunnel is a documented no-op, so the indicator stays dark rather than showing
 // a misleading "connecting" state forever.
 func (s RemoteMcpSettings) TunnelDesired() bool {
