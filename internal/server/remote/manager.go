@@ -24,6 +24,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/tunnel"
 )
 
@@ -48,9 +49,16 @@ type desiredState struct {
 	gatewayURL string
 }
 
-// on reports whether the tunnel should be up at all.
+// on reports whether the tunnel should be up at all. It delegates to
+// state.RemoteMcpSettings.TunnelDesired so the dial decision here and the TUI's
+// remote-connection indicator share one definition and can't drift.
 func (d desiredState) on() bool {
-	return (d.mcp || d.grpc || d.webhook) && d.gatewayURL != ""
+	return state.RemoteMcpSettings{
+		Enabled:        d.mcp,
+		FleetEnabled:   d.grpc,
+		WebhookEnabled: d.webhook,
+		GatewayURL:     d.gatewayURL,
+	}.TunnelDesired()
 }
 
 // Manager supervises the outbound tunnel. Construct with NewManager and drive
