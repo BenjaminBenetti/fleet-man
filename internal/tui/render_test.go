@@ -4,8 +4,65 @@ import (
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 )
+
+// TestRemoteIndicator covers the "wifi"-style remote-connection glyph: it must
+// appear when ANY of the three remote surfaces (MCP, gRPC, webhook) is enabled —
+// not just MCP (issue #199) — and stay hidden when all are off. It is green once
+// the shared tunnel is CONNECTED and red otherwise.
+func TestRemoteIndicator(t *testing.T) {
+	green := statusRunningStyle.Render("·))")
+	red := errorStyle.Render("·))")
+
+	connected := &fleetgrpc.RemoteMcpStatus{State: fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED}
+	connecting := &fleetgrpc.RemoteMcpStatus{State: fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTING}
+
+	cases := []struct {
+		name   string
+		cfg    *state.Config
+		status *fleetgrpc.RemoteMcpStatus
+		want   string
+	}{
+		{name: "nil config hides indicator", cfg: nil, want: ""},
+		{name: "all remote surfaces off hides indicator", cfg: &state.Config{}, want: ""},
+		{
+			name: "mcp enabled, connected -> green",
+			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{Enabled: true}},
+			status: connected, want: green,
+		},
+		{
+			name: "grpc (fleet) enabled, connected -> green",
+			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{FleetEnabled: true}},
+			status: connected, want: green,
+		},
+		{
+			name: "webhook enabled, connected -> green",
+			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{WebhookEnabled: true}},
+			status: connected, want: green,
+		},
+		{
+			name: "enabled but connecting -> red",
+			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{WebhookEnabled: true}},
+			status: connecting, want: red,
+		},
+		{
+			name: "enabled but no status yet -> red",
+			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{FleetEnabled: true}},
+			status: nil, want: red,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &model{config: tc.cfg, remoteMcpStatus: tc.status}
+			if got := remoteIndicator(m); got != tc.want {
+				t.Fatalf("remoteIndicator = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
 
 // TestVersionChain covers the control-chain version header rendering: local
 // (collapsed when matched), remote-server (two hops), and gateway (three hops),
