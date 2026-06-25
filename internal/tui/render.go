@@ -161,12 +161,14 @@ func agentToolLabelProto(tool fleetgrpc.AgentTool) string {
 }
 
 // remoteIndicator returns a small "wifi"-style signal glyph that radiates off
-// the end of the fleet logo when Fleet Remote (the outbound MCP gateway tunnel)
-// is enabled. It is green once the tunnel is CONNECTED and red while enabled but
-// not yet up (connecting / error). When remote is disabled it returns "" so the
-// header renders unchanged.
+// the end of the fleet logo when the outbound gateway tunnel is desired — i.e.
+// ANY of the three remote surfaces that ride it is on (remote MCP, remote gRPC
+// control, or the automation webhook) AND a gateway URL is configured (see
+// RemoteMcpSettings.TunnelDesired). It is green once the tunnel is CONNECTED and
+// red while desired but not yet up (connecting / error). When no surface is on
+// (or no gateway URL is set) it returns "" so the header renders unchanged.
 func remoteIndicator(m *model) string {
-	if m.config == nil || !m.config.RemoteMcpSettings.Enabled {
+	if m.config == nil || !m.config.RemoteMcpSettings.TunnelDesired() {
 		return ""
 	}
 	style := errorStyle
