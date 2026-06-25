@@ -234,11 +234,12 @@ message Agent {
 }
 
 // Trigger mirrors internal/fleet.Trigger — an automation trigger (issue #188).
-// type is the string-valued TriggerType ("schedule" | "webhook"); filter_type is
-// the string-valued WebhookFilterType ("regex" | "jsonpath"). Schedule triggers
-// use cron; webhook triggers use webhook_name + filter_type + the matching
-// fields. agent_names references Agents by name. The string-valued enums match
-// the Go model's string types, so the wire mapping is a plain string copy.
+// type is the string-valued TriggerType ("schedule" | "webhook" | "bash");
+// filter_type is the string-valued WebhookFilterType ("regex" | "jsonpath").
+// Schedule triggers use cron; webhook triggers use webhook_name + filter_type +
+// the matching fields; bash triggers use cron + script. agent_names references
+// Agents by name. The string-valued enums match the Go model's string types, so
+// the wire mapping is a plain string copy.
 message Trigger {
   string name = 1;
   string type = 2;
@@ -254,6 +255,9 @@ message Trigger {
   // proto3 default false means a missing field reads as enabled, so triggers
   // written before this field existed keep firing.
   bool disabled = 11;
+  // script is the bash command a bash trigger runs each time its cron is due; a
+  // zero exit fires the agents and the command's stdout is the event payload.
+  string script = 12;
 }
 
 // Fleet mirrors internal/fleet.Fleet. Settings is a NESTED message (not inlined)

@@ -134,7 +134,7 @@ func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 // matches across all fleets is intentional: webhook names are per-fleet in the
 // model, so the same name can legitimately drive triggers in several fleets, and
 // the common single-match case degenerates to exactly one fire.
-func collectWebhookFires(st *state.State, name string, body []byte) (fires []webhookFire, nameFound, jsonPathActive bool) {
+func collectWebhookFires(st *state.State, name string, body []byte) (fires []triggerFire, nameFound, jsonPathActive bool) {
 	for fleetName, f := range st.Fleets {
 		if f == nil {
 			continue
@@ -151,7 +151,7 @@ func collectWebhookFires(st *state.State, name string, body []byte) (fires []web
 				jsonPathActive = true
 			}
 			if t.MatchesWebhook(body) {
-				fires = append(fires, webhookFire{fleet: fleetName, trigger: t, body: body})
+				fires = append(fires, triggerFire{fleet: fleetName, trigger: t, body: body})
 			}
 		}
 	}
@@ -174,14 +174,14 @@ func bodyIsJSON(body []byte) bool {
 // webhookEnqueueTimeout and the request's own context. It returns false when the
 // scheduler can't accept the batch in time (overloaded) or the request was
 // cancelled — the caller turns that into a 503.
-func (s *service) enqueueWebhookFires(ctx context.Context, fires []webhookFire) bool {
-	if s.webhookFires == nil || len(fires) == 0 {
+func (s *service) enqueueWebhookFires(ctx context.Context, fires []triggerFire) bool {
+	if s.triggerFires == nil || len(fires) == 0 {
 		return false
 	}
 	timer := time.NewTimer(webhookEnqueueTimeout)
 	defer timer.Stop()
 	select {
-	case s.webhookFires <- fires:
+	case s.triggerFires <- fires:
 		return true
 	case <-ctx.Done():
 		return false

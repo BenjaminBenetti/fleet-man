@@ -57,6 +57,14 @@ func TestFleetSettingsAutomationRoundTrip(t *testing.T) {
 				JSONValue:   "refs/heads/main",
 				Disabled:    true,
 			},
+			{
+				Name:       "poll-queue",
+				Type:       fleet.TriggerBash,
+				AgentNames: []string{"builder"},
+				Prompt:     "drain it",
+				Cron:       "*/5 * * * *",
+				Script:     "test -s /var/queue",
+			},
 		},
 	}
 

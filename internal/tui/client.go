@@ -515,6 +515,7 @@ func protoTriggersToLegacy(in []*fleetgrpc.Trigger) []fleet.Trigger {
 			AgentNames:  t.GetAgentNames(),
 			Prompt:      t.GetPrompt(),
 			Cron:        t.GetCron(),
+			Script:      t.GetScript(),
 			WebhookName: t.GetWebhookName(),
 			FilterType:  fleet.WebhookFilterType(t.GetFilterType()),
 			Regex:       t.GetRegex(),

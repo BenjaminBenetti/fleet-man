@@ -55,6 +55,26 @@ func TestTriggerCreateWebhook(t *testing.T) {
 	}
 }
 
+func TestTriggerCreateBash(t *testing.T) {
+	seed := fleet.FleetSettings{Agents: []fleet.Agent{{Name: "a", Backend: fleet.BackendDevcontainer}}}
+	_, result := stubMutate(t, seed)
+
+	_, err := runCLI(t, "trigger", "create", "alpha", "poll",
+		"--type", "bash", "--agent", "a",
+		"--cron", "*/5 * * * *", "--script", "test -s /var/queue", "--prompt", "drain")
+	if err != nil {
+		t.Fatalf("create bash: %v", err)
+	}
+	tr := result.Triggers[0]
+	if tr.Type != fleet.TriggerBash || tr.Cron != "*/5 * * * *" || tr.Script != "test -s /var/queue" {
+		t.Errorf("bash trigger = %+v", tr)
+	}
+	// Bash triggers carry no webhook fields.
+	if tr.WebhookName != "" || tr.Regex != "" {
+		t.Errorf("bash trigger carries webhook fields: %+v", tr)
+	}
+}
+
 func TestTriggerCreateRequiresAgent(t *testing.T) {
 	stubMutate(t, fleet.FleetSettings{Agents: []fleet.Agent{{Name: "a", Backend: fleet.BackendDevcontainer}}})
 	// No --agent: NormalizeTrigger rejects a trigger that activates no agents.
@@ -172,6 +192,7 @@ func TestTriggerList(t *testing.T) {
 			Triggers: []fleet.Trigger{
 				{Name: "nightly", Type: fleet.TriggerSchedule, AgentNames: []string{"builder"}, Cron: "0 0 * * *"},
 				{Name: "hook", Type: fleet.TriggerWebhook, AgentNames: []string{"a", "b"}, WebhookName: "ci", FilterType: fleet.WebhookFilterRegex, Regex: "push"},
+				{Name: "poll", Type: fleet.TriggerBash, AgentNames: []string{"a"}, Cron: "*/5 * * * *", Script: "test -s /q"},
 			},
 		}, nil
 	}
@@ -180,7 +201,7 @@ func TestTriggerList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	for _, want := range []string{"NAME", "TYPE", "AGENTS", "nightly", "0 0 * * *", "hook", "webhook:ci", "a,b"} {
+	for _, want := range []string{"NAME", "TYPE", "AGENTS", "nightly", "0 0 * * *", "hook", "webhook:ci", "a,b", "poll", "bash", "sh: test -s /q"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list output missing %q:\n%s", want, out)
 		}

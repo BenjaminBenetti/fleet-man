@@ -124,9 +124,9 @@ type FleetSettings struct {
 
 	// Triggers is the fleet's list of automation trigger definitions (issue
 	// #188). A Trigger fires its referenced Agents (with a prompt) on a
-	// schedule or webhook event. Validated/normalized against Agents (see
-	// NormalizeTriggers) before persisting. Empty (the default) means no
-	// triggers.
+	// schedule, a webhook event, or a passing bash probe. Validated/normalized
+	// against Agents (see NormalizeTriggers) before persisting. Empty (the
+	// default) means no triggers.
 	Triggers []Trigger `json:"triggers,omitempty"`
 
 	// PreferFleetLaunch controls which page the built-in browser opens to

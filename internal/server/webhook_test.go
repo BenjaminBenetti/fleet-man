@@ -45,9 +45,9 @@ func postWebhook(t *testing.T, s *service, st *state.State, name, body string) *
 }
 
 // drainBatch returns the next queued fire batch (non-blocking), or nil if none.
-func drainBatch(s *service) []webhookFire {
+func drainBatch(s *service) []triggerFire {
 	select {
-	case b := <-s.webhookFires:
+	case b := <-s.triggerFires:
 		return b
 	default:
 		return nil
@@ -218,7 +218,7 @@ func TestServeWebhook_MultiFleetSelectiveFilter(t *testing.T) {
 // double-fire a trigger that "partially" went through (the bug the batch design
 // prevents).
 func TestServeWebhook_MultiTriggerShedIsAtomic(t *testing.T) {
-	s := &service{webhookFires: make(chan []webhookFire)} // unbuffered, no drainer
+	s := &service{triggerFires: make(chan []triggerFire)} // unbuffered, no drainer
 	st := &state.State{Fleets: map[string]*fleet.Fleet{
 		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{
 			Agents:   []fleet.Agent{{Name: "a"}},
@@ -249,7 +249,7 @@ func TestServeWebhook_MultiTriggerShedIsAtomic(t *testing.T) {
 func TestServeWebhook_SchedulerBusy503(t *testing.T) {
 	// Unbuffered channel with no drainer + an already-cancelled request context:
 	// enqueueWebhookFires can't hand off and the ctx.Done branch wins deterministically.
-	s := &service{webhookFires: make(chan []webhookFire)}
+	s := &service{triggerFires: make(chan []triggerFire)}
 	st := webhookState(fleet.Trigger{
 		Name: "ci", Type: fleet.TriggerWebhook, AgentNames: []string{"a"},
 		WebhookName: "ci", FilterType: fleet.WebhookFilterRegex, Regex: ".*",

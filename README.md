@@ -107,6 +107,10 @@ fleet up my-project/agent-3
 # Configure automation: agents (workers) and triggers (what fires them)
 fleet agent create my-project nightly-builder --system-prompt "Build and report"
 fleet trigger create my-project nightly --agent nightly-builder --cron "0 0 * * *" --prompt "Run the nightly build"
+# A 'bash' trigger polls a command on its cron and fires only when it exits 0
+# (stdout becomes the event payload) — for sources without a webhook
+fleet trigger create my-project new-issues --type bash --agent triager --cron "*/5 * * * *" \
+  --script 'gh issue list --label needs-triage --json number -q ".[].number" | grep -q .' --prompt "Triage the new issues"
 fleet agent list my-project
 fleet trigger list my-project
 fleet trigger logs my-project nightly   # inspect a trigger's recorded firings

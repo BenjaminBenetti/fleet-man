@@ -98,6 +98,7 @@ func triggersToProto(in []fleet.Trigger) []*fleetgrpc.Trigger {
 			AgentNames:  t.AgentNames,
 			Prompt:      t.Prompt,
 			Cron:        t.Cron,
+			Script:      t.Script,
 			WebhookName: t.WebhookName,
 			FilterType:  string(t.FilterType),
 			Regex:       t.Regex,

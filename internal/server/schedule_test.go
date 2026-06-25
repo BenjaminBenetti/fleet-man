@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -61,19 +63,19 @@ func TestDueSchedulesFiresOncePerMinute(t *testing.T) {
 	}, []fleet.Agent{{Name: "a"}})
 
 	lastFired := map[string]time.Time{}
-	due := dueSchedules(fleets, now, lastFired)
+	due := dueCronTriggers(fleets, now, lastFired)
 	if len(due) != 1 || due[0].trigger.Name != "match" {
 		t.Fatalf("want only 'match' to fire, got %+v", due)
 	}
 
 	// Same minute again: no re-fire.
-	if again := dueSchedules(fleets, now.Add(20*time.Second), lastFired); len(again) != 0 {
+	if again := dueCronTriggers(fleets, now.Add(20*time.Second), lastFired); len(again) != 0 {
 		t.Fatalf("trigger re-fired within the same minute: %+v", again)
 	}
 
 	// Next matching week: fires again.
 	next := now.AddDate(0, 0, 7)
-	if again := dueSchedules(fleets, next, lastFired); len(again) != 1 {
+	if again := dueCronTriggers(fleets, next, lastFired); len(again) != 1 {
 		t.Fatalf("trigger should fire on the next matching minute: %+v", again)
 	}
 }
@@ -88,7 +90,7 @@ func TestDueSchedulesSkipsDisabled(t *testing.T) {
 	}, []fleet.Agent{{Name: "a"}})
 
 	lastFired := map[string]time.Time{}
-	due := dueSchedules(fleets, now, lastFired)
+	due := dueCronTriggers(fleets, now, lastFired)
 	if len(due) != 1 || due[0].trigger.Name != "on" {
 		t.Fatalf("want only the enabled trigger to fire, got %+v", due)
 	}
@@ -106,13 +108,13 @@ func TestDueSchedulesPrunesStaleLastFired(t *testing.T) {
 	}, []fleet.Agent{{Name: "a"}})
 
 	lastFired := map[string]time.Time{}
-	dueSchedules(fleets, now, lastFired)
+	dueCronTriggers(fleets, now, lastFired)
 	if _, ok := lastFired["alpha\x00match"]; !ok {
 		t.Fatal("expected lastFired entry for the fired trigger")
 	}
 	// A stale entry (trigger that no longer exists) plus the live one.
 	lastFired["alpha\x00deleted"] = now
-	dueSchedules(fleets, now.Add(time.Minute), lastFired)
+	dueCronTriggers(fleets, now.Add(time.Minute), lastFired)
 	if _, ok := lastFired["alpha\x00deleted"]; ok {
 		t.Fatal("stale lastFired entry should have been pruned")
 	}
@@ -379,7 +381,7 @@ func TestFireWebhookBatchSpawns(t *testing.T) {
 
 	// One trigger activating both agents, with a prompt.
 	trig := fleet.Trigger{Name: "ci", Type: fleet.TriggerWebhook, AgentNames: []string{"a", "b"}, WebhookName: "ci", Prompt: "go"}
-	s.fireWebhookBatch(sched, []webhookFire{{fleet: "alpha", trigger: trig}}, now)
+	s.fireTriggerBatch(sched, []triggerFire{{fleet: "alpha", trigger: trig}}, now)
 
 	if len(created) != 2 {
 		t.Fatalf("expected 2 instances created, got %v", created)
@@ -414,9 +416,172 @@ func TestFireWebhookBatchSkipsMissingAgents(t *testing.T) {
 	s := &service{}
 	sched := newScheduler()
 	trig := fleet.Trigger{Name: "ci", Type: fleet.TriggerWebhook, AgentNames: []string{"gone"}, WebhookName: "ci"}
-	s.fireWebhookBatch(sched, []webhookFire{{fleet: "alpha", trigger: trig}}, time.Now())
+	s.fireTriggerBatch(sched, []triggerFire{{fleet: "alpha", trigger: trig}}, time.Now())
 	if len(sched.watched) != 0 {
 		t.Fatalf("no watch entries expected, got %d", len(sched.watched))
+	}
+}
+
+// TestDueCronTriggersIncludesBash confirms the shared cron sampler returns BOTH
+// schedule and bash triggers (they are the cron-driven types) and skips webhooks.
+func TestDueCronTriggersIncludesBash(t *testing.T) {
+	now := time.Date(2026, 6, 22, 9, 0, 30, 0, time.UTC) // Monday 09:00
+	fleets := scheduleFleet([]fleet.Trigger{
+		{Name: "sched", Type: fleet.TriggerSchedule, AgentNames: []string{"a"}, Cron: "0 9 * * 1"},
+		{Name: "bash", Type: fleet.TriggerBash, AgentNames: []string{"a"}, Cron: "0 9 * * 1", Script: "true"},
+		{Name: "wh", Type: fleet.TriggerWebhook, AgentNames: []string{"a"}, WebhookName: "x"},
+	}, []fleet.Agent{{Name: "a"}})
+
+	due := dueCronTriggers(fleets, now, map[string]time.Time{})
+	names := map[string]bool{}
+	for _, d := range due {
+		names[d.trigger.Name] = true
+	}
+	if len(due) != 2 || !names["sched"] || !names["bash"] {
+		t.Fatalf("expected schedule + bash to be due (webhook excluded), got %+v", due)
+	}
+}
+
+// TestSchedulerTickBashProbe confirms a due bash trigger is probed (off the tick)
+// rather than spawning an instance directly the way a schedule trigger does.
+func TestSchedulerTickBashProbe(t *testing.T) {
+	stubAutomationSeams(t) // serviceWatched runs against an empty watch set
+
+	st := &state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{
+			Agents: []fleet.Agent{{Name: "a", Backend: fleet.BackendDevcontainer}},
+			Triggers: []fleet.Trigger{
+				{Name: "poll", Type: fleet.TriggerBash, AgentNames: []string{"a"}, Cron: "* * * * *", Script: "true"},
+			},
+		}},
+	}}
+	origLoad := scheduleLoadState
+	scheduleLoadState = func() (*state.State, error) { return st, nil }
+	origCreate := createAutomationInstance
+	createAutomationInstance = func(*service, string, fleet.Agent, time.Time) (string, error) {
+		t.Fatal("a bash trigger must not create an instance from the tick (only on a passing probe)")
+		return "", nil
+	}
+	origProbe := startBashProbe
+	var probed []string
+	startBashProbe = func(_ *service, fleetName string, trigger fleet.Trigger, _ time.Time) {
+		probed = append(probed, fleetName+"/"+trigger.Name)
+	}
+	t.Cleanup(func() {
+		scheduleLoadState = origLoad
+		createAutomationInstance = origCreate
+		startBashProbe = origProbe
+	})
+
+	s := &service{}
+	sched := newScheduler()
+	s.schedulerTick(context.Background(), sched, time.Date(2026, 6, 22, 9, 0, 30, 0, time.UTC))
+
+	if len(probed) != 1 || probed[0] != "alpha/poll" {
+		t.Fatalf("expected the bash trigger to be probed once, got %v", probed)
+	}
+	if len(sched.watched) != 0 {
+		t.Fatalf("no watch entry should exist until the probe fires, got %d", len(sched.watched))
+	}
+}
+
+// TestStartBashProbe drives the real probe: a zero exit hands a fire (carrying the
+// command's stdout as the body) to the scheduler via triggerFires; a non-zero exit
+// fires nothing.
+func TestStartBashProbe(t *testing.T) {
+	orig := runBashScript
+	t.Cleanup(func() { runBashScript = orig })
+
+	s := &service{bgCtx: context.Background(), triggerFires: make(chan []triggerFire, 1)}
+	trig := fleet.Trigger{Name: "poll", Type: fleet.TriggerBash, AgentNames: []string{"a"}, Cron: "* * * * *", Script: "echo hi"}
+
+	// Zero exit → fires, carrying stdout as the payload body.
+	runBashScript = func(_ context.Context, script string) ([]byte, bool, error) {
+		if script != "echo hi" {
+			t.Errorf("probe ran the wrong script: %q", script)
+		}
+		return []byte("payload-out\n"), true, nil
+	}
+	startBashProbe(s, "alpha", trig, time.Now())
+	select {
+	case batch := <-s.triggerFires:
+		if len(batch) != 1 || batch[0].fleet != "alpha" || batch[0].trigger.Name != "poll" {
+			t.Fatalf("unexpected fire batch: %+v", batch)
+		}
+		if string(batch[0].body) != "payload-out\n" {
+			t.Fatalf("body = %q, want the command's stdout", batch[0].body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a fire on a zero exit")
+	}
+
+	// Non-zero exit → nothing fires. A non-firing probe sends nothing on
+	// triggerFires, so signal completion via `ran` to synchronize with the probe
+	// goroutine (otherwise the deferred runBashScript restore races its read).
+	ran := make(chan struct{}, 1)
+	runBashScript = func(context.Context, string) ([]byte, bool, error) {
+		defer func() { ran <- struct{}{} }()
+		return []byte("ignored"), false, errors.New("exit status 1")
+	}
+	startBashProbe(s, "alpha", trig, time.Now())
+	<-ran // the probe ran its (non-zero) command; it will not fire
+	select {
+	case batch := <-s.triggerFires:
+		t.Fatalf("a non-zero exit must not fire, got %+v", batch)
+	default:
+		// good: nothing queued
+	}
+}
+
+// TestRunBashScript exercises the real exec seam: stdout is captured as the
+// payload IN ISOLATION from stderr, and a non-zero exit reports failure with the
+// stderr tail folded into the error.
+func TestRunBashScript(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	ctx := context.Background()
+
+	out, ok, err := runBashScript(ctx, "printf payload; printf oops >&2; exit 0")
+	if !ok || err != nil {
+		t.Fatalf("zero exit: ok=%v err=%v", ok, err)
+	}
+	if string(out) != "payload" {
+		t.Fatalf("stdout = %q, want %q (stderr must be excluded from the payload)", out, "payload")
+	}
+
+	out, ok, err = runBashScript(ctx, "echo nope >&2; exit 3")
+	if ok || err == nil {
+		t.Fatalf("non-zero exit: want failure, got ok=%v err=%v", ok, err)
+	}
+	if !strings.Contains(err.Error(), "nope") {
+		t.Errorf("error should carry the stderr tail, got: %v", err)
+	}
+}
+
+// TestRunBashScriptBackgroundedGrandchildTimesOut guards the WaitDelay fix: a
+// command that backgrounds a long-lived process which inherits the stdout pipe
+// must NOT block Run() for that process's whole lifetime, and must be reported as
+// not-fired (CommandContext kills only the direct shell). Without WaitDelay this
+// blocks for the full `sleep` and falsely reports a zero exit.
+func TestRunBashScriptBackgroundedGrandchildTimesOut(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, ok, err := runBashScript(ctx, "sleep 30 & echo hi")
+	elapsed := time.Since(start)
+
+	// WaitDelay (3s) bounds how long Run lingers after the deadline; 30s would mean
+	// the deadline was ignored entirely.
+	if elapsed > 10*time.Second {
+		t.Fatalf("probe blocked %v on a backgrounded grandchild — WaitDelay not bounding it", elapsed)
+	}
+	if ok || err == nil {
+		t.Fatalf("a timed-out probe must be reported as not-fired, got ok=%v err=%v", ok, err)
 	}
 }
 

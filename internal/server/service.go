@@ -53,15 +53,16 @@ type service struct {
 	// several TUIs opening at once trigger one sweep, not one per client.
 	buildkitReconciling atomic.Bool
 
-	// webhookFires carries matched automation webhook events from the (concurrent)
-	// webhook receiver to the single-goroutine scheduler, which spawns + watches
-	// the agents. One channel send carries ALL of a request's matched triggers as
-	// a batch, so a request enqueues all-or-nothing — a sender that retries after a
-	// 503 can't double-fire triggers that already enqueued. Buffered so a burst of
-	// events doesn't block the receiver; a full channel makes the receiver shed
-	// (503) rather than block (see webhook.go). Drained only while runScheduler is
+	// triggerFires carries matched trigger fires from a concurrent producer — the
+	// webhook receiver or a bash trigger's probe goroutine — to the single-
+	// goroutine scheduler, which spawns + watches the agents. A webhook request
+	// sends ALL its matched triggers as one batch, so it enqueues all-or-nothing —
+	// a sender that retries after a 503 can't double-fire triggers that already
+	// enqueued; a bash probe sends a single-fire batch. Buffered so a burst doesn't
+	// block the producer; a full channel makes the webhook receiver shed (503)
+	// rather than block (see webhook.go). Drained only while runScheduler is
 	// running (the real serve loop); tests that use newService() read it directly.
-	webhookFires chan []webhookFire
+	triggerFires chan []triggerFire
 }
 
 func newService() *service {
@@ -71,7 +72,7 @@ func newService() *service {
 		jobs:         newJobManager(),
 		shutdownCh:   make(chan struct{}),
 		bgCtx:        context.Background(),
-		webhookFires: make(chan []webhookFire, webhookFireBuffer),
+		triggerFires: make(chan []triggerFire, triggerFireBuffer),
 	}
 }
 

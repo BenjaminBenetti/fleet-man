@@ -694,11 +694,12 @@ func (x *Agent) GetBackend() BackendType {
 }
 
 // Trigger mirrors internal/fleet.Trigger — an automation trigger (issue #188).
-// type is the string-valued TriggerType ("schedule" | "webhook"); filter_type is
-// the string-valued WebhookFilterType ("regex" | "jsonpath"). Schedule triggers
-// use cron; webhook triggers use webhook_name + filter_type + the matching
-// fields. agent_names references Agents by name. The string-valued enums match
-// the Go model's string types, so the wire mapping is a plain string copy.
+// type is the string-valued TriggerType ("schedule" | "webhook" | "bash");
+// filter_type is the string-valued WebhookFilterType ("regex" | "jsonpath").
+// Schedule triggers use cron; webhook triggers use webhook_name + filter_type +
+// the matching fields; bash triggers use cron + script. agent_names references
+// Agents by name. The string-valued enums match the Go model's string types, so
+// the wire mapping is a plain string copy.
 type Trigger struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -714,7 +715,10 @@ type Trigger struct {
 	// disabled, when true, stops the trigger from firing (the scheduler skips it).
 	// proto3 default false means a missing field reads as enabled, so triggers
 	// written before this field existed keep firing.
-	Disabled      bool `protobuf:"varint,11,opt,name=disabled,proto3" json:"disabled,omitempty"`
+	Disabled bool `protobuf:"varint,11,opt,name=disabled,proto3" json:"disabled,omitempty"`
+	// script is the bash command a bash trigger runs each time its cron is due; a
+	// zero exit fires the agents and the command's stdout is the event payload.
+	Script        string `protobuf:"bytes,12,opt,name=script,proto3" json:"script,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -824,6 +828,13 @@ func (x *Trigger) GetDisabled() bool {
 		return x.Disabled
 	}
 	return false
+}
+
+func (x *Trigger) GetScript() string {
+	if x != nil {
+		return x.Script
+	}
+	return ""
 }
 
 // Fleet mirrors internal/fleet.Fleet. Settings is a NESTED message (not inlined)
@@ -1097,7 +1108,7 @@ const file_domain_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12#\n" +
 	"\rsystem_prompt\x18\x04 \x01(\tR\fsystemPrompt\x120\n" +
-	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackendJ\x04\b\x03\x10\x04\"\xb0\x02\n" +
+	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackendJ\x04\b\x03\x10\x04\"\xc8\x02\n" +
 	"\aTrigger\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1f\n" +
@@ -1113,7 +1124,8 @@ const file_domain_proto_rawDesc = "" +
 	"\n" +
 	"json_value\x18\n" +
 	" \x01(\tR\tjsonValue\x12\x1a\n" +
-	"\bdisabled\x18\v \x01(\bR\bdisabled\"\xa2\x01\n" +
+	"\bdisabled\x18\v \x01(\bR\bdisabled\x12\x16\n" +
+	"\x06script\x18\f \x01(\tR\x06script\"\xa2\x01\n" +
 	"\x05Fleet\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06remote\x18\x02 \x01(\tR\x06remote\x124\n" +

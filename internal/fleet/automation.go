@@ -37,7 +37,23 @@ const (
 	// fleet gateway's webhook endpoint. (Delivering those events is out of
 	// scope for issue #188 — only the definition is modeled here.)
 	TriggerWebhook TriggerType = "webhook"
+	// TriggerBash polls a user-supplied bash command on the same cron schedule
+	// as TriggerSchedule, but only fires its agents when the command exits 0 —
+	// the command's stdout becomes the event payload. It lets users build
+	// arbitrary polling triggers where no webhook is available (e.g. checking an
+	// API, a queue, or a file). The command runs on the fleet host with the
+	// daemon's privileges, so it is author-supplied trusted config (like an
+	// Agent's command), not attacker-supplied input.
+	TriggerBash TriggerType = "bash"
 )
+
+// IsCron reports whether triggers of this type fire on a cron schedule (and so
+// carry a Cron expression): schedule triggers and bash triggers. Webhook
+// triggers are event-driven and return false. The scheduler uses this to decide
+// which triggers its cron loop must sample (see dueCronTriggers).
+func (t TriggerType) IsCron() bool {
+	return t == TriggerSchedule || t == TriggerBash
+}
 
 // WebhookFilterType selects how a webhook trigger decides whether an incoming
 // event should fire its agents.
@@ -82,12 +98,13 @@ type Agent struct {
 }
 
 // Trigger is an automation trigger: it activates one or more Agents with a
-// prompt when its condition (a schedule or a webhook event) is met.
+// prompt when its condition (a schedule, a webhook event, or a passing bash
+// probe) is met.
 type Trigger struct {
 	// Name is the user-chosen label, unique within a fleet's trigger list.
 	Name string `json:"name"`
 
-	// Type is the trigger category (schedule or webhook). Fields below are
+	// Type is the trigger category (schedule, webhook, or bash). Fields below are
 	// interpreted per type (struct composition via a flat record).
 	Type TriggerType `json:"type"`
 
@@ -98,9 +115,16 @@ type Trigger struct {
 	// Prompt is fed to the activated agents (into ${PROMPT}).
 	Prompt string `json:"prompt,omitempty"`
 
-	// Cron is the schedule expression (TriggerSchedule only): a standard 5-field
-	// cron pattern.
+	// Cron is the schedule expression (TriggerSchedule and TriggerBash): a
+	// standard 5-field cron pattern. For a bash trigger it is when the Script is
+	// polled, not when the agents fire — they fire only if the Script exits 0.
 	Cron string `json:"cron,omitempty"`
+
+	// Script is the bash command a TriggerBash trigger runs each time its Cron is
+	// due (TriggerBash only). A zero exit fires the agents and the command's
+	// stdout becomes the event payload; a non-zero exit fires nothing. Runs on
+	// the fleet host (see TriggerBash).
+	Script string `json:"script,omitempty"`
 
 	// WebhookName is appended to the fleet gateway's webhook URL for this
 	// trigger (TriggerWebhook only).
@@ -121,7 +145,7 @@ type Trigger struct {
 	JSONValue string `json:"jsonValue,omitempty"`
 
 	// Disabled, when true, stops the trigger from firing: the scheduler skips it
-	// (dueSchedules) and webhook delivery ignores it (collectWebhookFires), but
+	// (dueCronTriggers) and webhook delivery ignores it (collectWebhookFires), but
 	// the definition is kept so it can be re-enabled. Defaults to false so a
 	// freshly-created trigger — and every trigger persisted before this field
 	// existed — fires as before.
@@ -216,7 +240,19 @@ func NormalizeTrigger(t Trigger, agentNames map[string]struct{}) (Trigger, error
 		if err := ValidateCron(t.Cron); err != nil {
 			return Trigger{}, fmt.Errorf("trigger %q: %w", t.Name, err)
 		}
-		// Clear webhook-only fields.
+		// Clear the bash + webhook-only fields.
+		t.Script = ""
+		t.WebhookName, t.FilterType, t.Regex, t.JSONPath, t.JSONValue = "", "", "", "", ""
+	case TriggerBash:
+		t.Cron = strings.TrimSpace(t.Cron)
+		if err := ValidateCron(t.Cron); err != nil {
+			return Trigger{}, fmt.Errorf("trigger %q: %w", t.Name, err)
+		}
+		t.Script = strings.TrimSpace(t.Script)
+		if t.Script == "" {
+			return Trigger{}, fmt.Errorf("trigger %q: bash script is empty", t.Name)
+		}
+		// Clear webhook-only fields (Cron + Script are kept).
 		t.WebhookName, t.FilterType, t.Regex, t.JSONPath, t.JSONValue = "", "", "", "", ""
 	case TriggerWebhook:
 		t.WebhookName = strings.TrimSpace(t.WebhookName)
@@ -246,8 +282,8 @@ func NormalizeTrigger(t Trigger, agentNames map[string]struct{}) (Trigger, error
 		default:
 			return Trigger{}, fmt.Errorf("trigger %q: invalid webhook filter type %q", t.Name, t.FilterType)
 		}
-		// Clear schedule-only fields.
-		t.Cron = ""
+		// Clear schedule/bash-only fields.
+		t.Cron, t.Script = "", ""
 	default:
 		return Trigger{}, fmt.Errorf("trigger %q: invalid type %q", t.Name, t.Type)
 	}

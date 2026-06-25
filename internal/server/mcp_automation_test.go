@@ -150,6 +150,44 @@ func TestMCPTriggerUpdatePartial(t *testing.T) {
 	}
 }
 
+// TestMCPBashTrigger covers the bash trigger through the MCP tools: create with a
+// cron + script, then a partial update that changes only the script.
+func TestMCPBashTrigger(t *testing.T) {
+	cs := seedBareFleet(t)
+	callJSON(t, cs, "fleet_agent_create", map[string]any{"fleet": "alpha", "name": "a"}, nil)
+
+	var out AutomationOutput
+	callJSON(t, cs, "fleet_trigger_create", map[string]any{
+		"fleet": "alpha", "name": "poll", "type": "bash",
+		"agents": []string{"a"}, "cron": "*/5 * * * *", "script": "test -s /var/queue", "prompt": "drain",
+	}, &out)
+	if len(out.Triggers) != 1 {
+		t.Fatalf("create returned %+v", out.Triggers)
+	}
+	tr := out.Triggers[0]
+	if tr.Type != "bash" || tr.Cron != "*/5 * * * *" || tr.Script != "test -s /var/queue" {
+		t.Fatalf("bash trigger fields wrong: %+v", tr)
+	}
+
+	// A bash trigger with an empty script is rejected (server-side normalize).
+	if msg := callErr(t, cs, "fleet_trigger_create", map[string]any{
+		"fleet": "alpha", "name": "bad", "type": "bash", "agents": []string{"a"}, "cron": "* * * * *",
+	}); !strings.Contains(msg, "script") {
+		t.Errorf("empty-script error = %q", msg)
+	}
+
+	// Partial update: change only the script; cron + prompt are preserved.
+	var upd AutomationOutput
+	callJSON(t, cs, "fleet_trigger_update", map[string]any{"fleet": "alpha", "name": "poll", "script": "curl -sf http://x | grep -q ok"}, &upd)
+	got := upd.Triggers[0]
+	if got.Script != "curl -sf http://x | grep -q ok" {
+		t.Errorf("script not updated: %q", got.Script)
+	}
+	if got.Cron != "*/5 * * * *" || got.Prompt != "drain" {
+		t.Errorf("cron/prompt should be preserved: %+v", got)
+	}
+}
+
 func TestMCPAutomationUnknownFleet(t *testing.T) {
 	cs := seedBareFleet(t)
 	if msg := callErr(t, cs, "fleet_automation_list", map[string]any{"fleet": "ghost"}); !strings.Contains(msg, "not found") {

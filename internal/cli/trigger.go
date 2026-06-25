@@ -11,10 +11,10 @@ import (
 
 // trigger.go is the `fleet trigger` command tree (issue #189): CRUD over a
 // fleet's automation triggers. A trigger fires one or more of the fleet's
-// agents (with a prompt) when its condition is met — a cron schedule or a
-// gateway webhook event. The shared read-modify-write plumbing lives in
-// automation.go; the type-specific field validation lives in fleet.Normalize-
-// Trigger (which AddTrigger/UpdateTrigger apply).
+// agents (with a prompt) when its condition is met — a cron schedule, a gateway
+// webhook event, or a cron-scheduled bash command that exits zero. The shared
+// read-modify-write plumbing lives in automation.go; the type-specific field
+// validation lives in fleet.NormalizeTrigger (which AddTrigger/UpdateTrigger apply).
 
 // newTriggerCmd builds the `fleet trigger` command group.
 func newTriggerCmd() *cobra.Command {
@@ -59,6 +59,7 @@ type triggerFlags struct {
 	agents      []string
 	prompt      string
 	cron        string
+	script      string
 	webhookName string
 	filterType  string
 	regex       string
@@ -68,10 +69,11 @@ type triggerFlags struct {
 
 func (tf *triggerFlags) bind(cmd *cobra.Command, typeDefault, filterDefault string) {
 	f := cmd.Flags()
-	f.StringVar(&tf.triggerType, "type", typeDefault, "trigger type: schedule or webhook")
+	f.StringVar(&tf.triggerType, "type", typeDefault, "trigger type: schedule, webhook, or bash")
 	f.StringArrayVar(&tf.agents, "agent", nil, "agent to activate (repeatable; at least one required)")
 	f.StringVar(&tf.prompt, "prompt", "", "prompt fed to the agents via ${PROMPT}")
-	f.StringVar(&tf.cron, "cron", "", "schedule: 5-field cron expression (schedule type)")
+	f.StringVar(&tf.cron, "cron", "", "5-field cron expression (schedule and bash types)")
+	f.StringVar(&tf.script, "script", "", "bash command run when the cron is due; zero exit fires, stdout is the payload (bash type)")
 	f.StringVar(&tf.webhookName, "webhook-name", "", "webhook: name appended to the gateway URL (webhook type)")
 	f.StringVar(&tf.filterType, "filter-type", filterDefault, "webhook: filter type, regex or jsonpath (webhook type)")
 	f.StringVar(&tf.regex, "regex", "", "webhook: regex the event body must match (regex filter)")
@@ -93,6 +95,7 @@ func (tf *triggerFlags) apply(cmd *cobra.Command, t *fleet.Trigger, onlyChanged 
 	set("agent", func() { t.AgentNames = tf.agents })
 	set("prompt", func() { t.Prompt = tf.prompt })
 	set("cron", func() { t.Cron = tf.cron })
+	set("script", func() { t.Script = tf.script })
 	set("webhook-name", func() { t.WebhookName = tf.webhookName })
 	set("filter-type", func() { t.FilterType = fleet.WebhookFilterType(tf.filterType) })
 	set("regex", func() { t.Regex = tf.regex })
@@ -181,7 +184,7 @@ func newTriggerLogsCmd() *cobra.Command {
 		Use:   "logs <fleet> <name>",
 		Short: "Show a trigger's recorded event logs",
 		Long: "Show a trigger's recorded event logs: the payloads of its recent firings\n" +
-			"(webhook body or schedule fire-time). The last 100 firings are kept.",
+			"(webhook body, bash command stdout, or schedule fire-time). The last 100 firings are kept.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fleetName, name := args[0], args[1]
@@ -199,11 +202,13 @@ func newTriggerLogsCmd() *cobra.Command {
 	}
 }
 
-// triggerDetail is the one-line schedule/webhook summary shown by `list`.
+// triggerDetail is the one-line schedule/webhook/bash summary shown by `list`.
 func triggerDetail(t fleet.Trigger) string {
 	switch t.Type {
 	case fleet.TriggerSchedule:
 		return "cron: " + t.Cron
+	case fleet.TriggerBash:
+		return fmt.Sprintf("cron: %s sh: %s", t.Cron, firstLine(t.Script))
 	case fleet.TriggerWebhook:
 		switch t.FilterType {
 		case fleet.WebhookFilterJSONPath:
@@ -214,4 +219,18 @@ func triggerDetail(t fleet.Trigger) string {
 	default:
 		return string(t.Type)
 	}
+}
+
+// firstLine returns s's first line, truncated with an ellipsis, so a multi-line
+// or long bash script stays on one tidy row of the `list` table.
+func firstLine(s string) string {
+	line := s
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	const max = 40
+	if len(line) > max {
+		return line[:max-1] + "…"
+	}
+	return line
 }

@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -99,26 +101,27 @@ type watchedAgent struct {
 }
 
 // triggerEvent carries the context of the trigger firing that spawned an agent:
-// what fired it (schedule vs webhook), when, and — for a webhook — the request
-// body. launchAutomationCommand materializes payload() into a file inside the
-// instance and tells the agent where to read it (appendEventPrompt), so the
-// agent can act on the actual event rather than the static prompt alone.
+// what fired it (schedule / webhook / bash), when, and — for the body-bearing
+// types — the payload (a webhook's request body, or a bash probe's stdout).
+// launchAutomationCommand materializes payload() into a file inside the instance
+// and tells the agent where to read it (appendEventPrompt), so the agent can act
+// on the actual event rather than the static prompt alone.
 type triggerEvent struct {
 	kind        fleet.TriggerType
 	triggerName string
 	firedAt     time.Time
 	webhookName string // webhook only
-	body        []byte // webhook request body; nil for schedule triggers
+	body        []byte // webhook request body or bash stdout; nil for schedule triggers
 }
 
-// payload returns the bytes written to the in-instance event file: the raw
-// webhook body for a webhook trigger, or the fire time for a schedule trigger
-// (which carries no external payload of its own).
+// payload returns the bytes written to the in-instance event file: the body for
+// the body-bearing types (a webhook's request body, a bash probe's stdout), or
+// the fire time for a schedule trigger (which carries no external payload).
 func (e *triggerEvent) payload() []byte {
-	if e.kind == fleet.TriggerWebhook {
-		return e.body
+	if e.kind == fleet.TriggerSchedule {
+		return []byte(e.firedAt.UTC().Format(time.RFC3339) + "\n")
 	}
-	return []byte(e.firedAt.UTC().Format(time.RFC3339) + "\n")
+	return e.body
 }
 
 func (w *watchedAgent) key() string { return w.fleet + "/" + w.instance }
@@ -136,27 +139,47 @@ func newScheduler() *scheduler {
 	}
 }
 
-// webhookFireBuffer is how many matched webhook events may queue between
-// scheduler drains before the receiver starts shedding (503). The scheduler
-// drains one per loop turn, so this only fills under a sustained burst.
-const webhookFireBuffer = 64
+// triggerFireBuffer is how many matched fires (webhook events or passing bash
+// probes) may queue between scheduler drains before the webhook receiver starts
+// shedding (503). The scheduler drains one batch per loop turn, so this only
+// fills under a sustained burst.
+const triggerFireBuffer = 64
 
-// webhookFire is a matched automation webhook event handed from the (concurrent)
-// webhook receiver to the scheduler goroutine, which spawns the trigger's agents.
-// The receiver has already evaluated the trigger's filter against the event body;
-// body carries that same payload through so each spawned agent can be handed the
-// event it fired on (written into its instance and referenced from the prompt).
-type webhookFire struct {
+// triggerFire is a matched trigger handed from a concurrent producer (the
+// webhook receiver, or a bash probe goroutine) to the single-goroutine scheduler,
+// which spawns the trigger's agents. The producer has already decided the trigger
+// should fire (a webhook filter matched, or a bash probe exited 0); body carries
+// the resulting payload (the webhook request body or the probe's stdout) through
+// so each spawned agent can be handed the event it fired on (written into its
+// instance and referenced from the prompt).
+type triggerFire struct {
 	fleet   string
 	trigger fleet.Trigger
 	body    []byte
 }
 
+// bashProbeTimeout bounds how long a bash trigger's command may run before it is
+// killed (and treated as not-fired). A polling command that hangs must not leak a
+// process/goroutine or stall the next poll. Overridable via
+// FLEET_AUTOMATION_BASH_TIMEOUT (a Go duration); kept under the 1-minute cron
+// granularity by default so a per-minute trigger's runs can't overlap.
+var bashProbeTimeout = envDurationDefault("FLEET_AUTOMATION_BASH_TIMEOUT", 50*time.Second)
+
+// maxBashProbeConcurrency bounds how many bash trigger commands run at once, so a
+// burst of due bash triggers can't spawn an unbounded number of host processes.
+const maxBashProbeConcurrency = 8
+
+// bashProbeSem bounds concurrent bash probes to maxBashProbeConcurrency. A
+// process-wide semaphore (there is one scheduler per process); a probe acquires
+// before running its command and releases when done.
+var bashProbeSem = make(chan struct{}, maxBashProbeConcurrency)
+
 // runScheduler is the automation loop; it returns when ctx is cancelled. It
 // ticks once immediately so a trigger whose cron matches the current minute
 // fires promptly on daemon start instead of waiting up to a full interval, and
-// drains webhook fires between ticks so a delivered event spawns its agents
-// promptly. Both paths run on THIS goroutine, so sched's maps stay lock-free.
+// drains async fires (webhook events, passing bash probes) between ticks so a
+// produced fire spawns its agents promptly. Both paths run on THIS goroutine, so
+// sched's maps stay lock-free.
 func (s *service) runScheduler(ctx context.Context) {
 	sched := newScheduler()
 	ticker := time.NewTicker(scheduleTickInterval)
@@ -167,33 +190,33 @@ func (s *service) runScheduler(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-		case batch := <-s.webhookFires:
-			s.fireWebhookBatch(sched, batch, time.Now())
+		case batch := <-s.triggerFires:
+			s.fireTriggerBatch(sched, batch, time.Now())
 		}
 	}
 }
 
-// fireWebhookBatch spawns the agents of every matched webhook trigger in a
-// request's batch, on the SCHEDULER goroutine (so it touches sched.watched
-// without locking, like the schedule path). The receiver already matched each
-// trigger's filter; here we just resolve each fleet's CURRENT agents (state may
-// have changed since delivery) and spawn them. The next loop iteration's
-// schedulerTick reloads state and services the freshly-watched agents (launch on
-// running, reap on idle), so webhook-spawned agents ride the exact same lifecycle
-// as scheduled ones.
-func (s *service) fireWebhookBatch(sched *scheduler, batch []webhookFire, now time.Time) {
+// fireTriggerBatch spawns the agents of every fire in a batch, on the SCHEDULER
+// goroutine (so it touches sched.watched without locking, like the schedule
+// path). The producer already decided each trigger should fire (a matched webhook
+// filter, or a passing bash probe); here we just resolve each fleet's CURRENT
+// agents (state may have changed since the fire was produced) and spawn them. The
+// next loop iteration's schedulerTick reloads state and services the
+// freshly-watched agents (launch on running, reap on idle), so async-fired agents
+// ride the exact same lifecycle as scheduled ones.
+func (s *service) fireTriggerBatch(sched *scheduler, batch []triggerFire, now time.Time) {
 	if len(batch) == 0 {
 		return
 	}
 	st, err := scheduleLoadState()
 	if err != nil {
-		flog.Warn("automation: webhook load state failed", "err", err)
+		flog.Warn("automation: fire batch load state failed", "err", err)
 		return
 	}
 	for _, f := range batch {
 		agents := agentsForTrigger(st.Fleets[f.fleet], f.trigger)
 		if len(agents) == 0 {
-			flog.Warn("automation: webhook trigger has no live agents", "fleet", f.fleet, "trigger", f.trigger.Name)
+			flog.Warn("automation: fired trigger has no live agents", "fleet", f.fleet, "trigger", f.trigger.Name)
 			continue
 		}
 		s.fireTriggerAgents(sched, f.fleet, f.trigger, agents, now, f.body)
@@ -212,7 +235,16 @@ func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.
 		return
 	}
 	fired := false
-	for _, due := range dueSchedules(st.Fleets, now, sched.lastFired) {
+	for _, due := range dueCronTriggers(st.Fleets, now, sched.lastFired) {
+		if due.trigger.Type == fleet.TriggerBash {
+			// A bash trigger's cron only schedules a poll — it fires its agents only
+			// if its command exits 0. Run the command OFF the tick (it may be slow or
+			// block); on a zero exit the probe hands the trigger back via triggerFires
+			// to spawn the agents (see startBashProbe). Nothing is spawned here, so
+			// `fired` stays as-is.
+			startBashProbe(s, due.fleet, due.trigger, now)
+			continue
+		}
 		agents := agentsForTrigger(st.Fleets[due.fleet], due.trigger)
 		// Schedule triggers carry no external payload — the event file gets the
 		// fire time (see triggerEvent.payload), so pass a nil body here.
@@ -276,16 +308,22 @@ func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger 
 	return fired
 }
 
-// scheduledFire is one trigger that should fire now.
+// scheduledFire is one cron trigger that is due now (a schedule or bash trigger).
 type scheduledFire struct {
 	fleet   string
 	trigger fleet.Trigger
 }
 
-// dueSchedules returns the schedule triggers whose cron matches now and that
-// have not already fired this minute, recording the fire in lastFired. Pure
-// except for the lastFired bookkeeping, so it is unit-tested directly.
-func dueSchedules(fleets map[string]*fleet.Fleet, now time.Time, lastFired map[string]time.Time) []scheduledFire {
+// dueCronTriggers returns the cron-driven triggers (schedule AND bash — see
+// TriggerType.IsCron) whose cron matches now and that have not already fired this
+// minute, recording the due in lastFired. It is the shared cron sampler: a
+// schedule trigger that comes back fires its agents immediately, while a bash
+// trigger first runs its command and fires only on a zero exit (the caller
+// branches on type). Recording lastFired at due-detection time — before a bash
+// command even runs — is what keeps the two ticks within one minute from polling
+// the same command twice. Pure except for the lastFired bookkeeping, so it is
+// unit-tested directly.
+func dueCronTriggers(fleets map[string]*fleet.Fleet, now time.Time, lastFired map[string]time.Time) []scheduledFire {
 	minute := now.Truncate(time.Minute)
 	current := make(map[string]struct{})
 	var out []scheduledFire
@@ -294,7 +332,7 @@ func dueSchedules(fleets map[string]*fleet.Fleet, now time.Time, lastFired map[s
 			continue
 		}
 		for _, t := range f.Settings.Triggers {
-			if t.Type != fleet.TriggerSchedule {
+			if !t.Type.IsCron() {
 				continue
 			}
 			key := name + "\x00" + t.Name
@@ -534,9 +572,12 @@ func automationEventPath(firedAt time.Time) string {
 // than working from the static prompt alone. A blank prompt becomes just the note.
 func appendEventPrompt(prompt string, e *triggerEvent, path string) string {
 	var detail string
-	if e.kind == fleet.TriggerWebhook {
+	switch e.kind {
+	case fleet.TriggerWebhook:
 		detail = fmt.Sprintf("Its payload has been written to %s in this instance — read that file for the event details.", path)
-	} else {
+	case fleet.TriggerBash:
+		detail = fmt.Sprintf("The output of its bash probe has been written to %s in this instance — read that file for the event details.", path)
+	default:
 		detail = fmt.Sprintf("The time it fired has been written to %s in this instance.", path)
 	}
 	note := fmt.Sprintf("This session was started automatically by the %q %s trigger. %s", e.triggerName, e.kind, detail)
@@ -612,4 +653,64 @@ var reapAutomationInstance = func(s *service, fleetName, instanceName string) {
 	}); err != nil {
 		flog.Error("automation: reap failed", "fleet", fleetName, "instance", instanceName, "err", err)
 	}
+}
+
+// startBashProbe runs a bash trigger's command off the scheduler goroutine and,
+// on a zero exit, hands the trigger to the scheduler (via triggerFires) to fire
+// its agents — the command's stdout becomes the event payload. A non-zero exit, a
+// timeout, or an exec error means the polled condition is not met, so nothing
+// fires. It runs asynchronously (a slow polling command must not stall the
+// scheduler tick, mirroring the webhook delivery path) and is bounded by
+// bashProbeSem so a burst of due bash triggers can't spawn unbounded host
+// processes. A package var so schedulerTick tests can stub it.
+var startBashProbe = func(s *service, fleetName string, trigger fleet.Trigger, now time.Time) {
+	go func() {
+		bashProbeSem <- struct{}{}
+		defer func() { <-bashProbeSem }()
+
+		ctx, cancel := context.WithTimeout(s.bgCtx, bashProbeTimeout)
+		defer cancel()
+		stdout, ok, err := runBashScript(ctx, trigger.Script)
+		if !ok {
+			// "Condition not met" is the normal non-firing outcome, so log at info.
+			flog.Info("automation: bash trigger did not fire", "fleet", fleetName, "trigger", trigger.Name, "err", err)
+			return
+		}
+		flog.Info("automation: bash trigger fired", "fleet", fleetName, "trigger", trigger.Name, "bytes", len(stdout))
+		// Deliver as a single-fire batch on the shared channel (drained by
+		// runScheduler → fireTriggerBatch on the scheduler goroutine). Best-effort:
+		// give up if the daemon is shutting down rather than leaking this goroutine.
+		select {
+		case s.triggerFires <- []triggerFire{{fleet: fleetName, trigger: trigger, body: stdout}}:
+		case <-s.bgCtx.Done():
+		}
+	}()
+}
+
+// runBashScript runs a bash trigger's command on the fleet host and returns its
+// stdout (the event payload), whether it exited 0, and the run error if any.
+// stdout is captured in ISOLATION from stderr, so the payload is exactly the
+// command's output; stderr is folded into the error for logging a failed probe.
+// The command is killed when ctx (a bashProbeTimeout deadline) expires. A package
+// var so tests can stub the exec without spawning a real shell.
+//
+// WaitDelay is load-bearing: CommandContext SIGKILLs only the direct child
+// (bash), but a backgrounded grandchild (e.g. `slow &`) or a pipeline element can
+// inherit the stdout pipe's write end and keep it open, so cmd.Run() would block
+// at the pipe — well past the deadline — and (worse) then report a zero exit, a
+// false fire. WaitDelay force-closes the pipes shortly after the deadline so Run
+// returns with an error (→ exitZero false, not-fired) and the goroutine + its
+// bashProbeSem slot unwind. Same fix as runProbeWithTimeout (pr_status.go) and
+// CombinedOutputWithTimeout (backend/cmd.go).
+var runBashScript = func(ctx context.Context, script string) (stdout []byte, exitZero bool, err error) {
+	cmd := exec.CommandContext(ctx, "bash", "-c", script)
+	cmd.WaitDelay = 3 * time.Second
+	var out, errBuf bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
+	err = cmd.Run()
+	if err != nil && errBuf.Len() > 0 {
+		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(errBuf.String()))
+	}
+	return out.Bytes(), err == nil, err
 }
