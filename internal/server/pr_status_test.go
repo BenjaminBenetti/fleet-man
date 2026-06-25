@@ -307,24 +307,64 @@ func TestParsePRProbeOutput_ConcatenatedObjects(t *testing.T) {
 	}
 }
 
-func TestParsePRProbeOutput_EmptyAndClosed(t *testing.T) {
-	// No open PRs => the script emits nothing => nil. A closed PR (filtered by
-	// state) also contributes nothing.
+func TestParsePRProbeOutput_Empty(t *testing.T) {
+	// No PRs at all => the script emits nothing => nil (the branch never had a PR).
 	if got := parsePRProbeOutput(""); got != nil {
 		t.Errorf("empty output = %+v, want nil", got)
 	}
-	closed := `{"number":1,"state":"CLOSED","mergeStateStatus":"CLEAN","statusCheckRollup":[]}`
-	if got := parsePRProbeOutput(closed); got != nil {
-		t.Errorf("closed-only output = %+v, want nil (no open PRs)", got)
-	}
+}
 
-	// A closed object followed by a genuinely open one => one open PR.
-	out := closed + "\n" + `{"number":2,"state":"OPEN","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}` + "\n"
-	got := parsePRProbeOutput(out)
+func TestParsePRProbeOutput_ClosedPersistsPurple(t *testing.T) {
+	// A branch whose only PR is closed/merged keeps a persistent purple tag (issue
+	// #203) rather than vanishing — open_count 0, closed_count > 0, the closed PR
+	// kept as a ref so the tag stays clickable.
+	for _, tc := range []struct {
+		name, state string
+	}{
+		{"closed", "CLOSED"},
+		{"merged", "MERGED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := `{"number":1,"state":"` + tc.state + `","url":"https://example.test/pr/1","title":"old work"}`
+			got := parsePRProbeOutput(out)
+			if got == nil {
+				t.Fatalf("%s-only output = nil, want a purple tag", tc.state)
+			}
+			if got.GetOpenCount() != 0 {
+				t.Errorf("OpenCount = %d, want 0", got.GetOpenCount())
+			}
+			if got.GetClosedCount() != 1 {
+				t.Errorf("ClosedCount = %d, want 1", got.GetClosedCount())
+			}
+			if got.GetPrSignal() != fleetgrpc.PrSignal_PR_SIGNAL_PURPLE {
+				t.Errorf("PrSignal = %v, want PURPLE", got.GetPrSignal())
+			}
+			if n := len(got.GetPrs()); n != 1 {
+				t.Fatalf("len(Prs) = %d, want 1 (kept clickable)", n)
+			}
+			if got.GetPrs()[0].GetNumber() != 1 {
+				t.Errorf("Prs[0].Number = %d, want 1", got.GetPrs()[0].GetNumber())
+			}
+		})
+	}
+}
+
+func TestParsePRProbeOutput_OpenWinsOverClosed(t *testing.T) {
+	// An open PR (workspace repo) and a closed one (a subrepo) => the open status
+	// wins; the closed one neither shows nor inflates closed_count.
+	closed := `{"number":1,"state":"CLOSED","url":"https://example.test/pr/1","title":"old"}`
+	open := `{"number":2,"state":"OPEN","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}`
+	got := parsePRProbeOutput(closed + "\n" + open + "\n")
 	if got == nil {
 		t.Fatalf("parsePRProbeOutput returned nil, want one open PR")
 	}
 	if got.GetOpenCount() != 1 {
 		t.Errorf("OpenCount = %d, want 1", got.GetOpenCount())
+	}
+	if got.GetClosedCount() != 0 {
+		t.Errorf("ClosedCount = %d, want 0 (open takes priority)", got.GetClosedCount())
+	}
+	if got.GetPrSignal() != fleetgrpc.PrSignal_PR_SIGNAL_GREEN {
+		t.Errorf("PrSignal = %v, want GREEN (the open PR)", got.GetPrSignal())
 	}
 }

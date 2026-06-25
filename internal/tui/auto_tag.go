@@ -21,6 +21,8 @@ func prSignalStyle(sig fleetgrpc.PrSignal) lipgloss.Style {
 		return prGreenStyle
 	case fleetgrpc.PrSignal_PR_SIGNAL_RED:
 		return prRedStyle
+	case fleetgrpc.PrSignal_PR_SIGNAL_PURPLE:
+		return prPurpleStyle
 	default:
 		return prYellowStyle
 	}
@@ -40,16 +42,19 @@ func prChecksStyle(sig fleetgrpc.PrSignal) lipgloss.Style {
 }
 
 // instanceAutoTag renders the auto tag for an instance, or "" when there is
-// nothing to show — gh is unavailable inside the instance, no PR is open, or the
-// status hasn't been probed yet. The format is "[PR|PRxN] [Rejected | Accepted |
-// Pending] [Checks x/x]", each element coloured and shown only when it applies.
+// nothing to show — gh is unavailable inside the instance, the branch never had a
+// PR, or the status hasn't been probed yet. The format is "[PR|PRxN] [Rejected |
+// Accepted | Pending] [Checks x/x]", each element coloured and shown only when it
+// applies. When the only PR(s) are closed or merged, it shrinks to a single
+// purple "PR" badge (no review/checks) that persists so a finished instance stays
+// distinguishable from one that never had a PR.
 //
 // When selected (horizontally, via →/l), the whole tag is drawn as one chunk in
 // the pink selection colour wrapped in [ ], so it reads as a single navigable
 // unit rather than three separately-coloured indicators.
 func (m *model) instanceAutoTag(fleetName, instance string, selected bool) string {
 	ps := m.runtime[rtKey(fleetName, instance)].GetPrStatus()
-	if ps == nil || ps.GetOpenCount() == 0 {
+	if ps == nil || (ps.GetOpenCount() == 0 && ps.GetClosedCount() == 0) {
 		return ""
 	}
 

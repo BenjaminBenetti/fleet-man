@@ -75,6 +75,12 @@ var (
 	prGrayStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240"))
 
+	// Purple marks a closed/merged PR, matching GitHub's own colour. The tag is
+	// kept visible (rather than vanishing) so a finished instance is
+	// distinguishable from one that never had a PR.
+	prPurpleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("99"))
+
 	// Agent tool indicator
 	agentWorkingStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("42")).
