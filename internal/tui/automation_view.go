@@ -126,6 +126,11 @@ func triggerSummary(t fleet.Trigger) string {
 		if t.Cron == "" {
 			detail = "⏱ (no schedule)"
 		}
+	case fleet.TriggerBash:
+		detail = "⚙ bash " + t.Cron
+		if t.Cron == "" {
+			detail = "⚙ bash (no schedule)"
+		}
 	case fleet.TriggerWebhook:
 		detail = "⇄ webhook:" + t.WebhookName
 	default:

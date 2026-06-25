@@ -20,9 +20,10 @@ import (
 )
 
 // trigger_logs.go records and serves a per-trigger history of automation
-// firings, for debuggability. Each time a trigger fires (the schedule and
-// webhook paths both funnel through fireTriggerAgents), the daemon writes the
-// firing's event payload — the webhook request body, or the schedule fire-time — to
+// firings, for debuggability. Each time a trigger fires (the schedule, webhook,
+// and bash paths all funnel through fireTriggerAgents), the daemon writes the
+// firing's event payload — the webhook request body, a bash probe's stdout, or the
+// schedule fire-time — to
 //
 //	~/.fleet/logs/<fleet>/trigger/<trigger>/event-<UTC timestamp>.log
 //

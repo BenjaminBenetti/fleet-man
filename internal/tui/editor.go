@@ -11,10 +11,10 @@ import (
 )
 
 // editor.go backs the "edit this field in $EDITOR" experience for the automation
-// dialogs' long free-text fields — an agent's system prompt and a trigger's
-// prompt. Inline single-line editing is miserable for many-line text, so
-// selecting one of these fields opens the user's $EDITOR on a temp file and
-// reads the result back when they exit.
+// dialogs' long free-text fields — an agent's system prompt, a trigger's prompt,
+// and a bash trigger's script. Inline single-line editing is miserable for
+// many-line text, so selecting one of these fields opens the user's $EDITOR on a
+// temp file and reads the result back when they exit.
 
 // editorTarget identifies which dialog field an $EDITOR session feeds back into.
 type editorTarget int
@@ -22,6 +22,7 @@ type editorTarget int
 const (
 	editorTargetAgentSysPrompt editorTarget = iota
 	editorTargetTriggerPrompt
+	editorTargetTriggerScript
 )
 
 // editorFinishedMsg carries an $EDITOR session's result back to the dialog that
@@ -113,6 +114,9 @@ func (fleetPage *fleetPage) applyEditorResult(m *model, msg editorFinishedMsg) t
 		fleetPage.autosaveAgent(m)
 	case editorTargetTriggerPrompt:
 		fleetPage.triggerDlg.prompt = msg.value
+		fleetPage.autosaveTrigger(m)
+	case editorTargetTriggerScript:
+		fleetPage.triggerDlg.script = msg.value
 		fleetPage.autosaveTrigger(m)
 	}
 	return nil

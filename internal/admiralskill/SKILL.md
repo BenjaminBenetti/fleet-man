@@ -141,8 +141,9 @@ the task as its prompt, then read the session to see what it's doing or asking.
 **Configure automations.** A fleet can run unattended: **agents** are worker
 definitions (a launch command with `${PROMPT}`/`${SYS_PROMPT}` placeholders, a
 system prompt, an env backend) and **triggers** fire one or more agents — on a
-cron **schedule** or a gateway **webhook** event — each firing spins up a fresh
-instance that runs the agent. These tools let you set that up for the user.
+cron **schedule**, a gateway **webhook** event, or a cron-polled **bash** command
+that exits zero — each firing spins up a fresh instance that runs the agent.
+These tools let you set that up for the user.
 
 - `fleet_automation_list {fleet}` returns the fleet's `{agents, triggers}`.
   Read it first before an update — updates are field-merges, so you send only
@@ -153,15 +154,16 @@ instance that runs the agent. These tools let you set that up for the user.
   triggers that reference it). `fleet_agent_delete {fleet, name}` refuses while
   a trigger still references the agent — detach it first.
 - `fleet_trigger_create {fleet, name, type, agents[], prompt?, ...}` where
-  `type` is `schedule` (needs `cron`) or `webhook` (needs `webhook_name` +
-  `filter_type` `regex`/`jsonpath` and the matching `regex` or
-  `json_path`+`json_value`); `agents` names the agents it fires (each must
-  exist). `fleet_trigger_update` merges fields like the agent one;
-  `fleet_trigger_delete {fleet, name}` removes it.
+  `type` is `schedule` (needs `cron`), `bash` (needs `cron` + `script`, a command
+  run on the fleet host whose zero exit fires the agents and whose stdout is the
+  payload), or `webhook` (needs `webhook_name` + `filter_type` `regex`/`jsonpath`
+  and the matching `regex` or `json_path`+`json_value`); `agents` names the agents
+  it fires (each must exist). `fleet_trigger_update` merges fields like the agent
+  one; `fleet_trigger_delete {fleet, name}` removes it.
 - `fleet_trigger_logs {fleet, trigger}` returns `{logs, count}` — the recorded
-  payloads of the trigger's recent firings (webhook body or schedule fire-time),
-  concatenated oldest-first. Use it to debug what fired (or failed to fire) an
-  automation; the daemon keeps the last 100 firings per trigger.
+  payloads of the trigger's recent firings (webhook body, bash command stdout, or
+  schedule fire-time), concatenated oldest-first. Use it to debug what fired (or
+  failed to fire) an automation; the daemon keeps the last 100 firings per trigger.
 
 Every write returns the fleet's resulting `{agents, triggers}`. Names are
 unique per fleet; an invalid cron, an unknown agent reference, or a duplicate
@@ -225,7 +227,7 @@ AUTOMATION  (unattended agents fired by triggers; every write returns {agents, t
   fleet_agent_create {fleet, name, command?, system_prompt?, backend?}
   fleet_agent_update {fleet, name, new_name?, command?, system_prompt?, backend?}   # omit a field to keep it
   fleet_agent_delete {fleet, name}                             # fails if a trigger references it
-  fleet_trigger_create {fleet, name, type, agents:[...], prompt?, cron? | webhook_name?+filter_type?+regex?|json_path?+json_value?}
+  fleet_trigger_create {fleet, name, type, agents:[...], prompt?, cron? (schedule) | cron?+script? (bash) | webhook_name?+filter_type?+regex?|json_path?+json_value? (webhook)}
   fleet_trigger_update {fleet, name, new_name?, type?, agents?, ...}                 # omit a field to keep it
   fleet_trigger_delete {fleet, name}
   fleet_trigger_logs {fleet, trigger}                          # recorded firing payloads (debug what fired it)

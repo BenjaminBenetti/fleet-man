@@ -29,7 +29,7 @@ import (
 
 // webhookStack stands up the full real stack with the default webhook trigger
 // ("ci", regex `"action":"opened"`) and returns the gateway-minted public webhook
-// base URL, a cert pool trusting the gateway, and the service (whose webhookFires
+// base URL, a cert pool trusting the gateway, and the service (whose triggerFires
 // channel the test drains to confirm a fire).
 func webhookStack(t *testing.T) (publicWebhookBase string, pool *x509.CertPool, svc *service) {
 	t.Helper()
@@ -150,7 +150,7 @@ func TestWebhookDeliveryEndToEnd(t *testing.T) {
 	}
 
 	select {
-	case batch := <-svc.webhookFires:
+	case batch := <-svc.triggerFires:
 		if len(batch) != 1 || batch[0].fleet != "alpha" || batch[0].trigger.Name != "ci" {
 			t.Fatalf("unexpected fire batch through the tunnel: %+v", batch)
 		}
@@ -187,7 +187,7 @@ func TestWebhookJSONPathDeliveryEndToEnd(t *testing.T) {
 		t.Fatalf("matching json-path webhook POST -> %d, want 200", resp.StatusCode)
 	}
 	select {
-	case batch := <-svc.webhookFires:
+	case batch := <-svc.triggerFires:
 		if len(batch) != 1 || batch[0].fleet != "alpha" || batch[0].trigger.Name != "deploy" {
 			t.Fatalf("unexpected fire batch through the tunnel: %+v", batch)
 		}
@@ -209,7 +209,7 @@ func TestWebhookJSONPathDeliveryEndToEnd(t *testing.T) {
 		t.Fatalf("non-matching json-path webhook POST -> %d, want 200 (name wired, filter didn't match)", resp2.StatusCode)
 	}
 	select {
-	case batch := <-svc.webhookFires:
+	case batch := <-svc.triggerFires:
 		t.Fatalf("json-path filter must not fire when $.ref differs, got %+v", batch)
 	case <-time.After(500 * time.Millisecond):
 		// expected: nothing enqueued
@@ -232,7 +232,7 @@ func TestWebhookJSONPathDeliveryEndToEnd(t *testing.T) {
 		t.Fatalf("malformed json-path webhook POST -> %d, want 400 (json-path needs a JSON body)", resp3.StatusCode)
 	}
 	select {
-	case batch := <-svc.webhookFires:
+	case batch := <-svc.triggerFires:
 		t.Fatalf("a rejected json-path body must fire nothing, got %+v", batch)
 	case <-time.After(500 * time.Millisecond):
 		// expected: nothing enqueued

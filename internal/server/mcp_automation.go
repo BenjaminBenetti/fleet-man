@@ -40,6 +40,7 @@ type mcpTrigger struct {
 	Agents      []string `json:"agents"`
 	Prompt      string   `json:"prompt,omitempty"`
 	Cron        string   `json:"cron,omitempty"`
+	Script      string   `json:"script,omitempty"`
 	WebhookName string   `json:"webhook_name,omitempty"`
 	FilterType  string   `json:"filter_type,omitempty"`
 	Regex       string   `json:"regex,omitempty"`
@@ -71,6 +72,7 @@ func toMCPAutomation(s fleet.FleetSettings) AutomationOutput {
 			Agents:      t.AgentNames,
 			Prompt:      t.Prompt,
 			Cron:        t.Cron,
+			Script:      t.Script,
 			WebhookName: t.WebhookName,
 			FilterType:  string(t.FilterType),
 			Regex:       t.Regex,
@@ -225,10 +227,11 @@ func (s *service) mcpAgentDelete(ctx context.Context, _ *mcp.CallToolRequest, in
 type FleetTriggerCreateInput struct {
 	Fleet       string   `json:"fleet" jsonschema:"fleet name"`
 	Name        string   `json:"name" jsonschema:"trigger name, unique within the fleet"`
-	Type        string   `json:"type" jsonschema:"trigger type: schedule (cron) or webhook"`
+	Type        string   `json:"type" jsonschema:"trigger type: schedule (cron), webhook, or bash (cron-polled command)"`
 	Agents      []string `json:"agents" jsonschema:"names of the agents this trigger activates (at least one, each must exist in the fleet)"`
 	Prompt      string   `json:"prompt,omitempty" jsonschema:"prompt fed to the agents via ${PROMPT}"`
-	Cron        string   `json:"cron,omitempty" jsonschema:"schedule type: 5-field cron expression, e.g. 0 9 * * 1-5"`
+	Cron        string   `json:"cron,omitempty" jsonschema:"schedule and bash types: 5-field cron expression, e.g. 0 9 * * 1-5"`
+	Script      string   `json:"script,omitempty" jsonschema:"bash type: command run on the fleet host each time the cron is due; a zero exit fires the agents and the command's stdout is the event payload"`
 	WebhookName string   `json:"webhook_name,omitempty" jsonschema:"webhook type: name appended to the gateway webhook URL"`
 	FilterType  string   `json:"filter_type,omitempty" jsonschema:"webhook type: how events are matched, regex or jsonpath"`
 	Regex       string   `json:"regex,omitempty" jsonschema:"webhook regex filter: the event body must match this expression"`
@@ -243,6 +246,7 @@ func triggerFromCreate(in FleetTriggerCreateInput) fleet.Trigger {
 		AgentNames:  in.Agents,
 		Prompt:      in.Prompt,
 		Cron:        in.Cron,
+		Script:      in.Script,
 		WebhookName: in.WebhookName,
 		FilterType:  fleet.WebhookFilterType(in.FilterType),
 		Regex:       in.Regex,
@@ -268,10 +272,11 @@ type FleetTriggerUpdateInput struct {
 	Fleet       string   `json:"fleet" jsonschema:"fleet name"`
 	Name        string   `json:"name" jsonschema:"name of the trigger to update"`
 	NewName     string   `json:"new_name,omitempty" jsonschema:"rename the trigger; omit to keep the name"`
-	Type        string   `json:"type,omitempty" jsonschema:"new type, schedule or webhook; omit to keep current"`
+	Type        string   `json:"type,omitempty" jsonschema:"new type, schedule, webhook, or bash; omit to keep current"`
 	Agents      []string `json:"agents,omitempty" jsonschema:"replacement set of agent names; omit to keep current"`
 	Prompt      string   `json:"prompt,omitempty" jsonschema:"new prompt; omit to keep current"`
 	Cron        string   `json:"cron,omitempty" jsonschema:"new cron expression; omit to keep current"`
+	Script      string   `json:"script,omitempty" jsonschema:"new bash command (bash type); omit to keep current"`
 	WebhookName string   `json:"webhook_name,omitempty" jsonschema:"new webhook name; omit to keep current"`
 	FilterType  string   `json:"filter_type,omitempty" jsonschema:"new webhook filter type, regex or jsonpath; omit to keep current"`
 	Regex       string   `json:"regex,omitempty" jsonschema:"new webhook regex; omit to keep current"`
@@ -303,6 +308,9 @@ func (s *service) mcpTriggerUpdate(ctx context.Context, _ *mcp.CallToolRequest, 
 		}
 		if in.Cron != "" {
 			t.Cron = in.Cron
+		}
+		if in.Script != "" {
+			t.Script = in.Script
 		}
 		if in.WebhookName != "" {
 			t.WebhookName = in.WebhookName

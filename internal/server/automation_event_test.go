@@ -23,6 +23,20 @@ func TestTriggerEventPayload(t *testing.T) {
 		t.Fatalf("webhook payload = %q, want %q", got, body)
 	}
 
+	// Bash: the command's stdout is the payload, verbatim.
+	out := []byte("queue=3\nready\n")
+	bash := &triggerEvent{kind: fleet.TriggerBash, body: out, firedAt: now}
+	if got := bash.payload(); !bytes.Equal(got, out) {
+		t.Fatalf("bash payload = %q, want %q", got, out)
+	}
+
+	// Bash with no stdout (e.g. `test -s file`): fall back to the fire time so the
+	// agent's event file is never empty.
+	emptyBash := &triggerEvent{kind: fleet.TriggerBash, body: []byte{}, firedAt: now}
+	if got, want := string(emptyBash.payload()), "2026-06-22T09:30:15Z\n"; got != want {
+		t.Fatalf("empty bash payload = %q, want fire-time %q", got, want)
+	}
+
 	// Schedule: no external payload, so the fire time stands in.
 	sch := &triggerEvent{kind: fleet.TriggerSchedule, firedAt: now}
 	if got, want := string(sch.payload()), "2026-06-22T09:30:15Z\n"; got != want {
@@ -46,6 +60,14 @@ func TestAppendEventPrompt(t *testing.T) {
 	for _, want := range []string{"run the report", `"nightly" schedule trigger`, path} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("schedule prompt missing %q:\n%s", want, got)
+		}
+	}
+
+	bash := &triggerEvent{kind: fleet.TriggerBash, triggerName: "poll"}
+	got = appendEventPrompt("handle it", bash, path)
+	for _, want := range []string{"handle it", `"poll" bash trigger`, path, "output of its bash probe"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("bash prompt missing %q:\n%s", want, got)
 		}
 	}
 
@@ -125,7 +147,7 @@ func TestFireTriggerAgentsAttachesEvent(t *testing.T) {
 	body := []byte(`{"ref":"main"}`)
 	sched := newScheduler()
 	wtrig := fleet.Trigger{Name: "ci", Type: fleet.TriggerWebhook, AgentNames: []string{"a"}, WebhookName: "ci"}
-	s.fireWebhookBatch(sched, []webhookFire{{fleet: "alpha", trigger: wtrig, body: body}}, now)
+	s.fireTriggerBatch(sched, []triggerFire{{fleet: "alpha", trigger: wtrig, body: body}}, now)
 	ev := sched.watched["alpha/inst-a"].event
 	if ev == nil {
 		t.Fatal("webhook agent has no event")

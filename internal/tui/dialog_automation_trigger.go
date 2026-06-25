@@ -12,10 +12,10 @@ import (
 
 // dialog_automation_trigger.go is the add/edit-trigger modal (issue #188). A
 // trigger fires one or more of the fleet's agents (with a prompt) when its
-// condition is met. The fields shown depend on the trigger type (schedule vs
-// webhook) and, for webhooks, on the filter type (regex vs json-path) — the
-// visible-row list (visibleTriggerRows) recomputes on every change so navigation
-// only ever lands on a field that currently applies.
+// condition is met. The fields shown depend on the trigger type (schedule /
+// webhook / bash) and, for webhooks, on the filter type (regex vs json-path) —
+// the visible-row list (visibleTriggerRows) recomputes on every change so
+// navigation only ever lands on a field that currently applies.
 
 // Trigger dialog field ids. Agent toggle rows use trigRowAgentBase+i so the
 // fixed fields and the variable-length agent list never collide.
@@ -25,6 +25,7 @@ const (
 	trigRowEnabled
 	trigRowPrompt
 	trigRowCron
+	trigRowScript
 	trigRowWebhookName
 	trigRowWebhookURL
 	trigRowFilterType
@@ -50,6 +51,7 @@ type automationTriggerState struct {
 	agentSel    map[string]bool // agent name -> activated by this trigger
 	prompt      string
 	cron        string
+	script      string
 	webhookName string
 	filterType  fleet.WebhookFilterType
 	regex       string
@@ -106,6 +108,7 @@ func (fleetPage *fleetPage) openEditTriggerDialog(m *model, fleetName string, id
 		agentSel:    sel,
 		prompt:      t.Prompt,
 		cron:        t.Cron,
+		script:      t.Script,
 		webhookName: t.WebhookName,
 		filterType:  filterType,
 		regex:       t.Regex,
@@ -118,19 +121,22 @@ func (fleetPage *fleetPage) openEditTriggerDialog(m *model, fleetName string, id
 
 // visibleTriggerRows is the ordered list of currently-applicable field ids.
 // Order: Name, Type, Enabled, Prompt, then the type-specific rows (webhook:
-// name, filter, regex/json — schedule: cron), then the Agents list, then the
-// webhook URL (last, after Agents), then Save.
+// name, filter, regex/json — schedule: cron — bash: cron, script), then the
+// Agents list, then the webhook URL (last, after Agents), then Save.
 func (fleetPage *fleetPage) visibleTriggerRows(m *model) []int {
 	st := &fleetPage.triggerDlg
 	rows := []int{trigRowName, trigRowType, trigRowEnabled, trigRowPrompt}
-	if st.triggerType == fleet.TriggerWebhook {
+	switch st.triggerType {
+	case fleet.TriggerWebhook:
 		rows = append(rows, trigRowWebhookName, trigRowFilterType)
 		if st.filterType == fleet.WebhookFilterJSONPath {
 			rows = append(rows, trigRowJSONPath, trigRowJSONValue)
 		} else {
 			rows = append(rows, trigRowRegex)
 		}
-	} else {
+	case fleet.TriggerBash:
+		rows = append(rows, trigRowCron, trigRowScript)
+	default:
 		rows = append(rows, trigRowCron)
 	}
 	for i := range fleetAgents(m, st.fleetName) {
@@ -200,14 +206,18 @@ func (fleetPage *fleetPage) updateAutomationTrigger(m *model, msg tea.Msg) tea.C
 		return fleetPage.triggerRowEnter(m)
 	case " ":
 		return fleetPage.triggerRowToggle(m)
-	case "left", "h", "right", "l":
-		fleetPage.triggerRowCycle(m)
+	case "left", "h":
+		fleetPage.triggerRowCycle(m, false)
+		return nil
+	case "right", "l":
+		fleetPage.triggerRowCycle(m, true)
 		return nil
 	}
 
 	// A printable key activates an inline text field and feeds the key. The
-	// editor-backed prompt is excluded — it opens $EDITOR on enter instead.
-	if isDialogTextKey(key) && isTriggerTextRow(st.row) && st.row != trigRowPrompt {
+	// editor-backed prompt and script are excluded — they open $EDITOR on enter
+	// instead.
+	if isDialogTextKey(key) && isTriggerTextRow(st.row) && st.row != trigRowPrompt && st.row != trigRowScript {
 		blink := fleetPage.activateTriggerField()
 		var cmd tea.Cmd
 		st.input, cmd = st.input.Update(msg)
@@ -218,7 +228,7 @@ func (fleetPage *fleetPage) updateAutomationTrigger(m *model, msg tea.Msg) tea.C
 
 func isTriggerTextRow(row int) bool {
 	switch row {
-	case trigRowName, trigRowPrompt, trigRowCron, trigRowWebhookName, trigRowRegex, trigRowJSONPath, trigRowJSONValue:
+	case trigRowName, trigRowPrompt, trigRowScript, trigRowCron, trigRowWebhookName, trigRowRegex, trigRowJSONPath, trigRowJSONValue:
 		return true
 	}
 	return false
@@ -232,10 +242,13 @@ func (fleetPage *fleetPage) triggerRowEnter(m *model) tea.Cmd {
 	case st.row == trigRowPrompt:
 		// The prompt is often many lines — edit it in $EDITOR, not inline.
 		return editorCmd(editorTargetTriggerPrompt, "prompt", st.prompt)
+	case st.row == trigRowScript:
+		// The bash script can be many lines too — edit it in $EDITOR, not inline.
+		return editorCmd(editorTargetTriggerScript, "script", st.script)
 	case isTriggerTextRow(st.row):
 		return fleetPage.activateTriggerField()
 	case st.row == trigRowType:
-		fleetPage.cycleTriggerType(m)
+		fleetPage.cycleTriggerType(m, true)
 	case st.row == trigRowEnabled:
 		fleetPage.toggleTriggerEnabled(m)
 	case st.row == trigRowFilterType:
@@ -303,7 +316,7 @@ func (fleetPage *fleetPage) triggerRowToggle(m *model) tea.Cmd {
 		fleetPage.toggleTriggerAgent(m)
 		return nil
 	case st.row == trigRowType:
-		fleetPage.cycleTriggerType(m)
+		fleetPage.cycleTriggerType(m, true)
 		return nil
 	case st.row == trigRowEnabled:
 		fleetPage.toggleTriggerEnabled(m)
@@ -315,13 +328,15 @@ func (fleetPage *fleetPage) triggerRowToggle(m *model) tea.Cmd {
 	return fleetPage.triggerRowEnter(m)
 }
 
-// triggerRowCycle handles h/l on a selector row. Both selectors are two-valued,
-// so direction is immaterial — left and right just flip to the other option.
-func (fleetPage *fleetPage) triggerRowCycle(m *model) {
+// triggerRowCycle handles h/l on a selector row; forward is set for l/right and
+// cleared for h/left. The Type selector is three-valued, so direction matters
+// there (h steps back, l steps forward); Enabled and Filter are two-valued, so
+// either direction just flips them.
+func (fleetPage *fleetPage) triggerRowCycle(m *model, forward bool) {
 	st := &fleetPage.triggerDlg
 	switch st.row {
 	case trigRowType:
-		fleetPage.cycleTriggerType(m)
+		fleetPage.cycleTriggerType(m, forward)
 	case trigRowEnabled:
 		fleetPage.toggleTriggerEnabled(m)
 	case trigRowFilterType:
@@ -335,17 +350,28 @@ func (fleetPage *fleetPage) toggleTriggerEnabled(m *model) {
 	fleetPage.autosaveTrigger(m)
 }
 
-func (fleetPage *fleetPage) cycleTriggerType(m *model) {
+// triggerTypeOrder is the cycle order of the Type selector. forward steps along
+// it (Schedule → Webhook → Bash → Schedule); backward steps the reverse.
+var triggerTypeOrder = []fleet.TriggerType{fleet.TriggerSchedule, fleet.TriggerWebhook, fleet.TriggerBash}
+
+func (fleetPage *fleetPage) cycleTriggerType(m *model, forward bool) {
 	st := &fleetPage.triggerDlg
-	if st.triggerType == fleet.TriggerSchedule {
-		st.triggerType = fleet.TriggerWebhook
-	} else {
-		st.triggerType = fleet.TriggerSchedule
+	idx := 0
+	for i, t := range triggerTypeOrder {
+		if t == st.triggerType {
+			idx = i
+			break
+		}
 	}
+	delta := 1
+	if !forward {
+		delta = -1
+	}
+	st.triggerType = triggerTypeOrder[(idx+delta+len(triggerTypeOrder))%len(triggerTypeOrder)]
 	// The applicable rows changed; park the cursor back on the type selector.
 	st.row = trigRowType
-	// Quiet: a Schedule⇄Webhook switch makes the other type's required fields
-	// appear empty, so don't flash a validation error for that transient state.
+	// Quiet: switching type makes the other types' required fields appear empty,
+	// so don't flash a validation error for that transient state.
 	fleetPage.autosaveTriggerQuiet(m)
 }
 
@@ -394,6 +420,8 @@ func (fleetPage *fleetPage) triggerFieldValue() string {
 		return st.prompt
 	case trigRowCron:
 		return st.cron
+	case trigRowScript:
+		return st.script
 	case trigRowWebhookName:
 		return st.webhookName
 	case trigRowRegex:
@@ -416,6 +444,8 @@ func (fleetPage *fleetPage) commitTriggerField() {
 		st.prompt = v
 	case trigRowCron:
 		st.cron = v
+	case trigRowScript:
+		st.script = v
 	case trigRowWebhookName:
 		st.webhookName = v
 	case trigRowRegex:
@@ -465,6 +495,7 @@ func (fleetPage *fleetPage) triggerCandidate(f *fleet.Fleet) fleet.Trigger {
 		AgentNames:  selected,
 		Prompt:      st.prompt,
 		Cron:        st.cron,
+		Script:      st.script,
 		WebhookName: st.webhookName,
 		FilterType:  st.filterType,
 		Regex:       st.regex,
@@ -599,7 +630,8 @@ func (fleetPage *fleetPage) renderAutomationTriggerDialog(m *model) string {
 	fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowEnabled), dialogLabel.Render("Enabled:"), selectorLabel(enabledLabel(st.disabled)))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowPrompt), dialogLabel.Render("Prompt: "), promptFieldPreview(st.prompt, "(fed to the agent via ${PROMPT})"))
 
-	if st.triggerType == fleet.TriggerWebhook {
+	switch st.triggerType {
+	case fleet.TriggerWebhook:
 		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowWebhookName), dialogLabel.Render("Webhook:"), field(trigRowWebhookName, st.webhookName, "name (appended to gateway URL)"))
 		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowFilterType), dialogLabel.Render("Filter: "), selectorLabel(filterTypeLabel(st.filterType)))
 		if st.filterType == fleet.WebhookFilterJSONPath {
@@ -608,7 +640,10 @@ func (fleetPage *fleetPage) renderAutomationTriggerDialog(m *model) string {
 		} else {
 			fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowRegex), dialogLabel.Render("Regex:  "), field(trigRowRegex, st.regex, "event body must match"))
 		}
-	} else {
+	case fleet.TriggerBash:
+		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowCron), dialogLabel.Render("Cron:   "), field(trigRowCron, st.cron, "0 9 * * 1-5"))
+		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowScript), dialogLabel.Render("Script: "), promptFieldPreview(st.script, "(bash; zero exit fires, stdout is payload)"))
+	default:
 		fmt.Fprintf(&body, "%s%s %s\n", marker(trigRowCron), dialogLabel.Render("Cron:   "), field(trigRowCron, st.cron, "0 9 * * 1-5"))
 	}
 
@@ -651,10 +686,14 @@ func (fleetPage *fleetPage) renderAutomationTriggerDialog(m *model) string {
 func selectorLabel(text string) string { return fmt.Sprintf("[ %s ]", text) }
 
 func triggerTypeLabel(t fleet.TriggerType) string {
-	if t == fleet.TriggerWebhook {
+	switch t {
+	case fleet.TriggerWebhook:
 		return "Webhook"
+	case fleet.TriggerBash:
+		return "Bash"
+	default:
+		return "Schedule"
 	}
-	return "Schedule"
 }
 
 // enabledLabel renders the inverse of Trigger.Disabled — the dialog presents the
@@ -687,7 +726,7 @@ func automationTriggerHint(fieldActive bool, row int, isEdit bool) string {
 	if isEdit {
 		closeKey = "[q/esc] Close"
 	}
-	if row == trigRowPrompt {
+	if row == trigRowPrompt || row == trigRowScript {
 		return "[enter] Edit in $EDITOR  [j/k] Move  " + closeKey
 	}
 	if row >= trigRowAgentBase {

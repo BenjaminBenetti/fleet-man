@@ -138,7 +138,7 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	}, s.mcpAgentDelete)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_trigger_create",
-		Description: "Create an automation trigger in a fleet: it activates one or more agents (with a prompt) on a cron schedule or a gateway webhook event. Returns the fleet's resulting automation config.",
+		Description: "Create an automation trigger in a fleet: it activates one or more agents (with a prompt) on a cron schedule, a gateway webhook event, or a cron-polled bash command that exits zero. Returns the fleet's resulting automation config.",
 	}, s.mcpTriggerCreate)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_trigger_update",
@@ -150,7 +150,7 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	}, s.mcpTriggerDelete)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_trigger_logs",
-		Description: "Read an automation trigger's recorded event logs: the payloads of its recent firings (webhook body or schedule fire-time), captured on the daemon so you can debug what fired it. Returns {logs, count} with the firings concatenated, oldest first.",
+		Description: "Read an automation trigger's recorded event logs: the payloads of its recent firings (webhook body, bash command stdout, or schedule fire-time), captured on the daemon so you can debug what fired it. Returns {logs, count} with the firings concatenated, oldest first.",
 	}, s.mcpTriggerLogs)
 }
 

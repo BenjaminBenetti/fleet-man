@@ -151,6 +151,43 @@ func TestVisibleTriggerRowsByType(t *testing.T) {
 	if !slices.Contains(rows, trigRowJSONPath) || !slices.Contains(rows, trigRowJSONValue) || slices.Contains(rows, trigRowRegex) {
 		t.Fatalf("webhook+jsonpath rows wrong: %v", rows)
 	}
+
+	// Bash triggers show cron + script, and none of the webhook rows.
+	st.triggerType = fleet.TriggerBash
+	rows = fp.visibleTriggerRows(m)
+	if !slices.Contains(rows, trigRowCron) || !slices.Contains(rows, trigRowScript) {
+		t.Fatalf("bash trigger should show cron + script rows: %v", rows)
+	}
+	if slices.Contains(rows, trigRowWebhookName) || slices.Contains(rows, trigRowWebhookURL) || slices.Contains(rows, trigRowRegex) {
+		t.Fatalf("bash trigger should not show webhook rows: %v", rows)
+	}
+}
+
+// TestCycleTriggerTypeThreeWay confirms the Type selector cycles
+// Schedule → Webhook → Bash → Schedule (so the bash type is reachable in the UI).
+func TestCycleTriggerTypeThreeWay(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	m.st.Fleets["alpha"].Settings.Agents = []fleet.Agent{{Name: "a", Backend: fleet.BackendDevcontainer}}
+	fp.openAddTriggerDialog(m, "alpha")
+	st := &fp.triggerDlg
+
+	if st.triggerType != fleet.TriggerSchedule {
+		t.Fatalf("new trigger should default to schedule, got %q", st.triggerType)
+	}
+	// Forward (l/right): Schedule → Webhook → Bash → Schedule.
+	for i, w := range []fleet.TriggerType{fleet.TriggerWebhook, fleet.TriggerBash, fleet.TriggerSchedule} {
+		fp.cycleTriggerType(m, true)
+		if st.triggerType != w {
+			t.Fatalf("forward cycle %d: type = %q, want %q", i, st.triggerType, w)
+		}
+	}
+	// Backward (h/left): Schedule → Bash → Webhook → Schedule.
+	for i, w := range []fleet.TriggerType{fleet.TriggerBash, fleet.TriggerWebhook, fleet.TriggerSchedule} {
+		fp.cycleTriggerType(m, false)
+		if st.triggerType != w {
+			t.Fatalf("backward cycle %d: type = %q, want %q", i, st.triggerType, w)
+		}
+	}
 }
 
 func TestToggleTriggerDisabled(t *testing.T) {
