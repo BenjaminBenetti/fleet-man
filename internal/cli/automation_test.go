@@ -23,6 +23,7 @@ func TestAutomationConvertersRoundTrip(t *testing.T) {
 	triggers := []fleet.Trigger{
 		{Name: "nightly", Type: fleet.TriggerSchedule, AgentNames: []string{"a", "b"}, Prompt: "go", Cron: "0 0 * * *"},
 		{Name: "hook", Type: fleet.TriggerWebhook, AgentNames: []string{"a"}, WebhookName: "ci", FilterType: fleet.WebhookFilterJSONPath, JSONPath: "$.action", JSONValue: "opened"},
+		{Name: "poll", Type: fleet.TriggerBash, AgentNames: []string{"a"}, Prompt: "drain", Cron: "*/5 * * * *", Script: "test -s /var/queue"},
 	}
 	if got := protoTriggersToFleet(fleetTriggersToProto(triggers)); !reflect.DeepEqual(got, triggers) {
 		t.Fatalf("trigger round trip:\n got %+v\nwant %+v", got, triggers)

@@ -1,12 +1,30 @@
 package tui
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
+
+// TestTriggersConverterRoundTrip locks in that the TUI's client-side trigger
+// converters are lossless: the dialog persists by converting domain -> proto
+// (triggersToProto) for SetFleetSettings, and renders by converting back
+// (protoTriggersToLegacy), so any field dropped on the write would be silently
+// lost on save. Covers a bash trigger's Script — the field whose omission here
+// broke saving a bash trigger from the TUI.
+func TestTriggersConverterRoundTrip(t *testing.T) {
+	triggers := []fleet.Trigger{
+		{Name: "nightly", Type: fleet.TriggerSchedule, AgentNames: []string{"a"}, Prompt: "go", Cron: "0 0 * * *", Disabled: true},
+		{Name: "hook", Type: fleet.TriggerWebhook, AgentNames: []string{"a"}, WebhookName: "ci", FilterType: fleet.WebhookFilterRegex, Regex: "push"},
+		{Name: "poll", Type: fleet.TriggerBash, AgentNames: []string{"a"}, Prompt: "drain", Cron: "*/5 * * * *", Script: "test -s /var/queue"},
+	}
+	if got := protoTriggersToLegacy(triggersToProto(triggers)); !reflect.DeepEqual(got, triggers) {
+		t.Fatalf("trigger round trip:\n got %+v\nwant %+v", got, triggers)
+	}
+}
 
 // TestConfigToProtoEncodesFullConfig guards the client-side legacy->proto
 // converter against drift from the server's reverse mapper: every field the

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -161,9 +162,20 @@ type triggerFire struct {
 // bashProbeTimeout bounds how long a bash trigger's command may run before it is
 // killed (and treated as not-fired). A polling command that hangs must not leak a
 // process/goroutine or stall the next poll. Overridable via
-// FLEET_AUTOMATION_BASH_TIMEOUT (a Go duration); kept under the 1-minute cron
-// granularity by default so a per-minute trigger's runs can't overlap.
+// FLEET_AUTOMATION_BASH_TIMEOUT (a Go duration). The 50s default usually keeps a
+// per-minute trigger's runs from overlapping (a probe started near the top of the
+// minute finishes within it), but overlap is NOT guaranteed — e.g. a probe
+// launched on the :30 tick right after daemon start, or a raised timeout — so a
+// bash script should be idempotent. bashProbeSem bounds total probe concurrency
+// regardless.
 var bashProbeTimeout = envDurationDefault("FLEET_AUTOMATION_BASH_TIMEOUT", 50*time.Second)
+
+// maxBashOutputSize caps how many bytes of a probe's stdout/stderr are retained.
+// The stdout becomes the event payload (copied into the agent's instance and
+// persisted to the trigger log), so an unbounded capture would let a runaway
+// script (`yes`, a huge `curl`) OOM the daemon. Mirrors the webhook path's
+// maxWebhookBodySize bound; output past it is discarded (see cappedBuffer).
+const maxBashOutputSize = 1 << 20
 
 // maxBashProbeConcurrency bounds how many bash trigger commands run at once, so a
 // burst of due bash triggers can't spawn an unbounded number of host processes.
@@ -242,7 +254,7 @@ func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.
 			// block); on a zero exit the probe hands the trigger back via triggerFires
 			// to spawn the agents (see startBashProbe). Nothing is spawned here, so
 			// `fired` stays as-is.
-			startBashProbe(s, due.fleet, due.trigger, now)
+			startBashProbe(s, due.fleet, due.trigger)
 			continue
 		}
 		agents := agentsForTrigger(st.Fleets[due.fleet], due.trigger)
@@ -662,8 +674,10 @@ var reapAutomationInstance = func(s *service, fleetName, instanceName string) {
 // fires. It runs asynchronously (a slow polling command must not stall the
 // scheduler tick, mirroring the webhook delivery path) and is bounded by
 // bashProbeSem so a burst of due bash triggers can't spawn unbounded host
-// processes. A package var so schedulerTick tests can stub it.
-var startBashProbe = func(s *service, fleetName string, trigger fleet.Trigger, now time.Time) {
+// processes. A package var so schedulerTick tests can stub it. (now is the cron
+// due-time, taken when runScheduler drains the fire, not here — so it isn't a
+// parameter; the firing's timestamp is stamped at drain.)
+var startBashProbe = func(s *service, fleetName string, trigger fleet.Trigger) {
 	go func() {
 		bashProbeSem <- struct{}{}
 		defer func() { <-bashProbeSem }()
@@ -672,8 +686,14 @@ var startBashProbe = func(s *service, fleetName string, trigger fleet.Trigger, n
 		defer cancel()
 		stdout, ok, err := runBashScript(ctx, trigger.Script)
 		if !ok {
-			// "Condition not met" is the normal non-firing outcome, so log at info.
-			flog.Info("automation: bash trigger did not fire", "fleet", fleetName, "trigger", trigger.Name, "err", err)
+			// A clean non-zero exit just means the polled condition isn't met — the
+			// normal steady state for a frequent poll, so stay silent (logging it would
+			// spam a line every tick). An exec/timeout failure (not an *exec.ExitError)
+			// is a real problem worth surfacing.
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				flog.Warn("automation: bash trigger probe failed", "fleet", fleetName, "trigger", trigger.Name, "err", err)
+			}
 			return
 		}
 		flog.Info("automation: bash trigger fired", "fleet", fleetName, "trigger", trigger.Name, "bytes", len(stdout))
@@ -705,12 +725,41 @@ var startBashProbe = func(s *service, fleetName string, trigger fleet.Trigger, n
 var runBashScript = func(ctx context.Context, script string) (stdout []byte, exitZero bool, err error) {
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
 	cmd.WaitDelay = 3 * time.Second
-	var out, errBuf bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errBuf
+	// Bound the captured output so a runaway script can't OOM the daemon. Writes
+	// past the cap are discarded, so the command still drains its pipe and runs to
+	// completion (the exit code, not the output length, decides whether it fires).
+	out := &cappedBuffer{limit: maxBashOutputSize}
+	errBuf := &cappedBuffer{limit: maxBashOutputSize}
+	cmd.Stdout = out
+	cmd.Stderr = errBuf
 	err = cmd.Run()
 	if err != nil && errBuf.Len() > 0 {
-		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(errBuf.String()))
+		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(errBuf.Bytes())))
 	}
 	return out.Bytes(), err == nil, err
 }
+
+// cappedBuffer is an io.Writer that retains only the first `limit` bytes written
+// and silently discards the rest — Write always reports the full length consumed,
+// so the writer never backpressures the command's stdout/stderr pipe (it keeps
+// draining and runs to completion). It bounds a bash probe's captured output so a
+// runaway script can't exhaust memory, the same role maxWebhookBodySize plays for
+// webhook bodies.
+type cappedBuffer struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if room := c.limit - c.buf.Len(); room > 0 {
+		if len(p) > room {
+			c.buf.Write(p[:room])
+		} else {
+			c.buf.Write(p)
+		}
+	}
+	return len(p), nil
+}
+
+func (c *cappedBuffer) Bytes() []byte { return c.buf.Bytes() }
+func (c *cappedBuffer) Len() int      { return c.buf.Len() }

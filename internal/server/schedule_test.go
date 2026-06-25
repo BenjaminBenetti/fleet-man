@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -464,7 +465,7 @@ func TestSchedulerTickBashProbe(t *testing.T) {
 	}
 	origProbe := startBashProbe
 	var probed []string
-	startBashProbe = func(_ *service, fleetName string, trigger fleet.Trigger, _ time.Time) {
+	startBashProbe = func(_ *service, fleetName string, trigger fleet.Trigger) {
 		probed = append(probed, fleetName+"/"+trigger.Name)
 	}
 	t.Cleanup(func() {
@@ -502,7 +503,7 @@ func TestStartBashProbe(t *testing.T) {
 		}
 		return []byte("payload-out\n"), true, nil
 	}
-	startBashProbe(s, "alpha", trig, time.Now())
+	startBashProbe(s, "alpha", trig)
 	select {
 	case batch := <-s.triggerFires:
 		if len(batch) != 1 || batch[0].fleet != "alpha" || batch[0].trigger.Name != "poll" {
@@ -523,7 +524,7 @@ func TestStartBashProbe(t *testing.T) {
 		defer func() { ran <- struct{}{} }()
 		return []byte("ignored"), false, errors.New("exit status 1")
 	}
-	startBashProbe(s, "alpha", trig, time.Now())
+	startBashProbe(s, "alpha", trig)
 	<-ran // the probe ran its (non-zero) command; it will not fire
 	select {
 	case batch := <-s.triggerFires:
@@ -582,6 +583,46 @@ func TestRunBashScriptBackgroundedGrandchildTimesOut(t *testing.T) {
 	}
 	if ok || err == nil {
 		t.Fatalf("a timed-out probe must be reported as not-fired, got ok=%v err=%v", ok, err)
+	}
+}
+
+// TestCappedBuffer verifies a probe's output capture is bounded: writes past the
+// limit are retained-as-truncated but still fully consumed (so the command's pipe
+// keeps draining and never backpressures), guarding the daemon against an OOM from
+// a runaway script's stdout.
+func TestCappedBuffer(t *testing.T) {
+	c := &cappedBuffer{limit: 5}
+	// A write that straddles the limit keeps only the first `limit` bytes...
+	if n, err := c.Write([]byte("abcdefg")); n != 7 || err != nil {
+		t.Fatalf("Write reported n=%d err=%v, want full length consumed", n, err)
+	}
+	if got := string(c.Bytes()); got != "abcde" {
+		t.Fatalf("retained %q, want %q", got, "abcde")
+	}
+	// ...and further writes past the cap are fully consumed but stored nowhere.
+	if n, err := c.Write([]byte("hij")); n != 3 || err != nil {
+		t.Fatalf("over-cap Write reported n=%d err=%v, want full length consumed", n, err)
+	}
+	if got := string(c.Bytes()); got != "abcde" || c.Len() != 5 {
+		t.Fatalf("buffer grew past the cap: %q (len %d)", got, c.Len())
+	}
+}
+
+// TestRunBashScriptCapsOutput drives the real exec seam to confirm a script that
+// emits more than maxBashOutputSize bytes has its captured payload bounded (not
+// the full firehose), while still exiting 0 / firing.
+func TestRunBashScriptCapsOutput(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	// Emit ~2x the cap of zero bytes on stdout, fast.
+	out, ok, err := runBashScript(context.Background(),
+		"head -c "+strconv.Itoa(2*maxBashOutputSize)+" /dev/zero")
+	if !ok || err != nil {
+		t.Fatalf("script should exit 0: ok=%v err=%v", ok, err)
+	}
+	if len(out) != maxBashOutputSize {
+		t.Fatalf("captured %d bytes, want it capped at %d", len(out), maxBashOutputSize)
 	}
 }
 

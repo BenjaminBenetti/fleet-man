@@ -222,15 +222,16 @@ func triggerDetail(t fleet.Trigger) string {
 }
 
 // firstLine returns s's first line, truncated with an ellipsis, so a multi-line
-// or long bash script stays on one tidy row of the `list` table.
+// or long bash script stays on one tidy row of the `list` table. Truncation is
+// rune-aware so it never splits a multibyte character.
 func firstLine(s string) string {
 	line := s
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = line[:i]
 	}
 	const max = 40
-	if len(line) > max {
-		return line[:max-1] + "…"
+	if r := []rune(line); len(r) > max {
+		return string(r[:max-1]) + "…"
 	}
 	return line
 }
