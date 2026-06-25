@@ -70,8 +70,11 @@ find . -maxdepth 5 -name node_modules -prune -o -name .git -prune -print 2>/dev/
   [ "$br" = "HEAD" ] && continue
   ( cd "$dir" || exit 0
     # One list call for the branch (gh's embedded --jq, so no standalone jq
-    # dependency): "<STATE> <number>" per PR, e.g. "OPEN 12" / "MERGED 7".
-    list=$(gh pr list --state all --head "$br" --json number,state --jq '.[] | "\(.state) \(.number)"' 2>/dev/null)
+    # dependency): "<STATE> <number>" per PR, e.g. "OPEN 12" / "MERGED 7". The
+    # explicit --limit lifts gh's default 30-row cap so an open PR can't fall
+    # outside the window (and silently degrade to the purple tag) on a branch
+    # that's been the head of many PRs over its life.
+    list=$(gh pr list --state all --head "$br" --limit 100 --json number,state --jq '.[] | "\(.state) \(.number)"' 2>/dev/null)
     open=$(printf '%s\n' "$list" | awk '$1 == "OPEN" { print $2 }')
     if [ -n "$open" ]; then
       for num in $open; do
@@ -294,6 +297,12 @@ func parsePRProbeOutput(out string) *fleetgrpc.PrStatus {
 // visible — so a finished instance is distinguishable from one that never had a
 // PR — and carries the closed PRs' refs so the tag stays clickable. Returns nil
 // when there are no closed/merged PRs either (the branch never had one).
+//
+// Note the per-repo counting: the probe emits only the single most-recent
+// closed/merged PR PER repo, so ClosedCount is the number of repos with a
+// closed-but-no-open PR (rendered "PRxN"), NOT the total closed PRs in any one
+// repo's history. This deliberately differs from open_count, which sums every
+// open PR — a branch's closed-PR history would otherwise inflate the badge.
 func closedPRStatus(closed []ghPR) *fleetgrpc.PrStatus {
 	if len(closed) == 0 {
 		return nil

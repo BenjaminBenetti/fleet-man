@@ -14,15 +14,15 @@ import (
 // instance's PR status (→/l) and opening the PR in a browser (enter, or a
 // click), with a chooser dialog when more than one PR is open.
 
-// instancePRRefs returns the open PRs backing an instance's auto tag (nil when
-// there is no PR status).
+// instancePRRefs returns the PRs backing an instance's auto tag — the open PRs,
+// or the closed/merged ones when none are open (nil when there is no PR status).
 func (m *model) instancePRRefs(fleetName, instance string) []*fleetgrpc.PrRef {
 	return m.runtime[rtKey(fleetName, instance)].GetPrStatus().GetPrs()
 }
 
-// rowInlinePRRefs returns the open PRs for a row that carries the inline PR
-// status (the first child row of an expanded, untagged instance), or nil. This
-// is where the auto tag lives now, so it is the unit the cursor selects.
+// rowInlinePRRefs returns the PRs for a row that carries the inline PR status
+// (the first child row of an expanded, untagged instance), or nil. This is where
+// the auto tag lives now, so it is the unit the cursor selects.
 func (m *model) rowInlinePRRefs(r row) []*fleetgrpc.PrRef {
 	if !r.prStatusInline || r.instance == nil {
 		return nil
@@ -70,7 +70,7 @@ func openPRRefCmd(m *model, ref *fleetgrpc.PrRef) tea.Cmd {
 // ===========================================
 
 // choosePRState backs the "which PR?" dialog shown when an instance has more
-// than one open PR.
+// than one PR (open, or closed/merged).
 type choosePRState struct {
 	refs   []*fleetgrpc.PrRef
 	cursor int
@@ -106,8 +106,8 @@ func (fleetPage *fleetPage) updateChoosePR(m *model, msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// renderChoosePRDialog draws the chooser: one row per open PR (number, title,
-// url), with the selected row highlighted.
+// renderChoosePRDialog draws the chooser: one row per PR (number, title, url),
+// with the selected row highlighted.
 func (fleetPage *fleetPage) renderChoosePRDialog(m *model) string {
 	var b strings.Builder
 	b.WriteString(dialogTitle.Render("Open which PR?"))

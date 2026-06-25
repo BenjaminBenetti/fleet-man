@@ -589,11 +589,13 @@ type PrStatus struct {
 	// repo first, then subrepos). These are the OPEN PRs when open_count > 0,
 	// otherwise the closed/merged PRs backing the purple tag.
 	Prs []*PrRef `protobuf:"bytes,7,rep,name=prs,proto3" json:"prs,omitempty"`
-	// Closed or merged PRs counted across the repos, set only when NO PR is open
-	// (open_count 0). It keeps the tag visible in purple — matching GitHub's
-	// closed/merged colour — so a finished instance stays distinguishable from one
-	// that never had a PR. Open PRs always take priority; when both exist the open
-	// status is shown and this stays 0.
+	// Closed or merged PRs, set only when NO PR is open (open_count 0). It keeps
+	// the tag visible in purple — matching GitHub's closed/merged colour — so a
+	// finished instance stays distinguishable from one that never had a PR. This
+	// counts the most-recent closed/merged PR PER repo (so it's the number of repos
+	// with a closed-but-no-open PR), unlike open_count which sums every open PR.
+	// Open PRs always take priority; when both exist the open status is shown and
+	// this stays 0.
 	ClosedCount   int32 `protobuf:"varint,8,opt,name=closed_count,json=closedCount,proto3" json:"closed_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
