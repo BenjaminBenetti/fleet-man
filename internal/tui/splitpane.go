@@ -372,8 +372,7 @@ func derivePersistableSnapshot(activeGroup ActiveGroup, panes []paneByPosition, 
 		if p.title == "" {
 			return savedGroup{}, false
 		}
-		parsedGID, ok := parseGroupID(sanitized, p.title)
-		if !ok || parsedGID != groupID {
+		if !sessionInGroup(sanitized, p.title, groupID) {
 			return savedGroup{}, false
 		}
 		if seen[p.title] {
@@ -402,7 +401,7 @@ func snapshotMatchesRuntime(snapshot savedGroup, liveSessions []tmuxSession) boo
 	sanitized := SanitizeSessionName(snapshot.InstanceName)
 	live := make(map[string]bool)
 	for _, s := range liveSessions {
-		if gid, ok := parseGroupID(sanitized, s.Name); ok && gid == snapshot.GroupID {
+		if sessionInGroup(sanitized, s.Name, snapshot.GroupID) {
 			live[s.Name] = true
 		}
 	}

@@ -129,9 +129,11 @@ func NewGroupPaneSessionName(sanitizedInstance, groupID string) string {
 // apply, but a re-apply (or a leftover from a prior failed apply) falls back to
 // a random id so the root never collides forever on `tmux new-session` — the
 // reported "stuck, a restart doesn't help" bug, since the session lives in the
-// container. It deliberately does NOT auto-suffix (dev-2): that would prefix-
-// match a sibling group ("dev") in the prefix-based group ops (open/rename/
-// delete) — readable names for re-applies need boundary-aware matching first.
+// container. It falls back to a random id rather than an auto-suffixed readable
+// name (dev-2): a random id is the minimal collision-free choice and keeps this
+// path simple. (The group ops now match on the group boundary — sessionInGroup,
+// not a raw string prefix — so an auto-suffixed sibling would no longer be
+// swallowed; readable auto-suffixing is therefore a safe possible future change.)
 func groupIDFor(sanitizedInstance, desired string, existing []tmuxSession) string {
 	for _, s := range existing {
 		if gid, ok := parseGroupID(sanitizedInstance, s.Name); ok && gid == desired {
