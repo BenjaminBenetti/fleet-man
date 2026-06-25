@@ -75,7 +75,10 @@ find . -maxdepth 5 -name node_modules -prune -o -name .git -prune -print 2>/dev/
     # outside the window (and silently degrade to the purple tag) on a branch
     # that's been the head of many PRs over its life.
     list=$(gh pr list --state all --head "$br" --limit 100 --json number,state --jq '.[] | "\(.state) \(.number)"' 2>/dev/null)
-    open=$(printf '%s\n' "$list" | awk '$1 == "OPEN" { print $2 }')
+    # toupper() so the shell side is as case-defensive as the Go parser's
+    # strings.ToUpper: if gh ever stopped returning uppercase states, an open PR
+    # must still be classified open (not fall through to the purple closed tag).
+    open=$(printf '%s\n' "$list" | awk 'toupper($1) == "OPEN" { print $2 }')
     if [ -n "$open" ]; then
       for num in $open; do
         gh pr view "$num" \
@@ -86,7 +89,7 @@ find . -maxdepth 5 -name node_modules -prune -o -name .git -prune -print 2>/dev/
       # any) so the indicator persists in purple instead of disappearing. The
       # highest PR number is unambiguously the newest, so pick it without relying
       # on gh's list ordering.
-      num=$(printf '%s\n' "$list" | awk '$1 != "OPEN" && $2 > max { max = $2 } END { if (max) print max }')
+      num=$(printf '%s\n' "$list" | awk 'toupper($1) != "OPEN" && $2 > max { max = $2 } END { if (max) print max }')
       if [ -n "$num" ]; then
         gh pr view "$num" --json number,state,url,title 2>/dev/null
       fi

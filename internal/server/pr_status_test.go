@@ -36,15 +36,22 @@ func TestRunProbeWithTimeout_KillsOnTimeout(t *testing.T) {
 }
 
 // stubGHScript emulates the net output of the `gh` calls prProbeScript makes:
-// `gh auth status` succeeds, `gh pr list ... --jq '<STATE> <number>'` echoes the
-// lines in $GH_FAKE_PRLIST, and `gh pr view <n>` emits a MERGED PR object.
+// `gh auth status` succeeds and `gh pr list ... --jq '<STATE> <number>'` echoes
+// the lines in $GH_FAKE_PRLIST. `gh pr view <n>` mirrors which path called it:
+// the open path requests statusCheckRollup, so the stub reports state OPEN; the
+// closed fallback requests only number,state,url,title, so it reports MERGED.
+// That lets a test prove which branch the script's awk classification took.
 const stubGHScript = `#!/bin/sh
 case "$1" in
   auth) exit 0 ;;
   pr)
     case "$2" in
       list) cat "$GH_FAKE_PRLIST" 2>/dev/null ; exit 0 ;;
-      view) printf '{"number":%s,"state":"MERGED","url":"https://example.test/%s","title":"old"}\n' "$3" "$3" ; exit 0 ;;
+      view)
+        state=MERGED
+        case "$*" in *statusCheckRollup*) state=OPEN ;; esac
+        printf '{"number":%s,"state":"%s","url":"https://example.test/%s","title":"x"}\n' "$3" "$state" "$3"
+        exit 0 ;;
     esac ;;
 esac
 exit 0
@@ -132,6 +139,29 @@ func TestPRProbeScript_AlwaysExitsZero(t *testing.T) {
 		// One MERGED PR per repo (both repos resolve the same stub list).
 		if got.GetPrSignal() != fleetgrpc.PrSignal_PR_SIGNAL_PURPLE || got.GetClosedCount() == 0 {
 			t.Errorf("got %+v, want PURPLE with ClosedCount>0", got)
+		}
+	})
+
+	t.Run("lowercase state still classified open (toupper)", func(t *testing.T) {
+		// Defensive: if gh ever returned a non-uppercase state, the awk must still
+		// classify an open PR as open rather than letting it fall through to the
+		// purple closed fallback. The stub's `pr view` emits MERGED, so a fall-
+		// through would wrongly surface a purple tag.
+		lowerList := filepath.Join(t.TempDir(), "lower")
+		if err := os.WriteFile(lowerList, []byte("open 216\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, err := runScript(t, lowerList)
+		if err != nil {
+			t.Fatalf("probe script exited non-zero: %v\noutput: %q", err, out)
+		}
+		got := parsePRProbeOutput(out)
+		if got == nil || got.GetOpenCount() == 0 {
+			t.Errorf("a lowercase \"open\" PR must take the open path (full detail), "+
+				"not fall through to the purple closed fallback; got %+v (out=%q)", got, out)
+		}
+		if got.GetClosedCount() != 0 {
+			t.Errorf("lowercase open PR wrongly classified as closed: %+v", got)
 		}
 	})
 }
