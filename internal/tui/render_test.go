@@ -20,6 +20,7 @@ func TestRemoteIndicator(t *testing.T) {
 
 	connected := &fleetgrpc.RemoteMcpStatus{State: fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED}
 	connecting := &fleetgrpc.RemoteMcpStatus{State: fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTING}
+	errored := &fleetgrpc.RemoteMcpStatus{State: fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_ERROR}
 
 	cases := []struct {
 		name   string
@@ -50,9 +51,19 @@ func TestRemoteIndicator(t *testing.T) {
 			status: connected, want: green,
 		},
 		{
+			name: "multiple surfaces enabled, connected -> green",
+			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{FleetEnabled: true, WebhookEnabled: true, GatewayURL: gw}},
+			status: connected, want: green,
+		},
+		{
 			name: "enabled but connecting -> red",
 			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{WebhookEnabled: true, GatewayURL: gw}},
 			status: connecting, want: red,
+		},
+		{
+			name: "enabled but errored -> red",
+			cfg:  &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{Enabled: true, GatewayURL: gw}},
+			status: errored, want: red,
 		},
 		{
 			name: "enabled but no status yet -> red",
