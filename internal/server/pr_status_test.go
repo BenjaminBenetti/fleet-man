@@ -41,9 +41,14 @@ func TestRunProbeWithTimeout_KillsOnTimeout(t *testing.T) {
 // the open path requests statusCheckRollup, so the stub reports state OPEN; the
 // closed fallback requests only number,state,url,title, so it reports MERGED.
 // That lets a test prove which branch the script's awk classification took.
+// `gh repo view --json defaultBranchRef --jq ...` reports $GH_FAKE_DEFAULT_BRANCH
+// (default "main"), the default-branch determination's gh fallback — the test
+// repos have no origin remote, so the script's local origin/HEAD lookup misses and
+// this fallback is what the issue-#217 skip is exercised through.
 const stubGHScript = `#!/bin/sh
 case "$1" in
   auth) exit 0 ;;
+  repo) printf '%s\n' "${GH_FAKE_DEFAULT_BRANCH:-main}" ; exit 0 ;;
   pr)
     case "$2" in
       list) cat "$GH_FAKE_PRLIST" 2>/dev/null ; exit 0 ;;
@@ -162,6 +167,86 @@ func TestPRProbeScript_AlwaysExitsZero(t *testing.T) {
 		}
 		if got.GetClosedCount() != 0 {
 			t.Errorf("lowercase open PR wrongly classified as closed: %+v", got)
+		}
+	})
+}
+
+// TestPRProbeScript_SkipsDefaultBranch guards issue #217: a repo whose CURRENT
+// branch is its default branch (usually main) must be excluded from the probe
+// entirely. The default branch may have been the HEAD of PRs into other branches
+// over its life; surfacing those long-closed PRs put a bogus purple "closed PR"
+// tag on an instance merely parked on main. The skip is PER-REPO, so a nested
+// subrepo is judged against its own default branch.
+func TestPRProbeScript_SkipsDefaultBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(stubGHScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Every repo the stub reports has a single MERGED PR — so anything NOT skipped
+	// surfaces a purple closed tag, and the skip is observable by its absence.
+	closedList := filepath.Join(t.TempDir(), "closed")
+	if err := os.WriteFile(closedList, []byte("MERGED 210\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// run executes the real probe over a freshly-built workspace; init lays out the
+	// repos (relative dir -> branch) and defaultBranch is what the gh stub reports.
+	run := func(t *testing.T, repos map[string]string, defaultBranch string) string {
+		t.Helper()
+		ws := t.TempDir()
+		for rel, branch := range repos {
+			dir := ws
+			if rel != "." {
+				dir = filepath.Join(ws, rel)
+			}
+			gitInitOnBranch(t, dir, branch)
+		}
+		cmd := exec.Command("sh", "-c", prProbeScript)
+		cmd.Dir = ws
+		cmd.Env = append(os.Environ(),
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"GH_FAKE_PRLIST="+closedList,
+			"GH_FAKE_DEFAULT_BRANCH="+defaultBranch)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("probe script exited non-zero: %v\noutput: %q", err, out)
+		}
+		return string(out)
+	}
+
+	t.Run("on default branch => skipped, no tag", func(t *testing.T) {
+		out := run(t, map[string]string{".": "main"}, "main")
+		if got := parsePRProbeOutput(out); got != nil {
+			t.Errorf("instance parked on the default branch parsed to %+v, want nil (no tag); out=%q", got, out)
+		}
+	})
+
+	t.Run("on feature branch => closed PR still surfaces", func(t *testing.T) {
+		out := run(t, map[string]string{".": "feature"}, "main")
+		got := parsePRProbeOutput(out)
+		if got == nil {
+			t.Fatalf("feature branch with a closed PR parsed to nil, want a purple tag; out=%q", out)
+		}
+		if got.GetPrSignal() != fleetgrpc.PrSignal_PR_SIGNAL_PURPLE {
+			t.Errorf("got %+v, want PURPLE", got)
+		}
+	})
+
+	t.Run("per-repo: subrepo on default skipped, top-level feature kept", func(t *testing.T) {
+		// Top-level on a feature branch (kept) + a subrepo on the default branch
+		// (skipped). Only the top-level emits, so exactly one repo's closed PR
+		// shows — proving the default-branch test is applied per-repo, not globally.
+		out := run(t, map[string]string{".": "feature", "nested": "main"}, "main")
+		got := parsePRProbeOutput(out)
+		if got == nil {
+			t.Fatalf("top-level feature branch parsed to nil, want a purple tag; out=%q", out)
+		}
+		if got.GetClosedCount() != 1 {
+			t.Errorf("ClosedCount = %d, want 1 (subrepo on its default branch skipped); out=%q",
+				got.GetClosedCount(), out)
 		}
 	})
 }

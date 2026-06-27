@@ -44,7 +44,9 @@ const (
 
 // prProbeScript runs inside the container with the workspace folder as its cwd
 // (the backend's ExecCommand resolves that). For the workspace repo and every
-// nested subrepo it finds the open PRs on the current branch (gh pr list) and
+// nested subrepo it first skips the repo when its checked-out branch is that
+// repo's own default branch (the trunk has no in-flight PR to track; issue #217),
+// then finds the open PRs on the current branch (gh pr list) and
 // then emits the FULL detail of each via `gh pr view <n> --json ...` — one JSON
 // object per PR. gh pr view is used (not gh pr list's --json) because gh pr
 // list's statusCheckRollup is capped at the first 100 checks, while gh pr view
@@ -69,6 +71,18 @@ find . -maxdepth 5 -name node_modules -prune -o -name .git -prune -print 2>/dev/
   [ -z "$br" ] && continue
   [ "$br" = "HEAD" ] && continue
   ( cd "$dir" || exit 0
+    # Skip the repo's DEFAULT branch (usually main): it is the trunk, not in-flight
+    # work, yet it may have been the HEAD of PRs into other branches over its life.
+    # Surfacing those long-closed PRs put a bogus purple "closed PR" tag on an
+    # instance merely parked on main (issue #217). Resolved PER-REPO so a nested
+    # subrepo is judged against its OWN default branch. Prefer the local origin/HEAD
+    # ref (set by git clone, no API round-trip); fall back to gh only when it isn't
+    # configured. On any failure "default" is empty and we DON'T skip — degrading to
+    # the prior (over-eager) behaviour rather than risk hiding a real PR.
+    default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
+    default=${default#origin/}
+    [ -z "$default" ] && default=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null)
+    [ -n "$default" ] && [ "$br" = "$default" ] && exit 0
     # One list call for the branch (gh's embedded --jq, so no standalone jq
     # dependency): "<STATE> <number>" per PR, e.g. "OPEN 12" / "MERGED 7". The
     # explicit --limit lifts gh's default 30-row cap so an open PR can't fall
