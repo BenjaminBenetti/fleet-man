@@ -62,6 +62,18 @@ esac
 exit 0
 `
 
+// setSymbolicRef writes a symbolic ref in dir (e.g. refs/remotes/origin/HEAD ->
+// refs/remotes/origin/main, the marker `git clone` writes). git stores it as-is,
+// so no real remote or fetch is needed to emulate a freshly-cloned repo.
+func setSymbolicRef(t *testing.T, dir, name, target string) {
+	t.Helper()
+	c := exec.Command("git", "symbolic-ref", name, target)
+	c.Dir = dir
+	if out, err := c.CombinedOutput(); err != nil {
+		t.Fatalf("git symbolic-ref %s %s: %v\n%s", name, target, err, out)
+	}
+}
+
 func gitInitOnBranch(t *testing.T, dir, branch string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -247,6 +259,85 @@ func TestPRProbeScript_SkipsDefaultBranch(t *testing.T) {
 		if got.GetClosedCount() != 1 {
 			t.Errorf("ClosedCount = %d, want 1 (subrepo on its default branch skipped); out=%q",
 				got.GetClosedCount(), out)
+		}
+	})
+}
+
+// TestPRProbeScript_SkipsDefaultBranch_LocalOriginHead covers the production-
+// dominant arm of the issue-#217 skip: a cloned repo has refs/remotes/origin/HEAD
+// set, so the probe resolves the default branch from that LOCAL ref without a gh
+// round-trip. The gh stub here fails `repo view`, so the fallback can't supply a
+// default — any skip must come from the local ref alone. This guards the
+// `git symbolic-ref --short` output shape plus the `${default#origin/}` strip,
+// which the no-remote tests above never exercise (they fall through to gh).
+func TestPRProbeScript_SkipsDefaultBranch_LocalOriginHead(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	// gh stub whose `repo view` FAILS: the default-branch fallback is unavailable,
+	// so a skip proves the local origin/HEAD ref drove it. `pr list` still reports a
+	// merged PR, so a repo that is NOT skipped surfaces a (wrong) purple tag.
+	const ghNoRepoView = `#!/bin/sh
+case "$1" in
+  auth) exit 0 ;;
+  repo) exit 1 ;;
+  pr)
+    case "$2" in
+      list) cat "$GH_FAKE_PRLIST" 2>/dev/null ; exit 0 ;;
+      view) printf '{"number":%s,"state":"MERGED","url":"https://example.test/%s","title":"x"}\n' "$3" "$3" ; exit 0 ;;
+    esac ;;
+esac
+exit 0
+`
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(ghNoRepoView), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	closedList := filepath.Join(t.TempDir(), "closed")
+	if err := os.WriteFile(closedList, []byte("MERGED 210\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// run builds a repo on `main` and runs the real probe; when withOriginHead is
+	// set it first writes origin/HEAD -> origin/main, emulating a fresh clone.
+	run := func(t *testing.T, withOriginHead bool) string {
+		t.Helper()
+		ws := t.TempDir()
+		gitInitOnBranch(t, ws, "main")
+		if withOriginHead {
+			setSymbolicRef(t, ws, "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+		}
+		cmd := exec.Command("sh", "-c", prProbeScript)
+		cmd.Dir = ws
+		cmd.Env = append(os.Environ(),
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"GH_FAKE_PRLIST="+closedList)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("probe script exited non-zero: %v\noutput: %q", err, out)
+		}
+		return string(out)
+	}
+
+	t.Run("local origin/HEAD alone drives the skip", func(t *testing.T) {
+		out := run(t, true)
+		if got := parsePRProbeOutput(out); got != nil {
+			t.Errorf("default branch resolved via local origin/HEAD parsed to %+v, want nil — "+
+				"the local ref must drive the skip with no gh fallback; out=%q", got, out)
+		}
+	})
+
+	t.Run("negative control: no origin/HEAD and no gh fallback => not skipped", func(t *testing.T) {
+		// Same repo on main, but without the local ref: the lookup misses AND the gh
+		// fallback fails, so the default branch is NOT recognised and its closed PR
+		// surfaces. This proves the skip above came from the local ref, not elsewhere.
+		out := run(t, false)
+		got := parsePRProbeOutput(out)
+		if got == nil {
+			t.Fatalf("with no default-branch signal the repo should not be skipped, want a purple tag; out=%q", out)
+		}
+		if got.GetPrSignal() != fleetgrpc.PrSignal_PR_SIGNAL_PURPLE {
+			t.Errorf("got %+v, want PURPLE (repo not skipped)", got)
 		}
 	})
 }
