@@ -3,6 +3,7 @@ package create
 import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/buildkit"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -33,7 +34,14 @@ func configureBuildkit(instanceBackend backend.Backend, fleetName, workspaceDir 
 	if !instanceBackend.SupportsCustomMounts() || !fleetBuildkitEnabled(fleetName) {
 		return nil
 	}
-	return buildkit.ConfigureInstanceBuildx(instanceBackend, workspaceDir)
+	configured, err := buildkit.ConfigureInstanceBuildx(instanceBackend, workspaceDir)
+	if err != nil {
+		return err
+	}
+	if configured {
+		flog.Info("instance buildx configured", "fleet", fleetName, "workspace", workspaceDir)
+	}
+	return nil
 }
 
 // fleetBuildkitEnabled reports whether the named fleet has the BuildkitServer

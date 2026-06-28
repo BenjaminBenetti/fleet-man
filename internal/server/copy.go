@@ -3,7 +3,9 @@ package server
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,10 +13,12 @@ import (
 	"path"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -42,16 +46,51 @@ import (
 // default message cap while keeping per-frame overhead negligible.
 const copyChunkSize = 64 * 1024
 
+// isClientGone reports whether err is an ordinary client disconnect / cancel
+// (TUI closed, Ctrl-C mid-copy) rather than a real transfer failure. Such errors
+// surface from stream.Send and from a cancelled request context; the repo logs
+// these quietly (cf. probeFailureIsAlarming in schedule.go) instead of as
+// alarming ERRORs.
+func isClientGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Canceled, codes.Unavailable:
+		return true
+	}
+	return false
+}
+
+// logCopyOutcome records a copy RPC result once on completion: success at info,
+// a benign client cancellation at info ("… canceled", not an alarming ERROR),
+// and a genuine failure at error. dir is "out" (CopyFile) or "in" (CopyInto).
+func logCopyOutcome(dir, fleetName, instance, p string, start time.Time, err error) {
+	switch {
+	case err == nil:
+		flog.Info("file copied "+dir, "fleet", fleetName, "instance", instance, "path", p, "ms", flog.MillisSince(start))
+	case isClientGone(err):
+		flog.Info("file copy "+dir+" canceled", "fleet", fleetName, "instance", instance, "path", p, "err", err)
+	default:
+		flog.Error("file copy "+dir+" failed", "fleet", fleetName, "instance", instance, "path", p, "err", err)
+	}
+}
+
 // CopyFile streams the file at req.path out of the instance: first a meta
 // chunk (name/mode/size), then data chunks until EOF. Only regular files are
 // supported. A relative path resolves against the backend exec working
 // directory (the workspace folder).
-func (s *service) CopyFile(req *fleetgrpc.CopyFileRequest, stream grpc.ServerStreamingServer[fleetgrpc.CopyFileChunk]) error {
+func (s *service) CopyFile(req *fleetgrpc.CopyFileRequest, stream grpc.ServerStreamingServer[fleetgrpc.CopyFileChunk]) (err error) {
+	start := time.Now()
 	inst, err := resolveServerInstance(req.GetFleet(), req.GetInstance())
 	if err != nil {
 		return err
 	}
 	filePath := req.GetPath()
+	defer func() { logCopyOutcome("out", req.GetFleet(), req.GetInstance(), filePath, start, err) }()
 	base := path.Base(filePath)
 	if filePath == "" || base == "/" || base == "." || base == ".." {
 		return status.Errorf(codes.InvalidArgument, "invalid file path %q", filePath)
@@ -263,7 +302,8 @@ var copyIntoExecCommand = func(inst *fleet.Instance, argv []string) *exec.Cmd {
 // stream (the declared size is a hard cap) fails the RPC without ever clobbering
 // an existing destination, the same atomicity the download direction has. Only
 // single regular files; the mode is preserved.
-func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoChunk, fleetgrpc.CopyIntoReply]) error {
+func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoChunk, fleetgrpc.CopyIntoReply]) (err error) {
+	start := time.Now()
 	first, err := stream.Recv()
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "copy into: no open header: %v", err)
@@ -280,8 +320,21 @@ func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoC
 		return status.Errorf(codes.FailedPrecondition, "instance %s/%s is not running", open.GetFleet(), open.GetInstance())
 	}
 	if open.GetIsDir() {
-		return s.copyDirInto(inst, open, stream)
+		// Directory copy-in returns here, before the single-file defer below, so
+		// log it on its own. The destination dir is the client-requested target.
+		err = s.copyDirInto(inst, open, stream)
+		logCopyOutcome("in", open.GetFleet(), open.GetInstance(), open.GetDest(), start, err)
+		return err
 	}
+	// Single-file copy-in: register the outcome log now so validation, path
+	// resolution (incl. a rejected path-traversal name), and transfer failures
+	// are all traced — symmetric with the directory branch above. destPath starts
+	// as the client-requested target (the best identifier we have if we fail
+	// before resolving) and is replaced with the resolved write path once known,
+	// so a successful record names the file actually written — the rename form
+	// (dest is a full file path) resolves to a single path, not dest/name.
+	destPath := path.Join(open.GetDest(), open.GetName())
+	defer func() { logCopyOutcome("in", open.GetFleet(), open.GetInstance(), destPath, start, err) }()
 	if err := validateCopyName(open.GetName()); err != nil {
 		return err
 	}
@@ -293,6 +346,7 @@ func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoC
 	if err != nil {
 		return err
 	}
+	destPath = path.Join(finalDir, finalName)
 
 	mode := os.FileMode(open.GetMode()).Perm()
 	if mode == 0 {

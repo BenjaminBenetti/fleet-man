@@ -66,8 +66,12 @@ func TestProbeAndConfigureScripts(t *testing.T) {
 
 func TestConfigureInstanceBuildxSkipsWithoutDocker(t *testing.T) {
 	fe := &fakeExecer{probeOut: probeMarkerAbsent}
-	if err := ConfigureInstanceBuildx(fe, "/ws"); err != nil {
+	configured, err := ConfigureInstanceBuildx(fe, "/ws")
+	if err != nil {
 		t.Fatalf("ConfigureInstanceBuildx (absent) = %v, want nil", err)
+	}
+	if configured {
+		t.Fatalf("ConfigureInstanceBuildx (absent) configured = true, want false")
 	}
 	if len(fe.calls) != 1 {
 		t.Fatalf("expected only the probe call, got %d: %v", len(fe.calls), fe.calls)
@@ -81,8 +85,12 @@ func TestConfigureInstanceBuildxSkipsWithoutDocker(t *testing.T) {
 
 func TestConfigureInstanceBuildxConfiguresWhenPresent(t *testing.T) {
 	fe := &fakeExecer{probeOut: probeMarkerPresent}
-	if err := ConfigureInstanceBuildx(fe, "/ws"); err != nil {
+	configured, err := ConfigureInstanceBuildx(fe, "/ws")
+	if err != nil {
 		t.Fatalf("ConfigureInstanceBuildx (present) = %v, want nil", err)
+	}
+	if !configured {
+		t.Fatalf("ConfigureInstanceBuildx (present) configured = false, want true")
 	}
 	if len(fe.calls) != 2 {
 		t.Fatalf("expected probe + configure, got %d: %v", len(fe.calls), fe.calls)

@@ -97,8 +97,9 @@ func initLogger() {
 //
 // Keep keys consistent across call sites so the log stays greppable. The
 // conventional keys are: fleet, instance, session, backend, container,
-// branch, remote, from, to, port, ms, err, job, kind, warn, gateway, and
-// publicURL.
+// branch, remote, from, to, port, ms, err, job, kind, warn, gateway,
+// publicURL, agent, trigger, cmd, code, path, workspace, url, bytes, follow,
+// group, version, runtime, step, reason, name, and status.
 func Info(msg string, args ...any)  { L().Info(msg, args...) }
 func Warn(msg string, args ...any)  { L().Warn(msg, args...) }
 func Error(msg string, args ...any) { L().Error(msg, args...) }

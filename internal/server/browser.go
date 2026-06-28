@@ -12,6 +12,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/landingpage"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -92,6 +93,7 @@ func (s *service) PrepareBrowser(_ context.Context, req *fleetgrpc.PrepareBrowse
 	wsDir := inst.WorkspaceDir
 
 	if err := ensureProxyRunning(b, wsDir); err != nil {
+		flog.Error("browser prepare failed", "fleet", req.GetFleet(), "instance", req.GetInstance(), "err", err)
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
 
@@ -106,6 +108,7 @@ func (s *service) PrepareBrowser(_ context.Context, req *fleetgrpc.PrepareBrowse
 			switch {
 			case shouldUseLandingPage(hasURL, hasLanding, req.GetPreferFleetLaunch()):
 				if err := ensureLandingPageRunning(b, wsDir); err != nil {
+					flog.Error("browser prepare failed", "fleet", req.GetFleet(), "instance", req.GetInstance(), "err", err)
 					return nil, status.Errorf(codes.Internal, "landing page: %v", err)
 				}
 				initialURL = appstart.LocalURL(landingpage.DefaultPort)
@@ -114,6 +117,7 @@ func (s *service) PrepareBrowser(_ context.Context, req *fleetgrpc.PrepareBrowse
 			}
 		}
 	}
+	flog.Info("browser prepared", "fleet", req.GetFleet(), "instance", req.GetInstance())
 	return &fleetgrpc.PrepareBrowserReply{InitialUrl: initialURL}, nil
 }
 

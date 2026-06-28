@@ -8,6 +8,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -151,6 +152,7 @@ func (r *controlRegistry) syncRunning(st *state.State) {
 					return
 				}
 				if r.onOpen != nil {
+					flog.Info("browser open requested", "fleet", fName, "instance", iName, "url", payload.URL)
 					r.onOpen(fName, iName, payload.URL)
 				}
 			case control.TypeCopyFile:
@@ -159,6 +161,7 @@ func (r *controlRegistry) syncRunning(st *state.State) {
 					return
 				}
 				if r.onCopy != nil {
+					flog.Info("file copy requested", "fleet", fName, "instance", iName, "from", payload.Src, "to", payload.Dst)
 					r.onCopy(fName, iName, payload.Src, payload.Dst)
 				}
 			}

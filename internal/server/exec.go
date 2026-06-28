@@ -8,6 +8,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -70,8 +71,10 @@ func (s *service) Logs(req *fleetgrpc.LogsRequest, stream fleetgrpc.FleetService
 	cmd.Stdout = pw
 	cmd.Stderr = pw
 	if err := cmd.Start(); err != nil {
+		flog.Error("logs failed", "fleet", req.GetFleet(), "instance", req.GetInstance(), "err", err)
 		return status.Errorf(codes.Internal, "start logs: %v", err)
 	}
+	flog.Info("logs opened", "fleet", req.GetFleet(), "instance", req.GetInstance(), "follow", req.GetFollow())
 
 	ctx := stream.Context()
 	finished := make(chan struct{})

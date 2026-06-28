@@ -30,27 +30,30 @@ const proxyConfFile = "/etc/apt/apt.conf.d/01fleet-proxy"
 // ConfigureInstanceApt points an instance's apt at the fleet's shared deb cache
 // by writing an http-proxy drop-in. It first probes for apt AND a writable
 // apt.conf.d (directly or via passwordless sudo); if either is missing it
-// returns nil WITHOUT touching the instance — the documented "do nothing, no
-// error" behaviour for images that lack apt or are not configurable. When usable
-// it writes the proxy config (overwriting any prior one, so it is idempotent).
+// returns (false, nil) WITHOUT touching the instance — the documented "do
+// nothing, no error" behaviour for images that lack apt or are not configurable.
+// When usable it writes the proxy config (overwriting any prior one, so it is
+// idempotent) and returns configured=true.
 //
-// Callers should treat a returned error as non-fatal (warn and continue): a
-// cache-wiring failure must not block an otherwise-usable instance.
-func ConfigureInstanceApt(b instanceExecer, workspaceDir, proxyURL string) error {
+// The configured bool reports whether the instance's apt was actually pointed at
+// the cache, letting callers log only the real wiring. Callers should treat a
+// returned error as non-fatal (warn and continue): a cache-wiring failure must
+// not block an otherwise-usable instance.
+func ConfigureInstanceApt(b instanceExecer, workspaceDir, proxyURL string) (configured bool, err error) {
 	out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", probeScript()}).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("probe apt: %w (%s)", err, strings.TrimSpace(string(out)))
+		return false, fmt.Errorf("probe apt: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	if !aptPresent(string(out)) {
 		// apt absent or apt.conf.d not writable — silently skip per the contract.
-		return nil
+		return false, nil
 	}
 
 	out, err = b.ExecCommand(workspaceDir, []string{"sh", "-c", configureScript(proxyURL)}).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("configure apt proxy: %w (%s)", err, strings.TrimSpace(string(out)))
+		return true, fmt.Errorf("configure apt proxy: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-	return nil
+	return true, nil
 }
 
 // probeScript reports whether apt is present AND apt.conf.d is writable (either

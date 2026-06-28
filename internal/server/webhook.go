@@ -48,12 +48,16 @@ func (s *service) webhookHandler() http.Handler {
 func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 	name := firstPathSegment(r.URL.Path)
 	if name == "" {
+		flog.Warn("webhook: rejected", "reason", "empty-name", "status", 400)
 		http.Error(w, "webhook name required", http.StatusBadRequest)
 		return
 	}
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBodySize))
 	if err != nil {
+		// Not logged: this fires on the unauthenticated path for ANY name, so a
+		// prober could otherwise grow fleet.log one line per request. The sender
+		// still gets the 413 (surfaced in its delivery dashboard).
 		http.Error(w, "request body too large or unreadable", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -68,7 +72,9 @@ func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 	fires, nameFound, jsonPathActive := collectWebhookFires(st, name, body)
 	if !nameFound {
 		// No trigger anywhere carries this name. Same 404 the gateway gives an
-		// unknown id, so a probe can't enumerate configured webhook names.
+		// unknown id, so a probe can't enumerate configured webhook names. Not
+		// logged: an unknown name is attacker-controllable probe noise on this
+		// unauthenticated path, so recording it would let a prober grow fleet.log.
 		http.Error(w, "no webhook trigger with that name", http.StatusNotFound)
 		return
 	}
@@ -97,6 +103,7 @@ func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 	// treats as json-path is a misconfiguration worth surfacing loudly, not
 	// silently half-firing whichever same-named regex triggers happen to match.
 	if jsonPathActive && !bodyIsJSON(body) {
+		flog.Warn("webhook: rejected", "reason", "non-json", "name", clipName(name), "status", 400)
 		http.Error(w, "json-path webhook filter requires a JSON body; set the webhook content type to application/json", http.StatusBadRequest)
 		return
 	}
@@ -188,6 +195,23 @@ func (s *service) enqueueWebhookFires(ctx context.Context, fires []triggerFire) 
 	case <-timer.C:
 		return false
 	}
+}
+
+// clipName bounds an externally-supplied webhook name before it is written to
+// the append-only event log, so a prober hitting this unauthenticated endpoint
+// with unknown / oversized names can't emit arbitrarily long log lines. slog
+// already escapes the value, so only the length needs bounding.
+func clipName(name string) string {
+	const maxRunes = 128
+	if len(name) <= maxRunes { // bytes <= maxRunes implies runes <= maxRunes
+		return name
+	}
+	runes := []rune(name)
+	if len(runes) <= maxRunes {
+		return name
+	}
+	// Cut on a rune boundary so a multi-byte rune is never split.
+	return string(runes[:maxRunes]) + "...(clipped)"
 }
 
 // firstPathSegment returns the first path segment (the webhook name), trimming

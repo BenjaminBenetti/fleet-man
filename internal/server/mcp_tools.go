@@ -15,6 +15,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/tui"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/grpc/status"
@@ -628,6 +629,7 @@ func (s *service) mcpExec(ctx context.Context, _ *mcp.CallToolRequest, in FleetE
 	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir, in.Command).Cmd
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
+	began := time.Now()
 	runErr := runCmd(cctx, cmd)
 	exitCode := 0
 	if runErr != nil {
@@ -637,9 +639,11 @@ func (s *service) mcpExec(ctx context.Context, _ *mcp.CallToolRequest, in FleetE
 		if errors.As(runErr, &ee) {
 			exitCode = ee.ExitCode()
 		} else {
+			flog.Error("exec", "fleet", in.Fleet, "instance", in.Instance, "cmd", strings.Join(in.Command, " "), "ms", flog.MillisSince(began), "err", runErr)
 			return nil, FleetExecOutput{}, fmt.Errorf("exec: %w", runErr)
 		}
 	}
+	flog.Info("exec", "fleet", in.Fleet, "instance", in.Instance, "cmd", strings.Join(in.Command, " "), "code", exitCode, "ms", flog.MillisSince(began))
 	return nil, FleetExecOutput{Stdout: outBuf.String(), Stderr: errBuf.String(), ExitCode: exitCode}, nil
 }
 
@@ -670,8 +674,10 @@ func (s *service) mcpSessionSpawn(ctx context.Context, _ *mcp.CallToolRequest, i
 	defer cancel()
 	snippet := dotfiles.TmuxEnsureInstalled + fmt.Sprintf(`tmux new-session -d -s %s`, dotfiles.ShQuote(sessionName))
 	if out, err := runContainerShell(cctx, inst, snippet); err != nil {
+		flog.Error("session spawn failed", "fleet", in.Fleet, "instance", in.Instance, "session", sessionName, "err", err)
 		return nil, FleetSessionMessageOutput{}, fmt.Errorf("spawn session %q: %w: %s", in.Session, err, strings.TrimSpace(out))
 	}
+	flog.Info("session spawned", "fleet", in.Fleet, "instance", in.Instance, "session", sessionName)
 	return nil, FleetSessionMessageOutput{Message: fmt.Sprintf("created tmux session %q in %s/%s", sessionName, in.Fleet, in.Instance)}, nil
 }
 
@@ -697,8 +703,10 @@ func (s *service) mcpSessionExec(ctx context.Context, _ *mcp.CallToolRequest, in
 	defer cancel()
 	snippet := fmt.Sprintf(`tmux send-keys -t %s %s Enter`, dotfiles.ShQuote(sessionName), dotfiles.ShQuote(in.Command))
 	if out, err := runContainerShell(cctx, inst, snippet); err != nil {
+		flog.Error("session exec failed", "fleet", in.Fleet, "instance", in.Instance, "session", sessionName, "err", err)
 		return nil, FleetSessionMessageOutput{}, fmt.Errorf("exec in session %q: %w: %s", in.Session, err, strings.TrimSpace(out))
 	}
+	flog.Info("session exec", "fleet", in.Fleet, "instance", in.Instance, "session", sessionName, "cmd", in.Command)
 	return nil, FleetSessionMessageOutput{Message: fmt.Sprintf("sent command to session %q; read the session to see output", sessionName)}, nil
 }
 

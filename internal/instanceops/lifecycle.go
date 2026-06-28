@@ -78,6 +78,7 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 			return nil, fmt.Errorf("instance %s/%s cannot be stopped from status %q", fleetName, instanceName, instance.Status)
 		}
 		if err := instanceBackend.Stop(instance.ContainerID); err != nil {
+			flog.Error("instance status change failed", "fleet", fleetName, "instance", instanceName, "from", result.PreviousStatus, "to", targetStatus, "err", err, "ms", flog.MillisSince(start))
 			return nil, fmt.Errorf("stop instance %s/%s: %w", fleetName, instanceName, err)
 		}
 	case fleet.StatusRunning:
@@ -85,6 +86,7 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 			return nil, fmt.Errorf("instance %s/%s cannot be started from status %q", fleetName, instanceName, instance.Status)
 		}
 		if err := instanceBackend.Start(instance.ContainerID); err != nil {
+			flog.Error("instance status change failed", "fleet", fleetName, "instance", instanceName, "from", result.PreviousStatus, "to", targetStatus, "err", err, "ms", flog.MillisSince(start))
 			return nil, fmt.Errorf("start instance %s/%s: %w", fleetName, instanceName, err)
 		}
 		// Resolve the fleet's persisted container-home for the hook; empty
@@ -141,6 +143,8 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 						case !configured:
 							flog.Info("image cache: no in-instance dockerd appeared within poll window; mirror not configured",
 								"fleet", fleetName, "instance", instanceName)
+						default:
+							flog.Info("instance image cache configured", "fleet", fleetName, "instance", instanceName)
 						}
 					})
 			}

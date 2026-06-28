@@ -53,6 +53,8 @@ func imageCacheConfigureResult(fleetName, instanceName string) func(bool, error)
 		case !configured:
 			flog.Info("image cache: no in-instance dockerd appeared within poll window; mirror not configured",
 				"fleet", fleetName, "instance", instanceName)
+		default:
+			flog.Info("instance image cache configured", "fleet", fleetName, "instance", instanceName)
 		}
 	}
 }
