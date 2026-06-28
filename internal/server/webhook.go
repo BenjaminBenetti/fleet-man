@@ -70,7 +70,7 @@ func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 	if !nameFound {
 		// No trigger anywhere carries this name. Same 404 the gateway gives an
 		// unknown id, so a probe can't enumerate configured webhook names.
-		flog.Warn("webhook: rejected", "reason", "unknown-name", "name", name, "status", 404)
+		flog.Warn("webhook: rejected", "reason", "unknown-name", "name", clipName(name), "status", 404)
 		http.Error(w, "no webhook trigger with that name", http.StatusNotFound)
 		return
 	}
@@ -99,7 +99,7 @@ func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 	// treats as json-path is a misconfiguration worth surfacing loudly, not
 	// silently half-firing whichever same-named regex triggers happen to match.
 	if jsonPathActive && !bodyIsJSON(body) {
-		flog.Warn("webhook: rejected", "reason", "non-json", "name", name, "status", 400)
+		flog.Warn("webhook: rejected", "reason", "non-json", "name", clipName(name), "status", 400)
 		http.Error(w, "json-path webhook filter requires a JSON body; set the webhook content type to application/json", http.StatusBadRequest)
 		return
 	}
@@ -191,6 +191,18 @@ func (s *service) enqueueWebhookFires(ctx context.Context, fires []triggerFire) 
 	case <-timer.C:
 		return false
 	}
+}
+
+// clipName bounds an externally-supplied webhook name before it is written to
+// the append-only event log, so a prober hitting this unauthenticated endpoint
+// with unknown / oversized names can't emit arbitrarily long log lines. slog
+// already escapes the value, so only the length needs bounding.
+func clipName(name string) string {
+	const max = 128
+	if len(name) > max {
+		return name[:max] + "...(clipped)"
+	}
+	return name
 }
 
 // firstPathSegment returns the first path segment (the webhook name), trimming

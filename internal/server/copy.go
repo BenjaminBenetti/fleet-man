@@ -301,6 +301,18 @@ func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoC
 		}
 		return err
 	}
+	// Single-file copy-in: register the outcome log now so validation, path
+	// resolution (incl. a rejected path-traversal name), and transfer failures
+	// are all traced — symmetric with the directory branch above. The logged
+	// destination is the client-requested target.
+	destPath := path.Join(open.GetDest(), open.GetName())
+	defer func() {
+		if err != nil {
+			flog.Error("file copy in failed", "fleet", open.GetFleet(), "instance", open.GetInstance(), "path", destPath, "err", err)
+		} else {
+			flog.Info("file copied in", "fleet", open.GetFleet(), "instance", open.GetInstance(), "path", destPath, "ms", flog.MillisSince(start))
+		}
+	}()
 	if err := validateCopyName(open.GetName()); err != nil {
 		return err
 	}
@@ -312,14 +324,6 @@ func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoC
 	if err != nil {
 		return err
 	}
-	destPath := path.Join(finalDir, finalName)
-	defer func() {
-		if err != nil {
-			flog.Error("file copy in failed", "fleet", open.GetFleet(), "instance", open.GetInstance(), "path", destPath, "err", err)
-		} else {
-			flog.Info("file copied in", "fleet", open.GetFleet(), "instance", open.GetInstance(), "path", destPath, "ms", flog.MillisSince(start))
-		}
-	}()
 
 	mode := os.FileMode(open.GetMode()).Perm()
 	if mode == 0 {

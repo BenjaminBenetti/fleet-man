@@ -576,10 +576,11 @@ var launchAutomationCommand = func(ctx context.Context, s *service, w *watchedAg
 		// starts. Best-effort: a write failure still launches the agent (it just
 		// finds no event file) rather than dropping the whole run.
 		if w.event != nil {
-			if err := writeAutomationEventFile(inst, eventPath, w.event.payload()); err != nil {
+			payload := w.event.payload()
+			if err := writeAutomationEventFile(inst, eventPath, payload); err != nil {
 				flog.Warn("automation: write event file failed", "instance", inst.Name, "path", eventPath, "err", err)
 			} else {
-				flog.Info("automation: event file written", "fleet", w.fleet, "instance", inst.Name, "path", eventPath, "bytes", len(w.event.payload()))
+				flog.Info("automation: event file written", "fleet", w.fleet, "instance", inst.Name, "path", eventPath, "bytes", len(payload))
 			}
 		}
 		if out, err := b.RunScript(inst.ContainerID, script); err != nil {
