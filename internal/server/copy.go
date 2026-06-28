@@ -303,8 +303,11 @@ func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoC
 	}
 	// Single-file copy-in: register the outcome log now so validation, path
 	// resolution (incl. a rejected path-traversal name), and transfer failures
-	// are all traced — symmetric with the directory branch above. The logged
-	// destination is the client-requested target.
+	// are all traced — symmetric with the directory branch above. destPath starts
+	// as the client-requested target (the best identifier we have if we fail
+	// before resolving) and is replaced with the resolved write path once known,
+	// so a successful record names the file actually written — the rename form
+	// (dest is a full file path) resolves to a single path, not dest/name.
 	destPath := path.Join(open.GetDest(), open.GetName())
 	defer func() {
 		if err != nil {
@@ -324,6 +327,7 @@ func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoC
 	if err != nil {
 		return err
 	}
+	destPath = path.Join(finalDir, finalName)
 
 	mode := os.FileMode(open.GetMode()).Perm()
 	if mode == 0 {

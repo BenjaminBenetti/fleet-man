@@ -48,13 +48,14 @@ func (s *service) webhookHandler() http.Handler {
 func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 	name := firstPathSegment(r.URL.Path)
 	if name == "" {
+		flog.Warn("webhook: rejected", "reason", "empty-name", "status", 400)
 		http.Error(w, "webhook name required", http.StatusBadRequest)
 		return
 	}
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBodySize))
 	if err != nil {
-		flog.Warn("webhook: rejected", "reason", "body-too-large", "status", 413)
+		flog.Warn("webhook: rejected", "reason", "body-too-large", "name", clipName(name), "status", 413)
 		http.Error(w, "request body too large or unreadable", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -198,11 +199,16 @@ func (s *service) enqueueWebhookFires(ctx context.Context, fires []triggerFire) 
 // with unknown / oversized names can't emit arbitrarily long log lines. slog
 // already escapes the value, so only the length needs bounding.
 func clipName(name string) string {
-	const max = 128
-	if len(name) > max {
-		return name[:max] + "...(clipped)"
+	const maxRunes = 128
+	if len(name) <= maxRunes { // bytes <= maxRunes implies runes <= maxRunes
+		return name
 	}
-	return name
+	runes := []rune(name)
+	if len(runes) <= maxRunes {
+		return name
+	}
+	// Cut on a rune boundary so a multi-byte rune is never split.
+	return string(runes[:maxRunes]) + "...(clipped)"
 }
 
 // firstPathSegment returns the first path segment (the webhook name), trimming
