@@ -55,7 +55,9 @@ func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBodySize))
 	if err != nil {
-		flog.Warn("webhook: rejected", "reason", "body-too-large", "name", clipName(name), "status", 413)
+		// Not logged: this fires on the unauthenticated path for ANY name, so a
+		// prober could otherwise grow fleet.log one line per request. The sender
+		// still gets the 413 (surfaced in its delivery dashboard).
 		http.Error(w, "request body too large or unreadable", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -70,8 +72,9 @@ func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 	fires, nameFound, jsonPathActive := collectWebhookFires(st, name, body)
 	if !nameFound {
 		// No trigger anywhere carries this name. Same 404 the gateway gives an
-		// unknown id, so a probe can't enumerate configured webhook names.
-		flog.Warn("webhook: rejected", "reason", "unknown-name", "name", clipName(name), "status", 404)
+		// unknown id, so a probe can't enumerate configured webhook names. Not
+		// logged: an unknown name is attacker-controllable probe noise on this
+		// unauthenticated path, so recording it would let a prober grow fleet.log.
 		http.Error(w, "no webhook trigger with that name", http.StatusNotFound)
 		return
 	}
