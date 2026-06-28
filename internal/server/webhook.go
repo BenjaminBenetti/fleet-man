@@ -54,6 +54,7 @@ func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBodySize))
 	if err != nil {
+		flog.Warn("webhook: rejected", "reason", "body-too-large", "status", 413)
 		http.Error(w, "request body too large or unreadable", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -69,6 +70,7 @@ func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 	if !nameFound {
 		// No trigger anywhere carries this name. Same 404 the gateway gives an
 		// unknown id, so a probe can't enumerate configured webhook names.
+		flog.Warn("webhook: rejected", "reason", "unknown-name", "name", name, "status", 404)
 		http.Error(w, "no webhook trigger with that name", http.StatusNotFound)
 		return
 	}
@@ -97,6 +99,7 @@ func (s *service) serveWebhook(w http.ResponseWriter, r *http.Request) {
 	// treats as json-path is a misconfiguration worth surfacing loudly, not
 	// silently half-firing whichever same-named regex triggers happen to match.
 	if jsonPathActive && !bodyIsJSON(body) {
+		flog.Warn("webhook: rejected", "reason", "non-json", "name", name, "status", 400)
 		http.Error(w, "json-path webhook filter requires a JSON body; set the webhook content type to application/json", http.StatusBadRequest)
 		return
 	}

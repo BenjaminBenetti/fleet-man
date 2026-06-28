@@ -1,8 +1,10 @@
 package server
 
 import (
-	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"google.golang.org/grpc"
+
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
 // Watch is the server-streaming subscription that replaces the TUI's polling.
@@ -49,6 +51,8 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	flog.Info("watch subscribed", "runtime", sub.wantRuntime)
+	defer flog.Info("watch unsubscribed", "runtime", sub.wantRuntime)
 	defer s.hub.post(func(h *hub) { h.removeSub(sub) })
 
 	for {

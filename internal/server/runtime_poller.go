@@ -355,10 +355,10 @@ func statsActivityPass(h *hub) {
 			defer h.reprovisioning.Delete(cid)
 			executor := agentdetect.NewBackendExecutor(b, wsDir)
 			if err := agentdetect.NewClaudeProvisioner(executor).Provision(); err != nil {
-				state.WriteWarn(fleetName, instanceName, fmt.Sprintf("claude hook reinstall failed: %v", err))
+				state.WriteWarnQuiet(fleetName, instanceName, fmt.Sprintf("claude hook reinstall failed: %v", err))
 			}
 			if err := agentdetect.NewAuggieProvisioner(executor).Provision(); err != nil {
-				state.WriteWarn(fleetName, instanceName, fmt.Sprintf("auggie hook reinstall failed: %v", err))
+				state.WriteWarnQuiet(fleetName, instanceName, fmt.Sprintf("auggie hook reinstall failed: %v", err))
 			}
 		}()
 	}

@@ -4,6 +4,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/debcache"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetnet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -28,7 +29,14 @@ func setupDebCache(instanceBackend backend.Backend, fleetName, containerID, work
 	if err := fleetnet.ConnectInstance(fleetName, containerID); err != nil {
 		return err
 	}
-	return debcache.ConfigureInstanceApt(instanceBackend, workspaceDir, debcache.ProxyURL(fleetName))
+	configured, err := debcache.ConfigureInstanceApt(instanceBackend, workspaceDir, debcache.ProxyURL(fleetName))
+	if err != nil {
+		return err
+	}
+	if configured {
+		flog.Info("instance apt cache configured", "fleet", fleetName, "workspace", workspaceDir)
+	}
+	return nil
 }
 
 // fleetDebCacheEnabled reports whether the named fleet has the DebCacheServer

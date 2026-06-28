@@ -31,6 +31,7 @@ import (
 func Serve(ctx context.Context) error {
 	dir := fleetpaths.Dir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		flog.Error("fleet server start failed", "step", "mkdir", "err", err)
 		return fmt.Errorf("create fleet dir: %w", err)
 	}
 
@@ -48,17 +49,20 @@ func Serve(ctx context.Context) error {
 	// socket file is stale and safe to remove (net.Listen fails if it exists).
 	sock := fleetpaths.SocketPath()
 	if err := os.Remove(sock); err != nil && !os.IsNotExist(err) {
+		flog.Error("fleet server start failed", "step", "remove-socket", "err", err)
 		return fmt.Errorf("remove stale socket: %w", err)
 	}
 
 	lis, err := net.Listen("unix", sock)
 	if err != nil {
+		flog.Error("fleet server start failed", "step", "listen", "err", err)
 		return fmt.Errorf("listen on %s: %w", sock, err)
 	}
 	// 0600: host-local, per-user. Unlike the bind-mounted control socket,
 	// nothing cross-UID connects here.
 	if err := os.Chmod(sock, 0o600); err != nil {
 		_ = lis.Close()
+		flog.Error("fleet server start failed", "step", "chmod", "err", err)
 		return fmt.Errorf("chmod socket: %w", err)
 	}
 
@@ -222,6 +226,7 @@ func Serve(ctx context.Context) error {
 		grpcServer.GracefulStop()
 	case err := <-serveErr:
 		if err != nil {
+			flog.Error("fleet server crashed", "err", err)
 			return fmt.Errorf("serve: %w", err)
 		}
 	}

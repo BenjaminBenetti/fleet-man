@@ -24,30 +24,36 @@ const (
 
 // ConfigureInstanceBuildx points an instance's docker buildx at the fleet's
 // shared buildkit server. It first probes for BOTH docker and the buildx plugin
-// inside the instance; if either is missing it returns nil WITHOUT touching the
-// instance — the documented "do nothing, no error" behaviour for images that
-// lack docker tooling. When both are present it (re)creates a "remote" builder
-// bound to the bind-mounted socket and selects it as the default.
+// inside the instance; if either is missing it returns (false, nil) WITHOUT
+// touching the instance — the documented "do nothing, no error" behaviour for
+// images that lack docker tooling. When both are present it (re)creates a
+// "remote" builder bound to the bind-mounted socket and selects it as the
+// default.
+//
+// The returned bool reports whether buildx was actually wired (both tools
+// present): a probe error yields (false, err); the silent-skip branch yields
+// (false, nil); a configure-script failure yields (true, err); success yields
+// (true, nil).
 //
 // The configure step is idempotent (remove-then-create), so it is safe to call
 // on every create, clone, and start. Callers should treat a returned error as
 // non-fatal (warn and continue) — a build-cache wiring failure must not block
 // an otherwise-usable instance.
-func ConfigureInstanceBuildx(b instanceExecer, workspaceDir string) error {
+func ConfigureInstanceBuildx(b instanceExecer, workspaceDir string) (configured bool, err error) {
 	out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", probeScript()}).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("probe docker/buildx: %w (%s)", err, strings.TrimSpace(string(out)))
+		return false, fmt.Errorf("probe docker/buildx: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	if !buildxPresent(string(out)) {
 		// docker or buildx absent — silently skip per the feature contract.
-		return nil
+		return false, nil
 	}
 
 	out, err = b.ExecCommand(workspaceDir, []string{"sh", "-c", configureScript()}).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("configure buildx: %w (%s)", err, strings.TrimSpace(string(out)))
+		return true, fmt.Errorf("configure buildx: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-	return nil
+	return true, nil
 }
 
 // probeScript reports whether docker AND the buildx plugin are usable inside the

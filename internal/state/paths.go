@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
 // FleetDir returns the base directory for fleet state.
@@ -105,7 +106,7 @@ func ControlSocketPath(fleetName, instanceName string) string {
 	return filepath.Join(ControlDir(fleetName, instanceName), control.SocketName)
 }
 
-// WriteWarn writes warning to the instance's WarnPath. Errors are
+// writeWarnFile writes the banner file only (no event-log record). Errors are
 // intentionally swallowed: warning files are best-effort surfacing of
 // non-fatal failures during instance creation, and a write failure here
 // must not itself fail the creation flow. Callers can assume the
@@ -114,8 +115,21 @@ func ControlSocketPath(fleetName, instanceName string) string {
 // The logs directory is created first: it may not exist yet on a fresh
 // ~/.fleet, and without it the write would silently fail — which previously
 // made best-effort warnings (e.g. a cache-setup failure) invisible to the user.
-func WriteWarn(fleetName, instanceName, warning string) {
+func writeWarnFile(fleetName, instanceName, warning string) {
 	p := WarnPath(fleetName, instanceName)
 	_ = os.MkdirAll(filepath.Dir(p), 0755)
 	_ = os.WriteFile(p, []byte(warning), 0644)
+}
+
+// WriteWarn writes the warning banner AND records it to the event log so
+// user-visible non-fatal failures appear in ~/.fleet/fleet.log.
+func WriteWarn(fleetName, instanceName, warning string) {
+	writeWarnFile(fleetName, instanceName, warning)
+	flog.Warn("instance warning", "fleet", fleetName, "instance", instanceName, "warn", warning)
+}
+
+// WriteWarnQuiet writes the banner WITHOUT an event-log record. Poll loops
+// use this so a persistently-failing per-tick warning cannot flood fleet.log.
+func WriteWarnQuiet(fleetName, instanceName, warning string) {
+	writeWarnFile(fleetName, instanceName, warning)
 }

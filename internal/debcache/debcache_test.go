@@ -301,8 +301,12 @@ func TestProbeAndConfigureScripts(t *testing.T) {
 
 func TestConfigureInstanceAptSkipsWhenAbsent(t *testing.T) {
 	fe := &fakeExecer{probeOut: probeMarkerAbsent}
-	if err := ConfigureInstanceApt(fe, "/ws", ProxyURL("alpha")); err != nil {
+	configured, err := ConfigureInstanceApt(fe, "/ws", ProxyURL("alpha"))
+	if err != nil {
 		t.Fatalf("ConfigureInstanceApt (absent) = %v, want nil", err)
+	}
+	if configured {
+		t.Fatalf("ConfigureInstanceApt (absent) configured = true, want false")
 	}
 	if len(fe.calls) != 1 {
 		t.Fatalf("expected only the probe call, got %d: %v", len(fe.calls), fe.calls)
@@ -311,8 +315,12 @@ func TestConfigureInstanceAptSkipsWhenAbsent(t *testing.T) {
 
 func TestConfigureInstanceAptConfiguresWhenPresent(t *testing.T) {
 	fe := &fakeExecer{probeOut: probeMarkerPresent}
-	if err := ConfigureInstanceApt(fe, "/ws", ProxyURL("alpha")); err != nil {
+	configured, err := ConfigureInstanceApt(fe, "/ws", ProxyURL("alpha"))
+	if err != nil {
 		t.Fatalf("ConfigureInstanceApt (present) = %v, want nil", err)
+	}
+	if !configured {
+		t.Fatalf("ConfigureInstanceApt (present) configured = false, want true")
 	}
 	if len(fe.calls) != 2 {
 		t.Fatalf("expected probe + configure, got %d: %v", len(fe.calls), fe.calls)

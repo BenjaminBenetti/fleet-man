@@ -242,6 +242,7 @@ func (s *service) DeleteGroupLayout(_ context.Context, req *fleetgrpc.DeleteGrou
 	if err != nil {
 		return nil, err
 	}
+	flog.Info("group layout deleted", "instance", req.GetInstanceName(), "group", req.GetGroupId())
 	return &fleetgrpc.MutationReply{State: snapshot}, nil
 }
 
@@ -254,6 +255,7 @@ func (s *service) SetLastSeenVersion(_ context.Context, req *fleetgrpc.SetLastSe
 	if err != nil {
 		return nil, err
 	}
+	flog.Info("last seen version set", "version", req.GetVersion())
 	return &fleetgrpc.MutationReply{State: snapshot}, nil
 }
 
