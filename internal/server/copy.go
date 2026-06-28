@@ -3,7 +3,9 @@ package server
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -44,6 +46,39 @@ import (
 // default message cap while keeping per-frame overhead negligible.
 const copyChunkSize = 64 * 1024
 
+// isClientGone reports whether err is an ordinary client disconnect / cancel
+// (TUI closed, Ctrl-C mid-copy) rather than a real transfer failure. Such errors
+// surface from stream.Send and from a cancelled request context; the repo logs
+// these quietly (cf. probeFailureIsAlarming in schedule.go) instead of as
+// alarming ERRORs.
+func isClientGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Canceled, codes.Unavailable:
+		return true
+	}
+	return false
+}
+
+// logCopyOutcome records a copy RPC result once on completion: success at info,
+// a benign client cancellation at info ("… canceled", not an alarming ERROR),
+// and a genuine failure at error. dir is "out" (CopyFile) or "in" (CopyInto).
+func logCopyOutcome(dir, fleetName, instance, p string, start time.Time, err error) {
+	switch {
+	case err == nil:
+		flog.Info("file copied "+dir, "fleet", fleetName, "instance", instance, "path", p, "ms", flog.MillisSince(start))
+	case isClientGone(err):
+		flog.Info("file copy "+dir+" canceled", "fleet", fleetName, "instance", instance, "path", p, "err", err)
+	default:
+		flog.Error("file copy "+dir+" failed", "fleet", fleetName, "instance", instance, "path", p, "err", err)
+	}
+}
+
 // CopyFile streams the file at req.path out of the instance: first a meta
 // chunk (name/mode/size), then data chunks until EOF. Only regular files are
 // supported. A relative path resolves against the backend exec working
@@ -55,13 +90,7 @@ func (s *service) CopyFile(req *fleetgrpc.CopyFileRequest, stream grpc.ServerStr
 		return err
 	}
 	filePath := req.GetPath()
-	defer func() {
-		if err != nil {
-			flog.Error("file copy out failed", "fleet", req.GetFleet(), "instance", req.GetInstance(), "path", filePath, "err", err)
-		} else {
-			flog.Info("file copied out", "fleet", req.GetFleet(), "instance", req.GetInstance(), "path", filePath, "ms", flog.MillisSince(start))
-		}
-	}()
+	defer func() { logCopyOutcome("out", req.GetFleet(), req.GetInstance(), filePath, start, err) }()
 	base := path.Base(filePath)
 	if filePath == "" || base == "/" || base == "." || base == ".." {
 		return status.Errorf(codes.InvalidArgument, "invalid file path %q", filePath)
@@ -294,11 +323,7 @@ func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoC
 		// Directory copy-in returns here, before the single-file defer below, so
 		// log it on its own. The destination dir is the client-requested target.
 		err = s.copyDirInto(inst, open, stream)
-		if err != nil {
-			flog.Error("file copy in failed", "fleet", open.GetFleet(), "instance", open.GetInstance(), "path", open.GetDest(), "err", err)
-		} else {
-			flog.Info("file copied in", "fleet", open.GetFleet(), "instance", open.GetInstance(), "path", open.GetDest(), "ms", flog.MillisSince(start))
-		}
+		logCopyOutcome("in", open.GetFleet(), open.GetInstance(), open.GetDest(), start, err)
 		return err
 	}
 	// Single-file copy-in: register the outcome log now so validation, path
@@ -309,13 +334,7 @@ func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoC
 	// so a successful record names the file actually written — the rename form
 	// (dest is a full file path) resolves to a single path, not dest/name.
 	destPath := path.Join(open.GetDest(), open.GetName())
-	defer func() {
-		if err != nil {
-			flog.Error("file copy in failed", "fleet", open.GetFleet(), "instance", open.GetInstance(), "path", destPath, "err", err)
-		} else {
-			flog.Info("file copied in", "fleet", open.GetFleet(), "instance", open.GetInstance(), "path", destPath, "ms", flog.MillisSince(start))
-		}
-	}()
+	defer func() { logCopyOutcome("in", open.GetFleet(), open.GetInstance(), destPath, start, err) }()
 	if err := validateCopyName(open.GetName()); err != nil {
 		return err
 	}
