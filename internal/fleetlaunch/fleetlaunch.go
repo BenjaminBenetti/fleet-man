@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
@@ -116,16 +117,21 @@ fi`, RemotePath, RemotePath)
 	}
 }
 
+// stageSeq makes stageBinaryPath unique even if crypto/rand.Read fails (leaving
+// the byte buffer zeroed), so two concurrent stagers can never collide — the same
+// belt-and-suspenders the coder backend's remoteStageName uses.
+var stageSeq atomic.Uint64
+
 // stageBinaryPath returns a per-call-unique, user-writable path the binary is
 // transferred to before being installed into the privileged RemotePath. /tmp is
 // writable without sudo on every backend, so CopyFile (which is itself sudo-free)
-// can always land it here. The random suffix keeps two concurrent stagers from
-// clobbering each other's staging file between CopyFile and the install mv,
+// can always land it here. The seq+random suffix keeps two concurrent stagers
+// from clobbering each other's staging file between CopyFile and the install mv,
 // matching the per-call uniqueness used elsewhere in the staging path.
 func stageBinaryPath() string {
 	var b [6]byte
 	_, _ = rand.Read(b[:])
-	return fmt.Sprintf("/tmp/.fleet-launch-stage.%x", b[:])
+	return fmt.Sprintf("/tmp/.fleet-launch-stage.%d.%x", stageSeq.Add(1), b[:])
 }
 
 // copyBinary transfers the running fleet binary into the container at RemotePath
@@ -170,6 +176,12 @@ else
 fi`, RemotePath, stagePath, remoteDir)
 
 	if out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", install}).CombinedOutputWithTimeout(backend.CopyTimeout); err != nil {
+		// CopyFile landed the binary but the install didn't move it (e.g. /usr/bin
+		// not writable and `sudo -n` denied). Remove the staged copy best-effort so
+		// repeated provision attempts don't pile up /tmp/.fleet-launch-stage.*
+		// orphans — each gets a fresh random name. Mirrors coder.removeRemote.
+		rm := fmt.Sprintf("rm -f %s", backend.ShellQuote(stagePath))
+		_, _ = instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", rm}).CombinedOutputWithTimeout(backend.CopyTimeout)
 		return fmt.Errorf("install fleet binary: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil

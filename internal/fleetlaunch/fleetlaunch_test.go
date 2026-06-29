@@ -18,6 +18,7 @@ type recordingBackend struct {
 	copiedBytes int
 	copyMode    int
 	execScripts []string
+	failExec    bool // when set, every exec exits non-zero (drives error paths)
 }
 
 func (b *recordingBackend) CopyFile(workspaceDir string, src io.Reader, remotePath string, mode int) error {
@@ -32,7 +33,11 @@ func (b *recordingBackend) ExecCommand(workspaceDir string, command []string) *b
 	if len(command) == 3 {
 		b.execScripts = append(b.execScripts, command[2])
 	}
-	return backend.NewCmd(exec.Command("true"), nil)
+	bin := "true"
+	if b.failExec {
+		bin = "false"
+	}
+	return backend.NewCmd(exec.Command(bin), nil)
 }
 
 func (b *recordingBackend) ExecCommandQuiet(workspaceDir string, command []string) *backend.Cmd {
@@ -105,6 +110,23 @@ func TestCopyBinaryStagesViaCopyFileThenInstalls(t *testing.T) {
 	}
 	if !strings.Contains(install, "sudo -n") {
 		t.Errorf("install lost the sudo fallback for a non-writable /usr/bin:\n%s", install)
+	}
+}
+
+// TestCopyBinaryCleansStageOnInstallFailure asserts that when the install exec
+// fails (e.g. /usr/bin not writable and sudo -n denied) the staged /tmp copy is
+// removed best-effort, so retried provisions don't accumulate orphans.
+func TestCopyBinaryCleansStageOnInstallFailure(t *testing.T) {
+	b := &recordingBackend{failExec: true}
+	if err := copyBinary(b, "/ws"); err == nil {
+		t.Fatal("expected the failing install to surface as an error")
+	}
+	if len(b.execScripts) != 2 {
+		t.Fatalf("expected install + cleanup execs, got %d: %v", len(b.execScripts), b.execScripts)
+	}
+	cleanup := b.execScripts[1]
+	if !strings.Contains(cleanup, "rm -f") || !strings.Contains(cleanup, b.copiedTo) {
+		t.Errorf("cleanup must rm the staged temp %q:\n%s", b.copiedTo, cleanup)
 	}
 }
 

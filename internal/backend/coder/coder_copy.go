@@ -19,6 +19,13 @@ import (
 // the coder stdin-EOF hang; the deadline only guards against a stuck tunnel.
 const coderPrepTimeout = 30 * time.Second
 
+// coderScpWaitDelay is the grace period after the scp deadline fires (when
+// CommandContext kills scp) before Go force-closes the inherited stdout/stderr
+// pipe and lets cmd.Wait() return — so a hung tunnel can't keep the call blocked
+// past CopyTimeout. Generous relative to backend.Cmd's own 3s WaitDelay because
+// scp's nested `coder ssh --stdio` teardown can be slower than a local exec.
+const coderScpWaitDelay = 10 * time.Second
+
 // coderCopySeq makes the remote staging name unique within this process so two
 // concurrent CopyFile calls never collide on it.
 var coderCopySeq atomic.Uint64
@@ -124,6 +131,14 @@ func (coderBackend *CoderBackend) CopyFile(workspaceDir string, src io.Reader, r
 		"-o", "ProxyCommand=coder ssh --stdio %h",
 		localPath, target+":"+remoteTmp,
 	)
+	// Make the ctx deadline real. On timeout, CommandContext kills only scp; its
+	// ssh / `coder ssh --stdio` children inherit the stdout/stderr pipe, so
+	// without WaitDelay cmd.Wait() (inside CombinedOutput) would block on the
+	// output-copy goroutine until those children close it — a stuck tunnel could
+	// hang past CopyTimeout, the exact failure class this file removes. WaitDelay
+	// force-closes the pipe shortly after the kill, mirroring
+	// CombinedOutputWithTimeout's own WaitDelay.
+	scp.WaitDelay = coderScpWaitDelay
 	if out, err := scp.CombinedOutput(); err != nil {
 		// scp may have written a partial remote temp before failing.
 		coderBackend.removeRemote(workspaceDir, remoteTmp)
