@@ -20,16 +20,27 @@ import (
 const coderPrepTimeout = 30 * time.Second
 
 // coderCopySeq makes the remote staging name unique within this process so two
-// concurrent CopyFile calls to the same remotePath never collide on it.
+// concurrent CopyFile calls never collide on it.
 var coderCopySeq atomic.Uint64
 
-// remoteStageName returns a hidden, per-call-unique sibling of remotePath to scp
-// into before the atomic rename — the out-of-band analogue of the in-shell
-// `$$`-suffixed temp the stdin-streaming backends use.
-func remoteStageName(remotePath string) string {
+// coderStageDir is the fixed directory CopyFile scp's into before the install
+// rename. It is deliberately NOT a sibling of remotePath: the scp remote operand
+// is the one path in this file that cannot be ShellQuote'd (see the scp call),
+// and remotePath's parent can legitimately contain spaces — a `fleet copy` dest
+// directory is only `test -d`-probed, not character-restricted. Staging instead
+// in /tmp, whose name carries no shell metacharacters, keeps that operand safe
+// under both scp transports without quoting. /tmp is writable on every backend
+// (the binary and automation-event staging paths already rely on it).
+const coderStageDir = "/tmp"
+
+// remoteStageName returns a hidden, per-call-unique path in coderStageDir to scp
+// into before the install rename — the out-of-band analogue of the in-shell
+// `$$`-suffixed temp the stdin-streaming backends use. Its characters are
+// restricted to [0-9a-f.] so the unquoted scp operand is transport-safe.
+func remoteStageName() string {
 	var b [6]byte
 	_, _ = rand.Read(b[:])
-	return fmt.Sprintf("%s.fleet-scp.%d.%x", remotePath, coderCopySeq.Add(1), b)
+	return fmt.Sprintf("%s/.fleet-scp.%d.%x", coderStageDir, coderCopySeq.Add(1), b)
 }
 
 // CopyFile transfers src INTO the coder workspace (its nested devcontainer) at
@@ -44,8 +55,15 @@ func remoteStageName(remotePath string) string {
 //
 //  1. materialise src to a host file (an *os.File source is used directly);
 //  2. mkdir -p the destination's parent (scp will not create it);
-//  3. scp the host file to a sibling temp next to remotePath;
-//  4. chmod + atomic rename into place via a normal exec (stdin-free, hang-proof).
+//  3. scp the host file to a fixed metacharacter-free temp in /tmp;
+//  4. chmod + rename it into place via a normal exec (stdin-free, hang-proof).
+//
+// The rename in step 4 (not the scp in step 3) targets remotePath, so a `fleet
+// copy` destination that contains spaces is handled by the ShellQuote'd `mv` —
+// the scp operand never sees it. Because the temp lives in /tmp rather than
+// beside remotePath, that `mv` may cross filesystems (a copy+unlink, not an
+// atomic rename) when remotePath is outside /tmp; that is acceptable for the
+// best-effort staging this serves and matches no concurrent-reader expectation.
 //
 // scp defaults to the SFTP subsystem, which the coder agent provides; if a
 // particular template's nested agent lacks it the transfer fails cleanly (the
@@ -79,7 +97,7 @@ func (coderBackend *CoderBackend) CopyFile(workspaceDir string, src io.Reader, r
 
 	name := coderWorkspaceName(workspaceDir)
 	target := coderBackend.resolveSSHTarget(name)
-	remoteTmp := remoteStageName(remotePath)
+	remoteTmp := remoteStageName()
 
 	// scp cannot create the destination directory; make sure it exists first.
 	mkdir := fmt.Sprintf(`mkdir -p "$(dirname %s)"`, backend.ShellQuote(remotePath))
@@ -90,12 +108,15 @@ func (coderBackend *CoderBackend) CopyFile(workspaceDir string, src io.Reader, r
 	ctx, cancel := context.WithTimeout(context.Background(), backend.CopyTimeout)
 	defer cancel()
 	// The remote operand (target:remoteTmp) is intentionally NOT shell-quoted,
-	// unlike the mkdir/install/cleanup execs around it: scp's default SFTP
-	// transfer (OpenSSH 9.0+) takes the post-colon path LITERALLY, so a `'..'`
-	// wrapper would become part of the filename. (Quoting is only right for the
-	// pre-9.0 legacy protocol, where a remote shell expands the path — which this
-	// code never opts into via -O.) remoteTmp derives from remotePath, so the
-	// staging-path callers (always /tmp) carry no spaces regardless.
+	// unlike the mkdir/install/cleanup execs around it. The two scp transports
+	// disagree on how to read it: the default SFTP transfer (OpenSSH 9.0+) takes
+	// the post-colon path LITERALLY, so a `'..'` wrapper would become part of the
+	// filename, while the legacy pre-9.0 protocol shell-expands it (where quoting
+	// would be required). No single quoting choice is right for both — so instead
+	// remoteTmp is constructed to need none: it lives in /tmp with only [0-9a-f.]
+	// characters (see remoteStageName), which is safe verbatim under either
+	// transport. The spacey final path is reached by the ShellQuote'd `mv` below,
+	// never by scp.
 	scp := exec.CommandContext(ctx, "scp",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",

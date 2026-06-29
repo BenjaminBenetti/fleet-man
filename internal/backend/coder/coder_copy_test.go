@@ -8,18 +8,21 @@ import (
 	"testing"
 )
 
-// TestRemoteStageNameUnique confirms the remote scp staging name is a hidden
-// sibling of the destination and differs across calls, so concurrent copies to
-// the same path don't collide (the bug a fixed ".fleet-scp" suffix would cause).
+// TestRemoteStageNameUnique confirms the remote scp staging name lives in the
+// fixed metacharacter-free /tmp dir (so the unquoted scp operand is transport-
+// safe regardless of the destination), differs across calls (so concurrent
+// copies don't collide), and carries no shell metacharacters.
 func TestRemoteStageNameUnique(t *testing.T) {
-	const dst = "/usr/bin/fleet"
-	a, b := remoteStageName(dst), remoteStageName(dst)
+	a, b := remoteStageName(), remoteStageName()
 	if a == b {
 		t.Fatalf("stage names collide: %q", a)
 	}
 	for _, n := range []string{a, b} {
-		if !strings.HasPrefix(n, dst+".fleet-scp.") {
-			t.Errorf("stage name %q is not a hidden sibling of %q", n, dst)
+		if !strings.HasPrefix(n, coderStageDir+"/.fleet-scp.") {
+			t.Errorf("stage name %q is not in the fixed staging dir %q", n, coderStageDir)
+		}
+		if strings.ContainsAny(n, " \t'\"$`\\*?(){}[]") {
+			t.Errorf("stage name %q contains a shell metacharacter (unsafe as an unquoted scp operand)", n)
 		}
 	}
 }
