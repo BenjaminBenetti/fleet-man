@@ -397,6 +397,14 @@ var copyFileInto = func(inst *fleet.Instance, src io.Reader, remotePath string, 
 // and any other failure is Internal. On success it returns the temp file
 // rewound to the start (ready to be read by CopyFile) and the byte count; the
 // caller owns closing and removing it.
+//
+// Unlike the old tar path (which streamed straight through to the instance), the
+// whole upload is buffered to disk first — that is what makes the exact-size
+// check possible before anything is written into the instance, and it lets the
+// coder backend scp the file without a second copy. The temp lives in os.TempDir
+// (honoring $TMPDIR), so a very large `fleet copy` needs host scratch space
+// there; point $TMPDIR at a roomy filesystem if the default /tmp is small or
+// RAM-backed.
 func drainCopyIntoToHostFile(stream copyIntoChunkReceiver, size int64) (*os.File, int64, error) {
 	f, err := os.CreateTemp("", "fleetcopyin-*")
 	if err != nil {

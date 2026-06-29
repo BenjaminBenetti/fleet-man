@@ -11,6 +11,7 @@
 package fleetlaunch
 
 import (
+	"crypto/rand"
 	"fmt"
 	"os"
 	"strings"
@@ -115,10 +116,17 @@ fi`, RemotePath, RemotePath)
 	}
 }
 
-// stagePath is the user-writable path the binary is transferred to before being
-// installed into the privileged RemotePath. /tmp is writable without sudo on
-// every backend, so CopyFile (which is itself sudo-free) can always land it here.
-const stagePath = "/tmp/.fleet-launch-stage"
+// stageBinaryPath returns a per-call-unique, user-writable path the binary is
+// transferred to before being installed into the privileged RemotePath. /tmp is
+// writable without sudo on every backend, so CopyFile (which is itself sudo-free)
+// can always land it here. The random suffix keeps two concurrent stagers from
+// clobbering each other's staging file between CopyFile and the install mv,
+// matching the per-call uniqueness used elsewhere in the staging path.
+func stageBinaryPath() string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return fmt.Sprintf("/tmp/.fleet-launch-stage.%x", b[:])
+}
 
 // copyBinary transfers the running fleet binary into the container at RemotePath
 // in two stdin-EOF-safe steps:
@@ -148,6 +156,7 @@ func copyBinary(instanceBackend backend.Backend, workspaceDir string) error {
 	}
 	defer bin.Close()
 
+	stagePath := stageBinaryPath()
 	if err := instanceBackend.CopyFile(workspaceDir, bin, stagePath, 0o755); err != nil {
 		return fmt.Errorf("stage fleet binary: %w", err)
 	}

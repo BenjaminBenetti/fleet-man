@@ -57,6 +57,15 @@ func remoteStageName(remotePath string) string {
 // CopyTimeout rather than a caller context — Backend.CopyFile takes no context,
 // so a client that aborts an in-flight `fleet copy` cannot cancel the scp before
 // that timeout; the bound keeps an abandoned copy from leaking indefinitely.
+//
+// remotePath should be ABSOLUTE. Every caller in the staging path passes one
+// (the binary stages to /tmp, the automation event file to /tmp). A relative
+// remotePath resolves against scp's / `coder ssh`'s login dir (home) on coder —
+// which differs from the workspace folder a devcontainer/codespaces write would
+// use, and from the path the `fleet copy` handler reports — so a `fleet copy`
+// with an empty/relative dest lands in an undefined spot on coder. That path is
+// part of the still-to-be-validated coder `fleet copy` support; the #223 fix
+// (binary + automation staging) is unaffected because it is always absolute.
 func (coderBackend *CoderBackend) CopyFile(workspaceDir string, src io.Reader, remotePath string, mode int) error {
 	if _, err := exec.LookPath("scp"); err != nil {
 		return fmt.Errorf("copy into %q: scp not found on host (required for coder file transfer): %w", remotePath, err)
@@ -80,6 +89,13 @@ func (coderBackend *CoderBackend) CopyFile(workspaceDir string, src io.Reader, r
 
 	ctx, cancel := context.WithTimeout(context.Background(), backend.CopyTimeout)
 	defer cancel()
+	// The remote operand (target:remoteTmp) is intentionally NOT shell-quoted,
+	// unlike the mkdir/install/cleanup execs around it: scp's default SFTP
+	// transfer (OpenSSH 9.0+) takes the post-colon path LITERALLY, so a `'..'`
+	// wrapper would become part of the filename. (Quoting is only right for the
+	// pre-9.0 legacy protocol, where a remote shell expands the path — which this
+	// code never opts into via -O.) remoteTmp derives from remotePath, so the
+	// staging-path callers (always /tmp) carry no spaces regardless.
 	scp := exec.CommandContext(ctx, "scp",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",

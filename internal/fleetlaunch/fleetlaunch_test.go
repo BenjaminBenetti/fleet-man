@@ -84,8 +84,8 @@ func TestCopyBinaryStagesViaCopyFileThenInstalls(t *testing.T) {
 		t.Fatalf("copyBinary: %v", err)
 	}
 
-	if b.copiedTo != stagePath {
-		t.Errorf("staged to %q, want %q", b.copiedTo, stagePath)
+	if !strings.HasPrefix(b.copiedTo, "/tmp/.fleet-launch-stage.") {
+		t.Errorf("staged to %q, want a unique /tmp/.fleet-launch-stage.* path", b.copiedTo)
 	}
 	if b.copyMode != 0o755 {
 		t.Errorf("stage mode = %o, want 0755", b.copyMode)
@@ -97,8 +97,8 @@ func TestCopyBinaryStagesViaCopyFileThenInstalls(t *testing.T) {
 		t.Fatalf("expected 1 install exec, got %d: %v", len(b.execScripts), b.execScripts)
 	}
 	install := b.execScripts[0]
-	if !strings.Contains(install, stagePath) || !strings.Contains(install, RemotePath) {
-		t.Errorf("install script missing stage/remote paths:\n%s", install)
+	if !strings.Contains(install, b.copiedTo) || !strings.Contains(install, RemotePath) {
+		t.Errorf("install script missing the staged/remote paths:\n%s", install)
 	}
 	if strings.Contains(install, "cat >") {
 		t.Errorf("install must not stream over stdin (hangs on coder):\n%s", install)
