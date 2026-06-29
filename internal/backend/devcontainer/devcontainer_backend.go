@@ -352,6 +352,18 @@ func (devcontainerBackend *DevcontainerBackend) rawExec(workspaceDir string, com
 	return exec.Command("devcontainer", args...)
 }
 
+// CopyFile streams src into the container over stdin. `devcontainer exec` runs
+// `docker exec` without a PTY over a clean binary channel that delivers stdin
+// EOF, so the StreamWriteScript `cat > tmp` reliably terminates here.
+func (devcontainerBackend *DevcontainerBackend) CopyFile(workspaceDir string, src io.Reader, remotePath string, mode int) error {
+	cmd := devcontainerBackend.ExecCommand(workspaceDir, backend.StreamWriteScript(remotePath, mode))
+	cmd.Stdin = src
+	if out, err := cmd.CombinedOutputWithTimeout(backend.CopyTimeout); err != nil {
+		return fmt.Errorf("copy into %q: %w (%s)", remotePath, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // pruneStaleContainers force-removes any docker container labelled
 // `devcontainer.local_folder=<workspaceDir>`. Called from Up() so that
 // reusing an instance name (same wsDir on disk) never silently rebinds

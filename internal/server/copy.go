@@ -4,15 +4,12 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"crypto/rand"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -28,19 +25,22 @@ import (
 // in-instance `fc` shorthand): CopyFile streams a file OUT of an instance to the
 // client, CopyInto streams a file INTO an instance from the client.
 //
-// Both move bytes through the backend with a single container exec and a `tar`
-// pipe, so the file's metadata (mode, size) and bytes ride one consistent
-// stream with no shell quoting (argv goes straight to exec) and no stat/cat
-// race. OUT runs `tar -chf -` to stdout (-h dereferences a symlinked source so
-// the client receives the real content); IN runs `tar -xf -` from stdin into
-// the destination directory, preserving the file mode.
+// OUT runs `tar -chf -` to stdout (-h dereferences a symlinked source so the
+// client receives the real content) and reads the stream until the remote
+// process exits — a remote→host close the transport always delivers, so it works
+// on every backend.
 //
-// Backend caveat (shared by both directions, pre-existing): the codespaces
-// backend allocates a PTY for exec, whose line discipline mangles binary tar —
-// on stdin (IN) a 0x04 byte reads as EOF, truncating the upload. The strict size
-// check below turns such a truncation into a clean InvalidArgument rather than a
-// silent partial write. devcontainer (the default) and coder exec without a PTY
-// and over a clean binary channel, so both directions work there.
+// IN (single file) buffers the upload to a host temp — validating the declared
+// size exactly so a truncated/oversized stream fails before anything is written
+// — then hands it to the backend's CopyFile, the strategy seam that picks a
+// stdin-EOF-safe transport per backend. This is deliberate: a host→remote
+// `tar -xf -` reading stdin to EOF hangs forever on the coder backend, whose
+// `coder ssh` transport never half-closes the remote command's stdin (issue
+// #223); CopyFile streams over stdin on devcontainer/codespaces and transfers
+// out-of-band with scp on coder. IN (directory, copyDirInto) still streams a tar
+// to `tar -xf -` and so remains subject to that stdin-EOF limitation on coder —
+// it is already refused on codespaces (whose exec PTY mangles binary tar) and is
+// a tracked follow-up for coder.
 
 // copyChunkSize is the data-frame payload size. Comfortably under gRPC's 4MB
 // default message cap while keeping per-frame overhead negligible.
@@ -296,12 +296,13 @@ var copyIntoExecCommand = func(inst *fleet.Instance, argv []string) *exec.Cmd {
 
 // CopyInto streams the file in the client's chunks INTO the instance. The first
 // chunk carries the open header (instance, dest, name, mode, size); the rest
-// carry data. The server resolves dest inside the container, extracts a one-file
-// tar (built here from the streamed bytes) with `tar -xf - -C <dir>` under a
-// temporary name, then renames it into place — so a truncated or oversized
-// stream (the declared size is a hard cap) fails the RPC without ever clobbering
-// an existing destination, the same atomicity the download direction has. Only
-// single regular files; the mode is preserved.
+// carry data. The server resolves dest inside the container, buffers the stream
+// to a host temp validated against the declared size (a hard cap), then hands it
+// to the backend's CopyFile — which writes it atomically (temp + rename), so a
+// truncated or oversized stream fails the RPC without ever clobbering an existing
+// destination, the same atomicity the download direction has. Only single
+// regular files; the mode is preserved. (A directory upload routes to
+// copyDirInto.)
 func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoChunk, fleetgrpc.CopyIntoReply]) (err error) {
 	start := time.Now()
 	first, err := stream.Recv()
@@ -353,76 +354,96 @@ func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoC
 		mode = 0o644
 	}
 
-	// Extract under a hidden temporary name and rename into place only on a clean
-	// finish, so a half-written upload never replaces a previous good file.
-	tempName := copyIntoTempName()
-
-	cmd := copyIntoExecCommand(inst, []string{"tar", "-xf", "-", "-C", finalDir})
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	stdin, err := cmd.StdinPipe()
+	// Buffer the upload to a host temp, validating the declared size exactly, so a
+	// truncated or oversized stream fails the RPC BEFORE anything is written into
+	// the instance (preserving any existing destination, the same atomicity the
+	// tar path had). Then hand the validated file to the backend's CopyFile, which
+	// transfers it with a transport that does not depend on stdin EOF — so it
+	// works on the coder backend, whose `coder ssh` never delivers the stdin EOF a
+	// `tar -xf -` waits for — and publishes it atomically (same-dir temp + rename).
+	hostTmp, written, err := drainCopyIntoToHostFile(stream, open.GetSize())
 	if err != nil {
-		return status.Errorf(codes.Internal, "pipe: %v", err)
+		return err
 	}
-	if err := cmd.Start(); err != nil {
-		return status.Errorf(codes.Internal, "start copy: %v", err)
+	defer func() { _ = hostTmp.Close(); _ = os.Remove(hostTmp.Name()) }()
+
+	finalPath := finalName
+	if finalDir != "." {
+		finalPath = path.Join(finalDir, finalName)
 	}
-
-	ctx := stream.Context()
-	finished := make(chan struct{})
-	// On client disconnect, kill tar AND close stdin so a write blocked on a full
-	// pipe unblocks (the inverse of CopyFile, where the active side is stdout).
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = cmd.Process.Kill()
-			_ = stdin.Close()
-		case <-finished:
-		}
-	}()
-
-	writeErr := writeCopyIntoTar(stdin, stream, tempName, mode, open.GetSize())
-	// EOF to tar. A no-op if the killer already closed it; harmless after a
-	// write error (tar already saw a short archive).
-	_ = stdin.Close()
-	waitErr := cmd.Wait()
-	close(finished)
-
-	tarMsg := strings.TrimSpace(stderr.String())
-	if writeErr != nil || waitErr != nil {
-		// Never leave the temp file behind on a failed upload.
-		s.removeContainerFile(inst, finalDir, tempName)
-		if writeErr != nil {
-			// A size mismatch is the client's fault and already a clean status.
-			if status.Code(writeErr) == codes.InvalidArgument {
-				return writeErr
-			}
-			// Otherwise the write likely hit EPIPE because tar died first — tar's
-			// own stderr (e.g. a missing directory) is the real cause.
-			if tarMsg != "" {
-				return status.Errorf(codes.Internal, "write %q to %s/%s: %s", finalName, open.GetFleet(), open.GetInstance(), tarMsg)
-			}
-			return writeErr
-		}
-		if tarMsg != "" {
-			return status.Errorf(codes.Internal, "write %q to %s/%s: %s", finalName, open.GetFleet(), open.GetInstance(), tarMsg)
-		}
-		return status.Errorf(codes.Internal, "write %q to %s/%s: %v", finalName, open.GetFleet(), open.GetInstance(), waitErr)
+	if err := copyFileInto(inst, hostTmp, finalPath, int(mode)); err != nil {
+		return status.Errorf(codes.Internal, "write %q to %s/%s: %v", finalName, open.GetFleet(), open.GetInstance(), err)
 	}
 
-	// Publish the fully-written file with an atomic rename.
-	if err := s.moveContainerFile(inst, finalDir, tempName, finalName); err != nil {
-		s.removeContainerFile(inst, finalDir, tempName)
-		return status.Errorf(codes.Internal, "finalize %q in %s/%s: %v", finalName, open.GetFleet(), open.GetInstance(), err)
-	}
-
-	finalPath := path.Join(finalDir, finalName)
-	if !path.IsAbs(finalPath) {
+	reportedPath := finalPath
+	if !path.IsAbs(reportedPath) {
 		// A relative dest resolved against the workspace folder (the exec cwd);
 		// report the absolute path the file actually landed at.
-		finalPath = path.Join(inst.WorkspaceDir, finalDir, finalName)
+		reportedPath = path.Join(inst.WorkspaceDir, finalDir, finalName)
 	}
-	return stream.SendAndClose(&fleetgrpc.CopyIntoReply{Path: finalPath, Written: open.GetSize()})
+	return stream.SendAndClose(&fleetgrpc.CopyIntoReply{Path: reportedPath, Written: written})
+}
+
+// copyFileInto is the seam from the CopyInto handler to the backend's stdin-EOF-
+// safe file transfer. A package var so tests can stub the whole backend layer
+// (mirroring copyIntoExecCommand).
+var copyFileInto = func(inst *fleet.Instance, src io.Reader, remotePath string, mode int) error {
+	return backendutil.NewForInstance(inst, false).CopyFile(inst.WorkspaceDir, src, remotePath, mode)
+}
+
+// drainCopyIntoToHostFile streams the client's data chunks into a host temp file,
+// enforcing the declared size exactly: a stream that ends short or overruns is an
+// InvalidArgument (so a truncated upload never lands as a silent partial file),
+// and any other failure is Internal. On success it returns the temp file
+// rewound to the start (ready to be read by CopyFile) and the byte count; the
+// caller owns closing and removing it.
+//
+// Unlike the old tar path (which streamed straight through to the instance), the
+// whole upload is buffered to disk first — that is what makes the exact-size
+// check possible before anything is written into the instance, and it lets the
+// coder backend scp the file without a second copy. The temp lives in os.TempDir
+// (honoring $TMPDIR), so a very large `fleet copy` needs host scratch space
+// there; point $TMPDIR at a roomy filesystem if the default /tmp is small or
+// RAM-backed.
+func drainCopyIntoToHostFile(stream copyIntoChunkReceiver, size int64) (*os.File, int64, error) {
+	f, err := os.CreateTemp("", "fleetcopyin-*")
+	if err != nil {
+		return nil, 0, status.Errorf(codes.Internal, "stage upload: %v", err)
+	}
+	fail := func(c codes.Code, format string, a ...any) (*os.File, int64, error) {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return nil, 0, status.Errorf(c, format, a...)
+	}
+
+	var written int64
+	for {
+		chunk, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fail(codes.Internal, "recv: %v", err)
+		}
+		data := chunk.GetData()
+		if len(data) == 0 {
+			continue
+		}
+		written += int64(len(data))
+		if written > size {
+			return fail(codes.InvalidArgument, "copy into: stream exceeds declared size %d", size)
+		}
+		if _, err := f.Write(data); err != nil {
+			return fail(codes.Internal, "stage upload: %v", err)
+		}
+	}
+	if written != size {
+		return fail(codes.InvalidArgument, "copy into: stream ended early — got %d of %d bytes", written, size)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return fail(codes.Internal, "stage upload: %v", err)
+	}
+	return f, written, nil
 }
 
 // copyDirInto extracts the client's tar of directory contents into the instance.
@@ -434,6 +455,14 @@ func (s *service) CopyInto(stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoC
 func (s *service) copyDirInto(inst *fleet.Instance, open *fleetgrpc.CopyIntoOpen, stream grpc.ClientStreamingServer[fleetgrpc.CopyIntoChunk, fleetgrpc.CopyIntoReply]) error {
 	if inst.Backend == fleet.BackendCodespaces {
 		return status.Errorf(codes.FailedPrecondition, "copying a directory is not supported on the codespaces backend")
+	}
+	// The dir path still pipes a tar to a stdin-reading `tar -xf -`, which hangs
+	// forever on coder (its `coder ssh` never delivers the stdin EOF — issue
+	// #223). Refuse it cleanly rather than wedging the RPC; the single-file path
+	// goes through CopyFile and is unaffected. A CopyFile-based recursive extract
+	// is a tracked follow-up.
+	if inst.Backend == fleet.BackendCoder {
+		return status.Errorf(codes.FailedPrecondition, "copying a directory is not yet supported on the coder backend")
 	}
 	if err := validateCopyName(open.GetName()); err != nil {
 		return err
@@ -553,43 +582,6 @@ func pumpCopyIntoData(w io.Writer, stream copyIntoChunkReceiver) (int64, error) 
 	}
 }
 
-// copyIntoSeq makes the temp name below unique within this process regardless of
-// the RNG, so two concurrent uploads into one directory never collide even if
-// crypto/rand degrades (a failed Read would otherwise leave the bytes zeroed).
-var copyIntoSeq atomic.Uint64
-
-// copyIntoTempName returns a hidden, unique basename to extract an upload into
-// before the atomic rename onto its real destination.
-func copyIntoTempName() string {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
-	return fmt.Sprintf(".fleetcopy-%d-%x", copyIntoSeq.Add(1), b[:])
-}
-
-// moveContainerFile renames from→to within dir inside the instance — the atomic
-// publish step that replaces any existing destination only once the upload is
-// fully written.
-func (s *service) moveContainerFile(inst *fleet.Instance, dir, from, to string) error {
-	// `--` so a destination basename beginning with '-' is treated as a path,
-	// not an mv flag.
-	cmd := copyIntoExecCommand(inst, []string{"mv", "-f", "--", path.Join(dir, from), path.Join(dir, to)})
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return fmt.Errorf("%s", msg)
-		}
-		return err
-	}
-	return nil
-}
-
-// removeContainerFile best-effort deletes a leftover temp file inside the
-// instance after a failed upload.
-func (s *service) removeContainerFile(inst *fleet.Instance, dir, name string) {
-	_ = copyIntoExecCommand(inst, []string{"rm", "-f", "--", path.Join(dir, name)}).Run()
-}
-
 // resolveCopyIntoDest resolves the destination dir + final basename inside the
 // container, scp-style: an empty dest (or a dest that is an existing directory)
 // keeps the source name; otherwise dest is the full target path. A trailing
@@ -625,62 +617,23 @@ func (s *service) probeContainerDir(inst *fleet.Instance, dir string) bool {
 }
 
 // copyIntoChunkReceiver is the read half of the CopyInto stream — abstracted so
-// writeCopyIntoTar is unit-testable without a real gRPC stream.
+// drainCopyIntoToHostFile (single file) and pumpCopyIntoData (directory) are
+// unit-testable without a real gRPC stream.
 type copyIntoChunkReceiver interface {
 	Recv() (*fleetgrpc.CopyIntoChunk, error)
 }
 
-// writeCopyIntoTar drains the client's data chunks into w as a single-file tar
-// archive named name with the given mode. It enforces size exactly: a stream
-// that ends short or overruns is an InvalidArgument (so a truncated upload never
-// lands as a silent partial file), and any other write failure surfaces verbatim.
-func writeCopyIntoTar(w io.Writer, stream copyIntoChunkReceiver, name string, mode os.FileMode, size int64) error {
-	tw := tar.NewWriter(w)
-	if err := tw.WriteHeader(&tar.Header{
-		Name:     name,
-		Mode:     int64(mode.Perm()),
-		Size:     size,
-		Typeflag: tar.TypeReg,
-	}); err != nil {
-		return status.Errorf(codes.Internal, "tar header: %v", err)
-	}
-
-	var written int64
-	for {
-		chunk, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return status.Errorf(codes.Internal, "recv: %v", err)
-		}
-		data := chunk.GetData()
-		if len(data) == 0 {
-			continue
-		}
-		written += int64(len(data))
-		if written > size {
-			return status.Errorf(codes.InvalidArgument, "copy into: stream exceeds declared size %d", size)
-		}
-		if _, err := tw.Write(data); err != nil {
-			return status.Errorf(codes.Internal, "tar write: %v", err)
-		}
-	}
-	if written != size {
-		return status.Errorf(codes.InvalidArgument, "copy into: stream ended early — got %d of %d bytes", written, size)
-	}
-	if err := tw.Close(); err != nil {
-		return status.Errorf(codes.Internal, "tar close: %v", err)
-	}
-	return nil
-}
-
-// validateCopyName rejects a basename that is empty, a path-traversal token, or
-// contains a separator — a single-file copy must never create or escape into
-// subdirectories from the name alone.
+// validateCopyName rejects a basename that is empty, a path-traversal token,
+// contains a separator, or carries a control character — a single-file copy must
+// never create or escape into subdirectories from the name alone, and a newline
+// or NUL would corrupt the coder backend's scp transfer (its legacy-protocol
+// fallback frames records by newline, so an embedded one breaks the stream).
 func validateCopyName(name string) error {
 	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') {
 		return status.Errorf(codes.InvalidArgument, "invalid file name %q", name)
+	}
+	if strings.ContainsAny(name, "\n\r\x00") {
+		return status.Errorf(codes.InvalidArgument, "file name %q contains a control character", name)
 	}
 	return nil
 }

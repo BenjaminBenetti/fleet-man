@@ -37,41 +37,37 @@ func dataChunk(b string) *fleetgrpc.CopyIntoChunk {
 	return &fleetgrpc.CopyIntoChunk{Msg: &fleetgrpc.CopyIntoChunk_Data{Data: []byte(b)}}
 }
 
-func TestWriteCopyIntoTarRoundTrip(t *testing.T) {
-	var buf bytes.Buffer
+func TestDrainCopyIntoToHostFileRoundTrip(t *testing.T) {
 	rcv := &fakeChunkReceiver{chunks: []*fleetgrpc.CopyIntoChunk{dataChunk("hello "), dataChunk("world")}}
-	if err := writeCopyIntoTar(&buf, rcv, "tool", 0o755, 11); err != nil {
-		t.Fatalf("writeCopyIntoTar: %v", err)
-	}
-	tr := tar.NewReader(&buf)
-	hdr, err := tr.Next()
+	f, written, err := drainCopyIntoToHostFile(rcv, 11)
 	if err != nil {
-		t.Fatalf("tar Next: %v", err)
+		t.Fatalf("drainCopyIntoToHostFile: %v", err)
 	}
-	if hdr.Name != "tool" || hdr.Mode != 0o755 || hdr.Size != 11 {
-		t.Fatalf("header = name=%q mode=%o size=%d, want tool 0755 11", hdr.Name, hdr.Mode, hdr.Size)
+	defer func() { f.Close(); os.Remove(f.Name()) }()
+	if written != 11 {
+		t.Fatalf("written = %d, want 11", written)
 	}
-	body, _ := io.ReadAll(tr)
+	body, _ := io.ReadAll(f)
 	if string(body) != "hello world" {
 		t.Fatalf("body = %q, want hello world", body)
 	}
 }
 
-func TestWriteCopyIntoTarSizeMismatch(t *testing.T) {
+func TestDrainCopyIntoToHostFileSizeMismatch(t *testing.T) {
 	// Stream ends short of the declared size.
 	short := &fakeChunkReceiver{chunks: []*fleetgrpc.CopyIntoChunk{dataChunk("hi")}}
-	if err := writeCopyIntoTar(io.Discard, short, "f", 0o644, 10); status.Code(err) != codes.InvalidArgument {
+	if _, _, err := drainCopyIntoToHostFile(short, 10); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("short stream: want InvalidArgument, got %v", err)
 	}
 	// Stream overruns the declared size.
 	over := &fakeChunkReceiver{chunks: []*fleetgrpc.CopyIntoChunk{dataChunk("too much data")}}
-	if err := writeCopyIntoTar(io.Discard, over, "f", 0o644, 4); status.Code(err) != codes.InvalidArgument {
+	if _, _, err := drainCopyIntoToHostFile(over, 4); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("over stream: want InvalidArgument, got %v", err)
 	}
 }
 
 func TestValidateCopyName(t *testing.T) {
-	for _, bad := range []string{"", ".", "..", "a/b", "/abs", "sub/file"} {
+	for _, bad := range []string{"", ".", "..", "a/b", "/abs", "sub/file", "a\nb", "a\rb", "a\x00b"} {
 		if err := validateCopyName(bad); status.Code(err) != codes.InvalidArgument {
 			t.Errorf("validateCopyName(%q): want InvalidArgument, got %v", bad, err)
 		}
@@ -95,6 +91,33 @@ func stubCopyIntoExec(t *testing.T) {
 		return cmd
 	}
 	t.Cleanup(func() { copyIntoExecCommand = orig })
+}
+
+// stubCopyFileInto stands in for the backend's CopyFile: it writes the streamed
+// bytes to the resolved path on the host (relative paths resolve against the
+// instance's WorkspaceDir, the exec cwd), so a real temp dir models the
+// container filesystem without a backend.
+func stubCopyFileInto(t *testing.T) {
+	t.Helper()
+	orig := copyFileInto
+	copyFileInto = func(inst *fleet.Instance, src io.Reader, remotePath string, mode int) error {
+		p := remotePath
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(inst.WorkspaceDir, remotePath)
+		}
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		data, err := io.ReadAll(src)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(p, data, os.FileMode(mode)); err != nil {
+			return err
+		}
+		return os.Chmod(p, os.FileMode(mode))
+	}
+	t.Cleanup(func() { copyFileInto = orig })
 }
 
 func seedCopyIntoInstance(t *testing.T, ws string) {
@@ -201,6 +224,31 @@ func TestCopyIntoDirCodespacesGate(t *testing.T) {
 	}
 }
 
+// TestCopyIntoDirCoderGate confirms the IN dir path is refused on coder rather
+// than hanging on its stdin-EOF-bound `tar -xf -`.
+func TestCopyIntoDirCoderGate(t *testing.T) {
+	isolateFleetDir(t)
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Instances: []*fleet.Instance{
+			{Name: "i1", Backend: fleet.BackendCoder, WorkspaceDir: t.TempDir(), ContainerID: "ws.agent", Status: fleet.StatusRunning},
+		}},
+	}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	_, client, cleanup := newTestServer(t)
+	defer cleanup()
+	stream, err := client.CopyInto(context.Background())
+	if err != nil {
+		t.Fatalf("CopyInto: %v", err)
+	}
+	_, err = sendCopyInto(t, stream,
+		&fleetgrpc.CopyIntoOpen{Fleet: "alpha", Instance: "i1", Name: "proj", IsDir: true}, "")
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("coder dir IN: want FailedPrecondition, got %v", err)
+	}
+}
+
 // TestCopyFileDirCodespacesGate confirms the OUT dir path is refused on
 // codespaces (reached once the `test -d` probe — stubbed onto the host — sees a
 // real directory).
@@ -252,6 +300,7 @@ func TestCopyIntoWritesFileToDir(t *testing.T) {
 	}
 	seedCopyIntoInstance(t, ws)
 	stubCopyIntoExec(t)
+	stubCopyFileInto(t)
 
 	_, client, cleanup := newTestServer(t)
 	defer cleanup()
@@ -288,6 +337,7 @@ func TestCopyIntoEmptyDestUsesWorkspace(t *testing.T) {
 	ws := t.TempDir()
 	seedCopyIntoInstance(t, ws)
 	stubCopyIntoExec(t)
+	stubCopyFileInto(t)
 
 	_, client, cleanup := newTestServer(t)
 	defer cleanup()

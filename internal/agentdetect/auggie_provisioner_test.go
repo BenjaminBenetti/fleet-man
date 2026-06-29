@@ -17,17 +17,18 @@ func TestAuggieProvision_FreshContainer(t *testing.T) {
 			{stdout: []byte(homeStdout), err: nil}, // query home
 			{stdout: nil, err: nil},                // drop script
 			{stdout: nil, err: nil},                // read settings (empty)
-			{stdout: nil, err: nil},                // write settings
 		},
 	}
 	if err := NewAuggieProvisioner(exec).Provision(); err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
 
-	if len(exec.calls) != 4 {
-		t.Fatalf("expected 4 exec calls, got %d", len(exec.calls))
+	// The settings write now streams through CopyFile, so only three Run calls
+	// remain (home, drop, read) plus one recorded copy.
+	if len(exec.calls) != 3 {
+		t.Fatalf("expected 3 exec calls, got %d", len(exec.calls))
 	}
-	wantKinds := []string{"query-home", "drop-script", "read-settings", "write-settings"}
+	wantKinds := []string{"query-home", "drop-script", "read-settings"}
 	for i, want := range wantKinds {
 		if got := callKind(exec.calls[i]); got != want {
 			t.Errorf("call %d kind = %q, want %q", i, got, want)
@@ -35,7 +36,7 @@ func TestAuggieProvision_FreshContainer(t *testing.T) {
 	}
 
 	// The hook script payload must be the embedded auggie bytes.
-	if !bytes.Equal(exec.calls[1].stdin, AuggieHookScript) {
+	if !bytes.Equal(inlineWritten(exec.calls[1]), AuggieHookScript) {
 		t.Errorf("drop-script stdin does not match embedded AuggieHookScript")
 	}
 
@@ -45,17 +46,21 @@ func TestAuggieProvision_FreshContainer(t *testing.T) {
 		t.Errorf("drop-script missing resolved path %q:\n%s", expectedScriptPath, dropBody)
 	}
 
-	// Read and write must target ~/.augment/settings.json, not ~/.claude.
+	// Read (Run) and write (CopyFile) must target ~/.augment/settings.json, not
+	// ~/.claude.
 	if body := exec.calls[2].args[2]; !strings.Contains(body, ".augment/settings.json") {
 		t.Errorf("read does not target ~/.augment/settings.json:\n%s", body)
 	}
-	if body := exec.calls[3].args[2]; !strings.Contains(body, ".augment/settings.json") {
-		t.Errorf("write does not target ~/.augment/settings.json:\n%s", body)
+	if len(exec.copies) != 1 {
+		t.Fatalf("expected 1 settings CopyFile, got %d", len(exec.copies))
+	}
+	if p := exec.copies[0].path; !strings.Contains(p, ".augment/settings.json") {
+		t.Errorf("write does not target ~/.augment/settings.json: %q", p)
 	}
 
 	// The written settings.json must register every managed event,
 	// each pointing at the resolved script path.
-	written := exec.calls[3].stdin
+	written := exec.copies[0].content
 	hooks := parseHooks(t, written)
 	for _, event := range auggieManagedEvents {
 		group := fleetManAuggieGroup(t, hooks, event.name)
@@ -75,13 +80,12 @@ func TestAuggieProvision_PreservesExistingSettings(t *testing.T) {
 			{stdout: []byte(homeStdout), err: nil},
 			{stdout: nil, err: nil},
 			{stdout: existing, err: nil},
-			{stdout: nil, err: nil},
 		},
 	}
 	if err := NewAuggieProvisioner(exec).Provision(); err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	written := string(exec.calls[3].stdin)
+	written := string(exec.copies[0].content)
 	if !strings.Contains(written, `"model"`) || !strings.Contains(written, "/u/audit.sh") {
 		t.Errorf("user content dropped from output:\n%s", written)
 	}
@@ -95,27 +99,26 @@ func TestAuggieProvision_Idempotent(t *testing.T) {
 			{stdout: []byte(homeStdout), err: nil},
 			{stdout: nil, err: nil},
 			{stdout: nil, err: nil},
-			{stdout: nil, err: nil},
 		},
 	}
 	if err := NewAuggieProvisioner(first).Provision(); err != nil {
 		t.Fatalf("first Provision: %v", err)
 	}
-	firstWritten := first.calls[3].stdin
+	firstWritten := first.copies[0].content
 
 	second := &fakeExec{
 		responses: []fakeResponse{
 			{stdout: []byte(homeStdout), err: nil},
 			{stdout: nil, err: nil},
 			{stdout: firstWritten, err: nil},
-			{stdout: nil, err: nil},
 		},
 	}
 	if err := NewAuggieProvisioner(second).Provision(); err != nil {
 		t.Fatalf("second Provision: %v", err)
 	}
-	if !bytes.Equal(firstWritten, second.calls[3].stdin) {
-		t.Errorf("not idempotent\nfirst:  %s\nsecond: %s", firstWritten, second.calls[3].stdin)
+	secondWritten := second.copies[0].content
+	if !bytes.Equal(firstWritten, secondWritten) {
+		t.Errorf("not idempotent\nfirst:  %s\nsecond: %s", firstWritten, secondWritten)
 	}
 }
 

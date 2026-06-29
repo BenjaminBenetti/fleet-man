@@ -3,6 +3,7 @@ package agentdetect
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +45,21 @@ func (l *localExecutor) Run(args []string, stdin []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes(), nil
+}
+
+// CopyFile satisfies ContainerExecutor for the settings write. Since this
+// executor targets the host filesystem (with HOME redirected to a temp dir), it
+// writes the bytes straight to remotePath, mkdir'ing the parent — mirroring the
+// atomic-write contract the production CopyFile transports provide.
+func (l *localExecutor) CopyFile(src io.Reader, remotePath string, mode int) error {
+	data, err := io.ReadAll(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(remotePath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(remotePath, data, os.FileMode(mode))
 }
 
 // ===========================================

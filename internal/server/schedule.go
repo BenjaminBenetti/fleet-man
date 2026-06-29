@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -622,22 +621,15 @@ func appendEventPrompt(prompt string, e *triggerEvent, path string) string {
 	return prompt + "\n\n---\n" + note
 }
 
-// writeAutomationEventFile writes data to path inside the instance. It reuses the
-// fleet-copy exec seam (copyIntoExecCommand) and streams the payload as base64
-// over STDIN, decoded in-container — so a payload of any size avoids the argv
-// length limit a shell-embedded write would hit, arbitrary bytes survive intact,
-// and the base64 text stays clean over the codespaces backend's exec PTY (which
-// mangles raw binary). A package var so tests can stub the exec.
+// writeAutomationEventFile writes data to path inside the instance via the
+// backend's CopyFile strategy seam (copyFileInto) — the same stdin-EOF-safe
+// transfer the fleet-copy handler uses. An earlier base64-over-stdin write hung
+// forever on the coder backend, whose `coder ssh` never delivers the stdin EOF a
+// `base64 -d` waits for (issue #223); routing through CopyFile streams over a
+// clean channel on devcontainer/codespaces and transfers out-of-band with scp on
+// coder, for a payload of any size. A package var so tests can stub it.
 var writeAutomationEventFile = func(inst *fleet.Instance, path string, data []byte) error {
-	cmd := copyIntoExecCommand(inst, []string{"sh", "-c", "base64 -d > " + dotfiles.ShQuote(path)})
-	cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString(data))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		if msg := strings.TrimSpace(string(out)); msg != "" {
-			return fmt.Errorf("%w: %s", err, msg)
-		}
-		return err
-	}
-	return nil
+	return copyFileInto(inst, bytes.NewReader(data), path, 0o644)
 }
 
 // buildAgentLaunchScript builds the in-container snippet that brings up the agent

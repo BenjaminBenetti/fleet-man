@@ -11,9 +11,11 @@
 package fleetlaunch
 
 import (
+	"crypto/rand"
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
@@ -115,19 +117,40 @@ fi`, RemotePath, RemotePath)
 	}
 }
 
-// copyBinary streams the running fleet binary into the container at
-// RemotePath. It unlinks the old file first rather than truncating it:
-// a process the caller has just signalled may still have the old
-// binary mmap'd, and overwriting a mapped executable surfaces as
-// ETXTBSY. Unlink-then-create allocates a fresh inode so the running
-// process keeps its old copy and the new file is written cleanly.
+// stageSeq makes stageBinaryPath unique even if crypto/rand.Read fails (leaving
+// the byte buffer zeroed), so two concurrent stagers can never collide — the same
+// belt-and-suspenders the coder backend's remoteStageName uses.
+var stageSeq atomic.Uint64
+
+// stageBinaryPath returns a per-call-unique, user-writable path the binary is
+// transferred to before being installed into the privileged RemotePath. /tmp is
+// writable without sudo on every backend, so CopyFile (which is itself sudo-free)
+// can always land it here. The seq+random suffix keeps two concurrent stagers
+// from clobbering each other's staging file between CopyFile and the install mv,
+// matching the per-call uniqueness used elsewhere in the staging path.
+func stageBinaryPath() string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return fmt.Sprintf("/tmp/.fleet-launch-stage.%d.%x", stageSeq.Add(1), b[:])
+}
+
+// copyBinary transfers the running fleet binary into the container at RemotePath
+// in two stdin-EOF-safe steps:
 //
-// /usr/bin is typically not writable by a devcontainer's default user,
-// so the script probes the directory once and either writes directly or
-// re-runs through `sudo -n` (passwordless, matching the pattern used by
-// privoxy and tmux installers elsewhere). The branch is decided BEFORE
-// stdin is consumed so the binary bytes flow down exactly one of the
-// two paths — important because a pipe can only be read once.
+//   - CopyFile streams it to a user-writable staging path. CopyFile is the
+//     backend strategy seam, so this works on every backend including coder
+//     (whose `coder ssh` transport hangs a stdin-reading `cat`); the host-side
+//     conditional that used to branch on transport is gone.
+//
+//   - a small exec installs it into RemotePath. /usr/bin is typically not
+//     writable by a devcontainer's default user, so the script probes the
+//     directory and either moves directly or re-runs through `sudo -n`
+//     (passwordless, matching the privoxy/tmux installers elsewhere). It unlinks
+//     the old file before the move: a process the caller just signalled may
+//     still have the old binary mmap'd, and overwriting a mapped executable
+//     surfaces as ETXTBSY — rm-then-mv allocates a fresh inode so the running
+//     process keeps its old copy. The install reads no stdin, so it cannot hang
+//     on any backend.
 func copyBinary(instanceBackend backend.Backend, workspaceDir string) error {
 	self, err := os.Executable()
 	if err != nil {
@@ -139,18 +162,27 @@ func copyBinary(instanceBackend backend.Backend, workspaceDir string) error {
 	}
 	defer bin.Close()
 
-	script := fmt.Sprintf(`
-write='rm -f %s && cat > %s && chmod +x %s'
-if [ -w %s ]; then
+	stagePath := stageBinaryPath()
+	if err := instanceBackend.CopyFile(workspaceDir, bin, stagePath, 0o755); err != nil {
+		return fmt.Errorf("stage fleet binary: %w", err)
+	}
+
+	install := fmt.Sprintf(`
+write='rm -f %[1]s && mv -f %[2]s %[1]s && chmod +x %[1]s'
+if [ -w %[3]s ]; then
   sh -c "$write"
 else
   sudo -n sh -c "$write"
-fi`, RemotePath, RemotePath, RemotePath, remoteDir)
+fi`, RemotePath, stagePath, remoteDir)
 
-	cmd := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", script})
-	cmd.Stdin = bin
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("copy fleet binary: %w (%s)", err, strings.TrimSpace(string(out)))
+	if out, err := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", install}).CombinedOutputWithTimeout(backend.CopyTimeout); err != nil {
+		// CopyFile landed the binary but the install didn't move it (e.g. /usr/bin
+		// not writable and `sudo -n` denied). Remove the staged copy best-effort so
+		// repeated provision attempts don't pile up /tmp/.fleet-launch-stage.*
+		// orphans — each gets a fresh random name. Mirrors coder.removeRemote.
+		rm := fmt.Sprintf("rm -f %s", backend.ShellQuote(stagePath))
+		_, _ = instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", rm}).CombinedOutputWithTimeout(backend.CopyTimeout)
+		return fmt.Errorf("install fleet binary: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

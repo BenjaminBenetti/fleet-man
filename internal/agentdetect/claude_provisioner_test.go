@@ -2,7 +2,9 @@ package agentdetect
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -24,6 +26,14 @@ type fakeResponse struct {
 	err    error
 }
 
+// copyCall captures one CopyFile invocation (the settings write, now streamed
+// through the backend's uncapped CopyFile rather than an inline Run).
+type copyCall struct {
+	path    string
+	content []byte
+	mode    int
+}
+
 // fakeExec is a ContainerExecutor that records calls and returns
 // pre-seeded responses in order. Tests use it to assert both that
 // the provisioner issued the expected sequence of shell
@@ -31,6 +41,8 @@ type fakeResponse struct {
 type fakeExec struct {
 	calls     []fakeCall
 	responses []fakeResponse
+	copies    []copyCall // recorded CopyFile invocations (settings writes)
+	copyErr   error      // error CopyFile returns, for the write-failure paths
 }
 
 // Run satisfies ContainerExecutor.
@@ -43,10 +55,22 @@ func (f *fakeExec) Run(args []string, stdin []byte) ([]byte, error) {
 	return resp.stdout, resp.err
 }
 
-// callKind classifies a recorded call by inspecting its shell
-// payload — this lets tests assert "the third call wrote
+// CopyFile satisfies ContainerExecutor, recording the streamed payload so tests
+// can assert on the written settings.json without an inline base64 decode.
+func (f *fakeExec) CopyFile(src io.Reader, remotePath string, mode int) error {
+	data, _ := io.ReadAll(src)
+	f.copies = append(f.copies, copyCall{path: remotePath, content: data, mode: mode})
+	return f.copyErr
+}
+
+// callKind classifies a recorded Run call by inspecting its shell
+// payload — this lets tests assert "the third call read
 // settings.json" without depending on the exact wording of the
-// shell snippet.
+// shell snippet. The hook script drop is an inline (base64-in-argv)
+// write, recognised by its in-container `base64 -d` decode; the
+// settings WRITE no longer appears here at all (it streams through
+// CopyFile, asserted via fakeExec.copies). The write-settings case
+// is retained only to label any stray inline settings write.
 func callKind(call fakeCall) string {
 	if len(call.args) < 3 {
 		return "unknown"
@@ -55,14 +79,39 @@ func callKind(call fakeCall) string {
 	switch {
 	case strings.Contains(body, "echo") && strings.Contains(body, "$HOME"):
 		return "query-home"
-	case strings.Contains(body, "chmod +x"):
-		return "drop-script"
 	case strings.Contains(body, "if [ -f") && strings.Contains(body, "settings.json"):
 		return "read-settings"
-	case strings.Contains(body, "settings.json.tmp") && strings.Contains(body, "mv"):
+	case strings.Contains(body, "base64 -d") && strings.Contains(body, "settings.json"):
 		return "write-settings"
+	case strings.Contains(body, "base64 -d"):
+		return "drop-script"
 	}
 	return "unknown"
+}
+
+// inlineWritten extracts and decodes the payload an inline (base64-in-argv)
+// write embeds in its shell body (between `printf %s '` and `'`), so tests can
+// assert on the bytes the provisioner wrote without a stdin pipe.
+func inlineWritten(call fakeCall) []byte {
+	if len(call.args) < 3 {
+		return nil
+	}
+	const pre = "printf %s '"
+	body := call.args[2]
+	i := strings.Index(body, pre)
+	if i < 0 {
+		return nil
+	}
+	rest := body[i+len(pre):]
+	j := strings.Index(rest, "'")
+	if j < 0 {
+		return nil
+	}
+	data, err := base64.StdEncoding.DecodeString(rest[:j])
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 // homeStdout is the canned response to the queryHome call — used by
@@ -83,26 +132,33 @@ func TestProvision_FreshContainer(t *testing.T) {
 			{stdout: []byte(homeStdout), err: nil}, // query home
 			{stdout: nil, err: nil},                // drop script
 			{stdout: nil, err: nil},                // read settings (empty file)
-			{stdout: nil, err: nil},                // write settings
 		},
 	}
 	if err := NewClaudeProvisioner(exec).Provision(); err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
 
-	if len(exec.calls) != 4 {
-		t.Fatalf("expected 4 exec calls, got %d", len(exec.calls))
+	// The settings write now streams through CopyFile, so only three Run calls
+	// remain (home, drop, read) plus one recorded copy.
+	if len(exec.calls) != 3 {
+		t.Fatalf("expected 3 exec calls, got %d", len(exec.calls))
 	}
-	wantKinds := []string{"query-home", "drop-script", "read-settings", "write-settings"}
+	wantKinds := []string{"query-home", "drop-script", "read-settings"}
 	for i, want := range wantKinds {
 		if got := callKind(exec.calls[i]); got != want {
 			t.Errorf("call %d kind = %q, want %q", i, got, want)
 		}
 	}
+	if len(exec.copies) != 1 {
+		t.Fatalf("expected 1 settings CopyFile, got %d", len(exec.copies))
+	}
+	if want := "/home/test/" + settingsSuffix; exec.copies[0].path != want {
+		t.Errorf("settings written to %q, want %q", exec.copies[0].path, want)
+	}
 
 	// The hook script payload sent over stdin must match the
 	// embedded bytes — proves the wrong file isn't being shipped.
-	if !bytes.Equal(exec.calls[1].stdin, ClaudeHookScript) {
+	if !bytes.Equal(inlineWritten(exec.calls[1]), ClaudeHookScript) {
 		t.Errorf("drop-script stdin does not match embedded ClaudeHookScript")
 	}
 
@@ -116,7 +172,7 @@ func TestProvision_FreshContainer(t *testing.T) {
 
 	// The written settings.json must contain our hook command path
 	// for every managed event, using the resolved absolute path.
-	written := string(exec.calls[3].stdin)
+	written := string(exec.copies[0].content)
 	for _, event := range fleetManManagedEvents {
 		marker := expectedScriptPath + " " + event
 		if !strings.Contains(written, marker) {
@@ -136,14 +192,13 @@ func TestProvision_PreservesExistingSettings(t *testing.T) {
 			{stdout: []byte(homeStdout), err: nil},
 			{stdout: nil, err: nil},
 			{stdout: existing, err: nil},
-			{stdout: nil, err: nil},
 		},
 	}
 	if err := NewClaudeProvisioner(exec).Provision(); err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
 
-	written := string(exec.calls[3].stdin)
+	written := string(exec.copies[0].content)
 	if !strings.Contains(written, `"theme"`) || !strings.Contains(written, `"dark"`) {
 		t.Errorf("user theme key dropped from output:\n%s", written)
 	}
@@ -162,26 +217,24 @@ func TestProvision_Idempotent(t *testing.T) {
 			{stdout: []byte(homeStdout), err: nil},
 			{stdout: nil, err: nil},
 			{stdout: nil, err: nil},
-			{stdout: nil, err: nil},
 		},
 	}
 	if err := NewClaudeProvisioner(first).Provision(); err != nil {
 		t.Fatalf("first Provision: %v", err)
 	}
-	firstWritten := first.calls[3].stdin
+	firstWritten := first.copies[0].content
 
 	second := &fakeExec{
 		responses: []fakeResponse{
 			{stdout: []byte(homeStdout), err: nil},
 			{stdout: nil, err: nil},
 			{stdout: firstWritten, err: nil},
-			{stdout: nil, err: nil},
 		},
 	}
 	if err := NewClaudeProvisioner(second).Provision(); err != nil {
 		t.Fatalf("second Provision: %v", err)
 	}
-	secondWritten := second.calls[3].stdin
+	secondWritten := second.copies[0].content
 
 	if !bytes.Equal(firstWritten, secondWritten) {
 		t.Errorf("not idempotent\nfirst:  %s\nsecond: %s", firstWritten, secondWritten)
@@ -258,7 +311,7 @@ func TestProvision_HomeQueryFailureAborts(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when home query fails, got nil")
 	}
-	if !strings.Contains(err.Error(), "resolve script path") {
+	if !strings.Contains(err.Error(), "resolve home") {
 		t.Errorf("error not phase-tagged: %v", err)
 	}
 	if len(exec.calls) != 1 {
@@ -353,11 +406,11 @@ func TestProvision_MalformedExistingSettingsSurfaces(t *testing.T) {
 // compute succeed, a write error bubbles up with phase context.
 func TestProvision_WriteFailureSurfaces(t *testing.T) {
 	exec := &fakeExec{
+		copyErr: errors.New("disk full"), // the settings write now fails via CopyFile
 		responses: []fakeResponse{
 			{stdout: []byte(homeStdout), err: nil},
 			{stdout: nil, err: nil},
 			{stdout: nil, err: nil},
-			{stdout: nil, err: errors.New("disk full")},
 		},
 	}
 	err := NewClaudeProvisioner(exec).Provision()
