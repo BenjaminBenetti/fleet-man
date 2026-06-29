@@ -63,9 +63,12 @@ func InlineWriteScript(remotePath string, content []byte, mode int) ([]string, e
 	b64 := base64.StdEncoding.EncodeToString(content)
 	qPath := ShellQuote(remotePath)
 	// $$ (the sh PID) keeps the temp unique against a concurrent writer in the
-	// same directory; set -e aborts before the rename if any step fails.
+	// same directory; set -e aborts before the rename if any step fails, and the
+	// EXIT trap removes the temp on that abort so a failed write leaves no orphan
+	// in the dest dir. On success the temp is already renamed away, so the trap's
+	// rm is a harmless no-op.
 	body := fmt.Sprintf(
-		`set -e; d=$(dirname %[1]s); mkdir -p "$d"; t="$d/.fleet-inline.$$"; printf %%s '%[2]s' | base64 -d > "$t"; chmod %[3]o "$t"; mv -f "$t" %[1]s`,
+		`set -e; d=$(dirname %[1]s); mkdir -p "$d"; t="$d/.fleet-inline.$$"; trap 'rm -f "$t"' EXIT; printf %%s '%[2]s' | base64 -d > "$t"; chmod %[3]o "$t"; mv -f "$t" %[1]s`,
 		qPath, b64, mode,
 	)
 	return []string{"sh", "-c", body}, nil
@@ -96,8 +99,11 @@ func WriteFileInline(b Backend, workspaceDir, remotePath string, content []byte,
 // `cat` would block forever waiting for an EOF that never arrives.
 func StreamWriteScript(remotePath string, mode int) []string {
 	qPath := ShellQuote(remotePath)
+	// The EXIT trap removes the temp if any step fails before the rename (set -e),
+	// so an interrupted stream leaves no orphan .fleet-copy.$$ in the dest dir; on
+	// success the temp is already renamed away and the rm is a no-op.
 	body := fmt.Sprintf(
-		`set -e; d=$(dirname %[1]s); mkdir -p "$d"; t="$d/.fleet-copy.$$"; cat > "$t"; chmod %[2]o "$t"; mv -f "$t" %[1]s`,
+		`set -e; d=$(dirname %[1]s); mkdir -p "$d"; t="$d/.fleet-copy.$$"; trap 'rm -f "$t"' EXIT; cat > "$t"; chmod %[2]o "$t"; mv -f "$t" %[1]s`,
 		qPath, mode,
 	)
 	return []string{"sh", "-c", body}

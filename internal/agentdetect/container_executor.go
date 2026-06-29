@@ -1,5 +1,7 @@
 package agentdetect
 
+import "io"
+
 // ===========================================
 // ContainerExecutor abstraction
 // ===========================================
@@ -14,6 +16,13 @@ package agentdetect
 // exit or transport error is returned as err with stderr included
 // in the wrapped message so the caller has something diagnostic to
 // surface to the user.
+//
+// CopyFile writes src to remotePath with the given mode using the
+// backend's stdin-EOF-safe file transfer (atomic, parent-creating).
+// Unlike an inline base64-in-argv write it carries no size cap, so the
+// provisioner uses it for the unbounded read-merge-rewrite of the
+// user's settings.json; small fixed payloads still go inline.
 type ContainerExecutor interface {
 	Run(args []string, stdin []byte) ([]byte, error)
+	CopyFile(src io.Reader, remotePath string, mode int) error
 }

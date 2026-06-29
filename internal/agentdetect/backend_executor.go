@@ -3,6 +3,7 @@ package agentdetect
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
@@ -61,4 +62,11 @@ func (b *BackendExecutor) Run(args []string, stdin []byte) ([]byte, error) {
 		return nil, err
 	}
 	return stdout.Bytes(), nil
+}
+
+// CopyFile delegates to the backend's stdin-EOF-safe file transfer, anchored at
+// the same workspace dir. It is the uncapped counterpart to an inline write,
+// used for payloads (the merged settings.json) that may exceed the inline cap.
+func (b *BackendExecutor) CopyFile(src io.Reader, remotePath string, mode int) error {
+	return b.backend.CopyFile(b.workspaceDir, src, remotePath, mode)
 }

@@ -1,6 +1,7 @@
 package agentdetect
 
 import (
+	"bytes"
 	"fmt"
 	"path"
 	"strings"
@@ -132,14 +133,12 @@ func (p *AuggieProvisioner) readSettings(settingsPath string) ([]byte, error) {
 }
 
 // writeSettings writes content to settingsPath atomically (same-directory tmp
-// then rename, handled by the inline writer, which also mkdir's the parent).
-// Inline (base64-in-argv) rather than stdin-streamed so it cannot hang on the
-// coder backend (issue #223).
+// then rename, plus a parent mkdir — both guaranteed by the CopyFile transport).
+// It streams via CopyFile rather than an inline (base64-in-argv) write because
+// the merged settings.json is unbounded: a user's pre-existing file can exceed
+// the inline writer's ARG_MAX-derived cap. CopyFile is both uncapped and
+// stdin-EOF-safe on every backend including coder (issue #223). The fixed-size
+// hook script keeps using the inline writer.
 func (p *AuggieProvisioner) writeSettings(settingsPath string, content []byte) error {
-	argv, err := backend.InlineWriteScript(settingsPath, content, 0o644)
-	if err != nil {
-		return err
-	}
-	_, err = p.exec.Run(argv, nil)
-	return err
+	return p.exec.CopyFile(bytes.NewReader(content), settingsPath, 0o644)
 }
