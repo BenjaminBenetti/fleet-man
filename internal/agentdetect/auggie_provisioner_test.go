@@ -35,7 +35,7 @@ func TestAuggieProvision_FreshContainer(t *testing.T) {
 	}
 
 	// The hook script payload must be the embedded auggie bytes.
-	if !bytes.Equal(exec.calls[1].stdin, AuggieHookScript) {
+	if !bytes.Equal(inlineWritten(exec.calls[1]), AuggieHookScript) {
 		t.Errorf("drop-script stdin does not match embedded AuggieHookScript")
 	}
 
@@ -55,7 +55,7 @@ func TestAuggieProvision_FreshContainer(t *testing.T) {
 
 	// The written settings.json must register every managed event,
 	// each pointing at the resolved script path.
-	written := exec.calls[3].stdin
+	written := inlineWritten(exec.calls[3])
 	hooks := parseHooks(t, written)
 	for _, event := range auggieManagedEvents {
 		group := fleetManAuggieGroup(t, hooks, event.name)
@@ -81,7 +81,7 @@ func TestAuggieProvision_PreservesExistingSettings(t *testing.T) {
 	if err := NewAuggieProvisioner(exec).Provision(); err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	written := string(exec.calls[3].stdin)
+	written := string(inlineWritten(exec.calls[3]))
 	if !strings.Contains(written, `"model"`) || !strings.Contains(written, "/u/audit.sh") {
 		t.Errorf("user content dropped from output:\n%s", written)
 	}
@@ -101,7 +101,7 @@ func TestAuggieProvision_Idempotent(t *testing.T) {
 	if err := NewAuggieProvisioner(first).Provision(); err != nil {
 		t.Fatalf("first Provision: %v", err)
 	}
-	firstWritten := first.calls[3].stdin
+	firstWritten := inlineWritten(first.calls[3])
 
 	second := &fakeExec{
 		responses: []fakeResponse{
@@ -114,8 +114,9 @@ func TestAuggieProvision_Idempotent(t *testing.T) {
 	if err := NewAuggieProvisioner(second).Provision(); err != nil {
 		t.Fatalf("second Provision: %v", err)
 	}
-	if !bytes.Equal(firstWritten, second.calls[3].stdin) {
-		t.Errorf("not idempotent\nfirst:  %s\nsecond: %s", firstWritten, second.calls[3].stdin)
+	secondWritten := inlineWritten(second.calls[3])
+	if !bytes.Equal(firstWritten, secondWritten) {
+		t.Errorf("not idempotent\nfirst:  %s\nsecond: %s", firstWritten, secondWritten)
 	}
 }
 

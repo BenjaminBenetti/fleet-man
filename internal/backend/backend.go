@@ -1,6 +1,9 @@
 package backend
 
-import "os/exec"
+import (
+	"io"
+	"os/exec"
+)
 
 // Backend defines the strategy interface for container runtimes.
 // Implementations handle provisioning, lifecycle, execution,
@@ -91,6 +94,25 @@ type Backend interface {
 	// where logging every command would flood the event log. Behaviour is
 	// otherwise identical to ExecCommand.
 	ExecCommandQuiet(workspaceDir string, command []string) *Cmd
+
+	// CopyFile streams src INTO the instance, writing it to remotePath with the
+	// given mode. It is the single strategy seam for host→instance file transfer:
+	// callers (the fleet-launch binary stager, the `fleet copy` server handler)
+	// invoke it without caring which transport a backend uses. The write is
+	// atomic (same-directory temp + rename), creates remotePath's parent, and
+	// assumes that parent is writable by the exec user (a caller needing a
+	// privileged destination copies to a writable staging path and moves it into
+	// place separately).
+	//
+	// Crucially, an implementation MUST NOT rely on the remote command reading
+	// stdin to EOF: the coder backend's SSH transport never half-closes a remote
+	// command's stdin, so a `cat > file` there hangs forever. devcontainer (local
+	// docker exec) and codespaces (OpenSSH, no PTY) stream over stdin via
+	// StreamWriteScript; coder transfers out-of-band with scp.
+	//
+	// This is the INTO direction (host → instance); it is unrelated to the
+	// fleetgrpc CopyFile RPC, which streams a file OUT of an instance.
+	CopyFile(workspaceDir string, src io.Reader, remotePath string, mode int) error
 
 	// Stats returns CPU and memory usage for the given container IDs.
 	Stats(containerIDs []string) (map[string]*ContainerStats, error)

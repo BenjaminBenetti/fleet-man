@@ -2,6 +2,7 @@ package agentdetect
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
@@ -46,7 +47,10 @@ func (f *fakeExec) Run(args []string, stdin []byte) ([]byte, error) {
 // callKind classifies a recorded call by inspecting its shell
 // payload — this lets tests assert "the third call wrote
 // settings.json" without depending on the exact wording of the
-// shell snippet.
+// shell snippet. The script and settings writes are now inline
+// (base64-in-argv) writes rather than stdin-streamed `cat >`s, so
+// they are recognised by the in-container `base64 -d` decode plus
+// whether the target path is settings.json.
 func callKind(call fakeCall) string {
 	if len(call.args) < 3 {
 		return "unknown"
@@ -55,14 +59,39 @@ func callKind(call fakeCall) string {
 	switch {
 	case strings.Contains(body, "echo") && strings.Contains(body, "$HOME"):
 		return "query-home"
-	case strings.Contains(body, "chmod +x"):
-		return "drop-script"
 	case strings.Contains(body, "if [ -f") && strings.Contains(body, "settings.json"):
 		return "read-settings"
-	case strings.Contains(body, "settings.json.tmp") && strings.Contains(body, "mv"):
+	case strings.Contains(body, "base64 -d") && strings.Contains(body, "settings.json"):
 		return "write-settings"
+	case strings.Contains(body, "base64 -d"):
+		return "drop-script"
 	}
 	return "unknown"
+}
+
+// inlineWritten extracts and decodes the payload an inline (base64-in-argv)
+// write embeds in its shell body (between `printf %s '` and `'`), so tests can
+// assert on the bytes the provisioner wrote without a stdin pipe.
+func inlineWritten(call fakeCall) []byte {
+	if len(call.args) < 3 {
+		return nil
+	}
+	const pre = "printf %s '"
+	body := call.args[2]
+	i := strings.Index(body, pre)
+	if i < 0 {
+		return nil
+	}
+	rest := body[i+len(pre):]
+	j := strings.Index(rest, "'")
+	if j < 0 {
+		return nil
+	}
+	data, err := base64.StdEncoding.DecodeString(rest[:j])
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 // homeStdout is the canned response to the queryHome call — used by
@@ -102,7 +131,7 @@ func TestProvision_FreshContainer(t *testing.T) {
 
 	// The hook script payload sent over stdin must match the
 	// embedded bytes — proves the wrong file isn't being shipped.
-	if !bytes.Equal(exec.calls[1].stdin, ClaudeHookScript) {
+	if !bytes.Equal(inlineWritten(exec.calls[1]), ClaudeHookScript) {
 		t.Errorf("drop-script stdin does not match embedded ClaudeHookScript")
 	}
 
@@ -116,7 +145,7 @@ func TestProvision_FreshContainer(t *testing.T) {
 
 	// The written settings.json must contain our hook command path
 	// for every managed event, using the resolved absolute path.
-	written := string(exec.calls[3].stdin)
+	written := string(inlineWritten(exec.calls[3]))
 	for _, event := range fleetManManagedEvents {
 		marker := expectedScriptPath + " " + event
 		if !strings.Contains(written, marker) {
@@ -143,7 +172,7 @@ func TestProvision_PreservesExistingSettings(t *testing.T) {
 		t.Fatalf("Provision: %v", err)
 	}
 
-	written := string(exec.calls[3].stdin)
+	written := string(inlineWritten(exec.calls[3]))
 	if !strings.Contains(written, `"theme"`) || !strings.Contains(written, `"dark"`) {
 		t.Errorf("user theme key dropped from output:\n%s", written)
 	}
@@ -168,7 +197,7 @@ func TestProvision_Idempotent(t *testing.T) {
 	if err := NewClaudeProvisioner(first).Provision(); err != nil {
 		t.Fatalf("first Provision: %v", err)
 	}
-	firstWritten := first.calls[3].stdin
+	firstWritten := inlineWritten(first.calls[3])
 
 	second := &fakeExec{
 		responses: []fakeResponse{
@@ -181,7 +210,7 @@ func TestProvision_Idempotent(t *testing.T) {
 	if err := NewClaudeProvisioner(second).Provision(); err != nil {
 		t.Fatalf("second Provision: %v", err)
 	}
-	secondWritten := second.calls[3].stdin
+	secondWritten := inlineWritten(second.calls[3])
 
 	if !bytes.Equal(firstWritten, secondWritten) {
 		t.Errorf("not idempotent\nfirst:  %s\nsecond: %s", firstWritten, secondWritten)
@@ -258,7 +287,7 @@ func TestProvision_HomeQueryFailureAborts(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when home query fails, got nil")
 	}
-	if !strings.Contains(err.Error(), "resolve script path") {
+	if !strings.Contains(err.Error(), "resolve home") {
 		t.Errorf("error not phase-tagged: %v", err)
 	}
 	if len(exec.calls) != 1 {

@@ -2,8 +2,8 @@ package server
 
 import (
 	"bytes"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -90,16 +90,21 @@ func TestAutomationEventPath(t *testing.T) {
 	}
 }
 
-// TestWriteAutomationEventFile drives the real base64-over-stdin write by stubbing
-// the copy exec seam to run the same argv locally — so a payload of arbitrary
-// bytes round-trips through `base64 -d` exactly as it would inside a container.
+// TestWriteAutomationEventFile drives the real write by stubbing the CopyFile
+// strategy seam to write to a host file — so a payload of arbitrary bytes
+// round-trips exactly as it would inside a container, now over the stdin-EOF-safe
+// CopyFile path rather than a base64-over-stdin pipe that hung on coder.
 func TestWriteAutomationEventFile(t *testing.T) {
 	dir := t.TempDir()
-	orig := copyIntoExecCommand
-	copyIntoExecCommand = func(_ *fleet.Instance, argv []string) *exec.Cmd {
-		return exec.Command(argv[0], argv[1:]...)
+	orig := copyFileInto
+	copyFileInto = func(_ *fleet.Instance, src io.Reader, remotePath string, mode int) error {
+		data, err := io.ReadAll(src)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(remotePath, data, os.FileMode(mode))
 	}
-	t.Cleanup(func() { copyIntoExecCommand = orig })
+	t.Cleanup(func() { copyFileInto = orig })
 
 	cases := map[string][]byte{
 		"binary": {0x00, 0x01, 'h', 'i', 0xff, '\n', 0x04},

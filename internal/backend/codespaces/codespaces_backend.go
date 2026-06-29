@@ -210,6 +210,22 @@ func (codespacesBackend *CodespacesBackend) rawExec(workspaceDir string, command
 	return codespacesBackend.sshCommand(name, command, true)
 }
 
+// CopyFile streams src into the codespace over stdin. It deliberately builds a
+// NON-PTY ssh command (allocPTY=false): the PTY that ExecCommand allocates for
+// interactive work runs a line discipline that mangles raw binary (a 0x04 byte
+// reads as EOF, truncating the file). Without a PTY the channel is a clean
+// 8-bit pipe, and OpenSSH/gh half-close stdin on EOF, so the StreamWriteScript
+// `cat > tmp` terminates and the bytes survive intact.
+func (codespacesBackend *CodespacesBackend) CopyFile(workspaceDir string, src io.Reader, remotePath string, mode int) error {
+	name := codespacesBackend.resolveCodespaceName(workspaceDir)
+	cmd := backend.NewCmd(codespacesBackend.sshCommand(name, backend.StreamWriteScript(remotePath, mode), false), nil)
+	cmd.Stdin = src
+	if out, err := cmd.CombinedOutputWithTimeout(backend.CopyTimeout); err != nil {
+		return fmt.Errorf("copy into %q: %w (%s)", remotePath, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // ===========================================
 // Monitoring
 // ===========================================

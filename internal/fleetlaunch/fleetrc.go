@@ -74,14 +74,13 @@ func EnsureFleetRC(instanceBackend backend.Backend, workspaceDir, homeDir, insta
 	target := rcDir + "/" + rcFilename
 	bashrc := homeDir + "/.bashrc"
 
-	// 1. Write the rc. mkdir -p is idempotent; cat streams the embedded
-	// content over stdin so the body never has to be shell-quoted into
-	// the script literal.
-	write := fmt.Sprintf(`mkdir -p %s && cat > %s`, rcDir, target)
-	cmd := instanceBackend.ExecCommand(workspaceDir, []string{"sh", "-c", write})
-	cmd.Stdin = strings.NewReader(renderFleetRC(instanceName))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("write fleet.rc: %w (%s)", err, strings.TrimSpace(string(out)))
+	// 1. Write the rc. WriteFileInline embeds the (small) content base64-encoded
+	// in the command itself and decodes it in-container, so nothing is streamed
+	// over stdin — a plain `cat > file` would hang forever on the coder backend,
+	// whose transport never delivers the stdin EOF (issue #223). It also mkdir's
+	// the parent and writes atomically.
+	if err := backend.WriteFileInline(instanceBackend, workspaceDir, target, []byte(renderFleetRC(instanceName)), 0o644); err != nil {
+		return fmt.Errorf("write fleet.rc: %w", err)
 	}
 
 	// 2. Wire the rc into .bashrc — touch first so a missing file

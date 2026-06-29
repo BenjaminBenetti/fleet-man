@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path"
 	"strings"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 )
 
 // ===========================================
@@ -66,14 +68,15 @@ func NewClaudeProvisioner(exec ContainerExecutor) *ClaudeProvisioner {
 // path into settings.json keeps Claude Code's hook command field
 // independent of any shell expansion behaviour.
 func (p *ClaudeProvisioner) Provision() error {
-	scriptPath, err := p.resolveScriptPath()
+	home, err := p.resolveHome()
 	if err != nil {
-		return fmt.Errorf("resolve script path: %w", err)
+		return fmt.Errorf("resolve home: %w", err)
 	}
+	scriptPath := path.Join(home, FleetManScriptSuffix)
 	if err := p.dropHookScript(scriptPath); err != nil {
 		return fmt.Errorf("install hook script: %w", err)
 	}
-	if err := p.injectSettings(scriptPath); err != nil {
+	if err := p.injectSettings(home, scriptPath); err != nil {
 		return fmt.Errorf("edit settings.json: %w", err)
 	}
 	return nil
@@ -83,10 +86,14 @@ func (p *ClaudeProvisioner) Provision() error {
 // Private helpers
 // ===========================================
 
-// resolveScriptPath asks the container for $HOME and joins it with
-// FleetManScriptSuffix to produce the absolute path the hook script
-// will be dropped at and that settings.json will reference.
-func (p *ClaudeProvisioner) resolveScriptPath() (string, error) {
+// settingsSuffix is the home-relative path of Claude Code's settings file.
+const settingsSuffix = ".claude/settings.json"
+
+// resolveHome asks the container for $HOME. The hook script and settings.json
+// both live under it, and their absolute paths are baked into the in-container
+// commands (and into settings.json's hook command field) so nothing depends on
+// later shell expansion.
+func (p *ClaudeProvisioner) resolveHome() (string, error) {
 	out, err := p.exec.Run([]string{"sh", "-c", "echo \"$HOME\""}, nil)
 	if err != nil {
 		return "", err
@@ -95,31 +102,29 @@ func (p *ClaudeProvisioner) resolveScriptPath() (string, error) {
 	if home == "" {
 		return "", fmt.Errorf("container reported empty $HOME")
 	}
-	return path.Join(home, FleetManScriptSuffix), nil
+	return home, nil
 }
 
-// dropHookScript writes the embedded hook script bytes to scriptPath
-// and sets the executable bit. mkdir of the parent directory
-// guarantees the path exists even on a fresh container that has
-// never had ~/.fleet/scripts before.
-//
-// All three operations are bundled into a single shell invocation
-// to minimise round-trips to the container exec layer.
+// dropHookScript writes the embedded hook script bytes to scriptPath and sets
+// the executable bit. It uses an inline (base64-in-argv) write rather than
+// streaming the bytes over stdin: a stdin-reading `cat > file` hangs forever on
+// the coder backend, whose transport never delivers the stdin EOF (issue #223).
+// The write mkdir's the parent and is atomic.
 func (p *ClaudeProvisioner) dropHookScript(scriptPath string) error {
-	parentDir := path.Dir(scriptPath)
-	script := fmt.Sprintf(
-		`mkdir -p %q && cat > %q && chmod +x %q`,
-		parentDir, scriptPath, scriptPath,
-	)
-	_, err := p.exec.Run([]string{"sh", "-c", script}, ClaudeHookScript)
+	argv, err := backend.InlineWriteScript(scriptPath, ClaudeHookScript, 0o755)
+	if err != nil {
+		return err
+	}
+	_, err = p.exec.Run(argv, nil)
 	return err
 }
 
 // injectSettings reads the current settings.json (or treats it as
 // absent), passes it through InjectFleetManHooks, and writes the
 // result back atomically.
-func (p *ClaudeProvisioner) injectSettings(scriptPath string) error {
-	current, err := p.readSettings()
+func (p *ClaudeProvisioner) injectSettings(home, scriptPath string) error {
+	settingsPath := path.Join(home, settingsSuffix)
+	current, err := p.readSettings(settingsPath)
 	if err != nil {
 		return fmt.Errorf("read: %w", err)
 	}
@@ -127,30 +132,32 @@ func (p *ClaudeProvisioner) injectSettings(scriptPath string) error {
 	if err != nil {
 		return fmt.Errorf("compute: %w", err)
 	}
-	if err := p.writeSettings(updated); err != nil {
+	if err := p.writeSettings(settingsPath, updated); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
 	return nil
 }
 
-// readSettings cats ~/.claude/settings.json. A missing file
-// produces empty bytes (treated by InjectFleetManHooks as "the file
-// does not exist"), not an error — distinguishing "missing" from
-// "present and empty" inside a shell pipeline is not worth the
-// complexity since both yield the same downstream behaviour.
-func (p *ClaudeProvisioner) readSettings() ([]byte, error) {
-	const script = `if [ -f "$HOME/.claude/settings.json" ]; then cat "$HOME/.claude/settings.json"; fi`
+// readSettings cats settingsPath. A missing file produces empty bytes (treated
+// by InjectFleetManHooks as "the file does not exist"), not an error —
+// distinguishing "missing" from "present and empty" inside a shell pipeline is
+// not worth the complexity since both yield the same downstream behaviour. The
+// read produces output and exits, so it has no stdin-EOF dependency.
+func (p *ClaudeProvisioner) readSettings(settingsPath string) ([]byte, error) {
+	q := backend.ShellQuote(settingsPath)
+	script := fmt.Sprintf(`if [ -f %s ]; then cat %s; fi`, q, q)
 	return p.exec.Run([]string{"sh", "-c", script}, nil)
 }
 
-// writeSettings writes content to ~/.claude/settings.json
-// atomically: same-directory tmp file then rename. mkdir of
-// ~/.claude handles the first-time case where Claude Code has
-// never been run in this container.
-func (p *ClaudeProvisioner) writeSettings(content []byte) error {
-	const script = `mkdir -p "$HOME/.claude" && ` +
-		`cat > "$HOME/.claude/settings.json.tmp" && ` +
-		`mv "$HOME/.claude/settings.json.tmp" "$HOME/.claude/settings.json"`
-	_, err := p.exec.Run([]string{"sh", "-c", script}, content)
+// writeSettings writes content to settingsPath atomically (same-directory tmp
+// then rename, handled by the inline writer, which also mkdir's the parent for
+// the first-time case). Inline (base64-in-argv) rather than stdin-streamed so it
+// cannot hang on the coder backend (issue #223).
+func (p *ClaudeProvisioner) writeSettings(settingsPath string, content []byte) error {
+	argv, err := backend.InlineWriteScript(settingsPath, content, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = p.exec.Run(argv, nil)
 	return err
 }
