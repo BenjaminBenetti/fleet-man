@@ -95,18 +95,21 @@ func ShellCommandForSession(config *configutil.Config, session string, cols, row
 	// tabToggle hides the bar while a session has a single window and
 	// shows it otherwise. It runs once at attach time and again from the
 	// window-linked/unlinked hooks on every window create/kill. The hooks
-	// are global on the container's shared tmux server, so they are
-	// guarded by the session-scoped @fleet_tab_autohide marker: nested
-	// panes auto-hide (the TUI provides all other UI) while full-screen
+	// and the status options are session-scoped so they never touch a
+	// user's own tmux sessions on the container's shared server (or
+	// clobber their global hooks); only the window-status formats are
+	// global, as window options have no session scope. The session-scoped
+	// @fleet_tab_autohide marker distinguishes the modes: nested panes
+	// auto-hide (the TUI provides all other UI) while full-screen
 	// attaches keep the bar always on because status-right also carries
 	// the detach hint there.
 	tabToggle := `if -F '#{&&:#{@fleet_tab_autohide},#{==:#{session_windows},1}}' 'set status off' 'set status on'`
-	tabBarConf := ` \; set -g status-position top` +
-		` \; set -g status-style 'bg=default,fg=colour245'` +
+	tabBarConf := ` \; set status-position top` +
+		` \; set status-style 'bg=default,fg=colour245'` +
 		` \; set -g window-status-format ' #I:#W '` +
 		` \; set -g window-status-current-format '#[fg=colour39,bold] #I:#W #[default]'` +
-		` \; set-hook -g window-linked "` + tabToggle + `"` +
-		` \; set-hook -g window-unlinked "` + tabToggle + `"`
+		` \; set-hook window-linked "` + tabToggle + `"` +
+		` \; set-hook window-unlinked "` + tabToggle + `"`
 	// When nested inside a host tmux (split pane mode), use Ctrl+X as
 	// the inner prefix so it doesn't conflict with the outer Ctrl+B.
 	// Pane navigation (h/j/k/l) is handled by the outer tmux, so the

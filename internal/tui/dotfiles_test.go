@@ -244,10 +244,10 @@ func TestShellCommandTabBar(t *testing.T) {
 	for _, nested := range []bool{true, false} {
 		script := shellCommand(config, "agent-1", 80, 24, nested)[2]
 		for _, want := range []string{
-			"set -g status-position top",
+			"set status-position top",
 			"set -g window-status-format ' #I:#W '",
-			`set-hook -g window-linked "` + toggle + `"`,
-			`set-hook -g window-unlinked "` + toggle + `"`,
+			`set-hook window-linked "` + toggle + `"`,
+			`set-hook window-unlinked "` + toggle + `"`,
 		} {
 			if !strings.Contains(script, want) {
 				t.Errorf("nested=%v script missing %q: %s", nested, want, script)
