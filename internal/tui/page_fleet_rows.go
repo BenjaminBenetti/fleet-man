@@ -55,6 +55,13 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 					for _, g := range m.sessionStore.Groups(ref) {
 						liveGroups[g.GroupID] = true
 						rootName := g.Sessions[0].Name
+						// Tab badge only for single-session rows: a
+						// multi-pane group already carries the panes
+						// suffix, and its per-pane tab counts differ.
+						tabCount := 0
+						if len(g.Sessions) == 1 {
+							tabCount = g.Sessions[0].Windows
+						}
 						fleetPage.rows = append(fleetPage.rows, row{
 							kind:        rowSession,
 							fleetName:   name,
@@ -62,6 +69,7 @@ func (fleetPage *fleetPage) buildRows(m *model) {
 							sessionName: rootName,
 							groupID:     g.GroupID,
 							groupSize:   len(g.Sessions),
+							tabCount:    tabCount,
 						})
 					}
 					fleetPage.appendSavedGroupRows(name, instance, liveGroups)

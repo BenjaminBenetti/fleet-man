@@ -205,6 +205,47 @@ func TestBuildRowsShowsSavedGroupWithoutLiveSessions(t *testing.T) {
 	}
 }
 
+func TestBuildRowsTabCount(t *testing.T) {
+	inst := &fleet.Instance{Name: "alpha", Status: fleet.StatusRunning, ContainerID: "abc"}
+	fp := newFleetPage()
+	m := &model{
+		st: &state.State{
+			Fleets: map[string]*fleet.Fleet{
+				"repo": {Name: "repo", Instances: []*fleet.Instance{inst}},
+			},
+		},
+		sessionStore: func() *SessionStore {
+			s := NewSessionStore()
+			ref := InstanceRef{Fleet: "repo", Instance: "alpha"}
+			s.SetExpanded(ref, true)
+			s.SetDiscovery(ref, []tmuxSession{
+				{Name: "alpha~solo", Windows: 3},
+				{Name: "alpha~grp", Windows: 2},
+				{Name: "alpha~grp~ff00", Windows: 1},
+			})
+			return s
+		}(),
+		fleetPage: fp,
+	}
+
+	fp.buildRows(m)
+
+	got := map[string]int{}
+	for _, r := range fp.rows {
+		if r.kind == rowSession {
+			got[r.groupID] = r.tabCount
+		}
+	}
+	// Single-session row carries its window count as the tab badge.
+	if got["solo"] != 3 {
+		t.Errorf("solo tabCount = %d, want 3", got["solo"])
+	}
+	// Multi-pane groups show a panes suffix instead — no tab badge.
+	if got["grp"] != 0 {
+		t.Errorf("group tabCount = %d, want 0", got["grp"])
+	}
+}
+
 func tagTestModel(fp *fleetPage, inst *fleet.Instance, expanded bool) *model {
 	store := NewSessionStore()
 	if expanded {

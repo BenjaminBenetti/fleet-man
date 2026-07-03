@@ -76,6 +76,9 @@ func keybindingsData() []keybindingGroup {
 			Entries: []keybindingEntry{
 				{"ctrl+x", "Prefix key (nested)"},
 				{"ctrl+PageUp/Down", "Cycle sessions"},
+				{"prefix + c", "New tab in pane"},
+				{"prefix + n / p", "Next / previous tab"},
+				{"prefix + 0-9", "Jump to tab"},
 				{"prefix + T", "New tmux session"},
 				{"ctrl+q / ctrl+o", "Detach from session"},
 				{"j / k (vim mode)", "Select pane down / up"},

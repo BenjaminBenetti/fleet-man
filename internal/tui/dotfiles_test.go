@@ -231,9 +231,53 @@ func TestShellCommandNestedNoInnerPaneKeys(t *testing.T) {
 	if !strings.Contains(script, "set -g prefix C-x") {
 		t.Errorf("nested script missing prefix override: %s", script)
 	}
-	// Status bar should be hidden in nested mode.
-	if !strings.Contains(script, "set -g status off") {
-		t.Errorf("nested script should hide status bar: %s", script)
+	// The status bar doubles as the tab bar and auto-hides while the
+	// session has a single window.
+	if !strings.Contains(script, "set @fleet_tab_autohide 1") {
+		t.Errorf("nested script missing tab auto-hide marker: %s", script)
+	}
+}
+
+func TestShellCommandTabBar(t *testing.T) {
+	config := state.DefaultConfig()
+	toggle := `if -F '#{&&:#{@fleet_tab_autohide},#{==:#{session_windows},1}}' 'set status off' 'set status on'`
+	for _, nested := range []bool{true, false} {
+		script := shellCommand(config, "agent-1", 80, 24, nested)[2]
+		for _, want := range []string{
+			"set -g status-position top",
+			"set -g window-status-format ' #I:#W '",
+			`set-hook -g window-linked "` + toggle + `"`,
+			`set-hook -g window-unlinked "` + toggle + `"`,
+		} {
+			if !strings.Contains(script, want) {
+				t.Errorf("nested=%v script missing %q: %s", nested, want, script)
+			}
+		}
+	}
+}
+
+func TestShellCommandTabBarNested(t *testing.T) {
+	config := state.DefaultConfig()
+	script := shellCommand(config, "agent-1", 80, 24, true)[2]
+	// Auto-hide on, and the initial toggle runs at attach so a reattach
+	// to a multi-window session shows the bar immediately.
+	if !strings.Contains(script, `set @fleet_tab_autohide 1 \; if -F`) {
+		t.Errorf("nested script missing attach-time tab toggle: %s", script)
+	}
+	if !strings.Contains(script, "ctrl+x c: new tab") {
+		t.Errorf("nested script missing new-tab hint: %s", script)
+	}
+}
+
+func TestShellCommandTabBarFullScreen(t *testing.T) {
+	config := state.DefaultConfig()
+	script := shellCommand(config, "agent-1", 80, 24, false)[2]
+	// Full-screen keeps the bar always on (it carries the detach hint).
+	if !strings.Contains(script, `set @fleet_tab_autohide 0 \; set status on`) {
+		t.Errorf("full-screen script should force status on: %s", script)
+	}
+	if !strings.Contains(script, "ctrl+q/ctrl+o: detach") {
+		t.Errorf("full-screen script missing detach hint: %s", script)
 	}
 }
 
