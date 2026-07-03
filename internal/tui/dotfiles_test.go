@@ -227,9 +227,11 @@ func TestShellCommandNestedNoInnerPaneKeys(t *testing.T) {
 	if strings.Contains(script, "bind-key k select-pane") {
 		t.Errorf("nested script should not have k keybinding (pane nav is on outer tmux): %s", script)
 	}
-	// Should still have the prefix override for inner tmux.
-	if !strings.Contains(script, "set -g prefix C-x") {
-		t.Errorf("nested script missing prefix override: %s", script)
+	// Should still have the prefix override for inner tmux,
+	// session-scoped so it doesn't leak to full-screen attaches or a
+	// user's own sessions on the shared server.
+	if !strings.Contains(script, `set prefix C-x`) || strings.Contains(script, "set -g prefix") {
+		t.Errorf("nested script should set session-scoped prefix: %s", script)
 	}
 	// The status bar doubles as the tab bar and auto-hides while the
 	// session has a single window.
@@ -279,6 +281,11 @@ func TestShellCommandTabBarFullScreen(t *testing.T) {
 	if !strings.Contains(script, "ctrl+q/ctrl+o: detach") {
 		t.Errorf("full-screen script missing detach hint: %s", script)
 	}
+	// A prior nested attach session-scopes prefix C-x; full-screen must
+	// reset it so the documented ctrl+b keys hold regardless of order.
+	if !strings.Contains(script, `set -u prefix`) {
+		t.Errorf("full-screen script should reset session prefix: %s", script)
+	}
 }
 
 func TestShellCommandNestedVimKeysDisabled(t *testing.T) {
@@ -298,7 +305,7 @@ func TestShellCommandNestedVimKeysDisabled(t *testing.T) {
 		t.Errorf("nested script should not have vim keys help text: %s", script)
 	}
 	// Should still have the prefix override
-	if !strings.Contains(script, "set -g prefix C-x") {
+	if !strings.Contains(script, "set prefix C-x") {
 		t.Errorf("nested script missing prefix override: %s", script)
 	}
 }

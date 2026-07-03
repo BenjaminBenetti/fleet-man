@@ -119,18 +119,24 @@ func ShellCommandForSession(config *configutil.Config, session string, cols, row
 	if nested {
 		// In nested mode, Ctrl+Q/O are handled by the outer tmux
 		// (they close all split panes). The inner tmux only needs
-		// the prefix override and session navigation. The status bar
+		// the prefix override and session navigation. The prefix is
+		// session-scoped so full-screen attaches and a user's own
+		// sessions on the shared server keep the default Ctrl+B
+		// (bind-key tables are inherently global; prefix+C-x =
+		// send-prefix is inert under other prefixes). The status bar
 		// doubles as the tab bar and is hidden while the session has a
 		// single window (the outer tmux provides all other UI).
-		modeConf = ` \; set -g prefix C-x \; bind-key C-x send-prefix` +
+		modeConf = ` \; set prefix C-x \; bind-key C-x send-prefix` +
 			` \; set status-left '' \; set status-right ' ctrl+x c: new tab '` +
 			` \; set @fleet_tab_autohide 1 \; ` + tabToggle
 		statusRight = ""
 	} else {
 		// Full-screen mode keeps the bar always on: it carries the
-		// detach hint and doubles as the tab bar. -u resets a
-		// status-left cleared by an earlier nested attach.
-		modeConf = ` \; set @fleet_tab_autohide 0 \; set status on \; set -u status-left`
+		// detach hint and doubles as the tab bar. -u resets the
+		// prefix and status-left a prior nested attach overrode, so
+		// the documented full-screen keys (ctrl+b …) hold regardless
+		// of attach order.
+		modeConf = ` \; set @fleet_tab_autohide 0 \; set status on \; set -u status-left \; set -u prefix`
 	}
 	// Session navigation: Ctrl+PageUp/Down are handled by the outer
 	// tmux to cycle session groups. prefix+T creates a new session
