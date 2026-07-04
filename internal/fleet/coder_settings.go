@@ -25,13 +25,15 @@ const coderWorkspaceNameMaxLen = 24
 // NormalizeCoderSettings trims and validates a fleet's coder settings in
 // place. Template and preset are free-form coder-side identifiers and are only
 // trimmed; the workspace-name override becomes part of every workspace name
-// this fleet creates, so it must be a legal coder name fragment (empty means
-// "use the fleet name"). Parameter names are trimmed and empty-name entries
-// dropped (a nameless binding can never be passed to `coder create`).
+// this fleet creates, so it is lowercased (coder names are lowercase — the
+// stored value must match what `coder create` receives) and must be a legal
+// coder name fragment (empty means "use the fleet name"). Parameter names are
+// trimmed and empty-name entries dropped (a nameless binding can never be
+// passed to `coder create`).
 func NormalizeCoderSettings(s *FleetSettings) error {
 	s.CoderTemplate = strings.TrimSpace(s.CoderTemplate)
 	s.CoderPreset = strings.TrimSpace(s.CoderPreset)
-	s.CoderWorkspaceName = strings.TrimSpace(s.CoderWorkspaceName)
+	s.CoderWorkspaceName = strings.ToLower(strings.TrimSpace(s.CoderWorkspaceName))
 	if s.CoderWorkspaceName != "" {
 		if len(s.CoderWorkspaceName) > coderWorkspaceNameMaxLen {
 			return fmt.Errorf("coder workspace name %q is too long (max %d characters)", s.CoderWorkspaceName, coderWorkspaceNameMaxLen)
@@ -40,16 +42,15 @@ func NormalizeCoderSettings(s *FleetSettings) error {
 			return fmt.Errorf("coder workspace name %q must be alphanumerics and hyphens, starting and ending with an alphanumeric", s.CoderWorkspaceName)
 		}
 	}
-	params := s.CoderParameters[:0]
+	// Filter into a fresh slice: this func is exported and mutating the
+	// caller's backing array in place would be a surprising side effect.
+	var params []CoderParameter
 	for _, p := range s.CoderParameters {
 		p.Name = strings.TrimSpace(p.Name)
 		if p.Name == "" {
 			continue
 		}
 		params = append(params, p)
-	}
-	if len(params) == 0 {
-		params = nil
 	}
 	s.CoderParameters = params
 	return nil

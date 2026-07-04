@@ -350,6 +350,7 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	// page ran on startup).
 	if f.Settings.CoderTemplate != "" {
 		fleetPage.editFleet.coderFetching = true
+		fleetPage.editFleet.coderFetchTemplate = f.Settings.CoderTemplate
 		cmds = append(cmds, fetchCoderParamsCmd(f.Name, f.Settings.CoderTemplate))
 	}
 	if fleetPage.shouldKickHomedirDetect(f) {
@@ -609,21 +610,23 @@ func (fleetPage *fleetPage) updateCoderParamRow(keyMsg tea.KeyMsg) tea.Cmd {
 }
 
 // cycleFleetCoderPreset cycles the Coder preset selection through the fetched
-// preset list (instant-save), a no-op until a fetch has populated it.
+// preset list plus a leading "(none)" stop — "no preset" (`coder create`
+// without --preset) must stay representable — persisting each move
+// (instant-save). A no-op until a fetch has populated the list.
 func (fleetPage *fleetPage) cycleFleetCoderPreset(m *model, direction int) tea.Cmd {
-	presets := fleetPage.editFleet.coderPresets
-	if len(presets) == 0 {
+	if len(fleetPage.editFleet.coderPresets) == 0 {
 		return nil
 	}
+	options := append([]string{""}, fleetPage.editFleet.coderPresets...)
 	idx := 0
-	for i, preset := range presets {
+	for i, preset := range options {
 		if preset == fleetPage.editFleet.coderPreset {
 			idx = i
 			break
 		}
 	}
 	prev := fleetPage.editFleet.coderPreset
-	fleetPage.editFleet.coderPreset = presets[(idx+direction+len(presets))%len(presets)]
+	fleetPage.editFleet.coderPreset = options[(idx+direction+len(options))%len(options)]
 	if err := fleetPage.persistFleetSettings(m); err != nil {
 		fleetPage.editFleet.coderPreset = prev
 		m.message = fmt.Sprintf("Failed to save: %v", err)
@@ -1147,14 +1150,26 @@ func (fleetPage *fleetPage) restoreEditFleetField(m *model) {
 	// the (unchanged) working copy the next time an edit starts.
 }
 
-// commitCoderWsName persists the workspace-name override (instant-save),
-// restoring the input to the persisted value if the save fails (e.g. the
-// server rejects an illegal coder name fragment).
+// commitCoderWsName validates the workspace-name override with the SAME domain
+// rule the server enforces (immediate local feedback instead of a raw gRPC
+// InvalidArgument string), normalizes the input to the value `coder create`
+// will actually receive (trimmed, lowercased), and persists (instant-save) —
+// restoring the input to the persisted value if the save still fails.
 func (fleetPage *fleetPage) commitCoderWsName(m *model) tea.Cmd {
-	if err := fleetPage.persistFleetSettings(m); err != nil {
+	restore := func() {
 		if f, ok := m.st.Fleets[fleetPage.dlg.fleet]; ok {
 			fleetPage.coderWsNameInput.SetValue(f.Settings.CoderWorkspaceName)
 		}
+	}
+	probe := fleet.FleetSettings{CoderWorkspaceName: fleetPage.coderWsNameInput.Value()}
+	if err := fleet.NormalizeCoderSettings(&probe); err != nil {
+		restore()
+		m.message = fmt.Sprintf("Invalid workspace name: %v", err)
+		return nil
+	}
+	fleetPage.coderWsNameInput.SetValue(probe.CoderWorkspaceName)
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		restore()
 		m.message = fmt.Sprintf("Failed to save: %v", err)
 	}
 	return nil
@@ -1176,6 +1191,7 @@ func (fleetPage *fleetPage) commitCoderTemplate(m *model) tea.Cmd {
 	template := strings.TrimSpace(fleetPage.coderTemplateInput.Value())
 	if template != "" && template != prev {
 		fleetPage.editFleet.coderFetching = true
+		fleetPage.editFleet.coderFetchTemplate = template
 		m.message = "Fetching template parameters..."
 		return fetchCoderParamsCmd(fleetPage.dlg.fleet, template)
 	}
@@ -1199,21 +1215,35 @@ func (fleetPage *fleetPage) commitCoderParam(m *model, idx int) tea.Cmd {
 
 // handleCoderParamsFetched applies a GetCoderTemplateParams result to the open
 // edit-fleet dialog: fetched parameters are merged with the working copy
-// (user-set values kept by name, metadata refreshed), the preset list is
-// replaced, and an empty preset selection defaults to the first available.
-// Stale results — the dialog closed or now shows a different fleet — are
-// discarded (mirroring handleHomedirDetected).
+// (user-set values kept by name, metadata refreshed) and the preset list is
+// replaced. The merge is persisted ONLY when it actually changes the stored
+// bindings — merely opening the dialog on an unchanged template must not
+// rewrite settings — and the preset selection is never auto-adopted ("" is a
+// valid "no preset" choice; the cycler offers the fetched names).
+//
+// Stale results are discarded (mirroring handleHomedirDetected): the dialog
+// closed, now shows a different fleet, answers a template that is no longer
+// the latest one requested, or would land mid-edit on a parameter row (an
+// in-flight commit indexes into the param list, so it must not be reshaped
+// underneath the editor).
 func (fleetPage *fleetPage) handleCoderParamsFetched(m *model, msg coderParamsFetchedMsg) tea.Cmd {
-	// Always clear the in-flight flag for *this* fleet so the spinner stops,
-	// even when the result is not applied.
-	if fleetPage.dlg.fleet == msg.fleetName {
+	// Clear the in-flight flag only for the fetch we are actually waiting on:
+	// an older template's result must not stop the spinner of a newer fetch
+	// still in flight.
+	if fleetPage.dlg.fleet == msg.fleetName && fleetPage.editFleet.coderFetchTemplate == msg.template {
 		fleetPage.editFleet.coderFetching = false
 	}
-	if fleetPage.mode != viewEditFleet || fleetPage.dlg.fleet != msg.fleetName {
+	if fleetPage.mode != viewEditFleet || fleetPage.dlg.fleet != msg.fleetName ||
+		fleetPage.editFleet.coderFetchTemplate != msg.template {
 		return nil
 	}
 	if msg.err != nil {
 		m.message = fmt.Sprintf("Failed to fetch parameters: %v", msg.err)
+		return nil
+	}
+	if fleetPage.dlg.fieldActive && isCoderParamChildRow(fleetPage.dlg.row) {
+		// A parameter edit is in progress; its commit writes by row index.
+		// Drop the refresh rather than reshape the list under the editor.
 		return nil
 	}
 
@@ -1237,16 +1267,18 @@ func (fleetPage *fleetPage) handleCoderParamsFetched(m *model, msg coderParamsFe
 		})
 	}
 
-	prevParams := fleetPage.editFleet.coderParams
-	prevPreset := fleetPage.editFleet.coderPreset
-	fleetPage.editFleet.coderParams = newParams
+	// The preset list is in-memory feed for the cycler, not a persisted value.
 	fleetPage.editFleet.coderPresets = slices.Clone(msg.presets)
-	if fleetPage.editFleet.coderPreset == "" && len(msg.presets) > 0 {
-		fleetPage.editFleet.coderPreset = msg.presets[0]
+
+	if slices.Equal(fleetPage.editFleet.coderParams, newParams) {
+		m.message = fmt.Sprintf("Loaded %d parameters, %d presets", len(newParams), len(msg.presets))
+		return nil
 	}
+
+	prevParams := fleetPage.editFleet.coderParams
+	fleetPage.editFleet.coderParams = newParams
 	if err := fleetPage.persistFleetSettings(m); err != nil {
 		fleetPage.editFleet.coderParams = prevParams
-		fleetPage.editFleet.coderPreset = prevPreset
 		m.message = fmt.Sprintf("Failed to save: %v", err)
 		return nil
 	}
@@ -1414,11 +1446,12 @@ type editFleetState struct {
 	// the preset selection and parameter working copy live here. The preset
 	// list and parameter metadata come from the GetCoderTemplateParams fetch
 	// kicked on dialog open (template already set) or on a template commit.
-	coderExpanded bool                   // ▼ Coder expanded, revealing the coder rows
-	coderPreset   string                 // current preset selection (instant-save)
-	coderParams   []fleet.CoderParameter // working copy of the fleet's parameter bindings (instant-save)
-	coderPresets  []string               // available preset names (in-memory, from the fetch)
-	coderFetching bool                   // true while a template-params fetch is in flight
+	coderExpanded      bool                   // ▼ Coder expanded, revealing the coder rows
+	coderPreset        string                 // current preset selection ("" = no preset; instant-save)
+	coderParams        []fleet.CoderParameter // working copy of the fleet's parameter bindings (instant-save)
+	coderPresets       []string               // available preset names (in-memory, from the fetch)
+	coderFetching      bool                   // true while a template-params fetch is in flight
+	coderFetchTemplate string                 // template of the latest kicked fetch — results answering any other template are stale and discarded
 
 	detecting bool // true while a homedir auto-detect cmd is in flight
 }
@@ -1673,13 +1706,19 @@ func (fleetPage *fleetPage) renderCoderParamRow(row int, marker func(int) string
 
 // coderFooter returns a context line shown beneath the dialog rows while the
 // cursor is on a Coder row: the ${...} interpolation variables on a parameter
-// row, and the naming scheme on the workspace-name row.
+// row, and the naming scheme (with the live prefix and coder's 32-char cap —
+// a truncated compose can collide with a sibling instance) on the
+// workspace-name row.
 func (fleetPage *fleetPage) coderFooter() string {
 	if isCoderParamChildRow(fleetPage.dlg.row) {
 		return dimStyle.Render("Variables: ${GIT_URL} = fleet repo URL, ${GIT_BRANCH} = git branch\n  (blank = default), ${INSTANCE_NAME} = workspace name")
 	}
 	if fleetPage.dlg.row == editFleetRowCoderWsName {
-		return dimStyle.Render("workspaces are named <workspace>-<instance>")
+		prefix := strings.TrimSpace(fleetPage.coderWsNameInput.Value())
+		if prefix == "" {
+			prefix = fleetPage.dlg.fleet
+		}
+		return dimStyle.Render(fmt.Sprintf("workspaces are named %s-<instance>, truncated to 32 chars", prefix))
 	}
 	return ""
 }

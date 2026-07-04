@@ -684,7 +684,7 @@ const file_config_proto_rawDesc = "" +
 	"\vgateway_url\x18\x02 \x01(\tR\n" +
 	"gatewayUrl\x12#\n" +
 	"\rfleet_enabled\x18\x03 \x01(\bR\ffleetEnabled\x12'\n" +
-	"\x0fwebhook_enabled\x18\x04 \x01(\bR\x0ewebhookEnabled\"\xa6\x03\n" +
+	"\x0fwebhook_enabled\x18\x04 \x01(\bR\x0ewebhookEnabled\"\xad\x03\n" +
 	"\x06Config\x124\n" +
 	"\ageneral\x18\x01 \x01(\v2\x1a.fleetgrpc.GeneralSettingsR\ageneral\x12.\n" +
 	"\x05agent\x18\x02 \x01(\v2\x18.fleetgrpc.AgentSettingsR\x05agent\x127\n" +
@@ -695,7 +695,7 @@ const file_config_proto_rawDesc = "" +
 	"\abrowser\x18\x06 \x01(\v2\x1a.fleetgrpc.BrowserSettingsR\abrowser\x12?\n" +
 	"\x0fdefault_backend\x18\a \x01(\x0e2\x16.fleetgrpc.BackendTypeR\x0edefaultBackend\x12;\n" +
 	"\n" +
-	"remote_mcp\x18\b \x01(\v2\x1c.fleetgrpc.RemoteMcpSettingsR\tremoteMcpJ\x04\b\x04\x10\x05J\x04\b\t\x10\x15\"\x12\n" +
+	"remote_mcp\x18\b \x01(\v2\x1c.fleetgrpc.RemoteMcpSettingsR\tremoteMcpJ\x04\b\x04\x10\x05J\x04\b\t\x10\x15R\x05coder\"\x12\n" +
 	"\x10GetConfigRequest\";\n" +
 	"\x0eGetConfigReply\x12)\n" +
 	"\x06config\x18\x01 \x01(\v2\x11.fleetgrpc.ConfigR\x06config\"=\n" +

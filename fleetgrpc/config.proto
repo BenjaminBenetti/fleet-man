@@ -89,6 +89,7 @@ message Config {
   DotfilesSettings dotfiles = 3;
   // 4 was CoderSettings coder — moved to FleetSettings (issue #221).
   reserved 4;
+  reserved "coder";
   CodespacesSettings codespaces = 5;
   BrowserSettings browser = 6;
   // Feeds CreateInstanceRequest's UNSPECIFIED-backend resolution. UNSPECIFIED

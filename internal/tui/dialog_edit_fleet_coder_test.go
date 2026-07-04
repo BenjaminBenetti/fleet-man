@@ -69,7 +69,8 @@ func TestEditFleetCoderSectionEditsAndSaves(t *testing.T) {
 	}
 
 	// Down past the template row onto the preset row and cycle: with the
-	// fetched preset list populated, l moves the selection and saves.
+	// fetched preset list populated, l moves the selection and saves. The
+	// cycle includes a leading "(none)" stop so "no preset" stays reachable.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown})
 	if fp.dlg.row != editFleetRowCoderPreset {
@@ -81,8 +82,16 @@ func TestEditFleetCoderSectionEditsAndSaves(t *testing.T) {
 	}
 	fp.editFleet.coderPresets = []string{"small", "large"}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if f.Settings.CoderPreset != "small" {
+		t.Fatalf("CoderPreset = %q, want %q (instant-save)", f.Settings.CoderPreset, "small")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if f.Settings.CoderPreset != "large" {
-		t.Fatalf("CoderPreset = %q, want %q (instant-save)", f.Settings.CoderPreset, "large")
+		t.Fatalf("CoderPreset = %q, want %q", f.Settings.CoderPreset, "large")
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if f.Settings.CoderPreset != "" {
+		t.Fatalf("CoderPreset = %q, want the (none) stop after wrapping", f.Settings.CoderPreset)
 	}
 
 	// Down onto the parameter row; enter opens the shared input pre-loaded
@@ -163,8 +172,8 @@ func TestEditFleetCoderTemplateCommitKicksFetch(t *testing.T) {
 	if params[1].Name != "cpus" || params[1].Value != "" || params[1].DefaultValue != "2" {
 		t.Fatalf("new param not adopted with default: %+v", params[1])
 	}
-	if f.Settings.CoderPreset != "small" {
-		t.Fatalf("empty preset should default to the first fetched one, got %q", f.Settings.CoderPreset)
+	if f.Settings.CoderPreset != "" {
+		t.Fatalf("preset must NOT be auto-adopted on fetch (no-preset stays representable), got %q", f.Settings.CoderPreset)
 	}
 	if len(fp.editFleet.coderPresets) != 2 {
 		t.Fatalf("preset list not adopted: %v", fp.editFleet.coderPresets)
@@ -192,6 +201,134 @@ func TestEditFleetCoderFetchIgnoresStaleFleet(t *testing.T) {
 	}
 	if len(f.Settings.CoderParameters) != 0 || len(fp.editFleet.coderParams) != 0 {
 		t.Fatalf("stale result applied: %+v", fp.editFleet.coderParams)
+	}
+}
+
+// TestEditFleetCoderFetchIgnoresStaleTemplate guards the template-level
+// staleness race: commit template a, then template b while fetch-a is in
+// flight — fetch-a's late result must neither apply nor stop the spinner
+// still waiting on fetch-b.
+func TestEditFleetCoderFetchIgnoresStaleTemplate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	fp, m, f := openCoderTestDialog(t, fleet.FleetSettings{CoderTemplate: "b"})
+	// Dialog open kicked fetch-b: coderFetchTemplate == "b", spinner on.
+	if !fp.editFleet.coderFetching || fp.editFleet.coderFetchTemplate != "b" {
+		t.Fatalf("open should kick fetch-b: fetching=%v template=%q", fp.editFleet.coderFetching, fp.editFleet.coderFetchTemplate)
+	}
+
+	fp.handleCoderParamsFetched(m, coderParamsFetchedMsg{
+		fleetName: "alpha",
+		template:  "a", // stale: answers an older commit
+		params:    []coderRichParam{{Name: "intruder"}},
+		presets:   []string{"x"},
+	})
+
+	if !fp.editFleet.coderFetching {
+		t.Fatal("a stale template's result must not stop the newer fetch's spinner")
+	}
+	if len(f.Settings.CoderParameters) != 0 || len(fp.editFleet.coderPresets) != 0 {
+		t.Fatalf("stale template result applied: %+v", fp.editFleet.coderParams)
+	}
+}
+
+// TestEditFleetCoderFetchDiscardedDuringParamEdit guards the mid-edit race: a
+// fetch landing while a parameter edit is active must not reshape the list
+// under the editor (the in-flight commit writes by row index).
+func TestEditFleetCoderFetchDiscardedDuringParamEdit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	fp, m, f := openCoderTestDialog(t, fleet.FleetSettings{
+		CoderTemplate:   "tmpl",
+		CoderParameters: []fleet.CoderParameter{{Name: "repo"}},
+	})
+
+	// Start editing the parameter row.
+	fp.dlg.row = editFleetRowCoderParamBase
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !fp.dlg.fieldActive {
+		t.Fatal("param edit should be active")
+	}
+
+	fp.handleCoderParamsFetched(m, coderParamsFetchedMsg{
+		fleetName: "alpha",
+		template:  "tmpl",
+		params:    []coderRichParam{{Name: "cpus"}}, // would reshape the list
+	})
+	if got := fp.editFleet.coderParams; len(got) != 1 || got[0].Name != "repo" {
+		t.Fatalf("fetch reshaped the param list under an active edit: %+v", got)
+	}
+
+	// The edit still commits into the right parameter.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if f.Settings.CoderParameters[0].Name != "repo" || f.Settings.CoderParameters[0].Value != "v" {
+		t.Fatalf("commit landed wrong: %+v", f.Settings.CoderParameters)
+	}
+}
+
+// TestEditFleetCoderFetchUnchangedDoesNotPersist guards the dialog-open side
+// effect: a fetch whose merge does not change the stored bindings must not
+// rewrite the fleet's persisted settings.
+func TestEditFleetCoderFetchUnchangedDoesNotPersist(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	saves := 0
+	orig := setFleetSettingsRemote
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) error { saves++; return nil }
+	t.Cleanup(func() { setFleetSettingsRemote = orig })
+
+	param := fleet.CoderParameter{Name: "repo", Value: "v", DefaultValue: "d", DisplayName: "Repo"}
+	fp, m, _ := openCoderTestDialog(t, fleet.FleetSettings{
+		CoderTemplate:   "tmpl",
+		CoderParameters: []fleet.CoderParameter{param},
+	})
+
+	before := saves
+	fp.handleCoderParamsFetched(m, coderParamsFetchedMsg{
+		fleetName: "alpha",
+		template:  "tmpl",
+		params:    []coderRichParam{{Name: "repo", DefaultValue: "d", DisplayName: "Repo"}},
+		presets:   []string{"small"},
+	})
+	if saves != before {
+		t.Fatalf("unchanged fetch persisted settings (%d saves)", saves-before)
+	}
+	if len(fp.editFleet.coderPresets) != 1 {
+		t.Fatalf("preset list should still update in memory: %v", fp.editFleet.coderPresets)
+	}
+}
+
+// TestEditFleetCoderWsNameValidatedLocally guards the client-side use of the
+// shared domain rule: an illegal override is rejected with a local message
+// (no RPC), and a legal mixed-case one is normalized to what `coder create`
+// will receive.
+func TestEditFleetCoderWsNameValidatedLocally(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	saves := 0
+	orig := setFleetSettingsRemote
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) error { saves++; return nil }
+	t.Cleanup(func() { setFleetSettingsRemote = orig })
+
+	fp, m, f := openCoderTestDialog(t, fleet.FleetSettings{})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown}) // workspace-name row
+
+	// Illegal: rejected locally, nothing saved.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("bad name")})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if saves != 0 {
+		t.Fatalf("invalid name reached the RPC (%d saves)", saves)
+	}
+	if !strings.Contains(m.message, "Invalid workspace name") {
+		t.Fatalf("no local validation message: %q", m.message)
+	}
+
+	// Legal mixed case: normalized to lowercase and saved.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("MyProj")})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if f.Settings.CoderWorkspaceName != "myproj" {
+		t.Fatalf("CoderWorkspaceName = %q, want normalized %q", f.Settings.CoderWorkspaceName, "myproj")
 	}
 }
 

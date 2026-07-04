@@ -18,7 +18,7 @@ func TestNormalizeCoderSettingsTrimsAndKeepsValid(t *testing.T) {
 	if err := NormalizeCoderSettings(&s); err != nil {
 		t.Fatalf("NormalizeCoderSettings: %v", err)
 	}
-	if s.CoderTemplate != "tmpl" || s.CoderPreset != "large" || s.CoderWorkspaceName != "my-Proj" {
+	if s.CoderTemplate != "tmpl" || s.CoderPreset != "large" || s.CoderWorkspaceName != "my-proj" {
 		t.Fatalf("trimming failed: %+v", s)
 	}
 	if len(s.CoderParameters) != 1 || s.CoderParameters[0].Name != "repo" {
@@ -57,5 +57,33 @@ func TestNormalizeCoderSettingsRejectsBadWorkspaceName(t *testing.T) {
 		if err := NormalizeCoderSettings(&s); err != nil {
 			t.Errorf("workspace name %q: unexpected error %v", name, err)
 		}
+	}
+}
+
+// TestNormalizeCoderSettingsLowercasesWorkspaceName pins the stored override
+// to what `coder create` actually receives (coder names are lowercase).
+func TestNormalizeCoderSettingsLowercasesWorkspaceName(t *testing.T) {
+	s := FleetSettings{CoderWorkspaceName: " My-Proj "}
+	if err := NormalizeCoderSettings(&s); err != nil {
+		t.Fatalf("NormalizeCoderSettings: %v", err)
+	}
+	if s.CoderWorkspaceName != "my-proj" {
+		t.Fatalf("CoderWorkspaceName = %q, want %q", s.CoderWorkspaceName, "my-proj")
+	}
+}
+
+// TestNormalizeCoderSettingsDoesNotMutateCallerParams guards the exported
+// contract: filtering must not scribble over the caller's backing array.
+func TestNormalizeCoderSettingsDoesNotMutateCallerParams(t *testing.T) {
+	orig := []CoderParameter{{Name: "  "}, {Name: "keep"}}
+	s := FleetSettings{CoderParameters: orig}
+	if err := NormalizeCoderSettings(&s); err != nil {
+		t.Fatalf("NormalizeCoderSettings: %v", err)
+	}
+	if orig[0].Name != "  " || orig[1].Name != "keep" {
+		t.Fatalf("caller slice mutated: %+v", orig)
+	}
+	if len(s.CoderParameters) != 1 || s.CoderParameters[0].Name != "keep" {
+		t.Fatalf("filtered params wrong: %+v", s.CoderParameters)
 	}
 }

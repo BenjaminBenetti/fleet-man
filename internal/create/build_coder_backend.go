@@ -6,6 +6,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	coderbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/coder"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -31,6 +32,12 @@ func buildCoderBackend(fleetName, instanceName, remoteURL, branch string, verbos
 		prefix = fleetName
 	}
 	wsName := coderbackend.WorkspaceNameFor(prefix, instanceName)
+	// Coder caps workspace names at 32 chars; a truncated compose can collide
+	// with a sibling instance whose name shares the surviving prefix, so make
+	// the truncation visible in fleet.log rather than failing silently later.
+	if uncapped := backend.SanitizeName(prefix+"-"+instanceName, len(prefix)+1+len(instanceName)); uncapped != wsName {
+		flog.Warn("coder workspace name truncated", "fleet", fleetName, "instance", instanceName, "workspace", wsName)
+	}
 	opts = append(opts, coderbackend.WithWorkspaceName(wsName))
 
 	if settings.CoderTemplate != "" {
