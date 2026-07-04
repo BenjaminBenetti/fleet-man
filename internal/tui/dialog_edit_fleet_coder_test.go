@@ -558,6 +558,38 @@ func TestEditFleetCoderClearTemplateFailedSaveKeepsFetchLive(t *testing.T) {
 	}
 }
 
+// TestEditFleetCoderSameTemplateCommitRetriesFetch guards the in-dialog
+// retry: after a failed fetch (e.g. right after a template switch), re-
+// committing the SAME template must re-kick the fetch — the only other
+// recovery is reopening the dialog, and a fetch error after a switch leaves
+// the old template's bindings persisted until a fetch succeeds.
+func TestEditFleetCoderSameTemplateCommitRetriesFetch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	fp, m, _ := openCoderTestDialog(t, fleet.FleetSettings{CoderTemplate: "tmpl"})
+
+	// The open-time fetch fails.
+	fp.handleCoderParamsFetched(m, coderParamsFetchedMsg{
+		fleetName: "alpha", template: "tmpl", err: errors.New("api down"),
+	})
+	if fp.editFleet.coderFetching {
+		t.Fatal("failed fetch should clear the spinner")
+	}
+
+	// Re-committing the unchanged template retries.
+	fp.dlg.row = editFleetRowCoderTemplate
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // edit mode
+	cmd := fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("same-template commit should re-kick the fetch")
+	}
+	if !fp.editFleet.coderFetching || fp.editFleet.coderFetchTemplate != "tmpl" {
+		t.Fatalf("retry bookkeeping wrong: fetching=%v template=%q",
+			fp.editFleet.coderFetching, fp.editFleet.coderFetchTemplate)
+	}
+}
+
 // TestEditFleetCoderVariablesHintScopedToParams guards the footer hint: the
 // "${GIT_URL}" interpolation-variables hint shows on coder PARAMETER rows
 // only, not on the template row above them.

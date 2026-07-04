@@ -1221,13 +1221,15 @@ func (fleetPage *fleetPage) commitCoderTemplate(m *model) tea.Cmd {
 		fleetPage.editFleet.coderFetching = false
 		return nil
 	}
-	if template != prev {
-		fleetPage.editFleet.coderFetching = true
-		fleetPage.editFleet.coderFetchTemplate = template
-		m.message = "Fetching template parameters..."
-		return fetchCoderParamsCmd(fleetPage.dlg.fleet, template)
-	}
-	return nil
+	// Any non-empty commit re-kicks the fetch, INCLUDING template == prev:
+	// that is the in-dialog retry after a failed fetch (otherwise a fetch
+	// error after a template switch leaves the old template's preset/params
+	// bound with no recovery short of reopening the dialog). Redundant
+	// refreshes are harmless — merges persist only on actual change.
+	fleetPage.editFleet.coderFetching = true
+	fleetPage.editFleet.coderFetchTemplate = template
+	m.message = "Fetching template parameters..."
+	return fetchCoderParamsCmd(fleetPage.dlg.fleet, template)
 }
 
 // commitCoderParam copies the shared parameter input into the idx-th binding
