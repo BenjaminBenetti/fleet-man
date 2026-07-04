@@ -336,6 +336,7 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.editFleet.coderParams = slices.Clone(f.Settings.CoderParameters)
 	fleetPage.editFleet.coderPresets = nil
 	fleetPage.editFleet.coderFetching = false
+	fleetPage.editFleet.coderPendingFetch = nil
 	fleetPage.coderWsNameInput.SetValue(f.Settings.CoderWorkspaceName)
 	fleetPage.coderWsNameInput.Blur()
 	fleetPage.coderTemplateInput.SetValue(f.Settings.CoderTemplate)
@@ -374,17 +375,18 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 	if fleetPage.dlg.fieldActive {
 		switch keyMsg.String() {
 		case "enter":
-			// Commit the typed value (instant-save) and leave editing.
+			// Commit the typed value (instant-save) and leave editing, then
+			// apply any fetch result stashed while the edit was active.
 			cmd := fleetPage.commitEditFleetField(m)
 			fleetPage.dlg.fieldActive = false
 			fleetPage.syncEditFleetFocus()
-			return cmd
+			return tea.Batch(cmd, fleetPage.applyPendingCoderFetch(m))
 		case "esc":
 			// Discard the uncommitted edit; restore the persisted value.
 			fleetPage.restoreEditFleetField(m)
 			fleetPage.dlg.fieldActive = false
 			fleetPage.syncEditFleetFocus()
-			return nil
+			return fleetPage.applyPendingCoderFetch(m)
 		case "ctrl+c":
 			fleetPage.closeEditFleet(m)
 			return nil
@@ -1177,27 +1179,44 @@ func (fleetPage *fleetPage) commitCoderWsName(m *model) tea.Cmd {
 
 // commitCoderTemplate persists the template (instant-save) and, when it
 // changed to a new non-empty value, kicks the parameter/preset fetch — exactly
-// like the old global settings page did on a template commit.
+// like the old global settings page did on a template commit. Clearing the
+// template clears its template-scoped state with it (parameter bindings,
+// preset selection, the cycler's preset feed, any in-flight fetch): the
+// create path passes --preset/--parameter regardless of --template, so
+// leaving a removed template's bindings behind can hard-fail or
+// mis-provision creation against coder's default template.
 func (fleetPage *fleetPage) commitCoderTemplate(m *model) tea.Cmd {
 	prev := ""
 	if f, ok := m.st.Fleets[fleetPage.dlg.fleet]; ok {
 		prev = f.Settings.CoderTemplate
 	}
+	template := strings.TrimSpace(fleetPage.coderTemplateInput.Value())
+
+	prevParams := fleetPage.editFleet.coderParams
+	prevPreset := fleetPage.editFleet.coderPreset
+	prevPresets := fleetPage.editFleet.coderPresets
+	if template == "" {
+		fleetPage.editFleet.coderParams = nil
+		fleetPage.editFleet.coderPreset = ""
+		fleetPage.editFleet.coderPresets = nil
+		// Invalidate any in-flight fetch too: its result must not land (and
+		// persist the removed template's parameters) on a fleet whose
+		// template is now empty, and the spinner must stop.
+		fleetPage.editFleet.coderFetchTemplate = ""
+		fleetPage.editFleet.coderFetching = false
+	}
+
 	if err := fleetPage.persistFleetSettings(m); err != nil {
 		fleetPage.coderTemplateInput.SetValue(prev)
+		if template == "" {
+			fleetPage.editFleet.coderParams = prevParams
+			fleetPage.editFleet.coderPreset = prevPreset
+			fleetPage.editFleet.coderPresets = prevPresets
+		}
 		m.message = fmt.Sprintf("Failed to save: %v", err)
 		return nil
 	}
-	template := strings.TrimSpace(fleetPage.coderTemplateInput.Value())
-	if template == "" {
-		// Clearing the template invalidates any in-flight fetch: its result
-		// must not land (and persist the removed template's parameters) on a
-		// fleet whose template is now empty, and the spinner must stop.
-		fleetPage.editFleet.coderFetchTemplate = ""
-		fleetPage.editFleet.coderFetching = false
-		return nil
-	}
-	if template != prev {
+	if template != "" && template != prev {
 		fleetPage.editFleet.coderFetching = true
 		fleetPage.editFleet.coderFetchTemplate = template
 		m.message = "Fetching template parameters..."
@@ -1251,9 +1270,14 @@ func (fleetPage *fleetPage) handleCoderParamsFetched(m *model, msg coderParamsFe
 		return nil
 	}
 	if fleetPage.dlg.fieldActive {
-		// A text edit is in progress. Drop the refresh: a param commit writes
-		// by row index (the list must not reshape under the editor), and the
-		// persist below would snapshot the half-typed input as settled state.
+		// A text edit is in progress: a param commit writes by row index (the
+		// list must not reshape under the editor), and the persist below
+		// would snapshot the half-typed input as settled state. Stash the
+		// result and re-apply it when the edit ends instead of losing the
+		// fetch (the re-apply runs the staleness checks again, so a template
+		// change during the edit still discards it).
+		pending := msg
+		fleetPage.editFleet.coderPendingFetch = &pending
 		return nil
 	}
 
@@ -1299,6 +1323,18 @@ func (fleetPage *fleetPage) handleCoderParamsFetched(m *model, msg coderParamsFe
 	}
 	m.message = fmt.Sprintf("Loaded %d parameters, %d presets", len(newParams), len(msg.presets))
 	return nil
+}
+
+// applyPendingCoderFetch re-applies a fetch result stashed while a text edit
+// was active, routing it back through handleCoderParamsFetched so the full
+// staleness checks run again (a template change during the edit discards it).
+func (fleetPage *fleetPage) applyPendingCoderFetch(m *model) tea.Cmd {
+	pending := fleetPage.editFleet.coderPendingFetch
+	if pending == nil {
+		return nil
+	}
+	fleetPage.editFleet.coderPendingFetch = nil
+	return fleetPage.handleCoderParamsFetched(m, *pending)
 }
 
 // syncEditFleetFocus moves the cursor blink to the text input backing the
@@ -1462,6 +1498,10 @@ type editFleetState struct {
 	coderPresets       []string               // available preset names (in-memory, from the fetch)
 	coderFetching      bool                   // true while a template-params fetch is in flight
 	coderFetchTemplate string                 // template of the latest kicked fetch — results answering any other template are stale and discarded
+	// coderPendingFetch stashes a fetch result that arrived while a text edit
+	// was active (applying it would persist the half-typed input); it is
+	// re-applied — through the full staleness checks — when the edit ends.
+	coderPendingFetch *coderParamsFetchedMsg
 
 	detecting bool // true while a homedir auto-detect cmd is in flight
 }

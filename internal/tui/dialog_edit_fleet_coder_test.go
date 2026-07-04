@@ -269,11 +269,12 @@ func TestEditFleetCoderClearedTemplateInvalidatesFetch(t *testing.T) {
 	}
 }
 
-// TestEditFleetCoderFetchDiscardedDuringWsNameEdit guards the broad mid-edit
-// discard: the fetch-merge's persist snapshots every live text input, so a
+// TestEditFleetCoderFetchStashedDuringWsNameEdit guards the broad mid-edit
+// guard: the fetch-merge's persist snapshots every live text input, so a
 // result landing while the workspace-name row is being edited would store the
-// half-typed value. It must be dropped instead.
-func TestEditFleetCoderFetchDiscardedDuringWsNameEdit(t *testing.T) {
+// half-typed value. It must be deferred until the edit ends — then applied,
+// not lost.
+func TestEditFleetCoderFetchStashedDuringWsNameEdit(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	saves := 0
 	orig := setFleetSettingsRemote
@@ -284,7 +285,7 @@ func TestEditFleetCoderFetchDiscardedDuringWsNameEdit(t *testing.T) {
 
 	// Start typing a workspace name (half-typed, uncommitted).
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown}) // ws-name row
-	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("half-")})
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("dra")})
 	if !fp.dlg.fieldActive {
 		t.Fatal("ws-name edit should be active")
 	}
@@ -301,12 +302,54 @@ func TestEditFleetCoderFetchDiscardedDuringWsNameEdit(t *testing.T) {
 	if f.Settings.CoderWorkspaceName != "" || len(f.Settings.CoderParameters) != 0 {
 		t.Fatalf("half-typed edit persisted: %+v", f.Settings)
 	}
+
+	// Ending the edit commits the typed value AND applies the stashed fetch.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if f.Settings.CoderWorkspaceName != "dra" {
+		t.Fatalf("CoderWorkspaceName = %q, want committed %q", f.Settings.CoderWorkspaceName, "dra")
+	}
+	if len(f.Settings.CoderParameters) != 1 || f.Settings.CoderParameters[0].Name != "repo" {
+		t.Fatalf("stashed fetch not applied after the edit: %+v", f.Settings.CoderParameters)
+	}
+	if fp.editFleet.coderPendingFetch != nil {
+		t.Fatal("pending fetch should be consumed")
+	}
 }
 
-// TestEditFleetCoderFetchDiscardedDuringParamEdit guards the mid-edit race: a
+// TestEditFleetCoderClearingTemplateClearsBindings guards the clear-template
+// semantics: "no template" must mean no template-scoped state — the create
+// path passes --preset/--parameter regardless of --template, so a removed
+// template's bindings left behind can hard-fail or mis-provision creation.
+func TestEditFleetCoderClearingTemplateClearsBindings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	fp, m, f := openCoderTestDialog(t, fleet.FleetSettings{
+		CoderTemplate:   "T",
+		CoderPreset:     "large",
+		CoderParameters: []fleet.CoderParameter{{Name: "repo", Value: "v"}},
+	})
+	fp.editFleet.coderPresets = []string{"small", "large"}
+
+	fp.dlg.row = editFleetRowCoderTemplate
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // enter edit mode
+	fp.coderTemplateInput.SetValue("")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // commit the clear
+
+	if f.Settings.CoderTemplate != "" || f.Settings.CoderPreset != "" || len(f.Settings.CoderParameters) != 0 {
+		t.Fatalf("template-scoped state survived the clear: %+v", f.Settings)
+	}
+	if len(fp.editFleet.coderParams) != 0 || fp.editFleet.coderPreset != "" || len(fp.editFleet.coderPresets) != 0 {
+		t.Fatalf("dialog working state survived the clear: params=%+v preset=%q presets=%v",
+			fp.editFleet.coderParams, fp.editFleet.coderPreset, fp.editFleet.coderPresets)
+	}
+}
+
+// TestEditFleetCoderFetchDeferredDuringParamEdit guards the mid-edit race: a
 // fetch landing while a parameter edit is active must not reshape the list
-// under the editor (the in-flight commit writes by row index).
-func TestEditFleetCoderFetchDiscardedDuringParamEdit(t *testing.T) {
+// under the editor (the in-flight commit writes by row index); once the edit
+// commits, the stashed result applies and the merge keeps the typed value.
+func TestEditFleetCoderFetchDeferredDuringParamEdit(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	stubFleetSettingsSave(t)
 
@@ -325,17 +368,19 @@ func TestEditFleetCoderFetchDiscardedDuringParamEdit(t *testing.T) {
 	fp.handleCoderParamsFetched(m, coderParamsFetchedMsg{
 		fleetName: "alpha",
 		template:  "tmpl",
-		params:    []coderRichParam{{Name: "cpus"}}, // would reshape the list
+		params:    []coderRichParam{{Name: "repo"}, {Name: "cpus"}}, // would reshape the list
 	})
 	if got := fp.editFleet.coderParams; len(got) != 1 || got[0].Name != "repo" {
 		t.Fatalf("fetch reshaped the param list under an active edit: %+v", got)
 	}
 
-	// The edit still commits into the right parameter.
+	// The edit commits into the right parameter, then the stashed fetch
+	// applies — merging by name, so the just-typed value survives.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if f.Settings.CoderParameters[0].Name != "repo" || f.Settings.CoderParameters[0].Value != "v" {
-		t.Fatalf("commit landed wrong: %+v", f.Settings.CoderParameters)
+	params := f.Settings.CoderParameters
+	if len(params) != 2 || params[0].Name != "repo" || params[0].Value != "v" || params[1].Name != "cpus" {
+		t.Fatalf("deferred merge wrong: %+v", params)
 	}
 }
 
