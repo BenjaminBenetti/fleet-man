@@ -1189,7 +1189,15 @@ func (fleetPage *fleetPage) commitCoderTemplate(m *model) tea.Cmd {
 		return nil
 	}
 	template := strings.TrimSpace(fleetPage.coderTemplateInput.Value())
-	if template != "" && template != prev {
+	if template == "" {
+		// Clearing the template invalidates any in-flight fetch: its result
+		// must not land (and persist the removed template's parameters) on a
+		// fleet whose template is now empty, and the spinner must stop.
+		fleetPage.editFleet.coderFetchTemplate = ""
+		fleetPage.editFleet.coderFetching = false
+		return nil
+	}
+	if template != prev {
 		fleetPage.editFleet.coderFetching = true
 		fleetPage.editFleet.coderFetchTemplate = template
 		m.message = "Fetching template parameters..."
@@ -1223,9 +1231,10 @@ func (fleetPage *fleetPage) commitCoderParam(m *model, idx int) tea.Cmd {
 //
 // Stale results are discarded (mirroring handleHomedirDetected): the dialog
 // closed, now shows a different fleet, answers a template that is no longer
-// the latest one requested, or would land mid-edit on a parameter row (an
-// in-flight commit indexes into the param list, so it must not be reshaped
-// underneath the editor).
+// the latest one requested, or would land while ANY text edit is active —
+// a parameter commit indexes into the param list (which must not reshape
+// underneath it), and the merge's persist snapshots every live text input,
+// so it would store a half-typed workspace name / template / home dir.
 func (fleetPage *fleetPage) handleCoderParamsFetched(m *model, msg coderParamsFetchedMsg) tea.Cmd {
 	// Clear the in-flight flag only for the fetch we are actually waiting on:
 	// an older template's result must not stop the spinner of a newer fetch
@@ -1241,9 +1250,10 @@ func (fleetPage *fleetPage) handleCoderParamsFetched(m *model, msg coderParamsFe
 		m.message = fmt.Sprintf("Failed to fetch parameters: %v", msg.err)
 		return nil
 	}
-	if fleetPage.dlg.fieldActive && isCoderParamChildRow(fleetPage.dlg.row) {
-		// A parameter edit is in progress; its commit writes by row index.
-		// Drop the refresh rather than reshape the list under the editor.
+	if fleetPage.dlg.fieldActive {
+		// A text edit is in progress. Drop the refresh: a param commit writes
+		// by row index (the list must not reshape under the editor), and the
+		// persist below would snapshot the half-typed input as settled state.
 		return nil
 	}
 

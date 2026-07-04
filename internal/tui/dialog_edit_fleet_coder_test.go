@@ -233,6 +233,76 @@ func TestEditFleetCoderFetchIgnoresStaleTemplate(t *testing.T) {
 	}
 }
 
+// TestEditFleetCoderClearedTemplateInvalidatesFetch guards the clear-template
+// race: committing an empty template must invalidate the in-flight fetch so
+// the removed template's parameters never land (and persist) on a fleet whose
+// template is now empty, and the spinner must stop.
+func TestEditFleetCoderClearedTemplateInvalidatesFetch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	fp, m, f := openCoderTestDialog(t, fleet.FleetSettings{CoderTemplate: "T"})
+	if !fp.editFleet.coderFetching || fp.editFleet.coderFetchTemplate != "T" {
+		t.Fatalf("open should kick fetch-T: fetching=%v template=%q", fp.editFleet.coderFetching, fp.editFleet.coderFetchTemplate)
+	}
+
+	// Clear the template and commit.
+	fp.dlg.row = editFleetRowCoderTemplate
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // enter edit mode
+	fp.coderTemplateInput.SetValue("")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // commit
+	if f.Settings.CoderTemplate != "" {
+		t.Fatalf("CoderTemplate = %q, want cleared", f.Settings.CoderTemplate)
+	}
+	if fp.editFleet.coderFetching || fp.editFleet.coderFetchTemplate != "" {
+		t.Fatalf("clearing must invalidate the fetch: fetching=%v template=%q", fp.editFleet.coderFetching, fp.editFleet.coderFetchTemplate)
+	}
+
+	// Fetch-T lands late: discarded.
+	fp.handleCoderParamsFetched(m, coderParamsFetchedMsg{
+		fleetName: "alpha",
+		template:  "T",
+		params:    []coderRichParam{{Name: "intruder"}},
+	})
+	if len(f.Settings.CoderParameters) != 0 || len(fp.editFleet.coderParams) != 0 {
+		t.Fatalf("removed template's params applied: %+v", fp.editFleet.coderParams)
+	}
+}
+
+// TestEditFleetCoderFetchDiscardedDuringWsNameEdit guards the broad mid-edit
+// discard: the fetch-merge's persist snapshots every live text input, so a
+// result landing while the workspace-name row is being edited would store the
+// half-typed value. It must be dropped instead.
+func TestEditFleetCoderFetchDiscardedDuringWsNameEdit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	saves := 0
+	orig := setFleetSettingsRemote
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) error { saves++; return nil }
+	t.Cleanup(func() { setFleetSettingsRemote = orig })
+
+	fp, m, f := openCoderTestDialog(t, fleet.FleetSettings{CoderTemplate: "tmpl"})
+
+	// Start typing a workspace name (half-typed, uncommitted).
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyDown}) // ws-name row
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("half-")})
+	if !fp.dlg.fieldActive {
+		t.Fatal("ws-name edit should be active")
+	}
+
+	before := saves
+	fp.handleCoderParamsFetched(m, coderParamsFetchedMsg{
+		fleetName: "alpha",
+		template:  "tmpl",
+		params:    []coderRichParam{{Name: "repo"}}, // would change bindings -> persist
+	})
+	if saves != before {
+		t.Fatalf("fetch persisted during an active ws-name edit (%d saves)", saves-before)
+	}
+	if f.Settings.CoderWorkspaceName != "" || len(f.Settings.CoderParameters) != 0 {
+		t.Fatalf("half-typed edit persisted: %+v", f.Settings)
+	}
+}
+
 // TestEditFleetCoderFetchDiscardedDuringParamEdit guards the mid-edit race: a
 // fetch landing while a parameter edit is active must not reshape the list
 // under the editor (the in-flight commit writes by row index).
