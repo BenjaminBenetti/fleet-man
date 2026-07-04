@@ -70,7 +70,6 @@ func configToProto(c *state.Config) *fleetgrpc.Config {
 		General:    &fleetgrpc.GeneralSettings{},
 		Agent:      &fleetgrpc.AgentSettings{ToolSelection: string(c.AgentSettings.ToolSelection)},
 		Dotfiles:   &fleetgrpc.DotfilesSettings{AutoInstall: c.DotfilesSettings.AutoInstall},
-		Coder:      &fleetgrpc.CoderSettings{},
 		Codespaces: &fleetgrpc.CodespacesSettings{},
 		Browser:    &fleetgrpc.BrowserSettings{},
 		RemoteMcp: &fleetgrpc.RemoteMcpSettings{
@@ -94,29 +93,6 @@ func configToProto(c *state.Config) *fleetgrpc.Config {
 	}
 	if c.DotfilesSettings.InstallScript != "" {
 		pc.Dotfiles.InstallScript = strptr(c.DotfilesSettings.InstallScript)
-	}
-
-	if c.CoderSettings.Template != "" {
-		pc.Coder.Template = strptr(c.CoderSettings.Template)
-	}
-	if c.CoderSettings.Preset != "" {
-		pc.Coder.Preset = strptr(c.CoderSettings.Preset)
-	}
-	for _, p := range c.CoderSettings.Parameters {
-		pp := &fleetgrpc.CoderParameter{Name: p.Name, Value: p.Value}
-		if p.DefaultValue != "" {
-			pp.DefaultValue = strptr(p.DefaultValue)
-		}
-		if p.DisplayName != "" {
-			pp.DisplayName = strptr(p.DisplayName)
-		}
-		if p.Description != "" {
-			pp.Description = strptr(p.Description)
-		}
-		if p.Type != "" {
-			pp.Type = strptr(p.Type)
-		}
-		pc.Coder.Parameters = append(pc.Coder.Parameters, pp)
 	}
 
 	if c.CodespacesSettings.Machine != "" {
@@ -168,21 +144,6 @@ func protoConfigToLegacy(pc *fleetgrpc.Config) *state.Config {
 		c.DotfilesSettings.AutoInstall = d.GetAutoInstall()
 		c.DotfilesSettings.RepoURL = d.GetRepo()
 		c.DotfilesSettings.InstallScript = d.GetInstallScript()
-	}
-
-	if cd := pc.GetCoder(); cd != nil {
-		c.CoderSettings.Template = cd.GetTemplate()
-		c.CoderSettings.Preset = cd.GetPreset()
-		for _, p := range cd.GetParameters() {
-			c.CoderSettings.Parameters = append(c.CoderSettings.Parameters, state.CoderParameter{
-				Name:         p.GetName(),
-				Value:        p.GetValue(),
-				DefaultValue: p.GetDefaultValue(),
-				DisplayName:  p.GetDisplayName(),
-				Description:  p.GetDescription(),
-				Type:         p.GetType(),
-			})
-		}
 	}
 
 	if cs := pc.GetCodespaces(); cs != nil {

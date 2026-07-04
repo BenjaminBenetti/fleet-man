@@ -89,9 +89,6 @@ type model struct {
 	agentSpinner spinner.Model   // pulse throbber rendered next to running agents' instance names
 	creating     map[string]bool // "fleet/instance" keys currently being created
 
-	coderPresets        []string // available preset names (in-memory, from API)
-	coderFetchingParams bool     // true while fetching template parameters
-
 	daemonRestarting bool // true while the settings "Restart daemon" action is in flight
 
 	codespaceMachines         []codespaceMachine // available machine types (from GitHub API)
@@ -602,11 +599,6 @@ func (m model) Init() tea.Cmd {
 	if len(m.creating) > 0 {
 		cmds = append(cmds, pollCreatingCmd())
 	}
-	// Auto-fetch coder template parameters if template is configured
-	if m.config != nil && m.config.CoderSettings.Template != "" {
-		m.coderFetchingParams = true
-		cmds = append(cmds, fetchCoderParamsCmd(m.config.CoderSettings.Template))
-	}
 	// Auto-fetch codespace machine types from the first fleet's repo
 	if repo := m.firstFleetRepo(); repo != "" {
 		m.codespaceFetchingMachines = true
@@ -955,44 +947,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.message = "Fleet daemon restarted"
 		}
-		return m, spinCmd
-
-	case coderParamsFetchedMsg:
-		m.coderFetchingParams = false
-		if msg.err != nil {
-			m.message = fmt.Sprintf("Failed to fetch parameters: %v", msg.err)
-			return m, spinCmd
-		}
-		if m.config == nil {
-			m.config = configutil.DefaultConfig()
-		}
-		// Merge parameters: keep existing user-set values, add new ones with defaults
-		existing := make(map[string]string)
-		for _, param := range m.config.CoderSettings.Parameters {
-			if param.Value != "" {
-				existing[param.Name] = param.Value
-			}
-		}
-		var newParams []configutil.CoderParameter
-		for _, fetchedParam := range msg.params {
-			existingValue := existing[fetchedParam.Name]
-			newParams = append(newParams, configutil.CoderParameter{
-				Name:         fetchedParam.Name,
-				Value:        existingValue,
-				DefaultValue: fetchedParam.DefaultValue,
-				DisplayName:  fetchedParam.DisplayName,
-				Description:  fetchedParam.Description,
-				Type:         fetchedParam.Type,
-			})
-		}
-		m.config.CoderSettings.Parameters = newParams
-		m.coderPresets = nil
-		m.coderPresets = append(m.coderPresets, msg.presets...)
-		if m.config.CoderSettings.Preset == "" && len(m.coderPresets) > 0 {
-			m.config.CoderSettings.Preset = m.coderPresets[0]
-		}
-		_ = setConfigRemote(m.config)
-		m.message = fmt.Sprintf("Loaded %d parameters, %d presets", len(newParams), len(m.coderPresets))
 		return m, spinCmd
 
 	case codespaceMachinesFetchedMsg:

@@ -200,16 +200,6 @@ func TestUpdateSettingsNavUpDown(t *testing.T) {
 		t.Fatalf("item = %d, want %d", sp.settingsCursorItem(m), settingsItemDotfilesSetup)
 	}
 
-	sp.Update(m, tea.KeyMsg{Type: tea.KeyDown})
-	if sp.settingsCursorItem(m) != settingsItemCoderTemplate {
-		t.Fatalf("item = %d, want %d", sp.settingsCursorItem(m), settingsItemCoderTemplate)
-	}
-
-	sp.Update(m, tea.KeyMsg{Type: tea.KeyDown})
-	if sp.settingsCursorItem(m) != settingsItemCoderPreset {
-		t.Fatalf("item = %d, want %d", sp.settingsCursorItem(m), settingsItemCoderPreset)
-	}
-
 	// Navigate through remaining items until we wrap to top.
 	remaining := sp.settingsItemCount(m) - sp.cursor - 1
 	for i := 0; i < remaining; i++ {

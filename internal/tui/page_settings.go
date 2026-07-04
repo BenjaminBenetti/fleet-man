@@ -34,9 +34,6 @@ const (
 	settingsItemDotfilesScript
 	settingsItemDotfilesAutoInstall
 	settingsItemDotfilesSetup
-	settingsItemCoderTemplate
-	settingsItemCoderPreset
-	settingsItemCoderParamBase // parameters are at index base + i
 
 	settingsItemCodespacesMachine = 500 // codespaces settings start here
 
@@ -273,19 +270,6 @@ var settingsSections = []settingsSection{
 		Title: "Dotfiles",
 		Items: func(_ *model) []int {
 			return []int{settingsItemDotfilesRepo, settingsItemDotfilesScript, settingsItemDotfilesAutoInstall, settingsItemDotfilesSetup}
-		},
-	},
-	{
-		Title: "Coder",
-		Tool:  "coder",
-		Items: func(m *model) []int {
-			items := []int{settingsItemCoderTemplate, settingsItemCoderPreset}
-			if m.config != nil {
-				for i := range m.config.CoderSettings.Parameters {
-					items = append(items, settingsItemCoderParamBase+i)
-				}
-			}
-			return items
 		},
 	},
 	{
@@ -652,29 +636,6 @@ func (settingsPage *settingsPage) toggleAutoInstall(m *model) {
 	m.message = fmt.Sprintf("Auto install dotfiles set to %s", label)
 }
 
-// cycleCoderPreset cycles through available coder presets.
-func (settingsPage *settingsPage) cycleCoderPreset(m *model, direction int) {
-	if m.config == nil || len(m.coderPresets) == 0 {
-		return
-	}
-	current := m.config.CoderSettings.Preset
-	idx := 0
-	for i, preset := range m.coderPresets {
-		if preset == current {
-			idx = i
-			break
-		}
-	}
-	idx = (idx + direction + len(m.coderPresets)) % len(m.coderPresets)
-	m.config.CoderSettings.Preset = m.coderPresets[idx]
-	if err := setConfigRemote(m.config); err != nil {
-		m.config.CoderSettings.Preset = current
-		m.message = fmt.Sprintf("Failed to save settings: %v", err)
-		return
-	}
-	m.message = fmt.Sprintf("Preset set to %s", m.config.CoderSettings.Preset)
-}
-
 // cycleDaemonLogLevel moves the Fleet Daemon "Logs" selection by direction,
 // clamped at the ends. It's a segmented control (All…Info shown at once), so it
 // clamps rather than wrapping, and the choice is purely in-memory — nothing is
@@ -946,8 +907,6 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleRemoteFleetEnabled(m)
 			} else if item == settingsItemRemoteWebhookEnabled {
 				settingsPage.toggleRemoteWebhookEnabled(m)
-			} else if item == settingsItemCoderPreset {
-				settingsPage.cycleCoderPreset(m, -1)
 			} else if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, -1)
 			} else if item == settingsItemDaemonLogs {
@@ -978,8 +937,6 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleRemoteFleetEnabled(m)
 			} else if item == settingsItemRemoteWebhookEnabled {
 				settingsPage.toggleRemoteWebhookEnabled(m)
-			} else if item == settingsItemCoderPreset {
-				settingsPage.cycleCoderPreset(m, 1)
 			} else if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, 1)
 			} else if item == settingsItemDaemonLogs {
@@ -1076,9 +1033,6 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				m.message = "Bearer token copied to clipboard"
 				return copyToClipboardCmd(token)
 			}
-			if item == settingsItemCoderPreset {
-				settingsPage.cycleCoderPreset(m, 1)
-			}
 			if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, 1)
 				return nil
@@ -1149,23 +1103,9 @@ func (settingsPage *settingsPage) enterSettingsEditing(m *model) tea.Cmd {
 	case item == settingsItemDotfilesScript:
 		current = m.config.DotfilesSettings.InstallScript
 		settingsPage.input.Placeholder = "install.sh"
-	case item == settingsItemCoderTemplate:
-		current = m.config.CoderSettings.Template
-		settingsPage.input.Placeholder = "template-name"
 	case item == settingsItemRemoteMcpGatewayURL:
 		current = m.config.RemoteMcpSettings.GatewayURL
 		settingsPage.input.Placeholder = "https://gateway.example.com"
-	case item >= settingsItemCoderParamBase && item < settingsItemCodespacesMachine:
-		idx := item - settingsItemCoderParamBase
-		if idx < len(m.config.CoderSettings.Parameters) {
-			current = m.config.CoderSettings.Parameters[idx].Value
-			param := m.config.CoderSettings.Parameters[idx]
-			if param.DefaultValue != "" {
-				settingsPage.input.Placeholder = param.DefaultValue
-			} else {
-				settingsPage.input.Placeholder = "value"
-			}
-		}
 	case item == settingsItemCodespacesMachine:
 		settingsPage.cycleCodespacesMachine(m, 1)
 		return nil
@@ -1351,19 +1291,6 @@ func (settingsPage *settingsPage) updateSettingsEditing(m *model, msg tea.Msg) t
 				m.config.DotfilesSettings.InstallScript = value
 			case item == settingsItemRemoteMcpGatewayURL:
 				m.config.RemoteMcpSettings.GatewayURL = value
-			case item == settingsItemCoderTemplate:
-				oldTemplate := m.config.CoderSettings.Template
-				m.config.CoderSettings.Template = value
-				if value != "" && value != oldTemplate {
-					m.coderFetchingParams = true
-					m.message = "Fetching template parameters..."
-					cmd = fetchCoderParamsCmd(value)
-				}
-			case item >= settingsItemCoderParamBase && item < settingsItemCodespacesMachine:
-				idx := item - settingsItemCoderParamBase
-				if idx < len(m.config.CoderSettings.Parameters) {
-					m.config.CoderSettings.Parameters[idx].Value = value
-				}
 			}
 
 			if err := setConfigRemote(m.config); err != nil {
@@ -1517,43 +1444,6 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				setupValue = statusRunningStyle.Render(agentName) + "  " + dimStyle.Render("press enter to get help setting up dotfiles")
 			}
 			recordRow(settingsItemDotfilesSetup, settingsPage.renderSettingsRow(m, currentItem == settingsItemDotfilesSetup, "Help me set this up", setupValue))
-
-		case "Coder":
-			templateValue := config.CoderSettings.Template
-			if templateValue == "" && !(settingsPage.editing && currentItem == settingsItemCoderTemplate) {
-				templateValue = dimStyle.Render("(not set)")
-			}
-			if m.coderFetchingParams {
-				templateValue += "  " + m.spinner.View() + " fetching..."
-			}
-			recordRow(settingsItemCoderTemplate, settingsPage.renderSettingsRow(m, currentItem == settingsItemCoderTemplate, "Template", templateValue))
-			listContent.WriteString("\n")
-
-			presetValue := config.CoderSettings.Preset
-			if presetValue == "" {
-				presetValue = dimStyle.Render("(none)")
-			} else {
-				presetValue = fmt.Sprintf("[ %s ]", presetValue)
-			}
-			recordRow(settingsItemCoderPreset, settingsPage.renderSettingsRow(m, currentItem == settingsItemCoderPreset, "Preset", presetValue))
-
-			for i, param := range config.CoderSettings.Parameters {
-				listContent.WriteString("\n")
-				paramItem := settingsItemCoderParamBase + i
-				value := param.Value
-				if value == "" && !(settingsPage.editing && currentItem == paramItem) {
-					if param.DefaultValue != "" {
-						value = dimStyle.Render(param.DefaultValue + " (default)")
-					} else {
-						value = dimStyle.Render("(not set)")
-					}
-				}
-				label := param.Name
-				if param.DisplayName != "" {
-					label = param.DisplayName
-				}
-				recordRow(paramItem, settingsPage.renderSettingsRow(m, currentItem == paramItem, label, value))
-			}
 
 		case "Codespaces":
 			var machineValue string
@@ -1770,16 +1660,6 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 	if settingsPage.showKeybindings {
 		tail.WriteString("\n")
 		tail.WriteString(keybindingsDialogBox.Render(settingsPage.renderKeybindingsDialog()))
-		tail.WriteString("\n")
-	}
-	// Only the coder PARAMETER rows (value fields, which can interpolate the
-	// variables below) get this hint. Coder params occupy
-	// [settingsItemCoderParamBase, settingsItemCodespacesMachine); the upper
-	// bound must be settingsItemCodespacesMachine, not settingsItemToolStatusBase,
-	// or the hint also (wrongly) shows on the codespaces/browser/remote-mcp rows
-	// that sit in the 500/600/700 blocks below it.
-	if currentItem >= settingsItemCoderParamBase && currentItem < settingsItemCodespacesMachine {
-		tail.WriteString(dimStyle.Render("  Variables: ${GIT_URL} = fleet repo URL, ${GIT_BRANCH} = git branch (blank = default), ${INSTANCE_NAME} = workspace name"))
 		tail.WriteString("\n")
 	}
 	if isArmadaRemoteItem(currentItem) && settingsPage.armadaAddStage == armadaAddNone {

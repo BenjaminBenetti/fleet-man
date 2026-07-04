@@ -48,6 +48,9 @@ func (fleetPage *fleetPage) blurDialogFields() {
 	fleetPage.branchInput.Blur()
 	fleetPage.homedirInput.Blur()
 	fleetPage.customMountInput.Blur()
+	fleetPage.coderWsNameInput.Blur()
+	fleetPage.coderTemplateInput.Blur()
+	fleetPage.coderParamInput.Blur()
 }
 
 func (fleetPage *fleetPage) activateTextInput() tea.Cmd {

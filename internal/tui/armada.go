@@ -308,17 +308,12 @@ func (m *model) resumeCreatingFromState() {
 }
 
 // postSwitchFetchCmd re-runs the daemon-derived auto-fetches a fresh boot would
-// (Coder template params, codespace machine types) plus the creating-poll, so
-// the new daemon's config drives the settings page instead of the old one's
-// stale lists.
+// (codespace machine types) plus the creating-poll, so the new daemon's config
+// drives the settings page instead of the old one's stale lists.
 func (m *model) postSwitchFetchCmd() tea.Cmd {
 	var cmds []tea.Cmd
 	if len(m.creating) > 0 {
 		cmds = append(cmds, pollCreatingCmd())
-	}
-	if m.config != nil && m.config.CoderSettings.Template != "" {
-		m.coderFetchingParams = true
-		cmds = append(cmds, fetchCoderParamsCmd(m.config.CoderSettings.Template))
 	}
 	if repo := m.firstFleetRepo(); repo != "" {
 		m.codespaceFetchingMachines = true
@@ -619,9 +614,7 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	clear(m.runtime)
 	clear(m.creating)
 	m.remoteMcpStatus = nil
-	m.coderPresets = nil
 	m.codespaceMachines = nil
-	m.coderFetchingParams = false
 	m.codespaceFetchingMachines = false
 	m.sessionStore = NewSessionStore()
 	m.err = nil

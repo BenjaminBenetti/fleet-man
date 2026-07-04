@@ -15,7 +15,6 @@ type Config struct {
 	GeneralSettings    GeneralSettings    `json:"general_settings"`
 	AgentSettings      AgentSettings      `json:"agent_settings"`
 	DotfilesSettings   DotfilesSettings   `json:"dotfiles_settings"`
-	CoderSettings      CoderSettings      `json:"coder_settings"`
 	CodespacesSettings CodespacesSettings `json:"codespaces_settings"`
 	BrowserSettings    BrowserSettings    `json:"browser_settings"`
 	RemoteMcpSettings  RemoteMcpSettings  `json:"remote_mcp_settings"`
@@ -44,9 +43,6 @@ func (c *Config) applyDefaults() {
 
 	c.DotfilesSettings.RepoURL = strings.TrimSpace(c.DotfilesSettings.RepoURL)
 	c.DotfilesSettings.InstallScript = strings.TrimSpace(c.DotfilesSettings.InstallScript)
-
-	c.CoderSettings.Template = strings.TrimSpace(c.CoderSettings.Template)
-	c.CoderSettings.Preset = strings.TrimSpace(c.CoderSettings.Preset)
 
 	c.RemoteMcpSettings.GatewayURL = strings.TrimSpace(c.RemoteMcpSettings.GatewayURL)
 }

@@ -422,6 +422,7 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 		LayoutPresets:    layoutPresetsToProto(s.LayoutPresets),
 		Agents:           agentsToProto(s.Agents),
 		Triggers:         triggersToProto(s.Triggers),
+		CoderParameters:  coderParametersToProto(s.CoderParameters),
 	}
 	if s.HomeDir != "" {
 		ps.HomeDir = &s.HomeDir
@@ -430,7 +431,61 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 		v := *s.PreferFleetLaunch
 		ps.PreferFleetLaunch = &v
 	}
+	if s.CoderTemplate != "" {
+		ps.CoderTemplate = strp(s.CoderTemplate)
+	}
+	if s.CoderPreset != "" {
+		ps.CoderPreset = strp(s.CoderPreset)
+	}
+	if s.CoderWorkspaceName != "" {
+		ps.CoderWorkspaceName = strp(s.CoderWorkspaceName)
+	}
 	return ps
+}
+
+// coderParametersToProto mirrors the server-side converter: the fleet's coder
+// parameter bindings, template metadata included, nil for an empty list.
+func coderParametersToProto(in []fleet.CoderParameter) []*fleetgrpc.CoderParameter {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*fleetgrpc.CoderParameter, 0, len(in))
+	for _, p := range in {
+		pp := &fleetgrpc.CoderParameter{Name: p.Name, Value: p.Value}
+		if p.DefaultValue != "" {
+			pp.DefaultValue = strp(p.DefaultValue)
+		}
+		if p.DisplayName != "" {
+			pp.DisplayName = strp(p.DisplayName)
+		}
+		if p.Description != "" {
+			pp.Description = strp(p.Description)
+		}
+		if p.Type != "" {
+			pp.Type = strp(p.Type)
+		}
+		out = append(out, pp)
+	}
+	return out
+}
+
+// protoCoderParametersToLegacy is the read-side inverse (nil for empty).
+func protoCoderParametersToLegacy(in []*fleetgrpc.CoderParameter) []fleet.CoderParameter {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]fleet.CoderParameter, 0, len(in))
+	for _, p := range in {
+		out = append(out, fleet.CoderParameter{
+			Name:         p.GetName(),
+			Value:        p.GetValue(),
+			DefaultValue: p.GetDefaultValue(),
+			DisplayName:  p.GetDisplayName(),
+			Description:  p.GetDescription(),
+			Type:         p.GetType(),
+		})
+	}
+	return out
 }
 
 func layoutPresetsToProto(in []fleet.LayoutPreset) []*fleetgrpc.LayoutPreset {
@@ -551,7 +606,6 @@ func configToProto(c *configutil.Config) *fleetgrpc.Config {
 		General:    &fleetgrpc.GeneralSettings{},
 		Agent:      &fleetgrpc.AgentSettings{ToolSelection: string(c.AgentSettings.ToolSelection)},
 		Dotfiles:   &fleetgrpc.DotfilesSettings{AutoInstall: c.DotfilesSettings.AutoInstall},
-		Coder:      &fleetgrpc.CoderSettings{},
 		Codespaces: &fleetgrpc.CodespacesSettings{},
 		Browser:    &fleetgrpc.BrowserSettings{},
 		RemoteMcp: &fleetgrpc.RemoteMcpSettings{
@@ -577,29 +631,6 @@ func configToProto(c *configutil.Config) *fleetgrpc.Config {
 	}
 	if c.DotfilesSettings.InstallScript != "" {
 		pc.Dotfiles.InstallScript = strp(c.DotfilesSettings.InstallScript)
-	}
-
-	if c.CoderSettings.Template != "" {
-		pc.Coder.Template = strp(c.CoderSettings.Template)
-	}
-	if c.CoderSettings.Preset != "" {
-		pc.Coder.Preset = strp(c.CoderSettings.Preset)
-	}
-	for _, p := range c.CoderSettings.Parameters {
-		pp := &fleetgrpc.CoderParameter{Name: p.Name, Value: p.Value}
-		if p.DefaultValue != "" {
-			pp.DefaultValue = strp(p.DefaultValue)
-		}
-		if p.DisplayName != "" {
-			pp.DisplayName = strp(p.DisplayName)
-		}
-		if p.Description != "" {
-			pp.Description = strp(p.Description)
-		}
-		if p.Type != "" {
-			pp.Type = strp(p.Type)
-		}
-		pc.Coder.Parameters = append(pc.Coder.Parameters, pp)
 	}
 
 	if c.CodespacesSettings.Machine != "" {
@@ -710,18 +741,22 @@ func protoFleetToLegacy(pf *fleetgrpc.Fleet) *fleet.Fleet {
 	}
 	if ps := pf.GetSettings(); ps != nil {
 		f.Settings = fleet.FleetSettings{
-			ClaudeCodeMount:  ps.GetClaudeCodeMount(),
-			CodexMount:       ps.GetCodexMount(),
-			GhMount:          ps.GetGhMount(),
-			AuggieMount:      ps.GetAuggieMount(),
-			BuildkitServer:   ps.GetBuildkitServer(),
-			CustomMounts:     ps.GetCustomMounts(),
-			DebCacheServer:   ps.GetDebCacheServer(),
-			ImageCacheServer: ps.GetImageCacheServer(),
-			LayoutPresets:    protoLayoutPresetsToLegacy(ps.GetLayoutPresets()),
-			Agents:           protoAgentsToLegacy(ps.GetAgents()),
-			Triggers:         protoTriggersToLegacy(ps.GetTriggers()),
-			HomeDir:          ps.GetHomeDir(),
+			ClaudeCodeMount:    ps.GetClaudeCodeMount(),
+			CodexMount:         ps.GetCodexMount(),
+			GhMount:            ps.GetGhMount(),
+			AuggieMount:        ps.GetAuggieMount(),
+			BuildkitServer:     ps.GetBuildkitServer(),
+			CustomMounts:       ps.GetCustomMounts(),
+			DebCacheServer:     ps.GetDebCacheServer(),
+			ImageCacheServer:   ps.GetImageCacheServer(),
+			LayoutPresets:      protoLayoutPresetsToLegacy(ps.GetLayoutPresets()),
+			Agents:             protoAgentsToLegacy(ps.GetAgents()),
+			Triggers:           protoTriggersToLegacy(ps.GetTriggers()),
+			HomeDir:            ps.GetHomeDir(),
+			CoderTemplate:      ps.GetCoderTemplate(),
+			CoderPreset:        ps.GetCoderPreset(),
+			CoderWorkspaceName: ps.GetCoderWorkspaceName(),
+			CoderParameters:    protoCoderParametersToLegacy(ps.GetCoderParameters()),
 		}
 		if ps.PreferFleetLaunch != nil {
 			v := ps.GetPreferFleetLaunch()
@@ -817,20 +852,6 @@ func protoConfigToLegacy(pc *fleetgrpc.Config) *configutil.Config {
 		c.DotfilesSettings.AutoInstall = d.GetAutoInstall()
 		c.DotfilesSettings.RepoURL = d.GetRepo()
 		c.DotfilesSettings.InstallScript = d.GetInstallScript()
-	}
-	if cd := pc.GetCoder(); cd != nil {
-		c.CoderSettings.Template = cd.GetTemplate()
-		c.CoderSettings.Preset = cd.GetPreset()
-		for _, p := range cd.GetParameters() {
-			c.CoderSettings.Parameters = append(c.CoderSettings.Parameters, configutil.CoderParameter{
-				Name:         p.GetName(),
-				Value:        p.GetValue(),
-				DefaultValue: p.GetDefaultValue(),
-				DisplayName:  p.GetDisplayName(),
-				Description:  p.GetDescription(),
-				Type:         p.GetType(),
-			})
-		}
 	}
 	if cs := pc.GetCodespaces(); cs != nil {
 		c.CodespacesSettings.Machine = cs.GetMachine()

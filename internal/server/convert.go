@@ -60,6 +60,7 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 		LayoutPresets:    layoutPresetsToProto(s.LayoutPresets),
 		Agents:           agentsToProto(s.Agents),
 		Triggers:         triggersToProto(s.Triggers),
+		CoderParameters:  coderParametersToProto(s.CoderParameters),
 	}
 	if s.HomeDir != "" {
 		ps.HomeDir = strptr(s.HomeDir)
@@ -67,7 +68,43 @@ func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 	if s.PreferFleetLaunch != nil {
 		ps.PreferFleetLaunch = boolptr(*s.PreferFleetLaunch)
 	}
+	if s.CoderTemplate != "" {
+		ps.CoderTemplate = strptr(s.CoderTemplate)
+	}
+	if s.CoderPreset != "" {
+		ps.CoderPreset = strptr(s.CoderPreset)
+	}
+	if s.CoderWorkspaceName != "" {
+		ps.CoderWorkspaceName = strptr(s.CoderWorkspaceName)
+	}
 	return ps
+}
+
+// coderParametersToProto maps the fleet's coder parameter bindings to proto
+// (nil for an empty list). The template-derived metadata fields travel too so
+// a SetFleetSettings round-trip is lossless.
+func coderParametersToProto(in []fleet.CoderParameter) []*fleetgrpc.CoderParameter {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*fleetgrpc.CoderParameter, 0, len(in))
+	for _, p := range in {
+		pp := &fleetgrpc.CoderParameter{Name: p.Name, Value: p.Value}
+		if p.DefaultValue != "" {
+			pp.DefaultValue = strptr(p.DefaultValue)
+		}
+		if p.DisplayName != "" {
+			pp.DisplayName = strptr(p.DisplayName)
+		}
+		if p.Description != "" {
+			pp.Description = strptr(p.Description)
+		}
+		if p.Type != "" {
+			pp.Type = strptr(p.Type)
+		}
+		out = append(out, pp)
+	}
+	return out
 }
 
 func agentsToProto(in []fleet.Agent) []*fleetgrpc.Agent {

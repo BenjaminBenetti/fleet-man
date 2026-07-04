@@ -175,22 +175,25 @@ func restartDaemonCmd() tea.Cmd {
 
 // coderParamsFetchedMsg is sent when template parameter fetching completes.
 // params/presets come from the server's GetCoderTemplateParams RPC (the server
-// owns Coder-API access now).
+// owns Coder-API access now). fleetName identifies which fleet's edit dialog
+// requested the fetch so stale results — the user closed the dialog or moved
+// to another fleet — are discarded (mirroring homedirDetectedMsg).
 type coderParamsFetchedMsg struct {
-	params  []coderRichParam
-	presets []string
-	err     error
+	fleetName string
+	params    []coderRichParam
+	presets   []string
+	err       error
 }
 
 // fetchCoderParamsCmd fetches template parameters and presets asynchronously via
 // the server.
-func fetchCoderParamsCmd(templateName string) tea.Cmd {
+func fetchCoderParamsCmd(fleetName, templateName string) tea.Cmd {
 	return func() tea.Msg {
 		params, presets, err := getCoderTemplateParamsRemote(templateName)
 		if err != nil {
-			return coderParamsFetchedMsg{err: err}
+			return coderParamsFetchedMsg{fleetName: fleetName, err: err}
 		}
-		return coderParamsFetchedMsg{params: params, presets: presets}
+		return coderParamsFetchedMsg{fleetName: fleetName, params: params, presets: presets}
 	}
 }
 

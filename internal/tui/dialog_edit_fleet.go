@@ -9,6 +9,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/inspector"
 	homedircheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/homedir"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -23,12 +24,16 @@ const (
 	editFleetRowGh
 	editFleetRowHomeDir
 	editFleetRowPreferFleetLaunch
-	editFleetRowLayouts      // collapsible section header (issue #150)
-	editFleetRowCustomMounts // collapsible section header
-	editFleetRowCaching      // collapsible section header
-	editFleetRowBuildkit     // child of Caching; only navigable when expanded
-	editFleetRowDebCache     // child of Caching; only navigable when expanded
-	editFleetRowImageCache   // child of Caching; only navigable when expanded
+	editFleetRowLayouts       // collapsible section header (issue #150)
+	editFleetRowCustomMounts  // collapsible section header
+	editFleetRowCaching       // collapsible section header
+	editFleetRowBuildkit      // child of Caching; only navigable when expanded
+	editFleetRowDebCache      // child of Caching; only navigable when expanded
+	editFleetRowImageCache    // child of Caching; only navigable when expanded
+	editFleetRowCoder         // collapsible section header (issue #221)
+	editFleetRowCoderWsName   // child of Coder; workspace-name override text input
+	editFleetRowCoderTemplate // child of Coder; template text input (commit kicks a param fetch)
+	editFleetRowCoderPreset   // child of Coder; preset cycler (values from the last fetch)
 	editFleetRowCount
 )
 
@@ -43,6 +48,12 @@ const editFleetRowCustomMountBase = 1000
 // i-th existing preset; the row at base+len(presets) is "+ Layout Preset".
 const editFleetRowLayoutPresetBase = 2000
 
+// editFleetRowCoderParamBase is the start of the dynamic coder-parameter child
+// rows (issue #221), a third dynamic band above the layout-preset one. Row
+// base+i is the i-th template parameter (the list comes from the template
+// fetch; there is no add row).
+const editFleetRowCoderParamBase = 3000
+
 // isCustomMountChildRow reports whether row is one of the dynamic custom-mount
 // child rows (an existing mount or the "+ Add mount" row).
 func isCustomMountChildRow(row int) bool {
@@ -51,7 +62,13 @@ func isCustomMountChildRow(row int) bool {
 
 // isLayoutPresetChildRow reports whether row is one of the dynamic
 // layout-preset child rows (an existing preset or the "+ Layout Preset" row).
-func isLayoutPresetChildRow(row int) bool { return row >= editFleetRowLayoutPresetBase }
+func isLayoutPresetChildRow(row int) bool {
+	return row >= editFleetRowLayoutPresetBase && row < editFleetRowCoderParamBase
+}
+
+// isCoderParamChildRow reports whether row is one of the dynamic
+// coder-parameter child rows.
+func isCoderParamChildRow(row int) bool { return row >= editFleetRowCoderParamBase }
 
 // customMountAddRow returns the row id of the "+ Add mount" affordance, which
 // always sits just past the last existing custom mount.
@@ -171,6 +188,13 @@ func (fleetPage *fleetPage) visibleEditFleetRows() []int {
 	rows = append(rows, editFleetRowCaching)
 	if fleetPage.editFleet.cachingExpanded {
 		rows = append(rows, editFleetRowBuildkit, editFleetRowDebCache, editFleetRowImageCache)
+	}
+	rows = append(rows, editFleetRowCoder)
+	if fleetPage.editFleet.coderExpanded {
+		rows = append(rows, editFleetRowCoderWsName, editFleetRowCoderTemplate, editFleetRowCoderPreset)
+		for i := range fleetPage.editFleet.coderParams {
+			rows = append(rows, editFleetRowCoderParamBase+i)
+		}
 	}
 	return rows
 }
@@ -307,13 +331,31 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.editFleet.presetMoving = false
 	fleetPage.lpFlow = nil
 
+	fleetPage.editFleet.coderExpanded = false
+	fleetPage.editFleet.coderPreset = f.Settings.CoderPreset
+	fleetPage.editFleet.coderParams = slices.Clone(f.Settings.CoderParameters)
+	fleetPage.editFleet.coderPresets = nil
+	fleetPage.editFleet.coderFetching = false
+	fleetPage.coderWsNameInput.SetValue(f.Settings.CoderWorkspaceName)
+	fleetPage.coderWsNameInput.Blur()
+	fleetPage.coderTemplateInput.SetValue(f.Settings.CoderTemplate)
+	fleetPage.coderTemplateInput.Blur()
+
 	fleetPage.homedirInput.SetValue(f.Settings.HomeDir)
 	fleetPage.homedirInput.Blur()
 
-	if fleetPage.shouldKickHomedirDetect(f) {
-		return fleetPage.startHomedirDetect(f)
+	var cmds []tea.Cmd
+	// Refresh the template's parameter metadata + preset list so the Coder
+	// section renders live values (mirrors the fetch the old global settings
+	// page ran on startup).
+	if f.Settings.CoderTemplate != "" {
+		fleetPage.editFleet.coderFetching = true
+		cmds = append(cmds, fetchCoderParamsCmd(f.Name, f.Settings.CoderTemplate))
 	}
-	return nil
+	if fleetPage.shouldKickHomedirDetect(f) {
+		cmds = append(cmds, fleetPage.startHomedirDetect(f))
+	}
+	return tea.Batch(cmds...)
 }
 
 // updateEditFleet handles the edit-fleet dialog. The dialog is INSTANT-SAVE
@@ -326,18 +368,19 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 		return nil
 	}
 
-	// Home-dir text-editing sub-mode.
+	// Text-editing sub-mode (home dir / coder workspace name / coder template /
+	// coder parameter — whichever text row the cursor is on).
 	if fleetPage.dlg.fieldActive {
 		switch keyMsg.String() {
 		case "enter":
 			// Commit the typed value (instant-save) and leave editing.
-			cmd := fleetPage.commitHomedir(m)
+			cmd := fleetPage.commitEditFleetField(m)
 			fleetPage.dlg.fieldActive = false
 			fleetPage.syncEditFleetFocus()
 			return cmd
 		case "esc":
 			// Discard the uncommitted edit; restore the persisted value.
-			fleetPage.restoreHomedir(m)
+			fleetPage.restoreEditFleetField(m)
 			fleetPage.dlg.fieldActive = false
 			fleetPage.syncEditFleetFocus()
 			return nil
@@ -345,9 +388,9 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.closeEditFleet(m)
 			return nil
 		}
-		if fleetPage.dlg.row == editFleetRowHomeDir {
+		if input := fleetPage.activeEditFleetInput(); input != nil {
 			var cmd tea.Cmd
-			fleetPage.homedirInput, cmd = fleetPage.homedirInput.Update(msg)
+			*input, cmd = input.Update(msg)
 			return cmd
 		}
 		return nil
@@ -418,6 +461,10 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 	if isLayoutPresetChildRow(fleetPage.dlg.row) {
 		return fleetPage.updateLayoutPresetRow(m, keyMsg)
 	}
+	// And the dynamic coder-parameter child rows.
+	if isCoderParamChildRow(fleetPage.dlg.row) {
+		return fleetPage.updateCoderParamRow(keyMsg)
+	}
 
 	// Row-specific actions.
 	switch fleetPage.dlg.row {
@@ -469,6 +516,26 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.editFleet.cachingExpanded = false
 		}
 		return nil
+	case editFleetRowCoder:
+		switch keyMsg.String() {
+		case " ", "enter":
+			fleetPage.editFleet.coderExpanded = !fleetPage.editFleet.coderExpanded
+		case "right", "l":
+			fleetPage.editFleet.coderExpanded = true
+		case "left", "h":
+			fleetPage.editFleet.coderExpanded = false
+		}
+		return nil
+	case editFleetRowCoderPreset:
+		switch keyMsg.String() {
+		case " ", "enter", "right", "l":
+			return fleetPage.cycleFleetCoderPreset(m, 1)
+		case "left", "h":
+			return fleetPage.cycleFleetCoderPreset(m, -1)
+		}
+		return nil
+	case editFleetRowCoderWsName, editFleetRowCoderTemplate:
+		return fleetPage.beginEditFleetTextRow(keyMsg, msg)
 	case editFleetRowBuildkit:
 		return fleetPage.updateCacheRow(m, keyMsg, cacheBuildkit)
 	case editFleetRowDebCache:
@@ -476,20 +543,90 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 	case editFleetRowImageCache:
 		return fleetPage.updateCacheRow(m, keyMsg, cacheImage)
 	case editFleetRowHomeDir:
-		switch keyMsg.String() {
-		case "enter", " ":
-			fleetPage.dlg.fieldActive = true
-			fleetPage.syncEditFleetFocus()
-			return fleetPage.homedirInput.Cursor.BlinkCmd()
+		return fleetPage.beginEditFleetTextRow(keyMsg, msg)
+	}
+	return nil
+}
+
+// beginEditFleetTextRow enters the text-editing sub-mode for the current text
+// row (home dir / coder workspace name / coder template) on enter/space, or
+// immediately on the first typed character (like the home-dir row always did).
+func (fleetPage *fleetPage) beginEditFleetTextRow(keyMsg tea.KeyMsg, msg tea.Msg) tea.Cmd {
+	input := fleetPage.activeEditFleetInputForRow(fleetPage.dlg.row)
+	if input == nil {
+		return nil
+	}
+	switch keyMsg.String() {
+	case "enter", " ":
+		fleetPage.dlg.fieldActive = true
+		fleetPage.syncEditFleetFocus()
+		return input.Cursor.BlinkCmd()
+	}
+	if isDialogTextKey(keyMsg) {
+		fleetPage.dlg.fieldActive = true
+		fleetPage.syncEditFleetFocus()
+		blinkCmd := input.Cursor.BlinkCmd()
+		var inputCmd tea.Cmd
+		*input, inputCmd = input.Update(msg)
+		return tea.Batch(blinkCmd, inputCmd)
+	}
+	return nil
+}
+
+// updateCoderParamRow handles a key press while the cursor is on one of the
+// dynamic coder-parameter child rows: enter/space (or the first typed
+// character) opens the shared parameter text input pre-loaded with the row's
+// current value.
+func (fleetPage *fleetPage) updateCoderParamRow(keyMsg tea.KeyMsg) tea.Cmd {
+	idx := fleetPage.dlg.row - editFleetRowCoderParamBase
+	if idx < 0 || idx >= len(fleetPage.editFleet.coderParams) {
+		return nil
+	}
+	beginEdit := func() tea.Cmd {
+		p := fleetPage.editFleet.coderParams[idx]
+		fleetPage.coderParamInput.SetValue(p.Value)
+		if p.DefaultValue != "" {
+			fleetPage.coderParamInput.Placeholder = p.DefaultValue
+		} else {
+			fleetPage.coderParamInput.Placeholder = "value"
 		}
-		if isDialogTextKey(keyMsg) {
-			fleetPage.dlg.fieldActive = true
-			fleetPage.syncEditFleetFocus()
-			blinkCmd := fleetPage.homedirInput.Cursor.BlinkCmd()
-			var inputCmd tea.Cmd
-			fleetPage.homedirInput, inputCmd = fleetPage.homedirInput.Update(msg)
-			return tea.Batch(blinkCmd, inputCmd)
+		fleetPage.coderParamInput.CursorEnd()
+		fleetPage.dlg.fieldActive = true
+		fleetPage.syncEditFleetFocus()
+		return fleetPage.coderParamInput.Cursor.BlinkCmd()
+	}
+	switch keyMsg.String() {
+	case "enter", " ":
+		return beginEdit()
+	}
+	if isDialogTextKey(keyMsg) {
+		blinkCmd := beginEdit()
+		var inputCmd tea.Cmd
+		fleetPage.coderParamInput, inputCmd = fleetPage.coderParamInput.Update(keyMsg)
+		return tea.Batch(blinkCmd, inputCmd)
+	}
+	return nil
+}
+
+// cycleFleetCoderPreset cycles the Coder preset selection through the fetched
+// preset list (instant-save), a no-op until a fetch has populated it.
+func (fleetPage *fleetPage) cycleFleetCoderPreset(m *model, direction int) tea.Cmd {
+	presets := fleetPage.editFleet.coderPresets
+	if len(presets) == 0 {
+		return nil
+	}
+	idx := 0
+	for i, preset := range presets {
+		if preset == fleetPage.editFleet.coderPreset {
+			idx = i
+			break
 		}
+	}
+	prev := fleetPage.editFleet.coderPreset
+	fleetPage.editFleet.coderPreset = presets[(idx+direction+len(presets))%len(presets)]
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		fleetPage.editFleet.coderPreset = prev
+		m.message = fmt.Sprintf("Failed to save: %v", err)
 	}
 	return nil
 }
@@ -953,14 +1090,193 @@ func (fleetPage *fleetPage) handleHomedirDetected(m *model, msg homedirDetectedM
 	return nil
 }
 
-// syncEditFleetFocus moves the cursor blink to the home-dir input only
-// when that row is the currently selected row. Other rows have no
-// editable text so the input must blur to avoid a stray cursor.
+// activeEditFleetInputForRow returns the text input backing the given text
+// row, nil for non-text rows. The coder-parameter rows share one input; its
+// value is loaded on edit start and copied back on commit.
+func (fleetPage *fleetPage) activeEditFleetInputForRow(row int) *textinput.Model {
+	switch {
+	case row == editFleetRowHomeDir:
+		return &fleetPage.homedirInput
+	case row == editFleetRowCoderWsName:
+		return &fleetPage.coderWsNameInput
+	case row == editFleetRowCoderTemplate:
+		return &fleetPage.coderTemplateInput
+	case isCoderParamChildRow(row):
+		return &fleetPage.coderParamInput
+	}
+	return nil
+}
+
+// activeEditFleetInput returns the text input for the current cursor row.
+func (fleetPage *fleetPage) activeEditFleetInput() *textinput.Model {
+	return fleetPage.activeEditFleetInputForRow(fleetPage.dlg.row)
+}
+
+// commitEditFleetField commits the text-edit in progress on the current row
+// (instant-save), dispatching to the row's commit handler.
+func (fleetPage *fleetPage) commitEditFleetField(m *model) tea.Cmd {
+	switch {
+	case fleetPage.dlg.row == editFleetRowHomeDir:
+		return fleetPage.commitHomedir(m)
+	case fleetPage.dlg.row == editFleetRowCoderWsName:
+		return fleetPage.commitCoderWsName(m)
+	case fleetPage.dlg.row == editFleetRowCoderTemplate:
+		return fleetPage.commitCoderTemplate(m)
+	case isCoderParamChildRow(fleetPage.dlg.row):
+		return fleetPage.commitCoderParam(m, fleetPage.dlg.row-editFleetRowCoderParamBase)
+	}
+	return nil
+}
+
+// restoreEditFleetField discards the uncommitted text-edit on the current row,
+// restoring the input to the persisted value.
+func (fleetPage *fleetPage) restoreEditFleetField(m *model) {
+	f, ok := m.st.Fleets[fleetPage.dlg.fleet]
+	if !ok {
+		return
+	}
+	switch {
+	case fleetPage.dlg.row == editFleetRowHomeDir:
+		fleetPage.homedirInput.SetValue(f.Settings.HomeDir)
+	case fleetPage.dlg.row == editFleetRowCoderWsName:
+		fleetPage.coderWsNameInput.SetValue(f.Settings.CoderWorkspaceName)
+	case fleetPage.dlg.row == editFleetRowCoderTemplate:
+		fleetPage.coderTemplateInput.SetValue(f.Settings.CoderTemplate)
+	}
+	// Coder-parameter rows need no restore: the shared input is re-loaded from
+	// the (unchanged) working copy the next time an edit starts.
+}
+
+// commitCoderWsName persists the workspace-name override (instant-save),
+// restoring the input to the persisted value if the save fails (e.g. the
+// server rejects an illegal coder name fragment).
+func (fleetPage *fleetPage) commitCoderWsName(m *model) tea.Cmd {
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		if f, ok := m.st.Fleets[fleetPage.dlg.fleet]; ok {
+			fleetPage.coderWsNameInput.SetValue(f.Settings.CoderWorkspaceName)
+		}
+		m.message = fmt.Sprintf("Failed to save: %v", err)
+	}
+	return nil
+}
+
+// commitCoderTemplate persists the template (instant-save) and, when it
+// changed to a new non-empty value, kicks the parameter/preset fetch — exactly
+// like the old global settings page did on a template commit.
+func (fleetPage *fleetPage) commitCoderTemplate(m *model) tea.Cmd {
+	prev := ""
+	if f, ok := m.st.Fleets[fleetPage.dlg.fleet]; ok {
+		prev = f.Settings.CoderTemplate
+	}
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		fleetPage.coderTemplateInput.SetValue(prev)
+		m.message = fmt.Sprintf("Failed to save: %v", err)
+		return nil
+	}
+	template := strings.TrimSpace(fleetPage.coderTemplateInput.Value())
+	if template != "" && template != prev {
+		fleetPage.editFleet.coderFetching = true
+		m.message = "Fetching template parameters..."
+		return fetchCoderParamsCmd(fleetPage.dlg.fleet, template)
+	}
+	return nil
+}
+
+// commitCoderParam copies the shared parameter input into the idx-th binding
+// and persists (instant-save), reverting the value on RPC failure.
+func (fleetPage *fleetPage) commitCoderParam(m *model, idx int) tea.Cmd {
+	if idx < 0 || idx >= len(fleetPage.editFleet.coderParams) {
+		return nil
+	}
+	prev := fleetPage.editFleet.coderParams[idx].Value
+	fleetPage.editFleet.coderParams[idx].Value = strings.TrimSpace(fleetPage.coderParamInput.Value())
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		fleetPage.editFleet.coderParams[idx].Value = prev
+		m.message = fmt.Sprintf("Failed to save: %v", err)
+	}
+	return nil
+}
+
+// handleCoderParamsFetched applies a GetCoderTemplateParams result to the open
+// edit-fleet dialog: fetched parameters are merged with the working copy
+// (user-set values kept by name, metadata refreshed), the preset list is
+// replaced, and an empty preset selection defaults to the first available.
+// Stale results — the dialog closed or now shows a different fleet — are
+// discarded (mirroring handleHomedirDetected).
+func (fleetPage *fleetPage) handleCoderParamsFetched(m *model, msg coderParamsFetchedMsg) tea.Cmd {
+	// Always clear the in-flight flag for *this* fleet so the spinner stops,
+	// even when the result is not applied.
+	if fleetPage.dlg.fleet == msg.fleetName {
+		fleetPage.editFleet.coderFetching = false
+	}
+	if fleetPage.mode != viewEditFleet || fleetPage.dlg.fleet != msg.fleetName {
+		return nil
+	}
+	if msg.err != nil {
+		m.message = fmt.Sprintf("Failed to fetch parameters: %v", msg.err)
+		return nil
+	}
+
+	// Merge parameters: keep existing user-set values, add new ones with the
+	// template's metadata.
+	existing := make(map[string]string)
+	for _, param := range fleetPage.editFleet.coderParams {
+		if param.Value != "" {
+			existing[param.Name] = param.Value
+		}
+	}
+	var newParams []fleet.CoderParameter
+	for _, fetched := range msg.params {
+		newParams = append(newParams, fleet.CoderParameter{
+			Name:         fetched.Name,
+			Value:        existing[fetched.Name],
+			DefaultValue: fetched.DefaultValue,
+			DisplayName:  fetched.DisplayName,
+			Description:  fetched.Description,
+			Type:         fetched.Type,
+		})
+	}
+
+	prevParams := fleetPage.editFleet.coderParams
+	prevPreset := fleetPage.editFleet.coderPreset
+	fleetPage.editFleet.coderParams = newParams
+	fleetPage.editFleet.coderPresets = slices.Clone(msg.presets)
+	if fleetPage.editFleet.coderPreset == "" && len(msg.presets) > 0 {
+		fleetPage.editFleet.coderPreset = msg.presets[0]
+	}
+	if err := fleetPage.persistFleetSettings(m); err != nil {
+		fleetPage.editFleet.coderParams = prevParams
+		fleetPage.editFleet.coderPreset = prevPreset
+		m.message = fmt.Sprintf("Failed to save: %v", err)
+		return nil
+	}
+	// The param list may have shrunk under the cursor; land back on a row
+	// that still exists.
+	if idx := fleetPage.dlg.row - editFleetRowCoderParamBase; isCoderParamChildRow(fleetPage.dlg.row) && idx >= len(newParams) {
+		fleetPage.dlg.row = editFleetRowCoderPreset
+	}
+	m.message = fmt.Sprintf("Loaded %d parameters, %d presets", len(newParams), len(msg.presets))
+	return nil
+}
+
+// syncEditFleetFocus moves the cursor blink to the text input backing the
+// currently edited row. Every other input must blur to avoid a stray cursor.
 func (fleetPage *fleetPage) syncEditFleetFocus() {
-	if fleetPage.dlg.fieldActive && fleetPage.dlg.row == editFleetRowHomeDir {
-		fleetPage.homedirInput.Focus()
-	} else {
-		fleetPage.homedirInput.Blur()
+	var active *textinput.Model
+	if fleetPage.dlg.fieldActive {
+		active = fleetPage.activeEditFleetInput()
+	}
+	for _, input := range []*textinput.Model{
+		&fleetPage.homedirInput,
+		&fleetPage.coderWsNameInput,
+		&fleetPage.coderTemplateInput,
+		&fleetPage.coderParamInput,
+	} {
+		if input == active {
+			input.Focus()
+		} else {
+			input.Blur()
+		}
 	}
 }
 
@@ -994,6 +1310,10 @@ func (fleetPage *fleetPage) persistFleetSettings(m *model) error {
 		f.Settings.PreferFleetLaunch = &preferFleetLaunch
 	}
 	f.Settings.HomeDir = strings.TrimSpace(fleetPage.homedirInput.Value())
+	f.Settings.CoderWorkspaceName = strings.TrimSpace(fleetPage.coderWsNameInput.Value())
+	f.Settings.CoderTemplate = strings.TrimSpace(fleetPage.coderTemplateInput.Value())
+	f.Settings.CoderPreset = fleetPage.editFleet.coderPreset
+	f.Settings.CoderParameters = fleetPage.editFleet.coderParams
 
 	if err := setFleetSettingsRemote(fleetPage.dlg.fleet, f.Settings); err != nil {
 		f.Settings = prev
@@ -1089,6 +1409,17 @@ type editFleetState struct {
 	presetMoveFocused   bool                 // horizontal sub-cursor: on the [move] button (right of [remove])
 	presetMoving        bool                 // reorder sub-mode: j/k drag the focused preset up/down (instant-save)
 
+	// Coder section (issue #221). Template / workspace-name values live in
+	// fleetPage.coderTemplateInput / coderWsNameInput (like homedirInput);
+	// the preset selection and parameter working copy live here. The preset
+	// list and parameter metadata come from the GetCoderTemplateParams fetch
+	// kicked on dialog open (template already set) or on a template commit.
+	coderExpanded bool                   // ▼ Coder expanded, revealing the coder rows
+	coderPreset   string                 // current preset selection (instant-save)
+	coderParams   []fleet.CoderParameter // working copy of the fleet's parameter bindings (instant-save)
+	coderPresets  []string               // available preset names (in-memory, from the fetch)
+	coderFetching bool                   // true while a template-params fetch is in flight
+
 	detecting bool // true while a homedir auto-detect cmd is in flight
 }
 
@@ -1171,12 +1502,56 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 			d.WriteString(marker(row) + fleetPage.renderCacheRow(m, cacheDeb, "Deb package cache"))
 		case editFleetRowImageCache:
 			d.WriteString(marker(row) + fleetPage.renderCacheRow(m, cacheImage, "Docker image cache"))
+		case editFleetRowCoder:
+			arrow := "▶ "
+			if fleetPage.editFleet.coderExpanded {
+				arrow = "▼ "
+			}
+			summary := strings.TrimSpace(fleetPage.coderTemplateInput.Value())
+			if summary == "" {
+				summary = "no template"
+			}
+			d.WriteString(marker(row) + dialogLabel.Render(fmt.Sprintf("%sCoder (%s)", arrow, summary)))
+		case editFleetRowCoderWsName:
+			var field string
+			if fleetPage.dlg.fieldActive && fleetPage.dlg.row == editFleetRowCoderWsName {
+				field = fleetPage.coderWsNameInput.View()
+			} else if v := fleetPage.coderWsNameInput.Value(); v == "" {
+				field = dimStyle.Render(fmt.Sprintf("(default: %s)", fleetPage.dlg.fleet))
+			} else {
+				field = v
+			}
+			d.WriteString(marker(row) + "  " + dialogLabel.Render("Workspace:") + " " + field)
+		case editFleetRowCoderTemplate:
+			var field string
+			if fleetPage.dlg.fieldActive && fleetPage.dlg.row == editFleetRowCoderTemplate {
+				field = fleetPage.coderTemplateInput.View()
+			} else if v := fleetPage.coderTemplateInput.Value(); v == "" {
+				field = dimStyle.Render("(not set)")
+			} else {
+				field = v
+			}
+			if fleetPage.editFleet.coderFetching {
+				field += "  " + m.spinner.View() + dimStyle.Render(" fetching...")
+			}
+			d.WriteString(marker(row) + "  " + dialogLabel.Render("Template: ") + " " + field)
+		case editFleetRowCoderPreset:
+			preset := fleetPage.editFleet.coderPreset
+			if preset == "" {
+				preset = dimStyle.Render("(none)")
+			} else {
+				preset = fmt.Sprintf("[ %s ]", preset)
+			}
+			d.WriteString(marker(row) + "  " + dialogLabel.Render("Preset:   ") + " " + preset)
 		default:
 			// Dynamic child rows, indented one level under their section
-			// header: layout presets or custom mounts.
-			if isLayoutPresetChildRow(row) {
+			// header: layout presets, custom mounts, or coder parameters.
+			switch {
+			case isCoderParamChildRow(row):
+				d.WriteString(fleetPage.renderCoderParamRow(row, marker))
+			case isLayoutPresetChildRow(row):
 				d.WriteString(fleetPage.renderLayoutPresetRow(row, marker))
-			} else {
+			default:
 				d.WriteString(fleetPage.renderCustomMountRow(row, marker))
 			}
 		}
@@ -1184,6 +1559,9 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 	}
 
 	if footer := fleetPage.customMountFooter(); footer != "" {
+		d.WriteString("\n  " + footer + "\n")
+	}
+	if footer := fleetPage.coderFooter(); footer != "" {
 		d.WriteString("\n  " + footer + "\n")
 	}
 	d.WriteString("\n  " + dimStyle.Render("Mounts apply on supported backends only") + "\n\n")
@@ -1265,6 +1643,47 @@ func (fleetPage *fleetPage) renderRemoveMountButton(row int) string {
 	return dimStyle.Render("[remove]")
 }
 
+// renderCoderParamRow renders one dynamic coder-parameter child row: the
+// parameter's display name (or name) and its value — the shared text input
+// while the row is being edited, the template default (dim) when unset.
+func (fleetPage *fleetPage) renderCoderParamRow(row int, marker func(int) string) string {
+	idx := row - editFleetRowCoderParamBase
+	if idx < 0 || idx >= len(fleetPage.editFleet.coderParams) {
+		return marker(row)
+	}
+	param := fleetPage.editFleet.coderParams[idx]
+	label := param.Name
+	if param.DisplayName != "" {
+		label = param.DisplayName
+	}
+	var value string
+	if fleetPage.dlg.fieldActive && fleetPage.dlg.row == row {
+		value = fleetPage.coderParamInput.View()
+	} else if param.Value == "" {
+		if param.DefaultValue != "" {
+			value = dimStyle.Render(param.DefaultValue + " (default)")
+		} else {
+			value = dimStyle.Render("(not set)")
+		}
+	} else {
+		value = param.Value
+	}
+	return marker(row) + "  " + dialogLabel.Render(label+": ") + value
+}
+
+// coderFooter returns a context line shown beneath the dialog rows while the
+// cursor is on a Coder row: the ${...} interpolation variables on a parameter
+// row, and the naming scheme on the workspace-name row.
+func (fleetPage *fleetPage) coderFooter() string {
+	if isCoderParamChildRow(fleetPage.dlg.row) {
+		return dimStyle.Render("Variables: ${GIT_URL} = fleet repo URL, ${GIT_BRANCH} = git branch\n  (blank = default), ${INSTANCE_NAME} = workspace name")
+	}
+	if fleetPage.dlg.row == editFleetRowCoderWsName {
+		return dimStyle.Render("workspaces are named <workspace>-<instance>")
+	}
+	return ""
+}
+
 // customMountFooter returns a context line shown beneath the dialog rows while
 // the cursor is on a custom-mount row: the resolved host path for an existing
 // mount or the in-progress add, plus a hint or inline validation error.
@@ -1342,6 +1761,9 @@ func (fleetPage *fleetPage) editFleetHint() string {
 		}
 		return "[enter/d] Remove  [j/k] Select  [q/esc] Save & Close"
 	}
+	if isCoderParamChildRow(fleetPage.dlg.row) {
+		return "[enter] Edit  [j/k] Select  [q/esc] Save & Close"
+	}
 	if isLayoutPresetChildRow(fleetPage.dlg.row) {
 		if fleetPage.dlg.row == fleetPage.layoutPresetAddRow() {
 			return "[enter] New preset  [j/k] Select  [q/esc] Save & Close"
@@ -1381,6 +1803,15 @@ func (fleetPage *fleetPage) editFleetHint() string {
 			return "[h/←] Collapse  [j/k] Select  [q/esc] Save & Close"
 		}
 		return "[l/→/space] Expand  [j/k] Select  [q/esc] Save & Close"
+	case editFleetRowCoder:
+		if fleetPage.editFleet.coderExpanded {
+			return "[h/←] Collapse  [j/k] Select  [q/esc] Save & Close"
+		}
+		return "[l/→/space] Expand  [j/k] Select  [q/esc] Save & Close"
+	case editFleetRowCoderPreset:
+		return "[h/l] Cycle  [j/k] Select  [q/esc] Save & Close"
+	case editFleetRowCoderWsName, editFleetRowCoderTemplate:
+		return "[enter] Edit  [j/k] Select  [q/esc] Save & Close"
 	case editFleetRowBuildkit, editFleetRowDebCache, editFleetRowImageCache:
 		if fleetPage.editFleet.cacheButtonFocused {
 			if fleetPage.editFleet.deleteCacheConfirm {

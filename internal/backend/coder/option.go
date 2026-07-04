@@ -22,3 +22,10 @@ func WithPreset(preset string) Option {
 func WithParameters(params map[string]string) Option {
 	return func(coderBackend *CoderBackend) { coderBackend.parameters = params }
 }
+
+// WithWorkspaceName sets the explicit (already sanitized) workspace name Up
+// creates, instead of deriving one from the workspace dir path. See
+// WorkspaceNameFor.
+func WithWorkspaceName(name string) Option {
+	return func(coderBackend *CoderBackend) { coderBackend.workspaceName = name }
+}

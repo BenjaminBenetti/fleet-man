@@ -150,6 +150,11 @@ func (s *service) SetFleetSettings(_ context.Context, req *fleetgrpc.SetFleetSet
 		return nil, status.Errorf(codes.InvalidArgument, "invalid automation trigger: %v", err)
 	}
 	settings.Triggers = normalizedTriggers
+	// Coder settings (issue #221): the workspace-name override becomes part of
+	// every `coder create <name>` this fleet runs, so validate it here too.
+	if err := fleet.NormalizeCoderSettings(&settings); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid coder settings: %v", err)
+	}
 
 	snapshot, err := s.mutate(func(st *state.State) error {
 		f, ok := st.Fleets[req.GetFleet()]
@@ -291,7 +296,31 @@ func protoFleetSettingsToLegacy(ps *fleetgrpc.FleetSettings) fleet.FleetSettings
 		v := ps.GetPreferFleetLaunch()
 		s.PreferFleetLaunch = &v
 	}
+	s.CoderTemplate = ps.GetCoderTemplate()
+	s.CoderPreset = ps.GetCoderPreset()
+	s.CoderWorkspaceName = ps.GetCoderWorkspaceName()
+	s.CoderParameters = protoCoderParametersToLegacy(ps.GetCoderParameters())
 	return s
+}
+
+// protoCoderParametersToLegacy maps the repeated proto CoderParameter back to
+// the legacy slice (nil for an empty list, matching the `,omitempty` JSON tag).
+func protoCoderParametersToLegacy(in []*fleetgrpc.CoderParameter) []fleet.CoderParameter {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]fleet.CoderParameter, 0, len(in))
+	for _, p := range in {
+		out = append(out, fleet.CoderParameter{
+			Name:         p.GetName(),
+			Value:        p.GetValue(),
+			DefaultValue: p.GetDefaultValue(),
+			DisplayName:  p.GetDisplayName(),
+			Description:  p.GetDescription(),
+			Type:         p.GetType(),
+		})
+	}
+	return out
 }
 
 // protoAgentsToLegacy maps the repeated proto Agent back to the legacy slice

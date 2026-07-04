@@ -33,13 +33,24 @@ func New(backendType fleet.BackendType, verbose bool) backend.Backend {
 }
 
 // NewForInstance creates a Backend for the given instance, pre-registering
-// the codespace name mapping when applicable so that Exec/ExecCommand
+// the codespace/coder name mapping when applicable so that Exec/ExecCommand
 // use the correct container ID.
 func NewForInstance(instance *fleet.Instance, verbose bool) backend.Backend {
 	instanceBackend := New(instance.Backend, verbose)
-	if instance.Backend == fleet.BackendCodespaces && instance.ContainerID != "" {
+	if instance.ContainerID == "" {
+		return instanceBackend
+	}
+	switch instance.Backend {
+	case fleet.BackendCodespaces:
 		if codespacesBackend, ok := instanceBackend.(*codespacesbackend.CodespacesBackend); ok {
 			codespacesBackend.RegisterName(instance.WorkspaceDir, instance.ContainerID)
+		}
+	case fleet.BackendCoder:
+		// Coder workspace names are per-fleet configurable (issue #221), so
+		// path-based methods must target the recorded workspace, not a
+		// path-derived name.
+		if coderBackend, ok := instanceBackend.(*coderbackend.CoderBackend); ok {
+			coderBackend.RegisterName(instance.WorkspaceDir, instance.ContainerID)
 		}
 	}
 	return instanceBackend
