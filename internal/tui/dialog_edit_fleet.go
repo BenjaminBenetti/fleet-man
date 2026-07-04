@@ -1177,10 +1177,11 @@ func (fleetPage *fleetPage) commitCoderWsName(m *model) tea.Cmd {
 	return nil
 }
 
-// commitCoderTemplate persists the template (instant-save) and, when it
-// changed to a new non-empty value, kicks the parameter/preset fetch — exactly
-// like the old global settings page did on a template commit. Clearing the
-// template clears its template-scoped state with it (parameter bindings,
+// commitCoderTemplate persists the template (instant-save) and, when it is
+// non-empty, (re-)kicks the parameter/preset fetch — including for an
+// unchanged template, which doubles as the in-dialog retry after a failed
+// fetch. Clearing the template clears its template-scoped state with it
+// (parameter bindings,
 // preset selection, the cycler's preset feed, any in-flight fetch): the
 // create path passes --preset/--parameter regardless of --template, so
 // leaving a removed template's bindings behind can hard-fail or
@@ -1225,7 +1226,12 @@ func (fleetPage *fleetPage) commitCoderTemplate(m *model) tea.Cmd {
 	// that is the in-dialog retry after a failed fetch (otherwise a fetch
 	// error after a template switch leaves the old template's preset/params
 	// bound with no recovery short of reopening the dialog). Redundant
-	// refreshes are harmless — merges persist only on actual change.
+	// refreshes are harmless — merges persist only on actual change. The
+	// fresh fetch strictly supersedes any result stashed during this edit
+	// (a same-template stash would otherwise apply right after this commit
+	// and clear the just-kicked fetch's spinner), so drop the stash — the
+	// fresh result re-delivers the same payload through the same merge.
+	fleetPage.editFleet.coderPendingFetch = nil
 	fleetPage.editFleet.coderFetching = true
 	fleetPage.editFleet.coderFetchTemplate = template
 	m.message = "Fetching template parameters..."

@@ -590,6 +590,39 @@ func TestEditFleetCoderSameTemplateCommitRetriesFetch(t *testing.T) {
 	}
 }
 
+// TestEditFleetCoderTemplateCommitDropsStash guards the stash-vs-rekick
+// collision: a result stashed during a template-row edit must NOT apply right
+// after the commit re-kicks the fetch — it would clear the fresh fetch's
+// spinner while it is still in flight. The fresh fetch supersedes the stash.
+func TestEditFleetCoderTemplateCommitDropsStash(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	fp, m, _ := openCoderTestDialog(t, fleet.FleetSettings{CoderTemplate: "tmpl"})
+
+	// Enter the template-row edit; the open-time fetch's result lands mid-edit
+	// and is stashed.
+	fp.dlg.row = editFleetRowCoderTemplate
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	fp.handleCoderParamsFetched(m, coderParamsFetchedMsg{
+		fleetName: "alpha", template: "tmpl",
+		params: []coderRichParam{{Name: "repo"}},
+	})
+	if fp.editFleet.coderPendingFetch == nil {
+		t.Fatal("mid-edit result should be stashed")
+	}
+
+	// Committing the unchanged template kicks a fresh fetch; the stash is
+	// dropped, so the new fetch's spinner survives the commit.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if fp.editFleet.coderPendingFetch != nil {
+		t.Fatal("stash should be dropped when the commit re-kicks the fetch")
+	}
+	if !fp.editFleet.coderFetching {
+		t.Fatal("the just-kicked fetch's spinner must stay on")
+	}
+}
+
 // TestEditFleetCoderVariablesHintScopedToParams guards the footer hint: the
 // "${GIT_URL}" interpolation-variables hint shows on coder PARAMETER rows
 // only, not on the template row above them.
