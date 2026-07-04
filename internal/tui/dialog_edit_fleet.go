@@ -1199,11 +1199,6 @@ func (fleetPage *fleetPage) commitCoderTemplate(m *model) tea.Cmd {
 		fleetPage.editFleet.coderParams = nil
 		fleetPage.editFleet.coderPreset = ""
 		fleetPage.editFleet.coderPresets = nil
-		// Invalidate any in-flight fetch too: its result must not land (and
-		// persist the removed template's parameters) on a fleet whose
-		// template is now empty, and the spinner must stop.
-		fleetPage.editFleet.coderFetchTemplate = ""
-		fleetPage.editFleet.coderFetching = false
 	}
 
 	if err := fleetPage.persistFleetSettings(m); err != nil {
@@ -1216,7 +1211,17 @@ func (fleetPage *fleetPage) commitCoderTemplate(m *model) tea.Cmd {
 		m.message = fmt.Sprintf("Failed to save: %v", err)
 		return nil
 	}
-	if template != "" && template != prev {
+	if template == "" {
+		// Only now that the clear is persisted, invalidate any in-flight
+		// fetch: its result must not land (and persist the removed template's
+		// parameters) on a fleet whose template is now empty, and the spinner
+		// must stop. Not done before the persist — a failed save rolls back
+		// to the previous template, whose fetch must stay live.
+		fleetPage.editFleet.coderFetchTemplate = ""
+		fleetPage.editFleet.coderFetching = false
+		return nil
+	}
+	if template != prev {
 		fleetPage.editFleet.coderFetching = true
 		fleetPage.editFleet.coderFetchTemplate = template
 		m.message = "Fetching template parameters..."
@@ -1244,9 +1249,11 @@ func (fleetPage *fleetPage) commitCoderParam(m *model, idx int) tea.Cmd {
 // edit-fleet dialog: fetched parameters are merged with the working copy
 // (user-set values kept by name, metadata refreshed) and the preset list is
 // replaced. The merge is persisted ONLY when it actually changes the stored
-// bindings — merely opening the dialog on an unchanged template must not
-// rewrite settings — and the preset selection is never auto-adopted ("" is a
-// valid "no preset" choice; the cycler offers the fetched names).
+// bindings or drops the preset — merely opening the dialog on an unchanged
+// template must not rewrite settings. The preset selection is never
+// auto-adopted ("" is a valid "no preset" choice; the cycler offers the
+// fetched names) but IS dropped when the new feed doesn't contain it (a
+// template switch must not leave an invalid --preset behind).
 //
 // Stale results are discarded (mirroring handleHomedirDetected): the dialog
 // closed, now shows a different fleet, answers a template that is no longer
@@ -1303,8 +1310,19 @@ func (fleetPage *fleetPage) handleCoderParamsFetched(m *model, msg coderParamsFe
 
 	// The preset list is in-memory feed for the cycler, not a persisted value.
 	fleetPage.editFleet.coderPresets = slices.Clone(msg.presets)
+	// Validate the SELECTION against the new feed (mirroring the params'
+	// keep-by-name merge): a preset the new template doesn't offer must be
+	// dropped, or it persists as an invalid --preset that hard-fails
+	// `coder create` — unclearable from the UI when the new template has no
+	// presets at all, since the cycler no-ops on an empty feed.
+	prevPreset := fleetPage.editFleet.coderPreset
+	if prevPreset != "" && !slices.Contains(msg.presets, prevPreset) {
+		fleetPage.editFleet.coderPreset = ""
+	}
+	presetCleared := fleetPage.editFleet.coderPreset != prevPreset
 
-	if slices.Equal(fleetPage.editFleet.coderParams, newParams) {
+	// A cleared preset must persist even when the param lists are equal.
+	if !presetCleared && slices.Equal(fleetPage.editFleet.coderParams, newParams) {
 		m.message = fmt.Sprintf("Loaded %d parameters, %d presets", len(newParams), len(msg.presets))
 		return nil
 	}
@@ -1313,6 +1331,7 @@ func (fleetPage *fleetPage) handleCoderParamsFetched(m *model, msg coderParamsFe
 	fleetPage.editFleet.coderParams = newParams
 	if err := fleetPage.persistFleetSettings(m); err != nil {
 		fleetPage.editFleet.coderParams = prevParams
+		fleetPage.editFleet.coderPreset = prevPreset
 		m.message = fmt.Sprintf("Failed to save: %v", err)
 		return nil
 	}

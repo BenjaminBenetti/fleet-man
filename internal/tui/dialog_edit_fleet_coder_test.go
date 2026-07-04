@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -444,6 +445,116 @@ func TestEditFleetCoderWsNameValidatedLocally(t *testing.T) {
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if f.Settings.CoderWorkspaceName != "myproj" {
 		t.Fatalf("CoderWorkspaceName = %q, want normalized %q", f.Settings.CoderWorkspaceName, "myproj")
+	}
+}
+
+// TestEditFleetCoderStalePresetDroppedOnTemplateSwitch is the QA repro
+// (PR #227): fleet-dev (presets small/large, small selected) → gpu-heavy (no
+// presets). The stale preset must be dropped and the drop persisted —
+// otherwise it is unclearable (the cycler no-ops on an empty feed) and
+// reaches `coder create` as an invalid --preset that hard-fails provisioning.
+func TestEditFleetCoderStalePresetDroppedOnTemplateSwitch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	origFetch := getCoderTemplateParamsRemote
+	getCoderTemplateParamsRemote = func(template string) ([]coderRichParam, []string, error) {
+		return []coderRichParam{{Name: "gpu_count", DefaultValue: "1"}}, nil, nil // no presets
+	}
+	t.Cleanup(func() { getCoderTemplateParamsRemote = origFetch })
+
+	fp, m, f := openCoderTestDialog(t, fleet.FleetSettings{
+		CoderTemplate:   "fleet-dev",
+		CoderPreset:     "small",
+		CoderParameters: []fleet.CoderParameter{{Name: "cpu", Value: "8"}},
+	})
+
+	// Switch the template to gpu-heavy and let its fetch land.
+	fp.dlg.row = editFleetRowCoderTemplate
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	fp.coderTemplateInput.SetValue("gpu-heavy")
+	cmd := fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("template switch should kick a fetch")
+	}
+	fp.handleCoderParamsFetched(m, cmd().(coderParamsFetchedMsg))
+
+	if f.Settings.CoderPreset != "" {
+		t.Fatalf("stale preset survived the switch: %q", f.Settings.CoderPreset)
+	}
+	if fp.editFleet.coderPreset != "" {
+		t.Fatalf("dialog still shows the stale preset: %q", fp.editFleet.coderPreset)
+	}
+	if len(f.Settings.CoderParameters) != 1 || f.Settings.CoderParameters[0].Name != "gpu_count" {
+		t.Fatalf("params not remerged for the new template: %+v", f.Settings.CoderParameters)
+	}
+}
+
+// TestEditFleetCoderPresetDropPersistsWhenParamsUnchanged guards the
+// persist-skip wrinkle: when the merge leaves the parameter list identical
+// but drops a stale preset, the drop must still be persisted — otherwise
+// state.json keeps the invalid preset while the dialog shows it cleared.
+func TestEditFleetCoderPresetDropPersistsWhenParamsUnchanged(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFleetSettingsSave(t)
+
+	param := fleet.CoderParameter{Name: "cpu", Value: "8", DefaultValue: "4"}
+	fp, m, f := openCoderTestDialog(t, fleet.FleetSettings{
+		CoderTemplate:   "tmpl",
+		CoderPreset:     "small",
+		CoderParameters: []fleet.CoderParameter{param},
+	})
+
+	// Fetch returns the SAME params but no presets: only the preset changes.
+	fp.handleCoderParamsFetched(m, coderParamsFetchedMsg{
+		fleetName: "alpha",
+		template:  "tmpl",
+		params:    []coderRichParam{{Name: "cpu", DefaultValue: "4"}},
+	})
+	if f.Settings.CoderPreset != "" {
+		t.Fatalf("preset drop not persisted: %q", f.Settings.CoderPreset)
+	}
+	if len(f.Settings.CoderParameters) != 1 || f.Settings.CoderParameters[0].Value != "8" {
+		t.Fatalf("params should be unchanged: %+v", f.Settings.CoderParameters)
+	}
+}
+
+// TestEditFleetCoderClearTemplateFailedSaveKeepsFetchLive guards the
+// clear-template rollback completeness: when the persist fails, the dialog
+// rolls back to the previous template — whose in-flight fetch must stay live
+// (bookkeeping untouched) so its result can still populate the dialog.
+func TestEditFleetCoderClearTemplateFailedSaveKeepsFetchLive(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	failSaves := false
+	orig := setFleetSettingsRemote
+	setFleetSettingsRemote = func(string, fleet.FleetSettings) error {
+		if failSaves {
+			return errors.New("daemon down")
+		}
+		return nil
+	}
+	t.Cleanup(func() { setFleetSettingsRemote = orig })
+
+	fp, m, f := openCoderTestDialog(t, fleet.FleetSettings{
+		CoderTemplate: "T",
+		CoderPreset:   "small",
+	})
+
+	failSaves = true
+	fp.dlg.row = editFleetRowCoderTemplate
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter})
+	fp.coderTemplateInput.SetValue("")
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyEnter}) // commit fails
+
+	if f.Settings.CoderTemplate != "T" || f.Settings.CoderPreset != "small" {
+		t.Fatalf("failed clear leaked into settings: %+v", f.Settings)
+	}
+	if fp.editFleet.coderPreset != "small" {
+		t.Fatalf("working preset not rolled back: %q", fp.editFleet.coderPreset)
+	}
+	if !fp.editFleet.coderFetching || fp.editFleet.coderFetchTemplate != "T" {
+		t.Fatalf("rolled-back template's fetch was orphaned: fetching=%v template=%q",
+			fp.editFleet.coderFetching, fp.editFleet.coderFetchTemplate)
 	}
 }
 
