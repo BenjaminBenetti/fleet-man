@@ -86,19 +86,57 @@ func ShellCommandForSession(config *configutil.Config, session string, cols, row
 		tmuxSize = fmt.Sprintf(` -x %d -y %d`, cols, rows-1)
 		resizeHook = ` \; set -g aggressive-resize on \; set -g window-size latest`
 	}
+	// Tabs (issue #168): tmux windows inside the inner session act as
+	// per-pane tabs. The status line is the tab bar, rendered across the
+	// top of the pane with one entry per window; tmux's default
+	// MouseDown1Status binding makes each entry click-to-switch, and the
+	// default prefix keys (c / n / p / 0-9) create and cycle tabs.
+	//
+	// tabToggle hides the bar while a session has a single window and
+	// shows it otherwise. It runs once at attach time and again from the
+	// window-linked/unlinked hooks on every window create/kill. The hooks
+	// and the status options are session-scoped so they never touch a
+	// user's own tmux sessions on the container's shared server (or
+	// clobber their global hooks); only the window-status formats are
+	// global, as window options have no session scope. The session-scoped
+	// @fleet_tab_autohide marker distinguishes the modes: nested panes
+	// auto-hide (the TUI provides all other UI) while full-screen
+	// attaches keep the bar always on because status-right also carries
+	// the detach hint there.
+	tabToggle := `if -F '#{&&:#{@fleet_tab_autohide},#{==:#{session_windows},1}}' 'set status off' 'set status on'`
+	tabBarConf := ` \; set status-position top` +
+		` \; set status-style 'bg=default,fg=colour245'` +
+		` \; set -g window-status-format ' #I:#W '` +
+		` \; set -g window-status-current-format '#[fg=colour39,bold] #I:#W #[default]'` +
+		` \; set-hook window-linked "` + tabToggle + `"` +
+		` \; set-hook window-unlinked "` + tabToggle + `"`
 	// When nested inside a host tmux (split pane mode), use Ctrl+X as
 	// the inner prefix so it doesn't conflict with the outer Ctrl+B.
 	// Pane navigation (h/j/k/l) is handled by the outer tmux, so the
 	// inner tmux only needs prefix and session keys.
-	prefixConf := ""
+	modeConf := ""
 	statusRight := ` ctrl+q/ctrl+o: detach `
 	if nested {
 		// In nested mode, Ctrl+Q/O are handled by the outer tmux
 		// (they close all split panes). The inner tmux only needs
-		// the prefix override and session navigation. The status bar
-		// is hidden because the outer tmux provides all the UI.
-		prefixConf = ` \; set -g prefix C-x \; bind-key C-x send-prefix \; set -g status off`
+		// the prefix override and session navigation. The prefix is
+		// session-scoped so full-screen attaches and a user's own
+		// sessions on the shared server keep the default Ctrl+B
+		// (bind-key tables are inherently global; prefix+C-x =
+		// send-prefix is inert under other prefixes). The status bar
+		// doubles as the tab bar and is hidden while the session has a
+		// single window (the outer tmux provides all other UI).
+		modeConf = ` \; set prefix C-x \; bind-key C-x send-prefix` +
+			` \; set status-left '' \; set status-right ' ctrl+x c: new tab '` +
+			` \; set @fleet_tab_autohide 1 \; ` + tabToggle
 		statusRight = ""
+	} else {
+		// Full-screen mode keeps the bar always on: it carries the
+		// detach hint and doubles as the tab bar. -u resets the
+		// prefix and status-left a prior nested attach overrode, so
+		// the documented full-screen keys (ctrl+b …) hold regardless
+		// of attach order.
+		modeConf = ` \; set @fleet_tab_autohide 0 \; set status on \; set -u status-left \; set -u prefix`
 	}
 	// Session navigation: Ctrl+PageUp/Down are handled by the outer
 	// tmux to cycle session groups. prefix+T creates a new session
@@ -152,7 +190,7 @@ func ShellCommandForSession(config *configutil.Config, session string, cols, row
 		` \; unbind -n MouseDown2Pane`
 	clipboardFeatures := ` \; set -as terminal-features ',*:clipboard'`
 	inner := setup + tmuxEnsureInstalled + sizefix + sshAgentFix + hookClear + fmt.Sprintf(
-		`exec tmux -u new-session -A -s %s`+tmuxSize+` \; set -g mouse on`+clipboardConf+mouseBindings+detachKeys+statusConf+prefixConf+sessionKeys+resizeHook+clipboardFeatures,
+		`exec tmux -u new-session -A -s %s`+tmuxSize+` \; set -g mouse on`+clipboardConf+mouseBindings+detachKeys+tabBarConf+statusConf+modeConf+sessionKeys+resizeHook+clipboardFeatures,
 		shQuote(session),
 	)
 	return []string{"sh", "-c", inner}

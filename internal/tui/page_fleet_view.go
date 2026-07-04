@@ -246,13 +246,17 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				icon = "●"
 				style = sessionActiveStyle
 			}
+			tabSuffix := ""
+			if r.tabCount > 1 {
+				tabSuffix = fmt.Sprintf(" (%d tabs)", r.tabCount)
+			}
 			var label string
 			if r.groupSize > 1 {
 				label = fmt.Sprintf("%s %s (%d panes)", icon, r.groupID, r.groupSize)
 			} else if r.groupID != "" && isGroupedSession(SanitizeSessionName(r.instance.Name), r.sessionName) {
-				label = fmt.Sprintf("%s %s", icon, r.groupID)
+				label = fmt.Sprintf("%s %s%s", icon, r.groupID, tabSuffix)
 			} else {
-				label = fmt.Sprintf("%s %s", icon, r.sessionName)
+				label = fmt.Sprintf("%s %s%s", icon, r.sessionName, tabSuffix)
 			}
 			if isSelected {
 				style = selectedStyle

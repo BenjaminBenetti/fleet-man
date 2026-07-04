@@ -37,6 +37,7 @@ type row struct {
 	sessionName string // set when kind == rowSession or rowNewSession
 	groupID     string // set for grouped session rows
 	groupSize   int    // number of sessions in the group (for display)
+	tabCount    int    // tmux windows in a single-session row (for display)
 	// autoIdx indexes the fleet's Settings.Triggers (rowTrigger) or
 	// Settings.Agents (rowAgent) — the automation item this row renders/edits.
 	autoIdx int
