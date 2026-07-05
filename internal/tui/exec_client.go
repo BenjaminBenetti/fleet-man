@@ -233,9 +233,10 @@ var prepareBrowserRemote = func(fleetName, instanceName string, preferFleetLaunc
 
 // --- Coder template params -------------------------------------------------
 
-// coderRichParam mirrors the subset of a Coder rich parameter the settings
-// dialog renders/stores (replacing the direct coderbackend.RichParameter the
-// TUI used before the server owned backend access).
+// coderRichParam mirrors the subset of a Coder rich parameter the edit-fleet
+// dialog's Coder section renders/stores (replacing the direct
+// coderbackend.RichParameter the TUI used before the server owned backend
+// access).
 type coderRichParam struct {
 	Name         string
 	DisplayName  string

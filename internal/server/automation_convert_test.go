@@ -77,3 +77,26 @@ func TestFleetSettingsAutomationRoundTrip(t *testing.T) {
 		t.Errorf("triggers round-trip mismatch:\n in: %+v\nout: %+v", in.Triggers, out.Triggers)
 	}
 }
+
+// TestFleetSettingsCoderRoundTrip guards the per-fleet coder settings wire
+// mapping (issue #221): template, preset, the workspace-name override, and the
+// RICH parameter list (value + template metadata) must survive
+// legacy -> proto -> legacy unchanged, so a SetFleetSettings round-trip never
+// silently drops a field.
+func TestFleetSettingsCoderRoundTrip(t *testing.T) {
+	in := fleet.FleetSettings{
+		CoderTemplate:      "k8s-devbox",
+		CoderPreset:        "large",
+		CoderWorkspaceName: "myproj",
+		CoderParameters: []fleet.CoderParameter{
+			{Name: "repo", Value: "${GIT_URL}", DefaultValue: "d1", DisplayName: "Repo URL", Description: "clone target", Type: "string"},
+			{Name: "cpus", Value: "4"},
+		},
+	}
+
+	out := protoFleetSettingsToLegacy(fleetSettingsToProto(in))
+
+	if !reflect.DeepEqual(in, out) {
+		t.Errorf("coder settings round-trip mismatch:\n in: %+v\nout: %+v", in, out)
+	}
+}

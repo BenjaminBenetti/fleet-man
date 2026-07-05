@@ -129,6 +129,29 @@ type FleetSettings struct {
 	// default) means no triggers.
 	Triggers []Trigger `json:"triggers,omitempty"`
 
+	// CoderTemplate is the Coder template new instances of this fleet are
+	// created from (issue #221 — coder settings are per-fleet, not global).
+	// Empty means "let coder pick" (`coder create` without --template).
+	// Only consulted when an instance is created on the coder backend.
+	CoderTemplate string `json:"coderTemplate,omitempty"`
+
+	// CoderPreset is the template preset passed to `coder create --preset`.
+	// Empty means no preset.
+	CoderPreset string `json:"coderPreset,omitempty"`
+
+	// CoderWorkspaceName overrides the fleet-name portion of coder workspace
+	// names: workspaces are named "<CoderWorkspaceName>-<instance>" (sanitized
+	// to coder's naming rules). Empty (the default) means the fleet's own name
+	// is used, preserving the historical "<fleet>-<instance>" naming.
+	CoderWorkspaceName string `json:"coderWorkspaceName,omitempty"`
+
+	// CoderParameters is the fleet's list of Coder template parameter
+	// bindings, passed as `coder create --parameter name=value`. Values may
+	// interpolate ${GIT_URL}, ${GIT_BRANCH} and ${INSTANCE_NAME} at creation
+	// time. The template-derived metadata fields on each entry are refreshed
+	// by the edit-fleet dialog's parameter fetch.
+	CoderParameters []CoderParameter `json:"coderParameters,omitempty"`
+
 	// PreferFleetLaunch controls which page the built-in browser opens to
 	// when a workspace's devcontainer.json configures BOTH a
 	// customizations.fleet.browser.initialUrl AND a fleetLaunch block.

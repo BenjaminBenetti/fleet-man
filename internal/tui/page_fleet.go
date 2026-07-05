@@ -49,10 +49,13 @@ type fleetPage struct {
 	// move. See currentRowHasRightElement / activateRightSelection.
 	rightSelected bool
 
-	textInput        textinput.Model
-	branchInput      textinput.Model
-	homedirInput     textinput.Model
-	customMountInput textinput.Model
+	textInput          textinput.Model
+	branchInput        textinput.Model
+	homedirInput       textinput.Model
+	customMountInput   textinput.Model
+	coderWsNameInput   textinput.Model // edit-fleet Coder section: workspace-name override
+	coderTemplateInput textinput.Model // edit-fleet Coder section: template
+	coderParamInput    textinput.Model // edit-fleet Coder section: shared input for the focused parameter row
 
 	pfCursor int
 
@@ -97,19 +100,34 @@ func newFleetPage() *fleetPage {
 	customMountInput.Placeholder = "/opt/data"
 	customMountInput.CharLimit = 256
 
+	coderWsNameInput := textinput.New()
+	coderWsNameInput.Placeholder = "workspace-name"
+	coderWsNameInput.CharLimit = 64
+
+	coderTemplateInput := textinput.New()
+	coderTemplateInput.Placeholder = "template-name"
+	coderTemplateInput.CharLimit = 128
+
+	coderParamInput := textinput.New()
+	coderParamInput.Placeholder = "value"
+	coderParamInput.CharLimit = 256
+
 	return &fleetPage{
-		collapsed:        make(map[string]bool),
-		savedGroups:      make(map[string]savedGroup),
-		textInput:        nameInput,
-		branchInput:      branchInput,
-		homedirInput:     homedirInput,
-		customMountInput: customMountInput,
-		listRowY:         -1,
-		armadaSel:        armadaSelectState{y: -1},
-		automationMode:   make(map[string]bool),
-		autoCollapsed:    make(map[string]bool),
-		triggerDlg:       automationTriggerState{input: newAutomationInput()},
-		agentDlg:         automationAgentState{input: newAutomationInput()},
+		collapsed:          make(map[string]bool),
+		savedGroups:        make(map[string]savedGroup),
+		textInput:          nameInput,
+		branchInput:        branchInput,
+		homedirInput:       homedirInput,
+		customMountInput:   customMountInput,
+		coderWsNameInput:   coderWsNameInput,
+		coderTemplateInput: coderTemplateInput,
+		coderParamInput:    coderParamInput,
+		listRowY:           -1,
+		armadaSel:          armadaSelectState{y: -1},
+		automationMode:     make(map[string]bool),
+		autoCollapsed:      make(map[string]bool),
+		triggerDlg:         automationTriggerState{input: newAutomationInput()},
+		agentDlg:           automationAgentState{input: newAutomationInput()},
 	}
 }
 
@@ -171,6 +189,9 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 
 	case homedirDetectedMsg:
 		return fleetPage.handleHomedirDetected(m, msg.(homedirDetectedMsg))
+
+	case coderParamsFetchedMsg:
+		return fleetPage.handleCoderParamsFetched(m, msg.(coderParamsFetchedMsg))
 
 	case deleteCacheDoneMsg:
 		return fleetPage.handleDeleteCacheDone(m, msg.(deleteCacheDoneMsg))

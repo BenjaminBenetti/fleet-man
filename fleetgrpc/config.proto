@@ -38,26 +38,10 @@ message DotfilesSettings {
   optional string install_script = 3;
 }
 
-// CoderParameter mirrors internal/state.CoderParameter — one Coder template
-// parameter binding. name+value are always present; the remaining fields are
-// template-derived metadata (JSON `,omitempty`) and so are optional.
-message CoderParameter {
-  string name = 1;
-  string value = 2; // may contain ${GIT_URL}, ${GIT_BRANCH}, ${INSTANCE_NAME}
-  optional string default_value = 3;
-  optional string display_name = 4;
-  optional string description = 5;
-  optional string type = 6; // "string", "number"
-}
-
-message CoderSettings {
-  optional string template = 1;
-  optional string preset = 2;
-  // Mirrors []CoderParameter — a rich list (value + template metadata), NOT a
-  // name->value map: the TUI re-renders default/display/description/type after a
-  // fetch, so those must round-trip through SetConfig without loss.
-  repeated CoderParameter parameters = 3;
-}
+// CoderSettings/CoderParameter used to live here; coder settings moved to the
+// per-fleet FleetSettings (issue #221 — different fleets use different
+// templates), so the CoderParameter message now lives in domain.proto and
+// Config.coder = 4 is reserved below.
 
 message CodespacesSettings {
   optional string machine = 1;
@@ -103,7 +87,9 @@ message Config {
   GeneralSettings general = 1;
   AgentSettings agent = 2;
   DotfilesSettings dotfiles = 3;
-  CoderSettings coder = 4;
+  // 4 was CoderSettings coder — moved to FleetSettings (issue #221).
+  reserved 4;
+  reserved "coder";
   CodespacesSettings codespaces = 5;
   BrowserSettings browser = 6;
   // Feeds CreateInstanceRequest's UNSPECIFIED-backend resolution. UNSPECIFIED

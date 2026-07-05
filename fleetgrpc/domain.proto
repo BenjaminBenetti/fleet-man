@@ -201,6 +201,35 @@ message FleetSettings {
   // event. repeated message; names unique within the list (server normalizes
   // against the agent set). An empty list (the default) means no triggers.
   repeated Trigger triggers = 13;
+
+  // Coder backend settings (issue #221 — moved here from the global Config,
+  // whose Config.coder field is now reserved): the template / preset /
+  // parameter bindings used when an instance of this fleet is created on the
+  // coder backend. Empty means unset (`,omitempty` in Go) — optional.
+  optional string coder_template = 14;
+  optional string coder_preset = 15;
+  // coder_workspace_name overrides the fleet-name portion of coder workspace
+  // names ("<name>-<instance>"). Empty means the fleet's own name is used.
+  optional string coder_workspace_name = 16;
+  // coder_parameters mirrors []fleet.CoderParameter — a rich list (value +
+  // template metadata), NOT a name->value map: the TUI re-renders
+  // default/display/description/type after a fetch, so those must round-trip
+  // through SetFleetSettings without loss.
+  repeated CoderParameter coder_parameters = 17;
+}
+
+// CoderParameter mirrors internal/fleet.CoderParameter — one Coder template
+// parameter binding. name+value are always present; the remaining fields are
+// template-derived metadata (JSON `,omitempty`) and so are optional. (Moved
+// from config.proto with the coder-settings move to the fleet level; the
+// fully-qualified name fleetgrpc.CoderParameter is unchanged on the wire.)
+message CoderParameter {
+  string name = 1;
+  string value = 2; // may contain ${GIT_URL}, ${GIT_BRANCH}, ${INSTANCE_NAME}
+  optional string default_value = 3;
+  optional string display_name = 4;
+  optional string description = 5;
+  optional string type = 6; // "string", "number"
 }
 
 // LayoutPreset mirrors internal/fleet.LayoutPreset — a saved pane-layout

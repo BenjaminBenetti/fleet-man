@@ -21,15 +21,51 @@ type CoderBackend struct {
 	template   string            // coder template name
 	preset     string            // coder preset name
 	parameters map[string]string // resolved parameter key=value pairs
+
+	// workspaceName is the explicit name for the workspace Up creates
+	// (issue #221: the fleet-name portion is user-configurable, so the
+	// name can no longer always be re-derived from the workspace dir).
+	// Empty means "derive from the workspace dir" (the historical
+	// "<fleet>-<instance>" naming).
+	workspaceName string
+
+	// nameCache maps workspaceDir to the workspace's real SSH target
+	// (workspace or "workspace.agent"). Populated by Up() or
+	// RegisterName() so path-based methods (rawExec, EditorURI) address
+	// the right workspace even when its name differs from the
+	// path-derived default.
+	nameCache map[string]string
 }
 
 // New creates a new CoderBackend.
 func New(opts ...Option) *CoderBackend {
-	coderBackend := &CoderBackend{}
+	coderBackend := &CoderBackend{nameCache: make(map[string]string)}
 	for _, opt := range opts {
 		opt(coderBackend)
 	}
 	return coderBackend
+}
+
+// RegisterName associates a workspace dir with its recorded container ID (the
+// workspace name, possibly "workspace.agent"). Mirrors the codespaces
+// backend: contexts that know the instance record (backendutil.NewForInstance)
+// register it so Exec/ExecCommand target the actual workspace instead of
+// re-deriving a name from the path.
+func (coderBackend *CoderBackend) RegisterName(workspaceDir, containerID string) {
+	coderBackend.nameCache[workspaceDir] = containerID
+}
+
+// resolveWorkspaceName returns the workspace name (or "workspace.agent" SSH
+// target) for a workspace dir: the registered/created name when known, the
+// configured explicit name next, and the path-derived historical name last.
+func (coderBackend *CoderBackend) resolveWorkspaceName(workspaceDir string) string {
+	if name, ok := coderBackend.nameCache[workspaceDir]; ok {
+		return name
+	}
+	if coderBackend.workspaceName != "" {
+		return coderBackend.workspaceName
+	}
+	return coderWorkspaceName(workspaceDir)
 }
 
 // Up creates a Coder workspace. workspaceDir is used to derive the workspace
@@ -37,10 +73,13 @@ func New(opts ...Option) *CoderBackend {
 // via the repo parameter. The mounts argument is ignored: Coder workspaces
 // are managed remotely and SupportsCustomMounts reports false.
 func (coderBackend *CoderBackend) Up(workspaceDir string, _ []backend.Mount) (*backend.UpResult, error) {
-	// Derive workspace name from the workspace dir path.
-	// workspaceDir format: ~/.fleet/workspaces/{fleet}/{instance}/{fleet}
-	// We need a unique, valid coder workspace name.
-	name := coderWorkspaceName(workspaceDir)
+	// The configured workspace name wins (issue #221); otherwise derive it
+	// from the workspace dir path (~/.fleet/workspaces/{fleet}/{instance}/{fleet}
+	// -> "{fleet}-{instance}").
+	name := coderBackend.workspaceName
+	if name == "" {
+		name = coderWorkspaceName(workspaceDir)
+	}
 
 	args := []string{"create", name, "--yes"}
 	if coderBackend.template != "" {
@@ -83,6 +122,11 @@ func (coderBackend *CoderBackend) Up(workspaceDir string, _ []backend.Mount) (*b
 		}
 		time.Sleep(3 * time.Second)
 	}
+
+	// Post-Up provisioning runs Exec/ExecCommand against this same backend
+	// instance with only the workspace dir in hand — record the created
+	// target so those calls address the workspace we just made.
+	coderBackend.nameCache[workspaceDir] = sshTarget
 
 	return &backend.UpResult{
 		Outcome:               "success",
@@ -180,7 +224,7 @@ func (coderBackend *CoderBackend) ExecCommandQuiet(workspaceDir string, command 
 // rawExec builds the underlying `coder ssh` *exec.Cmd shared by ExecCommand
 // and ExecCommandQuiet.
 func (coderBackend *CoderBackend) rawExec(workspaceDir string, command []string) *exec.Cmd {
-	name := coderWorkspaceName(workspaceDir)
+	name := coderBackend.resolveWorkspaceName(workspaceDir)
 	target := coderBackend.resolveSSHTarget(name)
 	args := sshArgs(target, command)
 	return exec.Command("coder", args...)
@@ -349,7 +393,7 @@ func (coderBackend *CoderBackend) Status(containerID string) backend.LiveStatus 
 
 // EditorURI returns a VS Code URI for connecting to a Coder workspace.
 func (coderBackend *CoderBackend) EditorURI(workspaceDir string, projectName string) (string, bool) {
-	name := coderWorkspaceName(workspaceDir)
+	name := workspaceName(coderBackend.resolveWorkspaceName(workspaceDir))
 	// VS Code Coder extension uses vscode://coder.coder-remote/open?... format
 	// but the simpler approach is to use `coder open vscode` which handles it.
 	// Return the workspace name so the CLI can use `coder open vscode <name>`.

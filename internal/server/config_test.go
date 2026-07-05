@@ -10,8 +10,10 @@ import (
 
 // TestSetConfigRoundTripsFullConfig is the regression guard for the config proto
 // fix: the fields that the original proto could not represent — the browser
-// tri-state toggles and the RICH coder parameters (value + template metadata) —
-// must survive a SetConfig -> GetConfig round-trip without loss.
+// tri-state toggles — must survive a SetConfig -> GetConfig round-trip without
+// loss. (The rich coder parameters this test also used to guard moved to the
+// per-fleet FleetSettings — issue #221 — and are guarded by the FleetSettings
+// round-trip test in automation_convert_test.go.)
 func TestSetConfigRoundTripsFullConfig(t *testing.T) {
 	isolateFleetDir(t)
 	svc := newService()
@@ -27,14 +29,6 @@ func TestSetConfigRoundTripsFullConfig(t *testing.T) {
 			AutoInstall:   true,
 			Repo:          ptr("git@example.com:dotfiles.git"),
 			InstallScript: ptr("install.sh"),
-		},
-		Coder: &fleetgrpc.CoderSettings{
-			Template: ptr("tmpl"),
-			Preset:   ptr("preset-a"),
-			Parameters: []*fleetgrpc.CoderParameter{
-				{Name: "p1", Value: "v1", DefaultValue: ptr("d1"), DisplayName: ptr("P One"), Description: ptr("first"), Type: ptr("string")},
-				{Name: "p2", Value: "v2"},
-			},
 		},
 		Codespaces: &fleetgrpc.CodespacesSettings{Machine: ptr("basicLinux32gb"), IdleTimeout: ptr("30m")},
 		Browser:    &fleetgrpc.BrowserSettings{MultipleBrowsersPerFleet: &multi, AutoSwitch: &autoSwitch},
@@ -68,15 +62,6 @@ func TestSetConfigRoundTripsFullConfig(t *testing.T) {
 	if out.GetBrowser().AutoSwitch == nil || out.GetBrowser().GetAutoSwitch() {
 		t.Fatalf("auto_switch tri-state lost (want explicit false): %v", out.GetBrowser().AutoSwitch)
 	}
-	// Rich coder parameters — the other regression.
-	params := out.GetCoder().GetParameters()
-	if len(params) != 2 {
-		t.Fatalf("want 2 coder params, got %d", len(params))
-	}
-	if params[0].GetName() != "p1" || params[0].GetValue() != "v1" || params[0].GetDefaultValue() != "d1" ||
-		params[0].GetDisplayName() != "P One" || params[0].GetDescription() != "first" || params[0].GetType() != "string" {
-		t.Fatalf("rich coder param[0] lost metadata: %v", params[0])
-	}
 	if out.GetCodespaces().GetMachine() != "basicLinux32gb" || out.GetCodespaces().GetIdleTimeout() != "30m" {
 		t.Fatalf("codespaces mismatch: %v", out.GetCodespaces())
 	}
@@ -92,9 +77,6 @@ func TestSetConfigRoundTripsFullConfig(t *testing.T) {
 	}
 	if loaded.BrowserSettings.MultipleBrowsersPerFleet == nil || !*loaded.BrowserSettings.MultipleBrowsersPerFleet {
 		t.Fatalf("disk config lost multiple_browsers_per_fleet")
-	}
-	if len(loaded.CoderSettings.Parameters) != 2 || loaded.CoderSettings.Parameters[0].DisplayName != "P One" {
-		t.Fatalf("disk config lost rich coder params: %+v", loaded.CoderSettings.Parameters)
 	}
 }
 

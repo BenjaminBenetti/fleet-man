@@ -28,22 +28,16 @@ func TestTriggersConverterRoundTrip(t *testing.T) {
 
 // TestConfigToProtoEncodesFullConfig guards the client-side legacy->proto
 // converter against drift from the server's reverse mapper: every field the
-// settings page can edit — including the browser tri-states and the rich coder
-// parameters that the original proto could not represent — must be carried.
+// settings page can edit — including the browser tri-states that the original
+// proto could not represent — must be carried.
 func TestConfigToProtoEncodesFullConfig(t *testing.T) {
 	vim := false
 	multi := true
 	auto := false
 	c := &state.Config{
-		GeneralSettings:  state.GeneralSettings{TmuxVimKeys: &vim},
-		AgentSettings:    state.AgentSettings{ToolSelection: state.AgentToolCodex},
-		DotfilesSettings: state.DotfilesSettings{AutoInstall: true, RepoURL: "git@x:d.git", InstallScript: "i.sh"},
-		CoderSettings: state.CoderSettings{
-			Template: "tmpl", Preset: "p",
-			Parameters: []state.CoderParameter{
-				{Name: "n1", Value: "v1", DefaultValue: "d1", DisplayName: "N1", Description: "desc", Type: "string"},
-			},
-		},
+		GeneralSettings:    state.GeneralSettings{TmuxVimKeys: &vim},
+		AgentSettings:      state.AgentSettings{ToolSelection: state.AgentToolCodex},
+		DotfilesSettings:   state.DotfilesSettings{AutoInstall: true, RepoURL: "git@x:d.git", InstallScript: "i.sh"},
 		CodespacesSettings: state.CodespacesSettings{Machine: "m1", IdleTimeout: "30m"},
 		BrowserSettings:    state.BrowserSettings{MultipleBrowsersPerFleet: &multi, AutoSwitch: &auto},
 		DefaultBackend:     string(fleet.BackendCoder),
@@ -66,16 +60,33 @@ func TestConfigToProtoEncodesFullConfig(t *testing.T) {
 	if pc.GetBrowser().AutoSwitch == nil || pc.GetBrowser().GetAutoSwitch() {
 		t.Fatalf("auto_switch tri-state lost (want explicit false): %v", pc.GetBrowser().AutoSwitch)
 	}
-	ps := pc.GetCoder().GetParameters()
-	if len(ps) != 1 || ps[0].GetName() != "n1" || ps[0].GetDefaultValue() != "d1" ||
-		ps[0].GetDisplayName() != "N1" || ps[0].GetDescription() != "desc" || ps[0].GetType() != "string" {
-		t.Fatalf("rich coder param lost: %v", ps)
-	}
 	if pc.GetCodespaces().GetMachine() != "m1" || pc.GetCodespaces().GetIdleTimeout() != "30m" {
 		t.Fatalf("codespaces: %v", pc.GetCodespaces())
 	}
 	if pc.GetDefaultBackend() != fleetgrpc.BackendType_BACKEND_TYPE_CODER {
 		t.Fatalf("default_backend: %v", pc.GetDefaultBackend())
+	}
+}
+
+// TestCoderFleetSettingsClientRoundTrip locks in that the TUI's client-side
+// FleetSettings converters carry the per-fleet coder settings (issue #221) in
+// BOTH directions: the edit-fleet dialog persists via fleetSettingsToProto
+// (SetFleetSettings) and renders via protoFleetToLegacy, so a field dropped on
+// either side is silently lost — exactly the client-converter gap that only a
+// client round-trip test catches.
+func TestCoderFleetSettingsClientRoundTrip(t *testing.T) {
+	in := fleet.FleetSettings{
+		CoderTemplate:      "tmpl",
+		CoderPreset:        "preset-a",
+		CoderWorkspaceName: "myws",
+		CoderParameters: []fleet.CoderParameter{
+			{Name: "p1", Value: "v1", DefaultValue: "d1", DisplayName: "P One", Description: "first", Type: "string"},
+			{Name: "p2", Value: "${GIT_URL}"},
+		},
+	}
+	back := protoFleetToLegacy(&fleetgrpc.Fleet{Name: "f", Settings: fleetSettingsToProto(in)})
+	if !reflect.DeepEqual(back.Settings, in) {
+		t.Fatalf("coder fleet-settings round trip:\n got %+v\nwant %+v", back.Settings, in)
 	}
 }
 

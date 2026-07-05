@@ -33,8 +33,6 @@ type (
 	GeneralSettings    = state.GeneralSettings
 	AgentSettings      = state.AgentSettings
 	DotfilesSettings   = state.DotfilesSettings
-	CoderSettings      = state.CoderSettings
-	CoderParameter     = state.CoderParameter
 	CodespacesSettings = state.CodespacesSettings
 	BrowserSettings    = state.BrowserSettings
 	AgentTool          = state.AgentTool
