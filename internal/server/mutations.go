@@ -6,6 +6,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -35,7 +36,7 @@ func (s *service) mutate(apply func(*state.State) error) (*fleetgrpc.State, erro
 		if err := apply(st); err != nil {
 			return err
 		}
-		snapshot = stateToProto(st)
+		snapshot = protoconv.StateToProto(st)
 		return nil
 	})
 	if err != nil {
@@ -119,7 +120,7 @@ func (s *service) DestroyFleet(_ context.Context, req *fleetgrpc.DestroyFleetReq
 // SetFleetSettings replaces a fleet's settings wholesale (the caller sends the
 // full FleetSettings, preserving tri-state presence such as PreferFleetLaunch).
 func (s *service) SetFleetSettings(_ context.Context, req *fleetgrpc.SetFleetSettingsRequest) (*fleetgrpc.MutationReply, error) {
-	settings := protoFleetSettingsToLegacy(req.GetSettings())
+	settings := protoconv.FleetSettingsFromProto(req.GetSettings())
 	// Authoritative validation of user-supplied custom-mount paths: the TUI
 	// validates for UX, but the server is the trust boundary — a custom mount
 	// path becomes a host filesystem segment, so reject traversal/escape here
@@ -269,117 +270,4 @@ func (s *service) SetLastSeenVersion(_ context.Context, req *fleetgrpc.SetLastSe
 // group id.
 func groupLayoutKey(instanceName, groupID string) string {
 	return instanceName + "/" + groupID
-}
-
-// protoFleetSettingsToLegacy maps a proto FleetSettings back to the legacy
-// struct. The three mount flags are plain bools; HomeDir maps from the optional
-// string (empty when unset); PreferFleetLaunch preserves the nil-vs-set
-// tri-state.
-func protoFleetSettingsToLegacy(ps *fleetgrpc.FleetSettings) fleet.FleetSettings {
-	s := fleet.FleetSettings{}
-	if ps == nil {
-		return s
-	}
-	s.ClaudeCodeMount = ps.GetClaudeCodeMount()
-	s.CodexMount = ps.GetCodexMount()
-	s.GhMount = ps.GetGhMount()
-	s.AuggieMount = ps.GetAuggieMount()
-	s.BuildkitServer = ps.GetBuildkitServer()
-	s.CustomMounts = ps.GetCustomMounts()
-	s.DebCacheServer = ps.GetDebCacheServer()
-	s.ImageCacheServer = ps.GetImageCacheServer()
-	s.LayoutPresets = protoLayoutPresetsToLegacy(ps.GetLayoutPresets())
-	s.Agents = protoAgentsToLegacy(ps.GetAgents())
-	s.Triggers = protoTriggersToLegacy(ps.GetTriggers())
-	s.HomeDir = ps.GetHomeDir()
-	if ps.PreferFleetLaunch != nil {
-		v := ps.GetPreferFleetLaunch()
-		s.PreferFleetLaunch = &v
-	}
-	s.CoderTemplate = ps.GetCoderTemplate()
-	s.CoderPreset = ps.GetCoderPreset()
-	s.CoderWorkspaceName = ps.GetCoderWorkspaceName()
-	s.CoderParameters = protoCoderParametersToLegacy(ps.GetCoderParameters())
-	return s
-}
-
-// protoCoderParametersToLegacy maps the repeated proto CoderParameter back to
-// the legacy slice (nil for an empty list, matching the `,omitempty` JSON tag).
-func protoCoderParametersToLegacy(in []*fleetgrpc.CoderParameter) []fleet.CoderParameter {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]fleet.CoderParameter, 0, len(in))
-	for _, p := range in {
-		out = append(out, fleet.CoderParameter{
-			Name:         p.GetName(),
-			Value:        p.GetValue(),
-			DefaultValue: p.GetDefaultValue(),
-			DisplayName:  p.GetDisplayName(),
-			Description:  p.GetDescription(),
-			Type:         p.GetType(),
-		})
-	}
-	return out
-}
-
-// protoAgentsToLegacy maps the repeated proto Agent back to the legacy slice
-// (nil for an empty list, matching the `,omitempty` JSON tag).
-func protoAgentsToLegacy(in []*fleetgrpc.Agent) []fleet.Agent {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]fleet.Agent, 0, len(in))
-	for _, a := range in {
-		out = append(out, fleet.Agent{
-			Name:         a.GetName(),
-			Command:      a.GetCommand(),
-			SystemPrompt: a.GetSystemPrompt(),
-			Backend:      fleet.BackendType(backendProtoToString(a.GetBackend())),
-		})
-	}
-	return out
-}
-
-// protoTriggersToLegacy maps the repeated proto Trigger back to the legacy
-// slice (nil for an empty list).
-func protoTriggersToLegacy(in []*fleetgrpc.Trigger) []fleet.Trigger {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]fleet.Trigger, 0, len(in))
-	for _, t := range in {
-		out = append(out, fleet.Trigger{
-			Name:        t.GetName(),
-			Type:        fleet.TriggerType(t.GetType()),
-			AgentNames:  t.GetAgentNames(),
-			Prompt:      t.GetPrompt(),
-			Cron:        t.GetCron(),
-			Script:      t.GetScript(),
-			WebhookName: t.GetWebhookName(),
-			FilterType:  fleet.WebhookFilterType(t.GetFilterType()),
-			Regex:       t.GetRegex(),
-			JSONPath:    t.GetJsonPath(),
-			JSONValue:   t.GetJsonValue(),
-			Disabled:    t.GetDisabled(),
-		})
-	}
-	return out
-}
-
-// protoLayoutPresetsToLegacy maps the repeated proto LayoutPreset back to the
-// legacy slice (nil for an empty list, matching the `,omitempty` JSON tag).
-func protoLayoutPresetsToLegacy(in []*fleetgrpc.LayoutPreset) []fleet.LayoutPreset {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]fleet.LayoutPreset, 0, len(in))
-	for _, p := range in {
-		out = append(out, fleet.LayoutPreset{
-			Name:         p.GetName(),
-			Layout:       p.GetLayout(),
-			PaneCommands: p.GetPaneCommands(),
-		})
-	}
-	return out
 }

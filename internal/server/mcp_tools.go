@@ -16,6 +16,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/tui"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/grpc/status"
@@ -383,7 +384,7 @@ func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpI
 		if err != nil {
 			return nil, FleetJobOutput{}, err
 		}
-		backend = protoBackend(bt)
+		backend = protoconv.BackendToProto(bt)
 	}
 	// Verbose is left false (unlike `fleet up`): MCP returns only the final
 	// JobDone result, never a live provisioning stream, so verbose output would

@@ -21,6 +21,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/imagecache"
 	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -406,7 +407,7 @@ func (s *service) pushState() {
 	if err != nil {
 		return
 	}
-	snapshot := stateToProto(st)
+	snapshot := protoconv.StateToProto(st)
 	s.hub.post(func(h *hub) { h.setState(snapshot) })
 }
 
@@ -425,7 +426,7 @@ func loadInstanceSnapshot(fleetName, instanceName string) *fleetgrpc.Instance {
 	if err != nil {
 		return nil
 	}
-	return instanceToProto(inst)
+	return protoconv.InstanceToProto(inst)
 }
 
 // --- RPC handlers ---

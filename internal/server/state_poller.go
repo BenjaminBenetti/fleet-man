@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -42,6 +43,6 @@ func loadAndPush(h *hub) {
 		// the previous snapshot and retry next tick — never push a partial state.
 		return
 	}
-	snapshot := stateToProto(st)
+	snapshot := protoconv.StateToProto(st)
 	h.post(func(h *hub) { h.setState(snapshot) })
 }

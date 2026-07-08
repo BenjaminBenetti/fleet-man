@@ -10,6 +10,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"google.golang.org/grpc"
 )
 
@@ -141,7 +142,7 @@ var createInstanceRemote = func(fleetName, instanceName, remote, branch string, 
 		req := &fleetgrpc.CreateInstanceRequest{
 			Fleet:    fleetName,
 			Instance: instanceName,
-			Backend:  backendStringToProto(string(backendType)),
+			Backend:  protoconv.BackendToProto(backendType),
 		}
 		if remote != "" {
 			req.Remote = &remote
@@ -325,7 +326,7 @@ var setFleetSettingsRemote = func(fleetName string, s fleet.FleetSettings) error
 	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
 		_, err := svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{
 			Fleet:    fleetName,
-			Settings: fleetSettingsToProto(s),
+			Settings: protoconv.FleetSettingsToProto(s),
 		})
 		return err
 	})
@@ -398,285 +399,18 @@ var setLastSeenVersionRemote = func(version string) error {
 // edited Config).
 var setConfigRemote = func(c *configutil.Config) error {
 	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
-		_, err := svc.SetConfig(ctx, &fleetgrpc.SetConfigRequest{Config: configToProto(c)})
+		_, err := svc.SetConfig(ctx, &fleetgrpc.SetConfigRequest{Config: protoconv.ConfigToProto(c)})
 		return err
 	})
 }
 
-// --- Client-side legacy -> proto converters --------------------------------
-//
-// These mirror internal/server/convert.go + config.go but live here because the
-// client must not import the server. The duplication is transitional: when proto
-// becomes the model (Phase 5) the legacy structs — and these mappers — go away.
-
-func fleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
-	ps := &fleetgrpc.FleetSettings{
-		ClaudeCodeMount:  s.ClaudeCodeMount,
-		CodexMount:       s.CodexMount,
-		GhMount:          s.GhMount,
-		AuggieMount:      s.AuggieMount,
-		BuildkitServer:   s.BuildkitServer,
-		CustomMounts:     s.CustomMounts,
-		DebCacheServer:   s.DebCacheServer,
-		ImageCacheServer: s.ImageCacheServer,
-		LayoutPresets:    layoutPresetsToProto(s.LayoutPresets),
-		Agents:           agentsToProto(s.Agents),
-		Triggers:         triggersToProto(s.Triggers),
-		CoderParameters:  coderParametersToProto(s.CoderParameters),
-	}
-	if s.HomeDir != "" {
-		ps.HomeDir = &s.HomeDir
-	}
-	if s.PreferFleetLaunch != nil {
-		v := *s.PreferFleetLaunch
-		ps.PreferFleetLaunch = &v
-	}
-	if s.CoderTemplate != "" {
-		ps.CoderTemplate = strp(s.CoderTemplate)
-	}
-	if s.CoderPreset != "" {
-		ps.CoderPreset = strp(s.CoderPreset)
-	}
-	if s.CoderWorkspaceName != "" {
-		ps.CoderWorkspaceName = strp(s.CoderWorkspaceName)
-	}
-	return ps
-}
-
-// coderParametersToProto mirrors the server-side converter: the fleet's coder
-// parameter bindings, template metadata included, nil for an empty list.
-func coderParametersToProto(in []fleet.CoderParameter) []*fleetgrpc.CoderParameter {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]*fleetgrpc.CoderParameter, 0, len(in))
-	for _, p := range in {
-		pp := &fleetgrpc.CoderParameter{Name: p.Name, Value: p.Value}
-		if p.DefaultValue != "" {
-			pp.DefaultValue = strp(p.DefaultValue)
-		}
-		if p.DisplayName != "" {
-			pp.DisplayName = strp(p.DisplayName)
-		}
-		if p.Description != "" {
-			pp.Description = strp(p.Description)
-		}
-		if p.Type != "" {
-			pp.Type = strp(p.Type)
-		}
-		out = append(out, pp)
-	}
-	return out
-}
-
-// protoCoderParametersToLegacy is the read-side inverse (nil for empty).
-func protoCoderParametersToLegacy(in []*fleetgrpc.CoderParameter) []fleet.CoderParameter {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]fleet.CoderParameter, 0, len(in))
-	for _, p := range in {
-		out = append(out, fleet.CoderParameter{
-			Name:         p.GetName(),
-			Value:        p.GetValue(),
-			DefaultValue: p.GetDefaultValue(),
-			DisplayName:  p.GetDisplayName(),
-			Description:  p.GetDescription(),
-			Type:         p.GetType(),
-		})
-	}
-	return out
-}
-
-func layoutPresetsToProto(in []fleet.LayoutPreset) []*fleetgrpc.LayoutPreset {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]*fleetgrpc.LayoutPreset, 0, len(in))
-	for _, p := range in {
-		out = append(out, &fleetgrpc.LayoutPreset{
-			Name:         p.Name,
-			Layout:       p.Layout,
-			PaneCommands: p.PaneCommands,
-		})
-	}
-	return out
-}
-
-func agentsToProto(in []fleet.Agent) []*fleetgrpc.Agent {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]*fleetgrpc.Agent, 0, len(in))
-	for _, a := range in {
-		out = append(out, &fleetgrpc.Agent{
-			Name:         a.Name,
-			Command:      a.Command,
-			SystemPrompt: a.SystemPrompt,
-			Backend:      backendStringToProto(string(a.Backend)),
-		})
-	}
-	return out
-}
-
-func protoAgentsToLegacy(in []*fleetgrpc.Agent) []fleet.Agent {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]fleet.Agent, 0, len(in))
-	for _, a := range in {
-		out = append(out, fleet.Agent{
-			Name:         a.GetName(),
-			Command:      a.GetCommand(),
-			SystemPrompt: a.GetSystemPrompt(),
-			Backend:      fleet.BackendType(backendProtoToString(a.GetBackend())),
-		})
-	}
-	return out
-}
-
-func triggersToProto(in []fleet.Trigger) []*fleetgrpc.Trigger {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]*fleetgrpc.Trigger, 0, len(in))
-	for _, t := range in {
-		out = append(out, &fleetgrpc.Trigger{
-			Name:        t.Name,
-			Type:        string(t.Type),
-			AgentNames:  t.AgentNames,
-			Prompt:      t.Prompt,
-			Cron:        t.Cron,
-			Script:      t.Script,
-			WebhookName: t.WebhookName,
-			FilterType:  string(t.FilterType),
-			Regex:       t.Regex,
-			JsonPath:    t.JSONPath,
-			JsonValue:   t.JSONValue,
-			Disabled:    t.Disabled,
-		})
-	}
-	return out
-}
-
-func protoTriggersToLegacy(in []*fleetgrpc.Trigger) []fleet.Trigger {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]fleet.Trigger, 0, len(in))
-	for _, t := range in {
-		out = append(out, fleet.Trigger{
-			Name:        t.GetName(),
-			Type:        fleet.TriggerType(t.GetType()),
-			AgentNames:  t.GetAgentNames(),
-			Prompt:      t.GetPrompt(),
-			Cron:        t.GetCron(),
-			Script:      t.GetScript(),
-			WebhookName: t.GetWebhookName(),
-			FilterType:  fleet.WebhookFilterType(t.GetFilterType()),
-			Regex:       t.GetRegex(),
-			JSONPath:    t.GetJsonPath(),
-			JSONValue:   t.GetJsonValue(),
-			Disabled:    t.GetDisabled(),
-		})
-	}
-	return out
-}
-
-func protoLayoutPresetsToLegacy(in []*fleetgrpc.LayoutPreset) []fleet.LayoutPreset {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]fleet.LayoutPreset, 0, len(in))
-	for _, p := range in {
-		out = append(out, fleet.LayoutPreset{
-			Name:         p.GetName(),
-			Layout:       p.GetLayout(),
-			PaneCommands: p.GetPaneCommands(),
-		})
-	}
-	return out
-}
-
-func configToProto(c *configutil.Config) *fleetgrpc.Config {
-	if c == nil {
-		return &fleetgrpc.Config{}
-	}
-	pc := &fleetgrpc.Config{
-		General:    &fleetgrpc.GeneralSettings{},
-		Agent:      &fleetgrpc.AgentSettings{ToolSelection: string(c.AgentSettings.ToolSelection)},
-		Dotfiles:   &fleetgrpc.DotfilesSettings{AutoInstall: c.DotfilesSettings.AutoInstall},
-		Codespaces: &fleetgrpc.CodespacesSettings{},
-		Browser:    &fleetgrpc.BrowserSettings{},
-		RemoteMcp: &fleetgrpc.RemoteMcpSettings{
-			Enabled:        c.RemoteMcpSettings.Enabled,
-			GatewayUrl:     c.RemoteMcpSettings.GatewayURL,
-			FleetEnabled:   c.RemoteMcpSettings.FleetEnabled,
-			WebhookEnabled: c.RemoteMcpSettings.WebhookEnabled,
-		},
-		DefaultBackend: backendStringToProto(c.DefaultBackend),
-	}
-
-	if c.GeneralSettings.TmuxVimKeys != nil {
-		v := *c.GeneralSettings.TmuxVimKeys
-		pc.General.TmuxVimKeys = &v
-	}
-	if c.GeneralSettings.ShowHelpText != nil {
-		v := *c.GeneralSettings.ShowHelpText
-		pc.General.ShowHelpText = &v
-	}
-
-	if c.DotfilesSettings.RepoURL != "" {
-		pc.Dotfiles.Repo = strp(c.DotfilesSettings.RepoURL)
-	}
-	if c.DotfilesSettings.InstallScript != "" {
-		pc.Dotfiles.InstallScript = strp(c.DotfilesSettings.InstallScript)
-	}
-
-	if c.CodespacesSettings.Machine != "" {
-		pc.Codespaces.Machine = strp(c.CodespacesSettings.Machine)
-	}
-	if c.CodespacesSettings.IdleTimeout != "" {
-		pc.Codespaces.IdleTimeout = strp(c.CodespacesSettings.IdleTimeout)
-	}
-	if c.CodespacesSettings.DevcontainerPath != "" {
-		pc.Codespaces.DevcontainerPath = strp(c.CodespacesSettings.DevcontainerPath)
-	}
-
-	if c.BrowserSettings.MultipleBrowsersPerFleet != nil {
-		v := *c.BrowserSettings.MultipleBrowsersPerFleet
-		pc.Browser.MultipleBrowsersPerFleet = &v
-	}
-	if c.BrowserSettings.AutoSwitch != nil {
-		v := *c.BrowserSettings.AutoSwitch
-		pc.Browser.AutoSwitch = &v
-	}
-
-	return pc
-}
-
-func backendStringToProto(b string) fleetgrpc.BackendType {
-	switch fleet.BackendType(b) {
-	case fleet.BackendDevcontainer:
-		return fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER
-	case fleet.BackendCoder:
-		return fleetgrpc.BackendType_BACKEND_TYPE_CODER
-	case fleet.BackendCodespaces:
-		return fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES
-	default:
-		return fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED
-	}
-}
-
-func strp(s string) *string { return &s }
-
 // --- Read path: server snapshot -> legacy render model -----------------------
 //
-// The TUI still renders from the legacy *configutil.State / *configutil.Config, but it now
-// SOURCES them from the server (GetState/GetConfig + the Watch stream) rather
-// than reading state.json/config.json off disk. These proto->legacy converters
-// are the inverse of the ones above + internal/server/convert.go; they retire
-// with the legacy structs in P5.
+// The TUI still renders from the legacy *configutil.State / *configutil.Config,
+// but it SOURCES them from the server (GetState/GetConfig + the Watch stream)
+// rather than reading state.json/config.json off disk. The proto<->legacy
+// mapping itself lives in internal/protoconv (shared with the server and CLI);
+// it retires with the legacy structs in P5.
 
 // fetchStateLegacy pulls the authoritative persisted state from the server and
 // converts it to the legacy model. Package var so tests can stub it.
@@ -691,10 +425,12 @@ var fetchStateLegacy = func() (*configutil.State, error) {
 	if err != nil {
 		return nil, err
 	}
-	return protoStateToLegacy(reply.GetState()), nil
+	return protoconv.StateFromProto(reply.GetState()), nil
 }
 
-// fetchConfigLegacy pulls the config from the server and converts it.
+// fetchConfigLegacy pulls the config from the server and converts it. The
+// DefaultConfig base means absent optional fields render as their defaults
+// (unlike the server's SetConfig write path, which starts from a zero Config).
 var fetchConfigLegacy = func() (*configutil.Config, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), mutationTimeout)
 	defer cancel()
@@ -706,174 +442,5 @@ var fetchConfigLegacy = func() (*configutil.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return protoConfigToLegacy(reply.GetConfig()), nil
-}
-
-func protoStateToLegacy(ps *fleetgrpc.State) *configutil.State {
-	st := &configutil.State{
-		Fleets:       make(map[string]*fleet.Fleet),
-		GroupLayouts: make(map[string]configutil.GroupLayout),
-	}
-	if ps == nil {
-		return st
-	}
-	for name, pf := range ps.GetFleets() {
-		st.Fleets[name] = protoFleetToLegacy(pf)
-	}
-	for key, pgl := range ps.GetGroupLayouts() {
-		st.GroupLayouts[key] = configutil.GroupLayout{
-			GroupID:      pgl.GetGroupId(),
-			InstanceName: pgl.GetInstanceName(),
-			Sessions:     pgl.GetSessions(),
-			Layout:       pgl.GetLayout(),
-			PaneCount:    int(pgl.GetPaneCount()),
-		}
-	}
-	st.LastSeenVersion = ps.GetLastSeenVersion()
-	return st
-}
-
-func protoFleetToLegacy(pf *fleetgrpc.Fleet) *fleet.Fleet {
-	f := &fleet.Fleet{
-		Name:      pf.GetName(),
-		Remote:    pf.GetRemote(),
-		Instances: make([]*fleet.Instance, 0, len(pf.GetInstances())),
-	}
-	if ps := pf.GetSettings(); ps != nil {
-		f.Settings = fleet.FleetSettings{
-			ClaudeCodeMount:    ps.GetClaudeCodeMount(),
-			CodexMount:         ps.GetCodexMount(),
-			GhMount:            ps.GetGhMount(),
-			AuggieMount:        ps.GetAuggieMount(),
-			BuildkitServer:     ps.GetBuildkitServer(),
-			CustomMounts:       ps.GetCustomMounts(),
-			DebCacheServer:     ps.GetDebCacheServer(),
-			ImageCacheServer:   ps.GetImageCacheServer(),
-			LayoutPresets:      protoLayoutPresetsToLegacy(ps.GetLayoutPresets()),
-			Agents:             protoAgentsToLegacy(ps.GetAgents()),
-			Triggers:           protoTriggersToLegacy(ps.GetTriggers()),
-			HomeDir:            ps.GetHomeDir(),
-			CoderTemplate:      ps.GetCoderTemplate(),
-			CoderPreset:        ps.GetCoderPreset(),
-			CoderWorkspaceName: ps.GetCoderWorkspaceName(),
-			CoderParameters:    protoCoderParametersToLegacy(ps.GetCoderParameters()),
-		}
-		if ps.PreferFleetLaunch != nil {
-			v := ps.GetPreferFleetLaunch()
-			f.Settings.PreferFleetLaunch = &v
-		}
-	}
-	for _, pi := range pf.GetInstances() {
-		f.Instances = append(f.Instances, protoInstanceToLegacy(pi))
-	}
-	return f
-}
-
-func protoInstanceToLegacy(pi *fleetgrpc.Instance) *fleet.Instance {
-	inst := &fleet.Instance{
-		Name:         pi.GetName(),
-		DisplayName:  pi.GetDisplayName(),
-		ContainerID:  pi.GetContainerId(),
-		Config:       pi.GetConfig(),
-		WorkspaceDir: pi.GetWorkspaceDir(),
-		Status:       statusProtoToLegacy(pi.GetStatus()),
-		Error:        pi.GetError(),
-		Backend:      fleet.BackendType(backendProtoToString(pi.GetBackend())),
-		Tag:          pi.GetTag(),
-		Color:        pi.GetColor(),
-		Branch:       pi.GetBranch(),
-		Automated:    pi.GetAutomated(),
-	}
-	if ts := pi.GetCreatedAt(); ts != nil {
-		inst.CreatedAt = ts.AsTime()
-	}
-	return inst
-}
-
-func statusProtoToLegacy(s fleetgrpc.InstanceStatus) fleet.InstanceStatus {
-	switch s {
-	case fleetgrpc.InstanceStatus_INSTANCE_STATUS_CREATING:
-		return fleet.StatusCreating
-	case fleetgrpc.InstanceStatus_INSTANCE_STATUS_CLONING:
-		return fleet.StatusCloning
-	case fleetgrpc.InstanceStatus_INSTANCE_STATUS_RUNNING:
-		return fleet.StatusRunning
-	case fleetgrpc.InstanceStatus_INSTANCE_STATUS_STOPPED:
-		return fleet.StatusStopped
-	case fleetgrpc.InstanceStatus_INSTANCE_STATUS_FAILED:
-		return fleet.StatusFailed
-	case fleetgrpc.InstanceStatus_INSTANCE_STATUS_STOPPING:
-		return fleet.StatusStopping
-	case fleetgrpc.InstanceStatus_INSTANCE_STATUS_STARTING:
-		return fleet.StatusStarting
-	case fleetgrpc.InstanceStatus_INSTANCE_STATUS_DELETING:
-		return fleet.StatusDeleting
-	case fleetgrpc.InstanceStatus_INSTANCE_STATUS_REBUILDING:
-		return fleet.StatusRebuilding
-	default:
-		return ""
-	}
-}
-
-// backendProtoToString maps the backend enum to the legacy string ("" for
-// UNSPECIFIED / not recorded).
-func backendProtoToString(b fleetgrpc.BackendType) string {
-	switch b {
-	case fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER:
-		return string(fleet.BackendDevcontainer)
-	case fleetgrpc.BackendType_BACKEND_TYPE_CODER:
-		return string(fleet.BackendCoder)
-	case fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES:
-		return string(fleet.BackendCodespaces)
-	default:
-		return ""
-	}
-}
-
-func protoConfigToLegacy(pc *fleetgrpc.Config) *configutil.Config {
-	c := configutil.DefaultConfig()
-	if pc == nil {
-		return c
-	}
-	if g := pc.GetGeneral(); g != nil {
-		if g.TmuxVimKeys != nil {
-			v := g.GetTmuxVimKeys()
-			c.GeneralSettings.TmuxVimKeys = &v
-		}
-		if g.ShowHelpText != nil {
-			v := g.GetShowHelpText()
-			c.GeneralSettings.ShowHelpText = &v
-		}
-	}
-	if a := pc.GetAgent(); a != nil && a.GetToolSelection() != "" {
-		c.AgentSettings.ToolSelection = configutil.AgentTool(a.GetToolSelection())
-	}
-	if d := pc.GetDotfiles(); d != nil {
-		c.DotfilesSettings.AutoInstall = d.GetAutoInstall()
-		c.DotfilesSettings.RepoURL = d.GetRepo()
-		c.DotfilesSettings.InstallScript = d.GetInstallScript()
-	}
-	if cs := pc.GetCodespaces(); cs != nil {
-		c.CodespacesSettings.Machine = cs.GetMachine()
-		c.CodespacesSettings.IdleTimeout = cs.GetIdleTimeout()
-		c.CodespacesSettings.DevcontainerPath = cs.GetDevcontainerPath()
-	}
-	if b := pc.GetBrowser(); b != nil {
-		if b.MultipleBrowsersPerFleet != nil {
-			v := b.GetMultipleBrowsersPerFleet()
-			c.BrowserSettings.MultipleBrowsersPerFleet = &v
-		}
-		if b.AutoSwitch != nil {
-			v := b.GetAutoSwitch()
-			c.BrowserSettings.AutoSwitch = &v
-		}
-	}
-	if rm := pc.GetRemoteMcp(); rm != nil {
-		c.RemoteMcpSettings.Enabled = rm.GetEnabled()
-		c.RemoteMcpSettings.GatewayURL = rm.GetGatewayUrl()
-		c.RemoteMcpSettings.FleetEnabled = rm.GetFleetEnabled()
-		c.RemoteMcpSettings.WebhookEnabled = rm.GetWebhookEnabled()
-	}
-	c.DefaultBackend = backendProtoToString(pc.GetDefaultBackend())
-	return c
+	return protoconv.ConfigFromProto(reply.GetConfig(), configutil.DefaultConfig()), nil
 }

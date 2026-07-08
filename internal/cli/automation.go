@@ -7,6 +7,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 )
 
 // automation.go is the shared plumbing for the `fleet agent` and `fleet trigger`
@@ -42,8 +43,8 @@ var loadAutomation = func(ctx context.Context, fleetName string) (fleet.FleetSet
 	}
 	ps := pf.GetSettings()
 	return fleet.FleetSettings{
-		Agents:   protoAgentsToFleet(ps.GetAgents()),
-		Triggers: protoTriggersToFleet(ps.GetTriggers()),
+		Agents:   protoconv.AgentsFromProto(ps.GetAgents()),
+		Triggers: protoconv.TriggersFromProto(ps.GetTriggers()),
 	}, nil
 }
 
@@ -91,119 +92,18 @@ var mutateAutomation = func(ctx context.Context, fleetName string, fn func(fleet
 	}
 
 	settings := fleet.FleetSettings{
-		Agents:   protoAgentsToFleet(ps.GetAgents()),
-		Triggers: protoTriggersToFleet(ps.GetTriggers()),
+		Agents:   protoconv.AgentsFromProto(ps.GetAgents()),
+		Triggers: protoconv.TriggersFromProto(ps.GetTriggers()),
 	}
 	settings, err = fn(settings)
 	if err != nil {
 		return err
 	}
-	ps.Agents = fleetAgentsToProto(settings.Agents)
-	ps.Triggers = fleetTriggersToProto(settings.Triggers)
+	ps.Agents = protoconv.AgentsToProto(settings.Agents)
+	ps.Triggers = protoconv.TriggersToProto(settings.Triggers)
 
 	if _, err := svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{Fleet: fleetName, Settings: ps}); err != nil {
 		return err
 	}
 	return nil
-}
-
-// --- proto <-> domain converters (agents/triggers only) ---
-//
-// These mirror the server-side converters (internal/server/convert.go) and the
-// TUI's (internal/tui/client.go). The duplication is the depguard boundary's
-// price: client code cannot import the server, so each side maps the shared
-// proto wire types to its own domain view.
-
-func protoAgentsToFleet(in []*fleetgrpc.Agent) []fleet.Agent {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]fleet.Agent, 0, len(in))
-	for _, a := range in {
-		out = append(out, fleet.Agent{
-			Name:         a.GetName(),
-			Command:      a.GetCommand(),
-			SystemPrompt: a.GetSystemPrompt(),
-			Backend:      fleet.BackendType(backendProtoToString(a.GetBackend())),
-		})
-	}
-	return out
-}
-
-func fleetAgentsToProto(in []fleet.Agent) []*fleetgrpc.Agent {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]*fleetgrpc.Agent, 0, len(in))
-	for _, a := range in {
-		out = append(out, &fleetgrpc.Agent{
-			Name:         a.Name,
-			Command:      a.Command,
-			SystemPrompt: a.SystemPrompt,
-			Backend:      backendTypeToProto(a.Backend),
-		})
-	}
-	return out
-}
-
-func protoTriggersToFleet(in []*fleetgrpc.Trigger) []fleet.Trigger {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]fleet.Trigger, 0, len(in))
-	for _, t := range in {
-		out = append(out, fleet.Trigger{
-			Name:        t.GetName(),
-			Type:        fleet.TriggerType(t.GetType()),
-			AgentNames:  t.GetAgentNames(),
-			Prompt:      t.GetPrompt(),
-			Cron:        t.GetCron(),
-			Script:      t.GetScript(),
-			WebhookName: t.GetWebhookName(),
-			FilterType:  fleet.WebhookFilterType(t.GetFilterType()),
-			Regex:       t.GetRegex(),
-			JSONPath:    t.GetJsonPath(),
-			JSONValue:   t.GetJsonValue(),
-		})
-	}
-	return out
-}
-
-func fleetTriggersToProto(in []fleet.Trigger) []*fleetgrpc.Trigger {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]*fleetgrpc.Trigger, 0, len(in))
-	for _, t := range in {
-		out = append(out, &fleetgrpc.Trigger{
-			Name:        t.Name,
-			Type:        string(t.Type),
-			AgentNames:  t.AgentNames,
-			Prompt:      t.Prompt,
-			Cron:        t.Cron,
-			Script:      t.Script,
-			WebhookName: t.WebhookName,
-			FilterType:  string(t.FilterType),
-			Regex:       t.Regex,
-			JsonPath:    t.JSONPath,
-			JsonValue:   t.JSONValue,
-		})
-	}
-	return out
-}
-
-// backendProtoToString maps the backend enum to the legacy string ("" for
-// UNSPECIFIED, which NormalizeAgent then defaults to devcontainer). The reverse,
-// backendTypeToProto, lives in jobs.go.
-func backendProtoToString(b fleetgrpc.BackendType) string {
-	switch b {
-	case fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER:
-		return string(fleet.BackendDevcontainer)
-	case fleetgrpc.BackendType_BACKEND_TYPE_CODER:
-		return string(fleet.BackendCoder)
-	case fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES:
-		return string(fleet.BackendCodespaces)
-	default:
-		return ""
-	}
 }

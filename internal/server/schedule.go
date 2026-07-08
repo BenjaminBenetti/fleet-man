@@ -17,6 +17,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/tui"
 )
@@ -539,7 +540,7 @@ var createAutomationInstance = func(s *service, fleetName string, ag fleet.Agent
 	if _, err := s.startCreateInstanceJob(&fleetgrpc.CreateInstanceRequest{
 		Fleet:    fleetName,
 		Instance: instName,
-		Backend:  backendToProto(ag.Backend),
+		Backend:  protoconv.BackendToProto(ag.Backend),
 	}, true); err != nil {
 		return "", err
 	}

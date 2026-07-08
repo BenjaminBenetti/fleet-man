@@ -18,7 +18,6 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/atomicfile"
-	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -295,19 +294,4 @@ func mergeCtx(primary, secondary context.Context) (context.Context, context.Canc
 	ctx, cancel := context.WithCancel(primary)
 	stop := context.AfterFunc(secondary, cancel)
 	return ctx, func() { stop(); cancel() }
-}
-
-// protoBackend maps a concrete backend type to its proto enum. An empty/unknown
-// type becomes UNSPECIFIED, which the server resolves to the configured default.
-func protoBackend(b fleet.BackendType) fleetgrpc.BackendType {
-	switch b {
-	case fleet.BackendCoder:
-		return fleetgrpc.BackendType_BACKEND_TYPE_CODER
-	case fleet.BackendCodespaces:
-		return fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES
-	case fleet.BackendDevcontainer:
-		return fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER
-	default:
-		return fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED
-	}
 }

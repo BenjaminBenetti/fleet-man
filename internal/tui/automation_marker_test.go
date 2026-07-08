@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/charmbracelet/lipgloss"
@@ -110,16 +109,5 @@ func TestAutomationLabelColorsFollowInstancePattern(t *testing.T) {
 	}
 	if sessionStyle.GetForeground() != blue {
 		t.Error("trigger/agent items use sessionStyle, expected to be blue (color 39)")
-	}
-}
-
-// TestProtoInstanceToLegacyCarriesAutomated guards the TUI-side half of the
-// instance wire mapping (the server-side half is covered in the server package).
-func TestProtoInstanceToLegacyCarriesAutomated(t *testing.T) {
-	if !protoInstanceToLegacy(&fleetgrpc.Instance{Name: "x", Automated: true}).Automated {
-		t.Fatal("protoInstanceToLegacy should carry Automated=true")
-	}
-	if protoInstanceToLegacy(&fleetgrpc.Instance{Name: "x"}).Automated {
-		t.Fatal("an absent automated flag should map to false")
 	}
 }

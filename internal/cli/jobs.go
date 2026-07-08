@@ -5,24 +5,9 @@ import (
 	"fmt"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
-	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"google.golang.org/grpc"
 )
-
-// backendTypeToProto maps a validated CLI backend to its proto enum.
-func backendTypeToProto(b fleet.BackendType) fleetgrpc.BackendType {
-	switch b {
-	case fleet.BackendCoder:
-		return fleetgrpc.BackendType_BACKEND_TYPE_CODER
-	case fleet.BackendCodespaces:
-		return fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES
-	case fleet.BackendDevcontainer:
-		return fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER
-	default:
-		return fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED
-	}
-}
 
 // jobs.go routes the create/destroy CLI commands (up/down/destroy/clone) through
 // the fleet server's lifecycle jobs, so the server is the single writer for them

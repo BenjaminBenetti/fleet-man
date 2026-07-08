@@ -7,6 +7,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -96,7 +97,7 @@ func (s *service) automationSettings(ctx context.Context, fleetName string) (fle
 	if pf == nil {
 		return fleet.FleetSettings{}, fmt.Errorf("fleet %q not found", fleetName)
 	}
-	return protoFleetSettingsToLegacy(pf.GetSettings()), nil
+	return protoconv.FleetSettingsFromProto(pf.GetSettings()), nil
 }
 
 // mutateAutomation reads the fleet's full settings, applies fn to them, and
@@ -111,7 +112,7 @@ func (s *service) mutateAutomation(ctx context.Context, fleetName string, fn fun
 	if err != nil {
 		return fleet.FleetSettings{}, err
 	}
-	if _, err := s.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{Fleet: fleetName, Settings: fleetSettingsToProto(settings)}); err != nil {
+	if _, err := s.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{Fleet: fleetName, Settings: protoconv.FleetSettingsToProto(settings)}); err != nil {
 		return fleet.FleetSettings{}, mcpErr(err)
 	}
 	return settings, nil

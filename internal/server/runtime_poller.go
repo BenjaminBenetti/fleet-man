@@ -11,6 +11,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -213,7 +214,7 @@ func liveStatusPass(h *hub) {
 		// Broadcast the reconciled snapshot promptly (the 1s state poller would
 		// also catch it, but Watch subscribers shouldn't wait a tick).
 		if reloaded, lerr := state.Load(); lerr == nil {
-			snapshot := stateToProto(reloaded)
+			snapshot := protoconv.StateToProto(reloaded)
 			h.post(func(h *hub) { h.setState(snapshot) })
 		}
 	}
