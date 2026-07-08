@@ -27,9 +27,7 @@ func newStatusCmd() *cobra.Command {
 			var total fleetgrpc.StatusCounts
 			for name, f := range fleets {
 				counts := fleetgrpc.CountInstanceStatuses(f.GetInstances())
-				total.Running += counts.Running
-				total.Stopped += counts.Stopped
-				total.Other += counts.Other
+				total.Merge(counts)
 				fmt.Printf("%s: %d instances (%s) — %s\n", name, counts.Total(), formatStatusCounts(counts), f.GetRemote())
 			}
 

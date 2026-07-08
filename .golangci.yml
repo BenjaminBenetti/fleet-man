@@ -37,6 +37,11 @@ linters:
             # denied on purpose: the boundary stops clients from ACCESSING
             # state/backends (Load/Save/exec), not from naming the DTO shapes
             # they receive from the server.
+            # protoconv is itself INSIDE this rule (below) so its promised
+            # purity is machine-checked: it names the legacy types through the
+            # configutil aliases and may never import internal/state or any
+            # other server-only package.
+            - "**/internal/protoconv/**"
           deny:
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/state
               desc: client code must go through the fleet server (fleetgrpc), not internal/state

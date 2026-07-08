@@ -2,14 +2,14 @@ package protoconv
 
 import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
 // ConfigToProto maps the legacy Config to the proto contract. `,omitempty`
 // scalars are sent only when non-empty; tri-state *bool fields preserve their
 // nil-vs-set presence.
-func ConfigToProto(c *state.Config) *fleetgrpc.Config {
+func ConfigToProto(c *configutil.Config) *fleetgrpc.Config {
 	if c == nil {
 		return &fleetgrpc.Config{}
 	}
@@ -67,21 +67,21 @@ func ConfigToProto(c *state.Config) *fleetgrpc.Config {
 //
 // The base parameter is the one deliberate behavioral fork between the two
 // callers this converter was consolidated from:
-//   - The server's SetConfig (write path) passes a ZERO &state.Config{} so a
+//   - The server's SetConfig (write path) passes a ZERO &configutil.Config{} so a
 //     field the caller meant to clear is not masked by a default; SaveConfig's
 //     applyDefaults() then normalizes (e.g. an empty agent tool snaps to
 //     claude).
-//   - The TUI's read path passes state.DefaultConfig() so absent optional
+//   - The TUI's read path passes configutil.DefaultConfig() so absent optional
 //     fields render as their defaults.
 //
 // ToolSelection is only overwritten when non-empty: with a zero base that is
 // indistinguishable from a faithful copy (empty stays empty), and with a
 // default base it keeps the default from being clobbered by an unset field.
 // A nil base gets a zero Config.
-func ConfigFromProto(pc *fleetgrpc.Config, base *state.Config) *state.Config {
+func ConfigFromProto(pc *fleetgrpc.Config, base *configutil.Config) *configutil.Config {
 	c := base
 	if c == nil {
-		c = &state.Config{}
+		c = &configutil.Config{}
 	}
 	if pc == nil {
 		return c
@@ -99,7 +99,7 @@ func ConfigFromProto(pc *fleetgrpc.Config, base *state.Config) *state.Config {
 	}
 
 	if a := pc.GetAgent(); a != nil && a.GetToolSelection() != "" {
-		c.AgentSettings.ToolSelection = state.AgentTool(a.GetToolSelection())
+		c.AgentSettings.ToolSelection = configutil.AgentTool(a.GetToolSelection())
 	}
 
 	if d := pc.GetDotfiles(); d != nil {

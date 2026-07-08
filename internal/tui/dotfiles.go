@@ -6,12 +6,15 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
+	"github.com/BenjaminBenetti/fleet-man/internal/shellquote"
 )
 
 // shQuote returns value wrapped in single quotes with any embedded
-// single quotes escaped using the '\” idiom.
+// single quotes escaped, safe for a /bin/sh literal. Straight to the
+// shellquote leaf (not via dotfiles.ShQuote) so an injection audit of the
+// TUI ends at the one implementation.
 func shQuote(value string) string {
-	return dotfiles.ShQuote(value)
+	return shellquote.Single(value)
 }
 
 // SanitizeSessionName replaces characters that are problematic in

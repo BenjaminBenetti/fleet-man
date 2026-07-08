@@ -12,10 +12,13 @@
 // converter per type per direction, exercised by the exhaustive round-trip
 // tests in this package.
 //
-// Like internal/configutil, this package is deliberately NOT client code under
-// the depguard boundary even though clients import it: the boundary's intent
-// is to stop clients from ACCESSING state/backends (Load/Save/exec), and these
-// are pure functions over DTO shapes — no I/O, no state access.
+// Clients may import this package: the boundary's intent is to stop clients
+// from ACCESSING state/backends (Load/Save/exec), and these are pure functions
+// over DTO shapes — no I/O, no state access. That purity is machine-checked,
+// not just promised: the legacy struct types are named through the
+// internal/configutil aliases, and this package is itself inside the depguard
+// client rule, so an import of internal/state (or any server-only package)
+// fails the lint.
 //
 // This is still TRANSITIONAL glue. The end state (Phase 4/5 of the fleetd
 // migration) is proto-types-are-the-model, at which point the legacy structs —
@@ -32,15 +35,15 @@ package protoconv
 
 import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // --- State ------------------------------------------------------------------
 
 // StateToProto maps the whole persisted state to the wire snapshot.
-func StateToProto(st *state.State) *fleetgrpc.State {
+func StateToProto(st *configutil.State) *fleetgrpc.State {
 	out := &fleetgrpc.State{
 		Fleets:       make(map[string]*fleetgrpc.Fleet, len(st.Fleets)),
 		GroupLayouts: make(map[string]*fleetgrpc.GroupLayout, len(st.GroupLayouts)),
@@ -59,10 +62,10 @@ func StateToProto(st *state.State) *fleetgrpc.State {
 
 // StateFromProto reconstructs the legacy state from a wire snapshot. The maps
 // are always non-nil so callers can index/insert without nil checks.
-func StateFromProto(ps *fleetgrpc.State) *state.State {
-	st := &state.State{
+func StateFromProto(ps *fleetgrpc.State) *configutil.State {
+	st := &configutil.State{
 		Fleets:       make(map[string]*fleet.Fleet),
-		GroupLayouts: make(map[string]state.GroupLayout),
+		GroupLayouts: make(map[string]configutil.GroupLayout),
 	}
 	if ps == nil {
 		return st
@@ -403,7 +406,7 @@ func CoderParametersFromProto(in []*fleetgrpc.CoderParameter) []fleet.CoderParam
 // --- Group layouts ------------------------------------------------------------
 
 // GroupLayoutToProto maps one persisted tmux pane layout.
-func GroupLayoutToProto(gl state.GroupLayout) *fleetgrpc.GroupLayout {
+func GroupLayoutToProto(gl configutil.GroupLayout) *fleetgrpc.GroupLayout {
 	return &fleetgrpc.GroupLayout{
 		GroupId:      gl.GroupID,
 		InstanceName: gl.InstanceName,
@@ -414,8 +417,8 @@ func GroupLayoutToProto(gl state.GroupLayout) *fleetgrpc.GroupLayout {
 }
 
 // GroupLayoutFromProto reconstructs one persisted tmux pane layout.
-func GroupLayoutFromProto(pgl *fleetgrpc.GroupLayout) state.GroupLayout {
-	return state.GroupLayout{
+func GroupLayoutFromProto(pgl *fleetgrpc.GroupLayout) configutil.GroupLayout {
+	return configutil.GroupLayout{
 		GroupID:      pgl.GetGroupId(),
 		InstanceName: pgl.GetInstanceName(),
 		Sessions:     pgl.GetSessions(),

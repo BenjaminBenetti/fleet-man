@@ -87,6 +87,15 @@ type StatusCounts struct {
 // Total returns the number of counted instances.
 func (c StatusCounts) Total() int { return c.Running + c.Stopped + c.Other }
 
+// Merge folds another set of counts into c, so aggregating call sites never
+// enumerate the buckets themselves (a new bucket added here can't be silently
+// dropped from a total).
+func (c *StatusCounts) Merge(o StatusCounts) {
+	c.Running += o.Running
+	c.Stopped += o.Stopped
+	c.Other += o.Other
+}
+
 // Add folds one more status into the counts.
 func (c *StatusCounts) Add(s InstanceStatus) {
 	switch s {
