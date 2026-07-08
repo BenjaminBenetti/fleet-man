@@ -143,26 +143,42 @@ func TestConfigRoundTripAllFields(t *testing.T) {
 
 // --- Intent-specific cases the fuzz fill can't express -----------------------
 
-// TestEnumsExhaustive proves every enum member survives both directions; a new
-// domain status/backend added without a proto mapping falls to UNSPECIFIED and
-// fails here.
+// TestEnumsExhaustive proves every enum member survives both directions. The
+// member lists come from the GENERATED proto enum maps, not a hand-maintained
+// literal list: a new status/backend must be added to the .proto to reach the
+// wire, so iterating the generated map automatically covers it — if its domain
+// mapping is missing, FromProto returns "" and this test names the member.
 func TestEnumsExhaustive(t *testing.T) {
-	for _, s := range []fleet.InstanceStatus{
-		fleet.StatusCreating, fleet.StatusCloning, fleet.StatusRunning,
-		fleet.StatusStopped, fleet.StatusFailed, fleet.StatusStopping,
-		fleet.StatusStarting, fleet.StatusDeleting, fleet.StatusRebuilding,
-	} {
-		if got := StatusFromProto(StatusToProto(s)); got != s {
-			t.Errorf("status %q round-tripped to %q", s, got)
+	for num, name := range fleetgrpc.InstanceStatus_name {
+		pe := fleetgrpc.InstanceStatus(num)
+		if pe == fleetgrpc.InstanceStatus_INSTANCE_STATUS_UNSPECIFIED {
+			continue
+		}
+		d := StatusFromProto(pe)
+		if d == "" {
+			t.Errorf("proto status %s has no domain mapping in StatusFromProto", name)
+			continue
+		}
+		if got := StatusToProto(d); got != pe {
+			t.Errorf("status %s: domain %q maps back to %v", name, d, got)
 		}
 	}
 	if StatusToProto("") != fleetgrpc.InstanceStatus_INSTANCE_STATUS_UNSPECIFIED || StatusFromProto(fleetgrpc.InstanceStatus_INSTANCE_STATUS_UNSPECIFIED) != "" {
 		t.Error("empty status should map to UNSPECIFIED and back")
 	}
 
-	for _, b := range []fleet.BackendType{fleet.BackendDevcontainer, fleet.BackendCoder, fleet.BackendCodespaces} {
-		if got := BackendFromProto(BackendToProto(b)); got != b {
-			t.Errorf("backend %q round-tripped to %q", b, got)
+	for num, name := range fleetgrpc.BackendType_name {
+		pe := fleetgrpc.BackendType(num)
+		if pe == fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED {
+			continue
+		}
+		d := BackendFromProto(pe)
+		if d == "" {
+			t.Errorf("proto backend %s has no domain mapping in BackendFromProto", name)
+			continue
+		}
+		if got := BackendToProto(d); got != pe {
+			t.Errorf("backend %s: domain %q maps back to %v", name, d, got)
 		}
 	}
 	if BackendToProto("") != fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED || BackendFromProto(fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED) != "" {
