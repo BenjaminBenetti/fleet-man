@@ -72,3 +72,38 @@ func (f *Fleet) FindInstance(name string) (*Instance, bool) {
 	}
 	return nil, false
 }
+
+// StatusCounts is the running/stopped/other bucketing of a set of instances,
+// shared by every status summary (CLI `fleet status`, the MCP fleet_status
+// tool) so the surfaces cannot disagree on which statuses count as what.
+type StatusCounts struct {
+	Running int
+	Stopped int
+	// Other counts every transitional or failed status (creating, starting,
+	// stopping, failed, ...).
+	Other int
+}
+
+// Total returns the number of counted instances.
+func (c StatusCounts) Total() int { return c.Running + c.Stopped + c.Other }
+
+// Add folds one more status into the counts.
+func (c *StatusCounts) Add(s InstanceStatus) {
+	switch s {
+	case InstanceStatus_INSTANCE_STATUS_RUNNING:
+		c.Running++
+	case InstanceStatus_INSTANCE_STATUS_STOPPED:
+		c.Stopped++
+	default:
+		c.Other++
+	}
+}
+
+// CountInstanceStatuses buckets a fleet's instances by status.
+func CountInstanceStatuses(instances []*Instance) StatusCounts {
+	var c StatusCounts
+	for _, inst := range instances {
+		c.Add(inst.GetStatus())
+	}
+	return c
+}
