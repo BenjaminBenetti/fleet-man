@@ -1,6 +1,7 @@
 package protoconv
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -16,8 +17,26 @@ import (
 // contract stays correct for cross-version client/server pairs — one distinct
 // value per string field, and a set-one-assert-its-getter loop for bools
 // (whose two values can't be made mutually distinct).
+//
+// The placement assertions are hand-maintained literals, so each test opens
+// with an arity pin: when a domain struct grows a field, the pin fails and
+// forces the new field's placement to be asserted here too (the same
+// self-enforcement the enum test gets from the generated proto maps).
+
+// pinArity fails when the domain struct's field count differs from what the
+// enclosing wire test asserts, so a new field cannot land without extending
+// the placement assertions.
+func pinArity[T any](t *testing.T, want int) {
+	t.Helper()
+	typ := reflect.TypeFor[T]()
+	if got := typ.NumField(); got != want {
+		t.Fatalf("%s has %d fields but this wire test asserts %d — add placement assertions for the new field(s), then bump the pin", typ.Name(), got, want)
+	}
+}
 
 func TestTriggerWirePlacement(t *testing.T) {
+	pinArity[fleet.Trigger](t, 12)
+
 	pt := TriggersToProto([]fleet.Trigger{{
 		Name:        "nm",
 		Type:        fleet.TriggerWebhook,
@@ -42,6 +61,8 @@ func TestTriggerWirePlacement(t *testing.T) {
 }
 
 func TestAgentWirePlacement(t *testing.T) {
+	pinArity[fleet.Agent](t, 4)
+
 	pa := AgentsToProto([]fleet.Agent{{
 		Name: "nm", Command: "cmd", SystemPrompt: "sp", Backend: fleet.BackendCoder,
 	}})[0]
@@ -52,6 +73,8 @@ func TestAgentWirePlacement(t *testing.T) {
 }
 
 func TestInstanceWirePlacement(t *testing.T) {
+	pinArity[fleet.Instance](t, 13)
+
 	created := time.Unix(1720000000, 0).UTC()
 	pi := InstanceToProto(&fleet.Instance{
 		Name: "nm", DisplayName: "dn", ContainerID: "ci", Config: "cf",
@@ -70,6 +93,10 @@ func TestInstanceWirePlacement(t *testing.T) {
 }
 
 func TestFleetSettingsWirePlacement(t *testing.T) {
+	pinArity[fleet.FleetSettings](t, 17)
+	pinArity[fleet.LayoutPreset](t, 3)
+	pinArity[fleet.CoderParameter](t, 6)
+
 	prefer := true
 	ps := FleetSettingsToProto(fleet.FleetSettings{
 		CustomMounts:       []string{"/m1", "/m2"},
@@ -128,6 +155,14 @@ func TestFleetSettingsWirePlacement(t *testing.T) {
 }
 
 func TestConfigWirePlacement(t *testing.T) {
+	pinArity[state.Config](t, 7)
+	pinArity[state.GeneralSettings](t, 2)
+	pinArity[state.AgentSettings](t, 1)
+	pinArity[state.DotfilesSettings](t, 3)
+	pinArity[state.CodespacesSettings](t, 3)
+	pinArity[state.BrowserSettings](t, 2)
+	pinArity[state.RemoteMcpSettings](t, 4)
+
 	vim := false
 	multi := true
 	pc := ConfigToProto(&state.Config{
@@ -183,11 +218,36 @@ func TestConfigWirePlacement(t *testing.T) {
 }
 
 func TestGroupLayoutWirePlacement(t *testing.T) {
+	pinArity[state.GroupLayout](t, 5)
+
 	pgl := GroupLayoutToProto(state.GroupLayout{
 		GroupID: "gi", InstanceName: "in", Sessions: []string{"s1"}, Layout: "ly", PaneCount: 7,
 	})
 	if pgl.GetGroupId() != "gi" || pgl.GetInstanceName() != "in" ||
 		pgl.GetSessions()[0] != "s1" || pgl.GetLayout() != "ly" || pgl.GetPaneCount() != 7 {
 		t.Fatalf("group layout wire placement wrong: %+v", pgl)
+	}
+}
+
+func TestFleetAndStateWirePlacement(t *testing.T) {
+	pinArity[fleet.Fleet](t, 4)
+	pinArity[state.State](t, 3)
+
+	// Fleet.Name and Remote are two same-type strings in one message — the
+	// exact swap-prone shape these tests exist for.
+	pf := FleetToProto(&fleet.Fleet{Name: "nm", Remote: "rm",
+		Instances: []*fleet.Instance{{Name: "in"}}})
+	if pf.GetName() != "nm" || pf.GetRemote() != "rm" || pf.GetInstances()[0].GetName() != "in" {
+		t.Fatalf("fleet wire placement wrong: %+v", pf)
+	}
+
+	pst := StateToProto(&state.State{
+		Fleets:          map[string]*fleet.Fleet{"fk": {Name: "nm"}},
+		GroupLayouts:    map[string]state.GroupLayout{"gk": {GroupID: "gi"}},
+		LastSeenVersion: "lv",
+	})
+	if pst.GetLastSeenVersion() != "lv" || pst.GetFleets()["fk"].GetName() != "nm" ||
+		pst.GetGroupLayouts()["gk"].GetGroupId() != "gi" {
+		t.Fatalf("state wire placement wrong: %+v", pst)
 	}
 }
