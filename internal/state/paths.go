@@ -6,12 +6,21 @@ import (
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
+// The base-path definitions live in internal/fleetpaths (the dependency-free
+// leaf both the client and server may import); the wrappers below delegate so
+// server code keeps its historical state.* names without a second copy of any
+// path rule. In particular WarnPath is a cross-boundary contract — the server
+// WRITES the file (WriteWarn) and the TUI READS it via fleetpaths.WarnPath —
+// so the two sides must derive it from the same definition or the post-create
+// warning banner silently stops surfacing.
+
 // FleetDir returns the base directory for fleet state.
 func FleetDir() string {
-	return filepath.Join(os.Getenv("HOME"), ".fleet")
+	return fleetpaths.Dir()
 }
 
 // StatePath returns the path to the state file.
@@ -21,7 +30,7 @@ func StatePath() string {
 
 // WorkspacesDir returns the base directory for instance workspace clones.
 func WorkspacesDir() string {
-	return filepath.Join(FleetDir(), "workspaces")
+	return fleetpaths.WorkspacesDir()
 }
 
 // WarnPath returns the path to the host-side warning file for a single
@@ -30,7 +39,7 @@ func WorkspacesDir() string {
 // "no warnings". Producers should use WriteWarn rather than constructing
 // the path manually so all warnings end up in the same well-known place.
 func WarnPath(fleetName, instanceName string) string {
-	return filepath.Join(FleetDir(), "logs", fleetName+"-"+instanceName+".warn")
+	return fleetpaths.WarnPath(fleetName, instanceName)
 }
 
 // TriggerLogsDir returns the host directory that holds an automation trigger's
