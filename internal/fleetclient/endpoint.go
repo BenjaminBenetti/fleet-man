@@ -18,6 +18,22 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// The endpoint-selection environment variables. This package owns their
+// semantics (selectEndpoint / IsRemote / IsGateway), so the names are defined
+// here once; other packages that read or set them (the TUI's armada switch,
+// admiralmcp's local-only guard) refer to these constants.
+const (
+	// EnvGateway points the client through a fleet gateway:
+	// FLEET_GATEWAY=https://gw:50051/<id>.
+	EnvGateway = "FLEET_GATEWAY"
+	// EnvServer points the client at a plain remote TCP daemon:
+	// FLEET_SERVER=host:port.
+	EnvServer = "FLEET_SERVER"
+	// EnvToken carries the bearer token for a gateway/remote daemon; falls back
+	// to ~/.fleet/mcp.token (see BearerToken).
+	EnvToken = "FLEET_TOKEN"
+)
+
 // Endpoint abstracts WHERE the server is and HOW we reach it, so commands never
 // see a socket path or address. Locality is a property of the endpoint:
 // auto-spawn is only valid for a local endpoint (you can't fork-exec a process
@@ -66,10 +82,10 @@ func (e remoteEndpoint) DialOptions() []grpc.DialOption { return insecureCreds()
 // It errors only when FLEET_GATEWAY is set but malformed. Remote endpoints
 // (gateway/server) are not auto-spawned and a version mismatch is a hard error.
 func selectEndpoint() (Endpoint, error) {
-	if gw := os.Getenv("FLEET_GATEWAY"); gw != "" {
+	if gw := os.Getenv(EnvGateway); gw != "" {
 		return newGatewayEndpoint(gw, gatewayToken())
 	}
-	if addr := os.Getenv("FLEET_SERVER"); addr != "" {
+	if addr := os.Getenv(EnvServer); addr != "" {
 		return remoteEndpoint{addr: addr}, nil
 	}
 	return localEndpoint{socket: fleetpaths.SocketPath()}, nil
@@ -80,7 +96,7 @@ func selectEndpoint() (Endpoint, error) {
 // socket. Client-host concerns — dependency checks, the local-exec TTY
 // carve-out — only apply when this is false.
 func IsRemote() bool {
-	return os.Getenv("FLEET_GATEWAY") != "" || os.Getenv("FLEET_SERVER") != ""
+	return os.Getenv(EnvGateway) != "" || os.Getenv(EnvServer) != ""
 }
 
 // IsGateway reports whether the client reaches the daemon THROUGH a fleet
@@ -88,14 +104,14 @@ func IsRemote() bool {
 // (FLEET_SERVER) or the local socket. Only a gateway connection has a gateway
 // version to show in the control chain.
 func IsGateway() bool {
-	return os.Getenv("FLEET_GATEWAY") != ""
+	return os.Getenv(EnvGateway) != ""
 }
 
 // gatewayToken resolves the bearer token for a gateway endpoint: FLEET_TOKEN, or
 // the on-disk MCP token (so a user on the same host as their daemon need only
 // supply the URL).
 func gatewayToken() string {
-	if t := os.Getenv("FLEET_TOKEN"); t != "" {
+	if t := os.Getenv(EnvToken); t != "" {
 		return strings.TrimSpace(t)
 	}
 	if data, err := os.ReadFile(fleetpaths.McpTokenPath()); err == nil {

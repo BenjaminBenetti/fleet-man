@@ -39,6 +39,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 )
 
@@ -142,7 +143,7 @@ func EnsureInstalled() error {
 // describe a daemon the user isn't talking to. The remote MCP URL is surfaced
 // on the TUI settings page for manual configuration instead.
 func EnsureInstalledEventually(wait time.Duration) error {
-	if os.Getenv("FLEET_GATEWAY") != "" || os.Getenv("FLEET_SERVER") != "" {
+	if fleetclient.IsRemote() {
 		return nil
 	}
 	deadline := time.Now().Add(wait)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	tea "github.com/charmbracelet/bubbletea"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -521,10 +522,10 @@ func (m *model) armadaCurrentDisplay() string {
 	// The live connection isn't in the registry (e.g. its entry was just
 	// deleted while connected) — show its hostname straight from the env rather
 	// than wrongly claiming "local".
-	if gw := os.Getenv("FLEET_GATEWAY"); gw != "" {
+	if gw := os.Getenv(fleetclient.EnvGateway); gw != "" {
 		return (armadaEntry{url: gw}).host()
 	}
-	if srv := os.Getenv("FLEET_SERVER"); srv != "" {
+	if srv := os.Getenv(fleetclient.EnvServer); srv != "" {
 		return (armadaEntry{server: srv}).host()
 	}
 	return "local"
@@ -534,10 +535,10 @@ func (m *model) armadaCurrentDisplay() string {
 // IS the switch mechanism, so it's correct whether the connection came from
 // boot or a runtime switch). "" = local.
 func armadaCurrentKey() string {
-	if gw := os.Getenv("FLEET_GATEWAY"); gw != "" {
+	if gw := os.Getenv(fleetclient.EnvGateway); gw != "" {
 		return gw
 	}
-	if srv := os.Getenv("FLEET_SERVER"); srv != "" {
+	if srv := os.Getenv(fleetclient.EnvServer); srv != "" {
 		return "server:" + srv
 	}
 	return ""
@@ -557,17 +558,17 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	// during the teardown below targets the NEW endpoint, never the old one.
 	switch {
 	case entry.url != "":
-		_ = os.Setenv("FLEET_GATEWAY", entry.url)
-		_ = os.Setenv("FLEET_TOKEN", entry.token)
-		_ = os.Unsetenv("FLEET_SERVER")
+		_ = os.Setenv(fleetclient.EnvGateway, entry.url)
+		_ = os.Setenv(fleetclient.EnvToken, entry.token)
+		_ = os.Unsetenv(fleetclient.EnvServer)
 	case entry.server != "":
-		_ = os.Setenv("FLEET_SERVER", entry.server)
-		_ = os.Unsetenv("FLEET_GATEWAY")
-		_ = os.Unsetenv("FLEET_TOKEN")
+		_ = os.Setenv(fleetclient.EnvServer, entry.server)
+		_ = os.Unsetenv(fleetclient.EnvGateway)
+		_ = os.Unsetenv(fleetclient.EnvToken)
 	default: // local
-		_ = os.Unsetenv("FLEET_GATEWAY")
-		_ = os.Unsetenv("FLEET_SERVER")
-		_ = os.Unsetenv("FLEET_TOKEN")
+		_ = os.Unsetenv(fleetclient.EnvGateway)
+		_ = os.Unsetenv(fleetclient.EnvServer)
+		_ = os.Unsetenv(fleetclient.EnvToken)
 	}
 	// Mirror the swap into the tmux server environment so split-pane / bound-key
 	// `fleet shell` children — which tmux spawns from ITS environment, not this
@@ -639,7 +640,7 @@ func syncTmuxArmadaEnv(m *model) {
 	if !m.inHostTmux {
 		return
 	}
-	for _, name := range []string{"FLEET_GATEWAY", "FLEET_TOKEN", "FLEET_SERVER"} {
+	for _, name := range []string{fleetclient.EnvGateway, fleetclient.EnvToken, fleetclient.EnvServer} {
 		if v := os.Getenv(name); v != "" {
 			_ = exec.Command("tmux", "set-environment", "-g", name, v).Run()
 		} else {

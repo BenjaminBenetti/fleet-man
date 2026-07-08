@@ -196,9 +196,9 @@ func newModel() model {
 		inHostTmux:         os.Getenv("TMUX") != "",
 		armadaStatus:       make(map[string]armadaStatus),
 		copySessionAllow:   make(map[string]bool),
-		bootGateway:        os.Getenv("FLEET_GATEWAY"),
-		bootToken:          os.Getenv("FLEET_TOKEN"),
-		bootServer:         os.Getenv("FLEET_SERVER"),
+		bootGateway:        os.Getenv(fleetclient.EnvGateway),
+		bootToken:          os.Getenv(fleetclient.EnvToken),
+		bootServer:         os.Getenv(fleetclient.EnvServer),
 	}
 
 	// Create the fleet page (persistent — background handlers reference it)
