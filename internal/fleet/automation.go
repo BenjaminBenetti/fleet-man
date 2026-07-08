@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/shellquote"
 )
 
 // Automation (issue #188) lets a fleet define Triggers that spin up Agents.
@@ -335,15 +337,8 @@ func NormalizeTriggers(in []Trigger, agents []Agent) ([]Trigger, error) {
 // substituted system-prompt text is not re-expanded.
 func SubstituteAgentCommand(command, prompt, systemPrompt string) string {
 	r := strings.NewReplacer(
-		"${SYS_PROMPT}", shellSingleQuoteEscape(systemPrompt),
-		"${PROMPT}", shellSingleQuoteEscape(prompt),
+		"${SYS_PROMPT}", shellquote.EscapeSingle(systemPrompt),
+		"${PROMPT}", shellquote.EscapeSingle(prompt),
 	)
 	return r.Replace(command)
-}
-
-// shellSingleQuoteEscape rewrites single quotes so a value is safe inside a
-// single-quoted shell string: each ' becomes '\” (close the quote, emit an
-// escaped quote, reopen the quote).
-func shellSingleQuoteEscape(s string) string {
-	return strings.ReplaceAll(s, "'", `'\''`)
 }
