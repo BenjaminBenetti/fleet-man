@@ -9,7 +9,7 @@ package shellquote
 import "strings"
 
 // Single wraps value in single quotes with embedded single quotes escaped via
-// the '\” idiom (close the quote, emit an escaped quote, reopen the quote),
+// the '\'' idiom (close the quote, emit an escaped quote, reopen the quote),
 // making any value safe to drop into a /bin/sh command literal.
 func Single(value string) string {
 	return "'" + EscapeSingle(value) + "'"
