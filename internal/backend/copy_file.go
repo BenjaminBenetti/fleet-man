@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/shellquote"
 )
 
 // copy_file.go holds the transport-agnostic helpers behind the Backend.CopyFile
@@ -36,13 +38,11 @@ const CopyTimeout = 5 * time.Minute
 // fail loudly rather than silently exceed ARG_MAX if a payload ever grows.
 const maxInlineRaw = 64 * 1024
 
-// ShellQuote wraps value in single quotes with embedded single quotes escaped
-// via the '\” idiom, so any path is safe to drop into a /bin/sh command
-// literal. Exported so backend implementations (e.g. coder's scp install step)
-// share one quoting routine; kept here rather than imported from
-// internal/dotfiles to avoid that package's transitive state dependency.
+// ShellQuote wraps value in single quotes so any path is safe to drop into a
+// /bin/sh command literal. Thin delegate kept for the established name; the
+// one implementation lives in internal/shellquote.
 func ShellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+	return shellquote.Single(value)
 }
 
 // InlineWriteScript returns a /bin/sh command (as argv: {"sh","-c",body}) that

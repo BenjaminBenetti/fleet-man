@@ -6,6 +6,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 )
@@ -57,7 +58,7 @@ func newUpCmd() *cobra.Command {
 			req := &fleetgrpc.CreateInstanceRequest{
 				Fleet:    target.Fleet,
 				Instance: target.Instance,
-				Backend:  backendTypeToProto(backendType),
+				Backend:  protoconv.BackendToProto(backendType),
 				Verbose:  true,
 			}
 			if remoteURL != "" {

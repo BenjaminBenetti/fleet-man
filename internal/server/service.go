@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/server/remote"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
@@ -151,7 +152,7 @@ func (s *service) GetState(_ context.Context, _ *fleetgrpc.GetStateRequest) (*fl
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load state: %v", err)
 	}
-	return &fleetgrpc.GetStateReply{State: stateToProto(st), ActiveJobs: s.jobs.summaries()}, nil
+	return &fleetgrpc.GetStateReply{State: protoconv.StateToProto(st), ActiveJobs: s.jobs.summaries()}, nil
 }
 
 // Shutdown asks the server to stop. Phase 1 has no jobs, so a drain is

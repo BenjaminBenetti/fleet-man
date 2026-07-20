@@ -24,41 +24,22 @@ func newStatusCmd() *cobra.Command {
 				return nil
 			}
 
-			totalInstances := 0
-			running := 0
-			stopped := 0
-			other := 0
-
+			var total fleetgrpc.StatusCounts
 			for name, f := range fleets {
-				fleetRunning := 0
-				fleetStopped := 0
-				fleetOther := 0
-				for _, instance := range f.GetInstances() {
-					totalInstances++
-					switch instance.GetStatus() {
-					case fleetgrpc.InstanceStatus_INSTANCE_STATUS_RUNNING:
-						fleetRunning++
-						running++
-					case fleetgrpc.InstanceStatus_INSTANCE_STATUS_STOPPED:
-						fleetStopped++
-						stopped++
-					default:
-						fleetOther++
-						other++
-					}
-				}
-				fmt.Printf("%s: %d instances (%s) — %s\n", name, len(f.GetInstances()), formatStatusCounts(fleetRunning, fleetStopped, fleetOther), f.GetRemote())
+				counts := fleetgrpc.CountInstanceStatuses(f.GetInstances())
+				total.Merge(counts)
+				fmt.Printf("%s: %d instances (%s) — %s\n", name, counts.Total(), formatStatusCounts(counts), f.GetRemote())
 			}
 
-			fmt.Printf("\nTotal: %d fleets, %d instances (%s)\n", len(fleets), totalInstances, formatStatusCounts(running, stopped, other))
+			fmt.Printf("\nTotal: %d fleets, %d instances (%s)\n", len(fleets), total.Total(), formatStatusCounts(total))
 			return nil
 		},
 	}
 }
 
-func formatStatusCounts(running, stopped, other int) string {
-	if other > 0 {
-		return fmt.Sprintf("%d running, %d stopped, %d other", running, stopped, other)
+func formatStatusCounts(c fleetgrpc.StatusCounts) string {
+	if c.Other > 0 {
+		return fmt.Sprintf("%d running, %d stopped, %d other", c.Running, c.Stopped, c.Other)
 	}
-	return fmt.Sprintf("%d running, %d stopped", running, stopped)
+	return fmt.Sprintf("%d running, %d stopped", c.Running, c.Stopped)
 }

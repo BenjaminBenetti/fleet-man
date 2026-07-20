@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/shellquote"
 )
 
 // DefaultHomeDir is the in-container home directory used when a fleet
@@ -42,7 +43,7 @@ func renderFleetRC(instanceName string) string {
 	if instanceName == "" {
 		return fleetRCContent
 	}
-	quoted := "'" + strings.ReplaceAll(instanceName, "'", `'\''`) + "'"
+	quoted := shellquote.Single(instanceName)
 	return fleetRCContent + fmt.Sprintf(`
 # FLEET_INSTANCE_NAME — the name of this fleet instance, so in-container
 # tools can tell which instance they're running in.

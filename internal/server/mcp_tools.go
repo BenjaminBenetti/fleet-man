@@ -16,6 +16,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/tui"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/grpc/status"
@@ -294,17 +295,14 @@ func (s *service) mcpStatus(ctx context.Context, _ *mcp.CallToolRequest, _ struc
 	out := FleetStatusOutput{Fleets: []FleetStatusEntry{}}
 	for _, name := range sortedFleetNames(reply.GetState()) {
 		f := reply.GetState().GetFleets()[name]
-		entry := FleetStatusEntry{Fleet: name, Remote: f.GetRemote()}
-		for _, inst := range f.GetInstances() {
-			entry.Total++
-			switch inst.GetStatus() {
-			case fleetgrpc.InstanceStatus_INSTANCE_STATUS_RUNNING:
-				entry.Running++
-			case fleetgrpc.InstanceStatus_INSTANCE_STATUS_STOPPED:
-				entry.Stopped++
-			default:
-				entry.Other++
-			}
+		counts := fleetgrpc.CountInstanceStatuses(f.GetInstances())
+		entry := FleetStatusEntry{
+			Fleet:   name,
+			Remote:  f.GetRemote(),
+			Total:   counts.Total(),
+			Running: counts.Running,
+			Stopped: counts.Stopped,
+			Other:   counts.Other,
 		}
 		out.Fleets = append(out.Fleets, entry)
 		out.TotalFleets++
@@ -383,7 +381,7 @@ func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpI
 		if err != nil {
 			return nil, FleetJobOutput{}, err
 		}
-		backend = protoBackend(bt)
+		backend = protoconv.BackendToProto(bt)
 	}
 	// Verbose is left false (unlike `fleet up`): MCP returns only the final
 	// JobDone result, never a live provisioning stream, so verbose output would

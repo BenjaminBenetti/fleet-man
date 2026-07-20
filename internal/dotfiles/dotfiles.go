@@ -2,15 +2,17 @@ package dotfiles
 
 import (
 	"fmt"
-	"strings"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/shellquote"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
-// ShQuote returns value wrapped in single quotes with any embedded
-// single quotes escaped using the '\” idiom.
+// ShQuote returns value wrapped in single quotes, safe for a /bin/sh literal.
+// Thin delegate kept for the established name; the one implementation lives in
+// internal/shellquote.
 func ShQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+	return shellquote.Single(value)
 }
 
 // TmuxEnsureInstalled is a shell snippet that installs tmux if it is not

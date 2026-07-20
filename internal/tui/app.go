@@ -19,6 +19,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -195,9 +196,9 @@ func newModel() model {
 		inHostTmux:         os.Getenv("TMUX") != "",
 		armadaStatus:       make(map[string]armadaStatus),
 		copySessionAllow:   make(map[string]bool),
-		bootGateway:        os.Getenv("FLEET_GATEWAY"),
-		bootToken:          os.Getenv("FLEET_TOKEN"),
-		bootServer:         os.Getenv("FLEET_SERVER"),
+		bootGateway:        os.Getenv(fleetclient.EnvGateway),
+		bootToken:          os.Getenv(fleetclient.EnvToken),
+		bootServer:         os.Getenv(fleetclient.EnvServer),
 	}
 
 	// Create the fleet page (persistent — background handlers reference it)
@@ -790,7 +791,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// change (the hub diffs it), so this is not per-tick churn.
 		m.pstate = msg.state
 		if msg.state != nil {
-			m.st = protoStateToLegacy(msg.state)
+			m.st = protoconv.StateFromProto(msg.state)
 			// Pull pane layouts written by other TUIs on the same daemon
 			// into the local cache before rebuilding rows (which render
 			// group sizes from it) — see issue #158.

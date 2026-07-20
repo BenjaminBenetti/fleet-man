@@ -53,10 +53,10 @@ func TestResolveEditorPrecedence(t *testing.T) {
 }
 
 func TestShellQuoteSingle(t *testing.T) {
-	if got := shellQuoteSingle("/tmp/a b.md"); got != "'/tmp/a b.md'" {
+	if got := shQuote("/tmp/a b.md"); got != "'/tmp/a b.md'" {
 		t.Errorf("spaces: got %q", got)
 	}
-	if got := shellQuoteSingle("it's"); got != `'it'\''s'` {
+	if got := shQuote("it's"); got != `'it'\''s'` {
 		t.Errorf("embedded quote: got %q", got)
 	}
 }

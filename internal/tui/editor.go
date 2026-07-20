@@ -92,12 +92,7 @@ var editorCmd = func(target editorTarget, nameHint, current string) tea.Cmd {
 // $EDITOR runs through `sh -c` so an editor carrying arguments (e.g. "code
 // --wait") is honored, exactly as git invokes GIT_EDITOR.
 func buildEditorCommand(path string) *exec.Cmd {
-	return exec.Command("sh", "-c", resolveEditor()+" "+shellQuoteSingle(path))
-}
-
-// shellQuoteSingle single-quotes s for safe inclusion in a `sh -c` string.
-func shellQuoteSingle(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	return exec.Command("sh", "-c", resolveEditor()+" "+shQuote(path))
 }
 
 // applyEditorResult writes an $EDITOR session's result back into the dialog field

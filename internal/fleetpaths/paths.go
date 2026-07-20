@@ -96,15 +96,19 @@ func GatewaySessionPath() string {
 	return filepath.Join(Dir(), "gateway_session.json")
 }
 
-// WorkspacesDir is the base directory for instance workspace clones. Mirrors
-// internal/state.WorkspacesDir; lives here too so client code (which must not
-// import internal/state) can derive workspace paths.
+// WorkspacesDir is the base directory for instance workspace clones. This is
+// the single definition — internal/state.WorkspacesDir delegates here — living
+// in this leaf so client code (which must not import internal/state) can
+// derive workspace paths too.
 func WorkspacesDir() string {
 	return filepath.Join(Dir(), "workspaces")
 }
 
 // WarnPath is the host-side warning file for a single instance (the TUI banners
-// its first line after creation). Mirrors internal/state.WarnPath.
+// its first line after creation). This is the single definition of the format:
+// the server writes the file through state.WriteWarn (which delegates here via
+// state.WarnPath) and the TUI reads it through this function, so a format
+// change cannot desynchronize the two sides.
 func WarnPath(fleetName, instanceName string) string {
 	return filepath.Join(Dir(), "logs", fleetName+"-"+instanceName+".warn")
 }

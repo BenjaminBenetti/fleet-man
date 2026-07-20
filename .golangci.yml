@@ -32,6 +32,16 @@ linters:
             # can't construct backends either — they drive them via fleetgrpc RPCs
             # (ResolveExecCommand / Logs / Forward / GetCoderTemplateParams /
             # GetBrowserConfig / PrepareBrowser) and the Watch BrowserOpen event.
+            # NOTE: internal/configutil (type aliases) and internal/protoconv
+            # (pure proto<->domain mapping, shared with the server) are NOT
+            # denied on purpose: the boundary stops clients from ACCESSING
+            # state/backends (Load/Save/exec), not from naming the DTO shapes
+            # they receive from the server.
+            # protoconv is itself INSIDE this rule (below) so its promised
+            # purity is machine-checked: it names the legacy types through the
+            # configutil aliases and may never import internal/state or any
+            # other server-only package.
+            - "**/internal/protoconv/**"
           deny:
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/state
               desc: client code must go through the fleet server (fleetgrpc), not internal/state
