@@ -31,11 +31,18 @@ case "$ARCH" in
         ;;
 esac
 
+# Detect OS and map it to the release asset's platform token. Releases ship a
+# binary per OS/arch pair (fleet-linux-amd64, fleet-darwin-arm64, ...); pick the
+# one matching this machine.
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-if [ "$OS" != "linux" ]; then
-    echo "Error: unsupported OS: $OS (only linux is supported)"
-    exit 1
-fi
+case "$OS" in
+    linux)         OS="linux" ;;
+    darwin)        OS="darwin" ;;
+    *)
+        echo "Error: unsupported OS: $OS (supported: linux, darwin)"
+        exit 1
+        ;;
+esac
 
 ASSET="fleet-${OS}-${ARCH}"
 
