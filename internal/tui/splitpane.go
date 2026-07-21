@@ -202,6 +202,13 @@ func unbindDefaultSplitKeys() {
 	_ = exec.Command("tmux", "bind-key", `"`, "display-message", msg).Run()
 }
 
+// placeholderSleepSecs keeps Phase-1 placeholder panes alive until they are
+// respawned with their real session. It must be a plain seconds count:
+// `sleep infinity` is a GNU coreutils extension, and macOS/BSD sleep rejects
+// it and exits immediately — the pane then closes before the layout apply and
+// respawn phases run, breaking every group restore/switch on macOS.
+const placeholderSleepSecs = "2147483647"
+
 // splitWindowWithRetry runs `tmux split-window` with the given args,
 // retrying up to 3 times with a 250ms pause between attempts. tmux
 // occasionally fails a split mid-layout under rapid pane churn — a
@@ -581,14 +588,14 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 					"split-window", "-h",
 					"-l", "70%",
 					"-P", "-F", "#{pane_id}",
-					"--", "sleep", "infinity",
+					"--", "sleep", placeholderSleepSecs,
 				}
 			} else {
 				tmuxArgs = []string{
 					"split-window", "-v",
 					"-t", lastPaneID,
 					"-P", "-F", "#{pane_id}",
-					"--", "sleep", "infinity",
+					"--", "sleep", placeholderSleepSecs,
 				}
 			}
 			paneID, err := splitWindowWithRetry(tmuxArgs)
