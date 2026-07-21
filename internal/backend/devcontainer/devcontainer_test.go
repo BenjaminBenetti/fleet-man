@@ -162,6 +162,7 @@ func TestDevcontainerUpArgsUpdateRemoteUserUID(t *testing.T) {
 func TestRunUserCommandsArgs(t *testing.T) {
 	t.Run("without ssh agent", func(t *testing.T) {
 		t.Setenv("SSH_AUTH_SOCK", "")
+		t.Setenv(sshAgentSockOverrideEnv, "")
 		got := runUserCommandsArgs("/ws/alpha")
 		want := []string{"run-user-commands", "--workspace-folder", "/ws/alpha"}
 		if !slices.Equal(got, want) {
@@ -170,7 +171,7 @@ func TestRunUserCommandsArgs(t *testing.T) {
 	})
 
 	t.Run("with ssh agent threads remote-env", func(t *testing.T) {
-		t.Setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+		liveAgentSocket(t)
 		got := runUserCommandsArgs("/ws/alpha")
 		want := []string{
 			"run-user-commands", "--workspace-folder", "/ws/alpha",
