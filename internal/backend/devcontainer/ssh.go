@@ -1,11 +1,21 @@
 package devcontainer
 
-import "os"
+import (
+	"os"
+	"runtime"
+)
 
 // containerSSHSocketPath is the target path for the SSH agent socket inside
 // managed containers. Uses /run instead of /tmp because some devcontainer
 // features (e.g. docker-in-docker) mount a tmpfs on /tmp that shadows bind mounts.
 const containerSSHSocketPath = "/run/ssh-agent.sock"
+
+// dockerDesktopSSHAuthSock is the fixed path at which Docker Desktop (and
+// OrbStack, which is path-compatible) exposes the host's SSH agent inside its
+// Linux VM. On macOS the host's real SSH_AUTH_SOCK (a launchd socket under
+// /private/tmp) is not visible to the VM, so bind-mounting it fails with
+// "bind source path does not exist" — this VM-side path must be used instead.
+const dockerDesktopSSHAuthSock = "/run/host-services/ssh-auth.sock"
 
 // hostSSHAuthSock returns the host's SSH_AUTH_SOCK path if the environment
 // variable is set and the socket exists. Returns empty string otherwise.
@@ -31,6 +41,12 @@ func sshUpArgs() []string {
 	sock := hostSSHAuthSock()
 	if sock == "" {
 		return nil
+	}
+	// The macOS agent socket only exists on the mac side; the Docker VM
+	// exposes the agent at its own fixed path. The host check above still
+	// gates on an agent actually running.
+	if runtime.GOOS == "darwin" {
+		sock = dockerDesktopSSHAuthSock
 	}
 	return []string{
 		"--mount", "type=bind,source=" + sock + ",target=" + containerSSHSocketPath,

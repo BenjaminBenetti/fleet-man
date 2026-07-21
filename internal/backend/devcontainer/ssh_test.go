@@ -4,8 +4,22 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+// shortSocketPath returns a socket path short enough to bind. t.TempDir()
+// on macOS lives under /var/folders/... and, with the test name appended,
+// exceeds the platform's 104-byte sun_path limit.
+func shortSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "fmssh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, "agent.sock")
+}
 
 func TestHostSSHAuthSock_Unset(t *testing.T) {
 	t.Setenv("SSH_AUTH_SOCK", "")
@@ -34,7 +48,7 @@ func TestHostSSHAuthSock_RegularFile(t *testing.T) {
 }
 
 func TestHostSSHAuthSock_ValidSocket(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "agent.sock")
+	sockPath := shortSocketPath(t)
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +62,7 @@ func TestHostSSHAuthSock_ValidSocket(t *testing.T) {
 }
 
 func TestSSHUpArgs_WithValidSocket(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "agent.sock")
+	sockPath := shortSocketPath(t)
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +77,11 @@ func TestSSHUpArgs_WithValidSocket(t *testing.T) {
 	if args[0] != "--mount" {
 		t.Errorf("args[0] = %q, want --mount", args[0])
 	}
-	wantMount := "type=bind,source=" + sockPath + ",target=" + containerSSHSocketPath
+	wantSource := sockPath
+	if runtime.GOOS == "darwin" {
+		wantSource = dockerDesktopSSHAuthSock
+	}
+	wantMount := "type=bind,source=" + wantSource + ",target=" + containerSSHSocketPath
 	if args[1] != wantMount {
 		t.Errorf("args[1] = %q, want %q", args[1], wantMount)
 	}
