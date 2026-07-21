@@ -1,0 +1,5 @@
+#!/bin/sh
+# macOS ships no timeout(1) at all (it's GNU coreutils). Fail the same way
+# an interactive mac shell would.
+echo "sh: timeout: command not found" >&2
+exit 127

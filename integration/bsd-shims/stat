@@ -1,0 +1,46 @@
+#!/bin/sh
+# BSD stat has no -c/--format/--printf (it spells formatting -f).
+for arg in "$@"; do
+  case "$arg" in
+    -c|--format|--format=*|--printf|--printf=*)
+      echo "stat: illegal option -- c" >&2
+      echo "usage: stat [-FLnq] [-f format | -l | -r | -s | -x] [-t timefmt] [file ...]" >&2
+      exit 1
+      ;;
+    --) break ;;
+  esac
+done
+
+self_dir=$(cd "$(dirname "$0")" && pwd)
+real=""
+old_ifs=$IFS; IFS=:
+for d in $PATH; do
+  [ "$d" = "$self_dir" ] && continue
+  [ -x "$d/stat" ] && { real="$d/stat"; break; }
+done
+IFS=$old_ifs
+[ -n "$real" ] || { echo "stat: real binary not found" >&2; exit 1; }
+
+# Emulate the BSD spelling instead of delegating it: on the real GNU stat
+# behind this shim, -f means --file-system and the format string would be
+# read as a file operand. Without this, portable "try GNU, fall back to
+# BSD" probes have NO working spelling under shims — a false positive
+# relative to a real Mac. Translate the formats the suite needs; fail
+# loudly on the rest so new uses extend the map instead of silently
+# hitting GNU semantics.
+if [ "${1:-}" = "-f" ] && [ $# -ge 2 ] && "$real" --version 2>/dev/null | grep -q GNU; then
+  fmt="$2"
+  shift 2
+  case "$fmt" in
+    "%Lp") exec "$real" -c '%a' "$@" ;;
+    "%z")  exec "$real" -c '%s' "$@" ;;
+    *)
+      echo "bsd-shims/stat: BSD -f format '$fmt' not emulated; add it to the shim" >&2
+      exit 1
+      ;;
+  esac
+fi
+# (a real BSD stat behind the shim — e.g. running the shims on an actual
+# Mac — handles -f natively, so it falls through to plain delegation)
+
+exec "$real" "$@"

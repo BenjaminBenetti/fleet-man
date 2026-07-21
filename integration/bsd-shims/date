@@ -1,0 +1,21 @@
+#!/bin/sh
+# BSD date has no -d/--date (relative dates are -v; epoch rendering is -r).
+for arg in "$@"; do
+  case "$arg" in
+    -d|--date|--date=*)
+      echo "usage: date [-jnRu] [-r seconds|filename] [-v[+|-]val[y|m|w|d|H|M|S]] [+output_fmt]" >&2
+      exit 1
+      ;;
+    --) break ;;
+  esac
+done
+self_dir=$(cd "$(dirname "$0")" && pwd)
+real=""
+old_ifs=$IFS; IFS=:
+for d in $PATH; do
+  [ "$d" = "$self_dir" ] && continue
+  [ -x "$d/date" ] && { real="$d/date"; break; }
+done
+IFS=$old_ifs
+[ -n "$real" ] || { echo "date: real binary not found" >&2; exit 1; }
+exec "$real" "$@"

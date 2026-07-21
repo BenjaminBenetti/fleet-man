@@ -20,6 +20,16 @@ fi
 
 say() { printf "%b==>%b %s\n" "${BOLD}" "${RESET}" "$*"; }
 
+# FLEET_ITEST_BSD_SHIMS=1 — prepend integration/bsd-shims to PATH so host
+# shell-outs see macOS/BSD command behavior on a GNU/Linux runner (see
+# bsd-shims/README.md). Catches the #231 bug class (e.g. `sleep infinity`)
+# across the full suite without Mac hardware. Container-side commands are
+# unaffected: containers run their own Linux userland.
+if [ -n "${FLEET_ITEST_BSD_SHIMS:-}" ]; then
+  export PATH="${INTEGRATION_DIR}/bsd-shims:${PATH}"
+  say "FLEET_ITEST_BSD_SHIMS set: host PATH now fronts BSD-behavior shims"
+fi
+
 # 1. Build fleet binary unless caller provided one.
 if [ -z "${FLEET_BIN:-}" ]; then
   build_dir="$(mktemp -d)"

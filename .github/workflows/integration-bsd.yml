@@ -1,0 +1,82 @@
+name: Integration Tests (BSD userland shims)
+
+# The full integration suite on cheap Linux runners, but with macOS/BSD
+# command behavior fronting the host PATH (integration/bsd-shims). This
+# catches the most common class of macOS breakage — GNU-isms in host-side
+# shell-outs, e.g. the `sleep infinity` placeholder that broke every
+# session-group switch on a Mac (#231) — across all tests, with no Mac
+# hardware. Docker and the containers keep their real Linux userland;
+# only what fleet and the harness run on the HOST sees BSD semantics.
+#
+# The technique is borrowed from the repo's QA bot, which validated the
+# #231 fix on Linux with exactly this kind of `sleep` shim.
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  integration-bsd-shard:
+    name: integration-bsd ${{ matrix.range }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        range:
+          - "0-100"
+          - "100-200"
+          - "200-300"
+          - "300-400"
+          - "400-500"
+          - "500-600"
+          - "600-"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install devcontainer CLI
+        run: npm install -g @devcontainers/cli
+
+      - name: Install tmux (used by TUI tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux
+          tmux -V
+
+      - name: Verify docker
+        run: |
+          docker version
+          docker info
+
+      - name: Build fleet binary
+        run: go build -o /usr/local/bin/fleet ./cmd/fleet
+
+      - name: Run integration tests under BSD shims
+        env:
+          FLEET_BIN: /usr/local/bin/fleet
+          FLEET_ITEST_RANGE: ${{ matrix.range }}
+          FLEET_ITEST_BSD_SHIMS: "1"
+        run: ./integration/run.sh
+
+  integration-bsd:
+    name: integration-bsd
+    runs-on: ubuntu-latest
+    needs: [integration-bsd-shard]
+    if: ${{ always() }}
+    steps:
+      - name: Verify all shards passed
+        run: |
+          result="${{ needs.integration-bsd-shard.result }}"
+          echo "integration-bsd shard matrix result: ${result}"
+          if [ "${result}" != "success" ]; then
+            echo "::error::one or more integration-bsd shards failed (result=${result})"
+            exit 1
+          fi

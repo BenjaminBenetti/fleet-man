@@ -17,7 +17,7 @@ info "create a file inside the instance"
 info "fleet copy alpha:/tmp/fc-test.bin (absolute path, explicit dest)"
 "${FLEET_BIN}" copy "${FIXTURE_REPO_NAME}/alpha:/tmp/fc-test.bin" "${workdir}/out.bin"
 assert_equals "copied-bytes" "$(cat "${workdir}/out.bin")" "copied file content"
-mode=$(stat -c '%a' "${workdir}/out.bin")
+mode=$(file_mode "${workdir}/out.bin")
 assert_equals "755" "${mode}" "copied file keeps its mode"
 
 info "fleet copy into a directory keeps the source basename"
