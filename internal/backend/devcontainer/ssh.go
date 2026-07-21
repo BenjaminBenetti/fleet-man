@@ -90,10 +90,12 @@ func sshUpArgs() []string {
 }
 
 // sshExecArgs returns additional devcontainer exec arguments to set
-// SSH_AUTH_SOCK inside the container. Returns nil if SSH_AUTH_SOCK
-// is not set on the host.
+// SSH_AUTH_SOCK inside the container. It uses the same gate as the mount
+// (sshAgentMountSource) so exec sessions export the variable exactly when
+// the socket is actually mounted — e.g. FLEET_SSH_AGENT_SOCK=off suppresses
+// both, and an override path with no host agent enables both.
 func sshExecArgs() []string {
-	if os.Getenv("SSH_AUTH_SOCK") == "" {
+	if sshAgentMountSource() == "" {
 		return nil
 	}
 	return []string{

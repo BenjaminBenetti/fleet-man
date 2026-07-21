@@ -132,13 +132,29 @@ func TestSSHUpArgs_OverrideOff(t *testing.T) {
 
 func TestSSHUpArgs_NoSocket(t *testing.T) {
 	t.Setenv("SSH_AUTH_SOCK", "")
+	t.Setenv(sshAgentSockOverrideEnv, "")
 	if args := sshUpArgs(); args != nil {
 		t.Errorf("expected nil, got %v", args)
 	}
 }
 
-func TestSSHExecArgs_WithEnvVar(t *testing.T) {
-	t.Setenv("SSH_AUTH_SOCK", "/some/path")
+// liveAgentSocket binds a real unix socket and points SSH_AUTH_SOCK at it,
+// with the override cleared — sshExecArgs shares sshUpArgs's gate, which
+// stats the socket, so a bare env var is no longer enough.
+func liveAgentSocket(t *testing.T) {
+	t.Helper()
+	sockPath := shortSocketPath(t)
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	t.Setenv("SSH_AUTH_SOCK", sockPath)
+	t.Setenv(sshAgentSockOverrideEnv, "")
+}
+
+func TestSSHExecArgs_WithAgent(t *testing.T) {
+	liveAgentSocket(t)
 	args := sshExecArgs()
 	if len(args) != 2 {
 		t.Fatalf("expected 2 args, got %d: %v", len(args), args)
@@ -152,15 +168,24 @@ func TestSSHExecArgs_WithEnvVar(t *testing.T) {
 	}
 }
 
-func TestSSHExecArgs_NoEnvVar(t *testing.T) {
+func TestSSHExecArgs_NoAgent(t *testing.T) {
 	t.Setenv("SSH_AUTH_SOCK", "")
+	t.Setenv(sshAgentSockOverrideEnv, "")
 	if args := sshExecArgs(); args != nil {
 		t.Errorf("expected nil, got %v", args)
 	}
 }
 
+func TestSSHExecArgs_OverrideOff(t *testing.T) {
+	liveAgentSocket(t)
+	t.Setenv(sshAgentSockOverrideEnv, "off")
+	if args := sshExecArgs(); args != nil {
+		t.Errorf("expected nil with %s=off, got %v", sshAgentSockOverrideEnv, args)
+	}
+}
+
 func TestExecArgs_WithSSH(t *testing.T) {
-	t.Setenv("SSH_AUTH_SOCK", "/some/path")
+	liveAgentSocket(t)
 	args := execArgs("/workspace", []string{"bash"})
 	expected := []string{
 		"exec", "--workspace-folder", "/workspace",
@@ -179,6 +204,7 @@ func TestExecArgs_WithSSH(t *testing.T) {
 
 func TestExecArgs_WithoutSSH(t *testing.T) {
 	t.Setenv("SSH_AUTH_SOCK", "")
+	t.Setenv(sshAgentSockOverrideEnv, "")
 	args := execArgs("/workspace", []string{"bash"})
 	expected := []string{"exec", "--workspace-folder", "/workspace", "bash"}
 	if len(args) != len(expected) {
