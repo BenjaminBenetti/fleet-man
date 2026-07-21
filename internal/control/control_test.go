@@ -62,10 +62,18 @@ func (c *collector) wait(t *testing.T, n int, timeout time.Duration) []Envelope 
 	return out
 }
 
-// tempSocket returns a socket path inside a fresh temp dir.
+// tempSocket returns a socket path inside a fresh temp dir. Not t.TempDir():
+// on macOS the /var/folders/... test temp dirs (plus the test name) can push
+// the path past the platform's 104-byte sun_path limit, failing the bind
+// with EINVAL.
 func tempSocket(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(t.TempDir(), SocketName)
+	dir, err := os.MkdirTemp("/tmp", "fmctl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, SocketName)
 }
 
 // TestRoundTripOpenBrowser dials a listening Server, sends an OpenBrowser

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: no-docker
 # Description: fleet agent / fleet trigger CLI CRUD (issue #189) — create, list,
 # edit (rename), and delete automation agents and triggers through a real
 # daemon, asserting the changes round-trip to state.json, that a rename rewrites
@@ -12,7 +13,6 @@ source "$(dirname "$0")/../common.sh"
 itest_cleanup() { pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true; }
 itest_begin
 
-server_count() { pgrep -fc "${FLEET_BIN} server" 2>/dev/null || true; }
 
 setup_test
 

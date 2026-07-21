@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: no-docker
 # Description: TUI new-fleet abort path when repo lacks a devcontainer.json
 set -euo pipefail
 

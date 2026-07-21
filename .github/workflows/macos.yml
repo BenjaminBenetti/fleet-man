@@ -1,0 +1,71 @@
+name: macOS
+
+# macOS coverage without macOS Docker: GitHub's hosted macOS runners are
+# Apple Silicon VMs with nested virtualization disabled, so Docker (Desktop,
+# colima, lima) cannot run at all. Instead of a self-hosted Mac, this
+# workflow covers the host-side surface where macOS bugs actually live
+# (BSD userland, sun_path limits, launchd sockets, tmux, process mgmt):
+#
+#   - unit: the full go test suite on macos-latest.
+#   - integration-no-docker: the integration tests marked "# itest:
+#     no-docker" (CLI surface, TUI dialogs, daemon lifecycle, automation
+#     CRUD), run with FLEET_ITEST_NO_DOCKER=1 — see integration/run.sh.
+#
+# True end-to-end `devcontainer up` against Docker Desktop on a Mac remains
+# manual (or a future self-hosted runner).
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-macos:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # The cli/session unit tests drive a real host tmux (they skip when
+      # it's missing — install it so they actually run here).
+      - name: Install tmux
+        run: |
+          brew install tmux
+          tmux -V
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+  integration-macos-no-docker:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install tmux
+        run: |
+          brew install tmux
+          tmux -V
+
+      - name: Build fleet binary
+        run: |
+          go build -o "${RUNNER_TEMP}/fleet" ./cmd/fleet
+          echo "FLEET_BIN=${RUNNER_TEMP}/fleet" >> "${GITHUB_ENV}"
+
+      - name: Run docker-free integration tests
+        env:
+          FLEET_ITEST_NO_DOCKER: "1"
+          # Hosted mac runners are slower than the Linux jobs; give the TUI
+          # polling deadlines the same headroom trick the WSL job uses.
+          FLEET_TUI_WAIT_SCALE: "2"
+        run: ./integration/run.sh

@@ -32,31 +32,40 @@ say "Using fleet binary: ${FLEET_BIN}"
 "${FLEET_BIN}" --help >/dev/null || { printf "%b[fatal]%b fleet binary failed to run\n" "${RED}" "${RESET}" >&2; exit 2; }
 
 # 2. Preflight: docker + devcontainer CLI must be available and usable.
-if ! command -v docker >/dev/null 2>&1; then
-  printf "%b[fatal]%b docker CLI not on PATH\n" "${RED}" "${RESET}" >&2
-  exit 2
-fi
-if ! docker info >/dev/null 2>&1; then
-  printf "%b[fatal]%b docker daemon not reachable\n" "${RED}" "${RESET}" >&2
-  exit 2
-fi
-if ! command -v devcontainer >/dev/null 2>&1; then
-  printf "%b[fatal]%b devcontainer CLI not on PATH (npm i -g @devcontainers/cli)\n" "${RED}" "${RESET}" >&2
-  exit 2
-fi
-
-# 3. Pre-pull each fixture image once so individual tests are not waiting
-#    on image pulls. The agent fixture is used by the startup-script tests
-#    (claude / codex install) and is a different image from the default.
-for fixture_dir in "${INTEGRATION_DIR}/fixture" "${INTEGRATION_DIR}/fixture-agent"; do
-  dc_json="${fixture_dir}/.devcontainer/devcontainer.json"
-  [ -f "${dc_json}" ] || continue
-  fixture_image=$(grep -oE '"image":\s*"[^"]+"' "${dc_json}" | sed -E 's/.*"([^"]+)"$/\1/')
-  if [ -n "${fixture_image}" ]; then
-    say "Pre-pulling fixture image: ${fixture_image}"
-    docker pull -q "${fixture_image}" >/dev/null || true
+#    FLEET_ITEST_NO_DOCKER=1 skips the preflight and (below) restricts the
+#    run to tests marked "# itest: no-docker" — the host-side subset (CLI
+#    surface, TUI dialogs, daemon lifecycle, automation CRUD) that never
+#    creates an instance. This is what lets the suite run on GitHub's
+#    hosted macOS runners, whose Apple Silicon VMs cannot run Docker.
+if [ -z "${FLEET_ITEST_NO_DOCKER:-}" ]; then
+  if ! command -v docker >/dev/null 2>&1; then
+    printf "%b[fatal]%b docker CLI not on PATH\n" "${RED}" "${RESET}" >&2
+    exit 2
   fi
-done
+  if ! docker info >/dev/null 2>&1; then
+    printf "%b[fatal]%b docker daemon not reachable\n" "${RED}" "${RESET}" >&2
+    exit 2
+  fi
+  if ! command -v devcontainer >/dev/null 2>&1; then
+    printf "%b[fatal]%b devcontainer CLI not on PATH (npm i -g @devcontainers/cli)\n" "${RED}" "${RESET}" >&2
+    exit 2
+  fi
+
+  # 3. Pre-pull each fixture image once so individual tests are not waiting
+  #    on image pulls. The agent fixture is used by the startup-script tests
+  #    (claude / codex install) and is a different image from the default.
+  for fixture_dir in "${INTEGRATION_DIR}/fixture" "${INTEGRATION_DIR}/fixture-agent"; do
+    dc_json="${fixture_dir}/.devcontainer/devcontainer.json"
+    [ -f "${dc_json}" ] || continue
+    fixture_image=$(grep -oE '"image":\s*"[^"]+"' "${dc_json}" | sed -E 's/.*"([^"]+)"$/\1/')
+    if [ -n "${fixture_image}" ]; then
+      say "Pre-pulling fixture image: ${fixture_image}"
+      docker pull -q "${fixture_image}" >/dev/null || true
+    fi
+  done
+else
+  say "FLEET_ITEST_NO_DOCKER set: skipping docker preflight, running docker-free tests only"
+fi
 
 # 4. Iterate tests.
 shopt -s nullglob
@@ -86,8 +95,36 @@ if [ -n "${FLEET_ITEST_RANGE:-}" ]; then
     [ -z "${range_end}" ] || [ "${n}" -lt "$((10#${range_end}))" ] || continue
     shard+=("${test_file}")
   done
+  # Same bash-3.2 constraint as the no-docker filter below: check the
+  # length before expanding the possibly-empty array, and make the
+  # documented empty-shard exit explicit.
+  say "Shard ${FLEET_ITEST_RANGE}: running ${#shard[@]} test(s)"
+  if [ "${#shard[@]}" -eq 0 ]; then
+    say "Empty shard — nothing to do"
+    exit 0
+  fi
   tests=("${shard[@]}")
-  say "Shard ${FLEET_ITEST_RANGE}: running ${#tests[@]} test(s)"
+fi
+
+# No-docker mode: keep only tests that opt in with a "# itest: no-docker"
+# marker line. Opt-in (not inference) so a test that quietly grows a docker
+# dependency fails loudly in review rather than silently joining this set.
+if [ -n "${FLEET_ITEST_NO_DOCKER:-}" ]; then
+  nodocker=()
+  for test_file in "${tests[@]}"; do
+    if grep -q "^# itest: no-docker" "${test_file}"; then
+      nodocker+=("${test_file}")
+    fi
+  done
+  # Length check BEFORE expanding: in bash < 4.4 (macOS ships 3.2),
+  # "${nodocker[@]}" on an empty array is an unbound-variable error under
+  # set -u — the graceful exit below would never be reached.
+  say "No-docker subset: running ${#nodocker[@]} test(s)"
+  if [ "${#nodocker[@]}" -eq 0 ]; then
+    say "No no-docker tests in shard — nothing to do"
+    exit 0
+  fi
+  tests=("${nodocker[@]}")
 fi
 
 # Shared results file — tests append one row each via common.sh helpers.
@@ -123,19 +160,24 @@ source "${INTEGRATION_DIR}/common.sh"
 # (without the .sh suffix). Skipped tests emit a "skip" row and never
 # run; the suite does not fail on them. Used by the WSL CI job to
 # exempt environment-specific known-bad tests.
-declare -A skip_set=()
+#
+# Held as a comma-delimited string probed with a pattern match (not an
+# associative array): macOS ships bash 3.2, which has no `declare -A`,
+# and the no-docker mode runs this script there.
+skip_csv=""
 if [ -n "${FLEET_ITEST_SKIP:-}" ]; then
   IFS=',' read -ra _skip_list <<< "${FLEET_ITEST_SKIP}"
   for s in "${_skip_list[@]}"; do
     s_trimmed=$(printf '%s' "${s}" | tr -d '[:space:]')
-    [ -n "${s_trimmed}" ] && skip_set["${s_trimmed}"]=1
+    [ -n "${s_trimmed}" ] && skip_csv="${skip_csv},${s_trimmed}"
   done
+  skip_csv="${skip_csv},"
 fi
 
 for test_file in "${tests[@]}"; do
   test_name=$(basename "${test_file}" .sh)
   printf "\n"
-  if [ -n "${skip_set[${test_name}]:-}" ]; then
+  if [ -n "${skip_csv}" ] && [[ "${skip_csv}" == *",${test_name},"* ]]; then
     say "${YELLOW}SKIP${RESET} ${test_name} (FLEET_ITEST_SKIP)"
     desc=$(grep -m1 -E '^# Description:' "${test_file}" 2>/dev/null \
       | sed -E 's/^# Description: *//')
@@ -173,14 +215,15 @@ fi
 
 # Any test file that did not emit a row at all is an unexplained crash
 # (e.g. syntax error before itest_begin ran). Surface it as a failure.
-declare -A seen_names
+# Same bash-3.2 constraint as skip_csv above: no associative arrays.
+seen_csv=","
 for row in "${result_rows[@]}"; do
   IFS='|' read -r n _ _ _ <<< "${row}"
-  seen_names["${n}"]=1
+  seen_csv="${seen_csv}${n},"
 done
 for test_file in "${tests[@]}"; do
   n=$(basename "${test_file}" .sh)
-  if [ -z "${seen_names[${n}]:-}" ]; then
+  if [[ "${seen_csv}" != *",${n},"* ]]; then
     failed=$((failed + 1))
     failed_tests+=("${n}")
     result_rows+=("${n}|fail|0|(test did not emit a result — crashed before itest_begin?)")

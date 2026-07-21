@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: no-docker
 # Description: TUI new-fleet check passes through when repo has a devcontainer.json
 set -euo pipefail
 

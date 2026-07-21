@@ -601,3 +601,12 @@ tui_assert_not_contains() {
     fail "${msg}: needle=[${needle}]"
   fi
 }
+
+# server_count — number of live `fleet server` daemons for this suite's
+# binary. Shared here because macOS pgrep has no -c flag (the old per-test
+# `pgrep -fc` printed nothing there and every count assertion failed); the
+# pipe form behaves identically on Linux and macOS. `|| true` absorbs
+# pgrep's exit 1 on zero matches under pipefail.
+server_count() {
+  { pgrep -f "${FLEET_BIN} server" 2>/dev/null || true; } | wc -l | tr -d ' '
+}

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: no-docker
 # Description: a cold `fleet` command auto-spawns the fleetd daemon (socket appears) and the next reuses it.
 set -euo pipefail
 
@@ -6,7 +7,6 @@ source "$(dirname "$0")/../common.sh"
 itest_cleanup() { pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true; }
 itest_begin
 
-server_count() { pgrep -fc "${FLEET_BIN} server" 2>/dev/null || true; }
 server_pid() { pgrep -f "${FLEET_BIN} server" 2>/dev/null | head -n1 || true; }
 
 setup_test

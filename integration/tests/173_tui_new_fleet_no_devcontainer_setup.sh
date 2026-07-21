@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: no-docker
 # Description: TUI new-fleet Setup branch adds the fleet and launches the agent
 set -euo pipefail
 

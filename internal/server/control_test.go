@@ -20,6 +20,21 @@ type copyEvent struct {
 	fleet, instance, src, dst string
 }
 
+// shortHome creates a temp HOME under /tmp and points $HOME at it. Not
+// t.TempDir(): the control socket lives at
+// $HOME/.fleet/workspaces/<fleet>/<inst>/.control/fleet.sock, and on macOS
+// the /var/folders/... test temp dirs push that past the platform's
+// 104-byte sun_path limit, so the listener never binds.
+func shortHome(t *testing.T) {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "fmctl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Setenv("HOME", dir)
+}
+
 // waitForSocket polls path until it exists or the deadline passes.
 func waitForSocket(t *testing.T, path string, timeout time.Duration) bool {
 	t.Helper()
@@ -45,7 +60,7 @@ func fabricatedRunningState(fleetName, instanceName string) *state.State {
 // client.OpenBrowser round-trips an event into onOpen tagged with the right
 // fleet/instance, and a stopped instance's listener is dropped on the next sync.
 func TestControlSyncRoundTrip(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	shortHome(t)
 
 	const (
 		fleetName    = "alpha"
@@ -134,7 +149,7 @@ func TestControlSyncRoundTrip(t *testing.T) {
 // onOpen must not wedge serveConn, so shutdown() returns promptly. (The test's
 // onOpen drops on a full buffer, mirroring the server's non-blocking hub.post.)
 func TestControlShutdownFullBuffer(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	shortHome(t)
 
 	const (
 		fleetName    = "alpha"
@@ -182,7 +197,7 @@ func TestControlShutdownFullBuffer(t *testing.T) {
 // TestControlSyncIdempotent verifies repeated syncs against an unchanged running
 // set keep the same server pointer (no leak, no recreate).
 func TestControlSyncIdempotent(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	shortHome(t)
 
 	const (
 		fleetName    = "alpha"
@@ -214,7 +229,7 @@ func TestControlSyncIdempotent(t *testing.T) {
 // void (integration test 510). (Short name keeps the temp-HOME socket path under
 // the unix sun_path limit.)
 func TestCtrlGate(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	shortHome(t)
 
 	const (
 		fleetName    = "alpha"

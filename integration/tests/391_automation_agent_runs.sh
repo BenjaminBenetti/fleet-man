@@ -14,7 +14,6 @@ source "$(dirname "$0")/../common.sh"
 itest_cleanup() { pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true; }
 itest_begin
 
-server_count() { pgrep -fc "${FLEET_BIN} server" 2>/dev/null || true; }
 
 # Shorten the scheduler's idle timeout + tick so the reap half of the lifecycle
 # verifies in ~a minute instead of the production 2m/30s. The daemon inherits
