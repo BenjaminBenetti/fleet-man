@@ -301,7 +301,7 @@ func buildCloneRunArgs(imageTag, destWorkspaceDir, workspaceTarget string, inspe
 		args = append(args, "--network", mode)
 	}
 
-	if sock := hostSSHAuthSock(); sock != "" {
+	if sock := sshAgentMountSource(); sock != "" {
 		args = append(args, "--mount", "type=bind,source="+sock+",target="+containerSSHSocketPath)
 	}
 
