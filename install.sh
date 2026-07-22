@@ -31,11 +31,18 @@ case "$ARCH" in
         ;;
 esac
 
+# Detect OS and map it to the release asset's platform token. Releases ship a
+# binary per OS/arch pair (fleet-linux-amd64, fleet-darwin-arm64, ...); pick the
+# one matching this machine.
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-if [ "$OS" != "linux" ]; then
-    echo "Error: unsupported OS: $OS (only linux is supported)"
-    exit 1
-fi
+case "$OS" in
+    linux)         OS="linux" ;;
+    darwin)        OS="darwin" ;;
+    *)
+        echo "Error: unsupported OS: $OS (supported: linux, darwin)"
+        exit 1
+        ;;
+esac
 
 ASSET="fleet-${OS}-${ARCH}"
 
@@ -67,6 +74,14 @@ if [ "$HTTP_CODE" != "200" ]; then
 fi
 
 chmod +x "$TMP"
+
+# Ensure install directory exists (fresh macOS installs may not have /usr/local/bin)
+if [ ! -d "$INSTALL_DIR" ]; then
+    if ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
+        echo "Creating ${INSTALL_DIR} (requires sudo)..."
+        sudo mkdir -p "$INSTALL_DIR"
+    fi
+fi
 
 # Install — use sudo if needed
 if [ -w "$INSTALL_DIR" ]; then

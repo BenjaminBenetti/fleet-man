@@ -490,7 +490,7 @@ location), `TMUX` (enables split-pane mode when run inside tmux), `SSH_AUTH_SOCK
 
 ## Requirements
 
-- Linux, including Ubuntu on WSL2
+- Linux (including Ubuntu on WSL2) or macOS
 - Docker
 - [devcontainer CLI](https://github.com/devcontainers/cli) (`npm install -g @devcontainers/cli`)
 
