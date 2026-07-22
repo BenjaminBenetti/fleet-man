@@ -108,7 +108,11 @@ func (devcontainerBackend *DevcontainerBackend) Clone(sourceContainerID, destWor
 		return nil, fmt.Errorf("clone: docker commit failed: %w", err)
 	}
 
-	runArgs := buildCloneRunArgs(imageTag, destWorkspaceDir, workspaceTarget, inspected, mounts)
+	runArgs, err := buildCloneRunArgs(imageTag, destWorkspaceDir, workspaceTarget, inspected, mounts)
+	if err != nil {
+		_ = exec.Command("docker", "rmi", imageTag).Run()
+		return nil, fmt.Errorf("clone: %w", err)
+	}
 	runCmd := exec.Command("docker", runArgs...)
 	out, err := runCmd.Output()
 	if err != nil {
@@ -256,7 +260,7 @@ func findWorkspaceMountTarget(inspected *inspectedContainer) string {
 // ptrace, etc.) still work in the clone. Port bindings are
 // deliberately not propagated — keeping them would collide with the
 // source container if both are running.
-func buildCloneRunArgs(imageTag, destWorkspaceDir, workspaceTarget string, inspected *inspectedContainer, mounts []backend.Mount) []string {
+func buildCloneRunArgs(imageTag, destWorkspaceDir, workspaceTarget string, inspected *inspectedContainer, mounts []backend.Mount) ([]string, error) {
 	args := []string{"run", "-d",
 		"--label", devcontainerLocalFolderLabel + "=" + destWorkspaceDir,
 		"--label", cloneImageLabel + "=" + imageTag,
@@ -301,13 +305,17 @@ func buildCloneRunArgs(imageTag, destWorkspaceDir, workspaceTarget string, inspe
 		args = append(args, "--network", mode)
 	}
 
-	if sock := sshAgentMountSource(); sock != "" {
+	sock, err := sshAgentMountSource()
+	if err != nil {
+		return nil, err
+	}
+	if sock != "" {
 		args = append(args, "--mount", "type=bind,source="+sock+",target="+containerSSHSocketPath)
 	}
 
 	args = append(args, customMountArgs(mounts)...)
 	args = append(args, imageTag)
-	return args
+	return args, nil
 }
 
 // newCloneImageTag returns a unique image tag of the form
