@@ -75,6 +75,12 @@ fi
 
 chmod +x "$TMP"
 
+# Ensure install directory exists (fresh macOS installs may not have /usr/local/bin)
+if [ ! -d "$INSTALL_DIR" ]; then
+    echo "Creating ${INSTALL_DIR} (requires sudo)..."
+    sudo mkdir -p "$INSTALL_DIR"
+fi
+
 # Install — use sudo if needed
 if [ -w "$INSTALL_DIR" ]; then
     mv "$TMP" "${INSTALL_DIR}/${BINARY}"
