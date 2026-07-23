@@ -1,0 +1,21 @@
+#!/bin/sh
+# BSD sleep accepts only a number (optionally with an smhd unit on newer
+# macOS). GNU extensions like "infinity" exit 1 with a usage error there.
+for arg in "$@"; do
+  case "$arg" in
+    ''|*[!0-9.smhd]*)
+      echo "usage: sleep number[unit] [...]" >&2
+      exit 1
+      ;;
+  esac
+done
+self_dir=$(cd "$(dirname "$0")" && pwd)
+real=""
+old_ifs=$IFS; IFS=:
+for d in $PATH; do
+  [ "$d" = "$self_dir" ] && continue
+  [ -x "$d/sleep" ] && { real="$d/sleep"; break; }
+done
+IFS=$old_ifs
+[ -n "$real" ] || { echo "sleep: real binary not found" >&2; exit 1; }
+exec "$real" "$@"

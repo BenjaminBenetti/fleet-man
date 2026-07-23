@@ -601,3 +601,22 @@ tui_assert_not_contains() {
     fail "${msg}: needle=[${needle}]"
   fi
 }
+
+# server_count — number of live `fleet server` daemons for this suite's
+# binary. Shared here because macOS pgrep has no -c flag (the old per-test
+# `pgrep -fc` printed nothing there and every count assertion failed); the
+# pipe form behaves identically on Linux and macOS. `|| true` absorbs
+# pgrep's exit 1 on zero matches under pipefail.
+server_count() {
+  { pgrep -f "${FLEET_BIN} server" 2>/dev/null || true; } | wc -l | tr -d ' '
+}
+
+# file_mode <path> — octal permission bits of a HOST file, portably. Not
+# stat: GNU spells it -c '%a' and BSD -f '%Lp', and no probe order survives
+# the BSD-shim job — the shim rejects -c like BSD, but a -f fallback lands
+# on the real GNU stat where -f means file*system* status. perl's stat has
+# one meaning everywhere. (In-container stat calls stay plain `stat -c` —
+# containers are Linux regardless of the host.)
+file_mode() {
+  perl -e 'printf "%o", (stat shift)[2] & 07777' "$1"
+}

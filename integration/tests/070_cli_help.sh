@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: no-docker
 # Description: `fleet --help` and every subcommand --help exit 0 and surface their usage.
 set -euo pipefail
 

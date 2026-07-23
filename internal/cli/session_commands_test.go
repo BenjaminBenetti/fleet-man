@@ -61,17 +61,21 @@ func seedState(t *testing.T, status fleet.InstanceStatus) string {
 // target the developer's running server instead of our private socket. The
 // cleanup's `tmux kill-server` would then murder the developer's session.
 func tmuxIsolatedEnv(tmuxDir string) []string {
-	env := make([]string, 0, len(os.Environ())+1)
+	env := make([]string, 0, len(os.Environ())+2)
 	for _, kv := range os.Environ() {
 		switch {
 		case strings.HasPrefix(kv, "TMUX="),
 			strings.HasPrefix(kv, "TMUX_PANE="),
-			strings.HasPrefix(kv, "TMUX_TMPDIR="):
+			strings.HasPrefix(kv, "TMUX_TMPDIR="),
+			strings.HasPrefix(kv, "HOME="):
 			continue
 		}
 		env = append(env, kv)
 	}
-	return append(env, "TMUX_TMPDIR="+tmuxDir)
+	// HOME points at the tmux dir so shells the tmux server spawns drop
+	// their exit-time files (e.g. zsh history) there, not into the test's
+	// TempDir — whose cleanup races those writes and fails the test.
+	return append(env, "TMUX_TMPDIR="+tmuxDir, "HOME="+tmuxDir)
 }
 
 // useHostTmux skips the test if tmux is missing on PATH, then redirects
@@ -82,7 +86,14 @@ func useHostTmux(t *testing.T) string {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed on host; skipping integration test")
 	}
-	tmuxDir := t.TempDir()
+	// Not t.TempDir(): tmux appends tmux-$UID/default to TMUX_TMPDIR, and on
+	// macOS the /var/folders/... test temp dirs push the socket path past the
+	// platform's 104-byte sun_path limit ("File name too long").
+	tmuxDir, err := os.MkdirTemp("/tmp", "fmtmux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmuxDir) })
 
 	prevExec := sessionExecCommand
 	sessionExecCommand = func(_, _ string, args []string) (*exec.Cmd, error) {

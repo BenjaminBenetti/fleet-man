@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: no-docker
 # Description: TUI delete on empty fleet uses single-confirm path (no warn dialog)
 set -euo pipefail
 

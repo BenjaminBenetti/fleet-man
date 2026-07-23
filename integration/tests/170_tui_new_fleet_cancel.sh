@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: no-docker
 # Description: TUI new-fleet dialog cancel with esc does not create a fleet
 set -euo pipefail
 

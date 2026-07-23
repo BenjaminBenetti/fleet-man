@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: no-docker
 # Description: a hard-killed daemon leaves a stale socket; the next command clears it and respawns cleanly.
 set -euo pipefail
 
@@ -6,7 +7,6 @@ source "$(dirname "$0")/../common.sh"
 itest_cleanup() { pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true; }
 itest_begin
 
-server_count() { pgrep -fc "${FLEET_BIN} server" 2>/dev/null || true; }
 
 setup_test
 seed_fleet_settings "${FIXTURE_REPO_NAME}" false false "" false
