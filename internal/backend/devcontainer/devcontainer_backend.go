@@ -235,7 +235,11 @@ func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts [
 	if err != nil {
 		return nil, err
 	}
-	args = append(args, sshUpArgs()...)
+	sshArgs, err := sshUpArgs()
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, sshArgs...)
 	args = append(args, customMountArgs(mounts)...)
 	cmd := exec.Command("devcontainer", args...)
 	env, err := devcontainerEnv(os.Environ())

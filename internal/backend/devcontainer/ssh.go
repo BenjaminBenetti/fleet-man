@@ -1,8 +1,11 @@
 package devcontainer
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // containerSSHSocketPath is the target path for the SSH agent socket inside
@@ -45,22 +48,37 @@ func hostSSHAuthSock() string {
 	return sock
 }
 
+// agentSockDisabled reports whether an override value is the forwarding
+// kill-switch. Case-insensitive so OFF/None from a shell rc don't fall
+// through and get bind-mounted verbatim as a (nonexistent) source path.
+func agentSockDisabled(override string) bool {
+	return strings.EqualFold(override, "off") || strings.EqualFold(override, "none")
+}
+
 // sshAgentMountSource returns the bind source to use for the SSH agent
 // socket mount, or "" when agent forwarding should be skipped. Shared by
 // devcontainer up and clone so every container-creation path applies the
-// same gate, darwin remap, and override.
-func sshAgentMountSource() string {
-	return sshAgentMountSourceFor(os.Getenv(sshAgentSockOverrideEnv), hostSSHAuthSock(), runtime.GOOS)
+// same gate, darwin remap, and override. An unusable override value is a
+// hard error (matching the other FLEET_* env parsers): silently splicing
+// it into the mount string would resurface as a confusing docker failure
+// far from the cause — commas would even inject extra mount options.
+func sshAgentMountSource() (string, error) {
+	override := strings.TrimSpace(os.Getenv(sshAgentSockOverrideEnv))
+	if override != "" && !agentSockDisabled(override) {
+		if strings.Contains(override, ",") || !filepath.IsAbs(override) {
+			return "", fmt.Errorf("invalid %s value %q (valid: an absolute socket path, or off/none to disable agent forwarding)", sshAgentSockOverrideEnv, override)
+		}
+	}
+	return sshAgentMountSourceFor(override, hostSSHAuthSock(), runtime.GOOS), nil
 }
 
 // sshAgentMountSourceFor is the pure core of sshAgentMountSource, split out
 // so both the linux and darwin branches are testable on any platform.
 func sshAgentMountSourceFor(override, hostSock, goos string) string {
-	switch override {
-	case "off", "none":
+	switch {
+	case agentSockDisabled(override):
 		return ""
-	case "":
-	default:
+	case override != "":
 		return override
 	}
 	if hostSock == "" {
@@ -77,25 +95,32 @@ func sshAgentMountSourceFor(override, hostSock, goos string) string {
 
 // sshUpArgs returns additional devcontainer up arguments to bind-mount the
 // host SSH agent socket and set SSH_AUTH_SOCK inside the container.
-// Returns nil if SSH agent forwarding is not available.
-func sshUpArgs() []string {
-	sock := sshAgentMountSource()
+// Returns nil args if SSH agent forwarding is not available, and an error
+// for an unusable FLEET_SSH_AGENT_SOCK value.
+func sshUpArgs() ([]string, error) {
+	sock, err := sshAgentMountSource()
+	if err != nil {
+		return nil, err
+	}
 	if sock == "" {
-		return nil
+		return nil, nil
 	}
 	return []string{
 		"--mount", "type=bind,source=" + sock + ",target=" + containerSSHSocketPath,
 		"--remote-env", "SSH_AUTH_SOCK=" + containerSSHSocketPath,
-	}
+	}, nil
 }
 
 // sshExecArgs returns additional devcontainer exec arguments to set
 // SSH_AUTH_SOCK inside the container. It uses the same gate as the mount
 // (sshAgentMountSource) so exec sessions export the variable exactly when
 // the socket is actually mounted — e.g. FLEET_SSH_AGENT_SOCK=off suppresses
-// both, and an override path with no host agent enables both.
+// both, and an override path with no host agent enables both. An invalid
+// override already hard-fails instance creation; exec just degrades to no
+// forwarding rather than blocking shells into an existing container.
 func sshExecArgs() []string {
-	if sshAgentMountSource() == "" {
+	sock, err := sshAgentMountSource()
+	if err != nil || sock == "" {
 		return nil
 	}
 	return []string{

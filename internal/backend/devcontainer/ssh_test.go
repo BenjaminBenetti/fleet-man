@@ -94,7 +94,10 @@ func TestSSHUpArgs_WithValidSocket(t *testing.T) {
 
 	t.Setenv("SSH_AUTH_SOCK", sockPath)
 	t.Setenv(sshAgentSockOverrideEnv, "")
-	args := sshUpArgs()
+	args, err := sshUpArgs()
+	if err != nil {
+		t.Fatalf("sshUpArgs: %v", err)
+	}
 	if len(args) != 4 {
 		t.Fatalf("expected 4 args, got %d: %v", len(args), args)
 	}
@@ -125,16 +128,40 @@ func TestSSHUpArgs_OverrideOff(t *testing.T) {
 
 	t.Setenv("SSH_AUTH_SOCK", sockPath)
 	t.Setenv(sshAgentSockOverrideEnv, "off")
-	if args := sshUpArgs(); args != nil {
-		t.Errorf("expected nil with %s=off, got %v", sshAgentSockOverrideEnv, args)
+	if args, err := sshUpArgs(); err != nil || args != nil {
+		t.Errorf("expected nil/nil with %s=off, got %v, %v", sshAgentSockOverrideEnv, args, err)
+	}
+}
+
+func TestSSHUpArgs_OverrideCaseAndWhitespace(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "")
+	// OFF and padded off both disable forwarding rather than becoming a
+	// literal bind source.
+	for _, v := range []string{"OFF", " None ", "off "} {
+		t.Setenv(sshAgentSockOverrideEnv, v)
+		if args, err := sshUpArgs(); err != nil || args != nil {
+			t.Errorf("%s=%q: expected nil/nil, got %v, %v", sshAgentSockOverrideEnv, v, args, err)
+		}
+	}
+}
+
+func TestSSHUpArgs_OverrideInvalid(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "")
+	// Relative paths and comma-splicing into the mount string are hard
+	// errors, not confusing downstream docker failures.
+	for _, v := range []string{"relative/path.sock", "/run/foo.sock,readonly", "true"} {
+		t.Setenv(sshAgentSockOverrideEnv, v)
+		if _, err := sshUpArgs(); err == nil {
+			t.Errorf("%s=%q: expected error, got none", sshAgentSockOverrideEnv, v)
+		}
 	}
 }
 
 func TestSSHUpArgs_NoSocket(t *testing.T) {
 	t.Setenv("SSH_AUTH_SOCK", "")
 	t.Setenv(sshAgentSockOverrideEnv, "")
-	if args := sshUpArgs(); args != nil {
-		t.Errorf("expected nil, got %v", args)
+	if args, err := sshUpArgs(); err != nil || args != nil {
+		t.Errorf("expected nil/nil, got %v, %v", args, err)
 	}
 }
 
