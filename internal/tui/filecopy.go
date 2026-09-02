@@ -77,20 +77,22 @@ func copyForInstanceCmd(req copyRequest) tea.Cmd {
 		}
 		done := fileCopyDoneMsg{src: req.src, dst: req.dst, dest: res.DestPath}
 		if req.open {
-			done.openErr = openDelivered(dstEnd, res.DestPath)
+			done.dest, done.openErr = openDelivered(dstEnd, res.DestPath)
 			done.opened = done.openErr == nil
 		}
 		return done
 	}
 }
 
-// openDelivered hands a just-copied file to this machine's default application.
-// It refuses when the destination was not this machine: the path would then be
-// an in-instance one, and opening a same-named local file would be both wrong
-// and a way for a crafted envelope to open arbitrary host paths.
-func openDelivered(dst fleetclient.ResolvedEndpoint, dest string) error {
+// openDelivered hands a just-copied file to this machine's default application
+// and returns the (absolute) path it reported. It refuses when the destination
+// was not this machine: the path would then be an in-instance one, and opening
+// a same-named local file would be both wrong and a way for a crafted envelope
+// to open arbitrary host paths. platform.OpenFile additionally refuses anything
+// the opener would launch rather than view (executables, .desktop, .app, ...).
+func openDelivered(dst fleetclient.ResolvedEndpoint, dest string) (string, error) {
 	if !dst.Local {
-		return errors.New("destination is not on this machine")
+		return dest, errors.New("destination is not on this machine")
 	}
 	return platform.OpenFile(dest)
 }

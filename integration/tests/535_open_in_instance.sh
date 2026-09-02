@@ -4,7 +4,14 @@ set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
 workdir=$(mktemp -d)
-itest_cleanup() { tui_kill; rm -rf "${workdir}"; rm -f "${HOME}/Downloads/fo-itest.txt"; }
+created_downloads=0
+itest_cleanup() {
+  tui_kill
+  rm -rf "${workdir}"
+  rm -f "${HOME}/Downloads/fo-itest.txt"
+  # Leave the real home as we found it: only remove ~/Downloads if we made it.
+  if [ "${created_downloads}" = 1 ]; then rmdir "${HOME}/Downloads" 2>/dev/null || true; fi
+}
 itest_begin
 
 setup_test
@@ -23,8 +30,12 @@ chmod +x "${opener}"
 export FLEET_OPENER="${opener}"
 tmux set-environment -g FLEET_OPENER "${opener}" >/dev/null 2>&1 || true
 
-# The 1-arg form delivers to ~/Downloads when it exists.
-mkdir -p "${HOME}/Downloads"
+# The 1-arg form delivers to ~/Downloads when it exists (common.sh does not
+# isolate $HOME, so remember whether this test created the directory).
+if [ ! -d "${HOME}/Downloads" ]; then
+  mkdir -p "${HOME}/Downloads"
+  created_downloads=1
+fi
 rm -f "${HOME}/Downloads/fo-itest.txt"
 
 info "create a file inside the instance"

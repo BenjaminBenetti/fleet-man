@@ -58,7 +58,7 @@ func InInstance() bool {
 func Request(cfg Config, out io.Writer, src, dst string, open bool) error {
 	client, err := control.Dial(cfg.socketPath())
 	if err != nil {
-		return fmt.Errorf("not connected to a host fleet — `fc` needs a running fleet TUI on the host")
+		return fmt.Errorf("not connected to a host fleet — this needs a running fleet TUI on the host")
 	}
 	defer client.Close()
 	if err := client.CopyFile(src, dst, open); err != nil {

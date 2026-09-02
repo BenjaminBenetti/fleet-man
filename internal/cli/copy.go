@@ -89,8 +89,14 @@ func runCopy(ctx context.Context, out io.Writer, src, dst string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Copied %s -> %s (%d bytes)\n", src, res.DestPath, res.Written)
+	reportCopied(out, src, res)
 	return nil
+}
+
+// reportCopied prints the one-line outcome of a host-form copy (shared with
+// `fleet open`, which copies the same way before opening).
+func reportCopied(out io.Writer, src string, res fleetclient.CopyResult) {
+	fmt.Fprintf(out, "Copied %s -> %s (%d bytes)\n", src, res.DestPath, res.Written)
 }
 
 // rewriteInstanceLocal turns a plain (cwd-relative) path typed inside an instance

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path/filepath"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetcopy"
@@ -31,14 +30,16 @@ func newOpenCmd() *cobra.Command {
 		"desktop's default application. The endpoints are fleet copy's.\n\n" +
 		"  fleet open alpha:out/chart.png             copy to the cwd and open\n" +
 		"  fleet open alpha:report.pdf ~/Documents/   copy there and open\n\n" +
-		"FLEET_OPENER overrides the opener program (default: xdg-open, open, or wslview)."
+		"FLEET_OPENER overrides the opener (program + args, split on whitespace;\n" +
+		"default: xdg-open, open, or wslview). Executables are never opened."
 	if fleetcopy.InInstance() {
 		long = "Copy a file from this instance to your machine, then open it there with\n" +
 			"your desktop's default application. The endpoints are fc's.\n\n" +
 			"  fo ./out/chart.png                copy to your downloads folder and open\n" +
 			"  fo report.pdf host:~/Documents/   copy there and open\n\n" +
 			"The copy asks for confirmation in the fleet TUI, which does the opening\n" +
-			"(FLEET_OPENER in its environment overrides the opener program)."
+			"(FLEET_OPENER in its environment overrides the opener). Executables are\n" +
+			"never opened."
 	}
 
 	return &cobra.Command{
@@ -75,17 +76,12 @@ func runOpen(ctx context.Context, out io.Writer, src, dst string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Copied %s -> %s (%d bytes)\n", src, res.DestPath, res.Written)
-	// The 1-arg form lands the file as a bare name in the cwd; hand the opener
-	// an absolute path so it is unambiguous whatever the handler's own cwd is.
-	target := res.DestPath
-	if abs, err := filepath.Abs(target); err == nil {
-		target = abs
+	reportCopied(out, src, res)
+	opened, err := platform.OpenFile(res.DestPath)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", opened, err)
 	}
-	if err := platform.OpenFile(target); err != nil {
-		return fmt.Errorf("open %s: %w", target, err)
-	}
-	fmt.Fprintf(out, "Opened %s\n", target)
+	fmt.Fprintf(out, "Opened %s\n", opened)
 	return nil
 }
 

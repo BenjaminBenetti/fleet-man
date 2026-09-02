@@ -18,6 +18,11 @@ import (
 // path the TUI asks the human to allow it. "Allow for session" remembers the
 // originating instance in memory, so repeated copies from a box the human trusts
 // don't re-prompt while the TUI stays open.
+//
+// A `fleet open` (fo) is a copy PLUS handing the file to the desktop's opener,
+// which is a bigger thing to pre-approve than a copy, so it has its own session
+// allowance: an [s] pressed on a plain copy never unlocks unattended opens, while
+// an [s] pressed on an open covers both (an open is a superset of a copy).
 
 // copyRequest is one delegated copy awaiting (or cleared for) host-side action.
 // open marks a `fleet open` (fo): once the file lands on this machine it is
@@ -36,6 +41,14 @@ func (r copyRequest) verb() string {
 		return "open"
 	}
 	return "copy"
+}
+
+// verbs is the plural, for the session-allow hint ("allow copies/opens").
+func (r copyRequest) verbs() string {
+	if r.open {
+		return "opens"
+	}
+	return "copies"
 }
 
 // copyTouchesHost reports whether either endpoint is a path on this (the host)
@@ -62,15 +75,36 @@ func (m *model) copyConfirmShowing() bool {
 }
 
 // requestCopy decides what to do with a delegated copy: run it now when it does
-// not touch the host, or the originating instance is already session-allowed;
-// otherwise queue it for confirmation. Returns the command to run (nil while a
-// request is queued for the human to confirm).
+// not touch the host, or the originating instance is already session-allowed
+// for this kind of request; otherwise queue it for confirmation. Returns the
+// command to run (nil while a request is queued for the human to confirm).
 func (m *model) requestCopy(req copyRequest) tea.Cmd {
-	if !copyTouchesHost(req.src, req.dst) || m.copySessionAllow[req.instanceKey()] {
+	if !copyTouchesHost(req.src, req.dst) || m.sessionAllowed(req) {
 		return m.startConfirmedCopy(req)
 	}
 	m.pendingCopyConfirms = append(m.pendingCopyConfirms, req)
 	return nil
+}
+
+// sessionAllowed reports whether the human already cleared this instance for
+// the session for this KIND of request: an open needs the open allowance; a
+// copy is covered by either (an open allowance implies copies).
+func (m *model) sessionAllowed(req copyRequest) bool {
+	key := req.instanceKey()
+	if req.open {
+		return m.openSessionAllow[key]
+	}
+	return m.copySessionAllow[key] || m.openSessionAllow[key]
+}
+
+// allowSession records the human's [s] for req's instance: copies for a copy
+// request, copies AND opens for an open request.
+func (m *model) allowSession(req copyRequest) {
+	key := req.instanceKey()
+	m.copySessionAllow[key] = true
+	if req.open {
+		m.openSessionAllow[key] = true
+	}
 }
 
 // resolveCopyConfirm handles a keypress while the confirmation is showing: allow
@@ -86,14 +120,14 @@ func (m *model) resolveCopyConfirm(key string) tea.Cmd {
 		m.pendingCopyConfirms = m.pendingCopyConfirms[1:]
 		return m.startConfirmedCopy(req)
 	case "s":
-		m.copySessionAllow[req.instanceKey()] = true
-		// Run this one plus every other queued request from the now-trusted
-		// instance; keep the rest queued for their own confirmation.
+		m.allowSession(req)
+		// Run this one plus every other queued request the new allowance now
+		// covers; keep the rest queued for their own confirmation.
 		cmds := []tea.Cmd{m.startConfirmedCopy(req)}
 		remaining := append([]copyRequest(nil), m.pendingCopyConfirms[1:]...)
 		m.pendingCopyConfirms = nil
 		for _, r := range remaining {
-			if r.instanceKey() == req.instanceKey() {
+			if m.sessionAllowed(r) {
 				cmds = append(cmds, m.startConfirmedCopy(r))
 			} else {
 				m.pendingCopyConfirms = append(m.pendingCopyConfirms, r)
@@ -158,7 +192,7 @@ func (m model) viewCopyConfirm() string {
 	title := dialogTitle.Render("⚠ " + capitalize(req.verb()) + " request from " + req.instanceKey())
 	path := dialogLabel.Render(req.src + "  →  " + copyDstLabel(req.dst))
 	effects := dialogHint.Render(strings.Join(copyConfirmHostEffects(req), "\n"))
-	hint := dialogLabel.Render("[a]llow once    [s] allow for session    [d]eny")
+	hint := dialogLabel.Render("[a]llow once    [s] allow " + req.verbs() + " for session    [d]eny")
 
 	content := title + "\n\n" + path + "\n" + effects + "\n\n" + hint
 	if extra := len(m.pendingCopyConfirms) - 1; extra > 0 {

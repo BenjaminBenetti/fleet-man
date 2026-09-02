@@ -57,6 +57,20 @@ info "output: ${out}"
 assert_contains "${out}" "no handler for this file" "opener failure should surface its stderr"
 assert_equals "opened-bytes" "$(cat "${workdir}/sub/fo-test.txt")" "a failed open must not undo the copy"
 
+info "an executable is copied but never handed to the opener"
+"${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- sh -c "printf '#!/bin/sh\necho hi\n' > /tmp/fo-tool && chmod 755 /tmp/fo-tool"
+: > "${log}"
+set +e
+out=$("${FLEET_BIN}" open "${FIXTURE_REPO_NAME}/alpha:/tmp/fo-tool" "${workdir}/sub/" 2>&1)
+rc=$?
+set -e
+info "output: ${out}"
+[ "${rc}" -ne 0 ] || fail "expected non-zero exit opening an executable, got 0"
+assert_contains "${out}" "refusing to open an executable" "executable refusal text"
+assert_contains "${out}" "${workdir}/sub/fo-tool" "the refusal should say where the file was copied"
+assert_equals "755" "$(file_mode "${workdir}/sub/fo-tool")" "the executable is still copied, mode intact"
+[ ! -s "${log}" ] || fail "a refused open must not invoke the opener"
+
 info "a source already on this machine is rejected (nothing to fetch)"
 : > "${log}"
 set +e

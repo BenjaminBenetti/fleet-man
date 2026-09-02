@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"net/url"
-	"os/exec"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/platform"
 	tea "github.com/charmbracelet/bubbletea"
@@ -40,24 +39,17 @@ func isBrowsableURL(rawURL string) bool {
 	return u.Scheme == "http" || u.Scheme == "https"
 }
 
-// openExternalURL launches the host OS's default handler for rawURL. WSL is
-// special cased (xdg-open there opens nothing useful) to reach the Windows
-// browser. The launcher is Run (not Start) so the short-lived process is reaped
-// rather than left defunct.
+// openExternalURL launches the host OS's default handler for rawURL — the
+// shared platform opener, so a PR link and a `fleet open` file go through the
+// same per-OS command. The launcher is Run (not Start) so the short-lived
+// process is reaped rather than left defunct.
 func openExternalURL(rawURL string) error {
 	if !isBrowsableURL(rawURL) {
 		return fmt.Errorf("refusing to open non-http(s) URL")
 	}
-	cmd, err := openExternalURLCommand(rawURL)
+	cmd, err := platform.OpenCommand(rawURL)
 	if err != nil {
 		return err
 	}
 	return cmd.Run()
-}
-
-// openExternalURLCommand picks the per-OS opener — the shared platform one, so
-// a PR link and a `fleet open` file go through the same handler. Split out for
-// testability.
-func openExternalURLCommand(rawURL string) (*exec.Cmd, error) {
-	return platform.OpenCommand(rawURL)
 }

@@ -90,7 +90,7 @@ func TestResolveTUIEndpoint(t *testing.T) {
 // crafted envelope with open=true and an instance destination must not make the
 // TUI open a same-named path on the human's machine.
 func TestOpenDeliveredRefusesNonLocal(t *testing.T) {
-	err := openDelivered(fleetclient.ResolvedEndpoint{Fleet: "f", Instance: "i", Path: "/tmp/x"}, "/tmp/x")
+	_, err := openDelivered(fleetclient.ResolvedEndpoint{Fleet: "f", Instance: "i", Path: "/tmp/x"}, "/tmp/x")
 	if err == nil || !strings.Contains(err.Error(), "not on this machine") {
 		t.Fatalf("non-local destination should be refused, got %v", err)
 	}
