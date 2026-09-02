@@ -79,6 +79,23 @@ func ResolveTemplateDir(remote string) (string, error) {
 	return dir, nil
 }
 
+// ValidateTemplateWorkspace rejects a template directory that CONTAINS the
+// workspace dir it would be copied into (file:///home/me, ~/.fleet, the
+// workspaces tree, the fleet's own dir). cp -a would create wsDir inside the
+// template, copy everything up to it — for ~ that is .ssh and every other
+// workspace — and then abort on "cannot copy a directory into itself",
+// leaving a partial workspace and a stray dir inside the user's template.
+func ValidateTemplateWorkspace(dir, wsDir string) error {
+	rel, err := filepath.Rel(dir, wsDir)
+	if err != nil {
+		return nil
+	}
+	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		return fmt.Errorf("template dir %s contains the workspace dir %s: it would be copied into itself", dir, wsDir)
+	}
+	return nil
+}
+
 // TemplateNameHint suggests a fleet name for a template remote: the base name
 // of the template directory, with whitespace folded to "-" so the suggestion
 // is one ValidateFleetName accepts (the dir may have come in percent-encoded,

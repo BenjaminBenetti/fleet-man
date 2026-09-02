@@ -118,6 +118,21 @@ func TestAddFleetNameRejectsInvalidOrExisting(t *testing.T) {
 	}
 }
 
+// Before the first state snapshot m.st is nil; a fast n → file:// → Enter →
+// Enter must not panic (the server's get-or-create still applies).
+func TestAddFleetNameSubmitWithNilState(t *testing.T) {
+	fp := newFleetPage()
+	m := &model{fleetPage: fp}
+	fp.mode = viewAddFleetName
+	fp.addFleet.pendingRepoURL = "file:///home/me/scratch"
+	fp.textInput.SetValue("scratch")
+	fp.dlg.fieldActive = true
+
+	if cmd := fp.saveAddFleetName(m); cmd == nil || fp.mode != viewAddFleetInspecting {
+		t.Fatalf("nil state: mode=%v cmd=%v, want inspecting with a cmd", fp.mode, cmd != nil)
+	}
+}
+
 func TestAddFleetNameCancelClearsPending(t *testing.T) {
 	for _, key := range []tea.KeyMsg{{Type: tea.KeyRunes, Runes: []rune{'q'}}, {Type: tea.KeyCtrlC}} {
 		fp, m := newAddFleetModel(map[string]*fleet.Fleet{})

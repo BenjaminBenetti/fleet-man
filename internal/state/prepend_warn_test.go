@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+// (fleet.log gets only the new warning; the banner file gets both — see
+// PrependWarn.)
 func TestPrependWarnKeepsExistingBanner(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

@@ -46,8 +46,21 @@ printf '%s\n' "${out}"
 [ "${rc}" -ne 0 ] || fail "missing template dir should be rejected"
 assert_contains "${out}" "template dir" "error should name the template dir problem"
 
-ls_out=$("${FLEET_BIN}" ls || true)
-assert_not_contains "${ls_out}" "alpha" "rejected creates must not leave an instance behind"
+# Nothing may be left behind by a rejected create: no instance record (the
+# state file may not even exist yet) and no workspace dir.
+if [ -f "${HOME}/.fleet/state.json" ]; then
+  assert_not_contains "$(cat "${HOME}/.fleet/state.json")" '"alpha"' "rejected creates must not leave an instance record"
+fi
+assert_file_absent "${HOME}/.fleet/workspaces/scratch"
+
+info "fleet up scratch/alpha --repo file://\$HOME (template contains the workspace dir) must fail"
+set +e
+out=$("${FLEET_BIN}" up scratch/alpha --repo "file://${HOME}" 2>&1); rc=$?
+set -e
+printf '%s\n' "${out}"
+[ "${rc}" -ne 0 ] || fail "a template that contains ~/.fleet/workspaces should be rejected"
+assert_contains "${out}" "copied into itself" "error should explain the self-containment"
+assert_file_absent "${HOME}/.fleet/workspaces/scratch"
 
 # ===========================================
 # Happy path: explicit fleet name + template URL.

@@ -96,11 +96,17 @@ func TestCreateInstanceTemplateRejections(t *testing.T) {
 	_, client, cleanup := newTestServer(t)
 	defer cleanup()
 
+	// The workspaces tree itself as the template: contains wsDir.
+	self := "file://" + state.WorkspacesDir()
+	if err := os.MkdirAll(state.WorkspacesDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
 		name string
 		req  *fleetgrpc.CreateInstanceRequest
 		code codes.Code
 	}{
+		{"ancestor of wsDir", &fleetgrpc.CreateInstanceRequest{Fleet: "t", Instance: "i", Remote: &self, Backend: fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER}, codes.InvalidArgument},
 		{"branch", &fleetgrpc.CreateInstanceRequest{Fleet: "t", Instance: "i", Remote: &remote, Branch: &branch, Backend: fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER}, codes.InvalidArgument},
 		{"coder", &fleetgrpc.CreateInstanceRequest{Fleet: "t", Instance: "i", Remote: &remote, Backend: fleetgrpc.BackendType_BACKEND_TYPE_CODER}, codes.InvalidArgument},
 		{"codespaces", &fleetgrpc.CreateInstanceRequest{Fleet: "t", Instance: "i", Remote: &remote, Backend: fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES}, codes.InvalidArgument},

@@ -22,6 +22,9 @@ func copyTemplateTree(remoteURL, wsDir string) error {
 	if err != nil {
 		return err
 	}
+	if err := fleet.ValidateTemplateWorkspace(dir, wsDir); err != nil {
+		return err
+	}
 	if entries, err := os.ReadDir(wsDir); err == nil && len(entries) > 0 {
 		return fmt.Errorf("workspace dir %s already exists and is not empty", wsDir)
 	}

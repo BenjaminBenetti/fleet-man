@@ -181,9 +181,13 @@ func (fleetPage *fleetPage) saveAddFleetName(m *model) tea.Cmd {
 		m.message = err.Error()
 		return nil
 	}
-	if _, exists := m.st.Fleets[fleetName]; exists {
-		m.message = fmt.Sprintf("Fleet %s already exists", fleetName)
-		return nil
+	// m.st is nil until the first state snapshot lands; the server's
+	// get-or-create still applies then, this check is only the early UX.
+	if m.st != nil {
+		if _, exists := m.st.Fleets[fleetName]; exists {
+			m.message = fmt.Sprintf("Fleet %s already exists", fleetName)
+			return nil
+		}
 	}
 	repoURL := fleetPage.addFleet.pendingRepoURL
 	fleetPage.addFleet.pendingFleetName = fleetName

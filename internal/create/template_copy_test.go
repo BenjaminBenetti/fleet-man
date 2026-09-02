@@ -87,6 +87,23 @@ func TestCopyTemplateTreeRefusesNonEmptyDestination(t *testing.T) {
 	}
 }
 
+// A template that contains the workspace dir must be refused BEFORE cp -a
+// creates wsDir inside it — the template stays untouched.
+func TestCopyTemplateTreeRefusesAncestorTemplate(t *testing.T) {
+	tmpl := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpl, "a.txt"), []byte("a"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	wsDir := filepath.Join(tmpl, ".fleet", "workspaces", "f", "i", "f")
+	err := copyTemplateTree("file://"+tmpl, wsDir)
+	if err == nil || !strings.Contains(err.Error(), "copied into itself") {
+		t.Fatalf("want self-containment error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmpl, ".fleet")); err == nil {
+		t.Fatal("workspace dir must not have been created inside the template")
+	}
+}
+
 func TestTemplateGitFileWarning(t *testing.T) {
 	ws := t.TempDir()
 	if got := templateGitFileWarning(ws); got != "" {

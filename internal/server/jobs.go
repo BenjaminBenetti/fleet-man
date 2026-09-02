@@ -479,7 +479,7 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		if req.GetBackend() == fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED && fleet.IsTemplateRemote(remote) {
 			backendType = fleet.BackendDevcontainer
 		}
-		if err := validateTemplateRemote(remote, req.GetBranch(), backendType); err != nil {
+		if err := validateTemplateRemote(remote, req.GetBranch(), backendType, wsDir); err != nil {
 			return err
 		}
 		if _, err := f.GetInstance(instanceName); err == nil {
@@ -516,7 +516,7 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 // backend), or when the template directory is missing on THIS host. create.Run
 // re-checks the same rules; doing it here turns a would-be failed instance
 // record into an immediate RPC error for `fleet up` / the TUI / MCP.
-func validateTemplateRemote(remote, branch string, backendType fleet.BackendType) error {
+func validateTemplateRemote(remote, branch string, backendType fleet.BackendType, wsDir string) error {
 	if !fleet.IsTemplateRemote(remote) {
 		return nil
 	}
@@ -525,8 +525,13 @@ func validateTemplateRemote(remote, branch string, backendType fleet.BackendType
 	}
 	// ValidateTemplateCreate already parsed the URL, so a failure here is the
 	// directory itself (missing / not a dir) — a precondition on THIS host.
-	if _, err := fleet.ResolveTemplateDir(remote); err != nil {
+	dir, err := fleet.ResolveTemplateDir(remote)
+	if err != nil {
 		return status.Error(codes.FailedPrecondition, err.Error())
+	}
+	// A template that contains its own workspace dir can never be copied.
+	if err := fleet.ValidateTemplateWorkspace(dir, wsDir); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
 	}
 	return nil
 }

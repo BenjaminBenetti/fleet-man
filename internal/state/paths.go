@@ -143,10 +143,13 @@ func WriteWarn(fleetName, instanceName, warning string) {
 // the best-effort provisioning steps that WriteWarn around it — while keeping
 // their text in the file. Recorded to the event log like WriteWarn.
 func PrependWarn(fleetName, instanceName, warning string) {
+	banner := warning
 	if existing, err := os.ReadFile(WarnPath(fleetName, instanceName)); err == nil && len(existing) > 0 {
-		warning = warning + "\n" + string(existing)
+		banner = warning + "\n" + string(existing)
 	}
-	writeWarnFile(fleetName, instanceName, warning)
+	writeWarnFile(fleetName, instanceName, banner)
+	// Only the NEW warning goes to fleet.log; the existing banner text was
+	// logged when it was written.
 	flog.Warn("instance warning", "fleet", fleetName, "instance", instanceName, "warn", warning)
 }
 

@@ -85,6 +85,20 @@ func TestResolveTemplateDirChecksExistence(t *testing.T) {
 	}
 }
 
+func TestValidateTemplateWorkspaceRejectsAncestors(t *testing.T) {
+	ws := "/home/me/.fleet/workspaces/scratch/one/scratch"
+	for _, dir := range []string{"/home/me", "/home/me/.fleet", "/home/me/.fleet/workspaces", "/home/me/.fleet/workspaces/scratch", ws} {
+		if err := ValidateTemplateWorkspace(dir, ws); err == nil {
+			t.Errorf("template %q contains %q: want error", dir, ws)
+		}
+	}
+	for _, dir := range []string{"/home/me/projects/tpl", "/home/me/.fleet/workspaces/other", "/home/me/.fleet/workspaces/scratch-2", "/tmp/x"} {
+		if err := ValidateTemplateWorkspace(dir, ws); err != nil {
+			t.Errorf("template %q is disjoint from %q: got %v", dir, ws, err)
+		}
+	}
+}
+
 func TestTemplateNameHintIsDirBase(t *testing.T) {
 	if got := TemplateNameHint("file:///home/me/scratch-proj/"); got != "scratch-proj" {
 		t.Errorf("TemplateNameHint = %q, want scratch-proj", got)

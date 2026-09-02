@@ -119,8 +119,10 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 	// Template worktree/submodule check LAST, and prepended: every provisioning
 	// step above WriteWarns (replacing the banner) on failure, and the TUI shows
 	// the banner's first line — this warning must win that slot.
-	if warn := templateGitFileWarning(wsDir); warn != "" {
-		state.PrependWarn(fleetName, instanceName, warn)
+	if fleet.IsTemplateRemote(remoteURL) {
+		if warn := templateGitFileWarning(wsDir); warn != "" {
+			state.PrependWarn(fleetName, instanceName, warn)
+		}
 	}
 
 	// Success: update state (instance is running even if dotfiles failed)
