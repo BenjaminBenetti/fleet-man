@@ -100,3 +100,39 @@ func TestResolveCopyConfirmDeny(t *testing.T) {
 		t.Fatalf("deny should report it; message = %q", m.message)
 	}
 }
+
+// TestCopyConfirmOpenRequest covers the `fleet open` flavour of a delegated
+// request: it is always host-touching (so gated), the prompt names the open as
+// an extra effect and titles itself as an open, and the status lines say
+// "open" rather than "copy".
+func TestCopyConfirmOpenRequest(t *testing.T) {
+	m := &model{copySessionAllow: map[string]bool{}}
+	req := copyRequest{fleet: "f", instance: "i", src: ":out/chart.png", open: true}
+	if cmd := m.requestCopy(req); cmd != nil || !m.copyConfirmShowing() {
+		t.Fatal("an open always touches the host, so it must queue for confirmation")
+	}
+
+	effects := strings.Join(copyConfirmHostEffects(req), "\n")
+	if !strings.Contains(effects, "downloads folder") || !strings.Contains(effects, "opens it") {
+		t.Errorf("effects should name the write AND the open, got %q", effects)
+	}
+	if plain := strings.Join(copyConfirmHostEffects(copyRequest{src: ":x", dst: ""}), "\n"); strings.Contains(plain, "opens it") {
+		t.Errorf("a plain copy must not claim to open anything, got %q", plain)
+	}
+	if view := m.viewCopyConfirm(); !strings.Contains(view, "Open request from f/i") {
+		t.Errorf("open prompt should be titled as an open request, got %q", view)
+	}
+
+	m.resolveCopyConfirm("d")
+	if !strings.Contains(m.message, "Denied open") {
+		t.Errorf("deny should say open, got %q", m.message)
+	}
+
+	m.requestCopy(req)
+	if cmd := m.resolveCopyConfirm("a"); cmd == nil {
+		t.Fatal("allow should start the copy+open")
+	}
+	if !strings.Contains(m.message, "and opening") {
+		t.Errorf("status should announce the open, got %q", m.message)
+	}
+}

@@ -20,11 +20,23 @@ import (
 // don't re-prompt while the TUI stays open.
 
 // copyRequest is one delegated copy awaiting (or cleared for) host-side action.
+// open marks a `fleet open` (fo): once the file lands on this machine it is
+// also opened with the default application — one more thing the human is
+// agreeing to, so the prompt spells it out.
 type copyRequest struct {
 	fleet, instance, src, dst string
+	open                      bool
 }
 
 func (r copyRequest) instanceKey() string { return r.fleet + "/" + r.instance }
+
+// verb names the request for status lines: "copy", or "open" for a fleet open.
+func (r copyRequest) verb() string {
+	if r.open {
+		return "open"
+	}
+	return "copy"
+}
 
 // copyTouchesHost reports whether either endpoint is a path on this (the host)
 // machine — the only case that needs confirmation. A copy purely between
@@ -90,7 +102,7 @@ func (m *model) resolveCopyConfirm(key string) tea.Cmd {
 		return tea.Batch(cmds...)
 	case "d", "n", "esc":
 		m.pendingCopyConfirms = m.pendingCopyConfirms[1:]
-		m.message = fmt.Sprintf("Denied copy %s -> %s from %s", req.src, copyDstLabel(req.dst), req.instanceKey())
+		m.message = fmt.Sprintf("Denied %s %s -> %s from %s", req.verb(), req.src, copyDstLabel(req.dst), req.instanceKey())
 		return nil
 	}
 	return nil
@@ -98,12 +110,18 @@ func (m *model) resolveCopyConfirm(key string) tea.Cmd {
 
 // startConfirmedCopy sets the status line and returns the background copy command.
 func (m *model) startConfirmedCopy(req copyRequest) tea.Cmd {
-	m.message = fmt.Sprintf("Copying %s -> %s...", req.src, copyDstLabel(req.dst))
-	return copyForInstanceCmd(req.fleet, req.instance, req.src, req.dst)
+	if req.open {
+		m.message = fmt.Sprintf("Copying %s -> %s and opening...", req.src, copyDstLabel(req.dst))
+	} else {
+		m.message = fmt.Sprintf("Copying %s -> %s...", req.src, copyDstLabel(req.dst))
+	}
+	return copyForInstanceCmd(req)
 }
 
 // copyConfirmHostEffects describes, for the human, which host paths a pending
-// copy would read or write — the whole reason the prompt exists.
+// copy would read or write — and, for a fleet open, that the delivered file is
+// then handed to this machine's default application — the whole reason the
+// prompt exists.
 func copyConfirmHostEffects(req copyRequest) []string {
 	var effects []string
 	if endpointIsHost(req.src) {
@@ -114,6 +132,9 @@ func copyConfirmHostEffects(req copyRequest) []string {
 		effects = append(effects, "writes to your downloads folder on THIS machine")
 	case endpointIsHost(req.dst):
 		effects = append(effects, "writes "+req.dst+" on THIS machine")
+	}
+	if req.open {
+		effects = append(effects, "opens it with THIS machine's default application")
 	}
 	return effects
 }
@@ -134,7 +155,7 @@ func (m model) viewCopyConfirm() string {
 		Padding(1, 2).
 		Width(boxWidth)
 
-	title := dialogTitle.Render("⚠ Copy request from " + req.instanceKey())
+	title := dialogTitle.Render("⚠ " + capitalize(req.verb()) + " request from " + req.instanceKey())
 	path := dialogLabel.Render(req.src + "  →  " + copyDstLabel(req.dst))
 	effects := dialogHint.Render(strings.Join(copyConfirmHostEffects(req), "\n"))
 	hint := dialogLabel.Render("[a]llow once    [s] allow for session    [d]eny")
@@ -152,4 +173,12 @@ func (m model) viewCopyConfirm() string {
 		height = lipgloss.Height(box.Render(content))
 	}
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box.Render(content))
+}
+
+// capitalize upper-cases the first letter of an ASCII word.
+func capitalize(word string) string {
+	if word == "" {
+		return word
+	}
+	return strings.ToUpper(word[:1]) + word[1:]
 }

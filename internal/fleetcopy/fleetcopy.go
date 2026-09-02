@@ -52,20 +52,26 @@ func InInstance() bool {
 // a browser open: the in-container process can resolve neither the user's-machine
 // paths nor the host fleet's instances, so it does not validate the endpoints;
 // the TUI performs the copy and surfaces any error there. An empty dst is the
-// download shorthand (deliver to the user's downloads folder).
-func Request(cfg Config, out io.Writer, src, dst string) error {
+// download shorthand (deliver to the user's downloads folder). open additionally
+// asks the TUI to open the delivered file with the user's default application
+// once it lands — the in-instance `fleet open` (fo).
+func Request(cfg Config, out io.Writer, src, dst string, open bool) error {
 	client, err := control.Dial(cfg.socketPath())
 	if err != nil {
 		return fmt.Errorf("not connected to a host fleet — `fc` needs a running fleet TUI on the host")
 	}
 	defer client.Close()
-	if err := client.CopyFile(src, dst); err != nil {
+	if err := client.CopyFile(src, dst, open); err != nil {
 		return err
 	}
-	if dst != "" {
-		fmt.Fprintf(out, "Copying %s -> %s\n", src, dst)
+	target := dst
+	if target == "" {
+		target = "downloads"
+	}
+	if open {
+		fmt.Fprintf(out, "Copying %s -> %s and opening\n", src, target)
 	} else {
-		fmt.Fprintf(out, "Copying %s -> downloads\n", src)
+		fmt.Fprintf(out, "Copying %s -> %s\n", src, target)
 	}
 	return nil
 }

@@ -80,12 +80,17 @@ func runCopy(ctx context.Context, out io.Writer, src, dst string) error {
 		}
 		// The container can't reach the host fleetd over gRPC; ask the connected
 		// TUI to perform the copy against the host fleet.
-		return fleetcopy.Request(fleetcopy.Config{}, out, src, dst)
+		return fleetcopy.Request(fleetcopy.Config{}, out, src, dst, false)
 	}
 	if err := requireDownloadSource(src, dst); err != nil {
 		return err
 	}
-	return hostCopy(ctx, out, src, dst)
+	res, err := hostCopy(ctx, src, dst)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Copied %s -> %s (%d bytes)\n", src, res.DestPath, res.Written)
+	return nil
 }
 
 // rewriteInstanceLocal turns a plain (cwd-relative) path typed inside an instance
@@ -120,26 +125,21 @@ func requireDownloadSource(src, dst string) error {
 
 // hostCopy resolves both endpoints against the host fleet and runs the generic
 // copy engine over the dialled fleet server, with the CLI's own disk as local.
-func hostCopy(ctx context.Context, out io.Writer, src, dst string) error {
+func hostCopy(ctx context.Context, src, dst string) (fleetclient.CopyResult, error) {
 	srcEnd, err := resolveHostEndpoint(src)
 	if err != nil {
-		return err
+		return fleetclient.CopyResult{}, err
 	}
 	dstEnd, err := resolveHostEndpoint(dst)
 	if err != nil {
-		return err
+		return fleetclient.CopyResult{}, err
 	}
 	conn, err := fleetclient.Dial(ctx)
 	if err != nil {
-		return err
+		return fleetclient.CopyResult{}, err
 	}
 	defer conn.Close()
-	res, err := fleetclient.Copy(ctx, conn.Service(), srcEnd, dstEnd, fleetclient.HostLocalPolicy{})
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "Copied %s -> %s (%d bytes)\n", src, res.DestPath, res.Written)
-	return nil
+	return fleetclient.Copy(ctx, conn.Service(), srcEnd, dstEnd, fleetclient.HostLocalPolicy{})
 }
 
 // resolveHostEndpoint turns a typed argument into a ResolvedEndpoint for the host

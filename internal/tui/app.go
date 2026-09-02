@@ -865,15 +865,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.fleet == "" || msg.instance == "" || msg.src == "" {
 			return m, spinCmd
 		}
-		cmd := m.requestCopy(copyRequest{fleet: msg.fleet, instance: msg.instance, src: msg.src, dst: msg.dst})
+		cmd := m.requestCopy(copyRequest{fleet: msg.fleet, instance: msg.instance, src: msg.src, dst: msg.dst, open: msg.open})
 		return m, tea.Batch(spinCmd, cmd)
 
 	case fileCopyDoneMsg:
-		if msg.err != nil {
-			m.message = fmt.Sprintf("Copy of %s failed: %v", msg.src, msg.err)
-		} else {
-			m.message = fmt.Sprintf("Copied %s -> %s", msg.src, msg.dest)
-		}
+		m.message = msg.statusLine()
 		return m, spinCmd
 
 	case remoteMcpStatusMsg:

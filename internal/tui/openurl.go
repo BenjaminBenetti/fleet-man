@@ -3,9 +3,7 @@ package tui
 import (
 	"fmt"
 	"net/url"
-	"os"
 	"os/exec"
-	"runtime"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/platform"
 	tea "github.com/charmbracelet/bubbletea"
@@ -57,29 +55,9 @@ func openExternalURL(rawURL string) error {
 	return cmd.Run()
 }
 
-// openExternalURLCommand picks the per-OS opener. Split out for testability.
-// Every opener receives the URL as a separate, non-shell-interpreted argument;
-// the WSL PowerShell fallback passes it via the environment rather than
-// interpolating it into the -Command string, so a URL containing PowerShell
-// metacharacters can't inject code on the host.
+// openExternalURLCommand picks the per-OS opener — the shared platform one, so
+// a PR link and a `fleet open` file go through the same handler. Split out for
+// testability.
 func openExternalURLCommand(rawURL string) (*exec.Cmd, error) {
-	switch {
-	case runtime.GOOS == "darwin":
-		return exec.Command("open", rawURL), nil
-	case runtime.GOOS == "windows":
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL), nil
-	case platform.IsWSL():
-		// wslu's wslview is the clean path; fall back to the Windows shell's
-		// start handler via powershell when it isn't installed.
-		if _, err := exec.LookPath("wslview"); err == nil {
-			return exec.Command("wslview", rawURL), nil
-		}
-		cmd := exec.Command("powershell.exe", "-NoProfile", "-Command", "Start-Process -FilePath $env:FLEET_OPEN_URL")
-		cmd.Env = append(os.Environ(), "FLEET_OPEN_URL="+rawURL)
-		return cmd, nil
-	case runtime.GOOS == "linux":
-		return exec.Command("xdg-open", rawURL), nil
-	default:
-		return nil, fmt.Errorf("don't know how to open a browser on %s", runtime.GOOS)
-	}
+	return platform.OpenCommand(rawURL)
 }
