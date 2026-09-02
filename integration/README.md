@@ -10,7 +10,8 @@ real docker daemon.
 integration/
 ├── run.sh                      # driver: builds binary, runs every test, teardown between
 ├── common.sh                   # shared helpers: assertions, setup/teardown, fleet_up
-├── fixture/                    # minimal devcontainer fixture cloned via file:// per test
+├── fixture/                    # minimal devcontainer fixture git-cloned (local path) per test;
+│                               # also fed as a file:// template by the template-fleet tests
 │   └── .devcontainer/
 │       └── devcontainer.json
 ├── fixture-no-devcontainer/    # repo template deliberately missing a devcontainer

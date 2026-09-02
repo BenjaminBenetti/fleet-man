@@ -57,9 +57,16 @@ FLEET_BIN="${FLEET_BIN:-fleet}"
 
 # Fleet name is derived from the repo URL basename. We clone the fixture
 # into a dir named "itest-fleet" so resolve.go sees fleet "itest-fleet".
+#
+# FIXTURE_REPO_URL is a PLAIN PATH, which git clones like any other remote
+# (local clone). It must not be a file:// URL: fleet reserves file:// for
+# TEMPLATE fleets (the dir is copied per instance, never cloned, and the
+# fleet name is not derivable). FIXTURE_TEMPLATE_URL is that form of the
+# same fixture, for the template tests.
 FIXTURE_REPO_NAME="itest-fleet"
 FIXTURE_REPO_DIR="${TEST_SCRATCH_DIR}/${FIXTURE_REPO_NAME}"
-FIXTURE_REPO_URL="file://${FIXTURE_REPO_DIR}"
+FIXTURE_REPO_URL="${FIXTURE_REPO_DIR}"
+FIXTURE_TEMPLATE_URL="file://${FIXTURE_REPO_DIR}"
 
 # Default tmux session name used by TUI tests. Overridable per-test.
 TUI_SESSION="${TUI_SESSION:-fleetman-itest}"

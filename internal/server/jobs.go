@@ -466,6 +466,9 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		} else {
 			remote = f.Remote
 		}
+		if err := validateTemplateRemote(remote, req.GetBranch(), backendType); err != nil {
+			return err
+		}
 		if _, err := f.GetInstance(instanceName); err == nil {
 			return status.Errorf(codes.AlreadyExists, "instance %s/%s already exists", fleetName, instanceName)
 		}
@@ -492,6 +495,30 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		return loadInstanceSnapshot(fleetName, instanceName), nil, err
 	})
 	return j, nil
+}
+
+// validateTemplateRemote fails a create FAST — before the StatusCreating record
+// exists — when the fleet's remote is a file:// template and the request asks
+// for something a copied directory cannot honor (a branch, a non-devcontainer
+// backend), or when the template directory is missing on THIS host. create.Run
+// re-checks the same rules; doing it here turns a would-be failed instance
+// record into an immediate RPC error for `fleet up` / the TUI / MCP.
+func validateTemplateRemote(remote, branch string, backendType fleet.BackendType) error {
+	if !fleet.IsTemplateRemote(remote) {
+		return nil
+	}
+	if err := fleet.ValidateTemplateCreate(remote, branch, backendType); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	dir, _ := fleet.TemplateDir(remote)
+	info, err := os.Stat(dir)
+	if err != nil {
+		return status.Errorf(codes.FailedPrecondition, "template dir %s: %v (the path is resolved on the fleet daemon's host)", dir, err)
+	}
+	if !info.IsDir() {
+		return status.Errorf(codes.FailedPrecondition, "template path %s is not a directory", dir)
+	}
+	return nil
 }
 
 // CreateInstance starts the provisioning job and relays its events.

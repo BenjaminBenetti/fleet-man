@@ -21,7 +21,7 @@ tui_send_text "${FIXTURE_REPO_URL}"
 tui_send Enter
 
 info "verifying the no-devcontainer dialog is NEVER shown"
-# Inspecting + add are both fast on a file:// clone, so the next visible
+# Inspecting + add are both fast on a local clone, so the next visible
 # state should be the "Added fleet" status message — not the warn
 # dialog. The repo URL contains the fleet name, so we anchor on the
 # explicit success message rather than the bare fleet name (which would

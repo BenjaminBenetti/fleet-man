@@ -509,6 +509,8 @@ func (fleetPage *fleetPage) viewActiveDialog(m *model) string {
 		return fleetPage.renderAddInstanceDialog(m)
 	case viewAddFleet:
 		return fleetPage.renderAddFleetDialog(m)
+	case viewAddFleetName:
+		return fleetPage.renderAddFleetNameDialog(m)
 	case viewAddFleetInspecting:
 		return fleetPage.renderAddFleetInspectingDialog(m)
 	case viewAddFleetNoDevcontainer:

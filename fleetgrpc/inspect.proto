@@ -15,7 +15,8 @@ option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
 // can false-positive when the client has repo access but the daemon doesn't.
 
 message InspectRepoRequest {
-  // remote_url is the git remote to shallow-clone for inspection.
+  // remote_url is the git remote to shallow-clone for inspection, or a
+  // file:///abs/dir template directory that is inspected in place.
   string remote_url = 1;
   // branch optionally pins the branch to inspect (repo default when empty).
   string branch = 2;

@@ -264,6 +264,12 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "No fleet selected"
 				break
 			}
+			// Must precede availableBackendTypes: a template fleet narrows
+			// the deploy targets to devcontainer.
+			fleetPage.addInst.template = false
+			if f, ok := m.st.Fleets[fleetName]; ok {
+				fleetPage.addInst.template = fleet.IsTemplateRemote(f.Remote)
+			}
 			m.toolStatus = deps.CheckTools()
 			available := fleetPage.availableBackendTypes(m)
 			if len(available) == 0 {
@@ -296,8 +302,9 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 
 		case "n":
 			fleetPage.mode = viewAddFleet
+			fleetPage.clearPendingFleet()
 			fleetPage.textInput.SetValue("")
-			fleetPage.textInput.Placeholder = "git@github.com:org/repo.git"
+			fleetPage.textInput.Placeholder = addFleetURLPlaceholder
 			fleetPage.textInput.CharLimit = 256
 			return fleetPage.activateTextInput()
 

@@ -74,6 +74,7 @@ func (fleetPage *fleetPage) openEditInstanceDialog(m *model) tea.Cmd {
 
 	fleetPage.mode = viewAddInstance
 	fleetPage.addInst.editing = true
+	fleetPage.addInst.template = fleet.IsTemplateRemote(f.Remote)
 	fleetPage.dlg.fleet = f.Name
 	fleetPage.dlg.inst = instance.Name
 	fleetPage.addInst.backend = instance.Backend
@@ -280,6 +281,11 @@ func (fleetPage *fleetPage) submitAddInstance(m *model) tea.Cmd {
 	}
 
 	branch := strings.TrimSpace(fleetPage.branchInput.Value())
+	if fleetPage.addInst.template {
+		// The branch row is disabled for a template fleet (a copied dir has
+		// no refs); never let a stale value from a previous dialog through.
+		branch = ""
+	}
 
 	// Record the chosen backend as the new default. The instance record itself
 	// is pre-created server-side by the CreateInstance job (no client-side state
@@ -352,8 +358,13 @@ func (fleetPage *fleetPage) activateAddInstanceFieldWithMsg(msg tea.Msg) tea.Cmd
 // addInstanceRowEnabled reports whether a given row is selectable in the
 // current dialog mode. Branch and deploy are locked while editing because
 // they describe how the workspace was originally provisioned and cannot
-// be retroactively changed without recreating the instance.
+// be retroactively changed without recreating the instance. Branch is also
+// locked for a file:// template fleet: the template dir is copied as-is, so
+// there is no ref to check out.
 func (fleetPage *fleetPage) addInstanceRowEnabled(row int) bool {
+	if fleetPage.addInst.template && row == addInstanceRowBranch {
+		return false
+	}
 	if !fleetPage.addInst.editing {
 		return true
 	}
@@ -587,13 +598,22 @@ type addInstanceState struct {
 	backend fleet.BackendType
 	color   string
 	editing bool
+	// template is set when the target fleet's remote is a file:// template
+	// dir: the branch row is disabled and only the devcontainer backend (the
+	// one that provisions from a local workspace copy) is offered.
+	template bool
 }
 
 // availableBackendTypes returns the subset of backend types whose
-// required CLI tool is found on the system.
+// required CLI tool is found on the system. A template fleet is further
+// narrowed to devcontainer — coder and codespaces clone a git URL on their
+// own side and cannot consume a copied local directory.
 func (fleetPage *fleetPage) availableBackendTypes(m *model) []fleet.BackendType {
 	var out []fleet.BackendType
 	for _, backendType := range allBackendTypes {
+		if fleetPage.addInst.template && backendType != fleet.BackendDevcontainer {
+			continue
+		}
 		bin := backendToolRequirements[backendType]
 		if bin == "" {
 			out = append(out, backendType)
@@ -648,6 +668,9 @@ func (fleetPage *fleetPage) renderAddInstanceDialog(m *model) string {
 		}
 		nameField = fleetPage.textInput.View()
 		branchField = fleetPage.branchInput.View()
+		if fleetPage.addInst.template {
+			branchField = dimStyle.Render("n/a (template dir is copied as-is)")
+		}
 		deployField = fmt.Sprintf("[ %s ]", backendTypeLabel(backendType))
 	}
 

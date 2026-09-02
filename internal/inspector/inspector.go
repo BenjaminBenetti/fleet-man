@@ -27,6 +27,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 )
 
 // ===========================================
@@ -44,14 +46,21 @@ var ErrNoDevcontainerConfig = errors.New("no devcontainer.json found")
 // ===========================================
 
 // Repo is a handle to a shallow-cloned local copy of a fleet's remote
-// repository. Checks read from Root either directly (path is a normal
-// filesystem location) or via the convenience helpers on this type.
+// repository — or, for a file:// template remote, to the template
+// directory itself. Checks read from Root either directly (path is a
+// normal filesystem location) or via the convenience helpers on this type.
 //
-// A Repo MUST be closed via Close to remove its on-disk clone.
+// A Repo MUST be closed via Close to remove its on-disk clone. Close is a
+// no-op for a template Repo (Keep): Root is the user's own directory.
 type Repo struct {
 	// Root is the absolute path to the working tree of the clone.
 	// Checks may read any file under this path.
 	Root string
+
+	// Keep marks Root as a directory this handle does NOT own — a file://
+	// template dir opened in place — so Close leaves it alone. Zero (a
+	// scratch clone, or a test-built Repo) keeps the remove-on-Close contract.
+	Keep bool
 }
 
 // ===========================================
@@ -71,6 +80,9 @@ func Open(remoteURL, branch string) (*Repo, error) {
 	if remoteURL == "" {
 		return nil, errors.New("remoteURL is empty")
 	}
+	if fleet.IsTemplateRemote(remoteURL) {
+		return openTemplate(remoteURL)
+	}
 	tmpDir, err := os.MkdirTemp("", "fleet-inspect-*")
 	if err != nil {
 		return nil, fmt.Errorf("creating temp dir: %w", err)
@@ -82,10 +94,29 @@ func Open(remoteURL, branch string) (*Repo, error) {
 	return &Repo{Root: tmpDir}, nil
 }
 
+// openTemplate points a Repo at a file:// template directory in place. There
+// is nothing to clone: the checks read the directory that provisioning will
+// copy, and the branch (if any) is ignored because a copy has no refs.
+func openTemplate(remoteURL string) (*Repo, error) {
+	dir, err := fleet.TemplateDir(remoteURL)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return nil, fmt.Errorf("template dir: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("template path %s is not a directory", dir)
+	}
+	return &Repo{Root: dir, Keep: true}, nil
+}
+
 // Close removes the temporary clone associated with this Repo. Safe to
-// call on a nil receiver or a zero-value Repo.
+// call on a nil receiver or a zero-value Repo. A Keep Repo (a template dir,
+// the user's own directory rather than a scratch clone) is left untouched.
 func (r *Repo) Close() error {
-	if r == nil || r.Root == "" {
+	if r == nil || r.Root == "" || r.Keep {
 		return nil
 	}
 	return os.RemoveAll(r.Root)
