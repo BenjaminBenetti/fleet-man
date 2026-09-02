@@ -118,8 +118,9 @@ func (fleetPage *fleetPage) promptAddFleetName(m *model, repoURL string) tea.Cmd
 }
 
 // updateAddFleetName handles the fleet-name prompt shown for a file://
-// template URL. Same key contract as the URL step: enter submits, esc leaves
-// the field, q/esc/ctrl+c cancel the whole new-fleet flow.
+// template URL. Inside the field: enter submits, esc leaves the field,
+// ctrl+c cancels. With the field inactive: esc goes BACK to the URL step (so
+// a typo in the path can be fixed without starting over), q/ctrl+c cancel.
 func (fleetPage *fleetPage) updateAddFleetName(m *model, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -142,7 +143,9 @@ func (fleetPage *fleetPage) updateAddFleetName(m *model, msg tea.Msg) tea.Cmd {
 		switch msg.String() {
 		case "enter", " ":
 			return fleetPage.activateTextInput()
-		case "esc", "q", "Q", "ctrl+c":
+		case "esc":
+			return fleetPage.returnToAddFleetURL(m)
+		case "q", "Q", "ctrl+c":
 			fleetPage.clearPendingFleet()
 			return fleetPage.cancelTextDialog(m)
 		}
@@ -151,6 +154,19 @@ func (fleetPage *fleetPage) updateAddFleetName(m *model, msg tea.Msg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// returnToAddFleetURL reopens the URL step with the pending URL back in the
+// input. The name prompt borrows textInput for the fleet name, so both the
+// esc-back key and the inspection error path need this restore.
+func (fleetPage *fleetPage) returnToAddFleetURL(m *model) tea.Cmd {
+	fleetPage.mode = viewAddFleet
+	fleetPage.textInput.SetValue(fleetPage.addFleet.pendingRepoURL)
+	fleetPage.textInput.Placeholder = addFleetURLPlaceholder
+	fleetPage.textInput.CharLimit = 256
+	fleetPage.textInput.CursorEnd()
+	fleetPage.textInput.Focus()
+	return fleetPage.textInput.Cursor.BlinkCmd()
 }
 
 // saveAddFleetName validates the typed fleet name and continues into the
@@ -256,16 +272,10 @@ func (fleetPage *fleetPage) handleDevcontainerInspected(m *model, msg devcontain
 	}
 
 	if msg.err != nil {
-		// Back to the URL step. The template name prompt reuses textInput,
-		// so put the URL back where the user expects to correct it.
-		fleetPage.mode = viewAddFleet
-		fleetPage.textInput.SetValue(fleetPage.addFleet.pendingRepoURL)
-		fleetPage.textInput.Placeholder = addFleetURLPlaceholder
-		fleetPage.textInput.CharLimit = 256
-		fleetPage.textInput.CursorEnd()
-		fleetPage.textInput.Focus()
+		// Back to the URL step (with the URL restored — the template name
+		// prompt reuses textInput) so the user can correct it in place.
 		m.message = fmt.Sprintf("Could not inspect repo: %v", msg.err)
-		return fleetPage.textInput.Cursor.BlinkCmd()
+		return fleetPage.returnToAddFleetURL(m)
 	}
 
 	if msg.hasDevcontainer {
@@ -417,6 +427,15 @@ func (fleetPage *fleetPage) renderAddFleetDialog(m *model) string {
 	return b.String()
 }
 
+// addFleetNameHint is textDialogHint plus the name prompt's extra key: esc
+// with the field inactive returns to the URL step instead of cancelling.
+func (fleetPage *fleetPage) addFleetNameHint() string {
+	if fleetPage.dlg.fieldActive {
+		return fleetPage.textDialogHint("Add")
+	}
+	return "[enter] Edit  [esc] Back  [q] Cancel"
+}
+
 func (fleetPage *fleetPage) renderAddFleetNameDialog(m *model) string {
 	var b strings.Builder
 	b.WriteString("\n")
@@ -428,7 +447,7 @@ func (fleetPage *fleetPage) renderAddFleetNameDialog(m *model) string {
 		dialogLabel.Render("Name:    "),
 		fleetPage.textInput.View(),
 		dimStyle.Render("a local dir has no repo name to derive the fleet name from — pick one"),
-		dialogHint.Render(fleetPage.textDialogHint("Add")),
+		dialogHint.Render(fleetPage.addFleetNameHint()),
 	)
 	b.WriteString(dialogBox.Render(dialog))
 	b.WriteString("\n")

@@ -10,6 +10,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// checkTools is the deps.CheckTools seam the add-instance key uses to refresh
+// the deploy-target list; tests stub it so the dialog opens regardless of what
+// CLIs the host has installed.
+var checkTools = deps.CheckTools
+
 // updateNormal handles keyboard input in the default fleet list mode.
 func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
@@ -270,7 +275,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			if f, ok := m.st.Fleets[fleetName]; ok {
 				fleetPage.addInst.template = fleet.IsTemplateRemote(f.Remote)
 			}
-			m.toolStatus = deps.CheckTools()
+			m.toolStatus = checkTools()
 			available := fleetPage.availableBackendTypes(m)
 			if len(available) == 0 {
 				m.message = "No deploy targets available – install devcontainer or coder CLI"

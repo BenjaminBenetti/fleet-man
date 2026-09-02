@@ -3,6 +3,7 @@ package create
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -51,6 +52,58 @@ func TestCopyTemplateTreeCopiesContentsVerbatim(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.Join(tmpl, "README.md")); string(got) != "hello" {
 		t.Fatalf("template README changed to %q", got)
+	}
+}
+
+// Like git clone, a non-empty destination is refused rather than merged under
+// the template — a stale workspace dir must surface, not silently mix in.
+func TestCopyTemplateTreeRefusesNonEmptyDestination(t *testing.T) {
+	tmpl := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpl, "a.txt"), []byte("a"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	wsDir := filepath.Join(t.TempDir(), "ws")
+	if err := os.MkdirAll(wsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "stale.txt"), []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	err := copyTemplateTree("file://"+tmpl, wsDir)
+	if err == nil || !strings.Contains(err.Error(), "not empty") {
+		t.Fatalf("want non-empty destination error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wsDir, "a.txt")); err == nil {
+		t.Fatal("template must not have been copied over a non-empty dir")
+	}
+
+	// An existing but EMPTY dir is fine (MkdirAll of the parent is common).
+	empty := filepath.Join(t.TempDir(), "ws")
+	if err := os.MkdirAll(empty, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyTemplateTree("file://"+tmpl, empty); err != nil {
+		t.Fatalf("empty destination should be accepted: %v", err)
+	}
+}
+
+func TestTemplateGitFileWarning(t *testing.T) {
+	ws := t.TempDir()
+	if got := templateGitFileWarning(ws); got != "" {
+		t.Fatalf("no .git: want no warning, got %q", got)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if got := templateGitFileWarning(ws); got != "" {
+		t.Fatalf(".git dir: want no warning, got %q", got)
+	}
+	ws2 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws2, ".git"), []byte("gitdir: /elsewhere/.git/worktrees/x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := templateGitFileWarning(ws2); !strings.Contains(got, "worktree") {
+		t.Fatalf(".git file: want worktree warning, got %q", got)
 	}
 }
 

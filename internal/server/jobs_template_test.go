@@ -115,9 +115,65 @@ func TestCreateInstanceTemplateRejections(t *testing.T) {
 		}
 	}
 
+	// state.Update discards the whole mutation on error, so not even the
+	// fleet record may leak — assert that directly.
 	st, _ := state.Load()
-	if f := st.Fleets["t"]; f != nil && len(f.Instances) > 0 {
-		t.Fatalf("rejected creates must not leave instance records: %+v", f.Instances)
+	if f := st.Fleets["t"]; f != nil {
+		t.Fatalf("rejected creates must not leave a fleet record: %+v", f)
+	}
+}
+
+// A NEW fleet's name becomes a workspace path component, so the server (not
+// just the TUI dialog) must refuse names that escape ~/.fleet/workspaces.
+func TestCreateInstanceRejectsBadNewFleetName(t *testing.T) {
+	isolateFleetDir(t)
+	stubCreateJob(t)
+	remote := "file://" + t.TempDir()
+	git := "git@x:a.git"
+
+	_, client, cleanup := newTestServer(t)
+	defer cleanup()
+
+	for _, name := range []string{"..", "a b", "a/b"} {
+		for _, r := range []*string{&remote, &git} {
+			err := createErr(t, client, &fleetgrpc.CreateInstanceRequest{
+				Fleet: name, Instance: "i", Remote: r, Backend: fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER,
+			})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Errorf("fleet %q (remote %q): want InvalidArgument, got %v", name, *r, err)
+			}
+		}
+	}
+	st, _ := state.Load()
+	if len(st.Fleets) != 0 {
+		t.Fatalf("no fleet record may be created for a rejected name: %v", st.Fleets)
+	}
+
+	// An EXISTING record with an odd legacy name is still usable.
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"legacy name": {Name: "legacy name", Remote: git},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := createErr(t, client, &fleetgrpc.CreateInstanceRequest{
+		Fleet: "legacy name", Instance: "i", Backend: fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER,
+	}); err != nil {
+		t.Fatalf("existing fleet with a legacy name must not be blocked: %v", err)
+	}
+}
+
+func TestCreateFleetRejectsBadName(t *testing.T) {
+	isolateFleetDir(t)
+	svc := newService()
+	for _, name := range []string{"..", "a b", "a/b"} {
+		_, err := svc.CreateFleet(context.Background(), &fleetgrpc.CreateFleetRequest{Name: name, Remote: "git@x:a.git"})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("CreateFleet(%q): want InvalidArgument, got %v", name, err)
+		}
+	}
+	st, _ := state.Load()
+	if len(st.Fleets) != 0 {
+		t.Fatalf("no fleet record may be created for a rejected name: %v", st.Fleets)
 	}
 }
 

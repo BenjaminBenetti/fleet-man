@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
@@ -118,7 +119,7 @@ func TestAddFleetNameRejectsInvalidOrExisting(t *testing.T) {
 }
 
 func TestAddFleetNameCancelClearsPending(t *testing.T) {
-	for _, key := range []tea.KeyMsg{{Type: tea.KeyEsc}, {Type: tea.KeyRunes, Runes: []rune{'q'}}, {Type: tea.KeyCtrlC}} {
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyRunes, Runes: []rune{'q'}}, {Type: tea.KeyCtrlC}} {
 		fp, m := newAddFleetModel(map[string]*fleet.Fleet{})
 		fp.mode = viewAddFleetName
 		fp.addFleet.pendingRepoURL = "file:///home/me/scratch"
@@ -132,6 +133,28 @@ func TestAddFleetNameCancelClearsPending(t *testing.T) {
 		if fp.addFleet.pendingRepoURL != "" {
 			t.Fatalf("key %v: pending URL not cleared", key)
 		}
+	}
+}
+
+// esc with the field inactive is "back": the URL step reopens with the
+// template URL restored so a path typo can be fixed without starting over.
+func TestAddFleetNameEscGoesBackToURLStep(t *testing.T) {
+	fp, m := newAddFleetModel(map[string]*fleet.Fleet{})
+	fp.mode = viewAddFleetName
+	fp.addFleet.pendingRepoURL = "file:///home/me/scratch"
+	fp.textInput.SetValue("scratch")
+	fp.dlg.fieldActive = false
+
+	if view := fp.renderAddFleetNameDialog(m); !strings.Contains(view, "[esc] Back") {
+		t.Fatalf("name prompt hint should advertise esc as Back:\n%s", view)
+	}
+	fp.updateAddFleetName(m, tea.KeyMsg{Type: tea.KeyEsc})
+
+	if fp.mode != viewAddFleet {
+		t.Fatalf("mode = %v, want viewAddFleet", fp.mode)
+	}
+	if got := fp.textInput.Value(); got != "file:///home/me/scratch" {
+		t.Fatalf("textInput = %q, want the template URL restored", got)
 	}
 }
 
@@ -231,21 +254,30 @@ func TestAddInstanceTemplateFleetSkipsBranchAndLocksBackend(t *testing.T) {
 }
 
 // Pressing 'a' on a template fleet header must arm the template flag before
-// the backend list is computed.
+// the backend list is computed, and open the dialog locked to devcontainer
+// even when every backend CLI is installed.
 func TestAddInstanceKeySetsTemplateFlagFromFleetRemote(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	origCheck := checkTools
+	checkTools = allToolsFound
+	t.Cleanup(func() { checkTools = origCheck })
+
 	fp := newFleetPage()
 	fp.rows = []row{{kind: rowFleetHeader, fleetName: "scratch"}}
 	m := &model{
 		st:        &state.State{Fleets: map[string]*fleet.Fleet{"scratch": {Name: "scratch", Remote: "file:///home/me/scratch"}}},
 		fleetPage: fp,
+		config:    &configutil.Config{DefaultBackend: string(fleet.BackendCoder)},
 	}
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	if !fp.addInst.template {
 		t.Fatal("addInst.template not set from the fleet's file:// remote")
 	}
-	if fp.mode == viewAddInstance && fp.addInst.backend != fleet.BackendDevcontainer {
-		t.Fatalf("backend = %v, want devcontainer for a template fleet", fp.addInst.backend)
+	if fp.mode != viewAddInstance {
+		t.Fatalf("mode = %v, want viewAddInstance (message: %q)", fp.mode, m.message)
+	}
+	if fp.addInst.backend != fleet.BackendDevcontainer {
+		t.Fatalf("backend = %v, want devcontainer for a template fleet even with coder as the configured default", fp.addInst.backend)
 	}
 }
 

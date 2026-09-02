@@ -3,9 +3,9 @@ package fleet
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
 )
 
 // TemplateScheme is the URL scheme that marks a fleet remote as a local
@@ -54,6 +54,31 @@ func TemplateDir(remote string) (string, error) {
 	return dir, nil
 }
 
+// templateHostHint reminds a remote-TUI user that the path is checked on the
+// daemon's machine, not theirs. Every ResolveTemplateDir caller (job-start
+// validation, InspectRepo, the workspace copy) runs on the daemon host, so the
+// hint is accurate wherever the error surfaces.
+const templateHostHint = " (the path is resolved on the fleet daemon's host)"
+
+// ResolveTemplateDir is TemplateDir plus the existence check: the directory
+// must exist (on THIS host — the daemon's) and be a directory. Every consumer
+// of a template path goes through here so the rule and its wording cannot
+// drift between them.
+func ResolveTemplateDir(remote string) (string, error) {
+	dir, err := TemplateDir(remote)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return "", fmt.Errorf("template dir: %w%s", err, templateHostHint)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("template path %s is not a directory%s", dir, templateHostHint)
+	}
+	return dir, nil
+}
+
 // TemplateNameHint suggests a fleet name for a template remote: the base name
 // of the template directory. It is only a DEFAULT for the user to confirm or
 // edit — unlike a git URL, a local path carries no authoritative project name,
@@ -64,27 +89,6 @@ func TemplateNameHint(remote string) string {
 		return ""
 	}
 	return filepath.Base(dir)
-}
-
-// ValidateFleetName rejects names that cannot be embedded verbatim where a
-// fleet name ends up: the ~/.fleet/workspaces/<fleet> directory, container
-// names, and the fleet/instance target syntax. Template fleets are the first
-// place a user TYPES a fleet name (git fleets derive theirs from the URL), so
-// the rule lives here rather than in the dialog.
-func ValidateFleetName(name string) error {
-	if name == "" {
-		return fmt.Errorf("fleet name must not be empty")
-	}
-	if strings.ContainsFunc(name, unicode.IsSpace) {
-		return fmt.Errorf("fleet name %q must not contain spaces", name)
-	}
-	if strings.ContainsAny(name, "/\\") {
-		return fmt.Errorf("fleet name %q must not contain path separators", name)
-	}
-	if name == "." || name == ".." {
-		return fmt.Errorf("fleet name %q is not allowed", name)
-	}
-	return nil
 }
 
 // ValidateTemplateCreate checks the create-instance inputs that only make
@@ -99,7 +103,7 @@ func ValidateTemplateCreate(remote, branch string, backendType BackendType) erro
 		return err
 	}
 	if branch != "" {
-		return fmt.Errorf("--branch is not supported for a %s template fleet (the template dir is copied as-is)", TemplateScheme)
+		return fmt.Errorf("a branch cannot be checked out for a %s template fleet (the template dir is copied as-is)", TemplateScheme)
 	}
 	if backendType != BackendDevcontainer {
 		return fmt.Errorf("a %s template fleet requires the devcontainer backend (got %s)", TemplateScheme, backendType)

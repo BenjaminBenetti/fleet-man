@@ -98,16 +98,9 @@ func Open(remoteURL, branch string) (*Repo, error) {
 // is nothing to clone: the checks read the directory that provisioning will
 // copy, and the branch (if any) is ignored because a copy has no refs.
 func openTemplate(remoteURL string) (*Repo, error) {
-	dir, err := fleet.TemplateDir(remoteURL)
+	dir, err := fleet.ResolveTemplateDir(remoteURL)
 	if err != nil {
 		return nil, err
-	}
-	info, err := os.Stat(dir)
-	if err != nil {
-		return nil, fmt.Errorf("template dir: %w", err)
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("template path %s is not a directory", dir)
 	}
 	return &Repo{Root: dir, Keep: true}, nil
 }

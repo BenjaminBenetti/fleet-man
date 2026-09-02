@@ -1,6 +1,8 @@
 package fleet
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -62,6 +64,27 @@ func TestTemplateDirRejectsNonAbsoluteAndNonTemplate(t *testing.T) {
 	}
 }
 
+func TestResolveTemplateDirChecksExistence(t *testing.T) {
+	dir := t.TempDir()
+	got, err := ResolveTemplateDir("file://" + dir)
+	if err != nil || got != dir {
+		t.Fatalf("ResolveTemplateDir(existing) = %q, %v", got, err)
+	}
+	if _, err := ResolveTemplateDir("file://" + filepath.Join(dir, "nope")); err == nil || !strings.Contains(err.Error(), "daemon's host") {
+		t.Fatalf("missing dir: want stat error with the daemon-host hint, got %v", err)
+	}
+	file := filepath.Join(dir, "f")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveTemplateDir("file://" + file); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("file path: want not-a-directory error, got %v", err)
+	}
+	if _, err := ResolveTemplateDir("file://relative"); err == nil {
+		t.Fatal("relative path must fail before any stat")
+	}
+}
+
 func TestTemplateNameHintIsDirBase(t *testing.T) {
 	if got := TemplateNameHint("file:///home/me/scratch-proj/"); got != "scratch-proj" {
 		t.Errorf("TemplateNameHint = %q, want scratch-proj", got)
@@ -109,19 +132,6 @@ func TestResolveExplicitFleetWinsOverRepoFlag(t *testing.T) {
 	}
 	if target.Fleet != "mine" || target.Instance != "agent-1" {
 		t.Fatalf("target = %+v, want mine/agent-1", target)
-	}
-}
-
-func TestValidateFleetName(t *testing.T) {
-	for _, bad := range []string{"", "a b", "a/b", `a\b`, ".", "..", "\tx"} {
-		if err := ValidateFleetName(bad); err == nil {
-			t.Errorf("ValidateFleetName(%q) = nil, want error", bad)
-		}
-	}
-	for _, good := range []string{"scratch", "my-proj", "proj_2", "a.b"} {
-		if err := ValidateFleetName(good); err != nil {
-			t.Errorf("ValidateFleetName(%q) = %v, want nil", good, err)
-		}
 	}
 }
 

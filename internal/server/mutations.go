@@ -55,6 +55,13 @@ func (s *service) CreateFleet(_ context.Context, req *fleetgrpc.CreateFleetReque
 		return nil, status.Error(codes.InvalidArgument, "fleet name required")
 	}
 	snapshot, err := s.mutate(func(st *state.State) error {
+		// Get-or-create: only a NEW record takes the name into a workspace
+		// path, so only that branch is gated on ValidateFleetName.
+		if _, exists := st.Fleets[req.GetName()]; !exists {
+			if err := fleet.ValidateFleetName(req.GetName()); err != nil {
+				return status.Error(codes.InvalidArgument, err.Error())
+			}
+		}
 		st.GetOrCreateFleet(req.GetName(), req.GetRemote())
 		return nil
 	})

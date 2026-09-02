@@ -459,6 +459,12 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 			if req.Remote == nil || req.GetRemote() == "" {
 				return status.Errorf(codes.NotFound, "fleet %q not found and no remote provided", fleetName)
 			}
+			// New fleets only (an existing record keeps whatever name it has):
+			// the name becomes a workspace path component, so `..` or a slash
+			// would escape ~/.fleet/workspaces before anything is cloned/copied.
+			if err := fleet.ValidateFleetName(fleetName); err != nil {
+				return status.Error(codes.InvalidArgument, err.Error())
+			}
 			f = st.GetOrCreateFleet(fleetName, req.GetRemote())
 		}
 		if req.Remote != nil && req.GetRemote() != "" {
@@ -510,13 +516,10 @@ func validateTemplateRemote(remote, branch string, backendType fleet.BackendType
 	if err := fleet.ValidateTemplateCreate(remote, branch, backendType); err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
-	dir, _ := fleet.TemplateDir(remote)
-	info, err := os.Stat(dir)
-	if err != nil {
-		return status.Errorf(codes.FailedPrecondition, "template dir %s: %v (the path is resolved on the fleet daemon's host)", dir, err)
-	}
-	if !info.IsDir() {
-		return status.Errorf(codes.FailedPrecondition, "template path %s is not a directory", dir)
+	// ValidateTemplateCreate already parsed the URL, so a failure here is the
+	// directory itself (missing / not a dir) — a precondition on THIS host.
+	if _, err := fleet.ResolveTemplateDir(remote); err != nil {
+		return status.Error(codes.FailedPrecondition, err.Error())
 	}
 	return nil
 }

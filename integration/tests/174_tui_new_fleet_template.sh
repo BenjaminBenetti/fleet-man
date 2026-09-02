@@ -25,7 +25,11 @@ tui_send Enter
 info "the fleet-name prompt appears, pre-filled with the dir's base name"
 tui_wait_for "Name:" 5
 tui_assert_contains "Template:" "name prompt should label the source as a template"
-tui_assert_contains "${FIXTURE_REPO_NAME}" "name prompt should suggest the template dir's base name"
+# Anchor on the Name row itself (label, its padding, the input's "> " prompt,
+# then the value), not the bare name — the Template: line above already
+# contains it as the URL's last segment, so a bare match would pass even
+# with an empty prefill.
+tui_assert_contains "Name:     > ${FIXTURE_REPO_NAME}" "name prompt should pre-fill the template dir's base name"
 
 info "replacing the suggested name with an explicit one"
 # ctrl+u clears the (cursor-at-end) input; then type the real name.

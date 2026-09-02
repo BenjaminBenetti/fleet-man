@@ -73,6 +73,9 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 			setFailed(fleetName, instanceName, err)
 			return err
 		}
+		if warn := templateGitFileWarning(wsDir); warn != "" {
+			state.WriteWarn(fleetName, instanceName, warn)
+		}
 	default:
 		// Devcontainer: clone repo first, then provision
 		if err := os.MkdirAll(filepath.Dir(wsDir), 0755); err != nil {
