@@ -187,7 +187,7 @@ func runDetached(cmd *exec.Cmd, grace time.Duration) error {
 	cmd.Stderr = stderr
 	detachFromTerminal(cmd)
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("%s: %w", cmd.Args[0], err)
+		return err // os/exec's start errors already name the program
 	}
 	type exit struct {
 		err    error
