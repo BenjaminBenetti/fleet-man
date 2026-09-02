@@ -471,6 +471,7 @@ Variables fleet **reads** (set them to configure behavior):
 | `FLEET_DEVCONTAINER_BUILDKIT` | `auto` (default), `never` | BuildKit mode for Fleet-managed devcontainers. See [Devcontainer BuildKit](#devcontainer-buildkit). |
 | `FLEET_DEVCONTAINER_UPDATE_REMOTE_USER_UID` | `default`, `never`, `on`, `off` | Remote-user UID/GID rewrite mode. See [Devcontainer UID Rewrite](#devcontainer-uid-rewrite). |
 | `FLEET_SSH_AGENT_SOCK` | absolute path, `off`, or `none` (case-insensitive) | Override the bind source for SSH agent forwarding into instances (`off`/`none` disables it). On macOS the default is Docker Desktop's VM-side `/run/host-services/ssh-auth.sock` (OrbStack and `colima --ssh-agent` are path-compatible); set this if your Docker backend exposes the agent elsewhere (default Colima, Podman machine, Rancher Desktop). |
+| `FLEET_OPENER` | program (+ args, whitespace-split) | Program `fleet open` / in-instance `fo` hands a copied file to instead of the desktop opener (`xdg-open`, `open`, `wslview`), e.g. `imv -f`. Read by whichever process opens the file: the CLI for `fleet open`, the TUI for `fo`. Executables are never opened. |
 | `CODER_URL` | URL | Coder deployment URL (Coder backend). |
 | `CODER_SESSION_TOKEN` | token | Coder API token (Coder backend). |
 | `CODER_CONFIG_DIR` | path | Override the Coder CLI config dir. |

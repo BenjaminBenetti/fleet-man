@@ -2,11 +2,13 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
+	"github.com/BenjaminBenetti/fleet-man/internal/platform"
 )
 
 func TestResolveLocalPath(t *testing.T) {
@@ -108,6 +110,7 @@ func TestFileCopyDoneStatusLine(t *testing.T) {
 		{"copied", fileCopyDoneMsg{src: ":a", dest: "/h/a"}, "Copied :a -> /h/a"},
 		{"opened", fileCopyDoneMsg{src: ":a", dest: "/h/a", opened: true}, "Opened :a (/h/a)"},
 		{"open failed", fileCopyDoneMsg{src: ":a", dest: "/h/a", openErr: errors.New("no handler")}, "Copied :a -> /h/a, but could not open it: no handler"},
+		{"launcher refused", fileCopyDoneMsg{src: ":a", dest: "/h/a", openErr: fmt.Errorf("%w; it was copied to /h/a", platform.ErrLauncher)}, "Copied :a -> /h/a, but not opened: refusing to open an executable"},
 	}
 	for _, tc := range cases {
 		if got := tc.msg.statusLine(); got != tc.want {

@@ -44,6 +44,9 @@ func (msg fileCopyDoneMsg) statusLine() string {
 	switch {
 	case msg.err != nil:
 		return fmt.Sprintf("Copy of %s failed: %v", msg.src, msg.err)
+	case errors.Is(msg.openErr, platform.ErrLauncher):
+		// The error names the path too; the line already says where it landed.
+		return fmt.Sprintf("Copied %s -> %s, but not opened: %v", msg.src, msg.dest, platform.ErrLauncher)
 	case msg.openErr != nil:
 		return fmt.Sprintf("Copied %s -> %s, but could not open it: %v", msg.src, msg.dest, msg.openErr)
 	case msg.opened:
