@@ -24,6 +24,7 @@ func ConfigToProto(c *configutil.Config) *fleetgrpc.Config {
 			GatewayUrl:     c.RemoteMcpSettings.GatewayURL,
 			FleetEnabled:   c.RemoteMcpSettings.FleetEnabled,
 			WebhookEnabled: c.RemoteMcpSettings.WebhookEnabled,
+			FleetMode:      c.RemoteMcpSettings.FleetMode,
 		},
 		DefaultBackend: BackendToProto(fleet.BackendType(c.DefaultBackend)),
 	}
@@ -130,6 +131,7 @@ func ConfigFromProto(pc *fleetgrpc.Config, base *configutil.Config) *configutil.
 		c.RemoteMcpSettings.GatewayURL = rm.GetGatewayUrl()
 		c.RemoteMcpSettings.FleetEnabled = rm.GetFleetEnabled()
 		c.RemoteMcpSettings.WebhookEnabled = rm.GetWebhookEnabled()
+		c.RemoteMcpSettings.FleetMode = rm.GetFleetMode()
 	}
 
 	c.DefaultBackend = string(BackendFromProto(pc.GetDefaultBackend()))

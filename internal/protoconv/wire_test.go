@@ -161,7 +161,7 @@ func TestConfigWirePlacement(t *testing.T) {
 	pinArity[state.DotfilesSettings](t, 3)
 	pinArity[state.CodespacesSettings](t, 3)
 	pinArity[state.BrowserSettings](t, 2)
-	pinArity[state.RemoteMcpSettings](t, 4)
+	pinArity[state.RemoteMcpSettings](t, 5)
 
 	vim := false
 	multi := true
@@ -171,7 +171,7 @@ func TestConfigWirePlacement(t *testing.T) {
 		DotfilesSettings:   state.DotfilesSettings{AutoInstall: true, RepoURL: "ru", InstallScript: "is"},
 		CodespacesSettings: state.CodespacesSettings{Machine: "ma", IdleTimeout: "it", DevcontainerPath: "dp"},
 		BrowserSettings:    state.BrowserSettings{MultipleBrowsersPerFleet: &multi},
-		RemoteMcpSettings:  state.RemoteMcpSettings{GatewayURL: "gu"},
+		RemoteMcpSettings:  state.RemoteMcpSettings{GatewayURL: "gu", FleetMode: "fm"},
 		DefaultBackend:     string(fleet.BackendCoder),
 	})
 	if pc.GetGeneral().TmuxVimKeys == nil || pc.GetGeneral().GetTmuxVimKeys() ||
@@ -190,8 +190,8 @@ func TestConfigWirePlacement(t *testing.T) {
 	if b := pc.GetBrowser(); !b.GetMultipleBrowsersPerFleet() || b.AutoSwitch != nil {
 		t.Fatalf("browser tri-states wire placement wrong: %+v", b)
 	}
-	if pc.GetRemoteMcp().GetGatewayUrl() != "gu" {
-		t.Fatalf("remote-mcp url wire placement wrong: %+v", pc.GetRemoteMcp())
+	if pc.GetRemoteMcp().GetGatewayUrl() != "gu" || pc.GetRemoteMcp().GetFleetMode() != "fm" {
+		t.Fatalf("remote-mcp url/mode wire placement wrong: %+v", pc.GetRemoteMcp())
 	}
 	if pc.GetDefaultBackend() != fleetgrpc.BackendType_BACKEND_TYPE_CODER {
 		t.Fatalf("default backend wire placement wrong: %v", pc.GetDefaultBackend())

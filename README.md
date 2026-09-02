@@ -229,13 +229,25 @@ Once connected, the read-only **Public MCP URL** appears (e.g.
 The line shows the live connection state (connecting / connected / error).
 
 A second, independent toggle — **Enable Remote Fleet** — exposes the daemon's
-**gRPC control surface** through the same gateway, so a remote `fleet` binary can
-drive this instance (see [Remote control](#remote-control-grpc)). With it off,
-fleetd never negotiates the gRPC tunnel feature, so the gateway rejects any
-incoming gRPC commands aimed at the daemon. With it on, a read-only **Public GRPC
-URL** appears under the Public MCP URL (computed by the gateway from its
-`--public-grpc-url` flag) — that value is what you feed another `fleet` as
-`FLEET_GATEWAY`. The toggles are independent: expose MCP, remote control, or both.
+**gRPC control surface** so a remote `fleet` binary can drive this instance (see
+[Remote control](#remote-control-grpc)). Turning it on reveals a **Remote Fleet
+via** selector with two transports:
+
+- **Gateway** (the default) — through the same gateway tunnel. With it, a
+  read-only **Public GRPC URL** appears under the Public MCP URL (computed by the
+  gateway from its `--public-grpc-url` flag) — that value is what you feed
+  another `fleet` as `FLEET_GATEWAY`. With the toggle off, fleetd never
+  negotiates the gRPC tunnel feature, so the gateway rejects any incoming gRPC
+  commands aimed at the daemon.
+- **SSH** — no gateway at all. The daemon serves the same token-gated gRPC
+  server on a loopback port (shown on an **SSH Listener** row, and recorded in
+  `~/.fleet/ssh.port`), and a remote machine reaches it over a plain SSH tunnel
+  that *its* fleet daemon maintains — see [Remote control over
+  SSH](#remote-control-over-ssh). Nothing is exposed beyond what `ssh user@host`
+  already grants.
+
+The toggles are independent: expose MCP, remote control, or both. Only remote
+fleet has the SSH transport; MCP and webhooks stay gateway-only.
 
 A third, independent toggle — **Enable Webhook** — exposes this daemon's
 **automation webhook** endpoint through the same gateway. With it on, a read-only
@@ -433,13 +445,49 @@ h2c with no TLS in front of it (a trusted private network).
 > RPC works remotely today; remote interactive shell awaits a server-side `Exec`
 > handler.
 
+### Remote control over SSH
+
+If you can already `ssh` to the machine running a fleet, you don't need a
+gateway. On that machine, set **Settings → Fleet MCP → Enable Remote Fleet** on
+and **Remote Fleet via** to **SSH**. On your machine, register the fleet in
+**Settings → Fleet Armada** as an `ssh://` URL — `ssh://user@host`,
+`ssh://host:2222`, or an alias from your `~/.ssh/config` — and that's it: no
+token to paste, no session id.
+
+Under the hood your **local** fleet daemon owns the connection. When you connect
+(or ping) an `ssh://` remote it runs your `ssh` binary — so keys, agents,
+`ProxyJump` and every other `~/.ssh/config` setting apply unchanged — to read
+the remote's `~/.fleet/ssh.port` and `~/.fleet/mcp.token`, then keeps one
+`ssh -N -L` port-forward to that port alive and hands the TUI (and every
+`fleet` command or `fleet shell` child started from it) a loopback address to
+dial. A remote daemon that has restarted on a new port, or a dropped tunnel, is
+noticed on the next connection and rebuilt automatically. If the remote daemon
+isn't running at all, the probe starts it for you (it looks for `fleet` on the
+remote's `PATH`, then `~/.local/bin`, `~/go/bin`, `/usr/local/bin`).
+
+The daemon has no terminal, so `ssh` runs in **batch mode**: anything that would
+prompt — an unknown host key, a passphrase-locked key with no agent — fails with
+that reason in the remote's status column instead of hanging. Fix it once by
+running `ssh user@host` yourself, then ping again. `ssh` inherits the daemon's
+environment, so an agent socket must be visible to it (restart the daemon from
+a shell that has `SSH_AUTH_SOCK` if it isn't).
+
+You can also drive an `ssh://` fleet from a plain shell:
+
+```bash
+export FLEET_SSH="ssh://user@host"
+fleet ls          # resolved through your local daemon's tunnel
+```
+
 ### Fleet Armada (multiple remote fleets)
 
 Instead of juggling `FLEET_GATEWAY`/`FLEET_TOKEN` by hand, register remote fleets
 once in **Settings → Fleet Armada**: press **+ Remote Fleet**, paste the gateway
-URL and the remote's bearer token, and fleet runs a connection test before
-saving. Each registered remote shows a live connection status (pinged while the
-settings page is open) and a `[ delete ]` button (press twice to confirm).
+URL and the remote's bearer token — or just an `ssh://user@host` URL, which needs
+no token — and fleet runs a connection test before saving. Each registered
+remote shows its transport (`[gtwy]` or `[ssh]`), a live connection status
+(pinged while the settings page is open) and a `[ delete ]` button (press twice
+to confirm).
 
 The main page's list border carries an **Armada selector**
 (`╭─ Armada [ local ] ───╮`). It is part of the normal `j`/`k` (and arrow-key)
@@ -448,12 +496,15 @@ bottom of the list) — or jump straight to it with the **`A`** key or a mouse
 click. Selecting it opens a dropdown of `local` + every registered remote; pick
 one to **switch the TUI live**: the connection, fleet list, sessions, and shells
 all retarget to the chosen daemon. Registering a remote never switches to it;
-every boot starts on `local` unless `FLEET_GATEWAY` (or `FLEET_SERVER`) is set,
-in which case that boot endpoint appears in the dropdown as `(env)`.
+every boot starts on `local` unless `FLEET_GATEWAY`, `FLEET_SSH` or
+`FLEET_SERVER` is set, in which case that boot endpoint appears in the dropdown
+as `(env)`. The selector and the dropdown badge each remote with its transport —
+`╭─ Armada [ desktop ] [ssh] ──╮` — so you always know how you're connected.
 
-Remotes are shown by **hostname** rather than the full gateway URL; if two
-registered fleets live on the same host, they're disambiguated by the first 8
-characters of their session id (`fleet.example.com - 8e7d1f0a`).
+Remotes are shown by **hostname** rather than the full URL; if two registered
+fleets live on the same host, a gateway remote is disambiguated by the first 8
+characters of its session id (`fleet.example.com - 8e7d1f0a`) and an SSH remote
+by its `user@host[:port]`.
 
 The registry is stored on your own machine at `~/.fleet/armada.json` (mode
 `0600` — it holds bearer tokens) and always round-trips through your **local**
@@ -467,6 +518,7 @@ Variables fleet **reads** (set them to configure behavior):
 |----------|-----------------|--------------|
 | `FLEET_GATEWAY` | `https://gw:50051/<id>` (or `http://…` for a cert-less/h2c gateway) | Drive a *remote* daemon through a fleet gateway (full gRPC control). Takes precedence over `FLEET_SERVER` and the local socket. See [Remote MCP](#remote-mcp). |
 | `FLEET_TOKEN` | bearer token | Token for `FLEET_GATEWAY`. Defaults to `~/.fleet/mcp.token` on the daemon's own host. |
+| `FLEET_SSH` | `ssh://[user@]host[:port]` | Drive a remote daemon over an SSH tunnel your local daemon maintains (no gateway, no token). See [Remote control over SSH](#remote-control-over-ssh). |
 | `FLEET_SERVER` | `host:port` | Drive a remote daemon over plain TCP (no gateway). |
 | `FLEET_DEVCONTAINER_BUILDKIT` | `auto` (default), `never` | BuildKit mode for Fleet-managed devcontainers. See [Devcontainer BuildKit](#devcontainer-buildkit). |
 | `FLEET_DEVCONTAINER_UPDATE_REMOTE_USER_UID` | `default`, `never`, `on`, `off` | Remote-user UID/GID rewrite mode. See [Devcontainer UID Rewrite](#devcontainer-uid-rewrite). |

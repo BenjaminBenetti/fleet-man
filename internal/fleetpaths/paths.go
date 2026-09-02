@@ -68,6 +68,17 @@ func McpPortPath() string {
 	return filepath.Join(Dir(), "mcp.port")
 }
 
+// SSHPortPath records the loopback TCP port the server's token-gated gRPC
+// listener bound to while remote fleet is enabled in SSH mode (Settings → Fleet
+// MCP → Remote Fleet via SSH). Like McpPortPath it is a non-authoritative
+// liveness/discovery hint: written when the listener comes up and removed when
+// it stops or the server shuts down. A remote client's discovery script reads it
+// (with McpTokenPath) over SSH to learn what to port-forward to; its absence
+// means "daemon not running, or SSH mode off".
+func SSHPortPath() string {
+	return filepath.Join(Dir(), "ssh.port")
+}
+
 // McpTokenPath holds the bearer token a client must send to the MCP HTTP server.
 // The TCP port is reachable by any local user, so (unlike the 0600 unix socket)
 // the port alone is not an access boundary; the token file is written 0600 so

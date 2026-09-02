@@ -24,9 +24,13 @@ import (
 // "local" and a registered remote (the border selector on the main page).
 //
 // Persistence always targets the LOCAL daemon (armada_client.go); the switch
-// itself works by swapping the FLEET_GATEWAY/FLEET_TOKEN env vars — every
-// fleetclient.Dial re-reads them, and spawned `fleet shell` children inherit
-// them — then bouncing each connection the TUI holds.
+// itself works by swapping the FLEET_GATEWAY/FLEET_TOKEN (gateway remote) or
+// FLEET_SSH (ssh:// remote) env vars — every fleetclient.Dial re-reads them,
+// and spawned `fleet shell` children inherit them — then bouncing each
+// connection the TUI holds. A remote's URL scheme decides its transport: a
+// gateway URL carries a token the user pasted; an ssh:// URL carries none (the
+// local daemon discovers it over SSH) and is dialed through a tunnel the local
+// daemon maintains (fleetclient.EnvSSH).
 
 // ===========================================
 // Connection status
@@ -212,7 +216,7 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 	case armadaPingResultMsg:
 		st := armadaStatus{state: armadaStatusConnected}
 		if msg.err != nil {
-			st = armadaStatus{state: armadaStatusError, err: armadaPingErrText(msg.err)}
+			st = armadaStatus{state: armadaStatusError, err: armadaPingErrText(msg.url, msg.err)}
 		}
 		m.armadaStatus[msg.url] = st
 		return nil
@@ -223,7 +227,7 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 		}
 		if msg.err != nil {
 			settingsPage.cancelArmadaAdd()
-			m.message = fmt.Sprintf("Connection test failed: %s", armadaPingErrText(msg.err))
+			m.message = fmt.Sprintf("Connection test failed: %s", armadaPingErrText(msg.url, msg.err))
 			return nil
 		}
 		m.armadaStatus[msg.url] = armadaStatus{state: armadaStatusConnected}
@@ -327,28 +331,23 @@ func (m *model) postSwitchFetchCmd() tea.Cmd {
 }
 
 // pingAllArmadaCmd marks every pingable remote (registered remotes plus an
-// unregistered gateway boot remote) as pinging and probes them concurrently.
-// Remotes already mid-ping are skipped so overlapping sweeps (tick + manual)
-// don't double-probe.
+// unregistered gateway/ssh boot remote) as pinging and probes them
+// concurrently. Remotes already mid-ping are skipped so overlapping sweeps
+// (tick + manual) don't double-probe. Pinging an ssh:// remote makes the local
+// daemon bring its tunnel up, so a later switch to it is instant.
 func (m *model) pingAllArmadaCmd() tea.Cmd {
 	type target struct{ url, token string }
 	var targets []target
 	for _, r := range m.armadaRemotes {
 		targets = append(targets, target{r.URL, r.Token})
 	}
-	// The gateway boot remote shows in the dropdown as "(env)" even when not
-	// registered, so give it a status too.
-	if m.bootGateway != "" {
-		registered := false
-		for _, r := range m.armadaRemotes {
-			if r.URL == m.bootGateway {
-				registered = true
-				break
-			}
+	// A boot remote shows in the dropdown as "(env)" even when not registered,
+	// so give it a status too.
+	for _, boot := range []target{{m.bootGateway, m.bootToken}, {m.bootSSH, ""}} {
+		if boot.url == "" || m.armadaRegistered(boot.url) {
+			continue
 		}
-		if !registered {
-			targets = append(targets, target{m.bootGateway, m.bootToken})
-		}
+		targets = append(targets, boot)
 	}
 
 	var cmds []tea.Cmd
@@ -365,18 +364,40 @@ func (m *model) pingAllArmadaCmd() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// armadaRegistered reports whether url is in the registry.
+func (m *model) armadaRegistered(url string) bool {
+	for _, r := range m.armadaRemotes {
+		if r.URL == url {
+			return true
+		}
+	}
+	return false
+}
+
 // armadaPingErrText folds a ping error into a short human cause. The gRPC code
-// distinguishes where the chain broke (see fleetclient.Ping).
-func armadaPingErrText(err error) string {
+// distinguishes where the chain broke (see fleetclient.Ping); the URL's
+// transport words it (a gateway hop vs the local daemon's ssh tunnel).
+func armadaPingErrText(url string, err error) string {
+	ssh := fleetclient.IsSSHURL(url)
 	switch status.Code(err) {
 	case codes.Unauthenticated:
+		if ssh {
+			return "remote refused the discovered token"
+		}
 		return "invalid token"
 	case codes.NotFound:
 		return "unknown session — daemon offline or Remote Fleet disabled"
 	case codes.Unavailable:
+		if ssh {
+			return "ssh tunnel unreachable"
+		}
 		return "gateway unreachable"
 	case codes.DeadlineExceeded:
 		return "timed out"
+	case codes.FailedPrecondition:
+		// The local daemon could not bring the ssh tunnel up; its message is
+		// already user-facing (ssh's own diagnostic, or "SSH mode is off").
+		return status.Convert(err).Message()
 	default:
 		return err.Error()
 	}
@@ -387,16 +408,44 @@ func armadaPingErrText(err error) string {
 // ===========================================
 
 // armadaEntry is one row of the main-page Armada dropdown. Exactly one of url
-// (a gateway) / server (a plain FLEET_SERVER target) is set for a remote; both
-// empty means local. displayName is the short, user-facing name (hostname,
-// disambiguated by session id when two entries share a host).
+// (a gateway or ssh:// remote) / server (a plain FLEET_SERVER target) is set
+// for a remote; both empty means local. displayName is the short, user-facing
+// name (hostname, disambiguated when two entries share a host).
 type armadaEntry struct {
 	displayName string
-	url         string // gateway URL ("" unless a gateway entry)
+	url         string // gateway or ssh:// URL ("" unless a URL entry)
 	token       string
 	server      string // FLEET_SERVER host:port ("" unless a plain-TCP entry)
 	env         bool   // an unregistered boot endpoint (shown with "(env)")
 	current     bool
+}
+
+// Transport badges: every remote entry wears one so the connection mode is
+// always visible (the dropdown, the border selector, the settings rows).
+const (
+	armadaBadgeGateway = "[gtwy]"
+	armadaBadgeSSH     = "[ssh]"
+	armadaBadgeTCP     = "[tcp]"
+)
+
+// badge is the entry's transport badge ("" for local).
+func (e armadaEntry) badge() string {
+	return armadaURLBadge(e.url, e.server)
+}
+
+// armadaURLBadge picks the transport badge for a remote: ssh:// → [ssh], any
+// other URL → [gtwy], a plain FLEET_SERVER target → [tcp], nothing → "".
+func armadaURLBadge(url, server string) string {
+	switch {
+	case url != "" && fleetclient.IsSSHURL(url):
+		return armadaBadgeSSH
+	case url != "":
+		return armadaBadgeGateway
+	case server != "":
+		return armadaBadgeTCP
+	default:
+		return ""
+	}
 }
 
 // key uniquely identifies the endpoint an entry points at, matching
@@ -434,9 +483,11 @@ func (e armadaEntry) host() string {
 }
 
 // sessionID8 returns the first 8 characters of a gateway URL's session id (the
-// last path segment), used to disambiguate two gateways on the same host.
+// last path segment), used to disambiguate two gateways on the same host. An
+// ssh:// URL has no session id (it is disambiguated by its user/port instead —
+// see armadaDisplayName).
 func (e armadaEntry) sessionID8() string {
-	if e.url == "" {
+	if e.url == "" || fleetclient.IsSSHURL(e.url) {
 		return ""
 	}
 	u, err := url.Parse(e.url)
@@ -455,21 +506,20 @@ func (e armadaEntry) sessionID8() string {
 
 // armadaEntries builds the dropdown: local first, then every registered
 // remote, then — when the TUI was booted pointing at an UNREGISTERED remote
-// (FLEET_GATEWAY or FLEET_SERVER) — that boot remote, so the current selection
-// is always present and selectable. Each entry's displayName is its hostname,
-// suffixed with " - <sid8>" when another entry shares the same host.
+// (FLEET_GATEWAY, FLEET_SSH or FLEET_SERVER) — that boot remote, so the current
+// selection is always present and selectable. Each entry's displayName is its
+// hostname, disambiguated when another entry shares the same host.
 func (m *model) armadaEntries() []armadaEntry {
 	current := armadaCurrentKey()
 	entries := []armadaEntry{{}} // local
-	bootGatewaySeen := false
 	for _, r := range m.armadaRemotes {
-		if r.URL == m.bootGateway {
-			bootGatewaySeen = true
-		}
 		entries = append(entries, armadaEntry{url: r.URL, token: r.Token})
 	}
-	if m.bootGateway != "" && !bootGatewaySeen {
+	if m.bootGateway != "" && !m.armadaRegistered(m.bootGateway) {
 		entries = append(entries, armadaEntry{url: m.bootGateway, token: m.bootToken, env: true})
+	}
+	if m.bootSSH != "" && !m.armadaRegistered(m.bootSSH) {
+		entries = append(entries, armadaEntry{url: m.bootSSH, env: true})
 	}
 	if m.bootServer != "" {
 		// FLEET_SERVER targets aren't registrable (no token / gateway), so the
@@ -492,8 +542,9 @@ func (m *model) armadaEntries() []armadaEntry {
 }
 
 // armadaDisplayName renders the short name for an entry: "local" for the local
-// daemon, otherwise the hostname — suffixed with " - <sid8>" when another entry
-// shares the host, and with " (env)" for an unregistered boot endpoint.
+// daemon, otherwise the hostname — disambiguated when another entry shares the
+// host (a gateway by " - <sid8>", an ssh remote by its user@host[:port]
+// authority), and suffixed with " (env)" for an unregistered boot endpoint.
 func armadaDisplayName(e armadaEntry, hostCounts map[string]int) string {
 	h := e.host()
 	if h == "" {
@@ -503,12 +554,37 @@ func armadaDisplayName(e armadaEntry, hostCounts map[string]int) string {
 	if hostCounts[h] > 1 {
 		if sid := e.sessionID8(); sid != "" {
 			name = h + " - " + sid
+		} else if auth := e.sshAuthority(); auth != "" {
+			name = auth
 		}
 	}
 	if e.env {
 		name += " (env)"
 	}
 	return name
+}
+
+// sshAuthority returns an ssh:// entry's [user@]host[:port] (lower-cased host),
+// or "" for any other entry.
+func (e armadaEntry) sshAuthority() string {
+	if e.url == "" || !fleetclient.IsSSHURL(e.url) {
+		return ""
+	}
+	u, err := url.Parse(strings.TrimSpace(e.url))
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	auth := strings.ToLower(u.Host)
+	if u.User != nil && u.User.Username() != "" {
+		auth = u.User.Username() + "@" + auth
+	}
+	return auth
+}
+
+// armadaCurrentBadge is the active connection's transport badge for the border
+// selector ("" for local).
+func (m *model) armadaCurrentBadge() string {
+	return armadaURLBadge(os.Getenv(fleetclient.EnvGateway)+os.Getenv(fleetclient.EnvSSH), os.Getenv(fleetclient.EnvServer))
 }
 
 // armadaCurrentDisplay is the active connection's short name for the border
@@ -525,6 +601,9 @@ func (m *model) armadaCurrentDisplay() string {
 	if gw := os.Getenv(fleetclient.EnvGateway); gw != "" {
 		return (armadaEntry{url: gw}).host()
 	}
+	if ssh := os.Getenv(fleetclient.EnvSSH); ssh != "" {
+		return (armadaEntry{url: ssh}).host()
+	}
 	if srv := os.Getenv(fleetclient.EnvServer); srv != "" {
 		return (armadaEntry{server: srv}).host()
 	}
@@ -533,10 +612,14 @@ func (m *model) armadaCurrentDisplay() string {
 
 // armadaCurrentKey identifies the active connection from the live env (the env
 // IS the switch mechanism, so it's correct whether the connection came from
-// boot or a runtime switch). "" = local.
+// boot or a runtime switch). "" = local. Gateway and ssh remotes are both keyed
+// by their URL (the schemes never collide).
 func armadaCurrentKey() string {
 	if gw := os.Getenv(fleetclient.EnvGateway); gw != "" {
 		return gw
+	}
+	if ssh := os.Getenv(fleetclient.EnvSSH); ssh != "" {
+		return ssh
 	}
 	if srv := os.Getenv(fleetclient.EnvServer); srv != "" {
 		return "server:" + srv
@@ -557,16 +640,26 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	// from here on inherit them. Swap them FIRST so any RPC that re-dials
 	// during the teardown below targets the NEW endpoint, never the old one.
 	switch {
+	case entry.url != "" && fleetclient.IsSSHURL(entry.url):
+		// The local daemon resolves the tunnel address + token per dial; no
+		// token env (the remote's token never leaves the daemons).
+		_ = os.Setenv(fleetclient.EnvSSH, entry.url)
+		_ = os.Unsetenv(fleetclient.EnvGateway)
+		_ = os.Unsetenv(fleetclient.EnvToken)
+		_ = os.Unsetenv(fleetclient.EnvServer)
 	case entry.url != "":
 		_ = os.Setenv(fleetclient.EnvGateway, entry.url)
 		_ = os.Setenv(fleetclient.EnvToken, entry.token)
+		_ = os.Unsetenv(fleetclient.EnvSSH)
 		_ = os.Unsetenv(fleetclient.EnvServer)
 	case entry.server != "":
 		_ = os.Setenv(fleetclient.EnvServer, entry.server)
 		_ = os.Unsetenv(fleetclient.EnvGateway)
+		_ = os.Unsetenv(fleetclient.EnvSSH)
 		_ = os.Unsetenv(fleetclient.EnvToken)
 	default: // local
 		_ = os.Unsetenv(fleetclient.EnvGateway)
+		_ = os.Unsetenv(fleetclient.EnvSSH)
 		_ = os.Unsetenv(fleetclient.EnvServer)
 		_ = os.Unsetenv(fleetclient.EnvToken)
 	}
@@ -631,16 +724,16 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	return switchReloadCmd(entry.displayName, m.watchGen)
 }
 
-// syncTmuxArmadaEnv mirrors the FLEET_GATEWAY/FLEET_TOKEN/FLEET_SERVER env onto
-// the tmux server's global environment so panes tmux spawns AFTER a switch
-// (split-window, the bound %/" keys) inherit the new connection. tmux captures
-// its environment at session start, so an in-process os.Setenv alone never
-// reaches these children. No-op when not running inside tmux.
+// syncTmuxArmadaEnv mirrors the FLEET_GATEWAY/FLEET_TOKEN/FLEET_SSH/FLEET_SERVER
+// env onto the tmux server's global environment so panes tmux spawns AFTER a
+// switch (split-window, the bound %/" keys) inherit the new connection. tmux
+// captures its environment at session start, so an in-process os.Setenv alone
+// never reaches these children. No-op when not running inside tmux.
 func syncTmuxArmadaEnv(m *model) {
 	if !m.inHostTmux {
 		return
 	}
-	for _, name := range []string{fleetclient.EnvGateway, fleetclient.EnvToken, fleetclient.EnvServer} {
+	for _, name := range []string{fleetclient.EnvGateway, fleetclient.EnvToken, fleetclient.EnvSSH, fleetclient.EnvServer} {
 		if v := os.Getenv(name); v != "" {
 			_ = exec.Command("tmux", "set-environment", "-g", name, v).Run()
 		} else {
@@ -705,8 +798,11 @@ func (fleetPage *fleetPage) renderArmadaSelectDialog(m *model) string {
 	var opts strings.Builder
 	for i, e := range entries {
 		suffix := ""
+		if badge := e.badge(); badge != "" {
+			suffix = "  " + dimStyle.Render(badge)
+		}
 		if e.url != "" {
-			suffix = "  " + armadaStatusValue(m, e.url)
+			suffix += "  " + armadaStatusValue(m, e.url)
 		}
 		if e.current {
 			suffix += "  " + dimStyle.Render("(current)")
