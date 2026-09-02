@@ -100,7 +100,12 @@ func TestOpenFileRefusesExecutable(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("exec bits")
 	}
-	dir := t.TempDir()
+	// Resolve the temp dir: on macOS it sits under a symlinked /var/folders,
+	// and the cwd-based Abs below reports the real /private/var path.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	log := filepath.Join(dir, "opened.log")
 	stub := filepath.Join(dir, "opener.sh")
 	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"$1\" >> "+log+"\n"), 0o755); err != nil {
@@ -127,9 +132,7 @@ func TestOpenFileRefusesExecutable(t *testing.T) {
 	if err := os.WriteFile(png, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(dir)
 	got, err = OpenFile("chart.png")
 	if err != nil {
 		t.Fatalf("OpenFile(chart.png): %v", err)
