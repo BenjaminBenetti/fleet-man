@@ -99,7 +99,13 @@ func (fleetPage *fleetPage) renderArmadaBorder(m *model, width int) string {
 	borderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
 
 	name := m.armadaCurrentDisplay()
-	frame := " Armada [  ] "
+	// The transport badge ([gtwy] / [ssh] / [tcp]) trails the selector so the
+	// connection mode is visible at a glance; local wears none.
+	badge := ""
+	if b := m.armadaCurrentBadge(); b != "" {
+		badge = b + " "
+	}
+	frame := " Armada [  ] " + badge
 	// Corners + 2 leading dashes + at least 2 trailing dashes must survive.
 	maxName := width - 6 - lipgloss.Width(frame)
 	if maxName < 1 {
@@ -111,7 +117,7 @@ func (fleetPage *fleetPage) renderArmadaBorder(m *model, width int) string {
 	}
 	// labelWidth drives layout + mouse hit-testing, so measure the PLAIN text;
 	// the ANSI styling applied below doesn't change the visible width.
-	label := " Armada [ " + name + " ] "
+	label := " Armada [ " + name + " ] " + badge
 	labelWidth := lipgloss.Width(label)
 
 	// "Armada" wears the same light-cyan→deep-blue gradient as the "fleet" logo
@@ -123,6 +129,9 @@ func (fleetPage *fleetPage) renderArmadaBorder(m *model, width int) string {
 		restStyle = selectedStyle
 	}
 	styledLabel := " " + renderGradient("Armada") + restStyle.Render(rest)
+	if badge != "" {
+		styledLabel += dimStyle.Render(badge)
+	}
 
 	fleetPage.armadaSel.x0 = 3
 	fleetPage.armadaSel.x1 = 3 + labelWidth

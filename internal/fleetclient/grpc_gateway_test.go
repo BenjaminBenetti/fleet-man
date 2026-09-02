@@ -1,6 +1,7 @@
 package fleetclient
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,7 +76,7 @@ func TestSelectEndpointGatewayPrecedence(t *testing.T) {
 	t.Setenv("FLEET_SERVER", "1.2.3.4:9000") // gateway must win
 	t.Setenv("FLEET_TOKEN", "tok")
 
-	ep, err := selectEndpoint()
+	ep, err := selectEndpoint(context.Background())
 	if err != nil {
 		t.Fatalf("selectEndpoint: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestSelectEndpointGatewayPrecedence(t *testing.T) {
 // an error rather than a silently-broken endpoint.
 func TestSelectEndpointBadGateway(t *testing.T) {
 	t.Setenv("FLEET_GATEWAY", "ftp://nope")
-	if _, err := selectEndpoint(); err == nil {
+	if _, err := selectEndpoint(context.Background()); err == nil {
 		t.Fatal("malformed FLEET_GATEWAY should error")
 	}
 }

@@ -10,6 +10,7 @@
 package fleetclient
 
 import (
+	"context"
 	"os"
 	"strings"
 
@@ -29,6 +30,10 @@ const (
 	// EnvServer points the client at a plain remote TCP daemon:
 	// FLEET_SERVER=host:port.
 	EnvServer = "FLEET_SERVER"
+	// EnvSSH points the client at a daemon reached over an SSH tunnel the LOCAL
+	// daemon maintains: FLEET_SSH=ssh://[user@]host[:port]. Resolved to a
+	// loopback address + token per dial via the local ResolveArmadaRemote RPC.
+	EnvSSH = "FLEET_SSH"
 	// EnvToken carries the bearer token for a gateway/remote daemon; falls back
 	// to ~/.fleet/mcp.token (see BearerToken).
 	EnvToken = "FLEET_TOKEN"
@@ -76,14 +81,21 @@ func (e remoteEndpoint) DialOptions() []grpc.DialOption { return insecureCreds()
 //   - FLEET_GATEWAY=https://gw:50051/<id> (or http://… behind a TLS-terminating
 //     proxy) → through a fleet gateway (the bearer token from FLEET_TOKEN, or
 //     ~/.fleet/mcp.token for a same-host user).
+//   - FLEET_SSH=ssh://[user@]host[:port] → through an SSH tunnel the local
+//     daemon maintains (resolved per dial; needs the local daemon, which
+//     auto-spawns).
 //   - FLEET_SERVER=host:port → a plain remote TCP target.
 //   - otherwise → the local auto-spawned unix socket.
 //
-// It errors only when FLEET_GATEWAY is set but malformed. Remote endpoints
-// (gateway/server) are not auto-spawned and a version mismatch is a hard error.
-func selectEndpoint() (Endpoint, error) {
+// It errors when FLEET_GATEWAY/FLEET_SSH is set but malformed, or the SSH
+// tunnel cannot be brought up. Remote endpoints are not auto-spawned and a
+// version mismatch is a hard error.
+func selectEndpoint(ctx context.Context) (Endpoint, error) {
 	if gw := os.Getenv(EnvGateway); gw != "" {
 		return newGatewayEndpoint(gw, gatewayToken())
+	}
+	if ssh := os.Getenv(EnvSSH); ssh != "" {
+		return newSSHEndpoint(ctx, ssh)
 	}
 	if addr := os.Getenv(EnvServer); addr != "" {
 		return remoteEndpoint{addr: addr}, nil
@@ -92,11 +104,24 @@ func selectEndpoint() (Endpoint, error) {
 }
 
 // IsRemote reports whether the client is pointed at a remote daemon
-// (FLEET_GATEWAY or FLEET_SERVER set) rather than the local auto-spawned
-// socket. Client-host concerns — dependency checks, the local-exec TTY
-// carve-out — only apply when this is false.
+// (FLEET_GATEWAY, FLEET_SSH or FLEET_SERVER set) rather than the local
+// auto-spawned socket. Client-host concerns — dependency checks, the local-exec
+// TTY carve-out — only apply when this is false.
 func IsRemote() bool {
-	return os.Getenv(EnvGateway) != "" || os.Getenv(EnvServer) != ""
+	return os.Getenv(EnvGateway) != "" || os.Getenv(EnvSSH) != "" || os.Getenv(EnvServer) != ""
+}
+
+// IsSSH reports whether the client reaches the daemon over an SSH tunnel
+// (FLEET_SSH set).
+func IsSSH() bool {
+	return os.Getenv(EnvSSH) != ""
+}
+
+// IsSSHURL reports whether a fleet-armada URL names an SSH remote (ssh://…)
+// rather than a gateway. The scheme decides the transport everywhere a remote
+// URL is handled (registry, switch, ping, labels).
+func IsSSHURL(raw string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(raw)), "ssh://")
 }
 
 // IsGateway reports whether the client reaches the daemon THROUGH a fleet

@@ -81,6 +81,12 @@ message RemoteMcpSettings {
   // does not serve <session-url>/webhook/<name> for this daemon. Independent of
   // enabled/fleet_enabled — all three ride the SAME outbound tunnel.
   bool webhook_enabled = 4;
+  // fleet_mode selects how remote fleet control is reached: "gateway" (the
+  // default; empty reads as gateway) rides the gateway tunnel, "ssh" instead
+  // serves the token-gated gRPC server on a loopback port that a remote client
+  // reaches over an SSH tunnel (no gateway involved). Mirrors
+  // state.FleetModeGateway / state.FleetModeSSH; an unknown value is gateway.
+  string fleet_mode = 5;
 }
 
 message Config {

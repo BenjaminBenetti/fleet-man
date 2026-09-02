@@ -19,12 +19,34 @@ option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
 // list, and a remote-connected TUI's SetConfig would write the registry to the
 // wrong machine's config.json. Dedicated messages + RPCs avoid both.
 
-// ArmadaRemote is one registered remote fleet: where its gateway is and the
-// bearer token that authenticates to the daemon behind it.
+// ArmadaRemote is one registered remote fleet: where it is and the bearer
+// token that authenticates to the daemon behind it.
 message ArmadaRemote {
-  // FLEET_GATEWAY-style URL: <scheme>://<host[:port]>/<session-id>.
+  // Either a FLEET_GATEWAY-style URL (<scheme>://<host[:port]>/<session-id>)
+  // for a fleet reached through a gateway, or an SSH URL
+  // (ssh://[user@]host[:port]) for a fleet reached over an SSH tunnel the LOCAL
+  // daemon maintains (see ResolveArmadaRemote).
   string url = 1;
   // MCP bearer token; validated by the remote daemon, never by the gateway.
+  // Empty for an ssh:// remote — the token is discovered over SSH on connect.
+  string token = 2;
+}
+
+// ResolveArmadaRemote turns an ssh:// armada URL into something a gRPC client
+// can dial: the LOCAL daemon brings up (or reuses) an SSH port-forward to the
+// remote daemon's token-gated gRPC listener, discovers the remote's bearer token
+// over the same SSH connection, verifies the tunnel end-to-end, and returns the
+// loopback address + token. LOCAL-ONLY: it hands out a bearer token and drives
+// the user's ssh, so the tunnel-facing server refuses it (like Get/SetArmada).
+message ResolveArmadaRemoteRequest {
+  // The ssh://[user@]host[:port] URL (need not be registered in the armada).
+  string url = 1;
+}
+
+message ResolveArmadaRemoteReply {
+  // host:port on the local loopback that forwards to the remote daemon.
+  string addr = 1;
+  // The remote daemon's bearer token, sent as `authorization: Bearer <token>`.
   string token = 2;
 }
 

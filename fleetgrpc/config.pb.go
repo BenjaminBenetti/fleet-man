@@ -321,8 +321,14 @@ type RemoteMcpSettings struct {
 	// does not serve <session-url>/webhook/<name> for this daemon. Independent of
 	// enabled/fleet_enabled — all three ride the SAME outbound tunnel.
 	WebhookEnabled bool `protobuf:"varint,4,opt,name=webhook_enabled,json=webhookEnabled,proto3" json:"webhook_enabled,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// fleet_mode selects how remote fleet control is reached: "gateway" (the
+	// default; empty reads as gateway) rides the gateway tunnel, "ssh" instead
+	// serves the token-gated gRPC server on a loopback port that a remote client
+	// reaches over an SSH tunnel (no gateway involved). Mirrors
+	// state.FleetModeGateway / state.FleetModeSSH; an unknown value is gateway.
+	FleetMode     string `protobuf:"bytes,5,opt,name=fleet_mode,json=fleetMode,proto3" json:"fleet_mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RemoteMcpSettings) Reset() {
@@ -381,6 +387,13 @@ func (x *RemoteMcpSettings) GetWebhookEnabled() bool {
 		return x.WebhookEnabled
 	}
 	return false
+}
+
+func (x *RemoteMcpSettings) GetFleetMode() string {
+	if x != nil {
+		return x.FleetMode
+	}
+	return ""
 }
 
 type Config struct {
@@ -678,13 +691,15 @@ const file_config_proto_rawDesc = "" +
 	"\vauto_switch\x18\x02 \x01(\bH\x01R\n" +
 	"autoSwitch\x88\x01\x01B\x1e\n" +
 	"\x1c_multiple_browsers_per_fleetB\x0e\n" +
-	"\f_auto_switch\"\x9c\x01\n" +
+	"\f_auto_switch\"\xbb\x01\n" +
 	"\x11RemoteMcpSettings\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x1f\n" +
 	"\vgateway_url\x18\x02 \x01(\tR\n" +
 	"gatewayUrl\x12#\n" +
 	"\rfleet_enabled\x18\x03 \x01(\bR\ffleetEnabled\x12'\n" +
-	"\x0fwebhook_enabled\x18\x04 \x01(\bR\x0ewebhookEnabled\"\xad\x03\n" +
+	"\x0fwebhook_enabled\x18\x04 \x01(\bR\x0ewebhookEnabled\x12\x1d\n" +
+	"\n" +
+	"fleet_mode\x18\x05 \x01(\tR\tfleetMode\"\xad\x03\n" +
 	"\x06Config\x124\n" +
 	"\ageneral\x18\x01 \x01(\v2\x1a.fleetgrpc.GeneralSettingsR\ageneral\x12.\n" +
 	"\x05agent\x18\x02 \x01(\v2\x18.fleetgrpc.AgentSettingsR\x05agent\x127\n" +

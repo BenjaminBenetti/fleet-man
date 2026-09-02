@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -50,6 +51,7 @@ const (
 	settingsItemRemoteMcpToken         = 707 // copy the bearer token (~/.fleet/mcp.token)
 	settingsItemRemoteWebhookEnabled   = 708 // expose the automation webhook endpoint through the gateway
 	settingsItemRemoteWebhookPublicURL = 709 // copy the gateway-assigned public webhook base URL
+	settingsItemRemoteFleetMode        = 710 // "Remote Fleet via" [Gateway] [SSH] segmented selector
 
 	// Fleet armada: the "+ Remote Fleet" button has a fixed id; registered
 	// remotes get base+i. The base is placed FAR above every other block (and
@@ -163,6 +165,7 @@ type remoteSettingsSnapshot struct {
 	fleetEnabled   bool
 	webhookEnabled bool
 	gatewayURL     string
+	fleetMode      string
 }
 
 // snapshotRemoteSettings extracts the tunnel-relevant settings from config.
@@ -175,6 +178,7 @@ func snapshotRemoteSettings(config *configutil.Config) remoteSettingsSnapshot {
 		fleetEnabled:   config.RemoteMcpSettings.FleetEnabled,
 		webhookEnabled: config.RemoteMcpSettings.WebhookEnabled,
 		gatewayURL:     config.RemoteMcpSettings.GatewayURL,
+		fleetMode:      config.RemoteMcpSettings.FleetMode,
 	}
 }
 
@@ -304,7 +308,14 @@ var settingsSections = []settingsSection{
 			if m.config != nil && m.config.RemoteMcpSettings.Enabled {
 				items = append(items, settingsItemRemoteMcpCopyRemote)
 			}
-			items = append(items, settingsItemRemoteMcpEnabled, settingsItemRemoteFleetEnabled, settingsItemRemoteWebhookEnabled, settingsItemRemoteMcpGatewayURL)
+			items = append(items, settingsItemRemoteMcpEnabled, settingsItemRemoteFleetEnabled)
+			// The transport selector appears only while remote fleet is on —
+			// it is the toggle's sub-setting, and hidden it can't confuse the
+			// gateway-only MCP/webhook rows around it.
+			if m.config != nil && m.config.RemoteMcpSettings.FleetEnabled {
+				items = append(items, settingsItemRemoteFleetMode)
+			}
+			items = append(items, settingsItemRemoteWebhookEnabled, settingsItemRemoteMcpGatewayURL)
 			if m.config != nil && m.config.RemoteMcpSettings.Enabled {
 				items = append(items, settingsItemRemoteMcpPublicURL)
 			}
@@ -584,6 +595,56 @@ func (settingsPage *settingsPage) toggleRemoteFleetEnabled(m *model) {
 		label = "on"
 	}
 	m.message = fmt.Sprintf("Remote Fleet set to %s", label)
+}
+
+// setRemoteFleetMode selects the remote-fleet transport ("Remote Fleet via"
+// Gateway / SSH) and saves. A no-op when already in that mode. Reverts on a
+// failed save unless the failure is the expected tunnel bounce from a remote
+// client (switching the mode moves the daemon's control surface, which can
+// drop the very connection this save rode in on). The row sits BELOW the toggle
+// and above the rows the mode swaps (Public GRPC URL ↔ SSH Listener), so its
+// index is preserved and no cursor re-pin is needed.
+func (settingsPage *settingsPage) setRemoteFleetMode(m *model, mode string) {
+	if m.config == nil {
+		m.config = configutil.DefaultConfig()
+	}
+	current := m.config.RemoteMcpSettings.FleetMode
+	if current == mode || (mode == configutil.FleetModeGateway && !m.config.RemoteMcpSettings.FleetViaSSH()) {
+		return
+	}
+	m.config.RemoteMcpSettings.FleetMode = mode
+	if err := setConfigRemote(m.config); err != nil {
+		if settingsPage.remoteSaveBounced(m, err) {
+			settingsPage.serverRemote = snapshotRemoteSettings(m.config)
+			m.message = remoteSettingsSavedMsg
+			return
+		}
+		m.config.RemoteMcpSettings.FleetMode = current
+		m.message = fmt.Sprintf("Failed to save settings: %v", err)
+		return
+	}
+	settingsPage.serverRemote = snapshotRemoteSettings(m.config)
+	label := "Gateway"
+	if mode == configutil.FleetModeSSH {
+		label = "SSH"
+	}
+	m.message = fmt.Sprintf("Remote Fleet via %s", label)
+}
+
+// remoteSSHStatusValue renders the "SSH Listener" line (the Public GRPC URL
+// row's stand-in while Remote Fleet is via SSH) from the pushed status: the
+// loopback address the daemon's token-gated server listens on, or why it
+// isn't. Independent of the gateway tunnel's state field.
+func remoteSSHStatusValue(m *model) string {
+	st := m.remoteMcpStatus
+	switch {
+	case st != nil && st.GetSshAddr() != "":
+		return statusRunningStyle.Render("listening") + "  " + st.GetSshAddr() + "  " + dimStyle.Render("clients add ssh://<user>@<this host> as a Remote Fleet")
+	case st != nil && st.GetSshError() != "":
+		return statusCreatingStyle.Render("error") + "  " + dimStyle.Render(st.GetSshError())
+	default:
+		return dimStyle.Render("(starting…)")
+	}
 }
 
 // toggleRemoteWebhookEnabled flips the "Enable Webhook" preference — exposing
@@ -905,6 +966,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleRemoteMcpEnabled(m)
 			} else if item == settingsItemRemoteFleetEnabled {
 				settingsPage.toggleRemoteFleetEnabled(m)
+			} else if item == settingsItemRemoteFleetMode {
+				settingsPage.setRemoteFleetMode(m, configutil.FleetModeGateway)
 			} else if item == settingsItemRemoteWebhookEnabled {
 				settingsPage.toggleRemoteWebhookEnabled(m)
 			} else if item == settingsItemCodespacesMachine {
@@ -935,6 +998,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleRemoteMcpEnabled(m)
 			} else if item == settingsItemRemoteFleetEnabled {
 				settingsPage.toggleRemoteFleetEnabled(m)
+			} else if item == settingsItemRemoteFleetMode {
+				settingsPage.setRemoteFleetMode(m, configutil.FleetModeSSH)
 			} else if item == settingsItemRemoteWebhookEnabled {
 				settingsPage.toggleRemoteWebhookEnabled(m)
 			} else if item == settingsItemCodespacesMachine {
@@ -980,6 +1045,14 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleRemoteFleetEnabled(m)
 				return nil
 			}
+			if item == settingsItemRemoteFleetMode {
+				next := configutil.FleetModeSSH
+				if m.config != nil && m.config.RemoteMcpSettings.FleetViaSSH() {
+					next = configutil.FleetModeGateway
+				}
+				settingsPage.setRemoteFleetMode(m, next)
+				return nil
+			}
 			if item == settingsItemRemoteWebhookEnabled {
 				settingsPage.toggleRemoteWebhookEnabled(m)
 				return nil
@@ -1007,6 +1080,12 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				return copyToClipboardCmd(url)
 			}
 			if item == settingsItemRemoteGrpcPublicURL {
+				if m.config != nil && m.config.RemoteMcpSettings.FleetViaSSH() {
+					// The SSH listener has no public URL: the client side registers
+					// ssh://<user>@<this host> and discovers the port itself.
+					m.message = "Nothing to copy — on the client, add ssh://<user>@<this host> as a Remote Fleet"
+					return nil
+				}
 				url := remoteGrpcPublicURL(m)
 				if url == "" {
 					m.message = "No public GRPC URL yet — connect to the gateway first"
@@ -1131,7 +1210,7 @@ func (settingsPage *settingsPage) beginArmadaAdd(m *model) tea.Cmd {
 	}
 	settingsPage.armadaAddStage = armadaAddURLIn
 	settingsPage.armadaAddURL = ""
-	settingsPage.input.Placeholder = "https://gateway.example.com/<session-id>"
+	settingsPage.input.Placeholder = "https://gateway.example.com/<session-id>  or  ssh://user@host"
 	settingsPage.input.EchoMode = textinput.EchoNormal
 	settingsPage.input.SetValue("")
 	settingsPage.input.Focus()
@@ -1207,6 +1286,19 @@ func (settingsPage *settingsPage) updateArmadaAdd(m *model, msg tea.Msg) tea.Cmd
 				}
 			}
 			settingsPage.armadaAddURL = url
+			if fleetclient.IsSSHURL(url) {
+				// An ssh:// remote needs no token from the user: the local daemon
+				// discovers it over SSH during the connection test (which also
+				// brings the tunnel up). Straight to testing.
+				if !sshURLLooksValid(url) {
+					m.message = "Enter an ssh://[user@]host[:port] URL"
+					return nil
+				}
+				settingsPage.armadaAddStage = armadaAddTesting
+				settingsPage.input.Blur()
+				m.message = ""
+				return testArmadaRemoteCmd(url, "")
+			}
 			settingsPage.armadaAddStage = armadaAddTokenIn
 			settingsPage.input.SetValue("")
 			settingsPage.input.Placeholder = "bearer token (~/.fleet/mcp.token on the remote)"
@@ -1236,6 +1328,17 @@ func (settingsPage *settingsPage) updateArmadaAdd(m *model, msg tea.Msg) tea.Cmd
 	var cmd tea.Cmd
 	settingsPage.input, cmd = settingsPage.input.Update(msg)
 	return cmd
+}
+
+// sshURLLooksValid is the client-side shape check for an ssh:// armada URL
+// (a host, no path/query). The local daemon parses it strictly when resolving;
+// this just stops an obviously broken entry from starting a connection test.
+func sshURLLooksValid(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	return (u.Path == "" || u.Path == "/") && u.RawQuery == "" && u.Fragment == ""
 }
 
 // armadaStatusValue renders one remote's connection indicator from the latest
@@ -1510,9 +1613,37 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			if config.RemoteMcpSettings.FleetEnabled {
 				fleetEnabledValue = "[ on ]"
 			}
-			fleetEnabledValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Allow remote `fleet` binary to control this instance through the gateway public url")
+			fleetEnabledValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Allow a remote `fleet` binary to control this instance, via the gateway or an SSH tunnel")
 			recordRow(settingsItemRemoteFleetEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteFleetEnabled, "Enable Remote Fleet", fleetEnabledValue))
 			listContent.WriteString("\n")
+
+			if config.RemoteMcpSettings.FleetEnabled {
+				// Transport selector: every mode bracketed, the active one
+				// highlighted (the Fleet Daemon "Logs" segmented control).
+				viaSSH := config.RemoteMcpSettings.FleetViaSSH()
+				var seg strings.Builder
+				for i, mode := range []struct {
+					label string
+					ssh   bool
+				}{{"Gateway", false}, {"SSH", true}} {
+					if i > 0 {
+						seg.WriteString(" ")
+					}
+					label := "[" + mode.label + "]"
+					if mode.ssh == viaSSH {
+						seg.WriteString(selectedStyle.Render(label))
+					} else {
+						seg.WriteString(dimStyle.Render(label))
+					}
+				}
+				hint := "Reached through the fleet gateway at the Gateway URL below"
+				if viaSSH {
+					hint = "Reached over an SSH tunnel — no gateway; the client registers ssh://<user>@<this host>"
+				}
+				modeValue := seg.String() + "\n" + strings.Repeat(" ", 21) + dimStyle.Render(hint)
+				recordRow(settingsItemRemoteFleetMode, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteFleetMode, "Remote Fleet via", modeValue))
+				listContent.WriteString("\n")
+			}
 
 			webhookEnabledValue := "[ off ]"
 			if config.RemoteMcpSettings.WebhookEnabled {
@@ -1544,7 +1675,13 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				}
 				recordRow(settingsItemRemoteMcpPublicURL, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteMcpPublicURL, "Public MCP URL", mcpValue))
 			}
-			if config.RemoteMcpSettings.FleetEnabled {
+			if config.RemoteMcpSettings.FleetViaSSH() {
+				// SSH mode: the row shows the loopback listener instead of a
+				// gateway URL (there is none). Same item id, so navigation and
+				// tests keyed on it keep working across a mode flip.
+				listContent.WriteString("\n")
+				recordRow(settingsItemRemoteGrpcPublicURL, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteGrpcPublicURL, "SSH Listener", remoteSSHStatusValue(m)))
+			} else if config.RemoteMcpSettings.FleetEnabled {
 				listContent.WriteString("\n")
 				grpcValue := remoteGrpcStatusValue(m)
 				if remoteGrpcPublicURL(m) != "" {
@@ -1572,7 +1709,7 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			for i, remote := range m.armadaRemotes {
 				item := settingsItemArmadaBase + i
 				active := currentItem == item
-				value := remote.URL + "  " + armadaStatusValue(m, remote.URL) + "  " + settingsPage.renderArmadaDeleteButton(m, active)
+				value := dimStyle.Render(armadaURLBadge(remote.URL, "")) + " " + remote.URL + "  " + armadaStatusValue(m, remote.URL) + "  " + settingsPage.renderArmadaDeleteButton(m, active)
 				recordRow(item, settingsPage.renderSettingsRow(m, active, fmt.Sprintf("Remote %d", i+1), value))
 				listContent.WriteString("\n")
 			}

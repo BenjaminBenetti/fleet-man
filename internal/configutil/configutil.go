@@ -49,3 +49,9 @@ const (
 	AgentToolCopilot = state.AgentToolCopilot
 	AgentToolAuggie  = state.AgentToolAuggie
 )
+
+// RemoteMcpSettings.FleetMode values ("Remote Fleet via" Gateway / SSH).
+const (
+	FleetModeGateway = state.FleetModeGateway
+	FleetModeSSH     = state.FleetModeSSH
+)

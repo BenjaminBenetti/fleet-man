@@ -10,6 +10,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/server/remote"
+	"github.com/BenjaminBenetti/fleet-man/internal/server/sshtunnel"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	"google.golang.org/grpc/codes"
@@ -32,6 +33,13 @@ type service struct {
 	// after the MCP listener binds (so it knows the loopback port); nil for tests
 	// that use newService() without a serve loop, so callers must nil-check.
 	remote *remote.Manager
+
+	// sshListen serves the token-gated gRPC server on a loopback port while
+	// remote fleet is enabled in SSH mode (sshlisten.go); sshTunnels maintains
+	// this machine's OUTBOUND ssh forwards to ssh:// armada remotes
+	// (ResolveArmadaRemote). Both set in server.go; nil in newService() tests.
+	sshListen  *sshListener
+	sshTunnels *sshtunnel.Manager
 
 	// bgCtx is cancelled at server shutdown (set to the serve loop's hubCtx in
 	// server.go). Background work spawned by RPC handlers — e.g. the TUI-connect
