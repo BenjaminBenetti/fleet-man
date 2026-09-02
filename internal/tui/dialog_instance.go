@@ -51,6 +51,10 @@ func backendTypeLabel(backendType fleet.BackendType) string {
 	}
 }
 
+// templateBranchDisplay is the locked Branch row text for a file:// template
+// fleet, in both the New and Edit instance dialogs: a copied dir has no ref.
+const templateBranchDisplay = "n/a (template dir is copied as-is)"
+
 // addInstanceRow identifies a focusable row in the add-instance dialog.
 const (
 	addInstanceRowName = iota
@@ -654,6 +658,9 @@ func (fleetPage *fleetPage) renderAddInstanceDialog(m *model) string {
 		if branchDisplay == "" {
 			branchDisplay = "default"
 		}
+		if fleetPage.addInst.template {
+			branchDisplay = templateBranchDisplay
+		}
 		branchField = dimStyle.Render(branchDisplay)
 		deployField = dimStyle.Render(fmt.Sprintf("[ %s ]", backendTypeLabel(backendType)))
 	} else {
@@ -669,7 +676,7 @@ func (fleetPage *fleetPage) renderAddInstanceDialog(m *model) string {
 		nameField = fleetPage.textInput.View()
 		branchField = fleetPage.branchInput.View()
 		if fleetPage.addInst.template {
-			branchField = dimStyle.Render("n/a (template dir is copied as-is)")
+			branchField = dimStyle.Render(templateBranchDisplay)
 		}
 		deployField = fmt.Sprintf("[ %s ]", backendTypeLabel(backendType))
 	}

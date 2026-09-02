@@ -287,6 +287,43 @@ func TestAddInstanceKeySetsTemplateFlagFromFleetRemote(t *testing.T) {
 	}
 }
 
+// The Edit instance dialog must agree with the New instance dialog: a template
+// instance's locked Branch row reads n/a, not "default".
+func TestEditInstanceTemplateShowsBranchNA(t *testing.T) {
+	fp := newFleetPage()
+	f := &fleet.Fleet{Name: "scratch", Remote: "file:///home/me/scratch", Instances: []*fleet.Instance{{Name: "one"}}}
+	fp.rows = []row{{kind: rowInstance, fleetName: "scratch", instance: f.Instances[0]}}
+	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{"scratch": f}}, fleetPage: fp}
+
+	fp.openEditInstanceDialog(m)
+
+	if !fp.addInst.editing || !fp.addInst.template {
+		t.Fatalf("editing=%v template=%v, want both true", fp.addInst.editing, fp.addInst.template)
+	}
+	view := fp.renderAddInstanceDialog(m)
+	if !strings.Contains(view, templateBranchDisplay) {
+		t.Fatalf("edit dialog should show the template n/a branch text:\n%s", view)
+	}
+	if strings.Contains(view, "default") {
+		t.Fatalf("edit dialog must not show a 'default' branch for a template instance:\n%s", view)
+	}
+}
+
+func TestNoDevcontainerDialogCopyForTemplate(t *testing.T) {
+	fp, m := newAddFleetModel(map[string]*fleet.Fleet{})
+	fp.mode = viewAddFleetNoDevcontainer
+	fp.addFleet.pendingRepoURL = "file:///home/me/scratch"
+	view := fp.renderAddFleetNoDevcontainerDialog(m)
+	if !strings.Contains(view, "This template dir has no") || strings.Contains(view, "clone the repo") {
+		t.Fatalf("template no-devcontainer dialog should not talk about a repository/clone:\n%s", view)
+	}
+	fp.addFleet.pendingRepoURL = "git@github.com:org/repo.git"
+	view = fp.renderAddFleetNoDevcontainerDialog(m)
+	if !strings.Contains(view, "This repository has no") {
+		t.Fatalf("git no-devcontainer dialog copy regressed:\n%s", view)
+	}
+}
+
 func TestFirstFleetRepoSkipsTemplateFleets(t *testing.T) {
 	m := &model{st: &state.State{Fleets: map[string]*fleet.Fleet{
 		"scratch": {Name: "scratch", Remote: "file:///home/me/scratch"},

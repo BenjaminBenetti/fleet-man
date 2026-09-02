@@ -478,19 +478,26 @@ func (fleetPage *fleetPage) renderAddFleetNoDevcontainerDialog(m *model) string 
 	var b strings.Builder
 	b.WriteString("\n")
 	agentName, _, agentErr := devcontainersetup.FindAgent()
+	// A template is a local dir: the agent works in it directly, nothing is
+	// cloned. Keep the copy honest about which one this is.
+	isTemplate := fleet.IsTemplateRemote(fleetPage.addFleet.pendingRepoURL)
+	sourceNoun, setupVerb := "repository", "will clone the repo and walk you through configuration"
+	if isTemplate {
+		sourceNoun, setupVerb = "template dir", "will work in the template dir and walk you through configuration"
+	}
 	var setupLine string
 	if agentErr != nil {
 		setupLine = statusCreatingStyle.Render("no agent found") +
 			"  " + dimStyle.Render("install claude, codex, gemini, or copilot to use Setup")
 	} else {
 		setupLine = statusRunningStyle.Render(agentName) +
-			"  " + dimStyle.Render("will clone the repo and walk you through configuration")
+			"  " + dimStyle.Render(setupVerb)
 	}
 	dialog := fmt.Sprintf(
 		"%s\n\n%s\n\n%s %s\n\n%s\n\n%s\n\n%s",
 		warnBanner.Render("  No devcontainer.json found  "),
 		dialogLabel.Render(
-			"This repository has no .devcontainer/devcontainer.json.\n"+
+			"This "+sourceNoun+" has no .devcontainer/devcontainer.json.\n"+
 				"fleet-man needs one before it can provision instances.",
 		),
 		dialogLabel.Render(fleetPage.addFleetSourceLabel()),
