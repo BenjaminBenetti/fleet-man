@@ -156,6 +156,9 @@ func TestAddFleetNameEscGoesBackToURLStep(t *testing.T) {
 	if got := fp.textInput.Value(); got != "file:///home/me/scratch" {
 		t.Fatalf("textInput = %q, want the template URL restored", got)
 	}
+	if !fp.dlg.fieldActive {
+		t.Fatal("URL field should come back active so the cursor and hint agree")
+	}
 }
 
 // Inside the field, esc only leaves the field (matching the URL step).
@@ -191,6 +194,9 @@ func TestAddFleetInspectErrorRestoresTemplateURL(t *testing.T) {
 	}
 	if !strings.Contains(m.message, "no such file") {
 		t.Fatalf("message = %q", m.message)
+	}
+	if !fp.dlg.fieldActive {
+		t.Fatal("URL field should come back active after an inspect error")
 	}
 }
 

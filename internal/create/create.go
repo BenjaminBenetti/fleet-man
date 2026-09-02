@@ -73,9 +73,6 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 			setFailed(fleetName, instanceName, err)
 			return err
 		}
-		if warn := templateGitFileWarning(wsDir); warn != "" {
-			state.WriteWarn(fleetName, instanceName, warn)
-		}
 	default:
 		// Devcontainer: clone repo first, then provision
 		if err := os.MkdirAll(filepath.Dir(wsDir), 0755); err != nil {
@@ -118,6 +115,13 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 	// rebuilt container ends up equivalently provisioned. Every step is
 	// best-effort — the instance is marked running even if one fails.
 	finishProvision(instanceBackend, fleetName, instanceName, wsDir, result.ContainerID, resolvedMounts.Symlinks)
+
+	// Template worktree/submodule check LAST, and prepended: every provisioning
+	// step above WriteWarns (replacing the banner) on failure, and the TUI shows
+	// the banner's first line — this warning must win that slot.
+	if warn := templateGitFileWarning(wsDir); warn != "" {
+		state.PrependWarn(fleetName, instanceName, warn)
+	}
 
 	// Success: update state (instance is running even if dotfiles failed)
 	if err := markInstanceRunning(fleetName, instanceName, result.ContainerID); err != nil {

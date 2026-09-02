@@ -92,6 +92,14 @@ func TestTemplateNameHintIsDirBase(t *testing.T) {
 	if got := TemplateNameHint("file://relative"); got != "" {
 		t.Errorf("TemplateNameHint(invalid) = %q, want empty", got)
 	}
+	// A percent-encoded space decodes to a space, which ValidateFleetName
+	// rejects — the suggestion must already be acceptable.
+	if got := TemplateNameHint("file:///tmp/tpl%20space"); got != "tpl-space" {
+		t.Errorf("TemplateNameHint(%%20) = %q, want tpl-space", got)
+	}
+	if err := ValidateFleetName(TemplateNameHint("file:///tmp/my%20scratch%20dir")); err != nil {
+		t.Errorf("hint must pass ValidateFleetName: %v", err)
+	}
 }
 
 // A template remote must NOT yield a derived fleet name: the user has to

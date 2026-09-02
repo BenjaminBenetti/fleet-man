@@ -226,3 +226,45 @@ func TestInspectRepoTemplateDirInPlace(t *testing.T) {
 		t.Fatalf("missing template dir: want FailedPrecondition, got %v", err)
 	}
 }
+
+// An UNSPECIFIED backend normally resolves to the host default; for a template
+// remote it must narrow to devcontainer (as the TUI does) instead of failing
+// with "requires the devcontainer backend (got coder)". An explicit coder is
+// still rejected.
+func TestCreateInstanceTemplateNarrowsUnspecifiedBackend(t *testing.T) {
+	isolateFleetDir(t)
+	seen := stubCreateJob(t)
+	if err := state.SaveConfig(&state.Config{DefaultBackend: string(fleet.BackendCoder)}); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+	remote := "file://" + t.TempDir()
+
+	_, client, cleanup := newTestServer(t)
+	defer cleanup()
+
+	stream, err := client.CreateInstance(context.Background(), &fleetgrpc.CreateInstanceRequest{
+		Fleet: "scratch", Instance: "i1", Remote: &remote,
+	})
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+	evs := drainJob(t, stream)
+	last := evs[len(evs)-1].GetDone()
+	if last == nil || !last.GetSuccess() {
+		t.Fatalf("want successful JobDone, got %v", evs[len(evs)-1])
+	}
+	if last.GetInstance().GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER {
+		t.Fatalf("instance backend = %v, want devcontainer for a template with an unspecified backend", last.GetInstance().GetBackend())
+	}
+	if *seen != remote {
+		t.Fatalf("provisioner got remote %q", *seen)
+	}
+
+	// Explicit coder is still a fast-fail.
+	err = createErr(t, client, &fleetgrpc.CreateInstanceRequest{
+		Fleet: "scratch", Instance: "i2", Backend: fleetgrpc.BackendType_BACKEND_TYPE_CODER,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("explicit coder on a template fleet: want InvalidArgument, got %v", err)
+	}
+}

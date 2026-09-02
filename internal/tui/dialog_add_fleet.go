@@ -157,16 +157,17 @@ func (fleetPage *fleetPage) updateAddFleetName(m *model, msg tea.Msg) tea.Cmd {
 }
 
 // returnToAddFleetURL reopens the URL step with the pending URL back in the
-// input. The name prompt borrows textInput for the fleet name, so both the
-// esc-back key and the inspection error path need this restore.
+// input and the field ACTIVE (cursor and "[esc] Done editing" hint agree, and
+// the user can type straight away). The name prompt borrows textInput for the
+// fleet name, so both the esc-back key and the inspection error path need
+// this restore.
 func (fleetPage *fleetPage) returnToAddFleetURL(m *model) tea.Cmd {
 	fleetPage.mode = viewAddFleet
 	fleetPage.textInput.SetValue(fleetPage.addFleet.pendingRepoURL)
 	fleetPage.textInput.Placeholder = addFleetURLPlaceholder
 	fleetPage.textInput.CharLimit = 256
 	fleetPage.textInput.CursorEnd()
-	fleetPage.textInput.Focus()
-	return fleetPage.textInput.Cursor.BlinkCmd()
+	return fleetPage.activateTextInput()
 }
 
 // saveAddFleetName validates the typed fleet name and continues into the

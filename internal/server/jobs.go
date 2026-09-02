@@ -472,6 +472,13 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		} else {
 			remote = f.Remote
 		}
+		// An UNSPECIFIED backend resolved to the host default (which may be
+		// coder) — for a template fleet, devcontainer is the only backend that
+		// can consume a copied directory, so narrow it the way the TUI's add-
+		// instance dialog does. An explicit coder/codespaces still fails fast.
+		if req.GetBackend() == fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED && fleet.IsTemplateRemote(remote) {
+			backendType = fleet.BackendDevcontainer
+		}
 		if err := validateTemplateRemote(remote, req.GetBranch(), backendType); err != nil {
 			return err
 		}

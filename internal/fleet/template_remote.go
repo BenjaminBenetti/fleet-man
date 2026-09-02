@@ -80,15 +80,17 @@ func ResolveTemplateDir(remote string) (string, error) {
 }
 
 // TemplateNameHint suggests a fleet name for a template remote: the base name
-// of the template directory. It is only a DEFAULT for the user to confirm or
-// edit — unlike a git URL, a local path carries no authoritative project name,
-// which is why FleetNameFromRemote refuses to derive one automatically.
+// of the template directory, with whitespace folded to "-" so the suggestion
+// is one ValidateFleetName accepts (the dir may have come in percent-encoded,
+// e.g. file:///tmp/tpl%20space). It is only a DEFAULT for the user to confirm
+// or edit — unlike a git URL, a local path carries no authoritative project
+// name, which is why FleetNameFromRemote refuses to derive one automatically.
 func TemplateNameHint(remote string) string {
 	dir, err := TemplateDir(remote)
 	if err != nil {
 		return ""
 	}
-	return filepath.Base(dir)
+	return strings.Join(strings.Fields(filepath.Base(dir)), "-")
 }
 
 // ValidateTemplateCreate checks the create-instance inputs that only make
