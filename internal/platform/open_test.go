@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,6 +79,14 @@ func TestIsLauncherFile(t *testing.T) {
 		{mk("run.SH", 0o644), true},
 		{mk("thing.desktop", 0o644), true},
 		{mk("setup.exe", 0o644), true},
+		{mk("app.jar", 0o644), true},
+		{mk("link.url", 0o644), true},
+		{mk("page.webloc", 0o644), true},
+		{mk("script.py", 0o644), true},
+		{mk("Do It.workflow", 0o644), true},
+		// Win32 strips trailing dots/spaces on creation, so these are setup.exe.
+		{mk("setup.exe.", 0o644), true},
+		{mk("setup.exe ", 0o644), true},
 		{bundle, true},
 	}
 	for _, tc := range cases {
@@ -117,8 +126,8 @@ func TestOpenFileRefusesExecutable(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := OpenFile(tool)
-	if err == nil || !strings.Contains(err.Error(), "refusing to open an executable") || !strings.Contains(err.Error(), tool) {
-		t.Fatalf("executable should be refused naming the path, got %v", err)
+	if !errors.Is(err, ErrLauncher) || !strings.Contains(err.Error(), tool) {
+		t.Fatalf("executable should be refused with ErrLauncher naming the path, got %v", err)
 	}
 	if got != tool {
 		t.Errorf("returned path = %q, want %q", got, tool)

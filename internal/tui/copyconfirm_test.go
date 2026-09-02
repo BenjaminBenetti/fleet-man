@@ -191,7 +191,7 @@ func TestSessionAllowDrainsOnlyCovered(t *testing.T) {
 	if len(m.pendingCopyConfirms) != 1 || !m.pendingCopyConfirms[0].open {
 		t.Fatalf("only the open should remain queued, got %+v", m.pendingCopyConfirms)
 	}
-	if view := m.viewCopyConfirm(); !strings.Contains(view, "allow opens for session") {
+	if view := m.viewCopyConfirm(); !strings.Contains(view, "allow copies+opens for session") {
 		t.Errorf("the open prompt's [s] should say what it allows, got %q", view)
 	}
 	m.requestCopy(copyRequest{fleet: "f", instance: "k", src: ":c.txt"})

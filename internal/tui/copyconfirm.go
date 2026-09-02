@@ -43,10 +43,11 @@ func (r copyRequest) verb() string {
 	return "copy"
 }
 
-// verbs is the plural, for the session-allow hint ("allow copies/opens").
+// verbs names, for the session-allow hint, everything an [s] on this request
+// grants: copies for a copy, copies AND opens for an open (see allowSession).
 func (r copyRequest) verbs() string {
 	if r.open {
-		return "opens"
+		return "copies+opens"
 	}
 	return "copies"
 }
@@ -192,7 +193,7 @@ func (m model) viewCopyConfirm() string {
 	title := dialogTitle.Render("⚠ " + capitalize(req.verb()) + " request from " + req.instanceKey())
 	path := dialogLabel.Render(req.src + "  →  " + copyDstLabel(req.dst))
 	effects := dialogHint.Render(strings.Join(copyConfirmHostEffects(req), "\n"))
-	hint := dialogLabel.Render("[a]llow once    [s] allow " + req.verbs() + " for session    [d]eny")
+	hint := dialogLabel.Render("[a]llow once   [s] allow " + req.verbs() + " for session   [d]eny")
 
 	content := title + "\n\n" + path + "\n" + effects + "\n\n" + hint
 	if extra := len(m.pendingCopyConfirms) - 1; extra > 0 {

@@ -26,15 +26,15 @@ import (
 func newOpenCmd() *cobra.Command {
 	use := "open <src> [dst]"
 	short := "Copy a file from an instance and open it"
-	long := "Copy a file out of an instance to your machine, then open it with your\n" +
-		"desktop's default application. The endpoints are fleet copy's.\n\n" +
+	long := "Copy a file (or directory) out of an instance to your machine, then open it\n" +
+		"with your desktop's default application. The endpoints are fleet copy's.\n\n" +
 		"  fleet open alpha:out/chart.png             copy to the cwd and open\n" +
 		"  fleet open alpha:report.pdf ~/Documents/   copy there and open\n\n" +
 		"FLEET_OPENER overrides the opener (program + args, split on whitespace;\n" +
 		"default: xdg-open, open, or wslview). Executables are never opened."
 	if fleetcopy.InInstance() {
-		long = "Copy a file from this instance to your machine, then open it there with\n" +
-			"your desktop's default application. The endpoints are fc's.\n\n" +
+		long = "Copy a file (or directory) from this instance to your machine, then open it\n" +
+			"there with your desktop's default application. The endpoints are fc's.\n\n" +
 			"  fo ./out/chart.png                copy to your downloads folder and open\n" +
 			"  fo report.pdf host:~/Documents/   copy there and open\n\n" +
 			"The copy asks for confirmation in the fleet TUI, which does the opening\n" +
@@ -77,9 +77,9 @@ func runOpen(ctx context.Context, out io.Writer, src, dst string) error {
 		return err
 	}
 	reportCopied(out, src, res)
-	opened, err := platform.OpenFile(res.DestPath)
+	opened, err := platform.OpenFile(res.DestPath) // its errors name the path
 	if err != nil {
-		return fmt.Errorf("open %s: %w", opened, err)
+		return err
 	}
 	fmt.Fprintf(out, "Opened %s\n", opened)
 	return nil
