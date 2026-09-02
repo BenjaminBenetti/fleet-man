@@ -163,9 +163,11 @@ func (fleetPage *fleetPage) updateAddFleetName(m *model, msg tea.Msg) tea.Cmd {
 // this restore.
 func (fleetPage *fleetPage) returnToAddFleetURL(m *model) tea.Cmd {
 	fleetPage.mode = viewAddFleet
-	fleetPage.textInput.SetValue(fleetPage.addFleet.pendingRepoURL)
-	fleetPage.textInput.Placeholder = addFleetURLPlaceholder
+	// CharLimit FIRST: SetValue truncates to the current limit, and the name
+	// prompt left it at 64 — a longer path would come back silently cut.
 	fleetPage.textInput.CharLimit = 256
+	fleetPage.textInput.Placeholder = addFleetURLPlaceholder
+	fleetPage.textInput.SetValue(fleetPage.addFleet.pendingRepoURL)
 	fleetPage.textInput.CursorEnd()
 	return fleetPage.activateTextInput()
 }

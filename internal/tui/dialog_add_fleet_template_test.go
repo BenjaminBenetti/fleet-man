@@ -155,9 +155,14 @@ func TestAddFleetNameCancelClearsPending(t *testing.T) {
 // template URL restored so a path typo can be fixed without starting over.
 func TestAddFleetNameEscGoesBackToURLStep(t *testing.T) {
 	fp, m := newAddFleetModel(map[string]*fleet.Fleet{})
-	fp.mode = viewAddFleetName
-	fp.addFleet.pendingRepoURL = "file:///home/me/scratch"
-	fp.textInput.SetValue("scratch")
+	// Longer than the name prompt's 64-rune CharLimit: the restore must not
+	// truncate it (a cut path can name a DIFFERENT existing directory).
+	longURL := "file:///home/benjamin/projects/experiments/scratch/very-long-project-name-v2"
+	fp.mode = viewAddFleet
+	fp.textInput.CharLimit = 256 // as the 'n' key sets it before typing
+	fp.textInput.SetValue(longURL)
+	fp.dlg.fieldActive = true
+	fp.saveAddFleet(m) // → name prompt, CharLimit 64
 	fp.dlg.fieldActive = false
 
 	if view := fp.renderAddFleetNameDialog(m); !strings.Contains(view, "[esc] Back") {
@@ -168,8 +173,8 @@ func TestAddFleetNameEscGoesBackToURLStep(t *testing.T) {
 	if fp.mode != viewAddFleet {
 		t.Fatalf("mode = %v, want viewAddFleet", fp.mode)
 	}
-	if got := fp.textInput.Value(); got != "file:///home/me/scratch" {
-		t.Fatalf("textInput = %q, want the template URL restored", got)
+	if got := fp.textInput.Value(); got != longURL {
+		t.Fatalf("textInput = %q, want the full template URL restored (%d runes)", got, len([]rune(longURL)))
 	}
 	if !fp.dlg.fieldActive {
 		t.Fatal("URL field should come back active so the cursor and hint agree")
@@ -321,6 +326,15 @@ func TestEditInstanceTemplateShowsBranchNA(t *testing.T) {
 	}
 	if strings.Contains(view, "default") {
 		t.Fatalf("edit dialog must not show a 'default' branch for a template instance:\n%s", view)
+	}
+
+	// A recorded branch (an instance from before mixed-kind --repo was
+	// rejected) is never hidden behind the n/a text.
+	f.Instances[0].Branch = "main"
+	fp.openEditInstanceDialog(m)
+	view = fp.renderAddInstanceDialog(m)
+	if !strings.Contains(view, "main") || strings.Contains(view, templateBranchDisplay) {
+		t.Fatalf("edit dialog should show the recorded branch, not n/a:\n%s", view)
 	}
 }
 

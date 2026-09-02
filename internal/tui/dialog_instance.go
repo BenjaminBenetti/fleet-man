@@ -656,10 +656,11 @@ func (fleetPage *fleetPage) renderAddInstanceDialog(m *model) string {
 		nameField = fleetPage.textInput.View()
 		branchDisplay := fleetPage.branchInput.Value()
 		if branchDisplay == "" {
+			// A recorded branch (legacy mixed fleets) always shows as-is.
 			branchDisplay = "default"
-		}
-		if fleetPage.addInst.template {
-			branchDisplay = templateBranchDisplay
+			if fleetPage.addInst.template {
+				branchDisplay = templateBranchDisplay
+			}
 		}
 		branchField = dimStyle.Render(branchDisplay)
 		deployField = dimStyle.Render(fmt.Sprintf("[ %s ]", backendTypeLabel(backendType)))

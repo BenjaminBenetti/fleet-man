@@ -212,6 +212,39 @@ func TestCreateInstanceTemplateFleetRecordRejectsBranch(t *testing.T) {
 	}
 }
 
+// A per-instance --repo must not change the fleet's KIND: no template copy
+// inside a git fleet and no git clone inside a template fleet. Another git
+// URL on a git fleet (the pre-existing override) still works.
+func TestCreateInstanceRejectsMixedRemoteKinds(t *testing.T) {
+	isolateFleetDir(t)
+	stubCreateJob(t)
+	tmpl := "file://" + t.TempDir()
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"gitfleet": {Name: "gitfleet", Remote: "git@x:a.git"},
+		"tplfleet": {Name: "tplfleet", Remote: tmpl},
+	}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, client, cleanup := newTestServer(t)
+	defer cleanup()
+
+	git := "git@x:other.git"
+	dev := fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER
+	if err := createErr(t, client, &fleetgrpc.CreateInstanceRequest{Fleet: "gitfleet", Instance: "i", Remote: &tmpl, Backend: dev}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("template --repo on a git fleet: want InvalidArgument, got %v", err)
+	}
+	if err := createErr(t, client, &fleetgrpc.CreateInstanceRequest{Fleet: "tplfleet", Instance: "i", Remote: &git, Backend: dev}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("git --repo on a template fleet: want InvalidArgument, got %v", err)
+	}
+	if err := createErr(t, client, &fleetgrpc.CreateInstanceRequest{Fleet: "gitfleet", Instance: "i", Remote: &git, Backend: dev}); err != nil {
+		t.Fatalf("another git URL on a git fleet must still be accepted: %v", err)
+	}
+	st, _ := state.Load()
+	if n := len(st.Fleets["tplfleet"].Instances); n != 0 {
+		t.Fatalf("rejected create left %d instance(s) on tplfleet", n)
+	}
+}
+
 func TestInspectRepoTemplateDirInPlace(t *testing.T) {
 	isolateFleetDir(t)
 	root := fakeRepoDir(t, `{"remoteUser":"vscode"}`)

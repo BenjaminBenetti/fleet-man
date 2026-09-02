@@ -469,6 +469,15 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		}
 		if req.Remote != nil && req.GetRemote() != "" {
 			remote = req.GetRemote()
+			// A per-instance --repo may point at another git URL, but not
+			// change KIND: a template copy inside a git fleet (or a clone
+			// inside a template fleet) would leave the record describing
+			// something its instances are not.
+			if ok && fleet.IsTemplateRemote(remote) != fleet.IsTemplateRemote(f.Remote) {
+				return status.Errorf(codes.InvalidArgument,
+					"remote %q does not match fleet %q (%s): a fleet is either a git remote or a %s template, not both",
+					remote, fleetName, remoteKind(f.Remote), fleet.TemplateScheme)
+			}
 		} else {
 			remote = f.Remote
 		}
@@ -508,6 +517,14 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		return loadInstanceSnapshot(fleetName, instanceName), nil, err
 	})
 	return j, nil
+}
+
+// remoteKind names a fleet remote's kind for error messages.
+func remoteKind(remote string) string {
+	if fleet.IsTemplateRemote(remote) {
+		return "template " + remote
+	}
+	return "git " + remote
 }
 
 // validateTemplateRemote fails a create FAST — before the StatusCreating record
