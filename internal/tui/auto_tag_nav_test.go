@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"runtime"
 	"strings"
 	"testing"
 
@@ -326,24 +325,5 @@ func TestOpenExternalURLRefusesNonHTTP(t *testing.T) {
 	// Must return an error WITHOUT launching anything for a non-http scheme.
 	if err := openExternalURL("javascript:alert(1)"); err == nil {
 		t.Errorf("expected refusal for a non-http(s) URL")
-	}
-}
-
-func TestOpenExternalURLCommand(t *testing.T) {
-	cmd, err := openExternalURLCommand("https://github.com/o/r/pull/7")
-	if err != nil {
-		if runtime.GOOS == "linux" || runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
-			t.Fatalf("unexpected error on %s: %v", runtime.GOOS, err)
-		}
-		return
-	}
-	found := false
-	for _, a := range cmd.Args {
-		if strings.Contains(a, "github.com/o/r/pull/7") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("opener args should include the URL: %v", cmd.Args)
 	}
 }

@@ -1,10 +1,14 @@
 package tui
 
 import (
+	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
+	"github.com/BenjaminBenetti/fleet-man/internal/platform"
 )
 
 func TestResolveLocalPath(t *testing.T) {
@@ -81,5 +85,36 @@ func TestResolveTUIEndpoint(t *testing.T) {
 				t.Errorf("resolveTUIEndpoint(%q) = %+v, want %+v", tc.arg, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestOpenDeliveredRefusesNonLocal is the safety check behind `fleet open`: a
+// crafted envelope with open=true and an instance destination must not make the
+// TUI open a same-named path on the human's machine.
+func TestOpenDeliveredRefusesNonLocal(t *testing.T) {
+	_, err := openDelivered(fleetclient.ResolvedEndpoint{Fleet: "f", Instance: "i", Path: "/tmp/x"}, "/tmp/x")
+	if err == nil || !strings.Contains(err.Error(), "not on this machine") {
+		t.Fatalf("non-local destination should be refused, got %v", err)
+	}
+}
+
+// TestFileCopyDoneStatusLine covers the four outcomes a delegated copy/open
+// reports on the status bar.
+func TestFileCopyDoneStatusLine(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  fileCopyDoneMsg
+		want string
+	}{
+		{"copy failed", fileCopyDoneMsg{src: ":a", err: errors.New("boom")}, "Copy of :a failed: boom"},
+		{"copied", fileCopyDoneMsg{src: ":a", dest: "/h/a"}, "Copied :a -> /h/a"},
+		{"opened", fileCopyDoneMsg{src: ":a", dest: "/h/a", opened: true}, "Opened :a (/h/a)"},
+		{"open failed", fileCopyDoneMsg{src: ":a", dest: "/h/a", openErr: errors.New("no handler")}, "Copied :a -> /h/a, but could not open it: no handler"},
+		{"launcher refused", fileCopyDoneMsg{src: ":a", dest: "/h/a", openErr: fmt.Errorf("%w; it was copied to /h/a", platform.ErrLauncher)}, "Copied :a -> /h/a, but not opened: refusing to open an executable"},
+	}
+	for _, tc := range cases {
+		if got := tc.msg.statusLine(); got != tc.want {
+			t.Errorf("%s: statusLine() = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

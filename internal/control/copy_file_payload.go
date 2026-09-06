@@ -12,4 +12,9 @@ type CopyFilePayload struct {
 	// Dst is the destination endpoint as typed inside the instance. Empty is the
 	// 1-arg download shorthand (deliver to the TUI's downloads folder).
 	Dst string `json:"dst,omitempty"`
+	// Open asks the TUI to open the delivered file with its machine's default
+	// application once the copy lands — the in-instance `fleet open` (fo). Only
+	// meaningful when Dst is on the TUI's machine (or empty); the TUI refuses to
+	// open anything else.
+	Open bool `json:"open,omitempty"`
 }

@@ -159,4 +159,8 @@ message FileCopy {
   // dst is the destination endpoint as typed inside the instance. Empty is the
   // 1-arg download shorthand: the TUI delivers to its downloads folder.
   string dst = 4;
+  // open asks the TUI to open the delivered file with its machine's default
+  // application once the copy lands (the in-instance `fleet open` / fo). The
+  // TUI honours it only when dst is on its own machine (or empty).
+  bool open = 5;
 }

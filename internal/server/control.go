@@ -41,9 +41,10 @@ type controlRegistry struct {
 
 	// onCopy is invoked for each decoded file.copy envelope, tagged with the
 	// originating instance. src/dst are the scp endpoints as typed inside the
-	// instance, passed through verbatim (the TUI runs the copy). Same
+	// instance, passed through verbatim (the TUI runs the copy); open is the
+	// `fleet open` flag (open the delivered file on the TUI machine). Same
 	// concurrency/non-blocking contract as onOpen.
-	onCopy func(fleetName, instanceName, src, dst string)
+	onCopy func(fleetName, instanceName, src, dst string, open bool)
 
 	// gated reports whether to keep control sockets open at all: only while a
 	// browser-capable client (a TUI / Watch subscriber) is attached. With no
@@ -58,7 +59,7 @@ type controlRegistry struct {
 // newControlRegistry creates an empty registry. onOpen is invoked per received
 // browser.open envelope, onCopy per file.copy envelope; gated decides whether
 // any sockets should be open (nil means always on).
-func newControlRegistry(onOpen func(fleetName, instanceName, url string), onCopy func(fleetName, instanceName, src, dst string), gated func() bool) *controlRegistry {
+func newControlRegistry(onOpen func(fleetName, instanceName, url string), onCopy func(fleetName, instanceName, src, dst string, open bool), gated func() bool) *controlRegistry {
 	return &controlRegistry{
 		onOpen:  onOpen,
 		onCopy:  onCopy,
@@ -161,8 +162,8 @@ func (r *controlRegistry) syncRunning(st *state.State) {
 					return
 				}
 				if r.onCopy != nil {
-					flog.Info("file copy requested", "fleet", fName, "instance", iName, "from", payload.Src, "to", payload.Dst)
-					r.onCopy(fName, iName, payload.Src, payload.Dst)
+					flog.Info("file copy requested", "fleet", fName, "instance", iName, "from", payload.Src, "to", payload.Dst, "open", payload.Open)
+					r.onCopy(fName, iName, payload.Src, payload.Dst, payload.Open)
 				}
 			}
 		})

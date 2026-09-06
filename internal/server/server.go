@@ -105,13 +105,14 @@ func Serve(ctx context.Context) error {
 				Instance: instanceName,
 			})
 		})
-	}, func(fleetName, instanceName, src, dst string) {
+	}, func(fleetName, instanceName, src, dst string, open bool) {
 		svc.hub.post(func(h *hub) {
 			h.broadcastFileCopy(&fleetgrpc.FileCopy{
 				Fleet:    fleetName,
 				Instance: instanceName,
 				Src:      src,
 				Dst:      dst,
+				Open:     open,
 			})
 		})
 	}, svc.hub.hasSubscribers)

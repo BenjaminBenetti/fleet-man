@@ -47,6 +47,7 @@ func NewRootCmd() *cobra.Command {
 		newStatusCmd(),
 		newCloneCmd(),
 		newCopyCmd(),
+		newOpenCmd(),
 		newPortForwardCmd(),
 		newShellCmd(),
 		newSpawnSessionCmd(),

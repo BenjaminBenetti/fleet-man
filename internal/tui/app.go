@@ -137,11 +137,13 @@ type model struct {
 	releaseNotesVersion string
 	releaseNotesBody    string
 
-	// Delegated-copy confirmation: an in-container `fc` that touches a host path
-	// is queued here until the human allows/denies it; copySessionAllow remembers
-	// instances the human cleared for the lifetime of this TUI. See copyconfirm.go.
+	// Delegated-copy confirmation: an in-container `fc`/`fo` that touches a host
+	// path is queued here until the human allows/denies it; copySessionAllow and
+	// openSessionAllow remember instances the human cleared (for copies, and for
+	// opens) for the lifetime of this TUI. See copyconfirm.go.
 	pendingCopyConfirms []copyRequest
 	copySessionAllow    map[string]bool
+	openSessionAllow    map[string]bool
 
 	// Pending exec after quit: after a successful update the TUI
 	// quits, then Run() replaces the current process with the new
@@ -196,6 +198,7 @@ func newModel() model {
 		inHostTmux:         os.Getenv("TMUX") != "",
 		armadaStatus:       make(map[string]armadaStatus),
 		copySessionAllow:   make(map[string]bool),
+		openSessionAllow:   make(map[string]bool),
 		bootGateway:        os.Getenv(fleetclient.EnvGateway),
 		bootToken:          os.Getenv(fleetclient.EnvToken),
 		bootServer:         os.Getenv(fleetclient.EnvServer),
@@ -865,15 +868,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.fleet == "" || msg.instance == "" || msg.src == "" {
 			return m, spinCmd
 		}
-		cmd := m.requestCopy(copyRequest{fleet: msg.fleet, instance: msg.instance, src: msg.src, dst: msg.dst})
+		cmd := m.requestCopy(copyRequest{fleet: msg.fleet, instance: msg.instance, src: msg.src, dst: msg.dst, open: msg.open})
 		return m, tea.Batch(spinCmd, cmd)
 
 	case fileCopyDoneMsg:
-		if msg.err != nil {
-			m.message = fmt.Sprintf("Copy of %s failed: %v", msg.src, msg.err)
-		} else {
-			m.message = fmt.Sprintf("Copied %s -> %s", msg.src, msg.dest)
-		}
+		m.message = msg.statusLine()
 		return m, spinCmd
 
 	case remoteMcpStatusMsg:

@@ -114,6 +114,42 @@ func TestRoundTripOpenBrowser(t *testing.T) {
 	}
 }
 
+// TestRoundTripCopyFile round-trips a CopyFile message and asserts the payload
+// carries both endpoints and the `fleet open` flag verbatim.
+func TestRoundTripCopyFile(t *testing.T) {
+	c := newCollector()
+	srv, err := Listen(tempSocket(t), c.handle)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer srv.Close()
+
+	cli, err := Dial(srv.socketPath)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer cli.Close()
+
+	if err := cli.CopyFile(":build/chart.png", "host:~/Pictures/", true); err != nil {
+		t.Fatalf("CopyFile: %v", err)
+	}
+
+	got := c.wait(t, 1, 2*time.Second)
+	if len(got) != 1 {
+		t.Fatalf("received %d envelopes, want 1", len(got))
+	}
+	if got[0].Type != TypeCopyFile {
+		t.Errorf("Type = %q, want %q", got[0].Type, TypeCopyFile)
+	}
+	var p CopyFilePayload
+	if err := json.Unmarshal(got[0].Payload, &p); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if p.Src != ":build/chart.png" || p.Dst != "host:~/Pictures/" || !p.Open {
+		t.Errorf("payload = %+v, want src/dst verbatim and open=true", p)
+	}
+}
+
 // TestMultipleMessagesOneConnection verifies several Envelopes sent over a
 // single connection are each decoded and dispatched in order.
 func TestMultipleMessagesOneConnection(t *testing.T) {
