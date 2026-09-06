@@ -28,4 +28,17 @@ codex_path=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- bash -lc 'comma
 info "codex resolved at: ${codex_path}"
 assert_contains "${codex_path}" "codex" "command -v codex returned no path"
 
+info "asserting the complete package is installed outside the shared Codex mount"
+"${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- bash -lc '
+  set -e
+  package="$HOME/.local/share/fleet/codex/packages/standalone/current"
+  test "$(command -v codex)" -ef "$package/bin/codex"
+  test -f "$package/codex-package.json"
+  test -x "$package/bin/codex-code-mode-host"
+  test -x "$package/codex-path/rg"
+  test -x "$package/codex-resources/bwrap"
+  test ! -e "$HOME/.codex/packages/standalone"
+  codex --version
+' || fail "Codex package is incomplete or was installed in the shared mount"
+
 pass "codex installed"

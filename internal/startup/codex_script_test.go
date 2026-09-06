@@ -13,18 +13,18 @@ import (
 // download scratch dir is observable), and a stub bin dir that shadows
 // curl and sleep on PATH.
 type codexScriptEnv struct {
-	home    string
-	tmpDir  string
-	stubBin string
-	counter string
+	home          string
+	tmpDir        string
+	stubBin       string
+	counter       string
+	installerMode string
 }
 
 // newCodexScriptEnv builds the sandbox. failures is the number of leading
 // curl download attempts that must fail: the stub curl exits 1 (a failed
-// download) for the first `failures` calls and afterwards writes a
-// faithful release tarball — a gzipped tar holding the single
-// codex-<target> static binary — to curl's -o destination. The stub
-// counts every call in a counter file so tests can assert attempts.
+// download) for the first `failures` calls and afterwards writes a stub
+// official installer to curl's -o destination. The installer models the
+// complete package layout and checks the install-time environment.
 func newCodexScriptEnv(t *testing.T, failures string) *codexScriptEnv {
 	t.Helper()
 	env := &codexScriptEnv{
@@ -40,6 +40,9 @@ count=$((count + 1))
 echo "$count" > "`+env.counter+`"
 out=""
 while [ $# -gt 0 ]; do
+  case "$1" in
+    https://*) [ "$1" = "https://chatgpt.com/codex/install.sh" ] || exit 1 ;;
+  esac
   if [ "$1" = "-o" ]; then out="$2"; shift; fi
   shift
 done
@@ -47,15 +50,32 @@ if [ "$count" -le "`+failures+`" ]; then
   echo "curl: (23) Failure writing output to destination" >&2
   exit 1
 fi
-case "$(uname -m)" in
-  x86_64 | amd64)  target="x86_64-unknown-linux-musl" ;;
-  aarch64 | arm64) target="aarch64-unknown-linux-musl" ;;
+cp "`+filepath.Join(env.stubBin, "installer")+`" "$out"
+`)
+	writeStub(t, env.stubBin, "installer", `#!/bin/sh
+set -eu
+[ "$CODEX_NON_INTERACTIVE" = 1 ]
+[ "$CODEX_INSTALL_DIR" = "$HOME/.local/bin" ]
+[ "$CODEX_HOME" = "$HOME/.local/share/fleet/codex" ]
+root="$CODEX_HOME/packages/standalone"
+release="$root/releases/1.0.0-test"
+mkdir -p "$release/bin" "$release/codex-path" "$release/codex-resources" "$CODEX_INSTALL_DIR"
+printf '{}\n' > "$release/codex-package.json"
+printf '#!/bin/sh\necho "codex-cli 1.0.0"\n' > "$release/bin/codex"
+for resource in bin/codex-code-mode-host codex-path/rg codex-resources/bwrap; do
+  printf '#!/bin/sh\nexit 0\n' > "$release/$resource"
+  chmod +x "$release/$resource"
+done
+chmod +x "$release/bin/codex"
+ln -sfn "$release" "$root/current"
+ln -sf "$root/current/bin/codex" "$CODEX_INSTALL_DIR/codex"
+case "$TEST_INSTALLER_MODE" in
+  fail) exit 1 ;;
+  missing-host) rm "$release/bin/codex-code-mode-host" ;;
+  missing-rg) rm "$release/codex-path/rg" ;;
+  missing-bwrap) rm "$release/codex-resources/bwrap" ;;
+  broken-cli) printf '#!/bin/sh\nexit 1\n' > "$release/bin/codex" ;;
 esac
-stage=$(mktemp -d)
-printf '#!/bin/sh\necho "codex-cli 1.0.0"\n' > "$stage/codex-$target"
-chmod +x "$stage/codex-$target"
-tar -czf "$out" -C "$stage" "codex-$target"
-rm -rf "$stage"
 `)
 	// Stub sleep so the retry backoff doesn't slow the test down.
 	writeStub(t, env.stubBin, "sleep", "#!/bin/sh\nexit 0\n")
@@ -74,9 +94,11 @@ func (env *codexScriptEnv) run(t *testing.T) (string, error) {
 	}
 	cmd := exec.Command(sh, "-c", codexScript().Body)
 	cmd.Env = []string{
-		"PATH=" + env.stubBin + ":/usr/bin:/bin",
+		"PATH=" + env.stubBin + ":" + filepath.Join(env.home, ".local", "bin") + ":/usr/bin:/bin",
 		"HOME=" + env.home,
 		"TMPDIR=" + env.tmpDir,
+		"CODEX_HOME=" + filepath.Join(env.home, ".codex"),
+		"TEST_INSTALLER_MODE=" + env.installerMode,
 	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -95,13 +117,12 @@ func (env *codexScriptEnv) curlCalls(t *testing.T) string {
 	return strings.TrimSpace(string(content))
 }
 
-// TestCodexScript_InstallsStandaloneBinary is the regression test for
-// issue #145: the install must depend on nothing beyond curl + tar (the
-// sandbox PATH has no node/npm/gawk), must leave a runnable binary at
+// TestCodexScript_InstallsCompletePackage covers the missing Code Mode host
+// regression and issue #145: the install must leave a runnable binary at
 // the real ~/.local/bin/codex, must keep every write out of ~/.codex
 // (the fleet's shared mount), and must wire ~/.local/bin into
 // ~/.profile for login shells.
-func TestCodexScript_InstallsStandaloneBinary(t *testing.T) {
+func TestCodexScript_InstallsCompletePackage(t *testing.T) {
 	env := newCodexScriptEnv(t, "0")
 
 	out, err := env.run(t)
@@ -120,6 +141,16 @@ func TestCodexScript_InstallsStandaloneBinary(t *testing.T) {
 	if got := strings.TrimSpace(string(version)); got != "codex-cli 1.0.0" {
 		t.Errorf("codex --version = %q, want %q", got, "codex-cli 1.0.0")
 	}
+	resolved, err := filepath.EvalSymlinks(launcher)
+	if err != nil {
+		t.Fatalf("resolve installed launcher: %v", err)
+	}
+	for _, resource := range []string{"bin/codex-code-mode-host", "codex-path/rg", "codex-resources/bwrap"} {
+		path := filepath.Join(filepath.Dir(filepath.Dir(resolved)), resource)
+		if err := exec.Command(path, "--help").Run(); err != nil {
+			t.Errorf("bundled resource %s is not runnable: %v", resource, err)
+		}
+	}
 
 	// The shared mount (real ~/.codex) must be untouched by the install.
 	if _, err := os.Stat(filepath.Join(env.home, ".codex")); !os.IsNotExist(err) {
@@ -133,6 +164,9 @@ func TestCodexScript_InstallsStandaloneBinary(t *testing.T) {
 	}
 	if !strings.Contains(string(profile), `.local/bin`) {
 		t.Errorf("~/.profile not wired for ~/.local/bin:\n%s", profile)
+	}
+	if strings.Contains(string(profile), "CODEX_HOME") {
+		t.Errorf("installer changed runtime Codex home: %s", profile)
 	}
 
 	// The trap must have removed the download scratch dir.
@@ -228,5 +262,75 @@ func TestCodexScript_SkipsWhenAlreadyInstalled(t *testing.T) {
 	}
 	if got := env.curlCalls(t); got != "0" {
 		t.Errorf("curl invoked %s times, want 0", got)
+	}
+}
+
+func TestCodexScript_RepairsLegacyInstall(t *testing.T) {
+	env := newCodexScriptEnv(t, "0")
+	bin := filepath.Join(env.home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeStub(t, bin, "codex", "#!/bin/sh\necho 'codex-cli 0.1.0'\n")
+	out, err := env.run(t)
+	if err != nil || !strings.Contains(out, "codex installed: codex-cli 1.0.0") {
+		t.Fatalf("legacy install was not repaired: %v\n%s", err, out)
+	}
+}
+
+func TestCodexScript_SkipsCompleteFleetInstall(t *testing.T) {
+	env := newCodexScriptEnv(t, "0")
+	if out, err := env.run(t); err != nil {
+		t.Fatalf("initial install failed: %v\n%s", err, out)
+	}
+	out, err := env.run(t)
+	if err != nil || !strings.Contains(out, "already installed") {
+		t.Fatalf("complete install was not skipped: %v\n%s", err, out)
+	}
+	if got := env.curlCalls(t); got != "1" {
+		t.Errorf("curl invoked %s times, want only the initial download", got)
+	}
+}
+
+func TestCodexScript_RejectsIncompleteInstall(t *testing.T) {
+	for _, mode := range []string{"fail", "missing-host", "missing-rg", "missing-bwrap", "broken-cli"} {
+		t.Run(mode, func(t *testing.T) {
+			env := newCodexScriptEnv(t, "0")
+			env.installerMode = mode
+			out, err := env.run(t)
+			if err == nil || !strings.Contains(out, "failed after 3 attempts") {
+				t.Fatalf("incomplete install reported success: %v\n%s", err, out)
+			}
+			if got := env.curlCalls(t); got != "3" {
+				t.Errorf("curl invoked %s times, want 3", got)
+			}
+			env.installerMode = ""
+			out, err = env.run(t)
+			// A nonzero installer can still leave a complete package; all
+			// missing-resource cases must actually reinstall on the next run.
+			if err != nil || (mode != "fail" && !strings.Contains(out, "codex installed:")) {
+				t.Fatalf("subsequent startup did not repair install: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestCodexScript_DoesNotExecuteFailedDownload(t *testing.T) {
+	env := newCodexScriptEnv(t, "0")
+	writeStub(t, env.stubBin, "curl", `#!/bin/sh
+while [ $# -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    printf 'touch "$HOME/partial-installer-executed"\n' > "$2"
+    break
+  fi
+  shift
+done
+exit 1
+`)
+	if out, err := env.run(t); err == nil {
+		t.Fatalf("failed download reported success: %s", out)
+	}
+	if _, err := os.Stat(filepath.Join(env.home, "partial-installer-executed")); !os.IsNotExist(err) {
+		t.Fatalf("partial installer was executed: %v", err)
 	}
 }

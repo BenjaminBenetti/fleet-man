@@ -39,4 +39,13 @@ codex_path=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- bash -lc 'comma
 info "claude at: ${claude_path}"
 info "codex  at: ${codex_path}"
 
+info "asserting Codex can locate its bundled Code Mode host"
+"${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- bash -lc '
+  set -e
+  binary=$(readlink -f "$(command -v codex)")
+  test -x "$(dirname "$binary")/codex-code-mode-host"
+  test ! -e "$HOME/.codex/packages/standalone"
+  codex --version
+' || fail "Codex Code Mode host is missing or the install used the shared mount"
+
 pass "claude + codex install + mount"
