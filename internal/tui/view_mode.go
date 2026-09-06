@@ -17,6 +17,7 @@ const (
 	viewAddInstance
 	viewCloneInstance
 	viewAddFleet
+	viewAddFleetName
 	viewAddFleetInspecting
 	viewAddFleetNoDevcontainer
 	viewEditFleet

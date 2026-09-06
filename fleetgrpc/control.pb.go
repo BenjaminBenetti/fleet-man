@@ -691,9 +691,11 @@ func (x *GetStateReply) GetActiveJobs() []*JobSummary {
 // CreateFleet adds a fleet (GetOrCreateFleet). Idempotent: returns the existing
 // fleet if present.
 type CreateFleetRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Remote        string                 `protobuf:"bytes,2,opt,name=remote,proto3" json:"remote,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// git URL, or file:///abs/dir for a local template directory that is
+	// copied into each instance instead of cloned.
+	Remote        string `protobuf:"bytes,2,opt,name=remote,proto3" json:"remote,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

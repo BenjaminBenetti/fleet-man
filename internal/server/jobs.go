@@ -459,12 +459,37 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 			if req.Remote == nil || req.GetRemote() == "" {
 				return status.Errorf(codes.NotFound, "fleet %q not found and no remote provided", fleetName)
 			}
+			// New fleets only (an existing record keeps whatever name it has):
+			// the name becomes a workspace path component, so `..` or a slash
+			// would escape ~/.fleet/workspaces before anything is cloned/copied.
+			if err := fleet.ValidateFleetName(fleetName); err != nil {
+				return status.Error(codes.InvalidArgument, err.Error())
+			}
 			f = st.GetOrCreateFleet(fleetName, req.GetRemote())
 		}
 		if req.Remote != nil && req.GetRemote() != "" {
 			remote = req.GetRemote()
+			// A per-instance --repo may point at another git URL, but not
+			// change KIND: a template copy inside a git fleet (or a clone
+			// inside a template fleet) would leave the record describing
+			// something its instances are not.
+			if ok && fleet.IsTemplateRemote(remote) != fleet.IsTemplateRemote(f.Remote) {
+				return status.Errorf(codes.InvalidArgument,
+					"remote %q does not match fleet %q (%s): a fleet is either a git remote or a %s template, not both",
+					remote, fleetName, remoteKind(f.Remote), fleet.TemplateScheme)
+			}
 		} else {
 			remote = f.Remote
+		}
+		// An UNSPECIFIED backend resolved to the host default (which may be
+		// coder) — for a template fleet, devcontainer is the only backend that
+		// can consume a copied directory, so narrow it the way the TUI's add-
+		// instance dialog does. An explicit coder/codespaces still fails fast.
+		if req.GetBackend() == fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED && fleet.IsTemplateRemote(remote) {
+			backendType = fleet.BackendDevcontainer
+		}
+		if err := validateTemplateRemote(remote, req.GetBranch(), backendType, wsDir); err != nil {
+			return err
 		}
 		if _, err := f.GetInstance(instanceName); err == nil {
 			return status.Errorf(codes.AlreadyExists, "instance %s/%s already exists", fleetName, instanceName)
@@ -492,6 +517,40 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		return loadInstanceSnapshot(fleetName, instanceName), nil, err
 	})
 	return j, nil
+}
+
+// remoteKind names a fleet remote's kind for error messages.
+func remoteKind(remote string) string {
+	if fleet.IsTemplateRemote(remote) {
+		return "template " + remote
+	}
+	return "git " + remote
+}
+
+// validateTemplateRemote fails a create FAST — before the StatusCreating record
+// exists — when the fleet's remote is a file:// template and the request asks
+// for something a copied directory cannot honor (a branch, a non-devcontainer
+// backend), or when the template directory is missing on THIS host. create.Run
+// re-checks the same rules; doing it here turns a would-be failed instance
+// record into an immediate RPC error for `fleet up` / the TUI / MCP.
+func validateTemplateRemote(remote, branch string, backendType fleet.BackendType, wsDir string) error {
+	if !fleet.IsTemplateRemote(remote) {
+		return nil
+	}
+	if err := fleet.ValidateTemplateCreate(remote, branch, backendType); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	// ValidateTemplateCreate already parsed the URL, so a failure here is the
+	// directory itself (missing / not a dir) — a precondition on THIS host.
+	dir, err := fleet.ResolveTemplateDir(remote)
+	if err != nil {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
+	// A template that contains its own workspace dir can never be copied.
+	if err := fleet.ValidateTemplateWorkspace(dir, wsDir); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	return nil
 }
 
 // CreateInstance starts the provisioning job and relays its events.

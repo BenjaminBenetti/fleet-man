@@ -25,6 +25,11 @@ import (
 // When branch is non-empty, the devcontainer clone uses `git clone
 // --branch <branch>` so the instance is provisioned against that ref
 // rather than the repository's default branch.
+//
+// A file:// remote is a local TEMPLATE directory (fleet.IsTemplateRemote):
+// instead of cloning, its contents are copied into the workspace verbatim.
+// Only the devcontainer backend can do that (coder and codespaces provision
+// from a git URL on their own side), and a branch has no meaning for a copy.
 func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backendType fleet.BackendType) (err error) {
 	start := time.Now()
 	flog.Info("instance create started", "fleet", fleetName, "instance", instanceName, "backend", backendType, "branch", branch, "remote", remoteURL)
@@ -41,6 +46,10 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 		setFailed(fleetName, instanceName, err)
 		return err
 	}
+	if err := fleet.ValidateTemplateCreate(remoteURL, branch, backendType); err != nil {
+		setFailed(fleetName, instanceName, err)
+		return err
+	}
 
 	wsDir := filepath.Join(state.WorkspacesDir(), fleetName, instanceName, fleetName)
 
@@ -54,7 +63,17 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 		instanceBackend = backendutil.New(backendType, verbose)
 	}
 
-	if backendType != fleet.BackendCoder && backendType != fleet.BackendCodespaces {
+	switch {
+	case backendType == fleet.BackendCoder || backendType == fleet.BackendCodespaces:
+		// Remote-provisioned backends clone on their own side.
+	case fleet.IsTemplateRemote(remoteURL):
+		// Template fleet: copy the local template dir into the workspace
+		// (the cp stands in for git clone), then provision.
+		if err := copyTemplateTree(remoteURL, wsDir); err != nil {
+			setFailed(fleetName, instanceName, err)
+			return err
+		}
+	default:
 		// Devcontainer: clone repo first, then provision
 		if err := os.MkdirAll(filepath.Dir(wsDir), 0755); err != nil {
 			setFailed(fleetName, instanceName, err)
@@ -96,6 +115,15 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 	// rebuilt container ends up equivalently provisioned. Every step is
 	// best-effort — the instance is marked running even if one fails.
 	finishProvision(instanceBackend, fleetName, instanceName, wsDir, result.ContainerID, resolvedMounts.Symlinks)
+
+	// Template worktree/submodule check LAST, and prepended: every provisioning
+	// step above WriteWarns (replacing the banner) on failure, and the TUI shows
+	// the banner's first line — this warning must win that slot.
+	if fleet.IsTemplateRemote(remoteURL) {
+		if warn := templateGitFileWarning(wsDir); warn != "" {
+			state.PrependWarn(fleetName, instanceName, warn)
+		}
+	}
 
 	// Success: update state (instance is running even if dotfiles failed)
 	if err := markInstanceRunning(fleetName, instanceName, result.ContainerID); err != nil {
