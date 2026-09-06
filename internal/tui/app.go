@@ -61,12 +61,13 @@ type model struct {
 	armadaTickArmed bool
 
 	// bootGateway/bootToken capture FLEET_GATEWAY/FLEET_TOKEN as they were at
-	// startup, and bootServer captures FLEET_SERVER. A runtime armada switch
-	// rewrites the env vars, so these preserve the boot remote (and its token)
-	// as a dropdown entry the user can switch back to even when it isn't
-	// registered.
+	// startup, bootSSH captures FLEET_SSH, and bootServer captures FLEET_SERVER.
+	// A runtime armada switch rewrites the env vars, so these preserve the boot
+	// remote (and its token) as a dropdown entry the user can switch back to
+	// even when it isn't registered.
 	bootGateway string
 	bootToken   string
+	bootSSH     string
 	bootServer  string
 
 	// watchGen is the active Watch connection generation. The watch goroutine
@@ -198,6 +199,7 @@ func newModel() model {
 		copySessionAllow:   make(map[string]bool),
 		bootGateway:        os.Getenv(fleetclient.EnvGateway),
 		bootToken:          os.Getenv(fleetclient.EnvToken),
+		bootSSH:            os.Getenv(fleetclient.EnvSSH),
 		bootServer:         os.Getenv(fleetclient.EnvServer),
 	}
 

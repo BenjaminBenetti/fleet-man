@@ -78,6 +78,9 @@ service FleetService {
   // fleet (see armada.proto).
   rpc GetArmada(GetArmadaRequest) returns (GetArmadaReply);
   rpc SetArmada(SetArmadaRequest) returns (SetArmadaReply);
+  // Resolve an ssh:// armada remote into a dialable loopback address + token
+  // (the local daemon owns the SSH tunnel). Local-only, like Get/SetArmada.
+  rpc ResolveArmadaRemote(ResolveArmadaRemoteRequest) returns (ResolveArmadaRemoteReply);
 
   // ---- Interactive backend operations ----
   rpc Exec(stream ExecIn) returns (stream ExecOut);

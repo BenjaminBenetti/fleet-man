@@ -2,6 +2,9 @@ package tui
 
 import (
 	"encoding/base64"
+	"errors"
+	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
+	"github.com/charmbracelet/x/ansi"
 	"io"
 	"os"
 	"os/exec"
@@ -892,5 +895,119 @@ func TestSilenceStreamInterrupt(t *testing.T) {
 	// A clean exit stays nil.
 	if got := silenceStreamInterrupt(nil); got != nil {
 		t.Fatalf("nil error should stay nil, got %v", got)
+	}
+}
+
+// ===========================================
+// Remote Fleet via [Gateway] [SSH]
+// ===========================================
+
+// TestRemoteFleetModeRowFollowsToggle: the "Remote Fleet via" selector appears
+// only while Enable Remote Fleet is on, defaults to Gateway, and in SSH mode
+// the Public GRPC URL row becomes the SSH Listener row.
+func TestRemoteFleetModeRowFollowsToggle(t *testing.T) {
+	sp := newSettingsPage()
+	m := armadaTestModel(sp)
+
+	if slices.Contains(sp.visibleItems(m), settingsItemRemoteFleetMode) {
+		t.Fatal("mode row must be hidden while Remote Fleet is off")
+	}
+	m.config.RemoteMcpSettings.FleetEnabled = true
+	items := sp.visibleItems(m)
+	if i, j := slices.Index(items, settingsItemRemoteFleetEnabled), slices.Index(items, settingsItemRemoteFleetMode); j != i+1 {
+		t.Fatalf("mode row should directly follow the toggle: %v", items)
+	}
+	out := ansi.Strip(sp.View(m))
+	if !strings.Contains(out, "Remote Fleet via") || !strings.Contains(out, "[Gateway] [SSH]") || !strings.Contains(out, "Public GRPC URL") {
+		t.Fatalf("gateway-mode view missing rows:\n%s", out)
+	}
+
+	m.config.RemoteMcpSettings.FleetMode = configutil.FleetModeSSH
+	m.remoteMcpStatus = &fleetgrpc.RemoteMcpStatus{SshAddr: "127.0.0.1:41234"}
+	out = ansi.Strip(sp.View(m))
+	if strings.Contains(out, "Public GRPC URL") || !strings.Contains(out, "SSH Listener") || !strings.Contains(out, "listening  127.0.0.1:41234") {
+		t.Fatalf("ssh-mode view should show the listener instead of the gateway URL:\n%s", out)
+	}
+	m.remoteMcpStatus = &fleetgrpc.RemoteMcpStatus{SshError: "listen: boom"}
+	if out := ansi.Strip(sp.View(m)); !strings.Contains(out, "error  listen: boom") {
+		t.Fatalf("ssh listener error not rendered:\n%s", out)
+	}
+}
+
+// TestRemoteFleetModeKeysPersist: l selects SSH, h selects Gateway, enter
+// toggles; each change is saved through setConfigRemote, and a no-op key
+// (already in that mode) does not save.
+func TestRemoteFleetModeKeysPersist(t *testing.T) {
+	saves := 0
+	var lastMode string
+	orig := setConfigRemote
+	setConfigRemote = func(c *configutil.Config) error {
+		saves++
+		lastMode = c.RemoteMcpSettings.FleetMode
+		return nil
+	}
+	defer func() { setConfigRemote = orig }()
+
+	sp := newSettingsPage()
+	m := armadaTestModel(sp)
+	m.config.RemoteMcpSettings.FleetEnabled = true
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteFleetMode)
+
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}) // already gateway: no save
+	if saves != 0 {
+		t.Fatalf("h in gateway mode saved %d times, want 0", saves)
+	}
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if saves != 1 || lastMode != configutil.FleetModeSSH || !m.config.RemoteMcpSettings.FleetViaSSH() {
+		t.Fatalf("l: saves=%d mode=%q", saves, lastMode)
+	}
+	if m.message != "Remote Fleet via SSH" {
+		t.Fatalf("message = %q", m.message)
+	}
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}) // toggles back to gateway
+	if saves != 2 || lastMode != configutil.FleetModeGateway || m.config.RemoteMcpSettings.FleetViaSSH() {
+		t.Fatalf("enter: saves=%d mode=%q", saves, lastMode)
+	}
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}) // and forward to ssh again
+	if saves != 3 || lastMode != configutil.FleetModeSSH {
+		t.Fatalf("enter again: saves=%d mode=%q", saves, lastMode)
+	}
+	// The mode row keeps its position across the flip (the rows it swaps sit
+	// below it), so the cursor still rests on it.
+	if sp.settingsCursorItem(m) != settingsItemRemoteFleetMode {
+		t.Fatalf("cursor drifted to item %d", sp.settingsCursorItem(m))
+	}
+}
+
+// TestRemoteFleetModeSaveFailureReverts: a failed save restores the previous
+// mode and reports the error.
+func TestRemoteFleetModeSaveFailureReverts(t *testing.T) {
+	orig := setConfigRemote
+	setConfigRemote = func(*configutil.Config) error { return errors.New("disk full") }
+	defer func() { setConfigRemote = orig }()
+
+	sp := newSettingsPage()
+	m := armadaTestModel(sp)
+	m.config.RemoteMcpSettings.FleetEnabled = true
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteFleetMode)
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if m.config.RemoteMcpSettings.FleetViaSSH() || !strings.Contains(m.message, "disk full") {
+		t.Fatalf("mode=%q message=%q", m.config.RemoteMcpSettings.FleetMode, m.message)
+	}
+}
+
+// TestSSHListenerRowEnterExplains: enter on the SSH Listener row copies nothing
+// (there is no URL) and tells the user what to register on the client.
+func TestSSHListenerRowEnterExplains(t *testing.T) {
+	sp := newSettingsPage()
+	m := armadaTestModel(sp)
+	m.config.RemoteMcpSettings.FleetEnabled = true
+	m.config.RemoteMcpSettings.FleetMode = configutil.FleetModeSSH
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteGrpcPublicURL)
+	if cmd := sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Fatal("nothing should be copied in ssh mode")
+	}
+	if !strings.Contains(m.message, "ssh://") {
+		t.Fatalf("message = %q", m.message)
 	}
 }

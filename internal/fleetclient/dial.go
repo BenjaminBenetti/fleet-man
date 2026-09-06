@@ -35,7 +35,7 @@ func (c *Conn) Close() error { return c.conn.Close() }
 // version handshake (relaunching a too-old local server, or erroring on an
 // incompatible remote/newer one). For a remote endpoint it dials only.
 func Dial(ctx context.Context) (*Conn, error) {
-	ep, err := selectEndpoint()
+	ep, err := selectEndpoint(ctx)
 	if err != nil {
 		return nil, err
 	}

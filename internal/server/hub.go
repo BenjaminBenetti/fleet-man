@@ -35,6 +35,13 @@ type hub struct {
 	// RemoteMcpStatus event and cached here so a newly-attached subscriber gets
 	// the current status in its initial snapshot. Defaults to DISABLED.
 	remoteMcp *fleetgrpc.RemoteMcpStatus
+	// sshAddr / sshErr are the "Remote Fleet via SSH" loopback listener's state
+	// (owned by the loop). They ride the same RemoteMcpStatus event as the
+	// gateway tunnel status, but have a DIFFERENT producer (sshlisten.go vs
+	// remote.Manager), so the hub stamps them onto every status it caches or
+	// fans out — otherwise the gateway manager's next push would wipe them.
+	sshAddr string
+	sshErr  string
 
 	// runtimeWanted is true while at least one subscriber asked for runtime;
 	// the runtime pollers read it lock-free to gate their expensive work.
@@ -208,6 +215,10 @@ func (h *hub) broadcastRemoteMcpStatus(st *fleetgrpc.RemoteMcpStatus) {
 	if st == nil {
 		return
 	}
+	// Stamp the SSH listener fields onto a copy (the producer's message is not
+	// ours to mutate) so the merged status is what gets cached and fanned out.
+	st = proto.Clone(st).(*fleetgrpc.RemoteMcpStatus)
+	st.SshAddr, st.SshError = h.sshAddr, h.sshErr
 	if proto.Equal(h.remoteMcp, st) {
 		return
 	}
@@ -215,6 +226,13 @@ func (h *hub) broadcastRemoteMcpStatus(st *fleetgrpc.RemoteMcpStatus) {
 	for sub := range h.subs {
 		sub.enqueueRemoteMcp(st)
 	}
+}
+
+// setSSHStatus records the SSH listener's state and re-broadcasts the merged
+// RemoteMcpStatus (the gateway part unchanged). Runs on the hub loop.
+func (h *hub) setSSHStatus(addr, errMsg string) {
+	h.sshAddr, h.sshErr = addr, errMsg
+	h.broadcastRemoteMcpStatus(h.remoteMcp)
 }
 
 func runtimeKey(fleetName, instance string) string { return fleetName + "/" + instance }

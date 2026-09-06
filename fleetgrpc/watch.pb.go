@@ -394,8 +394,18 @@ type RemoteMcpStatus struct {
 	// CONNECTED and the webhook feature was negotiated (the user enabled "Enable
 	// Webhook"); empty otherwise (incl. from an old gateway).
 	PublicWebhookUrl string `protobuf:"bytes,6,opt,name=public_webhook_url,json=publicWebhookUrl,proto3" json:"public_webhook_url,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// ssh_addr is the loopback address (127.0.0.1:<port>) the daemon's
+	// token-gated gRPC server listens on while remote fleet is enabled in SSH
+	// mode — the port a remote client's SSH tunnel forwards to. Independent of
+	// `state` (which describes the gateway tunnel): empty when the SSH listener is
+	// off or failed. Stamped onto every status by the hub, so it survives the
+	// gateway manager's own status pushes.
+	SshAddr string `protobuf:"bytes,7,opt,name=ssh_addr,json=sshAddr,proto3" json:"ssh_addr,omitempty"`
+	// ssh_error carries the SSH listener's last failure (bind error, missing
+	// token) while it is enabled but not listening; empty otherwise.
+	SshError      string `protobuf:"bytes,8,opt,name=ssh_error,json=sshError,proto3" json:"ssh_error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RemoteMcpStatus) Reset() {
@@ -466,6 +476,20 @@ func (x *RemoteMcpStatus) GetGatewayVersion() string {
 func (x *RemoteMcpStatus) GetPublicWebhookUrl() string {
 	if x != nil {
 		return x.PublicWebhookUrl
+	}
+	return ""
+}
+
+func (x *RemoteMcpStatus) GetSshAddr() string {
+	if x != nil {
+		return x.SshAddr
+	}
+	return ""
+}
+
+func (x *RemoteMcpStatus) GetSshError() string {
+	if x != nil {
+		return x.SshError
 	}
 	return ""
 }
@@ -745,7 +769,7 @@ const file_watch_proto_rawDesc = "" +
 	"\x0fruntime_changed\x18\a \x01(\v2\x19.fleetgrpc.RuntimeChangedH\x00R\x0eruntimeChanged\x12H\n" +
 	"\x11remote_mcp_status\x18\b \x01(\v2\x1a.fleetgrpc.RemoteMcpStatusH\x00R\x0fremoteMcpStatus\x122\n" +
 	"\tfile_copy\x18\t \x01(\v2\x13.fleetgrpc.FileCopyH\x00R\bfileCopyB\x06\n" +
-	"\x04kind\"\xf5\x01\n" +
+	"\x04kind\"\xad\x02\n" +
 	"\x0fRemoteMcpStatus\x12.\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x18.fleetgrpc.RemoteMcpConnR\x05state\x12\x1d\n" +
 	"\n" +
@@ -753,7 +777,9 @@ const file_watch_proto_rawDesc = "" +
 	"\x05error\x18\x03 \x01(\tR\x05error\x12&\n" +
 	"\x0fpublic_grpc_url\x18\x04 \x01(\tR\rpublicGrpcUrl\x12'\n" +
 	"\x0fgateway_version\x18\x05 \x01(\tR\x0egatewayVersion\x12,\n" +
-	"\x12public_webhook_url\x18\x06 \x01(\tR\x10publicWebhookUrl\"6\n" +
+	"\x12public_webhook_url\x18\x06 \x01(\tR\x10publicWebhookUrl\x12\x19\n" +
+	"\bssh_addr\x18\a \x01(\tR\asshAddr\x12\x1b\n" +
+	"\tssh_error\x18\b \x01(\tR\bsshError\"6\n" +
 	"\fStateChanged\x12&\n" +
 	"\x05state\x18\x01 \x01(\v2\x10.fleetgrpc.StateR\x05state\"F\n" +
 	"\x0eRuntimeChanged\x124\n" +

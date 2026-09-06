@@ -13,6 +13,8 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // armadaTestModel builds a model with the pieces the armada paths touch. The
@@ -581,5 +583,180 @@ func TestBounceWatchStreamBumpsGeneration(t *testing.T) {
 	// is a no-op returning the current gen (0).
 	if got := bounceWatchStream(); got != watchCtl.gen {
 		t.Fatalf("bounce no-op returned %d, want current gen %d", got, watchCtl.gen)
+	}
+}
+
+// ===========================================
+// ssh:// remotes
+// ===========================================
+
+// TestArmadaAddFlowSSHSkipsToken: an ssh:// URL needs no token (the local
+// daemon discovers it), so enter on the URL goes straight to the connection
+// test, and the saved entry carries an empty token.
+func TestArmadaAddFlowSSHSkipsToken(t *testing.T) {
+	pingedURL, pingedToken := "", "unset"
+	origPing := pingArmadaRemote
+	pingArmadaRemote = func(url, token string) error {
+		pingedURL, pingedToken = url, token
+		return nil
+	}
+	defer func() { pingArmadaRemote = origPing }()
+	var saved []configutil.ArmadaRemote
+	origSave := saveArmadaLocal
+	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) error {
+		saved = remotes
+		return nil
+	}
+	defer func() { saveArmadaLocal = origSave }()
+
+	sp := newSettingsPage()
+	m := armadaTestModel(sp)
+	sp.cursor = settingsPositionOf(sp, m, settingsItemArmadaAdd)
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	typeRunes(sp, m, "ssh://ben@desktop")
+	cmd := sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if sp.armadaAddStage != armadaAddTesting {
+		t.Fatalf("stage = %v, want testing (no token stage for ssh)", sp.armadaAddStage)
+	}
+	if cmd == nil {
+		t.Fatal("ssh URL commit should return the connection-test command")
+	}
+	testMsg := cmd().(armadaTestResultMsg)
+	if pingedURL != "ssh://ben@desktop" || pingedToken != "" {
+		t.Fatalf("connection test used %q/%q, want the ssh url with an empty token", pingedURL, pingedToken)
+	}
+	saveCmd := m.handleArmadaMsg(testMsg)
+	if saveCmd == nil {
+		t.Fatal("successful test should chain into the save command")
+	}
+	m.handleArmadaMsg(saveCmd())
+	if len(saved) != 1 || saved[0].URL != "ssh://ben@desktop" || saved[0].Token != "" {
+		t.Fatalf("persisted registry mismatch: %+v", saved)
+	}
+}
+
+// TestArmadaAddFlowRejectsMalformedSSH: an ssh URL without a host, or with a
+// path, is refused before any connection test.
+func TestArmadaAddFlowRejectsMalformedSSH(t *testing.T) {
+	origPing := pingArmadaRemote
+	pinged := false
+	pingArmadaRemote = func(string, string) error { pinged = true; return nil }
+	defer func() { pingArmadaRemote = origPing }()
+
+	for _, bad := range []string{"ssh://", "ssh://host/path"} {
+		sp := newSettingsPage()
+		m := armadaTestModel(sp)
+		sp.cursor = settingsPositionOf(sp, m, settingsItemArmadaAdd)
+		sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
+		typeRunes(sp, m, bad)
+		sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if sp.armadaAddStage != armadaAddURLIn || !strings.Contains(m.message, "ssh://") {
+			t.Errorf("%q: stage %v, message %q — want to stay on the URL stage with a hint", bad, sp.armadaAddStage, m.message)
+		}
+	}
+	if pinged {
+		t.Fatal("a malformed ssh URL must not be tested")
+	}
+}
+
+// TestArmadaSSHBadgesAndNames: ssh remotes wear [ssh], gateway remotes [gtwy],
+// the plain-TCP boot [tcp], local none; two ssh remotes on one host are told
+// apart by user@host[:port].
+func TestArmadaSSHBadgesAndNames(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_SSH", "")
+	t.Setenv("FLEET_SERVER", "")
+	m := armadaTestModel(nil)
+	m.armadaRemotes = []configutil.ArmadaRemote{
+		{URL: "https://gw.example.com/abc", Token: "t"},
+		{URL: "ssh://ben@desktop"},
+		{URL: "ssh://root@Desktop:2222"},
+	}
+	m.bootServer = "10.0.0.9:50051"
+	entries := m.armadaEntries()
+	got := make([]string, 0, len(entries))
+	for _, e := range entries {
+		got = append(got, e.displayName+"|"+e.badge())
+	}
+	want := []string{"local|", "gw.example.com|[gtwy]", "ben@desktop|[ssh]", "root@desktop:2222|[ssh]", "10.0.0.9 (env)|[tcp]"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("entries = %v, want %v", got, want)
+	}
+	// A lone ssh remote shows just its host.
+	m.armadaRemotes = m.armadaRemotes[1:2]
+	if e := m.armadaEntries()[1]; e.displayName != "desktop" {
+		t.Fatalf("lone ssh remote displayName = %q, want desktop", e.displayName)
+	}
+}
+
+// TestSwitchArmadaSSHSetsEnv: switching to an ssh remote sets FLEET_SSH (and
+// nothing else), is recognised as current, and shows the [ssh] badge in the
+// border; switching back to local clears it.
+func TestSwitchArmadaSSHSetsEnv(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "https://old.example.com/abc")
+	t.Setenv("FLEET_TOKEN", "old")
+	t.Setenv("FLEET_SSH", "")
+	t.Setenv("FLEET_SERVER", "")
+	m := armadaTestModel(nil)
+	m.armadaRemotes = []configutil.ArmadaRemote{{URL: "ssh://ben@desktop"}}
+
+	entry := m.armadaEntries()[1]
+	if entry.badge() != armadaBadgeSSH {
+		t.Fatalf("entry badge = %q", entry.badge())
+	}
+	if cmd := m.switchArmada(entry); cmd == nil {
+		t.Fatal("switch should return the reload command")
+	}
+	if os.Getenv("FLEET_SSH") != "ssh://ben@desktop" || os.Getenv("FLEET_GATEWAY") != "" || os.Getenv("FLEET_TOKEN") != "" || os.Getenv("FLEET_SERVER") != "" {
+		t.Fatalf("env after ssh switch: SSH=%q GATEWAY=%q TOKEN=%q SERVER=%q",
+			os.Getenv("FLEET_SSH"), os.Getenv("FLEET_GATEWAY"), os.Getenv("FLEET_TOKEN"), os.Getenv("FLEET_SERVER"))
+	}
+	if armadaCurrentKey() != "ssh://ben@desktop" || !m.armadaEntries()[1].current {
+		t.Fatal("the ssh remote should now be the current connection")
+	}
+	if m.armadaCurrentDisplay() != "desktop" || m.armadaCurrentBadge() != armadaBadgeSSH {
+		t.Fatalf("current display/badge = %q/%q", m.armadaCurrentDisplay(), m.armadaCurrentBadge())
+	}
+	fp := newFleetPage()
+	border := ansi.Strip(fp.renderArmadaBorder(m, 80))
+	if !strings.Contains(border, "Armada [ desktop ] [ssh]") {
+		t.Fatalf("border = %q, want the [ssh] badge after the selector", border)
+	}
+
+	m.switchArmada(m.armadaEntries()[0]) // local
+	if os.Getenv("FLEET_SSH") != "" || armadaCurrentKey() != "" || m.armadaCurrentBadge() != "" {
+		t.Fatalf("local switch should clear FLEET_SSH: %q", os.Getenv("FLEET_SSH"))
+	}
+}
+
+// TestArmadaEntriesIncludesSSHBoot: a TUI booted with FLEET_SSH pointing at an
+// unregistered remote lists it as "(env)" and pings it.
+func TestArmadaEntriesIncludesSSHBoot(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_SSH", "ssh://ben@laptop")
+	t.Setenv("FLEET_SERVER", "")
+	m := armadaTestModel(nil)
+	m.bootSSH = "ssh://ben@laptop"
+	entries := m.armadaEntries()
+	if len(entries) != 2 || entries[1].displayName != "laptop (env)" || !entries[1].current || entries[1].badge() != armadaBadgeSSH {
+		t.Fatalf("entries = %+v", entries)
+	}
+	if m.pingAllArmadaCmd() == nil || m.armadaStatus["ssh://ben@laptop"].state != armadaStatusPinging {
+		t.Fatal("the ssh boot remote should be pinged")
+	}
+}
+
+// TestArmadaPingErrTextSSH words tunnel failures for ssh remotes: the local
+// daemon's FailedPrecondition message verbatim, Unavailable as the tunnel.
+func TestArmadaPingErrTextSSH(t *testing.T) {
+	precond := status.Error(codes.FailedPrecondition, "ssh: Permission denied (publickey).")
+	if got := armadaPingErrText("ssh://desktop", precond); got != "ssh: Permission denied (publickey)." {
+		t.Fatalf("FailedPrecondition text = %q", got)
+	}
+	if got := armadaPingErrText("ssh://desktop", status.Error(codes.Unavailable, "x")); got != "ssh tunnel unreachable" {
+		t.Fatalf("Unavailable (ssh) text = %q", got)
+	}
+	if got := armadaPingErrText("https://gw/abc", status.Error(codes.Unavailable, "x")); got != "gateway unreachable" {
+		t.Fatalf("Unavailable (gateway) text = %q", got)
 	}
 }

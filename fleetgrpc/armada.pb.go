@@ -21,13 +21,17 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// ArmadaRemote is one registered remote fleet: where its gateway is and the
-// bearer token that authenticates to the daemon behind it.
+// ArmadaRemote is one registered remote fleet: where it is and the bearer
+// token that authenticates to the daemon behind it.
 type ArmadaRemote struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// FLEET_GATEWAY-style URL: <scheme>://<host[:port]>/<session-id>.
+	// Either a FLEET_GATEWAY-style URL (<scheme>://<host[:port]>/<session-id>)
+	// for a fleet reached through a gateway, or an SSH URL
+	// (ssh://[user@]host[:port]) for a fleet reached over an SSH tunnel the LOCAL
+	// daemon maintains (see ResolveArmadaRemote).
 	Url string `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
 	// MCP bearer token; validated by the remote daemon, never by the gateway.
+	// Empty for an ssh:// remote — the token is discovered over SSH on connect.
 	Token         string `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -77,6 +81,111 @@ func (x *ArmadaRemote) GetToken() string {
 	return ""
 }
 
+// ResolveArmadaRemote turns an ssh:// armada URL into something a gRPC client
+// can dial: the LOCAL daemon brings up (or reuses) an SSH port-forward to the
+// remote daemon's token-gated gRPC listener, discovers the remote's bearer token
+// over the same SSH connection, verifies the tunnel end-to-end, and returns the
+// loopback address + token. LOCAL-ONLY: it hands out a bearer token and drives
+// the user's ssh, so the tunnel-facing server refuses it (like Get/SetArmada).
+type ResolveArmadaRemoteRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The ssh://[user@]host[:port] URL (need not be registered in the armada).
+	Url           string `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveArmadaRemoteRequest) Reset() {
+	*x = ResolveArmadaRemoteRequest{}
+	mi := &file_armada_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveArmadaRemoteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveArmadaRemoteRequest) ProtoMessage() {}
+
+func (x *ResolveArmadaRemoteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_armada_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveArmadaRemoteRequest.ProtoReflect.Descriptor instead.
+func (*ResolveArmadaRemoteRequest) Descriptor() ([]byte, []int) {
+	return file_armada_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ResolveArmadaRemoteRequest) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+type ResolveArmadaRemoteReply struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// host:port on the local loopback that forwards to the remote daemon.
+	Addr string `protobuf:"bytes,1,opt,name=addr,proto3" json:"addr,omitempty"`
+	// The remote daemon's bearer token, sent as `authorization: Bearer <token>`.
+	Token         string `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveArmadaRemoteReply) Reset() {
+	*x = ResolveArmadaRemoteReply{}
+	mi := &file_armada_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveArmadaRemoteReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveArmadaRemoteReply) ProtoMessage() {}
+
+func (x *ResolveArmadaRemoteReply) ProtoReflect() protoreflect.Message {
+	mi := &file_armada_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveArmadaRemoteReply.ProtoReflect.Descriptor instead.
+func (*ResolveArmadaRemoteReply) Descriptor() ([]byte, []int) {
+	return file_armada_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ResolveArmadaRemoteReply) GetAddr() string {
+	if x != nil {
+		return x.Addr
+	}
+	return ""
+}
+
+func (x *ResolveArmadaRemoteReply) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
 type GetArmadaRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -85,7 +194,7 @@ type GetArmadaRequest struct {
 
 func (x *GetArmadaRequest) Reset() {
 	*x = GetArmadaRequest{}
-	mi := &file_armada_proto_msgTypes[1]
+	mi := &file_armada_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -97,7 +206,7 @@ func (x *GetArmadaRequest) String() string {
 func (*GetArmadaRequest) ProtoMessage() {}
 
 func (x *GetArmadaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_armada_proto_msgTypes[1]
+	mi := &file_armada_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -110,7 +219,7 @@ func (x *GetArmadaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetArmadaRequest.ProtoReflect.Descriptor instead.
 func (*GetArmadaRequest) Descriptor() ([]byte, []int) {
-	return file_armada_proto_rawDescGZIP(), []int{1}
+	return file_armada_proto_rawDescGZIP(), []int{3}
 }
 
 type GetArmadaReply struct {
@@ -122,7 +231,7 @@ type GetArmadaReply struct {
 
 func (x *GetArmadaReply) Reset() {
 	*x = GetArmadaReply{}
-	mi := &file_armada_proto_msgTypes[2]
+	mi := &file_armada_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -134,7 +243,7 @@ func (x *GetArmadaReply) String() string {
 func (*GetArmadaReply) ProtoMessage() {}
 
 func (x *GetArmadaReply) ProtoReflect() protoreflect.Message {
-	mi := &file_armada_proto_msgTypes[2]
+	mi := &file_armada_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -147,7 +256,7 @@ func (x *GetArmadaReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetArmadaReply.ProtoReflect.Descriptor instead.
 func (*GetArmadaReply) Descriptor() ([]byte, []int) {
-	return file_armada_proto_rawDescGZIP(), []int{2}
+	return file_armada_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *GetArmadaReply) GetRemotes() []*ArmadaRemote {
@@ -169,7 +278,7 @@ type SetArmadaRequest struct {
 
 func (x *SetArmadaRequest) Reset() {
 	*x = SetArmadaRequest{}
-	mi := &file_armada_proto_msgTypes[3]
+	mi := &file_armada_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -181,7 +290,7 @@ func (x *SetArmadaRequest) String() string {
 func (*SetArmadaRequest) ProtoMessage() {}
 
 func (x *SetArmadaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_armada_proto_msgTypes[3]
+	mi := &file_armada_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -194,7 +303,7 @@ func (x *SetArmadaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetArmadaRequest.ProtoReflect.Descriptor instead.
 func (*SetArmadaRequest) Descriptor() ([]byte, []int) {
-	return file_armada_proto_rawDescGZIP(), []int{3}
+	return file_armada_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *SetArmadaRequest) GetRemotes() []*ArmadaRemote {
@@ -213,7 +322,7 @@ type SetArmadaReply struct {
 
 func (x *SetArmadaReply) Reset() {
 	*x = SetArmadaReply{}
-	mi := &file_armada_proto_msgTypes[4]
+	mi := &file_armada_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -225,7 +334,7 @@ func (x *SetArmadaReply) String() string {
 func (*SetArmadaReply) ProtoMessage() {}
 
 func (x *SetArmadaReply) ProtoReflect() protoreflect.Message {
-	mi := &file_armada_proto_msgTypes[4]
+	mi := &file_armada_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -238,7 +347,7 @@ func (x *SetArmadaReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetArmadaReply.ProtoReflect.Descriptor instead.
 func (*SetArmadaReply) Descriptor() ([]byte, []int) {
-	return file_armada_proto_rawDescGZIP(), []int{4}
+	return file_armada_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SetArmadaReply) GetRemotes() []*ArmadaRemote {
@@ -255,6 +364,11 @@ const file_armada_proto_rawDesc = "" +
 	"\farmada.proto\x12\tfleetgrpc\"6\n" +
 	"\fArmadaRemote\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x14\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\".\n" +
+	"\x1aResolveArmadaRemoteRequest\x12\x10\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\"D\n" +
+	"\x18ResolveArmadaRemoteReply\x12\x12\n" +
+	"\x04addr\x18\x01 \x01(\tR\x04addr\x12\x14\n" +
 	"\x05token\x18\x02 \x01(\tR\x05token\"\x12\n" +
 	"\x10GetArmadaRequest\"C\n" +
 	"\x0eGetArmadaReply\x121\n" +
@@ -276,13 +390,15 @@ func file_armada_proto_rawDescGZIP() []byte {
 	return file_armada_proto_rawDescData
 }
 
-var file_armada_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_armada_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_armada_proto_goTypes = []any{
-	(*ArmadaRemote)(nil),     // 0: fleetgrpc.ArmadaRemote
-	(*GetArmadaRequest)(nil), // 1: fleetgrpc.GetArmadaRequest
-	(*GetArmadaReply)(nil),   // 2: fleetgrpc.GetArmadaReply
-	(*SetArmadaRequest)(nil), // 3: fleetgrpc.SetArmadaRequest
-	(*SetArmadaReply)(nil),   // 4: fleetgrpc.SetArmadaReply
+	(*ArmadaRemote)(nil),               // 0: fleetgrpc.ArmadaRemote
+	(*ResolveArmadaRemoteRequest)(nil), // 1: fleetgrpc.ResolveArmadaRemoteRequest
+	(*ResolveArmadaRemoteReply)(nil),   // 2: fleetgrpc.ResolveArmadaRemoteReply
+	(*GetArmadaRequest)(nil),           // 3: fleetgrpc.GetArmadaRequest
+	(*GetArmadaReply)(nil),             // 4: fleetgrpc.GetArmadaReply
+	(*SetArmadaRequest)(nil),           // 5: fleetgrpc.SetArmadaRequest
+	(*SetArmadaReply)(nil),             // 6: fleetgrpc.SetArmadaReply
 }
 var file_armada_proto_depIdxs = []int32{
 	0, // 0: fleetgrpc.GetArmadaReply.remotes:type_name -> fleetgrpc.ArmadaRemote
@@ -306,7 +422,7 @@ func file_armada_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_armada_proto_rawDesc), len(file_armada_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -31,8 +31,9 @@ const authMetadataKey = "authorization"
 // client's LOCAL dial (fleetclient.DialLocal), so denying them remotely never
 // breaks a legitimate caller. Keys are gRPC full method names.
 var localOnlyMethods = map[string]bool{
-	"/fleetgrpc.FleetService/GetArmada": true,
-	"/fleetgrpc.FleetService/SetArmada": true,
+	"/fleetgrpc.FleetService/GetArmada":           true,
+	"/fleetgrpc.FleetService/SetArmada":           true,
+	"/fleetgrpc.FleetService/ResolveArmadaRemote": true, // hands out a remote's bearer token + drives the user's ssh
 }
 
 // bearerAuthInterceptors returns unary + stream interceptors that require

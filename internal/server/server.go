@@ -20,6 +20,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/server/remote"
+	"github.com/BenjaminBenetti/fleet-man/internal/server/sshtunnel"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	"google.golang.org/grpc"
@@ -168,6 +169,20 @@ func Serve(ctx context.Context) error {
 	// Both ride the same tunnel and are only wired when MCP is up (we need its
 	// loopback port for the tunnel to come up at all). The webhook receiver, unlike
 	// gRPC, does NOT need the MCP token, so it is wired independently of it.
+	// newTokenGatedServer builds a grpc.Server serving the SAME FleetService,
+	// gated by the MCP bearer token — the shape both remote transports serve:
+	// the gateway tunnel (below) and the SSH loopback listener (sshlisten.go).
+	newTokenGatedServer := func() (*grpc.Server, error) {
+		token, err := loadOrCreateMCPToken()
+		if err != nil {
+			return nil, fmt.Errorf("load bearer token: %w", err)
+		}
+		authUnary, authStream := bearerAuthInterceptors(token)
+		gs := grpc.NewServer(grpc.ChainUnaryInterceptor(authUnary), grpc.ChainStreamInterceptor(authStream))
+		fleetgrpc.RegisterFleetServiceServer(gs, svc)
+		return gs, nil
+	}
+
 	var remoteOpts []remote.Option
 	if mcpPort != 0 {
 		webhookLis := remote.NewChanListener()
@@ -176,11 +191,8 @@ func Serve(ctx context.Context) error {
 		defer webhookSrv.Close()
 		remoteOpts = append(remoteOpts, remote.WithWebhookListener(webhookLis))
 
-		if token, err := loadOrCreateMCPToken(); err == nil {
+		if tunnelGRPC, err := newTokenGatedServer(); err == nil {
 			grpcLis := remote.NewChanListener()
-			authUnary, authStream := bearerAuthInterceptors(token)
-			tunnelGRPC := grpc.NewServer(grpc.ChainUnaryInterceptor(authUnary), grpc.ChainStreamInterceptor(authStream))
-			fleetgrpc.RegisterFleetServiceServer(tunnelGRPC, svc)
 			go func() { _ = tunnelGRPC.Serve(grpcLis) }()
 			defer tunnelGRPC.Stop()
 			remoteOpts = append(remoteOpts, remote.WithGRPCListener(grpcLis))
@@ -188,6 +200,22 @@ func Serve(ctx context.Context) error {
 			flog.Warn("remote grpc: load token", "err", err)
 		}
 	}
+
+	// Remote fleet via SSH (no gateway): the token-gated server on a loopback
+	// port, converged from config like the tunnel. Independent of MCP being up
+	// — it needs only the token. Stopped (and ssh.port removed) on shutdown.
+	svc.sshListen = &sshListener{
+		newServer: newTokenGatedServer,
+		publish: func(addr, errMsg string) {
+			svc.hub.post(func(h *hub) { h.setSSHStatus(addr, errMsg) })
+		},
+	}
+	defer svc.sshListen.Stop()
+
+	// Outbound ssh forwards to this user's ssh:// armada remotes (client-side
+	// role of the same feature). Torn down with the daemon.
+	svc.sshTunnels = sshtunnel.New(hubCtx)
+	defer svc.sshTunnels.Close()
 
 	// Remote gateway tunnel: an outbound, OPT-IN connection that exposes the
 	// loopback MCP server ("Enable Remote MCP") and/or the gRPC server above
@@ -202,7 +230,7 @@ func Serve(ctx context.Context) error {
 	}, remoteOpts...)
 	go svc.remote.Run(hubCtx)
 	if cfg, err := state.LoadConfig(); err == nil {
-		svc.remote.Reconcile(cfg.RemoteMcpSettings.Enabled, cfg.RemoteMcpSettings.FleetEnabled, cfg.RemoteMcpSettings.WebhookEnabled, cfg.RemoteMcpSettings.GatewayURL)
+		svc.reconcileRemote(cfg.RemoteMcpSettings)
 	} else {
 		flog.Warn("remote mcp: load config", "err", err)
 	}
