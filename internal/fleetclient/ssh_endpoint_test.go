@@ -11,7 +11,9 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func TestIsSSHURL(t *testing.T) {
@@ -154,6 +156,60 @@ func TestSSHDialReResolvesOnReconnect(t *testing.T) {
 	}
 	if md, _ := (sshPerRPC{state: ep.state}).GetRequestMetadata(context.Background()); md["authorization"] != "Bearer tok-b" {
 		t.Fatalf("token not refreshed by the re-resolve: %v", md)
+	}
+}
+
+// TestSSHClientConnFailedReResolveIsUnavailable: when the re-resolve on
+// reconnect fails (the remote turned SSH mode off, ssh auth broke, …), the RPC
+// must fail Unavailable — the code every "tunnel is down" check keys on — with
+// the daemon's reason in the text, not Internal ("illegal status"), which is
+// what gRPC's picker makes of a status error escaping a dialer.
+func TestSSHClientConnFailedReResolveIsUnavailable(t *testing.T) {
+	dead, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadAddr := dead.Addr().String()
+	_ = dead.Close()
+
+	orig := resolveSSHRemote
+	var calls atomic.Int32
+	resolveSSHRemote = func(context.Context, string) (string, string, error) {
+		if calls.Add(1) == 1 {
+			return deadAddr, "tok", nil
+		}
+		return "", "", status.Error(codes.FailedPrecondition, "desktop: Remote Fleet via SSH is not enabled on the remote")
+	}
+	t.Cleanup(func() { resolveSSHRemote = orig })
+
+	ep, err := newSSHEndpoint(context.Background(), "ssh://desktop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cc, err := grpc.NewClient(ep.Target(), ep.DialOptions()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cc.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// Non-WaitForReady: fail as soon as the (re)connect attempt fails.
+	_, err = fleetgrpc.NewFleetServiceClient(cc).Hello(ctx, &fleetgrpc.HelloRequest{})
+	// Drive at least one re-resolving reconnect: the first connect (dead port)
+	// fails, gRPC backs off and redials, and the second resolve fails.
+	deadline := time.Now().Add(8 * time.Second)
+	for calls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+		_, err = fleetgrpc.NewFleetServiceClient(cc).Hello(ctx, &fleetgrpc.HelloRequest{})
+	}
+	if calls.Load() < 2 {
+		t.Fatal("expected gRPC to reconnect through the re-resolving dialer")
+	}
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable; err = %v", status.Code(err), err)
+	}
+	if !strings.Contains(err.Error(), "not enabled on the remote") || strings.Contains(err.Error(), "illegal status") {
+		t.Fatalf("error should carry the daemon's reason and no picker noise: %v", err)
 	}
 }
 

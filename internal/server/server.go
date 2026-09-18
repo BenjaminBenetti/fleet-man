@@ -170,6 +170,7 @@ func Serve(ctx context.Context) error {
 	// Both ride the same tunnel and are only wired when MCP is up (we need its
 	// loopback port for the tunnel to come up at all). The webhook receiver, unlike
 	// gRPC, does NOT need the MCP token, so it is wired independently of it.
+	//
 	// newTokenGatedServer builds a grpc.Server serving the SAME FleetService,
 	// gated by the MCP bearer token — the shape both remote transports serve:
 	// the gateway tunnel (below) and the SSH loopback listener (sshlisten.go).

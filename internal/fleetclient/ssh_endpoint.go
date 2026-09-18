@@ -2,6 +2,7 @@ package fleetclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/status"
 )
 
 // ssh_endpoint.go reaches a daemon over an SSH tunnel, with NO gateway. The
@@ -139,7 +141,12 @@ func (e sshEndpoint) DialOptions() []grpc.DialOption {
 // daemon, which is what moves a live client onto the tunnel's new port after a
 // local daemon restart. A failed resolve is returned as the dial error, so gRPC
 // retries with its usual backoff and the RPC reports Unavailable with the
-// reason inside.
+// reason inside — as PLAIN text: resolveSSHRemote's error is a gRPC status
+// (FailedPrecondition / InvalidArgument from ResolveArmadaRemote), and a status
+// error escaping a dialer is re-coded Internal by gRPC's picker ("received
+// picker error with illegal status", gRFC A54), which would read like a fleet
+// bug and defeat every Unavailable check (the settings page's tunnel-bounce
+// detection, retry heuristics).
 func (e sshEndpoint) dial(ctx context.Context, _ string) (net.Conn, error) {
 	addr, _, fresh := e.state.snapshot()
 	if !fresh {
@@ -147,7 +154,7 @@ func (e sshEndpoint) dial(ctx context.Context, _ string) (net.Conn, error) {
 		var token string
 		addr, token, err = resolveSSHRemote(ctx, e.rawURL)
 		if err != nil {
-			return nil, err
+			return nil, errors.New(status.Convert(err).Message())
 		}
 		e.state.set(addr, token)
 	}

@@ -435,6 +435,10 @@ func TestNewModelSurvivesUnreachableRemote(t *testing.T) {
 	t.Setenv("FLEET_GATEWAY", "")
 	t.Setenv("FLEET_SSH", "")
 	t.Setenv("FLEET_SERVER", addr)
+	// newModel() inside a tmux pane takes the inHostTmux branch and rebinds
+	// keys on the LIVE tmux server the developer is running the tests in.
+	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_PANE", "")
 
 	m := newModel()
 	if m.err == nil {
