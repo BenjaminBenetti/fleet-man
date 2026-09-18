@@ -20,6 +20,8 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // capturedClipboard runs a copyToClipboardCmd-style command, capturing the OSC
@@ -1009,5 +1011,27 @@ func TestSSHListenerRowEnterExplains(t *testing.T) {
 	}
 	if !strings.Contains(m.message, "ssh://") {
 		t.Fatalf("message = %q", m.message)
+	}
+}
+
+// TestRemoteSaveBouncedIgnoresDialFailures: an Unavailable raised while
+// dialing (the save never left the client) is a real failure, not the
+// expected tunnel bounce — even when the remote settings did change.
+func TestRemoteSaveBouncedIgnoresDialFailures(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_SERVER", "")
+	t.Setenv("FLEET_SSH", "ssh://ben@desktop")
+	sp := newSettingsPage()
+	m := armadaTestModel(sp)
+	sp.serverRemote = snapshotRemoteSettings(m.config)
+	m.config.RemoteMcpSettings.FleetEnabled = true // a changed remote setting
+
+	bounce := status.Error(codes.Unavailable, "error reading from server: EOF")
+	if !sp.remoteSaveBounced(m, bounce) {
+		t.Fatal("an Unavailable that cut an in-flight save on a changed remote setting is the expected bounce")
+	}
+	dial := status.Error(codes.Unavailable, `connection error: desc = "transport: Error while dialing: desktop: Remote Fleet via SSH is not enabled on the remote"`)
+	if sp.remoteSaveBounced(m, dial) {
+		t.Fatal("a dial-time Unavailable never delivered the save and must not count as a bounce")
 	}
 }

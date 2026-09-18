@@ -145,8 +145,10 @@ func (e sshEndpoint) DialOptions() []grpc.DialOption {
 // (FailedPrecondition / InvalidArgument from ResolveArmadaRemote), and a status
 // error escaping a dialer is re-coded Internal by gRPC's picker ("received
 // picker error with illegal status", gRFC A54), which would read like a fleet
-// bug and defeat every Unavailable check (the settings page's tunnel-bounce
-// detection, retry heuristics).
+// bug rather than the transport failure it is. (A dial-time Unavailable is
+// still distinguishable from one that cut an in-flight RPC — its message
+// carries "Error while dialing" — which the TUI's save-bounce heuristic
+// relies on.)
 func (e sshEndpoint) dial(ctx context.Context, _ string) (net.Conn, error) {
 	addr, _, fresh := e.state.snapshot()
 	if !fresh {

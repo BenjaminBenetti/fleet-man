@@ -195,15 +195,17 @@ func TestSSHClientConnFailedReResolveIsUnavailable(t *testing.T) {
 	defer cancel()
 	// Non-WaitForReady: fail as soon as the (re)connect attempt fails.
 	_, err = fleetgrpc.NewFleetServiceClient(cc).Hello(ctx, &fleetgrpc.HelloRequest{})
-	// Drive at least one re-resolving reconnect: the first connect (dead port)
-	// fails, gRPC backs off and redials, and the second resolve fails.
+	// Poll until an RPC actually sees the second resolve's error. Keying on the
+	// resolve counter alone races the picker: resolve #2 has started, but a
+	// fail-fast RPC can still be handed the dead port's "connection refused"
+	// until that dial attempt has failed. Only resolve #2 produces this text.
 	deadline := time.Now().Add(8 * time.Second)
-	for calls.Load() < 2 && time.Now().Before(deadline) {
+	for err == nil || !strings.Contains(err.Error(), "not enabled on the remote") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the failed re-resolve never reached an RPC (resolves=%d): %v", calls.Load(), err)
+		}
 		time.Sleep(50 * time.Millisecond)
 		_, err = fleetgrpc.NewFleetServiceClient(cc).Hello(ctx, &fleetgrpc.HelloRequest{})
-	}
-	if calls.Load() < 2 {
-		t.Fatal("expected gRPC to reconnect through the re-resolving dialer")
 	}
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("code = %v, want Unavailable; err = %v", status.Code(err), err)

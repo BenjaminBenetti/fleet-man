@@ -199,6 +199,14 @@ func (settingsPage *settingsPage) remoteSaveBounced(m *model, err error) bool {
 	if status.Code(err) != codes.Unavailable || !fleetclient.IsRemote() {
 		return false
 	}
+	// A bounce cuts an RPC on a transport that was already up. An Unavailable
+	// raised while DIALING (a gateway that is down, an ssh tunnel that could
+	// not be re-resolved) means the save never left the client — reporting it
+	// as "saved, connection restarting" would keep a value the remote never
+	// received.
+	if strings.Contains(status.Convert(err).Message(), "Error while dialing") {
+		return false
+	}
 	return snapshotRemoteSettings(m.config) != settingsPage.serverRemote
 }
 
