@@ -481,3 +481,62 @@ func runBatch(cmd tea.Cmd) []tea.Msg {
 	}
 	return []tea.Msg{msg}
 }
+
+// TestHostKeyAcceptFromSettingsRowReconnectsCurrent is QA's recovery path:
+// boot on FLEET_SSH, reject the key at boot, then Settings → enter on the
+// remote's row → accept. The accept must reconnect the live connection —
+// drop the cached mutation connection, bounce the Watch stream, reload — and
+// the reload must clear the boot error banner, instead of leaving the TUI on
+// the stale "host key … is not known" error until the reconnect backoff runs
+// out.
+func TestHostKeyAcceptFromSettingsRowReconnectsCurrent(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_TOKEN", "")
+	t.Setenv("FLEET_SERVER", "")
+	t.Setenv("FLEET_SSH", "ssh://bob@fleethost")
+	origPing := pingArmadaRemote
+	pingArmadaRemote = func(string, string) error { return nil }
+	defer func() { pingArmadaRemote = origPing }()
+	trusted := stubTrust(t, nil)
+
+	sp := newSettingsPage()
+	m := armadaTestModel(sp)
+	m.armadaRemotes = []configutil.ArmadaRemote{{URL: "ssh://bob@fleethost"}}
+	errK := unknownKeyErr(t, "ssh://bob@fleethost", "SHA256:abc")
+
+	// Boot: the reload failed on the unknown key (banner), the Watch dial
+	// prompted, the user rejected.
+	m.err = errK
+	m.offerHostKey("ssh://bob@fleethost", errK, hostKeyOriginConnect)
+	m.resolveHostKeyPrompt("r")
+
+	// Settings → enter on the remote's row: an explicit ping, whose result
+	// reopens the prompt with the ping origin.
+	sp.cursor = settingsPositionOf(sp, m, settingsItemArmadaBase)
+	if cmd := sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil || !m.armadaExplicitPing["ssh://bob@fleethost"] {
+		t.Fatal("enter on the row should ping explicitly")
+	}
+	m.handleArmadaMsg(armadaPingResultMsg{url: "ssh://bob@fleethost", err: errK})
+	if !m.hostKeyPromptShowing() || m.hostKeyPrompt.origin != hostKeyOriginPing {
+		t.Fatal("the explicit ping should reopen the prompt")
+	}
+
+	// Accept: trusts, then reconnects the CURRENT connection whatever raised
+	// the prompt.
+	msg := m.resolveHostKeyPrompt("a")().(hostKeyTrustedMsg)
+	if len(*trusted) != 1 {
+		t.Fatalf("trusted %v", *trusted)
+	}
+	reload := m.handleHostKeyTrusted(msg)
+	if reload == nil || !strings.Contains(m.message, "connecting to fleethost") {
+		t.Fatalf("accept for the live connection must bounce and reload; message=%q", m.message)
+	}
+	if m.armadaStatus["ssh://bob@fleethost"].state != armadaStatusConnected {
+		t.Fatal("row should show connected")
+	}
+	// The reload's success clears the boot banner.
+	m.handleArmadaMsg(armadaSwitchedMsg{label: "fleethost", gen: m.watchGen, st: &configutil.State{}, config: configutil.DefaultConfig()})
+	if m.err != nil {
+		t.Fatalf("the stale host-key banner must be cleared after reconnecting: %v", m.err)
+	}
+}
