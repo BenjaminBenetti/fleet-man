@@ -107,6 +107,16 @@ message RemoteMcpStatus {
   // CONNECTED and the webhook feature was negotiated (the user enabled "Enable
   // Webhook"); empty otherwise (incl. from an old gateway).
   string public_webhook_url = 6;
+  // ssh_addr is the loopback address (127.0.0.1:<port>) the daemon's
+  // token-gated gRPC server listens on while remote fleet is enabled in SSH
+  // mode — the port a remote client's SSH tunnel forwards to. Independent of
+  // `state` (which describes the gateway tunnel): empty when the SSH listener is
+  // off or failed. Stamped onto every status by the hub, so it survives the
+  // gateway manager's own status pushes.
+  string ssh_addr = 7;
+  // ssh_error carries the SSH listener's last failure (bind error, missing
+  // token) while it is enabled but not listening; empty otherwise.
+  string ssh_error = 8;
 }
 
 // StateChanged is pushed whenever the authoritative PERSISTED model mutates. It

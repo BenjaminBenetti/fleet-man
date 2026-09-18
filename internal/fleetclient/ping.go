@@ -15,16 +15,25 @@ import (
 const pingTimeout = 3 * time.Second
 
 // Ping dials a fleet-armada remote (a FLEET_GATEWAY-style URL plus its bearer
-// token) and runs one Hello round trip, validating connectivity, gateway
-// routing, and daemon auth in a single RPC. It deliberately skips the version
-// reconcile that Dial runs, so a version-skewed remote still answers and the
-// caller can render its real reachability (and compare ServerVersion itself).
+// token, or an ssh:// URL whose token is discovered by the local daemon) and
+// runs one Hello round trip, validating connectivity, routing, and daemon auth
+// in a single RPC. It deliberately skips the version reconcile that Dial runs,
+// so a version-skewed remote still answers and the caller can render its real
+// reachability (and compare ServerVersion itself).
 //
 // The gRPC status code distinguishes the failure for status indicators:
-// Unavailable = gateway unreachable, NotFound = unknown session or the remote
-// daemon is offline / has Remote Fleet disabled, Unauthenticated = bad token.
-func Ping(ctx context.Context, gatewayURL, token string) (*fleetgrpc.HelloReply, error) {
-	ep, err := newGatewayEndpoint(gatewayURL, token)
+// Unavailable = gateway/tunnel unreachable, NotFound = unknown session or the
+// remote daemon is offline / has Remote Fleet disabled, Unauthenticated = bad
+// token, FailedPrecondition = the local daemon could not bring the ssh tunnel up
+// (its message says why).
+func Ping(ctx context.Context, remoteURL, token string) (*fleetgrpc.HelloReply, error) {
+	var ep Endpoint
+	var err error
+	if IsSSHURL(remoteURL) {
+		ep, err = newSSHEndpoint(ctx, remoteURL)
+	} else {
+		ep, err = newGatewayEndpoint(remoteURL, token)
+	}
 	if err != nil {
 		return nil, err
 	}

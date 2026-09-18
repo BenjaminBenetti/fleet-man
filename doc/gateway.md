@@ -12,6 +12,15 @@ end‑to‑end for both the MCP and gRPC paths.
 > [Remote MCP](../README.md#remote-mcp) section of the README. This document is
 > the architecture deep‑dive.
 
+> **No gateway needed for remote fleet control between machines you can
+> `ssh` to.** "Remote Fleet via SSH" (`internal/server/sshlisten.go` on the
+> daemon, `internal/server/sshtunnel` on the client's local daemon) serves the
+> same token‑gated gRPC server on a loopback port and reaches it over an
+> `ssh -N -L` forward — no registration, no session ids, no yamux. The gateway
+> described here remains the path for machines with no inbound access at all,
+> and the only path for remote MCP and webhooks. See
+> [Remote control over SSH](../README.md#remote-control-over-ssh).
+
 ---
 
 ## 1. The core idea: a reverse tunnel

@@ -90,3 +90,22 @@ func TestSetArmadaReplacesWholeRegistry(t *testing.T) {
 		t.Fatalf("expected the second save to replace the registry, got %v", reply.GetRemotes())
 	}
 }
+
+// TestDroppedSSHRemotes pins the SetArmada tunnel-teardown rule: only ssh://
+// remotes present before and absent after the edit are dropped (matched
+// canonically), never gateway remotes or anything merely unregistered.
+func TestDroppedSSHRemotes(t *testing.T) {
+	prev := &state.Armada{Remotes: []state.ArmadaRemote{
+		{URL: "ssh://a"}, {URL: "ssh://ben@Desktop"}, {URL: "https://gw/x", Token: "t"}, {URL: "ssh://c"},
+	}}
+	next := &state.Armada{Remotes: []state.ArmadaRemote{
+		{URL: "SSH://ben@desktop/"}, {URL: "ssh://c"},
+	}}
+	got := droppedSSHRemotes(prev, next)
+	if len(got) != 1 || got[0] != "ssh://a" {
+		t.Fatalf("dropped = %v, want [ssh://a]", got)
+	}
+	if got := droppedSSHRemotes(next, next); len(got) != 0 {
+		t.Fatalf("unchanged registry dropped %v", got)
+	}
+}

@@ -43,13 +43,10 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 		return nil, status.Errorf(codes.Internal, "reload config: %v", err)
 	}
 
-	// Converge the remote-gateway tunnel to the saved settings. Reconcile is
-	// non-blocking (it just records desired state and nudges the supervisor), so
-	// calling it while muWrite is held cannot deadlock. nil during tests that use
-	// newService() without a serve loop.
-	if s.remote != nil {
-		s.remote.Reconcile(saved.RemoteMcpSettings.Enabled, saved.RemoteMcpSettings.FleetEnabled, saved.RemoteMcpSettings.WebhookEnabled, saved.RemoteMcpSettings.GatewayURL)
-	}
+	// Converge the remote transports (gateway tunnel + SSH listener) to the
+	// saved settings. Both reconciles are non-blocking / quick, so calling them
+	// while muWrite is held cannot deadlock.
+	s.reconcileRemote(saved.RemoteMcpSettings)
 
 	// The remote-gateway fields are the ones whose effects outlive this RPC (the
 	// tunnel supervisor reacts to them), so call them out; the manager logs the
@@ -57,4 +54,18 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "remoteFleet", saved.RemoteMcpSettings.FleetEnabled, "webhook", saved.RemoteMcpSettings.WebhookEnabled, "gateway", saved.RemoteMcpSettings.GatewayURL)
 
 	return &fleetgrpc.SetConfigReply{Config: protoconv.ConfigToProto(saved)}, nil
+}
+
+// reconcileRemote converges both remote-control transports on the settings:
+// the gateway tunnel negotiates grpc only in gateway mode, and the SSH loopback
+// listener is up only in SSH mode — so flipping the mode moves the surface
+// rather than doubling it. nil-safe for tests that use newService() without a
+// serve loop.
+func (s *service) reconcileRemote(rm state.RemoteMcpSettings) {
+	if s.remote != nil {
+		s.remote.Reconcile(rm.Enabled, rm.FleetViaGateway(), rm.WebhookEnabled, rm.GatewayURL)
+	}
+	if s.sshListen != nil {
+		s.sshListen.Reconcile(rm.FleetViaSSH())
+	}
 }

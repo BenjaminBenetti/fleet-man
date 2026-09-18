@@ -61,12 +61,13 @@ type model struct {
 	armadaTickArmed bool
 
 	// bootGateway/bootToken capture FLEET_GATEWAY/FLEET_TOKEN as they were at
-	// startup, and bootServer captures FLEET_SERVER. A runtime armada switch
-	// rewrites the env vars, so these preserve the boot remote (and its token)
-	// as a dropdown entry the user can switch back to even when it isn't
-	// registered.
+	// startup, bootSSH captures FLEET_SSH, and bootServer captures FLEET_SERVER.
+	// A runtime armada switch rewrites the env vars, so these preserve the boot
+	// remote (and its token) as a dropdown entry the user can switch back to
+	// even when it isn't registered.
 	bootGateway string
 	bootToken   string
+	bootSSH     string
 	bootServer  string
 
 	// watchGen is the active Watch connection generation. The watch goroutine
@@ -187,6 +188,12 @@ func newModel() model {
 	agentSpinnerModel.Style = agentWorkingStyle
 
 	m := model{
+		// Start from an EMPTY state, not nil: the boot reload below fails when
+		// the daemon can't be reached (an unreachable FLEET_SSH / FLEET_GATEWAY
+		// remote, an untrusted host key, …) and only records m.err — the fleet
+		// page must still build (empty, with the error banner) rather than nil-
+		// deref m.st.Fleets in buildRows.
+		st:                 &configutil.State{},
 		creating:           make(map[string]bool),
 		runtime:            make(map[string]*fleetgrpc.InstanceRuntime),
 		portForwards:       portforward.NewManager(),
@@ -201,6 +208,7 @@ func newModel() model {
 		openSessionAllow:   make(map[string]bool),
 		bootGateway:        os.Getenv(fleetclient.EnvGateway),
 		bootToken:          os.Getenv(fleetclient.EnvToken),
+		bootSSH:            os.Getenv(fleetclient.EnvSSH),
 		bootServer:         os.Getenv(fleetclient.EnvServer),
 	}
 
