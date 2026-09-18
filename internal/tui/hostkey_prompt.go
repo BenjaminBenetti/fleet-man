@@ -26,9 +26,10 @@ import (
 // accept / reject choice. Accept calls TrustSSHHostKey (the daemon appends the
 // exact offered line and re-resolves) and then carries on with whatever the
 // caller was doing; reject cancels it with a status message. The prompt is
-// surfaced once per key: concurrent dials share the open prompt, and after a
-// reject the background dials stay quiet until the user acts on that remote
-// again (a connection test, enter on its settings row).
+// surfaced once per key: concurrent dials of the same remote share the open
+// prompt, and after a reject the background dials stay quiet until the user
+// acts on that remote again — a connection test, enter on its settings row,
+// an Armada switch to it, or enter on it in the Armada selector.
 //
 // A CHANGED key never reaches here: the daemon reports it as a plain error
 // naming the offending known_hosts line, so it shows as an ordinary failure.
@@ -91,6 +92,12 @@ func (m *model) offerHostKey(url string, err error, origin hostKeyOrigin) bool {
 	if uk == nil || len(uk.GetKeys()) == 0 {
 		return false
 	}
+	if u := uk.GetUrl(); u != "" && u != url {
+		// Stale: the detail is for another remote — a pre-switch Watch dial
+		// whose error landed after FLEET_SSH already named the new one. Never
+		// label one remote's key with another's name.
+		return false
+	}
 	if p := m.hostKeyPrompt; p != nil {
 		// One prompt at a time — but only the SAME remote's concurrent dials
 		// share it. Another remote's error must take its normal failure path
@@ -125,10 +132,10 @@ func (m *model) resolveHostKeyPrompt(key string) tea.Cmd {
 		m.hostKeyDeclined[hostKeyDeclineKey(p.url, p.key)] = true
 		m.hostKeyPrompt = nil
 		m.armadaStatus[p.url] = armadaStatus{state: armadaStatusError, err: "host key rejected"}
-		if p.origin == hostKeyOriginAdd {
-			if sp, ok := m.currentPage.(*settingsPage); ok {
-				sp.cancelArmadaAdd()
-			}
+		// An add flow waiting on this remote is cancelled whichever path raised
+		// the prompt (a Connect prompt for the FLEET_SSH remote can absorb that
+		// remote's own add-flow test).
+		if m.cancelArmadaAddFor(p.url) {
 			m.message = "Host key rejected — " + p.key.GetName() + " was not added"
 		} else {
 			m.message = "Host key rejected — not connecting to " + p.key.GetName()
@@ -136,6 +143,23 @@ func (m *model) resolveHostKeyPrompt(key string) tea.Cmd {
 		return nil
 	}
 	return nil
+}
+
+// armadaAddPendingFor reports whether the settings page's add flow is waiting
+// on a connection test for url.
+func (m *model) armadaAddPendingFor(url string) bool {
+	sp, ok := m.currentPage.(*settingsPage)
+	return ok && sp.armadaAddStage == armadaAddTesting && sp.armadaAddURL == url
+}
+
+// cancelArmadaAddFor cancels an add flow waiting on url, reporting whether
+// there was one.
+func (m *model) cancelArmadaAddFor(url string) bool {
+	if !m.armadaAddPendingFor(url) {
+		return false
+	}
+	m.currentPage.(*settingsPage).cancelArmadaAdd()
+	return true
 }
 
 // trustHostKeyCmd runs the accept against the local daemon.
@@ -153,7 +177,6 @@ func trustHostKeyCmd(url, line string, origin hostKeyOrigin) tea.Cmd {
 // reports another unknown key, asks again.
 func (m *model) handleHostKeyTrusted(msg hostKeyTrustedMsg) tea.Cmd {
 	m.hostKeyPrompt = nil
-	settingsPage, _ := m.currentPage.(*settingsPage)
 	if msg.err != nil {
 		if m.offerHostKey(msg.url, msg.err, msg.origin) {
 			return nil
@@ -162,36 +185,34 @@ func (m *model) handleHostKeyTrusted(msg hostKeyTrustedMsg) tea.Cmd {
 		// that restarted and no longer holds the offer) as much as the connect —
 		// so say neither succeeded.
 		m.armadaStatus[msg.url] = armadaStatus{state: armadaStatusError, err: armadaPingErrText(msg.url, msg.err)}
-		if msg.origin == hostKeyOriginAdd && settingsPage != nil {
-			settingsPage.cancelArmadaAdd()
-		}
+		m.cancelArmadaAddFor(msg.url)
 		m.message = "Couldn't trust the host key and connect: " + armadaPingErrText(msg.url, msg.err)
 		return nil
 	}
 	m.armadaStatus[msg.url] = armadaStatus{state: armadaStatusConnected}
-	if msg.origin == hostKeyOriginAdd {
-		// The accept doubled as the connection test (the daemon re-resolved
-		// through the trusted tunnel), so register the remote now — unless the
-		// flow was abandoned while the prompt was up.
-		if settingsPage != nil && settingsPage.armadaAddStage == armadaAddTesting && settingsPage.armadaAddURL == msg.url {
-			next := append(slices.Clone(m.armadaRemotes), configutil.ArmadaRemote{URL: msg.url})
-			return saveArmadaCmd(next, "added", -1)
-		}
-		m.message = "Host key trusted"
-		return nil
+	// What to resume is decided by the URL, not by which path raised the
+	// prompt: an add flow waiting on this remote is finished (the accept
+	// doubled as its connection test — the daemon re-resolved through the
+	// trusted tunnel), and the connection this TUI is on is reconnected now
+	// rather than waiting out the Watch stream's backoff. Both can apply at
+	// once (adding the unregistered FLEET_SSH remote one is booted on).
+	var cmds []tea.Cmd
+	if m.armadaAddPendingFor(msg.url) {
+		next := append(slices.Clone(m.armadaRemotes), configutil.ArmadaRemote{URL: msg.url})
+		cmds = append(cmds, saveArmadaCmd(next, "added", -1))
 	}
+	m.message = "Host key trusted"
 	if armadaCurrentKey() == msg.url {
-		// The connection this TUI is on (whether the prompt came from its own
-		// dial or from the user retrying it): reconnect now rather than wait
-		// out the Watch stream's backoff.
 		closeMutationConn()
 		m.watchGen = bounceWatchStream()
 		label := (armadaEntry{url: msg.url}).host()
 		m.message = "Host key trusted — connecting to " + label + "…"
-		return switchReloadCmd(label, m.watchGen)
+		cmds = append(cmds, switchReloadCmd(label, m.watchGen))
 	}
-	m.message = "Host key trusted"
-	return nil
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 // viewHostKeyPrompt renders the centered overlay.

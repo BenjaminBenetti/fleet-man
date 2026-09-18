@@ -302,6 +302,7 @@ func TestHostKeyPromptDoesNotSwallowOtherRemote(t *testing.T) {
 // reopens the prompt instead of leaving "Switching to …" hanging silently.
 func TestSwitchArmadaReasksRejectedKey(t *testing.T) {
 	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_TOKEN", "")
 	t.Setenv("FLEET_SERVER", "")
 	t.Setenv("FLEET_SSH", "ssh://ben@desktop")
 	m := armadaTestModel(nil)
@@ -384,4 +385,99 @@ func TestArmadaSelectEnterRetriesRejectedCurrent(t *testing.T) {
 	if cmd := fp.updateArmadaSelect(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil || !strings.Contains(m.message, "Already connected") {
 		t.Fatalf("a connected current entry: cmd=%v message=%q", cmd != nil, m.message)
 	}
+}
+
+// TestHostKeyPromptIgnoresStaleDetailForOtherRemote: a Watch error carrying
+// remote A's key that lands after the TUI switched to B (watchErrMsg has no
+// generation stamp) must not open a prompt labelled B with A's fingerprint,
+// and must not take over B's own errors.
+func TestHostKeyPromptIgnoresStaleDetailForOtherRemote(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_TOKEN", "")
+	t.Setenv("FLEET_SERVER", "")
+	t.Setenv("FLEET_SSH", "ssh://b")
+	m := armadaTestModel(nil)
+	stale := unknownKeyErr(t, "ssh://a", "SHA256:aaa")
+	if m.offerHostKey(currentSSHURL(), stale, hostKeyOriginConnect) || m.hostKeyPromptShowing() {
+		t.Fatal("a detail for another remote must be ignored, not prompted")
+	}
+	res, _ := m.Update(watchErrMsg{err: stale})
+	if rm := res.(model); rm.hostKeyPrompt != nil {
+		t.Fatal("the Update dispatch must not prompt on a stale detail either")
+	}
+	// B's own error still prompts, labelled B.
+	if !m.offerHostKey("ssh://b", unknownKeyErr(t, "ssh://b", "SHA256:bbb"), hostKeyOriginConnect) || m.hostKeyPrompt.url != "ssh://b" || m.hostKeyPrompt.key.GetKeys()[0].GetFingerprint() != "SHA256:bbb" {
+		t.Fatal("B's own error should open B's prompt")
+	}
+}
+
+// TestHostKeyPromptConnectOriginFinishesAddFlow: a Connect prompt already open
+// for the unregistered FLEET_SSH remote absorbs that remote's own add-flow
+// test result; the decision must still resolve the add flow — reject cancels
+// it, accept registers it AND reconnects the live connection.
+func TestHostKeyPromptConnectOriginFinishesAddFlow(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_TOKEN", "")
+	t.Setenv("FLEET_SERVER", "")
+	t.Setenv("FLEET_SSH", "ssh://desktop")
+	origPing := pingArmadaRemote
+	pingArmadaRemote = func(string, string) error { return nil }
+	defer func() { pingArmadaRemote = origPing }()
+	var saved []configutil.ArmadaRemote
+	origSave := saveArmadaLocal
+	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) error { saved = remotes; return nil }
+	defer func() { saveArmadaLocal = origSave }()
+	errK := unknownKeyErr(t, "ssh://desktop", "SHA256:abc")
+
+	// Reject path.
+	sp := newSettingsPage()
+	m := armadaTestModel(sp)
+	startAddFlow(t, m, "ssh://desktop")
+	m.offerHostKey("ssh://desktop", errK, hostKeyOriginConnect) // the Watch dial got there first
+	if cmd := m.handleArmadaMsg(armadaTestResultMsg{url: "ssh://desktop", err: errK}); cmd != nil || sp.armadaAddStage != armadaAddTesting {
+		t.Fatal("the add result should be absorbed by the open prompt for the same remote")
+	}
+	m.resolveHostKeyPrompt("r")
+	if sp.armadaAddStage != armadaAddNone || !strings.Contains(m.message, "was not added") {
+		t.Fatalf("reject must cancel the waiting add flow: stage=%v message=%q", sp.armadaAddStage, m.message)
+	}
+
+	// Accept path: registers the remote and reconnects.
+	stubTrust(t, nil)
+	sp = newSettingsPage()
+	m = armadaTestModel(sp)
+	startAddFlow(t, m, "ssh://desktop")
+	m.offerHostKey("ssh://desktop", errK, hostKeyOriginConnect)
+	m.handleArmadaMsg(armadaTestResultMsg{url: "ssh://desktop", err: errK})
+	msg := m.resolveHostKeyPrompt("a")().(hostKeyTrustedMsg)
+	batch := m.handleHostKeyTrusted(msg)
+	if batch == nil || !strings.Contains(m.message, "connecting to desktop") {
+		t.Fatalf("accept should reconnect the live connection; message=%q", m.message)
+	}
+	// Run the batched commands: one of them is the registry save.
+	for _, out := range runBatch(batch) {
+		if sm, ok := out.(armadaSaveResultMsg); ok {
+			m.handleArmadaMsg(sm)
+		}
+	}
+	if len(saved) != 1 || saved[0].URL != "ssh://desktop" || sp.armadaAddStage != armadaAddNone {
+		t.Fatalf("accept should also register the remote: saved=%+v stage=%v", saved, sp.armadaAddStage)
+	}
+}
+
+// runBatch executes a tea.Cmd that may be a Batch, returning every message
+// it produced (a single command yields one).
+func runBatch(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var out []tea.Msg
+		for _, c := range batch {
+			out = append(out, runBatch(c)...)
+		}
+		return out
+	}
+	return []tea.Msg{msg}
 }
