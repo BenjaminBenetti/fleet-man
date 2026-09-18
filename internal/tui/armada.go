@@ -232,14 +232,18 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 		}
 		m.armadaStatus[msg.url] = st
 		if explicit && !prompted {
-			// The user asked for this ping and no prompt took it over: show
-			// the outcome on the status line (the selector has closed by now,
-			// so its row can't).
-			host := (armadaEntry{url: msg.url}).host()
-			if msg.err != nil {
-				m.message = host + ": " + st.err
-			} else {
-				m.message = "Connected to " + host
+			// The user asked for this ping (enter on a Settings row, or on the
+			// current entry in the Armada selector) and no prompt took it
+			// over: show the outcome on the status line. A success is worded as
+			// a probe result unless this is the connection the TUI is on.
+			name := m.armadaNameFor(msg.url)
+			switch {
+			case msg.err != nil:
+				m.message = name + ": " + st.err
+			case msg.url == armadaCurrentKey():
+				m.message = "Connected to " + name
+			default:
+				m.message = name + " is reachable"
 			}
 		}
 		return nil
@@ -612,6 +616,17 @@ func (e armadaEntry) sshAuthority() string {
 		auth = u.User.Username() + "@" + auth
 	}
 	return auth
+}
+
+// armadaNameFor is the dropdown display name for url (disambiguated like the
+// selector shows it), falling back to the bare host for an unlisted URL.
+func (m *model) armadaNameFor(url string) string {
+	for _, e := range m.armadaEntries() {
+		if e.url == url {
+			return e.displayName
+		}
+	}
+	return (armadaEntry{url: url}).host()
 }
 
 // armadaCurrentBadge is the active connection's transport badge for the border

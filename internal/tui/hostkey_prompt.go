@@ -200,6 +200,11 @@ func (m *model) handleHostKeyTrusted(msg hostKeyTrustedMsg) tea.Cmd {
 		return nil
 	}
 	m.armadaStatus[msg.url] = armadaStatus{state: armadaStatusConnected}
+	// The key is trusted now, so an earlier rejection for this remote no longer
+	// applies (rejections are keyed by fingerprint; a future different key is
+	// asked about afresh anyway). Leaving it would make the selector's
+	// mid-ping retry gate fire on a healthy connection.
+	m.forgetHostKeyRejections(msg.url)
 	// What to resume is decided by the URL, not by which path raised the
 	// prompt: an add flow waiting on this remote is finished (the accept
 	// doubled as its connection test — the daemon re-resolved through the

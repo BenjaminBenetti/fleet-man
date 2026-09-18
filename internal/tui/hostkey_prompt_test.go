@@ -436,6 +436,37 @@ func TestArmadaSelectRetryShowsOutcome(t *testing.T) {
 	}
 }
 
+// TestSettingsRowPingOutcomeWording: an explicit Settings-row ping of a remote
+// the TUI is NOT on reports a probe result ("X is reachable"), never
+// "Connected to X"; a failure repeats the reason (useful when the row
+// truncates it); names match the selector's display names.
+func TestSettingsRowPingOutcomeWording(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_TOKEN", "")
+	t.Setenv("FLEET_SERVER", "")
+	t.Setenv("FLEET_SSH", "") // the TUI is on local
+	origPing := pingArmadaRemote
+	pingArmadaRemote = func(string, string) error { return nil }
+	defer func() { pingArmadaRemote = origPing }()
+	sp := newSettingsPage()
+	m := armadaTestModel(sp)
+	m.armadaRemotes = []configutil.ArmadaRemote{{URL: "ssh://qa@fleet-remote"}, {URL: "ssh://root@fleet-remote"}}
+
+	sp.cursor = settingsPositionOf(sp, m, settingsItemArmadaBase)
+	if cmd := sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+		t.Fatal("enter on the row should ping")
+	}
+	m.handleArmadaMsg(armadaPingResultMsg{url: "ssh://qa@fleet-remote"})
+	if m.message != "qa@fleet-remote is reachable" {
+		t.Fatalf("success while local: message=%q", m.message)
+	}
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m.handleArmadaMsg(armadaPingResultMsg{url: "ssh://qa@fleet-remote", err: status.Error(codes.Unavailable, "x")})
+	if m.message != "qa@fleet-remote: ssh tunnel unreachable" {
+		t.Fatalf("failure: message=%q", m.message)
+	}
+}
+
 // TestHostKeyPromptIgnoresStaleDetailForOtherRemote: a Watch error carrying
 // remote A's key that lands after the TUI switched to B (watchErrMsg has no
 // generation stamp) must not open a prompt labelled B with A's fingerprint,
@@ -587,5 +618,21 @@ func TestHostKeyAcceptFromSettingsRowReconnectsCurrent(t *testing.T) {
 	m.handleArmadaMsg(armadaSwitchedMsg{label: "fleethost", gen: m.watchGen, st: &configutil.State{}, config: configutil.DefaultConfig()})
 	if m.err != nil {
 		t.Fatalf("the stale host-key banner must be cleared after reconnecting: %v", m.err)
+	}
+	// The trusted key retires the boot-time rejection, so a later A → enter
+	// on the (healthy, mid-ping) current entry is "Already connected", not a
+	// spurious retry.
+	if m.hasHostKeyRejection("ssh://bob@fleethost") {
+		t.Fatal("a successful accept must clear the remote's rejection")
+	}
+	fp := m.fleetPage
+	fp.openArmadaSelect(m)
+	for i, e := range m.armadaEntries() {
+		if e.current {
+			fp.armadaSel.dialogRow = i
+		}
+	}
+	if cmd := fp.updateArmadaSelect(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil || !strings.Contains(m.message, "Already connected") {
+		t.Fatalf("healthy current entry after an accept: cmd=%v message=%q", cmd != nil, m.message)
 	}
 }
