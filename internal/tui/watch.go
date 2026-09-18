@@ -103,6 +103,7 @@ type watchBrowserOpenMsg struct {
 }
 type watchFileCopyMsg struct {
 	fleet, instance, src, dst string
+	open                      bool // `fleet open`: open the delivered file here
 	gen                       int
 }
 type remoteMcpStatusMsg struct {
@@ -224,6 +225,7 @@ func watchOnce(ctx context.Context, program *tea.Program, gen int) bool {
 				instance: fc.GetInstance(),
 				src:      fc.GetSrc(),
 				dst:      fc.GetDst(),
+				open:     fc.GetOpen(),
 				gen:      gen,
 			})
 		case *fleetgrpc.Event_RemoteMcpStatus:

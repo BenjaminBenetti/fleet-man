@@ -3,9 +3,6 @@ package tui
 import (
 	"fmt"
 	"net/url"
-	"os"
-	"os/exec"
-	"runtime"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/platform"
 	tea "github.com/charmbracelet/bubbletea"
@@ -42,44 +39,17 @@ func isBrowsableURL(rawURL string) bool {
 	return u.Scheme == "http" || u.Scheme == "https"
 }
 
-// openExternalURL launches the host OS's default handler for rawURL. WSL is
-// special cased (xdg-open there opens nothing useful) to reach the Windows
-// browser. The launcher is Run (not Start) so the short-lived process is reaped
-// rather than left defunct.
+// openExternalURL launches the host OS's default handler for rawURL — the
+// shared platform opener, so a PR link and a `fleet open` file go through the
+// same per-OS command. The launcher is Run (not Start) so the short-lived
+// process is reaped rather than left defunct.
 func openExternalURL(rawURL string) error {
 	if !isBrowsableURL(rawURL) {
 		return fmt.Errorf("refusing to open non-http(s) URL")
 	}
-	cmd, err := openExternalURLCommand(rawURL)
+	cmd, err := platform.OpenCommand(rawURL)
 	if err != nil {
 		return err
 	}
 	return cmd.Run()
-}
-
-// openExternalURLCommand picks the per-OS opener. Split out for testability.
-// Every opener receives the URL as a separate, non-shell-interpreted argument;
-// the WSL PowerShell fallback passes it via the environment rather than
-// interpolating it into the -Command string, so a URL containing PowerShell
-// metacharacters can't inject code on the host.
-func openExternalURLCommand(rawURL string) (*exec.Cmd, error) {
-	switch {
-	case runtime.GOOS == "darwin":
-		return exec.Command("open", rawURL), nil
-	case runtime.GOOS == "windows":
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL), nil
-	case platform.IsWSL():
-		// wslu's wslview is the clean path; fall back to the Windows shell's
-		// start handler via powershell when it isn't installed.
-		if _, err := exec.LookPath("wslview"); err == nil {
-			return exec.Command("wslview", rawURL), nil
-		}
-		cmd := exec.Command("powershell.exe", "-NoProfile", "-Command", "Start-Process -FilePath $env:FLEET_OPEN_URL")
-		cmd.Env = append(os.Environ(), "FLEET_OPEN_URL="+rawURL)
-		return cmd, nil
-	case runtime.GOOS == "linux":
-		return exec.Command("xdg-open", rawURL), nil
-	default:
-		return nil, fmt.Errorf("don't know how to open a browser on %s", runtime.GOOS)
-	}
 }

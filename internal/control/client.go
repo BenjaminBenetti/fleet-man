@@ -80,9 +80,11 @@ func (c *Client) OpenBrowser(url string) error {
 
 // CopyFile is a typed convenience over Send for TypeCopyFile: it asks the
 // connected host TUI to perform a scp-style copy between src and dst (endpoints
-// as typed inside the instance). An empty dst is the download shorthand.
-func (c *Client) CopyFile(src, dst string) error {
-	return c.Send(TypeCopyFile, CopyFilePayload{Src: src, Dst: dst})
+// as typed inside the instance). An empty dst is the download shorthand; open
+// additionally asks the TUI to open the delivered file with its machine's
+// default application (`fleet open`).
+func (c *Client) CopyFile(src, dst string, open bool) error {
+	return c.Send(TypeCopyFile, CopyFilePayload{Src: src, Dst: dst, Open: open})
 }
 
 // Close closes the underlying connection. It is safe to call once; further

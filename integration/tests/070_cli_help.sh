@@ -20,7 +20,7 @@ assert_contains "${root_help}" "Available Commands:"        "root help missing c
 # Each visible subcommand we ship must appear in the Available Commands block.
 # This protects against accidentally dropping one from NewRootCmd. The
 # `_create-instance` command is intentionally Hidden, so it's not asserted.
-for sub in up stop start down destroy list exec code logs status port-forward shell; do
+for sub in up stop start down destroy list exec code logs status port-forward shell copy open; do
   assert_contains "${root_help}" "${sub}" "root help missing subcommand: ${sub}"
 done
 
@@ -42,6 +42,10 @@ declare -a checks=(
   "exec|Execute a command inside an instance"
   "logs|Show logs for an instance"
   "status|Show fleet-wide status summary"
+  # copy/open tailor their long help to where they run (host vs in-instance);
+  # these needles appear in both forms.
+  "copy|Copy a file or directory between"
+  "open|to your machine, then open it"
 )
 
 for entry in "${checks[@]}"; do

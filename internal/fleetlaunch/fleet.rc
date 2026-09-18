@@ -26,3 +26,12 @@ alias fl='fleet launch'
 # downloads folder. A copy that touches your machine asks for confirmation in
 # the fleet TUI.
 alias fc='fleet copy'
+
+# fo — shorthand for Fleet Open: `fc` to your machine, then open the file there
+# with your desktop's default application (xdg-open / open / wslview). Handy
+# for a screenshot, chart, or PDF produced inside the instance:
+#   fo ./out/chart.png                 copy to your downloads folder and open it
+#   fo report.pdf host:~/Documents/    copy there and open it
+# Like fc, it asks for confirmation in the fleet TUI; FLEET_OPENER in the TUI's
+# environment overrides the opener program.
+alias fo='fleet open'

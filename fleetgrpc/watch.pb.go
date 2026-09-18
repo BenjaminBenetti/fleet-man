@@ -661,7 +661,11 @@ type FileCopy struct {
 	Src string `protobuf:"bytes,3,opt,name=src,proto3" json:"src,omitempty"`
 	// dst is the destination endpoint as typed inside the instance. Empty is the
 	// 1-arg download shorthand: the TUI delivers to its downloads folder.
-	Dst           string `protobuf:"bytes,4,opt,name=dst,proto3" json:"dst,omitempty"`
+	Dst string `protobuf:"bytes,4,opt,name=dst,proto3" json:"dst,omitempty"`
+	// open asks the TUI to open the delivered file with its machine's default
+	// application once the copy lands (the in-instance `fleet open` / fo). The
+	// TUI honours it only when dst is on its own machine (or empty).
+	Open          bool `protobuf:"varint,5,opt,name=open,proto3" json:"open,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -724,6 +728,13 @@ func (x *FileCopy) GetDst() string {
 	return ""
 }
 
+func (x *FileCopy) GetOpen() bool {
+	if x != nil {
+		return x.Open
+	}
+	return false
+}
+
 var File_watch_proto protoreflect.FileDescriptor
 
 const file_watch_proto_rawDesc = "" +
@@ -763,12 +774,13 @@ const file_watch_proto_rawDesc = "" +
 	"\bdata_dir\x18\x02 \x01(\tH\x00R\adataDir\x88\x01\x01\x12\x14\n" +
 	"\x05fleet\x18\x03 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x04 \x01(\tR\binstanceB\v\n" +
-	"\t_data_dir\"`\n" +
+	"\t_data_dir\"t\n" +
 	"\bFileCopy\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12\x10\n" +
 	"\x03src\x18\x03 \x01(\tR\x03src\x12\x10\n" +
-	"\x03dst\x18\x04 \x01(\tR\x03dst*\x8a\x01\n" +
+	"\x03dst\x18\x04 \x01(\tR\x03dst\x12\x12\n" +
+	"\x04open\x18\x05 \x01(\bR\x04open*\x8a\x01\n" +
 	"\rRemoteMcpConn\x12\x1f\n" +
 	"\x1bREMOTE_MCP_CONN_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aREMOTE_MCP_CONN_CONNECTING\x10\x01\x12\x1d\n" +

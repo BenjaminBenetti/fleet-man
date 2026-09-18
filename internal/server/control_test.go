@@ -18,6 +18,7 @@ type openEvent struct {
 // copyEvent is one decoded file.copy the registry forwarded via onCopy.
 type copyEvent struct {
 	fleet, instance, src, dst string
+	open                      bool
 }
 
 // shortHome creates a temp HOME under /tmp and points $HOME at it. Not
@@ -75,9 +76,9 @@ func TestControlSyncRoundTrip(t *testing.T) {
 		case events <- openEvent{f, i, url}:
 		default:
 		}
-	}, func(f, i, src, dst string) {
+	}, func(f, i, src, dst string, open bool) {
 		select {
-		case copies <- copyEvent{f, i, src, dst}:
+		case copies <- copyEvent{f, i, src, dst, open}:
 		default:
 		}
 	}, nil)
@@ -117,24 +118,26 @@ func TestControlSyncRoundTrip(t *testing.T) {
 	}
 
 	// A file.copy envelope on the same socket dispatches to onCopy, carrying
-	// the two endpoints through verbatim.
+	// the two endpoints and the `fleet open` flag through verbatim.
 	const (
 		wantSrc = ":bin/tool"
 		wantDst = "~/builds/tool"
 	)
-	if err := client.CopyFile(wantSrc, wantDst); err != nil {
-		t.Fatalf("CopyFile: %v", err)
-	}
-	select {
-	case ev := <-copies:
-		if ev.fleet != fleetName || ev.instance != instanceName {
-			t.Errorf("copy event = (%q,%q), want (%q,%q)", ev.fleet, ev.instance, fleetName, instanceName)
+	for _, wantOpen := range []bool{false, true} {
+		if err := client.CopyFile(wantSrc, wantDst, wantOpen); err != nil {
+			t.Fatalf("CopyFile(open=%v): %v", wantOpen, err)
 		}
-		if ev.src != wantSrc || ev.dst != wantDst {
-			t.Errorf("copy event = (%q,%q), want (%q,%q)", ev.src, ev.dst, wantSrc, wantDst)
+		select {
+		case ev := <-copies:
+			if ev.fleet != fleetName || ev.instance != instanceName {
+				t.Errorf("copy event = (%q,%q), want (%q,%q)", ev.fleet, ev.instance, fleetName, instanceName)
+			}
+			if ev.src != wantSrc || ev.dst != wantDst || ev.open != wantOpen {
+				t.Errorf("copy event = (%q,%q,open=%v), want (%q,%q,open=%v)", ev.src, ev.dst, ev.open, wantSrc, wantDst, wantOpen)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for file.copy(open=%v) on onCopy", wantOpen)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for file.copy on onCopy")
 	}
 
 	r.syncRunning(&state.State{Fleets: map[string]*fleet.Fleet{}})

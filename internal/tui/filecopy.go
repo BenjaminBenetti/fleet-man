@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
+	"github.com/BenjaminBenetti/fleet-man/internal/platform"
 )
 
 // filecopy.go is the client half of the in-instance `fleet copy` (fc) feature:
@@ -25,36 +28,76 @@ import (
 // build output crossing a WAN tunnel — while still unsticking a wedged stream.
 const fileCopyTimeout = 15 * time.Minute
 
-// fileCopyDoneMsg reports a finished (or failed) background copy.
+// fileCopyDoneMsg reports a finished (or failed) background copy — and, for a
+// fleet open, whether the delivered file was opened.
 type fileCopyDoneMsg struct {
-	src  string // source endpoint as typed inside the instance (for messages)
-	dst  string // destination endpoint as typed inside the instance
-	dest string // final path written (empty on failure)
-	err  error
+	src     string // source endpoint as typed inside the instance (for messages)
+	dst     string // destination endpoint as typed inside the instance
+	dest    string // final path written (empty on failure)
+	err     error  // the copy itself failed
+	opened  bool   // the file was handed to the default application
+	openErr error  // the copy landed but opening it failed
 }
 
-// copyForInstanceCmd runs the copy an in-instance `fc` delegated, off the UI
-// thread. src/dst are the endpoints as typed inside the instance; origFleet/
-// origInstance identify the sender, used to resolve a `:path` (self) endpoint and
-// to default the fleet of a bare instance reference.
-func copyForInstanceCmd(origFleet, origInstance, src, dst string) tea.Cmd {
+// statusLine renders the outcome for the status bar.
+func (msg fileCopyDoneMsg) statusLine() string {
+	switch {
+	case msg.err != nil:
+		return fmt.Sprintf("Copy of %s failed: %v", msg.src, msg.err)
+	case errors.Is(msg.openErr, platform.ErrLauncher):
+		// The error names the path too; the line already says where it landed.
+		return fmt.Sprintf("Copied %s -> %s, but not opened: %v", msg.src, msg.dest, platform.ErrLauncher)
+	case msg.openErr != nil:
+		return fmt.Sprintf("Copied %s -> %s, but could not open it: %v", msg.src, msg.dest, msg.openErr)
+	case msg.opened:
+		return fmt.Sprintf("Opened %s (%s)", msg.src, msg.dest)
+	default:
+		return fmt.Sprintf("Copied %s -> %s", msg.src, msg.dest)
+	}
+}
+
+// copyForInstanceCmd runs the copy an in-instance `fc` (or `fo`) delegated, off
+// the UI thread. req.src/dst are the endpoints as typed inside the instance;
+// req.fleet/instance identify the sender, used to resolve a `:path` (self)
+// endpoint and to default the fleet of a bare instance reference. For a fleet
+// open the delivered file is then handed to this machine's default application.
+func copyForInstanceCmd(req copyRequest) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), fileCopyTimeout)
 		defer cancel()
 		conn, err := fleetclient.Dial(ctx)
 		if err != nil {
-			return fileCopyDoneMsg{src: src, dst: dst, err: err}
+			return fileCopyDoneMsg{src: req.src, dst: req.dst, err: err}
 		}
 		defer conn.Close()
+		dstEnd := resolveTUIEndpoint(req.dst, req.fleet, req.instance)
 		res, err := fleetclient.Copy(ctx, conn.Service(),
-			resolveTUIEndpoint(src, origFleet, origInstance),
-			resolveTUIEndpoint(dst, origFleet, origInstance),
+			resolveTUIEndpoint(req.src, req.fleet, req.instance),
+			dstEnd,
 			tuiLocalPolicy{})
 		if err != nil {
-			return fileCopyDoneMsg{src: src, dst: dst, err: err}
+			return fileCopyDoneMsg{src: req.src, dst: req.dst, err: err}
 		}
-		return fileCopyDoneMsg{src: src, dst: dst, dest: res.DestPath}
+		done := fileCopyDoneMsg{src: req.src, dst: req.dst, dest: res.DestPath}
+		if req.open {
+			done.dest, done.openErr = openDelivered(dstEnd, res.DestPath)
+			done.opened = done.openErr == nil
+		}
+		return done
 	}
+}
+
+// openDelivered hands a just-copied file to this machine's default application
+// and returns the (absolute) path it reported. It refuses when the destination
+// was not this machine: the path would then be an in-instance one, and opening
+// a same-named local file would be both wrong and a way for a crafted envelope
+// to open arbitrary host paths. platform.OpenFile additionally refuses anything
+// the opener would launch rather than view (executables, .desktop, .app, ...).
+func openDelivered(dst fleetclient.ResolvedEndpoint, dest string) (string, error) {
+	if !dst.Local {
+		return dest, errors.New("destination is not on this machine")
+	}
+	return platform.OpenFile(dest)
 }
 
 // copyDstLabel renders a destination for the status line — the empty 1-arg
