@@ -80,6 +80,16 @@ func (m *model) forgetHostKeyRejections(url string) {
 	}
 }
 
+// hasHostKeyRejection reports whether a rejection is on record for url.
+func (m *model) hasHostKeyRejection(url string) bool {
+	for k := range m.hostKeyDeclined {
+		if strings.HasPrefix(k, url+"|") {
+			return true
+		}
+	}
+	return false
+}
+
 // hostKeyPromptShowing reports whether the overlay is up.
 func (m *model) hostKeyPromptShowing() bool { return m.hostKeyPrompt != nil }
 

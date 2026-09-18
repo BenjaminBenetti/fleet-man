@@ -113,10 +113,13 @@ func (t Target) destination() string {
 var sshBaseArgs = []string{
 	"-o", "BatchMode=yes",
 	"-o", "StrictHostKeyChecking=yes",
-	// Never let ssh learn a host's OTHER key types on its own (its default
-	// UpdateHostKeys would append them, hashed, after the first verified
-	// connection): the one line the user accepted is the only line written.
+	// Never let ssh add to known_hosts on its own: its default UpdateHostKeys
+	// would append the host's OTHER key types (hashed) after the first
+	// verified connection, and CheckHostIP (on by default before OpenSSH 8.5)
+	// would add an "<ip> <same key>" line. The one line the user accepted is
+	// the only line written.
 	"-o", "UpdateHostKeys=no",
+	"-o", "CheckHostIP=no",
 	"-o", "ConnectTimeout=15",
 	"-o", "ServerAliveInterval=15",
 	"-o", "ServerAliveCountMax=3",

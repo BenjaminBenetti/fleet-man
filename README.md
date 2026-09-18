@@ -496,7 +496,10 @@ after the fact: no key is trusted without a person seeing its fingerprint.
 A **changed** key — the host is known, but presents a different key — is the
 man-in-the-middle warning, so it is never offered for acceptance. The
 connection fails with a message naming the offending `known_hosts` file and
-line reported by `ssh`; verify the host and fix that line by hand.
+line reported by `ssh`; verify the host and fix that line by hand. A planned
+host-key rotation looks the same to fleet (with `UpdateHostKeys=no` it never
+learns new keys in advance), so after rotating a host's keys expect this
+message and update the line yourself.
 
 The plain CLI stays non-interactive: `FLEET_SSH=ssh://user@host fleet ls`
 against a host with an unknown key fails fast, telling you the key is not

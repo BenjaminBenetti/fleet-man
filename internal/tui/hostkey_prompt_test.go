@@ -372,18 +372,67 @@ func TestArmadaSelectEnterRetriesRejectedCurrent(t *testing.T) {
 		t.Fatalf("accepting for the current connection should reconnect; message=%q", m.message)
 	}
 
-	// A healthy current entry still just says so. (Opening the dropdown
-	// re-pings every remote, so the connected status is set afterwards, as a
-	// ping result would be.)
+	// A healthy current entry says so — including in the window right after
+	// the dropdown opened, when its own re-ping is still in flight (the entry
+	// reads Pinging, with no rejection on record).
+	m.armadaStatus["ssh://qa@fleet-remote"] = armadaStatus{state: armadaStatusConnected}
 	fp.openArmadaSelect(m)
 	for i, e := range m.armadaEntries() {
 		if e.current {
 			fp.armadaSel.dialogRow = i
 		}
 	}
-	m.armadaStatus["ssh://qa@fleet-remote"] = armadaStatus{state: armadaStatusConnected}
+	if m.armadaStatus["ssh://qa@fleet-remote"].state != armadaStatusPinging {
+		t.Fatal("setup: opening the dropdown re-pings the current entry")
+	}
 	if cmd := fp.updateArmadaSelect(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil || !strings.Contains(m.message, "Already connected") {
-		t.Fatalf("a connected current entry: cmd=%v message=%q", cmd != nil, m.message)
+		t.Fatalf("a healthy current entry mid-ping: cmd=%v message=%q", cmd != nil, m.message)
+	}
+}
+
+// TestArmadaSelectRetryShowsOutcome: an explicit retry from the selector that
+// does not open the prompt replaces "Retrying …" with its outcome, success or
+// failure (the dropdown has closed, so its row can't show it).
+func TestArmadaSelectRetryShowsOutcome(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_TOKEN", "")
+	t.Setenv("FLEET_SERVER", "")
+	t.Setenv("FLEET_SSH", "ssh://qa@fleet-remote")
+	origPing := pingArmadaRemote
+	pingArmadaRemote = func(string, string) error { return nil }
+	defer func() { pingArmadaRemote = origPing }()
+	m := armadaTestModel(nil)
+	m.armadaRemotes = []configutil.ArmadaRemote{{URL: "ssh://qa@fleet-remote"}}
+	fp := m.fleetPage
+
+	retry := func() {
+		m.armadaStatus["ssh://qa@fleet-remote"] = armadaStatus{state: armadaStatusError, err: "connection refused"}
+		fp.openArmadaSelect(m)
+		m.armadaStatus["ssh://qa@fleet-remote"] = armadaStatus{state: armadaStatusError, err: "connection refused"} // the sweep's result landed
+		for i, e := range m.armadaEntries() {
+			if e.current {
+				fp.armadaSel.dialogRow = i
+			}
+		}
+		if cmd := fp.updateArmadaSelect(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil || !strings.Contains(m.message, "Retrying") {
+			t.Fatalf("an erroring current entry should retry: cmd=%v message=%q", cmd != nil, m.message)
+		}
+	}
+	retry()
+	m.handleArmadaMsg(armadaPingResultMsg{url: "ssh://qa@fleet-remote"})
+	if m.message != "Connected to fleet-remote" || m.armadaStatus["ssh://qa@fleet-remote"].state != armadaStatusConnected {
+		t.Fatalf("successful retry: message=%q", m.message)
+	}
+	retry()
+	m.handleArmadaMsg(armadaPingResultMsg{url: "ssh://qa@fleet-remote", err: status.Error(codes.Unavailable, "x")})
+	if m.message != "fleet-remote: ssh tunnel unreachable" {
+		t.Fatalf("failed retry: message=%q", m.message)
+	}
+	// A background sweep result never touches the status line.
+	m.message = "untouched"
+	m.handleArmadaMsg(armadaPingResultMsg{url: "ssh://qa@fleet-remote"})
+	if m.message != "untouched" {
+		t.Fatalf("background result changed the message: %q", m.message)
 	}
 }
 

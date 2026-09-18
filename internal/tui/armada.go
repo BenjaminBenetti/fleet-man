@@ -214,20 +214,34 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 		return tea.Batch(armadaPingTickCmd(), m.pingAllArmadaCmd())
 
 	case armadaPingResultMsg:
+		explicit := m.armadaExplicitPing[msg.url]
+		delete(m.armadaExplicitPing, msg.url)
 		st := armadaStatus{state: armadaStatusConnected}
+		prompted := false
 		if msg.err != nil {
 			st = armadaStatus{state: armadaStatusError, err: armadaPingErrText(msg.url, msg.err)}
 			if uk := fleetclient.UnknownSSHHostKey(msg.err); uk != nil && len(uk.GetKeys()) > 0 {
 				st.err = "unknown host key — press enter to review"
-				// Only a ping the user asked for (enter on the row) prompts; the
-				// background status sweep just shows the state.
-				if m.armadaExplicitPing[msg.url] {
-					m.offerHostKey(msg.url, msg.err, hostKeyOriginPing)
+				// Only a ping the user asked for (enter on the row, or on the
+				// current entry in the Armada selector) prompts; the background
+				// status sweep just shows the state.
+				if explicit {
+					prompted = m.offerHostKey(msg.url, msg.err, hostKeyOriginPing)
 				}
 			}
 		}
-		delete(m.armadaExplicitPing, msg.url)
 		m.armadaStatus[msg.url] = st
+		if explicit && !prompted {
+			// The user asked for this ping and no prompt took it over: show
+			// the outcome on the status line (the selector has closed by now,
+			// so its row can't).
+			host := (armadaEntry{url: msg.url}).host()
+			if msg.err != nil {
+				m.message = host + ": " + st.err
+			} else {
+				m.message = "Connected to " + host
+			}
+		}
 		return nil
 
 	case armadaTestResultMsg:
@@ -796,10 +810,13 @@ func (fleetPage *fleetPage) updateArmadaSelect(m *model, msg tea.Msg) tea.Cmd {
 		fleetPage.mode = viewNormal
 		entry := entries[min(fleetPage.armadaSel.dialogRow, n-1)]
 		if entry.current {
-			if entry.url != "" && m.armadaStatus[entry.url].state != armadaStatusConnected {
-				// The current remote is not known to be connected (its row says
-				// so, and invites this keypress): retry it explicitly — clearing
-				// a host key the user rejected earlier so the prompt can reopen.
+			// Retry the current remote only when it is KNOWN bad: its row shows
+			// an error (and invites this keypress), or the dropdown's own
+			// re-ping is still in flight but a host key the user rejected is on
+			// record. A healthy connection that merely hasn't answered the
+			// re-ping yet stays "Already connected".
+			st := m.armadaStatus[entry.url].state
+			if entry.url != "" && (st == armadaStatusError || (st == armadaStatusPinging && m.hasHostKeyRejection(entry.url))) {
 				m.forgetHostKeyRejections(entry.url)
 				m.armadaExplicitPing[entry.url] = true
 				m.armadaStatus[entry.url] = armadaStatus{state: armadaStatusPinging}
