@@ -33,26 +33,35 @@ const discoverTimeout = 45 * time.Second
 //	FLEET_NO_DAEMON           no daemon and none could be started (fleet not
 //	                          installed, or the client command failed)
 //
-// ssh.port is written when the SSH listener comes up and removed when it stops
-// or the daemon exits; server.version is written at the END of daemon startup
-// (after the listener converged) and removed on exit, so once it exists the
-// port file is either there or never will be — the wait loop keys on both.
+// Liveness is established by RUNNING a fleet client command whenever a fleet
+// binary can be found — `fleet list` connects to the daemon's socket,
+// auto-spawns one if none answers (and relaunches a version-skewed one), and
+// fails if no daemon can be had. The hint files alone are not trusted for
+// that: ssh.port and server.version are removed only on an orderly shutdown,
+// so after a crash they would describe a daemon that is gone. They are read
+// only once the daemon is known to be up (or, with no binary to run, as a
+// best-effort fallback). ssh.port is written when the SSH listener comes up;
+// server.version is written at the END of daemon startup (after the listener
+// converged), so once it exists the port file is either there or never will
+// be — the post-spawn wait loop keys on both.
 const discoverScript = `d="$HOME/.fleet"
-if [ ! -s "$d/ssh.port" ] && [ ! -e "$d/server.version" ]; then
-  started=
-  for c in "$(command -v fleet 2>/dev/null)" "$HOME/.local/bin/fleet" "$HOME/go/bin/fleet" /usr/local/bin/fleet /opt/homebrew/bin/fleet; do
-    if [ -n "$c" ] && [ -x "$c" ]; then
-      if "$c" list >/dev/null 2>&1 </dev/null; then started=1; fi
-      break
+found=
+for c in "$(command -v fleet 2>/dev/null)" "$HOME/.local/bin/fleet" "$HOME/go/bin/fleet" /usr/local/bin/fleet /opt/homebrew/bin/fleet; do
+  if [ -n "$c" ] && [ -x "$c" ]; then
+    found=1
+    if ! "$c" list >/dev/null 2>&1 </dev/null; then
+      echo FLEET_NO_DAEMON
+      exit 0
     fi
-  done
-  if [ -n "$started" ]; then
-    i=0
-    while [ ! -s "$d/ssh.port" ] && [ ! -e "$d/server.version" ] && [ "$i" -lt 10 ]; do
-      sleep 1
-      i=$((i+1))
-    done
+    break
   fi
+done
+if [ -n "$found" ]; then
+  i=0
+  while [ ! -s "$d/ssh.port" ] && [ ! -e "$d/server.version" ] && [ "$i" -lt 10 ]; do
+    sleep 1
+    i=$((i+1))
+  done
 fi
 if [ -s "$d/ssh.port" ] && [ -s "$d/mcp.token" ]; then
   printf 'FLEET_OK %s %s\n' "$(cat "$d/ssh.port")" "$(cat "$d/mcp.token")"
@@ -116,7 +125,8 @@ func parseDiscovery(out string) (Discovery, error) {
 		case strings.HasPrefix(line, "FLEET_OK "):
 			fields := strings.Fields(line)
 			if len(fields) != 3 {
-				return Discovery{}, fmt.Errorf("malformed discovery reply: %q", line)
+				// Never echo the line: its third field is the bearer token.
+				return Discovery{}, fmt.Errorf("malformed discovery reply: want 3 fields, got %d", len(fields))
 			}
 			port, err := strconv.Atoi(fields[1])
 			if err != nil || port <= 0 || port > 65535 {

@@ -20,9 +20,15 @@ import (
 // bearer token per RPC, exactly like the gateway endpoint minus the routing
 // header.
 
-// sshResolveTimeout bounds one resolve: the local daemon may have to auto-spawn,
-// then ssh (connect + auth + a possible remote daemon start) and verify.
-const sshResolveTimeout = 90 * time.Second
+// SSHResolveTimeout bounds one resolve: the local daemon may have to auto-spawn,
+// then ssh (connect + auth + a possible remote daemon start) and verify — the
+// daemon's own bring-up timeouts (discovery, forward readiness, Hello) sum to
+// under this, so a failure is always reported with ITS reason rather than as a
+// bare client-side timeout. The caller's ctx may still be shorter; then the
+// client just stops waiting while the daemon finishes the bring-up in the
+// background, and the next dial finds the tunnel up. Exported so the TUI can
+// size its connection-test / ping budget for ssh remotes to match.
+const SSHResolveTimeout = 90 * time.Second
 
 // sshEndpoint is a resolved ssh:// remote. Not auto-spawnable (the daemon is on
 // another machine); IsLocal is false so the version handshake treats a mismatch
@@ -36,7 +42,7 @@ type sshEndpoint struct {
 // resolveSSHRemote asks the LOCAL daemon for the tunnel endpoint of rawURL.
 // Package var so the TUI/CLI tests can stub the round trip.
 var resolveSSHRemote = func(ctx context.Context, rawURL string) (addr, token string, err error) {
-	rctx, cancel := context.WithTimeout(ctx, sshResolveTimeout)
+	rctx, cancel := context.WithTimeout(ctx, SSHResolveTimeout)
 	defer cancel()
 	conn, err := DialLocal(rctx)
 	if err != nil {

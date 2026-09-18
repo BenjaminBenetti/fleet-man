@@ -32,11 +32,14 @@ import (
 // bearer-token Hello — is exercised end to end without a system sshd.
 
 // testSSHServer is the minimal server. remoteHome is the HOME the exec'd
-// command sees (the fake remote's ~/.fleet lives under it).
+// command sees (the fake remote's ~/.fleet lives under it); remoteBin is put
+// first on its PATH and holds a fake `fleet` (the probe's liveness oracle) so
+// a real fleet binary on this machine can never be run against the temp HOME.
 type testSSHServer struct {
 	addr       string
 	hostPub    ssh.PublicKey
 	remoteHome string
+	remoteBin  string
 	stop       func()
 }
 
@@ -64,7 +67,7 @@ func startTestSSHServer(t *testing.T, clientPub ssh.PublicKey, remoteHome string
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &testSSHServer{addr: ln.Addr().String(), hostPub: hostSigner.PublicKey(), remoteHome: remoteHome}
+	srv := &testSSHServer{addr: ln.Addr().String(), hostPub: hostSigner.PublicKey(), remoteHome: remoteHome, remoteBin: fakeFleet(t, "exit 0\n")}
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	srv.stop = func() {
@@ -128,7 +131,7 @@ func (s *testSSHServer) handleSession(newCh ssh.NewChannel) {
 			}
 			_ = req.Reply(true, nil)
 			cmd := exec.Command("sh", "-c", payload.Command)
-			cmd.Env = []string{"HOME=" + s.remoteHome, "PATH=/usr/bin:/bin"}
+			cmd.Env = []string{"HOME=" + s.remoteHome, "PATH=" + s.remoteBin + ":/usr/bin:/bin"}
 			cmd.Stdin = ch
 			cmd.Stdout = ch
 			cmd.Stderr = ch.Stderr()

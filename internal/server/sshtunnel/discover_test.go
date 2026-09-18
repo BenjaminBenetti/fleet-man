@@ -60,28 +60,29 @@ func runScript(t *testing.T, home, fakeBin string) string {
 	return out.String()
 }
 
-// TestDiscoverScript runs the real remote-side probe under sh across its three
-// outcomes, so the shell and the Go parser are proven against each other.
+// TestDiscoverScript runs the real remote-side probe under sh across its
+// outcomes, so the shell and the Go parser are proven against each other. The
+// fake `fleet list` is the liveness oracle: its exit status decides whether the
+// hint files may be trusted.
 func TestDiscoverScript(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, ".fleet")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	broken := fakeFleet(t, "exit 1\n") // no daemon can be had
+	alive := fakeFleet(t, "exit 0\n")  // daemon answers (already up, or just spawned)
 
-	// Nothing there, and the client command fails (fleet can't start a daemon):
-	// no daemon — and no wait loop, since nothing was started.
-	broken := fakeFleet(t, "exit 1\n")
+	// Nothing there and no daemon can be started: no daemon, no wait loop.
 	if _, err := parseDiscovery(runScript(t, home, broken)); !errors.Is(err, ErrNoDaemon) {
 		t.Fatalf("empty ~/.fleet: want ErrNoDaemon, got %v", err)
 	}
 
-	// A running daemon (server.version) without the SSH listener: mode off; the
-	// script must not even try to spawn (a fake that would "succeed" is unused).
+	// A running daemon (server.version) without the SSH listener: mode off.
 	if err := os.WriteFile(filepath.Join(dir, "server.version"), []byte("v1"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parseDiscovery(runScript(t, home, broken)); !errors.Is(err, ErrSSHModeOff) {
+	if _, err := parseDiscovery(runScript(t, home, alive)); !errors.Is(err, ErrSSHModeOff) {
 		t.Fatalf("version but no port: want ErrSSHModeOff, got %v", err)
 	}
 
@@ -92,9 +93,66 @@ func TestDiscoverScript(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "mcp.token"), []byte("tok-abc\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	d, err := parseDiscovery(runScript(t, home, broken))
+	d, err := parseDiscovery(runScript(t, home, alive))
 	if err != nil || d != (Discovery{Port: 41234, Token: "tok-abc"}) {
 		t.Fatalf("listener up: %+v, %v", d, err)
+	}
+
+	// STALE hints after a crash (both files present, but no daemon answers and
+	// none can be started): the files must not be believed.
+	if _, err := parseDiscovery(runScript(t, home, broken)); !errors.Is(err, ErrNoDaemon) {
+		t.Fatalf("stale hints with a dead daemon: want ErrNoDaemon, got %v", err)
+	}
+}
+
+// TestDiscoverScriptNoBinaryTrustsFiles: with no fleet binary anywhere the
+// script has no liveness oracle and falls back to the hint files.
+func TestDiscoverScriptNoBinaryTrustsFiles(t *testing.T) {
+	for _, p := range []string{"/usr/local/bin/fleet", "/opt/homebrew/bin/fleet"} {
+		if _, err := os.Stat(p); err == nil {
+			t.Skipf("%s exists; the no-binary case cannot be isolated here", p)
+		}
+	}
+	home := t.TempDir()
+	dir := filepath.Join(home, ".fleet")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A PATH holding only the tools the script needs — no fleet.
+	bin := t.TempDir()
+	for _, tool := range []string{"cat", "sleep"} {
+		p, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("no %s", tool)
+		}
+		if err := os.Symlink(p, filepath.Join(bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	run := func() string {
+		cmd := exec.Command(sh)
+		cmd.Stdin = strings.NewReader(discoverScript)
+		cmd.Env = []string{"HOME=" + home, "PATH=" + bin}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("script: %v", err)
+		}
+		return string(out)
+	}
+	if _, err := parseDiscovery(run()); !errors.Is(err, ErrNoDaemon) {
+		t.Fatalf("no files, no binary: want ErrNoDaemon, got %v", err)
+	}
+	for name, val := range map[string]string{"ssh.port": "41234", "mcp.token": "tok", "server.version": "v1"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(val), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if d, err := parseDiscovery(run()); err != nil || d != (Discovery{Port: 41234, Token: "tok"}) {
+		t.Fatalf("files, no binary: %+v, %v", d, err)
 	}
 }
 

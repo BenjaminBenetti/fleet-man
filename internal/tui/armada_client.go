@@ -60,10 +60,27 @@ var saveArmadaLocal = func(remotes []configutil.ArmadaRemote) error {
 	return err
 }
 
+// armadaSSHTimeout bounds a ping / connection test of an ssh:// remote: the
+// local daemon's tunnel bring-up (fleetclient.SSHResolveTimeout, which covers
+// ssh connect + auth, a possible remote daemon start, and the verifying Hello)
+// plus the local dial that may auto-spawn the daemon first. Far longer than a
+// gateway ping, but a gateway ping is one RPC; this one may be starting a
+// daemon two hops away. The first "pinging…" of a cold remote is the price.
+const armadaSSHTimeout = fleetclient.SSHResolveTimeout + armadaLocalTimeout
+
+// armadaPingTimeout is the budget for pinging url: the long one for an ssh
+// remote, the registry-RPC one for a gateway.
+func armadaPingTimeout(url string) time.Duration {
+	if fleetclient.IsSSHURL(url) {
+		return armadaSSHTimeout
+	}
+	return armadaLocalTimeout
+}
+
 // pingArmadaRemote runs one Hello round trip against a registered remote.
 // Package var so tests can stub network probing.
 var pingArmadaRemote = func(url, token string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), armadaLocalTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), armadaPingTimeout(url))
 	defer cancel()
 	_, err := fleetclient.Ping(ctx, url, token)
 	return err

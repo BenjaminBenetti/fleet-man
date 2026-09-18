@@ -255,23 +255,129 @@ func TestResolveWrongTokenFails(t *testing.T) {
 	}
 }
 
-func TestPruneKillsDroppedRemotes(t *testing.T) {
+// TestResolveSpentCtxLeavesLiveForwardAlone: a caller whose ctx is already
+// done gets ctx.Err() back, and the (healthy, shared) forward is NOT torn
+// down — the liveness verdict must never come from the caller's deadline.
+func TestResolveSpentCtxLeavesLiveForwardAlone(t *testing.T) {
+	rd := startRemoteDaemon(t, "tok")
+	m, spawns := newTestManager(t, func() (Discovery, error) { return Discovery{Port: rd.port, Token: "tok"}, nil })
+	ep, err := m.Resolve(context.Background(), "ssh://desktop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spent, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := m.Resolve(spent, "ssh://desktop"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("spent ctx: want context.Canceled, got %v", err)
+	}
+	if err := helloThrough(context.Background(), ep.Addr, "tok"); err != nil {
+		t.Fatalf("forward must survive a caller's cancelled ctx: %v", err)
+	}
+	if *spawns != 1 {
+		t.Fatalf("spawns = %d, want 1 (no rebuild)", *spawns)
+	}
+}
+
+// TestResolveWaiterTimeoutDoesNotAbortBringUp: a caller that stops waiting
+// (short deadline) gets a ctx error naming the host, while the bring-up runs
+// to completion under the daemon's context — the next call finds the tunnel up
+// with no extra spawn.
+func TestResolveWaiterTimeoutDoesNotAbortBringUp(t *testing.T) {
+	rd := startRemoteDaemon(t, "tok")
+	release := make(chan struct{})
+	m, spawns := newTestManager(t, func() (Discovery, error) {
+		<-release // hold discovery until the first caller has given up
+		return Discovery{Port: rd.port, Token: "tok"}, nil
+	})
+	short, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err := m.Resolve(short, "ssh://desktop")
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "desktop") {
+		t.Fatalf("impatient caller: want DeadlineExceeded naming the host, got %v", err)
+	}
+	close(release)
+	ep, err := m.Resolve(context.Background(), "ssh://desktop")
+	if err != nil {
+		t.Fatalf("second caller: %v", err)
+	}
+	if err := helloThrough(context.Background(), ep.Addr, "tok"); err != nil || *spawns != 1 {
+		t.Fatalf("bring-up should have completed once in the background: hello=%v spawns=%d", err, *spawns)
+	}
+}
+
+// TestRemoveDuringBringUpDiscardsForward: a remote removed while its bring-up
+// is in flight ends with no forward installed; waiters learn it was removed.
+func TestRemoveDuringBringUpDiscardsForward(t *testing.T) {
+	rd := startRemoteDaemon(t, "tok")
+	release := make(chan struct{})
+	m, _ := newTestManager(t, func() (Discovery, error) {
+		<-release
+		return Discovery{Port: rd.port, Token: "tok"}, nil
+	})
+	result := make(chan error, 1)
+	go func() {
+		_, err := m.Resolve(context.Background(), "ssh://desktop")
+		result <- err
+	}()
+	// Wait until the bring-up is in flight, then remove the remote under it.
+	tgt, _ := ParseURL("ssh://desktop")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		tn := m.tunnelFor(tgt)
+		tn.mu.Lock()
+		inflight := tn.inflight != nil
+		tn.mu.Unlock()
+		if inflight || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	done := make(chan struct{})
+	go func() { m.Remove([]string{"ssh://desktop"}); close(done) }()
+	select {
+	case <-done: // Remove must not wait on the bring-up
+	case <-time.After(time.Second):
+		t.Fatal("Remove blocked on an in-flight bring-up")
+	}
+	close(release)
+	if err := <-result; !errors.Is(err, errRemoved) {
+		t.Fatalf("waiter: want errRemoved, got %v", err)
+	}
+	if len(m.tunnels) != 0 {
+		t.Fatalf("tunnels = %d after remove", len(m.tunnels))
+	}
+}
+
+func TestKey(t *testing.T) {
+	if Key(" SSH://Ben@Desktop/ ") != "ssh://Ben@desktop" || Key("https://gw/abc") != "" || Key("ssh://") != "" {
+		t.Fatalf("Key: %q %q %q", Key(" SSH://Ben@Desktop/ "), Key("https://gw/abc"), Key("ssh://"))
+	}
+}
+
+// TestRemoveKillsOnlyNamedRemotes: Remove tears down exactly the remotes it is
+// given (canonically matched; non-ssh URLs ignored) and leaves the rest — an
+// unregistered tunnel is never collateral. Close then drops everything.
+func TestRemoveKillsOnlyNamedRemotes(t *testing.T) {
 	rd := startRemoteDaemon(t, "tok")
 	m, _ := newTestManager(t, func() (Discovery, error) { return Discovery{Port: rd.port, Token: "tok"}, nil })
-	if _, err := m.Resolve(context.Background(), "ssh://a"); err != nil {
+	epA, err := m.Resolve(context.Background(), "ssh://a")
+	if err != nil {
 		t.Fatal(err)
 	}
 	epB, err := m.Resolve(context.Background(), "ssh://b")
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.Prune([]string{"ssh://b", "https://gw/keep-me-ignored"})
+	m.Remove([]string{"SSH://A/", "https://gw/ignored", "ssh://never-resolved"})
 	if len(m.tunnels) != 1 {
-		t.Fatalf("tunnels after prune = %d, want 1", len(m.tunnels))
+		t.Fatalf("tunnels after remove = %d, want 1", len(m.tunnels))
 	}
 	// b still serves; a's forward is gone.
 	if err := helloThrough(context.Background(), epB.Addr, "tok"); err != nil {
 		t.Fatalf("kept remote should still answer: %v", err)
+	}
+	if _, err := net.DialTimeout("tcp", epA.Addr, 200*time.Millisecond); err == nil {
+		t.Fatal("removed remote's forward should be closed")
 	}
 	m.Close()
 	deadline := time.Now().Add(2 * time.Second)

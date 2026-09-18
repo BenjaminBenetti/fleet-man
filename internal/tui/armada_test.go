@@ -8,6 +8,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -758,5 +759,41 @@ func TestArmadaPingErrTextSSH(t *testing.T) {
 	}
 	if got := armadaPingErrText("https://gw/abc", status.Error(codes.Unavailable, "x")); got != "gateway unreachable" {
 		t.Fatalf("Unavailable (gateway) text = %q", got)
+	}
+}
+
+// TestArmadaCurrentBadgePrecedence: the badge follows armadaCurrentKey's
+// precedence (gateway, ssh, server) even when several env vars are set.
+func TestArmadaCurrentBadgePrecedence(t *testing.T) {
+	m := armadaTestModel(nil)
+	t.Setenv("FLEET_GATEWAY", "https://gw.example.com/abc")
+	t.Setenv("FLEET_SSH", "ssh://ben@desktop")
+	t.Setenv("FLEET_SERVER", "10.0.0.9:50051")
+	if got := m.armadaCurrentBadge(); got != armadaBadgeGateway {
+		t.Fatalf("all set: badge %q, want %q", got, armadaBadgeGateway)
+	}
+	t.Setenv("FLEET_GATEWAY", "")
+	if got := m.armadaCurrentBadge(); got != armadaBadgeSSH {
+		t.Fatalf("ssh+server: badge %q, want %q", got, armadaBadgeSSH)
+	}
+	t.Setenv("FLEET_SSH", "")
+	if got := m.armadaCurrentBadge(); got != armadaBadgeTCP {
+		t.Fatalf("server only: badge %q, want %q", got, armadaBadgeTCP)
+	}
+	t.Setenv("FLEET_SERVER", "")
+	if got := m.armadaCurrentBadge(); got != "" {
+		t.Fatalf("local: badge %q, want none", got)
+	}
+}
+
+// TestArmadaPingTimeoutBudget: an ssh remote's ping budget covers a full
+// tunnel bring-up (fleetclient.SSHResolveTimeout) plus the local dial; a
+// gateway ping keeps the short budget.
+func TestArmadaPingTimeoutBudget(t *testing.T) {
+	if armadaPingTimeout("ssh://ben@desktop") != fleetclient.SSHResolveTimeout+armadaLocalTimeout {
+		t.Fatalf("ssh budget = %s", armadaPingTimeout("ssh://ben@desktop"))
+	}
+	if armadaPingTimeout("https://gw.example.com/abc") != armadaLocalTimeout {
+		t.Fatalf("gateway budget = %s", armadaPingTimeout("https://gw.example.com/abc"))
 	}
 }

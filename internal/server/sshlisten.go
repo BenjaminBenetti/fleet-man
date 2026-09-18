@@ -51,6 +51,18 @@ func (l *sshListener) Reconcile(enabled bool) {
 	case !enabled && l.srv != nil:
 		l.stopLocked()
 		l.publish("", "")
+	case !enabled:
+		// Off and staying off: make sure no hint from a previous, uncleanly
+		// exited daemon survives (the file is only removed on an orderly stop),
+		// or a remote client's discovery would tunnel to a dead port.
+		removePortFile()
+	}
+}
+
+// removePortFile deletes the ssh.port hint, tolerating its absence.
+func removePortFile() {
+	if err := os.Remove(fleetpaths.SSHPortPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		flog.Warn("remote fleet via ssh: remove ssh.port", "err", err)
 	}
 }
 
@@ -103,8 +115,6 @@ func (l *sshListener) startLocked() {
 func (l *sshListener) stopLocked() {
 	l.srv.Stop() // closes the listener and every live connection
 	l.srv, l.lis = nil, nil
-	if err := os.Remove(fleetpaths.SSHPortPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		flog.Warn("remote fleet via ssh: remove ssh.port", "err", err)
-	}
+	removePortFile()
 	flog.Info("remote fleet via ssh stopped")
 }

@@ -582,9 +582,16 @@ func (e armadaEntry) sshAuthority() string {
 }
 
 // armadaCurrentBadge is the active connection's transport badge for the border
-// selector ("" for local).
+// selector ("" for local). Same precedence as armadaCurrentKey (gateway, then
+// ssh, then plain server), so the badge and the key can never disagree.
 func (m *model) armadaCurrentBadge() string {
-	return armadaURLBadge(os.Getenv(fleetclient.EnvGateway)+os.Getenv(fleetclient.EnvSSH), os.Getenv(fleetclient.EnvServer))
+	if gw := os.Getenv(fleetclient.EnvGateway); gw != "" {
+		return armadaURLBadge(gw, "")
+	}
+	if ssh := os.Getenv(fleetclient.EnvSSH); ssh != "" {
+		return armadaURLBadge(ssh, "")
+	}
+	return armadaURLBadge("", os.Getenv(fleetclient.EnvServer))
 }
 
 // armadaCurrentDisplay is the active connection's short name for the border

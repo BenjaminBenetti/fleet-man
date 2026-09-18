@@ -103,6 +103,27 @@ func TestSSHListenerLifecycle(t *testing.T) {
 	}
 }
 
+// TestSSHListenerDropsStaleHint: a ssh.port left behind by an unclean daemon
+// exit is removed on a Reconcile(false) that finds the listener already off
+// (the daemon's first reconcile in gateway mode), so a remote's discovery can
+// never be pointed at a dead port.
+func TestSSHListenerDropsStaleHint(t *testing.T) {
+	l, published := newTestSSHListener(t, "tok")
+	if _, err := fleetpaths.EnsureDir(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fleetpaths.SSHPortPath(), []byte("41234"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l.Reconcile(false)
+	if _, err := os.Stat(fleetpaths.SSHPortPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale ssh.port should be removed, stat err = %v", err)
+	}
+	if len(*published) != 0 {
+		t.Fatalf("an off→off reconcile must publish nothing, got %+v", *published)
+	}
+}
+
 // TestSSHListenerServerBuildFailure: when the bearer token can't be loaded the
 // listener publishes the error and opens nothing.
 func TestSSHListenerServerBuildFailure(t *testing.T) {
