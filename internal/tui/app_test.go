@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -416,5 +417,36 @@ func TestReconcileSavedGroupsMirrorsServerState(t *testing.T) {
 	m.reconcileSavedGroups()
 	if got := fp.savedGroups[activeKey]; got.PaneCount != 3 {
 		t.Fatalf("after split close, group PaneCount = %d, want 3 (server copy)", got.PaneCount)
+	}
+}
+
+// TestNewModelSurvivesUnreachableRemote: booting against a remote that can't
+// be reached (here a refused FLEET_SERVER port; an unreachable FLEET_SSH or
+// FLEET_GATEWAY fails the same way) leaves the boot reload's error on the
+// model and an EMPTY state — so the fleet page builds instead of panicking on
+// a nil state (the pre-existing crash QA hit with an untrusted ssh host key).
+func TestNewModelSurvivesUnreachableRemote(t *testing.T) {
+	dead, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := dead.Addr().String()
+	_ = dead.Close()
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_SSH", "")
+	t.Setenv("FLEET_SERVER", addr)
+
+	m := newModel()
+	if m.err == nil {
+		t.Fatal("boot reload against a dead remote should record an error")
+	}
+	if m.st == nil {
+		t.Fatal("m.st must never be nil after a failed boot reload")
+	}
+	m.fleetPage.buildRows(&m) // must not panic
+	for _, r := range m.fleetPage.rows {
+		if r.kind == rowFleetHeader {
+			t.Fatalf("a failed boot reload should list no fleets, got %+v", r)
+		}
 	}
 }

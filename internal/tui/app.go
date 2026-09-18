@@ -188,6 +188,12 @@ func newModel() model {
 	agentSpinnerModel.Style = agentWorkingStyle
 
 	m := model{
+		// Start from an EMPTY state, not nil: the boot reload below fails when
+		// the daemon can't be reached (an unreachable FLEET_SSH / FLEET_GATEWAY
+		// remote, an untrusted host key, …) and only records m.err — the fleet
+		// page must still build (empty, with the error banner) rather than nil-
+		// deref m.st.Fleets in buildRows.
+		st:                 &configutil.State{},
 		creating:           make(map[string]bool),
 		runtime:            make(map[string]*fleetgrpc.InstanceRuntime),
 		portForwards:       portforward.NewManager(),
