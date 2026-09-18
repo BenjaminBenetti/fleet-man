@@ -218,7 +218,7 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 		if msg.err != nil {
 			st = armadaStatus{state: armadaStatusError, err: armadaPingErrText(msg.url, msg.err)}
 			if uk := fleetclient.UnknownSSHHostKey(msg.err); uk != nil && len(uk.GetKeys()) > 0 {
-				st.err = "unknown host key " + uk.GetKeys()[0].GetFingerprint() + " — press enter to review"
+				st.err = "unknown host key — press enter to review"
 				// Only a ping the user asked for (enter on the row) prompts; the
 				// background status sweep just shows the state.
 				if m.armadaExplicitPing[msg.url] {
@@ -796,6 +796,16 @@ func (fleetPage *fleetPage) updateArmadaSelect(m *model, msg tea.Msg) tea.Cmd {
 		fleetPage.mode = viewNormal
 		entry := entries[min(fleetPage.armadaSel.dialogRow, n-1)]
 		if entry.current {
+			if entry.url != "" && m.armadaStatus[entry.url].state != armadaStatusConnected {
+				// The current remote is not known to be connected (its row says
+				// so, and invites this keypress): retry it explicitly — clearing
+				// a host key the user rejected earlier so the prompt can reopen.
+				m.forgetHostKeyRejections(entry.url)
+				m.armadaExplicitPing[entry.url] = true
+				m.armadaStatus[entry.url] = armadaStatus{state: armadaStatusPinging}
+				m.message = "Retrying " + entry.displayName + "…"
+				return pingArmadaCmd(entry.url, entry.token)
+			}
 			m.message = "Already connected to " + entry.displayName
 			return nil
 		}

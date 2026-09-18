@@ -169,8 +169,7 @@ func (m *model) handleHostKeyTrusted(msg hostKeyTrustedMsg) tea.Cmd {
 		return nil
 	}
 	m.armadaStatus[msg.url] = armadaStatus{state: armadaStatusConnected}
-	switch msg.origin {
-	case hostKeyOriginAdd:
+	if msg.origin == hostKeyOriginAdd {
 		// The accept doubled as the connection test (the daemon re-resolved
 		// through the trusted tunnel), so register the remote now — unless the
 		// flow was abandoned while the prompt was up.
@@ -180,15 +179,16 @@ func (m *model) handleHostKeyTrusted(msg hostKeyTrustedMsg) tea.Cmd {
 		}
 		m.message = "Host key trusted"
 		return nil
-	case hostKeyOriginConnect:
-		if armadaCurrentKey() == msg.url {
-			// Reconnect now rather than wait out the Watch stream's backoff.
-			closeMutationConn()
-			m.watchGen = bounceWatchStream()
-			label := (armadaEntry{url: msg.url}).host()
-			m.message = "Host key trusted — connecting to " + label + "…"
-			return switchReloadCmd(label, m.watchGen)
-		}
+	}
+	if armadaCurrentKey() == msg.url {
+		// The connection this TUI is on (whether the prompt came from its own
+		// dial or from the user retrying it): reconnect now rather than wait
+		// out the Watch stream's backoff.
+		closeMutationConn()
+		m.watchGen = bounceWatchStream()
+		label := (armadaEntry{url: msg.url}).host()
+		m.message = "Host key trusted — connecting to " + label + "…"
+		return switchReloadCmd(label, m.watchGen)
 	}
 	m.message = "Host key trusted"
 	return nil
@@ -217,8 +217,8 @@ func (m model) viewHostKeyPrompt() string {
 		where = fmt.Sprintf("%s:%d", uk.GetHost(), uk.GetPort())
 	}
 	title := dialogTitle.Render("⚠ Unknown SSH host key for " + uk.GetName())
-	intro := dialogHint.Render("fleet has never connected to " + where + ". Compare the fingerprint with the host's own\n" +
-		"(on the host: ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub) before accepting.")
+	intro := dialogHint.Render("fleet has never connected to " + where + ". Before accepting, compare the fingerprint " +
+		"with the host's own: on the host, run ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub")
 	var rows strings.Builder
 	rows.WriteString(dialogLabel.Render(fmt.Sprintf("%-11s %s", "Remote", p.url)) + "\n")
 	rows.WriteString(dialogLabel.Render(fmt.Sprintf("%-11s %s", "Key type", primary.GetKeyType())) + "\n")

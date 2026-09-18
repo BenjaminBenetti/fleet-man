@@ -66,7 +66,7 @@ func TestSSHArgs(t *testing.T) {
 	tgt := Target{User: "ben", Host: "desktop", Port: "2222"}
 	args := tgt.sshArgs("-N", "-L", "127.0.0.1:1:127.0.0.1:2")
 	joined := strings.Join(args, " ")
-	for _, want := range []string{"-o BatchMode=yes", "-o ConnectTimeout=15", "-p 2222", "-N -L 127.0.0.1:1:127.0.0.1:2"} {
+	for _, want := range []string{"-o BatchMode=yes", "-o StrictHostKeyChecking=yes", "-o UpdateHostKeys=no", "-o ConnectTimeout=15", "-p 2222", "-N -L 127.0.0.1:1:127.0.0.1:2"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("args %q missing %q", joined, want)
 		}

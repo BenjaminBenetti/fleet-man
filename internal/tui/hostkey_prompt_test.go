@@ -202,7 +202,7 @@ func TestHostKeyPromptOncePerKey(t *testing.T) {
 	if m.hostKeyPromptShowing() {
 		t.Fatal("a background ping must not prompt")
 	}
-	if st := m.armadaStatus["ssh://ben@desktop"]; st.state != armadaStatusError || !strings.Contains(st.err, "unknown host key SHA256:abc") {
+	if st := m.armadaStatus["ssh://ben@desktop"]; st.state != armadaStatusError || !strings.Contains(st.err, "unknown host key") {
 		t.Fatalf("status after background ping = %+v", st)
 	}
 	m.armadaExplicitPing["ssh://ben@desktop"] = true
@@ -322,5 +322,66 @@ func TestSwitchArmadaReasksRejectedKey(t *testing.T) {
 	m.handleArmadaMsg(armadaSwitchedMsg{label: "desktop", gen: m.watchGen, err: errA})
 	if !m.hostKeyPromptShowing() || m.hostKeyPrompt.url != "ssh://ben@desktop" {
 		t.Fatalf("the switch's dial failure should reopen the prompt; message=%q", m.message)
+	}
+}
+
+// TestArmadaSelectEnterRetriesRejectedCurrent: enter on the CURRENT remote in
+// the Armada selector, when it is in error (its row invites the keypress),
+// retries it explicitly — clearing a rejected host key so the prompt can
+// reopen — instead of claiming "Already connected".
+func TestArmadaSelectEnterRetriesRejectedCurrent(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_SERVER", "")
+	t.Setenv("FLEET_SSH", "ssh://qa@fleet-remote")
+	origPing := pingArmadaRemote
+	pingArmadaRemote = func(string, string) error { return nil }
+	defer func() { pingArmadaRemote = origPing }()
+	m := armadaTestModel(nil)
+	m.armadaRemotes = []configutil.ArmadaRemote{{URL: "ssh://qa@fleet-remote"}}
+	errK := unknownKeyErr(t, "ssh://qa@fleet-remote", "SHA256:abc")
+	m.offerHostKey("ssh://qa@fleet-remote", errK, hostKeyOriginConnect)
+	m.resolveHostKeyPrompt("r")
+	if m.armadaStatus["ssh://qa@fleet-remote"].state != armadaStatusError || len(m.hostKeyDeclined) != 1 {
+		t.Fatal("setup: rejected remote should be in error with the rejection recorded")
+	}
+
+	fp := m.fleetPage
+	fp.openArmadaSelect(m)
+	for i, e := range m.armadaEntries() {
+		if e.current {
+			fp.armadaSel.dialogRow = i
+		}
+	}
+	cmd := fp.updateArmadaSelect(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil || strings.Contains(m.message, "Already connected") {
+		t.Fatalf("enter on the erroring current remote should retry it: cmd=%v message=%q", cmd != nil, m.message)
+	}
+	if len(m.hostKeyDeclined) != 0 || !m.armadaExplicitPing["ssh://qa@fleet-remote"] {
+		t.Fatal("the retry must clear the rejection and count as an explicit ping")
+	}
+	// The retry's unknown-key result reopens the prompt; accepting reconnects
+	// the live connection.
+	stubTrust(t, nil)
+	m.handleArmadaMsg(armadaPingResultMsg{url: "ssh://qa@fleet-remote", err: errK})
+	if !m.hostKeyPromptShowing() {
+		t.Fatal("the explicit retry should reopen the prompt")
+	}
+	msg := m.resolveHostKeyPrompt("a")().(hostKeyTrustedMsg)
+	if reload := m.handleHostKeyTrusted(msg); reload == nil || !strings.Contains(m.message, "connecting to") {
+		t.Fatalf("accepting for the current connection should reconnect; message=%q", m.message)
+	}
+
+	// A healthy current entry still just says so. (Opening the dropdown
+	// re-pings every remote, so the connected status is set afterwards, as a
+	// ping result would be.)
+	fp.openArmadaSelect(m)
+	for i, e := range m.armadaEntries() {
+		if e.current {
+			fp.armadaSel.dialogRow = i
+		}
+	}
+	m.armadaStatus["ssh://qa@fleet-remote"] = armadaStatus{state: armadaStatusConnected}
+	if cmd := fp.updateArmadaSelect(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil || !strings.Contains(m.message, "Already connected") {
+		t.Fatalf("a connected current entry: cmd=%v message=%q", cmd != nil, m.message)
 	}
 }

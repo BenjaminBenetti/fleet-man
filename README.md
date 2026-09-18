@@ -489,8 +489,9 @@ one line to your `known_hosts` (creating `~/.ssh` / the file with `0700` /
 `0600` if needed, never touching other lines) and retries the connection;
 **reject** cancels with a status message and writes nothing. The prompt appears
 once per key, not once per connection attempt. fleet never passes
-`StrictHostKeyChecking=accept-new` (or `no`): no key is trusted without a
-person seeing its fingerprint.
+`StrictHostKeyChecking=accept-new` (or `no`), and it runs `ssh` with
+`UpdateHostKeys=no` so ssh cannot quietly learn the host's other key types
+after the fact: no key is trusted without a person seeing its fingerprint.
 
 A **changed** key — the host is known, but presents a different key — is the
 man-in-the-middle warning, so it is never offered for acceptance. The
