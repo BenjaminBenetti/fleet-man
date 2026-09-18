@@ -668,7 +668,10 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	switch {
 	case entry.url != "" && fleetclient.IsSSHURL(entry.url):
 		// The local daemon resolves the tunnel address + token per dial; no
-		// token env (the remote's token never leaves the daemons).
+		// token env (the remote's token never leaves the daemons). An explicit
+		// switch is the user acting on this remote again, so a host key they
+		// rejected earlier may be asked about afresh instead of staying silent.
+		m.forgetHostKeyRejections(entry.url)
 		_ = os.Setenv(fleetclient.EnvSSH, entry.url)
 		_ = os.Unsetenv(fleetclient.EnvGateway)
 		_ = os.Unsetenv(fleetclient.EnvToken)

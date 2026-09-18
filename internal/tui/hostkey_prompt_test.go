@@ -268,3 +268,59 @@ func TestUnknownSSHHostKeyDetailRoundTrip(t *testing.T) {
 	}
 	_ = os.Getenv // keep os imported for the env-driven tests above
 }
+
+// TestHostKeyPromptDoesNotSwallowOtherRemote: an open prompt for remote A
+// must not take over remote B's add-flow test result — B's flow fails normally
+// instead of sitting in its testing stage waiting for a decision about A.
+func TestHostKeyPromptDoesNotSwallowOtherRemote(t *testing.T) {
+	sp := newSettingsPage()
+	m := armadaTestModel(sp)
+	m.armadaRemotes = []configutil.ArmadaRemote{{URL: "ssh://a"}}
+	// An explicit ping of A comes back with an unknown key: the prompt opens for A.
+	m.armadaExplicitPing["ssh://a"] = true
+	m.handleArmadaMsg(armadaPingResultMsg{url: "ssh://a", err: unknownKeyErr(t, "ssh://a", "SHA256:aaa")})
+	if !m.hostKeyPromptShowing() || m.hostKeyPrompt.url != "ssh://a" {
+		t.Fatal("expected the prompt for A")
+	}
+	// Meanwhile B's add-flow test also fails on an unknown key.
+	startAddFlow(t, m, "ssh://b")
+	m.handleArmadaMsg(armadaTestResultMsg{url: "ssh://b", err: unknownKeyErr(t, "ssh://b", "SHA256:bbb")})
+	if sp.armadaAddStage != armadaAddNone || !strings.Contains(m.message, "Connection test failed") {
+		t.Fatalf("B's flow should fail normally: stage=%v message=%q", sp.armadaAddStage, m.message)
+	}
+	if m.hostKeyPrompt.url != "ssh://a" {
+		t.Fatal("A's prompt must stay up, unchanged")
+	}
+	// A's own concurrent copy is still shared.
+	if !m.offerHostKey("ssh://a", unknownKeyErr(t, "ssh://a", "SHA256:aaa"), hostKeyOriginConnect) {
+		t.Fatal("the same remote's copy should be swallowed by the open prompt")
+	}
+}
+
+// TestSwitchArmadaReasksRejectedKey: an explicit switch to a remote whose key
+// was rejected earlier clears the rejection, so the switch's dial failure
+// reopens the prompt instead of leaving "Switching to …" hanging silently.
+func TestSwitchArmadaReasksRejectedKey(t *testing.T) {
+	t.Setenv("FLEET_GATEWAY", "")
+	t.Setenv("FLEET_SERVER", "")
+	t.Setenv("FLEET_SSH", "ssh://ben@desktop")
+	m := armadaTestModel(nil)
+	errA := unknownKeyErr(t, "ssh://ben@desktop", "SHA256:abc")
+
+	m.offerHostKey("ssh://ben@desktop", errA, hostKeyOriginConnect)
+	m.resolveHostKeyPrompt("r")
+	if !m.offerHostKey("ssh://ben@desktop", errA, hostKeyOriginConnect) || m.hostKeyPromptShowing() {
+		t.Fatal("after a reject, a background reconnect stays quiet")
+	}
+
+	// Switch away and explicitly back.
+	m.switchArmada(m.armadaEntries()[0]) // local
+	m.switchArmada(armadaEntry{url: "ssh://ben@desktop"})
+	if len(m.hostKeyDeclined) != 0 {
+		t.Fatalf("an explicit switch should clear the remote's rejections, got %v", m.hostKeyDeclined)
+	}
+	m.handleArmadaMsg(armadaSwitchedMsg{label: "desktop", gen: m.watchGen, err: errA})
+	if !m.hostKeyPromptShowing() || m.hostKeyPrompt.url != "ssh://ben@desktop" {
+		t.Fatalf("the switch's dial failure should reopen the prompt; message=%q", m.message)
+	}
+}

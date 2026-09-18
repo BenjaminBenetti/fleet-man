@@ -68,6 +68,17 @@ func hostKeyDeclineKey(url string, uk *fleetgrpc.UnknownSSHHostKey) string {
 	return url + "|" + fp
 }
 
+// forgetHostKeyRejections clears every remembered rejection for url: the user
+// is acting on that remote again (an explicit switch), so its key may be asked
+// about afresh rather than silently refused.
+func (m *model) forgetHostKeyRejections(url string) {
+	for k := range m.hostKeyDeclined {
+		if strings.HasPrefix(k, url+"|") {
+			delete(m.hostKeyDeclined, k)
+		}
+	}
+}
+
 // hostKeyPromptShowing reports whether the overlay is up.
 func (m *model) hostKeyPromptShowing() bool { return m.hostKeyPrompt != nil }
 
@@ -80,8 +91,12 @@ func (m *model) offerHostKey(url string, err error, origin hostKeyOrigin) bool {
 	if uk == nil || len(uk.GetKeys()) == 0 {
 		return false
 	}
-	if m.hostKeyPrompt != nil {
-		return true // one prompt at a time; a concurrent dial's copy is swallowed
+	if p := m.hostKeyPrompt; p != nil {
+		// One prompt at a time — but only the SAME remote's concurrent dials
+		// share it. Another remote's error must take its normal failure path
+		// (e.g. the add flow cancels with "Connection test failed"), or its
+		// flow would sit waiting for a decision that is about a different host.
+		return p.url == url
 	}
 	if origin == hostKeyOriginConnect && m.hostKeyDeclined[hostKeyDeclineKey(url, uk)] {
 		return true // rejected earlier; background reconnects stay quiet
