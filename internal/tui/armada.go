@@ -217,7 +217,16 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 		st := armadaStatus{state: armadaStatusConnected}
 		if msg.err != nil {
 			st = armadaStatus{state: armadaStatusError, err: armadaPingErrText(msg.url, msg.err)}
+			if uk := fleetclient.UnknownSSHHostKey(msg.err); uk != nil && len(uk.GetKeys()) > 0 {
+				st.err = "unknown host key " + uk.GetKeys()[0].GetFingerprint() + " — press enter to review"
+				// Only a ping the user asked for (enter on the row) prompts; the
+				// background status sweep just shows the state.
+				if m.armadaExplicitPing[msg.url] {
+					m.offerHostKey(msg.url, msg.err, hostKeyOriginPing)
+				}
+			}
 		}
+		delete(m.armadaExplicitPing, msg.url)
 		m.armadaStatus[msg.url] = st
 		return nil
 
@@ -226,6 +235,11 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 			return nil // flow cancelled or page left; drop the stale result
 		}
 		if msg.err != nil {
+			if m.offerHostKey(msg.url, msg.err, hostKeyOriginAdd) {
+				// The flow stays in its testing stage under the prompt; accept
+				// finishes the registration, reject cancels it.
+				return nil
+			}
 			settingsPage.cancelArmadaAdd()
 			m.message = fmt.Sprintf("Connection test failed: %s", armadaPingErrText(msg.url, msg.err))
 			return nil
@@ -265,6 +279,11 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if msg.err != nil {
+			// An unknown ssh host key is the user's call: prompt instead of
+			// waiting for a connection that can never come.
+			if url := currentSSHURL(); url != "" && m.offerHostKey(url, msg.err, hostKeyOriginConnect) {
+				return nil
+			}
 			// The new endpoint isn't answering yet (slow remote, or a local
 			// auto-spawn still coming up). Don't set the sticky m.err banner —
 			// the bounced Watch stream keeps retrying and pushes IncludeInitial

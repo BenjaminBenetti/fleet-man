@@ -19,10 +19,12 @@ import (
 const forwardReadyTimeout = 30 * time.Second
 
 // forwardProc is a running forward: Done closes when the process exits, Err is
-// its captured stderr (last line) once done, Kill tears it down.
+// its captured stderr's last line once done (the diagnostic ssh prints last),
+// Stderr the whole capture (for host-key classification), Kill tears it down.
 type forwardProc interface {
 	Done() <-chan struct{}
 	Err() string
+	Stderr() string
 	Kill()
 }
 
@@ -36,6 +38,7 @@ type sshForward struct {
 
 func (f *sshForward) Done() <-chan struct{} { return f.done }
 func (f *sshForward) Err() string           { return lastLine(f.stderr.String()) }
+func (f *sshForward) Stderr() string        { return f.stderr.String() }
 func (f *sshForward) Kill() {
 	f.once.Do(func() {
 		if f.cmd.Process != nil {

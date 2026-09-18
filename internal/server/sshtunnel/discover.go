@@ -101,6 +101,11 @@ func discoverOverSSH(ctx context.Context, t Target) (Discovery, error) {
 	}
 	if runErr != nil {
 		// ssh itself failed (auth, host key, unreachable): its stderr says why.
+		// A host-key refusal becomes a structured error (hostkey.go) so the
+		// client can show the fingerprint and ask, or name the changed key.
+		if hkErr := hostKeyError(ctx, t, stderr.String()); hkErr != nil {
+			return Discovery{}, hkErr
+		}
 		if line := lastLine(stderr.String()); line != "" {
 			return Discovery{}, fmt.Errorf("ssh: %s", line)
 		}

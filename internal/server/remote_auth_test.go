@@ -94,6 +94,9 @@ func TestTunnelDeniesArmadaEvenWithToken(t *testing.T) {
 	if _, err := client.ResolveArmadaRemote(withToken, &fleetgrpc.ResolveArmadaRemoteRequest{Url: "ssh://x"}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("ResolveArmadaRemote over tunnel WITH token: want PermissionDenied, got %v", err)
 	}
+	if _, err := client.TrustSSHHostKey(withToken, &fleetgrpc.TrustSSHHostKeyRequest{Url: "ssh://x", KnownHostsLine: "x ssh-ed25519 AAAA"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("TrustSSHHostKey over tunnel WITH token: want PermissionDenied, got %v", err)
+	}
 
 	// The same RPCs are served on the auth-less local server.
 	isolateFleetDir(t)

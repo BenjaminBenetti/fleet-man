@@ -26,7 +26,7 @@ const file_service_proto_rawDesc = "" +
 	"\n" +
 	"\rservice.proto\x12\tfleetgrpc\x1a\farmada.proto\x1a\rcontrol.proto\x1a\vwatch.proto\x1a\n" +
 	"jobs.proto\x1a\fconfig.proto\x1a\n" +
-	"exec.proto\x1a\rinspect.proto2\xf8\x16\n" +
+	"exec.proto\x1a\rinspect.proto2\xcf\x17\n" +
 	"\fFleetService\x127\n" +
 	"\x05Hello\x12\x17.fleetgrpc.HelloRequest\x1a\x15.fleetgrpc.HelloReply\x12@\n" +
 	"\bShutdown\x12\x1a.fleetgrpc.ShutdownRequest\x1a\x18.fleetgrpc.ShutdownReply\x12[\n" +
@@ -53,7 +53,8 @@ const file_service_proto_rawDesc = "" +
 	"\tSetConfig\x12\x1b.fleetgrpc.SetConfigRequest\x1a\x19.fleetgrpc.SetConfigReply\x12C\n" +
 	"\tGetArmada\x12\x1b.fleetgrpc.GetArmadaRequest\x1a\x19.fleetgrpc.GetArmadaReply\x12C\n" +
 	"\tSetArmada\x12\x1b.fleetgrpc.SetArmadaRequest\x1a\x19.fleetgrpc.SetArmadaReply\x12a\n" +
-	"\x13ResolveArmadaRemote\x12%.fleetgrpc.ResolveArmadaRemoteRequest\x1a#.fleetgrpc.ResolveArmadaRemoteReply\x121\n" +
+	"\x13ResolveArmadaRemote\x12%.fleetgrpc.ResolveArmadaRemoteRequest\x1a#.fleetgrpc.ResolveArmadaRemoteReply\x12U\n" +
+	"\x0fTrustSSHHostKey\x12!.fleetgrpc.TrustSSHHostKeyRequest\x1a\x1f.fleetgrpc.TrustSSHHostKeyReply\x121\n" +
 	"\x04Exec\x12\x11.fleetgrpc.ExecIn\x1a\x12.fleetgrpc.ExecOut(\x010\x01\x12^\n" +
 	"\x12ResolveExecCommand\x12$.fleetgrpc.ResolveExecCommandRequest\x1a\".fleetgrpc.ResolveExecCommandReply\x12^\n" +
 	"\x12ResolveLogsCommand\x12$.fleetgrpc.ResolveLogsCommandRequest\x1a\".fleetgrpc.ResolveLogsCommandReply\x124\n" +
@@ -94,44 +95,46 @@ var file_service_proto_goTypes = []any{
 	(*GetArmadaRequest)(nil),              // 23: fleetgrpc.GetArmadaRequest
 	(*SetArmadaRequest)(nil),              // 24: fleetgrpc.SetArmadaRequest
 	(*ResolveArmadaRemoteRequest)(nil),    // 25: fleetgrpc.ResolveArmadaRemoteRequest
-	(*ExecIn)(nil),                        // 26: fleetgrpc.ExecIn
-	(*ResolveExecCommandRequest)(nil),     // 27: fleetgrpc.ResolveExecCommandRequest
-	(*ResolveLogsCommandRequest)(nil),     // 28: fleetgrpc.ResolveLogsCommandRequest
-	(*LogsRequest)(nil),                   // 29: fleetgrpc.LogsRequest
-	(*TriggerLogsRequest)(nil),            // 30: fleetgrpc.TriggerLogsRequest
-	(*ForwardChunk)(nil),                  // 31: fleetgrpc.ForwardChunk
-	(*CopyFileRequest)(nil),               // 32: fleetgrpc.CopyFileRequest
-	(*CopyIntoChunk)(nil),                 // 33: fleetgrpc.CopyIntoChunk
-	(*InspectRepoRequest)(nil),            // 34: fleetgrpc.InspectRepoRequest
-	(*GetCoderTemplateParamsRequest)(nil), // 35: fleetgrpc.GetCoderTemplateParamsRequest
-	(*GetBrowserConfigRequest)(nil),       // 36: fleetgrpc.GetBrowserConfigRequest
-	(*PrepareBrowserRequest)(nil),         // 37: fleetgrpc.PrepareBrowserRequest
-	(*HelloReply)(nil),                    // 38: fleetgrpc.HelloReply
-	(*ShutdownReply)(nil),                 // 39: fleetgrpc.ShutdownReply
-	(*FleetTUIConnectedReply)(nil),        // 40: fleetgrpc.FleetTUIConnectedReply
-	(*GetStateReply)(nil),                 // 41: fleetgrpc.GetStateReply
-	(*Event)(nil),                         // 42: fleetgrpc.Event
-	(*JobEvent)(nil),                      // 43: fleetgrpc.JobEvent
-	(*MutationReply)(nil),                 // 44: fleetgrpc.MutationReply
-	(*DeleteBuildkitCacheReply)(nil),      // 45: fleetgrpc.DeleteBuildkitCacheReply
-	(*DeleteDebCacheReply)(nil),           // 46: fleetgrpc.DeleteDebCacheReply
-	(*DeleteImageCacheReply)(nil),         // 47: fleetgrpc.DeleteImageCacheReply
-	(*GetConfigReply)(nil),                // 48: fleetgrpc.GetConfigReply
-	(*SetConfigReply)(nil),                // 49: fleetgrpc.SetConfigReply
-	(*GetArmadaReply)(nil),                // 50: fleetgrpc.GetArmadaReply
-	(*SetArmadaReply)(nil),                // 51: fleetgrpc.SetArmadaReply
-	(*ResolveArmadaRemoteReply)(nil),      // 52: fleetgrpc.ResolveArmadaRemoteReply
-	(*ExecOut)(nil),                       // 53: fleetgrpc.ExecOut
-	(*ResolveExecCommandReply)(nil),       // 54: fleetgrpc.ResolveExecCommandReply
-	(*ResolveLogsCommandReply)(nil),       // 55: fleetgrpc.ResolveLogsCommandReply
-	(*LogLine)(nil),                       // 56: fleetgrpc.LogLine
-	(*TriggerLogsReply)(nil),              // 57: fleetgrpc.TriggerLogsReply
-	(*CopyFileChunk)(nil),                 // 58: fleetgrpc.CopyFileChunk
-	(*CopyIntoReply)(nil),                 // 59: fleetgrpc.CopyIntoReply
-	(*InspectRepoReply)(nil),              // 60: fleetgrpc.InspectRepoReply
-	(*GetCoderTemplateParamsReply)(nil),   // 61: fleetgrpc.GetCoderTemplateParamsReply
-	(*GetBrowserConfigReply)(nil),         // 62: fleetgrpc.GetBrowserConfigReply
-	(*PrepareBrowserReply)(nil),           // 63: fleetgrpc.PrepareBrowserReply
+	(*TrustSSHHostKeyRequest)(nil),        // 26: fleetgrpc.TrustSSHHostKeyRequest
+	(*ExecIn)(nil),                        // 27: fleetgrpc.ExecIn
+	(*ResolveExecCommandRequest)(nil),     // 28: fleetgrpc.ResolveExecCommandRequest
+	(*ResolveLogsCommandRequest)(nil),     // 29: fleetgrpc.ResolveLogsCommandRequest
+	(*LogsRequest)(nil),                   // 30: fleetgrpc.LogsRequest
+	(*TriggerLogsRequest)(nil),            // 31: fleetgrpc.TriggerLogsRequest
+	(*ForwardChunk)(nil),                  // 32: fleetgrpc.ForwardChunk
+	(*CopyFileRequest)(nil),               // 33: fleetgrpc.CopyFileRequest
+	(*CopyIntoChunk)(nil),                 // 34: fleetgrpc.CopyIntoChunk
+	(*InspectRepoRequest)(nil),            // 35: fleetgrpc.InspectRepoRequest
+	(*GetCoderTemplateParamsRequest)(nil), // 36: fleetgrpc.GetCoderTemplateParamsRequest
+	(*GetBrowserConfigRequest)(nil),       // 37: fleetgrpc.GetBrowserConfigRequest
+	(*PrepareBrowserRequest)(nil),         // 38: fleetgrpc.PrepareBrowserRequest
+	(*HelloReply)(nil),                    // 39: fleetgrpc.HelloReply
+	(*ShutdownReply)(nil),                 // 40: fleetgrpc.ShutdownReply
+	(*FleetTUIConnectedReply)(nil),        // 41: fleetgrpc.FleetTUIConnectedReply
+	(*GetStateReply)(nil),                 // 42: fleetgrpc.GetStateReply
+	(*Event)(nil),                         // 43: fleetgrpc.Event
+	(*JobEvent)(nil),                      // 44: fleetgrpc.JobEvent
+	(*MutationReply)(nil),                 // 45: fleetgrpc.MutationReply
+	(*DeleteBuildkitCacheReply)(nil),      // 46: fleetgrpc.DeleteBuildkitCacheReply
+	(*DeleteDebCacheReply)(nil),           // 47: fleetgrpc.DeleteDebCacheReply
+	(*DeleteImageCacheReply)(nil),         // 48: fleetgrpc.DeleteImageCacheReply
+	(*GetConfigReply)(nil),                // 49: fleetgrpc.GetConfigReply
+	(*SetConfigReply)(nil),                // 50: fleetgrpc.SetConfigReply
+	(*GetArmadaReply)(nil),                // 51: fleetgrpc.GetArmadaReply
+	(*SetArmadaReply)(nil),                // 52: fleetgrpc.SetArmadaReply
+	(*ResolveArmadaRemoteReply)(nil),      // 53: fleetgrpc.ResolveArmadaRemoteReply
+	(*TrustSSHHostKeyReply)(nil),          // 54: fleetgrpc.TrustSSHHostKeyReply
+	(*ExecOut)(nil),                       // 55: fleetgrpc.ExecOut
+	(*ResolveExecCommandReply)(nil),       // 56: fleetgrpc.ResolveExecCommandReply
+	(*ResolveLogsCommandReply)(nil),       // 57: fleetgrpc.ResolveLogsCommandReply
+	(*LogLine)(nil),                       // 58: fleetgrpc.LogLine
+	(*TriggerLogsReply)(nil),              // 59: fleetgrpc.TriggerLogsReply
+	(*CopyFileChunk)(nil),                 // 60: fleetgrpc.CopyFileChunk
+	(*CopyIntoReply)(nil),                 // 61: fleetgrpc.CopyIntoReply
+	(*InspectRepoReply)(nil),              // 62: fleetgrpc.InspectRepoReply
+	(*GetCoderTemplateParamsReply)(nil),   // 63: fleetgrpc.GetCoderTemplateParamsReply
+	(*GetBrowserConfigReply)(nil),         // 64: fleetgrpc.GetBrowserConfigReply
+	(*PrepareBrowserReply)(nil),           // 65: fleetgrpc.PrepareBrowserReply
 }
 var file_service_proto_depIdxs = []int32{
 	0,  // 0: fleetgrpc.FleetService.Hello:input_type -> fleetgrpc.HelloRequest
@@ -160,58 +163,60 @@ var file_service_proto_depIdxs = []int32{
 	23, // 23: fleetgrpc.FleetService.GetArmada:input_type -> fleetgrpc.GetArmadaRequest
 	24, // 24: fleetgrpc.FleetService.SetArmada:input_type -> fleetgrpc.SetArmadaRequest
 	25, // 25: fleetgrpc.FleetService.ResolveArmadaRemote:input_type -> fleetgrpc.ResolveArmadaRemoteRequest
-	26, // 26: fleetgrpc.FleetService.Exec:input_type -> fleetgrpc.ExecIn
-	27, // 27: fleetgrpc.FleetService.ResolveExecCommand:input_type -> fleetgrpc.ResolveExecCommandRequest
-	28, // 28: fleetgrpc.FleetService.ResolveLogsCommand:input_type -> fleetgrpc.ResolveLogsCommandRequest
-	29, // 29: fleetgrpc.FleetService.Logs:input_type -> fleetgrpc.LogsRequest
-	30, // 30: fleetgrpc.FleetService.TriggerLogs:input_type -> fleetgrpc.TriggerLogsRequest
-	31, // 31: fleetgrpc.FleetService.Forward:input_type -> fleetgrpc.ForwardChunk
-	32, // 32: fleetgrpc.FleetService.CopyFile:input_type -> fleetgrpc.CopyFileRequest
-	33, // 33: fleetgrpc.FleetService.CopyInto:input_type -> fleetgrpc.CopyIntoChunk
-	34, // 34: fleetgrpc.FleetService.InspectRepo:input_type -> fleetgrpc.InspectRepoRequest
-	35, // 35: fleetgrpc.FleetService.GetCoderTemplateParams:input_type -> fleetgrpc.GetCoderTemplateParamsRequest
-	36, // 36: fleetgrpc.FleetService.GetBrowserConfig:input_type -> fleetgrpc.GetBrowserConfigRequest
-	37, // 37: fleetgrpc.FleetService.PrepareBrowser:input_type -> fleetgrpc.PrepareBrowserRequest
-	38, // 38: fleetgrpc.FleetService.Hello:output_type -> fleetgrpc.HelloReply
-	39, // 39: fleetgrpc.FleetService.Shutdown:output_type -> fleetgrpc.ShutdownReply
-	40, // 40: fleetgrpc.FleetService.FleetTUIConnected:output_type -> fleetgrpc.FleetTUIConnectedReply
-	41, // 41: fleetgrpc.FleetService.GetState:output_type -> fleetgrpc.GetStateReply
-	42, // 42: fleetgrpc.FleetService.Watch:output_type -> fleetgrpc.Event
-	43, // 43: fleetgrpc.FleetService.CreateInstance:output_type -> fleetgrpc.JobEvent
-	43, // 44: fleetgrpc.FleetService.DestroyInstance:output_type -> fleetgrpc.JobEvent
-	43, // 45: fleetgrpc.FleetService.StartInstance:output_type -> fleetgrpc.JobEvent
-	43, // 46: fleetgrpc.FleetService.StopInstance:output_type -> fleetgrpc.JobEvent
-	43, // 47: fleetgrpc.FleetService.CloneInstance:output_type -> fleetgrpc.JobEvent
-	43, // 48: fleetgrpc.FleetService.RebuildInstance:output_type -> fleetgrpc.JobEvent
-	44, // 49: fleetgrpc.FleetService.CreateFleet:output_type -> fleetgrpc.MutationReply
-	44, // 50: fleetgrpc.FleetService.DestroyFleet:output_type -> fleetgrpc.MutationReply
-	44, // 51: fleetgrpc.FleetService.SetFleetSettings:output_type -> fleetgrpc.MutationReply
-	45, // 52: fleetgrpc.FleetService.DeleteBuildkitCache:output_type -> fleetgrpc.DeleteBuildkitCacheReply
-	46, // 53: fleetgrpc.FleetService.DeleteDebCache:output_type -> fleetgrpc.DeleteDebCacheReply
-	47, // 54: fleetgrpc.FleetService.DeleteImageCache:output_type -> fleetgrpc.DeleteImageCacheReply
-	44, // 55: fleetgrpc.FleetService.SetInstanceMetadata:output_type -> fleetgrpc.MutationReply
-	44, // 56: fleetgrpc.FleetService.SetGroupLayout:output_type -> fleetgrpc.MutationReply
-	44, // 57: fleetgrpc.FleetService.DeleteGroupLayout:output_type -> fleetgrpc.MutationReply
-	44, // 58: fleetgrpc.FleetService.SetLastSeenVersion:output_type -> fleetgrpc.MutationReply
-	48, // 59: fleetgrpc.FleetService.GetConfig:output_type -> fleetgrpc.GetConfigReply
-	49, // 60: fleetgrpc.FleetService.SetConfig:output_type -> fleetgrpc.SetConfigReply
-	50, // 61: fleetgrpc.FleetService.GetArmada:output_type -> fleetgrpc.GetArmadaReply
-	51, // 62: fleetgrpc.FleetService.SetArmada:output_type -> fleetgrpc.SetArmadaReply
-	52, // 63: fleetgrpc.FleetService.ResolveArmadaRemote:output_type -> fleetgrpc.ResolveArmadaRemoteReply
-	53, // 64: fleetgrpc.FleetService.Exec:output_type -> fleetgrpc.ExecOut
-	54, // 65: fleetgrpc.FleetService.ResolveExecCommand:output_type -> fleetgrpc.ResolveExecCommandReply
-	55, // 66: fleetgrpc.FleetService.ResolveLogsCommand:output_type -> fleetgrpc.ResolveLogsCommandReply
-	56, // 67: fleetgrpc.FleetService.Logs:output_type -> fleetgrpc.LogLine
-	57, // 68: fleetgrpc.FleetService.TriggerLogs:output_type -> fleetgrpc.TriggerLogsReply
-	31, // 69: fleetgrpc.FleetService.Forward:output_type -> fleetgrpc.ForwardChunk
-	58, // 70: fleetgrpc.FleetService.CopyFile:output_type -> fleetgrpc.CopyFileChunk
-	59, // 71: fleetgrpc.FleetService.CopyInto:output_type -> fleetgrpc.CopyIntoReply
-	60, // 72: fleetgrpc.FleetService.InspectRepo:output_type -> fleetgrpc.InspectRepoReply
-	61, // 73: fleetgrpc.FleetService.GetCoderTemplateParams:output_type -> fleetgrpc.GetCoderTemplateParamsReply
-	62, // 74: fleetgrpc.FleetService.GetBrowserConfig:output_type -> fleetgrpc.GetBrowserConfigReply
-	63, // 75: fleetgrpc.FleetService.PrepareBrowser:output_type -> fleetgrpc.PrepareBrowserReply
-	38, // [38:76] is the sub-list for method output_type
-	0,  // [0:38] is the sub-list for method input_type
+	26, // 26: fleetgrpc.FleetService.TrustSSHHostKey:input_type -> fleetgrpc.TrustSSHHostKeyRequest
+	27, // 27: fleetgrpc.FleetService.Exec:input_type -> fleetgrpc.ExecIn
+	28, // 28: fleetgrpc.FleetService.ResolveExecCommand:input_type -> fleetgrpc.ResolveExecCommandRequest
+	29, // 29: fleetgrpc.FleetService.ResolveLogsCommand:input_type -> fleetgrpc.ResolveLogsCommandRequest
+	30, // 30: fleetgrpc.FleetService.Logs:input_type -> fleetgrpc.LogsRequest
+	31, // 31: fleetgrpc.FleetService.TriggerLogs:input_type -> fleetgrpc.TriggerLogsRequest
+	32, // 32: fleetgrpc.FleetService.Forward:input_type -> fleetgrpc.ForwardChunk
+	33, // 33: fleetgrpc.FleetService.CopyFile:input_type -> fleetgrpc.CopyFileRequest
+	34, // 34: fleetgrpc.FleetService.CopyInto:input_type -> fleetgrpc.CopyIntoChunk
+	35, // 35: fleetgrpc.FleetService.InspectRepo:input_type -> fleetgrpc.InspectRepoRequest
+	36, // 36: fleetgrpc.FleetService.GetCoderTemplateParams:input_type -> fleetgrpc.GetCoderTemplateParamsRequest
+	37, // 37: fleetgrpc.FleetService.GetBrowserConfig:input_type -> fleetgrpc.GetBrowserConfigRequest
+	38, // 38: fleetgrpc.FleetService.PrepareBrowser:input_type -> fleetgrpc.PrepareBrowserRequest
+	39, // 39: fleetgrpc.FleetService.Hello:output_type -> fleetgrpc.HelloReply
+	40, // 40: fleetgrpc.FleetService.Shutdown:output_type -> fleetgrpc.ShutdownReply
+	41, // 41: fleetgrpc.FleetService.FleetTUIConnected:output_type -> fleetgrpc.FleetTUIConnectedReply
+	42, // 42: fleetgrpc.FleetService.GetState:output_type -> fleetgrpc.GetStateReply
+	43, // 43: fleetgrpc.FleetService.Watch:output_type -> fleetgrpc.Event
+	44, // 44: fleetgrpc.FleetService.CreateInstance:output_type -> fleetgrpc.JobEvent
+	44, // 45: fleetgrpc.FleetService.DestroyInstance:output_type -> fleetgrpc.JobEvent
+	44, // 46: fleetgrpc.FleetService.StartInstance:output_type -> fleetgrpc.JobEvent
+	44, // 47: fleetgrpc.FleetService.StopInstance:output_type -> fleetgrpc.JobEvent
+	44, // 48: fleetgrpc.FleetService.CloneInstance:output_type -> fleetgrpc.JobEvent
+	44, // 49: fleetgrpc.FleetService.RebuildInstance:output_type -> fleetgrpc.JobEvent
+	45, // 50: fleetgrpc.FleetService.CreateFleet:output_type -> fleetgrpc.MutationReply
+	45, // 51: fleetgrpc.FleetService.DestroyFleet:output_type -> fleetgrpc.MutationReply
+	45, // 52: fleetgrpc.FleetService.SetFleetSettings:output_type -> fleetgrpc.MutationReply
+	46, // 53: fleetgrpc.FleetService.DeleteBuildkitCache:output_type -> fleetgrpc.DeleteBuildkitCacheReply
+	47, // 54: fleetgrpc.FleetService.DeleteDebCache:output_type -> fleetgrpc.DeleteDebCacheReply
+	48, // 55: fleetgrpc.FleetService.DeleteImageCache:output_type -> fleetgrpc.DeleteImageCacheReply
+	45, // 56: fleetgrpc.FleetService.SetInstanceMetadata:output_type -> fleetgrpc.MutationReply
+	45, // 57: fleetgrpc.FleetService.SetGroupLayout:output_type -> fleetgrpc.MutationReply
+	45, // 58: fleetgrpc.FleetService.DeleteGroupLayout:output_type -> fleetgrpc.MutationReply
+	45, // 59: fleetgrpc.FleetService.SetLastSeenVersion:output_type -> fleetgrpc.MutationReply
+	49, // 60: fleetgrpc.FleetService.GetConfig:output_type -> fleetgrpc.GetConfigReply
+	50, // 61: fleetgrpc.FleetService.SetConfig:output_type -> fleetgrpc.SetConfigReply
+	51, // 62: fleetgrpc.FleetService.GetArmada:output_type -> fleetgrpc.GetArmadaReply
+	52, // 63: fleetgrpc.FleetService.SetArmada:output_type -> fleetgrpc.SetArmadaReply
+	53, // 64: fleetgrpc.FleetService.ResolveArmadaRemote:output_type -> fleetgrpc.ResolveArmadaRemoteReply
+	54, // 65: fleetgrpc.FleetService.TrustSSHHostKey:output_type -> fleetgrpc.TrustSSHHostKeyReply
+	55, // 66: fleetgrpc.FleetService.Exec:output_type -> fleetgrpc.ExecOut
+	56, // 67: fleetgrpc.FleetService.ResolveExecCommand:output_type -> fleetgrpc.ResolveExecCommandReply
+	57, // 68: fleetgrpc.FleetService.ResolveLogsCommand:output_type -> fleetgrpc.ResolveLogsCommandReply
+	58, // 69: fleetgrpc.FleetService.Logs:output_type -> fleetgrpc.LogLine
+	59, // 70: fleetgrpc.FleetService.TriggerLogs:output_type -> fleetgrpc.TriggerLogsReply
+	32, // 71: fleetgrpc.FleetService.Forward:output_type -> fleetgrpc.ForwardChunk
+	60, // 72: fleetgrpc.FleetService.CopyFile:output_type -> fleetgrpc.CopyFileChunk
+	61, // 73: fleetgrpc.FleetService.CopyInto:output_type -> fleetgrpc.CopyIntoReply
+	62, // 74: fleetgrpc.FleetService.InspectRepo:output_type -> fleetgrpc.InspectRepoReply
+	63, // 75: fleetgrpc.FleetService.GetCoderTemplateParams:output_type -> fleetgrpc.GetCoderTemplateParamsReply
+	64, // 76: fleetgrpc.FleetService.GetBrowserConfig:output_type -> fleetgrpc.GetBrowserConfigReply
+	65, // 77: fleetgrpc.FleetService.PrepareBrowser:output_type -> fleetgrpc.PrepareBrowserReply
+	39, // [39:78] is the sub-list for method output_type
+	0,  // [0:39] is the sub-list for method input_type
 	0,  // [0:0] is the sub-list for extension type_name
 	0,  // [0:0] is the sub-list for extension extendee
 	0,  // [0:0] is the sub-list for field type_name

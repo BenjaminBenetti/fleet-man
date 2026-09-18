@@ -37,6 +37,11 @@ type Manager struct {
 	ctx     context.Context // daemon lifetime: cancelling it kills every forward
 	mu      sync.Mutex
 	tunnels map[string]*tunnel
+	// offered remembers, per remote, the host keys the daemon itself fetched
+	// and reported as unknown (hostkey.go) — the only lines TrustHostKey will
+	// append. Keyed by canonical URL, then known_hosts line; the value is the
+	// known_hosts path the offer was made for.
+	offered map[string]map[string]string
 
 	// Seams (production defaults; tests swap them for in-process fakes).
 	discover func(ctx context.Context, t Target) (Discovery, error)
@@ -67,6 +72,7 @@ func New(ctx context.Context) *Manager {
 	return &Manager{
 		ctx:      ctx,
 		tunnels:  make(map[string]*tunnel),
+		offered:  make(map[string]map[string]string),
 		discover: discoverOverSSH,
 		forward:  startForward,
 		hello:    helloThrough,
@@ -171,6 +177,7 @@ func (m *Manager) bringUp(tn *tunnel, done chan struct{}) {
 	tn.mu.Unlock()
 
 	proc, port, disc, err := m.establish(t, localPort)
+	m.recordOffer(t, err)
 
 	tn.mu.Lock()
 	defer tn.mu.Unlock()
@@ -218,6 +225,13 @@ func (m *Manager) establish(t Target, localPort int) (forwardProc, int, Discover
 			return nil, localPort, Discovery{}, err
 		}
 		err = waitForwardReady(ctx, proc, localPort)
+		if err != nil {
+			// The forward's own ssh can refuse the host key too (known_hosts
+			// edited between discovery and now): classify it the same way.
+			if hkErr := hostKeyError(ctx, t, proc.Stderr()); hkErr != nil {
+				err = hkErr
+			}
+		}
 		if err == nil {
 			hctx, cancel := context.WithTimeout(ctx, helloTimeout)
 			err = m.hello(hctx, addr, disc.Token)
@@ -237,6 +251,53 @@ func (m *Manager) establish(t Target, localPort int) (forwardProc, int, Discover
 		}
 		return nil, localPort, Discovery{}, err
 	}
+}
+
+// recordOffer remembers the known_hosts lines an UnknownHostKeyError carries,
+// so TrustHostKey can later accept exactly one of them and nothing else.
+func (m *Manager) recordOffer(t Target, err error) {
+	var uk *UnknownHostKeyError
+	if !errors.As(err, &uk) {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lines := make(map[string]string, len(uk.Keys))
+	for _, k := range uk.Keys {
+		lines[k.Line] = uk.KnownHostsPath
+	}
+	m.offered[t.String()] = lines
+}
+
+// ErrKeyNotOffered is returned by TrustHostKey for a line the daemon never
+// offered for that remote (stale prompt, or a caller inventing lines).
+var ErrKeyNotOffered = errors.New("that host key was not offered for this remote — run the connection test again")
+
+// TrustHostKey appends one previously offered known_hosts line for rawURL to
+// the daemon user's known_hosts (see appendKnownHosts) and then resolves the
+// remote, returning its endpoint. The offer is consumed: a second call with
+// the same line is refused, so a key is written once, on one explicit accept.
+func (m *Manager) TrustHostKey(ctx context.Context, rawURL, line string) (Endpoint, error) {
+	t, err := ParseURL(rawURL)
+	if err != nil {
+		return Endpoint{}, err
+	}
+	m.mu.Lock()
+	path, ok := m.offered[t.String()][line]
+	m.mu.Unlock()
+	if !ok {
+		return Endpoint{}, ErrKeyNotOffered
+	}
+	if err := appendKnownHosts(path, line); err != nil {
+		// The offer stands: a failed write (permissions, disk) can be retried
+		// from the same prompt without another connection test.
+		return Endpoint{}, fmt.Errorf("write %s: %w", path, err)
+	}
+	m.mu.Lock()
+	delete(m.offered, t.String()) // consumed: one accept writes one line, once
+	m.mu.Unlock()
+	flog.Info("ssh host key trusted", "remote", t.String(), "knownHosts", path, "line", line)
+	return m.Resolve(ctx, rawURL)
 }
 
 // alive reports whether a forward process is still running.

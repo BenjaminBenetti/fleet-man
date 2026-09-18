@@ -58,6 +58,7 @@ type fakeForward struct {
 
 func (f *fakeForward) Done() <-chan struct{} { return f.done }
 func (f *fakeForward) Err() string           { return f.err }
+func (f *fakeForward) Stderr() string        { return f.err }
 func (f *fakeForward) Kill() {
 	f.once.Do(func() {
 		if f.lis != nil {
