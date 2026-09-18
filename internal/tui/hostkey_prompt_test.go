@@ -93,10 +93,16 @@ func TestHostKeyPromptAcceptRegistersRemote(t *testing.T) {
 		}
 	}
 
-	// Keys other than accept/reject are swallowed.
-	m.resolveHostKeyPrompt("j")
-	if !m.hostKeyPromptShowing() {
-		t.Fatal("an unrelated key must not dismiss the prompt")
+	// Keys other than accept/reject are swallowed — including enter and y:
+	// enter is the key that raised the prompt (it starts the connection test
+	// and the explicit ping), so a second press must never trust a key.
+	for _, k := range []string{"j", "enter", "y", " "} {
+		if cmd := m.resolveHostKeyPrompt(k); cmd != nil || !m.hostKeyPromptShowing() || m.hostKeyPrompt.busy {
+			t.Fatalf("key %q must neither accept nor dismiss the prompt", k)
+		}
+	}
+	if len(*trusted) != 0 {
+		t.Fatal("no key other than a may trust")
 	}
 
 	acceptCmd := m.resolveHostKeyPrompt("a")
@@ -216,7 +222,7 @@ func TestHostKeyPromptAcceptOnConnectReconnects(t *testing.T) {
 	trusted := stubTrust(t, nil)
 	m := armadaTestModel(nil)
 	m.offerHostKey("ssh://ben@desktop", unknownKeyErr(t, "ssh://ben@desktop", "SHA256:abc"), hostKeyOriginConnect)
-	cmd := m.resolveHostKeyPrompt("y")
+	cmd := m.resolveHostKeyPrompt("a")
 	msg := cmd().(hostKeyTrustedMsg)
 	if len(*trusted) != 1 {
 		t.Fatalf("trusted %v", *trusted)
@@ -244,8 +250,8 @@ func TestHostKeyPromptTrustFailureReported(t *testing.T) {
 	if cmd := m.handleHostKeyTrusted(msg); cmd != nil {
 		t.Fatal("a failed trust must not save the remote")
 	}
-	if sp.armadaAddStage != armadaAddNone || !strings.Contains(m.message, "permission denied") {
-		t.Fatalf("stage=%v message=%q", sp.armadaAddStage, m.message)
+	if sp.armadaAddStage != armadaAddNone || !strings.Contains(m.message, "permission denied") || strings.Contains(m.message, "trusted,") {
+		t.Fatalf("stage=%v message=%q (must not claim the key was trusted)", sp.armadaAddStage, m.message)
 	}
 }
 

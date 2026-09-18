@@ -91,19 +91,22 @@ func (m *model) offerHostKey(url string, err error, origin hostKeyOrigin) bool {
 }
 
 // resolveHostKeyPrompt handles a keypress while the prompt is showing: accept
-// (trust + continue) or reject (cancel). Every other key is swallowed so it
-// can't reach the page underneath; keys are ignored while the accept runs.
+// (trust + continue) or reject (cancel). Only a deliberate `a` accepts —
+// never enter or y: enter is the key that raised the prompt (it starts the
+// connection test and the explicit ping), so a second press must not trust a
+// key the user never read. Every other key is swallowed so it can't reach the
+// page underneath; keys are ignored while the accept runs.
 func (m *model) resolveHostKeyPrompt(key string) tea.Cmd {
 	p := m.hostKeyPrompt
 	if p == nil || p.busy {
 		return nil
 	}
 	switch key {
-	case "a", "y", "enter":
+	case "a":
 		p.busy = true
 		m.message = "Trusting host key and connecting to " + p.key.GetName() + "…"
 		return trustHostKeyCmd(p.url, p.key.GetKeys()[0].GetKnownHostsLine(), p.origin)
-	case "r", "d", "n", "esc":
+	case "r", "n", "esc":
 		m.hostKeyDeclined[hostKeyDeclineKey(p.url, p.key)] = true
 		m.hostKeyPrompt = nil
 		m.armadaStatus[p.url] = armadaStatus{state: armadaStatusError, err: "host key rejected"}
@@ -140,11 +143,14 @@ func (m *model) handleHostKeyTrusted(msg hostKeyTrustedMsg) tea.Cmd {
 		if m.offerHostKey(msg.url, msg.err, msg.origin) {
 			return nil
 		}
+		// msg.err covers the whole accept — the known_hosts write (or a daemon
+		// that restarted and no longer holds the offer) as much as the connect —
+		// so say neither succeeded.
 		m.armadaStatus[msg.url] = armadaStatus{state: armadaStatusError, err: armadaPingErrText(msg.url, msg.err)}
 		if msg.origin == hostKeyOriginAdd && settingsPage != nil {
 			settingsPage.cancelArmadaAdd()
 		}
-		m.message = "Host key trusted, but connecting failed: " + armadaPingErrText(msg.url, msg.err)
+		m.message = "Couldn't trust the host key and connect: " + armadaPingErrText(msg.url, msg.err)
 		return nil
 	}
 	m.armadaStatus[msg.url] = armadaStatus{state: armadaStatusConnected}
@@ -210,7 +216,7 @@ func (m model) viewHostKeyPrompt() string {
 		}
 		rows.WriteString("\n" + dialogHint.Render("also offered (not added): "+strings.Join(others, ", ")))
 	}
-	hint := dialogLabel.Render("[a]ccept and connect   [r]eject")
+	hint := dialogLabel.Render("[a]ccept and connect   [r]eject (esc)")
 	if p.busy {
 		hint = m.spinner.View() + " trusting and connecting…"
 	}

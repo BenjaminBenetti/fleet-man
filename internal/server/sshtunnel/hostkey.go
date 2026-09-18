@@ -28,6 +28,15 @@ import (
 // classic man-in-the-middle signal. It is never offered for acceptance: it
 // surfaces as a ChangedHostKeyError naming the known_hosts file and line ssh
 // reported, for the user to resolve by hand.
+//
+// Trust boundary: ssh's stderr during discovery also carries whatever the
+// REMOTE prints (a shell rc, a forced command), so nothing parsed from it is
+// allowed to choose what gets written. The known_hosts name is derived from
+// the local `ssh -G` view of the target (HostKeyAlias, else HostName and Port)
+// and the stderr name merely has to agree with it; the key material comes
+// from ssh-keyscan against that same resolved host:port; and a target that
+// ssh reaches through a ProxyJump/ProxyCommand — which ssh-keyscan cannot
+// follow, so a scan would fingerprint some other machine — is never probed.
 
 // keyscanTimeout bounds ssh-keyscan (its own -T is per-connection; this is the
 // whole run) and the ssh -G / ssh-keygen helpers.
@@ -93,6 +102,20 @@ var (
 	reChangedHost = regexp.MustCompile(`Host key for (\S+) has changed`)
 )
 
+// unknownHostKeyRefusal is the raw, unenriched refusal: ssh said the key for
+// name is unknown. The Manager turns it into an UnknownHostKeyError by probing
+// (see Manager.enrichHostKey); on its own it is a plain error that tells the
+// user to trust the host manually.
+type unknownHostKeyRefusal struct {
+	target  Target
+	keyType string // as ssh spells it: ED25519, ECDSA, RSA
+	name    string // the lookup name ssh printed
+}
+
+func (e *unknownHostKeyRefusal) Error() string {
+	return "host key for " + e.name + " is not known — run `ssh " + e.target.destination() + "` once to trust it manually"
+}
+
 // sshFailure is what classifySSHFailure recognised in ssh's stderr.
 type sshFailure struct {
 	unknown *struct{ keyType, name string }
@@ -118,12 +141,12 @@ func classifySSHFailure(stderr string) sshFailure {
 	return f
 }
 
-// hostKeyError turns a classified ssh failure into the structured error the
-// caller should return, or nil when stderr showed neither host-key case. An
-// unknown key is enriched by probing the host (keyscan + fingerprints); if
-// that probe fails the error still says the key is unknown, plus why it could
-// not be fetched.
-func hostKeyError(ctx context.Context, t Target, stderr string) error {
+// hostKeyError turns a classified ssh failure into the error the caller
+// should return, or nil when stderr showed neither host-key case: a
+// ChangedHostKeyError, or an unknownHostKeyRefusal for the Manager to enrich
+// with the host's fingerprints (Manager.enrichHostKey). Nothing is probed
+// here — stderr is not trusted to decide anything beyond "ssh refused".
+func hostKeyError(t Target, stderr string) error {
 	f := classifySSHFailure(stderr)
 	switch {
 	case f.changed != nil:
@@ -132,22 +155,35 @@ func hostKeyError(ctx context.Context, t Target, stderr string) error {
 		}
 		return f.changed
 	case f.unknown != nil:
-		uk, err := probeHostKeys(ctx, t, f.unknown.keyType, f.unknown.name)
-		if err != nil {
-			return fmt.Errorf("host key for %s is not known, and fetching it failed: %w — run `ssh %s` once to trust it manually", f.unknown.name, err, t.destination())
-		}
-		return uk
+		return &unknownHostKeyRefusal{target: t, keyType: f.unknown.keyType, name: f.unknown.name}
 	}
 	return nil
 }
 
 // sshEffectiveConfig is what `ssh -G` reports for a target: where ssh really
-// connects (HostName/Port from ~/.ssh/config may differ from the URL) and the
-// known_hosts file it consults first.
+// connects (HostName/Port from ~/.ssh/config may differ from the URL), the
+// known_hosts file it consults first ("" when the config says none or
+// /dev/null — nothing can be recorded), the HostKeyAlias if any, and whether
+// the connection goes through a jump host or proxy command.
 type sshEffectiveConfig struct {
-	hostname   string
-	port       int
-	knownHosts string
+	hostname     string
+	port         int
+	knownHosts   string
+	hostKeyAlias string
+	proxied      bool
+}
+
+// lookupName is the known_hosts name ssh looks up (and prints in its
+// refusal) for this config: the HostKeyAlias when set, else the resolved
+// hostname, with the port folded in as "[host]:port" when it is not 22.
+func (c sshEffectiveConfig) lookupName() string {
+	if c.hostKeyAlias != "" {
+		return c.hostKeyAlias
+	}
+	if c.port == 22 {
+		return c.hostname
+	}
+	return "[" + c.hostname + "]:" + strconv.Itoa(c.port)
 }
 
 // resolveSSHConfig runs `ssh -G` with the production arguments, so aliases,
@@ -164,10 +200,13 @@ func resolveSSHConfig(ctx context.Context, t Target) (sshEffectiveConfig, error)
 	return parseSSHConfig(out.String())
 }
 
-// parseSSHConfig extracts hostname, port and the first UserKnownHostsFile
-// from `ssh -G` output ("key value" lines).
+// parseSSHConfig extracts hostname, port, the first UserKnownHostsFile, the
+// HostKeyAlias and the proxy settings from `ssh -G` output ("key value"
+// lines; ssh omits string options that are unset and prints "none" for an
+// explicitly disabled one).
 func parseSSHConfig(out string) (sshEffectiveConfig, error) {
 	var c sshEffectiveConfig
+	knownHostsSeen := false
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
@@ -178,14 +217,25 @@ func parseSSHConfig(out string) (sshEffectiveConfig, error) {
 			c.hostname = fields[1]
 		case "port":
 			c.port, _ = strconv.Atoi(fields[1])
+		case "hostkeyalias":
+			if fields[1] != "none" {
+				c.hostKeyAlias = fields[1]
+			}
+		case "proxyjump", "proxycommand":
+			if fields[1] != "none" {
+				c.proxied = true
+			}
 		case "userknownhostsfile":
-			c.knownHosts = expandHome(fields[1])
+			knownHostsSeen = true
+			if v := fields[1]; v != "none" && v != "/dev/null" {
+				c.knownHosts = expandHome(v)
+			}
 		}
 	}
 	if c.hostname == "" || c.port == 0 {
 		return c, errors.New("ssh -G reported no hostname/port")
 	}
-	if c.knownHosts == "" {
+	if !knownHostsSeen {
 		c.knownHosts = expandHome("~/.ssh/known_hosts")
 	}
 	return c, nil
@@ -272,30 +322,63 @@ func parseFingerprint(out string) (string, error) {
 	return "", fmt.Errorf("no SHA256 fingerprint in ssh-keygen output %q", strings.TrimSpace(out))
 }
 
-// probeHostKeys builds the UnknownHostKeyError for a refused host: resolves
-// the effective ssh config, keyscans the real host:port, fingerprints every
-// key, and composes the known_hosts lines under the name ssh will look up.
-func probeHostKeys(ctx context.Context, t Target, wantType, name string) (*UnknownHostKeyError, error) {
-	cfg, err := resolveSSHConfig(ctx, t)
+// hostKeyProber are the external steps of a probe, as seams so tests can run
+// the policy without ssh/ssh-keyscan/ssh-keygen.
+type hostKeyProber struct {
+	sshConfig   func(ctx context.Context, t Target) (sshEffectiveConfig, error)
+	keyscan     func(ctx context.Context, host string, port int) ([]HostKey, error)
+	fingerprint func(ctx context.Context, keyType, blob string) (string, error)
+}
+
+func defaultProber() hostKeyProber {
+	return hostKeyProber{sshConfig: resolveSSHConfig, keyscan: keyscan, fingerprint: fingerprint}
+}
+
+// probeHostKeys builds the UnknownHostKeyError for a refused host — or
+// declines to. It resolves the local `ssh -G` view of the target and derives
+// from THAT the name a key would be recorded under; the name ssh printed
+// (which the remote can influence) must agree, or the refusal stays a plain
+// "trust it manually" error. It refuses a proxied target (ssh-keyscan would
+// fingerprint the wrong machine) and one with no known_hosts file to write.
+// Then it keyscans the resolved host:port, fingerprints every key with
+// ssh-keygen, and composes the known_hosts lines, the key type ssh asked for
+// first.
+func (p hostKeyProber) probeHostKeys(ctx context.Context, r *unknownHostKeyRefusal) (*UnknownHostKeyError, error) {
+	t := r.target
+	cfg, err := p.sshConfig(ctx, t)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := keyscan(ctx, cfg.hostname, cfg.port)
+	if cfg.proxied {
+		return nil, fmt.Errorf("%s is reached through a ProxyJump/ProxyCommand, which ssh-keyscan cannot follow", r.name)
+	}
+	if cfg.knownHosts == "" {
+		return nil, errors.New("UserKnownHostsFile is none for this host, so fleet cannot record a trusted key; set one in ~/.ssh/config")
+	}
+	if want := cfg.lookupName(); r.name != want {
+		// stderr named a host ssh would not actually look up for this target:
+		// never pair keys from one host with another's name.
+		return nil, fmt.Errorf("ssh refused a key for %q but this target resolves to %q", r.name, want)
+	}
+	raw, err := p.keyscan(ctx, cfg.hostname, cfg.port)
 	if err != nil {
 		return nil, err
 	}
-	uk := &UnknownHostKeyError{Target: t, Name: name, Host: cfg.hostname, Port: cfg.port, KeyType: wantType, KnownHostsPath: cfg.knownHosts}
+	uk := &UnknownHostKeyError{Target: t, Name: r.name, Host: cfg.hostname, Port: cfg.port, KeyType: r.keyType, KnownHostsPath: cfg.knownHosts}
 	for _, k := range raw {
-		fp, err := fingerprint(ctx, k.Type, k.Line)
+		fp, err := p.fingerprint(ctx, k.Type, k.Line)
 		if err != nil {
 			return nil, err
 		}
-		hk := HostKey{Type: k.Type, Fingerprint: fp, Line: name + " " + k.Type + " " + k.Line}
-		if keyTypeMatches(wantType, k.Type) {
+		hk := HostKey{Type: k.Type, Fingerprint: fp, Line: r.name + " " + k.Type + " " + k.Line}
+		if keyTypeMatches(r.keyType, k.Type) {
 			uk.Keys = append([]HostKey{hk}, uk.Keys...)
 		} else {
 			uk.Keys = append(uk.Keys, hk)
 		}
+	}
+	if len(uk.Keys) == 0 {
+		return nil, errors.New("ssh-keyscan returned no keys")
 	}
 	return uk, nil
 }
@@ -332,9 +415,14 @@ func validKnownHostsLine(line string) bool {
 // appendKnownHosts adds line to path: the directory is created 0700 and the
 // file 0600 when missing, existing lines are never touched, a missing final
 // newline is repaired first, and a line already present is not duplicated.
+// Only an absolute, real file is written (never "none", /dev/null, or a
+// relative path that would land in the daemon's working directory).
 func appendKnownHosts(path, line string) error {
 	if !validKnownHostsLine(line) {
 		return fmt.Errorf("refusing to write malformed known_hosts line %q", line)
+	}
+	if path == "" || path == "none" || path == os.DevNull || !filepath.IsAbs(path) {
+		return fmt.Errorf("refusing to record a host key in %q: no usable known_hosts file", path)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
