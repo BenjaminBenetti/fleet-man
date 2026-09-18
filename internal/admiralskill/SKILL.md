@@ -83,8 +83,12 @@ tool-call timeout allows it. A blocking call returns
 surfaces as a tool error.
 
 - `fleet_up {fleet, instance, remote?, branch?, backend?, wait?}` creates and
-  starts an instance. `remote` (a git URL) is required only when creating the
-  first instance of a new fleet; after that the fleet's recorded remote is used.
+  starts an instance. `remote` is required only when creating the first
+  instance of a new fleet; after that the fleet's recorded remote is used. It
+  is normally a git URL, but `file:///abs/dir` names a local TEMPLATE directory
+  on the daemon host instead: fleet copies it into each new instance rather
+  than cloning (a template fleet takes no `branch` and only the `devcontainer`
+  backend).
   `backend` selects where it runs: `devcontainer`, `coder`, or `codespaces`.
   Omitted, it falls back to the host's configured default backend
   (`devcontainer` out of the box) — the others need prior configuration, so

@@ -12,8 +12,15 @@ import (
 //	git@github.com:org/fleet-man.git → fleet-man
 //	https://github.com/org/fleet-man.git → fleet-man
 //	https://github.com/org/fleet-man → fleet-man
+//
+// A file:// template remote yields "" on purpose: a local directory name is
+// not an authoritative project name, so the user must supply the fleet name
+// explicitly (see TemplateNameHint for the default the TUI offers).
 func FleetNameFromRemote(remote string) string {
 	remote = strings.TrimSpace(remote)
+	if IsTemplateRemote(remote) {
+		return ""
+	}
 
 	// Handle SSH-style: git@github.com:org/repo.git
 	if strings.Contains(remote, ":") && !strings.Contains(remote, "://") {

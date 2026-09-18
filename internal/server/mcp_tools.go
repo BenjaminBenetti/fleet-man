@@ -68,7 +68,7 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	// --- lifecycle ---
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_up",
-		Description: "Create (provision) a new instance in a fleet. Returns immediately with a job_id to poll via fleet_job_status (provisioning takes minutes); pass wait:true to block until done instead. Provide remote (git URL) when creating the first instance of a new fleet.",
+		Description: "Create (provision) a new instance in a fleet. Returns immediately with a job_id to poll via fleet_job_status (provisioning takes minutes); pass wait:true to block until done instead. Provide remote (a git URL, or file:///abs/dir for a local template directory that is copied per instance) when creating the first instance of a new fleet.",
 	}, s.mcpUp)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_start",
@@ -365,8 +365,8 @@ func (s *service) mcpLogs(ctx context.Context, _ *mcp.CallToolRequest, in FleetL
 type FleetUpInput struct {
 	Fleet    string `json:"fleet" jsonschema:"fleet name"`
 	Instance string `json:"instance" jsonschema:"instance name"`
-	Remote   string `json:"remote,omitempty" jsonschema:"git remote URL; required only when creating the first instance of a new fleet"`
-	Branch   string `json:"branch,omitempty" jsonschema:"git branch to check out; defaults to the repository's default branch"`
+	Remote   string `json:"remote,omitempty" jsonschema:"git remote URL, or file:///abs/dir naming a local template directory on the daemon host that is copied into each instance instead of cloned; required only when creating the first instance of a new fleet"`
+	Branch   string `json:"branch,omitempty" jsonschema:"git branch to check out; defaults to the repository's default branch. Not allowed for a file:// template fleet"`
 	Backend  string `json:"backend,omitempty" jsonschema:"backend type: devcontainer (default), coder, or codespaces"`
 	Wait     bool   `json:"wait,omitempty" jsonschema:"block until provisioning completes instead of returning a job handle immediately; provisioning takes minutes, so only set this with a generous tool-call timeout"`
 }

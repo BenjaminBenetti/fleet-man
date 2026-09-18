@@ -212,6 +212,8 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.updateAddInstance(m, msg)
 	case viewAddFleet:
 		return fleetPage.updateAddFleet(m, msg)
+	case viewAddFleetName:
+		return fleetPage.updateAddFleetName(m, msg)
 	case viewAddFleetInspecting:
 		return fleetPage.updateAddFleetInspecting(m, msg)
 	case viewAddFleetNoDevcontainer:

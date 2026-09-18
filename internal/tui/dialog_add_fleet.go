@@ -61,6 +61,10 @@ func (fleetPage *fleetPage) updateAddFleet(m *model, msg tea.Msg) tea.Cmd {
 // or in updateAddFleetNoDevcontainer's Setup branch (devcontainer
 // missing but user opted into the agent flow). Aborting either dialog
 // after this point therefore leaves no trace in state.
+//
+// A file:// template URL detours through the name prompt first
+// (viewAddFleetName): a local directory carries no repo name to derive the
+// fleet name from, so the user has to supply one before inspection runs.
 func (fleetPage *fleetPage) saveAddFleet(m *model) tea.Cmd {
 	repoURL := strings.TrimSpace(fleetPage.textInput.Value())
 	if repoURL == "" {
@@ -68,6 +72,9 @@ func (fleetPage *fleetPage) saveAddFleet(m *model) tea.Cmd {
 		fleetPage.mode = viewNormal
 		fleetPage.blurDialogFields()
 		return nil
+	}
+	if fleet.IsTemplateRemote(repoURL) {
+		return fleetPage.promptAddFleetName(m, repoURL)
 	}
 	fleetName := fleet.FleetNameFromRemote(repoURL)
 	if fleetName == "" {
@@ -78,6 +85,113 @@ func (fleetPage *fleetPage) saveAddFleet(m *model) tea.Cmd {
 	}
 
 	fleetPage.addFleet.pendingRepoURL = repoURL
+	fleetPage.addFleet.pendingFleetName = fleetName
+	fleetPage.mode = viewAddFleetInspecting
+	fleetPage.blurDialogFields()
+	m.message = fmt.Sprintf("Inspecting %s...", repoURL)
+	return inspectDevcontainerCmd(fleetName, repoURL)
+}
+
+// ===========================================
+// Template Fleet Name Prompt
+// ===========================================
+
+// promptAddFleetName validates the template URL's shape (an absolute path is
+// the only thing the client can check — the directory itself lives on the
+// daemon host and is verified by the inspection) and switches to the
+// fleet-name prompt, pre-filled with the directory's base name as a
+// suggestion the user can accept or overwrite.
+func (fleetPage *fleetPage) promptAddFleetName(m *model, repoURL string) tea.Cmd {
+	if _, err := fleet.TemplateDir(repoURL); err != nil {
+		// Keep the dialog open so the user can fix the URL in place.
+		m.message = err.Error()
+		return nil
+	}
+	fleetPage.addFleet.pendingRepoURL = repoURL
+	fleetPage.mode = viewAddFleetName
+	fleetPage.textInput.SetValue(fleet.TemplateNameHint(repoURL))
+	fleetPage.textInput.Placeholder = "fleet-name"
+	fleetPage.textInput.CharLimit = 64
+	fleetPage.textInput.CursorEnd()
+	m.message = ""
+	return fleetPage.activateTextInput()
+}
+
+// updateAddFleetName handles the fleet-name prompt shown for a file://
+// template URL. Inside the field: enter submits, esc leaves the field,
+// ctrl+c cancels. With the field inactive: esc goes BACK to the URL step (so
+// a typo in the path can be fixed without starting over), q/ctrl+c cancel.
+func (fleetPage *fleetPage) updateAddFleetName(m *model, msg tea.Msg) tea.Cmd {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if fleetPage.dlg.fieldActive {
+			switch msg.String() {
+			case "enter":
+				return fleetPage.saveAddFleetName(m)
+			case "esc":
+				fleetPage.deactivateTextInput()
+				return nil
+			case "ctrl+c":
+				fleetPage.clearPendingFleet()
+				return fleetPage.cancelTextDialog(m)
+			}
+			var cmd tea.Cmd
+			fleetPage.textInput, cmd = fleetPage.textInput.Update(msg)
+			return cmd
+		}
+
+		switch msg.String() {
+		case "enter", " ":
+			return fleetPage.activateTextInput()
+		case "esc":
+			return fleetPage.returnToAddFleetURL(m)
+		case "q", "Q", "ctrl+c":
+			fleetPage.clearPendingFleet()
+			return fleetPage.cancelTextDialog(m)
+		}
+		if isDialogTextKey(msg) {
+			return fleetPage.activateTextInputWithMsg(msg)
+		}
+	}
+	return nil
+}
+
+// returnToAddFleetURL reopens the URL step with the pending URL back in the
+// input and the field ACTIVE (cursor and "[esc] Done editing" hint agree, and
+// the user can type straight away). The name prompt borrows textInput for the
+// fleet name, so both the esc-back key and the inspection error path need
+// this restore.
+func (fleetPage *fleetPage) returnToAddFleetURL(m *model) tea.Cmd {
+	fleetPage.mode = viewAddFleet
+	// CharLimit FIRST: SetValue truncates to the current limit, and the name
+	// prompt left it at 64 — a longer path would come back silently cut.
+	fleetPage.textInput.CharLimit = 256
+	fleetPage.textInput.Placeholder = addFleetURLPlaceholder
+	fleetPage.textInput.SetValue(fleetPage.addFleet.pendingRepoURL)
+	fleetPage.textInput.CursorEnd()
+	return fleetPage.activateTextInput()
+}
+
+// saveAddFleetName validates the typed fleet name and continues into the
+// same inspection the git path runs (against the template dir, on the daemon
+// host). An existing fleet name is refused rather than silently reused:
+// CreateFleet is get-or-create, so "adding" it would keep the OTHER fleet's
+// remote and the user's template would never be copied.
+func (fleetPage *fleetPage) saveAddFleetName(m *model) tea.Cmd {
+	fleetName := strings.TrimSpace(fleetPage.textInput.Value())
+	if err := fleet.ValidateFleetName(fleetName); err != nil {
+		m.message = err.Error()
+		return nil
+	}
+	// m.st is nil until the first state snapshot lands; the server's
+	// get-or-create still applies then, this check is only the early UX.
+	if m.st != nil {
+		if _, exists := m.st.Fleets[fleetName]; exists {
+			m.message = fmt.Sprintf("Fleet %s already exists", fleetName)
+			return nil
+		}
+	}
+	repoURL := fleetPage.addFleet.pendingRepoURL
 	fleetPage.addFleet.pendingFleetName = fleetName
 	fleetPage.mode = viewAddFleetInspecting
 	fleetPage.blurDialogFields()
@@ -165,10 +279,10 @@ func (fleetPage *fleetPage) handleDevcontainerInspected(m *model, msg devcontain
 	}
 
 	if msg.err != nil {
-		fleetPage.mode = viewAddFleet
-		fleetPage.textInput.Focus()
+		// Back to the URL step (with the URL restored — the template name
+		// prompt reuses textInput) so the user can correct it in place.
 		m.message = fmt.Sprintf("Could not inspect repo: %v", msg.err)
-		return fleetPage.textInput.Cursor.BlinkCmd()
+		return fleetPage.returnToAddFleetURL(m)
 	}
 
 	if msg.hasDevcontainer {
@@ -288,15 +402,59 @@ type addFleetState struct {
 	pendingFleetName string
 }
 
+// addFleetURLPlaceholder is the New fleet dialog's URL placeholder; the
+// inspection error path re-applies it after the template name prompt has
+// borrowed the input.
+const addFleetURLPlaceholder = "git@github.com:org/repo.git"
+
+// addFleetSourceLabel names the pending source in the inspect / no-devcontainer
+// dialogs: a template dir is copied, not cloned, so calling it "Repo" would
+// misdescribe what fleet is about to do with it.
+func (fleetPage *fleetPage) addFleetSourceLabel() string {
+	if fleet.IsTemplateRemote(fleetPage.addFleet.pendingRepoURL) {
+		return "Template:"
+	}
+	return "Repo:    "
+}
+
 func (fleetPage *fleetPage) renderAddFleetDialog(m *model) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	dialog := fmt.Sprintf(
-		"%s\n\n%s %s\n\n%s",
+		"%s\n\n%s %s\n\n%s\n%s",
 		dialogTitle.Render("New fleet"),
 		dialogLabel.Render("Repo:"),
 		fleetPage.textInput.View(),
+		dimStyle.Render("git URL to clone, or file:///abs/dir to copy a local template dir into each instance"),
 		dialogHint.Render(fleetPage.textDialogHint("Add")),
+	)
+	b.WriteString(dialogBox.Render(dialog))
+	b.WriteString("\n")
+
+	return b.String()
+}
+
+// addFleetNameHint is textDialogHint plus the name prompt's extra key: esc
+// with the field inactive returns to the URL step instead of cancelling.
+func (fleetPage *fleetPage) addFleetNameHint() string {
+	if fleetPage.dlg.fieldActive {
+		return fleetPage.textDialogHint("Add")
+	}
+	return "[enter] Edit  [esc] Back  [q] Cancel"
+}
+
+func (fleetPage *fleetPage) renderAddFleetNameDialog(m *model) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	dialog := fmt.Sprintf(
+		"%s\n\n%s %s\n%s %s\n\n%s\n%s",
+		dialogTitle.Render("New fleet"),
+		dialogLabel.Render("Template:"),
+		fleetExpandedStyle.Render(fleetPage.addFleet.pendingRepoURL),
+		dialogLabel.Render("Name:    "),
+		fleetPage.textInput.View(),
+		dimStyle.Render("a local dir has no repo name to derive the fleet name from — pick one"),
+		dialogHint.Render(fleetPage.addFleetNameHint()),
 	)
 	b.WriteString(dialogBox.Render(dialog))
 	b.WriteString("\n")
@@ -310,7 +468,7 @@ func (fleetPage *fleetPage) renderAddFleetInspectingDialog(m *model) string {
 	dialog := fmt.Sprintf(
 		"%s\n\n%s %s\n\n%s %s\n\n%s",
 		dialogTitle.Render("New fleet"),
-		dialogLabel.Render("Repo: "),
+		dialogLabel.Render(fleetPage.addFleetSourceLabel()),
 		fleetExpandedStyle.Render(fleetPage.addFleet.pendingRepoURL),
 		m.spinner.View(),
 		dialogLabel.Render("Inspecting for devcontainer.json..."),
@@ -326,22 +484,29 @@ func (fleetPage *fleetPage) renderAddFleetNoDevcontainerDialog(m *model) string 
 	var b strings.Builder
 	b.WriteString("\n")
 	agentName, _, agentErr := devcontainersetup.FindAgent()
+	// A template is a local dir: the agent works in it directly, nothing is
+	// cloned. Keep the copy honest about which one this is.
+	isTemplate := fleet.IsTemplateRemote(fleetPage.addFleet.pendingRepoURL)
+	sourceNoun, setupVerb := "repository", "will clone the repo and walk you through configuration"
+	if isTemplate {
+		sourceNoun, setupVerb = "template dir", "will work in the template dir and walk you through configuration"
+	}
 	var setupLine string
 	if agentErr != nil {
 		setupLine = statusCreatingStyle.Render("no agent found") +
 			"  " + dimStyle.Render("install claude, codex, gemini, or copilot to use Setup")
 	} else {
 		setupLine = statusRunningStyle.Render(agentName) +
-			"  " + dimStyle.Render("will clone the repo and walk you through configuration")
+			"  " + dimStyle.Render(setupVerb)
 	}
 	dialog := fmt.Sprintf(
 		"%s\n\n%s\n\n%s %s\n\n%s\n\n%s\n\n%s",
 		warnBanner.Render("  No devcontainer.json found  "),
 		dialogLabel.Render(
-			"This repository has no .devcontainer/devcontainer.json.\n"+
+			"This "+sourceNoun+" has no .devcontainer/devcontainer.json.\n"+
 				"fleet-man needs one before it can provision instances.",
 		),
-		dialogLabel.Render("Repo:"),
+		dialogLabel.Render(fleetPage.addFleetSourceLabel()),
 		fleetExpandedStyle.Render(fleetPage.addFleet.pendingRepoURL),
 		dialogLabel.Render("Setup agent: ")+setupLine,
 		dialogLabel.Render(

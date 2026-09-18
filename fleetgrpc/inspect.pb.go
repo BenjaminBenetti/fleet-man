@@ -23,7 +23,8 @@ const (
 
 type InspectRepoRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// remote_url is the git remote to shallow-clone for inspection.
+	// remote_url is the git remote to shallow-clone for inspection, or a
+	// file:///abs/dir template directory that is inspected in place.
 	RemoteUrl string `protobuf:"bytes,1,opt,name=remote_url,json=remoteUrl,proto3" json:"remote_url,omitempty"`
 	// branch optionally pins the branch to inspect (repo default when empty).
 	Branch string `protobuf:"bytes,2,opt,name=branch,proto3" json:"branch,omitempty"`

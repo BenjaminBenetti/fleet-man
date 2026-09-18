@@ -154,8 +154,10 @@ message JobDone {
 message CreateInstanceRequest {
   string fleet = 1;
   string instance = 2;
-  // git URL; optional — for an existing fleet the server resolves it from the
-  // fleet record.
+  // git URL, or file:///abs/dir naming a local template directory (on the
+  // daemon host) that is copied into each instance instead of cloned;
+  // optional — for an existing fleet the server resolves it from the fleet
+  // record.
   optional string remote = 3;
   BackendType backend = 4;
   optional string branch = 5;

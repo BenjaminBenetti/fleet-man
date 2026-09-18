@@ -104,6 +104,11 @@ fleet up agent-1 --repo git@github.com:org/my-project.git
 # Reference an existing fleet from anywhere
 fleet up my-project/agent-3
 
+# Fleet a local directory instead of a git remote: file:// marks a TEMPLATE dir
+# that is copied (not cloned) into every new instance. A local path has no repo
+# name, so the fleet must be named explicitly (the TUI prompts for it).
+fleet up scratch/agent-1 --repo file:///home/me/scratch-project
+
 # Configure automation: agents (workers) and triggers (what fires them)
 fleet agent create my-project nightly-builder --system-prompt "Build and report"
 fleet trigger create my-project nightly --agent nightly-builder --cron "0 0 * * *" --prompt "Run the nightly build"

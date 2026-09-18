@@ -546,12 +546,13 @@ func (m *model) pruneOrphanedSavedGroups() {
 
 // firstFleetRepo returns the "owner/repo" string for the first fleet's
 // remote URL, or "" if no fleets exist. Used to query GitHub APIs.
+// file:// template fleets are skipped: a local path has no GitHub repo.
 func (m *model) firstFleetRepo() string {
 	if m.st == nil {
 		return ""
 	}
 	for _, f := range m.st.Fleets {
-		if f.Remote != "" {
+		if f.Remote != "" && !fleet.IsTemplateRemote(f.Remote) {
 			return repoFromRemote(f.Remote)
 		}
 	}

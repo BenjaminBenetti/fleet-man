@@ -87,7 +87,7 @@ func newUpCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&repoFlag, "repo", "", "Git remote URL to clone from")
+	cmd.Flags().StringVar(&repoFlag, "repo", "", "Git remote URL to clone, or file:///abs/dir to copy a local template (needs <fleet>/<name>)")
 	cmd.Flags().StringVar(&backendFlag, "backend", "devcontainer", "Backend type: devcontainer, coder, or codespaces")
 	cmd.Flags().StringVar(&branchFlag, "branch", "", "Git branch to check out (defaults to the repository's default branch)")
 	return cmd

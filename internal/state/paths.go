@@ -137,6 +137,22 @@ func WriteWarn(fleetName, instanceName, warning string) {
 	flog.Warn("instance warning", "fleet", fleetName, "instance", instanceName, "warn", warning)
 }
 
+// PrependWarn puts warning in FRONT of the instance's existing banner (if any)
+// instead of replacing it. The TUI surfaces the banner's first line once the
+// instance is running, so this is for a warning that must not be shadowed by
+// the best-effort provisioning steps that WriteWarn around it — while keeping
+// their text in the file. Recorded to the event log like WriteWarn.
+func PrependWarn(fleetName, instanceName, warning string) {
+	banner := warning
+	if existing, err := os.ReadFile(WarnPath(fleetName, instanceName)); err == nil && len(existing) > 0 {
+		banner = warning + "\n" + string(existing)
+	}
+	writeWarnFile(fleetName, instanceName, banner)
+	// Only the NEW warning goes to fleet.log; the existing banner text was
+	// logged when it was written.
+	flog.Warn("instance warning", "fleet", fleetName, "instance", instanceName, "warn", warning)
+}
+
 // WriteWarnQuiet writes the banner WITHOUT an event-log record. Poll loops
 // use this so a persistently-failing per-tick warning cannot flood fleet.log.
 func WriteWarnQuiet(fleetName, instanceName, warning string) {

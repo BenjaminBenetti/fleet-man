@@ -772,8 +772,10 @@ type CreateInstanceRequest struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Fleet    string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
 	Instance string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
-	// git URL; optional — for an existing fleet the server resolves it from the
-	// fleet record.
+	// git URL, or file:///abs/dir naming a local template directory (on the
+	// daemon host) that is copied into each instance instead of cloned;
+	// optional — for an existing fleet the server resolves it from the fleet
+	// record.
 	Remote        *string     `protobuf:"bytes,3,opt,name=remote,proto3,oneof" json:"remote,omitempty"`
 	Backend       BackendType `protobuf:"varint,4,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
 	Branch        *string     `protobuf:"bytes,5,opt,name=branch,proto3,oneof" json:"branch,omitempty"`

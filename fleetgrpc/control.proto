@@ -125,6 +125,8 @@ message GetStateReply {
 // fleet if present.
 message CreateFleetRequest {
   string name = 1;
+  // git URL, or file:///abs/dir for a local template directory that is
+  // copied into each instance instead of cloned.
   string remote = 2;
 }
 
