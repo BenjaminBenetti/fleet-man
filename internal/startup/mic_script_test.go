@@ -297,7 +297,10 @@ func (env *micScriptEnv) serverUp(t *testing.T, sourceOutputs string) {
 	}
 	writeStub(t, env.stubBin, "arecord", "#!/bin/sh\nexec realsleep 30\n")
 	writeStub(t, env.stubBin, "pactl", `#!/bin/sh
-case "$*" in *source-outputs*) printf '%s' "`+sourceOutputs+`" ;; esac
+case "$*" in
+  *source-outputs*) printf '%s' "`+sourceOutputs+`" ;;
+  *"short sources"*) printf '0\tfleetnull.monitor\tx\n1\tfleetmic\tx\n' ;;
+esac
 exit 0
 `)
 }
@@ -314,6 +317,16 @@ func TestMicScriptProbeRequiresPulseToSeeTheStream(t *testing.T) {
 	out, err := env.run(t)
 	if err == nil || !strings.Contains(out, "WARNING") || strings.Contains(out, "virtual microphone ready") {
 		t.Fatalf("a live-but-bypassing ALSA default must fail: err=%v\n%s", err, out)
+	}
+
+	// A recorder on the null sink's MONITOR (source 0) is not a recorder on the
+	// fleet microphone (source 1).
+	env = newMicScriptEnv(t)
+	env.installAudio(t)
+	env.writeRoot(t, "etc/asound.conf", "pcm.!default { type null }\n")
+	env.serverUp(t, "7\t0\t12\tprotocol-native.c\ts16le 2ch 44100Hz\n")
+	if out, err := env.run(t); err == nil {
+		t.Fatalf("a stream on the monitor must not count as reaching the microphone:\n%s", out)
 	}
 
 	env = newMicScriptEnv(t)

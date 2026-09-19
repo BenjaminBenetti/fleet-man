@@ -240,6 +240,7 @@ func (settingsPage *settingsPage) Init(m *model) tea.Cmd {
 		// Also the natural moment to retry a provider that gave up on its own.
 		syncMicFromConfig(m.config)
 		m.micDevicesLoaded = false
+		m.micDevicesErr = ""
 		if cmd := m.ensureMicDevices(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}

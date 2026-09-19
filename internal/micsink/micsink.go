@@ -24,6 +24,7 @@
 package micsink
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -107,8 +108,8 @@ func pulseEnv() []string {
 
 // serverAnswers reports whether the virtual-microphone server is up at all.
 func serverAnswers() bool {
-	cmd := exec.Command("pactl", "info")
-	cmd.Env = pulseEnv()
+	cmd, cancel := boundedCommand(context.Background(), "pactl", "info")
+	defer cancel()
 	return cmd.Run() == nil
 }
 
@@ -118,7 +119,7 @@ func serverAnswers() bool {
 // container), and PulseAudio carries on regardless — every recorder then
 // silently gets the null sink's monitor, i.e. pure silence.
 func micPresent() bool {
-	sources, err := pactl("list", "short", "sources")
+	sources, err := pactl(context.Background(), "list", "short", "sources")
 	if err != nil {
 		return false
 	}
@@ -179,10 +180,11 @@ func Ensure() error {
 		return fmt.Errorf("write server script: %w", err)
 	}
 
-	cmd := exec.Command("pulseaudio", "-n", "-F", path("fleet.pa"),
+	// --daemonize=yes returns once the daemon has forked; bounded like the rest.
+	cmd, cancel := boundedCommand(context.Background(), "pulseaudio", "-n", "-F", path("fleet.pa"),
 		"--daemonize=yes", "--exit-idle-time=-1", "--use-pid-file=no",
 		"--log-target=file:"+path("pulse.log"))
-	cmd.Env = pulseEnv()
+	defer cancel()
 	cmd.Dir = "/"
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("start pulseaudio: %w: %s", err, strings.TrimSpace(string(out)))
@@ -208,7 +210,7 @@ func Stop() error {
 	if _, err := lookPath("pactl"); err != nil || !serverAnswers() {
 		return nil
 	}
-	cmd := exec.Command("pactl", "exit")
-	cmd.Env = pulseEnv()
+	cmd, cancel := boundedCommand(context.Background(), "pactl", "exit")
+	defer cancel()
 	return cmd.Run()
 }

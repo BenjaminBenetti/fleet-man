@@ -61,6 +61,31 @@ const (
 	sendQueue = 25
 )
 
+// frameQueue carries captured audio from the recorder's read loop to the
+// stream's sender goroutine. Both operations are NON-BLOCKING by construction:
+// push drops when the network is behind, and drain — which shares the channel
+// with the sender as a second consumer — never does a bare receive. (A drain
+// written as `for len(q) > 0 { <-q }` parks forever the first time the sender
+// takes the last frame between the len() and the receive.)
+type frameQueue chan []byte
+
+func (q frameQueue) push(pcm []byte) {
+	select {
+	case q <- pcm:
+	default:
+	}
+}
+
+func (q frameQueue) drain() {
+	for {
+		select {
+		case <-q:
+		default:
+			return
+		}
+	}
+}
+
 // startCapture is a seam so tests can run the stream logic with no recorder.
 var startCapture = StartNotify
 
@@ -149,7 +174,7 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 	// reasons: Stream.Send is not safe for concurrent use, and a Send stalled on
 	// the network must not be what Capture.Stop waits for. Closing the real
 	// microphone is the one thing here that has to be prompt.
-	frames := make(chan []byte, sendQueue)
+	frames := make(frameQueue, sendQueue)
 	go func() {
 		for {
 			select {
@@ -180,9 +205,7 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 		retry = nil
 		// Audio captured for a recording that has ended must not trail into
 		// the next one.
-		for len(frames) > 0 {
-			<-frames
-		}
+		frames.drain()
 	}
 	defer stop()
 	scheduleRetry := func() {
@@ -191,10 +214,7 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 	}
 	start := func() {
 		started, err := startCapture(device(), func(pcm []byte) {
-			select {
-			case frames <- slices.Clone(pcm):
-			default: // the network is behind; drop rather than queue
-			}
+			frames.push(slices.Clone(pcm)) // drops when the network is behind
 		}, func() {
 			select {
 			case fellBack <- struct{}{}:

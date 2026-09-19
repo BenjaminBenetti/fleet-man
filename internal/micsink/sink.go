@@ -12,9 +12,23 @@ import (
 	"time"
 )
 
-// demandPollInterval is the safety net under `pactl subscribe`: a missed or
-// coalesced event still converges within this long.
-const demandPollInterval = 2 * time.Second
+const (
+	// demandPollInterval is the safety net under `pactl subscribe`: a missed or
+	// coalesced event still converges within this long.
+	demandPollInterval = 2 * time.Second
+	// maxBlindRecounts is how many CONSECUTIVE failed recounts are tolerated
+	// before demand is forced off. One failure is a blip and means "unchanged"
+	// (closing the mic mid-sentence is its own bug); but this is the privacy
+	// gate, and it must fail CLOSED: a server that keeps the subscription alive
+	// while never answering must not hold the human's microphone open.
+	maxBlindRecounts = 3
+)
+
+// pactlTimeout bounds every pactl / pulseaudio invocation in this package. A
+// wedged sound server must cost a bounded wait — never a stuck watcher (the
+// microphone's gate), a sink that cannot shut down, or a daemon-side slot that
+// waits forever for a "ready" that is not coming. A var so tests can shorten it.
+var pactlTimeout = 3 * time.Second
 
 // Run is `fleet mic sink`: bring the virtual microphone up, then feed it from
 // stdin for as long as stdin lasts, reporting demand on stdout. It returns when
@@ -141,9 +155,19 @@ func watchDemand(ctx context.Context, set func(bool)) error {
 	// "nobody is recording": that would close the microphone mid-sentence, drain
 	// audio a still-attached recorder was about to read, and take up to a poll
 	// interval to recover. A server that is really gone ends the subscription.
+	blind := 0
 	recount := func() {
-		if attached, ok := recorderAttached(); ok {
+		attached, ok := recorderAttached(ctx)
+		switch {
+		case ok:
+			blind = 0
 			set(attached)
+		case ctx.Err() != nil:
+			// shutting down, not a failed probe
+		default:
+			if blind++; blind >= maxBlindRecounts {
+				set(false)
+			}
 		}
 	}
 	recount()
@@ -168,12 +192,12 @@ func watchDemand(ctx context.Context, set func(bool)) error {
 // recorderAttached reports whether at least one source-output is recording from
 // the fleet microphone (rather than, say, the null sink's monitor). ok is false
 // when the server could not be asked.
-func recorderAttached() (attached, ok bool) {
-	sources, err := pactl("list", "short", "sources")
+func recorderAttached(ctx context.Context) (attached, ok bool) {
+	sources, err := pactl(ctx, "list", "short", "sources")
 	if err != nil {
 		return false, false
 	}
-	outputs, err := pactl("list", "short", "source-outputs")
+	outputs, err := pactl(ctx, "list", "short", "source-outputs")
 	if err != nil {
 		return false, false
 	}
@@ -202,11 +226,22 @@ func countRecorders(sources, outputs string) int {
 	return count
 }
 
-func pactl(args ...string) (string, error) {
-	cmd := exec.Command("pactl", args...)
-	cmd.Env = pulseEnv()
+// pactl runs one bounded pactl query against the private server.
+func pactl(ctx context.Context, args ...string) (string, error) {
+	cmd, cancel := boundedCommand(ctx, "pactl", args...)
+	defer cancel()
 	out, err := cmd.Output()
 	return string(out), err
+}
+
+// boundedCommand builds a pulse command that cannot outlive pactlTimeout (or
+// ctx), with WaitDelay so a child holding the pipes cannot wedge Wait either.
+func boundedCommand(ctx context.Context, name string, args ...string) (*exec.Cmd, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(ctx, pactlTimeout)
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = pulseEnv()
+	cmd.WaitDelay = time.Second
+	return cmd, cancel
 }
 
 // oneLine keeps an error on a single protocol line.

@@ -33,6 +33,7 @@ case "$*" in
   "list short sources") printf '0\tfleetnull.monitor\tmodule-null-sink.c\n1\t` + SourceName + `\tmodule-pipe-source.c\n' ;;
   "list short source-outputs")
     [ -e "$state/fail" ] && exit 1
+    [ -e "$state/hang" ] && exec sleep 60
     cat "$state/outputs" 2>/dev/null ;;
   subscribe) touch "$state/events"; exec tail -n 0 -f "$state/events" ;;
 esac
@@ -226,4 +227,37 @@ func TestRunReportsMissingDeps(t *testing.T) {
 	t.Cleanup(func() { lookPath = origLook })
 	sink := startSink(t)
 	sink.expect(t, EventError+" "+ErrMissingDeps.Error())
+}
+
+// This is the privacy gate, so it must fail CLOSED. One failed probe is a blip
+// ("unchanged"); a server that keeps the subscription alive while never
+// answering — here: pactl HANGS — must not hold the human's microphone open,
+// and must not be able to wedge the sink's shutdown either.
+func TestRunFailsClosedWhenTheServerStopsAnswering(t *testing.T) {
+	origTimeout := pactlTimeout
+	pactlTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { pactlTimeout = origTimeout })
+
+	pulse := newFakePulse(t)
+	sink := startSink(t)
+	sink.expect(t, EventReady)
+	pulse.recorders(1)
+	sink.expect(t, EventDemand+" "+DemandOn)
+
+	if err := os.WriteFile(filepath.Join(pulse.state, "hang"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for range maxBlindRecounts {
+		pulse.event()
+		time.Sleep(pactlTimeout + 200*time.Millisecond)
+	}
+	sink.expect(t, EventDemand+" "+DemandOff)
+
+	// …and with pactl still hanging, the sink must still be able to exit.
+	_ = sink.stdin.Close()
+	select {
+	case <-sink.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a hung pactl wedged the sink's shutdown")
+	}
 }

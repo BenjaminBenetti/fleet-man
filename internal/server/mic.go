@@ -60,6 +60,11 @@ const (
 	// the daemon restarts. "Every attach" would be wrong too: an image that can
 	// never be prepared (no package manager, no sudo) would run apt forever.
 	micPrepareRetry = 30 * time.Minute
+	// maxMicFrameBytes bounds one audio frame. A frame is 40 ms (mic.ChunkBytes);
+	// the bound is generous — a client may coalesce — but without one a provider
+	// (which may be remote) sending frames at gRPC's 4 MiB message ceiling parks
+	// a quarter of a gigabyte in the sink queues before the drop policy engages.
+	maxMicFrameBytes = 16 * mic.ChunkBytes
 )
 
 // micSinkConn is a running sink: Write feeds PCM to its stdin, Read yields its
@@ -652,6 +657,12 @@ func (s *service) Mic(stream fleetgrpc.FleetService_MicServer) error {
 				return
 			}
 			if pcm := up.GetAudio(); len(pcm) > 0 {
+				// Rejected, not truncated: like the format check above, a client
+				// that breaks the contract should fail loudly.
+				if len(pcm) > maxMicFrameBytes {
+					recvDone <- status.Errorf(codes.InvalidArgument, "audio frame of %d bytes exceeds %d", len(pcm), maxMicFrameBytes)
+					return
+				}
 				s.mic.route(provider, pcm)
 			}
 		}

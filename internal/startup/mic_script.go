@@ -170,7 +170,11 @@ alsa_default_reaches_pulse() {
     probe=$!
     reached=1
     for _ in 1 2 3; do
-      if PULSE_SERVER="unix:$socket" pactl list short source-outputs 2>/dev/null | grep -q .; then
+      # A recorder on the fleet microphone specifically (join on the source
+      # index), not on the null sink's monitor.
+      mic_index=$(PULSE_SERVER="unix:$socket" pactl list short sources 2>/dev/null | awk -v name='%[4]s' '$2 == name { print $1 }')
+      if [ -n "$mic_index" ] && PULSE_SERVER="unix:$socket" pactl list short source-outputs 2>/dev/null |
+        awk -v idx="$mic_index" '$2 == idx { found = 1 } END { exit !found }'; then
         reached=0
         break
       fi
@@ -198,6 +202,6 @@ if [ -n "$foreign_asound" ] && ! alsa_default_reaches_pulse; then
   echo "Add 'pcm.!default { type pulse }' to it, or remove it and rebuild the instance."
   exit 3
 fi
-echo "virtual microphone ready"`, micConfigMarker, micsink.SocketPath, fleetlaunch.RemotePath),
+echo "virtual microphone ready"`, micConfigMarker, micsink.SocketPath, fleetlaunch.RemotePath, micsink.SourceName),
 	}
 }

@@ -79,7 +79,10 @@ const failureTailLines = 6
 // exit code becomes the wrapper's exit code, which the runner observes
 // via *exec.Cmd.CombinedOutput.
 //
-// On FAILURE the tail of the log is echoed to the original stderr, so the error
+// On FAILURE the tail of THIS RUN's output (the log is appended to, so the
+// line count is noted before the body starts — a short failing run must not be
+// padded out with the previous run's lines, which would also make every retry's
+// error text different) is echoed to the original stderr, so the error
 // the host sees — and the warning the user gets — says WHY, not just "exit
 // status 3" with the explanation left in a file inside the container. The body
 // runs in a subshell for that: a script is free to `exit` (or set its own EXIT
@@ -89,12 +92,13 @@ func wrap(script Script) string {
 exec 3>&2
 exec >>%[1]s/%[2]s.log 2>&1
 echo "=== %[2]s @ $(date -u +%%FT%%TZ) ==="
+start=$(wc -l < %[1]s/%[2]s.log 2>/dev/null || echo 0)
 (
 %[3]s
 )
 rc=$?
 if [ "$rc" -ne 0 ]; then
-  tail -n %[4]d %[1]s/%[2]s.log | grep -v '^=== ' >&3
+  tail -n +$((start + 1)) %[1]s/%[2]s.log | tail -n %[4]d >&3
 fi
 exit "$rc"
 `,

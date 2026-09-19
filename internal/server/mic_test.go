@@ -723,3 +723,31 @@ func TestMicSinkProtocolLiterals(t *testing.T) {
 		}
 	}
 }
+
+// A provider may be remote. A frame far beyond the 40 ms contract is refused
+// outright rather than parked, 64-deep, in every sink's queue.
+func TestMicRejectsOversizedFrames(t *testing.T) {
+	h := newMicHarness(t, true)
+	provider := openMicStream(t, h.client)
+	provider.expectDemand(t, false)
+	sink := h.nextSink(t)
+	sink.emit("ready")
+	sink.emit("demand 1")
+	provider.expectDemand(t, true, "alpha/i1")
+
+	provider.sendAudio(t, make([]byte, maxMicFrameBytes)) // at the bound: fine
+	eventually(t, "a frame at the bound to be routed", func() bool { return len(sink.received()) == maxMicFrameBytes })
+
+	provider.sendAudio(t, make([]byte, maxMicFrameBytes+2))
+	select {
+	case err := <-provider.done:
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("err = %v, want InvalidArgument", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("an oversized frame must end the stream")
+	}
+	if got := len(sink.received()); got != maxMicFrameBytes {
+		t.Fatalf("the oversized frame reached the sink (%d bytes)", got)
+	}
+}

@@ -8,12 +8,17 @@ import (
 
 func runWrapped(t *testing.T, script Script) (string, error) {
 	t.Helper()
+	return runWrappedIn(t, t.TempDir(), script)
+}
+
+func runWrappedIn(t *testing.T, home string, script Script) (string, error) {
+	t.Helper()
 	sh, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skip("no sh")
 	}
 	cmd := exec.Command(sh, "-c", wrap(script))
-	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
+	cmd.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin"}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -50,5 +55,26 @@ func TestWrapSurvivesABodyWithItsOwnExitTrap(t *testing.T) {
 	}
 	if !strings.Contains(out, "boom") || !strings.Contains(out, "cleanup ran") {
 		t.Fatalf("out = %q", out)
+	}
+}
+
+// The log is APPENDED to across runs. A short failing run must report its own
+// lines only: padded with the previous run's, every retry's error text differs,
+// which defeats de-duplication of the warning built from it.
+func TestWrapTailIsScopedToTheCurrentRun(t *testing.T) {
+	home := t.TempDir()
+	if _, err := runWrappedIn(t, home, Script{Name: "demo", Body: "echo 'apt chatter 1'\necho 'apt chatter 2'\necho 'apt chatter 3'\nexit 1"}); err == nil {
+		t.Fatal("run 1 should fail")
+	}
+	second, err := runWrappedIn(t, home, Script{Name: "demo", Body: "echo 'only this line'\nexit 1"})
+	if err == nil {
+		t.Fatal("run 2 should fail")
+	}
+	if strings.TrimSpace(second) != "only this line" {
+		t.Fatalf("run 2 reported %q; the previous run's lines bled in", second)
+	}
+	third, _ := runWrappedIn(t, home, Script{Name: "demo", Body: "echo 'only this line'\nexit 1"})
+	if third != second {
+		t.Fatalf("identical failures must produce identical text: %q vs %q", second, third)
 	}
 }

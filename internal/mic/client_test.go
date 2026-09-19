@@ -399,3 +399,102 @@ func TestRunBacksOffAFailingRecorder(t *testing.T) {
 		t.Fatalf("%d capture attempts in 3.5 s; want 2-3 (1 s then 2 s back-off)", starts)
 	}
 }
+
+// The send queue has TWO consumers: the sender goroutine and the drain that
+// runs when a recording ends. A drain that trusts len() parks forever the first
+// time the sender takes the last frame between the len() and the receive — and
+// with it the whole provider loop. The interleaving is rare per attempt (the
+// reviewer who found it hit it on trial 151 of 20 000), so: many attempts.
+func TestFrameQueueDrainNeverBlocksAgainstACompetingConsumer(t *testing.T) {
+	for trial := range 20000 {
+		queue := make(frameQueue, sendQueue)
+		for range 4 {
+			queue.push([]byte("pcm"))
+		}
+		go func() { // the sender goroutine, mid-recording
+			for range 4 {
+				select {
+				case <-queue:
+				default:
+				}
+			}
+		}()
+		drained := make(chan struct{})
+		go func() { queue.drain(); close(drained) }()
+		select {
+		case <-drained:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("drain blocked on trial %d", trial)
+		}
+	}
+}
+
+func TestFrameQueueDropsWhenFull(t *testing.T) {
+	queue := make(frameQueue, 2)
+	done := make(chan struct{})
+	go func() {
+		for range 10 {
+			queue.push([]byte("pcm"))
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("push blocked on a full queue")
+	}
+	if len(queue) != 2 {
+		t.Fatalf("queue holds %d frames, want 2 (the rest dropped)", len(queue))
+	}
+}
+
+// A liveness smoke test over the real stream: demand flapping against a slow-
+// but-alive peer must leave the loop still answering. (It does not reliably hit
+// the drain race above — that needs the tight loop — but it exercises stop()
+// with audio genuinely in flight.)
+func TestRunSurvivesDemandFlappingAgainstASlowPeer(t *testing.T) {
+	// Big frames, so the slow reader stalls Send on flow control and the queue
+	// genuinely backs up.
+	recorder := stubCapture{frame: make([]byte, 48*1024)}
+	recorder.install(t)
+
+	const rounds = 150
+	finished := make(chan struct{})
+	daemon := &fakeDaemon{handler: func(stream fleetgrpc.FleetService_MicServer) error {
+		if _, err := stream.Recv(); err != nil {
+			return err
+		}
+		go func() { // slow-but-alive reader
+			for {
+				if _, err := stream.Recv(); err != nil {
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}()
+		for range rounds {
+			_ = stream.Send(demandFrame(true, "alpha/i1"))
+			time.Sleep(8 * time.Millisecond) // long enough for the queue to back up
+			_ = stream.Send(demandFrame(false))
+			time.Sleep(2 * time.Millisecond)
+		}
+		close(finished)
+		<-stream.Context().Done()
+		return nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log statusLog
+	go Run(ctx, dialFakeDaemon(t, daemon), func() string { return "" }, log.report)
+
+	select {
+	case <-finished:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the daemon never finished flapping demand")
+	}
+	// If stop() had parked, the final "inactive" would never be acted on.
+	waitFor(t, "the loop to still be handling demand", func() bool {
+		starts, running := recorder.snapshot()
+		return starts > rounds/2 && running == 0
+	})
+}
