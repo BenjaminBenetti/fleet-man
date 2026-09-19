@@ -51,12 +51,14 @@ type stubCapture struct {
 	// failFirst makes that many leading starts fail with failWith.
 	failFirst int
 	failWith  error
+	// frame is what the fake recorder emits each tick (default "frame").
+	frame []byte
 }
 
 func (s *stubCapture) install(t *testing.T) {
 	t.Helper()
 	orig := startCapture
-	startCapture = func(deviceID string, sink func([]byte)) (*Capture, error) {
+	startCapture = func(deviceID string, sink func([]byte), _ func()) (*Capture, error) {
 		s.mu.Lock()
 		s.starts++
 		s.devices = append(s.devices, deviceID)
@@ -81,7 +83,11 @@ func (s *stubCapture) install(t *testing.T) {
 					s.mu.Unlock()
 					return
 				case <-ticker.C:
-					sink([]byte("frame"))
+					if s.frame != nil {
+						sink(s.frame)
+					} else {
+						sink([]byte("frame"))
+					}
 				}
 			}
 		}()
@@ -340,5 +346,56 @@ func TestRunDoesNotRetryWithoutACaptureTool(t *testing.T) {
 		if status.State == StateError && !strings.Contains(status.Detail, "install") {
 			t.Fatalf("the error should carry the install hint: %q", status.Detail)
 		}
+	}
+}
+
+// Closing the real microphone must never wait on the network. A daemon that has
+// stopped reading stalls Send on flow control; if audio were sent from the
+// recorder's own loop, Capture.Stop would wait on that Send and the microphone
+// would stay open for as long as the peer stays stalled.
+func TestRunClosesTheMicEvenWhenTheNetworkIsStalled(t *testing.T) {
+	recorder := stubCapture{frame: make([]byte, 64*1024)} // fills the window fast
+	recorder.install(t)
+
+	stalled := make(chan struct{})
+	daemon := &fakeDaemon{handler: func(stream fleetgrpc.FleetService_MicServer) error {
+		if _, err := stream.Recv(); err != nil { // the open header — then never read again
+			return err
+		}
+		_ = stream.Send(demandFrame(true, "alpha/i1"))
+		<-stalled
+		_ = stream.Send(demandFrame(false))
+		<-stream.Context().Done()
+		return nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log statusLog
+	go Run(ctx, dialFakeDaemon(t, daemon), func() string { return "" }, log.report)
+
+	waitFor(t, "the recorder to start", func() bool { _, running := recorder.snapshot(); return running == 1 })
+	time.Sleep(300 * time.Millisecond) // let the send path wedge on flow control
+	close(stalled)
+	waitFor(t, "the recorder to be released despite the stalled stream", func() bool {
+		_, running := recorder.snapshot()
+		return running == 0
+	})
+}
+
+// A recorder that keeps failing is retried with a growing delay, not once a
+// second for as long as someone holds the talk key.
+func TestRunBacksOffAFailingRecorder(t *testing.T) {
+	recorder := stubCapture{failFirst: 1000, failWith: errors.New("device busy")}
+	recorder.install(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log statusLog
+	go Run(ctx, dialFakeDaemon(t, holdDemand()), func() string { return "" }, log.report)
+
+	// 1 s, then 2 s: three attempts need ~3 s. A flat 1 s retry would make four
+	// or more in 3.5 s.
+	time.Sleep(3500 * time.Millisecond)
+	if starts, _ := recorder.snapshot(); starts < 2 || starts > 3 {
+		t.Fatalf("%d capture attempts in 3.5 s; want 2-3 (1 s then 2 s back-off)", starts)
 	}
 }

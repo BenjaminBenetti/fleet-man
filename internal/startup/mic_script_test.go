@@ -25,7 +25,7 @@ func newMicScriptEnv(t *testing.T) *micScriptEnv {
 	t.Helper()
 	env := &micScriptEnv{root: t.TempDir(), stubBin: t.TempDir()}
 	env.log = filepath.Join(env.stubBin, "calls.log")
-	for _, tool := range []string{"sh", "id", "grep", "dirname", "mkdir", "tee", "cat", "touch", "env", "true", "chmod"} {
+	for _, tool := range []string{"sh", "id", "grep", "dirname", "mkdir", "tee", "cat", "touch", "env", "true", "chmod", "awk", "head", "sed"} {
 		real, err := exec.LookPath(tool)
 		if err != nil {
 			t.Skipf("%s not available on this host: %v", tool, err)
@@ -34,6 +34,16 @@ func newMicScriptEnv(t *testing.T) *micScriptEnv {
 			t.Fatal(err)
 		}
 	}
+	// The probe loop's pauses are skipped; the stub recorder parks on the REAL
+	// sleep, under another name.
+	realSleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep not available: %v", err)
+	}
+	if err := os.Symlink(realSleep, filepath.Join(env.stubBin, "realsleep")); err != nil {
+		t.Fatal(err)
+	}
+	writeStub(t, env.stubBin, "sleep", "#!/bin/sh\nexit 0\n")
 	// Passwordless sudo that just runs the command (the test is not root).
 	writeStub(t, env.stubBin, "sudo", `#!/bin/sh
 echo "sudo $*" >> "`+env.log+`"
@@ -136,9 +146,49 @@ func TestMicScriptConfiguresAnInstalledStack(t *testing.T) {
 		t.Fatalf("output: %s", out)
 	}
 
-	// Idempotent: a second run rewrites fleet's own (marked) file without fuss.
+	// Idempotent: a second run replaces fleet's own block — once, not twice.
 	if out, err := env.run(t); err != nil || strings.Contains(out, "leaving the existing") {
 		t.Fatalf("re-run: %v\n%s", err, out)
+	}
+	if again := env.read(t, "etc/asound.conf"); again != asound {
+		t.Fatalf("a re-run changed asound.conf:\n%s\n--- was ---\n%s", again, asound)
+	}
+}
+
+// Ownership is by CONTENT. A stock /etc/asound.conf that sets no default —
+// alsa-lib ships one on RPM distros, and it may predate fleet's first run by
+// years — is not "the user's default": fleet adds its block and keeps the rest.
+func TestMicScriptKeepsForeignContentThatSetsNoDefault(t *testing.T) {
+	env := newMicScriptEnv(t)
+	env.installAudio(t)
+	stock := "# Place your global alsa-lib configuration here...\npcm.mymic { type hw card 1 }\n"
+	env.writeRoot(t, "etc/asound.conf", stock)
+
+	for run := 1; run <= 2; run++ {
+		if out, err := env.run(t); err != nil {
+			t.Fatalf("run %d: %v\n%s", run, err, out)
+		}
+		asound := env.read(t, "etc/asound.conf")
+		if !strings.HasPrefix(asound, stock) {
+			t.Fatalf("run %d lost the file's own content:\n%s", run, asound)
+		}
+		if strings.Count(asound, "pcm.!default { type pulse }") != 1 {
+			t.Fatalf("run %d: fleet's block should appear exactly once:\n%s", run, asound)
+		}
+	}
+}
+
+// A file an early build of this script wrote whole, under a bare marker line,
+// is fleet's and is simply replaced.
+func TestMicScriptReplacesItsLegacyWholeFile(t *testing.T) {
+	env := newMicScriptEnv(t)
+	env.installAudio(t)
+	env.writeRoot(t, "etc/asound.conf", "# "+micConfigMarker+"\npcm.!default { type pulse }\nctl.!default { type pulse }\n")
+	if out, err := env.run(t); err != nil || strings.Contains(out, "leaving the existing") {
+		t.Fatalf("err=%v\n%s", err, out)
+	}
+	if asound := env.read(t, "etc/asound.conf"); strings.Count(asound, "pcm.!default") != 1 || !strings.Contains(asound, ">>> "+micConfigMarker) {
+		t.Fatalf("asound.conf = %q", asound)
 	}
 }
 
@@ -217,7 +267,7 @@ func TestMicScriptAcceptsAForeignAsoundConfThatReachesPulse(t *testing.T) {
 			env.writeRoot(t, "etc/asound.conf", "pcm.!default { type pulse }\n")
 		},
 		"plugin drop-in": func(env *micScriptEnv, t *testing.T) {
-			env.writeRoot(t, "etc/asound.conf", "# stock\n")
+			env.writeRoot(t, "etc/asound.conf", "ctl.!default { type hw card 0 }\n")
 			env.writeRoot(t, "usr/share/alsa/alsa.conf.d/50-pulseaudio.conf", "pcm.!default { type pulse }\n")
 		},
 	} {
@@ -231,6 +281,73 @@ func TestMicScriptAcceptsAForeignAsoundConfThatReachesPulse(t *testing.T) {
 			}
 			if !strings.Contains(out, "leaving the existing") {
 				t.Fatalf("the foreign file should be reported as left alone:\n%s", out)
+			}
+		})
+	}
+}
+
+// serverUp stages a fleet binary whose `mic ensure` succeeds, a recorder that
+// keeps recording until killed, and a pactl that reports sourceOutputs as the
+// private server's recorder list — i.e. whether PulseAudio saw the stream.
+func (env *micScriptEnv) serverUp(t *testing.T, sourceOutputs string) {
+	t.Helper()
+	env.writeRoot(t, "usr/bin/fleet", "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(filepath.Join(env.root, "usr/bin/fleet"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeStub(t, env.stubBin, "arecord", "#!/bin/sh\nexec realsleep 30\n")
+	writeStub(t, env.stubBin, "pactl", `#!/bin/sh
+case "$*" in *source-outputs*) printf '%s' "`+sourceOutputs+`" ;; esac
+exit 0
+`)
+}
+
+// "The default keeps recording" is not "the default reaches PulseAudio": a
+// foreign default of type null records happily — and records nothing of ours.
+// With the server up the probe must ask the SERVER whether it saw the stream.
+func TestMicScriptProbeRequiresPulseToSeeTheStream(t *testing.T) {
+	env := newMicScriptEnv(t)
+	env.installAudio(t)
+	env.writeRoot(t, "etc/asound.conf", "pcm.!default { type null }\n")
+	env.serverUp(t, "") // the recorder runs, but PulseAudio never sees it
+
+	out, err := env.run(t)
+	if err == nil || !strings.Contains(out, "WARNING") || strings.Contains(out, "virtual microphone ready") {
+		t.Fatalf("a live-but-bypassing ALSA default must fail: err=%v\n%s", err, out)
+	}
+
+	env = newMicScriptEnv(t)
+	env.installAudio(t)
+	env.writeRoot(t, "etc/asound.conf", "pcm.!default { type plug slave.pcm \"pulse\" }\n")
+	env.serverUp(t, "7\t1\t12\tprotocol-native.c\ts16le 1ch 16000Hz\n")
+	if out, err := env.run(t); err != nil || !strings.Contains(out, "virtual microphone ready") {
+		t.Fatalf("a default PulseAudio does see must pass, however it is spelled: err=%v\n%s", err, out)
+	}
+}
+
+// The config fallback (no server to ask) must judge the !default, not the mere
+// presence of "type pulse" — which the plugin's own drop-in always contains.
+func TestMicScriptConfigFallbackJudgesTheDefault(t *testing.T) {
+	for name, tc := range map[string]struct {
+		asound, dropIn string
+		wantReady      bool
+	}{
+		"pulse pcm defined but default is hw":                    {"pcm.mypulse { type pulse }\npcm.!default { type hw card 0 }\n", "", false},
+		"multi-line pulse default":                               {"pcm.!default {\n    type pulse\n}\n", "", true},
+		"foreign default wins over a pulse drop-in":              {"pcm.!default { type null }\n", "pcm.!default { type pulse }\n", false},
+		"no foreign pcm default, drop-in only defines pcm.pulse": {"ctl.!default { type hw card 0 }\n", "pcm.pulse { type pulse }\n", false},
+		"no foreign default, drop-in routes the default":         {"# stock\n", "pcm.pulse { type pulse }\npcm.!default { type pulse }\n", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newMicScriptEnv(t)
+			env.installAudio(t)
+			env.writeRoot(t, "etc/asound.conf", tc.asound)
+			if tc.dropIn != "" {
+				env.writeRoot(t, "usr/share/alsa/alsa.conf.d/50-pulseaudio.conf", tc.dropIn)
+			}
+			out, err := env.run(t)
+			if ready := err == nil && strings.Contains(out, "virtual microphone ready"); ready != tc.wantReady {
+				t.Fatalf("ready = %v, want %v (err=%v)\n%s", ready, tc.wantReady, err, out)
 			}
 		})
 	}
@@ -262,7 +379,7 @@ func TestMicScriptShape(t *testing.T) {
 	}
 	// The staged binary is addressed absolutely, like the sink itself: the exec
 	// user's PATH is not to be relied on.
-	if !strings.Contains(script.Body, "fleet_bin='/usr/bin/fleet'") || strings.Contains(script.Body, "command -v fleet") {
+	if !strings.Contains(script.Body, `fleet_bin="$root/usr/bin/fleet"`) || strings.Contains(script.Body, "command -v fleet") {
 		t.Fatal("the script should run the staged fleet binary by absolute path")
 	}
 	if strings.Contains(script.Body, "find ") {

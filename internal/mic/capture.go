@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -20,12 +21,14 @@ const stderrTailBytes = 512
 type Capture struct {
 	cancel context.CancelFunc
 	done   chan struct{}
-	// fellBack: a device was asked for but the system default is being
-	// recorded, because this machine does not have that device.
+	mu     sync.Mutex
+	err    error
+	// fellBack: a device was asked for but the system default is being recorded
+	// — because this machine does not list that device (known at Start), or
+	// because it could not be opened (known only once the recorder has failed).
 	fellBack bool
-
-	mu  sync.Mutex
-	err error
+	// onFallback, if set, is called when the second case happens mid-capture.
+	onFallback func()
 }
 
 // Start launches the recorder for deviceID ("" = system default) and delivers
@@ -36,23 +39,50 @@ type Capture struct {
 // machine) falls back to the system default once, rather than leaving the user
 // with a dead microphone.
 func Start(deviceID string, sink func([]byte)) (*Capture, error) {
+	return StartNotify(deviceID, sink, nil)
+}
+
+// StartNotify is Start, plus a callback for the one thing Start cannot know up
+// front: that the configured device turned out not to open and the system
+// default is being recorded instead. "Which microphone is actually open" is the
+// one thing a status read-out must not get wrong.
+func StartNotify(deviceID string, sink func([]byte), onFallback func()) (*Capture, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	_, used, err := Command(ctx, deviceID)
+	// Built ONCE and handed to record: building it validates the device, which
+	// can mean enumerating — not something to pay twice per capture start.
+	cmd, used, err := Command(ctx, deviceID)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 	capture := &Capture{
-		cancel:   cancel,
-		done:     make(chan struct{}),
-		fellBack: deviceID != "" && used == "" && os.Getenv(EnvCapture) == "",
+		cancel:     cancel,
+		done:       make(chan struct{}),
+		fellBack:   deviceID != "" && used == "" && os.Getenv(EnvCapture) == "",
+		onFallback: onFallback,
 	}
+	return capture.run(ctx, cmd, used, sink), nil
+}
+
+func (c *Capture) run(ctx context.Context, cmd *exec.Cmd, used string, sink func([]byte)) *Capture {
+	capture, cancel := c, c.cancel
 	go func() {
 		defer close(capture.done)
 		defer cancel()
-		produced, err := record(ctx, deviceID, sink)
-		if err != nil && !produced && deviceID != "" && ctx.Err() == nil {
-			_, err = record(ctx, "", sink)
+		produced, err := record(cmd, sink)
+		if err != nil && !produced && used != "" && ctx.Err() == nil {
+			// The device was enumerated but cannot be opened (unplugged since):
+			// one try on the system default.
+			if fallback, _, cmdErr := Command(ctx, ""); cmdErr == nil {
+				capture.mu.Lock()
+				capture.fellBack = true
+				notify := capture.onFallback
+				capture.mu.Unlock()
+				if notify != nil {
+					notify()
+				}
+				_, err = record(fallback, sink)
+			}
 		}
 		if ctx.Err() != nil {
 			// Stopped on purpose; the recorder's "killed" exit is not an error.
@@ -62,7 +92,7 @@ func Start(deviceID string, sink func([]byte)) (*Capture, error) {
 		capture.err = err
 		capture.mu.Unlock()
 	}()
-	return capture, nil
+	return capture
 }
 
 // Stop ends the capture and waits for the recorder to be reaped, so the real
@@ -74,7 +104,11 @@ func (c *Capture) Stop() {
 
 // FellBack reports that the configured device is not available on this machine
 // and the system default is being recorded instead.
-func (c *Capture) FellBack() bool { return c.fellBack }
+func (c *Capture) FellBack() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.fellBack
+}
 
 // Done is closed once the recorder has exited, for whatever reason.
 func (c *Capture) Done() <-chan struct{} { return c.done }
@@ -90,11 +124,7 @@ func (c *Capture) Err() error {
 // record runs one recorder process to completion. produced reports whether it
 // ever delivered audio — the signal that separates "this device cannot be
 // opened" (worth retrying on the default) from a recorder that died mid-stream.
-func record(ctx context.Context, deviceID string, sink func([]byte)) (produced bool, err error) {
-	cmd, _, err := Command(ctx, deviceID)
-	if err != nil {
-		return false, err
-	}
+func record(cmd *exec.Cmd, sink func([]byte)) (produced bool, err error) {
 	// A recorder that ignores the kill (or leaves a grandchild holding the pipe)
 	// must not wedge Stop.
 	cmd.WaitDelay = 2 * time.Second

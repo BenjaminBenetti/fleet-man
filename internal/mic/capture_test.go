@@ -115,12 +115,23 @@ func TestCaptureFallsBackToTheDefaultDevice(t *testing.T) {
 	t.Cleanup(func() { goos, lookPath, runProbe = origOS, origLook, origProbe; resetDetectCache() })
 
 	var got pcmCollector
-	capture, err := Start("alsa:plughw:CARD=Gone,DEV=0", got.sink)
+	notified := make(chan struct{}, 1)
+	capture, err := StartNotify("alsa:plughw:CARD=Gone,DEV=0", got.sink, func() { notified <- struct{}{} })
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer capture.Stop()
 	waitFor(t, "audio from the default device", func() bool { return strings.Contains(got.string(), "default-mic") })
+	// "Which microphone is actually open" must not be wrong: the device was
+	// valid at Start, so only the runtime fallback can have set this.
+	if !capture.FellBack() {
+		t.Fatal("FellBack must report a fallback that happened at RUNTIME, not only at validation")
+	}
+	select {
+	case <-notified:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fallback callback was never called")
+	}
 }
 
 // A device this machine never enumerated is not even tried; the capture says so,

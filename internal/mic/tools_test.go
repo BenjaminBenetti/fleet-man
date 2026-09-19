@@ -322,3 +322,100 @@ func TestAVFoundationListWithoutATableIsAnError(t *testing.T) {
 		t.Fatal("no device table must be an error, not an empty list")
 	}
 }
+
+// countListings wraps runProbe and counts device listings (not `pactl info`).
+func countListings(t *testing.T) *int {
+	t.Helper()
+	calls := 0
+	inner := runProbe
+	runProbe = func(name string, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") != "info" {
+			calls++
+		}
+		return inner(name, args...)
+	}
+	return &calls
+}
+
+// A stale device id — exactly the case the fallback exists for — must not cost
+// an enumeration on every capture start.
+func TestUnknownDeviceDoesNotRelistEveryTime(t *testing.T) {
+	fakeHost(t, "linux", []string{"arecord"}, map[string]string{
+		"arecord -L": "plughw:CARD=Orb,DEV=0\n    Yeti Orb\n",
+	})
+	listings := countListings(t)
+	for range 5 {
+		if _, used, _ := Command(context.Background(), "alsa:plughw:CARD=Gone,DEV=0"); used != "" {
+			t.Fatal("an unknown device must not be used")
+		}
+	}
+	if *listings != 1 {
+		t.Fatalf("an unknown device listed devices %d times in a row, want 1", *listings)
+	}
+	// A KNOWN device costs nothing further.
+	for range 3 {
+		if _, used, _ := Command(context.Background(), "alsa:plughw:CARD=Orb,DEV=0"); used == "" {
+			t.Fatal("a listed device must be used")
+		}
+	}
+	if *listings != 1 {
+		t.Fatalf("a known device re-listed (%d)", *listings)
+	}
+}
+
+// What the settings page listed IS the allowlist: picking from it must not
+// trigger a second enumeration at capture start.
+func TestDevicesSeedsTheAllowlist(t *testing.T) {
+	fakeHost(t, "linux", []string{"arecord"}, map[string]string{
+		"arecord -L": "plughw:CARD=Orb,DEV=0\n    Yeti Orb\n",
+	})
+	listings := countListings(t)
+	if _, err := Devices(); err != nil {
+		t.Fatal(err)
+	}
+	if _, used, _ := Command(context.Background(), "alsa:plughw:CARD=Orb,DEV=0"); used == "" {
+		t.Fatal("a device Devices() returned must validate")
+	}
+	if *listings != 1 {
+		t.Fatalf("listed %d times, want 1", *listings)
+	}
+}
+
+// The allowlist holds FULL ids and is tied to the detection verdict it was made
+// under: a name pulse enumerated must never validate for ALSA — not even when a
+// slow pulse listing lands after detection has moved on to arecord.
+func TestAllowlistCannotCrossTools(t *testing.T) {
+	const name = "file:'/tmp/pwn',raw" // a pulse SOURCE may be named anything
+	fakeHost(t, "linux", []string{"parec", "pactl", "arecord"}, map[string]string{
+		"pactl info":         "ok",
+		"pactl list sources": "Source #1\n\tName: " + name + "\n",
+		"arecord -L":         "default\n",
+	})
+	if _, used, _ := Command(context.Background(), "pulse:"+name); used == "" {
+		t.Fatal("setup: pulse should accept its own source")
+	}
+
+	// Same cache, no re-detection: the prefix alone must not get it through.
+	if cmd, used, _ := Command(context.Background(), "alsa:"+name); used != "" || slices.Contains(cmd.Args, "-D") {
+		t.Fatalf("a pulse name validated under the alsa prefix: %v", cmd.Args)
+	}
+
+	// The race: a pulse listing still in flight when detection switches to alsa.
+	detectCache.mu.Lock()
+	staleEpoch := detectCache.epoch
+	detectCache.mu.Unlock()
+	lookPath = func(bin string) (string, error) {
+		if bin == "arecord" {
+			return "/usr/bin/arecord", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	resetDetectCache()
+	if detected, err := detect(); err != nil || detected.name != "alsa" {
+		t.Fatalf("setup: expected alsa, got %v %v", detected.name, err)
+	}
+	storeDevices(staleEpoch, []Device{{ID: "alsa:" + name}}) // the late pulse-era write
+	if cmd, used, _ := Command(context.Background(), "alsa:"+name); used != "" || slices.Contains(cmd.Args, "-D") {
+		t.Fatalf("a listing from a superseded detection was stored: %v", cmd.Args)
+	}
+}

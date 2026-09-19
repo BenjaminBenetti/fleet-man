@@ -1014,17 +1014,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case micDevicesMsg:
 		m.micDevicesLoading = false
-		m.micDevicesLoaded = true
 		m.micDevicesErr = ""
 		if msg.err != nil {
 			// Keep the list we had: a sound server that is momentarily wedged
-			// must not turn the user's real device into "not found here".
+			// must not turn the user's real device into "not found here". And
+			// micDevicesLoaded is NOT set by a failure: with no earlier list
+			// that would claim "not found here" about a device we never looked
+			// for, and block the retry that the next key press should get.
 			m.micDevicesErr = msg.err.Error()
 			if mic.IsNoTool(msg.err) {
 				m.micDevicesErr = mic.Describe(msg.err)
 			}
 			return m, spinCmd
 		}
+		m.micDevicesLoaded = true
 		m.micDevices = msg.devices
 		// A successful listing proves this machine can record. If the provider
 		// gave up earlier for lack of a recorder, this is the moment to retry.

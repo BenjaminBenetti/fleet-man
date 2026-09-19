@@ -27,6 +27,10 @@ var (
 		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, name, args...)
+		// The output is parsed, and pactl's "Name:" / "Description:" labels are
+		// gettext-translated: pin the locale or a non-English desktop lists
+		// no devices at all.
+		cmd.Env = append(os.Environ(), "LC_ALL=C")
 		cmd.WaitDelay = time.Second
 		return cmd.CombinedOutput()
 	}
@@ -164,10 +168,24 @@ var detectCache struct {
 	at    time.Time
 	found tool
 	err   error
-	// devices are the native device names the detected tool listed, for
-	// validDevice. nil = not listed yet.
-	devices map[string]bool
+	// epoch counts detection verdicts. A device listing started under one
+	// verdict must not be stored under the next (the tool may have changed).
+	epoch int
+	// devices is the allowlist for knownDevice: the FULL device ids
+	// ("pulse:<name>") the detected tool listed — full ids, so a name one tool
+	// enumerated can never validate under another tool's prefix. nil = not
+	// listed yet. devicesAt is when it was listed.
+	devices   map[string]bool
+	devicesAt time.Time
 }
+
+// deviceListTTL bounds how often a device id that is NOT in the allowlist can
+// trigger a re-listing. Without it a stale id — exactly the case the fallback
+// exists for — would cost a full enumeration (up to probeTimeout against a
+// wedged sound server) on every capture start. A device plugged in since the
+// last listing becomes usable within this long, or at once when the settings
+// page lists devices.
+const deviceListTTL = 10 * time.Second
 
 // detect returns the capture tool to use, caching the verdict briefly. The
 // error says WHY there is none: ErrNoCaptureTool or ErrVirtualMic.
@@ -179,6 +197,7 @@ func detect() (tool, error) {
 	}
 	detectCache.found, detectCache.err = detectUncached()
 	detectCache.at = time.Now()
+	detectCache.epoch++
 	detectCache.devices = nil
 	return detectCache.found, detectCache.err
 }
@@ -188,6 +207,7 @@ func detect() (tool, error) {
 func resetDetectCache() {
 	detectCache.mu.Lock()
 	detectCache.at = time.Time{}
+	detectCache.epoch++
 	detectCache.devices = nil
 	detectCache.mu.Unlock()
 }
@@ -246,39 +266,49 @@ func detectUncached() (tool, error) {
 	return tool{}, ErrNoCaptureTool
 }
 
-// validDevice reports whether native is a device the detected tool actually
+// knownDevice reports whether deviceID is a device the detected tool actually
 // lists on THIS machine. MicSettings.Device is daemon-side config: it can come
 // from a client on another machine — or from a daemon the user only half
 // trusts — and it is about to become an argument to a recorder. ALSA device
 // strings in particular are a small language ("plugin:args") in which some
 // plugins take a FILENAME, so an arbitrary string from the wire must never
-// reach `arecord -D`. Only names this machine enumerated itself get through;
-// anything else records the system default.
-func validDevice(detected tool, native string) bool {
+// reach `arecord -D`. Only ids this machine enumerated itself get through;
+// anything else records the system default. This is the single enforcement
+// point for that, so it is built to hold unconditionally: the allowlist holds
+// FULL ids (tool prefix included), and a listing is only stored if the
+// detection verdict it was made under is still the current one.
+func knownDevice(detected tool, deviceID string) bool {
 	if detected.list == nil {
 		return false
 	}
 	detectCache.mu.Lock()
-	known := detectCache.devices
+	known, listedAt, epoch := detectCache.devices, detectCache.devicesAt, detectCache.epoch
 	detectCache.mu.Unlock()
-	if known == nil || !known[native] {
-		// Unknown (or never listed): list once — the device may have been
-		// plugged in since. The result is cached with the detection verdict, so
-		// a missing device costs this at most once per detectTTL.
-		devices, err := detected.list()
-		if err != nil {
-			return false
-		}
-		known = make(map[string]bool, len(devices))
-		for _, device := range devices {
-			_, name, _ := strings.Cut(device.ID, ":")
-			known[name] = true
-		}
-		detectCache.mu.Lock()
-		detectCache.devices = known
-		detectCache.mu.Unlock()
+	if known != nil && (known[deviceID] || time.Since(listedAt) < deviceListTTL) {
+		return known[deviceID]
 	}
-	return known[native]
+
+	// Not listed yet, or a miss on a listing old enough that the device may
+	// have been plugged in since: list again. A failed listing is cached as
+	// "nothing known" for the same TTL — a wedged sound server must not be
+	// re-probed on every capture start either.
+	devices, _ := detected.list()
+	return storeDevices(epoch, devices)[deviceID]
+}
+
+// storeDevices records a listing as the allowlist, unless detection has moved
+// on since epoch, and returns the set either way.
+func storeDevices(epoch int, devices []Device) map[string]bool {
+	known := make(map[string]bool, len(devices))
+	for _, device := range devices {
+		known[device.ID] = true
+	}
+	detectCache.mu.Lock()
+	if detectCache.epoch == epoch {
+		detectCache.devices, detectCache.devicesAt = known, time.Now()
+	}
+	detectCache.mu.Unlock()
+	return known
 }
 
 // ErrNoCaptureTool is returned when this machine has nothing fleet can record
@@ -337,12 +367,21 @@ func Devices() ([]Device, error) {
 	if detected.list == nil {
 		return nil, nil
 	}
-	return detected.list()
+	detectCache.mu.Lock()
+	epoch := detectCache.epoch
+	detectCache.mu.Unlock()
+	devices, err := detected.list()
+	if err != nil {
+		return nil, err
+	}
+	// What the user is about to pick from is, by construction, the allowlist.
+	storeDevices(epoch, devices)
+	return devices, nil
 }
 
 // Command builds the unstarted capture command for deviceID ("" = system
 // default). A deviceID this machine did not itself enumerate — another tool's,
-// another machine's, unplugged, or not a device name at all (see validDevice) —
+// another machine's, unplugged, or not a device name at all (see knownDevice) —
 // records the default instead. The second result is the device id actually
 // used, so callers can tell the user when that differs from what they chose.
 func Command(ctx context.Context, deviceID string) (*exec.Cmd, string, error) {
@@ -354,7 +393,7 @@ func Command(ctx context.Context, deviceID string) (*exec.Cmd, string, error) {
 		return nil, "", err
 	}
 	native := ""
-	if toolName, rest, found := strings.Cut(deviceID, ":"); found && toolName == detected.name && validDevice(detected, rest) {
+	if toolName, rest, found := strings.Cut(deviceID, ":"); found && toolName == detected.name && knownDevice(detected, deviceID) {
 		native = rest
 	}
 	used := ""

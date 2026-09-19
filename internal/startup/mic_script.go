@@ -7,10 +7,10 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/micsink"
 )
 
-// micConfigMarker tags the config files this script writes, so a re-run can tell
-// fleet's own /etc/asound.conf (safe to rewrite) from one the image or user put
-// there (left alone — and, if it leaves the ALSA default dead, reported).
-const micConfigMarker = "# managed by fleet (virtual microphone)"
+// micConfigMarker tags what this script writes: the pulse client drop-in, and
+// the begin/end lines of fleet's block inside /etc/asound.conf — so a re-run can
+// replace exactly its own lines and nothing else in that file.
+const micConfigMarker = "managed by fleet (virtual microphone)"
 
 // MicScript installs what an instance needs to expose fleet's virtual
 // microphone (see internal/micsink for why it is PulseAudio):
@@ -34,9 +34,9 @@ func MicScript() Script {
 		Name: "mic",
 		Body: fmt.Sprintf(`marker='%[1]s'
 socket='%[2]s'
-fleet_bin='%[3]s'
-# Test seam: a prefix for every system path this script reads or writes.
+# Test seam: a prefix for every system path this script reads, writes or runs.
 root="${FLEET_MIC_ROOT:-}"
+fleet_bin="$root%[3]s"
 asound="$root/etc/asound.conf"
 client_conf="$root/etc/pulse/client.conf.d/00-fleet-mic.conf"
 
@@ -66,16 +66,6 @@ installed() {
     command -v arecord >/dev/null 2>&1 && have_pulse_plugin
 }
 
-# Whose /etc/asound.conf is this? Decided BEFORE the install, because the
-# install can create one: on RPM distros alsa-lib SHIPS a stock /etc/asound.conf,
-# and judging it afterwards would make fleet refuse to touch a file its own
-# install just dropped. Only a file that was already here, unmarked, is the
-# image's or the user's — and only that one is left alone.
-foreign_asound=""
-if [ -e "$asound" ] && ! grep -qF "$marker" "$asound" 2>/dev/null; then
-  foreign_asound=1
-fi
-
 if installed; then
   echo "audio packages already installed"
 elif command -v apt-get >/dev/null 2>&1; then
@@ -102,19 +92,38 @@ write_system() {
   as_root mkdir -p "$(dirname "$1")" && as_root tee "$1" >/dev/null
 }
 
-if [ -n "$foreign_asound" ]; then
-  echo "leaving the existing $asound alone (fleet did not write it)"
+# /etc/asound.conf is shared ground, so ownership is decided by CONTENT, not by
+# whether the file exists (RPM distros ship a stock one with alsa-lib — possibly
+# installed by this very script, possibly long before it ever ran):
+#   - fleet owns only its own delimited block, which a re-run replaces;
+#   - everything else in the file is kept, verbatim;
+#   - the one thing fleet will not do is override a default the image or user
+#     set: a file that itself claims pcm.!default / ctl.!default is left alone
+#     (and checked below for whether that default reaches PulseAudio anyway).
+begin="# >>> $marker >>>"
+end="# <<< $marker <<<"
+others=""
+if [ -e "$asound" ]; then
+  if head -n 1 "$asound" | grep -qxF "# $marker"; then
+    : # an early fleet build wrote the whole file under a bare marker line
+  else
+    others=$(sed "/^$begin\$/,/^$end\$/d" "$asound")
+  fi
+fi
+foreign_asound=""
+if printf '%%s\n' "$others" | grep -Eq '^[[:space:]]*(pcm|ctl)\.!default'; then
+  foreign_asound=1
+  echo "leaving the existing $asound alone (it sets its own ALSA default)"
 else
-  write_system "$asound" <<CONF || exit 1
-$marker
-pcm.!default { type pulse }
-ctl.!default { type pulse }
-CONF
+  {
+    [ -z "$others" ] || printf '%%s\n' "$others"
+    printf '%%s\n' "$begin" 'pcm.!default { type pulse }' 'ctl.!default { type pulse }' "$end"
+  } | write_system "$asound" || exit 1
 fi
 
 # The drop-in is fleet's by name, so it is always (re)written.
 write_system "$client_conf" <<CONF || exit 1
-$marker
+# $marker
 default-server = unix:$socket
 autospawn = no
 CONF
@@ -131,18 +140,52 @@ if [ -x "$fleet_bin" ]; then
   fi
 fi
 
-# alsa_default_reaches_pulse: does a plain ALSA recorder end up on PulseAudio?
-# With the server up this is asked of ALSA itself — a recorder on a live default
-# keeps running until killed (timeout: 124, busybox: 143), one on a dead default
-# exits at once. Without it, fall back to reading the configs.
+# default_is_pulse <file>...: does one of these ALSA configs define pcm.!default
+# as a pulse device? It has to be the !default — "type pulse" merely appearing
+# somewhere (a pcm.pulse definition, which the plugin's own drop-in always
+# carries) says nothing about where the default goes.
+default_is_pulse() {
+  for conf in "$@"; do
+    [ -r "$conf" ] || continue
+    awk '
+      /pcm\.!default/ { in_default = 1 }
+      in_default && /type[ \t]+"?pulse"?/ { found = 1 }
+      in_default && /}/ { in_default = 0 }
+      END { exit !found }
+    ' "$conf" && return 0
+  done
+  return 1
+}
+
+# alsa_default_reaches_pulse: does a plain ALSA recorder end up on fleet's
+# PulseAudio server? "It keeps recording" is not the question — a default of
+# type null (a common way for an image to silence ALSA) or type hw records
+# happily, and records nothing of ours. With the server up, ask the server: start
+# a recorder on the ALSA default and require the private server to see its
+# stream. Without it, read the configs: the foreign file wins if it defines
+# !default at all; otherwise the drop-ins decide.
 alsa_default_reaches_pulse() {
-  if [ -n "$server_up" ] && command -v timeout >/dev/null 2>&1; then
-    timeout 1 arecord -q -f S16_LE -r 16000 -c 1 -t raw /dev/null >/dev/null 2>&1
-    rc=$?
-    [ "$rc" = 124 ] || [ "$rc" = 143 ]
+  if [ -n "$server_up" ]; then
+    arecord -q -f S16_LE -r 16000 -c 1 -t raw /dev/null >/dev/null 2>&1 &
+    probe=$!
+    reached=1
+    for _ in 1 2 3; do
+      if PULSE_SERVER="unix:$socket" pactl list short source-outputs 2>/dev/null | grep -q .; then
+        reached=0
+        break
+      fi
+      kill -0 "$probe" 2>/dev/null || break
+      sleep 1
+    done
+    kill "$probe" 2>/dev/null
+    wait "$probe" 2>/dev/null
+    return "$reached"
+  fi
+  if grep -qs 'pcm\.!default' "$asound"; then
+    default_is_pulse "$asound"
     return
   fi
-  grep -qs 'type *pulse' "$asound" "$root"/etc/alsa/conf.d/*.conf "$root"/usr/share/alsa/alsa.conf.d/*.conf
+  default_is_pulse "$root"/etc/alsa/conf.d/*.conf "$root"/usr/share/alsa/alsa.conf.d/*.conf
 }
 
 # Declining to own the ALSA default is only fine if the default gets to

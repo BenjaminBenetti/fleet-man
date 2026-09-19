@@ -37,12 +37,21 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 
 	// Remember whether the microphone was on, to act on it being turned OFF
 	// below. An unreadable prior config reads as "was off" — nothing to undo.
+	//
+	// The previous microphone settings also SEED the otherwise-zero base: a
+	// client built before the mic group existed omits it from the Config it
+	// sends, and with a zero base that would read as "microphone off" — so
+	// changing an unrelated setting from an older TUI would kick every provider
+	// and stop every instance's sound server. An absent group means "unchanged";
+	// a current client always sends the group, so it still overrides the seed.
+	base := &state.Config{}
 	micWasEnabled := false
 	if previous, err := state.LoadConfig(); err == nil {
 		micWasEnabled = previous.MicSettings.Enabled
+		base.MicSettings = previous.MicSettings
 	}
 
-	if err := state.SaveConfig(protoconv.ConfigFromProto(req.GetConfig(), &state.Config{})); err != nil {
+	if err := state.SaveConfig(protoconv.ConfigFromProto(req.GetConfig(), base)); err != nil {
 		return nil, status.Errorf(codes.Internal, "save config: %v", err)
 	}
 	saved, err := state.LoadConfig()

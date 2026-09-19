@@ -55,6 +55,17 @@ const (
 	serverStartTimeout = 5 * time.Second
 )
 
+// The sink's stdout protocol: one event per line, "<event>[ <detail>]". The
+// daemon (internal/server/mic.go) parses exactly these, so they are constants
+// both sides share rather than literals each side types.
+const (
+	EventReady  = "ready"  // the virtual microphone is up; no detail
+	EventDemand = "demand" // detail: DemandOn / DemandOff
+	EventError  = "error"  // detail: why the sink is giving up
+	DemandOn    = "1"
+	DemandOff   = "0"
+)
+
 // ErrMissingDeps means the instance lacks PulseAudio. The daemon reacts by
 // running the provisioning script (internal/startup's mic script).
 var ErrMissingDeps = errors.New("pulseaudio is not installed")
@@ -86,6 +97,8 @@ set-default-sink fleetnull
 // one the user runs themselves) and the explicit server address.
 func pulseEnv() []string {
 	return append(os.Environ(),
+		// pactl's output is parsed, and its labels are gettext-translated.
+		"LC_ALL=C",
 		"PULSE_RUNTIME_PATH="+path("runtime"),
 		"PULSE_STATE_PATH="+path("state"),
 		"PULSE_SERVER=unix:"+path("pulse.sock"),

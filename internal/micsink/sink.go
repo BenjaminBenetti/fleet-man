@@ -29,12 +29,12 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	}
 
 	if err := Ensure(); err != nil {
-		emit("error %s", oneLine(err.Error()))
+		emit(EventError+" %s", oneLine(err.Error()))
 		return err
 	}
 	pipe, err := openFIFO(path("pcm"))
 	if err != nil {
-		emit("error open fifo: %s", oneLine(err.Error()))
+		emit(EventError+" open fifo: %s", oneLine(err.Error()))
 		return fmt.Errorf("open %s: %w", path("pcm"), err)
 	}
 	defer pipe.close()
@@ -43,7 +43,15 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	pipe.setOpen(false)
 
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// On the way out: stop the watcher and WAIT for it, before the deferred
+	// pipe.close above runs (defers are LIFO). The watcher opens/closes/drains
+	// the FIFO; letting it outlive Run would have it act on a closed — or, worse,
+	// reused — file descriptor.
+	watchDone := make(chan struct{})
+	defer func() {
+		cancel()
+		<-watchDone
+	}()
 
 	// The watcher opens and closes the microphone as recorders come and go. The
 	// gate itself lives inside the fifo (see fifo.open) so that closing — which
@@ -51,15 +59,16 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	var demand atomic.Bool
 	watchErr := make(chan error, 1)
 	go func() {
+		defer close(watchDone)
 		watchErr <- watchDemand(ctx, func(active bool) {
 			if demand.Swap(active) == active {
 				return
 			}
 			pipe.setOpen(active)
 			if active {
-				emit("demand 1")
+				emit(EventDemand + " " + DemandOn)
 			} else {
-				emit("demand 0")
+				emit(EventDemand + " " + DemandOff)
 			}
 		})
 	}()
@@ -82,7 +91,7 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 		}
 	}()
 
-	emit("ready")
+	emit(EventReady)
 	select {
 	case err := <-pumpDone:
 		return err
@@ -90,7 +99,7 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		emit("error %s", oneLine(err.Error()))
+		emit(EventError+" %s", oneLine(err.Error()))
 		return err
 	case <-ctx.Done():
 		return nil
@@ -128,7 +137,16 @@ func watchDemand(ctx context.Context, set func(bool)) error {
 		}
 	}()
 
-	set(recorderAttached())
+	// A probe that ERRORS says nothing, and is treated as "unchanged" — never as
+	// "nobody is recording": that would close the microphone mid-sentence, drain
+	// audio a still-attached recorder was about to read, and take up to a poll
+	// interval to recover. A server that is really gone ends the subscription.
+	recount := func() {
+		if attached, ok := recorderAttached(); ok {
+			set(attached)
+		}
+	}
+	recount()
 	ticker := time.NewTicker(demandPollInterval)
 	defer ticker.Stop()
 	for {
@@ -138,9 +156,9 @@ func watchDemand(ctx context.Context, set func(bool)) error {
 				_ = cmd.Wait()
 				return fmt.Errorf("lost the pulseaudio server (see %s)", path("pulse.log"))
 			}
-			set(recorderAttached())
+			recount()
 		case <-ticker.C:
-			set(recorderAttached())
+			recount()
 		case <-ctx.Done():
 			return nil
 		}
@@ -148,17 +166,18 @@ func watchDemand(ctx context.Context, set func(bool)) error {
 }
 
 // recorderAttached reports whether at least one source-output is recording from
-// the fleet microphone (rather than, say, the null sink's monitor).
-func recorderAttached() bool {
+// the fleet microphone (rather than, say, the null sink's monitor). ok is false
+// when the server could not be asked.
+func recorderAttached() (attached, ok bool) {
 	sources, err := pactl("list", "short", "sources")
 	if err != nil {
-		return false
+		return false, false
 	}
 	outputs, err := pactl("list", "short", "source-outputs")
 	if err != nil {
-		return false
+		return false, false
 	}
-	return countRecorders(sources, outputs) > 0
+	return countRecorders(sources, outputs) > 0, true
 }
 
 // countRecorders joins `pactl list short sources` (index, name, …) with

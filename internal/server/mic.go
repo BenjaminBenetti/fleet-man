@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/mic"
+	"github.com/BenjaminBenetti/fleet-man/internal/micsink"
 	"github.com/BenjaminBenetti/fleet-man/internal/startup"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc/codes"
@@ -237,7 +239,11 @@ func (h *micHub) sync() {
 			dropped = append(dropped, h.removeSinkLocked(key))
 		}
 	}
-	var attach []string
+	type launch struct {
+		key  string
+		sink *micSink
+	}
+	var attach []launch
 	now := time.Now()
 	for key, inst := range want {
 		if _, ok := h.sinks[key]; ok {
@@ -246,12 +252,24 @@ func (h *micHub) sync() {
 		if at, ok := h.retryAt[key]; ok && now.Before(at) {
 			continue
 		}
-		h.sinks[key] = &micSink{inst: inst, containerID: inst.ContainerID}
-		attach = append(attach, key)
+		sink := &micSink{inst: inst, containerID: inst.ContainerID}
+		h.sinks[key] = sink
+		attach = append(attach, launch{key, sink})
 	}
+	// Both back-off maps are pruned HERE, against the running set, and nowhere
+	// else: an entry lives exactly as long as its instance / container does.
 	for key := range h.retryAt {
 		if _, ok := want[key]; !ok {
 			delete(h.retryAt, key)
+		}
+	}
+	liveContainers := make(map[string]bool, len(want))
+	for _, inst := range want {
+		liveContainers[inst.ContainerID] = true
+	}
+	for containerID := range h.preparedAt {
+		if !liveContainers[containerID] {
+			delete(h.preparedAt, containerID)
 		}
 	}
 	h.publishDemandLocked()
@@ -260,19 +278,25 @@ func (h *micHub) sync() {
 	for _, sink := range dropped {
 		sink.close()
 	}
-	for _, key := range attach {
-		go h.attach(key)
+	for _, launch := range attach {
+		go h.attach(launch.key, launch.sink)
 	}
 }
 
 // attach starts key's sink and serves it until it exits. Runs on its own
 // goroutine: preparing an instance can take a minute, and must not hold up the
 // other instances' sinks.
-func (h *micHub) attach(key string) {
+//
+// It is handed the exact sink sync created for it rather than looking the key
+// up: between sync's unlock and this goroutine running, the entry can be dropped
+// and re-created (provider leaves and returns), and a lookup would then give two
+// attach goroutines the SAME sink — two processes in one container, the second
+// overwriting the first's conn so it is never closed.
+func (h *micHub) attach(key string, sink *micSink) {
 	h.mu.Lock()
-	sink, ok := h.sinks[key]
+	current := h.sinks[key] == sink
 	h.mu.Unlock()
-	if !ok {
+	if !current {
 		return
 	}
 
@@ -307,12 +331,27 @@ func (h *micHub) attach(key string) {
 	last, tried := h.preparedAt[sink.containerID]
 	recentlyPrepared := tried && time.Since(last) < micPrepareRetry
 	if !recentlyPrepared {
+		// Stamped at the START of the attempt, not on completion, and that is
+		// load-bearing: it is what stops a second attach from running apt
+		// concurrently against the same container. (So the effective window is
+		// micPrepareRetry minus the install's duration, and success and failure
+		// are recorded alike — both fine.)
 		h.preparedAt[sink.containerID] = time.Now()
 	}
 	h.mu.Unlock()
 	if recentlyPrepared {
 		flog.Warn("mic sink failed", "instance", key, "err", err)
 		h.retire(key, sink, micRetrySlow)
+		return
+	}
+	// Last look before installing anything: the feature may have been turned
+	// off (or this sink dropped) while the sink was failing. "Off" promises that
+	// nothing is installed, and an install is not something we can cancel once
+	// it is running.
+	h.mu.Lock()
+	dropped = sink.closed
+	h.mu.Unlock()
+	if dropped || !micEnabled() {
 		return
 	}
 	flog.Info("mic: preparing instance", "instance", key, "reason", err)
@@ -322,7 +361,9 @@ func (h *micHub) attach(key string) {
 		// perfectly good sound server installed, so the sink still gets its
 		// retry below. If that fails too, the back-off above takes over.
 		flog.Warn("mic: prepare instance failed", "instance", key, "err", prepErr)
-		state.WriteWarn(fleetOf(key), sink.inst.Name, fmt.Sprintf("virtual microphone: %v", prepErr))
+		if micEnabled() {
+			warnMic(fleetOf(key), sink.inst.Name, fmt.Sprintf("virtual microphone: %v", prepErr))
+		}
 	}
 	h.retire(key, sink, 0)
 	h.poke()
@@ -364,12 +405,12 @@ func (h *micHub) serve(key string, sink *micSink) (ready, supported bool, err er
 	for scanner.Scan() {
 		event, detail, _ := strings.Cut(scanner.Text(), " ")
 		switch event {
-		case "ready":
+		case micsink.EventReady:
 			ready = true
 			flog.Info("mic sink attached", "instance", key)
-		case "demand":
-			h.setDemand(key, sink, detail == "1")
-		case "error":
+		case micsink.EventDemand:
+			h.setDemand(key, sink, detail == micsink.DemandOn)
+		case micsink.EventError:
 			sinkErr = fmt.Errorf("sink: %s", detail)
 		}
 	}
@@ -423,7 +464,9 @@ func (h *micHub) closeAllSinks() {
 	for key := range h.sinks {
 		dropped = append(dropped, h.removeSinkLocked(key))
 	}
-	clear(h.retryAt)
+	// retryAt is deliberately NOT cleared: the last provider leaving is just a
+	// TUI closing, and reopening it must not re-probe every unsupported or
+	// broken instance at once. sync prunes entries for instances that are gone.
 	h.publishDemandLocked()
 	h.mu.Unlock()
 	for _, sink := range dropped {
@@ -559,6 +602,17 @@ func (h *micHub) route(provider *micProvider, pcm []byte) {
 		default:
 		}
 	}
+}
+
+// warnMic adds a microphone warning to the instance's banner WITHOUT replacing
+// what provisioning put there, and only once: the lazy install is retried every
+// micPrepareRetry, and an unfixable image must not grow a banner of duplicates
+// (or a fleet.log entry per retry).
+func warnMic(fleetName, instanceName, warning string) {
+	if existing, err := os.ReadFile(state.WarnPath(fleetName, instanceName)); err == nil && strings.Contains(string(existing), warning) {
+		return
+	}
+	state.PrependWarn(fleetName, instanceName, warning)
 }
 
 func fleetOf(key string) string {

@@ -69,20 +69,35 @@ func runOne(instanceBackend backend.Backend, wsDir string, script Script) error 
 	return nil
 }
 
+// failureTailLines is how much of a failed script's log is echoed back to the
+// host. Enough for a script's closing diagnosis; short enough for a banner.
+const failureTailLines = 6
+
 // wrap returns a shell snippet that ensures the log directory exists,
 // redirects all subsequent output to the script's log file, prints a
 // header for the run, and then executes the script body. The body's
 // exit code becomes the wrapper's exit code, which the runner observes
 // via *exec.Cmd.CombinedOutput.
+//
+// On FAILURE the tail of the log is echoed to the original stderr, so the error
+// the host sees — and the warning the user gets — says WHY, not just "exit
+// status 3" with the explanation left in a file inside the container. The body
+// runs in a subshell for that: a script is free to `exit` (or set its own EXIT
+// trap) without taking the wrapper down with it.
 func wrap(script Script) string {
-	return fmt.Sprintf(`mkdir -p %s
-exec >>%s/%s.log 2>&1
-echo "=== %s @ $(date -u +%%FT%%TZ) ==="
-%s
+	return fmt.Sprintf(`mkdir -p %[1]s
+exec 3>&2
+exec >>%[1]s/%[2]s.log 2>&1
+echo "=== %[2]s @ $(date -u +%%FT%%TZ) ==="
+(
+%[3]s
+)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  tail -n %[4]d %[1]s/%[2]s.log | grep -v '^=== ' >&3
+fi
+exit "$rc"
 `,
-		logDir,
-		logDir, script.Name,
-		script.Name,
-		script.Body,
+		logDir, script.Name, script.Body, failureTailLines,
 	)
 }

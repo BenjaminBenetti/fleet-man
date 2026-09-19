@@ -12,6 +12,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/mic"
+	"github.com/BenjaminBenetti/fleet-man/internal/micsink"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc/codes"
@@ -477,5 +478,248 @@ func TestMicSkipsUnsupportedBackends(t *testing.T) {
 	}
 	if len(h.opens) != 1 {
 		t.Fatalf("an unsupported instance must be backed off, got %d opens", len(h.opens))
+	}
+}
+
+// seedMicInstances replaces the seeded state with the named running instances
+// (container id = "c-<name>").
+func seedMicInstances(t *testing.T, names ...string) {
+	t.Helper()
+	var instances []*fleet.Instance
+	for _, name := range names {
+		instances = append(instances, &fleet.Instance{
+			Name: name, Backend: fleet.BackendDevcontainer, WorkspaceDir: "/ws/alpha/" + name,
+			ContainerID: "c-" + name, Status: fleet.StatusRunning,
+		})
+	}
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha", Instances: instances}}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+}
+
+// TestMicRoutesOnlyToDemandingInstances: demand is aggregated across instances
+// (the provider is told exactly who is listening, and only goes idle when the
+// LAST one stops), and audio fans out to the instances that asked — not to a
+// neighbour that merely has a sink.
+func TestMicRoutesOnlyToDemandingInstances(t *testing.T) {
+	h := newMicHarness(t, true)
+	seedMicInstances(t, "i1", "i2")
+	sinks := map[string]*fakeMicSink{}
+	var sinksMu sync.Mutex
+	origOpen := openMicSink
+	openMicSink = func(inst *fleet.Instance) (micSinkConn, bool, error) {
+		sink := newFakeMicSink()
+		sinksMu.Lock()
+		sinks[inst.Name] = sink
+		sinksMu.Unlock()
+		return sink, true, nil
+	}
+	t.Cleanup(func() { openMicSink = origOpen })
+
+	provider := openMicStream(t, h.client)
+	provider.expectDemand(t, false)
+	eventually(t, "both sinks to open", func() bool { sinksMu.Lock(); defer sinksMu.Unlock(); return len(sinks) == 2 })
+	sinksMu.Lock()
+	one, two := sinks["i1"], sinks["i2"]
+	sinksMu.Unlock()
+	one.emit("ready")
+	two.emit("ready")
+
+	one.emit("demand 1")
+	provider.expectDemand(t, true, "alpha/i1")
+	provider.sendAudio(t, []byte("for-one "))
+	eventually(t, "i1 to hear it", func() bool { return string(one.received()) == "for-one " })
+
+	two.emit("demand 1")
+	provider.expectDemand(t, true, "alpha/i1", "alpha/i2")
+	provider.sendAudio(t, []byte("for-both"))
+	eventually(t, "both to hear it", func() bool {
+		return string(one.received()) == "for-one for-both" && string(two.received()) == "for-both"
+	})
+
+	one.emit("demand 0")
+	provider.expectDemand(t, true, "alpha/i2") // still live: i2 is listening
+	two.emit("demand 0")
+	provider.expectDemand(t, false)
+}
+
+// TestMicAttachUsesTheSinkItWasGiven is the regression test for two attach
+// goroutines serving ONE sink: attach used to look the key up, so a drop +
+// re-insert between sync's unlock and the goroutine running gave both the same
+// *micSink — two processes in the container, the first never closed.
+func TestMicAttachUsesTheSinkItWasGiven(t *testing.T) {
+	h := newMicHarness(t, true)
+	hub := newMicHub()
+	inst := &fleet.Instance{Name: "i1", ContainerID: "c1"}
+	stale := &micSink{inst: inst, containerID: "c1"}
+	current := &micSink{inst: inst, containerID: "c1"}
+	hub.mu.Lock()
+	hub.sinks["alpha/i1"] = current // what a later sync inserted for the same key
+	hub.mu.Unlock()
+
+	hub.attach("alpha/i1", stale) // the goroutine launched for the EARLIER entry
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.opens) != 0 {
+		t.Fatalf("a superseded attach opened %d sink process(es) for a sink that is no longer current", len(h.opens))
+	}
+}
+
+// TestMicProviderDeathReleasesTheSinks: a provider that vanishes (TUI killed,
+// network gone) — not a polite CloseSend — must still count as leaving.
+func TestMicProviderDeathReleasesTheSinks(t *testing.T) {
+	h := newMicHarness(t, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := h.client.Mic(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&fleetgrpc.MicUp{Msg: &fleetgrpc.MicUp_Open{Open: &fleetgrpc.MicOpen{SampleRate: mic.SampleRate, Channels: mic.Channels}}}); err != nil {
+		t.Fatal(err)
+	}
+	sink := h.nextSink(t)
+	sink.emit("ready")
+	cancel() // die
+	eventually(t, "the sink to be closed after the provider died", sink.isClosed)
+	eventually(t, "the provider to be forgotten", func() bool {
+		h.svc.mic.mu.Lock()
+		defer h.svc.mic.mu.Unlock()
+		return len(h.svc.mic.providers) == 0
+	})
+}
+
+// TestMicSinkThatDiesAfterReadyComesBackQuickly: a working sink that dies on
+// its own is a restarting container, not a broken image — quick back-off, and
+// no package install.
+func TestMicSinkThatDiesAfterReadyComesBackQuickly(t *testing.T) {
+	h := newMicHarness(t, true)
+	provider := openMicStream(t, h.client)
+	provider.expectDemand(t, false)
+	first := h.nextSink(t)
+	first.emit("ready")
+	first.emit("demand 1")
+	provider.expectDemand(t, true, "alpha/i1")
+
+	_ = first.Close()               // the process dies under us
+	provider.expectDemand(t, false) // its demand goes with it
+	h.svc.mic.mu.Lock()
+	at, backedOff := h.svc.mic.retryAt["alpha/i1"]
+	h.svc.mic.mu.Unlock()
+	if !backedOff || time.Until(at) > micRetryQuick+time.Second {
+		t.Fatalf("want a quick (%s) back-off, got %v (set=%v)", micRetryQuick, time.Until(at), backedOff)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.prepares != 0 {
+		t.Fatal("a sink that HAD been working must not trigger the package install")
+	}
+}
+
+// TestMicBackoffSurvivesTheTUIReopening: closing and reopening the TUI must not
+// re-probe every broken or unsupported instance at once; the back-off maps are
+// pruned against the running set instead.
+func TestMicBackoffSurvivesTheTUIReopening(t *testing.T) {
+	h := newMicHarness(t, true)
+	h.script = func(int) (*fakeMicSink, bool, error) { return nil, false, nil } // unsupported
+	first := openMicStream(t, h.client)
+	first.expectDemand(t, false)
+	eventually(t, "the instance to be backed off", func() bool {
+		h.svc.mic.mu.Lock()
+		defer h.svc.mic.mu.Unlock()
+		_, ok := h.svc.mic.retryAt["alpha/i1"]
+		return ok
+	})
+	_ = first.stream.CloseSend()
+	eventually(t, "the provider to leave", func() bool {
+		h.svc.mic.mu.Lock()
+		defer h.svc.mic.mu.Unlock()
+		return len(h.svc.mic.providers) == 0
+	})
+
+	second := openMicStream(t, h.client)
+	second.expectDemand(t, false)
+	time.Sleep(100 * time.Millisecond)
+	h.mu.Lock()
+	opens := len(h.opens)
+	h.mu.Unlock()
+	if opens != 1 {
+		t.Fatalf("reopening the TUI re-probed a backed-off instance (%d opens)", opens)
+	}
+
+	// …and entries die with their instance / container.
+	h.svc.mic.mu.Lock()
+	h.svc.mic.preparedAt["c1"] = time.Now()
+	h.svc.mic.preparedAt["c-long-gone"] = time.Now()
+	h.svc.mic.mu.Unlock()
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{}}); err != nil {
+		t.Fatal(err)
+	}
+	h.svc.mic.poke()
+	eventually(t, "the back-off maps to be pruned", func() bool {
+		h.svc.mic.mu.Lock()
+		defer h.svc.mic.mu.Unlock()
+		return len(h.svc.mic.retryAt) == 0 && len(h.svc.mic.preparedAt) == 0
+	})
+}
+
+// TestSetConfigFromAPreMicClientLeavesTheMicAlone: a client built before the
+// mic group existed omits it. That must read as "unchanged" — not as "off",
+// which would kick every provider and stop every instance's sound server because
+// someone changed an unrelated setting from an older TUI.
+func TestSetConfigFromAPreMicClientLeavesTheMicAlone(t *testing.T) {
+	h := newMicHarness(t, true)
+	provider := openMicStream(t, h.client)
+	provider.expectDemand(t, false)
+	h.nextSink(t).emit("ready")
+
+	config, err := state.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MicSettings.Device = "pulse:yeti"
+	if err := state.SaveConfig(config); err != nil {
+		t.Fatal(err)
+	}
+	old := protoconv.ConfigToProto(config)
+	old.Mic = nil // what an old client sends
+	old.Dotfiles.AutoInstall = true
+	if _, err := h.client.SetConfig(context.Background(), &fleetgrpc.SetConfigRequest{Config: old}); err != nil {
+		t.Fatal(err)
+	}
+
+	saved, err := state.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.MicSettings.Enabled || saved.MicSettings.Device != "pulse:yeti" {
+		t.Fatalf("an absent mic group changed the settings: %+v", saved.MicSettings)
+	}
+	if !saved.DotfilesSettings.AutoInstall {
+		t.Fatal("the setting the old client DID send was lost")
+	}
+	select {
+	case err := <-provider.done:
+		t.Fatalf("the provider was kicked: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.stops) != 0 {
+		t.Fatalf("sound servers were stopped: %v", h.stops)
+	}
+}
+
+// The literals the fake sink emits in these tests are the protocol. Pin them to
+// the constants both real sides share, so the three cannot drift apart.
+func TestMicSinkProtocolLiterals(t *testing.T) {
+	for literal, constant := range map[string]string{
+		"ready":    micsink.EventReady,
+		"demand 1": micsink.EventDemand + " " + micsink.DemandOn,
+		"demand 0": micsink.EventDemand + " " + micsink.DemandOff,
+		"error":    micsink.EventError,
+	} {
+		if literal != constant {
+			t.Errorf("protocol drift: tests emit %q, micsink defines %q", literal, constant)
+		}
 	}
 }

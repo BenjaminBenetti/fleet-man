@@ -49,11 +49,20 @@ const (
 	reconnectInitial = 500 * time.Millisecond
 	reconnectMax     = 10 * time.Second
 	disabledRetry    = 5 * time.Second
-	captureRetry     = time.Second
+	// captureRetry / captureRetryMax pace restarts of a recorder that will not
+	// start or keeps dying while demand lasts: quick at first (a device busy for
+	// a moment), backing off so a permanently broken one is not respawned every
+	// second for as long as someone holds the talk key.
+	captureRetry    = time.Second
+	captureRetryMax = 30 * time.Second
+	// sendQueue bounds captured audio waiting for the network, in frames
+	// (~40 ms each). Late audio is worthless, so a full queue DROPS — the same
+	// policy the daemon applies toward its sinks.
+	sendQueue = 25
 )
 
 // startCapture is a seam so tests can run the stream logic with no recorder.
-var startCapture = Start
+var startCapture = StartNotify
 
 // Run is the microphone provider loop: it holds a Mic stream to the daemon,
 // opens the real microphone only while the daemon reports demand, and streams
@@ -135,12 +144,33 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 		}
 	}()
 
+	// Captured audio reaches the stream through a queue and ONE sender goroutine
+	// for the life of the stream — never from the recorder's read loop. Two
+	// reasons: Stream.Send is not safe for concurrent use, and a Send stalled on
+	// the network must not be what Capture.Stop waits for. Closing the real
+	// microphone is the one thing here that has to be prompt.
+	frames := make(chan []byte, sendQueue)
+	go func() {
+		for {
+			select {
+			case pcm := <-frames:
+				if stream.Send(&fleetgrpc.MicUp{Msg: &fleetgrpc.MicUp_Audio{Audio: pcm}}) != nil {
+					return // the recv loop reports the stream's death
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	fellBack := make(chan struct{}, 1)
+
 	var (
-		capture   *Capture
-		captureCh <-chan struct{} // capture.Done() while a capture is running
-		retry     <-chan time.Time
-		active    bool     // the daemon currently wants audio
-		wanted    []string // who is recording, for the status report
+		capture    *Capture
+		captureCh  <-chan struct{} // capture.Done() while a capture is running
+		retry      <-chan time.Time
+		retryDelay = captureRetry
+		active     bool     // the daemon currently wants audio
+		wanted     []string // who is recording, for the status report
 	)
 	stop := func() {
 		if capture != nil {
@@ -148,19 +178,33 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 			capture, captureCh = nil, nil
 		}
 		retry = nil
+		// Audio captured for a recording that has ended must not trail into
+		// the next one.
+		for len(frames) > 0 {
+			<-frames
+		}
 	}
 	defer stop()
+	scheduleRetry := func() {
+		retry = time.After(retryDelay)
+		retryDelay = min(retryDelay*2, captureRetryMax)
+	}
 	start := func() {
-		// Stream.Send is not safe for concurrent use. The capture goroutine is
-		// the only sender once the open header is out, and stop() joins it
-		// before another capture can start, so there is never more than one.
 		started, err := startCapture(device(), func(pcm []byte) {
-			_ = stream.Send(&fleetgrpc.MicUp{Msg: &fleetgrpc.MicUp_Audio{Audio: slices.Clone(pcm)}})
+			select {
+			case frames <- slices.Clone(pcm):
+			default: // the network is behind; drop rather than queue
+			}
+		}, func() {
+			select {
+			case fellBack <- struct{}{}:
+			default:
+			}
 		})
 		if err != nil {
 			report(Status{State: StateError, Detail: Describe(err)})
 			if !IsNoTool(err) {
-				retry = time.After(captureRetry)
+				scheduleRetry()
 			}
 			return
 		}
@@ -179,6 +223,7 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 			active = demand.GetActive()
 			if !active {
 				wanted = nil
+				retryDelay = captureRetry
 				stop()
 				report(Status{State: StateIdle})
 				continue
@@ -197,7 +242,12 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 			}
 			capture, captureCh = nil, nil
 			report(Status{State: StateError, Detail: detail})
-			retry = time.After(captureRetry)
+			scheduleRetry()
+		case <-fellBack:
+			// The configured device would not open; the default is live instead.
+			if capture != nil {
+				report(Status{State: StateLive, Instances: wanted, FellBack: true})
+			}
 		case <-retry:
 			retry = nil
 			if active && capture == nil {

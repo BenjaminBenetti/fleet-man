@@ -177,8 +177,11 @@ func TestMicDevicesMsgRecordsAMissingCaptureTool(t *testing.T) {
 	m.micDevicesLoading = true
 	next, _ := m.Update(micDevicesMsg{err: mic.ErrNoCaptureTool})
 	got := next.(model)
-	if got.micDevicesLoading || !got.micDevicesLoaded {
-		t.Fatal("loading flags not settled")
+	if got.micDevicesLoading {
+		t.Fatal("still marked as loading")
+	}
+	if got.micDevicesLoaded {
+		t.Fatal("a failed listing must stay retryable (the user may install a recorder)")
 	}
 	if !strings.Contains(got.micDevicesErr, "no capture tool") {
 		t.Fatalf("micDevicesErr = %q", got.micDevicesErr)
@@ -386,5 +389,27 @@ func waitUntil(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// The FIRST enumeration failing (no earlier list to fall back on) must not mark
+// the list as loaded: that would claim "not found here" about a device nobody
+// looked for, answer ←/→ with "no devices", and block the retry.
+func TestFirstMicDevicesErrorStaysRetryable(t *testing.T) {
+	sp, m := newMicTestModel(t)
+	m.config.MicSettings = state.MicSettings{Enabled: true, Device: "pulse:yeti"}
+	m.micDevicesLoading = true
+
+	next, _ := m.Update(micDevicesMsg{err: errors.New("pactl list sources: timeout")})
+	got := next.(model)
+	if got.micDevicesLoaded {
+		t.Fatal("a failed listing must not count as loaded")
+	}
+	if label := sp.micDeviceLabel(&got); strings.Contains(label, "not found") {
+		t.Fatalf("label = %q: we never established that", label)
+	}
+	sp.cursor = settingsPositionOf(sp, &got, settingsItemMicDevice)
+	if cmd := sp.Update(&got, tea.KeyMsg{Type: tea.KeyRight}); cmd == nil || !got.micDevicesLoading {
+		t.Fatal("the next key press should retry the listing")
 	}
 }
