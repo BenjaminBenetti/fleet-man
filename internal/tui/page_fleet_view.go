@@ -160,6 +160,9 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 	if chain := versionChain(m); chain != "" {
 		b.WriteString(" " + dimStyle.Render(chain))
 	}
+	if badge := micLiveIndicator(m); badge != "" {
+		b.WriteString("  " + badge)
+	}
 	if m.updateAvailable != "" {
 		b.WriteString("  " + updateStyle.Render(fmt.Sprintf("A new version: %s is available ⚡ Settings to update", m.updateAvailable)))
 	}

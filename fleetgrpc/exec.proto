@@ -114,6 +114,49 @@ message ForwardOpen {
   int32 remote_port = 3;
 }
 
+// Mic is the virtual-microphone DATA PLANE: one bidi stream per microphone-
+// providing client (a TUI on the machine the human — and their mic — sits at).
+// The CLIENT owns capture; the SERVER owns the per-instance sinks that feed each
+// instance's virtual audio source. Because the audio rides this stream, the mic
+// follows the client even when the server is remote, exactly like Forward.
+//
+// Capture is ON DEMAND: the server tells the client when something inside an
+// instance starts/stops recording (MicDemand) and the client only opens the
+// real microphone while demand is active — the mic is never streamed idle.
+//
+// The FIRST client frame MUST carry `open`; every later client frame carries
+// raw PCM in `audio`, in the format the open header declared.
+message MicUp {
+  oneof msg {
+    MicOpen open = 1;
+    bytes audio = 2;
+  }
+}
+
+// MicOpen declares the PCM format the client will send. Samples are always
+// signed 16-bit little-endian; the server currently accepts exactly 16 kHz mono
+// (the in-instance source's native format) and rejects anything else, so a
+// future format change fails loudly rather than playing back as noise.
+message MicOpen {
+  uint32 sample_rate = 1;
+  uint32 channels = 2;
+}
+
+message MicDown {
+  oneof msg {
+    MicDemand demand = 1;
+  }
+}
+
+// MicDemand is the server's start/stop signal. active=true means at least one
+// instance has a recorder attached to its virtual microphone; `instances` names
+// them ("<fleet>/<instance>") so the client can show WHO is listening. A stream
+// that has been superseded by a newer provider gets a final active=false.
+message MicDemand {
+  bool active = 1;
+  repeated string instances = 2;
+}
+
 // CopyFile streams a file OR directory out of an instance to the client (the
 // `fleet copy` / in-instance `fc` feature). The server reads through the backend
 // (a tar pipe over container exec) and streams it back: the FIRST chunk carries

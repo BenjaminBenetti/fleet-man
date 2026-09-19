@@ -119,6 +119,11 @@ func Serve(ctx context.Context) error {
 	}, svc.hub.hasSubscribers)
 	go controlReg.run(hubCtx)
 
+	// Virtual microphone: keeps a sink inside every running instance while a
+	// microphone provider (a TUI's Mic stream) is attached and the feature is on.
+	// Idle — no config reads, no execs — whenever no provider is attached.
+	go svc.mic.run(hubCtx)
+
 	grpcServer := grpc.NewServer()
 	fleetgrpc.RegisterFleetServiceServer(grpcServer, svc)
 

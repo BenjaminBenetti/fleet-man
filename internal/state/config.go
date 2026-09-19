@@ -18,6 +18,7 @@ type Config struct {
 	CodespacesSettings CodespacesSettings `json:"codespaces_settings"`
 	BrowserSettings    BrowserSettings    `json:"browser_settings"`
 	RemoteMcpSettings  RemoteMcpSettings  `json:"remote_mcp_settings"`
+	MicSettings        MicSettings        `json:"mic_settings"`
 	DefaultBackend     string             `json:"default_backend,omitempty"` // "devcontainer", "coder", or "codespaces"
 }
 
@@ -45,6 +46,8 @@ func (c *Config) applyDefaults() {
 	c.DotfilesSettings.InstallScript = strings.TrimSpace(c.DotfilesSettings.InstallScript)
 
 	c.RemoteMcpSettings.GatewayURL = strings.TrimSpace(c.RemoteMcpSettings.GatewayURL)
+
+	c.MicSettings.Device = strings.TrimSpace(c.MicSettings.Device)
 }
 
 // ConfigPath returns the path to the config file.

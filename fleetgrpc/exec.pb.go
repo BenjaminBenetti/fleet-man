@@ -801,6 +801,278 @@ func (x *ForwardOpen) GetRemotePort() int32 {
 	return 0
 }
 
+// Mic is the virtual-microphone DATA PLANE: one bidi stream per microphone-
+// providing client (a TUI on the machine the human — and their mic — sits at).
+// The CLIENT owns capture; the SERVER owns the per-instance sinks that feed each
+// instance's virtual audio source. Because the audio rides this stream, the mic
+// follows the client even when the server is remote, exactly like Forward.
+//
+// Capture is ON DEMAND: the server tells the client when something inside an
+// instance starts/stops recording (MicDemand) and the client only opens the
+// real microphone while demand is active — the mic is never streamed idle.
+//
+// The FIRST client frame MUST carry `open`; every later client frame carries
+// raw PCM in `audio`, in the format the open header declared.
+type MicUp struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Msg:
+	//
+	//	*MicUp_Open
+	//	*MicUp_Audio
+	Msg           isMicUp_Msg `protobuf_oneof:"msg"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MicUp) Reset() {
+	*x = MicUp{}
+	mi := &file_exec_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MicUp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MicUp) ProtoMessage() {}
+
+func (x *MicUp) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MicUp.ProtoReflect.Descriptor instead.
+func (*MicUp) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *MicUp) GetMsg() isMicUp_Msg {
+	if x != nil {
+		return x.Msg
+	}
+	return nil
+}
+
+func (x *MicUp) GetOpen() *MicOpen {
+	if x != nil {
+		if x, ok := x.Msg.(*MicUp_Open); ok {
+			return x.Open
+		}
+	}
+	return nil
+}
+
+func (x *MicUp) GetAudio() []byte {
+	if x != nil {
+		if x, ok := x.Msg.(*MicUp_Audio); ok {
+			return x.Audio
+		}
+	}
+	return nil
+}
+
+type isMicUp_Msg interface {
+	isMicUp_Msg()
+}
+
+type MicUp_Open struct {
+	Open *MicOpen `protobuf:"bytes,1,opt,name=open,proto3,oneof"`
+}
+
+type MicUp_Audio struct {
+	Audio []byte `protobuf:"bytes,2,opt,name=audio,proto3,oneof"`
+}
+
+func (*MicUp_Open) isMicUp_Msg() {}
+
+func (*MicUp_Audio) isMicUp_Msg() {}
+
+// MicOpen declares the PCM format the client will send. Samples are always
+// signed 16-bit little-endian; the server currently accepts exactly 16 kHz mono
+// (the in-instance source's native format) and rejects anything else, so a
+// future format change fails loudly rather than playing back as noise.
+type MicOpen struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SampleRate    uint32                 `protobuf:"varint,1,opt,name=sample_rate,json=sampleRate,proto3" json:"sample_rate,omitempty"`
+	Channels      uint32                 `protobuf:"varint,2,opt,name=channels,proto3" json:"channels,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MicOpen) Reset() {
+	*x = MicOpen{}
+	mi := &file_exec_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MicOpen) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MicOpen) ProtoMessage() {}
+
+func (x *MicOpen) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MicOpen.ProtoReflect.Descriptor instead.
+func (*MicOpen) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *MicOpen) GetSampleRate() uint32 {
+	if x != nil {
+		return x.SampleRate
+	}
+	return 0
+}
+
+func (x *MicOpen) GetChannels() uint32 {
+	if x != nil {
+		return x.Channels
+	}
+	return 0
+}
+
+type MicDown struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Msg:
+	//
+	//	*MicDown_Demand
+	Msg           isMicDown_Msg `protobuf_oneof:"msg"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MicDown) Reset() {
+	*x = MicDown{}
+	mi := &file_exec_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MicDown) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MicDown) ProtoMessage() {}
+
+func (x *MicDown) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MicDown.ProtoReflect.Descriptor instead.
+func (*MicDown) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *MicDown) GetMsg() isMicDown_Msg {
+	if x != nil {
+		return x.Msg
+	}
+	return nil
+}
+
+func (x *MicDown) GetDemand() *MicDemand {
+	if x != nil {
+		if x, ok := x.Msg.(*MicDown_Demand); ok {
+			return x.Demand
+		}
+	}
+	return nil
+}
+
+type isMicDown_Msg interface {
+	isMicDown_Msg()
+}
+
+type MicDown_Demand struct {
+	Demand *MicDemand `protobuf:"bytes,1,opt,name=demand,proto3,oneof"`
+}
+
+func (*MicDown_Demand) isMicDown_Msg() {}
+
+// MicDemand is the server's start/stop signal. active=true means at least one
+// instance has a recorder attached to its virtual microphone; `instances` names
+// them ("<fleet>/<instance>") so the client can show WHO is listening. A stream
+// that has been superseded by a newer provider gets a final active=false.
+type MicDemand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Active        bool                   `protobuf:"varint,1,opt,name=active,proto3" json:"active,omitempty"`
+	Instances     []string               `protobuf:"bytes,2,rep,name=instances,proto3" json:"instances,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MicDemand) Reset() {
+	*x = MicDemand{}
+	mi := &file_exec_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MicDemand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MicDemand) ProtoMessage() {}
+
+func (x *MicDemand) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MicDemand.ProtoReflect.Descriptor instead.
+func (*MicDemand) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *MicDemand) GetActive() bool {
+	if x != nil {
+		return x.Active
+	}
+	return false
+}
+
+func (x *MicDemand) GetInstances() []string {
+	if x != nil {
+		return x.Instances
+	}
+	return nil
+}
+
 // CopyFile streams a file OR directory out of an instance to the client (the
 // `fleet copy` / in-instance `fc` feature). The server reads through the backend
 // (a tar pipe over container exec) and streams it back: the FIRST chunk carries
@@ -821,7 +1093,7 @@ type CopyFileRequest struct {
 
 func (x *CopyFileRequest) Reset() {
 	*x = CopyFileRequest{}
-	mi := &file_exec_proto_msgTypes[11]
+	mi := &file_exec_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -833,7 +1105,7 @@ func (x *CopyFileRequest) String() string {
 func (*CopyFileRequest) ProtoMessage() {}
 
 func (x *CopyFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[11]
+	mi := &file_exec_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -846,7 +1118,7 @@ func (x *CopyFileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyFileRequest.ProtoReflect.Descriptor instead.
 func (*CopyFileRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{11}
+	return file_exec_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *CopyFileRequest) GetFleet() string {
@@ -883,7 +1155,7 @@ type CopyFileChunk struct {
 
 func (x *CopyFileChunk) Reset() {
 	*x = CopyFileChunk{}
-	mi := &file_exec_proto_msgTypes[12]
+	mi := &file_exec_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -895,7 +1167,7 @@ func (x *CopyFileChunk) String() string {
 func (*CopyFileChunk) ProtoMessage() {}
 
 func (x *CopyFileChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[12]
+	mi := &file_exec_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -908,7 +1180,7 @@ func (x *CopyFileChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyFileChunk.ProtoReflect.Descriptor instead.
 func (*CopyFileChunk) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{12}
+	return file_exec_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *CopyFileChunk) GetMsg() isCopyFileChunk_Msg {
@@ -972,7 +1244,7 @@ type CopyFileMeta struct {
 
 func (x *CopyFileMeta) Reset() {
 	*x = CopyFileMeta{}
-	mi := &file_exec_proto_msgTypes[13]
+	mi := &file_exec_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -984,7 +1256,7 @@ func (x *CopyFileMeta) String() string {
 func (*CopyFileMeta) ProtoMessage() {}
 
 func (x *CopyFileMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[13]
+	mi := &file_exec_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -997,7 +1269,7 @@ func (x *CopyFileMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyFileMeta.ProtoReflect.Descriptor instead.
 func (*CopyFileMeta) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{13}
+	return file_exec_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *CopyFileMeta) GetName() string {
@@ -1050,7 +1322,7 @@ type CopyIntoChunk struct {
 
 func (x *CopyIntoChunk) Reset() {
 	*x = CopyIntoChunk{}
-	mi := &file_exec_proto_msgTypes[14]
+	mi := &file_exec_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1062,7 +1334,7 @@ func (x *CopyIntoChunk) String() string {
 func (*CopyIntoChunk) ProtoMessage() {}
 
 func (x *CopyIntoChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[14]
+	mi := &file_exec_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1075,7 +1347,7 @@ func (x *CopyIntoChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyIntoChunk.ProtoReflect.Descriptor instead.
 func (*CopyIntoChunk) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{14}
+	return file_exec_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *CopyIntoChunk) GetMsg() isCopyIntoChunk_Msg {
@@ -1151,7 +1423,7 @@ type CopyIntoOpen struct {
 
 func (x *CopyIntoOpen) Reset() {
 	*x = CopyIntoOpen{}
-	mi := &file_exec_proto_msgTypes[15]
+	mi := &file_exec_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1163,7 +1435,7 @@ func (x *CopyIntoOpen) String() string {
 func (*CopyIntoOpen) ProtoMessage() {}
 
 func (x *CopyIntoOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[15]
+	mi := &file_exec_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1176,7 +1448,7 @@ func (x *CopyIntoOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyIntoOpen.ProtoReflect.Descriptor instead.
 func (*CopyIntoOpen) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{15}
+	return file_exec_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *CopyIntoOpen) GetFleet() string {
@@ -1240,7 +1512,7 @@ type CopyIntoReply struct {
 
 func (x *CopyIntoReply) Reset() {
 	*x = CopyIntoReply{}
-	mi := &file_exec_proto_msgTypes[16]
+	mi := &file_exec_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1252,7 +1524,7 @@ func (x *CopyIntoReply) String() string {
 func (*CopyIntoReply) ProtoMessage() {}
 
 func (x *CopyIntoReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[16]
+	mi := &file_exec_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1265,7 +1537,7 @@ func (x *CopyIntoReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyIntoReply.ProtoReflect.Descriptor instead.
 func (*CopyIntoReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{16}
+	return file_exec_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *CopyIntoReply) GetPath() string {
@@ -1296,7 +1568,7 @@ type ResolveLogsCommandRequest struct {
 
 func (x *ResolveLogsCommandRequest) Reset() {
 	*x = ResolveLogsCommandRequest{}
-	mi := &file_exec_proto_msgTypes[17]
+	mi := &file_exec_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1308,7 +1580,7 @@ func (x *ResolveLogsCommandRequest) String() string {
 func (*ResolveLogsCommandRequest) ProtoMessage() {}
 
 func (x *ResolveLogsCommandRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[17]
+	mi := &file_exec_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1321,7 +1593,7 @@ func (x *ResolveLogsCommandRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveLogsCommandRequest.ProtoReflect.Descriptor instead.
 func (*ResolveLogsCommandRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{17}
+	return file_exec_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ResolveLogsCommandRequest) GetFleet() string {
@@ -1347,7 +1619,7 @@ type ResolveLogsCommandReply struct {
 
 func (x *ResolveLogsCommandReply) Reset() {
 	*x = ResolveLogsCommandReply{}
-	mi := &file_exec_proto_msgTypes[18]
+	mi := &file_exec_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1359,7 +1631,7 @@ func (x *ResolveLogsCommandReply) String() string {
 func (*ResolveLogsCommandReply) ProtoMessage() {}
 
 func (x *ResolveLogsCommandReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[18]
+	mi := &file_exec_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1372,7 +1644,7 @@ func (x *ResolveLogsCommandReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveLogsCommandReply.ProtoReflect.Descriptor instead.
 func (*ResolveLogsCommandReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{18}
+	return file_exec_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ResolveLogsCommandReply) GetArgv() []string {
@@ -1399,7 +1671,7 @@ type TriggerLogsRequest struct {
 
 func (x *TriggerLogsRequest) Reset() {
 	*x = TriggerLogsRequest{}
-	mi := &file_exec_proto_msgTypes[19]
+	mi := &file_exec_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1411,7 +1683,7 @@ func (x *TriggerLogsRequest) String() string {
 func (*TriggerLogsRequest) ProtoMessage() {}
 
 func (x *TriggerLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[19]
+	mi := &file_exec_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1424,7 +1696,7 @@ func (x *TriggerLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerLogsRequest.ProtoReflect.Descriptor instead.
 func (*TriggerLogsRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{19}
+	return file_exec_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *TriggerLogsRequest) GetFleet() string {
@@ -1454,7 +1726,7 @@ type TriggerLogsReply struct {
 
 func (x *TriggerLogsReply) Reset() {
 	*x = TriggerLogsReply{}
-	mi := &file_exec_proto_msgTypes[20]
+	mi := &file_exec_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1466,7 +1738,7 @@ func (x *TriggerLogsReply) String() string {
 func (*TriggerLogsReply) ProtoMessage() {}
 
 func (x *TriggerLogsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[20]
+	mi := &file_exec_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1479,7 +1751,7 @@ func (x *TriggerLogsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerLogsReply.ProtoReflect.Descriptor instead.
 func (*TriggerLogsReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{20}
+	return file_exec_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *TriggerLogsReply) GetLogs() string {
@@ -1508,7 +1780,7 @@ type GetCoderTemplateParamsRequest struct {
 
 func (x *GetCoderTemplateParamsRequest) Reset() {
 	*x = GetCoderTemplateParamsRequest{}
-	mi := &file_exec_proto_msgTypes[21]
+	mi := &file_exec_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1520,7 +1792,7 @@ func (x *GetCoderTemplateParamsRequest) String() string {
 func (*GetCoderTemplateParamsRequest) ProtoMessage() {}
 
 func (x *GetCoderTemplateParamsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[21]
+	mi := &file_exec_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1533,7 +1805,7 @@ func (x *GetCoderTemplateParamsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCoderTemplateParamsRequest.ProtoReflect.Descriptor instead.
 func (*GetCoderTemplateParamsRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{21}
+	return file_exec_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetCoderTemplateParamsRequest) GetTemplate() string {
@@ -1559,7 +1831,7 @@ type CoderRichParameter struct {
 
 func (x *CoderRichParameter) Reset() {
 	*x = CoderRichParameter{}
-	mi := &file_exec_proto_msgTypes[22]
+	mi := &file_exec_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1571,7 +1843,7 @@ func (x *CoderRichParameter) String() string {
 func (*CoderRichParameter) ProtoMessage() {}
 
 func (x *CoderRichParameter) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[22]
+	mi := &file_exec_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1584,7 +1856,7 @@ func (x *CoderRichParameter) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CoderRichParameter.ProtoReflect.Descriptor instead.
 func (*CoderRichParameter) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{22}
+	return file_exec_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *CoderRichParameter) GetName() string {
@@ -1632,7 +1904,7 @@ type GetCoderTemplateParamsReply struct {
 
 func (x *GetCoderTemplateParamsReply) Reset() {
 	*x = GetCoderTemplateParamsReply{}
-	mi := &file_exec_proto_msgTypes[23]
+	mi := &file_exec_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1644,7 +1916,7 @@ func (x *GetCoderTemplateParamsReply) String() string {
 func (*GetCoderTemplateParamsReply) ProtoMessage() {}
 
 func (x *GetCoderTemplateParamsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[23]
+	mi := &file_exec_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1657,7 +1929,7 @@ func (x *GetCoderTemplateParamsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCoderTemplateParamsReply.ProtoReflect.Descriptor instead.
 func (*GetCoderTemplateParamsReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{23}
+	return file_exec_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *GetCoderTemplateParamsReply) GetParameters() []*CoderRichParameter {
@@ -1687,7 +1959,7 @@ type GetBrowserConfigRequest struct {
 
 func (x *GetBrowserConfigRequest) Reset() {
 	*x = GetBrowserConfigRequest{}
-	mi := &file_exec_proto_msgTypes[24]
+	mi := &file_exec_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1699,7 +1971,7 @@ func (x *GetBrowserConfigRequest) String() string {
 func (*GetBrowserConfigRequest) ProtoMessage() {}
 
 func (x *GetBrowserConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[24]
+	mi := &file_exec_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1712,7 +1984,7 @@ func (x *GetBrowserConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBrowserConfigRequest.ProtoReflect.Descriptor instead.
 func (*GetBrowserConfigRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{24}
+	return file_exec_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *GetBrowserConfigRequest) GetFleet() string {
@@ -1741,7 +2013,7 @@ type GetBrowserConfigReply struct {
 
 func (x *GetBrowserConfigReply) Reset() {
 	*x = GetBrowserConfigReply{}
-	mi := &file_exec_proto_msgTypes[25]
+	mi := &file_exec_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1753,7 +2025,7 @@ func (x *GetBrowserConfigReply) String() string {
 func (*GetBrowserConfigReply) ProtoMessage() {}
 
 func (x *GetBrowserConfigReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[25]
+	mi := &file_exec_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1766,7 +2038,7 @@ func (x *GetBrowserConfigReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBrowserConfigReply.ProtoReflect.Descriptor instead.
 func (*GetBrowserConfigReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{25}
+	return file_exec_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetBrowserConfigReply) GetInitialUrl() string {
@@ -1804,7 +2076,7 @@ type PrepareBrowserRequest struct {
 
 func (x *PrepareBrowserRequest) Reset() {
 	*x = PrepareBrowserRequest{}
-	mi := &file_exec_proto_msgTypes[26]
+	mi := &file_exec_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1816,7 +2088,7 @@ func (x *PrepareBrowserRequest) String() string {
 func (*PrepareBrowserRequest) ProtoMessage() {}
 
 func (x *PrepareBrowserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[26]
+	mi := &file_exec_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1829,7 +2101,7 @@ func (x *PrepareBrowserRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepareBrowserRequest.ProtoReflect.Descriptor instead.
 func (*PrepareBrowserRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{26}
+	return file_exec_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *PrepareBrowserRequest) GetFleet() string {
@@ -1869,7 +2141,7 @@ type PrepareBrowserReply struct {
 
 func (x *PrepareBrowserReply) Reset() {
 	*x = PrepareBrowserReply{}
-	mi := &file_exec_proto_msgTypes[27]
+	mi := &file_exec_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1881,7 +2153,7 @@ func (x *PrepareBrowserReply) String() string {
 func (*PrepareBrowserReply) ProtoMessage() {}
 
 func (x *PrepareBrowserReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[27]
+	mi := &file_exec_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1894,7 +2166,7 @@ func (x *PrepareBrowserReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepareBrowserReply.ProtoReflect.Descriptor instead.
 func (*PrepareBrowserReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{27}
+	return file_exec_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *PrepareBrowserReply) GetInitialUrl() string {
@@ -1964,7 +2236,21 @@ const file_exec_proto_rawDesc = "" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12\x1f\n" +
 	"\vremote_port\x18\x03 \x01(\x05R\n" +
-	"remotePort\"W\n" +
+	"remotePort\"P\n" +
+	"\x05MicUp\x12(\n" +
+	"\x04open\x18\x01 \x01(\v2\x12.fleetgrpc.MicOpenH\x00R\x04open\x12\x16\n" +
+	"\x05audio\x18\x02 \x01(\fH\x00R\x05audioB\x05\n" +
+	"\x03msg\"F\n" +
+	"\aMicOpen\x12\x1f\n" +
+	"\vsample_rate\x18\x01 \x01(\rR\n" +
+	"sampleRate\x12\x1a\n" +
+	"\bchannels\x18\x02 \x01(\rR\bchannels\"@\n" +
+	"\aMicDown\x12.\n" +
+	"\x06demand\x18\x01 \x01(\v2\x14.fleetgrpc.MicDemandH\x00R\x06demandB\x05\n" +
+	"\x03msg\"A\n" +
+	"\tMicDemand\x12\x16\n" +
+	"\x06active\x18\x01 \x01(\bR\x06active\x12\x1c\n" +
+	"\tinstances\x18\x02 \x03(\tR\tinstances\"W\n" +
 	"\x0fCopyFileRequest\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12\x12\n" +
@@ -2048,7 +2334,7 @@ func file_exec_proto_rawDescGZIP() []byte {
 	return file_exec_proto_rawDescData
 }
 
-var file_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
 var file_exec_proto_goTypes = []any{
 	(*ExecIn)(nil),                        // 0: fleetgrpc.ExecIn
 	(*ExecStart)(nil),                     // 1: fleetgrpc.ExecStart
@@ -2061,43 +2347,49 @@ var file_exec_proto_goTypes = []any{
 	(*LogLine)(nil),                       // 8: fleetgrpc.LogLine
 	(*ForwardChunk)(nil),                  // 9: fleetgrpc.ForwardChunk
 	(*ForwardOpen)(nil),                   // 10: fleetgrpc.ForwardOpen
-	(*CopyFileRequest)(nil),               // 11: fleetgrpc.CopyFileRequest
-	(*CopyFileChunk)(nil),                 // 12: fleetgrpc.CopyFileChunk
-	(*CopyFileMeta)(nil),                  // 13: fleetgrpc.CopyFileMeta
-	(*CopyIntoChunk)(nil),                 // 14: fleetgrpc.CopyIntoChunk
-	(*CopyIntoOpen)(nil),                  // 15: fleetgrpc.CopyIntoOpen
-	(*CopyIntoReply)(nil),                 // 16: fleetgrpc.CopyIntoReply
-	(*ResolveLogsCommandRequest)(nil),     // 17: fleetgrpc.ResolveLogsCommandRequest
-	(*ResolveLogsCommandReply)(nil),       // 18: fleetgrpc.ResolveLogsCommandReply
-	(*TriggerLogsRequest)(nil),            // 19: fleetgrpc.TriggerLogsRequest
-	(*TriggerLogsReply)(nil),              // 20: fleetgrpc.TriggerLogsReply
-	(*GetCoderTemplateParamsRequest)(nil), // 21: fleetgrpc.GetCoderTemplateParamsRequest
-	(*CoderRichParameter)(nil),            // 22: fleetgrpc.CoderRichParameter
-	(*GetCoderTemplateParamsReply)(nil),   // 23: fleetgrpc.GetCoderTemplateParamsReply
-	(*GetBrowserConfigRequest)(nil),       // 24: fleetgrpc.GetBrowserConfigRequest
-	(*GetBrowserConfigReply)(nil),         // 25: fleetgrpc.GetBrowserConfigReply
-	(*PrepareBrowserRequest)(nil),         // 26: fleetgrpc.PrepareBrowserRequest
-	(*PrepareBrowserReply)(nil),           // 27: fleetgrpc.PrepareBrowserReply
-	nil,                                   // 28: fleetgrpc.ExecStart.EnvEntry
-	nil,                                   // 29: fleetgrpc.ResolveExecCommandReply.EnvEntry
-	(*timestamppb.Timestamp)(nil),         // 30: google.protobuf.Timestamp
+	(*MicUp)(nil),                         // 11: fleetgrpc.MicUp
+	(*MicOpen)(nil),                       // 12: fleetgrpc.MicOpen
+	(*MicDown)(nil),                       // 13: fleetgrpc.MicDown
+	(*MicDemand)(nil),                     // 14: fleetgrpc.MicDemand
+	(*CopyFileRequest)(nil),               // 15: fleetgrpc.CopyFileRequest
+	(*CopyFileChunk)(nil),                 // 16: fleetgrpc.CopyFileChunk
+	(*CopyFileMeta)(nil),                  // 17: fleetgrpc.CopyFileMeta
+	(*CopyIntoChunk)(nil),                 // 18: fleetgrpc.CopyIntoChunk
+	(*CopyIntoOpen)(nil),                  // 19: fleetgrpc.CopyIntoOpen
+	(*CopyIntoReply)(nil),                 // 20: fleetgrpc.CopyIntoReply
+	(*ResolveLogsCommandRequest)(nil),     // 21: fleetgrpc.ResolveLogsCommandRequest
+	(*ResolveLogsCommandReply)(nil),       // 22: fleetgrpc.ResolveLogsCommandReply
+	(*TriggerLogsRequest)(nil),            // 23: fleetgrpc.TriggerLogsRequest
+	(*TriggerLogsReply)(nil),              // 24: fleetgrpc.TriggerLogsReply
+	(*GetCoderTemplateParamsRequest)(nil), // 25: fleetgrpc.GetCoderTemplateParamsRequest
+	(*CoderRichParameter)(nil),            // 26: fleetgrpc.CoderRichParameter
+	(*GetCoderTemplateParamsReply)(nil),   // 27: fleetgrpc.GetCoderTemplateParamsReply
+	(*GetBrowserConfigRequest)(nil),       // 28: fleetgrpc.GetBrowserConfigRequest
+	(*GetBrowserConfigReply)(nil),         // 29: fleetgrpc.GetBrowserConfigReply
+	(*PrepareBrowserRequest)(nil),         // 30: fleetgrpc.PrepareBrowserRequest
+	(*PrepareBrowserReply)(nil),           // 31: fleetgrpc.PrepareBrowserReply
+	nil,                                   // 32: fleetgrpc.ExecStart.EnvEntry
+	nil,                                   // 33: fleetgrpc.ResolveExecCommandReply.EnvEntry
+	(*timestamppb.Timestamp)(nil),         // 34: google.protobuf.Timestamp
 }
 var file_exec_proto_depIdxs = []int32{
 	1,  // 0: fleetgrpc.ExecIn.start:type_name -> fleetgrpc.ExecStart
 	2,  // 1: fleetgrpc.ExecIn.resize:type_name -> fleetgrpc.ExecResize
-	28, // 2: fleetgrpc.ExecStart.env:type_name -> fleetgrpc.ExecStart.EnvEntry
+	32, // 2: fleetgrpc.ExecStart.env:type_name -> fleetgrpc.ExecStart.EnvEntry
 	4,  // 3: fleetgrpc.ExecOut.exit:type_name -> fleetgrpc.ExecExit
-	29, // 4: fleetgrpc.ResolveExecCommandReply.env:type_name -> fleetgrpc.ResolveExecCommandReply.EnvEntry
-	30, // 5: fleetgrpc.LogLine.at:type_name -> google.protobuf.Timestamp
+	33, // 4: fleetgrpc.ResolveExecCommandReply.env:type_name -> fleetgrpc.ResolveExecCommandReply.EnvEntry
+	34, // 5: fleetgrpc.LogLine.at:type_name -> google.protobuf.Timestamp
 	10, // 6: fleetgrpc.ForwardChunk.open:type_name -> fleetgrpc.ForwardOpen
-	13, // 7: fleetgrpc.CopyFileChunk.meta:type_name -> fleetgrpc.CopyFileMeta
-	15, // 8: fleetgrpc.CopyIntoChunk.open:type_name -> fleetgrpc.CopyIntoOpen
-	22, // 9: fleetgrpc.GetCoderTemplateParamsReply.parameters:type_name -> fleetgrpc.CoderRichParameter
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	12, // 7: fleetgrpc.MicUp.open:type_name -> fleetgrpc.MicOpen
+	14, // 8: fleetgrpc.MicDown.demand:type_name -> fleetgrpc.MicDemand
+	17, // 9: fleetgrpc.CopyFileChunk.meta:type_name -> fleetgrpc.CopyFileMeta
+	19, // 10: fleetgrpc.CopyIntoChunk.open:type_name -> fleetgrpc.CopyIntoOpen
+	26, // 11: fleetgrpc.GetCoderTemplateParamsReply.parameters:type_name -> fleetgrpc.CoderRichParameter
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_exec_proto_init() }
@@ -2121,22 +2413,29 @@ func file_exec_proto_init() {
 		(*ForwardChunk_Open)(nil),
 		(*ForwardChunk_Data)(nil),
 	}
-	file_exec_proto_msgTypes[12].OneofWrappers = []any{
+	file_exec_proto_msgTypes[11].OneofWrappers = []any{
+		(*MicUp_Open)(nil),
+		(*MicUp_Audio)(nil),
+	}
+	file_exec_proto_msgTypes[13].OneofWrappers = []any{
+		(*MicDown_Demand)(nil),
+	}
+	file_exec_proto_msgTypes[16].OneofWrappers = []any{
 		(*CopyFileChunk_Meta)(nil),
 		(*CopyFileChunk_Data)(nil),
 	}
-	file_exec_proto_msgTypes[14].OneofWrappers = []any{
+	file_exec_proto_msgTypes[18].OneofWrappers = []any{
 		(*CopyIntoChunk_Open)(nil),
 		(*CopyIntoChunk_Data)(nil),
 	}
-	file_exec_proto_msgTypes[26].OneofWrappers = []any{}
+	file_exec_proto_msgTypes[30].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_exec_proto_rawDesc), len(file_exec_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   30,
+			NumMessages:   34,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

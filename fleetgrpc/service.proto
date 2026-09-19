@@ -102,6 +102,10 @@ service FleetService {
   // The client listens locally and pipes each accepted connection through this
   // stream; the server bridges it to remote_port inside the instance.
   rpc Forward(stream ForwardChunk) returns (stream ForwardChunk);
+  // Mic is the virtual-microphone data plane: the client streams captured PCM
+  // up (first frame is the MicOpen header); the server streams demand signals
+  // down so the client only opens the real microphone while an instance records.
+  rpc Mic(stream MicUp) returns (stream MicDown);
   // CopyFile streams a single file out of an instance: first chunk is metadata,
   // the rest are data. Backs `fleet copy` and the in-instance `fc` shorthand.
   rpc CopyFile(CopyFileRequest) returns (stream CopyFileChunk);

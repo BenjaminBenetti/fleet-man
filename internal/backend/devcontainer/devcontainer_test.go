@@ -193,3 +193,21 @@ func TestForwardStdioCommandArgv(t *testing.T) {
 		t.Fatalf("argv = %v, want %v", cmd.Args, want)
 	}
 }
+
+// TestMicSinkCommandArgv: the sink runs the staged binary by absolute path, as
+// the session user, over a TTY-less stdin stream.
+func TestMicSinkCommandArgv(t *testing.T) {
+	b := New()
+	b.userCacheMu.Lock()
+	b.userCache["cid123"] = "vscode"
+	b.userCacheMu.Unlock()
+
+	cmd, ok := b.MicSinkCommand("cid123")
+	if !ok {
+		t.Fatalf("devcontainer backend should support a mic sink")
+	}
+	want := []string{"docker", "exec", "-i", "-u", "vscode", "cid123", "/usr/bin/fleet", "mic", "sink"}
+	if !slices.Equal(cmd.Args, want) {
+		t.Fatalf("argv = %v, want %v", cmd.Args, want)
+	}
+}

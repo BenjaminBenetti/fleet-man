@@ -13,6 +13,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
+	"github.com/BenjaminBenetti/fleet-man/internal/mic"
 	tea "github.com/charmbracelet/bubbletea"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -311,6 +312,7 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 		}
 		m.st = msg.st
 		m.config = msg.config
+		syncMicFromConfig(msg.config)
 		m.armadaConfigPending = false
 		m.err = nil
 		m.resumeCreatingFromState()
@@ -328,6 +330,7 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		m.config = msg.config
+		syncMicFromConfig(msg.config)
 		return m.postSwitchFetchCmd()
 	}
 	return nil
@@ -763,6 +766,11 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	m.pstate = nil
 	m.config = configutil.DefaultConfig()
 	m.armadaConfigPending = true
+	// The microphone follows the connection: stop providing to the daemon being
+	// left now. The new daemon's config (armadaSwitchedMsg) decides whether to
+	// start again — never assume the feature is on over there.
+	syncMicFromConfig(m.config)
+	m.micStatus = mic.Status{}
 	clear(m.runtime)
 	clear(m.creating)
 	m.remoteMcpStatus = nil

@@ -35,6 +35,13 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
+	// Remember whether the microphone was on, to act on it being turned OFF
+	// below. An unreadable prior config reads as "was off" — nothing to undo.
+	micWasEnabled := false
+	if previous, err := state.LoadConfig(); err == nil {
+		micWasEnabled = previous.MicSettings.Enabled
+	}
+
 	if err := state.SaveConfig(protoconv.ConfigFromProto(req.GetConfig(), &state.Config{})); err != nil {
 		return nil, status.Errorf(codes.Internal, "save config: %v", err)
 	}
@@ -48,10 +55,21 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	// while muWrite is held cannot deadlock.
 	s.reconcileRemote(saved.RemoteMcpSettings)
 
+	// Converge the virtual microphone. Turning it ON needs nothing here: the
+	// client opens its Mic stream and the hub's sync loop attaches sinks. Turning
+	// it OFF is acted on now rather than on the next tick, so the toggle means
+	// what it says the moment it is flipped. Non-blocking (the per-instance
+	// shutdowns run on their own goroutines).
+	if micWasEnabled && !saved.MicSettings.Enabled {
+		s.mic.disable()
+	} else if saved.MicSettings.Enabled {
+		s.mic.poke()
+	}
+
 	// The remote-gateway fields are the ones whose effects outlive this RPC (the
 	// tunnel supervisor reacts to them), so call them out; the manager logs the
 	// resulting connection transitions itself.
-	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "remoteFleet", saved.RemoteMcpSettings.FleetEnabled, "webhook", saved.RemoteMcpSettings.WebhookEnabled, "gateway", saved.RemoteMcpSettings.GatewayURL)
+	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "remoteFleet", saved.RemoteMcpSettings.FleetEnabled, "webhook", saved.RemoteMcpSettings.WebhookEnabled, "gateway", saved.RemoteMcpSettings.GatewayURL, "mic", saved.MicSettings.Enabled)
 
 	return &fleetgrpc.SetConfigReply{Config: protoconv.ConfigToProto(saved)}, nil
 }

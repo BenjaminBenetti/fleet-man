@@ -89,6 +89,16 @@ message RemoteMcpSettings {
   string fleet_mode = 5;
 }
 
+// MicSettings mirrors internal/state.MicSettings — the virtual microphone.
+// enabled gates the whole feature daemon-side: the audio packages installed
+// into instances at provision time and the per-instance sinks (the "virtual
+// device injection"). device is the capture device on the CLIENT's machine
+// (an id from the client's own enumeration); empty means the system default.
+message MicSettings {
+  bool enabled = 1;
+  string device = 2;
+}
+
 message Config {
   GeneralSettings general = 1;
   AgentSettings agent = 2;
@@ -104,6 +114,8 @@ message Config {
   RemoteMcpSettings remote_mcp = 8;
 
   reserved 9 to 20;
+
+  MicSettings mic = 21;
 }
 
 message GetConfigRequest {}

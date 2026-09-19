@@ -324,6 +324,14 @@ func (codespacesBackend *CodespacesBackend) PortForwardCommand(containerID strin
 	return exec.Command("gh", "codespace", "ports", "forward", mapping, "-c", containerID)
 }
 
+// MicSinkCommand reports that codespaces instances have no virtual microphone: the
+// sink needs a long-lived, low-latency stdin stream into the workspace, and the
+// codespaces CLI's ssh transport is neither (see backend.Backend.CopyFile for its
+// stdin quirks). Callers skip the instance.
+func (codespacesBackend *CodespacesBackend) MicSinkCommand(string) (*exec.Cmd, bool) {
+	return nil, false
+}
+
 // ForwardStdioCommand returns (nil, false): the gh CLI has no
 // single-connection stdio bridge, so callers fall back to
 // PortForwardCommand bound to a host-local port.

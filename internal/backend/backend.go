@@ -171,6 +171,16 @@ type Backend interface {
 	// to PortForwardCommand bound to a host-local port.
 	ForwardStdioCommand(containerID string, remotePort int) (*exec.Cmd, bool)
 
+	// MicSinkCommand returns an unstarted *exec.Cmd running the in-instance
+	// virtual-microphone sink (`fleet mic sink`, internal/micsink) as the
+	// instance's session user: raw PCM written to its stdin becomes the
+	// instance's microphone, and it reports recorder demand as lines on stdout.
+	// The server's Mic data plane holds one per running instance while a
+	// microphone provider is attached. Returns (nil, false) when the backend
+	// cannot host a sink — a long-lived, low-latency stdin stream — in which
+	// case the instance simply has no virtual microphone.
+	MicSinkCommand(containerID string) (*exec.Cmd, bool)
+
 	// ResolveHostname returns a hostname or IP address that is directly
 	// reachable from the host for the given container/workspace. When
 	// the second return value is true, callers can open direct TCP

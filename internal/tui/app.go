@@ -18,6 +18,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
+	"github.com/BenjaminBenetti/fleet-man/internal/mic"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -105,6 +106,14 @@ type model struct {
 
 	codespaceMachines         []codespaceMachine // available machine types (from GitHub API)
 	codespaceFetchingMachines bool               // true while fetching machine types
+
+	// Virtual microphone (mic.go): the provider's latest status report, and this
+	// machine's capture devices for the settings selector (enumerated lazily).
+	micStatus         mic.Status
+	micDevices        []mic.Device
+	micDevicesLoaded  bool
+	micDevicesLoading bool
+	micDevicesErr     string
 
 	toolStatus []deps.ToolStatus // cached tool install statuses for settings page
 
@@ -299,6 +308,7 @@ func (m *model) reload() {
 	m.st = st
 	m.config = config
 	m.err = nil
+	syncMicFromConfig(config)
 
 	// (The control-socket listeners live on the server now — it owns every
 	// running instance's socket and pushes browser.open as a Watch BrowserOpen
@@ -990,6 +1000,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, spinCmd
 
+	case micStatusMsg:
+		m.micStatus = msg.status
+		return m, spinCmd
+
+	case micDevicesMsg:
+		m.micDevicesLoading = false
+		m.micDevicesLoaded = true
+		m.micDevices = msg.devices
+		m.micDevicesErr = ""
+		if msg.err != nil {
+			m.micDevicesErr = msg.err.Error()
+			if mic.IsNoTool(msg.err) {
+				m.micDevicesErr = "no capture tool: " + mic.InstallHint()
+			}
+		}
+		return m, spinCmd
+
 	case codespaceMachinesFetchedMsg:
 		m.codespaceFetchingMachines = false
 		if msg.err != nil {
@@ -1364,6 +1391,12 @@ func Run() error {
 	// stops the current stream and any bounced successor.
 	watchCtx, watchCancel := context.WithCancel(context.Background())
 	startWatchStream(watchCtx, program) // initial generation is 0, matching model.watchGen's zero value
+
+	// Virtual microphone provider: armed here (it needs the program to report
+	// into), started once the config says the feature is on. newModel already
+	// loaded the config, so converge now rather than waiting for a reload.
+	startMicControl(watchCtx, program)
+	syncMicFromConfig(m.config)
 
 	finalModel, err := program.Run()
 	watchCancel()
