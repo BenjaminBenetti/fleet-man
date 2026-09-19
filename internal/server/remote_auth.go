@@ -34,6 +34,7 @@ var localOnlyMethods = map[string]bool{
 	"/fleetgrpc.FleetService/GetArmada":           true,
 	"/fleetgrpc.FleetService/SetArmada":           true,
 	"/fleetgrpc.FleetService/ResolveArmadaRemote": true, // hands out a remote's bearer token + drives the user's ssh
+	"/fleetgrpc.FleetService/TrustSSHHostKey":     true, // writes the user's known_hosts + hands out a remote's bearer token
 }
 
 // bearerAuthInterceptors returns unary + stream interceptors that require

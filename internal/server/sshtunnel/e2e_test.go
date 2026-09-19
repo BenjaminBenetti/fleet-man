@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -345,5 +346,199 @@ func TestEndToEndAuthFailureIsReported(t *testing.T) {
 	}
 	if time.Since(start) > 20*time.Second {
 		t.Fatalf("auth failure took %s — batch mode should fail fast", time.Since(start))
+	}
+}
+
+// ===========================================
+// Host-key prompt flow over the real ssh binary
+// ===========================================
+
+// clientSSHHomeWith is clientSSHHome with control over the known_hosts the
+// client starts from: trust=false leaves it empty (the host is unknown);
+// wrongKey pre-trusts a DIFFERENT key under the server's name (the host is
+// known but changed).
+func clientSSHHomeWith(t *testing.T, trust bool, wrongKey bool) (knownHosts string, pub ssh.PublicKey, finish func(srv *testSSHServer)) {
+	t.Helper()
+	home := t.TempDir()
+	dir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pubKey, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBlock, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "id_ed25519"), pem.EncodeToMemory(pemBlock), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pub, err = ssh.NewPublicKey(pubKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	knownHosts = filepath.Join(dir, "known_hosts")
+	finish = func(srv *testSSHServer) {
+		_, port, _ := net.SplitHostPort(srv.addr)
+		name := "[127.0.0.1]:" + port
+		switch {
+		case wrongKey:
+			otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
+			other, _ := ssh.NewPublicKey(otherPub)
+			if err := os.WriteFile(knownHosts, []byte(knownhosts.Line([]string{name}, other)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		case trust:
+			if err := os.WriteFile(knownHosts, []byte(knownhosts.Line([]string{name}, srv.hostPub)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cfg := fmt.Sprintf("Host 127.0.0.1\n  IdentityFile %s\n  IdentitiesOnly yes\n  UserKnownHostsFile %s\n",
+			filepath.Join(dir, "id_ed25519"), knownHosts)
+		cfgPath := filepath.Join(dir, "config")
+		if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		orig := sshBaseArgs
+		sshBaseArgs = append([]string{"-F", cfgPath}, orig...)
+		t.Cleanup(func() { sshBaseArgs = orig })
+	}
+	return knownHosts, pub, finish
+}
+
+func requireSSHTools(t *testing.T) {
+	t.Helper()
+	for _, tool := range []string{"ssh", "ssh-keyscan", "ssh-keygen", "sh"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("no %s on PATH", tool)
+		}
+	}
+}
+
+// TestEndToEndUnknownHostKeyAccept: an unknown host is refused with a
+// structured error carrying the fingerprint ssh-keyscan/ssh-keygen computed;
+// trusting the offered line appends exactly it to known_hosts and connects.
+func TestEndToEndUnknownHostKeyAccept(t *testing.T) {
+	requireSSHTools(t)
+	remoteHome := t.TempDir()
+	remoteFleet := filepath.Join(remoteHome, ".fleet")
+	if err := os.MkdirAll(remoteFleet, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rd := startRemoteDaemon(t, "tok-1")
+	for name, val := range map[string]string{"ssh.port": strconv.Itoa(rd.port), "mcp.token": "tok-1\n", "server.version": "test"} {
+		if err := os.WriteFile(filepath.Join(remoteFleet, name), []byte(val), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	knownHosts, clientPub, finish := clientSSHHomeWith(t, false, false)
+	srv := startTestSSHServer(t, clientPub, remoteHome)
+	finish(srv)
+	t.Setenv("SSH_AUTH_SOCK", "")
+	_, port, _ := net.SplitHostPort(srv.addr)
+	rawURL := "ssh://tester@127.0.0.1:" + port
+
+	m := New(context.Background())
+	defer m.Close()
+
+	_, err := m.Resolve(context.Background(), rawURL)
+	var uk *UnknownHostKeyError
+	if !errors.As(err, &uk) {
+		t.Fatalf("want UnknownHostKeyError, got %T: %v", err, err)
+	}
+	if uk.Name != "[127.0.0.1]:"+port || uk.Host != "127.0.0.1" || strconv.Itoa(uk.Port) != port || uk.KeyType != "ED25519" {
+		t.Fatalf("unknown key identity: %+v", uk)
+	}
+	if uk.KnownHostsPath != knownHosts {
+		t.Fatalf("known_hosts path = %s, want the config's %s", uk.KnownHostsPath, knownHosts)
+	}
+	if len(uk.Keys) == 0 || uk.Keys[0].Type != "ssh-ed25519" || uk.Keys[0].Fingerprint != ssh.FingerprintSHA256(srv.hostPub) {
+		t.Fatalf("offered keys: %+v (want the server's ed25519 key %s first)", uk.Keys, ssh.FingerprintSHA256(srv.hostPub))
+	}
+	wantLine := knownhosts.Line([]string{"[127.0.0.1]:" + port}, srv.hostPub)
+	if uk.Keys[0].Line != wantLine {
+		t.Fatalf("known_hosts line = %q, want %q", uk.Keys[0].Line, wantLine)
+	}
+	if !strings.Contains(err.Error(), "not known") || !strings.Contains(err.Error(), "SHA256:") {
+		t.Fatalf("message should say the key is unknown and show the fingerprint: %v", err)
+	}
+	if _, err := os.Stat(knownHosts); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("nothing may be written to known_hosts before the user accepts")
+	}
+
+	ep, err := m.TrustHostKey(context.Background(), rawURL, uk.Keys[0].Line)
+	if err != nil {
+		t.Fatalf("TrustHostKey: %v", err)
+	}
+	if got, _ := os.ReadFile(knownHosts); string(got) != wantLine+"\n" {
+		t.Fatalf("known_hosts after accept = %q, want exactly the offered line", got)
+	}
+	if err := helloThrough(context.Background(), ep.Addr, ep.Token); err != nil {
+		t.Fatalf("Hello through the trusted tunnel: %v", err)
+	}
+	// The offer is consumed: accepting again is refused, nothing is rewritten.
+	if _, err := m.TrustHostKey(context.Background(), rawURL, uk.Keys[0].Line); !errors.Is(err, ErrKeyNotOffered) {
+		t.Fatalf("second accept: want ErrKeyNotOffered, got %v", err)
+	}
+}
+
+// TestEndToEndUnknownHostKeyReject: without an accept nothing is ever
+// written, and the next resolve refuses the host the same way.
+func TestEndToEndUnknownHostKeyReject(t *testing.T) {
+	requireSSHTools(t)
+	knownHosts, clientPub, finish := clientSSHHomeWith(t, false, false)
+	srv := startTestSSHServer(t, clientPub, t.TempDir())
+	finish(srv)
+	t.Setenv("SSH_AUTH_SOCK", "")
+	_, port, _ := net.SplitHostPort(srv.addr)
+	rawURL := "ssh://tester@127.0.0.1:" + port
+
+	m := New(context.Background())
+	defer m.Close()
+	for i := 0; i < 2; i++ {
+		_, err := m.Resolve(context.Background(), rawURL)
+		var uk *UnknownHostKeyError
+		if !errors.As(err, &uk) {
+			t.Fatalf("resolve %d: want UnknownHostKeyError, got %v", i, err)
+		}
+	}
+	if _, err := os.Stat(knownHosts); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a rejected (never accepted) key must not touch known_hosts")
+	}
+}
+
+// TestEndToEndChangedHostKeyRefused: a known host presenting a different key
+// is refused with the offending known_hosts file:line and is NEVER offered.
+func TestEndToEndChangedHostKeyRefused(t *testing.T) {
+	requireSSHTools(t)
+	knownHosts, clientPub, finish := clientSSHHomeWith(t, false, true)
+	srv := startTestSSHServer(t, clientPub, t.TempDir())
+	finish(srv)
+	t.Setenv("SSH_AUTH_SOCK", "")
+	_, port, _ := net.SplitHostPort(srv.addr)
+	rawURL := "ssh://tester@127.0.0.1:" + port
+	before, _ := os.ReadFile(knownHosts)
+
+	m := New(context.Background())
+	defer m.Close()
+	_, err := m.Resolve(context.Background(), rawURL)
+	var changed *ChangedHostKeyError
+	if !errors.As(err, &changed) {
+		t.Fatalf("want ChangedHostKeyError, got %T: %v", err, err)
+	}
+	var uk *UnknownHostKeyError
+	if errors.As(err, &uk) {
+		t.Fatal("a changed key must never be offered for acceptance")
+	}
+	if changed.File != knownHosts || changed.Line != 1 || !strings.Contains(err.Error(), knownHosts+":1") {
+		t.Fatalf("changed key should name %s:1, got %+v / %v", knownHosts, changed, err)
+	}
+	if len(m.offered) != 0 {
+		t.Fatal("no offer may be recorded for a changed key")
+	}
+	if after, _ := os.ReadFile(knownHosts); string(after) != string(before) {
+		t.Fatal("known_hosts must be untouched")
 	}
 }

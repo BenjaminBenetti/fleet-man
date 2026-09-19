@@ -1253,7 +1253,9 @@ func (settingsPage *settingsPage) enterArmadaRemoteRow(m *model, idx int) tea.Cm
 		return saveArmadaCmd(next, "removed", idx)
 	}
 
-	// Plain enter on the row: probe it again right now.
+	// Plain enter on the row: probe it again right now. Explicit, so an unknown
+	// host key from this ping opens the prompt (a background sweep never does).
+	m.armadaExplicitPing[remote.URL] = true
 	m.armadaStatus[remote.URL] = armadaStatus{state: armadaStatusPinging}
 	return pingArmadaCmd(remote.URL, remote.Token)
 }

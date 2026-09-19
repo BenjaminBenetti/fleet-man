@@ -470,12 +470,41 @@ noticed on the next connection and rebuilt automatically. If the remote daemon
 isn't running at all, the probe starts it for you (it looks for `fleet` on the
 remote's `PATH`, then `~/.local/bin`, `~/go/bin`, `/usr/local/bin`).
 
-The daemon has no terminal, so `ssh` runs in **batch mode**: anything that would
-prompt — an unknown host key, a passphrase-locked key with no agent — fails with
-that reason in the remote's status column instead of hanging. Fix it once by
-running `ssh user@host` yourself, then ping again. `ssh` inherits the daemon's
-environment, so an agent socket must be visible to it (restart the daemon from
-a shell that has `SSH_AUTH_SOCK` if it isn't).
+The daemon has no terminal, so `ssh` runs in **batch mode with strict host-key
+checking**: anything that would prompt — a passphrase-locked key with no agent,
+say — fails with that reason in the remote's status column instead of hanging.
+`ssh` inherits the daemon's environment, so an agent socket must be visible to
+it (restart the daemon from a shell that has `SSH_AUTH_SOCK` if it isn't).
+
+**Unknown host keys are your decision, never fleet's.** When a remote's host
+key is not in your `known_hosts`, `ssh` refuses it; the daemon then fetches
+the host's public keys with `ssh-keyscan` and their SHA256 fingerprints with
+`ssh-keygen -lf`, and the TUI shows a prompt — the host and port it reached,
+the key type and fingerprint, and the `known_hosts` file it would write to —
+wherever the connection came up: the **+ Remote Fleet** connection test, an
+Armada switch, a boot with `FLEET_SSH`, or pressing enter on a registered
+remote in Settings. Compare the fingerprint with the host's own (on the host:
+`ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub`). **Accept** appends exactly that
+one line to your `known_hosts` (creating `~/.ssh` / the file with `0700` /
+`0600` if needed, never touching other lines) and retries the connection;
+**reject** cancels with a status message and writes nothing. The prompt appears
+once per key, not once per connection attempt. fleet never passes
+`StrictHostKeyChecking=accept-new` (or `no`), and it runs `ssh` with
+`UpdateHostKeys=no` so ssh cannot quietly learn the host's other key types
+after the fact: no key is trusted without a person seeing its fingerprint.
+
+A **changed** key — the host is known, but presents a different key — is the
+man-in-the-middle warning, so it is never offered for acceptance. The
+connection fails with a message naming the offending `known_hosts` file and
+line reported by `ssh`; verify the host and fix that line by hand. A planned
+host-key rotation looks the same to fleet (with `UpdateHostKeys=no` it never
+learns new keys in advance), so after rotating a host's keys expect this
+message and update the line yourself.
+
+The plain CLI stays non-interactive: `FLEET_SSH=ssh://user@host fleet ls`
+against a host with an unknown key fails fast, telling you the key is not
+known and pointing you at the TUI (Settings → Fleet Armada) or a one-time
+manual `ssh user@host`.
 
 You can also drive an `ssh://` fleet from a plain shell:
 

@@ -59,6 +59,16 @@ type model struct {
 	armadaRemotes   []configutil.ArmadaRemote
 	armadaStatus    map[string]armadaStatus
 	armadaTickArmed bool
+	// armadaExplicitPing marks remotes the user just asked to ping (enter on
+	// their settings row), so an unknown host key from THAT ping prompts —
+	// the background status sweep never does.
+	armadaExplicitPing map[string]bool
+
+	// hostKeyPrompt is the pending ssh host-key decision (hostkey_prompt.go);
+	// hostKeyDeclined remembers rejected remote|fingerprint pairs so
+	// background reconnects don't re-ask.
+	hostKeyPrompt   *hostKeyPrompt
+	hostKeyDeclined map[string]bool
 
 	// bootGateway/bootToken capture FLEET_GATEWAY/FLEET_TOKEN as they were at
 	// startup, bootSSH captures FLEET_SSH, and bootServer captures FLEET_SERVER.
@@ -204,6 +214,8 @@ func newModel() model {
 		agentSpinner:       agentSpinnerModel,
 		inHostTmux:         os.Getenv("TMUX") != "",
 		armadaStatus:       make(map[string]armadaStatus),
+		armadaExplicitPing: make(map[string]bool),
+		hostKeyDeclined:    make(map[string]bool),
 		copySessionAllow:   make(map[string]bool),
 		openSessionAllow:   make(map[string]bool),
 		bootGateway:        os.Getenv(fleetclient.EnvGateway),
@@ -779,6 +791,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// 2.5 ssh host-key prompt — while an unknown host key awaits the user's
+	// decision it swallows all key input (accept/reject resolve it). See
+	// hostkey_prompt.go.
+	if m.hostKeyPromptShowing() {
+		if key, ok := msg.(tea.KeyMsg); ok {
+			return m, tea.Batch(spinCmd, m.resolveHostKeyPrompt(key.String()))
+		}
+	}
+
 	// 2.6 Delegated-copy confirmation — while a host-touching `fc` is pending it
 	// swallows all key input: allow/deny resolves it, every other key is ignored
 	// so it can't fall through to the active page. See copyconfirm.go.
@@ -903,10 +924,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.serverVersion = msg.serverVersion
 		return m, spinCmd
 
-	case watchErrMsg, watchClosedMsg:
-		// The watcher reconnects on its own; nothing rendered from the stream
-		// yet in Step 5, so this is a no-op (do not crash on a dropped stream).
+	case watchErrMsg:
+		// The watcher reconnects on its own. The one connect failure worth
+		// acting on here is an unknown ssh host key for the connection this TUI
+		// is on (boot with FLEET_SSH, a switch, a reconnect): ask the user once.
+		if url := currentSSHURL(); url != "" {
+			m.offerHostKey(url, msg.err, hostKeyOriginConnect)
+		}
 		return m, spinCmd
+
+	case watchClosedMsg:
+		// A dropped stream is reconnected by the watcher; nothing to do.
+		return m, spinCmd
+
+	case hostKeyTrustedMsg:
+		return m, tea.Batch(spinCmd, m.handleHostKeyTrusted(msg))
 
 	case armadaLoadedMsg, armadaPingTickMsg, armadaPingResultMsg,
 		armadaTestResultMsg, armadaSaveResultMsg, armadaSwitchedMsg,
@@ -1261,6 +1293,10 @@ func (m model) View() string {
 	// Release notes overlay takes over the whole screen, centered.
 	if m.releaseNotesShowing() {
 		return m.viewReleaseNotes() + "\x1b[0J"
+	}
+	// ssh host-key prompt overlay (an unknown key awaiting accept/reject).
+	if m.hostKeyPromptShowing() {
+		return m.viewHostKeyPrompt() + "\x1b[0J"
 	}
 	// Delegated-copy confirmation overlay (host-touching `fc`).
 	if m.copyConfirmShowing() {

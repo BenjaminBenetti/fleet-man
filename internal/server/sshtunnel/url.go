@@ -101,13 +101,25 @@ func (t Target) destination() string {
 }
 
 // sshBaseArgs are the options every ssh invocation starts with: batch mode so
-// a daemon with no TTY can never hang on a prompt (an unknown host key or a
-// passphrase-locked key fails fast with a clear stderr instead), a bounded
-// connect, and keepalives so a dead peer is noticed. A package var so tests can
-// prepend "-F <config>" — OpenSSH resolves ~/.ssh from the passwd entry, not
-// $HOME, so a test cannot redirect it any other way.
+// a daemon with no TTY can never hang on a prompt (a passphrase-locked key
+// fails fast with a clear stderr instead); STRICT host-key checking, so an
+// unknown host is refused with an explicit "No <type> host key is known for
+// <name>" that hostkey.go turns into a fingerprint prompt for the user (never
+// accept-new: no key is trusted without a human seeing its fingerprint), and a
+// changed key is refused outright; a bounded connect; and keepalives so a dead
+// peer is noticed. A package var so tests can prepend "-F <config>" — OpenSSH
+// resolves ~/.ssh from the passwd entry, not $HOME, so a test cannot redirect
+// it any other way.
 var sshBaseArgs = []string{
 	"-o", "BatchMode=yes",
+	"-o", "StrictHostKeyChecking=yes",
+	// Never let ssh add to known_hosts on its own: its default UpdateHostKeys
+	// would append the host's OTHER key types (hashed) after the first
+	// verified connection, and CheckHostIP (on by default before OpenSSH 8.5)
+	// would add an "<ip> <same key>" line. The one line the user accepted is
+	// the only line written.
+	"-o", "UpdateHostKeys=no",
+	"-o", "CheckHostIP=no",
 	"-o", "ConnectTimeout=15",
 	"-o", "ServerAliveInterval=15",
 	"-o", "ServerAliveCountMax=3",

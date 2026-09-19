@@ -214,11 +214,38 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 		return tea.Batch(armadaPingTickCmd(), m.pingAllArmadaCmd())
 
 	case armadaPingResultMsg:
+		explicit := m.armadaExplicitPing[msg.url]
+		delete(m.armadaExplicitPing, msg.url)
 		st := armadaStatus{state: armadaStatusConnected}
+		prompted := false
 		if msg.err != nil {
 			st = armadaStatus{state: armadaStatusError, err: armadaPingErrText(msg.url, msg.err)}
+			if uk := fleetclient.UnknownSSHHostKey(msg.err); uk != nil && len(uk.GetKeys()) > 0 {
+				st.err = "unknown host key — press enter to review"
+				// Only a ping the user asked for (enter on the row, or on the
+				// current entry in the Armada selector) prompts; the background
+				// status sweep just shows the state.
+				if explicit {
+					prompted = m.offerHostKey(msg.url, msg.err, hostKeyOriginPing)
+				}
+			}
 		}
 		m.armadaStatus[msg.url] = st
+		if explicit && !prompted {
+			// The user asked for this ping (enter on a Settings row, or on the
+			// current entry in the Armada selector) and no prompt took it
+			// over: show the outcome on the status line. A success is worded as
+			// a probe result unless this is the connection the TUI is on.
+			name := m.armadaNameFor(msg.url)
+			switch {
+			case msg.err != nil:
+				m.message = name + ": " + st.err
+			case msg.url == armadaCurrentKey():
+				m.message = "Connected to " + name
+			default:
+				m.message = name + " is reachable"
+			}
+		}
 		return nil
 
 	case armadaTestResultMsg:
@@ -226,6 +253,11 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 			return nil // flow cancelled or page left; drop the stale result
 		}
 		if msg.err != nil {
+			if m.offerHostKey(msg.url, msg.err, hostKeyOriginAdd) {
+				// The flow stays in its testing stage under the prompt; accept
+				// finishes the registration, reject cancels it.
+				return nil
+			}
 			settingsPage.cancelArmadaAdd()
 			m.message = fmt.Sprintf("Connection test failed: %s", armadaPingErrText(msg.url, msg.err))
 			return nil
@@ -265,6 +297,11 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if msg.err != nil {
+			// An unknown ssh host key is the user's call: prompt instead of
+			// waiting for a connection that can never come.
+			if url := currentSSHURL(); url != "" && m.offerHostKey(url, msg.err, hostKeyOriginConnect) {
+				return nil
+			}
 			// The new endpoint isn't answering yet (slow remote, or a local
 			// auto-spawn still coming up). Don't set the sticky m.err banner —
 			// the bounced Watch stream keeps retrying and pushes IncludeInitial
@@ -581,6 +618,17 @@ func (e armadaEntry) sshAuthority() string {
 	return auth
 }
 
+// armadaNameFor is the dropdown display name for url (disambiguated like the
+// selector shows it), falling back to the bare host for an unlisted URL.
+func (m *model) armadaNameFor(url string) string {
+	for _, e := range m.armadaEntries() {
+		if e.url == url {
+			return e.displayName
+		}
+	}
+	return (armadaEntry{url: url}).host()
+}
+
 // armadaCurrentBadge is the active connection's transport badge for the border
 // selector ("" for local). Same precedence as armadaCurrentKey (gateway, then
 // ssh, then plain server), so the badge and the key can never disagree.
@@ -649,7 +697,10 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	switch {
 	case entry.url != "" && fleetclient.IsSSHURL(entry.url):
 		// The local daemon resolves the tunnel address + token per dial; no
-		// token env (the remote's token never leaves the daemons).
+		// token env (the remote's token never leaves the daemons). An explicit
+		// switch is the user acting on this remote again, so a host key they
+		// rejected earlier may be asked about afresh instead of staying silent.
+		m.forgetHostKeyRejections(entry.url)
 		_ = os.Setenv(fleetclient.EnvSSH, entry.url)
 		_ = os.Unsetenv(fleetclient.EnvGateway)
 		_ = os.Unsetenv(fleetclient.EnvToken)
@@ -774,6 +825,19 @@ func (fleetPage *fleetPage) updateArmadaSelect(m *model, msg tea.Msg) tea.Cmd {
 		fleetPage.mode = viewNormal
 		entry := entries[min(fleetPage.armadaSel.dialogRow, n-1)]
 		if entry.current {
+			// Retry the current remote only when it is KNOWN bad: its row shows
+			// an error (and invites this keypress), or the dropdown's own
+			// re-ping is still in flight but a host key the user rejected is on
+			// record. A healthy connection that merely hasn't answered the
+			// re-ping yet stays "Already connected".
+			st := m.armadaStatus[entry.url].state
+			if entry.url != "" && (st == armadaStatusError || (st == armadaStatusPinging && m.hasHostKeyRejection(entry.url))) {
+				m.forgetHostKeyRejections(entry.url)
+				m.armadaExplicitPing[entry.url] = true
+				m.armadaStatus[entry.url] = armadaStatus{state: armadaStatusPinging}
+				m.message = "Retrying " + entry.displayName + "…"
+				return pingArmadaCmd(entry.url, entry.token)
+			}
 			m.message = "Already connected to " + entry.displayName
 			return nil
 		}

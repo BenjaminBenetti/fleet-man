@@ -50,6 +50,61 @@ message ResolveArmadaRemoteReply {
   string token = 2;
 }
 
+// SSHHostKey is one public key ssh-keyscan reported for an ssh:// remote,
+// with the SHA256 fingerprint ssh-keygen computed for it and the exact
+// known_hosts line that would trust it.
+message SSHHostKey {
+  // The key algorithm as it appears in known_hosts (ssh-ed25519, ssh-rsa,
+  // ecdsa-sha2-nistp256, …).
+  string key_type = 1;
+  // "SHA256:<base64>" — what the user must compare against the host's own
+  // fingerprint before accepting.
+  string fingerprint = 2;
+  // "<name> <key_type> <base64 key>": the line TrustSSHHostKey appends verbatim.
+  string known_hosts_line = 3;
+}
+
+// UnknownSSHHostKey rides as a status DETAIL on the FailedPrecondition that
+// ResolveArmadaRemote (or TrustSSHHostKey) returns when ssh refused the remote
+// because its host key is not in the daemon user's known_hosts. The daemon
+// never trusts a key on its own (ssh runs in batch mode with strict checking):
+// it fetches the host's keys with ssh-keyscan and hands the client what a human
+// needs to decide. A CHANGED key (host known, different key) is NOT reported
+// this way — that is a plain error naming the offending known_hosts line, and
+// is never offered for acceptance.
+message UnknownSSHHostKey {
+  // The ssh:// URL the resolve was for.
+  string url = 1;
+  // The known_hosts lookup name ssh used, exactly as it printed it — "host" or
+  // "[host]:port" for a non-default port (or a HostKeyAlias).
+  string name = 2;
+  // The hostname and port ssh-keyscan connected to (after ~/.ssh/config).
+  string host = 3;
+  uint32 port = 4;
+  // The key algorithm ssh wanted (ED25519, ECDSA, RSA, …); keys lists the
+  // matching key first when the host offered one of that type.
+  string key_type = 5;
+  repeated SSHHostKey keys = 6;
+  // The known_hosts file the daemon would append to (the first
+  // UserKnownHostsFile of the effective ssh config).
+  string known_hosts_path = 7;
+}
+
+// TrustSSHHostKey appends one offered known_hosts line for url to the daemon
+// user's known_hosts (creating ~/.ssh 0700 / the file 0600 if missing, never
+// touching other lines) and then resolves the remote again, returning the
+// tunnel endpoint like ResolveArmadaRemote. Only a line the daemon itself
+// offered for that url (in an UnknownSSHHostKey detail) is accepted. LOCAL-ONLY.
+message TrustSSHHostKeyRequest {
+  string url = 1;
+  string known_hosts_line = 2;
+}
+
+message TrustSSHHostKeyReply {
+  string addr = 1;
+  string token = 2;
+}
+
 message GetArmadaRequest {}
 
 message GetArmadaReply {

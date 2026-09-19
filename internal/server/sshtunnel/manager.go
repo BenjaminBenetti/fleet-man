@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +38,17 @@ type Manager struct {
 	ctx     context.Context // daemon lifetime: cancelling it kills every forward
 	mu      sync.Mutex
 	tunnels map[string]*tunnel
+	// offered remembers, per remote, the host keys the daemon itself fetched
+	// and reported as unknown (hostkey.go) — the only lines TrustHostKey will
+	// append. Keyed by canonical URL, then known_hosts line; the value is the
+	// known_hosts path the offer was made for.
+	offered map[string]map[string]string
+	// probes caches the outcome of the last host-key probe per remote for
+	// probeCacheTTL: a client that keeps redialing a refused host (the TUI's
+	// Watch loop, every few seconds, after the user rejected the key) must not
+	// re-run ssh-keyscan and ssh-keygen against it each time.
+	probes map[string]probeEntry
+	prober hostKeyProber
 
 	// Seams (production defaults; tests swap them for in-process fakes).
 	discover func(ctx context.Context, t Target) (Discovery, error)
@@ -62,11 +74,25 @@ type tunnel struct {
 	removed   bool
 }
 
+// probeCacheTTL is how long a host-key probe result is reused for a remote
+// (keyed by its refusal: the same lookup name and key type).
+const probeCacheTTL = 30 * time.Second
+
+// probeEntry is one cached probe: the enriched error (an UnknownHostKeyError
+// or the reason enrichment was declined) and when it was made.
+type probeEntry struct {
+	err error
+	at  time.Time
+}
+
 // New returns a Manager whose forwards live until ctx is cancelled (or Close).
 func New(ctx context.Context) *Manager {
 	return &Manager{
 		ctx:      ctx,
 		tunnels:  make(map[string]*tunnel),
+		offered:  make(map[string]map[string]string),
+		probes:   make(map[string]probeEntry),
+		prober:   defaultProber(),
 		discover: discoverOverSSH,
 		forward:  startForward,
 		hello:    helloThrough,
@@ -171,6 +197,7 @@ func (m *Manager) bringUp(tn *tunnel, done chan struct{}) {
 	tn.mu.Unlock()
 
 	proc, port, disc, err := m.establish(t, localPort)
+	m.recordOffer(t, err)
 
 	tn.mu.Lock()
 	defer tn.mu.Unlock()
@@ -202,7 +229,7 @@ func (m *Manager) establish(t Target, localPort int) (forwardProc, int, Discover
 	ctx := m.ctx
 	disc, err := m.discover(ctx, t)
 	if err != nil {
-		return nil, localPort, Discovery{}, fmt.Errorf("%s: %w", t.Host, err)
+		return nil, localPort, Discovery{}, fmt.Errorf("%s: %w", t.Host, m.enrichHostKey(ctx, err))
 	}
 	for attempt := 0; ; attempt++ {
 		if localPort == 0 || !portFree(localPort) {
@@ -218,6 +245,13 @@ func (m *Manager) establish(t Target, localPort int) (forwardProc, int, Discover
 			return nil, localPort, Discovery{}, err
 		}
 		err = waitForwardReady(ctx, proc, localPort)
+		if err != nil {
+			// The forward's own ssh can refuse the host key too (known_hosts
+			// edited between discovery and now): classify it the same way.
+			if hkErr := hostKeyError(t, proc.Stderr()); hkErr != nil {
+				err = m.enrichHostKey(ctx, hkErr)
+			}
+		}
 		if err == nil {
 			hctx, cancel := context.WithTimeout(ctx, helloTimeout)
 			err = m.hello(hctx, addr, disc.Token)
@@ -236,6 +270,131 @@ func (m *Manager) establish(t Target, localPort int) (forwardProc, int, Discover
 			continue
 		}
 		return nil, localPort, Discovery{}, err
+	}
+}
+
+// enrichHostKey turns an unknownHostKeyRefusal inside err into an
+// UnknownHostKeyError by probing the host (fingerprints, known_hosts lines),
+// reusing a recent probe for the same refusal. Any other error — including a
+// probe that declined (proxied target, no known_hosts file, a name that does
+// not match the target) — is returned as is or as a plain "not known" error
+// carrying the reason, so the client never gets a line to offer.
+func (m *Manager) enrichHostKey(ctx context.Context, err error) error {
+	var r *unknownHostKeyRefusal
+	if !errors.As(err, &r) {
+		return err
+	}
+	key := r.target.String() + "|" + r.name + "|" + r.keyType
+	m.mu.Lock()
+	entry, ok := m.probes[key]
+	m.mu.Unlock()
+	if !ok || time.Since(entry.at) > probeCacheTTL {
+		uk, perr := m.prober.probeHostKeys(ctx, r)
+		if perr != nil {
+			entry.err = fmt.Errorf("%w (fetching its key: %v)", r, perr)
+		} else {
+			entry.err = uk
+		}
+		entry.at = time.Now()
+		m.mu.Lock()
+		m.probes[key] = entry
+		m.mu.Unlock()
+	}
+	return entry.err
+}
+
+// forgetHostKey drops the cached probe and any offer for a remote (after a
+// trust, or when the remote is removed).
+func (m *Manager) forgetHostKey(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.offered, key)
+	for k := range m.probes {
+		if strings.HasPrefix(k, key+"|") {
+			delete(m.probes, k)
+		}
+	}
+}
+
+// recordOffer remembers the known_hosts lines an UnknownHostKeyError carries,
+// so TrustHostKey can later accept exactly one of them and nothing else.
+func (m *Manager) recordOffer(t Target, err error) {
+	var uk *UnknownHostKeyError
+	if !errors.As(err, &uk) {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lines := make(map[string]string, len(uk.Keys))
+	for _, k := range uk.Keys {
+		lines[k.Line] = uk.KnownHostsPath
+	}
+	m.offered[t.String()] = lines
+}
+
+// ErrKeyNotOffered is returned by TrustHostKey for a line the daemon never
+// offered for that remote (stale prompt, or a caller inventing lines).
+var ErrKeyNotOffered = errors.New("that host key was not offered for this remote — run the connection test again")
+
+// TrustHostKey appends one previously offered known_hosts line for rawURL to
+// the daemon user's known_hosts (see appendKnownHosts) and then resolves the
+// remote, returning its endpoint. The offer is taken ATOMICALLY before the
+// write — two concurrent accepts write the line once; the loser gets
+// ErrKeyNotOffered — and put back if the write fails, so a permissions error
+// can be retried from the same prompt. A bring-up that was already in flight
+// when the line was written started from the old known_hosts and would report
+// the key unknown again; it is waited out so the resolve that follows is a
+// fresh one against the trusted file.
+func (m *Manager) TrustHostKey(ctx context.Context, rawURL, line string) (Endpoint, error) {
+	t, err := ParseURL(rawURL)
+	if err != nil {
+		return Endpoint{}, err
+	}
+	key := t.String()
+	m.mu.Lock()
+	offers := m.offered[key]
+	path, ok := offers[line]
+	if ok {
+		delete(m.offered, key) // taken: one accept writes one line, once
+	}
+	m.mu.Unlock()
+	if !ok {
+		return Endpoint{}, ErrKeyNotOffered
+	}
+	if err := appendKnownHosts(path, line); err != nil {
+		m.mu.Lock()
+		if _, taken := m.offered[key]; !taken {
+			m.offered[key] = offers // the offer stands for a retry
+		}
+		m.mu.Unlock()
+		return Endpoint{}, fmt.Errorf("write %s: %w", path, err)
+	}
+	m.forgetHostKey(key)
+	flog.Info("ssh host key trusted", "remote", key, "knownHosts", path, "line", line)
+	if err := m.waitInflight(ctx, m.tunnelFor(t)); err != nil {
+		return Endpoint{}, err
+	}
+	ep, err := m.Resolve(ctx, rawURL)
+	if err == nil {
+		m.forgetHostKey(key) // a stale in-flight result may have re-recorded the offer
+	}
+	return ep, err
+}
+
+// waitInflight blocks until no bring-up is running for tn (or ctx ends).
+func (m *Manager) waitInflight(ctx context.Context, tn *tunnel) error {
+	for {
+		tn.mu.Lock()
+		wait := tn.inflight
+		tn.mu.Unlock()
+		if wait == nil {
+			return nil
+		}
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
@@ -295,6 +454,7 @@ func (m *Manager) Remove(urls []string) {
 		if key == "" {
 			continue
 		}
+		m.forgetHostKey(key) // offers/probes can exist without a tunnel record
 		m.mu.Lock()
 		tn, ok := m.tunnels[key]
 		delete(m.tunnels, key)

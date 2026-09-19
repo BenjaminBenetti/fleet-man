@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
@@ -97,9 +99,62 @@ func (s *service) ResolveArmadaRemote(ctx context.Context, req *fleetgrpc.Resolv
 	}
 	ep, err := s.sshTunnels.Resolve(ctx, req.GetUrl())
 	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, err.Error())
+		return nil, sshResolveStatus(req.GetUrl(), err)
 	}
 	return &fleetgrpc.ResolveArmadaRemoteReply{Addr: ep.Addr, Token: ep.Token}, nil
+}
+
+// TrustSSHHostKey appends one host-key line the daemon previously offered for
+// an ssh:// remote (an UnknownSSHHostKey detail) to the daemon user's
+// known_hosts, then resolves the remote again. LOCAL-ONLY (remote_auth.go):
+// it writes the user's known_hosts and hands out a bearer token. The daemon
+// only ever writes a line it fetched itself (sshtunnel.Manager.TrustHostKey
+// refuses anything else), so a client cannot inject arbitrary entries.
+func (s *service) TrustSSHHostKey(ctx context.Context, req *fleetgrpc.TrustSSHHostKeyRequest) (*fleetgrpc.TrustSSHHostKeyReply, error) {
+	if !sshtunnel.IsSSHURL(req.GetUrl()) {
+		return nil, status.Errorf(codes.InvalidArgument, "not an ssh:// remote: %q", req.GetUrl())
+	}
+	if strings.TrimSpace(req.GetKnownHostsLine()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "known_hosts_line is required")
+	}
+	if s.sshTunnels == nil {
+		return nil, status.Error(codes.Unavailable, "ssh tunnels are not available on this daemon")
+	}
+	ep, err := s.sshTunnels.TrustHostKey(ctx, req.GetUrl(), req.GetKnownHostsLine())
+	if err != nil {
+		if errors.Is(err, sshtunnel.ErrKeyNotOffered) {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+		return nil, sshResolveStatus(req.GetUrl(), err)
+	}
+	return &fleetgrpc.TrustSSHHostKeyReply{Addr: ep.Addr, Token: ep.Token}, nil
+}
+
+// sshResolveStatus maps a tunnel bring-up failure to its gRPC status: always
+// FailedPrecondition with the user-facing reason, and — for an unknown host
+// key — an UnknownSSHHostKey detail carrying the fingerprints and known_hosts
+// lines the client needs to ask the user. A changed key is a plain error (its
+// message names the offending known_hosts line); it is never offered.
+func sshResolveStatus(url string, err error) error {
+	st := status.New(codes.FailedPrecondition, err.Error())
+	var uk *sshtunnel.UnknownHostKeyError
+	if errors.As(err, &uk) {
+		detail := &fleetgrpc.UnknownSSHHostKey{
+			Url:            url,
+			Name:           uk.Name,
+			Host:           uk.Host,
+			Port:           uint32(uk.Port),
+			KeyType:        uk.KeyType,
+			KnownHostsPath: uk.KnownHostsPath,
+		}
+		for _, k := range uk.Keys {
+			detail.Keys = append(detail.Keys, &fleetgrpc.SSHHostKey{KeyType: k.Type, Fingerprint: k.Fingerprint, KnownHostsLine: k.Line})
+		}
+		if withDetail, derr := st.WithDetails(detail); derr == nil {
+			st = withDetail
+		}
+	}
+	return st.Err()
 }
 
 func armadaToProto(a *state.Armada) []*fleetgrpc.ArmadaRemote {

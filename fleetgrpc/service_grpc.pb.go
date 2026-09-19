@@ -45,6 +45,7 @@ const (
 	FleetService_GetArmada_FullMethodName              = "/fleetgrpc.FleetService/GetArmada"
 	FleetService_SetArmada_FullMethodName              = "/fleetgrpc.FleetService/SetArmada"
 	FleetService_ResolveArmadaRemote_FullMethodName    = "/fleetgrpc.FleetService/ResolveArmadaRemote"
+	FleetService_TrustSSHHostKey_FullMethodName        = "/fleetgrpc.FleetService/TrustSSHHostKey"
 	FleetService_Exec_FullMethodName                   = "/fleetgrpc.FleetService/Exec"
 	FleetService_ResolveExecCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveExecCommand"
 	FleetService_ResolveLogsCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveLogsCommand"
@@ -120,6 +121,9 @@ type FleetServiceClient interface {
 	// Resolve an ssh:// armada remote into a dialable loopback address + token
 	// (the local daemon owns the SSH tunnel). Local-only, like Get/SetArmada.
 	ResolveArmadaRemote(ctx context.Context, in *ResolveArmadaRemoteRequest, opts ...grpc.CallOption) (*ResolveArmadaRemoteReply, error)
+	// Trust one host key the daemon offered (UnknownSSHHostKey detail) for an
+	// ssh:// remote, then resolve it again. Local-only, like ResolveArmadaRemote.
+	TrustSSHHostKey(ctx context.Context, in *TrustSSHHostKeyRequest, opts ...grpc.CallOption) (*TrustSSHHostKeyReply, error)
 	// ---- Interactive backend operations ----
 	Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecIn, ExecOut], error)
 	ResolveExecCommand(ctx context.Context, in *ResolveExecCommandRequest, opts ...grpc.CallOption) (*ResolveExecCommandReply, error)
@@ -486,6 +490,16 @@ func (c *fleetServiceClient) ResolveArmadaRemote(ctx context.Context, in *Resolv
 	return out, nil
 }
 
+func (c *fleetServiceClient) TrustSSHHostKey(ctx context.Context, in *TrustSSHHostKeyRequest, opts ...grpc.CallOption) (*TrustSSHHostKeyReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TrustSSHHostKeyReply)
+	err := c.cc.Invoke(ctx, FleetService_TrustSSHHostKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecIn, ExecOut], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[7], FleetService_Exec_FullMethodName, cOpts...)
@@ -694,6 +708,9 @@ type FleetServiceServer interface {
 	// Resolve an ssh:// armada remote into a dialable loopback address + token
 	// (the local daemon owns the SSH tunnel). Local-only, like Get/SetArmada.
 	ResolveArmadaRemote(context.Context, *ResolveArmadaRemoteRequest) (*ResolveArmadaRemoteReply, error)
+	// Trust one host key the daemon offered (UnknownSSHHostKey detail) for an
+	// ssh:// remote, then resolve it again. Local-only, like ResolveArmadaRemote.
+	TrustSSHHostKey(context.Context, *TrustSSHHostKeyRequest) (*TrustSSHHostKeyReply, error)
 	// ---- Interactive backend operations ----
 	Exec(grpc.BidiStreamingServer[ExecIn, ExecOut]) error
 	ResolveExecCommand(context.Context, *ResolveExecCommandRequest) (*ResolveExecCommandReply, error)
@@ -814,6 +831,9 @@ func (UnimplementedFleetServiceServer) SetArmada(context.Context, *SetArmadaRequ
 }
 func (UnimplementedFleetServiceServer) ResolveArmadaRemote(context.Context, *ResolveArmadaRemoteRequest) (*ResolveArmadaRemoteReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ResolveArmadaRemote not implemented")
+}
+func (UnimplementedFleetServiceServer) TrustSSHHostKey(context.Context, *TrustSSHHostKeyRequest) (*TrustSSHHostKeyReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TrustSSHHostKey not implemented")
 }
 func (UnimplementedFleetServiceServer) Exec(grpc.BidiStreamingServer[ExecIn, ExecOut]) error {
 	return status.Errorf(codes.Unimplemented, "method Exec not implemented")
@@ -1291,6 +1311,24 @@ func _FleetService_ResolveArmadaRemote_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FleetService_TrustSSHHostKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TrustSSHHostKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).TrustSSHHostKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_TrustSSHHostKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).TrustSSHHostKey(ctx, req.(*TrustSSHHostKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_Exec_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(FleetServiceServer).Exec(&grpc.GenericServerStream[ExecIn, ExecOut]{ServerStream: stream})
 }
@@ -1542,6 +1580,10 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResolveArmadaRemote",
 			Handler:    _FleetService_ResolveArmadaRemote_Handler,
+		},
+		{
+			MethodName: "TrustSSHHostKey",
+			Handler:    _FleetService_TrustSSHHostKey_Handler,
 		},
 		{
 			MethodName: "ResolveExecCommand",

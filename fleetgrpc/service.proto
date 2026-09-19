@@ -81,6 +81,9 @@ service FleetService {
   // Resolve an ssh:// armada remote into a dialable loopback address + token
   // (the local daemon owns the SSH tunnel). Local-only, like Get/SetArmada.
   rpc ResolveArmadaRemote(ResolveArmadaRemoteRequest) returns (ResolveArmadaRemoteReply);
+  // Trust one host key the daemon offered (UnknownSSHHostKey detail) for an
+  // ssh:// remote, then resolve it again. Local-only, like ResolveArmadaRemote.
+  rpc TrustSSHHostKey(TrustSSHHostKeyRequest) returns (TrustSSHHostKeyReply);
 
   // ---- Interactive backend operations ----
   rpc Exec(stream ExecIn) returns (stream ExecOut);

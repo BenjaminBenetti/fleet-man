@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -58,6 +60,7 @@ type fakeForward struct {
 
 func (f *fakeForward) Done() <-chan struct{} { return f.done }
 func (f *fakeForward) Err() string           { return f.err }
+func (f *fakeForward) Stderr() string        { return f.err }
 func (f *fakeForward) Kill() {
 	f.once.Do(func() {
 		if f.lis != nil {
@@ -388,4 +391,67 @@ func TestRemoveKillsOnlyNamedRemotes(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("Close should tear down every forward")
+}
+
+// TestTrustHostKeyConcurrentAcceptsWriteOnce: two accepts racing on one offer
+// take it atomically — one writes the line and connects, the other is told
+// the key was not offered — and known_hosts ends with the line exactly once.
+func TestTrustHostKeyConcurrentAcceptsWriteOnce(t *testing.T) {
+	rd := startRemoteDaemon(t, "tok")
+	m, _ := newTestManager(t, func() (Discovery, error) { return Discovery{Port: rd.port, Token: "tok"}, nil })
+	path := filepath.Join(t.TempDir(), ".ssh", "known_hosts")
+	tgt, _ := ParseURL("ssh://desktop")
+	line := "desktop ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"
+	m.recordOffer(tgt, &UnknownHostKeyError{Target: tgt, Name: "desktop", KnownHostsPath: path,
+		Keys: []HostKey{{Type: "ssh-ed25519", Fingerprint: "SHA256:x", Line: line}}})
+
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, err := m.TrustHostKey(context.Background(), "ssh://desktop", line)
+			results <- err
+		}()
+	}
+	var ok, notOffered int
+	for i := 0; i < 2; i++ {
+		switch err := <-results; {
+		case err == nil:
+			ok++
+		case errors.Is(err, ErrKeyNotOffered):
+			notOffered++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if ok != 1 || notOffered != 1 {
+		t.Fatalf("ok=%d notOffered=%d, want exactly one of each", ok, notOffered)
+	}
+	if got, _ := os.ReadFile(path); string(got) != line+"\n" {
+		t.Fatalf("known_hosts = %q, want the line exactly once", got)
+	}
+	if len(m.offered) != 0 {
+		t.Fatal("the offer must be consumed")
+	}
+}
+
+// TestTrustHostKeyFailedWriteKeepsOffer: a write failure hands the offer back
+// so the same prompt can retry; TestRemoveClearsOffers: removing a remote
+// drops its offers and cached probes.
+func TestTrustHostKeyFailedWriteKeepsOffer(t *testing.T) {
+	m := New(context.Background())
+	tgt, _ := ParseURL("ssh://desktop")
+	line := "desktop ssh-ed25519 AAAA"
+	m.recordOffer(tgt, &UnknownHostKeyError{Target: tgt, Name: "desktop", KnownHostsPath: "/dev/null",
+		Keys: []HostKey{{Type: "ssh-ed25519", Line: line}}})
+	if _, err := m.TrustHostKey(context.Background(), "ssh://desktop", line); err == nil || errors.Is(err, ErrKeyNotOffered) {
+		t.Fatalf("want a write failure, got %v", err)
+	}
+	if _, still := m.offered["ssh://desktop"][line]; !still {
+		t.Fatal("a failed write must hand the offer back for a retry")
+	}
+	m.probes["ssh://desktop|desktop|ED25519"] = probeEntry{at: time.Now()}
+	m.Remove([]string{"ssh://desktop"})
+	if len(m.offered) != 0 || len(m.probes) != 0 {
+		t.Fatalf("Remove should clear offers and probes: %v %v", m.offered, m.probes)
+	}
 }

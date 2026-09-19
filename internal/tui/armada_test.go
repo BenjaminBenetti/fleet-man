@@ -22,17 +22,19 @@ import (
 // width keeps long gateway URLs on one line so substring assertions hold.
 func armadaTestModel(sp *settingsPage) *model {
 	m := &model{
-		config:       state.DefaultConfig(),
-		toolStatus:   allToolsFound(),
-		spinner:      spinner.New(),
-		armadaStatus: make(map[string]armadaStatus),
-		runtime:      make(map[string]*fleetgrpc.InstanceRuntime),
-		creating:     make(map[string]bool),
-		fleetPage:    newFleetPage(),
-		portForwards: portforward.NewManager(),
-		sessionStore: NewSessionStore(),
-		st:           &configutil.State{},
-		width:        160,
+		config:             state.DefaultConfig(),
+		toolStatus:         allToolsFound(),
+		spinner:            spinner.New(),
+		armadaStatus:       make(map[string]armadaStatus),
+		armadaExplicitPing: make(map[string]bool),
+		hostKeyDeclined:    make(map[string]bool),
+		runtime:            make(map[string]*fleetgrpc.InstanceRuntime),
+		creating:           make(map[string]bool),
+		fleetPage:          newFleetPage(),
+		portForwards:       portforward.NewManager(),
+		sessionStore:       NewSessionStore(),
+		st:                 &configutil.State{},
+		width:              160,
 	}
 	if sp != nil {
 		m.currentPage = sp

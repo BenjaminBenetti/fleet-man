@@ -186,6 +186,291 @@ func (x *ResolveArmadaRemoteReply) GetToken() string {
 	return ""
 }
 
+// SSHHostKey is one public key ssh-keyscan reported for an ssh:// remote,
+// with the SHA256 fingerprint ssh-keygen computed for it and the exact
+// known_hosts line that would trust it.
+type SSHHostKey struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The key algorithm as it appears in known_hosts (ssh-ed25519, ssh-rsa,
+	// ecdsa-sha2-nistp256, …).
+	KeyType string `protobuf:"bytes,1,opt,name=key_type,json=keyType,proto3" json:"key_type,omitempty"`
+	// "SHA256:<base64>" — what the user must compare against the host's own
+	// fingerprint before accepting.
+	Fingerprint string `protobuf:"bytes,2,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
+	// "<name> <key_type> <base64 key>": the line TrustSSHHostKey appends verbatim.
+	KnownHostsLine string `protobuf:"bytes,3,opt,name=known_hosts_line,json=knownHostsLine,proto3" json:"known_hosts_line,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *SSHHostKey) Reset() {
+	*x = SSHHostKey{}
+	mi := &file_armada_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SSHHostKey) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SSHHostKey) ProtoMessage() {}
+
+func (x *SSHHostKey) ProtoReflect() protoreflect.Message {
+	mi := &file_armada_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SSHHostKey.ProtoReflect.Descriptor instead.
+func (*SSHHostKey) Descriptor() ([]byte, []int) {
+	return file_armada_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *SSHHostKey) GetKeyType() string {
+	if x != nil {
+		return x.KeyType
+	}
+	return ""
+}
+
+func (x *SSHHostKey) GetFingerprint() string {
+	if x != nil {
+		return x.Fingerprint
+	}
+	return ""
+}
+
+func (x *SSHHostKey) GetKnownHostsLine() string {
+	if x != nil {
+		return x.KnownHostsLine
+	}
+	return ""
+}
+
+// UnknownSSHHostKey rides as a status DETAIL on the FailedPrecondition that
+// ResolveArmadaRemote (or TrustSSHHostKey) returns when ssh refused the remote
+// because its host key is not in the daemon user's known_hosts. The daemon
+// never trusts a key on its own (ssh runs in batch mode with strict checking):
+// it fetches the host's keys with ssh-keyscan and hands the client what a human
+// needs to decide. A CHANGED key (host known, different key) is NOT reported
+// this way — that is a plain error naming the offending known_hosts line, and
+// is never offered for acceptance.
+type UnknownSSHHostKey struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The ssh:// URL the resolve was for.
+	Url string `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
+	// The known_hosts lookup name ssh used, exactly as it printed it — "host" or
+	// "[host]:port" for a non-default port (or a HostKeyAlias).
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// The hostname and port ssh-keyscan connected to (after ~/.ssh/config).
+	Host string `protobuf:"bytes,3,opt,name=host,proto3" json:"host,omitempty"`
+	Port uint32 `protobuf:"varint,4,opt,name=port,proto3" json:"port,omitempty"`
+	// The key algorithm ssh wanted (ED25519, ECDSA, RSA, …); keys lists the
+	// matching key first when the host offered one of that type.
+	KeyType string        `protobuf:"bytes,5,opt,name=key_type,json=keyType,proto3" json:"key_type,omitempty"`
+	Keys    []*SSHHostKey `protobuf:"bytes,6,rep,name=keys,proto3" json:"keys,omitempty"`
+	// The known_hosts file the daemon would append to (the first
+	// UserKnownHostsFile of the effective ssh config).
+	KnownHostsPath string `protobuf:"bytes,7,opt,name=known_hosts_path,json=knownHostsPath,proto3" json:"known_hosts_path,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *UnknownSSHHostKey) Reset() {
+	*x = UnknownSSHHostKey{}
+	mi := &file_armada_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnknownSSHHostKey) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnknownSSHHostKey) ProtoMessage() {}
+
+func (x *UnknownSSHHostKey) ProtoReflect() protoreflect.Message {
+	mi := &file_armada_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnknownSSHHostKey.ProtoReflect.Descriptor instead.
+func (*UnknownSSHHostKey) Descriptor() ([]byte, []int) {
+	return file_armada_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *UnknownSSHHostKey) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *UnknownSSHHostKey) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *UnknownSSHHostKey) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *UnknownSSHHostKey) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *UnknownSSHHostKey) GetKeyType() string {
+	if x != nil {
+		return x.KeyType
+	}
+	return ""
+}
+
+func (x *UnknownSSHHostKey) GetKeys() []*SSHHostKey {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+func (x *UnknownSSHHostKey) GetKnownHostsPath() string {
+	if x != nil {
+		return x.KnownHostsPath
+	}
+	return ""
+}
+
+// TrustSSHHostKey appends one offered known_hosts line for url to the daemon
+// user's known_hosts (creating ~/.ssh 0700 / the file 0600 if missing, never
+// touching other lines) and then resolves the remote again, returning the
+// tunnel endpoint like ResolveArmadaRemote. Only a line the daemon itself
+// offered for that url (in an UnknownSSHHostKey detail) is accepted. LOCAL-ONLY.
+type TrustSSHHostKeyRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Url            string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
+	KnownHostsLine string                 `protobuf:"bytes,2,opt,name=known_hosts_line,json=knownHostsLine,proto3" json:"known_hosts_line,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *TrustSSHHostKeyRequest) Reset() {
+	*x = TrustSSHHostKeyRequest{}
+	mi := &file_armada_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrustSSHHostKeyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrustSSHHostKeyRequest) ProtoMessage() {}
+
+func (x *TrustSSHHostKeyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_armada_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrustSSHHostKeyRequest.ProtoReflect.Descriptor instead.
+func (*TrustSSHHostKeyRequest) Descriptor() ([]byte, []int) {
+	return file_armada_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *TrustSSHHostKeyRequest) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *TrustSSHHostKeyRequest) GetKnownHostsLine() string {
+	if x != nil {
+		return x.KnownHostsLine
+	}
+	return ""
+}
+
+type TrustSSHHostKeyReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Addr          string                 `protobuf:"bytes,1,opt,name=addr,proto3" json:"addr,omitempty"`
+	Token         string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TrustSSHHostKeyReply) Reset() {
+	*x = TrustSSHHostKeyReply{}
+	mi := &file_armada_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrustSSHHostKeyReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrustSSHHostKeyReply) ProtoMessage() {}
+
+func (x *TrustSSHHostKeyReply) ProtoReflect() protoreflect.Message {
+	mi := &file_armada_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrustSSHHostKeyReply.ProtoReflect.Descriptor instead.
+func (*TrustSSHHostKeyReply) Descriptor() ([]byte, []int) {
+	return file_armada_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *TrustSSHHostKeyReply) GetAddr() string {
+	if x != nil {
+		return x.Addr
+	}
+	return ""
+}
+
+func (x *TrustSSHHostKeyReply) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
 type GetArmadaRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -194,7 +479,7 @@ type GetArmadaRequest struct {
 
 func (x *GetArmadaRequest) Reset() {
 	*x = GetArmadaRequest{}
-	mi := &file_armada_proto_msgTypes[3]
+	mi := &file_armada_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -206,7 +491,7 @@ func (x *GetArmadaRequest) String() string {
 func (*GetArmadaRequest) ProtoMessage() {}
 
 func (x *GetArmadaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_armada_proto_msgTypes[3]
+	mi := &file_armada_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -219,7 +504,7 @@ func (x *GetArmadaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetArmadaRequest.ProtoReflect.Descriptor instead.
 func (*GetArmadaRequest) Descriptor() ([]byte, []int) {
-	return file_armada_proto_rawDescGZIP(), []int{3}
+	return file_armada_proto_rawDescGZIP(), []int{7}
 }
 
 type GetArmadaReply struct {
@@ -231,7 +516,7 @@ type GetArmadaReply struct {
 
 func (x *GetArmadaReply) Reset() {
 	*x = GetArmadaReply{}
-	mi := &file_armada_proto_msgTypes[4]
+	mi := &file_armada_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -243,7 +528,7 @@ func (x *GetArmadaReply) String() string {
 func (*GetArmadaReply) ProtoMessage() {}
 
 func (x *GetArmadaReply) ProtoReflect() protoreflect.Message {
-	mi := &file_armada_proto_msgTypes[4]
+	mi := &file_armada_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -256,7 +541,7 @@ func (x *GetArmadaReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetArmadaReply.ProtoReflect.Descriptor instead.
 func (*GetArmadaReply) Descriptor() ([]byte, []int) {
-	return file_armada_proto_rawDescGZIP(), []int{4}
+	return file_armada_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *GetArmadaReply) GetRemotes() []*ArmadaRemote {
@@ -278,7 +563,7 @@ type SetArmadaRequest struct {
 
 func (x *SetArmadaRequest) Reset() {
 	*x = SetArmadaRequest{}
-	mi := &file_armada_proto_msgTypes[5]
+	mi := &file_armada_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -290,7 +575,7 @@ func (x *SetArmadaRequest) String() string {
 func (*SetArmadaRequest) ProtoMessage() {}
 
 func (x *SetArmadaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_armada_proto_msgTypes[5]
+	mi := &file_armada_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -303,7 +588,7 @@ func (x *SetArmadaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetArmadaRequest.ProtoReflect.Descriptor instead.
 func (*SetArmadaRequest) Descriptor() ([]byte, []int) {
-	return file_armada_proto_rawDescGZIP(), []int{5}
+	return file_armada_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *SetArmadaRequest) GetRemotes() []*ArmadaRemote {
@@ -322,7 +607,7 @@ type SetArmadaReply struct {
 
 func (x *SetArmadaReply) Reset() {
 	*x = SetArmadaReply{}
-	mi := &file_armada_proto_msgTypes[6]
+	mi := &file_armada_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -334,7 +619,7 @@ func (x *SetArmadaReply) String() string {
 func (*SetArmadaReply) ProtoMessage() {}
 
 func (x *SetArmadaReply) ProtoReflect() protoreflect.Message {
-	mi := &file_armada_proto_msgTypes[6]
+	mi := &file_armada_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -347,7 +632,7 @@ func (x *SetArmadaReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetArmadaReply.ProtoReflect.Descriptor instead.
 func (*SetArmadaReply) Descriptor() ([]byte, []int) {
-	return file_armada_proto_rawDescGZIP(), []int{6}
+	return file_armada_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *SetArmadaReply) GetRemotes() []*ArmadaRemote {
@@ -368,6 +653,25 @@ const file_armada_proto_rawDesc = "" +
 	"\x1aResolveArmadaRemoteRequest\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\"D\n" +
 	"\x18ResolveArmadaRemoteReply\x12\x12\n" +
+	"\x04addr\x18\x01 \x01(\tR\x04addr\x12\x14\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"s\n" +
+	"\n" +
+	"SSHHostKey\x12\x19\n" +
+	"\bkey_type\x18\x01 \x01(\tR\akeyType\x12 \n" +
+	"\vfingerprint\x18\x02 \x01(\tR\vfingerprint\x12(\n" +
+	"\x10known_hosts_line\x18\x03 \x01(\tR\x0eknownHostsLine\"\xd1\x01\n" +
+	"\x11UnknownSSHHostKey\x12\x10\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
+	"\x04host\x18\x03 \x01(\tR\x04host\x12\x12\n" +
+	"\x04port\x18\x04 \x01(\rR\x04port\x12\x19\n" +
+	"\bkey_type\x18\x05 \x01(\tR\akeyType\x12)\n" +
+	"\x04keys\x18\x06 \x03(\v2\x15.fleetgrpc.SSHHostKeyR\x04keys\x12(\n" +
+	"\x10known_hosts_path\x18\a \x01(\tR\x0eknownHostsPath\"T\n" +
+	"\x16TrustSSHHostKeyRequest\x12\x10\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\x12(\n" +
+	"\x10known_hosts_line\x18\x02 \x01(\tR\x0eknownHostsLine\"@\n" +
+	"\x14TrustSSHHostKeyReply\x12\x12\n" +
 	"\x04addr\x18\x01 \x01(\tR\x04addr\x12\x14\n" +
 	"\x05token\x18\x02 \x01(\tR\x05token\"\x12\n" +
 	"\x10GetArmadaRequest\"C\n" +
@@ -390,25 +694,30 @@ func file_armada_proto_rawDescGZIP() []byte {
 	return file_armada_proto_rawDescData
 }
 
-var file_armada_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_armada_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_armada_proto_goTypes = []any{
 	(*ArmadaRemote)(nil),               // 0: fleetgrpc.ArmadaRemote
 	(*ResolveArmadaRemoteRequest)(nil), // 1: fleetgrpc.ResolveArmadaRemoteRequest
 	(*ResolveArmadaRemoteReply)(nil),   // 2: fleetgrpc.ResolveArmadaRemoteReply
-	(*GetArmadaRequest)(nil),           // 3: fleetgrpc.GetArmadaRequest
-	(*GetArmadaReply)(nil),             // 4: fleetgrpc.GetArmadaReply
-	(*SetArmadaRequest)(nil),           // 5: fleetgrpc.SetArmadaRequest
-	(*SetArmadaReply)(nil),             // 6: fleetgrpc.SetArmadaReply
+	(*SSHHostKey)(nil),                 // 3: fleetgrpc.SSHHostKey
+	(*UnknownSSHHostKey)(nil),          // 4: fleetgrpc.UnknownSSHHostKey
+	(*TrustSSHHostKeyRequest)(nil),     // 5: fleetgrpc.TrustSSHHostKeyRequest
+	(*TrustSSHHostKeyReply)(nil),       // 6: fleetgrpc.TrustSSHHostKeyReply
+	(*GetArmadaRequest)(nil),           // 7: fleetgrpc.GetArmadaRequest
+	(*GetArmadaReply)(nil),             // 8: fleetgrpc.GetArmadaReply
+	(*SetArmadaRequest)(nil),           // 9: fleetgrpc.SetArmadaRequest
+	(*SetArmadaReply)(nil),             // 10: fleetgrpc.SetArmadaReply
 }
 var file_armada_proto_depIdxs = []int32{
-	0, // 0: fleetgrpc.GetArmadaReply.remotes:type_name -> fleetgrpc.ArmadaRemote
-	0, // 1: fleetgrpc.SetArmadaRequest.remotes:type_name -> fleetgrpc.ArmadaRemote
-	0, // 2: fleetgrpc.SetArmadaReply.remotes:type_name -> fleetgrpc.ArmadaRemote
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	3, // 0: fleetgrpc.UnknownSSHHostKey.keys:type_name -> fleetgrpc.SSHHostKey
+	0, // 1: fleetgrpc.GetArmadaReply.remotes:type_name -> fleetgrpc.ArmadaRemote
+	0, // 2: fleetgrpc.SetArmadaRequest.remotes:type_name -> fleetgrpc.ArmadaRemote
+	0, // 3: fleetgrpc.SetArmadaReply.remotes:type_name -> fleetgrpc.ArmadaRemote
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_armada_proto_init() }
@@ -422,7 +731,7 @@ func file_armada_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_armada_proto_rawDesc), len(file_armada_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
