@@ -237,6 +237,8 @@ func (settingsPage *settingsPage) Init(m *model) tea.Cmd {
 	// The microphone selector lists THIS machine's devices; enumerate them as the
 	// page opens (fresh each visit — a headset may have been plugged in since).
 	if m.config != nil && m.config.MicSettings.Enabled {
+		// Also the natural moment to retry a provider that gave up on its own.
+		syncMicFromConfig(m.config)
 		m.micDevicesLoaded = false
 		if cmd := m.ensureMicDevices(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -1484,6 +1486,9 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 	var b strings.Builder
 
 	b.WriteString(renderGradient(nameToBanner("Settings")))
+	if badge := micLiveIndicator(m); badge != "" {
+		b.WriteString("  " + badge)
+	}
 	if m.updateAvailable != "" {
 		b.WriteString("  " + updateStyle.Render(fmt.Sprintf("A new version: %s is available ⚡ ", m.updateAvailable)))
 	}

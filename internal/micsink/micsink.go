@@ -118,9 +118,12 @@ func micPresent() bool {
 }
 
 // Ensure makes sure the instance's virtual-microphone server is running WITH
-// its microphone, (re)starting it if needed. Idempotent and safe to call
-// concurrently with itself from separate processes: a second server simply
-// fails to bind the socket and exits, and both callers then see the first one.
+// its microphone, (re)starting it if needed. Idempotent. It is NOT a lock: two
+// Ensures racing through a cold start can both decide nothing is listening, and
+// the later one's cleanup below would unlink the earlier one's fresh socket.
+// The callers make that unreachable in practice — the daemon runs one sink per
+// instance and the provisioning script finishes before an instance is marked
+// running — and the second look right before the cleanup narrows it further.
 func Ensure() error {
 	for _, bin := range []string{"pulseaudio", "pactl"} {
 		if _, err := lookPath(bin); err != nil {
@@ -154,6 +157,9 @@ func Ensure() error {
 	// SIGKILL): a stale socket makes the new server's bind fail, and a stale
 	// FIFO makes module-pipe-source refuse to load. Nothing is listening — that
 	// was just established — so both are safe to remove.
+	if serverAnswers() && micPresent() {
+		return nil // someone else brought it up while we were getting here
+	}
 	_ = os.Remove(path("pulse.sock"))
 	_ = os.Remove(path("pcm"))
 	if err := os.WriteFile(path("fleet.pa"), []byte(serverScript()), 0o644); err != nil {

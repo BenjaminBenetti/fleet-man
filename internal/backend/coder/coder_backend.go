@@ -319,10 +319,15 @@ func (coderBackend *CoderBackend) PortForwardCommand(containerID string, localPo
 	return exec.Command("coder", "port-forward", target, mapping)
 }
 
-// MicSinkCommand reports that coder instances have no virtual microphone: the
-// sink needs a long-lived, low-latency stdin stream into the workspace, and the
-// coder CLI's ssh transport is neither (see backend.Backend.CopyFile for its
-// stdin quirks). Callers skip the instance.
+// SupportsMicSink reports that coder workspaces have no virtual microphone yet.
+// The sink is a long-lived stdin stream, and coder's ssh server does not handle
+// stdin the way the sink needs (see backend.Backend.CopyFile: it never delivers
+// stdin EOF, which is how a sink learns the daemon detached).
+func (coderBackend *CoderBackend) SupportsMicSink() bool {
+	return false
+}
+
+// MicSinkCommand: see SupportsMicSink.
 func (coderBackend *CoderBackend) MicSinkCommand(string) (*exec.Cmd, bool) {
 	return nil, false
 }

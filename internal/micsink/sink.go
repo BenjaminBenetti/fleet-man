@@ -38,13 +38,16 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 		return fmt.Errorf("open %s: %w", path("pcm"), err)
 	}
 	defer pipe.close()
-	pipe.drain()
+	// Starts closed, and closing drains: whatever a previous sink left in the
+	// pipe is gone before the first recorder can hear it.
+	pipe.setOpen(false)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// demand gates the pump. The watcher flips it; on the falling edge it also
-	// drains the FIFO (see fifo.drain).
+	// The watcher opens and closes the microphone as recorders come and go. The
+	// gate itself lives inside the fifo (see fifo.open) so that closing — which
+	// drains — cannot interleave with a write that already passed the check.
 	var demand atomic.Bool
 	watchErr := make(chan error, 1)
 	go func() {
@@ -52,9 +55,7 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 			if demand.Swap(active) == active {
 				return
 			}
-			if !active {
-				pipe.drain()
-			}
+			pipe.setOpen(active)
 			if active {
 				emit("demand 1")
 			} else {
@@ -68,8 +69,8 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := stdin.Read(buf)
-			if n > 0 && demand.Load() {
-				pipe.write(buf[:n])
+			if n > 0 {
+				pipe.write(buf[:n]) // a no-op while nobody is recording
 			}
 			if err != nil {
 				if err == io.EOF {

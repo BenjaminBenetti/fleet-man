@@ -99,23 +99,47 @@ func TestCaptureFallsBackToTheDefaultDevice(t *testing.T) {
 	t.Setenv("PATH", bin+":/usr/bin:/bin")
 	origOS := goos
 	goos = "linux"
-	origLook := lookPath
+	origLook, origProbe := lookPath, runProbe
 	lookPath = func(name string) (string, error) {
 		if name == "arecord" {
 			return filepath.Join(bin, "arecord"), nil
 		}
 		return "", os.ErrNotExist
 	}
+	// The device IS enumerated (so it passes validation) — it just cannot be
+	// opened, which is what an unplug between listing and recording looks like.
+	runProbe = func(string, ...string) ([]byte, error) {
+		return []byte("plughw:CARD=Gone,DEV=0\n    Unplugged, USB Audio\n"), nil
+	}
 	resetDetectCache()
-	t.Cleanup(func() { goos, lookPath = origOS, origLook; resetDetectCache() })
+	t.Cleanup(func() { goos, lookPath, runProbe = origOS, origLook, origProbe; resetDetectCache() })
 
 	var got pcmCollector
-	capture, err := Start("alsa:plughw:CARD=Gone", got.sink)
+	capture, err := Start("alsa:plughw:CARD=Gone,DEV=0", got.sink)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer capture.Stop()
 	waitFor(t, "audio from the default device", func() bool { return strings.Contains(got.string(), "default-mic") })
+}
+
+// A device this machine never enumerated is not even tried; the capture says so,
+// so the UI can tell the user their choice is not in effect.
+func TestCaptureReportsFallingBackFromAnUnknownDevice(t *testing.T) {
+	fakeHost(t, "linux", []string{"arecord"}, map[string]string{"arecord -L": "default\n"})
+	_, used, err := Command(t.Context(), "alsa:plughw:CARD=Elsewhere,DEV=0")
+	if err != nil || used != "" {
+		t.Fatalf("used = %q, err = %v", used, err)
+	}
+	t.Setenv("PATH", t.TempDir()) // Start must not reach a real arecord
+	capture, err := Start("alsa:plughw:CARD=Elsewhere,DEV=0", func([]byte) {})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer capture.Stop()
+	if !capture.FellBack() {
+		t.Fatal("FellBack should report the configured device is not in effect")
+	}
 }
 
 func TestStartWithoutAToolFailsUpFront(t *testing.T) {

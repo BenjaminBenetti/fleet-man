@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/startup"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -20,7 +21,7 @@ import (
 // no scripts are run. The caller proceeds to mark the instance running
 // regardless — install can be re-attempted by the user via shell after
 // the instance comes up.
-func runStartupScripts(instanceBackend backend.Backend, wsDir, fleetName, instanceName, containerID string) {
+func runStartupScripts(instanceBackend backend.Backend, wsDir, fleetName, instanceName string) {
 	st, err := state.Load()
 	if err != nil {
 		return
@@ -29,15 +30,8 @@ func runStartupScripts(instanceBackend backend.Backend, wsDir, fleetName, instan
 	if !ok {
 		return
 	}
-	scripts := startup.ScriptsFor(f.Settings)
-	// The virtual microphone is a global setting rather than a fleet toggle, so
-	// it is not part of ScriptsFor. Only backends the daemon can attach a sink to
-	// get the packages — installing a sound server nothing will feed is waste.
-	if config, _ := state.LoadConfig(); config != nil && config.MicSettings.Enabled {
-		if _, ok := instanceBackend.MicSinkCommand(containerID); ok {
-			scripts = append(scripts, startup.MicScript())
-		}
-	}
+	config, _ := state.LoadConfig()
+	scripts := scriptsForInstance(instanceBackend, f.Settings, config)
 	if len(scripts) == 0 {
 		return
 	}
@@ -50,4 +44,17 @@ func runStartupScripts(instanceBackend backend.Backend, wsDir, fleetName, instan
 		lines = append(lines, failure.Error())
 	}
 	state.WriteWarn(fleetName, instanceName, strings.Join(lines, "\n"))
+}
+
+// scriptsForInstance is the fleet's agent install scripts plus, when the global
+// microphone setting is on, the audio stack. The microphone is not a
+// FleetSettings toggle, so it is not part of startup.ScriptsFor; and only
+// backends the daemon can attach a sink to get the packages — installing a sound
+// server nothing will ever feed is waste.
+func scriptsForInstance(instanceBackend backend.Backend, settings fleet.FleetSettings, config *state.Config) []startup.Script {
+	scripts := startup.ScriptsFor(settings)
+	if config != nil && config.MicSettings.Enabled && instanceBackend.SupportsMicSink() {
+		scripts = append(scripts, startup.MicScript())
+	}
+	return scripts
 }

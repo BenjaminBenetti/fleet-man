@@ -2,7 +2,9 @@ package mic
 
 import (
 	"context"
+	"errors"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -46,6 +48,9 @@ type stubCapture struct {
 	starts  int
 	running int
 	devices []string
+	// failFirst makes that many leading starts fail with failWith.
+	failFirst int
+	failWith  error
 }
 
 func (s *stubCapture) install(t *testing.T) {
@@ -54,8 +59,13 @@ func (s *stubCapture) install(t *testing.T) {
 	startCapture = func(deviceID string, sink func([]byte)) (*Capture, error) {
 		s.mu.Lock()
 		s.starts++
-		s.running++
 		s.devices = append(s.devices, deviceID)
+		if s.starts <= s.failFirst {
+			err := s.failWith
+			s.mu.Unlock()
+			return nil, err
+		}
+		s.running++
 		s.mu.Unlock()
 		ctx, cancel := context.WithCancel(context.Background())
 		capture := &Capture{cancel: cancel, done: make(chan struct{})}
@@ -258,4 +268,77 @@ func TestRunReportsADisabledDaemon(t *testing.T) {
 	var log statusLog
 	go Run(ctx, dialFakeDaemon(t, daemon), func() string { return "" }, log.report)
 	waitFor(t, "StateDisabled", func() bool { return log.has(StateDisabled) })
+}
+
+// holdDemand is a daemon that reports demand and then just keeps the stream up.
+func holdDemand() *fakeDaemon {
+	return &fakeDaemon{handler: func(stream fleetgrpc.FleetService_MicServer) error {
+		if _, err := stream.Recv(); err != nil {
+			return err
+		}
+		_ = stream.Send(demandFrame(true, "alpha/i1"))
+		<-stream.Context().Done()
+		return nil
+	}}
+}
+
+// A recorder that cannot start (device busy) is retried while demand lasts —
+// and the device is re-read each time, so a selection changed in Settings
+// applies to the very next attempt without restarting the provider.
+func TestRunRetriesAFailedCaptureWithTheCurrentDevice(t *testing.T) {
+	recorder := stubCapture{failFirst: 1, failWith: errors.New("device busy")}
+	recorder.install(t)
+
+	var mu sync.Mutex
+	device := "pulse:busy"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log statusLog
+	go Run(ctx, dialFakeDaemon(t, holdDemand()), func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return device
+	}, func(status Status) {
+		log.report(status)
+		if status.State == StateError {
+			mu.Lock()
+			device = "pulse:other" // the user picks another device meanwhile
+			mu.Unlock()
+		}
+	})
+
+	waitFor(t, "the retry to succeed", func() bool { _, running := recorder.snapshot(); return running == 1 })
+	recorder.mu.Lock()
+	devices := append([]string(nil), recorder.devices...)
+	recorder.mu.Unlock()
+	if len(devices) != 2 || devices[0] != "pulse:busy" || devices[1] != "pulse:other" {
+		t.Fatalf("capture attempts used %v, want [pulse:busy pulse:other]", devices)
+	}
+	if !log.has(StateError) || !log.has(StateLive) {
+		t.Fatalf("status log missing error/live: %+v", log.seen)
+	}
+}
+
+// No recorder on this machine is not something a retry fixes: report it once,
+// and do not spin.
+func TestRunDoesNotRetryWithoutACaptureTool(t *testing.T) {
+	recorder := stubCapture{failFirst: 1000, failWith: ErrNoCaptureTool}
+	recorder.install(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log statusLog
+	go Run(ctx, dialFakeDaemon(t, holdDemand()), func() string { return "" }, log.report)
+
+	waitFor(t, "the error report", func() bool { return log.has(StateError) })
+	time.Sleep(captureRetry + 200*time.Millisecond)
+	if starts, _ := recorder.snapshot(); starts != 1 {
+		t.Fatalf("capture was attempted %d times; a missing tool must not be retried", starts)
+	}
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	for _, status := range log.seen {
+		if status.State == StateError && !strings.Contains(status.Detail, "install") {
+			t.Fatalf("the error should carry the install hint: %q", status.Detail)
+		}
+	}
 }

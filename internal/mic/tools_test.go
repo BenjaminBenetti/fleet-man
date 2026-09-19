@@ -105,7 +105,10 @@ func TestParseAVFoundationAudioOnly(t *testing.T) {
 }
 
 func TestCommandPrefersPulseAndPassesTheDevice(t *testing.T) {
-	fakeHost(t, "linux", []string{"parec", "pactl", "arecord"}, map[string]string{"pactl info": "ok"})
+	fakeHost(t, "linux", []string{"parec", "pactl", "arecord"}, map[string]string{
+		"pactl info":         "ok",
+		"pactl list sources": "Source #1\n\tName: yeti\n\tDescription: Yeti Orb\n",
+	})
 	cmd, used, err := Command(context.Background(), "pulse:yeti")
 	if err != nil {
 		t.Fatalf("Command: %v", err)
@@ -146,7 +149,9 @@ func TestCommandIgnoresAnotherToolsDevice(t *testing.T) {
 }
 
 func TestCommandOnDarwinUsesAVFoundation(t *testing.T) {
-	fakeHost(t, "darwin", []string{"ffmpeg", "arecord"}, nil)
+	fakeHost(t, "darwin", []string{"ffmpeg", "arecord"}, map[string]string{
+		"ffmpeg -hide_banner -f avfoundation -list_devices true -i ": "[AVFoundation indev @ 0x7f8] AVFoundation audio devices:\n[AVFoundation indev @ 0x7f8] [0] Yeti Orb\n",
+	})
 	cmd, _, err := Command(context.Background(), "avfoundation:Yeti Orb")
 	if err != nil {
 		t.Fatalf("Command: %v", err)
@@ -203,15 +208,117 @@ func TestDevicesListsThroughTheDetectedTool(t *testing.T) {
 }
 
 // Inside a fleet instance the "microphone" is fleet's own virtual one; offering
-// it back to the daemon would be a self-sustaining loop.
+// it back to the daemon would be a self-sustaining loop. And the user must be
+// told THAT — not to install packages they demonstrably already have.
 func TestVirtualMicIsNeverOfferedAsAMicrophone(t *testing.T) {
 	fakeHost(t, "linux", []string{"parec", "pactl", "arecord"}, map[string]string{
 		"pactl info": "Server Name: pulseaudio\nDefault Sink: fleetnull\nDefault Source: fleetmic\n",
 	})
-	if Available() {
-		t.Fatal("a machine whose default source is the fleet virtual mic has no microphone to offer")
+	err := Unavailable()
+	if !errors.Is(err, ErrVirtualMic) {
+		t.Fatalf("Unavailable = %v, want ErrVirtualMic", err)
 	}
-	if _, _, err := Command(context.Background(), ""); !IsNoTool(err) {
-		t.Fatalf("Command err = %v, want ErrNoCaptureTool", err)
+	if !IsNoTool(err) {
+		t.Fatal("a virtual-mic machine must count as unable to capture (no retry)")
+	}
+	if got := Describe(err); strings.Contains(got, "install") || !strings.Contains(got, "fleet instance") {
+		t.Fatalf("Describe = %q", got)
+	}
+	if _, _, err := Command(context.Background(), ""); !errors.Is(err, ErrVirtualMic) {
+		t.Fatalf("Command err = %v, want ErrVirtualMic", err)
+	}
+}
+
+// A real device that merely STARTS with the virtual mic's name is not it.
+func TestVirtualMicMatchIsExact(t *testing.T) {
+	fakeHost(t, "linux", []string{"parec", "pactl"}, map[string]string{
+		"pactl info": "Default Source: fleetmicrophone_usb\n",
+	})
+	if err := Unavailable(); err != nil {
+		t.Fatalf("Unavailable = %v, want nil", err)
+	}
+}
+
+// MicSettings.Device comes off the wire (a remote daemon's config). ALSA device
+// strings are a small language in which some plugins take a FILENAME, so only a
+// name this machine enumerated itself may reach `arecord -D`.
+func TestCommandRejectsADeviceThisMachineDidNotEnumerate(t *testing.T) {
+	fakeHost(t, "linux", []string{"arecord"}, map[string]string{
+		"arecord -L": "plughw:CARD=Orb,DEV=0\n    Yeti Orb, USB Audio\n",
+	})
+	for _, hostile := range []string{
+		"alsa:file:'/home/me/.ssh/authorized_keys',raw",
+		"alsa:tee:default,'/tmp/x',raw",
+		"alsa:plughw:CARD=Gone,DEV=0",
+	} {
+		cmd, used, err := Command(context.Background(), hostile)
+		if err != nil {
+			t.Fatalf("Command(%q): %v", hostile, err)
+		}
+		if slices.Contains(cmd.Args, "-D") || used != "" {
+			t.Fatalf("%q reached the recorder: argv %v (used %q)", hostile, cmd.Args, used)
+		}
+	}
+	cmd, used, err := Command(context.Background(), "alsa:plughw:CARD=Orb,DEV=0")
+	if err != nil || used != "alsa:plughw:CARD=Orb,DEV=0" || !slices.Contains(cmd.Args, "plughw:CARD=Orb,DEV=0") {
+		t.Fatalf("an enumerated device must pass: argv %v used %q err %v", cmd.Args, used, err)
+	}
+}
+
+// The fallback recorders nobody runs day to day are the ones most likely to be
+// wrong; pin their argv and the order they are tried in.
+func TestFallbackRecorders(t *testing.T) {
+	fakeHost(t, "linux", []string{"ffmpeg", "rec"}, nil)
+	cmd, _, err := Command(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Command: %v", err)
+	}
+	if got := strings.Join(cmd.Args, " "); got != "ffmpeg -nostdin -hide_banner -loglevel error -fflags nobuffer -f alsa -i default -ac 1 -ar 16000 -f s16le -flush_packets 1 -" {
+		t.Fatalf("linux ffmpeg argv = %q", got)
+	}
+
+	fakeHost(t, "linux", []string{"rec"}, nil)
+	cmd, _, err = Command(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Command: %v", err)
+	}
+	// -L: the wire format is little-endian by contract, not host-native.
+	if got := strings.Join(cmd.Args, " "); got != "rec -q -t raw -r 16000 -e signed -b 16 -c 1 -L -" {
+		t.Fatalf("sox argv = %q", got)
+	}
+
+	fakeHost(t, "darwin", []string{"rec", "arecord", "parec"}, nil)
+	cmd, _, _ = Command(context.Background(), "")
+	if cmd == nil || cmd.Args[0] != "rec" {
+		t.Fatalf("darwin without ffmpeg should fall to sox, got %v", cmd)
+	}
+}
+
+// One sound-server probe per detection: a wedged server costs probeTimeout on
+// the capture-start path, so it must not be paid twice.
+func TestDetectionProbesPulseOnce(t *testing.T) {
+	fakeHost(t, "linux", []string{"parec", "pactl"}, map[string]string{"pactl info": "ok"})
+	calls := 0
+	inner := runProbe
+	runProbe = func(name string, args ...string) ([]byte, error) {
+		if name == "pactl" && len(args) == 1 && args[0] == "info" {
+			calls++
+		}
+		return inner(name, args...)
+	}
+	if !Available() {
+		t.Fatal("expected pulse to be usable")
+	}
+	if calls != 1 {
+		t.Fatalf("pactl info ran %d times, want 1", calls)
+	}
+}
+
+func TestAVFoundationListWithoutATableIsAnError(t *testing.T) {
+	fakeHost(t, "darwin", []string{"ffmpeg"}, map[string]string{
+		"ffmpeg -hide_banner -f avfoundation -list_devices true -i ": "ffmpeg: unrecognized option\n",
+	})
+	if _, err := Devices(); err == nil {
+		t.Fatal("no device table must be an error, not an empty list")
 	}
 }

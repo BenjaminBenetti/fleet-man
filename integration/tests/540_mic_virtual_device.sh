@@ -53,25 +53,42 @@ until grep -q '^idle' "${attach_log}" 2>/dev/null; do
   sleep 0.5
 done
 
+# wait_for_sink <n>: block until the daemon has logged its n-th sink attach —
+# the observable moment the instance's virtual microphone is up AND fed.
+wait_for_sink() {
+  local want="$1" deadline=$(( $(date +%s) + $(_scale_timeout 120) ))
+  local seen
+  until seen=$(grep -c 'mic sink attached' "${HOME}/.fleet/fleet.log" 2>/dev/null || true); [ "${seen:-0}" -ge "${want}" ]; do
+    [ "$(date +%s)" -lt "${deadline}" ] || fail "the daemon never attached sink #${want}: $(grep -i 'mic' "${HOME}/.fleet/fleet.log" | tail -5)"
+    sleep 0.5
+  done
+}
+
+# record <file>: record inside the instance exactly the way Claude Code's voice
+# mode does, and report "<bytes> <non-zero bytes>". 6 s, so that even a recorder
+# that beats the sink's event subscription — and is only noticed by its 2 s
+# safety-net poll — still captures several seconds of signal.
+record() {
+  "${FLEET_BIN}" exec "${target}" -- sh -c "timeout 6 arecord -f S16_LE -r 16000 -c 1 -t raw -q - > $1 2>/dev/null; true"
+  "${FLEET_BIN}" exec "${target}" -- sh -c "printf '%s %s' \"\$(wc -c < $1)\" \"\$(tr -d '\\000' < $1 | wc -c)\"" | tr -s '[:space:]' ' '
+}
+
 info "wait for the daemon's sink to bring the instance's virtual microphone up"
-deadline=$(( $(date +%s) + $(_scale_timeout 120) ))
-until "${FLEET_BIN}" exec "${target}" -- sh -c 'pactl info 2>/dev/null | grep -q "Default Source: fleetmic"'; do
-  [ "$(date +%s)" -lt "${deadline}" ] || fail "the instance never got its virtual microphone"
-  sleep 1
-done
-# Let the sink settle into its subscribe loop before the first recording.
-sleep 2
+wait_for_sink 1
+"${FLEET_BIN}" exec "${target}" -- sh -c 'pactl info | grep -q "Default Source: fleetmic"' \
+  || fail "the virtual microphone should be the instance's default source"
 [ ! -s "${starts}" ] || fail "the microphone was opened with nothing recording: $(cat "${starts}")"
 
 info "record inside the instance exactly the way Claude Code's voice mode does"
-"${FLEET_BIN}" exec "${target}" -- sh -c 'timeout 4 arecord -f S16_LE -r 16000 -c 1 -t raw -q - > /tmp/mic-test.raw; true'
-bytes=$("${FLEET_BIN}" exec "${target}" -- sh -c 'wc -c < /tmp/mic-test.raw' | tr -d '[:space:]')
-loud=$("${FLEET_BIN}" exec "${target}" -- sh -c "tr -d '\\000' < /tmp/mic-test.raw | wc -c" | tr -d '[:space:]')
+read -r bytes loud <<< "$(record /tmp/mic-test.raw)"
 info "recorded ${bytes} bytes, ${loud} non-zero"
-# 4 s at 32 kB/s is 128 kB; demand signalling and capture start-up eat into the
-# front of it, so ask for a bit over a second of real signal.
-[ "${bytes}" -ge 40000 ] || fail "recording too short (${bytes} bytes): the virtual microphone is not pacing/delivering audio"
-[ "${loud}" -ge 30000 ] || fail "recording is (nearly) silent (${loud} non-zero bytes): the provider's audio did not reach the instance"
+# SIGNAL is the load-bearing check: the noise the provider captured must be what
+# the recorder hears (a dead path records zeros). 6 s is 192 kB; ask for ~2 s.
+[ "${loud}" -ge 64000 ] || fail "recording is (nearly) silent (${loud} non-zero bytes): the provider's audio did not reach the instance"
+# PACING is the other half: a virtual device with no clock hands a recorder
+# samples as fast as it asks (the failure PulseAudio is here to prevent), which
+# shows up as far MORE than 6 s of audio in 6 s — never as less.
+[ "${bytes}" -le 230000 ] || fail "recorded ${bytes} bytes in 6 s: the virtual microphone is not paced in real time"
 
 info "the provider went live for that recording, and idle again after it"
 deadline=$(( $(date +%s) + $(_scale_timeout 30) ))
@@ -87,15 +104,9 @@ assert_equals "1" "$(wc -l < "${starts}" | tr -d '[:space:]')" "the microphone s
 info "the virtual microphone survives an instance stop/start"
 "${FLEET_BIN}" stop "${target}"
 "${FLEET_BIN}" start "${target}"
-deadline=$(( $(date +%s) + $(_scale_timeout 120) ))
-until "${FLEET_BIN}" exec "${target}" -- sh -c 'pactl info 2>/dev/null | grep -q "Default Source: fleetmic"'; do
-  [ "$(date +%s)" -lt "${deadline}" ] || fail "the virtual microphone did not come back after a restart"
-  sleep 1
-done
-sleep 2
-"${FLEET_BIN}" exec "${target}" -- sh -c 'timeout 4 arecord -f S16_LE -r 16000 -c 1 -t raw -q - > /tmp/mic-test2.raw; true'
-loud=$("${FLEET_BIN}" exec "${target}" -- sh -c "tr -d '\\000' < /tmp/mic-test2.raw | wc -c" | tr -d '[:space:]')
-info "after restart: ${loud} non-zero bytes"
-[ "${loud}" -ge 30000 ] || fail "recording after a restart is (nearly) silent (${loud} non-zero bytes)"
+wait_for_sink 2
+read -r bytes loud <<< "$(record /tmp/mic-test2.raw)"
+info "after restart: ${bytes} bytes, ${loud} non-zero"
+[ "${loud}" -ge 64000 ] || fail "recording after a restart is (nearly) silent (${loud} non-zero bytes)"
 
 pass "virtual microphone end to end"

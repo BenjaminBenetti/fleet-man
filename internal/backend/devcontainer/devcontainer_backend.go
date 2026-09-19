@@ -713,6 +713,12 @@ func (devcontainerBackend *DevcontainerBackend) ForwardStdioCommand(containerID 
 		"socat", "STDIO", fmt.Sprintf("TCP:localhost:%d", remotePort)), true
 }
 
+// SupportsMicSink reports that devcontainer instances can host the virtual
+// microphone: `docker exec -i` is a local, low-latency stdin stream.
+func (devcontainerBackend *DevcontainerBackend) SupportsMicSink() bool {
+	return true
+}
+
 // MicSinkCommand returns an unstarted *exec.Cmd running the virtual-microphone
 // sink inside the container over a plain `docker exec -i`: no TTY (the stream is
 // binary PCM) and no devcontainer CLI (a Node cold start per attach, and its

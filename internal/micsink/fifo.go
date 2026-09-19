@@ -19,6 +19,12 @@ const fifoPiece = 3200
 type fifo struct {
 	mu sync.Mutex
 	fd int
+	// open gates write. It lives here, under mu, rather than with the caller:
+	// the "is anyone recording?" check and the write it guards must be ONE
+	// critical section with respect to the drain, or a buffer that passed the
+	// check just before the recorder left lands in the pipe just after it was
+	// drained — and opens the next recording with a second of stale speech.
+	open bool
 	// carry holds the odd byte of a read that split a sample, to be prefixed to
 	// the next write.
 	carry []byte
@@ -36,10 +42,27 @@ func openFIFO(path string) (*fifo, error) {
 	return &fifo{fd: fd}, nil
 }
 
-// write feeds pcm to the source, dropping whatever does not fit.
+// setOpen opens or closes the microphone. Closing also discards everything
+// sitting in the FIFO, atomically with respect to write: PulseAudio stops
+// reading the pipe the moment the source goes idle, so the tail of one
+// recording would otherwise be the first thing the next recorder hears.
+func (f *fifo) setOpen(open bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.open = open
+	if !open {
+		f.drainLocked()
+	}
+}
+
+// write feeds pcm to the source while the microphone is open, dropping whatever
+// does not fit. While closed it is a no-op.
 func (f *fifo) write(pcm []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if !f.open {
+		return
+	}
 	if len(f.carry) > 0 {
 		pcm = append(f.carry, pcm...)
 		f.carry = nil
@@ -50,22 +73,20 @@ func (f *fifo) write(pcm []byte) {
 	}
 	for len(pcm) > 0 {
 		piece := pcm[:min(fifoPiece, len(pcm))]
-		pcm = pcm[len(piece):]
-		if _, err := syscall.Write(f.fd, piece); err != nil && !errors.Is(err, syscall.EINTR) {
+		_, err := syscall.Write(f.fd, piece)
+		if errors.Is(err, syscall.EINTR) {
+			continue // nothing was written; retry this same piece
+		}
+		if err != nil {
 			// EAGAIN: the pipe is full because nothing is consuming. Drop the
 			// rest of this buffer rather than spin.
 			return
 		}
+		pcm = pcm[len(piece):]
 	}
 }
 
-// drain discards everything sitting in the FIFO. Called when the last recorder
-// detaches (and at startup): PulseAudio stops reading the pipe the moment the
-// source goes idle, so the tail of one recording would otherwise be the first
-// thing the next recorder hears.
-func (f *fifo) drain() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+func (f *fifo) drainLocked() {
 	f.carry = nil
 	buf := make([]byte, 64*1024)
 	for {
@@ -82,5 +103,6 @@ func (f *fifo) drain() {
 func (f *fifo) close() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.open = false
 	_ = syscall.Close(f.fd)
 }

@@ -65,6 +65,7 @@ func newTestFIFO(t *testing.T) (*fifo, string) {
 		t.Fatalf("openFIFO: %v", err)
 	}
 	t.Cleanup(pipe.close)
+	pipe.setOpen(true)
 	return pipe, path
 }
 
@@ -120,18 +121,61 @@ func TestFIFODropsWhenFullWithoutBlocking(t *testing.T) {
 }
 
 // What is left in the pipe when a recording ends must not open the next one.
-func TestFIFODrainDiscardsStaleAudio(t *testing.T) {
+func TestFIFOClosingDiscardsStaleAudio(t *testing.T) {
 	pipe, path := newTestFIFO(t)
 	pipe.write([]byte("stale audio!"))
 	pipe.write([]byte{1}) // and a dangling carry byte
-	pipe.drain()
+	pipe.setOpen(false)
 	if got := readAvailable(t, path); len(got) != 0 {
-		t.Fatalf("drain left %q", got)
+		t.Fatalf("closing left %q in the pipe", got)
 	}
+	pipe.setOpen(true)
 	pipe.write([]byte{2, 3})
 	if got := readAvailable(t, path); !bytes.Equal(got, []byte{2, 3}) {
 		t.Fatalf("stale carry leaked into the next recording: %v", got)
 	}
+}
+
+// The gate and the drain are one critical section: a write that arrives after
+// the microphone closed — the pump always has a buffer in flight when the
+// recorder leaves — must not repopulate the just-drained pipe.
+func TestFIFOWriteWhileClosedIsDropped(t *testing.T) {
+	pipe, path := newTestFIFO(t)
+	pipe.setOpen(false)
+	pipe.write([]byte("the tail of the last sentence"))
+	if got := readAvailable(t, path); len(got) != 0 {
+		t.Fatalf("a closed microphone accepted %q", got)
+	}
+}
+
+// Hammer open/close against a writer: after the final close the pipe is empty,
+// however the two interleaved.
+func TestFIFOCloseAlwaysLeavesThePipeEmpty(t *testing.T) {
+	pipe, path := newTestFIFO(t)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				pipe.write([]byte("audio audio audio audio "))
+			}
+		}
+	}()
+	for range 200 {
+		pipe.setOpen(true)
+		pipe.setOpen(false)
+		if got := readAvailable(t, path); len(got) != 0 {
+			close(stop)
+			<-done
+			t.Fatalf("%d stale bytes survived a close", len(got))
+		}
+	}
+	close(stop)
+	<-done
 }
 
 func TestOpenFIFOMissing(t *testing.T) {

@@ -42,6 +42,11 @@ linters:
             # configutil aliases and may never import internal/state or any
             # other server-only package.
             - "**/internal/protoconv/**"
+            # The microphone capture/provider half runs wherever the human sits
+            # (TUI, `fleet mic attach`), possibly far from the daemon: client
+            # code, and machine-checked as such. (internal/micsink, the
+            # in-instance half, is a different package and not covered.)
+            - "**/internal/mic/**"
           deny:
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/state
               desc: client code must go through the fleet server (fleetgrpc), not internal/state

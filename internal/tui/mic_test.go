@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -192,7 +194,7 @@ func TestMicLiveIndicatorOnlyWhileLive(t *testing.T) {
 			t.Fatalf("state %v rendered a badge %q", state, got)
 		}
 	}
-	next, _ := m.Update(micStatusMsg{status: mic.Status{State: mic.StateLive, Instances: []string{"alpha/i1"}}})
+	next, _ := m.Update(micStatusMsg{gen: micGen(), status: mic.Status{State: mic.StateLive, Instances: []string{"alpha/i1"}}})
 	live := next.(model)
 	if !strings.Contains(micLiveIndicator(&live), "MIC") {
 		t.Fatal("no badge while live")
@@ -217,5 +219,172 @@ func TestSyncMicProviderIsInertBeforeStart(t *testing.T) {
 	syncMicFromConfig(nil)
 	if micDevice() != "" {
 		t.Fatal("a nil config reads as defaults")
+	}
+}
+
+// armMicCtl arms the controller with a parent context the test owns, and a
+// provider seam that just parks — so start/stop bookkeeping can be observed
+// without dialing a daemon. It restores the inert state afterwards.
+func armMicCtl(t *testing.T) (started chan int) {
+	t.Helper()
+	started = make(chan int, 8)
+	parent, cancel := context.WithCancel(context.Background())
+	origRun := runMicProviderFn
+	runMicProviderFn = func(ctx context.Context, _ *tea.Program, gen int) {
+		started <- gen
+		<-ctx.Done()
+	}
+	micCtl.mu.Lock()
+	micCtl.parent, micCtl.cancel = parent, nil
+	micCtl.mu.Unlock()
+	t.Cleanup(func() {
+		cancel()
+		runMicProviderFn = origRun
+		micCtl.mu.Lock()
+		micCtl.parent, micCtl.program, micCtl.cancel = nil, nil, nil
+		micCtl.mu.Unlock()
+	})
+	return started
+}
+
+func micCtlRunning() bool {
+	micCtl.mu.Lock()
+	defer micCtl.mu.Unlock()
+	return micCtl.cancel != nil
+}
+
+func TestSyncMicProviderStartsAndStops(t *testing.T) {
+	started := armMicCtl(t)
+	on := state.MicSettings{Enabled: true}
+
+	syncMicProvider(on)
+	first := <-started
+	if !micCtlRunning() {
+		t.Fatal("enable should start a provider")
+	}
+	syncMicProvider(on) // idempotent: no second provider
+	select {
+	case gen := <-started:
+		t.Fatalf("a second enable started another provider (gen %d)", gen)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	syncMicProvider(state.MicSettings{})
+	if micCtlRunning() {
+		t.Fatal("disable should stop the provider")
+	}
+	syncMicProvider(on)
+	if second := <-started; second <= first {
+		t.Fatalf("a restart must get a new generation: %d then %d", first, second)
+	}
+}
+
+// A provider that ends ON ITS OWN (no recorder on this machine, a daemon that
+// predates the RPC) must free the slot, or no later sync could ever restart it
+// — the user installs a recorder, and the microphone stays dead until they
+// restart the TUI.
+func TestMicProviderThatExitsOnItsOwnCanBeRestarted(t *testing.T) {
+	started := armMicCtl(t)
+	runMicProviderFn = func(_ context.Context, _ *tea.Program, gen int) {
+		started <- gen
+		micProviderExited(gen) // what runMicProvider's defer does
+	}
+	on := state.MicSettings{Enabled: true}
+
+	syncMicProvider(on)
+	<-started
+	waitUntil(t, "the exited provider to free the slot", func() bool { return !micCtlRunning() })
+
+	syncMicProvider(on)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the provider was not restarted after exiting on its own")
+	}
+}
+
+// A stale provider's exit must not free a slot its successor now holds.
+func TestMicProviderExitIgnoresASupersededGeneration(t *testing.T) {
+	started := armMicCtl(t)
+	syncMicProvider(state.MicSettings{Enabled: true})
+	current := <-started
+	micProviderExited(current - 1)
+	if !micCtlRunning() {
+		t.Fatal("an old generation's exit cleared the current provider's slot")
+	}
+}
+
+// For a privacy indicator, failing toward "not listening" is the wrong
+// direction: a dying provider's parting status must not clear the badge of the
+// provider that replaced it.
+func TestStaleMicStatusCannotClearTheLiveBadge(t *testing.T) {
+	_, m := newMicTestModel(t)
+	started := armMicCtl(t)
+	syncMicProvider(state.MicSettings{Enabled: true})
+	old := <-started
+	syncMicProvider(state.MicSettings{})
+	syncMicProvider(state.MicSettings{Enabled: true})
+	current := <-started
+
+	next, _ := m.Update(micStatusMsg{gen: current, status: mic.Status{State: mic.StateLive, Instances: []string{"alpha/i1"}}})
+	live := next.(model)
+	next, _ = live.Update(micStatusMsg{gen: old, status: mic.Status{State: mic.StateConnecting}})
+	after := next.(model)
+	if after.micStatus.State != mic.StateLive {
+		t.Fatalf("a superseded provider's status was applied: %+v", after.micStatus)
+	}
+	if !strings.Contains(micLiveIndicator(&after), "MIC") {
+		t.Fatal("the live badge disappeared while the microphone is open")
+	}
+}
+
+// A failed enumeration (sound server momentarily wedged) must not turn the
+// user's real device into "not found here".
+func TestMicDevicesErrorKeepsThePreviousList(t *testing.T) {
+	sp, m := newMicTestModel(t)
+	m.config.MicSettings = state.MicSettings{Enabled: true, Device: "pulse:yeti"}
+	m.micDevicesLoaded = true
+	m.micDevices = []mic.Device{{ID: "pulse:yeti", Label: "Yeti Orb"}}
+
+	next, _ := m.Update(micDevicesMsg{err: errors.New("pactl list sources: timeout")})
+	got := next.(model)
+	if len(got.micDevices) != 1 {
+		t.Fatalf("the device list was wiped: %+v", got.micDevices)
+	}
+	if label := sp.micDeviceLabel(&got); label != "Yeti Orb" {
+		t.Fatalf("label = %q, want the real device", label)
+	}
+	if !strings.Contains(got.micDevicesErr, "timeout") {
+		t.Fatalf("the error should still be shown: %q", got.micDevicesErr)
+	}
+}
+
+func TestCycleMicDeviceExplainsAnEmptyList(t *testing.T) {
+	sp, m := newMicTestModel(t)
+	m.config.MicSettings.Enabled = true
+	m.micDevicesLoaded = true
+	sp.cursor = settingsPositionOf(sp, m, settingsItemMicDevice)
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
+	if !strings.Contains(m.message, "system default") {
+		t.Fatalf("a no-op key press should say why: %q", m.message)
+	}
+}
+
+func TestMicStatusRowFlagsADeviceFallback(t *testing.T) {
+	_, m := newMicTestModel(t)
+	m.micStatus = mic.Status{State: mic.StateLive, Instances: []string{"alpha/i1"}, FellBack: true}
+	if !strings.Contains(micStatusValue(m), "recording the system default") {
+		t.Fatalf("status = %q", micStatusValue(m))
+	}
+}
+
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

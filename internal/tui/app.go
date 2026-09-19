@@ -932,6 +932,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The daemon's version learned at (re)connect; render it in the header's
 		// control-chain version string.
 		m.serverVersion = msg.serverVersion
+		// A (re)connect is when the daemon may have changed under us — notably
+		// an in-place update of one that predated the Mic RPC, whose provider
+		// gave up as "unsupported". Converge again; a no-op when one is running.
+		syncMicFromConfig(m.config)
 		return m, spinCmd
 
 	case watchErrMsg:
@@ -1001,20 +1005,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinCmd
 
 	case micStatusMsg:
-		m.micStatus = msg.status
+		// Drop a superseded provider's reports (see micCtl.gen): its parting
+		// "connecting" must not clear the badge of the provider that replaced it.
+		if msg.gen == micGen() {
+			m.micStatus = msg.status
+		}
 		return m, spinCmd
 
 	case micDevicesMsg:
 		m.micDevicesLoading = false
 		m.micDevicesLoaded = true
-		m.micDevices = msg.devices
 		m.micDevicesErr = ""
 		if msg.err != nil {
+			// Keep the list we had: a sound server that is momentarily wedged
+			// must not turn the user's real device into "not found here".
 			m.micDevicesErr = msg.err.Error()
 			if mic.IsNoTool(msg.err) {
-				m.micDevicesErr = "no capture tool: " + mic.InstallHint()
+				m.micDevicesErr = mic.Describe(msg.err)
 			}
+			return m, spinCmd
 		}
+		m.micDevices = msg.devices
+		// A successful listing proves this machine can record. If the provider
+		// gave up earlier for lack of a recorder, this is the moment to retry.
+		syncMicFromConfig(m.config)
 		return m, spinCmd
 
 	case codespaceMachinesFetchedMsg:

@@ -2,6 +2,7 @@ package mic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,8 +39,9 @@ type tool struct {
 	// bin is the executable that must be on PATH.
 	bin string
 	// usable is an optional extra check beyond bin being on PATH (e.g. parec is
-	// useless without a reachable sound server).
-	usable func() bool
+	// useless without a reachable sound server). It is handed the one sound-
+	// server probe detection already made, rather than each making its own.
+	usable func(pulse pulseProbe) bool
 	// args builds the argv (after bin) recording the wire format to stdout.
 	// native is the tool's own device name; "" means the system default.
 	args func(native string) []string
@@ -56,13 +58,9 @@ var channelsArg = strconv.Itoa(Channels)
 var pulseTool = tool{
 	name: "pulse",
 	bin:  "parec",
-	usable: func() bool {
-		if _, err := lookPath("pactl"); err != nil {
-			// No pactl to ask; let parec try — it fails fast with no server.
-			return true
-		}
-		_, err := runProbe("pactl", "info")
-		return err == nil
+	usable: func(pulse pulseProbe) bool {
+		// No pactl to ask: let parec try — it fails fast with no server.
+		return !pulse.havePactl || pulse.answers
 	},
 	args: func(native string) []string {
 		args := []string{"--raw", "--format=s16le", "--rate=" + rateArg, "--channels=" + channelsArg,
@@ -112,9 +110,13 @@ var avfoundationTool = tool{
 		return ffmpegArgs("avfoundation", ":"+native)
 	},
 	list: func() ([]Device, error) {
-		// ffmpeg "fails" this invocation by design (there is no input to open);
-		// the device table is on stderr regardless.
+		// ffmpeg "fails" this invocation by design (there is no input to open),
+		// so its exit status says nothing; the device table is on stderr
+		// regardless. What DOES mean failure is the table not being there.
 		out, _ := runProbe("ffmpeg", "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", "")
+		if !strings.Contains(string(out), avfoundationAudioHeading) {
+			return nil, fmt.Errorf("ffmpeg printed no AVFoundation device table")
+		}
 		return parseAVFoundationAudio(string(out)), nil
 	},
 }
@@ -132,7 +134,8 @@ var soxTool = tool{
 	name: "sox",
 	bin:  "rec",
 	args: func(string) []string {
-		return []string{"-q", "-t", "raw", "-r", rateArg, "-e", "signed", "-b", "16", "-c", channelsArg, "-"}
+		// -L: the wire format is little-endian by contract, not host-native.
+		return []string{"-q", "-t", "raw", "-r", rateArg, "-e", "signed", "-b", "16", "-c", channelsArg, "-L", "-"}
 	},
 }
 
@@ -150,28 +153,34 @@ func candidates() []tool {
 	return []tool{pulseTool, alsaTool, ffmpegALSATool, soxTool}
 }
 
-// detectTTL is how long a detection verdict is reused. Detection can cost a
-// `pactl info` round trip, and it sits on the capture-start path where every
-// millisecond is clipped off the start of the user's sentence.
+// detectTTL is how long a detection verdict is reused. Detection costs a
+// `pactl info` round trip (up to probeTimeout against a wedged sound server),
+// and it sits on the capture-start path where every millisecond is clipped off
+// the start of the user's sentence.
 const detectTTL = time.Minute
 
 var detectCache struct {
 	mu    sync.Mutex
 	at    time.Time
 	found tool
-	ok    bool
+	err   error
+	// devices are the native device names the detected tool listed, for
+	// validDevice. nil = not listed yet.
+	devices map[string]bool
 }
 
-// detect returns the first usable capture tool, caching the verdict briefly.
-func detect() (tool, bool) {
+// detect returns the capture tool to use, caching the verdict briefly. The
+// error says WHY there is none: ErrNoCaptureTool or ErrVirtualMic.
+func detect() (tool, error) {
 	detectCache.mu.Lock()
 	defer detectCache.mu.Unlock()
 	if !detectCache.at.IsZero() && time.Since(detectCache.at) < detectTTL {
-		return detectCache.found, detectCache.ok
+		return detectCache.found, detectCache.err
 	}
-	detectCache.found, detectCache.ok = detectUncached()
+	detectCache.found, detectCache.err = detectUncached()
 	detectCache.at = time.Now()
-	return detectCache.found, detectCache.ok
+	detectCache.devices = nil
+	return detectCache.found, detectCache.err
 }
 
 // resetDetectCache forgets the cached verdict (tests, and the settings page's
@@ -179,6 +188,7 @@ func detect() (tool, bool) {
 func resetDetectCache() {
 	detectCache.mu.Lock()
 	detectCache.at = time.Time{}
+	detectCache.devices = nil
 	detectCache.mu.Unlock()
 }
 
@@ -187,38 +197,97 @@ func resetDetectCache() {
 // it without importing the in-instance package.
 const VirtualSourceName = "fleetmic"
 
-// defaultIsVirtualMic reports whether this machine's default source is fleet's
-// OWN virtual microphone — i.e. this process runs inside a fleet instance.
-// Recording it would be a loop: the recorder is itself "something recording in
-// the instance", so it would raise the very demand that keeps it running, and
-// feed the instance its own silence. Such a machine has no microphone to offer.
-func defaultIsVirtualMic() bool {
-	if _, err := lookPath("pactl"); err != nil {
-		return false
-	}
-	out, err := runProbe("pactl", "info")
-	return err == nil && strings.Contains(string(out), "Default Source: "+VirtualSourceName)
+// pulseProbe is what one `pactl info` told detection.
+type pulseProbe struct {
+	havePactl bool
+	answers   bool
+	// virtualMic: the default source is fleet's OWN virtual microphone — this
+	// process runs inside a fleet instance.
+	virtualMic bool
 }
 
-func detectUncached() (tool, bool) {
-	if defaultIsVirtualMic() {
-		return tool{}, false
+func probePulse() pulseProbe {
+	if _, err := lookPath("pactl"); err != nil {
+		return pulseProbe{}
+	}
+	probe := pulseProbe{havePactl: true}
+	out, err := runProbe("pactl", "info")
+	if err != nil {
+		return probe
+	}
+	probe.answers = true
+	for line := range strings.SplitSeq(string(out), "\n") {
+		// Whole-line match: "fleetmic" must not match "fleetmicrophone_usb".
+		if strings.TrimSpace(line) == "Default Source: "+VirtualSourceName {
+			probe.virtualMic = true
+		}
+	}
+	return probe
+}
+
+func detectUncached() (tool, error) {
+	pulse := probePulse()
+	if pulse.virtualMic {
+		// Recording fleet's own virtual microphone would be a loop: the
+		// recorder is itself "something recording in the instance", so it would
+		// raise the very demand that keeps it running, and feed the instance
+		// its own silence. Such a machine has no microphone to offer.
+		return tool{}, ErrVirtualMic
 	}
 	for _, candidate := range candidates() {
 		if _, err := lookPath(candidate.bin); err != nil {
 			continue
 		}
-		if candidate.usable != nil && !candidate.usable() {
+		if candidate.usable != nil && !candidate.usable(pulse) {
 			continue
 		}
-		return candidate, true
+		return candidate, nil
 	}
-	return tool{}, false
+	return tool{}, ErrNoCaptureTool
+}
+
+// validDevice reports whether native is a device the detected tool actually
+// lists on THIS machine. MicSettings.Device is daemon-side config: it can come
+// from a client on another machine — or from a daemon the user only half
+// trusts — and it is about to become an argument to a recorder. ALSA device
+// strings in particular are a small language ("plugin:args") in which some
+// plugins take a FILENAME, so an arbitrary string from the wire must never
+// reach `arecord -D`. Only names this machine enumerated itself get through;
+// anything else records the system default.
+func validDevice(detected tool, native string) bool {
+	if detected.list == nil {
+		return false
+	}
+	detectCache.mu.Lock()
+	known := detectCache.devices
+	detectCache.mu.Unlock()
+	if known == nil || !known[native] {
+		// Unknown (or never listed): list once — the device may have been
+		// plugged in since. The result is cached with the detection verdict, so
+		// a missing device costs this at most once per detectTTL.
+		devices, err := detected.list()
+		if err != nil {
+			return false
+		}
+		known = make(map[string]bool, len(devices))
+		for _, device := range devices {
+			_, name, _ := strings.Cut(device.ID, ":")
+			known[name] = true
+		}
+		detectCache.mu.Lock()
+		detectCache.devices = known
+		detectCache.mu.Unlock()
+	}
+	return known[native]
 }
 
 // ErrNoCaptureTool is returned when this machine has nothing fleet can record
 // with. InstallHint says what to install.
-var ErrNoCaptureTool = fmt.Errorf("no audio capture tool found")
+var ErrNoCaptureTool = errors.New("no audio capture tool found")
+
+// ErrVirtualMic is returned when this machine's only microphone is the virtual
+// one fleet itself provides — i.e. fleet is running inside a fleet instance.
+var ErrVirtualMic = errors.New("this machine's microphone is fleet's own virtual microphone (running inside a fleet instance)")
 
 // InstallHint names the package that provides a capture tool on this OS.
 func InstallHint() string {
@@ -230,12 +299,25 @@ func InstallHint() string {
 
 // Available reports whether this machine can capture at all: either the
 // override command is set or a known recorder is present.
-func Available() bool {
+func Available() bool { return Unavailable() == nil }
+
+// Unavailable says why this machine cannot capture (ErrNoCaptureTool,
+// ErrVirtualMic), or nil if it can. Describe turns it into user-facing text.
+func Unavailable() error {
 	if os.Getenv(EnvCapture) != "" {
-		return true
+		return nil
 	}
-	_, ok := detect()
-	return ok
+	_, err := detect()
+	return err
+}
+
+// Describe renders a capture-availability error for the user: what is wrong
+// and, where there is something to do about it, what.
+func Describe(err error) string {
+	if errors.Is(err, ErrNoCaptureTool) {
+		return "no capture tool: " + InstallHint()
+	}
+	return err.Error()
 }
 
 // Devices enumerates the capture devices the settings page offers, NOT including
@@ -248,9 +330,9 @@ func Devices() ([]Device, error) {
 	// Listing is an explicit user action (opening the selector), so re-detect:
 	// they may have just installed a recorder.
 	resetDetectCache()
-	detected, ok := detect()
-	if !ok {
-		return nil, ErrNoCaptureTool
+	detected, err := detect()
+	if err != nil {
+		return nil, err
 	}
 	if detected.list == nil {
 		return nil, nil
@@ -259,19 +341,20 @@ func Devices() ([]Device, error) {
 }
 
 // Command builds the unstarted capture command for deviceID ("" = system
-// default). A deviceID that belongs to a different tool than the one this
-// machine has — a config shared with a client on another machine — records the
-// default instead of failing. The second result is the device id actually used.
+// default). A deviceID this machine did not itself enumerate — another tool's,
+// another machine's, unplugged, or not a device name at all (see validDevice) —
+// records the default instead. The second result is the device id actually
+// used, so callers can tell the user when that differs from what they chose.
 func Command(ctx context.Context, deviceID string) (*exec.Cmd, string, error) {
 	if override := os.Getenv(EnvCapture); override != "" {
 		return exec.CommandContext(ctx, "sh", "-c", override), "", nil
 	}
-	detected, ok := detect()
-	if !ok {
-		return nil, "", ErrNoCaptureTool
+	detected, err := detect()
+	if err != nil {
+		return nil, "", err
 	}
 	native := ""
-	if toolName, rest, found := strings.Cut(deviceID, ":"); found && toolName == detected.name && detected.list != nil {
+	if toolName, rest, found := strings.Cut(deviceID, ":"); found && toolName == detected.name && validDevice(detected, rest) {
 		native = rest
 	}
 	used := ""
@@ -337,6 +420,8 @@ func parseArecordPCMs(out string) []Device {
 	return devices
 }
 
+const avfoundationAudioHeading = "AVFoundation audio devices"
+
 // parseAVFoundationAudio reads ffmpeg's AVFoundation device table, keeping the
 // entries under the "audio devices" heading:
 //
@@ -349,7 +434,7 @@ func parseAVFoundationAudio(out string) []Device {
 	var devices []Device
 	inAudio := false
 	for line := range strings.SplitSeq(out, "\n") {
-		if strings.Contains(line, "AVFoundation audio devices") {
+		if strings.Contains(line, avfoundationAudioHeading) {
 			inAudio = true
 			continue
 		}

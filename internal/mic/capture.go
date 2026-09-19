@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,9 @@ const stderrTailBytes = 512
 type Capture struct {
 	cancel context.CancelFunc
 	done   chan struct{}
+	// fellBack: a device was asked for but the system default is being
+	// recorded, because this machine does not have that device.
+	fellBack bool
 
 	mu  sync.Mutex
 	err error
@@ -33,11 +37,16 @@ type Capture struct {
 // with a dead microphone.
 func Start(deviceID string, sink func([]byte)) (*Capture, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	if _, _, err := Command(ctx, deviceID); err != nil {
+	_, used, err := Command(ctx, deviceID)
+	if err != nil {
 		cancel()
 		return nil, err
 	}
-	capture := &Capture{cancel: cancel, done: make(chan struct{})}
+	capture := &Capture{
+		cancel:   cancel,
+		done:     make(chan struct{}),
+		fellBack: deviceID != "" && used == "" && os.Getenv(EnvCapture) == "",
+	}
 	go func() {
 		defer close(capture.done)
 		defer cancel()
@@ -62,6 +71,10 @@ func (c *Capture) Stop() {
 	c.cancel()
 	<-c.done
 }
+
+// FellBack reports that the configured device is not available on this machine
+// and the system default is being recorded instead.
+func (c *Capture) FellBack() bool { return c.fellBack }
 
 // Done is closed once the recorder has exited, for whatever reason.
 func (c *Capture) Done() <-chan struct{} { return c.done }
@@ -140,5 +153,9 @@ func (t *tailBuffer) String() string {
 	return strings.TrimSpace(t.buf.String())
 }
 
-// IsNoTool reports whether err means this machine has no capture tool.
-func IsNoTool(err error) bool { return errors.Is(err, ErrNoCaptureTool) }
+// IsNoTool reports whether err means this machine cannot capture at all — no
+// recorder, or only fleet's own virtual microphone — as opposed to a recorder
+// that failed. Retrying such an error is pointless.
+func IsNoTool(err error) bool {
+	return errors.Is(err, ErrNoCaptureTool) || errors.Is(err, ErrVirtualMic)
+}

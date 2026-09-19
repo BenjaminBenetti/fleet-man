@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 )
 
 func TestWithIsolatedTmp(t *testing.T) {
@@ -206,7 +207,10 @@ func TestMicSinkCommandArgv(t *testing.T) {
 	if !ok {
 		t.Fatalf("devcontainer backend should support a mic sink")
 	}
-	want := []string{"docker", "exec", "-i", "-u", "vscode", "cid123", "/usr/bin/fleet", "mic", "sink"}
+	if !b.SupportsMicSink() {
+		t.Fatalf("SupportsMicSink must agree with MicSinkCommand")
+	}
+	want := []string{"docker", "exec", "-i", "-u", "vscode", "cid123", fleetlaunch.RemotePath, "mic", "sink"}
 	if !slices.Equal(cmd.Args, want) {
 		t.Fatalf("argv = %v, want %v", cmd.Args, want)
 	}

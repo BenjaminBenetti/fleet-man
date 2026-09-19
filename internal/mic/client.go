@@ -40,6 +40,9 @@ type Status struct {
 	Instances []string
 	// Detail carries the error text for StateError.
 	Detail string
+	// FellBack is set while live if the configured device is not on this
+	// machine and the system default is being recorded instead.
+	FellBack bool
 }
 
 const (
@@ -155,14 +158,14 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 			_ = stream.Send(&fleetgrpc.MicUp{Msg: &fleetgrpc.MicUp_Audio{Audio: slices.Clone(pcm)}})
 		})
 		if err != nil {
-			report(Status{State: StateError, Detail: err.Error()})
+			report(Status{State: StateError, Detail: Describe(err)})
 			if !IsNoTool(err) {
 				retry = time.After(captureRetry)
 			}
 			return
 		}
 		capture, captureCh = started, started.Done()
-		report(Status{State: StateLive, Instances: wanted})
+		report(Status{State: StateLive, Instances: wanted, FellBack: started.FellBack()})
 	}
 
 	for {
@@ -184,7 +187,7 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 			if capture == nil {
 				start()
 			} else {
-				report(Status{State: StateLive, Instances: wanted})
+				report(Status{State: StateLive, Instances: wanted, FellBack: capture.FellBack()})
 			}
 		case <-captureCh:
 			// The recorder died on its own while demand was active.

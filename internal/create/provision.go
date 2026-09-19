@@ -126,7 +126,7 @@ func finishProvision(instanceBackend backend.Backend, fleetName, instanceName, w
 	// Code, Codex). Each script self-redirects its output to
 	// ~/.fleet/startup/<name>.log inside the container, and failures are
 	// non-fatal — the instance is still usable.
-	runStartupScripts(instanceBackend, wsDir, fleetName, instanceName, containerID)
+	runStartupScripts(instanceBackend, wsDir, fleetName, instanceName)
 
 	// Install the agent state-detection hooks (Claude Code, auggie). Runs after
 	// the startup scripts so any per-fleet agent install above has had a chance

@@ -72,10 +72,11 @@ type micHarness struct {
 	svc    *service
 	client fleetgrpc.FleetServiceClient
 
-	mu       sync.Mutex
-	opens    []*fakeMicSink // one per openMicSink call, in order
-	prepares int
-	stops    []string
+	mu         sync.Mutex
+	opens      []*fakeMicSink // one per openMicSink call, in order
+	prepares   int
+	prepareErr error // what prepareMicInstance returns
+	stops      []string
 	// script decides what each successive open yields; nil = a healthy sink.
 	script func(open int) (sink *fakeMicSink, supported bool, err error)
 	opened chan *fakeMicSink
@@ -111,9 +112,9 @@ func newMicHarness(t *testing.T, enabled bool) *micHarness {
 	}
 	prepareMicInstance = func(*fleet.Instance) error {
 		h.mu.Lock()
+		defer h.mu.Unlock()
 		h.prepares++
-		h.mu.Unlock()
-		return nil
+		return h.prepareErr
 	}
 	stopMicServer = func(inst *fleet.Instance) {
 		h.mu.Lock()
@@ -383,6 +384,76 @@ func TestMicPreparesAnInstanceOnce(t *testing.T) {
 	if h.prepares != 1 {
 		t.Fatalf("prepare ran %d times, want exactly 1", h.prepares)
 	}
+}
+
+// brokenSink is a sink that reports an error and exits without ever being ready.
+func brokenSink() *fakeMicSink {
+	sink := newFakeMicSink()
+	go func() {
+		sink.emit("error pulseaudio is not installed")
+		_ = sink.Close()
+	}()
+	return sink
+}
+
+// TestMicPrepareFailureStillRetriesTheSink: the install script can fail on its
+// LAST step (an image whose own asound.conf bypasses PulseAudio) with a working
+// sound server installed — so a failed prepare is surfaced but the sink is
+// still retried, and comes up.
+func TestMicPrepareFailureStillRetriesTheSink(t *testing.T) {
+	h := newMicHarness(t, true)
+	h.prepareErr = fmt.Errorf("mic: exit status 3")
+	h.script = func(open int) (*fakeMicSink, bool, error) {
+		if open == 0 {
+			return brokenSink(), true, nil
+		}
+		return newFakeMicSink(), true, nil
+	}
+	provider := openMicStream(t, h.client)
+	provider.expectDemand(t, false)
+
+	h.nextSink(t)
+	healthy := h.nextSink(t)
+	healthy.emit("ready")
+	healthy.emit("demand 1")
+	provider.expectDemand(t, true, "alpha/i1")
+}
+
+// TestMicDoesNotReprepareInAHurry: an instance that can never be prepared must
+// not have apt run against it on every attach — but the back-off is a window,
+// not "once per daemon lifetime": one bad minute must not be permanent.
+func TestMicDoesNotReprepareInAHurry(t *testing.T) {
+	h := newMicHarness(t, true)
+	h.script = func(int) (*fakeMicSink, bool, error) { return brokenSink(), true, nil }
+	provider := openMicStream(t, h.client)
+	provider.expectDemand(t, false)
+
+	h.nextSink(t)
+	h.nextSink(t) // the immediate post-prepare retry; fails too → backed off
+	eventually(t, "the instance to be backed off", func() bool {
+		h.svc.mic.mu.Lock()
+		defer h.svc.mic.mu.Unlock()
+		_, backedOff := h.svc.mic.retryAt["alpha/i1"]
+		return backedOff
+	})
+	h.mu.Lock()
+	if h.prepares != 1 {
+		t.Fatalf("prepare ran %d times, want 1", h.prepares)
+	}
+	h.mu.Unlock()
+
+	// Age the attempt past the window and lift the attach back-off: the next
+	// failure prepares again.
+	h.svc.mic.mu.Lock()
+	h.svc.mic.preparedAt["c1"] = time.Now().Add(-micPrepareRetry - time.Minute)
+	delete(h.svc.mic.retryAt, "alpha/i1")
+	h.svc.mic.mu.Unlock()
+	h.svc.mic.poke()
+	eventually(t, "a second prepare once the window has passed", func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.prepares == 2
+	})
 }
 
 // TestMicSkipsUnsupportedBackends: a backend with no sink is not an error and

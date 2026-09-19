@@ -587,7 +587,10 @@ How it fits together:
   pulse plugin and `alsa-utils` for this (apt, apk and dnf images; needs root or
   passwordless sudo, like fleet's other installs; log at
   `~/.fleet/startup/mic.log` inside the instance). An existing
-  `/etc/asound.conf` that fleet did not write is left alone.
+  `/etc/asound.conf` that fleet did not write is left alone — and if that leaves
+  the ALSA default not reaching PulseAudio (so `arecord` would record silence),
+  the instance gets a warning saying so instead of a microphone that silently
+  does nothing.
 
 Devcontainer instances only: Codespaces and Coder workspaces are skipped.
 

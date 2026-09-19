@@ -28,8 +28,13 @@ var micCtl struct {
 	mu      sync.Mutex
 	parent  context.Context
 	program *tea.Program
-	cancel  context.CancelFunc // non-nil while the provider is running
-	device  string             // consulted by the provider at each capture start
+	cancel  context.CancelFunc // non-nil while a provider goroutine is running
+	// gen counts provider STARTS. Every status message carries the gen of the
+	// goroutine that sent it and the model drops the ones from a superseded
+	// provider (same scheme as watchCtl.gen): a dying provider's parting
+	// "connecting" must never clear the live badge of its successor.
+	gen    int
+	device string // consulted by the provider at each capture start
 }
 
 // startMicControl arms micCtl for the TUI's lifetime. Cancelling parent stops
@@ -66,11 +71,35 @@ func syncMicProvider(settings configutil.MicSettings) {
 	case settings.Enabled && micCtl.cancel == nil:
 		ctx, cancel := context.WithCancel(micCtl.parent)
 		micCtl.cancel = cancel
-		go runMicProvider(ctx, micCtl.program)
+		micCtl.gen++
+		go runMicProviderFn(ctx, micCtl.program, micCtl.gen)
 	case !settings.Enabled && micCtl.cancel != nil:
+		// gen is NOT bumped on stop: the stopping provider's final status is
+		// the one that clears the read-out.
 		micCtl.cancel()
 		micCtl.cancel = nil
 	}
+}
+
+// micProviderExited is a provider goroutine's last act. If it is still the
+// current one, the slot is freed so a later syncMicProvider can start a fresh
+// provider: a provider can end ON ITS OWN (no capture tool on this machine, a
+// daemon that predates the RPC), and both of those are fixable without
+// restarting the TUI — install a recorder, update the daemon.
+func micProviderExited(gen int) {
+	micCtl.mu.Lock()
+	defer micCtl.mu.Unlock()
+	if micCtl.gen == gen && micCtl.cancel != nil {
+		micCtl.cancel() // release the context; nothing is running under it
+		micCtl.cancel = nil
+	}
+}
+
+// micGen is the generation of the current (or most recent) provider.
+func micGen() int {
+	micCtl.mu.Lock()
+	defer micCtl.mu.Unlock()
+	return micCtl.gen
 }
 
 func micDevice() string {
@@ -79,26 +108,36 @@ func micDevice() string {
 	return micCtl.device
 }
 
-// micStatusMsg carries a provider status change into the bubbletea loop.
-type micStatusMsg struct{ status mic.Status }
+// runMicProviderFn is the provider goroutine's entry point; a var so tests can
+// observe start/stop bookkeeping without dialing a daemon.
+var runMicProviderFn = runMicProvider
+
+// micStatusMsg carries a provider status change into the bubbletea loop, stamped
+// with the generation of the provider that sent it (see micCtl.gen).
+type micStatusMsg struct {
+	status mic.Status
+	gen    int
+}
 
 // runMicProvider is the provider goroutine: dial, then hold the Mic stream
 // until ctx is cancelled. mic.Run reconnects the stream itself; the loop here
 // only covers the dial, which can fail while a daemon is still coming up.
-func runMicProvider(ctx context.Context, program *tea.Program) {
-	report := func(status mic.Status) { program.Send(micStatusMsg{status: status}) }
+func runMicProvider(ctx context.Context, program *tea.Program, gen int) {
+	report := func(status mic.Status) { program.Send(micStatusMsg{status: status, gen: gen}) }
 	defer func() {
 		if ctx.Err() != nil {
 			// Stopped on purpose (disabled, or an armada switch): clear the
-			// indicator. A successor reports its own state right after.
+			// read-out. If a successor has already started, this message is
+			// stale by gen and the model drops it.
 			report(mic.Status{State: mic.StateConnecting})
 		}
+		micProviderExited(gen)
 	}()
 
 	// A machine that cannot record must not attach at all: attaching makes it
 	// the daemon's ACTIVE provider, silencing a working one elsewhere.
-	if !mic.Available() {
-		report(mic.Status{State: mic.StateError, Detail: "no capture tool: " + mic.InstallHint()})
+	if err := mic.Unavailable(); err != nil {
+		report(mic.Status{State: mic.StateError, Detail: mic.Describe(err)})
 		return
 	}
 
@@ -182,6 +221,13 @@ func (settingsPage *settingsPage) cycleMicDevice(m *model, direction int) tea.Cm
 	if !m.micDevicesLoaded {
 		return m.ensureMicDevices()
 	}
+	if len(m.micDevices) == 0 {
+		// Legitimate (SoX / ffmpeg can only record the default; so can a
+		// FLEET_MIC_CAPTURE override) — but a key press that does nothing
+		// looks broken, so say why.
+		m.message = "No selectable capture devices on this machine — recording the system default"
+		return nil
+	}
 	ids := []string{""}
 	for _, device := range m.micDevices {
 		ids = append(ids, device.ID)
@@ -245,7 +291,11 @@ func (settingsPage *settingsPage) micDeviceValue(m *model) string {
 func micStatusValue(m *model) string {
 	switch m.micStatus.State {
 	case mic.StateLive:
-		return statusRunningStyle.Render("● live") + "  " + dimStyle.Render("→ "+strings.Join(m.micStatus.Instances, ", "))
+		value := statusRunningStyle.Render("● live") + "  " + dimStyle.Render("→ "+strings.Join(m.micStatus.Instances, ", "))
+		if m.micStatus.FellBack {
+			value += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("configured device not found here — recording the system default")
+		}
+		return value
 	case mic.StateIdle:
 		return dimStyle.Render("idle — microphone closed until an instance records")
 	case mic.StateError:
@@ -259,9 +309,10 @@ func micStatusValue(m *model) string {
 	}
 }
 
-// micLiveIndicator is the header badge shown while the real microphone is open.
-// It is the user's at-a-glance answer to "is fleet listening right now?", on
-// every page, not just Settings.
+// micLiveIndicator is the badge shown while the real microphone is open: the
+// user's at-a-glance answer to "is fleet listening right now?". It sits in the
+// fleet page's header and in the Settings page's title (whose Status row spells
+// out the same thing, but may be scrolled out of view).
 func micLiveIndicator(m *model) string {
 	if m.micStatus.State != mic.StateLive {
 		return ""

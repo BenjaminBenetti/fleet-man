@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -40,7 +41,7 @@ func newMicDevicesCmd() *cobra.Command {
 			devices, err := mic.Devices()
 			if err != nil {
 				if mic.IsNoTool(err) {
-					return fmt.Errorf("%w: %s", err, mic.InstallHint())
+					return errors.New(mic.Describe(err))
 				}
 				return err
 			}
@@ -68,8 +69,8 @@ only opened while something inside an instance is recording; each transition is
 printed.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !mic.Available() {
-				return fmt.Errorf("%w: %s", mic.ErrNoCaptureTool, mic.InstallHint())
+			if err := mic.Unavailable(); err != nil {
+				return errors.New(mic.Describe(err))
 			}
 			conn, err := fleetclient.Dial(cmd.Context())
 			if err != nil {
@@ -83,7 +84,7 @@ printed.`,
 			mic.Run(cmd.Context(), conn.Service(), func() string { return device }, func(status mic.Status) {
 				final = status
 				// One line per CHANGE: the provider re-reports on every retry.
-				line := fmt.Sprintf("%d %v %s", status.State, status.Instances, status.Detail)
+				line := fmt.Sprintf("%d %v %s %v", status.State, status.Instances, status.Detail, status.FellBack)
 				if line == lastLine {
 					return
 				}
@@ -92,7 +93,11 @@ printed.`,
 				case mic.StateIdle:
 					fmt.Fprintln(out, "idle")
 				case mic.StateLive:
-					fmt.Fprintln(out, "live -> "+strings.Join(status.Instances, ", "))
+					line := "live -> " + strings.Join(status.Instances, ", ")
+					if status.FellBack {
+						line += " (configured device not found here; recording the system default)"
+					}
+					fmt.Fprintln(out, line)
 				case mic.StateError:
 					fmt.Fprintln(out, "error: "+status.Detail)
 				case mic.StateDisabled:

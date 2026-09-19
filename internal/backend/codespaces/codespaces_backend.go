@@ -324,10 +324,16 @@ func (codespacesBackend *CodespacesBackend) PortForwardCommand(containerID strin
 	return exec.Command("gh", "codespace", "ports", "forward", mapping, "-c", containerID)
 }
 
-// MicSinkCommand reports that codespaces instances have no virtual microphone: the
-// sink needs a long-lived, low-latency stdin stream into the workspace, and the
-// codespaces CLI's ssh transport is neither (see backend.Backend.CopyFile for its
-// stdin quirks). Callers skip the instance.
+// SupportsMicSink reports that codespaces have no virtual microphone yet. This
+// is "not built", not "cannot work": `gh codespace ssh` streams stdin fine (it
+// is what CopyFile uses). What is unproven is the rest — live audio over a WAN
+// ssh hop, and running the staged binary as the codespace's session user — and
+// a microphone that stutters is worse than none. Enable it here once validated.
+func (codespacesBackend *CodespacesBackend) SupportsMicSink() bool {
+	return false
+}
+
+// MicSinkCommand: see SupportsMicSink.
 func (codespacesBackend *CodespacesBackend) MicSinkCommand(string) (*exec.Cmd, bool) {
 	return nil, false
 }

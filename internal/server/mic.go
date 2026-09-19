@@ -52,6 +52,12 @@ const (
 	// up (no packages and no way to install them).
 	micRetryQuick = 2 * time.Second
 	micRetrySlow  = 5 * time.Minute
+	// micPrepareRetry is how long the hub waits before running the lazy install
+	// on the same container AGAIN. "Once" would be wrong: one bad minute (a
+	// network hiccup mid-apt) must not cost the instance its microphone until
+	// the daemon restarts. "Every attach" would be wrong too: an image that can
+	// never be prepared (no package manager, no sudo) would run apt forever.
+	micPrepareRetry = 30 * time.Minute
 )
 
 // micSinkConn is a running sink: Write feeds PCM to its stdin, Read yields its
@@ -90,7 +96,7 @@ var (
 	// the feature off the instance really has no microphone. Best-effort.
 	stopMicServer = func(inst *fleet.Instance) {
 		b := backendutil.NewForInstance(inst, false)
-		if _, ok := b.MicSinkCommand(inst.ContainerID); !ok {
+		if !b.SupportsMicSink() {
 			return
 		}
 		_, _ = b.RunScript(inst.ContainerID, fleetlaunch.RemotePath+" mic stop >/dev/null 2>&1")
@@ -146,10 +152,10 @@ type micHub struct {
 	mu        sync.Mutex
 	providers []*micProvider // attach order; the last is active
 	sinks     map[string]*micSink
-	// retryAt backs off re-attach per instance key; prepared remembers which
-	// containers the lazy install already ran for (once per daemon lifetime).
-	retryAt  map[string]time.Time
-	prepared map[string]bool
+	// retryAt backs off re-attach per instance key; preparedAt is when the lazy
+	// install last ran for a container (see micPrepareRetry).
+	retryAt    map[string]time.Time
+	preparedAt map[string]time.Time
 	// lastDemand is what the active provider was last told.
 	lastDemand []string
 
@@ -160,10 +166,10 @@ type micHub struct {
 
 func newMicHub() *micHub {
 	return &micHub{
-		sinks:    make(map[string]*micSink),
-		retryAt:  make(map[string]time.Time),
-		prepared: make(map[string]bool),
-		wake:     make(chan struct{}, 1),
+		sinks:      make(map[string]*micSink),
+		retryAt:    make(map[string]time.Time),
+		preparedAt: make(map[string]time.Time),
+		wake:       make(chan struct{}, 1),
 	}
 }
 
@@ -295,22 +301,28 @@ func (h *micHub) attach(key string) {
 	}
 
 	// The sink never came up. The usual reason is an instance that predates the
-	// feature; install what it needs — once per container — and try again.
+	// feature; install what it needs and try again — but not more often than
+	// micPrepareRetry per container.
 	h.mu.Lock()
-	alreadyPrepared := h.prepared[sink.containerID]
-	h.prepared[sink.containerID] = true
+	last, tried := h.preparedAt[sink.containerID]
+	recentlyPrepared := tried && time.Since(last) < micPrepareRetry
+	if !recentlyPrepared {
+		h.preparedAt[sink.containerID] = time.Now()
+	}
 	h.mu.Unlock()
-	if alreadyPrepared {
+	if recentlyPrepared {
 		flog.Warn("mic sink failed", "instance", key, "err", err)
 		h.retire(key, sink, micRetrySlow)
 		return
 	}
 	flog.Info("mic: preparing instance", "instance", key, "reason", err)
 	if prepErr := prepareMicInstance(sink.inst); prepErr != nil {
+		// Surfaced, but NOT the end of the road: the script can fail on its last
+		// step (an image whose own /etc/asound.conf bypasses PulseAudio) with a
+		// perfectly good sound server installed, so the sink still gets its
+		// retry below. If that fails too, the back-off above takes over.
 		flog.Warn("mic: prepare instance failed", "instance", key, "err", prepErr)
 		state.WriteWarn(fleetOf(key), sink.inst.Name, fmt.Sprintf("virtual microphone: %v", prepErr))
-		h.retire(key, sink, micRetrySlow)
-		return
 	}
 	h.retire(key, sink, 0)
 	h.poke()
