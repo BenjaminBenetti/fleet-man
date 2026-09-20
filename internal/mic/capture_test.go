@@ -141,7 +141,7 @@ func TestCaptureFallsBackToTheDefaultDevice(t *testing.T) {
 // so the UI can tell the user their choice is not in effect.
 func TestCaptureReportsFallingBackFromAnUnknownDevice(t *testing.T) {
 	fakeHost(t, "linux", []string{"arecord"}, map[string]string{"arecord -L": "default\n"})
-	_, used, err := Command(t.Context(), "alsa:plughw:CARD=Elsewhere,DEV=0")
+	_, used, err := commandArgv("alsa:plughw:CARD=Elsewhere,DEV=0")
 	if err != nil || used != "" {
 		t.Fatalf("used = %q, err = %v", used, err)
 	}

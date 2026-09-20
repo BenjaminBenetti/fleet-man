@@ -1,7 +1,6 @@
 package mic
 
 import (
-	"context"
 	"errors"
 	"os/exec"
 	"reflect"
@@ -9,6 +8,18 @@ import (
 	"strings"
 	"testing"
 )
+
+// argvOnly lets the argv assertions below read like assertions on a command.
+type argvOnly struct{ Args []string }
+
+// commandArgv resolves the recorder for deviceID without running anything.
+func commandArgv(deviceID string) (*argvOnly, string, error) {
+	argv, used, err := recorderArgv(deviceID)
+	if err != nil {
+		return nil, "", err
+	}
+	return &argvOnly{Args: argv}, used, nil
+}
 
 // fakeHost points detection at an imaginary machine: goos, the binaries on its
 // PATH, and what each probe command prints.
@@ -109,7 +120,7 @@ func TestCommandPrefersPulseAndPassesTheDevice(t *testing.T) {
 		"pactl info":         "ok",
 		"pactl list sources": "Source #1\n\tName: yeti\n\tDescription: Yeti Orb\n",
 	})
-	cmd, used, err := Command(context.Background(), "pulse:yeti")
+	cmd, used, err := commandArgv("pulse:yeti")
 	if err != nil {
 		t.Fatalf("Command: %v", err)
 	}
@@ -127,7 +138,7 @@ func TestCommandPrefersPulseAndPassesTheDevice(t *testing.T) {
 // A sound server that does not answer makes parec useless; fall through to ALSA.
 func TestCommandSkipsPulseWithoutAServer(t *testing.T) {
 	fakeHost(t, "linux", []string{"parec", "pactl", "arecord"}, nil)
-	cmd, _, err := Command(context.Background(), "")
+	cmd, _, err := commandArgv("")
 	if err != nil {
 		t.Fatalf("Command: %v", err)
 	}
@@ -139,7 +150,7 @@ func TestCommandSkipsPulseWithoutAServer(t *testing.T) {
 // A device id minted by another machine's tool must not be handed to this one.
 func TestCommandIgnoresAnotherToolsDevice(t *testing.T) {
 	fakeHost(t, "linux", []string{"arecord"}, nil)
-	cmd, used, err := Command(context.Background(), "avfoundation:MacBook Pro Microphone")
+	cmd, used, err := commandArgv("avfoundation:MacBook Pro Microphone")
 	if err != nil {
 		t.Fatalf("Command: %v", err)
 	}
@@ -152,7 +163,7 @@ func TestCommandOnDarwinUsesAVFoundation(t *testing.T) {
 	fakeHost(t, "darwin", []string{"ffmpeg", "arecord"}, map[string]string{
 		"ffmpeg -hide_banner -f avfoundation -list_devices true -i ": "[AVFoundation indev @ 0x7f8] AVFoundation audio devices:\n[AVFoundation indev @ 0x7f8] [0] Yeti Orb\n",
 	})
-	cmd, _, err := Command(context.Background(), "avfoundation:Yeti Orb")
+	cmd, _, err := commandArgv("avfoundation:Yeti Orb")
 	if err != nil {
 		t.Fatalf("Command: %v", err)
 	}
@@ -167,7 +178,7 @@ func TestNoCaptureTool(t *testing.T) {
 	if Available() {
 		t.Fatal("Available() with nothing installed")
 	}
-	if _, _, err := Command(context.Background(), ""); !IsNoTool(err) {
+	if _, _, err := commandArgv(""); !IsNoTool(err) {
 		t.Fatalf("Command err = %v, want ErrNoCaptureTool", err)
 	}
 	if _, err := Devices(); !IsNoTool(err) {
@@ -181,7 +192,7 @@ func TestOverrideCommandWinsAndHasNoDevices(t *testing.T) {
 	if !Available() {
 		t.Fatal("the override alone must make capture available")
 	}
-	cmd, _, err := Command(context.Background(), "pulse:yeti")
+	cmd, _, err := commandArgv("pulse:yeti")
 	if err != nil {
 		t.Fatalf("Command: %v", err)
 	}
@@ -224,7 +235,7 @@ func TestVirtualMicIsNeverOfferedAsAMicrophone(t *testing.T) {
 	if got := Describe(err); strings.Contains(got, "install") || !strings.Contains(got, "fleet instance") {
 		t.Fatalf("Describe = %q", got)
 	}
-	if _, _, err := Command(context.Background(), ""); !errors.Is(err, ErrVirtualMic) {
+	if _, _, err := commandArgv(""); !errors.Is(err, ErrVirtualMic) {
 		t.Fatalf("Command err = %v, want ErrVirtualMic", err)
 	}
 }
@@ -251,7 +262,7 @@ func TestCommandRejectsADeviceThisMachineDidNotEnumerate(t *testing.T) {
 		"alsa:tee:default,'/tmp/x',raw",
 		"alsa:plughw:CARD=Gone,DEV=0",
 	} {
-		cmd, used, err := Command(context.Background(), hostile)
+		cmd, used, err := commandArgv(hostile)
 		if err != nil {
 			t.Fatalf("Command(%q): %v", hostile, err)
 		}
@@ -259,7 +270,7 @@ func TestCommandRejectsADeviceThisMachineDidNotEnumerate(t *testing.T) {
 			t.Fatalf("%q reached the recorder: argv %v (used %q)", hostile, cmd.Args, used)
 		}
 	}
-	cmd, used, err := Command(context.Background(), "alsa:plughw:CARD=Orb,DEV=0")
+	cmd, used, err := commandArgv("alsa:plughw:CARD=Orb,DEV=0")
 	if err != nil || used != "alsa:plughw:CARD=Orb,DEV=0" || !slices.Contains(cmd.Args, "plughw:CARD=Orb,DEV=0") {
 		t.Fatalf("an enumerated device must pass: argv %v used %q err %v", cmd.Args, used, err)
 	}
@@ -269,7 +280,7 @@ func TestCommandRejectsADeviceThisMachineDidNotEnumerate(t *testing.T) {
 // wrong; pin their argv and the order they are tried in.
 func TestFallbackRecorders(t *testing.T) {
 	fakeHost(t, "linux", []string{"ffmpeg", "rec"}, nil)
-	cmd, _, err := Command(context.Background(), "")
+	cmd, _, err := commandArgv("")
 	if err != nil {
 		t.Fatalf("Command: %v", err)
 	}
@@ -278,7 +289,7 @@ func TestFallbackRecorders(t *testing.T) {
 	}
 
 	fakeHost(t, "linux", []string{"rec"}, nil)
-	cmd, _, err = Command(context.Background(), "")
+	cmd, _, err = commandArgv("")
 	if err != nil {
 		t.Fatalf("Command: %v", err)
 	}
@@ -288,7 +299,7 @@ func TestFallbackRecorders(t *testing.T) {
 	}
 
 	fakeHost(t, "darwin", []string{"rec", "arecord", "parec"}, nil)
-	cmd, _, _ = Command(context.Background(), "")
+	cmd, _, _ = commandArgv("")
 	if cmd == nil || cmd.Args[0] != "rec" {
 		t.Fatalf("darwin without ffmpeg should fall to sox, got %v", cmd)
 	}
@@ -345,7 +356,7 @@ func TestUnknownDeviceDoesNotRelistEveryTime(t *testing.T) {
 	})
 	listings := countListings(t)
 	for range 5 {
-		if _, used, _ := Command(context.Background(), "alsa:plughw:CARD=Gone,DEV=0"); used != "" {
+		if _, used, _ := commandArgv("alsa:plughw:CARD=Gone,DEV=0"); used != "" {
 			t.Fatal("an unknown device must not be used")
 		}
 	}
@@ -354,7 +365,7 @@ func TestUnknownDeviceDoesNotRelistEveryTime(t *testing.T) {
 	}
 	// A KNOWN device costs nothing further.
 	for range 3 {
-		if _, used, _ := Command(context.Background(), "alsa:plughw:CARD=Orb,DEV=0"); used == "" {
+		if _, used, _ := commandArgv("alsa:plughw:CARD=Orb,DEV=0"); used == "" {
 			t.Fatal("a listed device must be used")
 		}
 	}
@@ -373,7 +384,7 @@ func TestDevicesSeedsTheAllowlist(t *testing.T) {
 	if _, err := Devices(); err != nil {
 		t.Fatal(err)
 	}
-	if _, used, _ := Command(context.Background(), "alsa:plughw:CARD=Orb,DEV=0"); used == "" {
+	if _, used, _ := commandArgv("alsa:plughw:CARD=Orb,DEV=0"); used == "" {
 		t.Fatal("a device Devices() returned must validate")
 	}
 	if *listings != 1 {
@@ -391,12 +402,12 @@ func TestAllowlistCannotCrossTools(t *testing.T) {
 		"pactl list sources": "Source #1\n\tName: " + name + "\n",
 		"arecord -L":         "default\n",
 	})
-	if _, used, _ := Command(context.Background(), "pulse:"+name); used == "" {
+	if _, used, _ := commandArgv("pulse:" + name); used == "" {
 		t.Fatal("setup: pulse should accept its own source")
 	}
 
 	// Same cache, no re-detection: the prefix alone must not get it through.
-	if cmd, used, _ := Command(context.Background(), "alsa:"+name); used != "" || slices.Contains(cmd.Args, "-D") {
+	if cmd, used, _ := commandArgv("alsa:" + name); used != "" || slices.Contains(cmd.Args, "-D") {
 		t.Fatalf("a pulse name validated under the alsa prefix: %v", cmd.Args)
 	}
 
@@ -415,7 +426,7 @@ func TestAllowlistCannotCrossTools(t *testing.T) {
 		t.Fatalf("setup: expected alsa, got %v %v", detected.name, err)
 	}
 	storeDevices(staleEpoch, []Device{{ID: "alsa:" + name}}) // the late pulse-era write
-	if cmd, used, _ := Command(context.Background(), "alsa:"+name); used != "" || slices.Contains(cmd.Args, "-D") {
+	if cmd, used, _ := commandArgv("alsa:" + name); used != "" || slices.Contains(cmd.Args, "-D") {
 		t.Fatalf("a listing from a superseded detection was stored: %v", cmd.Args)
 	}
 }

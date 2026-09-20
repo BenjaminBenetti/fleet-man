@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -47,33 +46,32 @@ func Start(deviceID string, sink func([]byte)) (*Capture, error) {
 // default is being recorded instead. "Which microphone is actually open" is the
 // one thing a status read-out must not get wrong.
 func StartNotify(deviceID string, sink func([]byte), onFallback func()) (*Capture, error) {
-	ctx, cancel := context.WithCancel(context.Background())
-	// Built ONCE and handed to record: building it validates the device, which
+	// Resolved ONCE and handed to record: resolving validates the device, which
 	// can mean enumerating — not something to pay twice per capture start.
-	cmd, used, err := Command(ctx, deviceID)
+	argv, used, err := recorderArgv(deviceID)
 	if err != nil {
-		cancel()
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	capture := &Capture{
 		cancel:     cancel,
 		done:       make(chan struct{}),
 		fellBack:   deviceID != "" && used == "" && os.Getenv(EnvCapture) == "",
 		onFallback: onFallback,
 	}
-	return capture.run(ctx, cmd, used, sink), nil
+	return capture.run(ctx, argv, used, sink), nil
 }
 
-func (c *Capture) run(ctx context.Context, cmd *exec.Cmd, used string, sink func([]byte)) *Capture {
+func (c *Capture) run(ctx context.Context, argv []string, used string, sink func([]byte)) *Capture {
 	capture, cancel := c, c.cancel
 	go func() {
 		defer close(capture.done)
 		defer cancel()
-		produced, err := record(cmd, sink)
+		produced, err := record(ctx, argv, sink)
 		if err != nil && !produced && used != "" && ctx.Err() == nil {
 			// The device was enumerated but cannot be opened (unplugged since):
 			// one try on the system default.
-			if fallback, _, cmdErr := Command(ctx, ""); cmdErr == nil {
+			if fallback, _, argvErr := recorderArgv(""); argvErr == nil {
 				capture.mu.Lock()
 				capture.fellBack = true
 				notify := capture.onFallback
@@ -81,7 +79,7 @@ func (c *Capture) run(ctx context.Context, cmd *exec.Cmd, used string, sink func
 				if notify != nil {
 					notify()
 				}
-				_, err = record(fallback, sink)
+				_, err = record(ctx, fallback, sink)
 			}
 		}
 		if ctx.Err() != nil {
@@ -124,7 +122,14 @@ func (c *Capture) Err() error {
 // record runs one recorder process to completion. produced reports whether it
 // ever delivered audio — the signal that separates "this device cannot be
 // opened" (worth retrying on the default) from a recorder that died mid-stream.
-func record(cmd *exec.Cmd, sink func([]byte)) (produced bool, err error) {
+func record(ctx context.Context, argv []string, sink func([]byte)) (produced bool, err error) {
+	// guardedCommand: own process group, killed as a group on cancel, and tied
+	// to fleet's own lifetime by a lifeline — see there for why all three.
+	cmd, release, err := guardedCommand(ctx, argv...)
+	if err != nil {
+		return false, err
+	}
+	defer release()
 	// A recorder that ignores the kill (or leaves a grandchild holding the pipe)
 	// must not wedge Stop.
 	cmd.WaitDelay = 2 * time.Second

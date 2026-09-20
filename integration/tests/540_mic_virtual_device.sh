@@ -127,7 +127,40 @@ read -r bytes loud <<< "$(record /tmp/mic-test2.raw)"
 info "after restart: ${bytes} bytes, ${loud} non-zero"
 [ "${loud}" -ge 64000 ] || fail "recording after a restart is (nearly) silent (${loud} non-zero bytes)"
 
-info "and stopping the provider leaves no recorder behind either"
+# The microphone must close when the provider dies HOWEVER it dies — and the
+# deaths that matter are the ones that run no cleanup code: SIGHUP (closing the
+# terminal; fleet does not handle it) and SIGKILL. A plain `kill` (SIGTERM) is
+# the one signal fleet DOES handle, so on its own it proves very little.
+# provider_dies_midrecording <signal>
+provider_dies_midrecording() {
+  local sig="$1" log="${workdir}/attach-${1}.log" deadline
+  FLEET_MIC_CAPTURE="${capture}" "${FLEET_BIN}" mic attach > "${log}" 2>&1 &
+  attach_pid=$!
+  deadline=$(( $(date +%s) + $(_scale_timeout 60) ))
+  until grep -q '^idle' "${log}" 2>/dev/null; do
+    [ "$(date +%s)" -lt "${deadline}" ] || fail "provider (for SIG${sig}) never went idle: $(cat "${log}")"
+    sleep 0.5
+  done
+  "${FLEET_BIN}" exec "${target}" -- sh -c 'timeout 20 arecord -f S16_LE -r 16000 -c 1 -t raw -q - > /dev/null 2>&1; true' &
+  local recording=$!
+  deadline=$(( $(date +%s) + $(_scale_timeout 30) ))
+  until grep -q '^live' "${log}" 2>/dev/null && [ "$(recorders_alive)" != "0" ]; do
+    [ "$(date +%s)" -lt "${deadline}" ] || fail "provider (for SIG${sig}) never went live: $(cat "${log}")"
+    sleep 0.2
+  done
+  kill -s "${sig}" "${attach_pid}"
+  wait "${attach_pid}" 2>/dev/null || true
+  attach_pid=""
+  deadline=$(( $(date +%s) + $(_scale_timeout 15) ))
+  until [ "$(recorders_alive)" = "0" ]; do
+    [ "$(date +%s)" -lt "${deadline}" ] || fail "the provider died of SIG${sig} mid-recording and its recorder lived on — the microphone is still open: $(pgrep -af "${capture}")"
+    sleep 0.5
+  done
+  kill "${recording}" 2>/dev/null || true
+  wait "${recording}" 2>/dev/null || true
+}
+
+info "stopping the provider (SIGTERM, while idle) leaves no recorder behind"
 deadline=$(( $(date +%s) + $(_scale_timeout 15) ))
 until [ "$(tail -n 1 "${attach_log}")" = "idle" ]; do
   [ "$(date +%s)" -lt "${deadline}" ] || fail "provider never returned to idle: $(cat "${attach_log}")"
@@ -136,10 +169,11 @@ done
 kill "${attach_pid}" 2>/dev/null || true
 wait "${attach_pid}" 2>/dev/null || true
 attach_pid=""
-deadline=$(( $(date +%s) + $(_scale_timeout 15) ))
-until [ "$(recorders_alive)" = "0" ]; do
-  [ "$(date +%s)" -lt "${deadline}" ] || fail "recorder process(es) outlived the provider: $(pgrep -af "${capture}")"
-  sleep 0.5
-done
+[ "$(recorders_alive)" = "0" ] || fail "recorder process(es) outlived the provider: $(pgrep -af "${capture}")"
+
+info "the terminal closing mid-recording (SIGHUP) closes the microphone"
+provider_dies_midrecording HUP
+info "the provider being killed outright mid-recording (SIGKILL) closes the microphone"
+provider_dies_midrecording KILL
 
 pass "virtual microphone end to end"

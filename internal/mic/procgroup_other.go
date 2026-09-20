@@ -2,8 +2,13 @@
 
 package mic
 
-import "os/exec"
+import (
+	"context"
+	"os/exec"
+)
 
-// killWholeGroup is a no-op where there are no unix process groups; cancelling
-// kills the direct child only.
-func killWholeGroup(*exec.Cmd) {}
+// guardedCommand runs argv directly where there are no unix process groups;
+// cancelling kills the direct child only.
+func guardedCommand(ctx context.Context, argv ...string) (*exec.Cmd, func(), error) {
+	return exec.CommandContext(ctx, argv[0], argv[1:]...), func() {}, nil
+}

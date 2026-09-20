@@ -379,16 +379,17 @@ func Devices() ([]Device, error) {
 	return devices, nil
 }
 
-// Command builds the unstarted capture command for deviceID ("" = system
-// default). A deviceID this machine did not itself enumerate — another tool's,
+// recorderArgv is the recorder to run for deviceID ("" = system default), as an
+// argv. A deviceID this machine did not itself enumerate — another tool's,
 // another machine's, unplugged, or not a device name at all (see knownDevice) —
 // records the default instead. The second result is the device id actually
 // used, so callers can tell the user when that differs from what they chose.
-func Command(ctx context.Context, deviceID string) (*exec.Cmd, string, error) {
+//
+// It is only ever RUN through guardedCommand, which ties the recorder's
+// lifetime to fleet's.
+func recorderArgv(deviceID string) (argv []string, used string, err error) {
 	if override := os.Getenv(EnvCapture); override != "" {
-		cmd := exec.CommandContext(ctx, "sh", "-c", override)
-		killWholeGroup(cmd) // the real recorder is usually sh's CHILD
-		return cmd, "", nil
+		return []string{"sh", "-c", override}, "", nil
 	}
 	detected, err := detect()
 	if err != nil {
@@ -398,13 +399,10 @@ func Command(ctx context.Context, deviceID string) (*exec.Cmd, string, error) {
 	if toolName, rest, found := strings.Cut(deviceID, ":"); found && toolName == detected.name && knownDevice(detected, deviceID) {
 		native = rest
 	}
-	used := ""
 	if native != "" {
 		used = deviceID
 	}
-	cmd := exec.CommandContext(ctx, detected.bin, detected.args(native)...)
-	killWholeGroup(cmd) // recorders may have helpers of their own (ffmpeg, sox)
-	return cmd, used, nil
+	return append([]string{detected.bin}, detected.args(native)...), used, nil
 }
 
 // --- enumeration parsers ------------------------------------------------------
