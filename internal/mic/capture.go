@@ -151,12 +151,26 @@ func record(ctx context.Context, argv []string, deviceID string, sink func([]byt
 		return false, fmt.Errorf("start %s: %w", recorder, err)
 	}
 
-	buf := make([]byte, ChunkBytes)
+	// Frames leave here as WHOLE samples. A pipe read can return an odd number
+	// of bytes, and downstream drops whole frames (the send queue here, the
+	// daemon's sink queues): one dropped odd-length frame would shift the sample
+	// phase of everything after it, turning speech into byte-swapped noise. So
+	// the odd byte is held back and leads the next frame.
+	buf := make([]byte, ChunkBytes+1)
+	held := 0 // 0 or 1 bytes carried at buf[0]
 	for {
-		n, readErr := stdout.Read(buf)
+		n, readErr := stdout.Read(buf[held:])
 		if n > 0 {
 			produced = true
-			sink(buf[:n])
+			total := held + n
+			whole := total &^ 1
+			if whole > 0 {
+				sink(buf[:whole])
+			}
+			held = total - whole
+			if held == 1 {
+				buf[0] = buf[whole]
+			}
 		}
 		if readErr != nil {
 			break

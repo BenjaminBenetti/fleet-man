@@ -55,6 +55,11 @@ const (
 	// second for as long as someone holds the talk key.
 	captureRetry    = time.Second
 	captureRetryMax = 30 * time.Second
+	// captureHealthy is how long a recorder must stay up before the back-off is
+	// forgiven. "It started" proves nothing — that only means a process was
+	// spawned; a recorder that dies the instant it opens the device would
+	// otherwise be respawned at a flat 1 Hz for as long as demand lasts.
+	captureHealthy = 5 * time.Second
 	// sendQueue bounds captured audio waiting for the network, in frames
 	// (~40 ms each). Late audio is worthless, so a full queue DROPS — the same
 	// policy the daemon applies toward its sinks.
@@ -94,10 +99,12 @@ var startCapture = StartNotify
 // the captured PCM up. It reconnects with backoff and returns when ctx is
 // cancelled (or the daemon turns out not to support the RPC).
 //
-// device is consulted at each capture start, so a changed selection applies to
-// the next recording without restarting the loop. report is called from Run's
-// goroutine on every status change; it must not block.
-func Run(ctx context.Context, svc fleetgrpc.FleetServiceClient, device func() string, report func(Status)) {
+// The device to record from is PUSHED by the daemon with every demand (it owns
+// the config), so nothing is looked up on the capture-start path and a changed
+// selection applies to the next recording. override, if non-empty, wins over it
+// (`fleet mic attach --device`). report is called from Run's goroutine on every
+// status change; it must not block.
+func Run(ctx context.Context, svc fleetgrpc.FleetServiceClient, override string, report func(Status)) {
 	backoff := reconnectInitial
 	disabled := false
 	for ctx.Err() == nil {
@@ -106,7 +113,7 @@ func Run(ctx context.Context, svc fleetgrpc.FleetServiceClient, device func() st
 		if !disabled {
 			report(Status{State: StateConnecting})
 		}
-		attached, err := runStream(ctx, svc, device, report)
+		attached, err := runStream(ctx, svc, override, report)
 		disabled = false
 		wait := backoff
 		switch status.Code(err) {
@@ -135,7 +142,7 @@ func Run(ctx context.Context, svc fleetgrpc.FleetServiceClient, device func() st
 
 // runStream runs one Mic stream to completion. attached reports whether the
 // daemon accepted the stream (so the caller resets its backoff).
-func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device func() string, report func(Status)) (attached bool, err error) {
+func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override string, report func(Status)) (attached bool, err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -196,6 +203,8 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 		retryDelay = captureRetry
 		active     bool     // the daemon currently wants audio
 		wanted     []string // who is recording, for the status report
+		device     = override
+		startedAt  time.Time
 	)
 	stop := func() {
 		if capture != nil {
@@ -218,7 +227,7 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 		retryDelay = min(retryDelay*2, captureRetryMax)
 	}
 	start := func() {
-		started, err := startCapture(device(), func(pcm []byte) {
+		started, err := startCapture(device, func(pcm []byte) {
 			frames.push(slices.Clone(pcm)) // drops when the network is behind
 		}, func() {
 			select {
@@ -234,12 +243,20 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 			return
 		}
 		capture, captureCh = started, started.Done()
-		retryDelay = captureRetry // it works: the next failure starts over
+		startedAt = time.Now()
 		report(Status{State: StateLive, Instances: wanted, FellBack: started.FellBack()})
 	}
 
 	for {
 		select {
+		case <-ctx.Done():
+			// Without this the loop can park forever: the recv goroutine leaves
+			// SILENTLY on cancellation (it may be blocked handing over a demand,
+			// so it cannot always report), after which no other case can fire —
+			// Run would never return, stop() would never run, and the recorder
+			// (whose context is its own) would hold the microphone open for the
+			// life of the process.
+			return attached, ctx.Err()
 		case err := <-recvErr:
 			return attached, err
 		case demand := <-demands:
@@ -247,6 +264,9 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 			// so the first frame doubles as "attached".
 			attached = true
 			active = demand.GetActive()
+			if override == "" {
+				device = demand.GetDevice() // applies to the NEXT capture start
+			}
 			if !active {
 				wanted = nil
 				retryDelay = captureRetry
@@ -272,6 +292,9 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 				detail = err.Error()
 			}
 			capture, captureCh = nil, nil
+			if time.Since(startedAt) >= captureHealthy {
+				retryDelay = captureRetry // it had been working: start over
+			}
 			report(Status{State: StateError, Detail: detail})
 			scheduleRetry()
 		case <-fellBack:

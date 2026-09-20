@@ -155,6 +155,14 @@ message MicDown {
 message MicDemand {
   bool active = 1;
   repeated string instances = 2;
+  // device is the capture device chosen in Settings (MicSettings.device; empty
+  // = system default), pushed with every demand so a provider never has to ask:
+  // the daemon owns the config, and a lookup at capture start would sit on the
+  // one path where every millisecond is clipped off the user's sentence. A
+  // device-only change republishes the demand, so it reaches a running provider
+  // at once rather than at its next recording. It is an id from SOME client's
+  // enumeration — the provider validates it against its own machine.
+  string device = 3;
 }
 
 // CopyFile streams a file OR directory out of an instance to the client (the

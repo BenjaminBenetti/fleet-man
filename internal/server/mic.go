@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -75,8 +76,10 @@ const (
 	micPrepareParallel = 2
 )
 
-// micPrepareSlots is the semaphore behind micPrepareParallel.
-var micPrepareSlots = make(chan struct{}, micPrepareParallel)
+// micSinkReadyTimeout is how long a freshly-started sink may take to announce
+// itself. Generous: it covers a cold `docker exec` plus the sink bringing the
+// sound server up (itself bounded at ~5 s). A var so tests can shorten it.
+var micSinkReadyTimeout = 45 * time.Second
 
 // micSinkConn is a running sink: Write feeds PCM to its stdin, Read yields its
 // stdout event lines, Close kills it.
@@ -124,12 +127,12 @@ var (
 	// not be read" (a config.json caught mid-write) is NOT "the microphone is
 	// off", and must neither tear the feature down nor tell the user to go and
 	// flip a toggle that is already on.
-	micSetting = func() (enabled bool, err error) {
+	micSetting = func() (settings state.MicSettings, err error) {
 		config, err := state.LoadConfig()
 		if err != nil {
-			return false, err
+			return state.MicSettings{}, err
 		}
-		return config.MicSettings.Enabled, nil
+		return config.MicSettings, nil
 	}
 )
 
@@ -180,8 +183,19 @@ type micHub struct {
 	// install last ran for a container (see micPrepareRetry).
 	retryAt    map[string]time.Time
 	preparedAt map[string]time.Time
-	// lastDemand is what the active provider was last told.
+	// lastDemand / lastDevice are what the active provider was last told.
 	lastDemand []string
+	lastDevice string
+	// device is the capture device chosen in Settings, pushed to providers with
+	// every demand (see MicDemand.device).
+	device string
+	// teardowns counts closeAllSinks calls, so a sync that read its inputs
+	// BEFORE a teardown can tell, under the lock, that they are stale.
+	teardowns int
+	// prepareSlots bounds concurrent lazy installs (micPrepareParallel).
+	prepareSlots chan struct{}
+	// attaching tracks the attach goroutines, so run can leave nothing behind.
+	attaching sync.WaitGroup
 
 	// wake pokes the sync loop (provider attach/detach) so a fresh TUI does not
 	// wait out a tick before sinks appear.
@@ -190,10 +204,11 @@ type micHub struct {
 
 func newMicHub() *micHub {
 	return &micHub{
-		sinks:      make(map[string]*micSink),
-		retryAt:    make(map[string]time.Time),
-		preparedAt: make(map[string]time.Time),
-		wake:       make(chan struct{}, 1),
+		sinks:        make(map[string]*micSink),
+		retryAt:      make(map[string]time.Time),
+		preparedAt:   make(map[string]time.Time),
+		wake:         make(chan struct{}, 1),
+		prepareSlots: make(chan struct{}, micPrepareParallel),
 	}
 }
 
@@ -206,6 +221,9 @@ func (h *micHub) poke() {
 
 // run reconciles sinks until ctx is cancelled, then tears everything down.
 func (h *micHub) run(ctx context.Context) {
+	// On the way out: close every sink (which ends each attach goroutine's
+	// serve), then wait for those goroutines, so nothing of the hub outlives it.
+	defer h.attaching.Wait()
 	defer h.closeAllSinks()
 	ticker := time.NewTicker(micSyncInterval)
 	defer ticker.Stop()
@@ -225,6 +243,7 @@ func (h *micHub) run(ctx context.Context) {
 func (h *micHub) sync() {
 	h.mu.Lock()
 	haveProvider := len(h.providers) > 0
+	teardowns := h.teardowns
 	h.mu.Unlock()
 	if !haveProvider {
 		// Nobody to supply audio, so nothing to inject. Checked BEFORE the config
@@ -233,11 +252,11 @@ func (h *micHub) sync() {
 		h.closeAllSinks()
 		return
 	}
-	enabled, err := micSetting()
+	settings, err := micSetting()
 	if err != nil {
 		return // unreadable right now: change nothing, look again next tick
 	}
-	if !enabled {
+	if !settings.Enabled {
 		// Normally disable() got here first (SetConfig calls it); this covers a
 		// config.json edited by hand. It must keep the SAME promise — "off"
 		// means no microphone in the instances, not a silent one — so it is the
@@ -261,6 +280,16 @@ func (h *micHub) sync() {
 	}
 
 	h.mu.Lock()
+	// Everything above was read WITHOUT the lock, across two file reads. If the
+	// feature was torn down meanwhile (disable(), or the last provider leaving)
+	// those inputs are stale, and acting on them would inject a sink — and with
+	// it a detached sound server — into every instance right after "off"
+	// promised there would be none. Decide under the lock, or not at all.
+	if h.teardowns != teardowns || len(h.providers) == 0 {
+		h.mu.Unlock()
+		return
+	}
+	h.device = settings.Device
 	var dropped []*micSink
 	for key, sink := range h.sinks {
 		if inst, ok := want[key]; !ok || inst.ContainerID != sink.containerID {
@@ -307,7 +336,11 @@ func (h *micHub) sync() {
 		sink.close()
 	}
 	for _, launch := range attach {
-		go h.attach(launch.key, launch.sink)
+		h.attaching.Add(1)
+		go func() {
+			defer h.attaching.Done()
+			h.attach(launch.key, launch.sink)
+		}()
 	}
 }
 
@@ -372,26 +405,33 @@ func (h *micHub) attach(key string, sink *micSink) {
 		h.retire(key, sink, micRetrySlow)
 		return
 	}
+	// Bounded fan-out (micPrepareParallel). The wait for a slot can be long — so
+	// it comes BEFORE the last look below, never between it and the install.
+	h.prepareSlots <- struct{}{}
+	defer func() { <-h.prepareSlots }()
+
 	// Last look before installing anything: the feature may have been turned
-	// off (or this sink dropped) while the sink was failing. "Off" promises that
-	// nothing is installed, and an install is not something we can cancel once
-	// it is running.
+	// off (or this sink dropped) while the sink was failing or this goroutine
+	// was queued. "Off" promises that nothing is installed, and an install is
+	// not something we can cancel once it is running.
 	h.mu.Lock()
 	dropped = sink.closed
+	if !dropped {
+		// Re-stamped now that the install is really about to start: the stamp is
+		// the in-flight guard, and a queue wait can outlast micPrepareRetry.
+		h.preparedAt[sink.containerID] = time.Now()
+	}
 	h.mu.Unlock()
 	if dropped {
 		return
 	}
-	if enabled, err := micSetting(); err != nil || !enabled {
+	if settings, err := micSetting(); err != nil || !settings.Enabled {
 		// Off — or unreadable just now, which must not cost this instance its
 		// microphone: EVERY exit from attach has to hand the registration back,
 		// or sync finds the key occupied and skips this instance forever.
 		h.retire(key, sink, micRetryQuick)
 		return
 	}
-	// Bounded fan-out (see micPrepareParallel).
-	micPrepareSlots <- struct{}{}
-	defer func() { <-micPrepareSlots }()
 	flog.Info("mic: preparing instance", "instance", key, "reason", err)
 	if prepErr := prepareMicInstance(sink.inst); prepErr != nil {
 		// Surfaced, but NOT the end of the road: the script can fail on its last
@@ -399,7 +439,7 @@ func (h *micHub) attach(key string, sink *micSink) {
 		// perfectly good sound server installed, so the sink still gets its
 		// retry below. If that fails too, the back-off above takes over.
 		flog.Warn("mic: prepare instance failed", "instance", key, "err", prepErr)
-		if enabled, _ := micSetting(); enabled {
+		if settings, _ := micSetting(); settings.Enabled {
 			warnMic(fleetOf(key), sink.inst.Name, fmt.Sprintf("virtual microphone: %v", prepErr))
 		}
 	}
@@ -438,6 +478,19 @@ func (h *micHub) serve(key string, sink *micSink) (ready, supported bool, err er
 		}
 	}()
 
+	// A sink that never says anything — a paused container, a hung dockerd, an
+	// exec that neither prints nor EOFs — would park this goroutine, and with it
+	// the instance's slot, for the whole provider session: no retire, so no
+	// retry and no back-off. The in-instance half bounds itself; this is the
+	// daemon-side equivalent. Closing the conn ends the scan below.
+	var becameReady atomic.Bool
+	readiness := time.AfterFunc(micSinkReadyTimeout, func() {
+		if !becameReady.Load() {
+			_ = conn.Close()
+		}
+	})
+	defer readiness.Stop()
+
 	var sinkErr error
 	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() {
@@ -445,6 +498,7 @@ func (h *micHub) serve(key string, sink *micSink) (ready, supported bool, err er
 		switch event {
 		case micsink.EventReady:
 			ready = true
+			becameReady.Store(true)
 			flog.Info("mic sink attached", "instance", key)
 		case micsink.EventDemand:
 			h.setDemand(key, sink, detail == micsink.DemandOn)
@@ -454,6 +508,9 @@ func (h *micHub) serve(key string, sink *micSink) (ready, supported bool, err er
 	}
 	if sinkErr == nil {
 		sinkErr = scanner.Err()
+	}
+	if sinkErr == nil && !ready && !readiness.Stop() {
+		sinkErr = fmt.Errorf("sink said nothing for %s", micSinkReadyTimeout)
 	}
 	if sinkErr == nil && !ready {
 		sinkErr = fmt.Errorf("sink exited before becoming ready (is %s current?)", fleetlaunch.RemotePath)
@@ -499,6 +556,7 @@ func (s *micSink) close() {
 func (h *micHub) closeAllSinks() {
 	h.mu.Lock()
 	var dropped []*micSink
+	h.teardowns++
 	for key := range h.sinks {
 		dropped = append(dropped, h.removeSinkLocked(key))
 	}
@@ -555,35 +613,50 @@ func (h *micHub) publishDemandLocked() {
 		}
 	}
 	slices.Sort(demanding)
-	if slices.Equal(demanding, h.lastDemand) {
+	demandChanged := !slices.Equal(demanding, h.lastDemand)
+	if !demandChanged && h.device == h.lastDevice {
 		return
 	}
-	h.lastDemand = demanding
+	h.lastDemand, h.lastDevice = demanding, h.device
 	if len(h.providers) == 0 {
 		return
 	}
-	if len(demanding) > 0 {
-		flog.Info("mic live", "instances", strings.Join(demanding, ","))
-	} else {
-		flog.Info("mic idle")
+	if demandChanged {
+		if len(demanding) > 0 {
+			flog.Info("mic live", "instances", strings.Join(demanding, ","))
+		} else {
+			flog.Info("mic idle")
+		}
 	}
-	h.providers[len(h.providers)-1].post(demandMessage(demanding))
+	h.providers[len(h.providers)-1].post(h.demandMessageLocked(demanding))
 }
 
-func demandMessage(demanding []string) *fleetgrpc.MicDemand {
-	return &fleetgrpc.MicDemand{Active: len(demanding) > 0, Instances: demanding}
+// demandMessageLocked is the one place a MicDemand is built, so the selected
+// device rides along with every one of them.
+func (h *micHub) demandMessageLocked(demanding []string) *fleetgrpc.MicDemand {
+	return &fleetgrpc.MicDemand{Active: len(demanding) > 0, Instances: demanding, Device: h.device}
+}
+
+// setDevice records a changed device selection (SetConfig) and republishes, so a
+// running provider learns of it at once rather than at its next recording.
+func (h *micHub) setDevice(device string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.device = device
+	h.publishDemandLocked()
 }
 
 // addProvider attaches a stream as the new active provider. The previous active
 // one is told to stop capturing; the new one is greeted with current demand.
-func (h *micHub) addProvider() *micProvider {
+func (h *micHub) addProvider(device string) *micProvider {
 	provider := &micProvider{demand: make(chan *fleetgrpc.MicDemand, 1), kicked: make(chan struct{})}
 	h.mu.Lock()
+	h.device, h.lastDevice = device, device
 	if n := len(h.providers); n > 0 {
-		h.providers[n-1].post(demandMessage(nil))
+		h.providers[n-1].post(h.demandMessageLocked(nil))
 	}
 	h.providers = append(h.providers, provider)
-	provider.post(demandMessage(h.lastDemand))
+	provider.post(h.demandMessageLocked(h.lastDemand))
 	count := len(h.providers)
 	h.mu.Unlock()
 	flog.Info("mic provider attached", "providers", count)
@@ -603,7 +676,7 @@ func (h *micHub) removeProvider(provider *micProvider) {
 	wasActive := index == len(h.providers)-1
 	h.providers = slices.Delete(h.providers, index, index+1)
 	if n := len(h.providers); wasActive && n > 0 {
-		h.providers[n-1].post(demandMessage(h.lastDemand))
+		h.providers[n-1].post(h.demandMessageLocked(h.lastDemand))
 	}
 	count := len(h.providers)
 	h.mu.Unlock()
@@ -674,16 +747,17 @@ func (s *service) Mic(stream fleetgrpc.FleetService_MicServer) error {
 		return status.Errorf(codes.InvalidArgument, "unsupported format %d Hz x%d (want %d Hz x%d s16le)",
 			open.GetSampleRate(), open.GetChannels(), mic.SampleRate, mic.Channels)
 	}
-	switch enabled, err := micSetting(); {
+	settings, err := micSetting()
+	switch {
 	case err != nil:
 		// Not FailedPrecondition: the client renders that as "disabled — enable
 		// it in Settings", pointing the user at a toggle that may well be on.
 		return status.Errorf(codes.Unavailable, "cannot read the microphone setting: %v", err)
-	case !enabled:
+	case !settings.Enabled:
 		return status.Error(codes.FailedPrecondition, "the microphone is disabled in settings")
 	}
 
-	provider := s.mic.addProvider()
+	provider := s.mic.addProvider(settings.Device)
 	defer s.mic.removeProvider(provider)
 
 	recvDone := make(chan error, 1)

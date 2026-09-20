@@ -72,6 +72,7 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	if micWasEnabled && !saved.MicSettings.Enabled {
 		s.mic.disable()
 	} else if saved.MicSettings.Enabled {
+		s.mic.setDevice(saved.MicSettings.Device) // pushed to a running provider
 		s.mic.poke()
 	}
 

@@ -1,15 +1,11 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
-	"sync"
-	"time"
 
-	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/mic"
 	"github.com/BenjaminBenetti/fleet-man/internal/micsink"
@@ -86,7 +82,9 @@ printed.`,
 			out := cmd.OutOrStdout()
 			var final mic.Status
 			var lastLine string
-			mic.Run(cmd.Context(), conn.Service(), micDeviceResolver(cmd.Context(), conn.Service(), device), func(status mic.Status) {
+			// No --device: the daemon pushes the device chosen in Settings along
+			// with every demand, exactly as it does for an open TUI.
+			mic.Run(cmd.Context(), conn.Service(), device, func(status mic.Status) {
 				final = status
 				// One line per CHANGE: the provider re-reports on every retry.
 				line := fmt.Sprintf("%d %v %s %v", status.State, status.Instances, status.Detail, status.FellBack)
@@ -117,53 +115,6 @@ printed.`,
 	}
 	cmd.Flags().StringVar(&device, "device", "", "capture device id from `fleet mic devices` (default: the device chosen in Settings)")
 	return cmd
-}
-
-// micConfigTimeout bounds the config lookup micDeviceResolver makes at each
-// capture start. It sits on the path where every millisecond is clipped off the
-// start of the user's sentence, so a slow daemon costs at most this much before
-// the last known answer is used instead.
-const micConfigTimeout = 750 * time.Millisecond
-
-// micConfigPrimeTimeout bounds the ONE lookup made when `attach` starts, off the
-// recording path, so it can afford to be patient with a cold remote connection.
-const micConfigPrimeTimeout = 10 * time.Second
-
-// micDeviceResolver returns the "which device?" callback for mic.Run. An
-// explicit --device wins. Otherwise it is the device chosen in Settings ->
-// Microphone — exactly what an open TUI records from, and what this command's
-// own help tells the user to go and set. It is looked up at EVERY capture start
-// (mic.Run's contract: a changed selection applies to the next recording), and
-// if the daemon cannot be asked in time the last known selection is used —
-// never a silent fall to the system default.
-//
-// "Last known" has to exist for that to hold on the FIRST recording too — the
-// one a user is most likely testing their setup with, and, against a remote
-// daemon over a gateway or SSH, the one most likely to meet a cold connection
-// that cannot answer in 750 ms. So the resolver is primed with one patient
-// lookup up front, while nothing is waiting on it.
-func micDeviceResolver(ctx context.Context, svc fleetgrpc.FleetServiceClient, flag string) func() string {
-	if flag != "" {
-		return func() string { return flag }
-	}
-	var mu sync.Mutex
-	lastKnown := ""
-	prime, cancelPrime := context.WithTimeout(ctx, micConfigPrimeTimeout)
-	if reply, err := svc.GetConfig(prime, &fleetgrpc.GetConfigRequest{}); err == nil {
-		lastKnown = reply.GetConfig().GetMic().GetDevice()
-	}
-	cancelPrime()
-	return func() string {
-		lookup, cancel := context.WithTimeout(ctx, micConfigTimeout)
-		defer cancel()
-		reply, err := svc.GetConfig(lookup, &fleetgrpc.GetConfigRequest{})
-		mu.Lock()
-		defer mu.Unlock()
-		if err == nil {
-			lastKnown = reply.GetConfig().GetMic().GetDevice()
-		}
-		return lastKnown
-	}
 }
 
 // newMicSinkCmd creates the hidden in-instance `fleet mic sink`: PCM on stdin

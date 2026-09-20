@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // argvOnly lets the argv assertions below read like assertions on a command.
@@ -428,5 +429,38 @@ func TestAllowlistCannotCrossTools(t *testing.T) {
 	storeDevices(staleEpoch, []Device{{ID: "alsa:" + name}}) // the late pulse-era write
 	if cmd, used, _ := commandArgv("alsa:" + name); used != "" || slices.Contains(cmd.Args, "-D") {
 		t.Fatalf("a listing from a superseded detection was stored: %v", cmd.Args)
+	}
+}
+
+// A listing that FAILS says nothing about the hardware: it must not wipe a good
+// allowlist and send the user to a different microphone because the sound server
+// was busy for a moment.
+func TestFailedListingKeepsThePreviousAllowlist(t *testing.T) {
+	probes := map[string]string{"arecord -L": "plughw:CARD=Orb,DEV=0\n    Yeti Orb\n"}
+	fakeHost(t, "linux", []string{"arecord"}, probes)
+	if _, used, _ := commandArgv("alsa:plughw:CARD=Orb,DEV=0"); used == "" {
+		t.Fatal("setup: the device should validate")
+	}
+
+	delete(probes, "arecord -L") // the sound server is momentarily wedged
+	// Age the listing past deviceListTTL, so the miss below really re-lists
+	// (and that re-list is the one that fails).
+	detectCache.mu.Lock()
+	detectCache.devicesAt = time.Now().Add(-2 * deviceListTTL)
+	detectCache.mu.Unlock()
+	listings := countListings(t)
+	if _, used, _ := commandArgv("alsa:plughw:CARD=Elsewhere,DEV=0"); used != "" {
+		t.Fatal("an unknown id must still be refused") // …and this miss triggers the failing re-list
+	}
+	if *listings != 1 {
+		t.Fatalf("setup: expected the miss to trigger exactly one (failing) re-list, got %d", *listings)
+	}
+	if _, used, _ := commandArgv("alsa:plughw:CARD=Orb,DEV=0"); used == "" {
+		t.Fatal("a failed re-list wiped the allowlist: the configured, working device fell back to the default")
+	}
+	// …and the failure is rate-limited like any other listing.
+	_, _, _ = commandArgv("alsa:plughw:CARD=Elsewhere,DEV=0")
+	if *listings != 1 {
+		t.Fatalf("a wedged server was re-probed at once (%d listings)", *listings)
 	}
 }

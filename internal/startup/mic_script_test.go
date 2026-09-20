@@ -445,3 +445,31 @@ func TestScriptsForNeverIncludesMic(t *testing.T) {
 		}
 	}
 }
+
+// The write to /etc/asound.conf is privileged, so a READ that fails must never
+// be taken for an empty file — that would replace the image's whole ALSA config
+// with fleet's block and report success. A failed read is a hard stop.
+func TestMicScriptNeverReplacesAnAsoundConfItCannotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads everything")
+	}
+	env := newMicScriptEnv(t)
+	env.installAudio(t)
+	original := "pcm.!default { type hw card 0 }\npcm.studio { type hw card 2 }\n"
+	env.writeRoot(t, "etc/asound.conf", original)
+	path := filepath.Join(env.root, "etc/asound.conf")
+	if err := os.Chmod(path, 0o200); err != nil { // writable, unreadable
+		t.Fatal(err)
+	}
+
+	out, err := env.run(t)
+	if err == nil || strings.Contains(out, "virtual microphone ready") {
+		t.Fatalf("an unreadable asound.conf must stop the script: err=%v\n%s", err, out)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := env.read(t, "etc/asound.conf"); got != original {
+		t.Fatalf("the unreadable file was overwritten:\n%s", got)
+	}
+}

@@ -289,10 +289,23 @@ func knownDevice(detected tool, deviceID string) bool {
 	}
 
 	// Not listed yet, or a miss on a listing old enough that the device may
-	// have been plugged in since: list again. A failed listing is cached as
-	// "nothing known" for the same TTL — a wedged sound server must not be
-	// re-probed on every capture start either.
-	devices, _ := detected.list()
+	// have been plugged in since: list again.
+	devices, err := detected.list()
+	if err != nil {
+		// A probe that FAILED says nothing about the hardware. It must not
+		// replace a good allowlist with an empty one — that would switch the
+		// user to a different microphone for a whole TTL because the sound
+		// server was busy for a moment. Keep what we knew, and only push the
+		// timestamp forward so a wedged server is not re-probed on every capture
+		// start. (With no earlier listing there is nothing to keep, and an
+		// unvalidated id still must not reach the recorder.)
+		detectCache.mu.Lock()
+		if detectCache.epoch == epoch && detectCache.devices != nil {
+			detectCache.devicesAt = time.Now()
+		}
+		detectCache.mu.Unlock()
+		return known[deviceID]
+	}
 	return storeDevices(epoch, devices)[deviceID]
 }
 

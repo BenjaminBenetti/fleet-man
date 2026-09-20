@@ -217,12 +217,11 @@ func TestSyncMicProviderIsInertBeforeStart(t *testing.T) {
 	if running {
 		t.Fatal("a provider goroutine started without startMicControl")
 	}
-	if micDevice() != "pulse:yeti" {
-		t.Fatal("the device should still be recorded")
-	}
-	syncMicFromConfig(nil)
-	if micDevice() != "" {
-		t.Fatal("a nil config reads as defaults")
+	syncMicFromConfig(nil) // a nil config reads as "off"; must not panic or start anything
+	micCtl.mu.Lock()
+	defer micCtl.mu.Unlock()
+	if micCtl.cancel != nil {
+		t.Fatal("a nil config started a provider")
 	}
 }
 

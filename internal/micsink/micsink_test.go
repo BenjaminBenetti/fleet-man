@@ -124,15 +124,17 @@ func TestFIFODropsWhenFullWithoutBlocking(t *testing.T) {
 func TestFIFOClosingDiscardsStaleAudio(t *testing.T) {
 	pipe, path := newTestFIFO(t)
 	pipe.write([]byte("stale audio!"))
-	pipe.write([]byte{1}) // and a dangling carry byte
+	pipe.write([]byte{1}) // the low half of a sample whose high half comes next
 	pipe.setOpen(false)
 	if got := readAvailable(t, path); len(got) != 0 {
 		t.Fatalf("closing left %q in the pipe", got)
 	}
 	pipe.setOpen(true)
 	pipe.write([]byte{2, 3})
-	if got := readAvailable(t, path); !bytes.Equal(got, []byte{2, 3}) {
-		t.Fatalf("stale carry leaked into the next recording: %v", got)
+	// No stale AUDIO — but the phase byte survives: {1,2} is one whole sample of
+	// the stream, and 3 waits for its other half.
+	if got := readAvailable(t, path); !bytes.Equal(got, []byte{1, 2}) {
+		t.Fatalf("after reopening the pipe holds %v, want the stream's next whole sample [1 2]", got)
 	}
 }
 
@@ -184,22 +186,80 @@ func TestOpenFIFOMissing(t *testing.T) {
 	}
 }
 
-// A dropped buffer must take its stashed odd byte with it. That byte is the
-// first half of a sample; prefixed to the NEXT buffer after everything before it
-// was dropped, it shifts every later sample by one byte — and the shift never
-// heals, so the rest of the utterance is loud noise rather than a dropout.
-func TestFIFODropDiscardsThePendingCarry(t *testing.T) {
+// sampleStream yields an endless s16le stream whose every sample is (0xAA low,
+// 0xBB high), so a phase slip is unmistakable: the pipe must only ever contain
+// AA BB AA BB …, never BB AA ….
+type sampleStream struct{ offset int }
+
+func (s *sampleStream) next(n int) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		if (s.offset+i)%2 == 0 {
+			out[i] = 0xAA
+		} else {
+			out[i] = 0xBB
+		}
+	}
+	s.offset += n
+	return out
+}
+
+func requireInPhase(t *testing.T, what string, got []byte) {
+	t.Helper()
+	if len(got)%2 != 0 {
+		t.Fatalf("%s: %d bytes in the pipe — a sample was torn", what, len(got))
+	}
+	for i := 0; i+1 < len(got); i += 2 {
+		if got[i] != 0xAA || got[i+1] != 0xBB {
+			t.Fatalf("%s: sample %d is % x, want aa bb — the stream lost its phase (byte-swapped audio is loud noise)", what, i/2, got[i:i+2])
+		}
+	}
+}
+
+// The carry byte is the stream's PHASE. Whatever happens to the audio — a buffer
+// dropped because the pipe is full, a closed microphone discarding odd-sized
+// chunks, a drain — the bytes that do reach the pipe must still be whole samples
+// of the original stream. (An earlier "fix" cleared the carry on a drop: that
+// makes the gap ODD, and every later sample comes out byte-swapped.)
+func TestFIFOPhaseSurvivesDropsClosesAndDrains(t *testing.T) {
 	pipe, path := newTestFIFO(t)
-	// Odd-length and far bigger than the pipe: the tail is dropped on EAGAIN
-	// with a carry byte already stashed.
-	pipe.write(bytes.Repeat([]byte{0xCC}, 4*1024*1024+1))
-	if got := readAvailable(t, path); len(got)%2 != 0 {
-		t.Fatalf("pipe holds %d bytes: a sample was torn", len(got))
+	stream := &sampleStream{}
+
+	// Odd-sized chunks, as they really arrive (a pipe read and every hop after it
+	// may split anywhere).
+	for _, n := range []int{3, 5, 1, 7} {
+		pipe.write(stream.next(n))
 	}
-	pipe.write([]byte{1, 2, 3, 4, 5, 6})
-	if got := readAvailable(t, path); !bytes.Equal(got, []byte{1, 2, 3, 4, 5, 6}) {
-		t.Fatalf("the next buffer came out as %v: a stale carry byte misaligned it", got)
+	requireInPhase(t, "odd-sized chunks", readAvailable(t, path))
+
+	// A drop with a carry pending: odd length, far larger than the pipe.
+	pipe.write(stream.next(4*1024*1024 + 1))
+	requireInPhase(t, "what fit before the drop", readAvailable(t, path))
+	pipe.write(stream.next(6))
+	got := readAvailable(t, path)
+	if len(got) == 0 {
+		t.Fatal("nothing written after the drop")
 	}
+	requireInPhase(t, "the buffer after a drop", got)
+
+	// Closed: odd-sized chunks are discarded, but the phase is still tracked.
+	pipe.setOpen(false)
+	for _, n := range []int{5, 3, 9} {
+		pipe.write(stream.next(n))
+	}
+	if got := readAvailable(t, path); len(got) != 0 {
+		t.Fatalf("a closed microphone accepted %d bytes", len(got))
+	}
+	pipe.setOpen(true)
+	pipe.write(stream.next(8))
+	requireInPhase(t, "the first buffer of the NEXT recording", readAvailable(t, path))
+
+	// …and a drain (which setOpen(false) performs) does not disturb it either.
+	pipe.write(stream.next(5))
+	pipe.setOpen(false)
+	pipe.setOpen(true)
+	pipe.write(stream.next(7))
+	requireInPhase(t, "after a drain with a carry pending", readAvailable(t, path))
 }
 
 // A sink that exits mid-recording must not leave captured speech in the pipe.

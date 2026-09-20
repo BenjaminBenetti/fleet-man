@@ -763,7 +763,10 @@ func TestMicRejectsOversizedFrames(t *testing.T) {
 func stubMicSetting(t *testing.T, read func() (bool, error)) {
 	t.Helper()
 	orig := micSetting
-	micSetting = read
+	micSetting = func() (state.MicSettings, error) {
+		enabled, err := read()
+		return state.MicSettings{Enabled: enabled}, err
+	}
 	t.Cleanup(func() { micSetting = orig })
 }
 
@@ -869,5 +872,112 @@ func TestMicHandEditedDisableStopsTheSoundServers(t *testing.T) {
 	defer h.mu.Unlock()
 	if len(h.stops) != 1 {
 		t.Fatalf("sound servers were stopped %d times; want once for the enabled->disabled edge", len(h.stops))
+	}
+}
+
+// expectDevice reads demand frames until one carries want as the device.
+func (ms *micStream) expectDevice(t *testing.T, want string) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case demand := <-ms.demands:
+			if demand.GetDevice() == want {
+				return
+			}
+		case err := <-ms.done:
+			t.Fatalf("stream ended while waiting for device %q: %v", want, err)
+		case <-deadline:
+			t.Fatalf("no demand frame carried device %q", want)
+		}
+	}
+}
+
+// The daemon owns the config, so it PUSHES the selected device with the demand:
+// in the greeting, and again the moment the selection changes — a provider never
+// has to ask, least of all at capture start.
+func TestMicDemandCarriesTheSelectedDevice(t *testing.T) {
+	h := newMicHarness(t, true)
+	config, err := state.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MicSettings.Device = "pulse:desk_mic"
+	if err := state.SaveConfig(config); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := openMicStream(t, h.client)
+	provider.expectDevice(t, "pulse:desk_mic") // the greeting
+
+	config.MicSettings.Device = "pulse:headset"
+	if _, err := h.client.SetConfig(context.Background(), &fleetgrpc.SetConfigRequest{Config: protoconv.ConfigToProto(config)}); err != nil {
+		t.Fatal(err)
+	}
+	provider.expectDevice(t, "pulse:headset") // a device-only change republishes
+
+	config.MicSettings.Device = ""
+	if _, err := h.client.SetConfig(context.Background(), &fleetgrpc.SetConfigRequest{Config: protoconv.ConfigToProto(config)}); err != nil {
+		t.Fatal(err)
+	}
+	provider.expectDevice(t, "") // back to the system default
+}
+
+// A sink that never says anything must not hold its instance's slot for the
+// whole provider session: no "ready" in time → closed → retired → retried.
+func TestMicSilentSinkTimesOut(t *testing.T) {
+	orig := micSinkReadyTimeout
+	micSinkReadyTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { micSinkReadyTimeout = orig })
+
+	h := newMicHarness(t, true)
+	provider := openMicStream(t, h.client)
+	provider.expectDemand(t, false)
+
+	silent := h.nextSink(t) // never emits "ready"
+	eventually(t, "the silent sink to be closed", silent.isClosed)
+	next := h.nextSink(t) // …and the instance gets another attempt
+	next.emit("ready")
+	next.emit("demand 1")
+	provider.expectDemand(t, true, "alpha/i1")
+}
+
+// sync reads the config and the state WITHOUT the lock. A teardown that
+// completes in that window must win: acting on the stale read would inject a
+// sink (and a detached sound server) into every instance right after "off".
+func TestMicSyncDoesNotActOnInputsFromBeforeATeardown(t *testing.T) {
+	var inSetting sync.WaitGroup
+	release := make(chan struct{})
+	var block atomic.Bool
+	stubMicSetting(t, func() (bool, error) {
+		if block.CompareAndSwap(true, false) {
+			inSetting.Done()
+			<-release // sync is now parked between its checks and its act
+		}
+		return true, nil
+	})
+	h := newMicHarness(t, true)
+	provider := openMicStream(t, h.client)
+	provider.expectDemand(t, false)
+	h.nextSink(t).emit("ready")
+
+	// Drop the sink so the next sync has something to (re)create, park that sync
+	// mid-read, and tear everything down underneath it.
+	h.svc.mic.closeAllSinks()
+	h.mu.Lock()
+	before := len(h.opens)
+	h.mu.Unlock()
+	inSetting.Add(1)
+	block.Store(true)
+	h.svc.mic.poke()
+	inSetting.Wait()
+	h.svc.mic.closeAllSinks() // the teardown that must win
+	close(release)
+
+	time.Sleep(200 * time.Millisecond)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.opens) != before {
+		t.Fatalf("a sync that read its inputs before a teardown still opened %d sink(s)", len(h.opens)-before)
 	}
 }

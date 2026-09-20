@@ -1022,9 +1022,17 @@ func (*MicDown_Demand) isMicDown_Msg() {}
 // them ("<fleet>/<instance>") so the client can show WHO is listening. A stream
 // that has been superseded by a newer provider gets a final active=false.
 type MicDemand struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Active        bool                   `protobuf:"varint,1,opt,name=active,proto3" json:"active,omitempty"`
-	Instances     []string               `protobuf:"bytes,2,rep,name=instances,proto3" json:"instances,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Active    bool                   `protobuf:"varint,1,opt,name=active,proto3" json:"active,omitempty"`
+	Instances []string               `protobuf:"bytes,2,rep,name=instances,proto3" json:"instances,omitempty"`
+	// device is the capture device chosen in Settings (MicSettings.device; empty
+	// = system default), pushed with every demand so a provider never has to ask:
+	// the daemon owns the config, and a lookup at capture start would sit on the
+	// one path where every millisecond is clipped off the user's sentence. A
+	// device-only change republishes the demand, so it reaches a running provider
+	// at once rather than at its next recording. It is an id from SOME client's
+	// enumeration — the provider validates it against its own machine.
+	Device        string `protobuf:"bytes,3,opt,name=device,proto3" json:"device,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1071,6 +1079,13 @@ func (x *MicDemand) GetInstances() []string {
 		return x.Instances
 	}
 	return nil
+}
+
+func (x *MicDemand) GetDevice() string {
+	if x != nil {
+		return x.Device
+	}
+	return ""
 }
 
 // CopyFile streams a file OR directory out of an instance to the client (the
@@ -2247,10 +2262,11 @@ const file_exec_proto_rawDesc = "" +
 	"\bchannels\x18\x02 \x01(\rR\bchannels\"@\n" +
 	"\aMicDown\x12.\n" +
 	"\x06demand\x18\x01 \x01(\v2\x14.fleetgrpc.MicDemandH\x00R\x06demandB\x05\n" +
-	"\x03msg\"A\n" +
+	"\x03msg\"Y\n" +
 	"\tMicDemand\x12\x16\n" +
 	"\x06active\x18\x01 \x01(\bR\x06active\x12\x1c\n" +
-	"\tinstances\x18\x02 \x03(\tR\tinstances\"W\n" +
+	"\tinstances\x18\x02 \x03(\tR\tinstances\x12\x16\n" +
+	"\x06device\x18\x03 \x01(\tR\x06device\"W\n" +
 	"\x0fCopyFileRequest\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12\x12\n" +

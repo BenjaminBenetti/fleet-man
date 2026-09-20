@@ -15,9 +15,10 @@ import (
 // the read end of a pipe whose ONLY write end is held by fleet. When that write
 // end closes — fleet called release, or fleet DIED, by any means at all — the
 // read returns EOF and the watchdog SIGKILLs its own process group (`kill 0`),
-// recorder included. The watchdog's own stdio goes to /dev/null so it never
-// holds the recorder's stdout pipe open.
-const lifelineScript = `( cat <&3 >/dev/null 2>&1; kill -9 0 ) >/dev/null 2>&1 &
+// recorder included. It uses only shell builtins (read, kill), so it needs
+// nothing on the recorder's PATH. The watchdog's own stdio goes to /dev/null so
+// it never holds the recorder's stdout pipe open.
+const lifelineScript = `( while read -r _ <&3; do :; done; kill -9 0 ) >/dev/null 2>&1 &
 exec "$@"`
 
 // guardedCommand builds the command that runs argv as a recorder whose lifetime

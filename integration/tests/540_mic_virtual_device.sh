@@ -5,8 +5,12 @@ set -euo pipefail
 source "$(dirname "$0")/../common.sh"
 workdir=$(mktemp -d)
 attach_pid=""
+capture=""
 itest_cleanup() {
   [ -z "${attach_pid}" ] || kill "${attach_pid}" 2>/dev/null || true
+  # A failed assertion can exit with a capture stub still running (that is the
+  # very thing several assertions test for); never leave it on the runner.
+  [ -z "${capture:-}" ] || pkill -f "${capture}" 2>/dev/null || true
   rm -rf "${workdir}"
 }
 itest_begin

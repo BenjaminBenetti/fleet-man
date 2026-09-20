@@ -33,8 +33,7 @@ var micCtl struct {
 	// goroutine that sent it and the model drops the ones from a superseded
 	// provider (same scheme as watchCtl.gen): a dying provider's parting
 	// "connecting" must never clear the live badge of its successor.
-	gen    int
-	device string // consulted by the provider at each capture start
+	gen int
 }
 
 // startMicControl arms micCtl for the TUI's lifetime. Cancelling parent stops
@@ -56,14 +55,14 @@ func syncMicFromConfig(config *configutil.Config) {
 	syncMicProvider(config.MicSettings)
 }
 
-// syncMicProvider converges the provider on the settings: running iff enabled,
-// recording from device. Idempotent — called wherever m.config is replaced, so
+// syncMicProvider converges the provider on the settings: running iff enabled.
+// (WHICH device is not the provider's to track: the daemon pushes the selection
+// with every demand.) Idempotent — called wherever m.config is replaced, so
 // an armada switch moves the provider too: the switch blanks the config (stop),
 // and the new daemon's config decides whether to start against IT.
 func syncMicProvider(settings configutil.MicSettings) {
 	micCtl.mu.Lock()
 	defer micCtl.mu.Unlock()
-	micCtl.device = settings.Device
 	if micCtl.parent == nil {
 		return
 	}
@@ -100,12 +99,6 @@ func micGen() int {
 	micCtl.mu.Lock()
 	defer micCtl.mu.Unlock()
 	return micCtl.gen
-}
-
-func micDevice() string {
-	micCtl.mu.Lock()
-	defer micCtl.mu.Unlock()
-	return micCtl.device
 }
 
 // runMicProviderFn is the provider goroutine's entry point; a var so tests can
@@ -157,7 +150,7 @@ func runMicProvider(ctx context.Context, program *tea.Program, gen int) {
 			backoff = min(backoff*2, 10*time.Second)
 			continue
 		}
-		mic.Run(ctx, conn.Service(), micDevice, report)
+		mic.Run(ctx, conn.Service(), "", report)
 		conn.Close()
 		return
 	}
@@ -309,9 +302,9 @@ func (settingsPage *settingsPage) cycleMicDevice(m *model, direction int) tea.Cm
 		m.message = fmt.Sprintf("Failed to save settings: %v", err)
 		return nil
 	}
-	// Applies to the next recording; a capture already running keeps its device
-	// — so say so, or the message claims a switch that has not happened yet.
-	syncMicProvider(m.config.MicSettings)
+	// The daemon pushes the new selection to the provider; it applies to the next
+	// recording — a capture already running keeps its device, so say so, or the
+	// message claims a switch that has not happened yet.
 	m.message = fmt.Sprintf("Microphone set to %s", settingsPage.micDeviceLabel(m))
 	if m.micStatus.State == mic.StateLive {
 		m.message += " (from the next recording — this one keeps its device)"

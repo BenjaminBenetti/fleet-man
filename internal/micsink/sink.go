@@ -136,9 +136,16 @@ func watchDemand(ctx context.Context, set func(bool)) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("pactl subscribe: %w", err)
 	}
-	// Reaped on every way out (CommandContext kills it when ctx ends); without
-	// this each Run would leave a zombie behind.
-	defer func() { _ = cmd.Wait() }()
+	// Reaped on every way out; without this each Run would leave a zombie behind.
+	// KILLED first: not every way out cancels ctx (the subscription ending is
+	// one), and a Wait on a pactl that is still alive would park this watcher —
+	// freezing demand at its last value, possibly ON.
+	defer func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	}()
 
 	events := make(chan struct{}, 1)
 	go func() {

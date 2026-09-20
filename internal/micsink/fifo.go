@@ -25,8 +25,16 @@ type fifo struct {
 	// check just before the recorder left lands in the pipe just after it was
 	// drained — and opens the next recording with a second of stale speech.
 	open bool
-	// carry holds the odd byte of a read that split a sample, to be prefixed to
-	// the next write.
+	// carry is the stream's sample PHASE, not audio waiting to go out: when the
+	// bytes seen so far are odd in number it holds the last one — the LOW half
+	// of a 16-bit sample whose high half is the first byte of whatever arrives
+	// next. It is therefore tracked for every byte that arrives (also while the
+	// microphone is closed) and is NEVER discarded: not on a drop, not on a
+	// drain. Everything written to — or dropped from — the pipe is then a whole
+	// number of samples, so the gap a drop leaves is always even. Discard the
+	// carry and the gap becomes odd, which is exactly what shifts the reader's
+	// sample boundaries: every later sample comes out byte-swapped, i.e. loud
+	// noise for the rest of the recording.
 	carry []byte
 }
 
@@ -56,13 +64,11 @@ func (f *fifo) setOpen(open bool) {
 }
 
 // write feeds pcm to the source while the microphone is open, dropping whatever
-// does not fit. While closed it is a no-op.
+// does not fit. While closed it only keeps the sample phase (see carry).
 func (f *fifo) write(pcm []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if !f.open {
-		return
-	}
+	// Phase bookkeeping first, unconditionally.
 	if len(f.carry) > 0 {
 		pcm = append(f.carry, pcm...)
 		f.carry = nil
@@ -70,6 +76,9 @@ func (f *fifo) write(pcm []byte) {
 	if len(pcm)%2 == 1 {
 		f.carry = []byte{pcm[len(pcm)-1]}
 		pcm = pcm[:len(pcm)-1]
+	}
+	if !f.open {
+		return // pcm is whole samples: dropping it keeps the phase
 	}
 	for len(pcm) > 0 {
 		piece := pcm[:min(fifoPiece, len(pcm))]
@@ -79,23 +88,24 @@ func (f *fifo) write(pcm []byte) {
 		}
 		if err != nil {
 			// EAGAIN: the pipe is full because nothing is consuming. Drop the
-			// rest of this buffer rather than spin — INCLUDING the odd byte
-			// stashed from its tail. That byte is the first half of a sample
-			// whose second half arrives next; prefixing it to the next buffer
-			// after everything before it was dropped would shift every later
-			// sample by one byte, and the shift never heals: the rest of the
-			// utterance would be loud noise, not a dropout.
-			f.carry = nil
+			// rest of this buffer rather than spin. What is dropped is whole
+			// samples (pieces are even), and the carry STAYS: see carry.
 			return
 		}
 		pcm = pcm[len(piece):]
 	}
 }
 
+// drainMaxBytes bounds one drain. The pipe holds 64 KiB; the cap only matters if
+// something else keeps writing to it, which must not be able to spin this loop
+// forever while it holds the lock.
+const drainMaxBytes = 4 << 20
+
+// drainLocked empties the pipe. It does not touch carry: what sits in the pipe
+// is whole samples, so discarding it leaves the phase where it was.
 func (f *fifo) drainLocked() {
-	f.carry = nil
 	buf := make([]byte, 64*1024)
-	for {
+	for drained := 0; drained < drainMaxBytes; {
 		n, err := syscall.Read(f.fd, buf)
 		if errors.Is(err, syscall.EINTR) {
 			continue
@@ -103,6 +113,7 @@ func (f *fifo) drainLocked() {
 		if n <= 0 || err != nil {
 			return
 		}
+		drained += n
 	}
 }
 

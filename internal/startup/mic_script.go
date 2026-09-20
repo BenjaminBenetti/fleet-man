@@ -102,12 +102,22 @@ write_system() {
 #     (and checked below for whether that default reaches PulseAudio anyway).
 begin="# >>> $marker >>>"
 end="# <<< $marker <<<"
+#
+# It is READ as root too. The write below is privileged, so an unprivileged read
+# that fails (a root-only 0600 file — ordinary on a hardened image) must not be
+# mistaken for "the file is empty": that would replace the image's whole ALSA
+# configuration with fleet's block and report success. This is the one step here
+# that can destroy something the user owns, so a failed read is a hard stop.
 others=""
 if [ -e "$asound" ]; then
-  if head -n 1 "$asound" | grep -qxF "# $marker"; then
+  if ! current=$(as_root cat "$asound"); then
+    echo "cannot read the existing $asound; leaving it untouched"
+    exit 1
+  fi
+  if printf '%%s\n' "$current" | head -n 1 | grep -qxF "# $marker"; then
     : # an early fleet build wrote the whole file under a bare marker line
   else
-    others=$(sed "/^$begin\$/,/^$end\$/d" "$asound")
+    others=$(printf '%%s\n' "$current" | sed "/^$begin\$/,/^$end\$/d")
   fi
 fi
 foreign_asound=""
@@ -185,11 +195,14 @@ alsa_default_reaches_pulse() {
     # seconds on its own (-d), it is killed on EVERY way out of the script
     # (trap), and it does not inherit fd 3 — the wrapper's handle on the host's
     # stderr, which a survivor would hold open and hang the caller on.
-    arecord -q -d 8 -f S16_LE -r 16000 -c 1 -t raw /dev/null >/dev/null 2>&1 3>&- &
+    arecord -q -d 10 -f S16_LE -r 16000 -c 1 -t raw /dev/null >/dev/null 2>&1 3>&- &
     probe=$!
     trap 'kill "$probe" 2>/dev/null' EXIT INT TERM HUP
     reached=1
-    for _ in 1 2 3; do
+    # The probe gets nearly all of the recorder's lifetime to show up: on a cold
+    # container the first pulse connection alone can take a few seconds, and
+    # giving up early is a false "does not route to PulseAudio" warning.
+    for _ in 1 2 3 4 5 6 7 8; do
       # A recorder on the fleet microphone specifically (join on the source
       # index), not on the null sink's monitor.
       mic_index=$(bounded pactl list short sources 2>/dev/null | awk -v name='%[4]s' '$2 == name { print $1 }')

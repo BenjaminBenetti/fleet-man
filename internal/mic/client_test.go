@@ -154,7 +154,9 @@ func TestRunCapturesOnlyWhileDemanded(t *testing.T) {
 		if starts, _ := recorder.snapshot(); starts != 0 {
 			t.Errorf("recorder started %d times with no demand", starts)
 		}
-		_ = stream.Send(demandFrame(true, "alpha/i1"))
+		live := demandFrame(true, "alpha/i1")
+		live.GetDemand().Device = "pulse:yeti" // the selection rides on the demand
+		_ = stream.Send(live)
 		for {
 			up, err := stream.Recv()
 			if err != nil {
@@ -175,7 +177,7 @@ func TestRunCapturesOnlyWhileDemanded(t *testing.T) {
 	var log statusLog
 	done := make(chan struct{})
 	go func() {
-		Run(ctx, dialFakeDaemon(t, daemon), func() string { return "pulse:yeti" }, log.report)
+		Run(ctx, dialFakeDaemon(t, daemon), "pulse:yeti", log.report)
 		close(done)
 	}()
 
@@ -244,7 +246,7 @@ func TestRunStopsCaptureWhenTheStreamDrops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var log statusLog
-	go Run(ctx, dialFakeDaemon(t, daemon), func() string { return "" }, log.report)
+	go Run(ctx, dialFakeDaemon(t, daemon), "", log.report)
 
 	waitFor(t, "a reconnect", func() bool { mu.Lock(); defer mu.Unlock(); return calls >= 2 })
 	waitFor(t, "the recorder to be released", func() bool {
@@ -257,7 +259,7 @@ func TestRunGivesUpOnADaemonWithoutTheRPC(t *testing.T) {
 	var log statusLog
 	done := make(chan struct{})
 	go func() {
-		Run(context.Background(), dialFakeDaemon(t, &fleetgrpc.UnimplementedFleetServiceServer{}), func() string { return "" }, log.report)
+		Run(context.Background(), dialFakeDaemon(t, &fleetgrpc.UnimplementedFleetServiceServer{}), "", log.report)
 		close(done)
 	}()
 	select {
@@ -277,7 +279,7 @@ func TestRunReportsADisabledDaemon(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var log statusLog
-	go Run(ctx, dialFakeDaemon(t, daemon), func() string { return "" }, log.report)
+	go Run(ctx, dialFakeDaemon(t, daemon), "", log.report)
 	waitFor(t, "StateDisabled", func() bool { return log.has(StateDisabled) })
 }
 
@@ -293,30 +295,31 @@ func holdDemand() *fakeDaemon {
 	}}
 }
 
-// A recorder that cannot start (device busy) is retried while demand lasts —
-// and the device is re-read each time, so a selection changed in Settings
-// applies to the very next attempt without restarting the provider.
-func TestRunRetriesAFailedCaptureWithTheCurrentDevice(t *testing.T) {
+// A recorder that cannot start (device busy) is retried while demand lasts — and
+// each attempt uses the device the daemon most recently PUSHED, so a selection
+// changed in Settings applies to the very next attempt.
+func TestRunRetriesAFailedCaptureWithTheLatestPushedDevice(t *testing.T) {
 	recorder := stubCapture{failFirst: 1, failWith: errors.New("device busy")}
 	recorder.install(t)
 
-	var mu sync.Mutex
-	device := "pulse:busy"
+	daemon := &fakeDaemon{handler: func(stream fleetgrpc.FleetService_MicServer) error {
+		if _, err := stream.Recv(); err != nil {
+			return err
+		}
+		busy := demandFrame(true, "alpha/i1")
+		busy.GetDemand().Device = "pulse:busy"
+		_ = stream.Send(busy)
+		time.Sleep(200 * time.Millisecond) // the first attempt fails; the user picks another device
+		other := demandFrame(true, "alpha/i1")
+		other.GetDemand().Device = "pulse:other"
+		_ = stream.Send(other)
+		<-stream.Context().Done()
+		return nil
+	}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var log statusLog
-	go Run(ctx, dialFakeDaemon(t, holdDemand()), func() string {
-		mu.Lock()
-		defer mu.Unlock()
-		return device
-	}, func(status Status) {
-		log.report(status)
-		if status.State == StateError {
-			mu.Lock()
-			device = "pulse:other" // the user picks another device meanwhile
-			mu.Unlock()
-		}
-	})
+	go Run(ctx, dialFakeDaemon(t, daemon), "", log.report)
 
 	waitFor(t, "the retry to succeed", func() bool { _, running := recorder.snapshot(); return running == 1 })
 	recorder.mu.Lock()
@@ -330,6 +333,32 @@ func TestRunRetriesAFailedCaptureWithTheCurrentDevice(t *testing.T) {
 	}
 }
 
+// --device is an explicit choice and must win over whatever the daemon pushes.
+func TestRunOverrideBeatsThePushedDevice(t *testing.T) {
+	var recorder stubCapture
+	recorder.install(t)
+	daemon := &fakeDaemon{handler: func(stream fleetgrpc.FleetService_MicServer) error {
+		if _, err := stream.Recv(); err != nil {
+			return err
+		}
+		frame := demandFrame(true, "alpha/i1")
+		frame.GetDemand().Device = "pulse:from_settings"
+		_ = stream.Send(frame)
+		<-stream.Context().Done()
+		return nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log statusLog
+	go Run(ctx, dialFakeDaemon(t, daemon), "pulse:from_flag", log.report)
+	waitFor(t, "the recorder to start", func() bool { _, running := recorder.snapshot(); return running == 1 })
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.devices[0] != "pulse:from_flag" {
+		t.Fatalf("recorded from %q, want the override", recorder.devices[0])
+	}
+}
+
 // No recorder on this machine is not something a retry fixes: report it once,
 // and do not spin.
 func TestRunDoesNotRetryWithoutACaptureTool(t *testing.T) {
@@ -338,7 +367,7 @@ func TestRunDoesNotRetryWithoutACaptureTool(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var log statusLog
-	go Run(ctx, dialFakeDaemon(t, holdDemand()), func() string { return "" }, log.report)
+	go Run(ctx, dialFakeDaemon(t, holdDemand()), "", log.report)
 
 	waitFor(t, "the error report", func() bool { return log.has(StateError) })
 	time.Sleep(captureRetry + 200*time.Millisecond)
@@ -376,7 +405,7 @@ func TestRunClosesTheMicEvenWhenTheNetworkIsStalled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var log statusLog
-	go Run(ctx, dialFakeDaemon(t, daemon), func() string { return "" }, log.report)
+	go Run(ctx, dialFakeDaemon(t, daemon), "", log.report)
 
 	waitFor(t, "the recorder to start", func() bool { _, running := recorder.snapshot(); return running == 1 })
 	time.Sleep(300 * time.Millisecond) // let the send path wedge on flow control
@@ -395,7 +424,7 @@ func TestRunBacksOffAFailingRecorder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var log statusLog
-	go Run(ctx, dialFakeDaemon(t, holdDemand()), func() string { return "" }, log.report)
+	go Run(ctx, dialFakeDaemon(t, holdDemand()), "", log.report)
 
 	// 1 s, then 2 s: three attempts need ~3 s. A flat 1 s retry would make four
 	// or more in 3.5 s.
@@ -490,7 +519,7 @@ func TestRunSurvivesDemandFlappingAgainstASlowPeer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var log statusLog
-	go Run(ctx, dialFakeDaemon(t, daemon), func() string { return "" }, log.report)
+	go Run(ctx, dialFakeDaemon(t, daemon), "", log.report)
 
 	select {
 	case <-finished:
@@ -540,7 +569,7 @@ func TestFellBackNoticeDoesNotLeakIntoTheNextRecording(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var log statusLog
-	go Run(ctx, dialFakeDaemon(t, daemon), func() string { return "pulse:yeti" }, log.report)
+	go Run(ctx, dialFakeDaemon(t, daemon), "pulse:yeti", log.report)
 
 	waitFor(t, "the first recording", func() bool { return log.has(StateLive) })
 	step <- struct{}{}
@@ -562,5 +591,70 @@ func TestFellBackNoticeDoesNotLeakIntoTheNextRecording(t *testing.T) {
 		if sawIdle && status.State == StateLive && status.FellBack {
 			t.Fatalf("the second recording was reported as fallen back: %+v", log.seen)
 		}
+	}
+}
+
+// Cancelling the provider must ALWAYS end Run and release the microphone — also
+// when the recv goroutine is parked handing over a demand frame (it leaves
+// silently on cancellation), which used to leave every case in the loop dead:
+// Run never returned, stop() never ran, and the recorder held the device for the
+// life of the process.
+func TestRunReturnsAndReleasesTheMicWhenCancelled(t *testing.T) {
+	recorder := stubCapture{}
+	// Make start() slow, so a second demand frame arrives while the loop is busy
+	// and parks the recv goroutine on the hand-over.
+	slow := make(chan struct{})
+	recorder.onStart = func(*Capture, func()) { <-slow }
+	recorder.install(t)
+
+	daemon := &fakeDaemon{handler: func(stream fleetgrpc.FleetService_MicServer) error {
+		if _, err := stream.Recv(); err != nil {
+			return err
+		}
+		_ = stream.Send(demandFrame(true, "alpha/i1"))
+		_ = stream.Send(demandFrame(true, "alpha/i1", "alpha/i2")) // parks the recv goroutine
+		<-stream.Context().Done()
+		return nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	returned := make(chan struct{})
+	var log statusLog
+	go func() {
+		Run(ctx, dialFakeDaemon(t, daemon), "", log.report)
+		close(returned)
+	}()
+
+	waitFor(t, "start() to be in progress", func() bool { starts, _ := recorder.snapshot(); return starts == 1 })
+	time.Sleep(100 * time.Millisecond) // let the second frame arrive and park
+	cancel()
+	close(slow)
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
+	}
+	if _, running := recorder.snapshot(); running != 0 {
+		t.Fatal("the recorder is still running after Run returned — the microphone is held open")
+	}
+}
+
+// "It started" is not "it works": a recorder that dies the moment it opens the
+// device must still be backed off, not respawned at a flat 1 Hz.
+func TestRunBacksOffARecorderThatStartsAndDiesAtOnce(t *testing.T) {
+	recorder := stubCapture{}
+	recorder.onStart = func(capture *Capture, _ func()) {
+		go func() { time.Sleep(10 * time.Millisecond); capture.cancel() }() // dies on its own
+	}
+	recorder.install(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log statusLog
+	go Run(ctx, dialFakeDaemon(t, holdDemand()), "", log.report)
+
+	// 1 s then 2 s between restarts: three starts need ~3 s. A flat 1 s retry
+	// would manage four or more in 3.5 s.
+	time.Sleep(3500 * time.Millisecond)
+	if starts, _ := recorder.snapshot(); starts < 2 || starts > 3 {
+		t.Fatalf("%d capture starts in 3.5 s; want 2-3 (back-off must survive a successful spawn)", starts)
 	}
 }

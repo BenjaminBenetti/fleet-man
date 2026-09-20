@@ -259,3 +259,34 @@ func TestCaptureErrorNamesTheDetectedRecorder(t *testing.T) {
 		t.Fatalf("Err = %v, want it to start with the recorder's name", err)
 	}
 }
+
+// Frames must leave the client as WHOLE samples: downstream drops whole frames,
+// and a dropped odd-length frame would flip the sample phase of everything
+// after it. A recorder's pipe reads split anywhere.
+func TestCaptureOnlyEmitsWholeSamples(t *testing.T) {
+	t.Setenv(EnvCapture, `printf abc; sleep 0.05; printf d; sleep 0.05; printf efghi; sleep 0.05; printf j; sleep 5`)
+	var mu sync.Mutex
+	var frames [][]byte
+	capture, err := Start("", func(pcm []byte) {
+		mu.Lock()
+		frames = append(frames, bytes.Clone(pcm))
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer capture.Stop()
+	joined := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return string(bytes.Join(frames, nil))
+	}
+	waitFor(t, "all ten bytes", func() bool { return joined() == "abcdefghij" })
+	mu.Lock()
+	defer mu.Unlock()
+	for _, frame := range frames {
+		if len(frame)%2 != 0 {
+			t.Fatalf("frame %q has odd length: %q", frame, frames)
+		}
+	}
+}
