@@ -981,3 +981,78 @@ func TestMicSyncDoesNotActOnInputsFromBeforeATeardown(t *testing.T) {
 		t.Fatalf("a sync that read its inputs before a teardown still opened %d sink(s)", len(h.opens)-before)
 	}
 }
+
+// OPENING a sink can hang as well (it probes docker for the container's user);
+// parked there, attach would hold the instance's slot with no retire and no
+// back-off, for the daemon's lifetime. It is bounded, and a sink that turns up
+// after the deadline is closed rather than leaked.
+func TestMicHungSinkOpenTimesOut(t *testing.T) {
+	orig := micSinkOpenTimeout
+	micSinkOpenTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { micSinkOpenTimeout = orig })
+
+	h := newMicHarness(t, true)
+	release := make(chan struct{})
+	late := newFakeMicSink()
+	h.script = func(open int) (*fakeMicSink, bool, error) {
+		if open == 0 {
+			<-release // a wedged dockerd
+			return late, true, nil
+		}
+		return newFakeMicSink(), true, nil
+	}
+	provider := openMicStream(t, h.client)
+	provider.expectDemand(t, false)
+
+	eventually(t, "the hung open to be given up on and the instance backed off", func() bool {
+		h.svc.mic.mu.Lock()
+		defer h.svc.mic.mu.Unlock()
+		_, backedOff := h.svc.mic.retryAt["alpha/i1"]
+		_, stillHeld := h.svc.mic.sinks["alpha/i1"]
+		return backedOff && !stillHeld
+	})
+	close(release)
+	eventually(t, "the late sink to be closed, not leaked", late.isClosed)
+}
+
+// An attach ABANDONED while queued for an install slot installed nothing, so it
+// must hand back its "recently prepared" stamp — or closing the TUI with
+// installs queued leaves those instances mic-less for the whole retry window.
+func TestMicAbandonedPrepareHandsBackItsStamp(t *testing.T) {
+	h := newMicHarness(t, true)
+	h.script = func(int) (*fakeMicSink, bool, error) { return brokenSink(), true, nil }
+	// Hold both install slots so the attach queues.
+	for range micPrepareParallel {
+		h.svc.mic.prepareSlots <- struct{}{}
+	}
+	provider := openMicStream(t, h.client)
+	provider.expectDemand(t, false)
+	h.nextSink(t)
+	eventually(t, "the attach to stamp and queue", func() bool {
+		h.svc.mic.mu.Lock()
+		defer h.svc.mic.mu.Unlock()
+		_, stamped := h.svc.mic.preparedAt["c1"]
+		return stamped
+	})
+
+	_ = provider.stream.CloseSend() // the TUI closes: the queued attach is dropped
+	eventually(t, "the provider to leave", func() bool {
+		h.svc.mic.mu.Lock()
+		defer h.svc.mic.mu.Unlock()
+		return len(h.svc.mic.providers) == 0
+	})
+	for range micPrepareParallel {
+		<-h.svc.mic.prepareSlots // let the queued attach through: it must see "dropped"
+	}
+	eventually(t, "the abandoned attempt to hand back its stamp", func() bool {
+		h.svc.mic.mu.Lock()
+		defer h.svc.mic.mu.Unlock()
+		_, stamped := h.svc.mic.preparedAt["c1"]
+		return !stamped
+	})
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.prepares != 0 {
+		t.Fatalf("an abandoned attach still ran the install (%d)", h.prepares)
+	}
+}

@@ -4,7 +4,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -124,5 +126,51 @@ func TestBoundedShellStopsTheScriptItself(t *testing.T) {
 	}
 	if got := boundedShell("x", 0); len(got) != 3 || got[2] != "x" {
 		t.Fatalf("no timeout should mean a plain sh -c: %v", got)
+	}
+}
+
+// busybox `timeout` (Alpine) signals ONLY the pid it started — the wrapper — not
+// its process group. The body is the wrapper's child and the thing holding a
+// lock (apk, apt) is the body's child, so the wrapper has to take its
+// descendants down itself or a stalled install outlives its deadline. This
+// signals the wrapper's pid alone, exactly as busybox does, in the production
+// composition boundedShell(wrap(script)).
+func TestWrapStopsTheBodysDescendantsWhenOnlyTheWrapperIsSignalled(t *testing.T) {
+	if _, err := exec.LookPath("pgrep"); err != nil {
+		t.Skip("no pgrep here")
+	}
+	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
+	// The body's child records its pid and then "stalls", like an apk on a dead mirror.
+	script := Script{Name: "demo", Body: "sh -c 'echo $$ > " + pidFile + "; exec sleep 60'"}
+	argv := boundedShell(wrap(script), 0) // plain sh -c <wrapper>: we play timeout(1) ourselves
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+
+	var pid int
+	deadline := time.Now().Add(5 * time.Second)
+	for pid == 0 {
+		if raw, err := os.ReadFile(pidFile); err == nil {
+			pid, _ = strconv.Atoi(strings.TrimSpace(string(raw)))
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the body never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	defer func() { _ = syscall.Kill(pid, syscall.SIGKILL) }()
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil { // the wrapper's pid ONLY
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("the body's child (pid %d) survived the wrapper being stopped — it would still hold the package lock", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

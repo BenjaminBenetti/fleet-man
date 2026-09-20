@@ -195,15 +195,26 @@ func detect() (tool, error) {
 	if !detectCache.at.IsZero() && time.Since(detectCache.at) < detectTTL {
 		return detectCache.found, detectCache.err
 	}
+	previous := detectCache.found.name
 	detectCache.found, detectCache.err = detectUncached()
 	detectCache.at = time.Now()
-	detectCache.epoch++
-	detectCache.devices = nil
+	if detectCache.found.name != previous {
+		// A different tool: its ids mean nothing to the old allowlist (and any
+		// listing still in flight must not be stored under the new verdict).
+		detectCache.epoch++
+		detectCache.devices = nil
+	}
 	return detectCache.found, detectCache.err
 }
 
-// resetDetectCache forgets the cached verdict (tests, and the settings page's
-// explicit device refresh).
+// refreshDetection makes the next detect() look again, keeping the allowlist.
+func refreshDetection() {
+	detectCache.mu.Lock()
+	detectCache.at = time.Time{}
+	detectCache.mu.Unlock()
+}
+
+// resetDetectCache forgets everything (tests).
 func resetDetectCache() {
 	detectCache.mu.Lock()
 	detectCache.at = time.Time{}
@@ -299,8 +310,15 @@ func knownDevice(detected tool, deviceID string) bool {
 		// timestamp forward so a wedged server is not re-probed on every capture
 		// start. (With no earlier listing there is nothing to keep, and an
 		// unvalidated id still must not reach the recorder.)
+		// With NO earlier listing there is nothing to keep — but the failure is
+		// still recorded (as an empty list), or a wedged server would be probed
+		// again on every capture start: 3 s of pactl before the microphone
+		// opens, i.e. the start of every sentence lost.
 		detectCache.mu.Lock()
-		if detectCache.epoch == epoch && detectCache.devices != nil {
+		if detectCache.epoch == epoch {
+			if detectCache.devices == nil {
+				detectCache.devices = map[string]bool{}
+			}
 			detectCache.devicesAt = time.Now()
 		}
 		detectCache.mu.Unlock()
@@ -371,8 +389,10 @@ func Devices() ([]Device, error) {
 		return nil, nil
 	}
 	// Listing is an explicit user action (opening the selector), so re-detect:
-	// they may have just installed a recorder.
-	resetDetectCache()
+	// they may have just installed a recorder. Only the VERDICT is refreshed —
+	// the allowlist survives unless the tool changed, so a listing that fails
+	// now does not leave capture with no allowlist at all.
+	refreshDetection()
 	detected, err := detect()
 	if err != nil {
 		return nil, err

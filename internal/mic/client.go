@@ -60,6 +60,12 @@ const (
 	// spawned; a recorder that dies the instant it opens the device would
 	// otherwise be respawned at a flat 1 Hz for as long as demand lasts.
 	captureHealthy = 5 * time.Second
+	// streamHealthy is the same idea one level up. The daemon greets every
+	// stream it accepts, so "it attached" proves nothing either: a peer that
+	// accepts and then drops (a flaky tunnel) with demand active would otherwise
+	// reconnect every 500 ms — opening and closing the human's real microphone
+	// at 2 Hz, forever.
+	streamHealthy = 10 * time.Second
 	// sendQueue bounds captured audio waiting for the network, in frames
 	// (~40 ms each). Late audio is worthless, so a full queue DROPS — the same
 	// policy the daemon applies toward its sinks.
@@ -106,6 +112,9 @@ var startCapture = StartNotify
 // status change; it must not block.
 func Run(ctx context.Context, svc fleetgrpc.FleetServiceClient, override string, report func(Status)) {
 	backoff := reconnectInitial
+	// The capture back-off lives HERE, across streams: as a runStream local every
+	// reconnect would reset it and route around captureHealthy entirely.
+	retryDelay := captureRetry
 	disabled := false
 	for ctx.Err() == nil {
 		// A disabled daemon is polled quietly: flipping the status back to
@@ -113,7 +122,9 @@ func Run(ctx context.Context, svc fleetgrpc.FleetServiceClient, override string,
 		if !disabled {
 			report(Status{State: StateConnecting})
 		}
-		attached, err := runStream(ctx, svc, override, report)
+		began := time.Now()
+		attached, err := runStream(ctx, svc, override, &retryDelay, report)
+		healthy := attached && time.Since(began) >= streamHealthy
 		disabled = false
 		wait := backoff
 		switch status.Code(err) {
@@ -125,7 +136,7 @@ func Run(ctx context.Context, svc fleetgrpc.FleetServiceClient, override string,
 			disabled = true
 			wait = disabledRetry
 		default:
-			if attached {
+			if healthy {
 				backoff = reconnectInitial
 				wait = backoff
 			} else {
@@ -142,7 +153,7 @@ func Run(ctx context.Context, svc fleetgrpc.FleetServiceClient, override string,
 
 // runStream runs one Mic stream to completion. attached reports whether the
 // daemon accepted the stream (so the caller resets its backoff).
-func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override string, report func(Status)) (attached bool, err error) {
+func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override string, retryDelayAcrossStreams *time.Duration, report func(Status)) (attached bool, err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -200,7 +211,7 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override s
 		capture    *Capture
 		captureCh  <-chan struct{} // capture.Done() while a capture is running
 		retry      <-chan time.Time
-		retryDelay = captureRetry
+		retryDelay = *retryDelayAcrossStreams
 		active     bool     // the daemon currently wants audio
 		wanted     []string // who is recording, for the status report
 		device     = override
@@ -222,6 +233,7 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override s
 		}
 	}
 	defer stop()
+	defer func() { *retryDelayAcrossStreams = retryDelay }()
 	scheduleRetry := func() {
 		retry = time.After(retryDelay)
 		retryDelay = min(retryDelay*2, captureRetryMax)
@@ -264,8 +276,15 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override s
 			// so the first frame doubles as "attached".
 			attached = true
 			active = demand.GetActive()
-			if override == "" {
+			if override == "" && device != demand.GetDevice() {
 				device = demand.GetDevice() // applies to the NEXT capture start
+				// …and the back-off belonged to the OLD device: a recorder
+				// waiting out a long retry for a device the provider is no
+				// longer asked to use would ignore the very change the daemon
+				// pushed. Try the new one now.
+				if capture == nil && retry != nil {
+					retry, retryDelay = nil, captureRetry
+				}
 			}
 			if !active {
 				wanted = nil

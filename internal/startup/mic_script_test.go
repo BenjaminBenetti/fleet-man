@@ -22,6 +22,8 @@ type micScriptEnv struct {
 	root    string
 	stubBin string
 	log     string // every stub package-manager / sudo invocation, one per line
+	// preexisting is a source-output line present BEFORE the probe recorder runs.
+	preexisting string
 }
 
 func newMicScriptEnv(t *testing.T) *micScriptEnv {
@@ -301,9 +303,13 @@ func (env *micScriptEnv) serverUp(t *testing.T, sourceOutputs string) {
 	// Records its pid: a probe recorder that OUTLIVES the script reads as demand
 	// and would hold the human's microphone open, so the tests check it is gone.
 	writeStub(t, env.stubBin, "arecord", "#!/bin/sh\necho $$ > \""+filepath.Join(env.stubBin, "probe.pid")+"\"\nexec realsleep 30\n")
+	// sourceOutputs appear only once the probe recorder is running — they are the
+	// stream it created. preexisting (set via env.preexisting) is there all along.
 	writeStub(t, env.stubBin, "pactl", `#!/bin/sh
 case "$*" in
-  *source-outputs*) printf '%s' "`+sourceOutputs+`" ;;
+  *source-outputs*)
+    printf '%s' "`+env.preexisting+`"
+    [ -e "`+filepath.Join(env.stubBin, "probe.pid")+`" ] && printf '%s' "`+sourceOutputs+`" ;;
   *"short sources"*) printf '0\tfleetnull.monitor\tx\n1\tfleetmic\tx\n' ;;
 esac
 exit 0
@@ -471,5 +477,81 @@ func TestMicScriptNeverReplacesAnAsoundConfItCannotRead(t *testing.T) {
 	}
 	if got := env.read(t, "etc/asound.conf"); got != original {
 		t.Fatalf("the unreadable file was overwritten:\n%s", got)
+	}
+}
+
+// A recorder ALREADY attached to the fleet microphone (a live session) must not
+// pass the probe on behalf of an ALSA default that never reaches it.
+func TestMicScriptProbeIgnoresRecordersThatWereAlreadyThere(t *testing.T) {
+	env := newMicScriptEnv(t)
+	env.installAudio(t)
+	env.writeRoot(t, "etc/asound.conf", "pcm.!default { type null }\n")
+	env.preexisting = "3\t1\t9\tprotocol-native.c\ts16le 1ch 16000Hz\n"
+	env.serverUp(t, "") // the probe's own recorder never shows up
+	out, err := env.run(t)
+	if err == nil || !strings.Contains(out, "WARNING") {
+		t.Fatalf("someone else's recorder passed the probe: err=%v\n%s", err, out)
+	}
+}
+
+// Standing down ("it sets its own ALSA default") has to take fleet's own block
+// out too, if an earlier run put one there: left in, fleet either overrides the
+// default it claims to respect or splits the config.
+func TestMicScriptStandingDownRemovesItsOwnBlock(t *testing.T) {
+	env := newMicScriptEnv(t)
+	env.installAudio(t)
+	if out, err := env.run(t); err != nil { // run 1: fleet owns the file
+		t.Fatalf("run 1: %v\n%s", err, out)
+	}
+	mine := env.read(t, "etc/asound.conf")
+	env.writeRoot(t, "etc/asound.conf", "pcm.!default { type pulse }\n"+mine) // the user now sets their own default
+
+	out, err := env.run(t)
+	if err != nil || !strings.Contains(out, "leaving the existing") {
+		t.Fatalf("run 2: err=%v\n%s", err, out)
+	}
+	got := env.read(t, "etc/asound.conf")
+	if strings.Contains(got, micConfigMarker) || strings.Count(got, "pcm.!default") != 1 {
+		t.Fatalf("fleet's block is still in a file it says it is leaving alone:\n%s", got)
+	}
+}
+
+// A begin marker with no end marker would make the range delete run to the END
+// OF THE FILE, silently dropping whatever the user had after it.
+func TestMicScriptRefusesATruncatedManagedBlock(t *testing.T) {
+	env := newMicScriptEnv(t)
+	env.installAudio(t)
+	original := "pcm.first { type hw card 0 }\n# >>> " + micConfigMarker + " >>>\npcm.!default { type pulse }\npcm.precious { type hw card 3 }\n"
+	env.writeRoot(t, "etc/asound.conf", original)
+	out, err := env.run(t)
+	if err == nil || strings.Contains(out, "virtual microphone ready") {
+		t.Fatalf("a truncated block must stop the script: err=%v\n%s", err, out)
+	}
+	if got := env.read(t, "etc/asound.conf"); got != original {
+		t.Fatalf("the file was modified:\n%s", got)
+	}
+}
+
+// The config fallback must only count a DEFINITION of pcm.!default as pulse: not
+// a comment mentioning it, and not brace-less shorthand pointing at hardware —
+// after either, the pulse plugin's own "pcm.pulse { type pulse }" must not pass.
+func TestMicScriptConfigFallbackIsNotFooledByMentions(t *testing.T) {
+	for name, tc := range map[string]struct {
+		asound    string
+		wantReady bool
+	}{
+		"shorthand to hardware, then pcm.pulse":   {"ctl.!default { type hw card 0 }\npcm.!default \"plughw:0,0\"\npcm.pulse { type pulse }\n", false},
+		"a comment mentioning it, then pcm.pulse": {"ctl.!default { type hw card 0 }\n# remember to set pcm.!default one day\npcm.pulse { type pulse }\n", false},
+		"shorthand to pulse":                      {"ctl.!default { type hw card 0 }\npcm.!default pulse\n", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newMicScriptEnv(t)
+			env.installAudio(t)
+			env.writeRoot(t, "etc/asound.conf", tc.asound)
+			out, err := env.run(t)
+			if ready := err == nil && strings.Contains(out, "virtual microphone ready"); ready != tc.wantReady {
+				t.Fatalf("ready = %v, want %v (err=%v)\n%s", ready, tc.wantReady, err, out)
+			}
+		})
 	}
 }

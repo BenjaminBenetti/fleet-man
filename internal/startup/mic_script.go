@@ -116,6 +116,12 @@ if [ -e "$asound" ]; then
   fi
   if printf '%%s\n' "$current" | head -n 1 | grep -qxF "# $marker"; then
     : # an early fleet build wrote the whole file under a bare marker line
+  elif printf '%%s\n' "$current" | grep -qxF "$begin" && ! printf '%%s\n' "$current" | grep -qxF "$end"; then
+    # A begin marker with no end (the file was hand-edited or truncated): the
+    # range delete below would run from "begin" to the END OF THE FILE and
+    # silently drop everything the user had after it. Do not guess.
+    echo "$asound has fleet's begin marker but no end marker; leaving it untouched"
+    exit 1
   else
     others=$(printf '%%s\n' "$current" | sed "/^$begin\$/,/^$end\$/d")
   fi
@@ -124,6 +130,12 @@ foreign_asound=""
 if printf '%%s\n' "$others" | grep -Eq '^[[:space:]]*(pcm|ctl)\.!default'; then
   foreign_asound=1
   echo "leaving the existing $asound alone (it sets its own ALSA default)"
+  # Standing down means taking fleet's OWN block out too, if an earlier run put
+  # one there: left in, fleet would either override the default it claims to
+  # respect or split the config (their pcm, fleet's ctl).
+  if [ "$others" != "$current" ]; then
+    printf '%%s\n' "$others" | write_system "$asound" || exit 1
+  fi
 else
   {
     [ -z "$others" ] || printf '%%s\n' "$others"
@@ -157,10 +169,16 @@ fi
 default_is_pulse() {
   for conf in "$@"; do
     [ -r "$conf" ] || continue
+    # Only a DEFINITION counts: a block that opens on the pcm.!default line, or
+    # the brace-less shorthand naming the pulse pcm. A comment that merely
+    # mentions pcm.!default, or a shorthand pointing at hardware, must not latch
+    # on and let a later, unrelated "type pulse" (pcm.pulse always has one) pass.
     awk '
-      /pcm\.!default/ { in_default = 1 }
-      in_default && /type[ \t]+"?pulse"?/ { found = 1 }
-      in_default && /}/ { in_default = 0 }
+      /^[[:space:]]*#/ { next }
+      /^[[:space:]]*pcm\.!default[[:space:]]+"?pulse"?[[:space:]]*$/ { found = 1 }
+      /^[[:space:]]*pcm\.!default[[:space:]]*\{/ { in_default = 1 }
+      in_default && /type[[:space:]]+"?pulse"?/ { found = 1 }
+      in_default && /\}/ { in_default = 0 }
       END { exit !found }
     ' "$conf" && return 0
   done
@@ -179,6 +197,16 @@ bounded() {
   fi
 }
 
+# fleet_mic_outputs: the ids of the source-outputs attached to the fleet
+# microphone specifically (join on the source index — not the null sink's
+# monitor), space-separated on one line.
+fleet_mic_outputs() {
+  mic_index=$(bounded pactl list short sources 2>/dev/null | awk -v name='%[4]s' '$2 == name { print $1 }')
+  [ -n "$mic_index" ] || return 0
+  bounded pactl list short source-outputs 2>/dev/null |
+    awk -v idx="$mic_index" '$2 == idx { printf "%%s ", $1 }'
+}
+
 # alsa_default_reaches_pulse: does a plain ALSA recorder end up on fleet's
 # PulseAudio server? "It keeps recording" is not the question — a default of
 # type null (a common way for an image to silence ALSA) or type hw records
@@ -195,6 +223,10 @@ alsa_default_reaches_pulse() {
     # seconds on its own (-d), it is killed on EVERY way out of the script
     # (trap), and it does not inherit fd 3 — the wrapper's handle on the host's
     # stderr, which a survivor would hold open and hang the caller on.
+    # Recorders ALREADY on the fleet microphone (a live session, a leftover) must
+    # not pass the probe on behalf of a default that never reaches it: note who
+    # is there now, and require someone NEW.
+    before=$(fleet_mic_outputs)
     arecord -q -d 10 -f S16_LE -r 16000 -c 1 -t raw /dev/null >/dev/null 2>&1 3>&- &
     probe=$!
     trap 'kill "$probe" 2>/dev/null' EXIT INT TERM HUP
@@ -205,12 +237,13 @@ alsa_default_reaches_pulse() {
     for _ in 1 2 3 4 5 6 7 8; do
       # A recorder on the fleet microphone specifically (join on the source
       # index), not on the null sink's monitor.
-      mic_index=$(bounded pactl list short sources 2>/dev/null | awk -v name='%[4]s' '$2 == name { print $1 }')
-      if [ -n "$mic_index" ] && bounded pactl list short source-outputs 2>/dev/null |
-        awk -v idx="$mic_index" '$2 == idx { found = 1 } END { exit !found }'; then
-        reached=0
-        break
-      fi
+      for output in $(fleet_mic_outputs); do
+        case " $before " in
+          *" $output "*) ;;
+          *) reached=0 ;;
+        esac
+      done
+      [ "$reached" = 0 ] && break
       kill -0 "$probe" 2>/dev/null || break
       sleep 1
     done

@@ -93,6 +93,10 @@ printed.`,
 				}
 				lastLine = line
 				switch status.State {
+				case mic.StateConnecting:
+					// Printed too: when the daemon goes away the real microphone
+					// closes, and the terminal must not be left showing "live".
+					fmt.Fprintln(out, "connecting")
 				case mic.StateIdle:
 					fmt.Fprintln(out, "idle")
 				case mic.StateLive:
@@ -113,7 +117,8 @@ printed.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&device, "device", "", "capture device id from `fleet mic devices` (default: the device chosen in Settings)")
+	// No back-quotes in the usage: pflag reads them as the value's placeholder.
+	cmd.Flags().StringVar(&device, "device", "", "capture device id, as listed by 'fleet mic devices' (default: the device chosen in Settings)")
 	return cmd
 }
 

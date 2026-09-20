@@ -1650,8 +1650,13 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				recordRow(settingsItemMicDevice, settingsPage.renderSettingsRow(m, currentItem == settingsItemMicDevice, "Device", settingsPage.micDeviceValue(m)))
 				listContent.WriteString("\n")
 				// Not navigable: a read-out of the provider, like Public MCP URL's
-				// connection state.
-				listContent.WriteString(settingsPage.renderSettingsRow(m, false, "Status", micStatusValue(m)))
+				// connection state. It bypasses recordRow (no item id), so it must
+				// do recordRow's wrapping itself: an error detail easily exceeds
+				// the box, and an UNWRAPPED long line is drawn as two while being
+				// counted as one — which shifts the scrollbar and the mouse hit
+				// rows of everything below it.
+				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(
+					settingsPage.renderSettingsRow(m, false, "Status", micStatusValue(m))))
 			}
 
 		case "Fleet MCP":

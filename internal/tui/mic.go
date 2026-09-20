@@ -333,7 +333,7 @@ func (settingsPage *settingsPage) micDeviceLabel(m *model) string {
 // micDeviceValue renders the Device row's value.
 func (settingsPage *settingsPage) micDeviceValue(m *model) string {
 	if m.micDevicesLoading {
-		return m.spinner.View() + " listing devices..."
+		return m.spinner.View() + " listing devices…"
 	}
 	value := fmt.Sprintf("[ %s ]", settingsPage.micDeviceLabel(m))
 	if m.micDevicesErr != "" {

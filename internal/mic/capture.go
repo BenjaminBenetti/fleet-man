@@ -130,7 +130,11 @@ func record(ctx context.Context, argv []string, deviceID string, sink func([]byt
 		return false, err
 	}
 	defer release()
-	cmd.Env = append(os.Environ(), EnvDevice+"="+deviceID)
+	// The raw configured id (an override recorder is the one consumer, and fleet
+	// cannot validate it for a tool it does not know) — minus anything exec
+	// would refuse: a NUL in it would fail EVERY start, the system-default
+	// fallback included, and the status row would blame the recorder.
+	cmd.Env = append(os.Environ(), EnvDevice+"="+strings.ReplaceAll(deviceID, "\x00", ""))
 	// Every recorder runs under the sh wrapper, so cmd.Path is /bin/sh for all
 	// of them; errors are user-visible (the Status row) and must name the
 	// recorder that actually failed.
@@ -180,7 +184,7 @@ func record(ctx context.Context, argv []string, deviceID string, sink func([]byt
 	if waitErr == nil {
 		// A recorder has no business exiting on its own; treat a clean exit as
 		// the stream ending so the caller can restart it.
-		return produced, io.EOF
+		return produced, fmt.Errorf("%s: exited on its own: %w", recorder, io.EOF)
 	}
 	if detail := stderr.String(); detail != "" {
 		return produced, fmt.Errorf("%s: %w: %s", recorder, waitErr, detail)

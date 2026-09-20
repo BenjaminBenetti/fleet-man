@@ -113,11 +113,38 @@ func pulseEnv() []string {
 	)
 }
 
+// answer is what a probe of the sound server found. unknown is NOT no: a pactl
+// that timed out or could not be forked (an instance busy with a build) says
+// nothing about the server, and Ensure's destructive steps — stopping a server,
+// unlinking its socket and FIFO — must only ever follow a CONFIDENT answer.
+// (The same discipline as recorderAttached's ok, one file over.)
+type answer int
+
+const (
+	unknown answer = iota
+	yes
+	no
+)
+
 // serverAnswers reports whether the virtual-microphone server is up at all.
-func serverAnswers() bool {
+// "no" means pactl reached a verdict quickly (connection refused); a probe that
+// hit its deadline is unknown.
+func serverAnswers() answer {
 	cmd, cancel := boundedCommand(context.Background(), "pactl", "info")
 	defer cancel()
-	return cmd.Run() == nil
+	start := time.Now()
+	err := cmd.Run()
+	switch {
+	case err == nil:
+		return yes
+	case time.Since(start) >= pactlTimeout:
+		return unknown
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.Exited() {
+		return no // pactl ran and said so
+	}
+	return unknown // could not run it / killed
 }
 
 // micPresent reports whether the running server actually carries the fleet
@@ -125,17 +152,17 @@ func serverAnswers() bool {
 // over a FIFO left behind by a predecessor that was SIGKILLed (a stopped
 // container), and PulseAudio carries on regardless — every recorder then
 // silently gets the null sink's monitor, i.e. pure silence.
-func micPresent() bool {
+func micPresent() answer {
 	sources, err := pactl(context.Background(), "list", "short", "sources")
 	if err != nil {
-		return false
+		return unknown
 	}
 	for line := range strings.SplitSeq(sources, "\n") {
 		if fields := strings.Fields(line); len(fields) >= 2 && fields[1] == SourceName {
-			return true
+			return yes
 		}
 	}
-	return false
+	return no
 }
 
 // Ensure makes sure the instance's virtual-microphone server is running WITH
@@ -151,19 +178,27 @@ func Ensure() error {
 			return ErrMissingDeps
 		}
 	}
-	if serverAnswers() {
-		if micPresent() {
+	switch up, mic := serverAnswers(), unknown; up {
+	case unknown:
+		return fmt.Errorf("the sound server did not answer in time; leaving it alone")
+	case yes:
+		if mic = micPresent(); mic == yes {
 			return nil
 		}
-		// Up but microphone-less (see micPresent): replace it.
+		if mic == unknown {
+			// Up, and we could not ask what it carries. It may be serving a
+			// recording right now; do not touch it.
+			return fmt.Errorf("the sound server is up but could not be queried; leaving it alone")
+		}
+		// Up and CONFIDENTLY microphone-less (see micPresent): replace it.
 		if err := Stop(); err != nil {
 			return fmt.Errorf("stop degraded pulseaudio: %w", err)
 		}
 		deadline := time.Now().Add(serverStartTimeout)
-		for serverAnswers() && time.Now().Before(deadline) {
+		for serverAnswers() != no && time.Now().Before(deadline) {
 			time.Sleep(50 * time.Millisecond)
 		}
-		if serverAnswers() {
+		if serverAnswers() != no {
 			// It would not go away. Carrying on would unlink a LIVE server's
 			// socket and FIFO and start a second server beside it.
 			return fmt.Errorf("the running pulseaudio has no %s source and did not stop within %s (see %s)", SourceName, serverStartTimeout, path("pulse.log"))
@@ -183,8 +218,16 @@ func Ensure() error {
 	// SIGKILL): a stale socket makes the new server's bind fail, and a stale
 	// FIFO makes module-pipe-source refuse to load. Nothing is listening — that
 	// was just established — so both are safe to remove.
-	if serverAnswers() && micPresent() {
-		return nil // someone else brought it up while we were getting here
+	// The second look, right before the cleanup: only a confident "nothing is
+	// listening" licenses unlinking the socket and FIFO.
+	switch serverAnswers() {
+	case yes:
+		if micPresent() == yes {
+			return nil // someone else brought it up while we were getting here
+		}
+		return fmt.Errorf("a sound server appeared while starting one; leaving it alone")
+	case unknown:
+		return fmt.Errorf("the sound server did not answer in time; leaving it alone")
 	}
 	_ = os.Remove(path("pulse.sock"))
 	_ = os.Remove(path("pcm"))
@@ -192,24 +235,29 @@ func Ensure() error {
 		return fmt.Errorf("write server script: %w", err)
 	}
 
-	// --daemonize=yes returns once the daemon has forked; bounded like the rest.
-	cmd, cancel := boundedCommand(context.Background(), "pulseaudio", "-n", "-F", path("fleet.pa"),
+	// --daemonize=yes returns once the daemon has forked. Bounded — but by the
+	// START timeout, not the query timeout: bringing a server up is not a query,
+	// and a cold start slower than pactlTimeout must not be killed mid-fork.
+	startCtx, cancelStart := context.WithTimeout(context.Background(), serverStartTimeout+pactlTimeout)
+	defer cancelStart()
+	cmd := exec.CommandContext(startCtx, "pulseaudio", "-n", "-F", path("fleet.pa"),
 		"--daemonize=yes", "--exit-idle-time=-1", "--use-pid-file=no",
 		"--log-target=file:"+path("pulse.log"))
-	defer cancel()
+	cmd.Env = pulseEnv()
+	cmd.WaitDelay = time.Second
 	cmd.Dir = "/"
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("start pulseaudio: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
 	deadline := time.Now().Add(serverStartTimeout)
-	for !serverAnswers() {
+	for serverAnswers() != yes {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("pulseaudio did not come up within %s (see %s)", serverStartTimeout, path("pulse.log"))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if !micPresent() {
+	if micPresent() == no { // unknown: it answered a moment ago; do not cry wolf
 		return fmt.Errorf("pulseaudio started without the %s source (see %s)", SourceName, path("pulse.log"))
 	}
 	return nil
@@ -219,7 +267,7 @@ func Ensure() error {
 // Used when the feature is turned off: recorders then find no microphone at
 // all, rather than a silent one.
 func Stop() error {
-	if _, err := lookPath("pactl"); err != nil || !serverAnswers() {
+	if _, err := lookPath("pactl"); err != nil || serverAnswers() == no {
 		return nil
 	}
 	cmd, cancel := boundedCommand(context.Background(), "pactl", "exit")

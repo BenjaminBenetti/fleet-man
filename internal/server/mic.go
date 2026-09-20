@@ -74,7 +74,29 @@ const (
 	// mirror would hold its instance's sink slot for the daemon's lifetime.
 	micPrepareTimeout  = 10 * time.Minute
 	micPrepareParallel = 2
+	// micOpenParallel bounds concurrent sink opens (each may probe docker).
+	micOpenParallel = 8
 )
+
+// micSinkOpenTimeout bounds starting a sink (see serve). A var for tests.
+var micSinkOpenTimeout = 30 * time.Second
+
+// bounded runs fn, giving up after timeout. fn keeps running in its goroutine if
+// it is truly stuck — there is nothing to cancel it with, the Backend interface
+// takes no context — but the CALLER is released, which is what keeps one hung
+// docker call from holding an instance's slot forever. If the abandoned fn later
+// produces something (an opened sink), it is the caller's job to have made that
+// harmless; serve does so by checking the result only on the non-timeout path.
+func bounded(timeout time.Duration, what string, fn func() error) error {
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf("%s: no answer within %s", what, timeout)
+	}
+}
 
 // micSinkReadyTimeout is how long a freshly-started sink may take to announce
 // itself. Generous: it covers a cold `docker exec` plus the sink bringing the
@@ -196,6 +218,8 @@ type micHub struct {
 	prepareSlots chan struct{}
 	// attaching tracks the attach goroutines, so run can leave nothing behind.
 	attaching sync.WaitGroup
+	// openSlots bounds concurrent sink opens (micOpenParallel).
+	openSlots chan struct{}
 
 	// wake pokes the sync loop (provider attach/detach) so a fresh TUI does not
 	// wait out a tick before sinks appear.
@@ -209,6 +233,7 @@ func newMicHub() *micHub {
 		preparedAt:   make(map[string]time.Time),
 		wake:         make(chan struct{}, 1),
 		prepareSlots: make(chan struct{}, micPrepareParallel),
+		openSlots:    make(chan struct{}, micOpenParallel),
 	}
 }
 
@@ -414,6 +439,16 @@ func (h *micHub) attach(key string, sink *micSink) {
 	// off (or this sink dropped) while the sink was failing or this goroutine
 	// was queued. "Off" promises that nothing is installed, and an install is
 	// not something we can cancel once it is running.
+	// An attempt that is ABANDONED — nothing was installed — must hand back its
+	// stamp as well as its slot. Otherwise closing the TUI while installs are
+	// queued (or one unreadable config read) leaves every one of those instances
+	// "recently prepared", and they sit mic-less for the whole retry window
+	// although no install ever ran.
+	abandon := func() {
+		h.mu.Lock()
+		delete(h.preparedAt, sink.containerID)
+		h.mu.Unlock()
+	}
 	h.mu.Lock()
 	dropped = sink.closed
 	if !dropped {
@@ -423,17 +458,19 @@ func (h *micHub) attach(key string, sink *micSink) {
 	}
 	h.mu.Unlock()
 	if dropped {
+		abandon()
 		return
 	}
 	if settings, err := micSetting(); err != nil || !settings.Enabled {
 		// Off — or unreadable just now, which must not cost this instance its
 		// microphone: EVERY exit from attach has to hand the registration back,
 		// or sync finds the key occupied and skips this instance forever.
+		abandon()
 		h.retire(key, sink, micRetryQuick)
 		return
 	}
 	flog.Info("mic: preparing instance", "instance", key, "reason", err)
-	if prepErr := prepareMicInstance(sink.inst); prepErr != nil {
+	if prepErr := bounded(micPrepareTimeout+2*time.Minute, "prepare", func() error { return prepareMicInstance(sink.inst) }); prepErr != nil {
 		// Surfaced, but NOT the end of the road: the script can fail on its last
 		// step (an image whose own /etc/asound.conf bypasses PulseAudio) with a
 		// perfectly good sound server installed, so the sink still gets its
@@ -450,13 +487,45 @@ func (h *micHub) attach(key string, sink *micSink) {
 // serve runs one sink process to completion. ready reports whether it ever
 // announced itself; supported=false means the backend has no sink at all.
 func (h *micHub) serve(key string, sink *micSink) (ready, supported bool, err error) {
-	conn, supported, err := openMicSink(sink.inst)
-	if !supported {
+	// OPENING the sink is bounded too, not just waiting for it to speak: it
+	// resolves the container's user with docker inspect / devcontainer exec,
+	// which hang when dockerd does — and a goroutine parked there holds this
+	// instance's slot with no retire and no back-off, for the daemon's lifetime.
+	// It is also rate-limited: every TUI open would otherwise fire one such
+	// probe per instance at once.
+	type opened struct {
+		conn      micSinkConn
+		supported bool
+		err       error
+	}
+	h.openSlots <- struct{}{}
+	result := make(chan opened, 1)
+	go func() {
+		conn, supported, err := openMicSink(sink.inst)
+		result <- opened{conn, supported, err} // buffered: never blocks
+	}()
+	var got opened
+	select {
+	case got = <-result:
+	case <-time.After(micSinkOpenTimeout):
+		// Give up on it — but if it does come back with a running sink, that
+		// process must not be leaked: whoever receives the result closes it.
+		go func() {
+			if late := <-result; late.conn != nil {
+				_ = late.conn.Close()
+			}
+		}()
+		<-h.openSlots
+		return false, true, fmt.Errorf("open sink: no answer within %s", micSinkOpenTimeout)
+	}
+	<-h.openSlots
+	if got.err == nil && !got.supported {
 		return false, false, nil
 	}
-	if err != nil {
-		return false, true, err
+	if got.err != nil {
+		return false, true, got.err
 	}
+	conn := got.conn
 
 	audio := make(chan []byte, micSinkQueue)
 	h.mu.Lock()
@@ -578,17 +647,27 @@ func (h *micHub) disable() {
 	flog.Info("microphone disabled")
 	h.kickProviders()
 	h.closeAllSinks()
-	st, err := state.Load()
-	if err != nil {
-		return
-	}
-	for _, f := range st.Fleets {
-		for _, inst := range f.Instances {
-			if inst.Status == fleet.StatusRunning && inst.ContainerID != "" {
-				go stopMicServer(inst)
+	// Off the caller's goroutine (SetConfig holds a lock), and with retries: the
+	// enabled->disabled edge happens ONCE, so a state.json caught mid-write must
+	// not mean the instances' sound servers are never stopped.
+	go func() {
+		for attempt := 0; attempt < 5; attempt++ {
+			st, err := state.Load()
+			if err != nil {
+				time.Sleep(time.Second)
+				continue
 			}
+			for _, f := range st.Fleets {
+				for _, inst := range f.Instances {
+					if inst.Status == fleet.StatusRunning && inst.ContainerID != "" {
+						go stopMicServer(inst)
+					}
+				}
+			}
+			return
 		}
-	}
+		flog.Warn("microphone disabled, but the running instances could not be listed to stop their sound servers")
+	}()
 }
 
 // setDemand records a sink's demand report and republishes the aggregate.

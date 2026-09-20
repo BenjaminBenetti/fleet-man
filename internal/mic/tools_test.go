@@ -464,3 +464,36 @@ func TestFailedListingKeepsThePreviousAllowlist(t *testing.T) {
 		t.Fatalf("a wedged server was re-probed at once (%d listings)", *listings)
 	}
 }
+
+// With NO earlier listing, a failing one must still be rate-limited: a wedged
+// sound server probed on every capture start costs seconds before the microphone
+// opens — the start of every sentence.
+func TestFailedFirstListingIsStillRateLimited(t *testing.T) {
+	fakeHost(t, "linux", []string{"arecord"}, nil) // arecord -L fails
+	listings := countListings(t)
+	for range 4 {
+		if _, used, _ := commandArgv("alsa:plughw:CARD=Orb,DEV=0"); used != "" {
+			t.Fatal("an unvalidated id must not be used")
+		}
+	}
+	if *listings != 1 {
+		t.Fatalf("a failing listing ran %d times for 4 capture starts, want 1", *listings)
+	}
+}
+
+// Opening the device selector re-detects the tool, but a listing that then FAILS
+// must not leave capture with no allowlist at all.
+func TestDevicesFailureKeepsTheAllowlist(t *testing.T) {
+	probes := map[string]string{"arecord -L": "plughw:CARD=Orb,DEV=0\n    Yeti Orb\n"}
+	fakeHost(t, "linux", []string{"arecord"}, probes)
+	if _, err := Devices(); err != nil {
+		t.Fatal(err)
+	}
+	delete(probes, "arecord -L")
+	if _, err := Devices(); err == nil {
+		t.Fatal("setup: the second listing should fail")
+	}
+	if _, used, _ := commandArgv("alsa:plughw:CARD=Orb,DEV=0"); used == "" {
+		t.Fatal("a failed Devices() wiped the allowlist: the configured device fell back to the default")
+	}
+}

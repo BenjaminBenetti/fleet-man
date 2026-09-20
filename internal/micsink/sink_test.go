@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -28,9 +29,12 @@ func newFakePulse(t *testing.T) *fakePulse {
 
 	script := `#!/bin/sh
 state="` + fake.state + `"
+echo "$*" >> "$state/calls"
 case "$*" in
   info) exit 0 ;;
-  "list short sources") printf '0\tfleetnull.monitor\tmodule-null-sink.c\n1\t` + SourceName + `\tmodule-pipe-source.c\n' ;;
+  "list short sources")
+    [ -e "$state/fail-sources" ] && exit 1
+    printf '0\tfleetnull.monitor\tmodule-null-sink.c\n1\t` + SourceName + `\tmodule-pipe-source.c\n' ;;
   "list short source-outputs")
     [ -e "$state/fail" ] && exit 1
     [ -e "$state/hang" ] && exec sleep 60
@@ -259,5 +263,38 @@ func TestRunFailsClosedWhenTheServerStopsAnswering(t *testing.T) {
 	case <-sink.done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("a hung pactl wedged the sink's shutdown")
+	}
+}
+
+func (f *fakePulse) calls() string {
+	raw, _ := os.ReadFile(filepath.Join(f.state, "calls"))
+	return string(raw)
+}
+
+// "I could not ask the server" is not "the microphone is not there". Ensure's
+// destructive branch — stop the server, unlink its socket and FIFO — may only
+// follow a CONFIDENT absence: one pactl that fails under load must not kill a
+// live server in the middle of someone's recording.
+func TestEnsureLeavesAServerItCannotQueryAlone(t *testing.T) {
+	pulse := newFakePulse(t)
+	socket := filepath.Join(dir, "pulse.sock")
+	if err := os.WriteFile(socket, nil, 0o600); err != nil { // stands in for the live socket
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pulse.state, "fail-sources"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Ensure()
+	if err == nil {
+		t.Fatal("Ensure should report that it could not query the server")
+	}
+	if strings.Contains(pulse.calls(), "exit") {
+		t.Fatalf("Ensure stopped a server it could not query:\n%s", pulse.calls())
+	}
+	for _, leftover := range []string{socket, pulse.fifo} {
+		if _, statErr := os.Stat(leftover); statErr != nil {
+			t.Fatalf("Ensure unlinked %s of a live server: %v", leftover, statErr)
+		}
 	}
 }

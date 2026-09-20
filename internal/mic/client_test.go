@@ -658,3 +658,69 @@ func TestRunBacksOffARecorderThatStartsAndDiesAtOnce(t *testing.T) {
 		t.Fatalf("%d capture starts in 3.5 s; want 2-3 (back-off must survive a successful spawn)", starts)
 	}
 }
+
+// "It attached" proves nothing: the daemon greets every stream it accepts. A peer
+// that accepts and then drops — a flaky tunnel — with demand active must not be
+// reconnected to every 500 ms, opening and closing the human's real microphone
+// at 2 Hz forever. The reconnect back-off is only forgiven by stream UPTIME.
+func TestRunBacksOffAPeerThatAcceptsAndDrops(t *testing.T) {
+	var recorder stubCapture
+	recorder.install(t)
+	var mu sync.Mutex
+	connects := 0
+	daemon := &fakeDaemon{handler: func(stream fleetgrpc.FleetService_MicServer) error {
+		mu.Lock()
+		connects++
+		mu.Unlock()
+		if _, err := stream.Recv(); err != nil {
+			return err
+		}
+		_ = stream.Send(demandFrame(true, "alpha/i1")) // greeted, mic opens…
+		time.Sleep(20 * time.Millisecond)
+		return status.Error(codes.Unavailable, "tunnel reset") // …and dropped
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log statusLog
+	go Run(ctx, dialFakeDaemon(t, daemon), "", log.report)
+
+	// 1 s, 2 s, … between attempts: three connects need ~3 s. A flat 500 ms would
+	// manage seven or more in 3.5 s.
+	time.Sleep(3500 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if connects < 2 || connects > 4 {
+		t.Fatalf("%d connects in 3.5 s; want 2-4 (the reconnect back-off must grow)", connects)
+	}
+}
+
+// The back-off belongs to the device that was failing. When the daemon pushes a
+// DIFFERENT device, waiting out the old one's timer would ignore the very change
+// the user just made.
+func TestRunTriesAPushedDeviceChangeAtOnceDespiteTheBackoff(t *testing.T) {
+	recorder := stubCapture{failFirst: 1, failWith: errors.New("device busy")}
+	recorder.install(t)
+	daemon := &fakeDaemon{handler: func(stream fleetgrpc.FleetService_MicServer) error {
+		if _, err := stream.Recv(); err != nil {
+			return err
+		}
+		busy := demandFrame(true, "alpha/i1")
+		busy.GetDemand().Device = "pulse:busy"
+		_ = stream.Send(busy)
+		time.Sleep(100 * time.Millisecond) // the first attempt has failed; a 1 s retry is armed
+		other := demandFrame(true, "alpha/i1")
+		other.GetDemand().Device = "pulse:other"
+		_ = stream.Send(other)
+		<-stream.Context().Done()
+		return nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log statusLog
+	began := time.Now()
+	go Run(ctx, dialFakeDaemon(t, daemon), "", log.report)
+	waitFor(t, "the new device to be tried", func() bool { _, running := recorder.snapshot(); return running == 1 })
+	if elapsed := time.Since(began); elapsed > 700*time.Millisecond {
+		t.Fatalf("the pushed device was only tried after %s — it waited out the old device's back-off", elapsed)
+	}
+}

@@ -109,10 +109,28 @@ exec 3>&2
 exec >>%[1]s/%[2]s.log 2>&1
 echo "=== %[2]s @ $(date -u +%%FT%%TZ) ==="
 start=$(wc -l < %[1]s/%[2]s.log 2>/dev/null || echo 0)
+# Stopping the wrapper must stop the BODY. A deadline is enforced by signalling
+# this shell (timeout(1), or the exec being torn down), and the body is its
+# child — whose own children (apt, apk, sudo...) are what actually hold locks.
+# GNU timeout signals the whole process group, but busybox timeout (Alpine)
+# signals only the pid it started: without this, a stalled apk outlives its
+# deadline still holding the package db lock. So on a signal the wrapper walks
+# its descendants itself (pgrep is in procps and in busybox; where it is missing
+# only the body's own shell is signalled, which is what happened before).
+fleet_stop_tree() {
+  for fleet_child in $(pgrep -P "$1" 2>/dev/null); do
+    fleet_stop_tree "$fleet_child"
+  done
+  kill -TERM "$1" 2>/dev/null
+}
 (
 %[3]s
-) 3>&-
+) 3>&- &
+fleet_body=$!
+trap 'fleet_stop_tree "$fleet_body"; wait "$fleet_body" 2>/dev/null; echo "stopped: deadline or signal" >&2; exit 143' TERM INT HUP
+wait "$fleet_body"
 rc=$?
+trap - TERM INT HUP
 if [ "$rc" -ne 0 ]; then
   tail -n +$((start + 1)) %[1]s/%[2]s.log | tail -n %[4]d >&3
 fi
