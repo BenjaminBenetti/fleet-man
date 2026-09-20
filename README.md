@@ -123,7 +123,7 @@ fleet trigger logs my-project nightly   # inspect a trigger's recorded firings
 
 # Virtual microphone (enable it under Settings -> Microphone first)
 fleet mic devices                       # this machine's capture devices
-fleet mic attach                        # provide the microphone without a TUI open
+fleet mic attach                        # provide the microphone without a TUI open (records the Settings device; --device overrides)
 ```
 
 ## TUI Keybindings
@@ -608,7 +608,7 @@ Variables fleet **reads** (set them to configure behavior):
 | `FLEET_DEVCONTAINER_UPDATE_REMOTE_USER_UID` | `default`, `never`, `on`, `off` | Remote-user UID/GID rewrite mode. See [Devcontainer UID Rewrite](#devcontainer-uid-rewrite). |
 | `FLEET_SSH_AGENT_SOCK` | absolute path, `off`, or `none` (case-insensitive) | Override the bind source for SSH agent forwarding into instances (`off`/`none` disables it). On macOS the default is Docker Desktop's VM-side `/run/host-services/ssh-auth.sock` (OrbStack and `colima --ssh-agent` are path-compatible); set this if your Docker backend exposes the agent elsewhere (default Colima, Podman machine, Rancher Desktop). |
 | `FLEET_OPENER` | program (+ args, whitespace-split) | Program `fleet open` / in-instance `fo` hands a copied file to instead of the desktop opener (`xdg-open`, `open`, `wslview`), e.g. `imv -f`. Read by whichever process opens the file: the CLI for `fleet open`, the TUI for `fo`. Executables are never opened. |
-| `FLEET_MIC_CAPTURE` | shell command | Replace fleet's microphone recorder: the command's stdout must be raw 16 kHz mono signed 16-bit little-endian PCM. For audio stacks fleet can't drive itself (e.g. `sox -t coreaudio "My Mic" -t raw -r 16000 -e signed -b 16 -c 1 -`). Read by the process providing the microphone (the TUI / `fleet mic attach`); the Device setting is ignored. See [Microphone](#microphone). |
+| `FLEET_MIC_CAPTURE` | shell command | Replace fleet's microphone recorder: the command's stdout must be raw 16 kHz mono signed 16-bit little-endian PCM. For audio stacks fleet can't drive itself (e.g. `sox -t coreaudio "My Mic" -t raw -r 16000 -e signed -b 16 -c 1 -`). Read by the process providing the microphone (the TUI / `fleet mic attach`). Fleet cannot pass your command a device, so the Device setting reaches it as `FLEET_MIC_DEVICE` (the raw configured id, empty for the system default) for it to honour or ignore. See [Microphone](#microphone). |
 | `CODER_URL` | URL | Coder deployment URL (Coder backend). |
 | `CODER_SESSION_TOKEN` | token | Coder API token (Coder backend). |
 | `CODER_CONFIG_DIR` | path | Override the Coder CLI config dir. |

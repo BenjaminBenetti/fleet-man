@@ -14,8 +14,9 @@ itest_begin
 setup_test
 
 info "enable the microphone before the instance is created"
+selected_device="pulse:itest_desk_mic"
 cat > "${HOME}/.fleet/config.json" <<JSON
-{ "mic_settings": { "enabled": true } }
+{ "mic_settings": { "enabled": true, "device": "${selected_device}" } }
 JSON
 
 fleet_up alpha
@@ -41,7 +42,7 @@ capture="${workdir}/capture.sh"
 starts="${workdir}/capture-starts.log"
 cat > "${capture}" <<STUB
 #!/bin/sh
-echo started >> "${starts}"
+echo "started device=\${FLEET_MIC_DEVICE}" >> "${starts}"
 while :; do head -c 3200 /dev/urandom; sleep 0.1; done
 STUB
 chmod +x "${capture}"
@@ -103,6 +104,12 @@ until [ "$(tail -n 1 "${attach_log}")" = "idle" ] && grep -q "^live -> ${target}
   sleep 0.5
 done
 assert_equals "1" "$(wc -l < "${starts}" | tr -d '[:space:]')" "the microphone should have been opened exactly once"
+
+# `fleet mic attach` was given no --device: it must record from the device chosen
+# in Settings (as an open TUI would), not silently from the system default. The
+# override recorder cannot be PASSED a device, so fleet tells it the selection
+# through FLEET_MIC_DEVICE — which is what makes the choice observable here.
+assert_equals "started device=${selected_device}" "$(cat "${starts}")" "the provider should record from the device configured in Settings"
 
 # recorders_alive: how many processes are still running the capture stub.
 recorders_alive() { pgrep -f "${capture}" | wc -l | tr -d '[:space:]'; }

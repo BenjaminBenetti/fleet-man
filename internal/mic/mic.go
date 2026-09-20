@@ -37,6 +37,15 @@ const (
 // `fleet open`). When set, device selection is ignored.
 const EnvCapture = "FLEET_MIC_CAPTURE"
 
+// EnvDevice is set in the recorder's environment to the device id the user
+// selected ("" = system default). fleet's own recorders get the device as an
+// argument and ignore it; it exists for an EnvCapture override, which fleet
+// cannot pass a device to — so a custom recorder can still honour the selection
+// (and a test can see which device a provider chose). It is the raw configured
+// id, NOT validated against this machine's devices: an override that uses it
+// must treat it as untrusted input, exactly as fleet does (see knownDevice).
+const EnvDevice = "FLEET_MIC_DEVICE"
+
 // Device is one selectable capture device on this machine.
 type Device struct {
 	// ID is the stable identifier persisted in MicSettings.Device. It is

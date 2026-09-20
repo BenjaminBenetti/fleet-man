@@ -59,15 +59,15 @@ func StartNotify(deviceID string, sink func([]byte), onFallback func()) (*Captur
 		fellBack:   deviceID != "" && used == "" && os.Getenv(EnvCapture) == "",
 		onFallback: onFallback,
 	}
-	return capture.run(ctx, argv, used, sink), nil
+	return capture.run(ctx, argv, deviceID, used, sink), nil
 }
 
-func (c *Capture) run(ctx context.Context, argv []string, used string, sink func([]byte)) *Capture {
+func (c *Capture) run(ctx context.Context, argv []string, deviceID, used string, sink func([]byte)) *Capture {
 	capture, cancel := c, c.cancel
 	go func() {
 		defer close(capture.done)
 		defer cancel()
-		produced, err := record(ctx, argv, sink)
+		produced, err := record(ctx, argv, deviceID, sink)
 		if err != nil && !produced && used != "" && ctx.Err() == nil {
 			// The device was enumerated but cannot be opened (unplugged since):
 			// one try on the system default.
@@ -79,7 +79,7 @@ func (c *Capture) run(ctx context.Context, argv []string, used string, sink func
 				if notify != nil {
 					notify()
 				}
-				_, err = record(ctx, fallback, sink)
+				_, err = record(ctx, fallback, "", sink)
 			}
 		}
 		if ctx.Err() != nil {
@@ -122,7 +122,7 @@ func (c *Capture) Err() error {
 // record runs one recorder process to completion. produced reports whether it
 // ever delivered audio — the signal that separates "this device cannot be
 // opened" (worth retrying on the default) from a recorder that died mid-stream.
-func record(ctx context.Context, argv []string, sink func([]byte)) (produced bool, err error) {
+func record(ctx context.Context, argv []string, deviceID string, sink func([]byte)) (produced bool, err error) {
 	// guardedCommand: own process group, killed as a group on cancel, and tied
 	// to fleet's own lifetime by a lifeline — see there for why all three.
 	cmd, release, err := guardedCommand(ctx, argv...)
@@ -130,6 +130,7 @@ func record(ctx context.Context, argv []string, sink func([]byte)) (produced boo
 		return false, err
 	}
 	defer release()
+	cmd.Env = append(os.Environ(), EnvDevice+"="+deviceID)
 	// A recorder that ignores the kill (or leaves a grandchild holding the pipe)
 	// must not wedge Stop.
 	cmd.WaitDelay = 2 * time.Second

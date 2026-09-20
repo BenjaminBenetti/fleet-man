@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/mic"
 	"github.com/BenjaminBenetti/fleet-man/internal/micsink"
@@ -64,8 +68,9 @@ func newMicAttachCmd() *cobra.Command {
 		Use:   "attach",
 		Short: "Provide this machine's microphone until interrupted",
 		Long: `Provide this machine's microphone to the fleet daemon until interrupted — what
-an open TUI does on its own. The microphone must be enabled in Settings. It is
-only opened while something inside an instance is recording; each transition is
+an open TUI does on its own. The microphone must be enabled in Settings, and the
+device chosen there is the one recorded (--device overrides it). It is only
+opened while something inside an instance is recording; each transition is
 printed.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -81,7 +86,7 @@ printed.`,
 			out := cmd.OutOrStdout()
 			var final mic.Status
 			var lastLine string
-			mic.Run(cmd.Context(), conn.Service(), func() string { return device }, func(status mic.Status) {
+			mic.Run(cmd.Context(), conn.Service(), micDeviceResolver(cmd.Context(), conn.Service(), device), func(status mic.Status) {
 				final = status
 				// One line per CHANGE: the provider re-reports on every retry.
 				line := fmt.Sprintf("%d %v %s %v", status.State, status.Instances, status.Detail, status.FellBack)
@@ -110,8 +115,40 @@ printed.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&device, "device", "", "capture device id from `fleet mic devices` (default: system default)")
+	cmd.Flags().StringVar(&device, "device", "", "capture device id from `fleet mic devices` (default: the device chosen in Settings)")
 	return cmd
+}
+
+// micConfigTimeout bounds the config lookup micDeviceResolver makes at each
+// capture start. It sits on the path where every millisecond is clipped off the
+// start of the user's sentence, so a slow daemon costs at most this much before
+// the last known answer is used instead.
+const micConfigTimeout = 750 * time.Millisecond
+
+// micDeviceResolver returns the "which device?" callback for mic.Run. An
+// explicit --device wins. Otherwise it is the device chosen in Settings ->
+// Microphone — exactly what an open TUI records from, and what this command's
+// own help tells the user to go and set. It is looked up at EVERY capture start
+// (mic.Run's contract: a changed selection applies to the next recording), and
+// if the daemon cannot be asked in time the last known selection is used —
+// never a silent fall to the system default.
+func micDeviceResolver(ctx context.Context, svc fleetgrpc.FleetServiceClient, flag string) func() string {
+	if flag != "" {
+		return func() string { return flag }
+	}
+	var mu sync.Mutex
+	lastKnown := ""
+	return func() string {
+		lookup, cancel := context.WithTimeout(ctx, micConfigTimeout)
+		defer cancel()
+		reply, err := svc.GetConfig(lookup, &fleetgrpc.GetConfigRequest{})
+		mu.Lock()
+		defer mu.Unlock()
+		if err == nil {
+			lastKnown = reply.GetConfig().GetMic().GetDevice()
+		}
+		return lastKnown
+	}
 }
 
 // newMicSinkCmd creates the hidden in-instance `fleet mic sink`: PCM on stdin

@@ -201,3 +201,22 @@ func TestStopKillsARecorderThatIsAGrandchild(t *testing.T) {
 		return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
 	})
 }
+
+// fleet cannot pass a device to an override recorder, so it puts the user's
+// selection in the environment: a custom recorder can honour it, and it is what
+// lets a test see which device a provider actually chose.
+func TestOverrideRecorderIsToldTheSelectedDevice(t *testing.T) {
+	seen := filepath.Join(t.TempDir(), "device")
+	t.Setenv(EnvCapture, `printf '%s' "$`+EnvDevice+`" > `+seen+`; while :; do printf pcm; sleep 0.01; done`)
+	var got pcmCollector
+	capture, err := Start("pulse:desk_mic", got.sink)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer capture.Stop()
+	waitFor(t, "audio", func() bool { return got.len() > 0 })
+	raw, err := os.ReadFile(seen)
+	if err != nil || string(raw) != "pulse:desk_mic" {
+		t.Fatalf("the recorder saw %s=%q (err %v), want the selected device", EnvDevice, raw, err)
+	}
+}
