@@ -104,3 +104,19 @@ func TestAttachDeviceFlagOverridesSettings(t *testing.T) {
 		t.Fatal("an explicit --device needs no config lookup")
 	}
 }
+
+// The FIRST recording has no earlier lookup to fall back on, so the resolver is
+// primed when attach starts: a daemon that is slow exactly when the first
+// capture begins (a cold gateway / SSH connection) must not send that recording
+// to the system default.
+func TestAttachFirstRecordingSurvivesASlowLookup(t *testing.T) {
+	daemon := &configClient{device: "pulse:desk_mic"}
+	device := micDeviceResolver(context.Background(), daemon, "") // primes here
+	if daemon.calls != 1 {
+		t.Fatalf("resolver made %d lookups at start, want 1 (the prime)", daemon.calls)
+	}
+	daemon.err = errors.New("deadline exceeded") // …and the very first capture-time lookup fails
+	if got := device(); got != "pulse:desk_mic" {
+		t.Fatalf("first recording used %q, want the configured device", got)
+	}
+}
