@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -411,5 +412,73 @@ func TestFirstMicDevicesErrorStaysRetryable(t *testing.T) {
 	sp.cursor = settingsPositionOf(sp, &got, settingsItemMicDevice)
 	if cmd := sp.Update(&got, tea.KeyMsg{Type: tea.KeyRight}); cmd == nil || !got.micDevicesLoading {
 		t.Fatal("the next key press should retry the listing")
+	}
+}
+
+// mic.Run's report callback must not block: it is called from the loop that
+// closes the microphone when demand ends, and bubbletea's Send parks until the
+// current Update returns (which can be seconds, mid-reload). The forwarder takes
+// the status and returns at once; only the latest matters; nothing is lost at
+// the end.
+func TestMicStatusForwarderNeverBlocksTheProvider(t *testing.T) {
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var delivered []mic.State
+	report, flush := newMicStatusForwarder(func(status mic.Status) {
+		<-release // a slow Update
+		mu.Lock()
+		delivered = append(delivered, status.State)
+		mu.Unlock()
+	})
+
+	done := make(chan struct{})
+	go func() {
+		for _, state := range []mic.State{mic.StateLive, mic.StateError, mic.StateLive, mic.StateIdle} {
+			report(mic.Status{State: state})
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("report blocked behind a slow Send — the microphone would be held open")
+	}
+
+	close(release)
+	flush()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(delivered) == 0 || delivered[len(delivered)-1] != mic.StateIdle {
+		t.Fatalf("delivered %v: the final status must arrive", delivered)
+	}
+	report(mic.Status{State: mic.StateLive}) // after flush: a no-op, not a panic
+}
+
+// Turning the microphone off must not clear the badge before the recorder is
+// really gone; the stopping provider's parting status does that.
+func TestDisablingDoesNotClearTheLiveBadgeEarly(t *testing.T) {
+	sp, m := newMicTestModel(t)
+	m.config.MicSettings.Enabled = true
+	m.micStatus = mic.Status{State: mic.StateLive, Instances: []string{"alpha/i1"}}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemMicEnabled)
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.config.MicSettings.Enabled {
+		t.Fatal("setup: the toggle should now be off")
+	}
+	if micLiveIndicator(m) == "" {
+		t.Fatal("the badge was cleared synchronously, while the recorder is still being torn down")
+	}
+}
+
+func TestDeviceChangeWhileLiveSaysItAppliesNextTime(t *testing.T) {
+	sp, m := newMicTestModel(t)
+	m.config.MicSettings.Enabled = true
+	m.micDevicesLoaded = true
+	m.micDevices = []mic.Device{{ID: "pulse:yeti", Label: "Yeti Orb"}}
+	m.micStatus = mic.Status{State: mic.StateLive}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemMicDevice)
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
+	if !strings.Contains(m.message, "next recording") {
+		t.Fatalf("message = %q", m.message)
 	}
 }

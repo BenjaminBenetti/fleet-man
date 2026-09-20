@@ -123,7 +123,10 @@ type micStatusMsg struct {
 // until ctx is cancelled. mic.Run reconnects the stream itself; the loop here
 // only covers the dial, which can fail while a daemon is still coming up.
 func runMicProvider(ctx context.Context, program *tea.Program, gen int) {
-	report := func(status mic.Status) { program.Send(micStatusMsg{status: status, gen: gen}) }
+	report, flush := newMicStatusForwarder(func(status mic.Status) {
+		program.Send(micStatusMsg{status: status, gen: gen})
+	})
+	defer flush() // runs LAST: the parting status below must still be delivered
 	defer func() {
 		if ctx.Err() != nil {
 			// Stopped on purpose (disabled, or an armada switch): clear the
@@ -158,6 +161,58 @@ func runMicProvider(ctx context.Context, program *tea.Program, gen int) {
 		conn.Close()
 		return
 	}
+}
+
+// newMicStatusForwarder decouples mic.Run from the bubbletea loop. mic.Run's
+// report callback MUST NOT BLOCK — it is called from the very select loop that
+// closes the microphone when demand ends — but program.Send is a hand-off onto
+// an unbuffered channel whose only reader runs Update inline, and Update does
+// blocking RPCs (a reload can take seconds against a remote daemon). Sent
+// directly, a slow Update would park the provider loop and hold the real
+// microphone open past the end of a recording.
+//
+// report therefore only deposits the status in a one-slot, latest-wins mailbox;
+// a single forwarder goroutine does the (blocking) Send, preserving order. A
+// status overwritten before it was sent is one nobody needed: only the current
+// state matters to the read-out. flush stops the forwarder after it has
+// delivered whatever is pending.
+func newMicStatusForwarder(send func(mic.Status)) (report func(mic.Status), flush func()) {
+	mailbox := make(chan mic.Status, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for status := range mailbox {
+			send(status)
+		}
+	}()
+	var mu sync.Mutex
+	closed := false
+	report = func(status mic.Status) {
+		mu.Lock()
+		defer mu.Unlock()
+		if closed {
+			return
+		}
+		for {
+			select {
+			case mailbox <- status:
+				return
+			default:
+			}
+			select {
+			case <-mailbox: // drop the stale one; latest wins
+			default:
+			}
+		}
+	}
+	flush = func() {
+		mu.Lock()
+		closed = true
+		close(mailbox)
+		mu.Unlock()
+		<-done
+	}
+	return report, flush
 }
 
 // --- device list ----------------------------------------------------------------
@@ -204,7 +259,11 @@ func (settingsPage *settingsPage) toggleMicEnabled(m *model) tea.Cmd {
 	}
 	syncMicProvider(m.config.MicSettings)
 	if current {
-		m.micStatus = mic.Status{}
+		// m.micStatus is deliberately NOT cleared here. Stopping the provider is
+		// asynchronous (the recorder is still being torn down), and a badge that
+		// says "not listening" while the microphone is still open is the wrong
+		// direction to be wrong in. The stopping provider's own parting status
+		// clears the read-out once it really has stopped.
 		m.message = "Microphone off — instances no longer have a virtual microphone"
 		return nil
 	}
@@ -250,9 +309,13 @@ func (settingsPage *settingsPage) cycleMicDevice(m *model, direction int) tea.Cm
 		m.message = fmt.Sprintf("Failed to save settings: %v", err)
 		return nil
 	}
-	// Applies to the next recording; a capture already running keeps its device.
+	// Applies to the next recording; a capture already running keeps its device
+	// — so say so, or the message claims a switch that has not happened yet.
 	syncMicProvider(m.config.MicSettings)
 	m.message = fmt.Sprintf("Microphone set to %s", settingsPage.micDeviceLabel(m))
+	if m.micStatus.State == mic.StateLive {
+		m.message += " (from the next recording — this one keeps its device)"
+	}
 	return nil
 }
 

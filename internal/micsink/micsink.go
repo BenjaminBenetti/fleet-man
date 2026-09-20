@@ -40,6 +40,13 @@ const (
 	// Dir holds everything the virtual microphone needs at runtime. Under /tmp
 	// because it must be creatable by an unprivileged remote user and must
 	// survive nothing: a restarted container simply gets a fresh server.
+	//
+	// It is 0755 and the socket is auth-anonymous ON PURPOSE: fleet supports
+	// instances whose sessions run as more than one user, and root-run tools
+	// are common in devcontainers — with 0700 those recorders would silently
+	// find no microphone. Every user in an instance can already reach the
+	// session user's terminal through the container runtime, so the container
+	// boundary, not this directory, is what protects the microphone.
 	Dir = "/tmp/fleet-mic"
 	// SocketPath is the PulseAudio native-protocol socket. The provisioning
 	// script points /etc/pulse/client.conf.d at it, so every pulse client in the
@@ -155,6 +162,11 @@ func Ensure() error {
 		deadline := time.Now().Add(serverStartTimeout)
 		for serverAnswers() && time.Now().Before(deadline) {
 			time.Sleep(50 * time.Millisecond)
+		}
+		if serverAnswers() {
+			// It would not go away. Carrying on would unlink a LIVE server's
+			// socket and FIFO and start a second server beside it.
+			return fmt.Errorf("the running pulseaudio has no %s source and did not stop within %s (see %s)", SourceName, serverStartTimeout, path("pulse.log"))
 		}
 	}
 

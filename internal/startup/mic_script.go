@@ -157,6 +157,18 @@ default_is_pulse() {
   return 1
 }
 
+# bounded <pulse command>: run it against fleet's private server, for a few
+# seconds at most. A wedged sound server must not hang the script — least of all
+# while the probe recorder below is attached (see there). timeout is coreutils /
+# busybox; without it the command simply runs unbounded.
+bounded() {
+  if command -v timeout >/dev/null 2>&1; then
+    PULSE_SERVER="unix:$socket" timeout 5 "$@"
+  else
+    PULSE_SERVER="unix:$socket" "$@"
+  fi
+}
+
 # alsa_default_reaches_pulse: does a plain ALSA recorder end up on fleet's
 # PulseAudio server? "It keeps recording" is not the question — a default of
 # type null (a common way for an image to silence ALSA) or type hw records
@@ -166,14 +178,22 @@ default_is_pulse() {
 # !default at all; otherwise the drop-ins decide.
 alsa_default_reaches_pulse() {
   if [ -n "$server_up" ]; then
-    arecord -q -f S16_LE -r 16000 -c 1 -t raw /dev/null >/dev/null 2>&1 &
+    # The probe recorder must not be able to outlive this script. A recorder
+    # left attached to the fleet microphone reads as DEMAND: the human's real
+    # microphone would open and stream with nobody recording, and nothing would
+    # ever detach it. So it is bounded three ways: it cannot run past a few
+    # seconds on its own (-d), it is killed on EVERY way out of the script
+    # (trap), and it does not inherit fd 3 — the wrapper's handle on the host's
+    # stderr, which a survivor would hold open and hang the caller on.
+    arecord -q -d 8 -f S16_LE -r 16000 -c 1 -t raw /dev/null >/dev/null 2>&1 3>&- &
     probe=$!
+    trap 'kill "$probe" 2>/dev/null' EXIT INT TERM HUP
     reached=1
     for _ in 1 2 3; do
       # A recorder on the fleet microphone specifically (join on the source
       # index), not on the null sink's monitor.
-      mic_index=$(PULSE_SERVER="unix:$socket" pactl list short sources 2>/dev/null | awk -v name='%[4]s' '$2 == name { print $1 }')
-      if [ -n "$mic_index" ] && PULSE_SERVER="unix:$socket" pactl list short source-outputs 2>/dev/null |
+      mic_index=$(bounded pactl list short sources 2>/dev/null | awk -v name='%[4]s' '$2 == name { print $1 }')
+      if [ -n "$mic_index" ] && bounded pactl list short source-outputs 2>/dev/null |
         awk -v idx="$mic_index" '$2 == idx { found = 1 } END { exit !found }'; then
         reached=0
         break
@@ -183,6 +203,7 @@ alsa_default_reaches_pulse() {
     done
     kill "$probe" 2>/dev/null
     wait "$probe" 2>/dev/null
+    trap - EXIT INT TERM HUP
     return "$reached"
   fi
   if grep -qs 'pcm\.!default' "$asound"; then

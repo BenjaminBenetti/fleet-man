@@ -183,3 +183,37 @@ func TestOpenFIFOMissing(t *testing.T) {
 		t.Fatalf("err = %v, want not-exist", err)
 	}
 }
+
+// A dropped buffer must take its stashed odd byte with it. That byte is the
+// first half of a sample; prefixed to the NEXT buffer after everything before it
+// was dropped, it shifts every later sample by one byte — and the shift never
+// heals, so the rest of the utterance is loud noise rather than a dropout.
+func TestFIFODropDiscardsThePendingCarry(t *testing.T) {
+	pipe, path := newTestFIFO(t)
+	// Odd-length and far bigger than the pipe: the tail is dropped on EAGAIN
+	// with a carry byte already stashed.
+	pipe.write(bytes.Repeat([]byte{0xCC}, 4*1024*1024+1))
+	if got := readAvailable(t, path); len(got)%2 != 0 {
+		t.Fatalf("pipe holds %d bytes: a sample was torn", len(got))
+	}
+	pipe.write([]byte{1, 2, 3, 4, 5, 6})
+	if got := readAvailable(t, path); !bytes.Equal(got, []byte{1, 2, 3, 4, 5, 6}) {
+		t.Fatalf("the next buffer came out as %v: a stale carry byte misaligned it", got)
+	}
+}
+
+// A sink that exits mid-recording must not leave captured speech in the pipe.
+func TestFIFOCloseDrains(t *testing.T) {
+	pipe, path := newTestFIFO(t)
+	pipe.write([]byte("the last words of a recording"))
+	keep, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NONBLOCK, 0) // keeps the pipe's buffer alive across close
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Close(keep)
+	pipe.close()
+	buf := make([]byte, 64)
+	if n, _ := syscall.Read(keep, buf); n > 0 {
+		t.Fatalf("close left %q in the pipe", buf[:n])
+	}
+}

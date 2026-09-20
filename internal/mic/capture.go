@@ -131,6 +131,13 @@ func record(ctx context.Context, argv []string, deviceID string, sink func([]byt
 	}
 	defer release()
 	cmd.Env = append(os.Environ(), EnvDevice+"="+deviceID)
+	// Every recorder runs under the sh wrapper, so cmd.Path is /bin/sh for all
+	// of them; errors are user-visible (the Status row) and must name the
+	// recorder that actually failed.
+	recorder := argv[0]
+	if os.Getenv(EnvCapture) != "" {
+		recorder = EnvCapture + " recorder"
+	}
 	// A recorder that ignores the kill (or leaves a grandchild holding the pipe)
 	// must not wedge Stop.
 	cmd.WaitDelay = 2 * time.Second
@@ -141,7 +148,7 @@ func record(ctx context.Context, argv []string, deviceID string, sink func([]byt
 	var stderr tailBuffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
-		return false, fmt.Errorf("start %s: %w", cmd.Path, err)
+		return false, fmt.Errorf("start %s: %w", recorder, err)
 	}
 
 	buf := make([]byte, ChunkBytes)
@@ -162,9 +169,9 @@ func record(ctx context.Context, argv []string, deviceID string, sink func([]byt
 		return produced, io.EOF
 	}
 	if detail := stderr.String(); detail != "" {
-		return produced, fmt.Errorf("%s: %w: %s", cmd.Path, waitErr, detail)
+		return produced, fmt.Errorf("%s: %w: %s", recorder, waitErr, detail)
 	}
-	return produced, fmt.Errorf("%s: %w", cmd.Path, waitErr)
+	return produced, fmt.Errorf("%s: %w", recorder, waitErr)
 }
 
 // tailBuffer keeps the last stderrTailBytes written to it.

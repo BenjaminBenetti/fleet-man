@@ -136,6 +136,9 @@ func watchDemand(ctx context.Context, set func(bool)) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("pactl subscribe: %w", err)
 	}
+	// Reaped on every way out (CommandContext kills it when ctx ends); without
+	// this each Run would leave a zombie behind.
+	defer func() { _ = cmd.Wait() }()
 
 	events := make(chan struct{}, 1)
 	go func() {
@@ -177,7 +180,6 @@ func watchDemand(ctx context.Context, set func(bool)) error {
 		select {
 		case _, ok := <-events:
 			if !ok {
-				_ = cmd.Wait()
 				return fmt.Errorf("lost the pulseaudio server (see %s)", path("pulse.log"))
 			}
 			recount()

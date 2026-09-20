@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 )
 
@@ -27,8 +28,8 @@ exec "$@"`
 //     under `sh -c`, and as soon as that is a script file or a pipeline the
 //     shell forks: the process holding the microphone is a GRANDCHILD, and
 //     exec.CommandContext's default cancel signals only the direct child. So
-//     the recorder gets its own process group (Setpgid) and cancel kills the
-//     whole group.
+//     the recorder gets its own process group (Setpgid) and the whole group is
+//     killed — by the watchdog below, from the inside.
 //   - But a private group is also cut off from the terminal's: the SIGHUP the
 //     kernel sends when a terminal closes no longer reaches the recorder, and
 //     cancel never runs if fleet dies of a signal it does not handle (SIGHUP,
@@ -50,20 +51,26 @@ func guardedCommand(ctx context.Context, argv ...string) (cmd *exec.Cmd, release
 	cmd = exec.CommandContext(ctx, "sh", args...)
 	cmd.ExtraFiles = []*os.File{lifelineR} // fd 3 in the child
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			_ = lifelineR.Close()
+			_ = lifelineW.Close()
+		})
+	}
 	cmd.Cancel = func() error {
+		// Cancel IS "cut the lifeline": the watchdog — a member of the group —
+		// kills the group. Deliberately not syscall.Kill(-pgid) from here: a
+		// cancel racing the recorder's own exit can run after Wait has reaped
+		// it, when the pgid may already belong to someone else. A signal sent
+		// from inside the group cannot miss. Process.Kill (which the stdlib
+		// guards against exactly that reuse) then covers the direct child in
+		// case the watchdog is somehow gone.
+		release()
 		if cmd.Process == nil {
 			return nil
 		}
-		// Negative pid = the process group (its id is the child's pid, per
-		// Setpgid). Fall back to the single process if the group is gone.
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-			return cmd.Process.Kill()
-		}
-		return nil
-	}
-	release = func() {
-		_ = lifelineR.Close()
-		_ = lifelineW.Close()
+		return cmd.Process.Kill()
 	}
 	return cmd, release, nil
 }

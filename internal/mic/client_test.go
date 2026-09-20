@@ -53,12 +53,14 @@ type stubCapture struct {
 	failWith  error
 	// frame is what the fake recorder emits each tick (default "frame").
 	frame []byte
+	// onStart, if set, is handed each new capture and its fallback callback.
+	onStart func(capture *Capture, onFallback func())
 }
 
 func (s *stubCapture) install(t *testing.T) {
 	t.Helper()
 	orig := startCapture
-	startCapture = func(deviceID string, sink func([]byte), _ func()) (*Capture, error) {
+	startCapture = func(deviceID string, sink func([]byte), onFallback func()) (*Capture, error) {
 		s.mu.Lock()
 		s.starts++
 		s.devices = append(s.devices, deviceID)
@@ -71,6 +73,9 @@ func (s *stubCapture) install(t *testing.T) {
 		s.mu.Unlock()
 		ctx, cancel := context.WithCancel(context.Background())
 		capture := &Capture{cancel: cancel, done: make(chan struct{})}
+		if s.onStart != nil {
+			s.onStart(capture, onFallback)
+		}
 		go func() {
 			defer close(capture.done)
 			ticker := time.NewTicker(2 * time.Millisecond)
@@ -497,4 +502,65 @@ func TestRunSurvivesDemandFlappingAgainstASlowPeer(t *testing.T) {
 		starts, running := recorder.snapshot()
 		return starts > rounds/2 && running == 0
 	})
+}
+
+// A "fell back" notice belongs to the capture that raised it. Left buffered
+// across stop(), it would be replayed against the NEXT capture and the status
+// row would claim the system default is open while the configured device
+// actually is — so stop() discards it, and the live report asks the capture.
+func TestFellBackNoticeDoesNotLeakIntoTheNextRecording(t *testing.T) {
+	recorder := stubCapture{}
+	starts := 0
+	recorder.onStart = func(capture *Capture, onFallback func()) {
+		if starts++; starts == 1 {
+			// First recording: the device will not open; the default takes over —
+			// and the notice lands just as the recording ends.
+			capture.mu.Lock()
+			capture.fellBack = true
+			capture.mu.Unlock()
+			onFallback()
+		}
+		// Second recording: the device opens fine. fellBack stays false.
+	}
+	recorder.install(t)
+
+	step := make(chan struct{})
+	daemon := &fakeDaemon{handler: func(stream fleetgrpc.FleetService_MicServer) error {
+		if _, err := stream.Recv(); err != nil {
+			return err
+		}
+		_ = stream.Send(demandFrame(true, "alpha/i1"))
+		<-step
+		_ = stream.Send(demandFrame(false))
+		<-step
+		_ = stream.Send(demandFrame(true, "alpha/i1"))
+		<-stream.Context().Done()
+		return nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log statusLog
+	go Run(ctx, dialFakeDaemon(t, daemon), func() string { return "pulse:yeti" }, log.report)
+
+	waitFor(t, "the first recording", func() bool { return log.has(StateLive) })
+	step <- struct{}{}
+	waitFor(t, "idle", func() bool { return log.has(StateIdle) })
+	step <- struct{}{}
+	waitFor(t, "the second recording", func() bool {
+		s, _ := recorder.snapshot()
+		return s == 2
+	})
+	time.Sleep(100 * time.Millisecond) // room for a stale notice to be replayed
+
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	sawIdle := false
+	for _, status := range log.seen {
+		if status.State == StateIdle {
+			sawIdle = true
+		}
+		if sawIdle && status.State == StateLive && status.FellBack {
+			t.Fatalf("the second recording was reported as fallen back: %+v", log.seen)
+		}
+	}
 }

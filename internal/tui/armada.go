@@ -13,7 +13,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
-	"github.com/BenjaminBenetti/fleet-man/internal/mic"
 	tea "github.com/charmbracelet/bubbletea"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -769,8 +768,9 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	// The microphone follows the connection: stop providing to the daemon being
 	// left now. The new daemon's config (armadaSwitchedMsg) decides whether to
 	// start again — never assume the feature is on over there.
+	// (m.micStatus is left for the stopping provider's parting status to clear:
+	// until the recorder is really gone the badge must not say otherwise.)
 	syncMicFromConfig(m.config)
-	m.micStatus = mic.Status{}
 	clear(m.runtime)
 	clear(m.creating)
 	m.remoteMcpStatus = nil

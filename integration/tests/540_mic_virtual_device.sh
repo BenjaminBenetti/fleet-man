@@ -163,6 +163,10 @@ provider_dies_midrecording() {
     [ "$(date +%s)" -lt "${deadline}" ] || fail "the provider died of SIG${sig} mid-recording and its recorder lived on — the microphone is still open: $(pgrep -af "${capture}")"
     sleep 0.5
   done
+  # End the in-instance recording for real: killing the local `fleet exec` does
+  # not reach the arecord inside the instance, which would otherwise hold the
+  # virtual microphone's demand on until its own timeout.
+  "${FLEET_BIN}" exec "${target}" -- sh -c 'pkill -x arecord 2>/dev/null; true' || true
   kill "${recording}" 2>/dev/null || true
   wait "${recording}" 2>/dev/null || true
 }

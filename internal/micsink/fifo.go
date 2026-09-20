@@ -79,7 +79,13 @@ func (f *fifo) write(pcm []byte) {
 		}
 		if err != nil {
 			// EAGAIN: the pipe is full because nothing is consuming. Drop the
-			// rest of this buffer rather than spin.
+			// rest of this buffer rather than spin — INCLUDING the odd byte
+			// stashed from its tail. That byte is the first half of a sample
+			// whose second half arrives next; prefixing it to the next buffer
+			// after everything before it was dropped would shift every later
+			// sample by one byte, and the shift never heals: the rest of the
+			// utterance would be loud noise, not a dropout.
+			f.carry = nil
 			return
 		}
 		pcm = pcm[len(piece):]
@@ -103,6 +109,14 @@ func (f *fifo) drainLocked() {
 func (f *fifo) close() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// Drain on the way out too: a sink that exits while a recording is live
+	// (the last provider leaving) would otherwise leave captured speech in the
+	// pipe, and no later sink may come along to clear it before a recorder does.
+	if f.fd < 0 {
+		return
+	}
 	f.open = false
+	f.drainLocked()
 	_ = syscall.Close(f.fd)
+	f.fd = -1
 }

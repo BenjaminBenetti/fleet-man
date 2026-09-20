@@ -3,6 +3,7 @@ package startup
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 )
@@ -32,12 +33,21 @@ const logDir = "~/.fleet/startup"
 // agent install is intentionally avoided so the user still gets a
 // working container.
 func Run(instanceBackend backend.Backend, wsDir string, scripts []Script) []Error {
+	return RunWithTimeout(instanceBackend, wsDir, scripts, 0)
+}
+
+// RunWithTimeout is Run with a deadline PER SCRIPT (0 = none). Provisioning runs
+// its scripts once, in line, with a human watching; a background caller — the
+// daemon installing the microphone's packages into an instance that predates
+// the feature — must not be held forever by an apt that hangs on an unreachable
+// mirror.
+func RunWithTimeout(instanceBackend backend.Backend, wsDir string, scripts []Script, timeout time.Duration) []Error {
 	if len(scripts) == 0 {
 		return nil
 	}
 	var errs []Error
 	for _, script := range scripts {
-		if err := runOne(instanceBackend, wsDir, script); err != nil {
+		if err := runOne(instanceBackend, wsDir, script, timeout); err != nil {
 			errs = append(errs, Error{
 				ScriptName: script.Name,
 				LogPath:    fmt.Sprintf("%s/%s.log", logDir, script.Name),
@@ -56,9 +66,9 @@ func Run(instanceBackend backend.Backend, wsDir string, scripts []Script) []Erro
 // backend's ExecCommand. The script body is wrapped with output
 // redirection so the host-side combined output is essentially empty;
 // the meaningful logs live inside the container at logDir/<name>.log.
-func runOne(instanceBackend backend.Backend, wsDir string, script Script) error {
+func runOne(instanceBackend backend.Backend, wsDir string, script Script, timeout time.Duration) error {
 	cmd := instanceBackend.ExecCommand(wsDir, []string{"sh", "-c", wrap(script)})
-	out, err := cmd.CombinedOutput()
+	out, err := cmd.CombinedOutputWithTimeout(timeout) // 0 = no deadline
 	if err != nil {
 		detail := strings.TrimSpace(string(out))
 		if detail != "" {

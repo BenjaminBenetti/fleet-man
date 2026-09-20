@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -126,8 +127,11 @@ func newMicHarness(t *testing.T, enabled bool) *micHarness {
 
 	svc, client, cleanup := newTestServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	go svc.mic.run(ctx)
-	t.Cleanup(func() { cancel(); cleanup() })
+	stopped := make(chan struct{})
+	go func() { defer close(stopped); svc.mic.run(ctx) }()
+	// Wait for the sync loop to be gone before earlier-registered cleanups
+	// restore the package seams it reads.
+	t.Cleanup(func() { cancel(); <-stopped; cleanup() })
 	h.svc, h.client = svc, client
 	return h
 }
@@ -749,5 +753,121 @@ func TestMicRejectsOversizedFrames(t *testing.T) {
 	}
 	if got := len(sink.received()); got != maxMicFrameBytes {
 		t.Fatalf("the oversized frame reached the sink (%d bytes)", got)
+	}
+}
+
+// stubMicSetting replaces the config read for the rest of the test. Call it
+// BEFORE newMicHarness: the hub's sync loop reads the seam from its own
+// goroutine, so it must be in place before that loop starts (and, cleanups
+// being LIFO, it is then restored only after the loop has stopped).
+func stubMicSetting(t *testing.T, read func() (bool, error)) {
+	t.Helper()
+	orig := micSetting
+	micSetting = read
+	t.Cleanup(func() { micSetting = orig })
+}
+
+// EVERY exit from attach must hand the registration back. The one that did not
+// — the setting reading as off (or unreadable: a config.json caught mid-write)
+// between the sink failing and the install decision — left the key occupied, so
+// sync skipped that instance forever: no microphone until the TUI was reopened.
+func TestMicAttachReleasesItsSlotWhenTheSettingFlickers(t *testing.T) {
+	var mu sync.Mutex
+	flicker := false
+	stubMicSetting(t, func() (bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if flicker {
+			flicker = false // one bad read, exactly where attach re-checks
+			return false, fmt.Errorf("unexpected end of JSON input")
+		}
+		return true, nil
+	})
+	h := newMicHarness(t, true)
+	h.script = func(open int) (*fakeMicSink, bool, error) {
+		if open == 0 {
+			mu.Lock()
+			flicker = true
+			mu.Unlock()
+			return brokenSink(), true, nil
+		}
+		return newFakeMicSink(), true, nil
+	}
+	provider := openMicStream(t, h.client)
+	provider.expectDemand(t, false)
+
+	h.nextSink(t)            // fails; the re-check then reads garbage
+	healthy := h.nextSink(t) // …and the instance must still get another go
+	healthy.emit("ready")
+	healthy.emit("demand 1")
+	provider.expectDemand(t, true, "alpha/i1")
+}
+
+// "The config could not be read" is not "the microphone is off": it must not
+// tear the feature down, and must not tell the user to flip a toggle that is on.
+func TestMicUnreadableConfigIsNotDisabled(t *testing.T) {
+	var unreadable atomic.Bool
+	stubMicSetting(t, func() (bool, error) {
+		if unreadable.Load() {
+			return false, fmt.Errorf("unexpected end of JSON input")
+		}
+		return true, nil
+	})
+	h := newMicHarness(t, true)
+	provider := openMicStream(t, h.client)
+	provider.expectDemand(t, false)
+	sink := h.nextSink(t)
+	sink.emit("ready")
+
+	unreadable.Store(true)
+	h.svc.mic.poke()
+	time.Sleep(150 * time.Millisecond)
+	if sink.isClosed() {
+		t.Fatal("an unreadable config tore the sinks down")
+	}
+	select {
+	case err := <-provider.done:
+		t.Fatalf("an unreadable config kicked the provider: %v", err)
+	default:
+	}
+
+	late := openMicStream(t, h.client)
+	select {
+	case err := <-late.done:
+		if status.Code(err) != codes.Unavailable {
+			t.Fatalf("err = %v, want Unavailable (FailedPrecondition renders as \"enable it in Settings\")", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stream opened while the config is unreadable should be refused")
+	}
+}
+
+// A config.json switched off BY HAND never goes through SetConfig, so sync is
+// what notices — and it must keep the same promise: "off" means no microphone
+// in the instances, not a silent one recorders still happily open.
+func TestMicHandEditedDisableStopsTheSoundServers(t *testing.T) {
+	h := newMicHarness(t, true)
+	provider := openMicStream(t, h.client)
+	provider.expectDemand(t, false)
+	sink := h.nextSink(t)
+	sink.emit("ready")
+
+	if err := state.SaveConfig(&state.Config{MicSettings: state.MicSettings{Enabled: false}}); err != nil {
+		t.Fatal(err)
+	}
+	h.svc.mic.poke()
+
+	eventually(t, "the sink to be closed", sink.isClosed)
+	eventually(t, "the instance's sound server to be stopped", func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.stops) >= 1
+	})
+	// Once per edge, not once per tick.
+	time.Sleep(2*micSyncInterval + 200*time.Millisecond)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.stops) != 1 {
+		t.Fatalf("sound servers were stopped %d times; want once for the enabled->disabled edge", len(h.stops))
 	}
 }

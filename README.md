@@ -568,9 +568,10 @@ Turn it on under **Settings → Microphone**:
 **Your microphone is only open while something is recording.** The instance
 reports when a recorder attaches to its virtual microphone, and only then does
 fleet start capturing; it stops the moment the recorder detaches. While it is
-open the TUI header shows `● MIC`, the Settings status row names the instances
-listening, and every open/close is logged to `~/.fleet/fleet.log`
-(`mic live` / `mic idle`).
+open the TUI header shows `● MIC` and the Settings status row names the
+instances listening. The daemon also logs every change in who is recording to
+its `~/.fleet/fleet.log` (`mic live` / `mic idle`) — on the daemon's machine,
+which with a remote fleet is not the machine whose microphone opens.
 
 How it fits together:
 

@@ -4,8 +4,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/micsink"
@@ -295,7 +298,9 @@ func (env *micScriptEnv) serverUp(t *testing.T, sourceOutputs string) {
 	if err := os.Chmod(filepath.Join(env.root, "usr/bin/fleet"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeStub(t, env.stubBin, "arecord", "#!/bin/sh\nexec realsleep 30\n")
+	// Records its pid: a probe recorder that OUTLIVES the script reads as demand
+	// and would hold the human's microphone open, so the tests check it is gone.
+	writeStub(t, env.stubBin, "arecord", "#!/bin/sh\necho $$ > \""+filepath.Join(env.stubBin, "probe.pid")+"\"\nexec realsleep 30\n")
 	writeStub(t, env.stubBin, "pactl", `#!/bin/sh
 case "$*" in
   *source-outputs*) printf '%s' "`+sourceOutputs+`" ;;
@@ -303,6 +308,27 @@ case "$*" in
 esac
 exit 0
 `)
+}
+
+// requireProbeRecorderGone asserts the script's probe recorder did not survive it.
+func (env *micScriptEnv) requireProbeRecorderGone(t *testing.T) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(env.stubBin, "probe.pid"))
+	if err != nil {
+		t.Fatalf("the probe recorder never ran: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("probe pid %q: %v", raw, err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("the probe recorder (pid %d) outlived the script", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // "The default keeps recording" is not "the default reaches PulseAudio": a
@@ -318,6 +344,7 @@ func TestMicScriptProbeRequiresPulseToSeeTheStream(t *testing.T) {
 	if err == nil || !strings.Contains(out, "WARNING") || strings.Contains(out, "virtual microphone ready") {
 		t.Fatalf("a live-but-bypassing ALSA default must fail: err=%v\n%s", err, out)
 	}
+	env.requireProbeRecorderGone(t)
 
 	// A recorder on the null sink's MONITOR (source 0) is not a recorder on the
 	// fleet microphone (source 1).

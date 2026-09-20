@@ -204,8 +204,13 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 		}
 		retry = nil
 		// Audio captured for a recording that has ended must not trail into
-		// the next one.
+		// the next one — and neither must its "fell back" notice, which can be
+		// pushed while Stop above is still being awaited.
 		frames.drain()
+		select {
+		case <-fellBack:
+		default:
+		}
 	}
 	defer stop()
 	scheduleRetry := func() {
@@ -229,6 +234,7 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 			return
 		}
 		capture, captureCh = started, started.Done()
+		retryDelay = captureRetry // it works: the next failure starts over
 		report(Status{State: StateLive, Instances: wanted, FellBack: started.FellBack()})
 	}
 
@@ -249,8 +255,13 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 				continue
 			}
 			wanted = demand.GetInstances()
-			if capture == nil {
+			// retry == nil: a recorder that is failing is already on a back-off
+			// timer; a demand change (another instance joining) must not
+			// respawn it past that.
+			if capture == nil && retry == nil {
 				start()
+			} else if capture == nil {
+				// waiting out the back-off; the retry will pick `wanted` up
 			} else {
 				report(Status{State: StateLive, Instances: wanted, FellBack: capture.FellBack()})
 			}
@@ -265,8 +276,9 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, device fun
 			scheduleRetry()
 		case <-fellBack:
 			// The configured device would not open; the default is live instead.
+			// Ask the capture rather than assume: it is the one that knows.
 			if capture != nil {
-				report(Status{State: StateLive, Instances: wanted, FellBack: true})
+				report(Status{State: StateLive, Instances: wanted, FellBack: capture.FellBack()})
 			}
 		case <-retry:
 			retry = nil

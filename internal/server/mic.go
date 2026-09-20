@@ -65,7 +65,18 @@ const (
 	// (which may be remote) sending frames at gRPC's 4 MiB message ceiling parks
 	// a quarter of a gigabyte in the sink queues before the drop policy engages.
 	maxMicFrameBytes = 16 * mic.ChunkBytes
+	// micPrepareTimeout bounds one lazy install, and micPrepareParallel how many
+	// run at once. Until the hub, startup scripts only ran from provisioning —
+	// one instance at a time, with a human watching. Here they run from a
+	// background loop: unbounded, turning the feature on across thirty instances
+	// would start thirty concurrent apt-gets, and one apt hung on an unreachable
+	// mirror would hold its instance's sink slot for the daemon's lifetime.
+	micPrepareTimeout  = 10 * time.Minute
+	micPrepareParallel = 2
 )
+
+// micPrepareSlots is the semaphore behind micPrepareParallel.
+var micPrepareSlots = make(chan struct{}, micPrepareParallel)
 
 // micSinkConn is a running sink: Write feeds PCM to its stdin, Read yields its
 // stdout event lines, Close kills it.
@@ -93,7 +104,7 @@ var (
 		if _, err := fleetlaunch.EnsureFresh(b, inst.WorkspaceDir, nil); err != nil {
 			return fmt.Errorf("stage fleet binary: %w", err)
 		}
-		if failures := startup.Run(b, inst.WorkspaceDir, []startup.Script{startup.MicScript()}); len(failures) > 0 {
+		if failures := startup.RunWithTimeout(b, inst.WorkspaceDir, []startup.Script{startup.MicScript()}, micPrepareTimeout); len(failures) > 0 {
 			return failures[0]
 		}
 		return nil
@@ -109,10 +120,16 @@ var (
 		_, _ = b.RunScript(inst.ContainerID, fleetlaunch.RemotePath+" mic stop >/dev/null 2>&1")
 	}
 
-	// micEnabled reads the global toggle.
-	micEnabled = func() bool {
+	// micSetting reads the global toggle. The error matters: "the config could
+	// not be read" (a config.json caught mid-write) is NOT "the microphone is
+	// off", and must neither tear the feature down nor tell the user to go and
+	// flip a toggle that is already on.
+	micSetting = func() (enabled bool, err error) {
 		config, err := state.LoadConfig()
-		return err == nil && config.MicSettings.Enabled
+		if err != nil {
+			return false, err
+		}
+		return config.MicSettings.Enabled, nil
 	}
 )
 
@@ -216,11 +233,17 @@ func (h *micHub) sync() {
 		h.closeAllSinks()
 		return
 	}
-	if !micEnabled() {
+	enabled, err := micSetting()
+	if err != nil {
+		return // unreadable right now: change nothing, look again next tick
+	}
+	if !enabled {
 		// Normally disable() got here first (SetConfig calls it); this covers a
-		// config.json edited by hand.
-		h.kickProviders()
-		h.closeAllSinks()
+		// config.json edited by hand. It must keep the SAME promise — "off"
+		// means no microphone in the instances, not a silent one — so it is the
+		// same teardown. Not per tick: kickProviders empties the provider set,
+		// and sync returns before this point while it is empty.
+		h.disable()
 		return
 	}
 
@@ -356,9 +379,19 @@ func (h *micHub) attach(key string, sink *micSink) {
 	h.mu.Lock()
 	dropped = sink.closed
 	h.mu.Unlock()
-	if dropped || !micEnabled() {
+	if dropped {
 		return
 	}
+	if enabled, err := micSetting(); err != nil || !enabled {
+		// Off — or unreadable just now, which must not cost this instance its
+		// microphone: EVERY exit from attach has to hand the registration back,
+		// or sync finds the key occupied and skips this instance forever.
+		h.retire(key, sink, micRetryQuick)
+		return
+	}
+	// Bounded fan-out (see micPrepareParallel).
+	micPrepareSlots <- struct{}{}
+	defer func() { <-micPrepareSlots }()
 	flog.Info("mic: preparing instance", "instance", key, "reason", err)
 	if prepErr := prepareMicInstance(sink.inst); prepErr != nil {
 		// Surfaced, but NOT the end of the road: the script can fail on its last
@@ -366,7 +399,7 @@ func (h *micHub) attach(key string, sink *micSink) {
 		// perfectly good sound server installed, so the sink still gets its
 		// retry below. If that fails too, the back-off above takes over.
 		flog.Warn("mic: prepare instance failed", "instance", key, "err", prepErr)
-		if micEnabled() {
+		if enabled, _ := micSetting(); enabled {
 			warnMic(fleetOf(key), sink.inst.Name, fmt.Sprintf("virtual microphone: %v", prepErr))
 		}
 	}
@@ -641,7 +674,12 @@ func (s *service) Mic(stream fleetgrpc.FleetService_MicServer) error {
 		return status.Errorf(codes.InvalidArgument, "unsupported format %d Hz x%d (want %d Hz x%d s16le)",
 			open.GetSampleRate(), open.GetChannels(), mic.SampleRate, mic.Channels)
 	}
-	if !micEnabled() {
+	switch enabled, err := micSetting(); {
+	case err != nil:
+		// Not FailedPrecondition: the client renders that as "disabled — enable
+		// it in Settings", pointing the user at a toggle that may well be on.
+		return status.Errorf(codes.Unavailable, "cannot read the microphone setting: %v", err)
+	case !enabled:
 		return status.Error(codes.FailedPrecondition, "the microphone is disabled in settings")
 	}
 

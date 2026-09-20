@@ -88,6 +88,11 @@ func TestCaptureReportsARecorderFailure(t *testing.T) {
 	if err := capture.Err(); err == nil || !strings.Contains(err.Error(), "device busy") {
 		t.Fatalf("Err = %v, want the recorder's stderr", err)
 	}
+	// Every recorder runs under an sh wrapper; the error is user-visible and
+	// must point at the recorder, not at /bin/sh.
+	if err := capture.Err(); strings.Contains(err.Error(), "/sh:") || !strings.Contains(err.Error(), EnvCapture) {
+		t.Fatalf("Err = %v, want it to name the recorder", err)
+	}
 }
 
 // A configured device that cannot be opened (unplugged) must not leave the user
@@ -218,5 +223,39 @@ func TestOverrideRecorderIsToldTheSelectedDevice(t *testing.T) {
 	raw, err := os.ReadFile(seen)
 	if err != nil || string(raw) != "pulse:desk_mic" {
 		t.Fatalf("the recorder saw %s=%q (err %v), want the selected device", EnvDevice, raw, err)
+	}
+}
+
+// …and for a detected recorder that means its own name, even when it dies with
+// nothing on stderr — "/bin/sh: signal: killed" names nothing at all.
+func TestCaptureErrorNamesTheDetectedRecorder(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "arecord"), []byte("#!/bin/sh\nexit 7\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvCapture, "")
+	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	origOS, origLook := goos, lookPath
+	goos = "linux"
+	lookPath = func(name string) (string, error) {
+		if name == "arecord" {
+			return filepath.Join(bin, "arecord"), nil
+		}
+		return "", os.ErrNotExist
+	}
+	resetDetectCache()
+	t.Cleanup(func() { goos, lookPath = origOS, origLook; resetDetectCache() })
+
+	capture, err := Start("", func([]byte) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-capture.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("capture did not end")
+	}
+	if err := capture.Err(); err == nil || !strings.HasPrefix(err.Error(), "arecord:") {
+		t.Fatalf("Err = %v, want it to start with the recorder's name", err)
 	}
 }
