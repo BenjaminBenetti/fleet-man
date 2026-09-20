@@ -2,10 +2,13 @@ package mic
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -158,4 +161,43 @@ func TestStartWithoutAToolFailsUpFront(t *testing.T) {
 	if _, err := Start("", func([]byte) {}); !IsNoTool(err) {
 		t.Fatalf("Start err = %v, want ErrNoCaptureTool", err)
 	}
+}
+
+// The promise is that the microphone closes the moment the recorder detaches.
+// An override that is a script FILE makes `sh -c` fork, so the process holding
+// the microphone is fleet's grandchild — and killing only the direct child
+// leaves it running, reparented to init, with the microphone open. (A loop like
+// this one also shrugs off the EPIPE that would stop a simpler recorder.)
+func TestStopKillsARecorderThatIsAGrandchild(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "recorder.pid")
+	script := filepath.Join(dir, "capture.sh")
+	body := "#!/bin/sh\necho $$ > " + pidFile + "\nwhile :; do head -c 320 /dev/zero; sleep 0.02; done\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvCapture, script+" # a script file: sh forks, the recorder is a grandchild")
+
+	var got pcmCollector
+	capture, err := Start("", got.sink)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitFor(t, "audio", func() bool { return got.len() > 0 })
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("recorder pid: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("recorder pid %q: %v", raw, err)
+	}
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("setup: the recorder (pid %d) should be running: %v", pid, err)
+	}
+
+	capture.Stop()
+	waitFor(t, "the recorder itself — not just its shell — to be gone", func() bool {
+		return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+	})
 }

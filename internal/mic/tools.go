@@ -386,7 +386,9 @@ func Devices() ([]Device, error) {
 // used, so callers can tell the user when that differs from what they chose.
 func Command(ctx context.Context, deviceID string) (*exec.Cmd, string, error) {
 	if override := os.Getenv(EnvCapture); override != "" {
-		return exec.CommandContext(ctx, "sh", "-c", override), "", nil
+		cmd := exec.CommandContext(ctx, "sh", "-c", override)
+		killWholeGroup(cmd) // the real recorder is usually sh's CHILD
+		return cmd, "", nil
 	}
 	detected, err := detect()
 	if err != nil {
@@ -400,7 +402,9 @@ func Command(ctx context.Context, deviceID string) (*exec.Cmd, string, error) {
 	if native != "" {
 		used = deviceID
 	}
-	return exec.CommandContext(ctx, detected.bin, detected.args(native)...), used, nil
+	cmd := exec.CommandContext(ctx, detected.bin, detected.args(native)...)
+	killWholeGroup(cmd) // recorders may have helpers of their own (ffmpeg, sox)
+	return cmd, used, nil
 }
 
 // --- enumeration parsers ------------------------------------------------------

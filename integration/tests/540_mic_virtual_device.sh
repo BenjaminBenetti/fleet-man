@@ -31,6 +31,12 @@ assert_contains "${asound}" "managed by fleet" "/etc/asound.conf should carry fl
 # A stand-in for the real microphone: a loud, paced, never-ending signal. It
 # logs each start so the test can prove capture is ON DEMAND — the real
 # microphone must stay closed until something in an instance records.
+#
+# Its SHAPE matters as much: it is a script file (so `sh -c` forks and the
+# recorder is fleet's GRANDCHILD) and a loop that shrugs off EPIPE (head dies of
+# SIGPIPE, the loop carries on). That is the recorder that is hardest to close —
+# killing fleet's direct child leaves this one running with the "microphone"
+# open — which is what makes the no-survivors assertion below mean something.
 capture="${workdir}/capture.sh"
 starts="${workdir}/capture-starts.log"
 cat > "${capture}" <<STUB
@@ -98,6 +104,18 @@ until [ "$(tail -n 1 "${attach_log}")" = "idle" ] && grep -q "^live -> ${target}
 done
 assert_equals "1" "$(wc -l < "${starts}" | tr -d '[:space:]')" "the microphone should have been opened exactly once"
 
+# recorders_alive: how many processes are still running the capture stub.
+recorders_alive() { pgrep -f "${capture}" | wc -l | tr -d '[:space:]'; }
+
+# "idle" has to MEAN the microphone is closed: opened once is half the promise,
+# CLOSED when the recorder detaches is the other half.
+info "no recorder process survives the provider going idle"
+deadline=$(( $(date +%s) + $(_scale_timeout 15) ))
+until [ "$(recorders_alive)" = "0" ]; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "the provider is idle but $(recorders_alive) recorder process(es) are still running — the microphone was never closed: $(pgrep -af "${capture}")"
+  sleep 0.5
+done
+
 # A stopped container SIGKILLs the instance's sound server, leaving its FIFO and
 # socket behind; the restarted instance must still come back with a WORKING
 # microphone (a server that starts without its source records pure silence).
@@ -108,5 +126,20 @@ wait_for_sink 2
 read -r bytes loud <<< "$(record /tmp/mic-test2.raw)"
 info "after restart: ${bytes} bytes, ${loud} non-zero"
 [ "${loud}" -ge 64000 ] || fail "recording after a restart is (nearly) silent (${loud} non-zero bytes)"
+
+info "and stopping the provider leaves no recorder behind either"
+deadline=$(( $(date +%s) + $(_scale_timeout 15) ))
+until [ "$(tail -n 1 "${attach_log}")" = "idle" ]; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "provider never returned to idle: $(cat "${attach_log}")"
+  sleep 0.5
+done
+kill "${attach_pid}" 2>/dev/null || true
+wait "${attach_pid}" 2>/dev/null || true
+attach_pid=""
+deadline=$(( $(date +%s) + $(_scale_timeout 15) ))
+until [ "$(recorders_alive)" = "0" ]; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "recorder process(es) outlived the provider: $(pgrep -af "${capture}")"
+  sleep 0.5
+done
 
 pass "virtual microphone end to end"
