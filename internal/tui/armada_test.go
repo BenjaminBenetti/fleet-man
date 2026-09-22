@@ -746,9 +746,11 @@ func stubTmuxEnv(t *testing.T) map[string]string {
 }
 
 // TestSyncTmuxArmadaEnvMirrorsTheConnection: a switch mirrors the connection
-// into the tmux server's environment; back to local, every variable is unset.
+// and the TUI's agent hint into the tmux server's environment, so the
+// `fleet shell` panes tmux spawns start at once; back to local, every
+// variable is unset.
 func TestSyncTmuxArmadaEnvMirrorsTheConnection(t *testing.T) {
-	for _, key := range []string{fleetclient.EnvGateway, fleetclient.EnvSSH, fleetclient.EnvServer, fleetclient.EnvToken} {
+	for _, key := range []string{fleetclient.EnvGateway, fleetclient.EnvSSH, fleetclient.EnvServer, fleetclient.EnvToken, fleetclient.EnvTUIProvidesAgent} {
 		t.Setenv(key, "")
 	}
 	tmuxEnv := stubTmuxEnv(t)
@@ -765,9 +767,12 @@ func TestSyncTmuxArmadaEnvMirrorsTheConnection(t *testing.T) {
 	if tmuxEnv[fleetclient.EnvSSH] != "ssh://ben@desktop" {
 		t.Fatalf("tmux env after the ssh switch = %v, want FLEET_SSH", tmuxEnv)
 	}
+	if tmuxEnv[fleetclient.EnvTUIProvidesAgent] != "1" {
+		t.Fatalf("tmux env after the ssh switch = %v, want the agent hint", tmuxEnv)
+	}
 
 	m.switchArmada(m.armadaEntries()[0]) // local
-	for _, name := range []string{fleetclient.EnvGateway, fleetclient.EnvSSH, fleetclient.EnvServer, fleetclient.EnvToken} {
+	for _, name := range []string{fleetclient.EnvGateway, fleetclient.EnvSSH, fleetclient.EnvServer, fleetclient.EnvToken, fleetclient.EnvTUIProvidesAgent} {
 		if value, ok := tmuxEnv[name]; !ok || value != "" {
 			t.Errorf("tmux %s = %q (set=%v) after switching to local, want it unset explicitly", name, value, ok)
 		}

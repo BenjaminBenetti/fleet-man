@@ -194,6 +194,10 @@ func relayUsable() bool {
 	return relayServing.Load() && (LiveSocket(OriginSock()) || (remoteClients.Load() && providerSeen.Load()))
 }
 
+// RefreshUsable re-publishes the verdict (the daemon's own agent may have
+// come or gone since).
+func RefreshUsable() { publishUsable() }
+
 // publishUsable mirrors the daemon's verdict to usablePath (best-effort).
 func publishUsable() {
 	if !relayServing.Load() {

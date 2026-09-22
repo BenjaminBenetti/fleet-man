@@ -1,12 +1,15 @@
 package agentproto
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -123,7 +126,9 @@ func TestForwardingBindAppliesTheAgentsDestinationConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	BindAsForwarded(bound, key)
+	if err := BindAsForwarded(bound, key); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
 	keys := listKeys(t, bound)
 	if hasKey(keys, constrained) {
 		t.Fatal("a destination-constrained key must not be offered through the relay")
@@ -167,5 +172,78 @@ func TestForwardingBindIsAWellFormedExtension(t *testing.T) {
 	}
 	if reply[4] != 6 { // SSH_AGENT_SUCCESS
 		t.Fatalf("OpenSSH's agent rejected the forwarding bind: reply type %d", reply[4])
+	}
+}
+
+// authBind builds the session-bind@openssh.com an ssh client inside an
+// instance sends for its own hop: a fresh session id signed by hostKey, with
+// is_forwarding=0 (the connection authenticates to that host). Built here,
+// not from ForwardingBind, so the test cannot inherit a bug in it.
+func authBind(t *testing.T, hostKey ssh.Signer) []byte {
+	t.Helper()
+	sessionID := make([]byte, 32)
+	if _, err := rand.Read(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	sig, err := hostKey.Sign(rand.Reader, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte{27} // SSH_AGENTC_EXTENSION
+	body = appendString(body, []byte("session-bind@openssh.com"))
+	body = appendString(body, hostKey.PublicKey().Marshal())
+	body = appendString(body, sessionID)
+	body = appendString(body, ssh.Marshal(sig))
+	body = append(body, 0) // is_forwarding
+	return append(binary.BigEndian.AppendUint32(nil, uint32(len(body))), body...)
+}
+
+// TestForwardingBindLeavesTheHopToTheInstance: the relay's bind must say
+// is_forwarding=1. OpenSSH's agent refuses any further bind on a connection
+// already bound for authentication (is_forwarding=0), so with the flag wrong
+// the bind an ssh client inside an instance sends for its own hop would fail.
+// Bound as forwarded, that hop binds and the unconstrained key still signs.
+func TestForwardingBindLeavesTheHopToTheInstance(t *testing.T) {
+	sock, free, _ := realAgent(t)
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	relayKey, err := NewBindKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := BindAsForwarded(conn, relayKey); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+
+	hopKey, err := NewBindKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write(authBind(t, hopKey)); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := ReadMessage(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply[4] != 6 { // SSH_AGENT_SUCCESS
+		t.Fatalf("the agent refused the instance's own hop bind after the relay's (reply type %d): the relay's bind must set is_forwarding", reply[4])
+	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+
+	sig, err := agent.NewClient(conn).Sign(free, []byte("data"))
+	if err != nil {
+		t.Fatalf("sign with the unconstrained key after the hop bind: %v", err)
+	}
+	if err := free.Verify([]byte("data"), sig); err != nil {
+		t.Fatal(err)
 	}
 }

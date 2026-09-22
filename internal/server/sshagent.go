@@ -73,6 +73,13 @@ const (
 // skipped until it talks again. A var so tests can shorten it.
 var agentPingInterval = 15 * time.Second
 
+// monoBase anchors monotonic timestamps: liveness compares durations, so a
+// wall-clock step (NTP, a VM resuming) can neither make every provider look
+// dead nor a dead one look alive.
+var monoBase = time.Now()
+
+func monoNow() int64 { return int64(time.Since(monoBase)) }
+
 // agentHub owns providers, the relay sockets, and the routing between them.
 type agentHub struct {
 	mu        sync.Mutex
@@ -83,12 +90,11 @@ type agentHub struct {
 	// bindKey signs the forwarding bind on fallback connections from
 	// instances (agentproto.BindAsForwarded).
 	bindKey ssh.Signer
-	// logged remembers which provider/origin pairs were logged, so the log
-	// keeps an audit line per instance per provider without one per use.
-	logged map[string]bool
 	// onFirstProvider runs once, when the first provider ever attaches (the
 	// daemon persists that and starts relaying its own children).
 	onFirstProvider func()
+	// redirect points the daemon's own SSH_AUTH_SOCK at the relay (once).
+	redirect func()
 
 	// Listeners and live connections (sshagent_listen.go).
 	host      *agentListener
@@ -104,7 +110,6 @@ func newAgentHub() *agentHub {
 	key, _ := agentproto.NewBindKey()
 	return &agentHub{
 		bindKey:   key,
-		logged:    make(map[string]bool),
 		instances: make(map[string]*instanceListener),
 		opening:   make(map[string]bool),
 		retryAt:   make(map[string]time.Time),
@@ -154,8 +159,11 @@ func (h *agentHub) addProvider(client string, yield bool) *agentProvider {
 		status: make(chan bool, 1),
 		done:   make(chan struct{}),
 		conns:  make(map[uint64]*agentRelayConn),
+
+		loggedOrigins: make(map[string]bool),
+		closeNotify:   make(chan struct{}, 1),
 	}
-	p.lastRecv.Store(time.Now().UnixNano())
+	p.lastRecv.Store(monoNow())
 	h.mu.Lock()
 	var before *agentProvider
 	if n := len(h.providers); n > 0 {
@@ -230,11 +238,10 @@ func (h *agentHub) serveConn(conn net.Conn, origin string) {
 // logUse writes one audit line per provider per origin: which instance (or
 // the host) used whose agent, without a line for every git fetch.
 func (h *agentHub) logUse(p *agentProvider, origin string) {
-	key := p.client + "|" + origin
-	h.mu.Lock()
-	seen := h.logged[key]
-	h.logged[key] = true
-	h.mu.Unlock()
+	p.mu.Lock()
+	seen := p.loggedOrigins[origin]
+	p.loggedOrigins[origin] = true
+	p.mu.Unlock()
 	if !seen {
 		flog.Info("ssh agent used", "origin", agentOriginLabel(origin), "client", p.client)
 	}
@@ -255,7 +262,9 @@ func (h *agentHub) serveFromAgent(conn net.Conn, sock, origin string) {
 	defer agent.Close()
 	fromInstance := origin != ""
 	if fromInstance {
-		agentproto.BindAsForwarded(agent, h.bindKey)
+		if err := agentproto.BindAsForwarded(agent, h.bindKey); err != nil {
+			return // a late answer would pose as the next reply
+		}
 	}
 	requests := &agentproto.MessageReader{Next: agentproto.ChunkReader(conn)}
 	_ = agentproto.Serve(requests, agent, fromInstance, func(reply []byte) bool {
@@ -280,12 +289,20 @@ type agentProvider struct {
 
 	mu    sync.Mutex
 	conns map[uint64]*agentRelayConn
+	// loggedOrigins: origins this provider served that have been logged.
+	loggedOrigins map[string]bool
+	// pendingClose holds closes for the provider that must not be lost to a
+	// full queue (a lost close leaves the provider holding an agent
+	// connection for the stream's life); the send loop drains it when
+	// closeNotify fires.
+	pendingClose []uint64
+	closeNotify  chan struct{}
 
 	// suspect is set when a ready never came, and cleared by any frame.
 	suspect atomic.Bool
-	// lastRecv is when the provider last sent anything (unix nanos). Pongs
-	// keep an idle one fresh; one that has gone quiet for two ping intervals
-	// is suspect even while the send loop is stuck and no ping goes out.
+	// lastRecv is when the provider last sent anything (monoNow). Pongs keep
+	// an idle one fresh; one that has gone quiet for two ping intervals is
+	// suspect even while the send loop is stuck and no ping goes out.
 	lastRecv atomic.Int64
 	// pingSeq numbers the probes.
 	pingSeq atomic.Uint64
@@ -296,7 +313,28 @@ func (p *agentProvider) isSuspect() bool {
 	if p.suspect.Load() {
 		return true
 	}
-	return time.Since(time.Unix(0, p.lastRecv.Load())) > 2*agentPingInterval
+	return time.Duration(monoNow()-p.lastRecv.Load()) > 2*agentPingInterval
+}
+
+// queueClose tells the provider that connection id is over, reliably: it
+// never blocks and is never dropped, however backed up the stream is.
+func (p *agentProvider) queueClose(id uint64) {
+	p.mu.Lock()
+	p.pendingClose = append(p.pendingClose, id)
+	p.mu.Unlock()
+	select {
+	case p.closeNotify <- struct{}{}:
+	default:
+	}
+}
+
+// takeCloses empties the pending closes.
+func (p *agentProvider) takeCloses() []uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ids := p.pendingClose
+	p.pendingClose = nil
+	return ids
 }
 
 // sendWithin queues a frame for the provider, giving up after d (the stream
@@ -450,7 +488,7 @@ func (p *agentProvider) relay(conn net.Conn, origin string, id uint64) (served b
 		}
 	case <-timer.C:
 		p.suspect.Store(true)
-		p.sendWithin(agentDownClose(id), 0)
+		p.queueClose(id)
 		return false
 	case <-p.done:
 		return false
@@ -494,8 +532,11 @@ func (p *agentProvider) relay(conn net.Conn, origin string, id uint64) (served b
 		n, err := conn.Read(buf)
 		if n > 0 {
 			// Bounded: one connection flooding a stalled stream must not hold
-			// the queue every other connection needs.
+			// the queue every other connection needs. Giving up ends the
+			// connection on both sides at once — no reply can come.
 			if !p.sendWithin(agentDownData(id, append([]byte(nil), buf[:n]...)), agentReadyTimeout) {
+				p.queueClose(id)
+				rc.shut()
 				break
 			}
 		}
@@ -503,7 +544,7 @@ func (p *agentProvider) relay(conn net.Conn, origin string, id uint64) (served b
 			select {
 			case <-rc.closed: // the provider ended it; it knows
 			default:
-				p.sendWithin(agentDownClose(id), agentReadyTimeout)
+				p.queueClose(id)
 			}
 			break
 		}
@@ -525,7 +566,7 @@ func (p *agentProvider) relay(conn net.Conn, origin string, id uint64) (served b
 func (p *agentProvider) deliver(up *fleetgrpc.SSHAgentUp) error {
 	// It is talking.
 	p.suspect.Store(false)
-	p.lastRecv.Store(time.Now().UnixNano())
+	p.lastRecv.Store(monoNow())
 	switch msg := up.GetMsg().(type) {
 	case *fleetgrpc.SSHAgentUp_Pong:
 	case *fleetgrpc.SSHAgentUp_Ready:
@@ -549,7 +590,7 @@ func (p *agentProvider) deliver(up *fleetgrpc.SSHAgentUp) error {
 			// stream's receive loop, which must never block.
 			p.unregister(rc.id)
 			rc.shut()
-			p.sendWithin(agentDownClose(rc.id), 0)
+			p.queueClose(rc.id)
 		}
 	case *fleetgrpc.SSHAgentUp_Close:
 		if rc := p.lookup(msg.Close.GetConnId()); rc != nil {
@@ -637,6 +678,12 @@ func (s *service) SSHAgent(stream fleetgrpc.FleetService_SSHAgentServer) error {
 		case msg := <-provider.out:
 			if err := stream.Send(msg); err != nil {
 				return err
+			}
+		case <-provider.closeNotify:
+			for _, id := range provider.takeCloses() {
+				if err := stream.Send(agentDownClose(id)); err != nil {
+					return err
+				}
 			}
 		case active := <-provider.status:
 			msg := &fleetgrpc.SSHAgentDown{Msg: &fleetgrpc.SSHAgentDown_Status{Status: &fleetgrpc.SSHAgentStatus{Active: active}}}

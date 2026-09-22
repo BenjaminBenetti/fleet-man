@@ -128,7 +128,11 @@ var runInstanceCommand = func(fleetName, instanceName string, argv []string) (st
 // remote forwards the agent the child provides it too, but a CLI command's
 // provider yields to the TUI's (the daemon tries it only after non-yielding
 // providers), so a shell started here does not displace this TUI's
-// (sshagent.go). A package var so tests can stub it.
+// (sshagent.go). The child also gets tuiAgentHint, so it neither delays the
+// shell waiting for its own provider nor prints a forwarding notice the
+// Settings page already shows. Callers that hand only cmd.Args to tmux get
+// the hint from tmux's global environment instead (syncTmuxArmadaEnv). A
+// package var so tests can stub it.
 var attachExecCmd = func(fleetName, instanceName string, argv []string) (*exec.Cmd, error) {
 	if !fleetclient.IsRemote() {
 		return resolveExecCmd(fleetName, instanceName, argv)
@@ -138,7 +142,21 @@ var attachExecCmd = func(fleetName, instanceName string, argv []string) (*exec.C
 		self = "fleet" // fall back to PATH lookup at run time
 	}
 	args := append([]string{"shell", fleetName + "/" + instanceName, "--"}, argv...)
-	return exec.Command(self, args...), nil
+	cmd := exec.Command(self, args...)
+	cmd.Env = append(os.Environ(), fleetclient.EnvTUIProvidesAgent+"="+tuiAgentHint())
+	return cmd, nil
+}
+
+// tuiAgentHint is the fleetclient.EnvTUIProvidesAgent value for the
+// `fleet shell` children this TUI spawns: "1" while it is connected to a
+// remote (where its attaches are `fleet shell` re-invocations and its own
+// provider serves the remote whenever forwarding is on), "" (unset) when
+// local.
+func tuiAgentHint() string {
+	if fleetclient.IsRemote() {
+		return "1"
+	}
+	return ""
 }
 
 // mergeExecEnv layers the server-supplied env over the client's own. Nil/empty

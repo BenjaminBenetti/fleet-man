@@ -18,26 +18,73 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// peerCred reads the connecting process's kernel-reported credentials
-// (SO_PEERCRED: its uid and pid as seen from this daemon's namespaces — for a
-// process in a container, its host uid and host pid).
-func peerCred(conn net.Conn) (*unix.Ucred, bool) {
+// peerIdentity is who is on the other end of a relay connection: the
+// kernel-reported credentials (SO_PEERCRED: uid and pid as seen from this
+// daemon's namespaces — for a process in a container, its host uid and host
+// pid) and, where the kernel offers it (6.5+), a pidfd pinning that exact
+// process, so a pid reused after the connector exited cannot be mistaken for
+// it.
+type peerIdentity struct {
+	uid   uint32
+	pid   int32
+	pidfd int // -1 when unavailable
+}
+
+func peerCred(conn net.Conn) (peerIdentity, bool) {
+	id := peerIdentity{pidfd: -1}
 	uc, ok := conn.(*net.UnixConn)
 	if !ok {
-		return nil, false
+		return id, false
 	}
 	raw, err := uc.SyscallConn()
 	if err != nil {
-		return nil, false
+		return id, false
 	}
-	var cred *unix.Ucred
 	var credErr error
 	if err := raw.Control(func(fd uintptr) {
+		var cred *unix.Ucred
 		cred, credErr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+		if credErr != nil {
+			return
+		}
+		id.uid, id.pid = cred.Uid, cred.Pid
+		if pidfd, err := unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_PEERPIDFD); err == nil {
+			id.pidfd = pidfd
+		}
 	}); err != nil || credErr != nil {
-		return nil, false
+		id.close()
+		return id, false
 	}
-	return cred, true
+	return id, true
+}
+
+func (id peerIdentity) close() {
+	if id.pidfd >= 0 {
+		_ = unix.Close(id.pidfd)
+	}
+}
+
+// stillTheConnector reports whether pid still names the process that
+// connected, so what was read from /proc/<pid> was about it. With a pidfd:
+// that process has not exited (EPERM means alive, just not ours to signal).
+// Without one (older kernels): the process now at pid runs as the uid that
+// connected — a reused pid in a container almost always runs as another uid
+// than the user who planted the stale connection.
+func (id peerIdentity) stillTheConnector() bool {
+	if id.pidfd >= 0 {
+		err := unix.PidfdSendSignal(id.pidfd, 0, nil, 0)
+		return err == nil || errors.Is(err, unix.EPERM)
+	}
+	data, err := os.ReadFile(procRoot + "/" + strconv.Itoa(int(id.pid)) + "/status")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if fields := strings.Fields(line); len(fields) >= 3 && fields[0] == "Uid:" {
+			return fields[2] == strconv.FormatUint(uint64(id.uid), 10) // effective uid
+		}
+	}
+	return false
 }
 
 // instanceIdentity is what an instance's socket knows about its container.
@@ -51,23 +98,25 @@ type instanceIdentity interface {
 }
 
 // agentPeerAllowed admits the daemon's own user and root and, for an
-// instance's socket, any process of that instance's own container, whatever
-// uid its image runs it as (a remoteUser whose uid could not be remapped, a
-// rootless-docker subuid). inst is nil for the host socket. Everyone else —
-// other users on the host, who can traverse the control directory — is
-// refused.
+// instance's socket, any process of that instance's own container (or of a
+// container nested in it), whatever uid its image runs it as — a remoteUser
+// whose uid could not be remapped, a rootless-docker subuid. inst is nil for
+// the host socket. Everyone else — other users on the host, who can traverse
+// the control directory — is refused. May run docker (cached): call it off
+// the accept loop.
 func agentPeerAllowed(conn net.Conn, inst instanceIdentity) bool {
-	cred, ok := peerCred(conn)
+	peer, ok := peerCred(conn)
 	if !ok {
 		return false
 	}
-	if cred.Uid == 0 || int(cred.Uid) == os.Getuid() {
+	defer peer.close()
+	if peer.uid == 0 || int(peer.uid) == os.Getuid() {
 		return true
 	}
 	if inst == nil {
 		return false
 	}
-	return pidInInstanceContainer(cred.Pid, inst)
+	return peerInInstanceContainer(peer, inst)
 }
 
 // procRoot is /proc; a var so tests can point it at a fixture.
@@ -110,79 +159,156 @@ func processCgroup(pid int) (string, bool) {
 // (the innermost container, for nested runtimes) and returns that prefix and
 // the container ID it names ("" when the path is in no container).
 func runtimeAnchor(path string) (prefix, id string) {
-	parts := strings.Split(path, "/")
-	for i := len(parts) - 1; i >= 0; i-- {
-		if m := runtimeComponent.FindStringSubmatch(parts[i]); m != nil {
-			return strings.Join(parts[:i+1], "/"), m[1]
-		}
+	anchors := runtimeAnchors(path)
+	if len(anchors) == 0 {
+		return "", ""
 	}
-	return "", ""
+	return anchors[0].prefix, anchors[0].id
 }
 
-// pidInInstanceContainer reports whether pid runs inside the instance's
-// container. The container ID in the peer's cgroup path is NOT enough on its
-// own: another user can name a cgroup of their own after it (a delegated
-// systemd user scope called docker-<id>.scope). So the peer's path, cut at
-// its runtime component, must equal the container's real one — taken from
-// the container's own init process — which only the runtime (root, or the
-// daemon user for rootless) can create cgroups under. The container must
-// then be this instance's: the recorded ID, or — while `devcontainer up` is
-// still running and nothing is recorded yet (postCreate, dotfiles) — a
-// container labelled with this instance's workspace folder.
-func pidInInstanceContainer(pid int32, inst instanceIdentity) bool {
-	path, ok := processCgroup(int(pid))
+type cgroupAnchor struct{ prefix, id string }
+
+// runtimeAnchors lists every runtime-created component of a cgroup path,
+// innermost first, each with the path cut after it.
+func runtimeAnchors(path string) []cgroupAnchor {
+	parts := strings.Split(path, "/")
+	var out []cgroupAnchor
+	for i := len(parts) - 1; i >= 0; i-- {
+		if m := runtimeComponent.FindStringSubmatch(parts[i]); m != nil {
+			out = append(out, cgroupAnchor{prefix: strings.Join(parts[:i+1], "/"), id: m[1]})
+		}
+	}
+	return out
+}
+
+// peerInInstanceContainer reports whether the peer runs inside the
+// instance's container, or in a container nested inside it (a devcontainer
+// running docker). A container ID merely appearing in the peer's cgroup path
+// is NOT enough: another user can name a cgroup of their own after it (a
+// delegated systemd user scope called docker-<id>.scope). So only this
+// instance's own containers are considered — the recorded ID, or while
+// `devcontainer up` is still running and nothing is recorded yet (postCreate,
+// dotfiles), the containers labelled with this instance's workspace folder —
+// and the peer's path, cut at that container's component, must equal the
+// container's real one, taken from its own init process: only the runtime
+// (root, or the daemon user for rootless) can create cgroups under it. No ID
+// a peer chooses is ever looked up.
+func peerInInstanceContainer(peer peerIdentity, inst instanceIdentity) bool {
+	path, ok := processCgroup(int(peer.pid))
 	if !ok {
 		return false
 	}
-	prefix, id := runtimeAnchor(path)
-	if id == "" {
+	anchors := runtimeAnchors(path)
+	if len(anchors) == 0 {
 		return false
 	}
-	want := inst.containerID()
-	if id != want && inst.workspaceDir() == "" {
-		return false
+	ours := map[string]bool{}
+	if id := inst.containerID(); id != "" {
+		ours[id] = true
 	}
-	info, ok := lookupContainer(id)
-	if !ok || info.anchor != prefix {
-		return false
+	var labelled []string
+	labelledLoaded := false
+	for _, a := range anchors {
+		if !ours[a.id] {
+			if !labelledLoaded {
+				labelled = containersLabelled(inst.workspaceDir())
+				labelledLoaded = true
+			}
+			for _, id := range labelled {
+				ours[id] = true
+			}
+		}
+		if !ours[a.id] {
+			continue
+		}
+		info, ok := lookupContainer(a.id)
+		if ok && info.anchor == a.prefix {
+			// The cgroup read must have been about the process that
+			// connected, not one that took its pid since.
+			return peer.stillTheConnector()
+		}
 	}
-	return id == want || (info.localFolder != "" && info.localFolder == inst.workspaceDir())
+	return false
 }
 
 // containerInfo is what the peer check needs about one container.
 type containerInfo struct {
-	anchor      string // the container's cgroup, cut at its runtime component
-	localFolder string // its devcontainer.local_folder label
+	anchor string // the container's cgroup, cut at its runtime component
 }
 
-// inspectContainer asks the runtime for a container's init pid and workspace
-// label. A var so tests need no docker.
-var inspectContainer = func(id string) (pid int, localFolder string, err error) {
+// inspectContainer asks the runtime for a container's init pid. A var so
+// tests need no docker.
+var inspectContainer = func(id string) (pid int, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f",
-		`{{.State.Pid}}|{{index .Config.Labels "devcontainer.local_folder"}}`, id).Output()
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Pid}}", id).Output()
 	if err != nil {
-		return 0, "", err
+		return 0, err
 	}
-	pidText, folder, _ := strings.Cut(strings.TrimSpace(string(out)), "|")
-	pid, err = strconv.Atoi(pidText)
+	pid, err = strconv.Atoi(strings.TrimSpace(string(out)))
 	if err != nil || pid <= 0 {
-		return 0, "", fmt.Errorf("container %s is not running", id)
+		return 0, fmt.Errorf("container %s is not running", id)
 	}
-	return pid, folder, nil
+	return pid, nil
 }
 
-// containerCache remembers containerInfo per ID (a container's cgroup and
-// labels never change), and failed lookups for a short while so a peer
-// cannot make the daemon run docker for every connection.
+// listLabelled lists the IDs of the containers labelled with a workspace
+// folder. A var so tests need no docker.
+var listLabelled = func(workspaceDir string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-q", "--no-trunc",
+		"--filter", "label=devcontainer.local_folder="+workspaceDir).Output()
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(string(out)), nil
+}
+
+// labelledTTL bounds how long a workspace's labelled containers are reused:
+// long enough that a burst of connections costs one docker call, short
+// enough that a container just created by `devcontainer up` is seen.
+const labelledTTL = 2 * time.Second
+
+var labelledCache = struct {
+	sync.Mutex
+	entries map[string]labelledEntry
+}{entries: map[string]labelledEntry{}}
+
+type labelledEntry struct {
+	ids []string
+	at  time.Time
+}
+
+// containersLabelled returns the containers labelled with workspaceDir
+// (cached briefly; "" or a docker failure → none).
+func containersLabelled(workspaceDir string) []string {
+	if workspaceDir == "" {
+		return nil
+	}
+	labelledCache.Lock()
+	if e, ok := labelledCache.entries[workspaceDir]; ok && time.Since(e.at) < labelledTTL {
+		labelledCache.Unlock()
+		return e.ids
+	}
+	labelledCache.Unlock()
+	ids, err := listLabelled(workspaceDir)
+	if err != nil {
+		return nil
+	}
+	labelledCache.Lock()
+	defer labelledCache.Unlock()
+	labelledCache.entries[workspaceDir] = labelledEntry{ids: ids, at: time.Now()}
+	return ids
+}
+
+// containerCache remembers containerInfo per ID (a container's cgroup never
+// changes). Only this daemon's own instances' containers are ever looked up,
+// so it stays small; a failed lookup is not cached.
 var containerCache = struct {
 	sync.Mutex
-	found  map[string]containerInfo
-	failed map[string]time.Time
-}{found: map[string]containerInfo{}, failed: map[string]time.Time{}}
-
-const containerLookupRetry = 10 * time.Second
+	found map[string]containerInfo
+}{found: map[string]containerInfo{}}
 
 func lookupContainer(id string) (containerInfo, bool) {
 	containerCache.Lock()
@@ -190,26 +316,8 @@ func lookupContainer(id string) (containerInfo, bool) {
 		containerCache.Unlock()
 		return info, true
 	}
-	if at, ok := containerCache.failed[id]; ok && time.Since(at) < containerLookupRetry {
-		containerCache.Unlock()
-		return containerInfo{}, false
-	}
 	containerCache.Unlock()
-
-	info, ok := resolveContainer(id)
-	containerCache.Lock()
-	defer containerCache.Unlock()
-	if !ok {
-		containerCache.failed[id] = time.Now()
-		return containerInfo{}, false
-	}
-	delete(containerCache.failed, id)
-	containerCache.found[id] = info
-	return info, true
-}
-
-func resolveContainer(id string) (containerInfo, bool) {
-	pid, folder, err := inspectContainer(id)
+	pid, err := inspectContainer(id)
 	if err != nil {
 		return containerInfo{}, false
 	}
@@ -217,11 +325,21 @@ func resolveContainer(id string) (containerInfo, bool) {
 	if !ok {
 		return containerInfo{}, false
 	}
-	anchor, anchorID := runtimeAnchor(path)
-	if anchorID != id {
+	var anchor string
+	for _, a := range runtimeAnchors(path) {
+		if a.id == id {
+			anchor = a.prefix
+			break
+		}
+	}
+	if anchor == "" {
 		return containerInfo{}, false
 	}
-	return containerInfo{anchor: anchor, localFolder: folder}, true
+	info := containerInfo{anchor: anchor}
+	containerCache.Lock()
+	defer containerCache.Unlock()
+	containerCache.found[id] = info
+	return info, true
 }
 
 // afterInstanceBind is a test hook run between bind and chmod — the window a

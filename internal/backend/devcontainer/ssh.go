@@ -1,13 +1,18 @@
 package devcontainer
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
+	"github.com/BenjaminBenetti/fleet-man/internal/control"
 )
 
 // containerSSHSocketPath is where a DIRECTLY bind-mounted agent socket lands
@@ -137,7 +142,7 @@ func sshExecArgs(workspaceDir string) []string {
 	if err != nil || plan.sock == "" {
 		return nil
 	}
-	if plan.sock == agentsock.ContainerSocketPath && !hasControlDir(workspaceDir) {
+	if plan.sock == agentsock.ContainerSocketPath && !hasControlMount(workspaceDir) {
 		// An instance created before the control directory was mounted
 		// (fleet < #73) has no relay socket, only the agent socket file bind
 		// mounted at creation: keep pointing it there until it is rebuilt.
@@ -146,15 +151,122 @@ func sshExecArgs(workspaceDir string) []string {
 	return []string{"--remote-env", "SSH_AUTH_SOCK=" + plan.sock}
 }
 
-// hasControlDir reports whether the instance whose workspace is workspaceDir
-// has the host control directory the relay socket lives in: it sits next to
-// the workspace (<workspaces>/<fleet>/<instance>/{<workspace>,.control}).
-func hasControlDir(workspaceDir string) bool {
+// ControlMountMarker is the file provisioning (create.controlMount) drops in
+// an instance's host control directory, next to its sockets, when it
+// bind-mounts that directory into the container. Only provisioning writes it —
+// unlike the directory itself, which the daemon's control-socket registry
+// creates for every running instance — so its presence means the container
+// sees the relay socket.
+const ControlMountMarker = ".mounted"
+
+// Caching of the docker answer in hasControlMount. exec runs about once a
+// second per instance (session polling), so an answer is reused for
+// controlMountCacheTTL; an error or a workspace with no container yet is only
+// trusted for controlMountRetryTTL.
+const (
+	controlMountCacheTTL      = 5 * time.Minute
+	controlMountRetryTTL      = 10 * time.Second
+	controlMountLookupTimeout = 3 * time.Second
+)
+
+// containerHasControlMount looks up the container provisioned from
+// workspaceDir and reports whether one exists and whether it bind-mounts the
+// control directory at control.ContainerMountDir. A package var so tests can
+// stand in for docker.
+var containerHasControlMount = dockerHasControlMount
+
+// controlMountNow is the clock behind the cache, swapped by tests.
+var controlMountNow = time.Now
+
+type controlMountAnswer struct {
+	relay   bool
+	expires time.Time
+}
+
+var controlMountCache = struct {
+	sync.Mutex
+	answers map[string]controlMountAnswer // key: workspaceDir
+}{answers: make(map[string]controlMountAnswer)}
+
+// hasControlMount reports whether the container of the instance whose
+// workspace is workspaceDir sees the relay socket, i.e. was provisioned with
+// the instance's control directory mounted. The host directory alone proves
+// nothing: the daemon creates it for every running instance, including ones
+// whose container predates the mount. So provisioning's marker decides when
+// present, and otherwise docker is asked (and the answer cached). Anything
+// uncertain — no workspace, no container yet (up is about to create one with
+// the mount), docker failing — assumes the relay.
+func hasControlMount(workspaceDir string) bool {
 	if workspaceDir == "" {
 		return true
 	}
-	info, err := os.Stat(filepath.Join(filepath.Dir(workspaceDir), ".control"))
-	return err == nil && info.IsDir()
+	// The control directory sits next to the workspace:
+	// <workspaces>/<fleet>/<instance>/{<workspace>,.control}.
+	if _, err := os.Stat(filepath.Join(filepath.Dir(workspaceDir), ".control", ControlMountMarker)); err == nil {
+		return true
+	}
+
+	now := controlMountNow()
+	controlMountCache.Lock()
+	answer, ok := controlMountCache.answers[workspaceDir]
+	controlMountCache.Unlock()
+	if ok && now.Before(answer.expires) {
+		return answer.relay
+	}
+
+	// Not under the lock: a slow docker must not stall other instances'
+	// cached lookups. Concurrent misses for one workspace may both ask.
+	found, mounted, err := containerHasControlMount(workspaceDir)
+	answer = controlMountAnswer{relay: true, expires: now.Add(controlMountRetryTTL)}
+	if err == nil && found {
+		answer = controlMountAnswer{relay: mounted, expires: now.Add(controlMountCacheTTL)}
+	}
+
+	controlMountCache.Lock()
+	for dir, a := range controlMountCache.answers {
+		if !now.Before(a.expires) {
+			delete(controlMountCache.answers, dir)
+		}
+	}
+	controlMountCache.answers[workspaceDir] = answer
+	controlMountCache.Unlock()
+	return answer.relay
+}
+
+// dockerHasControlMount is containerHasControlMount against the docker CLI:
+// the newest container labelled with the workspace folder (-a, so a stopped
+// container about to be started is judged by its own mounts), and whether any
+// of its mounts lands exactly at control.ContainerMountDir.
+func dockerHasControlMount(workspaceDir string) (found, mounted bool, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), controlMountLookupTimeout)
+	defer cancel()
+	out, err := dockerOutput(ctx, "ps", "-a", "-q", "--no-trunc",
+		"--filter", "label="+devcontainerLocalFolderLabel+"="+workspaceDir)
+	if err != nil {
+		return false, false, fmt.Errorf("docker ps: %w", err)
+	}
+	id, _, _ := strings.Cut(strings.TrimSpace(out), "\n")
+	if id = strings.TrimSpace(id); id == "" {
+		return false, false, nil
+	}
+	out, err = dockerOutput(ctx, "inspect", "-f", "{{range .Mounts}}{{println .Destination}}{{end}}", id)
+	if err != nil {
+		return true, false, fmt.Errorf("docker inspect %s: %w", id, err)
+	}
+	for _, dest := range strings.Split(out, "\n") {
+		if strings.TrimSpace(dest) == control.ContainerMountDir {
+			return true, true, nil
+		}
+	}
+	return true, false, nil
+}
+
+// dockerOutput runs one bounded docker CLI call and returns its stdout.
+func dockerOutput(ctx context.Context, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
+	return string(out), err
 }
 
 // execArgs builds the full argument list for `devcontainer exec` including
@@ -166,31 +278,51 @@ func execArgs(workspaceDir string, command []string) []string {
 	return args
 }
 
+// maxConfigBytes caps each file configMentionsAgent reads; anything larger is
+// not a config file.
+const maxConfigBytes = 1 << 20
+
+// rootConfigPatterns are the workspace-root files a devcontainer config
+// commonly pulls in from outside .devcontainer (e.g.
+// "dockerComposeFile": ["../docker-compose.yml"], "dockerfile": "../Dockerfile").
+var rootConfigPatterns = []string{
+	"docker-compose*.yml", "docker-compose*.yaml",
+	"compose*.yml", "compose*.yaml",
+	"Dockerfile*",
+}
+
 // configMentionsAgent reports whether the workspace's devcontainer config
-// (or a compose file or Dockerfile beside it) refers to SSH_AUTH_SOCK — a
+// (or a compose file or Dockerfile it builds from) refers to SSH_AUTH_SOCK — a
 // project that mounts the host agent itself. Its ${localEnv:SSH_AUTH_SOCK}
 // must then resolve to the user's real agent rather than the relay's socket:
 // a bind mount pins the socket file, and the relay's is recreated on every
 // daemon restart. Anything else about `devcontainer up` (initializeCommand,
 // a BuildKit --ssh build) keeps the relay, which dials per connection.
+//
+// Scanned: .devcontainer.json; compose files and Dockerfiles at the workspace
+// root; and .devcontainer/ plus its immediate subdirectories (named configs),
+// following a symlinked .devcontainer.
 func configMentionsAgent(workspaceDir string) bool {
-	const maxConfigBytes = 1 << 20
-	mentions := func(path string) bool {
-		info, err := os.Stat(path)
-		if err != nil || !info.Mode().IsRegular() || info.Size() > maxConfigBytes {
-			return false
-		}
-		data, err := os.ReadFile(path)
-		return err == nil && strings.Contains(string(data), "SSH_AUTH_SOCK")
-	}
-	if mentions(filepath.Join(workspaceDir, ".devcontainer.json")) {
+	if fileMentionsAgent(filepath.Join(workspaceDir, ".devcontainer.json")) {
 		return true
 	}
-	root := filepath.Join(workspaceDir, ".devcontainer")
+	if entries, err := os.ReadDir(workspaceDir); err == nil {
+		for _, e := range entries {
+			if matchesAny(e.Name(), rootConfigPatterns) && fileMentionsAgent(filepath.Join(workspaceDir, e.Name())) {
+				return true
+			}
+		}
+	}
+	// The trailing separator makes WalkDir resolve a symlinked .devcontainer
+	// to its directory (it does not follow a symlinked root otherwise).
+	root := filepath.Join(workspaceDir, ".devcontainer") + string(filepath.Separator)
 	found := false
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil || found {
-			return filepath.SkipDir
+		if err != nil {
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if d.IsDir() {
 			if rel, _ := filepath.Rel(root, path); strings.Count(rel, string(filepath.Separator)) >= 1 {
@@ -198,8 +330,32 @@ func configMentionsAgent(workspaceDir string) bool {
 			}
 			return nil
 		}
-		found = mentions(path)
+		if fileMentionsAgent(path) {
+			found = true
+			return filepath.SkipAll
+		}
 		return nil
 	})
 	return found
+}
+
+// fileMentionsAgent reports whether path is a regular file (after symlinks) of
+// at most maxConfigBytes that contains SSH_AUTH_SOCK.
+func fileMentionsAgent(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxConfigBytes {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	return err == nil && strings.Contains(string(data), "SSH_AUTH_SOCK")
+}
+
+// matchesAny reports whether name matches one of the filepath.Match patterns.
+func matchesAny(name string, patterns []string) bool {
+	for _, p := range patterns {
+		if ok, _ := filepath.Match(p, name); ok {
+			return true
+		}
+	}
+	return false
 }

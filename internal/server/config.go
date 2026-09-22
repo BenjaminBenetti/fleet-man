@@ -93,6 +93,9 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 func (s *service) reconcileRemote(rm state.RemoteMcpSettings) {
 	// A remote client can only provide its SSH agent while remote access is on.
 	agentsock.SetRemoteClients(rm.FleetEnabled)
+	if s.agent != nil {
+		s.agent.maybeRedirect()
+	}
 	if s.remote != nil {
 		s.remote.Reconcile(rm.Enabled, rm.FleetViaGateway(), rm.WebhookEnabled, rm.GatewayURL)
 	}

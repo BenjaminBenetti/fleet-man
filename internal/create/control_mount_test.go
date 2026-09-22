@@ -2,8 +2,10 @@ package create
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
+	devcontainerbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -60,5 +62,39 @@ func TestControlMount(t *testing.T) {
 				t.Errorf("host control path %q is not a directory", wantLocal)
 			}
 		})
+	}
+}
+
+// TestControlMountWritesMarker: provisioning marks the control directory as
+// mounted into the container — before the ControlDirReady hook opens the
+// instance's sockets there, and idempotently across a rebuild — since the
+// daemon also creates the directory for instances whose container lacks the
+// mount, and the devcontainer backend tells them apart by this marker.
+func TestControlMountWritesMarker(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	marker := filepath.Join(state.ControlDir("f", "i"), devcontainerbackend.ControlMountMarker)
+
+	orig := ControlDirReady
+	t.Cleanup(func() { ControlDirReady = orig })
+	hookSawMarker := false
+	ControlDirReady = func(fleetName, instanceName string) {
+		_, err := os.Stat(marker)
+		hookSawMarker = err == nil
+	}
+
+	for range 2 {
+		if _, err := controlMount("f", "i"); err != nil {
+			t.Fatalf("controlMount: %v", err)
+		}
+		info, err := os.Stat(marker)
+		if err != nil {
+			t.Fatalf("marker %s not written: %v", marker, err)
+		}
+		if !info.Mode().IsRegular() {
+			t.Fatalf("marker %s is not a regular file: %v", marker, info.Mode())
+		}
+		if !hookSawMarker {
+			t.Fatal("ControlDirReady ran before the marker was written")
+		}
 	}
 }

@@ -10,7 +10,16 @@ import (
 
 // agent_forward.go holds the client side of SSH-agent forwarding that lives
 // outside the CLI: a registry probe that — unlike DialLocal — can never start
-// or restart the local daemon.
+// or restart the local daemon, and the hint the TUI hands its children.
+
+// EnvTUIProvidesAgent is set to "1" by the TUI for the `fleet shell` children
+// it spawns on a remote (its attaches, and — mirrored into tmux's global
+// environment — the split panes and %/" keys tmux spawns). It tells the child
+// that a TUI provides the agent for this connection and shows the forwarding
+// state in Settings, so the child's own (yielding) provider need not delay
+// the shell waiting to attach, nor print why forwarding cannot work. It only
+// changes that wait and that notice, never whether the child provides.
+const EnvTUIProvidesAgent = "FLEET_TUI_AGENT"
 
 // ProbeLocalArmada reads the fleet-armada registry from the LOCAL daemon if
 // one is listening right now. Unlike DialLocal it never spawns, restarts or

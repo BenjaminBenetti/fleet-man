@@ -1,12 +1,15 @@
 package devcontainer
 
 import (
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 )
@@ -95,10 +98,39 @@ func TestAgentPlanFor(t *testing.T) {
 }
 
 // relayServing marks this process as serving the relay, as the daemon does.
+// The agentsock setters publish (and on cleanup remove) a marker file under
+// $HOME/.fleet, so HOME is pointed at a temp dir FIRST: t.Cleanup runs LIFO,
+// so the setters' cleanups also run under it and never touch the developer's
+// real ~/.fleet. Real docker lookups are forbidden too; a test that exercises
+// one stubs it after this.
 func relayServing(t *testing.T) {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	stubControlMountLookup(t, func(ws string) (bool, bool, error) {
+		t.Errorf("unexpected docker lookup for %s", ws)
+		return false, false, errors.New("no docker in unit tests")
+	})
 	agentsock.SetRelayServing(true)
 	t.Cleanup(func() { agentsock.SetRelayServing(false) })
+}
+
+// stubControlMountLookup replaces the docker lookup behind hasControlMount
+// with fn and starts from an empty cache, restoring both on cleanup.
+func stubControlMountLookup(t *testing.T, fn func(workspaceDir string) (found, mounted bool, err error)) {
+	t.Helper()
+	orig := containerHasControlMount
+	containerHasControlMount = fn
+	resetControlMountCache()
+	t.Cleanup(func() {
+		containerHasControlMount = orig
+		resetControlMountCache()
+	})
+}
+
+func resetControlMountCache() {
+	controlMountCache.Lock()
+	clear(controlMountCache.answers)
+	controlMountCache.Unlock()
 }
 
 // wantAgentSock is the SSH_AUTH_SOCK instances get on this platform with no
@@ -249,8 +281,21 @@ func TestSSHExecArgs_OverrideOff(t *testing.T) {
 }
 
 // instanceWorkspace makes <tmp>/<instance>/{.control,<workspace>} and
-// returns the workspace path, laid out like the real thing.
+// returns the workspace path, laid out like the real thing: provisioned with
+// the control directory mounted, so carrying provisioning's marker.
 func instanceWorkspace(t *testing.T) string {
+	t.Helper()
+	ws := unmarkedInstanceWorkspace(t)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(ws), ".control", ControlMountMarker), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return ws
+}
+
+// unmarkedInstanceWorkspace is instanceWorkspace without the marker: the
+// control directory as the daemon's control-socket registry creates it for
+// any running instance, whatever its container mounts.
+func unmarkedInstanceWorkspace(t *testing.T) string {
 	t.Helper()
 	inst := t.TempDir()
 	if err := os.Mkdir(filepath.Join(inst, ".control"), 0o755); err != nil {
@@ -284,24 +329,144 @@ func TestExecArgs_WithoutSSH(t *testing.T) {
 	}
 }
 
-func TestSSHExecArgs_InstanceWithoutControlDirKeepsTheOldMount(t *testing.T) {
+// lookupResult is a canned containerHasControlMount answer that counts calls.
+type lookupResult struct {
+	found, mounted bool
+	err            error
+	calls          int
+}
+
+func (r *lookupResult) lookup(string) (bool, bool, error) {
+	r.calls++
+	return r.found, r.mounted, r.err
+}
+
+var (
+	relayExecArgs  = []string{"--remote-env", "SSH_AUTH_SOCK=" + agentsock.ContainerSocketPath}
+	legacyExecArgs = []string{"--remote-env", "SSH_AUTH_SOCK=" + containerSSHSocketPath}
+)
+
+// relayExecTest sets up a Linux relay with a live agent, where sshExecArgs
+// has to decide between the relay and the legacy socket-file mount.
+func relayExecTest(t *testing.T) {
+	t.Helper()
 	if runtime.GOOS == "darwin" {
 		t.Skip("the relay is not used for instances on macOS")
 	}
 	liveAgentSocket(t)
 	relayServing(t)
-	instDir := t.TempDir()
-	ws := filepath.Join(instDir, "fleet")
-	// Created before the control directory existed: only the agent socket
-	// file was bind-mounted, at /run/ssh-agent.sock.
-	if got := sshExecArgs(ws); !slices.Equal(got, []string{"--remote-env", "SSH_AUTH_SOCK=" + containerSSHSocketPath}) {
-		t.Fatalf("no control dir: %v", got)
+}
+
+func TestSSHExecArgs_MarkedInstanceUsesTheRelayWithoutDocker(t *testing.T) {
+	relayExecTest(t)
+	// relayServing forbids docker lookups: the marker alone decides.
+	if got := sshExecArgs(instanceWorkspace(t)); !slices.Equal(got, relayExecArgs) {
+		t.Fatalf("marked instance: %v, want %v", got, relayExecArgs)
 	}
-	if err := os.Mkdir(filepath.Join(instDir, ".control"), 0o755); err != nil {
+}
+
+func TestSSHExecArgs_UnmarkedInstanceAsksDocker(t *testing.T) {
+	cases := []struct {
+		name   string
+		result lookupResult
+		want   []string
+	}{
+		// The daemon created .control for an instance whose container
+		// predates the mount: only the agent socket file was bind-mounted,
+		// at /run/ssh-agent.sock, so keep pointing it there.
+		{"container without the mount keeps the old socket", lookupResult{found: true}, legacyExecArgs},
+		{"container with the mount uses the relay", lookupResult{found: true, mounted: true}, relayExecArgs},
+		{"no container yet assumes the relay", lookupResult{}, relayExecArgs},
+		{"docker failing assumes the relay", lookupResult{err: errors.New("docker down")}, relayExecArgs},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			relayExecTest(t)
+			stubControlMountLookup(t, c.result.lookup)
+			if got := sshExecArgs(unmarkedInstanceWorkspace(t)); !slices.Equal(got, c.want) {
+				t.Fatalf("sshExecArgs = %v, want %v", got, c.want)
+			}
+			if c.result.calls != 1 {
+				t.Fatalf("docker lookups = %d, want 1", c.result.calls)
+			}
+		})
+	}
+}
+
+func TestSSHExecArgs_NoControlDirAtAllKeepsTheOldMount(t *testing.T) {
+	relayExecTest(t)
+	stubControlMountLookup(t, (&lookupResult{found: true}).lookup)
+	if got := sshExecArgs(filepath.Join(t.TempDir(), "fleet")); !slices.Equal(got, legacyExecArgs) {
+		t.Fatalf("sshExecArgs = %v, want %v", got, legacyExecArgs)
+	}
+}
+
+// fakeClock pins controlMountNow for the duration of the test.
+func fakeClock(t *testing.T) *time.Time {
+	t.Helper()
+	now := time.Now()
+	orig := controlMountNow
+	controlMountNow = func() time.Time { return now }
+	t.Cleanup(func() { controlMountNow = orig })
+	return &now
+}
+
+func TestHasControlMount_CachesDockersAnswer(t *testing.T) {
+	now := fakeClock(t)
+	res := &lookupResult{found: true}
+	stubControlMountLookup(t, res.lookup)
+	ws := unmarkedInstanceWorkspace(t)
+
+	for range 5 {
+		if hasControlMount(ws) {
+			t.Fatal("container without the mount: want the legacy socket")
+		}
+	}
+	if res.calls != 1 {
+		t.Fatalf("docker lookups = %d, want 1 (the answer is cached)", res.calls)
+	}
+	*now = now.Add(controlMountCacheTTL)
+	hasControlMount(ws)
+	if res.calls != 2 {
+		t.Fatalf("docker lookups after the TTL = %d, want 2", res.calls)
+	}
+
+	// Rebuilt with the mount: provisioning's marker wins over the cached
+	// answer at once.
+	if err := os.WriteFile(filepath.Join(filepath.Dir(ws), ".control", ControlMountMarker), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := sshExecArgs(ws); !slices.Equal(got, []string{"--remote-env", "SSH_AUTH_SOCK=" + agentsock.ContainerSocketPath}) {
-		t.Fatalf("with a control dir: %v", got)
+	if !hasControlMount(ws) || res.calls != 2 {
+		t.Fatalf("marked after a rebuild: want the relay without asking docker (lookups = %d)", res.calls)
+	}
+}
+
+func TestHasControlMount_RetriesUncertainAnswersSoon(t *testing.T) {
+	for _, res := range []*lookupResult{{err: errors.New("docker down")}, {}} {
+		now := fakeClock(t)
+		stubControlMountLookup(t, res.lookup)
+		ws := unmarkedInstanceWorkspace(t)
+		if !hasControlMount(ws) || !hasControlMount(ws) {
+			t.Fatalf("%+v: want the relay", res)
+		}
+		if res.calls != 1 {
+			t.Fatalf("%+v: docker lookups = %d, want 1 within the retry TTL", res, res.calls)
+		}
+		*now = now.Add(controlMountRetryTTL)
+		hasControlMount(ws)
+		if res.calls != 2 {
+			t.Fatalf("%+v: docker lookups after the retry TTL = %d, want 2", res, res.calls)
+		}
+	}
+}
+
+func TestHasControlMount_EmptyWorkspaceIsTheRelay(t *testing.T) {
+	stubControlMountLookup(t, func(ws string) (bool, bool, error) {
+		t.Errorf("unexpected docker lookup for %q", ws)
+		return false, false, nil
+	})
+	if !hasControlMount("") {
+		t.Fatal("no workspace: want the relay")
 	}
 }
 
@@ -327,6 +492,14 @@ func TestConfigMentionsAgent(t *testing.T) {
 		{"compose file", map[string]string{".devcontainer/devcontainer.json": `{"dockerComposeFile":"compose.yml"}`, ".devcontainer/compose.yml": "volumes:\n  - ${SSH_AUTH_SOCK}:/ssh-agent\n"}, true},
 		{"named config", map[string]string{".devcontainer/py/devcontainer.json": `{"mounts":["source=${localEnv:SSH_AUTH_SOCK},target=/a,type=bind"]}`}, true},
 		{"too deep", map[string]string{".devcontainer/a/b/notes.txt": "SSH_AUTH_SOCK"}, false},
+		{"root compose file", map[string]string{".devcontainer/devcontainer.json": `{"dockerComposeFile":["../docker-compose.yml"]}`, "docker-compose.yml": "volumes:\n  - ${SSH_AUTH_SOCK}:/ssh-agent\n"}, true},
+		{"root compose override", map[string]string{"docker-compose.dev.yaml": "environment:\n  SSH_AUTH_SOCK: /ssh-agent\n"}, true},
+		{"root compose.yaml", map[string]string{"compose.yaml": "volumes:\n  - ${SSH_AUTH_SOCK}:/ssh-agent\n"}, true},
+		{"root Dockerfile", map[string]string{"Dockerfile": "FROM x\nENV SSH_AUTH_SOCK=/ssh-agent\n"}, true},
+		{"root Dockerfile variant", map[string]string{"Dockerfile.dev": "FROM x\nENV SSH_AUTH_SOCK=/ssh-agent\n"}, true},
+		{"other root files are not configs", map[string]string{"README.md": "export SSH_AUTH_SOCK=...", "compose.txt": "SSH_AUTH_SOCK"}, false},
+		{"plain root compose file", map[string]string{"docker-compose.yml": "services:\n  app:\n    image: x\n"}, false},
+		{"oversized file", map[string]string{"Dockerfile": "SSH_AUTH_SOCK" + strings.Repeat(" ", maxConfigBytes)}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -338,5 +511,21 @@ func TestConfigMentionsAgent(t *testing.T) {
 				t.Fatalf("configMentionsAgent = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// A symlinked .devcontainer (e.g. into a shared dotfiles checkout) is
+// followed; WalkDir alone would not descend into it.
+func TestConfigMentionsAgent_SymlinkedDevcontainer(t *testing.T) {
+	shared := t.TempDir()
+	if err := os.WriteFile(filepath.Join(shared, "devcontainer.json"), []byte(`{"mounts":["source=${localEnv:SSH_AUTH_SOCK},target=/a,type=bind"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws := t.TempDir()
+	if err := os.Symlink(shared, filepath.Join(ws, ".devcontainer")); err != nil {
+		t.Fatal(err)
+	}
+	if !configMentionsAgent(ws) {
+		t.Fatal("configMentionsAgent = false through a symlinked .devcontainer, want true")
 	}
 }

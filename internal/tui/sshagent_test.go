@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync"
@@ -15,10 +17,11 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 )
 
-// clearArmadaEnv points the TUI at the local daemon for the test.
+// clearArmadaEnv points the TUI at the local daemon for the test (and drops
+// an agent hint inherited from a TUI-spawned pane).
 func clearArmadaEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{fleetclient.EnvGateway, fleetclient.EnvSSH, fleetclient.EnvServer, fleetclient.EnvToken} {
+	for _, key := range []string{fleetclient.EnvGateway, fleetclient.EnvSSH, fleetclient.EnvServer, fleetclient.EnvToken, fleetclient.EnvTUIProvidesAgent} {
 		t.Setenv(key, "")
 	}
 }
@@ -410,9 +413,10 @@ func TestArmadaAdoptsTheSavedForwardAgent(t *testing.T) {
 }
 
 // TestAttachExecCmdReinvokesFleetShell: a remote attach re-invokes this
-// binary's `fleet shell`, which inherits the connection env unchanged (a nil
-// Env). Its agent provider yields to the TUI's on the daemon, so the child
-// needs nothing extra to leave forwarding to this TUI.
+// binary's `fleet shell` with this process's environment (the connection)
+// plus the TUI's agent hint, so the child's yielding provider neither delays
+// the shell nor prints a notice this TUI already shows. A local attach is the
+// server-resolved argv and carries no hint.
 func TestAttachExecCmdReinvokesFleetShell(t *testing.T) {
 	clearArmadaEnv(t)
 	t.Setenv(fleetclient.EnvSSH, "ssh://ben@devbox")
@@ -423,7 +427,51 @@ func TestAttachExecCmdReinvokesFleetShell(t *testing.T) {
 	if !slices.Equal(cmd.Args[1:], []string{"shell", "alpha/inst", "--", "bash"}) {
 		t.Fatalf("args = %v", cmd.Args)
 	}
-	if cmd.Env != nil {
-		t.Fatalf("child env = %v, want nil (inherit this process's environment)", cmd.Env)
+	if got := effectiveEnv(cmd, fleetclient.EnvSSH); got != "ssh://ben@devbox" {
+		t.Fatalf("child %s = %q, want the TUI's connection", fleetclient.EnvSSH, got)
+	}
+	if got := effectiveEnv(cmd, fleetclient.EnvTUIProvidesAgent); got != "1" {
+		t.Fatalf("child %s = %q, want the TUI's agent hint", fleetclient.EnvTUIProvidesAgent, got)
+	}
+
+	t.Setenv(fleetclient.EnvSSH, "")
+	origResolve := resolveExecArgv
+	t.Cleanup(func() { resolveExecArgv = origResolve })
+	resolveExecArgv = func(string, string, []string) ([]string, map[string]string, error) {
+		return []string{"docker", "exec", "-it", "c1", "bash"}, nil, nil
+	}
+	cmd, err = attachExecCmd("alpha", "inst", []string{"bash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Args[0] != "docker" {
+		t.Fatalf("local attach args = %v, want the resolved argv", cmd.Args)
+	}
+	if got := effectiveEnv(cmd, fleetclient.EnvTUIProvidesAgent); got != "" {
+		t.Fatalf("local attach %s = %q, want no hint", fleetclient.EnvTUIProvidesAgent, got)
+	}
+}
+
+// effectiveEnv is the value of key the child of cmd sees: from cmd.Env (the
+// last entry wins, as os/exec does) or, when that is nil, this process's.
+func effectiveEnv(cmd *exec.Cmd, key string) string {
+	if cmd.Env == nil {
+		return os.Getenv(key)
+	}
+	value := ""
+	for _, kv := range cmd.Env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == key {
+			value = v
+		}
+	}
+	return value
+}
+
+func TestExecWithBannerKeepsTheCommandsEnvironment(t *testing.T) {
+	cmd := exec.Command("fleet", "shell", "f/i")
+	cmd.Env = []string{"PATH=/bin", fleetclient.EnvTUIProvidesAgent + "=1"}
+	wrapped := execWithBannerCmd("banner", cmd)
+	if !slices.Equal(wrapped.Env, cmd.Env) {
+		t.Fatalf("the banner wrapper dropped the environment: %v", wrapped.Env)
 	}
 }

@@ -21,7 +21,9 @@ import (
 // fails because forwarding could not start. Its provider yields (agentfwd.Run
 // says so for any role but the TUI's): the daemon tries it only after every
 // non-yielding provider, so a shell started from the TUI does not displace
-// the TUI's.
+// the TUI's. A shell the TUI spawns carries fleetclient.EnvTUIProvidesAgent:
+// it still provides (forwarding outlives the TUI), but starts its shell at
+// once and leaves reporting the state to the TUI.
 
 // agentForwardLookupTimeout bounds reading the registry from the local daemon.
 const agentForwardLookupTimeout = 3 * time.Second
@@ -40,7 +42,8 @@ var agentForwardRecheck = 30 * time.Second
 // cannot work — only while forwardAgentWhile still waits for the provider to
 // settle: once it has returned the command owns the terminal (a remote
 // `fleet shell` has it in raw mode), and a stray line would corrupt a
-// full-screen app. A var so tests can capture it.
+// full-screen app. Never for a command the TUI spawned, whose state the TUI
+// shows. A var so tests can capture it.
 var agentForwardNotice io.Writer = os.Stderr
 
 // currentRemoteURL is the Armada URL the command is connected through
@@ -88,16 +91,31 @@ func agentForwardEnabled(ctx context.Context, url string) bool {
 // runAgentProvider is agentfwd.Run; a var so tests need no daemon.
 var runAgentProvider = agentfwd.Run
 
+// tuiProvidesAgent reports whether this command was spawned by a TUI that
+// provides the agent to the same remote and shows the forwarding state
+// (fleetclient.EnvTUIProvidesAgent). The hint can go stale — tmux's global
+// environment, and the panes it spawns, keep it after the TUI that set it
+// exited — which is harmless: it only drops the attach wait and the notice,
+// never the provider itself.
+func tuiProvidesAgent() bool {
+	return os.Getenv(fleetclient.EnvTUIProvidesAgent) == "1"
+}
+
 // forwardAgentWhile starts providing this machine's ssh-agent to svc when the
 // current connection has forwarding on, waits briefly for it to attach, and
 // returns the function that stops it (a no-op when nothing started). While it
 // runs it follows the registry: turning forwarding off stops the provider,
-// and the command carries on without it.
+// and the command carries on without it. Spawned by a TUI (tuiProvidesAgent)
+// it neither waits nor prints: the TUI's provider already serves the remote,
+// so the wait would only delay the shell, and the TUI shows the state the
+// notice would repeat. It still starts the provider, so forwarding survives
+// the TUI going away while this command runs.
 func forwardAgentWhile(ctx context.Context, svc fleetgrpc.FleetServiceClient) (stop func()) {
 	url := currentRemoteURL()
 	if !agentForwardEnabled(ctx, url) {
 		return func() {}
 	}
+	quiet := tuiProvidesAgent()
 	ctx, cancel := context.WithCancel(ctx)
 	// report runs on the provider's goroutines: the first settled state
 	// (attached, or a reason it cannot) releases the wait, and the first
@@ -109,7 +127,7 @@ func forwardAgentWhile(ctx context.Context, svc fleetgrpc.FleetServiceClient) (s
 	settled := make(chan struct{})
 	var settle sync.Once
 	var noticeMu sync.Mutex
-	noticeArmed := true
+	noticeArmed := !quiet
 	notice := func(format string, args ...any) {
 		noticeMu.Lock()
 		defer noticeMu.Unlock()
@@ -157,10 +175,12 @@ func forwardAgentWhile(ctx context.Context, svc fleetgrpc.FleetServiceClient) (s
 			}
 		}
 	}()
-	select {
-	case <-settled:
-	case <-done:
-	case <-time.After(agentForwardAttachWait):
+	if !quiet {
+		select {
+		case <-settled:
+		case <-done:
+		case <-time.After(agentForwardAttachWait):
+		}
 	}
 	noticeMu.Lock()
 	noticeArmed = false

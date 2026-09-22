@@ -129,7 +129,18 @@ func Serve(ctx context.Context) error {
 	// devcontainer instances (through a socket in each control directory) — is
 	// relayed to the attached provider's agent, else to the agent this daemon
 	// was started with. FLEET_SSH_AGENT_SOCK=off turns all of it off.
-	startAgentRelay(hubCtx, svc.agent)
+	agentRelayDone := startAgentRelay(hubCtx, svc.agent)
+	// On the way out, let the relay remove its sockets before the process
+	// exits (bounded): a socket file left behind is only replaced on the next
+	// start, and one in an instance's control dir outlives a daemon started
+	// with FLEET_SSH_AGENT_SOCK=off.
+	defer func() {
+		cancelHub()
+		select {
+		case <-agentRelayDone:
+		case <-time.After(3 * time.Second):
+		}
+	}()
 
 	grpcServer := grpc.NewServer()
 	fleetgrpc.RegisterFleetServiceServer(grpcServer, svc)

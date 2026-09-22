@@ -16,6 +16,9 @@ import (
 
 func stubAgentForward(t *testing.T, enabled bool) (started *atomic.Int32, stopped *atomic.Int32) {
 	t.Helper()
+	// A test run from a TUI-spawned pane inherits the TUI's hint; every test
+	// starts without it and sets it explicitly when it wants it.
+	t.Setenv(fleetclient.EnvTUIProvidesAgent, "")
 	origState, origRun := agentForwardState, runAgentProvider
 	t.Cleanup(func() { agentForwardState, runAgentProvider = origState, origRun })
 	agentForwardState = func(context.Context, string) (bool, error) {
@@ -267,6 +270,90 @@ func TestForwardAgentWhileIsSilentOnceItReturned(t *testing.T) {
 	stop()
 	if got := out.String(); got != "" {
 		t.Fatalf("notice after forwardAgentWhile returned = %q, want nothing", got)
+	}
+}
+
+// TestForwardAgentWhileSpawnedByTheTUIDoesNotWait: a shell the TUI spawned
+// (fleetclient.EnvTUIProvidesAgent) starts its provider but does not wait
+// for it to attach — the TUI's provider already serves the remote — and it
+// prints nothing even once the provider reports a reason it cannot work.
+func TestForwardAgentWhileSpawnedByTheTUIDoesNotWait(t *testing.T) {
+	t.Setenv(fleetclient.EnvGateway, "")
+	t.Setenv(fleetclient.EnvSSH, "ssh://ben@devbox")
+	started, stopped := stubAgentForward(t, true)
+	t.Setenv(fleetclient.EnvTUIProvidesAgent, "1")
+	out := captureAgentNotice(t)
+	orig := agentForwardAttachWait
+	t.Cleanup(func() { agentForwardAttachWait = orig })
+	agentForwardAttachWait = 10 * time.Second
+	// The provider settles only once released: without the hint the wait
+	// would run out its full attachWait.
+	release := make(chan struct{})
+	reported := make(chan struct{})
+	runAgentProvider = func(ctx context.Context, _ fleetgrpc.FleetServiceClient, _ string, report func(agentfwd.Status)) {
+		started.Add(1)
+		report(agentfwd.Status{State: agentfwd.StateConnecting})
+		<-release
+		report(agentfwd.Status{State: agentfwd.StateNoAgent, Detail: "SSH_AUTH_SOCK is not set"})
+		close(reported)
+		<-ctx.Done()
+		stopped.Add(1)
+	}
+
+	start := time.Now()
+	stop := forwardAgentWhile(context.Background(), nil)
+	if elapsed := time.Since(start); elapsed >= agentForwardAttachWait/2 {
+		t.Errorf("waited %s for the provider although the TUI provides the agent", elapsed)
+	}
+	waitUntil(t, "the provider to start", func() bool { return started.Load() == 1 })
+	close(release)
+	<-reported
+	if stopped.Load() != 0 {
+		t.Fatal("the provider must run for the command's duration")
+	}
+	stop()
+	if stopped.Load() != 1 {
+		t.Fatal("stop should end the provider and wait for it")
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("notice = %q, want nothing: the TUI shows the forwarding state", got)
+	}
+}
+
+// TestForwardAgentWhileLeavesTheNoticeToTheTUI: a reason forwarding cannot
+// work that the provider reports at once is printed by a command the user
+// ran, and not by one the TUI spawned (which still starts its provider).
+func TestForwardAgentWhileLeavesTheNoticeToTheTUI(t *testing.T) {
+	for _, c := range []struct {
+		hint string
+		want string
+	}{
+		{hint: "", want: "fleet: SSH agent forwarding: SSH_AUTH_SOCK is not set\n"},
+		{hint: "1", want: ""},
+	} {
+		t.Run("hint="+c.hint, func(t *testing.T) {
+			t.Setenv(fleetclient.EnvGateway, "")
+			t.Setenv(fleetclient.EnvSSH, "ssh://ben@devbox")
+			started, _ := stubAgentForward(t, true)
+			t.Setenv(fleetclient.EnvTUIProvidesAgent, c.hint)
+			out := captureAgentNotice(t)
+			reported := make(chan struct{})
+			runAgentProvider = func(ctx context.Context, _ fleetgrpc.FleetServiceClient, _ string, report func(agentfwd.Status)) {
+				started.Add(1)
+				report(agentfwd.Status{State: agentfwd.StateNoAgent, Detail: "SSH_AUTH_SOCK is not set"})
+				close(reported)
+				<-ctx.Done()
+			}
+			stop := forwardAgentWhile(context.Background(), nil)
+			<-reported
+			stop()
+			if started.Load() != 1 {
+				t.Fatalf("providers started = %d, want 1", started.Load())
+			}
+			if got := out.String(); got != c.want {
+				t.Fatalf("notice = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 

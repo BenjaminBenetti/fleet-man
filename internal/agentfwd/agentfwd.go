@@ -457,7 +457,12 @@ func (s *session) serve(id uint64, lc *localConn) {
 		return
 	default:
 	}
-	agentproto.BindAsForwarded(agent, s.runner.key())
+	if err := agentproto.BindAsForwarded(agent, s.runner.key()); err != nil {
+		// Its answer may still arrive and would pose as the next reply: this
+		// connection is unusable, so let the daemon try elsewhere.
+		s.send(upClose(id, fmt.Sprintf("the ssh-agent on %s did not answer: %v", hostname(), err)))
+		return
+	}
 	if !s.send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Ready{Ready: &fleetgrpc.SSHAgentReady{ConnId: id}}}) {
 		return
 	}

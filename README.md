@@ -624,7 +624,8 @@ time: reconnecting or switching machines takes effect at once, with no rebuild,
 and so does restarting your agent at the same socket path (if it moves, restart
 the TUI). A client that stops answering — a laptop gone to sleep — is skipped
 within half a minute. An instance's socket serves any process in that
-instance's container, whatever its uid; other users on the host are refused.
+instance's container (or a container nested in it), whatever its uid; other
+users on the host are refused.
 
 The trade-off is the one `ssh -A` has: while you are connected, anything on that
 host that reaches the relay — root, its fleet user, every process in its

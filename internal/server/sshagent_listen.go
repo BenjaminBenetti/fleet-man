@@ -56,6 +56,26 @@ type agentListener struct {
 	mu     sync.Mutex
 	closed bool
 	done   chan struct{}
+	// Refusals are logged at most once a minute per socket, with a count.
+	lastRefusalLog time.Time
+	refusals       int
+}
+
+// refusalLogInterval spaces "refused a connection" warnings for one socket.
+const refusalLogInterval = time.Minute
+
+func (l *agentListener) refused() {
+	l.mu.Lock()
+	l.refusals++
+	if time.Since(l.lastRefusalLog) < refusalLogInterval {
+		l.mu.Unlock()
+		return
+	}
+	count := l.refusals
+	l.refusals = 0
+	l.lastRefusalLog = time.Now()
+	l.mu.Unlock()
+	flog.Warn("ssh agent socket: refused connections from another user", "socket", l.path, "count", count)
 }
 
 // listenAgentSocket serves the relay socket at path, handing each accepted
@@ -98,12 +118,16 @@ func (l *agentListener) acceptLoop(serve func(net.Conn)) {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		if !agentPeerAllowed(conn, l.inst) {
-			flog.Warn("ssh agent socket: refused a connection from another user", "socket", l.path)
-			_ = conn.Close()
-			continue
-		}
-		go serve(conn)
+		// The peer check may ask docker (cached): never on the accept loop,
+		// where one slow answer would hold up every other connection.
+		go func() {
+			if !agentPeerAllowed(conn, l.inst) {
+				l.refused()
+				_ = conn.Close()
+				return
+			}
+			serve(conn)
+		}()
 	}
 }
 
@@ -176,25 +200,42 @@ func (h *agentHub) listenHost(path string) error {
 	return nil
 }
 
-// run reconciles the per-instance sockets until ctx is cancelled, then closes
-// every socket and connection. Instances only get sockets in relay mode.
+// run reconciles the per-instance sockets (relay mode) and refreshes the
+// published relay verdict until ctx is cancelled, then closes every socket and
+// connection.
 func (h *agentHub) run(ctx context.Context) {
 	defer h.close()
-	if agentsock.CurrentMode() != agentsock.ModeRelay {
-		<-ctx.Done()
-		return
-	}
+	relay := agentsock.CurrentMode() == agentsock.ModeRelay
 	ticker := time.NewTicker(agentSyncInterval)
 	defer ticker.Stop()
 	for {
-		if st, err := state.Load(); err == nil {
-			h.syncInstances(st)
+		if relay {
+			if st, err := state.Load(); err == nil {
+				h.syncInstances(st)
+			}
 		}
+		// Whether the daemon's own agent is alive changes on its own (a
+		// login's forwarded agent goes away): keep the verdict that
+		// in-process CLI backends read current, and redirect once usable.
+		agentsock.RefreshUsable()
+		h.maybeRedirect()
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+// maybeRedirect points the daemon's own SSH_AUTH_SOCK at the relay once
+// something can answer there (agentsock.RelayUsable). No-op before
+// startAgentRelay has set it up, and once done.
+func (h *agentHub) maybeRedirect() {
+	h.mu.Lock()
+	redirect := h.redirect
+	h.mu.Unlock()
+	if redirect != nil && agentsock.RelayUsable() {
+		redirect()
 	}
 }
 
@@ -389,7 +430,7 @@ func (h *agentHub) close() {
 // until something can answer on the relay. Then it reconciles the
 // per-instance sockets until ctx ends. Best-effort: if the host socket cannot
 // be created, the daemon keeps its original agent and says so in the log.
-func startAgentRelay(ctx context.Context, h *agentHub) {
+func startAgentRelay(ctx context.Context, h *agentHub) (done <-chan struct{}) {
 	origin := agentsock.OriginSock()
 	h.setFallback(origin)
 	if agentsock.CurrentMode() != agentsock.ModeOff {
@@ -397,31 +438,36 @@ func startAgentRelay(ctx context.Context, h *agentHub) {
 		if err := h.listenHost(path); err != nil {
 			flog.Warn("ssh agent relay: host socket unavailable; the daemon keeps its own agent", "err", err)
 		} else {
-			var redirect sync.Once
-			redirectNow := func() {
-				redirect.Do(func() {
+			var once sync.Once
+			_, err := os.Stat(agentsock.ProviderSeenPath())
+			agentsock.SetProviderSeen(err == nil)
+			agentsock.SetRelayServing(true)
+			h.mu.Lock()
+			h.redirect = func() {
+				once.Do(func() {
 					_ = os.Setenv(agentsock.EnvOrigin, origin)
 					_ = os.Setenv(agentsock.EnvAuthSock, path)
 				})
 			}
-			_, err := os.Stat(agentsock.ProviderSeenPath())
-			seen := err == nil
-			agentsock.SetProviderSeen(seen)
-			agentsock.SetRelayServing(true)
-			if seen || agentsock.LiveSocket(origin) {
-				redirectNow()
-			}
-			h.mu.Lock()
 			h.onFirstProvider = func() {
 				if f, err := os.OpenFile(agentsock.ProviderSeenPath(), os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
 					_ = f.Close()
 				}
 				agentsock.SetProviderSeen(true)
-				redirectNow()
+				h.maybeRedirect()
 			}
 			h.mu.Unlock()
+			// Remote Fleet is not known yet (the config is reconciled after
+			// this): with only a provider seen before, reconcileRemote
+			// completes the redirect.
+			h.maybeRedirect()
 		}
 	}
 	create.ControlDirReady = h.ensureInstance
-	go h.run(ctx)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		h.run(ctx)
+	}()
+	return finished
 }

@@ -117,5 +117,9 @@ func execWithBannerCmd(banner string, cmd *exec.Cmd) *exec.Cmd {
 		f.Name(), f.Name(), quoteArgs(cmd.Args),
 	)
 
-	return exec.Command("sh", "-c", script)
+	// Keep the wrapped command's environment (the server-supplied exec env,
+	// the TUI's hints to a `fleet shell` child): only the argv is rewritten.
+	wrapped := exec.Command("sh", "-c", script)
+	wrapped.Env = cmd.Env
+	return wrapped
 }

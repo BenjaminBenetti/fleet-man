@@ -20,7 +20,7 @@ import (
 // only check that it signed the session id, which is all a relay can offer —
 // so no constrained key ever matches it.
 
-const bindTimeout = 3 * time.Second
+const bindTimeout = 5 * time.Second
 
 // NewBindKey makes a throwaway key to sign forwarding binds with.
 func NewBindKey() (ssh.Signer, error) {
@@ -31,24 +31,29 @@ func NewBindKey() (ssh.Signer, error) {
 	return ssh.NewSignerFromKey(priv)
 }
 
-// BindAsForwarded sends the forwarding bind on agent and reads the answer. An
-// agent without the extension (or an older OpenSSH) answers with a failure,
-// which is fine: the allowlist still applies. Errors are ignored for the same
-// reason; a broken agent connection shows up on the first real request.
-func BindAsForwarded(agent net.Conn, key ssh.Signer) {
+// BindAsForwarded sends the forwarding bind on agent and reads the answer.
+// Any answer counts — an agent without the extension (or an older OpenSSH)
+// answers with a failure, which is fine: the allowlist still applies. An
+// error means the connection is unusable: the answer did not arrive in time
+// and could still turn up later as the "reply" to the next request, shifting
+// every reply after it. The caller must then drop the connection.
+func BindAsForwarded(agent net.Conn, key ssh.Signer) error {
 	if key == nil {
-		return
+		return nil
 	}
 	msg, err := ForwardingBind(key)
 	if err != nil {
-		return
+		return nil // nothing was sent; the connection is untouched
 	}
-	_ = agent.SetDeadline(time.Now().Add(bindTimeout))
+	if err := agent.SetDeadline(time.Now().Add(bindTimeout)); err != nil {
+		return err
+	}
 	defer agent.SetDeadline(time.Time{})
 	if _, err := agent.Write(msg); err != nil {
-		return
+		return err
 	}
-	_, _ = ReadMessage(agent)
+	_, err = ReadMessage(agent)
+	return err
 }
 
 // ForwardingBind builds a complete session-bind@openssh.com request binding a
