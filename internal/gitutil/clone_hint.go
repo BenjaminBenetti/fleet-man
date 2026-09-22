@@ -12,7 +12,9 @@ func CloneFailureHint(output string) string {
 	case strings.Contains(output, "Host key verification failed"):
 		return "hint: this host does not know the git server's SSH host key yet, and the fleet daemon cannot ask — connect to it once from this host (e.g. `ssh -T git@github.com`) to trust it"
 	case strings.Contains(output, "Permission denied (publickey)"):
-		return "hint: no SSH key on this host is accepted by the git server — on a remote fleet, turn on \"Forward SSH agent\" for it in the TUI's Fleet Armada settings to use your own keys"
+		// Names the control exactly as the TUI draws it: the toggle on the
+		// remote's row in Settings → Fleet Armada.
+		return "hint: no SSH key on this host is accepted by the git server — on a remote fleet, turn on [ agent: on ] on its row in Settings → Fleet Armada (right arrow, enter) to use your own keys, and keep the TUI connected"
 	default:
 		return ""
 	}

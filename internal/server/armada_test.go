@@ -111,9 +111,11 @@ func TestDroppedSSHRemotes(t *testing.T) {
 }
 
 // TestSetArmadaInheritsForwardAgentForNewSSHRemotes: a newly registered ssh://
-// remote starts with agent forwarding as the user's ssh config has it for that
-// host; an existing entry the user turned off is never flipped back on, and
-// gateway remotes are never touched.
+// remote starts with agent forwarding on only when the user's ssh config
+// forwards their default agent to that host (which values count is
+// sshtunnel's TestParseSSHConfig / TestForwardAgentConfiguredRealSSH); an
+// existing entry the user turned off is never flipped back on, and gateway
+// remotes are never touched.
 func TestSetArmadaInheritsForwardAgentForNewSSHRemotes(t *testing.T) {
 	isolateFleetDir(t)
 	orig := sshForwardAgentConfigured

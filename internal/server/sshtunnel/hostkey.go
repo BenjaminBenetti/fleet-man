@@ -171,8 +171,8 @@ type sshEffectiveConfig struct {
 	knownHosts   string
 	hostKeyAlias string
 	proxied      bool
-	// forwardAgent is the user's ForwardAgent for the host: anything but "no"
-	// (yes, or an agent socket path / variable name) means they forward one.
+	// forwardAgent: the user's ForwardAgent for the host forwards their
+	// default agent, the one fleet would forward (see forwardsDefaultAgent).
 	forwardAgent bool
 }
 
@@ -225,7 +225,8 @@ func parseSSHConfig(out string) (sshEffectiveConfig, error) {
 				c.hostKeyAlias = fields[1]
 			}
 		case "forwardagent":
-			c.forwardAgent = fields[1] != "no"
+			// One token only: "yes /x" is a socket path that starts with yes.
+			c.forwardAgent = len(fields) == 2 && forwardsDefaultAgent(fields[1])
 		case "proxyjump", "proxycommand":
 			if fields[1] != "none" {
 				c.proxied = true
@@ -244,6 +245,16 @@ func parseSSHConfig(out string) (sshEffectiveConfig, error) {
 		c.knownHosts = expandHome("~/.ssh/known_hosts")
 	}
 	return c, nil
+}
+
+// forwardsDefaultAgent reports whether a ForwardAgent value, as `ssh -G`
+// prints it, forwards the agent in SSH_AUTH_SOCK — the one fleet forwards.
+// ssh -G prints yes or no (true/false folded in), a socket path with ~ and
+// ${VAR} already expanded, and $VAR verbatim. A path or any other variable
+// names a different agent, often a deliberately restricted one, so it must not
+// switch on forwarding of the user's full default agent.
+func forwardsDefaultAgent(value string) bool {
+	return strings.EqualFold(value, "yes") || value == "$SSH_AUTH_SOCK"
 }
 
 // expandHome resolves a leading "~/" the way ssh does for UserKnownHostsFile.

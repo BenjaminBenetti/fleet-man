@@ -109,7 +109,22 @@ func TestParseSSHConfig(t *testing.T) {
 	if c.forwardAgent {
 		t.Fatal("no forwardagent line must read as not forwarding")
 	}
-	for value, want := range map[string]bool{"no": false, "yes": true, "/run/agent.sock": true, "SSH_AUTH_SOCK": true} {
+	// Values as `ssh -G` prints them (OpenSSH 9.2): only yes and
+	// $SSH_AUTH_SOCK forward the default agent fleet would forward; a path
+	// (${SSH_AUTH_SOCK} arrives already expanded to one) or another variable
+	// is a different, possibly restricted agent.
+	for value, want := range map[string]bool{
+		"no":                       false,
+		"yes":                      true,
+		"YES":                      true,
+		"$SSH_AUTH_SOCK":           true,
+		"/run/restricted.sock":     false,
+		"/path with space/a.sock":  false,
+		"yes /not/really/yes.sock": false,
+		"$OTHER_AGENT":             false,
+		"$ssh_auth_sock":           false,
+		"SSH_AUTH_SOCK":            false,
+	} {
 		c, err := parseSSHConfig("hostname h\nport 22\nforwardagent " + value + "\n")
 		if err != nil || c.forwardAgent != want {
 			t.Fatalf("forwardagent %s: got %v (err %v), want %v", value, c.forwardAgent, err, want)
@@ -143,6 +158,48 @@ func TestParseSSHConfig(t *testing.T) {
 	c, _ = parseSSHConfig("hostname h\nport 22\nproxycommand none\nproxyjump none\n")
 	if c.proxied {
 		t.Fatal("proxycommand/proxyjump none is not proxied")
+	}
+}
+
+// TestForwardAgentConfiguredRealSSH runs the real `ssh -G` over a scratch
+// config, so the parse above is checked against how this ssh actually prints
+// each ForwardAgent form rather than against assumptions about it.
+func TestForwardAgentConfiguredRealSSH(t *testing.T) {
+	if _, err := exec.LookPath("ssh"); err != nil {
+		t.Skip("no ssh binary on PATH")
+	}
+	cfg := `Host fa-yes
+  ForwardAgent yes
+Host fa-default-var
+  ForwardAgent $SSH_AUTH_SOCK
+Host fa-path
+  ForwardAgent /run/restricted-agent.sock
+Host fa-other-var
+  ForwardAgent $OTHER_AGENT
+Host fa-no
+  ForwardAgent no
+Host *
+  HostName 127.0.0.1
+`
+	cfgPath := filepath.Join(t.TempDir(), "ssh_config")
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orig := sshBaseArgs
+	sshBaseArgs = append([]string{"-F", cfgPath}, orig...)
+	t.Cleanup(func() { sshBaseArgs = orig })
+
+	for host, want := range map[string]bool{
+		"fa-yes":         true,
+		"fa-default-var": true,
+		"fa-path":        false,
+		"fa-other-var":   false,
+		"fa-no":          false,
+		"fa-unset":       false,
+	} {
+		if got := ForwardAgentConfigured(context.Background(), "ssh://ben@"+host); got != want {
+			t.Errorf("%s: ForwardAgentConfigured = %v, want %v", host, got, want)
+		}
 	}
 }
 

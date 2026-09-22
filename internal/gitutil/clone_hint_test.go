@@ -9,7 +9,8 @@ func TestCloneFailureHint(t *testing.T) {
 	if got := CloneFailureHint("Host key verification failed.\nfatal: Could not read from remote repository."); !strings.Contains(got, "host key") {
 		t.Fatalf("host key failure hint = %q", got)
 	}
-	if got := CloneFailureHint("git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."); !strings.Contains(got, "Forward SSH agent") {
+	// The hint must name the toggle as the TUI renders it (tui.renderArmadaAgentButton).
+	if got := CloneFailureHint("git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."); !strings.Contains(got, "[ agent: on ]") || !strings.Contains(got, "Settings → Fleet Armada") {
 		t.Fatalf("publickey failure hint = %q", got)
 	}
 	if got := CloneFailureHint("fatal: repository 'x' not found"); got != "" {

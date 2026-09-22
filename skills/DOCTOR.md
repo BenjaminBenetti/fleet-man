@@ -107,8 +107,9 @@ ssh -T git@github.com 2>&1 | head -1
 ### 3.2 SSH agent forwarding
 
 Fleet-man relays `SSH_AUTH_SOCK` into containers so git works inside instances.
-For a remote fleet, also turn on `[ agent: on ]` for it in Settings → Fleet Armada
-so your agent goes with you while you are connected.
+For a remote fleet, also turn on `[ agent: on ]` on its row in Settings → Fleet
+Armada (right arrow, enter). The remote only has your agent while the TUI (or a
+`fleet up`/`clone`/`rebuild`/`shell` against it) stays connected.
 
 ```bash
 echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK:-not set}"

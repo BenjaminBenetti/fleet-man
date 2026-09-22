@@ -605,25 +605,37 @@ remote's row in **Settings → Fleet Armada** (right arrow to reach it, enter to
 toggle) and fleet forwards your local ssh-agent to that fleet while you are
 connected to it, like `ssh -A`: the remote daemon's own clones and every process
 in its devcontainer instances use your keys. A newly added `ssh://` remote starts
-with it on when your `~/.ssh/config` already sets `ForwardAgent` for that host.
-The row shows whether your agent is in use.
+with it on only when your ssh config says `ForwardAgent yes` (or
+`$SSH_AUTH_SOCK`) for that host. The row shows whether your agent is in use.
 
-The TUI (and `fleet up` / `clone` / `rebuild` / `shell` against that remote)
-streams agent requests over the fleet connection itself, so it works for SSH and
-gateway remotes alike and needs nothing from the remote's `sshd`. On the remote,
-the daemon points its own `SSH_AUTH_SOCK` at a relay socket and listens on one in
-each instance's control directory (`/fleet-mounts/control/ssh-agent.sock` inside
-the instance). Each connection goes to the most recently attached client that has
-an agent, else to the agent the remote daemon was started with. The agent is
-chosen per connection, so reconnecting, switching machines, or restarting your
-agent takes effect at once, with no rebuild.
+The TUI streams agent requests over the fleet connection itself, so it works for
+SSH and gateway remotes alike and needs nothing from the remote's `sshd`.
+`fleet up` / `clone` / `rebuild` / `shell` against that remote carry your agent
+the same way for their duration (a shell started from the TUI leaves it to the
+TUI). On the remote, the daemon points its own `SSH_AUTH_SOCK` at a relay socket
+and listens on one in each instance's control directory
+(`/fleet-mounts/control/ssh-agent.sock` inside the instance); instances get
+`SSH_AUTH_SOCK` only when something can back it — the daemon has an agent of its
+own, or **Remote Fleet** is on so a client can attach one. Each connection goes
+to the newest connected client that can serve it, else to the host's own agent,
+chosen afresh every time: reconnecting or switching machines takes effect at
+once, with no rebuild, and so does restarting your agent at the same socket path
+(if it moves, restart the TUI). An instance's socket serves any process in that
+instance's container, whatever its uid; other users on the host are refused.
 
-The trade-off is the one `ssh -A` has: while you are connected, root on that host
-and anything running as its fleet user — every process in its instances included
-— can ask your agent to sign. The keys themselves never leave your machine; use
-`ssh-add -c` to confirm each use. Scheduled and webhook automation runs with
-nobody connected, so it never gets your agent: give the host its own deploy key
-for unattended work. The host's owner can refuse forwarding with
+The trade-off is the one `ssh -A` has: while you are connected, anything on that
+host that reaches the relay — root, its fleet user, every process in its
+instances, automation that fires meanwhile — can use your agent. It can list
+your keys and ask for signatures, nothing else: fleet refuses every other
+request before it reaches your agent, so the remote cannot add or remove keys,
+lock the agent, or load PKCS#11/security-key providers (which your agent would
+otherwise allow, since a relayed connection reaches it as a local client). The
+keys never leave your machine; use `ssh-add -c` to confirm each use.
+Destination constraints (`ssh-add -h`) do not see the fleet hop, so a key
+limited to host X can be used from the remote to reach X — keep such keys out
+of the agent you forward, or add them with `-c`. With nobody connected,
+automation cannot use your agent: give the host its own deploy key for
+unattended work. The host's owner can refuse forwarding with
 `FLEET_SSH_AGENT_SOCK=off`. On a macOS host, instances keep Docker Desktop's agent
 (a host socket cannot cross into its VM); the host-side clone still uses yours.
 
@@ -637,7 +649,7 @@ Variables fleet **reads** (set them to configure behavior):
 | `FLEET_SERVER` | `host:port` | Drive a remote daemon over plain TCP (no gateway). |
 | `FLEET_DEVCONTAINER_BUILDKIT` | `auto` (default), `never` | BuildKit mode for Fleet-managed devcontainers. See [Devcontainer BuildKit](#devcontainer-buildkit). |
 | `FLEET_DEVCONTAINER_UPDATE_REMOTE_USER_UID` | `default`, `never`, `on`, `off` | Remote-user UID/GID rewrite mode. See [Devcontainer UID Rewrite](#devcontainer-uid-rewrite). |
-| `FLEET_SSH_AGENT_SOCK` | absolute path, `off`, or `none` (case-insensitive) | How instances reach the SSH agent. By default they use the daemon's relay socket on Linux (see [Your SSH agent on a remote fleet](#your-ssh-agent-on-a-remote-fleet)) and Docker Desktop's VM-side `/run/host-services/ssh-auth.sock` on macOS (OrbStack and `colima --ssh-agent` are path-compatible). A path bind-mounts that socket instead — set it if your Docker backend exposes the agent elsewhere (default Colima, Podman machine, Rancher Desktop). `off`/`none` disables agent forwarding entirely, the relay and forwarding from Armada clients included. |
+| `FLEET_SSH_AGENT_SOCK` | absolute path, `off`, or `none` (case-insensitive) | How instances reach the SSH agent. By default they use the daemon's relay socket on Linux (see [Your SSH agent on a remote fleet](#your-ssh-agent-on-a-remote-fleet)) and Docker Desktop's VM-side `/run/host-services/ssh-auth.sock` on macOS (OrbStack and `colima --ssh-agent` are path-compatible). A path bind-mounts that socket instead — set it if your Docker backend exposes the agent elsewhere (default Colima, Podman machine, Rancher Desktop); instances then bypass the relay, so an agent forwarded by an Armada client reaches only the daemon's own git. `off`/`none` disables agent forwarding entirely, the relay and forwarding from Armada clients included. |
 | `FLEET_OPENER` | program (+ args, whitespace-split) | Program `fleet open` / in-instance `fo` hands a copied file to instead of the desktop opener (`xdg-open`, `open`, `wslview`), e.g. `imv -f`. Read by whichever process opens the file: the CLI for `fleet open`, the TUI for `fo`. Executables are never opened. |
 | `FLEET_MIC_CAPTURE` | shell command | Replace fleet's microphone recorder: the command's stdout must be raw 16 kHz mono signed 16-bit little-endian PCM. For audio stacks fleet can't drive itself (e.g. `sox -t coreaudio "My Mic" -t raw -r 16000 -e signed -b 16 -c 1 -`). Read by the process providing the microphone (the TUI / `fleet mic attach`). Fleet cannot pass your command a device, so the Device setting reaches it as `FLEET_MIC_DEVICE` (the raw configured id, empty for the system default) for it to honour or ignore. See [Microphone](#microphone). |
 | `CODER_URL` | URL | Coder deployment URL (Coder backend). |
@@ -654,7 +666,8 @@ Variables fleet **exports** for MCP clients (written to `~/.fleet/mcp.env`, sour
 
 Fleet also **respects** standard environment when present: `HOME` (the `~/.fleet`
 location), `TMUX` (enables split-pane mode when run inside tmux), `SSH_AUTH_SOCK`
-(relayed into instances for SSH/git), and `WSL_DISTRO_NAME` / `WSL_INTEROP`
+(the daemon's agent, relayed into instances for SSH/git; a client's, forwarded to
+remote fleets with `[ agent: on ]`), and `WSL_DISTRO_NAME` / `WSL_INTEROP`
 / `WAYLAND_DISPLAY` (platform detection for clipboard and browser integration).
 
 ## Requirements
