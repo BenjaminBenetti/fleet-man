@@ -36,9 +36,14 @@ var tmuxRun = func(args ...string) (string, error) {
 }
 
 // applyPaneChrome sets the window's divider styles to chrome, first saving
-// the current window-level values (once per process). An empty chrome
-// restores them, which is how the Fleet theme leaves tmux alone.
+// the current window-level values (once per dressing). An empty chrome
+// restores them, which is how the Fleet theme leaves tmux alone — and when
+// nothing was ever applied it runs no tmux command at all, so a Fleet-themed
+// session never snapshots (and later reverts) styles it did not set.
 func applyPaneChrome(chrome theme.PaneChrome) {
+	if chrome == (theme.PaneChrome{}) && paneChromeSaved == nil {
+		return
+	}
 	if paneChromeSaved == nil {
 		paneChromeSaved = make(map[string]string, len(paneChromeOptions))
 		for _, opt := range paneChromeOptions {
@@ -59,8 +64,9 @@ func applyPaneChrome(chrome theme.PaneChrome) {
 
 // restorePaneChrome puts back the window-level values captured by the first
 // applyPaneChrome: re-set if there was one, unset (fall back to the global /
-// inherited value) if there was not. Safe to call more than once and before
-// any apply.
+// inherited value) if there was not — then forgets the snapshot, so a second
+// restore (Gruvbox → Fleet, then quit) is a no-op and a later themed apply
+// snapshots afresh. Safe to call before any apply.
 func restorePaneChrome() {
 	if paneChromeSaved == nil {
 		return
@@ -72,4 +78,5 @@ func restorePaneChrome() {
 			_, _ = tmuxRun("set-option", "-wu", opt)
 		}
 	}
+	paneChromeSaved = nil
 }

@@ -96,6 +96,7 @@ func (m *model) setTheme(name string) {
 	m.themeName = t.Name
 	applyTheme(t)
 	m.spinner.Style = spinnerStyle
+	m.agentSpinner.Style = agentWorkingStyle
 	if m.inHostTmux {
 		applyPaneChrome(t.Pane)
 	}
@@ -105,9 +106,16 @@ func (m *model) setTheme(name string) {
 // TUI writes it through its own config (the active daemon IS the local one);
 // a remote TUI applies optimistically and saves to the local daemon
 // asynchronously, reverting on failure. Returns the save command, if any.
+//
+// Remote saves are serialized: bubbletea runs every Cmd on its own goroutine,
+// so two ←/→ presses would race their GetConfig→SetConfig round trips and the
+// LAST TO LAND would win — an in-between theme on disk. At most one save is in
+// flight; presses meanwhile only change the look, and the save's completion
+// (handleThemeMsg) issues one more save if the look moved on.
 func (m *model) selectTheme(name string) tea.Cmd {
 	previous := m.themeName
 	m.setTheme(name)
+	m.themePicked = true
 	if !fleetclient.IsRemote() {
 		if m.config == nil {
 			m.config = configutil.DefaultConfig()
@@ -124,30 +132,49 @@ func (m *model) selectTheme(name string) tea.Cmd {
 		return nil
 	}
 	m.message = fmt.Sprintf("Theme set to %s", m.themeName)
+	if m.themeSaving {
+		return nil // coalesced: the in-flight save's completion saves this one
+	}
+	m.themeSaving = true
 	return saveThemeCmd(m.themeName)
 }
 
-// handleThemeMsg applies the outcome of a load or an asynchronous save.
-func (m *model) handleThemeMsg(msg tea.Msg) {
+// handleThemeMsg applies the outcome of a load or an asynchronous save. It
+// returns the follow-up save when the look moved on while one was in flight.
+func (m *model) handleThemeMsg(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case themeLoadedMsg:
 		if msg.err != nil {
 			// The local daemon should always be reachable (it auto-spawns);
 			// keep the Fleet look rather than nag on the main page.
-			return
+			return nil
+		}
+		if m.themePicked {
+			// A slow boot-time load must not overwrite a theme the user has
+			// since chosen (that choice is what is being persisted).
+			return nil
 		}
 		m.setTheme(msg.name)
 		m.themeSaved = m.themeName
 	case themeSavedMsg:
+		m.themeSaving = false
+		saved := theme.Lookup(msg.name).Name
 		if msg.err != nil {
 			m.message = fmt.Sprintf("Failed to save theme: %v", msg.err)
 			// Revert to the last persisted look — unless the user has already
 			// moved on to another theme, whose own save will report.
-			if m.themeName == theme.Lookup(msg.name).Name {
+			if m.themeName == saved {
 				m.setTheme(m.themeSaved)
 			}
-			return
+			return nil
 		}
-		m.themeSaved = theme.Lookup(msg.name).Name
+		m.themeSaved = saved
+		if m.themeName != saved {
+			// The user kept cycling while this save was in flight: persist
+			// where they ended up (one save, whatever the number of presses).
+			m.themeSaving = true
+			return saveThemeCmd(m.themeName)
+		}
 	}
+	return nil
 }

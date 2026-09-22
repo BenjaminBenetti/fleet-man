@@ -46,6 +46,9 @@ func TestApplyThemeRebuildsStyles(t *testing.T) {
 	if m.spinner.Style.GetForeground() != theme.GruvboxDark().Accent {
 		t.Fatal("spinner style not refreshed")
 	}
+	if m.agentSpinner.Style.GetForeground() != theme.GruvboxDark().Success {
+		t.Fatal("agent throbber style not refreshed (would draw two greens per working row)")
+	}
 
 	m.setTheme("no such theme")
 	if m.themeName != theme.Default || titleStyle.GetForeground() != fleetTitle || instanceColorStyle("purple").GetForeground() != fleetPurple {
@@ -123,6 +126,9 @@ func TestSelectThemeRemoteSavesLocally(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("remote save must be asynchronous")
 	}
+	if !m.themeSaving {
+		t.Fatal("a save must be marked in flight")
+	}
 	if remoteSaved || m.config.ThemeSettings.Name != "" {
 		t.Fatal("remote TUI must not write the theme into the remote config")
 	}
@@ -133,7 +139,9 @@ func TestSelectThemeRemoteSavesLocally(t *testing.T) {
 	if localName != "Catppuccin Latte" {
 		t.Fatalf("local save got %q", localName)
 	}
-	m.handleThemeMsg(msg)
+	if follow := m.handleThemeMsg(msg); follow != nil || m.themeSaving {
+		t.Fatal("no follow-up save when the look did not move")
+	}
 	if m.themeSaved != "Catppuccin Latte" {
 		t.Fatalf("themeSaved = %q", m.themeSaved)
 	}
@@ -149,14 +157,61 @@ func TestSelectThemeRemoteSavesLocally(t *testing.T) {
 		t.Fatalf("message = %q", m.message)
 	}
 
-	// The boot-time load applies whatever the local daemon has.
+	// A late boot-time load must not overwrite a theme the user has picked.
 	m.handleThemeMsg(themeLoadedMsg{name: "Solarized Light"})
-	if activeTheme.Name != "Solarized Light" || m.themeSaved != "Solarized Light" {
+	if activeTheme.Name != "Catppuccin Latte" {
+		t.Fatal("themeLoadedMsg after a user pick must be ignored")
+	}
+
+	// Before any pick, the boot-time load applies whatever the local daemon has.
+	fresh := &model{spinner: spinner.New()}
+	fresh.handleThemeMsg(themeLoadedMsg{name: "Solarized Light"})
+	if activeTheme.Name != "Solarized Light" || fresh.themeSaved != "Solarized Light" {
 		t.Fatal("themeLoadedMsg must apply and record the persisted name")
 	}
-	m.handleThemeMsg(themeLoadedMsg{err: errors.New("nope")})
+	fresh.handleThemeMsg(themeLoadedMsg{err: errors.New("nope")})
 	if activeTheme.Name != "Solarized Light" {
 		t.Fatal("a failed load must keep the current look")
+	}
+}
+
+// TestSelectThemeRemoteCoalescesSaves: rapid cycling on a remote TUI keeps at
+// most one save in flight; presses meanwhile only change the look, and the
+// save's completion persists where the user ended up — so the config never
+// holds an in-between theme, whatever order the round trips would have landed.
+func TestSelectThemeRemoteCoalescesSaves(t *testing.T) {
+	resetTheme(t)
+	t.Setenv(fleetclient.EnvGateway, "https://gw.example")
+	var savedNames []string
+	origLocal := saveThemeLocal
+	saveThemeLocal = func(name string) error { savedNames = append(savedNames, name); return nil }
+	t.Cleanup(func() { saveThemeLocal = origLocal })
+
+	m := &model{spinner: spinner.New(), themeName: theme.Default, themeSaved: theme.Default}
+	first := m.selectTheme("Gruvbox Dark")
+	if first == nil {
+		t.Fatal("first press starts a save")
+	}
+	for _, name := range []string{"Catppuccin Mocha", "Tokyo Night", "Gruvbox Light"} {
+		if cmd := m.selectTheme(name); cmd != nil {
+			t.Fatalf("press to %s while a save is in flight must not start another", name)
+		}
+	}
+	if activeTheme.Name != "Gruvbox Light" {
+		t.Fatal("presses while saving must still change the look")
+	}
+	follow := m.handleThemeMsg(first())
+	if follow == nil {
+		t.Fatal("completion must issue the follow-up save for the final theme")
+	}
+	if done := m.handleThemeMsg(follow()); done != nil {
+		t.Fatal("no third save once caught up")
+	}
+	if !slices.Equal(savedNames, []string{"Gruvbox Dark", "Gruvbox Light"}) {
+		t.Fatalf("saves = %v, want the first press then the final theme only", savedNames)
+	}
+	if m.themeSaved != "Gruvbox Light" || m.themeSaving {
+		t.Fatalf("themeSaved=%q saving=%v", m.themeSaved, m.themeSaving)
 	}
 }
 
@@ -210,6 +265,14 @@ func TestPaneChromeSaveApplyRestore(t *testing.T) {
 	if len(calls) != 0 {
 		t.Fatalf("restore before apply ran %v", calls)
 	}
+	// The Fleet theme at boot (no chrome, nothing applied) must run NO tmux
+	// command: no snapshot, so quitting later can't revert a style that
+	// changed during the session.
+	applyPaneChrome(theme.Fleet().Pane)
+	restorePaneChrome()
+	if len(calls) != 0 {
+		t.Fatalf("Fleet at boot touched tmux: %v", calls)
+	}
 
 	applyPaneChrome(theme.GruvboxDark().Pane)
 	want := []string{
@@ -240,5 +303,17 @@ func TestPaneChromeSaveApplyRestore(t *testing.T) {
 	}
 	if !slices.Equal(calls, want) {
 		t.Fatalf("Fleet apply (restore) calls:\n%v\nwant\n%v", calls, want)
+	}
+
+	// Restored once: quitting afterwards does nothing, and a later themed
+	// apply snapshots afresh.
+	calls = nil
+	restorePaneChrome()
+	if len(calls) != 0 {
+		t.Fatalf("second restore ran %v", calls)
+	}
+	applyPaneChrome(theme.TokyoNight().Pane)
+	if len(calls) != 4 || calls[0] != "show-options -wv pane-border-style" {
+		t.Fatalf("re-apply after restore must re-snapshot: %v", calls)
 	}
 }

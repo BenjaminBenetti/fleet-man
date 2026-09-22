@@ -152,8 +152,13 @@ type model struct {
 	// switched onto — see theme_client.go. Empty until resolved (Fleet look).
 	// themeSaved is the last name known to be persisted locally, to revert to
 	// when an asynchronous save fails.
-	themeName  string
-	themeSaved string
+	// themeSaving marks a local save in flight (remote TUIs; see selectTheme)
+	// and themePicked that the user chose a theme this session, so a late
+	// boot-time load can't overwrite it.
+	themeName   string
+	themeSaved  string
+	themeSaving bool
+	themePicked bool
 
 	// Update check
 	updateAvailable string // non-empty = new version tag from GitHub
@@ -985,8 +990,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case themeLoadedMsg, themeSavedMsg:
 		// Theme messages are model-level too: the look outlives page switches.
-		m.handleThemeMsg(msg)
-		return m, spinCmd
+		return m, tea.Batch(spinCmd, m.handleThemeMsg(msg))
 
 	case updateCheckMsg:
 		if msg.latestVersion != "" {

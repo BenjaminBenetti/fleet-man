@@ -7,9 +7,11 @@ import (
 
 // The TUI's styles are package-level so every renderer can reach them without
 // threading a style set through; applyTheme rebuilds all of them from a
-// theme.Theme (issue #251). Nothing in the package names a raw color — every
+// theme.Theme (issue #251). Nothing the TUI DRAWS names a raw color — every
 // color comes from a theme slot, so a theme switch is one call and a slot
-// renamed here is a compile error, not a stray hardcoded shade.
+// renamed here is a compile error, not a stray hardcoded shade. (The tmux
+// status bar fleet configures INSIDE instance sessions, dotfiles.go, keeps
+// its own colours: that is pane content, which themes leave alone.)
 //
 // Callers that build a one-off style (a dialog frame sized to the terminal)
 // read the slot off activeTheme instead.
@@ -110,7 +112,7 @@ var (
 	// Update notification
 	updateStyle lipgloss.Style
 
-	// Spinner (the page spinner; the agent spinner is per-instance-colored)
+	// Spinner (the page spinner; the agent throbber reuses agentWorkingStyle)
 	spinnerStyle lipgloss.Style
 )
 
@@ -120,7 +122,7 @@ func init() {
 
 // applyTheme rebuilds every package-level style (and the instance color cycle)
 // from t. Renderers pick the styles up on their next View, so the caller only
-// has to refresh what it copied out of them (the spinner's style; see
+// has to refresh what it copied out of them (the two spinners' styles; see
 // model.setTheme).
 func applyTheme(t theme.Theme) {
 	activeTheme = t
