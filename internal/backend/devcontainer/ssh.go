@@ -6,11 +6,16 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 )
 
-// containerSSHSocketPath is the target path for the SSH agent socket inside
-// managed containers. Uses /run instead of /tmp because some devcontainer
-// features (e.g. docker-in-docker) mount a tmpfs on /tmp that shadows bind mounts.
+// containerSSHSocketPath is where a DIRECTLY bind-mounted agent socket lands
+// inside managed containers (the FLEET_SSH_AGENT_SOCK override and the macOS
+// Docker Desktop socket; on Linux instances use the daemon's relay socket
+// instead, agentsock.ContainerSocketPath). Uses /run instead of /tmp because
+// some devcontainer features (e.g. docker-in-docker) mount a tmpfs on /tmp that
+// shadows bind mounts.
 const containerSSHSocketPath = "/run/ssh-agent.sock"
 
 // dockerDesktopSSHAuthSock is the fixed path at which Docker Desktop (and
@@ -25,107 +30,118 @@ const containerSSHSocketPath = "/run/ssh-agent.sock"
 // SSH_AUTH_SOCK agent such as 1Password's.
 const dockerDesktopSSHAuthSock = "/run/host-services/ssh-auth.sock"
 
-// sshAgentSockOverrideEnv overrides the bind source used for SSH agent
-// forwarding into instances: a path replaces the computed source verbatim
-// (no host-side existence check — the path may only exist inside the Docker
-// VM), and "off" or "none" disables the agent mount entirely.
-const sshAgentSockOverrideEnv = "FLEET_SSH_AGENT_SOCK"
+// sshAgentSockOverrideEnv overrides how instances reach the agent: a path is
+// bind-mounted verbatim in place of the relay (no host-side existence check —
+// the path may only exist inside the Docker VM), and "off" or "none" disables
+// agent forwarding entirely.
+const sshAgentSockOverrideEnv = agentsock.EnvOverride
 
-// hostSSHAuthSock returns the host's SSH_AUTH_SOCK path if the environment
-// variable is set and the socket exists. Returns empty string otherwise.
-func hostSSHAuthSock() string {
-	sock := os.Getenv("SSH_AUTH_SOCK")
+// liveSocket returns sock if it names an existing unix socket, "" otherwise.
+func liveSocket(sock string) string {
 	if sock == "" {
 		return ""
 	}
 	info, err := os.Stat(sock)
-	if err != nil {
-		return ""
-	}
-	if info.Mode()&os.ModeSocket == 0 {
+	if err != nil || info.Mode()&os.ModeSocket == 0 {
 		return ""
 	}
 	return sock
 }
 
-// agentSockDisabled reports whether an override value is the forwarding
-// kill-switch. Case-insensitive so OFF/None from a shell rc don't fall
-// through and get bind-mounted verbatim as a (nonexistent) source path.
-func agentSockDisabled(override string) bool {
-	return strings.EqualFold(override, "off") || strings.EqualFold(override, "none")
+// hostSSHAuthSock returns the agent socket the daemon was started with if it
+// is a live socket, "" otherwise. Only the macOS Docker Desktop path gates on
+// it: the relay resolves the agent per connection, so it needs no gate.
+func hostSSHAuthSock() string {
+	return liveSocket(agentsock.OriginSock())
 }
 
-// sshAgentMountSource returns the bind source to use for the SSH agent
-// socket mount, or "" when agent forwarding should be skipped. Shared by
-// devcontainer up and clone so every container-creation path applies the
-// same gate, darwin remap, and override. An unusable override value is a
-// hard error (matching the other FLEET_* env parsers): silently splicing
-// it into the mount string would resurface as a confusing docker failure
-// far from the cause — commas would even inject extra mount options.
-func sshAgentMountSource() (string, error) {
-	override := strings.TrimSpace(os.Getenv(sshAgentSockOverrideEnv))
-	if override != "" && !agentSockDisabled(override) {
-		if strings.Contains(override, ",") || !filepath.IsAbs(override) {
-			return "", fmt.Errorf("invalid %s value %q (valid: an absolute socket path, or off/none to disable agent forwarding)", sshAgentSockOverrideEnv, override)
+// agentPlan is how one container reaches the agent: mount is the host (or
+// Docker VM) socket to bind-mount at containerSSHSocketPath ("" for none), and
+// sock is the SSH_AUTH_SOCK the container's processes get ("" for none).
+type agentPlan struct {
+	mount string
+	sock  string
+}
+
+// agentPlanFor is the pure core of currentAgentPlan, split out so every
+// platform's branch is testable anywhere.
+func agentPlanFor(mode agentsock.Mode, override, hostSock string) agentPlan {
+	switch mode {
+	case agentsock.ModeOff:
+		return agentPlan{}
+	case agentsock.ModeOverride:
+		return agentPlan{mount: override, sock: containerSSHSocketPath}
+	case agentsock.ModeDockerDesktop:
+		// The hostSock gate requires an agent to actually be running.
+		if hostSock == "" {
+			return agentPlan{}
 		}
+		return agentPlan{mount: dockerDesktopSSHAuthSock, sock: containerSSHSocketPath}
+	default:
+		// The relay: the daemon listens in the instance's control directory,
+		// which provisioning already bind-mounts as a DIRECTORY, so nothing is
+		// mounted here and a recreated socket reaches running containers.
+		return agentPlan{sock: agentsock.ContainerSocketPath}
 	}
-	return sshAgentMountSourceFor(override, hostSSHAuthSock(), runtime.GOOS), nil
 }
 
-// sshAgentMountSourceFor is the pure core of sshAgentMountSource, split out
-// so both the linux and darwin branches are testable on any platform.
-func sshAgentMountSourceFor(override, hostSock, goos string) string {
-	switch {
-	case agentSockDisabled(override):
-		return ""
-	case override != "":
-		return override
+// currentAgentPlan decides the agent plan from the environment. Shared by
+// devcontainer up, clone and exec so every path applies the same rules. An
+// unusable override value is a hard error (matching the other FLEET_* env
+// parsers): silently splicing it into the mount string would resurface as a
+// confusing docker failure far from the cause — commas would even inject extra
+// mount options.
+func currentAgentPlan() (agentPlan, error) {
+	override := agentsock.Override()
+	mode := agentsock.ModeFor(override, runtime.GOOS)
+	if mode == agentsock.ModeOverride && (strings.Contains(override, ",") || !filepath.IsAbs(override)) {
+		return agentPlan{}, fmt.Errorf("invalid %s value %q (valid: an absolute socket path, or off/none to disable agent forwarding)", sshAgentSockOverrideEnv, override)
 	}
-	if hostSock == "" {
-		return ""
+	var hostSock string
+	if mode == agentsock.ModeDockerDesktop {
+		hostSock = hostSSHAuthSock()
 	}
-	// The macOS agent socket only exists on the mac side; the Docker VM
-	// exposes the agent at its own fixed path. The hostSock gate still
-	// requires an agent to actually be running.
-	if goos == "darwin" {
-		return dockerDesktopSSHAuthSock
-	}
-	return hostSock
+	return agentPlanFor(mode, override, hostSock), nil
 }
 
-// sshUpArgs returns additional devcontainer up arguments to bind-mount the
-// host SSH agent socket and set SSH_AUTH_SOCK inside the container.
-// Returns nil args if SSH agent forwarding is not available, and an error
-// for an unusable FLEET_SSH_AGENT_SOCK value.
+// sshAgentMountSource returns the socket to bind-mount at
+// containerSSHSocketPath, or "" when nothing is mounted (the relay, or no
+// forwarding). Used by clone, which builds its own docker run.
+func sshAgentMountSource() (string, error) {
+	plan, err := currentAgentPlan()
+	return plan.mount, err
+}
+
+// sshUpArgs returns additional devcontainer up arguments: the agent socket
+// mount (override / Docker Desktop only) and SSH_AUTH_SOCK for the lifecycle
+// commands. Returns nil args when agent forwarding is off, and an error for an
+// unusable FLEET_SSH_AGENT_SOCK value.
 func sshUpArgs() ([]string, error) {
-	sock, err := sshAgentMountSource()
+	plan, err := currentAgentPlan()
 	if err != nil {
 		return nil, err
 	}
-	if sock == "" {
-		return nil, nil
+	var args []string
+	if plan.mount != "" {
+		args = append(args, "--mount", "type=bind,source="+plan.mount+",target="+containerSSHSocketPath)
 	}
-	return []string{
-		"--mount", "type=bind,source=" + sock + ",target=" + containerSSHSocketPath,
-		"--remote-env", "SSH_AUTH_SOCK=" + containerSSHSocketPath,
-	}, nil
+	if plan.sock != "" {
+		args = append(args, "--remote-env", "SSH_AUTH_SOCK="+plan.sock)
+	}
+	return args, nil
 }
 
 // sshExecArgs returns additional devcontainer exec arguments to set
-// SSH_AUTH_SOCK inside the container. It uses the same gate as the mount
-// (sshAgentMountSource) so exec sessions export the variable exactly when
-// the socket is actually mounted — e.g. FLEET_SSH_AGENT_SOCK=off suppresses
-// both, and an override path with no host agent enables both. An invalid
-// override already hard-fails instance creation; exec just degrades to no
-// forwarding rather than blocking shells into an existing container.
+// SSH_AUTH_SOCK inside the container, under the same plan as the mount — so
+// FLEET_SSH_AGENT_SOCK=off suppresses both. An invalid override already
+// hard-fails instance creation; exec just degrades to no forwarding rather
+// than blocking shells into an existing container.
 func sshExecArgs() []string {
-	sock, err := sshAgentMountSource()
-	if err != nil || sock == "" {
+	plan, err := currentAgentPlan()
+	if err != nil || plan.sock == "" {
 		return nil
 	}
-	return []string{
-		"--remote-env", "SSH_AUTH_SOCK=" + containerSSHSocketPath,
-	}
+	return []string{"--remote-env", "SSH_AUTH_SOCK=" + plan.sock}
 }
 
 // execArgs builds the full argument list for `devcontainer exec` including

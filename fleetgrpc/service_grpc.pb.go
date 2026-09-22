@@ -53,6 +53,7 @@ const (
 	FleetService_TriggerLogs_FullMethodName            = "/fleetgrpc.FleetService/TriggerLogs"
 	FleetService_Forward_FullMethodName                = "/fleetgrpc.FleetService/Forward"
 	FleetService_Mic_FullMethodName                    = "/fleetgrpc.FleetService/Mic"
+	FleetService_SSHAgent_FullMethodName               = "/fleetgrpc.FleetService/SSHAgent"
 	FleetService_CopyFile_FullMethodName               = "/fleetgrpc.FleetService/CopyFile"
 	FleetService_CopyInto_FullMethodName               = "/fleetgrpc.FleetService/CopyInto"
 	FleetService_InspectRepo_FullMethodName            = "/fleetgrpc.FleetService/InspectRepo"
@@ -144,6 +145,10 @@ type FleetServiceClient interface {
 	// up (first frame is the MicOpen header); the server streams demand signals
 	// down so the client only opens the real microphone while an instance records.
 	Mic(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[MicUp, MicDown], error)
+	// SSHAgent is the SSH-agent forwarding data plane: the client provides its
+	// local ssh-agent, the server relays every agent connection made on its host
+	// (its own git clone, processes inside instances) down this stream.
+	SSHAgent(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SSHAgentUp, SSHAgentDown], error)
 	// CopyFile streams a single file out of an instance: first chunk is metadata,
 	// the rest are data. Backs `fleet copy` and the in-instance `fc` shorthand.
 	CopyFile(ctx context.Context, in *CopyFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CopyFileChunk], error)
@@ -593,9 +598,22 @@ func (c *fleetServiceClient) Mic(ctx context.Context, opts ...grpc.CallOption) (
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_MicClient = grpc.BidiStreamingClient[MicUp, MicDown]
 
+func (c *fleetServiceClient) SSHAgent(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SSHAgentUp, SSHAgentDown], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[11], FleetService_SSHAgent_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[SSHAgentUp, SSHAgentDown]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_SSHAgentClient = grpc.BidiStreamingClient[SSHAgentUp, SSHAgentDown]
+
 func (c *fleetServiceClient) CopyFile(ctx context.Context, in *CopyFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CopyFileChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[11], FleetService_CopyFile_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[12], FleetService_CopyFile_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -614,7 +632,7 @@ type FleetService_CopyFileClient = grpc.ServerStreamingClient[CopyFileChunk]
 
 func (c *fleetServiceClient) CopyInto(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CopyIntoChunk, CopyIntoReply], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[12], FleetService_CopyInto_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[13], FleetService_CopyInto_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -748,6 +766,10 @@ type FleetServiceServer interface {
 	// up (first frame is the MicOpen header); the server streams demand signals
 	// down so the client only opens the real microphone while an instance records.
 	Mic(grpc.BidiStreamingServer[MicUp, MicDown]) error
+	// SSHAgent is the SSH-agent forwarding data plane: the client provides its
+	// local ssh-agent, the server relays every agent connection made on its host
+	// (its own git clone, processes inside instances) down this stream.
+	SSHAgent(grpc.BidiStreamingServer[SSHAgentUp, SSHAgentDown]) error
 	// CopyFile streams a single file out of an instance: first chunk is metadata,
 	// the rest are data. Backs `fleet copy` and the in-instance `fc` shorthand.
 	CopyFile(*CopyFileRequest, grpc.ServerStreamingServer[CopyFileChunk]) error
@@ -877,6 +899,9 @@ func (UnimplementedFleetServiceServer) Forward(grpc.BidiStreamingServer[ForwardC
 }
 func (UnimplementedFleetServiceServer) Mic(grpc.BidiStreamingServer[MicUp, MicDown]) error {
 	return status.Errorf(codes.Unimplemented, "method Mic not implemented")
+}
+func (UnimplementedFleetServiceServer) SSHAgent(grpc.BidiStreamingServer[SSHAgentUp, SSHAgentDown]) error {
+	return status.Errorf(codes.Unimplemented, "method SSHAgent not implemented")
 }
 func (UnimplementedFleetServiceServer) CopyFile(*CopyFileRequest, grpc.ServerStreamingServer[CopyFileChunk]) error {
 	return status.Errorf(codes.Unimplemented, "method CopyFile not implemented")
@@ -1440,6 +1465,13 @@ func _FleetService_Mic_Handler(srv interface{}, stream grpc.ServerStream) error 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_MicServer = grpc.BidiStreamingServer[MicUp, MicDown]
 
+func _FleetService_SSHAgent_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(FleetServiceServer).SSHAgent(&grpc.GenericServerStream[SSHAgentUp, SSHAgentDown]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_SSHAgentServer = grpc.BidiStreamingServer[SSHAgentUp, SSHAgentDown]
+
 func _FleetService_CopyFile_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(CopyFileRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -1702,6 +1734,12 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Mic",
 			Handler:       _FleetService_Mic_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "SSHAgent",
+			Handler:       _FleetService_SSHAgent_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},

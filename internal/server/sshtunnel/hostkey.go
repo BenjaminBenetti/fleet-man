@@ -171,6 +171,9 @@ type sshEffectiveConfig struct {
 	knownHosts   string
 	hostKeyAlias string
 	proxied      bool
+	// forwardAgent is the user's ForwardAgent for the host: anything but "no"
+	// (yes, or an agent socket path / variable name) means they forward one.
+	forwardAgent bool
 }
 
 // lookupName is the known_hosts name ssh looks up (and prints in its
@@ -221,6 +224,8 @@ func parseSSHConfig(out string) (sshEffectiveConfig, error) {
 			if fields[1] != "none" {
 				c.hostKeyAlias = fields[1]
 			}
+		case "forwardagent":
+			c.forwardAgent = fields[1] != "no"
 		case "proxyjump", "proxycommand":
 			if fields[1] != "none" {
 				c.proxied = true

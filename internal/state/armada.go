@@ -25,6 +25,10 @@ type Armada struct {
 type ArmadaRemote struct {
 	URL   string `json:"url"`
 	Token string `json:"token"`
+	// ForwardAgent provides the user's local ssh-agent to this remote while a
+	// client is connected to it (see the SSHAgent RPC), so the remote's git
+	// clones and instances can use the user's keys.
+	ForwardAgent bool `json:"forward_agent,omitempty"`
 }
 
 // applyDefaults normalises the armada in place: entries are trimmed and

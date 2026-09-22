@@ -165,6 +165,83 @@ message MicDemand {
   string device = 3;
 }
 
+// SSHAgent is the SSH-agent forwarding DATA PLANE: one bidi stream per
+// agent-providing client (a TUI or CLI on the machine where the human's
+// ssh-agent runs). The SERVER owns the agent sockets processes on its host use
+// (its own git clone, and one per devcontainer instance); every connection to
+// one of them is relayed over this stream to the provider, which splices it
+// onto its local SSH_AUTH_SOCK. Because the bytes ride this stream, the keys
+// follow the client even when the server is remote — like `ssh -A`, but for
+// everything the daemon runs — and they are gone the moment the client leaves.
+//
+// The most recently attached provider is ACTIVE; older ones stand by and are
+// promoted if it leaves. A connection nobody can serve falls back to the
+// agent the daemon itself was started with, if any.
+//
+// The FIRST client frame MUST carry `hello`. Connections are multiplexed by
+// conn_id, which the server assigns: it announces each with `open`, the
+// client answers `ready` once it has dialed its agent (or `close` with an
+// error if it cannot), and from then on both sides exchange `data` until
+// either sends `close`.
+message SSHAgentUp {
+  oneof msg {
+    SSHAgentHello hello = 1;
+    SSHAgentReady ready = 2;
+    SSHAgentData data = 3;
+    SSHAgentClose close = 4;
+  }
+}
+
+// SSHAgentHello registers the stream as a provider. client is a human label
+// (the provider's hostname) for the daemon's log.
+message SSHAgentHello {
+  string client = 1;
+}
+
+// SSHAgentReady: the provider dialed its local agent for conn_id; the server
+// may start relaying.
+message SSHAgentReady {
+  uint64 conn_id = 1;
+}
+
+message SSHAgentDown {
+  oneof msg {
+    SSHAgentOpen open = 1;
+    SSHAgentData data = 2;
+    SSHAgentClose close = 3;
+    SSHAgentStatus status = 4;
+  }
+}
+
+// SSHAgentOpen announces a new agent connection. origin says who opened it:
+// "<fleet>/<instance>" for a process inside an instance, "" for the daemon's
+// own host-side work (a git clone).
+message SSHAgentOpen {
+  uint64 conn_id = 1;
+  string origin = 2;
+}
+
+// SSHAgentData carries raw agent-protocol bytes for one connection.
+message SSHAgentData {
+  uint64 conn_id = 1;
+  bytes data = 2;
+}
+
+// SSHAgentClose ends one connection. error is set when the connection could
+// not be served (the provider has no reachable agent), so the server can fall
+// back rather than fail.
+message SSHAgentClose {
+  uint64 conn_id = 1;
+  string error = 2;
+}
+
+// SSHAgentStatus tells a provider whether it is the ACTIVE one (its agent is
+// the one being used) or standing by behind a newer provider. Sent on attach
+// and whenever that changes.
+message SSHAgentStatus {
+  bool active = 1;
+}
+
 // CopyFile streams a file OR directory out of an instance to the client (the
 // `fleet copy` / in-instance `fc` feature). The server reads through the backend
 // (a tar pipe over container exec) and streams it back: the FIRST chunk carries

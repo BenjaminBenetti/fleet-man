@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 )
 
 // ===========================================
@@ -176,7 +177,11 @@ func shallowClone(remoteURL, branch, dest string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		detail := strings.TrimSpace(string(out))
+		if hint := gitutil.CloneFailureHint(detail); hint != "" {
+			detail += "\n" + hint
+		}
+		return fmt.Errorf("%w: %s", err, detail)
 	}
 	return nil
 }

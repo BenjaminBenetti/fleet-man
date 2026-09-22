@@ -106,6 +106,15 @@ func TestParseSSHConfig(t *testing.T) {
 	if _, err := parseSSHConfig("user ben\n"); err == nil {
 		t.Fatal("missing hostname/port must be an error")
 	}
+	if c.forwardAgent {
+		t.Fatal("no forwardagent line must read as not forwarding")
+	}
+	for value, want := range map[string]bool{"no": false, "yes": true, "/run/agent.sock": true, "SSH_AUTH_SOCK": true} {
+		c, err := parseSSHConfig("hostname h\nport 22\nforwardagent " + value + "\n")
+		if err != nil || c.forwardAgent != want {
+			t.Fatalf("forwardagent %s: got %v (err %v), want %v", value, c.forwardAgent, err, want)
+		}
+	}
 	c, _ = parseSSHConfig("hostname h\nport 22\nuserknownhostsfile /tmp/kh\n")
 	if c.knownHosts != "/tmp/kh" || c.lookupName() != "h" {
 		t.Fatalf("absolute known_hosts kept / default-port name: %+v", c)

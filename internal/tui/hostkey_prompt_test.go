@@ -71,7 +71,10 @@ func TestHostKeyPromptAcceptRegistersRemote(t *testing.T) {
 	defer func() { pingArmadaRemote = origPing }()
 	var saved []configutil.ArmadaRemote
 	origSave := saveArmadaLocal
-	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) error { saved = remotes; return nil }
+	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) ([]configutil.ArmadaRemote, error) {
+		saved = remotes
+		return remotes, nil
+	}
 	defer func() { saveArmadaLocal = origSave }()
 	trusted := stubTrust(t, nil)
 
@@ -505,7 +508,10 @@ func TestHostKeyPromptConnectOriginFinishesAddFlow(t *testing.T) {
 	defer func() { pingArmadaRemote = origPing }()
 	var saved []configutil.ArmadaRemote
 	origSave := saveArmadaLocal
-	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) error { saved = remotes; return nil }
+	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) ([]configutil.ArmadaRemote, error) {
+		saved = remotes
+		return remotes, nil
+	}
 	defer func() { saveArmadaLocal = origSave }()
 	errK := unknownKeyErr(t, "ssh://desktop", "SHA256:abc")
 

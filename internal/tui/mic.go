@@ -170,7 +170,15 @@ func runMicProvider(ctx context.Context, program *tea.Program, gen int) {
 // state matters to the read-out. flush stops the forwarder after it has
 // delivered whatever is pending.
 func newMicStatusForwarder(send func(mic.Status)) (report func(mic.Status), flush func()) {
-	mailbox := make(chan mic.Status, 1)
+	return newLatestForwarder(send)
+}
+
+// newLatestForwarder is the mailbox behind newMicStatusForwarder, for any
+// provider whose status reports must never block the provider loop (the SSH
+// agent provider uses it too): report deposits the value in a one-slot,
+// latest-wins mailbox and a single forwarder goroutine does the blocking send.
+func newLatestForwarder[T any](send func(T)) (report func(T), flush func()) {
+	mailbox := make(chan T, 1)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -180,7 +188,7 @@ func newMicStatusForwarder(send func(mic.Status)) (report func(mic.Status), flus
 	}()
 	var mu sync.Mutex
 	closed := false
-	report = func(status mic.Status) {
+	report = func(status T) {
 		mu.Lock()
 		defer mu.Unlock()
 		if closed {

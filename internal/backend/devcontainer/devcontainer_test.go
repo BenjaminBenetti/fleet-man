@@ -161,9 +161,9 @@ func TestDevcontainerUpArgsUpdateRemoteUserUID(t *testing.T) {
 }
 
 func TestRunUserCommandsArgs(t *testing.T) {
-	t.Run("without ssh agent", func(t *testing.T) {
+	t.Run("with agent forwarding off", func(t *testing.T) {
 		t.Setenv("SSH_AUTH_SOCK", "")
-		t.Setenv(sshAgentSockOverrideEnv, "")
+		t.Setenv(sshAgentSockOverrideEnv, "off")
 		got := runUserCommandsArgs("/ws/alpha")
 		want := []string{"run-user-commands", "--workspace-folder", "/ws/alpha"}
 		if !slices.Equal(got, want) {
@@ -176,7 +176,7 @@ func TestRunUserCommandsArgs(t *testing.T) {
 		got := runUserCommandsArgs("/ws/alpha")
 		want := []string{
 			"run-user-commands", "--workspace-folder", "/ws/alpha",
-			"--remote-env", "SSH_AUTH_SOCK=" + containerSSHSocketPath,
+			"--remote-env", "SSH_AUTH_SOCK=" + wantAgentSock(),
 		}
 		if !slices.Equal(got, want) {
 			t.Fatalf("runUserCommandsArgs() = %#v, want %#v", got, want)

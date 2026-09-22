@@ -30,6 +30,12 @@ message ArmadaRemote {
   // MCP bearer token; validated by the remote daemon, never by the gateway.
   // Empty for an ssh:// remote — the token is discovered over SSH on connect.
   string token = 2;
+  // forward_agent: while the TUI (or a CLI command) is connected to this
+  // remote, provide the user's local ssh-agent to it over the SSHAgent stream,
+  // so the remote's git clones and instances can use the user's keys (the
+  // `ssh -A` of Fleet Armada). Off unless the user turns it on; a newly added
+  // ssh:// remote inherits ForwardAgent from the user's ssh config for that host.
+  bool forward_agent = 3;
 }
 
 // ResolveArmadaRemote turns an ssh:// armada URL into something a gRPC client

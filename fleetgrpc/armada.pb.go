@@ -32,7 +32,13 @@ type ArmadaRemote struct {
 	Url string `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
 	// MCP bearer token; validated by the remote daemon, never by the gateway.
 	// Empty for an ssh:// remote — the token is discovered over SSH on connect.
-	Token         string `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
+	Token string `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
+	// forward_agent: while the TUI (or a CLI command) is connected to this
+	// remote, provide the user's local ssh-agent to it over the SSHAgent stream,
+	// so the remote's git clones and instances can use the user's keys (the
+	// `ssh -A` of Fleet Armada). Off unless the user turns it on; a newly added
+	// ssh:// remote inherits ForwardAgent from the user's ssh config for that host.
+	ForwardAgent  bool `protobuf:"varint,3,opt,name=forward_agent,json=forwardAgent,proto3" json:"forward_agent,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -79,6 +85,13 @@ func (x *ArmadaRemote) GetToken() string {
 		return x.Token
 	}
 	return ""
+}
+
+func (x *ArmadaRemote) GetForwardAgent() bool {
+	if x != nil {
+		return x.ForwardAgent
+	}
+	return false
 }
 
 // ResolveArmadaRemote turns an ssh:// armada URL into something a gRPC client
@@ -646,10 +659,11 @@ var File_armada_proto protoreflect.FileDescriptor
 
 const file_armada_proto_rawDesc = "" +
 	"\n" +
-	"\farmada.proto\x12\tfleetgrpc\"6\n" +
+	"\farmada.proto\x12\tfleetgrpc\"[\n" +
 	"\fArmadaRemote\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\".\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\x12#\n" +
+	"\rforward_agent\x18\x03 \x01(\bR\fforwardAgent\".\n" +
 	"\x1aResolveArmadaRemoteRequest\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\"D\n" +
 	"\x18ResolveArmadaRemoteReply\x12\x12\n" +

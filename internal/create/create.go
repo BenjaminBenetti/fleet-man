@@ -7,12 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -92,7 +94,11 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 		gitClone.Stdout = io.MultiWriter(os.Stdout, &cloneBuf)
 		gitClone.Stderr = io.MultiWriter(os.Stderr, &cloneBuf)
 		if err := gitClone.Run(); err != nil {
-			wrapped := fmt.Errorf("git clone failed: %w\n%s", err, cloneBuf.String())
+			detail := cloneBuf.String()
+			if hint := gitutil.CloneFailureHint(detail); hint != "" {
+				detail = strings.TrimRight(detail, "\n") + "\n" + hint + "\n"
+			}
+			wrapped := fmt.Errorf("git clone failed: %w\n%s", err, detail)
 			setFailed(fleetName, instanceName, wrapped)
 			return wrapped
 		}

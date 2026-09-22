@@ -144,6 +144,7 @@ type settingsPage struct {
 	// + two-press armed confirm, reset on every cursor move).
 	armadaAddStage      armadaAddStage
 	armadaAddURL        string // committed URL while the token stage is active
+	armadaAgentFocused  bool   // sub-cursor on the [ agent: on/off ] toggle of the current remote row
 	armadaDeleteFocused bool   // sub-cursor on the [ delete ] button of the current remote row
 	armadaDeleteConfirm bool   // "[ delete? ]" armed (first enter on the button)
 	armadaBusy          bool   // an add/delete persistence RPC is in flight
@@ -966,14 +967,16 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 
 		case "up", "k":
 			settingsPage.cursor = (settingsPage.cursor - 1 + count) % count
-			// Leaving a remote-fleet row resets its delete sub-cursor, exactly
-			// like the edit-fleet cache rows.
+			// Leaving a remote-fleet row resets its sub-cursor, exactly like
+			// the edit-fleet cache rows.
+			settingsPage.armadaAgentFocused = false
 			settingsPage.armadaDeleteFocused = false
 			settingsPage.armadaDeleteConfirm = false
 			return nil
 
 		case "down", "j":
 			settingsPage.cursor = (settingsPage.cursor + 1) % count
+			settingsPage.armadaAgentFocused = false
 			settingsPage.armadaDeleteFocused = false
 			settingsPage.armadaDeleteConfirm = false
 			return nil
@@ -981,9 +984,14 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 		case "left", "h":
 			item := settingsPage.settingsCursorItem(m)
 			if isArmadaRemoteItem(item) {
-				// Back off the [ delete ] button onto the row itself.
-				settingsPage.armadaDeleteFocused = false
-				settingsPage.armadaDeleteConfirm = false
+				// Step back along the row: [ delete ] → [ agent ] → the row.
+				if settingsPage.armadaDeleteFocused {
+					settingsPage.armadaDeleteFocused = false
+					settingsPage.armadaDeleteConfirm = false
+					settingsPage.armadaAgentFocused = true
+				} else {
+					settingsPage.armadaAgentFocused = false
+				}
 				return nil
 			}
 			if item == settingsItemTmuxVimKeys {
@@ -1018,8 +1026,14 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 		case "right", "l":
 			item := settingsPage.settingsCursorItem(m)
 			if isArmadaRemoteItem(item) {
-				// Focus the row's [ delete ] button (cache-clear UX pattern).
-				settingsPage.armadaDeleteFocused = true
+				// Step along the row: the row → [ agent ] → [ delete ]
+				// (cache-clear UX pattern for the delete button).
+				if settingsPage.armadaAgentFocused || settingsPage.armadaDeleteFocused {
+					settingsPage.armadaAgentFocused = false
+					settingsPage.armadaDeleteFocused = true
+				} else {
+					settingsPage.armadaAgentFocused = true
+				}
 				return nil
 			}
 			if item == settingsItemTmuxVimKeys {
@@ -1275,13 +1289,18 @@ func (settingsPage *settingsPage) cancelArmadaAdd() {
 }
 
 // enterArmadaRemoteRow handles enter/space on a registered remote's row: on
-// the row itself it re-pings the remote; on the focused [ delete ] button it
-// arms the confirm, then removes the remote on the second press.
+// the row itself it re-pings the remote; on the focused [ agent ] toggle it
+// flips agent forwarding; on the focused [ delete ] button it arms the
+// confirm, then removes the remote on the second press.
 func (settingsPage *settingsPage) enterArmadaRemoteRow(m *model, idx int) tea.Cmd {
 	if idx < 0 || idx >= len(m.armadaRemotes) || settingsPage.armadaBusy {
 		return nil
 	}
 	remote := m.armadaRemotes[idx]
+
+	if settingsPage.armadaAgentFocused {
+		return settingsPage.toggleArmadaAgent(m, idx)
+	}
 
 	if settingsPage.armadaDeleteFocused {
 		if !settingsPage.armadaDeleteConfirm {
@@ -1783,7 +1802,12 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			for i, remote := range m.armadaRemotes {
 				item := settingsItemArmadaBase + i
 				active := currentItem == item
-				value := dimStyle.Render(armadaURLBadge(remote.URL, "")) + " " + remote.URL + "  " + armadaStatusValue(m, remote.URL) + "  " + settingsPage.renderArmadaDeleteButton(m, active)
+				value := dimStyle.Render(armadaURLBadge(remote.URL, "")) + " " + remote.URL + "  " + armadaStatusValue(m, remote.URL) +
+					"  " + settingsPage.renderArmadaAgentButton(remote.ForwardAgent, active)
+				if agent := armadaAgentStatusValue(m, remote.URL, remote.ForwardAgent); agent != "" {
+					value += " " + agent
+				}
+				value += "  " + settingsPage.renderArmadaDeleteButton(m, active)
 				recordRow(item, settingsPage.renderSettingsRow(m, active, fmt.Sprintf("Remote %d", i+1), value))
 				listContent.WriteString("\n")
 			}
@@ -1801,6 +1825,7 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				addValue = dimStyle.Render("press enter to register a remote fleet")
 			}
 			addValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Registered fleets can be switched to from the main page's Armada selector")
+			addValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("[ agent: on ] gives a remote your ssh-agent while you are connected to it, like ssh -A")
 			recordRow(settingsItemArmadaAdd, settingsPage.renderSettingsRow(m, addActive, "+ Remote Fleet", addValue))
 
 		case "Tool Status":
@@ -1874,7 +1899,7 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		tail.WriteString("\n")
 	}
 	if isArmadaRemoteItem(currentItem) && settingsPage.armadaAddStage == armadaAddNone {
-		tail.WriteString(dimStyle.Render("  enter: ping now  right/l: focus [ delete ]  enter twice on [ delete ]: remove"))
+		tail.WriteString(dimStyle.Render("  enter: ping now  right/l: focus [ agent ] then [ delete ]  enter on [ agent ]: toggle SSH agent forwarding  enter twice on [ delete ]: remove"))
 		tail.WriteString("\n")
 	}
 	// Copy rows act on enter (not edit/cycle), so spell that out — the generic

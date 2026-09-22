@@ -12,6 +12,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/admiralmcp"
 	"github.com/BenjaminBenetti/fleet-man/internal/admiralskill"
+	"github.com/BenjaminBenetti/fleet-man/internal/agentfwd"
 	"github.com/BenjaminBenetti/fleet-man/internal/codespaceerr"
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
@@ -114,6 +115,10 @@ type model struct {
 	micDevicesLoaded  bool
 	micDevicesLoading bool
 	micDevicesErr     string
+
+	// SSH-agent forwarding (sshagent.go): the provider's latest status report
+	// while the TUI provides its agent to the current remote.
+	agentStatus agentfwd.Status
 
 	toolStatus []deps.ToolStatus // cached tool install statuses for settings page
 
@@ -761,6 +766,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							if i != page.cursor {
 								page.armadaDeleteFocused = false
 								page.armadaDeleteConfirm = false
+								page.armadaAgentFocused = false
 							}
 							page.cursor = i
 							hit = true
@@ -1009,6 +1015,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// "connecting" must not clear the badge of the provider that replaced it.
 		if msg.gen == micGen() {
 			m.micStatus = msg.status
+		}
+		return m, spinCmd
+
+	case agentStatusMsg:
+		// Same generation rule as the microphone's.
+		if msg.gen == agentGen() {
+			m.agentStatus = msg.status
 		}
 		return m, spinCmd
 
@@ -1414,6 +1427,10 @@ func Run() error {
 	// loaded the config, so converge now rather than waiting for a reload.
 	startMicControl(watchCtx, program)
 	syncMicFromConfig(m.config)
+
+	// SSH-agent provider: armed here; it starts once the armada registry (loaded
+	// at boot) says forwarding is on for the remote this TUI is connected to.
+	startAgentControl(watchCtx, program)
 
 	finalModel, err := program.Run()
 	watchCancel()

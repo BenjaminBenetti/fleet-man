@@ -5,7 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 )
 
 // shortSocketPath returns a socket path short enough to bind. t.TempDir()
@@ -61,72 +64,74 @@ func TestHostSSHAuthSock_ValidSocket(t *testing.T) {
 	}
 }
 
-func TestSSHAgentMountSourceFor(t *testing.T) {
+func TestAgentPlanFor(t *testing.T) {
+	relay := agentPlan{sock: agentsock.ContainerSocketPath}
+	direct := func(mount string) agentPlan { return agentPlan{mount: mount, sock: containerSSHSocketPath} }
 	cases := []struct {
-		name, override, hostSock, goos, want string
+		name, override, hostSock, goos string
+		want                           agentPlan
 	}{
-		{"linux uses host socket", "", "/tmp/agent.sock", "linux", "/tmp/agent.sock"},
-		{"darwin remaps to docker vm path", "", "/private/tmp/launchd/Listeners", "darwin", dockerDesktopSSHAuthSock},
-		{"no agent, no mount", "", "", "linux", ""},
-		{"no agent on darwin, no mount", "", "", "darwin", ""},
-		{"override wins without host agent", "/vm/custom.sock", "", "darwin", "/vm/custom.sock"},
-		{"override wins over remap", "/vm/custom.sock", "/tmp/agent.sock", "darwin", "/vm/custom.sock"},
-		{"off disables", "off", "/tmp/agent.sock", "linux", ""},
-		{"none disables", "none", "/tmp/agent.sock", "darwin", ""},
+		{"linux uses the relay", "", "/tmp/agent.sock", "linux", relay},
+		{"linux relay needs no agent up front", "", "", "linux", relay},
+		{"darwin mounts the docker vm path", "", "/private/tmp/launchd/Listeners", "darwin", direct(dockerDesktopSSHAuthSock)},
+		{"no agent on darwin, no mount", "", "", "darwin", agentPlan{}},
+		{"override wins without host agent", "/vm/custom.sock", "", "darwin", direct("/vm/custom.sock")},
+		{"override wins over the relay", "/vm/custom.sock", "/tmp/agent.sock", "linux", direct("/vm/custom.sock")},
+		{"off disables", "off", "/tmp/agent.sock", "linux", agentPlan{}},
+		{"none disables", "none", "/tmp/agent.sock", "darwin", agentPlan{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := sshAgentMountSourceFor(tc.override, tc.hostSock, tc.goos); got != tc.want {
-				t.Errorf("sshAgentMountSourceFor(%q, %q, %q) = %q, want %q",
-					tc.override, tc.hostSock, tc.goos, got, tc.want)
+			mode := agentsock.ModeFor(tc.override, tc.goos)
+			if got := agentPlanFor(mode, tc.override, tc.hostSock); got != tc.want {
+				t.Errorf("agentPlanFor(%q, %q, %q) = %+v, want %+v", tc.override, tc.hostSock, tc.goos, got, tc.want)
 			}
 		})
 	}
 }
 
-func TestSSHUpArgs_WithValidSocket(t *testing.T) {
-	sockPath := shortSocketPath(t)
-	ln, err := net.Listen("unix", sockPath)
-	if err != nil {
-		t.Fatal(err)
+// wantAgentSock is the SSH_AUTH_SOCK instances get on this platform with no
+// override and a live agent.
+func wantAgentSock() string {
+	if runtime.GOOS == "darwin" {
+		return containerSSHSocketPath
 	}
-	defer ln.Close()
+	return agentsock.ContainerSocketPath
+}
 
-	t.Setenv("SSH_AUTH_SOCK", sockPath)
-	t.Setenv(sshAgentSockOverrideEnv, "")
+func TestSSHUpArgs_WithValidSocket(t *testing.T) {
+	liveAgentSocket(t)
 	args, err := sshUpArgs()
 	if err != nil {
 		t.Fatalf("sshUpArgs: %v", err)
 	}
-	if len(args) != 4 {
-		t.Fatalf("expected 4 args, got %d: %v", len(args), args)
+	want := []string{"--remote-env", "SSH_AUTH_SOCK=" + wantAgentSock()}
+	if runtime.GOOS == "darwin" {
+		want = append([]string{"--mount", "type=bind,source=" + dockerDesktopSSHAuthSock + ",target=" + containerSSHSocketPath}, want...)
 	}
-	if args[0] != "--mount" {
-		t.Errorf("args[0] = %q, want --mount", args[0])
+	if !slices.Equal(args, want) {
+		t.Fatalf("sshUpArgs() = %v, want %v", args, want)
 	}
-	wantSource := sshAgentMountSourceFor("", sockPath, runtime.GOOS)
-	wantMount := "type=bind,source=" + wantSource + ",target=" + containerSSHSocketPath
-	if args[1] != wantMount {
-		t.Errorf("args[1] = %q, want %q", args[1], wantMount)
+}
+
+func TestSSHUpArgs_OverridePathMountsIt(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "")
+	t.Setenv(sshAgentSockOverrideEnv, "/run/host-services/ssh-auth.sock")
+	args, err := sshUpArgs()
+	if err != nil {
+		t.Fatalf("sshUpArgs: %v", err)
 	}
-	if args[2] != "--remote-env" {
-		t.Errorf("args[2] = %q, want --remote-env", args[2])
+	want := []string{
+		"--mount", "type=bind,source=/run/host-services/ssh-auth.sock,target=" + containerSSHSocketPath,
+		"--remote-env", "SSH_AUTH_SOCK=" + containerSSHSocketPath,
 	}
-	wantEnv := "SSH_AUTH_SOCK=" + containerSSHSocketPath
-	if args[3] != wantEnv {
-		t.Errorf("args[3] = %q, want %q", args[3], wantEnv)
+	if !slices.Equal(args, want) {
+		t.Fatalf("sshUpArgs() = %v, want %v", args, want)
 	}
 }
 
 func TestSSHUpArgs_OverrideOff(t *testing.T) {
-	sockPath := shortSocketPath(t)
-	ln, err := net.Listen("unix", sockPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-
-	t.Setenv("SSH_AUTH_SOCK", sockPath)
+	liveAgentSocket(t)
 	t.Setenv(sshAgentSockOverrideEnv, "off")
 	if args, err := sshUpArgs(); err != nil || args != nil {
 		t.Errorf("expected nil/nil with %s=off, got %v, %v", sshAgentSockOverrideEnv, args, err)
@@ -160,14 +165,36 @@ func TestSSHUpArgs_OverrideInvalid(t *testing.T) {
 func TestSSHUpArgs_NoSocket(t *testing.T) {
 	t.Setenv("SSH_AUTH_SOCK", "")
 	t.Setenv(sshAgentSockOverrideEnv, "")
-	if args, err := sshUpArgs(); err != nil || args != nil {
-		t.Errorf("expected nil/nil, got %v, %v", args, err)
+	args, err := sshUpArgs()
+	if err != nil {
+		t.Fatalf("sshUpArgs: %v", err)
+	}
+	if runtime.GOOS == "darwin" {
+		if args != nil {
+			t.Errorf("darwin without an agent: expected nil, got %v", args)
+		}
+		return
+	}
+	// The relay serves whatever agent is reachable per connection, so an
+	// instance is pointed at it even when none is up yet.
+	if want := []string{"--remote-env", "SSH_AUTH_SOCK=" + agentsock.ContainerSocketPath}; !slices.Equal(args, want) {
+		t.Errorf("sshUpArgs() = %v, want %v", args, want)
+	}
+}
+
+func TestSSHAgentMountSource_RelayMountsNothing(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("the relay is not used for instances on macOS")
+	}
+	liveAgentSocket(t)
+	if got, err := sshAgentMountSource(); err != nil || got != "" {
+		t.Fatalf("sshAgentMountSource() = %q, %v; want no socket-file mount", got, err)
 	}
 }
 
 // liveAgentSocket binds a real unix socket and points SSH_AUTH_SOCK at it,
-// with the override cleared — sshExecArgs shares sshUpArgs's gate, which
-// stats the socket, so a bare env var is no longer enough.
+// with the override cleared (the macOS Docker Desktop gate stats the socket,
+// so a bare env var is not enough there).
 func liveAgentSocket(t *testing.T) {
 	t.Helper()
 	sockPath := shortSocketPath(t)
@@ -183,23 +210,8 @@ func liveAgentSocket(t *testing.T) {
 func TestSSHExecArgs_WithAgent(t *testing.T) {
 	liveAgentSocket(t)
 	args := sshExecArgs()
-	if len(args) != 2 {
-		t.Fatalf("expected 2 args, got %d: %v", len(args), args)
-	}
-	if args[0] != "--remote-env" {
-		t.Errorf("args[0] = %q, want --remote-env", args[0])
-	}
-	wantEnv := "SSH_AUTH_SOCK=" + containerSSHSocketPath
-	if args[1] != wantEnv {
-		t.Errorf("args[1] = %q, want %q", args[1], wantEnv)
-	}
-}
-
-func TestSSHExecArgs_NoAgent(t *testing.T) {
-	t.Setenv("SSH_AUTH_SOCK", "")
-	t.Setenv(sshAgentSockOverrideEnv, "")
-	if args := sshExecArgs(); args != nil {
-		t.Errorf("expected nil, got %v", args)
+	if want := []string{"--remote-env", "SSH_AUTH_SOCK=" + wantAgentSock()}; !slices.Equal(args, want) {
+		t.Fatalf("sshExecArgs() = %v, want %v", args, want)
 	}
 }
 
@@ -216,30 +228,20 @@ func TestExecArgs_WithSSH(t *testing.T) {
 	args := execArgs("/workspace", []string{"bash"})
 	expected := []string{
 		"exec", "--workspace-folder", "/workspace",
-		"--remote-env", "SSH_AUTH_SOCK=" + containerSSHSocketPath,
+		"--remote-env", "SSH_AUTH_SOCK=" + wantAgentSock(),
 		"bash",
 	}
-	if len(args) != len(expected) {
+	if !slices.Equal(args, expected) {
 		t.Fatalf("got %v, want %v", args, expected)
-	}
-	for i := range expected {
-		if args[i] != expected[i] {
-			t.Errorf("args[%d] = %q, want %q", i, args[i], expected[i])
-		}
 	}
 }
 
 func TestExecArgs_WithoutSSH(t *testing.T) {
 	t.Setenv("SSH_AUTH_SOCK", "")
-	t.Setenv(sshAgentSockOverrideEnv, "")
+	t.Setenv(sshAgentSockOverrideEnv, "off")
 	args := execArgs("/workspace", []string{"bash"})
 	expected := []string{"exec", "--workspace-folder", "/workspace", "bash"}
-	if len(args) != len(expected) {
+	if !slices.Equal(args, expected) {
 		t.Fatalf("got %v, want %v", args, expected)
-	}
-	for i := range expected {
-		if args[i] != expected[i] {
-			t.Errorf("args[%d] = %q, want %q", i, args[i], expected[i])
-		}
 	}
 }

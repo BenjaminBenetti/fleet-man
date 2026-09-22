@@ -124,6 +124,13 @@ func Serve(ctx context.Context) error {
 	// Idle — no config reads, no execs — whenever no provider is attached.
 	go svc.mic.run(hubCtx)
 
+	// SSH-agent relay: every agent connection made on this host — the daemon's
+	// own git clones (through SSH_AUTH_SOCK, redirected below) and processes in
+	// devcontainer instances (through a socket in each control directory) — is
+	// relayed to the attached provider's agent, else to the agent this daemon
+	// was started with. FLEET_SSH_AGENT_SOCK=off turns all of it off.
+	startAgentRelay(hubCtx, svc.agent)
+
 	grpcServer := grpc.NewServer()
 	fleetgrpc.RegisterFleetServiceServer(grpcServer, svc)
 

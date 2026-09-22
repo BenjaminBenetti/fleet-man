@@ -22,6 +22,11 @@ var runInstanceJob = func(ctx context.Context, open func(context.Context, fleetg
 	}
 	defer conn.Close()
 
+	// A remote job may clone over ssh on the remote's host: carry the user's
+	// agent there for its duration when the Armada remote forwards it.
+	stopAgent := forwardAgentWhile(ctx, conn.Service())
+	defer stopAgent()
+
 	stream, err := open(ctx, conn.Service())
 	if err != nil {
 		return err

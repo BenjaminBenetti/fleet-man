@@ -106,6 +106,10 @@ service FleetService {
   // up (first frame is the MicOpen header); the server streams demand signals
   // down so the client only opens the real microphone while an instance records.
   rpc Mic(stream MicUp) returns (stream MicDown);
+  // SSHAgent is the SSH-agent forwarding data plane: the client provides its
+  // local ssh-agent, the server relays every agent connection made on its host
+  // (its own git clone, processes inside instances) down this stream.
+  rpc SSHAgent(stream SSHAgentUp) returns (stream SSHAgentDown);
   // CopyFile streams a single file out of an instance: first chunk is metadata,
   // the rest are data. Backs `fleet copy` and the in-instance `fc` shorthand.
   rpc CopyFile(CopyFileRequest) returns (stream CopyFileChunk);

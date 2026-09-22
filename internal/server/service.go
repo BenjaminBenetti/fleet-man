@@ -32,6 +32,9 @@ type service struct {
 	// sinks, and the demand/audio routing between them. Its sync loop is started
 	// by the serve loop; without it (newService() tests) the hub is inert.
 	mic *micHub
+	// agent is the SSH-agent relay (sshagent.go): provider streams and the
+	// relay sockets the daemon's children and instances connect to.
+	agent *agentHub
 
 	// remote drives the outbound remote-MCP gateway tunnel. Set in server.go
 	// after the MCP listener binds (so it knows the loopback port); nil for tests
@@ -84,6 +87,7 @@ func newService() *service {
 		hub:          newHub(),
 		jobs:         newJobManager(),
 		mic:          newMicHub(),
+		agent:        newAgentHub(),
 		shutdownCh:   make(chan struct{}),
 		bgCtx:        context.Background(),
 		triggerFires: make(chan []triggerFire, triggerFireBuffer),

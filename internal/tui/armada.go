@@ -86,13 +86,20 @@ type armadaTestResultMsg struct {
 }
 
 // armadaSaveResultMsg delivers the outcome of persisting the edited registry
-// (add or delete). remotes is the saved list (post server normalization).
+// (add, delete, or an agent-forwarding toggle). remotes is the saved list
+// (post server normalization).
 type armadaSaveResultMsg struct {
-	remotes    []configutil.ArmadaRemote
-	action     string // "added" / "removed", for the status message
-	removedIdx int    // index the delete removed; -1 for adds (cursor re-pin)
+	remotes []configutil.ArmadaRemote
+	action  string // "added" / "removed" / armadaActionAgent, for the status message
+	// removedIdx is the row the cursor goes back to: the index the delete
+	// removed (or the toggled row), -1 for adds (the add button).
+	removedIdx int
 	err        error
 }
+
+// armadaActionAgent marks a save that toggled a remote's agent forwarding: the
+// cursor stays on that row's toggle and the status line names the new state.
+const armadaActionAgent = "agent"
 
 // armadaSwitchedMsg delivers the post-switch state/config reload. gen is the
 // connection generation the reload was started for, so a late reply from an
@@ -148,10 +155,11 @@ func testArmadaRemoteCmd(url, token string) tea.Cmd {
 // saveArmadaCmd persists the edited registry to the local daemon.
 func saveArmadaCmd(remotes []configutil.ArmadaRemote, action string, removedIdx int) tea.Cmd {
 	return func() tea.Msg {
-		if err := saveArmadaLocal(remotes); err != nil {
+		saved, err := saveArmadaLocal(remotes)
+		if err != nil {
 			return armadaSaveResultMsg{action: action, removedIdx: removedIdx, err: err}
 		}
-		return armadaSaveResultMsg{remotes: remotes, action: action, removedIdx: removedIdx}
+		return armadaSaveResultMsg{remotes: saved, action: action, removedIdx: removedIdx}
 	}
 }
 
@@ -203,6 +211,7 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		m.armadaRemotes = msg.remotes
+		m.syncAgentProvider()
 		return m.pingAllArmadaCmd()
 
 	case armadaPingTickMsg:
@@ -272,12 +281,21 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 			settingsPage.armadaBusy = false
 			settingsPage.armadaDeleteFocused = false
 			settingsPage.armadaDeleteConfirm = false
+			if msg.action != armadaActionAgent {
+				settingsPage.armadaAgentFocused = false
+			}
 		}
 		if msg.err != nil {
 			m.message = fmt.Sprintf("Failed to save remote fleets: %v", msg.err)
 			return nil
 		}
 		m.armadaRemotes = msg.remotes
+		m.syncAgentProvider()
+		if msg.action == armadaActionAgent {
+			// The list did not change shape: the cursor stays on the toggle.
+			m.message = m.agentToggleSavedMessage(msg.removedIdx)
+			return nil
+		}
 		if settingsPage != nil {
 			// The list length changed under the cursor; re-pin it sensibly.
 			if msg.removedIdx >= 0 && len(msg.remotes) > 0 {
@@ -723,6 +741,10 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 		_ = os.Unsetenv(fleetclient.EnvServer)
 		_ = os.Unsetenv(fleetclient.EnvToken)
 	}
+	// The SSH agent follows the connection too: stop providing to the daemon
+	// being left, and start providing to the new one if forwarding is on for it.
+	m.syncAgentProvider()
+
 	// Mirror the swap into the tmux server environment so split-pane / bound-key
 	// `fleet shell` children — which tmux spawns from ITS environment, not this
 	// process's live os.Environ() — connect to the new daemon too. Without this

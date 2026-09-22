@@ -102,9 +102,9 @@ func TestArmadaAddFlowRegistersRemote(t *testing.T) {
 
 	var saved []configutil.ArmadaRemote
 	origSave := saveArmadaLocal
-	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) error {
+	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) ([]configutil.ArmadaRemote, error) {
 		saved = remotes
-		return nil
+		return remotes, nil
 	}
 	defer func() { saveArmadaLocal = origSave }()
 
@@ -175,9 +175,9 @@ func TestArmadaAddFlowFailedTestDoesNotRegister(t *testing.T) {
 
 	saveCalled := false
 	origSave := saveArmadaLocal
-	saveArmadaLocal = func([]configutil.ArmadaRemote) error {
+	saveArmadaLocal = func([]configutil.ArmadaRemote) ([]configutil.ArmadaRemote, error) {
 		saveCalled = true
-		return nil
+		return nil, nil
 	}
 	defer func() { saveArmadaLocal = origSave }()
 
@@ -211,9 +211,9 @@ func TestArmadaAddFlowFailedTestDoesNotRegister(t *testing.T) {
 func TestArmadaDeleteTwoPress(t *testing.T) {
 	var saved []configutil.ArmadaRemote
 	origSave := saveArmadaLocal
-	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) error {
+	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) ([]configutil.ArmadaRemote, error) {
 		saved = remotes
-		return nil
+		return remotes, nil
 	}
 	defer func() { saveArmadaLocal = origSave }()
 
@@ -225,9 +225,10 @@ func TestArmadaDeleteTwoPress(t *testing.T) {
 	}
 
 	sp.cursor = settingsPositionOf(sp, m, settingsItemArmadaBase)
-	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
-	if !sp.armadaDeleteFocused {
-		t.Fatal("right should focus the delete button")
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight}) // [ agent ]
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight}) // [ delete ]
+	if !sp.armadaDeleteFocused || sp.armadaAgentFocused {
+		t.Fatal("right twice should focus the delete button")
 	}
 
 	if cmd := sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
@@ -262,7 +263,8 @@ func TestArmadaDeleteConfirmResetsOnCursorMove(t *testing.T) {
 	m.armadaRemotes = []configutil.ArmadaRemote{{URL: "https://gw.example.com/abc", Token: "t1"}}
 
 	sp.cursor = settingsPositionOf(sp, m, settingsItemArmadaBase)
-	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight}) // [ agent ]
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight}) // [ delete ]
 	sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}) // arm
 	sp.Update(m, tea.KeyMsg{Type: tea.KeyDown})  // move away
 
@@ -606,9 +608,9 @@ func TestArmadaAddFlowSSHSkipsToken(t *testing.T) {
 	defer func() { pingArmadaRemote = origPing }()
 	var saved []configutil.ArmadaRemote
 	origSave := saveArmadaLocal
-	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) error {
+	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) ([]configutil.ArmadaRemote, error) {
 		saved = remotes
-		return nil
+		return remotes, nil
 	}
 	defer func() { saveArmadaLocal = origSave }()
 
