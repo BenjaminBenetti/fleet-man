@@ -28,6 +28,10 @@ type service struct {
 	startedAt time.Time
 	hub       *hub
 	jobs      *jobManager
+	// mic is the virtual-microphone hub (mic.go): provider streams, per-instance
+	// sinks, and the demand/audio routing between them. Its sync loop is started
+	// by the serve loop; without it (newService() tests) the hub is inert.
+	mic *micHub
 
 	// remote drives the outbound remote-MCP gateway tunnel. Set in server.go
 	// after the MCP listener binds (so it knows the loopback port); nil for tests
@@ -79,6 +83,7 @@ func newService() *service {
 		startedAt:    time.Now(),
 		hub:          newHub(),
 		jobs:         newJobManager(),
+		mic:          newMicHub(),
 		shutdownCh:   make(chan struct{}),
 		bgCtx:        context.Background(),
 		triggerFires: make(chan []triggerFire, triggerFireBuffer),

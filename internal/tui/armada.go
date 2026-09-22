@@ -311,6 +311,7 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 		}
 		m.st = msg.st
 		m.config = msg.config
+		syncMicFromConfig(msg.config)
 		m.armadaConfigPending = false
 		m.err = nil
 		m.resumeCreatingFromState()
@@ -328,6 +329,7 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		m.config = msg.config
+		syncMicFromConfig(msg.config)
 		return m.postSwitchFetchCmd()
 	}
 	return nil
@@ -763,6 +765,12 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	m.pstate = nil
 	m.config = configutil.DefaultConfig()
 	m.armadaConfigPending = true
+	// The microphone follows the connection: stop providing to the daemon being
+	// left now. The new daemon's config (armadaSwitchedMsg) decides whether to
+	// start again — never assume the feature is on over there.
+	// (m.micStatus is left for the stopping provider's parting status to clear:
+	// until the recorder is really gone the badge must not say otherwise.)
+	syncMicFromConfig(m.config)
 	clear(m.runtime)
 	clear(m.creating)
 	m.remoteMcpStatus = nil

@@ -76,8 +76,10 @@ func (b *recordingBackend) PortForwardCommand(string, int, int) *exec.Cmd { retu
 func (b *recordingBackend) ForwardStdioCommand(string, int) (*exec.Cmd, bool) {
 	return nil, false
 }
-func (b *recordingBackend) ResolveHostname(string) (string, bool) { return "", false }
-func (b *recordingBackend) Status(string) backend.LiveStatus      { return backend.LiveStatusUnknown }
+func (b *recordingBackend) SupportsMicSink() bool                   { return false }
+func (b *recordingBackend) MicSinkCommand(string) (*exec.Cmd, bool) { return nil, false }
+func (b *recordingBackend) ResolveHostname(string) (string, bool)   { return "", false }
+func (b *recordingBackend) Status(string) backend.LiveStatus        { return backend.LiveStatusUnknown }
 
 // TestCopyBinaryStagesViaCopyFileThenInstalls asserts the binary staging now
 // goes through the backend's stdin-EOF-safe CopyFile (to a writable temp) and

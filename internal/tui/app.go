@@ -18,6 +18,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
+	"github.com/BenjaminBenetti/fleet-man/internal/mic"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -105,6 +106,14 @@ type model struct {
 
 	codespaceMachines         []codespaceMachine // available machine types (from GitHub API)
 	codespaceFetchingMachines bool               // true while fetching machine types
+
+	// Virtual microphone (mic.go): the provider's latest status report, and this
+	// machine's capture devices for the settings selector (enumerated lazily).
+	micStatus         mic.Status
+	micDevices        []mic.Device
+	micDevicesLoaded  bool
+	micDevicesLoading bool
+	micDevicesErr     string
 
 	toolStatus []deps.ToolStatus // cached tool install statuses for settings page
 
@@ -299,6 +308,7 @@ func (m *model) reload() {
 	m.st = st
 	m.config = config
 	m.err = nil
+	syncMicFromConfig(config)
 
 	// (The control-socket listeners live on the server now — it owns every
 	// running instance's socket and pushes browser.open as a Watch BrowserOpen
@@ -922,6 +932,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The daemon's version learned at (re)connect; render it in the header's
 		// control-chain version string.
 		m.serverVersion = msg.serverVersion
+		// A (re)connect is when the daemon may have changed under us — notably
+		// an in-place update of one that predated the Mic RPC, whose provider
+		// gave up as "unsupported". Converge again; a no-op when one is running.
+		syncMicFromConfig(m.config)
 		return m, spinCmd
 
 	case watchErrMsg:
@@ -988,6 +1002,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.message = "Fleet daemon restarted"
 		}
+		return m, spinCmd
+
+	case micStatusMsg:
+		// Drop a superseded provider's reports (see micCtl.gen): its parting
+		// "connecting" must not clear the badge of the provider that replaced it.
+		if msg.gen == micGen() {
+			m.micStatus = msg.status
+		}
+		return m, spinCmd
+
+	case micDevicesMsg:
+		m.micDevicesLoading = false
+		m.micDevicesErr = ""
+		if msg.err != nil {
+			// Keep the list we had: a sound server that is momentarily wedged
+			// must not turn the user's real device into "not found here". And
+			// micDevicesLoaded is NOT set by a failure: with no earlier list
+			// that would claim "not found here" about a device we never looked
+			// for, and block the retry that the next key press should get.
+			m.micDevicesErr = msg.err.Error()
+			if mic.IsNoTool(msg.err) {
+				m.micDevicesErr = mic.Describe(msg.err)
+			}
+			return m, spinCmd
+		}
+		m.micDevicesLoaded = true
+		m.micDevices = msg.devices
+		// A successful listing proves this machine can record. If the provider
+		// gave up earlier for lack of a recorder, this is the moment to retry.
+		syncMicFromConfig(m.config)
 		return m, spinCmd
 
 	case codespaceMachinesFetchedMsg:
@@ -1364,6 +1408,12 @@ func Run() error {
 	// stops the current stream and any bounced successor.
 	watchCtx, watchCancel := context.WithCancel(context.Background())
 	startWatchStream(watchCtx, program) // initial generation is 0, matching model.watchGen's zero value
+
+	// Virtual microphone provider: armed here (it needs the program to report
+	// into), started once the config says the feature is on. newModel already
+	// loaded the config, so converge now rather than waiting for a reload.
+	startMicControl(watchCtx, program)
+	syncMicFromConfig(m.config)
 
 	finalModel, err := program.Run()
 	watchCancel()

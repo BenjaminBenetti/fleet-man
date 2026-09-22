@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
@@ -710,6 +711,28 @@ func (devcontainerBackend *DevcontainerBackend) PortForwardCommand(containerID s
 func (devcontainerBackend *DevcontainerBackend) ForwardStdioCommand(containerID string, remotePort int) (*exec.Cmd, bool) {
 	return exec.Command("docker", "exec", "-i", containerID,
 		"socat", "STDIO", fmt.Sprintf("TCP:localhost:%d", remotePort)), true
+}
+
+// SupportsMicSink reports that devcontainer instances can host the virtual
+// microphone: `docker exec -i` is a local, low-latency stdin stream.
+func (devcontainerBackend *DevcontainerBackend) SupportsMicSink() bool {
+	return true
+}
+
+// MicSinkCommand returns an unstarted *exec.Cmd running the virtual-microphone
+// sink inside the container over a plain `docker exec -i`: no TTY (the stream is
+// binary PCM) and no devcontainer CLI (a Node cold start per attach, and its
+// exec does not stream stdin promptly). It runs as the devcontainer remoteUser —
+// the user whose tmux sessions, and therefore whose recorders, the private sound
+// server must belong to. The staged binary is addressed by absolute path so the
+// sink does not depend on the exec user's PATH.
+func (devcontainerBackend *DevcontainerBackend) MicSinkCommand(containerID string) (*exec.Cmd, bool) {
+	args := []string{"exec", "-i"}
+	if user := devcontainerBackend.containerUser(containerID); user != "" {
+		args = append(args, "-u", user)
+	}
+	args = append(args, containerID, fleetlaunch.RemotePath, "mic", "sink")
+	return exec.Command("docker", args...), true
 }
 
 // Status reports the live state of a docker container by reading

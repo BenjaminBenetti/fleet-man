@@ -35,6 +35,7 @@ type (
 	DotfilesSettings   = state.DotfilesSettings
 	CodespacesSettings = state.CodespacesSettings
 	BrowserSettings    = state.BrowserSettings
+	MicSettings        = state.MicSettings
 	AgentTool          = state.AgentTool
 	State              = state.State
 	GroupLayout        = state.GroupLayout

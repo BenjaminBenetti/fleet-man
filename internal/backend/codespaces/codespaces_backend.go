@@ -324,6 +324,20 @@ func (codespacesBackend *CodespacesBackend) PortForwardCommand(containerID strin
 	return exec.Command("gh", "codespace", "ports", "forward", mapping, "-c", containerID)
 }
 
+// SupportsMicSink reports that codespaces have no virtual microphone yet. This
+// is "not built", not "cannot work": `gh codespace ssh` streams stdin fine (it
+// is what CopyFile uses). What is unproven is the rest — live audio over a WAN
+// ssh hop, and running the staged binary as the codespace's session user — and
+// a microphone that stutters is worse than none. Enable it here once validated.
+func (codespacesBackend *CodespacesBackend) SupportsMicSink() bool {
+	return false
+}
+
+// MicSinkCommand: see SupportsMicSink.
+func (codespacesBackend *CodespacesBackend) MicSinkCommand(string) (*exec.Cmd, bool) {
+	return nil, false
+}
+
 // ForwardStdioCommand returns (nil, false): the gh CLI has no
 // single-connection stdio bridge, so callers fall back to
 // PortForwardCommand bound to a host-local port.

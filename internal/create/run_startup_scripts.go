@@ -4,12 +4,14 @@ import (
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/startup"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
 // runStartupScripts loads the fleet's settings, picks the matching
-// install scripts (Claude Code, Codex, …), and runs each one inside
+// install scripts (Claude Code, Codex, …, plus the virtual microphone's
+// audio packages when that global setting is on), and runs each one inside
 // the container. Output is captured to ~/.fleet/startup/<name>.log
 // inside the instance; per-script failures are aggregated into a
 // warning file so the TUI can surface them without marking the
@@ -28,7 +30,8 @@ func runStartupScripts(instanceBackend backend.Backend, wsDir, fleetName, instan
 	if !ok {
 		return
 	}
-	scripts := startup.ScriptsFor(f.Settings)
+	config, _ := state.LoadConfig()
+	scripts := scriptsForInstance(instanceBackend, f.Settings, config)
 	if len(scripts) == 0 {
 		return
 	}
@@ -41,4 +44,17 @@ func runStartupScripts(instanceBackend backend.Backend, wsDir, fleetName, instan
 		lines = append(lines, failure.Error())
 	}
 	state.WriteWarn(fleetName, instanceName, strings.Join(lines, "\n"))
+}
+
+// scriptsForInstance is the fleet's agent install scripts plus, when the global
+// microphone setting is on, the audio stack. The microphone is not a
+// FleetSettings toggle, so it is not part of startup.ScriptsFor; and only
+// backends the daemon can attach a sink to get the packages — installing a sound
+// server nothing will ever feed is waste.
+func scriptsForInstance(instanceBackend backend.Backend, settings fleet.FleetSettings, config *state.Config) []startup.Script {
+	scripts := startup.ScriptsFor(settings)
+	if config != nil && config.MicSettings.Enabled && instanceBackend.SupportsMicSink() {
+		scripts = append(scripts, startup.MicScript())
+	}
+	return scripts
 }

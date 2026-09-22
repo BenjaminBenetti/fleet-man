@@ -27,6 +27,10 @@ func ConfigToProto(c *configutil.Config) *fleetgrpc.Config {
 			FleetMode:      c.RemoteMcpSettings.FleetMode,
 		},
 		DefaultBackend: BackendToProto(fleet.BackendType(c.DefaultBackend)),
+		Mic: &fleetgrpc.MicSettings{
+			Enabled: c.MicSettings.Enabled,
+			Device:  c.MicSettings.Device,
+		},
 	}
 
 	if c.GeneralSettings.TmuxVimKeys != nil {
@@ -132,6 +136,11 @@ func ConfigFromProto(pc *fleetgrpc.Config, base *configutil.Config) *configutil.
 		c.RemoteMcpSettings.FleetEnabled = rm.GetFleetEnabled()
 		c.RemoteMcpSettings.WebhookEnabled = rm.GetWebhookEnabled()
 		c.RemoteMcpSettings.FleetMode = rm.GetFleetMode()
+	}
+
+	if mic := pc.GetMic(); mic != nil {
+		c.MicSettings.Enabled = mic.GetEnabled()
+		c.MicSettings.Device = mic.GetDevice()
 	}
 
 	c.DefaultBackend = string(BackendFromProto(pc.GetDefaultBackend()))

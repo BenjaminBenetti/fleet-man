@@ -1,0 +1,274 @@
+package startup
+
+import (
+	"fmt"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
+	"github.com/BenjaminBenetti/fleet-man/internal/micsink"
+)
+
+// micConfigMarker tags what this script writes: the pulse client drop-in, and
+// the begin/end lines of fleet's block inside /etc/asound.conf — so a re-run can
+// replace exactly its own lines and nothing else in that file.
+const micConfigMarker = "managed by fleet (virtual microphone)"
+
+// MicScript installs what an instance needs to expose fleet's virtual
+// microphone (see internal/micsink for why it is PulseAudio):
+//
+//   - pulseaudio + pactl: the private sound server and its control tool;
+//   - the ALSA pulse plugin + /etc/asound.conf: makes the ALSA "default" device
+//     the virtual microphone, which is what arecord, SoX, ffmpeg and native ALSA
+//     clients (Claude Code's voice mode among them) open;
+//   - alsa-utils: arecord itself — the recorder voice front ends fall back to;
+//   - a pulse client.conf.d drop-in pointing every pulse client at the private
+//     server's socket, so nothing depends on PULSE_SERVER reaching a process's
+//     environment.
+//
+// Unlike the agent install scripts this one is not tied to a FleetSettings
+// toggle: the microphone is a global setting, so callers (provisioning, and the
+// daemon's lazy install for instances created before the feature was turned on)
+// add it explicitly. It is idempotent and quick when everything is in place.
+// Needs root or passwordless sudo, like every package install fleet does.
+func MicScript() Script {
+	return Script{
+		Name: "mic",
+		Body: fmt.Sprintf(`marker='%[1]s'
+socket='%[2]s'
+# Test seam: a prefix for every system path this script reads, writes or runs.
+root="${FLEET_MIC_ROOT:-}"
+fleet_bin="$root%[3]s"
+asound="$root/etc/asound.conf"
+client_conf="$root/etc/pulse/client.conf.d/00-fleet-mic.conf"
+
+as_root() {
+  if [ "$(id -u)" = 0 ]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    sudo -n "$@"
+  else
+    echo "need root or passwordless sudo to run: $*"
+    return 126
+  fi
+}
+
+# The ALSA pulse plugin, wherever this distro keeps alsa-lib's plugins
+# (debian: /usr/lib/<triplet>, fedora: /usr/lib64, alpine: /usr/lib). Globs
+# rather than find: findutils is not a given on a slim image.
+have_pulse_plugin() {
+  for libdir in "$root"/usr/lib/alsa-lib "$root"/usr/lib64/alsa-lib "$root"/usr/lib/*/alsa-lib "$root"/lib/*/alsa-lib; do
+    [ -e "$libdir/libasound_module_pcm_pulse.so" ] && return 0
+  done
+  return 1
+}
+
+installed() {
+  command -v pulseaudio >/dev/null 2>&1 && command -v pactl >/dev/null 2>&1 &&
+    command -v arecord >/dev/null 2>&1 && have_pulse_plugin
+}
+
+if installed; then
+  echo "audio packages already installed"
+elif command -v apt-get >/dev/null 2>&1; then
+  # update and install are separate statements: a stale third-party repo makes
+  # update exit non-zero on images where the install would still succeed.
+  as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+  as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+    pulseaudio pulseaudio-utils libasound2-plugins alsa-utils
+elif command -v apk >/dev/null 2>&1; then
+  as_root apk add --no-cache pulseaudio pulseaudio-utils alsa-plugins-pulse alsa-utils
+elif command -v dnf >/dev/null 2>&1; then
+  as_root dnf install -y --allowerasing pulseaudio pulseaudio-utils alsa-plugins-pulseaudio alsa-utils
+else
+  echo "no supported package manager (apt-get, apk, dnf) found"
+  exit 1
+fi
+if ! installed; then
+  echo "audio packages are still missing after install"
+  exit 1
+fi
+
+# write_system <path>: install stdin at path.
+write_system() {
+  as_root mkdir -p "$(dirname "$1")" && as_root tee "$1" >/dev/null
+}
+
+# /etc/asound.conf is shared ground, so ownership is decided by CONTENT, not by
+# whether the file exists (RPM distros ship a stock one with alsa-lib — possibly
+# installed by this very script, possibly long before it ever ran):
+#   - fleet owns only its own delimited block, which a re-run replaces;
+#   - everything else in the file is kept, verbatim;
+#   - the one thing fleet will not do is override a default the image or user
+#     set: a file that itself claims pcm.!default / ctl.!default is left alone
+#     (and checked below for whether that default reaches PulseAudio anyway).
+begin="# >>> $marker >>>"
+end="# <<< $marker <<<"
+#
+# It is READ as root too. The write below is privileged, so an unprivileged read
+# that fails (a root-only 0600 file — ordinary on a hardened image) must not be
+# mistaken for "the file is empty": that would replace the image's whole ALSA
+# configuration with fleet's block and report success. This is the one step here
+# that can destroy something the user owns, so a failed read is a hard stop.
+others=""
+if [ -e "$asound" ]; then
+  if ! current=$(as_root cat "$asound"); then
+    echo "cannot read the existing $asound; leaving it untouched"
+    exit 1
+  fi
+  if printf '%%s\n' "$current" | head -n 1 | grep -qxF "# $marker"; then
+    : # an early fleet build wrote the whole file under a bare marker line
+  elif printf '%%s\n' "$current" | grep -qxF "$begin" && ! printf '%%s\n' "$current" | grep -qxF "$end"; then
+    # A begin marker with no end (the file was hand-edited or truncated): the
+    # range delete below would run from "begin" to the END OF THE FILE and
+    # silently drop everything the user had after it. Do not guess.
+    echo "$asound has fleet's begin marker but no end marker; leaving it untouched"
+    exit 1
+  else
+    others=$(printf '%%s\n' "$current" | sed "/^$begin\$/,/^$end\$/d")
+  fi
+fi
+foreign_asound=""
+if printf '%%s\n' "$others" | grep -Eq '^[[:space:]]*(pcm|ctl)\.!default'; then
+  foreign_asound=1
+  echo "leaving the existing $asound alone (it sets its own ALSA default)"
+  # Standing down means taking fleet's OWN block out too, if an earlier run put
+  # one there: left in, fleet would either override the default it claims to
+  # respect or split the config (their pcm, fleet's ctl).
+  if [ "$others" != "$current" ]; then
+    printf '%%s\n' "$others" | write_system "$asound" || exit 1
+  fi
+else
+  {
+    [ -z "$others" ] || printf '%%s\n' "$others"
+    printf '%%s\n' "$begin" 'pcm.!default { type pulse }' 'ctl.!default { type pulse }' "$end"
+  } | write_system "$asound" || exit 1
+fi
+
+# The drop-in is fleet's by name, so it is always (re)written.
+write_system "$client_conf" <<CONF || exit 1
+# $marker
+default-server = unix:$socket
+autospawn = no
+CONF
+
+# Bring the virtual microphone up now, so a recorder probing for a device finds
+# one before any client has attached. The staged fleet binary owns the server's
+# configuration; an instance without it yet gets the server on first attach.
+server_up=""
+if [ -x "$fleet_bin" ]; then
+  if "$fleet_bin" mic ensure; then
+    server_up=1
+  else
+    echo "fleet mic ensure failed (the daemon retries on attach)"
+  fi
+fi
+
+# default_is_pulse <file>...: does one of these ALSA configs define pcm.!default
+# as a pulse device? It has to be the !default — "type pulse" merely appearing
+# somewhere (a pcm.pulse definition, which the plugin's own drop-in always
+# carries) says nothing about where the default goes.
+default_is_pulse() {
+  for conf in "$@"; do
+    [ -r "$conf" ] || continue
+    # Only a DEFINITION counts: a block that opens on the pcm.!default line, or
+    # the brace-less shorthand naming the pulse pcm. A comment that merely
+    # mentions pcm.!default, or a shorthand pointing at hardware, must not latch
+    # on and let a later, unrelated "type pulse" (pcm.pulse always has one) pass.
+    awk '
+      /^[[:space:]]*#/ { next }
+      /^[[:space:]]*pcm\.!default[[:space:]]+"?pulse"?[[:space:]]*$/ { found = 1 }
+      /^[[:space:]]*pcm\.!default[[:space:]]*\{/ { in_default = 1 }
+      in_default && /type[[:space:]]+"?pulse"?/ { found = 1 }
+      in_default && /\}/ { in_default = 0 }
+      END { exit !found }
+    ' "$conf" && return 0
+  done
+  return 1
+}
+
+# bounded <pulse command>: run it against fleet's private server, for a few
+# seconds at most. A wedged sound server must not hang the script — least of all
+# while the probe recorder below is attached (see there). timeout is coreutils /
+# busybox; without it the command simply runs unbounded.
+bounded() {
+  if command -v timeout >/dev/null 2>&1; then
+    PULSE_SERVER="unix:$socket" timeout 5 "$@"
+  else
+    PULSE_SERVER="unix:$socket" "$@"
+  fi
+}
+
+# fleet_mic_outputs: the ids of the source-outputs attached to the fleet
+# microphone specifically (join on the source index — not the null sink's
+# monitor), space-separated on one line.
+fleet_mic_outputs() {
+  mic_index=$(bounded pactl list short sources 2>/dev/null | awk -v name='%[4]s' '$2 == name { print $1 }')
+  [ -n "$mic_index" ] || return 0
+  bounded pactl list short source-outputs 2>/dev/null |
+    awk -v idx="$mic_index" '$2 == idx { printf "%%s ", $1 }'
+}
+
+# alsa_default_reaches_pulse: does a plain ALSA recorder end up on fleet's
+# PulseAudio server? "It keeps recording" is not the question — a default of
+# type null (a common way for an image to silence ALSA) or type hw records
+# happily, and records nothing of ours. With the server up, ask the server: start
+# a recorder on the ALSA default and require the private server to see its
+# stream. Without it, read the configs: the foreign file wins if it defines
+# !default at all; otherwise the drop-ins decide.
+alsa_default_reaches_pulse() {
+  if [ -n "$server_up" ]; then
+    # The probe recorder must not be able to outlive this script. A recorder
+    # left attached to the fleet microphone reads as DEMAND: the human's real
+    # microphone would open and stream with nobody recording, and nothing would
+    # ever detach it. So it is bounded three ways: it cannot run past a few
+    # seconds on its own (-d), it is killed on EVERY way out of the script
+    # (trap), and it does not inherit fd 3 — the wrapper's handle on the host's
+    # stderr, which a survivor would hold open and hang the caller on.
+    # Recorders ALREADY on the fleet microphone (a live session, a leftover) must
+    # not pass the probe on behalf of a default that never reaches it: note who
+    # is there now, and require someone NEW.
+    before=$(fleet_mic_outputs)
+    arecord -q -d 10 -f S16_LE -r 16000 -c 1 -t raw /dev/null >/dev/null 2>&1 3>&- &
+    probe=$!
+    trap 'kill "$probe" 2>/dev/null' EXIT INT TERM HUP
+    reached=1
+    # The probe gets nearly all of the recorder's lifetime to show up: on a cold
+    # container the first pulse connection alone can take a few seconds, and
+    # giving up early is a false "does not route to PulseAudio" warning.
+    for _ in 1 2 3 4 5 6 7 8; do
+      # A recorder on the fleet microphone specifically (join on the source
+      # index), not on the null sink's monitor.
+      for output in $(fleet_mic_outputs); do
+        case " $before " in
+          *" $output "*) ;;
+          *) reached=0 ;;
+        esac
+      done
+      [ "$reached" = 0 ] && break
+      kill -0 "$probe" 2>/dev/null || break
+      sleep 1
+    done
+    kill "$probe" 2>/dev/null
+    wait "$probe" 2>/dev/null
+    trap - EXIT INT TERM HUP
+    return "$reached"
+  fi
+  if grep -qs 'pcm\.!default' "$asound"; then
+    default_is_pulse "$asound"
+    return
+  fi
+  default_is_pulse "$root"/etc/alsa/conf.d/*.conf "$root"/usr/share/alsa/alsa.conf.d/*.conf
+}
+
+# Declining to own the ALSA default is only fine if the default gets to
+# PulseAudio anyway (the image routes it itself, or the pulse plugin's drop-in
+# does). Otherwise say so LOUDLY: everything else here works, the provider goes
+# "live" — and arecord (so: Claude Code's voice mode) records pure silence.
+if [ -n "$foreign_asound" ] && ! alsa_default_reaches_pulse; then
+  echo "WARNING: $asound is not fleet's and does not route the ALSA default to PulseAudio."
+  echo "ALSA recorders (arecord, Claude Code voice mode) will NOT hear fleet's microphone."
+  echo "Add 'pcm.!default { type pulse }' to it, or remove it and rebuild the instance."
+  exit 3
+fi
+echo "virtual microphone ready"`, micConfigMarker, micsink.SocketPath, fleetlaunch.RemotePath, micsink.SourceName),
+	}
+}

@@ -35,7 +35,23 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
-	if err := state.SaveConfig(protoconv.ConfigFromProto(req.GetConfig(), &state.Config{})); err != nil {
+	// Remember whether the microphone was on, to act on it being turned OFF
+	// below. An unreadable prior config reads as "was off" — nothing to undo.
+	//
+	// The previous microphone settings also SEED the otherwise-zero base: a
+	// client built before the mic group existed omits it from the Config it
+	// sends, and with a zero base that would read as "microphone off" — so
+	// changing an unrelated setting from an older TUI would kick every provider
+	// and stop every instance's sound server. An absent group means "unchanged";
+	// a current client always sends the group, so it still overrides the seed.
+	base := &state.Config{}
+	micWasEnabled := false
+	if previous, err := state.LoadConfig(); err == nil {
+		micWasEnabled = previous.MicSettings.Enabled
+		base.MicSettings = previous.MicSettings
+	}
+
+	if err := state.SaveConfig(protoconv.ConfigFromProto(req.GetConfig(), base)); err != nil {
 		return nil, status.Errorf(codes.Internal, "save config: %v", err)
 	}
 	saved, err := state.LoadConfig()
@@ -48,10 +64,22 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	// while muWrite is held cannot deadlock.
 	s.reconcileRemote(saved.RemoteMcpSettings)
 
+	// Converge the virtual microphone. Turning it ON needs nothing here: the
+	// client opens its Mic stream and the hub's sync loop attaches sinks. Turning
+	// it OFF is acted on now rather than on the next tick, so the toggle means
+	// what it says the moment it is flipped. Non-blocking (the per-instance
+	// shutdowns run on their own goroutines).
+	if micWasEnabled && !saved.MicSettings.Enabled {
+		s.mic.disable()
+	} else if saved.MicSettings.Enabled {
+		s.mic.setDevice(saved.MicSettings.Device) // pushed to a running provider
+		s.mic.poke()
+	}
+
 	// The remote-gateway fields are the ones whose effects outlive this RPC (the
 	// tunnel supervisor reacts to them), so call them out; the manager logs the
 	// resulting connection transitions itself.
-	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "remoteFleet", saved.RemoteMcpSettings.FleetEnabled, "webhook", saved.RemoteMcpSettings.WebhookEnabled, "gateway", saved.RemoteMcpSettings.GatewayURL)
+	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "remoteFleet", saved.RemoteMcpSettings.FleetEnabled, "webhook", saved.RemoteMcpSettings.WebhookEnabled, "gateway", saved.RemoteMcpSettings.GatewayURL, "mic", saved.MicSettings.Enabled)
 
 	return &fleetgrpc.SetConfigReply{Config: protoconv.ConfigToProto(saved)}, nil
 }

@@ -41,6 +41,9 @@ const (
 	settingsItemBrowserMultiple   = 600 // browser settings start here
 	settingsItemBrowserAutoSwitch = 601
 
+	settingsItemMicEnabled = 650 // virtual microphone settings start here
+	settingsItemMicDevice  = 651
+
 	settingsItemRemoteMcpEnabled       = 700 // fleet remote (MCP) settings start here
 	settingsItemRemoteMcpGatewayURL    = 701
 	settingsItemRemoteMcpCopyLocal     = 702 // copy local mcp.json snippet to clipboard
@@ -231,6 +234,17 @@ func (settingsPage *settingsPage) Init(m *model) tea.Cmd {
 	// the per-remote connection indicators live while the page is open. The
 	// armed-flag guard stops a re-entered page from stacking a second loop.
 	cmds := []tea.Cmd{fetchArmadaCmd()}
+	// The microphone selector lists THIS machine's devices; enumerate them as the
+	// page opens (fresh each visit — a headset may have been plugged in since).
+	if m.config != nil && m.config.MicSettings.Enabled {
+		// Also the natural moment to retry a provider that gave up on its own.
+		syncMicFromConfig(m.config)
+		m.micDevicesLoaded = false
+		m.micDevicesErr = ""
+		if cmd := m.ensureMicDevices(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
 	if !m.armadaTickArmed {
 		m.armadaTickArmed = true
 		cmds = append(cmds, armadaPingTickCmd())
@@ -299,6 +313,18 @@ var settingsSections = []settingsSection{
 			// per-instance mode there is no "switch" to suppress.
 			if m.config != nil && !m.config.BrowserSettings.MultipleBrowsersPerFleetEnabled() {
 				items = append(items, settingsItemBrowserAutoSwitch)
+			}
+			return items
+		},
+	},
+	{
+		Title: "Microphone",
+		Items: func(m *model) []int {
+			items := []int{settingsItemMicEnabled}
+			// The device is the toggle's sub-setting: hidden while off, so an
+			// off microphone is one row, not a form.
+			if m.config != nil && m.config.MicSettings.Enabled {
+				items = append(items, settingsItemMicDevice)
 			}
 			return items
 		},
@@ -980,6 +1006,10 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleRemoteWebhookEnabled(m)
 			} else if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, -1)
+			} else if item == settingsItemMicEnabled {
+				return settingsPage.toggleMicEnabled(m)
+			} else if item == settingsItemMicDevice {
+				return settingsPage.cycleMicDevice(m, -1)
 			} else if item == settingsItemDaemonLogs {
 				settingsPage.cycleDaemonLogLevel(-1)
 			}
@@ -1012,6 +1042,10 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleRemoteWebhookEnabled(m)
 			} else if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, 1)
+			} else if item == settingsItemMicEnabled {
+				return settingsPage.toggleMicEnabled(m)
+			} else if item == settingsItemMicDevice {
+				return settingsPage.cycleMicDevice(m, 1)
 			} else if item == settingsItemDaemonLogs {
 				settingsPage.cycleDaemonLogLevel(1)
 			}
@@ -1123,6 +1157,12 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, 1)
 				return nil
+			}
+			if item == settingsItemMicEnabled {
+				return settingsPage.toggleMicEnabled(m)
+			}
+			if item == settingsItemMicDevice {
+				return settingsPage.cycleMicDevice(m, 1)
 			}
 			if item == settingsItemUpdate {
 				return performUpdateCmd()
@@ -1447,6 +1487,9 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 	var b strings.Builder
 
 	b.WriteString(renderGradient(nameToBanner("Settings")))
+	if badge := micLiveIndicator(m); badge != "" {
+		b.WriteString("  " + badge)
+	}
 	if m.updateAvailable != "" {
 		b.WriteString("  " + updateStyle.Render(fmt.Sprintf("A new version: %s is available ⚡ ", m.updateAvailable)))
 	}
@@ -1593,6 +1636,27 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				// (%-18s) + value-separator (1).
 				autoSwitchValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Do not prompt when switching the browser to another instance")
 				recordRow(settingsItemBrowserAutoSwitch, settingsPage.renderSettingsRow(m, currentItem == settingsItemBrowserAutoSwitch, "Auto Switch", autoSwitchValue))
+			}
+
+		case "Microphone":
+			micValue := "[ off ]"
+			if config.MicSettings.Enabled {
+				micValue = "[ on ]"
+			}
+			micValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Proxy this machine's microphone into instances (voice input for coding agents)")
+			recordRow(settingsItemMicEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemMicEnabled, "Enabled", micValue))
+			if config.MicSettings.Enabled {
+				listContent.WriteString("\n")
+				recordRow(settingsItemMicDevice, settingsPage.renderSettingsRow(m, currentItem == settingsItemMicDevice, "Device", settingsPage.micDeviceValue(m)))
+				listContent.WriteString("\n")
+				// Not navigable: a read-out of the provider, like Public MCP URL's
+				// connection state. It bypasses recordRow (no item id), so it must
+				// do recordRow's wrapping itself: an error detail easily exceeds
+				// the box, and an UNWRAPPED long line is drawn as two while being
+				// counted as one — which shifts the scrollbar and the mouse hit
+				// rows of everything below it.
+				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(
+					settingsPage.renderSettingsRow(m, false, "Status", micStatusValue(m))))
 			}
 
 		case "Fleet MCP":
