@@ -151,7 +151,12 @@ func (m *model) handleThemeMsg(msg tea.Msg) tea.Cmd {
 		}
 		if m.themePicked {
 			// A slow boot-time load must not overwrite a theme the user has
-			// since chosen (that choice is what is being persisted).
+			// since chosen (that choice is what is being persisted) — but if
+			// no save has landed yet, it IS the last persisted look, so a
+			// failed save reverts to it rather than to Fleet.
+			if m.themeSaved == "" {
+				m.themeSaved = theme.Lookup(msg.name).Name
+			}
 			return nil
 		}
 		m.setTheme(msg.name)

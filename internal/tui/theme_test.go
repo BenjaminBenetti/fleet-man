@@ -175,6 +175,40 @@ func TestSelectThemeRemoteSavesLocally(t *testing.T) {
 	}
 }
 
+// TestThemeLoadAfterPickRecordsPersisted: on a remote-booted TUI the user can
+// pick a theme before the boot-time load lands. The load must not change the
+// screen, but while no save has landed it is the last persisted look — so a
+// failed save reverts to it, not to Fleet. A save that landed first wins.
+func TestThemeLoadAfterPickRecordsPersisted(t *testing.T) {
+	resetTheme(t)
+	t.Setenv(fleetclient.EnvGateway, "https://gw.example")
+	origLocal := saveThemeLocal
+	saveThemeLocal = func(string) error { return errors.New("daemon down") }
+	t.Cleanup(func() { saveThemeLocal = origLocal })
+
+	m := &model{spinner: spinner.New()}
+	cmd := m.selectTheme("Tokyo Night")
+	m.handleThemeMsg(themeLoadedMsg{name: "Solarized Light"})
+	if activeTheme.Name != "Tokyo Night" {
+		t.Fatal("late load must not change the picked theme")
+	}
+	m.handleThemeMsg(cmd())
+	if activeTheme.Name != "Solarized Light" || m.themeSaved != "Solarized Light" {
+		t.Fatalf("failed save must revert to the LOADED theme, not Fleet: active=%q saved=%q", activeTheme.Name, m.themeSaved)
+	}
+
+	// The other ordering: a successful save lands before the stale load; the
+	// save's value is what is on disk, so the load must not replace it.
+	saveThemeLocal = func(string) error { return nil }
+	m2 := &model{spinner: spinner.New()}
+	cmd = m2.selectTheme("Gruvbox Dark")
+	m2.handleThemeMsg(cmd())
+	m2.handleThemeMsg(themeLoadedMsg{name: "Solarized Light"})
+	if m2.themeSaved != "Gruvbox Dark" || activeTheme.Name != "Gruvbox Dark" {
+		t.Fatalf("a landed save must win over a stale load: saved=%q active=%q", m2.themeSaved, activeTheme.Name)
+	}
+}
+
 // TestSelectThemeRemoteCoalescesSaves: rapid cycling on a remote TUI keeps at
 // most one save in flight; presses meanwhile only change the look, and the
 // save's completion persists where the user ended up — so the config never
