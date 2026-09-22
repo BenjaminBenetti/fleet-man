@@ -205,13 +205,15 @@ func runtimeAnchors(path string) []cgroupAnchor {
 // running docker). A container ID merely appearing in the peer's cgroup path
 // is NOT enough: another user can name a cgroup of their own after it (a
 // delegated systemd user scope called docker-<id>.scope). So only this
-// instance's own containers are considered — the recorded ID, or while
-// `devcontainer up` is still running and nothing is recorded yet (postCreate,
-// dotfiles), the containers labelled with this instance's workspace folder —
-// and the peer's path, cut at that container's component, must equal the
-// container's real one, taken from its own init process: only the runtime
+// instance's own containers are considered — the recorded ID first, then the
+// containers labelled with this instance's workspace folder, which covers the
+// windows where the recorded ID is missing or stale: `devcontainer up` still
+// running (postCreate, dotfiles) and a rebuild's new container before its ID
+// is recorded. The peer's path, cut at that container's component, must equal
+// the container's real one, taken from its own init process: only the runtime
 // (root, or the daemon user for rootless) can create cgroups under it. No ID
-// a peer chooses is ever looked up.
+// a peer chooses is ever looked up; a refused cross-uid peer costs at most a
+// cached `docker ps`, bounded per socket by agentPeerAllowed.
 func peerInInstanceContainer(peer peerIdentity, inst instanceIdentity) bool {
 	path, ok := processCgroup(int(peer.pid))
 	if !ok {
@@ -485,6 +487,12 @@ func listenInstanceAgentSocket(dir, name string, inst instanceIdentity, serve fu
 		slowChecks: make(chan struct{}, maxSlowPeerChecks),
 	}
 	ino, dev := st.Ino, st.Dev
+	l.bound = func() bool {
+		// Still THIS socket at the path (not merely a socket: a process in
+		// the instance can replace it with its own).
+		var cur unix.Stat_t
+		return unix.Fstatat(dirFD, name, &cur, unix.AT_SYMLINK_NOFOLLOW) == nil && cur.Ino == ino && cur.Dev == dev
+	}
 	l.unlink = func() {
 		// Remove the entry only if it is still the socket this listener bound.
 		var cur unix.Stat_t

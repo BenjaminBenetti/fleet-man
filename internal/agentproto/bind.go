@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"net"
 	"time"
 
@@ -38,12 +39,14 @@ func NewBindKey() (ssh.Signer, error) {
 // and could still turn up later as the "reply" to the next request, shifting
 // every reply after it. The caller must then drop the connection.
 func BindAsForwarded(agent net.Conn, key ssh.Signer) error {
+	// Fail closed: every relayed connection is bound, or it is not used —
+	// an unbound one reaches the agent as a local client.
 	if key == nil {
-		return nil
+		return errors.New("no key to sign the forwarding bind with")
 	}
 	msg, err := ForwardingBind(key)
 	if err != nil {
-		return nil // nothing was sent; the connection is untouched
+		return err
 	}
 	if err := agent.SetDeadline(time.Now().Add(bindTimeout)); err != nil {
 		return err

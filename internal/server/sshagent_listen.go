@@ -52,6 +52,9 @@ type agentListener struct {
 	// unlink removes the socket file on Close (nil: the listener's own
 	// unlink-on-close does).
 	unlink func()
+	// bound reports whether the socket file is still the one this listener
+	// bound (nil: not tracked).
+	bound func() bool
 
 	mu     sync.Mutex
 	closed bool
@@ -381,10 +384,14 @@ func (h *agentHub) openInstance(key, dir, containerID, workspace string, now boo
 	h.mu.Unlock()
 }
 
-// stillBound reports whether the socket file is still there (an instance
-// destroyed and re-created under the same name between reconciles, or a
-// process in the instance deleting it, leaves this listener bound to nothing).
+// stillBound reports whether the socket file is still the one this listener
+// bound (an instance destroyed and re-created under the same name between
+// reconciles, or a process in the instance deleting or replacing it, leaves
+// this listener bound to nothing).
 func (il *instanceListener) stillBound() bool {
+	if il.bound != nil {
+		return il.bound()
+	}
 	info, err := os.Lstat(il.path)
 	return err == nil && info.Mode()&os.ModeSocket != 0
 }

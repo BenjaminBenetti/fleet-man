@@ -139,7 +139,7 @@ func stubAgentProvider(t *testing.T) (starts func() int, running func() int) {
 	var mu sync.Mutex
 	started, live := 0, 0
 	orig := runAgentProviderFn
-	runAgentProviderFn = func(ctx context.Context, _ *tea.Program, gen int) {
+	runAgentProviderFn = func(ctx context.Context, _ *tea.Program, gen int, _ string) {
 		mu.Lock()
 		started++
 		live++
@@ -395,6 +395,9 @@ func TestArmadaAdoptsTheSavedForwardAgent(t *testing.T) {
 	if view := sp.viewSettings(m); !strings.Contains(view, "[ agent: on ]") {
 		t.Fatal("the adopted remote's row should show [ agent: on ]")
 	}
+	if !strings.Contains(m.message, "from your ssh config") {
+		t.Fatalf("status line %q should say forwarding came on from the ssh config", m.message)
+	}
 
 	// Delete the OTHER row (the gateway remote).
 	sp.cursor = settingsPositionOf(sp, m, settingsItemArmadaBase)
@@ -473,5 +476,22 @@ func TestExecWithBannerKeepsTheCommandsEnvironment(t *testing.T) {
 	wrapped := execWithBannerCmd("banner", cmd)
 	if !slices.Equal(wrapped.Env, cmd.Env) {
 		t.Fatalf("the banner wrapper dropped the environment: %v", wrapped.Env)
+	}
+}
+
+func TestAgentProviderNeverDialsAnotherRemote(t *testing.T) {
+	clearArmadaEnv(t)
+	// An Armada switch has already rewritten the env to another remote when
+	// the provider started for devbox wakes up: it must stop, not dial.
+	t.Setenv(fleetclient.EnvSSH, "ssh://ben@other")
+	done := make(chan struct{})
+	go func() {
+		runAgentProvider(context.Background(), nil, -1, "ssh://ben@devbox")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the provider dialed (or kept retrying) a remote it was not started for")
 	}
 }

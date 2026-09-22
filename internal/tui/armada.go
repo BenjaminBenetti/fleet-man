@@ -305,6 +305,11 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 			}
 		}
 		m.message = "Remote fleet " + msg.action
+		if msg.action == "added" && len(msg.remotes) > 0 && msg.remotes[len(msg.remotes)-1].ForwardAgent {
+			// The daemon turned it on because the user's ssh config forwards
+			// an agent to that host: say so, it is never a silent default.
+			m.message += " — [ agent: on ] from your ssh config (ForwardAgent yes)"
+		}
 		return nil
 
 	case armadaSwitchedMsg:

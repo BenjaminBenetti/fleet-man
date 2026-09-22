@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"net"
 	"testing"
 )
 
@@ -96,5 +97,14 @@ func TestMessageReaderRejectsTruncatedAndOversized(t *testing.T) {
 	binary.BigEndian.PutUint32(huge, maxAgentMessage+1)
 	if _, err := (&MessageReader{Next: once(huge)}).Read(); !errors.Is(err, ErrMessageTooLarge) {
 		t.Fatalf("oversized: %v", err)
+	}
+}
+
+func TestBindAsForwardedFailsClosedWithoutAKey(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	if err := BindAsForwarded(a, nil); err == nil {
+		t.Fatal("a connection that cannot be bound as forwarded must be refused, not used unbound")
 	}
 }

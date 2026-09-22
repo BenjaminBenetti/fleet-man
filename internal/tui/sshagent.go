@@ -88,7 +88,7 @@ func (m *model) syncAgentProvider() {
 	agentCtl.target = target
 	agentCtl.gen++
 	m.agentStatus = agentfwd.Status{}
-	go runAgentProviderFn(ctx, agentCtl.program, agentCtl.gen)
+	go runAgentProviderFn(ctx, agentCtl.program, agentCtl.gen, target)
 }
 
 // agentProviderExited is a provider goroutine's last act: if it is still the
@@ -125,7 +125,7 @@ type agentStatusMsg struct {
 // runAgentProvider dials the current endpoint and holds the SSHAgent stream
 // until ctx is cancelled. agentfwd.Run reconnects the stream itself; the loop
 // here only covers the dial, which can fail while a remote is coming up.
-func runAgentProvider(ctx context.Context, program *tea.Program, gen int) {
+func runAgentProvider(ctx context.Context, program *tea.Program, gen int, target string) {
 	report, flush := newLatestForwarder(func(status agentfwd.Status) {
 		program.Send(agentStatusMsg{status: status, gen: gen})
 	})
@@ -134,6 +134,13 @@ func runAgentProvider(ctx context.Context, program *tea.Program, gen int) {
 
 	backoff := 500 * time.Millisecond
 	for ctx.Err() == nil {
+		// Dial re-reads the connection env, which an Armada switch rewrites
+		// just BEFORE it cancels this goroutine: never dial (or auto-spawn a
+		// local daemon) for anything but the remote this provider was started
+		// for, whose [ agent: on ] it was started under.
+		if armadaCurrentKey() != target {
+			return
+		}
 		conn, err := fleetclient.Dial(ctx)
 		if err != nil {
 			report(agentfwd.Status{State: agentfwd.StateConnecting})
@@ -144,6 +151,10 @@ func runAgentProvider(ctx context.Context, program *tea.Program, gen int) {
 			}
 			backoff = min(backoff*2, 10*time.Second)
 			continue
+		}
+		if armadaCurrentKey() != target {
+			conn.Close() // the switch landed while dialing
+			return
 		}
 		agentfwd.Run(ctx, conn.Service(), "tui", report)
 		conn.Close()

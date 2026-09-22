@@ -240,3 +240,36 @@ func TestInstanceSocketReplacesAStaleSocket(t *testing.T) {
 	}
 	_ = conn.Close()
 }
+
+func TestSSHAgentInstanceSocketIsRecreatedWhenReplaced(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	svc, _ := startAgentTestServer(t)
+	st := &state.State{Fleets: map[string]*fleet.Fleet{
+		"f": {Name: "f", Instances: []*fleet.Instance{{Name: "i", Backend: fleet.BackendDevcontainer}}},
+	}}
+	control := state.ControlDir("f", "i")
+	if err := os.MkdirAll(control, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc.agent.syncInstances(st)
+	sock := filepath.Join(control, agentsock.SocketName)
+	// A process in the instance swaps in a socket of its own.
+	if err := os.Remove(sock); err != nil {
+		t.Fatal(err)
+	}
+	impostor, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Skipf("control path too long for a direct bind here: %v", err)
+	}
+	impostor.(*net.UnixListener).SetUnlinkOnClose(false)
+	_ = impostor.Close()
+
+	svc.agent.syncInstances(st) // notices the listener no longer owns the path
+	svc.agent.syncInstances(st) // opens a fresh one
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("the relay socket was not recreated after being replaced: %v", err)
+	}
+	_ = conn.Close()
+}

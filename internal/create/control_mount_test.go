@@ -2,10 +2,8 @@ package create
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 
-	devcontainerbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -72,7 +70,7 @@ func TestControlMount(t *testing.T) {
 // mount, and the devcontainer backend tells them apart by this marker.
 func TestControlMountWritesMarker(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	marker := filepath.Join(filepath.Dir(state.ControlDir("f", "i")), devcontainerbackend.ControlMountMarker)
+	marker := control.MountMarkerPath(state.ControlDir("f", "i"))
 
 	orig := ControlDirReady
 	t.Cleanup(func() { ControlDirReady = orig })
