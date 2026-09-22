@@ -15,6 +15,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/agentfwd"
 	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
+	"github.com/BenjaminBenetti/fleet-man/internal/create"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"golang.org/x/crypto/ssh"
@@ -499,20 +500,224 @@ func TestSSHAgentHubCloseEndsLiveConnections(t *testing.T) {
 	provider := attachRawProvider(t, client, "laptop")
 	provider.nextStatus()
 
-	done := dialAsync(t, hostSock)
+	conn, err := net.Dial("unix", hostSock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
 	open := provider.nextOpen()
 	if err := provider.stream.Send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Ready{Ready: &fleetgrpc.SSHAgentReady{ConnId: open.GetConnId()}}}); err != nil {
 		t.Fatal(err)
 	}
+	// Prove the relay is LIVE (past ready): bytes written now reach the
+	// provider as data for this connection.
+	if _, err := conn.Write([]byte{0, 0, 0, 1, 11}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(10 * time.Second)
+	for live := false; !live; {
+		select {
+		case down := <-provider.downs:
+			live = down.GetData().GetConnId() == open.GetConnId()
+		case <-deadline:
+			t.Fatal("the relay never went live")
+		}
+	}
 
-	svc.agent.close()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("closing the hub left a relayed connection open")
+	readDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, conn)
+		close(readDone)
+	}()
+	closed := make(chan struct{})
+	go func() {
+		svc.agent.close()
+		close(closed)
+	}()
+	for _, ch := range []chan struct{}{readDone, closed} {
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatal("closing the hub left a live relayed connection open (or hung)")
+		}
 	}
 	if _, err := os.Stat(hostSock); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("closing the hub should remove the host socket, stat err = %v", err)
+	}
+}
+
+// halfCloseList sends REQUEST_IDENTITIES, shuts the write side at once (as
+// socat or `nc -N` do), and returns everything read back.
+func halfCloseList(t *testing.T, sock string) []byte {
+	t.Helper()
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+	if _, err := conn.Write([]byte{0, 0, 0, 1, 11}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.(*net.UnixConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatalf("read reply: %v", err)
+	}
+	return reply
+}
+
+// isOneKeyAnswer reports whether reply is an identities answer with one key.
+func isOneKeyAnswer(reply []byte) bool {
+	return len(reply) >= 9 && reply[4] == 12 && reply[5] == 0 && reply[6] == 0 && reply[7] == 0 && reply[8] == 1
+}
+
+func TestSSHAgentRelayHalfCloseStillGetsTheReply(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	svc, client := startAgentTestServer(t)
+	hostSock := filepath.Join(dir, "relay.sock")
+	if err := svc.agent.listenHost(hostSock); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("fallback", func(t *testing.T) {
+		daemonSock, _ := startFakeAgent(t, dir, "daemon")
+		svc.agent.setFallback(daemonSock)
+		t.Cleanup(func() { svc.agent.setFallback("") })
+		if reply := halfCloseList(t, hostSock); !isOneKeyAnswer(reply) {
+			t.Fatalf("reply through the fallback after a half-close = %v", reply)
+		}
+	})
+
+	t.Run("provider", func(t *testing.T) {
+		userSock, _ := startFakeAgent(t, dir, "user")
+		t.Setenv("SSH_AUTH_SOCK", userSock)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		statuses := make(statusRecorder, 64)
+		go agentfwd.Run(ctx, client, "test", statuses.report)
+		statuses.waitFor(t, agentfwd.StateActive)
+		if reply := halfCloseList(t, hostSock); !isOneKeyAnswer(reply) {
+			t.Fatalf("reply through the provider after a half-close = %v", reply)
+		}
+	})
+}
+
+func TestSSHAgentSilentProviderIsSkipped(t *testing.T) {
+	orig := agentPingInterval
+	agentPingInterval = 50 * time.Millisecond
+	t.Cleanup(func() { agentPingInterval = orig })
+
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	daemonSock, daemonKey := startFakeAgent(t, dir, "daemon")
+	svc, client := startAgentTestServer(t)
+	svc.agent.setFallback(daemonSock)
+	hostSock := filepath.Join(dir, "relay.sock")
+	if err := svc.agent.listenHost(hostSock); err != nil {
+		t.Fatal(err)
+	}
+
+	// A provider that never answers pings (a laptop gone to sleep).
+	sleeper := attachRawProvider(t, client, "laptop")
+	sleeper.nextStatus()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		p := svc.agent.providersNewestFirst()
+		if len(p) == 1 && p[0].suspect.Load() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the silent provider was never marked suspect")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	start := time.Now()
+	requireOnlyKey(t, hostSock, daemonKey)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("a suspect provider still stalled the connection for %s", elapsed)
+	}
+
+	// It wakes up and answers: it is tried again.
+	if err := sleeper.stream.Send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Pong{Pong: &fleetgrpc.SSHAgentPong{Seq: 1 << 30}}}); err != nil {
+		t.Fatal(err)
+	}
+	for sleeper.stream.Context().Err() == nil {
+		if p := svc.agent.providersNewestFirst(); len(p) == 1 && !p[0].suspect.Load() {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	dialAsync(t, hostSock)
+	sleeper.nextOpen()
+}
+
+func TestStartAgentRelayRedirectsTheDaemonsAgent(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	daemonSock, daemonKey := startFakeAgent(t, dir, "daemon")
+	// t.Setenv first so its cleanup also undoes startAgentRelay's os.Setenv.
+	t.Setenv(agentsock.EnvAuthSock, daemonSock)
+	t.Setenv(agentsock.EnvOrigin, "")
+	_ = os.Unsetenv(agentsock.EnvOrigin)
+	t.Setenv(agentsock.EnvOverride, "")
+	origHook := create.ControlDirReady
+	t.Cleanup(func() {
+		create.ControlDirReady = origHook
+		agentsock.SetRelayServing(false)
+	})
+
+	h := newAgentHub()
+	ctx, cancel := context.WithCancel(context.Background())
+	startAgentRelay(ctx, h)
+	t.Cleanup(func() {
+		cancel()
+		h.close()
+	})
+
+	if got := os.Getenv(agentsock.EnvAuthSock); got != agentsock.HostSocketPath() {
+		t.Fatalf("SSH_AUTH_SOCK = %q, want the relay %q", got, agentsock.HostSocketPath())
+	}
+	if got := os.Getenv(agentsock.EnvOrigin); got != daemonSock {
+		t.Fatalf("%s = %q, want the original agent", agentsock.EnvOrigin, got)
+	}
+	if agentsock.OriginSock() != daemonSock {
+		t.Fatal("OriginSock must see through the redirect")
+	}
+	if !agentsock.RelayUsable() {
+		t.Fatal("the relay should be usable: the daemon has an agent to fall back to")
+	}
+	if create.ControlDirReady == nil {
+		t.Fatal("provisioning hook not installed")
+	}
+	// A child of the daemon (git clone) reaches the original agent through it.
+	requireOnlyKey(t, os.Getenv(agentsock.EnvAuthSock), daemonKey)
+}
+
+func TestStartAgentRelayLeavesTheEnvironmentAloneWhenOff(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	t.Setenv(agentsock.EnvAuthSock, "/tmp/some-agent.sock")
+	t.Setenv(agentsock.EnvOverride, "off")
+	origHook := create.ControlDirReady
+	t.Cleanup(func() { create.ControlDirReady = origHook })
+
+	h := newAgentHub()
+	ctx, cancel := context.WithCancel(context.Background())
+	startAgentRelay(ctx, h)
+	t.Cleanup(func() {
+		cancel()
+		h.close()
+	})
+	if got := os.Getenv(agentsock.EnvAuthSock); got != "/tmp/some-agent.sock" {
+		t.Fatalf("SSH_AUTH_SOCK changed to %q with forwarding off", got)
+	}
+	if _, err := os.Stat(agentsock.HostSocketPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("no relay socket may exist with forwarding off: %v", err)
 	}
 }
 

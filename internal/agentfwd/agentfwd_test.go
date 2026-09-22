@@ -92,9 +92,20 @@ func localAgent(t *testing.T) {
 
 func setAgentSocket(t *testing.T, sock string) {
 	t.Helper()
-	orig := agentSocket
-	t.Cleanup(func() { agentSocket = orig })
-	agentSocket = func() string { return sock }
+	setAgentSocketFn(t, func() string { return sock })
+}
+
+func setAgentSocketFn(t *testing.T, fn func() string) {
+	t.Helper()
+	agentSocketMu.Lock()
+	orig := agentSocketFn
+	agentSocketFn = fn
+	agentSocketMu.Unlock()
+	t.Cleanup(func() {
+		agentSocketMu.Lock()
+		agentSocketFn = orig
+		agentSocketMu.Unlock()
+	})
 }
 
 // reports collects Run's status reports.
@@ -245,13 +256,12 @@ func TestRunTellsTheDaemonWhenTheLocalAgentIsGone(t *testing.T) {
 	localAgent(t)
 	live := agentSocket()
 	var gone atomic.Bool
-	setAgentSocket(t, "")
-	agentSocket = func() string {
+	setAgentSocketFn(t, func() string {
 		if gone.Load() {
 			return filepath.Join(os.TempDir(), "no-such-agent.sock")
 		}
 		return live
-	}
+	})
 	gotClose := make(chan *fleetgrpc.SSHAgentClose, 1)
 	client := dialFake(t, &fakeDaemon{handle: func(stream fleetgrpc.FleetService_SSHAgentServer) error {
 		if _, err := stream.Recv(); err != nil {

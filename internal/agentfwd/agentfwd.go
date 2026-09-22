@@ -80,11 +80,24 @@ const (
 	maxFrameBytes = 1 << 20
 )
 
+// agentSocketFn reads the local agent's socket path — per connection, so an
+// agent restarted at the same path is picked up without restarting anything.
+// Behind a lock because tests swap it while an earlier provider's goroutines
+// may still be reading it.
+var (
+	agentSocketMu sync.RWMutex
+	agentSocketFn = func() string { return os.Getenv("SSH_AUTH_SOCK") }
+)
+
+func agentSocket() string {
+	agentSocketMu.RLock()
+	fn := agentSocketFn
+	agentSocketMu.RUnlock()
+	return fn()
+}
+
 // Seams for tests.
 var (
-	// agentSocket reads the local agent's socket path — per connection, so an
-	// agent restarted at a new path is picked up without restarting anything.
-	agentSocket = func() string { return os.Getenv("SSH_AUTH_SOCK") }
 	// hostname labels this provider in the daemon's log.
 	hostname = func() string {
 		name, err := os.Hostname()

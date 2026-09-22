@@ -1,6 +1,12 @@
 package agentsock
 
-import "testing"
+import (
+	"net"
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+)
 
 func TestModeFor(t *testing.T) {
 	cases := []struct {
@@ -51,5 +57,75 @@ func TestOriginSockNeverTheRelay(t *testing.T) {
 	t.Setenv(EnvAuthSock, HostSocketPath())
 	if got := OriginSock(); got != "" {
 		t.Fatalf("got %q, want the relay filtered out", got)
+	}
+}
+
+// liveSocket binds a unix socket under a short temp dir.
+func liveSocket(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "ags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "agent.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	return sock
+}
+
+func TestWithOriginAgent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	origin := liveSocket(t)
+	relay := HostSocketPath()
+	t.Setenv(EnvAuthSock, relay)
+	t.Setenv(EnvOrigin, origin)
+
+	got := WithOriginAgent([]string{"HOME=/h", EnvAuthSock + "=" + relay})
+	if !slices.Equal(got, []string{"HOME=/h", EnvAuthSock + "=" + origin}) {
+		t.Fatalf("relay not swapped for the live origin: %v", got)
+	}
+	// Someone else's SSH_AUTH_SOCK is left alone.
+	other := []string{EnvAuthSock + "=/elsewhere.sock"}
+	if got := WithOriginAgent(other); !slices.Equal(got, other) {
+		t.Fatalf("a non-relay SSH_AUTH_SOCK was changed: %v", got)
+	}
+	// No live origin (a remote daemon started without one): keep the relay —
+	// a mount that works until the next restart beats an empty source.
+	t.Setenv(EnvOrigin, "/tmp/gone.sock")
+	in := []string{EnvAuthSock + "=" + relay}
+	if got := WithOriginAgent(in); !slices.Equal(got, in) {
+		t.Fatalf("relay swapped for a dead origin: %v", got)
+	}
+}
+
+func TestRelayUsable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(func() {
+		SetRelayServing(false)
+		SetRemoteClients(false)
+	})
+	t.Setenv(EnvOrigin, "")
+	t.Setenv(EnvAuthSock, "")
+
+	SetRelayServing(false)
+	SetRemoteClients(true)
+	if RelayUsable() {
+		t.Fatal("not serving: never usable")
+	}
+	SetRelayServing(true)
+	if !RelayUsable() {
+		t.Fatal("serving with remote clients possible: usable")
+	}
+	SetRemoteClients(false)
+	if RelayUsable() {
+		t.Fatal("no agent of its own and no remote clients: nothing could answer")
+	}
+	t.Setenv(EnvAuthSock, liveSocket(t))
+	if !RelayUsable() {
+		t.Fatal("the daemon's own agent backs it")
 	}
 }
