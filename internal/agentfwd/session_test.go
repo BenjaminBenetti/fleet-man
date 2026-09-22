@@ -3,6 +3,7 @@ package agentfwd
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"net"
 	"os"
 	"path/filepath"
@@ -12,7 +13,20 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/agentproto"
 )
+
+const (
+	agentcRequestIdentities = 11
+	agentcExtension         = 27
+)
+
+// agentMessage frames body as an agent-protocol message.
+func agentMessage(body ...byte) []byte {
+	msg := make([]byte, 4, 4+len(body))
+	binary.BigEndian.PutUint32(msg, uint32(len(body)))
+	return append(msg, body...)
+}
 
 // recordingAgent is a minimal agent that records the request types it
 // receives, counts live connections, and answers REQUEST_IDENTITIES with an
@@ -21,6 +35,9 @@ type recordingAgent struct {
 	mu    sync.Mutex
 	types []byte
 	live  atomic.Int32
+	total atomic.Int32
+	// delay holds each reply back (a slow agent).
+	delay time.Duration
 }
 
 func startRecordingAgent(t *testing.T) *recordingAgent {
@@ -44,18 +61,20 @@ func startRecordingAgent(t *testing.T) *recordingAgent {
 				return
 			}
 			a.live.Add(1)
+			a.total.Add(1)
 			go func() {
 				defer a.live.Add(-1)
 				defer conn.Close()
 				for {
-					msg, err := readAgentMessage(conn)
+					msg, err := agentproto.ReadMessage(conn)
 					if err != nil {
 						return
 					}
 					a.mu.Lock()
 					a.types = append(a.types, msg[4])
 					a.mu.Unlock()
-					reply := failureReply
+					time.Sleep(a.delay)
+					reply := agentproto.FailureReply
 					if msg[4] == agentcRequestIdentities {
 						reply = []byte{0, 0, 0, 5, 12, 0, 0, 0, 0}
 					}
@@ -158,16 +177,18 @@ func TestProviderAnswersForbiddenRequestsItself(t *testing.T) {
 	sendDown(t, stream, downData(1, append(addSmartcard, agentMessage(agentcRequestIdentities)...)))
 
 	var replies []byte
-	for len(replies) < len(failureReply)+9 {
+	for len(replies) < len(agentproto.FailureReply)+9 {
 		up := recvUp(t, stream)
 		replies = append(replies, up.GetData().GetData()...)
 	}
-	want := append(append([]byte(nil), failureReply...), 0, 0, 0, 5, 12, 0, 0, 0, 0)
+	want := append(append([]byte(nil), agentproto.FailureReply...), 0, 0, 0, 5, 12, 0, 0, 0, 0)
 	if !bytes.Equal(replies, want) {
 		t.Fatalf("replies = %v, want FAILURE then an identities answer %v", replies, want)
 	}
-	if seen := agent.seen(); !bytes.Equal(seen, []byte{agentcRequestIdentities}) {
-		t.Fatalf("the agent saw request types %v; only the list request may reach it", seen)
+	// The provider's own forwarding bind (an extension) comes first; of the
+	// daemon's requests only the list may reach the agent.
+	if seen := agent.seen(); !bytes.Equal(seen, []byte{agentcExtension, agentcRequestIdentities}) {
+		t.Fatalf("the agent saw request types %v; want the bind, then only the list request", seen)
 	}
 }
 
@@ -179,13 +200,27 @@ func TestProviderDoesNotLeakConnectionsTheDaemonAbandoned(t *testing.T) {
 
 	// The daemon gave up waiting (its ready timeout) and closes right behind
 	// every open — the close must not be lost while the provider dials.
+	base := agent.total.Load() // the reachability probe before attaching
 	for id := uint64(1); id <= 20; id++ {
 		sendDown(t, stream, downOpen(id))
 		sendDown(t, stream, downClose(id))
 	}
+	// A ping round trip proves the provider's receive loop has handled every
+	// open and close above.
+	sendDown(t, stream, &fleetgrpc.SSHAgentDown{Msg: &fleetgrpc.SSHAgentDown_Ping{Ping: &fleetgrpc.SSHAgentPing{Seq: 1}}})
+	for {
+		if up := recvUp(t, stream); up.GetPong() != nil {
+			break
+		}
+	}
+	// Every open was dialed (the provider cannot know it was abandoned until
+	// it looks), and every one of those agent connections must be closed.
 	deadline := time.Now().Add(5 * time.Second)
-	for agent.live.Load() != 0 && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+	for (agent.total.Load()-base < 20 || agent.live.Load() != 0) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if dialed := agent.total.Load() - base; dialed < 20 {
+		t.Fatalf("only %d of the 20 opens reached the agent; the test did not exercise the race", dialed)
 	}
 	if n := agent.live.Load(); n != 0 {
 		t.Fatalf("%d agent connections left open for connections the daemon abandoned", n)
@@ -222,5 +257,42 @@ func TestProviderAnswersPings(t *testing.T) {
 	sendDown(t, stream, &fleetgrpc.SSHAgentDown{Msg: &fleetgrpc.SSHAgentDown_Ping{Ping: &fleetgrpc.SSHAgentPing{Seq: 42}}})
 	if up := recvUp(t, stream); up.GetPong().GetSeq() != 42 {
 		t.Fatalf("want pong 42, got %v", up)
+	}
+}
+
+func TestProviderAnswersRequestsQueuedBeforeTheDaemonsClose(t *testing.T) {
+	agent := startRecordingAgent(t)
+	agent.delay = 30 * time.Millisecond // requests pile up behind a slow agent
+	client, streams := scriptedDaemon(t)
+	runProvider(t, client)
+	stream := <-streams
+
+	answer := []byte{0, 0, 0, 5, 12, 0, 0, 0, 0}
+	for id := uint64(1); id <= 10; id++ {
+		sendDown(t, stream, downOpen(id))
+		for {
+			if up := recvUp(t, stream); up.GetReady().GetConnId() == id {
+				break
+			}
+		}
+		// Two requests in separate frames, then the client's half-close, all
+		// before the agent has answered the first.
+		sendDown(t, stream, downData(id, agentMessage(agentcRequestIdentities)))
+		sendDown(t, stream, downData(id, agentMessage(agentcRequestIdentities)))
+		sendDown(t, stream, downClose(id))
+
+		var got []byte
+		for {
+			up := recvUp(t, stream)
+			if c := up.GetClose(); c != nil && c.GetConnId() == id {
+				break
+			}
+			if d := up.GetData(); d.GetConnId() == id {
+				got = append(got, d.GetData()...)
+			}
+		}
+		if !bytes.Equal(got, append(append([]byte(nil), answer...), answer...)) {
+			t.Fatalf("conn %d: replies before the provider's close = %v, want two identity answers", id, got)
+		}
 	}
 }

@@ -246,7 +246,11 @@ func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts [
 	cmd := exec.Command("devcontainer", args...)
 	// ${localEnv:SSH_AUTH_SOCK} in the config (a project's own agent mount)
 	// must resolve to the user's real agent, not the daemon's relay socket.
-	env, err := devcontainerEnv(agentsock.WithOriginAgent(os.Environ()))
+	environ := os.Environ()
+	if configMentionsAgent(workspaceDir) {
+		environ = agentsock.WithOriginAgent(environ)
+	}
+	env, err := devcontainerEnv(environ)
 	if err != nil {
 		return nil, err
 	}
@@ -511,7 +515,7 @@ func (devcontainerBackend *DevcontainerBackend) runPostStart(containerID string)
 // the workspace was created with — mirroring devcontainer exec.
 func runUserCommandsArgs(workspaceDir string) []string {
 	args := []string{"run-user-commands", "--workspace-folder", workspaceDir}
-	args = append(args, sshExecArgs()...)
+	args = append(args, sshExecArgs(workspaceDir)...)
 	return args
 }
 

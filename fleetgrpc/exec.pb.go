@@ -1097,21 +1097,27 @@ func (x *MicDemand) GetDevice() string {
 // the client even when the server is remote — like `ssh -A`, but for
 // everything the daemon runs — and they are gone the moment the client leaves.
 //
-// A connection goes to the newest attached provider that can serve it (one
-// whose machine has no reachable agent answers `close` with an error and the
-// next one is tried); if none can, to the agent the daemon itself was started
-// with. The provider only forwards listing keys and signing to its agent: it
-// answers every other request (add/remove keys, lock, loading PKCS#11 or
-// security-key providers) with a failure itself, because a relayed connection
-// reaches the agent as a LOCAL client and would otherwise get more than an
-// `ssh -A` connection does.
+// A connection goes to the newest attached provider that can serve it —
+// non-yielding ones before yielding ones, skipping any that stopped answering
+// pings (one whose machine has no reachable agent answers `close` with an
+// error and the next one is tried); if none can, to the agent the daemon
+// itself was started with. Only listing keys and signing reach the agent
+// (plus the session-bind / query extensions); every other request (add/remove
+// keys, lock, loading PKCS#11 or security-key providers) is answered with a
+// failure without the agent seeing it, because a relayed connection reaches
+// the agent as a LOCAL client and would otherwise get more than an `ssh -A`
+// connection does. The provider also binds each connection as forwarded
+// (session-bind@openssh.com, is_forwarding) so the agent applies its own
+// remote-client rules and destination constraints.
 //
 // The FIRST client frame MUST carry `hello`. Connections are multiplexed by
 // conn_id, which the server assigns: it announces each with `open`, the
 // client answers `ready` once it has dialed its agent (or `close` with an
-// error if it cannot), and from then on both sides exchange `data`. `close`
-// means "nothing more from my side": the peer finishes what is in flight
-// (the provider answers a request already sent) and closes its side too.
+// error if it cannot), and from then on both sides exchange `data`. The
+// server's `close` means the connection has sent its last request (possibly
+// only a half-close): the provider still answers every request it received,
+// then sends its own `close`. The provider's `close` ends the connection: the
+// server delivers the replies already sent and closes it.
 type SSHAgentUp struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Msg:
@@ -1243,10 +1249,14 @@ func (*SSHAgentUp_Close) isSSHAgentUp_Msg() {}
 func (*SSHAgentUp_Pong) isSSHAgentUp_Msg() {}
 
 // SSHAgentHello registers the stream as a provider. client is a human label
-// (the provider's hostname and role) for the daemon's log.
+// (the provider's hostname and role) for the daemon's log. yield marks a
+// provider that should only be used when no non-yielding one can serve (a
+// CLI command's, behind the TUI that may have started it): it is queued
+// behind every non-yielding provider instead of becoming the newest.
 type SSHAgentHello struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Client        string                 `protobuf:"bytes,1,opt,name=client,proto3" json:"client,omitempty"`
+	Yield         bool                   `protobuf:"varint,2,opt,name=yield,proto3" json:"yield,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1286,6 +1296,13 @@ func (x *SSHAgentHello) GetClient() string {
 		return x.Client
 	}
 	return ""
+}
+
+func (x *SSHAgentHello) GetYield() bool {
+	if x != nil {
+		return x.Yield
+	}
+	return false
 }
 
 // SSHAgentReady: the provider dialed its local agent for conn_id; the server
@@ -2951,9 +2968,10 @@ const file_exec_proto_rawDesc = "" +
 	"\x04data\x18\x03 \x01(\v2\x17.fleetgrpc.SSHAgentDataH\x00R\x04data\x120\n" +
 	"\x05close\x18\x04 \x01(\v2\x18.fleetgrpc.SSHAgentCloseH\x00R\x05close\x12-\n" +
 	"\x04pong\x18\x05 \x01(\v2\x17.fleetgrpc.SSHAgentPongH\x00R\x04pongB\x05\n" +
-	"\x03msg\"'\n" +
+	"\x03msg\"=\n" +
 	"\rSSHAgentHello\x12\x16\n" +
-	"\x06client\x18\x01 \x01(\tR\x06client\"(\n" +
+	"\x06client\x18\x01 \x01(\tR\x06client\x12\x14\n" +
+	"\x05yield\x18\x02 \x01(\bR\x05yield\"(\n" +
 	"\rSSHAgentReady\x12\x17\n" +
 	"\aconn_id\x18\x01 \x01(\x04R\x06connId\" \n" +
 	"\fSSHAgentPong\x12\x10\n" +

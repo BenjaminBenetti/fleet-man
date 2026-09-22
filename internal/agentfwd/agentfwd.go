@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/agentproto"
+	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -38,8 +40,11 @@ const (
 	// active; this one takes over if it leaves.
 	StateStandby
 	// StateNoAgent: this machine has no reachable agent (SSH_AUTH_SOCK unset or
-	// dead), so the provider stays detached — attaching would only put a
-	// useless provider in front of the daemon's own agent. Re-checked.
+	// dead). Before attaching, the provider then stays detached — attaching
+	// would only put a useless provider in front of the daemon's own agent —
+	// and re-checks; while attached, it is reported when an agent dial fails
+	// (the daemon then tries the next provider) and cleared by the next
+	// successful one.
 	StateNoAgent
 	// StateUnsupported: the daemon does not know the RPC (older fleetd).
 	// Terminal — Run returns.
@@ -129,7 +134,7 @@ func AgentReachable() error {
 // ("tui", "cli"). report is called on every status change, possibly from
 // several goroutines but never concurrently; it must not block.
 func Run(ctx context.Context, svc fleetgrpc.FleetServiceClient, role string, report func(Status)) {
-	r := &runner{report: report, label: hostname() + " (" + role + ")"}
+	r := &runner{report: report, label: hostname() + " (" + role + ")", yield: role != "tui"}
 	backoff := reconnectInitial
 	for ctx.Err() == nil {
 		if err := AgentReachable(); err != nil {
@@ -177,13 +182,24 @@ func sleep(ctx context.Context, d time.Duration) bool {
 type runner struct {
 	report func(Status)
 	label  string
-	mu     sync.Mutex
-	state  State
-	uses   int
-	detail string
+	// yield: a CLI command's provider queues behind the TUI's (see Hello).
+	yield bool
+	// bindKey is this provider's throwaway "host key" for forwarding binds.
+	bindOnce sync.Once
+	bindKey  ssh.Signer
+	mu       sync.Mutex
+	state    State
+	uses     int
+	detail   string
 	// active is the daemon's last word on this provider (newest or standing
 	// by), restored when a connection succeeds after the agent was missing.
 	active bool
+}
+
+// key returns the provider's forwarding-bind key, made on first use.
+func (r *runner) key() ssh.Signer {
+	r.bindOnce.Do(func() { r.bindKey, _ = agentproto.NewBindKey() })
+	return r.bindKey
 }
 
 // set and the helpers below report under the lock so reports from the stream
@@ -247,7 +263,7 @@ func (r *runner) runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient
 	if err != nil {
 		return false, err
 	}
-	if err := stream.Send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Hello{Hello: &fleetgrpc.SSHAgentHello{Client: r.label}}}); err != nil {
+	if err := stream.Send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Hello{Hello: &fleetgrpc.SSHAgentHello{Client: r.label, Yield: r.yield}}}); err != nil {
 		return false, err
 	}
 
@@ -294,7 +310,12 @@ func (r *runner) runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient
 			attached = true
 			r.attachedAs(msg.Status.GetActive())
 		case *fleetgrpc.SSHAgentDown_Ping:
-			s.send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Pong{Pong: &fleetgrpc.SSHAgentPong{Seq: msg.Ping.GetSeq()}}})
+			// Never block this loop on a congested send queue: a missed pong
+			// only costs a later ping.
+			select {
+			case s.out <- &fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Pong{Pong: &fleetgrpc.SSHAgentPong{Seq: msg.Ping.GetSeq()}}}:
+			default:
+			}
 		case *fleetgrpc.SSHAgentDown_Open:
 			attached = true
 			// Registered HERE, before the goroutine dials, so a close the
@@ -436,12 +457,13 @@ func (s *session) serve(id uint64, lc *localConn) {
 		return
 	default:
 	}
+	agentproto.BindAsForwarded(agent, s.runner.key())
 	if !s.send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Ready{Ready: &fleetgrpc.SSHAgentReady{ConnId: id}}}) {
 		return
 	}
 	s.runner.served()
 
-	requests := &messageReader{next: func() ([]byte, bool) {
+	requests := &agentproto.MessageReader{Next: func() ([]byte, bool) {
 		select {
 		case chunk := <-lc.in:
 			return chunk, true
@@ -462,24 +484,9 @@ func (s *session) serve(id uint64, lc *localConn) {
 			return nil, false
 		}
 	}}
-	for {
-		request, err := requests.read()
-		if err != nil {
-			break
-		}
-		reply := failureReply
-		if requestAllowed(request) {
-			if _, err := agent.Write(request); err != nil {
-				break
-			}
-			if reply, err = readAgentMessage(agent); err != nil {
-				break
-			}
-		}
-		if !s.send(upData(id, reply)) {
-			return
-		}
-	}
+	_ = agentproto.Serve(requests, agent, true, func(reply []byte) bool {
+		return s.send(upData(id, reply))
+	})
 	s.send(upClose(id, ""))
 }
 

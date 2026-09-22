@@ -3,7 +3,6 @@ package tui
 import (
 	"errors"
 	"os"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -735,11 +734,20 @@ func TestSwitchArmadaSSHSetsEnv(t *testing.T) {
 	}
 }
 
-// TestSyncTmuxArmadaEnvMirrorsTheAgentProvider: a switch mirrors the
-// connection into the tmux server's environment, and with it this TUI's pid
-// as the agent provider while remote (so its panes' `fleet shell` does not
-// compete); back to local, every one of them is unset.
-func TestSyncTmuxArmadaEnvMirrorsTheAgentProvider(t *testing.T) {
+// stubTmuxEnv records what would be mirrored into the tmux server's global
+// environment ("" = unset).
+func stubTmuxEnv(t *testing.T) map[string]string {
+	t.Helper()
+	got := make(map[string]string)
+	orig := setTmuxGlobalEnv
+	setTmuxGlobalEnv = func(name, value string) { got[name] = value }
+	t.Cleanup(func() { setTmuxGlobalEnv = orig })
+	return got
+}
+
+// TestSyncTmuxArmadaEnvMirrorsTheConnection: a switch mirrors the connection
+// into the tmux server's environment; back to local, every variable is unset.
+func TestSyncTmuxArmadaEnvMirrorsTheConnection(t *testing.T) {
 	for _, key := range []string{fleetclient.EnvGateway, fleetclient.EnvSSH, fleetclient.EnvServer, fleetclient.EnvToken} {
 		t.Setenv(key, "")
 	}
@@ -754,19 +762,15 @@ func TestSyncTmuxArmadaEnvMirrorsTheAgentProvider(t *testing.T) {
 
 	m.inHostTmux = true
 	m.switchArmada(m.armadaEntries()[1])
-	pid := strconv.Itoa(os.Getpid())
-	if tmuxEnv[fleetclient.EnvSSH] != "ssh://ben@desktop" || tmuxEnv[fleetclient.EnvAgentProviderPID] != pid {
-		t.Fatalf("tmux env after the ssh switch = %v, want FLEET_SSH and this TUI's pid", tmuxEnv)
+	if tmuxEnv[fleetclient.EnvSSH] != "ssh://ben@desktop" {
+		t.Fatalf("tmux env after the ssh switch = %v, want FLEET_SSH", tmuxEnv)
 	}
 
 	m.switchArmada(m.armadaEntries()[0]) // local
-	for name, value := range tmuxEnv {
-		if value != "" {
-			t.Errorf("tmux %s = %q after switching to local, want it unset", name, value)
+	for _, name := range []string{fleetclient.EnvGateway, fleetclient.EnvSSH, fleetclient.EnvServer, fleetclient.EnvToken} {
+		if value, ok := tmuxEnv[name]; !ok || value != "" {
+			t.Errorf("tmux %s = %q (set=%v) after switching to local, want it unset explicitly", name, value, ok)
 		}
-	}
-	if _, ok := tmuxEnv[fleetclient.EnvAgentProviderPID]; !ok {
-		t.Fatal("the provider pid must be unset explicitly, not left behind")
 	}
 }
 

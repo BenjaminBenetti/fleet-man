@@ -46,9 +46,9 @@ const (
 type agentListener struct {
 	ln   net.Listener
 	path string
-	// containerID names the container whose processes may connect besides the
-	// daemon's user and root (nil for the host socket).
-	containerID func() string
+	// inst identifies the instance whose container's processes may connect
+	// besides the daemon's user and root (nil for the host socket).
+	inst instanceIdentity
 	// unlink removes the socket file on Close (nil: the listener's own
 	// unlink-on-close does).
 	unlink func()
@@ -98,11 +98,7 @@ func (l *agentListener) acceptLoop(serve func(net.Conn)) {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		containerID := ""
-		if l.containerID != nil {
-			containerID = l.containerID()
-		}
-		if !agentPeerAllowed(conn, containerID) {
+		if !agentPeerAllowed(conn, l.inst) {
 			flog.Warn("ssh agent socket: refused a connection from another user", "socket", l.path)
 			_ = conn.Close()
 			continue
@@ -202,17 +198,24 @@ func (h *agentHub) run(ctx context.Context) {
 	}
 }
 
-// instanceListener is a per-instance socket plus the container its
-// processes run in (known once `devcontainer up` has returned).
+// instanceListener is a per-instance socket plus what identifies its
+// container: the recorded ID (known once `devcontainer up` has returned) and
+// the workspace folder its container is labelled with.
 type instanceListener struct {
 	*agentListener
-	dir         string
-	containerID atomic.Value // string
+	dir       string
+	container atomic.Value // string
+	workspace atomic.Value // string
 }
 
-func (il *instanceListener) currentContainerID() string {
-	id, _ := il.containerID.Load().(string)
+func (il *instanceListener) containerID() string {
+	id, _ := il.container.Load().(string)
 	return id
+}
+
+func (il *instanceListener) workspaceDir() string {
+	dir, _ := il.workspace.Load().(string)
+	return dir
 }
 
 // syncInstances listens in the control directory of every instance that has
@@ -223,13 +226,13 @@ func (h *agentHub) syncInstances(st *state.State) {
 	if st == nil {
 		return
 	}
-	type wanted struct{ dir, containerID string }
+	type wanted struct{ dir, containerID, workspace string }
 	want := make(map[string]wanted)
 	for fleetName, f := range st.Fleets {
 		for _, inst := range f.Instances {
 			dir := state.ControlDir(fleetName, inst.Name)
 			if info, err := os.Stat(dir); err == nil && info.IsDir() {
-				want[fleetName+"/"+inst.Name] = wanted{dir: dir, containerID: inst.ContainerID}
+				want[fleetName+"/"+inst.Name] = wanted{dir: dir, containerID: inst.ContainerID, workspace: inst.WorkspaceDir}
 			}
 		}
 	}
@@ -247,7 +250,8 @@ func (h *agentHub) syncInstances(st *state.State) {
 			delete(h.instances, key)
 			continue
 		}
-		il.containerID.Store(w.containerID)
+		il.container.Store(w.containerID)
+		il.workspace.Store(w.workspace)
 	}
 	for key := range h.retryAt {
 		if _, ok := want[key]; !ok {
@@ -260,7 +264,7 @@ func (h *agentHub) syncInstances(st *state.State) {
 		il.Close()
 	}
 	for key, w := range want {
-		h.openInstance(key, w.dir, w.containerID, false)
+		h.openInstance(key, w.dir, w.containerID, w.workspace, false)
 	}
 }
 
@@ -272,12 +276,25 @@ func (h *agentHub) ensureInstance(fleetName, instanceName string) {
 	if agentsock.CurrentMode() != agentsock.ModeRelay {
 		return
 	}
-	h.openInstance(fleetName+"/"+instanceName, state.ControlDir(fleetName, instanceName), "", true)
+	// The record already exists (provisioning runs for a StatusCreating
+	// instance); its workspace folder is how the container is recognized
+	// before its ID is recorded.
+	var containerID, workspace string
+	if st, err := state.Load(); err == nil {
+		if f := st.Fleets[fleetName]; f != nil {
+			for _, inst := range f.Instances {
+				if inst.Name == instanceName {
+					containerID, workspace = inst.ContainerID, inst.WorkspaceDir
+				}
+			}
+		}
+	}
+	h.openInstance(fleetName+"/"+instanceName, state.ControlDir(fleetName, instanceName), containerID, workspace, true)
 }
 
 // openInstance listens for key unless it already is (or recently failed and
 // is not due a retry, unless now is set).
-func (h *agentHub) openInstance(key, dir, containerID string, now bool) {
+func (h *agentHub) openInstance(key, dir, containerID, workspace string, now bool) {
 	if !agentInstanceSocketsSupported {
 		return
 	}
@@ -292,8 +309,9 @@ func (h *agentHub) openInstance(key, dir, containerID string, now bool) {
 	h.mu.Unlock()
 
 	il := &instanceListener{dir: dir}
-	il.containerID.Store(containerID)
-	l, err := listenInstanceAgentSocket(dir, agentsock.SocketName, il.currentContainerID, h.serveFrom(key))
+	il.container.Store(containerID)
+	il.workspace.Store(workspace)
+	l, err := listenInstanceAgentSocket(dir, agentsock.SocketName, il, h.serveFrom(key))
 
 	h.mu.Lock()
 	delete(h.opening, key)
@@ -330,6 +348,7 @@ func (h *agentHub) close() {
 	h.mu.Lock()
 	h.closed = true
 	listeners := make([]*agentListener, 0, len(h.instances)+1)
+	hadHost := h.host != nil
 	if h.host != nil {
 		listeners = append(listeners, h.host)
 		h.host = nil
@@ -346,6 +365,9 @@ func (h *agentHub) close() {
 	h.providers = nil
 	h.mu.Unlock()
 
+	if hadHost {
+		agentsock.SetRelayServing(false)
+	}
 	for _, l := range listeners {
 		l.Close()
 	}
@@ -360,8 +382,11 @@ func (h *agentHub) close() {
 
 // startAgentRelay brings the relay up for the daemon's lifetime: it records
 // the agent the daemon was started with as the fallback, listens on the host
-// socket and — once that is up — points the daemon's own SSH_AUTH_SOCK at it,
-// keeping the original in agentsock.EnvOrigin. Then it reconciles the
+// socket, and points the daemon's own SSH_AUTH_SOCK at it (keeping the
+// original in agentsock.EnvOrigin) — right away if the daemon has an agent of
+// its own or a client has provided one before, otherwise as soon as the first
+// provider attaches, so the host's own scripts keep an unset SSH_AUTH_SOCK
+// until something can answer on the relay. Then it reconciles the
 // per-instance sockets until ctx ends. Best-effort: if the host socket cannot
 // be created, the daemon keeps its original agent and says so in the log.
 func startAgentRelay(ctx context.Context, h *agentHub) {
@@ -372,9 +397,29 @@ func startAgentRelay(ctx context.Context, h *agentHub) {
 		if err := h.listenHost(path); err != nil {
 			flog.Warn("ssh agent relay: host socket unavailable; the daemon keeps its own agent", "err", err)
 		} else {
-			_ = os.Setenv(agentsock.EnvOrigin, origin)
-			_ = os.Setenv(agentsock.EnvAuthSock, path)
+			var redirect sync.Once
+			redirectNow := func() {
+				redirect.Do(func() {
+					_ = os.Setenv(agentsock.EnvOrigin, origin)
+					_ = os.Setenv(agentsock.EnvAuthSock, path)
+				})
+			}
+			_, err := os.Stat(agentsock.ProviderSeenPath())
+			seen := err == nil
+			agentsock.SetProviderSeen(seen)
 			agentsock.SetRelayServing(true)
+			if seen || agentsock.LiveSocket(origin) {
+				redirectNow()
+			}
+			h.mu.Lock()
+			h.onFirstProvider = func() {
+				if f, err := os.OpenFile(agentsock.ProviderSeenPath(), os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+					_ = f.Close()
+				}
+				agentsock.SetProviderSeen(true)
+				redirectNow()
+			}
+			h.mu.Unlock()
 		}
 	}
 	create.ControlDirReady = h.ensureInstance

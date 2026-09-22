@@ -3,9 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 
@@ -62,28 +60,19 @@ func (m *model) agentForwardTarget() string {
 
 // syncAgentProvider converges the provider on the current connection and the
 // registry: running against the current remote iff forwarding is on for it.
-// Idempotent — called wherever the registry or the connection changes.
+// Idempotent — called wherever the registry or the connection changes. The
+// `fleet shell` children this TUI spawns provide too, but theirs yield: the
+// daemon tries them only after this non-yielding one, so they never push it
+// to standby.
 func (m *model) syncAgentProvider() {
-	if m.convergeAgentProvider() && m.inHostTmux {
-		// tmux starts split panes (and the bound %/" keys) from its own
-		// environment, not this process's, and a TUI that booted connected to
-		// the remote has had no switch to mirror it (syncTmuxArmadaEnv): tell
-		// their `fleet shell` children now that this TUI provides.
-		setTmuxGlobalEnv(fleetclient.EnvAgentProviderPID, agentProviderPIDValue())
-	}
-}
-
-// convergeAgentProvider does syncAgentProvider's bookkeeping under agentCtl's
-// lock and reports whether it started a provider.
-func (m *model) convergeAgentProvider() (started bool) {
 	target := m.agentForwardTarget()
 	agentCtl.mu.Lock()
 	defer agentCtl.mu.Unlock()
 	if agentCtl.parent == nil {
-		return false
+		return
 	}
 	if agentCtl.cancel != nil && agentCtl.target == target {
-		return false
+		return
 	}
 	if agentCtl.cancel != nil {
 		agentCtl.cancel()
@@ -92,7 +81,7 @@ func (m *model) convergeAgentProvider() (started bool) {
 	}
 	if target == "" {
 		m.agentStatus = agentfwd.Status{}
-		return false
+		return
 	}
 	ctx, cancel := context.WithCancel(agentCtl.parent)
 	agentCtl.cancel = cancel
@@ -100,18 +89,6 @@ func (m *model) convergeAgentProvider() (started bool) {
 	agentCtl.gen++
 	m.agentStatus = agentfwd.Status{}
 	go runAgentProviderFn(ctx, agentCtl.program, agentCtl.gen)
-	return true
-}
-
-// agentProviderPIDValue is the fleetclient.EnvAgentProviderPID value this
-// TUI's children get: its pid while it is connected to a remote, where it
-// provides its agent whenever the registry says so (a child reading the same
-// registry would only compete with it), and "" when local.
-func agentProviderPIDValue() string {
-	if !fleetclient.IsRemote() {
-		return ""
-	}
-	return strconv.Itoa(os.Getpid())
 }
 
 // agentProviderExited is a provider goroutine's last act: if it is still the
@@ -231,6 +208,8 @@ func armadaAgentStatusValue(m *model, url string, remoteOn bool) string {
 	case agentfwd.StateActive:
 		return statusRunningStyle.Render("forwarding") + " " + dimStyle.Render(agentUsesText(st.Uses))
 	case agentfwd.StateStandby:
+		// Another TUI (on this machine or another) attached after this one:
+		// a CLI command's provider yields, so it never puts this one here.
 		// Not idle: the relay falls through to this agent whenever the newer
 		// client cannot answer (it has no agent), so its uses still count.
 		value := dimStyle.Render("standing by — a newer client is attached")

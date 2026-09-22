@@ -107,19 +107,26 @@ func TestRelayUsable(t *testing.T) {
 	t.Cleanup(func() {
 		SetRelayServing(false)
 		SetRemoteClients(false)
+		SetProviderSeen(false)
 	})
 	t.Setenv(EnvOrigin, "")
 	t.Setenv(EnvAuthSock, "")
 
 	SetRelayServing(false)
 	SetRemoteClients(true)
+	SetProviderSeen(true)
 	if RelayUsable() {
-		t.Fatal("not serving: never usable")
+		t.Fatal("not serving and nothing published: not usable")
 	}
 	SetRelayServing(true)
 	if !RelayUsable() {
-		t.Fatal("serving with remote clients possible: usable")
+		t.Fatal("serving, remote clients possible, a provider seen before: usable")
 	}
+	SetProviderSeen(false)
+	if RelayUsable() {
+		t.Fatal("Remote Fleet on but nobody ever forwarded an agent here: nothing could answer")
+	}
+	SetProviderSeen(true)
 	SetRemoteClients(false)
 	if RelayUsable() {
 		t.Fatal("no agent of its own and no remote clients: nothing could answer")
@@ -127,5 +134,32 @@ func TestRelayUsable(t *testing.T) {
 	t.Setenv(EnvAuthSock, liveSocket(t))
 	if !RelayUsable() {
 		t.Fatal("the daemon's own agent backs it")
+	}
+}
+
+func TestRelayUsablePublishedForOtherProcesses(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(EnvOrigin, "")
+	t.Setenv(EnvAuthSock, liveSocket(t))
+	if err := os.MkdirAll(filepath.Dir(HostSocketPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetRelayServing(false) })
+
+	// The daemon serves and has an agent: it publishes "usable" for a CLI
+	// process that runs a backend in-process (`fleet start`).
+	SetRelayServing(true)
+	if _, err := os.Stat(usablePath()); err != nil {
+		t.Fatalf("verdict not published: %v", err)
+	}
+	relayServing.Store(false) // what a CLI process sees
+	if !RelayUsable() {
+		t.Fatal("a non-daemon process must read the published verdict")
+	}
+	relayServing.Store(true)
+	// Shutting the relay down withdraws it.
+	SetRelayServing(false)
+	if RelayUsable() {
+		t.Fatal("the verdict must be withdrawn when the relay stops")
 	}
 }

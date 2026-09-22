@@ -610,17 +610,20 @@ with it on only when your ssh config says `ForwardAgent yes` (or
 
 The TUI streams agent requests over the fleet connection itself, so it works for
 SSH and gateway remotes alike and needs nothing from the remote's `sshd`.
-`fleet up` / `clone` / `rebuild` / `shell` against that remote carry your agent
-the same way for their duration (a shell started from the TUI leaves it to the
-TUI). On the remote, the daemon points its own `SSH_AUTH_SOCK` at a relay socket
-and listens on one in each instance's control directory
-(`/fleet-mounts/control/ssh-agent.sock` inside the instance); instances get
-`SSH_AUTH_SOCK` only when something can back it — the daemon has an agent of its
-own, or **Remote Fleet** is on so a client can attach one. Each connection goes
-to the newest connected client that can serve it, else to the host's own agent,
-chosen afresh every time: reconnecting or switching machines takes effect at
-once, with no rebuild, and so does restarting your agent at the same socket path
-(if it moves, restart the TUI). An instance's socket serves any process in that
+Instance jobs (`fleet up`, `clone`, `rebuild`, …) and `fleet shell` against that
+remote carry your agent the same way for their duration; they step aside for a
+TUI that is also providing, rather than taking over from it. On the remote, the
+daemon listens on a relay socket in each instance's control directory
+(`/fleet-mounts/control/ssh-agent.sock` inside the instance) and points its own
+`SSH_AUTH_SOCK` at a host relay socket. Instances get `SSH_AUTH_SOCK`, and the
+daemon redirects its own, only once something can answer there: the daemon was
+started with an agent of its own, or a client has forwarded one to it before
+(and **Remote Fleet** is on). Each connection goes to the newest connected
+client that can serve it, else to the host's own agent, chosen afresh every
+time: reconnecting or switching machines takes effect at once, with no rebuild,
+and so does restarting your agent at the same socket path (if it moves, restart
+the TUI). A client that stops answering — a laptop gone to sleep — is skipped
+within half a minute. An instance's socket serves any process in that
 instance's container, whatever its uid; other users on the host are refused.
 
 The trade-off is the one `ssh -A` has: while you are connected, anything on that
@@ -628,16 +631,17 @@ host that reaches the relay — root, its fleet user, every process in its
 instances, automation that fires meanwhile — can use your agent. It can list
 your keys and ask for signatures, nothing else: fleet refuses every other
 request before it reaches your agent, so the remote cannot add or remove keys,
-lock the agent, or load PKCS#11/security-key providers (which your agent would
-otherwise allow, since a relayed connection reaches it as a local client). The
-keys never leave your machine; use `ssh-add -c` to confirm each use.
-Destination constraints (`ssh-add -h`) do not see the fleet hop, so a key
-limited to host X can be used from the remote to reach X — keep such keys out
-of the agent you forward, or add them with `-c`. With nobody connected,
-automation cannot use your agent: give the host its own deploy key for
-unattended work. The host's owner can refuse forwarding with
-`FLEET_SSH_AGENT_SOCK=off`. On a macOS host, instances keep Docker Desktop's agent
-(a host socket cannot cross into its VM); the host-side clone still uses yours.
+lock the agent, or load PKCS#11/security-key providers. Every relayed
+connection is also bound as forwarded, the way `ssh -A` binds it, so your agent
+applies its own rules for remote clients, and keys you added with destination
+constraints (`ssh-add -h`) are not offered through fleet at all. The same rules
+hold for instances on your own machine reaching the agent the daemon was
+started with. The keys never leave your machine; use `ssh-add -c` to confirm
+each use. With nobody connected, automation cannot use your agent: give the
+host its own deploy key for unattended work. The host's owner can refuse
+forwarding with `FLEET_SSH_AGENT_SOCK=off`. On a macOS host, instances keep
+Docker Desktop's agent (a host socket cannot cross into its VM); the host-side
+clone still uses yours.
 
 Variables fleet **reads** (set them to configure behavior):
 

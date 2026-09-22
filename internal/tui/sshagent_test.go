@@ -2,9 +2,7 @@ package tui
 
 import (
 	"context"
-	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -260,26 +258,12 @@ func armadaEntryFor(t *testing.T, m *model, url string) armadaEntry {
 	return armadaEntry{}
 }
 
-// stubTmuxEnv records what would be mirrored into the tmux server's global
-// environment ("" = unset).
-func stubTmuxEnv(t *testing.T) map[string]string {
-	t.Helper()
-	got := make(map[string]string)
-	orig := setTmuxGlobalEnv
-	setTmuxGlobalEnv = func(name, value string) { got[name] = value }
-	t.Cleanup(func() { setTmuxGlobalEnv = orig })
-	return got
-}
-
 // TestAgentProviderStartsWhenTheRegistryLoads: a TUI booted connected to a
-// remote starts providing as soon as the registry says forwarding is on, and
-// tells the tmux panes it spawns that it does.
+// remote starts providing as soon as the registry says forwarding is on.
 func TestAgentProviderStartsWhenTheRegistryLoads(t *testing.T) {
 	clearArmadaEnv(t)
 	_, running := stubAgentProvider(t)
-	tmuxEnv := stubTmuxEnv(t)
 	m := armadaTestModel(nil)
-	m.inHostTmux = true
 	t.Setenv(fleetclient.EnvSSH, "ssh://ben@devbox")
 
 	m.handleArmadaMsg(armadaLoadedMsg{remotes: []configutil.ArmadaRemote{
@@ -289,9 +273,6 @@ func TestAgentProviderStartsWhenTheRegistryLoads(t *testing.T) {
 	waitFor(t, "the provider to start", func() bool { return running() == 1 })
 	if got := agentTarget(); got != "ssh://ben@devbox" {
 		t.Fatalf("provider target = %q", got)
-	}
-	if got := tmuxEnv[fleetclient.EnvAgentProviderPID]; got != strconv.Itoa(os.Getpid()) {
-		t.Fatalf("tmux %s = %q, want this TUI's pid", fleetclient.EnvAgentProviderPID, got)
 	}
 }
 
@@ -428,9 +409,11 @@ func TestArmadaAdoptsTheSavedForwardAgent(t *testing.T) {
 	}
 }
 
-// TestAttachExecCmdNamesTheProvidingTUI: a remote attach's `fleet shell`
-// child learns this TUI's pid, so it leaves agent forwarding to the TUI.
-func TestAttachExecCmdNamesTheProvidingTUI(t *testing.T) {
+// TestAttachExecCmdReinvokesFleetShell: a remote attach re-invokes this
+// binary's `fleet shell`, which inherits the connection env unchanged (a nil
+// Env). Its agent provider yields to the TUI's on the daemon, so the child
+// needs nothing extra to leave forwarding to this TUI.
+func TestAttachExecCmdReinvokesFleetShell(t *testing.T) {
 	clearArmadaEnv(t)
 	t.Setenv(fleetclient.EnvSSH, "ssh://ben@devbox")
 	cmd, err := attachExecCmd("alpha", "inst", []string{"bash"})
@@ -440,11 +423,7 @@ func TestAttachExecCmdNamesTheProvidingTUI(t *testing.T) {
 	if !slices.Equal(cmd.Args[1:], []string{"shell", "alpha/inst", "--", "bash"}) {
 		t.Fatalf("args = %v", cmd.Args)
 	}
-	want := fleetclient.EnvAgentProviderPID + "=" + strconv.Itoa(os.Getpid())
-	if len(cmd.Env) == 0 || cmd.Env[len(cmd.Env)-1] != want {
-		t.Fatalf("child env should end with %q (last wins over an inherited one)", want)
-	}
-	if !slices.Contains(cmd.Env, fleetclient.EnvSSH+"=ssh://ben@devbox") {
-		t.Fatal("the child must still inherit the connection env")
+	if cmd.Env != nil {
+		t.Fatalf("child env = %v, want nil (inherit this process's environment)", cmd.Env)
 	}
 }

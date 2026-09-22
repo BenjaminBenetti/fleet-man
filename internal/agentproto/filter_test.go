@@ -1,4 +1,4 @@
-package agentfwd
+package agentproto
 
 import (
 	"bytes"
@@ -46,7 +46,7 @@ func TestRequestAllowed(t *testing.T) {
 		{"extension with a lying name length", agentMessage(agentcExtension, 0, 0, 0, 99, 'q'), false},
 	}
 	for _, c := range cases {
-		if got := requestAllowed(c.msg); got != c.want {
+		if got := RequestAllowed(c.msg); got != c.want {
 			t.Errorf("%s: allowed = %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -59,7 +59,7 @@ func TestMessageReaderReassemblesAcrossAndWithinChunks(t *testing.T) {
 	// Split mid-length-prefix, mid-body, and with two messages' boundary
 	// inside one chunk.
 	chunks := [][]byte{stream[:2], stream[2:6], stream[6:]}
-	r := &messageReader{next: func() ([]byte, bool) {
+	r := &MessageReader{Next: func() ([]byte, bool) {
 		if len(chunks) == 0 {
 			return nil, false
 		}
@@ -68,12 +68,12 @@ func TestMessageReaderReassemblesAcrossAndWithinChunks(t *testing.T) {
 		return c, true
 	}}
 	for i, want := range [][]byte{a, b} {
-		got, err := r.read()
+		got, err := r.Read()
 		if err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("message %d = %v, %v; want %v", i, got, err, want)
 		}
 	}
-	if _, err := r.read(); !errors.Is(err, io.EOF) {
+	if _, err := r.Read(); !errors.Is(err, io.EOF) {
 		t.Fatalf("end of stream: %v", err)
 	}
 }
@@ -89,12 +89,12 @@ func TestMessageReaderRejectsTruncatedAndOversized(t *testing.T) {
 			return chunk, true
 		}
 	}
-	if _, err := (&messageReader{next: once([]byte{0, 0, 0, 5, 11})}).read(); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if _, err := (&MessageReader{Next: once([]byte{0, 0, 0, 5, 11})}).Read(); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("truncated: %v", err)
 	}
 	huge := make([]byte, 4)
 	binary.BigEndian.PutUint32(huge, maxAgentMessage+1)
-	if _, err := (&messageReader{next: once(huge)}).read(); !errors.Is(err, errAgentMessageTooLarge) {
+	if _, err := (&MessageReader{Next: once(huge)}).Read(); !errors.Is(err, ErrMessageTooLarge) {
 		t.Fatalf("oversized: %v", err)
 	}
 }

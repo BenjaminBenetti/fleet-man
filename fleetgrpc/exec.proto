@@ -174,21 +174,27 @@ message MicDemand {
 // the client even when the server is remote — like `ssh -A`, but for
 // everything the daemon runs — and they are gone the moment the client leaves.
 //
-// A connection goes to the newest attached provider that can serve it (one
-// whose machine has no reachable agent answers `close` with an error and the
-// next one is tried); if none can, to the agent the daemon itself was started
-// with. The provider only forwards listing keys and signing to its agent: it
-// answers every other request (add/remove keys, lock, loading PKCS#11 or
-// security-key providers) with a failure itself, because a relayed connection
-// reaches the agent as a LOCAL client and would otherwise get more than an
-// `ssh -A` connection does.
+// A connection goes to the newest attached provider that can serve it —
+// non-yielding ones before yielding ones, skipping any that stopped answering
+// pings (one whose machine has no reachable agent answers `close` with an
+// error and the next one is tried); if none can, to the agent the daemon
+// itself was started with. Only listing keys and signing reach the agent
+// (plus the session-bind / query extensions); every other request (add/remove
+// keys, lock, loading PKCS#11 or security-key providers) is answered with a
+// failure without the agent seeing it, because a relayed connection reaches
+// the agent as a LOCAL client and would otherwise get more than an `ssh -A`
+// connection does. The provider also binds each connection as forwarded
+// (session-bind@openssh.com, is_forwarding) so the agent applies its own
+// remote-client rules and destination constraints.
 //
 // The FIRST client frame MUST carry `hello`. Connections are multiplexed by
 // conn_id, which the server assigns: it announces each with `open`, the
 // client answers `ready` once it has dialed its agent (or `close` with an
-// error if it cannot), and from then on both sides exchange `data`. `close`
-// means "nothing more from my side": the peer finishes what is in flight
-// (the provider answers a request already sent) and closes its side too.
+// error if it cannot), and from then on both sides exchange `data`. The
+// server's `close` means the connection has sent its last request (possibly
+// only a half-close): the provider still answers every request it received,
+// then sends its own `close`. The provider's `close` ends the connection: the
+// server delivers the replies already sent and closes it.
 message SSHAgentUp {
   oneof msg {
     SSHAgentHello hello = 1;
@@ -200,9 +206,13 @@ message SSHAgentUp {
 }
 
 // SSHAgentHello registers the stream as a provider. client is a human label
-// (the provider's hostname and role) for the daemon's log.
+// (the provider's hostname and role) for the daemon's log. yield marks a
+// provider that should only be used when no non-yielding one can serve (a
+// CLI command's, behind the TUI that may have started it): it is queued
+// behind every non-yielding provider instead of becoming the newest.
 message SSHAgentHello {
   string client = 1;
+  bool yield = 2;
 }
 
 // SSHAgentReady: the provider dialed its local agent for conn_id; the server

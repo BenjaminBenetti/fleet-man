@@ -174,9 +174,10 @@ func TestRunUserCommandsArgs(t *testing.T) {
 	t.Run("with ssh agent threads remote-env", func(t *testing.T) {
 		liveAgentSocket(t)
 		relayServing(t)
-		got := runUserCommandsArgs("/ws/alpha")
+		ws := instanceWorkspace(t)
+		got := runUserCommandsArgs(ws)
 		want := []string{
-			"run-user-commands", "--workspace-folder", "/ws/alpha",
+			"run-user-commands", "--workspace-folder", ws,
 			"--remote-env", "SSH_AUTH_SOCK=" + wantAgentSock(),
 		}
 		if !slices.Equal(got, want) {

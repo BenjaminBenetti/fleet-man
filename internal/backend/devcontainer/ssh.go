@@ -2,6 +2,7 @@ package devcontainer
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -131,19 +132,74 @@ func sshUpArgs() ([]string, error) {
 // FLEET_SSH_AGENT_SOCK=off suppresses both. An invalid override already
 // hard-fails instance creation; exec just degrades to no forwarding rather
 // than blocking shells into an existing container.
-func sshExecArgs() []string {
+func sshExecArgs(workspaceDir string) []string {
 	plan, err := currentAgentPlan()
 	if err != nil || plan.sock == "" {
 		return nil
 	}
+	if plan.sock == agentsock.ContainerSocketPath && !hasControlDir(workspaceDir) {
+		// An instance created before the control directory was mounted
+		// (fleet < #73) has no relay socket, only the agent socket file bind
+		// mounted at creation: keep pointing it there until it is rebuilt.
+		plan.sock = containerSSHSocketPath
+	}
 	return []string{"--remote-env", "SSH_AUTH_SOCK=" + plan.sock}
+}
+
+// hasControlDir reports whether the instance whose workspace is workspaceDir
+// has the host control directory the relay socket lives in: it sits next to
+// the workspace (<workspaces>/<fleet>/<instance>/{<workspace>,.control}).
+func hasControlDir(workspaceDir string) bool {
+	if workspaceDir == "" {
+		return true
+	}
+	info, err := os.Stat(filepath.Join(filepath.Dir(workspaceDir), ".control"))
+	return err == nil && info.IsDir()
 }
 
 // execArgs builds the full argument list for `devcontainer exec` including
 // SSH agent forwarding.
 func execArgs(workspaceDir string, command []string) []string {
 	args := []string{"exec", "--workspace-folder", workspaceDir}
-	args = append(args, sshExecArgs()...)
+	args = append(args, sshExecArgs(workspaceDir)...)
 	args = append(args, command...)
 	return args
+}
+
+// configMentionsAgent reports whether the workspace's devcontainer config
+// (or a compose file or Dockerfile beside it) refers to SSH_AUTH_SOCK — a
+// project that mounts the host agent itself. Its ${localEnv:SSH_AUTH_SOCK}
+// must then resolve to the user's real agent rather than the relay's socket:
+// a bind mount pins the socket file, and the relay's is recreated on every
+// daemon restart. Anything else about `devcontainer up` (initializeCommand,
+// a BuildKit --ssh build) keeps the relay, which dials per connection.
+func configMentionsAgent(workspaceDir string) bool {
+	const maxConfigBytes = 1 << 20
+	mentions := func(path string) bool {
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > maxConfigBytes {
+			return false
+		}
+		data, err := os.ReadFile(path)
+		return err == nil && strings.Contains(string(data), "SSH_AUTH_SOCK")
+	}
+	if mentions(filepath.Join(workspaceDir, ".devcontainer.json")) {
+		return true
+	}
+	root := filepath.Join(workspaceDir, ".devcontainer")
+	found := false
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || found {
+			return filepath.SkipDir
+		}
+		if d.IsDir() {
+			if rel, _ := filepath.Rel(root, path); strings.Count(rel, string(filepath.Separator)) >= 1 {
+				return filepath.SkipDir // .devcontainer/<name>/ is as deep as configs go
+			}
+			return nil
+		}
+		found = mentions(path)
+		return nil
+	})
+	return found
 }

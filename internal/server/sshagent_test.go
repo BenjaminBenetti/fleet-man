@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -222,9 +223,18 @@ type rawProvider struct {
 	stream fleetgrpc.FleetService_SSHAgentClient
 	downs  chan *fleetgrpc.SSHAgentDown
 	cancel context.CancelFunc
+	paused chan struct{} // closed: stop reading the stream
 }
 
+// pause stops reading the stream altogether (the provider stops draining).
+func (p *rawProvider) pause() { close(p.paused) }
+
 func attachRawProvider(t *testing.T, client fleetgrpc.FleetServiceClient, name string) *rawProvider {
+	t.Helper()
+	return attachRawProviderAs(t, client, name, false)
+}
+
+func attachRawProviderAs(t *testing.T, client fleetgrpc.FleetServiceClient, name string, yield bool) *rawProvider {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	stream, err := client.SSHAgent(ctx)
@@ -232,14 +242,20 @@ func attachRawProvider(t *testing.T, client fleetgrpc.FleetServiceClient, name s
 		cancel()
 		t.Fatal(err)
 	}
-	if err := stream.Send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Hello{Hello: &fleetgrpc.SSHAgentHello{Client: name}}}); err != nil {
+	if err := stream.Send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Hello{Hello: &fleetgrpc.SSHAgentHello{Client: name, Yield: yield}}}); err != nil {
 		cancel()
 		t.Fatal(err)
 	}
-	p := &rawProvider{t: t, stream: stream, downs: make(chan *fleetgrpc.SSHAgentDown, 64), cancel: cancel}
+	p := &rawProvider{t: t, stream: stream, downs: make(chan *fleetgrpc.SSHAgentDown, 64), cancel: cancel, paused: make(chan struct{})}
 	go func() {
 		defer close(p.downs)
 		for {
+			select {
+			case <-p.paused:
+				<-ctx.Done()
+				return
+			default:
+			}
 			down, err := stream.Recv()
 			if err != nil {
 				return
@@ -627,7 +643,7 @@ func TestSSHAgentSilentProviderIsSkipped(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		p := svc.agent.providersNewestFirst()
-		if len(p) == 1 && p[0].suspect.Load() {
+		if len(p) == 1 && p[0].isSuspect() {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -646,9 +662,13 @@ func TestSSHAgentSilentProviderIsSkipped(t *testing.T) {
 	if err := sleeper.stream.Send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Pong{Pong: &fleetgrpc.SSHAgentPong{Seq: 1 << 30}}}); err != nil {
 		t.Fatal(err)
 	}
-	for sleeper.stream.Context().Err() == nil {
-		if p := svc.agent.providersNewestFirst(); len(p) == 1 && !p[0].suspect.Load() {
+	wake := time.Now().Add(5 * time.Second)
+	for {
+		if p := svc.agent.providersNewestFirst(); len(p) == 1 && !p[0].isSuspect() {
 			break
+		}
+		if time.Now().After(wake) {
+			t.Fatal("the provider stayed suspect after it answered")
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -691,8 +711,14 @@ func TestStartAgentRelayRedirectsTheDaemonsAgent(t *testing.T) {
 	if !agentsock.RelayUsable() {
 		t.Fatal("the relay should be usable: the daemon has an agent to fall back to")
 	}
-	if create.ControlDirReady == nil {
-		t.Fatal("provisioning hook not installed")
+	// Provisioning's hook opens an instance's socket at once, before any
+	// reconcile could (`devcontainer up` may run postCreate within seconds).
+	if err := os.MkdirAll(state.ControlDir("f", "i"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	create.ControlDirReady("f", "i")
+	if info, err := os.Lstat(filepath.Join(state.ControlDir("f", "i"), agentsock.SocketName)); err != nil || info.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("the provisioning hook did not open the instance socket: %v", err)
 	}
 	// A child of the daemon (git clone) reaches the original agent through it.
 	requireOnlyKey(t, os.Getenv(agentsock.EnvAuthSock), daemonKey)
@@ -808,5 +834,286 @@ func TestSSHAgentInstanceSocketIsRecreatedWhenDeleted(t *testing.T) {
 	svc.agent.syncInstances(st) // opens a fresh one
 	if info, err := os.Lstat(sock); err != nil || info.Mode()&os.ModeSocket == 0 {
 		t.Fatalf("socket not recreated: %v", err)
+	}
+}
+
+func TestSSHAgentYieldingProviderQueuesBehindTheTUI(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	svc, client := startAgentTestServer(t)
+	hostSock := filepath.Join(dir, "relay.sock")
+	if err := svc.agent.listenHost(hostSock); err != nil {
+		t.Fatal(err)
+	}
+
+	tui := attachRawProviderAs(t, client, "laptop (tui)", false)
+	if !tui.nextStatus().GetActive() {
+		t.Fatal("the TUI should be active")
+	}
+	// A `fleet shell` the TUI spawned attaches later but yields.
+	shell := attachRawProviderAs(t, client, "laptop (cli)", true)
+	if shell.nextStatus().GetActive() {
+		t.Fatal("a yielding provider must not become active over the TUI")
+	}
+	dialAsync(t, hostSock)
+	tui.nextOpen()
+	shell.noOpen()
+
+	// A second TUI (another machine) still supersedes normally.
+	desk := attachRawProviderAs(t, client, "desktop (tui)", false)
+	if !desk.nextStatus().GetActive() || tui.nextStatus().GetActive() {
+		t.Fatal("a newer non-yielding provider takes over")
+	}
+
+	// With every non-yielding provider gone, the yielding one serves.
+	desk.cancel()
+	tui.cancel()
+	if !shell.nextStatus().GetActive() {
+		t.Fatal("the yielding provider should be promoted when nothing else is left")
+	}
+	dialAsync(t, hostSock)
+	shell.nextOpen()
+}
+
+func TestSSHAgentStalledProviderFailsOver(t *testing.T) {
+	orig := agentReadyTimeout
+	agentReadyTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { agentReadyTimeout = orig })
+
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	daemonSock, daemonKey := startFakeAgent(t, dir, "daemon")
+	svc, client := startAgentTestServer(t)
+	svc.agent.setFallback(daemonSock)
+	hostSock := filepath.Join(dir, "relay.sock")
+	if err := svc.agent.listenHost(hostSock); err != nil {
+		t.Fatal(err)
+	}
+
+	// A provider that answers one open and then stops reading its stream
+	// entirely (Ctrl-Z on a `fleet up`, a laptop asleep behind a live TCP).
+	stalled := attachRawProvider(t, client, "laptop")
+	stalled.nextStatus()
+	flood, err := net.Dial("unix", hostSock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer flood.Close()
+	open := stalled.nextOpen()
+	if err := stalled.stream.Send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Ready{Ready: &fleetgrpc.SSHAgentReady{ConnId: open.GetConnId()}}}); err != nil {
+		t.Fatal(err)
+	}
+	// Stop draining: from here on nothing reads the provider's downs.
+	stalled.pause()
+	go func() {
+		chunk := make([]byte, 64*1024)
+		for i := 0; i < 256; i++ { // 16 MiB: far past every window and queue
+			if _, err := flood.Write(chunk); err != nil {
+				return
+			}
+		}
+	}()
+	time.Sleep(time.Second) // let the stream back up
+
+	// Another connection must not hang behind the stalled stream: it fails
+	// over to the daemon's own agent within the ready timeout.
+	start := time.Now()
+	requireOnlyKey(t, hostSock, daemonKey)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("a stalled provider held a new connection for %s", elapsed)
+	}
+}
+
+func TestSSHAgentFallbackFiltersInstanceConnections(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	daemonSock, daemonKey := startFakeAgent(t, dir, "daemon")
+	svc, _ := startAgentTestServer(t)
+	svc.agent.setFallback(daemonSock)
+
+	control := state.ControlDir("f", "i")
+	if err := os.MkdirAll(control, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc.agent.ensureInstance("f", "i")
+	instSock := filepath.Join(control, agentsock.SocketName)
+
+	conn, err := net.Dial("unix", instSock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	client := agent.NewClient(conn)
+	if err := client.RemoveAll(); err == nil {
+		t.Fatal("an instance must not be able to remove the daemon agent's keys")
+	}
+	if err := client.Lock([]byte("x")); err == nil {
+		t.Fatal("an instance must not be able to lock the daemon's agent")
+	}
+	keys, err := client.List()
+	if err != nil || len(keys) != 1 || string(keys[0].Marshal()) != string(daemonKey.Marshal()) {
+		t.Fatalf("listing still works and the key is intact: %v %v", keys, err)
+	}
+	sig, err := client.Sign(daemonKey, []byte("d"))
+	if err != nil || daemonKey.Verify([]byte("d"), sig) != nil {
+		t.Fatalf("signing through the filtered fallback: %v", err)
+	}
+}
+
+// realOpenSSHAgent starts OpenSSH's ssh-agent holding one fresh key; skips
+// when it is not installed.
+func realOpenSSHAgent(t *testing.T, dir string) string {
+	t.Helper()
+	for _, tool := range []string{"ssh-agent", "ssh-add", "ssh-keygen"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not installed", tool)
+		}
+	}
+	sock := filepath.Join(dir, "openssh.sock")
+	cmd := exec.Command("ssh-agent", "-D", "-a", sock)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	for i := 0; i < 200; i++ {
+		if _, err := os.Stat(sock); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	key := filepath.Join(dir, "k")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v\n%s", err, out)
+	}
+	add := exec.Command("ssh-add", "-q", key)
+	add.Env = append(os.Environ(), "SSH_AUTH_SOCK="+sock)
+	if out, err := add.CombinedOutput(); err != nil {
+		t.Fatalf("ssh-add: %v\n%s", err, out)
+	}
+	return sock
+}
+
+func TestSSHAgentFallbackHalfCloseWithARealOpenSSHAgent(t *testing.T) {
+	// x/crypto's agent answers before it notices EOF; OpenSSH's drops the
+	// connection on EOF without answering — the relay must not pass a
+	// client's half-close on before the reply is in.
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	sock := realOpenSSHAgent(t, dir)
+	svc, _ := startAgentTestServer(t)
+	svc.agent.setFallback(sock)
+	hostSock := filepath.Join(dir, "relay.sock")
+	if err := svc.agent.listenHost(hostSock); err != nil {
+		t.Fatal(err)
+	}
+	if reply := halfCloseList(t, hostSock); !isOneKeyAnswer(reply) {
+		t.Fatalf("host socket, half-close: %v", reply)
+	}
+	control := state.ControlDir("f", "i")
+	if err := os.MkdirAll(control, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc.agent.ensureInstance("f", "i")
+	if reply := halfCloseList(t, filepath.Join(control, agentsock.SocketName)); !isOneKeyAnswer(reply) {
+		t.Fatalf("instance socket, half-close: %v", reply)
+	}
+}
+
+func TestInstanceSocketRefusesASocketSwappedForASymlinkWhileBinding(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	svc, _ := startAgentTestServer(t)
+	control := state.ControlDir("f", "i")
+	if err := os.MkdirAll(control, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "precious")
+	if err := os.WriteFile(target, []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	// A process in the instance wins the race: between bind and chmod it
+	// moves the fresh socket away and puts a symlink to a host file there.
+	afterInstanceBind = func(d, name string) {
+		_ = os.Rename(filepath.Join(d, name), filepath.Join(d, "moved"))
+		_ = os.Symlink(target, filepath.Join(d, name))
+	}
+	t.Cleanup(func() { afterInstanceBind = nil })
+
+	svc.agent.ensureInstance("f", "i")
+	if info, err := os.Stat(target); err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("the daemon changed the symlink target's mode: %v %v", info.Mode(), err)
+	}
+	svc.agent.mu.Lock()
+	_, listening := svc.agent.instances["f/i"]
+	svc.agent.mu.Unlock()
+	if listening {
+		t.Fatal("the listen must fail when the socket was replaced while binding")
+	}
+}
+
+func TestInstanceSocketReplacesAStaleSocket(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	svc, _ := startAgentTestServer(t)
+	control := state.ControlDir("f", "i")
+	if err := os.MkdirAll(control, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(control, agentsock.SocketName)
+	ln, err := net.Listen("unix", stale)
+	if err != nil {
+		t.Skipf("control path too long for a direct bind here: %v", err)
+	}
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	_ = ln.Close() // a crashed daemon's leftover
+	svc.agent.ensureInstance("f", "i")
+	conn, err := net.Dial("unix", stale)
+	if err != nil {
+		t.Fatalf("the stale socket was not replaced by a live one: %v", err)
+	}
+	_ = conn.Close()
+}
+
+func TestStartAgentRelayWaitsForSomethingToAnswer(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	// A headless remote host: started without an agent, nobody has forwarded
+	// one to it yet.
+	t.Setenv(agentsock.EnvAuthSock, "")
+	t.Setenv(agentsock.EnvOrigin, "")
+	_ = os.Unsetenv(agentsock.EnvOrigin)
+	svc, client := startAgentTestServer(t)
+	origHook := create.ControlDirReady
+	t.Cleanup(func() {
+		create.ControlDirReady = origHook
+		agentsock.SetRelayServing(false)
+		agentsock.SetRemoteClients(false)
+		agentsock.SetProviderSeen(false)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	startAgentRelay(ctx, svc.agent)
+	agentsock.SetRemoteClients(true) // Remote Fleet is on
+
+	if got := os.Getenv(agentsock.EnvAuthSock); got != "" {
+		t.Fatalf("SSH_AUTH_SOCK = %q before anything can answer on the relay; host scripts must see it unset", got)
+	}
+	if agentsock.RelayUsable() {
+		t.Fatal("instances must not be pointed at a relay nothing can answer")
+	}
+
+	p := attachRawProvider(t, client, "laptop")
+	p.nextStatus()
+	if got := os.Getenv(agentsock.EnvAuthSock); got != agentsock.HostSocketPath() {
+		t.Fatalf("after the first provider, SSH_AUTH_SOCK = %q, want the relay", got)
+	}
+	if _, err := os.Stat(agentsock.ProviderSeenPath()); err != nil {
+		t.Fatalf("the first provider must be remembered across restarts: %v", err)
+	}
+	if !agentsock.RelayUsable() {
+		t.Fatal("with a provider seen and Remote Fleet on, the relay is worth pointing instances at")
 	}
 }

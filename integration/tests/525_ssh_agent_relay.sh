@@ -5,9 +5,11 @@ set -euo pipefail
 source "$(dirname "$0")/../common.sh"
 
 agent_dir=""
+test_agent_pid=""
 itest_cleanup() {
   pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true
-  if [ -n "${SSH_AGENT_PID:-}" ]; then kill "${SSH_AGENT_PID}" >/dev/null 2>&1 || true; fi
+  # Only the agent this test started — never one inherited from the runner.
+  if [ -n "${test_agent_pid}" ]; then kill "${test_agent_pid}" >/dev/null 2>&1 || true; fi
   if [ -n "${agent_dir}" ]; then rm -rf "${agent_dir}"; fi
 }
 itest_begin
@@ -22,6 +24,7 @@ setup_twouser_test
 agent_dir="$(mktemp -d /tmp/fleet-agent.XXXXXX)"
 ssh-keygen -q -t ed25519 -N '' -C fleet-itest-key -f "${agent_dir}/key"
 eval "$(ssh-agent -a "${agent_dir}/agent.sock" -s)" >/dev/null
+test_agent_pid="${SSH_AGENT_PID}"
 ssh-add -q "${agent_dir}/key"
 fingerprint="$(ssh-keygen -lf "${agent_dir}/key.pub" | awk '{print $2}')"
 info "test key ${fingerprint}"
@@ -55,7 +58,8 @@ out="$("${FLEET_BIN}" exec "${inst}" -- sh -c 'cd /tmp && echo msg > m && ssh-ad
 assert_contains "${out}" "SIGNED" "ssh-keygen -Y sign through the relay"
 
 info "asserting a container user with another uid (app, 4001) is served"
-out="$("${FLEET_BIN}" exec "${inst}" -- sudo -u app env SSH_AUTH_SOCK=/fleet-mounts/control/ssh-agent.sock ssh-add -l)"
+# runuser, not sudo -u: the base image lets vscode sudo only to root.
+out="$("${FLEET_BIN}" exec "${inst}" -- sudo runuser -u app -- env SSH_AUTH_SOCK=/fleet-mounts/control/ssh-agent.sock ssh-add -l)"
 assert_contains "${out}" "${fingerprint}" "cross-uid container user through the relay"
 
 info "asserting the instance cannot manage the agent (ssh-add -D is refused)"
@@ -68,9 +72,15 @@ ssh-add -l | grep -q "${fingerprint}" || fail "the host agent lost its key throu
 info "restarting the daemon: the running instance keeps its agent (no pinned socket inode)"
 stop_daemon
 "${FLEET_BIN}" ls >/dev/null
-deadline=$(( $(date +%s) + $(_scale_timeout 15) ))
-until [ -S "${host_sock}" ] || [ "$(date +%s)" -ge "${deadline}" ]; do sleep 0.2; done
-out="$("${FLEET_BIN}" exec "${inst}" -- ssh-add -l)"
+# Wait for the NEW daemon to serve the instance socket: a leftover file from
+# the old one would pass a mere existence check.
+out=""
+deadline=$(( $(date +%s) + $(_scale_timeout 20) ))
+while [ "$(date +%s)" -lt "${deadline}" ]; do
+  out="$("${FLEET_BIN}" exec "${inst}" -- ssh-add -l 2>&1 || true)"
+  case "${out}" in *"${fingerprint}"*) break ;; esac
+  sleep 0.5
+done
 assert_contains "${out}" "${fingerprint}" "the key after a daemon restart"
 
 pass "instances use the host agent through the relay"

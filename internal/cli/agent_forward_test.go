@@ -5,10 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
-	"strconv"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
@@ -19,14 +16,10 @@ import (
 
 func stubAgentForward(t *testing.T, enabled bool) (started *atomic.Int32, stopped *atomic.Int32) {
 	t.Helper()
-	// A developer running the tests from a TUI's tmux pane inherits its pid.
-	t.Setenv(fleetclient.EnvAgentProviderPID, "")
-	origEnabled, origRun := agentForwardEnabled, runAgentProvider
-	t.Cleanup(func() { agentForwardEnabled, runAgentProvider = origEnabled, origRun })
-	var asked atomic.Value
-	agentForwardEnabled = func(_ context.Context, url string) bool {
-		asked.Store(url)
-		return enabled
+	origState, origRun := agentForwardState, runAgentProvider
+	t.Cleanup(func() { agentForwardState, runAgentProvider = origState, origRun })
+	agentForwardState = func(context.Context, string) (bool, error) {
+		return enabled, nil
 	}
 	started, stopped = new(atomic.Int32), new(atomic.Int32)
 	runAgentProvider = func(ctx context.Context, _ fleetgrpc.FleetServiceClient, _ string, report func(agentfwd.Status)) {
@@ -94,61 +87,6 @@ func TestForwardAgentWhileDoesNotWaitForeverOnASilentProvider(t *testing.T) {
 	}
 }
 
-// deadPID is the pid of a child that has exited and been reaped.
-func deadPID(t *testing.T) int {
-	t.Helper()
-	cmd := exec.Command("sh", "-c", "exit 0")
-	if err := cmd.Run(); err != nil {
-		t.Fatal(err)
-	}
-	return cmd.Process.Pid
-}
-
-// TestForwardAgentWhileDefersToALiveTUI: a shell the TUI spawned must not
-// become a competing provider while that TUI runs; once the TUI has exited
-// (its pid left behind in a tmux pane's env) the command provides as usual.
-func TestForwardAgentWhileDefersToALiveTUI(t *testing.T) {
-	t.Setenv(fleetclient.EnvGateway, "")
-	t.Setenv(fleetclient.EnvSSH, "ssh://ben@devbox")
-	started, _ := stubAgentForward(t, true)
-
-	t.Setenv(fleetclient.EnvAgentProviderPID, strconv.Itoa(os.Getpid()))
-	forwardAgentWhile(context.Background(), nil)()
-	if started.Load() != 0 {
-		t.Fatal("no provider while the TUI that spawned this command is alive")
-	}
-
-	t.Setenv(fleetclient.EnvAgentProviderPID, strconv.Itoa(deadPID(t)))
-	forwardAgentWhile(context.Background(), nil)()
-	if started.Load() != 1 {
-		t.Fatal("the command should provide once the TUI has exited")
-	}
-}
-
-func TestTUIProvidesAgent(t *testing.T) {
-	for _, raw := range []string{"", "not-a-pid", "0", "-1"} {
-		t.Setenv(fleetclient.EnvAgentProviderPID, raw)
-		if tuiProvidesAgent() {
-			t.Errorf("%s=%q: want no live provider", fleetclient.EnvAgentProviderPID, raw)
-		}
-	}
-	t.Setenv(fleetclient.EnvAgentProviderPID, strconv.Itoa(os.Getpid()))
-	if !tuiProvidesAgent() {
-		t.Error("a live pid should count as a providing TUI")
-	}
-	t.Setenv(fleetclient.EnvAgentProviderPID, strconv.Itoa(deadPID(t)))
-	if tuiProvidesAgent() {
-		t.Error("a dead pid should not count as a providing TUI")
-	}
-	// Another user's live process answers EPERM: still alive.
-	if err := syscall.Kill(1, 0); errors.Is(err, syscall.EPERM) {
-		t.Setenv(fleetclient.EnvAgentProviderPID, "1")
-		if !tuiProvidesAgent() {
-			t.Error("EPERM means the process exists")
-		}
-	}
-}
-
 // TestForwardAgentWhileStopsWhenForwardingIsTurnedOff: the provider re-reads
 // the registry while it runs and stops once forwarding is off; the command
 // itself keeps going (stop is still the caller's to call).
@@ -159,12 +97,12 @@ func TestForwardAgentWhileStopsWhenForwardingIsTurnedOff(t *testing.T) {
 	var enabled atomic.Bool
 	enabled.Store(true)
 	var checks atomic.Int32
-	agentForwardEnabled = func(_ context.Context, url string) bool {
+	agentForwardState = func(_ context.Context, url string) (bool, error) {
 		if url != "ssh://ben@devbox" {
 			t.Errorf("re-checked %q, want the command's remote", url)
 		}
 		checks.Add(1)
-		return enabled.Load()
+		return enabled.Load(), nil
 	}
 	orig := agentForwardRecheck
 	t.Cleanup(func() { agentForwardRecheck = orig })
@@ -186,6 +124,48 @@ func TestForwardAgentWhileStopsWhenForwardingIsTurnedOff(t *testing.T) {
 	if started.Load() != 1 || stopped.Load() != 1 {
 		t.Fatalf("started %d, stopped %d: want one provider, stopped once", started.Load(), stopped.Load())
 	}
+}
+
+// TestForwardAgentWhileKeepsForwardingWhenTheRegistryIsUnreadable: a
+// re-check that cannot read the registry (the local daemon restarting) keeps
+// the provider running; only a registry that was read and says off stops it.
+func TestForwardAgentWhileKeepsForwardingWhenTheRegistryIsUnreadable(t *testing.T) {
+	t.Setenv(fleetclient.EnvGateway, "")
+	t.Setenv(fleetclient.EnvSSH, "ssh://ben@devbox")
+	started, stopped := stubAgentForward(t, true)
+	// 0: on, 1: unreadable, 2: off.
+	var phase, checks atomic.Int32
+	agentForwardState = func(context.Context, string) (bool, error) {
+		checks.Add(1)
+		switch phase.Load() {
+		case 0:
+			return true, nil
+		case 1:
+			return false, errors.New("connection refused")
+		default:
+			return false, nil
+		}
+	}
+	orig := agentForwardRecheck
+	t.Cleanup(func() { agentForwardRecheck = orig })
+	agentForwardRecheck = 10 * time.Millisecond
+
+	stop := forwardAgentWhile(context.Background(), nil)
+	defer stop()
+	if started.Load() != 1 {
+		t.Fatal("the provider should start while forwarding is on")
+	}
+	phase.Store(1)
+	from := checks.Load()
+	waitUntil(t, "re-checks against an unreadable registry", func() bool {
+		return checks.Load() >= from+4 || stopped.Load() != 0
+	})
+	if stopped.Load() != 0 {
+		t.Fatal("an unreadable registry must not stop the provider")
+	}
+
+	phase.Store(2)
+	waitUntil(t, "the provider to stop", func() bool { return stopped.Load() == 1 })
 }
 
 func waitUntil(t *testing.T, what string, cond func() bool) {
@@ -253,6 +233,43 @@ func TestForwardAgentWhileTellsTheUserOnce(t *testing.T) {
 	}
 }
 
+// TestForwardAgentWhileIsSilentOnceItReturned: after forwardAgentWhile has
+// returned the command owns the terminal (a remote shell in raw mode), so a
+// later reason forwarding cannot work prints nothing.
+func TestForwardAgentWhileIsSilentOnceItReturned(t *testing.T) {
+	t.Setenv(fleetclient.EnvGateway, "")
+	t.Setenv(fleetclient.EnvSSH, "ssh://ben@devbox")
+	stubAgentForward(t, true)
+	out := captureAgentNotice(t)
+	late := make(chan agentfwd.Status)
+	delivered := make(chan struct{})
+	runAgentProvider = func(ctx context.Context, _ fleetgrpc.FleetServiceClient, _ string, report func(agentfwd.Status)) {
+		report(agentfwd.Status{State: agentfwd.StateActive})
+		for {
+			select {
+			case st := <-late:
+				report(st)
+				delivered <- struct{}{}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+
+	stop := forwardAgentWhile(context.Background(), nil)
+	for _, st := range []agentfwd.Status{
+		{State: agentfwd.StateNoAgent, Detail: "SSH_AUTH_SOCK is not set"},
+		{State: agentfwd.StateRefused, Detail: "turned off on this host"},
+	} {
+		late <- st
+		<-delivered
+	}
+	stop()
+	if got := out.String(); got != "" {
+		t.Fatalf("notice after forwardAgentWhile returned = %q, want nothing", got)
+	}
+}
+
 func TestCurrentRemoteURL(t *testing.T) {
 	t.Setenv(fleetclient.EnvGateway, "")
 	t.Setenv(fleetclient.EnvSSH, "")
@@ -270,7 +287,9 @@ func TestCurrentRemoteURL(t *testing.T) {
 }
 
 // TestAgentForwardEnabledWithoutADaemonIsOff: with no local daemon listening
-// the lookup answers off (and, through ProbeLocalArmada, never spawns one).
+// the lookup answers off (and, through ProbeLocalArmada, never spawns one),
+// and the state read reports it as unreadable rather than as off — the
+// distinction the running provider's re-check relies on.
 func TestAgentForwardEnabledWithoutADaemonIsOff(t *testing.T) {
 	home, err := os.MkdirTemp("/tmp", "fmagent")
 	if err != nil {
@@ -281,7 +300,13 @@ func TestAgentForwardEnabledWithoutADaemonIsOff(t *testing.T) {
 	if agentForwardEnabled(context.Background(), "ssh://ben@devbox") {
 		t.Fatal("no daemon, no registry: forwarding must be off")
 	}
+	if _, err := agentForwardState(context.Background(), "ssh://ben@devbox"); err == nil {
+		t.Fatal("no daemon: the registry could not be read, want an error")
+	}
 	if agentForwardEnabled(context.Background(), "") {
 		t.Fatal("a local connection never forwards")
+	}
+	if enabled, err := agentForwardState(context.Background(), ""); enabled || err != nil {
+		t.Fatalf("local connection: state = %v, %v; want off with no error", enabled, err)
 	}
 }

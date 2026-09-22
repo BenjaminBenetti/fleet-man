@@ -188,10 +188,14 @@ func TestSSHUpArgs_NoSocket(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		return
 	}
-	// A remote client could attach its agent: the relay is worth pointing at
-	// even though nothing backs it yet.
+	// A remote client has provided its agent here and can again: the relay is
+	// worth pointing at even though nothing backs it right now.
 	agentsock.SetRemoteClients(true)
-	t.Cleanup(func() { agentsock.SetRemoteClients(false) })
+	agentsock.SetProviderSeen(true)
+	t.Cleanup(func() {
+		agentsock.SetRemoteClients(false)
+		agentsock.SetProviderSeen(false)
+	})
 	args, err = sshUpArgs()
 	if err != nil {
 		t.Fatalf("sshUpArgs: %v", err)
@@ -230,26 +234,38 @@ func liveAgentSocket(t *testing.T) {
 func TestSSHExecArgs_WithAgent(t *testing.T) {
 	relayServing(t)
 	liveAgentSocket(t)
-	args := sshExecArgs()
+	args := sshExecArgs("")
 	if want := []string{"--remote-env", "SSH_AUTH_SOCK=" + wantAgentSock()}; !slices.Equal(args, want) {
-		t.Fatalf("sshExecArgs() = %v, want %v", args, want)
+		t.Fatalf("sshExecArgs = %v, want %v", args, want)
 	}
 }
 
 func TestSSHExecArgs_OverrideOff(t *testing.T) {
 	liveAgentSocket(t)
 	t.Setenv(sshAgentSockOverrideEnv, "off")
-	if args := sshExecArgs(); args != nil {
+	if args := sshExecArgs(""); args != nil {
 		t.Errorf("expected nil with %s=off, got %v", sshAgentSockOverrideEnv, args)
 	}
+}
+
+// instanceWorkspace makes <tmp>/<instance>/{.control,<workspace>} and
+// returns the workspace path, laid out like the real thing.
+func instanceWorkspace(t *testing.T) string {
+	t.Helper()
+	inst := t.TempDir()
+	if err := os.Mkdir(filepath.Join(inst, ".control"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(inst, "workspace")
 }
 
 func TestExecArgs_WithSSH(t *testing.T) {
 	relayServing(t)
 	liveAgentSocket(t)
-	args := execArgs("/workspace", []string{"bash"})
+	ws := instanceWorkspace(t)
+	args := execArgs(ws, []string{"bash"})
 	expected := []string{
-		"exec", "--workspace-folder", "/workspace",
+		"exec", "--workspace-folder", ws,
 		"--remote-env", "SSH_AUTH_SOCK=" + wantAgentSock(),
 		"bash",
 	}
@@ -265,5 +281,62 @@ func TestExecArgs_WithoutSSH(t *testing.T) {
 	expected := []string{"exec", "--workspace-folder", "/workspace", "bash"}
 	if !slices.Equal(args, expected) {
 		t.Fatalf("got %v, want %v", args, expected)
+	}
+}
+
+func TestSSHExecArgs_InstanceWithoutControlDirKeepsTheOldMount(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("the relay is not used for instances on macOS")
+	}
+	liveAgentSocket(t)
+	relayServing(t)
+	instDir := t.TempDir()
+	ws := filepath.Join(instDir, "fleet")
+	// Created before the control directory existed: only the agent socket
+	// file was bind-mounted, at /run/ssh-agent.sock.
+	if got := sshExecArgs(ws); !slices.Equal(got, []string{"--remote-env", "SSH_AUTH_SOCK=" + containerSSHSocketPath}) {
+		t.Fatalf("no control dir: %v", got)
+	}
+	if err := os.Mkdir(filepath.Join(instDir, ".control"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := sshExecArgs(ws); !slices.Equal(got, []string{"--remote-env", "SSH_AUTH_SOCK=" + agentsock.ContainerSocketPath}) {
+		t.Fatalf("with a control dir: %v", got)
+	}
+}
+
+func TestConfigMentionsAgent(t *testing.T) {
+	write := func(t *testing.T, path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  bool
+	}{
+		{"no config", nil, false},
+		{"plain config", map[string]string{".devcontainer/devcontainer.json": `{"image":"x"}`}, false},
+		{"mounts the agent", map[string]string{".devcontainer/devcontainer.json": `{"mounts":["source=${localEnv:SSH_AUTH_SOCK},target=/ssh-agent,type=bind"]}`}, true},
+		{"root-level config", map[string]string{".devcontainer.json": `{"remoteEnv":{"SSH_AUTH_SOCK":"/ssh-agent"}}`}, true},
+		{"compose file", map[string]string{".devcontainer/devcontainer.json": `{"dockerComposeFile":"compose.yml"}`, ".devcontainer/compose.yml": "volumes:\n  - ${SSH_AUTH_SOCK}:/ssh-agent\n"}, true},
+		{"named config", map[string]string{".devcontainer/py/devcontainer.json": `{"mounts":["source=${localEnv:SSH_AUTH_SOCK},target=/a,type=bind"]}`}, true},
+		{"too deep", map[string]string{".devcontainer/a/b/notes.txt": "SSH_AUTH_SOCK"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ws := t.TempDir()
+			for path, content := range c.files {
+				write(t, filepath.Join(ws, path), content)
+			}
+			if got := configMentionsAgent(ws); got != c.want {
+				t.Fatalf("configMentionsAgent = %v, want %v", got, c.want)
+			}
+		})
 	}
 }

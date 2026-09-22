@@ -124,11 +124,11 @@ var runInstanceCommand = func(fleetName, instanceName string, argv []string) (st
 // `shell <fleet>/<instance> -- argv...`, which streams over the Exec RPC —
 // keeping tea.ExecProcess, tmux split panes, and terminal windows working
 // unchanged (they still just run a local process). The child inherits
-// FLEET_GATEWAY / FLEET_SERVER / FLEET_TOKEN from the environment, plus
-// FLEET_AGENT_PROVIDER_PID naming this TUI, which already provides the
-// user's ssh-agent to that remote when forwarding is on (sshagent.go): the
-// shell's own provider would only push it to standby. A package var so tests
-// can stub it.
+// FLEET_GATEWAY / FLEET_SERVER / FLEET_TOKEN from the environment. When the
+// remote forwards the agent the child provides it too, but a CLI command's
+// provider yields to the TUI's (the daemon tries it only after non-yielding
+// providers), so a shell started here does not displace this TUI's
+// (sshagent.go). A package var so tests can stub it.
 var attachExecCmd = func(fleetName, instanceName string, argv []string) (*exec.Cmd, error) {
 	if !fleetclient.IsRemote() {
 		return resolveExecCmd(fleetName, instanceName, argv)
@@ -138,9 +138,7 @@ var attachExecCmd = func(fleetName, instanceName string, argv []string) (*exec.C
 		self = "fleet" // fall back to PATH lookup at run time
 	}
 	args := append([]string{"shell", fleetName + "/" + instanceName, "--"}, argv...)
-	cmd := exec.Command(self, args...)
-	cmd.Env = append(os.Environ(), fleetclient.EnvAgentProviderPID+"="+agentProviderPIDValue())
-	return cmd, nil
+	return exec.Command(self, args...), nil
 }
 
 // mergeExecEnv layers the server-supplied env over the client's own. Nil/empty

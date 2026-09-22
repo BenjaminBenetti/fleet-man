@@ -8,19 +8,9 @@ import (
 	"google.golang.org/grpc"
 )
 
-// agent_forward.go holds the client-side pieces of SSH-agent forwarding that
-// the CLI and the TUI share: the env var a TUI hands its children, and a
-// registry probe that — unlike DialLocal — can never start or restart the
-// local daemon.
-
-// EnvAgentProviderPID is how a TUI tells the `fleet shell` children it spawns
-// (directly, and through the tmux pane environment) that it already provides
-// the user's ssh-agent to the remote they connect to:
-// FLEET_AGENT_PROVIDER_PID=<the TUI's pid>. While that process lives a child
-// starts no provider of its own. Both read the same registry and serve the
-// same agent, so a second provider would only become the newest one and push
-// the TUI's to standby for as long as the child runs.
-const EnvAgentProviderPID = "FLEET_AGENT_PROVIDER_PID"
+// agent_forward.go holds the client side of SSH-agent forwarding that lives
+// outside the CLI: a registry probe that — unlike DialLocal — can never start
+// or restart the local daemon.
 
 // ProbeLocalArmada reads the fleet-armada registry from the LOCAL daemon if
 // one is listening right now. Unlike DialLocal it never spawns, restarts or

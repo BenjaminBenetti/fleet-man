@@ -816,10 +816,7 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 // env onto the tmux server's global environment so panes tmux spawns AFTER a
 // switch (split-window, the bound %/" keys) inherit the new connection. tmux
 // captures its environment at session start, so an in-process os.Setenv alone
-// never reaches these children. FLEET_AGENT_PROVIDER_PID goes along (this
-// TUI's pid while it is remote, unset when local) so those children's
-// `fleet shell` leaves agent forwarding to this TUI. No-op when not running
-// inside tmux.
+// never reaches these children. No-op when not running inside tmux.
 func syncTmuxArmadaEnv(m *model) {
 	if !m.inHostTmux {
 		return
@@ -827,7 +824,6 @@ func syncTmuxArmadaEnv(m *model) {
 	for _, name := range []string{fleetclient.EnvGateway, fleetclient.EnvToken, fleetclient.EnvSSH, fleetclient.EnvServer} {
 		setTmuxGlobalEnv(name, os.Getenv(name))
 	}
-	setTmuxGlobalEnv(fleetclient.EnvAgentProviderPID, agentProviderPIDValue())
 }
 
 // setTmuxGlobalEnv sets name in the tmux server's global environment, or
