@@ -159,21 +159,22 @@ func (m *model) handleThemeMsg(msg tea.Msg) tea.Cmd {
 	case themeSavedMsg:
 		m.themeSaving = false
 		saved := theme.Lookup(msg.name).Name
-		if msg.err != nil {
-			m.message = fmt.Sprintf("Failed to save theme: %v", msg.err)
-			// Revert to the last persisted look — unless the user has already
-			// moved on to another theme, whose own save will report.
-			if m.themeName == saved {
-				m.setTheme(m.themeSaved)
-			}
-			return nil
+		if msg.err == nil {
+			m.themeSaved = saved
 		}
-		m.themeSaved = saved
 		if m.themeName != saved {
-			// The user kept cycling while this save was in flight: persist
-			// where they ended up (one save, whatever the number of presses).
+			// The user kept cycling while this save was in flight (presses
+			// meanwhile start no save of their own): persist where they ended
+			// up. That save reports — and reverts — on its own, so this one's
+			// outcome only matters for themeSaved. Checked BEFORE the error
+			// branch, or a failed save would strand the on-screen theme:
+			// neither saved nor reverted.
 			m.themeSaving = true
 			return saveThemeCmd(m.themeName)
+		}
+		if msg.err != nil {
+			m.message = fmt.Sprintf("Failed to save theme: %v", msg.err)
+			m.setTheme(m.themeSaved) // back to the last persisted look
 		}
 	}
 	return nil

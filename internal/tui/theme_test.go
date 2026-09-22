@@ -213,6 +213,35 @@ func TestSelectThemeRemoteCoalescesSaves(t *testing.T) {
 	if m.themeSaved != "Gruvbox Light" || m.themeSaving {
 		t.Fatalf("themeSaved=%q saving=%v", m.themeSaved, m.themeSaving)
 	}
+
+	// A FAILED save with the user already moved on must still hand the final
+	// theme its own save (which then reports on its own), not strand it —
+	// neither saved nor reverted — on screen.
+	savedNames = nil
+	fail := true
+	saveThemeLocal = func(name string) error {
+		savedNames = append(savedNames, name)
+		if fail {
+			return errors.New("daemon down")
+		}
+		return nil
+	}
+	first = m.selectTheme("Gruvbox Dark")
+	m.selectTheme("Catppuccin Mocha")
+	fail = false
+	follow = m.handleThemeMsg(first())
+	if follow == nil {
+		t.Fatal("failed save + moved on: the final theme must get its own save")
+	}
+	if activeTheme.Name != "Catppuccin Mocha" || m.message != "Theme set to Catppuccin Mocha" {
+		t.Fatalf("must not revert or complain while the follow-up is pending: active=%q msg=%q", activeTheme.Name, m.message)
+	}
+	if m.handleThemeMsg(follow()) != nil || m.themeSaved != "Catppuccin Mocha" || activeTheme.Name != "Catppuccin Mocha" {
+		t.Fatalf("follow-up must persist the final theme: saved=%q active=%q", m.themeSaved, activeTheme.Name)
+	}
+	if !slices.Equal(savedNames, []string{"Gruvbox Dark", "Catppuccin Mocha"}) {
+		t.Fatalf("saves = %v", savedNames)
+	}
 }
 
 // TestThemeRowInSettings: the row sits in General and renders the current
