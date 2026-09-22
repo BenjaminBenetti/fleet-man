@@ -153,8 +153,11 @@ func ShellCommandForSession(config *configutil.Config, session string, cols, row
 	// Each SSH connection creates a new agent socket, but tmux keeps the
 	// old SSH_AUTH_SOCK from the original session. We symlink the current
 	// socket to a fixed path and point SSH_AUTH_SOCK there so it survives
-	// reconnects.
-	sshAgentFix := `if [ -n "$SSH_AUTH_SOCK" ] && [ "$SSH_AUTH_SOCK" != "$HOME/.ssh/ssh_auth_sock" ]; then mkdir -p ~/.ssh && ln -sf "$SSH_AUTH_SOCK" ~/.ssh/ssh_auth_sock; if [ ! -S /run/ssh-agent.sock ]; then ln -sf "$SSH_AUTH_SOCK" /run/ssh-agent.sock; fi; export SSH_AUTH_SOCK="$HOME/.ssh/ssh_auth_sock"; fi; `
+	// reconnects. The /run/ssh-agent.sock link is best-effort and silent: an
+	// instance on the daemon's agent relay has no socket there, and a non-root
+	// user cannot write /run, so it would print "Permission denied" on every
+	// attach.
+	sshAgentFix := `if [ -n "$SSH_AUTH_SOCK" ] && [ "$SSH_AUTH_SOCK" != "$HOME/.ssh/ssh_auth_sock" ]; then mkdir -p ~/.ssh && ln -sf "$SSH_AUTH_SOCK" ~/.ssh/ssh_auth_sock; if [ ! -S /run/ssh-agent.sock ]; then ln -sf "$SSH_AUTH_SOCK" /run/ssh-agent.sock 2>/dev/null; fi; export SSH_AUTH_SOCK="$HOME/.ssh/ssh_auth_sock"; fi; `
 	hookClear := fmt.Sprintf(
 		`tmux has-session -t %s 2>/dev/null && tmux set-hook -gu client-attached 2>/dev/null; `,
 		shQuote(session),

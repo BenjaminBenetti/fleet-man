@@ -73,6 +73,26 @@ func TestShellCommandProducesTmux(t *testing.T) {
 	}
 }
 
+// TestShellCommandSSHAgentFixIsQuiet: the stable agent symlink stays, and the
+// best-effort /run/ssh-agent.sock link is silenced — an instance on the
+// daemon's agent relay has no socket there, and a non-root user would see
+// "Permission denied" on every attach.
+func TestShellCommandSSHAgentFixIsQuiet(t *testing.T) {
+	config := state.DefaultConfig()
+	for _, nested := range []bool{false, true} {
+		script := shellCommand(config, "agent-1", 80, 24, nested)[2]
+		for _, want := range []string{
+			`ln -sf "$SSH_AUTH_SOCK" ~/.ssh/ssh_auth_sock;`,
+			`if [ ! -S /run/ssh-agent.sock ]; then ln -sf "$SSH_AUTH_SOCK" /run/ssh-agent.sock 2>/dev/null; fi;`,
+			`export SSH_AUTH_SOCK="$HOME/.ssh/ssh_auth_sock";`,
+		} {
+			if !strings.Contains(script, want) {
+				t.Errorf("nested=%v: script missing %q: %s", nested, want, script)
+			}
+		}
+	}
+}
+
 func TestShellCommandClipboard(t *testing.T) {
 	config := state.DefaultConfig()
 	got := shellCommand(config, "agent-1", 0, 0, false)

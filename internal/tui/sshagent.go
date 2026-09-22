@@ -3,7 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -15,8 +17,8 @@ import (
 
 // sshagent.go is the TUI's side of SSH-agent forwarding. The TUI runs on the
 // machine the human sits at — where their ssh-agent is — so while it is
-// connected to a registered remote fleet with "Forward SSH agent" on, it
-// provides that agent to the remote daemon (internal/agentfwd.Run): the
+// connected to a registered remote fleet with [ agent: on ], it provides
+// that agent to the remote daemon (internal/agentfwd.Run): the
 // remote's git clones and its instances then use the user's keys, like
 // `ssh -A`, for exactly as long as the TUI stays connected. The Fleet Armada
 // settings rows carry the per-remote toggle and show the provider's state.
@@ -62,14 +64,26 @@ func (m *model) agentForwardTarget() string {
 // registry: running against the current remote iff forwarding is on for it.
 // Idempotent — called wherever the registry or the connection changes.
 func (m *model) syncAgentProvider() {
+	if m.convergeAgentProvider() && m.inHostTmux {
+		// tmux starts split panes (and the bound %/" keys) from its own
+		// environment, not this process's, and a TUI that booted connected to
+		// the remote has had no switch to mirror it (syncTmuxArmadaEnv): tell
+		// their `fleet shell` children now that this TUI provides.
+		setTmuxGlobalEnv(fleetclient.EnvAgentProviderPID, agentProviderPIDValue())
+	}
+}
+
+// convergeAgentProvider does syncAgentProvider's bookkeeping under agentCtl's
+// lock and reports whether it started a provider.
+func (m *model) convergeAgentProvider() (started bool) {
 	target := m.agentForwardTarget()
 	agentCtl.mu.Lock()
 	defer agentCtl.mu.Unlock()
 	if agentCtl.parent == nil {
-		return
+		return false
 	}
 	if agentCtl.cancel != nil && agentCtl.target == target {
-		return
+		return false
 	}
 	if agentCtl.cancel != nil {
 		agentCtl.cancel()
@@ -78,7 +92,7 @@ func (m *model) syncAgentProvider() {
 	}
 	if target == "" {
 		m.agentStatus = agentfwd.Status{}
-		return
+		return false
 	}
 	ctx, cancel := context.WithCancel(agentCtl.parent)
 	agentCtl.cancel = cancel
@@ -86,6 +100,18 @@ func (m *model) syncAgentProvider() {
 	agentCtl.gen++
 	m.agentStatus = agentfwd.Status{}
 	go runAgentProviderFn(ctx, agentCtl.program, agentCtl.gen)
+	return true
+}
+
+// agentProviderPIDValue is the fleetclient.EnvAgentProviderPID value this
+// TUI's children get: its pid while it is connected to a remote, where it
+// provides its agent whenever the registry says so (a child reading the same
+// registry would only compete with it), and "" when local.
+func agentProviderPIDValue() string {
+	if !fleetclient.IsRemote() {
+		return ""
+	}
+	return strconv.Itoa(os.Getpid())
 }
 
 // agentProviderExited is a provider goroutine's last act: if it is still the
@@ -150,8 +176,8 @@ func runAgentProvider(ctx context.Context, program *tea.Program, gen int) {
 
 // --- settings page --------------------------------------------------------------
 
-// toggleArmadaAgent flips "Forward SSH agent" on remote idx and saves the
-// registry; the save result re-syncs the provider.
+// toggleArmadaAgent flips [ agent: on ] on remote idx and saves the registry;
+// the save result re-syncs the provider.
 func (settingsPage *settingsPage) toggleArmadaAgent(m *model, idx int) tea.Cmd {
 	if idx < 0 || idx >= len(m.armadaRemotes) || settingsPage.armadaBusy {
 		return nil
@@ -203,15 +229,15 @@ func armadaAgentStatusValue(m *model, url string, remoteOn bool) string {
 	st := m.agentStatus
 	switch st.State {
 	case agentfwd.StateActive:
-		uses := "no uses yet"
-		if st.Uses == 1 {
-			uses = "used once"
-		} else if st.Uses > 1 {
-			uses = fmt.Sprintf("used %d times", st.Uses)
-		}
-		return statusRunningStyle.Render("forwarding") + " " + dimStyle.Render(uses)
+		return statusRunningStyle.Render("forwarding") + " " + dimStyle.Render(agentUsesText(st.Uses))
 	case agentfwd.StateStandby:
-		return dimStyle.Render("standing by — another client's agent is in use")
+		// Not idle: the relay falls through to this agent whenever the newer
+		// client cannot answer (it has no agent), so its uses still count.
+		value := dimStyle.Render("standing by — a newer client is attached")
+		if st.Uses > 0 {
+			value += " " + dimStyle.Render(agentUsesText(st.Uses))
+		}
+		return value
 	case agentfwd.StateNoAgent:
 		return statusCreatingStyle.Render("no local agent") + " " + dimStyle.Render(st.Detail)
 	case agentfwd.StateRefused:
@@ -220,5 +246,17 @@ func armadaAgentStatusValue(m *model, url string, remoteOn bool) string {
 		return statusCreatingStyle.Render("unsupported") + " " + dimStyle.Render("the remote fleet is too old — update it")
 	default:
 		return dimStyle.Render("connecting…")
+	}
+}
+
+// agentUsesText words a provider's use count for the settings row.
+func agentUsesText(uses int) string {
+	switch {
+	case uses == 1:
+		return "used once"
+	case uses > 1:
+		return fmt.Sprintf("used %d times", uses)
+	default:
+		return "no uses yet"
 	}
 }

@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -731,6 +732,41 @@ func TestSwitchArmadaSSHSetsEnv(t *testing.T) {
 	m.switchArmada(m.armadaEntries()[0]) // local
 	if os.Getenv("FLEET_SSH") != "" || armadaCurrentKey() != "" || m.armadaCurrentBadge() != "" {
 		t.Fatalf("local switch should clear FLEET_SSH: %q", os.Getenv("FLEET_SSH"))
+	}
+}
+
+// TestSyncTmuxArmadaEnvMirrorsTheAgentProvider: a switch mirrors the
+// connection into the tmux server's environment, and with it this TUI's pid
+// as the agent provider while remote (so its panes' `fleet shell` does not
+// compete); back to local, every one of them is unset.
+func TestSyncTmuxArmadaEnvMirrorsTheAgentProvider(t *testing.T) {
+	for _, key := range []string{fleetclient.EnvGateway, fleetclient.EnvSSH, fleetclient.EnvServer, fleetclient.EnvToken} {
+		t.Setenv(key, "")
+	}
+	tmuxEnv := stubTmuxEnv(t)
+	m := armadaTestModel(nil)
+	m.armadaRemotes = []configutil.ArmadaRemote{{URL: "ssh://ben@desktop"}}
+
+	syncTmuxArmadaEnv(m)
+	if len(tmuxEnv) != 0 {
+		t.Fatalf("outside tmux nothing is mirrored: %v", tmuxEnv)
+	}
+
+	m.inHostTmux = true
+	m.switchArmada(m.armadaEntries()[1])
+	pid := strconv.Itoa(os.Getpid())
+	if tmuxEnv[fleetclient.EnvSSH] != "ssh://ben@desktop" || tmuxEnv[fleetclient.EnvAgentProviderPID] != pid {
+		t.Fatalf("tmux env after the ssh switch = %v, want FLEET_SSH and this TUI's pid", tmuxEnv)
+	}
+
+	m.switchArmada(m.armadaEntries()[0]) // local
+	for name, value := range tmuxEnv {
+		if value != "" {
+			t.Errorf("tmux %s = %q after switching to local, want it unset", name, value)
+		}
+	}
+	if _, ok := tmuxEnv[fleetclient.EnvAgentProviderPID]; !ok {
+		t.Fatal("the provider pid must be unset explicitly, not left behind")
 	}
 }
 
