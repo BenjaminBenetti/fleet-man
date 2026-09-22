@@ -112,10 +112,11 @@ func AgentReachable() error {
 // Run is the provider loop: it holds an SSHAgent stream to the daemon and
 // serves the connections the daemon announces from the local agent. It
 // reconnects with backoff and returns when ctx is cancelled (or the daemon
-// does not support the RPC). report is called from Run's goroutines on every
-// status change; it must not block.
-func Run(ctx context.Context, svc fleetgrpc.FleetServiceClient, report func(Status)) {
-	r := &runner{report: report}
+// does not support the RPC). role names this provider in the daemon's log
+// ("tui", "cli"). report is called on every status change, possibly from
+// several goroutines but never concurrently; it must not block.
+func Run(ctx context.Context, svc fleetgrpc.FleetServiceClient, role string, report func(Status)) {
+	r := &runner{report: report, label: hostname() + " (" + role + ")"}
 	backoff := reconnectInitial
 	for ctx.Err() == nil {
 		if err := AgentReachable(); err != nil {
@@ -162,27 +163,65 @@ func sleep(ctx context.Context, d time.Duration) bool {
 // runner carries the status across streams (Uses keeps counting).
 type runner struct {
 	report func(Status)
+	label  string
 	mu     sync.Mutex
 	state  State
 	uses   int
 	detail string
+	// active is the daemon's last word on this provider (newest or standing
+	// by), restored when a connection succeeds after the agent was missing.
+	active bool
 }
 
-// set and used report under the lock so reports from the stream loop and the
-// connection goroutines arrive in the order the state changed (report never
-// blocks, by contract).
+// set and the helpers below report under the lock so reports from the stream
+// loop and the connection goroutines arrive in the order the state changed
+// (report never blocks, by contract).
 func (r *runner) set(state State, detail string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.state, r.detail = state, detail
+	r.emit()
+}
+
+func (r *runner) emit() {
 	r.report(Status{State: r.state, Uses: r.uses, Detail: r.detail})
 }
 
-func (r *runner) used() {
+// attachedAs records the daemon's status message.
+func (r *runner) attachedAs(active bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.active = active
+	r.state, r.detail = StateStandby, ""
+	if active {
+		r.state = StateActive
+	}
+	r.emit()
+}
+
+// served counts a connection spliced onto the agent; it also clears a
+// "no local agent" state left by an earlier failed dial.
+func (r *runner) served() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.uses++
-	r.report(Status{State: r.state, Uses: r.uses, Detail: r.detail})
+	if r.state == StateNoAgent {
+		r.state, r.detail = StateStandby, ""
+		if r.active {
+			r.state = StateActive
+		}
+	}
+	r.emit()
+}
+
+// agentMissing reports, while attached, that the local agent could not be
+// dialed for a connection (the daemon then tries elsewhere): the status must
+// not keep claiming "forwarding".
+func (r *runner) agentMissing(detail string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.state, r.detail = StateNoAgent, detail
+	r.emit()
 }
 
 // runStream runs one stream to completion. attached reports whether the
@@ -195,20 +234,20 @@ func (r *runner) runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient
 	if err != nil {
 		return false, err
 	}
-	if err := stream.Send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Hello{Hello: &fleetgrpc.SSHAgentHello{Client: hostname()}}}); err != nil {
+	if err := stream.Send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Hello{Hello: &fleetgrpc.SSHAgentHello{Client: r.label}}}); err != nil {
 		return false, err
 	}
 
 	s := &session{
-		ctx:   ctx,
-		out:   make(chan *fleetgrpc.SSHAgentUp, sendQueue),
-		conns: make(map[uint64]*localConn),
-		used:  r.used,
+		ctx:    ctx,
+		out:    make(chan *fleetgrpc.SSHAgentUp, sendQueue),
+		conns:  make(map[uint64]*localConn),
+		runner: r,
 	}
 	defer s.closeAll()
 
 	// ONE sender for the stream's life: Send is not safe for concurrent use,
-	// and every connection's reader funnels through here.
+	// and every connection funnels through here.
 	sendErr := make(chan error, 1)
 	go func() {
 		for {
@@ -240,43 +279,76 @@ func (r *runner) runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient
 		switch msg := down.GetMsg().(type) {
 		case *fleetgrpc.SSHAgentDown_Status:
 			attached = true
-			if msg.Status.GetActive() {
-				r.set(StateActive, "")
-			} else {
-				r.set(StateStandby, "")
-			}
+			r.attachedAs(msg.Status.GetActive())
+		case *fleetgrpc.SSHAgentDown_Ping:
+			s.send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Pong{Pong: &fleetgrpc.SSHAgentPong{Seq: msg.Ping.GetSeq()}}})
 		case *fleetgrpc.SSHAgentDown_Open:
 			attached = true
-			go s.open(msg.Open.GetConnId())
+			// Registered HERE, before the goroutine dials, so a close the
+			// daemon sends right behind the open (it gave up waiting) finds
+			// the connection and cancels it rather than being dropped.
+			if lc := s.register(msg.Open.GetConnId()); lc != nil {
+				go s.serve(msg.Open.GetConnId(), lc)
+			}
 		case *fleetgrpc.SSHAgentDown_Data:
 			s.data(msg.Data.GetConnId(), msg.Data.GetData())
 		case *fleetgrpc.SSHAgentDown_Close:
-			s.closeConn(msg.Close.GetConnId())
+			s.peerClosed(msg.Close.GetConnId())
 		}
 	}
 }
 
 // session is one stream's set of spliced connections.
 type session struct {
-	ctx  context.Context
-	out  chan *fleetgrpc.SSHAgentUp
-	used func()
+	ctx    context.Context
+	out    chan *fleetgrpc.SSHAgentUp
+	runner *runner
 
 	mu    sync.Mutex
 	conns map[uint64]*localConn
 	done  bool
 }
 
-// localConn is one daemon connection spliced onto the local agent.
+// localConn is one daemon connection being served from the local agent.
 type localConn struct {
-	conn      net.Conn
-	in        chan []byte
-	closed    chan struct{}
-	closeOnce sync.Once
+	// in carries request bytes from the daemon.
+	in chan []byte
+	// peerDone closes when the daemon has nothing more to send (its close).
+	peerDone chan struct{}
+	peerOnce sync.Once
+	// agent is the dialed agent connection (nil until dialed).
+	agentMu sync.Mutex
+	agent   net.Conn
+	aborted bool
 }
 
-func (c *localConn) shut() {
-	c.closeOnce.Do(func() { close(c.closed) })
+func (c *localConn) finishPeer() {
+	c.peerOnce.Do(func() { close(c.peerDone) })
+}
+
+// setAgent records the dialed agent connection; false if the connection was
+// aborted meanwhile (the caller must close agent).
+func (c *localConn) setAgent(agent net.Conn) bool {
+	c.agentMu.Lock()
+	defer c.agentMu.Unlock()
+	if c.aborted {
+		return false
+	}
+	c.agent = agent
+	return true
+}
+
+// abort ends the connection now: the agent connection is closed so a pending
+// read returns.
+func (c *localConn) abort() {
+	c.agentMu.Lock()
+	c.aborted = true
+	agent := c.agent
+	c.agentMu.Unlock()
+	c.finishPeer()
+	if agent != nil {
+		_ = agent.Close()
+	}
 }
 
 // send queues a frame for the daemon; false once the stream is over.
@@ -293,85 +365,20 @@ func upClose(id uint64, errMsg string) *fleetgrpc.SSHAgentUp {
 	return &fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Close{Close: &fleetgrpc.SSHAgentClose{ConnId: id, Error: errMsg}}}
 }
 
-// open dials the local agent for connection id and splices the two until
-// either side ends it.
-func (s *session) open(id uint64) {
-	sock := agentSocket()
-	if sock == "" {
-		s.send(upClose(id, "SSH_AUTH_SOCK is not set on "+hostname()))
-		return
-	}
-	agentConn, err := net.DialTimeout("unix", sock, agentDialTimeout)
-	if err != nil {
-		s.send(upClose(id, fmt.Sprintf("cannot reach the ssh-agent on %s: %v", hostname(), err)))
-		return
-	}
-	lc := &localConn{conn: agentConn, in: make(chan []byte, connQueue), closed: make(chan struct{})}
+func upData(id uint64, data []byte) *fleetgrpc.SSHAgentUp {
+	return &fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Data{Data: &fleetgrpc.SSHAgentData{ConnId: id, Data: data}}}
+}
+
+// register records a new connection; nil once the stream is over.
+func (s *session) register(id uint64) *localConn {
+	lc := &localConn{in: make(chan []byte, connQueue), peerDone: make(chan struct{})}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.done {
-		s.mu.Unlock()
-		_ = agentConn.Close()
-		return
+		return nil
 	}
 	s.conns[id] = lc
-	s.mu.Unlock()
-	defer s.forget(id)
-
-	if !s.send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Ready{Ready: &fleetgrpc.SSHAgentReady{ConnId: id}}}) {
-		_ = agentConn.Close()
-		return
-	}
-	s.used()
-
-	// daemon → agent. Frames queued before a close are written first.
-	writerDone := make(chan struct{})
-	go func() {
-		defer close(writerDone)
-		defer agentConn.Close()
-		for {
-			select {
-			case data := <-lc.in:
-				if _, err := agentConn.Write(data); err != nil {
-					return
-				}
-			case <-lc.closed:
-				for {
-					select {
-					case data := <-lc.in:
-						if _, err := agentConn.Write(data); err != nil {
-							return
-						}
-					default:
-						return
-					}
-				}
-			case <-s.ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// agent → daemon.
-	buf := make([]byte, readChunk)
-	for {
-		n, err := agentConn.Read(buf)
-		if n > 0 {
-			data := append([]byte(nil), buf[:n]...)
-			if !s.send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Data{Data: &fleetgrpc.SSHAgentData{ConnId: id, Data: data}}}) {
-				break
-			}
-		}
-		if err != nil {
-			select {
-			case <-lc.closed: // the daemon ended it
-			default:
-				s.send(upClose(id, ""))
-			}
-			break
-		}
-	}
-	lc.shut()
-	<-writerDone
+	return lc
 }
 
 func (s *session) lookup(id uint64) *localConn {
@@ -386,31 +393,107 @@ func (s *session) forget(id uint64) {
 	delete(s.conns, id)
 }
 
-// data hands bytes from the daemon to connection id.
+// serve dials the local agent for connection id and answers the daemon's
+// requests one at a time — each allowed request is forwarded and its reply
+// read back before the next is looked at, so replies stay in order even when
+// some requests are answered here instead of by the agent.
+func (s *session) serve(id uint64, lc *localConn) {
+	defer s.forget(id)
+	sock := agentSocket()
+	if sock == "" {
+		s.runner.agentMissing("SSH_AUTH_SOCK is not set")
+		s.send(upClose(id, "SSH_AUTH_SOCK is not set on "+hostname()))
+		return
+	}
+	agent, err := net.DialTimeout("unix", sock, agentDialTimeout)
+	if err != nil {
+		s.runner.agentMissing(fmt.Sprintf("cannot reach the ssh-agent at %s", sock))
+		s.send(upClose(id, fmt.Sprintf("cannot reach the ssh-agent on %s: %v", hostname(), err)))
+		return
+	}
+	if !lc.setAgent(agent) {
+		_ = agent.Close()
+		return
+	}
+	defer agent.Close()
+	select {
+	case <-lc.peerDone:
+		// The daemon closed before any byte could flow: it gave up waiting
+		// for this answer. Nothing to say.
+		return
+	default:
+	}
+	if !s.send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Ready{Ready: &fleetgrpc.SSHAgentReady{ConnId: id}}}) {
+		return
+	}
+	s.runner.served()
+
+	requests := &messageReader{next: func() ([]byte, bool) {
+		select {
+		case chunk := <-lc.in:
+			return chunk, true
+		default:
+		}
+		select {
+		case chunk := <-lc.in:
+			return chunk, true
+		case <-lc.peerDone:
+			// Frames that arrived before the close are still owed a reply.
+			select {
+			case chunk := <-lc.in:
+				return chunk, true
+			default:
+				return nil, false
+			}
+		case <-s.ctx.Done():
+			return nil, false
+		}
+	}}
+	for {
+		request, err := requests.read()
+		if err != nil {
+			break
+		}
+		reply := failureReply
+		if requestAllowed(request) {
+			if _, err := agent.Write(request); err != nil {
+				break
+			}
+			if reply, err = readAgentMessage(agent); err != nil {
+				break
+			}
+		}
+		if !s.send(upData(id, reply)) {
+			return
+		}
+	}
+	s.send(upClose(id, ""))
+}
+
+// data hands request bytes from the daemon to connection id.
 func (s *session) data(id uint64, data []byte) {
 	lc := s.lookup(id)
 	if lc == nil || len(data) == 0 {
 		return
 	}
 	if len(data) > maxFrameBytes {
-		s.closeConn(id)
-		s.send(upClose(id, ""))
+		lc.abort()
 		return
 	}
 	select {
 	case lc.in <- data:
 	default:
-		// The local agent stopped reading; end this connection rather than
-		// stall every other one on the stream.
-		s.closeConn(id)
-		s.send(upClose(id, ""))
+		// The requests outran the agent by a whole queue: end this
+		// connection rather than stall every other one on the stream.
+		lc.abort()
 	}
 }
 
-// closeConn ends connection id at the daemon's request.
-func (s *session) closeConn(id uint64) {
+// peerClosed records the daemon's close of connection id: requests already
+// received are still answered, then the connection ends.
+func (s *session) peerClosed(id uint64) {
 	if lc := s.lookup(id); lc != nil {
-		lc.shut()
+		lc.finishPeer()
 	}
 }
 
@@ -422,7 +505,6 @@ func (s *session) closeAll() {
 	s.conns = make(map[uint64]*localConn)
 	s.mu.Unlock()
 	for _, lc := range conns {
-		lc.shut()
-		_ = lc.conn.Close()
+		lc.abort()
 	}
 }

@@ -166,7 +166,7 @@ func TestSSHAgentRelayServesTheProvidersAgent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	statuses := make(statusRecorder, 64)
-	go agentfwd.Run(ctx, client, statuses.report)
+	go agentfwd.Run(ctx, client, "test", statuses.report)
 	statuses.waitFor(t, agentfwd.StateActive)
 
 	requireOnlyKey(t, hostSock, userKey)
@@ -419,8 +419,10 @@ func TestSSHAgentInstanceSocketsFollowState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("instance socket not created: %v", err)
 	}
-	if info.Mode()&os.ModeSocket == 0 || info.Mode().Perm() != 0o600 {
-		t.Fatalf("instance socket mode = %v, want a 0600 socket", info.Mode())
+	// 0666 so a container user with another uid can connect; the peer check
+	// (daemon user, root, or that instance's container) decides who is served.
+	if info.Mode()&os.ModeSocket == 0 || info.Mode().Perm() != 0o666 {
+		t.Fatalf("instance socket mode = %v, want a 0666 socket", info.Mode())
 	}
 	if _, err := os.Stat(filepath.Join(state.ControlDir("f", "nocontrol"), agentsock.SocketName)); err == nil {
 		t.Fatal("an instance without a control directory must not get a socket")
@@ -511,5 +513,95 @@ func TestSSHAgentHubCloseEndsLiveConnections(t *testing.T) {
 	}
 	if _, err := os.Stat(hostSock); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("closing the hub should remove the host socket, stat err = %v", err)
+	}
+}
+
+func TestSSHAgentInstanceSocketWithLongNames(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	svc, client := startAgentTestServer(t)
+
+	// Far past the 108-byte unix socket path limit.
+	fleetName := "a-rather-long-fleet-name-for-the-platform-backend-service"
+	instName := "feature-auth-refactor-with-a-long-descriptive-instance-name"
+	control := state.ControlDir(fleetName, instName)
+	if len(control) < 110 {
+		t.Fatalf("test setup: control dir %d bytes, want it past the socket limit", len(control))
+	}
+	if err := os.MkdirAll(control, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc.agent.ensureInstance(fleetName, instName)
+	sock := filepath.Join(control, agentsock.SocketName)
+	if info, err := os.Lstat(sock); err != nil || info.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("no socket at a long path: %v", err)
+	}
+
+	provider := attachRawProvider(t, client, "laptop")
+	provider.nextStatus()
+	// Connect the way a container does, through a short path to the same
+	// directory (a symlink standing in for the /fleet-mounts/control mount).
+	short := filepath.Join(dir, "m")
+	if err := os.Symlink(control, short); err != nil {
+		t.Fatal(err)
+	}
+	dialAsync(t, filepath.Join(short, agentsock.SocketName))
+	if origin := provider.nextOpen().GetOrigin(); origin != fleetName+"/"+instName {
+		t.Fatalf("origin = %q", origin)
+	}
+}
+
+func TestSSHAgentInstanceSocketNeverFollowsASymlink(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	svc, _ := startAgentTestServer(t)
+
+	control := state.ControlDir("f", "i")
+	if err := os.MkdirAll(control, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A process in the instance plants a symlink where the socket goes,
+	// pointing at a host file it wants the daemon to chmod.
+	target := filepath.Join(dir, "precious")
+	if err := os.WriteFile(target, []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(control, agentsock.SocketName)); err != nil {
+		t.Fatal(err)
+	}
+	svc.agent.ensureInstance("f", "i")
+	if info, err := os.Stat(target); err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("the symlink target's mode changed: %v %v", info.Mode(), err)
+	}
+	if info, err := os.Lstat(filepath.Join(control, agentsock.SocketName)); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the planted entry should be left alone (and no socket served): %v", err)
+	}
+}
+
+func TestSSHAgentInstanceSocketIsRecreatedWhenDeleted(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	svc, _ := startAgentTestServer(t)
+	st := &state.State{Fleets: map[string]*fleet.Fleet{
+		"f": {Name: "f", Instances: []*fleet.Instance{{Name: "i", Backend: fleet.BackendDevcontainer}}},
+	}}
+	control := state.ControlDir("f", "i")
+	if err := os.MkdirAll(control, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc.agent.syncInstances(st)
+	sock := filepath.Join(control, agentsock.SocketName)
+	// The instance is destroyed and re-created under the same name between
+	// two reconciles: the old listener is bound to nothing.
+	if err := os.RemoveAll(control); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(control, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc.agent.syncInstances(st) // notices the stale listener
+	svc.agent.syncInstances(st) // opens a fresh one
+	if info, err := os.Lstat(sock); err != nil || info.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("socket not recreated: %v", err)
 	}
 }

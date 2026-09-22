@@ -142,7 +142,7 @@ func runAgentProvider(ctx context.Context, program *tea.Program, gen int) {
 			backoff = min(backoff*2, 10*time.Second)
 			continue
 		}
-		agentfwd.Run(ctx, conn.Service(), report)
+		agentfwd.Run(ctx, conn.Service(), "tui", report)
 		conn.Close()
 		return
 	}

@@ -21,7 +21,7 @@ func stubAgentForward(t *testing.T, enabled bool) (started *atomic.Int32, stoppe
 		return enabled
 	}
 	started, stopped = new(atomic.Int32), new(atomic.Int32)
-	runAgentProvider = func(ctx context.Context, _ fleetgrpc.FleetServiceClient, report func(agentfwd.Status)) {
+	runAgentProvider = func(ctx context.Context, _ fleetgrpc.FleetServiceClient, _ string, report func(agentfwd.Status)) {
 		started.Add(1)
 		report(agentfwd.Status{State: agentfwd.StateActive})
 		<-ctx.Done()
@@ -60,7 +60,7 @@ func TestForwardAgentWhileIsANoOpWhenOff(t *testing.T) {
 func TestForwardAgentWhileDoesNotWaitForeverOnASilentProvider(t *testing.T) {
 	t.Setenv(fleetclient.EnvSSH, "ssh://ben@devbox")
 	stubAgentForward(t, true)
-	runAgentProvider = func(ctx context.Context, _ fleetgrpc.FleetServiceClient, report func(agentfwd.Status)) {
+	runAgentProvider = func(ctx context.Context, _ fleetgrpc.FleetServiceClient, _ string, report func(agentfwd.Status)) {
 		report(agentfwd.Status{State: agentfwd.StateConnecting})
 		<-ctx.Done()
 	}

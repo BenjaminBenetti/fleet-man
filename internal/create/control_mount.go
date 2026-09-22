@@ -32,8 +32,17 @@ func controlMount(fleetName, instanceName string) (backend.Mount, error) {
 	if err := os.MkdirAll(dir, 0777); err != nil {
 		return backend.Mount{}, fmt.Errorf("create control dir %s: %w", dir, err)
 	}
+	if ControlDirReady != nil {
+		ControlDirReady(fleetName, instanceName)
+	}
 	return backend.Mount{
 		LocalPath:     dir,
 		ContainerPath: control.ContainerMountDir,
 	}, nil
 }
+
+// ControlDirReady, when set, is called as soon as an instance's control
+// directory exists — before its container is created. The daemon sets it to
+// open the instance's SSH-agent relay socket there, so a postCreate command
+// already finds its agent.
+var ControlDirReady func(fleetName, instanceName string)

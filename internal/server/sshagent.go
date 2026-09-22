@@ -7,6 +7,7 @@ import (
 	"net"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -27,8 +28,9 @@ import (
 //     one on the host, which the daemon's own children use through
 //     SSH_AUTH_SOCK, and one per devcontainer instance.
 //   - the HUB below, which hands every connection made to a socket to the
-//     active provider — or, if there is none or it cannot serve (no agent on
-//     its machine), to the agent the daemon itself was started with.
+//     newest provider that can serve it (a client whose machine has no agent
+//     answers "cannot" and the next one is tried) — or, if none can, to the
+//     agent the daemon itself was started with.
 //
 // The upstream is chosen per CONNECTION, never frozen at creation time, so a
 // client reconnecting, a new client attaching, or the local agent restarting
@@ -55,7 +57,16 @@ const (
 	// maxAgentConnsPerProvider bounds concurrent connections on one provider;
 	// beyond it new connections fall back as if there were no provider.
 	maxAgentConnsPerProvider = 256
+	// agentCloseGrace bounds how long a connection that has finished sending
+	// (EOF, possibly only a half-close) waits for the provider to deliver the
+	// replies it still owes and close its side.
+	agentCloseGrace = 30 * time.Second
 )
+
+// agentPingInterval is how often a provider is probed; one that has not
+// answered the previous probe by the next is SUSPECT and skipped until it
+// answers anything. A var so tests can shorten it.
+var agentPingInterval = 15 * time.Second
 
 // agentHub owns providers, the relay sockets, and the routing between them.
 type agentHub struct {
@@ -67,8 +78,9 @@ type agentHub struct {
 
 	// Listeners and live connections (sshagent_listen.go).
 	host      *agentListener
-	instances map[string]*agentListener // "<fleet>/<instance>"
-	retryAt   map[string]time.Time      // failed instance listens, retried after
+	instances map[string]*instanceListener // "<fleet>/<instance>"
+	opening   map[string]bool              // instance listens in flight
+	retryAt   map[string]time.Time         // failed instance listens, retried after
 	conns     map[net.Conn]struct{}
 	closed    bool
 	serving   sync.WaitGroup // connection goroutines
@@ -76,7 +88,8 @@ type agentHub struct {
 
 func newAgentHub() *agentHub {
 	return &agentHub{
-		instances: make(map[string]*agentListener),
+		instances: make(map[string]*instanceListener),
+		opening:   make(map[string]bool),
 		retryAt:   make(map[string]time.Time),
 		conns:     make(map[net.Conn]struct{}),
 	}
@@ -159,6 +172,12 @@ func (h *agentHub) removeProvider(p *agentProvider) {
 func (h *agentHub) serveConn(conn net.Conn, origin string) {
 	defer conn.Close()
 	for _, p := range h.providersNewestFirst() {
+		if p.suspect.Load() {
+			// Not answering (a laptop asleep, a dead link TCP has not given
+			// up on yet): trying it would stall this connection for
+			// agentReadyTimeout, every time.
+			continue
+		}
 		if p.relay(conn, origin, h.newConnID()) {
 			return
 		}
@@ -168,7 +187,9 @@ func (h *agentHub) serveConn(conn net.Conn, origin string) {
 	}
 }
 
-// spliceAgent pipes conn to the agent at sock until either side closes.
+// spliceAgent pipes conn to the agent at sock. A client that half-closes
+// after its request still gets the reply: each direction's end is passed on
+// as a half-close, and the splice ends once both are done (bounded).
 func spliceAgent(conn net.Conn, sock string) {
 	upstream, err := net.DialTimeout("unix", sock, agentFallbackDialTimeout)
 	if err != nil {
@@ -176,9 +197,22 @@ func spliceAgent(conn net.Conn, sock string) {
 	}
 	defer upstream.Close()
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(upstream, conn); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(conn, upstream); done <- struct{}{} }()
+	pipe := func(dst, src net.Conn) {
+		_, _ = io.Copy(dst, src)
+		if hc, ok := dst.(interface{ CloseWrite() error }); ok {
+			_ = hc.CloseWrite()
+		}
+		done <- struct{}{}
+	}
+	go pipe(upstream, conn)
+	go pipe(conn, upstream)
 	<-done
+	grace := time.NewTimer(agentCloseGrace)
+	defer grace.Stop()
+	select {
+	case <-done:
+	case <-grace.C:
+	}
 }
 
 // agentProvider is one attached provider stream.
@@ -195,6 +229,13 @@ type agentProvider struct {
 
 	mu    sync.Mutex
 	conns map[uint64]*agentRelayConn
+
+	// suspect is set when the provider stops answering (a missed ping, a
+	// ready that never came) and cleared by any frame from it.
+	suspect atomic.Bool
+	// pingSent / pingAcked are the last probe sent and the last answered.
+	pingSent  atomic.Uint64
+	pingAcked atomic.Uint64
 }
 
 // postStatus replaces any unsent status with active.
@@ -319,6 +360,7 @@ func (p *agentProvider) relay(conn net.Conn, origin string, id uint64) (served b
 			return false
 		}
 	case <-timer.C:
+		p.suspect.Store(true)
 		p.send(agentDownClose(id))
 		return false
 	case <-p.done:
@@ -356,7 +398,9 @@ func (p *agentProvider) relay(conn net.Conn, origin string, id uint64) (served b
 		}
 	}()
 
-	// connection → provider.
+	// connection → provider. The connection ending its side is only a
+	// half-close as far as the provider is concerned: it still owes replies
+	// to what was sent, so the writer runs on until the provider closes too.
 	buf := make([]byte, agentReadChunk)
 	for {
 		n, err := conn.Read(buf)
@@ -374,7 +418,14 @@ func (p *agentProvider) relay(conn net.Conn, origin string, id uint64) (served b
 			break
 		}
 	}
+	grace := time.NewTimer(agentCloseGrace)
+	select {
+	case <-writerDone:
+	case <-grace.C:
+	}
+	grace.Stop()
 	rc.shut()
+	_ = conn.Close()
 	<-writerDone
 	return true
 }
@@ -382,7 +433,10 @@ func (p *agentProvider) relay(conn net.Conn, origin string, id uint64) (served b
 // deliver routes one frame from the provider. An error ends the stream (the
 // provider broke the contract).
 func (p *agentProvider) deliver(up *fleetgrpc.SSHAgentUp) error {
+	p.suspect.Store(false) // it is talking
 	switch msg := up.GetMsg().(type) {
+	case *fleetgrpc.SSHAgentUp_Pong:
+		p.pingAcked.Store(msg.Pong.GetSeq())
 	case *fleetgrpc.SSHAgentUp_Ready:
 		if rc := p.lookup(msg.Ready.GetConnId()); rc != nil {
 			rc.answer("")
@@ -478,8 +532,19 @@ func (s *service) SSHAgent(stream fleetgrpc.FleetService_SSHAgentServer) error {
 		}
 	}()
 
+	pings := time.NewTicker(agentPingInterval)
+	defer pings.Stop()
 	for {
 		select {
+		case <-pings.C:
+			if provider.pingAcked.Load() < provider.pingSent.Load() {
+				provider.suspect.Store(true) // the last probe went unanswered
+			}
+			seq := provider.pingSent.Add(1)
+			msg := &fleetgrpc.SSHAgentDown{Msg: &fleetgrpc.SSHAgentDown_Ping{Ping: &fleetgrpc.SSHAgentPing{Seq: seq}}}
+			if err := stream.Send(msg); err != nil {
+				return err
+			}
 		case msg := <-provider.out:
 			if err := stream.Send(msg); err != nil {
 				return err

@@ -2,7 +2,6 @@ package devcontainer
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -36,23 +35,13 @@ const dockerDesktopSSHAuthSock = "/run/host-services/ssh-auth.sock"
 // agent forwarding entirely.
 const sshAgentSockOverrideEnv = agentsock.EnvOverride
 
-// liveSocket returns sock if it names an existing unix socket, "" otherwise.
-func liveSocket(sock string) string {
-	if sock == "" {
-		return ""
-	}
-	info, err := os.Stat(sock)
-	if err != nil || info.Mode()&os.ModeSocket == 0 {
-		return ""
-	}
-	return sock
-}
-
 // hostSSHAuthSock returns the agent socket the daemon was started with if it
-// is a live socket, "" otherwise. Only the macOS Docker Desktop path gates on
-// it: the relay resolves the agent per connection, so it needs no gate.
+// is a live socket, "" otherwise. The macOS Docker Desktop path gates on it.
 func hostSSHAuthSock() string {
-	return liveSocket(agentsock.OriginSock())
+	if sock := agentsock.OriginSock(); agentsock.LiveSocket(sock) {
+		return sock
+	}
+	return ""
 }
 
 // agentPlan is how one container reaches the agent: mount is the host (or
@@ -64,8 +53,9 @@ type agentPlan struct {
 }
 
 // agentPlanFor is the pure core of currentAgentPlan, split out so every
-// platform's branch is testable anywhere.
-func agentPlanFor(mode agentsock.Mode, override, hostSock string) agentPlan {
+// platform's branch is testable anywhere. relayUsable is
+// agentsock.RelayUsable: whether the relay can back an agent at all.
+func agentPlanFor(mode agentsock.Mode, override, hostSock string, relayUsable bool) agentPlan {
 	switch mode {
 	case agentsock.ModeOff:
 		return agentPlan{}
@@ -81,6 +71,11 @@ func agentPlanFor(mode agentsock.Mode, override, hostSock string) agentPlan {
 		// The relay: the daemon listens in the instance's control directory,
 		// which provisioning already bind-mounts as a DIRECTORY, so nothing is
 		// mounted here and a recreated socket reaches running containers.
+		// Pointless — and harmful to an in-container `ssh-agent` fallback —
+		// when nothing could ever answer on it.
+		if !relayUsable {
+			return agentPlan{}
+		}
 		return agentPlan{sock: agentsock.ContainerSocketPath}
 	}
 }
@@ -101,7 +96,7 @@ func currentAgentPlan() (agentPlan, error) {
 	if mode == agentsock.ModeDockerDesktop {
 		hostSock = hostSSHAuthSock()
 	}
-	return agentPlanFor(mode, override, hostSock), nil
+	return agentPlanFor(mode, override, hostSock, agentsock.RelayUsable()), nil
 }
 
 // sshAgentMountSource returns the socket to bind-mount at

@@ -72,7 +72,6 @@ func TestAgentPlanFor(t *testing.T) {
 		want                           agentPlan
 	}{
 		{"linux uses the relay", "", "/tmp/agent.sock", "linux", relay},
-		{"linux relay needs no agent up front", "", "", "linux", relay},
 		{"darwin mounts the docker vm path", "", "/private/tmp/launchd/Listeners", "darwin", direct(dockerDesktopSSHAuthSock)},
 		{"no agent on darwin, no mount", "", "", "darwin", agentPlan{}},
 		{"override wins without host agent", "/vm/custom.sock", "", "darwin", direct("/vm/custom.sock")},
@@ -83,11 +82,23 @@ func TestAgentPlanFor(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			mode := agentsock.ModeFor(tc.override, tc.goos)
-			if got := agentPlanFor(mode, tc.override, tc.hostSock); got != tc.want {
+			if got := agentPlanFor(mode, tc.override, tc.hostSock, true); got != tc.want {
 				t.Errorf("agentPlanFor(%q, %q, %q) = %+v, want %+v", tc.override, tc.hostSock, tc.goos, got, tc.want)
 			}
 		})
 	}
+	// Nothing can ever answer on the relay: no SSH_AUTH_SOCK at all, so an
+	// in-container `ssh-agent` fallback still starts.
+	if got := agentPlanFor(agentsock.ModeRelay, "", "", false); got != (agentPlan{}) {
+		t.Errorf("unusable relay: got %+v, want no agent", got)
+	}
+}
+
+// relayServing marks this process as serving the relay, as the daemon does.
+func relayServing(t *testing.T) {
+	t.Helper()
+	agentsock.SetRelayServing(true)
+	t.Cleanup(func() { agentsock.SetRelayServing(false) })
 }
 
 // wantAgentSock is the SSH_AUTH_SOCK instances get on this platform with no
@@ -101,6 +112,7 @@ func wantAgentSock() string {
 
 func TestSSHUpArgs_WithValidSocket(t *testing.T) {
 	liveAgentSocket(t)
+	relayServing(t)
 	args, err := sshUpArgs()
 	if err != nil {
 		t.Fatalf("sshUpArgs: %v", err)
@@ -165,24 +177,32 @@ func TestSSHUpArgs_OverrideInvalid(t *testing.T) {
 func TestSSHUpArgs_NoSocket(t *testing.T) {
 	t.Setenv("SSH_AUTH_SOCK", "")
 	t.Setenv(sshAgentSockOverrideEnv, "")
+	relayServing(t)
 	args, err := sshUpArgs()
 	if err != nil {
 		t.Fatalf("sshUpArgs: %v", err)
 	}
+	if args != nil {
+		t.Errorf("no agent and no remote clients: expected nil, got %v", args)
+	}
 	if runtime.GOOS == "darwin" {
-		if args != nil {
-			t.Errorf("darwin without an agent: expected nil, got %v", args)
-		}
 		return
 	}
-	// The relay serves whatever agent is reachable per connection, so an
-	// instance is pointed at it even when none is up yet.
+	// A remote client could attach its agent: the relay is worth pointing at
+	// even though nothing backs it yet.
+	agentsock.SetRemoteClients(true)
+	t.Cleanup(func() { agentsock.SetRemoteClients(false) })
+	args, err = sshUpArgs()
+	if err != nil {
+		t.Fatalf("sshUpArgs: %v", err)
+	}
 	if want := []string{"--remote-env", "SSH_AUTH_SOCK=" + agentsock.ContainerSocketPath}; !slices.Equal(args, want) {
 		t.Errorf("sshUpArgs() = %v, want %v", args, want)
 	}
 }
 
 func TestSSHAgentMountSource_RelayMountsNothing(t *testing.T) {
+	relayServing(t)
 	if runtime.GOOS == "darwin" {
 		t.Skip("the relay is not used for instances on macOS")
 	}
@@ -208,6 +228,7 @@ func liveAgentSocket(t *testing.T) {
 }
 
 func TestSSHExecArgs_WithAgent(t *testing.T) {
+	relayServing(t)
 	liveAgentSocket(t)
 	args := sshExecArgs()
 	if want := []string{"--remote-env", "SSH_AUTH_SOCK=" + wantAgentSock()}; !slices.Equal(args, want) {
@@ -224,6 +245,7 @@ func TestSSHExecArgs_OverrideOff(t *testing.T) {
 }
 
 func TestExecArgs_WithSSH(t *testing.T) {
+	relayServing(t)
 	liveAgentSocket(t)
 	args := execArgs("/workspace", []string{"bash"})
 	expected := []string{

@@ -169,31 +169,38 @@ message MicDemand {
 // agent-providing client (a TUI or CLI on the machine where the human's
 // ssh-agent runs). The SERVER owns the agent sockets processes on its host use
 // (its own git clone, and one per devcontainer instance); every connection to
-// one of them is relayed over this stream to the provider, which splices it
-// onto its local SSH_AUTH_SOCK. Because the bytes ride this stream, the keys
-// follow the client even when the server is remote — like `ssh -A`, but for
+// one of them is relayed over this stream to a provider, which splices it onto
+// its local SSH_AUTH_SOCK. Because the bytes ride this stream, the keys follow
+// the client even when the server is remote — like `ssh -A`, but for
 // everything the daemon runs — and they are gone the moment the client leaves.
 //
-// The most recently attached provider is ACTIVE; older ones stand by and are
-// promoted if it leaves. A connection nobody can serve falls back to the
-// agent the daemon itself was started with, if any.
+// A connection goes to the newest attached provider that can serve it (one
+// whose machine has no reachable agent answers `close` with an error and the
+// next one is tried); if none can, to the agent the daemon itself was started
+// with. The provider only forwards listing keys and signing to its agent: it
+// answers every other request (add/remove keys, lock, loading PKCS#11 or
+// security-key providers) with a failure itself, because a relayed connection
+// reaches the agent as a LOCAL client and would otherwise get more than an
+// `ssh -A` connection does.
 //
 // The FIRST client frame MUST carry `hello`. Connections are multiplexed by
 // conn_id, which the server assigns: it announces each with `open`, the
 // client answers `ready` once it has dialed its agent (or `close` with an
-// error if it cannot), and from then on both sides exchange `data` until
-// either sends `close`.
+// error if it cannot), and from then on both sides exchange `data`. `close`
+// means "nothing more from my side": the peer finishes what is in flight
+// (the provider answers a request already sent) and closes its side too.
 message SSHAgentUp {
   oneof msg {
     SSHAgentHello hello = 1;
     SSHAgentReady ready = 2;
     SSHAgentData data = 3;
     SSHAgentClose close = 4;
+    SSHAgentPong pong = 5;
   }
 }
 
 // SSHAgentHello registers the stream as a provider. client is a human label
-// (the provider's hostname) for the daemon's log.
+// (the provider's hostname and role) for the daemon's log.
 message SSHAgentHello {
   string client = 1;
 }
@@ -204,12 +211,18 @@ message SSHAgentReady {
   uint64 conn_id = 1;
 }
 
+// SSHAgentPong answers an SSHAgentPing with its seq.
+message SSHAgentPong {
+  uint64 seq = 1;
+}
+
 message SSHAgentDown {
   oneof msg {
     SSHAgentOpen open = 1;
     SSHAgentData data = 2;
     SSHAgentClose close = 3;
     SSHAgentStatus status = 4;
+    SSHAgentPing ping = 5;
   }
 }
 
@@ -227,19 +240,25 @@ message SSHAgentData {
   bytes data = 2;
 }
 
-// SSHAgentClose ends one connection. error is set when the connection could
-// not be served (the provider has no reachable agent), so the server can fall
-// back rather than fail.
+// SSHAgentClose ends one side of a connection. error is set when the
+// provider could not serve it at all (no reachable agent), so the server can
+// try the next provider or its own agent rather than fail.
 message SSHAgentClose {
   uint64 conn_id = 1;
   string error = 2;
 }
 
-// SSHAgentStatus tells a provider whether it is the ACTIVE one (its agent is
-// the one being used) or standing by behind a newer provider. Sent on attach
-// and whenever that changes.
+// SSHAgentStatus tells a provider whether it is the newest one (tried first)
+// or standing by behind a newer provider. Sent on attach and on changes.
 message SSHAgentStatus {
   bool active = 1;
+}
+
+// SSHAgentPing is the server's liveness probe: a provider that does not answer
+// with a pong is skipped (a laptop that went to sleep must not stall every
+// agent use on the host until TCP gives up) until it answers again.
+message SSHAgentPing {
+  uint64 seq = 1;
 }
 
 // CopyFile streams a file OR directory out of an instance to the client (the

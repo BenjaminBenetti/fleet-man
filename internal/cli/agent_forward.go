@@ -89,7 +89,7 @@ func forwardAgentWhile(ctx context.Context, svc fleetgrpc.FleetServiceClient) (s
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAgentProvider(ctx, svc, report)
+		runAgentProvider(ctx, svc, "cli", report)
 	}()
 	select {
 	case <-settled:

@@ -132,7 +132,7 @@ func TestRunStaysDetachedWithoutALocalAgent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	got := make(reports, 16)
-	go Run(ctx, client, got.report)
+	go Run(ctx, client, "test", got.report)
 	st := got.waitFor(t, StateNoAgent)
 	if !strings.Contains(st.Detail, "SSH_AUTH_SOCK") {
 		t.Fatalf("detail = %q", st.Detail)
@@ -150,7 +150,7 @@ func TestRunStopsOnAnOldDaemon(t *testing.T) {
 	got := make(reports, 16)
 	done := make(chan struct{})
 	go func() {
-		Run(context.Background(), client, got.report)
+		Run(context.Background(), client, "test", got.report)
 		close(done)
 	}()
 	got.waitFor(t, StateUnsupported)
@@ -169,7 +169,7 @@ func TestRunReportsARefusal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	got := make(reports, 16)
-	go Run(ctx, client, got.report)
+	go Run(ctx, client, "test", got.report)
 	if st := got.waitFor(t, StateRefused); !strings.Contains(st.Detail, "turned off") {
 		t.Fatalf("detail = %q", st.Detail)
 	}
@@ -217,7 +217,7 @@ func TestRunSplicesAConnectionOntoTheLocalAgent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	got := make(reports, 64)
-	go Run(ctx, client, got.report)
+	go Run(ctx, client, "test", got.report)
 
 	got.waitFor(t, StateActive)
 	var ex exchange
@@ -270,7 +270,7 @@ func TestRunTellsTheDaemonWhenTheLocalAgentIsGone(t *testing.T) {
 	}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go Run(ctx, client, func(Status) {})
+	go Run(ctx, client, "test", func(Status) {})
 	select {
 	case c := <-gotClose:
 		if c.GetConnId() != 3 || c.GetError() == "" {

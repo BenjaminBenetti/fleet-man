@@ -8,28 +8,30 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
+	"github.com/BenjaminBenetti/fleet-man/internal/create"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
 // sshagent_listen.go owns the relay's unix sockets:
 //
-//   - the HOST socket (agentsock.HostSocketPath, in a 0700 directory), which
-//     the daemon points its own SSH_AUTH_SOCK at so every child it runs — the
-//     repo clone, repo inspection, coder/codespaces `ssh -A`, devcontainer
-//     initializeCommand — reaches the provider's agent;
+//   - the HOST socket (agentsock.HostSocketPath, 0600 in a 0700 directory),
+//     which the daemon points its own SSH_AUTH_SOCK at so every child it runs
+//     — the repo clone, repo inspection, coder/codespaces `ssh -A` — reaches
+//     the provider's agent;
 //   - one socket per devcontainer instance, inside the instance's control
 //     directory (already bind-mounted at /fleet-mounts/control), so processes
 //     in the instance reach it at agentsock.ContainerSocketPath. Linux only
 //     (agentsock.ModeRelay): on macOS a host socket cannot cross into Docker
-//     Desktop's VM.
-//
-// Every socket is 0600 and, on Linux, also checks the connecting process's uid
-// (the daemon's user or root), closing the window between bind and chmod. The
-// control directory is traversable by other users; the keys must not be.
+//     Desktop's VM. The control directory is writable from the instance and
+//     traversable by other host users, so these sockets are created without
+//     resolving any path there (sshagent_peer_linux.go) and every connection
+//     is checked: the daemon's user, root, or a process of that instance's
+//     own container — never another host user.
 
 const (
 	// agentSyncInterval is how often the per-instance sockets are reconciled
@@ -44,6 +46,12 @@ const (
 type agentListener struct {
 	ln   net.Listener
 	path string
+	// containerID names the container whose processes may connect besides the
+	// daemon's user and root (nil for the host socket).
+	containerID func() string
+	// unlink removes the socket file on Close (nil: the listener's own
+	// unlink-on-close does).
+	unlink func()
 
 	mu     sync.Mutex
 	closed bool
@@ -90,7 +98,11 @@ func (l *agentListener) acceptLoop(serve func(net.Conn)) {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		if !agentPeerAllowed(conn) {
+		containerID := ""
+		if l.containerID != nil {
+			containerID = l.containerID()
+		}
+		if !agentPeerAllowed(conn, containerID) {
 			flog.Warn("ssh agent socket: refused a connection from another user", "socket", l.path)
 			_ = conn.Close()
 			continue
@@ -108,8 +120,11 @@ func (l *agentListener) Close() {
 	}
 	l.closed = true
 	l.mu.Unlock()
-	_ = l.ln.Close() // unlinks the path (a net.Listen'd unix listener)
+	_ = l.ln.Close() // for the host socket this also unlinks the path
 	<-l.done
+	if l.unlink != nil {
+		l.unlink()
+	}
 }
 
 // track registers a live connection so shutdown can end it; false once the
@@ -187,22 +202,34 @@ func (h *agentHub) run(ctx context.Context) {
 	}
 }
 
+// instanceListener is a per-instance socket plus the container its
+// processes run in (known once `devcontainer up` has returned).
+type instanceListener struct {
+	*agentListener
+	dir         string
+	containerID atomic.Value // string
+}
+
+func (il *instanceListener) currentContainerID() string {
+	id, _ := il.containerID.Load().(string)
+	return id
+}
+
 // syncInstances listens in the control directory of every instance that has
-// one (devcontainer-style backends; the directory is created at provision
-// time, before `devcontainer up`, so postCreate already finds the socket) and
-// stops listening for instances that are gone. Status does not matter: a
-// socket on a stopped instance costs nothing, and being there before a start
-// means postStart can use it.
+// one (devcontainer-style backends) and stops listening for instances that
+// are gone. Status does not matter: a socket on a stopped instance costs
+// nothing, and being there before a start means postStart can use it.
 func (h *agentHub) syncInstances(st *state.State) {
 	if st == nil {
 		return
 	}
-	want := make(map[string]string)
+	type wanted struct{ dir, containerID string }
+	want := make(map[string]wanted)
 	for fleetName, f := range st.Fleets {
 		for _, inst := range f.Instances {
 			dir := state.ControlDir(fleetName, inst.Name)
 			if info, err := os.Stat(dir); err == nil && info.IsDir() {
-				want[fleetName+"/"+inst.Name] = filepath.Join(dir, agentsock.SocketName)
+				want[fleetName+"/"+inst.Name] = wanted{dir: dir, containerID: inst.ContainerID}
 			}
 		}
 	}
@@ -212,54 +239,89 @@ func (h *agentHub) syncInstances(st *state.State) {
 		h.mu.Unlock()
 		return
 	}
-	var stale []*agentListener
-	for key, l := range h.instances {
-		if path, ok := want[key]; !ok || path != l.path {
-			stale = append(stale, l)
+	var stale []*instanceListener
+	for key, il := range h.instances {
+		w, ok := want[key]
+		if !ok || w.dir != il.dir || !il.stillBound() {
+			stale = append(stale, il)
 			delete(h.instances, key)
+			continue
 		}
+		il.containerID.Store(w.containerID)
 	}
 	for key := range h.retryAt {
 		if _, ok := want[key]; !ok {
 			delete(h.retryAt, key)
 		}
 	}
-	now := time.Now()
-	var missing []string
-	for key := range want {
-		if _, ok := h.instances[key]; ok {
-			continue
-		}
-		if at, ok := h.retryAt[key]; ok && now.Before(at) {
-			continue
-		}
-		missing = append(missing, key)
-	}
 	h.mu.Unlock()
 
-	for _, l := range stale {
-		l.Close()
+	for _, il := range stale {
+		il.Close()
 	}
-	for _, key := range missing {
-		l, err := listenAgentSocket(want[key], h.serveFrom(key))
-		h.mu.Lock()
-		if err != nil {
-			if _, retrying := h.retryAt[key]; !retrying {
-				flog.Warn("ssh agent socket: listen failed", "instance", key, "err", err)
-			}
-			h.retryAt[key] = now.Add(agentListenRetry)
-			h.mu.Unlock()
-			continue
-		}
-		delete(h.retryAt, key)
-		if h.closed {
-			h.mu.Unlock()
-			l.Close()
-			continue
-		}
-		h.instances[key] = l
+	for key, w := range want {
+		h.openInstance(key, w.dir, w.containerID, false)
+	}
+}
+
+// ensureInstance opens an instance's socket right away. Provisioning calls it
+// (through create.ControlDirReady) as soon as the control directory exists,
+// so a postCreate command in the new container already finds its agent
+// rather than racing the next reconcile.
+func (h *agentHub) ensureInstance(fleetName, instanceName string) {
+	if agentsock.CurrentMode() != agentsock.ModeRelay {
+		return
+	}
+	h.openInstance(fleetName+"/"+instanceName, state.ControlDir(fleetName, instanceName), "", true)
+}
+
+// openInstance listens for key unless it already is (or recently failed and
+// is not due a retry, unless now is set).
+func (h *agentHub) openInstance(key, dir, containerID string, now bool) {
+	if !agentInstanceSocketsSupported {
+		return
+	}
+	h.mu.Lock()
+	_, listening := h.instances[key]
+	at, failed := h.retryAt[key]
+	if h.closed || listening || h.opening[key] || (failed && !now && time.Now().Before(at)) {
 		h.mu.Unlock()
+		return
 	}
+	h.opening[key] = true
+	h.mu.Unlock()
+
+	il := &instanceListener{dir: dir}
+	il.containerID.Store(containerID)
+	l, err := listenInstanceAgentSocket(dir, agentsock.SocketName, il.currentContainerID, h.serveFrom(key))
+
+	h.mu.Lock()
+	delete(h.opening, key)
+	if err != nil {
+		if !failed {
+			flog.Warn("ssh agent socket: listen failed", "instance", key, "err", err)
+		}
+		h.retryAt[key] = time.Now().Add(agentListenRetry)
+		h.mu.Unlock()
+		return
+	}
+	delete(h.retryAt, key)
+	il.agentListener = l
+	if h.closed {
+		h.mu.Unlock()
+		l.Close()
+		return
+	}
+	h.instances[key] = il
+	h.mu.Unlock()
+}
+
+// stillBound reports whether the socket file is still there (an instance
+// destroyed and re-created under the same name between reconciles, or a
+// process in the instance deleting it, leaves this listener bound to nothing).
+func (il *instanceListener) stillBound() bool {
+	info, err := os.Lstat(il.path)
+	return err == nil && info.Mode()&os.ModeSocket != 0
 }
 
 // close stops every socket, ends every live connection, and waits for their
@@ -272,8 +334,8 @@ func (h *agentHub) close() {
 		listeners = append(listeners, h.host)
 		h.host = nil
 	}
-	for key, l := range h.instances {
-		listeners = append(listeners, l)
+	for key, il := range h.instances {
+		listeners = append(listeners, il.agentListener)
 		delete(h.instances, key)
 	}
 	conns := make([]net.Conn, 0, len(h.conns))
@@ -312,7 +374,9 @@ func startAgentRelay(ctx context.Context, h *agentHub) {
 		} else {
 			_ = os.Setenv(agentsock.EnvOrigin, origin)
 			_ = os.Setenv(agentsock.EnvAuthSock, path)
+			agentsock.SetRelayServing(true)
 		}
 	}
+	create.ControlDirReady = h.ensureInstance
 	go h.run(ctx)
 }

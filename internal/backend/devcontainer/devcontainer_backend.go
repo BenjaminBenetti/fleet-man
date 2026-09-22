@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
@@ -243,7 +244,9 @@ func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts [
 	args = append(args, sshArgs...)
 	args = append(args, customMountArgs(mounts)...)
 	cmd := exec.Command("devcontainer", args...)
-	env, err := devcontainerEnv(os.Environ())
+	// ${localEnv:SSH_AUTH_SOCK} in the config (a project's own agent mount)
+	// must resolve to the user's real agent, not the daemon's relay socket.
+	env, err := devcontainerEnv(agentsock.WithOriginAgent(os.Environ()))
 	if err != nil {
 		return nil, err
 	}

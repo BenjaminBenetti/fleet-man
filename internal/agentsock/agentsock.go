@@ -15,8 +15,9 @@
 //     survives the socket being recreated; bind-mounting a socket FILE pins
 //     its inode and breaks the instance's agent on any reconnect.
 //
-// Each connection goes to the ACTIVE provider (a client streaming its local
-// agent over the SSHAgent RPC), else to the agent the daemon was started with.
+// Each connection goes to the newest provider (a client streaming its local
+// agent over the SSHAgent RPC) that can serve it, else to the agent the daemon
+// was started with.
 package agentsock
 
 import (
@@ -24,6 +25,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
@@ -120,4 +122,59 @@ func notRelay(sock string) string {
 		return ""
 	}
 	return sock
+}
+
+// LiveSocket reports whether path names an existing unix socket.
+func LiveSocket(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode()&os.ModeSocket != 0
+}
+
+// Signals from the daemon about what can back the relay; the devcontainer
+// backend reads them to decide whether pointing an instance at the relay can
+// ever get it an agent.
+var (
+	relayServing  atomic.Bool
+	remoteClients atomic.Bool
+)
+
+// SetRelayServing records that this process serves the relay sockets.
+func SetRelayServing(on bool) { relayServing.Store(on) }
+
+// SetRemoteClients records whether remote clients — the only ones that
+// provide their agent — can reach this daemon (Remote Fleet enabled).
+func SetRemoteClients(on bool) { remoteClients.Store(on) }
+
+// RelayUsable reports whether an instance pointed at the relay can get an
+// agent at all: the relay is up, and either the daemon has an agent of its
+// own to fall back to or a remote client could attach one. When it cannot,
+// instances are not given an SSH_AUTH_SOCK that could only ever fail — a
+// dotfiles `[ -z "$SSH_AUTH_SOCK" ] && eval "$(ssh-agent)"` must still work.
+func RelayUsable() bool {
+	return relayServing.Load() && (remoteClients.Load() || LiveSocket(OriginSock()))
+}
+
+// WithOriginAgent returns environ with SSH_AUTH_SOCK set back to the agent the
+// daemon was started with, when the daemon redirected it to the relay and
+// that agent is live. For `devcontainer up`: a config may bind-mount
+// ${localEnv:SSH_AUTH_SOCK}, and a bind mount pins the socket FILE — the
+// relay's is recreated on every daemon restart, the user's own agent is not.
+func WithOriginAgent(environ []string) []string {
+	origin := OriginSock()
+	if !LiveSocket(origin) {
+		return environ
+	}
+	out := make([]string, 0, len(environ))
+	for _, kv := range environ {
+		if strings.HasPrefix(kv, EnvAuthSock+"=") {
+			if strings.TrimPrefix(kv, EnvAuthSock+"=") == HostSocketPath() {
+				kv = EnvAuthSock + "=" + origin
+			}
+		}
+		out = append(out, kv)
+	}
+	return out
 }
