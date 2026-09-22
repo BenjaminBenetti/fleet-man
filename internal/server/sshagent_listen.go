@@ -59,7 +59,13 @@ type agentListener struct {
 	// Refusals are logged at most once a minute per socket, with a count.
 	lastRefusalLog time.Time
 	refusals       int
+	// slowChecks bounds concurrent container checks for cross-uid peers.
+	slowChecks chan struct{}
 }
+
+// maxSlowPeerChecks is how many cross-uid peer checks (which may run docker)
+// one socket runs at once; more are refused.
+const maxSlowPeerChecks = 8
 
 // refusalLogInterval spaces "refused a connection" warnings for one socket.
 const refusalLogInterval = time.Minute
@@ -121,7 +127,7 @@ func (l *agentListener) acceptLoop(serve func(net.Conn)) {
 		// The peer check may ask docker (cached): never on the accept loop,
 		// where one slow answer would hold up every other connection.
 		go func() {
-			if !agentPeerAllowed(conn, l.inst) {
+			if !agentPeerAllowed(conn, l.inst, l.slowChecks) {
 				l.refused()
 				_ = conn.Close()
 				return

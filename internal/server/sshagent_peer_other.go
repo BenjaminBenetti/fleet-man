@@ -9,7 +9,7 @@ import (
 
 // agentPeerAllowed relies on permissions alone off Linux: the only relay
 // socket there is the host one, in a 0700 directory.
-func agentPeerAllowed(net.Conn, instanceIdentity) bool { return true }
+func agentPeerAllowed(net.Conn, instanceIdentity, chan struct{}) bool { return true }
 
 // instanceIdentity is what an instance's socket knows about its container
 // (unused off Linux).

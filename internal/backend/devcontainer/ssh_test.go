@@ -286,7 +286,7 @@ func TestSSHExecArgs_OverrideOff(t *testing.T) {
 func instanceWorkspace(t *testing.T) string {
 	t.Helper()
 	ws := unmarkedInstanceWorkspace(t)
-	if err := os.WriteFile(filepath.Join(filepath.Dir(ws), ".control", ControlMountMarker), nil, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(filepath.Dir(ws), ControlMountMarker), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return ws
@@ -433,7 +433,7 @@ func TestHasControlMount_CachesDockersAnswer(t *testing.T) {
 
 	// Rebuilt with the mount: provisioning's marker wins over the cached
 	// answer at once.
-	if err := os.WriteFile(filepath.Join(filepath.Dir(ws), ".control", ControlMountMarker), nil, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(filepath.Dir(ws), ControlMountMarker), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if !hasControlMount(ws) || res.calls != 2 {

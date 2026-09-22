@@ -72,7 +72,7 @@ func TestControlMount(t *testing.T) {
 // mount, and the devcontainer backend tells them apart by this marker.
 func TestControlMountWritesMarker(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	marker := filepath.Join(state.ControlDir("f", "i"), devcontainerbackend.ControlMountMarker)
+	marker := filepath.Join(filepath.Dir(state.ControlDir("f", "i")), devcontainerbackend.ControlMountMarker)
 
 	orig := ControlDirReady
 	t.Cleanup(func() { ControlDirReady = orig })

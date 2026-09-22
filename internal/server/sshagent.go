@@ -680,7 +680,17 @@ func (s *service) SSHAgent(stream fleetgrpc.FleetService_SSHAgentServer) error {
 				return err
 			}
 		case <-provider.closeNotify:
-			for _, id := range provider.takeCloses() {
+			// A close must never overtake what was queued for its connection
+			// before it (a half-closed client's last request, the open of a
+			// connection given up on): take the closes, then send everything
+			// already in the queue, then the closes.
+			ids := provider.takeCloses()
+			for n := len(provider.out); n > 0; n-- {
+				if err := stream.Send(<-provider.out); err != nil {
+					return err
+				}
+			}
+			for _, id := range ids {
 				if err := stream.Send(agentDownClose(id)); err != nil {
 					return err
 				}

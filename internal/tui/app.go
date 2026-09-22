@@ -1413,15 +1413,6 @@ func Run() error {
 		}
 	}
 
-	// A TUI booted straight onto a remote (FLEET_SSH / FLEET_GATEWAY) has had
-	// no Armada switch to mirror that into tmux: do it now, so split panes and
-	// the bound keys reach the same daemon and know this TUI provides the SSH
-	// agent (their `fleet shell` then neither waits for its own provider nor
-	// prints a notice the Settings row already shows).
-	if m.inHostTmux && fleetclient.IsRemote() {
-		syncTmuxArmadaEnv(&m)
-	}
-
 	program := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	// Subscribe to the fleet server's Watch stream for the TUI's lifetime,

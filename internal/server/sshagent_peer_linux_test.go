@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 type fakeInstance struct{ id, workspace string }
@@ -84,6 +86,7 @@ func fakeRuntime(t *testing.T, containers map[string]int, labels map[string][]st
 	reset := func() {
 		containerCache.Lock()
 		containerCache.found = map[string]containerInfo{}
+		containerCache.failed = map[string]time.Time{}
 		containerCache.Unlock()
 		labelledCache.Lock()
 		labelledCache.entries = map[string]labelledEntry{}
@@ -182,5 +185,30 @@ func TestPeerCheckRejectsAReusedPid(t *testing.T) {
 	}
 	if !peerInInstanceContainer(peerIdentity{uid: 4001, pid: 100, pidfd: -1}, fakeInstance{id: id}) {
 		t.Fatal("the process that connected is still the one at the pid: allowed")
+	}
+}
+
+func TestPeerCheckSharesDockerCallsAndCachesFailures(t *testing.T) {
+	const id = "3f1c0a9e5b7d2c4e6f8a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e"
+	write := procFixture(t)
+	docker := fakeRuntime(t, map[string]int{}, map[string][]string{})
+	// A stopped recorded container (inspect fails) that a peer names in its
+	// cgroup, hit by a burst of connections.
+	write(100, "0::/system.slice/docker-"+id+".scope\n")
+	writeStatus(t, 100, 4001)
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			peerInInstanceContainer(peerIdentity{uid: 4001, pid: 100, pidfd: -1}, fakeInstance{id: id, workspace: "/ws"})
+		}()
+	}
+	wg.Wait()
+	if n := len(docker.inspected); n > 1 {
+		t.Fatalf("docker inspect ran %d times for one failing container; want it shared and the failure cached", n)
+	}
+	if docker.listed > 1 {
+		t.Fatalf("docker ps ran %d times for one workspace; want it shared and cached", docker.listed)
 	}
 }

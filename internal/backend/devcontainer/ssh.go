@@ -152,12 +152,14 @@ func sshExecArgs(workspaceDir string) []string {
 }
 
 // ControlMountMarker is the file provisioning (create.controlMount) drops in
-// an instance's host control directory, next to its sockets, when it
+// an instance's host directory, NEXT TO its control directory, when it
 // bind-mounts that directory into the container. Only provisioning writes it —
-// unlike the directory itself, which the daemon's control-socket registry
-// creates for every running instance — so its presence means the container
-// sees the relay socket.
-const ControlMountMarker = ".mounted"
+// unlike the control directory itself, which the daemon's control-socket
+// registry creates for every running instance — so its presence means the
+// container sees the relay socket. It is deliberately not inside the control
+// directory: the instance can write there (and could plant a symlink for the
+// daemon to write through); the instance directory is not mounted.
+const ControlMountMarker = ".control-mounted"
 
 // Caching of the docker answer in hasControlMount. exec runs about once a
 // second per instance (session polling), so an answer is reused for
@@ -202,7 +204,7 @@ func hasControlMount(workspaceDir string) bool {
 	}
 	// The control directory sits next to the workspace:
 	// <workspaces>/<fleet>/<instance>/{<workspace>,.control}.
-	if _, err := os.Stat(filepath.Join(filepath.Dir(workspaceDir), ".control", ControlMountMarker)); err == nil {
+	if _, err := os.Stat(filepath.Join(filepath.Dir(workspaceDir), ControlMountMarker)); err == nil {
 		return true
 	}
 

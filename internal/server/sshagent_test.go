@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -895,5 +897,42 @@ func TestStartAgentRelayWaitsForSomethingToAnswer(t *testing.T) {
 	}
 	if !agentsock.RelayUsable() {
 		t.Fatal("with a provider seen and Remote Fleet on, the relay is worth pointing instances at")
+	}
+}
+
+func TestSSHAgentConcurrentHalfClosesAllGetTheirReplies(t *testing.T) {
+	// Many clients at once, each sending one request and half-closing: a
+	// close must never overtake the request queued before it.
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	userSock, _ := startFakeAgent(t, dir, "user")
+	t.Setenv("SSH_AUTH_SOCK", userSock)
+	svc, client := startAgentTestServer(t)
+	hostSock := filepath.Join(dir, "relay.sock")
+	if err := svc.agent.listenHost(hostSock); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	statuses := make(statusRecorder, 64)
+	go agentfwd.Run(ctx, client, "test", statuses.report)
+	statuses.waitFor(t, agentfwd.StateActive)
+
+	for round := 0; round < 10; round++ {
+		var wg sync.WaitGroup
+		var lost atomic.Int32
+		for i := 0; i < 40; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if !isOneKeyAnswer(halfCloseList(t, hostSock)) {
+					lost.Add(1)
+				}
+			}()
+		}
+		wg.Wait()
+		if n := lost.Load(); n > 0 {
+			t.Fatalf("round %d: %d of 40 half-closed clients got no reply", round, n)
+		}
 	}
 }

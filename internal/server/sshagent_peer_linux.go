@@ -48,8 +48,16 @@ func peerCred(conn net.Conn) (peerIdentity, bool) {
 			return
 		}
 		id.uid, id.pid = cred.Uid, cred.Pid
-		if pidfd, err := unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_PEERPIDFD); err == nil {
+		pidfd, err := unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_PEERPIDFD)
+		switch {
+		case err == nil:
 			id.pidfd = pidfd
+		case errors.Is(err, unix.ENOPROTOOPT) || errors.Is(err, unix.EOPNOTSUPP):
+			// A kernel without SO_PEERPIDFD (< 6.5): fall back to the uid check.
+		default:
+			// The connector is already gone (EINVAL / ESRCH: exited and
+			// reaped) — exactly when its pid may name someone else.
+			credErr = err
 		}
 	}); err != nil || credErr != nil {
 		id.close()
@@ -102,9 +110,12 @@ type instanceIdentity interface {
 // container nested in it), whatever uid its image runs it as — a remoteUser
 // whose uid could not be remapped, a rootless-docker subuid. inst is nil for
 // the host socket. Everyone else — other users on the host, who can traverse
-// the control directory — is refused. May run docker (cached): call it off
-// the accept loop.
-func agentPeerAllowed(conn net.Conn, inst instanceIdentity) bool {
+// the control directory — is refused. The container check may run docker
+// (cached): call this off the accept loop. slow, when non-nil, bounds how
+// many of those checks run at once for the socket; past it a cross-uid peer
+// is refused rather than queued, so a flood of them cannot pile up docker
+// processes (the daemon's own user never waits on it).
+func agentPeerAllowed(conn net.Conn, inst instanceIdentity, slow chan struct{}) bool {
 	peer, ok := peerCred(conn)
 	if !ok {
 		return false
@@ -115,6 +126,14 @@ func agentPeerAllowed(conn net.Conn, inst instanceIdentity) bool {
 	}
 	if inst == nil {
 		return false
+	}
+	if slow != nil {
+		select {
+		case slow <- struct{}{}:
+			defer func() { <-slow }()
+		default:
+			return false
+		}
 	}
 	return peerInInstanceContainer(peer, inst)
 }
@@ -202,33 +221,28 @@ func peerInInstanceContainer(peer peerIdentity, inst instanceIdentity) bool {
 	if len(anchors) == 0 {
 		return false
 	}
-	ours := map[string]bool{}
-	if id := inst.containerID(); id != "" {
-		ours[id] = true
-	}
-	var labelled []string
-	labelledLoaded := false
-	for _, a := range anchors {
-		if !ours[a.id] {
-			if !labelledLoaded {
-				labelled = containersLabelled(inst.workspaceDir())
-				labelledLoaded = true
+	matches := func(ours map[string]bool) bool {
+		for _, a := range anchors {
+			if !ours[a.id] {
+				continue
 			}
-			for _, id := range labelled {
-				ours[id] = true
+			if info, ok := lookupContainer(a.id); ok && info.anchor == a.prefix {
+				// The cgroup read must have been about the process that
+				// connected, not one that took its pid since.
+				return peer.stillTheConnector()
 			}
 		}
-		if !ours[a.id] {
-			continue
-		}
-		info, ok := lookupContainer(a.id)
-		if ok && info.anchor == a.prefix {
-			// The cgroup read must have been about the process that
-			// connected, not one that took its pid since.
-			return peer.stillTheConnector()
-		}
+		return false
 	}
-	return false
+	// The recorded container first: the common case costs no docker call.
+	if id := inst.containerID(); id != "" && matches(map[string]bool{id: true}) {
+		return true
+	}
+	labelled := map[string]bool{}
+	for _, id := range containersLabelled(inst.workspaceDir()) {
+		labelled[id] = true
+	}
+	return len(labelled) > 0 && matches(labelled)
 }
 
 // containerInfo is what the peer check needs about one container.
@@ -272,8 +286,9 @@ const labelledTTL = 2 * time.Second
 
 var labelledCache = struct {
 	sync.Mutex
-	entries map[string]labelledEntry
-}{entries: map[string]labelledEntry{}}
+	entries  map[string]labelledEntry
+	inflight map[string]chan struct{}
+}{entries: map[string]labelledEntry{}, inflight: map[string]chan struct{}{}}
 
 type labelledEntry struct {
 	ids []string
@@ -281,42 +296,96 @@ type labelledEntry struct {
 }
 
 // containersLabelled returns the containers labelled with workspaceDir
-// (cached briefly; "" or a docker failure → none).
+// ("" or a docker failure → none). Every answer, failures included, is reused
+// for labelledTTL, and concurrent callers for the same workspace share one
+// docker call.
 func containersLabelled(workspaceDir string) []string {
 	if workspaceDir == "" {
 		return nil
 	}
 	labelledCache.Lock()
-	if e, ok := labelledCache.entries[workspaceDir]; ok && time.Since(e.at) < labelledTTL {
+	for {
+		if e, ok := labelledCache.entries[workspaceDir]; ok && time.Since(e.at) < labelledTTL {
+			labelledCache.Unlock()
+			return e.ids
+		}
+		wait, busy := labelledCache.inflight[workspaceDir]
+		if !busy {
+			break
+		}
 		labelledCache.Unlock()
-		return e.ids
+		<-wait
+		labelledCache.Lock()
 	}
+	done := make(chan struct{})
+	labelledCache.inflight[workspaceDir] = done
 	labelledCache.Unlock()
+
 	ids, err := listLabelled(workspaceDir)
 	if err != nil {
-		return nil
+		ids = nil
 	}
 	labelledCache.Lock()
-	defer labelledCache.Unlock()
 	labelledCache.entries[workspaceDir] = labelledEntry{ids: ids, at: time.Now()}
+	delete(labelledCache.inflight, workspaceDir)
+	labelledCache.Unlock()
+	close(done)
 	return ids
 }
 
 // containerCache remembers containerInfo per ID (a container's cgroup never
-// changes). Only this daemon's own instances' containers are ever looked up,
-// so it stays small; a failed lookup is not cached.
+// changes) and failed lookups for a short while (a stopped container named by
+// a peer must not cost a docker call per connection). Only this daemon's own
+// instances' containers are ever looked up, so it stays small. Concurrent
+// lookups of one ID share a docker call.
 var containerCache = struct {
 	sync.Mutex
-	found map[string]containerInfo
-}{found: map[string]containerInfo{}}
+	found    map[string]containerInfo
+	failed   map[string]time.Time
+	inflight map[string]chan struct{}
+}{found: map[string]containerInfo{}, failed: map[string]time.Time{}, inflight: map[string]chan struct{}{}}
+
+// containerLookupRetry is how long a failed lookup is not repeated.
+const containerLookupRetry = 10 * time.Second
 
 func lookupContainer(id string) (containerInfo, bool) {
 	containerCache.Lock()
-	if info, ok := containerCache.found[id]; ok {
+	for {
+		if info, ok := containerCache.found[id]; ok {
+			containerCache.Unlock()
+			return info, true
+		}
+		if at, ok := containerCache.failed[id]; ok && time.Since(at) < containerLookupRetry {
+			containerCache.Unlock()
+			return containerInfo{}, false
+		}
+		wait, busy := containerCache.inflight[id]
+		if !busy {
+			break
+		}
 		containerCache.Unlock()
-		return info, true
+		<-wait
+		containerCache.Lock()
 	}
+	done := make(chan struct{})
+	containerCache.inflight[id] = done
 	containerCache.Unlock()
+
+	info, ok := resolveContainer(id)
+	containerCache.Lock()
+	if ok {
+		containerCache.found[id] = info
+		delete(containerCache.failed, id)
+	} else {
+		containerCache.failed[id] = time.Now()
+	}
+	delete(containerCache.inflight, id)
+	containerCache.Unlock()
+	close(done)
+	return info, ok
+}
+
+func resolveContainer(id string) (containerInfo, bool) {
 	pid, err := inspectContainer(id)
 	if err != nil {
 		return containerInfo{}, false
@@ -335,11 +404,7 @@ func lookupContainer(id string) (containerInfo, bool) {
 	if anchor == "" {
 		return containerInfo{}, false
 	}
-	info := containerInfo{anchor: anchor}
-	containerCache.Lock()
-	defer containerCache.Unlock()
-	containerCache.found[id] = info
-	return info, true
+	return containerInfo{anchor: anchor}, true
 }
 
 // afterInstanceBind is a test hook run between bind and chmod — the window a
@@ -413,10 +478,11 @@ func listenInstanceAgentSocket(dir, name string, inst instanceIdentity, serve fu
 	}
 
 	l := &agentListener{
-		ln:   ln,
-		path: dir + "/" + name,
-		done: make(chan struct{}),
-		inst: inst,
+		ln:         ln,
+		path:       dir + "/" + name,
+		done:       make(chan struct{}),
+		inst:       inst,
+		slowChecks: make(chan struct{}, maxSlowPeerChecks),
 	}
 	ino, dev := st.Ino, st.Dev
 	l.unlink = func() {
