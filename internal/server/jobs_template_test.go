@@ -205,11 +205,15 @@ func TestCreateInstanceTemplateFleetRecordRejectsBranch(t *testing.T) {
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("want InvalidArgument for branch on template fleet, got %v", err)
 	}
-	if err := createErr(t, client, &fleetgrpc.CreateInstanceRequest{
+	stream, err := client.CreateInstance(context.Background(), &fleetgrpc.CreateInstanceRequest{
 		Fleet: "scratch", Instance: "i1", Backend: fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("plain create on template fleet should start: %v", err)
 	}
+	// Run the job to its end: returning while it still writes state.json
+	// races the temp HOME's removal ("directory not empty" on slow runners).
+	drainJob(t, stream)
 }
 
 // A per-instance --repo must not change the fleet's KIND: no template copy
