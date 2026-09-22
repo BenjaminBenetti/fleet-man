@@ -184,11 +184,7 @@ func (m model) viewCopyConfirm() string {
 		boxWidth = m.width - 4
 	}
 	boxWidth = max(boxWidth, 24)
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("203")).
-		Padding(1, 2).
-		Width(boxWidth)
+	box := framedBox(activeTheme.Danger).Width(boxWidth)
 
 	title := dialogTitle.Render("⚠ " + capitalize(req.verb()) + " request from " + req.instanceKey())
 	path := dialogLabel.Render(req.src + "  →  " + copyDstLabel(req.dst))

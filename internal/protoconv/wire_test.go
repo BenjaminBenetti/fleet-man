@@ -155,7 +155,7 @@ func TestFleetSettingsWirePlacement(t *testing.T) {
 }
 
 func TestConfigWirePlacement(t *testing.T) {
-	pinArity[state.Config](t, 8)
+	pinArity[state.Config](t, 9)
 	pinArity[state.GeneralSettings](t, 2)
 	pinArity[state.AgentSettings](t, 1)
 	pinArity[state.DotfilesSettings](t, 3)
@@ -163,6 +163,7 @@ func TestConfigWirePlacement(t *testing.T) {
 	pinArity[state.BrowserSettings](t, 2)
 	pinArity[state.RemoteMcpSettings](t, 5)
 	pinArity[state.MicSettings](t, 2)
+	pinArity[state.ThemeSettings](t, 1)
 
 	vim := false
 	multi := true
@@ -175,6 +176,7 @@ func TestConfigWirePlacement(t *testing.T) {
 		RemoteMcpSettings:  state.RemoteMcpSettings{GatewayURL: "gu", FleetMode: "fm"},
 		DefaultBackend:     string(fleet.BackendCoder),
 		MicSettings:        state.MicSettings{Enabled: true, Device: "md"},
+		ThemeSettings:      state.ThemeSettings{Name: "tn"},
 	})
 	if pc.GetGeneral().TmuxVimKeys == nil || pc.GetGeneral().GetTmuxVimKeys() ||
 		pc.GetGeneral().ShowHelpText != nil {
@@ -197,6 +199,9 @@ func TestConfigWirePlacement(t *testing.T) {
 	}
 	if !pc.GetMic().GetEnabled() || pc.GetMic().GetDevice() != "md" {
 		t.Fatalf("mic wire placement wrong: %+v", pc.GetMic())
+	}
+	if pc.GetTheme().GetName() != "tn" {
+		t.Fatalf("theme wire placement wrong: %+v", pc.GetTheme())
 	}
 	if pc.GetDefaultBackend() != fleetgrpc.BackendType_BACKEND_TYPE_CODER {
 		t.Fatalf("default backend wire placement wrong: %v", pc.GetDefaultBackend())

@@ -94,11 +94,7 @@ func (m model) viewReleaseNotes() string {
 	}
 	boxWidth = max(boxWidth, 20)
 
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("170")).
-		Padding(1, 2).
-		Width(boxWidth)
+	box := framedBox(activeTheme.Accent).Width(boxWidth)
 
 	// Inner content width = box width minus border (2) and padding (2*2).
 	contentWidth := max(boxWidth-6, 1)

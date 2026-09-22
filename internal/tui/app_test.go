@@ -182,6 +182,11 @@ func TestUpdateSettingsNavUpDown(t *testing.T) {
 	}
 
 	sp.Update(m, tea.KeyMsg{Type: tea.KeyDown})
+	if sp.settingsCursorItem(m) != settingsItemTheme {
+		t.Fatalf("item = %d, want %d", sp.settingsCursorItem(m), settingsItemTheme)
+	}
+
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyDown})
 	if sp.settingsCursorItem(m) != settingsItemDotfilesRepo {
 		t.Fatalf("item = %d, want %d", sp.settingsCursorItem(m), settingsItemDotfilesRepo)
 	}

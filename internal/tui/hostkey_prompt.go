@@ -242,11 +242,7 @@ func (m model) viewHostKeyPrompt() string {
 		boxWidth = m.width - 4
 	}
 	boxWidth = max(boxWidth, 30)
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("203")).
-		Padding(1, 2).
-		Width(boxWidth)
+	box := framedBox(activeTheme.Danger).Width(boxWidth)
 
 	where := uk.GetHost()
 	if uk.GetPort() != 0 {

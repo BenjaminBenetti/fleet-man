@@ -44,11 +44,16 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	// changing an unrelated setting from an older TUI would kick every provider
 	// and stop every instance's sound server. An absent group means "unchanged";
 	// a current client always sends the group, so it still overrides the seed.
+	//
+	// The theme group (issue #251) is seeded the same way: it is a client
+	// preference an older TUI never sends, and a zero base would reset the
+	// look to the default every time such a client saved anything.
 	base := &state.Config{}
 	micWasEnabled := false
 	if previous, err := state.LoadConfig(); err == nil {
 		micWasEnabled = previous.MicSettings.Enabled
 		base.MicSettings = previous.MicSettings
+		base.ThemeSettings = previous.ThemeSettings
 	}
 
 	if err := state.SaveConfig(protoconv.ConfigFromProto(req.GetConfig(), base)); err != nil {
