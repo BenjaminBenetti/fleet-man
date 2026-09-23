@@ -493,7 +493,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 	b.WriteString(fleetPage.viewActiveDialog(m))
 
 	if m.message != "" {
-		b.WriteString(messageStyle.Render(m.message))
+		b.WriteString(renderMessage(m.message, m.width))
 		b.WriteString("\n")
 	}
 
@@ -505,6 +505,17 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 	}
 
 	return b.String()
+}
+
+// renderMessage renders the status message wrapped to the terminal width:
+// the renderer cuts every line at the width, and a long message — a failed
+// clone's git output and its hint — tends to end with the part that says
+// what to do.
+func renderMessage(msg string, width int) string {
+	if width > 0 {
+		msg = ansi.Wrap(msg, width, "")
+	}
+	return messageStyle.Render(msg)
 }
 
 // viewActiveDialog renders the active dialog overlay appended below the

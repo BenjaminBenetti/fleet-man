@@ -126,11 +126,13 @@ type settingsPage struct {
 
 	// scrollOffset is the index of the first content line shown in the
 	// scrolling viewport. The mouse wheel adjusts it directly; View()
-	// clamps it each render. lastViewCursor is the cursor position at the
-	// previous render, used to chase the selection only when it actually
-	// moves (so a wheel scroll isn't yanked back to the cursor).
-	scrollOffset   int
-	lastViewCursor int
+	// clamps it each render. lastChase is the selection's geometry at the
+	// previous render, used to chase the selection only when that changes —
+	// the cursor moved, or its row grew or shifted or the viewport shrank
+	// under it (a toggle adding a status line and a message) — so a wheel
+	// scroll isn't yanked back to the cursor.
+	scrollOffset int
+	lastChase    settingsChase
 
 	// serverRemote snapshots the remote-gateway settings as last known to be on
 	// the server (taken when the page opens, refreshed after each successful
@@ -221,10 +223,10 @@ func newSettingsPage() *settingsPage {
 	input := textinput.New()
 	input.CharLimit = 256
 	return &settingsPage{
-		input:          input,
-		itemRowYs:      make(map[int]int),
-		itemHeights:    make(map[int]int),
-		lastViewCursor: -1,
+		input:       input,
+		itemRowYs:   make(map[int]int),
+		itemHeights: make(map[int]int),
+		lastChase:   settingsChase{cursor: -1},
 	}
 }
 
@@ -1946,7 +1948,7 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		tail.WriteString("\n")
 	}
 	if m.message != "" {
-		tail.WriteString(messageStyle.Render(m.message))
+		tail.WriteString(renderMessage(m.message, m.width))
 		tail.WriteString("\n")
 	}
 	if settingsPage.armadaAddStage == armadaAddURLIn || settingsPage.armadaAddStage == armadaAddTokenIn {
@@ -1981,21 +1983,22 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		viewHeight = totalLines
 	}
 
-	// Chase the selection only when it moved (keyboard nav or a click); a
-	// plain re-render after a wheel scroll leaves the viewport where it is.
+	// Chase the selection only when it or its geometry changed (keyboard
+	// nav, a click, a toggle that grows its row or the tail); a plain
+	// re-render after a wheel scroll leaves the viewport where it is.
 	offset := settingsPage.scrollOffset
-	if settingsPage.cursor != settingsPage.lastViewCursor {
-		if start, ok := itemLineStart[currentItem]; ok {
-			end := start + settingsPage.itemHeights[currentItem] - 1
-			if start < offset {
-				offset = start
-			}
-			if end > offset+viewHeight-1 {
-				offset = end - viewHeight + 1
-			}
+	start, selected := itemLineStart[currentItem]
+	chase := settingsChase{cursor: settingsPage.cursor, start: start, height: settingsPage.itemHeights[currentItem], viewHeight: viewHeight}
+	if selected && chase != settingsPage.lastChase {
+		end := start + chase.height - 1
+		if start < offset {
+			offset = start
+		}
+		if end > offset+viewHeight-1 {
+			offset = end - viewHeight + 1
 		}
 	}
-	settingsPage.lastViewCursor = settingsPage.cursor
+	settingsPage.lastChase = chase
 	offset = max(0, min(offset, totalLines-viewHeight))
 	settingsPage.scrollOffset = offset
 
@@ -2021,6 +2024,12 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 	b.WriteString(tail.String())
 
 	return b.String()
+}
+
+// settingsChase is what the settings viewport last chased: the cursor, where
+// its item's lines start, how many there are, and the viewport's height.
+type settingsChase struct {
+	cursor, start, height, viewHeight int
 }
 
 // renderScrollbar draws a vertical scrollbar viewHeight rows tall for a list

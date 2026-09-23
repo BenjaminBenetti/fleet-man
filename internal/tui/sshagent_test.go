@@ -11,6 +11,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agentfwd"
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
@@ -516,5 +518,64 @@ func TestAgentProviderNeverDialsAnotherRemote(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the provider dialed (or kept retrying) a remote it was not started for")
+	}
+}
+
+// TestArmadaAgentToggleKeepsTheRowInView: toggling [ agent ] adds a status
+// message below the viewport (and may grow the row) without moving the
+// cursor; a row at the viewport's bottom edge must stay visible. A wheel
+// scroll that changes nothing about the selection is still left alone.
+func TestArmadaAgentToggleKeepsTheRowInView(t *testing.T) {
+	clearArmadaEnv(t)
+	origSave := saveArmadaLocal
+	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) ([]configutil.ArmadaRemote, error) { return remotes, nil }
+	defer func() { saveArmadaLocal = origSave }()
+
+	sp := newSettingsPage()
+	m := armadaTestModel(sp)
+	m.height = 24
+	m.armadaRemotes = []configutil.ArmadaRemote{{URL: "ssh://ben@devbox"}}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemArmadaBase)
+	inView := func(when string) {
+		t.Helper()
+		c := sp.lastChase
+		if c.start < sp.scrollOffset || c.start+c.height > sp.scrollOffset+c.viewHeight {
+			t.Fatalf("%s: row lines %d..%d outside the viewport %d..%d", when, c.start, c.start+c.height-1, sp.scrollOffset, sp.scrollOffset+c.viewHeight-1)
+		}
+	}
+	sp.viewSettings(m)
+	inView("before the toggle")
+	if sp.scrollOffset == 0 {
+		t.Fatal("the test needs the row below the first screenful")
+	}
+
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
+	cmd := sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m.handleArmadaMsg(cmd().(armadaSaveResultMsg))
+	if m.message == "" {
+		t.Fatal("the toggle should leave a status message")
+	}
+	sp.viewSettings(m)
+	inView("after the toggle")
+
+	sp.scrollOffset = 0 // a wheel scroll to the top
+	sp.viewSettings(m)
+	if sp.scrollOffset != 0 {
+		t.Fatalf("a plain re-render yanked a wheel scroll back to offset %d", sp.scrollOffset)
+	}
+}
+
+// TestStatusMessageWrapsToTheTerminal: the renderer cuts lines at the
+// terminal width, and a clone failure's hint is its last, longest line.
+func TestStatusMessageWrapsToTheTerminal(t *testing.T) {
+	hint := "hint: no SSH key on this host is accepted by the git server — on a remote fleet, turn on [ agent: on ] on its row in Settings → Fleet Armada (right arrow, enter) to use your own keys, and keep the TUI connected"
+	out := renderMessage("Failed to create app/x: git clone failed\n"+hint, 80)
+	for _, line := range strings.Split(out, "\n") {
+		if w := lipgloss.Width(line); w > 80 {
+			t.Fatalf("line %q is %d cells wide, over the 80-column terminal", line, w)
+		}
+	}
+	if !strings.Contains(strings.Join(strings.Fields(ansi.Strip(out)), " "), "keep the TUI connected") {
+		t.Fatalf("the hint's end was lost: %q", out)
 	}
 }
