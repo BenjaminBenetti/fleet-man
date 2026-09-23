@@ -20,6 +20,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/agentfwd"
 	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/create"
+	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -1025,4 +1026,19 @@ func TestSSHAgentConcurrentHalfClosesAllGetTheirReplies(t *testing.T) {
 			t.Fatalf("round %d: %d of 40 half-closed clients got no reply", round, n)
 		}
 	}
+}
+
+// TestSSHAgentProvidersTellTheCloneHint: while a client provides its agent, a
+// failed clone's hint must not ask for forwarding to be turned on.
+func TestSSHAgentProvidersTellTheCloneHint(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	_, client := startAgentTestServer(t)
+	if got := agentsock.CloneForwarding(); got != gitutil.AgentNotForwarded {
+		t.Fatalf("no provider: %v", got)
+	}
+	p := attachRawProvider(t, client, "laptop")
+	eventually(t, "the provider to count as forwarding", func() bool { return agentsock.CloneForwarding() == gitutil.AgentForwarded })
+	p.cancel()
+	eventually(t, "the detach to end forwarding", func() bool { return agentsock.CloneForwarding() == gitutil.AgentNotForwarded })
 }

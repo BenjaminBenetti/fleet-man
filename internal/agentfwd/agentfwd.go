@@ -198,7 +198,7 @@ type runner struct {
 
 // key returns the provider's forwarding-bind key, made on first use.
 func (r *runner) key() ssh.Signer {
-	r.bindOnce.Do(func() { r.bindKey, _ = agentproto.NewBindKey() })
+	r.bindOnce.Do(func() { r.bindKey = agentproto.NewBindKey() })
 	return r.bindKey
 }
 

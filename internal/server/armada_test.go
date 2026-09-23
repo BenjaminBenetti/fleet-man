@@ -159,3 +159,33 @@ func TestSetArmadaInheritsForwardAgentForNewSSHRemotes(t *testing.T) {
 		t.Fatalf("existing remotes: forward_agent = %v/%v, want the user's false/true", got[0].GetForwardAgent(), got[1].GetForwardAgent())
 	}
 }
+
+// TestSetArmadaResolvesSSHConfigOutsideTheWriteLock: `ssh -G` runs the user's
+// Match exec commands, so it must not hold muWrite, which every config write
+// waits on.
+func TestSetArmadaResolvesSSHConfigOutsideTheWriteLock(t *testing.T) {
+	isolateFleetDir(t)
+	svc := newService()
+	orig := sshForwardAgentConfigured
+	t.Cleanup(func() { sshForwardAgentConfigured = orig })
+	lookups, locked := 0, 0
+	sshForwardAgentConfigured = func(context.Context, string) bool {
+		lookups++
+		if !svc.muWrite.TryLock() {
+			locked++
+			return true
+		}
+		svc.muWrite.Unlock()
+		return true
+	}
+	reply, err := svc.SetArmada(context.Background(), &fleetgrpc.SetArmadaRequest{Remotes: []*fleetgrpc.ArmadaRemote{{Url: "ssh://ben@devbox"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lookups != 1 || locked != 0 {
+		t.Fatalf("lookups = %d (want 1), made under muWrite = %d (want 0)", lookups, locked)
+	}
+	if !reply.GetRemotes()[0].GetForwardAgent() {
+		t.Fatal("the answer looked up ahead must still be applied")
+	}
+}

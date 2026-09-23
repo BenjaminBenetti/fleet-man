@@ -110,9 +110,8 @@ type agentHub struct {
 }
 
 func newAgentHub() *agentHub {
-	key, _ := agentproto.NewBindKey()
 	return &agentHub{
-		bindKey:   key,
+		bindKey:   agentproto.NewBindKey(),
 		instances: make(map[string]*instanceListener),
 		opening:   make(map[string]bool),
 		retryAt:   make(map[string]time.Time),
@@ -186,6 +185,7 @@ func (h *agentHub) addProvider(client string, yield bool) *agentProvider {
 	}
 	p.postStatus(p == after)
 	count := len(h.providers)
+	agentsock.SetForwarded(true)
 	first := h.onFirstProvider
 	h.onFirstProvider = nil
 	h.mu.Unlock()
@@ -209,6 +209,7 @@ func (h *agentHub) removeProvider(p *agentProvider) {
 		}
 	}
 	count := len(h.providers)
+	agentsock.SetForwarded(count > 0)
 	h.mu.Unlock()
 	p.finish()
 	flog.Info("ssh agent provider detached", "client", p.client, "providers", count)
@@ -225,7 +226,12 @@ func (h *agentHub) serveConn(conn net.Conn, origin string) {
 		if p.isSuspect() {
 			// Not answering (a laptop asleep, a dead link TCP has not given
 			// up on yet): trying it would stall this connection for
-			// agentReadyTimeout, every time.
+			// agentReadyTimeout, every time. Said once per silence: from
+			// here on git runs with another agent's keys, possibly the
+			// host's own.
+			if p.skipLogged.CompareAndSwap(false, true) {
+				flog.Warn("ssh agent provider not answering; skipping it until it does", "client", p.client)
+			}
 			continue
 		}
 		if p.relay(conn, origin, h.newConnID()) {
@@ -311,6 +317,9 @@ type agentProvider struct {
 	lastRecv atomic.Int64
 	// pingSeq numbers the probes.
 	pingSeq atomic.Uint64
+	// skipLogged: serveConn has said it skips this provider (suspect); reset
+	// once it talks again.
+	skipLogged atomic.Bool
 }
 
 // isSuspect reports whether the provider should be skipped.
@@ -572,6 +581,9 @@ func (p *agentProvider) deliver(up *fleetgrpc.SSHAgentUp) error {
 	// It is talking.
 	p.suspect.Store(false)
 	p.lastRecv.Store(monoNow())
+	if p.skipLogged.CompareAndSwap(true, false) {
+		flog.Info("ssh agent provider answering again", "client", p.client)
+	}
 	switch msg := up.GetMsg().(type) {
 	case *fleetgrpc.SSHAgentUp_Pong:
 	case *fleetgrpc.SSHAgentUp_Ready:
@@ -640,6 +652,14 @@ var errAgentForwardingOff = status.Error(codes.FailedPrecondition,
 // SSHAgent implements the agent-forwarding data plane. The first client frame
 // must carry the hello; afterwards the server announces connections and both
 // sides exchange their bytes (see exec.proto SSHAgentUp).
+//
+// Any caller becomes a provider, and a non-yielding one the active provider
+// for the host's clones and every instance socket. That is deliberate: every
+// caller is this daemon's owner — the local socket is 0600 and the remote
+// server requires the owner's bearer token (remote_auth.go), and tokens are
+// single-principal. Such a caller can already Exec anything on this host and
+// in every instance, so providing an agent gives it nothing more; and it can
+// only ever sign with its own agent's keys.
 func (s *service) SSHAgent(stream fleetgrpc.FleetService_SSHAgentServer) error {
 	if agentsock.CurrentMode() == agentsock.ModeOff {
 		return errAgentForwardingOff

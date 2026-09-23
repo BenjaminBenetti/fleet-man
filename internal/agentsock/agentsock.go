@@ -23,14 +23,20 @@
 package agentsock
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/atomicfile"
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
+	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 )
 
 const (
@@ -142,7 +148,25 @@ var (
 	relayServing  atomic.Bool
 	remoteClients atomic.Bool
 	providerSeen  atomic.Bool
+	// forwarded: a client is providing its agent to this daemon right now.
+	forwarded atomic.Bool
 )
+
+// SetForwarded records whether any client is providing its agent right now.
+func SetForwarded(on bool) { forwarded.Store(on) }
+
+// CloneForwarding is what agent forwarding could offer a clone this process
+// runs now, for gitutil.CloneFailureHint.
+func CloneForwarding() gitutil.AgentForwarding {
+	switch {
+	case CurrentMode() == ModeOff:
+		return gitutil.AgentForwardingOff
+	case forwarded.Load():
+		return gitutil.AgentForwarded
+	default:
+		return gitutil.AgentNotForwarded
+	}
+}
 
 // SetRelayServing records that this process serves the relay sockets. Turning
 // it off withdraws the published verdict.
@@ -171,7 +195,9 @@ func ProviderSeenPath() string {
 }
 
 // usablePath is where the daemon publishes RelayUsable for processes that run
-// a backend in-process (`fleet start`) and so cannot see its signals.
+// a backend in-process (`fleet start`) and so cannot see its signals. It holds
+// the daemon's pid: a daemon that was killed cannot withdraw its verdict, so a
+// reader only believes one whose daemon is still running.
 func usablePath() string {
 	return filepath.Join(filepath.Dir(HostSocketPath()), "usable")
 }
@@ -184,10 +210,26 @@ func usablePath() string {
 // must still work. Outside the daemon it reads the daemon's published verdict.
 func RelayUsable() bool {
 	if !relayServing.Load() {
-		_, err := os.Stat(usablePath())
-		return err == nil
+		return publishedUsable()
 	}
 	return relayUsable()
+}
+
+// publishedUsable reads the verdict a running daemon published.
+func publishedUsable() bool {
+	data, err := os.ReadFile(usablePath())
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(string(bytes.TrimSpace(data)))
+	return err == nil && pid > 0 && processAlive(pid)
+}
+
+// processAlive reports whether pid names a running process (one owned by
+// another user still counts).
+func processAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 func relayUsable() bool {
@@ -204,8 +246,10 @@ func publishUsable() {
 		return
 	}
 	if relayUsable() {
-		if f, err := os.OpenFile(usablePath(), os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
-			_ = f.Close()
+		// Rewritten only when it changes: this runs on every reconcile tick.
+		pid := []byte(strconv.Itoa(os.Getpid()))
+		if cur, err := os.ReadFile(usablePath()); err != nil || !bytes.Equal(cur, pid) {
+			_ = atomicfile.Write(usablePath(), pid, 0o600)
 		}
 		return
 	}

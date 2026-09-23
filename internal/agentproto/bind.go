@@ -24,12 +24,18 @@ import (
 const bindTimeout = 5 * time.Second
 
 // NewBindKey makes a throwaway key to sign forwarding binds with.
-func NewBindKey() (ssh.Signer, error) {
+func NewBindKey() ssh.Signer {
+	// Neither step can fail: crypto/rand never returns an error (Go 1.24+),
+	// and any ed25519 key makes a signer.
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, err
+		panic("agentproto: ed25519 key generation failed: " + err.Error())
 	}
-	return ssh.NewSignerFromKey(priv)
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		panic("agentproto: ed25519 signer: " + err.Error())
+	}
+	return signer
 }
 
 // BindAsForwarded sends the forwarding bind on agent and reads the answer.

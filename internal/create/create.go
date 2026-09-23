@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -95,7 +96,7 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 		gitClone.Stderr = io.MultiWriter(os.Stderr, &cloneBuf)
 		if err := gitClone.Run(); err != nil {
 			detail := cloneBuf.String()
-			if hint := gitutil.CloneFailureHint(detail); hint != "" {
+			if hint := gitutil.CloneFailureHint(detail, remoteURL, agentsock.CloneForwarding()); hint != "" {
 				detail = strings.TrimRight(detail, "\n") + "\n" + hint + "\n"
 			}
 			wrapped := fmt.Errorf("git clone failed: %w\n%s", err, detail)

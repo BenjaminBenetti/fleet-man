@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 )
@@ -178,7 +179,7 @@ func shallowClone(remoteURL, branch, dest string) error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		detail := strings.TrimSpace(string(out))
-		if hint := gitutil.CloneFailureHint(detail); hint != "" {
+		if hint := gitutil.CloneFailureHint(detail, remoteURL, agentsock.CloneForwarding()); hint != "" {
 			detail += "\n" + hint
 		}
 		return fmt.Errorf("%w: %s", err, detail)

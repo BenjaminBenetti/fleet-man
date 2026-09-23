@@ -418,6 +418,9 @@ func (h *agentHub) close() {
 	}
 	providers := h.providers
 	h.providers = nil
+	if len(providers) > 0 {
+		agentsock.SetForwarded(false)
+	}
 	h.mu.Unlock()
 
 	if relayStarted {

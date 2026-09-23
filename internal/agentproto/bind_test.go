@@ -122,10 +122,7 @@ func TestForwardingBindAppliesTheAgentsDestinationConstraints(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer bound.Close()
-	key, err := NewBindKey()
-	if err != nil {
-		t.Fatal(err)
-	}
+	key := NewBindKey()
 	if err := BindAsForwarded(bound, key); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
@@ -152,10 +149,7 @@ func TestForwardingBindIsAWellFormedExtension(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	signer, err := NewBindKey()
-	if err != nil {
-		t.Fatal(err)
-	}
+	signer := NewBindKey()
 	msg, err := ForwardingBind(signer)
 	if err != nil {
 		t.Fatal(err)
@@ -210,18 +204,12 @@ func TestForwardingBindLeavesTheHopToTheInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	relayKey, err := NewBindKey()
-	if err != nil {
-		t.Fatal(err)
-	}
+	relayKey := NewBindKey()
 	if err := BindAsForwarded(conn, relayKey); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 
-	hopKey, err := NewBindKey()
-	if err != nil {
-		t.Fatal(err)
-	}
+	hopKey := NewBindKey()
 	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatal(err)
 	}

@@ -96,7 +96,10 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 // rather than doubling it. nil-safe for tests that use newService() without a
 // serve loop.
 func (s *service) reconcileRemote(rm state.RemoteMcpSettings) {
-	// A remote client can only provide its SSH agent while remote access is on.
+	// Remote clients can only reach this daemon — and so provide an SSH agent
+	// — while remote access is on. This only decides whether instances are
+	// pointed at the relay when nothing else could ever answer there; it is
+	// not access control (see SSHAgent for who may provide).
 	agentsock.SetRemoteClients(rm.FleetEnabled)
 	if s.agent != nil {
 		s.agent.maybeRedirect()

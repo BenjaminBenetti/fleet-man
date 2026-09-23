@@ -3,8 +3,10 @@ package agentsock
 import (
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -161,5 +163,36 @@ func TestRelayUsablePublishedForOtherProcesses(t *testing.T) {
 	SetRelayServing(false)
 	if RelayUsable() {
 		t.Fatal("the verdict must be withdrawn when the relay stops")
+	}
+}
+
+// TestRelayUsablePublishedByADeadDaemon: a daemon that was killed cannot
+// withdraw its verdict, so the one it left behind is not believed — nor is
+// one from before the verdict carried the daemon's pid.
+func TestRelayUsablePublishedByADeadDaemon(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(HostSocketPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	relayServing.Store(false) // a CLI process
+	dead := exec.Command("true")
+	if err := dead.Run(); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"running daemon", strconv.Itoa(os.Getpid()), true},
+		{"killed daemon", strconv.Itoa(dead.Process.Pid), false},
+		{"older daemon's empty marker", "", false},
+	} {
+		if err := os.WriteFile(usablePath(), []byte(c.content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := RelayUsable(); got != c.want {
+			t.Errorf("%s: RelayUsable() = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

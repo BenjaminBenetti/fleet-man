@@ -335,11 +335,18 @@ func configMentionsAgent(workspaceDir string) bool {
 }
 
 // fileMentionsAgent reports whether path is a regular file (after symlinks) of
-// at most maxConfigBytes that contains SSH_AUTH_SOCK. The checks are made on
-// the opened file and the read is capped: a running instance can swap its
-// config for a link to a FIFO or /dev/zero between a stat and a read.
+// at most maxConfigBytes that contains SSH_AUTH_SOCK. The workspace is the
+// repository's and the instance's to shape, so a config may be a link to
+// anywhere on this host: only a regular file is opened at all (opening a
+// device can act on it), and since a running instance can swap the link
+// between that check and the open, the open itself can neither block (a FIFO)
+// nor take a terminal, and the checks are repeated on the opened file with a
+// capped read (/dev/zero).
 func fileMentionsAgent(path string) bool {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOCTTY, 0)
 	if err != nil {
 		return false
 	}

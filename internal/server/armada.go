@@ -35,6 +35,16 @@ func (s *service) GetArmada(_ context.Context, _ *fleetgrpc.GetArmadaRequest) (*
 // edited list). muWrite serializes it alongside config.json writes — both are
 // small whole-file replaces owned by this server.
 func (s *service) SetArmada(ctx context.Context, req *fleetgrpc.SetArmadaRequest) (*fleetgrpc.SetArmadaReply, error) {
+	next := protoToArmada(req.GetRemotes())
+	// Looked up before taking muWrite: `ssh -G` runs the user's Match exec
+	// commands, which may take as long as they like, and every config write
+	// waits on muWrite. The registry read here is only a first guess at which
+	// entries are new; inheritForwardAgent decides under the lock.
+	var resolved map[string]bool
+	if early, err := state.LoadArmada(); err == nil {
+		resolved = resolveForwardAgent(ctx, early, next)
+	}
+
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
@@ -42,8 +52,7 @@ func (s *service) SetArmada(ctx context.Context, req *fleetgrpc.SetArmadaRequest
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load armada: %v", err)
 	}
-	next := protoToArmada(req.GetRemotes())
-	inheritForwardAgent(ctx, prev, next)
+	inheritForwardAgent(ctx, prev, next, resolved)
 	if err := state.SaveArmada(next); err != nil {
 		return nil, status.Errorf(codes.Internal, "save armada: %v", err)
 	}
@@ -73,21 +82,47 @@ var sshForwardAgentConfigured = sshtunnel.ForwardAgentConfigured
 // inheritForwardAgent turns agent forwarding on for ssh:// remotes that this
 // edit ADDS when the user's ssh config already forwards an agent to that host:
 // registering a host you `ssh -A` into should behave the same way. Only new
-// entries are touched, so turning it off afterwards sticks.
-func inheritForwardAgent(ctx context.Context, prev, next *state.Armada) {
+// entries are touched, so turning it off afterwards sticks. resolved holds the
+// answers resolveForwardAgent looked up ahead (keyed by sshtunnel.Key); an
+// entry it lacks — the registry changed in between — is looked up here.
+func inheritForwardAgent(ctx context.Context, prev, next *state.Armada, resolved map[string]bool) {
+	for _, i := range addedSSHRemotes(prev, next) {
+		r := next.Remotes[i]
+		configured, ok := resolved[sshtunnel.Key(r.URL)]
+		if !ok {
+			configured = sshForwardAgentConfigured(ctx, r.URL)
+		}
+		next.Remotes[i].ForwardAgent = configured
+	}
+}
+
+// resolveForwardAgent looks up sshForwardAgentConfigured for the entries
+// inheritForwardAgent would touch, without changing next.
+func resolveForwardAgent(ctx context.Context, prev, next *state.Armada) map[string]bool {
+	resolved := make(map[string]bool)
+	for _, i := range addedSSHRemotes(prev, next) {
+		r := next.Remotes[i]
+		resolved[sshtunnel.Key(r.URL)] = sshForwardAgentConfigured(ctx, r.URL)
+	}
+	return resolved
+}
+
+// addedSSHRemotes indexes the ssh:// entries of next that prev does not have
+// (compared canonically) and that do not already forward the agent.
+func addedSSHRemotes(prev, next *state.Armada) []int {
 	known := make(map[string]bool)
 	for _, r := range prev.Remotes {
 		if key := sshtunnel.Key(r.URL); key != "" {
 			known[key] = true
 		}
 	}
+	var added []int
 	for i, r := range next.Remotes {
-		key := sshtunnel.Key(r.URL)
-		if key == "" || known[key] || r.ForwardAgent {
-			continue
+		if key := sshtunnel.Key(r.URL); key != "" && !known[key] && !r.ForwardAgent {
+			added = append(added, i)
 		}
-		next.Remotes[i].ForwardAgent = sshForwardAgentConfigured(ctx, r.URL)
 	}
+	return added
 }
 
 // droppedSSHRemotes lists the ssh:// URLs present in prev but not in next
