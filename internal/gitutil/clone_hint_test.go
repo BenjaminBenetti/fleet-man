@@ -27,7 +27,7 @@ func TestCloneFailureHint(t *testing.T) {
 	// With forwarding already on, or refused by the host, the toggle is not
 	// the answer.
 	const denied = "git@github.com: Permission denied (publickey)."
-	if got := CloneFailureHint(denied, "", AgentForwarded); strings.Contains(got, "turn on") || !strings.Contains(got, "forwards") {
+	if got := CloneFailureHint(denied, "", AgentForwarded); strings.Contains(got, "turn on") || !strings.Contains(got, "ssh-add -l") {
 		t.Fatalf("publickey hint with a forwarded agent = %q", got)
 	}
 	if got := CloneFailureHint(denied, "", AgentForwardingOff); strings.Contains(got, "turn on") || !strings.Contains(got, "FLEET_SSH_AGENT_SOCK=off") {

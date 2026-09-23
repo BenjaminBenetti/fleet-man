@@ -14,10 +14,13 @@ const (
 	// AgentNotForwarded: no client was forwarding its agent — the host's own
 	// keys, if any, were all the clone could offer.
 	AgentNotForwarded AgentForwarding = iota
-	// AgentForwarded: a client was forwarding its agent to this host.
+	// AgentForwarded: a client was attached to forward its agent to this host.
+	// Whether that agent served the clone is not known: it may hold no key,
+	// be unreachable on the client's machine, or not be answering at all.
 	AgentForwarded
 	// AgentForwardingOff: this host refuses agent forwarding
-	// (FLEET_SSH_AGENT_SOCK=off), so no client's keys can reach it.
+	// (FLEET_SSH_AGENT_SOCK=off), so no client's keys can reach it. The agent
+	// the daemon was started with still serves its clones.
 	AgentForwardingOff
 )
 
@@ -41,9 +44,9 @@ func CloneFailureHint(output, remote string, agent AgentForwarding) string {
 	case strings.Contains(output, "Permission denied (publickey"):
 		switch agent {
 		case AgentForwarded:
-			return "hint: the git server accepted none of the keys offered, including those of the agent your machine forwards — check that one of your keys has access to this repository"
+			return "hint: the git server accepted none of the keys offered, including any from the agent a connected client forwards — run `ssh-add -l` on your machine to check that it holds a key with access to this repository"
 		case AgentForwardingOff:
-			return "hint: no SSH key on this host is accepted by the git server, and this host has SSH agent forwarding turned off (FLEET_SSH_AGENT_SOCK=off), so your own keys cannot be used here"
+			return "hint: no SSH key this host offered is accepted by the git server, and this host has SSH agent forwarding turned off (FLEET_SSH_AGENT_SOCK=off), so it cannot use keys forwarded from another machine"
 		default:
 			// Names the control exactly as the TUI draws it: the toggle on
 			// the remote's row in Settings → Fleet Armada.

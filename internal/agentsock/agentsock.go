@@ -148,11 +148,12 @@ var (
 	relayServing  atomic.Bool
 	remoteClients atomic.Bool
 	providerSeen  atomic.Bool
-	// forwarded: a client is providing its agent to this daemon right now.
+	// forwarded: a client is attached to provide its agent right now (whether
+	// that agent can serve is only known per connection).
 	forwarded atomic.Bool
 )
 
-// SetForwarded records whether any client is providing its agent right now.
+// SetForwarded records whether any client is attached as a provider.
 func SetForwarded(on bool) { forwarded.Store(on) }
 
 // CloneForwarding is what agent forwarding could offer a clone this process
