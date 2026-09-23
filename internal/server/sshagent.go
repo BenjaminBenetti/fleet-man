@@ -93,6 +93,9 @@ type agentHub struct {
 	// onFirstProvider runs once, when the first provider ever attaches (the
 	// daemon persists that and starts relaying its own children).
 	onFirstProvider func()
+	// relayStarted: startAgentRelay published this daemon as the relay
+	// (agentsock.SetRelayServing); close withdraws it.
+	relayStarted bool
 	// redirect points the daemon's own SSH_AUTH_SOCK at the relay (once).
 	redirect func()
 
@@ -249,25 +252,27 @@ func (h *agentHub) logUse(p *agentProvider, origin string) {
 
 // serveFromAgent answers conn from the agent at sock — the one the daemon was
 // started with. Requests are served one at a time (agentproto.Serve), so a
-// client that half-closes after its request still gets its reply. A process
-// in an instance gets exactly what a provider would give it: its connection
-// is bound as forwarded and only listing and signing reach the agent. The
-// daemon's own children (origin "") are the user's own host processes and
-// keep full access, as they had before the relay.
+// client that half-closes after its request still gets its reply. Only
+// listing and signing reach the agent, whatever the origin: the host socket is
+// not only the daemon's own children's — codespaces' and coder's `ssh -A`
+// forward it into their workspaces, and a devcontainer config can mount it —
+// so no connection may manage the agent or load a provider library through it
+// (the CVE-2023-38408 class). A process in an instance is also bound as
+// forwarded, exactly as a provider would serve it; the daemon's own children
+// (origin "") are not, so its ssh still uses keys limited to this host.
 func (h *agentHub) serveFromAgent(conn net.Conn, sock, origin string) {
 	agent, err := net.DialTimeout("unix", sock, agentFallbackDialTimeout)
 	if err != nil {
 		return
 	}
 	defer agent.Close()
-	fromInstance := origin != ""
-	if fromInstance {
+	if origin != "" {
 		if err := agentproto.BindAsForwarded(agent, h.bindKey); err != nil {
 			return // a late answer would pose as the next reply
 		}
 	}
 	requests := &agentproto.MessageReader{Next: agentproto.ChunkReader(conn)}
-	_ = agentproto.Serve(requests, agent, fromInstance, func(reply []byte) bool {
+	_ = agentproto.Serve(requests, agent, true, func(reply []byte) bool {
 		_, err := conn.Write(reply)
 		return err == nil
 	})

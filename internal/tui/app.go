@@ -635,6 +635,7 @@ func (m model) Init() tea.Cmd {
 		// The armada registry feeds the main-page selector dropdown, so it
 		// loads at boot, not just when the settings page opens.
 		fetchArmadaCmd(),
+		armadaRecheckCmd(),
 	}
 	if len(m.creating) > 0 {
 		cmds = append(cmds, pollCreatingCmd())
@@ -960,7 +961,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case hostKeyTrustedMsg:
 		return m, tea.Batch(spinCmd, m.handleHostKeyTrusted(msg))
 
-	case armadaLoadedMsg, armadaPingTickMsg, armadaPingResultMsg,
+	case armadaLoadedMsg, armadaRecheckMsg, armadaPingTickMsg, armadaPingResultMsg,
 		armadaTestResultMsg, armadaSaveResultMsg, armadaSwitchedMsg,
 		armadaConfigLoadedMsg:
 		// Fleet Armada messages are model-level: the registry and per-remote

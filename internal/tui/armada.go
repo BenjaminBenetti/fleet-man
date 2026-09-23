@@ -77,6 +77,14 @@ type armadaPingResultMsg struct {
 // armadaPingTickMsg re-pings all remotes while the settings page is open.
 type armadaPingTickMsg struct{}
 
+// armadaRecheckMsg delivers the registry re-read on armadaRecheckInterval, so
+// a change made elsewhere (another TUI turning [ agent: on ] off) reaches this
+// TUI's agent provider without the user opening Settings.
+type armadaRecheckMsg struct {
+	remotes []configutil.ArmadaRemote
+	err     error
+}
+
 // armadaTestResultMsg delivers the registration connection test outcome for
 // the add flow ("+ Remote Fleet"). On success the remote is saved.
 type armadaTestResultMsg struct {
@@ -131,6 +139,18 @@ func fetchArmadaCmd() tea.Cmd {
 		remotes, err := fetchArmadaLocal()
 		return armadaLoadedMsg{remotes: remotes, err: err}
 	}
+}
+
+// armadaRecheckInterval is how often the TUI re-reads the registry (the same
+// cadence as a CLI command's provider). A var so tests can shorten it.
+var armadaRecheckInterval = 30 * time.Second
+
+// armadaRecheckCmd re-reads the registry after armadaRecheckInterval.
+func armadaRecheckCmd() tea.Cmd {
+	return tea.Tick(armadaRecheckInterval, func(time.Time) tea.Msg {
+		remotes, err := fetchArmadaLocal()
+		return armadaRecheckMsg{remotes: remotes, err: err}
+	})
 }
 
 // pingArmadaCmd probes one remote.
@@ -213,6 +233,15 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 		m.armadaRemotes = msg.remotes
 		m.syncAgentProvider()
 		return m.pingAllArmadaCmd()
+
+	case armadaRecheckMsg:
+		// Quietly: an unreadable registry keeps the current state until the
+		// next read, and an add/delete in flight owns the list until it lands.
+		if msg.err == nil && (settingsPage == nil || !settingsPage.armadaBusy) {
+			m.armadaRemotes = msg.remotes
+			m.syncAgentProvider()
+		}
+		return armadaRecheckCmd()
 
 	case armadaPingTickMsg:
 		if settingsPage == nil {

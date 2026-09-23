@@ -25,7 +25,7 @@ func newDownCmd() *cobra.Command {
 			instance := target.Instance
 			// The server tears down the container + workspace and removes the
 			// record (it errors NotFound for a missing target).
-			if err := runInstanceJob(cmd.Context(), func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error) {
+			if err := runInstanceJob(cmd.Context(), false, func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error) {
 				return svc.DestroyInstance(ctx, &fleetgrpc.DestroyInstanceRequest{Fleet: target.Fleet, Instance: &instance})
 			}); err != nil {
 				return err

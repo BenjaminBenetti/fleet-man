@@ -264,6 +264,13 @@ func (r *runner) runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient
 		return false, err
 	}
 	if err := stream.Send(&fleetgrpc.SSHAgentUp{Msg: &fleetgrpc.SSHAgentUp_Hello{Hello: &fleetgrpc.SSHAgentHello{Client: r.label, Yield: r.yield}}}); err != nil {
+		// Send reports only io.EOF once the daemon has ended the stream
+		// (refused, or an older fleetd without the RPC); its status — which
+		// decides between stopping, a slow retry and a backoff — comes from
+		// Recv.
+		if errors.Is(err, io.EOF) {
+			_, err = stream.Recv()
+		}
 		return false, err
 	}
 

@@ -50,7 +50,7 @@ func TestForwardAgentWhileProvidesForTheCommandsDuration(t *testing.T) {
 	t.Setenv(fleetclient.EnvSSH, "ssh://ben@devbox")
 	started, stopped := stubAgentForward(t, true)
 
-	stop := forwardAgentWhile(context.Background(), nil)
+	stop := forwardAgentWhile(context.Background(), nil, true)
 	if started.Load() != 1 {
 		t.Fatal("the provider should be attached before the command's work starts")
 	}
@@ -66,7 +66,7 @@ func TestForwardAgentWhileProvidesForTheCommandsDuration(t *testing.T) {
 func TestForwardAgentWhileIsANoOpWhenOff(t *testing.T) {
 	t.Setenv(fleetclient.EnvSSH, "ssh://ben@devbox")
 	started, _ := stubAgentForward(t, false)
-	forwardAgentWhile(context.Background(), nil)()
+	forwardAgentWhile(context.Background(), nil, true)()
 	if started.Load() != 0 {
 		t.Fatal("no provider when forwarding is off for the remote")
 	}
@@ -83,7 +83,7 @@ func TestForwardAgentWhileDoesNotWaitForeverOnASilentProvider(t *testing.T) {
 	t.Cleanup(func() { agentForwardAttachWait = orig })
 	agentForwardAttachWait = 200 * time.Millisecond
 	start := time.Now()
-	stop := forwardAgentWhile(context.Background(), nil)
+	stop := forwardAgentWhile(context.Background(), nil, true)
 	stop()
 	if elapsed := time.Since(start); elapsed > agentForwardAttachWait+2*time.Second {
 		t.Fatalf("waited %s for a provider that never attached", elapsed)
@@ -111,7 +111,7 @@ func TestForwardAgentWhileStopsWhenForwardingIsTurnedOff(t *testing.T) {
 	t.Cleanup(func() { agentForwardRecheck = orig })
 	agentForwardRecheck = 10 * time.Millisecond
 
-	stop := forwardAgentWhile(context.Background(), nil)
+	stop := forwardAgentWhile(context.Background(), nil, true)
 	defer stop()
 	if started.Load() != 1 {
 		t.Fatal("the provider should start while forwarding is on")
@@ -153,7 +153,7 @@ func TestForwardAgentWhileKeepsForwardingWhenTheRegistryIsUnreadable(t *testing.
 	t.Cleanup(func() { agentForwardRecheck = orig })
 	agentForwardRecheck = 10 * time.Millisecond
 
-	stop := forwardAgentWhile(context.Background(), nil)
+	stop := forwardAgentWhile(context.Background(), nil, true)
 	defer stop()
 	if started.Load() != 1 {
 		t.Fatal("the provider should start while forwarding is on")
@@ -228,7 +228,7 @@ func TestForwardAgentWhileTellsTheUserOnce(t *testing.T) {
 				}
 				<-ctx.Done()
 			}
-			forwardAgentWhile(context.Background(), nil)()
+			forwardAgentWhile(context.Background(), nil, true)()
 			if got := out.String(); got != c.want {
 				t.Fatalf("notice = %q, want %q", got, c.want)
 			}
@@ -259,7 +259,7 @@ func TestForwardAgentWhileIsSilentOnceItReturned(t *testing.T) {
 		}
 	}
 
-	stop := forwardAgentWhile(context.Background(), nil)
+	stop := forwardAgentWhile(context.Background(), nil, true)
 	for _, st := range []agentfwd.Status{
 		{State: agentfwd.StateNoAgent, Detail: "SSH_AUTH_SOCK is not set"},
 		{State: agentfwd.StateRefused, Detail: "turned off on this host"},
@@ -301,7 +301,7 @@ func TestForwardAgentWhileSpawnedByTheTUIDoesNotWait(t *testing.T) {
 	}
 
 	start := time.Now()
-	stop := forwardAgentWhile(context.Background(), nil)
+	stop := forwardAgentWhile(context.Background(), nil, true)
 	if elapsed := time.Since(start); elapsed >= agentForwardAttachWait/2 {
 		t.Errorf("waited %s for the provider although the TUI provides the agent", elapsed)
 	}
@@ -322,16 +322,22 @@ func TestForwardAgentWhileSpawnedByTheTUIDoesNotWait(t *testing.T) {
 
 // TestForwardAgentWhileLeavesTheNoticeToTheTUI: a reason forwarding cannot
 // work that the provider reports at once is printed by a command the user
-// ran, and not by one the TUI spawned (which still starts its provider).
+// ran, and not by a shell the TUI spawned (which still starts its provider).
+// A job ignores the hint: it may be stale, and a job's clone needs its own
+// provider attached first.
 func TestForwardAgentWhileLeavesTheNoticeToTheTUI(t *testing.T) {
+	const notice = "fleet: SSH agent forwarding: SSH_AUTH_SOCK is not set\n"
 	for _, c := range []struct {
-		hint string
-		want string
+		name  string
+		hint  string
+		shell bool
+		want  string
 	}{
-		{hint: "", want: "fleet: SSH agent forwarding: SSH_AUTH_SOCK is not set\n"},
-		{hint: "1", want: ""},
+		{name: "shell", hint: "", shell: true, want: notice},
+		{name: "tui-shell", hint: "1", shell: true, want: ""},
+		{name: "tui-job", hint: "1", shell: false, want: notice},
 	} {
-		t.Run("hint="+c.hint, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			t.Setenv(fleetclient.EnvGateway, "")
 			t.Setenv(fleetclient.EnvSSH, "ssh://ben@devbox")
 			started, _ := stubAgentForward(t, true)
@@ -344,7 +350,7 @@ func TestForwardAgentWhileLeavesTheNoticeToTheTUI(t *testing.T) {
 				close(reported)
 				<-ctx.Done()
 			}
-			stop := forwardAgentWhile(context.Background(), nil)
+			stop := forwardAgentWhile(context.Background(), nil, c.shell)
 			<-reported
 			stop()
 			if started.Load() != 1 {

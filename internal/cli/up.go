@@ -67,7 +67,7 @@ func newUpCmd() *cobra.Command {
 			if branchFlag != "" {
 				req.Branch = &branchFlag
 			}
-			if err := runInstanceJob(cmd.Context(), func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error) {
+			if err := runInstanceJob(cmd.Context(), true, func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error) {
 				return svc.CreateInstance(ctx, req)
 			}); err != nil {
 				return err

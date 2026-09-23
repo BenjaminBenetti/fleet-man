@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -528,5 +529,32 @@ func TestConfigMentionsAgent_SymlinkedDevcontainer(t *testing.T) {
 	}
 	if !configMentionsAgent(ws) {
 		t.Fatal("configMentionsAgent = false through a symlinked .devcontainer, want true")
+	}
+}
+
+// TestFileMentionsAgentSkipsSpecialFiles: a config an instance swapped for a
+// FIFO or an endless device is neither waited on nor read without bound.
+func TestFileMentionsAgentSkipsSpecialFiles(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "devcontainer.json")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	zero := filepath.Join(dir, "zero.json")
+	if err := os.Symlink("/dev/zero", zero); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan bool, 2)
+	go func() { done <- fileMentionsAgent(fifo) }()
+	go func() { done <- fileMentionsAgent(zero) }()
+	for range 2 {
+		select {
+		case got := <-done:
+			if got {
+				t.Fatal("a special file must not count as a config")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("fileMentionsAgent blocked on a special file")
+		}
 	}
 }

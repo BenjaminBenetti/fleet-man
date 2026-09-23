@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -170,6 +171,57 @@ func TestRunStopsOnAnOldDaemon(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run should return against a daemon without the RPC")
 	}
+}
+
+// eofOnHello is a client whose SSHAgent stream fails the hello with the bare
+// io.EOF grpc-go returns once the daemon has already ended the stream — the
+// order a refusing or older daemon produces when its reply outruns the Send.
+type eofOnHello struct{ fleetgrpc.FleetServiceClient }
+
+func (c eofOnHello) SSHAgent(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[fleetgrpc.SSHAgentUp, fleetgrpc.SSHAgentDown], error) {
+	s, err := c.FleetServiceClient.SSHAgent(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return eofSend{s}, nil
+}
+
+type eofSend struct {
+	grpc.BidiStreamingClient[fleetgrpc.SSHAgentUp, fleetgrpc.SSHAgentDown]
+}
+
+func (eofSend) Send(*fleetgrpc.SSHAgentUp) error { return io.EOF }
+
+// TestRunReadsTheStatusBehindAHelloEOF: the daemon's status, not the EOF
+// Send saw, decides — an older daemon still stops Run, a refusal is still
+// reported as one.
+func TestRunReadsTheStatusBehindAHelloEOF(t *testing.T) {
+	localAgent(t)
+	t.Run("old daemon", func(t *testing.T) {
+		client := eofOnHello{dialFake(t, &fleetgrpc.UnimplementedFleetServiceServer{})}
+		got := make(reports, 16)
+		done := make(chan struct{})
+		go func() {
+			Run(context.Background(), client, "test", got.report)
+			close(done)
+		}()
+		got.waitFor(t, StateUnsupported)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Run should return against a daemon without the RPC")
+		}
+	})
+	t.Run("refused", func(t *testing.T) {
+		client := eofOnHello{dialFake(t, &fakeDaemon{handle: func(fleetgrpc.FleetService_SSHAgentServer) error {
+			return status.Error(codes.FailedPrecondition, "SSH agent forwarding is turned off on this host")
+		}})}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		got := make(reports, 16)
+		go Run(ctx, client, "test", got.report)
+		got.waitFor(t, StateRefused)
+	})
 }
 
 func TestRunReportsARefusal(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -201,6 +202,39 @@ func TestSSHAgentRelayFallsBackToTheDaemonsAgent(t *testing.T) {
 	hostSock := filepath.Join(dir, "relay.sock")
 	if err := svc.agent.listenHost(hostSock); err != nil {
 		t.Fatal(err)
+	}
+	requireOnlyKey(t, hostSock, daemonKey)
+}
+
+// TestSSHAgentHostFallbackIsFiltered: the host socket reaches more than the
+// daemon's own children (codespaces/coder `ssh -A` forward it), so it never
+// lets a connection manage the daemon's agent either.
+func TestSSHAgentHostFallbackIsFiltered(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	daemonSock, daemonKey := startFakeAgent(t, dir, "daemon")
+
+	svc, _ := startAgentTestServer(t)
+	svc.agent.setFallback(daemonSock)
+	hostSock := filepath.Join(dir, "relay.sock")
+	if err := svc.agent.listenHost(hostSock); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("unix", hostSock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	client := agent.NewClient(conn)
+	if err := client.RemoveAll(); err == nil {
+		t.Fatal("the host socket must not remove the daemon agent's keys")
+	}
+	if err := client.Lock([]byte("x")); err == nil {
+		t.Fatal("the host socket must not lock the daemon's agent")
+	}
+	sig, err := client.Sign(daemonKey, []byte("d"))
+	if err != nil || daemonKey.Verify([]byte("d"), sig) != nil {
+		t.Fatalf("signing through the filtered host fallback: %v", err)
 	}
 	requireOnlyKey(t, hostSock, daemonKey)
 }
@@ -682,6 +716,62 @@ func TestStartAgentRelayRedirectsTheDaemonsAgent(t *testing.T) {
 	}
 	// A child of the daemon (git clone) reaches the original agent through it.
 	requireOnlyKey(t, os.Getenv(agentsock.EnvAuthSock), daemonKey)
+}
+
+// TestStartAgentRelayServesInstancesWithoutTheHostSocket: a HOME long enough
+// to put the host socket over the unix path limit leaves the daemon on its own
+// agent, but the instance sockets (bound through /proc/self/fd) still serve —
+// instances must not lose the agent the old direct mount gave them.
+func TestStartAgentRelayServesInstancesWithoutTheHostSocket(t *testing.T) {
+	dir := shortTempDir(t)
+	daemonSock, daemonKey := startFakeAgent(t, dir, "daemon")
+	home := filepath.Join(dir, strings.Repeat("h", 100))
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv(agentsock.EnvAuthSock, daemonSock)
+	t.Setenv(agentsock.EnvOrigin, "")
+	_ = os.Unsetenv(agentsock.EnvOrigin)
+	t.Setenv(agentsock.EnvOverride, "")
+	origHook := create.ControlDirReady
+	t.Cleanup(func() {
+		create.ControlDirReady = origHook
+		agentsock.SetRelayServing(false)
+	})
+
+	h := newAgentHub()
+	ctx, cancel := context.WithCancel(context.Background())
+	startAgentRelay(ctx, h)
+	t.Cleanup(func() {
+		cancel()
+		h.close()
+	})
+
+	if _, err := os.Lstat(agentsock.HostSocketPath()); err == nil {
+		t.Fatalf("the host socket %q should be over the path limit", agentsock.HostSocketPath())
+	}
+	if got := os.Getenv(agentsock.EnvAuthSock); got != daemonSock {
+		t.Fatalf("SSH_AUTH_SOCK = %q, want the daemon's own agent kept", got)
+	}
+	if !agentInstanceSocketsSupported {
+		return
+	}
+	if !agentsock.RelayUsable() {
+		t.Fatal("instances should still be pointed at the relay: their sockets serve")
+	}
+	control := state.ControlDir("f", "i")
+	if err := os.MkdirAll(control, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	create.ControlDirReady("f", "i")
+	// Connect through a short symlinked dir: the socket's own path is as
+	// long as the host one.
+	link := filepath.Join(dir, "c")
+	if err := os.Symlink(control, link); err != nil {
+		t.Fatal(err)
+	}
+	requireOnlyKey(t, filepath.Join(link, agentsock.SocketName), daemonKey)
 }
 
 func TestStartAgentRelayLeavesTheEnvironmentAloneWhenOff(t *testing.T) {

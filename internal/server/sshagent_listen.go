@@ -402,7 +402,8 @@ func (h *agentHub) close() {
 	h.mu.Lock()
 	h.closed = true
 	listeners := make([]*agentListener, 0, len(h.instances)+1)
-	hadHost := h.host != nil
+	relayStarted := h.relayStarted
+	h.relayStarted = false
 	if h.host != nil {
 		listeners = append(listeners, h.host)
 		h.host = nil
@@ -419,7 +420,7 @@ func (h *agentHub) close() {
 	h.providers = nil
 	h.mu.Unlock()
 
-	if hadHost {
+	if relayStarted {
 		agentsock.SetRelayServing(false)
 	}
 	for _, l := range listeners {
@@ -447,27 +448,33 @@ func startAgentRelay(ctx context.Context, h *agentHub) (done <-chan struct{}) {
 	origin := agentsock.OriginSock()
 	h.setFallback(origin)
 	if agentsock.CurrentMode() != agentsock.ModeOff {
+		// The instance sockets are served whether or not the host one can
+		// be: they are bound through /proc/self/fd, clear of the unix socket
+		// path limit a long HOME puts the host socket over.
+		_, err := os.Stat(agentsock.ProviderSeenPath())
+		agentsock.SetProviderSeen(err == nil)
+		agentsock.SetRelayServing(true)
+		h.mu.Lock()
+		h.relayStarted = true
+		h.onFirstProvider = func() {
+			if f, err := os.OpenFile(agentsock.ProviderSeenPath(), os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+				_ = f.Close()
+			}
+			agentsock.SetProviderSeen(true)
+			h.maybeRedirect()
+		}
+		h.mu.Unlock()
 		path := agentsock.HostSocketPath()
 		if err := h.listenHost(path); err != nil {
 			flog.Warn("ssh agent relay: host socket unavailable; the daemon keeps its own agent", "err", err)
 		} else {
 			var once sync.Once
-			_, err := os.Stat(agentsock.ProviderSeenPath())
-			agentsock.SetProviderSeen(err == nil)
-			agentsock.SetRelayServing(true)
 			h.mu.Lock()
 			h.redirect = func() {
 				once.Do(func() {
 					_ = os.Setenv(agentsock.EnvOrigin, origin)
 					_ = os.Setenv(agentsock.EnvAuthSock, path)
 				})
-			}
-			h.onFirstProvider = func() {
-				if f, err := os.OpenFile(agentsock.ProviderSeenPath(), os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
-					_ = f.Close()
-				}
-				agentsock.SetProviderSeen(true)
-				h.maybeRedirect()
 			}
 			h.mu.Unlock()
 			// Remote Fleet is not known yet (the config is reconciled after

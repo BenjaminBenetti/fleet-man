@@ -279,6 +279,29 @@ func TestAgentProviderStartsWhenTheRegistryLoads(t *testing.T) {
 	}
 }
 
+// TestAgentProviderFollowsTheRegistryRecheck: [ agent: on ] turned off
+// elsewhere (another TUI) stops this TUI's provider on the next re-read, and a
+// re-read that fails keeps it running; the recheck always re-arms.
+func TestAgentProviderFollowsTheRegistryRecheck(t *testing.T) {
+	clearArmadaEnv(t)
+	_, running := stubAgentProvider(t)
+	m := armadaTestModel(nil)
+	t.Setenv(fleetclient.EnvSSH, "ssh://ben@devbox")
+	m.handleArmadaMsg(armadaLoadedMsg{remotes: []configutil.ArmadaRemote{{URL: "ssh://ben@devbox", ForwardAgent: true}}})
+	waitFor(t, "the provider to start", func() bool { return running() == 1 })
+
+	if cmd := m.handleArmadaMsg(armadaRecheckMsg{err: context.DeadlineExceeded}); cmd == nil {
+		t.Fatal("a failed recheck must re-arm")
+	}
+	if running() != 1 {
+		t.Fatal("an unreadable registry must not stop the provider")
+	}
+	if cmd := m.handleArmadaMsg(armadaRecheckMsg{remotes: []configutil.ArmadaRemote{{URL: "ssh://ben@devbox"}}}); cmd == nil {
+		t.Fatal("the recheck must re-arm")
+	}
+	waitFor(t, "the provider to stop", func() bool { return running() == 0 })
+}
+
 // TestAgentProviderFollowsArmadaSwitches: switching to a remote with
 // forwarding off stops the provider; switching to one with it on starts it or
 // moves it there.

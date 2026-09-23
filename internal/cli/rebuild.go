@@ -29,7 +29,7 @@ func newRebuildCmd() *cobra.Command {
 			// The server validates the target, refuses an unsupported backend, and
 			// reprovisions the container in place (it errors NotFound / FailedPrecondition
 			// for a missing or non-rebuildable target).
-			if err := runInstanceJob(cmd.Context(), func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error) {
+			if err := runInstanceJob(cmd.Context(), true, func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error) {
 				return svc.RebuildInstance(ctx, &fleetgrpc.RebuildInstanceRequest{Fleet: target.Fleet, Instance: target.Instance})
 			}); err != nil {
 				return err

@@ -3,12 +3,14 @@ package devcontainer
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
@@ -333,14 +335,21 @@ func configMentionsAgent(workspaceDir string) bool {
 }
 
 // fileMentionsAgent reports whether path is a regular file (after symlinks) of
-// at most maxConfigBytes that contains SSH_AUTH_SOCK.
+// at most maxConfigBytes that contains SSH_AUTH_SOCK. The checks are made on
+// the opened file and the read is capped: a running instance can swap its
+// config for a link to a FIFO or /dev/zero between a stat and a read.
 func fileMentionsAgent(path string) bool {
-	info, err := os.Stat(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxConfigBytes {
 		return false
 	}
-	data, err := os.ReadFile(path)
-	return err == nil && strings.Contains(string(data), "SSH_AUTH_SOCK")
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	return err == nil && len(data) <= maxConfigBytes && strings.Contains(string(data), "SSH_AUTH_SOCK")
 }
 
 // matchesAny reports whether name matches one of the filepath.Match patterns.

@@ -34,6 +34,7 @@ when they need attention.
 - [MCP Server](#mcp-server)
 - [Remote MCP](#remote-mcp) — expose MCP & gRPC to remote agents via a fleet gateway
 - [Microphone](#microphone) — talk to the agents in your instances (voice input in a container)
+- [Your SSH agent on a remote fleet](#your-ssh-agent-on-a-remote-fleet) — your keys go with you to remote fleets, like `ssh -A`
 - [Environment Variables](#environment-variables)
 - [Requirements](#requirements)
 - [Development](#development)
@@ -595,9 +596,7 @@ How it fits together:
 
 Devcontainer instances only: Codespaces and Coder workspaces are skipped.
 
-## Environment Variables
-
-### Your SSH agent on a remote fleet
+## Your SSH agent on a remote fleet
 
 A remote host has its own SSH keys, not yours, so by default a remote fleet
 cannot `git clone` your private repos over ssh. Turn on **`[ agent: on ]`** on the
@@ -610,7 +609,7 @@ with it on only when your ssh config says `ForwardAgent yes` (or
 
 The TUI streams agent requests over the fleet connection itself, so it works for
 SSH and gateway remotes alike and needs nothing from the remote's `sshd`.
-Instance jobs (`fleet up`, `clone`, `rebuild`, …) and `fleet shell` against that
+`fleet up`, `clone`, `rebuild` and `fleet shell` against that
 remote carry your agent the same way for their duration; they step aside for a
 TUI that is also providing, rather than taking over from it. On the remote, the
 daemon listens on a relay socket in each instance's control directory
@@ -643,6 +642,8 @@ host its own deploy key for unattended work. The host's owner can refuse
 forwarding with `FLEET_SSH_AGENT_SOCK=off`. On a macOS host, instances keep
 Docker Desktop's agent (a host socket cannot cross into its VM); the host-side
 clone still uses yours.
+
+## Environment Variables
 
 Variables fleet **reads** (set them to configure behavior):
 
