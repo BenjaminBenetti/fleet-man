@@ -507,15 +507,21 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 	return b.String()
 }
 
-// renderMessage renders the status message wrapped to the terminal width:
-// the renderer cuts every line at the width, and a long message — a failed
-// clone's git output and its hint — tends to end with the part that says
-// what to do.
+// renderMessage renders the status message wrapped to the terminal width
+// (wrapToWidth): a long message — a failed clone's git output and its hint —
+// tends to end with the part that says what to do.
 func renderMessage(msg string, width int) string {
-	if width > 0 {
-		msg = ansi.Wrap(msg, width, "")
+	return messageStyle.Render(wrapToWidth(msg, width))
+}
+
+// wrapToWidth wraps s to the terminal width: the renderer cuts every line at
+// the width, so whatever runs past it is simply lost. A width of 0 (not yet
+// known) leaves s alone.
+func wrapToWidth(s string, width int) string {
+	if width <= 0 {
+		return s
 	}
-	return messageStyle.Render(msg)
+	return ansi.Wrap(s, width, "")
 }
 
 // viewActiveDialog renders the active dialog overlay appended below the

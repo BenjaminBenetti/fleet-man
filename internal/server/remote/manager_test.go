@@ -236,6 +236,30 @@ func newManagerForTest(mcpPort int, addr string, pool *x509.CertPool, opts ...Op
 	return m, statusCh
 }
 
+// startManager runs m until the test ends, and waits for Run to return before
+// the test's TempDir HOME is removed: Run persists the gateway session there,
+// and a write still in flight makes the TempDir cleanup fail ("directory not
+// empty"). The wait is bounded so a Run that never returns (a publish blocked
+// on a status channel nobody drains) fails the test by name instead of
+// hanging it until -timeout.
+func startManager(t *testing.T, m *Manager) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("Manager.Run did not return after cancel (a publish blocked?)")
+		}
+	})
+}
+
 // TestManagerConnectsServesAndDisables drives the full lifecycle against a real
 // TLS gateway: CONNECTING -> CONNECTED (with the gateway's public URL), the
 // session is persisted, the tunnel actually serves a request, and disabling
@@ -328,24 +352,6 @@ func TestManagerConnectsServesAndDisables(t *testing.T) {
 // TestManagerStickyReconnect verifies that after an established connection drops,
 // the manager reconnects supplying the previously-assigned session id so the
 // gateway can hand back the SAME public URL.
-// startManager runs m until the test ends, and waits for Run to return before
-// the test's TempDir HOME is removed: Run persists the gateway session there,
-// and a write still in flight makes the TempDir cleanup fail ("directory not
-// empty").
-func startManager(t *testing.T, m *Manager) {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		m.Run(ctx)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		<-done
-	})
-}
-
 func TestManagerStickyReconnect(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cert, pool := genTestTLS(t)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -272,4 +273,48 @@ func TestSSHAgentInstanceSocketIsRecreatedWhenReplaced(t *testing.T) {
 		t.Fatalf("the relay socket was not recreated after being replaced: %v", err)
 	}
 	_ = conn.Close()
+}
+
+// TestEnsureInstanceWaitsForAnOpenInFlight: the provisioning hook promises
+// the instance's socket exists when it returns — also when a reconcile is
+// opening the same socket at that moment, and when that open fails.
+func TestEnsureInstanceWaitsForAnOpenInFlight(t *testing.T) {
+	dir := shortTempDir(t)
+	t.Setenv("HOME", dir)
+	t.Setenv(agentsock.EnvOverride, "")
+	h := newAgentHub()
+	t.Cleanup(h.close)
+	control := state.ControlDir("f", "i")
+	if err := os.MkdirAll(control, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	inflight := make(chan struct{}) // a reconcile's open of f/i
+	h.mu.Lock()
+	h.opening["f/i"] = inflight
+	h.mu.Unlock()
+	returned := make(chan struct{})
+	go func() {
+		h.ensureInstance("f", "i")
+		close(returned)
+	}()
+	select {
+	case <-returned:
+		t.Fatal("the hook returned while another open of its socket was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// That open settles without a socket (it failed): the hook opens one.
+	h.mu.Lock()
+	delete(h.opening, "f/i")
+	close(inflight)
+	h.mu.Unlock()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the hook never returned")
+	}
+	if info, err := os.Lstat(filepath.Join(control, agentsock.SocketName)); err != nil || info.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("no instance socket once the hook returned: %v", err)
+	}
 }

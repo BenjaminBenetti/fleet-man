@@ -102,7 +102,7 @@ type agentHub struct {
 	// Listeners and live connections (sshagent_listen.go).
 	host      *agentListener
 	instances map[string]*instanceListener // "<fleet>/<instance>"
-	opening   map[string]bool              // instance listens in flight
+	opening   map[string]chan struct{}     // instance listens in flight; closed when each settles
 	retryAt   map[string]time.Time         // failed instance listens, retried after
 	conns     map[net.Conn]struct{}
 	closed    bool
@@ -113,7 +113,7 @@ func newAgentHub() *agentHub {
 	return &agentHub{
 		bindKey:   agentproto.NewBindKey(),
 		instances: make(map[string]*instanceListener),
-		opening:   make(map[string]bool),
+		opening:   make(map[string]chan struct{}),
 		retryAt:   make(map[string]time.Time),
 		conns:     make(map[net.Conn]struct{}),
 	}

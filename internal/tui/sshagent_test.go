@@ -609,3 +609,24 @@ func TestStatusMessageWrapsToTheTerminal(t *testing.T) {
 		t.Fatalf("the hint's end was lost: %q", out)
 	}
 }
+
+// TestArmadaRowHelpFitsAnEightyColumnTerminal: the renderer cuts lines at the
+// terminal width, so the row's key help — which ends with how to delete —
+// must fit a common 80 columns whole.
+func TestArmadaRowHelpFitsAnEightyColumnTerminal(t *testing.T) {
+	clearArmadaEnv(t)
+	sp := newSettingsPage()
+	m := armadaTestModel(sp)
+	m.width = 80
+	m.armadaRemotes = []configutil.ArmadaRemote{{URL: "ssh://ben@devbox"}}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemArmadaBase)
+	for _, line := range strings.Split(sp.viewSettings(m), "\n") {
+		if strings.Contains(line, "enter: ping now") {
+			if w := lipgloss.Width(line); w > 80 || !strings.Contains(line, "[ delete ] (enter twice)") {
+				t.Fatalf("help line (%d cells) = %q", w, ansi.Strip(line))
+			}
+			return
+		}
+	}
+	t.Fatal("no Armada row help line")
+}

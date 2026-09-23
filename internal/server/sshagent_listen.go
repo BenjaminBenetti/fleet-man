@@ -348,25 +348,50 @@ func (h *agentHub) openInstance(key, dir, containerID, workspace string, now boo
 	if !agentInstanceSocketsSupported {
 		return
 	}
-	h.mu.Lock()
-	_, listening := h.instances[key]
-	at, failed := h.retryAt[key]
-	if h.closed || listening || h.opening[key] || (failed && !now && time.Now().Before(at)) {
+	for {
+		h.mu.Lock()
+		_, listening := h.instances[key]
+		at, failed := h.retryAt[key]
+		if h.closed || listening || (failed && !now && time.Now().Before(at)) {
+			h.mu.Unlock()
+			return
+		}
+		if inflight, busy := h.opening[key]; busy {
+			h.mu.Unlock()
+			if !now {
+				return
+			}
+			// The provisioning hook promises the socket exists when it
+			// returns: wait for a reconcile's open of the same instance, and
+			// try again at once if that one failed.
+			<-inflight
+			continue
+		}
+		settled := make(chan struct{})
+		h.opening[key] = settled
+		h.mu.Unlock()
+
+		h.listenInstance(key, dir, containerID, workspace, failed)
+
+		h.mu.Lock()
+		delete(h.opening, key)
+		close(settled)
 		h.mu.Unlock()
 		return
 	}
-	h.opening[key] = true
-	h.mu.Unlock()
+}
 
+// listenInstance opens one instance's socket for openInstance, which holds
+// its slot in h.opening.
+func (h *agentHub) listenInstance(key, dir, containerID, workspace string, failedBefore bool) {
 	il := &instanceListener{dir: dir}
 	il.container.Store(containerID)
 	il.workspace.Store(workspace)
 	l, err := listenInstanceAgentSocket(dir, agentsock.SocketName, il, h.serveFrom(key))
 
 	h.mu.Lock()
-	delete(h.opening, key)
 	if err != nil {
-		if !failed {
+		if !failedBefore {
 			flog.Warn("ssh agent socket: listen failed", "instance", key, "err", err)
 		}
 		h.retryAt[key] = time.Now().Add(agentListenRetry)

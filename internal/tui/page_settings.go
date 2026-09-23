@@ -1932,7 +1932,7 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		tail.WriteString("\n")
 	}
 	if isArmadaRemoteItem(currentItem) && settingsPage.armadaAddStage == armadaAddNone {
-		tail.WriteString(dimStyle.Render("  enter: ping now  right/l: focus [ agent ] then [ delete ]  enter on [ agent ]: toggle SSH agent forwarding  enter twice on [ delete ]: remove"))
+		tail.WriteString(dimStyle.Render(wrapToWidth("  enter: ping now  right/l: [ agent ] (enter: toggle), [ delete ] (enter twice)", m.width)))
 		tail.WriteString("\n")
 	}
 	// Copy rows act on enter (not edit/cycle), so spell that out — the generic
