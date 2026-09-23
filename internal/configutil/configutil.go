@@ -36,6 +36,7 @@ type (
 	CodespacesSettings = state.CodespacesSettings
 	BrowserSettings    = state.BrowserSettings
 	MicSettings        = state.MicSettings
+	ThemeSettings      = state.ThemeSettings
 	AgentTool          = state.AgentTool
 	State              = state.State
 	GroupLayout        = state.GroupLayout

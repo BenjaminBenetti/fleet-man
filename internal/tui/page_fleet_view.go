@@ -96,7 +96,7 @@ func (m *model) renderChildRowLine(cursor, label string, style lipgloss.Style, r
 // box's border color; the label's column span is recorded for mouse
 // hit-testing. Falls back to a plain border when the box is too narrow.
 func (fleetPage *fleetPage) renderArmadaBorder(m *model, width int) string {
-	borderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
+	borderStyle := lipgloss.NewStyle().Foreground(activeTheme.Border)
 
 	name := m.armadaCurrentDisplay()
 	// The transport badge ([gtwy] / [ssh] / [tcp]) trails the selector so the

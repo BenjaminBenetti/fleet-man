@@ -34,6 +34,7 @@ when they need attention.
 - [MCP Server](#mcp-server)
 - [Remote MCP](#remote-mcp) — expose MCP & gRPC to remote agents via a fleet gateway
 - [Microphone](#microphone) — talk to the agents in your instances (voice input in a container)
+- [Themes](#themes) — color themes for the TUI (Gruvbox, Catppuccin, Tokyo Night, Solarized)
 - [Environment Variables](#environment-variables)
 - [Requirements](#requirements)
 - [Development](#development)
@@ -594,6 +595,35 @@ How it fits together:
   does nothing.
 
 Devcontainer instances only: Codespaces and Coder workspaces are skipped.
+
+## Themes
+
+The TUI ships with eight color themes — four dark, four light — chosen under
+**Settings → General → Theme** (`←`/`→` or `enter` cycles; the row previews each
+theme's key colors). The default, **Fleet**, is the original look.
+
+| Dark | Light |
+|------|-------|
+| Fleet (default) | Gruvbox Light |
+| Gruvbox Dark | Catppuccin Latte |
+| Catppuccin Mocha | Tokyo Night Day |
+| Tokyo Night | Solarized Light |
+
+A theme recolors everything fleet itself draws — the TUI, the instance color
+tags, the banner — and, inside tmux, the pane dividers of fleet's window (the
+previous divider styles are put back when fleet exits; Fleet leaves them
+alone). It does **not** recolor what runs *inside* the panes: a shell or an
+agent draws with your terminal emulator's palette, so set the emulator to the
+matching scheme and fleet's accents will agree with it. Fleet never paints a
+page background either, so a light theme is a set of accents that read on a
+light terminal, not a light page.
+
+The theme is a preference of the machine you sit at, not of a fleet: it is
+stored on your local daemon (like the [armada](#fleet-armada-multiple-remote-fleets)
+registry) and stays put when you switch the TUI onto a remote fleet. Hex
+colors need a truecolor terminal; inside tmux that means tmux must advertise
+it (e.g. `set -as terminal-features ",*:RGB"`), otherwise the shades round to
+the nearest of the 256 ANSI colors.
 
 ## Environment Variables
 

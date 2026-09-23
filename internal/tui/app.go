@@ -23,7 +23,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // ===========================================
@@ -148,6 +147,19 @@ type model struct {
 	// instead of suspending the TUI.
 	inHostTmux bool // true when TMUX env var is set at startup
 
+	// themeName is the active color theme (issue #251): a CLIENT preference
+	// read from the LOCAL daemon's config, never from the fleet the TUI is
+	// switched onto — see theme_client.go. Empty until resolved (Fleet look).
+	// themeSaved is the last name known to be persisted locally, to revert to
+	// when an asynchronous save fails.
+	// themeSaving marks a local save in flight (remote TUIs; see selectTheme)
+	// and themePicked that the user chose a theme this session, so a late
+	// boot-time load can't overwrite it.
+	themeName   string
+	themeSaved  string
+	themeSaving bool
+	themePicked bool
+
 	// Update check
 	updateAvailable string // non-empty = new version tag from GitHub
 
@@ -197,7 +209,7 @@ func needsDepsCheck() bool {
 func newModel() model {
 	spinnerModel := spinner.New()
 	spinnerModel.Spinner = spinner.Dot
-	spinnerModel.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("170"))
+	spinnerModel.Style = spinnerStyle
 
 	agentSpinnerModel := spinner.New()
 	agentSpinnerModel.Spinner = spinner.Spinner{
@@ -260,6 +272,15 @@ func newModel() model {
 	}
 
 	m.reload()
+
+	// A local TUI just fetched its own daemon's config, so the theme is in
+	// hand: apply it before the first frame. A remote-booted TUI resolves it
+	// asynchronously from the local daemon (Init → fetchThemeCmd) — its
+	// m.config belongs to the remote.
+	if !fleetclient.IsRemote() && m.config != nil {
+		m.setTheme(m.config.ThemeSettings.Name)
+		m.themeSaved = m.themeName
+	}
 
 	// Rehydrate saved pane layouts from disk so group restores after
 	// a fleet restart use the exact geometry the user left behind,
@@ -631,6 +652,11 @@ func (m model) Init() tea.Cmd {
 		// loads at boot, not just when the settings page opens.
 		fetchArmadaCmd(),
 	}
+	if fleetclient.IsRemote() {
+		// The theme lives on the LOCAL daemon; a remote-booted TUI's config
+		// is the remote's, so fetch the preference separately.
+		cmds = append(cmds, fetchThemeCmd())
+	}
 	if len(m.creating) > 0 {
 		cmds = append(cmds, pollCreatingCmd())
 	}
@@ -961,6 +987,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// statuses outlive page switches (the main-page selector needs them
 		// too), so they are not forwarded to the active page.
 		return m, tea.Batch(spinCmd, m.handleArmadaMsg(msg))
+
+	case themeLoadedMsg, themeSavedMsg:
+		// Theme messages are model-level too: the look outlives page switches.
+		return m, tea.Batch(spinCmd, m.handleThemeMsg(msg))
 
 	case updateCheckMsg:
 		if msg.latestVersion != "" {
@@ -1323,6 +1353,7 @@ func (m model) View() string {
 			unbindHostSplitKeys()
 			unbindHostCloseKeys()
 			unbindRefocusTUIKey()
+			restorePaneChrome()
 		}
 		return ""
 	}

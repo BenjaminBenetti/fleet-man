@@ -1,6 +1,9 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/BenjaminBenetti/fleet-man/internal/theme"
+	"github.com/charmbracelet/lipgloss"
+)
 
 // ===========================================
 // Instance Colors
@@ -17,17 +20,25 @@ type InstanceColorOption struct {
 const instanceColorWhite = "white"
 
 // instanceColors is the ordered cycle list of selectable instance colors.
-// The first entry is the default (no custom styling applied).
-var instanceColors = []InstanceColorOption{
-	{Name: instanceColorWhite},
-	{Name: "red", Color: lipgloss.Color("196")},
-	{Name: "orange", Color: lipgloss.Color("214")},
-	{Name: "yellow", Color: lipgloss.Color("226")},
-	{Name: "green", Color: lipgloss.Color("42")},
-	{Name: "cyan", Color: lipgloss.Color("39")},
-	{Name: "blue", Color: lipgloss.Color("69")},
-	{Name: "purple", Color: lipgloss.Color("170")},
-	{Name: "pink", Color: lipgloss.Color("213")},
+// The first entry is the default (no custom styling applied). The NAMES are
+// what an instance stores (its color is portable across themes); the colors
+// behind them come from the active theme's palette — applyTheme rebuilds the
+// list, so "purple" under Gruvbox is Gruvbox's purple.
+var instanceColors = buildInstanceColors(theme.Fleet().Instance)
+
+// buildInstanceColors maps the fixed color names onto a theme's palette.
+func buildInstanceColors(p theme.InstancePalette) []InstanceColorOption {
+	return []InstanceColorOption{
+		{Name: instanceColorWhite},
+		{Name: "red", Color: p.Red},
+		{Name: "orange", Color: p.Orange},
+		{Name: "yellow", Color: p.Yellow},
+		{Name: "green", Color: p.Green},
+		{Name: "cyan", Color: p.Cyan},
+		{Name: "blue", Color: p.Blue},
+		{Name: "purple", Color: p.Purple},
+		{Name: "pink", Color: p.Pink},
+	}
 }
 
 // nextInstanceColor returns the next color name in instanceColors starting

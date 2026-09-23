@@ -14,6 +14,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/doctor"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
+	"github.com/BenjaminBenetti/fleet-man/internal/theme"
 	"github.com/aymanbagabas/go-osc52/v2"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -35,6 +36,7 @@ const (
 	settingsItemDotfilesScript
 	settingsItemDotfilesAutoInstall
 	settingsItemDotfilesSetup
+	settingsItemTheme // color theme (issue #251); cycles with ←/→
 
 	settingsItemCodespacesMachine = 500 // codespaces settings start here
 
@@ -289,7 +291,7 @@ var settingsSections = []settingsSection{
 	{
 		Title: "General",
 		Items: func(_ *model) []int {
-			return []int{settingsItemTmuxVimKeys, settingsItemShowHelpText, settingsItemUpdate}
+			return []int{settingsItemTmuxVimKeys, settingsItemShowHelpText, settingsItemTheme, settingsItemUpdate}
 		},
 	},
 	{
@@ -739,6 +741,25 @@ func (settingsPage *settingsPage) cycleDaemonLogLevel(direction int) {
 	settingsPage.logLevel = max(0, min(settingsPage.logLevel+direction, len(daemonLogLevels)-1))
 }
 
+// cycleTheme steps the color theme by direction (wrapping) and persists it as
+// the client preference — see model.selectTheme for the local/remote split.
+// The new look applies immediately (the styles are rebuilt before this View).
+func (settingsPage *settingsPage) cycleTheme(m *model, direction int) tea.Cmd {
+	return m.selectTheme(theme.Next(m.themeName, direction))
+}
+
+// themeValue renders the Theme row's value: the name, a swatch of the theme's
+// key colors (so the row previews the scheme without applying it), and the
+// dark/light kind.
+func themeValue(m *model) string {
+	t := theme.Lookup(m.themeName)
+	swatch := ""
+	for _, c := range []lipgloss.Color{t.Accent, t.Primary, t.Success, t.Warning, t.Error} {
+		swatch += lipgloss.NewStyle().Foreground(c).Render("●")
+	}
+	return fmt.Sprintf("[ %s ]  %s  %s", t.Name, swatch, dimStyle.Render(t.Kind()))
+}
+
 // cycleCodespacesMachine cycles through available codespace machine types.
 func (settingsPage *settingsPage) cycleCodespacesMachine(m *model, direction int) {
 	if m.config == nil || len(m.codespaceMachines) == 0 {
@@ -1006,6 +1027,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleRemoteWebhookEnabled(m)
 			} else if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, -1)
+			} else if item == settingsItemTheme {
+				return settingsPage.cycleTheme(m, -1)
 			} else if item == settingsItemMicEnabled {
 				return settingsPage.toggleMicEnabled(m)
 			} else if item == settingsItemMicDevice {
@@ -1042,6 +1065,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.toggleRemoteWebhookEnabled(m)
 			} else if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, 1)
+			} else if item == settingsItemTheme {
+				return settingsPage.cycleTheme(m, 1)
 			} else if item == settingsItemMicEnabled {
 				return settingsPage.toggleMicEnabled(m)
 			} else if item == settingsItemMicDevice {
@@ -1157,6 +1182,9 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, 1)
 				return nil
+			}
+			if item == settingsItemTheme {
+				return settingsPage.cycleTheme(m, 1)
 			}
 			if item == settingsItemMicEnabled {
 				return settingsPage.toggleMicEnabled(m)
@@ -1563,6 +1591,9 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				helpTextValue = "[ on ]"
 			}
 			recordRow(settingsItemShowHelpText, settingsPage.renderSettingsRow(m, currentItem == settingsItemShowHelpText, "Show help text", helpTextValue))
+			listContent.WriteString("\n")
+
+			recordRow(settingsItemTheme, settingsPage.renderSettingsRow(m, currentItem == settingsItemTheme, "Theme", themeValue(m)))
 
 			if m.updateAvailable != "" {
 				listContent.WriteString("\n")
