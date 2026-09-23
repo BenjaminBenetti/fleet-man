@@ -1983,13 +1983,17 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		viewHeight = totalLines
 	}
 
-	// Chase the selection only when it or its geometry changed (keyboard
-	// nav, a click, a toggle that grows its row or the tail); a plain
-	// re-render after a wheel scroll leaves the viewport where it is.
+	// Chase the selection when the cursor moved (keyboard nav, a click), or
+	// when its geometry changed while it was in view (a toggle that grows
+	// its row or the tail). Geometry also changes on its own — the ping
+	// sweep re-wraps an erroring remote's row every few seconds — so once a
+	// wheel scroll has taken the selection out of view, it stays put.
 	offset := settingsPage.scrollOffset
 	start, selected := itemLineStart[currentItem]
 	chase := settingsChase{cursor: settingsPage.cursor, start: start, height: settingsPage.itemHeights[currentItem], viewHeight: viewHeight}
-	if selected && chase != settingsPage.lastChase {
+	last := settingsPage.lastChase
+	wasInView := last.start >= offset && last.start+last.height <= offset+last.viewHeight
+	if selected && (chase.cursor != last.cursor || (chase != last && wasInView)) {
 		end := start + chase.height - 1
 		if start < offset {
 			offset = start

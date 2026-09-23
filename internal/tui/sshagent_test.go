@@ -565,6 +565,33 @@ func TestArmadaAgentToggleKeepsTheRowInView(t *testing.T) {
 	}
 }
 
+// TestSettingsPingSweepLeavesAWheelScrollAlone: the ping sweep re-wraps an
+// erroring remote's row (pinging… ↔ error <text>) every few seconds; that
+// must not yank a viewport the user wheel-scrolled away back to the cursor.
+func TestSettingsPingSweepLeavesAWheelScrollAlone(t *testing.T) {
+	clearArmadaEnv(t)
+	for _, width := range []int{80, 100, 120, 140} {
+		sp := newSettingsPage()
+		m := armadaTestModel(sp)
+		m.width, m.height = width, 24
+		const url = "ssh://ben@devbox"
+		m.armadaRemotes = []configutil.ArmadaRemote{{URL: url}}
+		m.armadaStatus[url] = armadaStatus{state: armadaStatusError, err: "unknown session — daemon offline or Remote Fleet disabled"}
+		sp.cursor = settingsPositionOf(sp, m, settingsItemArmadaBase)
+		sp.viewSettings(m)
+
+		sp.scrollOffset = 0 // a wheel scroll to the top
+		sp.viewSettings(m)
+		m.armadaStatus[url] = armadaStatus{state: armadaStatusPinging}
+		sp.viewSettings(m)
+		m.armadaStatus[url] = armadaStatus{state: armadaStatusError, err: "unknown session — daemon offline or Remote Fleet disabled"}
+		sp.viewSettings(m)
+		if sp.scrollOffset != 0 {
+			t.Fatalf("width %d: the ping sweep yanked a wheel scroll to offset %d", width, sp.scrollOffset)
+		}
+	}
+}
+
 // TestStatusMessageWrapsToTheTerminal: the renderer cuts lines at the
 // terminal width, and a clone failure's hint is its last, longest line.
 func TestStatusMessageWrapsToTheTerminal(t *testing.T) {
