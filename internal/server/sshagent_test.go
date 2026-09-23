@@ -20,6 +20,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/agentfwd"
 	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/create"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"golang.org/x/crypto/ssh"
@@ -668,6 +669,17 @@ func TestSSHAgentSilentProviderIsSkipped(t *testing.T) {
 	sleeper.nextOpen()
 }
 
+// seedAgentInstance records instance f/i, as create does before its
+// provisioning hook opens the instance's socket: the relay's reconcile closes
+// the socket of any instance the state does not list.
+func seedAgentInstance(t *testing.T) {
+	t.Helper()
+	inst := &fleet.Instance{Name: "i", Backend: fleet.BackendDevcontainer, Status: fleet.StatusCreating}
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{"f": {Name: "f", Instances: []*fleet.Instance{inst}}}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+}
+
 func TestStartAgentRelayRedirectsTheDaemonsAgent(t *testing.T) {
 	dir := shortTempDir(t)
 	t.Setenv("HOME", dir)
@@ -682,6 +694,7 @@ func TestStartAgentRelayRedirectsTheDaemonsAgent(t *testing.T) {
 		create.ControlDirReady = origHook
 		agentsock.SetRelayServing(false)
 	})
+	seedAgentInstance(t)
 
 	h := newAgentHub()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -740,6 +753,7 @@ func TestStartAgentRelayServesInstancesWithoutTheHostSocket(t *testing.T) {
 		create.ControlDirReady = origHook
 		agentsock.SetRelayServing(false)
 	})
+	seedAgentInstance(t)
 
 	h := newAgentHub()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -766,6 +780,14 @@ func TestStartAgentRelayServesInstancesWithoutTheHostSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	create.ControlDirReady("f", "i")
+	// The relay's reconcile runs on its own schedule: run one here so the
+	// socket is known to survive it (it closes any instance's the state
+	// does not list).
+	st, err := state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.syncInstances(st)
 	// Connect through a short symlinked dir: the socket's own path is as
 	// long as the host one.
 	link := filepath.Join(dir, "c")

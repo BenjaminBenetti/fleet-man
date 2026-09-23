@@ -579,6 +579,9 @@ func TestSettingsPingSweepLeavesAWheelScrollAlone(t *testing.T) {
 		m.armadaStatus[url] = armadaStatus{state: armadaStatusError, err: "unknown session — daemon offline or Remote Fleet disabled"}
 		sp.cursor = settingsPositionOf(sp, m, settingsItemArmadaBase)
 		sp.viewSettings(m)
+		if c := sp.lastChase; c.start+c.height <= c.viewHeight {
+			t.Fatalf("width %d: the test needs the row below the first screenful", width)
+		}
 
 		sp.scrollOffset = 0 // a wheel scroll to the top
 		sp.viewSettings(m)

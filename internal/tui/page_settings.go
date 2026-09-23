@@ -127,10 +127,10 @@ type settingsPage struct {
 	// scrollOffset is the index of the first content line shown in the
 	// scrolling viewport. The mouse wheel adjusts it directly; View()
 	// clamps it each render. lastChase is the selection's geometry at the
-	// previous render, used to chase the selection only when that changes —
-	// the cursor moved, or its row grew or shifted or the viewport shrank
-	// under it (a toggle adding a status line and a message) — so a wheel
-	// scroll isn't yanked back to the cursor.
+	// previous render. The viewport chases the selection when the cursor
+	// moved, or when that geometry changed (its row grew or shifted, or the
+	// viewport shrank under it) while the selection was in view. Once a wheel
+	// scroll has taken the selection out of view, only a cursor move chases.
 	scrollOffset int
 	lastChase    settingsChase
 
