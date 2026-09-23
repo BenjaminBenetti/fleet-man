@@ -99,6 +99,15 @@ message MicSettings {
   string device = 2;
 }
 
+// ThemeSettings is the TUI color theme — a CLIENT preference (like the armada
+// registry) that clients read from and write to their LOCAL daemon only, so a
+// TUI switched onto a remote fleet keeps its own look (issue #251).
+message ThemeSettings {
+  // A built-in theme name ("Fleet", "Gruvbox Dark", …); empty or unknown
+  // means Fleet. The server stores it verbatim — the theme list is client-side.
+  string name = 1;
+}
+
 message Config {
   GeneralSettings general = 1;
   AgentSettings agent = 2;
@@ -116,6 +125,7 @@ message Config {
   reserved 9 to 20;
 
   MicSettings mic = 21;
+  ThemeSettings theme = 22;
 }
 
 message GetConfigRequest {}

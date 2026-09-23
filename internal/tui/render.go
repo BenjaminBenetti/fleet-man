@@ -180,10 +180,10 @@ func remoteIndicator(m *model) string {
 }
 
 func renderGradient(text string) string {
-	// Gradient from light cyan to deep blue
+	// The theme's banner gradient (Fleet: light cyan to deep blue).
 	type rgb struct{ r, g, b float64 }
-	from := rgb{130, 220, 255}
-	to := rgb{60, 80, 200}
+	from := rgb{activeTheme.GradientFrom.R, activeTheme.GradientFrom.G, activeTheme.GradientFrom.B}
+	to := rgb{activeTheme.GradientTo.R, activeTheme.GradientTo.G, activeTheme.GradientTo.B}
 
 	lines := strings.Split(text, "\n")
 	// Find max line length for consistent gradient

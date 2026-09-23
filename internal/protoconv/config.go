@@ -31,6 +31,7 @@ func ConfigToProto(c *configutil.Config) *fleetgrpc.Config {
 			Enabled: c.MicSettings.Enabled,
 			Device:  c.MicSettings.Device,
 		},
+		Theme: &fleetgrpc.ThemeSettings{Name: c.ThemeSettings.Name},
 	}
 
 	if c.GeneralSettings.TmuxVimKeys != nil {
@@ -141,6 +142,10 @@ func ConfigFromProto(pc *fleetgrpc.Config, base *configutil.Config) *configutil.
 	if mic := pc.GetMic(); mic != nil {
 		c.MicSettings.Enabled = mic.GetEnabled()
 		c.MicSettings.Device = mic.GetDevice()
+	}
+
+	if th := pc.GetTheme(); th != nil {
+		c.ThemeSettings.Name = th.GetName()
 	}
 
 	c.DefaultBackend = string(BackendFromProto(pc.GetDefaultBackend()))
