@@ -56,7 +56,7 @@ message ResolveArmadaRemoteReply {
   string token = 2;
 }
 
-// SSHHostKey is one public key ssh-keyscan reported for an ssh:// remote,
+// SSHHostKey is one public key ssh-keyscan reported for an SSH host,
 // with the SHA256 fingerprint ssh-keygen computed for it and the exact
 // known_hosts line that would trust it.
 message SSHHostKey {
@@ -79,7 +79,7 @@ message SSHHostKey {
 // this way — that is a plain error naming the offending known_hosts line, and
 // is never offered for acceptance.
 message UnknownSSHHostKey {
-  // The ssh:// URL the resolve was for.
+  // The Armada ssh:// URL, or the repository URL in a GitHostKeyPrompt.
   string url = 1;
   // The known_hosts lookup name ssh used, exactly as it printed it — "host" or
   // "[host]:port" for a non-default port (or a HostKeyAlias).
@@ -109,6 +109,23 @@ message TrustSSHHostKeyRequest {
 message TrustSSHHostKeyReply {
   string addr = 1;
   string token = 2;
+}
+
+// A connected interactive client receives clone host-key decisions here.
+// The first, empty frame acknowledges registration. A later frame with only
+// request_id withdraws an expired/cancelled prompt. key.url is the git URL;
+// known_hosts_path belongs to the daemon, including for remote connections.
+message GitHostKeyPrompt {
+  string request_id = 1;
+  UnknownSSHHostKey key = 2;
+}
+
+// First send an empty answer to register. Subsequent answers must echo an
+// outstanding request_id on this stream and one exact offered line. An empty
+// line rejects. Arbitrary entries and answers from other streams are refused.
+message GitHostKeyAnswer {
+  string request_id = 1;
+  string known_hosts_line = 2;
 }
 
 message GetArmadaRequest {}

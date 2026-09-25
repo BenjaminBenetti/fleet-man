@@ -21,6 +21,8 @@ var runInstanceJob = func(ctx context.Context, forwardAgent bool, open func(cont
 		return err
 	}
 	defer conn.Close()
+	stopPrompts := gitHostKeyPromptsWhile(ctx, conn.Service())
+	defer stopPrompts()
 
 	// A remote job that clones (forwardAgent: up, clone, rebuild) may do so
 	// over ssh on the remote's host: carry the user's agent there for its

@@ -6,6 +6,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/inspector"
 	devcontainercheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/devcontainer"
 	homedircheck "github.com/BenjaminBenetti/fleet-man/internal/inspector/check/homedir"
@@ -23,7 +24,7 @@ import (
 // inspectorOpen is the package-var seam over inspector.Open so tests can hand
 // the handler a prepared Repo without a network clone (the openForwardBridge
 // precedent in forward.go).
-var inspectorOpen = inspector.Open
+var inspectorOpen = inspector.OpenContext
 
 // InspectRepo shallow-clones remote_url (optionally at branch), reports
 // whether the repo declares a devcontainer config, and — when detect_home_dir
@@ -33,13 +34,13 @@ var inspectorOpen = inspector.Open
 // check may shell out to docker (and pull the devcontainer image) — that is
 // the point: it runs against the daemon host's docker, the one provisioning
 // will use. Clients must therefore call this with a generous deadline.
-func (s *service) InspectRepo(_ context.Context, req *fleetgrpc.InspectRepoRequest) (*fleetgrpc.InspectRepoReply, error) {
+func (s *service) InspectRepo(ctx context.Context, req *fleetgrpc.InspectRepoRequest) (*fleetgrpc.InspectRepoReply, error) {
 	remoteURL := req.GetRemoteUrl()
 	if remoteURL == "" {
 		return nil, status.Error(codes.InvalidArgument, "remote_url is required")
 	}
 
-	repo, err := inspectorOpen(remoteURL, req.GetBranch())
+	repo, err := inspectorOpen(gitutil.WithHostKeyPrompt(ctx, s.gitHostKeys.ask), remoteURL, req.GetBranch())
 	if err != nil {
 		// FailedPrecondition rather than Internal: the clone error text
 		// (unreachable host, bad credentials, unknown branch) is the user-facing

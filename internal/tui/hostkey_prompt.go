@@ -49,7 +49,8 @@ type hostKeyPrompt struct {
 	url    string
 	key    *fleetgrpc.UnknownSSHHostKey
 	origin hostKeyOrigin
-	busy   bool // TrustSSHHostKey in flight
+	busy   bool           // TrustSSHHostKey in flight
+	git    *gitHostKeyMsg // clone approval on the connected daemon, if non-nil
 }
 
 // hostKeyTrustedMsg delivers the accept's outcome.
@@ -133,6 +134,9 @@ func (m *model) resolveHostKeyPrompt(key string) tea.Cmd {
 	if p == nil || p.busy {
 		return nil
 	}
+	if p.git != nil {
+		return m.resolveGitHostKey(key)
+	}
 	switch key {
 	case "a":
 		p.busy = true
@@ -141,6 +145,7 @@ func (m *model) resolveHostKeyPrompt(key string) tea.Cmd {
 	case "r", "n", "esc":
 		m.hostKeyDeclined[hostKeyDeclineKey(p.url, p.key)] = true
 		m.hostKeyPrompt = nil
+		m.showNextGitHostKey()
 		m.armadaStatus[p.url] = armadaStatus{state: armadaStatusError, err: "host key rejected"}
 		// An add flow waiting on this remote is cancelled whichever path raised
 		// the prompt (a Connect prompt for the FLEET_SSH remote can absorb that
@@ -187,6 +192,7 @@ func trustHostKeyCmd(url, line string, origin hostKeyOrigin) tea.Cmd {
 // reports another unknown key, asks again.
 func (m *model) handleHostKeyTrusted(msg hostKeyTrustedMsg) tea.Cmd {
 	m.hostKeyPrompt = nil
+	defer m.showNextGitHostKey()
 	if msg.err != nil {
 		if m.offerHostKey(msg.url, msg.err, msg.origin) {
 			return nil
@@ -264,6 +270,10 @@ func (m model) viewHostKeyPrompt() string {
 		rows.WriteString("\n" + dialogHint.Render("also offered (not added): "+strings.Join(others, ", ")))
 	}
 	hint := dialogLabel.Render("[a]ccept and connect   [r]eject (esc)")
+	if p.git != nil {
+		intro = dialogHint.Render("The fleet host does not trust this git server yet. Verify the fingerprint with the server administrator before accepting. The key is saved on the connected fleet host.")
+		hint = dialogLabel.Render("[a]ccept and retry clone   [r]eject (esc)")
+	}
 	if p.busy {
 		hint = m.spinner.View() + " trusting and connecting…"
 	}

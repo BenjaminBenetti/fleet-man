@@ -7,6 +7,9 @@ import (
 
 func TestCloneFailureHint(t *testing.T) {
 	const hostKey = "Host key verification failed.\nfatal: Could not read from remote repository."
+	if got := CloneFailureHint("REMOTE HOST IDENTIFICATION HAS CHANGED\n"+hostKey, "git@host:r.git", AgentNotForwarded); strings.Contains(got, "retry with") || !strings.Contains(got, "will not offer") {
+		t.Fatalf("changed key must not suggest approval: %q", got)
+	}
 	if got := CloneFailureHint(hostKey, "git@gitlab.com:team/repo.git", AgentNotForwarded); !strings.Contains(got, "host key") || !strings.Contains(got, "`ssh -T git@gitlab.com`") {
 		t.Fatalf("host key failure hint = %q", got)
 	}

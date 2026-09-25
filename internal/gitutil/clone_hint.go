@@ -33,12 +33,14 @@ const (
 // asks for a toggle that is already on.
 func CloneFailureHint(output, remote string, agent AgentForwarding) string {
 	switch {
+	case strings.Contains(output, "REMOTE HOST IDENTIFICATION HAS CHANGED"), strings.Contains(output, "has changed and you have requested strict checking"), strings.Contains(output, "Offending "), strings.Contains(output, "REVOKED HOST KEY DETECTED"):
+		return "hint: the git server's SSH host key has changed or was revoked — verify the host and fix the offending known_hosts entry on the daemon host; fleet will not offer it for acceptance"
 	case strings.Contains(output, "Host key verification failed"):
 		try := "e.g. `ssh -T git@github.com`"
 		if cmd := sshTestCommand(remote); cmd != "" {
 			try = "`" + cmd + "`"
 		}
-		return "hint: this host does not know the git server's SSH host key yet, and the fleet daemon cannot ask — connect to it once from this host (" + try + ") to trust it"
+		return "hint: this host does not trust the git server's SSH host key — retry with the fleet TUI connected or fleet up on a terminal to review its fingerprint, or connect to it once from this host (" + try + ") to trust it"
 	// No closing paren: servers that also offer other methods answer
 	// "(publickey,password)" and the like.
 	case strings.Contains(output, "Permission denied (publickey"):

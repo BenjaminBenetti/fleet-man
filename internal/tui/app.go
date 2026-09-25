@@ -69,6 +69,7 @@ type model struct {
 	// hostKeyDeclined remembers rejected remote|fingerprint pairs so
 	// background reconnects don't re-ask.
 	hostKeyPrompt   *hostKeyPrompt
+	gitHostKeyQueue []*gitHostKeyMsg
 	hostKeyDeclined map[string]bool
 
 	// bootGateway/bootToken capture FLEET_GATEWAY/FLEET_TOKEN as they were at
@@ -986,6 +987,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case hostKeyTrustedMsg:
 		return m, tea.Batch(spinCmd, m.handleHostKeyTrusted(msg))
+
+	case *gitHostKeyMsg:
+		m.gitHostKeyQueue = append(m.gitHostKeyQueue, msg)
+		m.showNextGitHostKey()
+		return m, spinCmd
+
+	case gitHostKeyClosedMsg:
+		if m.hostKeyPrompt != nil && m.hostKeyPrompt.git == msg.prompt {
+			m.hostKeyPrompt = nil
+		}
+		m.showNextGitHostKey()
+		return m, spinCmd
 
 	case armadaLoadedMsg, armadaRecheckMsg, armadaPingTickMsg, armadaPingResultMsg,
 		armadaTestResultMsg, armadaSaveResultMsg, armadaSwitchedMsg,

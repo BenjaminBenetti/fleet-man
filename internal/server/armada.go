@@ -201,17 +201,7 @@ func sshResolveStatus(url string, err error) error {
 	st := status.New(codes.FailedPrecondition, err.Error())
 	var uk *sshtunnel.UnknownHostKeyError
 	if errors.As(err, &uk) {
-		detail := &fleetgrpc.UnknownSSHHostKey{
-			Url:            url,
-			Name:           uk.Name,
-			Host:           uk.Host,
-			Port:           uint32(uk.Port),
-			KeyType:        uk.KeyType,
-			KnownHostsPath: uk.KnownHostsPath,
-		}
-		for _, k := range uk.Keys {
-			detail.Keys = append(detail.Keys, &fleetgrpc.SSHHostKey{KeyType: k.Type, Fingerprint: k.Fingerprint, KnownHostsLine: k.Line})
-		}
+		detail := sshHostKeyDetail(url, uk)
 		if withDetail, derr := st.WithDetails(detail); derr == nil {
 			st = withDetail
 		}

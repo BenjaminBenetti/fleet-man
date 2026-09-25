@@ -19,7 +19,9 @@ import (
 func stubInspectorOpen(t *testing.T, fn func(remoteURL, branch string) (*inspector.Repo, error)) {
 	t.Helper()
 	orig := inspectorOpen
-	inspectorOpen = fn
+	inspectorOpen = func(_ context.Context, remoteURL, branch string) (*inspector.Repo, error) {
+		return fn(remoteURL, branch)
+	}
 	t.Cleanup(func() { inspectorOpen = orig })
 }
 

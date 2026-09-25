@@ -85,6 +85,10 @@ service FleetService {
   // ssh:// remote, then resolve it again. Local-only, like ResolveArmadaRemote.
   rpc TrustSSHHostKey(TrustSSHHostKeyRequest) returns (TrustSSHHostKeyReply);
 
+  // Interactive approval of unknown git-host keys on THIS daemon's host.
+  // Unlike Armada trust, this is available to authenticated remote clients.
+  rpc GitHostKeys(stream GitHostKeyAnswer) returns (stream GitHostKeyPrompt);
+
   // ---- Interactive backend operations ----
   rpc Exec(stream ExecIn) returns (stream ExecOut);
   rpc ResolveExecCommand(ResolveExecCommandRequest) returns (ResolveExecCommandReply);

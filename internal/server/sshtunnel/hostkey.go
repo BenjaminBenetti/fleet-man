@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -135,6 +136,10 @@ func classifySSHFailure(stderr string) sshFailure {
 		f.changed = c
 		return f
 	}
+	if strings.Contains(stderr, "REMOTE HOST IDENTIFICATION HAS CHANGED") || reChangedHost.MatchString(stderr) || strings.Contains(stderr, "REVOKED HOST KEY DETECTED") {
+		f.changed = &ChangedHostKeyError{}
+		return f
+	}
 	if m := reUnknownHostKey.FindStringSubmatch(stderr); m != nil {
 		f.unknown = &struct{ keyType, name string }{m[1], m[2]}
 	}
@@ -158,6 +163,30 @@ func hostKeyError(t Target, stderr string) error {
 		return &unknownHostKeyRefusal{target: t, keyType: f.unknown.keyType, name: f.unknown.name}
 	}
 	return nil
+}
+
+// ProbeHostKey shares Armada's refusal classification and host-key probe with
+// daemon git clones. A changed key is an error, never an offer. Callers must
+// use the same OpenSSH target/config as the failed command.
+func ProbeHostKey(ctx context.Context, t Target, stderr string) (*UnknownHostKeyError, error) {
+	err := hostKeyError(t, stderr)
+	var refusal *unknownHostKeyRefusal
+	if errors.As(err, &refusal) {
+		return defaultProber().probeHostKeys(ctx, refusal)
+	}
+	return nil, err
+}
+
+// TrustOfferedHostKey writes only a line from a daemon-produced offer, using
+// the same writer as TrustSSHHostKey. The caller must obtain explicit human
+// approval first; neither a path nor new key material comes from the client.
+func TrustOfferedHostKey(offer *UnknownHostKeyError, line string) error {
+	for _, key := range offer.Keys {
+		if line == key.Line {
+			return appendKnownHosts(offer.KnownHostsPath, line)
+		}
+	}
+	return ErrKeyNotOffered
 }
 
 // sshEffectiveConfig is what `ssh -G` reports for a target: where ssh really
@@ -428,12 +457,18 @@ func validKnownHostsLine(line string) bool {
 	return len(strings.Fields(line)) == 3
 }
 
+// Serialize Armada and git-clone accepts so simultaneous approvals cannot
+// append the same key twice or race the missing-newline repair.
+var knownHostsMu sync.Mutex
+
 // appendKnownHosts adds line to path: the directory is created 0700 and the
 // file 0600 when missing, existing lines are never touched, a missing final
 // newline is repaired first, and a line already present is not duplicated.
 // Only an absolute, real file is written (never "none", /dev/null, or a
 // relative path that would land in the daemon's working directory).
 func appendKnownHosts(path, line string) error {
+	knownHostsMu.Lock()
+	defer knownHostsMu.Unlock()
 	if !validKnownHostsLine(line) {
 		return fmt.Errorf("refusing to write malformed known_hosts line %q", line)
 	}

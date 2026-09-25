@@ -19,7 +19,7 @@ func stubCreateJob(t *testing.T) *string {
 	t.Helper()
 	var seen string
 	orig := jobRunCreate
-	jobRunCreate = func(fleetName, instanceName, remote, branch string, verbose bool, b fleet.BackendType) error {
+	jobRunCreate = func(_ context.Context, fleetName, instanceName, remote, branch string, verbose bool, b fleet.BackendType) error {
 		seen = remote
 		return state.Update(func(st *state.State) error {
 			if f, ok := st.Fleets[fleetName]; ok {

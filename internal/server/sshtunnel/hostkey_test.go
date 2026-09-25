@@ -53,6 +53,11 @@ func TestClassifySSHFailure(t *testing.T) {
 	if f := classifySSHFailure(stderrChanged + stderrUnknown); f.changed == nil || f.unknown != nil {
 		t.Fatalf("changed must win over unknown: %+v", f)
 	}
+	for _, marker := range []string{"REMOTE HOST IDENTIFICATION HAS CHANGED", "Host key for desktop has changed", "REVOKED HOST KEY DETECTED"} {
+		if f := classifySSHFailure(marker + "\n" + stderrUnknown); f.changed == nil || f.unknown != nil {
+			t.Fatalf("%q without an offending file must still prevent acceptance: %+v", marker, f)
+		}
+	}
 }
 
 func TestChangedHostKeyErrorNamesFileAndLine(t *testing.T) {

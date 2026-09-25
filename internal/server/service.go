@@ -34,7 +34,8 @@ type service struct {
 	mic *micHub
 	// agent is the SSH-agent relay (sshagent.go): provider streams and the
 	// relay sockets the daemon's children and instances connect to.
-	agent *agentHub
+	agent       *agentHub
+	gitHostKeys gitHostKeyHub
 
 	// remote drives the outbound remote-MCP gateway tunnel. Set in server.go
 	// after the MCP listener binds (so it knows the loopback port); nil for tests

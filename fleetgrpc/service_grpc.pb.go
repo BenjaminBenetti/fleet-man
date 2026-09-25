@@ -46,6 +46,7 @@ const (
 	FleetService_SetArmada_FullMethodName              = "/fleetgrpc.FleetService/SetArmada"
 	FleetService_ResolveArmadaRemote_FullMethodName    = "/fleetgrpc.FleetService/ResolveArmadaRemote"
 	FleetService_TrustSSHHostKey_FullMethodName        = "/fleetgrpc.FleetService/TrustSSHHostKey"
+	FleetService_GitHostKeys_FullMethodName            = "/fleetgrpc.FleetService/GitHostKeys"
 	FleetService_Exec_FullMethodName                   = "/fleetgrpc.FleetService/Exec"
 	FleetService_ResolveExecCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveExecCommand"
 	FleetService_ResolveLogsCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveLogsCommand"
@@ -126,6 +127,9 @@ type FleetServiceClient interface {
 	// Trust one host key the daemon offered (UnknownSSHHostKey detail) for an
 	// ssh:// remote, then resolve it again. Local-only, like ResolveArmadaRemote.
 	TrustSSHHostKey(ctx context.Context, in *TrustSSHHostKeyRequest, opts ...grpc.CallOption) (*TrustSSHHostKeyReply, error)
+	// Interactive approval of unknown git-host keys on THIS daemon's host.
+	// Unlike Armada trust, this is available to authenticated remote clients.
+	GitHostKeys(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GitHostKeyAnswer, GitHostKeyPrompt], error)
 	// ---- Interactive backend operations ----
 	Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecIn, ExecOut], error)
 	ResolveExecCommand(ctx context.Context, in *ResolveExecCommandRequest, opts ...grpc.CallOption) (*ResolveExecCommandReply, error)
@@ -510,9 +514,22 @@ func (c *fleetServiceClient) TrustSSHHostKey(ctx context.Context, in *TrustSSHHo
 	return out, nil
 }
 
+func (c *fleetServiceClient) GitHostKeys(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GitHostKeyAnswer, GitHostKeyPrompt], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[7], FleetService_GitHostKeys_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[GitHostKeyAnswer, GitHostKeyPrompt]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_GitHostKeysClient = grpc.BidiStreamingClient[GitHostKeyAnswer, GitHostKeyPrompt]
+
 func (c *fleetServiceClient) Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecIn, ExecOut], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[7], FleetService_Exec_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[8], FleetService_Exec_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -545,7 +562,7 @@ func (c *fleetServiceClient) ResolveLogsCommand(ctx context.Context, in *Resolve
 
 func (c *fleetServiceClient) Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[8], FleetService_Logs_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[9], FleetService_Logs_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -574,7 +591,7 @@ func (c *fleetServiceClient) TriggerLogs(ctx context.Context, in *TriggerLogsReq
 
 func (c *fleetServiceClient) Forward(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardChunk, ForwardChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[9], FleetService_Forward_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[10], FleetService_Forward_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -587,7 +604,7 @@ type FleetService_ForwardClient = grpc.BidiStreamingClient[ForwardChunk, Forward
 
 func (c *fleetServiceClient) Mic(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[MicUp, MicDown], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[10], FleetService_Mic_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[11], FleetService_Mic_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -600,7 +617,7 @@ type FleetService_MicClient = grpc.BidiStreamingClient[MicUp, MicDown]
 
 func (c *fleetServiceClient) SSHAgent(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SSHAgentUp, SSHAgentDown], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[11], FleetService_SSHAgent_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[12], FleetService_SSHAgent_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -613,7 +630,7 @@ type FleetService_SSHAgentClient = grpc.BidiStreamingClient[SSHAgentUp, SSHAgent
 
 func (c *fleetServiceClient) CopyFile(ctx context.Context, in *CopyFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CopyFileChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[12], FleetService_CopyFile_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[13], FleetService_CopyFile_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -632,7 +649,7 @@ type FleetService_CopyFileClient = grpc.ServerStreamingClient[CopyFileChunk]
 
 func (c *fleetServiceClient) CopyInto(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CopyIntoChunk, CopyIntoReply], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[13], FleetService_CopyInto_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[14], FleetService_CopyInto_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -747,6 +764,9 @@ type FleetServiceServer interface {
 	// Trust one host key the daemon offered (UnknownSSHHostKey detail) for an
 	// ssh:// remote, then resolve it again. Local-only, like ResolveArmadaRemote.
 	TrustSSHHostKey(context.Context, *TrustSSHHostKeyRequest) (*TrustSSHHostKeyReply, error)
+	// Interactive approval of unknown git-host keys on THIS daemon's host.
+	// Unlike Armada trust, this is available to authenticated remote clients.
+	GitHostKeys(grpc.BidiStreamingServer[GitHostKeyAnswer, GitHostKeyPrompt]) error
 	// ---- Interactive backend operations ----
 	Exec(grpc.BidiStreamingServer[ExecIn, ExecOut]) error
 	ResolveExecCommand(context.Context, *ResolveExecCommandRequest) (*ResolveExecCommandReply, error)
@@ -878,6 +898,9 @@ func (UnimplementedFleetServiceServer) ResolveArmadaRemote(context.Context, *Res
 }
 func (UnimplementedFleetServiceServer) TrustSSHHostKey(context.Context, *TrustSSHHostKeyRequest) (*TrustSSHHostKeyReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TrustSSHHostKey not implemented")
+}
+func (UnimplementedFleetServiceServer) GitHostKeys(grpc.BidiStreamingServer[GitHostKeyAnswer, GitHostKeyPrompt]) error {
+	return status.Errorf(codes.Unimplemented, "method GitHostKeys not implemented")
 }
 func (UnimplementedFleetServiceServer) Exec(grpc.BidiStreamingServer[ExecIn, ExecOut]) error {
 	return status.Errorf(codes.Unimplemented, "method Exec not implemented")
@@ -1379,6 +1402,13 @@ func _FleetService_TrustSSHHostKey_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FleetService_GitHostKeys_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(FleetServiceServer).GitHostKeys(&grpc.GenericServerStream[GitHostKeyAnswer, GitHostKeyPrompt]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_GitHostKeysServer = grpc.BidiStreamingServer[GitHostKeyAnswer, GitHostKeyPrompt]
+
 func _FleetService_Exec_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(FleetServiceServer).Exec(&grpc.GenericServerStream[ExecIn, ExecOut]{ServerStream: stream})
 }
@@ -1713,6 +1743,12 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "RebuildInstance",
 			Handler:       _FleetService_RebuildInstance_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "GitHostKeys",
+			Handler:       _FleetService_GitHostKeys_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 		{
 			StreamName:    "Exec",

@@ -673,6 +673,21 @@ forwarding with `FLEET_SSH_AGENT_SOCK=off`. On a macOS host, instances keep
 Docker Desktop's agent (a host socket cannot cross into its VM); the host-side
 clone still uses yours.
 
+When a daemon clone encounters an unknown git server's SSH host key, the
+connected TUI shows its key type, SHA256 fingerprint, and the `known_hosts`
+file on the **fleet host**. Verify the fingerprint with the git server's
+administrator, then press **a** to save that key and retry the clone, or
+**r** / **Esc** to reject it. `fleet up` on a terminal asks for the same
+decision (type `accept`); piped input cannot approve a key. This also works
+when adding a fleet and inspecting its repository, over SSH or a gateway.
+
+Only the displayed, accepted key is saved. Changed or revoked keys remain a
+hard failure. Rejecting, disconnecting, or running with nobody connected
+leaves the clone failed with a command to trust the host manually. Custom
+`GIT_SSH_COMMAND`, `GIT_SSH`, and `core.sshCommand` settings are preserved;
+those transports, and SSH proxy/jump hosts that `ssh-keyscan` cannot follow,
+use the manual-trust hint instead of an automatic prompt.
+
 ## Environment Variables
 
 Variables fleet **reads** (set them to configure behavior):
