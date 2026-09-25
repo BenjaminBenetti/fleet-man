@@ -37,6 +37,8 @@ func stubCreateJob(t *testing.T) *string {
 
 // createErr starts a CreateInstance stream and returns the error its first
 // Recv yields (job-start rejections surface there, before any JobStarted).
+// Accepted jobs are drained before returning so they cannot write state or
+// read a restored provisioning seam after the test has removed its HOME.
 func createErr(t *testing.T, client fleetgrpc.FleetServiceClient, req *fleetgrpc.CreateInstanceRequest) error {
 	t.Helper()
 	stream, err := client.CreateInstance(context.Background(), req)
@@ -44,6 +46,9 @@ func createErr(t *testing.T, client fleetgrpc.FleetServiceClient, req *fleetgrpc
 		return err
 	}
 	_, err = stream.Recv()
+	if err == nil {
+		drainJob(t, stream)
+	}
 	return err
 }
 
