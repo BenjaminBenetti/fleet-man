@@ -35,6 +35,7 @@ when they need attention.
 - [Remote MCP](#remote-mcp) — expose MCP & gRPC to remote agents via a fleet gateway
 - [Microphone](#microphone) — talk to the agents in your instances (voice input in a container)
 - [Themes](#themes) — color themes for the TUI (Gruvbox, Catppuccin, Tokyo Night, Solarized)
+- [Your SSH agent on a remote fleet](#your-ssh-agent-on-a-remote-fleet) — your keys go with you to remote fleets, like `ssh -A`
 - [Environment Variables](#environment-variables)
 - [Requirements](#requirements)
 - [Development](#development)
@@ -625,6 +626,68 @@ colors need a truecolor terminal; inside tmux that means tmux must advertise
 it (e.g. `set -as terminal-features ",*:RGB"`), otherwise the shades round to
 the nearest of the 256 ANSI colors.
 
+## Your SSH agent on a remote fleet
+
+A remote host has its own SSH keys, not yours, so by default a remote fleet
+cannot `git clone` your private repos over ssh. Turn on **`[ agent: on ]`** on the
+remote's row in **Settings → Fleet Armada** (right arrow to reach it, enter to
+toggle) and fleet forwards your local ssh-agent to that fleet while you are
+connected to it, like `ssh -A`: the remote daemon's own clones and every process
+in its devcontainer instances use your keys. A newly added `ssh://` remote starts
+with it on only when your ssh config says `ForwardAgent yes` (or
+`$SSH_AUTH_SOCK`) for that host. The row shows whether your agent is in use.
+
+The TUI streams agent requests over the fleet connection itself, so it works for
+SSH and gateway remotes alike and needs nothing from the remote's `sshd`.
+`fleet up`, `clone`, `rebuild` and `fleet shell` against that
+remote carry your agent the same way for their duration; they step aside for a
+TUI that is also providing, rather than taking over from it. On the remote, the
+daemon listens on a relay socket in each instance's control directory
+(`/fleet-mounts/control/ssh-agent.sock` inside the instance) and points its own
+`SSH_AUTH_SOCK` at a host relay socket. Instances get `SSH_AUTH_SOCK`, and the
+daemon redirects its own, only once something can answer there: the daemon was
+started with an agent of its own, or a client has forwarded one to it before
+(and **Remote Fleet** is on). Each connection goes to the newest connected
+client that can serve it, else to the host's own agent, chosen afresh every
+time: reconnecting or switching machines takes effect at once, with no rebuild,
+and so does restarting your agent at the same socket path (if it moves, restart
+the TUI). A client that stops answering — a laptop gone to sleep — is skipped
+within half a minute. An instance's socket serves any process in that
+instance's container (or a container nested in it), whatever its uid; other
+users on the host are refused.
+
+The trade-off is the one `ssh -A` has: while you are connected, anything on that
+host that reaches the relay — root, its fleet user, every process in its
+instances, automation that fires meanwhile — can use your agent. It can list
+your keys and ask for signatures, nothing else: fleet refuses every other
+request before it reaches your agent, so the remote cannot add or remove keys,
+lock the agent, or load PKCS#11/security-key providers. Every relayed
+connection is also bound as forwarded, the way `ssh -A` binds it, so your agent
+applies its own rules for remote clients, and keys you added with destination
+constraints (`ssh-add -h`) are not offered through fleet at all. The same rules
+hold for instances on your own machine reaching the agent the daemon was
+started with. The keys never leave your machine; use `ssh-add -c` to confirm
+each use. With nobody connected, automation cannot use your agent: give the
+host its own deploy key for unattended work. The host's owner can refuse
+forwarding with `FLEET_SSH_AGENT_SOCK=off`. On a macOS host, instances keep
+Docker Desktop's agent (a host socket cannot cross into its VM); the host-side
+clone still uses yours.
+
+When a daemon clone encounters an unknown git server's SSH host key, the
+connected TUI shows its key type, SHA256 fingerprint, and the `known_hosts`
+file on the **fleet host**. Verify the fingerprint with the git server's
+administrator, then press **a** to save that key and retry the clone, or
+**r** / **Esc** to reject it. `fleet up` on a terminal asks for the same
+decision (type `accept`); piped input cannot approve a key. This also works
+when adding a fleet and inspecting its repository, over SSH or a gateway.
+
+Only the displayed, accepted key is saved. Changed or revoked keys remain a
+hard failure. Rejecting, disconnecting, or running with nobody connected
+leaves the clone failed with a command to trust the host manually. Custom
+`GIT_SSH_COMMAND`, `GIT_SSH`, and `core.sshCommand` settings are preserved;
+those transports, and SSH proxy/jump hosts that `ssh-keyscan` cannot follow,
+use the manual-trust hint instead of an automatic prompt.
+
 ## Environment Variables
 
 Variables fleet **reads** (set them to configure behavior):
@@ -637,7 +700,7 @@ Variables fleet **reads** (set them to configure behavior):
 | `FLEET_SERVER` | `host:port` | Drive a remote daemon over plain TCP (no gateway). |
 | `FLEET_DEVCONTAINER_BUILDKIT` | `auto` (default), `never` | BuildKit mode for Fleet-managed devcontainers. See [Devcontainer BuildKit](#devcontainer-buildkit). |
 | `FLEET_DEVCONTAINER_UPDATE_REMOTE_USER_UID` | `default`, `never`, `on`, `off` | Remote-user UID/GID rewrite mode. See [Devcontainer UID Rewrite](#devcontainer-uid-rewrite). |
-| `FLEET_SSH_AGENT_SOCK` | absolute path, `off`, or `none` (case-insensitive) | Override the bind source for SSH agent forwarding into instances (`off`/`none` disables it). On macOS the default is Docker Desktop's VM-side `/run/host-services/ssh-auth.sock` (OrbStack and `colima --ssh-agent` are path-compatible); set this if your Docker backend exposes the agent elsewhere (default Colima, Podman machine, Rancher Desktop). |
+| `FLEET_SSH_AGENT_SOCK` | absolute path, `off`, or `none` (case-insensitive) | How instances reach the SSH agent. By default they use the daemon's relay socket on Linux (see [Your SSH agent on a remote fleet](#your-ssh-agent-on-a-remote-fleet)) and Docker Desktop's VM-side `/run/host-services/ssh-auth.sock` on macOS (OrbStack and `colima --ssh-agent` are path-compatible). A path bind-mounts that socket instead — set it if your Docker backend exposes the agent elsewhere (default Colima, Podman machine, Rancher Desktop); instances then bypass the relay, so an agent forwarded by an Armada client reaches only the daemon's own git. `off`/`none` disables agent forwarding entirely, the relay and forwarding from Armada clients included. |
 | `FLEET_OPENER` | program (+ args, whitespace-split) | Program `fleet open` / in-instance `fo` hands a copied file to instead of the desktop opener (`xdg-open`, `open`, `wslview`), e.g. `imv -f`. Read by whichever process opens the file: the CLI for `fleet open`, the TUI for `fo`. Executables are never opened. |
 | `FLEET_MIC_CAPTURE` | shell command | Replace fleet's microphone recorder: the command's stdout must be raw 16 kHz mono signed 16-bit little-endian PCM. For audio stacks fleet can't drive itself (e.g. `sox -t coreaudio "My Mic" -t raw -r 16000 -e signed -b 16 -c 1 -`). Read by the process providing the microphone (the TUI / `fleet mic attach`). Fleet cannot pass your command a device, so the Device setting reaches it as `FLEET_MIC_DEVICE` (the raw configured id, empty for the system default) for it to honour or ignore. See [Microphone](#microphone). |
 | `CODER_URL` | URL | Coder deployment URL (Coder backend). |
@@ -654,7 +717,8 @@ Variables fleet **exports** for MCP clients (written to `~/.fleet/mcp.env`, sour
 
 Fleet also **respects** standard environment when present: `HOME` (the `~/.fleet`
 location), `TMUX` (enables split-pane mode when run inside tmux), `SSH_AUTH_SOCK`
-(forwarded into instances for SSH/git), and `WSL_DISTRO_NAME` / `WSL_INTEROP`
+(the daemon's agent, relayed into instances for SSH/git; a client's, forwarded to
+remote fleets with `[ agent: on ]`), and `WSL_DISTRO_NAME` / `WSL_INTEROP`
 / `WAYLAND_DISPLAY` (platform detection for clipboard and browser integration).
 
 ## Requirements

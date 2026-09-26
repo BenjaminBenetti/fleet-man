@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -95,6 +96,14 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 // rather than doubling it. nil-safe for tests that use newService() without a
 // serve loop.
 func (s *service) reconcileRemote(rm state.RemoteMcpSettings) {
+	// Remote clients can only reach this daemon — and so provide an SSH agent
+	// — while remote access is on. This only decides whether instances are
+	// pointed at the relay when nothing else could ever answer there; it is
+	// not access control (see SSHAgent for who may provide).
+	agentsock.SetRemoteClients(rm.FleetEnabled)
+	if s.agent != nil {
+		s.agent.maybeRedirect()
+	}
 	if s.remote != nil {
 		s.remote.Reconcile(rm.Enabled, rm.FleetViaGateway(), rm.WebhookEnabled, rm.GatewayURL)
 	}

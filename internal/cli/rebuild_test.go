@@ -16,7 +16,7 @@ func TestRebuildCmdRunsJob(t *testing.T) {
 	defer func() { runInstanceJob = orig }()
 
 	called := false
-	runInstanceJob = func(ctx context.Context, open func(context.Context, fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error)) error {
+	runInstanceJob = func(ctx context.Context, _ bool, open func(context.Context, fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error)) error {
 		called = true
 		return nil
 	}

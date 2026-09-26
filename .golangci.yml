@@ -51,6 +51,9 @@ linters:
             # (internal/cli runs it as `fleet mic sink`), so it is held to the
             # same boundary rather than being a package the linter never sees.
             - "**/internal/micsink/**"
+            # The SSH-agent provider runs where the human's ssh-agent is (TUI,
+            # CLI), possibly far from the daemon: client code, like internal/mic.
+            - "**/internal/agentfwd/**"
           deny:
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/state
               desc: client code must go through the fleet server (fleetgrpc), not internal/state

@@ -32,7 +32,7 @@ func TestCreateAutomationInstanceMarksAutomated(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	orig := jobRunCreate
-	jobRunCreate = func(string, string, string, string, bool, fleet.BackendType) error { return nil }
+	jobRunCreate = func(context.Context, string, string, string, string, bool, fleet.BackendType) error { return nil }
 	defer func() { jobRunCreate = orig }()
 
 	s, _, cleanup := newTestServer(t)
@@ -42,6 +42,19 @@ func TestCreateAutomationInstanceMarksAutomated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("createAutomationInstance: %v", err)
 	}
+	// The scheduler starts a detached job. Join it before restoring the seam
+	// or removing HOME; either could otherwise race the provisioning goroutine.
+	defer func() {
+		deadline := time.After(5 * time.Second)
+		for len(s.jobs.summaries()) > 0 {
+			select {
+			case <-deadline:
+				t.Error("automation create job did not finish")
+				return
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}()
 
 	st, _ := state.Load()
 	inst, err := st.Fleets["alpha"].GetInstance(name)

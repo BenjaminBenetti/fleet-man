@@ -56,7 +56,7 @@ func TestMCPUpAsyncJobLifecycle(t *testing.T) {
 
 	release := make(chan struct{})
 	orig := jobRunCreate
-	jobRunCreate = func(fleetName, instanceName, remote, branch string, verbose bool, b fleet.BackendType) error {
+	jobRunCreate = func(_ context.Context, fleetName, instanceName, remote, branch string, verbose bool, b fleet.BackendType) error {
 		<-release // hold provisioning in flight until the test releases it
 		return state.Update(func(st *state.State) error {
 			inst, _ := st.Fleets[fleetName].GetInstance(instanceName)
@@ -114,7 +114,7 @@ func TestMCPUpWaitBlocksUntilDone(t *testing.T) {
 	}
 
 	orig := jobRunCreate
-	jobRunCreate = func(fleetName, instanceName, remote, branch string, verbose bool, b fleet.BackendType) error {
+	jobRunCreate = func(_ context.Context, fleetName, instanceName, remote, branch string, verbose bool, b fleet.BackendType) error {
 		return state.Update(func(st *state.State) error {
 			inst, _ := st.Fleets[fleetName].GetInstance(instanceName)
 			inst.Status = fleet.StatusRunning
@@ -149,7 +149,7 @@ func TestMCPUpAsyncFailureSurfacesViaJobStatus(t *testing.T) {
 	}
 
 	orig := jobRunCreate
-	jobRunCreate = func(fleetName, instanceName, remote, branch string, verbose bool, b fleet.BackendType) error {
+	jobRunCreate = func(_ context.Context, fleetName, instanceName, remote, branch string, verbose bool, b fleet.BackendType) error {
 		return context.DeadlineExceeded // any error; the message must surface
 	}
 	defer func() { jobRunCreate = orig }()

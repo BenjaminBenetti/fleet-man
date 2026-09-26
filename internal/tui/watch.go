@@ -166,6 +166,8 @@ func watchOnce(ctx context.Context, program *tea.Program, gen int) bool {
 		return false
 	}
 	defer conn.Close()
+	stopPrompts, _ := fleetclient.StartGitHostKeyPrompts(ctx, conn.Service(), promptGitHostKey(program, gen))
+	defer stopPrompts()
 
 	// Surface the daemon's version (from Dial's Hello handshake) so the header
 	// can render the control-chain versions. Reached through the gateway when

@@ -19,7 +19,7 @@ func stubCreateJob(t *testing.T) *string {
 	t.Helper()
 	var seen string
 	orig := jobRunCreate
-	jobRunCreate = func(fleetName, instanceName, remote, branch string, verbose bool, b fleet.BackendType) error {
+	jobRunCreate = func(_ context.Context, fleetName, instanceName, remote, branch string, verbose bool, b fleet.BackendType) error {
 		seen = remote
 		return state.Update(func(st *state.State) error {
 			if f, ok := st.Fleets[fleetName]; ok {
@@ -37,6 +37,8 @@ func stubCreateJob(t *testing.T) *string {
 
 // createErr starts a CreateInstance stream and returns the error its first
 // Recv yields (job-start rejections surface there, before any JobStarted).
+// Accepted jobs are drained before returning so they cannot write state or
+// read a restored provisioning seam after the test has removed its HOME.
 func createErr(t *testing.T, client fleetgrpc.FleetServiceClient, req *fleetgrpc.CreateInstanceRequest) error {
 	t.Helper()
 	stream, err := client.CreateInstance(context.Background(), req)
@@ -44,6 +46,9 @@ func createErr(t *testing.T, client fleetgrpc.FleetServiceClient, req *fleetgrpc
 		return err
 	}
 	_, err = stream.Recv()
+	if err == nil {
+		drainJob(t, stream)
+	}
 	return err
 }
 
@@ -205,11 +210,15 @@ func TestCreateInstanceTemplateFleetRecordRejectsBranch(t *testing.T) {
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("want InvalidArgument for branch on template fleet, got %v", err)
 	}
-	if err := createErr(t, client, &fleetgrpc.CreateInstanceRequest{
+	stream, err := client.CreateInstance(context.Background(), &fleetgrpc.CreateInstanceRequest{
 		Fleet: "scratch", Instance: "i1", Backend: fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("plain create on template fleet should start: %v", err)
 	}
+	// Run the job to its end: returning while it still writes state.json
+	// races the temp HOME's removal ("directory not empty" on slow runners).
+	drainJob(t, stream)
 }
 
 // A per-instance --repo must not change the fleet's KIND: no template copy

@@ -1,18 +1,19 @@
 package create
 
 import (
-	"bytes"
+	"context"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -31,6 +32,12 @@ import (
 // Only the devcontainer backend can do that (coder and codespaces provision
 // from a git URL on their own side), and a branch has no meaning for a copy.
 func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backendType fleet.BackendType) (err error) {
+	return RunContext(context.Background(), fleetName, instanceName, remoteURL, branch, verbose, backendType)
+}
+
+// RunContext allows the daemon to ask a connected client about an unknown git
+// host key before provisioning fails. The context belongs to the daemon job.
+func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch string, verbose bool, backendType fleet.BackendType) (err error) {
 	start := time.Now()
 	flog.Info("instance create started", "fleet", fleetName, "instance", instanceName, "backend", backendType, "branch", branch, "remote", remoteURL)
 	// Log the failure outcome (with elapsed time) from one place: every error
@@ -84,15 +91,14 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 		if branch != "" {
 			cloneArgs = append(cloneArgs, "--branch", branch)
 		}
-		cloneArgs = append(cloneArgs, remoteURL, wsDir)
-		gitClone := exec.Command("git", cloneArgs...)
-		// Tee output to os.Stdout/os.Stderr (the log file when run from
-		// the TUI) while capturing it for inclusion in error messages.
-		var cloneBuf bytes.Buffer
-		gitClone.Stdout = io.MultiWriter(os.Stdout, &cloneBuf)
-		gitClone.Stderr = io.MultiWriter(os.Stderr, &cloneBuf)
-		if err := gitClone.Run(); err != nil {
-			wrapped := fmt.Errorf("git clone failed: %w\n%s", err, cloneBuf.String())
+		cloneArgs = append(cloneArgs, "--", remoteURL, wsDir)
+		out, err := gitutil.Clone(ctx, remoteURL, cloneArgs, os.Stderr)
+		if err != nil {
+			detail := string(out)
+			if hint := gitutil.CloneFailureHint(detail, remoteURL, agentsock.CloneForwarding()); hint != "" {
+				detail = strings.TrimRight(detail, "\n") + "\n" + hint + "\n"
+			}
+			wrapped := fmt.Errorf("git clone failed: %w\n%s", err, detail)
 			setFailed(fleetName, instanceName, wrapped)
 			return wrapped
 		}

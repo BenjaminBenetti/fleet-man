@@ -19,6 +19,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetnet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/imagecache"
 	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
@@ -46,9 +47,7 @@ import (
 
 // --- work seams (overridable in tests so the engine is exercised without docker) ---
 
-var jobRunCreate = func(fleetName, instanceName, remote, branch string, verbose bool, backendType fleet.BackendType) error {
-	return create.Run(fleetName, instanceName, remote, branch, verbose, backendType)
-}
+var jobRunCreate = create.RunContext
 
 var jobRunClone = func(fleetName, srcInstance, destInstance string, verbose bool) error {
 	return create.RunClone(fleetName, srcInstance, destInstance, verbose)
@@ -513,7 +512,8 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 
 	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, fleetName, instanceName, time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
-		err := jobRunCreate(fleetName, instanceName, remote, req.GetBranch(), req.GetVerbose(), backendType)
+		ctx := gitutil.WithHostKeyPrompt(s.bgCtx, s.gitHostKeys.ask)
+		err := jobRunCreate(ctx, fleetName, instanceName, remote, req.GetBranch(), req.GetVerbose(), backendType)
 		return loadInstanceSnapshot(fleetName, instanceName), nil, err
 	})
 	return j, nil

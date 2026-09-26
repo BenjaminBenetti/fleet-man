@@ -70,6 +70,12 @@ func runRemoteShell(ctx context.Context, fleetName, instanceName string, argv []
 		return err
 	}
 	defer conn.Close()
+	// git in the remote shell uses the user's keys when the Armada remote
+	// forwards the agent. This provider yields to the TUI's (the daemon tries
+	// it only after non-yielding providers), so a shell started from the TUI
+	// does not displace it.
+	stopAgent := forwardAgentWhile(ctx, conn.Service(), true)
+	defer stopAgent()
 	code, err := execstream.Run(ctx, conn.Service(), execstream.Options{
 		Fleet:    fleetName,
 		Instance: instanceName,

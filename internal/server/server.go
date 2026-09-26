@@ -80,6 +80,26 @@ func Serve(ctx context.Context) error {
 	// reconcile) derives from hubCtx so it stops on shutdown. Set before Serve
 	// starts accepting RPCs, so no handler observes the zero value.
 	svc.bgCtx = hubCtx
+	// SSH-agent relay: every agent connection made on this host — the daemon's
+	// own git clones (through SSH_AUTH_SOCK, redirected to it) and processes in
+	// devcontainer instances (through a socket in each control directory) — is
+	// relayed to the attached provider's agent, else to the agent this daemon
+	// was started with. FLEET_SSH_AGENT_SOCK=off turns all of it off. Started
+	// before anything that provisions (the scheduler), so the first instance
+	// already finds its socket and the daemon's own clones the relay.
+	agentRelayDone := startAgentRelay(hubCtx, svc.agent)
+	// On the way out, let the relay remove its sockets before the process
+	// exits (bounded): a socket file left behind is only replaced on the next
+	// start, and one in an instance's control dir outlives a daemon started
+	// with FLEET_SSH_AGENT_SOCK=off.
+	defer func() {
+		cancelHub()
+		select {
+		case <-agentRelayDone:
+		case <-time.After(3 * time.Second):
+		}
+	}()
+
 	go svc.hub.run(hubCtx)
 	go runStatePoller(hubCtx, svc.hub)
 	// Runtime pollers (live status / stats+activity / sessions). Gated on a

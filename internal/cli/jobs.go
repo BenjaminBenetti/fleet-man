@@ -15,12 +15,22 @@ import (
 // longer race state.json; they serialize through the one server).
 //
 // runInstanceJob is a package var so unit tests can stub the whole job layer.
-var runInstanceJob = func(ctx context.Context, open func(context.Context, fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error)) error {
+var runInstanceJob = func(ctx context.Context, forwardAgent bool, open func(context.Context, fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error)) error {
 	conn, err := fleetclient.Dial(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
+	stopPrompts := gitHostKeyPromptsWhile(ctx, conn.Service())
+	defer stopPrompts()
+
+	// A remote job that clones (forwardAgent: up, clone, rebuild) may do so
+	// over ssh on the remote's host: carry the user's agent there for its
+	// duration when the Armada remote forwards it.
+	if forwardAgent {
+		stopAgent := forwardAgentWhile(ctx, conn.Service(), false)
+		defer stopAgent()
+	}
 
 	stream, err := open(ctx, conn.Service())
 	if err != nil {

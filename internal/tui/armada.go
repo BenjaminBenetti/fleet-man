@@ -77,6 +77,14 @@ type armadaPingResultMsg struct {
 // armadaPingTickMsg re-pings all remotes while the settings page is open.
 type armadaPingTickMsg struct{}
 
+// armadaRecheckMsg delivers the registry re-read on armadaRecheckInterval, so
+// a change made elsewhere (another TUI turning [ agent: on ] off) reaches this
+// TUI's agent provider without the user opening Settings.
+type armadaRecheckMsg struct {
+	remotes []configutil.ArmadaRemote
+	err     error
+}
+
 // armadaTestResultMsg delivers the registration connection test outcome for
 // the add flow ("+ Remote Fleet"). On success the remote is saved.
 type armadaTestResultMsg struct {
@@ -86,13 +94,20 @@ type armadaTestResultMsg struct {
 }
 
 // armadaSaveResultMsg delivers the outcome of persisting the edited registry
-// (add or delete). remotes is the saved list (post server normalization).
+// (add, delete, or an agent-forwarding toggle). remotes is the saved list
+// (post server normalization).
 type armadaSaveResultMsg struct {
-	remotes    []configutil.ArmadaRemote
-	action     string // "added" / "removed", for the status message
-	removedIdx int    // index the delete removed; -1 for adds (cursor re-pin)
+	remotes []configutil.ArmadaRemote
+	action  string // "added" / "removed" / armadaActionAgent, for the status message
+	// removedIdx is the row the cursor goes back to: the index the delete
+	// removed (or the toggled row), -1 for adds (the add button).
+	removedIdx int
 	err        error
 }
+
+// armadaActionAgent marks a save that toggled a remote's agent forwarding: the
+// cursor stays on that row's toggle and the status line names the new state.
+const armadaActionAgent = "agent"
 
 // armadaSwitchedMsg delivers the post-switch state/config reload. gen is the
 // connection generation the reload was started for, so a late reply from an
@@ -126,6 +141,18 @@ func fetchArmadaCmd() tea.Cmd {
 	}
 }
 
+// armadaRecheckInterval is how often the TUI re-reads the registry (the same
+// cadence as a CLI command's provider). A var so tests can shorten it.
+var armadaRecheckInterval = 30 * time.Second
+
+// armadaRecheckCmd re-reads the registry after armadaRecheckInterval.
+func armadaRecheckCmd() tea.Cmd {
+	return tea.Tick(armadaRecheckInterval, func(time.Time) tea.Msg {
+		remotes, err := fetchArmadaLocal()
+		return armadaRecheckMsg{remotes: remotes, err: err}
+	})
+}
+
 // pingArmadaCmd probes one remote.
 func pingArmadaCmd(url, token string) tea.Cmd {
 	return func() tea.Msg {
@@ -148,10 +175,11 @@ func testArmadaRemoteCmd(url, token string) tea.Cmd {
 // saveArmadaCmd persists the edited registry to the local daemon.
 func saveArmadaCmd(remotes []configutil.ArmadaRemote, action string, removedIdx int) tea.Cmd {
 	return func() tea.Msg {
-		if err := saveArmadaLocal(remotes); err != nil {
+		saved, err := saveArmadaLocal(remotes)
+		if err != nil {
 			return armadaSaveResultMsg{action: action, removedIdx: removedIdx, err: err}
 		}
-		return armadaSaveResultMsg{remotes: remotes, action: action, removedIdx: removedIdx}
+		return armadaSaveResultMsg{remotes: saved, action: action, removedIdx: removedIdx}
 	}
 }
 
@@ -203,7 +231,17 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		m.armadaRemotes = msg.remotes
+		m.syncAgentProvider()
 		return m.pingAllArmadaCmd()
+
+	case armadaRecheckMsg:
+		// Quietly: an unreadable registry keeps the current state until the
+		// next read, and an add/delete in flight owns the list until it lands.
+		if msg.err == nil && (settingsPage == nil || !settingsPage.armadaBusy) {
+			m.armadaRemotes = msg.remotes
+			m.syncAgentProvider()
+		}
+		return armadaRecheckCmd()
 
 	case armadaPingTickMsg:
 		if settingsPage == nil {
@@ -272,12 +310,21 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 			settingsPage.armadaBusy = false
 			settingsPage.armadaDeleteFocused = false
 			settingsPage.armadaDeleteConfirm = false
+			if msg.action != armadaActionAgent {
+				settingsPage.armadaAgentFocused = false
+			}
 		}
 		if msg.err != nil {
 			m.message = fmt.Sprintf("Failed to save remote fleets: %v", msg.err)
 			return nil
 		}
 		m.armadaRemotes = msg.remotes
+		m.syncAgentProvider()
+		if msg.action == armadaActionAgent {
+			// The list did not change shape: the cursor stays on the toggle.
+			m.message = m.agentToggleSavedMessage(msg.removedIdx)
+			return nil
+		}
 		if settingsPage != nil {
 			// The list length changed under the cursor; re-pin it sensibly.
 			if msg.removedIdx >= 0 && len(msg.remotes) > 0 {
@@ -287,6 +334,11 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 			}
 		}
 		m.message = "Remote fleet " + msg.action
+		if msg.action == "added" && len(msg.remotes) > 0 && msg.remotes[len(msg.remotes)-1].ForwardAgent {
+			// The daemon turned it on because the user's ssh config forwards
+			// an agent to that host: say so, it is never a silent default.
+			m.message += " — [ agent: on ] from your ssh config (ForwardAgent yes)"
+		}
 		return nil
 
 	case armadaSwitchedMsg:
@@ -723,6 +775,10 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 		_ = os.Unsetenv(fleetclient.EnvServer)
 		_ = os.Unsetenv(fleetclient.EnvToken)
 	}
+	// The SSH agent follows the connection too: stop providing to the daemon
+	// being left, and start providing to the new one if forwarding is on for it.
+	m.syncAgentProvider()
+
 	// Mirror the swap into the tmux server environment so split-pane / bound-key
 	// `fleet shell` children — which tmux spawns from ITS environment, not this
 	// process's live os.Environ() — connect to the new daemon too. Without this
@@ -794,17 +850,29 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 // env onto the tmux server's global environment so panes tmux spawns AFTER a
 // switch (split-window, the bound %/" keys) inherit the new connection. tmux
 // captures its environment at session start, so an in-process os.Setenv alone
-// never reaches these children. No-op when not running inside tmux.
+// never reaches these children. The TUI's agent hint (tuiAgentHint) goes with
+// it — set while remote, unset when local — so those `fleet shell` children
+// start at once like the ones attachExecCmd spawns. A hint left behind after
+// the TUI exits only spares a later shell the attach wait and the notice.
+// No-op when not running inside tmux.
 func syncTmuxArmadaEnv(m *model) {
 	if !m.inHostTmux {
 		return
 	}
 	for _, name := range []string{fleetclient.EnvGateway, fleetclient.EnvToken, fleetclient.EnvSSH, fleetclient.EnvServer} {
-		if v := os.Getenv(name); v != "" {
-			_ = exec.Command("tmux", "set-environment", "-g", name, v).Run()
-		} else {
-			_ = exec.Command("tmux", "set-environment", "-gu", name).Run()
-		}
+		setTmuxGlobalEnv(name, os.Getenv(name))
+	}
+	setTmuxGlobalEnv(fleetclient.EnvTUIProvidesAgent, tuiAgentHint())
+}
+
+// setTmuxGlobalEnv sets name in the tmux server's global environment, or
+// unsets it for an empty value. A var so tests can observe the mirror without
+// a tmux server.
+var setTmuxGlobalEnv = func(name, value string) {
+	if value != "" {
+		_ = exec.Command("tmux", "set-environment", "-g", name, value).Run()
+	} else {
+		_ = exec.Command("tmux", "set-environment", "-gu", name).Run()
 	}
 }
 

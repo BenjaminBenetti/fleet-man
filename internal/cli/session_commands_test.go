@@ -145,6 +145,23 @@ func waitForFile(t *testing.T, path string, timeout time.Duration) {
 	t.Fatalf("timeout waiting for sentinel file %s", path)
 }
 
+// waitForFileContaining waits until path contains want. A shell's
+// `echo … > path` creates the file before it writes to it, so the file
+// existing (waitForFile) does not mean its content is there yet.
+func waitForFileContaining(t *testing.T, path, want string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var body []byte
+	for time.Now().Before(deadline) {
+		body, _ = os.ReadFile(path)
+		if strings.Contains(string(body), want) {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for %q in sentinel file %s (has %q)", want, path, body)
+}
+
 // ============================================================================
 // Error-path tests — do not require tmux on the host.
 // ============================================================================
@@ -258,15 +275,7 @@ func TestExecInSession_SendsCommandToShell(t *testing.T) {
 		t.Fatalf("exec-in-session: %v", err)
 	}
 
-	waitForFile(t, sentinel, 3*time.Second)
-
-	body, err := os.ReadFile(sentinel)
-	if err != nil {
-		t.Fatalf("read sentinel: %v", err)
-	}
-	if !strings.Contains(string(body), "executed") {
-		t.Fatalf("sentinel had unexpected content: %q", body)
-	}
+	waitForFileContaining(t, sentinel, "executed", 3*time.Second)
 
 	_ = tmuxDir // useHostTmux registers cleanup; we don't need the dir directly here
 }
@@ -291,14 +300,7 @@ func TestExecInSession_PreservesShellState(t *testing.T) {
 		t.Fatalf("exec-in-session read: %v", err)
 	}
 
-	waitForFile(t, sentinel, 3*time.Second)
-	body, err := os.ReadFile(sentinel)
-	if err != nil {
-		t.Fatalf("read sentinel: %v", err)
-	}
-	if !strings.Contains(string(body), "VAR=persisted") {
-		t.Fatalf("expected persisted var, got %q", body)
-	}
+	waitForFileContaining(t, sentinel, "VAR=persisted", 3*time.Second)
 }
 
 func TestReadSession_CapturesVisiblePane(t *testing.T) {

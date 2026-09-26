@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -135,6 +136,10 @@ func classifySSHFailure(stderr string) sshFailure {
 		f.changed = c
 		return f
 	}
+	if strings.Contains(stderr, "REMOTE HOST IDENTIFICATION HAS CHANGED") || reChangedHost.MatchString(stderr) || strings.Contains(stderr, "REVOKED HOST KEY DETECTED") {
+		f.changed = &ChangedHostKeyError{}
+		return f
+	}
 	if m := reUnknownHostKey.FindStringSubmatch(stderr); m != nil {
 		f.unknown = &struct{ keyType, name string }{m[1], m[2]}
 	}
@@ -160,6 +165,30 @@ func hostKeyError(t Target, stderr string) error {
 	return nil
 }
 
+// ProbeHostKey shares Armada's refusal classification and host-key probe with
+// daemon git clones. A changed key is an error, never an offer. Callers must
+// use the same OpenSSH target/config as the failed command.
+func ProbeHostKey(ctx context.Context, t Target, stderr string) (*UnknownHostKeyError, error) {
+	err := hostKeyError(t, stderr)
+	var refusal *unknownHostKeyRefusal
+	if errors.As(err, &refusal) {
+		return defaultProber().probeHostKeys(ctx, refusal)
+	}
+	return nil, err
+}
+
+// TrustOfferedHostKey writes only a line from a daemon-produced offer, using
+// the same writer as TrustSSHHostKey. The caller must obtain explicit human
+// approval first; neither a path nor new key material comes from the client.
+func TrustOfferedHostKey(offer *UnknownHostKeyError, line string) error {
+	for _, key := range offer.Keys {
+		if line == key.Line {
+			return appendKnownHosts(offer.KnownHostsPath, line)
+		}
+	}
+	return ErrKeyNotOffered
+}
+
 // sshEffectiveConfig is what `ssh -G` reports for a target: where ssh really
 // connects (HostName/Port from ~/.ssh/config may differ from the URL), the
 // known_hosts file it consults first ("" when the config says none or
@@ -171,6 +200,9 @@ type sshEffectiveConfig struct {
 	knownHosts   string
 	hostKeyAlias string
 	proxied      bool
+	// forwardAgent: the user's ForwardAgent for the host forwards their
+	// default agent, the one fleet would forward (see forwardsDefaultAgent).
+	forwardAgent bool
 }
 
 // lookupName is the known_hosts name ssh looks up (and prints in its
@@ -221,6 +253,9 @@ func parseSSHConfig(out string) (sshEffectiveConfig, error) {
 			if fields[1] != "none" {
 				c.hostKeyAlias = fields[1]
 			}
+		case "forwardagent":
+			// One token only: "yes /x" is a socket path that starts with yes.
+			c.forwardAgent = len(fields) == 2 && forwardsDefaultAgent(fields[1])
 		case "proxyjump", "proxycommand":
 			if fields[1] != "none" {
 				c.proxied = true
@@ -239,6 +274,16 @@ func parseSSHConfig(out string) (sshEffectiveConfig, error) {
 		c.knownHosts = expandHome("~/.ssh/known_hosts")
 	}
 	return c, nil
+}
+
+// forwardsDefaultAgent reports whether a ForwardAgent value, as `ssh -G`
+// prints it, forwards the agent in SSH_AUTH_SOCK — the one fleet forwards.
+// ssh -G prints yes or no (true/false folded in), a socket path with ~ and
+// ${VAR} already expanded, and $VAR verbatim. A path or any other variable
+// names a different agent, often a deliberately restricted one, so it must not
+// switch on forwarding of the user's full default agent.
+func forwardsDefaultAgent(value string) bool {
+	return strings.EqualFold(value, "yes") || value == "$SSH_AUTH_SOCK"
 }
 
 // expandHome resolves a leading "~/" the way ssh does for UserKnownHostsFile.
@@ -412,12 +457,18 @@ func validKnownHostsLine(line string) bool {
 	return len(strings.Fields(line)) == 3
 }
 
+// Serialize Armada and git-clone accepts so simultaneous approvals cannot
+// append the same key twice or race the missing-newline repair.
+var knownHostsMu sync.Mutex
+
 // appendKnownHosts adds line to path: the directory is created 0700 and the
 // file 0600 when missing, existing lines are never touched, a missing final
 // newline is repaired first, and a line already present is not duplicated.
 // Only an absolute, real file is written (never "none", /dev/null, or a
 // relative path that would land in the daemon's working directory).
 func appendKnownHosts(path, line string) error {
+	knownHostsMu.Lock()
+	defer knownHostsMu.Unlock()
 	if !validKnownHostsLine(line) {
 		return fmt.Errorf("refusing to write malformed known_hosts line %q", line)
 	}

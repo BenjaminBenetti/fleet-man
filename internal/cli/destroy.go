@@ -27,7 +27,7 @@ func newDestroyCmd() *cobra.Command {
 
 			// One destroy_fleet job: down every container, remove every workspace,
 			// then remove the fleet record. Errors NotFound for a missing fleet.
-			if err := runInstanceJob(cmd.Context(), func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error) {
+			if err := runInstanceJob(cmd.Context(), false, func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error) {
 				return svc.DestroyInstance(ctx, &fleetgrpc.DestroyInstanceRequest{Fleet: fleetName, DestroyFleet: true})
 			}); err != nil {
 				return err

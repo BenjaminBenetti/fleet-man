@@ -7,6 +7,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 )
 
 // armada_client.go is the TUI's persistence path for the fleet-armada registry
@@ -35,29 +36,26 @@ var fetchArmadaLocal = func() ([]configutil.ArmadaRemote, error) {
 	if err != nil {
 		return nil, err
 	}
-	remotes := make([]configutil.ArmadaRemote, 0, len(reply.GetRemotes()))
-	for _, r := range reply.GetRemotes() {
-		remotes = append(remotes, configutil.ArmadaRemote{URL: r.GetUrl(), Token: r.GetToken()})
-	}
-	return remotes, nil
+	return protoconv.ArmadaRemotesFromProto(reply.GetRemotes()), nil
 }
 
-// saveArmadaLocal replaces the registry on the LOCAL daemon. Package var so
-// tests can stub the persistence seam.
-var saveArmadaLocal = func(remotes []configutil.ArmadaRemote) error {
+// saveArmadaLocal replaces the registry on the LOCAL daemon and returns the
+// list as saved (the daemon normalizes it, and a new ssh:// remote inherits
+// ForwardAgent from the user's ssh config). Package var so tests can stub the
+// persistence seam.
+var saveArmadaLocal = func(remotes []configutil.ArmadaRemote) ([]configutil.ArmadaRemote, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), armadaLocalTimeout)
 	defer cancel()
 	conn, err := fleetclient.DialLocal(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer conn.Close()
-	out := make([]*fleetgrpc.ArmadaRemote, 0, len(remotes))
-	for _, r := range remotes {
-		out = append(out, &fleetgrpc.ArmadaRemote{Url: r.URL, Token: r.Token})
+	reply, err := conn.Service().SetArmada(ctx, &fleetgrpc.SetArmadaRequest{Remotes: protoconv.ArmadaRemotesToProto(remotes)})
+	if err != nil {
+		return nil, err
 	}
-	_, err = conn.Service().SetArmada(ctx, &fleetgrpc.SetArmadaRequest{Remotes: out})
-	return err
+	return protoconv.ArmadaRemotesFromProto(reply.GetRemotes()), nil
 }
 
 // armadaSSHTimeout bounds a ping / connection test of an ssh:// remote: the

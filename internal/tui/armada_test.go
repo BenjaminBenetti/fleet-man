@@ -102,9 +102,9 @@ func TestArmadaAddFlowRegistersRemote(t *testing.T) {
 
 	var saved []configutil.ArmadaRemote
 	origSave := saveArmadaLocal
-	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) error {
+	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) ([]configutil.ArmadaRemote, error) {
 		saved = remotes
-		return nil
+		return remotes, nil
 	}
 	defer func() { saveArmadaLocal = origSave }()
 
@@ -175,9 +175,9 @@ func TestArmadaAddFlowFailedTestDoesNotRegister(t *testing.T) {
 
 	saveCalled := false
 	origSave := saveArmadaLocal
-	saveArmadaLocal = func([]configutil.ArmadaRemote) error {
+	saveArmadaLocal = func([]configutil.ArmadaRemote) ([]configutil.ArmadaRemote, error) {
 		saveCalled = true
-		return nil
+		return nil, nil
 	}
 	defer func() { saveArmadaLocal = origSave }()
 
@@ -211,9 +211,9 @@ func TestArmadaAddFlowFailedTestDoesNotRegister(t *testing.T) {
 func TestArmadaDeleteTwoPress(t *testing.T) {
 	var saved []configutil.ArmadaRemote
 	origSave := saveArmadaLocal
-	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) error {
+	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) ([]configutil.ArmadaRemote, error) {
 		saved = remotes
-		return nil
+		return remotes, nil
 	}
 	defer func() { saveArmadaLocal = origSave }()
 
@@ -225,9 +225,10 @@ func TestArmadaDeleteTwoPress(t *testing.T) {
 	}
 
 	sp.cursor = settingsPositionOf(sp, m, settingsItemArmadaBase)
-	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
-	if !sp.armadaDeleteFocused {
-		t.Fatal("right should focus the delete button")
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight}) // [ agent ]
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight}) // [ delete ]
+	if !sp.armadaDeleteFocused || sp.armadaAgentFocused {
+		t.Fatal("right twice should focus the delete button")
 	}
 
 	if cmd := sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
@@ -262,7 +263,8 @@ func TestArmadaDeleteConfirmResetsOnCursorMove(t *testing.T) {
 	m.armadaRemotes = []configutil.ArmadaRemote{{URL: "https://gw.example.com/abc", Token: "t1"}}
 
 	sp.cursor = settingsPositionOf(sp, m, settingsItemArmadaBase)
-	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight}) // [ agent ]
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight}) // [ delete ]
 	sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}) // arm
 	sp.Update(m, tea.KeyMsg{Type: tea.KeyDown})  // move away
 
@@ -606,9 +608,9 @@ func TestArmadaAddFlowSSHSkipsToken(t *testing.T) {
 	defer func() { pingArmadaRemote = origPing }()
 	var saved []configutil.ArmadaRemote
 	origSave := saveArmadaLocal
-	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) error {
+	saveArmadaLocal = func(remotes []configutil.ArmadaRemote) ([]configutil.ArmadaRemote, error) {
 		saved = remotes
-		return nil
+		return remotes, nil
 	}
 	defer func() { saveArmadaLocal = origSave }()
 
@@ -729,6 +731,51 @@ func TestSwitchArmadaSSHSetsEnv(t *testing.T) {
 	m.switchArmada(m.armadaEntries()[0]) // local
 	if os.Getenv("FLEET_SSH") != "" || armadaCurrentKey() != "" || m.armadaCurrentBadge() != "" {
 		t.Fatalf("local switch should clear FLEET_SSH: %q", os.Getenv("FLEET_SSH"))
+	}
+}
+
+// stubTmuxEnv records what would be mirrored into the tmux server's global
+// environment ("" = unset).
+func stubTmuxEnv(t *testing.T) map[string]string {
+	t.Helper()
+	got := make(map[string]string)
+	orig := setTmuxGlobalEnv
+	setTmuxGlobalEnv = func(name, value string) { got[name] = value }
+	t.Cleanup(func() { setTmuxGlobalEnv = orig })
+	return got
+}
+
+// TestSyncTmuxArmadaEnvMirrorsTheConnection: a switch mirrors the connection
+// and the TUI's agent hint into the tmux server's environment, so the
+// `fleet shell` panes tmux spawns start at once; back to local, every
+// variable is unset.
+func TestSyncTmuxArmadaEnvMirrorsTheConnection(t *testing.T) {
+	for _, key := range []string{fleetclient.EnvGateway, fleetclient.EnvSSH, fleetclient.EnvServer, fleetclient.EnvToken, fleetclient.EnvTUIProvidesAgent} {
+		t.Setenv(key, "")
+	}
+	tmuxEnv := stubTmuxEnv(t)
+	m := armadaTestModel(nil)
+	m.armadaRemotes = []configutil.ArmadaRemote{{URL: "ssh://ben@desktop"}}
+
+	syncTmuxArmadaEnv(m)
+	if len(tmuxEnv) != 0 {
+		t.Fatalf("outside tmux nothing is mirrored: %v", tmuxEnv)
+	}
+
+	m.inHostTmux = true
+	m.switchArmada(m.armadaEntries()[1])
+	if tmuxEnv[fleetclient.EnvSSH] != "ssh://ben@desktop" {
+		t.Fatalf("tmux env after the ssh switch = %v, want FLEET_SSH", tmuxEnv)
+	}
+	if tmuxEnv[fleetclient.EnvTUIProvidesAgent] != "1" {
+		t.Fatalf("tmux env after the ssh switch = %v, want the agent hint", tmuxEnv)
+	}
+
+	m.switchArmada(m.armadaEntries()[0]) // local
+	for _, name := range []string{fleetclient.EnvGateway, fleetclient.EnvSSH, fleetclient.EnvServer, fleetclient.EnvToken, fleetclient.EnvTUIProvidesAgent} {
+		if value, ok := tmuxEnv[name]; !ok || value != "" {
+			t.Errorf("tmux %s = %q (set=%v) after switching to local, want it unset explicitly", name, value, ok)
+		}
 	}
 }
 

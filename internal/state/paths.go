@@ -105,7 +105,7 @@ func ImageCacheDir(fleetName string) string {
 // the instance's workspace tree so it shares that tree's lifecycle (created
 // when the instance is and cleaned up with it).
 func ControlDir(fleetName, instanceName string) string {
-	return filepath.Join(WorkspacesDir(), fleetName, instanceName, ".control")
+	return filepath.Join(WorkspacesDir(), fleetName, instanceName, control.HostDirName)
 }
 
 // ControlSocketPath returns the host path of an instance's control socket.

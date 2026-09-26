@@ -126,11 +126,13 @@ type settingsPage struct {
 
 	// scrollOffset is the index of the first content line shown in the
 	// scrolling viewport. The mouse wheel adjusts it directly; View()
-	// clamps it each render. lastViewCursor is the cursor position at the
-	// previous render, used to chase the selection only when it actually
-	// moves (so a wheel scroll isn't yanked back to the cursor).
-	scrollOffset   int
-	lastViewCursor int
+	// clamps it each render. lastChase is the selection's geometry at the
+	// previous render. The viewport chases the selection when the cursor
+	// moved, or when that geometry changed (its row grew or shifted, or the
+	// viewport shrank under it) while the selection was in view. Once a wheel
+	// scroll has taken the selection out of view, only a cursor move chases.
+	scrollOffset int
+	lastChase    settingsChase
 
 	// serverRemote snapshots the remote-gateway settings as last known to be on
 	// the server (taken when the page opens, refreshed after each successful
@@ -146,6 +148,7 @@ type settingsPage struct {
 	// + two-press armed confirm, reset on every cursor move).
 	armadaAddStage      armadaAddStage
 	armadaAddURL        string // committed URL while the token stage is active
+	armadaAgentFocused  bool   // sub-cursor on the [ agent: on/off ] toggle of the current remote row
 	armadaDeleteFocused bool   // sub-cursor on the [ delete ] button of the current remote row
 	armadaDeleteConfirm bool   // "[ delete? ]" armed (first enter on the button)
 	armadaBusy          bool   // an add/delete persistence RPC is in flight
@@ -220,10 +223,10 @@ func newSettingsPage() *settingsPage {
 	input := textinput.New()
 	input.CharLimit = 256
 	return &settingsPage{
-		input:          input,
-		itemRowYs:      make(map[int]int),
-		itemHeights:    make(map[int]int),
-		lastViewCursor: -1,
+		input:       input,
+		itemRowYs:   make(map[int]int),
+		itemHeights: make(map[int]int),
+		lastChase:   settingsChase{cursor: -1},
 	}
 }
 
@@ -987,14 +990,16 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 
 		case "up", "k":
 			settingsPage.cursor = (settingsPage.cursor - 1 + count) % count
-			// Leaving a remote-fleet row resets its delete sub-cursor, exactly
-			// like the edit-fleet cache rows.
+			// Leaving a remote-fleet row resets its sub-cursor, exactly like
+			// the edit-fleet cache rows.
+			settingsPage.armadaAgentFocused = false
 			settingsPage.armadaDeleteFocused = false
 			settingsPage.armadaDeleteConfirm = false
 			return nil
 
 		case "down", "j":
 			settingsPage.cursor = (settingsPage.cursor + 1) % count
+			settingsPage.armadaAgentFocused = false
 			settingsPage.armadaDeleteFocused = false
 			settingsPage.armadaDeleteConfirm = false
 			return nil
@@ -1002,9 +1007,14 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 		case "left", "h":
 			item := settingsPage.settingsCursorItem(m)
 			if isArmadaRemoteItem(item) {
-				// Back off the [ delete ] button onto the row itself.
-				settingsPage.armadaDeleteFocused = false
-				settingsPage.armadaDeleteConfirm = false
+				// Step back along the row: [ delete ] → [ agent ] → the row.
+				if settingsPage.armadaDeleteFocused {
+					settingsPage.armadaDeleteFocused = false
+					settingsPage.armadaDeleteConfirm = false
+					settingsPage.armadaAgentFocused = true
+				} else {
+					settingsPage.armadaAgentFocused = false
+				}
 				return nil
 			}
 			if item == settingsItemTmuxVimKeys {
@@ -1041,8 +1051,14 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 		case "right", "l":
 			item := settingsPage.settingsCursorItem(m)
 			if isArmadaRemoteItem(item) {
-				// Focus the row's [ delete ] button (cache-clear UX pattern).
-				settingsPage.armadaDeleteFocused = true
+				// Step along the row: the row → [ agent ] → [ delete ]
+				// (cache-clear UX pattern for the delete button).
+				if settingsPage.armadaAgentFocused || settingsPage.armadaDeleteFocused {
+					settingsPage.armadaAgentFocused = false
+					settingsPage.armadaDeleteFocused = true
+				} else {
+					settingsPage.armadaAgentFocused = true
+				}
 				return nil
 			}
 			if item == settingsItemTmuxVimKeys {
@@ -1303,13 +1319,18 @@ func (settingsPage *settingsPage) cancelArmadaAdd() {
 }
 
 // enterArmadaRemoteRow handles enter/space on a registered remote's row: on
-// the row itself it re-pings the remote; on the focused [ delete ] button it
-// arms the confirm, then removes the remote on the second press.
+// the row itself it re-pings the remote; on the focused [ agent ] toggle it
+// flips agent forwarding; on the focused [ delete ] button it arms the
+// confirm, then removes the remote on the second press.
 func (settingsPage *settingsPage) enterArmadaRemoteRow(m *model, idx int) tea.Cmd {
 	if idx < 0 || idx >= len(m.armadaRemotes) || settingsPage.armadaBusy {
 		return nil
 	}
 	remote := m.armadaRemotes[idx]
+
+	if settingsPage.armadaAgentFocused {
+		return settingsPage.toggleArmadaAgent(m, idx)
+	}
 
 	if settingsPage.armadaDeleteFocused {
 		if !settingsPage.armadaDeleteConfirm {
@@ -1814,7 +1835,12 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			for i, remote := range m.armadaRemotes {
 				item := settingsItemArmadaBase + i
 				active := currentItem == item
-				value := dimStyle.Render(armadaURLBadge(remote.URL, "")) + " " + remote.URL + "  " + armadaStatusValue(m, remote.URL) + "  " + settingsPage.renderArmadaDeleteButton(m, active)
+				value := dimStyle.Render(armadaURLBadge(remote.URL, "")) + " " + remote.URL + "  " + armadaStatusValue(m, remote.URL) +
+					"  " + settingsPage.renderArmadaAgentButton(remote.ForwardAgent, active)
+				if agent := armadaAgentStatusValue(m, remote.URL, remote.ForwardAgent); agent != "" {
+					value += " " + agent
+				}
+				value += "  " + settingsPage.renderArmadaDeleteButton(m, active)
 				recordRow(item, settingsPage.renderSettingsRow(m, active, fmt.Sprintf("Remote %d", i+1), value))
 				listContent.WriteString("\n")
 			}
@@ -1832,6 +1858,7 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				addValue = dimStyle.Render("press enter to register a remote fleet")
 			}
 			addValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Registered fleets can be switched to from the main page's Armada selector")
+			addValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("[ agent: on ] gives a remote your ssh-agent while you are connected to it, like ssh -A")
 			recordRow(settingsItemArmadaAdd, settingsPage.renderSettingsRow(m, addActive, "+ Remote Fleet", addValue))
 
 		case "Tool Status":
@@ -1905,7 +1932,7 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		tail.WriteString("\n")
 	}
 	if isArmadaRemoteItem(currentItem) && settingsPage.armadaAddStage == armadaAddNone {
-		tail.WriteString(dimStyle.Render("  enter: ping now  right/l: focus [ delete ]  enter twice on [ delete ]: remove"))
+		tail.WriteString(dimStyle.Render(wrapToWidth("  enter: ping now  right/l: [ agent ] (enter: toggle), [ delete ] (enter twice)", m.width)))
 		tail.WriteString("\n")
 	}
 	// Copy rows act on enter (not edit/cycle), so spell that out — the generic
@@ -1921,7 +1948,7 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		tail.WriteString("\n")
 	}
 	if m.message != "" {
-		tail.WriteString(messageStyle.Render(m.message))
+		tail.WriteString(renderMessage(m.message, m.width))
 		tail.WriteString("\n")
 	}
 	if settingsPage.armadaAddStage == armadaAddURLIn || settingsPage.armadaAddStage == armadaAddTokenIn {
@@ -1956,21 +1983,26 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		viewHeight = totalLines
 	}
 
-	// Chase the selection only when it moved (keyboard nav or a click); a
-	// plain re-render after a wheel scroll leaves the viewport where it is.
+	// Chase the selection when the cursor moved (keyboard nav, a click), or
+	// when its geometry changed while it was in view (a toggle that grows
+	// its row or the tail). Geometry also changes on its own — the ping
+	// sweep re-wraps an erroring remote's row every few seconds — so once a
+	// wheel scroll has taken the selection out of view, it stays put.
 	offset := settingsPage.scrollOffset
-	if settingsPage.cursor != settingsPage.lastViewCursor {
-		if start, ok := itemLineStart[currentItem]; ok {
-			end := start + settingsPage.itemHeights[currentItem] - 1
-			if start < offset {
-				offset = start
-			}
-			if end > offset+viewHeight-1 {
-				offset = end - viewHeight + 1
-			}
+	start, selected := itemLineStart[currentItem]
+	chase := settingsChase{cursor: settingsPage.cursor, start: start, height: settingsPage.itemHeights[currentItem], viewHeight: viewHeight}
+	last := settingsPage.lastChase
+	wasInView := last.start >= offset && last.start+last.height <= offset+last.viewHeight
+	if selected && (chase.cursor != last.cursor || (chase != last && wasInView)) {
+		end := start + chase.height - 1
+		if start < offset {
+			offset = start
+		}
+		if end > offset+viewHeight-1 {
+			offset = end - viewHeight + 1
 		}
 	}
-	settingsPage.lastViewCursor = settingsPage.cursor
+	settingsPage.lastChase = chase
 	offset = max(0, min(offset, totalLines-viewHeight))
 	settingsPage.scrollOffset = offset
 
@@ -1996,6 +2028,12 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 	b.WriteString(tail.String())
 
 	return b.String()
+}
+
+// settingsChase is what the settings viewport last chased: the cursor, where
+// its item's lines start, how many there are, and the viewport's height.
+type settingsChase struct {
+	cursor, start, height, viewHeight int
 }
 
 // renderScrollbar draws a vertical scrollbar viewHeight rows tall for a list

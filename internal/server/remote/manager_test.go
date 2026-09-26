@@ -236,6 +236,30 @@ func newManagerForTest(mcpPort int, addr string, pool *x509.CertPool, opts ...Op
 	return m, statusCh
 }
 
+// startManager runs m until the test ends, and waits for Run to return before
+// the test's TempDir HOME is removed: Run persists the gateway session there,
+// and a write still in flight makes the TempDir cleanup fail ("directory not
+// empty"). The wait is bounded so a Run that never returns (a publish blocked
+// on a status channel nobody drains) fails the test by name instead of
+// hanging it until -timeout.
+func startManager(t *testing.T, m *Manager) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("Manager.Run did not return after cancel (a publish blocked?)")
+		}
+	})
+}
+
 // TestManagerConnectsServesAndDisables drives the full lifecycle against a real
 // TLS gateway: CONNECTING -> CONNECTED (with the gateway's public URL), the
 // session is persisted, the tunnel actually serves a request, and disabling
@@ -286,9 +310,7 @@ func TestManagerConnectsServesAndDisables(t *testing.T) {
 	}()
 
 	m, statusCh := newManagerForTest(mcp.port(t), ln.Addr().String(), pool)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go m.Run(ctx)
+	startManager(t, m)
 
 	m.Reconcile(true, false, false, "https://gw.example.com")
 
@@ -381,9 +403,7 @@ func TestManagerStickyReconnect(t *testing.T) {
 	}()
 
 	m, statusCh := newManagerForTest(mcp.port(t), ln.Addr().String(), pool)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go m.Run(ctx)
+	startManager(t, m)
 	m.Reconcile(true, false, false, "https://gw.example.com")
 
 	// First registration: no prior session id or resume token.
@@ -457,9 +477,7 @@ func TestManagerWebhookOnlyReconnect(t *testing.T) {
 	}()
 
 	m, statusCh := newManagerForTest(mcp.port(t), ln.Addr().String(), pool, WithWebhookListener(NewChanListener()))
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go m.Run(ctx)
+	startManager(t, m)
 	// Webhook-only: mcp=false, fleet=false, webhook=true.
 	m.Reconcile(false, false, true, "https://gw.example.com")
 
@@ -537,9 +555,7 @@ func TestManagerReconcileIdempotentKeepsTunnel(t *testing.T) {
 	}()
 
 	m, statusCh := newManagerForTest(mcp.port(t), ln.Addr().String(), pool)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go m.Run(ctx)
+	startManager(t, m)
 
 	m.Reconcile(true, false, false, "https://gw.example.com")
 	waitForReg(t, regs, 5*time.Second)
@@ -611,9 +627,7 @@ func TestManagerReconcileDisableConverges(t *testing.T) {
 	}()
 
 	m, statusCh := newManagerForTest(mcp.port(t), ln.Addr().String(), pool)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go m.Run(ctx)
+	startManager(t, m)
 
 	for i := 0; i < 30; i++ {
 		m.Reconcile(true, false, false, "https://gw.example.com")
@@ -657,9 +671,7 @@ func TestManagerErrorsWhenMcpDown(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	statusCh := make(chan *fleetgrpc.RemoteMcpStatus, 64)
 	m := NewManager(0, "vtest", func(st *fleetgrpc.RemoteMcpStatus) { statusCh <- st })
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go m.Run(ctx)
+	startManager(t, m)
 	m.Reconcile(true, false, false, "https://gw.example.com")
 
 	st := waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_ERROR, 5*time.Second)

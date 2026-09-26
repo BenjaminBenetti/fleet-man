@@ -7,6 +7,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/server/sshtunnel"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc/codes"
@@ -33,7 +34,17 @@ func (s *service) GetArmada(_ context.Context, _ *fleetgrpc.GetArmadaRequest) (*
 // SetArmada replaces the whole registry (the settings page sends the full
 // edited list). muWrite serializes it alongside config.json writes — both are
 // small whole-file replaces owned by this server.
-func (s *service) SetArmada(_ context.Context, req *fleetgrpc.SetArmadaRequest) (*fleetgrpc.SetArmadaReply, error) {
+func (s *service) SetArmada(ctx context.Context, req *fleetgrpc.SetArmadaRequest) (*fleetgrpc.SetArmadaReply, error) {
+	next := protoToArmada(req.GetRemotes())
+	// Looked up before taking muWrite: `ssh -G` runs the user's Match exec
+	// commands, which may take as long as they like, and every config write
+	// waits on muWrite. The registry read here is only a first guess at which
+	// entries are new; inheritForwardAgent decides under the lock.
+	var resolved map[string]bool
+	if early, err := state.LoadArmada(); err == nil {
+		resolved = resolveForwardAgent(ctx, early, next)
+	}
+
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
@@ -41,7 +52,8 @@ func (s *service) SetArmada(_ context.Context, req *fleetgrpc.SetArmadaRequest) 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load armada: %v", err)
 	}
-	if err := state.SaveArmada(protoToArmada(req.GetRemotes())); err != nil {
+	inheritForwardAgent(ctx, prev, next, resolved)
+	if err := state.SaveArmada(next); err != nil {
 		return nil, status.Errorf(codes.Internal, "save armada: %v", err)
 	}
 	saved, err := state.LoadArmada()
@@ -61,6 +73,56 @@ func (s *service) SetArmada(_ context.Context, req *fleetgrpc.SetArmadaRequest) 
 	}
 
 	return &fleetgrpc.SetArmadaReply{Remotes: armadaToProto(saved)}, nil
+}
+
+// sshForwardAgentConfigured reports the user's ssh-config ForwardAgent for an
+// ssh:// URL. A var so tests do not depend on the machine's ~/.ssh/config.
+var sshForwardAgentConfigured = sshtunnel.ForwardAgentConfigured
+
+// inheritForwardAgent turns agent forwarding on for ssh:// remotes that this
+// edit ADDS when the user's ssh config already forwards an agent to that host:
+// registering a host you `ssh -A` into should behave the same way. Only new
+// entries are touched, so turning it off afterwards sticks. resolved holds the
+// answers resolveForwardAgent looked up ahead (keyed by sshtunnel.Key); an
+// entry it lacks — the registry changed in between — is looked up here.
+func inheritForwardAgent(ctx context.Context, prev, next *state.Armada, resolved map[string]bool) {
+	for _, i := range addedSSHRemotes(prev, next) {
+		r := next.Remotes[i]
+		configured, ok := resolved[sshtunnel.Key(r.URL)]
+		if !ok {
+			configured = sshForwardAgentConfigured(ctx, r.URL)
+		}
+		next.Remotes[i].ForwardAgent = configured
+	}
+}
+
+// resolveForwardAgent looks up sshForwardAgentConfigured for the entries
+// inheritForwardAgent would touch, without changing next.
+func resolveForwardAgent(ctx context.Context, prev, next *state.Armada) map[string]bool {
+	resolved := make(map[string]bool)
+	for _, i := range addedSSHRemotes(prev, next) {
+		r := next.Remotes[i]
+		resolved[sshtunnel.Key(r.URL)] = sshForwardAgentConfigured(ctx, r.URL)
+	}
+	return resolved
+}
+
+// addedSSHRemotes indexes the ssh:// entries of next that prev does not have
+// (compared canonically) and that do not already forward the agent.
+func addedSSHRemotes(prev, next *state.Armada) []int {
+	known := make(map[string]bool)
+	for _, r := range prev.Remotes {
+		if key := sshtunnel.Key(r.URL); key != "" {
+			known[key] = true
+		}
+	}
+	var added []int
+	for i, r := range next.Remotes {
+		if key := sshtunnel.Key(r.URL); key != "" && !known[key] && !r.ForwardAgent {
+			added = append(added, i)
+		}
+	}
+	return added
 }
 
 // droppedSSHRemotes lists the ssh:// URLs present in prev but not in next
@@ -139,17 +201,7 @@ func sshResolveStatus(url string, err error) error {
 	st := status.New(codes.FailedPrecondition, err.Error())
 	var uk *sshtunnel.UnknownHostKeyError
 	if errors.As(err, &uk) {
-		detail := &fleetgrpc.UnknownSSHHostKey{
-			Url:            url,
-			Name:           uk.Name,
-			Host:           uk.Host,
-			Port:           uint32(uk.Port),
-			KeyType:        uk.KeyType,
-			KnownHostsPath: uk.KnownHostsPath,
-		}
-		for _, k := range uk.Keys {
-			detail.Keys = append(detail.Keys, &fleetgrpc.SSHHostKey{KeyType: k.Type, Fingerprint: k.Fingerprint, KnownHostsLine: k.Line})
-		}
+		detail := sshHostKeyDetail(url, uk)
 		if withDetail, derr := st.WithDetails(detail); derr == nil {
 			st = withDetail
 		}
@@ -161,17 +213,9 @@ func armadaToProto(a *state.Armada) []*fleetgrpc.ArmadaRemote {
 	if a == nil {
 		return nil
 	}
-	out := make([]*fleetgrpc.ArmadaRemote, 0, len(a.Remotes))
-	for _, r := range a.Remotes {
-		out = append(out, &fleetgrpc.ArmadaRemote{Url: r.URL, Token: r.Token})
-	}
-	return out
+	return protoconv.ArmadaRemotesToProto(a.Remotes)
 }
 
 func protoToArmada(remotes []*fleetgrpc.ArmadaRemote) *state.Armada {
-	a := &state.Armada{}
-	for _, r := range remotes {
-		a.Remotes = append(a.Remotes, state.ArmadaRemote{URL: r.GetUrl(), Token: r.GetToken()})
-	}
-	return a
+	return &state.Armada{Remotes: protoconv.ArmadaRemotesFromProto(remotes)}
 }

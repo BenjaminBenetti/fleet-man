@@ -21,6 +21,8 @@
 // path, and both must resolve to the same file through the bind mount.
 package control
 
+import "path/filepath"
+
 // Path constants for the container side of the channel. The host side derives
 // its own absolute path via internal/state; both ends resolve to the SAME
 // file through the bind mount, so the socket basename (SocketName) MUST be
@@ -49,3 +51,24 @@ const (
 	// instance's behalf. Its payload is CopyFilePayload.
 	TypeCopyFile = "file.copy"
 )
+
+// HostDirName is the basename of an instance's host control directory, which
+// sits next to its workspace: <workspaces>/<fleet>/<instance>/{<workspace>,
+// .control}. (state.ControlDir builds the full path.)
+const HostDirName = ".control"
+
+// MountMarkerName is the file provisioning drops in an instance's host
+// directory, NEXT TO its control directory, when it bind-mounts the control
+// directory into the container. Only provisioning writes it — unlike the
+// control directory itself, which the daemon's control-socket registry creates
+// for every running instance — so its presence means the container sees what
+// the daemon serves there (the SSH-agent relay socket). It is deliberately not
+// inside the control directory: the instance can write there (and could plant
+// a symlink for the daemon to write through); the instance directory is not
+// mounted.
+const MountMarkerName = ".control-mounted"
+
+// MountMarkerPath is the marker's path for the control directory controlDir.
+func MountMarkerPath(controlDir string) string {
+	return filepath.Join(filepath.Dir(controlDir), MountMarkerName)
+}

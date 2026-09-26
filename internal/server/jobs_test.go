@@ -74,7 +74,7 @@ func TestCreateInstanceJobStartedThenDone(t *testing.T) {
 	}
 
 	orig := jobRunCreate
-	jobRunCreate = func(fleetName, instanceName, remote, branch string, verbose bool, b fleet.BackendType) error {
+	jobRunCreate = func(_ context.Context, fleetName, instanceName, remote, branch string, verbose bool, b fleet.BackendType) error {
 		if remote != "git@x:a.git" {
 			t.Errorf("remote not resolved from fleet record: %q", remote)
 		}

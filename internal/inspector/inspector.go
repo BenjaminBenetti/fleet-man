@@ -23,12 +23,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 )
 
 // ===========================================
@@ -77,6 +78,12 @@ type Repo struct {
 // an error the temp dir is cleaned up before returning, so callers
 // only need to defer Close on the success path.
 func Open(remoteURL, branch string) (*Repo, error) {
+	return OpenContext(context.Background(), remoteURL, branch)
+}
+
+// OpenContext propagates cancellation and the daemon's host-key prompt to the
+// temporary clone. Open remains useful for noninteractive inspection.
+func OpenContext(ctx context.Context, remoteURL, branch string) (*Repo, error) {
 	if remoteURL == "" {
 		return nil, errors.New("remoteURL is empty")
 	}
@@ -87,7 +94,7 @@ func Open(remoteURL, branch string) (*Repo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating temp dir: %w", err)
 	}
-	if err := shallowClone(remoteURL, branch, tmpDir); err != nil {
+	if err := shallowClone(ctx, remoteURL, branch, tmpDir); err != nil {
 		_ = os.RemoveAll(tmpDir)
 		return nil, fmt.Errorf("clone: %w", err)
 	}
@@ -163,20 +170,23 @@ func (r *Repo) FindDevcontainerJSON() (string, []byte, error) {
 // shallowClone runs `git clone --depth 1` into dest. A 90-second
 // context bounds the clone so an unreachable host eventually surfaces
 // as an error rather than hanging the dialog that triggered Open.
-func shallowClone(remoteURL, branch, dest string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+func shallowClone(ctx context.Context, remoteURL, branch, dest string) error {
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
 	args := []string{"clone", "--depth", "1", "--no-tags"}
 	if branch != "" {
 		args = append(args, "--branch", branch)
 	}
-	args = append(args, remoteURL, dest)
+	args = append(args, "--", remoteURL, dest)
 
-	cmd := exec.CommandContext(ctx, "git", args...)
-	out, err := cmd.CombinedOutput()
+	out, err := gitutil.Clone(ctx, remoteURL, args, nil)
 	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		detail := strings.TrimSpace(string(out))
+		if hint := gitutil.CloneFailureHint(detail, remoteURL, agentsock.CloneForwarding()); hint != "" {
+			detail += "\n" + hint
+		}
+		return fmt.Errorf("%w: %s", err, detail)
 	}
 	return nil
 }

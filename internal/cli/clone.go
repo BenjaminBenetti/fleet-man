@@ -35,7 +35,7 @@ func newCloneCmd() *cobra.Command {
 			// The server pre-creates the StatusCloning destination (copying the
 			// source's config/backend/tag/color/branch) and runs the clone — it
 			// errors NotFound for a missing source / AlreadyExists for a taken dest.
-			if err := runInstanceJob(cmd.Context(), func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error) {
+			if err := runInstanceJob(cmd.Context(), true, func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error) {
 				return svc.CloneInstance(ctx, &fleetgrpc.CloneInstanceRequest{
 					Fleet:          srcTarget.Fleet,
 					SourceInstance: srcTarget.Instance,
