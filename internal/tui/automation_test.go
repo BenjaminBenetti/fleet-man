@@ -379,15 +379,20 @@ func TestEditAgentTogglesFleetMCP(t *testing.T) {
 		t.Fatal("enter on Fleet MCP should turn it on and instant-save")
 	}
 	view = fp.renderAutomationAgentDialog(m)
-	if !strings.Contains(view, "Fleet MCP: [ on ]") || !strings.Contains(view, "fleet-admiral") {
-		t.Fatalf("the selected row should read on and explain itself:\n%s", view)
+	if !strings.Contains(view, "Fleet MCP: [ on ]") {
+		t.Fatalf("the row should read on:\n%s", view)
 	}
 	if strings.Contains(view, "Won't apply") {
 		t.Fatalf("a Claude Code agent on devcontainer can use it:\n%s", view)
 	}
 	fp.agentDlg.backend = fleet.BackendCoder
-	if view := fp.renderAutomationAgentDialog(m); !strings.Contains(view, "Won't apply") {
+	view = fp.renderAutomationAgentDialog(m)
+	if !strings.Contains(view, "Won't apply") {
 		t.Fatalf("on for a coder agent should say it won't apply:\n%s", view)
+	}
+	// Its tallest state still fits an 80x24 terminal.
+	if lines := strings.Count(view, "\n"); lines > 24 {
+		t.Fatalf("the agent dialog is %d lines tall with every note showing; it must fit 24 rows", lines)
 	}
 	fp.agentDlg.backend = fleet.BackendDevcontainer
 	fp.updateAutomationAgent(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
@@ -401,8 +406,12 @@ func TestEditAgentTogglesFleetMCP(t *testing.T) {
 	if !fp.agentDlg.fleetMCP {
 		t.Fatal("the dialog should load the agent's Fleet MCP setting")
 	}
-	if !strings.Contains(agentSummary(m.st.Fleets["alpha"], m.st.Fleets["alpha"].Settings.Agents[0]), "fleet MCP") {
-		t.Fatal("the agent row summary should mention the fleet MCP")
+	if got := agentSummary(m.st.Fleets["alpha"], m.st.Fleets["alpha"].Settings.Agents[0]); !strings.Contains(got, "fleet MCP") || strings.Contains(got, "won't apply") {
+		t.Fatalf("the agent row summary should mention the fleet MCP: %q", got)
+	}
+	unusable := fleet.Agent{Name: "c", Command: "codex x", Backend: fleet.BackendDevcontainer, FleetMCP: true}
+	if got := agentSummary(m.st.Fleets["alpha"], unusable); !strings.Contains(got, "fleet MCP (won't apply)") {
+		t.Fatalf("an agent that can't use it should be flagged in its row: %q", got)
 	}
 }
 

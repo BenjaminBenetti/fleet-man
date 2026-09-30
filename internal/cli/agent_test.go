@@ -176,6 +176,22 @@ func TestAgentList(t *testing.T) {
 	}
 }
 
+func TestFleetMCPColumn(t *testing.T) {
+	for _, c := range []struct {
+		agent fleet.Agent
+		want  string
+	}{
+		{fleet.Agent{Command: "claude"}, "off"},
+		{fleet.Agent{Command: "claude", FleetMCP: true}, "on"},
+		{fleet.Agent{Command: "codex", FleetMCP: true}, "on (won't apply)"},
+		{fleet.Agent{Command: "claude", Backend: fleet.BackendCoder, FleetMCP: true}, "on (won't apply)"},
+	} {
+		if got := fleetMCPColumn(c.agent); got != c.want {
+			t.Errorf("fleetMCPColumn(%+v) = %q, want %q", c.agent, got, c.want)
+		}
+	}
+}
+
 func TestAgentAliases(t *testing.T) {
 	cmds := map[string]string{}
 	for _, c := range newAgentCmd().Commands() {

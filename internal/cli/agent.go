@@ -46,7 +46,7 @@ func newAgentListCmd() *cobra.Command {
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(w, "NAME\tBACKEND\tTRIGGERS\tMCP\tCOMMAND")
 			for _, a := range settings.Agents {
-				fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n", a.Name, a.Backend, triggersUsing(settings.Triggers, a.Name), onOff(a.FleetMCP), a.Command)
+				fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n", a.Name, a.Backend, triggersUsing(settings.Triggers, a.Name), fleetMCPColumn(a), a.Command)
 			}
 			return w.Flush()
 		},
@@ -173,12 +173,17 @@ func warnFleetMCP(cmd *cobra.Command, a fleet.Agent) {
 	}
 }
 
-// onOff renders a bool as a list column.
-func onOff(on bool) string {
-	if on {
+// fleetMCPColumn renders an agent's fleet MCP for the list: on, off, or on
+// but unusable by this agent.
+func fleetMCPColumn(a fleet.Agent) string {
+	switch {
+	case !a.FleetMCP:
+		return "off"
+	case agentstrategy.FleetMCPUnsupported(a.Command, a.Backend) != "":
+		return "on (won't apply)"
+	default:
 		return "on"
 	}
-	return "off"
 }
 
 // triggersUsing counts the triggers that reference the named agent.

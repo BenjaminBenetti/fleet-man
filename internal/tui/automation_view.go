@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentstrategy"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -151,7 +152,11 @@ func agentSummary(f *fleet.Fleet, a fleet.Agent) string {
 	n := triggerCountForAgent(f, a.Name)
 	parts := []string{backendTypeLabel(a.Backend)}
 	if a.FleetMCP {
-		parts = append(parts, "fleet MCP")
+		if agentstrategy.FleetMCPUnsupported(a.Command, a.Backend) != "" {
+			parts = append(parts, "fleet MCP (won't apply)")
+		} else {
+			parts = append(parts, "fleet MCP")
+		}
 	}
 	suffix := "s"
 	if n == 1 {

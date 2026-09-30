@@ -382,12 +382,9 @@ func (fleetPage *fleetPage) renderAutomationAgentDialog(m *model) string {
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowSystemPrompt), dialogLabel.Render("Sys prompt:"), promptFieldPreview(st.systemPrompt, "(optional, injected into ${SYS_PROMPT})"))
 	fmt.Fprintf(&body, "%s%s [ %s ]\n", marker(agentRowBackend), dialogLabel.Render("Backend: "), backendTypeLabel(st.backend))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowFleetMCP), dialogLabel.Render("Fleet MCP:"), selectorLabel(onOffLabel(st.fleetMCP)))
-	// Always shown: what turning it on risks.
+	// Always shown: what turning it on risks. (Kept to these few lines: the
+	// dialog must still fit an 80x24 terminal with "Won't apply" showing.)
 	fmt.Fprintf(&body, "%s\n", warnTextStyle.PaddingLeft(4).Width(46).Render(fleetMCPRiskNote))
-	if st.row == agentRowFleetMCP {
-		fmt.Fprintf(&body, "%s\n", dimStyle.PaddingLeft(4).Width(46).Render(
-			"Gives the agent the full fleet MCP (every fleet) and the fleet-admiral skill, so it can run more instances and agents. Claude Code, devcontainer backend."))
-	}
 	if why := fleetPage.agentFleetMCPProblem(); why != "" {
 		fmt.Fprintf(&body, "%s\n", errorStyle.PaddingLeft(4).Width(46).Render("Won't apply: "+why+"."))
 	}
