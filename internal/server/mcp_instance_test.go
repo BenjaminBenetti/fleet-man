@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -216,8 +217,12 @@ func (l *localScriptBackend) RunScript(_, script string) (string, error) {
 }
 
 // TestWriteFleetMCPFiles runs the real write script: every file lands, with
-// its content and mode, in one exec.
+// its content and mode, in one exec. The script runs inside Linux containers,
+// so it is only run against a Linux userland here.
 func TestWriteFleetMCPFiles(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the write script targets a Linux container's userland")
+	}
 	dir := t.TempDir()
 	setup, ok := agentstrategy.For("claude").FleetMCP(agentstrategy.FleetMCPParams{Dir: dir, Bridge: []string{"/usr/bin/fleet", "mcp-bridge"}})
 	if !ok {
