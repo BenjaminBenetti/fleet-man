@@ -391,6 +391,7 @@ func derivePersistableSnapshot(activeGroup ActiveGroup, panes []paneByPosition, 
 
 	return savedGroup{
 		GroupID:      groupID,
+		FleetName:    activeGroup.Ref.Fleet,
 		InstanceName: activeGroup.Ref.Instance,
 		Sessions:     sessionNames,
 		Layout:       layout,
@@ -451,7 +452,7 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(m *model) {
 	// No-op when nothing changed. The 250ms layout tick fires this
 	// constantly; without this gate an idle split would rewrite
 	// state.json every tick with identical bytes.
-	key := computeGroupKey(groupSnapshot.InstanceName, groupSnapshot.GroupID)
+	key := computeGroupKey(groupSnapshot.FleetName, groupSnapshot.InstanceName, groupSnapshot.GroupID)
 	if existing, ok := fleetPage.savedGroups[key]; ok && sameSavedGroup(existing, groupSnapshot) {
 		return
 	}
@@ -475,11 +476,12 @@ func (fleetPage *fleetPage) saveCurrentGroupLayout(m *model) {
 	if st.GroupLayouts == nil {
 		st.GroupLayouts = make(map[string]configutil.GroupLayout)
 	}
-	// Use composite key (instanceName/groupID) for state persistence
+	// Use composite key (fleetName/instanceName/groupID) for state persistence
 	// to ensure isolation between instances with the same group ID.
-	stateKey := computeGroupKey(groupSnapshot.InstanceName, groupSnapshot.GroupID)
+	stateKey := computeGroupKey(groupSnapshot.FleetName, groupSnapshot.InstanceName, groupSnapshot.GroupID)
 	layout := configutil.GroupLayout{
 		GroupID:      groupSnapshot.GroupID,
+		FleetName:    groupSnapshot.FleetName,
 		InstanceName: groupSnapshot.InstanceName,
 		Sessions:     groupSnapshot.Sessions,
 		Layout:       groupSnapshot.Layout,
@@ -524,7 +526,7 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 	// one currently open here (toggle-close handles that), and local
 	// saves write m.st synchronously, so the server copy is
 	// fresher-or-equal for any group reaching this path.
-	key := computeGroupKey(instanceName, groupID)
+	key := computeGroupKey(fleetName, instanceName, groupID)
 	savedLayout := ""
 	var savedOrder []string
 	var savedSnapshot *savedGroup
@@ -532,6 +534,7 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 		if gl, ok := m.st.GroupLayouts[key]; ok {
 			savedSnapshot = &savedGroup{
 				GroupID:      gl.GroupID,
+				FleetName:    gl.FleetName,
 				InstanceName: gl.InstanceName,
 				Sessions:     gl.Sessions,
 				Layout:       gl.Layout,

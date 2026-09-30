@@ -157,7 +157,7 @@ func (fleetPage *fleetPage) cursorToFleetHeader(name string) {
 
 func (fleetPage *fleetPage) appendSavedGroupRows(fleetName string, instance *fleet.Instance, liveGroups map[string]bool) {
 	sanitized := SanitizeSessionName(instance.Name)
-	for _, group := range fleetPage.savedGroupsForInstance(instance.Name) {
+	for _, group := range fleetPage.savedGroupsForInstance(InstanceRef{Fleet: fleetName, Instance: instance.Name}) {
 		if liveGroups[group.GroupID] {
 			continue
 		}
@@ -215,10 +215,10 @@ func (fleetPage *fleetPage) toggleAutomationMode(m *model, name string) {
 	fleetPage.cursorToFleetHeader(name)
 }
 
-func (fleetPage *fleetPage) savedGroupsForInstance(instanceName string) []savedGroup {
+func (fleetPage *fleetPage) savedGroupsForInstance(ref InstanceRef) []savedGroup {
 	groups := make([]savedGroup, 0, len(fleetPage.savedGroups))
 	for _, group := range fleetPage.savedGroups {
-		if group.InstanceName == instanceName {
+		if group.FleetName == ref.Fleet && group.InstanceName == ref.Instance {
 			groups = append(groups, group)
 		}
 	}

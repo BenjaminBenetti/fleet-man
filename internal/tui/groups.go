@@ -31,6 +31,7 @@ type sessionGroup struct {
 // savedGroup stores the state of a group's outer tmux panes so
 // they can be restored when switching back.
 type savedGroup struct {
+	FleetName    string   // fleet this group belongs to
 	GroupID      string   // group identifier
 	InstanceName string   // instance this group belongs to
 	Sessions     []string // ordered session names (for pane recreation)
@@ -39,18 +40,18 @@ type savedGroup struct {
 }
 
 // computeGroupKey returns a composite key for the savedGroups map that
-// uniquely identifies a group within a specific instance. This ensures
-// that two instances with sessions sharing the same group ID do not
-// collide in the map.
-func computeGroupKey(instanceName, groupID string) string {
-	return instanceName + "/" + groupID
+// uniquely identifies a group within a fleet and instance, including when
+// instances in different fleets share both an instance name and a group ID.
+func computeGroupKey(fleetName, instanceName, groupID string) string {
+	return fleetName + "/" + instanceName + "/" + groupID
 }
 
 // sameSavedGroup reports whether two savedGroup values are byte-identical.
 // Used by saveCurrentGroupLayout to skip redundant writes on poll ticks
 // when the user hasn't changed anything.
 func sameSavedGroup(a, b savedGroup) bool {
-	if a.GroupID != b.GroupID ||
+	if a.FleetName != b.FleetName ||
+		a.GroupID != b.GroupID ||
 		a.InstanceName != b.InstanceName ||
 		a.Layout != b.Layout ||
 		a.PaneCount != b.PaneCount ||

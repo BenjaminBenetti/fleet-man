@@ -222,8 +222,8 @@ func TestBuildRowsMarksFirstSessionRowInlineWithPRStatus(t *testing.T) {
 	inst := &fleet.Instance{Name: "agent-1", Status: fleet.StatusRunning, ContainerID: "abc"}
 	ps := &fleetgrpc.PrStatus{OpenCount: 1, PrSignal: fleetgrpc.PrSignal_PR_SIGNAL_GREEN}
 	fp := newFleetPage()
-	fp.savedGroups[computeGroupKey("agent-1", "abc123")] = savedGroup{
-		GroupID: "g-a", InstanceName: "agent-1",
+	fp.savedGroups[computeGroupKey("alpha", "agent-1", "abc123")] = savedGroup{
+		GroupID: "g-a", FleetName: "alpha", InstanceName: "agent-1",
 		Sessions: []string{"g-a", "g-a~ff00"}, PaneCount: 2,
 	}
 	store := NewSessionStore()

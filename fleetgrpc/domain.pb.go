@@ -1041,7 +1041,7 @@ func (x *Fleet) GetInstances() []*Instance {
 
 // GroupLayout mirrors internal/state.GroupLayout (a tmux pane layout snapshot,
 // the ONE piece of tmux state that IS persisted). The State map key is the
-// composite computeGroupKey(instance_name, group_id) (splitpane.go), which the
+// composite computeGroupKey(fleet_name, instance_name, group_id) (splitpane.go), which the
 // server derives from these fields — so SetGroupLayout/DeleteGroupLayout senders
 // only supply the layout's own fields.
 type GroupLayout struct {
@@ -1051,6 +1051,7 @@ type GroupLayout struct {
 	Sessions      []string               `protobuf:"bytes,3,rep,name=sessions,proto3" json:"sessions,omitempty"`
 	Layout        string                 `protobuf:"bytes,4,opt,name=layout,proto3" json:"layout,omitempty"`
 	PaneCount     int32                  `protobuf:"varint,5,opt,name=pane_count,json=paneCount,proto3" json:"pane_count,omitempty"`
+	FleetName     string                 `protobuf:"bytes,6,opt,name=fleet_name,json=fleetName,proto3" json:"fleet_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1118,6 +1119,13 @@ func (x *GroupLayout) GetPaneCount() int32 {
 		return x.PaneCount
 	}
 	return 0
+}
+
+func (x *GroupLayout) GetFleetName() string {
+	if x != nil {
+		return x.FleetName
+	}
+	return ""
 }
 
 // State mirrors internal/state.State — the canonical PERSISTED model the server
@@ -1279,14 +1287,16 @@ const file_domain_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06remote\x18\x02 \x01(\tR\x06remote\x124\n" +
 	"\bsettings\x18\x03 \x01(\v2\x18.fleetgrpc.FleetSettingsR\bsettings\x121\n" +
-	"\tinstances\x18\x04 \x03(\v2\x13.fleetgrpc.InstanceR\tinstancesJ\x04\b\x05\x10\x10\"\xa0\x01\n" +
+	"\tinstances\x18\x04 \x03(\v2\x13.fleetgrpc.InstanceR\tinstancesJ\x04\b\x05\x10\x10\"\xbf\x01\n" +
 	"\vGroupLayout\x12\x19\n" +
 	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x12#\n" +
 	"\rinstance_name\x18\x02 \x01(\tR\finstanceName\x12\x1a\n" +
 	"\bsessions\x18\x03 \x03(\tR\bsessions\x12\x16\n" +
 	"\x06layout\x18\x04 \x01(\tR\x06layout\x12\x1d\n" +
 	"\n" +
-	"pane_count\x18\x05 \x01(\x05R\tpaneCount\"\xf9\x02\n" +
+	"pane_count\x18\x05 \x01(\x05R\tpaneCount\x12\x1d\n" +
+	"\n" +
+	"fleet_name\x18\x06 \x01(\tR\tfleetName\"\xf9\x02\n" +
 	"\x05State\x124\n" +
 	"\x06fleets\x18\x01 \x03(\v2\x1c.fleetgrpc.State.FleetsEntryR\x06fleets\x12G\n" +
 	"\rgroup_layouts\x18\x02 \x03(\v2\".fleetgrpc.State.GroupLayoutsEntryR\fgroupLayouts\x12/\n" +

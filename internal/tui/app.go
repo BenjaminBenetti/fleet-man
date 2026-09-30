@@ -370,7 +370,7 @@ func (m *model) reconcileSavedGroups() {
 	fleetPage := m.fleetPage
 	activeKey := ""
 	if fleetPage.split.paneID != "" && !fleetPage.split.activeGroup.Empty() {
-		activeKey = computeGroupKey(fleetPage.split.activeGroup.Ref.Instance, fleetPage.split.activeGroup.GroupID)
+		activeKey = computeGroupKey(fleetPage.split.activeGroup.Ref.Fleet, fleetPage.split.activeGroup.Ref.Instance, fleetPage.split.activeGroup.GroupID)
 	}
 	for key := range fleetPage.savedGroups {
 		if key == activeKey {
@@ -384,10 +384,11 @@ func (m *model) reconcileSavedGroups() {
 		if stateKey == activeKey {
 			continue
 		}
-		// Use the stateKey (instanceName/groupID) directly as the
+		// Use the stateKey (fleetName/instanceName/groupID) directly as the
 		// savedGroups map key to maintain instance isolation.
 		fleetPage.savedGroups[stateKey] = savedGroup{
 			GroupID:      layout.GroupID,
+			FleetName:    layout.FleetName,
 			InstanceName: layout.InstanceName,
 			Sessions:     layout.Sessions,
 			Layout:       layout.Layout,
@@ -419,7 +420,7 @@ func (m *model) pruneSavedGroupsForInstance(ref InstanceRef) {
 		return
 	}
 	for key, savedLayout := range m.fleetPage.savedGroups {
-		if savedLayout.InstanceName != ref.Instance {
+		if savedLayout.FleetName != ref.Fleet || savedLayout.InstanceName != ref.Instance {
 			continue
 		}
 		// A layout recorded moments ago (preset-backed creation) may predate
@@ -434,7 +435,7 @@ func (m *model) pruneSavedGroupsForInstance(ref InstanceRef) {
 		if !live[savedLayout.GroupID] {
 			delete(m.fleetPage.savedGroups, key)
 			delete(m.st.GroupLayouts, key)
-			_ = deleteGroupLayoutRemote(savedLayout.InstanceName, savedLayout.GroupID)
+			_ = deleteGroupLayoutRemote(savedLayout.FleetName, savedLayout.InstanceName, savedLayout.GroupID)
 		}
 	}
 }
@@ -449,9 +450,10 @@ const groupLayoutPruneGrace = 15 * time.Second
 // does for a live split — so opening the new session restores the preset's
 // pane geometry and session-to-pane mapping.
 func (m *model) recordPresetGroupLayout(msg presetSessionsCreatedMsg) {
-	key := computeGroupKey(msg.ref.Instance, msg.groupID)
+	key := computeGroupKey(msg.ref.Fleet, msg.ref.Instance, msg.groupID)
 	m.fleetPage.savedGroups[key] = savedGroup{
 		GroupID:      msg.groupID,
+		FleetName:    msg.ref.Fleet,
 		InstanceName: msg.ref.Instance,
 		Sessions:     msg.sessions,
 		Layout:       msg.layout,
@@ -467,6 +469,7 @@ func (m *model) recordPresetGroupLayout(msg presetSessionsCreatedMsg) {
 	}
 	layout := configutil.GroupLayout{
 		GroupID:      msg.groupID,
+		FleetName:    msg.ref.Fleet,
 		InstanceName: msg.ref.Instance,
 		Sessions:     msg.sessions,
 		Layout:       msg.layout,
@@ -537,7 +540,7 @@ func (m *model) migrateRenamedSession(msg sessionRenamedMsg) {
 // mirrors the move into state.json and the server. A no-op when no saved
 // layout exists for the old group ID.
 func (m *model) migrateSavedGroup(ref InstanceRef, oldGroupID, newGroupID, oldPrefix, newPrefix string) {
-	oldKey := computeGroupKey(ref.Instance, oldGroupID)
+	oldKey := computeGroupKey(ref.Fleet, ref.Instance, oldGroupID)
 	sg, ok := m.fleetPage.savedGroups[oldKey]
 	if !ok {
 		return
@@ -555,22 +558,24 @@ func (m *model) migrateSavedGroup(ref InstanceRef, oldGroupID, newGroupID, oldPr
 	sg.Sessions = sessions
 
 	delete(m.fleetPage.savedGroups, oldKey)
-	newKey := computeGroupKey(ref.Instance, newGroupID)
+	newKey := computeGroupKey(ref.Fleet, ref.Instance, newGroupID)
 	m.fleetPage.savedGroups[newKey] = sg
 
 	if m.st != nil && m.st.GroupLayouts != nil {
 		delete(m.st.GroupLayouts, oldKey)
 		m.st.GroupLayouts[newKey] = configutil.GroupLayout{
 			GroupID:      sg.GroupID,
+			FleetName:    sg.FleetName,
 			InstanceName: sg.InstanceName,
 			Sessions:     sg.Sessions,
 			Layout:       sg.Layout,
 			PaneCount:    sg.PaneCount,
 		}
 	}
-	_ = deleteGroupLayoutRemote(ref.Instance, oldGroupID)
+	_ = deleteGroupLayoutRemote(ref.Fleet, ref.Instance, oldGroupID)
 	_ = setGroupLayoutRemote(configutil.GroupLayout{
 		GroupID:      sg.GroupID,
+		FleetName:    sg.FleetName,
 		InstanceName: sg.InstanceName,
 		Sessions:     sg.Sessions,
 		Layout:       sg.Layout,
@@ -586,16 +591,16 @@ func (m *model) pruneOrphanedSavedGroups() {
 		return
 	}
 	live := make(map[string]bool)
-	for _, f := range m.st.Fleets {
+	for name, f := range m.st.Fleets {
 		for _, instance := range f.Instances {
-			live[instance.Name] = true
+			live[name+"/"+instance.Name] = true
 		}
 	}
 	for key, savedLayout := range m.fleetPage.savedGroups {
-		if !live[savedLayout.InstanceName] {
+		if !live[savedLayout.FleetName+"/"+savedLayout.InstanceName] {
 			delete(m.fleetPage.savedGroups, key)
 			delete(m.st.GroupLayouts, key)
-			_ = deleteGroupLayoutRemote(savedLayout.InstanceName, savedLayout.GroupID)
+			_ = deleteGroupLayoutRemote(savedLayout.FleetName, savedLayout.InstanceName, savedLayout.GroupID)
 		}
 	}
 }
@@ -1251,11 +1256,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		fleetPage := m.fleetPage
 		if msg.groupID != "" {
-			key := computeGroupKey(msg.ref.Instance, msg.groupID)
+			key := computeGroupKey(msg.ref.Fleet, msg.ref.Instance, msg.groupID)
 			delete(fleetPage.savedGroups, key)
 			if m.st != nil && m.st.GroupLayouts != nil {
 				delete(m.st.GroupLayouts, key)
-				_ = deleteGroupLayoutRemote(msg.ref.Instance, msg.groupID)
+				_ = deleteGroupLayoutRemote(msg.ref.Fleet, msg.ref.Instance, msg.groupID)
 			}
 		}
 		// Tear down the split only when the deletion targets the very

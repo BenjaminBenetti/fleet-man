@@ -219,24 +219,29 @@ func (s *service) SetInstanceMetadata(_ context.Context, req *fleetgrpc.SetInsta
 }
 
 // SetGroupLayout persists a tmux pane layout. The state map key is the composite
-// computeGroupKey(instanceName, groupID), which the server derives here from the
-// layout's own fields (see groupLayoutKey).
+// fleet/instance/group key, derived from the layout's own fields.
 func (s *service) SetGroupLayout(_ context.Context, req *fleetgrpc.SetGroupLayoutRequest) (*fleetgrpc.MutationReply, error) {
 	gl := req.GetLayout()
 	if gl == nil {
 		return nil, status.Error(codes.InvalidArgument, "layout required")
 	}
 	snapshot, err := s.mutate(func(st *state.State) error {
+		fleetName, err := layoutFleet(st, gl.GetFleetName(), gl.GetInstanceName(), gl.GetGroupId())
+		if err != nil {
+			return err
+		}
 		if st.GroupLayouts == nil {
 			st.GroupLayouts = make(map[string]state.GroupLayout)
 		}
-		st.GroupLayouts[groupLayoutKey(gl.GetInstanceName(), gl.GetGroupId())] = state.GroupLayout{
+		layout := state.GroupLayout{
+			FleetName:    fleetName,
 			GroupID:      gl.GetGroupId(),
 			InstanceName: gl.GetInstanceName(),
 			Sessions:     gl.GetSessions(),
 			Layout:       gl.GetLayout(),
 			PaneCount:    int(gl.GetPaneCount()),
 		}
+		st.GroupLayouts[layout.Key()] = layout
 		return nil
 	})
 	if err != nil {
@@ -249,13 +254,18 @@ func (s *service) SetGroupLayout(_ context.Context, req *fleetgrpc.SetGroupLayou
 // no-op success.
 func (s *service) DeleteGroupLayout(_ context.Context, req *fleetgrpc.DeleteGroupLayoutRequest) (*fleetgrpc.MutationReply, error) {
 	snapshot, err := s.mutate(func(st *state.State) error {
-		delete(st.GroupLayouts, groupLayoutKey(req.GetInstanceName(), req.GetGroupId()))
+		fleetName, err := layoutFleet(st, req.GetFleetName(), req.GetInstanceName(), req.GetGroupId())
+		if err != nil {
+			return err
+		}
+		layout := state.GroupLayout{FleetName: fleetName, InstanceName: req.GetInstanceName(), GroupID: req.GetGroupId()}
+		delete(st.GroupLayouts, layout.Key())
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	flog.Info("group layout deleted", "instance", req.GetInstanceName(), "group", req.GetGroupId())
+	flog.Info("group layout deleted", "fleet", req.GetFleetName(), "instance", req.GetInstanceName(), "group", req.GetGroupId())
 	return &fleetgrpc.MutationReply{State: snapshot}, nil
 }
 
@@ -272,9 +282,16 @@ func (s *service) SetLastSeenVersion(_ context.Context, req *fleetgrpc.SetLastSe
 	return &fleetgrpc.MutationReply{State: snapshot}, nil
 }
 
-// groupLayoutKey mirrors the TUI's computeGroupKey(instanceName, groupID): the
-// composite state-map key that isolates layouts across instances sharing a
-// group id.
-func groupLayoutKey(instanceName, groupID string) string {
-	return instanceName + "/" + groupID
+// Older clients omit fleet identity. Accept those only for unique instances.
+func layoutFleet(st *state.State, fleetName, instanceName, groupID string) (string, error) {
+	if instanceName == "" || groupID == "" {
+		return "", status.Error(codes.InvalidArgument, "instance name and group ID required")
+	}
+	if fleetName == "" {
+		fleetName = st.UniqueInstanceFleet(instanceName)
+	}
+	if fleetName == "" {
+		return "", status.Error(codes.InvalidArgument, "fleet name required for an unknown or ambiguous instance")
+	}
+	return fleetName, nil
 }

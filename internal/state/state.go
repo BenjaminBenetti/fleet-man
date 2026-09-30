@@ -85,6 +85,7 @@ func loadLocked() (*State, error) {
 	if s.GroupLayouts == nil {
 		s.GroupLayouts = make(map[string]GroupLayout)
 	}
+	s.migrateGroupLayouts()
 
 	return s, nil
 }

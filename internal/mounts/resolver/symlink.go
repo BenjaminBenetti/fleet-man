@@ -17,9 +17,9 @@ type Symlink struct {
 	// symlink points to. Must live inside one of the Resolved.Mounts
 	// so reads and writes pass through to the host.
 	Source string
-	// Target is an absolute path inside the container where the
-	// symlink is created. Typically a path the agent's CLI looks up
-	// by convention (e.g. /home/vscode/.claude.json).
+	// Target is a path inside the container where the symlink is created.
+	// Absolute paths address home-level config; relative paths address the
+	// configured remote workspace (the working directory of backend.Exec).
 	Target string
 	// SeedContent, when non-empty, is written to Source after the
 	// symlink is created — but only when Source is still empty after

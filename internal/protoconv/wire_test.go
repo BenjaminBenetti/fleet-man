@@ -228,12 +228,12 @@ func TestConfigWirePlacement(t *testing.T) {
 }
 
 func TestGroupLayoutWirePlacement(t *testing.T) {
-	pinArity[state.GroupLayout](t, 5)
+	pinArity[state.GroupLayout](t, 6)
 
 	pgl := GroupLayoutToProto(state.GroupLayout{
-		GroupID: "gi", InstanceName: "in", Sessions: []string{"s1"}, Layout: "ly", PaneCount: 7,
+		FleetName: "fn", GroupID: "gi", InstanceName: "in", Sessions: []string{"s1"}, Layout: "ly", PaneCount: 7,
 	})
-	if pgl.GetGroupId() != "gi" || pgl.GetInstanceName() != "in" ||
+	if pgl.GetFleetName() != "fn" || pgl.GetGroupId() != "gi" || pgl.GetInstanceName() != "in" ||
 		pgl.GetSessions()[0] != "s1" || pgl.GetLayout() != "ly" || pgl.GetPaneCount() != 7 {
 		t.Fatalf("group layout wire placement wrong: %+v", pgl)
 	}

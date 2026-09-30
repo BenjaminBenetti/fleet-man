@@ -30,4 +30,22 @@ info "asserting host-side fleet mount root exists"
 assert_file_exists "${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/.claude"
 assert_file_exists "${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/files/.claude.json"
 
-pass "claude mount applied"
+# Project overrides share one per-fleet file, without replacing the repo's
+# other .claude files. Use devcontainer exec's workspace, not a guessed path.
+project_link=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- readlink .claude/settings.local.json)
+assert_equals "/fleet-mounts/files/claude-settings.local.json" "${project_link}" "project overrides must point to fleet storage"
+"${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- sh -c 'printf "%s" "{\"permissions\":{\"allow\":[\"Bash(go test:*)\"]}}" > .claude/settings.local.json'
+settings=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat .claude/settings.local.json)
+assert_equals "${settings}" "$(cat "${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/files/claude-settings.local.json")" "project settings must persist on the host"
+
+fleet_up beta
+assert_equals "${settings}" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/beta" -- cat .claude/settings.local.json)" "new instances must share project overrides (#248)"
+"${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/beta" -- sh -c 'printf "%s" "{\"permissions\":{\"allow\":[\"Bash(go vet:*)\"]}}" > .claude/settings.local.json'
+updated=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/beta" -- cat .claude/settings.local.json)
+assert_equals "${updated}" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat .claude/settings.local.json)" "existing instances must see updates"
+
+"${FLEET_BIN}" down "${FIXTURE_REPO_NAME}/alpha"
+fleet_up alpha
+assert_equals "${updated}" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat .claude/settings.local.json)" "project overrides must survive instance recreation"
+
+pass "claude home and project mounts shared and persisted"

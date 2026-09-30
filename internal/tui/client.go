@@ -367,6 +367,7 @@ var setGroupLayoutRemote = func(gl configutil.GroupLayout) error {
 	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
 		_, err := svc.SetGroupLayout(ctx, &fleetgrpc.SetGroupLayoutRequest{Layout: &fleetgrpc.GroupLayout{
 			GroupId:      gl.GroupID,
+			FleetName:    gl.FleetName,
 			InstanceName: gl.InstanceName,
 			Sessions:     gl.Sessions,
 			Layout:       gl.Layout,
@@ -377,9 +378,10 @@ var setGroupLayoutRemote = func(gl configutil.GroupLayout) error {
 }
 
 // deleteGroupLayoutRemote removes one persisted layout.
-var deleteGroupLayoutRemote = func(instanceName, groupID string) error {
+var deleteGroupLayoutRemote = func(fleetName, instanceName, groupID string) error {
 	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
 		_, err := svc.DeleteGroupLayout(ctx, &fleetgrpc.DeleteGroupLayoutRequest{
+			FleetName:    fleetName,
 			InstanceName: instanceName,
 			GroupId:      groupID,
 		})
