@@ -429,12 +429,16 @@ func TestAgentDialogFits80x24(t *testing.T) {
 	for _, c := range []struct {
 		command string
 		backend fleet.BackendType
+		errMsg  string
 	}{
-		{"./run-agent.sh", fleet.BackendDevcontainer},   // unrecognised command
-		{fleet.DefaultAgentCommand, fleet.BackendCoder}, // two-line command, wrong backend
+		{"./run-agent.sh", fleet.BackendDevcontainer, ""},   // unrecognised command
+		{fleet.DefaultAgentCommand, fleet.BackendCoder, ""}, // two-line command, wrong backend
+		// ... and with a save error under it.
+		{fleet.DefaultAgentCommand, fleet.BackendCoder, "agent name is empty"},
 	} {
 		fp.openAddAgentDialog(m, "alpha")
 		fp.agentDlg.fleetMCP, fp.agentDlg.command, fp.agentDlg.backend = true, c.command, c.backend
+		fp.agentDlg.errMsg = c.errMsg
 		dlg := strings.TrimSpace(fp.renderAutomationAgentDialog(m))
 		if !strings.Contains(dlg, "Won't apply") {
 			t.Fatalf("test setup: %q on %s should show Won't apply:\n%s", c.command, c.backend, dlg)

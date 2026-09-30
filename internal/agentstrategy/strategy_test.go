@@ -57,6 +57,14 @@ func TestToolForCommand(t *testing.T) {
 		{"claude -p x 2>&1 | tee /tmp/log", state.AgentToolClaude, true},
 		{">&2 claude -p x", state.AgentToolClaude, true},
 		{"./run.sh >claude.log", "", false},
+		{"./run.sh &>/dev/null claude", "", false},
+		{"./run.sh &> out.log claude", "", false},
+		{"echo hi >| out.log claude", "", false},
+		{"&>/dev/null claude -p x", state.AgentToolClaude, true},
+		{"claude -p x &>/dev/null", state.AgentToolClaude, true},
+		{"./run.sh |& claude", state.AgentToolClaude, true},
+		{"nice -n10 claude x", state.AgentToolClaude, true},
+		{"timeout -k30s 2h claude x", state.AgentToolClaude, true},
 		// A quoted command word is not recognized.
 		{"\"claude\" -p x", "", false},
 		{"timeout 2h \"claude\" -p x", "", false},
@@ -221,7 +229,17 @@ func TestFleetMCPUnsupported(t *testing.T) {
 		{"./agent.sh", fleet.BackendDevcontainer, "`claude` command"},
 		// Recognized, but the wrapper clears what the launch exports.
 		{"env -i HOME=/h claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
-		{"sudo -E -u vscode claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
+		{"sudo -u vscode claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
+		{"sudo --preserve-env=HOME claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
+		{"exec -cl claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
+		{"env -vi claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
+		{"env -iu CI claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
+		{"env - claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
+		// sudo -E keeps the environment (or refuses to run at all).
+		{"sudo -E -u vscode claude x", fleet.BackendDevcontainer, ""},
+		{"sudo -Eu vscode claude x", fleet.BackendDevcontainer, ""},
+		{"sudo --preserve-env claude x", fleet.BackendDevcontainer, ""},
+		{"env -uCI claude x", fleet.BackendDevcontainer, ""},
 		{"doas claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
 		{"env -u CI claude x", fleet.BackendDevcontainer, ""},
 	}

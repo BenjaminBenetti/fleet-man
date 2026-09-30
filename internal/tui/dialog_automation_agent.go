@@ -395,7 +395,8 @@ func (fleetPage *fleetPage) renderAutomationAgentDialog(m *model) string {
 	}
 
 	if st.errMsg != "" {
-		fmt.Fprintf(&body, "\n%s\n", errorStyle.Render(st.errMsg))
+		// No blank after it: the hint below brings its own top padding.
+		fmt.Fprintf(&body, "\n%s", errorStyle.Render(st.errMsg))
 	}
 	body.WriteString("\n")
 	body.WriteString(dialogHint.Render(automationHint(st.fieldActive, st.row == agentRowSystemPrompt, st.editIdx >= 0)))

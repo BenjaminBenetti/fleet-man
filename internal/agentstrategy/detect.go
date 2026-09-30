@@ -21,18 +21,48 @@ var agentBinaries = map[string]state.AgentTool{
 
 // launcher describes a command that runs the command after it: which of its
 // flags take the next word as their value, how many positional operands it
-// takes before the command (timeout's duration), and whether it — or one of
-// clearFlags — runs the command with the environment cleared.
+// takes before the command (timeout's duration), and whether it runs the
+// command with the environment cleared — by default (clears) or with one of
+// clearFlags — unless one of keepFlags asks it to keep the environment.
 type launcher struct {
 	valueFlags []string
 	positional int
 	clears     bool
 	clearFlags []string
+	keepFlags  []string
+}
+
+// flag reads launcher flag f: whether it takes the next word as its value,
+// and whether it clears or keeps the command's environment. A cluster of short
+// flags (-cl, -iu, -Eu) is read letter by letter; a value flag inside it takes
+// the rest of the cluster (-uCI), or the next word when it is the last letter
+// (-iu CI).
+func (l *launcher) flag(f string) (takesValue, clears, keeps bool) {
+	whole := func(f string) (bool, bool, bool) {
+		return slices.Contains(l.valueFlags, f), slices.Contains(l.clearFlags, f), slices.Contains(l.keepFlags, f)
+	}
+	if len(f) < 3 || f[1] == '-' {
+		return whole(f)
+	}
+	if v, c, k := whole(f); v || c || k {
+		return v, c, k
+	}
+	for i, letter := range f[1:] {
+		v, c, k := whole("-" + string(letter))
+		clears, keeps = clears || c, keeps || k
+		if v {
+			return i == len(f)-2, clears, keeps
+		}
+	}
+	return false, clears, keeps
 }
 
 // launchers are the wrappers fleet looks through to find the agent. sudo and
-// doas (env_reset) and `env -i` drop the environment the launch exports, so an
-// agent under them is recognized but cannot be handed the fleet MCP.
+// doas (env_reset), `env -i` and `exec -c` drop the environment the launch
+// exports, so an agent under them is recognized but cannot be handed the fleet
+// MCP. `sudo -E` / `--preserve-env` keeps it — or sudo refuses to run, so it
+// never fails silently; `--preserve-env=LIST` keeps only LIST and still
+// counts as clearing.
 var launchers = map[string]launcher{
 	"env":     {valueFlags: []string{"-u", "--unset", "-C", "--chdir"}, clearFlags: []string{"-i", "--ignore-environment", "-"}},
 	"exec":    {valueFlags: []string{"-a"}, clearFlags: []string{"-c"}},
@@ -44,7 +74,7 @@ var launchers = map[string]launcher{
 	"npx":     {valueFlags: []string{"-p", "--package"}},
 	"bunx":    {valueFlags: []string{"-p", "--package"}},
 	"pnpx":    {valueFlags: []string{"-p", "--package"}},
-	"sudo":    {valueFlags: []string{"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "--close-from", "-D", "--chdir", "-r", "--role", "-t", "--type", "-T", "--command-timeout", "-U", "--other-user"}, clears: true},
+	"sudo":    {valueFlags: []string{"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "--close-from", "-D", "--chdir", "-r", "--role", "-t", "--type", "-T", "--command-timeout", "-U", "--other-user"}, clears: true, keepFlags: []string{"-E", "--preserve-env"}},
 	"doas":    {valueFlags: []string{"-u", "-C"}, clears: true},
 }
 
@@ -94,6 +124,7 @@ func commandAgent(words []shellWord) (agentCommand, bool) {
 	var outer *launcher // the innermost launcher so far
 	skipValue := false  // the previous word was a flag taking this one
 	positional := 0     // operands still owed to outer
+	outerClears := false
 	for k, w := range words {
 		if k > 0 && w.start {
 			break // the next simple command
@@ -106,10 +137,9 @@ func commandAgent(words []shellWord) (agentCommand, bool) {
 			continue // its value may well be quoted
 		}
 		if outer != nil && strings.HasPrefix(w.text, "-") {
-			skipValue = slices.Contains(outer.valueFlags, w.text)
-			if slices.Contains(outer.clearFlags, w.text) {
-				a.clearsEnv = true
-			}
+			var clears, keeps bool
+			skipValue, clears, keeps = outer.flag(w.text)
+			outerClears = (outerClears || clears) && !keeps
 			continue
 		}
 		if positional > 0 {
@@ -119,10 +149,10 @@ func commandAgent(words []shellWord) (agentCommand, bool) {
 		if w.quoted {
 			return agentCommand{}, false // a quoted command word: not one fleet recognizes
 		}
+		a.clearsEnv = a.clearsEnv || outerClears // outer's flags are done
 		name := path.Base(w.text)
 		if l, ok := launchers[name]; ok {
-			outer, positional = &l, l.positional
-			a.clearsEnv = a.clearsEnv || l.clears
+			outer, positional, outerClears = &l, l.positional, l.clears
 			continue
 		}
 		if at := strings.LastIndex(name, "@"); at > 0 {
@@ -170,7 +200,8 @@ func shellWords(command string) []shellWord {
 		cur.Reset()
 		quoted, inWord = false, false
 	}
-	for _, r := range command {
+	runes := []rune(command)
+	for i, r := range runes {
 		wasRedir := afterRedir
 		afterRedir = false
 		switch {
@@ -196,8 +227,10 @@ func shellWords(command string) []shellWord {
 			}
 			flush()
 			redirTarget, afterRedir = true, true
-		case r == '&' && wasRedir:
-			// >&2: part of the redirection, not a control operator.
+		case (r == '&' || r == '|') && wasRedir,
+			r == '&' && i+1 < len(runes) && runes[i+1] == '>':
+			// >&2, >| and bash's &>: part of the redirection, not a control
+			// operator.
 		case strings.ContainsRune(";&|()\n", r):
 			flush()
 			atStart = true
