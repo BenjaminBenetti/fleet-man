@@ -76,10 +76,11 @@ func TestCreateAutomationInstanceMarksAutomated(t *testing.T) {
 		t.Fatalf("an agent without the fleet MCP must not get it: %+v", inst)
 	}
 	// The agent's fleet MCP opt-in is recorded on its instance, which is what
-	// the daemon serves the in-instance MCP socket for.
+	// the daemon serves the in-instance MCP socket for — on a host that can
+	// (Linux).
 	mcpInst, err := st.Fleets["alpha"].GetInstance(mcpName)
-	if err != nil || !mcpInst.FleetMCP || !mcpInst.Automated {
-		t.Fatalf("instance of a fleet-MCP agent = %+v (%v), want FleetMCP and Automated", mcpInst, err)
+	if err != nil || mcpInst.FleetMCP != instanceSocketsSupported || !mcpInst.Automated {
+		t.Fatalf("instance of a fleet-MCP agent = %+v (%v), want Automated and FleetMCP=%v", mcpInst, err, instanceSocketsSupported)
 	}
 	// An agent that cannot take it (not a Claude Code command) gets no socket.
 	codexInst, err := st.Fleets["alpha"].GetInstance(codexName)
@@ -426,7 +427,8 @@ func TestFireWebhookBatchSpawns(t *testing.T) {
 	if wa == nil {
 		t.Fatal("agent a was not registered in the watch set")
 	}
-	if wa.command != "claude cmdA" || wa.systemPrompt != "sysA" || wa.prompt != "go" || !wa.fleetMCP {
+	// a gets the fleet MCP wherever this host can serve it (Linux).
+	if wa.command != "claude cmdA" || wa.systemPrompt != "sysA" || wa.prompt != "go" || wa.fleetMCP != instanceSocketsSupported {
 		t.Fatalf("watched agent a carries the wrong fields: %+v", wa)
 	}
 	// b has the fleet MCP on, but its command is no agent fleet can hand it to.
