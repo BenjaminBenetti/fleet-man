@@ -265,3 +265,39 @@ func TestMCPTriggerLogs(t *testing.T) {
 		t.Errorf("missing-trigger error = %q", msg)
 	}
 }
+
+// TestMCPAgentFleetMCP: fleet_mcp is set on create, kept by an update that
+// omits it, and cleared only by an explicit false.
+func TestMCPAgentFleetMCP(t *testing.T) {
+	cs := seedBareFleet(t)
+
+	var out AutomationOutput
+	callJSON(t, cs, "fleet_agent_create", map[string]any{"fleet": "alpha", "name": "orchestrator", "fleet_mcp": true}, &out)
+	if !out.Agents[0].FleetMCP {
+		t.Fatalf("create with fleet_mcp: %+v", out.Agents[0])
+	}
+	callJSON(t, cs, "fleet_agent_update", map[string]any{"fleet": "alpha", "name": "orchestrator", "system_prompt": "delegate"}, &out)
+	if !out.Agents[0].FleetMCP {
+		t.Fatalf("an update that omits fleet_mcp must keep it: %+v", out.Agents[0])
+	}
+	callJSON(t, cs, "fleet_agent_update", map[string]any{"fleet": "alpha", "name": "orchestrator", "fleet_mcp": false}, &out)
+	if out.Agents[0].FleetMCP {
+		t.Fatalf("fleet_mcp:false must turn it off: %+v", out.Agents[0])
+	}
+	st, err := state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := fleet.FindAgent(st.Fleets["alpha"].Settings.Agents, "orchestrator"); a.FleetMCP || a.SystemPrompt != "delegate" {
+		t.Fatalf("persisted agent = %+v", a)
+	}
+	// Turned on where it cannot apply, the result says so.
+	callJSON(t, cs, "fleet_agent_update", map[string]any{"fleet": "alpha", "name": "orchestrator", "fleet_mcp": true, "backend": "coder"}, &out)
+	want := "devcontainer"
+	if !instanceSocketsSupported {
+		want = "Linux host"
+	}
+	if len(out.Warnings) != 1 || !strings.Contains(out.Warnings[0], want) {
+		t.Fatalf("warnings = %q, want one mentioning %q", out.Warnings, want)
+	}
+}

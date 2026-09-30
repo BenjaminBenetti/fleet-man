@@ -42,6 +42,14 @@ func TestCreateAutomationInstanceMarksAutomated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("createAutomationInstance: %v", err)
 	}
+	mcpName, err := createAutomationInstance(s, "alpha", fleet.Agent{Name: "orchestrator", Backend: fleet.BackendDevcontainer, FleetMCP: true}, time.Now())
+	if err != nil {
+		t.Fatalf("createAutomationInstance (fleet MCP): %v", err)
+	}
+	codexName, err := createAutomationInstance(s, "alpha", fleet.Agent{Name: "coder", Command: "codex '${PROMPT}'", Backend: fleet.BackendDevcontainer, FleetMCP: true}, time.Now())
+	if err != nil {
+		t.Fatalf("createAutomationInstance (unsupported fleet MCP): %v", err)
+	}
 	// The scheduler starts a detached job. Join it before restoring the seam
 	// or removing HOME; either could otherwise race the provisioning goroutine.
 	defer func() {
@@ -63,6 +71,21 @@ func TestCreateAutomationInstanceMarksAutomated(t *testing.T) {
 	}
 	if !inst.Automated {
 		t.Fatalf("scheduler-spawned instance should be marked Automated: %+v", inst)
+	}
+	if inst.FleetMCP {
+		t.Fatalf("an agent without the fleet MCP must not get it: %+v", inst)
+	}
+	// The agent's fleet MCP opt-in is recorded on its instance, which is what
+	// the daemon serves the in-instance MCP socket for — on a host that can
+	// (Linux).
+	mcpInst, err := st.Fleets["alpha"].GetInstance(mcpName)
+	if err != nil || mcpInst.FleetMCP != instanceSocketsSupported || !mcpInst.Automated {
+		t.Fatalf("instance of a fleet-MCP agent = %+v (%v), want Automated and FleetMCP=%v", mcpInst, err, instanceSocketsSupported)
+	}
+	// An agent that cannot take it (not Claude Code) gets no socket.
+	codexInst, err := st.Fleets["alpha"].GetInstance(codexName)
+	if err != nil || codexInst.FleetMCP {
+		t.Fatalf("instance of an unsupported fleet-MCP agent = %+v (%v), want no FleetMCP", codexInst, err)
 	}
 }
 
@@ -373,8 +396,8 @@ func TestFireWebhookBatchSpawns(t *testing.T) {
 	st := &state.State{Fleets: map[string]*fleet.Fleet{
 		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{
 			Agents: []fleet.Agent{
-				{Name: "a", Command: "cmdA", SystemPrompt: "sysA", Backend: fleet.BackendDevcontainer},
-				{Name: "b", Command: "cmdB", Backend: fleet.BackendDevcontainer},
+				{Name: "a", Command: "claude cmdA", SystemPrompt: "sysA", Backend: fleet.BackendDevcontainer, FleetMCP: true},
+				{Name: "b", Command: "cmdB", Backend: fleet.BackendDevcontainer, FleetMCP: true},
 			},
 		}},
 	}}
@@ -404,11 +427,13 @@ func TestFireWebhookBatchSpawns(t *testing.T) {
 	if wa == nil {
 		t.Fatal("agent a was not registered in the watch set")
 	}
-	if wa.command != "cmdA" || wa.systemPrompt != "sysA" || wa.prompt != "go" {
+	// a gets the fleet MCP wherever this host can serve it (Linux).
+	if wa.command != "claude cmdA" || wa.systemPrompt != "sysA" || wa.prompt != "go" || wa.fleetMCP != instanceSocketsSupported {
 		t.Fatalf("watched agent a carries the wrong fields: %+v", wa)
 	}
-	if sched.watched["alpha/inst-b"] == nil {
-		t.Fatal("agent b was not registered in the watch set")
+	// b has the fleet MCP on, but its command is no agent fleet can hand it to.
+	if wb := sched.watched["alpha/inst-b"]; wb == nil || wb.fleetMCP {
+		t.Fatalf("agent b should be watched, without the fleet MCP: %+v", wb)
 	}
 }
 

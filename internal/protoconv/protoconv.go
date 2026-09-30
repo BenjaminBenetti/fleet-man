@@ -141,6 +141,7 @@ func InstanceToProto(i *fleet.Instance) *fleetgrpc.Instance {
 		pi.Branch = strptr(i.Branch)
 	}
 	pi.Automated = i.Automated
+	pi.FleetMcp = i.FleetMCP
 	// Warnings is proto-only (populated by jobs); it has no legacy field.
 	return pi
 }
@@ -161,6 +162,7 @@ func InstanceFromProto(pi *fleetgrpc.Instance) *fleet.Instance {
 		Color:        pi.GetColor(),
 		Branch:       pi.GetBranch(),
 		Automated:    pi.GetAutomated(),
+		FleetMCP:     pi.GetFleetMcp(),
 	}
 	if ts := pi.GetCreatedAt(); ts != nil {
 		inst.CreatedAt = ts.AsTime()
@@ -248,6 +250,7 @@ func AgentsToProto(in []fleet.Agent) []*fleetgrpc.Agent {
 			Command:      a.Command,
 			SystemPrompt: a.SystemPrompt,
 			Backend:      BackendToProto(a.Backend),
+			FleetMcp:     a.FleetMCP,
 		})
 	}
 	return out
@@ -265,6 +268,7 @@ func AgentsFromProto(in []*fleetgrpc.Agent) []fleet.Agent {
 			Command:      a.GetCommand(),
 			SystemPrompt: a.GetSystemPrompt(),
 			Backend:      BackendFromProto(a.GetBackend()),
+			FleetMCP:     a.GetFleetMcp(),
 		})
 	}
 	return out

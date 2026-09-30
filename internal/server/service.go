@@ -36,6 +36,10 @@ type service struct {
 	// relay sockets the daemon's children and instances connect to.
 	agent       *agentHub
 	gitHostKeys gitHostKeyHub
+	// instanceMCP serves the fleet MCP server into the instances of agents
+	// that have it (mcp_instance.go). Its sync loop is started by the serve
+	// loop; the automation launch opens an instance's socket directly.
+	instanceMCP *instanceMCP
 
 	// remote drives the outbound remote-MCP gateway tunnel. Set in server.go
 	// after the MCP listener binds (so it knows the loopback port); nil for tests
@@ -83,7 +87,7 @@ type service struct {
 }
 
 func newService() *service {
-	return &service{
+	svc := &service{
 		startedAt:    time.Now(),
 		hub:          newHub(),
 		jobs:         newJobManager(),
@@ -93,6 +97,8 @@ func newService() *service {
 		bgCtx:        context.Background(),
 		triggerFires: make(chan []triggerFire, triggerFireBuffer),
 	}
+	svc.instanceMCP = newInstanceMCP(svc)
+	return svc
 }
 
 // reconcileTimeout bounds the TUI-connect buildkit reconcile so a slow/wedged

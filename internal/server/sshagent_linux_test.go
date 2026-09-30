@@ -211,10 +211,7 @@ func TestInstanceSocketRefusesASocketSwappedForASymlinkWhileBinding(t *testing.T
 	if info, err := os.Stat(target); err != nil || info.Mode().Perm() != 0o640 {
 		t.Fatalf("the daemon changed the symlink target's mode: %v %v", info.Mode(), err)
 	}
-	svc.agent.mu.Lock()
-	_, listening := svc.agent.instances["f/i"]
-	svc.agent.mu.Unlock()
-	if listening {
+	if svc.agent.sockets.listening("f/i") {
 		t.Fatal("the listen must fail when the socket was replaced while binding")
 	}
 }
@@ -290,9 +287,9 @@ func TestEnsureInstanceWaitsForAnOpenInFlight(t *testing.T) {
 	}
 
 	inflight := make(chan struct{}) // a reconcile's open of f/i
-	h.mu.Lock()
-	h.opening["f/i"] = inflight
-	h.mu.Unlock()
+	h.sockets.mu.Lock()
+	h.sockets.opening["f/i"] = inflight
+	h.sockets.mu.Unlock()
 	returned := make(chan struct{})
 	go func() {
 		h.ensureInstance("f", "i")
@@ -305,10 +302,10 @@ func TestEnsureInstanceWaitsForAnOpenInFlight(t *testing.T) {
 	}
 
 	// That open settles without a socket (it failed): the hook opens one.
-	h.mu.Lock()
-	delete(h.opening, "f/i")
+	h.sockets.mu.Lock()
+	delete(h.sockets.opening, "f/i")
 	close(inflight)
-	h.mu.Unlock()
+	h.sockets.mu.Unlock()
 	select {
 	case <-returned:
 	case <-time.After(5 * time.Second):

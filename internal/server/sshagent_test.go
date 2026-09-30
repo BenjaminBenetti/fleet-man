@@ -718,7 +718,7 @@ func TestStartAgentRelayRedirectsTheDaemonsAgent(t *testing.T) {
 	}
 	// Provisioning's hook opens an instance's socket at once, before any
 	// reconcile could (`devcontainer up` may run postCreate within seconds).
-	if !agentInstanceSocketsSupported {
+	if !instanceSocketsSupported {
 		return
 	}
 	if err := os.MkdirAll(state.ControlDir("f", "i"), 0o755); err != nil {
@@ -769,7 +769,7 @@ func TestStartAgentRelayServesInstancesWithoutTheHostSocket(t *testing.T) {
 	if got := os.Getenv(agentsock.EnvAuthSock); got != daemonSock {
 		t.Fatalf("SSH_AUTH_SOCK = %q, want the daemon's own agent kept", got)
 	}
-	if !agentInstanceSocketsSupported {
+	if !instanceSocketsSupported {
 		return
 	}
 	if !agentsock.RelayUsable() {
@@ -959,7 +959,7 @@ func TestSSHAgentFallbackHalfCloseWithARealOpenSSHAgent(t *testing.T) {
 	if reply := halfCloseList(t, hostSock); !isOneKeyAnswer(reply) {
 		t.Fatalf("host socket, half-close: %v", reply)
 	}
-	if !agentInstanceSocketsSupported {
+	if !instanceSocketsSupported {
 		return
 	}
 	control := state.ControlDir("f", "i")

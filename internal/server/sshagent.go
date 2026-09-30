@@ -100,23 +100,23 @@ type agentHub struct {
 	redirect func()
 
 	// Listeners and live connections (sshagent_listen.go).
-	host      *agentListener
-	instances map[string]*instanceListener // "<fleet>/<instance>"
-	opening   map[string]chan struct{}     // instance listens in flight; closed when each settles
-	retryAt   map[string]time.Time         // failed instance listens, retried after
-	conns     map[net.Conn]struct{}
-	closed    bool
-	serving   sync.WaitGroup // connection goroutines
+	host    *socketListener
+	sockets *instanceSocketSet // one per devcontainer instance
+	conns   map[net.Conn]struct{}
+	closed  bool
+	serving sync.WaitGroup // connection goroutines
 }
 
+// agentSocketLabel names the relay's sockets in log lines.
+const agentSocketLabel = "ssh agent"
+
 func newAgentHub() *agentHub {
-	return &agentHub{
-		bindKey:   agentproto.NewBindKey(),
-		instances: make(map[string]*instanceListener),
-		opening:   make(map[string]chan struct{}),
-		retryAt:   make(map[string]time.Time),
-		conns:     make(map[net.Conn]struct{}),
+	h := &agentHub{
+		bindKey: agentproto.NewBindKey(),
+		conns:   make(map[net.Conn]struct{}),
 	}
+	h.sockets = newInstanceSocketSet(agentsock.SocketName, agentSocketLabel, h.serveFrom)
+	return h
 }
 
 // setFallback records the agent the daemon was started with.

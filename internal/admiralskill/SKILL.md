@@ -144,7 +144,8 @@ the task as its prompt, then read the session to see what it's doing or asking.
 
 **Configure automations.** A fleet can run unattended: **agents** are worker
 definitions (a launch command with `${PROMPT}`/`${SYS_PROMPT}` placeholders, a
-system prompt, an env backend) and **triggers** fire one or more agents — on a
+system prompt, an env backend, and optionally the fleet MCP) and **triggers**
+fire one or more agents — on a
 cron **schedule**, a gateway **webhook** event, or a cron-polled **bash** command
 that exits zero — each firing spins up a fresh instance that runs the agent.
 These tools let you set that up for the user.
@@ -152,11 +153,16 @@ These tools let you set that up for the user.
 - `fleet_automation_list {fleet}` returns the fleet's `{agents, triggers}`.
   Read it first before an update — updates are field-merges, so you send only
   what changes.
-- `fleet_agent_create {fleet, name, command?, system_prompt?, backend?}` and
-  `fleet_agent_update {fleet, name, new_name?, command?, system_prompt?,
-  backend?}` (omit a field to keep it; `new_name` renames and rewrites the
-  triggers that reference it). `fleet_agent_delete {fleet, name}` refuses while
-  a trigger still references the agent — detach it first.
+- `fleet_agent_create {fleet, name, command?, system_prompt?, backend?,
+  fleet_mcp?}` and `fleet_agent_update {fleet, name, new_name?, command?,
+  system_prompt?, backend?, fleet_mcp?}` (omit a field to keep it; `new_name`
+  renames and rewrites the triggers that reference it). `fleet_mcp: true` gives
+  the agent these same tools and this skill inside its instance, so it can
+  orchestrate instances and agents of its own (Claude Code agents on the
+  `devcontainer` backend) — it gets the FULL fleet MCP, every fleet included,
+  and with it host-level reach (a `bash` trigger runs on the host), so only
+  turn it on when the user asks for it. `fleet_agent_delete {fleet, name}` refuses while a
+  trigger still references the agent — detach it first.
 - `fleet_trigger_create {fleet, name, type, agents[], prompt?, ...}` where
   `type` is `schedule` (needs `cron`), `bash` (needs `cron` + `script`, a command
   run on the fleet host whose zero exit fires the agents and whose stdout is the
@@ -188,6 +194,10 @@ name comes back as a tool error.
 - When awaiting an async job, poll `fleet_job_status` every few seconds (a
   `fleet_up` typically takes 1–3 minutes) rather than spinning; you can do
   other work between polls.
+- An automation agent given the fleet MCP runs these tools from INSIDE a fleet
+  instance (the server's instructions name it). Instances it creates outlive
+  it — clean them up with `fleet_down` — while its own instance is reaped once
+  it goes idle.
 - If the `fleet_*` MCP tools are not available, the `fleet` CLI offers the same
   operations from the shell (`fleet --help`). The MCP server is registered in
   Claude Code automatically when the fleet TUI runs; a missing registration
@@ -228,8 +238,8 @@ SESSIONS  (interact with an agent / long-lived process in an instance)
 
 AUTOMATION  (unattended agents fired by triggers; every write returns {agents, triggers})
   fleet_automation_list {fleet}                                # read agents + triggers
-  fleet_agent_create {fleet, name, command?, system_prompt?, backend?}
-  fleet_agent_update {fleet, name, new_name?, command?, system_prompt?, backend?}   # omit a field to keep it
+  fleet_agent_create {fleet, name, command?, system_prompt?, backend?, fleet_mcp?}   # fleet_mcp: tools + skill inside its instance
+  fleet_agent_update {fleet, name, new_name?, command?, system_prompt?, backend?, fleet_mcp?}   # omit a field to keep it
   fleet_agent_delete {fleet, name}                             # fails if a trigger references it
   fleet_trigger_create {fleet, name, type, agents:[...], prompt?, cron? (schedule) | cron?+script? (bash) | webhook_name?+filter_type?+regex?|json_path?+json_value? (webhook)}
   fleet_trigger_update {fleet, name, new_name?, type?, agents?, ...}                 # omit a field to keep it

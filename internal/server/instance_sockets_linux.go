@@ -18,7 +18,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// peerIdentity is who is on the other end of a relay connection: the
+// peerIdentity is who is on the other end of an instance socket: the
 // kernel-reported credentials (SO_PEERCRED: uid and pid as seen from this
 // daemon's namespaces — for a process in a container, its host uid and host
 // pid) and, where the kernel offers it (6.5+), a pidfd pinning that exact
@@ -105,7 +105,7 @@ type instanceIdentity interface {
 	workspaceDir() string
 }
 
-// agentPeerAllowed admits the daemon's own user and root and, for an
+// peerAllowed admits the daemon's own user and root and, for an
 // instance's socket, any process of that instance's own container (or of a
 // container nested in it), whatever uid its image runs it as — a remoteUser
 // whose uid could not be remapped, a rootless-docker subuid. inst is nil for
@@ -115,7 +115,7 @@ type instanceIdentity interface {
 // many of those checks run at once for the socket; past it a cross-uid peer
 // is refused rather than queued, so a flood of them cannot pile up docker
 // processes (the daemon's own user never waits on it).
-func agentPeerAllowed(conn net.Conn, inst instanceIdentity, slow chan struct{}) bool {
+func peerAllowed(conn net.Conn, inst instanceIdentity, slow chan struct{}) bool {
 	peer, ok := peerCred(conn)
 	if !ok {
 		return false
@@ -213,7 +213,7 @@ func runtimeAnchors(path string) []cgroupAnchor {
 // the container's real one, taken from its own init process: only the runtime
 // (root, or the daemon user for rootless) can create cgroups under it. No ID
 // a peer chooses is ever looked up; a refused cross-uid peer costs at most a
-// cached `docker ps`, bounded per socket by agentPeerAllowed.
+// cached `docker ps`, bounded per socket by peerAllowed.
 func peerInInstanceContainer(peer peerIdentity, inst instanceIdentity) bool {
 	path, ok := processCgroup(int(peer.pid))
 	if !ok {
@@ -413,11 +413,11 @@ func resolveContainer(id string) (containerInfo, bool) {
 // process in the instance could swap the socket for a symlink in.
 var afterInstanceBind func(dir, name string)
 
-// agentInstanceSocketsSupported reports whether per-instance sockets can be
+// instanceSocketsSupported reports whether per-instance sockets can be
 // served here.
-const agentInstanceSocketsSupported = true
+const instanceSocketsSupported = true
 
-// listenInstanceAgentSocket serves an instance's relay socket in its control
+// listenInstanceSocket serves a socket named name in an instance's control
 // directory, which the instance can write to. It never resolves a path the
 // instance controls: the directory is held open (O_PATH, no symlink follow)
 // and the socket is bound through /proc/self/fd/<dir>/<name> — which also
@@ -425,7 +425,7 @@ const agentInstanceSocketsSupported = true
 // (a unix socket path is capped at 108 bytes). The mode is then set through a
 // no-follow handle on the socket itself, so a symlink swapped in by a process
 // in the instance can never redirect a chmod onto a host file.
-func listenInstanceAgentSocket(dir, name string, inst instanceIdentity, serve func(net.Conn)) (*agentListener, error) {
+func listenInstanceSocket(dir, name, label string, inst instanceIdentity, serve func(net.Conn)) (*socketListener, error) {
 	dirFD, err := unix.Open(dir, unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", dir, err)
@@ -444,7 +444,7 @@ func listenInstanceAgentSocket(dir, name string, inst instanceIdentity, serve fu
 			return nil, fmt.Errorf("%s/%s exists and is not a socket", dir, name)
 		}
 		if err := unix.Unlinkat(dirFD, name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
-			return nil, fmt.Errorf("remove stale agent socket: %w", err)
+			return nil, fmt.Errorf("remove stale socket: %w", err)
 		}
 	case !errors.Is(err, unix.ENOENT):
 		return nil, fmt.Errorf("stat %s/%s: %w", dir, name, err)
@@ -465,23 +465,24 @@ func listenInstanceAgentSocket(dir, name string, inst instanceIdentity, serve fu
 	sockFD, err := unix.Openat(dirFD, name, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		_ = ln.Close()
-		return nil, fmt.Errorf("open agent socket: %w", err)
+		return nil, fmt.Errorf("open socket: %w", err)
 	}
 	defer unix.Close(sockFD)
 	if err := unix.Fstat(sockFD, &st); err != nil || st.Mode&unix.S_IFMT != unix.S_IFSOCK {
 		_ = ln.Close()
-		return nil, fmt.Errorf("agent socket %s/%s was replaced while binding", dir, name)
+		return nil, fmt.Errorf("socket %s/%s was replaced while binding", dir, name)
 	}
 	// 0666: a container user with another uid must be able to connect; who
-	// gets served is decided per connection by agentPeerAllowed.
+	// gets served is decided per connection by peerAllowed.
 	if err := os.Chmod("/proc/self/fd/"+strconv.Itoa(sockFD), 0o666); err != nil {
 		_ = ln.Close()
-		return nil, fmt.Errorf("chmod agent socket: %w", err)
+		return nil, fmt.Errorf("chmod socket: %w", err)
 	}
 
-	l := &agentListener{
+	l := &socketListener{
 		ln:         ln,
 		path:       dir + "/" + name,
+		label:      label,
 		done:       make(chan struct{}),
 		inst:       inst,
 		slowChecks: make(chan struct{}, maxSlowPeerChecks),

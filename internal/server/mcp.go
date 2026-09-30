@@ -79,7 +79,7 @@ func startMCPServer(svc *service) (*http.Server, int) {
 		return nil, 0
 	}
 
-	mcpSrv := newMCPServer(svc)
+	mcpSrv := newMCPServer(svc, nil)
 	handler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return mcpSrv },
 		&mcp.StreamableHTTPOptions{SessionTimeout: mcpSessionTimeout},
@@ -221,9 +221,9 @@ func listenMCP(startPort int) (net.Listener, int, error) {
 
 // newMCPServer builds the MCP server and registers every fleet tool. Long-running
 // lifecycle tools scope their job relay to svc.bgCtx (the daemon's shutdown
-// context) so they unblock promptly when the daemon stops.
-func newMCPServer(svc *service) *mcp.Server {
-	srv := mcp.NewServer(&mcp.Implementation{Name: "fleet", Version: versionOrDev()}, nil)
+// context) so they unblock promptly when the daemon stops. opts may be nil.
+func newMCPServer(svc *service, opts *mcp.ServerOptions) *mcp.Server {
+	srv := mcp.NewServer(&mcp.Implementation{Name: "fleet", Version: versionOrDev()}, opts)
 	registerMCPTools(srv, svc)
 	return srv
 }

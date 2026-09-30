@@ -87,6 +87,14 @@ func EnsureInstalled() error {
 	return os.WriteFile(filepath.Join(dir, hashFile), []byte(want), 0o644)
 }
 
+// Name is the skill's name (its frontmatter name and directory basename).
+const Name = skillName
+
+// Content returns the skill's SKILL.md. Callers must not modify it.
+func Content() []byte {
+	return skillContent
+}
+
 // ===========================================
 // Internal helpers
 // ===========================================

@@ -1,0 +1,5 @@
+{
+  "name": "fleet-man fleet-MCP fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "postCreateCommand": "sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends tmux && mkdir -p $HOME/.local/bin && install -m 755 .devcontainer/fake-claude.sh $HOME/.local/bin/claude && echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> $HOME/.bashrc"
+}

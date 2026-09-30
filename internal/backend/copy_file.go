@@ -57,8 +57,19 @@ func ShellQuote(value string) string {
 // and base64's alphabet contains no single quote, so the blob is safe to embed
 // single-quoted verbatim.
 func InlineWriteScript(remotePath string, content []byte, mode int) ([]string, error) {
+	body, err := InlineWriteBody(remotePath, content, mode)
+	if err != nil {
+		return nil, err
+	}
+	return []string{"sh", "-c", body}, nil
+}
+
+// InlineWriteBody is InlineWriteScript's shell script on its own, for callers
+// composing several writes into one exec. It sets -e and an EXIT trap, so run
+// each body in its own subshell when composing.
+func InlineWriteBody(remotePath string, content []byte, mode int) (string, error) {
 	if len(content) > maxInlineRaw {
-		return nil, fmt.Errorf("inline write of %q: payload %d bytes exceeds inline cap %d (use CopyFile)", remotePath, len(content), maxInlineRaw)
+		return "", fmt.Errorf("inline write of %q: payload %d bytes exceeds inline cap %d (use CopyFile)", remotePath, len(content), maxInlineRaw)
 	}
 	b64 := base64.StdEncoding.EncodeToString(content)
 	qPath := ShellQuote(remotePath)
@@ -71,7 +82,7 @@ func InlineWriteScript(remotePath string, content []byte, mode int) ([]string, e
 		`set -e; d=$(dirname %[1]s); mkdir -p "$d"; t="$d/.fleet-inline.$$"; trap 'rm -f "$t"' EXIT; printf %%s '%[2]s' | base64 -d > "$t"; chmod %[3]o "$t"; mv -f "$t" %[1]s`,
 		qPath, b64, mode,
 	)
-	return []string{"sh", "-c", body}, nil
+	return body, nil
 }
 
 // WriteFileInline runs InlineWriteScript against the backend's exec surface with
