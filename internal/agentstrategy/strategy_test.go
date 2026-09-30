@@ -48,8 +48,17 @@ func TestToolForCommand(t *testing.T) {
 		{"env -u CI claude -p x", state.AgentToolClaude, true},
 		{"time -o f claude -p x", state.AgentToolClaude, true},
 		{"IS_SANDBOX=1 timeout 2h nice claude x", state.AgentToolClaude, true},
+		{"timeout \"$AGENT_TIMEOUT\" claude -p x", state.AgentToolClaude, true},
+		{"timeout -s KILL '2h' claude -p x", state.AgentToolClaude, true},
+		// Redirections are not command words.
+		{">/tmp/agent.log claude -p x", state.AgentToolClaude, true},
+		{"2>/dev/null claude -p x", state.AgentToolClaude, true},
+		{"claude -p x 2>&1 | tee /tmp/log", state.AgentToolClaude, true},
+		{">&2 claude -p x", state.AgentToolClaude, true},
+		{"./run.sh >claude.log", "", false},
 		// A quoted command word is not recognized.
 		{"\"claude\" -p x", "", false},
+		{"timeout 2h \"claude\" -p x", "", false},
 		// An agent's name in an argument is not the command.
 		{"cd /workspaces/claude-code && ./run-agent.sh", "", false},
 		{"./run-agent.sh --workdir /src/claude-code", "", false},

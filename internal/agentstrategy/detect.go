@@ -83,16 +83,16 @@ func commandTool(words []shellWord) (state.AgentTool, bool) {
 		if assignment.MatchString(w.text) {
 			continue // its value may well be quoted
 		}
-		if w.quoted {
-			return "", false // a quoted command word: not one fleet recognizes
-		}
 		if outer != nil && strings.HasPrefix(w.text, "-") {
 			skipValue = slices.Contains(outer.valueFlags, w.text)
 			continue
 		}
 		if positional > 0 {
-			positional--
+			positional-- // an operand, e.g. timeout's duration; it may be quoted
 			continue
+		}
+		if w.quoted {
+			return "", false // a quoted command word: not one fleet recognizes
 		}
 		name := path.Base(w.text)
 		if l, ok := launchers[name]; ok {
@@ -118,10 +118,11 @@ type shellWord struct {
 }
 
 // shellWords splits a command line into words the way sh would for this
-// purpose: whitespace, redirections (<>) and the control operators ;&|() and
-// newline separate words outside quotes, and a control operator starts a new
-// simple command; quotes and backslashes are removed. Expansions are left as
-// written.
+// purpose: whitespace and the control operators ;&|() and newline separate
+// words outside quotes, and a control operator starts a new simple command.
+// Redirections are dropped with their target and any fd number (2>/dev/null,
+// >&2), so they are never taken for a command word. Quotes and backslashes are
+// removed; expansions are left as written.
 func shellWords(command string) []shellWord {
 	var words []shellWord
 	var cur strings.Builder
@@ -129,8 +130,13 @@ func shellWords(command string) []shellWord {
 	atStart := true
 	var quote rune // the open quote, or 0
 	escaped := false
+	redirTarget := false // the next word is a redirection's target
+	afterRedir := false  // the previous rune was < or >
 	flush := func() {
-		if inWord {
+		switch {
+		case inWord && redirTarget:
+			redirTarget = false // a redirection's target: not a word
+		case inWord:
 			words = append(words, shellWord{text: cur.String(), quoted: quoted, start: atStart})
 			atStart = false
 		}
@@ -138,6 +144,8 @@ func shellWords(command string) []shellWord {
 		quoted, inWord = false, false
 	}
 	for _, r := range command {
+		wasRedir := afterRedir
+		afterRedir = false
 		switch {
 		case escaped:
 			cur.WriteRune(r)
@@ -154,10 +162,19 @@ func shellWords(command string) []shellWord {
 			escaped, quoted, inWord = true, true, true
 		case r == '\'' || r == '"':
 			quote, quoted, inWord = r, true, true
+		case r == '<' || r == '>':
+			if inWord && !quoted && isDigits(cur.String()) {
+				cur.Reset() // the fd number of 2>..., not a word
+				inWord = false
+			}
+			flush()
+			redirTarget, afterRedir = true, true
+		case r == '&' && wasRedir:
+			// >&2: part of the redirection, not a control operator.
 		case strings.ContainsRune(";&|()\n", r):
 			flush()
 			atStart = true
-		case strings.ContainsRune(" \t<>", r):
+		case r == ' ' || r == '\t':
 			flush()
 		default:
 			cur.WriteRune(r)
@@ -166,4 +183,17 @@ func shellWords(command string) []shellWord {
 	}
 	flush()
 	return words
+}
+
+// isDigits reports whether s is a non-empty run of ASCII digits.
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
