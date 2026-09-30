@@ -85,7 +85,8 @@ var assignment = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 type agentCommand struct {
 	tool state.AgentTool
 	// clearsEnv: a wrapper runs the agent with the environment cleared
-	// (env -i, sudo, doas), so what the launch exports never reaches it.
+	// (env -i, exec -c, sudo without -E, doas), so what the launch exports
+	// never reaches it.
 	clearsEnv bool
 }
 

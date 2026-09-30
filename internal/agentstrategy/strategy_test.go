@@ -240,6 +240,10 @@ func TestFleetMCPUnsupported(t *testing.T) {
 		{"sudo -Eu vscode claude x", fleet.BackendDevcontainer, ""},
 		{"sudo --preserve-env claude x", fleet.BackendDevcontainer, ""},
 		{"env -uCI claude x", fleet.BackendDevcontainer, ""},
+		// A keep flag only undoes its own launcher's clear.
+		{"env -i sudo -E claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
+		{"sudo -E env -i claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
+		{"sudo -u vscode -E claude x", fleet.BackendDevcontainer, ""},
 		{"doas claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
 		{"env -u CI claude x", fleet.BackendDevcontainer, ""},
 	}
