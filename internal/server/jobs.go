@@ -436,10 +436,19 @@ func loadInstanceSnapshot(fleetName, instanceName string) *fleetgrpc.Instance {
 // start a job and return its handle immediately (async-first, issue #134)
 // while the gRPC path keeps streaming until JobDone.
 
+// createOrigin is what the instance record learns about who asked for it,
+// beyond the request: the scheduler's spawns are marked automated, and carry
+// their agent's fleet MCP opt-in (issue #219). Callers outside the scheduler
+// pass the zero value — the fleet MCP is never reachable through the RPC.
+type createOrigin struct {
+	automated bool
+	fleetMCP  bool
+}
+
 // startCreateInstanceJob pre-creates the StatusCreating record server-side
 // (this removes the client-side pre-create write that drove issue #63), then
 // starts the provisioning job.
-func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, automated bool) (*job, error) {
+func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, origin createOrigin) (*job, error) {
 	fleetName, instanceName := req.GetFleet(), req.GetInstance()
 	if fleetName == "" || instanceName == "" {
 		return nil, status.Error(codes.InvalidArgument, "fleet and instance are required")
@@ -502,7 +511,8 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 			Status:       fleet.StatusCreating,
 			Backend:      backendType,
 			Branch:       req.GetBranch(),
-			Automated:    automated,
+			Automated:    origin.automated,
+			FleetMCP:     origin.fleetMCP,
 		})
 	})
 	if err != nil {
@@ -555,7 +565,7 @@ func validateTemplateRemote(remote, branch string, backendType fleet.BackendType
 
 // CreateInstance starts the provisioning job and relays its events.
 func (s *service) CreateInstance(req *fleetgrpc.CreateInstanceRequest, stream fleetgrpc.FleetService_CreateInstanceServer) error {
-	j, err := s.startCreateInstanceJob(req, false)
+	j, err := s.startCreateInstanceJob(req, createOrigin{})
 	if err != nil {
 		return err
 	}

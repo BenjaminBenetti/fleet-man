@@ -14,9 +14,13 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/agentdetect"
+	"github.com/BenjaminBenetti/fleet-man/internal/agentstrategy"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/dotfiles"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/mcpbridge"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/tui"
@@ -99,6 +103,9 @@ type watchedAgent struct {
 	// appended to the prompt, so the agent knows what fired it. Nil only if a
 	// future caller spawns an agent outside the trigger path.
 	event *triggerEvent
+	// fleetMCP: the agent has the fleet MCP (Agent.FleetMCP, issue #219),
+	// which its launch hands it (fleetMCPExports).
+	fleetMCP bool
 }
 
 // triggerEvent carries the context of the trigger firing that spawned an agent:
@@ -324,6 +331,7 @@ func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger 
 			command:      ag.Command,
 			prompt:       trigger.Prompt,
 			systemPrompt: ag.SystemPrompt,
+			fleetMCP:     ag.FleetMCP,
 			spawnedAt:    now,
 			lastActive:   now,
 			event:        ev,
@@ -541,7 +549,7 @@ var createAutomationInstance = func(s *service, fleetName string, ag fleet.Agent
 		Fleet:    fleetName,
 		Instance: instName,
 		Backend:  protoconv.BackendToProto(ag.Backend),
-	}, true); err != nil {
+	}, createOrigin{automated: true, fleetMCP: ag.FleetMCP}); err != nil {
 		return "", err
 	}
 	return instName, nil
@@ -568,7 +576,6 @@ var launchAutomationCommand = func(ctx context.Context, s *service, w *watchedAg
 		prompt = appendEventPrompt(prompt, w.event, eventPath)
 	}
 	command := fleet.SubstituteAgentCommand(w.command, prompt, w.systemPrompt)
-	script := buildAgentLaunchScript(session, command)
 	b := s.hub.backendFor(inst)
 	go func() {
 		// Write the trigger payload into the instance BEFORE launching the agent,
@@ -583,6 +590,11 @@ var launchAutomationCommand = func(ctx context.Context, s *service, w *watchedAg
 				flog.Info("automation: event file written", "fleet", w.fleet, "instance", inst.Name, "path", eventPath, "bytes", len(payload))
 			}
 		}
+		launch := command
+		if w.fleetMCP {
+			launch = s.fleetMCPExports(w, inst, b) + command
+		}
+		script := buildAgentLaunchScript(session, launch)
 		if out, err := b.RunScript(inst.ContainerID, script); err != nil {
 			flog.Error("automation: launch agent failed", "instance", inst.Name, "err", err, "out", strings.TrimSpace(out))
 		} else {
@@ -631,6 +643,59 @@ func appendEventPrompt(prompt string, e *triggerEvent, path string) string {
 // coder, for a payload of any size. A package var so tests can stub it.
 var writeAutomationEventFile = func(inst *fleet.Instance, path string, data []byte) error {
 	return copyFileInto(inst, bytes.NewReader(data), path, 0o644)
+}
+
+// fleetMCPDir is where an agent's fleet MCP files are written inside its
+// instance. Every automation run gets a fresh container, so one fixed path
+// never collides.
+const fleetMCPDir = "/tmp/fleet-mcp"
+
+// fleetMCPExports hands the fleet MCP to an agent's launch (issue #219): it
+// opens the instance's MCP socket, writes the files the agent's strategy needs
+// into the instance, and returns the shell exports that point this launch —
+// and only this launch — at them, to prefix the agent's command with. On any
+// failure it logs why and returns "": the agent still runs, without fleet's
+// tools. Runs off the scheduler goroutine (it execs into the instance).
+func (s *service) fleetMCPExports(w *watchedAgent, inst *fleet.Instance, b backend.Backend) string {
+	strategy := agentstrategy.ForCommand(w.command)
+	setup, ok := strategy.FleetMCP(agentstrategy.FleetMCPParams{
+		Dir:    fleetMCPDir,
+		Bridge: []string{fleetlaunch.RemotePath, mcpbridge.Subcommand},
+	})
+	if !ok {
+		flog.Warn("automation: fleet MCP not supported for this agent's command; launching without it",
+			"fleet", w.fleet, "instance", inst.Name, "tool", strategy.Tool(), "command", w.command)
+		return ""
+	}
+	if err := s.instanceMCP.ensure(w.fleet, inst.Name); err != nil {
+		flog.Warn("automation: fleet MCP unavailable; launching without it", "fleet", w.fleet, "instance", inst.Name, "err", err)
+		return ""
+	}
+	if err := writeFleetMCPFiles(b, inst, setup.Files); err != nil {
+		flog.Warn("automation: writing the fleet MCP files failed; launching without it", "fleet", w.fleet, "instance", inst.Name, "err", err)
+		return ""
+	}
+	flog.Info("automation: fleet MCP provided", "fleet", w.fleet, "instance", inst.Name, "tool", strategy.Tool())
+	return setup.Exports()
+}
+
+// writeFleetMCPFiles writes files into the instance in one exec, as the
+// session user the agent runs as (RunScript). The payloads ride the command
+// itself (backend.InlineWriteScript), a few KB each. A package var so tests
+// can stub it.
+var writeFleetMCPFiles = func(b backend.Backend, inst *fleet.Instance, files []agentstrategy.File) error {
+	steps := make([]string, 0, len(files))
+	for _, f := range files {
+		argv, err := backend.InlineWriteScript(f.Path, f.Content, int(f.Mode.Perm()))
+		if err != nil {
+			return err
+		}
+		steps = append(steps, "("+argv[len(argv)-1]+")")
+	}
+	if out, err := b.RunScript(inst.ContainerID, strings.Join(steps, " && ")); err != nil {
+		return fmt.Errorf("%w (%s)", err, strings.TrimSpace(out))
+	}
+	return nil
 }
 
 // buildAgentLaunchScript builds the in-container snippet that brings up the agent

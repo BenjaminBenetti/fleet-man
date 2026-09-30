@@ -88,15 +88,26 @@ func Serve(ctx context.Context) error {
 	// before anything that provisions (the scheduler), so the first instance
 	// already finds its socket and the daemon's own clones the relay.
 	agentRelayDone := startAgentRelay(hubCtx, svc.agent)
-	// On the way out, let the relay remove its sockets before the process
+	// In-instance fleet MCP (issue #219): a socket in the control directory of
+	// every instance whose automation agent has the fleet MCP.
+	instanceMCPDone := make(chan struct{})
+	go func() {
+		defer close(instanceMCPDone)
+		svc.instanceMCP.run(hubCtx)
+	}()
+	// On the way out, let the relay and the MCP sockets go before the process
 	// exits (bounded): a socket file left behind is only replaced on the next
 	// start, and one in an instance's control dir outlives a daemon started
 	// with FLEET_SSH_AGENT_SOCK=off.
 	defer func() {
 		cancelHub()
-		select {
-		case <-agentRelayDone:
-		case <-time.After(3 * time.Second):
+		deadline := time.After(3 * time.Second)
+		for _, done := range []<-chan struct{}{agentRelayDone, instanceMCPDone} {
+			select {
+			case <-done:
+			case <-deadline:
+				return
+			}
 		}
 	}()
 

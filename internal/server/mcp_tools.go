@@ -128,7 +128,7 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	}, s.mcpAutomationList)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_agent_create",
-		Description: "Create an automation agent in a fleet: a worker definition (launch command, system prompt, env backend) that triggers activate. Returns the fleet's resulting automation config.",
+		Description: "Create an automation agent in a fleet: a worker definition (launch command, system prompt, env backend, whether it gets the fleet MCP) that triggers activate. Returns the fleet's resulting automation config.",
 	}, s.mcpAgentCreate)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_agent_update",
@@ -393,7 +393,7 @@ func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpI
 	if in.Branch != "" {
 		req.Branch = &in.Branch
 	}
-	j, err := s.startCreateInstanceJob(req, false)
+	j, err := s.startCreateInstanceJob(req, createOrigin{})
 	if err != nil {
 		return nil, FleetJobOutput{}, mcpErr(err)
 	}

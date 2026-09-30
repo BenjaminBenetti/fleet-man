@@ -54,6 +54,7 @@ func NewRootCmd() *cobra.Command {
 		newExecInSessionCmd(),
 		newReadSessionCmd(),
 		newLandingPageCmd(),
+		newMCPBridgeCmd(),
 		newLaunchCmd(),
 		newVersionCmd(),
 		newServerCmd(),

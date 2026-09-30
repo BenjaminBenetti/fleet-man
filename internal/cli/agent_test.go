@@ -160,7 +160,7 @@ func TestAgentList(t *testing.T) {
 	t.Cleanup(func() { loadAutomation = orig })
 	loadAutomation = func(_ context.Context, fleetName string) (fleet.FleetSettings, error) {
 		return fleet.FleetSettings{
-			Agents:   []fleet.Agent{{Name: "builder", Backend: fleet.BackendDevcontainer, Command: "claude"}},
+			Agents:   []fleet.Agent{{Name: "builder", Backend: fleet.BackendDevcontainer, Command: "claude", FleetMCP: true}},
 			Triggers: []fleet.Trigger{{Name: "nightly", Type: fleet.TriggerSchedule, AgentNames: []string{"builder"}, Cron: "0 0 * * *"}},
 		}, nil
 	}
@@ -169,7 +169,7 @@ func TestAgentList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	for _, want := range []string{"NAME", "BACKEND", "TRIGGERS", "builder", "devcontainer", "claude"} {
+	for _, want := range []string{"NAME", "BACKEND", "MCP", "TRIGGERS", "builder", "devcontainer", " on ", "claude"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list output missing %q:\n%s", want, out)
 		}
@@ -185,5 +185,32 @@ func TestAgentAliases(t *testing.T) {
 	}
 	if cmds["ls"] != "list" || cmds["rm"] != "delete" {
 		t.Errorf("agent aliases = %v, want ls->list, rm->delete", cmds)
+	}
+}
+
+// TestAgentFleetMCPFlag: --fleet-mcp turns the fleet MCP on at create; on edit
+// only a passed flag changes it, and --fleet-mcp=false turns it off.
+func TestAgentFleetMCPFlag(t *testing.T) {
+	_, result := stubMutate(t, fleet.FleetSettings{})
+	if _, err := runCLI(t, "agent", "create", "alpha", "orchestrator", "--fleet-mcp"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if !result.Agents[0].FleetMCP {
+		t.Fatalf("create --fleet-mcp: %+v", result.Agents[0])
+	}
+
+	seed := fleet.FleetSettings{Agents: []fleet.Agent{{Name: "a", Backend: fleet.BackendDevcontainer, FleetMCP: true}}}
+	_, result = stubMutate(t, seed)
+	if _, err := runCLI(t, "agent", "edit", "alpha", "a", "--command", "claude"); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if !result.Agents[0].FleetMCP {
+		t.Fatalf("an edit without --fleet-mcp must keep it: %+v", result.Agents[0])
+	}
+	if _, err := runCLI(t, "agent", "edit", "alpha", "a", "--fleet-mcp=false"); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if result.Agents[0].FleetMCP {
+		t.Fatalf("--fleet-mcp=false must turn it off: %+v", result.Agents[0])
 	}
 }

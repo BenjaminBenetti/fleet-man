@@ -233,7 +233,11 @@ type Instance struct {
 	// (issue #188). Plain bool: false == "not automated" == user-created, like the
 	// FleetSettings *Mount flags — the zero value carries the common case, so no
 	// optional is needed.
-	Automated     bool `protobuf:"varint,31,opt,name=automated,proto3" json:"automated,omitempty"`
+	Automated bool `protobuf:"varint,31,opt,name=automated,proto3" json:"automated,omitempty"`
+	// fleet_mcp marks an automation instance whose agent has the fleet MCP
+	// (Agent.fleet_mcp, issue #219): the daemon serves the MCP server on a socket
+	// in its control directory. Plain bool like automated.
+	FleetMcp      bool `protobuf:"varint,32,opt,name=fleet_mcp,json=fleetMcp,proto3" json:"fleet_mcp,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -362,6 +366,13 @@ func (x *Instance) GetWarnings() []string {
 func (x *Instance) GetAutomated() bool {
 	if x != nil {
 		return x.Automated
+	}
+	return false
+}
+
+func (x *Instance) GetFleetMcp() bool {
+	if x != nil {
+		return x.FleetMcp
 	}
 	return false
 }
@@ -757,11 +768,14 @@ func (x *LayoutPreset) GetPaneCommands() []string {
 // and it is always persisted explicitly). backend reuses Instance.backend's enum
 // (UNSPECIFIED -> devcontainer at normalization).
 type Agent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Command       string                 `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
-	SystemPrompt  string                 `protobuf:"bytes,4,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
-	Backend       BackendType            `protobuf:"varint,5,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Name         string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Command      string                 `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
+	SystemPrompt string                 `protobuf:"bytes,4,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
+	Backend      BackendType            `protobuf:"varint,5,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
+	// fleet_mcp gives the agent the fleet MCP server and the Fleet Admiral skill
+	// inside its instance (issue #219). Plain bool: false == off, the default.
+	FleetMcp      bool `protobuf:"varint,6,opt,name=fleet_mcp,json=fleetMcp,proto3" json:"fleet_mcp,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -822,6 +836,13 @@ func (x *Agent) GetBackend() BackendType {
 		return x.Backend
 	}
 	return BackendType_BACKEND_TYPE_UNSPECIFIED
+}
+
+func (x *Agent) GetFleetMcp() bool {
+	if x != nil {
+		return x.FleetMcp
+	}
+	return false
 }
 
 // Trigger mirrors internal/fleet.Trigger — an automation trigger (issue #188).
@@ -1187,7 +1208,7 @@ var File_domain_proto protoreflect.FileDescriptor
 
 const file_domain_proto_rawDesc = "" +
 	"\n" +
-	"\fdomain.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe5\x04\n" +
+	"\fdomain.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\x82\x05\n" +
 	"\bInstance\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12&\n" +
 	"\fdisplay_name\x18\x02 \x01(\tH\x00R\vdisplayName\x88\x01\x01\x12&\n" +
@@ -1204,7 +1225,8 @@ const file_domain_proto_rawDesc = "" +
 	"\x05color\x18\v \x01(\tH\x06R\x05color\x88\x01\x01\x12\x1b\n" +
 	"\x06branch\x18\f \x01(\tH\aR\x06branch\x88\x01\x01\x12\x1a\n" +
 	"\bwarnings\x18\r \x03(\tR\bwarnings\x12\x1c\n" +
-	"\tautomated\x18\x1f \x01(\bR\tautomatedB\x0f\n" +
+	"\tautomated\x18\x1f \x01(\bR\tautomated\x12\x1b\n" +
+	"\tfleet_mcp\x18  \x01(\bR\bfleetMcpB\x0f\n" +
 	"\r_display_nameB\x0f\n" +
 	"\r_container_idB\t\n" +
 	"\a_configB\x10\n" +
@@ -1252,12 +1274,13 @@ const file_domain_proto_rawDesc = "" +
 	"\fLayoutPreset\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06layout\x18\x02 \x01(\tR\x06layout\x12#\n" +
-	"\rpane_commands\x18\x03 \x03(\tR\fpaneCommands\"\x92\x01\n" +
+	"\rpane_commands\x18\x03 \x03(\tR\fpaneCommands\"\xaf\x01\n" +
 	"\x05Agent\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12#\n" +
 	"\rsystem_prompt\x18\x04 \x01(\tR\fsystemPrompt\x120\n" +
-	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackendJ\x04\b\x03\x10\x04\"\xc8\x02\n" +
+	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackend\x12\x1b\n" +
+	"\tfleet_mcp\x18\x06 \x01(\bR\bfleetMcpJ\x04\b\x03\x10\x04\"\xc8\x02\n" +
 	"\aTrigger\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1f\n" +

@@ -359,6 +359,41 @@ func TestEditAgentInstantSavesFieldCommit(t *testing.T) {
 	}
 }
 
+// TestEditAgentTogglesFleetMCP: the Fleet MCP row flips with enter and h/l,
+// each flip instant-saves, and the row explains itself while selected.
+func TestEditAgentTogglesFleetMCP(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	m.st.Fleets["alpha"].Settings.Agents = []fleet.Agent{{Name: "orchestrator", Command: "claude", Backend: fleet.BackendDevcontainer}}
+
+	fp.openEditAgentDialog(m, "alpha", 0)
+	if !strings.Contains(fp.renderAutomationAgentDialog(m), "Fleet MCP: [ off ]") {
+		t.Fatal("the dialog should show the Fleet MCP toggle, off by default")
+	}
+	fp.agentDlg.row = agentRowFleetMCP
+	fp.updateAutomationAgent(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.st.Fleets["alpha"].Settings.Agents[0].FleetMCP {
+		t.Fatal("enter on Fleet MCP should turn it on and instant-save")
+	}
+	view := fp.renderAutomationAgentDialog(m)
+	if !strings.Contains(view, "Fleet MCP: [ on ]") || !strings.Contains(view, "fleet-admiral") {
+		t.Fatalf("the selected row should read on and explain itself:\n%s", view)
+	}
+	fp.updateAutomationAgent(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if m.st.Fleets["alpha"].Settings.Agents[0].FleetMCP {
+		t.Fatal("l on Fleet MCP should turn it back off")
+	}
+
+	// Re-opening reflects the stored value.
+	m.st.Fleets["alpha"].Settings.Agents[0].FleetMCP = true
+	fp.openEditAgentDialog(m, "alpha", 0)
+	if !fp.agentDlg.fleetMCP {
+		t.Fatal("the dialog should load the agent's Fleet MCP setting")
+	}
+	if !strings.Contains(agentSummary(m.st.Fleets["alpha"], m.st.Fleets["alpha"].Settings.Agents[0]), "fleet MCP") {
+		t.Fatal("the agent row summary should mention the fleet MCP")
+	}
+}
+
 // TestEditTriggerTypeSwitchDoesNotFlashError: flipping Type while editing makes
 // the other type's required fields appear empty; that transient invalid state
 // must not flash a validation error, and must not persist over the last good one.

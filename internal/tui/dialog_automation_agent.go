@@ -11,8 +11,9 @@ import (
 
 // dialog_automation_agent.go is the add/edit-agent modal (issue #188). An agent
 // defines how an automation worker is launched: a command (with ${PROMPT}/
-// ${SYS_PROMPT} placeholders), a system prompt, and an env backend. The command
-// always runs in a tmux session so the user can open it in the TUI and watch.
+// ${SYS_PROMPT} placeholders), a system prompt, an env backend, and whether it
+// gets the fleet MCP (issue #219). The command always runs in a tmux session so
+// the user can open it in the TUI and watch.
 
 // agentRow identifies a focusable field in the agent dialog.
 const (
@@ -20,6 +21,7 @@ const (
 	agentRowCommand
 	agentRowSystemPrompt
 	agentRowBackend
+	agentRowFleetMCP
 	agentRowSave
 	agentRowCount
 )
@@ -38,6 +40,7 @@ type automationAgentState struct {
 	command      string
 	systemPrompt string
 	backend      fleet.BackendType
+	fleetMCP     bool
 	errMsg       string
 }
 
@@ -87,6 +90,7 @@ func (fleetPage *fleetPage) openEditAgentDialog(m *model, fleetName string, idx 
 		command:      a.Command,
 		systemPrompt: a.SystemPrompt,
 		backend:      backend,
+		fleetMCP:     a.FleetMCP,
 	}
 	fleetPage.mode = viewAutomationAgent
 	return nil
@@ -140,14 +144,22 @@ func (fleetPage *fleetPage) updateAutomationAgent(m *model, msg tea.Msg) tea.Cmd
 	case "enter", " ":
 		return fleetPage.agentRowEnter(m)
 	case "left", "h":
-		if st.row == agentRowBackend {
+		switch st.row {
+		case agentRowBackend:
 			st.backend = nextBackendType(st.backend, -1, allBackendTypes)
+			fleetPage.autosaveAgent(m)
+		case agentRowFleetMCP:
+			st.fleetMCP = !st.fleetMCP
 			fleetPage.autosaveAgent(m)
 		}
 		return nil
 	case "right", "l":
-		if st.row == agentRowBackend {
+		switch st.row {
+		case agentRowBackend:
 			st.backend = nextBackendType(st.backend, 1, allBackendTypes)
+			fleetPage.autosaveAgent(m)
+		case agentRowFleetMCP:
+			st.fleetMCP = !st.fleetMCP
 			fleetPage.autosaveAgent(m)
 		}
 		return nil
@@ -179,6 +191,9 @@ func (fleetPage *fleetPage) agentRowEnter(m *model) tea.Cmd {
 		return editorCmd(editorTargetAgentSysPrompt, "sysprompt", st.systemPrompt)
 	case agentRowBackend:
 		st.backend = nextBackendType(st.backend, 1, allBackendTypes)
+		fleetPage.autosaveAgent(m)
+	case agentRowFleetMCP:
+		st.fleetMCP = !st.fleetMCP
 		fleetPage.autosaveAgent(m)
 	case agentRowSave:
 		return fleetPage.saveAutomationAgent(m)
@@ -264,6 +279,7 @@ func (fleetPage *fleetPage) agentCandidate() fleet.Agent {
 		Command:      st.command,
 		SystemPrompt: st.systemPrompt,
 		Backend:      st.backend,
+		FleetMCP:     st.fleetMCP,
 	}
 }
 
@@ -364,6 +380,11 @@ func (fleetPage *fleetPage) renderAutomationAgentDialog(m *model) string {
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowCommand), dialogLabel.Render("Command: "), field(agentRowCommand, st.command, fleet.DefaultAgentCommand))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowSystemPrompt), dialogLabel.Render("Sys prompt:"), promptFieldPreview(st.systemPrompt, "(optional, injected into ${SYS_PROMPT})"))
 	fmt.Fprintf(&body, "%s%s [ %s ]\n", marker(agentRowBackend), dialogLabel.Render("Backend: "), backendTypeLabel(st.backend))
+	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowFleetMCP), dialogLabel.Render("Fleet MCP:"), selectorLabel(onOffLabel(st.fleetMCP)))
+	if st.row == agentRowFleetMCP {
+		fmt.Fprintf(&body, "%s\n", dimStyle.PaddingLeft(4).Width(46).Render(
+			"Gives the agent fleet's MCP tools and the fleet-admiral skill, so it can run more instances and agents. Claude Code, devcontainer backend."))
+	}
 	// Editing instant-saves, so there is no Save row; a new agent keeps it.
 	if st.editIdx < 0 {
 		fmt.Fprintf(&body, "%s%s\n", marker(agentRowSave), saveButtonLabel(st.row == agentRowSave))
@@ -378,6 +399,14 @@ func (fleetPage *fleetPage) renderAutomationAgentDialog(m *model) string {
 	b.WriteString(dialogBox.Render(body.String()))
 	b.WriteString("\n")
 	return b.String()
+}
+
+// onOffLabel renders a two-valued toggle.
+func onOffLabel(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }
 
 // saveButtonLabel renders the dialogs' shared "[ Save ]" action.

@@ -150,6 +150,9 @@ func triggerSummary(t fleet.Trigger) string {
 func agentSummary(f *fleet.Fleet, a fleet.Agent) string {
 	n := triggerCountForAgent(f, a.Name)
 	parts := []string{backendTypeLabel(a.Backend)}
+	if a.FleetMCP {
+		parts = append(parts, "fleet MCP")
+	}
 	suffix := "s"
 	if n == 1 {
 		suffix = ""

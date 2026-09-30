@@ -33,6 +33,7 @@ type mcpAgent struct {
 	Command      string `json:"command,omitempty"`
 	SystemPrompt string `json:"system_prompt,omitempty"`
 	Backend      string `json:"backend,omitempty"`
+	FleetMCP     bool   `json:"fleet_mcp"`
 }
 
 type mcpTrigger struct {
@@ -64,6 +65,7 @@ func toMCPAutomation(s fleet.FleetSettings) AutomationOutput {
 			Command:      a.Command,
 			SystemPrompt: a.SystemPrompt,
 			Backend:      string(a.Backend),
+			FleetMCP:     a.FleetMCP,
 		})
 	}
 	for _, t := range s.Triggers {
@@ -143,6 +145,7 @@ type FleetAgentCreateInput struct {
 	Command      string `json:"command,omitempty" jsonschema:"launch command; ${PROMPT} and ${SYS_PROMPT} are substituted when a trigger fires it. Defaults to a live claude session command if omitted"`
 	SystemPrompt string `json:"system_prompt,omitempty" jsonschema:"system prompt injected into the command's ${SYS_PROMPT}"`
 	Backend      string `json:"backend,omitempty" jsonschema:"env backend the agent's instance runs on: devcontainer (default), coder, or codespaces"`
+	FleetMCP     bool   `json:"fleet_mcp,omitempty" jsonschema:"give the agent these fleet MCP tools and the fleet-admiral skill inside its instance, so it can spin up more instances and agents (Claude Code agents on a devcontainer backend; default false)"`
 }
 
 func (s *service) mcpAgentCreate(ctx context.Context, _ *mcp.CallToolRequest, in FleetAgentCreateInput) (*mcp.CallToolResult, AutomationOutput, error) {
@@ -155,6 +158,7 @@ func (s *service) mcpAgentCreate(ctx context.Context, _ *mcp.CallToolRequest, in
 			Command:      in.Command,
 			SystemPrompt: in.SystemPrompt,
 			Backend:      fleet.BackendType(in.Backend),
+			FleetMCP:     in.FleetMCP,
 		})
 	})
 	if err != nil {
@@ -170,6 +174,7 @@ type FleetAgentUpdateInput struct {
 	Command      string `json:"command,omitempty" jsonschema:"new launch command; omit to keep the current one"`
 	SystemPrompt string `json:"system_prompt,omitempty" jsonschema:"new system prompt; omit to keep the current one"`
 	Backend      string `json:"backend,omitempty" jsonschema:"new backend (devcontainer, coder, codespaces); omit to keep the current one"`
+	FleetMCP     *bool  `json:"fleet_mcp,omitempty" jsonschema:"true gives the agent the fleet MCP tools and the fleet-admiral skill inside its instance, false takes them away; omit to keep the current setting"`
 }
 
 func (s *service) mcpAgentUpdate(ctx context.Context, _ *mcp.CallToolRequest, in FleetAgentUpdateInput) (*mcp.CallToolResult, AutomationOutput, error) {
@@ -194,6 +199,9 @@ func (s *service) mcpAgentUpdate(ctx context.Context, _ *mcp.CallToolRequest, in
 		}
 		if in.Backend != "" {
 			a.Backend = fleet.BackendType(in.Backend)
+		}
+		if in.FleetMCP != nil {
+			a.FleetMCP = *in.FleetMCP
 		}
 		return fleet.UpdateAgent(st, in.Name, a)
 	})
