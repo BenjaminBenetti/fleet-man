@@ -367,24 +367,24 @@ func TestNeedsDepsCheck(t *testing.T) {
 // currently open in this TUI's split, whose outer tmux is live truth.
 func TestReconcileSavedGroupsMirrorsServerState(t *testing.T) {
 	ref := InstanceRef{Fleet: "repo", Instance: "alpha"}
-	activeKey := computeGroupKey("alpha", "dog")
-	updatedKey := computeGroupKey("alpha", "cat")
-	vanishedKey := computeGroupKey("alpha", "old")
-	newKey := computeGroupKey("beta", "fish")
+	activeKey := computeGroupKey("repo", "alpha", "dog")
+	updatedKey := computeGroupKey("repo", "alpha", "cat")
+	vanishedKey := computeGroupKey("repo", "alpha", "old")
+	newKey := computeGroupKey("repo", "beta", "fish")
 
 	fp := newFleetPage()
 	fp.split.paneID = "%5"
 	fp.split.activeGroup = ActiveGroup{Ref: ref, GroupID: "dog"}
 	fp.savedGroups[activeKey] = savedGroup{
-		GroupID: "dog", InstanceName: "alpha",
+		GroupID: "dog", FleetName: "repo", InstanceName: "alpha",
 		Sessions: []string{"alpha~dog", "alpha~dog~ff00"}, PaneCount: 2,
 	}
 	fp.savedGroups[updatedKey] = savedGroup{
-		GroupID: "cat", InstanceName: "alpha",
+		GroupID: "cat", FleetName: "repo", InstanceName: "alpha",
 		Sessions: []string{"alpha~cat"}, PaneCount: 1,
 	}
 	fp.savedGroups[vanishedKey] = savedGroup{
-		GroupID: "old", InstanceName: "alpha",
+		GroupID: "old", FleetName: "repo", InstanceName: "alpha",
 		Sessions: []string{"alpha~old"}, PaneCount: 1,
 	}
 
@@ -393,9 +393,9 @@ func TestReconcileSavedGroupsMirrorsServerState(t *testing.T) {
 			GroupLayouts: map[string]state.GroupLayout{
 				// The server has a NEWER copy of the active group (the other
 				// TUI added a pane) — but this TUI's open split owns it.
-				activeKey:  {GroupID: "dog", InstanceName: "alpha", Sessions: []string{"alpha~dog", "alpha~dog~ff00", "alpha~dog~3421"}, PaneCount: 3},
-				updatedKey: {GroupID: "cat", InstanceName: "alpha", Sessions: []string{"alpha~cat", "alpha~cat~aa11"}, PaneCount: 2},
-				newKey:     {GroupID: "fish", InstanceName: "beta", Sessions: []string{"beta~fish"}, PaneCount: 1},
+				activeKey:  {GroupID: "dog", FleetName: "repo", InstanceName: "alpha", Sessions: []string{"alpha~dog", "alpha~dog~ff00", "alpha~dog~3421"}, PaneCount: 3},
+				updatedKey: {GroupID: "cat", FleetName: "repo", InstanceName: "alpha", Sessions: []string{"alpha~cat", "alpha~cat~aa11"}, PaneCount: 2},
+				newKey:     {GroupID: "fish", FleetName: "repo", InstanceName: "beta", Sessions: []string{"beta~fish"}, PaneCount: 1},
 			},
 		},
 		fleetPage: fp,

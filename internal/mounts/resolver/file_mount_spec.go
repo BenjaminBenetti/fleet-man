@@ -11,8 +11,8 @@ type fileMountSpec struct {
 	name string
 	// filename is the basename of the file inside the shared mount.
 	filename string
-	// symlinkTarget is the absolute container path where the symlink
-	// is created (the path the agent's tooling reads/writes).
+	// symlinkTarget is a container path, absolute or relative to the remote
+	// workspace, where the symlink is created.
 	symlinkTarget string
 	// seedContent is written into the host file after the symlink is
 	// established when the file is still empty (i.e. nothing to
@@ -35,6 +35,13 @@ func fileMountSpecsFor(fleetSettings fleet.FleetSettings, containerHome string) 
 			// parses as anything other than valid JSON; an empty
 			// file would trip that check.
 			seedContent: "{}",
+		}, fileMountSpec{
+			name:     "Claude Code project settings",
+			filename: "claude-settings.local.json",
+			// Exec runs in the configured remote workspace, which need not be
+			// /workspaces/<repo> (workspaceFolder can override it).
+			symlinkTarget: ".claude/settings.local.json",
+			seedContent:   "{}",
 		})
 	}
 	return specs

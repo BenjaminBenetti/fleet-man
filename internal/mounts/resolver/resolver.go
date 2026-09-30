@@ -50,8 +50,8 @@ const sharedFilesContainerPath = "/fleet-mounts/files"
 // shared parent-dir mount and a Symlink that the caller must create
 // inside the container after Up.
 //
-// The container side of each mount is rooted at fleetSettings.HomeDir
-// (the user's container home). When HomeDir is empty Resolve falls
+// Home-level mounts are rooted at fleetSettings.HomeDir; project file links
+// are relative to the remote workspace. When HomeDir is empty Resolve falls
 // back to defaultContainerHome — picked to match standard Microsoft
 // devcontainer images — so existing fleets created before the home-dir
 // detector existed still get a working mount on the common case.

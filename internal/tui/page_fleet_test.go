@@ -163,9 +163,10 @@ func TestViewFleetListShowsBranchItemForInstance(t *testing.T) {
 func TestBuildRowsShowsSavedGroupWithoutLiveSessions(t *testing.T) {
 	inst := &fleet.Instance{Name: "alpha", Status: fleet.StatusRunning, ContainerID: "abc"}
 	fp := newFleetPage()
-	key := computeGroupKey("alpha", "abc123")
+	key := computeGroupKey("repo", "alpha", "abc123")
 	fp.savedGroups[key] = savedGroup{
 		GroupID:      "abc123",
+		FleetName:    "repo",
 		InstanceName: "alpha",
 		Sessions:     []string{"alpha~abc123", "alpha~abc123~ff00"},
 		PaneCount:    2,
@@ -380,9 +381,10 @@ func TestPruneSavedGroupsKeepsSavedGroupWhenDiscoveryIsEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	fp := newFleetPage()
-	key := computeGroupKey("alpha", "abc123")
+	key := computeGroupKey("repo", "alpha", "abc123")
 	fp.savedGroups[key] = savedGroup{
 		GroupID:      "abc123",
+		FleetName:    "repo",
 		InstanceName: "alpha",
 		Sessions:     []string{"alpha~abc123"},
 		PaneCount:    1,
@@ -390,7 +392,7 @@ func TestPruneSavedGroupsKeepsSavedGroupWhenDiscoveryIsEmpty(t *testing.T) {
 	m := &model{
 		st: &state.State{
 			Fleets:       map[string]*fleet.Fleet{},
-			GroupLayouts: map[string]state.GroupLayout{key: {GroupID: "abc123", InstanceName: "alpha"}},
+			GroupLayouts: map[string]state.GroupLayout{key: {GroupID: "abc123", FleetName: "repo", InstanceName: "alpha"}},
 		},
 		fleetPage: fp,
 		sessionStore: func() *SessionStore {
@@ -2044,16 +2046,17 @@ func TestUpdateNormalShiftJumpKeys(t *testing.T) {
 func TestMigrateRenamedSessionGroupedReKeysAndPreventsDuplicate(t *testing.T) {
 	prevSet, prevDel := setGroupLayoutRemote, deleteGroupLayoutRemote
 	setGroupLayoutRemote = func(state.GroupLayout) error { return nil }
-	deleteGroupLayoutRemote = func(string, string) error { return nil }
+	deleteGroupLayoutRemote = func(string, string, string) error { return nil }
 	defer func() { setGroupLayoutRemote, deleteGroupLayoutRemote = prevSet, prevDel }()
 
 	ref := InstanceRef{Fleet: "repo", Instance: "alpha"}
 	inst := &fleet.Instance{Name: "alpha", Status: fleet.StatusRunning, ContainerID: "abc"}
 
 	fp := newFleetPage()
-	oldKey := computeGroupKey("alpha", "abc123")
+	oldKey := computeGroupKey("repo", "alpha", "abc123")
 	fp.savedGroups[oldKey] = savedGroup{
 		GroupID:      "abc123",
+		FleetName:    "repo",
 		InstanceName: "alpha",
 		Sessions:     []string{"alpha~abc123", "alpha~abc123~ff00"},
 		PaneCount:    2,
@@ -2071,7 +2074,7 @@ func TestMigrateRenamedSessionGroupedReKeysAndPreventsDuplicate(t *testing.T) {
 	m := &model{
 		st: &state.State{
 			Fleets:       map[string]*fleet.Fleet{"repo": {Name: "repo", Instances: []*fleet.Instance{inst}}},
-			GroupLayouts: map[string]state.GroupLayout{oldKey: {GroupID: "abc123", InstanceName: "alpha", Sessions: []string{"alpha~abc123"}}},
+			GroupLayouts: map[string]state.GroupLayout{oldKey: {GroupID: "abc123", FleetName: "repo", InstanceName: "alpha", Sessions: []string{"alpha~abc123"}}},
 		},
 		fleetPage:    fp,
 		sessionStore: store,
@@ -2085,7 +2088,7 @@ func TestMigrateRenamedSessionGroupedReKeysAndPreventsDuplicate(t *testing.T) {
 		newGroupID: "test",
 	})
 
-	newKey := computeGroupKey("alpha", "test")
+	newKey := computeGroupKey("repo", "alpha", "test")
 	if _, ok := fp.savedGroups[oldKey]; ok {
 		t.Fatal("saved group still keyed under old group ID after rename")
 	}
@@ -2170,16 +2173,17 @@ func TestMigrateRenamedSessionUngroupedFollowsNewName(t *testing.T) {
 func TestPruneWithStaleRuntimeDeletesMigratedGroup(t *testing.T) {
 	prevSet, prevDel := setGroupLayoutRemote, deleteGroupLayoutRemote
 	setGroupLayoutRemote = func(state.GroupLayout) error { return nil }
-	deleteGroupLayoutRemote = func(string, string) error { return nil }
+	deleteGroupLayoutRemote = func(string, string, string) error { return nil }
 	defer func() { setGroupLayoutRemote, deleteGroupLayoutRemote = prevSet, prevDel }()
 
 	ref := InstanceRef{Fleet: "repo", Instance: "alpha"}
 	inst := &fleet.Instance{Name: "alpha", Status: fleet.StatusRunning, ContainerID: "abc"}
 
 	fp := newFleetPage()
-	oldKey := computeGroupKey("alpha", "abc123")
+	oldKey := computeGroupKey("repo", "alpha", "abc123")
 	fp.savedGroups[oldKey] = savedGroup{
 		GroupID:      "abc123",
+		FleetName:    "repo",
 		InstanceName: "alpha",
 		Sessions:     []string{"alpha~abc123", "alpha~abc123~ff00"},
 		PaneCount:    2,
@@ -2197,7 +2201,7 @@ func TestPruneWithStaleRuntimeDeletesMigratedGroup(t *testing.T) {
 	m := &model{
 		st: &state.State{
 			Fleets:       map[string]*fleet.Fleet{"repo": {Name: "repo", Instances: []*fleet.Instance{inst}}},
-			GroupLayouts: map[string]state.GroupLayout{oldKey: {GroupID: "abc123", InstanceName: "alpha", Sessions: []string{"alpha~abc123"}}},
+			GroupLayouts: map[string]state.GroupLayout{oldKey: {GroupID: "abc123", FleetName: "repo", InstanceName: "alpha", Sessions: []string{"alpha~abc123"}}},
 		},
 		fleetPage:    fp,
 		sessionStore: store,
@@ -2212,7 +2216,7 @@ func TestPruneWithStaleRuntimeDeletesMigratedGroup(t *testing.T) {
 		newGroupID: "test",
 	})
 
-	newKey := computeGroupKey("alpha", "test")
+	newKey := computeGroupKey("repo", "alpha", "test")
 	if _, ok := fp.savedGroups[newKey]; !ok {
 		t.Fatal("precondition: saved group should exist under new key after migrate")
 	}

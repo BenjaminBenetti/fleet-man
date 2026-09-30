@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Description: `fleet stop`/`start` transition state and the underlying docker container correctly.
+# Description: Stop/start preserves container identity and runs postStart once per start (#229).
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -70,4 +70,15 @@ poststart_restart=$(count_poststart)
 info "poststart count after restart: ${poststart_restart}"
 assert_equals "2" "${poststart_restart}" "postStart must re-run when the instance is started (#179)"
 
-pass "stop + start"
+# An already-running start must not repeat lifecycle hooks.
+start_again=$("${FLEET_BIN}" start "${FIXTURE_REPO_NAME}/alpha")
+assert_contains "${start_again}" "already running" "repeated start should be a no-op"
+assert_equals "2" "$(count_poststart)" "already-running start must not repeat postStart"
+
+# A second real restart proves the hook is not a one-time resume action.
+"${FLEET_BIN}" stop "${FIXTURE_REPO_NAME}/alpha"
+"${FLEET_BIN}" start "${FIXTURE_REPO_NAME}/alpha"
+assert_equals "3" "$(count_poststart)" "postStart must run on every restart (#229)"
+assert_equals "running" "$(docker inspect -f '{{.State.Status}}' "${container_id}")" "restart should preserve the same container"
+
+pass "stop + start lifecycle hooks"

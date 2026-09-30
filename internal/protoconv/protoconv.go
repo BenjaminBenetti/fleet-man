@@ -409,6 +409,7 @@ func CoderParametersFromProto(in []*fleetgrpc.CoderParameter) []fleet.CoderParam
 func GroupLayoutToProto(gl configutil.GroupLayout) *fleetgrpc.GroupLayout {
 	return &fleetgrpc.GroupLayout{
 		GroupId:      gl.GroupID,
+		FleetName:    gl.FleetName,
 		InstanceName: gl.InstanceName,
 		Sessions:     gl.Sessions,
 		Layout:       gl.Layout,
@@ -420,6 +421,7 @@ func GroupLayoutToProto(gl configutil.GroupLayout) *fleetgrpc.GroupLayout {
 func GroupLayoutFromProto(pgl *fleetgrpc.GroupLayout) configutil.GroupLayout {
 	return configutil.GroupLayout{
 		GroupID:      pgl.GetGroupId(),
+		FleetName:    pgl.GetFleetName(),
 		InstanceName: pgl.GetInstanceName(),
 		Sessions:     pgl.GetSessions(),
 		Layout:       pgl.GetLayout(),

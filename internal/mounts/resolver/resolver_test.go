@@ -81,8 +81,8 @@ func TestResolveCreatesClaudeJSONSymlinkAndHostFile(t *testing.T) {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 
-	if len(resolved.Symlinks) != 1 {
-		t.Fatalf("len(Symlinks) = %d, want 1: %+v", len(resolved.Symlinks), resolved.Symlinks)
+	if len(resolved.Symlinks) != 2 {
+		t.Fatalf("len(Symlinks) = %d, want 2: %+v", len(resolved.Symlinks), resolved.Symlinks)
 	}
 	link := resolved.Symlinks[0]
 	if link.Target != "/home/vscode/.claude.json" {
@@ -113,8 +113,8 @@ func TestResolveClaudeJSONSymlinkCarriesSeedContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if len(resolved.Symlinks) != 1 {
-		t.Fatalf("len(Symlinks) = %d, want 1", len(resolved.Symlinks))
+	if len(resolved.Symlinks) != 2 {
+		t.Fatalf("len(Symlinks) = %d, want 2", len(resolved.Symlinks))
 	}
 	if got := resolved.Symlinks[0].SeedContent; got != "{}" {
 		t.Errorf("Symlink.SeedContent = %q, want %q", got, "{}")
@@ -173,7 +173,7 @@ func TestResolveUsesHomeDirSetting(t *testing.T) {
 		t.Errorf("expected /root/.claude mount, got %+v", resolved.Mounts)
 	}
 
-	if len(resolved.Symlinks) != 1 || resolved.Symlinks[0].Target != "/root/.claude.json" {
+	if len(resolved.Symlinks) != 2 || resolved.Symlinks[0].Target != "/root/.claude.json" {
 		t.Errorf("expected symlink at /root/.claude.json, got %+v", resolved.Symlinks)
 	}
 }
@@ -378,5 +378,51 @@ func TestResolveOnlyEnabledMountsAreReturned(t *testing.T) {
 	sharedHost := filepath.Join(home, ".fleet", "workspaces", "beta", "files")
 	if _, err := os.Stat(sharedHost); !os.IsNotExist(err) {
 		t.Errorf("expected shared files dir to be absent when no file mounts, stat err = %v", err)
+	}
+}
+
+func TestResolveClaudeProjectSettings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	settings := fleet.FleetSettings{ClaudeCodeMount: true, HomeDir: "/custom/home"}
+	first, err := Resolve("one", settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var link Symlink
+	for _, candidate := range first.Symlinks {
+		if candidate.Target == ".claude/settings.local.json" {
+			link = candidate
+		}
+	}
+	if link.Source != "/fleet-mounts/files/claude-settings.local.json" || link.SeedContent != "{}" {
+		t.Fatalf("project settings link = %#v", link)
+	}
+	hostFile := filepath.Join(fleetMountDir("one"), "files", "claude-settings.local.json")
+	contents := []byte(`{"permissions":{"allow":["Bash(go test:*)"]}}`)
+	if err := os.WriteFile(hostFile, contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve("one", settings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve("two", settings); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(hostFile)
+	if err != nil || string(got) != string(contents) {
+		t.Fatalf("existing settings replaced: %s, %v", got, err)
+	}
+	other, err := os.ReadFile(filepath.Join(fleetMountDir("two"), "files", "claude-settings.local.json"))
+	if err != nil || len(other) != 0 {
+		t.Fatalf("other fleet inherited settings: %s, %v", other, err)
+	}
+	disabled, err := Resolve("off", fleet.FleetSettings{CodexMount: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range disabled.Symlinks {
+		if candidate.Target == link.Target {
+			t.Fatal("project settings linked with Claude disabled")
+		}
 	}
 }

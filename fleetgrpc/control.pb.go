@@ -927,7 +927,7 @@ func (x *SetInstanceMetadataRequest) GetTag() string {
 }
 
 // SetGroupLayout persists a tmux pane layout (SAVE_GROUP_LAYOUT). The state map
-// is keyed by computeGroupKey(instance_name, group_id); the server derives that
+// is keyed by computeGroupKey(fleet_name, instance_name, group_id); the server derives that
 // composite key from the GroupLayout's own fields.
 type SetGroupLayoutRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -980,6 +980,7 @@ type DeleteGroupLayoutRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	InstanceName  string                 `protobuf:"bytes,1,opt,name=instance_name,json=instanceName,proto3" json:"instance_name,omitempty"`
 	GroupId       string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	FleetName     string                 `protobuf:"bytes,3,opt,name=fleet_name,json=fleetName,proto3" json:"fleet_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1024,6 +1025,13 @@ func (x *DeleteGroupLayoutRequest) GetInstanceName() string {
 func (x *DeleteGroupLayoutRequest) GetGroupId() string {
 	if x != nil {
 		return x.GroupId
+	}
+	return ""
+}
+
+func (x *DeleteGroupLayoutRequest) GetFleetName() string {
+	if x != nil {
+		return x.FleetName
 	}
 	return ""
 }
@@ -1174,10 +1182,12 @@ const file_control_proto_rawDesc = "" +
 	"\x06_colorB\x06\n" +
 	"\x04_tag\"G\n" +
 	"\x15SetGroupLayoutRequest\x12.\n" +
-	"\x06layout\x18\x01 \x01(\v2\x16.fleetgrpc.GroupLayoutR\x06layout\"Z\n" +
+	"\x06layout\x18\x01 \x01(\v2\x16.fleetgrpc.GroupLayoutR\x06layout\"y\n" +
 	"\x18DeleteGroupLayoutRequest\x12#\n" +
 	"\rinstance_name\x18\x01 \x01(\tR\finstanceName\x12\x19\n" +
-	"\bgroup_id\x18\x02 \x01(\tR\agroupId\"5\n" +
+	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12\x1d\n" +
+	"\n" +
+	"fleet_name\x18\x03 \x01(\tR\tfleetName\"5\n" +
 	"\x19SetLastSeenVersionRequest\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\"7\n" +
 	"\rMutationReply\x12&\n" +

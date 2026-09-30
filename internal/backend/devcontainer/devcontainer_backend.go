@@ -494,7 +494,7 @@ func (devcontainerBackend *DevcontainerBackend) runPostStart(containerID string)
 		return
 	}
 
-	cmd := exec.Command("devcontainer", runUserCommandsArgs(workspaceDir)...)
+	cmd := exec.Command("devcontainer", runUserCommandsArgs(workspaceDir, containerID)...)
 	// Tee output to the process stdio so the postStart script's output (and
 	// any failure detail) reaches the log file under the TUI's background
 	// process, exactly like up().
@@ -510,11 +510,12 @@ func (devcontainerBackend *DevcontainerBackend) runPostStart(containerID string)
 }
 
 // runUserCommandsArgs builds the `devcontainer run-user-commands` argument list
-// for a just-started workspace, threading the SSH agent socket through with
+// for the exact container just started, avoiding a second label-based lookup
+// that could select another container. Threads the SSH agent socket through with
 // --remote-env so a postStart hook that talks to git/ssh sees the same agent
 // the workspace was created with — mirroring devcontainer exec.
-func runUserCommandsArgs(workspaceDir string) []string {
-	args := []string{"run-user-commands", "--workspace-folder", workspaceDir}
+func runUserCommandsArgs(workspaceDir, containerID string) []string {
+	args := []string{"run-user-commands", "--workspace-folder", workspaceDir, "--container-id", containerID}
 	args = append(args, sshExecArgs(workspaceDir)...)
 	return args
 }

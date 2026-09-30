@@ -128,6 +128,18 @@ fleet mic devices                       # this machine's capture devices
 fleet mic attach                        # provide the microphone without a TUI open (records the Settings device; --device overrides)
 ```
 
+## Agent state and container lifecycle
+
+Enabling a fleet's **Claude Code mount** shares `~/.claude`, `~/.claude.json`,
+and the project's `.claude/settings.local.json` across its devcontainer instances.
+Project overrides survive instance deletion and recreation; other project
+`.claude` files remain part of each workspace. Rebuild existing instances to
+apply newly enabled mounts and project settings links.
+
+Fleet runs the devcontainer's `postStartCommand` during creation and after each
+stop/start cycle. Starting an already running instance does not repeat it.
+Restart hook failures are logged while the container remains running.
+
 ## TUI Keybindings
 
 | Key | Action |

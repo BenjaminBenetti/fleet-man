@@ -70,6 +70,7 @@ func TestSameSavedGroupFieldDifferences(t *testing.T) {
 		name string
 		mut  func(*savedGroup)
 	}{
+		{"FleetName", func(g *savedGroup) { g.FleetName = "other" }},
 		{"GroupID", func(g *savedGroup) { g.GroupID = "other" }},
 		{"InstanceName", func(g *savedGroup) { g.InstanceName = "beta" }},
 		{"Layout", func(g *savedGroup) { g.Layout = "L2" }},

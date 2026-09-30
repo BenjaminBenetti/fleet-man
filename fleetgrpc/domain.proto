@@ -303,7 +303,7 @@ message Fleet {
 
 // GroupLayout mirrors internal/state.GroupLayout (a tmux pane layout snapshot,
 // the ONE piece of tmux state that IS persisted). The State map key is the
-// composite computeGroupKey(instance_name, group_id) (splitpane.go), which the
+// composite computeGroupKey(fleet_name, instance_name, group_id) (splitpane.go), which the
 // server derives from these fields — so SetGroupLayout/DeleteGroupLayout senders
 // only supply the layout's own fields.
 message GroupLayout {
@@ -312,6 +312,7 @@ message GroupLayout {
   repeated string sessions = 3;
   string layout = 4;
   int32 pane_count = 5;
+  string fleet_name = 6;
 }
 
 // State mirrors internal/state.State — the canonical PERSISTED model the server

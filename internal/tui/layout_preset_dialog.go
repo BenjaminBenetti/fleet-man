@@ -144,7 +144,7 @@ func (fleetPage *fleetPage) collectLayoutPresetCandidates(m *model, fleetName st
 		for _, g := range groupSessions(sanitized, sessions) {
 			paneCount := len(g.Sessions)
 			layout := ""
-			if sg, ok := fleetPage.savedGroups[computeGroupKey(inst.Name, g.GroupID)]; ok {
+			if sg, ok := fleetPage.savedGroups[computeGroupKey(fleetName, inst.Name, g.GroupID)]; ok {
 				layout = sg.Layout
 				paneCount = savedGroupPaneCount(sg)
 			}

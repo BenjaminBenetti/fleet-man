@@ -164,8 +164,8 @@ func TestRunUserCommandsArgs(t *testing.T) {
 	t.Run("with agent forwarding off", func(t *testing.T) {
 		t.Setenv("SSH_AUTH_SOCK", "")
 		t.Setenv(sshAgentSockOverrideEnv, "off")
-		got := runUserCommandsArgs("/ws/alpha")
-		want := []string{"run-user-commands", "--workspace-folder", "/ws/alpha"}
+		got := runUserCommandsArgs("/ws/alpha", "cid123")
+		want := []string{"run-user-commands", "--workspace-folder", "/ws/alpha", "--container-id", "cid123"}
 		if !slices.Equal(got, want) {
 			t.Fatalf("runUserCommandsArgs() = %#v, want %#v", got, want)
 		}
@@ -175,9 +175,9 @@ func TestRunUserCommandsArgs(t *testing.T) {
 		liveAgentSocket(t)
 		relayServing(t)
 		ws := instanceWorkspace(t)
-		got := runUserCommandsArgs(ws)
+		got := runUserCommandsArgs(ws, "cid123")
 		want := []string{
-			"run-user-commands", "--workspace-folder", ws,
+			"run-user-commands", "--workspace-folder", ws, "--container-id", "cid123",
 			"--remote-env", "SSH_AUTH_SOCK=" + wantAgentSock(),
 		}
 		if !slices.Equal(got, want) {

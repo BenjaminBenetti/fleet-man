@@ -327,22 +327,22 @@ func TestGroupLayoutSetAndDelete(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := svc.SetGroupLayout(ctx, &fleetgrpc.SetGroupLayoutRequest{Layout: &fleetgrpc.GroupLayout{
-		GroupId: "g1", InstanceName: "i1", Sessions: []string{"s1", "s2"}, Layout: "abc", PaneCount: 2,
+		FleetName: "alpha", GroupId: "g1", InstanceName: "i1", Sessions: []string{"s1", "s2"}, Layout: "abc", PaneCount: 2,
 	}})
 	if err != nil {
 		t.Fatalf("SetGroupLayout: %v", err)
 	}
 	st, _ := state.Load()
-	gl, ok := st.GroupLayouts["i1/g1"]
+	gl, ok := st.GroupLayouts["alpha/i1/g1"]
 	if !ok || gl.Layout != "abc" || gl.PaneCount != 2 || len(gl.Sessions) != 2 {
 		t.Fatalf("layout not persisted under composite key: %+v", st.GroupLayouts)
 	}
 
-	if _, err := svc.DeleteGroupLayout(ctx, &fleetgrpc.DeleteGroupLayoutRequest{InstanceName: "i1", GroupId: "g1"}); err != nil {
+	if _, err := svc.DeleteGroupLayout(ctx, &fleetgrpc.DeleteGroupLayoutRequest{FleetName: "alpha", InstanceName: "i1", GroupId: "g1"}); err != nil {
 		t.Fatalf("DeleteGroupLayout: %v", err)
 	}
 	st, _ = state.Load()
-	if _, ok := st.GroupLayouts["i1/g1"]; ok {
+	if _, ok := st.GroupLayouts["alpha/i1/g1"]; ok {
 		t.Fatalf("layout not deleted")
 	}
 
@@ -370,3 +370,55 @@ func TestSetLastSeenVersion(t *testing.T) {
 
 // proto returns a pointer to v — a tiny helper for the optional scalar fields.
 func ptr[T any](v T) *T { return &v }
+
+func TestGroupLayoutsIsolateSameNamedInstances(t *testing.T) {
+	isolateFleetDir(t)
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"one": {Instances: []*fleet.Instance{{Name: "alpha"}, {Name: "unique"}}},
+		"two": {Instances: []*fleet.Instance{{Name: "alpha"}}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	svc := newService()
+	ctx := context.Background()
+	for _, name := range []string{"one", "two"} {
+		_, err := svc.SetGroupLayout(ctx, &fleetgrpc.SetGroupLayoutRequest{Layout: &fleetgrpc.GroupLayout{
+			FleetName: name, InstanceName: "alpha", GroupId: "shared", Layout: name,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Older clients cannot mutate an ambiguous instance.
+	if _, err := svc.SetGroupLayout(ctx, &fleetgrpc.SetGroupLayoutRequest{Layout: &fleetgrpc.GroupLayout{
+		InstanceName: "alpha", GroupId: "shared", Layout: "wrong",
+	}}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ambiguous set: %v", err)
+	}
+	if _, err := svc.DeleteGroupLayout(ctx, &fleetgrpc.DeleteGroupLayoutRequest{InstanceName: "alpha", GroupId: "shared"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ambiguous delete: %v", err)
+	}
+	if _, err := svc.DeleteGroupLayout(ctx, &fleetgrpc.DeleteGroupLayoutRequest{FleetName: "one", InstanceName: "alpha", GroupId: "shared"}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.GroupLayouts) != 1 || st.GroupLayouts["two/alpha/shared"].Layout != "two" {
+		t.Fatalf("cross-fleet mutation: %#v", st.GroupLayouts)
+	}
+	// A legacy client still works when there is exactly one possible owner.
+	if _, err := svc.SetGroupLayout(ctx, &fleetgrpc.SetGroupLayoutRequest{Layout: &fleetgrpc.GroupLayout{
+		InstanceName: "unique", GroupId: "legacy",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	st, err = state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.GroupLayouts["one/unique/legacy"]; !ok {
+		t.Fatal("legacy layout did not resolve its fleet")
+	}
+}
