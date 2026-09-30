@@ -3,6 +3,7 @@ package agentstrategy
 import (
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -18,11 +19,28 @@ var agentBinaries = map[string]state.AgentTool{
 	"auggie":      state.AgentToolAuggie,
 }
 
-// launchers run the command that follows them (after their own flags and,
-// for env, assignments), so the agent is the word after them.
-var launchers = map[string]bool{
-	"env": true, "exec": true, "command": true, "nohup": true, "time": true,
-	"npx": true, "bunx": true, "pnpx": true,
+// launcher describes a command that runs the command after it: which of its
+// flags take the next word as their value, and how many positional operands
+// it takes before the command (timeout's duration).
+type launcher struct {
+	valueFlags []string
+	positional int
+}
+
+// launchers are the wrappers fleet looks through to find the agent. Not sudo
+// or doas: their env_reset would drop the launch's exported environment, so
+// the agent would be recognized but never get the fleet MCP.
+var launchers = map[string]launcher{
+	"env":     {valueFlags: []string{"-u", "--unset", "-C", "--chdir"}},
+	"exec":    {valueFlags: []string{"-a"}},
+	"command": {},
+	"nohup":   {},
+	"time":    {valueFlags: []string{"-o", "--output", "-f", "--format"}},
+	"nice":    {valueFlags: []string{"-n", "--adjustment"}},
+	"timeout": {valueFlags: []string{"-s", "--signal", "-k", "--kill-after"}, positional: 1},
+	"npx":     {valueFlags: []string{"-p", "--package"}},
+	"bunx":    {valueFlags: []string{"-p", "--package"}},
+	"pnpx":    {valueFlags: []string{"-p", "--package"}},
 }
 
 // assignment matches a leading NAME=value word.
@@ -47,24 +65,38 @@ func ToolForCommand(command string) (state.AgentTool, bool) {
 	return "", false
 }
 
-// commandTool names the agent the simple command starting at words[0] runs.
+// commandTool names the agent the simple command starting at words[0] runs:
+// its first word that is not a VAR=value assignment, a launcher, or a
+// launcher's flag, flag value or positional operand.
 func commandTool(words []shellWord) (state.AgentTool, bool) {
-	launched := false
+	var outer *launcher // the innermost launcher so far
+	skipValue := false  // the previous word was a flag taking this one
+	positional := 0     // operands still owed to outer
 	for k, w := range words {
 		if k > 0 && w.start {
 			break // the next simple command
 		}
+		if skipValue {
+			skipValue = false
+			continue
+		}
+		if assignment.MatchString(w.text) {
+			continue // its value may well be quoted
+		}
 		if w.quoted {
 			return "", false // a quoted command word: not one fleet recognizes
 		}
-		name := path.Base(w.text)
-		switch {
-		case assignment.MatchString(w.text):
+		if outer != nil && strings.HasPrefix(w.text, "-") {
+			skipValue = slices.Contains(outer.valueFlags, w.text)
 			continue
-		case launched && strings.HasPrefix(w.text, "-"):
-			continue // a launcher's flag
-		case launchers[name]:
-			launched = true
+		}
+		if positional > 0 {
+			positional--
+			continue
+		}
+		name := path.Base(w.text)
+		if l, ok := launchers[name]; ok {
+			outer, positional = &l, l.positional
 			continue
 		}
 		if at := strings.LastIndex(name, "@"); at > 0 {

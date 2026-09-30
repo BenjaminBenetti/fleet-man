@@ -36,6 +36,20 @@ func TestToolForCommand(t *testing.T) {
 		{"npx -y @anthropic-ai/claude-code@latest '${PROMPT}'", state.AgentToolClaude, true},
 		{"exec env -i HOME=/h claude", state.AgentToolClaude, true},
 		{"echo start | claude -p x", state.AgentToolClaude, true},
+		// Assignments with quoted values, and wrappers with their own flags,
+		// operands and flag values.
+		{"ANTHROPIC_MODEL=\"claude-opus-5-5\" claude -p '${PROMPT}'", state.AgentToolClaude, true},
+		{"GH_TOKEN=\"$(cat ~/.gh-token)\" claude -p x", state.AgentToolClaude, true},
+		{"IS_SANDBOX=1 MAX_THINKING_TOKENS='8000' ~/.local/bin/claude x", state.AgentToolClaude, true},
+		{"env FOO=\"a b\" claude x", state.AgentToolClaude, true},
+		{"timeout 2h claude -p x", state.AgentToolClaude, true},
+		{"timeout -k 30s --signal=TERM 2h claude -p x", state.AgentToolClaude, true},
+		{"nice -n 10 claude -p x", state.AgentToolClaude, true},
+		{"env -u CI claude -p x", state.AgentToolClaude, true},
+		{"time -o f claude -p x", state.AgentToolClaude, true},
+		{"IS_SANDBOX=1 timeout 2h nice claude x", state.AgentToolClaude, true},
+		// A quoted command word is not recognized.
+		{"\"claude\" -p x", "", false},
 		// An agent's name in an argument is not the command.
 		{"cd /workspaces/claude-code && ./run-agent.sh", "", false},
 		{"./run-agent.sh --workdir /src/claude-code", "", false},
