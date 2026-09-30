@@ -169,7 +169,7 @@ func warnFleetMCP(cmd *cobra.Command, a fleet.Agent) {
 		return
 	}
 	if why := agentstrategy.FleetMCPUnsupported(a.Command, a.Backend); why != "" {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s; the agent will run without it\n", why)
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: the fleet MCP %s; the agent will run without it\n", why)
 	}
 }
 

@@ -379,11 +379,12 @@ func (fleetPage *fleetPage) renderAutomationAgentDialog(m *model) string {
 	fmt.Fprintf(&body, "%s\n\n", dialogTitle.Render(title))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowName), dialogLabel.Render("Name:    "), field(agentRowName, st.name, "agent-name"))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowCommand), dialogLabel.Render("Command: "), field(agentRowCommand, st.command, fleet.DefaultAgentCommand))
-	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowSystemPrompt), dialogLabel.Render("Sys prompt:"), promptFieldPreview(st.systemPrompt, "(optional, injected into ${SYS_PROMPT})"))
+	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowSystemPrompt), dialogLabel.Render("Sys prompt:"), promptFieldPreview(st.systemPrompt, "(optional, fills ${SYS_PROMPT})"))
 	fmt.Fprintf(&body, "%s%s [ %s ]\n", marker(agentRowBackend), dialogLabel.Render("Backend: "), backendTypeLabel(st.backend))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowFleetMCP), dialogLabel.Render("Fleet MCP:"), selectorLabel(onOffLabel(st.fleetMCP)))
-	// Always shown: what turning it on risks. (Kept to these few lines: the
-	// dialog must still fit an 80x24 terminal with "Won't apply" showing.)
+	// Always shown: what turning it on risks. The notes are kept to one or two
+	// lines each so the dialog, "Won't apply" included, fits an 80x24
+	// terminal (TestAgentDialogFits80x24).
 	fmt.Fprintf(&body, "%s\n", warnTextStyle.PaddingLeft(4).Width(46).Render(fleetMCPRiskNote))
 	if why := fleetPage.agentFleetMCPProblem(); why != "" {
 		fmt.Fprintf(&body, "%s\n", errorStyle.PaddingLeft(4).Width(46).Render("Won't apply: "+why+"."))
@@ -405,7 +406,7 @@ func (fleetPage *fleetPage) renderAutomationAgentDialog(m *model) string {
 }
 
 // fleetMCPRiskNote is the caution under the Fleet MCP toggle.
-const fleetMCPRiskNote = "⚠ Turning this on allows host access from inside the instance and poses an agent escape risk."
+const fleetMCPRiskNote = "⚠ On: allows host access from inside the instance and poses an agent escape risk."
 
 // agentFleetMCPProblem says why the Fleet MCP, when on, would not reach this
 // agent ("" when it would, or when it is off).

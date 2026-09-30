@@ -35,6 +35,7 @@ func TestToolForCommand(t *testing.T) {
 		{"claude -p \"$(codex --version)\"", state.AgentToolClaude, true},
 		{"npx -y @anthropic-ai/claude-code@latest '${PROMPT}'", state.AgentToolClaude, true},
 		{"exec env -i HOME=/h claude", state.AgentToolClaude, true},
+		{"sudo -u vscode claude x", state.AgentToolClaude, true},
 		{"echo start | claude -p x", state.AgentToolClaude, true},
 		// Assignments with quoted values, and wrappers with their own flags,
 		// operands and flag values.
@@ -216,13 +217,22 @@ func TestFleetMCPUnsupported(t *testing.T) {
 		{"", "", ""}, // the default command, the default backend
 		{"npx -y @anthropic-ai/claude-code@latest '${PROMPT}'", fleet.BackendDevcontainer, ""},
 		{"claude '${PROMPT}'", fleet.BackendCoder, "devcontainer backend"},
-		{"codex '${PROMPT}'", fleet.BackendDevcontainer, "not codex"},
-		{"./agent.sh", fleet.BackendDevcontainer, "Claude Code command"},
+		{"codex '${PROMPT}'", fleet.BackendDevcontainer, "Claude Code only"},
+		{"./agent.sh", fleet.BackendDevcontainer, "`claude` command"},
+		// Recognized, but the wrapper clears what the launch exports.
+		{"env -i HOME=/h claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
+		{"sudo -E -u vscode claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
+		{"doas claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
+		{"env -u CI claude x", fleet.BackendDevcontainer, ""},
 	}
 	for _, c := range cases {
 		got := FleetMCPUnsupported(c.command, c.backend)
 		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
 			t.Errorf("FleetMCPUnsupported(%q, %q) = %q, want %q", c.command, c.backend, got, c.want)
+		}
+		// It must fit one line of the agent dialog: "Won't apply: <why>."
+		if n := len("Won't apply: " + got + "."); n > 42 {
+			t.Errorf("reason %q makes a %d-char dialog line, want <= 42", got, n)
 		}
 	}
 }

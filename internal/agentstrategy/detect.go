@@ -20,19 +20,22 @@ var agentBinaries = map[string]state.AgentTool{
 }
 
 // launcher describes a command that runs the command after it: which of its
-// flags take the next word as their value, and how many positional operands
-// it takes before the command (timeout's duration).
+// flags take the next word as their value, how many positional operands it
+// takes before the command (timeout's duration), and whether it — or one of
+// clearFlags — runs the command with the environment cleared.
 type launcher struct {
 	valueFlags []string
 	positional int
+	clears     bool
+	clearFlags []string
 }
 
-// launchers are the wrappers fleet looks through to find the agent. Not sudo
-// or doas: their env_reset would drop the launch's exported environment, so
-// the agent would be recognized but never get the fleet MCP.
+// launchers are the wrappers fleet looks through to find the agent. sudo and
+// doas (env_reset) and `env -i` drop the environment the launch exports, so an
+// agent under them is recognized but cannot be handed the fleet MCP.
 var launchers = map[string]launcher{
-	"env":     {valueFlags: []string{"-u", "--unset", "-C", "--chdir"}},
-	"exec":    {valueFlags: []string{"-a"}},
+	"env":     {valueFlags: []string{"-u", "--unset", "-C", "--chdir"}, clearFlags: []string{"-i", "--ignore-environment", "-"}},
+	"exec":    {valueFlags: []string{"-a"}, clearFlags: []string{"-c"}},
 	"command": {},
 	"nohup":   {},
 	"time":    {valueFlags: []string{"-o", "--output", "-f", "--format"}},
@@ -41,34 +44,53 @@ var launchers = map[string]launcher{
 	"npx":     {valueFlags: []string{"-p", "--package"}},
 	"bunx":    {valueFlags: []string{"-p", "--package"}},
 	"pnpx":    {valueFlags: []string{"-p", "--package"}},
+	"sudo":    {valueFlags: []string{"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "--close-from", "-D", "--chdir", "-r", "--role", "-t", "--type", "-T", "--command-timeout", "-U", "--other-user"}, clears: true},
+	"doas":    {valueFlags: []string{"-u", "-C"}, clears: true},
 }
 
 // assignment matches a leading NAME=value word.
 var assignment = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
+// agentCommand is what fleet recognized a launch command runs.
+type agentCommand struct {
+	tool state.AgentTool
+	// clearsEnv: a wrapper runs the agent with the environment cleared
+	// (env -i, sudo, doas), so what the launch exports never reaches it.
+	clearsEnv bool
+}
+
 // ToolForCommand names the agent a launch command runs: the command word of
 // one of its simple commands, past any VAR=value assignments and launchers —
 // `claude ...`, `IS_SANDBOX=1 claude ...`, `cd app && ~/.local/bin/claude ...`,
-// `npx -y @anthropic-ai/claude-code@latest ...`. Only command words count: an
-// agent's name in an argument (a path like /src/claude-code, a prompt) is not
-// the command. ok is false when no agent is recognized (a wrapper script, say).
+// `npx -y @anthropic-ai/claude-code@latest ...`, `timeout 2h claude ...`. Only
+// command words count: an agent's name in an argument (a path like
+// /src/claude-code, a prompt) is not the command. ok is false when no agent is
+// recognized (a wrapper script, say).
 func ToolForCommand(command string) (state.AgentTool, bool) {
+	a, ok := detectAgent(command)
+	return a.tool, ok
+}
+
+// detectAgent is ToolForCommand with what else fleet learned about the agent's
+// simple command.
+func detectAgent(command string) (agentCommand, bool) {
 	words := shellWords(command)
 	for i, w := range words {
 		if !w.start {
 			continue
 		}
-		if tool, ok := commandTool(words[i:]); ok {
-			return tool, true
+		if a, ok := commandAgent(words[i:]); ok {
+			return a, true
 		}
 	}
-	return "", false
+	return agentCommand{}, false
 }
 
-// commandTool names the agent the simple command starting at words[0] runs:
-// its first word that is not a VAR=value assignment, a launcher, or a
+// commandAgent recognizes the agent the simple command starting at words[0]
+// runs: its first word that is not a VAR=value assignment, a launcher, or a
 // launcher's flag, flag value or positional operand.
-func commandTool(words []shellWord) (state.AgentTool, bool) {
+func commandAgent(words []shellWord) (agentCommand, bool) {
+	var a agentCommand
 	var outer *launcher // the innermost launcher so far
 	skipValue := false  // the previous word was a flag taking this one
 	positional := 0     // operands still owed to outer
@@ -85,6 +107,9 @@ func commandTool(words []shellWord) (state.AgentTool, bool) {
 		}
 		if outer != nil && strings.HasPrefix(w.text, "-") {
 			skipValue = slices.Contains(outer.valueFlags, w.text)
+			if slices.Contains(outer.clearFlags, w.text) {
+				a.clearsEnv = true
+			}
 			continue
 		}
 		if positional > 0 {
@@ -92,20 +117,22 @@ func commandTool(words []shellWord) (state.AgentTool, bool) {
 			continue
 		}
 		if w.quoted {
-			return "", false // a quoted command word: not one fleet recognizes
+			return agentCommand{}, false // a quoted command word: not one fleet recognizes
 		}
 		name := path.Base(w.text)
 		if l, ok := launchers[name]; ok {
 			outer, positional = &l, l.positional
+			a.clearsEnv = a.clearsEnv || l.clears
 			continue
 		}
 		if at := strings.LastIndex(name, "@"); at > 0 {
 			name = name[:at] // a package spec's version
 		}
 		tool, ok := agentBinaries[name]
-		return tool, ok
+		a.tool = tool
+		return a, ok
 	}
-	return "", false
+	return agentCommand{}, false
 }
 
 // shellWord is one word of a command line: whether any of it was quoted or

@@ -74,7 +74,7 @@ func toMCPAutomation(s fleet.FleetSettings) AutomationOutput {
 			continue
 		}
 		if why := agentFleetMCPProblem(a); why != "" {
-			out.Warnings = append(out.Warnings, fmt.Sprintf("agent %q: %s; it will run without it", a.Name, why))
+			out.Warnings = append(out.Warnings, fmt.Sprintf("agent %q: the fleet MCP %s; it will run without it", a.Name, why))
 		}
 	}
 	for _, t := range s.Triggers {

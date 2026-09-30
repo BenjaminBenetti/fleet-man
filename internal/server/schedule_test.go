@@ -82,7 +82,7 @@ func TestCreateAutomationInstanceMarksAutomated(t *testing.T) {
 	if err != nil || mcpInst.FleetMCP != instanceSocketsSupported || !mcpInst.Automated {
 		t.Fatalf("instance of a fleet-MCP agent = %+v (%v), want Automated and FleetMCP=%v", mcpInst, err, instanceSocketsSupported)
 	}
-	// An agent that cannot take it (not a Claude Code command) gets no socket.
+	// An agent that cannot take it (not Claude Code) gets no socket.
 	codexInst, err := st.Fleets["alpha"].GetInstance(codexName)
 	if err != nil || codexInst.FleetMCP {
 		t.Fatalf("instance of an unsupported fleet-MCP agent = %+v (%v), want no FleetMCP", codexInst, err)

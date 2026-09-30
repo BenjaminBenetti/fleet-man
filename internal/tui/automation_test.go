@@ -360,7 +360,8 @@ func TestEditAgentInstantSavesFieldCommit(t *testing.T) {
 }
 
 // TestEditAgentTogglesFleetMCP: the Fleet MCP row flips with enter and h/l,
-// each flip instant-saves, and the row explains itself while selected.
+// each flip instant-saves, and it always carries its risk note (plus "Won't
+// apply" when the agent can't use it).
 func TestEditAgentTogglesFleetMCP(t *testing.T) {
 	m, fp := newAutomationModel(t)
 	m.st.Fleets["alpha"].Settings.Agents = []fleet.Agent{{Name: "orchestrator", Command: "claude", Backend: fleet.BackendDevcontainer}}
@@ -390,10 +391,6 @@ func TestEditAgentTogglesFleetMCP(t *testing.T) {
 	if !strings.Contains(view, "Won't apply") {
 		t.Fatalf("on for a coder agent should say it won't apply:\n%s", view)
 	}
-	// Its tallest state still fits an 80x24 terminal.
-	if lines := strings.Count(view, "\n"); lines > 24 {
-		t.Fatalf("the agent dialog is %d lines tall with every note showing; it must fit 24 rows", lines)
-	}
 	fp.agentDlg.backend = fleet.BackendDevcontainer
 	fp.updateAutomationAgent(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if m.st.Fleets["alpha"].Settings.Agents[0].FleetMCP {
@@ -412,6 +409,40 @@ func TestEditAgentTogglesFleetMCP(t *testing.T) {
 	unusable := fleet.Agent{Name: "c", Command: "codex x", Backend: fleet.BackendDevcontainer, FleetMCP: true}
 	if got := agentSummary(m.st.Fleets["alpha"], unusable); !strings.Contains(got, "fleet MCP (won't apply)") {
 		t.Fatalf("an agent that can't use it should be flagged in its row: %q", got)
+	}
+}
+
+// TestAgentDialogFits80x24: the agent dialog's tallest state (a new agent
+// whose command fleet can't recognise, so "Won't apply" shows) is whole on an
+// 80x24 terminal, with the help bar under it — checked on the rows bubbletea
+// actually keeps (the bottom `height` lines of the page).
+func TestAgentDialogFits80x24(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	m.width, m.height = 80, 24
+	m.st.Fleets["alpha"].Settings.Agents = []fleet.Agent{{Name: "orchestrator", Command: "claude", Backend: fleet.BackendDevcontainer}}
+	fp.toggleAutomationMode(m, "alpha")
+	for i, r := range fp.rows {
+		if r.kind == rowNewAgent {
+			fp.cursor = i // where the dialog opens from, so the help bar matches
+		}
+	}
+	for _, c := range []struct {
+		command string
+		backend fleet.BackendType
+	}{
+		{"./run-agent.sh", fleet.BackendDevcontainer},   // unrecognised command
+		{fleet.DefaultAgentCommand, fleet.BackendCoder}, // two-line command, wrong backend
+	} {
+		fp.openAddAgentDialog(m, "alpha")
+		fp.agentDlg.fleetMCP, fp.agentDlg.command, fp.agentDlg.backend = true, c.command, c.backend
+		dlg := strings.TrimSpace(fp.renderAutomationAgentDialog(m))
+		if !strings.Contains(dlg, "Won't apply") {
+			t.Fatalf("test setup: %q on %s should show Won't apply:\n%s", c.command, c.backend, dlg)
+		}
+		lines := strings.Split(fp.View(m)+"\x1b[0J", "\n") // as model.View returns it and bubbletea splits it
+		if visible := strings.Join(lines[max(0, len(lines)-m.height):], "\n"); !strings.Contains(visible, dlg) {
+			t.Fatalf("the agent dialog (%q on %s) is clipped at 80x24:\n%s", c.command, c.backend, visible)
+		}
 	}
 }
 

@@ -240,8 +240,9 @@ them, collect what they produce. Turn on **Fleet MCP** in the agent's dialog
   **Fleet Admiral** skill) to `/tmp/fleet-mcp/claude-plugin` and points
   `CLAUDE_CODE_PLUGIN_DIRS` at it for the agent's process alone. Claude Code is
   the only agent supported so far (detected from the agent's command); turning
-  it on for another agent, or another backend, warns (CLI, TUI, MCP) and the
-  agent runs without it.
+  it on for another agent, another backend, or a command that runs Claude under
+  `sudo`/`doas`/`env -i` (which drop the launch's environment) warns (CLI, TUI,
+  MCP) and the agent runs without it.
 - Devcontainer instances on Linux hosts only. Instances the agent creates are
   not reaped with it — it is told to `fleet_down` them when done.
 

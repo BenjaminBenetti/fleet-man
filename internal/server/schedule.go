@@ -320,7 +320,7 @@ func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger 
 	fired := false
 	for _, ag := range agents {
 		if why := agentFleetMCPProblem(ag); ag.FleetMCP && why != "" {
-			flog.Warn("automation: agent has the fleet MCP on but runs without it", "fleet", fleetName, "agent", ag.Name, "why", why)
+			flog.Warn("automation: agent has the fleet MCP on but runs without it", "fleet", fleetName, "agent", ag.Name, "why", "the fleet MCP "+why)
 		}
 		instName, err := createAutomationInstance(s, fleetName, ag, now)
 		if err != nil {
@@ -658,10 +658,11 @@ func agentGetsFleetMCP(ag fleet.Agent) bool {
 
 // agentFleetMCPProblem says why this daemon could not hand an agent the fleet
 // MCP ("" when it could): the agent's own config
-// (agentstrategy.FleetMCPUnsupported), or this host.
+// (agentstrategy.FleetMCPUnsupported), or this host. Like that, it is a
+// predicate for "the fleet MCP ...".
 func agentFleetMCPProblem(ag fleet.Agent) string {
 	if !instanceSocketsSupported {
-		return "the fleet MCP needs a Linux host"
+		return "needs a Linux host"
 	}
 	return agentstrategy.FleetMCPUnsupported(ag.Command, ag.Backend)
 }
