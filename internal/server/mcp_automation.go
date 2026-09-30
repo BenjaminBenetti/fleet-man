@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
-	"github.com/BenjaminBenetti/fleet-man/internal/agentstrategy"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -74,7 +73,7 @@ func toMCPAutomation(s fleet.FleetSettings) AutomationOutput {
 		if !a.FleetMCP {
 			continue
 		}
-		if why := agentstrategy.FleetMCPUnsupported(a.Command, a.Backend); why != "" {
+		if why := agentFleetMCPProblem(a); why != "" {
 			out.Warnings = append(out.Warnings, fmt.Sprintf("agent %q: %s; it will run without it", a.Name, why))
 		}
 	}

@@ -25,9 +25,11 @@ import (
 type Strategy interface {
 	// Tool names the agent this strategy is for ("" when unknown).
 	Tool() state.AgentTool
+	// SupportsFleetMCP reports whether this agent can be handed the fleet MCP.
+	SupportsFleetMCP() bool
 	// FleetMCP returns what gives one launch of the agent the fleet MCP
 	// server and the Fleet Admiral skill, or ok=false when this agent has no
-	// way to take them yet.
+	// way to take them yet (or p is incomplete).
 	FleetMCP(p FleetMCPParams) (setup FleetMCPSetup, ok bool)
 }
 
@@ -105,14 +107,17 @@ type unsupportedStrategy struct{ tool state.AgentTool }
 
 func (u unsupportedStrategy) Tool() state.AgentTool { return u.tool }
 
+func (unsupportedStrategy) SupportsFleetMCP() bool { return false }
+
 func (unsupportedStrategy) FleetMCP(FleetMCPParams) (FleetMCPSetup, bool) {
 	return FleetMCPSetup{}, false
 }
 
 // FleetMCPUnsupported says why an agent launched with command on backend would
-// run WITHOUT the fleet MCP, or "" when it gets it (on a Linux host). Config
-// surfaces use it to warn when the toggle is turned on; the daemon uses it to
-// decide whether an agent's instance is served the MCP at all.
+// run WITHOUT the fleet MCP, or "" when its config can take it. Config surfaces
+// use it to warn when the toggle is turned on; the daemon adds its own host
+// check on top (server agentFleetMCPProblem) to decide whether an agent's
+// instance is served the MCP at all.
 func FleetMCPUnsupported(command string, backend fleet.BackendType) string {
 	if strings.TrimSpace(command) == "" {
 		command = fleet.DefaultAgentCommand // what normalization fills in
@@ -121,7 +126,7 @@ func FleetMCPUnsupported(command string, backend fleet.BackendType) string {
 		return fmt.Sprintf("the fleet MCP needs the devcontainer backend, not %s", backend)
 	}
 	strategy := ForCommand(command)
-	if _, ok := strategy.FleetMCP(FleetMCPParams{Dir: "/", Bridge: []string{"fleet"}}); ok {
+	if strategy.SupportsFleetMCP() {
 		return ""
 	}
 	if tool := strategy.Tool(); tool != "" {

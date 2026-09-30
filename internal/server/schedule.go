@@ -319,7 +319,7 @@ func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger 
 	logTriggerEvent(fleetName, ev)
 	fired := false
 	for _, ag := range agents {
-		if why := agentstrategy.FleetMCPUnsupported(ag.Command, ag.Backend); ag.FleetMCP && why != "" {
+		if why := agentFleetMCPProblem(ag); ag.FleetMCP && why != "" {
 			flog.Warn("automation: agent has the fleet MCP on but runs without it", "fleet", fleetName, "agent", ag.Name, "why", why)
 		}
 		instName, err := createAutomationInstance(s, fleetName, ag, now)
@@ -649,12 +649,21 @@ var writeAutomationEventFile = func(inst *fleet.Instance, path string, data []by
 }
 
 // agentGetsFleetMCP reports whether an agent's runs are handed the fleet MCP:
-// it is turned on AND the agent can take it (a Claude Code command on the
-// devcontainer backend). Only then is its instance served the MCP socket — an
-// agent that would launch without the tools leaves nothing behind that could
-// use them.
+// it is turned on AND the agent can take it here (agentFleetMCPProblem). Only
+// then is its instance served the MCP socket — an agent that would launch
+// without the tools leaves nothing behind that could use them.
 func agentGetsFleetMCP(ag fleet.Agent) bool {
-	return ag.FleetMCP && agentstrategy.FleetMCPUnsupported(ag.Command, ag.Backend) == ""
+	return ag.FleetMCP && agentFleetMCPProblem(ag) == ""
+}
+
+// agentFleetMCPProblem says why this daemon could not hand an agent the fleet
+// MCP ("" when it could): the agent's own config
+// (agentstrategy.FleetMCPUnsupported), or this host.
+func agentFleetMCPProblem(ag fleet.Agent) string {
+	if !instanceSocketsSupported {
+		return "the fleet MCP needs a Linux host"
+	}
+	return agentstrategy.FleetMCPUnsupported(ag.Command, ag.Backend)
 }
 
 // fleetMCPDir is where an agent's fleet MCP files are written inside its

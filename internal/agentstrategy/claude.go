@@ -37,6 +37,8 @@ func pluginVersion() string {
 
 func (claudeStrategy) Tool() state.AgentTool { return state.AgentToolClaude }
 
+func (claudeStrategy) SupportsFleetMCP() bool { return true }
+
 func (claudeStrategy) FleetMCP(p FleetMCPParams) (FleetMCPSetup, bool) {
 	if p.Dir == "" || len(p.Bridge) == 0 {
 		return FleetMCPSetup{}, false

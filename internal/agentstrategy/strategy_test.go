@@ -33,6 +33,14 @@ func TestToolForCommand(t *testing.T) {
 		{"", "", false},
 		// The first agent word wins.
 		{"claude -p \"$(codex --version)\"", state.AgentToolClaude, true},
+		{"npx -y @anthropic-ai/claude-code@latest '${PROMPT}'", state.AgentToolClaude, true},
+		{"exec env -i HOME=/h claude", state.AgentToolClaude, true},
+		{"echo start | claude -p x", state.AgentToolClaude, true},
+		// An agent's name in an argument is not the command.
+		{"cd /workspaces/claude-code && ./run-agent.sh", "", false},
+		{"./run-agent.sh --workdir /src/claude-code", "", false},
+		{"./run.sh claude", "", false},
+		{"bash -lc 'claude ${PROMPT}'", "", false},
 	}
 	for _, c := range cases {
 		got, ok := ToolForCommand(c.command)
@@ -43,12 +51,12 @@ func TestToolForCommand(t *testing.T) {
 }
 
 func TestForCommandPicksTheStrategy(t *testing.T) {
-	if got := ForCommand("claude '${PROMPT}'").Tool(); got != state.AgentToolClaude {
-		t.Fatalf("claude command: tool = %q", got)
+	if claude := ForCommand("claude '${PROMPT}'"); claude.Tool() != state.AgentToolClaude || !claude.SupportsFleetMCP() {
+		t.Fatalf("claude command: tool = %q, supports = %v", claude.Tool(), claude.SupportsFleetMCP())
 	}
 	s := ForCommand("codex '${PROMPT}'")
-	if s.Tool() != state.AgentToolCodex {
-		t.Fatalf("codex command: tool = %q", s.Tool())
+	if s.Tool() != state.AgentToolCodex || s.SupportsFleetMCP() {
+		t.Fatalf("codex command: tool = %q, supports = %v", s.Tool(), s.SupportsFleetMCP())
 	}
 	if _, ok := s.FleetMCP(FleetMCPParams{Dir: "/tmp/x", Bridge: []string{"fleet", "mcp-bridge"}}); ok {
 		t.Fatal("codex has no fleet MCP integration yet")

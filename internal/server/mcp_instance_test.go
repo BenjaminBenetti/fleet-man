@@ -253,3 +253,25 @@ func TestWriteFleetMCPFiles(t *testing.T) {
 		t.Fatal("the admiral skill did not land intact")
 	}
 }
+
+// TestAgentFleetMCPProblem: the daemon's gate is the agent's config plus this
+// host, and an agent gets the fleet MCP only when both allow it.
+func TestAgentFleetMCPProblem(t *testing.T) {
+	claude := fleet.Agent{Name: "a", Command: "claude '${PROMPT}'", Backend: fleet.BackendDevcontainer, FleetMCP: true}
+	if got := agentFleetMCPProblem(claude); (got == "") != instanceSocketsSupported {
+		t.Fatalf("claude on devcontainer: problem %q (instance sockets supported: %v)", got, instanceSocketsSupported)
+	}
+	if got := agentGetsFleetMCP(claude); got != instanceSocketsSupported {
+		t.Fatalf("agentGetsFleetMCP(claude) = %v", got)
+	}
+	codex := claude
+	codex.Command = "codex '${PROMPT}'"
+	if agentFleetMCPProblem(codex) == "" || agentGetsFleetMCP(codex) {
+		t.Fatal("codex cannot take the fleet MCP")
+	}
+	off := claude
+	off.FleetMCP = false
+	if agentGetsFleetMCP(off) {
+		t.Fatal("an agent with the fleet MCP off never gets it")
+	}
+}
