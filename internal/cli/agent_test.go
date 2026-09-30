@@ -214,3 +214,23 @@ func TestAgentFleetMCPFlag(t *testing.T) {
 		t.Fatalf("--fleet-mcp=false must turn it off: %+v", result.Agents[0])
 	}
 }
+
+// TestAgentFleetMCPWarnsWhenUnusable: turning the fleet MCP on for an agent
+// that cannot take it says so instead of silently doing nothing.
+func TestAgentFleetMCPWarnsWhenUnusable(t *testing.T) {
+	stubMutate(t, fleet.FleetSettings{})
+	out, err := runCLI(t, "agent", "create", "alpha", "coder-agent", "--fleet-mcp", "--command", "codex '${PROMPT}'")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if !strings.Contains(out, "warning:") || !strings.Contains(out, "run without it") {
+		t.Fatalf("expected a fleet MCP warning, got %q", out)
+	}
+	out, err = runCLI(t, "agent", "create", "alpha", "claude-agent", "--fleet-mcp")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if strings.Contains(out, "warning:") {
+		t.Fatalf("a Claude Code agent on devcontainer needs no warning, got %q", out)
+	}
+}

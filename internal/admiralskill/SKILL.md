@@ -159,8 +159,9 @@ These tools let you set that up for the user.
   renames and rewrites the triggers that reference it). `fleet_mcp: true` gives
   the agent these same tools and this skill inside its instance, so it can
   orchestrate instances and agents of its own (Claude Code agents on the
-  `devcontainer` backend) — it gets full control of fleet, so only turn it on
-  when the user wants that. `fleet_agent_delete {fleet, name}` refuses while a
+  `devcontainer` backend) — it gets the FULL fleet MCP, every fleet included,
+  and with it host-level reach (a `bash` trigger runs on the host), so only
+  turn it on when the user asks for it. `fleet_agent_delete {fleet, name}` refuses while a
   trigger still references the agent — detach it first.
 - `fleet_trigger_create {fleet, name, type, agents[], prompt?, ...}` where
   `type` is `schedule` (needs `cron`), `bash` (needs `cron` + `script`, a command

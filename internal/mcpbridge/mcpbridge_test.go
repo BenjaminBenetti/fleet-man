@@ -180,7 +180,7 @@ const (
 )
 
 // testTimings keeps the tests quick.
-var testTimings = timings{connect: 500 * time.Millisecond, replay: 2 * time.Second, drain: 2 * time.Second, dialRetry: 20 * time.Millisecond}
+var testTimings = timings{connect: 500 * time.Millisecond, replay: 2 * time.Second, drain: 2 * time.Second, dialRetry: 20 * time.Millisecond, failFast: 2 * time.Second}
 
 func TestBridgeRelays(t *testing.T) {
 	path := socketPath(t)
@@ -215,6 +215,20 @@ func TestBridgeAnswersInFlightRequestsWhenTheDaemonDrops(t *testing.T) {
 	got := c.next()
 	if got["id"] != float64(7) || got["error"] == nil {
 		t.Fatalf("an in-flight request must be answered with an error, got %v", got)
+	}
+}
+
+// TestBridgeReportsARefusal: a daemon that hangs up without ever answering
+// (its peer check refused this process) is not reported as a restart.
+func TestBridgeReportsARefusal(t *testing.T) {
+	path := socketPath(t)
+	startFakeDaemon(t, path, func(_ *fakeDaemon, conn net.Conn, _ int, _ string) { _ = conn.Close() })
+	c := startBridge(t, path)
+	c.send(initializeLine)
+	got := c.next()
+	errObj, _ := got["error"].(map[string]any)
+	if errObj == nil || !strings.Contains(errObj["message"].(string), "without answering") {
+		t.Fatalf("got %v, want the refusal explained", got)
 	}
 }
 
@@ -269,6 +283,24 @@ func TestBridgeReportsAnUnreachableDaemon(t *testing.T) {
 	errObj, _ := got["error"].(map[string]any)
 	if got["id"] != float64(0) || errObj == nil || !strings.Contains(errObj["message"].(string), "unreachable") {
 		t.Fatalf("got %v, want an 'unreachable' error for the initialize", got)
+	}
+}
+
+// TestBridgeFailsFastDuringAnOutage: once a connect has given up, requests
+// queued behind it are answered at once rather than one connect apart.
+func TestBridgeFailsFastDuringAnOutage(t *testing.T) {
+	c := startBridge(t, socketPath(t)) // nothing listens there
+	c.send(initializeLine)
+	c.next() // waited out the connect
+	start := time.Now()
+	for id := 1; id <= 3; id++ {
+		c.send(`{"jsonrpc":"2.0","id":` + string(rune('0'+id)) + `,"method":"tools/list"}`)
+		if got := c.next(); got["id"] != float64(id) || got["error"] == nil {
+			t.Fatalf("request %d: got %v, want an error", id, got)
+		}
+	}
+	if elapsed := time.Since(start); elapsed > testTimings.connect {
+		t.Fatalf("queued requests took %v to fail, want them answered without another connect", elapsed)
 	}
 }
 

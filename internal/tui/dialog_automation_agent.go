@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentstrategy"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -381,9 +382,14 @@ func (fleetPage *fleetPage) renderAutomationAgentDialog(m *model) string {
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowSystemPrompt), dialogLabel.Render("Sys prompt:"), promptFieldPreview(st.systemPrompt, "(optional, injected into ${SYS_PROMPT})"))
 	fmt.Fprintf(&body, "%s%s [ %s ]\n", marker(agentRowBackend), dialogLabel.Render("Backend: "), backendTypeLabel(st.backend))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowFleetMCP), dialogLabel.Render("Fleet MCP:"), selectorLabel(onOffLabel(st.fleetMCP)))
+	// Always shown: what turning it on risks.
+	fmt.Fprintf(&body, "%s\n", warnTextStyle.PaddingLeft(4).Width(46).Render(fleetMCPRiskNote))
 	if st.row == agentRowFleetMCP {
 		fmt.Fprintf(&body, "%s\n", dimStyle.PaddingLeft(4).Width(46).Render(
-			"Gives the agent fleet's MCP tools and the fleet-admiral skill, so it can run more instances and agents. Claude Code, devcontainer backend."))
+			"Gives the agent the full fleet MCP (every fleet) and the fleet-admiral skill, so it can run more instances and agents. Claude Code, devcontainer backend."))
+	}
+	if why := fleetPage.agentFleetMCPProblem(); why != "" {
+		fmt.Fprintf(&body, "%s\n", errorStyle.PaddingLeft(4).Width(46).Render("Won't apply: "+why+"."))
 	}
 	// Editing instant-saves, so there is no Save row; a new agent keeps it.
 	if st.editIdx < 0 {
@@ -399,6 +405,19 @@ func (fleetPage *fleetPage) renderAutomationAgentDialog(m *model) string {
 	b.WriteString(dialogBox.Render(body.String()))
 	b.WriteString("\n")
 	return b.String()
+}
+
+// fleetMCPRiskNote is the caution under the Fleet MCP toggle.
+const fleetMCPRiskNote = "⚠ Turning this on allows host access from inside the instance and poses an agent escape risk."
+
+// agentFleetMCPProblem says why the Fleet MCP, when on, would not reach this
+// agent ("" when it would, or when it is off).
+func (fleetPage *fleetPage) agentFleetMCPProblem() string {
+	st := &fleetPage.agentDlg
+	if !st.fleetMCP {
+		return ""
+	}
+	return agentstrategy.FleetMCPUnsupported(st.command, st.backend)
 }
 
 // onOffLabel renders a two-valued toggle.

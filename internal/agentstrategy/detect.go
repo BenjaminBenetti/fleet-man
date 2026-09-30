@@ -9,16 +9,18 @@ import (
 
 // agentBinaries maps an agent CLI's executable name to its tool.
 var agentBinaries = map[string]state.AgentTool{
-	"claude":  state.AgentToolClaude,
-	"codex":   state.AgentToolCodex,
-	"gemini":  state.AgentToolGemini,
-	"copilot": state.AgentToolCopilot,
-	"auggie":  state.AgentToolAuggie,
+	"claude":      state.AgentToolClaude,
+	"claude-code": state.AgentToolClaude, // npx/bunx @anthropic-ai/claude-code
+	"codex":       state.AgentToolCodex,
+	"gemini":      state.AgentToolGemini,
+	"copilot":     state.AgentToolCopilot,
+	"auggie":      state.AgentToolAuggie,
 }
 
 // ToolForCommand names the agent a launch command runs: the first unquoted
 // shell word whose executable name is a known agent CLI — `claude ...`,
-// `IS_SANDBOX=1 claude ...`, `cd app && ~/.local/bin/claude ...`. Quoted words
+// `IS_SANDBOX=1 claude ...`, `cd app && ~/.local/bin/claude ...`, or a package
+// spec like `npx @anthropic-ai/claude-code@latest ...`. Quoted words
 // are arguments (a prompt, a flag value), so an agent named inside one is not
 // mistaken for the command. ok is false when no agent is recognized (a wrapper
 // script, say).
@@ -27,7 +29,11 @@ func ToolForCommand(command string) (state.AgentTool, bool) {
 		if w.quoted {
 			continue
 		}
-		if tool, ok := agentBinaries[path.Base(w.text)]; ok {
+		name := path.Base(w.text)
+		if at := strings.LastIndex(name, "@"); at > 0 {
+			name = name[:at] // a package spec's version
+		}
+		if tool, ok := agentBinaries[name]; ok {
 			return tool, true
 		}
 	}

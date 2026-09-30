@@ -3,9 +3,11 @@ package agentstrategy
 import (
 	"encoding/json"
 	"path"
+	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/admiralskill"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/internal/version"
 )
 
 // Claude Code takes the fleet MCP server and the Fleet Admiral skill as an
@@ -25,6 +27,14 @@ const (
 
 type claudeStrategy struct{}
 
+// pluginVersion is fleet's version as the semver a plugin manifest takes.
+func pluginVersion() string {
+	if v := strings.TrimPrefix(version.Version, "v"); v != "" {
+		return v
+	}
+	return "0.0.0-dev"
+}
+
 func (claudeStrategy) Tool() state.AgentTool { return state.AgentToolClaude }
 
 func (claudeStrategy) FleetMCP(p FleetMCPParams) (FleetMCPSetup, bool) {
@@ -33,9 +43,11 @@ func (claudeStrategy) FleetMCP(p FleetMCPParams) (FleetMCPSetup, bool) {
 	}
 	root := path.Join(p.Dir, "claude-plugin")
 
-	manifest, err := json.MarshalIndent(map[string]string{
+	manifest, err := json.MarshalIndent(map[string]any{
 		"name":        claudePluginName,
+		"version":     pluginVersion(),
 		"description": "The fleet MCP server and the Fleet Admiral skill, given to this automation agent by fleet.",
+		"author":      map[string]string{"name": "fleet-man"},
 	}, "", "  ")
 	if err != nil {
 		return FleetMCPSetup{}, false

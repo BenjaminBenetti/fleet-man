@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/agentstrategy"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -55,6 +56,9 @@ type mcpTrigger struct {
 type AutomationOutput struct {
 	Agents   []mcpAgent   `json:"agents"`
 	Triggers []mcpTrigger `json:"triggers"`
+	// Warnings flags config that will not do what it says, e.g. the fleet
+	// MCP turned on for an agent that cannot take it.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func toMCPAutomation(s fleet.FleetSettings) AutomationOutput {
@@ -67,6 +71,12 @@ func toMCPAutomation(s fleet.FleetSettings) AutomationOutput {
 			Backend:      string(a.Backend),
 			FleetMCP:     a.FleetMCP,
 		})
+		if !a.FleetMCP {
+			continue
+		}
+		if why := agentstrategy.FleetMCPUnsupported(a.Command, a.Backend); why != "" {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("agent %q: %s; it will run without it", a.Name, why))
+		}
 	}
 	for _, t := range s.Triggers {
 		out.Triggers = append(out.Triggers, mcpTrigger{
@@ -145,7 +155,7 @@ type FleetAgentCreateInput struct {
 	Command      string `json:"command,omitempty" jsonschema:"launch command; ${PROMPT} and ${SYS_PROMPT} are substituted when a trigger fires it. Defaults to a live claude session command if omitted"`
 	SystemPrompt string `json:"system_prompt,omitempty" jsonschema:"system prompt injected into the command's ${SYS_PROMPT}"`
 	Backend      string `json:"backend,omitempty" jsonschema:"env backend the agent's instance runs on: devcontainer (default), coder, or codespaces"`
-	FleetMCP     bool   `json:"fleet_mcp,omitempty" jsonschema:"give the agent these fleet MCP tools and the fleet-admiral skill inside its instance, so it can spin up more instances and agents (Claude Code agents on a devcontainer backend; default false)"`
+	FleetMCP     bool   `json:"fleet_mcp,omitempty" jsonschema:"give the agent the full fleet MCP (every fleet; host-level reach, e.g. bash triggers) and the fleet-admiral skill inside its instance, so it can spin up more instances and agents (Claude Code agents on a devcontainer backend; default false)"`
 }
 
 func (s *service) mcpAgentCreate(ctx context.Context, _ *mcp.CallToolRequest, in FleetAgentCreateInput) (*mcp.CallToolResult, AutomationOutput, error) {

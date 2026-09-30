@@ -51,6 +51,10 @@ type timings struct {
 	drain time.Duration
 	// dialRetry spaces dial attempts while waiting for the socket.
 	dialRetry time.Duration
+	// failFast: after a connect gives up, messages are answered at once for
+	// this long instead of each waiting out another connect, so requests
+	// queued during a long outage are not failed one connect apart.
+	failFast time.Duration
 }
 
 var defaultTimings = timings{
@@ -58,11 +62,23 @@ var defaultTimings = timings{
 	replay:    10 * time.Second,
 	drain:     30 * time.Second,
 	dialRetry: 250 * time.Millisecond,
+	failFast:  2 * time.Second,
 }
 
 // errCodeUnavailable is the JSON-RPC error code of a request the bridge
 // answers itself because the daemon could not (JSON-RPC "internal error").
 const errCodeUnavailable = -32603
+
+// Why a request the daemon never answered failed.
+const (
+	// errLost: the connection ended after the daemon had answered on it —
+	// normally the daemon restarting.
+	errLost = "lost the connection to the fleet daemon (restarting?); retry the call"
+	// errRefused: the daemon closed a connection without ever answering on
+	// it — normally this process is not one it serves (the socket's peer
+	// check), which its fleet.log says.
+	errRefused = "the fleet daemon closed the connection without answering; this process may not be allowed to use the fleet MCP here (see the daemon's fleet.log)"
+)
 
 // Bridge relays MCP messages between a stdio client and the daemon.
 type Bridge struct {
@@ -75,8 +91,12 @@ type Bridge struct {
 	// timing is defaultTimings unless a test shortens it.
 	timing timings
 
-	// connectMu serializes connecting, so one message at a time dials.
+	// connectMu serializes connecting, so one message at a time dials. It
+	// also guards downUntil/downErr: the last connect's failure, reused
+	// without dialing until downUntil (timing.failFast).
 	connectMu sync.Mutex
+	downUntil time.Time
+	downErr   error
 
 	mu   sync.Mutex
 	conn net.Conn // nil while disconnected
@@ -218,13 +238,13 @@ func (b *Bridge) fromClient(ctx context.Context, line []byte) {
 			b.markIdleIfDone()
 			b.mu.Unlock()
 		}
-		b.drop(conn)
+		b.drop(conn, errLost)
 		if !retry {
 			return
 		}
 	}
 	if isRequest {
-		b.replyError(msg.ID, "lost the connection to the fleet daemon; retry the call")
+		b.replyError(msg.ID, errLost)
 	}
 }
 
@@ -243,8 +263,12 @@ func (b *Bridge) connection(ctx context.Context, sendingInitialize bool) (net.Co
 	initialize, initialized := b.initialize, b.initialized
 	b.mu.Unlock()
 
+	if time.Now().Before(b.downUntil) {
+		return nil, b.downErr
+	}
 	conn, err := b.dial(ctx)
 	if err != nil {
+		b.downUntil, b.downErr = time.Now().Add(b.timing.failFast), err
 		return nil, err
 	}
 	var replayID string
@@ -327,7 +351,14 @@ func (b *Bridge) replay(conn net.Conn, initialize, initialized []byte, replayID 
 // ends. The reply to a replayed initialize (replayID) is swallowed.
 func (b *Bridge) readLoop(conn net.Conn, replayID string, replayed, done chan struct{}) {
 	defer close(done)
-	defer b.drop(conn)
+	answered := false
+	defer func() {
+		why := errLost
+		if !answered {
+			why = errRefused
+		}
+		b.drop(conn, why)
+	}()
 	var replayKey string
 	if replayID != "" {
 		replayKey = idKey(json.RawMessage(replayID))
@@ -336,6 +367,7 @@ func (b *Bridge) readLoop(conn net.Conn, replayID string, replayed, done chan st
 	for {
 		line, err := r.ReadBytes('\n')
 		if len(bytes.TrimSpace(line)) > 0 {
+			answered = true
 			var msg message
 			if json.Unmarshal(line, &msg) == nil && msg.Method == "" && msg.hasID() {
 				key := idKey(msg.ID)
@@ -358,8 +390,8 @@ func (b *Bridge) readLoop(conn net.Conn, replayID string, replayed, done chan st
 }
 
 // drop retires conn (if it is still the live connection) and answers the
-// requests that were waiting on it.
-func (b *Bridge) drop(conn net.Conn) {
+// requests that were waiting on it with why.
+func (b *Bridge) drop(conn net.Conn, why string) {
 	_ = conn.Close()
 	b.mu.Lock()
 	if b.conn != conn {
@@ -372,7 +404,7 @@ func (b *Bridge) drop(conn net.Conn) {
 	b.markIdleIfDone()
 	b.mu.Unlock()
 	for _, id := range lost {
-		b.replyError(id, "lost the connection to the fleet daemon (restarting?); retry the call")
+		b.replyError(id, why)
 	}
 }
 
@@ -382,7 +414,7 @@ func (b *Bridge) disconnect() {
 	conn := b.conn
 	b.mu.Unlock()
 	if conn != nil {
-		b.drop(conn)
+		b.drop(conn, errLost)
 	}
 }
 

@@ -319,6 +319,9 @@ func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger 
 	logTriggerEvent(fleetName, ev)
 	fired := false
 	for _, ag := range agents {
+		if why := agentstrategy.FleetMCPUnsupported(ag.Command, ag.Backend); ag.FleetMCP && why != "" {
+			flog.Warn("automation: agent has the fleet MCP on but runs without it", "fleet", fleetName, "agent", ag.Name, "why", why)
+		}
 		instName, err := createAutomationInstance(s, fleetName, ag, now)
 		if err != nil {
 			flog.Warn("automation: create instance failed", "fleet", fleetName, "agent", ag.Name, "err", err)
@@ -331,7 +334,7 @@ func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger 
 			command:      ag.Command,
 			prompt:       trigger.Prompt,
 			systemPrompt: ag.SystemPrompt,
-			fleetMCP:     ag.FleetMCP,
+			fleetMCP:     agentGetsFleetMCP(ag),
 			spawnedAt:    now,
 			lastActive:   now,
 			event:        ev,
@@ -549,7 +552,7 @@ var createAutomationInstance = func(s *service, fleetName string, ag fleet.Agent
 		Fleet:    fleetName,
 		Instance: instName,
 		Backend:  protoconv.BackendToProto(ag.Backend),
-	}, createOrigin{automated: true, fleetMCP: ag.FleetMCP}); err != nil {
+	}, createOrigin{automated: true, fleetMCP: agentGetsFleetMCP(ag)}); err != nil {
 		return "", err
 	}
 	return instName, nil
@@ -645,6 +648,15 @@ var writeAutomationEventFile = func(inst *fleet.Instance, path string, data []by
 	return copyFileInto(inst, bytes.NewReader(data), path, 0o644)
 }
 
+// agentGetsFleetMCP reports whether an agent's runs are handed the fleet MCP:
+// it is turned on AND the agent can take it (a Claude Code command on the
+// devcontainer backend). Only then is its instance served the MCP socket — an
+// agent that would launch without the tools leaves nothing behind that could
+// use them.
+func agentGetsFleetMCP(ag fleet.Agent) bool {
+	return ag.FleetMCP && agentstrategy.FleetMCPUnsupported(ag.Command, ag.Backend) == ""
+}
+
 // fleetMCPDir is where an agent's fleet MCP files are written inside its
 // instance. Every automation run gets a fresh container, so one fixed path
 // never collides.
@@ -681,16 +693,16 @@ func (s *service) fleetMCPExports(w *watchedAgent, inst *fleet.Instance, b backe
 
 // writeFleetMCPFiles writes files into the instance in one exec, as the
 // session user the agent runs as (RunScript). The payloads ride the command
-// itself (backend.InlineWriteScript), a few KB each. A package var so tests
-// can stub it.
+// itself (backend.InlineWriteBody), a few KB each, one subshell per file. A
+// package var so tests can stub it.
 var writeFleetMCPFiles = func(b backend.Backend, inst *fleet.Instance, files []agentstrategy.File) error {
 	steps := make([]string, 0, len(files))
 	for _, f := range files {
-		argv, err := backend.InlineWriteScript(f.Path, f.Content, int(f.Mode.Perm()))
+		body, err := backend.InlineWriteBody(f.Path, f.Content, int(f.Mode.Perm()))
 		if err != nil {
 			return err
 		}
-		steps = append(steps, "("+argv[len(argv)-1]+")")
+		steps = append(steps, "("+body+")")
 	}
 	if out, err := b.RunScript(inst.ContainerID, strings.Join(steps, " && ")); err != nil {
 		return fmt.Errorf("%w (%s)", err, strings.TrimSpace(out))

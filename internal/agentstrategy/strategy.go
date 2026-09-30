@@ -12,9 +12,11 @@
 package agentstrategy
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/shellquote"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -105,4 +107,25 @@ func (u unsupportedStrategy) Tool() state.AgentTool { return u.tool }
 
 func (unsupportedStrategy) FleetMCP(FleetMCPParams) (FleetMCPSetup, bool) {
 	return FleetMCPSetup{}, false
+}
+
+// FleetMCPUnsupported says why an agent launched with command on backend would
+// run WITHOUT the fleet MCP, or "" when it gets it (on a Linux host). Config
+// surfaces use it to warn when the toggle is turned on; the daemon uses it to
+// decide whether an agent's instance is served the MCP at all.
+func FleetMCPUnsupported(command string, backend fleet.BackendType) string {
+	if strings.TrimSpace(command) == "" {
+		command = fleet.DefaultAgentCommand // what normalization fills in
+	}
+	if backend != "" && backend != fleet.BackendDevcontainer {
+		return fmt.Sprintf("the fleet MCP needs the devcontainer backend, not %s", backend)
+	}
+	strategy := ForCommand(command)
+	if _, ok := strategy.FleetMCP(FleetMCPParams{Dir: "/", Bridge: []string{"fleet"}}); ok {
+		return ""
+	}
+	if tool := strategy.Tool(); tool != "" {
+		return fmt.Sprintf("the fleet MCP supports Claude Code agents only so far, not %s", tool)
+	}
+	return "the fleet MCP needs a Claude Code command (fleet did not find `claude` in it)"
 }

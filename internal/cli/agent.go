@@ -5,6 +5,7 @@ import (
 	"slices"
 	"text/tabwriter"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentstrategy"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/spf13/cobra"
 )
@@ -61,19 +62,21 @@ func newAgentCreateCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fleetName, name := args[0], args[1]
+			a := fleet.Agent{
+				Name:         name,
+				Command:      command,
+				SystemPrompt: systemPrompt,
+				Backend:      fleet.BackendType(backend),
+				FleetMCP:     fleetMCP,
+			}
 			err := mutateAutomation(cmd.Context(), fleetName, func(s fleet.FleetSettings) (fleet.FleetSettings, error) {
-				return fleet.AddAgent(s, fleet.Agent{
-					Name:         name,
-					Command:      command,
-					SystemPrompt: systemPrompt,
-					Backend:      fleet.BackendType(backend),
-					FleetMCP:     fleetMCP,
-				})
+				return fleet.AddAgent(s, a)
 			})
 			if err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Created agent %q in fleet %q\n", name, fleetName)
+			warnFleetMCP(cmd, a)
 			return nil
 		},
 	}
@@ -95,6 +98,7 @@ func newAgentEditCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fleetName, name := args[0], args[1]
 			flags := cmd.Flags()
+			var edited fleet.Agent
 			err := mutateAutomation(cmd.Context(), fleetName, func(s fleet.FleetSettings) (fleet.FleetSettings, error) {
 				a, ok := fleet.FindAgent(s.Agents, name)
 				if !ok {
@@ -115,12 +119,14 @@ func newAgentEditCmd() *cobra.Command {
 				if flags.Changed("fleet-mcp") {
 					a.FleetMCP = fleetMCP
 				}
+				edited = a
 				return fleet.UpdateAgent(s, name, a)
 			})
 			if err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Updated agent %q in fleet %q\n", name, fleetName)
+			warnFleetMCP(cmd, edited)
 			return nil
 		},
 	}
@@ -154,7 +160,18 @@ func newAgentDeleteCmd() *cobra.Command {
 }
 
 // fleetMCPFlagHelp describes --fleet-mcp.
-const fleetMCPFlagHelp = "give the agent the fleet MCP server and fleet-admiral skill (Claude Code, devcontainer)"
+const fleetMCPFlagHelp = "give the agent the full fleet MCP + fleet-admiral skill in its instance (Claude Code, devcontainer; allows host access from the instance)"
+
+// warnFleetMCP warns on stderr when an agent has the fleet MCP on but could
+// not use it, so the toggle does not silently do nothing.
+func warnFleetMCP(cmd *cobra.Command, a fleet.Agent) {
+	if !a.FleetMCP {
+		return
+	}
+	if why := agentstrategy.FleetMCPUnsupported(a.Command, a.Backend); why != "" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s; the agent will run without it\n", why)
+	}
+}
 
 // onOff renders a bool as a list column.
 func onOff(on bool) string {

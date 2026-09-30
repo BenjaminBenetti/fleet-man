@@ -366,18 +366,30 @@ func TestEditAgentTogglesFleetMCP(t *testing.T) {
 	m.st.Fleets["alpha"].Settings.Agents = []fleet.Agent{{Name: "orchestrator", Command: "claude", Backend: fleet.BackendDevcontainer}}
 
 	fp.openEditAgentDialog(m, "alpha", 0)
-	if !strings.Contains(fp.renderAutomationAgentDialog(m), "Fleet MCP: [ off ]") {
+	view := fp.renderAutomationAgentDialog(m)
+	if !strings.Contains(view, "Fleet MCP: [ off ]") {
 		t.Fatal("the dialog should show the Fleet MCP toggle, off by default")
+	}
+	if !strings.Contains(view, "allows host access") {
+		t.Fatalf("the toggle should always carry its risk note:\n%s", view)
 	}
 	fp.agentDlg.row = agentRowFleetMCP
 	fp.updateAutomationAgent(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if !m.st.Fleets["alpha"].Settings.Agents[0].FleetMCP {
 		t.Fatal("enter on Fleet MCP should turn it on and instant-save")
 	}
-	view := fp.renderAutomationAgentDialog(m)
+	view = fp.renderAutomationAgentDialog(m)
 	if !strings.Contains(view, "Fleet MCP: [ on ]") || !strings.Contains(view, "fleet-admiral") {
 		t.Fatalf("the selected row should read on and explain itself:\n%s", view)
 	}
+	if strings.Contains(view, "Won't apply") {
+		t.Fatalf("a Claude Code agent on devcontainer can use it:\n%s", view)
+	}
+	fp.agentDlg.backend = fleet.BackendCoder
+	if view := fp.renderAutomationAgentDialog(m); !strings.Contains(view, "Won't apply") {
+		t.Fatalf("on for a coder agent should say it won't apply:\n%s", view)
+	}
+	fp.agentDlg.backend = fleet.BackendDevcontainer
 	fp.updateAutomationAgent(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if m.st.Fleets["alpha"].Settings.Agents[0].FleetMCP {
 		t.Fatal("l on Fleet MCP should turn it back off")

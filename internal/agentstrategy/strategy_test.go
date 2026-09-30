@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/admiralskill"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -71,8 +72,8 @@ func TestClaudeFleetMCPIsAnInlinePlugin(t *testing.T) {
 	}
 	root := "/tmp/fleet-mcp/claude-plugin"
 
-	var manifest struct{ Name string }
-	if err := json.Unmarshal(files[root+"/.claude-plugin/plugin.json"].Content, &manifest); err != nil || manifest.Name != "fleet" {
+	var manifest struct{ Name, Version string }
+	if err := json.Unmarshal(files[root+"/.claude-plugin/plugin.json"].Content, &manifest); err != nil || manifest.Name != "fleet" || manifest.Version == "" {
 		t.Fatalf("plugin manifest = %+v (%v)", manifest, err)
 	}
 	var servers struct {
@@ -171,5 +172,26 @@ func TestClaudeLoadsThePlugin(t *testing.T) {
 	out, _ := cmd.CombinedOutput()
 	if !strings.Contains(string(out), "plugin:fleet:fleet") {
 		t.Fatalf("claude did not load the plugin's MCP server:\n%s", out)
+	}
+}
+
+func TestFleetMCPUnsupported(t *testing.T) {
+	cases := []struct {
+		command string
+		backend fleet.BackendType
+		want    string // substring; "" means supported
+	}{
+		{"claude '${PROMPT}'", fleet.BackendDevcontainer, ""},
+		{"", "", ""}, // the default command, the default backend
+		{"npx -y @anthropic-ai/claude-code@latest '${PROMPT}'", fleet.BackendDevcontainer, ""},
+		{"claude '${PROMPT}'", fleet.BackendCoder, "devcontainer backend"},
+		{"codex '${PROMPT}'", fleet.BackendDevcontainer, "not codex"},
+		{"./agent.sh", fleet.BackendDevcontainer, "Claude Code command"},
+	}
+	for _, c := range cases {
+		got := FleetMCPUnsupported(c.command, c.backend)
+		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
+			t.Errorf("FleetMCPUnsupported(%q, %q) = %q, want %q", c.command, c.backend, got, c.want)
+		}
 	}
 }

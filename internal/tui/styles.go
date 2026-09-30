@@ -112,6 +112,9 @@ var (
 	// Update notification
 	updateStyle lipgloss.Style
 
+	// warnTextStyle is a caution note beside a risky setting.
+	warnTextStyle lipgloss.Style
+
 	// Spinner (the page spinner; the agent throbber reuses agentWorkingStyle)
 	spinnerStyle lipgloss.Style
 )
@@ -281,6 +284,9 @@ func applyTheme(t theme.Theme) {
 	updateStyle = lipgloss.NewStyle().
 		Foreground(t.Warning).
 		Bold(true)
+
+	warnTextStyle = lipgloss.NewStyle().
+		Foreground(t.Warning)
 
 	spinnerStyle = lipgloss.NewStyle().Foreground(t.Accent)
 

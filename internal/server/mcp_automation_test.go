@@ -291,4 +291,9 @@ func TestMCPAgentFleetMCP(t *testing.T) {
 	if a, _ := fleet.FindAgent(st.Fleets["alpha"].Settings.Agents, "orchestrator"); a.FleetMCP || a.SystemPrompt != "delegate" {
 		t.Fatalf("persisted agent = %+v", a)
 	}
+	// Turned on where it cannot apply, the result says so.
+	callJSON(t, cs, "fleet_agent_update", map[string]any{"fleet": "alpha", "name": "orchestrator", "fleet_mcp": true, "backend": "coder"}, &out)
+	if len(out.Warnings) != 1 || !strings.Contains(out.Warnings[0], "devcontainer") {
+		t.Fatalf("warnings = %q, want one about the backend", out.Warnings)
+	}
 }
