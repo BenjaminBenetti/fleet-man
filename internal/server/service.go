@@ -98,12 +98,15 @@ func newService() *service {
 		triggerFires: make(chan []triggerFire, triggerFireBuffer),
 	}
 	svc.instanceMCP = newInstanceMCP(svc)
-	// The attached microphone clients are pushed over Watch. The snapshot is
-	// taken ON the hub loop, not here: two changes in quick succession then
-	// cannot be delivered out of order, since a later turn never sees an older
-	// set.
+	// The attached microphone clients, and the settings that select among them,
+	// are pushed over Watch. The mic hub calls this from a single goroutine, one
+	// change at a time, so the snapshots reach the Watch hub in the order they
+	// were taken.
+	var lastSettings *fleetgrpc.MicSettings
 	svc.mic.onSources = func() {
-		svc.hub.post(func(h *hub) { h.broadcastMicSources(svc.mic.sources()) })
+		snapshot := svc.micSourcesNow(lastSettings)
+		lastSettings = snapshot.GetSettings()
+		svc.hub.post(func(h *hub) { h.broadcastMicSources(snapshot) })
 	}
 	return svc
 }

@@ -974,6 +974,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinCmd
 		}
 		m.micSources = msg.sources
+		m.adoptMicSettings(msg.sources.GetSettings())
 		return m, spinCmd
 
 	case serverInfoMsg:

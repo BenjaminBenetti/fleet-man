@@ -1468,3 +1468,138 @@ func TestSetConfigFromAPreClientSelectionClientKeepsTheClient(t *testing.T) {
 		t.Fatalf("client = %q, want the selection cleared", saved.MicSettings.Client)
 	}
 }
+
+// The QA-found hole: the selection is a daemon setting any client can change,
+// but a client fetches the config once. So the daemon pushes the microphone
+// settings with the client list — on EVERY config save, with or without a
+// provider attached — and every open TUI keeps the selection the daemon holds
+// (rather than showing a stale one and writing it back with its next save).
+func TestWatchPushesTheMicSettingsOnEverySave(t *testing.T) {
+	h := newMicHarness(t, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	watch, err := h.client.Watch(ctx, &fleetgrpc.WatchRequest{IncludeInitialState: true})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	pushed := make(chan *fleetgrpc.MicSettings, 32)
+	go func() {
+		for {
+			event, err := watch.Recv()
+			if err != nil {
+				return
+			}
+			if sources := event.GetMicSources(); sources != nil && sources.GetSettings() != nil {
+				pushed <- sources.GetSettings()
+			}
+		}
+	}()
+	expect := func(what string, match func(*fleetgrpc.MicSettings) bool) {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case settings := <-pushed:
+				if match(settings) {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("no push with %s", what)
+			}
+		}
+	}
+
+	// Nothing has happened yet, and nobody is attached: a subscriber is still
+	// told what the daemon holds.
+	expect("the settings on disk", func(s *fleetgrpc.MicSettings) bool {
+		return s.GetEnabled() && s.Client != nil && s.GetClient() == ""
+	})
+
+	// Another client makes a selection — no provider anywhere.
+	h.setMicSelection(t, "desk", "pulse:desk_usb")
+	expect("the new selection", func(s *fleetgrpc.MicSettings) bool {
+		return s.GetEnabled() && s.GetClient() == "desk" && s.GetDevice() == "pulse:desk_usb"
+	})
+
+	// ListMicSources answers the same thing.
+	reply, err := h.client.ListMicSources(context.Background(), &fleetgrpc.ListMicSourcesRequest{})
+	if err != nil {
+		t.Fatalf("ListMicSources: %v", err)
+	}
+	if got := reply.GetSources().GetSettings(); got.GetClient() != "desk" || got.GetDevice() != "pulse:desk_usb" {
+		t.Fatalf("ListMicSources settings = %v", got)
+	}
+
+	// Turning the microphone off is pushed too: a client still holding
+	// "enabled" would otherwise turn it back on with its next save.
+	config, err := state.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MicSettings.Enabled = false
+	if _, err := h.client.SetConfig(context.Background(), &fleetgrpc.SetConfigRequest{Config: protoconv.ConfigToProto(config)}); err != nil {
+		t.Fatal(err)
+	}
+	expect("the microphone turned off, selection kept", func(s *fleetgrpc.MicSettings) bool {
+		return !s.GetEnabled() && s.GetClient() == "desk"
+	})
+	// Turning it off stops the instances' sound servers on a goroutine of its
+	// own; let it finish before the harness restores the seam it calls.
+	eventually(t, "the instance's sound server to be stopped", func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.stops) == 1
+	})
+}
+
+// A selection made by editing config.json reaches the clients as well (the hub
+// reads it on its sync tick while a provider is attached).
+func TestHandEditedMicSelectionIsPushed(t *testing.T) {
+	h := newMicHarness(t, true)
+	provider := openMicStreamAs(t, h.client, "laptop")
+	provider.expectDemand(t, false)
+
+	config, err := state.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MicSettings.Client, config.MicSettings.Device = "laptop", "pulse:builtin"
+	if err := state.SaveConfig(config); err != nil { // not through SetConfig
+		t.Fatal(err)
+	}
+	provider.expectDevice(t, "pulse:builtin")
+	eventually(t, "the hand-edited selection to be announced", func() bool {
+		var cached *fleetgrpc.MicSettings
+		done := make(chan struct{})
+		if !h.svc.hub.post(func(hub *hub) { cached = hub.micSources.GetSettings(); close(done) }) {
+			return false
+		}
+		<-done
+		return cached.GetClient() == "laptop" && cached.GetDevice() == "pulse:builtin"
+	})
+}
+
+// An unreadable config must not blank the settings a new subscriber is greeted
+// with: "absent" tells clients to keep what they have, but the cache should
+// still hold the last value the daemon could read.
+func TestMicSourcesKeepLastKnownSettingsWhenTheConfigIsUnreadable(t *testing.T) {
+	svc := newService()
+	orig := micSetting
+	t.Cleanup(func() { micSetting = orig })
+
+	micSetting = func() (state.MicSettings, error) {
+		return state.MicSettings{Enabled: true, Client: "desk"}, nil
+	}
+	known := svc.micSourcesNow(nil).GetSettings()
+	if known.GetClient() != "desk" || !known.GetEnabled() {
+		t.Fatalf("settings = %v", known)
+	}
+
+	micSetting = func() (state.MicSettings, error) { return state.MicSettings{}, fmt.Errorf("mid-write") }
+	if got := svc.micSourcesNow(known).GetSettings(); got.GetClient() != "desk" {
+		t.Fatalf("an unreadable config replaced the last known settings with %v", got)
+	}
+	if got := svc.micSourcesNow(nil).GetSettings(); got != nil {
+		t.Fatalf("with nothing known the settings must be absent, got %v", got)
+	}
+}

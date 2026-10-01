@@ -251,6 +251,28 @@ func (m *model) ensureMicDevices() tea.Cmd {
 	return fetchMicDevicesCmd()
 }
 
+// adoptMicSettings takes over the microphone settings the daemon pushed along
+// with its client list. This TUI fetched the config once; the settings can be
+// changed from any other client since, and the copy here is what the Source row
+// shows AND what the next save — of any setting at all, SetConfig sends the
+// whole config — writes back. A stale copy would show the wrong microphone and
+// then quietly move it. nil means the daemon could not say (or predates the
+// push): keep what we have.
+func (m *model) adoptMicSettings(pushed *fleetgrpc.MicSettings) {
+	if pushed == nil || m.config == nil {
+		return
+	}
+	settings := configutil.MicSettings{Enabled: pushed.GetEnabled(), Device: pushed.GetDevice(), Client: pushed.GetClient()}
+	if m.config.MicSettings == settings {
+		return
+	}
+	m.config.MicSettings = settings
+	// Enabled may have flipped too (another client turned the microphone off,
+	// or on): the provider follows the settings, as at every other place the
+	// config is replaced.
+	syncMicProvider(settings)
+}
+
 // relistMicSourcesCmd asks the daemon to have the other attached clients list
 // their devices again. Fire-and-forget: the answers arrive over Watch, and a
 // daemon that predates the RPC simply has no other clients to offer.
@@ -320,6 +342,16 @@ func micClientDevices(m *model, client string) (devices []mic.Device, known bool
 func micChoices(m *model) []micChoice {
 	self := micClientName()
 	choices := []micChoice{{}}
+	if m.micSources == nil {
+		// A daemon that never pushed its clients predates selecting one: it
+		// would drop the client from what we save, and the row would go on
+		// showing a selection the daemon does not have. Offer what it can
+		// store — a device, recorded by whichever client attached last.
+		for _, device := range m.micDevices {
+			choices = append(choices, micChoice{device: device.ID})
+		}
+		return choices
+	}
 	add := func(client string) {
 		choices = append(choices, micChoice{client: client})
 		devices, _ := micClientDevices(m, client)
@@ -380,8 +412,12 @@ func (settingsPage *settingsPage) cycleMicDevice(m *model, direction int) tea.Cm
 	}
 	choices := micChoices(m)
 	if len(choices) == 1 {
-		// Only "automatic": nothing has been listed yet, here or elsewhere. The
-		// listing just started (or still running) is what will change that.
+		// Only "automatic". Either nothing has been listed yet — the listing just
+		// started (or still running) is what will change that — or there really
+		// is nothing else: a key press that does nothing looks broken, so say why.
+		if m.micDevicesLoaded {
+			m.message = "No selectable capture devices on this machine — recording the system default"
+		}
 		return load
 	}
 	settings := m.config.MicSettings

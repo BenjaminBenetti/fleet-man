@@ -279,6 +279,9 @@ func (h *micHub) run(ctx context.Context) {
 	announcing := make(chan struct{})
 	go func() { defer close(announcing); h.announceSources(ctx) }()
 	defer func() { <-announcing }()
+	// Announce once up front, so a client that subscribes before anything has
+	// changed is still handed the settings the daemon holds.
+	h.sourcesChanged()
 	ticker := time.NewTicker(micSyncInterval)
 	defer ticker.Stop()
 	for {
@@ -342,6 +345,11 @@ func (h *micHub) sync() {
 	if h.teardowns != teardowns || len(h.providers) == 0 {
 		h.mu.Unlock()
 		return
+	}
+	if h.client != settings.Client || h.device != settings.Device {
+		// A selection that did not come through SetConfig (config.json edited
+		// by hand): the clients showing it must hear of it all the same.
+		h.sourcesChanged()
 	}
 	h.client, h.device = settings.Client, settings.Device
 	var dropped []*micSink
@@ -765,7 +773,7 @@ func (h *micHub) publishDemandLocked() {
 	wasRecording := len(h.lastDemand) > 0
 	h.lastDemand, h.lastDevice, h.lastSource = demanding, device, source
 	if sourceChanged || wasRecording != (len(demanding) > 0) {
-		h.sourcesChangedLocked()
+		h.sourcesChanged()
 	}
 	if sourceChanged && previous != nil && slices.Contains(h.providers, previous) {
 		// Superseded, not gone: it must close its microphone.
@@ -823,7 +831,7 @@ func (h *micHub) addProvider(client string, settings state.MicSettings) *micProv
 		provider.post(h.demandMessageLocked(provider, nil))
 	}
 	h.publishDemandLocked()
-	h.sourcesChangedLocked()
+	h.sourcesChanged()
 	count := len(h.providers)
 	h.mu.Unlock()
 	flog.Info("mic provider attached", "client", client, "providers", count)
@@ -842,7 +850,7 @@ func (h *micHub) removeProvider(provider *micProvider) {
 	}
 	h.providers = slices.Delete(h.providers, index, index+1)
 	h.publishDemandLocked()
-	h.sourcesChangedLocked()
+	h.sourcesChanged()
 	count := len(h.providers)
 	h.mu.Unlock()
 	flog.Info("mic provider detached", "client", provider.client, "providers", count)
@@ -855,7 +863,7 @@ func (h *micHub) kickProviders() {
 	kicked := h.providers
 	h.providers = nil
 	h.lastSource = nil
-	h.sourcesChangedLocked()
+	h.sourcesChanged()
 	h.mu.Unlock()
 	for _, provider := range kicked {
 		close(provider.kicked)
@@ -920,7 +928,7 @@ func (h *micHub) setDevices(provider *micProvider, devices []*fleetgrpc.MicDevic
 		return
 	}
 	provider.devices, provider.listed = devices, true
-	h.sourcesChangedLocked()
+	h.sourcesChanged()
 }
 
 // relistDevices asks every attached provider for a fresh device listing.
@@ -969,14 +977,19 @@ func (h *micHub) sources() *fleetgrpc.MicSources {
 	return out
 }
 
-func (h *micHub) sourcesChangedLocked() {
+// sourcesChanged flags that what a selector shows — the attached clients, or
+// the settings that select among them — is no longer what was last announced.
+// Safe with or without mu held: it only signals.
+func (h *micHub) sourcesChanged() {
 	select {
 	case h.sourcesDirty <- struct{}{}:
 	default:
 	}
 }
 
-// announceSources calls onSources after every change, off the hub's lock.
+// announceSources calls onSources after every change, off the hub's lock. It is
+// the ONLY caller, and calls it from this one goroutine: that is what keeps two
+// changes in quick succession from being announced out of order.
 func (h *micHub) announceSources(ctx context.Context) {
 	for {
 		select {
@@ -1090,5 +1103,21 @@ func (s *service) ListMicSources(_ context.Context, req *fleetgrpc.ListMicSource
 	if req.GetRefresh() {
 		s.mic.relistDevices()
 	}
-	return &fleetgrpc.ListMicSourcesReply{Sources: s.mic.sources()}, nil
+	return &fleetgrpc.ListMicSourcesReply{Sources: s.micSourcesNow(nil)}, nil
+}
+
+// micSourcesNow is what a selector needs, in one snapshot: the attached clients
+// and the microphone settings that select among them, read from the config —
+// the daemon is its only writer, so that IS what the daemon holds. If the config
+// cannot be read just now (caught mid-write), lastKnown stands in: an absent
+// group tells clients "not known, keep what you have", which must not replace a
+// good value in the cache every new subscriber is greeted from.
+func (s *service) micSourcesNow(lastKnown *fleetgrpc.MicSettings) *fleetgrpc.MicSources {
+	sources := s.mic.sources()
+	sources.Settings = lastKnown
+	if settings, err := micSetting(); err == nil {
+		client := settings.Client
+		sources.Settings = &fleetgrpc.MicSettings{Enabled: settings.Enabled, Device: settings.Device, Client: &client}
+	}
+	return sources
 }

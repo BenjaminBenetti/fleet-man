@@ -1385,8 +1385,16 @@ func (x *MicSource) GetRecording() bool {
 // MicSources is the full set of attached microphone clients, sorted by name.
 // Pushed over Watch whenever it changes and returned by ListMicSources.
 type MicSources struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Sources       []*MicSource           `protobuf:"bytes,1,rep,name=sources,proto3" json:"sources,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Sources []*MicSource           `protobuf:"bytes,1,rep,name=sources,proto3" json:"sources,omitempty"`
+	// settings is the microphone configuration the daemon holds RIGHT NOW (the
+	// config's mic group), pushed along with the clients it selects among. A
+	// client fetches the config once, so without this a selection made on one
+	// client is invisible to every other open one — and, since SetConfig sends
+	// the whole config, the next unrelated setting saved there would write the
+	// stale selection back and move the microphone to another machine. Absent
+	// means "not known" (the config could not be read): keep what you have.
+	Settings      *MicSettings `protobuf:"bytes,2,opt,name=settings,proto3" json:"settings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1424,6 +1432,13 @@ func (*MicSources) Descriptor() ([]byte, []int) {
 func (x *MicSources) GetSources() []*MicSource {
 	if x != nil {
 		return x.Sources
+	}
+	return nil
+}
+
+func (x *MicSources) GetSettings() *MicSettings {
+	if x != nil {
+		return x.Settings
 	}
 	return nil
 }
@@ -3321,7 +3336,7 @@ var File_exec_proto protoreflect.FileDescriptor
 const file_exec_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"exec.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\x86\x01\n" +
+	"exec.proto\x12\tfleetgrpc\x1a\fconfig.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x86\x01\n" +
 	"\x06ExecIn\x12,\n" +
 	"\x05start\x18\x01 \x01(\v2\x14.fleetgrpc.ExecStartH\x00R\x05start\x12\x16\n" +
 	"\x05stdin\x18\x02 \x01(\fH\x00R\x05stdin\x12/\n" +
@@ -3407,10 +3422,11 @@ const file_exec_proto_rawDesc = "" +
 	"\adevices\x18\x02 \x03(\v2\x14.fleetgrpc.MicDeviceR\adevices\x12%\n" +
 	"\x0edevices_listed\x18\x03 \x01(\bR\rdevicesListed\x12\x16\n" +
 	"\x06source\x18\x04 \x01(\bR\x06source\x12\x1c\n" +
-	"\trecording\x18\x05 \x01(\bR\trecording\"<\n" +
+	"\trecording\x18\x05 \x01(\bR\trecording\"p\n" +
 	"\n" +
 	"MicSources\x12.\n" +
-	"\asources\x18\x01 \x03(\v2\x14.fleetgrpc.MicSourceR\asources\"1\n" +
+	"\asources\x18\x01 \x03(\v2\x14.fleetgrpc.MicSourceR\asources\x122\n" +
+	"\bsettings\x18\x02 \x01(\v2\x16.fleetgrpc.MicSettingsR\bsettings\"1\n" +
 	"\x15ListMicSourcesRequest\x12\x18\n" +
 	"\arefresh\x18\x01 \x01(\bR\arefresh\"F\n" +
 	"\x13ListMicSourcesReply\x12/\n" +
@@ -3587,6 +3603,7 @@ var file_exec_proto_goTypes = []any{
 	nil,                                   // 49: fleetgrpc.ExecStart.EnvEntry
 	nil,                                   // 50: fleetgrpc.ResolveExecCommandReply.EnvEntry
 	(*timestamppb.Timestamp)(nil),         // 51: google.protobuf.Timestamp
+	(*MicSettings)(nil),                   // 52: fleetgrpc.MicSettings
 }
 var file_exec_proto_depIdxs = []int32{
 	1,  // 0: fleetgrpc.ExecIn.start:type_name -> fleetgrpc.ExecStart
@@ -3603,25 +3620,26 @@ var file_exec_proto_depIdxs = []int32{
 	16, // 11: fleetgrpc.MicDown.list_devices:type_name -> fleetgrpc.MicListDevices
 	13, // 12: fleetgrpc.MicSource.devices:type_name -> fleetgrpc.MicDevice
 	18, // 13: fleetgrpc.MicSources.sources:type_name -> fleetgrpc.MicSource
-	19, // 14: fleetgrpc.ListMicSourcesReply.sources:type_name -> fleetgrpc.MicSources
-	23, // 15: fleetgrpc.SSHAgentUp.hello:type_name -> fleetgrpc.SSHAgentHello
-	24, // 16: fleetgrpc.SSHAgentUp.ready:type_name -> fleetgrpc.SSHAgentReady
-	28, // 17: fleetgrpc.SSHAgentUp.data:type_name -> fleetgrpc.SSHAgentData
-	29, // 18: fleetgrpc.SSHAgentUp.close:type_name -> fleetgrpc.SSHAgentClose
-	25, // 19: fleetgrpc.SSHAgentUp.pong:type_name -> fleetgrpc.SSHAgentPong
-	27, // 20: fleetgrpc.SSHAgentDown.open:type_name -> fleetgrpc.SSHAgentOpen
-	28, // 21: fleetgrpc.SSHAgentDown.data:type_name -> fleetgrpc.SSHAgentData
-	29, // 22: fleetgrpc.SSHAgentDown.close:type_name -> fleetgrpc.SSHAgentClose
-	30, // 23: fleetgrpc.SSHAgentDown.status:type_name -> fleetgrpc.SSHAgentStatus
-	31, // 24: fleetgrpc.SSHAgentDown.ping:type_name -> fleetgrpc.SSHAgentPing
-	34, // 25: fleetgrpc.CopyFileChunk.meta:type_name -> fleetgrpc.CopyFileMeta
-	36, // 26: fleetgrpc.CopyIntoChunk.open:type_name -> fleetgrpc.CopyIntoOpen
-	43, // 27: fleetgrpc.GetCoderTemplateParamsReply.parameters:type_name -> fleetgrpc.CoderRichParameter
-	28, // [28:28] is the sub-list for method output_type
-	28, // [28:28] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	52, // 14: fleetgrpc.MicSources.settings:type_name -> fleetgrpc.MicSettings
+	19, // 15: fleetgrpc.ListMicSourcesReply.sources:type_name -> fleetgrpc.MicSources
+	23, // 16: fleetgrpc.SSHAgentUp.hello:type_name -> fleetgrpc.SSHAgentHello
+	24, // 17: fleetgrpc.SSHAgentUp.ready:type_name -> fleetgrpc.SSHAgentReady
+	28, // 18: fleetgrpc.SSHAgentUp.data:type_name -> fleetgrpc.SSHAgentData
+	29, // 19: fleetgrpc.SSHAgentUp.close:type_name -> fleetgrpc.SSHAgentClose
+	25, // 20: fleetgrpc.SSHAgentUp.pong:type_name -> fleetgrpc.SSHAgentPong
+	27, // 21: fleetgrpc.SSHAgentDown.open:type_name -> fleetgrpc.SSHAgentOpen
+	28, // 22: fleetgrpc.SSHAgentDown.data:type_name -> fleetgrpc.SSHAgentData
+	29, // 23: fleetgrpc.SSHAgentDown.close:type_name -> fleetgrpc.SSHAgentClose
+	30, // 24: fleetgrpc.SSHAgentDown.status:type_name -> fleetgrpc.SSHAgentStatus
+	31, // 25: fleetgrpc.SSHAgentDown.ping:type_name -> fleetgrpc.SSHAgentPing
+	34, // 26: fleetgrpc.CopyFileChunk.meta:type_name -> fleetgrpc.CopyFileMeta
+	36, // 27: fleetgrpc.CopyIntoChunk.open:type_name -> fleetgrpc.CopyIntoOpen
+	43, // 28: fleetgrpc.GetCoderTemplateParamsReply.parameters:type_name -> fleetgrpc.CoderRichParameter
+	29, // [29:29] is the sub-list for method output_type
+	29, // [29:29] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_exec_proto_init() }
@@ -3629,6 +3647,7 @@ func file_exec_proto_init() {
 	if File_exec_proto != nil {
 		return
 	}
+	file_config_proto_init()
 	file_exec_proto_msgTypes[0].OneofWrappers = []any{
 		(*ExecIn_Start)(nil),
 		(*ExecIn_Stdin)(nil),

@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package fleetgrpc;
 
+import "config.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
@@ -230,6 +231,14 @@ message MicSource {
 // Pushed over Watch whenever it changes and returned by ListMicSources.
 message MicSources {
   repeated MicSource sources = 1;
+  // settings is the microphone configuration the daemon holds RIGHT NOW (the
+  // config's mic group), pushed along with the clients it selects among. A
+  // client fetches the config once, so without this a selection made on one
+  // client is invisible to every other open one — and, since SetConfig sends
+  // the whole config, the next unrelated setting saved there would write the
+  // stale selection back and move the microphone to another machine. Absent
+  // means "not known" (the config could not be read): keep what you have.
+  MicSettings settings = 2;
 }
 
 message ListMicSourcesRequest {

@@ -38,6 +38,9 @@ func newMicTestModel(t *testing.T) (*settingsPage, *model) {
 		currentPage: sp,
 		fleetPage:   newFleetPage(),
 		spinner:     spinner.New(),
+		// A current daemon: it has pushed its (so far empty) set of microphone
+		// clients. nil is a daemon that predates them.
+		micSources: &fleetgrpc.MicSources{},
 	}
 	return sp, m
 }
@@ -292,9 +295,13 @@ func TestMicSourcesMsgIsDroppedFromAStaleWatch(t *testing.T) {
 	_, m := newMicTestModel(t)
 	m.watchGen = 2
 
-	next, _ := m.Update(micSourcesMsg{sources: micSources(micSource("desk")), gen: 1})
-	if got := next.(model); got.micSources != nil {
-		t.Fatalf("a stale push was applied: %v", got.micSources)
+	m.micSources = nil
+	selected := "desk"
+	stale := micSources(micSource("desk"))
+	stale.Settings = &fleetgrpc.MicSettings{Enabled: true, Client: &selected}
+	next, _ := m.Update(micSourcesMsg{sources: stale, gen: 1})
+	if got := next.(model); got.micSources != nil || got.config.MicSettings.Client != "" {
+		t.Fatalf("a stale push was applied: %v / %+v", got.micSources, got.config.MicSettings)
 	}
 	next, _ = m.Update(micSourcesMsg{sources: micSources(micSource("desk")), gen: 2})
 	if got := next.(model); len(got.micSources.GetSources()) != 1 {
@@ -567,6 +574,86 @@ func TestCycleMicDeviceWithNothingListedChangesNothing(t *testing.T) {
 	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
 	if m.config.MicSettings.Client != "" || m.config.MicSettings.Device != "" {
 		t.Fatalf("selection changed to %+v with nothing listed", m.config.MicSettings)
+	}
+}
+
+// A daemon that predates client selection cannot store a client: the selector
+// must offer only what it can keep — a device — or the row would show a
+// selection the daemon does not have.
+func TestCycleMicDeviceAgainstADaemonWithoutClientSelection(t *testing.T) {
+	sp, m := newMicTestModel(t)
+	m.micSources = nil // never pushed
+	m.config.MicSettings.Enabled = true
+	m.micDevicesLoaded = true
+	m.micDevices = []mic.Device{{ID: "pulse:yeti", Label: "Yeti Orb"}}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemMicDevice)
+
+	for _, want := range []string{"pulse:yeti", ""} {
+		sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
+		if got := m.config.MicSettings; got.Client != "" || got.Device != want {
+			t.Fatalf("selection = %+v, want device %q and no client", got, want)
+		}
+	}
+
+	// With no devices either there is nothing to step to; say why.
+	m.micDevices = nil
+	m.message = ""
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
+	if !strings.Contains(m.message, "system default") {
+		t.Fatalf("a no-op key press should say why: %q", m.message)
+	}
+}
+
+// The selection is the DAEMON's, and any client can change it. A TUI fetched the
+// config once, so the daemon pushes the microphone settings with its client
+// list — otherwise this TUI would go on showing the old selection and, with the
+// next setting it saves (SetConfig sends the whole config), write it back and
+// move the microphone to another machine.
+func TestPushedMicSettingsReplaceAStaleSelection(t *testing.T) {
+	sp, m := newMicTestModel(t)
+	m.config.MicSettings.Enabled = true
+	m.micDevicesLoaded = true
+	if err := state.SaveConfig(m.config); err != nil {
+		t.Fatal(err)
+	}
+
+	// Another client selects desk's USB microphone.
+	selected := "desk"
+	pushed := micSources(micSource("desk", "pulse:usb=Desk USB Mic"), micSource("laptop"))
+	pushed.Settings = &fleetgrpc.MicSettings{Enabled: true, Device: "pulse:usb", Client: &selected}
+	next, _ := m.Update(micSourcesMsg{sources: pushed, gen: m.watchGen})
+	got := next.(model)
+	if got.config.MicSettings.Client != "desk" || got.config.MicSettings.Device != "pulse:usb" {
+		t.Fatalf("selection = %+v, want the pushed one", got.config.MicSettings)
+	}
+	if label := sp.micDeviceLabel(&got); label != "desk · Desk USB Mic" {
+		t.Fatalf("Source row = %q, want the selection the daemon holds", label)
+	}
+
+	// Saving an unrelated setting from here must leave the microphone alone.
+	sp.cursor = settingsPositionOf(sp, &got, settingsItemShowHelpText)
+	sp.Update(&got, tea.KeyMsg{Type: tea.KeyEnter})
+	saved, err := state.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.MicSettings.Client != "desk" || saved.MicSettings.Device != "pulse:usb" {
+		t.Fatalf("an unrelated save wrote %+v over the selection", saved.MicSettings)
+	}
+
+	// A push that cannot say (config unreadable on the daemon) changes nothing.
+	unknown := micSources(micSource("desk"))
+	next, _ = got.Update(micSourcesMsg{sources: unknown, gen: got.watchGen})
+	if after := next.(model); after.config.MicSettings.Client != "desk" {
+		t.Fatalf("a push without settings cleared the selection: %+v", after.config.MicSettings)
+	}
+
+	// Another client turning the microphone off is adopted too.
+	off := micSources()
+	off.Settings = &fleetgrpc.MicSettings{Enabled: false, Device: "pulse:usb", Client: &selected}
+	next, _ = got.Update(micSourcesMsg{sources: off, gen: got.watchGen})
+	if after := next.(model); after.config.MicSettings.Enabled {
+		t.Fatal("the microphone was turned off elsewhere, but this TUI still has it on")
 	}
 }
 
