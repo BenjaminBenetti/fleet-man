@@ -31,15 +31,26 @@ func ensureServerLocal(ctx context.Context, ep Endpoint) error {
 	if pingOK(ep) {
 		return nil
 	}
-	if err := startServerProcess(); err != nil {
+	// Nothing answers, but a daemon process may still be there — starting,
+	// stopping, or wedged. It holds the lifetime lock, so a new daemon cannot
+	// start next to it: give it a moment, then replace it.
+	revived, killed, err := clearServer(ctx, ep, unresponsiveGrace, true)
+	if err != nil || revived {
+		return err
+	}
+	if err := startServerProcess(killed); err != nil {
 		return fmt.Errorf("spawn fleet server: %w", err)
 	}
 	return waitReady(ctx, ep, 5*time.Second)
 }
 
+// EnvSpawnNote tells a spawned `fleet server` that it replaces a daemon this
+// client had to kill, so the daemon's log says why the previous one vanished.
+const EnvSpawnNote = "FLEET_SPAWN_NOTE"
+
 // startServerProcess fork-execs `fleet server` detached, so it outlives the
-// client that spawned it.
-func startServerProcess() error {
+// client that spawned it. note, when set, is handed to it as EnvSpawnNote.
+func startServerProcess(note string) error {
 	// Refuse to spawn from a Go test binary. We spawn by re-execing our own
 	// executable with "server"; under `go test` os.Executable() is the test
 	// binary, which ignores that arg and re-runs the whole suite — each new
@@ -56,6 +67,9 @@ func startServerProcess() error {
 	}
 	cmd := exec.Command(self, "server")
 	cmd.Env = os.Environ()
+	if note != "" {
+		cmd.Env = append(cmd.Env, EnvSpawnNote+"="+note)
+	}
 	// Setsid detaches from this client's session/controlling terminal, so
 	// closing the client's terminal won't SIGHUP the server.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}

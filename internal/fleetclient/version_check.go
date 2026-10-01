@@ -120,23 +120,25 @@ func restartServer(ctx context.Context, ep Endpoint, svc fleetgrpc.FleetServiceC
 	defer releaseSpawnLock(lockFD)
 
 	// Ask the current server to drain and exit. Best-effort: it may already be
-	// gone (a racing client restarted it while we waited for the lock), in which
-	// case Shutdown errors and we just make sure one is up below.
-	sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// gone (a racing client restarted it while we waited for the lock) or not
+	// answering at all; either way we make sure a fresh one is up below.
+	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	_, _ = svc.Shutdown(sctx, &fleetgrpc.ShutdownRequest{
 		Drain:  true,
 		Reason: strptr(reason),
 	})
 	cancel()
 
-	// Wait for the old server to stop serving (closing its listener unlinks the
-	// socket), then spawn the new one. We already hold the spawn lock, so spawn
-	// directly rather than via ensureServerLocal (which would re-acquire it).
-	stopDeadline := time.Now().Add(15 * time.Second)
-	for pingOK(ep) && time.Now().Before(stopDeadline) {
-		time.Sleep(50 * time.Millisecond)
+	// Wait for the old server's PROCESS to be gone, not just its socket: it
+	// stops answering as soon as it starts shutting down, but holds the
+	// lifetime lock until it exits, and the new server cannot start before
+	// then. One that never exits is killed. We already hold the spawn lock, so
+	// spawn directly rather than via ensureServerLocal (which would re-acquire it).
+	_, killed, err := clearServer(ctx, ep, shutdownGrace, false)
+	if err != nil {
+		return err
 	}
-	if err := startServerProcess(); err != nil {
+	if err := startServerProcess(killed); err != nil {
 		return fmt.Errorf("relaunch server: %w", err)
 	}
 	return waitReady(ctx, ep, 5*time.Second)

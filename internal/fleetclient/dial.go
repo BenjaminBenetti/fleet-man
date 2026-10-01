@@ -31,9 +31,10 @@ func (c *Conn) ServerVersion() string { return c.serverVersion }
 func (c *Conn) Close() error { return c.conn.Close() }
 
 // Dial connects to the fleet server and returns a ready Conn. For a local
-// endpoint it auto-spawns the server if it isn't running and runs the Hello
-// version handshake (relaunching a too-old local server, or erroring on an
-// incompatible remote/newer one). For a remote endpoint it dials only.
+// endpoint it auto-spawns the server if it isn't running — killing and
+// replacing one that is running but answers nothing (reap.go) — and runs the
+// Hello version handshake (relaunching a too-old local server, or erroring on
+// an incompatible remote/newer one). For a remote endpoint it dials only.
 func Dial(ctx context.Context) (*Conn, error) {
 	ep, err := selectEndpoint(ctx)
 	if err != nil {
