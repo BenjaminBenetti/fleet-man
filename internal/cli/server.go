@@ -1,6 +1,10 @@
 package cli
 
 import (
+	"os"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/server"
 	"github.com/spf13/cobra"
 )
@@ -18,6 +22,11 @@ func newServerCmd() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if note := os.Getenv(fleetclient.EnvSpawnNote); note != "" {
+				// Ours alone: the daemon's children must not inherit it.
+				_ = os.Unsetenv(fleetclient.EnvSpawnNote)
+				flog.Warn("fleet server replaces an unresponsive one", "previous", note)
+			}
 			return server.Serve(cmd.Context())
 		},
 	}

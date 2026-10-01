@@ -25,6 +25,8 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Serve runs the fleet server until ctx is cancelled (signal) or a Shutdown RPC
@@ -46,6 +48,15 @@ func Serve(ctx context.Context) error {
 		return nil
 	}
 	defer releaseLock(lockFD)
+
+	// Armed once shutdown begins (below). Deferred here, right after the lock,
+	// so it is disarmed LAST: it must cover every cleanup deferred after it.
+	var hardExit *time.Timer
+	defer func() {
+		if hardExit != nil {
+			hardExit.Stop()
+		}
+	}()
 
 	// Holding the lifetime lock proves no other server exists, so any leftover
 	// socket file is stale and safe to remove (net.Listen fails if it exists).
@@ -165,7 +176,7 @@ func Serve(ctx context.Context) error {
 	// Idle — no config reads, no execs — whenever no provider is attached.
 	go svc.mic.run(hubCtx)
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.ChainStreamInterceptor(endStreamsOnShutdown(hubCtx)))
 	fleetgrpc.RegisterFleetServiceServer(grpcServer, svc)
 
 	// MCP HTTP server: a second listener exposing the non-interactive CLI subset
@@ -226,7 +237,7 @@ func Serve(ctx context.Context) error {
 			return nil, fmt.Errorf("load bearer token: %w", err)
 		}
 		authUnary, authStream := bearerAuthInterceptors(token)
-		gs := grpc.NewServer(grpc.ChainUnaryInterceptor(authUnary), grpc.ChainStreamInterceptor(authStream))
+		gs := grpc.NewServer(grpc.ChainUnaryInterceptor(authUnary), grpc.ChainStreamInterceptor(authStream, endStreamsOnShutdown(hubCtx)))
 		fleetgrpc.RegisterFleetServiceServer(gs, svc)
 		return gs, nil
 	}
@@ -294,20 +305,87 @@ func Serve(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		flog.Info("fleet server stopping (signal)", "pid", os.Getpid())
-		cancelHub()
-		grpcServer.GracefulStop()
 	case <-svc.shutdownCh:
 		flog.Info("fleet server stopping (Shutdown RPC)", "pid", os.Getpid())
-		cancelHub()
-		grpcServer.GracefulStop()
 	case err := <-serveErr:
 		if err != nil {
 			flog.Error("fleet server crashed", "err", err)
 			return fmt.Errorf("serve: %w", err)
 		}
+		return nil
 	}
+
+	// From here the daemon MUST exit. Stopping closes the listener (which
+	// unlinks the socket) while the lifetime lock is still held, so a daemon
+	// that lingers is one no client can reach and no replacement can start
+	// next to. Whatever is left running when the limit passes is abandoned.
+	hardExit = time.AfterFunc(shutdownHardLimit, func() {
+		flog.Error("fleet server shutdown wedged; exiting", "pid", os.Getpid(), "after", shutdownHardLimit)
+		exitProcess(1)
+	})
+	cancelHub()
+	stopGRPC(grpcServer, drainTimeout)
 	return nil
 }
+
+var (
+	// drainTimeout is how long shutdown lets in-flight RPCs finish before
+	// their connections are closed under them.
+	drainTimeout = 3 * time.Second
+	// shutdownHardLimit bounds the whole shutdown, deferred cleanup included.
+	shutdownHardLimit = 20 * time.Second
+	// exitProcess is os.Exit; a var so a test can observe the hard exit
+	// instead of dying of it.
+	exitProcess = os.Exit
+)
+
+// stopGRPC drains gs, giving in-flight RPCs up to grace to finish. GracefulStop
+// alone waits for EVERY handler to return, and a handler has no reason to: a
+// long-lived stream runs for as long as its client stays connected, and one
+// parked in a backend call does not watch its context.
+func stopGRPC(gs *grpc.Server, grace time.Duration) {
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		gs.GracefulStop()
+	}()
+	select {
+	case <-drained:
+	case <-time.After(grace):
+		flog.Warn("fleet server: RPCs still in flight after the drain window; closing their connections", "after", grace)
+		// Not waited for: GracefulStop keeps waiting on the handlers (holding
+		// the server's mutex once the connections are gone), and Stop can
+		// queue behind it. The connections close either way — here, or when
+		// the process exits.
+		go gs.Stop()
+	}
+}
+
+// endStreamsOnShutdown cancels every stream's context once done is (the serve
+// loop's hubCtx), so a stream held open by a connected client — a TUI's Mic or
+// SSHAgent, a job relay, a log tail — ends at shutdown rather than holding the
+// drain. The client is told Unavailable, which is what it would see had the
+// connection dropped, and reconnects to the daemon's replacement.
+func endStreamsOnShutdown(done context.Context) grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		ctx, cancel := context.WithCancel(ss.Context())
+		defer cancel()
+		defer context.AfterFunc(done, cancel)()
+		err := handler(srv, &shutdownStream{ServerStream: ss, ctx: ctx})
+		if err != nil && done.Err() != nil {
+			return status.Error(codes.Unavailable, "fleet server is shutting down")
+		}
+		return err
+	}
+}
+
+// shutdownStream is a ServerStream whose context also ends at daemon shutdown.
+type shutdownStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *shutdownStream) Context() context.Context { return s.ctx }
 
 // acquireServerLock takes the exclusive flock held for the server's whole
 // lifetime. The returned *os.File must stay open to hold the lock.
