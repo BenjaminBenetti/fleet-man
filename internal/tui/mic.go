@@ -3,12 +3,14 @@ package tui
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/mic"
@@ -21,6 +23,12 @@ import (
 // which opens the real microphone only while something inside an instance is
 // recording. The settings page's Microphone section drives it; the header shows
 // when the microphone is live.
+//
+// Every TUI on a daemon is such a provider, so there can be several — one per
+// machine the human moves between. The daemon records from ONE of them, and the
+// settings page chooses which: it lists the capture devices of every attached
+// client (this machine's from its own enumeration, the others' as pushed by the
+// daemon), and the choice is a client plus a device on it.
 
 // micCtl owns the provider goroutine. Like watchCtl it is package state rather
 // than model state: the goroutine outlives any one Update.
@@ -243,7 +251,126 @@ func (m *model) ensureMicDevices() tea.Cmd {
 	return fetchMicDevicesCmd()
 }
 
+// adoptMicSettings takes over the microphone settings the daemon pushed along
+// with its client list. This TUI fetched the config once; the settings can be
+// changed from any other client since, and the copy here is what the Source row
+// shows AND what the next save — of any setting at all, SetConfig sends the
+// whole config — writes back. A stale copy would show the wrong microphone and
+// then quietly move it. nil means the daemon could not say (or predates the
+// push): keep what we have.
+func (m *model) adoptMicSettings(pushed *fleetgrpc.MicSettings) {
+	if pushed == nil || m.config == nil {
+		return
+	}
+	settings := configutil.MicSettings{Enabled: pushed.GetEnabled(), Device: pushed.GetDevice(), Client: pushed.GetClient()}
+	if m.config.MicSettings == settings {
+		return
+	}
+	m.config.MicSettings = settings
+	// Enabled may have flipped too (another client turned the microphone off,
+	// or on): the provider follows the settings, as at every other place the
+	// config is replaced.
+	syncMicProvider(settings)
+}
+
+// relistMicSourcesCmd asks the daemon to have the other attached clients list
+// their devices again. Fire-and-forget: the answers arrive over Watch, and a
+// daemon that predates the RPC simply has no other clients to offer.
+func relistMicSourcesCmd() tea.Cmd {
+	return func() tea.Msg {
+		_ = relistMicSourcesRemote()
+		return nil
+	}
+}
+
 // --- settings page --------------------------------------------------------------
+
+// micClientName is this machine's name among the daemon's microphone clients
+// (what its provider announces). A var so tests need not depend on the hostname.
+var micClientName = mic.ClientName
+
+// micChoice is one thing the selector can be set to: a client and a capture
+// device on it. The zero value is "automatic" — no client selected, so whichever
+// client attached most recently records, on its system default.
+type micChoice struct {
+	client string
+	device string // "" = that client's system default
+}
+
+// micAttachedSource is client's entry in the daemon's pushed set, or nil if no
+// provider is attached from it.
+func micAttachedSource(m *model, client string) *fleetgrpc.MicSource {
+	for _, source := range m.micSources.GetSources() {
+		if source.GetClient() == client {
+			return source
+		}
+	}
+	return nil
+}
+
+// micCurrentSource is the client whose microphone the daemon records right now
+// (which differs from the selection when that is automatic, or not attached).
+func micCurrentSource(m *model) *fleetgrpc.MicSource {
+	for _, source := range m.micSources.GetSources() {
+		if source.GetSource() {
+			return source
+		}
+	}
+	return nil
+}
+
+// micClientDevices is what is known of client's capture devices; known=false
+// means no listing has been seen. This machine's come from its own enumeration,
+// which is authoritative and exists even while its provider is not attached;
+// every other machine's come from the daemon.
+func micClientDevices(m *model, client string) (devices []mic.Device, known bool) {
+	if client == micClientName() && m.micDevicesLoaded {
+		return m.micDevices, true
+	}
+	source := micAttachedSource(m, client)
+	if source == nil || !source.GetDevicesListed() {
+		return nil, false
+	}
+	for _, device := range source.GetDevices() {
+		devices = append(devices, mic.Device{ID: device.GetId(), Label: device.GetLabel()})
+	}
+	return devices, true
+}
+
+// micChoices is everything the selector steps through: automatic, then this
+// machine's microphones, then those of every other attached client.
+func micChoices(m *model) []micChoice {
+	self := micClientName()
+	choices := []micChoice{{}}
+	if m.micSources == nil {
+		// A daemon that never pushed its clients predates selecting one: it
+		// would drop the client from what we save, and the row would go on
+		// showing a selection the daemon does not have. Offer what it can
+		// store — a device, recorded by whichever client attached last.
+		for _, device := range m.micDevices {
+			choices = append(choices, micChoice{device: device.ID})
+		}
+		return choices
+	}
+	add := func(client string) {
+		choices = append(choices, micChoice{client: client})
+		devices, _ := micClientDevices(m, client)
+		for _, device := range devices {
+			choices = append(choices, micChoice{client: client, device: device.ID})
+		}
+	}
+	// This machine is offered once it is known to be able to record at all: a
+	// successful listing, or a provider of its own already attached.
+	if m.micDevicesLoaded || micAttachedSource(m, self) != nil {
+		add(self)
+	}
+	for _, source := range m.micSources.GetSources() {
+		if source.GetClient() != self {
+			add(source.GetClient())
+		}
+	}
+	return choices
+}
 
 // toggleMicEnabled flips the virtual microphone on/off and saves. Reverts on a
 // save failure, mirroring the other toggles.
@@ -272,80 +399,143 @@ func (settingsPage *settingsPage) toggleMicEnabled(m *model) tea.Cmd {
 	return m.ensureMicDevices()
 }
 
-// cycleMicDevice steps the capture device through [system default, devices…]
-// and saves. The list is enumerated lazily; the first press just loads it.
+// cycleMicDevice steps the microphone through micChoices and saves. This
+// machine's devices are enumerated lazily; a press before they have loaded
+// starts that, and still steps through whatever the other clients offer.
 func (settingsPage *settingsPage) cycleMicDevice(m *model, direction int) tea.Cmd {
 	if m.config == nil {
 		return nil
 	}
+	var load tea.Cmd
 	if !m.micDevicesLoaded {
-		return m.ensureMicDevices()
+		load = m.ensureMicDevices()
 	}
-	if len(m.micDevices) == 0 {
-		// Legitimate (SoX / ffmpeg can only record the default; so can a
-		// FLEET_MIC_CAPTURE override) — but a key press that does nothing
-		// looks broken, so say why.
-		m.message = "No selectable capture devices on this machine — recording the system default"
-		return nil
-	}
-	ids := []string{""}
-	for _, device := range m.micDevices {
-		ids = append(ids, device.ID)
-	}
-	current := m.config.MicSettings.Device
-	index := 0 // an unknown id (a device from another machine) counts as default
-	for i, id := range ids {
-		if id == current {
-			index = i
-			break
+	choices := micChoices(m)
+	if len(choices) == 1 {
+		// Only "automatic". Either nothing has been listed yet — the listing just
+		// started (or still running) is what will change that — or there really
+		// is nothing else: a key press that does nothing looks broken, so say why.
+		if m.micDevicesLoaded {
+			m.message = "No selectable capture devices on this machine — recording the system default"
 		}
+		return load
 	}
-	next := ids[(index+direction+len(ids))%len(ids)]
+	settings := m.config.MicSettings
+	current := micChoice{client: settings.Client, device: settings.Device}
+	// A selection that is not among the choices (a client that is not attached,
+	// a device that is gone) steps from the start of the list.
+	index := max(slices.Index(choices, current), 0)
+	next := choices[(index+direction+len(choices))%len(choices)]
 	if next == current {
-		return nil
+		return load
 	}
-	m.config.MicSettings.Device = next
+	m.config.MicSettings.Client, m.config.MicSettings.Device = next.client, next.device
 	if err := setConfigRemote(m.config); err != nil {
-		m.config.MicSettings.Device = current
+		m.config.MicSettings.Client, m.config.MicSettings.Device = current.client, current.device
 		m.message = fmt.Sprintf("Failed to save settings: %v", err)
-		return nil
+		return load
 	}
-	// The daemon pushes the new selection to the provider; it applies to the next
-	// recording — a capture already running keeps its device, so say so, or the
-	// message claims a switch that has not happened yet.
 	m.message = fmt.Sprintf("Microphone set to %s", settingsPage.micDeviceLabel(m))
-	if m.micStatus.State == mic.StateLive {
+	// Moving the microphone to another client happens at once — the daemon tells
+	// this machine to stop and the other to start. A different DEVICE on the
+	// machine that is recording does not: a capture already running keeps its
+	// device, so say so, or the message claims a switch that has not happened.
+	staysHere := next.client == "" || next.client == micClientName()
+	if m.micStatus.State == mic.StateLive && staysHere && next.device != current.device {
 		m.message += " (from the next recording — this one keeps its device)"
 	}
-	return nil
+	return load
 }
 
-// micDeviceLabel names the configured device. An id this machine does not have
-// (a config shared with a client elsewhere) is shown for what it will do.
+// micDeviceLabel names the configured microphone: the client, then the device
+// on it. What cannot be found is shown for what it will do instead.
 func (settingsPage *settingsPage) micDeviceLabel(m *model) string {
-	id := m.config.MicSettings.Device
+	settings := m.config.MicSettings
+	self := micClientName()
+	if settings.Client == "" {
+		if settings.Device == "" {
+			return "Automatic"
+		}
+		// A device with no client — a selection saved before clients could be
+		// chosen. Whichever client records uses it if it has it; this machine's
+		// listing is the one that can be shown.
+		return "Automatic · " + micDeviceName(m, self, settings.Device)
+	}
+	name := settings.Client
+	switch {
+	case settings.Client == self:
+		name += " (this machine)"
+	case m.micSources != nil && micAttachedSource(m, settings.Client) == nil:
+		name += " (not connected)"
+	}
+	return name + " · " + micDeviceName(m, settings.Client, settings.Device)
+}
+
+// micDeviceName names device on client. An id the client does not list is shown
+// for what it will do: the provider falls back to its system default.
+func micDeviceName(m *model, client, id string) string {
 	if id == "" {
 		return mic.DefaultLabel
 	}
-	for _, device := range m.micDevices {
+	devices, known := micClientDevices(m, client)
+	for _, device := range devices {
 		if device.ID == id {
 			return device.Label
 		}
 	}
-	if m.micDevicesLoaded {
-		return mic.DefaultLabel + " (" + id + " not found here)"
+	if known {
+		where := "there"
+		if client == micClientName() {
+			where = "here"
+		}
+		return mic.DefaultLabel + " (" + id + " not found " + where + ")"
 	}
 	return id
 }
 
-// micDeviceValue renders the Device row's value.
+// micSourceNote is the dim line under the selector: where the audio actually
+// comes from whenever that is not simply what the selection says.
+func micSourceNote(m *model) string {
+	settings := m.config.MicSettings
+	self := micClientName()
+	current := micCurrentSource(m)
+	now := ""
+	if current != nil {
+		now = current.GetClient()
+		if now == self {
+			now += " (this machine)"
+		}
+	}
+	switch {
+	case m.micSources == nil:
+		// Nothing pushed (yet, or ever: a daemon that predates the client list).
+		return ""
+	case settings.Client == "":
+		if now == "" {
+			return "follows the most recently connected client"
+		}
+		return "follows the most recently connected client — now " + now
+	case micAttachedSource(m, settings.Client) == nil:
+		if now == "" {
+			return settings.Client + " is not connected"
+		}
+		return settings.Client + " is not connected — " + now + " records in its place"
+	}
+	return ""
+}
+
+// micDeviceValue renders the Source row's value.
 func (settingsPage *settingsPage) micDeviceValue(m *model) string {
 	if m.micDevicesLoading {
 		return m.spinner.View() + " listing devices…"
 	}
+	indent := "\n" + strings.Repeat(" ", 21)
 	value := fmt.Sprintf("[ %s ]", settingsPage.micDeviceLabel(m))
+	if note := micSourceNote(m); note != "" {
+		value += indent + dimStyle.Render(note)
+	}
 	if m.micDevicesErr != "" {
-		value += "\n" + strings.Repeat(" ", 21) + dimStyle.Render(m.micDevicesErr)
+		value += indent + dimStyle.Render(m.micDevicesErr)
 	}
 	return value
 }
@@ -353,14 +543,27 @@ func (settingsPage *settingsPage) micDeviceValue(m *model) string {
 // micStatusValue renders the (non-navigable) Status row from the provider's
 // latest report.
 func micStatusValue(m *model) string {
+	indent := "\n" + strings.Repeat(" ", 21)
 	switch m.micStatus.State {
 	case mic.StateLive:
 		value := statusRunningStyle.Render("● live") + "  " + dimStyle.Render("→ "+strings.Join(m.micStatus.Instances, ", "))
 		if m.micStatus.FellBack {
-			value += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("configured device not found here — recording the system default")
+			value += indent + dimStyle.Render("configured device not found here — recording the system default")
+		}
+		if m.micStatus.StandInFor != "" {
+			value += indent + dimStyle.Render(m.micStatus.StandInFor+" is not connected — recording this machine's system default in its place")
 		}
 		return value
 	case mic.StateIdle:
+		// Idle because nothing records — or because another client is the source,
+		// in which case this machine's microphone stays closed whatever happens.
+		if current := micCurrentSource(m); current != nil && current.GetClient() != micClientName() {
+			value := dimStyle.Render("standby — " + current.GetClient() + " is the microphone source")
+			if current.GetRecording() {
+				value += "  " + statusRunningStyle.Render("● live there")
+			}
+			return value
+		}
 		return dimStyle.Render("idle — microphone closed until an instance records")
 	case mic.StateError:
 		return statusCreatingStyle.Render("error") + "  " + dimStyle.Render(m.micStatus.Detail)

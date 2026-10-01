@@ -812,13 +812,22 @@ func (x *ForwardOpen) GetRemotePort() int32 {
 // real microphone while demand is active — the mic is never streamed idle.
 //
 // The FIRST client frame MUST carry `open`; every later client frame carries
-// raw PCM in `audio`, in the format the open header declared.
+// raw PCM in `audio`, in the format the open header declared — or `devices`,
+// the provider's capture devices, which it sends once after `open` and again
+// whenever the server asks (MicDown.list_devices).
+//
+// Several providers can be attached at once (a TUI on every machine driving
+// this daemon). Exactly ONE of them is the SOURCE at any moment — the one that
+// is sent active demand and whose audio is routed. Which one is a setting
+// (MicSettings.client): the named client if it is attached, otherwise the most
+// recently attached provider.
 type MicUp struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Msg:
 	//
 	//	*MicUp_Open
 	//	*MicUp_Audio
+	//	*MicUp_Devices
 	Msg           isMicUp_Msg `protobuf_oneof:"msg"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -879,6 +888,15 @@ func (x *MicUp) GetAudio() []byte {
 	return nil
 }
 
+func (x *MicUp) GetDevices() *MicDeviceList {
+	if x != nil {
+		if x, ok := x.Msg.(*MicUp_Devices); ok {
+			return x.Devices
+		}
+	}
+	return nil
+}
+
 type isMicUp_Msg interface {
 	isMicUp_Msg()
 }
@@ -891,18 +909,31 @@ type MicUp_Audio struct {
 	Audio []byte `protobuf:"bytes,2,opt,name=audio,proto3,oneof"`
 }
 
+type MicUp_Devices struct {
+	Devices *MicDeviceList `protobuf:"bytes,3,opt,name=devices,proto3,oneof"`
+}
+
 func (*MicUp_Open) isMicUp_Msg() {}
 
 func (*MicUp_Audio) isMicUp_Msg() {}
+
+func (*MicUp_Devices) isMicUp_Msg() {}
 
 // MicOpen declares the PCM format the client will send. Samples are always
 // signed 16-bit little-endian; the server currently accepts exactly 16 kHz mono
 // (the in-instance source's native format) and rejects anything else, so a
 // future format change fails loudly rather than playing back as noise.
 type MicOpen struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SampleRate    uint32                 `protobuf:"varint,1,opt,name=sample_rate,json=sampleRate,proto3" json:"sample_rate,omitempty"`
-	Channels      uint32                 `protobuf:"varint,2,opt,name=channels,proto3" json:"channels,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	SampleRate uint32                 `protobuf:"varint,1,opt,name=sample_rate,json=sampleRate,proto3" json:"sample_rate,omitempty"`
+	Channels   uint32                 `protobuf:"varint,2,opt,name=channels,proto3" json:"channels,omitempty"`
+	// client names the MACHINE this provider records on (its hostname, unless
+	// overridden). It is what Settings lists the provider's devices under and
+	// what MicSettings.client selects, so it must be stable across reconnects;
+	// two providers on one machine share it. Empty (a client built before this
+	// field) is an anonymous provider: it can still become the source by being
+	// the most recently attached, but it cannot be selected by name.
+	Client        string `protobuf:"bytes,3,opt,name=client,proto3" json:"client,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -951,11 +982,120 @@ func (x *MicOpen) GetChannels() uint32 {
 	return 0
 }
 
+func (x *MicOpen) GetClient() string {
+	if x != nil {
+		return x.Client
+	}
+	return ""
+}
+
+// MicDevice is one capture device on a provider's machine. id is what
+// MicSettings.device stores (namespaced by the capture tool that enumerated
+// it); label is the human-readable name.
+type MicDevice struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Label         string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MicDevice) Reset() {
+	*x = MicDevice{}
+	mi := &file_exec_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MicDevice) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MicDevice) ProtoMessage() {}
+
+func (x *MicDevice) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MicDevice.ProtoReflect.Descriptor instead.
+func (*MicDevice) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *MicDevice) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *MicDevice) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+// MicDeviceList is the provider's capture devices, NOT including the implicit
+// system default. An empty list is a valid answer (a default-only recorder).
+type MicDeviceList struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Devices       []*MicDevice           `protobuf:"bytes,1,rep,name=devices,proto3" json:"devices,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MicDeviceList) Reset() {
+	*x = MicDeviceList{}
+	mi := &file_exec_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MicDeviceList) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MicDeviceList) ProtoMessage() {}
+
+func (x *MicDeviceList) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MicDeviceList.ProtoReflect.Descriptor instead.
+func (*MicDeviceList) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *MicDeviceList) GetDevices() []*MicDevice {
+	if x != nil {
+		return x.Devices
+	}
+	return nil
+}
+
 type MicDown struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Msg:
 	//
 	//	*MicDown_Demand
+	//	*MicDown_ListDevices
 	Msg           isMicDown_Msg `protobuf_oneof:"msg"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -963,7 +1103,7 @@ type MicDown struct {
 
 func (x *MicDown) Reset() {
 	*x = MicDown{}
-	mi := &file_exec_proto_msgTypes[13]
+	mi := &file_exec_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -975,7 +1115,7 @@ func (x *MicDown) String() string {
 func (*MicDown) ProtoMessage() {}
 
 func (x *MicDown) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[13]
+	mi := &file_exec_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -988,7 +1128,7 @@ func (x *MicDown) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MicDown.ProtoReflect.Descriptor instead.
 func (*MicDown) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{13}
+	return file_exec_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *MicDown) GetMsg() isMicDown_Msg {
@@ -1007,6 +1147,15 @@ func (x *MicDown) GetDemand() *MicDemand {
 	return nil
 }
 
+func (x *MicDown) GetListDevices() *MicListDevices {
+	if x != nil {
+		if x, ok := x.Msg.(*MicDown_ListDevices); ok {
+			return x.ListDevices
+		}
+	}
+	return nil
+}
+
 type isMicDown_Msg interface {
 	isMicDown_Msg()
 }
@@ -1015,7 +1164,52 @@ type MicDown_Demand struct {
 	Demand *MicDemand `protobuf:"bytes,1,opt,name=demand,proto3,oneof"`
 }
 
+type MicDown_ListDevices struct {
+	ListDevices *MicListDevices `protobuf:"bytes,2,opt,name=list_devices,json=listDevices,proto3,oneof"`
+}
+
 func (*MicDown_Demand) isMicDown_Msg() {}
+
+func (*MicDown_ListDevices) isMicDown_Msg() {}
+
+// MicListDevices asks the provider to enumerate its capture devices again and
+// answer with MicUp.devices (someone opened the selector: a headset may have
+// been plugged in since the last listing).
+type MicListDevices struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MicListDevices) Reset() {
+	*x = MicListDevices{}
+	mi := &file_exec_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MicListDevices) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MicListDevices) ProtoMessage() {}
+
+func (x *MicListDevices) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MicListDevices.ProtoReflect.Descriptor instead.
+func (*MicListDevices) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{16}
+}
 
 // MicDemand is the server's start/stop signal. active=true means at least one
 // instance has a recorder attached to its virtual microphone; `instances` names
@@ -1031,15 +1225,22 @@ type MicDemand struct {
 	// one path where every millisecond is clipped off the user's sentence. A
 	// device-only change republishes the demand, so it reaches a running provider
 	// at once rather than at its next recording. It is an id from SOME client's
-	// enumeration — the provider validates it against its own machine.
-	Device        string `protobuf:"bytes,3,opt,name=device,proto3" json:"device,omitempty"`
+	// enumeration — the provider validates it against its own machine. A provider
+	// standing in for the selected client (see `client`) is sent an empty device:
+	// the id belongs to the other machine's enumeration.
+	Device string `protobuf:"bytes,3,opt,name=device,proto3" json:"device,omitempty"`
+	// client is the client selected in Settings (MicSettings.client; empty = no
+	// selection, the most recently attached provider records). A provider that
+	// is sent active demand while this names a DIFFERENT client is standing in
+	// for a selected client that is not attached, and says so in its status.
+	Client        string `protobuf:"bytes,4,opt,name=client,proto3" json:"client,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MicDemand) Reset() {
 	*x = MicDemand{}
-	mi := &file_exec_proto_msgTypes[14]
+	mi := &file_exec_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1051,7 +1252,7 @@ func (x *MicDemand) String() string {
 func (*MicDemand) ProtoMessage() {}
 
 func (x *MicDemand) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[14]
+	mi := &file_exec_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1064,7 +1265,7 @@ func (x *MicDemand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MicDemand.ProtoReflect.Descriptor instead.
 func (*MicDemand) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{14}
+	return file_exec_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *MicDemand) GetActive() bool {
@@ -1086,6 +1287,251 @@ func (x *MicDemand) GetDevice() string {
 		return x.Device
 	}
 	return ""
+}
+
+func (x *MicDemand) GetClient() string {
+	if x != nil {
+		return x.Client
+	}
+	return ""
+}
+
+// MicSource is one attached microphone client — a machine with a provider on
+// it — and the capture devices it offers. This is what the Settings selector
+// lists: every client currently connected to the daemon, not just the one the
+// settings page happens to be open on.
+type MicSource struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// client is the provider's name (MicOpen.client).
+	Client string `protobuf:"bytes,1,opt,name=client,proto3" json:"client,omitempty"`
+	// devices are its capture devices, not including the implicit system
+	// default. Empty until the provider has answered (see devices_listed).
+	Devices []*MicDevice `protobuf:"bytes,2,rep,name=devices,proto3" json:"devices,omitempty"`
+	// devices_listed is false while the provider has not sent a listing yet.
+	DevicesListed bool `protobuf:"varint,3,opt,name=devices_listed,json=devicesListed,proto3" json:"devices_listed,omitempty"`
+	// source marks the client whose microphone is the one recorded on demand.
+	Source bool `protobuf:"varint,4,opt,name=source,proto3" json:"source,omitempty"`
+	// recording is set on the source while its microphone is open.
+	Recording     bool `protobuf:"varint,5,opt,name=recording,proto3" json:"recording,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MicSource) Reset() {
+	*x = MicSource{}
+	mi := &file_exec_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MicSource) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MicSource) ProtoMessage() {}
+
+func (x *MicSource) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MicSource.ProtoReflect.Descriptor instead.
+func (*MicSource) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *MicSource) GetClient() string {
+	if x != nil {
+		return x.Client
+	}
+	return ""
+}
+
+func (x *MicSource) GetDevices() []*MicDevice {
+	if x != nil {
+		return x.Devices
+	}
+	return nil
+}
+
+func (x *MicSource) GetDevicesListed() bool {
+	if x != nil {
+		return x.DevicesListed
+	}
+	return false
+}
+
+func (x *MicSource) GetSource() bool {
+	if x != nil {
+		return x.Source
+	}
+	return false
+}
+
+func (x *MicSource) GetRecording() bool {
+	if x != nil {
+		return x.Recording
+	}
+	return false
+}
+
+// MicSources is the full set of attached microphone clients, sorted by name.
+// Pushed over Watch whenever it changes and returned by ListMicSources.
+type MicSources struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Sources []*MicSource           `protobuf:"bytes,1,rep,name=sources,proto3" json:"sources,omitempty"`
+	// settings is the microphone configuration the daemon holds RIGHT NOW (the
+	// config's mic group), pushed along with the clients it selects among. A
+	// client fetches the config once, so without this a selection made on one
+	// client is invisible to every other open one — and, since SetConfig sends
+	// the whole config, the next unrelated setting saved there would write the
+	// stale selection back and move the microphone to another machine. Absent
+	// means "not known" (the config could not be read): keep what you have.
+	Settings      *MicSettings `protobuf:"bytes,2,opt,name=settings,proto3" json:"settings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MicSources) Reset() {
+	*x = MicSources{}
+	mi := &file_exec_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MicSources) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MicSources) ProtoMessage() {}
+
+func (x *MicSources) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MicSources.ProtoReflect.Descriptor instead.
+func (*MicSources) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *MicSources) GetSources() []*MicSource {
+	if x != nil {
+		return x.Sources
+	}
+	return nil
+}
+
+func (x *MicSources) GetSettings() *MicSettings {
+	if x != nil {
+		return x.Settings
+	}
+	return nil
+}
+
+type ListMicSourcesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// refresh asks every attached provider to enumerate its devices again
+	// (MicListDevices). The reply is the list as known NOW; the refreshed
+	// listings arrive over Watch as each provider answers.
+	Refresh       bool `protobuf:"varint,1,opt,name=refresh,proto3" json:"refresh,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListMicSourcesRequest) Reset() {
+	*x = ListMicSourcesRequest{}
+	mi := &file_exec_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListMicSourcesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListMicSourcesRequest) ProtoMessage() {}
+
+func (x *ListMicSourcesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListMicSourcesRequest.ProtoReflect.Descriptor instead.
+func (*ListMicSourcesRequest) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ListMicSourcesRequest) GetRefresh() bool {
+	if x != nil {
+		return x.Refresh
+	}
+	return false
+}
+
+type ListMicSourcesReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sources       *MicSources            `protobuf:"bytes,1,opt,name=sources,proto3" json:"sources,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListMicSourcesReply) Reset() {
+	*x = ListMicSourcesReply{}
+	mi := &file_exec_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListMicSourcesReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListMicSourcesReply) ProtoMessage() {}
+
+func (x *ListMicSourcesReply) ProtoReflect() protoreflect.Message {
+	mi := &file_exec_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListMicSourcesReply.ProtoReflect.Descriptor instead.
+func (*ListMicSourcesReply) Descriptor() ([]byte, []int) {
+	return file_exec_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *ListMicSourcesReply) GetSources() *MicSources {
+	if x != nil {
+		return x.Sources
+	}
+	return nil
 }
 
 // SSHAgent is the SSH-agent forwarding DATA PLANE: one bidi stream per
@@ -1134,7 +1580,7 @@ type SSHAgentUp struct {
 
 func (x *SSHAgentUp) Reset() {
 	*x = SSHAgentUp{}
-	mi := &file_exec_proto_msgTypes[15]
+	mi := &file_exec_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1146,7 +1592,7 @@ func (x *SSHAgentUp) String() string {
 func (*SSHAgentUp) ProtoMessage() {}
 
 func (x *SSHAgentUp) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[15]
+	mi := &file_exec_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1159,7 +1605,7 @@ func (x *SSHAgentUp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentUp.ProtoReflect.Descriptor instead.
 func (*SSHAgentUp) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{15}
+	return file_exec_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SSHAgentUp) GetMsg() isSSHAgentUp_Msg {
@@ -1263,7 +1709,7 @@ type SSHAgentHello struct {
 
 func (x *SSHAgentHello) Reset() {
 	*x = SSHAgentHello{}
-	mi := &file_exec_proto_msgTypes[16]
+	mi := &file_exec_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1275,7 +1721,7 @@ func (x *SSHAgentHello) String() string {
 func (*SSHAgentHello) ProtoMessage() {}
 
 func (x *SSHAgentHello) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[16]
+	mi := &file_exec_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1288,7 +1734,7 @@ func (x *SSHAgentHello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentHello.ProtoReflect.Descriptor instead.
 func (*SSHAgentHello) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{16}
+	return file_exec_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SSHAgentHello) GetClient() string {
@@ -1316,7 +1762,7 @@ type SSHAgentReady struct {
 
 func (x *SSHAgentReady) Reset() {
 	*x = SSHAgentReady{}
-	mi := &file_exec_proto_msgTypes[17]
+	mi := &file_exec_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1328,7 +1774,7 @@ func (x *SSHAgentReady) String() string {
 func (*SSHAgentReady) ProtoMessage() {}
 
 func (x *SSHAgentReady) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[17]
+	mi := &file_exec_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1341,7 +1787,7 @@ func (x *SSHAgentReady) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentReady.ProtoReflect.Descriptor instead.
 func (*SSHAgentReady) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{17}
+	return file_exec_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SSHAgentReady) GetConnId() uint64 {
@@ -1361,7 +1807,7 @@ type SSHAgentPong struct {
 
 func (x *SSHAgentPong) Reset() {
 	*x = SSHAgentPong{}
-	mi := &file_exec_proto_msgTypes[18]
+	mi := &file_exec_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1373,7 +1819,7 @@ func (x *SSHAgentPong) String() string {
 func (*SSHAgentPong) ProtoMessage() {}
 
 func (x *SSHAgentPong) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[18]
+	mi := &file_exec_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1386,7 +1832,7 @@ func (x *SSHAgentPong) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentPong.ProtoReflect.Descriptor instead.
 func (*SSHAgentPong) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{18}
+	return file_exec_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *SSHAgentPong) GetSeq() uint64 {
@@ -1412,7 +1858,7 @@ type SSHAgentDown struct {
 
 func (x *SSHAgentDown) Reset() {
 	*x = SSHAgentDown{}
-	mi := &file_exec_proto_msgTypes[19]
+	mi := &file_exec_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1424,7 +1870,7 @@ func (x *SSHAgentDown) String() string {
 func (*SSHAgentDown) ProtoMessage() {}
 
 func (x *SSHAgentDown) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[19]
+	mi := &file_exec_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1437,7 +1883,7 @@ func (x *SSHAgentDown) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentDown.ProtoReflect.Descriptor instead.
 func (*SSHAgentDown) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{19}
+	return file_exec_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *SSHAgentDown) GetMsg() isSSHAgentDown_Msg {
@@ -1539,7 +1985,7 @@ type SSHAgentOpen struct {
 
 func (x *SSHAgentOpen) Reset() {
 	*x = SSHAgentOpen{}
-	mi := &file_exec_proto_msgTypes[20]
+	mi := &file_exec_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1551,7 +1997,7 @@ func (x *SSHAgentOpen) String() string {
 func (*SSHAgentOpen) ProtoMessage() {}
 
 func (x *SSHAgentOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[20]
+	mi := &file_exec_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1564,7 +2010,7 @@ func (x *SSHAgentOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentOpen.ProtoReflect.Descriptor instead.
 func (*SSHAgentOpen) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{20}
+	return file_exec_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *SSHAgentOpen) GetConnId() uint64 {
@@ -1592,7 +2038,7 @@ type SSHAgentData struct {
 
 func (x *SSHAgentData) Reset() {
 	*x = SSHAgentData{}
-	mi := &file_exec_proto_msgTypes[21]
+	mi := &file_exec_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1604,7 +2050,7 @@ func (x *SSHAgentData) String() string {
 func (*SSHAgentData) ProtoMessage() {}
 
 func (x *SSHAgentData) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[21]
+	mi := &file_exec_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1617,7 +2063,7 @@ func (x *SSHAgentData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentData.ProtoReflect.Descriptor instead.
 func (*SSHAgentData) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{21}
+	return file_exec_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *SSHAgentData) GetConnId() uint64 {
@@ -1647,7 +2093,7 @@ type SSHAgentClose struct {
 
 func (x *SSHAgentClose) Reset() {
 	*x = SSHAgentClose{}
-	mi := &file_exec_proto_msgTypes[22]
+	mi := &file_exec_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1659,7 +2105,7 @@ func (x *SSHAgentClose) String() string {
 func (*SSHAgentClose) ProtoMessage() {}
 
 func (x *SSHAgentClose) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[22]
+	mi := &file_exec_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1672,7 +2118,7 @@ func (x *SSHAgentClose) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentClose.ProtoReflect.Descriptor instead.
 func (*SSHAgentClose) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{22}
+	return file_exec_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *SSHAgentClose) GetConnId() uint64 {
@@ -1700,7 +2146,7 @@ type SSHAgentStatus struct {
 
 func (x *SSHAgentStatus) Reset() {
 	*x = SSHAgentStatus{}
-	mi := &file_exec_proto_msgTypes[23]
+	mi := &file_exec_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1712,7 +2158,7 @@ func (x *SSHAgentStatus) String() string {
 func (*SSHAgentStatus) ProtoMessage() {}
 
 func (x *SSHAgentStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[23]
+	mi := &file_exec_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1725,7 +2171,7 @@ func (x *SSHAgentStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentStatus.ProtoReflect.Descriptor instead.
 func (*SSHAgentStatus) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{23}
+	return file_exec_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *SSHAgentStatus) GetActive() bool {
@@ -1747,7 +2193,7 @@ type SSHAgentPing struct {
 
 func (x *SSHAgentPing) Reset() {
 	*x = SSHAgentPing{}
-	mi := &file_exec_proto_msgTypes[24]
+	mi := &file_exec_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1759,7 +2205,7 @@ func (x *SSHAgentPing) String() string {
 func (*SSHAgentPing) ProtoMessage() {}
 
 func (x *SSHAgentPing) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[24]
+	mi := &file_exec_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1772,7 +2218,7 @@ func (x *SSHAgentPing) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SSHAgentPing.ProtoReflect.Descriptor instead.
 func (*SSHAgentPing) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{24}
+	return file_exec_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *SSHAgentPing) GetSeq() uint64 {
@@ -1802,7 +2248,7 @@ type CopyFileRequest struct {
 
 func (x *CopyFileRequest) Reset() {
 	*x = CopyFileRequest{}
-	mi := &file_exec_proto_msgTypes[25]
+	mi := &file_exec_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1814,7 +2260,7 @@ func (x *CopyFileRequest) String() string {
 func (*CopyFileRequest) ProtoMessage() {}
 
 func (x *CopyFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[25]
+	mi := &file_exec_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1827,7 +2273,7 @@ func (x *CopyFileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyFileRequest.ProtoReflect.Descriptor instead.
 func (*CopyFileRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{25}
+	return file_exec_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *CopyFileRequest) GetFleet() string {
@@ -1864,7 +2310,7 @@ type CopyFileChunk struct {
 
 func (x *CopyFileChunk) Reset() {
 	*x = CopyFileChunk{}
-	mi := &file_exec_proto_msgTypes[26]
+	mi := &file_exec_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1876,7 +2322,7 @@ func (x *CopyFileChunk) String() string {
 func (*CopyFileChunk) ProtoMessage() {}
 
 func (x *CopyFileChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[26]
+	mi := &file_exec_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1889,7 +2335,7 @@ func (x *CopyFileChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyFileChunk.ProtoReflect.Descriptor instead.
 func (*CopyFileChunk) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{26}
+	return file_exec_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *CopyFileChunk) GetMsg() isCopyFileChunk_Msg {
@@ -1953,7 +2399,7 @@ type CopyFileMeta struct {
 
 func (x *CopyFileMeta) Reset() {
 	*x = CopyFileMeta{}
-	mi := &file_exec_proto_msgTypes[27]
+	mi := &file_exec_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1965,7 +2411,7 @@ func (x *CopyFileMeta) String() string {
 func (*CopyFileMeta) ProtoMessage() {}
 
 func (x *CopyFileMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[27]
+	mi := &file_exec_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1978,7 +2424,7 @@ func (x *CopyFileMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyFileMeta.ProtoReflect.Descriptor instead.
 func (*CopyFileMeta) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{27}
+	return file_exec_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *CopyFileMeta) GetName() string {
@@ -2031,7 +2477,7 @@ type CopyIntoChunk struct {
 
 func (x *CopyIntoChunk) Reset() {
 	*x = CopyIntoChunk{}
-	mi := &file_exec_proto_msgTypes[28]
+	mi := &file_exec_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2043,7 +2489,7 @@ func (x *CopyIntoChunk) String() string {
 func (*CopyIntoChunk) ProtoMessage() {}
 
 func (x *CopyIntoChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[28]
+	mi := &file_exec_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2056,7 +2502,7 @@ func (x *CopyIntoChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyIntoChunk.ProtoReflect.Descriptor instead.
 func (*CopyIntoChunk) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{28}
+	return file_exec_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *CopyIntoChunk) GetMsg() isCopyIntoChunk_Msg {
@@ -2132,7 +2578,7 @@ type CopyIntoOpen struct {
 
 func (x *CopyIntoOpen) Reset() {
 	*x = CopyIntoOpen{}
-	mi := &file_exec_proto_msgTypes[29]
+	mi := &file_exec_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2144,7 +2590,7 @@ func (x *CopyIntoOpen) String() string {
 func (*CopyIntoOpen) ProtoMessage() {}
 
 func (x *CopyIntoOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[29]
+	mi := &file_exec_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2157,7 +2603,7 @@ func (x *CopyIntoOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyIntoOpen.ProtoReflect.Descriptor instead.
 func (*CopyIntoOpen) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{29}
+	return file_exec_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *CopyIntoOpen) GetFleet() string {
@@ -2221,7 +2667,7 @@ type CopyIntoReply struct {
 
 func (x *CopyIntoReply) Reset() {
 	*x = CopyIntoReply{}
-	mi := &file_exec_proto_msgTypes[30]
+	mi := &file_exec_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2233,7 +2679,7 @@ func (x *CopyIntoReply) String() string {
 func (*CopyIntoReply) ProtoMessage() {}
 
 func (x *CopyIntoReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[30]
+	mi := &file_exec_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2246,7 +2692,7 @@ func (x *CopyIntoReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyIntoReply.ProtoReflect.Descriptor instead.
 func (*CopyIntoReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{30}
+	return file_exec_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *CopyIntoReply) GetPath() string {
@@ -2277,7 +2723,7 @@ type ResolveLogsCommandRequest struct {
 
 func (x *ResolveLogsCommandRequest) Reset() {
 	*x = ResolveLogsCommandRequest{}
-	mi := &file_exec_proto_msgTypes[31]
+	mi := &file_exec_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2289,7 +2735,7 @@ func (x *ResolveLogsCommandRequest) String() string {
 func (*ResolveLogsCommandRequest) ProtoMessage() {}
 
 func (x *ResolveLogsCommandRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[31]
+	mi := &file_exec_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2302,7 +2748,7 @@ func (x *ResolveLogsCommandRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveLogsCommandRequest.ProtoReflect.Descriptor instead.
 func (*ResolveLogsCommandRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{31}
+	return file_exec_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ResolveLogsCommandRequest) GetFleet() string {
@@ -2328,7 +2774,7 @@ type ResolveLogsCommandReply struct {
 
 func (x *ResolveLogsCommandReply) Reset() {
 	*x = ResolveLogsCommandReply{}
-	mi := &file_exec_proto_msgTypes[32]
+	mi := &file_exec_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2340,7 +2786,7 @@ func (x *ResolveLogsCommandReply) String() string {
 func (*ResolveLogsCommandReply) ProtoMessage() {}
 
 func (x *ResolveLogsCommandReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[32]
+	mi := &file_exec_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2353,7 +2799,7 @@ func (x *ResolveLogsCommandReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveLogsCommandReply.ProtoReflect.Descriptor instead.
 func (*ResolveLogsCommandReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{32}
+	return file_exec_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ResolveLogsCommandReply) GetArgv() []string {
@@ -2380,7 +2826,7 @@ type TriggerLogsRequest struct {
 
 func (x *TriggerLogsRequest) Reset() {
 	*x = TriggerLogsRequest{}
-	mi := &file_exec_proto_msgTypes[33]
+	mi := &file_exec_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2392,7 +2838,7 @@ func (x *TriggerLogsRequest) String() string {
 func (*TriggerLogsRequest) ProtoMessage() {}
 
 func (x *TriggerLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[33]
+	mi := &file_exec_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2405,7 +2851,7 @@ func (x *TriggerLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerLogsRequest.ProtoReflect.Descriptor instead.
 func (*TriggerLogsRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{33}
+	return file_exec_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *TriggerLogsRequest) GetFleet() string {
@@ -2435,7 +2881,7 @@ type TriggerLogsReply struct {
 
 func (x *TriggerLogsReply) Reset() {
 	*x = TriggerLogsReply{}
-	mi := &file_exec_proto_msgTypes[34]
+	mi := &file_exec_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2447,7 +2893,7 @@ func (x *TriggerLogsReply) String() string {
 func (*TriggerLogsReply) ProtoMessage() {}
 
 func (x *TriggerLogsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[34]
+	mi := &file_exec_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2460,7 +2906,7 @@ func (x *TriggerLogsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerLogsReply.ProtoReflect.Descriptor instead.
 func (*TriggerLogsReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{34}
+	return file_exec_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *TriggerLogsReply) GetLogs() string {
@@ -2489,7 +2935,7 @@ type GetCoderTemplateParamsRequest struct {
 
 func (x *GetCoderTemplateParamsRequest) Reset() {
 	*x = GetCoderTemplateParamsRequest{}
-	mi := &file_exec_proto_msgTypes[35]
+	mi := &file_exec_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2501,7 +2947,7 @@ func (x *GetCoderTemplateParamsRequest) String() string {
 func (*GetCoderTemplateParamsRequest) ProtoMessage() {}
 
 func (x *GetCoderTemplateParamsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[35]
+	mi := &file_exec_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2514,7 +2960,7 @@ func (x *GetCoderTemplateParamsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCoderTemplateParamsRequest.ProtoReflect.Descriptor instead.
 func (*GetCoderTemplateParamsRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{35}
+	return file_exec_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *GetCoderTemplateParamsRequest) GetTemplate() string {
@@ -2540,7 +2986,7 @@ type CoderRichParameter struct {
 
 func (x *CoderRichParameter) Reset() {
 	*x = CoderRichParameter{}
-	mi := &file_exec_proto_msgTypes[36]
+	mi := &file_exec_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2552,7 +2998,7 @@ func (x *CoderRichParameter) String() string {
 func (*CoderRichParameter) ProtoMessage() {}
 
 func (x *CoderRichParameter) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[36]
+	mi := &file_exec_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2565,7 +3011,7 @@ func (x *CoderRichParameter) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CoderRichParameter.ProtoReflect.Descriptor instead.
 func (*CoderRichParameter) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{36}
+	return file_exec_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *CoderRichParameter) GetName() string {
@@ -2613,7 +3059,7 @@ type GetCoderTemplateParamsReply struct {
 
 func (x *GetCoderTemplateParamsReply) Reset() {
 	*x = GetCoderTemplateParamsReply{}
-	mi := &file_exec_proto_msgTypes[37]
+	mi := &file_exec_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2625,7 +3071,7 @@ func (x *GetCoderTemplateParamsReply) String() string {
 func (*GetCoderTemplateParamsReply) ProtoMessage() {}
 
 func (x *GetCoderTemplateParamsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[37]
+	mi := &file_exec_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2638,7 +3084,7 @@ func (x *GetCoderTemplateParamsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCoderTemplateParamsReply.ProtoReflect.Descriptor instead.
 func (*GetCoderTemplateParamsReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{37}
+	return file_exec_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *GetCoderTemplateParamsReply) GetParameters() []*CoderRichParameter {
@@ -2668,7 +3114,7 @@ type GetBrowserConfigRequest struct {
 
 func (x *GetBrowserConfigRequest) Reset() {
 	*x = GetBrowserConfigRequest{}
-	mi := &file_exec_proto_msgTypes[38]
+	mi := &file_exec_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2680,7 +3126,7 @@ func (x *GetBrowserConfigRequest) String() string {
 func (*GetBrowserConfigRequest) ProtoMessage() {}
 
 func (x *GetBrowserConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[38]
+	mi := &file_exec_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2693,7 +3139,7 @@ func (x *GetBrowserConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBrowserConfigRequest.ProtoReflect.Descriptor instead.
 func (*GetBrowserConfigRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{38}
+	return file_exec_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *GetBrowserConfigRequest) GetFleet() string {
@@ -2722,7 +3168,7 @@ type GetBrowserConfigReply struct {
 
 func (x *GetBrowserConfigReply) Reset() {
 	*x = GetBrowserConfigReply{}
-	mi := &file_exec_proto_msgTypes[39]
+	mi := &file_exec_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2734,7 +3180,7 @@ func (x *GetBrowserConfigReply) String() string {
 func (*GetBrowserConfigReply) ProtoMessage() {}
 
 func (x *GetBrowserConfigReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[39]
+	mi := &file_exec_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2747,7 +3193,7 @@ func (x *GetBrowserConfigReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBrowserConfigReply.ProtoReflect.Descriptor instead.
 func (*GetBrowserConfigReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{39}
+	return file_exec_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *GetBrowserConfigReply) GetInitialUrl() string {
@@ -2785,7 +3231,7 @@ type PrepareBrowserRequest struct {
 
 func (x *PrepareBrowserRequest) Reset() {
 	*x = PrepareBrowserRequest{}
-	mi := &file_exec_proto_msgTypes[40]
+	mi := &file_exec_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2797,7 +3243,7 @@ func (x *PrepareBrowserRequest) String() string {
 func (*PrepareBrowserRequest) ProtoMessage() {}
 
 func (x *PrepareBrowserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[40]
+	mi := &file_exec_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2810,7 +3256,7 @@ func (x *PrepareBrowserRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepareBrowserRequest.ProtoReflect.Descriptor instead.
 func (*PrepareBrowserRequest) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{40}
+	return file_exec_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *PrepareBrowserRequest) GetFleet() string {
@@ -2850,7 +3296,7 @@ type PrepareBrowserReply struct {
 
 func (x *PrepareBrowserReply) Reset() {
 	*x = PrepareBrowserReply{}
-	mi := &file_exec_proto_msgTypes[41]
+	mi := &file_exec_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2862,7 +3308,7 @@ func (x *PrepareBrowserReply) String() string {
 func (*PrepareBrowserReply) ProtoMessage() {}
 
 func (x *PrepareBrowserReply) ProtoReflect() protoreflect.Message {
-	mi := &file_exec_proto_msgTypes[41]
+	mi := &file_exec_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2875,7 +3321,7 @@ func (x *PrepareBrowserReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepareBrowserReply.ProtoReflect.Descriptor instead.
 func (*PrepareBrowserReply) Descriptor() ([]byte, []int) {
-	return file_exec_proto_rawDescGZIP(), []int{41}
+	return file_exec_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *PrepareBrowserReply) GetInitialUrl() string {
@@ -2890,7 +3336,7 @@ var File_exec_proto protoreflect.FileDescriptor
 const file_exec_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"exec.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\x86\x01\n" +
+	"exec.proto\x12\tfleetgrpc\x1a\fconfig.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x86\x01\n" +
 	"\x06ExecIn\x12,\n" +
 	"\x05start\x18\x01 \x01(\v2\x14.fleetgrpc.ExecStartH\x00R\x05start\x12\x16\n" +
 	"\x05stdin\x18\x02 \x01(\fH\x00R\x05stdin\x12/\n" +
@@ -2945,22 +3391,46 @@ const file_exec_proto_rawDesc = "" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12\x1f\n" +
 	"\vremote_port\x18\x03 \x01(\x05R\n" +
-	"remotePort\"P\n" +
+	"remotePort\"\x86\x01\n" +
 	"\x05MicUp\x12(\n" +
 	"\x04open\x18\x01 \x01(\v2\x12.fleetgrpc.MicOpenH\x00R\x04open\x12\x16\n" +
-	"\x05audio\x18\x02 \x01(\fH\x00R\x05audioB\x05\n" +
-	"\x03msg\"F\n" +
+	"\x05audio\x18\x02 \x01(\fH\x00R\x05audio\x124\n" +
+	"\adevices\x18\x03 \x01(\v2\x18.fleetgrpc.MicDeviceListH\x00R\adevicesB\x05\n" +
+	"\x03msg\"^\n" +
 	"\aMicOpen\x12\x1f\n" +
 	"\vsample_rate\x18\x01 \x01(\rR\n" +
 	"sampleRate\x12\x1a\n" +
-	"\bchannels\x18\x02 \x01(\rR\bchannels\"@\n" +
+	"\bchannels\x18\x02 \x01(\rR\bchannels\x12\x16\n" +
+	"\x06client\x18\x03 \x01(\tR\x06client\"1\n" +
+	"\tMicDevice\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
+	"\x05label\x18\x02 \x01(\tR\x05label\"?\n" +
+	"\rMicDeviceList\x12.\n" +
+	"\adevices\x18\x01 \x03(\v2\x14.fleetgrpc.MicDeviceR\adevices\"\x80\x01\n" +
 	"\aMicDown\x12.\n" +
-	"\x06demand\x18\x01 \x01(\v2\x14.fleetgrpc.MicDemandH\x00R\x06demandB\x05\n" +
-	"\x03msg\"Y\n" +
+	"\x06demand\x18\x01 \x01(\v2\x14.fleetgrpc.MicDemandH\x00R\x06demand\x12>\n" +
+	"\flist_devices\x18\x02 \x01(\v2\x19.fleetgrpc.MicListDevicesH\x00R\vlistDevicesB\x05\n" +
+	"\x03msg\"\x10\n" +
+	"\x0eMicListDevices\"q\n" +
 	"\tMicDemand\x12\x16\n" +
 	"\x06active\x18\x01 \x01(\bR\x06active\x12\x1c\n" +
 	"\tinstances\x18\x02 \x03(\tR\tinstances\x12\x16\n" +
-	"\x06device\x18\x03 \x01(\tR\x06device\"\x87\x02\n" +
+	"\x06device\x18\x03 \x01(\tR\x06device\x12\x16\n" +
+	"\x06client\x18\x04 \x01(\tR\x06client\"\xb0\x01\n" +
+	"\tMicSource\x12\x16\n" +
+	"\x06client\x18\x01 \x01(\tR\x06client\x12.\n" +
+	"\adevices\x18\x02 \x03(\v2\x14.fleetgrpc.MicDeviceR\adevices\x12%\n" +
+	"\x0edevices_listed\x18\x03 \x01(\bR\rdevicesListed\x12\x16\n" +
+	"\x06source\x18\x04 \x01(\bR\x06source\x12\x1c\n" +
+	"\trecording\x18\x05 \x01(\bR\trecording\"p\n" +
+	"\n" +
+	"MicSources\x12.\n" +
+	"\asources\x18\x01 \x03(\v2\x14.fleetgrpc.MicSourceR\asources\x122\n" +
+	"\bsettings\x18\x02 \x01(\v2\x16.fleetgrpc.MicSettingsR\bsettings\"1\n" +
+	"\x15ListMicSourcesRequest\x12\x18\n" +
+	"\arefresh\x18\x01 \x01(\bR\arefresh\"F\n" +
+	"\x13ListMicSourcesReply\x12/\n" +
+	"\asources\x18\x01 \x01(\v2\x15.fleetgrpc.MicSourcesR\asources\"\x87\x02\n" +
 	"\n" +
 	"SSHAgentUp\x120\n" +
 	"\x05hello\x18\x01 \x01(\v2\x18.fleetgrpc.SSHAgentHelloH\x00R\x05hello\x120\n" +
@@ -3079,7 +3549,7 @@ func file_exec_proto_rawDescGZIP() []byte {
 	return file_exec_proto_rawDescData
 }
 
-var file_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
+var file_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 51)
 var file_exec_proto_goTypes = []any{
 	(*ExecIn)(nil),                        // 0: fleetgrpc.ExecIn
 	(*ExecStart)(nil),                     // 1: fleetgrpc.ExecStart
@@ -3094,67 +3564,82 @@ var file_exec_proto_goTypes = []any{
 	(*ForwardOpen)(nil),                   // 10: fleetgrpc.ForwardOpen
 	(*MicUp)(nil),                         // 11: fleetgrpc.MicUp
 	(*MicOpen)(nil),                       // 12: fleetgrpc.MicOpen
-	(*MicDown)(nil),                       // 13: fleetgrpc.MicDown
-	(*MicDemand)(nil),                     // 14: fleetgrpc.MicDemand
-	(*SSHAgentUp)(nil),                    // 15: fleetgrpc.SSHAgentUp
-	(*SSHAgentHello)(nil),                 // 16: fleetgrpc.SSHAgentHello
-	(*SSHAgentReady)(nil),                 // 17: fleetgrpc.SSHAgentReady
-	(*SSHAgentPong)(nil),                  // 18: fleetgrpc.SSHAgentPong
-	(*SSHAgentDown)(nil),                  // 19: fleetgrpc.SSHAgentDown
-	(*SSHAgentOpen)(nil),                  // 20: fleetgrpc.SSHAgentOpen
-	(*SSHAgentData)(nil),                  // 21: fleetgrpc.SSHAgentData
-	(*SSHAgentClose)(nil),                 // 22: fleetgrpc.SSHAgentClose
-	(*SSHAgentStatus)(nil),                // 23: fleetgrpc.SSHAgentStatus
-	(*SSHAgentPing)(nil),                  // 24: fleetgrpc.SSHAgentPing
-	(*CopyFileRequest)(nil),               // 25: fleetgrpc.CopyFileRequest
-	(*CopyFileChunk)(nil),                 // 26: fleetgrpc.CopyFileChunk
-	(*CopyFileMeta)(nil),                  // 27: fleetgrpc.CopyFileMeta
-	(*CopyIntoChunk)(nil),                 // 28: fleetgrpc.CopyIntoChunk
-	(*CopyIntoOpen)(nil),                  // 29: fleetgrpc.CopyIntoOpen
-	(*CopyIntoReply)(nil),                 // 30: fleetgrpc.CopyIntoReply
-	(*ResolveLogsCommandRequest)(nil),     // 31: fleetgrpc.ResolveLogsCommandRequest
-	(*ResolveLogsCommandReply)(nil),       // 32: fleetgrpc.ResolveLogsCommandReply
-	(*TriggerLogsRequest)(nil),            // 33: fleetgrpc.TriggerLogsRequest
-	(*TriggerLogsReply)(nil),              // 34: fleetgrpc.TriggerLogsReply
-	(*GetCoderTemplateParamsRequest)(nil), // 35: fleetgrpc.GetCoderTemplateParamsRequest
-	(*CoderRichParameter)(nil),            // 36: fleetgrpc.CoderRichParameter
-	(*GetCoderTemplateParamsReply)(nil),   // 37: fleetgrpc.GetCoderTemplateParamsReply
-	(*GetBrowserConfigRequest)(nil),       // 38: fleetgrpc.GetBrowserConfigRequest
-	(*GetBrowserConfigReply)(nil),         // 39: fleetgrpc.GetBrowserConfigReply
-	(*PrepareBrowserRequest)(nil),         // 40: fleetgrpc.PrepareBrowserRequest
-	(*PrepareBrowserReply)(nil),           // 41: fleetgrpc.PrepareBrowserReply
-	nil,                                   // 42: fleetgrpc.ExecStart.EnvEntry
-	nil,                                   // 43: fleetgrpc.ResolveExecCommandReply.EnvEntry
-	(*timestamppb.Timestamp)(nil),         // 44: google.protobuf.Timestamp
+	(*MicDevice)(nil),                     // 13: fleetgrpc.MicDevice
+	(*MicDeviceList)(nil),                 // 14: fleetgrpc.MicDeviceList
+	(*MicDown)(nil),                       // 15: fleetgrpc.MicDown
+	(*MicListDevices)(nil),                // 16: fleetgrpc.MicListDevices
+	(*MicDemand)(nil),                     // 17: fleetgrpc.MicDemand
+	(*MicSource)(nil),                     // 18: fleetgrpc.MicSource
+	(*MicSources)(nil),                    // 19: fleetgrpc.MicSources
+	(*ListMicSourcesRequest)(nil),         // 20: fleetgrpc.ListMicSourcesRequest
+	(*ListMicSourcesReply)(nil),           // 21: fleetgrpc.ListMicSourcesReply
+	(*SSHAgentUp)(nil),                    // 22: fleetgrpc.SSHAgentUp
+	(*SSHAgentHello)(nil),                 // 23: fleetgrpc.SSHAgentHello
+	(*SSHAgentReady)(nil),                 // 24: fleetgrpc.SSHAgentReady
+	(*SSHAgentPong)(nil),                  // 25: fleetgrpc.SSHAgentPong
+	(*SSHAgentDown)(nil),                  // 26: fleetgrpc.SSHAgentDown
+	(*SSHAgentOpen)(nil),                  // 27: fleetgrpc.SSHAgentOpen
+	(*SSHAgentData)(nil),                  // 28: fleetgrpc.SSHAgentData
+	(*SSHAgentClose)(nil),                 // 29: fleetgrpc.SSHAgentClose
+	(*SSHAgentStatus)(nil),                // 30: fleetgrpc.SSHAgentStatus
+	(*SSHAgentPing)(nil),                  // 31: fleetgrpc.SSHAgentPing
+	(*CopyFileRequest)(nil),               // 32: fleetgrpc.CopyFileRequest
+	(*CopyFileChunk)(nil),                 // 33: fleetgrpc.CopyFileChunk
+	(*CopyFileMeta)(nil),                  // 34: fleetgrpc.CopyFileMeta
+	(*CopyIntoChunk)(nil),                 // 35: fleetgrpc.CopyIntoChunk
+	(*CopyIntoOpen)(nil),                  // 36: fleetgrpc.CopyIntoOpen
+	(*CopyIntoReply)(nil),                 // 37: fleetgrpc.CopyIntoReply
+	(*ResolveLogsCommandRequest)(nil),     // 38: fleetgrpc.ResolveLogsCommandRequest
+	(*ResolveLogsCommandReply)(nil),       // 39: fleetgrpc.ResolveLogsCommandReply
+	(*TriggerLogsRequest)(nil),            // 40: fleetgrpc.TriggerLogsRequest
+	(*TriggerLogsReply)(nil),              // 41: fleetgrpc.TriggerLogsReply
+	(*GetCoderTemplateParamsRequest)(nil), // 42: fleetgrpc.GetCoderTemplateParamsRequest
+	(*CoderRichParameter)(nil),            // 43: fleetgrpc.CoderRichParameter
+	(*GetCoderTemplateParamsReply)(nil),   // 44: fleetgrpc.GetCoderTemplateParamsReply
+	(*GetBrowserConfigRequest)(nil),       // 45: fleetgrpc.GetBrowserConfigRequest
+	(*GetBrowserConfigReply)(nil),         // 46: fleetgrpc.GetBrowserConfigReply
+	(*PrepareBrowserRequest)(nil),         // 47: fleetgrpc.PrepareBrowserRequest
+	(*PrepareBrowserReply)(nil),           // 48: fleetgrpc.PrepareBrowserReply
+	nil,                                   // 49: fleetgrpc.ExecStart.EnvEntry
+	nil,                                   // 50: fleetgrpc.ResolveExecCommandReply.EnvEntry
+	(*timestamppb.Timestamp)(nil),         // 51: google.protobuf.Timestamp
+	(*MicSettings)(nil),                   // 52: fleetgrpc.MicSettings
 }
 var file_exec_proto_depIdxs = []int32{
 	1,  // 0: fleetgrpc.ExecIn.start:type_name -> fleetgrpc.ExecStart
 	2,  // 1: fleetgrpc.ExecIn.resize:type_name -> fleetgrpc.ExecResize
-	42, // 2: fleetgrpc.ExecStart.env:type_name -> fleetgrpc.ExecStart.EnvEntry
+	49, // 2: fleetgrpc.ExecStart.env:type_name -> fleetgrpc.ExecStart.EnvEntry
 	4,  // 3: fleetgrpc.ExecOut.exit:type_name -> fleetgrpc.ExecExit
-	43, // 4: fleetgrpc.ResolveExecCommandReply.env:type_name -> fleetgrpc.ResolveExecCommandReply.EnvEntry
-	44, // 5: fleetgrpc.LogLine.at:type_name -> google.protobuf.Timestamp
+	50, // 4: fleetgrpc.ResolveExecCommandReply.env:type_name -> fleetgrpc.ResolveExecCommandReply.EnvEntry
+	51, // 5: fleetgrpc.LogLine.at:type_name -> google.protobuf.Timestamp
 	10, // 6: fleetgrpc.ForwardChunk.open:type_name -> fleetgrpc.ForwardOpen
 	12, // 7: fleetgrpc.MicUp.open:type_name -> fleetgrpc.MicOpen
-	14, // 8: fleetgrpc.MicDown.demand:type_name -> fleetgrpc.MicDemand
-	16, // 9: fleetgrpc.SSHAgentUp.hello:type_name -> fleetgrpc.SSHAgentHello
-	17, // 10: fleetgrpc.SSHAgentUp.ready:type_name -> fleetgrpc.SSHAgentReady
-	21, // 11: fleetgrpc.SSHAgentUp.data:type_name -> fleetgrpc.SSHAgentData
-	22, // 12: fleetgrpc.SSHAgentUp.close:type_name -> fleetgrpc.SSHAgentClose
-	18, // 13: fleetgrpc.SSHAgentUp.pong:type_name -> fleetgrpc.SSHAgentPong
-	20, // 14: fleetgrpc.SSHAgentDown.open:type_name -> fleetgrpc.SSHAgentOpen
-	21, // 15: fleetgrpc.SSHAgentDown.data:type_name -> fleetgrpc.SSHAgentData
-	22, // 16: fleetgrpc.SSHAgentDown.close:type_name -> fleetgrpc.SSHAgentClose
-	23, // 17: fleetgrpc.SSHAgentDown.status:type_name -> fleetgrpc.SSHAgentStatus
-	24, // 18: fleetgrpc.SSHAgentDown.ping:type_name -> fleetgrpc.SSHAgentPing
-	27, // 19: fleetgrpc.CopyFileChunk.meta:type_name -> fleetgrpc.CopyFileMeta
-	29, // 20: fleetgrpc.CopyIntoChunk.open:type_name -> fleetgrpc.CopyIntoOpen
-	36, // 21: fleetgrpc.GetCoderTemplateParamsReply.parameters:type_name -> fleetgrpc.CoderRichParameter
-	22, // [22:22] is the sub-list for method output_type
-	22, // [22:22] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	14, // 8: fleetgrpc.MicUp.devices:type_name -> fleetgrpc.MicDeviceList
+	13, // 9: fleetgrpc.MicDeviceList.devices:type_name -> fleetgrpc.MicDevice
+	17, // 10: fleetgrpc.MicDown.demand:type_name -> fleetgrpc.MicDemand
+	16, // 11: fleetgrpc.MicDown.list_devices:type_name -> fleetgrpc.MicListDevices
+	13, // 12: fleetgrpc.MicSource.devices:type_name -> fleetgrpc.MicDevice
+	18, // 13: fleetgrpc.MicSources.sources:type_name -> fleetgrpc.MicSource
+	52, // 14: fleetgrpc.MicSources.settings:type_name -> fleetgrpc.MicSettings
+	19, // 15: fleetgrpc.ListMicSourcesReply.sources:type_name -> fleetgrpc.MicSources
+	23, // 16: fleetgrpc.SSHAgentUp.hello:type_name -> fleetgrpc.SSHAgentHello
+	24, // 17: fleetgrpc.SSHAgentUp.ready:type_name -> fleetgrpc.SSHAgentReady
+	28, // 18: fleetgrpc.SSHAgentUp.data:type_name -> fleetgrpc.SSHAgentData
+	29, // 19: fleetgrpc.SSHAgentUp.close:type_name -> fleetgrpc.SSHAgentClose
+	25, // 20: fleetgrpc.SSHAgentUp.pong:type_name -> fleetgrpc.SSHAgentPong
+	27, // 21: fleetgrpc.SSHAgentDown.open:type_name -> fleetgrpc.SSHAgentOpen
+	28, // 22: fleetgrpc.SSHAgentDown.data:type_name -> fleetgrpc.SSHAgentData
+	29, // 23: fleetgrpc.SSHAgentDown.close:type_name -> fleetgrpc.SSHAgentClose
+	30, // 24: fleetgrpc.SSHAgentDown.status:type_name -> fleetgrpc.SSHAgentStatus
+	31, // 25: fleetgrpc.SSHAgentDown.ping:type_name -> fleetgrpc.SSHAgentPing
+	34, // 26: fleetgrpc.CopyFileChunk.meta:type_name -> fleetgrpc.CopyFileMeta
+	36, // 27: fleetgrpc.CopyIntoChunk.open:type_name -> fleetgrpc.CopyIntoOpen
+	43, // 28: fleetgrpc.GetCoderTemplateParamsReply.parameters:type_name -> fleetgrpc.CoderRichParameter
+	29, // [29:29] is the sub-list for method output_type
+	29, // [29:29] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_exec_proto_init() }
@@ -3162,6 +3647,7 @@ func file_exec_proto_init() {
 	if File_exec_proto != nil {
 		return
 	}
+	file_config_proto_init()
 	file_exec_proto_msgTypes[0].OneofWrappers = []any{
 		(*ExecIn_Start)(nil),
 		(*ExecIn_Stdin)(nil),
@@ -3181,40 +3667,42 @@ func file_exec_proto_init() {
 	file_exec_proto_msgTypes[11].OneofWrappers = []any{
 		(*MicUp_Open)(nil),
 		(*MicUp_Audio)(nil),
-	}
-	file_exec_proto_msgTypes[13].OneofWrappers = []any{
-		(*MicDown_Demand)(nil),
+		(*MicUp_Devices)(nil),
 	}
 	file_exec_proto_msgTypes[15].OneofWrappers = []any{
+		(*MicDown_Demand)(nil),
+		(*MicDown_ListDevices)(nil),
+	}
+	file_exec_proto_msgTypes[22].OneofWrappers = []any{
 		(*SSHAgentUp_Hello)(nil),
 		(*SSHAgentUp_Ready)(nil),
 		(*SSHAgentUp_Data)(nil),
 		(*SSHAgentUp_Close)(nil),
 		(*SSHAgentUp_Pong)(nil),
 	}
-	file_exec_proto_msgTypes[19].OneofWrappers = []any{
+	file_exec_proto_msgTypes[26].OneofWrappers = []any{
 		(*SSHAgentDown_Open)(nil),
 		(*SSHAgentDown_Data)(nil),
 		(*SSHAgentDown_Close)(nil),
 		(*SSHAgentDown_Status)(nil),
 		(*SSHAgentDown_Ping)(nil),
 	}
-	file_exec_proto_msgTypes[26].OneofWrappers = []any{
+	file_exec_proto_msgTypes[33].OneofWrappers = []any{
 		(*CopyFileChunk_Meta)(nil),
 		(*CopyFileChunk_Data)(nil),
 	}
-	file_exec_proto_msgTypes[28].OneofWrappers = []any{
+	file_exec_proto_msgTypes[35].OneofWrappers = []any{
 		(*CopyIntoChunk_Open)(nil),
 		(*CopyIntoChunk_Data)(nil),
 	}
-	file_exec_proto_msgTypes[40].OneofWrappers = []any{}
+	file_exec_proto_msgTypes[47].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_exec_proto_rawDesc), len(file_exec_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   44,
+			NumMessages:   51,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

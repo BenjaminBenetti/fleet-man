@@ -406,6 +406,18 @@ var setConfigRemote = func(c *configutil.Config) error {
 	})
 }
 
+// relistMicSourcesRemote asks the daemon to have every attached microphone
+// client enumerate its capture devices again. Only the request matters: the
+// fresh listings arrive over Watch as each client answers (micSourcesMsg), and
+// applying this RPC's reply as well would let it overwrite a newer push.
+// Package var so tests can stub it.
+var relistMicSourcesRemote = func() error {
+	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
+		_, err := svc.ListMicSources(ctx, &fleetgrpc.ListMicSourcesRequest{Refresh: true})
+		return err
+	})
+}
+
 // --- Read path: server snapshot -> legacy render model -----------------------
 //
 // The TUI still renders from the legacy *configutil.State / *configutil.Config,

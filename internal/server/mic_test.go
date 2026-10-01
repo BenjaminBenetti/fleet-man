@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -147,14 +148,25 @@ func (h *micHarness) nextSink(t *testing.T) *fakeMicSink {
 	}
 }
 
-// micStream is a provider stream with its demand frames pumped onto a channel.
+// micStream is a provider stream with its demand frames (and device-listing
+// requests) pumped onto channels.
 type micStream struct {
 	stream  fleetgrpc.FleetService_MicClient
 	demands chan *fleetgrpc.MicDemand
+	relists chan struct{}
 	done    chan error
+	cancel  context.CancelFunc
 }
 
+// openMicStream attaches an anonymous provider — what a client built before
+// providers announced a name looks like.
 func openMicStream(t *testing.T, client fleetgrpc.FleetServiceClient) *micStream {
+	t.Helper()
+	return openMicStreamAs(t, client, "")
+}
+
+// openMicStreamAs attaches a provider announcing itself as the machine `name`.
+func openMicStreamAs(t *testing.T, client fleetgrpc.FleetServiceClient, name string) *micStream {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -163,11 +175,17 @@ func openMicStream(t *testing.T, client fleetgrpc.FleetServiceClient) *micStream
 		t.Fatalf("Mic: %v", err)
 	}
 	if err := stream.Send(&fleetgrpc.MicUp{Msg: &fleetgrpc.MicUp_Open{Open: &fleetgrpc.MicOpen{
-		SampleRate: mic.SampleRate, Channels: mic.Channels,
+		SampleRate: mic.SampleRate, Channels: mic.Channels, Client: name,
 	}}}); err != nil {
 		t.Fatalf("send open: %v", err)
 	}
-	ms := &micStream{stream: stream, demands: make(chan *fleetgrpc.MicDemand, 16), done: make(chan error, 1)}
+	ms := &micStream{
+		stream:  stream,
+		demands: make(chan *fleetgrpc.MicDemand, 16),
+		relists: make(chan struct{}, 16),
+		done:    make(chan error, 1),
+		cancel:  cancel,
+	}
 	go func() {
 		for {
 			down, err := stream.Recv()
@@ -178,9 +196,93 @@ func openMicStream(t *testing.T, client fleetgrpc.FleetServiceClient) *micStream
 			if demand := down.GetDemand(); demand != nil {
 				ms.demands <- demand
 			}
+			if down.GetListDevices() != nil {
+				ms.relists <- struct{}{}
+			}
 		}
 	}()
 	return ms
+}
+
+// sendDevices announces the provider's capture devices ("id=label" each).
+func (ms *micStream) sendDevices(t *testing.T, devices ...string) {
+	t.Helper()
+	list := &fleetgrpc.MicDeviceList{}
+	for _, device := range devices {
+		id, label, _ := strings.Cut(device, "=")
+		list.Devices = append(list.Devices, &fleetgrpc.MicDevice{Id: id, Label: label})
+	}
+	if err := ms.stream.Send(&fleetgrpc.MicUp{Msg: &fleetgrpc.MicUp_Devices{Devices: list}}); err != nil {
+		t.Fatalf("send devices: %v", err)
+	}
+}
+
+// nextDemand returns the next demand frame.
+func (ms *micStream) nextDemand(t *testing.T) *fleetgrpc.MicDemand {
+	t.Helper()
+	select {
+	case demand := <-ms.demands:
+		return demand
+	case err := <-ms.done:
+		t.Fatalf("stream ended while waiting for demand: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no demand frame")
+	}
+	return nil
+}
+
+// expectNoDemand fails if a demand frame arrives: a stand-by provider must not
+// be told anything when the source's demand changes.
+func (ms *micStream) expectNoDemand(t *testing.T) {
+	t.Helper()
+	select {
+	case demand := <-ms.demands:
+		t.Fatalf("unexpected demand frame: %v", demand)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// setMicSelection saves the microphone selection the way the settings page
+// does: through SetConfig.
+func (h *micHarness) setMicSelection(t *testing.T, client, device string) {
+	t.Helper()
+	config, err := state.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MicSettings.Client, config.MicSettings.Device = client, device
+	if _, err := h.client.SetConfig(context.Background(), &fleetgrpc.SetConfigRequest{Config: protoconv.ConfigToProto(config)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// micSourceNames renders the daemon's source list as "name[*][!](ids…)" —
+// * marks the client being recorded, ! that its microphone is open.
+func (h *micHarness) micSourceNames(t *testing.T) string {
+	t.Helper()
+	reply, err := h.client.ListMicSources(context.Background(), &fleetgrpc.ListMicSourcesRequest{})
+	if err != nil {
+		t.Fatalf("ListMicSources: %v", err)
+	}
+	var out []string
+	for _, source := range reply.GetSources().GetSources() {
+		entry := source.GetClient()
+		if source.GetSource() {
+			entry += "*"
+		}
+		if source.GetRecording() {
+			entry += "!"
+		}
+		if source.GetDevicesListed() {
+			var ids []string
+			for _, device := range source.GetDevices() {
+				ids = append(ids, device.GetId())
+			}
+			entry += "(" + strings.Join(ids, ",") + ")"
+		}
+		out = append(out, entry)
+	}
+	return strings.Join(out, " ")
 }
 
 func (ms *micStream) expectDemand(t *testing.T, active bool, instances ...string) {
@@ -1054,5 +1156,450 @@ func TestMicAbandonedPrepareHandsBackItsStamp(t *testing.T) {
 	defer h.mu.Unlock()
 	if h.prepares != 0 {
 		t.Fatalf("an abandoned attach still ran the install (%d)", h.prepares)
+	}
+}
+
+// The feature: with several clients attached, the one Settings selects is the
+// source — NOT whichever attached last. Its audio is the audio routed, and the
+// others stand by with their microphones closed.
+func TestMicSelectedClientIsTheSource(t *testing.T) {
+	h := newMicHarness(t, true)
+	h.setMicSelection(t, "desk", "pulse:desk_usb")
+
+	desk := openMicStreamAs(t, h.client, "desk")
+	if greeting := desk.nextDemand(t); greeting.GetActive() || greeting.GetDevice() != "pulse:desk_usb" || greeting.GetClient() != "desk" {
+		t.Fatalf("desk greeting = %v, want idle with its selected device", greeting)
+	}
+	sink := h.nextSink(t)
+	sink.emit("ready")
+
+	// A newer client attaches. Before clients could be selected it would have
+	// taken the microphone over; now it is greeted idle and stands by.
+	laptop := openMicStreamAs(t, h.client, "laptop")
+	if greeting := laptop.nextDemand(t); greeting.GetActive() || greeting.GetDevice() != "" {
+		t.Fatalf("laptop greeting = %v, want idle and no device (it is not the selected client)", greeting)
+	}
+
+	sink.emit("demand 1")
+	desk.expectDemand(t, true, "alpha/i1")
+	laptop.expectNoDemand(t)
+
+	laptop.sendAudio(t, []byte("laptop"))
+	desk.sendAudio(t, []byte("desk"))
+	eventually(t, "the selected client's audio", func() bool { return string(sink.received()) == "desk" })
+}
+
+// Changing the selection moves the microphone at once, mid-recording: the old
+// source is told to close, the new one to open — on its own device.
+func TestMicSelectionChangeMovesTheMicrophone(t *testing.T) {
+	h := newMicHarness(t, true)
+	h.setMicSelection(t, "desk", "pulse:desk_usb")
+	desk := openMicStreamAs(t, h.client, "desk")
+	desk.expectDemand(t, false)
+	laptop := openMicStreamAs(t, h.client, "laptop")
+	laptop.expectDemand(t, false)
+	sink := h.nextSink(t)
+	sink.emit("ready")
+	sink.emit("demand 1")
+	desk.expectDemand(t, true, "alpha/i1")
+
+	h.setMicSelection(t, "laptop", "pulse:laptop_builtin")
+
+	desk.expectDemand(t, false)
+	moved := laptop.nextDemand(t)
+	if !moved.GetActive() || moved.GetDevice() != "pulse:laptop_builtin" || moved.GetClient() != "laptop" {
+		t.Fatalf("laptop was told %v, want live on its own device", moved)
+	}
+	desk.sendAudio(t, []byte("desk"))
+	laptop.sendAudio(t, []byte("laptop"))
+	eventually(t, "the newly selected client's audio", func() bool { return string(sink.received()) == "laptop" })
+
+	// Back to no selection: the most recently attached client records.
+	h.setMicSelection(t, "", "")
+	if demand := laptop.nextDemand(t); !demand.GetActive() || demand.GetDevice() != "" || demand.GetClient() != "" {
+		t.Fatalf("laptop was told %v, want live on the default with no selection", demand)
+	}
+	desk.expectNoDemand(t)
+}
+
+// A selected client that is not attached must not mean a dead microphone: the
+// most recently attached client stands in — on its DEFAULT device (the selected
+// id belongs to the other machine's enumeration) and told whom it stands in for
+// — and hands the microphone over the moment the selected client attaches.
+func TestMicStandsInForAnAbsentSelectedClient(t *testing.T) {
+	h := newMicHarness(t, true)
+	h.setMicSelection(t, "desk", "pulse:desk_usb")
+
+	laptop := openMicStreamAs(t, h.client, "laptop")
+	if greeting := laptop.nextDemand(t); greeting.GetDevice() != "" || greeting.GetClient() != "desk" {
+		t.Fatalf("stand-in greeting = %v, want no device and the selected client named", greeting)
+	}
+	sink := h.nextSink(t)
+	sink.emit("ready")
+	sink.emit("demand 1")
+	laptop.expectDemand(t, true, "alpha/i1")
+	if got := h.micSourceNames(t); got != "laptop*!" {
+		t.Fatalf("sources = %q, want laptop recording", got)
+	}
+
+	desk := openMicStreamAs(t, h.client, "desk")
+	if demand := desk.nextDemand(t); !demand.GetActive() || demand.GetDevice() != "pulse:desk_usb" {
+		t.Fatalf("desk was told %v, want live on its selected device", demand)
+	}
+	laptop.expectDemand(t, false)
+	eventually(t, "desk to be the source", func() bool { return h.micSourceNames(t) == "desk*! laptop" })
+
+	desk.cancel() // the selected client goes away mid-recording
+	laptop.expectDemand(t, true, "alpha/i1")
+	eventually(t, "laptop to stand in again", func() bool { return h.micSourceNames(t) == "laptop*!" })
+}
+
+// The source list is what the selector offers: one entry per MACHINE with its
+// devices, sorted, the recorded one marked. Two providers on one machine are one
+// source; a provider with no name cannot be selected and is not listed.
+func TestMicSourcesListEveryClientsDevices(t *testing.T) {
+	h := newMicHarness(t, true)
+	if got := h.micSourceNames(t); got != "" {
+		t.Fatalf("sources with nobody attached = %q", got)
+	}
+
+	laptop := openMicStreamAs(t, h.client, "laptop")
+	laptop.expectDemand(t, false)
+	eventually(t, "laptop to be listed, devices unknown", func() bool { return h.micSourceNames(t) == "laptop*" })
+	laptop.sendDevices(t, "pulse:builtin=Built-in Microphone")
+
+	desk := openMicStreamAs(t, h.client, "desk")
+	desk.expectDemand(t, false)
+	desk.sendDevices(t, "pulse:usb=USB Mic", "pulse:webcam=Webcam")
+	eventually(t, "both clients with their devices", func() bool {
+		return h.micSourceNames(t) == "desk*(pulse:usb,pulse:webcam) laptop(pulse:builtin)"
+	})
+
+	// A second provider on the desk machine (a second TUI) is the same source,
+	// described by the newer of the two.
+	desk2 := openMicStreamAs(t, h.client, "desk")
+	desk2.expectDemand(t, false)
+	desk2.sendDevices(t, "pulse:usb=USB Mic")
+	eventually(t, "the newer desk provider's listing", func() bool {
+		return h.micSourceNames(t) == "desk*(pulse:usb) laptop(pulse:builtin)"
+	})
+
+	// An anonymous provider takes the microphone (it is the newest, and nothing
+	// is selected) but offers nothing to select.
+	old := openMicStream(t, h.client)
+	old.expectDemand(t, false)
+	eventually(t, "no listed client to be the source", func() bool {
+		return h.micSourceNames(t) == "desk(pulse:usb) laptop(pulse:builtin)"
+	})
+
+	// An empty listing is an answer too (a default-only recorder).
+	laptop.sendDevices(t)
+	eventually(t, "laptop's empty listing", func() bool {
+		return h.micSourceNames(t) == "desk(pulse:usb) laptop()"
+	})
+}
+
+// What a provider announces is stored by the daemon and drawn in every other
+// client's terminal, and a provider can be anywhere: names and labels are
+// scrubbed of control characters, ids that are not printable are dropped, and
+// the listing is bounded.
+func TestMicSourcesAreScrubbedAndBounded(t *testing.T) {
+	h := newMicHarness(t, true)
+	provider := openMicStreamAs(t, h.client, "  evil\x1b[31m\nhost\u202e  ")
+	provider.expectDemand(t, false)
+
+	devices := []string{"pulse:ok=Good\x1b]0;pwned\x07 Mic", "pulse:bad\x1bid=Escaped Id", "=No Id", "pulse:ok=Duplicate"}
+	for i := range 2 * mic.MaxDevices {
+		devices = append(devices, fmt.Sprintf("pulse:extra%d=%s", i, strings.Repeat("x", 4*mic.MaxDeviceLabel)))
+	}
+	provider.sendDevices(t, devices...)
+
+	var source *fleetgrpc.MicSource
+	eventually(t, "the listing to arrive", func() bool {
+		reply, err := h.client.ListMicSources(context.Background(), &fleetgrpc.ListMicSourcesRequest{})
+		if err != nil || len(reply.GetSources().GetSources()) != 1 {
+			return false
+		}
+		source = reply.GetSources().GetSources()[0]
+		return source.GetDevicesListed()
+	})
+	if source.GetClient() != "evil[31m host" {
+		t.Fatalf("client = %q, want the control characters gone", source.GetClient())
+	}
+	if len(source.GetDevices()) != mic.MaxDevices {
+		t.Fatalf("%d devices listed, want the bound of %d", len(source.GetDevices()), mic.MaxDevices)
+	}
+	if first := source.GetDevices()[0]; first.GetId() != "pulse:ok" || first.GetLabel() != "Good]0;pwned Mic" {
+		t.Fatalf("first device = %v, want a scrubbed label", first)
+	}
+	for _, device := range source.GetDevices() {
+		if strings.ContainsAny(device.GetId()+device.GetLabel(), "\x1b\x07\n") {
+			t.Fatalf("device %v still carries control characters", device)
+		}
+		if device.GetId() == "pulse:bad\x1bid" || device.GetId() == "" {
+			t.Fatalf("device %v should have been dropped", device)
+		}
+		if len([]rune(device.GetLabel())) > mic.MaxDeviceLabel {
+			t.Fatalf("label of %d runes exceeds the bound", len([]rune(device.GetLabel())))
+		}
+	}
+}
+
+// Opening a selector asks every attached provider — not just the source — to
+// list its devices again.
+func TestMicRelistAsksEveryProvider(t *testing.T) {
+	h := newMicHarness(t, true)
+	desk := openMicStreamAs(t, h.client, "desk")
+	desk.expectDemand(t, false)
+	laptop := openMicStreamAs(t, h.client, "laptop")
+	laptop.expectDemand(t, false)
+
+	if _, err := h.client.ListMicSources(context.Background(), &fleetgrpc.ListMicSourcesRequest{Refresh: true}); err != nil {
+		t.Fatalf("ListMicSources: %v", err)
+	}
+	for name, provider := range map[string]*micStream{"desk": desk, "laptop": laptop} {
+		select {
+		case <-provider.relists:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s was not asked to list its devices", name)
+		}
+	}
+
+	// Without refresh nobody is bothered.
+	if _, err := h.client.ListMicSources(context.Background(), &fleetgrpc.ListMicSourcesRequest{}); err != nil {
+		t.Fatalf("ListMicSources: %v", err)
+	}
+	select {
+	case <-desk.relists:
+		t.Fatal("a plain listing must not make providers enumerate")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// The source list is PUSHED: a TUI with its settings page open sees another
+// client connect, list its devices and leave without asking.
+func TestWatchPushesMicSources(t *testing.T) {
+	h := newMicHarness(t, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	watch, err := h.client.Watch(ctx, &fleetgrpc.WatchRequest{IncludeInitialState: true})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	pushed := make(chan *fleetgrpc.MicSources, 32)
+	go func() {
+		for {
+			event, err := watch.Recv()
+			if err != nil {
+				return
+			}
+			if sources := event.GetMicSources(); sources != nil {
+				pushed <- sources
+			}
+		}
+	}()
+	// expect reads pushes until one matches (earlier ones are intermediate
+	// states: attached, then listed).
+	expect := func(what string, match func(*fleetgrpc.MicSources) bool) {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case sources := <-pushed:
+				if match(sources) {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("no push with %s", what)
+			}
+		}
+	}
+
+	expect("the initial, empty set", func(s *fleetgrpc.MicSources) bool { return len(s.GetSources()) == 0 })
+
+	desk := openMicStreamAs(t, h.client, "desk")
+	desk.expectDemand(t, false)
+	desk.sendDevices(t, "pulse:usb=USB Mic")
+	expect("desk and its device", func(s *fleetgrpc.MicSources) bool {
+		return len(s.GetSources()) == 1 && s.GetSources()[0].GetClient() == "desk" &&
+			s.GetSources()[0].GetSource() && len(s.GetSources()[0].GetDevices()) == 1
+	})
+
+	sink := h.nextSink(t)
+	sink.emit("ready")
+	sink.emit("demand 1")
+	expect("desk recording", func(s *fleetgrpc.MicSources) bool {
+		return len(s.GetSources()) == 1 && s.GetSources()[0].GetRecording()
+	})
+
+	desk.cancel()
+	expect("nobody attached", func(s *fleetgrpc.MicSources) bool { return len(s.GetSources()) == 0 })
+}
+
+// A client built before the selection had a client sends the mic group without
+// one. That must read as "unchanged": saving an unrelated setting from an older
+// TUI must not hand the microphone to a different machine.
+func TestSetConfigFromAPreClientSelectionClientKeepsTheClient(t *testing.T) {
+	h := newMicHarness(t, true)
+	h.setMicSelection(t, "desk", "pulse:desk_usb")
+
+	config, err := state.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := protoconv.ConfigToProto(config)
+	old.Mic.Client = nil // what an older client's message decodes to
+	old.Mic.Device = "pulse:other"
+	reply, err := h.client.SetConfig(context.Background(), &fleetgrpc.SetConfigRequest{Config: old})
+	if err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+	if got := reply.GetConfig().GetMic(); got.GetClient() != "desk" || got.GetDevice() != "pulse:other" {
+		t.Fatalf("mic after an older client's save = %v, want the client kept and the device applied", got)
+	}
+
+	// A current client clearing the selection says so explicitly, and is obeyed.
+	h.setMicSelection(t, "", "")
+	saved, err := state.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.MicSettings.Client != "" {
+		t.Fatalf("client = %q, want the selection cleared", saved.MicSettings.Client)
+	}
+}
+
+// The QA-found hole: the selection is a daemon setting any client can change,
+// but a client fetches the config once. So the daemon pushes the microphone
+// settings with the client list — on EVERY config save, with or without a
+// provider attached — and every open TUI keeps the selection the daemon holds
+// (rather than showing a stale one and writing it back with its next save).
+func TestWatchPushesTheMicSettingsOnEverySave(t *testing.T) {
+	h := newMicHarness(t, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	watch, err := h.client.Watch(ctx, &fleetgrpc.WatchRequest{IncludeInitialState: true})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	pushed := make(chan *fleetgrpc.MicSettings, 32)
+	go func() {
+		for {
+			event, err := watch.Recv()
+			if err != nil {
+				return
+			}
+			if sources := event.GetMicSources(); sources != nil && sources.GetSettings() != nil {
+				pushed <- sources.GetSettings()
+			}
+		}
+	}()
+	expect := func(what string, match func(*fleetgrpc.MicSettings) bool) {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case settings := <-pushed:
+				if match(settings) {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("no push with %s", what)
+			}
+		}
+	}
+
+	// Nothing has happened yet, and nobody is attached: a subscriber is still
+	// told what the daemon holds.
+	expect("the settings on disk", func(s *fleetgrpc.MicSettings) bool {
+		return s.GetEnabled() && s.Client != nil && s.GetClient() == ""
+	})
+
+	// Another client makes a selection — no provider anywhere.
+	h.setMicSelection(t, "desk", "pulse:desk_usb")
+	expect("the new selection", func(s *fleetgrpc.MicSettings) bool {
+		return s.GetEnabled() && s.GetClient() == "desk" && s.GetDevice() == "pulse:desk_usb"
+	})
+
+	// ListMicSources answers the same thing.
+	reply, err := h.client.ListMicSources(context.Background(), &fleetgrpc.ListMicSourcesRequest{})
+	if err != nil {
+		t.Fatalf("ListMicSources: %v", err)
+	}
+	if got := reply.GetSources().GetSettings(); got.GetClient() != "desk" || got.GetDevice() != "pulse:desk_usb" {
+		t.Fatalf("ListMicSources settings = %v", got)
+	}
+
+	// Turning the microphone off is pushed too: a client still holding
+	// "enabled" would otherwise turn it back on with its next save.
+	config, err := state.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MicSettings.Enabled = false
+	if _, err := h.client.SetConfig(context.Background(), &fleetgrpc.SetConfigRequest{Config: protoconv.ConfigToProto(config)}); err != nil {
+		t.Fatal(err)
+	}
+	expect("the microphone turned off, selection kept", func(s *fleetgrpc.MicSettings) bool {
+		return !s.GetEnabled() && s.GetClient() == "desk"
+	})
+	// Turning it off stops the instances' sound servers on a goroutine of its
+	// own; let it finish before the harness restores the seam it calls.
+	eventually(t, "the instance's sound server to be stopped", func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.stops) == 1
+	})
+}
+
+// A selection made by editing config.json reaches the clients as well (the hub
+// reads it on its sync tick while a provider is attached).
+func TestHandEditedMicSelectionIsPushed(t *testing.T) {
+	h := newMicHarness(t, true)
+	provider := openMicStreamAs(t, h.client, "laptop")
+	provider.expectDemand(t, false)
+
+	config, err := state.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MicSettings.Client, config.MicSettings.Device = "laptop", "pulse:builtin"
+	if err := state.SaveConfig(config); err != nil { // not through SetConfig
+		t.Fatal(err)
+	}
+	provider.expectDevice(t, "pulse:builtin")
+	eventually(t, "the hand-edited selection to be announced", func() bool {
+		var cached *fleetgrpc.MicSettings
+		done := make(chan struct{})
+		if !h.svc.hub.post(func(hub *hub) { cached = hub.micSources.GetSettings(); close(done) }) {
+			return false
+		}
+		<-done
+		return cached.GetClient() == "laptop" && cached.GetDevice() == "pulse:builtin"
+	})
+}
+
+// An unreadable config must not blank the settings a new subscriber is greeted
+// with: "absent" tells clients to keep what they have, but the cache should
+// still hold the last value the daemon could read.
+func TestMicSourcesKeepLastKnownSettingsWhenTheConfigIsUnreadable(t *testing.T) {
+	svc := newService()
+	orig := micSetting
+	t.Cleanup(func() { micSetting = orig })
+
+	micSetting = func() (state.MicSettings, error) {
+		return state.MicSettings{Enabled: true, Client: "desk"}, nil
+	}
+	known := svc.micSourcesNow(nil).GetSettings()
+	if known.GetClient() != "desk" || !known.GetEnabled() {
+		t.Fatalf("settings = %v", known)
+	}
+
+	micSetting = func() (state.MicSettings, error) { return state.MicSettings{}, fmt.Errorf("mid-write") }
+	if got := svc.micSourcesNow(known).GetSettings(); got.GetClient() != "desk" {
+		t.Fatalf("an unreadable config replaced the last known settings with %v", got)
+	}
+	if got := svc.micSourcesNow(nil).GetSettings(); got != nil {
+		t.Fatalf("with nothing known the settings must be absent, got %v", got)
 	}
 }

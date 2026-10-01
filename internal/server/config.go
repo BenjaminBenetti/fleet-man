@@ -78,9 +78,15 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	if micWasEnabled && !saved.MicSettings.Enabled {
 		s.mic.disable()
 	} else if saved.MicSettings.Enabled {
-		s.mic.setDevice(saved.MicSettings.Device) // pushed to a running provider
+		// Pushed at once: a changed client moves the microphone, a changed
+		// device reaches the provider that records it.
+		s.mic.setSelection(saved.MicSettings.Client, saved.MicSettings.Device)
 		s.mic.poke()
 	}
+	// Every OTHER client holds a copy of these settings and would write it back
+	// with its next save: tell them all what is now on disk (a no-op push if the
+	// microphone settings did not change).
+	s.mic.sourcesChanged()
 
 	// The remote-gateway fields are the ones whose effects outlive this RPC (the
 	// tunnel supervisor reacts to them), so call them out; the manager logs the

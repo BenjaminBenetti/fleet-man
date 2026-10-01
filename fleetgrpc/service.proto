@@ -110,6 +110,9 @@ service FleetService {
   // up (first frame is the MicOpen header); the server streams demand signals
   // down so the client only opens the real microphone while an instance records.
   rpc Mic(stream MicUp) returns (stream MicDown);
+  // ListMicSources returns the attached microphone clients and their capture
+  // devices — what the Settings selector offers (also pushed over Watch).
+  rpc ListMicSources(ListMicSourcesRequest) returns (ListMicSourcesReply);
   // SSHAgent is the SSH-agent forwarding data plane: the client provides its
   // local ssh-agent, the server relays every agent connection made on its host
   // (its own git clone, processes inside instances) down this stream.

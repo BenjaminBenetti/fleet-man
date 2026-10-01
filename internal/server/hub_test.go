@@ -132,6 +132,42 @@ func TestSubscriberRemoteMcpConflation(t *testing.T) {
 	}
 }
 
+// The attached microphone clients are conflated like the remote-MCP status:
+// only the current set matters, and an unchanged one is not sent again.
+func TestHubMicSourcesBroadcastsAndDedups(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := newHub()
+	go h.run(ctx)
+
+	sub := newSubscriber(false)
+	if !h.post(func(h *hub) { h.addSub(sub) }) {
+		t.Fatal("addSub post failed")
+	}
+	set := func(clients ...string) *fleetgrpc.MicSources {
+		sources := &fleetgrpc.MicSources{}
+		for _, client := range clients {
+			sources.Sources = append(sources.Sources, &fleetgrpc.MicSource{Client: client})
+		}
+		return sources
+	}
+	h.post(func(h *hub) { h.broadcastMicSources(set("desk")) })
+	h.post(func(h *hub) { h.broadcastMicSources(set("desk", "laptop")) })
+	drainSync(t, h)
+	if got := sub.takeMicSources(); len(got.GetSources()) != 2 {
+		t.Fatalf("conflation: want the newest set (2 clients), got %v", got)
+	}
+	if again := sub.takeMicSources(); again != nil {
+		t.Fatalf("want nothing pending after a take, got %v", again)
+	}
+
+	h.post(func(h *hub) { h.broadcastMicSources(set("desk", "laptop")) })
+	drainSync(t, h)
+	if again := sub.takeMicSources(); again != nil {
+		t.Fatalf("dedup: an unchanged set was broadcast again: %v", again)
+	}
+}
+
 func TestHubRemoteMcpStatusBroadcastsAndDedups(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

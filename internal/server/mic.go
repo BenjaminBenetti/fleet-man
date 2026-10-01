@@ -27,10 +27,13 @@ import (
 
 // mic.go is the SERVER half of the virtual microphone. Three parties meet here:
 //
-//   - PROVIDERS: clients (TUIs) holding a Mic stream. They own the real
-//     microphone, on whatever machine the human sits at. The most recently
-//     attached one is ACTIVE; the rest stand by and are promoted if it leaves —
-//     superseding rather than rejecting, so two TUIs never fight over the slot.
+//   - PROVIDERS: clients (TUIs) holding a Mic stream. Each owns the real
+//     microphones of the machine it runs on, and announces that machine's name
+//     and capture devices. Exactly one is the SOURCE — the one sent demand and
+//     whose audio is routed: the client Settings selects, if it is attached,
+//     otherwise the most recently attached one. The rest stand by and take over
+//     if the source leaves — superseding rather than rejecting, so two TUIs
+//     never fight over the slot.
 //   - SINKS: one `fleet mic sink` process inside every running instance
 //     (internal/micsink), reached through the backend's MicSinkCommand. Audio
 //     written to a sink's stdin is that instance's microphone; its stdout
@@ -160,9 +163,20 @@ var (
 
 // micProvider is one attached Mic stream.
 type micProvider struct {
+	// client is the machine the provider records on (MicOpen.client, scrubbed).
+	// Empty for a client that predates the field: it can be the source by being
+	// the most recently attached, but it cannot be selected by name.
+	client string
+	// devices is the provider's last listing; listed says one has arrived.
+	// Guarded by the hub's mu.
+	devices []*fleetgrpc.MicDevice
+	listed  bool
 	// demand carries the latest demand to the stream's send loop. Capacity 1,
 	// latest wins: a provider only ever needs the CURRENT answer.
 	demand chan *fleetgrpc.MicDemand
+	// relist asks the stream's send loop to request a fresh device listing.
+	// Capacity 1: requests waiting to be sent are the same request.
+	relist chan struct{}
 	// kicked is closed when the hub ends the stream (feature turned off).
 	kicked chan struct{}
 }
@@ -205,11 +219,15 @@ type micHub struct {
 	// install last ran for a container (see micPrepareRetry).
 	retryAt    map[string]time.Time
 	preparedAt map[string]time.Time
-	// lastDemand / lastDevice are what the active provider was last told.
+	// lastDemand / lastDevice are what the source was last told, and lastSource
+	// who that was.
 	lastDemand []string
 	lastDevice string
-	// device is the capture device chosen in Settings, pushed to providers with
-	// every demand (see MicDemand.device).
+	lastSource *micProvider
+	// client / device are the selection made in Settings: which client's
+	// microphone, and which capture device on it. Pushed to the source with
+	// every demand (see MicDemand).
+	client string
 	device string
 	// teardowns counts closeAllSinks calls, so a sync that read its inputs
 	// BEFORE a teardown can tell, under the lock, that they are stale.
@@ -224,6 +242,13 @@ type micHub struct {
 	// wake pokes the sync loop (provider attach/detach) so a fresh TUI does not
 	// wait out a tick before sinks appear.
 	wake chan struct{}
+
+	// sourcesDirty signals that sources() would now answer differently, and
+	// onSources is who wants to know (the Watch hub; nil in tests). Decoupled by
+	// the channel because every change happens under mu, where calling out —
+	// into a hub loop that may itself be waiting for mu — is not an option.
+	sourcesDirty chan struct{}
+	onSources    func()
 }
 
 func newMicHub() *micHub {
@@ -232,6 +257,7 @@ func newMicHub() *micHub {
 		retryAt:      make(map[string]time.Time),
 		preparedAt:   make(map[string]time.Time),
 		wake:         make(chan struct{}, 1),
+		sourcesDirty: make(chan struct{}, 1),
 		prepareSlots: make(chan struct{}, micPrepareParallel),
 		openSlots:    make(chan struct{}, micOpenParallel),
 	}
@@ -250,6 +276,12 @@ func (h *micHub) run(ctx context.Context) {
 	// serve), then wait for those goroutines, so nothing of the hub outlives it.
 	defer h.attaching.Wait()
 	defer h.closeAllSinks()
+	announcing := make(chan struct{})
+	go func() { defer close(announcing); h.announceSources(ctx) }()
+	defer func() { <-announcing }()
+	// Announce once up front, so a client that subscribes before anything has
+	// changed is still handed the settings the daemon holds.
+	h.sourcesChanged()
 	ticker := time.NewTicker(micSyncInterval)
 	defer ticker.Stop()
 	for {
@@ -314,7 +346,12 @@ func (h *micHub) sync() {
 		h.mu.Unlock()
 		return
 	}
-	h.device = settings.Device
+	if h.client != settings.Client || h.device != settings.Device {
+		// A selection that did not come through SetConfig (config.json edited
+		// by hand): the clients showing it must hear of it all the same.
+		h.sourcesChanged()
+	}
+	h.client, h.device = settings.Client, settings.Device
 	var dropped []*micSink
 	for key, sink := range h.sinks {
 		if inst, ok := want[key]; !ok || inst.ContainerID != sink.containerID {
@@ -681,9 +718,42 @@ func (h *micHub) setDemand(key string, sink *micSink, active bool) {
 	h.publishDemandLocked()
 }
 
-// publishDemandLocked tells the active provider who is recording, if that
-// changed. Every transition is logged: this is the audit trail of when the
-// human's microphone was live, and for whom.
+// sourceLocked is the provider whose microphone is recorded: the newest one
+// attached from the selected client, or — with no selection, or with the
+// selected client not attached — the newest one of all. Falling back rather than
+// going silent is the same promise the device selection makes (a device that is
+// not there records the system default): closing the laptop that was selected
+// must not leave the instances with a dead microphone while another client is
+// sitting right there.
+func (h *micHub) sourceLocked() *micProvider {
+	if h.client != "" {
+		for i := len(h.providers) - 1; i >= 0; i-- {
+			if h.providers[i].client == h.client {
+				return h.providers[i]
+			}
+		}
+	}
+	if n := len(h.providers); n > 0 {
+		return h.providers[n-1]
+	}
+	return nil
+}
+
+// deviceForLocked is the device to push to provider. The selected device is an
+// id from the SELECTED client's enumeration, so a provider standing in for that
+// client is not sent it: ids are not unique across machines ("the built-in
+// microphone" has the same id on two laptops of one model), and a stand-in must
+// record its default, not whatever happens to share the name.
+func (h *micHub) deviceForLocked(provider *micProvider) string {
+	if provider == nil || (h.client != "" && provider.client != h.client) {
+		return ""
+	}
+	return h.device
+}
+
+// publishDemandLocked tells the source who is recording, if that — or who the
+// source is — changed. Every transition is logged: this is the audit trail of
+// when a human's microphone was live, whose, and for whom.
 func (h *micHub) publishDemandLocked() {
 	var demanding []string
 	for key, sink := range h.sinks {
@@ -692,59 +762,85 @@ func (h *micHub) publishDemandLocked() {
 		}
 	}
 	slices.Sort(demanding)
+	source := h.sourceLocked()
+	device := h.deviceForLocked(source)
 	demandChanged := !slices.Equal(demanding, h.lastDemand)
-	if !demandChanged && h.device == h.lastDevice {
+	sourceChanged := source != h.lastSource
+	if !demandChanged && !sourceChanged && device == h.lastDevice {
 		return
 	}
-	h.lastDemand, h.lastDevice = demanding, h.device
-	if len(h.providers) == 0 {
+	previous := h.lastSource
+	wasRecording := len(h.lastDemand) > 0
+	h.lastDemand, h.lastDevice, h.lastSource = demanding, device, source
+	if sourceChanged || wasRecording != (len(demanding) > 0) {
+		h.sourcesChanged()
+	}
+	if sourceChanged && previous != nil && slices.Contains(h.providers, previous) {
+		// Superseded, not gone: it must close its microphone.
+		previous.post(h.demandMessageLocked(previous, nil))
+	}
+	if source == nil {
 		return
 	}
-	if demandChanged {
-		if len(demanding) > 0 {
-			flog.Info("mic live", "instances", strings.Join(demanding, ","))
-		} else {
-			flog.Info("mic idle")
-		}
+	switch {
+	case len(demanding) == 0 && demandChanged:
+		flog.Info("mic idle")
+	case len(demanding) > 0 && (demandChanged || sourceChanged):
+		flog.Info("mic live", "instances", strings.Join(demanding, ","), "client", source.client)
 	}
-	h.providers[len(h.providers)-1].post(h.demandMessageLocked(demanding))
+	source.post(h.demandMessageLocked(source, demanding))
 }
 
-// demandMessageLocked is the one place a MicDemand is built, so the selected
-// device rides along with every one of them.
-func (h *micHub) demandMessageLocked(demanding []string) *fleetgrpc.MicDemand {
-	return &fleetgrpc.MicDemand{Active: len(demanding) > 0, Instances: demanding, Device: h.device}
+// demandMessageLocked is the one place a MicDemand is built, so the selection
+// rides along with every one of them.
+func (h *micHub) demandMessageLocked(provider *micProvider, demanding []string) *fleetgrpc.MicDemand {
+	return &fleetgrpc.MicDemand{
+		Active:    len(demanding) > 0,
+		Instances: demanding,
+		Device:    h.deviceForLocked(provider),
+		Client:    h.client,
+	}
 }
 
-// setDevice records a changed device selection (SetConfig) and republishes, so a
-// running provider learns of it at once rather than at its next recording.
-func (h *micHub) setDevice(device string) {
+// setSelection records a changed selection (SetConfig) and republishes, so the
+// microphone moves to the newly selected client — or device — at once rather
+// than at the next sync tick.
+func (h *micHub) setSelection(client, device string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.device = device
+	h.client, h.device = client, device
 	h.publishDemandLocked()
 }
 
-// addProvider attaches a stream as the new active provider. The previous active
-// one is told to stop capturing; the new one is greeted with current demand.
-func (h *micHub) addProvider(device string) *micProvider {
-	provider := &micProvider{demand: make(chan *fleetgrpc.MicDemand, 1), kicked: make(chan struct{})}
-	h.mu.Lock()
-	h.device, h.lastDevice = device, device
-	if n := len(h.providers); n > 0 {
-		h.providers[n-1].post(h.demandMessageLocked(nil))
+// addProvider attaches a stream. Whether it becomes the source is the
+// selection's call (sourceLocked): if it does, the previous source is told to
+// stop capturing and it is greeted with current demand; if it does not, it is
+// greeted idle — every accepted stream is greeted, the greeting doubles as
+// "attached".
+func (h *micHub) addProvider(client string, settings state.MicSettings) *micProvider {
+	provider := &micProvider{
+		client: client,
+		demand: make(chan *fleetgrpc.MicDemand, 1),
+		relist: make(chan struct{}, 1),
+		kicked: make(chan struct{}),
 	}
+	h.mu.Lock()
+	h.client, h.device = settings.Client, settings.Device
 	h.providers = append(h.providers, provider)
-	provider.post(h.demandMessageLocked(h.lastDemand))
+	if h.sourceLocked() != provider {
+		provider.post(h.demandMessageLocked(provider, nil))
+	}
+	h.publishDemandLocked()
+	h.sourcesChanged()
 	count := len(h.providers)
 	h.mu.Unlock()
-	flog.Info("mic provider attached", "providers", count)
+	flog.Info("mic provider attached", "client", client, "providers", count)
 	h.poke()
 	return provider
 }
 
-// removeProvider detaches a stream, promoting the newest stand-by if it was the
-// active one.
+// removeProvider detaches a stream; if it was the source, the next in line
+// (sourceLocked) takes over.
 func (h *micHub) removeProvider(provider *micProvider) {
 	h.mu.Lock()
 	index := slices.Index(h.providers, provider)
@@ -752,14 +848,12 @@ func (h *micHub) removeProvider(provider *micProvider) {
 		h.mu.Unlock()
 		return
 	}
-	wasActive := index == len(h.providers)-1
 	h.providers = slices.Delete(h.providers, index, index+1)
-	if n := len(h.providers); wasActive && n > 0 {
-		h.providers[n-1].post(h.demandMessageLocked(h.lastDemand))
-	}
+	h.publishDemandLocked()
+	h.sourcesChanged()
 	count := len(h.providers)
 	h.mu.Unlock()
-	flog.Info("mic provider detached", "providers", count)
+	flog.Info("mic provider detached", "client", provider.client, "providers", count)
 	h.poke()
 }
 
@@ -768,6 +862,8 @@ func (h *micHub) kickProviders() {
 	h.mu.Lock()
 	kicked := h.providers
 	h.providers = nil
+	h.lastSource = nil
+	h.sourcesChanged()
 	h.mu.Unlock()
 	for _, provider := range kicked {
 		close(provider.kicked)
@@ -775,12 +871,12 @@ func (h *micHub) kickProviders() {
 }
 
 // route fans one audio frame from provider out to every sink with demand.
-// Frames from a stand-by provider, or for a sink whose queue is full, are
-// dropped — live audio is worthless late.
+// Frames from a provider that is not the source, or for a sink whose queue is
+// full, are dropped — live audio is worthless late.
 func (h *micHub) route(provider *micProvider, pcm []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if n := len(h.providers); n == 0 || h.providers[n-1] != provider {
+	if h.sourceLocked() != provider {
 		return
 	}
 	for _, sink := range h.sinks {
@@ -790,6 +886,119 @@ func (h *micHub) route(provider *micProvider, pcm []byte) {
 		select {
 		case sink.audio <- pcm:
 		default:
+		}
+	}
+}
+
+// --- sources: who is attached, and what they can record ---------------------------
+
+// cleanMicClient scrubs a provider's announced name. It is stored, compared
+// against the selection and drawn in every other client's terminal.
+func cleanMicClient(name string) string {
+	return mic.CleanText(name, mic.MaxClientName)
+}
+
+// cleanMicDevices bounds and scrubs a provider's announced device listing, for
+// the same reasons (a provider may be remote; see mic.CleanDevices).
+func cleanMicDevices(list *fleetgrpc.MicDeviceList) []*fleetgrpc.MicDevice {
+	var announced []mic.Device
+	for _, device := range list.GetDevices() {
+		// Bounded BEFORE scrubbing: the scrub is linear in what it is handed.
+		if len(announced) == 4*mic.MaxDevices {
+			break
+		}
+		label := device.GetLabel()
+		if len(label) > 4*mic.MaxDeviceLabel {
+			label = label[:4*mic.MaxDeviceLabel]
+		}
+		announced = append(announced, mic.Device{ID: device.GetId(), Label: label})
+	}
+	var devices []*fleetgrpc.MicDevice
+	for _, device := range mic.CleanDevices(announced) {
+		devices = append(devices, &fleetgrpc.MicDevice{Id: device.ID, Label: device.Label})
+	}
+	return devices
+}
+
+// setDevices records a provider's device listing.
+func (h *micHub) setDevices(provider *micProvider, devices []*fleetgrpc.MicDevice) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !slices.Contains(h.providers, provider) {
+		return
+	}
+	provider.devices, provider.listed = devices, true
+	h.sourcesChanged()
+}
+
+// relistDevices asks every attached provider for a fresh device listing.
+func (h *micHub) relistDevices() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, provider := range h.providers {
+		select {
+		case provider.relist <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// sources is the attached microphone clients and what each can record — what a
+// selector offers. One entry per client NAME: several providers on one machine
+// (two TUIs) are one source, described by the newest of them. Anonymous
+// providers (no name: a client that predates it) are left out — there is
+// nothing to select them by.
+func (h *micHub) sources() *fleetgrpc.MicSources {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	source := h.sourceLocked()
+	recording := len(h.lastDemand) > 0
+	byClient := make(map[string]*fleetgrpc.MicSource)
+	out := &fleetgrpc.MicSources{}
+	for i := len(h.providers) - 1; i >= 0; i-- {
+		provider := h.providers[i]
+		if provider.client == "" {
+			continue
+		}
+		entry, seen := byClient[provider.client]
+		if !seen {
+			entry = &fleetgrpc.MicSource{Client: provider.client}
+			byClient[provider.client] = entry
+			out.Sources = append(out.Sources, entry)
+		}
+		if !entry.DevicesListed && provider.listed {
+			entry.Devices, entry.DevicesListed = provider.devices, true
+		}
+		if provider == source {
+			entry.Source, entry.Recording = true, recording
+		}
+	}
+	slices.SortFunc(out.Sources, func(a, b *fleetgrpc.MicSource) int { return strings.Compare(a.GetClient(), b.GetClient()) })
+	return out
+}
+
+// sourcesChanged flags that what a selector shows — the attached clients, or
+// the settings that select among them — is no longer what was last announced.
+// Safe with or without mu held: it only signals.
+func (h *micHub) sourcesChanged() {
+	select {
+	case h.sourcesDirty <- struct{}{}:
+	default:
+	}
+}
+
+// announceSources calls onSources after every change, off the hub's lock. It is
+// the ONLY caller, and calls it from this one goroutine: that is what keeps two
+// changes in quick succession from being announced out of order.
+func (h *micHub) announceSources(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-h.sourcesDirty:
+			if h.onSources != nil {
+				h.onSources()
+			}
 		}
 	}
 }
@@ -836,7 +1045,7 @@ func (s *service) Mic(stream fleetgrpc.FleetService_MicServer) error {
 		return status.Error(codes.FailedPrecondition, "the microphone is disabled in settings")
 	}
 
-	provider := s.mic.addProvider(settings.Device)
+	provider := s.mic.addProvider(cleanMicClient(open.GetClient()), settings)
 	defer s.mic.removeProvider(provider)
 
 	recvDone := make(chan error, 1)
@@ -856,6 +1065,9 @@ func (s *service) Mic(stream fleetgrpc.FleetService_MicServer) error {
 				}
 				s.mic.route(provider, pcm)
 			}
+			if list := up.GetDevices(); list != nil {
+				s.mic.setDevices(provider, cleanMicDevices(list))
+			}
 		}
 	}()
 
@@ -863,6 +1075,10 @@ func (s *service) Mic(stream fleetgrpc.FleetService_MicServer) error {
 		select {
 		case demand := <-provider.demand:
 			if err := stream.Send(&fleetgrpc.MicDown{Msg: &fleetgrpc.MicDown_Demand{Demand: demand}}); err != nil {
+				return err
+			}
+		case <-provider.relist:
+			if err := stream.Send(&fleetgrpc.MicDown{Msg: &fleetgrpc.MicDown_ListDevices{ListDevices: &fleetgrpc.MicListDevices{}}}); err != nil {
 				return err
 			}
 		case err := <-recvDone:
@@ -876,4 +1092,32 @@ func (s *service) Mic(stream fleetgrpc.FleetService_MicServer) error {
 			return stream.Context().Err()
 		}
 	}
+}
+
+// ListMicSources returns the attached microphone clients and their devices,
+// optionally asking each provider to enumerate again first. The refreshed
+// listings are not waited for: they arrive over Watch as the providers answer
+// (an enumeration can take seconds against a wedged sound server, and a
+// selector should not hang on the slowest client).
+func (s *service) ListMicSources(_ context.Context, req *fleetgrpc.ListMicSourcesRequest) (*fleetgrpc.ListMicSourcesReply, error) {
+	if req.GetRefresh() {
+		s.mic.relistDevices()
+	}
+	return &fleetgrpc.ListMicSourcesReply{Sources: s.micSourcesNow(nil)}, nil
+}
+
+// micSourcesNow is what a selector needs, in one snapshot: the attached clients
+// and the microphone settings that select among them, read from the config —
+// the daemon is its only writer, so that IS what the daemon holds. If the config
+// cannot be read just now (caught mid-write), lastKnown stands in: an absent
+// group tells clients "not known, keep what you have", which must not replace a
+// good value in the cache every new subscriber is greeted from.
+func (s *service) micSourcesNow(lastKnown *fleetgrpc.MicSettings) *fleetgrpc.MicSources {
+	sources := s.mic.sources()
+	sources.Settings = lastKnown
+	if settings, err := micSetting(); err == nil {
+		client := settings.Client
+		sources.Settings = &fleetgrpc.MicSettings{Enabled: settings.Enabled, Device: settings.Device, Client: &client}
+	}
+	return sources
 }

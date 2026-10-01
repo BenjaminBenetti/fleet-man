@@ -401,10 +401,17 @@ func (x *RemoteMcpSettings) GetFleetMode() string {
 // into instances at provision time and the per-instance sinks (the "virtual
 // device injection"). device is the capture device on the CLIENT's machine
 // (an id from the client's own enumeration); empty means the system default.
+// client names WHICH connected client's microphone is recorded (MicOpen.client);
+// empty means the most recently attached one.
 type MicSettings struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Enabled       bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	Device        string                 `protobuf:"bytes,2,opt,name=device,proto3" json:"device,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Enabled bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Device  string                 `protobuf:"bytes,2,opt,name=device,proto3" json:"device,omitempty"`
+	// optional: a client built before the field existed sends the group without
+	// it, and that must read as "unchanged" — not as clearing the selection every
+	// time such a client saves an unrelated setting. A current client always
+	// sends it, the empty string included.
+	Client        *string `protobuf:"bytes,3,opt,name=client,proto3,oneof" json:"client,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -449,6 +456,13 @@ func (x *MicSettings) GetEnabled() bool {
 func (x *MicSettings) GetDevice() string {
 	if x != nil {
 		return x.Device
+	}
+	return ""
+}
+
+func (x *MicSettings) GetClient() string {
+	if x != nil && x.Client != nil {
+		return *x.Client
 	}
 	return ""
 }
@@ -821,10 +835,12 @@ const file_config_proto_rawDesc = "" +
 	"\rfleet_enabled\x18\x03 \x01(\bR\ffleetEnabled\x12'\n" +
 	"\x0fwebhook_enabled\x18\x04 \x01(\bR\x0ewebhookEnabled\x12\x1d\n" +
 	"\n" +
-	"fleet_mode\x18\x05 \x01(\tR\tfleetMode\"?\n" +
+	"fleet_mode\x18\x05 \x01(\tR\tfleetMode\"g\n" +
 	"\vMicSettings\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x16\n" +
-	"\x06device\x18\x02 \x01(\tR\x06device\"#\n" +
+	"\x06device\x18\x02 \x01(\tR\x06device\x12\x1b\n" +
+	"\x06client\x18\x03 \x01(\tH\x00R\x06client\x88\x01\x01B\t\n" +
+	"\a_client\"#\n" +
 	"\rThemeSettings\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"\x87\x04\n" +
 	"\x06Config\x124\n" +
@@ -907,6 +923,7 @@ func file_config_proto_init() {
 	file_config_proto_msgTypes[2].OneofWrappers = []any{}
 	file_config_proto_msgTypes[3].OneofWrappers = []any{}
 	file_config_proto_msgTypes[4].OneofWrappers = []any{}
+	file_config_proto_msgTypes[6].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

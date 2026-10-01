@@ -49,6 +49,7 @@ func (c *Config) applyDefaults() {
 	c.RemoteMcpSettings.GatewayURL = strings.TrimSpace(c.RemoteMcpSettings.GatewayURL)
 
 	c.MicSettings.Device = strings.TrimSpace(c.MicSettings.Device)
+	c.MicSettings.Client = strings.TrimSpace(c.MicSettings.Client)
 	c.ThemeSettings.Name = strings.TrimSpace(c.ThemeSettings.Name)
 }
 

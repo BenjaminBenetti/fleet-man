@@ -5,6 +5,7 @@ package fleetgrpc;
 import "domain.proto";
 import "runtime.proto";
 import "jobs.proto";
+import "exec.proto";
 
 option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
 
@@ -62,6 +63,11 @@ message WatchRequest {
 // COMPUTED value (never a Config field), so the settings page renders whatever
 // the latest pushed status says without any SetConfig read-back. Conflatable
 // (newest status wins) and cached by the hub for the initial snapshot.
+//
+// MicSources is the set of attached microphone clients and their capture
+// devices (exec.proto) — what the Settings selector offers. Server-owned and
+// conflatable exactly like RemoteMcpStatus, and likewise part of the initial
+// snapshot.
 message Event {
   oneof kind {
     StateChanged state_changed = 1;
@@ -73,6 +79,7 @@ message Event {
     RuntimeChanged runtime_changed = 7;
     RemoteMcpStatus remote_mcp_status = 8;
     FileCopy file_copy = 9;
+    MicSources mic_sources = 10;
   }
 }
 

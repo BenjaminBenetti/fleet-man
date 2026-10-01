@@ -43,6 +43,10 @@ type Status struct {
 	// FellBack is set while live if the configured device is not on this
 	// machine and the system default is being recorded instead.
 	FellBack bool
+	// StandInFor is set while live if Settings selects ANOTHER client's
+	// microphone and that client is not attached: this machine is recording in
+	// its place (on its system default). It names the selected client.
+	StandInFor string
 }
 
 const (
@@ -100,6 +104,20 @@ func (q frameQueue) drain() {
 // startCapture is a seam so tests can run the stream logic with no recorder.
 var startCapture = StartNotify
 
+// listDevices is the listing a provider announces; a seam for the same reason.
+var listDevices = announcedDevices
+
+// deviceList converts a listing for the wire, bounded the way the daemon will
+// bound it anyway (CleanDevices) — so what this machine announces is what
+// every selector shows.
+func deviceList(devices []Device) *fleetgrpc.MicDeviceList {
+	list := &fleetgrpc.MicDeviceList{}
+	for _, device := range CleanDevices(devices) {
+		list.Devices = append(list.Devices, &fleetgrpc.MicDevice{Id: device.ID, Label: device.Label})
+	}
+	return list
+}
+
 // Run is the microphone provider loop: it holds a Mic stream to the daemon,
 // opens the real microphone only while the daemon reports demand, and streams
 // the captured PCM up. It reconnects with backoff and returns when ctx is
@@ -110,6 +128,12 @@ var startCapture = StartNotify
 // selection applies to the next recording. override, if non-empty, wins over it
 // (`fleet mic attach --device`). report is called from Run's goroutine on every
 // status change; it must not block.
+//
+// The provider also ANNOUNCES itself: its machine's name (ClientName) and its
+// capture devices, which is what lets a selector on any other client offer this
+// machine's microphones. Being attached is not the same as being recorded — the
+// daemon sends active demand to one provider at a time, the one Settings
+// selects — so a provider that is not the source simply stays idle.
 func Run(ctx context.Context, svc fleetgrpc.FleetServiceClient, override string, report func(Status)) {
 	backoff := reconnectInitial
 	// The capture back-off lives HERE, across streams: as a runStream local every
@@ -161,12 +185,20 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override s
 	if err != nil {
 		return false, err
 	}
+	self := ClientName()
 	if err := stream.Send(&fleetgrpc.MicUp{Msg: &fleetgrpc.MicUp_Open{Open: &fleetgrpc.MicOpen{
 		SampleRate: SampleRate,
 		Channels:   Channels,
+		Client:     self,
 	}}}); err != nil {
 		return false, err
 	}
+
+	// listNow asks the lister below for a fresh device listing: once now, and
+	// again whenever the daemon asks (someone opened a selector). Capacity 1:
+	// requests arriving while one is pending are the same request.
+	listNow := make(chan struct{}, 1)
+	listNow <- struct{}{}
 
 	demands := make(chan *fleetgrpc.MicDemand)
 	recvErr := make(chan error, 1)
@@ -176,6 +208,12 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override s
 			if err != nil {
 				recvErr <- err
 				return
+			}
+			if down.GetListDevices() != nil {
+				select {
+				case listNow <- struct{}{}:
+				default:
+				}
 			}
 			if demand := down.GetDemand(); demand != nil {
 				select {
@@ -187,11 +225,44 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override s
 		}
 	}()
 
+	// Enumerating shells out to the sound server (seconds, when that is wedged),
+	// so it has a goroutine of its own: nothing about WHAT this machine can
+	// record may delay opening the stream, answering demand, or closing the
+	// microphone. A listing that fails is not sent — it says nothing about the
+	// hardware, and the daemon keeps what it was told before.
+	lists := make(chan *fleetgrpc.MicDeviceList, 1)
+	enumerate := listDevices // read here, not on the goroutine, which may outlive this call
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-listNow:
+			}
+			devices, err := enumerate()
+			if err != nil {
+				continue
+			}
+			list := deviceList(devices)
+			// Latest wins. This goroutine is the only producer, so after
+			// discarding an unsent listing the slot is free.
+			select {
+			case <-lists:
+			default:
+			}
+			select {
+			case lists <- list:
+			default:
+			}
+		}
+	}()
+
 	// Captured audio reaches the stream through a queue and ONE sender goroutine
 	// for the life of the stream — never from the recorder's read loop. Two
 	// reasons: Stream.Send is not safe for concurrent use, and a Send stalled on
 	// the network must not be what Capture.Stop waits for. Closing the real
-	// microphone is the one thing here that has to be prompt.
+	// microphone is the one thing here that has to be prompt. Device listings
+	// go out through the same goroutine, for the first of those reasons.
 	frames := make(frameQueue, sendQueue)
 	go func() {
 		for {
@@ -199,6 +270,10 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override s
 			case pcm := <-frames:
 				if stream.Send(&fleetgrpc.MicUp{Msg: &fleetgrpc.MicUp_Audio{Audio: pcm}}) != nil {
 					return // the recv loop reports the stream's death
+				}
+			case list := <-lists:
+				if stream.Send(&fleetgrpc.MicUp{Msg: &fleetgrpc.MicUp_Devices{Devices: list}}) != nil {
+					return
 				}
 			case <-ctx.Done():
 				return
@@ -216,7 +291,13 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override s
 		wanted     []string // who is recording, for the status report
 		device     = override
 		startedAt  time.Time
+		// standInFor names the client Settings selects while that is not this
+		// machine: demand reaching us anyway means it is not attached.
+		standInFor string
 	)
+	live := func(fellBack bool) Status {
+		return Status{State: StateLive, Instances: wanted, FellBack: fellBack, StandInFor: standInFor}
+	}
 	stop := func() {
 		if capture != nil {
 			capture.Stop()
@@ -256,7 +337,7 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override s
 		}
 		capture, captureCh = started, started.Done()
 		startedAt = time.Now()
-		report(Status{State: StateLive, Instances: wanted, FellBack: started.FellBack()})
+		report(live(started.FellBack()))
 	}
 
 	for {
@@ -276,6 +357,10 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override s
 			// so the first frame doubles as "attached".
 			attached = true
 			active = demand.GetActive()
+			standInFor = ""
+			if selected := demand.GetClient(); selected != self {
+				standInFor = selected
+			}
 			if override == "" && device != demand.GetDevice() {
 				device = demand.GetDevice() // applies to the NEXT capture start
 				// …and the back-off belonged to the OLD device: a recorder
@@ -302,7 +387,7 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override s
 			} else if capture == nil {
 				// waiting out the back-off; the retry will pick `wanted` up
 			} else {
-				report(Status{State: StateLive, Instances: wanted, FellBack: capture.FellBack()})
+				report(live(capture.FellBack()))
 			}
 		case <-captureCh:
 			// The recorder died on its own while demand was active.
@@ -320,7 +405,7 @@ func runStream(ctx context.Context, svc fleetgrpc.FleetServiceClient, override s
 			// The configured device would not open; the default is live instead.
 			// Ask the capture rather than assume: it is the one that knows.
 			if capture != nil {
-				report(Status{State: StateLive, Instances: wanted, FellBack: capture.FellBack()})
+				report(live(capture.FellBack()))
 			}
 		case <-retry:
 			retry = nil

@@ -125,6 +125,7 @@ fleet trigger logs my-project nightly   # inspect a trigger's recorded firings
 
 # Virtual microphone (enable it under Settings -> Microphone first)
 fleet mic devices                       # this machine's capture devices
+fleet mic sources                       # every connected client's capture devices (* = the one recorded)
 fleet mic attach                        # provide the microphone without a TUI open (records the Settings device; --device overrides)
 ```
 
@@ -601,30 +602,43 @@ you say straight into the prompt — but an agent in a devcontainer has no sound
 hardware to listen to. Fleet's **virtual microphone** proxies the microphone of
 the machine you are sitting at into your instances, over the same gRPC connection
 everything else uses. It follows you: drive a remote daemon through a gateway or
-SSH and the microphone is still the one on your laptop.
+SSH and the microphone is the one on your laptop — every machine with a TUI on
+the daemon offers its microphones, and you pick which one is recorded.
 
 Turn it on under **Settings → Microphone**:
 
 | Setting | What it does |
 |---------|--------------|
 | **Enabled** | Off by default. On: new instances get the audio packages at provision time (existing running instances get them the first time the microphone attaches), and each running instance gets a virtual capture device. Off: nothing is installed or injected, and the instances' virtual sound servers are shut down. |
-| **Device** | Which capture device to record from. Defaults to the system default; `←`/`→` cycles through the devices found on *this* machine (also listed by `fleet mic devices`). A device that is not present — e.g. a setting saved from another machine — falls back to the system default. |
+| **Source** | Which microphone to record: a **client** — a machine with a TUI (or `fleet mic attach`) on this daemon — and a capture device on it. `←`/`→` cycles through **Automatic**, this machine's devices, then the devices of every other connected client (the same list as `fleet mic sources`). **Automatic**, the default, records the most recently connected client on its system default. A selected client that is not connected is stood in for by the most recently connected one — on *its* system default — until it returns; a device that is no longer there falls back to the system default. The selection (like **Enabled**) belongs to the daemon: change it in one TUI and every other open TUI shows it at once. |
 
 **Your microphone is only open while something is recording.** The instance
 reports when a recorder attaches to its virtual microphone, and only then does
 fleet start capturing; it stops the moment the recorder detaches. While it is
 open the TUI header shows `● MIC` and the Settings status row names the
-instances listening. The daemon also logs every change in who is recording to
-its `~/.fleet/fleet.log` (`mic live` / `mic idle`) — on the daemon's machine,
-which with a remote fleet is not the machine whose microphone opens.
+instances listening. The daemon also logs every change in who is recording, and
+from which client, to its `~/.fleet/fleet.log` (`mic live` / `mic idle`) — on
+the daemon's machine, which with a remote fleet is not the machine whose
+microphone opens.
+
+**Any client of the daemon can choose any connected client's microphone.** The
+selection is a daemon setting, so someone at another machine can make *your*
+microphone the source — which is the point when both machines are yours. Your
+TUI still shows `● MIC` the moment it opens, and it only ever opens for a
+recorder running in an instance. Only connect a machine to a daemon whose other
+users you would hand a microphone to; turning **Enabled** off, or closing the
+TUI, takes the machine out of the list.
 
 How it fits together:
 
 - **On your machine** the TUI (or `fleet mic attach`, for running without one)
   records with whatever is installed — `parec` (PulseAudio / PipeWire / WSLg),
   `arecord`, `ffmpeg`, or SoX `rec`; on macOS `ffmpeg` (`brew install ffmpeg`) —
-  and streams 16 kHz mono PCM to the daemon. With several TUIs attached the most
-  recently opened one supplies the audio.
+  and streams 16 kHz mono PCM to the daemon. Each one announces its machine's
+  name (the hostname; `FLEET_MIC_CLIENT` overrides it) and capture devices,
+  which is what the **Source** selector on every other client lists. With
+  several attached, exactly one supplies the audio: the selected client, else
+  the most recently opened. The others keep their microphones closed.
 - **The daemon** relays it to the instances that are recording.
 - **In the instance** a small private PulseAudio server exposes the stream as
   the default source, and `/etc/asound.conf` makes it the ALSA default too — so
@@ -746,6 +760,7 @@ Variables fleet **reads** (set them to configure behavior):
 | `FLEET_SSH_AGENT_SOCK` | absolute path, `off`, or `none` (case-insensitive) | How instances reach the SSH agent. By default they use the daemon's relay socket on Linux (see [Your SSH agent on a remote fleet](#your-ssh-agent-on-a-remote-fleet)) and Docker Desktop's VM-side `/run/host-services/ssh-auth.sock` on macOS (OrbStack and `colima --ssh-agent` are path-compatible). A path bind-mounts that socket instead — set it if your Docker backend exposes the agent elsewhere (default Colima, Podman machine, Rancher Desktop); instances then bypass the relay, so an agent forwarded by an Armada client reaches only the daemon's own git. `off`/`none` disables agent forwarding entirely, the relay and forwarding from Armada clients included. |
 | `FLEET_OPENER` | program (+ args, whitespace-split) | Program `fleet open` / in-instance `fo` hands a copied file to instead of the desktop opener (`xdg-open`, `open`, `wslview`), e.g. `imv -f`. Read by whichever process opens the file: the CLI for `fleet open`, the TUI for `fo`. Executables are never opened. |
 | `FLEET_MIC_CAPTURE` | shell command | Replace fleet's microphone recorder: the command's stdout must be raw 16 kHz mono signed 16-bit little-endian PCM. For audio stacks fleet can't drive itself (e.g. `sox -t coreaudio "My Mic" -t raw -r 16000 -e signed -b 16 -c 1 -`). Read by the process providing the microphone (the TUI / `fleet mic attach`). Fleet cannot pass your command a device, so the Device setting reaches it as `FLEET_MIC_DEVICE` (the raw configured id, empty for the system default) for it to honour or ignore. See [Microphone](#microphone). |
+| `FLEET_MIC_CLIENT` | name | The name this machine's microphone provider announces to the daemon — what its devices are listed under in **Settings → Microphone → Source** and what the selection is stored against. Defaults to the short hostname; set it to tell apart two machines that share one. Read by the process providing the microphone (the TUI / `fleet mic attach`). See [Microphone](#microphone). |
 | `CODER_URL` | URL | Coder deployment URL (Coder backend). |
 | `CODER_SESSION_TOKEN` | token | Coder API token (Coder backend). |
 | `CODER_CONFIG_DIR` | path | Override the Coder CLI config dir. |

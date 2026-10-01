@@ -326,6 +326,52 @@ func TestDetectionProbesPulseOnce(t *testing.T) {
 	}
 }
 
+// The provider announces its devices on its own, next to the capture-start
+// path — so unlike the selector's listing it must NOT force a fresh detection
+// (detection holds the lock capture start needs, and costs a sound-server
+// probe). It still seeds the allowlist: what a provider announced is what
+// another client may select, and that must validate here without relisting.
+func TestAnnouncedDevicesListsWithoutRedetecting(t *testing.T) {
+	fakeHost(t, "linux", []string{"parec", "pactl"}, map[string]string{
+		"pactl info":         "ok",
+		"pactl list sources": pactlSources,
+	})
+	probes := 0
+	inner := runProbe
+	runProbe = func(name string, args ...string) ([]byte, error) {
+		if name == "pactl" && len(args) == 1 && args[0] == "info" {
+			probes++
+		}
+		return inner(name, args...)
+	}
+	if !Available() { // the provider checked this before attaching
+		t.Fatal("expected pulse to be usable")
+	}
+	listings := countListings(t)
+
+	devices, err := announcedDevices()
+	if err != nil || len(devices) != 2 {
+		t.Fatalf("announcedDevices = %+v, %v", devices, err)
+	}
+	if probes != 1 {
+		t.Fatalf("pactl info ran %d times, want 1: announcing must reuse the detection verdict", probes)
+	}
+	if _, used, _ := commandArgv(devices[0].ID); used != devices[0].ID {
+		t.Fatalf("an announced device must validate: used %q", used)
+	}
+	if *listings != 1 {
+		t.Fatalf("listed %d times, want 1 (the announcement seeded the allowlist)", *listings)
+	}
+
+	// The selector's listing is the explicit one: it looks again.
+	if _, err := Devices(); err != nil {
+		t.Fatal(err)
+	}
+	if probes != 2 {
+		t.Fatalf("pactl info ran %d times, want 2: Devices() re-detects", probes)
+	}
+}
+
 func TestAVFoundationListWithoutATableIsAnError(t *testing.T) {
 	fakeHost(t, "darwin", []string{"ffmpeg"}, map[string]string{
 		"ffmpeg -hide_banner -f avfoundation -list_devices true -i ": "ffmpeg: unrecognized option\n",

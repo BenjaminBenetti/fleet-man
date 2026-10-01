@@ -111,6 +111,13 @@ type remoteMcpStatusMsg struct {
 	gen    int
 }
 
+// micSourcesMsg carries the daemon's pushed set of attached microphone clients
+// (every machine with a provider on this daemon, and its capture devices).
+type micSourcesMsg struct {
+	sources *fleetgrpc.MicSources
+	gen     int
+}
+
 // serverInfoMsg carries the daemon version learned at Dial time (Hello
 // handshake), sent on every successful (re)connect so the header can render the
 // control-chain versions.
@@ -232,6 +239,8 @@ func watchOnce(ctx context.Context, program *tea.Program, gen int) bool {
 			})
 		case *fleetgrpc.Event_RemoteMcpStatus:
 			program.Send(remoteMcpStatusMsg{status: k.RemoteMcpStatus, gen: gen})
+		case *fleetgrpc.Event_MicSources:
+			program.Send(micSourcesMsg{sources: k.MicSources, gen: gen})
 		default:
 			// Job* events are not consumed by the TUI in P2.
 		}

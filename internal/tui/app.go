@@ -115,6 +115,11 @@ type model struct {
 	micDevicesLoaded  bool
 	micDevicesLoading bool
 	micDevicesErr     string
+	// micSources is the daemon's pushed set of attached microphone clients —
+	// every machine with a provider on this daemon, with its capture devices —
+	// which is what lets the selector offer microphones on OTHER machines. nil
+	// until the first push (or against a daemon that predates it).
+	micSources *fleetgrpc.MicSources
 
 	// SSH-agent forwarding (sshagent.go): the provider's latest status report
 	// while the TUI provides its agent to the current remote.
@@ -962,6 +967,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// state + computed Public MCP URL). Cache it for the settings page to
 		// render; a redraw picks it up on the next frame.
 		m.remoteMcpStatus = msg.status
+		return m, spinCmd
+
+	case micSourcesMsg:
+		if msg.gen != m.watchGen {
+			return m, spinCmd
+		}
+		m.micSources = msg.sources
+		m.adoptMicSettings(msg.sources.GetSettings())
 		return m, spinCmd
 
 	case serverInfoMsg:
