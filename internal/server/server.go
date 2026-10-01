@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/create"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/server/remote"
@@ -89,7 +90,16 @@ func Serve(ctx context.Context) error {
 	// already finds its socket and the daemon's own clones the relay.
 	agentRelayDone := startAgentRelay(hubCtx, svc.agent)
 	// In-instance fleet MCP (issue #219): a socket in the control directory of
-	// every instance whose automation agent has the fleet MCP.
+	// every instance of the fleets that have the Fleet MCP setting on. Like the
+	// agent relay's, a new instance's socket is opened as soon as provisioning
+	// creates its control directory, so its first shell already finds it.
+	agentSocketReady := create.ControlDirReady
+	create.ControlDirReady = func(fleetName, instanceName string) {
+		if agentSocketReady != nil {
+			agentSocketReady(fleetName, instanceName)
+		}
+		svc.instanceMCP.ensureInstance(fleetName, instanceName)
+	}
 	instanceMCPDone := make(chan struct{})
 	go func() {
 		defer close(instanceMCPDone)

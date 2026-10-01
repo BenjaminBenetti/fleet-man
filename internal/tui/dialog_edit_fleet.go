@@ -17,10 +17,11 @@ import (
 
 // editFleetRow identifies a focusable row in the edit-fleet dialog.
 const (
-	editFleetRowAgents = iota // collapsible section header (issue #184)
-	editFleetRowClaude        // child of Agents; only navigable when expanded
-	editFleetRowCodex         // child of Agents; only navigable when expanded
-	editFleetRowAuggie        // child of Agents; only navigable when expanded
+	editFleetRowAgents   = iota // collapsible section header (issue #184)
+	editFleetRowClaude          // child of Agents; only navigable when expanded
+	editFleetRowCodex           // child of Agents; only navigable when expanded
+	editFleetRowAuggie          // child of Agents; only navigable when expanded
+	editFleetRowFleetMCP        // fleet MCP for the agents in this fleet's instances (issue #219)
 	editFleetRowGh
 	editFleetRowHomeDir
 	editFleetRowPreferFleetLaunch
@@ -36,6 +37,9 @@ const (
 	editFleetRowCoderPreset   // child of Coder; preset cycler (values from the last fetch)
 	editFleetRowCount
 )
+
+// fleetMCPRiskNote is the caution under the Fleet MCP toggle.
+const fleetMCPRiskNote = "⚠ Allows host access from inside instances and poses an agent escape risk."
 
 // editFleetRowCustomMountBase is the start of the dynamic custom-mount child
 // rows, placed well above the fixed row constants so the two never collide.
@@ -167,6 +171,7 @@ func (fleetPage *fleetPage) visibleEditFleetRows() []int {
 		rows = append(rows, editFleetRowClaude, editFleetRowCodex, editFleetRowAuggie)
 	}
 	rows = append(rows,
+		editFleetRowFleetMCP,
 		editFleetRowGh,
 		editFleetRowHomeDir,
 		editFleetRowPreferFleetLaunch,
@@ -303,6 +308,7 @@ func (fleetPage *fleetPage) openEditFleetDialog(m *model) tea.Cmd {
 	fleetPage.editFleet.codexMount = f.Settings.CodexMount
 	fleetPage.editFleet.ghMount = f.Settings.GhMount
 	fleetPage.editFleet.auggieMount = f.Settings.AuggieMount
+	fleetPage.editFleet.fleetMCP = f.Settings.FleetMCP
 	fleetPage.editFleet.buildkitServer = f.Settings.BuildkitServer
 	fleetPage.editFleet.debCache = f.Settings.DebCacheServer
 	fleetPage.editFleet.imageCache = f.Settings.ImageCacheServer
@@ -471,7 +477,7 @@ func (fleetPage *fleetPage) updateEditFleet(m *model, msg tea.Msg) tea.Cmd {
 
 	// Row-specific actions.
 	switch fleetPage.dlg.row {
-	case editFleetRowClaude, editFleetRowCodex, editFleetRowGh, editFleetRowAuggie, editFleetRowPreferFleetLaunch:
+	case editFleetRowClaude, editFleetRowCodex, editFleetRowGh, editFleetRowAuggie, editFleetRowFleetMCP, editFleetRowPreferFleetLaunch:
 		// space/x and h/l/enter all toggle (instant-save), matching the
 		// settings page.
 		switch keyMsg.String() {
@@ -758,6 +764,9 @@ func (fleetPage *fleetPage) toggleEditFleetRow(m *model) tea.Cmd {
 		fleetPage.editFleet.auggieMount = !fleetPage.editFleet.auggieMount
 		turnedOn = fleetPage.editFleet.auggieMount
 		revert = func() { fleetPage.editFleet.auggieMount = !fleetPage.editFleet.auggieMount }
+	case editFleetRowFleetMCP:
+		fleetPage.editFleet.fleetMCP = !fleetPage.editFleet.fleetMCP
+		revert = func() { fleetPage.editFleet.fleetMCP = !fleetPage.editFleet.fleetMCP }
 	case editFleetRowBuildkit:
 		fleetPage.editFleet.buildkitServer = !fleetPage.editFleet.buildkitServer
 		revert = func() { fleetPage.editFleet.buildkitServer = !fleetPage.editFleet.buildkitServer }
@@ -1405,6 +1414,7 @@ func (fleetPage *fleetPage) persistFleetSettings(m *model) error {
 	f.Settings.CodexMount = fleetPage.editFleet.codexMount
 	f.Settings.GhMount = fleetPage.editFleet.ghMount
 	f.Settings.AuggieMount = fleetPage.editFleet.auggieMount
+	f.Settings.FleetMCP = fleetPage.editFleet.fleetMCP
 	f.Settings.BuildkitServer = fleetPage.editFleet.buildkitServer
 	f.Settings.CustomMounts = fleetPage.editFleet.customMounts
 	f.Settings.LayoutPresets = fleetPage.editFleet.layoutPresets
@@ -1478,6 +1488,7 @@ type editFleetState struct {
 	codexMount        bool
 	ghMount           bool
 	auggieMount       bool
+	fleetMCP          bool // Fleet MCP for the agents in this fleet's instances
 	buildkitServer    bool
 	debCache          bool
 	imageCache        bool
@@ -1569,6 +1580,14 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 			d.WriteString(marker(row) + "  " + checkbox(fleetPage.editFleet.codexMount) + " " + dialogLabel.Render("Codex mount"))
 		case editFleetRowAuggie:
 			d.WriteString(marker(row) + "  " + checkbox(fleetPage.editFleet.auggieMount) + " " + dialogLabel.Render("Auggie mount"))
+		case editFleetRowFleetMCP:
+			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.fleetMCP) + " " + dialogLabel.Render("Fleet MCP"))
+			// The risk note shows where it matters — on the toggle while it is
+			// selected, and for as long as it is on — and not otherwise: the
+			// dialog has to fit an 80x24 terminal.
+			if fleetPage.dlg.row == row || fleetPage.editFleet.fleetMCP {
+				d.WriteString("\n" + warnTextStyle.PaddingLeft(4).Width(46).Render(fleetMCPRiskNote))
+			}
 		case editFleetRowGh:
 			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.ghMount) + " " + dialogLabel.Render("GitHub CLI mount"))
 		case editFleetRowHomeDir:

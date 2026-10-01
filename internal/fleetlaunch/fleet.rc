@@ -35,3 +35,14 @@ alias fc='fleet copy'
 # Like fc, it asks for confirmation in the fleet TUI; FLEET_OPENER in the TUI's
 # environment overrides the opener program.
 alias fo='fleet open'
+
+# Fleet MCP — when this instance's fleet has the "Fleet MCP" setting on, the
+# fleet daemon serves its MCP server on a socket in the control directory.
+# `fleet mcp-env` then writes what each supported coding agent needs to load it
+# (for Claude Code: a plugin with the MCP server and the fleet-admiral skill)
+# and prints the exports that point agents at it, so an agent started from this
+# shell can drive fleet. Nothing is added to the agent's own config, and with
+# the setting off (no socket) nothing happens here.
+if [ -S /fleet-mounts/control/mcp.sock ] && command -v fleet >/dev/null 2>&1; then
+  eval "$(fleet mcp-env 2>/dev/null)"
+fi

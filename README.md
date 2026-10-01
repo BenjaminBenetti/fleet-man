@@ -119,9 +119,6 @@ fleet trigger create my-project nightly --agent nightly-builder --cron "0 0 * * 
 # (stdout becomes the event payload) — for sources without a webhook
 fleet trigger create my-project new-issues --type bash --agent triager --cron "*/5 * * * *" \
   --script 'gh issue list --label needs-triage --json number -q ".[].number" | grep -q .' --prompt "Triage the new issues"
-# --fleet-mcp gives the agent fleet's MCP tools inside its instance, so it can
-# run more instances and agents itself (see "Fleet MCP for automation agents")
-fleet agent create my-project orchestrator --fleet-mcp --system-prompt "Split the work across instances"
 fleet agent list my-project
 fleet trigger list my-project
 fleet trigger logs my-project nightly   # inspect a trigger's recorded firings
@@ -227,36 +224,36 @@ the tmux session tools `fleet_session_spawn` / `fleet_session_exec` /
 Interactive, open-ended commands (`fleet shell`, log following) are intentionally
 not exposed.
 
-### Fleet MCP for automation agents
+### Fleet MCP inside instances
 
-An automation agent can be given these tools too, **inside its instance**, so it
-can take on work too big for one agent: spin up more instances, run agents in
-them, collect what they produce. Turn on **Fleet MCP** in the agent's dialog
-(automation view, `m`), or pass `--fleet-mcp` to `fleet agent create`/`edit`
-(`fleet_mcp` in the MCP tools). Off by default.
+A fleet can also provide these tools to the coding agents running **inside its
+instances**, so an agent there can take on work too big for one agent — spin up
+more instances, run agents in them, collect what they produce — or act as a
+coordinator for all of your fleets. Turn on **Fleet MCP** in the fleet's options
+(`e` on the fleet). Off by default; it applies to every instance of that fleet,
+however it was created (by you, a clone, or an automation trigger).
 
-- **It is the full fleet MCP, on purpose** — every tool, every fleet — so one
-  agent can coordinate all of your fleets. That includes tools that reach the
-  host: a `bash` automation trigger runs its script on the host as you, and a
-  `file://` fleet copies host directories into an instance. Turning it on gives
-  anything running in that instance — the agent, a prompt injection of it, the
-  repo's own scripts — host-level access: an agent-escape risk you accept by
-  turning it on.
-- The daemon serves MCP on a socket in the instance's control directory
+- **It is the full fleet MCP, on purpose** — every tool, every fleet. That
+  includes tools that reach the host: a `bash` automation trigger runs its
+  script on the host as you, and a `file://` fleet copies host directories into
+  an instance. Turning it on gives anything running in those instances — an
+  agent, a prompt injection of it, the repo's own scripts — host-level access:
+  an agent-escape risk you accept by turning it on.
+- The daemon serves MCP on a socket in each instance's control directory
   (`/fleet-mounts/control/mcp.sock`); the staged `fleet mcp-bridge` relays it to
-  the agent over stdio. No token enters the instance: only instances spawned for
-  an agent that has Fleet MCP (and can use it) get the socket, and only that
-  instance's own processes can connect.
-- It is handed to that one launch, never installed in the fleet's shared agent
-  config: for Claude Code, fleet writes a plugin (the MCP server plus the
-  **Fleet Admiral** skill) to `/tmp/fleet-mcp/claude-plugin` and points
-  `CLAUDE_CODE_PLUGIN_DIRS` at it for the agent's process alone. Claude Code is
-  the only agent supported so far (detected from the agent's command); turning
-  it on for another agent, another backend, or a command that runs Claude under
-  `sudo`/`doas`/`env -i`/`exec -c` (which drop the launch's environment; `sudo
-  -E` keeps it and is fine) warns (CLI, TUI, MCP) and the agent runs without it.
-- Devcontainer instances on Linux hosts only. Instances the agent creates are
-  not reaped with it — it is told to `fleet_down` them when done.
+  an agent over stdio. No token enters the instance: only instances of a fleet
+  with the setting on get the socket, and only that instance's own processes
+  can connect.
+- Agents pick it up from their shell, not from their config: `~/.fleet/fleet.rc`
+  (sourced by `~/.bashrc`) sees the socket and runs `fleet mcp-env`, which
+  writes a Claude Code plugin (the MCP server plus the **Fleet Admiral** skill)
+  under `~/.cache/fleet/mcp` and exports `CLAUDE_CODE_PLUGIN_DIRS`. Nothing is
+  written to `~/.claude` or `~/.claude.json`. So it reaches a `claude` started
+  from a bash shell opened after the setting was turned on (a new session, an
+  automation agent); a command that clears the environment (`sudo` without
+  `-E`, `env -i`) loses it. Claude Code is the only agent supported so far.
+- Devcontainer instances on Linux hosts only. Instances an agent creates are
+  not cleaned up for it — it is told to `fleet_down` them when done.
 
 ## Remote MCP
 

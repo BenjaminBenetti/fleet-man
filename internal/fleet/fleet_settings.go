@@ -97,6 +97,17 @@ type FleetSettings struct {
 	// mirrored (that is all docker registry-mirrors ever applies to).
 	ImageCacheServer bool `json:"imageCacheServer,omitempty"`
 
+	// FleetMCP provides the fleet MCP server — the full one: every tool,
+	// every fleet — and the Fleet Admiral skill to the coding agents running
+	// in this fleet's instances (issue #219), so an agent in an instance can
+	// drive fleet itself: spin up instances, run agents in them, coordinate
+	// other fleets. The daemon serves the MCP server on a socket in each
+	// instance's control directory and the instance's shells point agents at
+	// it (see internal/server/mcp_instance.go, internal/agentstrategy). Off
+	// by default: it gives everything in those instances host-level reach.
+	// Devcontainer instances on a Linux host only.
+	FleetMCP bool `json:"fleetMcp,omitempty"`
+
 	// HomeDir is the absolute path inside the container that should be
 	// treated as the home directory when computing mount targets — e.g.
 	// "/home/vscode" so a Claude Code mount lands at "/home/vscode/.claude".

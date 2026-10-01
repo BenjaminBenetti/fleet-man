@@ -80,14 +80,8 @@ tui_send_text "builder"
 sleep 0.2
 tui_send Enter         # commit the name
 sleep 0.2
-# Name -> Command -> Sys prompt -> Backend -> Fleet MCP: four 'j'.
+# Name -> Command -> Sys prompt -> Backend -> [ Save ]: four 'j'.
 for _ in 1 2 3 4; do tui_send j; sleep 0.15; done
-tui_wait_for "Fleet MCP: [ off ]" 5
-tui_send Enter         # toggle the fleet MCP on
-tui_wait_for "Fleet MCP: [ on ]" 5
-# Fleet MCP -> [ Save ]: one more 'j'.
-tui_send j
-sleep 0.15
 tui_send Enter         # save
 tui_wait_for "agents (1)" 10
 tui_assert_contains "builder" "saved agent row should be visible"

@@ -10,91 +10,22 @@ import (
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/admiralskill"
-	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
-func TestToolForCommand(t *testing.T) {
-	cases := []struct {
-		command string
-		want    state.AgentTool
-		ok      bool
-	}{
-		{"claude --system-prompt '${SYS_PROMPT}' '${PROMPT}'", state.AgentToolClaude, true},
-		{"IS_SANDBOX=1 claude --dangerously-skip-permissions '${PROMPT}'", state.AgentToolClaude, true},
-		{"cd app && ~/.local/bin/claude '${PROMPT}'", state.AgentToolClaude, true},
-		{"env FOO=1 /usr/local/bin/codex exec \"${PROMPT}\"", state.AgentToolCodex, true},
-		{"auggie --print '${PROMPT}'", state.AgentToolAuggie, true},
-		{"(gemini -p '${PROMPT}')", state.AgentToolGemini, true},
-		// An agent named inside a quoted argument is not the command.
-		{"./run.sh --tool 'claude' \"codex\"", "", false},
-		{"./run.sh c\\laude", "", false},
-		{"./run-agent.sh '${PROMPT}'", "", false},
-		{"", "", false},
-		// The first agent word wins.
-		{"claude -p \"$(codex --version)\"", state.AgentToolClaude, true},
-		{"npx -y @anthropic-ai/claude-code@latest '${PROMPT}'", state.AgentToolClaude, true},
-		{"exec env -i HOME=/h claude", state.AgentToolClaude, true},
-		{"sudo -u vscode claude x", state.AgentToolClaude, true},
-		{"echo start | claude -p x", state.AgentToolClaude, true},
-		// Assignments with quoted values, and wrappers with their own flags,
-		// operands and flag values.
-		{"ANTHROPIC_MODEL=\"claude-opus-5-5\" claude -p '${PROMPT}'", state.AgentToolClaude, true},
-		{"GH_TOKEN=\"$(cat ~/.gh-token)\" claude -p x", state.AgentToolClaude, true},
-		{"IS_SANDBOX=1 MAX_THINKING_TOKENS='8000' ~/.local/bin/claude x", state.AgentToolClaude, true},
-		{"env FOO=\"a b\" claude x", state.AgentToolClaude, true},
-		{"timeout 2h claude -p x", state.AgentToolClaude, true},
-		{"timeout -k 30s --signal=TERM 2h claude -p x", state.AgentToolClaude, true},
-		{"nice -n 10 claude -p x", state.AgentToolClaude, true},
-		{"env -u CI claude -p x", state.AgentToolClaude, true},
-		{"time -o f claude -p x", state.AgentToolClaude, true},
-		{"IS_SANDBOX=1 timeout 2h nice claude x", state.AgentToolClaude, true},
-		{"timeout \"$AGENT_TIMEOUT\" claude -p x", state.AgentToolClaude, true},
-		{"timeout -s KILL '2h' claude -p x", state.AgentToolClaude, true},
-		// Redirections are not command words.
-		{">/tmp/agent.log claude -p x", state.AgentToolClaude, true},
-		{"2>/dev/null claude -p x", state.AgentToolClaude, true},
-		{"claude -p x 2>&1 | tee /tmp/log", state.AgentToolClaude, true},
-		{">&2 claude -p x", state.AgentToolClaude, true},
-		{"./run.sh >claude.log", "", false},
-		{"./run.sh &>/dev/null claude", "", false},
-		{"./run.sh &> out.log claude", "", false},
-		{"echo hi >| out.log claude", "", false},
-		{"&>/dev/null claude -p x", state.AgentToolClaude, true},
-		{"claude -p x &>/dev/null", state.AgentToolClaude, true},
-		{"./run.sh |& claude", state.AgentToolClaude, true},
-		{"nice -n10 claude x", state.AgentToolClaude, true},
-		{"timeout -k30s 2h claude x", state.AgentToolClaude, true},
-		// A quoted command word is not recognized.
-		{"\"claude\" -p x", "", false},
-		{"timeout 2h \"claude\" -p x", "", false},
-		// An agent's name in an argument is not the command.
-		{"cd /workspaces/claude-code && ./run-agent.sh", "", false},
-		{"./run-agent.sh --workdir /src/claude-code", "", false},
-		{"./run.sh claude", "", false},
-		{"bash -lc 'claude ${PROMPT}'", "", false},
-	}
-	for _, c := range cases {
-		got, ok := ToolForCommand(c.command)
-		if got != c.want || ok != c.ok {
-			t.Errorf("ToolForCommand(%q) = %q, %v; want %q, %v", c.command, got, ok, c.want, c.ok)
+func TestOnlyClaudeSupportsTheFleetMCPSoFar(t *testing.T) {
+	for _, tool := range tools {
+		s := For(tool)
+		if s.Tool() != tool {
+			t.Errorf("For(%q).Tool() = %q", tool, s.Tool())
 		}
-	}
-}
-
-func TestForCommandPicksTheStrategy(t *testing.T) {
-	if claude := ForCommand("claude '${PROMPT}'"); claude.Tool() != state.AgentToolClaude || !claude.SupportsFleetMCP() {
-		t.Fatalf("claude command: tool = %q, supports = %v", claude.Tool(), claude.SupportsFleetMCP())
-	}
-	s := ForCommand("codex '${PROMPT}'")
-	if s.Tool() != state.AgentToolCodex || s.SupportsFleetMCP() {
-		t.Fatalf("codex command: tool = %q, supports = %v", s.Tool(), s.SupportsFleetMCP())
-	}
-	if _, ok := s.FleetMCP(FleetMCPParams{Dir: "/tmp/x", Bridge: []string{"fleet", "mcp-bridge"}}); ok {
-		t.Fatal("codex has no fleet MCP integration yet")
-	}
-	if _, ok := ForCommand("./wrapper.sh").FleetMCP(FleetMCPParams{Dir: "/tmp/x", Bridge: []string{"fleet"}}); ok {
-		t.Fatal("an unrecognized command must not get a fleet MCP setup")
+		want := tool == state.AgentToolClaude
+		if s.SupportsFleetMCP() != want {
+			t.Errorf("%s: SupportsFleetMCP = %v, want %v", tool, s.SupportsFleetMCP(), want)
+		}
+		if _, ok := s.FleetMCP(FleetMCPParams{Dir: "/tmp/x", Bridge: []string{"fleet", "mcp-bridge"}}); ok != want {
+			t.Errorf("%s: FleetMCP ok = %v, want %v", tool, ok, want)
+		}
 	}
 }
 
@@ -152,8 +83,9 @@ func TestClaudeFleetMCPNeedsADirAndABridge(t *testing.T) {
 	}
 }
 
-// TestExportsInAShell runs the rendered prelude through sh: values survive
-// quoting, and a path list keeps what the user already had.
+// TestExportsInAShell runs the rendered exports through sh: values survive
+// quoting, a path list keeps what the user already had, and sourcing them
+// again (a shell started from a shell) adds nothing.
 func TestExportsInAShell(t *testing.T) {
 	sh, err := exec.LookPath("sh")
 	if err != nil {
@@ -163,7 +95,8 @@ func TestExportsInAShell(t *testing.T) {
 		{Name: "FLEET_TEST_PLAIN", Value: "it's $HOME"},
 		{Name: "FLEET_TEST_LIST", Value: "/tmp/fleet mcp/plugin", PathList: true},
 	}}
-	script := setup.Exports() + `printf '%s|%s' "$FLEET_TEST_PLAIN" "$FLEET_TEST_LIST"`
+	exports := setup.Exports()
+	script := exports + exports + `printf '%s|%s' "$FLEET_TEST_PLAIN" "$FLEET_TEST_LIST"`
 
 	run := func(env ...string) string {
 		cmd := exec.Command(sh, "-c", script)
@@ -180,8 +113,57 @@ func TestExportsInAShell(t *testing.T) {
 	if got := run("FLEET_TEST_LIST=/home/me/plugins"); got != "it's $HOME|/tmp/fleet mcp/plugin:/home/me/plugins" {
 		t.Fatalf("existing list: %q", got)
 	}
+	if got := run("FLEET_TEST_LIST=/home/me/plugins:/tmp/fleet mcp/plugin"); got != "it's $HOME|/home/me/plugins:/tmp/fleet mcp/plugin" {
+		t.Fatalf("already listed: %q", got)
+	}
 	if (FleetMCPSetup{}).Exports() != "" {
-		t.Fatal("no env: no prelude")
+		t.Fatal("no env: no exports")
+	}
+}
+
+// TestInstallFleetMCP: the install writes every supporting agent's files and
+// returns exports that point at them; a second run rewrites nothing.
+func TestInstallFleetMCP(t *testing.T) {
+	dir := t.TempDir()
+	exports, err := InstallFleetMCP(dir, []string{"/usr/bin/fleet", "mcp-bridge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "claude-plugin")
+	if !strings.Contains(exports, "CLAUDE_CODE_PLUGIN_DIRS") || !strings.Contains(exports, root) {
+		t.Fatalf("exports = %q, want CLAUDE_CODE_PLUGIN_DIRS pointing at %s", exports, root)
+	}
+	skillPath := filepath.Join(root, "skills", "fleet-admiral", "SKILL.md")
+	skill, err := os.ReadFile(skillPath)
+	if err != nil || !bytes.Equal(skill, admiralskill.Content()) {
+		t.Fatalf("the admiral skill did not land intact: %v", err)
+	}
+	for _, name := range []string{".claude-plugin/plugin.json", ".mcp.json"} {
+		if _, err := os.Stat(filepath.Join(root, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Unchanged content is left alone (every shell start runs this).
+	before, _ := os.Stat(skillPath)
+	again, err := InstallFleetMCP(dir, []string{"/usr/bin/fleet", "mcp-bridge"})
+	if err != nil || again != exports {
+		t.Fatalf("second install: %q, %v", again, err)
+	}
+	after, _ := os.Stat(skillPath)
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Fatal("an unchanged file was rewritten")
+	}
+
+	// Changed content (a fleet upgrade) is replaced.
+	if err := os.WriteFile(skillPath, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallFleetMCP(dir, []string{"/usr/bin/fleet", "mcp-bridge"}); err != nil {
+		t.Fatal(err)
+	}
+	if skill, _ := os.ReadFile(skillPath); !bytes.Equal(skill, admiralskill.Content()) {
+		t.Fatal("a stale file was not replaced")
 	}
 }
 
@@ -198,63 +180,14 @@ func TestClaudeLoadsThePlugin(t *testing.T) {
 		t.Skip("claude not installed")
 	}
 	dir := t.TempDir()
-	setup, _ := For(state.AgentToolClaude).FleetMCP(FleetMCPParams{Dir: dir, Bridge: []string{"/bin/true"}})
-	for _, f := range setup.Files {
-		if err := os.MkdirAll(filepath.Dir(f.Path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(f.Path, f.Content, f.Mode); err != nil {
-			t.Fatal(err)
-		}
+	exports, err := InstallFleetMCP(dir, []string{"/bin/true"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	cmd := exec.Command("sh", "-c", setup.Exports()+"exec "+claude+" mcp list")
+	cmd := exec.Command("sh", "-c", exports+"exec "+claude+" mcp list")
 	cmd.Dir = dir
 	out, _ := cmd.CombinedOutput()
 	if !strings.Contains(string(out), "plugin:fleet:fleet") {
 		t.Fatalf("claude did not load the plugin's MCP server:\n%s", out)
-	}
-}
-
-func TestFleetMCPUnsupported(t *testing.T) {
-	cases := []struct {
-		command string
-		backend fleet.BackendType
-		want    string // substring; "" means supported
-	}{
-		{"claude '${PROMPT}'", fleet.BackendDevcontainer, ""},
-		{"", "", ""}, // the default command, the default backend
-		{"npx -y @anthropic-ai/claude-code@latest '${PROMPT}'", fleet.BackendDevcontainer, ""},
-		{"claude '${PROMPT}'", fleet.BackendCoder, "devcontainer backend"},
-		{"codex '${PROMPT}'", fleet.BackendDevcontainer, "Claude Code only"},
-		{"./agent.sh", fleet.BackendDevcontainer, "`claude` command"},
-		// Recognized, but the wrapper clears what the launch exports.
-		{"env -i HOME=/h claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
-		{"sudo -u vscode claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
-		{"sudo --preserve-env=HOME claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
-		{"exec -cl claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
-		{"env -vi claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
-		{"env -iu CI claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
-		{"env - claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
-		// sudo -E keeps the environment (or refuses to run at all).
-		{"sudo -E -u vscode claude x", fleet.BackendDevcontainer, ""},
-		{"sudo -Eu vscode claude x", fleet.BackendDevcontainer, ""},
-		{"sudo --preserve-env claude x", fleet.BackendDevcontainer, ""},
-		{"env -uCI claude x", fleet.BackendDevcontainer, ""},
-		// A keep flag only undoes its own launcher's clear.
-		{"env -i sudo -E claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
-		{"sudo -E env -i claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
-		{"sudo -u vscode -E claude x", fleet.BackendDevcontainer, ""},
-		{"doas claude x", fleet.BackendDevcontainer, "sudo/doas/env -i"},
-		{"env -u CI claude x", fleet.BackendDevcontainer, ""},
-	}
-	for _, c := range cases {
-		got := FleetMCPUnsupported(c.command, c.backend)
-		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
-			t.Errorf("FleetMCPUnsupported(%q, %q) = %q, want %q", c.command, c.backend, got, c.want)
-		}
-		// It must fit one line of the agent dialog: "Won't apply: <why>."
-		if n := len("Won't apply: " + got + "."); n > 42 {
-			t.Errorf("reason %q makes a %d-char dialog line, want <= 42", got, n)
-		}
 	}
 }

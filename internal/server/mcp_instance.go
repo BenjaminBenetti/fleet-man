@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -16,18 +15,20 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// mcp_instance.go serves the fleet MCP server INTO the instances of automation
-// agents that have the fleet MCP (Agent.FleetMCP, issue #219), so the agent can
-// drive fleet from inside: spin up more instances, run agents in them. Each
-// such instance gets a socket (mcpbridge.SocketName) in its control directory,
-// which a process inside reaches at mcpbridge.ContainerSocketPath through the
-// staged `fleet mcp-bridge`. Every connection is one MCP session in the stdio
-// framing (newline-delimited JSON-RPC) over the same tools as the loopback
-// HTTP server.
+// mcp_instance.go serves the fleet MCP server INTO the instances of fleets
+// that have the Fleet MCP setting on (FleetSettings.FleetMCP, issue #219), so a
+// coding agent in an instance can drive fleet from inside: spin up instances,
+// run agents in them, coordinate other fleets. Each such instance gets a
+// socket (mcpbridge.SocketName) in its control directory, which a process
+// inside reaches at mcpbridge.ContainerSocketPath through the staged `fleet
+// mcp-bridge`; the instance's shells see the socket and point agents at that
+// bridge (fleet.rc → `fleet mcp-env`). Every connection is one MCP session in
+// the stdio framing (newline-delimited JSON-RPC) over the same tools as the
+// loopback HTTP server — the full set, by design.
 //
 // The socket is the credential — no bearer token enters the instance — so only
-// instances created for an opted-in agent get one (Instance.FleetMCP), and only
-// that instance's own processes (or the daemon's user, or root) are served
+// instances of fleets with the setting on get one, and only that instance's
+// own processes (or the daemon's user, or root) are served
 // (instanceSocketSet). Devcontainer instances on a Linux host only: elsewhere
 // no socket can be served into the instance.
 
@@ -74,18 +75,20 @@ func (m *instanceMCP) run(ctx context.Context) {
 	}
 }
 
-// sync listens for every instance that has the fleet MCP and a mounted control
-// directory, and stops listening for the rest (destroyed instances included).
+// sync listens for every instance, with a mounted control directory, of the
+// fleets that have the Fleet MCP on, and stops listening for the rest: the
+// setting turned off, the instance destroyed. Status does not matter (a socket
+// on a stopped instance costs nothing, and is there when it starts).
 func (m *instanceMCP) sync(st *state.State) {
 	if st == nil {
 		return
 	}
 	want := make(map[string]instanceTarget)
 	for fleetName, f := range st.Fleets {
+		if !f.Settings.FleetMCP {
+			continue
+		}
 		for _, inst := range f.Instances {
-			if !inst.FleetMCP {
-				continue
-			}
 			if t, ok := controlDirTarget(fleetName, inst); ok && controlDirMounted(t.dir) {
 				want[fleetName+"/"+inst.Name] = t
 			}
@@ -94,21 +97,25 @@ func (m *instanceMCP) sync(st *state.State) {
 	m.sockets.sync(want)
 }
 
-// ensure opens an instance's socket right away — the agent's launch calls it
-// before starting the agent, so its MCP server finds the socket — or says why
-// the instance cannot have one.
-func (m *instanceMCP) ensure(fleetName, instanceName string) error {
+// ensureInstance opens a new instance's socket right away, if its fleet has
+// the Fleet MCP on. Provisioning calls it (through create.ControlDirReady) as
+// soon as the control directory exists, so the first shell in the new instance
+// — an automation agent's launch, a postCreate command — already finds the
+// socket rather than racing the next reconcile.
+func (m *instanceMCP) ensureInstance(fleetName, instanceName string) {
 	if !instanceSocketsSupported {
-		return errors.New("the fleet MCP reaches into instances only on Linux hosts")
+		return
 	}
-	t := loadInstanceTarget(fleetName, instanceName)
-	if !controlDirMounted(t.dir) {
-		return errors.New("the instance does not mount its control directory (the fleet MCP needs a devcontainer instance)")
+	st, err := state.Load()
+	if err != nil {
+		return
 	}
-	if !m.sockets.ensure(fleetName+"/"+instanceName, t) {
-		return fmt.Errorf("could not listen in %s (see the log)", t.dir)
+	if f := st.Fleets[fleetName]; f == nil || !f.Settings.FleetMCP {
+		return
 	}
-	return nil
+	if t := loadInstanceTarget(fleetName, instanceName); controlDirMounted(t.dir) {
+		m.sockets.ensure(fleetName+"/"+instanceName, t)
+	}
 }
 
 // controlDirMounted reports whether provisioning bind-mounted the control
@@ -139,8 +146,8 @@ func (m *instanceMCP) serveFrom(key string) func(net.Conn) {
 // instanceMCPInstructions tells the agent where it is and how to use fleet
 // from there. Claude Code shows server instructions to the model.
 func instanceMCPInstructions(fleetName, instanceName string) string {
-	return fmt.Sprintf(`You are running inside instance %[2]q of fleet %[1]q, started by a fleet automation. These tools drive the fleet daemon on the host that runs you: create more instances (fleet_up), run coding agents in them through sessions (fleet_session_*), and read their results — use that to split up and parallelize large work. Load the fleet-admiral skill for how the tools fit together.
-Instances you create are yours to clean up: fleet_down them once their work is done. Your own instance (fleet %[1]q, instance %[2]q) is torn down automatically after you go idle — never stop, rebuild or remove it yourself.`, fleetName, instanceName)
+	return fmt.Sprintf(`You are running inside instance %[2]q of fleet %[1]q. These tools drive the fleet daemon on the host that runs you, for every fleet it manages: create more instances (fleet_up), run coding agents in them through sessions (fleet_session_*), and read their results — use that to split up and parallelize large work. Load the fleet-admiral skill for how the tools fit together.
+Instances you create are yours to clean up: fleet_down them once their work is done. Never stop, rebuild or remove your own instance (fleet %[1]q, instance %[2]q) — you are running in it.`, fleetName, instanceName)
 }
 
 // track registers a live session connection so shutdown can end it; false

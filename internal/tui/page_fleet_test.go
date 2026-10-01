@@ -1836,9 +1836,26 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 	if !fp.editFleet.auggieMount {
 		t.Fatal("l should toggle selected auggie row")
 	}
+	// The Fleet MCP toggle sits right under the Agents group: off until
+	// toggled, saved with the fleet's settings, and it carries its risk note
+	// while selected or on.
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if fp.dlg.row != editFleetRowFleetMCP {
+		t.Fatalf("dialogRow = %d, want fleet MCP row", fp.dlg.row)
+	}
+	if view := fp.renderEditFleet(m); !strings.Contains(view, "[ ] Fleet MCP") || !strings.Contains(view, "Allows host access") {
+		t.Fatalf("the selected Fleet MCP row should read off and show its risk note:\n%s", view)
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if !fp.editFleet.fleetMCP || !f.Settings.FleetMCP {
+		t.Fatal("l should toggle the Fleet MCP on and save it to the fleet's settings")
+	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	if fp.dlg.row != editFleetRowGh {
 		t.Fatalf("dialogRow = %d, want gh row", fp.dlg.row)
+	}
+	if view := fp.renderEditFleet(m); !strings.Contains(view, "[x] Fleet MCP") || !strings.Contains(view, "Allows host access") {
+		t.Fatalf("while on, the Fleet MCP row keeps its risk note:\n%s", view)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if !fp.editFleet.ghMount {
@@ -1866,14 +1883,18 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 		t.Fatal("esc should leave the home-dir field")
 	}
 
-	// k now navigates UP (field inactive): home-dir → gh → auggie.
+	// k now navigates UP (field inactive): home-dir → gh → fleet MCP → auggie.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	if fp.dlg.row != editFleetRowGh {
 		t.Fatalf("dialogRow = %d, want gh row after inactive k", fp.dlg.row)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if fp.dlg.row != editFleetRowFleetMCP {
+		t.Fatalf("dialogRow = %d, want fleet MCP row after second inactive k", fp.dlg.row)
+	}
+	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	if fp.dlg.row != editFleetRowAuggie {
-		t.Fatalf("dialogRow = %d, want auggie row after second inactive k", fp.dlg.row)
+		t.Fatalf("dialogRow = %d, want auggie row after third inactive k", fp.dlg.row)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if fp.mode != viewNormal {

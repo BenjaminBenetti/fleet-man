@@ -62,22 +62,10 @@ assert_contains "${out}" "nightly" "trigger list missing the new trigger"
 assert_contains "${out}" "builder" "trigger list missing the agent reference"
 
 # The agent list's TRIGGERS column now reports the reference count for builder.
-# Columns are NAME BACKEND TRIGGERS MCP COMMAND, so match builder's row with a 1.
+# Columns are NAME BACKEND TRIGGERS COMMAND, so match builder's row with a 1.
 out=$("${FLEET_BIN}" agent list "${FLEET}" 2>&1) || fail "agent list (after trigger) failed: ${out}"
-printf '%s' "${out}" | grep -qE 'builder[[:space:]]+devcontainer[[:space:]]+1[[:space:]]+off' \
-  || fail "agent list TRIGGERS column should show 1 for builder (fleet MCP off): ${out}"
-
-# --- fleet MCP (issue #219): --fleet-mcp turns it on, =false back off ---
-info "toggling the agent's fleet MCP"
-"${FLEET_BIN}" agent edit "${FLEET}" builder --fleet-mcp >/dev/null 2>&1 || fail "agent edit --fleet-mcp failed"
-out=$("${FLEET_BIN}" agent list "${FLEET}" 2>&1) || fail "agent list failed: ${out}"
-printf '%s' "${out}" | grep -qE 'builder[[:space:]]+devcontainer[[:space:]]+1[[:space:]]+on' \
-  || fail "agent list MCP column should show on after --fleet-mcp: ${out}"
-assert_contains "$(cat "${HOME}/.fleet/state.json")" '"fleetMcp": true' "fleet MCP not persisted to state.json"
-"${FLEET_BIN}" agent edit "${FLEET}" builder --fleet-mcp=false >/dev/null 2>&1 || fail "agent edit --fleet-mcp=false failed"
-out=$("${FLEET_BIN}" agent list "${FLEET}" 2>&1) || fail "agent list failed: ${out}"
-printf '%s' "${out}" | grep -qE 'builder[[:space:]]+devcontainer[[:space:]]+1[[:space:]]+off' \
-  || fail "agent list MCP column should show off after --fleet-mcp=false: ${out}"
+printf '%s' "${out}" | grep -qE 'builder[[:space:]]+devcontainer[[:space:]]+1' \
+  || fail "agent list TRIGGERS column should show 1 for builder: ${out}"
 
 # --- delete guard: a referenced agent can't be deleted ---
 info "verifying a referenced agent cannot be deleted"

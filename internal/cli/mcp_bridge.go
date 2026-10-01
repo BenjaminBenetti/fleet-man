@@ -8,10 +8,10 @@ import (
 )
 
 // newMCPBridgeCmd creates the hidden `fleet mcp-bridge` command: the stdio
-// MCP server an automation agent with the fleet MCP (issue #219) is given. It
-// runs INSIDE an instance, through the staged /usr/bin/fleet, and relays to
-// the daemon's MCP socket in the instance's control directory — meaningless
-// on the host, hence hidden.
+// MCP server the coding agents in an instance are given when its fleet has the
+// Fleet MCP setting on (issue #219). It runs INSIDE an instance, through the
+// staged /usr/bin/fleet, and relays to the daemon's MCP socket in the
+// instance's control directory — meaningless on the host, hence hidden.
 func newMCPBridgeCmd() *cobra.Command {
 	var socket string
 	cmd := &cobra.Command{
