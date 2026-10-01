@@ -125,11 +125,20 @@ message ForwardOpen {
 // real microphone while demand is active — the mic is never streamed idle.
 //
 // The FIRST client frame MUST carry `open`; every later client frame carries
-// raw PCM in `audio`, in the format the open header declared.
+// raw PCM in `audio`, in the format the open header declared — or `devices`,
+// the provider's capture devices, which it sends once after `open` and again
+// whenever the server asks (MicDown.list_devices).
+//
+// Several providers can be attached at once (a TUI on every machine driving
+// this daemon). Exactly ONE of them is the SOURCE at any moment — the one that
+// is sent active demand and whose audio is routed. Which one is a setting
+// (MicSettings.client): the named client if it is attached, otherwise the most
+// recently attached provider.
 message MicUp {
   oneof msg {
     MicOpen open = 1;
     bytes audio = 2;
+    MicDeviceList devices = 3;
   }
 }
 
@@ -140,13 +149,40 @@ message MicUp {
 message MicOpen {
   uint32 sample_rate = 1;
   uint32 channels = 2;
+  // client names the MACHINE this provider records on (its hostname, unless
+  // overridden). It is what Settings lists the provider's devices under and
+  // what MicSettings.client selects, so it must be stable across reconnects;
+  // two providers on one machine share it. Empty (a client built before this
+  // field) is an anonymous provider: it can still become the source by being
+  // the most recently attached, but it cannot be selected by name.
+  string client = 3;
+}
+
+// MicDevice is one capture device on a provider's machine. id is what
+// MicSettings.device stores (namespaced by the capture tool that enumerated
+// it); label is the human-readable name.
+message MicDevice {
+  string id = 1;
+  string label = 2;
+}
+
+// MicDeviceList is the provider's capture devices, NOT including the implicit
+// system default. An empty list is a valid answer (a default-only recorder).
+message MicDeviceList {
+  repeated MicDevice devices = 1;
 }
 
 message MicDown {
   oneof msg {
     MicDemand demand = 1;
+    MicListDevices list_devices = 2;
   }
 }
+
+// MicListDevices asks the provider to enumerate its capture devices again and
+// answer with MicUp.devices (someone opened the selector: a headset may have
+// been plugged in since the last listing).
+message MicListDevices {}
 
 // MicDemand is the server's start/stop signal. active=true means at least one
 // instance has a recorder attached to its virtual microphone; `instances` names
@@ -161,8 +197,50 @@ message MicDemand {
   // one path where every millisecond is clipped off the user's sentence. A
   // device-only change republishes the demand, so it reaches a running provider
   // at once rather than at its next recording. It is an id from SOME client's
-  // enumeration — the provider validates it against its own machine.
+  // enumeration — the provider validates it against its own machine. A provider
+  // standing in for the selected client (see `client`) is sent an empty device:
+  // the id belongs to the other machine's enumeration.
   string device = 3;
+  // client is the client selected in Settings (MicSettings.client; empty = no
+  // selection, the most recently attached provider records). A provider that
+  // is sent active demand while this names a DIFFERENT client is standing in
+  // for a selected client that is not attached, and says so in its status.
+  string client = 4;
+}
+
+// MicSource is one attached microphone client — a machine with a provider on
+// it — and the capture devices it offers. This is what the Settings selector
+// lists: every client currently connected to the daemon, not just the one the
+// settings page happens to be open on.
+message MicSource {
+  // client is the provider's name (MicOpen.client).
+  string client = 1;
+  // devices are its capture devices, not including the implicit system
+  // default. Empty until the provider has answered (see devices_listed).
+  repeated MicDevice devices = 2;
+  // devices_listed is false while the provider has not sent a listing yet.
+  bool devices_listed = 3;
+  // source marks the client whose microphone is the one recorded on demand.
+  bool source = 4;
+  // recording is set on the source while its microphone is open.
+  bool recording = 5;
+}
+
+// MicSources is the full set of attached microphone clients, sorted by name.
+// Pushed over Watch whenever it changes and returned by ListMicSources.
+message MicSources {
+  repeated MicSource sources = 1;
+}
+
+message ListMicSourcesRequest {
+  // refresh asks every attached provider to enumerate its devices again
+  // (MicListDevices). The reply is the list as known NOW; the refreshed
+  // listings arrive over Watch as each provider answers.
+  bool refresh = 1;
+}
+
+message ListMicSourcesReply {
+  MicSources sources = 1;
 }
 
 // SSHAgent is the SSH-agent forwarding DATA PLANE: one bidi stream per

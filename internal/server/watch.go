@@ -40,6 +40,10 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 			if h.remoteMcp != nil {
 				sub.enqueueRemoteMcp(h.remoteMcp)
 			}
+			// Likewise the attached microphone clients, for the selector.
+			if h.micSources != nil {
+				sub.enqueueMicSources(h.micSources)
+			}
 		}
 		close(registered)
 	})
@@ -92,6 +96,12 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 			}
 			if rm != nil {
 				ev := &fleetgrpc.Event{Kind: &fleetgrpc.Event_RemoteMcpStatus{RemoteMcpStatus: rm}}
+				if err := stream.Send(ev); err != nil {
+					return err
+				}
+			}
+			if ms := sub.takeMicSources(); ms != nil {
+				ev := &fleetgrpc.Event{Kind: &fleetgrpc.Event_MicSources{MicSources: ms}}
 				if err := stream.Send(ev); err != nil {
 					return err
 				}

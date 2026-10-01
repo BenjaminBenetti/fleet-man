@@ -3,19 +3,25 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/mic"
 	"github.com/BenjaminBenetti/fleet-man/internal/micsink"
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // newMicCmd creates the `fleet mic` command group: the virtual microphone.
 //
-// `devices` and `attach` are user-facing: the first lists what the Settings
-// page's microphone selector offers on this machine, the second provides this
+// `devices`, `sources` and `attach` are user-facing: the first lists this
+// machine's capture devices, the second what the Settings page's microphone
+// selector offers across every connected client, the third provides this
 // machine's microphone without a TUI. `sink`, `ensure` and `stop` are hidden:
 // fleet-man runs them INSIDE an instance, through its staged /usr/bin/fleet, and
 // they are meaningless on the host.
@@ -23,13 +29,70 @@ func newMicCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mic",
 		Short: "Virtual microphone",
-		Long: `Proxy this machine's microphone into fleet instances, so voice input works
-in a headless container. Enable it, and pick the device, under Settings ->
-Microphone in the TUI. The microphone is only opened while something inside an
-instance is recording.`,
+		Long: `Proxy a microphone into fleet instances, so voice input works in a headless
+container. Every machine with a TUI (or 'fleet mic attach') on the daemon
+offers its microphones; enable the feature, and pick the client and device,
+under Settings -> Microphone in the TUI. The microphone is only opened while
+something inside an instance is recording.`,
 	}
-	cmd.AddCommand(newMicDevicesCmd(), newMicAttachCmd(), newMicSinkCmd(), newMicEnsureCmd(), newMicStopCmd())
+	cmd.AddCommand(newMicDevicesCmd(), newMicSourcesCmd(), newMicAttachCmd(), newMicSinkCmd(), newMicEnsureCmd(), newMicStopCmd())
 	return cmd
+}
+
+// newMicSourcesCmd creates `fleet mic sources`: every client attached to the
+// daemon as a microphone provider, and the capture devices each offers — the
+// Settings selector's list, for a terminal.
+func newMicSourcesCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "sources",
+		Short: "List the microphones of every connected client",
+		Long: `List every client attached to the fleet daemon as a microphone provider, and
+its capture devices. '*' marks the client being recorded.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			conn, err := fleetclient.Dial(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer conn.Close()
+			reply, err := conn.Service().ListMicSources(cmd.Context(), &fleetgrpc.ListMicSourcesRequest{})
+			if status.Code(err) == codes.Unimplemented {
+				return fmt.Errorf("this fleet daemon predates microphone sources; update it")
+			}
+			if err != nil {
+				return err
+			}
+			printMicSources(cmd.OutOrStdout(), reply.GetSources())
+			return nil
+		},
+	}
+}
+
+func printMicSources(out io.Writer, sources *fleetgrpc.MicSources) {
+	if len(sources.GetSources()) == 0 {
+		fmt.Fprintln(out, "no microphone clients connected")
+		return
+	}
+	// The client column fits the longest name: a truncated name could not be
+	// told from another, and a padded-to-the-maximum one wastes the line.
+	width := len("CLIENT")
+	for _, source := range sources.GetSources() {
+		width = max(width, utf8.RuneCountInString(source.GetClient()))
+	}
+	row := func(mark, client, id, label string) {
+		fmt.Fprintf(out, "%-1s %-*s  %-40s %s\n", mark, width, client, id, label)
+	}
+	row("", "CLIENT", "DEVICE", "LABEL")
+	for _, source := range sources.GetSources() {
+		mark := ""
+		if source.GetSource() {
+			mark = "*"
+		}
+		row(mark, source.GetClient(), "(default)", mic.DefaultLabel)
+		for _, device := range source.GetDevices() {
+			row(mark, source.GetClient(), device.GetId(), device.GetLabel())
+		}
+	}
 }
 
 func newMicDevicesCmd() *cobra.Command {
@@ -66,8 +129,9 @@ func newMicAttachCmd() *cobra.Command {
 		Long: `Provide this machine's microphone to the fleet daemon until interrupted — what
 an open TUI does on its own. The microphone must be enabled in Settings, and the
 device chosen there is the one recorded (--device overrides it). It is only
-opened while something inside an instance is recording; each transition is
-printed.`,
+opened while something inside an instance is recording, and only if Settings
+selects this client (or none); each transition is printed. The client is named
+after the hostname; FLEET_MIC_CLIENT overrides that.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := mic.Unavailable(); err != nil {
@@ -87,7 +151,7 @@ printed.`,
 			mic.Run(cmd.Context(), conn.Service(), device, func(status mic.Status) {
 				final = status
 				// One line per CHANGE: the provider re-reports on every retry.
-				line := fmt.Sprintf("%d %v %s %v", status.State, status.Instances, status.Detail, status.FellBack)
+				line := fmt.Sprintf("%d %v %s %v %s", status.State, status.Instances, status.Detail, status.FellBack, status.StandInFor)
 				if line == lastLine {
 					return
 				}
@@ -103,6 +167,9 @@ printed.`,
 					line := "live -> " + strings.Join(status.Instances, ", ")
 					if status.FellBack {
 						line += " (configured device not found here; recording the system default)"
+					}
+					if status.StandInFor != "" {
+						line += " (standing in for " + status.StandInFor + ", which is not connected)"
 					}
 					fmt.Fprintln(out, line)
 				case mic.StateError:

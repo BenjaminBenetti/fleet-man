@@ -94,9 +94,16 @@ message RemoteMcpSettings {
 // into instances at provision time and the per-instance sinks (the "virtual
 // device injection"). device is the capture device on the CLIENT's machine
 // (an id from the client's own enumeration); empty means the system default.
+// client names WHICH connected client's microphone is recorded (MicOpen.client);
+// empty means the most recently attached one.
 message MicSettings {
   bool enabled = 1;
   string device = 2;
+  // optional: a client built before the field existed sends the group without
+  // it, and that must read as "unchanged" — not as clearing the selection every
+  // time such a client saves an unrelated setting. A current client always
+  // sends it, the empty string included.
+  optional string client = 3;
 }
 
 // ThemeSettings is the TUI color theme — a CLIENT preference (like the armada

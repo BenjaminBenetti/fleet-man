@@ -54,6 +54,7 @@ const (
 	FleetService_TriggerLogs_FullMethodName            = "/fleetgrpc.FleetService/TriggerLogs"
 	FleetService_Forward_FullMethodName                = "/fleetgrpc.FleetService/Forward"
 	FleetService_Mic_FullMethodName                    = "/fleetgrpc.FleetService/Mic"
+	FleetService_ListMicSources_FullMethodName         = "/fleetgrpc.FleetService/ListMicSources"
 	FleetService_SSHAgent_FullMethodName               = "/fleetgrpc.FleetService/SSHAgent"
 	FleetService_CopyFile_FullMethodName               = "/fleetgrpc.FleetService/CopyFile"
 	FleetService_CopyInto_FullMethodName               = "/fleetgrpc.FleetService/CopyInto"
@@ -149,6 +150,9 @@ type FleetServiceClient interface {
 	// up (first frame is the MicOpen header); the server streams demand signals
 	// down so the client only opens the real microphone while an instance records.
 	Mic(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[MicUp, MicDown], error)
+	// ListMicSources returns the attached microphone clients and their capture
+	// devices — what the Settings selector offers (also pushed over Watch).
+	ListMicSources(ctx context.Context, in *ListMicSourcesRequest, opts ...grpc.CallOption) (*ListMicSourcesReply, error)
 	// SSHAgent is the SSH-agent forwarding data plane: the client provides its
 	// local ssh-agent, the server relays every agent connection made on its host
 	// (its own git clone, processes inside instances) down this stream.
@@ -615,6 +619,16 @@ func (c *fleetServiceClient) Mic(ctx context.Context, opts ...grpc.CallOption) (
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_MicClient = grpc.BidiStreamingClient[MicUp, MicDown]
 
+func (c *fleetServiceClient) ListMicSources(ctx context.Context, in *ListMicSourcesRequest, opts ...grpc.CallOption) (*ListMicSourcesReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListMicSourcesReply)
+	err := c.cc.Invoke(ctx, FleetService_ListMicSources_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) SSHAgent(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SSHAgentUp, SSHAgentDown], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[12], FleetService_SSHAgent_FullMethodName, cOpts...)
@@ -786,6 +800,9 @@ type FleetServiceServer interface {
 	// up (first frame is the MicOpen header); the server streams demand signals
 	// down so the client only opens the real microphone while an instance records.
 	Mic(grpc.BidiStreamingServer[MicUp, MicDown]) error
+	// ListMicSources returns the attached microphone clients and their capture
+	// devices — what the Settings selector offers (also pushed over Watch).
+	ListMicSources(context.Context, *ListMicSourcesRequest) (*ListMicSourcesReply, error)
 	// SSHAgent is the SSH-agent forwarding data plane: the client provides its
 	// local ssh-agent, the server relays every agent connection made on its host
 	// (its own git clone, processes inside instances) down this stream.
@@ -922,6 +939,9 @@ func (UnimplementedFleetServiceServer) Forward(grpc.BidiStreamingServer[ForwardC
 }
 func (UnimplementedFleetServiceServer) Mic(grpc.BidiStreamingServer[MicUp, MicDown]) error {
 	return status.Errorf(codes.Unimplemented, "method Mic not implemented")
+}
+func (UnimplementedFleetServiceServer) ListMicSources(context.Context, *ListMicSourcesRequest) (*ListMicSourcesReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListMicSources not implemented")
 }
 func (UnimplementedFleetServiceServer) SSHAgent(grpc.BidiStreamingServer[SSHAgentUp, SSHAgentDown]) error {
 	return status.Errorf(codes.Unimplemented, "method SSHAgent not implemented")
@@ -1495,6 +1515,24 @@ func _FleetService_Mic_Handler(srv interface{}, stream grpc.ServerStream) error 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_MicServer = grpc.BidiStreamingServer[MicUp, MicDown]
 
+func _FleetService_ListMicSources_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListMicSourcesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ListMicSources(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ListMicSources_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ListMicSources(ctx, req.(*ListMicSourcesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_SSHAgent_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(FleetServiceServer).SSHAgent(&grpc.GenericServerStream[SSHAgentUp, SSHAgentDown]{ServerStream: stream})
 }
@@ -1690,6 +1728,10 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TriggerLogs",
 			Handler:    _FleetService_TriggerLogs_Handler,
+		},
+		{
+			MethodName: "ListMicSources",
+			Handler:    _FleetService_ListMicSources_Handler,
 		},
 		{
 			MethodName: "InspectRepo",

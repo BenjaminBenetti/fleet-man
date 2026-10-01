@@ -239,8 +239,10 @@ func (settingsPage *settingsPage) Init(m *model) tea.Cmd {
 	// the per-remote connection indicators live while the page is open. The
 	// armed-flag guard stops a re-entered page from stacking a second loop.
 	cmds := []tea.Cmd{fetchArmadaCmd()}
-	// The microphone selector lists THIS machine's devices; enumerate them as the
-	// page opens (fresh each visit — a headset may have been plugged in since).
+	// The microphone selector lists the devices of every attached client. This
+	// machine's are enumerated here as the page opens (fresh each visit — a
+	// headset may have been plugged in since), and the other clients are asked
+	// to do the same through the daemon.
 	if m.config != nil && m.config.MicSettings.Enabled {
 		// Also the natural moment to retry a provider that gave up on its own.
 		syncMicFromConfig(m.config)
@@ -249,6 +251,7 @@ func (settingsPage *settingsPage) Init(m *model) tea.Cmd {
 		if cmd := m.ensureMicDevices(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+		cmds = append(cmds, relistMicSourcesCmd())
 	}
 	if !m.armadaTickArmed {
 		m.armadaTickArmed = true
@@ -1695,11 +1698,11 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			if config.MicSettings.Enabled {
 				micValue = "[ on ]"
 			}
-			micValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Proxy this machine's microphone into instances (voice input for coding agents)")
+			micValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Proxy a client's microphone into instances (voice input for coding agents)")
 			recordRow(settingsItemMicEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemMicEnabled, "Enabled", micValue))
 			if config.MicSettings.Enabled {
 				listContent.WriteString("\n")
-				recordRow(settingsItemMicDevice, settingsPage.renderSettingsRow(m, currentItem == settingsItemMicDevice, "Device", settingsPage.micDeviceValue(m)))
+				recordRow(settingsItemMicDevice, settingsPage.renderSettingsRow(m, currentItem == settingsItemMicDevice, "Source", settingsPage.micDeviceValue(m)))
 				listContent.WriteString("\n")
 				// Not navigable: a read-out of the provider, like Public MCP URL's
 				// connection state. It bypasses recordRow (no item id), so it must

@@ -17,4 +17,13 @@ type MicSettings struct {
 	// system default rather than failing, since one config may be shared by
 	// clients on different machines.
 	Device string `json:"device,omitempty"`
+
+	// Client names WHICH connected client's microphone is recorded: every
+	// machine with a TUI (or `fleet mic attach`) on this daemon is a candidate,
+	// and Device is an id from THAT client's enumeration. Empty means no
+	// selection — the most recently attached client records. A selected client
+	// that is not attached is stood in for the same way (by the most recently
+	// attached one, on its system default) rather than leaving the instances
+	// with a dead microphone.
+	Client string `json:"client,omitempty"`
 }

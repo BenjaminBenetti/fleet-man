@@ -176,6 +176,11 @@ func (x *WatchRequest) GetReattachJobIds() []string {
 // COMPUTED value (never a Config field), so the settings page renders whatever
 // the latest pushed status says without any SetConfig read-back. Conflatable
 // (newest status wins) and cached by the hub for the initial snapshot.
+//
+// MicSources is the set of attached microphone clients and their capture
+// devices (exec.proto) — what the Settings selector offers. Server-owned and
+// conflatable exactly like RemoteMcpStatus, and likewise part of the initial
+// snapshot.
 type Event struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Kind:
@@ -189,6 +194,7 @@ type Event struct {
 	//	*Event_RuntimeChanged
 	//	*Event_RemoteMcpStatus
 	//	*Event_FileCopy
+	//	*Event_MicSources
 	Kind          isEvent_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -312,6 +318,15 @@ func (x *Event) GetFileCopy() *FileCopy {
 	return nil
 }
 
+func (x *Event) GetMicSources() *MicSources {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_MicSources); ok {
+			return x.MicSources
+		}
+	}
+	return nil
+}
+
 type isEvent_Kind interface {
 	isEvent_Kind()
 }
@@ -352,6 +367,10 @@ type Event_FileCopy struct {
 	FileCopy *FileCopy `protobuf:"bytes,9,opt,name=file_copy,json=fileCopy,proto3,oneof"`
 }
 
+type Event_MicSources struct {
+	MicSources *MicSources `protobuf:"bytes,10,opt,name=mic_sources,json=micSources,proto3,oneof"`
+}
+
 func (*Event_StateChanged) isEvent_Kind() {}
 
 func (*Event_JobStarted) isEvent_Kind() {}
@@ -369,6 +388,8 @@ func (*Event_RuntimeChanged) isEvent_Kind() {}
 func (*Event_RemoteMcpStatus) isEvent_Kind() {}
 
 func (*Event_FileCopy) isEvent_Kind() {}
+
+func (*Event_MicSources) isEvent_Kind() {}
 
 // RemoteMcpStatus is the computed status the settings page shows after the user
 // enables remote MCP and/or remote fleet (both share the one gateway tunnel, so
@@ -764,11 +785,12 @@ var File_watch_proto protoreflect.FileDescriptor
 const file_watch_proto_rawDesc = "" +
 	"\n" +
 	"\vwatch.proto\x12\tfleetgrpc\x1a\fdomain.proto\x1a\rruntime.proto\x1a\n" +
-	"jobs.proto\"\x99\x01\n" +
+	"jobs.proto\x1a\n" +
+	"exec.proto\"\x99\x01\n" +
 	"\fWatchRequest\x122\n" +
 	"\x15include_initial_state\x18\x01 \x01(\bR\x13includeInitialState\x12+\n" +
 	"\x11subscribe_runtime\x18\x02 \x01(\bR\x10subscribeRuntime\x12(\n" +
-	"\x10reattach_job_ids\x18\x03 \x03(\tR\x0ereattachJobIds\"\xa6\x04\n" +
+	"\x10reattach_job_ids\x18\x03 \x03(\tR\x0ereattachJobIds\"\xe0\x04\n" +
 	"\x05Event\x12>\n" +
 	"\rstate_changed\x18\x01 \x01(\v2\x17.fleetgrpc.StateChangedH\x00R\fstateChanged\x128\n" +
 	"\vjob_started\x18\x02 \x01(\v2\x15.fleetgrpc.JobStartedH\x00R\n" +
@@ -779,7 +801,10 @@ const file_watch_proto_rawDesc = "" +
 	"\fbrowser_open\x18\x06 \x01(\v2\x16.fleetgrpc.BrowserOpenH\x00R\vbrowserOpen\x12D\n" +
 	"\x0fruntime_changed\x18\a \x01(\v2\x19.fleetgrpc.RuntimeChangedH\x00R\x0eruntimeChanged\x12H\n" +
 	"\x11remote_mcp_status\x18\b \x01(\v2\x1a.fleetgrpc.RemoteMcpStatusH\x00R\x0fremoteMcpStatus\x122\n" +
-	"\tfile_copy\x18\t \x01(\v2\x13.fleetgrpc.FileCopyH\x00R\bfileCopyB\x06\n" +
+	"\tfile_copy\x18\t \x01(\v2\x13.fleetgrpc.FileCopyH\x00R\bfileCopy\x128\n" +
+	"\vmic_sources\x18\n" +
+	" \x01(\v2\x15.fleetgrpc.MicSourcesH\x00R\n" +
+	"micSourcesB\x06\n" +
 	"\x04kind\"\xad\x02\n" +
 	"\x0fRemoteMcpStatus\x12.\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x18.fleetgrpc.RemoteMcpConnR\x05state\x12\x1d\n" +
@@ -840,8 +865,9 @@ var file_watch_proto_goTypes = []any{
 	(*JobProgress)(nil),     // 9: fleetgrpc.JobProgress
 	(*JobLog)(nil),          // 10: fleetgrpc.JobLog
 	(*JobDone)(nil),         // 11: fleetgrpc.JobDone
-	(*State)(nil),           // 12: fleetgrpc.State
-	(*InstanceRuntime)(nil), // 13: fleetgrpc.InstanceRuntime
+	(*MicSources)(nil),      // 12: fleetgrpc.MicSources
+	(*State)(nil),           // 13: fleetgrpc.State
+	(*InstanceRuntime)(nil), // 14: fleetgrpc.InstanceRuntime
 }
 var file_watch_proto_depIdxs = []int32{
 	4,  // 0: fleetgrpc.Event.state_changed:type_name -> fleetgrpc.StateChanged
@@ -853,14 +879,15 @@ var file_watch_proto_depIdxs = []int32{
 	5,  // 6: fleetgrpc.Event.runtime_changed:type_name -> fleetgrpc.RuntimeChanged
 	3,  // 7: fleetgrpc.Event.remote_mcp_status:type_name -> fleetgrpc.RemoteMcpStatus
 	7,  // 8: fleetgrpc.Event.file_copy:type_name -> fleetgrpc.FileCopy
-	0,  // 9: fleetgrpc.RemoteMcpStatus.state:type_name -> fleetgrpc.RemoteMcpConn
-	12, // 10: fleetgrpc.StateChanged.state:type_name -> fleetgrpc.State
-	13, // 11: fleetgrpc.RuntimeChanged.runtime:type_name -> fleetgrpc.InstanceRuntime
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	12, // 9: fleetgrpc.Event.mic_sources:type_name -> fleetgrpc.MicSources
+	0,  // 10: fleetgrpc.RemoteMcpStatus.state:type_name -> fleetgrpc.RemoteMcpConn
+	13, // 11: fleetgrpc.StateChanged.state:type_name -> fleetgrpc.State
+	14, // 12: fleetgrpc.RuntimeChanged.runtime:type_name -> fleetgrpc.InstanceRuntime
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_watch_proto_init() }
@@ -871,6 +898,7 @@ func file_watch_proto_init() {
 	file_domain_proto_init()
 	file_runtime_proto_init()
 	file_jobs_proto_init()
+	file_exec_proto_init()
 	file_watch_proto_msgTypes[1].OneofWrappers = []any{
 		(*Event_StateChanged)(nil),
 		(*Event_JobStarted)(nil),
@@ -881,6 +909,7 @@ func file_watch_proto_init() {
 		(*Event_RuntimeChanged)(nil),
 		(*Event_RemoteMcpStatus)(nil),
 		(*Event_FileCopy)(nil),
+		(*Event_MicSources)(nil),
 	}
 	file_watch_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}

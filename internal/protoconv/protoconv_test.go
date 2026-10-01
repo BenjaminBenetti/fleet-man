@@ -280,3 +280,28 @@ func TestConfigFromProtoBases(t *testing.T) {
 		t.Errorf("set tool selection should override the base default, got %q", got.AgentSettings.ToolSelection)
 	}
 }
+
+// The microphone's selected client has PRESENCE on the wire: a client built
+// before the field sends the mic group without it, which must leave the base's
+// selection alone, while a current client's explicit "" clears it.
+func TestConfigFromProtoMicClientPresence(t *testing.T) {
+	base := func() *state.Config {
+		return &state.Config{MicSettings: state.MicSettings{Enabled: true, Device: "old", Client: "desk"}}
+	}
+
+	absent := &fleetgrpc.Config{Mic: &fleetgrpc.MicSettings{Enabled: true, Device: "new"}}
+	if got := ConfigFromProto(absent, base()).MicSettings; got.Client != "desk" || got.Device != "new" {
+		t.Errorf("absent client: got %+v, want the base's client kept and the device applied", got)
+	}
+
+	cleared := ""
+	explicit := &fleetgrpc.Config{Mic: &fleetgrpc.MicSettings{Enabled: true, Client: &cleared}}
+	if got := ConfigFromProto(explicit, base()).MicSettings; got.Client != "" {
+		t.Errorf("explicit empty client: got %q, want the selection cleared", got.Client)
+	}
+
+	// ConfigToProto always sends it — that is what makes "" explicit.
+	if sent := ConfigToProto(&state.Config{}).GetMic(); sent.Client == nil {
+		t.Error("ConfigToProto must always set mic.client, the empty string included")
+	}
+}

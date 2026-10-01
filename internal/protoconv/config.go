@@ -30,6 +30,9 @@ func ConfigToProto(c *configutil.Config) *fleetgrpc.Config {
 		Mic: &fleetgrpc.MicSettings{
 			Enabled: c.MicSettings.Enabled,
 			Device:  c.MicSettings.Device,
+			// Always present, the empty string included: presence is how the
+			// server tells "no selection" from "a client that predates the field".
+			Client: strptr(c.MicSettings.Client),
 		},
 		Theme: &fleetgrpc.ThemeSettings{Name: c.ThemeSettings.Name},
 	}
@@ -142,6 +145,10 @@ func ConfigFromProto(pc *fleetgrpc.Config, base *configutil.Config) *configutil.
 	if mic := pc.GetMic(); mic != nil {
 		c.MicSettings.Enabled = mic.GetEnabled()
 		c.MicSettings.Device = mic.GetDevice()
+		// Absent = sent by a client built before the field: keep base's selection.
+		if mic.Client != nil {
+			c.MicSettings.Client = mic.GetClient()
+		}
 	}
 
 	if th := pc.GetTheme(); th != nil {

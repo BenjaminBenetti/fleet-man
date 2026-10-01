@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/mic"
 )
 
@@ -15,7 +16,7 @@ func TestMicCommandSurface(t *testing.T) {
 	for _, sub := range newMicCmd().Commands() {
 		visible[sub.Name()] = !sub.Hidden
 	}
-	for name, want := range map[string]bool{"devices": true, "attach": true, "sink": false, "ensure": false, "stop": false} {
+	for name, want := range map[string]bool{"devices": true, "sources": true, "attach": true, "sink": false, "ensure": false, "stop": false} {
 		got, ok := visible[name]
 		if !ok {
 			t.Errorf("fleet mic %s is missing", name)
@@ -38,5 +39,41 @@ func TestMicDevicesListsTheDefault(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "(default)") || !strings.Contains(out.String(), mic.DefaultLabel) {
 		t.Fatalf("output = %q", out.String())
+	}
+}
+
+// `fleet mic sources` is the selector's list for a terminal: every client, its
+// implicit default and its devices, with the recorded client marked.
+func TestPrintMicSources(t *testing.T) {
+	var out bytes.Buffer
+	printMicSources(&out, &fleetgrpc.MicSources{})
+	if !strings.Contains(out.String(), "no microphone clients connected") {
+		t.Fatalf("empty output = %q", out.String())
+	}
+
+	out.Reset()
+	printMicSources(&out, &fleetgrpc.MicSources{Sources: []*fleetgrpc.MicSource{
+		{Client: "desk", Source: true, DevicesListed: true, Devices: []*fleetgrpc.MicDevice{{Id: "pulse:usb", Label: "USB Mic"}}},
+		{Client: "a-much-longer-laptop-name"},
+	}})
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("want a header and three rows, got:\n%s", out.String())
+	}
+	for i, want := range [][]string{
+		{"CLIENT", "DEVICE", "LABEL"},
+		{"* desk", "(default)", mic.DefaultLabel},
+		{"* desk", "pulse:usb", "USB Mic"},
+		{"  a-much-longer-laptop-name", "(default)", mic.DefaultLabel},
+	} {
+		for _, field := range want {
+			if !strings.Contains(lines[i], field) {
+				t.Errorf("line %d = %q, want it to contain %q", i, lines[i], field)
+			}
+		}
+	}
+	// Columns line up under the longest client name.
+	if strings.Index(lines[1], "(default)") != strings.Index(lines[3], "(default)") {
+		t.Errorf("device column is not aligned:\n%s", out.String())
 	}
 }

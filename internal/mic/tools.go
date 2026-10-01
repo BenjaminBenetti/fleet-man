@@ -385,14 +385,29 @@ func Describe(err error) string {
 // the implicit system default (the empty id). An override command or a
 // default-only tool yields an empty list.
 func Devices() ([]Device, error) {
-	if os.Getenv(EnvCapture) != "" {
-		return nil, nil
-	}
 	// Listing is an explicit user action (opening the selector), so re-detect:
 	// they may have just installed a recorder. Only the VERDICT is refreshed —
 	// the allowlist survives unless the tool changed, so a listing that fails
 	// now does not leave capture with no allowlist at all.
-	refreshDetection()
+	return enumerate(true)
+}
+
+// announcedDevices is the listing a provider announces to the daemon. Same
+// answer as Devices, minus the forced re-detection: this one runs on its own,
+// next to the capture-start path, and detection holds the lock that path needs
+// — a re-probe of a wedged sound server here would be paid for out of the
+// start of the user's sentence.
+func announcedDevices() ([]Device, error) {
+	return enumerate(false)
+}
+
+func enumerate(redetect bool) ([]Device, error) {
+	if os.Getenv(EnvCapture) != "" {
+		return nil, nil
+	}
+	if redetect {
+		refreshDetection()
+	}
 	detected, err := detect()
 	if err != nil {
 		return nil, err

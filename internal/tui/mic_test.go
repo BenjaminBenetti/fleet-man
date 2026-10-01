@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/mic"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -21,9 +22,14 @@ import (
 func newMicTestModel(t *testing.T) (*settingsPage, *model) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	origSetConfig := setConfigRemote
+	origSetConfig, origClientName, origRelist := setConfigRemote, micClientName, relistMicSourcesRemote
 	setConfigRemote = func(c *state.Config) error { return state.SaveConfig(c) }
-	t.Cleanup(func() { setConfigRemote = origSetConfig })
+	// This machine is "laptop" among the daemon's microphone clients.
+	micClientName = func() string { return "laptop" }
+	relistMicSourcesRemote = func() error { return nil }
+	t.Cleanup(func() {
+		setConfigRemote, micClientName, relistMicSourcesRemote = origSetConfig, origClientName, origRelist
+	})
 
 	sp := newSettingsPage()
 	m := &model{
@@ -113,7 +119,27 @@ func TestToggleMicEnabledRevertsOnSaveFailure(t *testing.T) {
 	}
 }
 
-func TestCycleMicDeviceWalksDefaultThenDevices(t *testing.T) {
+// micSources builds the daemon's pushed set of attached microphone clients.
+// The first client named is the one being recorded.
+func micSources(clients ...*fleetgrpc.MicSource) *fleetgrpc.MicSources {
+	if len(clients) > 0 {
+		clients[0].Source = true
+	}
+	return &fleetgrpc.MicSources{Sources: clients}
+}
+
+func micSource(client string, devices ...string) *fleetgrpc.MicSource {
+	source := &fleetgrpc.MicSource{Client: client, DevicesListed: true}
+	for _, device := range devices {
+		id, label, _ := strings.Cut(device, "=")
+		source.Devices = append(source.Devices, &fleetgrpc.MicDevice{Id: id, Label: label})
+	}
+	return source
+}
+
+// The selector steps through automatic, then this machine's microphones, and
+// wraps — and every step pins the CLIENT along with the device.
+func TestCycleMicDeviceWalksAutomaticThenThisMachine(t *testing.T) {
 	sp, m := newMicTestModel(t)
 	m.config.MicSettings.Enabled = true
 	m.micDevicesLoaded = true
@@ -123,25 +149,174 @@ func TestCycleMicDeviceWalksDefaultThenDevices(t *testing.T) {
 	right := tea.KeyMsg{Type: tea.KeyRight}
 	left := tea.KeyMsg{Type: tea.KeyLeft}
 
-	for _, want := range []string{"pulse:yeti", "pulse:webcam", ""} {
+	for _, want := range []micChoice{{"laptop", ""}, {"laptop", "pulse:yeti"}, {"laptop", "pulse:webcam"}, {}} {
 		sp.Update(m, right)
-		if got := m.config.MicSettings.Device; got != want {
-			t.Fatalf("after right: device = %q, want %q", got, want)
+		if got := (micChoice{m.config.MicSettings.Client, m.config.MicSettings.Device}); got != want {
+			t.Fatalf("after right: selection = %+v, want %+v", got, want)
 		}
 	}
-	sp.Update(m, left) // wraps backwards from default to the last device
-	if got := m.config.MicSettings.Device; got != "pulse:webcam" {
-		t.Fatalf("after left: device = %q, want pulse:webcam", got)
+	sp.Update(m, left) // wraps backwards from automatic to the last device
+	if got := m.config.MicSettings; got.Client != "laptop" || got.Device != "pulse:webcam" {
+		t.Fatalf("after left: selection = %+v, want laptop's webcam", got)
 	}
 	loaded, err := state.LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if loaded.MicSettings.Device != "pulse:webcam" {
-		t.Fatalf("device not persisted: %q", loaded.MicSettings.Device)
+	if loaded.MicSettings.Client != "laptop" || loaded.MicSettings.Device != "pulse:webcam" {
+		t.Fatalf("selection not persisted: %+v", loaded.MicSettings)
 	}
-	if !strings.Contains(sp.View(m), "Webcam") {
-		t.Fatal("Device row should show the device's label")
+	view := sp.View(m)
+	if !strings.Contains(view, "laptop (this machine)") || !strings.Contains(view, "Webcam") {
+		t.Fatalf("Source row should name the client and the device's label:\n%s", view)
+	}
+}
+
+// The point of the feature: microphones on OTHER machines attached to the same
+// daemon are offered next to this machine's, and choosing one selects that
+// client.
+func TestCycleMicDeviceOffersOtherClientsMicrophones(t *testing.T) {
+	sp, m := newMicTestModel(t)
+	m.config.MicSettings.Enabled = true
+	m.micDevicesLoaded = true
+	m.micDevices = []mic.Device{{ID: "pulse:yeti", Label: "Yeti Orb"}}
+	m.micSources = micSources(
+		micSource("desk", "pulse:usb=Desk USB Mic"),
+		micSource("laptop", "pulse:stale=Stale Listing"), // this machine: its own enumeration wins
+		micSource("tablet"),
+	)
+	sp.cursor = settingsPositionOf(sp, m, settingsItemMicDevice)
+
+	var walked []micChoice
+	for range 7 {
+		sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
+		walked = append(walked, micChoice{m.config.MicSettings.Client, m.config.MicSettings.Device})
+	}
+	want := []micChoice{
+		{"laptop", ""}, {"laptop", "pulse:yeti"},
+		{"desk", ""}, {"desk", "pulse:usb"},
+		{"tablet", ""},
+		{}, {"laptop", ""},
+	}
+	if !slices.Equal(walked, want) {
+		t.Fatalf("walked %+v\nwant   %+v", walked, want)
+	}
+
+	m.config.MicSettings.Client, m.config.MicSettings.Device = "desk", "pulse:usb"
+	if label := sp.micDeviceLabel(m); label != "desk · Desk USB Mic" {
+		t.Fatalf("label = %q", label)
+	}
+}
+
+// A machine with no recorder of its own (its listing fails, its provider never
+// attaches) can still pick a microphone on another client — it is the case the
+// selector matters most for.
+func TestCycleMicDeviceWorksWithoutALocalMicrophone(t *testing.T) {
+	sp, m := newMicTestModel(t)
+	m.config.MicSettings.Enabled = true
+	m.micDevicesErr = "no capture tool"
+	m.micSources = micSources(micSource("desk", "pulse:usb=Desk USB Mic"))
+	sp.cursor = settingsPositionOf(sp, m, settingsItemMicDevice)
+
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
+
+	if got := m.config.MicSettings; got.Client != "desk" || got.Device != "" {
+		t.Fatalf("selection = %+v, want desk's default (this machine offers nothing)", got)
+	}
+}
+
+// A selected client that is not attached is shown as such, with who records in
+// its place — the selection is kept, not silently rewritten.
+func TestMicSourceRowExplainsAStandIn(t *testing.T) {
+	sp, m := newMicTestModel(t)
+	m.config.MicSettings = state.MicSettings{Enabled: true, Client: "desk", Device: "pulse:usb"}
+	m.micDevicesLoaded = true
+	m.micSources = micSources(micSource("laptop"))
+
+	value := sp.micDeviceValue(m)
+	for _, want := range []string{"desk (not connected)", "pulse:usb", "laptop (this machine) records in its place"} {
+		if !strings.Contains(value, want) {
+			t.Fatalf("Source row = %q, want it to contain %q", value, want)
+		}
+	}
+
+	// Automatic says where the audio comes from right now.
+	m.config.MicSettings.Client, m.config.MicSettings.Device = "", ""
+	m.micSources = micSources(micSource("desk"), micSource("laptop"))
+	if value := sp.micDeviceValue(m); !strings.Contains(value, "Automatic") || !strings.Contains(value, "now desk") {
+		t.Fatalf("Source row = %q", value)
+	}
+
+	// A selected, attached client needs no note.
+	m.config.MicSettings.Client = "desk"
+	if note := micSourceNote(m); note != "" {
+		t.Fatalf("note = %q, want none", note)
+	}
+}
+
+// The Status row is this machine's provider. Idle because ANOTHER client is the
+// source is a different thing from idle because nothing records.
+func TestMicStatusRowSaysWhenAnotherClientIsTheSource(t *testing.T) {
+	_, m := newMicTestModel(t)
+	m.micStatus = mic.Status{State: mic.StateIdle}
+	if status := micStatusValue(m); !strings.Contains(status, "idle") {
+		t.Fatalf("status = %q", status)
+	}
+
+	m.micSources = micSources(micSource("desk"), micSource("laptop"))
+	if status := micStatusValue(m); !strings.Contains(status, "standby") || !strings.Contains(status, "desk") {
+		t.Fatalf("status = %q", status)
+	}
+	m.micSources.Sources[0].Recording = true
+	if status := micStatusValue(m); !strings.Contains(status, "live there") {
+		t.Fatalf("status = %q, want it to say desk's microphone is open", status)
+	}
+
+	m.micSources = micSources(micSource("laptop"), micSource("desk"))
+	if status := micStatusValue(m); !strings.Contains(status, "idle") {
+		t.Fatalf("status = %q, want plain idle when this machine is the source", status)
+	}
+}
+
+func TestMicStatusRowFlagsStandingIn(t *testing.T) {
+	_, m := newMicTestModel(t)
+	m.micStatus = mic.Status{State: mic.StateLive, Instances: []string{"alpha/i1"}, StandInFor: "desk"}
+	if status := micStatusValue(m); !strings.Contains(status, "desk is not connected") {
+		t.Fatalf("status = %q", status)
+	}
+}
+
+// The pushed set belongs to one daemon connection: a frame from a superseded
+// Watch stream (an armada switch) must not populate the new daemon's selector.
+func TestMicSourcesMsgIsDroppedFromAStaleWatch(t *testing.T) {
+	_, m := newMicTestModel(t)
+	m.watchGen = 2
+
+	next, _ := m.Update(micSourcesMsg{sources: micSources(micSource("desk")), gen: 1})
+	if got := next.(model); got.micSources != nil {
+		t.Fatalf("a stale push was applied: %v", got.micSources)
+	}
+	next, _ = m.Update(micSourcesMsg{sources: micSources(micSource("desk")), gen: 2})
+	if got := next.(model); len(got.micSources.GetSources()) != 1 {
+		t.Fatalf("the current push was not applied: %v", got.micSources)
+	}
+}
+
+// Asking the other clients for fresh listings is fire-and-forget: the answers
+// arrive over Watch, so the command itself reports nothing — not even a failure
+// (a daemon that predates the RPC just has no other clients to offer).
+func TestRelistMicSourcesCmdAsksTheDaemonAndReportsNothing(t *testing.T) {
+	newMicTestModel(t)
+	asked := 0
+	relistMicSourcesRemote = func() error {
+		asked++
+		return errors.New("unimplemented")
+	}
+	if msg := relistMicSourcesCmd()(); msg != nil {
+		t.Fatalf("msg = %v, want none", msg)
+	}
+	if asked != 1 {
+		t.Fatalf("the daemon was asked %d times, want once", asked)
 	}
 }
 
@@ -165,10 +340,30 @@ func TestCycleMicDeviceLoadsTheListFirst(t *testing.T) {
 // do here: record the system default.
 func TestMicDeviceLabelForAnUnknownDevice(t *testing.T) {
 	sp, m := newMicTestModel(t)
-	m.config.MicSettings = state.MicSettings{Enabled: true, Device: "avfoundation:MacBook Pro Microphone"}
+	m.config.MicSettings = state.MicSettings{Enabled: true, Client: "laptop", Device: "avfoundation:MacBook Pro Microphone"}
 	m.micDevicesLoaded = true
 	label := sp.micDeviceLabel(m)
-	if !strings.HasPrefix(label, mic.DefaultLabel) || !strings.Contains(label, "not found here") {
+	if !strings.Contains(label, mic.DefaultLabel) || !strings.Contains(label, "not found here") {
+		t.Fatalf("label = %q", label)
+	}
+
+	// The same for a device another client no longer lists.
+	m.config.MicSettings.Client = "desk"
+	m.micSources = micSources(micSource("desk"))
+	if label := sp.micDeviceLabel(m); !strings.Contains(label, "not found there") {
+		t.Fatalf("label = %q", label)
+	}
+}
+
+// A selection saved before clients could be chosen has a device and no client.
+// It keeps meaning what it meant — whichever client records uses the device if
+// it has it — and reads as automatic.
+func TestMicDeviceLabelForASelectionWithNoClient(t *testing.T) {
+	sp, m := newMicTestModel(t)
+	m.config.MicSettings = state.MicSettings{Enabled: true, Device: "pulse:yeti"}
+	m.micDevicesLoaded = true
+	m.micDevices = []mic.Device{{ID: "pulse:yeti", Label: "Yeti Orb"}}
+	if label := sp.micDeviceLabel(m); label != "Automatic · Yeti Orb" {
 		t.Fatalf("label = %q", label)
 	}
 }
@@ -345,7 +540,7 @@ func TestStaleMicStatusCannotClearTheLiveBadge(t *testing.T) {
 // user's real device into "not found here".
 func TestMicDevicesErrorKeepsThePreviousList(t *testing.T) {
 	sp, m := newMicTestModel(t)
-	m.config.MicSettings = state.MicSettings{Enabled: true, Device: "pulse:yeti"}
+	m.config.MicSettings = state.MicSettings{Enabled: true, Client: "laptop", Device: "pulse:yeti"}
 	m.micDevicesLoaded = true
 	m.micDevices = []mic.Device{{ID: "pulse:yeti", Label: "Yeti Orb"}}
 
@@ -354,7 +549,7 @@ func TestMicDevicesErrorKeepsThePreviousList(t *testing.T) {
 	if len(got.micDevices) != 1 {
 		t.Fatalf("the device list was wiped: %+v", got.micDevices)
 	}
-	if label := sp.micDeviceLabel(&got); label != "Yeti Orb" {
+	if label := sp.micDeviceLabel(&got); label != "laptop (this machine) · Yeti Orb" {
 		t.Fatalf("label = %q, want the real device", label)
 	}
 	if !strings.Contains(got.micDevicesErr, "timeout") {
@@ -362,14 +557,29 @@ func TestMicDevicesErrorKeepsThePreviousList(t *testing.T) {
 	}
 }
 
-func TestCycleMicDeviceExplainsAnEmptyList(t *testing.T) {
+// With nothing listed — here or on any other client — a key press changes
+// nothing: there is only "automatic" to be on.
+func TestCycleMicDeviceWithNothingListedChangesNothing(t *testing.T) {
+	sp, m := newMicTestModel(t)
+	m.config.MicSettings.Enabled = true
+	m.micDevicesLoading = true // this machine's listing is still in flight
+	sp.cursor = settingsPositionOf(sp, m, settingsItemMicDevice)
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
+	if m.config.MicSettings.Client != "" || m.config.MicSettings.Device != "" {
+		t.Fatalf("selection changed to %+v with nothing listed", m.config.MicSettings)
+	}
+}
+
+// A default-only recorder (SoX, an override command) lists no devices — but the
+// machine is still a microphone, and can be pinned as the source.
+func TestCycleMicDeviceOffersADefaultOnlyMachine(t *testing.T) {
 	sp, m := newMicTestModel(t)
 	m.config.MicSettings.Enabled = true
 	m.micDevicesLoaded = true
 	sp.cursor = settingsPositionOf(sp, m, settingsItemMicDevice)
 	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
-	if !strings.Contains(m.message, "system default") {
-		t.Fatalf("a no-op key press should say why: %q", m.message)
+	if got := m.config.MicSettings; got.Client != "laptop" || got.Device != "" {
+		t.Fatalf("selection = %+v, want this machine's system default", got)
 	}
 }
 
@@ -475,9 +685,25 @@ func TestDeviceChangeWhileLiveSaysItAppliesNextTime(t *testing.T) {
 	m.micDevicesLoaded = true
 	m.micDevices = []mic.Device{{ID: "pulse:yeti", Label: "Yeti Orb"}}
 	m.micStatus = mic.Status{State: mic.StateLive}
+	m.micSources = micSources(micSource("laptop"), micSource("desk"))
 	sp.cursor = settingsPositionOf(sp, m, settingsItemMicDevice)
+
+	// Automatic -> this machine's default: same microphone, nothing to qualify.
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
+	if strings.Contains(m.message, "next recording") {
+		t.Fatalf("message = %q, but the device did not change", m.message)
+	}
+	// -> another device on this machine: the running capture keeps its device.
 	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
 	if !strings.Contains(m.message, "next recording") {
 		t.Fatalf("message = %q", m.message)
+	}
+	// -> another client: the daemon moves the microphone at once.
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyRight})
+	if m.config.MicSettings.Client != "desk" {
+		t.Fatalf("setup: selection = %+v, want desk", m.config.MicSettings)
+	}
+	if strings.Contains(m.message, "next recording") {
+		t.Fatalf("message = %q, but moving to another client is immediate", m.message)
 	}
 }

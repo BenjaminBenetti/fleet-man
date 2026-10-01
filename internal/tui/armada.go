@@ -830,6 +830,7 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	clear(m.runtime)
 	clear(m.creating)
 	m.remoteMcpStatus = nil
+	m.micSources = nil // the other daemon has its own set of microphone clients
 	m.codespaceMachines = nil
 	m.codespaceFetchingMachines = false
 	m.sessionStore = NewSessionStore()

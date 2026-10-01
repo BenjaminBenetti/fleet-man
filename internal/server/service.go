@@ -98,6 +98,13 @@ func newService() *service {
 		triggerFires: make(chan []triggerFire, triggerFireBuffer),
 	}
 	svc.instanceMCP = newInstanceMCP(svc)
+	// The attached microphone clients are pushed over Watch. The snapshot is
+	// taken ON the hub loop, not here: two changes in quick succession then
+	// cannot be delivered out of order, since a later turn never sees an older
+	// set.
+	svc.mic.onSources = func() {
+		svc.hub.post(func(h *hub) { h.broadcastMicSources(svc.mic.sources()) })
+	}
 	return svc
 }
 

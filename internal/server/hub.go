@@ -43,6 +43,12 @@ type hub struct {
 	sshAddr string
 	sshErr  string
 
+	// micSources is the attached microphone clients and their capture devices
+	// (owned by the loop) — like remoteMcp a server-owned value pushed over
+	// Watch and cached for a new subscriber's initial snapshot. Produced by the
+	// mic hub (mic.go).
+	micSources *fleetgrpc.MicSources
+
 	// runtimeWanted is true while at least one subscriber asked for runtime;
 	// the runtime pollers read it lock-free to gate their expensive work.
 	runtimeWanted atomic.Bool
@@ -83,6 +89,7 @@ func newHub() *hub {
 		agent:       newAgentTracker(),
 		runtimeEdge: make(chan struct{}, 1),
 		remoteMcp:   &fleetgrpc.RemoteMcpStatus{}, // state == UNSPECIFIED (not connected)
+		micSources:  &fleetgrpc.MicSources{},
 	}
 }
 
@@ -235,6 +242,19 @@ func (h *hub) setSSHStatus(addr, errMsg string) {
 	h.broadcastRemoteMcpStatus(h.remoteMcp)
 }
 
+// broadcastMicSources caches the attached microphone clients and fans them out
+// to every subscriber. Conflatable like the remote-MCP status: only the current
+// set matters, and an unchanged one is dropped. Runs on the hub loop.
+func (h *hub) broadcastMicSources(sources *fleetgrpc.MicSources) {
+	if sources == nil || proto.Equal(h.micSources, sources) {
+		return
+	}
+	h.micSources = sources
+	for sub := range h.subs {
+		sub.enqueueMicSources(sources)
+	}
+}
+
 func runtimeKey(fleetName, instance string) string { return fleetName + "/" + instance }
 
 // subscriber is one Watch stream's conflating buffer. pendingState keeps the
@@ -259,6 +279,9 @@ type subscriber struct {
 	// pendingRemoteMcp is the newest outbound-MCP-tunnel status (conflated like
 	// pendingState — only the current status matters).
 	pendingRemoteMcp *fleetgrpc.RemoteMcpStatus
+	// pendingMicSources is the newest set of attached microphone clients
+	// (conflated the same way).
+	pendingMicSources *fleetgrpc.MicSources
 
 	notify chan struct{}
 }
@@ -306,6 +329,24 @@ func (s *subscriber) enqueueRemoteMcp(st *fleetgrpc.RemoteMcpStatus) {
 	s.pendingRemoteMcp = st
 	s.mu.Unlock()
 	s.signal()
+}
+
+func (s *subscriber) enqueueMicSources(sources *fleetgrpc.MicSources) {
+	s.mu.Lock()
+	s.pendingMicSources = sources
+	s.mu.Unlock()
+	s.signal()
+}
+
+// takeMicSources takes the pending microphone-clients set, if any, out of the
+// buffer for sending. Separate from drain only to keep that one's result list
+// from growing a sixth positional value.
+func (s *subscriber) takeMicSources() *fleetgrpc.MicSources {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sources := s.pendingMicSources
+	s.pendingMicSources = nil
+	return sources
 }
 
 func (s *subscriber) enqueueFileCopy(ev *fleetgrpc.FileCopy) {

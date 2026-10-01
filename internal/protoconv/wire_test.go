@@ -162,7 +162,7 @@ func TestConfigWirePlacement(t *testing.T) {
 	pinArity[state.CodespacesSettings](t, 3)
 	pinArity[state.BrowserSettings](t, 2)
 	pinArity[state.RemoteMcpSettings](t, 5)
-	pinArity[state.MicSettings](t, 2)
+	pinArity[state.MicSettings](t, 3)
 	pinArity[state.ThemeSettings](t, 1)
 
 	vim := false
@@ -175,7 +175,7 @@ func TestConfigWirePlacement(t *testing.T) {
 		BrowserSettings:    state.BrowserSettings{MultipleBrowsersPerFleet: &multi},
 		RemoteMcpSettings:  state.RemoteMcpSettings{GatewayURL: "gu", FleetMode: "fm"},
 		DefaultBackend:     string(fleet.BackendCoder),
-		MicSettings:        state.MicSettings{Enabled: true, Device: "md"},
+		MicSettings:        state.MicSettings{Enabled: true, Device: "md", Client: "mc"},
 		ThemeSettings:      state.ThemeSettings{Name: "tn"},
 	})
 	if pc.GetGeneral().TmuxVimKeys == nil || pc.GetGeneral().GetTmuxVimKeys() ||
@@ -197,7 +197,7 @@ func TestConfigWirePlacement(t *testing.T) {
 	if pc.GetRemoteMcp().GetGatewayUrl() != "gu" || pc.GetRemoteMcp().GetFleetMode() != "fm" {
 		t.Fatalf("remote-mcp url/mode wire placement wrong: %+v", pc.GetRemoteMcp())
 	}
-	if !pc.GetMic().GetEnabled() || pc.GetMic().GetDevice() != "md" {
+	if !pc.GetMic().GetEnabled() || pc.GetMic().GetDevice() != "md" || pc.GetMic().GetClient() != "mc" {
 		t.Fatalf("mic wire placement wrong: %+v", pc.GetMic())
 	}
 	if pc.GetTheme().GetName() != "tn" {
