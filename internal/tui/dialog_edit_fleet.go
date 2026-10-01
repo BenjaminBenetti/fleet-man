@@ -41,6 +41,9 @@ const (
 // fleetMCPRiskNote is the caution under the Fleet MCP toggle.
 const fleetMCPRiskNote = "⚠ Allows host access from inside instances and poses an agent escape risk."
 
+// fleetMCPRiskShort is the reminder beside the toggle while it is on.
+const fleetMCPRiskShort = "⚠ host access risk"
+
 // editFleetRowCustomMountBase is the start of the dynamic custom-mount child
 // rows, placed well above the fixed row constants so the two never collide.
 // Row editFleetRowCustomMountBase+i is the i-th existing custom mount; the row
@@ -1582,11 +1585,15 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 			d.WriteString(marker(row) + "  " + checkbox(fleetPage.editFleet.auggieMount) + " " + dialogLabel.Render("Auggie mount"))
 		case editFleetRowFleetMCP:
 			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.fleetMCP) + " " + dialogLabel.Render("Fleet MCP"))
-			// The risk note shows where it matters — on the toggle while it is
-			// selected, and for as long as it is on — and not otherwise: the
-			// dialog has to fit an 80x24 terminal.
-			if fleetPage.dlg.row == row || fleetPage.editFleet.fleetMCP {
+			// The risk note shows in full on the toggle while it is selected.
+			// While the setting is on and the cursor is elsewhere, a short
+			// reminder rides the row itself: the dialog is tall, and extra
+			// lines would push the selected row off an 80x24 terminal.
+			switch {
+			case fleetPage.dlg.row == row:
 				d.WriteString("\n" + warnTextStyle.PaddingLeft(4).Width(46).Render(fleetMCPRiskNote))
+			case fleetPage.editFleet.fleetMCP:
+				d.WriteString("  " + warnTextStyle.Render(fleetMCPRiskShort))
 			}
 		case editFleetRowGh:
 			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.ghMount) + " " + dialogLabel.Render("GitHub CLI mount"))
@@ -1597,7 +1604,7 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 			if fleetPage.dlg.fieldActive && fleetPage.dlg.row == editFleetRowHomeDir {
 				field = fleetPage.homedirInput.View()
 			} else if v := fleetPage.homedirInput.Value(); v == "" {
-				field = dimStyle.Render("(unset — defaults to /home/vscode)")
+				field = dimStyle.Render("(default /home/vscode)")
 			} else {
 				field = v
 			}
