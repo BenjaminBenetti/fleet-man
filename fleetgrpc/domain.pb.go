@@ -233,11 +233,7 @@ type Instance struct {
 	// (issue #188). Plain bool: false == "not automated" == user-created, like the
 	// FleetSettings *Mount flags — the zero value carries the common case, so no
 	// optional is needed.
-	Automated bool `protobuf:"varint,31,opt,name=automated,proto3" json:"automated,omitempty"`
-	// fleet_mcp marks an automation instance whose agent has the fleet MCP
-	// (Agent.fleet_mcp, issue #219): the daemon serves the MCP server on a socket
-	// in its control directory. Plain bool like automated.
-	FleetMcp      bool `protobuf:"varint,32,opt,name=fleet_mcp,json=fleetMcp,proto3" json:"fleet_mcp,omitempty"`
+	Automated     bool `protobuf:"varint,31,opt,name=automated,proto3" json:"automated,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -370,13 +366,6 @@ func (x *Instance) GetAutomated() bool {
 	return false
 }
 
-func (x *Instance) GetFleetMcp() bool {
-	if x != nil {
-		return x.FleetMcp
-	}
-	return false
-}
-
 // FleetSettings mirrors internal/fleet.FleetSettings. The three *Mount flags are
 // plain bool: their Go JSON tags are `...,omitempty`, so an explicit-false mount
 // is OMITTED from state.json and reads back false — on disk false == "never
@@ -450,8 +439,12 @@ type FleetSettings struct {
 	// default/display/description/type after a fetch, so those must round-trip
 	// through SetFleetSettings without loss.
 	CoderParameters []*CoderParameter `protobuf:"bytes,17,rep,name=coder_parameters,json=coderParameters,proto3" json:"coder_parameters,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// fleet_mcp provides the fleet MCP server and the Fleet Admiral skill to the
+	// coding agents in this fleet's instances (issue #219). Plain bool like the
+	// *Mount flags: false == off, the default.
+	FleetMcp      bool `protobuf:"varint,18,opt,name=fleet_mcp,json=fleetMcp,proto3" json:"fleet_mcp,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *FleetSettings) Reset() {
@@ -601,6 +594,13 @@ func (x *FleetSettings) GetCoderParameters() []*CoderParameter {
 		return x.CoderParameters
 	}
 	return nil
+}
+
+func (x *FleetSettings) GetFleetMcp() bool {
+	if x != nil {
+		return x.FleetMcp
+	}
+	return false
 }
 
 // CoderParameter mirrors internal/fleet.CoderParameter — one Coder template
@@ -768,14 +768,11 @@ func (x *LayoutPreset) GetPaneCommands() []string {
 // and it is always persisted explicitly). backend reuses Instance.backend's enum
 // (UNSPECIFIED -> devcontainer at normalization).
 type Agent struct {
-	state        protoimpl.MessageState `protogen:"open.v1"`
-	Name         string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Command      string                 `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
-	SystemPrompt string                 `protobuf:"bytes,4,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
-	Backend      BackendType            `protobuf:"varint,5,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
-	// fleet_mcp gives the agent the fleet MCP server and the Fleet Admiral skill
-	// inside its instance (issue #219). Plain bool: false == off, the default.
-	FleetMcp      bool `protobuf:"varint,6,opt,name=fleet_mcp,json=fleetMcp,proto3" json:"fleet_mcp,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Command       string                 `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
+	SystemPrompt  string                 `protobuf:"bytes,4,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
+	Backend       BackendType            `protobuf:"varint,5,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -836,13 +833,6 @@ func (x *Agent) GetBackend() BackendType {
 		return x.Backend
 	}
 	return BackendType_BACKEND_TYPE_UNSPECIFIED
-}
-
-func (x *Agent) GetFleetMcp() bool {
-	if x != nil {
-		return x.FleetMcp
-	}
-	return false
 }
 
 // Trigger mirrors internal/fleet.Trigger — an automation trigger (issue #188).
@@ -1216,7 +1206,7 @@ var File_domain_proto protoreflect.FileDescriptor
 
 const file_domain_proto_rawDesc = "" +
 	"\n" +
-	"\fdomain.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\x82\x05\n" +
+	"\fdomain.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\xeb\x04\n" +
 	"\bInstance\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12&\n" +
 	"\fdisplay_name\x18\x02 \x01(\tH\x00R\vdisplayName\x88\x01\x01\x12&\n" +
@@ -1233,8 +1223,7 @@ const file_domain_proto_rawDesc = "" +
 	"\x05color\x18\v \x01(\tH\x06R\x05color\x88\x01\x01\x12\x1b\n" +
 	"\x06branch\x18\f \x01(\tH\aR\x06branch\x88\x01\x01\x12\x1a\n" +
 	"\bwarnings\x18\r \x03(\tR\bwarnings\x12\x1c\n" +
-	"\tautomated\x18\x1f \x01(\bR\tautomated\x12\x1b\n" +
-	"\tfleet_mcp\x18  \x01(\bR\bfleetMcpB\x0f\n" +
+	"\tautomated\x18\x1f \x01(\bR\tautomatedB\x0f\n" +
 	"\r_display_nameB\x0f\n" +
 	"\r_container_idB\t\n" +
 	"\a_configB\x10\n" +
@@ -1242,7 +1231,7 @@ const file_domain_proto_rawDesc = "" +
 	"\x06_errorB\x06\n" +
 	"\x04_tagB\b\n" +
 	"\x06_colorB\t\n" +
-	"\a_branchJ\x04\b\x0e\x10\x1f\"\xe2\x06\n" +
+	"\a_branchJ\x04\b\x0e\x10\x1fJ\x04\b \x10!\"\xff\x06\n" +
 	"\rFleetSettings\x12*\n" +
 	"\x11claude_code_mount\x18\x01 \x01(\bR\x0fclaudeCodeMount\x12\x1f\n" +
 	"\vcodex_mount\x18\x02 \x01(\bR\n" +
@@ -1262,7 +1251,8 @@ const file_domain_proto_rawDesc = "" +
 	"\x0ecoder_template\x18\x0e \x01(\tH\x02R\rcoderTemplate\x88\x01\x01\x12&\n" +
 	"\fcoder_preset\x18\x0f \x01(\tH\x03R\vcoderPreset\x88\x01\x01\x125\n" +
 	"\x14coder_workspace_name\x18\x10 \x01(\tH\x04R\x12coderWorkspaceName\x88\x01\x01\x12D\n" +
-	"\x10coder_parameters\x18\x11 \x03(\v2\x19.fleetgrpc.CoderParameterR\x0fcoderParametersB\v\n" +
+	"\x10coder_parameters\x18\x11 \x03(\v2\x19.fleetgrpc.CoderParameterR\x0fcoderParameters\x12\x1b\n" +
+	"\tfleet_mcp\x18\x12 \x01(\bR\bfleetMcpB\v\n" +
 	"\t_home_dirB\x16\n" +
 	"\x14_prefer_fleet_launchB\x11\n" +
 	"\x0f_coder_templateB\x0f\n" +
@@ -1282,13 +1272,12 @@ const file_domain_proto_rawDesc = "" +
 	"\fLayoutPreset\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06layout\x18\x02 \x01(\tR\x06layout\x12#\n" +
-	"\rpane_commands\x18\x03 \x03(\tR\fpaneCommands\"\xaf\x01\n" +
+	"\rpane_commands\x18\x03 \x03(\tR\fpaneCommands\"\x98\x01\n" +
 	"\x05Agent\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12#\n" +
 	"\rsystem_prompt\x18\x04 \x01(\tR\fsystemPrompt\x120\n" +
-	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackend\x12\x1b\n" +
-	"\tfleet_mcp\x18\x06 \x01(\bR\bfleetMcpJ\x04\b\x03\x10\x04\"\xc8\x02\n" +
+	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackendJ\x04\b\x03\x10\x04J\x04\b\x06\x10\a\"\xc8\x02\n" +
 	"\aTrigger\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1f\n" +

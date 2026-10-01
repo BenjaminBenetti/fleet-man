@@ -99,13 +99,6 @@ type Agent struct {
 	// same set offered when creating an instance. Empty falls back to
 	// BackendDevcontainer.
 	Backend BackendType `json:"backend,omitempty"`
-
-	// FleetMCP gives the agent the fleet MCP server and the Fleet Admiral skill
-	// (issue #219), so it can drive fleet from inside its instance — spin up
-	// more instances, run agents in them. Off by default. Registered for this
-	// agent's launch only, never in the fleet's shared agent config (see
-	// internal/agentstrategy); needs a devcontainer instance on a Linux host.
-	FleetMCP bool `json:"fleetMcp,omitempty"`
 }
 
 // Trigger is an automation trigger: it activates one or more Agents with a

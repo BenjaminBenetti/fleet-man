@@ -136,13 +136,9 @@ message Instance {
   // optional is needed.
   bool automated = 31;
 
-  // fleet_mcp marks an automation instance whose agent has the fleet MCP
-  // (Agent.fleet_mcp, issue #219): the daemon serves the MCP server on a socket
-  // in its control directory. Plain bool like automated.
-  bool fleet_mcp = 32;
-
   // Reserved for forward/back compat across the version skew Hello tolerates.
   reserved 14 to 30;
+  reserved 32; // was fleet_mcp (v2.12.0: per-instance; now FleetSettings.fleet_mcp)
 }
 
 // FleetSettings mirrors internal/fleet.FleetSettings. The three *Mount flags are
@@ -221,6 +217,11 @@ message FleetSettings {
   // default/display/description/type after a fetch, so those must round-trip
   // through SetFleetSettings without loss.
   repeated CoderParameter coder_parameters = 17;
+
+  // fleet_mcp provides the fleet MCP server and the Fleet Admiral skill to the
+  // coding agents in this fleet's instances (issue #219). Plain bool like the
+  // *Mount flags: false == off, the default.
+  bool fleet_mcp = 18;
 }
 
 // CoderParameter mirrors internal/fleet.CoderParameter — one Coder template
@@ -263,11 +264,9 @@ message Agent {
   string command = 2;
   string system_prompt = 4;
   BackendType backend = 5;
-  // fleet_mcp gives the agent the fleet MCP server and the Fleet Admiral skill
-  // inside its instance (issue #219). Plain bool: false == off, the default.
-  bool fleet_mcp = 6;
 
   reserved 3; // was tmux_mode (removed: agents always run in a tmux session)
+  reserved 6; // was fleet_mcp (v2.12.0: per-agent; now FleetSettings.fleet_mcp)
 }
 
 // Trigger mirrors internal/fleet.Trigger — an automation trigger (issue #188).

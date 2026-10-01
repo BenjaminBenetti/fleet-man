@@ -36,9 +36,9 @@ type service struct {
 	// relay sockets the daemon's children and instances connect to.
 	agent       *agentHub
 	gitHostKeys gitHostKeyHub
-	// instanceMCP serves the fleet MCP server into the instances of agents
-	// that have it (mcp_instance.go). Its sync loop is started by the serve
-	// loop; the automation launch opens an instance's socket directly.
+	// instanceMCP serves the fleet MCP server into the instances of fleets
+	// with the Fleet MCP setting on (mcp_instance.go). Its sync loop is
+	// started by the serve loop; without it (newService() tests) it is inert.
 	instanceMCP *instanceMCP
 
 	// remote drives the outbound remote-MCP gateway tunnel. Set in server.go

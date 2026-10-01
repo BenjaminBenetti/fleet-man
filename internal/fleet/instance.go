@@ -26,10 +26,6 @@ type Instance struct {
 	// (issue #188), as opposed to one a user created. Set once at creation and
 	// never cleared; the TUI shows a marker in front of its name.
 	Automated bool `json:"automated,omitempty"`
-	// FleetMCP marks an automation instance whose agent has the fleet MCP
-	// (Agent.FleetMCP, issue #219): the daemon serves the MCP server on a
-	// socket in its control directory. Set once at creation.
-	FleetMCP bool `json:"fleet_mcp,omitempty"`
 }
 
 // GetDisplayName returns the user-facing label for the instance. Legacy

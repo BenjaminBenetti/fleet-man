@@ -3,6 +3,8 @@ package fleetlaunch
 import (
 	"strings"
 	"testing"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/mcpbridge"
 )
 
 func TestRenderFleetRCExportsInstanceName(t *testing.T) {
@@ -26,5 +28,15 @@ func TestRenderFleetRCQuotesSingleQuotesInName(t *testing.T) {
 func TestRenderFleetRCEmptyNameLeavesBaseUnchanged(t *testing.T) {
 	if got := renderFleetRC(""); got != fleetRCContent {
 		t.Fatalf("empty instance name should return the embedded rc unchanged, got:\n%s", got)
+	}
+}
+
+// TestFleetRCHandsAgentsTheFleetMCP: the rc keys the fleet MCP off the socket
+// the daemon serves — the path the bridge dials — and only then runs `fleet
+// mcp-env`, so with the fleet setting off (no socket) a shell is untouched.
+func TestFleetRCHandsAgentsTheFleetMCP(t *testing.T) {
+	want := "if [ -S " + mcpbridge.ContainerSocketPath + " ] && command -v fleet >/dev/null 2>&1; then\n  eval \"$(fleet mcp-env 2>/dev/null)\"\nfi\n"
+	if !strings.Contains(fleetRCContent, want) {
+		t.Fatalf("fleet.rc should hand agents the fleet MCP when %s exists; want it to contain:\n%s", mcpbridge.ContainerSocketPath, want)
 	}
 }

@@ -43,12 +43,6 @@ FIXTURE_LAUNCH_SRC="${INTEGRATION_DIR}/fixture-launch"
 # launches the agent with the prompt.
 FIXTURE_AUTOMATION_SRC="${INTEGRATION_DIR}/fixture-automation"
 
-# Alternate fixture like fixture-automation, whose fake `claude` also plays an
-# MCP client: it records the fleet MCP plugin its launch was handed and calls a
-# tool through the plugin's server (`fleet mcp-bridge`), recording the answer to
-# /tmp/fleetmcp_out. The fleet-MCP test opts into it via setup_fleetmcp_test.
-FIXTURE_FLEETMCP_SRC="${INTEGRATION_DIR}/fixture-fleetmcp"
-
 # Alternate fixture whose postCreate adds a second container user `app` (with a
 # home dir that sorts before /home/vscode). Tests opt into it via
 # setup_twouser_test to prove the containerUser resolution picks the devcontainer
@@ -243,12 +237,6 @@ setup_agent_test() {
 # verify an agent actually launches with its prompt.
 setup_automation_test() {
   FIXTURE_SRC="${FIXTURE_AUTOMATION_SRC}" setup_test
-}
-
-# setup_fleetmcp_test prepares a clean environment whose fixture's fake
-# `claude` exercises the fleet MCP it is handed (see FIXTURE_FLEETMCP_SRC).
-setup_fleetmcp_test() {
-  FIXTURE_SRC="${FIXTURE_FLEETMCP_SRC}" setup_test
 }
 
 # setup_twouser_test prepares a clean environment whose fixture provisions a

@@ -359,97 +359,6 @@ func TestEditAgentInstantSavesFieldCommit(t *testing.T) {
 	}
 }
 
-// TestEditAgentTogglesFleetMCP: the Fleet MCP row flips with enter and h/l,
-// each flip instant-saves, and it always carries its risk note (plus "Won't
-// apply" when the agent can't use it).
-func TestEditAgentTogglesFleetMCP(t *testing.T) {
-	m, fp := newAutomationModel(t)
-	m.st.Fleets["alpha"].Settings.Agents = []fleet.Agent{{Name: "orchestrator", Command: "claude", Backend: fleet.BackendDevcontainer}}
-
-	fp.openEditAgentDialog(m, "alpha", 0)
-	view := fp.renderAutomationAgentDialog(m)
-	if !strings.Contains(view, "Fleet MCP: [ off ]") {
-		t.Fatal("the dialog should show the Fleet MCP toggle, off by default")
-	}
-	if !strings.Contains(view, "allows host access") {
-		t.Fatalf("the toggle should always carry its risk note:\n%s", view)
-	}
-	fp.agentDlg.row = agentRowFleetMCP
-	fp.updateAutomationAgent(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if !m.st.Fleets["alpha"].Settings.Agents[0].FleetMCP {
-		t.Fatal("enter on Fleet MCP should turn it on and instant-save")
-	}
-	view = fp.renderAutomationAgentDialog(m)
-	if !strings.Contains(view, "Fleet MCP: [ on ]") {
-		t.Fatalf("the row should read on:\n%s", view)
-	}
-	if strings.Contains(view, "Won't apply") {
-		t.Fatalf("a Claude Code agent on devcontainer can use it:\n%s", view)
-	}
-	fp.agentDlg.backend = fleet.BackendCoder
-	view = fp.renderAutomationAgentDialog(m)
-	if !strings.Contains(view, "Won't apply") {
-		t.Fatalf("on for a coder agent should say it won't apply:\n%s", view)
-	}
-	fp.agentDlg.backend = fleet.BackendDevcontainer
-	fp.updateAutomationAgent(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	if m.st.Fleets["alpha"].Settings.Agents[0].FleetMCP {
-		t.Fatal("l on Fleet MCP should turn it back off")
-	}
-
-	// Re-opening reflects the stored value.
-	m.st.Fleets["alpha"].Settings.Agents[0].FleetMCP = true
-	fp.openEditAgentDialog(m, "alpha", 0)
-	if !fp.agentDlg.fleetMCP {
-		t.Fatal("the dialog should load the agent's Fleet MCP setting")
-	}
-	if got := agentSummary(m.st.Fleets["alpha"], m.st.Fleets["alpha"].Settings.Agents[0]); !strings.Contains(got, "fleet MCP") || strings.Contains(got, "won't apply") {
-		t.Fatalf("the agent row summary should mention the fleet MCP: %q", got)
-	}
-	unusable := fleet.Agent{Name: "c", Command: "codex x", Backend: fleet.BackendDevcontainer, FleetMCP: true}
-	if got := agentSummary(m.st.Fleets["alpha"], unusable); !strings.Contains(got, "fleet MCP (won't apply)") {
-		t.Fatalf("an agent that can't use it should be flagged in its row: %q", got)
-	}
-}
-
-// TestAgentDialogFits80x24: the agent dialog's tallest state (a new agent
-// whose command fleet can't recognise, so "Won't apply" shows) is whole on an
-// 80x24 terminal, with the help bar under it — checked on the rows bubbletea
-// actually keeps (the bottom `height` lines of the page).
-func TestAgentDialogFits80x24(t *testing.T) {
-	m, fp := newAutomationModel(t)
-	m.width, m.height = 80, 24
-	m.st.Fleets["alpha"].Settings.Agents = []fleet.Agent{{Name: "orchestrator", Command: "claude", Backend: fleet.BackendDevcontainer}}
-	fp.toggleAutomationMode(m, "alpha")
-	for i, r := range fp.rows {
-		if r.kind == rowNewAgent {
-			fp.cursor = i // where the dialog opens from, so the help bar matches
-		}
-	}
-	for _, c := range []struct {
-		command string
-		backend fleet.BackendType
-		errMsg  string
-	}{
-		{"./run-agent.sh", fleet.BackendDevcontainer, ""},   // unrecognised command
-		{fleet.DefaultAgentCommand, fleet.BackendCoder, ""}, // two-line command, wrong backend
-		// ... and with a save error under it.
-		{fleet.DefaultAgentCommand, fleet.BackendCoder, "agent name is empty"},
-	} {
-		fp.openAddAgentDialog(m, "alpha")
-		fp.agentDlg.fleetMCP, fp.agentDlg.command, fp.agentDlg.backend = true, c.command, c.backend
-		fp.agentDlg.errMsg = c.errMsg
-		dlg := strings.TrimSpace(fp.renderAutomationAgentDialog(m))
-		if !strings.Contains(dlg, "Won't apply") {
-			t.Fatalf("test setup: %q on %s should show Won't apply:\n%s", c.command, c.backend, dlg)
-		}
-		lines := strings.Split(fp.View(m)+"\x1b[0J", "\n") // as model.View returns it and bubbletea splits it
-		if visible := strings.Join(lines[max(0, len(lines)-m.height):], "\n"); !strings.Contains(visible, dlg) {
-			t.Fatalf("the agent dialog (%q on %s) is clipped at 80x24:\n%s", c.command, c.backend, visible)
-		}
-	}
-}
-
 // TestEditTriggerTypeSwitchDoesNotFlashError: flipping Type while editing makes
 // the other type's required fields appear empty; that transient invalid state
 // must not flash a validation error, and must not persist over the last good one.
@@ -796,5 +705,39 @@ func TestRenameAgentUpdatesTriggerRefs(t *testing.T) {
 	}
 	if got := f.Settings.Triggers[0].AgentNames; len(got) != 1 || got[0] != "renamed" {
 		t.Fatalf("trigger ref not updated on rename: %v", got)
+	}
+}
+
+// TestEditFleetDialogKeepsItsSelectedRowAt80x24: with the Fleet MCP on, the
+// fleet options dialog still shows its selected row on an 80x24 terminal —
+// both as it opens (on Agents) and on the Fleet MCP toggle with its risk note
+// — checked on the rows bubbletea actually keeps (the bottom `height` lines).
+func TestEditFleetDialogKeepsItsSelectedRowAt80x24(t *testing.T) {
+	m, fp := newAutomationModel(t)
+	m.width, m.height = 80, 24
+	m.st.Fleets["alpha"].Settings.FleetMCP = true
+	fp.openEditFleetDialog(m)
+	if fp.mode != viewEditFleet {
+		t.Fatalf("test setup: the fleet options dialog did not open (mode %v)", fp.mode)
+	}
+	visible := func() string {
+		lines := strings.Split(fp.View(m)+"\x1b[0J", "\n") // as model.View returns it and bubbletea splits it
+		return strings.Join(lines[max(0, len(lines)-m.height):], "\n")
+	}
+
+	if v := visible(); !strings.Contains(v, "> ▶ Agents") || !strings.Contains(v, "[x] Fleet MCP  ⚠ host access risk") {
+		t.Fatalf("as it opens, the selected Agents row (and the Fleet MCP reminder) should be on screen:\n%s", v)
+	}
+	fp.dlg.row = editFleetRowFleetMCP
+	if v := visible(); !strings.Contains(v, "> [x] Fleet MCP") || !strings.Contains(v, "poses an agent escape risk") {
+		t.Fatalf("on the toggle, the row and its risk note should be on screen:\n%s", v)
+	}
+
+	// With the setting off the dialog is no taller than it was before the
+	// Fleet MCP row existed (the home-dir placeholder gave its line back).
+	fp.editFleet.fleetMCP = false
+	fp.dlg.row = editFleetRowAgents
+	if lines := strings.Count(fp.renderEditFleetDialog(m), "\n"); lines > 23 {
+		t.Fatalf("the fleet options dialog is %d lines tall by default, want <= 23", lines)
 	}
 }

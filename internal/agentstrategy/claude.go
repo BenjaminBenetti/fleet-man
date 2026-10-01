@@ -13,10 +13,10 @@ import (
 // Claude Code takes the fleet MCP server and the Fleet Admiral skill as an
 // inline PLUGIN: a directory holding a manifest, an .mcp.json and a skills/
 // folder, named in CLAUDE_CODE_PLUGIN_DIRS (the environment form of
-// --plugin-dir). Loaded for that process only — nothing is written to the
-// fleet's shared ~/.claude or ~/.claude.json, and the agent's own command line
-// is left alone. Claude names the server "plugin:fleet:fleet" and the skill
-// "fleet:fleet-admiral".
+// --plugin-dir). Claude loads it for the processes that have the variable —
+// nothing is written to ~/.claude or ~/.claude.json, and the command the user
+// runs is left alone. Claude names the server "plugin:fleet:fleet" and the
+// skill "fleet:fleet-admiral".
 
 const (
 	// claudePluginName is the plugin's name, and the MCP server's inside it.
@@ -48,7 +48,7 @@ func (claudeStrategy) FleetMCP(p FleetMCPParams) (FleetMCPSetup, bool) {
 	manifest, err := json.MarshalIndent(map[string]any{
 		"name":        claudePluginName,
 		"version":     pluginVersion(),
-		"description": "The fleet MCP server and the Fleet Admiral skill, given to this automation agent by fleet.",
+		"description": "The fleet MCP server and the Fleet Admiral skill, provided by fleet to the agents in this instance.",
 		"author":      map[string]string{"name": "fleet-man"},
 	}, "", "  ")
 	if err != nil {

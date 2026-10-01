@@ -141,7 +141,6 @@ func InstanceToProto(i *fleet.Instance) *fleetgrpc.Instance {
 		pi.Branch = strptr(i.Branch)
 	}
 	pi.Automated = i.Automated
-	pi.FleetMcp = i.FleetMCP
 	// Warnings is proto-only (populated by jobs); it has no legacy field.
 	return pi
 }
@@ -162,7 +161,6 @@ func InstanceFromProto(pi *fleetgrpc.Instance) *fleet.Instance {
 		Color:        pi.GetColor(),
 		Branch:       pi.GetBranch(),
 		Automated:    pi.GetAutomated(),
-		FleetMCP:     pi.GetFleetMcp(),
 	}
 	if ts := pi.GetCreatedAt(); ts != nil {
 		inst.CreatedAt = ts.AsTime()
@@ -184,6 +182,7 @@ func FleetSettingsToProto(s fleet.FleetSettings) *fleetgrpc.FleetSettings {
 		CustomMounts:     s.CustomMounts,
 		DebCacheServer:   s.DebCacheServer,
 		ImageCacheServer: s.ImageCacheServer,
+		FleetMcp:         s.FleetMCP,
 		LayoutPresets:    LayoutPresetsToProto(s.LayoutPresets),
 		Agents:           AgentsToProto(s.Agents),
 		Triggers:         TriggersToProto(s.Triggers),
@@ -221,6 +220,7 @@ func FleetSettingsFromProto(ps *fleetgrpc.FleetSettings) fleet.FleetSettings {
 	s.CustomMounts = ps.GetCustomMounts()
 	s.DebCacheServer = ps.GetDebCacheServer()
 	s.ImageCacheServer = ps.GetImageCacheServer()
+	s.FleetMCP = ps.GetFleetMcp()
 	s.LayoutPresets = LayoutPresetsFromProto(ps.GetLayoutPresets())
 	s.Agents = AgentsFromProto(ps.GetAgents())
 	s.Triggers = TriggersFromProto(ps.GetTriggers())
@@ -250,7 +250,6 @@ func AgentsToProto(in []fleet.Agent) []*fleetgrpc.Agent {
 			Command:      a.Command,
 			SystemPrompt: a.SystemPrompt,
 			Backend:      BackendToProto(a.Backend),
-			FleetMcp:     a.FleetMCP,
 		})
 	}
 	return out
@@ -268,7 +267,6 @@ func AgentsFromProto(in []*fleetgrpc.Agent) []fleet.Agent {
 			Command:      a.GetCommand(),
 			SystemPrompt: a.GetSystemPrompt(),
 			Backend:      BackendFromProto(a.GetBackend()),
-			FleetMCP:     a.GetFleetMcp(),
 		})
 	}
 	return out
