@@ -38,11 +38,10 @@ const (
 	editFleetRowCount
 )
 
-// fleetMCPRiskNote is the caution under the Fleet MCP toggle.
-const fleetMCPRiskNote = "⚠ Allows host access from inside instances and poses an agent escape risk."
-
-// fleetMCPRiskShort is the reminder beside the toggle while it is on.
-const fleetMCPRiskShort = "⚠ host access risk"
+// fleetMCPWarning sits beside the Fleet MCP toggle, on the same line, in
+// every state — short enough to fit there, so selecting or flipping the toggle
+// never moves the rest of the dialog.
+const fleetMCPWarning = "⚠ exposes full control"
 
 // editFleetRowCustomMountBase is the start of the dynamic custom-mount child
 // rows, placed well above the fixed row constants so the two never collide.
@@ -1584,17 +1583,7 @@ func (fleetPage *fleetPage) renderEditFleet(m *model) string {
 		case editFleetRowAuggie:
 			d.WriteString(marker(row) + "  " + checkbox(fleetPage.editFleet.auggieMount) + " " + dialogLabel.Render("Auggie mount"))
 		case editFleetRowFleetMCP:
-			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.fleetMCP) + " " + dialogLabel.Render("Fleet MCP"))
-			// The risk note shows in full on the toggle while it is selected.
-			// While the setting is on and the cursor is elsewhere, a short
-			// reminder rides the row itself: the dialog is tall, and extra
-			// lines would push the selected row off an 80x24 terminal.
-			switch {
-			case fleetPage.dlg.row == row:
-				d.WriteString("\n" + warnTextStyle.PaddingLeft(4).Width(46).Render(fleetMCPRiskNote))
-			case fleetPage.editFleet.fleetMCP:
-				d.WriteString("  " + warnTextStyle.Render(fleetMCPRiskShort))
-			}
+			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.fleetMCP) + " " + dialogLabel.Render("Fleet MCP") + "  " + warnTextStyle.Render(fleetMCPWarning))
 		case editFleetRowGh:
 			d.WriteString(marker(row) + checkbox(fleetPage.editFleet.ghMount) + " " + dialogLabel.Render("GitHub CLI mount"))
 		case editFleetRowHomeDir:
