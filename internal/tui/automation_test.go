@@ -739,7 +739,11 @@ func TestEditFleetDialogFleetMCPWarningDoesNotShiftTheLayout(t *testing.T) {
 			if on {
 				box = "[x]"
 			}
-			if v := visible(); !strings.Contains(v, box+" Fleet MCP  ⚠ exposes full control") || !strings.Contains(v, "> ") {
+			selected := "> ▶ Agents"
+			if row == editFleetRowFleetMCP {
+				selected = "> " + box + " Fleet MCP  ⚠ exposes full control"
+			}
+			if v := visible(); !strings.Contains(v, box+" Fleet MCP  ⚠ exposes full control") || !strings.Contains(v, selected) {
 				t.Fatalf("on=%v row=%d: the toggle with its warning, and the selected row, should be on screen:\n%s", on, row, v)
 			}
 		}
