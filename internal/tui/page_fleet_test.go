@@ -1837,14 +1837,13 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 		t.Fatal("l should toggle selected auggie row")
 	}
 	// The Fleet MCP toggle sits right under the Agents group: off until
-	// toggled, saved with the fleet's settings, and it carries its risk note
-	// while selected.
+	// toggled, saved with the fleet's settings, with its warning on its row.
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	if fp.dlg.row != editFleetRowFleetMCP {
 		t.Fatalf("dialogRow = %d, want fleet MCP row", fp.dlg.row)
 	}
-	if view := fp.renderEditFleet(m); !strings.Contains(view, "[ ] Fleet MCP") || !strings.Contains(view, "Allows host access") {
-		t.Fatalf("the selected Fleet MCP row should read off and show its risk note:\n%s", view)
+	if view := fp.renderEditFleet(m); !strings.Contains(view, "[ ] Fleet MCP  ⚠ exposes full control") {
+		t.Fatalf("the selected Fleet MCP row should read off, with its warning beside it:\n%s", view)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if !fp.editFleet.fleetMCP || !f.Settings.FleetMCP {
@@ -1854,9 +1853,8 @@ func TestEditFleetDialogVimKeysAndActiveHomedir(t *testing.T) {
 	if fp.dlg.row != editFleetRowGh {
 		t.Fatalf("dialogRow = %d, want gh row", fp.dlg.row)
 	}
-	// Off the row, the full note folds into a short reminder beside the toggle.
-	if view := fp.renderEditFleet(m); !strings.Contains(view, "[x] Fleet MCP  ⚠ host access risk") || strings.Contains(view, "Allows host access") {
-		t.Fatalf("while on and not selected, the Fleet MCP row keeps a one-line reminder:\n%s", view)
+	if view := fp.renderEditFleet(m); !strings.Contains(view, "[x] Fleet MCP  ⚠ exposes full control") {
+		t.Fatalf("on and not selected, the Fleet MCP row keeps its warning:\n%s", view)
 	}
 	fp.updateEditFleet(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if !fp.editFleet.ghMount {
