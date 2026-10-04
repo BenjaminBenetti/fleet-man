@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -45,9 +46,13 @@ func TestTmuxSetupArgsHidesStatusForFleetSessionOnly(t *testing.T) {
 			found = true
 		}
 		// A global status change would hide the bar on every session of
-		// a user's shared tmux server.
-		if c[0] == "set" && strings.Contains(c[1], "g") && c[len(c)-2] == "status" {
-			t.Fatalf("status set globally: %q", got)
+		// a user's shared tmux server. tmux honours -g even beside -t.
+		if (c[0] == "set" || c[0] == "set-option") && slices.Contains(c, "status") {
+			for _, a := range c[1:] {
+				if strings.HasPrefix(a, "-") && strings.Contains(a, "g") {
+					t.Fatalf("status set globally: %q", got)
+				}
+			}
 		}
 	}
 	if !found {

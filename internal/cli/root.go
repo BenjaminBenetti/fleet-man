@@ -113,8 +113,11 @@ func relaunchInTmux() error {
 	}, os.Environ())
 }
 
-// tmuxSetupArgs builds the command chain that configures fleet's
-// detached outer session before the client attaches.
+// tmuxSetupArgs builds the ";"-chained tmux argv that creates fleet's
+// detached outer session and configures it before the client attaches.
+// Only status is session-scoped; the other options and key bindings are
+// server-wide. tmux skips the rest of a chain after a failing command,
+// so terminal-features (tmux 3.2+) must stay last.
 func tmuxSetupArgs(session, self string, vimKeys bool) []string {
 	args := []string{
 		"tmux", "new-session", "-d", "-s", session, self,
