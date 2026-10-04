@@ -104,6 +104,10 @@ func relaunchInTmux() error {
 		"tmux", "new-session", "-d", "-s", session, self,
 		";", "set", "-g", "set-clipboard", "on",
 		";", "set", "-g", "mouse", "on",
+		// The TUI provides all the UI; the outer status bar is dead
+		// space. Session-scoped so a user's own sessions sharing this
+		// tmux server keep theirs.
+		";", "set", "-t", session, "status", "off",
 	}
 
 	config, _ := configutil.LoadConfig()
