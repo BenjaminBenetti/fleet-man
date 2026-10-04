@@ -100,7 +100,23 @@ func relaunchInTmux() error {
 	// is detected at attach time. The detached session keeps the server
 	// alive between the two tmux invocations. terminal-features (tmux
 	// 3.2+) is last so older versions just lose clipboard, not everything.
-	setupArgs := []string{
+	config, _ := configutil.LoadConfig()
+	vimKeys := config == nil || config.GeneralSettings.TmuxVimKeysEnabled()
+	setupArgs := tmuxSetupArgs(session, self, vimKeys)
+	//nolint:errcheck // terminal-features may fail on tmux <3.2
+	exec.Command(setupArgs[0], setupArgs[1:]...).Run()
+
+	// Attach: the client connects with terminal-features already set,
+	// so Ms (clipboard) is available from the start.
+	return syscall.Exec(tmuxBin, []string{
+		"tmux", "attach", "-t", session,
+	}, os.Environ())
+}
+
+// tmuxSetupArgs builds the command chain that configures fleet's
+// detached outer session before the client attaches.
+func tmuxSetupArgs(session, self string, vimKeys bool) []string {
+	args := []string{
 		"tmux", "new-session", "-d", "-s", session, self,
 		";", "set", "-g", "set-clipboard", "on",
 		";", "set", "-g", "mouse", "on",
@@ -110,9 +126,8 @@ func relaunchInTmux() error {
 		";", "set", "-t", session, "status", "off",
 	}
 
-	config, _ := configutil.LoadConfig()
-	if config == nil || config.GeneralSettings.TmuxVimKeysEnabled() {
-		setupArgs = append(setupArgs,
+	if vimKeys {
+		args = append(args,
 			";", "bind-key", "h", "if", "-F", "#{pane_at_left}", "", "select-pane -L",
 			";", "bind-key", "l", "if", "-F", "#{pane_at_right}", "", "select-pane -R",
 			";", "bind-key", "j", "if", "-F", "#{pane_at_bottom}", "", "select-pane -D",
@@ -123,7 +138,7 @@ func relaunchInTmux() error {
 	// view stays at the scroll position after copying instead of
 	// jumping back to the bottom (the default copy-selection-and-cancel
 	// exits copy-mode which resets the scroll).
-	setupArgs = append(setupArgs,
+	args = append(args,
 		";", "bind", "-T", "copy-mode", "MouseDragEnd1Pane",
 		"send-keys", "-X", "copy-selection",
 		";", "bind", "-T", "copy-mode-vi", "MouseDragEnd1Pane",
@@ -151,7 +166,7 @@ func relaunchInTmux() error {
 	// cause middle-click to paste the inner tmux's last drag
 	// selection instead of the host PRIMARY a fraction of the
 	// time.
-	setupArgs = append(setupArgs,
+	args = append(args,
 		";", "bind-key", "-n", "MouseDown2Pane",
 		"run-shell",
 		mousePasteCommand(),
@@ -160,17 +175,10 @@ func relaunchInTmux() error {
 	// clipboard and RGB/truecolor (tmux 3.2+). Appended last so
 	// older versions just lose these features without breaking the
 	// session.
-	setupArgs = append(setupArgs,
+	args = append(args,
 		";", "set", "-as", "terminal-features", ",*:clipboard:RGB",
 	)
-	//nolint:errcheck // terminal-features may fail on tmux <3.2
-	exec.Command(setupArgs[0], setupArgs[1:]...).Run()
-
-	// Attach: the client connects with terminal-features already set,
-	// so Ms (clipboard) is available from the start.
-	return syscall.Exec(tmuxBin, []string{
-		"tmux", "attach", "-t", session,
-	}, os.Environ())
+	return args
 }
 
 func mousePasteCommand() string {
