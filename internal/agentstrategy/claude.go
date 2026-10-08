@@ -39,9 +39,9 @@ func (claudeStrategy) Tool() state.AgentTool { return state.AgentToolClaude }
 
 func (claudeStrategy) SupportsFleetMCP() bool { return true }
 
-func (claudeStrategy) FleetMCP(p FleetMCPParams) (FleetMCPSetup, bool) {
+func (claudeStrategy) FleetMCP(p FleetMCPParams) (Setup, bool) {
 	if p.Dir == "" || len(p.Bridge) == 0 {
-		return FleetMCPSetup{}, false
+		return Setup{}, false
 	}
 	root := path.Join(p.Dir, "claude-plugin")
 
@@ -52,7 +52,7 @@ func (claudeStrategy) FleetMCP(p FleetMCPParams) (FleetMCPSetup, bool) {
 		"author":      map[string]string{"name": "fleet-man"},
 	}, "", "  ")
 	if err != nil {
-		return FleetMCPSetup{}, false
+		return Setup{}, false
 	}
 	servers, err := json.MarshalIndent(map[string]any{
 		"mcpServers": map[string]any{
@@ -63,10 +63,10 @@ func (claudeStrategy) FleetMCP(p FleetMCPParams) (FleetMCPSetup, bool) {
 		},
 	}, "", "  ")
 	if err != nil {
-		return FleetMCPSetup{}, false
+		return Setup{}, false
 	}
 
-	return FleetMCPSetup{
+	return Setup{
 		Files: []File{
 			{Path: path.Join(root, ".claude-plugin", "plugin.json"), Content: append(manifest, '\n'), Mode: 0o644},
 			{Path: path.Join(root, ".mcp.json"), Content: append(servers, '\n'), Mode: 0o644},

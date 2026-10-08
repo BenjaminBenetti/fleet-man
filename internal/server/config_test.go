@@ -125,3 +125,37 @@ func TestSetConfigRoundTripsRemoteMcp(t *testing.T) {
 		t.Fatalf("disk config lost fleet_enabled: %+v", loaded.RemoteMcpSettings)
 	}
 }
+
+// TestSetConfigKeepsTheStatusModForAnOlderClient: the fleet status mod setting
+// round-trips, and a TUI built before it existed (no claude_code group) saving
+// an unrelated setting leaves a switched-off mod off.
+func TestSetConfigKeepsTheStatusModForAnOlderClient(t *testing.T) {
+	isolateFleetDir(t)
+	svc := newService()
+	ctx := context.Background()
+
+	off := false
+	in := &fleetgrpc.Config{
+		Agent:      &fleetgrpc.AgentSettings{ToolSelection: "claude"},
+		ClaudeCode: &fleetgrpc.ClaudeCodeSettings{StatusMod: &off},
+	}
+	reply, err := svc.SetConfig(ctx, &fleetgrpc.SetConfigRequest{Config: in})
+	if err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+	if cc := reply.GetConfig().GetClaudeCode(); cc.StatusMod == nil || cc.GetStatusMod() {
+		t.Fatalf("status_mod off lost on round-trip: %+v", cc)
+	}
+
+	older := &fleetgrpc.Config{Agent: &fleetgrpc.AgentSettings{ToolSelection: "codex"}}
+	if _, err := svc.SetConfig(ctx, &fleetgrpc.SetConfigRequest{Config: older}); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+	loaded, err := state.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if loaded.ClaudeCodeSettings.StatusModEnabled() {
+		t.Fatal("an older client's save turned the status mod back on")
+	}
+}

@@ -91,7 +91,7 @@ func TestExportsInAShell(t *testing.T) {
 	if err != nil {
 		t.Skip("no sh")
 	}
-	setup := FleetMCPSetup{Env: []EnvVar{
+	setup := Setup{Env: []EnvVar{
 		{Name: "FLEET_TEST_PLAIN", Value: "it's $HOME"},
 		{Name: "FLEET_TEST_LIST", Value: "/tmp/fleet mcp/plugin", PathList: true},
 	}}
@@ -116,7 +116,7 @@ func TestExportsInAShell(t *testing.T) {
 	if got := run("FLEET_TEST_LIST=/home/me/plugins:/tmp/fleet mcp/plugin"); got != "it's $HOME|/home/me/plugins:/tmp/fleet mcp/plugin" {
 		t.Fatalf("already listed: %q", got)
 	}
-	if (FleetMCPSetup{}).Exports() != "" {
+	if (Setup{}).Exports() != "" {
 		t.Fatal("no env: no exports")
 	}
 }

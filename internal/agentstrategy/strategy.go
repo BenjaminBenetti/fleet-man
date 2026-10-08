@@ -11,6 +11,10 @@
 // agent at it through the environment of the instance's shells (fleet.rc runs
 // `fleet mcp-env`, which calls InstallFleetMCP). Only Claude Code implements
 // it so far; the others report that they don't support it.
+//
+// The fleet status mod (statusmod.go) reaches Claude Code the same way, in
+// every instance whatever the fleet's settings (`fleet claude-mod-env`, which
+// calls InstallStatusMod).
 package agentstrategy
 
 import (
@@ -33,7 +37,7 @@ type Strategy interface {
 	// FleetMCP returns what gives the agent the fleet MCP server and the
 	// Fleet Admiral skill, or ok=false when this agent has no way to take
 	// them yet (or p is incomplete).
-	FleetMCP(p FleetMCPParams) (setup FleetMCPSetup, ok bool)
+	FleetMCP(p FleetMCPParams) (setup Setup, ok bool)
 }
 
 // FleetMCPParams describes where a fleet MCP setup goes.
@@ -46,9 +50,9 @@ type FleetMCPParams struct {
 	Bridge []string
 }
 
-// FleetMCPSetup is what an agent needs: files written into the instance, and
+// Setup is what an agent needs: files written into the instance, and
 // environment for the shells agents are started from.
-type FleetMCPSetup struct {
+type Setup struct {
 	Files []File
 	Env   []EnvVar
 }
@@ -72,7 +76,7 @@ type EnvVar struct {
 
 // Exports renders the environment as shell code to eval, or "" when there is
 // none. Sourcing it twice (a shell started from a shell) changes nothing.
-func (s FleetMCPSetup) Exports() string {
+func (s Setup) Exports() string {
 	var b strings.Builder
 	for _, v := range s.Env {
 		value := shellquote.Single(v.Value)
@@ -108,7 +112,7 @@ var tools = []state.AgentTool{
 
 // InstallFleetMCP writes, under dir, what every agent that can take the fleet
 // MCP needs to load it, and returns the shell code that points those agents at
-// it (FleetMCPSetup.Exports). It runs inside the instance, at the start of
+// it (Setup.Exports). It runs inside the instance, at the start of
 // every shell there: a file is only rewritten when its content changed, and
 // atomically, so shells starting at the same time never see half a file.
 func InstallFleetMCP(dir string, bridge []string) (string, error) {
@@ -146,6 +150,6 @@ func (u unsupportedStrategy) Tool() state.AgentTool { return u.tool }
 
 func (unsupportedStrategy) SupportsFleetMCP() bool { return false }
 
-func (unsupportedStrategy) FleetMCP(FleetMCPParams) (FleetMCPSetup, bool) {
-	return FleetMCPSetup{}, false
+func (unsupportedStrategy) FleetMCP(FleetMCPParams) (Setup, bool) {
+	return Setup{}, false
 }

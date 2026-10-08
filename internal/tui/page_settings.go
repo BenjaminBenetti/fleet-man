@@ -46,6 +46,8 @@ const (
 	settingsItemMicEnabled = 650 // virtual microphone settings start here
 	settingsItemMicDevice  = 651
 
+	settingsItemClaudeStatusMod = 670 // Claude Code settings start here
+
 	settingsItemRemoteMcpEnabled       = 700 // fleet remote (MCP) settings start here
 	settingsItemRemoteMcpGatewayURL    = 701
 	settingsItemRemoteMcpCopyLocal     = 702 // copy local mcp.json snippet to clipboard
@@ -338,6 +340,12 @@ var settingsSections = []settingsSection{
 		},
 	},
 	{
+		Title: "Claude Code",
+		Items: func(_ *model) []int {
+			return []int{settingsItemClaudeStatusMod}
+		},
+	},
+	{
 		Title: "Fleet MCP",
 		Items: func(m *model) []int {
 			// Copy actions come first. The remote-copy action only appears
@@ -523,6 +531,28 @@ func (settingsPage *settingsPage) toggleShowHelpText(m *model) {
 		label = "on"
 	}
 	m.message = fmt.Sprintf("Show help text set to %s", label)
+}
+
+// toggleClaudeStatusMod flips the fleet status mod setting and saves. The
+// daemon adds or removes the mod's status files on its next pass, so running
+// Claude Code sessions follow within seconds.
+func (settingsPage *settingsPage) toggleClaudeStatusMod(m *model) {
+	if m.config == nil {
+		m.config = configutil.DefaultConfig()
+	}
+	current := m.config.ClaudeCodeSettings.StatusModEnabled()
+	next := !current
+	m.config.ClaudeCodeSettings.StatusMod = &next
+	if err := setConfigRemote(m.config); err != nil {
+		m.config.ClaudeCodeSettings.StatusMod = &current
+		m.message = fmt.Sprintf("Failed to save settings: %v", err)
+		return
+	}
+	label := "off"
+	if next {
+		label = "on"
+	}
+	m.message = fmt.Sprintf("Fleet status mod set to %s", label)
 }
 
 // toggleBrowserAutoSwitch flips the "Auto Switch" preference and saves.
@@ -1046,6 +1076,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				return settingsPage.toggleMicEnabled(m)
 			} else if item == settingsItemMicDevice {
 				return settingsPage.cycleMicDevice(m, -1)
+			} else if item == settingsItemClaudeStatusMod {
+				settingsPage.toggleClaudeStatusMod(m)
 			} else if item == settingsItemDaemonLogs {
 				settingsPage.cycleDaemonLogLevel(-1)
 			}
@@ -1090,6 +1122,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				return settingsPage.toggleMicEnabled(m)
 			} else if item == settingsItemMicDevice {
 				return settingsPage.cycleMicDevice(m, 1)
+			} else if item == settingsItemClaudeStatusMod {
+				settingsPage.toggleClaudeStatusMod(m)
 			} else if item == settingsItemDaemonLogs {
 				settingsPage.cycleDaemonLogLevel(1)
 			}
@@ -1210,6 +1244,10 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			}
 			if item == settingsItemMicDevice {
 				return settingsPage.cycleMicDevice(m, 1)
+			}
+			if item == settingsItemClaudeStatusMod {
+				settingsPage.toggleClaudeStatusMod(m)
+				return nil
 			}
 			if item == settingsItemUpdate {
 				return performUpdateCmd()
@@ -1713,6 +1751,14 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(
 					settingsPage.renderSettingsRow(m, false, "Status", micStatusValue(m))))
 			}
+
+		case "Claude Code":
+			statusModValue := "[ off ]"
+			if config.ClaudeCodeSettings.StatusModEnabled() {
+				statusModValue = "[ on ]"
+			}
+			statusModValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Show the instance and the agents at work across fleets above the Claude Code prompt")
+			recordRow(settingsItemClaudeStatusMod, settingsPage.renderSettingsRow(m, currentItem == settingsItemClaudeStatusMod, "Fleet status mod", statusModValue))
 
 		case "Fleet MCP":
 			// Copy local config — the common task, so it leads the section.

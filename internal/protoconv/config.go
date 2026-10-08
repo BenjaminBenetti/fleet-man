@@ -34,7 +34,8 @@ func ConfigToProto(c *configutil.Config) *fleetgrpc.Config {
 			// server tells "no selection" from "a client that predates the field".
 			Client: strptr(c.MicSettings.Client),
 		},
-		Theme: &fleetgrpc.ThemeSettings{Name: c.ThemeSettings.Name},
+		Theme:      &fleetgrpc.ThemeSettings{Name: c.ThemeSettings.Name},
+		ClaudeCode: &fleetgrpc.ClaudeCodeSettings{},
 	}
 
 	if c.GeneralSettings.TmuxVimKeys != nil {
@@ -66,6 +67,10 @@ func ConfigToProto(c *configutil.Config) *fleetgrpc.Config {
 	}
 	if c.BrowserSettings.AutoSwitch != nil {
 		pc.Browser.AutoSwitch = boolptr(*c.BrowserSettings.AutoSwitch)
+	}
+
+	if c.ClaudeCodeSettings.StatusMod != nil {
+		pc.ClaudeCode.StatusMod = boolptr(*c.ClaudeCodeSettings.StatusMod)
 	}
 
 	return pc
@@ -153,6 +158,11 @@ func ConfigFromProto(pc *fleetgrpc.Config, base *configutil.Config) *configutil.
 
 	if th := pc.GetTheme(); th != nil {
 		c.ThemeSettings.Name = th.GetName()
+	}
+
+	if cc := pc.GetClaudeCode(); cc != nil && cc.StatusMod != nil {
+		v := cc.GetStatusMod()
+		c.ClaudeCodeSettings.StatusMod = &v
 	}
 
 	c.DefaultBackend = string(BackendFromProto(pc.GetDefaultBackend()))

@@ -35,6 +35,7 @@ when they need attention.
 - [Remote MCP](#remote-mcp) — expose MCP & gRPC to remote agents via a fleet gateway
 - [Microphone](#microphone) — talk to the agents in your instances (voice input in a container)
 - [Themes](#themes) — color themes for the TUI (Gruvbox, Catppuccin, Tokyo Night, Solarized)
+- [Claude Code status mod](#claude-code-status-mod) — which instance you're in and the agents at work, above the Claude Code prompt
 - [Your SSH agent on a remote fleet](#your-ssh-agent-on-a-remote-fleet) — your keys go with you to remote fleets, like `ssh -A`
 - [Environment Variables](#environment-variables)
 - [Requirements](#requirements)
@@ -682,6 +683,34 @@ registry) and stays put when you switch the TUI onto a remote fleet. Hex
 colors need a truecolor terminal; inside tmux that means tmux must advertise
 it (e.g. `set -as terminal-features ",*:RGB"`), otherwise the shades round to
 the nearest of the 256 ANSI colors.
+
+## Claude Code status mod
+
+Every devcontainer instance's Claude Code gets a fleet mod that draws a band
+above the prompt:
+
+```
+fleet-man/feature-auth  ● 3 working  ○ 2 idle  ⚑ api/bugfix-42 stopped     admiral connected
+```
+
+- **`fleet/instance`** — the instance this Claude Code runs in, so you don't
+  type into the wrong one.
+- **`● working` / `○ idle`** — the agents across *every* fleet on the daemon
+  (idle is the TUI's `⏸`).
+- **`⚑ … stopped`** — another instance's agent just went from working to idle;
+  shown for about 15 seconds.
+- **`admiral connected`** — a fleet MCP server is among this session's tools
+  ([Fleet MCP inside instances](#fleet-mcp-inside-instances)).
+
+On by default; **Settings → Claude Code → Fleet status mod** turns it off, and
+running sessions follow within seconds. The counts are live while a fleet TUI
+is connected (the daemon only polls agents then); without one the band shows
+just the name. The band shortens to fit narrow terminals, the name last.
+
+`~/.fleet/fleet.rc` runs `fleet claude-mod-env`, which writes the mod (it ships
+inside the fleet binary) under `~/.cache/fleet/claude-mod` and adds it to
+`CLAUDE_CODE_PLUGIN_DIRS`; nothing is written to `~/.claude`. The daemon feeds
+it `/fleet-mounts/control/claude-status.json`. Devcontainer instances only.
 
 ## Your SSH agent on a remote fleet
 

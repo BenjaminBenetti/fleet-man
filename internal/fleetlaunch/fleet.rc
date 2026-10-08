@@ -46,3 +46,15 @@ alias fo='fleet open'
 if [ -S /fleet-mounts/control/mcp.sock ] && command -v fleet >/dev/null 2>&1; then
   eval "$(fleet mcp-env 2>/dev/null)"
 fi
+
+# Fleet status mod — a Claude Code mod that draws a band above the prompt with
+# this instance's fleet/instance name, the agents working and idle across every
+# fleet, the ones that just stopped, and whether the fleet MCP is connected.
+# `fleet claude-mod-env` writes the mod (it ships inside the fleet binary) and
+# prints the exports that load it into the Claude Code sessions started from
+# this shell. The daemon feeds it a status file in the control directory while
+# the global "Fleet status mod" setting is on; with the setting off the file is
+# gone and the mod draws nothing.
+if [ -d /fleet-mounts/control ] && command -v fleet >/dev/null 2>&1; then
+  eval "$(fleet claude-mod-env 2>/dev/null)"
+fi
