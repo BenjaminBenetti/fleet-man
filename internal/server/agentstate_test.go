@@ -41,6 +41,27 @@ func TestAgentTrackerForgetsPaneHistoryAcrossAGap(t *testing.T) {
 	}
 }
 
+// TestAgentTrackerForgetsStatesAcrossAGap: a capture that fails right after
+// polling resumes must not carry a pre-gap state forward — an agent working
+// when the TUI left and idle since would read as working, then "just stopped"
+// on the next good capture. Any agent: the stale value is the tracker's.
+func TestAgentTrackerForgetsStatesAcrossAGap(t *testing.T) {
+	for _, tool := range []state.AgentTool{state.AgentToolCodex, state.AgentToolClaude} {
+		tr := newAgentTracker()
+		tr.states["c"] = agentdetect.StateWorking
+		tr.tools["c"] = tool
+		tr.forgetHistory()
+		failed := map[string]backend.AllSessions{"c": {OK: false}}
+		tr.Update(failed, nil, []string{"c"}, time.Unix(2_000, 0))
+		if got := tr.State("c"); got == agentdetect.StateWorking {
+			t.Fatalf("%s: a failed capture after the gap kept the pre-gap Working", tool)
+		}
+		if got := tr.Tool("c"); got != tool {
+			t.Fatalf("%s: the tool was forgotten too (%q)", tool, got)
+		}
+	}
+}
+
 // TestRuntimeEdgeForgetsAgentHistory: the hub forgets the detectors' history
 // when activity polling resumes (the runtime gate's false→true edge).
 func TestRuntimeEdgeForgetsAgentHistory(t *testing.T) {

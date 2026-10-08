@@ -74,10 +74,20 @@ type claudeStatusStop struct {
 	stop            agentstrategy.StatusModStop
 }
 
-// claudeStatusWritten is a file as last written: its content less UpdatedAt.
+// claudeStatusWritten is a file as last written: its content less UpdatedAt,
+// and the file as it stood right after the write.
 type claudeStatusWritten struct {
 	body []byte
 	at   time.Time
+	file os.FileInfo
+}
+
+// untouched reports whether the file at path is still the one written: the
+// same file, size and modification time.
+func (w claudeStatusWritten) untouched(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && w.file != nil && os.SameFile(w.file, info) &&
+		info.Size() == w.file.Size() && info.ModTime().Equal(w.file.ModTime())
 }
 
 func newClaudeStatus(h *hub) *claudeStatus {
@@ -254,9 +264,9 @@ func (c *claudeStatus) stopsElsewhere(fleetName, instanceName string) []agentstr
 }
 
 // write writes dir's status file when its content changed, when a live file
-// is due a heartbeat, or when the file is no longer there as written (the
-// instance can delete or replace it). A failed write is tried again on the
-// next update.
+// is due a heartbeat, or when the file is no longer the one written (the
+// instance can delete, replace or overwrite it). A failed write is tried again
+// on the next update.
 func (c *claudeStatus) write(dir string, file agentstrategy.StatusModFile, now time.Time) {
 	body, err := json.Marshal(file)
 	if err != nil {
@@ -264,10 +274,8 @@ func (c *claudeStatus) write(dir string, file agentstrategy.StatusModFile, now t
 	}
 	path := filepath.Join(dir, agentstrategy.StatusModFileName)
 	last, ok := c.written[dir]
-	if ok && bytes.Equal(last.body, body) && (!file.Live || now.Sub(last.at) < claudeStatusHeartbeat) {
-		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
-			return
-		}
+	if ok && bytes.Equal(last.body, body) && (!file.Live || now.Sub(last.at) < claudeStatusHeartbeat) && last.untouched(path) {
+		return
 	}
 	file.UpdatedAt = now.UnixMilli()
 	data, err := json.Marshal(file)
@@ -277,7 +285,8 @@ func (c *claudeStatus) write(dir string, file agentstrategy.StatusModFile, now t
 	if err := atomicfile.Write(path, data, 0o644); err != nil {
 		return
 	}
-	c.written[dir] = claudeStatusWritten{body: body, at: now}
+	written, _ := os.Lstat(path)
+	c.written[dir] = claudeStatusWritten{body: body, at: now, file: written}
 }
 
 // removeAll removes every instance's status file, once per time the setting is

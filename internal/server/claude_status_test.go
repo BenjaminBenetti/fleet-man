@@ -250,15 +250,23 @@ func TestClaudeStatusRewritesOnChangeOrHeartbeat(t *testing.T) {
 		t.Fatalf("a not-live file got a heartbeat (updated_at %d)", got)
 	}
 
-	// But a file deleted from inside the instance comes back on the next
-	// update, heartbeat or not.
-	if err := os.Remove(filepath.Join(state.ControlDir("web", "alpha"), agentstrategy.StatusModFileName)); err != nil {
+	// But a file deleted or overwritten from inside the instance comes back
+	// on the next update, heartbeat or not.
+	path := filepath.Join(state.ControlDir("web", "alpha"), agentstrategy.StatusModFileName)
+	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 	tBack := tOff.Add(3 * claudeStatusHeartbeat)
 	c.update(st, nil, time.Time{}, tBack)
 	if f, ok := readStatusFile(t, "web", "alpha"); !ok || f.Instance != "Alpha" {
 		t.Fatalf("a deleted not-live file was not restored: %+v (present %v)", f, ok)
+	}
+	if err := os.WriteFile(path, []byte(`{"updated_at":1,"live":false,"fleet":"web","instance":"WRONG","working":0,"idle":0,"stops":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c.update(st, nil, time.Time{}, tBack.Add(claudeStatusInterval))
+	if f, _ := readStatusFile(t, "web", "alpha"); f.Instance != "Alpha" {
+		t.Fatalf("an overwritten not-live file was not restored: %+v", f)
 	}
 }
 
