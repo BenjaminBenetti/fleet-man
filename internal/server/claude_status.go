@@ -43,11 +43,6 @@ const (
 	claudeStatusHeartbeat = 4 * time.Second
 	// claudeStatusStopWindow is how long a stop stays in the files.
 	claudeStatusStopWindow = 30 * time.Second
-	// claudeStatusWarmup is how long after the activity polling (re)starts the
-	// files stay not live and changes of activity are not taken for stops:
-	// until the first polls land, the runtime holds whatever activity was last
-	// seen, maybe long ago.
-	claudeStatusWarmup = 2 * statsActivityInterval
 )
 
 // claudeStatus keeps the status files. Its methods run on its own goroutine.
@@ -57,8 +52,14 @@ type claudeStatus struct {
 	// prev is each running instance's agent activity at the last update, by
 	// runtime key; nil while activity is not being polled.
 	prev map[string]fleetgrpc.AgentActivity
-	// trackFrom is when changes of activity start counting as stops.
+	// trackFrom is when the activity polling was seen to (re)start: until an
+	// activity pass that started since then has landed, the runtime holds
+	// whatever activity was last seen, maybe long ago — the files stay not
+	// live and changes of activity are not taken for stops.
 	trackFrom time.Time
+	// live is whether the last update was live: a stop is a change between two
+	// live updates, never one against activity from before polling resumed.
+	live bool
 	// stops are the recent stops, oldest first.
 	stops []claudeStatusStop
 	// written is what was last written to each control directory.
@@ -114,33 +115,38 @@ func (c *claudeStatus) tick(now time.Time) {
 	c.cleared = false
 	if !c.h.runtimeWanted.Load() {
 		c.pause()
-		c.update(st, nil, now)
+		c.update(st, nil, time.Time{}, now)
 		return
 	}
-	acts, ok := c.activities()
+	acts, passAt, ok := c.activities()
 	if !ok {
 		return
 	}
-	c.update(st, acts, now)
+	c.update(st, acts, passAt, now)
 }
 
-// activities reads every instance's agent activity off the hub, by runtime key.
-func (c *claudeStatus) activities() (map[string]fleetgrpc.AgentActivity, bool) {
-	ch := make(chan map[string]fleetgrpc.AgentActivity, 1)
+// activities reads every instance's agent activity off the hub, by runtime
+// key, with when the activity pass it comes from started.
+func (c *claudeStatus) activities() (map[string]fleetgrpc.AgentActivity, time.Time, bool) {
+	type snapshot struct {
+		acts   map[string]fleetgrpc.AgentActivity
+		passAt time.Time
+	}
+	ch := make(chan snapshot, 1)
 	if !c.h.post(func(h *hub) {
 		acts := make(map[string]fleetgrpc.AgentActivity, len(h.runtime))
 		for key, r := range h.runtime {
 			acts[key] = r.GetAgentActivity()
 		}
-		ch <- acts
+		ch <- snapshot{acts, h.activityPassAt}
 	}) {
-		return nil, false
+		return nil, time.Time{}, false
 	}
 	select {
-	case acts := <-ch:
-		return acts, true
+	case s := <-ch:
+		return s.acts, s.passAt, true
 	case <-c.h.done:
-		return nil, false
+		return nil, time.Time{}, false
 	}
 }
 
@@ -149,19 +155,23 @@ func (c *claudeStatus) activities() (map[string]fleetgrpc.AgentActivity, bool) {
 func (c *claudeStatus) pause() {
 	c.prev = nil
 	c.trackFrom = time.Time{}
+	c.live = false
 	c.stops = nil
 }
 
 // update counts the agents of every running instance, records the stops since
-// the last update, and writes each mounted instance its file. A nil acts means
-// the activity is not being polled; then, and through the warmup after polling
-// starts, the files are written not live: the instance's name alone.
-func (c *claudeStatus) update(st *state.State, acts map[string]fleetgrpc.AgentActivity, now time.Time) {
+// the last update, and writes each mounted instance its file. acts is the
+// activity read off the hub, from the activity pass that started at passAt; a
+// nil acts means the activity is not being polled. Then, and until a pass that
+// started since polling (re)started has landed, the files are written not
+// live: the instance's name alone.
+func (c *claudeStatus) update(st *state.State, acts map[string]fleetgrpc.AgentActivity, passAt, now time.Time) {
 	polled := acts != nil
 	if polled && c.prev == nil {
-		c.trackFrom = now.Add(claudeStatusWarmup)
+		c.trackFrom = now
 	}
-	live := polled && !now.Before(c.trackFrom)
+	live := polled && !passAt.Before(c.trackFrom)
+	tracking := live && c.live
 
 	working, idle := 0, 0
 	prev := make(map[string]fleetgrpc.AgentActivity)
@@ -178,7 +188,7 @@ func (c *claudeStatus) update(st *state.State, acts map[string]fleetgrpc.AgentAc
 			case fleetgrpc.AgentActivity_AGENT_ACTIVITY_WAITING:
 				idle++
 			}
-			if live && c.prev[key] == fleetgrpc.AgentActivity_AGENT_ACTIVITY_WORKING &&
+			if tracking && c.prev[key] == fleetgrpc.AgentActivity_AGENT_ACTIVITY_WORKING &&
 				act == fleetgrpc.AgentActivity_AGENT_ACTIVITY_WAITING {
 				c.stops = append(c.stops, claudeStatusStop{
 					fleet:    fleetName,
@@ -192,6 +202,7 @@ func (c *claudeStatus) update(st *state.State, acts map[string]fleetgrpc.AgentAc
 	if polled {
 		c.prev = prev
 	}
+	c.live = live
 	if !live {
 		working, idle = 0, 0
 	}
