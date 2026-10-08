@@ -114,6 +114,16 @@ func (t *agentTracker) applyProbe(
 	return false
 }
 
+// forgetHistory drops every detector's history. The hub calls it when the
+// activity polling resumes after a gap: the frame-diff detectors would
+// otherwise compare the first fresh capture with a screen from before the gap,
+// and read an agent idle the whole time (on a screen that redrew meanwhile) as
+// working for a while, then as "just stopped". A fresh detector seeds on its
+// first capture instead (StateWaiting).
+func (t *agentTracker) forgetHistory() {
+	t.detectors = make(map[string]agentdetect.Detector)
+}
+
 func (t *agentTracker) detectorFor(containerID string, tool state.AgentTool) agentdetect.Detector {
 	if existing, ok := t.detectors[containerID]; ok && t.tools[containerID] == tool {
 		return existing

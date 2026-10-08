@@ -249,6 +249,17 @@ func TestClaudeStatusRewritesOnChangeOrHeartbeat(t *testing.T) {
 	if got := updatedAt(); got != tOff.UnixMilli() {
 		t.Fatalf("a not-live file got a heartbeat (updated_at %d)", got)
 	}
+
+	// But a file deleted from inside the instance comes back on the next
+	// update, heartbeat or not.
+	if err := os.Remove(filepath.Join(state.ControlDir("web", "alpha"), agentstrategy.StatusModFileName)); err != nil {
+		t.Fatal(err)
+	}
+	tBack := tOff.Add(3 * claudeStatusHeartbeat)
+	c.update(st, nil, time.Time{}, tBack)
+	if f, ok := readStatusFile(t, "web", "alpha"); !ok || f.Instance != "Alpha" {
+		t.Fatalf("a deleted not-live file was not restored: %+v (present %v)", f, ok)
+	}
 }
 
 // TestClaudeStatusNeverFollowsAPlantedSymlink: the instance can write to its

@@ -253,23 +253,28 @@ func (c *claudeStatus) stopsElsewhere(fleetName, instanceName string) []agentstr
 	return stops
 }
 
-// write writes dir's status file when its content changed, or when a live
-// file is due a heartbeat. A failed write is tried again on the next update.
+// write writes dir's status file when its content changed, when a live file
+// is due a heartbeat, or when the file is no longer there as written (the
+// instance can delete or replace it). A failed write is tried again on the
+// next update.
 func (c *claudeStatus) write(dir string, file agentstrategy.StatusModFile, now time.Time) {
 	body, err := json.Marshal(file)
 	if err != nil {
 		return
 	}
+	path := filepath.Join(dir, agentstrategy.StatusModFileName)
 	last, ok := c.written[dir]
 	if ok && bytes.Equal(last.body, body) && (!file.Live || now.Sub(last.at) < claudeStatusHeartbeat) {
-		return
+		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+			return
+		}
 	}
 	file.UpdatedAt = now.UnixMilli()
 	data, err := json.Marshal(file)
 	if err != nil {
 		return
 	}
-	if err := atomicfile.Write(filepath.Join(dir, agentstrategy.StatusModFileName), data, 0o644); err != nil {
+	if err := atomicfile.Write(path, data, 0o644); err != nil {
 		return
 	}
 	c.written[dir] = claudeStatusWritten{body: body, at: now}

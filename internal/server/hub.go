@@ -149,6 +149,8 @@ func (h *hub) recomputeRuntimeWanted() {
 	}
 	prev := h.runtimeWanted.Swap(want)
 	if want && !prev {
+		// Polling resumes: nothing seen before the gap is a baseline to diff.
+		h.agent.forgetHistory()
 		select {
 		case h.runtimeEdge <- struct{}{}:
 		default:

@@ -4,7 +4,6 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { FleetStatusView } from '../types'
 import {
   GAP,
-  MCP_SOCKET,
   STATUS_FILE,
   TICK_MS,
   fitBand,
@@ -33,8 +32,7 @@ async function readStatus($: EngineInterface) {
 
 async function hasAdmiral($: EngineInterface) {
   try {
-    const tools = await $.tool.list()
-    return isAdmiral(tools, await $.fs.exists(MCP_SOCKET))
+    return isAdmiral(await $.tool.list())
   } catch {
     return false
   }
