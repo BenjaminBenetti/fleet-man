@@ -708,14 +708,14 @@ func TestRenameAgentUpdatesTriggerRefs(t *testing.T) {
 	}
 }
 
-// TestEditFleetDialogKeepsItsSelectedRowAt80x24: with the Fleet MCP on, the
-// fleet options dialog still shows its selected row on an 80x24 terminal —
-// both as it opens (on Agents) and on the Fleet MCP toggle with its risk note
-// — checked on the rows bubbletea actually keeps (the bottom `height` lines).
-func TestEditFleetDialogKeepsItsSelectedRowAt80x24(t *testing.T) {
+// TestEditFleetDialogFleetMCPWarningDoesNotShiftTheLayout: the Fleet MCP
+// warning rides the toggle's own line in every state, so selecting or
+// flipping the toggle never moves the rest of the fleet options dialog, and
+// the dialog shows its selected row on an 80x24 terminal — checked on the
+// rows bubbletea actually keeps (the bottom `height` lines).
+func TestEditFleetDialogFleetMCPWarningDoesNotShiftTheLayout(t *testing.T) {
 	m, fp := newAutomationModel(t)
 	m.width, m.height = 80, 24
-	m.st.Fleets["alpha"].Settings.FleetMCP = true
 	fp.openEditFleetDialog(m)
 	if fp.mode != viewEditFleet {
 		t.Fatalf("test setup: the fleet options dialog did not open (mode %v)", fp.mode)
@@ -725,19 +725,32 @@ func TestEditFleetDialogKeepsItsSelectedRowAt80x24(t *testing.T) {
 		return strings.Join(lines[max(0, len(lines)-m.height):], "\n")
 	}
 
-	if v := visible(); !strings.Contains(v, "> ▶ Agents") || !strings.Contains(v, "[x] Fleet MCP  ⚠ host access risk") {
-		t.Fatalf("as it opens, the selected Agents row (and the Fleet MCP reminder) should be on screen:\n%s", v)
+	height := -1
+	for _, on := range []bool{false, true} {
+		for _, row := range []int{editFleetRowAgents, editFleetRowFleetMCP} {
+			fp.editFleet.fleetMCP, fp.dlg.row = on, row
+			dlg := fp.renderEditFleetDialog(m)
+			if n := strings.Count(dlg, "\n"); height < 0 {
+				height = n
+			} else if n != height {
+				t.Fatalf("on=%v row=%d: the dialog is %d lines, want %d in every state (no layout shift)", on, row, n, height)
+			}
+			box := "[ ]"
+			if on {
+				box = "[x]"
+			}
+			selected := "> ▶ Agents"
+			if row == editFleetRowFleetMCP {
+				selected = "> " + box + " Fleet MCP  ⚠ exposes full control"
+			}
+			if v := visible(); !strings.Contains(v, box+" Fleet MCP  ⚠ exposes full control") || !strings.Contains(v, selected) {
+				t.Fatalf("on=%v row=%d: the toggle with its warning, and the selected row, should be on screen:\n%s", on, row, v)
+			}
+		}
 	}
-	fp.dlg.row = editFleetRowFleetMCP
-	if v := visible(); !strings.Contains(v, "> [x] Fleet MCP") || !strings.Contains(v, "poses an agent escape risk") {
-		t.Fatalf("on the toggle, the row and its risk note should be on screen:\n%s", v)
-	}
-
-	// With the setting off the dialog is no taller than it was before the
-	// Fleet MCP row existed (the home-dir placeholder gave its line back).
-	fp.editFleet.fleetMCP = false
-	fp.dlg.row = editFleetRowAgents
-	if lines := strings.Count(fp.renderEditFleetDialog(m), "\n"); lines > 23 {
-		t.Fatalf("the fleet options dialog is %d lines tall by default, want <= 23", lines)
+	// No taller than before the Fleet MCP row existed: the home-dir
+	// placeholder gave its line back.
+	if height > 23 {
+		t.Fatalf("the fleet options dialog is %d lines tall, want <= 23", height)
 	}
 }
