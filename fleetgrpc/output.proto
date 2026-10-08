@@ -1,0 +1,60 @@
+syntax = "proto3";
+package fleetgrpc;
+
+import "config.proto";
+
+option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
+
+// Output reverses the microphone data plane. Every player is a CLIENT,
+// regardless of where fleetd runs. PCM is signed 16-bit LE, 48 kHz stereo.
+message OutputUp {
+  oneof msg {
+    OutputOpen open = 1;
+    OutputDeviceList devices = 2;
+  }
+}
+message OutputOpen {
+  string client = 1;
+}
+message OutputDevice {
+  string id = 1;
+  string label = 2;
+}
+message OutputDeviceList {
+  repeated OutputDevice devices = 1;
+}
+message OutputDown {
+  oneof msg {
+    OutputSelection selection = 1;
+    OutputAudio audio = 2;
+    OutputListDevices list_devices = 3;
+  }
+}
+// A selection change closes all playback streams before accepting new audio.
+message OutputSelection {
+  bool active = 1;
+  string device = 2;
+}
+message OutputAudio {
+  string instance = 1; // fleet/instance, separate streams mixed by the client
+  bytes pcm = 2;
+  bool end = 3;
+}
+message OutputListDevices {}
+message OutputTarget {
+  string client = 1;
+  repeated OutputDevice devices = 2;
+  bool selected = 3;
+  bool devices_listed = 4;
+}
+message OutputTargets {
+  repeated OutputTarget targets = 1;
+  OutputSettings settings = 2;
+  uint64 revision = 3;
+}
+message ListOutputTargetsRequest {
+  bool refresh = 1;
+}
+message ListOutputTargetsReply {
+  OutputTargets targets = 1;
+}

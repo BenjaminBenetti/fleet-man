@@ -6,6 +6,7 @@ import "domain.proto";
 import "runtime.proto";
 import "jobs.proto";
 import "exec.proto";
+import "output.proto";
 
 option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
 
@@ -80,6 +81,7 @@ message Event {
     RemoteMcpStatus remote_mcp_status = 8;
     FileCopy file_copy = 9;
     MicSources mic_sources = 10;
+    OutputTargets output_targets = 11;
   }
 }
 

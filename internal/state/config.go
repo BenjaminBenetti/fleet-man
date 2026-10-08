@@ -19,6 +19,7 @@ type Config struct {
 	BrowserSettings    BrowserSettings    `json:"browser_settings"`
 	RemoteMcpSettings  RemoteMcpSettings  `json:"remote_mcp_settings"`
 	MicSettings        MicSettings        `json:"mic_settings"`
+	OutputSettings     OutputSettings     `json:"output_settings"`
 	ThemeSettings      ThemeSettings      `json:"theme_settings"`
 	ClaudeCodeSettings ClaudeCodeSettings `json:"claude_code_settings"`
 	DefaultBackend     string             `json:"default_backend,omitempty"` // "devcontainer", "coder", or "codespaces"
@@ -51,6 +52,8 @@ func (c *Config) applyDefaults() {
 
 	c.MicSettings.Device = strings.TrimSpace(c.MicSettings.Device)
 	c.MicSettings.Client = strings.TrimSpace(c.MicSettings.Client)
+	c.OutputSettings.Client = strings.TrimSpace(c.OutputSettings.Client)
+	c.OutputSettings.Device = strings.TrimSpace(c.OutputSettings.Device)
 	c.ThemeSettings.Name = strings.TrimSpace(c.ThemeSettings.Name)
 }
 

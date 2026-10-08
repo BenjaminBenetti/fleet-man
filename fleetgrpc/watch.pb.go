@@ -195,6 +195,7 @@ type Event struct {
 	//	*Event_RemoteMcpStatus
 	//	*Event_FileCopy
 	//	*Event_MicSources
+	//	*Event_OutputTargets
 	Kind          isEvent_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -327,6 +328,15 @@ func (x *Event) GetMicSources() *MicSources {
 	return nil
 }
 
+func (x *Event) GetOutputTargets() *OutputTargets {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_OutputTargets); ok {
+			return x.OutputTargets
+		}
+	}
+	return nil
+}
+
 type isEvent_Kind interface {
 	isEvent_Kind()
 }
@@ -371,6 +381,10 @@ type Event_MicSources struct {
 	MicSources *MicSources `protobuf:"bytes,10,opt,name=mic_sources,json=micSources,proto3,oneof"`
 }
 
+type Event_OutputTargets struct {
+	OutputTargets *OutputTargets `protobuf:"bytes,11,opt,name=output_targets,json=outputTargets,proto3,oneof"`
+}
+
 func (*Event_StateChanged) isEvent_Kind() {}
 
 func (*Event_JobStarted) isEvent_Kind() {}
@@ -390,6 +404,8 @@ func (*Event_RemoteMcpStatus) isEvent_Kind() {}
 func (*Event_FileCopy) isEvent_Kind() {}
 
 func (*Event_MicSources) isEvent_Kind() {}
+
+func (*Event_OutputTargets) isEvent_Kind() {}
 
 // RemoteMcpStatus is the computed status the settings page shows after the user
 // enables remote MCP and/or remote fleet (both share the one gateway tunnel, so
@@ -786,11 +802,11 @@ const file_watch_proto_rawDesc = "" +
 	"\n" +
 	"\vwatch.proto\x12\tfleetgrpc\x1a\fdomain.proto\x1a\rruntime.proto\x1a\n" +
 	"jobs.proto\x1a\n" +
-	"exec.proto\"\x99\x01\n" +
+	"exec.proto\x1a\foutput.proto\"\x99\x01\n" +
 	"\fWatchRequest\x122\n" +
 	"\x15include_initial_state\x18\x01 \x01(\bR\x13includeInitialState\x12+\n" +
 	"\x11subscribe_runtime\x18\x02 \x01(\bR\x10subscribeRuntime\x12(\n" +
-	"\x10reattach_job_ids\x18\x03 \x03(\tR\x0ereattachJobIds\"\xe0\x04\n" +
+	"\x10reattach_job_ids\x18\x03 \x03(\tR\x0ereattachJobIds\"\xa3\x05\n" +
 	"\x05Event\x12>\n" +
 	"\rstate_changed\x18\x01 \x01(\v2\x17.fleetgrpc.StateChangedH\x00R\fstateChanged\x128\n" +
 	"\vjob_started\x18\x02 \x01(\v2\x15.fleetgrpc.JobStartedH\x00R\n" +
@@ -804,7 +820,8 @@ const file_watch_proto_rawDesc = "" +
 	"\tfile_copy\x18\t \x01(\v2\x13.fleetgrpc.FileCopyH\x00R\bfileCopy\x128\n" +
 	"\vmic_sources\x18\n" +
 	" \x01(\v2\x15.fleetgrpc.MicSourcesH\x00R\n" +
-	"micSourcesB\x06\n" +
+	"micSources\x12A\n" +
+	"\x0eoutput_targets\x18\v \x01(\v2\x18.fleetgrpc.OutputTargetsH\x00R\routputTargetsB\x06\n" +
 	"\x04kind\"\xad\x02\n" +
 	"\x0fRemoteMcpStatus\x12.\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x18.fleetgrpc.RemoteMcpConnR\x05state\x12\x1d\n" +
@@ -866,8 +883,9 @@ var file_watch_proto_goTypes = []any{
 	(*JobLog)(nil),          // 10: fleetgrpc.JobLog
 	(*JobDone)(nil),         // 11: fleetgrpc.JobDone
 	(*MicSources)(nil),      // 12: fleetgrpc.MicSources
-	(*State)(nil),           // 13: fleetgrpc.State
-	(*InstanceRuntime)(nil), // 14: fleetgrpc.InstanceRuntime
+	(*OutputTargets)(nil),   // 13: fleetgrpc.OutputTargets
+	(*State)(nil),           // 14: fleetgrpc.State
+	(*InstanceRuntime)(nil), // 15: fleetgrpc.InstanceRuntime
 }
 var file_watch_proto_depIdxs = []int32{
 	4,  // 0: fleetgrpc.Event.state_changed:type_name -> fleetgrpc.StateChanged
@@ -880,14 +898,15 @@ var file_watch_proto_depIdxs = []int32{
 	3,  // 7: fleetgrpc.Event.remote_mcp_status:type_name -> fleetgrpc.RemoteMcpStatus
 	7,  // 8: fleetgrpc.Event.file_copy:type_name -> fleetgrpc.FileCopy
 	12, // 9: fleetgrpc.Event.mic_sources:type_name -> fleetgrpc.MicSources
-	0,  // 10: fleetgrpc.RemoteMcpStatus.state:type_name -> fleetgrpc.RemoteMcpConn
-	13, // 11: fleetgrpc.StateChanged.state:type_name -> fleetgrpc.State
-	14, // 12: fleetgrpc.RuntimeChanged.runtime:type_name -> fleetgrpc.InstanceRuntime
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	13, // 10: fleetgrpc.Event.output_targets:type_name -> fleetgrpc.OutputTargets
+	0,  // 11: fleetgrpc.RemoteMcpStatus.state:type_name -> fleetgrpc.RemoteMcpConn
+	14, // 12: fleetgrpc.StateChanged.state:type_name -> fleetgrpc.State
+	15, // 13: fleetgrpc.RuntimeChanged.runtime:type_name -> fleetgrpc.InstanceRuntime
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_watch_proto_init() }
@@ -899,6 +918,7 @@ func file_watch_proto_init() {
 	file_runtime_proto_init()
 	file_jobs_proto_init()
 	file_exec_proto_init()
+	file_output_proto_init()
 	file_watch_proto_msgTypes[1].OneofWrappers = []any{
 		(*Event_StateChanged)(nil),
 		(*Event_JobStarted)(nil),
@@ -910,6 +930,7 @@ func file_watch_proto_init() {
 		(*Event_RemoteMcpStatus)(nil),
 		(*Event_FileCopy)(nil),
 		(*Event_MicSources)(nil),
+		(*Event_OutputTargets)(nil),
 	}
 	file_watch_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}

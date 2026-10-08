@@ -5,6 +5,12 @@ import (
 	"os/exec"
 )
 
+// OutputBackend is an optional capability for backends that can stream PCM
+// from an instance and deliver stdin EOF when the daemon detaches.
+type OutputBackend interface {
+	OutputSourceCommand(containerID string) (*exec.Cmd, bool)
+}
+
 // Backend defines the strategy interface for container runtimes.
 // Implementations handle provisioning, lifecycle, execution,
 // monitoring, and introspection of containerized workspaces.

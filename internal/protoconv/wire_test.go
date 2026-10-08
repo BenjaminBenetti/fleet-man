@@ -156,7 +156,7 @@ func TestFleetSettingsWirePlacement(t *testing.T) {
 }
 
 func TestConfigWirePlacement(t *testing.T) {
-	pinArity[state.Config](t, 10)
+	pinArity[state.Config](t, 11)
 	pinArity[state.GeneralSettings](t, 2)
 	pinArity[state.AgentSettings](t, 1)
 	pinArity[state.DotfilesSettings](t, 3)
@@ -164,6 +164,7 @@ func TestConfigWirePlacement(t *testing.T) {
 	pinArity[state.BrowserSettings](t, 2)
 	pinArity[state.RemoteMcpSettings](t, 5)
 	pinArity[state.MicSettings](t, 3)
+	pinArity[state.OutputSettings](t, 3)
 	pinArity[state.ThemeSettings](t, 1)
 	pinArity[state.ClaudeCodeSettings](t, 1)
 
@@ -179,9 +180,13 @@ func TestConfigWirePlacement(t *testing.T) {
 		RemoteMcpSettings:  state.RemoteMcpSettings{GatewayURL: "gu", FleetMode: "fm"},
 		DefaultBackend:     string(fleet.BackendCoder),
 		MicSettings:        state.MicSettings{Enabled: true, Device: "md", Client: "mc"},
+		OutputSettings:     state.OutputSettings{Enabled: true, Device: "od", Client: "oc"},
 		ThemeSettings:      state.ThemeSettings{Name: "tn"},
 		ClaudeCodeSettings: state.ClaudeCodeSettings{StatusMod: &statusMod},
 	})
+	if o := pc.GetOutput(); !o.GetEnabled() || o.GetDevice() != "od" || o.GetClient() != "oc" {
+		t.Fatalf("output wire placement wrong: %+v", o)
+	}
 	if pc.GetGeneral().TmuxVimKeys == nil || pc.GetGeneral().GetTmuxVimKeys() ||
 		pc.GetGeneral().ShowHelpText != nil {
 		t.Fatalf("general tri-states wire placement wrong: %+v", pc.GetGeneral())

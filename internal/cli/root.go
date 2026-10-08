@@ -64,6 +64,7 @@ func NewRootCmd() *cobra.Command {
 		newAgentCmd(),
 		newTriggerCmd(),
 		newMicCmd(),
+		newOutputCmd(),
 	)
 
 	return root

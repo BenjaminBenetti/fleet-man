@@ -55,6 +55,8 @@ const (
 	FleetService_Forward_FullMethodName                = "/fleetgrpc.FleetService/Forward"
 	FleetService_Mic_FullMethodName                    = "/fleetgrpc.FleetService/Mic"
 	FleetService_ListMicSources_FullMethodName         = "/fleetgrpc.FleetService/ListMicSources"
+	FleetService_Output_FullMethodName                 = "/fleetgrpc.FleetService/Output"
+	FleetService_ListOutputTargets_FullMethodName      = "/fleetgrpc.FleetService/ListOutputTargets"
 	FleetService_SSHAgent_FullMethodName               = "/fleetgrpc.FleetService/SSHAgent"
 	FleetService_CopyFile_FullMethodName               = "/fleetgrpc.FleetService/CopyFile"
 	FleetService_CopyInto_FullMethodName               = "/fleetgrpc.FleetService/CopyInto"
@@ -153,6 +155,8 @@ type FleetServiceClient interface {
 	// ListMicSources returns the attached microphone clients and their capture
 	// devices — what the Settings selector offers (also pushed over Watch).
 	ListMicSources(ctx context.Context, in *ListMicSourcesRequest, opts ...grpc.CallOption) (*ListMicSourcesReply, error)
+	Output(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[OutputUp, OutputDown], error)
+	ListOutputTargets(ctx context.Context, in *ListOutputTargetsRequest, opts ...grpc.CallOption) (*ListOutputTargetsReply, error)
 	// SSHAgent is the SSH-agent forwarding data plane: the client provides its
 	// local ssh-agent, the server relays every agent connection made on its host
 	// (its own git clone, processes inside instances) down this stream.
@@ -629,9 +633,32 @@ func (c *fleetServiceClient) ListMicSources(ctx context.Context, in *ListMicSour
 	return out, nil
 }
 
+func (c *fleetServiceClient) Output(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[OutputUp, OutputDown], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[12], FleetService_Output_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[OutputUp, OutputDown]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_OutputClient = grpc.BidiStreamingClient[OutputUp, OutputDown]
+
+func (c *fleetServiceClient) ListOutputTargets(ctx context.Context, in *ListOutputTargetsRequest, opts ...grpc.CallOption) (*ListOutputTargetsReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListOutputTargetsReply)
+	err := c.cc.Invoke(ctx, FleetService_ListOutputTargets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) SSHAgent(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SSHAgentUp, SSHAgentDown], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[12], FleetService_SSHAgent_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[13], FleetService_SSHAgent_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -644,7 +671,7 @@ type FleetService_SSHAgentClient = grpc.BidiStreamingClient[SSHAgentUp, SSHAgent
 
 func (c *fleetServiceClient) CopyFile(ctx context.Context, in *CopyFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CopyFileChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[13], FleetService_CopyFile_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[14], FleetService_CopyFile_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -663,7 +690,7 @@ type FleetService_CopyFileClient = grpc.ServerStreamingClient[CopyFileChunk]
 
 func (c *fleetServiceClient) CopyInto(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CopyIntoChunk, CopyIntoReply], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[14], FleetService_CopyInto_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[15], FleetService_CopyInto_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -803,6 +830,8 @@ type FleetServiceServer interface {
 	// ListMicSources returns the attached microphone clients and their capture
 	// devices — what the Settings selector offers (also pushed over Watch).
 	ListMicSources(context.Context, *ListMicSourcesRequest) (*ListMicSourcesReply, error)
+	Output(grpc.BidiStreamingServer[OutputUp, OutputDown]) error
+	ListOutputTargets(context.Context, *ListOutputTargetsRequest) (*ListOutputTargetsReply, error)
 	// SSHAgent is the SSH-agent forwarding data plane: the client provides its
 	// local ssh-agent, the server relays every agent connection made on its host
 	// (its own git clone, processes inside instances) down this stream.
@@ -942,6 +971,12 @@ func (UnimplementedFleetServiceServer) Mic(grpc.BidiStreamingServer[MicUp, MicDo
 }
 func (UnimplementedFleetServiceServer) ListMicSources(context.Context, *ListMicSourcesRequest) (*ListMicSourcesReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListMicSources not implemented")
+}
+func (UnimplementedFleetServiceServer) Output(grpc.BidiStreamingServer[OutputUp, OutputDown]) error {
+	return status.Errorf(codes.Unimplemented, "method Output not implemented")
+}
+func (UnimplementedFleetServiceServer) ListOutputTargets(context.Context, *ListOutputTargetsRequest) (*ListOutputTargetsReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListOutputTargets not implemented")
 }
 func (UnimplementedFleetServiceServer) SSHAgent(grpc.BidiStreamingServer[SSHAgentUp, SSHAgentDown]) error {
 	return status.Errorf(codes.Unimplemented, "method SSHAgent not implemented")
@@ -1533,6 +1568,31 @@ func _FleetService_ListMicSources_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FleetService_Output_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(FleetServiceServer).Output(&grpc.GenericServerStream[OutputUp, OutputDown]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_OutputServer = grpc.BidiStreamingServer[OutputUp, OutputDown]
+
+func _FleetService_ListOutputTargets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListOutputTargetsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ListOutputTargets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ListOutputTargets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ListOutputTargets(ctx, req.(*ListOutputTargetsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_SSHAgent_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(FleetServiceServer).SSHAgent(&grpc.GenericServerStream[SSHAgentUp, SSHAgentDown]{ServerStream: stream})
 }
@@ -1734,6 +1794,10 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _FleetService_ListMicSources_Handler,
 		},
 		{
+			MethodName: "ListOutputTargets",
+			Handler:    _FleetService_ListOutputTargets_Handler,
+		},
+		{
 			MethodName: "InspectRepo",
 			Handler:    _FleetService_InspectRepo_Handler,
 		},
@@ -1812,6 +1876,12 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Mic",
 			Handler:       _FleetService_Mic_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Output",
+			Handler:       _FleetService_Output_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},

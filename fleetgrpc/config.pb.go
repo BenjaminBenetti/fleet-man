@@ -467,6 +467,68 @@ func (x *MicSettings) GetClient() string {
 	return ""
 }
 
+// OutputSettings selects a playback device on an attached client, never on
+// fleetd itself. Independent of the microphone settings.
+type OutputSettings struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Enabled       bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Client        string                 `protobuf:"bytes,2,opt,name=client,proto3" json:"client,omitempty"` // empty = Auto: newest attached playback client
+	Device        string                 `protobuf:"bytes,3,opt,name=device,proto3" json:"device,omitempty"` // empty = that client's system default
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OutputSettings) Reset() {
+	*x = OutputSettings{}
+	mi := &file_config_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OutputSettings) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OutputSettings) ProtoMessage() {}
+
+func (x *OutputSettings) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OutputSettings.ProtoReflect.Descriptor instead.
+func (*OutputSettings) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *OutputSettings) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *OutputSettings) GetClient() string {
+	if x != nil {
+		return x.Client
+	}
+	return ""
+}
+
+func (x *OutputSettings) GetDevice() string {
+	if x != nil {
+		return x.Device
+	}
+	return ""
+}
+
 // ThemeSettings is the TUI color theme — a CLIENT preference (like the armada
 // registry) that clients read from and write to their LOCAL daemon only, so a
 // TUI switched onto a remote fleet keeps its own look (issue #251).
@@ -481,7 +543,7 @@ type ThemeSettings struct {
 
 func (x *ThemeSettings) Reset() {
 	*x = ThemeSettings{}
-	mi := &file_config_proto_msgTypes[7]
+	mi := &file_config_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -493,7 +555,7 @@ func (x *ThemeSettings) String() string {
 func (*ThemeSettings) ProtoMessage() {}
 
 func (x *ThemeSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[7]
+	mi := &file_config_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -506,7 +568,7 @@ func (x *ThemeSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThemeSettings.ProtoReflect.Descriptor instead.
 func (*ThemeSettings) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{7}
+	return file_config_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ThemeSettings) GetName() string {
@@ -531,7 +593,7 @@ type ClaudeCodeSettings struct {
 
 func (x *ClaudeCodeSettings) Reset() {
 	*x = ClaudeCodeSettings{}
-	mi := &file_config_proto_msgTypes[8]
+	mi := &file_config_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -543,7 +605,7 @@ func (x *ClaudeCodeSettings) String() string {
 func (*ClaudeCodeSettings) ProtoMessage() {}
 
 func (x *ClaudeCodeSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[8]
+	mi := &file_config_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -556,7 +618,7 @@ func (x *ClaudeCodeSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaudeCodeSettings.ProtoReflect.Descriptor instead.
 func (*ClaudeCodeSettings) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{8}
+	return file_config_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ClaudeCodeSettings) GetStatusMod() bool {
@@ -580,13 +642,14 @@ type Config struct {
 	Mic            *MicSettings        `protobuf:"bytes,21,opt,name=mic,proto3" json:"mic,omitempty"`
 	Theme          *ThemeSettings      `protobuf:"bytes,22,opt,name=theme,proto3" json:"theme,omitempty"`
 	ClaudeCode     *ClaudeCodeSettings `protobuf:"bytes,23,opt,name=claude_code,json=claudeCode,proto3" json:"claude_code,omitempty"`
+	Output         *OutputSettings     `protobuf:"bytes,24,opt,name=output,proto3" json:"output,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Config) Reset() {
 	*x = Config{}
-	mi := &file_config_proto_msgTypes[9]
+	mi := &file_config_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -598,7 +661,7 @@ func (x *Config) String() string {
 func (*Config) ProtoMessage() {}
 
 func (x *Config) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[9]
+	mi := &file_config_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -611,7 +674,7 @@ func (x *Config) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Config.ProtoReflect.Descriptor instead.
 func (*Config) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{9}
+	return file_config_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Config) GetGeneral() *GeneralSettings {
@@ -684,6 +747,13 @@ func (x *Config) GetClaudeCode() *ClaudeCodeSettings {
 	return nil
 }
 
+func (x *Config) GetOutput() *OutputSettings {
+	if x != nil {
+		return x.Output
+	}
+	return nil
+}
+
 type GetConfigRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -692,7 +762,7 @@ type GetConfigRequest struct {
 
 func (x *GetConfigRequest) Reset() {
 	*x = GetConfigRequest{}
-	mi := &file_config_proto_msgTypes[10]
+	mi := &file_config_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -704,7 +774,7 @@ func (x *GetConfigRequest) String() string {
 func (*GetConfigRequest) ProtoMessage() {}
 
 func (x *GetConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[10]
+	mi := &file_config_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -717,7 +787,7 @@ func (x *GetConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConfigRequest.ProtoReflect.Descriptor instead.
 func (*GetConfigRequest) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{10}
+	return file_config_proto_rawDescGZIP(), []int{11}
 }
 
 type GetConfigReply struct {
@@ -729,7 +799,7 @@ type GetConfigReply struct {
 
 func (x *GetConfigReply) Reset() {
 	*x = GetConfigReply{}
-	mi := &file_config_proto_msgTypes[11]
+	mi := &file_config_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -741,7 +811,7 @@ func (x *GetConfigReply) String() string {
 func (*GetConfigReply) ProtoMessage() {}
 
 func (x *GetConfigReply) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[11]
+	mi := &file_config_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -754,7 +824,7 @@ func (x *GetConfigReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConfigReply.ProtoReflect.Descriptor instead.
 func (*GetConfigReply) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{11}
+	return file_config_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GetConfigReply) GetConfig() *Config {
@@ -775,7 +845,7 @@ type SetConfigRequest struct {
 
 func (x *SetConfigRequest) Reset() {
 	*x = SetConfigRequest{}
-	mi := &file_config_proto_msgTypes[12]
+	mi := &file_config_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -787,7 +857,7 @@ func (x *SetConfigRequest) String() string {
 func (*SetConfigRequest) ProtoMessage() {}
 
 func (x *SetConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[12]
+	mi := &file_config_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -800,7 +870,7 @@ func (x *SetConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetConfigRequest.ProtoReflect.Descriptor instead.
 func (*SetConfigRequest) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{12}
+	return file_config_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *SetConfigRequest) GetConfig() *Config {
@@ -811,15 +881,17 @@ func (x *SetConfigRequest) GetConfig() *Config {
 }
 
 type SetConfigReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Config        *Config                `protobuf:"bytes,1,opt,name=config,proto3" json:"config,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Config *Config                `protobuf:"bytes,1,opt,name=config,proto3" json:"config,omitempty"`
+	// Orders output settings against Watch snapshots from this daemon.
+	OutputRevision uint64 `protobuf:"varint,2,opt,name=output_revision,json=outputRevision,proto3" json:"output_revision,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *SetConfigReply) Reset() {
 	*x = SetConfigReply{}
-	mi := &file_config_proto_msgTypes[13]
+	mi := &file_config_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -831,7 +903,7 @@ func (x *SetConfigReply) String() string {
 func (*SetConfigReply) ProtoMessage() {}
 
 func (x *SetConfigReply) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[13]
+	mi := &file_config_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -844,7 +916,7 @@ func (x *SetConfigReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetConfigReply.ProtoReflect.Descriptor instead.
 func (*SetConfigReply) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{13}
+	return file_config_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *SetConfigReply) GetConfig() *Config {
@@ -852,6 +924,13 @@ func (x *SetConfigReply) GetConfig() *Config {
 		return x.Config
 	}
 	return nil
+}
+
+func (x *SetConfigReply) GetOutputRevision() uint64 {
+	if x != nil {
+		return x.OutputRevision
+	}
+	return 0
 }
 
 var File_config_proto protoreflect.FileDescriptor
@@ -898,13 +977,17 @@ const file_config_proto_rawDesc = "" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x16\n" +
 	"\x06device\x18\x02 \x01(\tR\x06device\x12\x1b\n" +
 	"\x06client\x18\x03 \x01(\tH\x00R\x06client\x88\x01\x01B\t\n" +
-	"\a_client\"#\n" +
+	"\a_client\"Z\n" +
+	"\x0eOutputSettings\x12\x18\n" +
+	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x16\n" +
+	"\x06client\x18\x02 \x01(\tR\x06client\x12\x16\n" +
+	"\x06device\x18\x03 \x01(\tR\x06device\"#\n" +
 	"\rThemeSettings\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"G\n" +
 	"\x12ClaudeCodeSettings\x12\"\n" +
 	"\n" +
 	"status_mod\x18\x01 \x01(\bH\x00R\tstatusMod\x88\x01\x01B\r\n" +
-	"\v_status_mod\"\xc7\x04\n" +
+	"\v_status_mod\"\xfa\x04\n" +
 	"\x06Config\x124\n" +
 	"\ageneral\x18\x01 \x01(\v2\x1a.fleetgrpc.GeneralSettingsR\ageneral\x12.\n" +
 	"\x05agent\x18\x02 \x01(\v2\x18.fleetgrpc.AgentSettingsR\x05agent\x127\n" +
@@ -919,14 +1002,16 @@ const file_config_proto_rawDesc = "" +
 	"\x03mic\x18\x15 \x01(\v2\x16.fleetgrpc.MicSettingsR\x03mic\x12.\n" +
 	"\x05theme\x18\x16 \x01(\v2\x18.fleetgrpc.ThemeSettingsR\x05theme\x12>\n" +
 	"\vclaude_code\x18\x17 \x01(\v2\x1d.fleetgrpc.ClaudeCodeSettingsR\n" +
-	"claudeCodeJ\x04\b\x04\x10\x05J\x04\b\t\x10\x15R\x05coder\"\x12\n" +
+	"claudeCode\x121\n" +
+	"\x06output\x18\x18 \x01(\v2\x19.fleetgrpc.OutputSettingsR\x06outputJ\x04\b\x04\x10\x05J\x04\b\t\x10\x15R\x05coder\"\x12\n" +
 	"\x10GetConfigRequest\";\n" +
 	"\x0eGetConfigReply\x12)\n" +
 	"\x06config\x18\x01 \x01(\v2\x11.fleetgrpc.ConfigR\x06config\"=\n" +
 	"\x10SetConfigRequest\x12)\n" +
-	"\x06config\x18\x01 \x01(\v2\x11.fleetgrpc.ConfigR\x06config\";\n" +
+	"\x06config\x18\x01 \x01(\v2\x11.fleetgrpc.ConfigR\x06config\"d\n" +
 	"\x0eSetConfigReply\x12)\n" +
-	"\x06config\x18\x01 \x01(\v2\x11.fleetgrpc.ConfigR\x06configB:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
+	"\x06config\x18\x01 \x01(\v2\x11.fleetgrpc.ConfigR\x06config\x12'\n" +
+	"\x0foutput_revision\x18\x02 \x01(\x04R\x0eoutputRevisionB:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
 
 var (
 	file_config_proto_rawDescOnce sync.Once
@@ -940,7 +1025,7 @@ func file_config_proto_rawDescGZIP() []byte {
 	return file_config_proto_rawDescData
 }
 
-var file_config_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_config_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_config_proto_goTypes = []any{
 	(*GeneralSettings)(nil),    // 0: fleetgrpc.GeneralSettings
 	(*AgentSettings)(nil),      // 1: fleetgrpc.AgentSettings
@@ -949,14 +1034,15 @@ var file_config_proto_goTypes = []any{
 	(*BrowserSettings)(nil),    // 4: fleetgrpc.BrowserSettings
 	(*RemoteMcpSettings)(nil),  // 5: fleetgrpc.RemoteMcpSettings
 	(*MicSettings)(nil),        // 6: fleetgrpc.MicSettings
-	(*ThemeSettings)(nil),      // 7: fleetgrpc.ThemeSettings
-	(*ClaudeCodeSettings)(nil), // 8: fleetgrpc.ClaudeCodeSettings
-	(*Config)(nil),             // 9: fleetgrpc.Config
-	(*GetConfigRequest)(nil),   // 10: fleetgrpc.GetConfigRequest
-	(*GetConfigReply)(nil),     // 11: fleetgrpc.GetConfigReply
-	(*SetConfigRequest)(nil),   // 12: fleetgrpc.SetConfigRequest
-	(*SetConfigReply)(nil),     // 13: fleetgrpc.SetConfigReply
-	(BackendType)(0),           // 14: fleetgrpc.BackendType
+	(*OutputSettings)(nil),     // 7: fleetgrpc.OutputSettings
+	(*ThemeSettings)(nil),      // 8: fleetgrpc.ThemeSettings
+	(*ClaudeCodeSettings)(nil), // 9: fleetgrpc.ClaudeCodeSettings
+	(*Config)(nil),             // 10: fleetgrpc.Config
+	(*GetConfigRequest)(nil),   // 11: fleetgrpc.GetConfigRequest
+	(*GetConfigReply)(nil),     // 12: fleetgrpc.GetConfigReply
+	(*SetConfigRequest)(nil),   // 13: fleetgrpc.SetConfigRequest
+	(*SetConfigReply)(nil),     // 14: fleetgrpc.SetConfigReply
+	(BackendType)(0),           // 15: fleetgrpc.BackendType
 }
 var file_config_proto_depIdxs = []int32{
 	0,  // 0: fleetgrpc.Config.general:type_name -> fleetgrpc.GeneralSettings
@@ -964,19 +1050,20 @@ var file_config_proto_depIdxs = []int32{
 	2,  // 2: fleetgrpc.Config.dotfiles:type_name -> fleetgrpc.DotfilesSettings
 	3,  // 3: fleetgrpc.Config.codespaces:type_name -> fleetgrpc.CodespacesSettings
 	4,  // 4: fleetgrpc.Config.browser:type_name -> fleetgrpc.BrowserSettings
-	14, // 5: fleetgrpc.Config.default_backend:type_name -> fleetgrpc.BackendType
+	15, // 5: fleetgrpc.Config.default_backend:type_name -> fleetgrpc.BackendType
 	5,  // 6: fleetgrpc.Config.remote_mcp:type_name -> fleetgrpc.RemoteMcpSettings
 	6,  // 7: fleetgrpc.Config.mic:type_name -> fleetgrpc.MicSettings
-	7,  // 8: fleetgrpc.Config.theme:type_name -> fleetgrpc.ThemeSettings
-	8,  // 9: fleetgrpc.Config.claude_code:type_name -> fleetgrpc.ClaudeCodeSettings
-	9,  // 10: fleetgrpc.GetConfigReply.config:type_name -> fleetgrpc.Config
-	9,  // 11: fleetgrpc.SetConfigRequest.config:type_name -> fleetgrpc.Config
-	9,  // 12: fleetgrpc.SetConfigReply.config:type_name -> fleetgrpc.Config
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	8,  // 8: fleetgrpc.Config.theme:type_name -> fleetgrpc.ThemeSettings
+	9,  // 9: fleetgrpc.Config.claude_code:type_name -> fleetgrpc.ClaudeCodeSettings
+	7,  // 10: fleetgrpc.Config.output:type_name -> fleetgrpc.OutputSettings
+	10, // 11: fleetgrpc.GetConfigReply.config:type_name -> fleetgrpc.Config
+	10, // 12: fleetgrpc.SetConfigRequest.config:type_name -> fleetgrpc.Config
+	10, // 13: fleetgrpc.SetConfigReply.config:type_name -> fleetgrpc.Config
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_config_proto_init() }
@@ -990,14 +1077,14 @@ func file_config_proto_init() {
 	file_config_proto_msgTypes[3].OneofWrappers = []any{}
 	file_config_proto_msgTypes[4].OneofWrappers = []any{}
 	file_config_proto_msgTypes[6].OneofWrappers = []any{}
-	file_config_proto_msgTypes[8].OneofWrappers = []any{}
+	file_config_proto_msgTypes[9].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_config_proto_rawDesc), len(file_config_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

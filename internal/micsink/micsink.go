@@ -92,6 +92,13 @@ func path(name string) string { return filepath.Join(dir, name) }
 // autodetection, no hardware modules, no D-Bus — there is none of that in a
 // container, and each would only add a startup delay and a log full of errors.
 func serverScript() string {
+	return audioServerScript(true)
+}
+
+func audioServerScript(microphone bool) string {
+	if !microphone {
+		return fmt.Sprintf("load-module module-native-protocol-unix socket=%s auth-anonymous=1\nload-module module-null-sink sink_name=fleetnull sink_properties=device.description=FleetNull\nset-default-sink fleetnull\n", path("pulse.sock"))
+	}
 	return fmt.Sprintf(`load-module module-native-protocol-unix socket=%s auth-anonymous=1
 load-module module-null-sink sink_name=fleetnull sink_properties=device.description=FleetNull
 load-module module-pipe-source source_name=%s file=%s format=s16le rate=%d channels=%d source_properties=device.description=FleetMicrophone
@@ -173,6 +180,10 @@ func micPresent() answer {
 // instance and the provisioning script finishes before an instance is marked
 // running — and the second look right before the cleanup narrows it further.
 func Ensure() error {
+	return withAudioLock(func() error { return ensureAudio(true) })
+}
+
+func ensureAudio(microphone bool) error {
 	for _, bin := range []string{"pulseaudio", "pactl"} {
 		if _, err := lookPath(bin); err != nil {
 			return ErrMissingDeps
@@ -182,6 +193,9 @@ func Ensure() error {
 	case unknown:
 		return fmt.Errorf("the sound server did not answer in time; leaving it alone")
 	case yes:
+		if !microphone {
+			return nil
+		}
 		if mic = micPresent(); mic == yes {
 			return nil
 		}
@@ -191,7 +205,20 @@ func Ensure() error {
 			return fmt.Errorf("the sound server is up but could not be queried; leaving it alone")
 		}
 		// Up and CONFIDENTLY microphone-less (see micPresent): replace it.
-		if err := Stop(); err != nil {
+		output, err := outputPresent()
+		if err != nil {
+			return err
+		}
+		if output {
+			// Restore input without interrupting the independent output sink.
+			_ = os.Remove(path("pcm"))
+			if _, err := pactl(context.Background(), "load-module", "module-pipe-source", "source_name="+SourceName, "file="+path("pcm"), "format=s16le", "rate=16000", "channels=1", "source_properties=device.description=FleetMicrophone"); err != nil {
+				return err
+			}
+			_, err := pactl(context.Background(), "set-default-source", SourceName)
+			return err
+		}
+		if err := stopServer(); err != nil {
 			return fmt.Errorf("stop degraded pulseaudio: %w", err)
 		}
 		deadline := time.Now().Add(serverStartTimeout)
@@ -222,7 +249,7 @@ func Ensure() error {
 	// listening" licenses unlinking the socket and FIFO.
 	switch serverAnswers() {
 	case yes:
-		if micPresent() == yes {
+		if !microphone || micPresent() == yes {
 			return nil // someone else brought it up while we were getting here
 		}
 		return fmt.Errorf("a sound server appeared while starting one; leaving it alone")
@@ -231,7 +258,7 @@ func Ensure() error {
 	}
 	_ = os.Remove(path("pulse.sock"))
 	_ = os.Remove(path("pcm"))
-	if err := os.WriteFile(path("fleet.pa"), []byte(serverScript()), 0o644); err != nil {
+	if err := os.WriteFile(path("fleet.pa"), []byte(audioServerScript(microphone)), 0o644); err != nil {
 		return fmt.Errorf("write server script: %w", err)
 	}
 
@@ -257,7 +284,7 @@ func Ensure() error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if micPresent() == no { // unknown: it answered a moment ago; do not cry wolf
+	if microphone && micPresent() == no { // unknown: it answered a moment ago; do not cry wolf
 		return fmt.Errorf("pulseaudio started without the %s source (see %s)", SourceName, path("pulse.log"))
 	}
 	return nil
@@ -267,6 +294,26 @@ func Ensure() error {
 // Used when the feature is turned off: recorders then find no microphone at
 // all, rather than a silent one.
 func Stop() error {
+	return withAudioLock(func() error {
+		if _, err := lookPath("pactl"); err != nil || serverAnswers() == no {
+			return nil
+		}
+		output, err := outputPresent()
+		if err != nil {
+			return err
+		}
+		if output {
+			if micPresent() == no {
+				return nil
+			}
+			_, err := pactl(context.Background(), "unload-module", "module-pipe-source")
+			return err
+		}
+		return stopServer()
+	})
+}
+
+func stopServer() error {
 	if _, err := lookPath("pactl"); err != nil || serverAnswers() == no {
 		return nil
 	}

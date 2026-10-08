@@ -1,6 +1,7 @@
 package create
 
 import (
+	"os/exec"
 	"slices"
 	"testing"
 
@@ -17,6 +18,26 @@ type micCapability struct {
 }
 
 func (m micCapability) SupportsMicSink() bool { return m.supports }
+
+type outputCapability struct{ micCapability }
+
+func (outputCapability) OutputSourceCommand(string) (*exec.Cmd, bool) { return nil, true }
+
+func TestScriptsForInstanceGatesOutputIndependently(t *testing.T) {
+	config := &state.Config{OutputSettings: state.OutputSettings{Enabled: true}}
+	if got := scriptNames(scriptsForInstance(micCapability{supports: true}, fleet.FleetSettings{}, config)); len(got) != 0 {
+		t.Fatalf("unsupported backend installs output: %v", got)
+	}
+	b := outputCapability{micCapability{supports: true}}
+	if got := scriptNames(scriptsForInstance(b, fleet.FleetSettings{}, config)); !slices.Equal(got, []string{"output"}) {
+		t.Fatalf("output-only scripts: %v", got)
+	}
+	config.MicSettings.Enabled = true
+	scripts := scriptsForInstance(b, fleet.FleetSettings{}, config)
+	if len(scripts) != 1 {
+		t.Fatalf("both directions should install the stack once: %v", scriptNames(scripts))
+	}
+}
 
 func scriptNames(scripts []startup.Script) []string {
 	var names []string

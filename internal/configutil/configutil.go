@@ -36,6 +36,7 @@ type (
 	CodespacesSettings = state.CodespacesSettings
 	BrowserSettings    = state.BrowserSettings
 	MicSettings        = state.MicSettings
+	OutputSettings     = state.OutputSettings
 	ThemeSettings      = state.ThemeSettings
 	AgentTool          = state.AgentTool
 	State              = state.State

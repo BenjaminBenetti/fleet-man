@@ -47,6 +47,7 @@ linters:
             # code, and machine-checked as such. (internal/micsink, the
             # in-instance half, is a different package and not covered.)
             - "**/internal/mic/**"
+            - "**/internal/output/**"
             # …and the in-instance half is linked into the same client binary
             # (internal/cli runs it as `fleet mic sink`), so it is held to the
             # same boundary rather than being a package the linter never sees.

@@ -57,6 +57,7 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	if previous, err := state.LoadConfig(); err == nil {
 		micWasEnabled = previous.MicSettings.Enabled
 		base.MicSettings = previous.MicSettings
+		base.OutputSettings = previous.OutputSettings
 		base.ThemeSettings = previous.ThemeSettings
 		base.ClaudeCodeSettings = previous.ClaudeCodeSettings
 	}
@@ -91,13 +92,14 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	// with its next save: tell them all what is now on disk (a no-op push if the
 	// microphone settings did not change).
 	s.mic.sourcesChanged()
+	outputRevision := s.output.configure(saved.OutputSettings)
 
 	// The remote-gateway fields are the ones whose effects outlive this RPC (the
 	// tunnel supervisor reacts to them), so call them out; the manager logs the
 	// resulting connection transitions itself.
 	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "remoteFleet", saved.RemoteMcpSettings.FleetEnabled, "webhook", saved.RemoteMcpSettings.WebhookEnabled, "gateway", saved.RemoteMcpSettings.GatewayURL, "mic", saved.MicSettings.Enabled)
 
-	return &fleetgrpc.SetConfigReply{Config: protoconv.ConfigToProto(saved)}, nil
+	return &fleetgrpc.SetConfigReply{Config: protoconv.ConfigToProto(saved), OutputRevision: outputRevision}, nil
 }
 
 // reconcileRemote converges both remote-control transports on the settings:

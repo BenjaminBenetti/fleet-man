@@ -30,8 +30,18 @@ const micConfigMarker = "managed by fleet (virtual microphone)"
 // add it explicitly. It is idempotent and quick when everything is in place.
 // Needs root or passwordless sudo, like every package install fleet does.
 func MicScript() Script {
+	return AudioScript(true, false)
+}
+
+// AudioScript installs the shared stack, then enables only the requested
+// directions. Output-only setup must never open a microphone for validation.
+func AudioScript(microphone, output bool) Script {
+	name := "mic"
+	if !microphone {
+		name = "output"
+	}
 	return Script{
-		Name: "mic",
+		Name: name,
 		Body: fmt.Sprintf(`marker='%[1]s'
 socket='%[2]s'
 # Test seam: a prefix for every system path this script reads, writes or runs.
@@ -63,7 +73,8 @@ have_pulse_plugin() {
 
 installed() {
   command -v pulseaudio >/dev/null 2>&1 && command -v pactl >/dev/null 2>&1 &&
-    command -v arecord >/dev/null 2>&1 && have_pulse_plugin
+    command -v arecord >/dev/null 2>&1 && have_pulse_plugin &&
+    { [ '%[5]t' != true ] || command -v parec >/dev/null 2>&1; }
 }
 
 if installed; then
@@ -150,11 +161,19 @@ default-server = unix:$socket
 autospawn = no
 CONF
 
+if [ '%[5]t' = true ]; then
+  if [ ! -x "$fleet_bin" ]; then
+    echo "fleet binary missing; cannot start audio output"
+    exit 1
+  fi
+  "$fleet_bin" output ensure || exit 1
+fi
+
 # Bring the virtual microphone up now, so a recorder probing for a device finds
 # one before any client has attached. The staged fleet binary owns the server's
 # configuration; an instance without it yet gets the server on first attach.
 server_up=""
-if [ -x "$fleet_bin" ]; then
+if [ '%[6]t' = true ] && [ -x "$fleet_bin" ]; then
   if "$fleet_bin" mic ensure; then
     server_up=1
   else
@@ -184,6 +203,16 @@ default_is_pulse() {
   done
   return 1
 }
+
+if [ '%[6]t' = false ]; then
+  if [ -n "$foreign_asound" ] && ! default_is_pulse "$asound"; then
+    echo "WARNING: $asound sets its own ALSA default; playback may bypass fleet's audio output."
+    echo "PulseAudio applications can use FleetAudioOutput directly."
+    exit 3
+  fi
+  echo "virtual audio output ready"
+  exit 0
+fi
 
 # bounded <pulse command>: run it against fleet's private server, for a few
 # seconds at most. A wedged sound server must not hang the script — least of all
@@ -269,6 +298,6 @@ if [ -n "$foreign_asound" ] && ! alsa_default_reaches_pulse; then
   echo "Add 'pcm.!default { type pulse }' to it, or remove it and rebuild the instance."
   exit 3
 fi
-echo "virtual microphone ready"`, micConfigMarker, micsink.SocketPath, fleetlaunch.RemotePath, micsink.SourceName),
+echo "virtual microphone ready"`, micConfigMarker, micsink.SocketPath, fleetlaunch.RemotePath, micsink.SourceName, output, microphone),
 	}
 }

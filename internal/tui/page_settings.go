@@ -43,8 +43,10 @@ const (
 	settingsItemBrowserMultiple   = 600 // browser settings start here
 	settingsItemBrowserAutoSwitch = 601
 
-	settingsItemMicEnabled = 650 // virtual microphone settings start here
-	settingsItemMicDevice  = 651
+	settingsItemMicEnabled    = 650 // virtual microphone settings start here
+	settingsItemMicDevice     = 651
+	settingsItemOutputEnabled = 660
+	settingsItemOutputDevice  = 661
 
 	settingsItemClaudeStatusMod = 670 // Claude Code settings start here
 
@@ -241,13 +243,17 @@ func (settingsPage *settingsPage) Init(m *model) tea.Cmd {
 	// the per-remote connection indicators live while the page is open. The
 	// armed-flag guard stops a re-entered page from stacking a second loop.
 	cmds := []tea.Cmd{fetchArmadaCmd()}
+	if m.config != nil && m.config.OutputSettings.Enabled {
+		syncOutputFromConfig(m.config)
+		cmds = append(cmds, relistOutputTargetsCmd())
+	}
 	// The microphone selector lists the devices of every attached client. This
 	// machine's are enumerated here as the page opens (fresh each visit — a
 	// headset may have been plugged in since), and the other clients are asked
 	// to do the same through the daemon.
 	if m.config != nil && m.config.MicSettings.Enabled {
 		// Also the natural moment to retry a provider that gave up on its own.
-		syncMicFromConfig(m.config)
+		syncAudioFromConfig(m.config)
 		m.micDevicesLoaded = false
 		m.micDevicesErr = ""
 		if cmd := m.ensureMicDevices(); cmd != nil {
@@ -335,6 +341,16 @@ var settingsSections = []settingsSection{
 			// off microphone is one row, not a form.
 			if m.config != nil && m.config.MicSettings.Enabled {
 				items = append(items, settingsItemMicDevice)
+			}
+			return items
+		},
+	},
+	{
+		Title: "Audio Output",
+		Items: func(m *model) []int {
+			items := []int{settingsItemOutputEnabled}
+			if m.config != nil && m.config.OutputSettings.Enabled {
+				items = append(items, settingsItemOutputDevice)
 			}
 			return items
 		},
@@ -1078,6 +1094,10 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				return settingsPage.cycleMicDevice(m, -1)
 			} else if item == settingsItemClaudeStatusMod {
 				settingsPage.toggleClaudeStatusMod(m)
+			} else if item == settingsItemOutputEnabled {
+				return settingsPage.toggleOutputEnabled(m)
+			} else if item == settingsItemOutputDevice {
+				return settingsPage.cycleOutputDevice(m, -1)
 			} else if item == settingsItemDaemonLogs {
 				settingsPage.cycleDaemonLogLevel(-1)
 			}
@@ -1124,6 +1144,10 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				return settingsPage.cycleMicDevice(m, 1)
 			} else if item == settingsItemClaudeStatusMod {
 				settingsPage.toggleClaudeStatusMod(m)
+			} else if item == settingsItemOutputEnabled {
+				return settingsPage.toggleOutputEnabled(m)
+			} else if item == settingsItemOutputDevice {
+				return settingsPage.cycleOutputDevice(m, 1)
 			} else if item == settingsItemDaemonLogs {
 				settingsPage.cycleDaemonLogLevel(1)
 			}
@@ -1238,6 +1262,12 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			}
 			if item == settingsItemTheme {
 				return settingsPage.cycleTheme(m, 1)
+			}
+			if item == settingsItemOutputEnabled {
+				return settingsPage.toggleOutputEnabled(m)
+			}
+			if item == settingsItemOutputDevice {
+				return settingsPage.cycleOutputDevice(m, 1)
 			}
 			if item == settingsItemMicEnabled {
 				return settingsPage.toggleMicEnabled(m)
@@ -1759,6 +1789,26 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			}
 			statusModValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Show the instance and the agents at work across fleets above the Claude Code prompt")
 			recordRow(settingsItemClaudeStatusMod, settingsPage.renderSettingsRow(m, currentItem == settingsItemClaudeStatusMod, "Fleet status mod", statusModValue))
+
+		case "Audio Output":
+			value := "[ off ]"
+			if config.OutputSettings.Enabled {
+				value = "[ on ]"
+			}
+			value += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Play instance audio on a connected client's speakers or headphones")
+			recordRow(settingsItemOutputEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemOutputEnabled, "Enabled", value))
+			if config.OutputSettings.Enabled {
+				listContent.WriteString("\n")
+				device := "◀ " + outputDeviceLabel(m) + " ▶"
+				device += "\n" + strings.Repeat(" ", 21) + dimStyle.Render(outputRouteNote(m))
+				recordRow(settingsItemOutputDevice, settingsPage.renderSettingsRow(m, currentItem == settingsItemOutputDevice, "Output device", device))
+				listContent.WriteString("\n")
+				status := m.outputStatus.Detail
+				if status == "" {
+					status = "connecting"
+				}
+				listContent.WriteString(lipgloss.NewStyle().Width(contentWidth).Render(settingsPage.renderSettingsRow(m, false, "This client", dimStyle.Render(status))))
+			}
 
 		case "Fleet MCP":
 			// Copy local config — the common task, so it leads the section.

@@ -31,7 +31,8 @@ type service struct {
 	// mic is the virtual-microphone hub (mic.go): provider streams, per-instance
 	// sinks, and the demand/audio routing between them. Its sync loop is started
 	// by the serve loop; without it (newService() tests) the hub is inert.
-	mic *micHub
+	mic    *micHub
+	output *outputHub
 	// agent is the SSH-agent relay (sshagent.go): provider streams and the
 	// relay sockets the daemon's children and instances connect to.
 	agent       *agentHub
@@ -92,12 +93,17 @@ func newService() *service {
 		hub:          newHub(),
 		jobs:         newJobManager(),
 		mic:          newMicHub(),
+		output:       newOutputHub(),
 		agent:        newAgentHub(),
 		shutdownCh:   make(chan struct{}),
 		bgCtx:        context.Background(),
 		triggerFires: make(chan []triggerFire, triggerFireBuffer),
 	}
 	svc.instanceMCP = newInstanceMCP(svc)
+	svc.output.configMu = &svc.muWrite
+	svc.output.onChange = func(snapshot *fleetgrpc.OutputTargets) {
+		svc.hub.post(func(h *hub) { h.broadcastOutputTargets(snapshot) })
+	}
 	// The attached microphone clients, and the settings that select among them,
 	// are pushed over Watch. The mic hub calls this from a single goroutine, one
 	// change at a time, so the snapshots reach the Watch hub in the order they
