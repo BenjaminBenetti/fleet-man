@@ -43,9 +43,10 @@ const (
 	claudeStatusHeartbeat = 4 * time.Second
 	// claudeStatusStopWindow is how long a stop stays in the files.
 	claudeStatusStopWindow = 30 * time.Second
-	// claudeStatusWarmup is how long after the activity polling (re)starts
-	// changes of activity are not taken for stops: until the first polls land,
-	// the runtime holds whatever activity was last seen, maybe long ago.
+	// claudeStatusWarmup is how long after the activity polling (re)starts the
+	// files stay not live and changes of activity are not taken for stops:
+	// until the first polls land, the runtime holds whatever activity was last
+	// seen, maybe long ago.
 	claudeStatusWarmup = 2 * statsActivityInterval
 )
 
@@ -153,13 +154,14 @@ func (c *claudeStatus) pause() {
 
 // update counts the agents of every running instance, records the stops since
 // the last update, and writes each mounted instance its file. A nil acts means
-// the activity is not being polled: the files are written not live.
+// the activity is not being polled; then, and through the warmup after polling
+// starts, the files are written not live: the instance's name alone.
 func (c *claudeStatus) update(st *state.State, acts map[string]fleetgrpc.AgentActivity, now time.Time) {
-	live := acts != nil
-	if live && c.prev == nil {
+	polled := acts != nil
+	if polled && c.prev == nil {
 		c.trackFrom = now.Add(claudeStatusWarmup)
 	}
-	tracking := live && !now.Before(c.trackFrom)
+	live := polled && !now.Before(c.trackFrom)
 
 	working, idle := 0, 0
 	prev := make(map[string]fleetgrpc.AgentActivity)
@@ -176,7 +178,7 @@ func (c *claudeStatus) update(st *state.State, acts map[string]fleetgrpc.AgentAc
 			case fleetgrpc.AgentActivity_AGENT_ACTIVITY_WAITING:
 				idle++
 			}
-			if tracking && c.prev[key] == fleetgrpc.AgentActivity_AGENT_ACTIVITY_WORKING &&
+			if live && c.prev[key] == fleetgrpc.AgentActivity_AGENT_ACTIVITY_WORKING &&
 				act == fleetgrpc.AgentActivity_AGENT_ACTIVITY_WAITING {
 				c.stops = append(c.stops, claudeStatusStop{
 					fleet:    fleetName,
@@ -187,8 +189,11 @@ func (c *claudeStatus) update(st *state.State, acts map[string]fleetgrpc.AgentAc
 			prev[key] = act
 		}
 	}
-	if live {
+	if polled {
 		c.prev = prev
+	}
+	if !live {
+		working, idle = 0, 0
 	}
 
 	cutoff := now.Add(-claudeStatusStopWindow).UnixMilli()

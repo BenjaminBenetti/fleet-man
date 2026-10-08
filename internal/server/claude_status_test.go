@@ -64,12 +64,19 @@ func readStatusFile(t *testing.T, fleetName, instanceName string) (agentstrategy
 func TestClaudeStatusCountsEveryFleet(t *testing.T) {
 	st := statusFleets(t)
 	c := newClaudeStatus(newHub())
-	now := time.UnixMilli(1_000_000)
-	c.update(st, map[string]fleetgrpc.AgentActivity{
+	acts := map[string]fleetgrpc.AgentActivity{
 		"web/alpha": working, "web/beta": waiting,
 		"api/gamma": working, "api/delta": waiting,
 		"api/old": working, // stopped instance: a stale runtime entry, not counted
-	}, now)
+	}
+	// Through the warmup the runtime may still hold activity from before
+	// polling started: not live, no counts.
+	c.update(st, acts, time.UnixMilli(1_000_000))
+	if a, _ := readStatusFile(t, "web", "alpha"); a.Live || a.Working != 0 || a.Instance != "Alpha" {
+		t.Fatalf("web/alpha during the warmup = %+v, want its name only, not live", a)
+	}
+	now := time.UnixMilli(1_000_000).Add(claudeStatusWarmup)
+	c.update(st, acts, now)
 
 	alpha, ok := readStatusFile(t, "web", "alpha")
 	if !ok {
@@ -171,9 +178,14 @@ func TestClaudeStatusGoesNotLiveWithoutPolling(t *testing.T) {
 		t.Fatalf("api/gamma with no TUI = %+v, want its name only, not live", g)
 	}
 
-	// Polling again: no stop from before the gap comes back.
-	tBack := tStop.Add(time.Minute)
+	// Polling again, inside the stop window: the stop from before the gap
+	// does not come back, neither through the warmup nor after it.
+	tBack := tStop.Add(3 * claudeStatusInterval)
 	c.update(st, acts, tBack)
+	if g, _ := readStatusFile(t, "api", "gamma"); g.Live || len(g.Stops) != 0 {
+		t.Fatalf("api/gamma in the warmup after the TUI came back = %+v, want not live, no stops", g)
+	}
+	c.update(st, acts, tBack.Add(claudeStatusWarmup))
 	if g, _ := readStatusFile(t, "api", "gamma"); !g.Live || len(g.Stops) != 0 {
 		t.Fatalf("api/gamma after the TUI came back = %+v, want live with no stops", g)
 	}
@@ -184,8 +196,9 @@ func TestClaudeStatusGoesNotLiveWithoutPolling(t *testing.T) {
 func TestClaudeStatusRewritesOnChangeOrHeartbeat(t *testing.T) {
 	st := statusFleets(t)
 	c := newClaudeStatus(newHub())
-	t0 := time.UnixMilli(1_000_000)
 	acts := map[string]fleetgrpc.AgentActivity{"web/alpha": working}
+	c.update(st, acts, time.UnixMilli(1_000_000)) // polling starts; t0 is past the warmup
+	t0 := time.UnixMilli(1_000_000).Add(claudeStatusWarmup)
 	updatedAt := func() int64 {
 		f, _ := readStatusFile(t, "web", "alpha")
 		return f.UpdatedAt
@@ -284,8 +297,12 @@ func TestClaudeStatusFollowsTheSetting(t *testing.T) {
 
 	h.runtimeWanted.Store(true)
 	c.tick(time.UnixMilli(1_002_000))
+	if f, _ := readStatusFile(t, "web", "alpha"); f.Live {
+		t.Fatalf("live before the warmup ended: %+v", f)
+	}
+	c.tick(time.UnixMilli(1_002_000).Add(claudeStatusWarmup))
 	if f, _ := readStatusFile(t, "web", "alpha"); !f.Live {
-		t.Fatalf("not live with the runtime polled: %+v", f)
+		t.Fatalf("not live with the runtime polled past the warmup: %+v", f)
 	}
 
 	setStatusMod(false)
