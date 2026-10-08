@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
@@ -29,6 +30,10 @@ type hub struct {
 	runtime map[string]*fleetgrpc.InstanceRuntime // key=fleet/instance (owned by the loop; merged in place)
 	subs    map[*subscriber]struct{}
 	agent   *agentTracker // stateful agent-activity detection (owned by the loop)
+	// activityPassAt is when the activity pass whose results the runtime last
+	// took started (owned by the loop): activity in h.runtime is at least that
+	// fresh. Zero before the first pass.
+	activityPassAt time.Time
 
 	// remoteMcp is the latest outbound-MCP-gateway tunnel status (owned by the
 	// loop). It is a computed, server-owned value pushed to clients via the Watch
@@ -144,6 +149,8 @@ func (h *hub) recomputeRuntimeWanted() {
 	}
 	prev := h.runtimeWanted.Swap(want)
 	if want && !prev {
+		// Polling resumes: nothing seen before the gap is a baseline to diff.
+		h.agent.forgetHistory()
 		select {
 		case h.runtimeEdge <- struct{}{}:
 		default:

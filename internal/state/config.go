@@ -20,6 +20,7 @@ type Config struct {
 	RemoteMcpSettings  RemoteMcpSettings  `json:"remote_mcp_settings"`
 	MicSettings        MicSettings        `json:"mic_settings"`
 	ThemeSettings      ThemeSettings      `json:"theme_settings"`
+	ClaudeCodeSettings ClaudeCodeSettings `json:"claude_code_settings"`
 	DefaultBackend     string             `json:"default_backend,omitempty"` // "devcontainer", "coder", or "codespaces"
 }
 

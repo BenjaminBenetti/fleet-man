@@ -56,6 +56,7 @@ func NewRootCmd() *cobra.Command {
 		newLandingPageCmd(),
 		newMCPBridgeCmd(),
 		newMCPEnvCmd(),
+		newClaudeModEnvCmd(),
 		newLaunchCmd(),
 		newVersionCmd(),
 		newServerCmd(),

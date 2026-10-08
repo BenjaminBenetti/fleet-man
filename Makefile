@@ -12,7 +12,7 @@ GOBIN := $(shell go env GOPATH)/bin
 PROTOC_GEN_GO_VERSION      := v1.36.11
 PROTOC_GEN_GO_GRPC_VERSION := v1.5.1
 
-.PHONY: proto proto-check lint build test
+.PHONY: proto proto-check lint build test mod-test
 
 ## proto: regenerate the fleetgrpc Go stubs from the .proto contract.
 ## Requires `buf` on PATH (installed by the devcontainer).
@@ -38,3 +38,10 @@ build:
 ## test: run the import-boundary lint, then the unit tests — mirroring CI.
 test: lint
 	go test ./...
+
+## mod-test: validate and test the fleet status mod (a Claude Code mod in
+## TypeScript, embedded in the fleet binary). Needs `claude` on PATH.
+MOD_DIR := internal/agentstrategy/statusmod
+mod-test:
+	claude plugin validate $(MOD_DIR)
+	claude plugin test $(MOD_DIR)

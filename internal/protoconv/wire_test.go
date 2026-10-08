@@ -156,7 +156,7 @@ func TestFleetSettingsWirePlacement(t *testing.T) {
 }
 
 func TestConfigWirePlacement(t *testing.T) {
-	pinArity[state.Config](t, 9)
+	pinArity[state.Config](t, 10)
 	pinArity[state.GeneralSettings](t, 2)
 	pinArity[state.AgentSettings](t, 1)
 	pinArity[state.DotfilesSettings](t, 3)
@@ -165,9 +165,11 @@ func TestConfigWirePlacement(t *testing.T) {
 	pinArity[state.RemoteMcpSettings](t, 5)
 	pinArity[state.MicSettings](t, 3)
 	pinArity[state.ThemeSettings](t, 1)
+	pinArity[state.ClaudeCodeSettings](t, 1)
 
 	vim := false
 	multi := true
+	statusMod := false
 	pc := ConfigToProto(&state.Config{
 		GeneralSettings:    state.GeneralSettings{TmuxVimKeys: &vim},
 		AgentSettings:      state.AgentSettings{ToolSelection: state.AgentToolCodex},
@@ -178,6 +180,7 @@ func TestConfigWirePlacement(t *testing.T) {
 		DefaultBackend:     string(fleet.BackendCoder),
 		MicSettings:        state.MicSettings{Enabled: true, Device: "md", Client: "mc"},
 		ThemeSettings:      state.ThemeSettings{Name: "tn"},
+		ClaudeCodeSettings: state.ClaudeCodeSettings{StatusMod: &statusMod},
 	})
 	if pc.GetGeneral().TmuxVimKeys == nil || pc.GetGeneral().GetTmuxVimKeys() ||
 		pc.GetGeneral().ShowHelpText != nil {
@@ -203,6 +206,9 @@ func TestConfigWirePlacement(t *testing.T) {
 	}
 	if pc.GetTheme().GetName() != "tn" {
 		t.Fatalf("theme wire placement wrong: %+v", pc.GetTheme())
+	}
+	if cc := pc.GetClaudeCode(); cc.StatusMod == nil || cc.GetStatusMod() {
+		t.Fatalf("claude code tri-state wire placement wrong: %+v", cc)
 	}
 	if pc.GetDefaultBackend() != fleetgrpc.BackendType_BACKEND_TYPE_CODER {
 		t.Fatalf("default backend wire placement wrong: %v", pc.GetDefaultBackend())

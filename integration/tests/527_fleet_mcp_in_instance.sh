@@ -18,7 +18,8 @@ setup_test
 # the plugin's MCP server (the command in its .mcp.json) and call a tool.
 cat > "${FIXTURE_REPO_DIR}/mcp-probe.sh" <<'PROBE'
 echo "PLUGIN_DIRS=[${CLAUDE_CODE_PLUGIN_DIRS:-}]"
-plugin="${CLAUDE_CODE_PLUGIN_DIRS%%:*}"
+# The list holds other plugins too (the fleet status mod): pick the fleet's.
+plugin=$(printf '%s\n' "${CLAUDE_CODE_PLUGIN_DIRS:-}" | tr ':' '\n' | grep '/fleet/mcp/claude-plugin$' | head -n 1)
 [ -n "${plugin}" ] || exit 0
 [ -f "${plugin}/skills/fleet-admiral/SKILL.md" ] && echo "SKILL_PRESENT"
 cat "${plugin}/.mcp.json"
@@ -88,7 +89,7 @@ info "a new instance of the fleet has the socket and its shells the plugin"
 [ -S "${sock}" ] || fail "no MCP socket in the instance's control directory (${sock})"
 out=$(probe)
 printf 'probe:\n%s\n' "${out}"
-assert_contains "${out}" ".cache/fleet/mcp/claude-plugin]" "the shell was not handed the fleet plugin via CLAUDE_CODE_PLUGIN_DIRS"
+assert_contains "${out}" ".cache/fleet/mcp/claude-plugin" "the shell was not handed the fleet plugin via CLAUDE_CODE_PLUGIN_DIRS"
 assert_contains "${out}" "SKILL_PRESENT" "the plugin is missing the fleet-admiral skill"
 assert_contains "${out}" "mcp-bridge" "the plugin's .mcp.json does not run the bridge"
 assert_contains "${out}" '"id":1' "no answer to the MCP initialize"
@@ -104,12 +105,12 @@ fi
 info "turning the setting off takes the socket and the plugin away"
 set_fleet_mcp false
 out=$(probe)
-assert_contains "${out}" "PLUGIN_DIRS=[]" "a shell still got the plugin with the setting off: ${out}"
+assert_not_contains "${out}" ".cache/fleet/mcp/claude-plugin" "a shell still got the plugin with the setting off: ${out}"
 
 info "turning it back on restores both for the running instance"
 set_fleet_mcp true
 out=$(probe)
-assert_contains "${out}" ".cache/fleet/mcp/claude-plugin]" "the plugin did not come back with the setting"
+assert_contains "${out}" ".cache/fleet/mcp/claude-plugin" "the plugin did not come back with the setting"
 assert_contains "${out}" '\"instance\":\"alpha\"' "fleet_list did not answer after the setting came back"
 
 pass "fleet MCP: the fleet setting serves the MCP to the agents in its instances"

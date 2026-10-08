@@ -12,8 +12,10 @@ import (
 // strategy-agnostic owner of agent run-state across tracked containers. It is
 // mutated only on the hub loop (single-threaded), so it needs no internal
 // locking. The stateful per-container Detectors (frame-diff history, claude-hook
-// reads) live here for the server's lifetime; on a version-restart the history
-// resets and seed-on-first-capture (in the detectors) avoids a misleading flip.
+// reads) live here across passes: forgetHistory drops them, with the derived
+// states, when activity polling resumes after a gap, and a version-restart starts
+// them over. Seed-on-first-capture (in the detectors) avoids a misleading flip
+// either way.
 //
 // This is a near-verbatim port of internal/tui/activity.go (which the TUI keeps
 // until Step 7 deletes it, once the server owns the live read path).
@@ -112,6 +114,19 @@ func (t *agentTracker) applyProbe(
 	}
 	newTools[containerID] = state.AgentTool(probeTool)
 	return false
+}
+
+// forgetHistory drops every detector's history and the states derived before.
+// The hub calls it when the activity polling resumes after a gap: the
+// frame-diff detectors would otherwise compare the first fresh capture with a
+// screen from before the gap, and read an agent idle the whole time (on a
+// screen that redrew meanwhile) as working for a while, then as "just
+// stopped"; and a failed first capture would carry a pre-gap state forward the
+// same way. A fresh detector seeds on its first capture instead (StateWaiting),
+// and a failed one reads NotRunning for that pass. The tools are kept.
+func (t *agentTracker) forgetHistory() {
+	t.detectors = make(map[string]agentdetect.Detector)
+	t.states = make(map[string]agentdetect.State)
 }
 
 func (t *agentTracker) detectorFor(containerID string, tool state.AgentTool) agentdetect.Detector {

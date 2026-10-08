@@ -241,6 +241,7 @@ func statsActivityPoller(ctx context.Context, h *hub) {
 }
 
 func statsActivityPass(h *hub) {
+	passStart := time.Now()
 	st, err := state.Load()
 	if err != nil {
 		return
@@ -262,6 +263,7 @@ func statsActivityPass(h *hub) {
 		// No running instances: every cached backend is now stale (the prune in
 		// the main path below never runs on this branch).
 		h.pruneBackends(nil)
+		h.post(func(h *hub) { h.activityPassAt = passStart })
 		return
 	}
 
@@ -366,6 +368,7 @@ func statsActivityPass(h *hub) {
 
 	now := time.Now()
 	h.post(func(h *hub) {
+		h.activityPassAt = passStart
 		h.agent.Update(captures, probes, expectedIDs, now)
 		ups := make([]runtimeUpdate, 0, len(items))
 		for _, it := range items {

@@ -49,12 +49,16 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	// The theme group (issue #251) is seeded the same way: it is a client
 	// preference an older TUI never sends, and a zero base would reset the
 	// look to the default every time such a client saved anything.
+	//
+	// So is the Claude Code group: an older TUI never sends it, and a zero base
+	// would turn a fleet status mod the user switched off back on.
 	base := &state.Config{}
 	micWasEnabled := false
 	if previous, err := state.LoadConfig(); err == nil {
 		micWasEnabled = previous.MicSettings.Enabled
 		base.MicSettings = previous.MicSettings
 		base.ThemeSettings = previous.ThemeSettings
+		base.ClaudeCodeSettings = previous.ClaudeCodeSettings
 	}
 
 	if err := state.SaveConfig(protoconv.ConfigFromProto(req.GetConfig(), base)); err != nil {

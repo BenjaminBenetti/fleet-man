@@ -115,6 +115,16 @@ message ThemeSettings {
   string name = 1;
 }
 
+// ClaudeCodeSettings mirrors internal/state.ClaudeCodeSettings — the global
+// Claude Code integration preferences. status_mod is a *bool tri-state in Go
+// (nil defaults to true): the fleet status mod, a Claude Code plugin in every
+// instance that draws this instance's name and the agents at work across every
+// fleet above the prompt, fed by a status file the daemon keeps in each
+// instance's control directory.
+message ClaudeCodeSettings {
+  optional bool status_mod = 1;
+}
+
 message Config {
   GeneralSettings general = 1;
   AgentSettings agent = 2;
@@ -133,6 +143,7 @@ message Config {
 
   MicSettings mic = 21;
   ThemeSettings theme = 22;
+  ClaudeCodeSettings claude_code = 23;
 }
 
 message GetConfigRequest {}

@@ -1,0 +1,7 @@
+{
+  "name": "fleet-status",
+  "version": "0.0.0-dev",
+  "description": "Shows this fleet instance's name and the agents at work across every fleet above the prompt.",
+  "author": { "name": "fleet-man" },
+  "types": "./types/index.d.ts"
+}

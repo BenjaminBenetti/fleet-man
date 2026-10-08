@@ -138,6 +138,9 @@ func Serve(ctx context.Context) error {
 	// runtime subscriber, so they stay idle until a TUI connects with
 	// subscribe_runtime — no backend traffic for plain `fleet ls`.
 	startRuntimePollers(hubCtx, svc.hub)
+	// The fleet status mod's files in each instance's control directory, while
+	// the global setting is on (refreshed only while the runtime is polled).
+	go newClaudeStatus(svc.hub).run(hubCtx)
 	// Automation scheduler (issue #188): fires Schedule triggers and reaps idle
 	// agents. Runs unconditionally — cron triggers must fire even when no TUI is
 	// connected — and stops on shutdown via hubCtx.

@@ -16,6 +16,7 @@ go build -o ./bin/fleet ./cmd/fleet # build just the fleet binary
 make test                # go test ./...  (unit)
 go vet ./...
 golangci-lint run ./...  # client/server import boundary (depguard)
+make mod-test            # fleet status mod: claude plugin validate + test (needs claude)
 ./integration/run.sh     # full integration suite (needs Docker)
 FLEET_BIN=$(which fleet) ./integration/run.sh   # reuse a prebuilt binary
 ```
