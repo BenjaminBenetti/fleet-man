@@ -700,7 +700,9 @@ fleet-man/feature-auth  ⚑ api/bugfix-42 stopped     ● 3 working  ○ 2 idle 
 - **`● working` / `○ idle`** (right-aligned) — the agents across *every* fleet
   on the daemon, not just this instance (idle is the TUI's `⏸`).
 - **`Admiral connected`** — a fleet MCP server is among this session's tools
-  ([Fleet MCP inside instances](#fleet-mcp-inside-instances)).
+  ([Fleet MCP inside instances](#fleet-mcp-inside-instances)); the instance's
+  own one counts only while the daemon still serves it, so turning the fleet's
+  Fleet MCP off clears it in running sessions too.
 
 On by default; **Settings → Claude Code → Fleet status mod** turns it off, and
 running sessions follow within seconds. The counts are live while a fleet TUI

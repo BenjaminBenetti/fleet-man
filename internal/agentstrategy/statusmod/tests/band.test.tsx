@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { STATUS_FILE, TICK_MS } from '../hooks/view'
+import { MCP_SOCKET, STATUS_FILE, TICK_MS } from '../hooks/view'
 
 const band = (bodyColumns: number) =>
   ({
@@ -18,11 +18,12 @@ const band = (bodyColumns: number) =>
   }) as const
 
 // The world beneath the mod: the session, the status file (undefined =
-// missing), the session's tools, and what is drawn beneath it in the band —
-// the engine's own drawing unless `beneath` names a plugin's band.
+// missing) and the fleet MCP socket, the session's tools, and what is drawn
+// beneath it in the band — the engine's own drawing unless `beneath` names a
+// plugin's band.
 function world(
   on: On,
-  files: { status?: string },
+  files: { status?: string; socket?: boolean },
   tools: { name: string; mcp: boolean }[] = [],
   beneath?: string,
 ) {
@@ -30,6 +31,7 @@ function world(
   on('fs.read', ($, e) =>
     e.path === STATUS_FILE && files.status !== undefined ? { value: files.status } : { deny: 'ENOENT' },
   )
+  on('fs.exists', ($, e) => ({ value: e.path === MCP_SOCKET && files.socket === true }))
   on('tool.list', () => ({ value: tools.map(t => ({ ...t, description: '' })) }))
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     if (beneath === undefined) return { type: 'engine', ref: 0 }
@@ -56,7 +58,7 @@ const statusText = (over: Record<string, unknown> = {}) =>
 
 test('draws the instance, the counts and admiral on every surface', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000 })
-  const files = { status: statusText() }
+  const files = { status: statusText(), socket: true }
   world(on, files, [{ name: 'mcp__plugin_fleet_fleet__fleet_list', mcp: true }])
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await clock.settle()
@@ -132,5 +134,22 @@ test("keeps another plugin's band, stacked above its own", async ($, on) => {
   const ui = await $.ui.mount({ ...band(120), surface: 'terminal' })
   expect(await shown(ui, /my own band/)).toBeDefined()
   expect(await shown(ui, /feature-auth/)).toBeDefined()
+  await ui.unmount()
+})
+
+test("drops Admiral when the instance's fleet MCP socket goes", async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000 })
+  const files = { status: statusText(), socket: true }
+  world(on, files, [{ name: 'mcp__plugin_fleet_fleet__fleet_list', mcp: true }])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ ...band(120), surface: 'terminal' })
+  expect(await shown(ui, /Admiral/)).toBe('Admiral connected')
+
+  // The fleet's Fleet MCP turned off: the daemon closes the socket, while
+  // Claude Code keeps the tools it listed.
+  files.socket = false
+  await clock.advance(TICK_MS)
+  expect(await shown(ui, /Admiral/)).toBe(undefined)
   await ui.unmount()
 })

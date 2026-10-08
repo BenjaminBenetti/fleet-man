@@ -6,6 +6,14 @@ import type { FleetStatusView } from '../types'
 // mod draws nothing.
 export const STATUS_FILE = '/fleet-mounts/control/claude-status.json'
 
+// The socket the daemon serves the fleet MCP on, in an instance whose fleet has
+// the Fleet MCP setting on (mcpbridge.ContainerSocketPath).
+export const MCP_SOCKET = '/fleet-mounts/control/mcp.sock'
+
+// The tools of that fleet MCP, as Claude Code names those of the "fleet"
+// plugin's "fleet" server (`fleet mcp-env`).
+export const INSTANCE_MCP_TOOL_PREFIX = 'mcp__plugin_fleet_fleet__'
+
 // How often the file is read.
 export const TICK_MS = 2_000
 // How long a "stopped" alert stays up.
@@ -117,6 +125,15 @@ export function toView(s: Status, now: number, admiral: boolean, clocks: Clocks)
     stopped: isStale ? [] : stopped,
     admiral,
   }
+}
+
+// isAdmiral reports whether the session has a fleet MCP: a fleet MCP server's
+// tools include fleet_list, whatever the server is named. The instance's own
+// one counts only while its socket is there — the Fleet MCP setting turned off
+// removes the socket, but Claude Code keeps the tools it already listed.
+export function isAdmiral(tools: { name: string; mcp: boolean }[], hasSocket: boolean): boolean {
+  const fleetTools = tools.filter(t => t.mcp && t.name.endsWith('__fleet_list'))
+  return fleetTools.some(t => hasSocket || !t.name.startsWith(INSTANCE_MCP_TOOL_PREFIX))
 }
 
 export const sameView = (a: FleetStatusView | null, b: FleetStatusView | null): boolean =>

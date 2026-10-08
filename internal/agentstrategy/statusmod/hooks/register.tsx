@@ -2,7 +2,18 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { FleetStatusView } from '../types'
-import { GAP, STATUS_FILE, TICK_MS, fitBand, newClocks, parseStatus, sameView, toView } from './view'
+import {
+  GAP,
+  MCP_SOCKET,
+  STATUS_FILE,
+  TICK_MS,
+  fitBand,
+  isAdmiral,
+  newClocks,
+  parseStatus,
+  sameView,
+  toView,
+} from './view'
 
 // The fleet status mod: a band above the prompt naming the fleet instance this
 // Claude Code runs in, how many agents are working and idle across every fleet,
@@ -11,10 +22,6 @@ import { GAP, STATUS_FILE, TICK_MS, fitBand, newClocks, parseStatus, sameView, t
 // the daemon feeds it through STATUS_FILE.
 
 const view = atom({ plugin: 'fleet-status', key: 'view' } as const, null)
-
-// A fleet MCP server's tools carry its fleet_list tool, whatever the server is
-// named here (the in-instance plugin's, or one the user registered).
-const isFleetMCPTool = (t: { name: string; mcp: boolean }) => t.mcp && t.name.endsWith('__fleet_list')
 
 async function readStatus($: EngineInterface) {
   try {
@@ -26,7 +33,8 @@ async function readStatus($: EngineInterface) {
 
 async function hasAdmiral($: EngineInterface) {
   try {
-    return (await $.tool.list()).some(isFleetMCPTool)
+    const tools = await $.tool.list()
+    return isAdmiral(tools, await $.fs.exists(MCP_SOCKET))
   } catch {
     return false
   }

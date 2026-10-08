@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { FleetStatusView } from '../types'
-import { ALERT_MS, STALE_MS, fitBand, newClocks, parseStatus, toView } from '../hooks/view'
+import { ALERT_MS, STALE_MS, fitBand, isAdmiral, newClocks, parseStatus, toView } from '../hooks/view'
 import type { Status } from '../hooks/view'
 
 const status = (over: Partial<Status> = {}): Status => ({
@@ -103,6 +103,25 @@ describe('toView', () => {
     expect(stale.idle).toBe(null)
     // A fresh write brings them back.
     expect(toView(status({ updated_at: 2_000_000 }), 4_002 + STALE_MS, false, clocks).working).toBe(3)
+  })
+})
+
+describe('isAdmiral', () => {
+  const tool = (name: string, mcp = true) => ({ name, mcp })
+
+  test("counts the instance's fleet MCP only while its socket is there", () => {
+    const tools = [tool('Bash', false), tool('mcp__plugin_fleet_fleet__fleet_list')]
+    expect(isAdmiral(tools, true)).toBe(true)
+    expect(isAdmiral(tools, false)).toBe(false)
+  })
+
+  test('counts a fleet MCP registered any other way from its tools alone', () => {
+    expect(isAdmiral([tool('mcp__fleet__fleet_list')], false)).toBe(true)
+  })
+
+  test('needs a fleet_list tool from an MCP server', () => {
+    expect(isAdmiral([tool('mcp__other__list')], true)).toBe(false)
+    expect(isAdmiral([tool('fleet_list', false)], true)).toBe(false)
   })
 })
 

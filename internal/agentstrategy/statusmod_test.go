@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
+	"github.com/BenjaminBenetti/fleet-man/internal/mcpbridge"
 )
 
 func TestStatusModShipsTheModButNotItsTests(t *testing.T) {
@@ -119,5 +120,14 @@ func TestStatusModFileMatchesTheModsReader(t *testing.T) {
 	path := control.ContainerMountDir + "/" + StatusModFileName
 	if !strings.Contains(string(src), `STATUS_FILE = '`+path+`'`) {
 		t.Errorf("view.ts must read the status file at %s", path)
+	}
+	// Admiral: the instance's fleet MCP socket, and how Claude Code names the
+	// tools of the fleet MCP plugin's server (mcp__plugin_<plugin>_<server>__).
+	if !strings.Contains(string(src), `MCP_SOCKET = '`+mcpbridge.ContainerSocketPath+`'`) {
+		t.Errorf("view.ts must check the fleet MCP socket at %s", mcpbridge.ContainerSocketPath)
+	}
+	prefix := "mcp__plugin_" + claudePluginName + "_" + claudePluginName + "__"
+	if !strings.Contains(string(src), `INSTANCE_MCP_TOOL_PREFIX = '`+prefix+`'`) {
+		t.Errorf("view.ts must know the fleet MCP plugin's tools by %s", prefix)
 	}
 }
