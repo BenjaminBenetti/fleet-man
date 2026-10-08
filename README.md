@@ -690,16 +690,16 @@ Every devcontainer instance's Claude Code gets a fleet mod that draws a band
 above the prompt:
 
 ```
-fleet-man/feature-auth  ● 3 working  ○ 2 idle  ⚑ api/bugfix-42 stopped     admiral connected
+fleet-man/feature-auth  ⚑ api/bugfix-42 stopped     ● 3 working  ○ 2 idle  Admiral connected
 ```
 
 - **`fleet/instance`** — the instance this Claude Code runs in, so you don't
   type into the wrong one.
-- **`● working` / `○ idle`** — the agents across *every* fleet on the daemon
-  (idle is the TUI's `⏸`).
 - **`⚑ … stopped`** — another instance's agent just went from working to idle;
   shown for about 15 seconds.
-- **`admiral connected`** — a fleet MCP server is among this session's tools
+- **`● working` / `○ idle`** (right-aligned) — the agents across *every* fleet
+  on the daemon, not just this instance (idle is the TUI's `⏸`).
+- **`Admiral connected`** — a fleet MCP server is among this session's tools
   ([Fleet MCP inside instances](#fleet-mcp-inside-instances)).
 
 On by default; **Settings → Claude Code → Fleet status mod** turns it off, and

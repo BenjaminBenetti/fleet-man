@@ -58,7 +58,7 @@ test('draws the instance, the counts and admiral on every surface', async ($, on
     expect(await shown(ui, /^fleet-man\/feature-auth$/)).toBeDefined()
     expect(await shown(ui, /working/)).toBe('● 3 working')
     expect(await shown(ui, /idle/)).toBe('○ 2 idle')
-    expect(await shown(ui, /admiral/)).toBe('admiral connected')
+    expect(await shown(ui, /Admiral/)).toBe('Admiral connected')
     expect(await shown(ui, /⚑/)).toBe(undefined)
     await ui.unmount()
   }
@@ -71,7 +71,7 @@ test('raises a stop for a while, then lets it go', async ($, on) => {
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await clock.settle()
   const ui = await $.ui.mount({ ...band(120), surface: 'terminal' })
-  expect(await shown(ui, /admiral/)).toBe(undefined)
+  expect(await shown(ui, /Admiral/)).toBe(undefined)
 
   files.status = statusText({ updated_at: 3_000, working: 2, idle: 3, stops: [{ fleet: 'api', instance: 'bugfix-42', at: 3_000 }] })
   await clock.advance(TICK_MS)

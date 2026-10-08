@@ -14,8 +14,9 @@ const status = (over: Partial<Status> = {}): Status => ({
   ...over,
 })
 
+// The band as text: left || right, each side's segments joined by " | ".
 const text = (band: ReturnType<typeof fitBand>) =>
-  [...band.left.map(s => s.text), ...(band.right ? [band.right.text] : [])].join(' | ')
+  [band.left, band.right].map(side => side.map(s => s.text).join(' | ')).join(' || ')
 
 describe('parseStatus', () => {
   test('reads the file the daemon writes', () => {
@@ -82,23 +83,23 @@ describe('fitBand', () => {
 
   test('spells everything out when there is room', () => {
     expect(text(fitBand(v, 200))).toBe(
-      'fleet-man/feature-auth | ● 3 working | ○ 2 idle | ⚑ api/bugfix-42, web/cache stopped | admiral connected',
+      'fleet-man/feature-auth | ⚑ api/bugfix-42, web/cache stopped || ● 3 working | ○ 2 idle | Admiral connected',
     )
   })
 
   test('shortens step by step as the band narrows', () => {
-    expect(text(fitBand(v, 80))).toBe('fleet-man/feature-auth | ●3 | ○2 | ⚑ api/bugfix-42, web/cache | admiral')
-    expect(text(fitBand(v, 60))).toBe('fleet-man/feature-auth | ●3 | ○2 | ⚑ api/bugfix-42 +1 | admiral')
-    expect(text(fitBand(v, 50))).toBe('fleet-man/feature-auth | ●3 | ○2 | ⚑ api/bugfix-42 +1')
-    expect(text(fitBand(v, 36))).toBe('fleet-man/feature-auth | ●3 | ○2')
+    expect(text(fitBand(v, 80))).toBe('fleet-man/feature-auth | ⚑ api/bugfix-42, web/cache || ●3 | ○2 | Admiral')
+    expect(text(fitBand(v, 60))).toBe('fleet-man/feature-auth | ⚑ api/bugfix-42 +1 || ●3 | ○2 | Admiral')
+    expect(text(fitBand(v, 50))).toBe('fleet-man/feature-auth | ⚑ api/bugfix-42 +1 || ●3 | ○2')
+    expect(text(fitBand(v, 36))).toBe('fleet-man/feature-auth || ●3 | ○2')
   })
 
   test('never drops the instance name', () => {
-    expect(text(fitBand(v, 10))).toBe('fleet-man/feature-auth')
+    expect(text(fitBand(v, 10))).toBe('fleet-man/feature-auth || ')
   })
 
   test('leaves out what it does not know', () => {
     const quiet = fitBand({ ...v, working: null, idle: null, stopped: [], admiral: false }, 200)
-    expect(text(quiet)).toBe('fleet-man/feature-auth')
+    expect(text(quiet)).toBe('fleet-man/feature-auth || ')
   })
 })

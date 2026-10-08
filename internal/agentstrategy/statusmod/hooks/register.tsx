@@ -75,10 +75,14 @@ export const register: Register = on => {
             </Text>
           ))}
         </Box>
-        {band.right && (
-          <Text key={band.right.key} color={band.right.color}>
-            {band.right.text}
-          </Text>
+        {band.right.length > 0 && (
+          <Box flexDirection="row" columnGap={GAP} flexShrink={0}>
+            {band.right.map(s => (
+              <Text key={s.key} color={s.color} bold={s.bold} dimColor={s.dim}>
+                {s.text}
+              </Text>
+            ))}
+          </Box>
         )}
       </Box>
     )

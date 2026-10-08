@@ -115,9 +115,10 @@ export const sameView = (a: FleetStatusView | null, b: FleetStatusView | null): 
 // One run of text in the band.
 export type Segment = { key: string; text: string; color?: string; bold?: boolean; dim?: boolean }
 
-// The band laid out for a width: the segments on the left, and the one pinned
-// to the right (admiral), if any.
-export type Band = { left: Segment[]; right: Segment | null }
+// The band laid out for a width: what is about this instance on the left (its
+// name, then the agents that just stopped), and what is fleet-wide pinned to
+// the right (the counts across every fleet, then admiral).
+export type Band = { left: Segment[]; right: Segment[] }
 
 // The cells between two segments.
 export const GAP = 2
@@ -129,7 +130,7 @@ const STOPPED = 'warning'
 const ADMIRAL = 'ide'
 
 const width = (band: Band): number => {
-  const parts = [...band.left, ...(band.right ? [band.right] : [])]
+  const parts = [...band.left, ...band.right]
   return parts.reduce((n, p) => n + [...p.text].length, 0) + GAP * Math.max(0, parts.length - 1)
 }
 
@@ -149,8 +150,16 @@ export function fitBand(v: FleetStatusView, columns: number): Band {
     counts: boolean
   }): Band => {
     const left: Segment[] = [name]
+    const right: Segment[] = []
+    if (v.stopped.length > 0 && o.stops !== 'none') {
+      const shown = o.stops === 'all' ? v.stopped : v.stopped.slice(0, 1)
+      const more = v.stopped.length - shown.length
+      const text =
+        `⚑ ${stoppedList(shown)}` + (more > 0 ? ` +${more}` : '') + (o.compact ? '' : ' stopped')
+      left.push({ key: 'stopped', text, color: STOPPED })
+    }
     if (hasCounts && o.counts) {
-      left.push(
+      right.push(
         o.compact
           ? { key: 'working', text: `●${v.working}`, color: WORKING }
           : { key: 'working', text: `● ${v.working} working`, color: WORKING },
@@ -159,17 +168,9 @@ export function fitBand(v: FleetStatusView, columns: number): Band {
           : { key: 'idle', text: `○ ${v.idle} idle`, dim: true },
       )
     }
-    if (v.stopped.length > 0 && o.stops !== 'none') {
-      const shown = o.stops === 'all' ? v.stopped : v.stopped.slice(0, 1)
-      const more = v.stopped.length - shown.length
-      const text =
-        `⚑ ${stoppedList(shown)}` + (more > 0 ? ` +${more}` : '') + (o.compact ? '' : ' stopped')
-      left.push({ key: 'stopped', text, color: STOPPED })
+    if (v.admiral && o.admiral) {
+      right.push({ key: 'admiral', text: o.compact ? 'Admiral' : 'Admiral connected', color: ADMIRAL })
     }
-    const right: Segment | null =
-      v.admiral && o.admiral
-        ? { key: 'admiral', text: o.compact ? 'admiral' : 'admiral connected', color: ADMIRAL }
-        : null
     return { left, right }
   }
 
