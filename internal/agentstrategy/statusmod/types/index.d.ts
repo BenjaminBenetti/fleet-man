@@ -3,8 +3,8 @@
 export type FleetStatusView = {
   // "<fleet>/<instance>" of the instance this Claude Code runs in.
   label: string
-  // Agents working and idle (paused) across every fleet; null when the
-  // daemon's status file has gone stale (no fleet TUI connected).
+  // Agents working and idle (paused) across every fleet; null while they are
+  // not live (no fleet TUI connected, or a file not yet seen to change).
   working: number | null
   idle: number | null
   // "<fleet>/<instance>" of each other agent that paused moments ago.

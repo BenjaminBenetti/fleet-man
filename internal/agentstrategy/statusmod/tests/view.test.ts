@@ -6,6 +6,7 @@ import type { Status } from '../hooks/view'
 
 const status = (over: Partial<Status> = {}): Status => ({
   updated_at: 1_000_000,
+  live: true,
   fleet: 'fleet-man',
   instance: 'feature-auth',
   working: 3,
@@ -24,6 +25,11 @@ describe('parseStatus', () => {
     expect(parseStatus(JSON.stringify(s))).toEqual(s)
   })
 
+  test('reads a file without live as not live', () => {
+    const { live: _, ...old } = status()
+    expect(parseStatus(JSON.stringify(old))?.live).toBe(false)
+  })
+
   test('refuses what is not a status', () => {
     expect(parseStatus('not json')).toBe(null)
     expect(parseStatus('null')).toBe(null)
@@ -38,13 +44,40 @@ describe('parseStatus', () => {
 })
 
 describe('toView', () => {
-  test('labels the instance and carries the counts', () => {
-    const v = toView(status(), 0, true, newClocks())
+  // seen returns clocks that have read `s` once, at mod time 0.
+  const seen = (s: Status) => {
+    const clocks = newClocks()
+    toView(s, 0, false, clocks)
+    return clocks
+  }
+
+  test('labels the instance and carries the counts once the file is seen to change', () => {
+    const clocks = seen(status())
+    const v = toView(status({ updated_at: 1_004_000 }), 4_000, true, clocks)
     expect(v).toEqual({ label: 'fleet-man/feature-auth', working: 3, idle: 2, stopped: [], admiral: true })
   })
 
-  test('shows a stop for ALERT_MS of the mod clock, whatever the daemon clock says', () => {
+  test('trusts nothing on the first read: a file nobody refreshes reads the same', () => {
+    const s = status({ stops: [{ fleet: 'api', instance: 'bugfix-42', at: 999_990 }] })
     const clocks = newClocks()
+    for (const now of [0, 2_000, 60_000]) {
+      const v = toView(s, now, false, clocks)
+      expect(v.label).toBe('fleet-man/feature-auth')
+      expect(v.working).toBe(null)
+      expect(v.stopped).toEqual([])
+    }
+  })
+
+  test('shows no counts while the daemon says they are not live', () => {
+    const clocks = seen(status({ live: false }))
+    const v = toView(status({ live: false, updated_at: 1_004_000 }), 4_000, false, clocks)
+    expect(v.working).toBe(null)
+    expect(v.idle).toBe(null)
+    expect(v.stopped).toEqual([])
+  })
+
+  test('shows a stop for ALERT_MS of the mod clock, whatever the daemon clock says', () => {
+    const clocks = seen(status({ updated_at: 48_000 }))
     // The daemon wrote the stop 2s after it happened; the mod clock is far off.
     const s = status({ updated_at: 50_000, stops: [{ fleet: 'api', instance: 'bugfix-42', at: 48_000 }] })
     expect(toView(s, 7, false, clocks).stopped).toEqual(['api/bugfix-42'])
@@ -53,22 +86,23 @@ describe('toView', () => {
   })
 
   test('names an instance once when it stopped twice', () => {
+    const clocks = seen(status({ updated_at: 998_000 }))
     const stops = [
       { fleet: 'api', instance: 'a', at: 999_000 },
       { fleet: 'api', instance: 'a', at: 1_000_000 },
     ]
-    expect(toView(status({ stops }), 0, false, newClocks()).stopped).toEqual(['api/a'])
+    expect(toView(status({ stops }), 1, false, clocks).stopped).toEqual(['api/a'])
   })
 
   test('hides the counts once the file stops changing', () => {
-    const clocks = newClocks()
-    toView(status(), 0, false, clocks)
-    expect(toView(status(), STALE_MS, false, clocks).working).toBe(3)
-    const stale = toView(status(), STALE_MS + 1, false, clocks)
+    const clocks = seen(status())
+    toView(status({ updated_at: 1_004_000 }), 4_000, false, clocks)
+    expect(toView(status({ updated_at: 1_004_000 }), 4_000 + STALE_MS, false, clocks).working).toBe(3)
+    const stale = toView(status({ updated_at: 1_004_000 }), 4_001 + STALE_MS, false, clocks)
     expect(stale.working).toBe(null)
     expect(stale.idle).toBe(null)
     // A fresh write brings them back.
-    expect(toView(status({ updated_at: 2_000_000 }), STALE_MS + 2, false, clocks).working).toBe(3)
+    expect(toView(status({ updated_at: 2_000_000 }), 4_002 + STALE_MS, false, clocks).working).toBe(3)
   })
 })
 

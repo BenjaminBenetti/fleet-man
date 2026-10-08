@@ -705,7 +705,10 @@ fleet-man/feature-auth  ⚑ api/bugfix-42 stopped     ● 3 working  ○ 2 idle 
 On by default; **Settings → Claude Code → Fleet status mod** turns it off, and
 running sessions follow within seconds. The counts are live while a fleet TUI
 is connected (the daemon only polls agents then); without one the band shows
-just the name. The band shortens to fit narrow terminals, the name last.
+just the name. The band shortens to fit narrow terminals, the name last. The
+band above the prompt is one slot: when fleet's mod hooks first, a band your
+own mod draws there is kept, stacked above fleet's; a mod hooked before
+fleet's that draws its own band without handing on hides fleet's.
 
 `~/.fleet/fleet.rc` runs `fleet claude-mod-env`, which writes the mod (it ships
 inside the fleet binary) under `~/.cache/fleet/claude-mod` and adds it to

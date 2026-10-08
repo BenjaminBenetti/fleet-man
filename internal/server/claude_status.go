@@ -25,8 +25,10 @@ import (
 // With the setting off the files are removed, and the mod draws nothing.
 //
 // Agent activity is only polled while a TUI subscribes to runtime (the
-// pollers' gate), so the files are only refreshed then; the mod stops trusting
-// the counts once the file stops changing.
+// pollers' gate). Without one the files still name their instance but are
+// marked not live — no counts, no stops — so the mod shows just the name; the
+// mod also stops trusting counts in a file that has stopped changing (a daemon
+// that died), and never trusts its first read of one.
 //
 // The control directory is writable from inside the instance, so the file is
 // written by temp+rename (atomicfile) and removed by unlink: a symlink planted
@@ -35,9 +37,10 @@ import (
 const (
 	// claudeStatusInterval is how often the files are brought up to date.
 	claudeStatusInterval = 2 * time.Second
-	// claudeStatusHeartbeat is how often an unchanged file is rewritten anyway,
-	// so the mod can tell live counts from a file nobody refreshes.
-	claudeStatusHeartbeat = 10 * time.Second
+	// claudeStatusHeartbeat is how often an unchanged live file is rewritten
+	// anyway, so the mod can tell live counts from a file nobody refreshes. It
+	// is also how long a new session waits to show the counts.
+	claudeStatusHeartbeat = 4 * time.Second
 	// claudeStatusStopWindow is how long a stop stays in the files.
 	claudeStatusStopWindow = 30 * time.Second
 	// claudeStatusWarmup is how long after the activity polling (re)starts
@@ -110,6 +113,7 @@ func (c *claudeStatus) tick(now time.Time) {
 	c.cleared = false
 	if !c.h.runtimeWanted.Load() {
 		c.pause()
+		c.update(st, nil, now)
 		return
 	}
 	acts, ok := c.activities()
@@ -140,19 +144,22 @@ func (c *claudeStatus) activities() (map[string]fleetgrpc.AgentActivity, bool) {
 }
 
 // pause forgets the activity while it is not polled: a change seen across the
-// gap is no "just stopped".
+// gap is no "just stopped", and no stop from before it is "recent".
 func (c *claudeStatus) pause() {
 	c.prev = nil
 	c.trackFrom = time.Time{}
+	c.stops = nil
 }
 
 // update counts the agents of every running instance, records the stops since
-// the last update, and writes each mounted instance its file.
+// the last update, and writes each mounted instance its file. A nil acts means
+// the activity is not being polled: the files are written not live.
 func (c *claudeStatus) update(st *state.State, acts map[string]fleetgrpc.AgentActivity, now time.Time) {
-	if c.prev == nil {
+	live := acts != nil
+	if live && c.prev == nil {
 		c.trackFrom = now.Add(claudeStatusWarmup)
 	}
-	tracking := !now.Before(c.trackFrom)
+	tracking := live && !now.Before(c.trackFrom)
 
 	working, idle := 0, 0
 	prev := make(map[string]fleetgrpc.AgentActivity)
@@ -180,7 +187,9 @@ func (c *claudeStatus) update(st *state.State, acts map[string]fleetgrpc.AgentAc
 			prev[key] = act
 		}
 	}
-	c.prev = prev
+	if live {
+		c.prev = prev
+	}
 
 	cutoff := now.Add(-claudeStatusStopWindow).UnixMilli()
 	for len(c.stops) > 0 && c.stops[0].stop.At < cutoff {
@@ -199,6 +208,7 @@ func (c *claudeStatus) update(st *state.State, acts map[string]fleetgrpc.AgentAc
 			}
 			seen[dir] = true
 			file := agentstrategy.StatusModFile{
+				Live:     live,
 				Fleet:    fleetName,
 				Instance: inst.GetDisplayName(),
 				Working:  working,
@@ -227,15 +237,15 @@ func (c *claudeStatus) stopsElsewhere(fleetName, instanceName string) []agentstr
 	return stops
 }
 
-// write writes dir's status file when its content changed, or when it is due
-// a heartbeat. A failed write is tried again on the next update.
+// write writes dir's status file when its content changed, or when a live
+// file is due a heartbeat. A failed write is tried again on the next update.
 func (c *claudeStatus) write(dir string, file agentstrategy.StatusModFile, now time.Time) {
 	body, err := json.Marshal(file)
 	if err != nil {
 		return
 	}
 	last, ok := c.written[dir]
-	if ok && bytes.Equal(last.body, body) && now.Sub(last.at) < claudeStatusHeartbeat {
+	if ok && bytes.Equal(last.body, body) && (!file.Live || now.Sub(last.at) < claudeStatusHeartbeat) {
 		return
 	}
 	file.UpdatedAt = now.UnixMilli()
@@ -254,7 +264,6 @@ func (c *claudeStatus) write(dir string, file agentstrategy.StatusModFile, now t
 // left behind).
 func (c *claudeStatus) removeAll(st *state.State) {
 	c.pause()
-	c.stops = nil
 	if c.cleared {
 		return
 	}

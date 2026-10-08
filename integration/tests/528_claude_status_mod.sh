@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Description: Fleet status mod — every devcontainer instance's shells load the
 # fleet-status Claude Code mod (CLAUDE_CODE_PLUGIN_DIRS → a plugin of function
-# hooks the fleet binary carries), and while a TUI has the runtime polled the
-# daemon keeps the mod's status file in each instance's control directory:
-# readable inside the instance, naming it, with the agent counts. Turning the
-# global "Fleet status mod" setting off removes the file (the mod then draws
+# hooks the fleet binary carries), and the daemon keeps the mod's status file in
+# each instance's control directory: readable inside the instance, naming it,
+# live (with the agent counts) only while a TUI has the runtime polled. Turning
+# the global "Fleet status mod" setting off removes the file (the mod then draws
 # nothing); turning it on brings it back for the running instance.
 set -euo pipefail
 
@@ -56,15 +56,22 @@ assert_contains "${out}" ".cache/fleet/claude-mod/fleet-status" "the shell was n
 assert_contains "${out}" "register.tsx" "the mod's hooks module was not written"
 assert_contains "${out}" '"name": "fleet-status"' "the mod's manifest was not written"
 
-info "with no TUI the runtime is not polled: no status file yet"
-sleep 3
-[ ! -e "${status_file}" ] || fail "a status file was written with nothing polling the agents: $(cat "${status_file}")"
+info "with no TUI the runtime is not polled: the file only names the instance"
+wait_status present
+host=$(cat "${status_file}")
+printf 'status file: %s\n' "${host}"
+assert_contains "${host}" '"instance":"alpha"' "the not-live status file does not name the instance"
+assert_contains "${host}" '"live":false' "a status file claims live counts with nothing polling the agents"
 
-info "with a TUI connected the daemon writes the instance its status file"
+info "with a TUI connected the file goes live, with the agent counts"
 tui_spawn
 tui_wait_for "alpha" 15
 tui_wait_for "○ idle" 60
-wait_status present
+deadline=$(( $(date +%s) + $(_scale_timeout 30) ))
+until grep -q '"live":true' "${status_file}" 2>/dev/null; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "the status file never went live: $(cat "${status_file}" 2>/dev/null)"
+  sleep 0.5
+done
 host=$(cat "${status_file}")
 printf 'status file: %s\n' "${host}"
 assert_contains "${host}" "\"fleet\":\"${FIXTURE_REPO_NAME}\"" "the status file does not name the fleet"

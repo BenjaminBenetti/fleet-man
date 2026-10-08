@@ -59,14 +59,18 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // The band is one slot. A survey has it to itself; a band another plugin
+  // beneath draws is kept, stacked above this one; only the engine's own empty
+  // drawing is replaced.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const v = await read($, view)
     if (v === null || e.props.hasSurvey) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
     const band = fitBand(v, e.props.bodyColumns)
+    const below = await next(e)
 
-    return (
+    const row = (
       <Box flexDirection="row" justifyContent="space-between" columnGap={GAP}>
         <Box flexDirection="row" columnGap={GAP} flexShrink={1}>
           {band.left.map(s => (
@@ -84,6 +88,13 @@ export const register: Register = on => {
             ))}
           </Box>
         )}
+      </Box>
+    )
+    if (below.type === 'engine') return row
+    return (
+      <Box flexDirection="column">
+        {below}
+        {row}
       </Box>
     )
   })

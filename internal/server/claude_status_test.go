@@ -76,10 +76,10 @@ func TestClaudeStatusCountsEveryFleet(t *testing.T) {
 		t.Fatal("web/alpha has no status file")
 	}
 	want := agentstrategy.StatusModFile{
-		UpdatedAt: now.UnixMilli(), Fleet: "web", Instance: "Alpha",
+		UpdatedAt: now.UnixMilli(), Live: true, Fleet: "web", Instance: "Alpha",
 		Working: 2, Idle: 2, Stops: []agentstrategy.StatusModStop{},
 	}
-	if alpha.UpdatedAt != want.UpdatedAt || alpha.Fleet != want.Fleet || alpha.Instance != want.Instance ||
+	if alpha.UpdatedAt != want.UpdatedAt || !alpha.Live || alpha.Fleet != want.Fleet || alpha.Instance != want.Instance ||
 		alpha.Working != want.Working || alpha.Idle != want.Idle || len(alpha.Stops) != 0 {
 		t.Fatalf("web/alpha = %+v, want %+v", alpha, want)
 	}
@@ -147,6 +147,38 @@ func TestClaudeStatusReportsStopsElsewhere(t *testing.T) {
 	}
 }
 
+// TestClaudeStatusGoesNotLiveWithoutPolling: when the last TUI leaves, every
+// file is rewritten not live, its counts and recent stops dropped, so a
+// session started then shows only the name — not counts or a stop from
+// before, as if they were current.
+func TestClaudeStatusGoesNotLiveWithoutPolling(t *testing.T) {
+	st := statusFleets(t)
+	c := newClaudeStatus(newHub())
+	t0 := time.UnixMilli(1_000_000)
+	acts := map[string]fleetgrpc.AgentActivity{"web/alpha": working, "web/beta": working}
+	c.update(st, acts, t0)
+	tStop := t0.Add(claudeStatusWarmup + claudeStatusInterval)
+	acts["web/alpha"] = waiting
+	c.update(st, acts, tStop)
+	if g, _ := readStatusFile(t, "api", "gamma"); !g.Live || len(g.Stops) != 1 {
+		t.Fatalf("api/gamma before the TUI left = %+v, want live with one stop", g)
+	}
+
+	c.pause()
+	c.update(st, nil, tStop.Add(claudeStatusInterval))
+	g, ok := readStatusFile(t, "api", "gamma")
+	if !ok || g.Live || g.Working != 0 || g.Idle != 0 || len(g.Stops) != 0 || g.Instance != "gamma" {
+		t.Fatalf("api/gamma with no TUI = %+v, want its name only, not live", g)
+	}
+
+	// Polling again: no stop from before the gap comes back.
+	tBack := tStop.Add(time.Minute)
+	c.update(st, acts, tBack)
+	if g, _ := readStatusFile(t, "api", "gamma"); !g.Live || len(g.Stops) != 0 {
+		t.Fatalf("api/gamma after the TUI came back = %+v, want live with no stops", g)
+	}
+}
+
 // TestClaudeStatusRewritesOnChangeOrHeartbeat: an unchanged file is left alone
 // until its heartbeat; a change is written at once.
 func TestClaudeStatusRewritesOnChangeOrHeartbeat(t *testing.T) {
@@ -174,6 +206,15 @@ func TestClaudeStatusRewritesOnChangeOrHeartbeat(t *testing.T) {
 	c.update(st, acts, tBeat)
 	if got := updatedAt(); got != tBeat.UnixMilli() {
 		t.Fatalf("no heartbeat (updated_at %d)", got)
+	}
+
+	// Not live there is nothing to keep fresh: no heartbeat.
+	tOff := tBeat.Add(claudeStatusInterval)
+	c.pause()
+	c.update(st, nil, tOff)
+	c.update(st, nil, tOff.Add(2*claudeStatusHeartbeat))
+	if got := updatedAt(); got != tOff.UnixMilli() {
+		t.Fatalf("a not-live file got a heartbeat (updated_at %d)", got)
 	}
 }
 
@@ -212,8 +253,8 @@ func TestClaudeStatusNeverFollowsAPlantedSymlink(t *testing.T) {
 }
 
 // TestClaudeStatusFollowsTheSetting: with the setting off every file goes (a
-// previous daemon's too); with it on, files are only written while a TUI has
-// the runtime polled.
+// previous daemon's too); with it on, every file names its instance, and is
+// live only while a TUI has the runtime polled.
 func TestClaudeStatusFollowsTheSetting(t *testing.T) {
 	st := statusFleets(t)
 	if err := state.Save(st); err != nil {
@@ -234,17 +275,17 @@ func TestClaudeStatusFollowsTheSetting(t *testing.T) {
 	}
 	hasFile := func() bool { _, ok := readStatusFile(t, "web", "alpha"); return ok }
 
-	// No subscriber: nothing is polled, nothing written.
+	// No subscriber: nothing is polled, so the file only names the instance.
 	setStatusMod(true)
 	c.tick(time.UnixMilli(1_000_000))
-	if hasFile() {
-		t.Fatal("a file was written with no runtime polled")
+	if f, ok := readStatusFile(t, "web", "alpha"); !ok || f.Live || f.Instance != "Alpha" {
+		t.Fatalf("with no runtime polled: %+v (present %v), want the name, not live", f, ok)
 	}
 
 	h.runtimeWanted.Store(true)
 	c.tick(time.UnixMilli(1_002_000))
-	if !hasFile() {
-		t.Fatal("no file with the setting on and the runtime polled")
+	if f, _ := readStatusFile(t, "web", "alpha"); !f.Live {
+		t.Fatalf("not live with the runtime polled: %+v", f)
 	}
 
 	setStatusMod(false)

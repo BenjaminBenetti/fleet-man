@@ -42,6 +42,9 @@ type StatusModFile struct {
 	// UpdatedAt is when the daemon wrote the file, in Unix milliseconds; it
 	// is rewritten every few seconds while the counts are live.
 	UpdatedAt int64 `json:"updated_at"`
+	// Live is false while no fleet TUI is connected: agent activity is not
+	// polled then, so the file only names the instance (no counts, no stops).
+	Live bool `json:"live"`
 	// Fleet and Instance name the instance the file is for (the instance's
 	// display name).
 	Fleet    string `json:"fleet"`

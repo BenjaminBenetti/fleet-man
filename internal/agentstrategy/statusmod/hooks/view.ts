@@ -10,14 +10,16 @@ export const STATUS_FILE = '/fleet-mounts/control/claude-status.json'
 export const TICK_MS = 2_000
 // How long a "stopped" alert stays up.
 export const ALERT_MS = 15_000
-// How long after the daemon last rewrote the file its counts are trusted. The
-// daemon refreshes it every few seconds while a fleet TUI is connected (agent
-// activity is only polled then).
-export const STALE_MS = 30_000
+// How long after the file last changed its counts are trusted. While the
+// counts are live the daemon rewrites it every few seconds.
+export const STALE_MS = 15_000
 
-// The file as the daemon writes it (agentstrategy.StatusModFile).
+// The file as the daemon writes it (agentstrategy.StatusModFile). `live` is
+// false while no fleet TUI is connected: agent activity is not polled then,
+// so the file only names the instance.
 export type Status = {
   updated_at: number
+  live: boolean
   fleet: string
   instance: string
   working: number
@@ -53,6 +55,7 @@ export function parseStatus(text: string): Status | null {
   }
   return {
     updated_at: s.updated_at,
+    live: s.live === true,
     fleet: s.fleet,
     instance: s.instance,
     working: s.working,
@@ -65,22 +68,28 @@ export function parseStatus(text: string): Status | null {
 // mod's own clock: the daemon's (updated_at, at) is only ever compared with
 // itself, so a container clock that drifts from the host's changes nothing.
 export type Clocks = {
-  // updated_at of the last read, and when (mod clock) it last changed.
-  updatedAt: number
+  // updated_at of the last read (null before the first), and when (mod
+  // clock) it was last seen to change.
+  updatedAt: number | null
   freshAt: number
   // When each stop (by key) started, translated onto the mod clock.
   stopSeen: Map<string, number>
 }
 
-export const newClocks = (): Clocks => ({ updatedAt: -1, freshAt: 0, stopSeen: new Map() })
+// A session (or a reload of the mod) starts knowing nothing: until the file is
+// seen to change, its counts and stops may be what a daemon left behind long
+// ago — no TUI since, or a daemon that died — so they are not shown.
+export const newClocks = (): Clocks => ({ updatedAt: null, freshAt: -Infinity, stopSeen: new Map() })
 
 // toView turns a read of the file at `now` (mod clock) into what the band shows.
 export function toView(s: Status, now: number, admiral: boolean, clocks: Clocks): FleetStatusView {
+  const isFirstRead = clocks.updatedAt === null
   if (s.updated_at !== clocks.updatedAt) {
+    // The first read proves nothing about freshness; only a change does.
+    if (!isFirstRead) clocks.freshAt = now
     clocks.updatedAt = s.updated_at
-    clocks.freshAt = now
   }
-  const isStale = now - clocks.freshAt > STALE_MS
+  const isStale = !s.live || now - clocks.freshAt > STALE_MS
 
   const stopped: string[] = []
   const live = new Set<string>()
@@ -90,8 +99,9 @@ export function toView(s: Status, now: number, admiral: boolean, clocks: Clocks)
     live.add(key)
     let seen = clocks.stopSeen.get(key)
     if (seen === undefined) {
-      // Its age by the daemon's clock, carried over to ours.
-      seen = now - Math.max(0, s.updated_at - stop.at)
+      // Its age by the daemon's clock, carried over to ours. One already in
+      // the file on the first read is of unknown age: taken as long gone.
+      seen = isFirstRead ? -Infinity : now - Math.max(0, s.updated_at - stop.at)
       clocks.stopSeen.set(key, seen)
     }
     if (now - seen < ALERT_MS && !stopped.includes(name)) stopped.push(name)
