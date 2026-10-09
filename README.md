@@ -152,8 +152,11 @@ on Linux). Auto-review handles eligible approval requests; actions it rejects ma
 still need your input.
 
 Codex's Linux workspace sandbox requires working bubblewrap/user namespaces
-inside the container. Some Docker host security policies block these even when
-Codex installs and loads its configuration successfully. See the
+inside the container. Standard unprivileged Fleet instances may be unable to
+create these namespaces; this reproduces with Fleet's own integration fixture,
+so Codex's workspace sandbox may be unavailable even when installation and
+configuration succeed. If Codex then requests approval to run outside its sandbox,
+eligible requests go to automatic review instead of the user. See the
 [Codex container sandbox guidance](https://learn.chatgpt.com/docs/agent-approvals-security).
 Fleet configures the approval mode but does not change the container's security
 options.

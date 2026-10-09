@@ -46,20 +46,24 @@ configure_auto_mode() (
     echo "flock is required to configure Codex auto mode (install util-linux)"
     exit 127
   fi
-  # Lock the existing directory inode: no marker can go stale after SIGKILL.
-  # Keep fd 9 open until the update finishes; never unlink a flock lock target.
-  exec 9<"$config_dir"
+  # Keep a stable lock file open for writing, including for NFS flock support.
+  # The kernel releases the lock on SIGKILL; never unlink the lock file because
+  # concurrent waiters must continue to share the same inode.
+  lock="$config_dir/.fleet-codex.lock"
+  exec 9<>"$lock"
   tries=0
   while :; do
-    flock -n 9 && break
+    lock_err=$(flock -n 9 2>&1) && break
     status=$?
-    if [ "$status" -ne 1 ]; then
-      echo "cannot lock Codex config directory: $config_dir"
+    # BusyBox uses exit 1 for errors as well as contention. Both supported
+    # implementations are silent on contention, so preserve other diagnostics.
+    if [ "$status" -ne 1 ] || [ -n "$lock_err" ]; then
+      echo "cannot lock Codex config: $lock${lock_err:+ ($lock_err)}"
       exit "$status"
     fi
     tries=$((tries + 1))
     if [ "$tries" -ge 30 ]; then
-      echo "timed out waiting for Codex config directory lock: $config_dir"
+      echo "timed out waiting for Codex config lock: $lock"
       exit 1
     fi
     sleep 1
