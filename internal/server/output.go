@@ -57,7 +57,14 @@ var stopOutputServer = func(inst *fleet.Instance) {
 	if _, ok := b.(backend.OutputBackend); !ok {
 		return
 	}
-	_, _ = b.RunScript(inst.ContainerID, fleetlaunch.RemotePath+" output stop >/dev/null 2>&1")
+	out, err := b.RunScript(inst.ContainerID, fleetlaunch.RemotePath+" output stop")
+	if err != nil {
+		flog.Warn("audio output cleanup failed", "instance", inst.Name, "err", err, "output", strings.TrimSpace(out))
+	}
+	// A failed mic-off can retain an unfed module to protect this output
+	// recorder. Retry even after an ambiguous output-stop result: mic cleanup
+	// checks whether output remains and preserves its routing if it does.
+	stopMicWhenDisabled(inst)
 }
 
 type outputClient struct {

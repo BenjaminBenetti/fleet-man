@@ -119,10 +119,11 @@ func newMicHarness(t *testing.T, enabled bool) *micHarness {
 		h.prepares++
 		return h.prepareErr
 	}
-	stopMicServer = func(inst *fleet.Instance) {
+	stopMicServer = func(inst *fleet.Instance) error {
 		h.mu.Lock()
 		h.stops = append(h.stops, inst.Name)
 		h.mu.Unlock()
+		return nil
 	}
 	t.Cleanup(func() { openMicSink, prepareMicInstance, stopMicServer = origOpen, origPrepare, origStop })
 

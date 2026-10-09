@@ -31,6 +31,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/mic"
@@ -305,6 +306,14 @@ func ensureAudio(microphone bool) error {
 // and closes the microphone feed before calling Stop.
 func Stop() error {
 	return withAudioLock(func() error {
+		// A daemon cleanup may arrive late, after the user re-enabled the mic.
+		// Check in the instance, under the same lock as Run's startup: a host-side
+		// settings check alone cannot protect against a delayed remote command.
+		feed, err := lockMicFeed(syscall.LOCK_EX)
+		if err != nil {
+			return err
+		}
+		defer feed.Close()
 		if _, err := lookPath("pactl"); err != nil || serverAnswers() == no {
 			return nil
 		}
@@ -334,6 +343,21 @@ func Stop() error {
 		}
 		return stopServer()
 	})
+}
+
+// lockMicFeed is called with audio.lock held. Run keeps a shared lease until
+// its watcher and FIFO have closed; Stop needs an exclusive lease. Kernel file
+// locks also release on process death, so a killed sink cannot block cleanup.
+func lockMicFeed(mode int) (*os.File, error) {
+	f, err := os.OpenFile(path("mic-feed.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), mode|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("microphone feed still active; deferring cleanup: %w", err)
+	}
+	return f, nil
 }
 
 func stopServer() error {

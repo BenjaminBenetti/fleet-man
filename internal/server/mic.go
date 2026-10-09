@@ -139,13 +139,17 @@ var (
 	}
 
 	// stopMicServer shuts the instance's private sound server down, so that with
-	// the feature off the instance really has no microphone. Best-effort.
-	stopMicServer = func(inst *fleet.Instance) {
+	// the feature off the instance really has no microphone.
+	stopMicServer = func(inst *fleet.Instance) error {
 		b := backendutil.NewForInstance(inst, false)
 		if !b.SupportsMicSink() {
-			return
+			return nil
 		}
-		_, _ = b.RunScript(inst.ContainerID, fleetlaunch.RemotePath+" mic stop >/dev/null 2>&1")
+		out, err := b.RunScript(inst.ContainerID, fleetlaunch.RemotePath+" mic stop")
+		if err != nil {
+			return fmt.Errorf("%w: %s", err, strings.TrimSpace(out))
+		}
+		return nil
 	}
 
 	// micSetting reads the global toggle. The error matters: "the config could
@@ -697,7 +701,7 @@ func (h *micHub) disable() {
 			for _, f := range st.Fleets {
 				for _, inst := range f.Instances {
 					if inst.Status == fleet.StatusRunning && inst.ContainerID != "" {
-						go stopMicServer(inst)
+						go stopMicWhenDisabled(inst)
 					}
 				}
 			}
@@ -705,6 +709,35 @@ func (h *micHub) disable() {
 		}
 		flog.Warn("microphone disabled, but the running instances could not be listed to stop their sound servers")
 	}()
+}
+
+// Bound both the retry count and each backend wait. A timed-out backend call
+// can still finish later; the in-instance feed lease makes that harmless to a
+// newly enabled microphone. Never hold the config writer lock across remote IO.
+var micStopTimeout = 30 * time.Second
+var micStopRetryDelay = time.Second
+
+func stopMicWhenDisabled(inst *fleet.Instance) {
+	stop := stopMicServer
+	settings := micSetting
+	for attempt := 1; attempt <= 3; attempt++ {
+		cfg, err := settings()
+		if err != nil {
+			flog.Warn("microphone cleanup deferred: cannot read settings", "instance", inst.Name, "err", err)
+		} else if cfg.Enabled {
+			return
+		} else {
+			err = bounded(micStopTimeout, "stop microphone", func() error { return stop(inst) })
+			if err == nil {
+				return
+			}
+			flog.Warn("microphone cleanup failed", "instance", inst.Name, "container", inst.ContainerID, "attempt", attempt, "err", err)
+		}
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * micStopRetryDelay)
+		}
+	}
+	flog.Warn("microphone cleanup exhausted retries; a silent device may remain until the next cleanup or instance restart", "instance", inst.Name, "container", inst.ContainerID)
 }
 
 // setDemand records a sink's demand report and republishes the aggregate.
