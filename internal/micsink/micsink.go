@@ -201,7 +201,11 @@ func ensureAudio(microphone bool) error {
 			return nil
 		}
 		if mic = micPresent(); mic == yes {
-			return nil
+			// A failed shutdown can leave the module loaded after selecting
+			// the silent fallback (including a command whose result was lost).
+			// Re-enabling must restore default capture, not just the module.
+			_, err := pactl(context.Background(), "set-default-source", SourceName)
+			return err
 		}
 		if mic == unknown {
 			// Up, and we could not ask what it carries. It may be serving a

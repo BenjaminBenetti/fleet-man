@@ -422,8 +422,17 @@ func TestOutputPulseRoutingAcrossMicToggles(t *testing.T) {
 // output monitor become default, un-pinning an already-running recorder.
 func TestOutputPulseFallbackFailurePreservesLiveRecorder(t *testing.T) {
 	for _, micFirst := range []bool{false, true} {
-		for _, failures := range []int{1, 2} {
-			t.Run(fmt.Sprintf("mic-first=%v/failures=%d", micFirst, failures), func(t *testing.T) {
+		for _, tc := range []struct {
+			name       string
+			failures   int
+			afterApply bool
+		}{
+			{"transient", 1, false},
+			{"persistent", 2, false},
+			{"applied-but-reported-failure", 2, true},
+		} {
+			failures := tc.failures
+			t.Run(fmt.Sprintf("mic-first=%v/%s", micFirst, tc.name), func(t *testing.T) {
 				routingPulse(t)
 				if micFirst {
 					if err := Ensure(); err != nil {
@@ -451,11 +460,14 @@ if [ "$*" = "set-default-source fleetnull.monitor" ]; then
   remaining=$(cat %q)
   if [ "$remaining" -gt 0 ]; then
     echo "$((remaining - 1))" > %q
+    if %t; then
+      %q "$@" || exit $?
+    fi
     exit 1
   fi
 fi
 exec %q "$@"
-`, remaining, remaining, realPactl)
+`, remaining, remaining, tc.afterApply, realPactl, realPactl)
 				if err := os.WriteFile(filepath.Join(bin, "pactl"), []byte(script), 0700); err != nil {
 					t.Fatal(err)
 				}
@@ -470,6 +482,19 @@ exec %q "$@"
 				assertRoutingOutput(t, id)
 				assertRoutingDemand(t, false)
 				assertRoutingTone(t, pcm, 48000, 2, 440, 1000)
+				if source := routingPactl(t, "get-default-source"); source != SourceName {
+					t.Fatalf("mic re-enable left default source %s; want %s", source, SourceName)
+				}
+				stopMic := routingMic(t)
+				micPCM := &routingPCM{}
+				stopRecorder := routingCommand(t, nil, micPCM, "parec", "--raw", "--format=s16le",
+					"--rate=16000", "--channels=1", "--latency-msec=20")
+				assertRoutingDemand(t, true)
+				assertRoutingTone(t, micPCM, 16000, 1, 1000, 440)
+				assertRoutingTone(t, pcm, 48000, 2, 440, 1000)
+				stopRecorder()
+				assertRoutingDemand(t, false)
+				stopMic()
 				if failures == 1 && (stopErr != nil || presentAfterStop != no) {
 					t.Fatalf("transient fallback failure was not retried: mic=%v err=%v", presentAfterStop, stopErr)
 				}
