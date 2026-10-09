@@ -8,6 +8,7 @@ import "watch.proto";
 import "jobs.proto";
 import "config.proto";
 import "exec.proto";
+import "output.proto";
 import "inspect.proto";
 
 option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
@@ -113,6 +114,8 @@ service FleetService {
   // ListMicSources returns the attached microphone clients and their capture
   // devices — what the Settings selector offers (also pushed over Watch).
   rpc ListMicSources(ListMicSourcesRequest) returns (ListMicSourcesReply);
+  rpc Output(stream OutputUp) returns (stream OutputDown);
+  rpc ListOutputTargets(ListOutputTargetsRequest) returns (ListOutputTargetsReply);
   // SSHAgent is the SSH-agent forwarding data plane: the client provides its
   // local ssh-agent, the server relays every agent connection made on its host
   // (its own git clone, processes inside instances) down this stream.

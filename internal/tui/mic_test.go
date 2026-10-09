@@ -419,7 +419,7 @@ func TestSyncMicProviderIsInertBeforeStart(t *testing.T) {
 	if running {
 		t.Fatal("a provider goroutine started without startMicControl")
 	}
-	syncMicFromConfig(nil) // a nil config reads as "off"; must not panic or start anything
+	syncAudioFromConfig(nil) // a nil config reads as "off"; must not panic or start anything
 	micCtl.mu.Lock()
 	defer micCtl.mu.Unlock()
 	if micCtl.cancel != nil {

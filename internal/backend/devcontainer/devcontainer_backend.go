@@ -743,6 +743,15 @@ func (devcontainerBackend *DevcontainerBackend) MicSinkCommand(containerID strin
 	return exec.Command("docker", args...), true
 }
 
+func (devcontainerBackend *DevcontainerBackend) OutputSourceCommand(containerID string) (*exec.Cmd, bool) {
+	args := []string{"exec", "-i"}
+	if user := devcontainerBackend.containerUser(containerID); user != "" {
+		args = append(args, "-u", user)
+	}
+	args = append(args, containerID, fleetlaunch.RemotePath, "output", "source")
+	return exec.Command("docker", args...), true
+}
+
 // Status reports the live state of a docker container by reading
 // `docker inspect --format {{.State.Status}}`. Maps docker's
 // fine-grained states into the coarser backend.LiveStatus enum:

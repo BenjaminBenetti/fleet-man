@@ -53,9 +53,10 @@ func startMicControl(parent context.Context, program *tea.Program) {
 	micCtl.program = program
 }
 
-// syncMicFromConfig is syncMicProvider for a config that may not have arrived
-// yet (nil reads as the feature being off).
-func syncMicFromConfig(config *configutil.Config) {
+// syncAudioFromConfig converges both client audio directions. A nil config
+// stops both streams while switching between fleet daemons.
+func syncAudioFromConfig(config *configutil.Config) {
+	syncOutputFromConfig(config)
 	if config == nil {
 		syncMicProvider(configutil.MicSettings{})
 		return

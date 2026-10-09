@@ -52,7 +52,8 @@ type hub struct {
 	// (owned by the loop) — like remoteMcp a server-owned value pushed over
 	// Watch and cached for a new subscriber's initial snapshot. Produced by the
 	// mic hub (mic.go).
-	micSources *fleetgrpc.MicSources
+	micSources    *fleetgrpc.MicSources
+	outputTargets *fleetgrpc.OutputTargets
 
 	// runtimeWanted is true while at least one subscriber asked for runtime;
 	// the runtime pollers read it lock-free to gate their expensive work.
@@ -86,15 +87,16 @@ type hub struct {
 
 func newHub() *hub {
 	return &hub{
-		in:          make(chan func(*hub), 64),
-		done:        make(chan struct{}),
-		st:          &fleetgrpc.State{},
-		runtime:     make(map[string]*fleetgrpc.InstanceRuntime),
-		subs:        make(map[*subscriber]struct{}),
-		agent:       newAgentTracker(),
-		runtimeEdge: make(chan struct{}, 1),
-		remoteMcp:   &fleetgrpc.RemoteMcpStatus{}, // state == UNSPECIFIED (not connected)
-		micSources:  &fleetgrpc.MicSources{},
+		in:            make(chan func(*hub), 64),
+		done:          make(chan struct{}),
+		st:            &fleetgrpc.State{},
+		runtime:       make(map[string]*fleetgrpc.InstanceRuntime),
+		subs:          make(map[*subscriber]struct{}),
+		agent:         newAgentTracker(),
+		runtimeEdge:   make(chan struct{}, 1),
+		remoteMcp:     &fleetgrpc.RemoteMcpStatus{}, // state == UNSPECIFIED (not connected)
+		micSources:    &fleetgrpc.MicSources{},
+		outputTargets: &fleetgrpc.OutputTargets{},
 	}
 }
 
@@ -264,6 +266,16 @@ func (h *hub) broadcastMicSources(sources *fleetgrpc.MicSources) {
 
 func runtimeKey(fleetName, instance string) string { return fleetName + "/" + instance }
 
+func (h *hub) broadcastOutputTargets(targets *fleetgrpc.OutputTargets) {
+	if targets == nil || proto.Equal(h.outputTargets, targets) {
+		return
+	}
+	h.outputTargets = targets
+	for sub := range h.subs {
+		sub.enqueueOutputTargets(targets)
+	}
+}
+
 // subscriber is one Watch stream's conflating buffer. pendingState keeps the
 // newest State (older ones are dropped — a full snapshot supersedes them);
 // pendingRuntime merges by key so a stats-only update and a live-status-only
@@ -288,7 +300,8 @@ type subscriber struct {
 	pendingRemoteMcp *fleetgrpc.RemoteMcpStatus
 	// pendingMicSources is the newest set of attached microphone clients
 	// (conflated the same way).
-	pendingMicSources *fleetgrpc.MicSources
+	pendingMicSources    *fleetgrpc.MicSources
+	pendingOutputTargets *fleetgrpc.OutputTargets
 
 	notify chan struct{}
 }
@@ -361,6 +374,20 @@ func (s *subscriber) enqueueFileCopy(ev *fleetgrpc.FileCopy) {
 	s.pendingFileCopy = append(s.pendingFileCopy, ev)
 	s.mu.Unlock()
 	s.signal()
+}
+
+func (s *subscriber) enqueueOutputTargets(targets *fleetgrpc.OutputTargets) {
+	s.mu.Lock()
+	s.pendingOutputTargets = targets
+	s.mu.Unlock()
+	s.signal()
+}
+func (s *subscriber) takeOutputTargets() *fleetgrpc.OutputTargets {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	targets := s.pendingOutputTargets
+	s.pendingOutputTargets = nil
+	return targets
 }
 
 // drain takes the pending state + runtime + browser-opens + file-copies +

@@ -20,6 +20,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/mic"
+	"github.com/BenjaminBenetti/fleet-man/internal/output"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -119,7 +120,10 @@ type model struct {
 	// every machine with a provider on this daemon, with its capture devices —
 	// which is what lets the selector offer microphones on OTHER machines. nil
 	// until the first push (or against a daemon that predates it).
-	micSources *fleetgrpc.MicSources
+	micSources     *fleetgrpc.MicSources
+	outputTargets  *fleetgrpc.OutputTargets
+	outputStatus   output.Status
+	outputRevision uint64
 
 	// SSH-agent forwarding (sshagent.go): the provider's latest status report
 	// while the TUI provides its agent to the current remote.
@@ -340,7 +344,7 @@ func (m *model) reload() {
 	m.st = st
 	m.config = config
 	m.err = nil
-	syncMicFromConfig(config)
+	syncAudioFromConfig(config)
 
 	// (The control-socket listeners live on the server now — it owns every
 	// running instance's socket and pushes browser.open as a Watch BrowserOpen
@@ -977,17 +981,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.adoptMicSettings(msg.sources.GetSettings())
 		return m, spinCmd
 
+	case outputTargetsMsg:
+		if msg.gen == m.watchGen && msg.targets.GetRevision() >= m.outputRevision {
+			m.outputRevision = msg.targets.GetRevision()
+			m.outputTargets = msg.targets
+			m.adoptOutputSettings(msg.targets.GetSettings())
+		}
+		return m, spinCmd
+
+	case outputStatusMsg:
+		outputCtl.mu.Lock()
+		if msg.gen == outputCtl.gen {
+			m.outputStatus = msg.status
+		}
+		outputCtl.mu.Unlock()
+		return m, spinCmd
+
 	case serverInfoMsg:
 		if msg.gen != m.watchGen {
 			return m, spinCmd
 		}
+		// Revisions belong to a daemon lifetime; the new Watch's initial
+		// snapshot is authoritative after reconnecting to a restarted daemon.
+		m.outputRevision = 0
 		// The daemon's version learned at (re)connect; render it in the header's
 		// control-chain version string.
 		m.serverVersion = msg.serverVersion
 		// A (re)connect is when the daemon may have changed under us — notably
 		// an in-place update of one that predated the Mic RPC, whose provider
 		// gave up as "unsupported". Converge again; a no-op when one is running.
-		syncMicFromConfig(m.config)
+		syncAudioFromConfig(m.config)
 		return m, spinCmd
 
 	case watchErrMsg:
@@ -1106,7 +1129,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.micDevices = msg.devices
 		// A successful listing proves this machine can record. If the provider
 		// gave up earlier for lack of a recorder, this is the moment to retry.
-		syncMicFromConfig(m.config)
+		syncAudioFromConfig(m.config)
 		return m, spinCmd
 
 	case codespaceMachinesFetchedMsg:
@@ -1489,7 +1512,8 @@ func Run() error {
 	// into), started once the config says the feature is on. newModel already
 	// loaded the config, so converge now rather than waiting for a reload.
 	startMicControl(watchCtx, program)
-	syncMicFromConfig(m.config)
+	startOutputControl(watchCtx, program)
+	syncAudioFromConfig(m.config)
 
 	// SSH-agent provider: armed here; it starts once the armada registry (loaded
 	// at boot) says forwarding is on for the remote this TUI is connected to.

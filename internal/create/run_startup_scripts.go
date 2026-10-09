@@ -53,8 +53,13 @@ func runStartupScripts(instanceBackend backend.Backend, wsDir, fleetName, instan
 // server nothing will ever feed is waste.
 func scriptsForInstance(instanceBackend backend.Backend, settings fleet.FleetSettings, config *state.Config) []startup.Script {
 	scripts := startup.ScriptsFor(settings)
-	if config != nil && config.MicSettings.Enabled && instanceBackend.SupportsMicSink() {
-		scripts = append(scripts, startup.MicScript())
+	if config != nil {
+		_, supportsOutput := instanceBackend.(backend.OutputBackend)
+		mic := config.MicSettings.Enabled && instanceBackend.SupportsMicSink()
+		output := config.OutputSettings.Enabled && supportsOutput
+		if mic || output {
+			scripts = append(scripts, startup.AudioScript(mic, output))
+		}
 	}
 	return scripts
 }

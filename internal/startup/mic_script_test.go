@@ -61,7 +61,7 @@ exec "$@"
 // installAudio makes the sandbox look like the audio stack is installed.
 func (env *micScriptEnv) installAudio(t *testing.T) {
 	t.Helper()
-	for _, bin := range []string{"pulseaudio", "pactl", "arecord"} {
+	for _, bin := range []string{"pulseaudio", "pactl", "arecord", "parec"} {
 		writeStub(t, env.stubBin, bin, "#!/bin/sh\nexit 0\n")
 	}
 	plugin := filepath.Join(env.root, "usr/lib/x86_64-linux-gnu/alsa-lib")
@@ -97,6 +97,29 @@ func (env *micScriptEnv) run(t *testing.T) (string, error) {
 	cmd.Env = []string{"PATH=" + env.stubBin, "FLEET_MIC_ROOT=" + env.root}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+func TestOutputOnlySetupNeverProbesMicrophone(t *testing.T) {
+	env := newMicScriptEnv(t)
+	env.installAudio(t)
+	bin := filepath.Join(env.root, "usr/bin/fleet")
+	if err := os.MkdirAll(filepath.Dir(bin), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho \"$*\" >> \""+env.log+"\"\n[ \"$1 $2\" = 'output ensure' ]\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeStub(t, env.stubBin, "arecord", "#!/bin/sh\necho unexpected-recording >> \""+env.log+"\"\nexit 1\n")
+	cmd := exec.Command(filepath.Join(env.stubBin, "sh"), "-c", AudioScript(false, true).Body)
+	cmd.Env = []string{"PATH=" + env.stubBin, "FLEET_MIC_ROOT=" + env.root}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("setup: %v %s", err, out)
+	}
+	calls := env.calls(t)
+	if !strings.Contains(calls, "output ensure") || strings.Contains(calls, "mic ensure") || strings.Contains(calls, "unexpected-recording") {
+		t.Fatalf("output setup recorded a microphone: %s", calls)
+	}
 }
 
 func (env *micScriptEnv) read(t *testing.T, rel string) string {

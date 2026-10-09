@@ -1,0 +1,38 @@
+            _    _    _
+ ___   ___ | |_ | |_ (_) _ __     __ _  ___
+/ __| / _ \| __|| __|| || '_ \   / _` |/ __|
+\__ \|  __/| |_ | |_ | || | | | | (_| |\__ \
+|___/ \___| \__| \__||_||_| |_|  \__, ||___/
+                                 |___/
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                      Do not prompt when switching the browser to another instance                            ▲   │
+│                                                                                                              ░   │
+│ Microphone                                                                                                   ░   │
+│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────── ░   │
+│                                                                                                              ░   │
+│   Enabled            [ off ]                                                                                 ░   │
+│                      Proxy a client's microphone into instances (voice input for coding agents)              ░   │
+│                                                                                                              █   │
+│ Audio Output                                                                                                 █   │
+│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────── █   │
+│                                                                                                              █   │
+│   Enabled            [ on ]                                                                                  █   │
+│                      Play instance audio on a connected client's speakers or headphones                      ░   │
+│ > Output device      ◀ studio — USB_Headset ▶                                                                ░   │
+│                      Output on studio                                                                        ░   │
+│   This client        standby — another client is selected                                                    ░   │
+│                                                                                                              ░   │
+│ Claude Code                                                                                                  ░   │
+│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────── ░   │
+│                                                                                                              ░   │
+│   Fleet status mod   [ on ]                                                                                  ░   │
+│                      Show the instance and the agents at work across fleets above the Claude Code prompt     ░   │
+│                                                                                                              ░   │
+│ Fleet MCP                                                                                                    ▼   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+Audio output set to studio — USB_Headset
+
+j/k: navigate  left/right: cycle  enter: edit  esc: back  ctrl+c: quit
+

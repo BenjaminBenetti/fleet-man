@@ -36,6 +36,7 @@ func ConfigToProto(c *configutil.Config) *fleetgrpc.Config {
 		},
 		Theme:      &fleetgrpc.ThemeSettings{Name: c.ThemeSettings.Name},
 		ClaudeCode: &fleetgrpc.ClaudeCodeSettings{},
+		Output:     &fleetgrpc.OutputSettings{Enabled: c.OutputSettings.Enabled, Client: c.OutputSettings.Client, Device: c.OutputSettings.Device},
 	}
 
 	if c.GeneralSettings.TmuxVimKeys != nil {
@@ -158,6 +159,9 @@ func ConfigFromProto(pc *fleetgrpc.Config, base *configutil.Config) *configutil.
 
 	if th := pc.GetTheme(); th != nil {
 		c.ThemeSettings.Name = th.GetName()
+	}
+	if output := pc.GetOutput(); output != nil {
+		c.OutputSettings = configutil.OutputSettings{Enabled: output.GetEnabled(), Client: output.GetClient(), Device: output.GetDevice()}
 	}
 
 	if cc := pc.GetClaudeCode(); cc != nil && cc.StatusMod != nil {

@@ -1,0 +1,6 @@
+ok  	github.com/BenjaminBenetti/fleet-man/internal/output	1.144s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/micsink	5.392s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/tui	1.423s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/protoconv	1.010s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/server	1.058s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/output	2.315s

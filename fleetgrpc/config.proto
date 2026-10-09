@@ -106,6 +106,14 @@ message MicSettings {
   optional string client = 3;
 }
 
+// OutputSettings selects a playback device on an attached client, never on
+// fleetd itself. Independent of the microphone settings.
+message OutputSettings {
+  bool enabled = 1;
+  string client = 2; // empty = Auto: newest attached playback client
+  string device = 3; // empty = that client's system default
+}
+
 // ThemeSettings is the TUI color theme — a CLIENT preference (like the armada
 // registry) that clients read from and write to their LOCAL daemon only, so a
 // TUI switched onto a remote fleet keeps its own look (issue #251).
@@ -144,6 +152,7 @@ message Config {
   MicSettings mic = 21;
   ThemeSettings theme = 22;
   ClaudeCodeSettings claude_code = 23;
+  OutputSettings output = 24;
 }
 
 message GetConfigRequest {}
@@ -160,4 +169,6 @@ message SetConfigRequest {
 
 message SetConfigReply {
   Config config = 1;
+  // Orders output settings against Watch snapshots from this daemon.
+  uint64 output_revision = 2;
 }

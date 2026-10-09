@@ -34,6 +34,7 @@ when they need attention.
 - [MCP Server](#mcp-server)
 - [Remote MCP](#remote-mcp) — expose MCP & gRPC to remote agents via a fleet gateway
 - [Microphone](#microphone) — talk to the agents in your instances (voice input in a container)
+- [Audio output](#audio-output) — hear instance audio on a connected client
 - [Themes](#themes) — color themes for the TUI (Gruvbox, Catppuccin, Tokyo Night, Solarized)
 - [Claude Code status mod](#claude-code-status-mod) — which instance you're in and the agents at work, above the Claude Code prompt
 - [Your SSH agent on a remote fleet](#your-ssh-agent-on-a-remote-fleet) — your keys go with you to remote fleets, like `ssh -A`
@@ -610,7 +611,7 @@ Turn it on under **Settings → Microphone**:
 
 | Setting | What it does |
 |---------|--------------|
-| **Enabled** | Off by default. On: new instances get the audio packages at provision time (existing running instances get them the first time the microphone attaches), and each running instance gets a virtual capture device. Off: nothing is installed or injected, and the instances' virtual sound servers are shut down. |
+| **Enabled** | Off by default. On: new instances get the audio packages at provision time (existing running instances get them the first time the microphone attaches), and each running instance gets a virtual capture device. Off: the virtual microphone is removed; the sound server stays up if audio output is enabled. |
 | **Source** | Which microphone to record: a **client** — a machine with a TUI (or `fleet mic attach`) on this daemon — and a capture device on it. `←`/`→` cycles through **Automatic**, this machine's devices, then the devices of every other connected client (the same list as `fleet mic sources`). **Automatic**, the default, records the most recently connected client on its system default. A selected client that is not connected is stood in for by the most recently connected one — on *its* system default — until it returns; a device that is no longer there falls back to the system default. The selection (like **Enabled**) belongs to the daemon: change it in one TUI and every other open TUI shows it at once. |
 
 **Your microphone is only open while something is recording.** The instance
@@ -654,6 +655,41 @@ How it fits together:
   does nothing.
 
 Devcontainer instances only: Codespaces and Coder workspaces are skipped.
+
+## Audio output
+
+Enable **Settings → Audio Output** to hear audio from your devcontainer instances.
+The **Output device** row cycles through **Auto**, each connected client's system
+default, and its speakers or headphones. Devices always belong to a client: a
+local fleetd and a fleetd reached through SSH or a gateway use the same path.
+Keep a TUI or `fleet output attach` running on the computer that should play.
+
+**Auto** uses the most recently connected playback client and its system default.
+If a pinned client disconnects, the newest remaining client uses its own default
+until the pinned client returns. A missing device falls back to that client's
+system default. Selection changes take effect during playback and are pushed to
+all connected TUIs. Microphone and output can be enabled independently.
+
+Linux clients use `paplay` (PulseAudio/PipeWire/WSLg, from `pulseaudio-utils`) or
+`aplay` (`alsa-utils`). macOS clients use SoX (`brew install sox`). The selector
+shows playback devices announced by those clients. Client names follow the
+microphone's naming convention, including `FLEET_MIC_CLIENT` for duplicate
+hostnames. A client inside an instance does not offer fleet's own virtual sink.
+
+Instances get a virtual **FleetAudioOutput** sink as their PulseAudio default.
+Fleet installs the same audio packages and ALSA configuration used by the
+microphone, at creation or on first attachment to an existing instance. Existing
+custom ALSA defaults are preserved; a warning explains when they may bypass
+Fleet's output. Audio uses 48 kHz stereo PCM, with bounded queues and mixing on
+the receiving client so multiple instances can play together. Devcontainer
+instances are supported; Coder and Codespaces workspaces are skipped, as for the
+microphone.
+
+```bash
+fleet output devices  # this client's playback devices
+fleet output targets  # connected clients and outputs; * marks the selected one
+fleet output attach   # offer playback without keeping a TUI open
+```
 
 ## Themes
 

@@ -1,0 +1,172 @@
+{
+  "implementation_commit": "7dd6f07aaab6b1e0a871ab1b29bc9fe33ed73614",
+  "captured_utc": "2026-10-08",
+  "capture_method": "Running fleet TUI in a 116x38 tmux pane; capture-pane -p -e parsed with pyte and rendered to PNG using Pillow and DejaVu Sans Mono. Matching plain terminal captures accompany every PNG. No mocked TUI model or generated UI images.",
+  "fixture": "Isolated fleetd state; real Debian container running the generated AudioScript(false, true) as fleetuser; two real output client processes named laptop and studio. Devices are private PulseAudio null sinks, not physical speakers. laptop uses the local Unix socket; studio was also exercised over fleetd's authenticated loopback TCP listener used by SSH remote access.",
+  "audio_path": "paplay in container -> fleetoutput.monitor -> fleet output source via docker exec -> fleetd Output gRPC -> output.Run -> paplay on selected client -> monitored client sink",
+  "signal": {
+    "format": "48000 Hz, stereo, signed 16-bit little endian",
+    "tone_hz": 440,
+    "peak_amplitude": 10000,
+    "measurement": "Each probe records two seconds and analyzes the final one second (48000 samples from one stereo channel). Frequency is estimated by positive-going zero crossings."
+  },
+  "measurements": {
+    "selected-tcp": [
+      {
+        "target": "studio/usb",
+        "samples": 48000,
+        "rms": 7070.62,
+        "positive_zero_crossings_hz": 440,
+        "peak": 10000
+      },
+      {
+        "target": "studio/monitor",
+        "samples": 48000,
+        "rms": 0.0,
+        "positive_zero_crossings_hz": 0,
+        "peak": 0
+      },
+      {
+        "target": "laptop/speakers",
+        "samples": 48000,
+        "rms": 0.0,
+        "positive_zero_crossings_hz": 0,
+        "peak": 0
+      }
+    ],
+    "disconnected-fallback": [
+      {
+        "target": "laptop/speakers",
+        "samples": 48000,
+        "rms": 7070.62,
+        "positive_zero_crossings_hz": 440,
+        "peak": 10000
+      },
+      {
+        "target": "studio/usb",
+        "samples": 48000,
+        "rms": 0.0,
+        "positive_zero_crossings_hz": 0,
+        "peak": 0
+      }
+    ],
+    "missing-device": [
+      {
+        "target": "studio/monitor",
+        "samples": 48000,
+        "rms": 7070.62,
+        "positive_zero_crossings_hz": 440,
+        "peak": 10000
+      },
+      {
+        "target": "laptop/speakers",
+        "samples": 48000,
+        "rms": 0.0,
+        "positive_zero_crossings_hz": 0,
+        "peak": 0
+      }
+    ],
+    "restored-device": [
+      {
+        "target": "studio/usb",
+        "samples": 48000,
+        "rms": 7070.62,
+        "positive_zero_crossings_hz": 440,
+        "peak": 10000
+      },
+      {
+        "target": "studio/monitor",
+        "samples": 48000,
+        "rms": 0.0,
+        "positive_zero_crossings_hz": 0,
+        "peak": 0
+      },
+      {
+        "target": "laptop/speakers",
+        "samples": 48000,
+        "rms": 0.0,
+        "positive_zero_crossings_hz": 0,
+        "peak": 0
+      }
+    ],
+    "local-playback": [
+      {
+        "target": "laptop/headphones",
+        "samples": 48000,
+        "rms": 7070.62,
+        "positive_zero_crossings_hz": 440,
+        "peak": 10000
+      },
+      {
+        "target": "laptop/speakers",
+        "samples": 48000,
+        "rms": 0.0,
+        "positive_zero_crossings_hz": 0,
+        "peak": 0
+      },
+      {
+        "target": "studio/usb",
+        "samples": 48000,
+        "rms": 0.0,
+        "positive_zero_crossings_hz": 0,
+        "peak": 0
+      }
+    ],
+    "disabled-output": {
+      "output_disabled_via_tui": true,
+      "instance_pulse_server_removed": true,
+      "probe_exit_code": 1
+    }
+  },
+  "limits": [
+    "Linux virtual audio endpoints; no physical speaker/headphone listening test.",
+    "macOS arm64 cross-build and device-parser tests passed; CoreAudio playback not run on hardware.",
+    "Authenticated loopback TCP tested; external SSH forwarding and gateway network traversal not exercised.",
+    "Coder and Codespaces output backends are unsupported, matching current microphone support."
+  ],
+  "review_regressions": [
+    "Unrelated standby connections preserve pinned playback.",
+    "Requested devices survive fallback and return on refreshed enumeration.",
+    "A client losing all playback devices releases Auto selection.",
+    "Revision-ordered Watch updates cannot undo newer rapid local selector changes.",
+    "Queued samples drain at end of a source."
+  ],
+  "validation": [
+    {
+      "command": "go test ./...",
+      "result": "passed"
+    },
+    {
+      "command": "go vet ./...",
+      "result": "passed"
+    },
+    {
+      "command": "golangci-lint run ./...",
+      "result": "0 issues"
+    },
+    {
+      "command": "buf lint fleetgrpc && buf build fleetgrpc",
+      "result": "passed"
+    },
+    {
+      "command": "CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o /tmp/fleet-output-darwin ./cmd/fleet",
+      "result": "passed"
+    },
+    {
+      "command": "go test -race ./internal/output ./internal/micsink ./internal/tui ./internal/protoconv",
+      "result": "passed"
+    },
+    {
+      "command": "go test -race ./internal/server -run TestOutput -count=3",
+      "result": "passed"
+    },
+    {
+      "command": "go test -race ./internal/output -count=10",
+      "result": "passed"
+    },
+    {
+      "command": "go test -race ./internal/server -run TestServeShutdownAbandonsStuckRPCs -count=5",
+      "result": "Existing race in micSetting test-seam restoration, reproduced on untouched baseline 72e41a7. That test is unchanged in base 9925ea3. Full server race suite is not claimed clean."
+    }
+  ]
+}

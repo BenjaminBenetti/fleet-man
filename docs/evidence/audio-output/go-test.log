@@ -1,0 +1,63 @@
+?   	github.com/BenjaminBenetti/fleet-man/cmd/fleet	[no test files]
+ok  	github.com/BenjaminBenetti/fleet-man/fleetgrpc	0.003s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/admiralmcp	0.508s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/admiralskill	(cached)
+?   	github.com/BenjaminBenetti/fleet-man/internal/agent	[no test files]
+ok  	github.com/BenjaminBenetti/fleet-man/internal/agentdetect	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/agentfwd	1.144s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/agentproto	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/agentsock	0.005s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/agentstrategy	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/appstart	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/atomicfile	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/backend	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/backend/coder	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/backend/codespaces	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer	0.023s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/backendutil	0.004s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/buildkit	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/cli	0.858s
+?   	github.com/BenjaminBenetti/fleet-man/internal/codespaceerr	[no test files]
+?   	github.com/BenjaminBenetti/fleet-man/internal/configutil	[no test files]
+ok  	github.com/BenjaminBenetti/fleet-man/internal/control	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/create	9.187s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/debcache	(cached)
+?   	github.com/BenjaminBenetti/fleet-man/internal/deps	[no test files]
+ok  	github.com/BenjaminBenetti/fleet-man/internal/devcontainersetup	(cached)
+?   	github.com/BenjaminBenetti/fleet-man/internal/doctor	[no test files]
+?   	github.com/BenjaminBenetti/fleet-man/internal/dotfiles	[no test files]
+ok  	github.com/BenjaminBenetti/fleet-man/internal/execstream	0.006s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/fleet	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/fleetclient	3.165s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/fleetcopy	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/fleetnet	(cached)
+?   	github.com/BenjaminBenetti/fleet-man/internal/fleetpaths	[no test files]
+?   	github.com/BenjaminBenetti/fleet-man/internal/flog	[no test files]
+ok  	github.com/BenjaminBenetti/fleet-man/internal/gateway	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/gitutil	0.047s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/imagecache	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/inspector	0.019s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/inspector/check/devcontainer	0.018s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/inspector/check/homedir	0.004s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/instanceops	0.004s
+?   	github.com/BenjaminBenetti/fleet-man/internal/landingpage	[no test files]
+ok  	github.com/BenjaminBenetti/fleet-man/internal/launchtui	0.011s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/mcpbridge	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/mic	15.089s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/micsink	4.341s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/mounts/resolver	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/output	0.131s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/platform	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/portforward	0.006s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/protoconv	0.004s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/server	18.273s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/server/remote	1.323s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/server/sshtunnel	1.007s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/shellquote	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/startup	3.984s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/state	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/theme	(cached)
+ok  	github.com/BenjaminBenetti/fleet-man/internal/tui	0.219s
+ok  	github.com/BenjaminBenetti/fleet-man/internal/tunnel	(cached)
+?   	github.com/BenjaminBenetti/fleet-man/internal/version	[no test files]

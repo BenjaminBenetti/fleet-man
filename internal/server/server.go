@@ -178,6 +178,7 @@ func Serve(ctx context.Context) error {
 	// microphone provider (a TUI's Mic stream) is attached and the feature is on.
 	// Idle — no config reads, no execs — whenever no provider is attached.
 	go svc.mic.run(hubCtx)
+	go svc.output.run(hubCtx)
 
 	grpcServer := grpc.NewServer(grpc.ChainStreamInterceptor(endStreamsOnShutdown(hubCtx)))
 	fleetgrpc.RegisterFleetServiceServer(grpcServer, svc)

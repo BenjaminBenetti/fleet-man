@@ -13,6 +13,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
+	"github.com/BenjaminBenetti/fleet-man/internal/output"
 	tea "github.com/charmbracelet/bubbletea"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -363,7 +364,7 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 		}
 		m.st = msg.st
 		m.config = msg.config
-		syncMicFromConfig(msg.config)
+		syncAudioFromConfig(msg.config)
 		m.armadaConfigPending = false
 		m.err = nil
 		m.resumeCreatingFromState()
@@ -381,7 +382,7 @@ func (m *model) handleArmadaMsg(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		m.config = msg.config
-		syncMicFromConfig(msg.config)
+		syncAudioFromConfig(msg.config)
 		return m.postSwitchFetchCmd()
 	}
 	return nil
@@ -826,11 +827,14 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	// start again — never assume the feature is on over there.
 	// (m.micStatus is left for the stopping provider's parting status to clear:
 	// until the recorder is really gone the badge must not say otherwise.)
-	syncMicFromConfig(m.config)
+	syncAudioFromConfig(m.config)
 	clear(m.runtime)
 	clear(m.creating)
 	m.remoteMcpStatus = nil
 	m.micSources = nil // the other daemon has its own set of microphone clients
+	m.outputTargets = nil
+	m.outputStatus = output.Status{}
+	m.outputRevision = 0
 	m.codespaceMachines = nil
 	m.codespaceFetchingMachines = false
 	m.sessionStore = NewSessionStore()

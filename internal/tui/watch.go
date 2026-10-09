@@ -241,6 +241,8 @@ func watchOnce(ctx context.Context, program *tea.Program, gen int) bool {
 			program.Send(remoteMcpStatusMsg{status: k.RemoteMcpStatus, gen: gen})
 		case *fleetgrpc.Event_MicSources:
 			program.Send(micSourcesMsg{sources: k.MicSources, gen: gen})
+		case *fleetgrpc.Event_OutputTargets:
+			program.Send(outputTargetsMsg{targets: k.OutputTargets, gen: gen})
 		default:
 			// Job* events are not consumed by the TUI in P2.
 		}

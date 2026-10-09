@@ -44,6 +44,9 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 			if h.micSources != nil {
 				sub.enqueueMicSources(h.micSources)
 			}
+			if h.outputTargets != nil {
+				sub.enqueueOutputTargets(h.outputTargets)
+			}
 		}
 		close(registered)
 	})
@@ -103,6 +106,11 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 			if ms := sub.takeMicSources(); ms != nil {
 				ev := &fleetgrpc.Event{Kind: &fleetgrpc.Event_MicSources{MicSources: ms}}
 				if err := stream.Send(ev); err != nil {
+					return err
+				}
+			}
+			if targets := sub.takeOutputTargets(); targets != nil {
+				if err := stream.Send(&fleetgrpc.Event{Kind: &fleetgrpc.Event_OutputTargets{OutputTargets: targets}}); err != nil {
 					return err
 				}
 			}
