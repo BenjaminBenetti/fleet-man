@@ -1,7 +1,7 @@
 # Development
 
 Command reference for building and testing fleet-man. The devcontainer ships the
-full toolchain (Go, Docker, buf, golangci-lint).
+full toolchain (Go, Docker, buf, golangci-lint, and minikube/kubectl/kubectx/kubens/k9s).
 
 ## Build
 
@@ -28,4 +28,15 @@ Generated `*.pb.go` are checked in; regenerate only when the `.proto` contract c
 ```bash
 make proto        # regenerate the Go stubs (needs buf)
 make proto-check  # lint + compile the contract, no codegen
+```
+
+## Kubernetes (minikube)
+
+The cluster is off by default to save memory. Once on, `minikube` is the current
+kubectl context.
+
+```bash
+.devcontainer/minikube.sh on    # start/resume (extra args go to `minikube start`)
+.devcontainer/minikube.sh off   # stop, keeping state
+.devcontainer/minikube.sh status
 ```
