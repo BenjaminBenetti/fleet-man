@@ -296,7 +296,9 @@ func ensureAudio(microphone bool) error {
 
 // Stop shuts the instance's virtual-microphone server down, if it is running.
 // Used when the feature is turned off: recorders then find no microphone at
-// all, rather than a silent one.
+// all. If routing cannot be made safe for live output recorders, it returns an
+// error and leaves the microphone module loaded. The daemon disables capture
+// and closes the microphone feed before calling Stop.
 func Stop() error {
 	return withAudioLock(func() error {
 		if _, err := lookPath("pactl"); err != nil || serverAnswers() == no {
@@ -310,14 +312,21 @@ func Stop() error {
 			if micPresent() == no {
 				return nil
 			}
-			// Set the fallback BEFORE removing the mic: otherwise PulseAudio
-			// picks the output monitor, and a reconnecting output recorder
-			// will follow the default back onto the mic when it is re-enabled.
-			// A failed fallback must not prevent the user's mic-off request.
-			// Still report either failure, but always attempt the unload.
-			_, fallbackErr := pactl(context.Background(), "set-default-source", silentSource)
-			_, unloadErr := pactl(context.Background(), "unload-module", "module-pipe-source")
-			return errors.Join(fallbackErr, unloadErr)
+			// Set the fallback BEFORE removing the mic. Making the output
+			// monitor default un-pins even a live recorder, which then follows
+			// the default onto the mic when it is re-enabled. Retry a transient
+			// control failure once; otherwise preserve routing and report it.
+			for attempt := 0; attempt < 2; attempt++ {
+				_, err = pactl(context.Background(), "set-default-source", silentSource)
+				if err == nil {
+					break
+				}
+			}
+			if err != nil {
+				return fmt.Errorf("leaving microphone loaded to preserve output routing: set silent default source: %w", err)
+			}
+			_, err = pactl(context.Background(), "unload-module", "module-pipe-source")
+			return err
 		}
 		return stopServer()
 	})

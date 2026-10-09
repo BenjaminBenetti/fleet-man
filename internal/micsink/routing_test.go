@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -405,11 +406,91 @@ func TestOutputPulseRoutingAcrossMicToggles(t *testing.T) {
 				}
 				assertRoutingOutput(t, id)
 				assertRoutingTone(t, pcm, 48000, 2, 440, 1000)
-				// A new output stream while mic is off must remain independent
-				// when the microphone is enabled again.
-				disconnect()
-				id, pcm, disconnect = routingOutput(t)
+				// Keep the first recorder through a complete off/on cycle.
+				// Later cycles also cover reconnecting while the mic is off.
+				if i > 0 {
+					disconnect()
+					id, pcm, disconnect = routingOutput(t)
+				}
 			}
 		})
+	}
+}
+
+// Inject only the control-command failure: the server, streams, module unload
+// and PCM are real. An unconditional unload after a failed fallback lets the
+// output monitor become default, un-pinning an already-running recorder.
+func TestOutputPulseFallbackFailurePreservesLiveRecorder(t *testing.T) {
+	for _, micFirst := range []bool{false, true} {
+		for _, failures := range []int{1, 2} {
+			t.Run(fmt.Sprintf("mic-first=%v/failures=%d", micFirst, failures), func(t *testing.T) {
+				routingPulse(t)
+				if micFirst {
+					if err := Ensure(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				id, pcm, _ := routingOutput(t)
+				if err := Ensure(); err != nil {
+					t.Fatal(err)
+				}
+				routingCommand(t, &routingLoop{pcm: routingTone(440, 48000, 2)}, io.Discard,
+					"paplay", "--raw", "--format=s16le", "--rate=48000", "--channels=2", "--latency-msec=20")
+				assertRoutingTone(t, pcm, 48000, 2, 440, 1000)
+				realPactl, err := exec.LookPath("pactl")
+				if err != nil {
+					t.Fatal(err)
+				}
+				bin := t.TempDir()
+				remaining := filepath.Join(bin, "failures")
+				if err := os.WriteFile(remaining, []byte(fmt.Sprint(failures)), 0600); err != nil {
+					t.Fatal(err)
+				}
+				script := fmt.Sprintf(`#!/bin/sh
+if [ "$*" = "set-default-source fleetnull.monitor" ]; then
+  remaining=$(cat %q)
+  if [ "$remaining" -gt 0 ]; then
+    echo "$((remaining - 1))" > %q
+    exit 1
+  fi
+fi
+exec %q "$@"
+`, remaining, remaining, realPactl)
+				if err := os.WriteFile(filepath.Join(bin, "pactl"), []byte(script), 0700); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+				stopErr := Stop()
+				presentAfterStop := micPresent()
+				if err := Ensure(); err != nil {
+					t.Fatal(err)
+				}
+				// Check the real failure first: on the buggy path this very same
+				// recorder is now on fleetmic and creates false microphone demand.
+				assertRoutingOutput(t, id)
+				assertRoutingDemand(t, false)
+				assertRoutingTone(t, pcm, 48000, 2, 440, 1000)
+				if failures == 1 && (stopErr != nil || presentAfterStop != no) {
+					t.Fatalf("transient fallback failure was not retried: mic=%v err=%v", presentAfterStop, stopErr)
+				}
+				if failures == 2 && (stopErr == nil || presentAfterStop != yes) {
+					t.Fatalf("persistent failure must report an error and preserve routing: mic=%v err=%v", presentAfterStop, stopErr)
+				}
+				// Once the control failure clears, a later disable succeeds and
+				// the same output stream still survives the next microphone enable.
+				if err := Stop(); err != nil {
+					t.Fatal(err)
+				}
+				if micPresent() != no {
+					t.Fatal("microphone survived a successful disable")
+				}
+				if err := Ensure(); err != nil {
+					t.Fatal(err)
+				}
+				assertRoutingOutput(t, id)
+				assertRoutingDemand(t, false)
+				assertRoutingTone(t, pcm, 48000, 2, 440, 1000)
+			})
+		}
 	}
 }

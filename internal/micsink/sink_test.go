@@ -90,7 +90,7 @@ func (f *fakePulse) event() {
 
 func (f *fakePulse) heard() []byte { return readAvailable(f.t, f.fifo) }
 
-func TestStopUnloadsMicrophoneWhenFallbackFails(t *testing.T) {
+func TestStopPreservesRoutingWhenFallbackFails(t *testing.T) {
 	pulse := newFakePulse(t)
 	for _, flag := range []string{"output", "fail-default-source"} {
 		if err := os.WriteFile(filepath.Join(pulse.state, flag), nil, 0600); err != nil {
@@ -100,8 +100,8 @@ func TestStopUnloadsMicrophoneWhenFallbackFails(t *testing.T) {
 	if err := Stop(); err == nil {
 		t.Fatal("Stop did not report the fallback failure")
 	}
-	if calls := pulse.calls(); !strings.Contains(calls, "unload-module module-pipe-source\n") {
-		t.Fatalf("failed fallback prevented microphone unload:\n%s", calls)
+	if calls := pulse.calls(); strings.Contains(calls, "unload-module module-pipe-source\n") {
+		t.Fatalf("failed fallback must not unload the mic and un-pin live output recorders:\n%s", calls)
 	}
 }
 
