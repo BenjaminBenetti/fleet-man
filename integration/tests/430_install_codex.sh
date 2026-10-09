@@ -41,4 +41,14 @@ info "asserting the complete package is installed outside the shared Codex mount
   codex --version
 ' || fail "Codex package is incomplete or was installed in the shared mount"
 
-pass "codex installed"
+info "asserting Codex starts with automatic approval review"
+"${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- bash -lc '
+  set -e
+  config="${CODEX_HOME:-$HOME/.codex}/config.toml"
+  grep -qx "approval_policy = \"on-request\"" "$config"
+  grep -qx "approvals_reviewer = \"auto_review\"" "$config"
+  grep -qx "sandbox_mode = \"workspace-write\"" "$config"
+  codex features list >/dev/null
+' || fail "Codex automatic approval review was not configured"
+
+pass "codex installed and configured for auto mode"

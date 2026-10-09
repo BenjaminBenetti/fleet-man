@@ -139,6 +139,29 @@ Project overrides survive instance deletion and recreation; other project
 `.claude` files remain part of each workspace. Rebuild existing instances to
 apply newly enabled mounts and project settings links.
 
+Enabling a fleet's **Codex mount** shares `~/.codex` and installs Codex in each
+instance. Creation and rebuilds also configure Codex's default permissions for
+[automatic approval review](https://learn.chatgpt.com/docs/sandboxing/auto-review)
+("Approve for me"): `approval_policy = "on-request"`,
+`approvals_reviewer = "auto_review"`, and `sandbox_mode = "workspace-write"`.
+These three top-level settings are reset on every create/rebuild of any instance
+in the fleet, including when Codex is already installed in the image. Use a named
+Codex profile for a different permission mode; other settings and named profiles
+are preserved. Configuration requires `flock` (provided by util-linux or BusyBox
+on Linux). Fleet keeps a `.fleet-codex.lock` file in the shared Codex home to
+coordinate provisioning. Auto-review handles eligible approval requests; actions
+it rejects may still need your input.
+
+Codex's Linux workspace sandbox requires working bubblewrap/user namespaces
+inside the container. Standard unprivileged Fleet instances may be unable to
+create these namespaces; this reproduces with Fleet's own integration fixture,
+so Codex's workspace sandbox may be unavailable even when installation and
+configuration succeed. If Codex then requests approval to run outside its sandbox,
+eligible requests go to automatic review instead of the user. See the
+[Codex container sandbox guidance](https://learn.chatgpt.com/docs/agent-approvals-security).
+Fleet configures the approval mode but does not change the container's security
+options.
+
 Fleet runs the devcontainer's `postStartCommand` during creation and after each
 stop/start cycle. Starting an already running instance does not repeat it.
 Restart hook failures are logged while the container remains running.
