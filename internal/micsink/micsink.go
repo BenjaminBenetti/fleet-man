@@ -313,11 +313,11 @@ func Stop() error {
 			// Set the fallback BEFORE removing the mic: otherwise PulseAudio
 			// picks the output monitor, and a reconnecting output recorder
 			// will follow the default back onto the mic when it is re-enabled.
-			if _, err := pactl(context.Background(), "set-default-source", silentSource); err != nil {
-				return err
-			}
-			_, err := pactl(context.Background(), "unload-module", "module-pipe-source")
-			return err
+			// A failed fallback must not prevent the user's mic-off request.
+			// Still report either failure, but always attempt the unload.
+			_, fallbackErr := pactl(context.Background(), "set-default-source", silentSource)
+			_, unloadErr := pactl(context.Background(), "unload-module", "module-pipe-source")
+			return errors.Join(fallbackErr, unloadErr)
 		}
 		return stopServer()
 	})

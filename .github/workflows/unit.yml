@@ -41,4 +41,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils
 
       - name: go test
+        env:
+          FLEET_TEST_REQUIRE_PULSE: "1"
         run: go test ./...

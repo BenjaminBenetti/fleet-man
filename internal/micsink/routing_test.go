@@ -19,6 +19,9 @@ func routingPulse(t *testing.T) {
 	t.Helper()
 	for _, bin := range []string{"pulseaudio", "pactl", "paplay", "parec"} {
 		if _, err := exec.LookPath(bin); err != nil {
+			if os.Getenv("FLEET_TEST_REQUIRE_PULSE") == "1" {
+				t.Fatalf("required audio test dependency %s unavailable: %v", bin, err)
+			}
 			t.Skipf("%s unavailable", bin)
 		}
 	}
@@ -370,6 +373,9 @@ func TestOutputPulseRoutingAcrossMicToggles(t *testing.T) {
 				}
 			}
 			id, pcm, disconnect := routingOutput(t)
+			if !micFirst && micPresent() != no {
+				t.Fatal("output-only setup exposed a microphone")
+			}
 			// A normal application plays to the default sink, not an explicit
 			// test-only route. Leave it running through the microphone toggles.
 			routingCommand(t, &routingLoop{pcm: routingTone(440, 48000, 2)}, io.Discard,
