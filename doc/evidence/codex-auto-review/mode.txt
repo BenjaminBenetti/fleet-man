@@ -1,0 +1,24 @@
+host$ bash /tmp/fleet-codex-evidence/verify-default.sh
+$ fleet exec codex-auto-evidence/auto-default -- bash -lc 'codex --version; codex login status || true'
+codex-cli 0.162.0
+Not logged in
+$ python3 /tmp/fleet-codex-evidence/read-mode.py
+Codex config/read (no permission overrides; no login):
+  approval_policy = "on-request"
+  approvals_reviewer = "auto_review"
+  sandbox_mode = "workspace-write"
+PASS: Codex loaded automatic approval review by default.
+host$
+
+
+
+
+
+
+
+
+
+
+
+
+

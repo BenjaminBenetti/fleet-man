@@ -1,0 +1,7 @@
+host$ fleet up codex-auto-evidence/auto-default
+Creating codex-auto-evidence/auto-default (backend: devcontainer)...
+Instance codex-auto-evidence/auto-default is running (container: 97f1eb877679)
+host$ fleet exec codex-auto-evidence/auto-default -- tail -n 3 /home/vscode/.fleet/startup/codex.log
+Codex CLI 0.162.0 installed successfully.
+codex installed: codex-cli 0.162.0
+codex configured for auto mode (automatic approval review)

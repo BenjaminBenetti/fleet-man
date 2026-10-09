@@ -1,0 +1,37 @@
+{
+  "method": "config/read",
+  "params": {
+    "includeLayers": true
+  },
+  "config": {
+    "approval_policy": "on-request",
+    "approvals_reviewer": "auto_review",
+    "sandbox_mode": "workspace-write"
+  },
+  "origins": {
+    "approval_policy": {
+      "name": {
+        "type": "user",
+        "file": "/home/vscode/.codex/config.toml",
+        "profile": null
+      },
+      "version": "sha256:be1eef6e30e4fe6ef0b7813e89da3ed3003c483735c83b9c6c46468e36ac28ba"
+    },
+    "approvals_reviewer": {
+      "name": {
+        "type": "user",
+        "file": "/home/vscode/.codex/config.toml",
+        "profile": null
+      },
+      "version": "sha256:be1eef6e30e4fe6ef0b7813e89da3ed3003c483735c83b9c6c46468e36ac28ba"
+    },
+    "sandbox_mode": {
+      "name": {
+        "type": "user",
+        "file": "/home/vscode/.codex/config.toml",
+        "profile": null
+      },
+      "version": "sha256:be1eef6e30e4fe6ef0b7813e89da3ed3003c483735c83b9c6c46468e36ac28ba"
+    }
+  }
+}
