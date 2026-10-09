@@ -18,7 +18,7 @@ install_home="$HOME/.local/share/fleet/codex"
 package="$install_home/packages/standalone/current"
 
 # Configure even an image-provided or already complete install. Use a shared
-# lock and an atomic rename because several instances can provision together.
+# kernel lock and an atomic rename because instances can provision together.
 configure_auto_mode() (
   config_home="${CODEX_HOME:-$HOME/.codex}"
   mkdir -p "$config_home" || exit 1
@@ -38,18 +38,34 @@ configure_auto_mode() (
   done
   config_dir=$(dirname "$config")
   mkdir -p "$config_dir" || exit 1
-  lock="$config.fleet-lock"
+  if [ ! -w "$config_dir" ]; then
+    echo "cannot configure Codex auto mode: config directory is not writable: $config_dir"
+    exit 1
+  fi
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "flock is required to configure Codex auto mode (install util-linux)"
+    exit 127
+  fi
+  # Lock the existing directory inode: no marker can go stale after SIGKILL.
+  # Keep fd 9 open until the update finishes; never unlink a flock lock target.
+  exec 9<"$config_dir"
   tries=0
-  until mkdir "$lock" 2>/dev/null; do
+  while :; do
+    flock -n 9 && break
+    status=$?
+    if [ "$status" -ne 1 ]; then
+      echo "cannot lock Codex config directory: $config_dir"
+      exit "$status"
+    fi
     tries=$((tries + 1))
     if [ "$tries" -ge 30 ]; then
-      echo "timed out waiting to configure Codex auto mode"
+      echo "timed out waiting for Codex config directory lock: $config_dir"
       exit 1
     fi
     sleep 1
   done
   config_tmp=""
-  trap 'rm -f "$config_tmp"; rmdir "$lock"' EXIT
+  trap 'rm -f "$config_tmp"' EXIT
   trap 'exit 1' HUP INT TERM
   config_tmp=$(mktemp "$config_dir/.config.toml.XXXXXX") || exit 1
   source=/dev/null

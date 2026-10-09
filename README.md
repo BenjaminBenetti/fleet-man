@@ -144,9 +144,19 @@ instance. Creation and rebuilds also configure Codex's default permissions for
 [automatic approval review](https://learn.chatgpt.com/docs/sandboxing/auto-review)
 ("Approve for me"): `approval_policy = "on-request"`,
 `approvals_reviewer = "auto_review"`, and `sandbox_mode = "workspace-write"`.
-This also applies to Codex already installed in the image. Other Codex settings
-and named profiles are preserved. Auto-review handles eligible approval requests;
-actions it rejects may still need your input.
+These three top-level settings are reset on every create/rebuild of any instance
+in the fleet, including when Codex is already installed in the image. Use a named
+Codex profile for a different permission mode; other settings and named profiles
+are preserved. Configuration requires `flock` (provided by util-linux or BusyBox
+on Linux). Auto-review handles eligible approval requests; actions it rejects may
+still need your input.
+
+Codex's Linux workspace sandbox requires working bubblewrap/user namespaces
+inside the container. Some Docker host security policies block these even when
+Codex installs and loads its configuration successfully. See the
+[Codex container sandbox guidance](https://learn.chatgpt.com/docs/agent-approvals-security).
+Fleet configures the approval mode but does not change the container's security
+options.
 
 Fleet runs the devcontainer's `postStartCommand` during creation and after each
 stop/start cycle. Starting an already running instance does not repeat it.

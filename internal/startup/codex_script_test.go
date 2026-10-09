@@ -1,13 +1,20 @@
 package startup
 
 import (
+	"bufio"
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/shellquote"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -83,7 +90,43 @@ esac
 `)
 	// Stub sleep so the retry backoff doesn't slow the test down.
 	writeStub(t, env.stubBin, "sleep", "#!/bin/sh\nexit 0\n")
+	if flock, err := exec.LookPath("flock"); err == nil {
+		if err := os.Symlink(flock, filepath.Join(env.stubBin, "flock")); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		// macOS has flock(2), but no flock(1). Exercise the same kernel lock
+		// via the test binary instead of skipping the container-script tests.
+		writeTestFlock(t, env.stubBin)
+	}
 	return env
+}
+
+// writeTestFlock supplies the exact flock(1) operation used by the Linux script
+// on test hosts without that utility. Linux tests normally use the real utility.
+func writeTestFlock(t *testing.T, bin string) {
+	t.Helper()
+	writeStub(t, bin, "flock", "#!/bin/sh\nFLEET_TEST_CODEX_FLOCK=1 exec "+shellquote.Single(os.Args[0])+" -test.run=^TestCodexFlockCommand$ -- \"$@\"\n")
+}
+
+// TestCodexFlockCommand implements flock -n 9 for the portable test fixture.
+// Its inherited descriptor stays open in the parent shell after this exits.
+func TestCodexFlockCommand(t *testing.T) {
+	if os.Getenv("FLEET_TEST_CODEX_FLOCK") != "1" {
+		return
+	}
+	if args := os.Args; len(args) < 2 || args[len(args)-2] != "-n" || args[len(args)-1] != "9" {
+		os.Exit(2)
+	}
+	err := syscall.Flock(9, syscall.LOCK_EX|syscall.LOCK_NB)
+	if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+		os.Exit(1)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	os.Exit(0)
 }
 
 // run executes the codex script body under sh with the sandbox
@@ -119,6 +162,30 @@ func (env *codexScriptEnv) curlCalls(t *testing.T) string {
 		t.Fatalf("read curl counter: %v", err)
 	}
 	return strings.TrimSpace(string(content))
+}
+
+// assertCodexAutoMode parses the produced TOML and verifies the effective root
+// settings, so duplicate keys or accidentally nested defaults fail the test.
+func assertCodexAutoMode(t *testing.T, path string) map[string]any {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := toml.Unmarshal(content, &config); err != nil {
+		t.Fatalf("invalid Codex config: %v\n%s", err, content)
+	}
+	for key, want := range map[string]string{
+		"approval_policy":    "on-request",
+		"approvals_reviewer": "auto_review",
+		"sandbox_mode":       "workspace-write",
+	} {
+		if got := config[key]; got != want {
+			t.Errorf("%s = %v, want %s", key, got, want)
+		}
+	}
+	return config
 }
 
 // TestCodexScript_InstallsCompletePackage covers the missing Code Mode host
@@ -272,28 +339,8 @@ func TestCodexScript_SkipsWhenAlreadyInstalled(t *testing.T) {
 	assertCodexAutoMode(t, filepath.Join(env.home, ".codex", "config.toml"))
 }
 
-func assertCodexAutoMode(t *testing.T, path string) map[string]any {
-	t.Helper()
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var config map[string]any
-	if err := toml.Unmarshal(content, &config); err != nil {
-		t.Fatalf("invalid Codex config: %v\n%s", err, content)
-	}
-	for key, want := range map[string]string{
-		"approval_policy":    "on-request",
-		"approvals_reviewer": "auto_review",
-		"sandbox_mode":       "workspace-write",
-	} {
-		if got := config[key]; got != want {
-			t.Errorf("%s = %v, want %s", key, got, want)
-		}
-	}
-	return config
-}
-
+// TestCodexScript_ConfiguresExistingConfig verifies the intentional reset of the
+// three root settings and preservation of unrelated settings and named profiles.
 func TestCodexScript_ConfiguresExistingConfig(t *testing.T) {
 	env := newCodexScriptEnv(t, "0")
 	configHome := filepath.Join(env.home, ".codex")
@@ -336,6 +383,8 @@ sandbox_mode = "read-only"
 	}
 }
 
+// TestCodexScript_UsesRuntimeCodexHome keeps runtime config separate from the
+// installer's container-local package home, including paths containing spaces.
 func TestCodexScript_UsesRuntimeCodexHome(t *testing.T) {
 	env := newCodexScriptEnv(t, "0")
 	env.codexHome = filepath.Join(t.TempDir(), "custom codex home")
@@ -348,6 +397,8 @@ func TestCodexScript_UsesRuntimeCodexHome(t *testing.T) {
 	}
 }
 
+// TestCodexScript_PreservesTOMLValues checks the rewrite with an independent TOML
+// parser, including strings and arrays that resemble keys or table headers.
 func TestCodexScript_PreservesTOMLValues(t *testing.T) {
 	for name, existing := range map[string]string{
 		"quoted keys": `"approval_policy" = 'never'
@@ -421,6 +472,8 @@ sandbox_mode = "read-only"
 	}
 }
 
+// TestCodexScript_ConcurrentSharedConfig checks eventual completion and valid
+// output when several instances provision against the same runtime home.
 func TestCodexScript_ConcurrentSharedConfig(t *testing.T) {
 	sharedHome := t.TempDir()
 	const instances = 4
@@ -449,6 +502,8 @@ func TestCodexScript_ConcurrentSharedConfig(t *testing.T) {
 	}
 }
 
+// TestCodexScript_ReportsConfigFailure ensures configuration errors reach the
+// startup runner without unnecessarily repeating a successful package install.
 func TestCodexScript_ReportsConfigFailure(t *testing.T) {
 	env := newCodexScriptEnv(t, "0")
 	env.codexHome = filepath.Join(env.home, "not-a-directory")
@@ -463,6 +518,8 @@ func TestCodexScript_ReportsConfigFailure(t *testing.T) {
 	}
 }
 
+// TestCodexScript_PreservesConfigSymlink updates a dotfile target without
+// replacing its relative symlink or discarding unrelated settings.
 func TestCodexScript_PreservesConfigSymlink(t *testing.T) {
 	env := newCodexScriptEnv(t, "0")
 	env.codexHome = t.TempDir()
@@ -490,6 +547,162 @@ func TestCodexScript_PreservesConfigSymlink(t *testing.T) {
 	}
 }
 
+// TestCodexScript_HeldConfigLock deterministically checks mutual exclusion: a
+// separate open file description holds the lock throughout the script's run.
+func TestCodexScript_HeldConfigLock(t *testing.T) {
+	for _, portable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("portable-flock=%t", portable), func(t *testing.T) {
+			env := newCodexScriptEnv(t, "0")
+			env.codexHome = t.TempDir()
+			if portable {
+				if err := os.Remove(filepath.Join(env.stubBin, "flock")); err != nil {
+					t.Fatal(err)
+				}
+				writeTestFlock(t, env.stubBin)
+			}
+			config := filepath.Join(env.codexHome, "config.toml")
+			const original = "approvals_reviewer = \"user\"\n"
+			if err := os.WriteFile(config, []byte(original), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			lock, err := os.Open(env.codexHome)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lock.Close()
+			if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+				t.Fatal(err)
+			}
+			out, err := env.run(t)
+			if err == nil || !strings.Contains(out, "timed out waiting for Codex config directory lock: "+env.codexHome) {
+				t.Fatalf("held lock not reported: %v\n%s", err, out)
+			}
+			got, err := os.ReadFile(config)
+			if err != nil || string(got) != original {
+				t.Fatalf("config changed while lock was held: %q, %v", got, err)
+			}
+			if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := env.run(t); err != nil {
+				t.Fatalf("configure after unlock failed: %v\n%s", err, out)
+			}
+			assertCodexAutoMode(t, config)
+		})
+	}
+}
+
+// TestCodexLockHolderProcess is a subprocess fixture that owns a real kernel
+// lock until killed. It does nothing during an ordinary test run.
+func TestCodexLockHolderProcess(t *testing.T) {
+	path := os.Getenv("FLEET_TEST_CODEX_LOCK_HOLDER")
+	if path == "" {
+		return
+	}
+	lock, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println("holding")
+	time.Sleep(time.Minute)
+}
+
+// TestCodexScript_RecoversAfterKilledLockHolder verifies SIGKILL cannot strand
+// the fleet's lock. An obsolete mkdir marker from the old implementation is
+// harmless too; the new lock does not depend on marker cleanup or process IDs.
+func TestCodexScript_RecoversAfterKilledLockHolder(t *testing.T) {
+	env := newCodexScriptEnv(t, "0")
+	env.codexHome = t.TempDir()
+	if err := os.Mkdir(filepath.Join(env.codexHome, "config.toml.fleet-lock"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	holder := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCodexLockHolderProcess$")
+	holder.Env = append(os.Environ(), "FLEET_TEST_CODEX_LOCK_HOLDER="+env.codexHome)
+	stdout, err := holder.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if holder.ProcessState == nil {
+			_ = holder.Process.Kill()
+			_ = holder.Wait()
+		}
+	}()
+	if line, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || line != "holding\n" {
+		t.Fatalf("lock holder did not start: %q, %v", line, err)
+	}
+	if err := holder.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = holder.Wait()
+	if out, err := env.run(t); err != nil {
+		t.Fatalf("configure after SIGKILL failed: %v\n%s", err, out)
+	}
+	assertCodexAutoMode(t, filepath.Join(env.codexHome, "config.toml"))
+}
+
+// TestCodexScript_UnwritableConfigDirectory checks that EACCES is reported
+// immediately with the affected path, rather than disguised as lock contention.
+func TestCodexScript_UnwritableConfigDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write to a directory regardless of its mode bits")
+	}
+	env := newCodexScriptEnv(t, "0")
+	env.codexHome = t.TempDir()
+	if err := os.Chmod(env.codexHome, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(env.codexHome, 0o700) })
+	waited := filepath.Join(env.tmpDir, "waited")
+	writeStub(t, env.stubBin, "sleep", "#!/bin/sh\ntouch "+shellquote.Single(waited)+"\n")
+	out, err := env.run(t)
+	if err == nil || !strings.Contains(out, "config directory is not writable: "+env.codexHome) {
+		t.Fatalf("missing permission diagnostic: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(waited); !os.IsNotExist(err) {
+		t.Fatalf("retried a non-contention failure: %v", err)
+	}
+}
+
+// TestCodexScript_ReportsLockFailure distinguishes an unsupported lock operation
+// from contention and reports it immediately without modifying the config.
+func TestCodexScript_ReportsLockFailure(t *testing.T) {
+	env := newCodexScriptEnv(t, "0")
+	env.codexHome = t.TempDir()
+	if err := os.Remove(filepath.Join(env.stubBin, "flock")); err != nil {
+		t.Fatal(err)
+	}
+	writeStub(t, env.stubBin, "flock", "#!/bin/sh\necho 'flock: operation not supported' >&2\nexit 2\n")
+	waited := filepath.Join(env.tmpDir, "waited")
+	writeStub(t, env.stubBin, "sleep", "#!/bin/sh\ntouch "+shellquote.Single(waited)+"\n")
+	config := filepath.Join(env.codexHome, "config.toml")
+	const original = "approvals_reviewer = \"user\"\n"
+	if err := os.WriteFile(config, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := env.run(t)
+	if err == nil || !strings.Contains(out, "cannot lock Codex config directory: "+env.codexHome) || !strings.Contains(out, "operation not supported") {
+		t.Fatalf("missing lock diagnostic: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(waited); !os.IsNotExist(err) {
+		t.Fatalf("retried a non-contention failure: %v", err)
+	}
+	got, err := os.ReadFile(config)
+	if err != nil || string(got) != original {
+		t.Fatalf("config changed despite failed lock: %q, %v", got, err)
+	}
+}
+
+// TestCodexScript_RepairsLegacyInstall replaces an incomplete bare-binary install.
 func TestCodexScript_RepairsLegacyInstall(t *testing.T) {
 	env := newCodexScriptEnv(t, "0")
 	bin := filepath.Join(env.home, ".local", "bin")
