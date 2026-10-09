@@ -66,6 +66,9 @@ const (
 	// serverStartTimeout bounds how long Ensure waits for a freshly-started
 	// server to answer.
 	serverStartTimeout = 5 * time.Second
+	// Allow the old sink to finish closing after daemon stdin EOF. This stays
+	// well below the audio lock's 20 s bound so new startup can wait safely.
+	micFeedStopTimeout = 3 * time.Second
 )
 
 // The sink's stdout protocol: one event per line, "<event>[ <detail>]". The
@@ -353,11 +356,21 @@ func lockMicFeed(mode int) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), mode|syscall.LOCK_NB); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("microphone feed still active; deferring cleanup: %w", err)
+	deadline := time.Now().Add(micFeedStopTimeout)
+	for {
+		err := syscall.Flock(int(f.Fd()), mode|syscall.LOCK_NB)
+		if err == nil {
+			return f, nil
+		}
+		if mode != syscall.LOCK_EX || !errors.Is(err, syscall.EWOULDBLOCK) || time.Now().After(deadline) {
+			f.Close()
+			return nil, fmt.Errorf("microphone feed still active; deferring cleanup: %w", err)
+		}
+		// Run releases its lease only after the watcher and FIFO are closed.
+		// Waiting here lets ordinary off complete without a spurious warning;
+		// a re-enabled active feed keeps its lease and is never interrupted.
+		time.Sleep(20 * time.Millisecond)
 	}
-	return f, nil
 }
 
 func stopServer() error {
