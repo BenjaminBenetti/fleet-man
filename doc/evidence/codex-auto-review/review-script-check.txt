@@ -1,0 +1,10 @@
+Real Debian 12 fixture: reviewed installer script, run twice.
+Container: Privileged=false; CapAdd=null; SecurityOpt=null.
+Run 1:
+codex already installed: codex-cli 0.162.0
+codex auto mode already configured
+exit=0
+Run 2:
+codex already installed: codex-cli 0.162.0
+codex auto mode already configured
+exit=0

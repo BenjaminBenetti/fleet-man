@@ -1,0 +1,5 @@
+Codex config/read (no permission overrides; no login):
+  approval_policy = "on-request"
+  approvals_reviewer = "auto_review"
+  sandbox_mode = "workspace-write"
+PASS: Codex loaded automatic approval review by default.
