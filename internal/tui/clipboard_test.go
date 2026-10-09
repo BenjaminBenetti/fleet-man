@@ -86,12 +86,28 @@ func TestClipboardHelperProcess(t *testing.T) {
 		switch mode {
 		case "tmux":
 			args := os.Args[i+3:]
-			if len(args) > 0 && args[0] == "display-message" {
-				name, err := os.ReadFile(path + ".name")
+			if len(args) == 0 {
+				os.Exit(2)
+			}
+			name, err := os.ReadFile(path + ".name")
+			must(err)
+			switch args[0] {
+			case "display-message":
+				// Older tmux has no default paste-buffer context here.
+				_, err = os.Stdout.WriteString("\n")
 				must(err)
+				os.Exit(0)
+			case "list-buffers":
 				_, err = os.Stdout.Write(append(name, '\n'))
 				must(err)
 				os.Exit(0)
+			case "show-buffer":
+				first, _, _ := strings.Cut(string(name), "\n")
+				if len(args) != 3 || args[1] != "-b" || args[2] != first {
+					os.Exit(2)
+				}
+			default:
+				os.Exit(2)
 			}
 			data, err := os.ReadFile(path)
 			must(err)
@@ -145,18 +161,29 @@ func clipboardTestSync(t *testing.T) (cs *clipboardSync, buffer string, destinat
 		t.Fatal(err)
 	}
 	t.Setenv("FLEET_CLIPBOARD_TEST_HELPER", "1")
+	// Race-built helper processes otherwise sleep for a second on every exit.
+	// Preserve other race settings while removing this subprocess-only delay.
+	t.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	script := "#!/bin/sh\nexec " + shQuote(helper) + " -test.run=^TestClipboardHelperProcess$ -- tmux " + shQuote(buffer) + " \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cs = &clipboardSync{}
+	cs = &clipboardSync{
+		timeout: 500 * time.Millisecond,
+		clock:   func() time.Time { return time.Unix(1, 0) },
+	}
 	for _, name := range []string{"regular", "primary"} {
 		path := filepath.Join(dir, name)
 		destinations = append(destinations, path)
 		cs.clipCmds = append(cs.clipCmds, []string{helper, "-test.run=^TestClipboardHelperProcess$", "--", "copy", path})
 	}
 	return cs, buffer, destinations
+}
+
+func clipboardTestAdvance(cs *clipboardSync, d time.Duration) {
+	now := cs.now().Add(d)
+	cs.clock = func() time.Time { return now }
 }
 
 func TestClipboardPollRecoversFromHungWriter(t *testing.T) {
@@ -175,7 +202,7 @@ func TestClipboardPollRecoversFromHungWriter(t *testing.T) {
 			clipboardTestWrite(t, destinations[blocked]+".hang", "")
 			started := time.Now()
 			cs.poll(ctx)
-			if elapsed := time.Since(started); elapsed > clipboardCommandTimeout+2*time.Second || ctx.Err() != nil {
+			if elapsed := time.Since(started); elapsed > cs.commandTimeout()+2*time.Second || ctx.Err() != nil {
 				t.Fatalf("poll did not recover using its own timeout: elapsed=%v, parent=%v", elapsed, ctx.Err())
 			}
 			if got := clipboardTestRead(t, destinations[blocked]); got != "initial" {
@@ -186,6 +213,7 @@ func TestClipboardPollRecoversFromHungWriter(t *testing.T) {
 			}
 
 			clipboardTestRemove(t, destinations[blocked]+".hang")
+			clipboardTestAdvance(cs, clipboardRetryDelay)
 			cs.poll(ctx) // Retry the same text without restarting the synchronizer.
 			if got := clipboardTestRead(t, destinations[blocked]); got != text {
 				t.Fatal("timed-out write was not retried")
@@ -213,6 +241,7 @@ func TestClipboardPollRetriesOnlyFailedDestination(t *testing.T) {
 	clipboardTestWrite(t, destinations[1]+".fail", "")
 	cs.poll(ctx)
 	clipboardTestRemove(t, destinations[1]+".fail")
+	clipboardTestAdvance(cs, clipboardRetryDelay)
 	cs.poll(ctx)
 	cs.poll(ctx)
 	for i, path := range destinations {
@@ -233,7 +262,7 @@ func TestClipboardPollRecoversFromHungTmux(t *testing.T) {
 	clipboardTestWrite(t, buffer+".hang", "")
 	started := time.Now()
 	cs.poll(ctx)
-	if elapsed := time.Since(started); elapsed > clipboardCommandTimeout+2*time.Second || ctx.Err() != nil {
+	if elapsed := time.Since(started); elapsed > cs.commandTimeout()+2*time.Second || ctx.Err() != nil {
 		t.Fatalf("tmux read did not time out: elapsed=%v, parent=%v", elapsed, ctx.Err())
 	}
 	clipboardTestRemove(t, buffer+".hang")
@@ -311,6 +340,7 @@ func TestClipboardPollRecopiesIdenticalText(t *testing.T) {
 		t.Fatalf("explicit recopy left stale clipboard contents: %q", got)
 	}
 	clipboardTestRemove(t, destinations[1]+".fail")
+	clipboardTestAdvance(cs, clipboardRetryDelay)
 	cs.poll(ctx)
 	for i, path := range destinations {
 		if got := clipboardTestRead(t, path); got != "hello" {
@@ -380,6 +410,95 @@ func TestClipboardPollRecopiesIdenticalTextWithTmux(t *testing.T) {
 	for _, path := range destinations {
 		if got := clipboardTestRead(t, path); got != "hello" {
 			t.Fatalf("real tmux recopy left stale clipboard contents: %q", got)
+		}
+	}
+}
+
+func TestClipboardPollSupportsOlderTmux(t *testing.T) {
+	cs, buffer, destinations := clipboardTestSync(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	clipboardTestWrite(t, buffer+".name", "buffer9\nbuffer8\nbuffer7")
+	clipboardTestWrite(t, buffer, "newest copy")
+	cs.poll(ctx)
+	for _, path := range destinations {
+		if got := clipboardTestRead(t, path); got != "newest copy" {
+			t.Fatalf("copy with list-buffers-only metadata failed: %q", got)
+		}
+	}
+}
+
+func TestClipboardPollBoundsRetries(t *testing.T) {
+	cs, buffer, destinations := clipboardTestSync(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	clipboardTestWrite(t, buffer, "copied once")
+	clipboardTestWrite(t, destinations[1]+".fail", "")
+	cs.poll(ctx)
+	for i := 0; i < 4; i++ {
+		clipboardTestAdvance(cs, 200*time.Millisecond)
+		cs.poll(ctx)
+	}
+	if got := clipboardTestRead(t, destinations[1]+".attempts"); got != "x" {
+		t.Fatalf("retried during first backoff: %q", got)
+	}
+	clipboardTestAdvance(cs, 200*time.Millisecond)
+	cs.poll(ctx)
+	if got := clipboardTestRead(t, destinations[1]+".attempts"); got != "xx" {
+		t.Fatalf("first retry attempts = %q", got)
+	}
+	clipboardTestAdvance(cs, time.Second)
+	cs.poll(ctx)
+	if got := clipboardTestRead(t, destinations[1]+".attempts"); got != "xx" {
+		t.Fatalf("second backoff was not longer: %q", got)
+	}
+	clipboardTestAdvance(cs, time.Second)
+	cs.poll(ctx)
+	if got := clipboardTestRead(t, destinations[1]+".attempts"); got != "xxx" {
+		t.Fatalf("second retry attempts = %q", got)
+	}
+
+	// A destination recovering long after the retry budget is exhausted must
+	// not overwrite text the user has since selected in another application.
+	clipboardTestRemove(t, destinations[1]+".fail")
+	for _, path := range destinations {
+		clipboardTestWrite(t, path, "text selected in browser")
+	}
+	clipboardTestAdvance(cs, time.Hour)
+	cs.poll(ctx)
+	for i, path := range destinations {
+		if got := clipboardTestRead(t, path); got != "text selected in browser" {
+			t.Fatalf("stale retry overwrote destination %d: %q", i, got)
+		}
+		if got, want := clipboardTestRead(t, path+".attempts"), []string{"x", "xxx"}[i]; got != want {
+			t.Fatalf("destination %d exceeded retry budget: %q", i, got)
+		}
+	}
+
+	// Recopying the same text is a new user action with a fresh retry budget.
+	clipboardTestWrite(t, buffer+".name", "buffer1")
+	cs.poll(ctx)
+	for _, path := range destinations {
+		if got := clipboardTestRead(t, path); got != "copied once" {
+			t.Fatalf("explicit recopy did not reset retry budget: %q", got)
+		}
+	}
+}
+
+func TestClipboardPollNewCopyBypassesBackoff(t *testing.T) {
+	cs, buffer, destinations := clipboardTestSync(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	clipboardTestWrite(t, buffer, "old copy")
+	clipboardTestWrite(t, destinations[1]+".fail", "")
+	cs.poll(ctx)
+	clipboardTestRemove(t, destinations[1]+".fail")
+	clipboardTestWrite(t, buffer+".name", "buffer1")
+	clipboardTestWrite(t, buffer, "latest copy")
+	cs.poll(ctx) // No clock advance: the previous buffer's backoff still applies.
+	for _, path := range destinations {
+		if got := clipboardTestRead(t, path); got != "latest copy" {
+			t.Fatalf("new copy waited for old copy's backoff: %q", got)
 		}
 	}
 }
