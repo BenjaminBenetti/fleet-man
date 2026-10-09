@@ -148,8 +148,9 @@ These three top-level settings are reset on every create/rebuild of any instance
 in the fleet, including when Codex is already installed in the image. Use a named
 Codex profile for a different permission mode; other settings and named profiles
 are preserved. Configuration requires `flock` (provided by util-linux or BusyBox
-on Linux). Auto-review handles eligible approval requests; actions it rejects may
-still need your input.
+on Linux). Fleet keeps a `.fleet-codex.lock` file in the shared Codex home to
+coordinate provisioning. Auto-review handles eligible approval requests; actions
+it rejects may still need your input.
 
 Codex's Linux workspace sandbox requires working bubblewrap/user namespaces
 inside the container. Standard unprivileged Fleet instances may be unable to

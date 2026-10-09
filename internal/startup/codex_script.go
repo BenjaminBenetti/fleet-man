@@ -48,8 +48,9 @@ configure_auto_mode() (
   fi
   # Keep a stable lock file open for writing, including for NFS flock support.
   # The kernel releases the lock on SIGKILL; never unlink the lock file because
-  # concurrent waiters must continue to share the same inode.
-  lock="$config_dir/.fleet-codex.lock"
+  # concurrent waiters must continue to share the same inode. Keep it in the
+  # shared Codex home, outside any symlinked dotfiles target directory.
+  lock="$config_home/.fleet-codex.lock"
   exec 9<>"$lock"
   tries=0
   while :; do

@@ -111,22 +111,23 @@ func writeTestFlock(t *testing.T, bin string) {
 
 // TestCodexFlockCommand implements flock -n 9 for the portable test fixture.
 // Its inherited descriptor stays open in the parent shell after this exits.
+// syscall.Exit skips coverage hooks so contention stays silent under -cover.
 func TestCodexFlockCommand(t *testing.T) {
 	if os.Getenv("FLEET_TEST_CODEX_FLOCK") != "1" {
 		return
 	}
 	if args := os.Args; len(args) < 2 || args[len(args)-2] != "-n" || args[len(args)-1] != "9" {
-		os.Exit(2)
+		syscall.Exit(2)
 	}
 	err := syscall.Flock(9, syscall.LOCK_EX|syscall.LOCK_NB)
 	if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
-		os.Exit(1)
+		syscall.Exit(1)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		syscall.Exit(2)
 	}
-	os.Exit(0)
+	syscall.Exit(0)
 }
 
 // run executes the codex script body under sh with the sandbox
@@ -544,6 +545,10 @@ func TestCodexScript_PreservesConfigSymlink(t *testing.T) {
 	config := assertCodexAutoMode(t, target)
 	if config["model"] != "test-model" {
 		t.Fatalf("lost existing config: %v", config)
+	}
+	entries, err := os.ReadDir(filepath.Dir(target))
+	if err != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(target) {
+		t.Fatalf("unexpected files beside symlink target: %v, %v", entries, err)
 	}
 }
 
