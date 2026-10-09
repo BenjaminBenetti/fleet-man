@@ -24,7 +24,7 @@ type outputCapability struct{ micCapability }
 func (outputCapability) OutputSourceCommand(string) (*exec.Cmd, bool) { return nil, true }
 
 func TestScriptsForInstanceGatesOutputIndependently(t *testing.T) {
-	config := &state.Config{OutputSettings: state.OutputSettings{Enabled: true}}
+	config := state.DefaultConfig()
 	if got := scriptNames(scriptsForInstance(micCapability{supports: true}, fleet.FleetSettings{}, config)); len(got) != 0 {
 		t.Fatalf("unsupported backend installs output: %v", got)
 	}
@@ -32,6 +32,11 @@ func TestScriptsForInstanceGatesOutputIndependently(t *testing.T) {
 	if got := scriptNames(scriptsForInstance(b, fleet.FleetSettings{}, config)); !slices.Equal(got, []string{"output"}) {
 		t.Fatalf("output-only scripts: %v", got)
 	}
+	config.OutputSettings.Enabled = false
+	if got := scriptNames(scriptsForInstance(b, fleet.FleetSettings{}, config)); len(got) != 0 {
+		t.Fatalf("disabled output installs audio: %v", got)
+	}
+	config.OutputSettings.Enabled = true
 	config.MicSettings.Enabled = true
 	scripts := scriptsForInstance(b, fleet.FleetSettings{}, config)
 	if len(scripts) != 1 {

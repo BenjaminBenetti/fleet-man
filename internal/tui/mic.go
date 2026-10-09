@@ -377,7 +377,7 @@ func micChoices(m *model) []micChoice {
 // save failure, mirroring the other toggles.
 func (settingsPage *settingsPage) toggleMicEnabled(m *model) tea.Cmd {
 	if m.config == nil {
-		m.config = configutil.DefaultConfig()
+		m.config = placeholderConfig()
 	}
 	current := m.config.MicSettings.Enabled
 	m.config.MicSettings.Enabled = !current

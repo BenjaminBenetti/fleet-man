@@ -820,7 +820,7 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	// page / saves). The reload (or the Watch initial state) repopulates them.
 	m.st = &configutil.State{}
 	m.pstate = nil
-	m.config = configutil.DefaultConfig()
+	m.config = placeholderConfig()
 	m.armadaConfigPending = true
 	// The microphone follows the connection: stop providing to the daemon being
 	// left now. The new daemon's config (armadaSwitchedMsg) decides whether to

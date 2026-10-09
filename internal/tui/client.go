@@ -445,6 +445,7 @@ var fetchStateLegacy = func() (*configutil.State, error) {
 // fetchConfigLegacy pulls the config from the server and converts it. The
 // DefaultConfig base means absent optional fields render as their defaults
 // (unlike the server's SetConfig write path, which starts from a zero Config).
+// Missing audio output settings instead mean the daemon predates that feature.
 var fetchConfigLegacy = func() (*configutil.Config, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), mutationTimeout)
 	defer cancel()
@@ -456,5 +457,11 @@ var fetchConfigLegacy = func() (*configutil.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return protoconv.ConfigFromProto(reply.GetConfig(), configutil.DefaultConfig()), nil
+	cfg := protoconv.ConfigFromProto(reply.GetConfig(), configutil.DefaultConfig())
+	if reply.GetConfig().GetOutput() == nil {
+		// A current daemon always sends this group, even on a fresh profile.
+		// Do not enable playback against an older daemon that cannot serve it.
+		cfg.OutputSettings.Enabled = false
+	}
+	return cfg, nil
 }

@@ -118,7 +118,7 @@ func (m *model) selectTheme(name string) tea.Cmd {
 	m.themePicked = true
 	if !fleetclient.IsRemote() {
 		if m.config == nil {
-			m.config = configutil.DefaultConfig()
+			m.config = placeholderConfig()
 		}
 		m.config.ThemeSettings.Name = m.themeName
 		if err := setConfigRemote(m.config); err != nil {

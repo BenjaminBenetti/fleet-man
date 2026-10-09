@@ -170,7 +170,7 @@ var setOutputConfigRemote = func(config *configutil.Config) (uint64, error) {
 
 func (p *settingsPage) toggleOutputEnabled(m *model) tea.Cmd {
 	if m.config == nil {
-		m.config = configutil.DefaultConfig()
+		m.config = placeholderConfig()
 	}
 	old := m.config.OutputSettings
 	m.config.OutputSettings.Enabled = !old.Enabled

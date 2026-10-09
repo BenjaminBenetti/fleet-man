@@ -31,6 +31,7 @@ func DefaultConfig() *Config {
 		AgentSettings: AgentSettings{
 			ToolSelection: AgentToolClaude,
 		},
+		OutputSettings: OutputSettings{Enabled: true},
 	}
 }
 

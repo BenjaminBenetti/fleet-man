@@ -39,6 +39,51 @@ func TestLoadConfigAppliesDefaultsToEmptyJSON(t *testing.T) {
 	}
 }
 
+func TestOutputDefaultsAndSavedPreferences(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		json string // empty means no config file
+		want OutputSettings
+	}{
+		{"fresh install", "", OutputSettings{Enabled: true}},
+		{"older config", `{"agent_settings":{"tool_selection":"codex"}}`, OutputSettings{Enabled: true}},
+		{"empty output settings", `{"output_settings":{}}`, OutputSettings{Enabled: true}},
+		{"missing enabled preserves selection", `{"output_settings":{"client":"desk","device":"pulse:usb"}}`, OutputSettings{Enabled: true, Client: "desk", Device: "pulse:usb"}},
+		{"saved off", `{"output_settings":{"enabled":false}}`, OutputSettings{}},
+		{"saved off preserves selection", `{"output_settings":{"enabled":false,"client":"desk","device":"pulse:usb"}}`, OutputSettings{Client: "desk", Device: "pulse:usb"}},
+		{"saved on", `{"output_settings":{"enabled":true}}`, OutputSettings{Enabled: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			if tc.json != "" {
+				if err := os.MkdirAll(FleetDir(), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(ConfigPath(), []byte(tc.json), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			config, err := LoadConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if config.OutputSettings != tc.want || config.MicSettings.Enabled {
+				t.Fatalf("audio defaults: output=%+v mic=%+v", config.OutputSettings, config.MicSettings)
+			}
+			if err := SaveConfig(config); err != nil {
+				t.Fatal(err)
+			}
+			reloaded, err := LoadConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reloaded.OutputSettings != tc.want {
+				t.Fatalf("save/reload lost preference: %+v, want %+v", reloaded.OutputSettings, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadConfigPreservesValidToolSelections(t *testing.T) {
 	tests := []struct {
 		name string

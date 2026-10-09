@@ -138,6 +138,38 @@ func TestOutputConfigPreservedForOldClients(t *testing.T) {
 		t.Fatal("explicit off ignored")
 	}
 }
+
+func TestOutputDefaultOnAndSavedOffSurviveOlderClients(t *testing.T) {
+	isolateFleetDir(t)
+	svc := newService()
+	ctx := context.Background()
+	initial, err := svc.GetConfig(ctx, &fleetgrpc.GetConfigRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := initial.Config.GetOutput(); !out.GetEnabled() || out.GetClient() != "" || out.GetDevice() != "" {
+		t.Fatalf("fresh daemon must offer output on Auto: %v", out)
+	}
+	for _, enabled := range []bool{true, false} {
+		if !enabled {
+			if _, err := svc.SetConfig(ctx, &fleetgrpc.SetConfigRequest{Config: &fleetgrpc.Config{Output: &fleetgrpc.OutputSettings{Enabled: false}}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// An older client saves an unrelated setting without an output group.
+		if _, err := svc.SetConfig(ctx, &fleetgrpc.SetConfigRequest{Config: &fleetgrpc.Config{Agent: &fleetgrpc.AgentSettings{ToolSelection: "codex"}}}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := svc.GetConfig(ctx, &fleetgrpc.GetConfigRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Config.GetOutput().GetEnabled() != enabled {
+			t.Fatalf("older client changed output, want enabled=%v", enabled)
+		}
+	}
+}
+
 func TestOutputRPCSelectionDevicesAndDisable(t *testing.T) {
 	isolateFleetDir(t)
 	if err := state.SaveConfig(&state.Config{OutputSettings: state.OutputSettings{Enabled: true}}); err != nil {
