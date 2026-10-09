@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func newOutputTestModel(t *testing.T) (*settingsPage, *model) {
@@ -123,5 +125,65 @@ func TestSwitchArmadaStopsOutputUntilConfigArrives(t *testing.T) {
 	}
 	if !m.armadaConfigPending || m.config.OutputSettings.Enabled {
 		t.Fatal("placeholder defaults enabled output before destination config arrived")
+	}
+}
+
+func TestSettingsSaveKeepsOutputOffWithoutConfig(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		missing bool
+		enabled bool
+	}{
+		{name: "initial config load failed", missing: true},
+		{name: "loaded saved off"},
+		{name: "loaded default on", enabled: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sp, m := newMicTestModel(t)
+			m.config.OutputSettings.Enabled = tt.enabled
+			before := m.config.BrowserSettings.MultipleBrowsersPerFleetEnabled()
+			if tt.missing {
+				m.config = nil
+			}
+			sp.cursor = settingsPositionOf(sp, m, settingsItemBrowserMultiple)
+			if sp.cursor < 0 {
+				t.Fatal("browser setting missing")
+			}
+			sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
+			saved, err := state.LoadConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if saved.BrowserSettings.MultipleBrowsersPerFleetEnabled() == before {
+				t.Fatal("unrelated setting was not saved")
+			}
+			if saved.OutputSettings.Enabled != tt.enabled {
+				t.Fatalf("saved output enabled = %v, want %v", saved.OutputSettings.Enabled, tt.enabled)
+			}
+		})
+	}
+}
+
+func TestSettingsWithoutConfigShowsOutputOffAndAllowsOptIn(t *testing.T) {
+	sp, m := newOutputTestModel(t)
+	m.config = nil
+	m.width = 120
+	view := ansi.Strip(sp.viewSettings(m))
+	_, section, ok := strings.Cut(view, "Audio Output")
+	if !ok {
+		t.Fatal("audio output section missing")
+	}
+	section, _, _ = strings.Cut(section, "Claude Code")
+	if !strings.Contains(section, "[ off ]") || strings.Contains(section, "Output device") {
+		t.Fatalf("unloaded config must show output off: %s", section)
+	}
+	if m.config != nil {
+		t.Fatal("rendering must not fill in the missing config")
+	}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemOutputEnabled)
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	saved, err := state.LoadConfig()
+	if err != nil || !saved.OutputSettings.Enabled {
+		t.Fatalf("explicit output opt-in was not saved: config=%+v err=%v", saved, err)
 	}
 }

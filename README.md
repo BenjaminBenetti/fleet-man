@@ -690,9 +690,12 @@ passwordless sudo inside the instance. New devcontainers receive this setup at
 creation, including fleets run without an attached playback client. Existing
 running instances receive it when a playback client attaches. After upgrading
 from a version without output settings, this can install audio packages in all
-running devcontainers. Turn output off before creating instances or attaching a
-playback client if you do not want that setup. Setup failures appear as instance
-warnings.
+running devcontainers. The TUI automatically attaches as a playback client when
+output is enabled. To opt out before upgrading, set `"enabled": false` in the
+`"output_settings"` object in the daemon host's `~/.fleet/config.json` before
+starting the upgraded daemon or TUI. If that object is absent, add
+`"output_settings": {"enabled": false}` while preserving the other settings.
+Setup failures appear as instance warnings.
 
 Fleet also installs the ALSA configuration used by the microphone. Existing
 custom ALSA defaults are preserved; a warning explains when they may bypass

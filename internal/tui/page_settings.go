@@ -512,7 +512,7 @@ func (settingsPage *settingsPage) settingsItemCount(m *model) int {
 // toggleTmuxVimKeys toggles the tmux vim keys setting.
 func (settingsPage *settingsPage) toggleTmuxVimKeys(m *model) {
 	if m.config == nil {
-		m.config = configutil.DefaultConfig()
+		m.config = placeholderConfig()
 	}
 	current := m.config.GeneralSettings.TmuxVimKeysEnabled()
 	next := !current
@@ -532,7 +532,7 @@ func (settingsPage *settingsPage) toggleTmuxVimKeys(m *model) {
 // toggleShowHelpText flips the show-help-text preference and saves.
 func (settingsPage *settingsPage) toggleShowHelpText(m *model) {
 	if m.config == nil {
-		m.config = configutil.DefaultConfig()
+		m.config = placeholderConfig()
 	}
 	current := m.config.GeneralSettings.ShowHelpTextEnabled()
 	next := !current
@@ -554,7 +554,7 @@ func (settingsPage *settingsPage) toggleShowHelpText(m *model) {
 // Claude Code sessions follow within seconds.
 func (settingsPage *settingsPage) toggleClaudeStatusMod(m *model) {
 	if m.config == nil {
-		m.config = configutil.DefaultConfig()
+		m.config = placeholderConfig()
 	}
 	current := m.config.ClaudeCodeSettings.StatusModEnabled()
 	next := !current
@@ -577,7 +577,7 @@ func (settingsPage *settingsPage) toggleClaudeStatusMod(m *model) {
 // silently.
 func (settingsPage *settingsPage) toggleBrowserAutoSwitch(m *model) {
 	if m.config == nil {
-		m.config = configutil.DefaultConfig()
+		m.config = placeholderConfig()
 	}
 	current := m.config.BrowserSettings.AutoSwitchEnabled()
 	next := !current
@@ -600,7 +600,7 @@ func (settingsPage *settingsPage) toggleBrowserAutoSwitch(m *model) {
 // single profile under <fleet>/.browser.
 func (settingsPage *settingsPage) toggleBrowserMultiple(m *model) {
 	if m.config == nil {
-		m.config = configutil.DefaultConfig()
+		m.config = placeholderConfig()
 	}
 	current := m.config.BrowserSettings.MultipleBrowsersPerFleetEnabled()
 	next := !current
@@ -622,7 +622,7 @@ func (settingsPage *settingsPage) toggleBrowserMultiple(m *model) {
 // save failure, mirroring the other toggles.
 func (settingsPage *settingsPage) toggleRemoteMcpEnabled(m *model) {
 	if m.config == nil {
-		m.config = configutil.DefaultConfig()
+		m.config = placeholderConfig()
 	}
 	current := m.config.RemoteMcpSettings.Enabled
 	next := !current
@@ -661,7 +661,7 @@ func (settingsPage *settingsPage) toggleRemoteMcpEnabled(m *model) {
 // ever changes.
 func (settingsPage *settingsPage) toggleRemoteFleetEnabled(m *model) {
 	if m.config == nil {
-		m.config = configutil.DefaultConfig()
+		m.config = placeholderConfig()
 	}
 	current := m.config.RemoteMcpSettings.FleetEnabled
 	next := !current
@@ -694,7 +694,7 @@ func (settingsPage *settingsPage) toggleRemoteFleetEnabled(m *model) {
 // index is preserved and no cursor re-pin is needed.
 func (settingsPage *settingsPage) setRemoteFleetMode(m *model, mode string) {
 	if m.config == nil {
-		m.config = configutil.DefaultConfig()
+		m.config = placeholderConfig()
 	}
 	current := m.config.RemoteMcpSettings.FleetMode
 	if current == mode || (mode == configutil.FleetModeGateway && !m.config.RemoteMcpSettings.FleetViaSSH()) {
@@ -744,7 +744,7 @@ func remoteSSHStatusValue(m *model) string {
 // bounce from a remote client).
 func (settingsPage *settingsPage) toggleRemoteWebhookEnabled(m *model) {
 	if m.config == nil {
-		m.config = configutil.DefaultConfig()
+		m.config = placeholderConfig()
 	}
 	current := m.config.RemoteMcpSettings.WebhookEnabled
 	next := !current
@@ -770,7 +770,7 @@ func (settingsPage *settingsPage) toggleRemoteWebhookEnabled(m *model) {
 // toggleAutoInstall toggles the dotfiles auto-install setting.
 func (settingsPage *settingsPage) toggleAutoInstall(m *model) {
 	if m.config == nil {
-		m.config = configutil.DefaultConfig()
+		m.config = placeholderConfig()
 	}
 	m.config.DotfilesSettings.AutoInstall = !m.config.DotfilesSettings.AutoInstall
 	if err := setConfigRemote(m.config); err != nil {
@@ -1333,7 +1333,7 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 // enterSettingsEditing activates text editing for the current setting.
 func (settingsPage *settingsPage) enterSettingsEditing(m *model) tea.Cmd {
 	if m.config == nil {
-		m.config = configutil.DefaultConfig()
+		m.config = placeholderConfig()
 	}
 
 	item := settingsPage.settingsCursorItem(m)
@@ -1552,7 +1552,7 @@ func (settingsPage *settingsPage) updateSettingsEditing(m *model, msg tea.Msg) t
 		case tea.KeyEnter:
 			value := strings.TrimSpace(settingsPage.input.Value())
 			if m.config == nil {
-				m.config = configutil.DefaultConfig()
+				m.config = placeholderConfig()
 			}
 
 			item := settingsPage.settingsCursorItem(m)
@@ -1622,7 +1622,7 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 
 	config := m.config
 	if config == nil {
-		config = configutil.DefaultConfig()
+		config = placeholderConfig()
 	}
 
 	box := listBox
