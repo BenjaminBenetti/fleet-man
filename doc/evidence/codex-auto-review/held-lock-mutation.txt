@@ -1,0 +1,17 @@
+Negative control: replace flock -n 9 with true using a temporary Go build overlay.
+Expected result: held-lock regression test must fail.
+
+--- FAIL: TestCodexScript_HeldConfigLock (0.02s)
+    --- FAIL: TestCodexScript_HeldConfigLock/portable-flock=false (0.01s)
+        codex_script_test.go:578: held lock not reported: <nil>
+            installing Codex via OpenAI installer (attempt 1 of 3)...
+            codex installed: codex-cli 1.0.0
+            codex configured for auto mode (automatic approval review)
+    --- FAIL: TestCodexScript_HeldConfigLock/portable-flock=true (0.01s)
+        codex_script_test.go:578: held lock not reported: <nil>
+            installing Codex via OpenAI installer (attempt 1 of 3)...
+            codex installed: codex-cli 1.0.0
+            codex configured for auto mode (automatic approval review)
+FAIL
+FAIL	github.com/BenjaminBenetti/fleet-man/internal/startup	0.021s
+FAIL
