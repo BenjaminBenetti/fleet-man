@@ -77,6 +77,16 @@ func EnsureOutput() error {
 		if err := ensureAudio(false); err != nil {
 			return err
 		}
+		// Also repair servers started by older fleet binaries. Set this before
+		// choosing the output sink so its monitor never becomes the default.
+		switch micPresent() {
+		case no:
+			if _, err := pactl(context.Background(), "set-default-source", silentSource); err != nil {
+				return err
+			}
+		case unknown:
+			return fmt.Errorf("cannot determine the microphone source; leaving audio routing alone")
+		}
 		present, err := outputPresent()
 		if err != nil {
 			return err

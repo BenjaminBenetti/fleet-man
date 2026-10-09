@@ -57,6 +57,10 @@ const (
 	FIFOPath = Dir + "/pcm"
 	// SourceName is the pipe-source's PulseAudio name.
 	SourceName = mic.VirtualSourceName
+	// The silent fallback keeps fleetoutput.monitor from becoming the default
+	// source while the mic is off. PulseAudio lets streams opened on the
+	// current default follow later default changes, even with --device set.
+	silentSource = "fleetnull.monitor"
 
 	// serverStartTimeout bounds how long Ensure waits for a freshly-started
 	// server to answer.
@@ -97,7 +101,7 @@ func serverScript() string {
 
 func audioServerScript(microphone bool) string {
 	if !microphone {
-		return fmt.Sprintf("load-module module-native-protocol-unix socket=%s auth-anonymous=1\nload-module module-null-sink sink_name=fleetnull sink_properties=device.description=FleetNull\nset-default-sink fleetnull\n", path("pulse.sock"))
+		return fmt.Sprintf("load-module module-native-protocol-unix socket=%s auth-anonymous=1\nload-module module-null-sink sink_name=fleetnull sink_properties=device.description=FleetNull\nset-default-sink fleetnull\nset-default-source %s\n", path("pulse.sock"), silentSource)
 	}
 	return fmt.Sprintf(`load-module module-native-protocol-unix socket=%s auth-anonymous=1
 load-module module-null-sink sink_name=fleetnull sink_properties=device.description=FleetNull
@@ -305,6 +309,12 @@ func Stop() error {
 		if output {
 			if micPresent() == no {
 				return nil
+			}
+			// Set the fallback BEFORE removing the mic: otherwise PulseAudio
+			// picks the output monitor, and a reconnecting output recorder
+			// will follow the default back onto the mic when it is re-enabled.
+			if _, err := pactl(context.Background(), "set-default-source", silentSource); err != nil {
+				return err
 			}
 			_, err := pactl(context.Background(), "unload-module", "module-pipe-source")
 			return err
