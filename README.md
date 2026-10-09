@@ -660,8 +660,11 @@ Devcontainer instances only: Codespaces and Coder workspaces are skipped.
 
 Audio output defaults to **on**, with **Auto** selected, so you can hear audio
 from your devcontainer instances. Configure it under **Settings → Audio Output**.
-Existing saved off settings are preserved, including those saved by earlier
-betas; turn output on there if you previously saved it as off.
+Existing saved off settings are preserved. If you used an earlier beta and
+changed any setting, output may have been saved as off even if you never changed
+the output toggle. Turn it on under **Settings → Audio Output** to enable it.
+When connected to a daemon that predates audio output, output defaults to off;
+upgrade that daemon to use playback.
 
 The **Output device** row cycles through **Auto**, each connected client's system
 default, and its speakers or headphones. Devices always belong to a client: a
@@ -681,8 +684,17 @@ microphone's naming convention, including `FLEET_MIC_CLIENT` for duplicate
 hostnames. A client inside an instance does not offer fleet's own virtual sink.
 
 Instances get a virtual **FleetAudioOutput** sink as their PulseAudio default.
-Fleet installs the same audio packages and ALSA configuration used by the
-microphone, at creation or on first attachment to an existing instance. Existing
+With output enabled, Fleet installs `pulseaudio`, `pulseaudio-utils`, the ALSA
+pulse plugin and `alsa-utils` using apt, apk or dnf; this requires root or
+passwordless sudo inside the instance. New devcontainers receive this setup at
+creation, including fleets run without an attached playback client. Existing
+running instances receive it when a playback client attaches. After upgrading
+from a version without output settings, this can install audio packages in all
+running devcontainers. Turn output off before creating instances or attaching a
+playback client if you do not want that setup. Setup failures appear as instance
+warnings.
+
+Fleet also installs the ALSA configuration used by the microphone. Existing
 custom ALSA defaults are preserved; a warning explains when they may bypass
 Fleet's output. Audio uses 48 kHz stereo PCM, with bounded queues and mixing on
 the receiving client so multiple instances can play together. Devcontainer
