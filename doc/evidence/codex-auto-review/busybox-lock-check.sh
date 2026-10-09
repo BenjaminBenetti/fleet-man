@@ -47,4 +47,14 @@ grep -Fq "cannot lock Codex config: $lock" "$HOME/result"
 grep -Fq 'Bad file descriptor' "$HOME/result"
 [ ! -e "$HOME/retried" ]
 cmp "$HOME/original.toml" "$CODEX_HOME/config.toml"
-printf '\nPASS: free/held/released locks and BusyBox exit-1 errors; error has no retry and preserves config.\n'
+printf '\nSymlinked dotfiles target: '
+rm "$HOME/bin/flock"
+target_dir=/tmp/fleet-dotfiles/codex
+mkdir -p "$target_dir"
+mv "$CODEX_HOME/config.toml" "$target_dir/config.toml"
+ln -s "$target_dir/config.toml" "$CODEX_HOME/config.toml"
+sh /evidence/codex-review-script.sh
+[ "$(ls -A "$target_dir")" = config.toml ]
+[ -f "$CODEX_HOME/.fleet-codex.lock" ]
+[ "$(stat -c %i "$lock")" = "$inode" ]
+printf '\nPASS: free/held/released locks, BusyBox exit-1 errors without retries, and no lock artifact beside the symlink target.\n' 

@@ -12,4 +12,7 @@ codex configured for auto mode (automatic approval review)
 Real BusyBox error (close fd 9 in flock wrapper): codex already installed: codex-fixture
 cannot lock Codex config: /tmp/codex-lock-fixture/config/.fleet-codex.lock (flock: Bad file descriptor)
 
-PASS: free/held/released locks and BusyBox exit-1 errors; error has no retry and preserves config.
+Symlinked dotfiles target: codex already installed: codex-fixture
+codex auto mode already configured
+
+PASS: free/held/released locks, BusyBox exit-1 errors without retries, and no lock artifact beside the symlink target.
