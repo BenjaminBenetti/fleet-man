@@ -821,6 +821,9 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	m.st = &configutil.State{}
 	m.pstate = nil
 	m.config = configutil.DefaultConfig()
+	// Defaults are only a placeholder here. Keep output stopped until the
+	// destination daemon supplies its actual setting, even though it defaults on.
+	m.config.OutputSettings.Enabled = false
 	m.armadaConfigPending = true
 	// The microphone follows the connection: stop providing to the daemon being
 	// left now. The new daemon's config (armadaSwitchedMsg) decides whether to

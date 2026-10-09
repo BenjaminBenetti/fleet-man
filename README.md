@@ -658,7 +658,11 @@ Devcontainer instances only: Codespaces and Coder workspaces are skipped.
 
 ## Audio output
 
-Enable **Settings → Audio Output** to hear audio from your devcontainer instances.
+Audio output defaults to **on**, with **Auto** selected, so you can hear audio
+from your devcontainer instances. Configure it under **Settings → Audio Output**.
+Existing saved off settings are preserved, including those saved by earlier
+betas; turn output on there if you previously saved it as off.
+
 The **Output device** row cycles through **Auto**, each connected client's system
 default, and its speakers or headphones. Devices always belong to a client: a
 local fleetd and a fleetd reached through SSH or a gateway use the same path.

@@ -1,0 +1,38 @@
+            _    _    _
+ ___   ___ | |_ | |_ (_) _ __     __ _  ___
+/ __| / _ \| __|| __|| || '_ \   / _` |/ __|
+\__ \|  __/| |_ | |_ | || | | | | (_| |\__ \
+|___/ \___| \__| \__||_||_| |_|  \__, ||___/
+                                 |___/
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────── ▲   │
+│                                                                                                              ░   │
+│   Enabled            [ off ]                                                                                 ░   │
+│                      Proxy a client's microphone into instances (voice input for coding agents)              ░   │
+│                                                                                                              ░   │
+│ Audio Output                                                                                                 ░   │
+│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────── ░   │
+│                                                                                                              ░   │
+│   Enabled            [ on ]                                                                                  █   │
+│                      Play instance audio on a connected client's speakers or headphones                      █   │
+│ > Output device      ◀ Auto ▶                                                                                █   │
+│                      Output on review-laptop                                                                 █   │
+│   This client        ready — waiting for instance audio                                                      █   │
+│                                                                                                              █   │
+│ Claude Code                                                                                                  ░   │
+│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────── ░   │
+│                                                                                                              ░   │
+│   Fleet status mod   [ on ]                                                                                  ░   │
+│                      Show the instance and the agents at work across fleets above the Claude Code prompt     ░   │
+│                                                                                                              ░   │
+│ Fleet MCP                                                                                                    ░   │
+│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────── ░   │
+│                                                                                                              ░   │
+│   Copy local MCP config press enter to copy mcp.json for the loopback server                                 ░   │
+│   Enable Remote MCP  [ off ]                                                                                 ░   │
+│                      Expose this fleet's MCP server to the internet via a fleet gateway                      ▼   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+j/k: navigate  left/right: cycle  enter: edit  esc: back  ctrl+c: quit
+
