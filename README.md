@@ -139,6 +139,15 @@ Project overrides survive instance deletion and recreation; other project
 `.claude` files remain part of each workspace. Rebuild existing instances to
 apply newly enabled mounts and project settings links.
 
+Enabling a fleet's **Codex mount** shares `~/.codex` and installs Codex in each
+instance. Creation and rebuilds also configure Codex's default permissions for
+[automatic approval review](https://learn.chatgpt.com/docs/sandboxing/auto-review)
+("Approve for me"): `approval_policy = "on-request"`,
+`approvals_reviewer = "auto_review"`, and `sandbox_mode = "workspace-write"`.
+This also applies to Codex already installed in the image. Other Codex settings
+and named profiles are preserved. Auto-review handles eligible approval requests;
+actions it rejects may still need your input.
+
 Fleet runs the devcontainer's `postStartCommand` during creation and after each
 stop/start cycle. Starting an already running instance does not repeat it.
 Restart hook failures are logged while the container remains running.

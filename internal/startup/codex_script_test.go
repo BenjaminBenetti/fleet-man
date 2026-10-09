@@ -5,7 +5,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // codexScriptEnv is the sandbox a single test run of the codex script
@@ -18,6 +21,7 @@ type codexScriptEnv struct {
 	stubBin       string
 	counter       string
 	installerMode string
+	codexHome     string
 }
 
 // newCodexScriptEnv builds the sandbox. failures is the number of leading
@@ -97,7 +101,7 @@ func (env *codexScriptEnv) run(t *testing.T) (string, error) {
 		"PATH=" + env.stubBin + ":" + filepath.Join(env.home, ".local", "bin") + ":/usr/bin:/bin",
 		"HOME=" + env.home,
 		"TMPDIR=" + env.tmpDir,
-		"CODEX_HOME=" + filepath.Join(env.home, ".codex"),
+		"CODEX_HOME=" + env.codexHome,
 		"TEST_INSTALLER_MODE=" + env.installerMode,
 	}
 	out, err := cmd.CombinedOutput()
@@ -119,8 +123,8 @@ func (env *codexScriptEnv) curlCalls(t *testing.T) string {
 
 // TestCodexScript_InstallsCompletePackage covers the missing Code Mode host
 // regression and issue #145: the install must leave a runnable binary at
-// the real ~/.local/bin/codex, must keep every write out of ~/.codex
-// (the fleet's shared mount), and must wire ~/.local/bin into
+// the real ~/.local/bin/codex, must keep package writes out of ~/.codex
+// (the fleet's shared config mount), and must wire ~/.local/bin into
 // ~/.profile for login shells.
 func TestCodexScript_InstallsCompletePackage(t *testing.T) {
 	env := newCodexScriptEnv(t, "0")
@@ -152,10 +156,12 @@ func TestCodexScript_InstallsCompletePackage(t *testing.T) {
 		}
 	}
 
-	// The shared mount (real ~/.codex) must be untouched by the install.
-	if _, err := os.Stat(filepath.Join(env.home, ".codex")); !os.IsNotExist(err) {
-		t.Errorf("install wrote to ~/.codex (the shared mount): stat err = %v", err)
+	// Only runtime configuration belongs in the shared Codex home.
+	entries, err := os.ReadDir(filepath.Join(env.home, ".codex"))
+	if err != nil || len(entries) != 1 || entries[0].Name() != "config.toml" {
+		t.Fatalf("unexpected shared Codex home contents: %v, err = %v", entries, err)
 	}
+	assertCodexAutoMode(t, filepath.Join(env.home, ".codex", "config.toml"))
 
 	// Login shells must find ~/.local/bin.
 	profile, err := os.ReadFile(filepath.Join(env.home, ".profile"))
@@ -262,6 +268,225 @@ func TestCodexScript_SkipsWhenAlreadyInstalled(t *testing.T) {
 	}
 	if got := env.curlCalls(t); got != "0" {
 		t.Errorf("curl invoked %s times, want 0", got)
+	}
+	assertCodexAutoMode(t, filepath.Join(env.home, ".codex", "config.toml"))
+}
+
+func assertCodexAutoMode(t *testing.T, path string) map[string]any {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := toml.Unmarshal(content, &config); err != nil {
+		t.Fatalf("invalid Codex config: %v\n%s", err, content)
+	}
+	for key, want := range map[string]string{
+		"approval_policy":    "on-request",
+		"approvals_reviewer": "auto_review",
+		"sandbox_mode":       "workspace-write",
+	} {
+		if got := config[key]; got != want {
+			t.Errorf("%s = %v, want %s", key, got, want)
+		}
+	}
+	return config
+}
+
+func TestCodexScript_ConfiguresExistingConfig(t *testing.T) {
+	env := newCodexScriptEnv(t, "0")
+	configHome := filepath.Join(env.home, ".codex")
+	if err := os.MkdirAll(configHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configHome, "config.toml")
+	const preserved = `# User preferences
+model = "test-model"
+
+[mcp_servers.example]
+command = "example-server"
+
+[profiles.manual]
+approval_policy = "on-request"
+approvals_reviewer = "user"
+sandbox_mode = "read-only"
+`
+	const oldPermissions = "approval_policy = \"never\"\napprovals_reviewer = \"user\"\nsandbox_mode = \"read-only\"\n"
+	if err := os.WriteFile(configPath, []byte(oldPermissions+preserved), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := env.run(t); err != nil {
+		t.Fatalf("configure failed: %v\n%s", err, out)
+	}
+	assertCodexAutoMode(t, configPath)
+	first, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(string(first), preserved) {
+		t.Fatalf("unrelated config changed:\n%s", first)
+	}
+	if out, err := env.run(t); err != nil {
+		t.Fatalf("repeat configure failed: %v\n%s", err, out)
+	}
+	second, err := os.ReadFile(configPath)
+	if err != nil || string(first) != string(second) {
+		t.Fatalf("repeated configure changed config: %v\n%s", err, second)
+	}
+}
+
+func TestCodexScript_UsesRuntimeCodexHome(t *testing.T) {
+	env := newCodexScriptEnv(t, "0")
+	env.codexHome = filepath.Join(t.TempDir(), "custom codex home")
+	if out, err := env.run(t); err != nil {
+		t.Fatalf("configure failed: %v\n%s", err, out)
+	}
+	assertCodexAutoMode(t, filepath.Join(env.codexHome, "config.toml"))
+	if _, err := os.Stat(filepath.Join(env.home, ".codex")); !os.IsNotExist(err) {
+		t.Fatalf("wrote config outside runtime Codex home: %v", err)
+	}
+}
+
+func TestCodexScript_PreservesTOMLValues(t *testing.T) {
+	for name, existing := range map[string]string{
+		"quoted keys": `"approval_policy" = 'never'
+'approvals_reviewer' = 'user'
+"sandbox_mode" = 'read-only'
+`,
+		"granular inline": `approval_policy = { granular = { sandbox_approval = true } }
+`,
+		"granular table": `[approval_policy.granular]
+sandbox_approval = true
+`,
+		"granular dotted": `approval_policy.granular.sandbox_approval = true
+`,
+		"multiline strings": `developer_instructions = """
+[this is not a table]
+approval_policy = "preserve this text"
+escaped triple quotes: \"""
+"""
+model = "test-model"
+approvals_reviewer = "user"
+`,
+		"multiline literals": `developer_instructions = '''
+[this is not a table]
+approvals_reviewer = "preserve this text"
+'''
+sandbox_mode = 'read-only'
+`,
+		"multiline arrays": `test_values = [
+  ["[not a table]", "approvals_reviewer = \"user\""],
+  ["keep", "me"],
+]
+sandbox_mode = "read-only"
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newCodexScriptEnv(t, "0")
+			env.codexHome = t.TempDir()
+			// Tables after the existing values must never become root defaults.
+			existing += "\n[mcp_servers.example]\ncommand = \"example\"\n"
+			var want map[string]any
+			if err := toml.Unmarshal([]byte(existing), &want); err != nil {
+				t.Fatalf("invalid test fixture: %v", err)
+			}
+			want["approval_policy"] = "on-request"
+			want["approvals_reviewer"] = "auto_review"
+			want["sandbox_mode"] = "workspace-write"
+			path := filepath.Join(env.codexHome, "config.toml")
+			if err := os.WriteFile(path, []byte(existing), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := env.run(t); err != nil {
+				t.Fatalf("configure failed: %v\n%s", err, out)
+			}
+			got := assertCodexAutoMode(t, path)
+			gotTOML, err := toml.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantTOML, err := toml.Marshal(want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(gotTOML) != string(wantTOML) {
+				t.Fatalf("unexpected config:\n%s\nwant:\n%s", gotTOML, wantTOML)
+			}
+			info, err := os.Stat(path)
+			if err != nil || info.Mode().Perm() != 0o640 {
+				t.Fatalf("config permissions changed: %v, %v", info, err)
+			}
+		})
+	}
+}
+
+func TestCodexScript_ConcurrentSharedConfig(t *testing.T) {
+	sharedHome := t.TempDir()
+	const instances = 4
+	envs := make([]*codexScriptEnv, instances)
+	for i := range envs {
+		envs[i] = newCodexScriptEnv(t, "0")
+		envs[i].codexHome = sharedHome
+		// Use the real lock wait while exercising concurrent provisioning.
+		if err := os.Remove(filepath.Join(envs[i].stubBin, "sleep")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	for _, env := range envs {
+		wg.Go(func() {
+			if out, err := env.run(t); err != nil {
+				t.Errorf("concurrent configure failed: %v\n%s", err, out)
+			}
+		})
+	}
+	wg.Wait()
+	assertCodexAutoMode(t, filepath.Join(sharedHome, "config.toml"))
+	entries, err := os.ReadDir(sharedHome)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "config.toml" {
+		t.Fatalf("config lock or temporary files left behind: %v, %v", entries, err)
+	}
+}
+
+func TestCodexScript_ReportsConfigFailure(t *testing.T) {
+	env := newCodexScriptEnv(t, "0")
+	env.codexHome = filepath.Join(env.home, "not-a-directory")
+	if err := os.WriteFile(env.codexHome, []byte("preserve"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := env.run(t); err == nil {
+		t.Fatalf("configuration failure reported success:\n%s", out)
+	}
+	if got := env.curlCalls(t); got != "1" {
+		t.Errorf("configuration failure retried installer %s times", got)
+	}
+}
+
+func TestCodexScript_PreservesConfigSymlink(t *testing.T) {
+	env := newCodexScriptEnv(t, "0")
+	env.codexHome = t.TempDir()
+	target := filepath.Join(env.codexHome, "dotfiles", "codex config.toml")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("model = \"test-model\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(env.codexHome, "config.toml")
+	const relativeTarget = "dotfiles/codex config.toml"
+	if err := os.Symlink(relativeTarget, link); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := env.run(t); err != nil {
+		t.Fatalf("configure failed: %v\n%s", err, out)
+	}
+	if got, err := os.Readlink(link); err != nil || got != relativeTarget {
+		t.Fatalf("config symlink changed: %q, %v", got, err)
+	}
+	config := assertCodexAutoMode(t, target)
+	if config["model"] != "test-model" {
+		t.Fatalf("lost existing config: %v", config)
 	}
 }
 
