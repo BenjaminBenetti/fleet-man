@@ -1486,7 +1486,7 @@ func Run() error {
 	m := newModel()
 
 	// Start clipboard buffer polling when running inside tmux.
-	// A goroutine polls `tmux show-buffer` and copies changes to the
+	// A goroutine polls the latest tmux buffer's name and contents to copy to the
 	// system clipboard (wl-copy / xclip / pbcopy). This is the
 	// universal clipboard mechanism that works on ALL terminals,
 	// including those without OSC 52 support.
