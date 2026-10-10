@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/codes"
@@ -334,7 +335,7 @@ func applyConnectionFlags(cmd *cobra.Command, c *fleetgrpc.KubeCluster, kubeCont
 // (then the daemon shows the id).
 func defaultClusterName(ctx context.Context, svc fleetgrpc.FleetServiceClient, c *fleetgrpc.KubeCluster) string {
 	name := c.GetContext()
-	if len(name) > 63 || strings.ContainsFunc(name, func(r rune) bool { return r < ' ' || r == 0x7f }) {
+	if len(name) > 63 || strings.ContainsFunc(name, unicode.IsControl) {
 		return ""
 	}
 	reply, err := svc.ListKubeClusters(ctx, &fleetgrpc.ListKubeClustersRequest{})
@@ -375,12 +376,19 @@ func parseLabels(labels []string) (map[string]string, error) {
 
 // createClusterNamespace creates the namespace c names (or its default)
 // through fleetd before the connection is added; one that exists is fine.
+// When fleetd may not create it, the manifest is printed for someone who can.
 func createClusterNamespace(ctx context.Context, svc fleetgrpc.FleetServiceClient, out io.Writer, c *fleetgrpc.KubeCluster, labels map[string]string) error {
 	reply, err := svc.CreateKubeNamespace(ctx, &fleetgrpc.CreateKubeNamespaceRequest{Cluster: c, Labels: labels})
 	switch {
 	case status.Code(err) == codes.AlreadyExists:
 		fmt.Fprintf(out, "%s\n", status.Convert(err).Message())
 		return nil
+	case status.Code(err) == codes.PermissionDenied:
+		dry, derr := svc.CreateKubeNamespace(ctx, &fleetgrpc.CreateKubeNamespaceRequest{Cluster: c, Labels: labels, DryRun: true})
+		if derr == nil && dry.GetManifest() != "" {
+			fmt.Fprintf(out, "Namespace manifest:\n%s", dry.GetManifest())
+		}
+		return err
 	case err != nil:
 		return err
 	}
@@ -474,12 +482,24 @@ func newClusterRemoveCmd() *cobra.Command {
 					fmt.Fprintf(out, "warning: %s\n", w)
 				}
 				fmt.Fprintf(out, "Removed cluster %q\n", c.DisplayNameOrID())
-				if users := reply.GetUsers(); len(users) > 0 {
-					verb := "destroyed"
-					if mode == fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_FORGET {
-						verb = "left in namespace " + c.GetNamespace()
+				// The users' statuses are from before the removal: name them only.
+				var instances, agents []string
+				for _, u := range reply.GetUsers() {
+					if u.GetAgent() != "" {
+						agents = append(agents, fmt.Sprintf("  %s: agent %s", u.GetFleet(), u.GetAgent()))
+					} else {
+						instances = append(instances, fmt.Sprintf("  %s/%s", u.GetFleet(), u.GetInstance()))
 					}
-					fmt.Fprintf(out, "%s:\n%s\n", verb, describeClusterUsers(users))
+				}
+				if len(instances) > 0 {
+					heading := "destroyed"
+					if mode == fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_FORGET {
+						heading = "left in namespace " + c.GetNamespace()
+					}
+					fmt.Fprintf(out, "%s:\n%s\n", heading, strings.Join(instances, "\n"))
+				}
+				if len(agents) > 0 {
+					fmt.Fprintf(out, "agents left without a cluster:\n%s\n", strings.Join(agents, "\n"))
 				}
 				return nil
 			})
@@ -571,8 +591,8 @@ func runClusterTest(ctx context.Context, svc fleetgrpc.FleetServiceClient, req *
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "%-23s %-7s %s\n", "CHECK", "RESULT", "DETAIL")
 	var result *fleetgrpc.KubeClusterStatus
+	header := false
 	for {
 		ev, err := stream.Recv()
 		if err == io.EOF {
@@ -580,6 +600,11 @@ func runClusterTest(ctx context.Context, svc fleetgrpc.FleetServiceClient, req *
 		}
 		if err != nil {
 			return err
+		}
+		// Once the test runs: a refused request prints its error alone.
+		if !header {
+			fmt.Fprintf(out, "%-23s %-7s %s\n", "CHECK", "RESULT", "DETAIL")
+			header = true
 		}
 		if c := ev.GetCheck(); c != nil && c.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_RUNNING {
 			printCheck(out, c)

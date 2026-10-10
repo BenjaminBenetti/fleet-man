@@ -45,6 +45,7 @@ type fakeKube struct {
 	contexts    *fleetgrpc.ListKubeContextsReply
 	removeReply *fleetgrpc.RemoveKubeClusterReply
 	testEvents  []*fleetgrpc.TestKubeClusterEvent
+	testErr     error // the test stream's error after its events
 	pruneReply  *fleetgrpc.PruneKubeClusterReply
 	loginEvents []*fleetgrpc.LoginKubeClusterEvent
 	nsReply     *fleetgrpc.CreateKubeNamespaceReply
@@ -92,7 +93,7 @@ func (f *fakeKube) RemoveKubeCluster(_ context.Context, req *fleetgrpc.RemoveKub
 }
 
 func (f *fakeKube) TestKubeCluster(_ context.Context, req *fleetgrpc.TestKubeClusterRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[fleetgrpc.TestKubeClusterEvent], error) {
-	return &fakeStream[fleetgrpc.TestKubeClusterEvent]{events: f.testEvents}, f.record("TestKubeCluster", req)
+	return &fakeStream[fleetgrpc.TestKubeClusterEvent]{events: f.testEvents, err: f.testErr}, f.record("TestKubeCluster", req)
 }
 
 func (f *fakeKube) PruneKubeCluster(_ context.Context, req *fleetgrpc.PruneKubeClusterRequest, _ ...grpc.CallOption) (*fleetgrpc.PruneKubeClusterReply, error) {
@@ -106,6 +107,9 @@ func (f *fakeKube) LoginKubeCluster(_ context.Context, req *fleetgrpc.LoginKubeC
 func (f *fakeKube) CreateKubeNamespace(_ context.Context, req *fleetgrpc.CreateKubeNamespaceRequest, _ ...grpc.CallOption) (*fleetgrpc.CreateKubeNamespaceReply, error) {
 	if err := f.record("CreateKubeNamespace", req); err != nil {
 		return nil, err
+	}
+	if req.GetDryRun() {
+		return &fleetgrpc.CreateKubeNamespaceReply{Manifest: "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: fleet\n"}, nil
 	}
 	return f.nsReply, f.nsErr
 }
@@ -275,12 +279,15 @@ func TestClusterAdd(t *testing.T) {
 	if name := f.last(t, "AddKubeCluster").(*fleetgrpc.AddKubeClusterRequest).GetCluster().GetDisplayName(); name != "lab" {
 		t.Errorf("--name = %q", name)
 	}
-	long := strings.Repeat("x", 64)
-	if _, _, err := runClusterCLI(t, f, "cluster", "add", long); err != nil {
-		t.Fatal(err)
-	}
-	if name := f.last(t, "AddKubeCluster").(*fleetgrpc.AddKubeClusterRequest).GetCluster().GetDisplayName(); name != "" {
-		t.Errorf("a context too long to be a name became %q", name)
+	// The daemon's display-name rules: at most 63 bytes, no control
+	// character (C1 included).
+	for _, unfit := range []string{strings.Repeat("x", 64), "dev\u0085"} {
+		if _, _, err := runClusterCLI(t, f, "cluster", "add", unfit); err != nil {
+			t.Fatal(err)
+		}
+		if name := f.last(t, "AddKubeCluster").(*fleetgrpc.AddKubeClusterRequest).GetCluster().GetDisplayName(); name != "" {
+			t.Errorf("context %q, unfit for a name, became %q", unfit, name)
+		}
 	}
 
 	for _, tc := range []struct {
@@ -333,13 +340,22 @@ func TestClusterAddCreatesTheNamespaceFirst(t *testing.T) {
 	if err != nil || !strings.HasPrefix(out, "namespace \"fleet\" already exists\nAdded cluster") {
 		t.Errorf("existing namespace: %q, %v", out, err)
 	}
+	// fleetd may not create it: the manifest is shown for someone who can,
+	// and nothing is added.
 	f = newFakeKube()
-	f.nsErr = status.Error(codes.PermissionDenied, `creating namespace "fleet": forbidden`)
-	if _, _, err := runClusterCLI(t, f, "cluster", "add", "kind-dev", "--create-namespace"); err == nil || err.Error() != `creating namespace "fleet": forbidden` {
+	f.nsErr = status.Error(codes.PermissionDenied, `creating namespace "fleet": forbidden (it needs namespaces create; apply the manifest as someone who has it)`)
+	out, _, err = runClusterCLI(t, f, "cluster", "add", "kind-dev", "--create-namespace", "--namespace-label", "a=b")
+	if err == nil || !strings.HasPrefix(err.Error(), `creating namespace "fleet": forbidden`) {
 		t.Errorf("forbidden namespace = %v", err)
 	}
-	if f.calls[len(f.calls)-1] != "CreateKubeNamespace" {
-		t.Errorf("added after a refused namespace: %v", f.calls)
+	if strings.Join(f.calls, ",") != "ListKubeClusters,CreateKubeNamespace,CreateKubeNamespace" {
+		t.Errorf("calls after a refused namespace: %v", f.calls)
+	}
+	if dry := f.last(t, "CreateKubeNamespace").(*fleetgrpc.CreateKubeNamespaceRequest); !dry.GetDryRun() || dry.GetCluster().GetContext() != "kind-dev" || dry.GetLabels()["a"] != "b" {
+		t.Errorf("manifest request = %v", dry)
+	}
+	if out != "Namespace manifest:\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: fleet\n" {
+		t.Errorf("forbidden namespace output = %q", out)
 	}
 }
 
@@ -405,7 +421,9 @@ func TestClusterRemove(t *testing.T) {
 		t.Errorf("refused rm = %v", err)
 	}
 
-	f.removeReply = &fleetgrpc.RemoveKubeClusterReply{Removed: true, Users: users[:1], Warnings: []string{"the instances were left running"}}
+	// Forget names what it leaves behind: the instances in the namespace and
+	// the agents that still target the connection.
+	f.removeReply = &fleetgrpc.RemoveKubeClusterReply{Removed: true, Users: users, Warnings: []string{"the instances were left running"}}
 	out, _, err = runClusterCLI(t, f, "cluster", "rm", "minikube", "--forget")
 	if err != nil {
 		t.Fatal(err)
@@ -413,9 +431,11 @@ func TestClusterRemove(t *testing.T) {
 	if req := f.last(t, "RemoveKubeCluster").(*fleetgrpc.RemoveKubeClusterRequest); req.GetMode() != fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_FORGET {
 		t.Errorf("--forget sent %v", req.GetMode())
 	}
-	if out != "warning: the instances were left running\nRemoved cluster \"minikube\"\nleft in namespace default:\n  alpha/i1 (running)\n" {
+	if out != "warning: the instances were left running\nRemoved cluster \"minikube\"\nleft in namespace default:\n  alpha/i1\n"+
+		"agents left without a cluster:\n  alpha: agent builder\n" {
 		t.Errorf("forget output = %q", out)
 	}
+	f.removeReply = &fleetgrpc.RemoveKubeClusterReply{Removed: true, Users: users[:1]}
 	out, _, err = runClusterCLI(t, f, "cluster", "rm", "minikube", "--destroy-instances")
 	if err != nil {
 		t.Fatal(err)
@@ -423,7 +443,7 @@ func TestClusterRemove(t *testing.T) {
 	if req := f.last(t, "RemoveKubeCluster").(*fleetgrpc.RemoveKubeClusterRequest); req.GetMode() != fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_DESTROY_INSTANCES {
 		t.Errorf("--destroy-instances sent %v", req.GetMode())
 	}
-	if !strings.Contains(out, "destroyed:\n  alpha/i1 (running)\n") {
+	if !strings.HasSuffix(out, "Removed cluster \"minikube\"\ndestroyed:\n  alpha/i1\n") {
 		t.Errorf("destroy output = %q", out)
 	}
 	if _, _, err := runClusterCLI(t, f, "cluster", "rm", "minikube", "--forget", "--destroy-instances"); err == nil || !strings.Contains(err.Error(), "exclude each other") {
@@ -506,6 +526,14 @@ func TestClusterTestDraft(t *testing.T) {
 	if !strings.HasSuffix(out, "\nready\n") {
 		t.Errorf("output %q", out)
 	}
+	// A draft the daemon refuses (a streamed RPC fails on its first
+	// receive) prints the error alone, no table.
+	f.testEvents, f.testErr = nil, status.Error(codes.NotFound, `no context "nope" in [/srv/kube/config] on the daemon host`)
+	out, _, err = runClusterCLI(t, f, "cluster", "test", "--context", "nope", "--kubeconfig", "/srv/kube/config")
+	if err == nil || err.Error() != `no context "nope" in [/srv/kube/config] on the daemon host` || out != "" {
+		t.Errorf("refused draft: out %q, err %v", out, err)
+	}
+	f.testErr = nil
 	for _, args := range [][]string{
 		{"cluster", "test", "prod-eu", "--kubeconfig", "/a"},
 		{"cluster", "test", "prod-eu", "-n", "x"},

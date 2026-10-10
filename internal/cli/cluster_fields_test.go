@@ -100,6 +100,10 @@ func TestParseClusterFieldsErrors(t *testing.T) {
 		{[]string{"node_selector=a=1", "node_selector=a=2"}, `node_selector: key "a" given twice`},
 		{[]string{"extra_path=/a", "extra_path="}, "extra_path: an empty item"},
 		{[]string{"resources={}", "resources={}"}, "resources given more than once"},
+		// Either order: the whole message would drop (or re-set) the sub-field.
+		{[]string{"resources.cpu_request=1", `resources={"memory_request":"2Gi"}`}, "resources and resources.cpu_request overlap"},
+		{[]string{`resources={"memory_request":"2Gi"}`, "resources.cpu_request=1"}, "resources and resources.cpu_request overlap"},
+		{[]string{"image=", "image.mode=registry"}, "image and image.mode overlap"},
 	} {
 		if _, _, err := parseClusterFields(tc.args); err == nil || !strings.Contains(err.Error(), tc.err) {
 			t.Errorf("parse %v = %v, want %q", tc.args, err, tc.err)

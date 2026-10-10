@@ -79,6 +79,15 @@ func parseClusterFields(args []string) (*fleetgrpc.KubeCluster, []string, error)
 		}
 		values[path] = append(values[path], unquoteValue(arg[i+1:]))
 	}
+	// A message path replaces the whole message: given with one of its
+	// sub-fields, whichever came last would silently win.
+	for _, a := range order {
+		for _, b := range order {
+			if strings.HasPrefix(b, a+".") {
+				return nil, nil, fmt.Errorf("%s and %s overlap: give one", a, b)
+			}
+		}
+	}
 	for _, path := range order {
 		if err := setClusterField(c.ProtoReflect(), path, values[path]); err != nil {
 			return nil, nil, err
