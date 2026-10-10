@@ -1035,3 +1035,67 @@ func TestRemoteSaveBouncedIgnoresDialFailures(t *testing.T) {
 		t.Fatal("a dial-time Unavailable never delivered the save and must not count as a bounce")
 	}
 }
+
+// TestToggleRemoteRegistryEnabledPersists confirms enter on the Enable Image
+// Registry row flips the setting and persists it, leaving the other remote
+// toggles and the cursor alone.
+func TestToggleRemoteRegistryEnabledPersists(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	origSetConfig := setConfigRemote
+	setConfigRemote = func(c *state.Config) error { return state.SaveConfig(c) }
+	defer func() { setConfigRemote = origSetConfig }()
+
+	sp := newSettingsPage()
+	m := &model{config: state.DefaultConfig(), toolStatus: allToolsFound(), currentPage: sp, fleetPage: newFleetPage(), spinner: spinner.New()}
+	sp.cursor = settingsPositionOf(sp, m, settingsItemRemoteRegistryEnabled)
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	rm := m.config.RemoteMcpSettings
+	if !rm.ImageRegistryEnabled || rm.Enabled || rm.FleetEnabled || rm.WebhookEnabled {
+		t.Fatalf("after the toggle: %+v", rm)
+	}
+	loaded, err := state.LoadConfig()
+	if err != nil || !loaded.RemoteMcpSettings.ImageRegistryEnabled {
+		t.Fatalf("toggle did not persist: %+v %v", loaded.RemoteMcpSettings, err)
+	}
+	if got := sp.settingsCursorItem(m); got != settingsItemRemoteRegistryEnabled {
+		t.Fatalf("cursor slid off the image registry toggle: got item %d", got)
+	}
+	if !strings.Contains(m.message, "Image Registry set to on") {
+		t.Fatalf("message %q", m.message)
+	}
+	sp.Update(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if m.config.RemoteMcpSettings.ImageRegistryEnabled {
+		t.Fatal("left should toggle the image registry back off")
+	}
+}
+
+// TestSettingsImageRegistryRowShowsWhy: the Enable Image Registry row sits
+// with the other gateway toggles and, while on, says where the gateway serves
+// this daemon's images or why it serves none.
+func TestSettingsImageRegistryRowShowsWhy(t *testing.T) {
+	sp := newSettingsPage()
+	cfg := state.DefaultConfig()
+	m := &model{config: cfg, toolStatus: allToolsFound(), spinner: spinner.New(), width: 160}
+	items := sp.visibleItems(m)
+	at := slices.Index(items, settingsItemRemoteRegistryEnabled)
+	if at < 0 || items[at-1] != settingsItemRemoteWebhookEnabled || items[at+1] != settingsItemRemoteMcpGatewayURL {
+		t.Fatalf("the image registry toggle belongs between Enable Webhook and Gateway URL: %v", items)
+	}
+	out := sp.viewSettings(m)
+	if !strings.Contains(out, "Enable Image Registry") || !strings.Contains(out, "Gateway delivery") {
+		t.Fatal("settings view missing the Enable Image Registry row")
+	}
+
+	m.config.RemoteMcpSettings.ImageRegistryEnabled = true
+	m.remoteMcpStatus = &fleetgrpc.RemoteMcpStatus{State: fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED, RegistryError: "the gateway does not offer image delivery: no --session-key"}
+	if out := sp.viewSettings(m); !strings.Contains(out, "not serving") || !strings.Contains(out, "no --session-key") {
+		t.Fatalf("the reason is missing:\n%s", out)
+	}
+	m.remoteMcpStatus = &fleetgrpc.RemoteMcpStatus{State: fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTED, PublicRegistry: "gw.example.com/" + strings.Repeat("a", 64)}
+	out = sp.viewSettings(m)
+	if !strings.Contains(out, "serving") || !strings.Contains(out, "clusters pull from gw.example.com") || strings.Contains(out, strings.Repeat("a", 64)) {
+		t.Fatalf("the serving line is wrong (it must not print the registry id):\n%s", out)
+	}
+}
