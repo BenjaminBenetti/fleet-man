@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/shellquote"
 	"github.com/spf13/cobra"
 )
 
 func newCodeCmd() *cobra.Command {
-	return &cobra.Command{
+	var printOnly bool
+	cmd := &cobra.Command{
 		Use:   "code <name>",
 		Short: "Open VS Code attached to an instance",
 		Args:  cobra.ExactArgs(1),
@@ -21,26 +24,53 @@ func newCodeCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("Opening VS Code for %s/%s...\n", target.Fleet, target.Instance)
+			argv := editorArgv(target.Fleet, instance)
+			if printOnly {
+				fmt.Fprintln(cmd.OutOrStdout(), commandLine(argv))
+				return nil
+			}
 
-			// Each backend opens VS Code with a local CLI; no container access is
-			// needed, so these are computed client-side (no internal/backend). The
-			// editor URI/args are pure and small enough to inline rather than add a
-			// dedicated RPC.
+			fmt.Printf("Opening VS Code for %s/%s...\n", target.Fleet, target.Instance)
+			c := exec.Command(argv[0], argv[1:]...)
 			switch instance.Backend {
-			case fleet.BackendCoder:
-				return runEditorCmd(exec.Command("coder", "open", "vscode", instance.ContainerID))
-			case fleet.BackendCodespaces:
-				return runEditorCmd(exec.Command("gh", "codespace", "code", "-c", instance.ContainerID))
+			case fleet.BackendCoder, fleet.BackendCodespaces:
+				return runEditorCmd(c)
 			default:
-				// Devcontainer: VS Code's dev-container remote URI (hex of the host
-				// workspace path + the in-container /workspaces/<project> folder).
-				uri := fmt.Sprintf("vscode-remote://dev-container+%s/workspaces/%s",
-					hex.EncodeToString([]byte(instance.WorkspaceDir)), target.Fleet)
-				return exec.Command("code", "--folder-uri", uri).Run()
+				return c.Run()
 			}
 		},
 	}
+	cmd.Flags().BoolVar(&printOnly, "print", false, "print the editor command instead of running it")
+	return cmd
+}
+
+// editorArgv is the command that opens VS Code on instance, a member of
+// fleetName. Each backend opens VS Code with a local CLI; no container access
+// is needed, so this is computed client-side (no internal/backend). The TUI's
+// `c` key builds the same command.
+func editorArgv(fleetName string, instance *fleet.Instance) []string {
+	switch instance.Backend {
+	case fleet.BackendCoder:
+		return []string{"coder", "open", "vscode", instance.ContainerID}
+	case fleet.BackendCodespaces:
+		return []string{"gh", "codespace", "code", "-c", instance.ContainerID}
+	default:
+		// Devcontainer: VS Code's dev-container remote URI (hex of the host
+		// workspace path + the in-container /workspaces/<project> folder).
+		uri := fmt.Sprintf("vscode-remote://dev-container+%s/workspaces/%s",
+			hex.EncodeToString([]byte(instance.WorkspaceDir)), fleetName)
+		return []string{"code", "--folder-uri", uri}
+	}
+}
+
+// commandLine joins argv into one line a POSIX shell runs as the same command,
+// quoting only the words that need it.
+func commandLine(argv []string) string {
+	words := make([]string, len(argv))
+	for i, word := range argv {
+		words[i] = shellquote.CommandWord(word)
+	}
+	return strings.Join(words, " ")
 }
 
 func runEditorCmd(c *exec.Cmd) error {
