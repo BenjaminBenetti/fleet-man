@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -40,9 +41,21 @@ const forwarderDialTimeout = 15 * time.Second
 type closeWriter interface{ CloseWrite() error }
 
 // openForwardBridge opens the server-side byte bridge to remotePort inside
-// the instance. Package var so tests can stub the whole container layer.
-var openForwardBridge = func(inst *fleet.Instance, remotePort int) (io.ReadWriteCloser, error) {
-	b := backendutil.NewForInstance(inst, false)
+// the instance. ctx is the Forward stream's: a dial still under way when the
+// client goes is abandoned. Package var so tests can stub the whole container
+// layer.
+var openForwardBridge = func(ctx context.Context, inst *fleet.Instance, remotePort int) (io.ReadWriteCloser, error) {
+	return forwardBridge(ctx, backendutil.NewForInstance(inst, false), inst, remotePort)
+}
+
+// forwardBridge opens the bridge through b, the instance's backend.
+func forwardBridge(ctx context.Context, b backend.Backend, inst *fleet.Instance, remotePort int) (io.ReadWriteCloser, error) {
+	// A backend that dials into the instance from this process (Kubernetes:
+	// a stream pair on a pooled port-forward connection) does the whole job:
+	// no address to dial, and no process per connection.
+	if dialer, ok := b.(backend.PortDialer); ok {
+		return dialer.DialPort(ctx, inst.ContainerID, remotePort)
+	}
 
 	// Fast path: the container is directly reachable from the server host
 	// (devcontainer on native Linux) — a plain TCP dial, no subprocess.
@@ -90,7 +103,7 @@ func (s *service) Forward(stream fleetgrpc.FleetService_ForwardServer) error {
 		return status.Errorf(codes.InvalidArgument, "invalid remote port %d", remotePort)
 	}
 
-	bridge, err := openForwardBridge(inst, remotePort)
+	bridge, err := openForwardBridge(stream.Context(), inst, remotePort)
 	if err != nil {
 		flog.Warn("forward: open bridge", "fleet", open.GetFleet(), "instance", open.GetInstance(), "remotePort", remotePort, "err", err)
 		return status.Errorf(codes.Unavailable, "open bridge to %s/%s:%d: %v", open.GetFleet(), open.GetInstance(), remotePort, err)
