@@ -447,7 +447,11 @@ func (m *model) startKubeTest(key, id string, req *fleetgrpc.TestKubeClusterRequ
 	if old := m.kubeRuns[key]; old != nil {
 		old.cancel()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), kubeTestTimeout)
+	timeout := kubeTestTimeout
+	if req.GetDeep() {
+		timeout = kubeDeepTestTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	run := &kubeTestRun{key: key, id: id, gen: m.watchGen, cancel: cancel}
 	if m.kubeRuns == nil {
 		m.kubeRuns = map[string]*kubeTestRun{}

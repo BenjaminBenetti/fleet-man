@@ -136,7 +136,7 @@ func kubeDeliveryLines(st *fleetgrpc.KubeClusterStatus) []string {
 	setting := kubeDeliverySetting(st)
 	switch {
 	case del.GetMode() == "none":
-		lines = append(lines, statusCreatingStyle.Render("✕ ")+del.GetReason())
+		lines = append(lines, kubeErrStyle.Render(kubeGlyphFailed+" ")+del.GetReason())
 	case setting == kubeDeliveryAuto && del.GetReason() != "":
 		lines = append(lines, dimStyle.Render("Auto picked "+kubeDeliveryModeLabel(del.GetMode())+": "+del.GetReason()))
 	}
@@ -148,11 +148,11 @@ func kubeDeliveryLines(st *fleetgrpc.KubeClusterStatus) []string {
 	switch del.GetMode() {
 	case kubeDeliveryRegistry:
 		if del.GetRegistryReachable() && !del.GetRegistryDeleteSupported() {
-			lines = append(lines, statusCreatingStyle.Render("▲ ")+"images past retention stay in the registry: "+del.GetReason())
+			lines = append(lines, kubeWarnStyle.Render(kubeGlyphLimited+" ")+"images past retention stay in the registry: "+del.GetReason())
 		}
 	case kubeDeliveryGateway:
 		if step := del.GetGatewayFailedStep(); step != "" {
-			lines = append(lines, statusCreatingStyle.Render("✕ ")+"the manifest check through the gateway failed at the "+step+" step")
+			lines = append(lines, kubeErrStyle.Render(kubeGlyphFailed+" ")+"the manifest check through the gateway failed at the "+step+" step")
 		}
 		lines = append(lines, kubeGatewayPullLine(del))
 		if n := del.GetCacheBytes(); n > 0 {

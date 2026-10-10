@@ -49,8 +49,8 @@ type kubeEditor struct {
 	offset int
 	open   map[string]bool
 	// button is the row's sub-cursor: 0 on the row, 1.. on its buttons (the
-	// Status row's [ test ] and [ login on fleetd ], the Namespace row's
-	// [ Create ]).
+	// Status row's [ test ], [ deep test ] and [ login on fleetd ], the
+	// Namespace row's [ Create ]).
 	button int
 
 	editing *kubeField
@@ -140,7 +140,7 @@ func (e *kubeEditor) buttons(m *model, st *fleetgrpc.KubeClusterStatus) int {
 	row := e.current()
 	switch {
 	case row.kind == kubeEditorRowStatus:
-		return 2
+		return kubeEditorButtonLogin
 	case row.kind == kubeEditorRowField && row.field.path == "namespace" && kubeNamespaceMissing(st.GetChecks()):
 		return 1
 	}
@@ -268,9 +268,13 @@ func (e *kubeEditor) enter(m *model, page *settingsPage, st *fleetgrpc.KubeClust
 		e.open[row.group.key] = !e.open[row.group.key]
 		return nil
 	case kubeEditorRowStatus:
-		if e.button == 2 {
+		switch e.button {
+		case kubeEditorButtonLogin:
 			m.message = fmt.Sprintf("Running the login plugin of %s %s on fleetd…", kubeGlyphCluster, st.GetCluster().DisplayNameOrID())
 			return m.startKubeLogin(e.id)
+		case kubeEditorButtonDeep:
+			m.message = "Deep test: throwaway pods in " + st.GetCluster().GetNamespace() + " (minutes)"
+			return m.startKubeTest(kubeTestKey(e.id), e.id, &fleetgrpc.TestKubeClusterRequest{Id: e.id, Deep: true})
 		}
 		return m.startKubeTest(kubeTestKey(e.id), e.id, &fleetgrpc.TestKubeClusterRequest{Id: e.id})
 	}
@@ -281,6 +285,8 @@ func (e *kubeEditor) enter(m *model, page *settingsPage, st *fleetgrpc.KubeClust
 	switch {
 	case f.path == "namespace" && e.button == 1:
 		return e.openNamespace(st)
+	case f.path == kubeDeliveryPath:
+		return e.cycleDelivery(st, f, 1, true)
 	case f.kind == kubeKindContext:
 		picker := newKubePicker(m, e.id)
 		picker.back = e
@@ -302,12 +308,35 @@ func (e *kubeEditor) enter(m *model, page *settingsPage, st *fleetgrpc.KubeClust
 
 // cycle saves the next value of a choice-like field.
 func (e *kubeEditor) cycle(st *fleetgrpc.KubeClusterStatus, f kubeField, dir int) tea.Cmd {
+	if f.path == kubeDeliveryPath {
+		return e.cycleDelivery(st, f, dir, false)
+	}
 	if e.saving[f.path] {
 		return nil // one save at a time per field: the next press reads its result
 	}
 	next := f.next(st, dir)
 	if next == f.text(st.GetCluster()) {
 		return nil // nothing else to pick (a class list fleetd could not read)
+	}
+	return e.save(f, next, st.GetCluster().GetRevision())
+}
+
+// cycleDelivery moves the Delivery selector: ←/→ step over a greyed-out
+// Gateway and stop at either end; enter (wrap) goes on round to Auto, which
+// is never greyed out.
+func (e *kubeEditor) cycleDelivery(st *fleetgrpc.KubeClusterStatus, f kubeField, dir int, wrap bool) tea.Cmd {
+	if e.saving[f.path] {
+		return nil
+	}
+	next, ok := kubeDeliveryNext(st, dir)
+	if !ok {
+		if !wrap {
+			return nil
+		}
+		next = kubeDeliveryAuto
+	}
+	if next == kubeDeliverySetting(st) {
+		return nil
 	}
 	return e.save(f, next, st.GetCluster().GetRevision())
 }
@@ -467,7 +496,9 @@ func (e *kubeEditor) view(m *model, _ *settingsPage) string {
 		switch row.kind {
 		case kubeEditorRowStatus:
 			line := marker + e.labelCell("Status:", i == e.row) + e.statusValue(m, st)
-			buttons := kubeButton("[ test ]", i == e.row && e.button == 1) + " " + kubeButton("[ login on fleetd ]", i == e.row && e.button == 2)
+			buttons := kubeButton("[ test ]", i == e.row && e.button == kubeEditorButtonTest) + " " +
+				kubeButton("[ deep test ]", i == e.row && e.button == kubeEditorButtonDeep) + " " +
+				kubeButton("[ login on fleetd ]", i == e.row && e.button == kubeEditorButtonLogin)
 			if lipgloss.Width(line)+2+lipgloss.Width(buttons) <= inner {
 				body = kubeLines(body, line+"  "+buttons)
 			} else {
@@ -529,6 +560,17 @@ func (e *kubeEditor) view(m *model, _ *settingsPage) string {
 	return kubeDialogFrame(m, strings.Join(lines, "\n"), maxWidth)
 }
 
+// The Status row's buttons, by e.button.
+const (
+	kubeEditorButtonTest = iota + 1
+	kubeEditorButtonDeep
+	kubeEditorButtonLogin
+)
+
+// kubeDeliveryPath is the Delivery field: the Image group's selector
+// (kube_delivery.go), not a plain cycling choice.
+const kubeDeliveryPath = "image.mode"
+
 // kubeEditorValueCol is the column an editor row's value starts at:
 // cursor (2) + label (19) + separator (1).
 const kubeEditorValueCol = 22
@@ -588,6 +630,11 @@ func (e *kubeEditor) fieldValue(m *model, st *fleetgrpc.KubeClusterStatus, f kub
 			value = text
 		}
 	}
+	if f.path == kubeDeliveryPath {
+		// [Auto→X] [Registry] [Gateway], Gateway greyed out while the
+		// gateway serves no images for this daemon.
+		value = kubeDeliverySelector(kubeDeliveryOptions(st))
+	}
 	if e.saving[f.path] {
 		value += " " + m.spinner.View()
 	}
@@ -629,6 +676,9 @@ func (e *kubeEditor) statusValue(m *model, st *fleetgrpc.KubeClusterStatus) stri
 		}
 		if at := st.GetCheckedAt(); at != nil {
 			parts = append(parts, "checked "+kubeAgo(kubeNow().Sub(at.AsTime()))+" ago")
+		}
+		if at := st.GetDeepCheckedAt(); at != nil {
+			parts = append(parts, "deep test "+kubeAgo(kubeNow().Sub(at.AsTime()))+" ago")
 		}
 		if len(parts) > 0 {
 			value += " · " + dimStyle.Render(strings.Join(parts, " · "))
@@ -789,20 +839,13 @@ func kubeGroupInfo(key string, st *fleetgrpc.KubeClusterStatus) []string {
 		checkLine("limits")
 		checkLine("quota")
 	case "image":
-		d := caps.GetImageDelivery()
-		switch {
-		case d == nil:
-			out = append(out, dimStyle.Render("delivery not checked yet"))
-		default:
-			line := "delivery: " + d.GetMode()
-			if d.GetReason() != "" {
-				line += " · " + d.GetReason()
-			}
-			out = append(out, dimStyle.Render(line))
-			if d.GetMode() == "registry" && d.GetRegistryReachable() && !d.GetRegistryDeleteSupported() {
-				out = append(out, kubeWarnStyle.Render(kubeGlyphLimited+" the registry has no DELETE: images past retention stay in it"))
-			}
+		// A passing delivery check says what the selector and the Auto line
+		// already do; one that did not pass names the failing step and fix.
+		if c := kubeCheck(st, "image_delivery"); c != nil && c.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS {
+			checkLine("image_delivery")
 		}
+		checkLine("image_pull")
+		out = append(out, kubeDeliveryLines(st)...)
 	case "security":
 		checkLine("admission_unprivileged")
 		checkLine("admission_debug_caps")

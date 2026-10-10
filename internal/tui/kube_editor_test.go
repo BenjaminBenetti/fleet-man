@@ -344,8 +344,9 @@ func TestEditorRefusedSavesExplain(t *testing.T) {
 }
 
 // Groups fold and unfold with enter and ←/→; the Status row's [ test ] runs
-// the preflight and [ login on fleetd ] the daemon-side login, whose device
-// code shows in the editor.
+// the preflight, [ deep test ] the preflight with the throwaway-pod probes,
+// and [ login on fleetd ] the daemon-side login, whose device code shows in
+// the editor.
 func TestEditorGroupsStatusAndLoginOnDaemon(t *testing.T) {
 	st := kubeSt("aks-1", "aks", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNAUTHORIZED)
 	m, sp := kubeTestModel(t, st)
@@ -366,13 +367,24 @@ func TestEditorGroupsStatusAndLoginOnDaemon(t *testing.T) {
 	}
 
 	e.row = len(kubeTopFields) // Status
-	stubKubeTest(t, func(*fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent {
+	reqs := stubKubeTest(t, func(*fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent {
 		return testEvents(kubeSt("aks-1", "aks", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNAUTHORIZED))
 	})
 	pumpKube(t, m, press(m, sp, "enter"))
 	if run := m.kubeRuns[kubeTestKey("aks-1")]; run == nil || run.running() {
 		t.Fatal("enter on Status must run the test")
 	}
+	press(m, sp, "l")
+	press(m, sp, "l")
+	if e.button != kubeEditorButtonDeep || !strings.Contains(flatText(sp.viewSettings(m)), "[ test ] [ deep test ] [ login on fleetd ]") {
+		t.Fatalf("button = %d, want [ deep test ]", e.button)
+	}
+	pumpKube(t, m, press(m, sp, "enter"))
+	if len(*reqs) != 2 || (*reqs)[0].GetDeep() || !(*reqs)[1].GetDeep() || (*reqs)[1].GetId() != "aks-1" {
+		t.Fatalf("test requests = %v, want a plain test then a deep one", *reqs)
+	}
+	press(m, sp, "h")
+	press(m, sp, "h")
 
 	codeSent := make(chan struct{})
 	origLogin := openKubeLoginRemote
@@ -382,7 +394,8 @@ func TestEditorGroupsStatusAndLoginOnDaemon(t *testing.T) {
 	t.Cleanup(func() { openKubeLoginRemote = origLogin })
 	press(m, sp, "l")
 	press(m, sp, "l")
-	if e.button != 2 {
+	press(m, sp, "l")
+	if e.button != kubeEditorButtonLogin {
 		t.Fatalf("button = %d, want [ login on fleetd ]", e.button)
 	}
 	cmd := press(m, sp, "enter")
@@ -634,5 +647,56 @@ func TestEditorCycleWithOneChoiceSavesNothing(t *testing.T) {
 	pumpKube(t, m, press(m, sp, "right"))
 	if len(*calls) != 0 {
 		t.Fatalf("sent %+v for a class list with nothing in it", *calls)
+	}
+}
+
+// The Image group's Delivery row is the [Auto] [Registry] [Gateway]
+// selector: Gateway is greyed out with the reason while the gateway serves
+// no images, ←/→ never land on it (and stop at the ends), enter goes round
+// past it back to Auto, and each move is one masked image.mode save. A
+// passing delivery check stays out of the group (the selector says it); the
+// deep test's pull shows.
+func TestEditorDeliverySelector(t *testing.T) {
+	st := kubeSt("eu-1", "prod-eu", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
+	st.Cluster.Image = &fleetgrpc.KubeImageSettings{Mode: "registry", Registry: "reg.example.com"}
+	st.Capabilities = &fleetgrpc.KubeCapabilities{ImageDelivery: &fleetgrpc.KubeImageDelivery{
+		Mode: "registry", RegistryReachable: true, RegistryDeleteSupported: true, GatewayReason: "Enable Image Registry is off"}}
+	st.Checks = []*fleetgrpc.KubeCheck{
+		{Name: "image_delivery", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, Detail: "registry reg.example.com reachable"},
+		{Name: "image_pull", Result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_SKIPPED, Detail: "delivery is registry: no pull through the gateway to test"},
+	}
+	m, sp := kubeTestModel(t, st)
+	calls := stubKubeUpdate(t, savedStatus(st))
+	e := openEditor(m, sp, "eu-1")
+	editorRowOf(t, e, "image.mode")
+	out := flatText(sp.viewSettings(m))
+	for _, want := range []string{"Delivery: [Auto] [Registry] [Gateway]", "Gateway unavailable: Enable Image Registry is off", "delivery is registry: no pull through the gateway"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "registry reg.example.com reachable") {
+		t.Fatalf("a passing delivery check must stay out of the Image group:\n%s", out)
+	}
+
+	pumpKube(t, m, press(m, sp, "right"))
+	if len(*calls) != 0 {
+		t.Fatalf("→ onto a greyed-out Gateway sent %+v", *calls)
+	}
+	pumpKube(t, m, press(m, sp, "left"))
+	if len(*calls) != 1 || !slices.Equal((*calls)[0].paths, []string{"image.mode"}) || (*calls)[0].cluster.GetImage().GetMode() != "" || (*calls)[0].rev != 3 {
+		t.Fatalf("← to Auto = %+v", *calls)
+	}
+	pumpKube(t, m, press(m, sp, "left"))
+	if len(*calls) != 1 {
+		t.Fatal("← past Auto must stop there")
+	}
+	if out := flatText(sp.viewSettings(m)); !strings.Contains(out, "Delivery: [Auto→Registry] [Registry] [Gateway]") {
+		t.Fatalf("Auto must name what it resolved to:\n%s", out)
+	}
+	pumpKube(t, m, press(m, sp, "enter"))
+	pumpKube(t, m, press(m, sp, "enter"))
+	if len(*calls) != 3 || (*calls)[1].cluster.GetImage().GetMode() != "registry" || (*calls)[2].cluster.GetImage().GetMode() != "" {
+		t.Fatalf("enter must step to Registry, then round past Gateway to Auto: %+v", *calls)
 	}
 }
