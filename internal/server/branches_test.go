@@ -302,6 +302,45 @@ func TestBranchPassPublishesRuntimeBranches(t *testing.T) {
 	}
 }
 
+// TestRecordLastBranchesSkipsAReplacedRecord checks a read is persisted only
+// onto the record it was taken for: an instance destroyed and recreated under
+// the same name while the read was in flight keeps the same (name-derived)
+// workspace dir, so CreatedAt is what keeps the old read off the new record.
+func TestRecordLastBranchesSkipsAReplacedRecord(t *testing.T) {
+	isolateFleetDir(t)
+	created := time.Unix(1720000000, 0).UTC()
+	read := &fleet.Instance{Name: "i1", WorkspaceDir: "/ws/i1", CreatedAt: created}
+	targets := []branchTarget{{"alpha", read}}
+	reads := map[string]branchRead{"alpha/i1": {branch: "feature/old", ok: true}}
+
+	for _, tt := range []struct {
+		name      string
+		createdAt time.Time
+		want      string
+	}{
+		{"same record", created, "feature/old"},
+		{"recreated under the same name", created.Add(time.Minute), ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+				"alpha": {Name: "alpha", Instances: []*fleet.Instance{
+					{Name: "i1", Status: fleet.StatusCreating, WorkspaceDir: "/ws/i1", CreatedAt: tt.createdAt},
+				}},
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			recordLastBranches(targets, reads)
+			st, err := state.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := st.Fleets["alpha"].Instances[0].LastBranch; got != tt.want {
+				t.Fatalf("LastBranch = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestMCPListReportsCurrentBranch checks fleet_list asks for fresh branches:
 // current_branch is the workspace's checked-out branch (read on the daemon),
 // falling back to the last branch seen when the workspace can't be read, while

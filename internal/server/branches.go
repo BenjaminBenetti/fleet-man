@@ -191,9 +191,11 @@ func recordLastBranches(targets []branchTarget, reads map[string]branchRead) {
 		for fleetName, f := range st.Fleets {
 			for _, inst := range f.Instances {
 				key := runtimeKey(fleetName, inst.Name)
-				// Skip a record that was replaced since the read (same name, new
-				// workspace): the read belongs to the old one.
-				if t, ok := changed[key]; ok && inst.WorkspaceDir == t.inst.WorkspaceDir {
+				// Skip a record that was replaced since the read: the read belongs
+				// to the old one. The workspace dir is derived from the names, so
+				// a destroyed and recreated instance keeps it; CreatedAt is what
+				// tells the new record apart.
+				if t, ok := changed[key]; ok && inst.WorkspaceDir == t.inst.WorkspaceDir && inst.CreatedAt.Equal(t.inst.CreatedAt) {
 					inst.LastBranch = branches[key]
 				}
 			}
