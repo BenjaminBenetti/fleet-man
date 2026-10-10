@@ -25,7 +25,10 @@ type Manager struct {
 	// PATH; "" is "docker".
 	Docker string
 	// IndexPath is where a connection's image index lives
-	// (state.KubeImagesPath).
+	// (state.KubeImagesPath). Each connection's index sits in a directory of
+	// its own under one parent: before the GC deletes what connections can
+	// share (a registry manifest, a local cluster's copy, a host tag), it
+	// reads the other indexes there.
 	IndexPath func(clusterID string) string
 	// Credentials finds the daemon host's registry logins; nil reads
 	// docker's config.
@@ -171,7 +174,7 @@ func (m *Manager) Deliver(ctx context.Context, t Target, img Image, holder strin
 	var d *Delivery
 	if p, ok := m.passthrough(ctx, t, img); ok {
 		e := Entry{ImageID: img.Config.ID, Strategy: StrategyPassthrough, Location: p.ref.Repository(), Ref: p.ref.String(), Digest: p.ref.Digest, Platform: t.Platform, DeliveredAt: m.now()}
-		if d, err = m.hold(path, e.key(), holder, &e); err != nil {
+		if d, err = m.hold(path, e, holder, true); err != nil {
 			return nil, err
 		}
 		if p.private && len(t.Cluster.Image.PullSecrets) == 0 {
@@ -191,7 +194,7 @@ func (m *Manager) Deliver(ctx context.Context, t Target, img Image, holder strin
 			if err != nil {
 				return nil, err
 			}
-			if d, err = m.hold(path, e.key(), holder, nil); err != nil {
+			if d, err = m.hold(path, e, holder, false); err != nil {
 				return nil, err
 			}
 			if d != nil {
@@ -228,9 +231,8 @@ func (m *Manager) deliverOnce(ctx context.Context, t Target, img Image, s Strate
 	if err != nil {
 		return Entry{}, err
 	}
-	key := path + "|" + probe.key()
-	return m.deliveries.do(ctx, key, func(ctx context.Context) (Entry, error) {
-		unlock := m.keys.lock(key)
+	return m.deliveries.do(ctx, path+"|"+probe.key(), func(ctx context.Context) (Entry, error) {
+		unlock := m.keys.lock(probe.lockKey())
 		defer unlock()
 		var cur *Entry
 		if ix, err := m.files.read(path); err == nil {
@@ -244,6 +246,7 @@ func (m *Manager) deliverOnce(ctx context.Context, t Target, img Image, s Strate
 		}
 		e.DeliveredAt = m.now()
 		e.Platform = t.Platform
+		e.GCError = ""
 		if err := m.files.update(path, func(ix *Index) error { ix.put(e); return nil }); err != nil {
 			return Entry{}, err
 		}
@@ -385,16 +388,17 @@ func (m *Manager) client(ctx context.Context, t Target, domain string) (*registr
 	return RemoteOptions{Credentials: m.credentials(), Insecure: t.insecure(domain), Transport: m.Transport}.client(ctx, domain)
 }
 
-// hold makes holder hold the entry with key (first recording put, when
-// given) and lets go of any other entry it held. It returns nil when the
-// entry is gone (collected).
-func (m *Manager) hold(path, key, holder string, put *Entry) (*Delivery, error) {
-	unlock := m.keys.lock(path + "|" + key)
+// hold makes holder hold the entry with entry's key (first recording entry,
+// when record is set) and lets go of any other entry it held. It returns nil
+// when the entry is gone (collected).
+func (m *Manager) hold(path string, entry Entry, holder string, record bool) (*Delivery, error) {
+	unlock := m.keys.lock(entry.lockKey())
 	defer unlock()
+	key := entry.key()
 	var d *Delivery
 	err := m.files.update(path, func(ix *Index) error {
-		if put != nil {
-			ix.put(*put)
+		if record {
+			ix.put(entry)
 		}
 		e := ix.find(key)
 		if e == nil {
@@ -598,11 +602,10 @@ func (m *Manager) Redeliver(ctx context.Context, t Target, d Delivery) (*Deliver
 	if d.Tag != "" {
 		e.Tag = d.Tag
 	}
-	key := path + "|" + e.key()
 	log := backend.JobLogFrom(ctx)
 	fmt.Fprintf(log, "delivering image %s to %s again (%s)\n", id12(d.ImageID), t.Cluster.GetDisplayName(), d.Strategy)
-	got, err := m.deliveries.do(ctx, key, func(ctx context.Context) (Entry, error) {
-		unlock := m.keys.lock(key)
+	got, err := m.deliveries.do(ctx, path+"|"+e.key(), func(ctx context.Context) (Entry, error) {
+		unlock := m.keys.lock(e.lockKey())
 		defer unlock()
 		var out Entry
 		var err error
@@ -616,6 +619,7 @@ func (m *Manager) Redeliver(ctx context.Context, t Target, d Delivery) (*Deliver
 		}
 		out.DeliveredAt = m.now()
 		out.Platform = t.Platform
+		out.GCError = ""
 		return out, m.files.update(path, func(ix *Index) error { ix.put(out); return nil })
 	})
 	if err != nil {

@@ -72,8 +72,9 @@ func RemoteImageConfig(ctx context.Context, ref, platform string, opts RemoteOpt
 	if err != nil {
 		return kubeshim.ImageConfig{}, fmt.Errorf("reading %s from its registry: %w", ref, err)
 	}
-	manifest := body
+	manifest, picked := body, false
 	if isIndex(mediaType) {
+		picked = true
 		child, err := pickPlatform(body, platform)
 		if err != nil {
 			return kubeshim.ImageConfig{}, fmt.Errorf("%s: %w", ref, err)
@@ -104,6 +105,12 @@ func RemoteImageConfig(ctx context.Context, ref, platform string, opts RemoteOpt
 	if err := json.Unmarshal(blob, &cfg); err != nil {
 		return kubeshim.ImageConfig{}, fmt.Errorf("parsing the config of %s: %w", ref, err)
 	}
+	// A single-platform image is for whatever platform its config says;
+	// pods on other nodes could not run it (a pull for the platform fails
+	// the same way).
+	if platform != "" && !picked && !samePlatform(platform, cfg.Os, cfg.Architecture) {
+		return kubeshim.ImageConfig{}, fmt.Errorf("%s is an image for %s/%s only, not %s", ref, cfg.Os, cfg.Architecture, platform)
+	}
 	img := kubeshim.ImageConfig{ID: m.Config.Digest, Architecture: cfg.Architecture, Os: cfg.Os, Variant: cfg.Variant}
 	if len(cfg.Config) > 0 && string(cfg.Config) != "null" {
 		if err := json.Unmarshal(cfg.Config, &img.Config); err != nil {
@@ -115,6 +122,17 @@ func RemoteImageConfig(ctx context.Context, ref, platform string, opts RemoteOpt
 		img.RepoTags = []string{r.Repository() + ":" + r.Tag}
 	}
 	return img, nil
+}
+
+// samePlatform reports whether an image config's os and architecture are
+// those of platform ("os/arch[/variant]"); a config that leaves one out
+// matches.
+func samePlatform(platform, os, arch string) bool {
+	want := strings.Split(platform, "/")
+	if len(want) < 2 {
+		return false
+	}
+	return (os == "" || os == want[0]) && (arch == "" || arch == want[1])
 }
 
 func isIndex(mediaType string) bool {

@@ -77,6 +77,20 @@ func isOwnRepository(repo, daemonID string) bool {
 	return path == own || strings.HasSuffix(path, "/"+own)
 }
 
+// isOwnTag reports whether tag is one fleet gives imageID for the daemon:
+// its node load tag, or a tag in one of its registry repositories. The GC
+// removes no other tag.
+func isOwnTag(tag, daemonID, imageID string) bool {
+	r, err := ParseReference(tag)
+	if err != nil || r.Digest != "" || r.Tag != id12(imageID) || len(daemonID) < 8 {
+		return false
+	}
+	if r.Domain == nodeLoadDomain {
+		return r.Path == daemon8(daemonID)+"/"+repoName
+	}
+	return isOwnRepository(r.Repository(), daemonID)
+}
+
 // PullSecretName is the name of the managed pull Secret of one connection:
 // "fleet-pull-<owner12>-<cluster id>". It names the connection as well as the
 // daemon (like the owner Lease), so two connections to one namespace each

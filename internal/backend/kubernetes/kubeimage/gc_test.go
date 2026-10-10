@@ -77,20 +77,29 @@ func TestGCKeepsWhatTheRegistryCannotDelete(t *testing.T) {
 		if err != nil || len(res.Deleted) != 0 || len(res.Kept) != 1 || !strings.Contains(res.Kept[0].GCError, tt.why) {
 			t.Fatalf("mode %d: %+v, %v", tt.mode, res, err)
 		}
-		if !h.reg.has(ownRepoPath, digest) || strings.Contains(h.tools.read(t, "docker.log"), "image rm") {
-			t.Errorf("mode %d: something was removed", tt.mode)
+		// The manifest stays; the host tag, only there to push from, goes
+		// (it would pin every old image on the daemon host).
+		tag := "registry.example.com/" + ownRepoPath + ":" + id12(imageID("old"))
+		if !h.reg.has(ownRepoPath, digest) || !strings.Contains(h.tools.read(t, "docker.log"), "image rm -- "+tag) {
+			t.Errorf("mode %d: manifest kept %v; docker saw:\n%s", tt.mode, h.reg.has(ownRepoPath, digest), h.tools.read(t, "docker.log"))
 		}
 		ix := h.indexOf(t, tgt.Cluster.ID)
-		if len(ix.Images) != 1 || !strings.Contains(ix.Images[0].GCError, tt.why) || *ix.Registries["registry.example.com"].DeleteSupported {
+		if len(ix.Images) != 1 || !strings.Contains(ix.Images[0].GCError, tt.why) || ix.Images[0].Tag != "" || *ix.Registries["registry.example.com"].DeleteSupported {
 			t.Errorf("mode %d: index %+v", tt.mode, ix)
 		}
-		// The answer is trusted for a day: the next pass does not ask again.
+		// The answer is trusted for a day: the next pass does not ask again,
+		// nor untag again, nor look up a login beyond the pull Secret's
+		// refresh.
 		h.clock.advance(time.Hour)
+		lookups := h.creds.lookups()
 		if _, err := h.m.GC(context.Background(), tgt, GCOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		if n := h.reg.count("DELETE /v2/" + ownRepoPath + "/manifests/" + zeroDigest); n != 1 {
 			t.Errorf("mode %d: DELETE support checked %d times", tt.mode, n)
+		}
+		if n := strings.Count(h.tools.read(t, "docker.log"), "image rm"); n != 1 || h.creds.lookups() != lookups+1 {
+			t.Errorf("mode %d: a later pass untagged %d times, looked up %d logins", tt.mode, n, h.creds.lookups()-lookups)
 		}
 		// Once the registry deletes, the next check after a day collects it.
 		h.reg.delete = deleteEnabled
@@ -217,7 +226,7 @@ func TestGCRechecksUnderTheImageLock(t *testing.T) {
 	h.clock.advance(100 * time.Hour)
 	path := h.m.IndexPath(tgt.Cluster.ID)
 	e := h.indexOf(t, tgt.Cluster.ID).Images[0]
-	unlock := h.m.keys.lock(path + "|" + e.key())
+	unlock := h.m.keys.lock(e.lockKey())
 	done := make(chan *GCResult)
 	go func() {
 		res, err := h.m.GC(context.Background(), tgt, GCOptions{})
@@ -278,5 +287,168 @@ func TestIndexCallsRefuseBadClusterIDs(t *testing.T) {
 		if _, err := h.m.Entries(id); err == nil {
 			t.Errorf("Entries(%q) passed", id)
 		}
+	}
+}
+
+// TestGCLeavesWhatAnotherConnectionShares: connections of one daemon that
+// push to one repository, or load into one local cluster, share the manifest,
+// the nodes' copy and the host tag of an image both deliver. The first to
+// let go only drops its own record; the last one deletes.
+func TestGCLeavesWhatAnotherConnectionShares(t *testing.T) {
+	ctx := context.Background()
+	t.Run("registry", func(t *testing.T) {
+		h := newHarness(t)
+		h.creds["registry.example.com"] = Credential{Username: "u", Password: "p"}
+		a := h.target(h.registryCluster(), localcluster.Cluster{})
+		b := h.target(h.registryCluster(func(c *fleet.KubeCluster) { c.ID = "prod-xyz789" }), localcluster.Cluster{})
+		digest := h.seedPush(t, "shared")
+		id := imageID("shared")
+		da := h.deliverAndRelease(t, a, id)
+		if _, err := h.m.Deliver(ctx, b, builtImage(id), "inst-b"); err != nil {
+			t.Fatal(err)
+		}
+		h.clock.advance(73 * time.Hour)
+		res, err := h.m.GC(ctx, a, GCOptions{})
+		if err != nil || len(res.Deleted) != 1 || len(h.indexOf(t, a.Cluster.ID).Images) != 0 {
+			t.Fatalf("GC of the first connection = %+v, %v", res, err)
+		}
+		if !h.reg.has(ownRepoPath, digest) || h.reg.count("DELETE /v2/"+ownRepoPath+"/manifests/"+digest) != 0 || strings.Contains(h.tools.read(t, "docker.log"), "image rm") {
+			t.Fatalf("deleted what the other connection holds: registry %v; docker:\n%s", h.reg.seen(), h.tools.read(t, "docker.log"))
+		}
+		if err := h.m.Release(b.Cluster.ID, "inst-b"); err != nil {
+			t.Fatal(err)
+		}
+		h.clock.advance(73 * time.Hour)
+		if res, err := h.m.GC(ctx, b, GCOptions{}); err != nil || len(res.Deleted) != 1 {
+			t.Fatalf("GC of the last connection = %+v, %v", res, err)
+		}
+		if h.reg.has(ownRepoPath, digest) || !strings.Contains(h.tools.read(t, "docker.log"), "image rm -- "+da.Tag) {
+			t.Errorf("the last connection left the image: registry %v; docker:\n%s", h.reg.seen(), h.tools.read(t, "docker.log"))
+		}
+	})
+
+	t.Run("node load", func(t *testing.T) {
+		h := newHarness(t)
+		a := h.target(h.cluster(), minikubeDev)
+		b := h.target(h.cluster(func(c *fleet.KubeCluster) { c.ID = "dev-other1"; c.Namespace = "other" }), minikubeDev)
+		kind := h.target(h.cluster(func(c *fleet.KubeCluster) { c.ID = "kind-abc123" }), localcluster.Cluster{Kind: localcluster.KinD, Name: "kind"})
+		id := imageID("local")
+		tag := NodeLoadTag(testDaemonID, id)
+		h.deliverAndRelease(t, a, id)
+		if _, err := h.m.Deliver(ctx, b, builtImage(id), "inst-b"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.m.Deliver(ctx, kind, builtImage(id), "inst-k"); err != nil {
+			t.Fatal(err)
+		}
+		h.clock.advance(73 * time.Hour)
+		if res, err := h.m.GC(ctx, a, GCOptions{}); err != nil || len(res.Deleted) != 1 {
+			t.Fatalf("GC = %+v, %v", res, err)
+		}
+		if l := h.tools.lines(t, "minikube.log"); slices.ContainsFunc(l, func(s string) bool { return strings.Contains(s, "image rm") }) || strings.Contains(h.tools.read(t, "docker.log"), "image rm") {
+			t.Fatalf("removed an image another connection holds: minikube %q; docker:\n%s", l, h.tools.read(t, "docker.log"))
+		}
+		// The other minikube connection goes: the nodes' copy goes with it,
+		// but kind's connection still needs the host tag.
+		_ = h.m.Release(b.Cluster.ID, "inst-b")
+		h.clock.advance(73 * time.Hour)
+		if res, err := h.m.GC(ctx, b, GCOptions{}); err != nil || len(res.Deleted) != 1 {
+			t.Fatalf("GC = %+v, %v", res, err)
+		}
+		if l := h.tools.lines(t, "minikube.log"); !slices.Contains(l, "-p dev image rm "+tag) || strings.Contains(h.tools.read(t, "docker.log"), "image rm") {
+			t.Errorf("minikube saw %q; docker:\n%s", l, h.tools.read(t, "docker.log"))
+		}
+	})
+
+	// A delivery on another connection that holds the image's lock while
+	// the GC waits for it is seen once the GC gets the lock.
+	t.Run("delivery racing the collection", func(t *testing.T) {
+		h := newHarness(t)
+		a := h.target(h.registryCluster(), localcluster.Cluster{})
+		b := h.target(h.registryCluster(func(c *fleet.KubeCluster) { c.ID = "prod-xyz789" }), localcluster.Cluster{})
+		digest := h.seedPush(t, "race")
+		h.deliverAndRelease(t, a, imageID("race"))
+		h.clock.advance(100 * time.Hour)
+		e := h.indexOf(t, a.Cluster.ID).Images[0]
+		unlock := h.m.keys.lock(e.lockKey())
+		done := make(chan *GCResult)
+		go func() {
+			res, err := h.m.GC(ctx, a, GCOptions{})
+			if err != nil {
+				t.Error(err)
+			}
+			done <- res
+		}()
+		time.Sleep(50 * time.Millisecond)
+		late := e
+		late.Holders, late.ReleasedAt, late.DeliveredAt = []string{"inst-b"}, time.Time{}, h.clock.Now()
+		if err := h.m.files.update(h.m.IndexPath(b.Cluster.ID), func(ix *Index) error { ix.Images = append(ix.Images, late); return nil }); err != nil {
+			t.Fatal(err)
+		}
+		unlock()
+		<-done
+		if !h.reg.has(ownRepoPath, digest) {
+			t.Error("the GC deleted a manifest another connection's delivery recorded while it waited")
+		}
+	})
+}
+
+// TestGCRemovesOnlyItsOwnTags: an index entry naming a tag that is not
+// fleet's (a hand-edited or foreign index) costs the host and the nodes
+// nothing.
+func TestGCRemovesOnlyItsOwnTags(t *testing.T) {
+	h := newHarness(t)
+	tgt := h.target(h.registryCluster(), minikubeDev)
+	old := h.clock.Now().Add(-100 * time.Hour)
+	id := imageID("x")
+	err := h.m.files.update(h.m.IndexPath(tgt.Cluster.ID), func(ix *Index) error {
+		ix.put(Entry{ImageID: id, Strategy: StrategyNodeLoad, Location: minikubeDev.String(), Ref: "busybox:latest", Tag: "busybox:latest", DeliveredAt: old})
+		ix.put(Entry{ImageID: id, Strategy: StrategyRegistry, Location: "registry.example.com/" + ownRepoPath, Ref: "x@" + zeroDigest, Digest: zeroDigest, Tag: "registry.example.com/team/app:" + id12(id), DeliveredAt: old})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := h.m.GC(context.Background(), tgt, GCOptions{})
+	if err != nil || len(res.Kept) != 2 {
+		t.Fatalf("GC = %+v, %v", res, err)
+	}
+	for _, e := range res.Kept {
+		if !strings.Contains(e.GCError, "not one of this daemon's tags") {
+			t.Errorf("kept %+v", e)
+		}
+	}
+	if log := h.tools.read(t, "docker.log") + h.tools.read(t, "minikube.log"); log != "" || len(h.reg.seen()) != 0 {
+		t.Errorf("something was removed: %s %v", log, h.reg.seen())
+	}
+	for tag, want := range map[string]bool{
+		NodeLoadTag(testDaemonID, id): true,
+		RegistryTag(Registry{Domain: "r.example.com", Prefix: "team"}, testDaemonID, id): true,
+		RegistryTag(Registry{Domain: "r.example.com"}, testDaemonID, id):                 true,
+		NodeLoadTag(testDaemonID, imageID("other")):                                      false,
+		NodeLoadTag("0000000000000000", id):                                              false,
+		"fleet.invalid/3fa2c91e/devcontainer@" + zeroDigest:                              false,
+		"busybox:" + id12(id):                                                            false,
+	} {
+		if got := isOwnTag(tag, testDaemonID, id); got != want {
+			t.Errorf("isOwnTag(%q) = %v", tag, got)
+		}
+	}
+}
+
+// TestGCGraceFollowsADeliveryAgain: an image unheld for long and delivered
+// again is in use again; the GC leaves it through the grace, before its new
+// holder takes it.
+func TestGCGraceFollowsADeliveryAgain(t *testing.T) {
+	h := newHarness(t)
+	tgt := h.target(h.cluster(), minikubeDev)
+	img := builtImage(imageID("again"))
+	h.deliverAndRelease(t, tgt, img.Config.ID)
+	h.clock.advance(100 * time.Hour)
+	if _, err := h.m.deliverOnce(context.Background(), tgt, img, StrategyNodeLoad, h.m.IndexPath(tgt.Cluster.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := h.m.GC(context.Background(), tgt, GCOptions{}); err != nil || len(res.Deleted) != 0 {
+		t.Errorf("collected an image delivered again a moment ago: %+v, %v", res, err)
 	}
 }

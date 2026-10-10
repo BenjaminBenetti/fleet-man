@@ -64,6 +64,18 @@ type Entry struct {
 // key identifies an entry within its index.
 func (e *Entry) key() string { return string(e.Strategy) + "|" + e.Location + "|" + e.ImageID }
 
+// lockKey is what delivery and collection of the entry serialize on, across
+// every connection of the daemon: connections that push to one repository,
+// or load into one local cluster, share what their entries name, so one
+// connection's GC must never delete what another's delivery is handing out.
+// Node loads of an image into any local cluster share its one host tag.
+func (e *Entry) lockKey() string {
+	if e.Strategy == StrategyNodeLoad {
+		return string(e.Strategy) + "|" + e.ImageID
+	}
+	return e.key()
+}
+
 // hold adds holder.
 func (e *Entry) hold(holder string) {
 	if !slices.Contains(e.Holders, holder) {
@@ -88,10 +100,11 @@ func (e *Entry) release(holder string, now time.Time) bool {
 	return true
 }
 
-// unheldSince is when the entry last had a holder (or was delivered, if it
-// never had one).
+// unheldSince is when the entry last had a holder or was delivered,
+// whichever came later: an image delivered again is in use again, even
+// before its new holder takes it.
 func (e *Entry) unheldSince() time.Time {
-	if !e.ReleasedAt.IsZero() {
+	if e.ReleasedAt.After(e.DeliveredAt) {
 		return e.ReleasedAt
 	}
 	return e.DeliveredAt

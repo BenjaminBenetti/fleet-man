@@ -66,6 +66,10 @@ func TestRemoteImageConfigSingleManifestAndDigestRefs(t *testing.T) {
 			t.Errorf("%s: %+v", ref, img)
 		}
 	}
+	// A single-platform image is no image for another platform's nodes.
+	if _, err := RemoteImageConfig(context.Background(), "alpine:3.24", "linux/arm64", opts); err == nil || !strings.Contains(err.Error(), "for linux/amd64 only, not linux/arm64") {
+		t.Errorf("an amd64-only image for arm64 nodes: %v", err)
+	}
 	if _, err := RemoteImageConfig(context.Background(), "alpine:nope", "", opts); err == nil || !isNotFound(err) {
 		t.Errorf("an unknown tag: %v", err)
 	}

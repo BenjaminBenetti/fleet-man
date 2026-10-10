@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -426,9 +427,15 @@ func (s *fakeSecrets) get(name string) (PullSecret, bool) {
 
 type staticCredentials map[string]Credential
 
+// lookupCount counts every staticCredentials lookup of the test binary.
+var lookupCount atomic.Int64
+
 func (c staticCredentials) Lookup(_ context.Context, domain string) (Credential, error) {
+	lookupCount.Add(1)
 	return c[domain], nil
 }
+
+func (c staticCredentials) lookups() int64 { return lookupCount.Load() }
 
 // --- harness ---
 
