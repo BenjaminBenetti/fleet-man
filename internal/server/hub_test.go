@@ -244,3 +244,36 @@ func TestHubRuntimeGate(t *testing.T) {
 		t.Fatal("gate should drop to false after the runtime subscriber leaves")
 	}
 }
+
+func TestHubKubeClustersBroadcastsAndDedups(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := newHub()
+	go h.run(ctx)
+
+	sub := newSubscriber(false)
+	if !h.post(func(h *hub) { h.addSub(sub) }) {
+		t.Fatal("addSub post failed")
+	}
+	set := func(states ...fleetgrpc.KubeClusterState) *fleetgrpc.KubeClusters {
+		clusters := &fleetgrpc.KubeClusters{}
+		for i, s := range states {
+			clusters.Clusters = append(clusters.Clusters, &fleetgrpc.KubeClusterStatus{Cluster: &fleetgrpc.KubeCluster{Id: fmt.Sprintf("c-%d", i)}, State: s})
+		}
+		return clusters
+	}
+	h.post(func(h *hub) { h.broadcastKubeClusters(set(fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CHECKING)) })
+	h.post(func(h *hub) { h.broadcastKubeClusters(set(fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)) })
+	drainSync(t, h)
+	if got := sub.takeKubeClusters(); len(got.GetClusters()) != 1 || got.GetClusters()[0].GetState() != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY {
+		t.Fatalf("conflation: want the newest set (READY), got %v", got)
+	}
+	if again := sub.takeKubeClusters(); again != nil {
+		t.Fatalf("want nothing pending after a take, got %v", again)
+	}
+	h.post(func(h *hub) { h.broadcastKubeClusters(set(fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)) })
+	drainSync(t, h)
+	if again := sub.takeKubeClusters(); again != nil {
+		t.Fatalf("dedup: an unchanged set was broadcast again: %v", again)
+	}
+}

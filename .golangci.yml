@@ -97,3 +97,20 @@ linters:
               desc: client code must not import the server; talk to it via fleetgrpc over fleetclient
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/gitutil
               desc: workspace checkouts live with the daemon (or inside the instance); read branches from InstanceRuntime.current_branch or GetState fresh_branches
+            # Kubernetes: every cluster call runs in fleetd, so a remote client
+            # works exactly like a local one and cluster credentials never leave
+            # the daemon host. Clients use the kube RPCs (ListKubeClusters,
+            # TestKubeCluster, ...) and Watch Event.kube_clusters. The one
+            # client-go leaf a client may link is internal/kubeexec, for the
+            # daemon-host kube-exec shim; internal/k8s/names is pure Go and
+            # allowed too.
+            - pkg: k8s.io/client-go
+              desc: cluster calls run in fleetd; use the fleetgrpc kube RPCs (internal/kubeexec is the shim's only client-go leaf)
+            - pkg: k8s.io/api
+              desc: cluster calls run in fleetd; use the fleetgrpc kube RPCs
+            - pkg: k8s.io/apimachinery
+              desc: cluster calls run in fleetd; use the fleetgrpc kube RPCs
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/k8s/owner
+              desc: cluster ownership (daemon_id, owner Leases) is the daemon's; clients see OWNER_CONFLICT in KubeClusterStatus
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/k8s/preflight
+              desc: preflight runs in fleetd; stream it with TestKubeCluster

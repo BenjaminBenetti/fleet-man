@@ -48,11 +48,16 @@ type Lease struct {
 	duration time.Duration
 	now      func() time.Time
 
+	// mu serializes Ensure and Release, which make API round trips.
 	mu sync.Mutex
 	// seen is another holder's Lease as last observed and when (local
-	// clock), for the expiry judgement.
-	seen    string
-	seenAt  time.Time
+	// clock), for the expiry judgement. Guarded by mu.
+	seen   string
+	seenAt time.Time
+
+	// heldMu guards heldAt and hasHeld alone, so Holding never waits behind
+	// an Ensure that is still talking to the API server.
+	heldMu  sync.Mutex
 	heldAt  time.Time // when Ensure last found this incarnation holding it
 	hasHeld bool
 }
@@ -117,12 +122,16 @@ func (l *Lease) Ensure(ctx context.Context) (LeaseStatus, error) {
 	for range 4 {
 		st, retry, err := l.ensureOnce(ctx)
 		if err != nil || !retry {
-			if err == nil && st.Held {
-				// From before the write: a takeover counts from no earlier
-				// than when the other side saw it.
-				l.heldAt, l.hasHeld = st.RenewedAt, true
-			} else if err == nil {
-				l.hasHeld = false
+			if err == nil {
+				l.heldMu.Lock()
+				if st.Held {
+					// From before the write: a takeover counts from no
+					// earlier than when the other side saw it.
+					l.heldAt, l.hasHeld = st.RenewedAt, true
+				} else {
+					l.hasHeld = false
+				}
+				l.heldMu.Unlock()
 			}
 			return st, err
 		}
@@ -241,10 +250,10 @@ func (l *Lease) heldStatus(now time.Time, tookOver bool) LeaseStatus {
 // the last Ensure found it holding the Lease, recently enough that no other
 // incarnation can have taken it over since (a takeover needs a full duration
 // without renewals; this claims five sixths of one). GC checks it before
-// deleting.
+// deleting. It never waits on an Ensure in flight.
 func (l *Lease) Holding() bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.heldMu.Lock()
+	defer l.heldMu.Unlock()
 	return l.hasHeld && l.now().Before(l.heldAt.Add(l.duration*5/6))
 }
 
@@ -253,7 +262,9 @@ func (l *Lease) Holding() bool {
 func (l *Lease) Release(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.heldMu.Lock()
 	l.hasHeld = false
+	l.heldMu.Unlock()
 	cur, err := l.leases.Get(ctx, l.name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil

@@ -58,6 +58,11 @@ type hub struct {
 	// over Watch whenever a job starts, changes step or ends, and cached for a
 	// new subscriber's initial snapshot. Produced by the job manager.
 	activeJobs *fleetgrpc.ActiveJobs
+	// kubeClusters is every Kubernetes connection with its health (owned by
+	// the loop), pushed over Watch whenever a record or its health changes
+	// and cached for a new subscriber's initial snapshot. Produced by the
+	// kube manager (kube_health.go).
+	kubeClusters *fleetgrpc.KubeClusters
 
 	// runtimeWanted is true while at least one subscriber asked for runtime;
 	// the runtime pollers read it lock-free to gate their expensive work.
@@ -106,6 +111,7 @@ func newHub() *hub {
 		micSources:    &fleetgrpc.MicSources{},
 		outputTargets: &fleetgrpc.OutputTargets{},
 		activeJobs:    &fleetgrpc.ActiveJobs{},
+		kubeClusters:  &fleetgrpc.KubeClusters{},
 	}
 	h.branches = newBranchResolver(h.readBranch)
 	return h
@@ -300,6 +306,20 @@ func (h *hub) broadcastActiveJobs(jobs *fleetgrpc.ActiveJobs) {
 	}
 }
 
+// broadcastKubeClusters caches the Kubernetes connections with their health
+// and fans them out to every subscriber. Conflatable like the in-flight jobs:
+// each push replaces the last one whole, and an unchanged set is dropped.
+// Runs on the hub loop.
+func (h *hub) broadcastKubeClusters(clusters *fleetgrpc.KubeClusters) {
+	if clusters == nil || proto.Equal(h.kubeClusters, clusters) {
+		return
+	}
+	h.kubeClusters = clusters
+	for sub := range h.subs {
+		sub.enqueueKubeClusters(clusters)
+	}
+}
+
 // subscriber is one Watch stream's conflating buffer. pendingState keeps the
 // newest State (older ones are dropped — a full snapshot supersedes them);
 // pendingRuntime merges by key so a stats-only update and a live-status-only
@@ -327,6 +347,7 @@ type subscriber struct {
 	pendingMicSources    *fleetgrpc.MicSources
 	pendingOutputTargets *fleetgrpc.OutputTargets
 	pendingActiveJobs    *fleetgrpc.ActiveJobs
+	pendingKubeClusters  *fleetgrpc.KubeClusters
 
 	notify chan struct{}
 }
@@ -430,6 +451,23 @@ func (s *subscriber) takeActiveJobs() *fleetgrpc.ActiveJobs {
 	jobs := s.pendingActiveJobs
 	s.pendingActiveJobs = nil
 	return jobs
+}
+
+func (s *subscriber) enqueueKubeClusters(clusters *fleetgrpc.KubeClusters) {
+	s.mu.Lock()
+	s.pendingKubeClusters = clusters
+	s.mu.Unlock()
+	s.signal()
+}
+
+// takeKubeClusters takes the pending Kubernetes connections, if any, out of
+// the buffer for sending.
+func (s *subscriber) takeKubeClusters() *fleetgrpc.KubeClusters {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clusters := s.pendingKubeClusters
+	s.pendingKubeClusters = nil
+	return clusters
 }
 
 // drain takes the pending state + runtime + browser-opens + file-copies +

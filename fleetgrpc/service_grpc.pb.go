@@ -61,6 +61,15 @@ const (
 	FleetService_CopyFile_FullMethodName               = "/fleetgrpc.FleetService/CopyFile"
 	FleetService_CopyInto_FullMethodName               = "/fleetgrpc.FleetService/CopyInto"
 	FleetService_ListDeployTargets_FullMethodName      = "/fleetgrpc.FleetService/ListDeployTargets"
+	FleetService_ListKubeContexts_FullMethodName       = "/fleetgrpc.FleetService/ListKubeContexts"
+	FleetService_ListKubeClusters_FullMethodName       = "/fleetgrpc.FleetService/ListKubeClusters"
+	FleetService_AddKubeCluster_FullMethodName         = "/fleetgrpc.FleetService/AddKubeCluster"
+	FleetService_UpdateKubeCluster_FullMethodName      = "/fleetgrpc.FleetService/UpdateKubeCluster"
+	FleetService_RemoveKubeCluster_FullMethodName      = "/fleetgrpc.FleetService/RemoveKubeCluster"
+	FleetService_TestKubeCluster_FullMethodName        = "/fleetgrpc.FleetService/TestKubeCluster"
+	FleetService_PruneKubeCluster_FullMethodName       = "/fleetgrpc.FleetService/PruneKubeCluster"
+	FleetService_LoginKubeCluster_FullMethodName       = "/fleetgrpc.FleetService/LoginKubeCluster"
+	FleetService_CreateKubeNamespace_FullMethodName    = "/fleetgrpc.FleetService/CreateKubeNamespace"
 	FleetService_InspectRepo_FullMethodName            = "/fleetgrpc.FleetService/InspectRepo"
 	FleetService_GetCoderTemplateParams_FullMethodName = "/fleetgrpc.FleetService/GetCoderTemplateParams"
 	FleetService_GetBrowserConfig_FullMethodName       = "/fleetgrpc.FleetService/GetBrowserConfig"
@@ -174,6 +183,30 @@ type FleetServiceClient interface {
 	// on the daemon host), the remembered default, and the daemon host's build
 	// tools. Served to remote clients exactly as to local ones.
 	ListDeployTargets(ctx context.Context, in *ListDeployTargetsRequest, opts ...grpc.CallOption) (*ListDeployTargetsReply, error)
+	// ListKubeContexts lists the contexts of kubeconfig files on the daemon
+	// host (the context picker).
+	ListKubeContexts(ctx context.Context, in *ListKubeContextsRequest, opts ...grpc.CallOption) (*ListKubeContextsReply, error)
+	// ListKubeClusters returns every connection with its health (also pushed
+	// as Watch Event.kube_clusters).
+	ListKubeClusters(ctx context.Context, in *ListKubeClustersRequest, opts ...grpc.CallOption) (*ListKubeClustersReply, error)
+	AddKubeCluster(ctx context.Context, in *AddKubeClusterRequest, opts ...grpc.CallOption) (*AddKubeClusterReply, error)
+	// UpdateKubeCluster changes the fields its FieldMask names.
+	UpdateKubeCluster(ctx context.Context, in *UpdateKubeClusterRequest, opts ...grpc.CallOption) (*UpdateKubeClusterReply, error)
+	// RemoveKubeCluster disconnects a connection (KubeRemoveMode). Destroying
+	// its instances can take minutes: clients use a long deadline.
+	RemoveKubeCluster(ctx context.Context, in *RemoveKubeClusterRequest, opts ...grpc.CallOption) (*RemoveKubeClusterReply, error)
+	// TestKubeCluster runs the full preflight on a saved or an unsaved
+	// connection, streaming each check.
+	TestKubeCluster(ctx context.Context, in *TestKubeClusterRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TestKubeClusterEvent], error)
+	// PruneKubeCluster lists, and with apply deletes, the objects labelled for
+	// this daemon and connection that no instance accounts for.
+	PruneKubeCluster(ctx context.Context, in *PruneKubeClusterRequest, opts ...grpc.CallOption) (*PruneKubeClusterReply, error)
+	// LoginKubeCluster runs the connection's login plugin on the daemon host
+	// ([Run login on daemon]) and relays only its device-code URL and code.
+	LoginKubeCluster(ctx context.Context, in *LoginKubeClusterRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LoginKubeClusterEvent], error)
+	// CreateKubeNamespace creates a connection's namespace, an explicit action
+	// (fleet never creates one on its own), or with dry_run only renders it.
+	CreateKubeNamespace(ctx context.Context, in *CreateKubeNamespaceRequest, opts ...grpc.CallOption) (*CreateKubeNamespaceReply, error)
 	// ---- Repo inspection (server-side clone + checks) ----
 	// InspectRepo shallow-clones remote_url on the DAEMON's host and reports
 	// devcontainer presence (and optionally the detected container home dir).
@@ -717,6 +750,114 @@ func (c *fleetServiceClient) ListDeployTargets(ctx context.Context, in *ListDepl
 	return out, nil
 }
 
+func (c *fleetServiceClient) ListKubeContexts(ctx context.Context, in *ListKubeContextsRequest, opts ...grpc.CallOption) (*ListKubeContextsReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListKubeContextsReply)
+	err := c.cc.Invoke(ctx, FleetService_ListKubeContexts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) ListKubeClusters(ctx context.Context, in *ListKubeClustersRequest, opts ...grpc.CallOption) (*ListKubeClustersReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListKubeClustersReply)
+	err := c.cc.Invoke(ctx, FleetService_ListKubeClusters_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) AddKubeCluster(ctx context.Context, in *AddKubeClusterRequest, opts ...grpc.CallOption) (*AddKubeClusterReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddKubeClusterReply)
+	err := c.cc.Invoke(ctx, FleetService_AddKubeCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) UpdateKubeCluster(ctx context.Context, in *UpdateKubeClusterRequest, opts ...grpc.CallOption) (*UpdateKubeClusterReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateKubeClusterReply)
+	err := c.cc.Invoke(ctx, FleetService_UpdateKubeCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) RemoveKubeCluster(ctx context.Context, in *RemoveKubeClusterRequest, opts ...grpc.CallOption) (*RemoveKubeClusterReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveKubeClusterReply)
+	err := c.cc.Invoke(ctx, FleetService_RemoveKubeCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) TestKubeCluster(ctx context.Context, in *TestKubeClusterRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TestKubeClusterEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[16], FleetService_TestKubeCluster_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[TestKubeClusterRequest, TestKubeClusterEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_TestKubeClusterClient = grpc.ServerStreamingClient[TestKubeClusterEvent]
+
+func (c *fleetServiceClient) PruneKubeCluster(ctx context.Context, in *PruneKubeClusterRequest, opts ...grpc.CallOption) (*PruneKubeClusterReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PruneKubeClusterReply)
+	err := c.cc.Invoke(ctx, FleetService_PruneKubeCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) LoginKubeCluster(ctx context.Context, in *LoginKubeClusterRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LoginKubeClusterEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[17], FleetService_LoginKubeCluster_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[LoginKubeClusterRequest, LoginKubeClusterEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_LoginKubeClusterClient = grpc.ServerStreamingClient[LoginKubeClusterEvent]
+
+func (c *fleetServiceClient) CreateKubeNamespace(ctx context.Context, in *CreateKubeNamespaceRequest, opts ...grpc.CallOption) (*CreateKubeNamespaceReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateKubeNamespaceReply)
+	err := c.cc.Invoke(ctx, FleetService_CreateKubeNamespace_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) InspectRepo(ctx context.Context, in *InspectRepoRequest, opts ...grpc.CallOption) (*InspectRepoReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(InspectRepoReply)
@@ -864,6 +1005,30 @@ type FleetServiceServer interface {
 	// on the daemon host), the remembered default, and the daemon host's build
 	// tools. Served to remote clients exactly as to local ones.
 	ListDeployTargets(context.Context, *ListDeployTargetsRequest) (*ListDeployTargetsReply, error)
+	// ListKubeContexts lists the contexts of kubeconfig files on the daemon
+	// host (the context picker).
+	ListKubeContexts(context.Context, *ListKubeContextsRequest) (*ListKubeContextsReply, error)
+	// ListKubeClusters returns every connection with its health (also pushed
+	// as Watch Event.kube_clusters).
+	ListKubeClusters(context.Context, *ListKubeClustersRequest) (*ListKubeClustersReply, error)
+	AddKubeCluster(context.Context, *AddKubeClusterRequest) (*AddKubeClusterReply, error)
+	// UpdateKubeCluster changes the fields its FieldMask names.
+	UpdateKubeCluster(context.Context, *UpdateKubeClusterRequest) (*UpdateKubeClusterReply, error)
+	// RemoveKubeCluster disconnects a connection (KubeRemoveMode). Destroying
+	// its instances can take minutes: clients use a long deadline.
+	RemoveKubeCluster(context.Context, *RemoveKubeClusterRequest) (*RemoveKubeClusterReply, error)
+	// TestKubeCluster runs the full preflight on a saved or an unsaved
+	// connection, streaming each check.
+	TestKubeCluster(*TestKubeClusterRequest, grpc.ServerStreamingServer[TestKubeClusterEvent]) error
+	// PruneKubeCluster lists, and with apply deletes, the objects labelled for
+	// this daemon and connection that no instance accounts for.
+	PruneKubeCluster(context.Context, *PruneKubeClusterRequest) (*PruneKubeClusterReply, error)
+	// LoginKubeCluster runs the connection's login plugin on the daemon host
+	// ([Run login on daemon]) and relays only its device-code URL and code.
+	LoginKubeCluster(*LoginKubeClusterRequest, grpc.ServerStreamingServer[LoginKubeClusterEvent]) error
+	// CreateKubeNamespace creates a connection's namespace, an explicit action
+	// (fleet never creates one on its own), or with dry_run only renders it.
+	CreateKubeNamespace(context.Context, *CreateKubeNamespaceRequest) (*CreateKubeNamespaceReply, error)
 	// ---- Repo inspection (server-side clone + checks) ----
 	// InspectRepo shallow-clones remote_url on the DAEMON's host and reports
 	// devcontainer presence (and optionally the detected container home dir).
@@ -1010,6 +1175,33 @@ func (UnimplementedFleetServiceServer) CopyInto(grpc.ClientStreamingServer[CopyI
 }
 func (UnimplementedFleetServiceServer) ListDeployTargets(context.Context, *ListDeployTargetsRequest) (*ListDeployTargetsReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListDeployTargets not implemented")
+}
+func (UnimplementedFleetServiceServer) ListKubeContexts(context.Context, *ListKubeContextsRequest) (*ListKubeContextsReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListKubeContexts not implemented")
+}
+func (UnimplementedFleetServiceServer) ListKubeClusters(context.Context, *ListKubeClustersRequest) (*ListKubeClustersReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListKubeClusters not implemented")
+}
+func (UnimplementedFleetServiceServer) AddKubeCluster(context.Context, *AddKubeClusterRequest) (*AddKubeClusterReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AddKubeCluster not implemented")
+}
+func (UnimplementedFleetServiceServer) UpdateKubeCluster(context.Context, *UpdateKubeClusterRequest) (*UpdateKubeClusterReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateKubeCluster not implemented")
+}
+func (UnimplementedFleetServiceServer) RemoveKubeCluster(context.Context, *RemoveKubeClusterRequest) (*RemoveKubeClusterReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveKubeCluster not implemented")
+}
+func (UnimplementedFleetServiceServer) TestKubeCluster(*TestKubeClusterRequest, grpc.ServerStreamingServer[TestKubeClusterEvent]) error {
+	return status.Errorf(codes.Unimplemented, "method TestKubeCluster not implemented")
+}
+func (UnimplementedFleetServiceServer) PruneKubeCluster(context.Context, *PruneKubeClusterRequest) (*PruneKubeClusterReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PruneKubeCluster not implemented")
+}
+func (UnimplementedFleetServiceServer) LoginKubeCluster(*LoginKubeClusterRequest, grpc.ServerStreamingServer[LoginKubeClusterEvent]) error {
+	return status.Errorf(codes.Unimplemented, "method LoginKubeCluster not implemented")
+}
+func (UnimplementedFleetServiceServer) CreateKubeNamespace(context.Context, *CreateKubeNamespaceRequest) (*CreateKubeNamespaceReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateKubeNamespace not implemented")
 }
 func (UnimplementedFleetServiceServer) InspectRepo(context.Context, *InspectRepoRequest) (*InspectRepoReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InspectRepo not implemented")
@@ -1660,6 +1852,154 @@ func _FleetService_ListDeployTargets_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FleetService_ListKubeContexts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListKubeContextsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ListKubeContexts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ListKubeContexts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ListKubeContexts(ctx, req.(*ListKubeContextsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_ListKubeClusters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListKubeClustersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ListKubeClusters(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ListKubeClusters_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ListKubeClusters(ctx, req.(*ListKubeClustersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_AddKubeCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddKubeClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).AddKubeCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_AddKubeCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).AddKubeCluster(ctx, req.(*AddKubeClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_UpdateKubeCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateKubeClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).UpdateKubeCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_UpdateKubeCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).UpdateKubeCluster(ctx, req.(*UpdateKubeClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_RemoveKubeCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveKubeClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).RemoveKubeCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_RemoveKubeCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).RemoveKubeCluster(ctx, req.(*RemoveKubeClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_TestKubeCluster_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(TestKubeClusterRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FleetServiceServer).TestKubeCluster(m, &grpc.GenericServerStream[TestKubeClusterRequest, TestKubeClusterEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_TestKubeClusterServer = grpc.ServerStreamingServer[TestKubeClusterEvent]
+
+func _FleetService_PruneKubeCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PruneKubeClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).PruneKubeCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_PruneKubeCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).PruneKubeCluster(ctx, req.(*PruneKubeClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_LoginKubeCluster_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(LoginKubeClusterRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FleetServiceServer).LoginKubeCluster(m, &grpc.GenericServerStream[LoginKubeClusterRequest, LoginKubeClusterEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_LoginKubeClusterServer = grpc.ServerStreamingServer[LoginKubeClusterEvent]
+
+func _FleetService_CreateKubeNamespace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateKubeNamespaceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).CreateKubeNamespace(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_CreateKubeNamespace_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).CreateKubeNamespace(ctx, req.(*CreateKubeNamespaceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_InspectRepo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(InspectRepoRequest)
 	if err := dec(in); err != nil {
@@ -1844,6 +2184,34 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _FleetService_ListDeployTargets_Handler,
 		},
 		{
+			MethodName: "ListKubeContexts",
+			Handler:    _FleetService_ListKubeContexts_Handler,
+		},
+		{
+			MethodName: "ListKubeClusters",
+			Handler:    _FleetService_ListKubeClusters_Handler,
+		},
+		{
+			MethodName: "AddKubeCluster",
+			Handler:    _FleetService_AddKubeCluster_Handler,
+		},
+		{
+			MethodName: "UpdateKubeCluster",
+			Handler:    _FleetService_UpdateKubeCluster_Handler,
+		},
+		{
+			MethodName: "RemoveKubeCluster",
+			Handler:    _FleetService_RemoveKubeCluster_Handler,
+		},
+		{
+			MethodName: "PruneKubeCluster",
+			Handler:    _FleetService_PruneKubeCluster_Handler,
+		},
+		{
+			MethodName: "CreateKubeNamespace",
+			Handler:    _FleetService_CreateKubeNamespace_Handler,
+		},
+		{
 			MethodName: "InspectRepo",
 			Handler:    _FleetService_InspectRepo_Handler,
 		},
@@ -1946,6 +2314,16 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "CopyInto",
 			Handler:       _FleetService_CopyInto_Handler,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "TestKubeCluster",
+			Handler:       _FleetService_TestKubeCluster_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "LoginKubeCluster",
+			Handler:       _FleetService_LoginKubeCluster_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "service.proto",

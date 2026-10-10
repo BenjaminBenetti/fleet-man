@@ -250,6 +250,11 @@ func kubeImageSettingsToProto(i fleet.KubeImageSettings) *fleetgrpc.KubeImageSet
 }
 
 func kubeImageSettingsFromProto(pi *fleetgrpc.KubeImageSettings) fleet.KubeImageSettings {
+	if pi == nil {
+		// A record sent without image settings: the tri-states below read
+		// fields directly, so a nil message must not reach them.
+		return fleet.KubeImageSettings{}
+	}
 	return fleet.KubeImageSettings{
 		Mode:              fleet.KubeImageMode(pi.GetMode()),
 		Registry:          pi.GetRegistry(),

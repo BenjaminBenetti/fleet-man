@@ -219,6 +219,7 @@ type FleetJobOutput struct {
 // backend out learns which target the daemon's remembered default resolved to.
 type mcpDeployTarget struct {
 	Backend   string `json:"backend" jsonschema:"the backend the instance was created on"`
+	Cluster   string `json:"cluster,omitempty" jsonschema:"kubernetes only: the cluster connection (its id) the instance was created on"`
 	Defaulted bool   `json:"defaulted,omitempty" jsonschema:"true when backend was omitted, so the daemon picked the target: its remembered default deploy target, else devcontainer"`
 }
 
@@ -414,8 +415,10 @@ func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpI
 	if err != nil {
 		return nil, FleetJobOutput{}, mcpErr(err)
 	}
+	resolved := protoconv.DeployTargetFromProto(j.target)
 	target := &mcpDeployTarget{
-		Backend:   protoconv.DeployTargetFromProto(j.target).String(),
+		Backend:   string(resolved.Backend),
+		Cluster:   resolved.KubeCluster,
 		Defaulted: in.Backend == "",
 	}
 	var (

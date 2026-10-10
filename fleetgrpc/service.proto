@@ -11,6 +11,7 @@ import "exec.proto";
 import "output.proto";
 import "inspect.proto";
 import "deploy.proto";
+import "kube.proto";
 
 option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
 
@@ -134,6 +135,35 @@ service FleetService {
   // on the daemon host), the remembered default, and the daemon host's build
   // tools. Served to remote clients exactly as to local ones.
   rpc ListDeployTargets(ListDeployTargetsRequest) returns (ListDeployTargetsReply);
+
+  // ---- Kubernetes cluster connections (kube.proto) ----
+  // Served to remote clients exactly as to local ones: every RPC and every
+  // field. Cluster I/O runs in fleetd, on the daemon host.
+
+  // ListKubeContexts lists the contexts of kubeconfig files on the daemon
+  // host (the context picker).
+  rpc ListKubeContexts(ListKubeContextsRequest) returns (ListKubeContextsReply);
+  // ListKubeClusters returns every connection with its health (also pushed
+  // as Watch Event.kube_clusters).
+  rpc ListKubeClusters(ListKubeClustersRequest) returns (ListKubeClustersReply);
+  rpc AddKubeCluster(AddKubeClusterRequest) returns (AddKubeClusterReply);
+  // UpdateKubeCluster changes the fields its FieldMask names.
+  rpc UpdateKubeCluster(UpdateKubeClusterRequest) returns (UpdateKubeClusterReply);
+  // RemoveKubeCluster disconnects a connection (KubeRemoveMode). Destroying
+  // its instances can take minutes: clients use a long deadline.
+  rpc RemoveKubeCluster(RemoveKubeClusterRequest) returns (RemoveKubeClusterReply);
+  // TestKubeCluster runs the full preflight on a saved or an unsaved
+  // connection, streaming each check.
+  rpc TestKubeCluster(TestKubeClusterRequest) returns (stream TestKubeClusterEvent);
+  // PruneKubeCluster lists, and with apply deletes, the objects labelled for
+  // this daemon and connection that no instance accounts for.
+  rpc PruneKubeCluster(PruneKubeClusterRequest) returns (PruneKubeClusterReply);
+  // LoginKubeCluster runs the connection's login plugin on the daemon host
+  // ([Run login on daemon]) and relays only its device-code URL and code.
+  rpc LoginKubeCluster(LoginKubeClusterRequest) returns (stream LoginKubeClusterEvent);
+  // CreateKubeNamespace creates a connection's namespace, an explicit action
+  // (fleet never creates one on its own), or with dry_run only renders it.
+  rpc CreateKubeNamespace(CreateKubeNamespaceRequest) returns (CreateKubeNamespaceReply);
 
   // ---- Repo inspection (server-side clone + checks) ----
   // InspectRepo shallow-clones remote_url on the DAEMON's host and reports

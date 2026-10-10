@@ -13,8 +13,9 @@ import (
 // the client until it disconnects or the server shuts down.
 //
 // The persisted snapshots come from the state poller (disk re-Load) and job
-// writes, the runtime sidecar from the runtime pollers, and the in-flight jobs
-// (ActiveJobs) from the job manager. The per-job Job* events and
+// writes, the runtime sidecar from the runtime pollers, the in-flight jobs
+// (ActiveJobs) from the job manager, and the Kubernetes connections
+// (KubeClusters) from the kube manager. The per-job Job* events and
 // reattach_job_ids are not used: a job's own stream carries its events.
 func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreamingServer[fleetgrpc.Event]) error {
 	ctx := stream.Context()
@@ -52,6 +53,12 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 			// (and a reconnecting client drops the steps of jobs that ended).
 			if h.activeJobs != nil {
 				sub.enqueueActiveJobs(h.activeJobs)
+			}
+			// The Kubernetes connections and their health, so Settings rows
+			// and Deploy options draw from the first snapshot (empty when
+			// there are none).
+			if h.kubeClusters != nil {
+				sub.enqueueKubeClusters(h.kubeClusters)
 			}
 		}
 		close(registered)
@@ -122,6 +129,11 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 			}
 			if jobs := sub.takeActiveJobs(); jobs != nil {
 				if err := stream.Send(&fleetgrpc.Event{Kind: &fleetgrpc.Event_ActiveJobs{ActiveJobs: jobs}}); err != nil {
+					return err
+				}
+			}
+			if clusters := sub.takeKubeClusters(); clusters != nil {
+				if err := stream.Send(&fleetgrpc.Event{Kind: &fleetgrpc.Event_KubeClusters{KubeClusters: clusters}}); err != nil {
 					return err
 				}
 			}
