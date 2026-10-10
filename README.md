@@ -342,6 +342,19 @@ path/value match). The trigger's create/edit dialog renders its full URL ready t
 paste into the remote system. With the toggle off, fleetd never negotiates the
 webhook feature, so the gateway 404s the route for this daemon.
 
+A fourth toggle — **Enable Image Registry** (off by default) — serves the images
+this daemon builds to Kubernetes clusters whose image **Delivery** is Gateway (or
+Auto on a cluster with no registry that is not local), so they need no registry
+of their own. Nodes pull `<gateway host>/<registry id>/devcontainer@sha256:…`
+over HTTPS, each cluster with its own pull credential that never leaves fleetd
+and its namespace. The gateway must run with `--session-key` and an `https`
+`--public-url` at the host root; otherwise the row (and the cluster editor's
+greyed-out Gateway option) says why it serves nothing. The images go up your
+upload link (paced to 80% of it by default) and through the gateway, so a
+registry stays the better choice for heavy clusters; `fleet cluster test` checks
+the route from the daemon and `--deep` has a pod pull through it. See
+[Image delivery](doc/gateway.md#6a-image-delivery-the-v2-route).
+
 ### Use it from a remote agent
 
 Point the remote MCP client at the Public MCP URL, with the **same bearer token**
@@ -381,7 +394,7 @@ fleet gateway \
 | `--public-addr` | `:443` | MCP + `/healthz` listener — HTTP/1.1 (HTTPS when a cert is set, else HTTP) |
 | `--grpc-addr` | `:50051` | Native gRPC listener — HTTP/2 (h2c when cert-less, h2 under TLS). Hosts remote `fleet` control **and** fleetd registration. Empty disables both |
 | `--max-sessions` | `1024` | Cap on concurrent tunnels |
-| `--session-key` | (random per boot) | Secret key signing the session-resume tokens daemons present on reconnect. Set it (or `FLEET_GATEWAY_SESSION_KEY`) so daemons keep the **same session URL across gateway restarts**; left unset, a restart hands every daemon a fresh URL |
+| `--session-key` | (random per boot) | Secret key signing the session-resume tokens daemons present on reconnect. Set it (or `FLEET_GATEWAY_SESSION_KEY`) so daemons keep the **same session URL across gateway restarts**; left unset, a restart hands every daemon a fresh URL. The image registry route needs it (and an `https` `--public-url` with no path) |
 
 Every flag is also settable via environment variable — `FLEET_GATEWAY_<FLAG>` with
 dashes as underscores (e.g. `FLEET_GATEWAY_PUBLIC_URL`,
