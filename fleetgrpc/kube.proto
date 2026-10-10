@@ -609,9 +609,12 @@ message ListKubeClustersReply {
 message AddKubeClusterRequest {
   // cluster is the new connection. context is required. The daemon assigns
   // id and the bookkeeping fields (it ignores any sent); empty
-  // kubeconfig_paths pin fleetd's defaults (ListKubeContextsReply), and an
-  // empty namespace takes the context's, else "default". The daemon tests the
-  // connection in the background and pushes its health.
+  // kubeconfig_paths pin fleetd's defaults (ListKubeContextsReply), an empty
+  // namespace takes the context's, else "default", and an empty plugin_env
+  // passes through, by name, the variables fleetd has for the context's
+  // plugin (AWS_* for aws, CLOUDSDK_*/GOOGLE_* for gke-gcloud-auth-plugin,
+  // AZURE_*/AAD_* for kubelogin, CA bundles). The daemon tests the connection
+  // in the background and pushes its health.
   KubeCluster cluster = 1;
 }
 

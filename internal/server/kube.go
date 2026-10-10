@@ -55,8 +55,9 @@ func kubeRecordFromProto(pc *fleetgrpc.KubeCluster) fleet.KubeCluster {
 }
 
 // kubeDefaults fills an unsaved record the way AddKubeCluster does: fleetd's
-// kubeconfig files, the context's namespace (else "default"), and checks the
-// context exists there.
+// kubeconfig files, the context's namespace (else "default"), the plugin
+// variables fleetd has for the context's plugin (defaultPluginEnv), and
+// checks the context exists there.
 func (s *service) kubeDefaults(rec *fleet.KubeCluster) error {
 	if rec.Context == "" {
 		return invalidf("context is required")
@@ -73,6 +74,9 @@ func (s *service) kubeDefaults(rec *fleet.KubeCluster) error {
 	kc, err := findContext(*rec)
 	if err != nil {
 		return err
+	}
+	if rec.PluginEnv == nil {
+		rec.PluginEnv = defaultPluginEnv(kc.Plugin, s.kube.environ())
 	}
 	if rec.Namespace == "" {
 		rec.Namespace = kc.Namespace
