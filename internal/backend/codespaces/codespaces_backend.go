@@ -383,10 +383,10 @@ func (codespacesBackend *CodespacesBackend) ResolveHostname(containerID string) 
 	return "", false
 }
 
-// SupportsCustomMounts reports false: GitHub Codespaces are provisioned
+// SupportsSharedMounts reports false: GitHub Codespaces are provisioned
 // by GitHub's control plane and the gh CLI does not expose a way to
 // inject host bind mounts.
-func (codespacesBackend *CodespacesBackend) SupportsCustomMounts() bool {
+func (codespacesBackend *CodespacesBackend) SupportsSharedMounts() bool {
 	return false
 }
 

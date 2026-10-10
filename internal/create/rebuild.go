@@ -64,6 +64,7 @@ func RunRebuild(ctx context.Context, fleetName, instanceName string, verbose boo
 	}
 
 	instanceBackend := newInstanceBackend(inst, verbose)
+	services := sharedServicesFor(inst)
 	if !instanceBackend.SupportsRebuild() {
 		err := fmt.Errorf("backend %q does not support rebuild", inst.Backend)
 		setFailed(fleetName, instanceName, err)
@@ -71,7 +72,7 @@ func RunRebuild(ctx context.Context, fleetName, instanceName string, verbose boo
 	}
 
 	backend.ReportStep(ctx, fleet.StepResolveMounts, "")
-	resolvedMounts, err := resolveProvisionMounts(ctx, instanceBackend, fleetName, instanceName)
+	resolvedMounts, err := resolveProvisionMounts(ctx, instanceBackend, services, fleetName, instanceName)
 	if err != nil {
 		setFailed(fleetName, instanceName, err)
 		return err
@@ -101,7 +102,7 @@ func RunRebuild(ctx context.Context, fleetName, instanceName string, verbose boo
 
 	// Re-run the post-Up provisioning so the fresh container ends up equivalent
 	// to a newly created one. All best-effort (warnings, never fatal).
-	finishProvision(ctx, instanceBackend, fleetName, instanceName, inst.WorkspaceDir, result.ContainerID, resolvedMounts.Symlinks)
+	finishProvision(ctx, instanceBackend, services, fleetName, instanceName, inst.WorkspaceDir, result.ContainerID, resolvedMounts.Symlinks)
 
 	backend.ReportStep(ctx, fleet.StepMarkRunning, "")
 	if err := commitRunning(ctx, instanceBackend, fleetName, instanceName, result.ContainerID); err != nil {

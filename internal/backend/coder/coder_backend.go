@@ -80,7 +80,7 @@ func (coderBackend *CoderBackend) resolveWorkspaceName(workspaceDir string) stri
 // Up creates a Coder workspace. workspaceDir is used to derive the workspace
 // name (last path component). The git clone happens inside the Coder template
 // via the repo parameter. The mounts argument is ignored: Coder workspaces
-// are managed remotely and SupportsCustomMounts reports false.
+// are managed remotely and SupportsSharedMounts reports false.
 func (coderBackend *CoderBackend) Up(workspaceDir string, _ []backend.Mount) (*backend.UpResult, error) {
 	// The configured workspace name wins (issue #221); otherwise derive it
 	// from the workspace dir path (~/.fleet/workspaces/{fleet}/{instance}/{fleet}
@@ -354,10 +354,10 @@ func (coderBackend *CoderBackend) ResolveHostname(containerID string) (string, b
 	return "", false
 }
 
-// SupportsCustomMounts reports false: Coder workspaces are provisioned
+// SupportsSharedMounts reports false: Coder workspaces are provisioned
 // by a remote control plane and the local CLI cannot inject host bind
 // mounts into them.
-func (coderBackend *CoderBackend) SupportsCustomMounts() bool {
+func (coderBackend *CoderBackend) SupportsSharedMounts() bool {
 	return false
 }
 

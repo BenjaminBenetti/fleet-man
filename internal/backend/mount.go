@@ -1,7 +1,7 @@
 package backend
 
 // Mount describes a host directory bind-mounted into a container at a
-// specified target path. Backends that report SupportsCustomMounts()==true
+// specified target path. Backends that report SupportsSharedMounts()==true
 // are responsible for honoring these mounts when provisioning a workspace.
 //
 // Scope and SubPath say where the source lives, so a backend that cannot

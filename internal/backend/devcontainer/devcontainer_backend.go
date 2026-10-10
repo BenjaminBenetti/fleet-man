@@ -699,9 +699,10 @@ func (devcontainerBackend *DevcontainerBackend) AgentToolProbe(containerID strin
 	return backend.ParseToolProbeOutput(string(out))
 }
 
-// SupportsCustomMounts reports that the devcontainer backend honors
-// caller-supplied bind mounts via `devcontainer up --mount` flags.
-func (devcontainerBackend *DevcontainerBackend) SupportsCustomMounts() bool {
+// SupportsSharedMounts reports that the devcontainer backend honors
+// caller-supplied mounts, binding each one's host LocalPath via
+// `devcontainer up --mount` flags.
+func (devcontainerBackend *DevcontainerBackend) SupportsSharedMounts() bool {
 	return true
 }
 

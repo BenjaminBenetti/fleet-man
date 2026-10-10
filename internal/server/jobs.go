@@ -14,14 +14,10 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
-	"github.com/BenjaminBenetti/fleet-man/internal/buildkit"
 	"github.com/BenjaminBenetti/fleet-man/internal/create"
-	"github.com/BenjaminBenetti/fleet-man/internal/debcache"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/fleetnet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
-	"github.com/BenjaminBenetti/fleet-man/internal/imagecache"
 	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -70,77 +66,6 @@ var jobRunStop = func(fleetName, instanceName string) error {
 
 var jobRunRebuild = func(ctx context.Context, fleetName, instanceName string) error {
 	return create.RunRebuild(ctx, fleetName, instanceName, false)
-}
-
-// stopBuildkitServer is the buildkit teardown seam (a package var so the destroy
-// paths can be exercised in tests without docker).
-var stopBuildkitServer = buildkit.StopSharedServer
-
-// teardownFleetBuildkit removes a fleet's shared buildkit CONTAINER when the
-// fleet had the feature enabled, so it doesn't orphan or (given its
-// restart=unless-stopped policy) auto-restart after the fleet is gone. It
-// deliberately LEAVES the .buildkit cache directory on disk: a shared build
-// cache is the whole point of the feature, so it should persist across a fleet
-// teardown and warm the next instance created for a fleet of the same name —
-// exactly like the persisted .claude/.codex/.config/gh mount dirs already do.
-// Best-effort: a failure becomes a warning, never an abort. Shared by the
-// destroy job and the DestroyFleet RPC so the container is reclaimed no matter
-// which delete path runs (destroy_fleet=true vs. removing an already-empty fleet).
-func teardownFleetBuildkit(fleetName string, enabled bool) []string {
-	if !enabled {
-		return nil
-	}
-	if err := stopBuildkitServer(fleetName); err != nil {
-		return []string{fmt.Sprintf("stop buildkit server: %v", err)}
-	}
-	return nil
-}
-
-// stopDebCacheServer / stopImageCacheServer / removeFleetNetwork are the deb/
-// image cache + network teardown seams (package vars so the destroy paths can be
-// exercised in tests without docker). Mirror stopBuildkitServer.
-var stopDebCacheServer = debcache.StopSharedServer
-var stopImageCacheServer = imagecache.StopSharedServer
-var removeFleetNetwork = fleetnet.RemoveNetwork
-
-// teardownFleetDebCache removes a fleet's shared deb cache CONTAINER when the
-// fleet had the feature enabled. Like teardownFleetBuildkit it LEAVES the
-// .aptcache directory on disk so the cache warms the next fleet of the same
-// name. Best-effort: a failure becomes a warning, never an abort.
-func teardownFleetDebCache(fleetName string, enabled bool) []string {
-	if !enabled {
-		return nil
-	}
-	if err := stopDebCacheServer(fleetName); err != nil {
-		return []string{fmt.Sprintf("stop deb cache server: %v", err)}
-	}
-	return nil
-}
-
-// teardownFleetImageCache removes a fleet's shared image cache CONTAINER when
-// the fleet had the feature enabled (leaving .imgcache on disk). Best-effort.
-func teardownFleetImageCache(fleetName string, enabled bool) []string {
-	if !enabled {
-		return nil
-	}
-	if err := stopImageCacheServer(fleetName); err != nil {
-		return []string{fmt.Sprintf("stop image cache server: %v", err)}
-	}
-	return nil
-}
-
-// teardownFleetNetwork removes a fleet's shared cache network when the fleet
-// used a network-based cache (deb or image). It must run AFTER the cache
-// containers and instances are gone, since docker refuses to remove a network
-// with active endpoints. Best-effort.
-func teardownFleetNetwork(fleetName string, enabled bool) []string {
-	if !enabled {
-		return nil
-	}
-	if err := removeFleetNetwork(fleetName); err != nil {
-		return []string{fmt.Sprintf("remove fleet network: %v", err)}
-	}
-	return nil
 }
 
 // jobDownInstance tears down one instance's container. Best-effort: a backend
@@ -1000,22 +925,13 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 	}
 
 	// Fleet-level teardown: once every instance is down, remove the fleet's
-	// shared cache containers (and the shared network). Single-instance destroys
+	// shared service servers (and the shared network). Single-instance destroys
 	// leave them up — the fleet's other instances may still use them. Cache
-	// directories are intentionally kept on disk (see each teardown helper). The
-	// network is removed LAST, after the cache containers, so docker doesn't
-	// refuse it for active endpoints.
-	//
-	// The deb/image cache + network teardown is UNCONDITIONAL on a full destroy
-	// (not gated on the current setting): toggling a cache off does not stop its
-	// running container, so gating on the live setting would orphan a container
-	// the user disabled before destroying. The teardown helpers are idempotent
-	// (a missing container/network is a no-op), so this is safe even for fleets
-	// that never used a cache.
-	warnings = append(warnings, teardownFleetBuildkit(fleetName, destroyFleet && buildkitEnabled)...)
-	warnings = append(warnings, teardownFleetDebCache(fleetName, destroyFleet)...)
-	warnings = append(warnings, teardownFleetImageCache(fleetName, destroyFleet)...)
-	warnings = append(warnings, teardownFleetNetwork(fleetName, destroyFleet)...)
+	// directories are intentionally kept on disk, and the deb/image caches go
+	// whatever the current setting (see teardownFleetSharedServices).
+	if destroyFleet {
+		warnings = append(warnings, teardownFleetSharedServices(fleetName, buildkitEnabled)...)
+	}
 
 	_ = state.Update(func(st *state.State) error {
 		f, ok := st.Fleets[fleetName]

@@ -30,7 +30,7 @@ type fakeJobBackend struct {
 	plainUps       int
 }
 
-func (f *fakeJobBackend) SupportsCustomMounts() bool { return false }
+func (f *fakeJobBackend) SupportsSharedMounts() bool { return false }
 func (f *fakeJobBackend) SupportsClone() bool        { return f.clone }
 func (f *fakeJobBackend) SupportsRebuild() bool      { return f.rebuild }
 

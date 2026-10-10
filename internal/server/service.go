@@ -71,9 +71,10 @@ type service struct {
 	shutdownOnce sync.Once
 	shutdownCh   chan struct{}
 
-	// buildkitReconciling coalesces the TUI-connect buildkit re-ensure so that
-	// several TUIs opening at once trigger one sweep, not one per client.
-	buildkitReconciling atomic.Bool
+	// sharedServicesReconciling coalesces the TUI-connect shared-service
+	// re-ensure so that several TUIs opening at once trigger one sweep, not one
+	// per client.
+	sharedServicesReconciling atomic.Bool
 
 	// triggerFires carries matched trigger fires from a concurrent producer — the
 	// webhook receiver or a bash trigger's probe goroutine — to the single-
@@ -123,9 +124,10 @@ func newService() *service {
 	return svc
 }
 
-// reconcileTimeout bounds the TUI-connect buildkit reconcile so a slow/wedged
-// docker daemon can't keep the coalescing flag held indefinitely (which would
-// lock out future reconciles). It also frees the flag on shutdown via bgCtx.
+// reconcileTimeout bounds the TUI-connect shared-service reconcile so a
+// slow/wedged runtime can't keep the coalescing flag held indefinitely (which
+// would lock out future reconciles). It also frees the flag on shutdown via
+// bgCtx.
 const reconcileTimeout = 3 * time.Minute
 
 // Hello is the authoritative version handshake. It reports the server's
@@ -147,8 +149,9 @@ func (s *service) FleetTUIConnected(_ context.Context, _ *fleetgrpc.FleetTUIConn
 }
 
 // onTUIConnected runs the once-per-connect, fire-and-forget reconciliation in a
-// background goroutine. Today it re-ensures configured shared buildkit servers
-// (recovering from an external kill / reboot).
+// background goroutine. Today it re-ensures the fleets' configured shared
+// services (recovering from an external kill / reboot; see
+// ensureConfiguredSharedServices).
 //
 // Coalesced via an atomic flag so N TUIs connecting simultaneously run the sweep
 // once, not N times. NOTE the in-flight sweep reflects state as of WHEN IT
@@ -163,7 +166,7 @@ func (s *service) FleetTUIConnected(_ context.Context, _ *fleetgrpc.FleetTUIConn
 // (the inner sweep goroutine may then outlive this one, but it dies with the
 // process and does no harm).
 func (s *service) onTUIConnected() {
-	if !s.buildkitReconciling.CompareAndSwap(false, true) {
+	if !s.sharedServicesReconciling.CompareAndSwap(false, true) {
 		return // a reconcile is already in flight; it covers this connect
 	}
 	go func() {
@@ -172,15 +175,13 @@ func (s *service) onTUIConnected() {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			ensureConfiguredBuildkitServers(ctx)
-			ensureConfiguredDebCacheServers(ctx)
-			ensureConfiguredImageCacheServers(ctx)
+			ensureConfiguredSharedServices(ctx)
 		}()
 		select {
 		case <-done:
 		case <-ctx.Done(): // timeout or shutdown
 		}
-		s.buildkitReconciling.Store(false)
+		s.sharedServicesReconciling.Store(false)
 	}()
 }
 

@@ -47,7 +47,7 @@ func (b *recordingBackend) ExecCommandQuiet(workspaceDir string, command []strin
 // --- interface filler: unused by the staging path ---
 
 func (b *recordingBackend) Up(string, []backend.Mount) (*backend.UpResult, error) { return nil, nil }
-func (b *recordingBackend) SupportsCustomMounts() bool                            { return false }
+func (b *recordingBackend) SupportsSharedMounts() bool                            { return false }
 func (b *recordingBackend) Clone(string, string, []backend.Mount) (*backend.UpResult, error) {
 	return nil, nil
 }

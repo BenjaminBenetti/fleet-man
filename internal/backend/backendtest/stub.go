@@ -59,7 +59,7 @@ type Stub struct {
 
 // StubCaps are a Stub's capability answers.
 type StubCaps struct {
-	CustomMounts, Clone, Rebuild, MicSink bool
+	SharedMounts, Clone, Rebuild, MicSink bool
 }
 
 // StubCall is one recorded method call. ContainerID and WorkspaceDir are the
@@ -76,7 +76,7 @@ type StubContainer struct {
 	WorkspaceDir string
 	Status       backend.LiveStatus
 	// Mounts are what Up, Clone or Rebuild was given (nil when
-	// Caps.CustomMounts is off: the stub then ignores them).
+	// Caps.SharedMounts is off: the stub then ignores them).
 	Mounts []backend.Mount
 	// Home is the container's $HOME on this host.
 	Home string
@@ -111,7 +111,7 @@ func NewStub(t TB) *Stub {
 		user = string(bytes.TrimSpace(out))
 	}
 	s := &Stub{
-		Caps:       StubCaps{CustomMounts: true, Clone: true, Rebuild: true, MicSink: true},
+		Caps:       StubCaps{SharedMounts: true, Clone: true, Rebuild: true, MicSink: true},
 		dir:        t.TempDir(),
 		tmuxDir:    tmuxDir,
 		user:       user,
@@ -285,7 +285,7 @@ func (s *Stub) newContainer(workspaceDir string, mounts []backend.Mount) (*stubC
 		root:      filepath.Join(s.dir, id),
 		tmux:      filepath.Join(s.tmuxDir, fmt.Sprint(s.seq)),
 	}
-	if s.Caps.CustomMounts {
+	if s.Caps.SharedMounts {
 		c.mounts = append([]backend.Mount(nil), mounts...)
 	}
 	s.mu.Unlock()
@@ -385,8 +385,8 @@ func (s *Stub) Up(workspaceDir string, mounts []backend.Mount) (*backend.UpResul
 	return s.up(workspaceDir, mounts)
 }
 
-// SupportsCustomMounts reports Caps.CustomMounts.
-func (s *Stub) SupportsCustomMounts() bool { return s.Caps.CustomMounts }
+// SupportsSharedMounts reports Caps.SharedMounts.
+func (s *Stub) SupportsSharedMounts() bool { return s.Caps.SharedMounts }
 
 // Clone makes a running container for destWorkspaceDir with a copy of the
 // source container's $HOME. The caller copies the workspace, as with

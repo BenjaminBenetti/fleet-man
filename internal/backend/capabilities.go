@@ -6,7 +6,7 @@ package backend
 // sweep). Acting on an instance takes the full Backend from
 // backendutil.NewForInstance.
 type Capabilities interface {
-	SupportsCustomMounts() bool
+	SupportsSharedMounts() bool
 	SupportsClone() bool
 	SupportsRebuild() bool
 	SupportsMicSink() bool

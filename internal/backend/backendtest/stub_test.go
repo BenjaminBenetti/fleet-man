@@ -49,13 +49,13 @@ func TestStubRecordsCallsAndMounts(t *testing.T) {
 
 func TestStubIgnoresMountsWithoutTheCapability(t *testing.T) {
 	s := NewStub(t)
-	s.Caps.CustomMounts = false
+	s.Caps.SharedMounts = false
 	r, err := s.Up(stubWorkspace(t, Fixture{}), []backend.Mount{{LocalPath: "/a", ContainerPath: "/b"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.Container(r.ContainerID); len(got.Mounts) != 0 || s.SupportsCustomMounts() {
-		t.Errorf("mounts %v kept, SupportsCustomMounts %v", got.Mounts, s.SupportsCustomMounts())
+	if got, _ := s.Container(r.ContainerID); len(got.Mounts) != 0 || s.SupportsSharedMounts() {
+		t.Errorf("mounts %v kept, SupportsSharedMounts %v", got.Mounts, s.SupportsSharedMounts())
 	}
 }
 

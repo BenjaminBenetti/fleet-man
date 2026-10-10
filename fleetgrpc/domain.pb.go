@@ -398,8 +398,8 @@ type FleetSettings struct {
 	// whose unix socket (under ~/.fleet/workspaces/<fleet>/.buildkit/) is
 	// bind-mounted into every instance, giving all instances one shared build
 	// cache. Plain bool (default off): false == "never set" == disabled, like
-	// the *Mount flags. Honored only on backends that SupportsCustomMounts()
-	// (devcontainer); cloud backends silently skip it.
+	// the *Mount flags. Honored only for instances whose fleet services run on
+	// the daemon host's docker (devcontainer); cloud backends silently skip it.
 	BuildkitServer bool `protobuf:"varint,6,opt,name=buildkit_server,json=buildkitServer,proto3" json:"buildkit_server,omitempty"`
 	// custom_mounts is the list of user-defined shared directory mounts for the
 	// fleet. Each entry is an ABSOLUTE in-container path (e.g. "/opt/data"); the
@@ -407,12 +407,12 @@ type FleetSettings struct {
 	// bind-mounted into every instance, so the directory is shared across all
 	// instances exactly like the *Mount toggles. repeated string: an empty list
 	// (the default) means no custom mounts. Honored only on backends that
-	// SupportsCustomMounts() (devcontainer); cloud backends silently skip them.
+	// SupportsSharedMounts() (devcontainer); cloud backends silently skip them.
 	CustomMounts []string `protobuf:"bytes,7,rep,name=custom_mounts,json=customMounts,proto3" json:"custom_mounts,omitempty"`
 	// deb_cache_server enables a shared apt-cacher-ng container for the fleet so
 	// repeated `apt install` reuse cached .deb packages. Instances reach it over
 	// a shared per-fleet docker network and get an apt http-proxy drop-in. Plain
-	// bool (default off), honored only on SupportsCustomMounts() backends.
+	// bool (default off), honored only where buildkit_server is.
 	DebCacheServer bool `protobuf:"varint,8,opt,name=deb_cache_server,json=debCacheServer,proto3" json:"deb_cache_server,omitempty"`
 	// image_cache_server enables a shared registry pull-through cache (a
 	// registry:2 mirror of Docker Hub) for the fleet so repeated `docker pull`

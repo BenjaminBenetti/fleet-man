@@ -63,7 +63,9 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 	wsDir := filepath.Join(state.WorkspacesDir(), fleetName, instanceName, fleetName)
 
 	backend.ReportStep(ctx, fleet.StepBuildBackend, string(backendType))
-	instanceBackend := createBackend(createRecord(fleetName, instanceName, wsDir, branch, backendType), fleetName, remoteURL, branch, verbose)
+	rec := createRecord(fleetName, instanceName, wsDir, branch, backendType)
+	instanceBackend := createBackend(rec, fleetName, remoteURL, branch, verbose)
+	services := sharedServicesFor(rec)
 
 	if err := checkCancelled(ctx); err != nil {
 		setFailed(fleetName, instanceName, err)
@@ -113,7 +115,7 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 	}
 
 	backend.ReportStep(ctx, fleet.StepResolveMounts, "")
-	resolvedMounts, err := resolveProvisionMounts(ctx, instanceBackend, fleetName, instanceName)
+	resolvedMounts, err := resolveProvisionMounts(ctx, instanceBackend, services, fleetName, instanceName)
 	if err != nil {
 		setFailed(fleetName, instanceName, err)
 		return err
@@ -144,7 +146,7 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 	// scripts, Claude hooks, shared caches). Shared with RunRebuild so a
 	// rebuilt container ends up equivalently provisioned. Every step is
 	// best-effort — the instance is marked running even if one fails.
-	finishProvision(ctx, instanceBackend, fleetName, instanceName, wsDir, result.ContainerID, resolvedMounts.Symlinks)
+	finishProvision(ctx, instanceBackend, services, fleetName, instanceName, wsDir, result.ContainerID, resolvedMounts.Symlinks)
 
 	// Template worktree/submodule check LAST, and prepended: every provisioning
 	// step above WriteWarns (replacing the banner) on failure, and the TUI shows

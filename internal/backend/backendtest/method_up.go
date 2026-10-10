@@ -88,7 +88,7 @@ func caseCapabilities(c *C) {
 			name      string
 			asked, of bool
 		}{
-			{"SupportsCustomMounts", caps.SupportsCustomMounts(), b.SupportsCustomMounts()},
+			{"SupportsSharedMounts", caps.SupportsSharedMounts(), b.SupportsSharedMounts()},
 			{"SupportsClone", caps.SupportsClone(), b.SupportsClone()},
 			{"SupportsRebuild", caps.SupportsRebuild(), b.SupportsRebuild()},
 			{"SupportsMicSink", caps.SupportsMicSink(), b.SupportsMicSink()},
