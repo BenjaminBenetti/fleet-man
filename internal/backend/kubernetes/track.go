@@ -29,8 +29,10 @@ import (
 // first pod seen of an instance is its baseline: a restart made while fleetd
 // was not watching is not reported.
 
-// Crash-loop rule: this many restarts within crashLoopWindow, or the kubelet
-// backing the dev container off (CrashLoopBackOff), park the instance.
+// Crash-loop rule: this many restarts of the dev container (crashes and
+// out-of-memory kills, not pods the cluster replaced) within
+// crashLoopWindow, or the kubelet backing the dev container off
+// (CrashLoopBackOff), park the instance.
 const (
 	crashLoopRestarts = 3
 	crashLoopWindow   = 5 * time.Minute
@@ -249,7 +251,8 @@ func (p *Pool) podEvent(w *watcher, sts string, pod *corev1.Pod, deleted bool) {
 		t.uid, t.count, t.pod = pod.UID, restartCount(pod), pod
 		t.stopped, t.gone, t.tampered = false, "", nil
 		if cause != "" {
-			t.restarted(cause, false, pod, now, 1)
+			// A replaced pod is no crash: it does not count toward a loop.
+			t.restarted(cause, false, pod, now, 0)
 		}
 	default:
 		// The same pod.
@@ -286,8 +289,11 @@ func (p *Pool) podEvent(w *watcher, sts string, pod *corev1.Pod, deleted bool) {
 	p.podChanged(k, pod, deleted)
 }
 
-// restarted records a restart (n of them, when several happened between two
-// events) and judges whether the instance is crash looping.
+// restarted records a restart and judges whether the instance is crash
+// looping: n is how many crashes of the dev container (several when they
+// happened between two events) it counts toward the loop, 0 for a pod the
+// cluster replaced (a drain, an eviction, a lost node, a deleted pod or
+// fleet's own move), which is no crash.
 func (t *track) restarted(cause backend.RestartCause, ended bool, pod *corev1.Pod, now time.Time, n int) {
 	at := now
 	if s := containerStatus(pod, DevContainer); s != nil && s.State.Running != nil && !s.State.Running.StartedAt.IsZero() {

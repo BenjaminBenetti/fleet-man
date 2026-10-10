@@ -203,7 +203,11 @@ func TestKubePodsTracksTheKubernetesInstances(t *testing.T) {
 		t.Fatalf("the stopped instance: %+v, want watched only", two)
 	}
 
-	// Destroyed: forgotten, and no longer tracked.
+	r.pool.observe(kubeSTS("two"), kubernetes.Observation{Live: backend.LiveStatusStopped, Restart: &backend.Restart{ID: "u2/0", Cause: backend.RestartNodeLost}})
+	r.eventually("the stopped instance's runtime", func() bool { return r.runtime("two").GetKube() != nil })
+
+	// Destroyed: forgotten, no longer tracked, and nothing of its pod left
+	// on the name for whatever instance takes it next.
 	if err := state.Update(func(st *state.State) error {
 		st.Fleets["alpha"].Instances = st.Fleets["alpha"].Instances[:1]
 		return nil
@@ -219,6 +223,10 @@ func TestKubePodsTracksTheKubernetesInstances(t *testing.T) {
 	if items := r.pool.lastTrack(); len(items) != 1 || items[0].StatefulSet != kubeSTS("one") {
 		t.Fatalf("tracked after the destroy: %+v", items)
 	}
+	r.eventually("the destroyed instance's runtime cleared", func() bool {
+		rt := r.runtime("two")
+		return rt.GetKube() == nil && rt.GetLiveStatus() == fleetgrpc.LiveContainerStatus_LIVE_CONTAINER_STATUS_UNSPECIFIED
+	})
 }
 
 func TestKubePodsLeavesThePoolAloneWithoutKubernetesInstances(t *testing.T) {

@@ -49,6 +49,9 @@ type AgentSession struct {
 	main   *podwire.Client
 	stream *kubeexec.Stream
 	pacer  *podwire.Pacer
+	// connected is when the handshake finished (the wall clock: how long
+	// the session lived decides whether its drop counts as a failure).
+	connected time.Time
 
 	mu         sync.Mutex
 	closed     bool

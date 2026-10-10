@@ -12,7 +12,10 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -119,6 +122,32 @@ func TestSupervisorKeepsAnAgentUp(t *testing.T) {
 	if h.pool.Session(target) != s2 {
 		t.Fatal("the session changed in steady state")
 	}
+}
+
+// An agent that keeps dying as soon as it connects is a failing pod: the
+// first quick drop reconnects at once, the next ones wait the backoff
+// instead of looping on exec upgrades.
+func TestSupervisorBacksOffSessionsThatKeepDropping(t *testing.T) {
+	const backoff = 400 * time.Millisecond
+	h := newHarness(t, PoolOptions{BackoffBase: backoff, BackoffCap: backoff, Rand: func() float64 { return 1 }})
+	target := h.addPod("one")
+	h.track(target)
+	s := h.session(t, target, nil)
+	var waits []time.Duration
+	for range 3 {
+		dropped := time.Now()
+		_ = s.stream.Close()
+		waitDone(t, s.Done(), "the dropped session")
+		s = h.session(t, target, s)
+		waits = append(waits, time.Since(dropped))
+	}
+	// The first drop is an ordinary one; the two after it are failures.
+	for i, w := range waits[1:] {
+		if w < backoff*3/4 {
+			t.Fatalf("quick drop %d reconnected after %s, within the %s backoff (waits %v)", i+2, w, backoff, waits)
+		}
+	}
+	h.wantCounts(target.Pod(), map[string]int{"probe": 1, "stage": 1, "serve": 4})
 }
 
 func TestSupervisorWaitsForThePodToRun(t *testing.T) {
@@ -266,6 +295,21 @@ func TestPoolObservesFromItsInformers(t *testing.T) {
 	}
 	eventually(t, "the missing observation", func() bool {
 		return h.pool.Observe(testCluster, target.StatefulSet).Live == backend.LiveStatusMissing
+	})
+}
+
+// A connection whose list is refused before it ever synced says why, not
+// merely that it has not listed yet.
+func TestPoolObservesARefusedList(t *testing.T) {
+	h := newHarness(t, PoolOptions{})
+	target := h.addPod("one")
+	h.cs.PrependReactor("list", "pods", func(k8stesting.Action) (bool, kruntime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New("RBAC: access denied"))
+	})
+	h.pool.Track([]Tracked{{Cluster: testCluster, StatefulSet: target.StatefulSet}})
+	eventually(t, "the refused observation", func() bool {
+		o := h.pool.Observe(testCluster, target.StatefulSet)
+		return o.Live == backend.LiveStatusUnknown && o.Reason == "the connection may not watch its instances"
 	})
 }
 

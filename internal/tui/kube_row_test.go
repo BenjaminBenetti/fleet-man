@@ -31,19 +31,23 @@ func TestKubeRowNote(t *testing.T) {
 func TestViewFleetListShowsSessionsReset(t *testing.T) {
 	inst := &fleet.Instance{Name: "epsilon", Status: fleet.StatusRunning, ContainerID: "k8s:c1/ns/fi-alpha-epsilon-abcdefgh@g1", Backend: fleet.BackendKubernetes}
 	stopped := &fleet.Instance{Name: "gamma", Status: fleet.StatusStopped, ContainerID: "k8s:c1/ns/fi-alpha-gamma-abcdefgh@g1", Backend: fleet.BackendKubernetes}
+	docker := &fleet.Instance{Name: "delta", Status: fleet.StatusRunning, ContainerID: "c0ffee", Backend: fleet.BackendDevcontainer}
 	fp := newFleetPage()
 	fp.rows = []row{
 		{kind: rowFleetHeader, fleetName: "alpha"},
 		{kind: rowInstance, fleetName: "alpha", instance: inst},
 		{kind: rowInstance, fleetName: "alpha", instance: stopped},
+		{kind: rowInstance, fleetName: "alpha", instance: docker},
 		{kind: rowSettings},
 	}
 	m := &model{
-		st:     &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha", Instances: []*fleet.Instance{inst, stopped}}}},
+		st:     &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha", Instances: []*fleet.Instance{inst, stopped, docker}}}},
 		config: &state.Config{},
 		runtime: map[string]*fleetgrpc.InstanceRuntime{
 			"alpha/epsilon": {Fleet: "alpha", Instance: "epsilon", Kube: &fleetgrpc.KubeInstanceRuntime{RestartCause: "node drained", RestartHint: "turn on protect_from_drain"}},
 			"alpha/gamma":   {Fleet: "alpha", Instance: "gamma", Kube: &fleetgrpc.KubeInstanceRuntime{RestartCause: "crashed"}},
+			// What a destroyed Kubernetes instance of the name left.
+			"alpha/delta": {Fleet: "alpha", Instance: "delta", Kube: &fleetgrpc.KubeInstanceRuntime{RestartCause: "evicted"}},
 		},
 		sessionStore: NewSessionStore(),
 		fleetPage:    fp,
@@ -62,5 +66,9 @@ func TestViewFleetListShowsSessionsReset(t *testing.T) {
 	// A stopped row's warning explains it; the notice is for running rows.
 	if strings.Contains(view, "sessions reset: crashed") {
 		t.Fatalf("a stopped row shows the notice:\n%s", view)
+	}
+	// And for Kubernetes rows only.
+	if strings.Contains(view, "sessions reset: evicted") {
+		t.Fatalf("a devcontainer row shows a notice:\n%s", view)
 	}
 }

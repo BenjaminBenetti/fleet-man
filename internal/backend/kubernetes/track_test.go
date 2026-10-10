@@ -5,6 +5,7 @@ package kubernetes
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -354,6 +355,33 @@ func TestTrackCrashLoop(t *testing.T) {
 		}
 		if msg := l.Message(); !strings.Contains(msg, "exit code 3") || !strings.Contains(msg, "fleet logs") {
 			t.Fatalf("message %q", msg)
+		}
+	})
+	t.Run("replaced pods are no crashes", func(t *testing.T) {
+		// A rolling node upgrade drains the instance off node after node:
+		// every move is a restart, none a crash.
+		tr := newTracker(t)
+		tr.set(1)
+		tr.pod(trackedPod("u0", 0))
+		for i := 1; i <= 4; i++ {
+			tr.advance(30 * time.Second)
+			old := trackedPod("u"+strconv.Itoa(i-1), 0, disrupted("EvictionByEvictionAPI"))
+			tr.pod(going(old))
+			tr.deleted(going(old))
+			id := "u" + strconv.Itoa(i)
+			tr.pod(trackedPod(id, 0))
+			tr.wantRestart(id+"/0", backend.RestartNodeDrained)
+		}
+		if l := tr.pool.Observe("c1", trackSTS).CrashLoop; l != nil {
+			t.Fatalf("loop %+v for four drains", l)
+		}
+		// Crashes still count, across a move.
+		for n := int32(1); n <= 3; n++ {
+			tr.advance(time.Second)
+			tr.pod(trackedPod("u4", n, lastExit("Error", 1)))
+		}
+		if l := tr.pool.Observe("c1", trackSTS).CrashLoop; l == nil || l.Restarts != 3 {
+			t.Fatalf("loop %+v after three crashes", l)
 		}
 	})
 	t.Run("back-off", func(t *testing.T) {

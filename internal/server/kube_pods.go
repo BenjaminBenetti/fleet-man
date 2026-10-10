@@ -330,6 +330,7 @@ func (k *kubePods) sync(st *state.State) {
 	}
 
 	var gone []kubeRef
+	var unbound [][2]string // fleet, instance
 	k.mu.Lock()
 	seen := map[kubeRef]bool{}
 	for _, e := range entries {
@@ -349,6 +350,7 @@ func (k *kubePods) sync(st *state.State) {
 			delete(k.insts, ref)
 			if k.byName[ki.fleet+"/"+ki.name] == ref {
 				delete(k.byName, ki.fleet+"/"+ki.name)
+				unbound = append(unbound, [2]string{ki.fleet, ki.name})
 			}
 		}
 	}
@@ -357,6 +359,17 @@ func (k *kubePods) sync(st *state.State) {
 	k.synced = st
 	k.mu.Unlock()
 
+	if len(unbound) > 0 {
+		// No Kubernetes instance has the name any more: what the row said of
+		// the old one's pod must not show on whatever takes the name next.
+		ups := make([]runtimeUpdate, 0, len(unbound))
+		for _, n := range unbound {
+			ups = append(ups, runtimeUpdate{n[0], n[1], func(r *fleetgrpc.InstanceRuntime) {
+				r.Kube, r.LiveStatus = nil, fleetgrpc.LiveContainerStatus_LIVE_CONTAINER_STATUS_UNSPECIFIED
+			}})
+		}
+		k.svc.hub.post(func(h *hub) { h.applyRuntime(ups) })
+	}
 	pool := k.pool()
 	for _, ref := range gone {
 		// Destroyed (or its record replaced): nothing of its pod is kept.

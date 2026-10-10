@@ -71,7 +71,16 @@ type podSlot struct {
 	// flowingAtDrop: audio was flowing on the pod when its last session
 	// dropped, so its reconnect is interactive.
 	flowingAtDrop bool
+	// quickDrops counts the pod's sessions in a row that ended within
+	// quickDrop of their handshake: past the first, the next bootstrap waits
+	// a full-jitter backoff, so an agent that dies as soon as it connects
+	// cannot turn the supervisor's reconnect-at-once into a storm of execs.
+	quickDrops int
 }
+
+// quickDrop is how long a session must live for its drop to be an ordinary
+// one, reconnected at once, rather than a failure of the pod's.
+const quickDrop = 10 * time.Second
 
 type bootFlight struct {
 	done    chan struct{}
@@ -336,6 +345,15 @@ func (s *podSlot) watch(sess *AgentSession) {
 	if current {
 		s.session = nil
 		s.flowingAtDrop = s.activity.Flowing()
+		if time.Since(sess.connected) < quickDrop {
+			s.quickDrops++
+			if s.quickDrops > 1 {
+				p := s.pool
+				s.retryAt = p.opts.Now().Add(fullJitter(s.quickDrops-1, p.opts.BackoffBase, p.opts.BackoffCap, p.opts.Rand()))
+			}
+		} else {
+			s.quickDrops = 0
+		}
 	}
 	gone := s.gone
 	s.mu.Unlock()
@@ -430,7 +448,7 @@ func (s *podSlot) bootstrap(c *Cluster, t PodTarget, tk *ticket) (*AgentSession,
 	s.mu.Lock()
 	s.fast = &fastPath{uid: string(pod.UID), probe: fast.probe, build: &podBuild{Version: h.Version, SHA: h.SHA, ProtoMin: h.ProtoMin, ProtoMax: h.ProtoMax}}
 	s.mu.Unlock()
-	sess := &AgentSession{pool: p, slot: s, cluster: c, pod: ref, probe: fast.probe, main: client, stream: stream, pacer: podwire.NewPacer(s.activity.Flowing)}
+	sess := &AgentSession{pool: p, slot: s, cluster: c, pod: ref, probe: fast.probe, main: client, stream: stream, pacer: podwire.NewPacer(s.activity.Flowing), connected: time.Now()}
 	if art != nil {
 		sess.setWant(art.SHA256)
 	}

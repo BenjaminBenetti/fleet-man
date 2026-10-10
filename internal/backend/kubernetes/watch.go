@@ -174,17 +174,22 @@ func (w *watcher) answered(ctx context.Context, err error) {
 	}
 }
 
-// health is why the informers' view may be stale: not synced yet, or the
-// API server not answering (nil when it is current).
+// health is why the informers' view may be stale: the API server not
+// answering (or refusing the list: a login that expired, missing RBAC), or
+// not synced yet (nil when it is current).
 func (w *watcher) health() error {
+	w.mu.Lock()
+	err := w.err
+	w.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	select {
 	case <-w.synced:
+		return nil
 	default:
 		return errNotSynced
 	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.err
 }
 
 var errNotSynced = errors.New("the cluster's instances are not listed yet")

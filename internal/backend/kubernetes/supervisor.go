@@ -23,8 +23,9 @@ import (
 //     let go with the commands it held, and a session whose pod no longer
 //     verifies (an ephemeral container added, say) is closed;
 //   - a session that ends reconnects at once (the bootstrap's own backoff
-//     paces a pod that keeps failing), at interactive priority when audio
-//     was flowing on the pod when it dropped;
+//     paces a pod that keeps failing, or whose sessions keep dropping as
+//     soon as they connect), at interactive priority when audio was flowing
+//     on the pod when it dropped;
 //   - every resumable command started on a session (AgentSession.Exec) is
 //     re-attached to the pod's next session, or failed with
 //     podwire.ErrHeldStreamGone once the pod is replaced or after the hold
