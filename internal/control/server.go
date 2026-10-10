@@ -2,7 +2,9 @@ package control
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -119,21 +121,35 @@ func (s *Server) acceptLoop() {
 	}
 }
 
-// serveConn reads successive Envelopes from one connection until EOF or a
-// decode error, dispatching each to the handler. A decode error closes that
-// connection (the framing is desynchronised once a line is unparseable, so the
-// safe move is to drop it rather than guess where the next message starts).
+// serveConn serves one accepted connection, then closes it.
 func (s *Server) serveConn(conn net.Conn) {
 	defer s.wg.Done()
 	defer s.dropConn(conn)
+	_ = ServeConn(conn, s.handler)
+}
 
+// ServeConn reads successive Envelopes from one connection to the control
+// socket and passes each to handler, until EOF or a line it cannot decode (the
+// framing is desynchronised once a line is unparseable, so the safe move is to
+// drop the connection rather than guess where the next message starts). It
+// returns nil at EOF and the decode error otherwise, and leaves closing conn
+// to the caller.
+//
+// A Server runs it for each connection it accepts. A connection that reaches
+// the daemon another way runs through it too: a pod agent relays each
+// connection to its in-pod control socket over its session (the instance's
+// backend carries the control channel itself; see backend.ControlChannel).
+func ServeConn(conn io.Reader, handler func(Envelope)) error {
 	dec := json.NewDecoder(conn)
 	for {
 		var envelope Envelope
 		if err := dec.Decode(&envelope); err != nil {
-			return // EOF or undecodable: close this connection
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
 		}
-		s.handler(envelope)
+		handler(envelope)
 	}
 }
 

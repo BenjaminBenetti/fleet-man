@@ -30,18 +30,40 @@ var outputSetting = func() (state.OutputSettings, error) {
 	}
 	return c.OutputSettings, nil
 }
+
+// outputSourceOpenTimeout bounds starting an instance's audio source.
+const outputSourceOpenTimeout = 30 * time.Second
+
 var openOutputSource = func(inst *fleet.Instance) (io.ReadWriteCloser, bool, error) {
-	b, ok := backendutil.NewForInstance(inst, false).(backend.OutputBackend)
+	return startOutputSource(backendutil.NewForInstance(inst, false), inst)
+}
+
+// startOutputSource starts inst's audio source through b, its backend. Whether
+// the instance can have one is the backend's OutputSourceCommand's answer; a
+// backend that runs commands as streams of its own (StreamExecer) then runs
+// the source in one, as the session user, instead of that host command.
+func startOutputSource(b backend.Backend, inst *fleet.Instance) (io.ReadWriteCloser, bool, error) {
+	ob, ok := b.(backend.OutputBackend)
 	if !ok {
 		return nil, false, nil
 	}
-	cmd, ok := b.OutputSourceCommand(inst.ContainerID)
+	cmd, ok := ob.OutputSourceCommand(inst.ContainerID)
 	if !ok {
 		return nil, false, nil
+	}
+	if execer, ok := b.(backend.StreamExecer); ok {
+		c, err := openExecStreamConn(execer, backend.ExecRequest{
+			Class:        backend.ExecClassScript,
+			WorkspaceDir: inst.WorkspaceDir,
+			ContainerID:  inst.ContainerID,
+			Argv:         fleetlaunch.OutputSourceArgv(),
+		}, outputSourceOpenTimeout)
+		return c, true, err
 	}
 	c, err := startStdioBridge(cmd)
 	return c, true, err
 }
+
 var prepareOutputInstance = func(inst *fleet.Instance) error {
 	b := backendutil.NewForInstance(inst, false)
 	if _, err := fleetlaunch.EnsureFresh(b, inst.WorkspaceDir, nil); err != nil {
@@ -440,7 +462,7 @@ func (h *outputHub) serveSource(ctx context.Context, key string, s *outputSource
 	}
 	opened := make(chan result)
 	open := openOutputSource
-	openCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	openCtx, cancel := context.WithTimeout(ctx, outputSourceOpenTimeout)
 	defer cancel()
 	go func() {
 		defer func() { <-h.openSlots }()

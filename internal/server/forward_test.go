@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -67,7 +69,7 @@ func stubBridgeTo(t *testing.T, addr string) *struct {
 		RemotePort      int
 	}{}
 	orig := openForwardBridge
-	openForwardBridge = func(inst *fleet.Instance, remotePort int) (io.ReadWriteCloser, error) {
+	openForwardBridge = func(_ context.Context, inst *fleet.Instance, remotePort int) (io.ReadWriteCloser, error) {
 		seen.Instance = inst.Name
 		seen.RemotePort = remotePort
 		return net.Dial("tcp", addr)
@@ -261,5 +263,46 @@ func dialWithRetry(t *testing.T, addr string) net.Conn {
 			t.Fatalf("dial %s: %v", addr, err)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// portDialer is a backend that dials into its instances itself. Any other
+// Backend method panics on the nil embedded interface: the bridge must not
+// resolve a hostname or spawn a forwarder for it.
+type portDialer struct {
+	backend.Backend
+	containerID string
+	port        int
+	ctx         context.Context
+	conn        io.ReadWriteCloser
+	err         error
+}
+
+func (d *portDialer) DialPort(ctx context.Context, containerID string, port int) (io.ReadWriteCloser, error) {
+	d.ctx, d.containerID, d.port = ctx, containerID, port
+	return d.conn, d.err
+}
+
+// TestForwardBridgePrefersPortDialer: a backend with a PortDialer opens every
+// bridge itself, with the stream's ctx; its failure is the bridge's, with no
+// fallback to the host-side ways in.
+func TestForwardBridgePrefersPortDialer(t *testing.T) {
+	inst := &fleet.Instance{Name: "i1", ContainerID: "c1"}
+	ours, theirs := net.Pipe()
+	defer theirs.Close()
+	ctx := context.WithValue(context.Background(), struct{}{}, "forward stream")
+
+	d := &portDialer{conn: ours}
+	bridge, err := forwardBridge(ctx, d, inst, 8080)
+	if err != nil {
+		t.Fatalf("forwardBridge: %v", err)
+	}
+	if bridge != io.ReadWriteCloser(ours) || d.containerID != "c1" || d.port != 8080 || d.ctx != ctx {
+		t.Fatalf("DialPort(%v, %q, %d) gave %v; want the stream ctx, c1, 8080 and the dialer's conn", d.ctx, d.containerID, d.port, bridge)
+	}
+
+	d = &portDialer{err: errors.New("pods/portforward forbidden")}
+	if _, err := forwardBridge(ctx, d, inst, 8080); err == nil || err.Error() != "pods/portforward forbidden" {
+		t.Fatalf("forwardBridge error = %v, want the dialer's", err)
 	}
 }

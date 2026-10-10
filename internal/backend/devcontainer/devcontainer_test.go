@@ -217,3 +217,21 @@ func TestMicSinkCommandArgv(t *testing.T) {
 		t.Fatalf("argv = %v, want %v", cmd.Args, want)
 	}
 }
+
+// TestOutputSourceCommandArgv: the audio output's source runs the staged binary
+// by absolute path, as the session user, over a TTY-less stdin stream.
+func TestOutputSourceCommandArgv(t *testing.T) {
+	b := New()
+	b.userCacheMu.Lock()
+	b.userCache["cid123"] = "vscode"
+	b.userCacheMu.Unlock()
+
+	cmd, ok := b.OutputSourceCommand("cid123")
+	if !ok {
+		t.Fatalf("devcontainer backend should support an output source")
+	}
+	want := []string{"docker", "exec", "-i", "-u", "vscode", "cid123", fleetlaunch.RemotePath, "output", "source"}
+	if !slices.Equal(cmd.Args, want) {
+		t.Fatalf("argv = %v, want %v", cmd.Args, want)
+	}
+}

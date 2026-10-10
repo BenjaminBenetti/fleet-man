@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
@@ -115,12 +116,7 @@ var (
 	// openMicSink starts the in-instance sink. ok=false means the instance's
 	// backend cannot host one.
 	openMicSink = func(inst *fleet.Instance) (conn micSinkConn, ok bool, err error) {
-		cmd, ok := backendutil.NewForInstance(inst, false).MicSinkCommand(inst.ContainerID)
-		if !ok {
-			return nil, false, nil
-		}
-		conn, err = startStdioBridge(cmd)
-		return conn, true, err
+		return startMicSink(backendutil.NewForInstance(inst, false), inst)
 	}
 
 	// prepareMicInstance makes an instance able to run a sink: a current staged
@@ -160,6 +156,30 @@ var (
 		return config.MicSettings, nil
 	}
 )
+
+// startMicSink starts inst's sink through b, its backend. A backend that runs
+// commands as streams of its own (StreamExecer) runs the sink in one, as the
+// session user; any other runs its MicSinkCommand on the daemon host.
+func startMicSink(b backend.Backend, inst *fleet.Instance) (micSinkConn, bool, error) {
+	if execer, ok := b.(backend.StreamExecer); ok {
+		if !b.SupportsMicSink() {
+			return nil, false, nil
+		}
+		conn, err := openExecStreamConn(execer, backend.ExecRequest{
+			Class:        backend.ExecClassScript,
+			WorkspaceDir: inst.WorkspaceDir,
+			ContainerID:  inst.ContainerID,
+			Argv:         fleetlaunch.MicSinkArgv(),
+		}, micSinkOpenTimeout)
+		return conn, true, err
+	}
+	cmd, ok := b.MicSinkCommand(inst.ContainerID)
+	if !ok {
+		return nil, false, nil
+	}
+	conn, err := startStdioBridge(cmd)
+	return conn, true, err
+}
 
 // micProvider is one attached Mic stream.
 type micProvider struct {

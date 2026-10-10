@@ -4,13 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/agentstrategy"
-	"github.com/BenjaminBenetti/fleet-man/internal/atomicfile"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -19,7 +16,7 @@ import (
 // the Claude Code mod in every instance that draws a band above the prompt.
 // While the global "Fleet status mod" setting is on, the daemon keeps a status
 // file (agentstrategy.StatusModFileName) in the control directory of every
-// running instance whose container mounts it: that instance's fleet/instance
+// running instance that sees one: that instance's fleet/instance
 // name, the agents working and idle across every fleet, and the agents of
 // other instances that just stopped — went from working to idle, the TUI's ⏸.
 // With the setting off the files are removed, and the mod draws nothing.
@@ -30,9 +27,11 @@ import (
 // mod also stops trusting counts in a file that has stopped changing (a daemon
 // that died), and never trusts its first read of one.
 //
-// The control directory is writable from inside the instance, so the file is
-// written by temp+rename (atomicfile) and removed by unlink: a symlink planted
-// at its name is replaced or removed, never followed.
+// The files go where the instance sees its control directory (controlSink):
+// the host control directory provisioning mounted into it, or the control
+// channel its backend carries. The host directory is writable from inside the
+// instance, so a file there is written by temp+rename and removed by unlink: a
+// symlink planted at its name is replaced or removed, never followed.
 
 const (
 	// claudeStatusInterval is how often the files are brought up to date.
@@ -62,7 +61,8 @@ type claudeStatus struct {
 	live bool
 	// stops are the recent stops, oldest first.
 	stops []claudeStatusStop
-	// written is what was last written to each control directory.
+	// written is what was last written to each control directory, by
+	// controlSink key.
 	written map[string]claudeStatusWritten
 	// cleared is set once the files are removed for the setting being off.
 	cleared bool
@@ -75,19 +75,10 @@ type claudeStatusStop struct {
 }
 
 // claudeStatusWritten is a file as last written: its content less UpdatedAt,
-// and the file as it stood right after the write.
+// and the sink's record of the write.
 type claudeStatusWritten struct {
-	body []byte
-	at   time.Time
-	file os.FileInfo
-}
-
-// untouched reports whether the file at path is still the one written: the
-// same file, size and modification time.
-func (w claudeStatusWritten) untouched(path string) bool {
-	info, err := os.Lstat(path)
-	return err == nil && w.file != nil && os.SameFile(w.file, info) &&
-		info.Size() == w.file.Size() && info.ModTime().Equal(w.file.ModTime())
+	body  []byte
+	stamp controlStamp
 }
 
 func newClaudeStatus(h *hub) *claudeStatus {
@@ -170,11 +161,11 @@ func (c *claudeStatus) pause() {
 }
 
 // update counts the agents of every running instance, records the stops since
-// the last update, and writes each mounted instance its file. acts is the
-// activity read off the hub, from the activity pass that started at passAt; a
-// nil acts means the activity is not being polled. Then, and until a pass that
-// started since polling (re)started has landed, the files are written not
-// live: the instance's name alone.
+// the last update, and writes each instance that sees its control directory
+// its file. acts is the activity read off the hub, from the activity pass that
+// started at passAt; a nil acts means the activity is not being polled. Then,
+// and until a pass that started since polling (re)started has landed, the
+// files are written not live: the instance's name alone.
 func (c *claudeStatus) update(st *state.State, acts map[string]fleetgrpc.AgentActivity, passAt, now time.Time) {
 	polled := acts != nil
 	if polled && c.prev == nil {
@@ -228,11 +219,11 @@ func (c *claudeStatus) update(st *state.State, acts map[string]fleetgrpc.AgentAc
 			if inst.Status != fleet.StatusRunning {
 				continue
 			}
-			dir := state.ControlDir(fleetName, inst.Name)
-			if !controlDirMounted(dir) {
+			sink := controlSinkFor(fleetName, inst)
+			if !sink.reaches() {
 				continue
 			}
-			seen[dir] = true
+			seen[sink.key()] = true
 			file := agentstrategy.StatusModFile{
 				Live:     live,
 				Fleet:    fleetName,
@@ -241,12 +232,12 @@ func (c *claudeStatus) update(st *state.State, acts map[string]fleetgrpc.AgentAc
 				Idle:     idle,
 				Stops:    c.stopsElsewhere(fleetName, inst.Name),
 			}
-			c.write(dir, file, now)
+			c.write(sink, file, now)
 		}
 	}
-	for dir := range c.written {
-		if !seen[dir] {
-			delete(c.written, dir)
+	for key := range c.written {
+		if !seen[key] {
+			delete(c.written, key)
 		}
 	}
 }
@@ -263,18 +254,19 @@ func (c *claudeStatus) stopsElsewhere(fleetName, instanceName string) []agentstr
 	return stops
 }
 
-// write writes dir's status file when its content changed, when a live file
-// is due a heartbeat, or when the file is no longer the one written (the
+// write writes the status file to sink when its content changed, when a live
+// file is due a heartbeat, or when the file is no longer the one written (the
 // instance can delete, replace or overwrite it). A failed write is tried again
 // on the next update.
-func (c *claudeStatus) write(dir string, file agentstrategy.StatusModFile, now time.Time) {
+func (c *claudeStatus) write(sink controlSink, file agentstrategy.StatusModFile, now time.Time) {
 	body, err := json.Marshal(file)
 	if err != nil {
 		return
 	}
-	path := filepath.Join(dir, agentstrategy.StatusModFileName)
-	last, ok := c.written[dir]
-	if ok && bytes.Equal(last.body, body) && (!file.Live || now.Sub(last.at) < claudeStatusHeartbeat) && last.untouched(path) {
+	key := sink.key()
+	last, ok := c.written[key]
+	if ok && bytes.Equal(last.body, body) && (!file.Live || now.Sub(last.stamp.at) < claudeStatusHeartbeat) &&
+		sink.intact(agentstrategy.StatusModFileName, last.stamp, now) {
 		return
 	}
 	file.UpdatedAt = now.UnixMilli()
@@ -282,11 +274,11 @@ func (c *claudeStatus) write(dir string, file agentstrategy.StatusModFile, now t
 	if err != nil {
 		return
 	}
-	if err := atomicfile.Write(path, data, 0o644); err != nil {
+	stamp, err := sink.write(agentstrategy.StatusModFileName, data, 0o644, now)
+	if err != nil {
 		return
 	}
-	written, _ := os.Lstat(path)
-	c.written[dir] = claudeStatusWritten{body: body, at: now, file: written}
+	c.written[key] = claudeStatusWritten{body: body, stamp: stamp}
 }
 
 // removeAll removes every instance's status file, once per time the setting is
@@ -299,7 +291,7 @@ func (c *claudeStatus) removeAll(st *state.State) {
 	}
 	for fleetName, f := range st.Fleets {
 		for _, inst := range f.Instances {
-			_ = os.Remove(filepath.Join(state.ControlDir(fleetName, inst.Name), agentstrategy.StatusModFileName))
+			_ = controlSinkFor(fleetName, inst).remove(agentstrategy.StatusModFileName)
 		}
 	}
 	c.written = make(map[string]claudeStatusWritten)

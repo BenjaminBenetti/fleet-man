@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
@@ -39,6 +40,10 @@ type CodespacesBackend struct {
 	// When present, methods use native `ssh` instead of `gh codespace ssh`
 	// for proper PTY allocation.
 	sshConfigs map[string]sshConfig
+
+	// cacheMu guards nameCache and sshConfigs: the server's pollers share one
+	// backend per instance across goroutines.
+	cacheMu sync.RWMutex
 }
 
 // New creates a new CodespacesBackend.
@@ -59,7 +64,7 @@ func New(opts ...Option) *CodespacesBackend {
 // Also loads any existing SSH config from disk so that native SSH is
 // used for subsequent commands.
 func (codespacesBackend *CodespacesBackend) RegisterName(workspaceDir, codespace string) {
-	codespacesBackend.nameCache[workspaceDir] = codespace
+	codespacesBackend.cacheName(workspaceDir, codespace)
 	codespacesBackend.loadSSHConfig(codespace, workspaceDir)
 }
 
@@ -67,10 +72,35 @@ func (codespacesBackend *CodespacesBackend) RegisterName(workspaceDir, codespace
 // Checks the cache first (populated by Up or RegisterName), then falls
 // back to deriving from the path.
 func (codespacesBackend *CodespacesBackend) resolveCodespaceName(workspaceDir string) string {
-	if name, ok := codespacesBackend.nameCache[workspaceDir]; ok {
+	codespacesBackend.cacheMu.RLock()
+	name, ok := codespacesBackend.nameCache[workspaceDir]
+	codespacesBackend.cacheMu.RUnlock()
+	if ok {
 		return name
 	}
 	return codespaceName(workspaceDir)
+}
+
+// cacheName records the codespace name for a workspace dir.
+func (codespacesBackend *CodespacesBackend) cacheName(workspaceDir, codespace string) {
+	codespacesBackend.cacheMu.Lock()
+	codespacesBackend.nameCache[workspaceDir] = codespace
+	codespacesBackend.cacheMu.Unlock()
+}
+
+// cacheSSHConfig records a codespace's SSH connection info.
+func (codespacesBackend *CodespacesBackend) cacheSSHConfig(csName string, config sshConfig) {
+	codespacesBackend.cacheMu.Lock()
+	codespacesBackend.sshConfigs[csName] = config
+	codespacesBackend.cacheMu.Unlock()
+}
+
+// cachedSSHConfig returns a codespace's SSH connection info, if cached.
+func (codespacesBackend *CodespacesBackend) cachedSSHConfig(csName string) (sshConfig, bool) {
+	codespacesBackend.cacheMu.RLock()
+	defer codespacesBackend.cacheMu.RUnlock()
+	config, ok := codespacesBackend.sshConfigs[csName]
+	return config, ok
 }
 
 // ===========================================
@@ -125,7 +155,7 @@ func (codespacesBackend *CodespacesBackend) Up(workspaceDir string, _ []backend.
 	}
 
 	// Cache the real name so ExecCommand can find it later.
-	codespacesBackend.nameCache[workspaceDir] = csName
+	codespacesBackend.cacheName(workspaceDir, csName)
 
 	// Wait for the codespace to become available.
 	if err := codespacesBackend.waitForState(csName, "Available", 5*time.Minute); err != nil {
@@ -146,7 +176,9 @@ func (codespacesBackend *CodespacesBackend) Up(workspaceDir string, _ []backend.
 
 // Down deletes a codespace permanently.
 func (codespacesBackend *CodespacesBackend) Down(containerID string) error {
+	codespacesBackend.cacheMu.Lock()
 	delete(codespacesBackend.sshConfigs, containerID)
+	codespacesBackend.cacheMu.Unlock()
 	cmd := exec.Command("gh", "codespace", "delete", "-c", containerID, "--force")
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -401,7 +433,7 @@ func (codespacesBackend *CodespacesBackend) Rebuild(containerID, workspaceDir st
 	if err := codespacesBackend.waitForState(containerID, "Available", 5*time.Minute); err != nil {
 		return nil, err
 	}
-	codespacesBackend.nameCache[workspaceDir] = containerID
+	codespacesBackend.cacheName(workspaceDir, containerID)
 	_, _ = codespacesBackend.generateSSHConfig(containerID, workspaceDir)
 
 	return &backend.UpResult{

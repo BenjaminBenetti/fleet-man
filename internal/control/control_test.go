@@ -323,3 +323,31 @@ func TestDialNoServerErrors(t *testing.T) {
 		t.Fatal("Dial with no server = nil error, want error")
 	}
 }
+
+// TestServeConnOnAnyConnection: ServeConn serves a connection that did not
+// come through a Server's listener (a pod agent's relayed one): envelopes in
+// order, nil at EOF, and the decode error at a garbled line, after which
+// nothing more is read.
+func TestServeConnOnAnyConnection(t *testing.T) {
+	var got []string
+	handler := func(env Envelope) { got = append(got, env.Type+" "+string(env.Payload)) }
+
+	stream := `{"type":"browser.open","payload":{"url":"https://a"}}` + "\n" +
+		`{"type":"file.copy","payload":{"src":"x"}}` + "\n"
+	if err := ServeConn(strings.NewReader(stream), handler); err != nil {
+		t.Fatalf("ServeConn at EOF = %v, want nil", err)
+	}
+	want := []string{`browser.open {"url":"https://a"}`, `file.copy {"src":"x"}`}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("handled %q, want %q", got, want)
+	}
+
+	got = nil
+	stream = `{"type":"browser.open"}` + "\nnot json\n" + `{"type":"file.copy"}` + "\n"
+	if err := ServeConn(strings.NewReader(stream), handler); err == nil {
+		t.Fatal("ServeConn on a garbled line = nil, want the decode error")
+	}
+	if len(got) != 1 || got[0] != "browser.open " {
+		t.Fatalf("handled %q, want only the envelope before the garbled line", got)
+	}
+}

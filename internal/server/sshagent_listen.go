@@ -150,9 +150,10 @@ func (h *agentHub) maybeRedirect() {
 }
 
 // syncInstances listens in the control directory of every instance that has
-// one (devcontainer-style backends) and stops listening for instances that
-// are gone. Status does not matter: a socket on a stopped instance costs
-// nothing, and being there before a start means postStart can use it.
+// one on the host (devcontainer-style backends; see controlDirTarget) and
+// stops listening for instances that are gone. Status does not matter: a
+// socket on a stopped instance costs nothing, and being there before a start
+// means postStart can use it.
 func (h *agentHub) syncInstances(st *state.State) {
 	if st == nil {
 		return
