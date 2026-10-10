@@ -533,6 +533,10 @@ func (m *Manager) Entries(clusterID string) ([]Entry, error) {
 	return ix.Images, nil
 }
 
+// NeverPullHint explains an ErrImageNeverPull that a re-delivery did not
+// fix.
+const NeverPullHint = "the node has the image, but its kubelet will not run it without a pull: it once pulled this image ID under another name and checks pull credentials; use registry delivery for this cluster, or set the kubelet's imagePullCredentialsVerificationPolicy to NeverVerify"
+
 // waiting reasons and messages a kubelet reports for an image it cannot get.
 const (
 	reasonNeverPull = "ErrImageNeverPull"
@@ -545,11 +549,12 @@ const (
 // the node no longer has (ErrImageNeverPull: a new node, or the kubelet's
 // image GC), or a pushed image the registry no longer has.
 //
-// A node can also refuse a loaded image it has: a 1.33+ kubelet that once
-// pulled the same image ID under another name under credential checks
-// (KubeletEnsureSecretPulledImages) answers ErrImageNeverPull for it too.
-// Re-delivery cannot fix that, so callers re-deliver once per start and then
-// report the kubelet's message.
+// A node can also refuse a loaded image it has: a kubelet that checks pull
+// credentials (KubeletEnsureSecretPulledImages, on by default in recent
+// releases) and once pulled the same image ID under another name (from a
+// registry, say) answers ErrImageNeverPull for it too. Re-delivery cannot fix
+// that, so callers re-deliver once per start and then fail with
+// NeverPullHint.
 func NeedsRedelivery(s Strategy, reason, message string) bool {
 	switch s {
 	case StrategyNodeLoad:

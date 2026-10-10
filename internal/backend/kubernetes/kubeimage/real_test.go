@@ -51,7 +51,11 @@ func runQuiet(name string, args ...string) {
 func buildUniqueImage(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
-	nonce := hex.EncodeToString([]byte(t.Name() + time.Now().String()))[:16]
+	// Truly unique: a kubelet that once pulled an image ID under another
+	// name refuses a Never pull of it (KubeletEnsureSecretPulledImages).
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	nonce := hex.EncodeToString(b)
 	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM busybox:musl\nRUN echo "+nonce+" > /fleet-nonce\nCMD [\"sleep\", \"3600\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
