@@ -9,18 +9,33 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeshim"
 )
 
-// imageFor reads the config of the image a captured run names, pulling it
-// first when the daemon host does not have it: an image-only configuration is
-// never built, and the docker run the CLI asked for, which would have pulled
-// it, was captured instead. The pull's output goes to jobLog.
-func imageFor(ctx context.Context, docker, image, platform string, jobLog io.Writer) (kubeshim.ImageConfig, error) {
+// imageFor reads the config of the image a captured run names. When the
+// daemon host does not have it (for platform), it is read from its registry
+// instead: an image-only configuration is never built, and the docker run the
+// CLI asked for, which would have pulled it, was captured instead. Only if
+// the registry cannot say is the image pulled: on docker's classic store a
+// pull for another architecture moves the host's tag to that architecture,
+// under the devcontainer-backend instances that use it. The pull's output
+// goes to jobLog.
+func imageFor(ctx context.Context, docker, image, platform string, remote kubeimage.RemoteOptions, jobLog io.Writer) (kubeshim.ImageConfig, error) {
 	img, inspectErr := inspectImage(ctx, docker, image, platform)
 	if inspectErr == nil {
 		return img, nil
 	}
+	img, err := kubeimage.RemoteImageConfig(ctx, image, platform, remote)
+	if err == nil {
+		fmt.Fprintf(jobLog, "read %s from its registry (the daemon host has no image for this cluster's platform)\n", image)
+		return img, nil
+	}
+	if ctx.Err() != nil {
+		return kubeshim.ImageConfig{}, ctx.Err()
+	}
+	flog.Info("kubernetes capture-up: reading the image from its registry failed; pulling it", "image", image, "err", err)
 	args := []string{"pull"}
 	if platform != "" {
 		args = append(args, "--platform", platform)

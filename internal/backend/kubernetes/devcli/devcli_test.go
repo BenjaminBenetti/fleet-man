@@ -258,7 +258,7 @@ func TestCaptureUpEnvironment(t *testing.T) {
 
 // TestCaptureUpPullsAnImageTheHostLacks: an image-only configuration's image
 // is never built, and the captured run would have pulled it, so capture-up
-// pulls it to read its config.
+// pulls it to read its config when its registry cannot be read.
 func TestCaptureUpPullsAnImageTheHostLacks(t *testing.T) {
 	f := newFakeTools(t)
 	ws, configFile := appWorkspace(t, nil)
@@ -267,7 +267,8 @@ func TestCaptureUpPullsAnImageTheHostLacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	jobLog := &syncBuffer{}
-	res, err := CaptureUp(backend.WithJobLog(context.Background(), jobLog), CaptureRequest{Tools: f.Tools, WorkspaceDir: ws, Platform: "linux/arm64"})
+	// The image's registry cannot say (offline): capture-up pulls.
+	res, err := CaptureUp(backend.WithJobLog(context.Background(), jobLog), CaptureRequest{Tools: f.Tools, WorkspaceDir: ws, Platform: "linux/arm64", Remote: offlineRegistry()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +285,7 @@ func TestCaptureUpPullsAnImageTheHostLacks(t *testing.T) {
 	// A failed pull says why the image could not be read.
 	_ = os.Remove(filepath.Join(f.dir, "image.json"))
 	_ = os.Remove(filepath.Join(f.dir, "image.remote.json"))
-	_, err = CaptureUp(context.Background(), CaptureRequest{Tools: f.Tools, WorkspaceDir: ws})
+	_, err = CaptureUp(context.Background(), CaptureRequest{Tools: f.Tools, WorkspaceDir: ws, Remote: offlineRegistry()})
 	if err == nil || !strings.Contains(err.Error(), "No such image") || !strings.Contains(err.Error(), "pull access denied") {
 		t.Errorf("a missing image that does not pull: %v", err)
 	}
