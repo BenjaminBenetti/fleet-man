@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -57,7 +56,7 @@ func RunRebuild(fleetName, instanceName string, verbose bool) (err error) {
 		return err
 	}
 
-	instanceBackend := backendutil.NewForInstance(inst, verbose)
+	instanceBackend := newInstanceBackend(inst, verbose)
 	if !instanceBackend.SupportsRebuild() {
 		err := fmt.Errorf("backend %q does not support rebuild", inst.Backend)
 		setFailed(fleetName, instanceName, err)

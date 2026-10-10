@@ -69,7 +69,7 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 		return nil, fmt.Errorf("instance %s/%s has no container ID", fleetName, instanceName)
 	}
 
-	instanceBackend := newClient(instance.Backend)
+	instanceBackend := newClient(instance)
 
 	start := time.Now()
 	switch targetStatus {
@@ -101,7 +101,7 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 			// instance's own buildx config persists across stop/start, so only
 			// the server container needs reviving. Best-effort: a failure just
 			// means no shared cache this session.
-			execBackend := backendutil.New(instance.Backend, false)
+			execBackend := backendutil.NewForInstance(instance, false)
 			supportsMounts := execBackend.SupportsCustomMounts()
 			if f.Settings.BuildkitServer && supportsMounts {
 				if _, err := buildkit.EnsureSharedServer(fleetName); err != nil {

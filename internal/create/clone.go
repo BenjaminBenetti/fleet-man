@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -23,7 +23,8 @@ import (
 //
 // The flow:
 //
-//  1. Look up the source instance from state and build its backend.
+//  1. Look up the source instance from state and build the backend,
+//     bound to the destination record.
 //  2. Refuse early if the backend does not support cloning so the
 //     caller surfaces a clear error instead of partial work.
 //  3. Copy the source workspace directory onto the destination
@@ -71,14 +72,24 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) (err er
 		return err
 	}
 
-	instanceBackend := backendutil.NewForInstance(src, verbose)
+	destWorkspaceDir := filepath.Join(state.WorkspacesDir(), fleetName, destInstance, fleetName)
+
+	// The clone acts through a backend bound to the DESTINATION record (which
+	// startCloneInstanceJob created with the source's backend): what it creates
+	// belongs to the destination, and the source is reached by its ContainerID.
+	// A destination record removed while the job was starting falls back to the
+	// fields the clone has always used.
+	dest := persistedRecord(st, fleetName, destInstance)
+	if dest == nil {
+		dest = &fleet.Instance{Name: destInstance, WorkspaceDir: destWorkspaceDir, Status: fleet.StatusCloning, Backend: src.Backend}
+	}
+	instanceBackend := newInstanceBackend(dest, verbose)
 	if !instanceBackend.SupportsClone() {
-		err := fmt.Errorf("backend %q does not support cloning", src.Backend)
+		err := fmt.Errorf("backend %q does not support cloning", dest.Backend)
 		setFailed(fleetName, destInstance, err)
 		return err
 	}
 
-	destWorkspaceDir := filepath.Join(state.WorkspacesDir(), fleetName, destInstance, fleetName)
 	if err := os.MkdirAll(filepath.Dir(destWorkspaceDir), 0755); err != nil {
 		err = fmt.Errorf("mkdir dest workspace parent: %w", err)
 		setFailed(fleetName, destInstance, err)

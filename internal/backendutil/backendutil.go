@@ -8,8 +8,12 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 )
 
-// New creates a Backend for the given type.
-func New(backendType fleet.BackendType, verbose bool) backend.Backend {
+// newForType creates a Backend for the given type, bound to no instance. It is
+// unexported so every construction site has to name the instance it acts on
+// (NewForInstance) or asks about (CapabilitiesFor): a backend whose handle needs
+// more of an instance's identity than its type then binds it here, in one place,
+// instead of at each call site.
+func newForType(backendType fleet.BackendType, verbose bool) backend.Backend {
 	switch backendType {
 	case fleet.BackendCoder:
 		opts := []coderbackend.Option{}
@@ -32,11 +36,13 @@ func New(backendType fleet.BackendType, verbose bool) backend.Backend {
 	}
 }
 
-// NewForInstance creates a Backend for the given instance, pre-registering
+// NewForInstance creates the Backend that acts on instance, pre-registering
 // the codespace/coder name mapping when applicable so that Exec/ExecCommand
-// use the correct container ID.
+// use the correct container ID. It is the one constructor for a backend that
+// does anything to an instance (create, clone dest, rebuild, start/stop, down,
+// exec, pollers); an empty Backend type means devcontainer.
 func NewForInstance(instance *fleet.Instance, verbose bool) backend.Backend {
-	instanceBackend := New(instance.Backend, verbose)
+	instanceBackend := newForType(instance.Backend, verbose)
 	if instance.ContainerID == "" {
 		return instanceBackend
 	}
@@ -54,6 +60,15 @@ func NewForInstance(instance *fleet.Instance, verbose bool) backend.Backend {
 		}
 	}
 	return instanceBackend
+}
+
+// CapabilitiesFor returns a capability-only handle for instance's backend, for
+// callers that only ask what the backend supports. It names the instance (not
+// just its type) so a backend whose answers depend on where the instance runs
+// can bind that, but it registers no names and does no I/O, so it is safe under
+// the state lock. Use NewForInstance to act on the instance.
+func CapabilitiesFor(instance *fleet.Instance) backend.Capabilities {
+	return newForType(instance.Backend, false)
 }
 
 // CoderOpenVSCodeArgs builds args for `coder open vscode`.
