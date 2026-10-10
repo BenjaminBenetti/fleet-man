@@ -65,6 +65,27 @@ func TestKubeClusterUnsetSettingsStayUnset(t *testing.T) {
 	}
 }
 
+// A converted record shares nothing with its source, either way: changing the
+// stored record (or a received one) after converting it changes no copy.
+func TestKubeClusterConversionSharesNothing(t *testing.T) {
+	k := filled[fleet.KubeCluster](t)
+	pk := KubeClusterToProto(k)
+	k.KubeconfigPaths[0], k.ExtraPath[0], k.PluginEnv[0], k.Image.PullSecrets[0] = "changed", "changed", "changed", "changed"
+	k.NodeSelector["added"] = "changed"
+	if pk.GetKubeconfigPaths()[0] == "changed" || pk.GetExtraPath()[0] == "changed" || pk.GetPluginEnv()[0] == "changed" ||
+		pk.GetImage().GetPullSecrets()[0] == "changed" || pk.GetNodeSelector()["added"] != "" {
+		t.Fatalf("the proto aliases the record it was converted from: %+v", pk)
+	}
+
+	back := KubeClusterFromProto(pk)
+	pk.KubeconfigPaths[0], pk.ExtraPath[0], pk.PluginEnv[0], pk.Image.PullSecrets[0] = "changed", "changed", "changed", "changed"
+	pk.NodeSelector["added"] = "changed"
+	if back.KubeconfigPaths[0] == "changed" || back.ExtraPath[0] == "changed" || back.PluginEnv[0] == "changed" ||
+		back.Image.PullSecrets[0] == "changed" || back.NodeSelector["added"] != "" {
+		t.Fatalf("the record aliases the proto it was read from: %+v", back)
+	}
+}
+
 // The gateway image credential is never returned to a client and never set
 // by one: the proto has no field for it anywhere in the record, and a record
 // that holds one sends no trace of it.

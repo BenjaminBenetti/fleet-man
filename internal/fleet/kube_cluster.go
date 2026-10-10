@@ -39,8 +39,12 @@ type KubeCluster struct {
 	// ExtraPath is prepended to PATH for the kubeconfig's exec credential
 	// plugins on the daemon host.
 	ExtraPath []string `json:"extra_path,omitempty"`
-	// PluginEnv names the daemon environment variables passed through to the
-	// exec credential plugins. Names only; values are never stored.
+	// PluginEnv is environment for the exec credential plugins, one variable
+	// per entry: "NAME" passes the daemon's own value through, "NAME=value"
+	// sets it. Names are allowlisted, and a value is refused for a name that
+	// looks secret (*SECRET*, *TOKEN*, *PASSWORD*, *KEY*), so the record,
+	// which every client can read, never holds a credential. The daemon
+	// validates entries.
 	PluginEnv []string `json:"plugin_env,omitempty"`
 
 	// --- instance storage ---

@@ -1,6 +1,8 @@
 package protoconv
 
 import (
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -11,18 +13,21 @@ import (
 // KubeClusterToProto maps a cluster connection to the wire. The gateway image
 // credential (Image.GatewayCredential) has no proto field and is never sent:
 // it stays on the daemon host. Settings travel as stored, unset ones included,
-// so a client sees which settings take their defaults.
+// so a client sees which settings take their defaults. The result shares no
+// slice, map or pointer with k (nor does KubeClusterFromProto's with its
+// input), so a record pushed to watchers stays as it was sent when the stored
+// one changes.
 func KubeClusterToProto(k fleet.KubeCluster) *fleetgrpc.KubeCluster {
 	pk := &fleetgrpc.KubeCluster{
 		Id:                          k.ID,
 		DisplayName:                 k.DisplayName,
 		Context:                     k.Context,
-		KubeconfigPaths:             k.KubeconfigPaths,
+		KubeconfigPaths:             slices.Clone(k.KubeconfigPaths),
 		Namespace:                   k.Namespace,
 		Server:                      k.Server,
 		ClusterUid:                  k.ClusterUID,
-		ExtraPath:                   k.ExtraPath,
-		PluginEnv:                   k.PluginEnv,
+		ExtraPath:                   slices.Clone(k.ExtraPath),
+		PluginEnv:                   slices.Clone(k.PluginEnv),
 		StorageClass:                k.StorageClass,
 		DiskSize:                    k.DiskSize,
 		AutoExpandDisk:              copyBool(k.AutoExpandDisk),
@@ -44,7 +49,7 @@ func KubeClusterToProto(k fleet.KubeCluster) *fleetgrpc.KubeCluster {
 		BlockMetadata:               copyBool(k.BlockMetadata),
 		Resources:                   kubeResourcesToProto(k.Resources),
 		MemoryLimit:                 k.MemoryLimit,
-		NodeSelector:                k.NodeSelector,
+		NodeSelector:                maps.Clone(k.NodeSelector),
 		Tolerations:                 kubeTolerationsToProto(k.Tolerations),
 		AllowPrivileged:             copyBool(k.AllowPrivileged),
 		DebugCapabilities:           string(k.DebugCapabilities),
@@ -78,12 +83,12 @@ func KubeClusterFromProto(pk *fleetgrpc.KubeCluster) fleet.KubeCluster {
 		ID:                          pk.GetId(),
 		DisplayName:                 pk.GetDisplayName(),
 		Context:                     pk.GetContext(),
-		KubeconfigPaths:             pk.GetKubeconfigPaths(),
+		KubeconfigPaths:             slices.Clone(pk.GetKubeconfigPaths()),
 		Namespace:                   pk.GetNamespace(),
 		Server:                      pk.GetServer(),
 		ClusterUID:                  pk.GetClusterUid(),
-		ExtraPath:                   pk.GetExtraPath(),
-		PluginEnv:                   pk.GetPluginEnv(),
+		ExtraPath:                   slices.Clone(pk.GetExtraPath()),
+		PluginEnv:                   slices.Clone(pk.GetPluginEnv()),
 		StorageClass:                pk.GetStorageClass(),
 		DiskSize:                    pk.GetDiskSize(),
 		AutoExpandDisk:              copyBool(pk.AutoExpandDisk),
@@ -105,7 +110,7 @@ func KubeClusterFromProto(pk *fleetgrpc.KubeCluster) fleet.KubeCluster {
 		BlockMetadata:               copyBool(pk.BlockMetadata),
 		Resources:                   kubeResourcesFromProto(pk.GetResources()),
 		MemoryLimit:                 pk.GetMemoryLimit(),
-		NodeSelector:                pk.GetNodeSelector(),
+		NodeSelector:                maps.Clone(pk.GetNodeSelector()),
 		Tolerations:                 kubeTolerationsFromProto(pk.GetTolerations()),
 		AllowPrivileged:             copyBool(pk.AllowPrivileged),
 		DebugCapabilities:           fleet.KubeDebugCapabilities(pk.GetDebugCapabilities()),
@@ -235,7 +240,7 @@ func kubeImageSettingsToProto(i fleet.KubeImageSettings) *fleetgrpc.KubeImageSet
 		Mode:              string(i.Mode),
 		Registry:          i.Registry,
 		InsecureRegistry:  i.InsecureRegistry,
-		PullSecrets:       i.PullSecrets,
+		PullSecrets:       slices.Clone(i.PullSecrets),
 		ManagedPullSecret: copyBool(i.ManagedPullSecret),
 		Builder:           i.Builder,
 		Platform:          i.Platform,
@@ -249,7 +254,7 @@ func kubeImageSettingsFromProto(pi *fleetgrpc.KubeImageSettings) fleet.KubeImage
 		Mode:              fleet.KubeImageMode(pi.GetMode()),
 		Registry:          pi.GetRegistry(),
 		InsecureRegistry:  pi.GetInsecureRegistry(),
-		PullSecrets:       pi.GetPullSecrets(),
+		PullSecrets:       slices.Clone(pi.GetPullSecrets()),
 		ManagedPullSecret: copyBool(pi.ManagedPullSecret),
 		Builder:           pi.GetBuilder(),
 		Platform:          pi.GetPlatform(),

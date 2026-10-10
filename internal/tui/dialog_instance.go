@@ -292,6 +292,7 @@ func (fleetPage *fleetPage) submitAddInstance(m *model) tea.Cmd {
 	// into view.
 	if m.config != nil {
 		m.config.DefaultBackend = string(target.Backend)
+		m.config.DefaultKubeCluster = target.KubeCluster
 	}
 
 	key := fleetName + "/" + name

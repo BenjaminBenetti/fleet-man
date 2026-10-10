@@ -306,8 +306,12 @@ type KubeCluster struct {
 	// extra_path is prepended to PATH for the kubeconfig's exec credential
 	// plugins (aws, gke-gcloud-auth-plugin, kubelogin, ...) on the daemon host.
 	ExtraPath []string `protobuf:"bytes,8,rep,name=extra_path,json=extraPath,proto3" json:"extra_path,omitempty"`
-	// plugin_env names the daemon environment variables passed through to the
-	// exec credential plugins. Names only; values are never stored.
+	// plugin_env is environment for the exec credential plugins, one variable
+	// per entry: "NAME" passes the daemon's own value through, "NAME=value"
+	// sets it. Names are allowlisted, and a value is refused for a name that
+	// looks secret (*SECRET*, *TOKEN*, *PASSWORD*, *KEY*), so the record, which
+	// every client can read, never holds a credential. The daemon validates
+	// entries.
 	PluginEnv []string `protobuf:"bytes,9,rep,name=plugin_env,json=pluginEnv,proto3" json:"plugin_env,omitempty"`
 	// storage_class for each instance's root disk. Empty = auto (a RWO block
 	// class with WaitForFirstConsumer binding, expansion and a snapshot class).
