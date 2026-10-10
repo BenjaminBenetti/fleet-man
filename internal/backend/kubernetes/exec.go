@@ -104,10 +104,16 @@ func (b *Backend) OpenPodExec(ctx context.Context, cmd PodCommand) (backend.Exec
 // connection does not load, or the caller gave up.
 func fallbackable(err error) bool {
 	var tampered *TamperedError
+	var timedOut *DeadlineError
 	switch {
 	case errors.As(err, &tampered), errors.Is(err, ErrUnverifiable), errors.Is(err, ErrPodNotReady),
-		errors.Is(err, ErrClusterNotFound), errors.Is(err, errUnbound), errors.Is(err, errNoInstanceRecord),
-		errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		errors.Is(err, ErrClusterNotFound), errors.Is(err, errUnbound), errors.Is(err, errNoInstanceRecord):
+		return false
+	case errors.As(err, &timedOut):
+		// The bootstrap's own deadline (it wraps the context error it ended
+		// with): the agent did not connect in time, the fallback's case.
+		return true
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return false
 	}
 	return true

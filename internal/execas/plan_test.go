@@ -608,11 +608,11 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-// TestPlanPutsBundlesFirst: a bundle fleet staged (the static tmux of an image
-// without one) is first on every class's PATH, its program found there, and
+// TestPlanPutsBundlesLast: a bundle fleet staged (the static tmux of an image
+// without one) is last on every class's PATH, its program found there, and
 // its terminfo searched after the system's; a bundle installed after the Host
 // was made counts at the next plan.
-func TestPlanPutsBundlesFirst(t *testing.T) {
+func TestPlanPutsBundlesLast(t *testing.T) {
 	m := newMatrixHost(t)
 	tmux := t.TempDir()
 	writeExecutable(t, filepath.Join(tmux, "bundled-tmux"), 0o755)

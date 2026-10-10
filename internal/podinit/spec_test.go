@@ -551,3 +551,30 @@ func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
+
+// PodSeq numbers each pod's runs from 0 in the order the index records them
+// (fleetd names a run by pod and PodSeq, its restart count).
+func TestRollingRunsNumberEachPodsRuns(t *testing.T) {
+	dir := t.TempDir()
+	for _, mark := range []RunMark{{ID: "a0", PodUID: "a"}, {ID: "a1", PodUID: "a"}, {ID: "b0", PodUID: "b"}, {ID: "b1", PodUID: "b"}, {ID: "b2", PodUID: "b"}} {
+		r, err := OpenRolling(dir, 0, mark)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = r.Write([]byte(mark.ID + "\n"))
+		_ = r.Close()
+	}
+	runs, err := ReadRolling(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int{"a0": 0, "a1": 1, "b0": 0, "b1": 1, "b2": 2}
+	if len(runs) != len(want) {
+		t.Fatalf("%d runs, want %d", len(runs), len(want))
+	}
+	for _, r := range runs {
+		if r.PodSeq != want[r.ID] || string(r.Data) != r.ID+"\n" {
+			t.Errorf("run %s: PodSeq %d data %q, want %d", r.ID, r.PodSeq, r.Data, want[r.ID])
+		}
+	}
+}

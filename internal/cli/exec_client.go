@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -88,20 +89,40 @@ func runRemoteShell(ctx context.Context, fleetName, instanceName string, argv []
 		Stdout:   os.Stdout,
 		Stderr:   os.Stderr,
 	})
+	return remoteShellResult(code, err)
+}
+
+// remoteShellResult is how `fleet shell` ends after a remote attach ended with
+// code (and err, the exit frame's error or the stream's). A pod replaced under
+// the attach ends it with exit 75 and a "connection lost" error: the caller's
+// wrapper (a TUI pane, a full-screen attach) re-runs it on that code, so the
+// shell exits 75 itself rather than main's generic 1.
+func remoteShellResult(code int, err error) error {
+	if code == kubeRejoinExitCode {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		exitRemoteShell(code)
+		return err // reached only when exitRemoteShell is stubbed
+	}
 	if err != nil {
 		return err
 	}
 	if code != 0 {
-		// A pod replaced under a remote attach ends the command with exit 75
-		// (the rejoin signal); the caller's wrapper (a TUI pane, a full-screen
-		// attach) re-runs it. Exit with that code so the signal survives
-		// `fleet shell`, instead of main's generic exit 1.
-		if code == kubeRejoinExitCode {
-			exitRemoteShell(code)
-		}
 		return fmt.Errorf("exit status %d", code)
 	}
 	return nil
+}
+
+// rejoinLocalExit carries a local attach's exit 75 (the kube-exec shim's
+// rejoin signal for a replaced pod) through `fleet shell`, as
+// remoteShellResult does for a remote one; any other result is err as is.
+func rejoinLocalExit(err error) error {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == kubeRejoinExitCode {
+		exitRemoteShell(kubeRejoinExitCode)
+	}
+	return err
 }
 
 // kubeRejoinExitCode is podwire.ExitHeldStreamGone: a replaced pod, the attach

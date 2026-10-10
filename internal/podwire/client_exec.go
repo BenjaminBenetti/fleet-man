@@ -532,6 +532,16 @@ func (e *Exec) Detached() <-chan struct{} {
 	return e.detached
 }
 
+// DetachSignal is closed when the command next loses its transport (it is
+// closed already while the command is detached), for a client that re-attaches
+// it itself: unlike Detached, it is never nil, so a select on it sees the drop.
+// After a re-attach a new call returns the next drop's channel.
+func (e *Exec) DetachSignal() <-chan struct{} {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.detached
+}
+
 // Done is closed when the command has ended.
 func (e *Exec) Done() <-chan struct{} { return e.done }
 

@@ -10,7 +10,11 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/execas"
@@ -39,7 +43,7 @@ var redialBackoff = []time.Duration{0, time.Second, 2 * time.Second, 5 * time.Se
 // fleet binary in the pod) runs the command with the pod's own shell and does
 // not resume.
 func runKubeExecDirect(ctx context.Context, f kubeExecFlags, argv []string, tty bool) (int, error) {
-	t, podUID, err := kubeExecTransport(ctx, f, false)
+	t, podUID, err := kubeExecTransport(ctx, f, f.pod, false)
 	if err != nil {
 		return -1, err
 	}
@@ -84,47 +88,94 @@ func runKubeExecAgent(ctx context.Context, t *kubeexec.Transport, f kubeExecFlag
 	if tty {
 		go kubeExecResizes(e)
 	}
-	go func() { _, _ = io.Copy(os.Stdout, e.Stdout()) }()
-	go func() { _, _ = io.Copy(os.Stderr, e.Stderr()) }()
-	go kubeExecResume(ctx, e, t, f)
+	drained := copyOutput(e.Stdout(), e.Stderr(), os.Stdout, os.Stderr)
+	go kubeExecResume(ctx, e, func(ctx context.Context, attempt int) (io.ReadWriteCloser, error) {
+		// The first re-dial of a drop takes fleetd's cached credential (it
+		// renews one near expiry itself); a re-dial after a failed one asks
+		// for a fresh one, in case the API server refused the cached.
+		fresh, _, err := kubeExecTransport(ctx, f, f.pod, attempt > 0)
+		if err != nil {
+			// Refused, or not now (the pod is still being replaced): never
+			// an unverified re-attach.
+			return nil, err
+		}
+		t = fresh
+		return t.Stream(ctx, podAgentStdioReq(f)), nil
+	})
 	code, werr := e.Wait()
+	// The caller exits as soon as this returns: what the command printed
+	// last (a tmux detach's terminal reset, a one-shot's tail) must reach
+	// the terminal first.
+	drained()
 	_ = stream.Close()
-	if errors.Is(werr, podwire.ErrHeldStreamGone) {
+	return attachExit(code, werr)
+}
+
+// attachExit is the shim's exit for an attach that ended with code and werr:
+// 75 when the pod was replaced (its wrapper rejoins a fresh session), 1 when
+// the connection was lost for good, else the command's own code.
+func attachExit(code int, werr error) (int, error) {
+	switch {
+	case werr == nil:
+		return code, nil
+	case errors.Is(werr, podwire.ErrHeldStreamGone):
 		// The pod was replaced; the shell ended with it. Exit 75 so the
 		// pane's wrapper rejoins a fresh session.
 		fmt.Fprintln(os.Stderr, "connection lost: the instance's pod was replaced")
 		return podwire.ExitHeldStreamGone, nil
-	}
-	if errors.Is(werr, podwire.ErrConnectionLost) {
+	case errors.Is(werr, podwire.ErrConnectionLost):
 		fmt.Fprintln(os.Stderr, "connection lost")
 		return 1, nil
 	}
-	return code, nil
+	fmt.Fprintf(os.Stderr, "connection lost: %v\n", werr)
+	return 1, nil
 }
 
-// kubeExecResume re-attaches e to a fresh connection whenever it loses its
-// transport, until it ends: a new credential (fleetd mints it from its cache,
-// or the kubeconfig while fleetd is down) and a new API server exec.
-func kubeExecResume(ctx context.Context, e *podwire.Exec, t *kubeexec.Transport, f kubeExecFlags) {
+// copyOutput copies a command's stdout and stderr to the terminal's and
+// returns a func that waits until both are drained (the command's streams end
+// when it does).
+func copyOutput(stdout, stderr io.Reader, toOut, toErr io.Writer) (drained func()) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); _, _ = io.Copy(toOut, stdout) }()
+	go func() { defer wg.Done(); _, _ = io.Copy(toErr, stderr) }()
+	return wg.Wait
+}
+
+// kubeExecResume re-attaches e whenever it loses its transport, until it
+// ends: redial is a new API server exec of the pod's agent (attempt counts the
+// drop's re-dials from 0), on a credential from fleetd (or the kubeconfig
+// while fleetd is down). Re-dials back off and a re-dial that fails is tried
+// again; a pod
+// that replaced e's (the held command is gone) ends e with
+// ErrHeldStreamGone, and fleetd refusing the pod (errKubeExecRefused) ends it
+// with that refusal.
+func kubeExecResume(ctx context.Context, e *podwire.Exec, redial func(ctx context.Context, attempt int) (io.ReadWriteCloser, error)) {
 	for {
+		// DetachSignal, not Detached: Detached is nil while e is attached,
+		// and a select on it would never see the drop.
 		select {
 		case <-e.Done():
 			return
-		case <-e.Detached():
+		case <-e.DetachSignal():
 		}
-		attempt := 0
-		for {
+		for attempt := 0; ; attempt++ {
 			select {
 			case <-e.Done():
 				return
 			case <-time.After(redialBackoff[min(attempt, len(redialBackoff)-1)]):
 			}
-			attempt++
-			if fresh, _, err := kubeExecTransport(ctx, f, true); err == nil {
-				t = fresh
+			stream, err := redial(ctx, attempt)
+			if errors.Is(err, errKubeExecRefused) {
+				// fleetd no longer vouches for the pod (it was substituted):
+				// the command's input must not go to it.
+				e.Fail(err)
+				return
 			}
-			stream := t.Stream(ctx, podAgentStdioReq(f))
-			err := e.ReattachOver(ctx, stream)
+			if err != nil {
+				continue // not now (the pod is starting, the API is away)
+			}
+			err = e.ReattachOver(ctx, stream)
 			if err == nil {
 				break
 			}
@@ -171,7 +222,7 @@ func runKubeExecLogs(ctx context.Context, f kubeExecLogsFlags) error {
 			return fmt.Errorf("the saved container log: %w", err)
 		}
 	}
-	t, _, err := kubeExecTransport(ctx, f.kubeExecFlags, false)
+	t, _, err := kubeExecTransport(ctx, f.kubeExecFlags, "", false)
 	if err != nil {
 		// Without a cluster the saved log is all there is (a stopped
 		// instance on an unreachable cluster).
@@ -196,20 +247,36 @@ func isPodNotRunning(err error) bool {
 	return false
 }
 
+// errKubeExecRefused is fleetd refusing an attach for good: the pod is not
+// one of its instances', or did not verify. The shim never goes around it
+// with the kubeconfig.
+var errKubeExecRefused = errors.New("fleetd refused the attach")
+
 // kubeExecTransport is the transport an attach reaches the pod with: fleetd's
-// own (IssueKubeExecCredential, which verifies the pod and returns its uid),
-// or, when fleetd will not answer, the connection's kubeconfig loaded here.
-func kubeExecTransport(ctx context.Context, f kubeExecFlags, refresh bool) (*kubeexec.Transport, string, error) {
-	if conn, err := fleetclient.DialLocal(ctx); err == nil {
+// own (IssueKubeExecCredential, which verifies pod, when named, and returns
+// its uid), or, only when fleetd does not answer (down, or a build without
+// Kubernetes support), the connection's kubeconfig loaded here. A refusal
+// from fleetd is final (errKubeExecRefused); its other errors are "not now".
+func kubeExecTransport(ctx context.Context, f kubeExecFlags, pod string, refresh bool) (*kubeexec.Transport, string, error) {
+	if conn, err := fleetclient.DialSocket(ctx, f.socket); err == nil {
 		defer conn.Close()
 		reply, err := conn.Service().IssueKubeExecCredential(ctx, &fleetgrpc.IssueKubeExecCredentialRequest{
-			ClusterId: f.cluster, Pod: f.pod, Refresh: refresh,
+			ClusterId: f.cluster, Pod: pod, Refresh: refresh,
 		})
 		if err == nil {
-			t, cerr := kubeexec.TransportFor(protoconv.KubeExecCredentialFromProto(reply.GetCredential()))
-			if cerr == nil {
-				return t, reply.GetPodUid(), nil
+			t, err := kubeexec.TransportFor(protoconv.KubeExecCredentialFromProto(reply.GetCredential()))
+			if err != nil {
+				return nil, "", fmt.Errorf("fleetd's credential: %w", err)
 			}
+			return t, reply.GetPodUid(), nil
+		}
+		switch {
+		case fleetdRefused(err):
+			return nil, "", fmt.Errorf("%w: %v", errKubeExecRefused, status.Convert(err).Message())
+		case !fleetdUnavailable(err):
+			// fleetd answered, but not now (the pod is not running yet, the
+			// API server is away): the caller may try again, never around it.
+			return nil, "", errors.New(status.Convert(err).Message())
 		}
 	}
 	// fleetd will not issue (down, or no Kubernetes support): load the
@@ -221,6 +288,28 @@ func kubeExecTransport(ctx context.Context, f kubeExecFlags, refresh bool) (*kub
 	return conn.Transport(), "", nil
 }
 
+// fleetdUnavailable reports whether err is fleetd not answering an issue (the
+// daemon went away mid-call, or is a build without the RPC), as opposed to it
+// answering.
+func fleetdUnavailable(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.Unimplemented:
+		return true
+	}
+	return false
+}
+
+// fleetdRefused reports whether err is fleetd refusing the pod for good: it
+// is not one of its instances' (NotFound), or it did not verify
+// (PermissionDenied).
+func fleetdRefused(err error) bool {
+	switch status.Code(err) {
+	case codes.NotFound, codes.PermissionDenied, codes.InvalidArgument:
+		return true
+	}
+	return false
+}
+
 // podAgentStdioReq is the kube exec that runs the pod's fleet binary as the
 // direct-exec agent.
 func podAgentStdioReq(f kubeExecFlags) kubeexec.ExecRequest {
@@ -228,11 +317,16 @@ func podAgentStdioReq(f kubeExecFlags) kubeexec.ExecRequest {
 }
 
 // isAgentMissing reports whether err is the agent exec never starting because
-// the pod has no fleet binary.
+// the pod has no fleet binary: the runtime's own 126/127 for the kube exec of
+// a missing program (or the agent's, for a binary that cannot run).
 func isAgentMissing(err error) bool {
 	var se *podwire.StartError
 	if errors.As(err, &se) {
 		return se.Code == execas.ExitNotFound || se.Code == execas.ExitCannotRun
+	}
+	var exit *kubeexec.ExitError
+	if errors.As(err, &exit) {
+		return exit.Code == execas.ExitNotFound || exit.Code == execas.ExitCannotRun
 	}
 	return false
 }

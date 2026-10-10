@@ -31,9 +31,9 @@ type Host struct {
 	Prober EnvProber
 	// Bundles, when set, lists the program bundles fleet staged into the pod
 	// (the static tmux of an image that has none). Every command, whatever
-	// its class, finds their programs first on its PATH and their terminfo
-	// after the system's. It is asked on every Plan, so a bundle installed
-	// after this Host was made counts.
+	// its class, finds their programs last on its PATH (the image's own come
+	// first) and their terminfo after the system's. It is asked on every
+	// Plan, so a bundle installed after this Host was made counts.
 	Bundles func() []Bundle
 }
 

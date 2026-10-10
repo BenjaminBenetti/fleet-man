@@ -143,7 +143,7 @@ func runKubeExec(ctx context.Context, f kubeExecFlags, argv []string) (int, erro
 // runKubeExecDaemon runs the command through fleetd's PodExec RPC on the
 // local socket: the command without a terminal, on the pod's agent session.
 func runKubeExecDaemon(ctx context.Context, f kubeExecFlags, argv []string) (int, error) {
-	conn, err := fleetclient.DialLocal(ctx)
+	conn, err := fleetclient.DialSocket(ctx, f.socket)
 	if err != nil {
 		return -1, fmt.Errorf("reaching fleetd: %w", err)
 	}

@@ -19,3 +19,5 @@ func (*kubePods) run(ctx context.Context) { <-ctx.Done() }
 func (*kubePods) onState(*state.State) {}
 
 func (*kubePods) attached(string, string) {}
+
+func (*kubePods) started(string, string) {}

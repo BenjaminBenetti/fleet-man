@@ -76,9 +76,10 @@ type Options struct {
 
 	// Bundles are the program bundles fleet may stage into the pod (the
 	// static tmux): each one that is installed, when a command is planned,
-	// is first on the command's PATH whatever its class (see
+	// is last on the command's PATH whatever its class (see
 	// execas.Host.Bundles), so an image without tmux gets the bundled one
-	// and never an install from a package mirror.
+	// (and one with its own keeps it) and never an install from a package
+	// mirror.
 	Bundles []execas.Bundle
 
 	// HoldGrace and MaxHeld bound held commands.

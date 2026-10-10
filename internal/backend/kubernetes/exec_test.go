@@ -33,6 +33,7 @@ func TestFallbackable(t *testing.T) {
 		want bool
 	}{
 		{"timeout", &DeadlineError{Kind: CodeTimeout}, true},
+		{"bootstrap-timeout", classify(&DeadlineError{Kind: CodeTimeout, Wait: "the pod agent to connect", Err: context.DeadlineExceeded}), true},
 		{"generic", errors.New("some transient failure"), true},
 		{"tampered", tampered, false},
 		{"unverifiable", ErrUnverifiable, false},

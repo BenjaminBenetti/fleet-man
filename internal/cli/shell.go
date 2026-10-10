@@ -99,7 +99,7 @@ uses this to attach panes through a remote daemon.`,
 			execCmd.Stdin = os.Stdin
 			execCmd.Stdout = os.Stdout
 			execCmd.Stderr = os.Stderr
-			return execCmd.Run()
+			return rejoinLocalExit(execCmd.Run())
 		},
 	}
 
