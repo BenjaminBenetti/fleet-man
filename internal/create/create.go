@@ -36,7 +36,10 @@ func Run(fleetName, instanceName, remoteURL, branch string, verbose bool, backen
 }
 
 // RunContext allows the daemon to ask a connected client about an unknown git
-// host key before provisioning fails. The context belongs to the daemon job.
+// host key before provisioning fails. The context belongs to the daemon job:
+// cancelling it (a destroy of the instance, or the daemon shutting down) stops
+// the run at the next step, tearing down a container it already started (see
+// cancel.go).
 func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch string, verbose bool, backendType fleet.BackendType) (err error) {
 	start := time.Now()
 	flog.Info("instance create started", "fleet", fleetName, "instance", instanceName, "backend", backendType, "branch", branch, "remote", remoteURL)
@@ -70,13 +73,18 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 		instanceBackend = backendutil.New(backendType, verbose)
 	}
 
+	if err := checkCancelled(ctx); err != nil {
+		setFailed(fleetName, instanceName, err)
+		return err
+	}
+
 	switch {
 	case backendType == fleet.BackendCoder || backendType == fleet.BackendCodespaces:
 		// Remote-provisioned backends clone on their own side.
 	case fleet.IsTemplateRemote(remoteURL):
 		// Template fleet: copy the local template dir into the workspace
 		// (the cp stands in for git clone), then provision.
-		if err := copyTemplateTree(remoteURL, wsDir); err != nil {
+		if err := copyTemplateTree(ctx, remoteURL, wsDir); err != nil {
 			setFailed(fleetName, instanceName, err)
 			return err
 		}
@@ -110,8 +118,18 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 		return err
 	}
 
+	if err := checkCancelled(ctx); err != nil {
+		setFailed(fleetName, instanceName, err)
+		return err
+	}
 	result, err := instanceBackend.Up(wsDir, resolvedMounts.Mounts)
 	if err != nil {
+		setFailed(fleetName, instanceName, err)
+		return err
+	}
+	// Up takes no context, so a destroy may have cancelled the run while it
+	// worked: tear the new container down rather than provision it further.
+	if err := discardIfCancelled(ctx, instanceBackend, fleetName, instanceName, result.ContainerID); err != nil {
 		setFailed(fleetName, instanceName, err)
 		return err
 	}
@@ -131,8 +149,9 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 		}
 	}
 
-	// Success: update state (instance is running even if dotfiles failed)
-	if err := markInstanceRunning(fleetName, instanceName, result.ContainerID); err != nil {
+	// Success: update state (instance is running even if dotfiles failed),
+	// unless the run was abandoned during the provisioning steps above.
+	if err := commitRunning(ctx, instanceBackend, fleetName, instanceName, result.ContainerID); err != nil {
 		return err
 	}
 	flog.Info("instance created", "fleet", fleetName, "instance", instanceName, "backend", backendType, "container", result.ContainerID, "ms", flog.MillisSince(start))

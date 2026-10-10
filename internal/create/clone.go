@@ -2,6 +2,7 @@ package create
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -39,7 +40,11 @@ import (
 // scripts: the source already executed those, and the committed image
 // carries their effects. Running them again would diverge the clone
 // from the source.
-func RunClone(fleetName, srcInstance, destInstance string, verbose bool) (err error) {
+//
+// ctx is the daemon job's: cancelling it (a destroy of the destination, or
+// the daemon shutting down) stops the clone at the next step, tearing down
+// a container it already started (see cancel.go).
+func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, verbose bool) (err error) {
 	start := time.Now()
 	flog.Info("instance clone started", "fleet", fleetName, "src", srcInstance, "instance", destInstance)
 	// Failure outcome (with elapsed time) is logged from one place; setFailed
@@ -88,7 +93,11 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) (err er
 	// Copy the source workspace tree. `cp -a` preserves permissions,
 	// timestamps, and symlinks — important for git's working tree
 	// metadata and any tooling that inspects mtimes.
-	if err := copyWorkspaceTree(src.WorkspaceDir, destWorkspaceDir); err != nil {
+	if err := checkCancelled(ctx); err != nil {
+		setFailed(fleetName, destInstance, err)
+		return err
+	}
+	if err := copyWorkspaceTree(ctx, src.WorkspaceDir, destWorkspaceDir); err != nil {
 		setFailed(fleetName, destInstance, err)
 		return err
 	}
@@ -122,8 +131,17 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) (err er
 		resolvedMounts.Mounts = append(resolvedMounts.Mounts, mount)
 	}
 
+	if err := checkCancelled(ctx); err != nil {
+		setFailed(fleetName, destInstance, err)
+		return err
+	}
 	result, err := instanceBackend.Clone(src.ContainerID, destWorkspaceDir, resolvedMounts.Mounts)
 	if err != nil {
+		setFailed(fleetName, destInstance, err)
+		return err
+	}
+	// Clone takes no context: tear down a clone the run no longer wants.
+	if err := discardIfCancelled(ctx, instanceBackend, fleetName, destInstance, result.ContainerID); err != nil {
 		setFailed(fleetName, destInstance, err)
 		return err
 	}
@@ -169,7 +187,7 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) (err er
 		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("image cache: %v", err))
 	}
 
-	if err := markInstanceRunning(fleetName, destInstance, result.ContainerID); err != nil {
+	if err := commitRunning(ctx, instanceBackend, fleetName, destInstance, result.ContainerID); err != nil {
 		return err
 	}
 	flog.Info("instance cloned", "fleet", fleetName, "src", srcInstance, "instance", destInstance, "container", result.ContainerID, "ms", flog.MillisSince(start))
@@ -179,8 +197,8 @@ func RunClone(fleetName, srcInstance, destInstance string, verbose bool) (err er
 // copyWorkspaceTree runs `cp -a <src>/. <dest>/` so the contents of src
 // land directly inside dest (mirroring rsync's trailing-slash idiom).
 // The trailing `/.` is the portable way to ask cp to copy contents
-// rather than the directory itself.
-func copyWorkspaceTree(src, dest string) error {
+// rather than the directory itself. Cancelling ctx kills the copy.
+func copyWorkspaceTree(ctx context.Context, src, dest string) error {
 	if src == "" {
 		return fmt.Errorf("source workspace dir is empty")
 	}
@@ -191,7 +209,7 @@ func copyWorkspaceTree(src, dest string) error {
 		return fmt.Errorf("mkdir dest workspace dir: %w", err)
 	}
 
-	cmd := exec.Command("cp", "-a", src+"/.", dest+"/")
+	cmd := exec.CommandContext(ctx, "cp", "-a", src+"/.", dest+"/")
 	var buf bytes.Buffer
 	cmd.Stdout = io.MultiWriter(os.Stdout, &buf)
 	cmd.Stderr = io.MultiWriter(os.Stderr, &buf)

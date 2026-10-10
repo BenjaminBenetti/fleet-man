@@ -252,7 +252,7 @@ func TestRebuildInstanceJob(t *testing.T) {
 
 	orig := jobRunRebuild
 	// Simulate create.RunRebuild's success path: a new container id, running.
-	jobRunRebuild = func(f, i string) error {
+	jobRunRebuild = func(_ context.Context, f, i string) error {
 		return state.Update(func(st *state.State) error {
 			inst, _ := st.Fleets[f].GetInstance(i)
 			inst.ContainerID = "c2"
@@ -372,7 +372,7 @@ func TestDestroyInstanceJobRemovesRecord(t *testing.T) {
 func TestJobManagerFinishedRetention(t *testing.T) {
 	m := newJobManager()
 
-	first := m.start(fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, "f", "i0", time.Now())
+	first := m.start(context.Background(), fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, "f", "i0", time.Now())
 	firstID := first.summary.GetJobId()
 	if m.get(firstID) != first {
 		t.Fatalf("active job not resolvable by id")
@@ -387,7 +387,7 @@ func TestJobManagerFinishedRetention(t *testing.T) {
 
 	// Filling the retention window evicts the oldest finished job.
 	for range finishedJobRetention {
-		j := m.start(fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, "f", "i", time.Now())
+		j := m.start(context.Background(), fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, "f", "i", time.Now())
 		m.finish(j.summary.GetJobId())
 	}
 	if m.get(firstID) != nil {

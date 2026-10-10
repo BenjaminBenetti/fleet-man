@@ -1,6 +1,7 @@
 package create
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,7 @@ func TestCopyTemplateTreeCopiesContentsVerbatim(t *testing.T) {
 	}
 
 	wsDir := filepath.Join(t.TempDir(), "fleet", "inst", "fleet")
-	if err := copyTemplateTree("file://"+tmpl, wsDir); err != nil {
+	if err := copyTemplateTree(context.Background(), "file://"+tmpl, wsDir); err != nil {
 		t.Fatalf("copyTemplateTree: %v", err)
 	}
 	for rel, want := range map[string]string{
@@ -69,7 +70,7 @@ func TestCopyTemplateTreeRefusesNonEmptyDestination(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wsDir, "stale.txt"), []byte("old"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	err := copyTemplateTree("file://"+tmpl, wsDir)
+	err := copyTemplateTree(context.Background(), "file://"+tmpl, wsDir)
 	if err == nil || !strings.Contains(err.Error(), "not empty") {
 		t.Fatalf("want non-empty destination error, got %v", err)
 	}
@@ -82,7 +83,7 @@ func TestCopyTemplateTreeRefusesNonEmptyDestination(t *testing.T) {
 	if err := os.MkdirAll(empty, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyTemplateTree("file://"+tmpl, empty); err != nil {
+	if err := copyTemplateTree(context.Background(), "file://"+tmpl, empty); err != nil {
 		t.Fatalf("empty destination should be accepted: %v", err)
 	}
 }
@@ -95,7 +96,7 @@ func TestCopyTemplateTreeRefusesAncestorTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 	wsDir := filepath.Join(tmpl, ".fleet", "workspaces", "f", "i", "f")
-	err := copyTemplateTree("file://"+tmpl, wsDir)
+	err := copyTemplateTree(context.Background(), "file://"+tmpl, wsDir)
 	if err == nil || !strings.Contains(err.Error(), "copied into itself") {
 		t.Fatalf("want self-containment error, got %v", err)
 	}
@@ -126,17 +127,17 @@ func TestTemplateGitFileWarning(t *testing.T) {
 
 func TestCopyTemplateTreeRejectsBadSources(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "ws")
-	if err := copyTemplateTree("file://"+filepath.Join(t.TempDir(), "missing"), dest); err == nil {
+	if err := copyTemplateTree(context.Background(), "file://"+filepath.Join(t.TempDir(), "missing"), dest); err == nil {
 		t.Fatal("missing template dir should error")
 	}
 	file := filepath.Join(t.TempDir(), "f")
 	if err := os.WriteFile(file, []byte("x"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyTemplateTree("file://"+file, dest); err == nil {
+	if err := copyTemplateTree(context.Background(), "file://"+file, dest); err == nil {
 		t.Fatal("template path that is a file should error")
 	}
-	if err := copyTemplateTree("git@github.com:o/r.git", dest); err == nil {
+	if err := copyTemplateTree(context.Background(), "git@github.com:o/r.git", dest); err == nil {
 		t.Fatal("non-template remote should error")
 	}
 }

@@ -1,6 +1,7 @@
 package create
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -29,7 +30,11 @@ import (
 //     carries none of the prior fleet-launch / dotfiles / hook state.
 //  6. Persist the new ContainerID (it changes for devcontainer) and flip back
 //     to StatusRunning.
-func RunRebuild(fleetName, instanceName string, verbose bool) (err error) {
+//
+// ctx is the daemon job's: cancelling it (a destroy of the instance, or the
+// daemon shutting down) stops the rebuild at the next step, tearing down a
+// container it already started (see cancel.go).
+func RunRebuild(ctx context.Context, fleetName, instanceName string, verbose bool) (err error) {
 	start := time.Now()
 	flog.Info("instance rebuild started", "fleet", fleetName, "instance", instanceName)
 	// Failure outcome (with elapsed time) is logged from one place; setFailed
@@ -70,8 +75,17 @@ func RunRebuild(fleetName, instanceName string, verbose bool) (err error) {
 		return err
 	}
 
+	if err := checkCancelled(ctx); err != nil {
+		setFailed(fleetName, instanceName, err)
+		return err
+	}
 	result, err := instanceBackend.Rebuild(inst.ContainerID, inst.WorkspaceDir, resolvedMounts.Mounts)
 	if err != nil {
+		setFailed(fleetName, instanceName, err)
+		return err
+	}
+	// Rebuild takes no context: tear down a container the run no longer wants.
+	if err := discardIfCancelled(ctx, instanceBackend, fleetName, instanceName, result.ContainerID); err != nil {
 		setFailed(fleetName, instanceName, err)
 		return err
 	}
@@ -80,7 +94,7 @@ func RunRebuild(fleetName, instanceName string, verbose bool) (err error) {
 	// to a newly created one. All best-effort (warnings, never fatal).
 	finishProvision(instanceBackend, fleetName, instanceName, inst.WorkspaceDir, result.ContainerID, resolvedMounts.Symlinks)
 
-	if err := markInstanceRunning(fleetName, instanceName, result.ContainerID); err != nil {
+	if err := commitRunning(ctx, instanceBackend, fleetName, instanceName, result.ContainerID); err != nil {
 		return err
 	}
 	flog.Info("instance rebuilt", "fleet", fleetName, "instance", instanceName, "container", result.ContainerID, "ms", flog.MillisSince(start))
