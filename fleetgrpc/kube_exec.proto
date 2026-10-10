@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package fleetgrpc;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
+
+// =====================================================================
+// KUBERNETES — the daemon-host kube-exec shim's transport
+// =====================================================================
+//
+// `fleet kube-exec` is the self-contained argv the *exec.Cmd seams of a
+// Kubernetes instance hand out (TTY attaches, panes). In direct mode it dials
+// the API server itself, so an attach survives a fleetd restart; to do that
+// without running the connection's credential plugin on every attach, it
+// asks fleetd for the transport fleetd itself uses (IssueKubeExecCredential).
+// The RPC is local-socket only: the shim runs on the daemon host, and a
+// remote client reaches the same pods through the streaming Exec RPC, so a
+// cluster credential never leaves the daemon host.
+
+message IssueKubeExecCredentialRequest {
+  // cluster_id is the connection (KubeCluster.id).
+  string cluster_id = 1;
+  // refresh discards fleetd's cached credential and mints a new one: the API
+  // server refused the last one.
+  bool refresh = 2;
+}
+
+message IssueKubeExecCredentialReply {
+  KubeExecCredential credential = 1;
+}
+
+// KubeExecCredential is the complete transport fleetd reaches a connection's
+// API server with (internal/fleet.KubeExecCredential). It carries a live
+// credential: the shim never logs or stores it.
+message KubeExecCredential {
+  string cluster_id = 1;
+  // server is the API server's URL, path prefix included.
+  string server = 2;
+  // certificate_authority_data is the PEM bundle that verifies the server
+  // (empty: the system roots).
+  bytes certificate_authority_data = 3;
+  string tls_server_name = 4;
+  bool insecure_skip_tls_verify = 5;
+  // proxy_url is the proxy fleetd goes through; empty: none, whatever the
+  // shim's own environment says.
+  string proxy_url = 6;
+  KubeImpersonation impersonate = 7;
+  // auth names the credential's kind (internal/kubeexec.AuthKind: exec-plugin,
+  // client-cert, token, token-file, basic, none).
+  string auth = 8;
+  // The credential: a bearer token, a client certificate and key (PEM), or a
+  // basic-auth login.
+  string bearer_token = 9;
+  bytes client_certificate_data = 10;
+  bytes client_key_data = 11;
+  string username = 12;
+  string password = 13;
+  // expires_at is when the credential stops working; unset when unknown.
+  google.protobuf.Timestamp expires_at = 14;
+}
+
+// KubeImpersonation is a kubeconfig's impersonation.
+message KubeImpersonation {
+  string user = 1;
+  string uid = 2;
+  repeated string groups = 3;
+  map<string, KubeStringList> extra = 4;
+}
+
+message KubeStringList {
+  repeated string values = 1;
+}

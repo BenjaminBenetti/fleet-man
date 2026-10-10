@@ -35,6 +35,13 @@ var localOnlyMethods = map[string]bool{
 	"/fleetgrpc.FleetService/SetArmada":           true,
 	"/fleetgrpc.FleetService/ResolveArmadaRemote": true, // hands out a remote's bearer token + drives the user's ssh
 	"/fleetgrpc.FleetService/TrustSSHHostKey":     true, // writes the user's known_hosts + hands out a remote's bearer token
+	// Internal plumbing, not a limit on remote control: it hands the
+	// daemon-host `fleet kube-exec` shim a live cluster credential. A remote
+	// client gets the same capability (every shell, pane and command in a
+	// Kubernetes pod) through the streaming Exec RPC, which fleetd serves over
+	// its own connection, so cluster tokens never leave the daemon host. This
+	// is the one exception the remote full-control rule allows.
+	"/fleetgrpc.FleetService/IssueKubeExecCredential": true,
 }
 
 // bearerAuthInterceptors returns unary + stream interceptors that require

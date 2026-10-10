@@ -16,12 +16,15 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -135,6 +138,23 @@ func TestKubeRPCsHaveRemoteParity(t *testing.T) {
 	} {
 		if localOnlyMethods[m] {
 			t.Errorf("%s is local-only: remote Fleet must have it", m)
+		}
+	}
+	// The one exception: the daemon-host kube-exec shim's credential, which
+	// remote clients do not need (they exec through Exec).
+	if !localOnlyMethods[fleetgrpc.FleetService_IssueKubeExecCredential_FullMethodName] {
+		t.Error("IssueKubeExecCredential must be local-only")
+	}
+	stubKubeExecCredential(t, func(_ context.Context, id string, _ bool) (fleet.KubeExecCredential, error) {
+		return fleet.KubeExecCredential{ClusterID: id, BearerToken: "shim-only"}, nil
+	})
+	for name, c := range clients {
+		reply, err := c.IssueKubeExecCredential(context.Background(), &fleetgrpc.IssueKubeExecCredentialRequest{ClusterId: "any"})
+		switch {
+		case name == "local" && (err != nil || reply.GetCredential().GetBearerToken() != "shim-only"):
+			t.Errorf("IssueKubeExecCredential on the local socket: %v %v", reply, err)
+		case name != "local" && status.Code(err) != codes.PermissionDenied:
+			t.Errorf("IssueKubeExecCredential over %s: %v, want PermissionDenied", name, err)
 		}
 	}
 
