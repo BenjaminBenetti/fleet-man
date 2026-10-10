@@ -182,23 +182,46 @@ func lockHolder(f *os.File) int {
 	if !ok {
 		return 0
 	}
-	want := fmt.Sprintf("%02x:%02x:%d", unix.Major(st.Dev), unix.Minor(st.Dev), st.Ino)
 	locks, err := os.Open("/proc/locks")
 	if err != nil {
 		return 0
 	}
 	defer locks.Close()
-	sc := bufio.NewScanner(locks)
+	return flockHolder(locks, fmt.Sprintf("%02x:%02x", unix.Major(st.Dev), unix.Minor(st.Dev)), st.Ino)
+}
+
+// flockHolder reads a /proc/locks listing for the holder of the flock on the
+// inode ino of device dev ("major:minor" in hex). /proc/locks names the
+// filesystem's own device, which is not always the one stat reports: on
+// btrfs (a node whose kubelet dir is btrfs, emptyDirs included) stat gives
+// the subvolume's anonymous device. So when no lock names dev, the one flock
+// on an inode numbered ino is taken as the holder; two such locks are
+// ambiguous and name none.
+func flockHolder(r io.Reader, dev string, ino uint64) int {
+	exact, byIno, matches := 0, 0, 0
+	suffix := ":" + strconv.FormatUint(ino, 10)
+	sc := bufio.NewScanner(r)
 	for sc.Scan() {
 		// "1: FLOCK  ADVISORY  WRITE 4242 00:2f:1234 0 EOF"; a waiter's line
 		// has "->" after the number.
 		fields := strings.Fields(sc.Text())
-		if len(fields) < 6 || fields[1] != "FLOCK" || fields[5] != want {
+		if len(fields) < 6 || fields[1] != "FLOCK" || !strings.HasSuffix(fields[5], suffix) {
 			continue
 		}
-		if pid, err := strconv.Atoi(fields[4]); err == nil {
-			return pid
+		pid, err := strconv.Atoi(fields[4])
+		if err != nil {
+			continue
 		}
+		if fields[5] == dev+suffix {
+			exact = pid
+		}
+		byIno, matches = pid, matches+1
+	}
+	switch {
+	case exact != 0:
+		return exact
+	case matches == 1:
+		return byIno
 	}
 	return 0
 }

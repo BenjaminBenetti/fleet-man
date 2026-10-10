@@ -8,6 +8,7 @@ import "watch.proto";
 import "jobs.proto";
 import "config.proto";
 import "exec.proto";
+import "kube_exec.proto";
 import "output.proto";
 import "inspect.proto";
 import "deploy.proto";
@@ -97,6 +98,11 @@ service FleetService {
   rpc ResolveExecCommand(ResolveExecCommandRequest) returns (ResolveExecCommandReply);
   rpc ResolveLogsCommand(ResolveLogsCommandRequest) returns (ResolveLogsCommandReply);
   rpc Logs(LogsRequest) returns (stream LogLine);
+  // IssueKubeExecCredential hands the daemon-host `fleet kube-exec` shim the
+  // transport fleetd reaches a Kubernetes connection's API server with
+  // (kube_exec.proto), so its direct-mode attaches run no credential plugin
+  // of their own. Local-only: remote clients exec through Exec instead.
+  rpc IssueKubeExecCredential(IssueKubeExecCredentialRequest) returns (IssueKubeExecCredentialReply);
 
   // TriggerLogs returns an automation trigger's recorded event logs (the
   // payloads of its recent firings, concatenated for viewing). The daemon owns

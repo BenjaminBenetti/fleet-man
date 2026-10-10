@@ -48,6 +48,8 @@ func fillValue(t *testing.T, v reflect.Value, path string) {
 		v.SetBool(true)
 	case reflect.Int, reflect.Int32, reflect.Int64:
 		v.SetInt(7)
+	case reflect.Uint8: // []byte elements
+		v.SetUint(7)
 	case reflect.Pointer:
 		p := reflect.New(v.Type().Elem())
 		// Leave a *bool pointing at false: presence-vs-value is exactly the

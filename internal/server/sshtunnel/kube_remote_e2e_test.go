@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
@@ -190,6 +192,22 @@ users:
 	if result.GetState() != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNREACHABLE {
 		t.Errorf("test of an unreachable cluster = %v %q", result.GetState(), result.GetMessage())
 	}
+	// The kube-exec shim's credential is the one RPC the remote does not
+	// get (it execs through Exec instead); the daemon host's own socket
+	// does, and is handed the connection's credential.
+	if _, err := c.IssueKubeExecCredential(rctx, &fleetgrpc.IssueKubeExecCredentialRequest{ClusterId: id}); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("IssueKubeExecCredential over Armada SSH = %v, want PermissionDenied", err)
+	}
+	local, err := grpc.NewClient("unix://"+filepath.Join(fleetDir, "fleet.sock"), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	cred, err := fleetgrpc.NewFleetServiceClient(local).IssueKubeExecCredential(rctx, &fleetgrpc.IssueKubeExecCredentialRequest{ClusterId: id})
+	if err != nil || cred.GetCredential().GetBearerToken() != remoteKubeToken {
+		t.Errorf("IssueKubeExecCredential on the daemon host's socket = %v, %v", cred, err)
+	}
+
 	removed, err := c.RemoveKubeCluster(rctx, &fleetgrpc.RemoveKubeClusterRequest{Id: id})
 	if err != nil || !removed.GetRemoved() {
 		t.Fatalf("RemoveKubeCluster over Armada SSH = %v, %v", removed, err)

@@ -78,28 +78,36 @@ func (c *Connection) Credential(ctx context.Context) (Credential, error) {
 }
 
 func (p *Plugin) credential(ctx context.Context) (Credential, error) {
+	_, expires, err := p.mint(ctx)
+	return Credential{Auth: AuthExecPlugin, ExpiresAt: expires, Refreshable: true}, err
+}
+
+// mint runs the plugin once and returns the credential it printed, with its
+// expiry: status.expirationTimestamp, capped by a returned certificate's
+// NotAfter.
+func (p *Plugin) mint(ctx context.Context) (*clientauthentication.ExecCredentialStatus, time.Time, error) {
 	out, err := p.run(ctx)
 	if err != nil {
-		return Credential{Auth: AuthExecPlugin, Refreshable: true}, err
+		return nil, time.Time{}, err
 	}
 	cred, err := p.decode(out)
 	if err != nil {
-		return Credential{Auth: AuthExecPlugin, Refreshable: true}, &PluginError{Path: p.Path, Err: err}
+		return nil, time.Time{}, &PluginError{Path: p.Path, Err: err}
 	}
-	got := Credential{Auth: AuthExecPlugin, Refreshable: true}
+	var expires time.Time
 	if exp := cred.Status.ExpirationTimestamp; exp != nil {
-		got.ExpiresAt = exp.Time
+		expires = exp.Time
 	}
 	if cred.Status.ClientCertificateData != "" {
 		notAfter, err := certNotAfter([]byte(cred.Status.ClientCertificateData))
 		if err != nil {
-			return got, &PluginError{Path: p.Path, Err: err}
+			return nil, expires, &PluginError{Path: p.Path, Err: err}
 		}
-		if got.ExpiresAt.IsZero() || notAfter.Before(got.ExpiresAt) {
-			got.ExpiresAt = notAfter
+		if expires.IsZero() || notAfter.Before(expires) {
+			expires = notAfter
 		}
 	}
-	return got, nil
+	return cred.Status, expires, nil
 }
 
 // The client.authentication.k8s.io codecs, built on first use (never at

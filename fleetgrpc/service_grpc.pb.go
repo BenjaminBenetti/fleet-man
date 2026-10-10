@@ -19,61 +19,62 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	FleetService_Hello_FullMethodName                  = "/fleetgrpc.FleetService/Hello"
-	FleetService_Shutdown_FullMethodName               = "/fleetgrpc.FleetService/Shutdown"
-	FleetService_FleetTUIConnected_FullMethodName      = "/fleetgrpc.FleetService/FleetTUIConnected"
-	FleetService_GetState_FullMethodName               = "/fleetgrpc.FleetService/GetState"
-	FleetService_Watch_FullMethodName                  = "/fleetgrpc.FleetService/Watch"
-	FleetService_CreateInstance_FullMethodName         = "/fleetgrpc.FleetService/CreateInstance"
-	FleetService_DestroyInstance_FullMethodName        = "/fleetgrpc.FleetService/DestroyInstance"
-	FleetService_StartInstance_FullMethodName          = "/fleetgrpc.FleetService/StartInstance"
-	FleetService_StopInstance_FullMethodName           = "/fleetgrpc.FleetService/StopInstance"
-	FleetService_CloneInstance_FullMethodName          = "/fleetgrpc.FleetService/CloneInstance"
-	FleetService_RebuildInstance_FullMethodName        = "/fleetgrpc.FleetService/RebuildInstance"
-	FleetService_CreateFleet_FullMethodName            = "/fleetgrpc.FleetService/CreateFleet"
-	FleetService_DestroyFleet_FullMethodName           = "/fleetgrpc.FleetService/DestroyFleet"
-	FleetService_SetFleetSettings_FullMethodName       = "/fleetgrpc.FleetService/SetFleetSettings"
-	FleetService_DeleteBuildkitCache_FullMethodName    = "/fleetgrpc.FleetService/DeleteBuildkitCache"
-	FleetService_DeleteDebCache_FullMethodName         = "/fleetgrpc.FleetService/DeleteDebCache"
-	FleetService_DeleteImageCache_FullMethodName       = "/fleetgrpc.FleetService/DeleteImageCache"
-	FleetService_SetInstanceMetadata_FullMethodName    = "/fleetgrpc.FleetService/SetInstanceMetadata"
-	FleetService_SetGroupLayout_FullMethodName         = "/fleetgrpc.FleetService/SetGroupLayout"
-	FleetService_DeleteGroupLayout_FullMethodName      = "/fleetgrpc.FleetService/DeleteGroupLayout"
-	FleetService_SetLastSeenVersion_FullMethodName     = "/fleetgrpc.FleetService/SetLastSeenVersion"
-	FleetService_GetConfig_FullMethodName              = "/fleetgrpc.FleetService/GetConfig"
-	FleetService_SetConfig_FullMethodName              = "/fleetgrpc.FleetService/SetConfig"
-	FleetService_GetArmada_FullMethodName              = "/fleetgrpc.FleetService/GetArmada"
-	FleetService_SetArmada_FullMethodName              = "/fleetgrpc.FleetService/SetArmada"
-	FleetService_ResolveArmadaRemote_FullMethodName    = "/fleetgrpc.FleetService/ResolveArmadaRemote"
-	FleetService_TrustSSHHostKey_FullMethodName        = "/fleetgrpc.FleetService/TrustSSHHostKey"
-	FleetService_GitHostKeys_FullMethodName            = "/fleetgrpc.FleetService/GitHostKeys"
-	FleetService_Exec_FullMethodName                   = "/fleetgrpc.FleetService/Exec"
-	FleetService_ResolveExecCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveExecCommand"
-	FleetService_ResolveLogsCommand_FullMethodName     = "/fleetgrpc.FleetService/ResolveLogsCommand"
-	FleetService_Logs_FullMethodName                   = "/fleetgrpc.FleetService/Logs"
-	FleetService_TriggerLogs_FullMethodName            = "/fleetgrpc.FleetService/TriggerLogs"
-	FleetService_Forward_FullMethodName                = "/fleetgrpc.FleetService/Forward"
-	FleetService_Mic_FullMethodName                    = "/fleetgrpc.FleetService/Mic"
-	FleetService_ListMicSources_FullMethodName         = "/fleetgrpc.FleetService/ListMicSources"
-	FleetService_Output_FullMethodName                 = "/fleetgrpc.FleetService/Output"
-	FleetService_ListOutputTargets_FullMethodName      = "/fleetgrpc.FleetService/ListOutputTargets"
-	FleetService_SSHAgent_FullMethodName               = "/fleetgrpc.FleetService/SSHAgent"
-	FleetService_CopyFile_FullMethodName               = "/fleetgrpc.FleetService/CopyFile"
-	FleetService_CopyInto_FullMethodName               = "/fleetgrpc.FleetService/CopyInto"
-	FleetService_ListDeployTargets_FullMethodName      = "/fleetgrpc.FleetService/ListDeployTargets"
-	FleetService_ListKubeContexts_FullMethodName       = "/fleetgrpc.FleetService/ListKubeContexts"
-	FleetService_ListKubeClusters_FullMethodName       = "/fleetgrpc.FleetService/ListKubeClusters"
-	FleetService_AddKubeCluster_FullMethodName         = "/fleetgrpc.FleetService/AddKubeCluster"
-	FleetService_UpdateKubeCluster_FullMethodName      = "/fleetgrpc.FleetService/UpdateKubeCluster"
-	FleetService_RemoveKubeCluster_FullMethodName      = "/fleetgrpc.FleetService/RemoveKubeCluster"
-	FleetService_TestKubeCluster_FullMethodName        = "/fleetgrpc.FleetService/TestKubeCluster"
-	FleetService_PruneKubeCluster_FullMethodName       = "/fleetgrpc.FleetService/PruneKubeCluster"
-	FleetService_LoginKubeCluster_FullMethodName       = "/fleetgrpc.FleetService/LoginKubeCluster"
-	FleetService_CreateKubeNamespace_FullMethodName    = "/fleetgrpc.FleetService/CreateKubeNamespace"
-	FleetService_InspectRepo_FullMethodName            = "/fleetgrpc.FleetService/InspectRepo"
-	FleetService_GetCoderTemplateParams_FullMethodName = "/fleetgrpc.FleetService/GetCoderTemplateParams"
-	FleetService_GetBrowserConfig_FullMethodName       = "/fleetgrpc.FleetService/GetBrowserConfig"
-	FleetService_PrepareBrowser_FullMethodName         = "/fleetgrpc.FleetService/PrepareBrowser"
+	FleetService_Hello_FullMethodName                   = "/fleetgrpc.FleetService/Hello"
+	FleetService_Shutdown_FullMethodName                = "/fleetgrpc.FleetService/Shutdown"
+	FleetService_FleetTUIConnected_FullMethodName       = "/fleetgrpc.FleetService/FleetTUIConnected"
+	FleetService_GetState_FullMethodName                = "/fleetgrpc.FleetService/GetState"
+	FleetService_Watch_FullMethodName                   = "/fleetgrpc.FleetService/Watch"
+	FleetService_CreateInstance_FullMethodName          = "/fleetgrpc.FleetService/CreateInstance"
+	FleetService_DestroyInstance_FullMethodName         = "/fleetgrpc.FleetService/DestroyInstance"
+	FleetService_StartInstance_FullMethodName           = "/fleetgrpc.FleetService/StartInstance"
+	FleetService_StopInstance_FullMethodName            = "/fleetgrpc.FleetService/StopInstance"
+	FleetService_CloneInstance_FullMethodName           = "/fleetgrpc.FleetService/CloneInstance"
+	FleetService_RebuildInstance_FullMethodName         = "/fleetgrpc.FleetService/RebuildInstance"
+	FleetService_CreateFleet_FullMethodName             = "/fleetgrpc.FleetService/CreateFleet"
+	FleetService_DestroyFleet_FullMethodName            = "/fleetgrpc.FleetService/DestroyFleet"
+	FleetService_SetFleetSettings_FullMethodName        = "/fleetgrpc.FleetService/SetFleetSettings"
+	FleetService_DeleteBuildkitCache_FullMethodName     = "/fleetgrpc.FleetService/DeleteBuildkitCache"
+	FleetService_DeleteDebCache_FullMethodName          = "/fleetgrpc.FleetService/DeleteDebCache"
+	FleetService_DeleteImageCache_FullMethodName        = "/fleetgrpc.FleetService/DeleteImageCache"
+	FleetService_SetInstanceMetadata_FullMethodName     = "/fleetgrpc.FleetService/SetInstanceMetadata"
+	FleetService_SetGroupLayout_FullMethodName          = "/fleetgrpc.FleetService/SetGroupLayout"
+	FleetService_DeleteGroupLayout_FullMethodName       = "/fleetgrpc.FleetService/DeleteGroupLayout"
+	FleetService_SetLastSeenVersion_FullMethodName      = "/fleetgrpc.FleetService/SetLastSeenVersion"
+	FleetService_GetConfig_FullMethodName               = "/fleetgrpc.FleetService/GetConfig"
+	FleetService_SetConfig_FullMethodName               = "/fleetgrpc.FleetService/SetConfig"
+	FleetService_GetArmada_FullMethodName               = "/fleetgrpc.FleetService/GetArmada"
+	FleetService_SetArmada_FullMethodName               = "/fleetgrpc.FleetService/SetArmada"
+	FleetService_ResolveArmadaRemote_FullMethodName     = "/fleetgrpc.FleetService/ResolveArmadaRemote"
+	FleetService_TrustSSHHostKey_FullMethodName         = "/fleetgrpc.FleetService/TrustSSHHostKey"
+	FleetService_GitHostKeys_FullMethodName             = "/fleetgrpc.FleetService/GitHostKeys"
+	FleetService_Exec_FullMethodName                    = "/fleetgrpc.FleetService/Exec"
+	FleetService_ResolveExecCommand_FullMethodName      = "/fleetgrpc.FleetService/ResolveExecCommand"
+	FleetService_ResolveLogsCommand_FullMethodName      = "/fleetgrpc.FleetService/ResolveLogsCommand"
+	FleetService_Logs_FullMethodName                    = "/fleetgrpc.FleetService/Logs"
+	FleetService_IssueKubeExecCredential_FullMethodName = "/fleetgrpc.FleetService/IssueKubeExecCredential"
+	FleetService_TriggerLogs_FullMethodName             = "/fleetgrpc.FleetService/TriggerLogs"
+	FleetService_Forward_FullMethodName                 = "/fleetgrpc.FleetService/Forward"
+	FleetService_Mic_FullMethodName                     = "/fleetgrpc.FleetService/Mic"
+	FleetService_ListMicSources_FullMethodName          = "/fleetgrpc.FleetService/ListMicSources"
+	FleetService_Output_FullMethodName                  = "/fleetgrpc.FleetService/Output"
+	FleetService_ListOutputTargets_FullMethodName       = "/fleetgrpc.FleetService/ListOutputTargets"
+	FleetService_SSHAgent_FullMethodName                = "/fleetgrpc.FleetService/SSHAgent"
+	FleetService_CopyFile_FullMethodName                = "/fleetgrpc.FleetService/CopyFile"
+	FleetService_CopyInto_FullMethodName                = "/fleetgrpc.FleetService/CopyInto"
+	FleetService_ListDeployTargets_FullMethodName       = "/fleetgrpc.FleetService/ListDeployTargets"
+	FleetService_ListKubeContexts_FullMethodName        = "/fleetgrpc.FleetService/ListKubeContexts"
+	FleetService_ListKubeClusters_FullMethodName        = "/fleetgrpc.FleetService/ListKubeClusters"
+	FleetService_AddKubeCluster_FullMethodName          = "/fleetgrpc.FleetService/AddKubeCluster"
+	FleetService_UpdateKubeCluster_FullMethodName       = "/fleetgrpc.FleetService/UpdateKubeCluster"
+	FleetService_RemoveKubeCluster_FullMethodName       = "/fleetgrpc.FleetService/RemoveKubeCluster"
+	FleetService_TestKubeCluster_FullMethodName         = "/fleetgrpc.FleetService/TestKubeCluster"
+	FleetService_PruneKubeCluster_FullMethodName        = "/fleetgrpc.FleetService/PruneKubeCluster"
+	FleetService_LoginKubeCluster_FullMethodName        = "/fleetgrpc.FleetService/LoginKubeCluster"
+	FleetService_CreateKubeNamespace_FullMethodName     = "/fleetgrpc.FleetService/CreateKubeNamespace"
+	FleetService_InspectRepo_FullMethodName             = "/fleetgrpc.FleetService/InspectRepo"
+	FleetService_GetCoderTemplateParams_FullMethodName  = "/fleetgrpc.FleetService/GetCoderTemplateParams"
+	FleetService_GetBrowserConfig_FullMethodName        = "/fleetgrpc.FleetService/GetBrowserConfig"
+	FleetService_PrepareBrowser_FullMethodName          = "/fleetgrpc.FleetService/PrepareBrowser"
 )
 
 // FleetServiceClient is the client API for FleetService service.
@@ -148,6 +149,11 @@ type FleetServiceClient interface {
 	ResolveExecCommand(ctx context.Context, in *ResolveExecCommandRequest, opts ...grpc.CallOption) (*ResolveExecCommandReply, error)
 	ResolveLogsCommand(ctx context.Context, in *ResolveLogsCommandRequest, opts ...grpc.CallOption) (*ResolveLogsCommandReply, error)
 	Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error)
+	// IssueKubeExecCredential hands the daemon-host `fleet kube-exec` shim the
+	// transport fleetd reaches a Kubernetes connection's API server with
+	// (kube_exec.proto), so its direct-mode attaches run no credential plugin
+	// of their own. Local-only: remote clients exec through Exec instead.
+	IssueKubeExecCredential(ctx context.Context, in *IssueKubeExecCredentialRequest, opts ...grpc.CallOption) (*IssueKubeExecCredentialReply, error)
 	// TriggerLogs returns an automation trigger's recorded event logs (the
 	// payloads of its recent firings, concatenated for viewing). The daemon owns
 	// the log files (~/.fleet/logs/<fleet>/trigger/<trigger>/), so reading them
@@ -626,6 +632,16 @@ func (c *fleetServiceClient) Logs(ctx context.Context, in *LogsRequest, opts ...
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_LogsClient = grpc.ServerStreamingClient[LogLine]
 
+func (c *fleetServiceClient) IssueKubeExecCredential(ctx context.Context, in *IssueKubeExecCredentialRequest, opts ...grpc.CallOption) (*IssueKubeExecCredentialReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IssueKubeExecCredentialReply)
+	err := c.cc.Invoke(ctx, FleetService_IssueKubeExecCredential_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) TriggerLogs(ctx context.Context, in *TriggerLogsRequest, opts ...grpc.CallOption) (*TriggerLogsReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TriggerLogsReply)
@@ -970,6 +986,11 @@ type FleetServiceServer interface {
 	ResolveExecCommand(context.Context, *ResolveExecCommandRequest) (*ResolveExecCommandReply, error)
 	ResolveLogsCommand(context.Context, *ResolveLogsCommandRequest) (*ResolveLogsCommandReply, error)
 	Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error
+	// IssueKubeExecCredential hands the daemon-host `fleet kube-exec` shim the
+	// transport fleetd reaches a Kubernetes connection's API server with
+	// (kube_exec.proto), so its direct-mode attaches run no credential plugin
+	// of their own. Local-only: remote clients exec through Exec instead.
+	IssueKubeExecCredential(context.Context, *IssueKubeExecCredentialRequest) (*IssueKubeExecCredentialReply, error)
 	// TriggerLogs returns an automation trigger's recorded event logs (the
 	// payloads of its recent firings, concatenated for viewing). The daemon owns
 	// the log files (~/.fleet/logs/<fleet>/trigger/<trigger>/), so reading them
@@ -1145,6 +1166,9 @@ func (UnimplementedFleetServiceServer) ResolveLogsCommand(context.Context, *Reso
 }
 func (UnimplementedFleetServiceServer) Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error {
 	return status.Errorf(codes.Unimplemented, "method Logs not implemented")
+}
+func (UnimplementedFleetServiceServer) IssueKubeExecCredential(context.Context, *IssueKubeExecCredentialRequest) (*IssueKubeExecCredentialReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method IssueKubeExecCredential not implemented")
 }
 func (UnimplementedFleetServiceServer) TriggerLogs(context.Context, *TriggerLogsRequest) (*TriggerLogsReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TriggerLogs not implemented")
@@ -1734,6 +1758,24 @@ func _FleetService_Logs_Handler(srv interface{}, stream grpc.ServerStream) error
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_LogsServer = grpc.ServerStreamingServer[LogLine]
 
+func _FleetService_IssueKubeExecCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IssueKubeExecCredentialRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).IssueKubeExecCredential(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_IssueKubeExecCredential_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).IssueKubeExecCredential(ctx, req.(*IssueKubeExecCredentialRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_TriggerLogs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TriggerLogsRequest)
 	if err := dec(in); err != nil {
@@ -2166,6 +2208,10 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResolveLogsCommand",
 			Handler:    _FleetService_ResolveLogsCommand_Handler,
+		},
+		{
+			MethodName: "IssueKubeExecCredential",
+			Handler:    _FleetService_IssueKubeExecCredential_Handler,
 		},
 		{
 			MethodName: "TriggerLogs",
