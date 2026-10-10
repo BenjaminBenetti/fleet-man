@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"runtime"
 	"strings"
 	"sync"
@@ -62,6 +63,14 @@ type Gateway struct {
 	// registry id or host changes; with either nil that part waits.
 	Connections Connections
 	Index       Index
+	// Transport carries the daemon-side route check (CheckRoute) to the
+	// gateway's public URL; nil is http.DefaultTransport (the daemon host's
+	// trust store).
+	Transport http.RoundTripper
+	// OnPull is told the connection after each step of a node's pull (its
+	// manifest, then each blob), for the live pull statistics; it must not
+	// block.
+	OnPull func(clusterID string)
 
 	once    sync.Once
 	handler *Handler
@@ -101,7 +110,7 @@ var _ kubeimage.Gateway = (*Gateway)(nil)
 // Handler is the registry the gateway's TagRegistry streams are served
 // with.
 func (g *Gateway) Handler() *Handler {
-	g.once.Do(func() { g.handler = &Handler{Store: g.Store, Clusters: g.Clusters, Uplink: g.Uplink} })
+	g.once.Do(func() { g.handler = &Handler{Store: g.Store, Clusters: g.Clusters, Uplink: g.Uplink, Notify: g.OnPull} })
 	return g.handler
 }
 
@@ -171,23 +180,40 @@ func (g *Gateway) Deliver(ctx context.Context, t kubeimage.Target, img kubeimage
 		}
 		return kubeimage.GatewayDelivery{}, &kubeimage.Error{Code: kubeimage.CodeImagePush, Err: err}
 	}
+	ref, secret, err := g.serve(ctx, t, prep.Digest, img.Config.ID, cred)
+	if err != nil {
+		return kubeimage.GatewayDelivery{}, err
+	}
+	fmt.Fprintf(backend.JobLogFrom(ctx), "image %s is served through the gateway as %s (%s to pull on a fresh node)\n", short(img.Config.ID), ref, humanBytes(prep.Bytes))
+	return kubeimage.GatewayDelivery{Ref: ref, Digest: prep.Digest, Location: "gateway", PullSecret: secret}, nil
+}
+
+// serve makes the connection serve a cached manifest for holder: the pull
+// Secret is brought in line (when the target has Secrets), the prefix
+// bookkeeping follows the current registry, the Store takes the reference
+// and the registry connection is opened for the pull to come. It returns the
+// reference and the Secret's name ("" without Secrets).
+func (g *Gateway) serve(ctx context.Context, t kubeimage.Target, digest, holder, cred string) (string, string, error) {
 	// The prefix is read only now: the export can take minutes, and a new
 	// registry id or host meanwhile must neither be handed out stale nor
 	// have this delivery re-point the connection back to the old one.
 	prefix, why := g.Tunnel.Registry()
 	if prefix == "" {
-		return kubeimage.GatewayDelivery{}, unavailable(why)
+		return "", "", unavailable(why)
 	}
-	secret := GatewayPullSecretName(t.DaemonID, t.Cluster.ID)
-	if err := g.applySecret(ctx, t, registryHost(prefix), cred); err != nil {
-		return kubeimage.GatewayDelivery{}, err
+	secret := ""
+	if t.Secrets != nil {
+		secret = GatewayPullSecretName(t.DaemonID, t.Cluster.ID)
+		if err := g.applySecret(ctx, t, registryHost(prefix), cred); err != nil {
+			return "", "", err
+		}
 	}
 	switch recorded, err := g.Store.Prefix(t.Cluster.ID); {
 	case err != nil:
-		return kubeimage.GatewayDelivery{}, err
+		return "", "", err
 	case recorded == "":
 		if err := g.Store.SetPrefix(t.Cluster.ID, prefix); err != nil {
-			return kubeimage.GatewayDelivery{}, err
+			return "", "", err
 		}
 	case recorded != prefix:
 		// The connection's older references name another registry id or
@@ -197,13 +223,11 @@ func (g *Gateway) Deliver(ctx context.Context, t kubeimage.Target, img kubeimage
 	// The connection serves the image from here on. Nothing that can fail
 	// comes after, so a failed delivery never leaves it holding an image
 	// its index does not know (and kubeimage's GC would never let go).
-	if err := g.Store.Ref(t.Cluster.ID, prep.Digest, img.Config.ID); err != nil {
-		return kubeimage.GatewayDelivery{}, err
+	if err := g.Store.Ref(t.Cluster.ID, digest, holder); err != nil {
+		return "", "", err
 	}
 	g.Tunnel.WarmRegistry()
-	ref := Ref(prefix, prep.Digest)
-	fmt.Fprintf(backend.JobLogFrom(ctx), "image %s is served through the gateway as %s (%s to pull on a fresh node)\n", short(img.Config.ID), ref, humanBytes(prep.Bytes))
-	return kubeimage.GatewayDelivery{Ref: ref, Digest: prep.Digest, Location: "gateway", PullSecret: secret}, nil
+	return Ref(prefix, digest), secret, nil
 }
 
 // Remove implements kubeimage.Gateway: the connection stops serving the

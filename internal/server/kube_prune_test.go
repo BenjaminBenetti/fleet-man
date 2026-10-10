@@ -44,6 +44,8 @@ func createObjects(t *testing.T, cs *fake.Clientset, objs ...any) {
 			_, err = cs.CoreV1().ConfigMaps("fleet").Create(ctx, o, metav1.CreateOptions{})
 		case *corev1.Pod:
 			_, err = cs.CoreV1().Pods("fleet").Create(ctx, o, metav1.CreateOptions{})
+		case *corev1.Secret:
+			_, err = cs.CoreV1().Secrets("fleet").Create(ctx, o, metav1.CreateOptions{})
 		}
 		if err != nil {
 			t.Fatal(err)
@@ -77,6 +79,8 @@ func TestPruneKubeCluster(t *testing.T) {
 		&corev1.PersistentVolumeClaim{ObjectMeta: labelled(names.FleetObject("alpha", alphaHash, names.SuffixShare), id, 48*time.Hour, map[string]string{names.LabelFleet: alphaHash})},
 		// the other connection's, on the same namespace: never seen
 		&appsv1.StatefulSet{ObjectMeta: labelled("fi-theirs-one-dddddddd", other, 48*time.Hour, instance)},
+		// the connection's own managed pull Secret: never listed
+		&corev1.Secret{ObjectMeta: labelled("fleet-gwpull-"+testIdentity.Owner()+"-"+id, id, 48*time.Hour, map[string]string{names.LabelRole: string(names.RolePullSecret)})},
 		// another daemon's
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "not-ours", Namespace: "fleet", Labels: names.Base("ffffffffffff", id), CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour))}},
 	)
@@ -149,7 +153,7 @@ func TestTwoKubeRecordsOnOneNamespaceStayIsolated(t *testing.T) {
 	a := f.add(&fleetgrpc.KubeCluster{Context: "minikube", Namespace: "fleet"}).GetCluster().GetId()
 	b := f.add(&fleetgrpc.KubeCluster{Context: "minikube-alias", Namespace: "fleet"}).GetCluster().GetId()
 	for _, id := range []string{a, b} {
-		if st, err := f.svc.kube.test(context.Background(), id, nil); err != nil || st.GetState() != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY {
+		if st, err := f.svc.kube.test(context.Background(), id, false, nil); err != nil || st.GetState() != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY {
 			t.Fatalf("%s: %v %v", id, st.GetState(), err)
 		}
 	}
@@ -169,7 +173,7 @@ func TestTwoKubeRecordsOnOneNamespaceStayIsolated(t *testing.T) {
 	}
 	// The orphan counts in each one's capabilities are its own.
 	for _, id := range []string{a, b} {
-		res, err := f.svc.kube.test(context.Background(), id, nil)
+		res, err := f.svc.kube.test(context.Background(), id, false, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

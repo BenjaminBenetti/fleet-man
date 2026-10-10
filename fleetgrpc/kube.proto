@@ -469,18 +469,64 @@ message KubeQuotaHeadroom {
   string hard = 3;
 }
 
-// KubeImageDelivery is how images reach this cluster.
+// KubeImageDelivery is how images reach this cluster. mode through
+// gateway_failed_step are the last full preflight's (re-run when the
+// gateway's image registry comes or goes); the gateway availability and the
+// fields from last_pull on are read live whenever the status is built.
 message KubeImageDelivery {
   // mode resolved from KubeImageSettings.mode: "node-load", "registry",
-  // "gateway", or "none" (reason says why).
+  // "gateway", or "none" (reason says why). Auto resolves to node load on a
+  // local cluster, else the registry when one is set, else the gateway when
+  // it serves images.
   string mode = 1;
   bool registry_reachable = 2;
   bool registry_delete_supported = 3;
-  // gateway_registry: the gateway offers image delivery for this daemon.
+  // gateway_registry: the gateway offers image delivery for this daemon
+  // (live).
   bool gateway_registry = 4;
   // gateway_manifest_ok: the daemon fetched a manifest through the gateway.
   bool gateway_manifest_ok = 5;
+  // reason says why Auto picked the mode, why nothing delivers, or what is
+  // wrong with the registry (images past retention stay in a registry
+  // without DELETE).
   string reason = 6;
+  // gateway_reason says why Gateway delivery cannot be picked now (live; the
+  // cluster editor greys Gateway out with it): fleetd has no gateway, Enable
+  // Image Registry is off, the gateway is too old, runs without
+  // --session-key, or its --public-url is not https or has a path prefix.
+  // Empty while the gateway serves images.
+  string gateway_reason = 7;
+  // gateway_failed_step names what the daemon-side manifest check through
+  // the gateway's public URL found broken: "route", "tls", "credential" or
+  // "digest"; empty when it passed or did not run.
+  string gateway_failed_step = 8;
+  // gateway_host is the gateway host[:port] nodes pull from (live; empty
+  // while it serves no images).
+  string gateway_host = 9;
+  // last_pull is the connection's latest pull through the gateway since
+  // the daemon started (absent before one).
+  KubeImagePull last_pull = 10;
+  // cache_bytes is the size of the daemon's gateway image cache
+  // (~/.fleet/kube/images), shared by every connection.
+  int64 cache_bytes = 11;
+  // upload_pace_percent is the pace in effect for gateway uploads:
+  // image.upload_pace_percent, else 80; 0 is unpaced.
+  int32 upload_pace_percent = 12;
+  // uplink_bytes_per_second is the daemon host's measured upload rate (0
+  // until a pull over the registry connection measured it).
+  int64 uplink_bytes_per_second = 13;
+}
+
+// KubeImagePull is one pull of a gateway-served image by a node.
+message KubeImagePull {
+  // manifest is the digest the node fetched.
+  string manifest = 1;
+  // started_at is when it fetched the manifest; last_byte_at when the last
+  // layer byte went (absent while the node had every layer already).
+  google.protobuf.Timestamp started_at = 2;
+  google.protobuf.Timestamp last_byte_at = 3;
+  // bytes are the layer bytes sent since.
+  int64 bytes = 4;
 }
 
 // KubeOrphans counts fleet objects no record owns.
@@ -690,6 +736,12 @@ message TestKubeClusterRequest {
   // picker's test & connect) without saving or claiming anything; defaults
   // apply as on AddKubeCluster.
   KubeCluster cluster = 2;
+  // deep also runs the throwaway-pod probes after the full preflight (the
+  // editor's [ deep test ], `fleet cluster test --deep`): with Gateway
+  // delivery, a pod pulls a tiny image through the gateway and the failing
+  // step (route, TLS, credential or digest) is named. Saved connections only;
+  // a draft skips them.
+  bool deep = 3;
 }
 
 // TestKubeClusterEvent is one step of a streamed preflight.

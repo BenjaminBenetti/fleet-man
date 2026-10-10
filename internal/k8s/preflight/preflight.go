@@ -17,6 +17,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/localcluster"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/owner"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
 )
@@ -43,6 +44,9 @@ const (
 	CheckMetrics               = "metrics"
 	CheckRuntimeClasses        = "runtime_classes"
 	CheckExposure              = "exposure"
+	CheckImageDelivery         = "image_delivery"
+	// CheckImagePull is the deep test's pull through the gateway.
+	CheckImagePull = "image_pull"
 )
 
 // Timeouts: one API call, and a whole full run.
@@ -81,6 +85,12 @@ type Target struct {
 	Lease LeaseClaimer
 	// Owner is this daemon's owner label value, put on the canaries.
 	Owner string
+	// Delivery judges image delivery (the image_delivery check, and the
+	// deep test's pull); nil skips both.
+	Delivery Delivery
+	// Deep also runs the deep test's throwaway-pod probes after the full
+	// run's checks.
+	Deep bool
 	// Now replaces time.Now (tests).
 	Now func() time.Time
 }
@@ -109,8 +119,14 @@ type Result struct {
 	CredentialErr error
 	// Lease is the owner Lease's state, when it was claimed.
 	Lease *owner.LeaseStatus
-	// CheckedAt is when the run finished.
-	CheckedAt time.Time
+	// Local is the local cluster the nodes belong to, and Platform their
+	// one os/arch ("" when unknown or mixed), when the nodes were readable.
+	Local    localcluster.Cluster
+	Platform string
+	// CheckedAt is when the run finished, DeepCheckedAt when its deep test
+	// did (zero without one).
+	CheckedAt     time.Time
+	DeepCheckedAt time.Time
 }
 
 // Failed reports a failure state: anything but READY, LIMITED and
@@ -178,9 +194,14 @@ type run struct {
 }
 
 // Full runs every check, passing each to report as it starts (RUNNING) and
-// once it has a result. report may be nil.
+// once it has a result, then, with t.Deep, the deep test's. report may be
+// nil.
 func Full(ctx context.Context, t Target, report func(*fleetgrpc.KubeCheck)) Result {
-	ctx, cancel := context.WithTimeout(ctx, FullTimeout)
+	timeout := FullTimeout
+	if t.Deep {
+		timeout += DeepTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	r := &run{t: &t, report: report, caps: &fleetgrpc.KubeCapabilities{}}
 	r.full(ctx)
@@ -218,6 +239,10 @@ func (r *run) full(ctx context.Context) {
 	r.metrics(ctx)
 	r.runtimeClasses(ctx)
 	r.exposure(ctx)
+	r.imageDelivery(ctx)
+	if r.t.Deep {
+		r.deep(ctx)
+	}
 }
 
 // finish derives the state from what the checks found.

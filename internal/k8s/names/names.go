@@ -73,6 +73,12 @@ const (
 	RoleTool     Role = "tool"
 	// RoleOwner marks a connection's owner Lease (OwnerLease).
 	RoleOwner Role = "owner"
+	// RolePullSecret marks a connection's managed image pull Secrets
+	// (registry and gateway delivery): they belong to the connection, not
+	// to any instance, and go with it.
+	RolePullSecret Role = "pull-secret"
+	// RoleProbe marks the deep test's throwaway pods.
+	RoleProbe Role = "probe"
 )
 
 // Base returns the labels every object of one connection carries: managed-by,

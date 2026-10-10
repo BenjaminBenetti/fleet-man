@@ -232,6 +232,9 @@ func Serve(ctx context.Context) error {
 	//   - webhook: the automation webhook receiver, UNauthenticated (the unguessable
 	//     public URL is the capability, like the MCP proxy). Tunneled whenever both
 	//     ends negotiate FeatureWebhook.
+	//   - registry: the pull-only gateway image server (each request carries a
+	//     connection's own pull credential). Tunneled whenever both ends
+	//     negotiate FeatureRegistry.
 	// Both ride the same tunnel and are only wired when MCP is up (we need its
 	// loopback port for the tunnel to come up at all). The webhook receiver, unlike
 	// gRPC, does NOT need the MCP token, so it is wired independently of it.
@@ -267,6 +270,10 @@ func Serve(ctx context.Context) error {
 			flog.Warn("remote grpc: load token", "err", err)
 		}
 	}
+	// Image delivery to the Kubernetes connections, and the gateway image
+	// server ("Enable Image Registry", the tunnel's registry listener)
+	// while the tunnel can come up at all. Serves until hubCtx ends.
+	remoteOpts = append(remoteOpts, svc.kube.startImages(hubCtx, mcpPort != 0)...)
 
 	// Remote fleet via SSH (no gateway): the token-gated server on a loopback
 	// port, converged from config like the tunnel. Independent of MCP being up
@@ -295,6 +302,7 @@ func Serve(ctx context.Context) error {
 	svc.remote = remote.NewManager(mcpPort, versionOrDev(), func(st *fleetgrpc.RemoteMcpStatus) {
 		svc.hub.post(func(h *hub) { h.broadcastRemoteMcpStatus(st) })
 	}, remoteOpts...)
+	svc.kube.attachTunnel(svc.remote)
 	go svc.remote.Run(hubCtx)
 	if cfg, err := state.LoadConfig(); err == nil {
 		svc.reconcileRemote(cfg.RemoteMcpSettings)

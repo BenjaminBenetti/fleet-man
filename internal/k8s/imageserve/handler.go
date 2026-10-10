@@ -44,6 +44,9 @@ type Handler struct {
 	Clusters Clusters
 	// Uplink paces blob uploads; nil sends them unpaced.
 	Uplink *Uplink
+	// Notify, when set, is told the connection after a pull's manifest and
+	// after each of its blobs (the statistics changed); it must not block.
+	Notify func(clusterID string)
 
 	mu    sync.Mutex
 	pulls map[string]*PullStats
@@ -61,7 +64,8 @@ type PullStats struct {
 }
 
 // LastPull returns a connection's latest pull (false when it has made
-// none since the daemon started).
+// none since the daemon started). Pulls of the probe image (Probe) are not
+// counted.
 func (h *Handler) LastPull(clusterID string) (PullStats, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -73,27 +77,42 @@ func (h *Handler) LastPull(clusterID string) (PullStats, bool) {
 }
 
 func (h *Handler) notePull(clusterID, manifest string) {
+	if isProbeDigest(manifest) {
+		return
+	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.pulls == nil {
 		h.pulls = map[string]*PullStats{}
 	}
 	p := h.pulls[clusterID]
 	if p != nil && p.Manifest == manifest && time.Since(p.At) < time.Minute {
+		h.mu.Unlock()
 		return
 	}
 	h.pulls[clusterID] = &PullStats{Manifest: manifest, At: time.Now()}
+	h.mu.Unlock()
+	h.notify(clusterID)
 }
 
-func (h *Handler) noteBytes(clusterID string, n int64) {
-	if n <= 0 {
+func (h *Handler) noteBytes(clusterID, blob string, n int64) {
+	if n <= 0 || isProbeDigest(blob) {
 		return
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if p := h.pulls[clusterID]; p != nil {
+	p := h.pulls[clusterID]
+	if p != nil {
 		p.Bytes += n
 		p.Last = time.Now()
+	}
+	h.mu.Unlock()
+	if p != nil {
+		h.notify(clusterID)
+	}
+}
+
+func (h *Handler) notify(clusterID string) {
+	if h.Notify != nil {
+		h.Notify(clusterID)
 	}
 }
 
@@ -226,7 +245,7 @@ func (h *Handler) serveBlob(w http.ResponseWriter, r *http.Request, c Cluster, r
 		out = &pacedResponse{countingResponse: pw, pw: h.Uplink.writer(r.Context(), pw, c.PacePercent)}
 	}
 	http.ServeContent(out, r, "", time.Time{}, f)
-	h.noteBytes(c.ID, pw.n)
+	h.noteBytes(c.ID, ref, pw.n)
 }
 
 // countingResponse counts the body bytes written.
