@@ -66,6 +66,16 @@ func workspace(t *testing.T, fixture string) string {
 	return ws
 }
 
+// untagBuilt removes, when the test ends, the tag the CLI gave an image it
+// built for the test's workspace (vsc-<folder>-<hash of its path>): every run
+// has a new path, so the tags would pile up. The layers stay cached.
+func untagBuilt(t *testing.T, res *CaptureResult) {
+	t.Helper()
+	if image := res.Run.Image; strings.HasPrefix(image, "vsc-") {
+		t.Cleanup(func() { _ = exec.Command("docker", "image", "rm", image).Run() })
+	}
+}
+
 // signatureFixtures are the configurations whose capture signature is
 // recorded: every integration fixture that is a plain devcontainer, and this
 // package's own. The ones with published features fetch them from ghcr.io.
@@ -154,6 +164,7 @@ func TestCaptureSignature(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CaptureUp: %v", err)
 			}
+			untagBuilt(t, res)
 			checkCapture(t, fx.name, ws, res)
 			if golden == nil {
 				version = res.CLIVersion
@@ -335,6 +346,7 @@ func TestSetUpReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CaptureUp: %v", err)
 	}
+	untagBuilt(t, res)
 	cid := replay(t, res)
 	ex := dockerExecer{container: cid}
 
