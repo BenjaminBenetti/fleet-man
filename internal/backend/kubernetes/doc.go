@@ -37,6 +37,19 @@
 // stdin, never in argv), and RawScript through `sh` alone when the pod has no
 // fleet binary.
 //
+// Jobs are durable. A create, clone or rebuild writes an intent journal
+// (journal.go) before each API server write and mirrors its step on its
+// anchor object, so a daemon that dies mid-job leaves a record the next one's
+// reconciler fails or rolls back (UndoRebuild, UndoClone), never resumes; a
+// journal the live objects no longer match is never acted on. A destroy
+// tombstones the instance's key (footprint.go) before DownByKey deletes
+// every object of it, so what a teardown misses is known garbage. Every
+// deletion goes through Scope, under the owner check (SetOwnerGate). Waits
+// on the cluster have deadlines (deadlines.go, FLEET_KUBE_*_TIMEOUT) and fail
+// naming what they were stuck on (WaitReady, RunJob, the agent handshake).
+// RunJob drives the jobboot Jobs (seed, rollback, tool) to their result.
+//
 // Everything that needs client-go builds only in the full binary (!nok8s);
-// this file alone builds in the pod build, so the package always exists.
+// this file and the pure ones beside it (journal, footprint, deadlines)
+// build in the pod build too, so the package always exists.
 package kubernetes
