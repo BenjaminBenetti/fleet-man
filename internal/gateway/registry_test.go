@@ -349,3 +349,168 @@ func TestRegistryReapHonorsGraceTTL(t *testing.T) {
 		t.Fatal("session must be reaped after the grace TTL")
 	}
 }
+
+// TestRegistryMintsRegistryID: every fresh claim gets a third id, the registry
+// id: 256-bit lowercase hex, distinct from the public id (whose URL is the
+// webhook credential) and the secret, carried in the session token, and handed
+// out as PublicRegistry only by a gateway that offers the registry.
+func TestRegistryMintsRegistryID(t *testing.T) {
+	r := newRegistry("https://gw.example.com", "", 16, testSigner(t, "k"))
+	r.registryHost = "gw.example.com"
+
+	s, reply, _, err := r.claim(tunnel.RegisterRequest{})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if !isRegistryID(s.registryID) {
+		t.Fatalf("registry id %q is not a lowercase 256-bit hex id", s.registryID)
+	}
+	if s.registryID == s.publicID || s.registryID == s.secret {
+		t.Fatal("the registry id must be its own id")
+	}
+	if reply.PublicRegistry != "gw.example.com/"+s.registryID {
+		t.Fatalf("PublicRegistry = %q", reply.PublicRegistry)
+	}
+	if strings.Contains(reply.PublicRegistry, s.publicID) || strings.Contains(reply.PublicRegistry, s.secret) {
+		t.Fatal("PublicRegistry must carry neither the public id nor the secret")
+	}
+	if claims, ok := r.signer.verify(reply.SessionToken); !ok || claims.RegistryID != s.registryID {
+		t.Fatalf("the session token must carry the registry id: ok=%v claims=%+v", ok, claims)
+	}
+
+	s2, _, _, _ := r.claim(tunnel.RegisterRequest{})
+	if s2.registryID == s.registryID {
+		t.Fatal("two sessions must get distinct registry ids")
+	}
+
+	plain := newRegistry("https://gw.example.com", "", 16, testSigner(t, "k"))
+	if _, reply, _, _ := plain.claim(tunnel.RegisterRequest{}); reply.PublicRegistry != "" {
+		t.Fatalf("a gateway that does not offer the registry handed out %q", reply.PublicRegistry)
+	}
+}
+
+// TestRegistryRoutesRegistryIDOnlyWhileBound: the registry id becomes routable
+// at bind, like the public id, and stops being routable on release and reap.
+// A reaped session's registry connection is closed with it.
+func TestRegistryRoutesRegistryIDOnlyWhileBound(t *testing.T) {
+	r := newRegistry("https://gw", "", 16, testSigner(t, ""))
+	s, _, _, _ := r.claim(tunnel.RegisterRequest{})
+	if r.lookupRegistry(s.registryID) != nil {
+		t.Fatal("the registry id must not route before bind")
+	}
+	r.release(s)
+
+	s, _, _, _ = r.claim(tunnel.RegisterRequest{})
+	ym := fakeTunnel(t)
+	r.bind(s, ym)
+	if r.lookupRegistry(s.registryID) != s {
+		t.Fatal("the registry id must route to its session after bind")
+	}
+	if r.lookupRegistry(s.publicID) != nil || r.lookup(s.registryID) != nil {
+		t.Fatal("the public and registry ids must not route each other's traffic")
+	}
+	attached := fakeTunnel(t)
+	s.setRegistryYamux(attached)
+
+	_ = ym.Close()
+	now := time.Now()
+	r.reap(now, sessionTTL)
+	r.reap(now.Add(2*sessionTTL), sessionTTL)
+	if r.lookupRegistry(s.registryID) != nil {
+		t.Fatal("a reaped session's registry id must stop routing")
+	}
+	if !attached.IsClosed() || s.currentRegistryYamux() != nil {
+		t.Fatal("reaping a session must close its registry connection")
+	}
+}
+
+// TestRegistryTokenKeepsRegistryIDAcrossRestart: a restarted gateway with the
+// same key resurrects the registry id from the token, so image references in
+// the cluster stay valid.
+func TestRegistryTokenKeepsRegistryIDAcrossRestart(t *testing.T) {
+	const key = "stable-key"
+	r1 := newRegistry("https://gw", "", 16, testSigner(t, key))
+	s1, reply1, _, _ := r1.claim(tunnel.RegisterRequest{})
+
+	r2 := newRegistry("https://gw", "", 16, testSigner(t, key))
+	s2, _, _, err := r2.claim(tunnel.RegisterRequest{SessionID: reply1.SessionID, SessionToken: reply1.SessionToken})
+	if err != nil {
+		t.Fatalf("resurrect: %v", err)
+	}
+	if s2.registryID != s1.registryID || s2.publicID != s1.publicID {
+		t.Fatalf("resurrected ids changed: rid %q -> %q", s1.registryID, s2.registryID)
+	}
+}
+
+// TestRegistryPreRegistryTokenGetsRegistryID is the upgrade path: a token
+// minted before the registry route (no rid claim) still resurrects the session
+// under its public id, so MCP and webhook URLs don't move, while the gateway
+// mints a registry id and returns a fresh token carrying it. The next restart
+// keeps that id.
+func TestRegistryPreRegistryTokenGetsRegistryID(t *testing.T) {
+	const key = "upgrade-key"
+	signer := testSigner(t, key)
+	secret, publicID := hexID(1), hexID(2)
+	oldToken := signer.mint(secret, publicID, "")
+
+	r := newRegistry("https://gw", "", 16, testSigner(t, key))
+	s, reply, isNew, err := r.claim(tunnel.RegisterRequest{SessionID: secret, SessionToken: oldToken})
+	if err != nil {
+		t.Fatalf("claim with a pre-registry token: %v", err)
+	}
+	if !isNew || s.publicID != publicID || reply.PublicURL != "https://gw/mcp/"+publicID {
+		t.Fatalf("the public URL must survive the upgrade: %q", reply.PublicURL)
+	}
+	if !isRegistryID(s.registryID) {
+		t.Fatalf("a registry id must be minted on that reclaim, got %q", s.registryID)
+	}
+	claims, ok := r.signer.verify(reply.SessionToken)
+	if !ok || claims.RegistryID != s.registryID {
+		t.Fatalf("the fresh token must carry the minted registry id: %+v", claims)
+	}
+
+	r2 := newRegistry("https://gw", "", 16, testSigner(t, key))
+	s2, _, _, _ := r2.claim(tunnel.RegisterRequest{SessionID: secret, SessionToken: reply.SessionToken})
+	if s2.registryID != s.registryID {
+		t.Fatalf("the minted registry id must survive the next restart: %q -> %q", s.registryID, s2.registryID)
+	}
+}
+
+// TestRegistryTokenRegistryIDCollision: a token whose registry id another live
+// session already routes is not resurrected (defensive, like the public-id
+// check): the daemon gets a fresh session instead of a shared route.
+func TestRegistryTokenRegistryIDCollision(t *testing.T) {
+	const key = "collide-key"
+	r := newRegistry("https://gw", "", 16, testSigner(t, key))
+	live, _, _, _ := r.claim(tunnel.RegisterRequest{})
+	r.bind(live, fakeTunnel(t))
+
+	forged := r.signer.mint(hexID(1), hexID(2), live.registryID)
+	s, _, isNew, err := r.claim(tunnel.RegisterRequest{SessionToken: forged})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if !isNew || s.registryID == live.registryID || s.publicID == hexID(2) {
+		t.Fatal("a registry-id collision must mint a fresh session")
+	}
+}
+
+// TestRegistryAttachTarget: an attach finds only a session that has been
+// bound, by its secret; never by the public or registry id, and never a
+// claimed-but-unbound reservation.
+func TestRegistryAttachTarget(t *testing.T) {
+	r := newRegistry("https://gw", "", 16, testSigner(t, ""))
+	s, _, _, _ := r.claim(tunnel.RegisterRequest{})
+	if r.attachTarget(s.secret) != nil {
+		t.Fatal("an unbound reservation must not be attachable")
+	}
+	r.bind(s, fakeTunnel(t))
+	if r.attachTarget(s.secret) != s {
+		t.Fatal("a bound session must be attachable by its secret")
+	}
+	for _, id := range []string{s.publicID, s.registryID, "", hexID(9)} {
+		if r.attachTarget(id) != nil {
+			t.Fatalf("attachTarget(%q) must find nothing", id)
+		}
+	}
+}

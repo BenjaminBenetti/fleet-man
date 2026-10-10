@@ -38,6 +38,8 @@ func newGatewayCmd() *cobra.Command {
 			"Set --session-key (or FLEET_GATEWAY_SESSION_KEY) to a stable secret so fleet\n" +
 			"daemons keep their session URL across gateway restarts; without it each boot\n" +
 			"uses a random key and a restart hands every daemon a fresh URL.\n\n" +
+			"With --session-key and an https --public-url with no path, the gateway also\n" +
+			"serves daemons' images to cluster nodes at <host>/v2/<registry-id>/.\n\n" +
 			"Every flag can also be set via environment variable — FLEET_GATEWAY_<FLAG>\n" +
 			"with dashes as underscores (e.g. FLEET_GATEWAY_PUBLIC_URL,\n" +
 			"FLEET_GATEWAY_MAX_SESSIONS) — handy for the Docker image and Kubernetes.\n" +
@@ -62,7 +64,7 @@ func newGatewayCmd() *cobra.Command {
 	f.StringVar(&cfg.TLSCert, "tls-cert", "", "path to the TLS certificate, PEM (optional; set with --tls-key to enable TLS)")
 	f.StringVar(&cfg.TLSKey, "tls-key", "", "path to the TLS private key, PEM (optional; set with --tls-cert to enable TLS)")
 	f.IntVar(&cfg.MaxSessions, "max-sessions", 0, "max concurrent tunnels (0 = default 1024)")
-	f.StringVar(&cfg.SessionKey, "session-key", "", "secret key signing session-resume tokens, so daemons keep their session URL across gateway restarts (empty = random per boot; FLEET_GATEWAY_SESSION_KEY is also read)")
+	f.StringVar(&cfg.SessionKey, "session-key", "", "secret key signing session-resume tokens, so daemons keep their session URL and image registry id across gateway restarts; required for the /v2/ image route (empty = random per boot; FLEET_GATEWAY_SESSION_KEY is also read)")
 
 	return cmd
 }
