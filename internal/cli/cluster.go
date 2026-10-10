@@ -392,16 +392,18 @@ func createClusterNamespace(ctx context.Context, svc fleetgrpc.FleetServiceClien
 
 // --- set ---
 
+const clusterSetLong = "Change a cluster connection's settings; other fields keep their values.\n" +
+	"A sub-field is named by its path (image.mode=registry), a list or map\n" +
+	"takes one item per field=value (extra_path=/a extra_path=/b,\n" +
+	"node_selector=pool=fleet; tolerations=key[=value][:effect[:seconds]]),\n" +
+	"and field= resets a field to its default. Fields (kube.proto):\n"
+
 func newClusterSetCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "set <cluster> <field>=<value>...",
 		Short: "Change a cluster connection's settings",
-		Long: "Change a cluster connection's settings; other fields keep their values.\n" +
-			"A sub-field is named by its path (image.mode=registry), a list or map\n" +
-			"takes one item per field=value (extra_path=/a extra_path=/b,\n" +
-			"node_selector=pool=fleet; tolerations=key[=value][:effect[:seconds]]),\n" +
-			"and field= resets a field to its default. Fields (kube.proto):\n" + clusterFieldHelp(),
-		Args: cobra.MinimumNArgs(2),
+		Long:  clusterSetLong,
+		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, paths, err := parseClusterFields(args[1:])
 			if err != nil {
@@ -423,6 +425,12 @@ func newClusterSetCmd() *cobra.Command {
 			})
 		},
 	}
+	// The field list is built only when help is shown, not on every start.
+	cmd.SetHelpFunc(func(c *cobra.Command, args []string) {
+		c.Long = clusterSetLong + clusterFieldHelp()
+		c.Parent().HelpFunc()(c, args)
+	})
+	return cmd
 }
 
 // --- rm ---

@@ -697,3 +697,19 @@ func TestClusterCommandsAreTheSameForRemoteDaemons(t *testing.T) {
 		t.Errorf("set of every field sent %v", req.GetCluster())
 	}
 }
+
+// `set --help` lists the fields (built when help is shown), and so does
+// `fleet help cluster set`.
+func TestClusterSetHelpListsTheFields(t *testing.T) {
+	for _, args := range [][]string{{"cluster", "set", "--help"}, {"help", "cluster", "set"}} {
+		out, _, err := runClusterCLI(t, newFakeKube(), args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"Fields (kube.proto):", " allow_privileged ", " image.upload_pace_percent ", "Usage:"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("%v lacks %q:\n%s", args, want, out)
+			}
+		}
+	}
+}
