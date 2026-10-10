@@ -125,7 +125,13 @@ func (s *AgentSession) Bulk(ctx context.Context) (*podwire.Client, error) {
 func (s *AgentSession) openBulk(f *bulkFlight) {
 	ctx, cancel := context.WithTimeout(s.pool.ctx, s.pool.opts.HandshakeTimeout)
 	defer cancel()
-	client, stream, err := s.pool.dialAgent(ctx, s.cluster, s.slot, s.pod, podwire.RoleBulk, s.pacer)
+	// The connection's current client: its kubeconfig may have been reloaded
+	// since the agent session started.
+	c, err := s.pool.Cluster(s.pod.Cluster)
+	if err != nil {
+		c = s.cluster
+	}
+	client, stream, err := s.pool.dialAgent(ctx, c, s.slot, s.pod, podwire.RoleBulk, s.pacer)
 	s.mu.Lock()
 	s.bulkFlight = nil
 	if err == nil && s.closed {

@@ -197,7 +197,9 @@ type clusterGates struct {
 	fallback *tokenBucket
 }
 
-// Cluster is one connection's client side.
+// Cluster is one connection's client side. Record is the record it was
+// loaded from (a record change that does not touch how the cluster is
+// reached keeps it).
 type Cluster struct {
 	Record fleet.KubeCluster
 	Conn   *kubeexec.Connection
@@ -288,7 +290,7 @@ func (p *Pool) Configure(records []fleet.KubeCluster) {
 	for _, rec := range records {
 		keep[rec.ID] = true
 		if c, ok := p.clusters[rec.ID]; ok && sameConnection(c.Record, rec) {
-			c.Record = rec
+			// Only bookkeeping or settings the client does not read changed.
 			continue
 		}
 		p.clusters[rec.ID] = p.loadLocked(rec)

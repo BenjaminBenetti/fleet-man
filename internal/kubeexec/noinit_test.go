@@ -15,7 +15,7 @@ import (
 // codecs are built on first use. Package-level variables may not be
 // initialized from a k8s.io package, and there are no init functions.
 func TestNoClusterWorkAtInit(t *testing.T) {
-	for _, dir := range []string{".", "../k8s/names", "../k8s/owner", "../k8s/preflight", "../server"} {
+	for _, dir := range []string{".", "../k8s/names", "../k8s/owner", "../k8s/preflight", "../server", "../backend/kubernetes", "../backend/kubernetes/binstore"} {
 		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 		if err != nil {
 			t.Fatal(err)
