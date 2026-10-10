@@ -233,7 +233,14 @@ type Instance struct {
 	// (issue #188). Plain bool: false == "not automated" == user-created, like the
 	// FleetSettings *Mount flags — the zero value carries the common case, so no
 	// optional is needed.
-	Automated     bool `protobuf:"varint,31,opt,name=automated,proto3" json:"automated,omitempty"`
+	Automated bool `protobuf:"varint,31,opt,name=automated,proto3" json:"automated,omitempty"`
+	// The last branch a live workspace read saw checked out (JSON
+	// last_branch,omitempty): written whenever a read reports a different named
+	// branch and again just before Stop. It is the fallback, ahead of the
+	// REQUESTED branch above, for a caller that gets no live read
+	// (InstanceRuntime.current_branch absent), e.g. an instance whose workspace
+	// only exists inside its stopped runtime. Empty == never seen — optional.
+	LastBranch    *string `protobuf:"bytes,35,opt,name=last_branch,json=lastBranch,proto3,oneof" json:"last_branch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -364,6 +371,13 @@ func (x *Instance) GetAutomated() bool {
 		return x.Automated
 	}
 	return false
+}
+
+func (x *Instance) GetLastBranch() string {
+	if x != nil && x.LastBranch != nil {
+		return *x.LastBranch
+	}
+	return ""
 }
 
 // FleetSettings mirrors internal/fleet.FleetSettings. The three *Mount flags are
@@ -1206,7 +1220,7 @@ var File_domain_proto protoreflect.FileDescriptor
 
 const file_domain_proto_rawDesc = "" +
 	"\n" +
-	"\fdomain.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\xeb\x04\n" +
+	"\fdomain.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa1\x05\n" +
 	"\bInstance\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12&\n" +
 	"\fdisplay_name\x18\x02 \x01(\tH\x00R\vdisplayName\x88\x01\x01\x12&\n" +
@@ -1223,7 +1237,9 @@ const file_domain_proto_rawDesc = "" +
 	"\x05color\x18\v \x01(\tH\x06R\x05color\x88\x01\x01\x12\x1b\n" +
 	"\x06branch\x18\f \x01(\tH\aR\x06branch\x88\x01\x01\x12\x1a\n" +
 	"\bwarnings\x18\r \x03(\tR\bwarnings\x12\x1c\n" +
-	"\tautomated\x18\x1f \x01(\bR\tautomatedB\x0f\n" +
+	"\tautomated\x18\x1f \x01(\bR\tautomated\x12$\n" +
+	"\vlast_branch\x18# \x01(\tH\bR\n" +
+	"lastBranch\x88\x01\x01B\x0f\n" +
 	"\r_display_nameB\x0f\n" +
 	"\r_container_idB\t\n" +
 	"\a_configB\x10\n" +
@@ -1231,7 +1247,8 @@ const file_domain_proto_rawDesc = "" +
 	"\x06_errorB\x06\n" +
 	"\x04_tagB\b\n" +
 	"\x06_colorB\t\n" +
-	"\a_branchJ\x04\b\x0e\x10\x1fJ\x04\b \x10!\"\xff\x06\n" +
+	"\a_branchB\x0e\n" +
+	"\f_last_branchJ\x04\b\x0e\x10\x1fJ\x04\b \x10!\"\xff\x06\n" +
 	"\rFleetSettings\x12*\n" +
 	"\x11claude_code_mount\x18\x01 \x01(\bR\x0fclaudeCodeMount\x12\x1f\n" +
 	"\vcodex_mount\x18\x02 \x01(\bR\n" +

@@ -136,6 +136,14 @@ message Instance {
   // optional is needed.
   bool automated = 31;
 
+  // The last branch a live workspace read saw checked out (JSON
+  // last_branch,omitempty): written whenever a read reports a different named
+  // branch and again just before Stop. It is the fallback, ahead of the
+  // REQUESTED branch above, for a caller that gets no live read
+  // (InstanceRuntime.current_branch absent), e.g. an instance whose workspace
+  // only exists inside its stopped runtime. Empty == never seen — optional.
+  optional string last_branch = 35;
+
   // Reserved for forward/back compat across the version skew Hello tolerates.
   reserved 14 to 30;
   reserved 32; // was fleet_mcp (v2.12.0: per-instance; now FleetSettings.fleet_mcp)

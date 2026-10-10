@@ -102,11 +102,20 @@ message DeleteImageCacheRequest {
 // DeleteImageCacheReply is empty: success is signalled by a nil error.
 message DeleteImageCacheReply {}
 
-message GetStateRequest {}
+message GetStateRequest {
+  // fresh_branches asks the server to read every instance's checked-out branch
+  // through its backend's workspace reader (bounded concurrency, results
+  // cached ~10s) and return them as GetStateReply.runtime entries carrying
+  // current_branch. Callers without a Watch subscription (fleet ls, the MCP
+  // fleet_list tool) set it: the runtime pollers only run while a TUI watches.
+  bool fresh_branches = 1;
+}
 
 // GetStateReply is the one-stop snapshot of EVERYTHING the TUI renders:
 //   state   — persisted: what fleets/instances exist + their recorded status
 //   runtime — live: agent running?/stats/sessions/ports/live container status
+//             (filled only with current_branch, and only when the request set
+//             fresh_branches; the full live sidecar streams over Watch)
 //   active_jobs — in-flight jobs (for progress + re-attach)
 message GetStateReply {
   State state = 1;

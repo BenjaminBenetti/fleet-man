@@ -709,10 +709,13 @@ type InstanceRuntime struct {
 	Sessions []*TmuxSession `protobuf:"bytes,7,rep,name=sessions,proto3" json:"sessions,omitempty"`
 	// Active port-forwards (the ⇄ labels).
 	ForwardedPorts []*ForwardedPort `protobuf:"bytes,8,rep,name=forwarded_ports,json=forwardedPorts,proto3" json:"forwarded_ports,omitempty"`
-	// Actual git branch resolved from the workspace (resolveWorkspaceBranch) —
-	// live because the user may switch branches inside the instance; distinct
-	// from the persisted REQUESTED Instance.branch. Optional: absent when there
-	// is no local workspace (cloud backends) or it hasn't been resolved yet.
+	// Actual git branch read from the workspace through the backend's
+	// WorkspaceReader — live because the user may switch branches inside the
+	// instance; distinct from the persisted REQUESTED Instance.branch. Optional:
+	// absent when no live read was possible (no workspace, a runtime that holds
+	// the only copy is stopped, or not resolved yet) — callers then fall back to
+	// Instance.last_branch, then Instance.branch. Present but "" means the read
+	// worked and HEAD is not on a named branch (detached, or not a git repo).
 	CurrentBranch *string `protobuf:"bytes,9,opt,name=current_branch,json=currentBranch,proto3,oneof" json:"current_branch,omitempty"`
 	// When the server last refreshed this snapshot.
 	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
