@@ -110,9 +110,16 @@ func noDeployTargetsMessage() string {
 	return "No deploy targets available – install devcontainer or coder CLI"
 }
 
-// deployTargetLabel is a target's human-readable name.
-func deployTargetLabel(target fleet.DeployTarget) string {
-	return backendTypeLabel(target.Backend)
+// deployTargetLabel is a target's human-readable name: a cluster target is
+// "☸ <its connection's name>".
+func deployTargetLabel(m *model, target fleet.DeployTarget) string {
+	if target.KubeCluster == "" {
+		return backendTypeLabel(target.Backend)
+	}
+	if st := m.kubeStatus(target.KubeCluster); st != nil {
+		return kubeGlyphCluster + " " + kubeDisplayName(st.GetCluster())
+	}
+	return kubeGlyphCluster + " " + target.KubeCluster
 }
 
 // ===========================================
@@ -151,14 +158,6 @@ func fetchDaemonTools() daemonToolStatus {
 		return daemonToolStatus{err: "could not ask fleetd: " + grpcstatus.Convert(err).Message()}
 	}
 	return daemonToolStatus{host: reply.GetHost(), tools: protoconv.HostToolsFromProto(reply.GetHostTools())}
-}
-
-// where names the daemon host on its tool rows.
-func (s daemonToolStatus) where() string {
-	if s.host == "" {
-		return "on fleetd"
-	}
-	return "on fleetd @ " + s.host
 }
 
 // handleDaemonToolsMsg stores the daemon's tools. The rows below them shift

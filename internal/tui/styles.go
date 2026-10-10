@@ -115,6 +115,13 @@ var (
 	// warnTextStyle is a caution note beside a risky setting.
 	warnTextStyle lipgloss.Style
 
+	// Kubernetes badges and check marks (Settings → Kubernetes, the context
+	// picker, the cluster editor): ● and ✓ Success, ▲ and ⚠ Warning, ✕ Error.
+	// One slot each, so they read on the light themes too.
+	kubeOKStyle   lipgloss.Style
+	kubeWarnStyle lipgloss.Style
+	kubeErrStyle  lipgloss.Style
+
 	// Spinner (the page spinner; the agent throbber reuses agentWorkingStyle)
 	spinnerStyle lipgloss.Style
 )
@@ -287,6 +294,10 @@ func applyTheme(t theme.Theme) {
 
 	warnTextStyle = lipgloss.NewStyle().
 		Foreground(t.Warning)
+
+	kubeOKStyle = lipgloss.NewStyle().Foreground(t.Success)
+	kubeWarnStyle = lipgloss.NewStyle().Foreground(t.Warning)
+	kubeErrStyle = lipgloss.NewStyle().Foreground(t.Error)
 
 	spinnerStyle = lipgloss.NewStyle().Foreground(t.Accent)
 

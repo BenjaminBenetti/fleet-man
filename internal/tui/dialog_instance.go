@@ -299,7 +299,7 @@ func (fleetPage *fleetPage) submitAddInstance(m *model) tea.Cmd {
 	m.creating[key] = true
 	fleetPage.mode = viewNormal
 	fleetPage.blurDialogFields()
-	m.message = fmt.Sprintf("Creating %s (%s)...", key, deployTargetLabel(target))
+	m.message = fmt.Sprintf("Creating %s (%s)...", key, deployTargetLabel(m, target))
 
 	return createInstanceCmd(fleetName, name, f.Remote, branch, color, target)
 }
@@ -641,7 +641,7 @@ func (fleetPage *fleetPage) renderAddInstanceDialog(m *model) string {
 			}
 		}
 		branchField = dimStyle.Render(branchDisplay)
-		deployField = dimStyle.Render(fmt.Sprintf("[ %s ]", deployTargetLabel(target)))
+		deployField = dimStyle.Render(fmt.Sprintf("[ %s ]", deployTargetLabel(m, target)))
 	} else {
 		title = "New instance"
 		if fleetPage.dlg.fieldActive {
@@ -657,7 +657,7 @@ func (fleetPage *fleetPage) renderAddInstanceDialog(m *model) string {
 		if fleetPage.addInst.template {
 			branchField = dimStyle.Render(templateBranchDisplay)
 		}
-		deployField = fmt.Sprintf("[ %s ]", deployTargetLabel(target))
+		deployField = fmt.Sprintf("[ %s ]", deployTargetLabel(m, target))
 	}
 
 	rowMarker := func(r int) string {

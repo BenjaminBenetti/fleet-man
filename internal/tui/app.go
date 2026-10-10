@@ -140,6 +140,17 @@ type model struct {
 	// answer arrives (and after an armada switch).
 	daemonTools *daemonToolStatus
 
+	// Kubernetes connections (kube.go): the daemon's connections with their
+	// health, pushed over Watch (nil until the first push, and after an armada
+	// switch); the streamed tests and daemon-side logins in flight (or last
+	// finished), by run key and connection id; the login plugin each
+	// connection's context names, for Tool Status; and the daemon host's name.
+	kubeClusters *fleetgrpc.KubeClusters
+	kubeRuns     map[string]*kubeTestRun
+	kubeLogins   map[string]*kubeLoginRun
+	kubePlugins  map[string]kubePlugin
+	kubeHost     string
+
 	// Port forwarding
 	portForwards *portforward.Manager // manages active port forward processes
 
@@ -726,7 +737,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if mouseMsg, ok := msg.(tea.MouseMsg); ok {
 		// Mouse wheel scrolls the settings viewport directly.
 		if mouseMsg.Button == tea.MouseButtonWheelUp || mouseMsg.Button == tea.MouseButtonWheelDown {
-			if page, ok := m.currentPage.(*settingsPage); ok && !page.editing {
+			if page, ok := m.currentPage.(*settingsPage); ok && !page.editing && page.kubeDialog == nil {
 				const wheelStep = 3
 				if mouseMsg.Button == tea.MouseButtonWheelUp {
 					page.scrollOffset -= wheelStep
@@ -799,7 +810,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// The add-flow consumes typed input through the shared text
 				// input (like editing); a click must not jump the cursor and
 				// synthesize Enter into the middle of that state machine.
-				if !page.editing && !page.showKeybindings && page.armadaAddStage == armadaAddNone {
+				if !page.editing && !page.showKeybindings && page.armadaAddStage == armadaAddNone && page.kubeDialog == nil {
 					items := page.visibleItems(&m)
 					for i, id := range items {
 						y, ok := page.itemRowYs[id]
@@ -818,6 +829,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								page.armadaDeleteFocused = false
 								page.armadaDeleteConfirm = false
 								page.armadaAgentFocused = false
+								page.resetKubeRowFocus()
 							}
 							page.cursor = i
 							hit = true
@@ -984,6 +996,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case daemonToolsMsg:
 		m.handleDaemonToolsMsg(msg)
+		return m, spinCmd
+
+	case kubeClustersMsg:
+		return m, tea.Batch(spinCmd, m.handleKubeClustersMsg(msg))
+
+	case kubeTestMsg:
+		return m, tea.Batch(spinCmd, m.handleKubeTestMsg(msg))
+
+	case kubeLoginMsg:
+		return m, tea.Batch(spinCmd, m.handleKubeLoginMsg(msg))
+
+	case kubePluginsMsg:
+		m.handleKubePluginsMsg(msg)
 		return m, spinCmd
 
 	case micSourcesMsg:
