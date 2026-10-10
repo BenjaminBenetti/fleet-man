@@ -1,8 +1,8 @@
-package devcontainer
+package devmeta
 
 import "testing"
 
-func TestRemoteUserFromMetadataJSON(t *testing.T) {
+func TestRemoteUser(t *testing.T) {
 	// Trimmed from a real devcontainer.metadata label: remoteUser is declared
 	// on one feature entry, the user's own config (last) declares none.
 	realLabel := `[ {"id":"ghcr.io/devcontainers/features/common-utils:2"},` +
@@ -32,8 +32,8 @@ func TestRemoteUserFromMetadataJSON(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := remoteUserFromMetadataJSON(tt.raw); got != tt.want {
-				t.Errorf("remoteUserFromMetadataJSON() = %q, want %q", got, tt.want)
+			if got := RemoteUser(tt.raw); got != tt.want {
+				t.Errorf("RemoteUser() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -42,16 +42,16 @@ func TestRemoteUserFromMetadataJSON(t *testing.T) {
 func TestLooksLikeUsername(t *testing.T) {
 	valid := []string{"vscode", "root", "app", "node-dev", "user_1", "ubuntu"}
 	for _, s := range valid {
-		if !looksLikeUsername(s) {
-			t.Errorf("looksLikeUsername(%q) = false, want true", s)
+		if !LooksLikeUsername(s) {
+			t.Errorf("LooksLikeUsername(%q) = false, want true", s)
 		}
 	}
 	// Empty, whitespace (banner noise), and unsubstituted templates must be
 	// rejected so they never get cached and routed to `docker exec -u`.
 	invalid := []string{"", "  ", "two words", "name\twith\ttab", "${localEnv:USER}", "${containerEnv:FOO}", "line1\nvscode"}
 	for _, s := range invalid {
-		if looksLikeUsername(s) {
-			t.Errorf("looksLikeUsername(%q) = true, want false", s)
+		if LooksLikeUsername(s) {
+			t.Errorf("LooksLikeUsername(%q) = true, want false", s)
 		}
 	}
 }

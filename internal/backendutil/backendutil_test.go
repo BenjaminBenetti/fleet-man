@@ -40,3 +40,22 @@ func TestNewForInstanceRegistersCoderName(t *testing.T) {
 		t.Fatalf("EditorURI fallback = %q, %v; want path-derived alpha-agent-1, true", uri, ok)
 	}
 }
+
+// TestBackendCapabilitiesMatchBackends keeps fleet.BackendType.Capabilities —
+// the hints clients gate their clone and rebuild keys on — equal to what each
+// backend itself reports, so a client never offers an action the server
+// refuses, or hides one it would run.
+func TestBackendCapabilitiesMatchBackends(t *testing.T) {
+	for _, backendType := range []fleet.BackendType{fleet.BackendDevcontainer, fleet.BackendCoder, fleet.BackendCodespaces} {
+		t.Run(string(backendType), func(t *testing.T) {
+			b := New(backendType, false)
+			hints := backendType.Capabilities()
+			if hints.Clone != b.SupportsClone() {
+				t.Errorf("Capabilities().Clone = %v, backend SupportsClone() = %v", hints.Clone, b.SupportsClone())
+			}
+			if hints.Rebuild != b.SupportsRebuild() {
+				t.Errorf("Capabilities().Rebuild = %v, backend SupportsRebuild() = %v", hints.Rebuild, b.SupportsRebuild())
+			}
+		})
+	}
+}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/devmeta"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
@@ -103,20 +104,13 @@ func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string
 // rejected so it can't be cached and route every `docker exec -u` to a user that
 // doesn't exist — re-creating the very bug this resolves.
 func (devcontainerBackend *DevcontainerBackend) resolveContainerUser(containerID string) string {
-	if user := remoteUserFromMetadata(containerID); looksLikeUsername(user) {
+	if user := remoteUserFromMetadata(containerID); devmeta.LooksLikeUsername(user) {
 		return user
 	}
-	if user := devcontainerBackend.remoteUserViaExec(containerID); looksLikeUsername(user) {
+	if user := devcontainerBackend.remoteUserViaExec(containerID); devmeta.LooksLikeUsername(user) {
 		return user
 	}
 	return containerUserHeuristic(containerID)
-}
-
-// looksLikeUsername reports whether s is a plausible single-token Unix username:
-// non-empty, no whitespace, and free of shell-expansion leftovers like an
-// unsubstituted ${...} that a metadata template may carry.
-func looksLikeUsername(s string) bool {
-	return s != "" && !strings.ContainsAny(s, " \t\r\n") && !strings.Contains(s, "${")
 }
 
 // remoteUserViaExec asks the devcontainer CLI who it execs as. --default-user-env-probe
@@ -135,7 +129,7 @@ func (devcontainerBackend *DevcontainerBackend) remoteUserViaExec(containerID st
 	}
 	// Take the last line: with --default-user-env-probe none the username is the
 	// only stdout, but this is belt-and-suspenders against a stray banner line.
-	// resolveContainerUser validates the token via looksLikeUsername.
+	// resolveContainerUser validates the token via devmeta.LooksLikeUsername.
 	out = bytes.TrimSpace(out)
 	if i := bytes.LastIndexByte(out, '\n'); i >= 0 {
 		out = bytes.TrimSpace(out[i+1:])
@@ -199,6 +193,12 @@ func (devcontainerBackend *DevcontainerBackend) SupportsRebuild() bool {
 // design — the user's per-fleet agent state should override whatever
 // the repo's devcontainer.json was pointing at.
 func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts []backend.Mount, extraArgs []string) (*backend.UpResult, error) {
+	// Refuse unsupported mounts before anything is pruned or rewritten.
+	mountArgs, err := customMountArgs(mounts)
+	if err != nil {
+		return nil, err
+	}
+
 	// Drop any docker container still labelled with this workspace
 	// folder before provisioning. The devcontainer CLI matches existing
 	// containers by `devcontainer.local_folder=<wsDir>` and silently
@@ -242,7 +242,7 @@ func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts [
 		return nil, err
 	}
 	args = append(args, sshArgs...)
-	args = append(args, customMountArgs(mounts)...)
+	args = append(args, mountArgs...)
 	cmd := exec.Command("devcontainer", args...)
 	// ${localEnv:SSH_AUTH_SOCK} in the config (a project's own agent mount)
 	// must resolve to the user's real agent, not the daemon's relay socket.
@@ -680,18 +680,29 @@ func (devcontainerBackend *DevcontainerBackend) SupportsCustomMounts() bool {
 // customMountArgs translates a slice of backend.Mount values into the
 // `--mount type=bind,...` flag pairs accepted by `devcontainer up`.
 // Returns nil for an empty input so callers can append unconditionally.
-func customMountArgs(mounts []backend.Mount) []string {
+// Every scope binds its LocalPath: docker shares the daemon host's
+// filesystem.
+//
+// A ReadOnly mount is refused: `devcontainer up --mount` only accepts
+// type, source, target and external, so it cannot be made read-only, and
+// mounting it writable would silently drop the request. Clone's `docker
+// run` refuses it too, so an instance gets the same mounts however it was
+// made.
+func customMountArgs(mounts []backend.Mount) ([]string, error) {
 	if len(mounts) == 0 {
-		return nil
+		return nil, nil
 	}
 	args := make([]string, 0, len(mounts)*2)
 	for _, mount := range mounts {
 		if mount.LocalPath == "" || mount.ContainerPath == "" {
 			continue
 		}
+		if mount.ReadOnly {
+			return nil, fmt.Errorf("mount %s: the devcontainer backend cannot mount read-only", mount.ContainerPath)
+		}
 		args = append(args, "--mount", "type=bind,source="+mount.LocalPath+",target="+mount.ContainerPath)
 	}
-	return args
+	return args, nil
 }
 
 // EditorURI returns a VS Code devcontainer remote URI.
