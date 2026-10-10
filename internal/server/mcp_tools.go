@@ -154,6 +154,16 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 		Name:        "fleet_trigger_logs",
 		Description: "Read an automation trigger's recorded event logs: the payloads of its recent firings (webhook body, bash command stdout, or schedule fire-time), captured on the daemon so you can debug what fired it. Returns {logs, count} with the firings concatenated, oldest first.",
 	}, s.mcpTriggerLogs)
+
+	// --- Kubernetes cluster connections ---
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_cluster_list",
+		Description: "List the daemon's Kubernetes cluster connections (a kubeconfig context and namespace each) with their health: state (ready, limited, unreachable, ...), usable, why, exposure warnings, every setting and the capabilities the last check found. Pass cluster (an id, name or context) for one.",
+	}, s.mcpClusterList)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "fleet_cluster_test",
+		Description: "Run every check of a Kubernetes cluster connection (by id, name or context) on the daemon and return each check's result with the resulting health; usable is true when the cluster is ready or limited. Blocks for the run, usually seconds (at most a few minutes).",
+	}, s.mcpClusterTest)
 }
 
 // --- shared shapes ---
