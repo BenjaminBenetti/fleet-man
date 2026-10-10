@@ -295,6 +295,15 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 					m.jobStepSuffix(r.fleetName, instance)
 			} else {
 				status = renderStatus(instance.Status)
+				if instance.Status == fleet.StatusRunning && instance.Backend == fleet.BackendKubernetes {
+					rt := m.runtime[rtKey(r.fleetName, instance.Name)]
+					if note := kubeRowNote(rt); note != "" {
+						if hint := rt.GetKube().GetRestartHint(); hint != "" && isSelected {
+							note += " (" + hint + ")"
+						}
+						status += dimStyle.Render(" · " + note)
+					}
+				}
 			}
 
 			ref := InstanceRef{Fleet: r.fleetName, Instance: instance.Name}

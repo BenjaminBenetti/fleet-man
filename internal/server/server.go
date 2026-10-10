@@ -322,6 +322,10 @@ func Serve(ctx context.Context) error {
 	// is unreachable or a login plugin that hangs never delays a Hello. Stops
 	// with hubCtx.
 	go svc.kube.run(hubCtx)
+	// The Kubernetes instances' pods: informers, restarts, crash-loop parking
+	// and agent supervision, with or without a TUI. Like the connections,
+	// nothing reaches a cluster before fleetd serves.
+	go svc.kubePods.run(hubCtx)
 
 	select {
 	case <-ctx.Done():

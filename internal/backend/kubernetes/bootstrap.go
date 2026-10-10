@@ -11,6 +11,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/binstore"
 	"github.com/BenjaminBenetti/fleet-man/internal/jobboot"
@@ -64,7 +65,22 @@ type podSlot struct {
 	retryAt  time.Time
 	fast     *fastPath
 	gone     bool
+	// held is every resumable command started on the pod's sessions
+	// (AgentSession.Exec), re-attached to the next session after a drop.
+	held map[*podwire.Exec]*heldExec
+	// flowingAtDrop: audio was flowing on the pod when its last session
+	// dropped, so its reconnect is interactive.
+	flowingAtDrop bool
+	// quickDrops counts the pod's sessions in a row that ended within
+	// quickDrop of their handshake: past the first, the next bootstrap waits
+	// a full-jitter backoff, so an agent that dies as soon as it connects
+	// cannot turn the supervisor's reconnect-at-once into a storm of execs.
+	quickDrops int
 }
+
+// quickDrop is how long a session must live for its drop to be an ordinary
+// one, reconnected at once, rather than a failure of the pod's.
+const quickDrop = 10 * time.Second
 
 type bootFlight struct {
 	done    chan struct{}
@@ -122,6 +138,13 @@ func (p *Pool) EnsureAgent(ctx context.Context, t PodTarget) (*AgentSession, err
 	slot, err := p.slot(c, t)
 	if err != nil {
 		return nil, err
+	}
+	if t.Restage {
+		if s := slot.live(); s != nil {
+			// A session started while the store had no build for the
+			// pod's arch is judged against the store's build now.
+			s.refreshWant(ctx)
+		}
 	}
 	for attempt := 0; ; attempt++ {
 		slot.mu.Lock()
@@ -189,9 +212,11 @@ func (p *Pool) Session(t PodTarget) *AgentSession {
 	return slot.live()
 }
 
-// Forget drops what the pool keeps for the pod: its session, fast path and
-// backoff (the instance was destroyed or rebuilt). It needs no working
-// connection: a pod is forgotten even while its kubeconfig does not load.
+// Forget drops what the pool keeps for the pod: its session and the
+// commands it held, its fast path and backoff, what the informers showed of
+// it, and its supervision (the instance was destroyed or rebuilt). It needs
+// no working connection: a pod is forgotten even while its kubeconfig does
+// not load.
 func (p *Pool) Forget(t PodTarget) {
 	pod := t.Pod()
 	var gone []*podSlot
@@ -203,6 +228,12 @@ func (p *Pool) Forget(t PodTarget) {
 		}
 	}
 	p.mu.Unlock()
+	k := trackKey{t.Cluster, t.StatefulSet}
+	p.instMu.Lock()
+	delete(p.tracks, k)
+	delete(p.supervised, k)
+	delete(p.watched, k)
+	p.instMu.Unlock()
 	for _, slot := range gone {
 		slot.forget()
 	}
@@ -250,7 +281,11 @@ func (s *podSlot) boot(c *Cluster, t PodTarget, f *bootFlight) {
 		err = ErrSessionClosed
 	case err == nil:
 		s.failures, s.retryAt = 0, time.Time{}
+		s.flowingAtDrop = false
 		replaced, s.session = s.session, sess
+	case errors.Is(err, ErrPodNotReady):
+		// Not a failure of the pod's: it is starting (or going), and the
+		// informer's Ready event, not a backoff, says when to try again.
 	default:
 		s.failures++
 		s.retryAt = p.opts.Now().Add(fullJitter(s.failures, p.opts.BackoffBase, p.opts.BackoffCap, p.opts.Rand()))
@@ -276,8 +311,21 @@ func (s *podSlot) boot(c *Cluster, t PodTarget, f *bootFlight) {
 		_ = replaced.Close()
 	}
 	close(f.done)
+	if sts, ok := cutPodSuffix(s.key.pod); ok {
+		k := trackKey{s.key.cluster, sts}
+		switch {
+		case err == nil:
+			p.noteTampered(k, nil)
+		case errors.As(err, &tampered):
+			p.noteTampered(k, tampered)
+		}
+	}
 	if err == nil {
 		go s.watch(sess)
+		go s.reattach(sess)
+		if sts, ok := cutPodSuffix(s.key.pod); ok {
+			p.changed(trackKey{s.key.cluster, sts})
+		}
 	}
 }
 
@@ -293,12 +341,28 @@ func (s *podSlot) watch(sess *AgentSession) {
 	}
 	_ = sess.stream.Close()
 	s.mu.Lock()
-	if s.session == sess {
+	current := s.session == sess
+	if current {
 		s.session = nil
+		s.flowingAtDrop = s.activity.Flowing()
+		if time.Since(sess.connected) < quickDrop {
+			s.quickDrops++
+			if s.quickDrops > 1 {
+				p := s.pool
+				s.retryAt = p.opts.Now().Add(fullJitter(s.quickDrops-1, p.opts.BackoffBase, p.opts.BackoffCap, p.opts.Rand()))
+			}
+		} else {
+			s.quickDrops = 0
+		}
 	}
+	gone := s.gone
 	s.mu.Unlock()
 	if err := sess.Err(); err != nil && !errors.Is(err, podwire.ErrClosed) {
 		s.pool.opts.Logger.Info("kube agent: session ended", "cluster", s.key.cluster, "pod", s.key.namespace+"/"+s.key.pod, "err", err)
+	}
+	if current && !gone {
+		s.detachHeld()
+		s.pool.sessionEnded(s)
 	}
 }
 
@@ -384,9 +448,9 @@ func (s *podSlot) bootstrap(c *Cluster, t PodTarget, tk *ticket) (*AgentSession,
 	s.mu.Lock()
 	s.fast = &fastPath{uid: string(pod.UID), probe: fast.probe, build: &podBuild{Version: h.Version, SHA: h.SHA, ProtoMin: h.ProtoMin, ProtoMax: h.ProtoMax}}
 	s.mu.Unlock()
-	sess := &AgentSession{pool: p, slot: s, cluster: c, pod: ref, probe: fast.probe, main: client, stream: stream, pacer: podwire.NewPacer(s.activity.Flowing)}
+	sess := &AgentSession{pool: p, slot: s, cluster: c, pod: ref, probe: fast.probe, main: client, stream: stream, pacer: podwire.NewPacer(s.activity.Flowing), connected: time.Now()}
 	if art != nil {
-		sess.want = art.SHA256
+		sess.setWant(art.SHA256)
 	}
 	p.opts.Logger.Info("kube agent: connected", "fleet", t.Fleet, "instance", t.Instance, "pod", ref.Namespace+"/"+ref.Name,
 		"probed", probed, "staged", staged != "", "agent_version", versionOrDev(h.Version), "stale", sess.Stale(), "ms", p.opts.Now().Sub(start).Milliseconds())
@@ -442,7 +506,7 @@ func versionOrDev(v string) string {
 	return v
 }
 
-// forget closes the slot's session for good.
+// forget closes the slot's session for good, with the commands it held.
 func (s *podSlot) forget() {
 	s.mu.Lock()
 	s.gone = true
@@ -452,6 +516,7 @@ func (s *podSlot) forget() {
 	if sess != nil {
 		_ = sess.Close()
 	}
+	s.failHeld(func(types.UID) bool { return true })
 	s.logs.Close()
 }
 

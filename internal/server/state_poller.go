@@ -6,6 +6,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"google.golang.org/protobuf/proto"
 )
 
 // statePollInterval is how often the server re-Loads state.json to detect
@@ -44,5 +45,15 @@ func loadAndPush(h *hub) {
 		return
 	}
 	snapshot := protoconv.StateToProto(st)
-	h.post(func(h *hub) { h.setState(snapshot) })
+	h.post(func(h *hub) {
+		h.setState(snapshot)
+		// The state listeners hear of a change once, whichever writer's
+		// broadcast reached subscribers first.
+		if len(h.stateListeners) > 0 && !proto.Equal(h.notified, snapshot) {
+			h.notified = snapshot
+			for _, fn := range h.stateListeners {
+				fn(st)
+			}
+		}
+	})
 }

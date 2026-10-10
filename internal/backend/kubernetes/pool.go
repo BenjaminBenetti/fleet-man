@@ -22,8 +22,11 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/owner"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
+	"github.com/BenjaminBenetti/fleet-man/internal/podagent"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
+	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 )
@@ -108,12 +111,24 @@ type PoolOptions struct {
 	// Version is the daemon's build for the agent handshake.
 	Version string
 
+	// Owner is this daemon's owner label value (owner.Identity.Owner), which
+	// the informers select the connection's instances by. By default the
+	// daemon's identity is read on first use.
+	Owner func() (string, error)
+	// OnChange and RunEnded are the hooks OnChange and OnRunEnded set (those
+	// win when both are set).
+	OnChange func(clusterID, sts string)
+	RunEnded func(context.Context, RunEnd)
+
 	MaxBootstraps           int
 	BackoffBase, BackoffCap time.Duration
 	HandshakeTimeout        time.Duration
 	BulkIdle                time.Duration
 	FallbackRate            float64
 	FallbackBurst           int
+	// HoldGrace is how long a held command waits for its pod's next session
+	// (FLEET_EXEC_HOLD_GRACE, else podwire.HoldGrace), as the agent holds it.
+	HoldGrace time.Duration
 
 	// Now and Rand are the clock and the jitter source (tests).
 	Now  func() time.Time
@@ -166,6 +181,21 @@ func (o PoolOptions) withDefaults() PoolOptions {
 	if o.FallbackBurst <= 0 {
 		o.FallbackBurst = DefaultFallbackBurst
 	}
+	if o.HoldGrace <= 0 {
+		o.HoldGrace = podwire.HoldGrace
+		if d, err := time.ParseDuration(os.Getenv(podagent.EnvHoldGrace)); err == nil && d > 0 {
+			o.HoldGrace = d
+		}
+	}
+	if o.Owner == nil {
+		o.Owner = func() (string, error) {
+			id, err := owner.LoadIdentity()
+			if err != nil {
+				return "", err
+			}
+			return id.Owner(), nil
+		}
+	}
 	if o.Now == nil {
 		o.Now = time.Now
 	}
@@ -187,7 +217,24 @@ type Pool struct {
 	gates       map[string]*clusterGates
 	refreshedAt time.Time
 	slots       map[podKey]*podSlot
+	watchers    map[string]*watcher
 	closed      bool
+
+	// instMu guards what the informers and the supervisor know of each
+	// instance (never held with mu).
+	instMu     sync.Mutex
+	tracks     map[trackKey]*track
+	watched    map[trackKey]bool
+	supervised map[trackKey]*supervision
+
+	hookMu       sync.Mutex
+	changeHook   func(clusterID, sts string)
+	runEndedHook func(context.Context, RunEnd)
+
+	ownerMu  sync.Mutex
+	ownerVal string
+	ownerErr error
+	ownerAt  time.Time
 }
 
 // clusterGates are a connection's limits, kept across reloads of its
@@ -263,13 +310,43 @@ func DefaultPool() *Pool {
 func NewPool(opts PoolOptions) *Pool {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Pool{
-		opts:     opts.withDefaults(),
-		ctx:      ctx,
-		cancel:   cancel,
-		clusters: map[string]*Cluster{},
-		gates:    map[string]*clusterGates{},
-		slots:    map[podKey]*podSlot{},
+		opts:       opts.withDefaults(),
+		ctx:        ctx,
+		cancel:     cancel,
+		clusters:   map[string]*Cluster{},
+		gates:      map[string]*clusterGates{},
+		slots:      map[podKey]*podSlot{},
+		watchers:   map[string]*watcher{},
+		tracks:     map[trackKey]*track{},
+		watched:    map[trackKey]bool{},
+		supervised: map[trackKey]*supervision{},
 	}
+}
+
+// ownerRetry is how soon an identity read that failed is tried again.
+const ownerRetry = 10 * time.Second
+
+// owner is this daemon's owner label value, read once (and again a while
+// after a failure).
+func (p *Pool) owner() (string, error) {
+	p.ownerMu.Lock()
+	defer p.ownerMu.Unlock()
+	if p.ownerVal != "" {
+		return p.ownerVal, nil
+	}
+	if p.ownerErr != nil && p.opts.Now().Sub(p.ownerAt) < ownerRetry {
+		return "", p.ownerErr
+	}
+	v, err := p.opts.Owner()
+	if err == nil && v == "" {
+		err = errors.New("the daemon has no owner id")
+	}
+	if err != nil {
+		p.ownerErr, p.ownerAt = fmt.Errorf("daemon identity: %w", err), p.opts.Now()
+		return "", p.ownerErr
+	}
+	p.ownerVal, p.ownerErr = v, nil
+	return v, nil
 }
 
 func (p *Pool) bins() *binstore.Store {
@@ -296,12 +373,15 @@ func (p *Pool) Configure(records []fleet.KubeCluster) {
 		p.clusters[rec.ID] = p.loadLocked(rec)
 	}
 	var dropped []*podSlot
+	var removed []string
 	for id := range p.clusters {
 		if keep[id] {
 			continue
 		}
+		removed = append(removed, id)
 		delete(p.clusters, id)
 		delete(p.gates, id)
+		p.stopWatcherLocked(id)
 		for key, slot := range p.slots {
 			if key.cluster == id {
 				dropped = append(dropped, slot)
@@ -313,6 +393,22 @@ func (p *Pool) Configure(records []fleet.KubeCluster) {
 	p.mu.Unlock()
 	for _, slot := range dropped {
 		slot.forget()
+	}
+	if len(removed) > 0 {
+		p.instMu.Lock()
+		for _, id := range removed {
+			for k := range p.tracks {
+				if k.cluster == id {
+					delete(p.tracks, k)
+				}
+			}
+			for k := range p.supervised {
+				if k.cluster == id {
+					delete(p.supervised, k)
+				}
+			}
+		}
+		p.instMu.Unlock()
 	}
 }
 
@@ -421,6 +517,8 @@ func (w warningLog) HandleWarningHeader(code int, agent, text string) {
 	}
 }
 
+// objects reads c's objects: from its informers while they run and are
+// current, else (and for what they do not hold) with API server Gets.
 func (p *Pool) objects(c *Cluster) (Objects, error) {
 	if p.opts.Objects != nil {
 		return p.opts.Objects(c)
@@ -429,7 +527,11 @@ func (p *Pool) objects(c *Cluster) (Objects, error) {
 	if err != nil {
 		return nil, err
 	}
-	return apiObjects{cs}, nil
+	api := apiObjects{cs}
+	if w := p.runningWatcher(c.Record.ID); w != nil {
+		return cacheObjects{w: w, api: api}, nil
+	}
+	return api, nil
 }
 
 func (p *Pool) exec(ctx context.Context, c *Cluster, req kubeexec.ExecRequest, stdio kubeexec.Stdio) error {

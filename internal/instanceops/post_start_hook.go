@@ -29,3 +29,12 @@ var postStartHook = func(fleetName string, instance *fleet.Instance, homeDir str
 		state.WriteWarn(fleetName, instance.Name, fmt.Sprintf("stage fleet.rc: %v", err))
 	}
 }
+
+// RunPostStartHook runs the post-start hook for an instance that is running
+// again without a Fleet start: the runtime restarted it on its own (a
+// Kubernetes pod the cluster restarted after an OOM kill, a crash or an
+// eviction), which skipped the hook a Fleet start runs. homeDir is the
+// fleet's HomeDir setting.
+func RunPostStartHook(fleetName string, instance *fleet.Instance, homeDir string) {
+	postStartHook(fleetName, instance, homeDir)
+}

@@ -465,7 +465,7 @@ func TestAttachExecCmdReinvokesFleetShell(t *testing.T) {
 	t.Setenv(fleetclient.EnvSSH, "")
 	origResolve := resolveExecArgv
 	t.Cleanup(func() { resolveExecArgv = origResolve })
-	resolveExecArgv = func(string, string, []string) ([]string, map[string]string, error) {
+	resolveExecArgv = func(string, string, []string, bool) ([]string, map[string]string, error) {
 		return []string{"docker", "exec", "-it", "c1", "bash"}, nil, nil
 	}
 	cmd, err = attachExecCmd("alpha", "inst", []string{"bash"})

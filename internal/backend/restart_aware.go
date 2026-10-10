@@ -43,4 +43,16 @@ const (
 	RestartNodeLost    RestartCause = "node lost"
 	RestartFleetMoved  RestartCause = "fleet moved"
 	RestartCrashed     RestartCause = "crashed"
+	// RestartPodDeleted: someone deleted the instance's pod (kubectl delete
+	// pod, an operator) with none of the cluster's own reasons on it.
+	RestartPodDeleted RestartCause = "pod deleted"
 )
+
+// PostStarter is an optional capability of a RestartAware backend: it redoes
+// the devcontainer's start-time hooks (postStartCommand, then
+// postAttachCommand) in an instance that is running again after a restart the
+// runtime made on its own, as its Start does after a Fleet start. The daemon
+// calls it once per Restart.
+type PostStarter interface {
+	RunPostStart(containerID string) error
+}

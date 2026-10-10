@@ -205,7 +205,12 @@ func TestLimiterRaisesAQueuedTicket(t *testing.T) {
 	}
 	// Raising a granted ticket is a no-op.
 	poke.raise(PriorityInteractive + 1)
-	if n := l.inFlight(); n != 0 {
-		t.Fatalf("%d slots taken", n)
+	// The last holder releases just after it reported its turn.
+	deadline := time.Now().Add(5 * time.Second)
+	for l.inFlight() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d slots taken", l.inFlight())
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

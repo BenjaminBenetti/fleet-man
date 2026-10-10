@@ -8,6 +8,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -96,6 +97,12 @@ type hub struct {
 	// branches reads instance branches for the branch poller and
 	// GetState(fresh_branches), sharing one short-lived cache (branches.go).
 	branches *branchResolver
+
+	// stateListeners are told (on the loop; they must not block) of every
+	// state the state poller loads that differs from notified, the last one
+	// they were told of. Set before the loop runs.
+	stateListeners []func(*state.State)
+	notified       *fleetgrpc.State
 }
 
 func newHub() *hub {

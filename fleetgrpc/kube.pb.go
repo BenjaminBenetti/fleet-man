@@ -2496,9 +2496,11 @@ type KubeInstanceRuntime struct {
 	PodReason string         `protobuf:"bytes,1,opt,name=pod_reason,json=podReason,proto3" json:"pod_reason,omitempty"`
 	Node      string         `protobuf:"bytes,2,opt,name=node,proto3" json:"node,omitempty"`
 	Agent     KubeAgentState `protobuf:"varint,3,opt,name=agent,proto3,enum=fleetgrpc.KubeAgentState" json:"agent,omitempty"`
-	// restart_cause names the last restart the cluster made on its own
-	// ("oom-killed", "evicted", "node-drained", "node-lost", "fleet-moved",
-	// "crashed"); cleared by the next attach.
+	// restart_cause names the last restart the cluster made on its own, in
+	// the words the instance row shows after "sessions reset: " ("OOM-killed",
+	// "evicted", "node drained", "node lost", "fleet moved", "crashed", "pod
+	// deleted"; backend.RestartCause); "" when there was none, or the next
+	// attach cleared it.
 	RestartCause string                 `protobuf:"bytes,4,opt,name=restart_cause,json=restartCause,proto3" json:"restart_cause,omitempty"`
 	RestartedAt  *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=restarted_at,json=restartedAt,proto3" json:"restarted_at,omitempty"`
 	// sessions_ended: that restart killed every process (an out-of-memory kill
@@ -2506,8 +2508,12 @@ type KubeInstanceRuntime struct {
 	SessionsEnded bool `protobuf:"varint,6,opt,name=sessions_ended,json=sessionsEnded,proto3" json:"sessions_ended,omitempty"`
 	// node_cordoned_moving: the pod is being moved off a cordoned node.
 	NodeCordonedMoving bool `protobuf:"varint,7,opt,name=node_cordoned_moving,json=nodeCordonedMoving,proto3" json:"node_cordoned_moving,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// restart_hint is the setting that keeps a restart of restart_cause from
+	// happening again ("raise memory_limit in the cluster's resources"); ""
+	// when none does, or there is no restart_cause.
+	RestartHint   string `protobuf:"bytes,8,opt,name=restart_hint,json=restartHint,proto3" json:"restart_hint,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *KubeInstanceRuntime) Reset() {
@@ -2587,6 +2593,13 @@ func (x *KubeInstanceRuntime) GetNodeCordonedMoving() bool {
 		return x.NodeCordonedMoving
 	}
 	return false
+}
+
+func (x *KubeInstanceRuntime) GetRestartHint() string {
+	if x != nil {
+		return x.RestartHint
+	}
+	return ""
 }
 
 // ShareSyncStatus is the sync between an instance's fleet share on its
@@ -4339,7 +4352,7 @@ const file_kube_proto_rawDesc = "" +
 	"\tinstances\x18\x01 \x01(\x05R\tinstances\x12\x16\n" +
 	"\x06shares\x18\x02 \x01(\x05R\x06shares\x12#\n" +
 	"\rcache_volumes\x18\x03 \x01(\x05R\fcacheVolumes\x12+\n" +
-	"\x11snapshot_contents\x18\x04 \x01(\x05R\x10snapshotContents\"\xb6\x02\n" +
+	"\x11snapshot_contents\x18\x04 \x01(\x05R\x10snapshotContents\"\xd9\x02\n" +
 	"\x13KubeInstanceRuntime\x12\x1d\n" +
 	"\n" +
 	"pod_reason\x18\x01 \x01(\tR\tpodReason\x12\x12\n" +
@@ -4348,7 +4361,8 @@ const file_kube_proto_rawDesc = "" +
 	"\rrestart_cause\x18\x04 \x01(\tR\frestartCause\x12=\n" +
 	"\frestarted_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vrestartedAt\x12%\n" +
 	"\x0esessions_ended\x18\x06 \x01(\bR\rsessionsEnded\x120\n" +
-	"\x14node_cordoned_moving\x18\a \x01(\bR\x12nodeCordonedMoving\"\xd4\x01\n" +
+	"\x14node_cordoned_moving\x18\a \x01(\bR\x12nodeCordonedMoving\x12!\n" +
+	"\frestart_hint\x18\b \x01(\tR\vrestartHint\"\xd4\x01\n" +
 	"\x0fShareSyncStatus\x12/\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x19.fleetgrpc.ShareSyncStateR\x05state\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x18\n" +

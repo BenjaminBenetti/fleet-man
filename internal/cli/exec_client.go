@@ -24,8 +24,10 @@ import (
 // over the Exec bidi RPC instead (runRemoteShell → internal/execstream).
 
 // resolveExecArgv asks the server for the argv (+ env) to run argv inside the
-// instance. A package var so tests can stub the whole RPC.
-var resolveExecArgv = func(ctx context.Context, fleetName, instanceName string, argv []string) ([]string, map[string]string, error) {
+// instance; attach says a terminal attaches with it (which clears the
+// instance's "sessions reset" notice). A package var so tests can stub the
+// whole RPC.
+var resolveExecArgv = func(ctx context.Context, fleetName, instanceName string, argv []string, attach bool) ([]string, map[string]string, error) {
 	conn, err := fleetclient.Dial(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -35,6 +37,7 @@ var resolveExecArgv = func(ctx context.Context, fleetName, instanceName string, 
 		Fleet:    fleetName,
 		Instance: instanceName,
 		Argv:     argv,
+		Attach:   attach,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -45,7 +48,7 @@ var resolveExecArgv = func(ctx context.Context, fleetName, instanceName string, 
 // runResolvedExec resolves the exec argv and runs it locally with the caller's
 // stdio inherited.
 func runResolvedExec(ctx context.Context, fleetName, instanceName string, argv []string) error {
-	resolved, env, err := resolveExecArgv(ctx, fleetName, instanceName, argv)
+	resolved, env, err := resolveExecArgv(ctx, fleetName, instanceName, argv, false)
 	if err != nil {
 		return err
 	}

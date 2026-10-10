@@ -68,6 +68,11 @@ message ResolveExecCommandRequest {
   string instance = 2;
   // command to run inside; empty means "interactive login shell".
   repeated string argv = 3;
+  // attach: the client attaches a terminal with the argv (a pane, a shell),
+  // not a one-shot. The instance's "sessions reset" notice
+  // (KubeInstanceRuntime.restart_cause) clears, as it does when an Exec
+  // stream opens with tty.
+  bool attach = 4;
 }
 
 message ResolveExecCommandReply {

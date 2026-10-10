@@ -416,7 +416,12 @@ type ResolveExecCommandRequest struct {
 	Fleet    string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
 	Instance string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
 	// command to run inside; empty means "interactive login shell".
-	Argv          []string `protobuf:"bytes,3,rep,name=argv,proto3" json:"argv,omitempty"`
+	Argv []string `protobuf:"bytes,3,rep,name=argv,proto3" json:"argv,omitempty"`
+	// attach: the client attaches a terminal with the argv (a pane, a shell),
+	// not a one-shot. The instance's "sessions reset" notice
+	// (KubeInstanceRuntime.restart_cause) clears, as it does when an Exec
+	// stream opens with tty.
+	Attach        bool `protobuf:"varint,4,opt,name=attach,proto3" json:"attach,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -470,6 +475,13 @@ func (x *ResolveExecCommandRequest) GetArgv() []string {
 		return x.Argv
 	}
 	return nil
+}
+
+func (x *ResolveExecCommandRequest) GetAttach() bool {
+	if x != nil {
+		return x.Attach
+	}
+	return false
 }
 
 type ResolveExecCommandReply struct {
@@ -3363,11 +3375,12 @@ const file_exec_proto_rawDesc = "" +
 	"\bExecExit\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x19\n" +
 	"\x05error\x18\x02 \x01(\tH\x00R\x05error\x88\x01\x01B\b\n" +
-	"\x06_error\"a\n" +
+	"\x06_error\"y\n" +
 	"\x19ResolveExecCommandRequest\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12\x12\n" +
-	"\x04argv\x18\x03 \x03(\tR\x04argv\"\xa4\x01\n" +
+	"\x04argv\x18\x03 \x03(\tR\x04argv\x12\x16\n" +
+	"\x06attach\x18\x04 \x01(\bR\x06attach\"\xa4\x01\n" +
 	"\x17ResolveExecCommandReply\x12\x12\n" +
 	"\x04argv\x18\x01 \x03(\tR\x04argv\x12=\n" +
 	"\x03env\x18\x02 \x03(\v2+.fleetgrpc.ResolveExecCommandReply.EnvEntryR\x03env\x1a6\n" +

@@ -12,7 +12,7 @@ import (
 // commands run against a private tmux server on the host instead of a real
 // container.
 var sessionExecCommand = func(fleetName, instanceName string, args []string) (*exec.Cmd, error) {
-	argv, env, err := resolveExecArgv(context.Background(), fleetName, instanceName, args)
+	argv, env, err := resolveExecArgv(context.Background(), fleetName, instanceName, args, false)
 	if err != nil {
 		return nil, err
 	}
