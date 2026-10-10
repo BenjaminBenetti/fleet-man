@@ -83,10 +83,14 @@ type hub struct {
 	// the hub loop), so guarded by its own mutex. See backendFor / pruneBackends.
 	backendsMu sync.Mutex
 	backends   map[string]backend.Backend
+
+	// branches reads instance branches for the branch poller and
+	// GetState(fresh_branches), sharing one short-lived cache (branches.go).
+	branches *branchResolver
 }
 
 func newHub() *hub {
-	return &hub{
+	h := &hub{
 		in:            make(chan func(*hub), 64),
 		done:          make(chan struct{}),
 		st:            &fleetgrpc.State{},
@@ -98,6 +102,8 @@ func newHub() *hub {
 		micSources:    &fleetgrpc.MicSources{},
 		outputTargets: &fleetgrpc.OutputTargets{},
 	}
+	h.branches = newBranchResolver(h.readBranch)
+	return h
 }
 
 // run is the actor loop. It owns all hub mutable state; only closures posted to

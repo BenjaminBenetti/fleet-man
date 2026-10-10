@@ -22,6 +22,12 @@ type Instance struct {
 	Tag          string         `json:"tag,omitempty"`
 	Color        string         `json:"color,omitempty"`
 	Branch       string         `json:"branch,omitempty"`
+	// LastBranch is the last named branch a live workspace read saw checked
+	// out (see DisplayBranch). The server writes it when a read reports a
+	// different branch and just before Stop, so callers that get no live read
+	// — a stopped instance whose workspace lives only in its runtime, or a
+	// daemon that just restarted — still have a branch to show.
+	LastBranch string `json:"last_branch,omitempty"`
 	// Automated marks an instance the automation scheduler spawned for a trigger
 	// (issue #188), as opposed to one a user created. Set once at creation and
 	// never cleared; the TUI shows a marker in front of its name.

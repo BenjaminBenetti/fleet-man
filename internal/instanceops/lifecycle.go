@@ -77,6 +77,7 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 		if instance.Status != fleet.StatusRunning && instance.Status != fleet.StatusStopping {
 			return nil, fmt.Errorf("instance %s/%s cannot be stopped from status %q", fleetName, instanceName, instance.Status)
 		}
+		recordLastBranch(instance)
 		if err := instanceBackend.Stop(instance.ContainerID); err != nil {
 			flog.Error("instance status change failed", "fleet", fleetName, "instance", instanceName, "from", result.PreviousStatus, "to", targetStatus, "err", err, "ms", flog.MillisSince(start))
 			return nil, fmt.Errorf("stop instance %s/%s: %w", fleetName, instanceName, err)

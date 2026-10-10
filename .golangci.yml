@@ -70,3 +70,5 @@ linters:
               desc: the event log is server-owned; clients do not write fleet.log
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/server
               desc: client code must not import the server; talk to it via fleetgrpc over fleetclient
+            - pkg: github.com/BenjaminBenetti/fleet-man/internal/gitutil
+              desc: workspace checkouts live with the daemon (or inside the instance); read branches from InstanceRuntime.current_branch or GetState fresh_branches

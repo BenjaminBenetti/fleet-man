@@ -159,19 +159,22 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 // --- shared shapes ---
 
 // mcpInstance is the JSON-friendly view of an instance returned by the read and
-// lifecycle tools. It surfaces the persisted record fields (no live git HEAD
-// lookup, which would shell out per instance); branch is the REQUESTED branch.
+// lifecycle tools. It surfaces the persisted record fields; branch is the
+// REQUESTED branch. current_branch, the branch the workspace has checked out,
+// is filled by fleet_list only (a workspace read per instance, GetState
+// fresh_branches); the lifecycle tools leave it out.
 type mcpInstance struct {
-	Fleet        string `json:"fleet"`
-	Instance     string `json:"instance"`
-	Status       string `json:"status"`
-	ContainerID  string `json:"container_id,omitempty"`
-	Backend      string `json:"backend,omitempty"`
-	Branch       string `json:"branch,omitempty"`
-	Tag          string `json:"tag,omitempty"`
-	WorkspaceDir string `json:"workspace_dir,omitempty"`
-	CreatedAt    string `json:"created_at,omitempty"`
-	Error        string `json:"error,omitempty"`
+	Fleet         string `json:"fleet"`
+	Instance      string `json:"instance"`
+	Status        string `json:"status"`
+	ContainerID   string `json:"container_id,omitempty"`
+	Backend       string `json:"backend,omitempty"`
+	Branch        string `json:"branch,omitempty" jsonschema:"the branch the instance was created from; empty means the repository's default branch"`
+	CurrentBranch string `json:"current_branch,omitempty" jsonschema:"the branch checked out in the workspace now; when it can't be read, the last one seen, else the requested branch"`
+	Tag           string `json:"tag,omitempty"`
+	WorkspaceDir  string `json:"workspace_dir,omitempty"`
+	CreatedAt     string `json:"created_at,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 func toMCPInstance(fleetName string, inst *fleetgrpc.Instance) *mcpInstance {
@@ -252,9 +255,13 @@ type FleetListOutput struct {
 }
 
 func (s *service) mcpList(ctx context.Context, _ *mcp.CallToolRequest, in FleetListInput) (*mcp.CallToolResult, FleetListOutput, error) {
-	reply, err := s.GetState(ctx, &fleetgrpc.GetStateRequest{})
+	reply, err := s.GetState(ctx, &fleetgrpc.GetStateRequest{FreshBranches: true})
 	if err != nil {
 		return nil, FleetListOutput{}, mcpErr(err)
+	}
+	live := make(map[string]*string, len(reply.GetRuntime()))
+	for _, rt := range reply.GetRuntime() {
+		live[runtimeKey(rt.GetFleet(), rt.GetInstance())] = rt.CurrentBranch
 	}
 	out := FleetListOutput{Instances: []mcpInstance{}}
 	for _, name := range sortedFleetNames(reply.GetState()) {
@@ -263,7 +270,9 @@ func (s *service) mcpList(ctx context.Context, _ *mcp.CallToolRequest, in FleetL
 		}
 		f := reply.GetState().GetFleets()[name]
 		for _, inst := range f.GetInstances() {
-			out.Instances = append(out.Instances, *toMCPInstance(name, inst))
+			m := toMCPInstance(name, inst)
+			m.CurrentBranch = fleet.DisplayBranch(live[runtimeKey(name, inst.GetName())], inst.GetLastBranch(), inst.GetBranch())
+			out.Instances = append(out.Instances, *m)
 		}
 	}
 	return nil, out, nil

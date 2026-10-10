@@ -73,21 +73,21 @@ func TestAgentWirePlacement(t *testing.T) {
 }
 
 func TestInstanceWirePlacement(t *testing.T) {
-	pinArity[fleet.Instance](t, 13)
+	pinArity[fleet.Instance](t, 14)
 
 	created := time.Unix(1720000000, 0).UTC()
 	pi := InstanceToProto(&fleet.Instance{
 		Name: "nm", DisplayName: "dn", ContainerID: "ci", Config: "cf",
 		WorkspaceDir: "wd", CreatedAt: created, Status: fleet.StatusRunning,
 		Error: "er", Backend: fleet.BackendCodespaces, Tag: "tg", Color: "co",
-		Branch: "br", Automated: true,
+		Branch: "br", LastBranch: "lb", Automated: true,
 	})
 	if pi.GetName() != "nm" || pi.GetDisplayName() != "dn" || pi.GetContainerId() != "ci" ||
 		pi.GetConfig() != "cf" || pi.GetWorkspaceDir() != "wd" ||
 		pi.GetStatus() != fleetgrpc.InstanceStatus_INSTANCE_STATUS_RUNNING ||
 		pi.GetError() != "er" || pi.GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES ||
 		pi.GetTag() != "tg" || pi.GetColor() != "co" || pi.GetBranch() != "br" ||
-		!pi.GetAutomated() || !pi.GetCreatedAt().AsTime().Equal(created) {
+		pi.GetLastBranch() != "lb" || !pi.GetAutomated() || !pi.GetCreatedAt().AsTime().Equal(created) {
 		t.Fatalf("instance wire placement wrong: %+v", pi)
 	}
 }

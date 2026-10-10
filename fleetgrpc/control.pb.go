@@ -588,7 +588,13 @@ func (*DeleteImageCacheReply) Descriptor() ([]byte, []int) {
 }
 
 type GetStateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// fresh_branches asks the server to read every instance's checked-out branch
+	// through its backend's workspace reader (bounded concurrency, results
+	// cached ~10s) and return them as GetStateReply.runtime entries carrying
+	// current_branch. Callers without a Watch subscription (fleet ls, the MCP
+	// fleet_list tool) set it: the runtime pollers only run while a TUI watches.
+	FreshBranches bool `protobuf:"varint,1,opt,name=fresh_branches,json=freshBranches,proto3" json:"fresh_branches,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -623,10 +629,19 @@ func (*GetStateRequest) Descriptor() ([]byte, []int) {
 	return file_control_proto_rawDescGZIP(), []int{12}
 }
 
+func (x *GetStateRequest) GetFreshBranches() bool {
+	if x != nil {
+		return x.FreshBranches
+	}
+	return false
+}
+
 // GetStateReply is the one-stop snapshot of EVERYTHING the TUI renders:
 //
 //	state   — persisted: what fleets/instances exist + their recorded status
 //	runtime — live: agent running?/stats/sessions/ports/live container status
+//	          (filled only with current_branch, and only when the request set
+//	          fresh_branches; the full live sidecar streams over Watch)
 //	active_jobs — in-flight jobs (for progress + re-attach)
 type GetStateReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1157,8 +1172,9 @@ const file_control_proto_rawDesc = "" +
 	"\x13DeleteDebCacheReply\"/\n" +
 	"\x17DeleteImageCacheRequest\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\"\x17\n" +
-	"\x15DeleteImageCacheReply\"\x11\n" +
-	"\x0fGetStateRequest\"\xa5\x01\n" +
+	"\x15DeleteImageCacheReply\"8\n" +
+	"\x0fGetStateRequest\x12%\n" +
+	"\x0efresh_branches\x18\x01 \x01(\bR\rfreshBranches\"\xa5\x01\n" +
 	"\rGetStateReply\x12&\n" +
 	"\x05state\x18\x01 \x01(\v2\x10.fleetgrpc.StateR\x05state\x124\n" +
 	"\aruntime\x18\x02 \x03(\v2\x1a.fleetgrpc.InstanceRuntimeR\aruntime\x126\n" +

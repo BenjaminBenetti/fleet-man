@@ -1,13 +1,14 @@
 package gitutil
 
 import (
+	"context"
 	"os/exec"
 	"strings"
 )
 
 // BranchName returns the checked-out branch for a workspace, or "" when the
-// workspace is not on a named branch.
-func BranchName(workspaceDir string) string {
+// workspace is not on a named branch. ctx bounds the git call.
+func BranchName(ctx context.Context, workspaceDir string) string {
 	if workspaceDir == "" {
 		return ""
 	}
@@ -16,7 +17,7 @@ func BranchName(workspaceDir string) string {
 		return ""
 	}
 
-	output, err := exec.Command("git", "-C", workspaceDir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	output, err := exec.CommandContext(ctx, "git", "-C", workspaceDir, "rev-parse", "--abbrev-ref", "HEAD").Output()
 	if err != nil {
 		return ""
 	}

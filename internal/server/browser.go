@@ -68,13 +68,14 @@ var proxySetupScript = privoxyEnsureInstalled +
 // GetBrowserConfig reads the workspace's devcontainer.json fleet customization
 // so the TUI can decide whether to show the launch chooser. A load error reads
 // as "nothing configured".
-func (s *service) GetBrowserConfig(_ context.Context, req *fleetgrpc.GetBrowserConfigRequest) (*fleetgrpc.GetBrowserConfigReply, error) {
+func (s *service) GetBrowserConfig(ctx context.Context, req *fleetgrpc.GetBrowserConfigRequest) (*fleetgrpc.GetBrowserConfigReply, error) {
 	inst, err := resolveServerInstance(req.GetFleet(), req.GetInstance())
 	if err != nil {
 		return nil, err
 	}
 	reply := &fleetgrpc.GetBrowserConfigReply{}
-	if fc, err := devcontainer.LoadFleetCustomizations(inst.WorkspaceDir); err == nil {
+	b := backendutil.NewForInstance(inst, false)
+	if fc, err := loadWorkspaceCustomizations(ctx, b, inst.WorkspaceDir); err == nil {
 		reply.InitialUrl = fc.Browser.InitialURL
 		reply.HasLanding = fc.FleetLaunch.Configured()
 	}
@@ -84,7 +85,7 @@ func (s *service) GetBrowserConfig(_ context.Context, req *fleetgrpc.GetBrowserC
 // PrepareBrowser ensures the privoxy proxy is running in the container and
 // resolves the page the browser should open to. An explicit target_url wins; a
 // load error falls back to the default page rather than blocking the launch.
-func (s *service) PrepareBrowser(_ context.Context, req *fleetgrpc.PrepareBrowserRequest) (*fleetgrpc.PrepareBrowserReply, error) {
+func (s *service) PrepareBrowser(ctx context.Context, req *fleetgrpc.PrepareBrowserRequest) (*fleetgrpc.PrepareBrowserReply, error) {
 	inst, err := resolveServerInstance(req.GetFleet(), req.GetInstance())
 	if err != nil {
 		return nil, err
@@ -102,7 +103,7 @@ func (s *service) PrepareBrowser(_ context.Context, req *fleetgrpc.PrepareBrowse
 	case req.GetTargetUrl() != "":
 		initialURL = req.GetTargetUrl()
 	default:
-		if fc, err := devcontainer.LoadFleetCustomizations(wsDir); err == nil {
+		if fc, err := loadWorkspaceCustomizations(ctx, b, wsDir); err == nil {
 			hasURL := fc.Browser.InitialURL != ""
 			hasLanding := fc.FleetLaunch.Configured()
 			switch {
@@ -119,6 +120,16 @@ func (s *service) PrepareBrowser(_ context.Context, req *fleetgrpc.PrepareBrowse
 	}
 	flog.Info("browser prepared", "fleet", req.GetFleet(), "instance", req.GetInstance())
 	return &fleetgrpc.PrepareBrowserReply{InitialUrl: initialURL}, nil
+}
+
+// loadWorkspaceCustomizations reads the workspace devcontainer.json's fleet
+// customization through b's WorkspaceReader, so the read reaches the workspace
+// wherever the backend keeps it.
+func loadWorkspaceCustomizations(ctx context.Context, b backend.Backend, workspaceDir string) (devcontainer.FleetCustomizations, error) {
+	reader := backendutil.WorkspaceReaderFor(b)
+	return devcontainer.ReadFleetCustomizations(func(relPath string) ([]byte, error) {
+		return reader.ReadWorkspaceFile(ctx, workspaceDir, relPath)
+	})
 }
 
 // shouldUseLandingPage decides whether to open the Fleet Launch landing page

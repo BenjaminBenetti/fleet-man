@@ -140,6 +140,9 @@ func InstanceToProto(i *fleet.Instance) *fleetgrpc.Instance {
 	if i.Branch != "" {
 		pi.Branch = strptr(i.Branch)
 	}
+	if i.LastBranch != "" {
+		pi.LastBranch = strptr(i.LastBranch)
+	}
 	pi.Automated = i.Automated
 	// Warnings is proto-only (populated by jobs); it has no legacy field.
 	return pi
@@ -160,6 +163,7 @@ func InstanceFromProto(pi *fleetgrpc.Instance) *fleet.Instance {
 		Tag:          pi.GetTag(),
 		Color:        pi.GetColor(),
 		Branch:       pi.GetBranch(),
+		LastBranch:   pi.GetLastBranch(),
 		Automated:    pi.GetAutomated(),
 	}
 	if ts := pi.GetCreatedAt(); ts != nil {

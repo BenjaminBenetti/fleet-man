@@ -10,7 +10,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
-	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/protobuf/proto"
@@ -18,9 +17,10 @@ import (
 )
 
 // Poll cadences mirror the TUI's original pollers (live_status.go ~60s,
-// stats/activity ~3s, sessions ~1s). All are GATED on a runtime subscriber
-// existing (h.runtimeWanted), so with no TUI connected the server stays quiet —
-// `fleet ls` (GetState) never opens Watch, so nothing here runs.
+// stats/activity ~3s, sessions ~1s; branches ~3s, in branches.go). All are
+// GATED on a runtime subscriber existing (h.runtimeWanted), so with no TUI
+// connected the server stays quiet — `fleet ls` (GetState) never opens Watch,
+// so nothing here runs (it reads branches on demand instead).
 const (
 	liveStatusInterval    = time.Minute
 	statsActivityInterval = 3 * time.Second
@@ -81,13 +81,14 @@ func (h *hub) pruneBackends(activeKeys []string) {
 	}
 }
 
-// startRuntimePollers launches the three live-runtime pollers. Each populates
-// only its own InstanceRuntime fields and broadcasts changed entries.
+// startRuntimePollers launches the live-runtime pollers. Each populates only
+// its own InstanceRuntime fields and broadcasts changed entries.
 func startRuntimePollers(ctx context.Context, h *hub) {
 	go liveStatusPoller(ctx, h)
 	go statsActivityPoller(ctx, h)
 	go sessionsPoller(ctx, h)
 	go prStatusPoller(ctx, h)
+	go branchPoller(ctx, h)
 }
 
 // runtimeUpdate is one instance's field mutation, applied on the hub loop.
@@ -223,8 +224,8 @@ func liveStatusPass(h *hub) {
 	}
 }
 
-// statsActivityPoller fills CPU/mem stats, agent tool/activity, and the resolved
-// git branch for running instances every ~3s.
+// statsActivityPoller fills CPU/mem stats and agent tool/activity for running
+// instances every ~3s.
 func statsActivityPoller(ctx context.Context, h *hub) {
 	ticker := time.NewTicker(statsActivityInterval)
 	defer ticker.Stop()
@@ -270,7 +271,6 @@ func statsActivityPass(h *hub) {
 	statsByID := make(map[string]*backend.ContainerStats, len(items))
 	captures := make(map[string]backend.AllSessions, len(items))
 	probes := make(map[string]string, len(items))
-	branchByKey := make(map[string]string, len(items))
 	expectedIDs := make([]string, 0, len(items))
 
 	// Fetch container stats, grouped by backend type. Each container keeps its
@@ -329,9 +329,6 @@ func statsActivityPass(h *hub) {
 		}
 		expectedIDs = append(expectedIDs, it.containerID)
 		activeKeys = append(activeKeys, backendCacheKey(it.inst))
-		if it.workspaceDir != "" {
-			branchByKey[runtimeKey(it.fleetName, it.instance)] = gitutil.BranchName(it.workspaceDir)
-		}
 	}
 	// Bound the backend cache to the instances running this pass (stops/rebuilds
 	// drop out). The stats pass owns this since it already enumerates every
@@ -373,19 +370,13 @@ func statsActivityPass(h *hub) {
 		ups := make([]runtimeUpdate, 0, len(items))
 		for _, it := range items {
 			cid := it.containerID
-			key := runtimeKey(it.fleetName, it.instance)
 			activity := agentActivityToProto(h.agent.State(cid))
 			tool := agentToolToProto(h.agent.Tool(cid))
 			stats := statsToProto(statsByID[cid])
-			branch := branchByKey[key]
 			ups = append(ups, runtimeUpdate{it.fleetName, it.instance, func(r *fleetgrpc.InstanceRuntime) {
 				r.AgentActivity = activity
 				r.AgentTool = tool
 				r.Stats = stats
-				if branch != "" {
-					b := branch
-					r.CurrentBranch = &b
-				}
 			}})
 		}
 		h.applyRuntime(ups)
