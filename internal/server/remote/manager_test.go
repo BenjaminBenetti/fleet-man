@@ -106,6 +106,30 @@ func TestFeaturesGatedOnWebhookEnabled(t *testing.T) {
 	}
 }
 
+// TestFeaturesGatedOnRegistryEnabled pins the image registry gate, like the
+// grpc and webhook gates: FeatureRegistry is requested ONLY when a registry
+// listener is wired AND the registry is wanted, and composes with the others.
+func TestFeaturesGatedOnRegistryEnabled(t *testing.T) {
+	discard := func(*fleetgrpc.RemoteMcpStatus) {}
+	registryOnly := NewManager(1, "v", discard, WithRegistryListener(NewChanListener()))
+	all := NewManager(1, "v", discard, WithGRPCListener(NewChanListener()), WithWebhookListener(NewChanListener()), WithRegistryListener(NewChanListener()))
+	noLis := NewManager(1, "v", discard)
+
+	if got := registryOnly.features(desiredState{mcp: true, registry: true}); !tunnel.HasFeature(got, tunnel.FeatureRegistry) {
+		t.Fatalf("registry wanted + listener wired should request registry, got %v", got)
+	}
+	if got := registryOnly.features(desiredState{mcp: true}); len(got) != 0 {
+		t.Fatalf("registry not wanted must request no features, got %v", got)
+	}
+	if got := noLis.features(desiredState{mcp: true, registry: true}); len(got) != 0 {
+		t.Fatalf("no registry listener must request no features, got %v", got)
+	}
+	got := all.features(desiredState{grpc: true, webhook: true, registry: true})
+	if !tunnel.HasFeature(got, tunnel.FeatureGRPC) || !tunnel.HasFeature(got, tunnel.FeatureWebhook) || !tunnel.HasFeature(got, tunnel.FeatureRegistry) {
+		t.Fatalf("all enabled should request all three features, got %v", got)
+	}
+}
+
 // TestDesiredOnWithWebhook confirms the tunnel comes up for a webhook-only daemon
 // (no remote MCP, no remote fleet) as long as a gateway URL is set.
 func TestDesiredOnWithWebhook(t *testing.T) {

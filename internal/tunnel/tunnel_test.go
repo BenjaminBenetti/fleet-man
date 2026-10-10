@@ -41,7 +41,7 @@ func TestFrameReplyRoundTrip(t *testing.T) {
 }
 
 func TestTagRoundTrip(t *testing.T) {
-	for _, tag := range []byte{TagMCP, TagGRPC, 0x7f} {
+	for _, tag := range []byte{TagMCP, TagGRPC, TagWebhook, TagRegistry, 0x7f} {
 		var buf bytes.Buffer
 		if err := WriteTag(&buf, tag); err != nil {
 			t.Fatalf("WriteTag(%#x): %v", tag, err)

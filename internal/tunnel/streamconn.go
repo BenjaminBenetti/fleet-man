@@ -77,13 +77,27 @@ func (c *StreamConn) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// maxStreamFrame caps the payload of one gRPC message StreamConn sends. yamux
+// writes a stream's data frame in one Write of up to that stream's send window.
+// A registry connection's window (RegistryStreamWindow, 4 MiB) puts such a frame
+// exactly on gRPC's default 4 MiB receive-message limit, and any larger window
+// past it, so writes are split well below the limit.
+const maxStreamFrame = 1 << 20
+
 // Write is called only by yamux's single send goroutine. It copies p because grpc
-// may hold the buffer past SendMsg while yamux reuses its write buffer.
+// may hold the buffer past SendMsg while yamux reuses its write buffer. A write
+// larger than maxStreamFrame goes out as several messages; the peer's Read sees
+// the same byte stream.
 func (c *StreamConn) Write(p []byte) (int, error) {
-	if err := c.stream.SendMsg(&RawFrame{Payload: append([]byte(nil), p...)}); err != nil {
-		return 0, err
+	n := 0
+	for n < len(p) {
+		chunk := p[n:min(len(p), n+maxStreamFrame)]
+		if err := c.stream.SendMsg(&RawFrame{Payload: append([]byte(nil), chunk...)}); err != nil {
+			return n, err
+		}
+		n += len(chunk)
 	}
-	return len(p), nil
+	return n, nil
 }
 
 func (c *StreamConn) Close() error {

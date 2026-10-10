@@ -12,7 +12,7 @@ import (
 )
 
 // token.go mints and verifies the session-resume token: a JWT, returned in
-// every RegisterReply, that encodes the session's two ids and is signed
+// every RegisterReply, that encodes the session's ids and is signed
 // (HMAC-SHA256) with the gateway's session key. fleetd stores it alongside the
 // session secret and presents it on reconnect; because the SIGNATURE proves the
 // ids were minted by a gateway holding the key, a restarted gateway — whose
@@ -40,6 +40,12 @@ type sessionClaims struct {
 	Secret string `json:"sec"`
 	// PublicID is the id in the session's public URL.
 	PublicID string `json:"pub"`
+	// RegistryID is the session's registry id (the /v2/<rid>/ prefix of its
+	// image references). OPTIONAL: tokens minted before the registry route
+	// carry none and still verify; the gateway mints a rid on that reclaim and
+	// hands back a fresh token carrying it, so upgrading the gateway never
+	// changes a daemon's MCP or webhook URL.
+	RegistryID string `json:"rid,omitempty"`
 	// IssuedAt is the standard iat claim (seconds since epoch). Informational
 	// only: tokens do not expire — they are exactly as long-lived as the
 	// session secret they carry.
@@ -66,12 +72,13 @@ func newTokenSigner(key string) (*tokenSigner, error) {
 	return &tokenSigner{key: b}, nil
 }
 
-// mint signs a session-resume token for a session's ids. It returns "" if the
-// claims fail to marshal — impossible for today's strings + int64, but should a
-// future field make it possible, registration must degrade to "no token" (the
-// session URL just won't survive a restart) rather than sign garbage.
-func (t *tokenSigner) mint(secret, publicID string) string {
-	claims, err := json.Marshal(sessionClaims{Secret: secret, PublicID: publicID, IssuedAt: time.Now().Unix()})
+// mint signs a session-resume token for a session's ids (registryID may be
+// empty). It returns "" if the claims fail to marshal — impossible for today's
+// strings + int64, but should a future field make it possible, registration
+// must degrade to "no token" (the session URL just won't survive a restart)
+// rather than sign garbage.
+func (t *tokenSigner) mint(secret, publicID, registryID string) string {
+	claims, err := json.Marshal(sessionClaims{Secret: secret, PublicID: publicID, RegistryID: registryID, IssuedAt: time.Now().Unix()})
 	if err != nil {
 		return ""
 	}
@@ -90,7 +97,9 @@ func (t *tokenSigner) sign(signingInput string) string {
 // false for anything this signer's key did not mint: a missing/malformed
 // token, a header other than the pinned HS256 one, a bad signature, or claim
 // ids that are not 256-bit hex (belt-and-braces — the claims feed registry map
-// keys and the public URL path, so they must be exactly id-shaped).
+// keys and the public URL and image paths, so they must be exactly id-shaped).
+// An absent RegistryID is fine (a pre-registry token); a present one must be
+// id-shaped too.
 func (t *tokenSigner) verify(token string) (sessionClaims, bool) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 || parts[0] != sessionTokenHeader {
@@ -107,7 +116,7 @@ func (t *tokenSigner) verify(token string) (sessionClaims, bool) {
 	if err := json.Unmarshal(payload, &c); err != nil {
 		return sessionClaims{}, false
 	}
-	if !isHexID(c.Secret) || !isHexID(c.PublicID) {
+	if !isHexID(c.Secret) || !isHexID(c.PublicID) || (c.RegistryID != "" && !isRegistryID(c.RegistryID)) {
 		return sessionClaims{}, false
 	}
 	return c, true
@@ -121,4 +130,10 @@ func isHexID(s string) bool {
 	}
 	_, err := hex.DecodeString(s)
 	return err == nil
+}
+
+// isRegistryID reports whether s is shaped like a registry id: an id newID
+// mints, which is lowercase, as an OCI repository path component must be.
+func isRegistryID(s string) bool {
+	return isHexID(s) && strings.ToLower(s) == s
 }

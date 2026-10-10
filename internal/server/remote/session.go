@@ -30,7 +30,11 @@ type sessionFile struct {
 	// last registration ("" when the webhook feature was not negotiated).
 	// Recorded for parity with PublicURL.
 	PublicWebhookURL string `json:"public_webhook_url,omitempty"`
-	GatewayURL       string `json:"gateway_url"`
+	// PublicRegistry is the gateway-assigned image registry prefix
+	// ("<host>/<rid>") from the last registration ("" when the registry
+	// feature was not negotiated). Recorded for parity with PublicURL.
+	PublicRegistry string `json:"public_registry,omitempty"`
+	GatewayURL     string `json:"gateway_url"`
 }
 
 // loadSession returns the persisted session IF it was issued for gatewayURL. A

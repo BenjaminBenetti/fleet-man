@@ -15,7 +15,7 @@ func TestTokenMintVerifyRoundTrip(t *testing.T) {
 	s := testSigner(t, "round-trip-key")
 	sec, pub := hexID(1), hexID(2)
 
-	tok := s.mint(sec, pub)
+	tok := s.mint(sec, pub, "")
 	if tok == "" {
 		t.Fatal("mint returned an empty token")
 	}
@@ -35,7 +35,7 @@ func TestTokenMintVerifyRoundTrip(t *testing.T) {
 // with the SAME key (a new gateway process) verifies tokens an earlier one
 // minted.
 func TestTokenSameKeyAcrossSigners(t *testing.T) {
-	tok := testSigner(t, "shared-key").mint(hexID(1), hexID(2))
+	tok := testSigner(t, "shared-key").mint(hexID(1), hexID(2), "")
 	if _, ok := testSigner(t, "shared-key").verify(tok); !ok {
 		t.Fatal("a token must verify across signer instances sharing the key")
 	}
@@ -49,7 +49,7 @@ func TestTokenSameKeyAcrossSigners(t *testing.T) {
 // no---session-key restart behavior.
 func TestTokenRandomKeyPerBoot(t *testing.T) {
 	a, b := testSigner(t, ""), testSigner(t, "")
-	tok := a.mint(hexID(1), hexID(2))
+	tok := a.mint(hexID(1), hexID(2), "")
 	if _, ok := a.verify(tok); !ok {
 		t.Fatal("a random-key signer must verify its own tokens")
 	}
@@ -60,7 +60,7 @@ func TestTokenRandomKeyPerBoot(t *testing.T) {
 
 func TestTokenVerifyRejectsForgeries(t *testing.T) {
 	s := testSigner(t, "forgery-key")
-	valid := s.mint(hexID(1), hexID(2))
+	valid := s.mint(hexID(1), hexID(2), "")
 	parts := strings.Split(valid, ".")
 
 	b64 := func(raw string) string { return base64.RawURLEncoding.EncodeToString([]byte(raw)) }
@@ -90,13 +90,47 @@ func TestTokenVerifyRejectsForgeries(t *testing.T) {
 func TestTokenVerifyRejectsNonIDClaims(t *testing.T) {
 	s := testSigner(t, "shape-key")
 	for name, tok := range map[string]string{
-		"path traversal public id": s.mint(hexID(1), "../../evil"),
-		"short secret":             s.mint("abc123", hexID(2)),
-		"empty ids":                s.mint("", ""),
-		"non-hex chars":            s.mint(hexID(1), strings.Repeat("z", 64)),
+		"path traversal public id": s.mint(hexID(1), "../../evil", ""),
+		"short secret":             s.mint("abc123", hexID(2), ""),
+		"empty ids":                s.mint("", "", ""),
+		"non-hex chars":            s.mint(hexID(1), strings.Repeat("z", 64), ""),
 	} {
 		if _, ok := s.verify(tok); ok {
 			t.Errorf("%s: token with non-id claims must not verify", name)
+		}
+	}
+}
+
+// TestTokenCarriesRegistryID: a token minted with a registry id hands it back,
+// and one minted without (a pre-registry token) still verifies with none.
+func TestTokenCarriesRegistryID(t *testing.T) {
+	s := testSigner(t, "rid-key")
+	claims, ok := s.verify(s.mint(hexID(1), hexID(2), hexID(3)))
+	if !ok || claims.RegistryID != hexID(3) {
+		t.Fatalf("registry id round trip: ok=%v rid=%q", ok, claims.RegistryID)
+	}
+	legacy, ok := s.verify(s.mint(hexID(1), hexID(2), ""))
+	if !ok {
+		t.Fatal("a token without a registry id must still verify")
+	}
+	if legacy.RegistryID != "" || legacy.PublicID != hexID(2) {
+		t.Fatalf("legacy claims = %+v", legacy)
+	}
+}
+
+// TestTokenRejectsMalformedRegistryID: a signed token whose registry id is not
+// a lowercase 256-bit hex id is refused, since the id becomes an image path
+// component and a registry map key.
+func TestTokenRejectsMalformedRegistryID(t *testing.T) {
+	s := testSigner(t, "rid-shape-key")
+	for name, rid := range map[string]string{
+		"path traversal": "../../evil",
+		"short":          "abc123",
+		"uppercase":      strings.ToUpper(hexID(10)),
+		"non-hex":        strings.Repeat("z", 64),
+	} {
+		if _, ok := s.verify(s.mint(hexID(1), hexID(2), rid)); ok {
+			t.Errorf("%s: token with registry id %q must not verify", name, rid)
 		}
 	}
 }

@@ -34,7 +34,7 @@ func TestServeTunnelDemux(t *testing.T) {
 
 	grpcLis := NewChanListener()
 	defer grpcLis.Close()
-	go func() { _ = serveTunnel(fleetdSession, mcp.port(t), grpcLis, nil, true) }()
+	go func() { _ = serveTunnel(fleetdSession, mcp.port(t), tunnelListeners{grpc: grpcLis}, true) }()
 
 	// --- TagGRPC: the post-tag bytes must arrive intact on grpcLis. ---
 	gstream, err := gwSession.Open()
@@ -111,7 +111,7 @@ func TestServeTunnelRejectsMcpWhenDisabled(t *testing.T) {
 
 	grpcLis := NewChanListener()
 	defer grpcLis.Close()
-	go func() { _ = serveTunnel(fleetdSession, 0, grpcLis, nil, false) }()
+	go func() { _ = serveTunnel(fleetdSession, 0, tunnelListeners{grpc: grpcLis}, false) }()
 
 	// --- TagMCP: closed unanswered (no HTTP response, the read just fails). ---
 	mstream, err := gwSession.Open()
@@ -180,7 +180,7 @@ func TestServeTunnelWebhookDispatch(t *testing.T) {
 	webhookLis := NewChanListener()
 	defer webhookLis.Close()
 	// grpcLis nil + mcpOn false: only webhook streams may be served.
-	go func() { _ = serveTunnel(fleetdSession, 0, nil, webhookLis, false) }()
+	go func() { _ = serveTunnel(fleetdSession, 0, tunnelListeners{webhook: webhookLis}, false) }()
 
 	// --- TagWebhook: post-tag bytes arrive intact on webhookLis. ---
 	wstream, err := gwSession.Open()
@@ -279,4 +279,77 @@ func mcpRoundTrip(t *testing.T, gw *yamux.Session, auth string) string {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	return string(b)
+}
+
+// TestServeTunnelRegistryDispatch: TagRegistry streams reach the registry
+// listener with their bytes intact, MCP keeps working beside them, and with no
+// registry listener (feature not negotiated) a registry stream is closed.
+func TestServeTunnelRegistryDispatch(t *testing.T) {
+	mcp := newFakeMCP()
+	defer mcp.srv.Close()
+
+	for _, wired := range []bool{true, false} {
+		fleetdConn, gwConn := tcpPair(t)
+		fleetdSession, err := tunnel.ClientSession(fleetdConn, io.Discard)
+		if err != nil {
+			t.Fatalf("client session: %v", err)
+		}
+		gwSession, err := tunnel.ServerSession(gwConn, io.Discard)
+		if err != nil {
+			t.Fatalf("server session: %v", err)
+		}
+		registryLis := NewChanListener()
+		lis := tunnelListeners{}
+		if wired {
+			lis.registry = registryLis
+		}
+		go func() { _ = serveTunnel(fleetdSession, mcp.port(t), lis, true) }()
+
+		rstream, err := gwSession.Open()
+		if err != nil {
+			t.Fatalf("open registry stream: %v", err)
+		}
+		if err := tunnel.WriteTag(rstream, tunnel.TagRegistry); err != nil {
+			t.Fatalf("write registry tag: %v", err)
+		}
+		if _, err := io.WriteString(rstream, "GET /v2/"); err != nil {
+			t.Fatalf("write registry bytes: %v", err)
+		}
+		if wired {
+			got := make(chan string, 1)
+			go func() {
+				c, err := registryLis.Accept()
+				if err != nil {
+					got <- "ERR:" + err.Error()
+					return
+				}
+				b := make([]byte, len("GET /v2/"))
+				if _, err := io.ReadFull(c, b); err != nil {
+					got <- "READ:" + err.Error()
+					return
+				}
+				got <- string(b)
+			}()
+			select {
+			case s := <-got:
+				if s != "GET /v2/" {
+					t.Fatalf("registry stream payload = %q", s)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("registry-tagged stream never reached the registry listener")
+			}
+		} else {
+			_ = rstream.SetReadDeadline(time.Now().Add(3 * time.Second))
+			if _, err := rstream.Read(make([]byte, 1)); err == nil {
+				t.Fatal("a registry stream must be closed when the registry was not negotiated")
+			}
+		}
+
+		if body := mcpRoundTrip(t, gwSession, "Bearer beside-registry"); body != "Bearer beside-registry" {
+			t.Fatalf("mcp beside registry (wired=%v) = %q", wired, body)
+		}
+		_ = gwSession.Close()
+		_ = fleetdSession.Close()
+		_ = registryLis.Close()
+	}
 }
