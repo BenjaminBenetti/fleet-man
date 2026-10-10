@@ -3,6 +3,8 @@ package create
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -44,7 +46,8 @@ func seedInstance(t *testing.T, inst *fleet.Instance) {
 	}
 }
 
-func loadInstance(t *testing.T, name string) *fleet.Instance {
+// findInstance returns alpha's persisted record name, or nil when it is gone.
+func findInstance(t *testing.T, name string) *fleet.Instance {
 	t.Helper()
 	st, err := state.Load()
 	if err != nil {
@@ -107,7 +110,7 @@ func TestCommitRunning(t *testing.T) {
 			if discarded := len(b.downs) == 1 && b.downs[0] == "cid-1"; discarded != tc.wantDiscard || len(b.downs) > 1 {
 				t.Fatalf("downs = %v, want discard=%v", b.downs, tc.wantDiscard)
 			}
-			inst := loadInstance(t, "i1")
+			inst := findInstance(t, "i1")
 			if tc.remove {
 				if inst != nil {
 					t.Fatalf("a removed record came back: %+v", inst)
@@ -132,7 +135,7 @@ func TestCancelledRunNamesTheCause(t *testing.T) {
 	if err == nil || err.Error() != "cancelled: instance destroyed" {
 		t.Fatalf("err = %v, want %q", err, "cancelled: instance destroyed")
 	}
-	if inst := loadInstance(t, "i1"); inst.Error != err.Error() {
+	if inst := findInstance(t, "i1"); inst.Error != err.Error() {
 		t.Fatalf("recorded error = %q, want %q", inst.Error, err.Error())
 	}
 }
@@ -175,7 +178,7 @@ func TestStopIfCancelled(t *testing.T) {
 			if discarded := len(b.downs) == 1 && b.downs[0] == tc.containerID; discarded != tc.wantDiscard || len(b.downs) > 1 {
 				t.Fatalf("downs = %v, want discard=%v", b.downs, tc.wantDiscard)
 			}
-			inst := loadInstance(t, "i1")
+			inst := findInstance(t, "i1")
 			if inst.Status != tc.wantStatus || inst.ContainerID != tc.wantContainer {
 				t.Fatalf("record = %s %q, want %s %q", inst.Status, inst.ContainerID, tc.wantStatus, tc.wantContainer)
 			}
@@ -201,13 +204,13 @@ func TestCancelledOr(t *testing.T) {
 func TestSetFailedLeavesDeletingRecords(t *testing.T) {
 	seedInstance(t, &fleet.Instance{Name: "i1", Status: fleet.StatusDeleting})
 	setFailed("alpha", "i1", errors.New("boom"))
-	if inst := loadInstance(t, "i1"); inst.Status != fleet.StatusDeleting || inst.Error != "" {
+	if inst := findInstance(t, "i1"); inst.Status != fleet.StatusDeleting || inst.Error != "" {
 		t.Fatalf("a record being destroyed must not flip to failed: %+v", inst)
 	}
 
 	seedInstance(t, &fleet.Instance{Name: "i1", Status: fleet.StatusCreating})
 	setFailed("alpha", "i1", errors.New("boom"))
-	if inst := loadInstance(t, "i1"); inst.Status != fleet.StatusFailed || inst.Error != "boom" {
+	if inst := findInstance(t, "i1"); inst.Status != fleet.StatusFailed || inst.Error != "boom" {
 		t.Fatalf("setFailed = %+v, want failed with the error", inst)
 	}
 }
@@ -222,7 +225,7 @@ func TestRunStopsWhenCancelledBeforeWork(t *testing.T) {
 	if !errors.Is(err, errCancelled) {
 		t.Fatalf("err = %v, want the cancellation (no clone attempted)", err)
 	}
-	if inst := loadInstance(t, "i1"); inst.Status != fleet.StatusFailed || !strings.Contains(inst.Error, "instance destroyed") {
+	if inst := findInstance(t, "i1"); inst.Status != fleet.StatusFailed || !strings.Contains(inst.Error, "instance destroyed") {
 		t.Fatalf("record = %+v, want failed with the cancellation cause", inst)
 	}
 }
@@ -244,7 +247,45 @@ func TestRunCloneStopsWhenCancelledBeforeCopy(t *testing.T) {
 	if !errors.Is(err, errCancelled) {
 		t.Fatalf("err = %v, want the cancellation", err)
 	}
-	if inst := loadInstance(t, "dst"); inst.Status != fleet.StatusFailed {
+	if inst := findInstance(t, "dst"); inst.Status != fleet.StatusFailed {
 		t.Fatalf("dest record = %+v, want failed", inst)
+	}
+}
+
+// cancellingUpBackend is a ctx-aware backend (UpContexter) whose provisioning
+// is cut short by its job's cancellation: the destroy lands mid-UpContext, and
+// the backend fails with its own wording of the stop.
+type cancellingUpBackend struct {
+	fakeJobBackend
+	cancel context.CancelCauseFunc
+}
+
+func (c *cancellingUpBackend) UpContext(context.Context, backend.UpRequest) (*backend.UpResult, error) {
+	c.cancel(errTestDestroyed)
+	return nil, errors.New("wait for pod: context canceled")
+}
+
+// TestRunReportsACancelledUpContext: a ctx-aware backend stopped by the run's
+// cancellation fails the create with the cancellation and its cause, not the
+// backend's own "context canceled".
+func TestRunReportsACancelledUpContext(t *testing.T) {
+	seedInstance(t, &fleet.Instance{Name: "i1", Status: fleet.StatusCreating, Backend: fleet.BackendDevcontainer})
+	tmpl := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpl, ".devcontainer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpl, ".devcontainer", "devcontainer.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	stubInstanceBackend(t, &cancellingUpBackend{cancel: cancel})
+
+	err := RunContext(ctx, "alpha", "i1", "file://"+tmpl, "", false, fleet.BackendDevcontainer)
+	if !errors.Is(err, errCancelled) || !errors.Is(err, errTestDestroyed) {
+		t.Fatalf("err = %v, want the cancellation and its cause", err)
+	}
+	if inst := findInstance(t, "i1"); inst.Status != fleet.StatusFailed || inst.Error != err.Error() {
+		t.Fatalf("record = %s %q, want failed with %q", inst.Status, inst.Error, err.Error())
 	}
 }

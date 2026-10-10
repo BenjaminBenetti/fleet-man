@@ -150,7 +150,7 @@ func TestRunCloneBindsTheDestinationRecord(t *testing.T) {
 	)
 	bound := stubInstanceBackend(t, &fakeJobBackend{clone: false})
 
-	err := RunClone("alpha", "src", "dest", false)
+	err := RunClone(context.Background(), "alpha", "src", "dest", false)
 	if err == nil || !strings.Contains(err.Error(), "does not support cloning") {
 		t.Fatalf("RunClone error = %v, want the SupportsClone refusal", err)
 	}
@@ -171,7 +171,7 @@ func TestRunRebuildBindsThePersistedRecord(t *testing.T) {
 	seedFleet(t, &fleet.Instance{Name: "i1", Status: fleet.StatusRebuilding, Backend: fleet.BackendDevcontainer, ContainerID: "c1", WorkspaceDir: "/ws/i1"})
 	bound := stubInstanceBackend(t, &fakeJobBackend{rebuild: false})
 
-	err := RunRebuild("alpha", "i1", false)
+	err := RunRebuild(context.Background(), "alpha", "i1", false)
 	if err == nil || !strings.Contains(err.Error(), "does not support rebuild") {
 		t.Fatalf("RunRebuild error = %v, want the SupportsRebuild refusal", err)
 	}

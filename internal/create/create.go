@@ -124,11 +124,13 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 	// the plain Up for the rest.
 	result, err := backend.UpContext(ctx, instanceBackend, backend.UpRequest{WorkspaceDir: wsDir, Mounts: resolvedMounts.Mounts})
 	if err != nil {
+		// A ctx-aware backend stopped by the cancellation reports why.
+		err = cancelledOr(ctx, err)
 		setFailed(fleetName, instanceName, err)
 		return err
 	}
-	// Up takes no context, so the run may have been cancelled while it
-	// worked: stop here rather than provision the new container further.
+	// A plain Up takes no context, so the run may have been cancelled while
+	// it worked: stop here rather than provision the new container further.
 	if err := stopIfCancelled(ctx, instanceBackend, fleetName, instanceName, result.ContainerID); err != nil {
 		return err
 	}
