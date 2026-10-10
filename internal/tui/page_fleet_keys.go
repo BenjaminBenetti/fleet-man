@@ -397,9 +397,9 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "Select an instance"
 				break
 			}
-			// Only the devcontainer backend supports clone (coder/codespaces don't);
-			// "" defaults to devcontainer. Pure check — no backend construction.
-			if instance.Backend != fleet.BackendDevcontainer && instance.Backend != "" {
+			// Gate on the backend type's capability hints. Pure check — no
+			// backend construction; the clone job re-checks the live backend.
+			if !instance.Backend.Capabilities().Clone {
 				m.message = fmt.Sprintf("Clone not supported by %s backend", instance.Backend)
 				break
 			}
@@ -421,9 +421,10 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "Select an instance"
 				break
 			}
-			// Coder workspaces have no rebuild primitive; devcontainer ("" defaults
-			// to devcontainer) and codespaces do. Pure check — no backend construction.
-			if instance.Backend == fleet.BackendCoder {
+			// Gate on the backend type's capability hints (coder has no rebuild
+			// primitive). Pure check — no backend construction; the server
+			// re-checks the live backend before it marks the instance rebuilding.
+			if !instance.Backend.Capabilities().Rebuild {
 				m.message = fmt.Sprintf("Rebuild not supported by %s backend", instance.Backend)
 				break
 			}
