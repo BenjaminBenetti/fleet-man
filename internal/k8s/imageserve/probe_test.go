@@ -199,6 +199,8 @@ func TestGatewayRegistryChangeRecordsAProbeOnlyConnection(t *testing.T) {
 	f.tunnel.set(newPrefix)
 	f.gw.RegistryChanged(newPrefix)
 	waitFor(t, "the new prefix recorded", func() bool { p, _ := f.gw.Store.Prefix("kc-1"); return p == newPrefix })
+	f.gw.repointMu.Lock() // the pass is over
+	f.gw.repointMu.Unlock()
 	if len(conns.repoints) != 0 || len(conns.called) != 0 {
 		t.Fatalf("a probe-only connection was re-pointed in its cluster: %v", conns.repoints)
 	}
@@ -214,4 +216,9 @@ func TestGatewayRegistryChangeRecordsAProbeOnlyConnection(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("a connection serving a delivered image was not re-pointed")
 	}
+	// The pass records the prefix after the re-point; let it finish before
+	// the store's directory goes.
+	waitFor(t, "the third prefix recorded", func() bool { p, _ := f.gw.Store.Prefix("kc-1"); return p == third })
+	f.gw.repointMu.Lock()
+	f.gw.repointMu.Unlock()
 }
