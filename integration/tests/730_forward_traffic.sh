@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Description: `fleet port-forward add` carries bulk traffic both ways intact, keeps a client half-close (the peer still answers after EOF), serves parallel connections, and a forward to a closed port fails alone.
+# Description: `fleet port-forward add` carries bulk traffic both ways intact, keeps a client half-close (the peer still answers after EOF, also 3s later), serves parallel connections, and a forward to a closed port fails alone.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -32,21 +32,24 @@ source_sha=$("${FLEET_BIN}" exec "${inst}" -- sha256sum /tmp/itest-source.bin | 
 itest_net_serve "${inst}" source 17311 0.0.0.0 /tmp/itest-source.bin
 itest_net_serve "${inst}" echo 17312
 itest_net_serve "${inst}" sink 17313 127.0.0.1
+itest_net_serve "${inst}" latesink 17314
 # 17319: nothing listens there.
 
 sink_port=$(itest_net_free_port)
 source_port=$(itest_net_free_port)
 echo_port=$(itest_net_free_port)
 loop_port=$(itest_net_free_port)
+late_port=$(itest_net_free_port)
 closed_port=$(itest_net_free_port)
+ports="${sink_port} ${source_port} ${echo_port} ${loop_port} ${late_port} ${closed_port}"
 
-info "fleet port-forward add alpha (5 mappings)"
+info "fleet port-forward add alpha (6 mappings)"
 forward_log="${workdir}/forward.log"
 "${FLEET_BIN}" port-forward add "${inst}" \
   "${sink_port}:17310" "${source_port}:17311" "${echo_port}:17312" \
-  "${loop_port}:17313" "${closed_port}:17319" > "${forward_log}" 2>&1 &
+  "${loop_port}:17313" "${late_port}:17314" "${closed_port}:17319" > "${forward_log}" 2>&1 &
 forward_pid=$!
-for port in "${sink_port}" "${source_port}" "${echo_port}" "${loop_port}" "${closed_port}"; do
+for port in ${ports}; do
   itest_net_wait_accepts "${port}" 30 || fail "local port ${port} never accepted: $(cat "${forward_log}")"
 done
 assert_contains "$(cat "${forward_log}")" "Forwarding localhost:${sink_port} -> alpha:17310" "the forward should announce each mapping"
@@ -54,6 +57,13 @@ assert_contains "$(cat "${forward_log}")" "Press Ctrl+C to stop all forwards." "
 
 info "upload ${upload_bytes} bytes, half-close, and read the sink's reply"
 out=$(itest_net_client upload "${sink_port}" "${upload_bytes}" 2>&1) || fail "${out}"
+info "${out}"
+
+info "a half-close keeps the read side open: the reply comes 3s after EOF"
+# Longer than a bridge that closes soon after the client's EOF allows
+# (containerd's port-forward closes ~1s after it), so only a true half-close
+# passes.
+out=$(itest_net_client upload "${late_port}" 1048576 --late 3 2>&1) || fail "${out}"
 info "${out}"
 
 info "download ${download_bytes} bytes"
@@ -69,6 +79,8 @@ out=$(itest_net_client upload "${sink_port}" 1048576 --parallel 8 2>&1) || fail 
 info "${out}"
 
 info "a loopback-only service, through the in-container bridge (upload + half-close)"
+# An immediate reply only: socat ends the bridge 0.5s after the client's EOF
+# (its default -t), so on devcontainer a late reply is lost on this path.
 out=$(itest_net_client upload "${loop_port}" 2097152 2>&1) || fail "${out}"
 info "${out}"
 
@@ -83,7 +95,7 @@ kill -INT "${forward_pid}"
 wait "${forward_pid}" 2>/dev/null || true
 forward_pid=""
 assert_contains "$(cat "${forward_log}")" "Stopping port forwards..." "the forward should report stopping"
-for port in "${sink_port}" "${source_port}" "${echo_port}" "${loop_port}" "${closed_port}"; do
+for port in ${ports}; do
   if itest_net_accepts "${port}"; then
     fail "local port ${port} still accepts after the forward stopped"
   fi

@@ -6,9 +6,12 @@ in-instance servers of integration/fixture-net/itest-net.pl.
 Each subcommand checks its own result: it exits 0 and prints one summary line
 when the traffic came through intact, or exits 1 with what went wrong.
 
-  upload   <port> <bytes> [--parallel N]  send random bytes, half-close, and
+  upload   <port> <bytes> [--parallel N] [--late S]
+                                          send random bytes, half-close, and
                                           expect the sink's "bytes= sha256="
-                                          reply to match
+                                          reply to match (--late: and to come
+                                          no sooner than S seconds after the
+                                          half-close, from a latesink)
   download <port> <bytes> <sha256>        read to EOF and expect that content
   echo     <port> <bytes>                 stream while reading the echo back
   closed   <port>                         expect the forward to close the
@@ -24,6 +27,7 @@ import os
 import socket
 import sys
 import threading
+import time
 
 TIMEOUT = 60.0
 
@@ -46,7 +50,7 @@ def fail(msg):
     sys.exit(1)
 
 
-def upload_once(port, size, results, index):
+def upload_once(port, size, late, results, index):
     try:
         data = os.urandom(size)
         want = "bytes=%d sha256=%s" % (size, hashlib.sha256(data).hexdigest())
@@ -55,15 +59,24 @@ def upload_once(port, size, results, index):
             # The half-close under test: the sink replies only after EOF, and
             # the reply must still reach this (read) side.
             sock.shutdown(socket.SHUT_WR)
+            closed_at = time.monotonic()
             reply = read_to_eof(sock).decode(errors="replace").strip()
-        results[index] = None if reply == want else "reply %r, want %r" % (reply, want)
+            waited = time.monotonic() - closed_at
+        if reply != want:
+            results[index] = "reply %r, want %r (%.1fs after the half-close)" % (reply, want, waited)
+        elif waited < late - 0.5:
+            # (0.5s of slack: the sink starts counting at EOF, a little after
+            # this side half-closed.)
+            results[index] = "reply came %.1fs after the half-close, want %gs (a latesink)" % (waited, late)
+        else:
+            results[index] = None
     except OSError as err:
         results[index] = "connection %d: %s" % (index, err)
 
 
 def cmd_upload(args):
     results = [None] * args.parallel
-    threads = [threading.Thread(target=upload_once, args=(args.port, args.bytes, results, i))
+    threads = [threading.Thread(target=upload_once, args=(args.port, args.bytes, args.late, results, i))
                for i in range(args.parallel)]
     for t in threads:
         t.start()
@@ -72,7 +85,8 @@ def cmd_upload(args):
     errors = [r for r in results if r]
     if errors:
         fail("upload: %d of %d connections failed: %s" % (len(errors), args.parallel, "; ".join(errors)))
-    print("upload ok: %d x %d bytes, each answered after half-close" % (args.parallel, args.bytes))
+    print("upload ok: %d x %d bytes, each answered %safter half-close" % (
+        args.parallel, args.bytes, "%gs " % args.late if args.late else ""))
 
 
 def cmd_download(args):
@@ -182,6 +196,7 @@ def main():
     p.add_argument("port", type=int)
     p.add_argument("bytes", type=int)
     p.add_argument("--parallel", type=int, default=1)
+    p.add_argument("--late", type=float, default=0)
     p.set_defaults(fn=cmd_upload)
     p = sub.add_parser("download")
     p.add_argument("port", type=int)

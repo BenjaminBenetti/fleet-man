@@ -14,6 +14,9 @@
 #                       "echo:<text>" and closes
 #   sink    reads to EOF, then replies "bytes=<n> sha256=<hex>" and closes:
 #           the reply only exists if the client's half-close got through
+#   latesink  sink, but replies 3s after EOF: a true half-close keeps the
+#           read side open that long, a bridge that closes soon after the
+#           client's EOF (containerd's port-forward: ~1s) loses the reply
 #   source  sends <file>, then closes
 #   echo    echoes every byte until EOF, then closes
 #
@@ -24,8 +27,8 @@ use IO::Socket::INET;
 use Digest::SHA qw(sha1_base64);
 
 my ($mode, $port, $bind, $file) = @ARGV;
-die "usage: itest-net.pl <http|sink|source|echo> <port> [bind] [file]\n"
-  unless $mode && $port && $mode =~ /^(http|sink|source|echo)$/;
+die "usage: itest-net.pl <http|sink|latesink|source|echo> <port> [bind] [file]\n"
+  unless $mode && $port && $mode =~ /^(http|sink|latesink|source|echo)$/;
 $bind ||= '0.0.0.0';
 die "source needs a file\n" if $mode eq 'source' && !($file && -r $file);
 
@@ -44,10 +47,11 @@ while (1) {
     close $server;
     binmode $conn;
     $conn->autoflush(1);
-    if    ($mode eq 'http')   { serve_http($conn) }
-    elsif ($mode eq 'sink')   { serve_sink($conn) }
-    elsif ($mode eq 'source') { serve_source($conn) }
-    else                      { serve_echo($conn) }
+    if    ($mode eq 'http')     { serve_http($conn) }
+    elsif ($mode eq 'sink')     { serve_sink($conn, 0) }
+    elsif ($mode eq 'latesink') { serve_sink($conn, 3) }
+    elsif ($mode eq 'source')   { serve_source($conn) }
+    else                        { serve_echo($conn) }
     close $conn;
     exit 0;
   }
@@ -55,10 +59,11 @@ while (1) {
 }
 
 sub serve_sink {
-  my ($conn) = @_;
+  my ($conn, $delay) = @_;
   my $sha = Digest::SHA->new(256);
   my ($n, $buf) = (0, '');
   while (my $r = sysread($conn, $buf, 65536)) { $n += $r; $sha->add($buf); }
+  sleep $delay if $delay;
   syswrite_all($conn, "bytes=$n sha256=" . $sha->hexdigest . "\n");
 }
 
