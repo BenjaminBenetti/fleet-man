@@ -10,7 +10,7 @@ fleet_up alpha
 fleet_up beta
 
 # Collect container IDs for both instances.
-mapfile -t container_ids < <(grep -oE '"container_id":\s*"[^"]+"' "${HOME}/.fleet/state.json" | sed -E 's/.*"([^"]+)"$/\1/')
+mapfile -t container_ids < <(itest_container_ids)
 [ "${#container_ids[@]}" -eq 2 ] || fail "expected 2 container ids in state, got ${#container_ids[@]}"
 info "container ids: ${container_ids[*]}"
 
@@ -26,9 +26,7 @@ assert_contains "${destroy_out}" "2 instances removed" "destroy should remove bo
 
 # All containers gone.
 for cid in "${container_ids[@]}"; do
-  if docker inspect "${cid}" >/dev/null 2>&1; then
-    fail "container ${cid} still exists after destroy"
-  fi
+  assert_container_absent "${cid}" "container still exists after destroy"
 done
 
 # Fleet removed from state.

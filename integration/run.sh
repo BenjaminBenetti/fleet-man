@@ -2,7 +2,9 @@
 # Integration test driver for fleet-man.
 #
 # - Builds the fleet binary to a temp location (unless FLEET_BIN is set).
-# - Runs every test in integration/tests in alphabetical order.
+# - Runs every test in integration/tests in alphabetical order, on the
+#   FLEET_ITEST_BACKEND backend (devcontainer by default; kubernetes runs only
+#   the tests marked "# itest: k8s", see common.sh "Test markers").
 # - Between tests: runs teardown to kill any leftover containers / state.
 # - Exits 0 only if every test passes.
 
@@ -41,6 +43,12 @@ export FLEET_BIN
 say "Using fleet binary: ${FLEET_BIN}"
 "${FLEET_BIN}" --help >/dev/null || { printf "%b[fatal]%b fleet binary failed to run\n" "${RED}" "${RESET}" >&2; exit 2; }
 
+# common.sh provides teardown_test, the test-marker helpers and the backend
+# (FLEET_ITEST_BACKEND, validated there). Sourced only now: it defaults
+# FLEET_BIN, which step 1 must see unset to build.
+# shellcheck disable=SC1091
+source "${INTEGRATION_DIR}/common.sh"
+
 # 2. Preflight: docker + devcontainer CLI must be available and usable.
 #    FLEET_ITEST_NO_DOCKER=1 skips the preflight and (below) restricts the
 #    run to tests marked "# itest: no-docker" — the host-side subset (CLI
@@ -75,6 +83,15 @@ if [ -z "${FLEET_ITEST_NO_DOCKER:-}" ]; then
   done
 else
   say "FLEET_ITEST_NO_DOCKER set: skipping docker preflight, running docker-free tests only"
+fi
+
+# Backend preflight (kubernetes: kubectl reaches FLEET_ITEST_CLUSTER, defaulted
+# to the current context). It prints its own [fatal] line.
+_be_preflight || exit 2
+if [ "${FLEET_ITEST_BACKEND}" = "kubernetes" ]; then
+  say "Backend: kubernetes (context ${FLEET_ITEST_CLUSTER})"
+else
+  say "Backend: ${FLEET_ITEST_BACKEND}"
 fi
 
 # 4. Iterate tests.
@@ -137,6 +154,51 @@ if [ -n "${FLEET_ITEST_NO_DOCKER:-}" ]; then
   tests=("${nodocker[@]}")
 fi
 
+# Kubernetes parity of the selected tests, from their "# itest:" markers (see
+# common.sh), for the summary: how many run on kubernetes, how many are
+# exempt (devcontainer-only, with the reasons), how many are not ported yet.
+parity_k8s=0
+parity_exempt=0
+parity_pending=0
+parity_host=0
+exemptions=()
+for test_file in "${tests[@]}"; do
+  case "$(itest_k8s_class "${test_file}")" in
+    k8s) parity_k8s=$((parity_k8s + 1)) ;;
+    devcontainer-only)
+      parity_exempt=$((parity_exempt + 1))
+      exemptions+=("$(basename "${test_file}" .sh)|$(itest_exemption "${test_file}")")
+      ;;
+    host-only) parity_host=$((parity_host + 1)) ;;
+    *) parity_pending=$((parity_pending + 1)) ;;
+  esac
+done
+parity_total="${#tests[@]}"
+
+# On kubernetes, run only the "# itest: k8s" tests. devcontainer-only ones stay
+# in the list to be reported as skipped with their reason, and so do tests with
+# a malformed marker, which fail below; the rest are left out like other
+# shards' tests.
+if [ "${FLEET_ITEST_BACKEND}" = "kubernetes" ]; then
+  k8s_tests=()
+  for test_file in "${tests[@]}"; do
+    if [ -n "$(itest_marker_problem "${test_file}")" ]; then
+      k8s_tests+=("${test_file}")
+      continue
+    fi
+    case "$(itest_k8s_class "${test_file}")" in
+      k8s|devcontainer-only) k8s_tests+=("${test_file}") ;;
+    esac
+  done
+  # Same bash-3.2 constraint as above: length check before expanding.
+  say "Kubernetes subset: ${#k8s_tests[@]} test(s): marked k8s, or to report as devcontainer-only or malformed"
+  if [ "${#k8s_tests[@]}" -eq 0 ]; then
+    say "No kubernetes tests in shard — nothing to do"
+    exit 0
+  fi
+  tests=("${k8s_tests[@]}")
+fi
+
 # Shared results file — tests append one row each via common.sh helpers.
 # run.sh does NOT judge results; it only aggregates this file at the end.
 FLEET_ITEST_RESULTS="$(mktemp)"
@@ -161,10 +223,6 @@ _restore_claude_json() {
 }
 
 trap 'rm -f "${FLEET_ITEST_RESULTS}"; _restore_claude_json' EXIT
-
-# Sourced common.sh in tests provides teardown_test — we need it here too.
-# shellcheck disable=SC1091
-source "${INTEGRATION_DIR}/common.sh"
 
 # FLEET_ITEST_SKIP — comma-separated list of test basenames to skip
 # (without the .sh suffix). Skipped tests emit a "skip" row and never
@@ -193,6 +251,21 @@ for test_file in "${tests[@]}"; do
       | sed -E 's/^# Description: *//')
     [ -z "${desc}" ] && desc="(no description)"
     printf '%s|skip|0|%s\n' "${test_name}" "${desc}" \
+      >> "${FLEET_ITEST_RESULTS}"
+    continue
+  fi
+  marker_problem=$(itest_marker_problem "${test_file}")
+  if [ -n "${marker_problem}" ]; then
+    say "${RED}FAIL${RESET} ${test_name} (malformed itest marker: ${marker_problem})"
+    printf '%s|fail|0|malformed itest marker: %s\n' "${test_name}" "${marker_problem}" \
+      >> "${FLEET_ITEST_RESULTS}"
+    continue
+  fi
+  if [ "${FLEET_ITEST_BACKEND}" = "kubernetes" ] \
+    && [ "$(itest_k8s_class "${test_file}")" = "devcontainer-only" ]; then
+    reason=$(itest_exemption "${test_file}")
+    say "${YELLOW}SKIP${RESET} ${test_name} (devcontainer-only: ${reason})"
+    printf '%s|skip|0|devcontainer-only: %s\n' "${test_name}" "${reason}" \
       >> "${FLEET_ITEST_RESULTS}"
     continue
   fi
@@ -253,6 +326,17 @@ else
     "${RED}"   "${failed}" "${RESET}"
 fi
 
+# Kubernetes parity of the selected tests (counted before the kubernetes run's
+# own selection), then each devcontainer-only exemption with its reason.
+parity_line="k8s parity of ${parity_total} test(s): ${parity_k8s} marked k8s, ${parity_exempt} devcontainer-only, ${parity_pending} not ported yet, ${parity_host} host-only"
+printf "%b==>%b Backend %s; %s\n" "${BOLD}" "${RESET}" "${FLEET_ITEST_BACKEND}" "${parity_line}"
+if [ "${#exemptions[@]}" -gt 0 ]; then
+  for row in "${exemptions[@]}"; do
+    IFS='|' read -r name reason <<< "${row}"
+    printf "    devcontainer-only %s: %s\n" "${name}" "${reason}"
+  done
+fi
+
 # Emit a GitHub Actions step summary if running inside a workflow.
 # GITHUB_STEP_SUMMARY is a file path the runner publishes as markdown on
 # the job summary page. Outside Actions this env var is unset and we skip.
@@ -271,6 +355,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     printf '## Integration Tests — %s\n\n' "${overall}"
     printf '**%d passed**, **%d failed**, **%d skipped** out of %d.\n\n' \
       "${passed}" "${failed}" "${skipped}" "${total}"
+    printf 'Backend `%s`; %s.\n\n' "${FLEET_ITEST_BACKEND}" "${parity_line}"
     printf '| Test | Status | Duration | Description |\n'
     printf '| --- | --- | ---: | --- |\n'
     for row in "${result_rows[@]}"; do
@@ -284,6 +369,14 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     done
     if [ "${failed}" -gt 0 ]; then
       printf '\n**Failed:** %s\n' "${failed_tests[*]}"
+    fi
+    if [ "${#exemptions[@]}" -gt 0 ]; then
+      printf '\n<details><summary>devcontainer-only exemptions (%d)</summary>\n\n' "${#exemptions[@]}"
+      for row in "${exemptions[@]}"; do
+        IFS='|' read -r name reason <<< "${row}"
+        printf -- '- `%s`: %s\n' "${name}" "${reason}"
+      done
+      printf '\n</details>\n'
     fi
   } >> "${GITHUB_STEP_SUMMARY}"
 fi

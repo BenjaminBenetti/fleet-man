@@ -10,7 +10,10 @@ itest_cleanup() { [ -n "${up_pid:-}" ] && kill "${up_pid}" >/dev/null 2>&1 || tr
 itest_begin
 
 setup_test
-workspace_dir="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/alpha/${FIXTURE_REPO_NAME}"
+inst="${FIXTURE_REPO_NAME}/alpha"
+# Every backend clones the repo on the daemon host first, so the host checkout
+# marks the end of the clone step.
+workspace_dir=$(itest_host_workspace_dir "${inst}")
 up_log="${TEST_SCRATCH_DIR}/up.log"
 
 info "fleet up alpha in the background"
@@ -49,6 +52,7 @@ assert_contains "${up_out}" "instance destroyed" "fleet up should fail naming th
 state=$(cat "${HOME}/.fleet/state.json")
 assert_not_contains "${state}" "\"name\": \"alpha\"" "the destroyed record came back"
 assert_file_absent "${workspace_dir}"
+assert_workspace_absent "${inst}" "the destroyed instance's workspace is still there"
 
 # The create job tears down the container its devcontainer up produced as soon
 # as that call returns (the destroy waits for it, up to 60s).
@@ -56,7 +60,7 @@ info "checking no container is left for the destroyed workspace"
 leftover=""
 deadline=$(( $(date +%s) + $(_scale_timeout 120) ))
 while [ "$(date +%s)" -lt "${deadline}" ]; do
-  leftover=$(docker ps -aq --filter "label=devcontainer.local_folder=${workspace_dir}" 2>/dev/null || true)
+  leftover=$(itest_container_leftovers "${inst}")
   [ -z "${leftover}" ] && break
   sleep 1
 done

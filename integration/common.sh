@@ -55,6 +55,23 @@ TEST_SCRATCH_DIR="${TEST_SCRATCH_DIR:-/tmp/fleet-man-itest}"
 # The fleet binary under test. run.sh builds it and exports FLEET_BIN.
 FLEET_BIN="${FLEET_BIN:-fleet}"
 
+# The backend the suite provisions instances on: devcontainer (the default) or
+# kubernetes (FLEET_ITEST_CLUSTER names the kubeconfig context). Tests reach
+# backend state only through the neutral helpers below, which dispatch to
+# integration/backends/<backend>.sh.
+FLEET_ITEST_BACKEND="${FLEET_ITEST_BACKEND:-devcontainer}"
+case "${FLEET_ITEST_BACKEND}" in
+  devcontainer|kubernetes) ;;
+  *)
+    printf '[fatal] unknown FLEET_ITEST_BACKEND=%s (want devcontainer or kubernetes)\n' \
+      "${FLEET_ITEST_BACKEND}" >&2
+    exit 2
+    ;;
+esac
+export FLEET_ITEST_BACKEND
+# shellcheck disable=SC1090
+source "${INTEGRATION_DIR}/backends/${FLEET_ITEST_BACKEND}.sh"
+
 # Fleet name is derived from the repo URL basename. We clone the fixture
 # into a dir named "itest-fleet" so resolve.go sees fleet "itest-fleet".
 #
@@ -199,6 +216,7 @@ assert_file_absent() {
 # setup_test prepares a clean environment:
 #   1. removes ~/.fleet
 #   2. recreates the fixture git repo at $FIXTURE_REPO_DIR
+#   3. runs the backend's setup (nothing for devcontainer)
 # Called at the top of each test.
 setup_test() {
   # 1. Wipe fleet state. Leave an empty ~/.fleet behind — its presence
@@ -221,6 +239,9 @@ setup_test() {
     git add -A
     git commit -q -m "fixture: initial commit"
   )
+
+  # 3. Backend setup, after the wipe so it sees the fresh ~/.fleet.
+  _be_setup
 }
 
 # setup_agent_test prepares a clean environment for tests that need an
@@ -346,9 +367,9 @@ teardown_test() {
     tmux kill-session -t "${TUI_SESSION}" >/dev/null 2>&1 || true
   fi
 
-  # Tear down containers. Best effort — a test that never reached
+  # Tear down instances. Best effort — a test that never reached
   # "up" will have no fleets; a test that left state in a weird place
-  # is recovered by the fallback docker sweep below.
+  # is recovered by the backend's fallback sweep below.
   if [ -f "${HOME}/.fleet/state.json" ]; then
     # Iterate fleet names out of state.json without jq (not guaranteed on
     # the runner). Grep the top-level keys under "fleets".
@@ -362,28 +383,9 @@ teardown_test() {
     done
   fi
 
-  # Fallback: remove any devcontainer created from the fixture workspace.
-  # The devcontainer CLI labels containers with the workspace folder path.
-  if command -v docker >/dev/null 2>&1; then
-    local stale
-    stale=$(docker ps -aq --filter "label=devcontainer.local_folder=${HOME}/.fleet/workspaces" 2>/dev/null || true)
-    if [ -n "${stale}" ]; then
-      docker rm -f ${stale} >/dev/null 2>&1 || true
-    fi
-  fi
-
-  # Sweep any shared buildkit servers (named fleet-<fleet>-buildkit). They
-  # carry --restart unless-stopped, so a test that crashed before `fleet
-  # destroy` ran must not leave one to auto-restart across runs. The
-  # per-fleet `destroy` above already removes them on the happy path; this
-  # is the crash-recovery backstop.
-  if command -v docker >/dev/null 2>&1; then
-    local bk
-    bk=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^fleet-.*-buildkit$' || true)
-    if [ -n "${bk}" ]; then
-      docker rm -f ${bk} >/dev/null 2>&1 || true
-    fi
-  fi
+  # Fallback: the backend removes whatever a crashed test left behind
+  # (devcontainer: labelled containers and shared buildkit servers).
+  _be_teardown || true
 
   # A privileged buildkit server writes a ROOT-owned cache into the
   # bind-mounted .buildkit/cache dir. Fleet deliberately keeps that cache
@@ -409,6 +411,207 @@ fleet_up() {
   local name="$1"
   "${FLEET_BIN}" up "${name}" --repo "${FIXTURE_REPO_URL}"
 }
+
+# === Backend-neutral instance helpers ===
+#
+# Tests check an instance's container, workspace, control dir and shared
+# mounts through these, never through docker (or kubectl) directly, so one
+# test runs on every FLEET_ITEST_BACKEND. Each dispatches to its _be_* twin in
+# integration/backends/<backend>.sh; on kubernetes most of those still fail the
+# test as "not wired yet", naming the unit that wires them.
+#
+# <ref> is <fleet>/<instance>, as `fleet exec` takes it; a bare <instance> is
+# the fixture fleet's. Containers are named by the container_id fleet recorded
+# for the instance (itest_container_id); on kubernetes that id has the
+# k8s:<cluster>/<namespace>/<statefulset>@g<generation> form.
+
+# itest_backend_is <backend> — true when the suite runs on <backend>. Only for
+# a step that has no counterpart on other backends (a host bind mount, say);
+# anything that does goes through a helper.
+itest_backend_is() { [ "${FLEET_ITEST_BACKEND}" = "$1" ]; }
+
+# _itest_ref <ref> — <ref> as <fleet>/<instance>.
+_itest_ref() {
+  case "$1" in
+    */*) printf '%s\n' "$1" ;;
+    *) printf '%s/%s\n' "${FIXTURE_REPO_NAME}" "$1" ;;
+  esac
+}
+
+# --- state.json: the same on every backend ---
+
+# itest_container_id [<ref>] — the container_id fleet recorded for <ref>, or
+# with no argument for the first instance that has one. Prints nothing when
+# there is none.
+itest_container_id() {
+  local ref=""
+  [ -z "${1:-}" ] || ref=$(_itest_ref "$1")
+  _itest_state_container_ids "${ref}" first
+}
+
+# itest_container_ids — every recorded container_id, one per line.
+itest_container_ids() { _itest_state_container_ids "" all; }
+
+# _itest_state_container_ids <ref|""> <first|all>. perl's core JSON::PP rather
+# than jq, which the runner is not guaranteed to have.
+_itest_state_container_ids() {
+  perl -MJSON::PP -e '
+    my ($path, $ref, $mode) = @ARGV;
+    open(my $fh, "<", $path) or exit 0;
+    my $text = do { local $/; <$fh> };
+    my $st = eval { decode_json($text) } or exit 0;
+    my ($want_fleet, $want_inst) = $ref =~ m{^([^/]+)/(.+)$} ? ($1, $2) : ("", "");
+    my $fleets = $st->{fleets} || {};
+    for my $f (sort keys %$fleets) {
+      next if $want_fleet ne "" && $f ne $want_fleet;
+      for my $i (@{ $fleets->{$f}{instances} || [] }) {
+        next if $want_inst ne "" && ($i->{name} // "") ne $want_inst;
+        my $id = $i->{container_id} // "";
+        next if $id eq "" && $want_inst eq "";
+        print "$id\n" if $id ne "";
+        exit 0 if $mode eq "first";
+      }
+    }
+  ' "${HOME}/.fleet/state.json" "$1" "$2"
+}
+
+# --- daemon-host paths: the same on every backend ---
+
+# itest_host_workspace_dir <ref> — where `fleet up` clones the instance's repo
+# on the daemon host: ~/.fleet/workspaces/<fleet>/<instance>/<fleet>. Every
+# backend clones there while creating, but only devcontainer keeps working in
+# it (bind-mounted), so checks on an instance's files go through the
+# itest_workspace_* helpers below.
+itest_host_workspace_dir() {
+  local ref
+  ref=$(_itest_ref "$1")
+  printf '%s\n' "${HOME}/.fleet/workspaces/${ref%%/*}/${ref#*/}/${ref%%/*}"
+}
+
+# itest_host_control_dir <ref> — the instance's control dir on the daemon host,
+# which devcontainer bind-mounts at /fleet-mounts/control. Clusters keep it in
+# the pod; itest_control_* reach it on every backend.
+itest_host_control_dir() {
+  local ref
+  ref=$(_itest_ref "$1")
+  printf '%s\n' "${HOME}/.fleet/workspaces/${ref%%/*}/${ref#*/}/.control"
+}
+
+# itest_share_dir <fleet> [<subpath>] — the fleet's shared-mount tree on the
+# daemon host (~/.fleet/workspaces/<fleet>: .claude, .codex, .config/gh,
+# .augment, files/, .mnt/<path>). It is the canonical copy on every backend;
+# call itest_share_sync between a write on one side and a read on the other.
+itest_share_dir() {
+  printf '%s\n' "${HOME}/.fleet/workspaces/$1${2:+/$2}"
+}
+
+# --- containers ---
+
+# itest_container_status <container_id> — "running" while it runs, "absent"
+# once it is gone, otherwise the backend's word for a stopped one (docker:
+# exited, created, ...).
+itest_container_status() { _be_container_status "$1"; }
+
+# itest_container_exists <container_id>
+itest_container_exists() { _be_container_exists "$1"; }
+
+# assert_container_running <container_id> [message]
+assert_container_running() {
+  local status
+  status=$(itest_container_status "$1")
+  [ "${status}" = "running" ] || fail "${2:-container should be running}: $1 is ${status}"
+}
+
+# assert_container_stopped <container_id> [message] — it exists and is not running.
+assert_container_stopped() {
+  local status
+  status=$(itest_container_status "$1")
+  case "${status}" in
+    running|absent) fail "${2:-container should be stopped}: $1 is ${status}" ;;
+  esac
+}
+
+# assert_container_absent <container_id> [message]
+assert_container_absent() {
+  if itest_container_exists "$1"; then
+    fail "${2:-container should be gone}: $1 still exists"
+  fi
+}
+
+# itest_container_belongs_to <container_id> <ref> — the container carries the
+# identity fleet finds <ref>'s container by (devcontainer: the
+# devcontainer.local_folder label naming its workspace). Explains a mismatch
+# on stderr.
+itest_container_belongs_to() { _be_container_belongs_to "$1" "$(_itest_ref "$2")"; }
+
+# itest_container_leftovers <ref> — ids of containers still labelled for <ref>,
+# one per line; empty once nothing is left.
+itest_container_leftovers() { _be_container_leftovers "$(_itest_ref "$1")"; }
+
+# itest_container_logs <container_id> — the container's own output log, what
+# `fleet logs` should print.
+itest_container_logs() { _be_container_logs "$1"; }
+
+# itest_container_stop <container_id> — stop it behind fleet's back.
+itest_container_stop() { _be_container_stop "$1"; }
+
+# itest_container_exec_as <container_id> <user> <cmd> [args...] — run a command
+# in the container as <user>, bypassing fleet.
+itest_container_exec_as() { _be_container_exec_as "$@"; }
+
+# --- workspace: the instance's checkout ---
+
+# itest_workspace_exists <ref>
+itest_workspace_exists() { _be_workspace_exists "$(_itest_ref "$1")"; }
+
+# assert_workspace_exists <ref> [message]
+assert_workspace_exists() {
+  itest_workspace_exists "$1" || fail "${2:-expected the workspace to exist}: $1"
+}
+
+# assert_workspace_absent <ref> [message]
+assert_workspace_absent() {
+  if itest_workspace_exists "$1"; then
+    fail "${2:-expected the workspace to be gone}: $1"
+  fi
+}
+
+# itest_workspace_test <ref> <test-op> <relpath> — test(1) on a path in the
+# workspace, e.g. `itest_workspace_test "${inst}" -f README.md`.
+itest_workspace_test() { _be_workspace_test "$(_itest_ref "$1")" "$2" "$3"; }
+
+# itest_workspace_read <ref> <relpath> — print a workspace file.
+itest_workspace_read() { _be_workspace_read "$(_itest_ref "$1")" "$2"; }
+
+# itest_workspace_write <ref> <relpath> <content> — write <content> plus a
+# newline to a workspace file.
+itest_workspace_write() { _be_workspace_write "$(_itest_ref "$1")" "$2" "$3"; }
+
+# itest_workspace_git <ref> <git-args...> — run git in the workspace checkout.
+itest_workspace_git() {
+  local ref
+  ref=$(_itest_ref "$1")
+  shift
+  _be_workspace_git "${ref}" "$@"
+}
+
+# --- control dir: /fleet-mounts/control as the instance sees it ---
+
+# itest_control_test <ref> <test-op> <name> — test(1) on <name> in the
+# instance's control dir ("." is the dir itself), e.g. -S fleet.sock.
+itest_control_test() { _be_control_test "$(_itest_ref "$1")" "$2" "$3"; }
+
+# itest_control_read <ref> <name> — print a file from the control dir.
+itest_control_read() { _be_control_read "$(_itest_ref "$1")" "$2"; }
+
+# itest_control_mode <ref> <name> — octal permission bits of <name>.
+itest_control_mode() { _be_control_mode "$(_itest_ref "$1")" "$2"; }
+
+# --- shared fleet mounts ---
+
+# itest_share_sync <fleet> — wait until the fleet's instances and its host
+# share tree (itest_share_dir) agree. Instant on devcontainer, a bind mount.
+itest_share_sync() { _be_share_sync "$1"; }
 
 # === TUI helpers ===
 #
@@ -626,4 +829,82 @@ server_count() {
 # containers are Linux regardless of the host.)
 file_mode() {
   perl -e 'printf "%o", (stat shift)[2] & 07777' "$1"
+}
+
+# === Test markers ===
+#
+# A test declares how it relates to the backends with "# itest: <marker>"
+# lines:
+#   no-docker                    host-side only (no instance); the subset
+#                                FLEET_ITEST_NO_DOCKER=1 runs
+#   k8s                          runs on FLEET_ITEST_BACKEND=kubernetes too;
+#                                the unit that ports its feature adds it
+#   devcontainer-only: <reason>  checks a Docker mechanism clusters lack, so
+#                                the kubernetes run skips it; <reason> says
+#                                what replaces it. These must reach 0 before
+#                                the kubernetes backend merges.
+# An unmarked test that creates instances is not ported to kubernetes yet.
+# run.sh fails a test with a malformed marker without running it.
+
+# _itest_markers <test-file> — the file's marker values, one per line.
+_itest_markers() {
+  sed -n 's/^# itest:[[:space:]]*//p' "$1" | sed 's/[[:space:]]*$//'
+}
+
+# itest_has_marker <test-file> <marker> — e.g. `itest_has_marker "$f" k8s`.
+itest_has_marker() {
+  local markers
+  markers=$(_itest_markers "$1")
+  printf '%s\n' "${markers}" | grep -qxF -- "$2"
+}
+
+# itest_exemption <test-file> — the devcontainer-only reason; empty when the
+# test is not exempt.
+itest_exemption() {
+  local markers
+  markers=$(_itest_markers "$1")
+  printf '%s\n' "${markers}" | sed -n 's/^devcontainer-only:[[:space:]]*//p' | head -n 1
+}
+
+# itest_marker_problem <test-file> — prints why the file's markers are
+# malformed; prints nothing when they are fine.
+itest_marker_problem() {
+  local marker k8s="" exempt="" reason
+  while IFS= read -r marker; do
+    case "${marker}" in
+      ""|no-docker) ;;
+      k8s) k8s=1 ;;
+      devcontainer-only|devcontainer-only:*)
+        exempt=1
+        reason=$(printf '%s' "${marker#devcontainer-only}" | sed 's/^://' | tr -d '[:space:]')
+        if [ -z "${reason}" ]; then
+          echo "devcontainer-only needs a reason: '# itest: devcontainer-only: <reason>'"
+          return 0
+        fi
+        ;;
+      *)
+        echo "unknown marker '# itest: ${marker}' (want no-docker, k8s or devcontainer-only: <reason>)"
+        return 0
+        ;;
+    esac
+  done <<MARKERS
+$(_itest_markers "$1")
+MARKERS
+  if [ -n "${k8s}" ] && [ -n "${exempt}" ]; then
+    echo "'# itest: k8s' and '# itest: devcontainer-only' contradict each other"
+  fi
+}
+
+# itest_k8s_class <test-file> — where the test stands on kubernetes: k8s,
+# devcontainer-only, host-only (no-docker, not marked k8s) or pending.
+itest_k8s_class() {
+  if itest_has_marker "$1" k8s; then
+    echo k8s
+  elif [ -n "$(itest_exemption "$1")" ]; then
+    echo devcontainer-only
+  elif itest_has_marker "$1" no-docker; then
+    echo host-only
+  else
+    echo pending
+  fi
 }

@@ -14,7 +14,7 @@ setup_agent_test
 seed_fleet_settings "${FIXTURE_REPO_NAME}" true false /home/node false false '["/home/node/.claude"]'
 
 info "seeding the custom mount's host dir with a winner marker"
-custom_host="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/.mnt/home/node/.claude"
+custom_host=$(itest_share_dir "${FIXTURE_REPO_NAME}" .mnt/home/node/.claude)
 mkdir -p "${custom_host}"
 printf "custom\n" > "${custom_host}/WINNER.txt"
 

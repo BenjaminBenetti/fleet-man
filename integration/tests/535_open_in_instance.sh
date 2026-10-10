@@ -58,14 +58,13 @@ assert_contains "${out}" "host:" "the error should steer to host:path"
 tui_spawn
 tui_wait_for "alpha" 15
 
-socket="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/alpha/.control/fleet.sock"
 info "waiting for the server to open the control socket (TUI now attached)"
 deadline=$(( $(date +%s) + $(_scale_timeout 20) ))
 while [ "$(date +%s)" -lt "${deadline}" ]; do
-  if [ -S "${socket}" ]; then break; fi
+  if itest_control_test "${FIXTURE_REPO_NAME}/alpha" -S fleet.sock; then break; fi
   sleep 0.25
 done
-assert_file_exists "${socket}"
+itest_control_test "${FIXTURE_REPO_NAME}/alpha" -S fleet.sock || fail "the control socket fleet.sock never opened"
 
 info "fleet open /tmp/fo-itest.txt inside the instance"
 out=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- fleet open /tmp/fo-itest.txt 2>&1)

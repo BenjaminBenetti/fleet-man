@@ -18,7 +18,7 @@ outside="${TEST_SCRATCH_DIR}/big-disk"
 mkdir -p "${outside}"
 chmod 700 "${outside}"
 printf "private\n" > "${outside}/keep.txt"
-mnt_dir="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/.mnt/opt/data"
+mnt_dir=$(itest_share_dir "${FIXTURE_REPO_NAME}" .mnt/opt/data)
 mkdir -p "$(dirname "${mnt_dir}")"
 ln -s "${outside}" "${mnt_dir}"
 

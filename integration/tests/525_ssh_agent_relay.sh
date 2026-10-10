@@ -43,10 +43,9 @@ info "fleet up alpha"
 fleet_up alpha
 inst="${FIXTURE_REPO_NAME}/alpha"
 
-host_sock="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/alpha/.control/ssh-agent.sock"
-info "asserting the relay socket exists on the host: ${host_sock}"
-[ -S "${host_sock}" ] || fail "no relay socket at ${host_sock}"
-assert_equals "666" "$(file_mode "${host_sock}")" "instance relay socket mode (served per peer check)"
+info "asserting the relay socket exists in the instance's control dir"
+itest_control_test "${inst}" -S ssh-agent.sock || fail "no relay socket ssh-agent.sock in the control dir"
+assert_equals "666" "$(itest_control_mode "${inst}" ssh-agent.sock)" "instance relay socket mode (served per peer check)"
 
 info "asserting the instance's SSH_AUTH_SOCK is the relay and lists the key"
 out="$("${FLEET_BIN}" exec "${inst}" -- sh -c 'echo "sock=${SSH_AUTH_SOCK}"; ssh-add -l')"

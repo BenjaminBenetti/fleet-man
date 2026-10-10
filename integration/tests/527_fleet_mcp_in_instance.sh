@@ -53,7 +53,6 @@ EOF2
 
 fleet_up alpha
 inst="${FIXTURE_REPO_NAME}/alpha"
-sock="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/alpha/.control/mcp.sock"
 
 # probe runs the script from an interactive bash, the way a tmux session or an
 # automation agent's launch does (it sources ~/.bashrc, hence fleet.rc).
@@ -78,15 +77,15 @@ if settings.get("fleetMcp", False) != want:
         json.dump(st, f, indent=2)
     os.replace(tmp, path)
 PY
-    if [ "${want}" = "true" ] && [ -S "${sock}" ]; then return 0; fi
-    if [ "${want}" = "false" ] && [ ! -e "${sock}" ]; then return 0; fi
+    if [ "${want}" = "true" ] && itest_control_test "${inst}" -S mcp.sock; then return 0; fi
+    if [ "${want}" = "false" ] && ! itest_control_test "${inst}" -e mcp.sock; then return 0; fi
     sleep 1
   done
-  fail "the MCP socket did not follow fleetMcp=${want} (${sock})"
+  fail "the MCP socket did not follow fleetMcp=${want} (mcp.sock in the control dir)"
 }
 
 info "a new instance of the fleet has the socket and its shells the plugin"
-[ -S "${sock}" ] || fail "no MCP socket in the instance's control directory (${sock})"
+itest_control_test "${inst}" -S mcp.sock || fail "no MCP socket in the instance's control directory (mcp.sock)"
 out=$(probe)
 printf 'probe:\n%s\n' "${out}"
 assert_contains "${out}" ".cache/fleet/mcp/claude-plugin" "the shell was not handed the fleet plugin via CLAUDE_CODE_PLUGIN_DIRS"

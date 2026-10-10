@@ -10,14 +10,16 @@ itest_begin
 setup_launch_test
 fleet_up alpha
 
-socket="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/alpha/.control/fleet.sock"
+inst="${FIXTURE_REPO_NAME}/alpha"
 
 # With NO TUI attached the subscriber gate keeps the control socket closed —
 # assert that first, so the socket appearing below is causally attributable to
 # the TUI attaching (not a pre-existing socket). This is the positive complement
 # to 510, which proves the no-TUI case where `fleet launch` reports
 # "not connected to host fleet".
-assert_file_absent "${socket}"
+if itest_control_test "${inst}" -e fleet.sock; then
+  fail "the control socket fleet.sock is open with no TUI attached"
+fi
 
 # Attaching a TUI makes it a Watch subscriber, so the server opens the
 # per-instance control socket within one controlReg tick.
@@ -27,10 +29,10 @@ tui_wait_for "alpha" 15
 info "waiting for the server to open the control socket (TUI now attached)"
 deadline=$(( $(date +%s) + $(_scale_timeout 20) ))
 while [ "$(date +%s)" -lt "${deadline}" ]; do
-  if [ -S "${socket}" ]; then break; fi
+  if itest_control_test "${inst}" -S fleet.sock; then break; fi
   sleep 0.25
 done
-assert_file_exists "${socket}"
+itest_control_test "${inst}" -S fleet.sock || fail "the control socket fleet.sock never opened"
 
 info "fleet launch graf inside the instance (host listener present)"
 set +e

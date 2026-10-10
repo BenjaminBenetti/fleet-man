@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Description: enabling buildkit_server boots a shared buildkit container, exposes a working buildkitd socket, and bind-mounts it into the instance.
+# itest: devcontainer-only: the shared buildkit server is a host docker container reached through a bind-mounted unix socket; on a cluster it is a TCP+mTLS Deployment (P5.2 ports this test)
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"

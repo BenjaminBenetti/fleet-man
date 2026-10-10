@@ -10,7 +10,7 @@ setup_agent_test
 seed_fleet_settings "${FIXTURE_REPO_NAME}" false false /home/node true
 
 info "seeding host-side gh config dir with a stand-in hosts.yml"
-host_gh_dir="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/.config/gh"
+host_gh_dir=$(itest_share_dir "${FIXTURE_REPO_NAME}" .config/gh)
 mkdir -p "${host_gh_dir}"
 cat > "${host_gh_dir}/hosts.yml" <<'EOF'
 github.com:
@@ -38,6 +38,7 @@ assert_contains "${container_hosts}" "ghp_dummy_integration_token" \
 info "asserting a container-side write propagates back to the host"
 "${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- \
   sh -c 'printf "editor: nano\n" > /home/node/.config/gh/config.yml'
+itest_share_sync "${FIXTURE_REPO_NAME}"
 assert_file_exists "${host_gh_dir}/config.yml"
 host_config=$(cat "${host_gh_dir}/config.yml")
 assert_contains "${host_config}" "editor: nano" \

@@ -9,12 +9,8 @@ itest_begin
 setup_test
 fleet_up alpha
 
-# Pull the container ID out of state.json. The fixture only has one
-# instance so a grep is sufficient — the runner is not guaranteed to
-# have jq.
-container_id=$(grep -oE '"container_id":[[:space:]]*"[^"]+"' "${HOME}/.fleet/state.json" \
-  | head -1 \
-  | sed -E 's/.*"([^"]+)"$/\1/')
+# Pull the container ID out of state.json.
+container_id=$(itest_container_id "${FIXTURE_REPO_NAME}/alpha")
 [ -n "${container_id}" ] || fail "could not read container_id from state.json"
 info "container_id = ${container_id}"
 
@@ -23,7 +19,7 @@ assert_contains "$(cat "${HOME}/.fleet/state.json")" '"status": "running"' \
   "expected initial state to be running"
 
 info "Stop the container behind fleet's back to simulate an inactivity timeout / crash"
-docker stop "${container_id}" >/dev/null
+itest_container_stop "${container_id}"
 
 # Nothing has reconciled the drift yet, so the persisted status is stale.
 assert_contains "$(cat "${HOME}/.fleet/state.json")" '"status": "running"' \
