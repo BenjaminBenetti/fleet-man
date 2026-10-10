@@ -34,6 +34,15 @@ func TestKubeClusterListRoundTrip(t *testing.T) {
 	}
 }
 
+// A client may leave every sub-message out (a minimal AddKubeCluster): the
+// record decodes to its defaults instead of panicking the daemon.
+func TestKubeClusterFromProtoWithoutSubMessages(t *testing.T) {
+	got := KubeClusterFromProto(&fleetgrpc.KubeCluster{Context: "minikube"})
+	if !reflect.DeepEqual(got, fleet.KubeCluster{Context: "minikube"}) {
+		t.Fatalf("minimal record read back as %+v", got)
+	}
+}
+
 // An unset setting stays unset both ways: the tri-states stay nil (a nil
 // reads as the default, an explicit false must not), zero times stay absent.
 func TestKubeClusterUnsetSettingsStayUnset(t *testing.T) {
