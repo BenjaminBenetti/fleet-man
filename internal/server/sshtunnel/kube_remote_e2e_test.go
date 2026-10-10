@@ -44,7 +44,7 @@ const remoteKubeToken = "remote-kube-SECRET-token"
 // reply carries the kubeconfig's token.
 func TestKubeRPCsOverArmadaSSH(t *testing.T) {
 	d := startSSHModeFleetd(t)
-	ctx, kubeconfig, extra, srv := d.ctx, d.kubeconfig, d.extra, d.srv
+	ctx, kubeconfig, extra, srv, fleetDir := d.ctx, d.kubeconfig, d.extra, d.srv, d.fleetDir
 	m := sshtunnel.New(ctx)
 	defer m.Close()
 	rctx, rcancel := context.WithTimeout(ctx, 60*time.Second)
@@ -155,6 +155,9 @@ func TestKubeRPCsOverArmadaSSH(t *testing.T) {
 // script finds this daemon).
 type sshModeFleetd struct {
 	ctx context.Context
+	// fleetDir is the daemon's ~/.fleet; its fleet.sock is the daemon host's
+	// own (local) socket.
+	fleetDir string
 	// kubeconfig is a kubeconfig on the daemon host whose context remote-ctx
 	// (namespace team) reaches nothing and authenticates with
 	// remoteKubeToken; extra is an existing directory for extra_path.
@@ -234,7 +237,7 @@ users:
 	_, clientPub, finish := sshtunnel.ClientSSHHome(t)
 	srv := sshtunnel.StartTestSSHServer(t, clientPub, home)
 	finish(srv)
-	return &sshModeFleetd{ctx: ctx, kubeconfig: kubeconfig, extra: extra, srv: srv}
+	return &sshModeFleetd{ctx: ctx, fleetDir: fleetDir, kubeconfig: kubeconfig, extra: extra, srv: srv}
 }
 
 func writeFile(t *testing.T, path, content string) {
