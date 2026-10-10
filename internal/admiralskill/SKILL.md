@@ -63,7 +63,8 @@ the daemon's version and liveness. `fleet_logs` returns an instance's container
 logs (use `tail` to cap to the last N lines).
 
 **Recover daemon state.** fleetd snapshots its own state (config, registry, MCP
-files) to `~/.fleet/backup/<date>/<hour>.tar.xz` every hour. `fleet_restore_backup`
+files, Kubernetes connections) to `~/.fleet/backup/<date>/<hour>.tar.xz` every
+hour; instance disks on Kubernetes stay in their clusters. `fleet_restore_backup`
 is documentation-only — it restores nothing — but tells you where those archives
 live, which ones exist, what each contains, and the manual procedure to restore
 one (the daemon must be stopped first, then the archive is unpacked over

@@ -351,8 +351,8 @@ func TestMcpRestoreBackupDocuments(t *testing.T) {
 	if out.BackupDir != base {
 		t.Errorf("BackupDir = %s, want %s", out.BackupDir, base)
 	}
-	if len(out.Contents) != 7 {
-		t.Errorf("documented %d files, want 7", len(out.Contents))
+	if len(out.Contents) != 12 {
+		t.Errorf("documented %d files, want 12", len(out.Contents))
 	}
 	if len(out.Procedure) == 0 {
 		t.Error("Procedure should not be empty")
