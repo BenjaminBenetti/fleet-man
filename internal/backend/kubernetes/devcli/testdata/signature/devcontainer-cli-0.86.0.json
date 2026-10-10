@@ -1,0 +1,171 @@
+{
+  "cli": "0.86.0",
+  "fixtures": {
+    "fixture": {
+      "calls": [
+        "-v -\u003e pass",
+        "buildx version -\u003e pass",
+        "events -\u003e block",
+        "inspect --type image -\u003e pass",
+        "ps -\u003e empty",
+        "run -\u003e captured",
+        "version -\u003e pass"
+      ],
+      "runFlags": [
+        "attach",
+        "entrypoint",
+        "label",
+        "mount",
+        "sig-proxy"
+      ]
+    },
+    "fixture-dind": {
+      "calls": [
+        "-v -\u003e pass",
+        "buildx build -\u003e pass",
+        "buildx version -\u003e pass",
+        "events -\u003e block",
+        "inspect --type image -\u003e pass",
+        "ps -\u003e empty",
+        "run -\u003e captured",
+        "version -\u003e pass"
+      ],
+      "runFlags": [
+        "attach",
+        "entrypoint",
+        "label",
+        "mount",
+        "privileged",
+        "sig-proxy"
+      ]
+    },
+    "fixture-dockerfile": {
+      "calls": [
+        "-v -\u003e pass",
+        "buildx build -\u003e pass",
+        "buildx version -\u003e pass",
+        "events -\u003e block",
+        "inspect --type image -\u003e pass",
+        "ps -\u003e empty",
+        "run -\u003e captured",
+        "version -\u003e pass"
+      ],
+      "runFlags": [
+        "attach",
+        "entrypoint",
+        "env",
+        "label",
+        "mount",
+        "sig-proxy"
+      ]
+    },
+    "fixture-go-feature": {
+      "calls": [
+        "-v -\u003e pass",
+        "buildx build -\u003e pass",
+        "buildx version -\u003e pass",
+        "events -\u003e block",
+        "inspect --type image -\u003e pass",
+        "ps -\u003e empty",
+        "run -\u003e captured",
+        "version -\u003e pass"
+      ],
+      "runFlags": [
+        "attach",
+        "cap-add",
+        "entrypoint",
+        "init",
+        "label",
+        "mount",
+        "security-opt",
+        "sig-proxy"
+      ]
+    },
+    "fixture-hostgw": {
+      "calls": [
+        "-v -\u003e pass",
+        "buildx version -\u003e pass",
+        "events -\u003e block",
+        "inspect --type image -\u003e pass",
+        "ps -\u003e empty",
+        "run -\u003e captured",
+        "version -\u003e pass"
+      ],
+      "runFlags": [
+        "add-host",
+        "attach",
+        "entrypoint",
+        "label",
+        "mount",
+        "sig-proxy"
+      ]
+    },
+    "fixture-lifecycle": {
+      "calls": [
+        "-v -\u003e pass",
+        "buildx version -\u003e pass",
+        "events -\u003e block",
+        "inspect --type image -\u003e pass",
+        "ps -\u003e empty",
+        "run -\u003e captured",
+        "version -\u003e pass"
+      ],
+      "runFlags": [
+        "attach",
+        "entrypoint",
+        "label",
+        "mount",
+        "sig-proxy"
+      ]
+    },
+    "hooks": {
+      "calls": [
+        "-v -\u003e pass",
+        "buildx version -\u003e pass",
+        "events -\u003e block",
+        "inspect --type image -\u003e pass",
+        "ps -\u003e empty",
+        "run -\u003e captured",
+        "version -\u003e pass"
+      ],
+      "runFlags": [
+        "attach",
+        "entrypoint",
+        "env",
+        "label",
+        "mount",
+        "sig-proxy"
+      ]
+    },
+    "runargs": {
+      "calls": [
+        "-v -\u003e pass",
+        "buildx version -\u003e pass",
+        "events -\u003e block",
+        "inspect --type image -\u003e pass",
+        "ps -\u003e empty",
+        "run -\u003e captured",
+        "version -\u003e pass"
+      ],
+      "runFlags": [
+        "add-host",
+        "attach",
+        "cap-add",
+        "entrypoint",
+        "env",
+        "env-file",
+        "hostname",
+        "init",
+        "label",
+        "mount",
+        "privileged",
+        "publish",
+        "security-opt",
+        "shm-size",
+        "sig-proxy",
+        "ulimit",
+        "user"
+      ]
+    }
+  }
+}

@@ -101,6 +101,42 @@ jobs:
           FLEET_CONFORMANCE: devcontainer
         run: go test -count=1 -timeout 40m -v ./internal/backend/conformance
 
+  # The Kubernetes backend's docker shim (internal/kubeshim, driven by
+  # internal/backend/kubernetes/devcli) against the real devcontainer CLI and
+  # docker: the capture signature of a pinned CLI version, the set-up replay,
+  # the compose refusal, and the shim's option tables against docker's own
+  # --help. The matrix is the oldest and newest of devcli.TestedCLIVersions
+  # (the goldens in between were recorded the same way); a CLI release gets a
+  # golden and a TestedCLIVersions entry before it joins. Without
+  # FLEET_KUBESHIM_CLI the same tests skip, so the unit workflow never needs
+  # the CLI.
+  kubeshim-cli:
+    name: kubeshim cli ${{ matrix.cli }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        cli: ["0.85.0", "0.89.0"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install devcontainer CLI ${{ matrix.cli }}
+        run: npm install -g "@devcontainers/cli@${{ matrix.cli }}"
+
+      - name: Run the kubeshim CLI tests
+        env:
+          FLEET_KUBESHIM_CLI: "1"
+        run: go test -count=1 -timeout 25m -v ./internal/kubeshim ./internal/backend/kubernetes/devcli
+
   # Single aggregate check: green only when every shard passed. Preserves one
   # stable "integration" status name for branch protection / the review loop,
   # independent of how many shards the matrix expands to.

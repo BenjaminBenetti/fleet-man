@@ -1,0 +1,17 @@
+{
+  // Every hook appends its name to .hooks.log in the workspace, and
+  // postCreate records the environment the hooks see.
+  "name": "kubeshim set-up fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "remoteUser": "vscode",
+  "containerEnv": { "KUBESHIM_CONTAINER_ENV": "from-containerEnv with spaces" },
+  "remoteEnv": {
+    "KUBESHIM_REMOTE_ENV": "from-remoteEnv",
+    "KUBESHIM_REMOTE_FROM_CONTAINER": "${containerEnv:KUBESHIM_CONTAINER_ENV}"
+  },
+  "onCreateCommand": "echo onCreate >> \"${containerWorkspaceFolder}/.hooks.log\"",
+  "updateContentCommand": "echo updateContent >> \"${containerWorkspaceFolder}/.hooks.log\"",
+  "postCreateCommand": "echo postCreate >> \"${containerWorkspaceFolder}/.hooks.log\" && { id -un; pwd; echo \"$KUBESHIM_CONTAINER_ENV\"; echo \"$KUBESHIM_REMOTE_ENV\"; echo \"$KUBESHIM_REMOTE_FROM_CONTAINER\"; } > \"${containerWorkspaceFolder}/.hooks.env\"",
+  "postStartCommand": "echo postStart >> \"${containerWorkspaceFolder}/.hooks.log\"",
+  "postAttachCommand": "echo postAttach >> \"${containerWorkspaceFolder}/.hooks.log\""
+}
