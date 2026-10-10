@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
@@ -97,7 +98,6 @@ func validateKubeCluster(c *fleet.KubeCluster) error {
 		"credential_scope":   c.CredentialScope.Valid(),
 		"debug_capabilities": c.DebugCapabilities.Valid(),
 		"host_gateway":       c.HostGateway.Valid(),
-		"image.mode":         c.Image.Mode.Valid(),
 	} {
 		if !ok {
 			return invalidf("%s: unknown value", field)
@@ -133,25 +133,14 @@ func validateKubeCluster(c *fleet.KubeCluster) error {
 	return validateKubeImage(c.Image)
 }
 
+// validateKubeImage holds the image settings to the delivery strategies'
+// rules (kubeimage.ValidateSettings) and checks the build platform.
 func validateKubeImage(img fleet.KubeImageSettings) error {
-	if strings.ContainsAny(img.Registry, " \t\n") {
-		return invalidf("image.registry %q contains whitespace", img.Registry)
-	}
-	for _, s := range img.PullSecrets {
-		if len(validation.IsDNS1123Subdomain(s)) > 0 {
-			return invalidf("image.pull_secrets: %q is not a valid Secret name", s)
-		}
+	if err := kubeimage.ValidateSettings(img); err != nil {
+		return invalidf("image: %v", err)
 	}
 	if img.Platform != "" && !platformPattern.MatchString(img.Platform) {
 		return invalidf("image.platform %q is not os/arch[/variant] (\"linux/arm64\")", img.Platform)
-	}
-	if img.Retention != "" {
-		if d, err := time.ParseDuration(img.Retention); err != nil || d <= 0 {
-			return invalidf("image.retention %q is not a positive duration (\"72h\")", img.Retention)
-		}
-	}
-	if p := img.UploadPacePercent; p != nil && (*p < 0 || *p > 100) {
-		return invalidf("image.upload_pace_percent %d is not 0-100", *p)
 	}
 	return nil
 }

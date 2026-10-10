@@ -599,21 +599,3 @@ func TestRulesAllow(t *testing.T) {
 		}
 	}
 }
-
-func TestLocalKind(t *testing.T) {
-	for _, tc := range []struct {
-		node *corev1.Node
-		want string
-	}{
-		{minikubeNode(), "minikube"},
-		{&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "kind-control-plane"}, Spec: corev1.NodeSpec{ProviderID: "kind://docker/kind/kind-control-plane"}}, "kind"},
-		{&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "k3d-dev-server-0"}, Spec: corev1.NodeSpec{ProviderID: "k3s://k3d-dev-server-0"}}, "k3d"},
-		{&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "edge-1"}, Spec: corev1.NodeSpec{ProviderID: "k3s://edge-1"}}, ""},
-		{&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "docker-desktop"}}, "Docker Desktop"},
-		{cloudNode("minikube"), ""},
-	} {
-		if got := LocalKind(tc.node); got != tc.want {
-			t.Errorf("LocalKind(%s) = %q, want %q", tc.node.Name, got, tc.want)
-		}
-	}
-}

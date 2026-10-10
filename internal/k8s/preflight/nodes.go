@@ -13,35 +13,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
-	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/localcluster"
 )
-
-// LocalKind names the local cluster a node belongs to ("" for none):
-// minikube, kind, k3d or Docker Desktop. Only node evidence counts (labels,
-// provider ids, the names those tools give their nodes), never a context's
-// name, because a local cluster turns privileged pods on by default.
-func LocalKind(node *corev1.Node) string {
-	switch {
-	case node.Labels["minikube.k8s.io/name"] != "":
-		return "minikube"
-	case strings.HasPrefix(node.Spec.ProviderID, "kind://"):
-		return "kind"
-	case strings.HasPrefix(node.Spec.ProviderID, "k3s://") && strings.HasPrefix(node.Name, "k3d-"):
-		return "k3d"
-	case node.Name == "docker-desktop", node.Name == "desktop-control-plane" || strings.HasPrefix(node.Name, "desktop-worker"):
-		return "Docker Desktop"
-	}
-	return ""
-}
-
-// PrivilegedAllowed is a connection's effective allow_privileged: the
-// setting when it is set, else on for a detected local cluster only.
-func PrivilegedAllowed(c fleet.KubeCluster, local bool) bool {
-	if c.AllowPrivileged != nil {
-		return *c.AllowPrivileged
-	}
-	return local
-}
 
 func (r *run) nodes(ctx context.Context) {
 	r.running(CheckNodes)
@@ -49,7 +22,7 @@ func (r *run) nodes(ctx context.Context) {
 	defer cancel()
 	list, err := r.t.Client.CoreV1().Nodes().List(cctx, metav1.ListOptions{})
 	if err != nil {
-		r.caps.PrivilegedAllowed = PrivilegedAllowed(r.t.Cluster, false)
+		r.caps.PrivilegedAllowed = r.t.Cluster.AllowsPrivileged(false)
 		if apierrors.IsForbidden(err) {
 			r.skip(CheckNodes, "nodes are not readable (optional): architectures, capacity and local-cluster detection unknown")
 			return
@@ -61,19 +34,17 @@ func (r *run) nodes(ctx context.Context) {
 	r.multiNode = len(list.Items) > 1
 	r.csiLimits = r.attachLimits(ctx)
 	archs := map[string]bool{}
-	local := ""
 	cordoned := 0
+	facts := make([]localcluster.Node, 0, len(list.Items))
 	for i := range list.Items {
 		n := &list.Items[i]
+		facts = append(facts, localcluster.Node{Name: n.Name, Labels: n.Labels, ProviderID: n.Spec.ProviderID})
 		arch := n.Status.NodeInfo.Architecture
 		if arch == "" {
 			arch = n.Labels[corev1.LabelArchStable]
 		}
 		if arch != "" {
 			archs[arch] = true
-		}
-		if kind := LocalKind(n); kind != "" && local == "" {
-			local = kind
 		}
 		if n.Spec.Unschedulable {
 			cordoned++
@@ -87,9 +58,10 @@ func (r *run) nodes(ctx context.Context) {
 		}
 		r.caps.Nodes = append(r.caps.Nodes, kn)
 	}
+	local := localcluster.Detect(facts)
 	r.caps.NodeArchs = sortedKeys(archs)
-	r.caps.LocalCluster = local != ""
-	r.caps.PrivilegedAllowed = PrivilegedAllowed(r.t.Cluster, local != "")
+	r.caps.LocalCluster = local.Local()
+	r.caps.PrivilegedAllowed = r.t.Cluster.AllowsPrivileged(local.Local())
 	sort.Slice(r.caps.Nodes, func(i, j int) bool { return r.caps.Nodes[i].Name < r.caps.Nodes[j].Name })
 
 	var archParts []string
@@ -109,8 +81,8 @@ func (r *run) nodes(ctx context.Context) {
 	if len(archParts) > 0 {
 		detail += " · " + strings.Join(archParts, " ")
 	}
-	if local != "" {
-		detail += " · local cluster (" + local + ")"
+	if local.Local() {
+		detail += " · local cluster (" + local.String() + ")"
 	}
 	if cordoned > 0 {
 		detail += fmt.Sprintf(" · %d cordoned", cordoned)
