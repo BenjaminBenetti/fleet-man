@@ -2,6 +2,7 @@ package devcontainer
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/devmeta"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/redact"
 )
 
 // DevcontainerBackend implements backend.Backend using the devcontainer
@@ -155,7 +157,17 @@ func containerUserHeuristic(containerID string) string {
 
 // Up provisions a devcontainer for the given workspace folder.
 func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string, mounts []backend.Mount) (*backend.UpResult, error) {
-	return devcontainerBackend.up(workspaceDir, mounts, nil)
+	return devcontainerBackend.up(workspaceDir, mounts, nil, io.Discard)
+}
+
+// UpContext is Up for a provisioning job: the same `devcontainer up`, with the
+// CLI's log teed into the job's provisioning log (backend.JobLogFrom) as it
+// runs. The run is NOT tied to ctx's cancellation: killing the CLI mid
+// `docker run` could leave a container that nothing records, so a cancelled
+// job stops once up returns instead (create's stopIfCancelled tears down what
+// it made).
+func (devcontainerBackend *DevcontainerBackend) UpContext(ctx context.Context, req backend.UpRequest) (*backend.UpResult, error) {
+	return devcontainerBackend.up(req.WorkspaceDir, req.Mounts, nil, backend.JobLogFrom(ctx))
 }
 
 // Rebuild recreates the workspace's container in place by re-running
@@ -169,7 +181,14 @@ func (devcontainerBackend *DevcontainerBackend) Up(workspaceDir string, mounts [
 // belt-and-braces signal of rebuild intent. A future "full" rebuild could add
 // --build-no-cache to force a from-scratch image build.
 func (devcontainerBackend *DevcontainerBackend) Rebuild(_, workspaceDir string, mounts []backend.Mount) (*backend.UpResult, error) {
-	return devcontainerBackend.up(workspaceDir, mounts, []string{"--remove-existing-container"})
+	return devcontainerBackend.up(workspaceDir, mounts, []string{"--remove-existing-container"}, io.Discard)
+}
+
+// RebuildContext is Rebuild for a provisioning job, teeing the CLI's log into
+// the job's provisioning log the way UpContext does (and, like it, not
+// interrupted by ctx's cancellation).
+func (devcontainerBackend *DevcontainerBackend) RebuildContext(ctx context.Context, _ string, req backend.UpRequest) (*backend.UpResult, error) {
+	return devcontainerBackend.up(req.WorkspaceDir, req.Mounts, []string{"--remove-existing-container"}, backend.JobLogFrom(ctx))
 }
 
 // SupportsRebuild reports true: the devcontainer backend can recreate a
@@ -183,6 +202,10 @@ func (devcontainerBackend *DevcontainerBackend) SupportsRebuild() bool {
 // flags so they appear inside the container alongside the SSH agent
 // socket and the workspace itself. extraArgs are passed through verbatim to
 // the `up` subcommand (Rebuild uses it for --remove-existing-container).
+// jobLog receives the CLI's log (its stderr) as it runs: the provisioning log
+// of the job that asked, or io.Discard. Whatever reads it redacts it; the
+// failure detail this returns is redacted here (redact.EnvText), since the
+// CLI's docker run line carries every containerEnv value as -e KEY=VALUE.
 //
 // When the workspace's devcontainer.json declares its own mount at the
 // same container path as one of the fleet-supplied mounts, the user's
@@ -192,7 +215,7 @@ func (devcontainerBackend *DevcontainerBackend) SupportsRebuild() bool {
 // point" and the instance enters StatusFailed. Fleet's mount wins by
 // design — the user's per-fleet agent state should override whatever
 // the repo's devcontainer.json was pointing at.
-func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts []backend.Mount, extraArgs []string) (*backend.UpResult, error) {
+func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts []backend.Mount, extraArgs []string, jobLog io.Writer) (*backend.UpResult, error) {
 	// Refuse unsupported mounts before anything is pruned or rewritten.
 	mountArgs, err := customMountArgs(mounts)
 	if err != nil {
@@ -261,13 +284,14 @@ func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts [
 	var stdoutBuf bytes.Buffer
 	cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
 
-	// Always tee stderr to os.Stderr so build output reaches the log
-	// file. A buffer captures it for inclusion in error messages.
+	// Always tee stderr (the CLI's log: build output, lifecycle commands) to
+	// os.Stderr and the job's provisioning log. A buffer captures it for
+	// inclusion in error messages.
 	var stderrBuf strings.Builder
-	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf, jobLog)
 
 	if err := cmd.Run(); err != nil {
-		detail := strings.TrimSpace(stderrBuf.String())
+		detail := redact.EnvText(strings.TrimSpace(stderrBuf.String()))
 		if detail != "" {
 			return nil, fmt.Errorf("devcontainer up failed: %w\n%s", err, detail)
 		}

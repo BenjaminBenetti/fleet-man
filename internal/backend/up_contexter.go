@@ -15,7 +15,9 @@ type UpRequest struct {
 // long, multi-step sequence that has to stop when its job is cancelled
 // (Kubernetes: build, seed, apply, wait for the pod). For those backends
 // UpContext replaces Up. ctx carries the job's cancellation, its provisioning
-// log (JobLogFrom) and the Hooks the server injected (HooksFrom).
+// log (JobLogFrom, with ReportStep / ReportWarning) and the Hooks the server
+// injected (HooksFrom). An implementation uses what applies to it: the
+// devcontainer backend only tees its CLI's output into the log.
 //
 // Callers go through the package-level UpContext, which falls back to Up for
 // every backend that lacks this capability.
