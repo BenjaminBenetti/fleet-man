@@ -75,6 +75,32 @@ jobs:
           FLEET_ITEST_RANGE: ${{ matrix.range }}
         run: ./integration/run.sh
 
+  # The backend conformance suite (internal/backend/backendtest) against the
+  # devcontainer backend on the runner's docker. Without FLEET_CONFORMANCE the
+  # same test skips, so the unit workflow never needs docker for it.
+  conformance-devcontainer:
+    name: conformance devcontainer
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install devcontainer CLI
+        run: npm install -g @devcontainers/cli
+
+      - name: Run the conformance suite
+        env:
+          FLEET_CONFORMANCE: devcontainer
+        run: go test -count=1 -timeout 40m -v ./internal/backend/conformance
+
   # Single aggregate check: green only when every shard passed. Preserves one
   # stable "integration" status name for branch protection / the review loop,
   # independent of how many shards the matrix expands to.

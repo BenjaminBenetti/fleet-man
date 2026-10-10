@@ -26,6 +26,10 @@ import (
 type DevcontainerBackend struct {
 	verbose bool
 
+	// workspaceDir is the workspace folder of the instance the backend was
+	// bound to (BindWorkspace); DownByKey removes what was made for it.
+	workspaceDir string
+
 	userCache   map[string]string
 	userMissAt  map[string]time.Time // last failed user resolution, to throttle re-resolves
 	userCacheMu sync.Mutex
@@ -788,26 +792,36 @@ func (devcontainerBackend *DevcontainerBackend) OutputSourceCommand(containerID 
 }
 
 // Status reports the live state of a docker container by reading
-// `docker inspect --format {{.State.Status}}`. Maps docker's
-// fine-grained states into the coarser backend.LiveStatus enum:
-// running/restarting → running; exited/paused/dead/created → stopped;
-// "No such container" → missing; everything else (and probe errors)
-// → unknown so callers preserve whatever was persisted.
+// `docker inspect --format {{.State.Status}}` (see inspectLiveStatus).
 func (devcontainerBackend *DevcontainerBackend) Status(containerID string) backend.LiveStatus {
 	if containerID == "" {
 		return backend.LiveStatusUnknown
 	}
 	cmd := exec.Command("docker", "inspect", "--format", "{{.State.Status}}", containerID)
 	out, err := cmd.Output()
+	var stderr []byte
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		stderr = exitErr.Stderr
+	}
+	return inspectLiveStatus(string(out), string(stderr), err)
+}
+
+// inspectLiveStatus maps a `docker inspect --format {{.State.Status}}` run
+// into the coarser backend.LiveStatus enum: running/restarting → running;
+// exited/paused/dead/created → stopped; removing, or no such container →
+// missing; everything else (and probe errors) → unknown so callers preserve
+// whatever was persisted. A gone container fails the inspect with "No such
+// object" (docker inspect names no object type) or "No such container",
+// capitalized or not depending on the docker version.
+func inspectLiveStatus(stdout, stderr string, err error) backend.LiveStatus {
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if strings.Contains(string(exitErr.Stderr), "No such container") {
-				return backend.LiveStatusMissing
-			}
+		lower := strings.ToLower(stderr)
+		if strings.Contains(lower, "no such container") || strings.Contains(lower, "no such object") {
+			return backend.LiveStatusMissing
 		}
 		return backend.LiveStatusUnknown
 	}
-	switch strings.TrimSpace(string(out)) {
+	switch strings.TrimSpace(stdout) {
 	case "running", "restarting":
 		return backend.LiveStatusRunning
 	case "exited", "paused", "dead", "created":
