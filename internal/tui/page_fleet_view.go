@@ -292,7 +292,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			var status string
 			if transitional {
 				status = strings.TrimRight(m.spinner.View(), "\n") + " " + statusCreatingStyle.Render(string(instance.Status)) +
-					m.jobStepSuffix(r.fleetName, instance.Name)
+					m.jobStepSuffix(r.fleetName, instance)
 			} else {
 				status = renderStatus(instance.Status)
 			}

@@ -47,6 +47,9 @@ func TestViewFleetListShowsTheProvisioningStep(t *testing.T) {
 		{name: "no step yet", status: fleet.StatusCreating, want: "creating"},
 		{name: "another instance's step", status: fleet.StatusCreating, steps: map[string]fleet.JobStep{rtKey("alpha", "other"): fleet.StepGitClone}, want: "creating"},
 		{name: "a step this build does not know", status: fleet.StatusCreating, steps: map[string]fleet.JobStep{rtKey("alpha", "agent-1"): fleet.JobStep(4242)}, want: "creating"},
+		{name: "cloning", status: fleet.StatusCloning, steps: map[string]fleet.JobStep{rtKey("alpha", "agent-1"): fleet.StepCopyWorkspace}, want: "cloning · copying workspace"},
+		// A destroy waiting on the create it cancelled: the create's step is not the deletion's.
+		{name: "deleting during a cancelled create", status: fleet.StatusDeleting, steps: map[string]fleet.JobStep{rtKey("alpha", "agent-1"): fleet.StepBackendUp}, want: "deleting"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			inst := &fleet.Instance{Name: "agent-1", Status: tt.status}
@@ -65,7 +68,7 @@ func TestViewFleetListShowsTheProvisioningStep(t *testing.T) {
 			if !strings.Contains(view, tt.want) {
 				t.Fatalf("view is missing %q:\n%s", tt.want, view)
 			}
-			if tt.want == "creating" && strings.Contains(view, "creating ·") {
+			if !strings.Contains(tt.want, "·") && strings.Contains(view, tt.want+" ·") {
 				t.Fatalf("view shows a step it should not:\n%s", view)
 			}
 		})

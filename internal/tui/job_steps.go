@@ -31,9 +31,17 @@ func jobStepsFrom(jobs *fleetgrpc.ActiveJobs) map[string]fleet.JobStep {
 }
 
 // jobStepSuffix is what a transitional row shows after its status: the step
-// its job is on, or "" when none is known.
-func (m *model) jobStepSuffix(fleetName, instanceName string) string {
-	label := m.jobSteps[rtKey(fleetName, instanceName)].Label()
+// its provisioning job is on, or "" when none is known. Only a provisioning
+// row (creating, cloning, rebuilding) shows one: a destroy that cancelled a
+// create waits for it to stop, and its deleting row must not read as if the
+// create's step ("starting container") were the deletion's.
+func (m *model) jobStepSuffix(fleetName string, instance *fleet.Instance) string {
+	switch instance.Status {
+	case fleet.StatusCreating, fleet.StatusCloning, fleet.StatusRebuilding:
+	default:
+		return ""
+	}
+	label := m.jobSteps[rtKey(fleetName, instance.Name)].Label()
 	if label == "" {
 		return ""
 	}

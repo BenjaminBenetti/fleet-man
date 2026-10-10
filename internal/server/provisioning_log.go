@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
@@ -33,11 +34,24 @@ import (
 // One line of the file is one event. Every line is redacted first
 // (redact.EnvLine): the devcontainer CLI logs its docker run with each
 // containerEnv value as -e KEY=VALUE, and none of those values may reach the
-// disk or a client.
+// disk or a client. A line is redacted whole, before it is cut into pieces, so
+// a value split across two pieces is still hidden; and it is made valid UTF-8
+// (proto strings must be, or the job stream fails to send it).
 
-// provisioningLogMaxLine bounds the unfinished line held in memory: output that
-// never ends a line (a progress bar) is passed on in pieces of this size.
-const provisioningLogMaxLine = 16 << 10
+const (
+	// provisioningLogMaxLine bounds one line of the creation log and one JobLog
+	// event: a longer output line is passed on in pieces of this size, after it
+	// was redacted whole.
+	provisioningLogMaxLine = 16 << 10
+	// provisioningLogMaxPending bounds the unfinished line held in memory. A
+	// line that grows past it is passed on up to here, ending in
+	// provisioningLogCut, and the rest of it, up to the next newline, is
+	// dropped: a piece cut off from the start of its line can't be redacted.
+	provisioningLogMaxPending = 1 << 20
+)
+
+// provisioningLogCut ends a line that was too long to keep whole.
+const provisioningLogCut = " [line cut]"
 
 // provisioningLog is a job's provisioning-log sink: an io.Writer for raw
 // output (split into lines) and a backend.JobReporter for steps and warnings.
@@ -46,11 +60,12 @@ const provisioningLogMaxLine = 16 << 10
 type provisioningLog struct {
 	job *job
 
-	mu      sync.Mutex
-	file    *os.File // nil when the creation log could not be written; events still flow
-	path    string
-	partial []byte // output after the last newline
-	closed  bool
+	mu       sync.Mutex
+	file     *os.File // nil when the creation log could not be written; events still flow
+	path     string
+	partial  []byte // output after the last newline
+	dropping bool   // the line in progress was cut; drop it up to its newline
+	closed   bool
 }
 
 var _ backend.JobReporter = (*provisioningLog)(nil)
@@ -70,7 +85,7 @@ func openProvisioningLog(j *job, fleetName, instanceName, what string) *provisio
 	}
 	l.mu.Lock()
 	l.lineLocked(fleetgrpc.LogLevel_LOG_LEVEL_INFO, "",
-		fmt.Sprintf("==> fleet %s: %s/%s at %s", what, fleetName, instanceName, time.Now().Format(time.RFC3339)))
+		fmt.Sprintf("==> fleet %s: %s/%s at %s", what, fleetName, instanceName, time.Now().Format(time.RFC3339)), "")
 	l.mu.Unlock()
 	return l
 }
@@ -106,22 +121,45 @@ func (l *provisioningLog) Write(p []byte) (int, error) {
 	if l.closed {
 		return len(p), nil
 	}
-	l.partial = append(l.partial, p...)
-	start := 0
-	for {
-		i := bytes.IndexByte(l.partial[start:], '\n')
+	for rest := p; len(rest) > 0; {
+		i := bytes.IndexByte(rest, '\n')
 		if i < 0 {
+			l.appendLocked(rest)
 			break
 		}
-		l.outputLocked(l.partial[start : start+i])
-		start += i + 1
+		l.appendLocked(rest[:i])
+		if !l.dropping {
+			l.outputLocked(l.partial)
+		}
+		l.partial = l.partial[:0]
+		l.dropping = false
+		rest = rest[i+1:]
 	}
-	for len(l.partial)-start > provisioningLogMaxLine {
-		l.outputLocked(l.partial[start : start+provisioningLogMaxLine])
-		start += provisioningLogMaxLine
-	}
-	l.partial = l.partial[:copy(l.partial, l.partial[start:])]
 	return len(p), nil
+}
+
+// appendLocked adds output to the unfinished line, keeping it within
+// provisioningLogMaxPending: a terminal line redrawn in place (a progress
+// bar) keeps only what follows its last carriage return, as outputLocked
+// would, and a line still too long is passed on cut (see
+// provisioningLogMaxPending).
+func (l *provisioningLog) appendLocked(b []byte) {
+	if l.dropping {
+		return
+	}
+	l.partial = append(l.partial, b...)
+	if len(l.partial) <= provisioningLogMaxPending {
+		return
+	}
+	if i := bytes.LastIndexByte(l.partial[:len(l.partial)-1], '\r'); i >= 0 {
+		l.partial = l.partial[:copy(l.partial, l.partial[i+1:])]
+	}
+	if len(l.partial) <= provisioningLogMaxPending {
+		return
+	}
+	l.lineLocked(fleetgrpc.LogLevel_LOG_LEVEL_INFO, "", carriageReturned(l.partial[:provisioningLogMaxPending]), provisioningLogCut)
+	l.partial = l.partial[:0]
+	l.dropping = true
 }
 
 // Step records that the run entered step: a "==> label: detail" line and a
@@ -133,7 +171,7 @@ func (l *provisioningLog) Step(step fleet.JobStep, detail string) {
 		return
 	}
 	l.flushPartialLocked()
-	line := redact.EnvLine(backend.StepLine(step, detail))
+	line := strings.ToValidUTF8(redact.EnvLine(backend.StepLine(step, detail)), "\uFFFD")
 	l.writeFileLocked("==> " + line)
 	l.job.emit(&fleetgrpc.JobEvent{JobId: l.job.summary.GetJobId(), Event: &fleetgrpc.JobEvent_Progress{Progress: &fleetgrpc.JobProgress{
 		Step:    protoconv.JobStepToProto(step),
@@ -151,7 +189,7 @@ func (l *provisioningLog) Warn(message string) {
 	}
 	l.flushPartialLocked()
 	for _, line := range strings.Split(strings.TrimRight(message, "\n"), "\n") {
-		l.lineLocked(fleetgrpc.LogLevel_LOG_LEVEL_WARN, "warning: ", line)
+		l.lineLocked(fleetgrpc.LogLevel_LOG_LEVEL_WARN, "warning: ", line, "")
 	}
 }
 
@@ -166,7 +204,7 @@ func (l *provisioningLog) finish(err error) {
 	l.flushPartialLocked()
 	if err != nil {
 		for _, line := range strings.Split(strings.TrimRight(err.Error(), "\n"), "\n") {
-			l.lineLocked(fleetgrpc.LogLevel_LOG_LEVEL_ERROR, "error: ", line)
+			l.lineLocked(fleetgrpc.LogLevel_LOG_LEVEL_ERROR, "error: ", line, "")
 		}
 	} else {
 		label := fleet.StepDone.Label()
@@ -186,14 +224,19 @@ func (l *provisioningLog) finish(err error) {
 	}
 }
 
-// outputLocked passes on one line of raw output. A carriage return redraws
-// a terminal line in place, so only what follows the last one is kept.
+// outputLocked passes on one line of raw output.
 func (l *provisioningLog) outputLocked(raw []byte) {
+	l.lineLocked(fleetgrpc.LogLevel_LOG_LEVEL_INFO, "", carriageReturned(raw), "")
+}
+
+// carriageReturned is a raw output line as a terminal leaves it: a carriage
+// return redraws the line in place, so only what follows the last one is kept.
+func carriageReturned(raw []byte) string {
 	line := strings.TrimSuffix(string(raw), "\r")
 	if i := strings.LastIndexByte(line, '\r'); i >= 0 {
 		line = line[i+1:]
 	}
-	l.lineLocked(fleetgrpc.LogLevel_LOG_LEVEL_INFO, "", line)
+	return line
 }
 
 // flushPartialLocked passes on an unfinished line before a step, warning or
@@ -205,16 +248,32 @@ func (l *provisioningLog) flushPartialLocked() {
 	}
 }
 
-// lineLocked redacts line, writes it to the file behind filePrefix, and emits
-// it as a JobLog event of level.
-func (l *provisioningLog) lineLocked(level fleetgrpc.LogLevel, filePrefix, line string) {
-	line = redact.EnvLine(line)
-	l.writeFileLocked(filePrefix + line)
-	l.job.emit(&fleetgrpc.JobEvent{JobId: l.job.summary.GetJobId(), Event: &fleetgrpc.JobEvent_Log{Log: &fleetgrpc.JobLog{
-		Level: level,
-		Line:  line,
-		At:    timestamppb.Now(),
-	}}})
+// lineLocked redacts line whole, makes it valid UTF-8 and adds suffix, then
+// passes it on in pieces of at most provisioningLogMaxLine bytes (cut between
+// characters): each piece is a line of the file behind filePrefix and a JobLog
+// event of level.
+func (l *provisioningLog) lineLocked(level fleetgrpc.LogLevel, filePrefix, line, suffix string) {
+	line = strings.ToValidUTF8(redact.EnvLine(line), "\uFFFD") + suffix
+	for {
+		piece := line
+		if len(piece) > provisioningLogMaxLine {
+			end := provisioningLogMaxLine
+			for end > 0 && !utf8.RuneStart(line[end]) {
+				end--
+			}
+			piece = line[:end]
+		}
+		l.writeFileLocked(filePrefix + piece)
+		l.job.emit(&fleetgrpc.JobEvent{JobId: l.job.summary.GetJobId(), Event: &fleetgrpc.JobEvent_Log{Log: &fleetgrpc.JobLog{
+			Level: level,
+			Line:  piece,
+			At:    timestamppb.Now(),
+		}}})
+		line = line[len(piece):]
+		if line == "" {
+			return
+		}
+	}
 }
 
 // writeFileLocked appends one line to the creation log. A failed write is

@@ -11,11 +11,13 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"google.golang.org/protobuf/proto"
 )
 
 // newTestJob registers a create job for alpha/i1 on m.
@@ -242,6 +244,108 @@ func TestProvisioningLogSplitsEndlessLines(t *testing.T) {
 	}
 }
 
+// TestProvisioningLogRedactsALongLineWhole: a docker run line longer than one
+// piece, arriving in two writes (as a pipe hands it over) with the piece
+// boundary inside an env value, is redacted before it is cut, so no part of a
+// value reaches the file or the events.
+func TestProvisioningLogRedactsALongLineWhole(t *testing.T) {
+	isolateFleetDir(t)
+	j := newTestJob(newJobManager())
+	l := openProvisioningLog(j, "alpha", "i1", "create")
+	head := "Run: docker run "
+	meta := ` -l devcontainer.metadata=[{"containerEnv":{"FIRST":"topsecret`
+	pad := strings.Repeat("a", provisioningLogMaxLine-len(head)-len(meta))
+	line := head + pad + meta + `value1","SECOND":"othersecret2"}}] -e TOKEN=hunter2hunter2 --entrypoint /bin/sh img` + "\n"
+	_, _ = io.WriteString(l, line[:len(line)-30])
+	_, _ = io.WriteString(l, line[len(line)-30:])
+	l.finish(nil)
+
+	file := readCreationLog(t)
+	var events []string
+	for _, ev := range jobEvents(j) {
+		if line := ev.GetLog().GetLine(); line != "" {
+			events = append(events, line)
+			if len(line) > provisioningLogMaxLine {
+				t.Errorf("event of %d bytes, want at most %d", len(line), provisioningLogMaxLine)
+			}
+		}
+	}
+	for _, secret := range []string{"value1", "othersecret2", "hunter2hunter2"} {
+		if strings.Contains(file, secret) {
+			t.Errorf("creation log leaks %q", secret)
+		}
+		if strings.Contains(strings.Join(events, "\n"), secret) {
+			t.Errorf("job events leak %q", secret)
+		}
+	}
+	if !strings.Contains(file, `"SECOND":"<redacted>"}}] -e TOKEN=<redacted> --entrypoint /bin/sh img`) {
+		t.Fatalf("the end of the line is missing:\n%q", file[len(file)-300:])
+	}
+}
+
+// TestProvisioningLogCutsAnOverlongLine: an unfinished line that outgrows
+// provisioningLogMaxPending is passed on cut and the rest of it, which can't be
+// redacted on its own, is dropped; a line redrawn with carriage returns keeps
+// only its last state and is never cut.
+func TestProvisioningLogCutsAnOverlongLine(t *testing.T) {
+	isolateFleetDir(t)
+	j := newTestJob(newJobManager())
+	l := openProvisioningLog(j, "alpha", "i1", "create")
+
+	_, _ = io.WriteString(l, "-e TOKEN=")
+	for written := 0; written <= provisioningLogMaxPending; written += 4096 {
+		_, _ = io.WriteString(l, strings.Repeat("s", 4096))
+	}
+	_, _ = io.WriteString(l, " -e OTHER=tail-secret\nnext line\n")
+	for range provisioningLogMaxPending / 4096 * 2 {
+		_, _ = io.WriteString(l, strings.Repeat("p", 4090)+" 100%\r")
+	}
+	_, _ = io.WriteString(l, "redrawn 100%\r\n")
+	l.finish(nil)
+
+	file := readCreationLog(t)
+	if strings.Contains(file, "sss") || strings.Contains(file, "tail-secret") {
+		t.Fatal("creation log leaks a value of the cut line")
+	}
+	lines := strings.Split(strings.TrimSuffix(file, "\n"), "\n")
+	want := []string{"-e TOKEN=<redacted>" + provisioningLogCut, "next line", "redrawn 100%", "==> done"}
+	if got := lines[1:]; strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("creation log lines:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if n := len(l.partial); n != 0 {
+		t.Fatalf("%d bytes still held", n)
+	}
+}
+
+// TestProvisioningLogEventsAreValidUTF8: output that is not UTF-8, and a long
+// line cut into pieces, still makes events the job stream can send (proto
+// strings must be valid UTF-8, or Send fails and the client's stream breaks).
+func TestProvisioningLogEventsAreValidUTF8(t *testing.T) {
+	isolateFleetDir(t)
+	j := newTestJob(newJobManager())
+	l := openProvisioningLog(j, "alpha", "i1", "create")
+	_, _ = io.WriteString(l, "latin-1 caf\xe9\n")
+	_, _ = io.WriteString(l, "x"+strings.Repeat("é", provisioningLogMaxLine)+"\n")
+	l.Step(fleet.StepCopyWorkspace, "template file:///tmp/caf\xe9")
+	l.finish(errors.New("boom \xff"))
+
+	var pieces int
+	for _, ev := range jobEvents(j) {
+		if _, err := proto.Marshal(ev); err != nil {
+			t.Fatalf("event %v does not marshal: %v", ev, err)
+		}
+		if strings.HasPrefix(ev.GetLog().GetLine(), "x") || strings.HasPrefix(ev.GetLog().GetLine(), "é") {
+			pieces++
+		}
+	}
+	if pieces < 2 {
+		t.Fatalf("the long line came out in %d pieces, want it cut", pieces)
+	}
+	if file := readCreationLog(t); !utf8.ValidString(file) || !strings.Contains(file, "latin-1 caf\uFFFD") {
+		t.Fatalf("creation log is not valid UTF-8 or lost the line:\n%q", file[:200])
+	}
+}
+
 // TestProvisioningLogTakesConcurrentWriters: commands tee stdout and stderr
 // into the log from separate goroutines (run with -race).
 func TestProvisioningLogTakesConcurrentWriters(t *testing.T) {
@@ -340,6 +444,26 @@ func TestRelaySendsJobDoneDroppedFromAFullBuffer(t *testing.T) {
 	sent := stream.sentEvents()
 	if len(sent) == 0 || sent[len(sent)-1].GetDone() == nil || !sent[len(sent)-1].GetDone().GetSuccess() {
 		t.Fatalf("relay did not end on the JobDone (sent %d events)", len(sent))
+	}
+}
+
+// TestAwaitJobReturnsADoneDroppedFromAFullBuffer: an MCP wait whose buffer
+// overflowed with log lines (a failed create's error, line by line) still gets
+// the job's outcome, not "job ended without a result".
+func TestAwaitJobReturnsADoneDroppedFromAFullBuffer(t *testing.T) {
+	m := newJobManager()
+	j := newTestJob(m)
+	hist, ch := j.subscribe()
+	for i := range 200 {
+		j.emit(&fleetgrpc.JobEvent{Event: &fleetgrpc.JobEvent_Log{Log: &fleetgrpc.JobLog{Line: fmt.Sprint(i)}}})
+	}
+	msg := "devcontainer up failed"
+	j.emit(&fleetgrpc.JobEvent{Event: &fleetgrpc.JobEvent_Done{Done: &fleetgrpc.JobDone{Error: &msg}}})
+	m.finish(j.summary.GetJobId())
+
+	_, _, err := awaitSubscribed(context.Background(), j, hist, ch)
+	if err == nil || err.Error() != msg {
+		t.Fatalf("awaitJob = %v, want the job's error %q", err, msg)
 	}
 }
 
