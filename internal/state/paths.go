@@ -53,6 +53,13 @@ func TriggerLogsDir(fleetName, triggerName string) string {
 	return filepath.Join(FleetDir(), "logs", safeLogSegment(fleetName), "trigger", safeLogSegment(triggerName))
 }
 
+// AutomationWatchPath returns the file the automation scheduler persists its
+// watch list to (~/.fleet/automation/watch.json): the runs it has spawned and
+// still has to launch or reap, so a daemon restart picks them back up.
+func AutomationWatchPath() string {
+	return filepath.Join(FleetDir(), "automation", "watch.json")
+}
+
 // safeLogSegment reduces name to one filesystem-safe path segment: it keeps
 // letters, digits, and -._, maps everything else to '_', and collapses the
 // empty / "." / ".." forms (which would escape or alias a directory) to "_".

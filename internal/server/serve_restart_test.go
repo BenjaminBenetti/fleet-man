@@ -1,11 +1,13 @@
 package server
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -63,4 +65,43 @@ func TestServeFailsInterruptedRecords(t *testing.T) {
 	}
 	shutdownAndWait(t, client, served)
 	awaitFirstBackup(t)
+}
+
+// TestServeRestoresAutomationWatchList: the serve loop's scheduler starts from
+// the watch list the previous daemon left — dropping a run whose instance is
+// gone, keeping one still present, adopting an Automated instance it did not
+// know — and writes the result back.
+func TestServeRestoresAutomationWatchList(t *testing.T) {
+	client, served := startServeSeeded(t, func() {
+		// Stopped instances: the scheduler keeps watching them but leaves the
+		// backend alone, so no docker is needed.
+		if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha", Instances: []*fleet.Instance{
+			{Name: "kept", Status: fleet.StatusStopped, Automated: true},
+			{Name: "orphan", Status: fleet.StatusStopped, Automated: true},
+		}}}}); err != nil {
+			t.Fatalf("seed state: %v", err)
+		}
+		data, _ := json.Marshal(watchFile{Version: watchFileVersion, Runs: []watchRun{
+			{Fleet: "alpha", Instance: "kept", Command: "c", Launched: true},
+			{Fleet: "alpha", Instance: "gone", Command: "c", Launched: true},
+		}})
+		if err := writeWatchFile(state.AutomationWatchPath(), data); err != nil {
+			t.Fatalf("seed watch list: %v", err)
+		}
+	})
+	defer awaitFirstBackup(t)
+	defer shutdownAndWait(t, client, served)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		wf, _, err := readWatchFile(state.AutomationWatchPath())
+		if err == nil && len(wf.Runs) == 2 && wf.Runs[0].Instance == "kept" && !wf.Runs[0].Adopted &&
+			wf.Runs[1].Instance == "orphan" && wf.Runs[1].Adopted {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("watch list never reconciled: %+v (err %v)", wf, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
