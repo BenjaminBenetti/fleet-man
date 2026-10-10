@@ -309,3 +309,36 @@ func TestLeaseRelease(t *testing.T) {
 		t.Errorf("a second Release: %v", err)
 	}
 }
+
+// Holding answers at once while an Ensure is stuck on the API server: GC
+// asks it right before deleting, and must not inherit a renewal's latency.
+func TestLeaseHoldingDoesNotWaitOnEnsure(t *testing.T) {
+	cs, clk := fake.NewClientset(), newClock()
+	l := newTestLease(cs, original, clk.now)
+	ensure(t, l)
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	cs.PrependReactor("get", "leases", func(k8stesting.Action) (bool, runtime.Object, error) {
+		close(entered)
+		<-release
+		return false, nil, nil
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = l.Ensure(context.Background())
+	}()
+	<-entered
+	held := make(chan bool, 1)
+	go func() { held <- l.Holding() }()
+	select {
+	case h := <-held:
+		if !h {
+			t.Error("Holding = false right after a successful Ensure")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Holding waited on the Ensure in flight")
+	}
+	close(release)
+	<-done
+}
