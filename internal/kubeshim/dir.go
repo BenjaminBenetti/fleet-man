@@ -36,7 +36,7 @@ func NewDir(exe string) (*Dir, error) {
 	if len(base)+len("/fleet-kubeshim-0123456789/")+len(execSocketFile) > maxSocketPath {
 		base = "/tmp"
 	}
-	path, err := os.MkdirTemp(base, "fleet-kubeshim-")
+	path, err := os.MkdirTemp(base, dirPrefix)
 	if err != nil {
 		return nil, err
 	}

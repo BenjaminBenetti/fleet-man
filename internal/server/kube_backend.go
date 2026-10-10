@@ -16,6 +16,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/preflight"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
+	"github.com/BenjaminBenetti/fleet-man/internal/kubeshim"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -35,6 +36,17 @@ var (
 	// kubeImageGCInterval paces a connection's image collection.
 	kubeImageGCInterval = time.Hour
 )
+
+// kubeShimDirAge is how old a docker shim directory must be for the sweep
+// at start to take it for a dead daemon's.
+const kubeShimDirAge = 24 * time.Hour
+
+// sweepKubeShimDirs removes the stale docker shim directories.
+func sweepKubeShimDirs(now time.Time) {
+	if n := kubeshim.SweepStale(kubeShimDirAge, now); n > 0 {
+		flog.Info("kube: removed docker shim directories a stopped daemon left", "count", n)
+	}
+}
 
 // setBackendEnvironment gives the backend handles the daemon's image
 // delivery and connection facts.

@@ -218,6 +218,9 @@ func (m *kubeManager) run(ctx context.Context) {
 	m.mu.Unlock()
 	_, _ = m.identity()
 	m.sync()
+	// A daemon that died mid-build or mid-hook left its docker shim
+	// directories behind, the capture's environment values in them.
+	go sweepKubeShimDirs(m.now())
 	<-ctx.Done()
 	m.mu.Lock()
 	workers := m.workers
