@@ -68,11 +68,13 @@ assert_file_absent "${HOME}/.fleet/workspaces/scratch"
 info "fleet up scratch/alpha --repo ${template_url}"
 "${FLEET_BIN}" up scratch/alpha --repo "${template_url}"
 
-ws_dir="${HOME}/.fleet/workspaces/scratch/alpha/scratch"
-assert_file_exists "${ws_dir}/sentinel.txt"
-assert_file_exists "${ws_dir}/.devcontainer/devcontainer.json"
-assert_file_absent "${ws_dir}/.git" "workspace must be a copy of the template, not a git clone"
-assert_equals "from-template" "$(cat "${ws_dir}/sentinel.txt")" "template content should be copied"
+itest_workspace_test scratch/alpha -e sentinel.txt || fail "workspace is missing sentinel.txt"
+itest_workspace_test scratch/alpha -e .devcontainer/devcontainer.json \
+  || fail "workspace is missing .devcontainer/devcontainer.json"
+if itest_workspace_test scratch/alpha -e .git; then
+  fail "workspace must be a copy of the template, not a git clone"
+fi
+assert_equals "from-template" "$(itest_workspace_read scratch/alpha sentinel.txt)" "template content should be copied"
 
 ls_out=$("${FLEET_BIN}" ls scratch)
 printf '%s\n' "${ls_out}"
@@ -89,12 +91,11 @@ assert_contains "${state}" "\"remote\": \"${template_url}\"" "fleet record shoul
 # the pristine template again.
 # ===========================================
 info "editing the workspace copy must not modify the template"
-printf 'edited-in-instance\n' > "${ws_dir}/sentinel.txt"
+itest_workspace_write scratch/alpha sentinel.txt "edited-in-instance"
 assert_equals "from-template" "$(cat "${template_dir}/sentinel.txt")" "template must stay pristine"
 
 info "fleet up scratch/beta (reuses the fleet's template remote)"
 "${FLEET_BIN}" up scratch/beta
-beta_ws="${HOME}/.fleet/workspaces/scratch/beta/scratch"
-assert_equals "from-template" "$(cat "${beta_ws}/sentinel.txt")" "second instance should start from the pristine template"
+assert_equals "from-template" "$(itest_workspace_read scratch/beta sentinel.txt)" "second instance should start from the pristine template"
 
 pass "fleet up from a file:// template copies the dir per instance"

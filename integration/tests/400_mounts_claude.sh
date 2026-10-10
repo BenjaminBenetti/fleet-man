@@ -27,8 +27,8 @@ assert_contains "${link_target}" "/fleet-mounts/files/.claude.json" \
   "symlink target should land under /fleet-mounts/files"
 
 info "asserting host-side fleet mount root exists"
-assert_file_exists "${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/.claude"
-assert_file_exists "${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/files/.claude.json"
+assert_file_exists "$(itest_share_dir "${FIXTURE_REPO_NAME}" .claude)"
+assert_file_exists "$(itest_share_dir "${FIXTURE_REPO_NAME}" files/.claude.json)"
 
 # Project overrides share one per-fleet file, without replacing the repo's
 # other .claude files. Use devcontainer exec's workspace, not a guessed path.
@@ -36,7 +36,8 @@ project_link=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- readlink .cla
 assert_equals "/fleet-mounts/files/claude-settings.local.json" "${project_link}" "project overrides must point to fleet storage"
 "${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- sh -c 'printf "%s" "{\"permissions\":{\"allow\":[\"Bash(go test:*)\"]}}" > .claude/settings.local.json'
 settings=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat .claude/settings.local.json)
-assert_equals "${settings}" "$(cat "${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/files/claude-settings.local.json")" "project settings must persist on the host"
+itest_share_sync "${FIXTURE_REPO_NAME}"
+assert_equals "${settings}" "$(cat "$(itest_share_dir "${FIXTURE_REPO_NAME}" files/claude-settings.local.json)")" "project settings must persist on the host"
 
 fleet_up beta
 assert_equals "${settings}" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/beta" -- cat .claude/settings.local.json)" "new instances must share project overrides (#248)"

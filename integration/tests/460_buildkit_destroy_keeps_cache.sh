@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Description: destroying a buildkit-enabled fleet removes the server container but preserves the build cache, which a re-created fleet reuses.
+# itest: devcontainer-only: the buildkit cache is a host bind dir kept across destroy; on a cluster it is a cache PVC kept or deleted per delete_cache_volumes_on_destroy (P5.0/P5.2 port this test)
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"

@@ -121,11 +121,11 @@ printf '%s\n' "${local_ls}"
 assert_contains "${local_ls}" "stopped" "instance should be stopped locally after the remote command"
 
 # And the container itself is no longer running.
-container_id=$(grep -oE '"container_id"[[:space:]]*:[[:space:]]*"[^"]+"' "${HOME}/.fleet/state.json" | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
-if [ -n "${container_id}" ] && command -v docker >/dev/null 2>&1; then
-  docker_state=$(docker inspect -f '{{.State.Status}}' "${container_id}" 2>/dev/null || echo unknown)
-  info "docker state after remote stop: ${docker_state}"
-  [ "${docker_state}" != "running" ] || fail "container still running after remote stop"
+container_id=$(itest_container_id "${FIXTURE_REPO_NAME}/alpha")
+if [ -n "${container_id}" ]; then
+  container_state=$(itest_container_status "${container_id}")
+  info "container state after remote stop: ${container_state}"
+  [ "${container_state}" != "running" ] || fail "container still running after remote stop"
 fi
 
 pass "remote gRPC control through the gateway"

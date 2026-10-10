@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Description: A branch switched inside an instance shows in `fleet ls`, MCP fleet_list and the TUI (read by the daemon), and still does after a stop and a daemon restart.
+# itest: k8s
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -61,7 +62,7 @@ mcp_current_branch() {
 # daemon for up to 10s (GetState's branch cache), so other backends get a
 # grace period.
 branch_grace=15
-if [ "${FLEET_ITEST_BACKEND:-devcontainer}" = "devcontainer" ]; then
+if itest_backend_is devcontainer; then
   branch_grace=0
 fi
 
@@ -103,11 +104,12 @@ info "fleet stop alpha"
 assert_branch "feature/live" "while stopped"
 
 expected="feature/live"
-if [ "${FLEET_ITEST_BACKEND:-devcontainer}" = "devcontainer" ]; then
+if itest_backend_is devcontainer; then
   # The devcontainer workspace IS the host checkout, and its reader keeps
   # reading it while the instance is stopped: a switch made there now shows
-  # (rather than the last branch seen while running).
-  ws_dir="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/alpha/${FIXTURE_REPO_NAME}"
+  # (rather than the last branch seen while running). Other backends have no
+  # host checkout to switch, so they keep the last branch seen.
+  ws_dir=$(itest_host_workspace_dir "${inst}")
   info "switch the host checkout while stopped"
   git -C "${ws_dir}" checkout -q -b feature/while-stopped
   expected="feature/while-stopped"

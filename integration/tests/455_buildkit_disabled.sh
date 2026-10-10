@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Description: with buildkit_server disabled, no buildkit container or socket is created and nothing is mounted into the instance.
+# itest: devcontainer-only: asserts no buildkit host container, host .buildkit dir or /run/fleet-buildkit socket bind; on a cluster that is the buildkit Deployment and its TCP+mTLS client config (P5.2 ports this test)
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"

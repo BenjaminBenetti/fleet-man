@@ -8,14 +8,15 @@ itest_begin
 setup_test
 fleet_up alpha
 
-old_container=$(grep -oE '"container_id":\s*"[^"]+"' "${HOME}/.fleet/state.json" | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+inst="${FIXTURE_REPO_NAME}/alpha"
+old_container=$(itest_container_id "${inst}")
 [ -n "${old_container}" ] || fail "could not read container_id from state"
 info "first container: ${old_container}"
 
-# Drop a marker into the workspace (a host bind mount), so we can prove the
-# rebuild preserves the checkout rather than wiping it like a destroy would.
-ws_dir="${HOME}/.fleet/workspaces/${FIXTURE_REPO_NAME}/alpha/${FIXTURE_REPO_NAME}"
-echo "preserved-through-rebuild" > "${ws_dir}/REBUILD_MARKER.txt"
+# Drop a marker into the workspace (devcontainer: the host bind mount), so we
+# can prove the rebuild preserves the checkout rather than wiping it like a
+# destroy would.
+itest_workspace_write "${inst}" REBUILD_MARKER.txt "preserved-through-rebuild"
 
 # --- rebuild ---
 info "fleet rebuild alpha"
@@ -24,7 +25,7 @@ printf '%s\n' "${rebuild_out}"
 assert_contains "${rebuild_out}" "rebuilt" "rebuild output should mention rebuilt"
 
 # The container is torn down and recreated, so its id changes...
-new_container=$(grep -oE '"container_id":\s*"[^"]+"' "${HOME}/.fleet/state.json" | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+new_container=$(itest_container_id "${inst}")
 [ -n "${new_container}" ] || fail "could not read new container_id from state"
 info "new container: ${new_container}"
 if [ "${old_container}" = "${new_container}" ]; then
@@ -32,13 +33,10 @@ if [ "${old_container}" = "${new_container}" ]; then
 fi
 
 # ...and the old container is gone.
-if docker inspect "${old_container}" >/dev/null 2>&1; then
-  fail "old container ${old_container} should have been removed by rebuild"
-fi
+assert_container_absent "${old_container}" "old container should have been removed by rebuild"
 
 # The fresh container is running.
-docker_state=$(docker inspect -f '{{.State.Status}}' "${new_container}")
-assert_equals "running" "${docker_state}" "rebuilt container should be running"
+assert_container_running "${new_container}" "rebuilt container should be running"
 
 # State reports running again (rebuilding -> running).
 ls_after=$("${FLEET_BIN}" ls "${FIXTURE_REPO_NAME}")
