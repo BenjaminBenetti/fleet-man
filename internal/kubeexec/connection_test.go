@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,6 +139,46 @@ func TestLoadPinsPathsAndContext(t *testing.T) {
 	if conn.RESTConfig().Host == "mutated" {
 		t.Error("RESTConfig hands out the connection's own config")
 	}
+}
+
+// Every RESTConfig is a copy of its own, the exec provider included, and
+// copies may be taken concurrently (rest.CopyConfig alone shares the exec
+// provider and writes through it when the cluster carries the exec
+// extension; run with -race).
+func TestRESTConfigCopiesTheExecProvider(t *testing.T) {
+	dir := t.TempDir()
+	writePlugin(t, dir, "fake-plugin", pluginOutput)
+	withExtension := strings.Replace(kubeconfig{server: "https://x.example", user: execUser}.yaml(),
+		"    server: https://x.example\n",
+		"    server: https://x.example\n    extensions:\n    - name: client.authentication.k8s.io/exec\n      extension: {audience: fleet}\n", 1)
+	path := writeFile(t, filepath.Join(dir, "config"), withExtension, 0o600)
+	conn, err := Load(fleet.KubeCluster{Context: "ctx", KubeconfigPaths: []string{path}, ExtraPath: []string{dir}}, Options{Environ: []string{"PATH=/usr/bin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := conn.RESTConfig(), conn.RESTConfig()
+	if a.ExecProvider == nil || a.ExecProvider.Config == nil {
+		t.Fatalf("exec provider %+v lacks the cluster's exec extension", a.ExecProvider)
+	}
+	if a.ExecProvider == b.ExecProvider {
+		t.Fatal("two RESTConfig copies share one exec provider")
+	}
+	a.ExecProvider.Env = nil
+	a.ExecProvider.Command = "/elsewhere"
+	if c := conn.RESTConfig(); c.ExecProvider.Command != conn.Plugin.Path || len(c.ExecProvider.Env) == 0 {
+		t.Errorf("editing a copy changed the connection: %+v", c.ExecProvider)
+	}
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = conn.RESTConfig()
+			_, _ = conn.Clientset()
+		}()
+	}
+	wg.Wait()
 }
 
 func TestLoadErrors(t *testing.T) {
@@ -285,6 +326,27 @@ func TestClientsetAuthenticatesThroughThePlugin(t *testing.T) {
 	if env["FROM_KUBECONFIG"] != "yes" || !strings.Contains(env[execInfoEnv], `"interactive":false`) {
 		t.Errorf("plugin env FROM_KUBECONFIG=%q %s=%q", env["FROM_KUBECONFIG"], execInfoEnv, env[execInfoEnv])
 	}
+
+	// Credential runs the plugin exactly as client-go just did, so what it
+	// reads is what the connection authenticates with: the same environment,
+	// blanked variables included, and the same request.
+	if err := os.Remove(dump); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Credential(context.Background()); err != nil {
+		t.Fatalf("Credential: %v", err)
+	}
+	probe := readEnv(t, dump)
+	for name, value := range env {
+		if got, ok := probe[name]; !ok || got != value {
+			t.Errorf("client-go ran the plugin with %s=%q, Credential with %q (set: %v)", name, value, got, ok)
+		}
+	}
+	for name := range probe {
+		if _, ok := env[name]; !ok {
+			t.Errorf("Credential ran the plugin with %s, which client-go did not set", name)
+		}
+	}
 }
 
 func TestCredentialFromPlugin(t *testing.T) {
@@ -306,8 +368,8 @@ func TestCredentialFromPlugin(t *testing.T) {
 		t.Errorf("credential = %+v", cred)
 	}
 	env := readEnv(t, dump)
-	if _, ok := env["GITHUB_TOKEN"]; ok {
-		t.Error("the probe run passed GITHUB_TOKEN to the plugin")
+	if got, ok := env["GITHUB_TOKEN"]; !ok || got != "" {
+		t.Errorf("the probe run gave the plugin GITHUB_TOKEN=%q (set: %v), want it blanked as client-go's runs see it", got, ok)
 	}
 	info := env[execInfoEnv]
 	if !strings.Contains(info, `"interactive":false`) || !strings.Contains(info, srv.URL) || !strings.Contains(info, `"apiVersion":"client.authentication.k8s.io/v1"`) {

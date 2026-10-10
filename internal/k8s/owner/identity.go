@@ -129,7 +129,31 @@ func readDaemonID(path string) (string, error) {
 // createExclusive writes data to path only if path does not exist yet, and
 // atomically: a temp file hard-linked into place, so a reader (the backup
 // loop) never sees a partial file and a concurrent creator never overwrites.
+// On a filesystem without hard links it falls back to an exclusive create,
+// which still never overwrites.
 func createExclusive(path string, data []byte) error {
+	if err := createLinked(path, data); !errors.Is(err, errLink) {
+		return err // done, already there, or a failure before the link
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path) // nobody has read it: the next try starts over
+		return err
+	}
+	return f.Close()
+}
+
+// errLink marks a createLinked failure of the hard link itself.
+var errLink = errors.New("hard link")
+
+// linkFunc is os.Link (a test seam).
+var linkFunc = os.Link
+
+func createLinked(path string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*.tmp")
 	if err != nil {
 		return err
@@ -146,7 +170,13 @@ func createExclusive(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Link(tmp.Name(), path)
+	if err := linkFunc(tmp.Name(), path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return err
+		}
+		return fmt.Errorf("%w: %w", errLink, err)
+	}
+	return nil
 }
 
 func loadOrCreateNonce(fp string) (string, error) {

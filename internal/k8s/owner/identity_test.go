@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -160,6 +161,39 @@ func TestCreateExclusive(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
 		t.Errorf("temp files left behind: %v", entries)
+	}
+}
+
+// On a filesystem without hard links the daemon id is still created, and an
+// existing one is still never overwritten.
+func TestCreateExclusiveWithoutHardLinks(t *testing.T) {
+	prev := linkFunc
+	linkFunc = func(_, _ string) error { return &os.LinkError{Op: "link", Err: syscall.EPERM} }
+	t.Cleanup(func() { linkFunc = prev })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon_id")
+	if err := createExclusive(path, []byte("first")); err != nil {
+		t.Fatalf("createExclusive without hard links: %v", err)
+	}
+	if err := createExclusive(path, []byte("second")); !errors.Is(err, os.ErrExist) {
+		t.Errorf("second create = %v, want ErrExist", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "first" || info.Mode().Perm() != 0600 {
+		t.Errorf("file = %q mode %o, want the first content at 0600", data, info.Mode().Perm())
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("temp files left behind: %v", entries)
+	}
+
+	t.Setenv("HOME", t.TempDir())
+	withMachine(t, "m", "h")
+	if id, err := LoadIdentity(); err != nil || !daemonIDPattern.MatchString(id.DaemonID) {
+		t.Fatalf("LoadIdentity without hard links = %+v, %v", id, err)
 	}
 }
 

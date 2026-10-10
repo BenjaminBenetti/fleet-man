@@ -50,9 +50,13 @@ type Plugin struct {
 	Command string
 	Path    string
 	Args    []string
-	// Env is the plugin's whole environment ("NAME=value", sorted). It can
-	// hold credentials passed through plugin_env: never log it.
+	// Env is what the plugin gets of the daemon's environment and the
+	// connection's settings ("NAME=value", sorted). It can hold credentials
+	// passed through plugin_env: never log it.
 	Env []string
+	// Blanked are the daemon's other variables, which every run of the
+	// plugin sees set to empty (see execConfig).
+	Blanked []string
 	// APIVersion is the client.authentication.k8s.io version it speaks.
 	APIVersion  string
 	InstallHint string
@@ -78,6 +82,7 @@ func newPlugin(cfg *rest.Config, c fleet.KubeCluster, environ []string) (*Plugin
 		Path:               path,
 		Args:               append([]string(nil), ec.Args...),
 		Env:                env,
+		Blanked:            blanked(environ, env),
 		APIVersion:         ec.APIVersion,
 		InstallHint:        ec.InstallHint,
 		provideClusterInfo: ec.ProvideClusterInfo,
@@ -129,6 +134,18 @@ func pluginEnv(environ []string, kubeconfigEnv []clientcmdapi.ExecEnvVar, record
 	return env
 }
 
+// blanked lists the names of environ that env does not carry (sorted).
+func blanked(environ, env []string) []string {
+	kept := envMap(env)
+	var out []string
+	for _, name := range sortedKeys(envMap(environ)) {
+		if _, ok := kept[name]; !ok && name != execInfoEnv {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // resolvePlugin finds the plugin file: an absolute command as it is, a bare
 // name through path's absolute entries (a relative entry, such as ".", is
 // never searched).
@@ -174,9 +191,9 @@ func checkExecutable(path string) error {
 // resolved path (and only that path, by plugin policy), never interactive,
 // with the plugin's environment. client-go starts plugins with the daemon's
 // whole environment and appends the provider's entries, the last value of a
-// name winning; so every other daemon variable is set empty here, and a
-// plugin sees nothing of the daemon's environment beyond Env.
-func (p *Plugin) execConfig(environ []string) *clientcmdapi.ExecConfig {
+// name winning; so every Blanked variable is set empty here, and a plugin
+// sees nothing of the daemon's environment beyond Env.
+func (p *Plugin) execConfig() *clientcmdapi.ExecConfig {
 	ec := p.restConfig.ExecProvider.DeepCopy()
 	ec.Command = p.Path
 	ec.Args = append([]string(nil), p.Args...)
@@ -187,18 +204,26 @@ func (p *Plugin) execConfig(environ []string) *clientcmdapi.ExecConfig {
 		PolicyType: clientcmdapi.PluginPolicyAllowlist,
 		Allowlist:  []clientcmdapi.AllowlistEntry{{Name: p.Path}},
 	}
-	kept := envMap(p.Env)
 	ec.Env = nil
 	for _, kv := range p.Env {
 		name, value, _ := strings.Cut(kv, "=")
 		ec.Env = append(ec.Env, clientcmdapi.ExecEnvVar{Name: name, Value: value})
 	}
-	for _, name := range sortedKeys(envMap(environ)) {
-		if _, ok := kept[name]; !ok && name != execInfoEnv {
-			ec.Env = append(ec.Env, clientcmdapi.ExecEnvVar{Name: name})
-		}
+	for _, name := range p.Blanked {
+		ec.Env = append(ec.Env, clientcmdapi.ExecEnvVar{Name: name})
 	}
 	return ec
+}
+
+// environ is the environment of a run of the plugin: what client-go's runs
+// get (Env, every Blanked variable set empty) and the request.
+func (p *Plugin) environ(execInfo []byte) []string {
+	env := make([]string, 0, len(p.Env)+len(p.Blanked)+1)
+	env = append(env, p.Env...)
+	for _, name := range p.Blanked {
+		env = append(env, name+"=")
+	}
+	return append(env, execInfoEnv+"="+string(execInfo))
 }
 
 // --- running the plugin ---
@@ -236,15 +261,15 @@ func (e *PluginError) Error() string {
 
 func (e *PluginError) Unwrap() error { return e.Err }
 
-// run runs the plugin once, non-interactively, as client-go would, and
-// returns its stdout. ctx bounds it.
+// run runs the plugin once, non-interactively and in the environment
+// client-go would give it, and returns its stdout. ctx bounds it.
 func (p *Plugin) run(ctx context.Context) ([]byte, error) {
 	info, err := p.execInfo()
 	if err != nil {
 		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, p.Path, p.Args...)
-	cmd.Env = append(append([]string(nil), p.Env...), execInfoEnv+"="+string(info))
+	cmd.Env = p.environ(info)
 	cmd.Stdin = nil
 	stdout := &cappedBuffer{max: maxPluginStdout}
 	stderr := &cappedBuffer{max: maxPluginStderr}

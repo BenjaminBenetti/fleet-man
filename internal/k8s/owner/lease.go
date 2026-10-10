@@ -133,8 +133,11 @@ func (l *Lease) Ensure(ctx context.Context) (LeaseStatus, error) {
 // ensureOnce is one read-decide-write round; retry reports a lost
 // optimistic-concurrency race worth another round.
 func (l *Lease) ensureOnce(ctx context.Context) (st LeaseStatus, retry bool, err error) {
-	now := l.now()
 	cur, err := l.leases.Get(ctx, l.name, metav1.GetOptions{})
+	// Read the clock once the Get has returned: another holder's state then
+	// counts as seen no earlier than it was written, however slow the Get, and
+	// this incarnation's own renewal is still stamped before its write lands.
+	now := l.now()
 	if apierrors.IsNotFound(err) {
 		_, err := l.leases.Create(ctx, l.claim(&coordinationv1.Lease{ObjectMeta: metav1.ObjectMeta{Name: l.name}}, now, true), metav1.CreateOptions{})
 		if apierrors.IsAlreadyExists(err) {

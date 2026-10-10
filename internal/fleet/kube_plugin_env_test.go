@@ -44,11 +44,20 @@ func TestValidatePluginEnv(t *testing.T) {
 	}
 }
 
-// A refused secret value is never echoed back in the error.
+// A refusal never echoes the entry's value, whatever the reason.
 func TestValidatePluginEnvDoesNotEchoSecrets(t *testing.T) {
-	err := ValidatePluginEnv([]string{"MY_SECRET=hunter2"})
-	if err == nil || strings.Contains(err.Error(), "hunter2") {
-		t.Fatalf("error %v must refuse without echoing the value", err)
+	for _, entries := range [][]string{
+		{"MY_SECRET=hunter2"},
+		{"MY-SECRET=hunter2"}, // not a variable name
+		{"PATH=hunter2"},      // reserved
+		{"KUBERNETES_EXEC_INFO=hunter2"},
+		{"A=1", "A=hunter2"}, // listed twice
+		{"A=hunter2\x00"},    // NUL
+	} {
+		err := ValidatePluginEnv(entries)
+		if err == nil || strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("ValidatePluginEnv(%q) = %v, want a refusal that does not echo the value", entries, err)
+		}
 	}
 }
 

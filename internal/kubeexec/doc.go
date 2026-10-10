@@ -9,8 +9,9 @@
 // path resolved through the record's extra_path, never interactively, and
 // with an environment limited to the process basics, the kubeconfig's own env
 // entries and the record's plugin_env allowlist (fleet.ValidatePluginEnv):
-// the rest of the daemon's environment never reaches a plugin. Credential
-// reads the expiry of the credential the connection authenticates with.
+// the daemon's other variables reach a plugin set empty, never with their
+// values. Credential reads the expiry of the credential the connection
+// authenticates with, running the plugin exactly as client-go does.
 //
 // Clients are built on first use, never at package init, so linking the
 // package costs fleet commands that never touch a cluster only client-go's own

@@ -20,9 +20,8 @@ import (
 // backup.go is the server-side state backup loop. fleetd periodically snapshots
 // the handful of files that constitute its own durable state (~/.fleet/*.json,
 // the mcp.* discovery/secret files and its Kubernetes state) into a single
-// compressed archive, so a
-// botched write, an errant `fleet destroy`, or a corrupted state.json can be
-// recovered from a recent point in time.
+// compressed archive, so a botched write, an errant `fleet destroy`, or a
+// corrupted state.json can be recovered from a recent point in time.
 //
 // Archives are written to ~/.fleet/backup/<date>/<hour>.tar.xz — one per UTC
 // clock hour, bucketed by day. xz is used (the most-compressing of the common
@@ -500,7 +499,7 @@ func (s *service) mcpRestoreBackup(_ context.Context, _ *mcp.CallToolRequest, _ 
 			"4. Unpack the archive over the settings dir: `tar -xJf <archive> -C " + fleetDir + "`. Each file lands back at its original path under the settings dir (kube/ files included), overwriting the current copy; files the archive does not hold are left alone.",
 			"5. Restart the daemon — run any `fleet` command (it auto-spawns fleetd) or start `fleet server` directly — then verify with the `fleet_version` and `fleet_status` tools.",
 		},
-		Warning: "Stop fleetd BEFORE unpacking. It rewrites these files continuously and snapshots hourly, so restoring under a live daemon can corrupt state.json or have your restore immediately overwritten. The archives contain mcp.token (a secret) — handle them accordingly.",
+		Warning: "Stop fleetd BEFORE unpacking. It rewrites these files continuously and snapshots hourly, so restoring under a live daemon can corrupt state.json or have your restore immediately overwritten. The archives contain secrets (mcp.token, armada.json's tokens, kube_clusters.json's gateway pull credentials) — handle them accordingly.",
 	}
 	if len(archives) == 0 {
 		out.Summary = "No backups exist yet under " + out.BackupDir + " (the daemon writes the first within an hour of starting). " + out.Summary

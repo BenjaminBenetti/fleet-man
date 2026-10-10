@@ -72,7 +72,10 @@ type Connection struct {
 	Auth   AuthKind
 	Plugin *Plugin
 
-	config *rest.Config
+	// configMu serializes copies of config: rest.CopyConfig writes through
+	// the exec provider it shares with its source (see RESTConfig).
+	configMu sync.Mutex
+	config   *rest.Config
 
 	clientOnce sync.Once
 	clientset  kubernetes.Interface
@@ -144,7 +147,7 @@ func Load(c fleet.KubeCluster, opts Options) (*Connection, error) {
 			return nil, err
 		}
 		conn.Plugin = plugin
-		cfg.ExecProvider = plugin.execConfig(environ)
+		cfg.ExecProvider = plugin.execConfig()
 	}
 	cfg.QPS, cfg.Burst = QPS, Burst
 	cfg.UserAgent = userAgent()
@@ -153,7 +156,18 @@ func Load(c fleet.KubeCluster, opts Options) (*Connection, error) {
 }
 
 // RESTConfig returns a copy of the pinned client configuration.
-func (c *Connection) RESTConfig() *rest.Config { return rest.CopyConfig(c.config) }
+// rest.CopyConfig leaves the copy sharing its source's exec provider, and
+// replaces that provider's cluster extension as it copies, so copies are
+// serialized and each gets an exec provider of its own.
+func (c *Connection) RESTConfig() *rest.Config {
+	c.configMu.Lock()
+	defer c.configMu.Unlock()
+	cfg := rest.CopyConfig(c.config)
+	if cfg.ExecProvider != nil {
+		cfg.ExecProvider = cfg.ExecProvider.DeepCopy()
+	}
+	return cfg
+}
 
 // Clientset returns the connection's typed client, built on first use.
 func (c *Connection) Clientset() (kubernetes.Interface, error) {

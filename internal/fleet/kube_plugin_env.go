@@ -45,16 +45,17 @@ func IsSecretEnvName(name string) bool {
 // ValidatePluginEnv reports the first PluginEnv entry the daemon refuses: a
 // name that is not a shell variable name, a name fleet sets itself, a name
 // given twice, or a value for a name that looks secret (pass such a variable
-// by name, so its value stays in the daemon's environment).
+// by name, so its value stays in the daemon's environment). A refusal names
+// the variable, never its value.
 func ValidatePluginEnv(entries []string) error {
 	seen := make(map[string]bool, len(entries))
 	for _, entry := range entries {
 		name, value, hasValue := ParsePluginEnv(entry)
 		switch {
 		case !isEnvName(name):
-			return fmt.Errorf("plugin_env %q: %q is not a variable name (letters, digits and _, not starting with a digit)", entry, name)
+			return fmt.Errorf("plugin_env: %q is not a variable name (letters, digits and _, not starting with a digit)", name)
 		case pluginEnvReserved[name] != "":
-			return fmt.Errorf("plugin_env %q: %s cannot be set here; %s", entry, name, pluginEnvReserved[name])
+			return fmt.Errorf("plugin_env: %s cannot be set here; %s", name, pluginEnvReserved[name])
 		case seen[name]:
 			return fmt.Errorf("plugin_env: %s is listed twice", name)
 		case hasValue && IsSecretEnvName(name):

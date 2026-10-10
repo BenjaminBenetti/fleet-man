@@ -180,6 +180,44 @@ func TestLeaseExpiredAllowsTakeover(t *testing.T) {
 	}
 }
 
+// A holder's renewal that lands while the copy's Get is in flight counts as
+// seen when the Get returns, not when it was sent: a slow read must not eat
+// into the margin Holding leaves the holder.
+func TestLeaseExpiryCountsFromTheRead(t *testing.T) {
+	cs, clk := fake.NewClientset(), newClock()
+	a := newTestLease(cs, original, clk.now)
+	ensure(t, a)
+	b := newTestLease(cs, restored, clk.now)
+	const slow = 20 * time.Second
+	gvr := coordinationv1.SchemeGroupVersion.WithResource("leases")
+	cs.PrependReactor("get", "leases", func(k8stesting.Action) (bool, runtime.Object, error) {
+		// The read takes 20s, and the holder renews 10s into it. (The fake
+		// clientset is locked while reactors run, so renew through its
+		// tracker.)
+		clk.advance(slow / 2)
+		obj, err := cs.Tracker().Get(gvr, testNS, a.Name())
+		if err != nil {
+			t.Fatalf("tracker get: %v", err)
+		}
+		renewed := obj.(*coordinationv1.Lease).DeepCopy()
+		renewTime := metav1.NewMicroTime(clk.now())
+		renewed.Spec.RenewTime = &renewTime
+		if err := cs.Tracker().Update(gvr, renewed, testNS); err != nil {
+			t.Fatalf("tracker update: %v", err)
+		}
+		clk.advance(slow / 2)
+		return false, nil, nil
+	})
+	sent := clk.now()
+	st := ensure(t, b)
+	if st.Held {
+		t.Fatalf("the copy took a live Lease: %+v", st)
+	}
+	if want := sent.Add(slow).Add(LeaseDuration); !st.FreeAt.Equal(want) {
+		t.Errorf("FreeAt = %v, want %v (a full duration after the read returned)", st.FreeAt, want)
+	}
+}
+
 // A restart on the same machine (same incarnation) renews at once.
 func TestLeaseSameIncarnationAfterRestart(t *testing.T) {
 	cs, clk := fake.NewClientset(), newClock()
