@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -38,17 +39,28 @@ func devcontainerTarget(t *testing.T, _ backendtest.Selection) backendtest.Targe
 	}
 }
 
-// devcontainerLeftovers lists the containers, running or not, that the
-// devcontainer CLI labelled with inst's workspace folder.
+// devcontainerLeftovers lists what docker holds labelled with inst's workspace
+// folder: the containers, running or not, the devcontainer CLI made for it,
+// and the images committed from them. A clone's image is committed from its
+// source and keeps the source's labels, so an image the clone's Down failed
+// to remove shows up at the source's teardown.
 func devcontainerLeftovers(inst *fleet.Instance) ([]string, error) {
-	out, err := exec.Command("docker", "ps", "-a", "-q", "--no-trunc",
-		"--filter", "label="+devmeta.LocalFolderLabel+"="+inst.WorkspaceDir).Output()
-	if err != nil {
-		return nil, err
-	}
+	filter := "label=" + devmeta.LocalFolderLabel + "=" + inst.WorkspaceDir
 	var held []string
-	for _, id := range strings.Fields(string(out)) {
-		held = append(held, "container "+id)
+	for _, list := range []struct {
+		kind string
+		args []string
+	}{
+		{"container", []string{"ps", "-a", "-q", "--no-trunc", "--filter", filter}},
+		{"image", []string{"image", "ls", "-q", "--no-trunc", "--filter", filter}},
+	} {
+		out, err := exec.Command("docker", list.args...).Output()
+		if err != nil {
+			return nil, fmt.Errorf("list %ss: %w", list.kind, err)
+		}
+		for _, id := range strings.Fields(string(out)) {
+			held = append(held, list.kind+" "+id)
+		}
 	}
 	return held, nil
 }

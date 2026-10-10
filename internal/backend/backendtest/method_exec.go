@@ -15,11 +15,11 @@ func caseExecExitCodes(c *C) {
 	i := c.Shared()
 	for _, code := range []int{0, 1, 3, 42, 255} {
 		for _, quiet := range []bool{false, true} {
-			argv := ShArgv(fmt.Sprintf("exit %d", code))
-			r := c.Exec(i, argv, nil)
+			run := c.Exec
 			if quiet {
-				r = c.ExecQuiet(i, argv, nil)
+				run = c.ExecQuiet
 			}
+			r := run(i, ShArgv(fmt.Sprintf("exit %d", code)), nil)
 			if r.Code != code || (r.Err == nil) != (code == 0) {
 				c.Errorf("exit %d (quiet %v): %s", code, quiet, r)
 			}
