@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,9 +29,9 @@ import (
 //   - an unlaunched run launches normally once its instance runs, with the
 //     command and prompts it was fired with and its payload read back from the
 //     firing's trigger event log;
-//   - a run whose instance is gone is dropped (an interrupted create is FAILED
-//     by then, see interrupted_jobs.go, and is dropped by the next tick, leaving
-//     the record for the user as any failed run does);
+//   - a run whose instance is gone is dropped, and one whose create the restart
+//     interrupted is FAILED by then (interrupted_jobs.go), so the first tick
+//     drops it and leaves the record for the user, as for any failed run;
 //   - an Automated instance missing from the file (spawned by a daemon that
 //     predates the file, or one whose write failed) is adopted: reaped on the
 //     idle rule, or, while it has no agent session, once idle for
@@ -155,7 +156,7 @@ func (sched *scheduler) persist() {
 		flog.Warn("automation: encode watch list failed", "err", err)
 		return
 	}
-	if sched.saved != nil && string(data) == string(sched.saved) {
+	if sched.saved != nil && bytes.Equal(data, sched.saved) {
 		return
 	}
 	if err := writeWatchFile(sched.watchPath, data); err != nil {

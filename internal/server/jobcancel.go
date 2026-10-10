@@ -118,7 +118,7 @@ func awaitCancelledJobs(ctx context.Context, cancelled []*job) []string {
 		warnings = append(warnings, fmt.Sprintf("%s job for %s/%s still running after %s; tearing down anyway",
 			jobKindName(cj.summary.GetKind()), cj.summary.GetFleet(), cj.summary.GetInstance(), destroyCancelWait))
 	}
-	flog.Info("destroy: cancelled in-flight jobs", "count", len(cancelled), "stuck", len(stuck), "ms", flog.MillisSince(start))
+	flog.Info("destroy: cancelled in-flight jobs", "fleet", cancelled[0].summary.GetFleet(), "count", len(cancelled), "stuck", len(stuck), "ms", flog.MillisSince(start))
 	return warnings
 }
 
