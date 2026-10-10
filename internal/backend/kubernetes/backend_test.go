@@ -3,7 +3,6 @@
 package kubernetes
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +32,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/imageserve"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/localcluster"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
@@ -378,6 +379,30 @@ func TestTeardown(t *testing.T) {
 		t.Errorf("the record outlived the teardown: %v", err)
 	}
 
+	// A cluster that refuses the teardown fails it, but the destroy removes
+	// the instance's state record regardless: the image hold and fleetd's
+	// record go too, and the tombstone finishes the objects later.
+	if err := SaveInstanceRecord(InstanceRecord{Cluster: handleCluster, Key: handleKey, StatefulSet: sts, Gen: 1}); err != nil {
+		t.Fatal(err)
+	}
+	writeIndex(t, state.KubeImagesPath(handleCluster), idx)
+	r.cs.PrependReactor("list", "*", func(k8stesting.Action) (bool, kruntime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "statefulsets"}, "", errors.New("no"))
+	})
+	err = newHandle(inst, r.pool).Down(inst.ContainerID)
+	if code, _ := kubeerr.Of(err); code != kubeerr.Forbidden {
+		t.Errorf("a refused teardown: %v", err)
+	}
+	if d, err := images.Lookup(handleCluster, handleKey); err != nil || d != nil {
+		t.Errorf("a refused teardown kept the image held: %+v, %v", d, err)
+	}
+	if _, err := LoadInstanceRecord(handleCluster, handleKey); !errors.Is(err, errNoInstanceRecord) {
+		t.Errorf("a refused teardown kept the record: %v", err)
+	}
+	if fp, _ := LoadFootprint(); len(fp.TombstonesOf(handleCluster)) != 1 {
+		t.Errorf("a refused teardown left no tombstone: %+v", fp)
+	}
+
 	keyless := r.inst()
 	keyless.KubeKey = ""
 	before := len(r.cs.Actions())
@@ -665,13 +690,12 @@ func TestAPICode(t *testing.T) {
 	}
 }
 
-func TestReportWarningsGoOnTheBanner(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+// A create's warnings come back with its result, each once, for the create
+// job to put on the banner.
+func TestCreateWarningsAreReturnedOnce(t *testing.T) {
 	c := &creation{id: bound{fleet: "alpha", name: "web"}, warnings: []string{"debug capabilities dropped by admission", " ", "debug capabilities dropped by admission", "second"}}
-	c.reportWarnings()
-	data, err := os.ReadFile(state.WarnPath("alpha", "web"))
-	if err != nil || !bytes.Equal(data, []byte("debug capabilities dropped by admission\nsecond")) {
-		t.Errorf("banner %q, %v", data, err)
+	if got := c.warningLines(); !slices.Equal(got, []string{"debug capabilities dropped by admission", "second"}) {
+		t.Errorf("warnings %q", got)
 	}
 }
 
@@ -704,5 +728,103 @@ func TestStartThatFailsScalesBackDown(t *testing.T) {
 	set, _ := r.cs.AppsV1().StatefulSets(handleNS).Get(context.Background(), sts, metav1.GetOptions{})
 	if *set.Spec.Replicas != 0 {
 		t.Fatalf("the failed start left replicas at %d", *set.Spec.Replicas)
+	}
+}
+
+// fakeGateway answers every pull with one classification and counts Warm.
+type fakeGateway struct {
+	pf    imageserve.PullFailure
+	asked []string
+	warms int
+}
+
+func (g *fakeGateway) ClassifyPull(clusterID, ref, reason, message string) (imageserve.PullFailure, bool) {
+	g.asked = append(g.asked, clusterID+" "+ref+" "+reason+" "+message)
+	if reason != "ErrImagePull" && reason != "ImagePullBackOff" {
+		return imageserve.PullFailure{}, false
+	}
+	return g.pf, true
+}
+
+func (g *fakeGateway) Warm() { g.warms++ }
+
+// A gateway-delivered image's failed pull is judged by the gateway while
+// fleet waits on the pod: one that cannot pass ends the wait at once with
+// its fix; one the kubelet's retries may fix is waited out, and the image
+// pull deadline then says what it was. Other strategies, and a daemon
+// without the gateway, are not asked.
+func TestGatewayPulls(t *testing.T) {
+	sts := handleSTS()
+	ref := "gw.example.com/r1/devcontainer@sha256:" + strings.Repeat("a", 64)
+	pod := &corev1.Pod{ObjectMeta: handleMeta(names.Pod(sts)),
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: DevContainer, Image: ref}}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: DevContainer,
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "x509: certificate signed by unknown authority"}}}}}}
+	r := newHandleRig(t, pod)
+	gw := &fakeGateway{}
+	SetEnvironment(Environment{Gateway: gw})
+	t.Cleanup(func() { SetEnvironment(Environment{}) })
+
+	if g := newGatewayPulls(r.pool, kubeimage.StrategyRegistry, handleCluster, sts); g != nil || g.check(context.Background()) != nil {
+		t.Fatal("a registry-delivered image was judged by the gateway")
+	}
+	g := newGatewayPulls(r.pool, kubeimage.StrategyGateway, handleCluster, sts)
+
+	gw.pf = imageserve.PullFailure{Kind: imageserve.PullCertificate, Message: "the node does not trust the gateway", Hint: "install its CA"}
+	err := g.check(context.Background())
+	if code, _ := kubeerr.Of(err); code != kubeerr.ImagePull.Narrow("certificate") || !strings.Contains(err.Error(), "install its CA") {
+		t.Fatalf("a lasting failure: %v", err)
+	}
+	if len(gw.asked) != 1 || gw.asked[0] != handleCluster+" "+ref+" ImagePullBackOff x509: certificate signed by unknown authority" {
+		t.Fatalf("asked %q", gw.asked)
+	}
+
+	gw.pf = imageserve.PullFailure{Kind: imageserve.PullGatewayUnreachable, Message: "the node could not reach the gateway", Hint: "check the gateway"}
+	if err := g.check(context.Background()); err != nil {
+		t.Fatalf("a failure that may pass ended the wait: %v", err)
+	}
+	deadline := &DeadlineError{Kind: CodeImagePull, Wait: "the instance pod's image to pull", After: time.Minute, Detail: "ImagePullBackOff", Env: EnvImagePullTimeout}
+	got := g.explain(deadline)
+	if code, _ := kubeerr.Of(got); code != kubeerr.ImagePull || !strings.Contains(got.Error(), "the node could not reach the gateway; check the gateway") || !strings.Contains(got.Error(), EnvImagePullTimeout) {
+		t.Fatalf("the pull deadline: %v", got)
+	}
+	other := &DeadlineError{Kind: CodeTimeout, Wait: "the pod", After: time.Minute}
+	if g.explain(other) != error(other) {
+		t.Error("another deadline was explained by the gateway")
+	}
+
+	SetEnvironment(Environment{})
+	if newGatewayPulls(r.pool, kubeimage.StrategyGateway, handleCluster, sts) != nil {
+		t.Error("judged without the daemon's gateway")
+	}
+}
+
+// A start of a gateway-delivered instance warms the gateway's registry
+// connection before the pod pulls; another strategy's does not.
+func TestStartWarmsTheGateway(t *testing.T) {
+	sts := handleSTS()
+	zero := int32(0)
+	r := newHandleRig(t, &appsv1.StatefulSet{ObjectMeta: handleMeta(sts), Spec: appsv1.StatefulSetSpec{Replicas: &zero}})
+	gw := &fakeGateway{}
+	SetEnvironment(Environment{Gateway: gw})
+	t.Cleanup(func() { SetEnvironment(Environment{}) })
+	// The scale is refused: the start ends right after the warm.
+	r.cs.PrependReactor("patch", "statefulsets", func(k8stesting.Action) (bool, kruntime.Object, error) {
+		return true, nil, errors.New("refused")
+	})
+	for _, tc := range []struct {
+		strategy kubeimage.Strategy
+		warms    int
+	}{{kubeimage.StrategyGateway, 1}, {kubeimage.StrategyNodeLoad, 0}} {
+		gw.warms = 0
+		if err := SaveInstanceRecord(InstanceRecord{Cluster: handleCluster, Key: handleKey, StatefulSet: sts, Gen: 1, Strategy: string(tc.strategy)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := newHandle(r.inst(), r.pool).Start(ContainerID(handleCluster, handleNS, sts, 1)); err == nil {
+			t.Fatal("a refused scale started the instance")
+		}
+		if gw.warms != tc.warms {
+			t.Errorf("%s: %d warms, want %d", tc.strategy, gw.warms, tc.warms)
+		}
 	}
 }

@@ -49,9 +49,13 @@ func sweepKubeShimDirs(now time.Time) {
 }
 
 // setBackendEnvironment gives the backend handles the daemon's image
-// delivery and connection facts.
+// delivery (and the gateway image server, when it runs) and connection facts.
 func (m *kubeManager) setBackendEnvironment(im *kubeImages) {
-	kubernetes.SetEnvironment(kubernetes.Environment{Images: im.manager, Facts: m.backendFacts})
+	env := kubernetes.Environment{Images: im.manager, Facts: m.backendFacts}
+	if im.gateway != nil {
+		env.Gateway = im.gateway
+	}
+	kubernetes.SetEnvironment(env)
 }
 
 // backendFacts is connection id's last full preflight, as a create needs it:

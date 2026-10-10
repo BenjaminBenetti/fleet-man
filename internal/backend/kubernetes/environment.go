@@ -16,7 +16,8 @@ import (
 
 // environment.go is what the daemon gives the backend handles beyond the
 // pool: its one image delivery (the kubeimage.Manager every connection shares,
-// with the gateway image server behind it) and what each connection's last
+// with the gateway image server behind it, which also explains failed pulls
+// through it) and what each connection's last
 // full preflight found (the facts a translation needs: is the cluster local,
 // its nodes and their platform, what admission lets in). fleetd sets it when
 // it starts (SetEnvironment). A process without one (a test, or a CLI that
@@ -39,6 +40,9 @@ type Environment struct {
 	// Images delivers instance images; nil in a process without the daemon's
 	// (Down and Start then use one of their own on the same index).
 	Images *kubeimage.Manager
+	// Gateway is the gateway image server, which explains a failed pull of
+	// a gateway-delivered image; nil when the daemon serves none.
+	Gateway GatewayPulls
 	// Facts is connection clusterID's last full preflight, waited for (within
 	// ctx) when none has finished yet; an error when the connection is
 	// unusable, with its kubernetes: code.

@@ -52,7 +52,8 @@ func (b *Backend) Stop(containerID string) error {
 }
 
 // Start scales the instance to 1, waits for its pod (delivering its image
-// again when the node lost it), connects its agent (restaging the daemon's
+// again when the node lost it, or warming the gateway a gateway-delivered
+// one pulls through), connects its agent (restaging the daemon's
 // fleet build into it) and runs the devcontainer's start hooks
 // (postStart, postAttach). A hook that fails is a warning, as on docker: the
 // instance runs. A pod that does not come up, or whose agent does not
@@ -73,6 +74,7 @@ func (b *Backend) Start(containerID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
 	defer cancel()
 	p := b.p()
+	warmGateway(kubeimage.Strategy(rec.Strategy))
 	if err := p.Scale(ctx, w.cluster, w.sts, 1); err != nil {
 		return classify(err)
 	}
@@ -88,14 +90,15 @@ func (b *Backend) Start(containerID string) error {
 		return classify(err)
 	}
 	redelivered := false
+	pulls := newGatewayPulls(p, kubeimage.Strategy(rec.Strategy), w.cluster, w.sts)
 	pod, err := p.WaitReady(ctx, w.cluster, w.sts, WaitOptions{PVC: w.sts, Check: func(ctx context.Context) error {
 		if !redelivered && b.redeliver(ctx, rec) {
 			redelivered = true
 		}
-		return nil
+		return pulls.check(ctx)
 	}})
 	if err != nil {
-		return failed(err)
+		return failed(pulls.explain(err))
 	}
 	t := rec.target()
 	t.Priority, t.Restage = PriorityInteractive, true
@@ -213,7 +216,10 @@ func (b *Backend) DownByKey() error {
 // teardown is a destroy's: the key's tombstone first (whatever the teardown
 // cannot delete now is known garbage), every object of the key, the image
 // released, fleetd's record of the instance and the pool's state of its pod
-// dropped.
+// dropped. A teardown the cluster refuses (unreachable, another daemon owns
+// it) fails, but the destroy goes on and removes the instance's state record
+// all the same, so the image hold and fleetd's record go with it: the
+// tombstone is what finishes the objects later.
 func (b *Backend) teardown() error {
 	if b.inst.KubeCluster == "" || !names.ValidHash(b.inst.KubeKey) {
 		return errUnbound
@@ -227,14 +233,14 @@ func (b *Backend) teardown() error {
 	if fleetName != "" {
 		p.Forget(PodTarget{Cluster: cluster, StatefulSet: names.Instance(fleetName, b.inst.Name, key)})
 	}
-	if err != nil {
-		return classify(err)
-	}
 	if rerr := currentEnvironment().images().Release(cluster, key); rerr != nil {
 		flog.Warn("kube down: releasing the instance's image", "cluster", cluster, "key", key, "err", rerr)
 	}
 	if rerr := RemoveInstanceRecord(cluster, key); rerr != nil {
 		flog.Warn("kube down: removing the instance's record", "cluster", cluster, "key", key, "err", rerr)
+	}
+	if err != nil {
+		return classify(err)
 	}
 	flog.Info("kube down: the instance's objects are deleted", "cluster", cluster, "key", key, "deleted", len(td.Deleted), "still_going", len(td.Remaining))
 	return nil

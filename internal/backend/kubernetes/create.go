@@ -31,7 +31,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeshim"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
-	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
 // create.go is an instance's create on its cluster (UpContext), after the
@@ -149,7 +148,7 @@ func (c *creation) run(ctx context.Context) (*backend.UpResult, error) {
 		c.stopFailed()
 		return nil, err
 	}
-	c.reportWarnings()
+	res.Warnings = c.warningLines()
 	return res, nil
 }
 
@@ -181,7 +180,9 @@ func (c *creation) provision(ctx context.Context, cfg *devcli.Config) (*backend.
 	if err != nil {
 		return nil, kubeerr.Wrap(kubeerr.ImagePush, err)
 	}
-	c.warnings = append(c.warnings, del.Warnings...)
+	for _, w := range del.Warnings {
+		c.warn(ctx, w)
+	}
 
 	if err := c.step(ctx, stepAdmit, fleet.StepApplyManifests, "admission"); err != nil {
 		return nil, err
@@ -193,10 +194,8 @@ func (c *creation) provision(ctx context.Context, cfg *devcli.Config) (*backend.
 	if err != nil {
 		return nil, classify(err)
 	}
-	c.warnings = append(c.warnings, adm.Result.Pod.Warnings...)
-	c.warnings = append(c.warnings, adm.Objects.Warnings...)
 	for _, w := range append(append([]string(nil), adm.Result.Pod.Warnings...), adm.Objects.Warnings...) {
-		backend.ReportWarning(ctx, w)
+		c.warn(ctx, w)
 	}
 
 	if err := c.step(ctx, stepApply, fleet.StepApplyManifests, ""); err != nil {
@@ -255,9 +254,16 @@ func (c *creation) provision(ctx context.Context, cfg *devcli.Config) (*backend.
 		return nil, err
 	}
 
-	pod, err := c.p.WaitReady(ctx, c.id.cluster, c.id.sts, WaitOptions{PVC: o.Disk.Name, Check: c.failedCreate(o.StatefulSet.Name)})
+	pulls := newGatewayPulls(c.p, del.Strategy, c.id.cluster, c.id.sts)
+	failedCreate := c.failedCreate(o.StatefulSet.Name)
+	pod, err := c.p.WaitReady(ctx, c.id.cluster, c.id.sts, WaitOptions{PVC: o.Disk.Name, Check: func(ctx context.Context) error {
+		if err := failedCreate(ctx); err != nil {
+			return err
+		}
+		return pulls.check(ctx)
+	}})
 	if err != nil {
-		return nil, classify(err)
+		return nil, classify(pulls.explain(err))
 	}
 	if err := c.learnNodeImage(pod, &rec, del); err != nil {
 		return nil, err
@@ -674,11 +680,10 @@ func (c *creation) warn(ctx context.Context, w string) {
 	backend.ReportWarning(ctx, w)
 }
 
-// reportWarnings puts the create's warnings on the instance's banner.
-func (c *creation) reportWarnings() {
-	if len(c.warnings) == 0 {
-		return
-	}
+// warningLines are the create's warnings for the instance's banner
+// (UpResult.Warnings, which the create job puts there after its own
+// provisioning steps), each once.
+func (c *creation) warningLines() []string {
 	seen := map[string]bool{}
 	var lines []string
 	for _, w := range c.warnings {
@@ -687,9 +692,7 @@ func (c *creation) reportWarnings() {
 			lines = append(lines, w)
 		}
 	}
-	if len(lines) > 0 {
-		state.WriteWarn(c.id.fleet, c.id.name, strings.Join(lines, "\n"))
-	}
+	return lines
 }
 
 // finish ends the job's journal, whatever the outcome: a failed create's
