@@ -445,6 +445,26 @@ func TestRemoveKubeCluster(t *testing.T) {
 	}
 }
 
+// A create that lands between a removal's look at the users and the
+// removal itself is still seen: the connection stays, and the reply names
+// it.
+func TestRemoveKubeClusterSeesACreateThatLandsMeanwhile(t *testing.T) {
+	f := newKubeFixture(t)
+	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube", Namespace: "fleet"}).GetCluster().GetId()
+	orig := beforeKubeRemove
+	beforeKubeRemove = func() {
+		seedKubeInstance(t, "alpha", "late", id, names.InstanceKey(testIdentity.DaemonID, "alpha", "late", time.Unix(1700000000, 0)))
+	}
+	t.Cleanup(func() { beforeKubeRemove = orig })
+	reply, err := f.svc.RemoveKubeCluster(context.Background(), &fleetgrpc.RemoveKubeClusterRequest{Id: id})
+	if err != nil || reply.GetRemoved() || len(reply.GetUsers()) != 1 || reply.GetUsers()[0].GetInstance() != "late" {
+		t.Fatalf("remove with a create landing meanwhile = %v, %v", reply, err)
+	}
+	if _, ok := f.svc.kube.record(id); !ok {
+		t.Fatal("the connection was removed under an instance")
+	}
+}
+
 // DESTROY_INSTANCES destroys the connection's instances, then removes it.
 func TestRemoveKubeClusterDestroysInstances(t *testing.T) {
 	f := newKubeFixture(t)
