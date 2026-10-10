@@ -86,6 +86,9 @@ func TestKubeSeedAndPodInit(t *testing.T) {
 	k.applyInstance(sts, m, 1)
 	pod := sts + "-0"
 	k.waitReady(pod)
+	// The pod is Ready before pod-init has laid out the cgroups; it records
+	// the layout once it has.
+	k.waitFile(pod, podinit.LayoutFile)
 	sh := func(script string) string {
 		return strings.TrimSpace(k.must(nil, "exec", "-n", k.ns, pod, "-c", "dev", "--", "sh", "-c", script))
 	}
@@ -450,6 +453,22 @@ func (k *kube) waitReady(pod string) {
 			logs, _, _ := k.run(nil, "logs", "-n", k.ns, pod)
 			k.t.Fatalf("%s never became Ready\n%s\n%s", pod, desc, logs)
 		}
+	}
+}
+
+// waitFile waits for file to exist, not empty, in pod's dev container.
+func (k *kube) waitFile(pod, file string) {
+	k.t.Helper()
+	deadline := time.Now().Add(time.Minute)
+	for {
+		if _, _, code := k.run(nil, "exec", "-n", k.ns, pod, "-c", "dev", "--", "test", "-s", file); code == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			logs, _, _ := k.run(nil, "logs", "-n", k.ns, pod)
+			k.t.Fatalf("%s: no %s after a minute\n%s", pod, file, logs)
+		}
+		time.Sleep(time.Second)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
 )
@@ -433,12 +434,18 @@ func TestContainerCgroup(t *testing.T) {
 }
 
 func TestSetupCgroups(t *testing.T) {
+	var slept []time.Duration
+	defer func(orig func(time.Duration)) { cgroupSleep = orig }(cgroupSleep)
+	cgroupSleep = func(d time.Duration) { slept = append(slept, d) }
 	const dir = "/sys/fs/cgroup/pod/ctr"
 	f := newFakeCgroupFS(dir, "cpuset cpu io memory pids", "536870912\n")
 	f.busy = 2
 	l, err := setupCgroups(f, dir, 0)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(slept, []time.Duration{time.Millisecond, 2 * time.Millisecond}) {
+		t.Fatalf("waits %v between the retries, want a short backoff", slept)
 	}
 	if !f.dirs[dir+"/fleet-agent"] || !f.dirs[dir+"/fleet-user"] {
 		t.Fatalf("children not created: %v", f.dirs)
@@ -486,6 +493,9 @@ func TestSetupCgroups(t *testing.T) {
 }
 
 func TestSetupCgroupsUnprivilegedAndStubborn(t *testing.T) {
+	var slept []time.Duration
+	defer func(orig func(time.Duration)) { cgroupSleep = orig }(cgroupSleep)
+	cgroupSleep = func(d time.Duration) { slept = append(slept, d) }
 	const dir = "/sys/fs/cgroup"
 	ro := newFakeCgroupFS(dir, "cpu memory pids", "max")
 	ro.readOnly = true
@@ -499,6 +509,18 @@ func TestSetupCgroupsUnprivilegedAndStubborn(t *testing.T) {
 	busy.busy = moveRetries + 1
 	if _, err := setupCgroups(busy, dir, 0); err == nil || errors.Is(err, errNoLayout) {
 		t.Fatalf("processes that never stop arriving: %v", err)
+	}
+	// It gives up only after outlasting a kube exec's start, which forks into
+	// the container cgroup for milliseconds.
+	var total time.Duration
+	for _, d := range slept {
+		total += d
+		if d > moveBackoffMax {
+			t.Fatalf("waited %v between two retries", d)
+		}
+	}
+	if len(slept) != moveRetries-1 || total < 2*time.Second || total > 10*time.Second {
+		t.Fatalf("%d waits, %v in all, before giving up", len(slept), total)
 	}
 	// No limit: the user cgroup stays unlimited; no memory controller: none
 	// enabled.

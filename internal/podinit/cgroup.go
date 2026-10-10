@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
 )
@@ -102,8 +103,17 @@ func containerCgroup(procSelfCgroup []byte) (string, bool) {
 var layoutControllers = []string{"cpu", "memory", "pids"}
 
 // moveRetries bounds the move-then-enable loop: a process forked between the
-// move and the write makes the kernel refuse (EBUSY), so it goes again.
-const moveRetries = 50
+// move and the write makes the kernel refuse (EBUSY), so it goes again. A
+// kube exec starting meanwhile lands in the container cgroup too and forks
+// its runc stages over milliseconds, so the retries back off, up to
+// moveBackoffMax, instead of spinning through the burst: about 4s in all.
+const (
+	moveRetries    = 50
+	moveBackoffMax = 100 * time.Millisecond
+)
+
+// cgroupSleep waits between the retries; tests stub it.
+var cgroupSleep = time.Sleep
 
 // setupCgroups lays out the container's cgroup (dir, a cgroupfs path): the
 // two children, every process moved into the agent one, the controllers
@@ -153,15 +163,20 @@ func (l *Layout) moveAndEnable(enable []string) error {
 	for _, c := range enable {
 		plus = append(plus, "+"+c)
 	}
-	var lastErr error
-	for range moveRetries {
+	var lastErr, moveErr error
+	wait := time.Millisecond
+	for i := range moveRetries {
+		if i > 0 {
+			cgroupSleep(wait)
+			wait = min(2*wait, moveBackoffMax)
+		}
 		procs, err := l.fs.ReadFile(path.Join(l.Container, "cgroup.procs"))
 		if err != nil {
 			return fmt.Errorf("read the container's processes: %w", err)
 		}
 		for _, pid := range strings.Fields(string(procs)) {
 			if err := l.fs.WriteFile(path.Join(l.Agent, "cgroup.procs"), []byte(pid)); err != nil && !errors.Is(err, syscall.ESRCH) {
-				lastErr = fmt.Errorf("move process %s into %s: %w", pid, AgentCgroup, err)
+				moveErr = fmt.Errorf("move process %s into %s: %w", pid, AgentCgroup, err)
 			}
 		}
 		if len(plus) == 0 {
@@ -175,6 +190,9 @@ func (l *Layout) moveAndEnable(enable []string) error {
 			return fmt.Errorf("enable %s for the children: %w", strings.Join(enable, ", "), err)
 		}
 		lastErr = err
+	}
+	if moveErr != nil {
+		return fmt.Errorf("enable the children's controllers: processes kept arriving: %w (last move: %v)", lastErr, moveErr)
 	}
 	return fmt.Errorf("enable the children's controllers: processes kept arriving: %w", lastErr)
 }
