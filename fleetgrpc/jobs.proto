@@ -25,7 +25,10 @@ enum JobKind {
 
 // JobStep enumerates the discrete provisioning/lifecycle steps (create.Run /
 // instanceops / destroy). A typed enum lets the TUI render a stable progress
-// checklist; DONE marks terminal success.
+// checklist; DONE marks terminal success. A provisioning job (create, clone,
+// rebuild) reports each step it enters as a JobProgress and records it as its
+// JobSummary.current_step, which is what an instance row shows while the job
+// runs. The domain mirror is fleet.JobStep (same numbers; protoconv converts).
 enum JobStep {
   JOB_STEP_UNSPECIFIED = 0;
   JOB_STEP_VALIDATE_BACKEND = 1;
@@ -40,13 +43,27 @@ enum JobStep {
   JOB_STEP_INSTALL_DOTFILES = 10;
   JOB_STEP_RUN_STARTUP_SCRIPTS = 11;
   JOB_STEP_INSTALL_CLAUDE_HOOKS = 12;
-  JOB_STEP_COPY_WORKSPACE = 13;     // clone-only
+  JOB_STEP_COPY_WORKSPACE = 13;     // clone, and a file:// template's copy
   JOB_STEP_BACKEND_CLONE = 14;      // clone-only
   JOB_STEP_BACKEND_DOWN = 15;       // destroy / stop
   JOB_STEP_REMOVE_WORKSPACE = 16;   // destroy (os.RemoveAll workspaceDir)
   JOB_STEP_BACKEND_START = 17;      // start
   JOB_STEP_MARK_RUNNING = 18;
   JOB_STEP_DONE = 19;
+  // 20-27 are the Kubernetes backend's provisioning steps (reported from its
+  // UpContext / rebuild). Nothing emits them yet; they are declared now so a
+  // client can already name them.
+  JOB_STEP_IMAGE_BUILD = 20;
+  JOB_STEP_IMAGE_DELIVER = 21;
+  JOB_STEP_APPLY_MANIFESTS = 22;
+  JOB_STEP_WAIT_POD = 23;
+  JOB_STEP_SEED = 24;
+  JOB_STEP_LIFECYCLE_HOOKS = 25;
+  JOB_STEP_EXPORT_WORKSPACE = 26;
+  JOB_STEP_ROLLBACK = 27;
+  // Wiring the instance into the fleet's shared buildkit server and deb/image
+  // caches (create, clone, rebuild).
+  JOB_STEP_CONFIGURE_CACHES = 28;
 }
 
 // LogLevel classifies a JobLog line. WARN replaces the legacy non-fatal
@@ -110,7 +127,12 @@ message JobProgress {
 
 // JobLog carries raw log output (tee'd git clone / devcontainer up /
 // startup-script stdout). level distinguishes the non-fatal WARNING surface
-// from info/error.
+// from info/error. One event per line, already redacted: the value of every
+// docker env flag (-e KEY=VALUE) is replaced by "<redacted>". A provisioning
+// job writes the same lines (and one per JobProgress step) to the instance's
+// creation log on the daemon host (~/.fleet/logs/<fleet>-<instance>.log, 0600),
+// which the TUI's logs view shows; the job's stream keeps only the most recent
+// lines for a watcher that attaches late.
 message JobLog {
   LogLevel level = 1;
   string line = 2;

@@ -87,7 +87,10 @@ func (JobKind) EnumDescriptor() ([]byte, []int) {
 
 // JobStep enumerates the discrete provisioning/lifecycle steps (create.Run /
 // instanceops / destroy). A typed enum lets the TUI render a stable progress
-// checklist; DONE marks terminal success.
+// checklist; DONE marks terminal success. A provisioning job (create, clone,
+// rebuild) reports each step it enters as a JobProgress and records it as its
+// JobSummary.current_step, which is what an instance row shows while the job
+// runs. The domain mirror is fleet.JobStep (same numbers; protoconv converts).
 type JobStep int32
 
 const (
@@ -104,13 +107,27 @@ const (
 	JobStep_JOB_STEP_INSTALL_DOTFILES     JobStep = 10
 	JobStep_JOB_STEP_RUN_STARTUP_SCRIPTS  JobStep = 11
 	JobStep_JOB_STEP_INSTALL_CLAUDE_HOOKS JobStep = 12
-	JobStep_JOB_STEP_COPY_WORKSPACE       JobStep = 13 // clone-only
+	JobStep_JOB_STEP_COPY_WORKSPACE       JobStep = 13 // clone, and a file:// template's copy
 	JobStep_JOB_STEP_BACKEND_CLONE        JobStep = 14 // clone-only
 	JobStep_JOB_STEP_BACKEND_DOWN         JobStep = 15 // destroy / stop
 	JobStep_JOB_STEP_REMOVE_WORKSPACE     JobStep = 16 // destroy (os.RemoveAll workspaceDir)
 	JobStep_JOB_STEP_BACKEND_START        JobStep = 17 // start
 	JobStep_JOB_STEP_MARK_RUNNING         JobStep = 18
 	JobStep_JOB_STEP_DONE                 JobStep = 19
+	// 20-27 are the Kubernetes backend's provisioning steps (reported from its
+	// UpContext / rebuild). Nothing emits them yet; they are declared now so a
+	// client can already name them.
+	JobStep_JOB_STEP_IMAGE_BUILD      JobStep = 20
+	JobStep_JOB_STEP_IMAGE_DELIVER    JobStep = 21
+	JobStep_JOB_STEP_APPLY_MANIFESTS  JobStep = 22
+	JobStep_JOB_STEP_WAIT_POD         JobStep = 23
+	JobStep_JOB_STEP_SEED             JobStep = 24
+	JobStep_JOB_STEP_LIFECYCLE_HOOKS  JobStep = 25
+	JobStep_JOB_STEP_EXPORT_WORKSPACE JobStep = 26
+	JobStep_JOB_STEP_ROLLBACK         JobStep = 27
+	// Wiring the instance into the fleet's shared buildkit server and deb/image
+	// caches (create, clone, rebuild).
+	JobStep_JOB_STEP_CONFIGURE_CACHES JobStep = 28
 )
 
 // Enum value maps for JobStep.
@@ -136,6 +153,15 @@ var (
 		17: "JOB_STEP_BACKEND_START",
 		18: "JOB_STEP_MARK_RUNNING",
 		19: "JOB_STEP_DONE",
+		20: "JOB_STEP_IMAGE_BUILD",
+		21: "JOB_STEP_IMAGE_DELIVER",
+		22: "JOB_STEP_APPLY_MANIFESTS",
+		23: "JOB_STEP_WAIT_POD",
+		24: "JOB_STEP_SEED",
+		25: "JOB_STEP_LIFECYCLE_HOOKS",
+		26: "JOB_STEP_EXPORT_WORKSPACE",
+		27: "JOB_STEP_ROLLBACK",
+		28: "JOB_STEP_CONFIGURE_CACHES",
 	}
 	JobStep_value = map[string]int32{
 		"JOB_STEP_UNSPECIFIED":          0,
@@ -158,6 +184,15 @@ var (
 		"JOB_STEP_BACKEND_START":        17,
 		"JOB_STEP_MARK_RUNNING":         18,
 		"JOB_STEP_DONE":                 19,
+		"JOB_STEP_IMAGE_BUILD":          20,
+		"JOB_STEP_IMAGE_DELIVER":        21,
+		"JOB_STEP_APPLY_MANIFESTS":      22,
+		"JOB_STEP_WAIT_POD":             23,
+		"JOB_STEP_SEED":                 24,
+		"JOB_STEP_LIFECYCLE_HOOKS":      25,
+		"JOB_STEP_EXPORT_WORKSPACE":     26,
+		"JOB_STEP_ROLLBACK":             27,
+		"JOB_STEP_CONFIGURE_CACHES":     28,
 	}
 )
 
@@ -609,7 +644,12 @@ func (x *JobProgress) GetPercent() float32 {
 
 // JobLog carries raw log output (tee'd git clone / devcontainer up /
 // startup-script stdout). level distinguishes the non-fatal WARNING surface
-// from info/error.
+// from info/error. One event per line, already redacted: the value of every
+// docker env flag (-e KEY=VALUE) is replaced by "<redacted>". A provisioning
+// job writes the same lines (and one per JobProgress step) to the instance's
+// creation log on the daemon host (~/.fleet/logs/<fleet>-<instance>.log, 0600),
+// which the TUI's logs view shows; the job's stream keeps only the most recent
+// lines for a watcher that attaches late.
 type JobLog struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Level         LogLevel               `protobuf:"varint,1,opt,name=level,proto3,enum=fleetgrpc.LogLevel" json:"level,omitempty"`
@@ -1276,7 +1316,7 @@ const file_jobs_proto_rawDesc = "" +
 	"\x17JOB_KIND_START_INSTANCE\x10\x03\x12\x1a\n" +
 	"\x16JOB_KIND_STOP_INSTANCE\x10\x04\x12\x1b\n" +
 	"\x17JOB_KIND_CLONE_INSTANCE\x10\x05\x12\x1d\n" +
-	"\x19JOB_KIND_REBUILD_INSTANCE\x10\x06*\xca\x04\n" +
+	"\x19JOB_KIND_REBUILD_INSTANCE\x10\x06*\xbb\x06\n" +
 	"\aJobStep\x12\x18\n" +
 	"\x14JOB_STEP_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19JOB_STEP_VALIDATE_BACKEND\x10\x01\x12\x1a\n" +
@@ -1298,7 +1338,16 @@ const file_jobs_proto_rawDesc = "" +
 	"\x19JOB_STEP_REMOVE_WORKSPACE\x10\x10\x12\x1a\n" +
 	"\x16JOB_STEP_BACKEND_START\x10\x11\x12\x19\n" +
 	"\x15JOB_STEP_MARK_RUNNING\x10\x12\x12\x11\n" +
-	"\rJOB_STEP_DONE\x10\x13*b\n" +
+	"\rJOB_STEP_DONE\x10\x13\x12\x18\n" +
+	"\x14JOB_STEP_IMAGE_BUILD\x10\x14\x12\x1a\n" +
+	"\x16JOB_STEP_IMAGE_DELIVER\x10\x15\x12\x1c\n" +
+	"\x18JOB_STEP_APPLY_MANIFESTS\x10\x16\x12\x15\n" +
+	"\x11JOB_STEP_WAIT_POD\x10\x17\x12\x11\n" +
+	"\rJOB_STEP_SEED\x10\x18\x12\x1c\n" +
+	"\x18JOB_STEP_LIFECYCLE_HOOKS\x10\x19\x12\x1d\n" +
+	"\x19JOB_STEP_EXPORT_WORKSPACE\x10\x1a\x12\x15\n" +
+	"\x11JOB_STEP_ROLLBACK\x10\x1b\x12\x1d\n" +
+	"\x19JOB_STEP_CONFIGURE_CACHES\x10\x1c*b\n" +
 	"\bLogLevel\x12\x19\n" +
 	"\x15LOG_LEVEL_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eLOG_LEVEL_INFO\x10\x01\x12\x12\n" +

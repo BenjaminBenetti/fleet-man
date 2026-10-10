@@ -77,10 +77,10 @@ func (RemoteMcpConn) EnumDescriptor() ([]byte, []int) {
 // WatchRequest opens a subscription.
 //
 // include_initial_state: emit one StateChanged snapshot, one RuntimeChanged
-// snapshot (if subscribe_runtime), and one JobStarted per in-flight job up
-// front — all taken in the SAME model-loop turn that registers the subscriber,
-// so they reflect every mutation up to that instant and arrive before any live
-// event.
+// snapshot (if subscribe_runtime), and one ActiveJobs set of the in-flight jobs
+// up front — all taken in the SAME model-loop turn that registers the
+// subscriber, so they reflect every mutation up to that instant and arrive
+// before any live event.
 //
 // subscribe_runtime: opt in to the high-frequency InstanceRuntime stream
 // (RuntimeChanged). The server only runs the expensive backend pollers (stats,
@@ -164,7 +164,9 @@ func (x *WatchRequest) GetReattachJobIds() []string {
 //
 // The Job* variants surface job activity to a watcher that did not itself start
 // the job. JobStarted is here (not only on the job RPC) so a Watch-only client
-// learns a job's identity/kind/target/started_at.
+// learns a job's identity/kind/target/started_at. The server does not send the
+// per-job variants on Watch; ActiveJobs carries every in-flight job's summary
+// (kind, target, current step) instead.
 //
 // BrowserOpen is pushed when the server's per-instance control listener receives
 // a browser.open envelope from inside a container; the SERVER owns the control
@@ -196,6 +198,7 @@ type Event struct {
 	//	*Event_FileCopy
 	//	*Event_MicSources
 	//	*Event_OutputTargets
+	//	*Event_ActiveJobs
 	Kind          isEvent_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -337,6 +340,15 @@ func (x *Event) GetOutputTargets() *OutputTargets {
 	return nil
 }
 
+func (x *Event) GetActiveJobs() *ActiveJobs {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_ActiveJobs); ok {
+			return x.ActiveJobs
+		}
+	}
+	return nil
+}
+
 type isEvent_Kind interface {
 	isEvent_Kind()
 }
@@ -385,6 +397,11 @@ type Event_OutputTargets struct {
 	OutputTargets *OutputTargets `protobuf:"bytes,11,opt,name=output_targets,json=outputTargets,proto3,oneof"`
 }
 
+type Event_ActiveJobs struct {
+	// 12 is kept for the Kubernetes cluster-health event.
+	ActiveJobs *ActiveJobs `protobuf:"bytes,13,opt,name=active_jobs,json=activeJobs,proto3,oneof"`
+}
+
 func (*Event_StateChanged) isEvent_Kind() {}
 
 func (*Event_JobStarted) isEvent_Kind() {}
@@ -406,6 +423,57 @@ func (*Event_FileCopy) isEvent_Kind() {}
 func (*Event_MicSources) isEvent_Kind() {}
 
 func (*Event_OutputTargets) isEvent_Kind() {}
+
+func (*Event_ActiveJobs) isEvent_Kind() {}
+
+// ActiveJobs is every in-flight job, as GetStateReply.active_jobs lists them,
+// pushed whenever a job starts, reaches another step (current_step) or ends.
+// Server-owned and conflatable like MicSources: each push replaces the last
+// one whole, and the initial snapshot carries the current set (empty when no
+// job runs), so a watcher can show the step every provisioning row is on.
+type ActiveJobs struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Jobs          []*JobSummary          `protobuf:"bytes,1,rep,name=jobs,proto3" json:"jobs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ActiveJobs) Reset() {
+	*x = ActiveJobs{}
+	mi := &file_watch_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActiveJobs) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActiveJobs) ProtoMessage() {}
+
+func (x *ActiveJobs) ProtoReflect() protoreflect.Message {
+	mi := &file_watch_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActiveJobs.ProtoReflect.Descriptor instead.
+func (*ActiveJobs) Descriptor() ([]byte, []int) {
+	return file_watch_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ActiveJobs) GetJobs() []*JobSummary {
+	if x != nil {
+		return x.Jobs
+	}
+	return nil
+}
 
 // RemoteMcpStatus is the computed status the settings page shows after the user
 // enables remote MCP and/or remote fleet (both share the one gateway tunnel, so
@@ -447,7 +515,7 @@ type RemoteMcpStatus struct {
 
 func (x *RemoteMcpStatus) Reset() {
 	*x = RemoteMcpStatus{}
-	mi := &file_watch_proto_msgTypes[2]
+	mi := &file_watch_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -459,7 +527,7 @@ func (x *RemoteMcpStatus) String() string {
 func (*RemoteMcpStatus) ProtoMessage() {}
 
 func (x *RemoteMcpStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_watch_proto_msgTypes[2]
+	mi := &file_watch_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -472,7 +540,7 @@ func (x *RemoteMcpStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoteMcpStatus.ProtoReflect.Descriptor instead.
 func (*RemoteMcpStatus) Descriptor() ([]byte, []int) {
-	return file_watch_proto_rawDescGZIP(), []int{2}
+	return file_watch_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *RemoteMcpStatus) GetState() RemoteMcpConn {
@@ -543,7 +611,7 @@ type StateChanged struct {
 
 func (x *StateChanged) Reset() {
 	*x = StateChanged{}
-	mi := &file_watch_proto_msgTypes[3]
+	mi := &file_watch_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -555,7 +623,7 @@ func (x *StateChanged) String() string {
 func (*StateChanged) ProtoMessage() {}
 
 func (x *StateChanged) ProtoReflect() protoreflect.Message {
-	mi := &file_watch_proto_msgTypes[3]
+	mi := &file_watch_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -568,7 +636,7 @@ func (x *StateChanged) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StateChanged.ProtoReflect.Descriptor instead.
 func (*StateChanged) Descriptor() ([]byte, []int) {
-	return file_watch_proto_rawDescGZIP(), []int{3}
+	return file_watch_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *StateChanged) GetState() *State {
@@ -591,7 +659,7 @@ type RuntimeChanged struct {
 
 func (x *RuntimeChanged) Reset() {
 	*x = RuntimeChanged{}
-	mi := &file_watch_proto_msgTypes[4]
+	mi := &file_watch_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -603,7 +671,7 @@ func (x *RuntimeChanged) String() string {
 func (*RuntimeChanged) ProtoMessage() {}
 
 func (x *RuntimeChanged) ProtoReflect() protoreflect.Message {
-	mi := &file_watch_proto_msgTypes[4]
+	mi := &file_watch_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -616,7 +684,7 @@ func (x *RuntimeChanged) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeChanged.ProtoReflect.Descriptor instead.
 func (*RuntimeChanged) Descriptor() ([]byte, []int) {
-	return file_watch_proto_rawDescGZIP(), []int{4}
+	return file_watch_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *RuntimeChanged) GetRuntime() []*InstanceRuntime {
@@ -642,7 +710,7 @@ type BrowserOpen struct {
 
 func (x *BrowserOpen) Reset() {
 	*x = BrowserOpen{}
-	mi := &file_watch_proto_msgTypes[5]
+	mi := &file_watch_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -654,7 +722,7 @@ func (x *BrowserOpen) String() string {
 func (*BrowserOpen) ProtoMessage() {}
 
 func (x *BrowserOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_watch_proto_msgTypes[5]
+	mi := &file_watch_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -667,7 +735,7 @@ func (x *BrowserOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BrowserOpen.ProtoReflect.Descriptor instead.
 func (*BrowserOpen) Descriptor() ([]byte, []int) {
-	return file_watch_proto_rawDescGZIP(), []int{5}
+	return file_watch_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *BrowserOpen) GetUrl() string {
@@ -733,7 +801,7 @@ type FileCopy struct {
 
 func (x *FileCopy) Reset() {
 	*x = FileCopy{}
-	mi := &file_watch_proto_msgTypes[6]
+	mi := &file_watch_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -745,7 +813,7 @@ func (x *FileCopy) String() string {
 func (*FileCopy) ProtoMessage() {}
 
 func (x *FileCopy) ProtoReflect() protoreflect.Message {
-	mi := &file_watch_proto_msgTypes[6]
+	mi := &file_watch_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -758,7 +826,7 @@ func (x *FileCopy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileCopy.ProtoReflect.Descriptor instead.
 func (*FileCopy) Descriptor() ([]byte, []int) {
-	return file_watch_proto_rawDescGZIP(), []int{6}
+	return file_watch_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *FileCopy) GetFleet() string {
@@ -806,7 +874,7 @@ const file_watch_proto_rawDesc = "" +
 	"\fWatchRequest\x122\n" +
 	"\x15include_initial_state\x18\x01 \x01(\bR\x13includeInitialState\x12+\n" +
 	"\x11subscribe_runtime\x18\x02 \x01(\bR\x10subscribeRuntime\x12(\n" +
-	"\x10reattach_job_ids\x18\x03 \x03(\tR\x0ereattachJobIds\"\xa3\x05\n" +
+	"\x10reattach_job_ids\x18\x03 \x03(\tR\x0ereattachJobIds\"\xdd\x05\n" +
 	"\x05Event\x12>\n" +
 	"\rstate_changed\x18\x01 \x01(\v2\x17.fleetgrpc.StateChangedH\x00R\fstateChanged\x128\n" +
 	"\vjob_started\x18\x02 \x01(\v2\x15.fleetgrpc.JobStartedH\x00R\n" +
@@ -821,8 +889,13 @@ const file_watch_proto_rawDesc = "" +
 	"\vmic_sources\x18\n" +
 	" \x01(\v2\x15.fleetgrpc.MicSourcesH\x00R\n" +
 	"micSources\x12A\n" +
-	"\x0eoutput_targets\x18\v \x01(\v2\x18.fleetgrpc.OutputTargetsH\x00R\routputTargetsB\x06\n" +
-	"\x04kind\"\xad\x02\n" +
+	"\x0eoutput_targets\x18\v \x01(\v2\x18.fleetgrpc.OutputTargetsH\x00R\routputTargets\x128\n" +
+	"\vactive_jobs\x18\r \x01(\v2\x15.fleetgrpc.ActiveJobsH\x00R\n" +
+	"activeJobsB\x06\n" +
+	"\x04kind\"7\n" +
+	"\n" +
+	"ActiveJobs\x12)\n" +
+	"\x04jobs\x18\x01 \x03(\v2\x15.fleetgrpc.JobSummaryR\x04jobs\"\xad\x02\n" +
 	"\x0fRemoteMcpStatus\x12.\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x18.fleetgrpc.RemoteMcpConnR\x05state\x12\x1d\n" +
 	"\n" +
@@ -868,45 +941,49 @@ func file_watch_proto_rawDescGZIP() []byte {
 }
 
 var file_watch_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_watch_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_watch_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_watch_proto_goTypes = []any{
 	(RemoteMcpConn)(0),      // 0: fleetgrpc.RemoteMcpConn
 	(*WatchRequest)(nil),    // 1: fleetgrpc.WatchRequest
 	(*Event)(nil),           // 2: fleetgrpc.Event
-	(*RemoteMcpStatus)(nil), // 3: fleetgrpc.RemoteMcpStatus
-	(*StateChanged)(nil),    // 4: fleetgrpc.StateChanged
-	(*RuntimeChanged)(nil),  // 5: fleetgrpc.RuntimeChanged
-	(*BrowserOpen)(nil),     // 6: fleetgrpc.BrowserOpen
-	(*FileCopy)(nil),        // 7: fleetgrpc.FileCopy
-	(*JobStarted)(nil),      // 8: fleetgrpc.JobStarted
-	(*JobProgress)(nil),     // 9: fleetgrpc.JobProgress
-	(*JobLog)(nil),          // 10: fleetgrpc.JobLog
-	(*JobDone)(nil),         // 11: fleetgrpc.JobDone
-	(*MicSources)(nil),      // 12: fleetgrpc.MicSources
-	(*OutputTargets)(nil),   // 13: fleetgrpc.OutputTargets
-	(*State)(nil),           // 14: fleetgrpc.State
-	(*InstanceRuntime)(nil), // 15: fleetgrpc.InstanceRuntime
+	(*ActiveJobs)(nil),      // 3: fleetgrpc.ActiveJobs
+	(*RemoteMcpStatus)(nil), // 4: fleetgrpc.RemoteMcpStatus
+	(*StateChanged)(nil),    // 5: fleetgrpc.StateChanged
+	(*RuntimeChanged)(nil),  // 6: fleetgrpc.RuntimeChanged
+	(*BrowserOpen)(nil),     // 7: fleetgrpc.BrowserOpen
+	(*FileCopy)(nil),        // 8: fleetgrpc.FileCopy
+	(*JobStarted)(nil),      // 9: fleetgrpc.JobStarted
+	(*JobProgress)(nil),     // 10: fleetgrpc.JobProgress
+	(*JobLog)(nil),          // 11: fleetgrpc.JobLog
+	(*JobDone)(nil),         // 12: fleetgrpc.JobDone
+	(*MicSources)(nil),      // 13: fleetgrpc.MicSources
+	(*OutputTargets)(nil),   // 14: fleetgrpc.OutputTargets
+	(*JobSummary)(nil),      // 15: fleetgrpc.JobSummary
+	(*State)(nil),           // 16: fleetgrpc.State
+	(*InstanceRuntime)(nil), // 17: fleetgrpc.InstanceRuntime
 }
 var file_watch_proto_depIdxs = []int32{
-	4,  // 0: fleetgrpc.Event.state_changed:type_name -> fleetgrpc.StateChanged
-	8,  // 1: fleetgrpc.Event.job_started:type_name -> fleetgrpc.JobStarted
-	9,  // 2: fleetgrpc.Event.job_progress:type_name -> fleetgrpc.JobProgress
-	10, // 3: fleetgrpc.Event.job_log:type_name -> fleetgrpc.JobLog
-	11, // 4: fleetgrpc.Event.job_done:type_name -> fleetgrpc.JobDone
-	6,  // 5: fleetgrpc.Event.browser_open:type_name -> fleetgrpc.BrowserOpen
-	5,  // 6: fleetgrpc.Event.runtime_changed:type_name -> fleetgrpc.RuntimeChanged
-	3,  // 7: fleetgrpc.Event.remote_mcp_status:type_name -> fleetgrpc.RemoteMcpStatus
-	7,  // 8: fleetgrpc.Event.file_copy:type_name -> fleetgrpc.FileCopy
-	12, // 9: fleetgrpc.Event.mic_sources:type_name -> fleetgrpc.MicSources
-	13, // 10: fleetgrpc.Event.output_targets:type_name -> fleetgrpc.OutputTargets
-	0,  // 11: fleetgrpc.RemoteMcpStatus.state:type_name -> fleetgrpc.RemoteMcpConn
-	14, // 12: fleetgrpc.StateChanged.state:type_name -> fleetgrpc.State
-	15, // 13: fleetgrpc.RuntimeChanged.runtime:type_name -> fleetgrpc.InstanceRuntime
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	5,  // 0: fleetgrpc.Event.state_changed:type_name -> fleetgrpc.StateChanged
+	9,  // 1: fleetgrpc.Event.job_started:type_name -> fleetgrpc.JobStarted
+	10, // 2: fleetgrpc.Event.job_progress:type_name -> fleetgrpc.JobProgress
+	11, // 3: fleetgrpc.Event.job_log:type_name -> fleetgrpc.JobLog
+	12, // 4: fleetgrpc.Event.job_done:type_name -> fleetgrpc.JobDone
+	7,  // 5: fleetgrpc.Event.browser_open:type_name -> fleetgrpc.BrowserOpen
+	6,  // 6: fleetgrpc.Event.runtime_changed:type_name -> fleetgrpc.RuntimeChanged
+	4,  // 7: fleetgrpc.Event.remote_mcp_status:type_name -> fleetgrpc.RemoteMcpStatus
+	8,  // 8: fleetgrpc.Event.file_copy:type_name -> fleetgrpc.FileCopy
+	13, // 9: fleetgrpc.Event.mic_sources:type_name -> fleetgrpc.MicSources
+	14, // 10: fleetgrpc.Event.output_targets:type_name -> fleetgrpc.OutputTargets
+	3,  // 11: fleetgrpc.Event.active_jobs:type_name -> fleetgrpc.ActiveJobs
+	15, // 12: fleetgrpc.ActiveJobs.jobs:type_name -> fleetgrpc.JobSummary
+	0,  // 13: fleetgrpc.RemoteMcpStatus.state:type_name -> fleetgrpc.RemoteMcpConn
+	16, // 14: fleetgrpc.StateChanged.state:type_name -> fleetgrpc.State
+	17, // 15: fleetgrpc.RuntimeChanged.runtime:type_name -> fleetgrpc.InstanceRuntime
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_watch_proto_init() }
@@ -931,15 +1008,16 @@ func file_watch_proto_init() {
 		(*Event_FileCopy)(nil),
 		(*Event_MicSources)(nil),
 		(*Event_OutputTargets)(nil),
+		(*Event_ActiveJobs)(nil),
 	}
-	file_watch_proto_msgTypes[5].OneofWrappers = []any{}
+	file_watch_proto_msgTypes[6].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_watch_proto_rawDesc), len(file_watch_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
