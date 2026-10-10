@@ -533,3 +533,106 @@ func TestTolerationText(t *testing.T) {
 		t.Fatalf("parsed %v", tol)
 	}
 }
+
+// kubeRevServer is UpdateKubeCluster as the daemon answers it: an expected
+// revision other than the record's is refused as ABORTED, and every save
+// applies to the record and bumps its revision.
+func kubeRevServer(st *fleetgrpc.KubeClusterStatus) (*fleetgrpc.KubeClusterStatus, func(kubeUpdateCall) (*fleetgrpc.KubeClusterStatus, error)) {
+	cur := proto.Clone(st).(*fleetgrpc.KubeClusterStatus)
+	return cur, func(c kubeUpdateCall) (*fleetgrpc.KubeClusterStatus, error) {
+		if c.rev != 0 && c.rev != cur.GetCluster().GetRevision() {
+			return nil, status.Errorf(codes.Aborted, "changed since it was read (revision %d, now %d)", c.rev, cur.GetCluster().GetRevision())
+		}
+		next, _ := savedStatus(cur)(kubeUpdateCall{paths: c.paths, cluster: c.cluster, rev: cur.GetCluster().GetRevision()})
+		proto.Reset(cur)
+		proto.Merge(cur, next)
+		return proto.Clone(cur).(*fleetgrpc.KubeClusterStatus), nil
+	}
+}
+
+// Quick edits of several fields, made before the first save is back (over a
+// slow gateway), all land: the saves go one at a time, each past this
+// editor's own earlier ones, so they never refuse each other as "changed
+// elsewhere". A change made elsewhere still refuses the next save.
+func TestEditorQuickEditsNeverRefuseEachOther(t *testing.T) {
+	st := kubeSt("eu-1", "prod-eu", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
+	m, sp := kubeTestModel(t, st)
+	server, answer := kubeRevServer(st)
+	calls := stubKubeUpdate(t, answer)
+	e := openEditor(m, sp, "eu-1")
+
+	editorRowOf(t, e, "allow_privileged")
+	first := press(m, sp, "right") // on its way, not answered yet
+	editorRowOf(t, e, "debug_capabilities")
+	if cmd := press(m, sp, "right"); cmd != nil {
+		t.Fatal("a second save while one is in flight must wait for it")
+	}
+	editorRowOf(t, e, "disk_size")
+	press(m, sp, "enter") // an edit begun before either answer
+	e.input.SetValue("100Gi")
+
+	pumpKube(t, m, first)
+	pumpKube(t, m, press(m, sp, "enter"))
+	if len(*calls) != 3 {
+		t.Fatalf("sent %d saves, want 3", len(*calls))
+	}
+	for i, want := range []int64{3, 4, 5} {
+		if got := (*calls)[i].rev; got != want {
+			t.Errorf("save %d (%v) sent at revision %d, want %d", i, (*calls)[i].paths, got, want)
+		}
+	}
+	if len(e.fieldErr) != 0 || len(e.saving) != 0 || e.inFlight {
+		t.Fatalf("every save must land: errors %v, saving %v", e.fieldErr, e.saving)
+	}
+	got := m.kubeStatus("eu-1").GetCluster()
+	if !got.GetAllowPrivileged() || got.GetDebugCapabilities() != "require" || got.GetDiskSize() != "100Gi" || got.GetRevision() != 6 {
+		t.Fatalf("record = %v", got)
+	}
+
+	// Someone else changes the record; the editor has not seen it yet.
+	server.Cluster.Revision++
+	editorRowOf(t, e, "clone_method")
+	pumpKube(t, m, press(m, sp, "right"))
+	if !strings.Contains(e.fieldErr["clone_method"], "changed elsewhere") {
+		t.Fatalf("a change made elsewhere must still refuse the save: %v", e.fieldErr)
+	}
+}
+
+// Saves queued when the editor closes still go out: esc never drops an edit
+// already made.
+func TestEditorClosedWithSavesQueuedSendsThem(t *testing.T) {
+	st := kubeSt("eu-1", "prod-eu", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
+	m, sp := kubeTestModel(t, st)
+	_, answer := kubeRevServer(st)
+	calls := stubKubeUpdate(t, answer)
+	e := openEditor(m, sp, "eu-1")
+	editorRowOf(t, e, "allow_privileged")
+	first := press(m, sp, "right")
+	editorRowOf(t, e, "debug_capabilities")
+	press(m, sp, "right")
+	press(m, sp, "esc")
+	if sp.kubeDialog != nil {
+		t.Fatal("esc closes the editor")
+	}
+	pumpKube(t, m, first)
+	if len(*calls) != 2 || (*calls)[1].rev != 4 {
+		t.Fatalf("calls = %+v, want the queued save sent after the first", *calls)
+	}
+	if got := m.kubeStatus("eu-1").GetCluster(); got.GetDebugCapabilities() != "require" {
+		t.Fatalf("record = %v", got)
+	}
+}
+
+// ←/→ on a class field with nothing to choose from saves nothing: an update
+// that changes nothing would still bump the revision.
+func TestEditorCycleWithOneChoiceSavesNothing(t *testing.T) {
+	st := kubeSt("eu-1", "prod-eu", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
+	m, sp := kubeTestModel(t, st)
+	calls := stubKubeUpdate(t, savedStatus(st))
+	e := openEditor(m, sp, "eu-1")
+	editorRowOf(t, e, "storage_class")
+	pumpKube(t, m, press(m, sp, "right"))
+	if len(*calls) != 0 {
+		t.Fatalf("sent %+v for a class list with nothing in it", *calls)
+	}
+}

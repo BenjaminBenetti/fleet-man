@@ -32,6 +32,7 @@ const (
 // kubeRemoveDialog is the disconnect dialog.
 type kubeRemoveDialog struct {
 	id                string
+	gen               int    // the watch generation it was opened under
 	name              string // as it was when the dialog opened (a push may drop it first)
 	instances, agents []kubeUser
 	cursor            int // index into actions()
@@ -55,7 +56,7 @@ func newKubeRemoveDialog(m *model, id string) *kubeRemoveDialog {
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 128
-	d := &kubeRemoveDialog{id: id, name: id, input: input}
+	d := &kubeRemoveDialog{id: id, name: id, input: input, gen: m.watchGen}
 	if st := m.kubeStatus(id); st != nil {
 		d.name = kubeDisplayName(st.GetCluster())
 	}
@@ -101,11 +102,6 @@ func (d *kubeRemoveDialog) forgetNeedsName(st *fleetgrpc.KubeClusterStatus) bool
 func (d *kubeRemoveDialog) update(m *model, page *settingsPage, msg tea.Msg) (tea.Cmd, bool) {
 	st := m.kubeStatus(d.id)
 	switch msg := msg.(type) {
-	case kubeRemovedMsg:
-		if msg.dialog != d {
-			return nil, false
-		}
-		return d.onRemoved(m, page, msg), true
 	case tea.KeyMsg:
 		if st == nil && d.busy == "" {
 			page.closeKubeDialog(m)
@@ -119,7 +115,14 @@ func (d *kubeRemoveDialog) update(m *model, page *settingsPage, msg tea.Msg) (te
 
 func (d *kubeRemoveDialog) key(m *model, page *settingsPage, st *fleetgrpc.KubeClusterStatus, key tea.KeyMsg) tea.Cmd {
 	if d.busy != "" {
-		return nil // the daemon is working on it; its answer closes or updates the dialog
+		// The daemon is working on it (destroying instances can take
+		// minutes); its answer closes or updates the dialog. esc leaves it
+		// to finish there, and the answer then comes as a message.
+		if s := key.String(); s == "esc" || s == "q" {
+			page.closeKubeDialog(m)
+			m.message = fmt.Sprintf("%s %s: still %s on fleetd", kubeGlyphCluster, d.name, strings.TrimSuffix(d.busy, "…"))
+		}
+		return nil
 	}
 	if d.typing {
 		switch key.String() {
@@ -187,6 +190,33 @@ func (d *kubeRemoveDialog) remove(mode fleetgrpc.KubeRemoveMode, busy string) te
 		reply, err := removeKubeClusterRemote(id, mode)
 		return kubeRemovedMsg{dialog: d, mode: mode, reply: reply, err: err}
 	}
+}
+
+// handleKubeRemovedMsg applies a disconnect's answer: in its dialog while
+// that is open, else (esc left it while fleetd worked) as a message. An
+// armada switch drops it: the dialog was about the daemon it left.
+func (m *model) handleKubeRemovedMsg(msg kubeRemovedMsg) tea.Cmd {
+	d := msg.dialog
+	if d == nil || d.gen != m.watchGen {
+		return nil
+	}
+	if page, ok := m.currentPage.(*settingsPage); ok && page.kubeDialog == kubeDialog(d) {
+		return d.onRemoved(m, page, msg)
+	}
+	d.busy = ""
+	switch {
+	case msg.err != nil:
+		m.message = fmt.Sprintf("Disconnecting %s %s failed: %s", kubeGlyphCluster, d.name, kubeRPCError(msg.err))
+	case !msg.reply.GetRemoved():
+		m.message = fmt.Sprintf("%s %s is still connected: something uses it now", kubeGlyphCluster, d.name)
+	default:
+		m.kubeForget(d.id)
+		m.message = fmt.Sprintf("Disconnected %s %s", kubeGlyphCluster, d.name)
+		if w := msg.reply.GetWarnings(); len(w) > 0 {
+			m.message += " · " + strings.Join(w, " · ")
+		}
+	}
+	return nil
 }
 
 // onRemoved applies the daemon's answer: gone, or (users appeared since the

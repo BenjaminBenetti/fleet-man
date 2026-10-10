@@ -163,3 +163,27 @@ func TestRemoveDestroyForgetUnreachableAndRepoint(t *testing.T) {
 		t.Fatalf("Re-point opened %T", sp.kubeDialog)
 	}
 }
+
+// Destroying a cluster's instances can take minutes: esc leaves the dialog
+// while fleetd works, and the answer then arrives as a message (and the row
+// goes) instead of being lost.
+func TestRemoveBusyEscLeavesItToFleetd(t *testing.T) {
+	m, sp := kubeTestModel(t, kubeSt("mk-1", "minikube", 2))
+	stubKubeRemove(t, func(fleetgrpc.KubeRemoveMode) *fleetgrpc.RemoveKubeClusterReply {
+		return &fleetgrpc.RemoveKubeClusterReply{Removed: true, Warnings: []string{"2 PVCs left"}}
+	})
+	openRemove(t, m, sp)
+	working := press(m, sp, "enter")
+	press(m, sp, "j") // ignored while fleetd works
+	if _, ok := sp.kubeDialog.(*kubeRemoveDialog); !ok {
+		t.Fatal("keys other than esc must wait for fleetd")
+	}
+	press(m, sp, "esc")
+	if sp.kubeDialog != nil || !strings.Contains(m.message, "still disconnecting on fleetd") {
+		t.Fatalf("esc must leave the dialog to fleetd (dialog %T, message %q)", sp.kubeDialog, m.message)
+	}
+	pumpKube(t, m, working)
+	if m.kubeStatus("mk-1") != nil || !strings.Contains(m.message, "Disconnected ☸ minikube · 2 PVCs left") {
+		t.Fatalf("still listed %v, message %q", m.kubeStatus("mk-1") != nil, m.message)
+	}
+}

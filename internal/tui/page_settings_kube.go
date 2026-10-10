@@ -173,7 +173,9 @@ func (settingsPage *settingsPage) enterKubeClusterRow(m *model, i int) tea.Cmd {
 		settingsPage.kubeDialog = newKubeRemoveDialog(m, id)
 		return nil
 	}
-	settingsPage.kubeDialog = newKubeEditor(id)
+	editor := newKubeEditor(id)
+	editor.gen = m.watchGen
+	settingsPage.kubeDialog = editor
 	return nil
 }
 

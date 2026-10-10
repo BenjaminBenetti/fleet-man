@@ -123,6 +123,10 @@ func pumpKube(t *testing.T, m *model, cmd tea.Cmd) []tea.Msg {
 			queue = append(queue, m.handleKubeTestMsg(msg))
 		case kubeLoginMsg:
 			queue = append(queue, m.handleKubeLoginMsg(msg))
+		case kubeSavedMsg:
+			queue = append(queue, m.handleKubeSavedMsg(msg))
+		case kubeRemovedMsg:
+			queue = append(queue, m.handleKubeRemovedMsg(msg))
 		case kubePluginsMsg:
 			m.handleKubePluginsMsg(msg)
 		case kubeClustersMsg:

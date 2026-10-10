@@ -1007,6 +1007,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case kubeLoginMsg:
 		return m, tea.Batch(spinCmd, m.handleKubeLoginMsg(msg))
 
+	case kubeSavedMsg:
+		return m, tea.Batch(spinCmd, m.handleKubeSavedMsg(msg))
+
+	case kubeRemovedMsg:
+		return m, tea.Batch(spinCmd, m.handleKubeRemovedMsg(msg))
+
 	case kubePluginsMsg:
 		m.handleKubePluginsMsg(msg)
 		return m, spinCmd

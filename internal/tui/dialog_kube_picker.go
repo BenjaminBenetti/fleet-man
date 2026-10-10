@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -156,20 +158,37 @@ func (p *kubePicker) draft(m *model, c *fleetgrpc.KubeContext) *fleetgrpc.KubeCl
 	}
 }
 
+// kubeNameMaxBytes is the longest display name the daemon accepts.
+const kubeNameMaxBytes = 63
+
 // kubeDefaultName names a new connection after its context, or after its
-// context and namespace when that is taken (names are unique per daemon).
+// context and namespace when that is taken (names are unique per daemon). A
+// long context (an EKS ARN) is shortened in the middle to the daemon's limit.
 func kubeDefaultName(m *model, context, ns string) string {
 	taken := map[string]bool{}
 	for _, st := range m.kubeStatuses() {
 		taken[strings.ToLower(kubeDisplayName(st.GetCluster()))] = true
 	}
 	for _, name := range []string{context, context + "/" + ns} {
-		name = kubeShortContext(name, 63)
+		if strings.ContainsFunc(name, unicode.IsControl) {
+			break // refused by the daemon: let it name the connection
+		}
+		name = kubeFitBytes(name, kubeNameMaxBytes)
 		if !taken[strings.ToLower(name)] {
 			return name
 		}
 	}
 	return "" // the daemon names it after its id
+}
+
+// kubeFitBytes is s shortened in the middle (kubeShortContext) until it is
+// at most max bytes: the limit is in bytes, and the ellipsis alone is three.
+func kubeFitBytes(s string, max int) string {
+	out := s
+	for n := utf8.RuneCountInString(s) - 1; len(out) > max && n > 0; n-- {
+		out = kubeShortContext(s, n)
+	}
+	return out
 }
 
 // run is the latest draft test, or nil.
@@ -476,8 +495,10 @@ func (p *kubePicker) startTest(m *model, c *fleetgrpc.KubeContext) tea.Cmd {
 // onTestDone connects a usable draft, or says what failed.
 func (p *kubePicker) onTestDone(m *model, run *kubeTestRun) tea.Cmd {
 	c := p.selected()
-	if c == nil || c.GetName() != p.testCtx {
-		return nil // the cursor moved on; the result stays for when it is back
+	if c == nil || !p.sameDraft(c) {
+		// The cursor moved on, or n chose another namespace meanwhile: only
+		// what was tested connects. The result stays for when it is back.
+		return nil
 	}
 	if run.err == nil && kubeUsable(run.result.GetState()) {
 		return p.add(m, p.draft(m, c))

@@ -332,3 +332,55 @@ func TestPickerRepointsAConnection(t *testing.T) {
 		t.Fatalf("a re-point returns to the editor with the new context (dialog %T)", sp.kubeDialog)
 	}
 }
+
+// A long context (an EKS ARN) still names the connection: shortened in the
+// middle to the daemon's 63-byte limit (the ellipsis counts three bytes),
+// keeping the cluster name at the end. A name the daemon would refuse
+// outright is left for it to choose.
+func TestPickerNamesALongContextWithinTheDaemonLimit(t *testing.T) {
+	m, _ := kubeTestModel(t)
+	arn := "arn:aws:eks:ap-southeast-2:123456789012:cluster/acme-production-platform"
+	got := kubeDefaultName(m, arn, "fleet")
+	if len(got) > kubeNameMaxBytes || !strings.HasPrefix(got, "arn:aws:eks:") || !strings.HasSuffix(got, "production-platform") || !strings.Contains(got, "…") {
+		t.Fatalf("name = %q (%d bytes)", got, len(got))
+	}
+	wide := strings.Repeat("ü", 40) + "-cluster"
+	if got := kubeDefaultName(m, wide, "fleet"); len(got) > kubeNameMaxBytes || !strings.HasSuffix(got, "-cluster") {
+		t.Fatalf("name = %q (%d bytes)", got, len(got))
+	}
+	if got := kubeDefaultName(m, "ctx\x07bell", "fleet"); got != "" {
+		t.Fatalf("name = %q, want the daemon to name it", got)
+	}
+}
+
+// What connects is what was tested: a namespace chosen with n while the test
+// ran waits for its own test instead of connecting untested.
+func TestPickerConnectsOnlyTheTestedNamespace(t *testing.T) {
+	m, sp := kubeTestModel(t)
+	stubKubeContexts(t, pickerContexts())
+	p := openPicker(t, m, sp)
+	ready := kubeSt("", "", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
+	reqs := stubKubeTest(t, func(*fleetgrpc.TestKubeClusterRequest) []*fleetgrpc.TestKubeClusterEvent {
+		return testEvents(ready)
+	})
+	var added []*fleetgrpc.KubeCluster
+	origAdd := addKubeClusterRemote
+	addKubeClusterRemote = func(c *fleetgrpc.KubeCluster) (*fleetgrpc.KubeClusterStatus, error) {
+		added = append(added, proto.Clone(c).(*fleetgrpc.KubeCluster))
+		return kubeSt("minikube-1", c.GetDisplayName(), fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CHECKING), nil
+	}
+	t.Cleanup(func() { addKubeClusterRemote = origAdd })
+
+	test := press(m, sp, "enter") // the test of namespace fleet, not answered yet
+	press(m, sp, "n")
+	p.input.SetValue("team-a")
+	press(m, sp, "enter")
+	pumpKube(t, m, test)
+	if len(added) != 0 || sp.kubeDialog != p {
+		t.Fatalf("added %v: team-a was never tested", added)
+	}
+	pumpKube(t, m, press(m, sp, "enter"))
+	if len(*reqs) != 2 || (*reqs)[1].GetCluster().GetNamespace() != "team-a" || len(added) != 1 || added[0].GetNamespace() != "team-a" {
+		t.Fatalf("tests %v, added %v: enter must test team-a, then connect it", *reqs, added)
+	}
+}

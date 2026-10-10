@@ -44,6 +44,7 @@ type kubeEditorRow struct {
 // kubeEditor is the cluster editor dialog.
 type kubeEditor struct {
 	id     string
+	gen    int // the watch generation it was opened under
 	row    int
 	offset int
 	open   map[string]bool
@@ -56,9 +57,25 @@ type kubeEditor struct {
 	input   textinput.Model
 	editRev int64
 
+	// saving marks the fields with a save queued or in flight. Saves go to
+	// the daemon one at a time, in order: each one's expected revision is
+	// moved past this editor's own earlier saves (own: the revision a save
+	// was sent at → the one it produced), so quick edits of two fields never
+	// refuse each other as "changed elsewhere", while a change made anywhere
+	// else still does.
 	saving   map[string]bool
+	inFlight bool
+	queue    []kubeSave
+	own      map[int64]int64
 	fieldErr map[string]string
 	ns       *kubeNamespacePanel
+}
+
+// kubeSave is one field's save waiting for the one in flight.
+type kubeSave struct {
+	field kubeField
+	src   *fleetgrpc.KubeCluster
+	rev   int64
 }
 
 // Answers to the editor's saves and its $EDITOR run.
@@ -66,6 +83,7 @@ type (
 	kubeSavedMsg struct {
 		editor *kubeEditor
 		field  kubeField
+		rev    int64 // the revision it was sent at
 		status *fleetgrpc.KubeClusterStatus
 		err    error
 	}
@@ -87,7 +105,7 @@ func newKubeEditor(id string) *kubeEditor {
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 4096
-	return &kubeEditor{id: id, open: open, input: input, saving: map[string]bool{}, fieldErr: map[string]string{}}
+	return &kubeEditor{id: id, open: open, input: input, saving: map[string]bool{}, own: map[int64]int64{}, fieldErr: map[string]string{}}
 }
 
 // rows is the editor's navigable rows in order.
@@ -132,12 +150,6 @@ func (e *kubeEditor) buttons(m *model, st *fleetgrpc.KubeClusterStatus) int {
 func (e *kubeEditor) update(m *model, page *settingsPage, msg tea.Msg) (tea.Cmd, bool) {
 	st := m.kubeStatus(e.id)
 	switch msg := msg.(type) {
-	case kubeSavedMsg:
-		if msg.editor != e {
-			return nil, false
-		}
-		e.onSaved(m, msg)
-		return nil, true
 	case kubeYAMLEditedMsg:
 		if msg.editor != e {
 			return nil, false
@@ -293,7 +305,11 @@ func (e *kubeEditor) cycle(st *fleetgrpc.KubeClusterStatus, f kubeField, dir int
 	if e.saving[f.path] {
 		return nil // one save at a time per field: the next press reads its result
 	}
-	return e.save(f, f.next(st, dir), st.GetCluster().GetRevision())
+	next := f.next(st, dir)
+	if next == f.text(st.GetCluster()) {
+		return nil // nothing else to pick (a class list fleetd could not read)
+	}
+	return e.save(f, next, st.GetCluster().GetRevision())
 }
 
 // openNamespace opens the Create panel for the connection's namespace.
@@ -313,29 +329,62 @@ func (e *kubeEditor) save(f kubeField, text string, rev int64) tea.Cmd {
 	}
 	delete(e.fieldErr, f.path)
 	e.saving[f.path] = true
+	if e.inFlight {
+		e.queue = append(e.queue, kubeSave{field: f, src: src, rev: rev})
+		return nil
+	}
+	return e.send(kubeSave{field: f, src: src, rev: rev})
+}
+
+// send puts one save on its way, past the editor's own earlier saves.
+func (e *kubeEditor) send(s kubeSave) tea.Cmd {
+	for next, ok := e.own[s.rev]; ok; next, ok = e.own[s.rev] {
+		s.rev = next
+	}
+	e.inFlight = true
 	id := e.id
 	return func() tea.Msg {
-		st, err := updateKubeClusterRemote(id, src, []string{f.path}, rev)
-		return kubeSavedMsg{editor: e, field: f, status: st, err: err}
+		st, err := updateKubeClusterRemote(id, s.src, []string{s.field.path}, s.rev)
+		return kubeSavedMsg{editor: e, field: s.field, rev: s.rev, status: st, err: err}
 	}
 }
 
-// onSaved applies a save's answer.
-func (e *kubeEditor) onSaved(m *model, msg kubeSavedMsg) {
+// handleKubeSavedMsg hands a save's answer to the editor that sent it, open
+// or not: one closed (or left with Settings) while saves were on their way
+// still sends the rest of its queue, so no edit made before esc is lost. An
+// armada switch drops them: they were meant for the daemon it left.
+func (m *model) handleKubeSavedMsg(msg kubeSavedMsg) tea.Cmd {
+	if msg.editor == nil || msg.editor.gen != m.watchGen {
+		return nil
+	}
+	return msg.editor.onSaved(m, msg)
+}
+
+// onSaved applies a save's answer, then sends the next queued one.
+func (e *kubeEditor) onSaved(m *model, msg kubeSavedMsg) tea.Cmd {
 	delete(e.saving, msg.field.path)
-	if msg.err != nil {
-		if status.Code(msg.err) == codes.Aborted {
-			e.fieldErr[msg.field.path] = "changed elsewhere meanwhile: showing the current value, try again"
-			return
-		}
+	e.inFlight = false
+	switch {
+	case status.Code(msg.err) == codes.Aborted:
+		e.fieldErr[msg.field.path] = "changed elsewhere meanwhile: showing the current value, try again"
+	case msg.err != nil:
 		e.fieldErr[msg.field.path] = kubeRPCError(msg.err)
-		return
+	default:
+		if rev := msg.status.GetCluster().GetRevision(); rev > msg.rev && msg.rev != 0 {
+			e.own[msg.rev] = rev
+		}
+		m.kubeUpsert(msg.status)
+		m.message = "Saved " + msg.field.label
+		if msg.field.path == "allow_privileged" && msg.field.text(msg.status.GetCluster()) == "on" {
+			m.message = "Privileged pods allowed: " + kubePrivilegedWarning
+		}
 	}
-	m.kubeUpsert(msg.status)
-	m.message = "Saved " + msg.field.label
-	if msg.field.path == "allow_privileged" && msg.field.text(msg.status.GetCluster()) == "on" {
-		m.message = "Privileged pods allowed: " + kubePrivilegedWarning
+	if len(e.queue) == 0 {
+		return nil
 	}
+	next := e.queue[0]
+	e.queue = e.queue[1:]
+	return e.send(next)
 }
 
 // kubeInputHint is the input's placeholder for a field: its format.
