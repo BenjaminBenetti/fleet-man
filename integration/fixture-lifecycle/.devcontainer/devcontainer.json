@@ -1,0 +1,10 @@
+{
+  "name": "fleet-man lifecycle hooks fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "initializeCommand": "echo initialize >> \"${localWorkspaceFolder}/../initialize.log\"",
+  "onCreateCommand": "echo onCreate >> \"${containerWorkspaceFolder}/.lifecycle.log\"",
+  "updateContentCommand": "echo updateContent >> \"${containerWorkspaceFolder}/.lifecycle.log\"",
+  "postCreateCommand": "echo postCreate >> \"${containerWorkspaceFolder}/.lifecycle.log\"",
+  "postStartCommand": "echo postStart >> \"${containerWorkspaceFolder}/.lifecycle.log\"",
+  "postAttachCommand": "echo postAttach >> \"${containerWorkspaceFolder}/.lifecycle.log\""
+}

@@ -1,0 +1,7 @@
+{
+  "name": "fleet-man docker-in-docker fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": { "dockerDashComposeVersion": "none" }
+  }
+}

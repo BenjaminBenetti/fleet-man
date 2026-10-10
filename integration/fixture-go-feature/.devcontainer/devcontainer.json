@@ -1,0 +1,7 @@
+{
+  "name": "fleet-man go-feature fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "features": {
+    "ghcr.io/devcontainers/features/go:1": { "version": "1.24", "installGoTools": false }
+  }
+}
