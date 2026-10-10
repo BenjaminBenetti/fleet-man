@@ -187,14 +187,29 @@ func (p *Pool) supervise(k trackKey, t PodTarget) {
 				sv.blocked = podIdentity(tr.pod, p.opts.SpecHash)
 			}
 		default:
-			// The bootstrap's own full-jitter backoff paces the next one.
 			again = true
 		}
 	}
 	p.instMu.Unlock()
 	if again {
-		p.kick(k)
+		time.AfterFunc(p.retryDelay(t), func() { p.kick(k) })
 	}
+}
+
+// retryDelay is how long the supervisor waits before it tries a pod whose
+// bootstrap failed again: the pod's own full-jitter backoff, or, for a
+// failure before any bootstrap (the connection does not load), the backoff
+// cap.
+func (p *Pool) retryDelay(t PodTarget) time.Duration {
+	for _, s := range p.slotsOf(trackKey{t.Cluster, t.StatefulSet}) {
+		s.mu.Lock()
+		failures, at := s.failures, s.retryAt
+		s.mu.Unlock()
+		if failures > 0 {
+			return max(at.Sub(p.opts.Now()), 0)
+		}
+	}
+	return p.opts.BackoffCap
 }
 
 // podIdentity is what a blocked pod must change for the supervisor to try it

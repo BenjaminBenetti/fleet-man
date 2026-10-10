@@ -203,16 +203,20 @@ func TestSupervisorReattachesHeldCommands(t *testing.T) {
 	// it, and its input and output carry on.
 	_ = s.stream.Close()
 	waitDone(t, s.Done(), "the dropped session")
-	s2 := h.session(t, target, s)
+	h.session(t, target, s)
 	if _, err := io.WriteString(e.Stdin(), "hello\n"); err != nil {
 		t.Fatal(err)
 	}
-	out, _ := io.ReadAll(e.Stdout())
+	out := make(chan []byte, 1)
+	go func() {
+		b, _ := io.ReadAll(e.Stdout())
+		out <- b
+	}()
+	waitDone(t, e.Done(), "the re-attached command")
 	code, err := e.Wait()
-	if err != nil || code != 0 || string(out) != "got hello\n" {
-		t.Fatalf("the re-attached command: %q exit %d %v", out, code, err)
+	if got := <-out; err != nil || code != 0 || string(got) != "got hello\n" {
+		t.Fatalf("the re-attached command: %q exit %d %v", got, code, err)
 	}
-	_ = s2
 }
 
 func TestSupervisorFailsTheHeldCommandsOfAReplacedPod(t *testing.T) {
@@ -346,5 +350,25 @@ func TestEnsureAgentRefreshesAMissingBuildAtARestage(t *testing.T) {
 	s2, err := upgraded.EnsureAgent(ctx, restage)
 	if err != nil || s2 == s || s2.Hello().Version != "vtest-2" {
 		t.Fatalf("restage once the build is there: %v", err)
+	}
+}
+
+// A supervisor retry waits the pod's own backoff after a failed bootstrap,
+// and the backoff cap after a failure before any (a connection that does not
+// load), never spinning.
+func TestSupervisorRetryDelay(t *testing.T) {
+	h := newHarness(t, PoolOptions{BackoffBase: time.Second, BackoffCap: time.Minute, Rand: func() float64 { return 0.5 }})
+	target := h.addPod("one")
+	if d := h.pool.retryDelay(target); d != time.Minute {
+		t.Fatalf("delay before any bootstrap: %v, want the cap", d)
+	}
+	h.failMu.Lock()
+	h.fail[target.Pod()] = errors.New("exec refused")
+	h.failMu.Unlock()
+	if _, err := h.pool.EnsureAgent(context.Background(), target); err == nil {
+		t.Fatal("a failing pod bootstrapped")
+	}
+	if d := h.pool.retryDelay(target); d != 500*time.Millisecond {
+		t.Fatalf("delay after a failed bootstrap: %v, want its backoff", d)
 	}
 }

@@ -570,6 +570,10 @@ message KubeInstanceRuntime {
   bool sessions_ended = 6;
   // node_cordoned_moving: the pod is being moved off a cordoned node.
   bool node_cordoned_moving = 7;
+  // restart_hint is the setting that keeps a restart of restart_cause from
+  // happening again ("raise memory_limit in the cluster's resources"); ""
+  // when none does, or there is no restart_cause.
+  string restart_hint = 8;
 }
 
 // ShareSyncState is how far the fleet share on a cluster lags the daemon

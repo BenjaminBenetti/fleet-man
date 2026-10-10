@@ -134,7 +134,6 @@ type kubePods struct {
 	byName   map[string]kubeRef
 	tracking bool // the pool has (had) something to track
 	wanted   bool // a TUI watched at the last sync
-	ctx      context.Context
 }
 
 func newKubePods(svc *service) *kubePods {
@@ -152,7 +151,6 @@ func newKubePods(svc *service) *kubePods {
 		pending:       map[kubeRef]bool{},
 		insts:         map[kubeRef]*kubeInst{},
 		byName:        map[string]kubeRef{},
-		ctx:           context.Background(),
 	}
 }
 
@@ -198,9 +196,6 @@ func (k *kubePods) attached(fleetName, instance string) {
 // run processes state changes, pool events and the backstop until ctx ends.
 // The serve loop starts it once fleetd serves.
 func (k *kubePods) run(ctx context.Context) {
-	k.mu.Lock()
-	k.ctx = ctx
-	k.mu.Unlock()
 	backstop := time.NewTicker(k.backstop)
 	defer backstop.Stop()
 	prio := time.NewTicker(k.priorityCheck)
@@ -212,6 +207,12 @@ func (k *kubePods) run(ctx context.Context) {
 			return
 		case <-k.wake:
 		case <-backstop.C:
+			k.mu.Lock()
+			tracking := k.tracking
+			k.mu.Unlock()
+			if !tracking {
+				continue
+			}
 			// Also catches a state change the hub did not hand in.
 			if st, err := state.Load(); err == nil {
 				k.mu.Lock()
@@ -265,8 +266,9 @@ func (k *kubePods) process(ctx context.Context) {
 	k.mu.Lock()
 	st := k.state
 	k.state = nil
+	tracking := k.tracking
 	k.mu.Unlock()
-	if st != nil && (k.tracking || hasKubeInstance(st)) {
+	if st != nil && (tracking || hasKubeInstance(st)) {
 		k.sync(st)
 	}
 	k.mu.Lock()
@@ -446,6 +448,7 @@ func kubeRuntime(obs kubernetes.Observation, ki *kubeInst) *fleetgrpc.KubeInstan
 	kr := &fleetgrpc.KubeInstanceRuntime{PodReason: obs.Reason, Node: obs.Node, Agent: kubeAgentToProto(obs.Agent)}
 	if n := ki.notice; n != nil {
 		kr.RestartCause = string(n.Cause)
+		kr.RestartHint = kubernetes.RestartHint(n.Cause)
 		kr.RestartedAt = timestamppb.New(n.At)
 		kr.SessionsEnded = ki.sessionsEnded
 	}

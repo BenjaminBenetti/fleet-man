@@ -370,3 +370,37 @@ func TestTrackChangesAreTold(t *testing.T) {
 		t.Fatalf("changes told %v", tr.seen)
 	}
 }
+
+func TestRestartHint(t *testing.T) {
+	for cause, want := range map[backend.RestartCause]string{
+		backend.RestartOOMKilled:   "raise memory_limit in the cluster's resources",
+		backend.RestartEvicted:     "raise memory_request in the cluster's resources",
+		backend.RestartNodeDrained: "turn on protect_from_drain in the cluster's settings",
+		backend.RestartNodeLost:    "",
+		backend.RestartCrashed:     "",
+		backend.RestartPodDeleted:  "",
+		backend.RestartFleetMoved:  "",
+	} {
+		if got := RestartHint(cause); got != want {
+			t.Errorf("RestartHint(%q) = %q, want %q", cause, got, want)
+		}
+	}
+}
+
+// The pod informer can deliver before the StatefulSet one: a pod that goes
+// while the StatefulSet is not seen yet is judged by what comes next.
+func TestTrackBeforeTheStatefulSetIsSeen(t *testing.T) {
+	tr := newTracker(t)
+	tr.pod(trackedPod("u1", 0))
+	tr.deleted(trackedPod("u1", 0))
+	tr.pod(trackedPod("u2", 0))
+	tr.wantRestart("u2/0", backend.RestartPodDeleted)
+
+	tr = newTracker(t)
+	tr.pod(trackedPod("u1", 0))
+	tr.deleted(going(trackedPod("u1", 0)))
+	tr.set(0) // it was a stop
+	tr.set(1)
+	tr.pod(trackedPod("u2", 0))
+	tr.wantNoRestart()
+}

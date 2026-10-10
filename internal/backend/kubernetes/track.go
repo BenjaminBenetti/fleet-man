@@ -92,6 +92,22 @@ func (l CrashLoop) Message() string {
 	return fmt.Sprintf("%s: the dev container %s, %s. Parked as stopped: %s.", l.Code(), what, when, hint)
 }
 
+// RestartHint is the connection setting that keeps a restart of cause from
+// happening again, in the words the instance row shows ("" when no setting
+// does: a crash, a lost node, a deleted pod).
+func RestartHint(cause backend.RestartCause) string {
+	switch cause {
+	case backend.RestartOOMKilled:
+		return "raise memory_limit in the cluster's resources"
+	case backend.RestartEvicted:
+		// Pods over their memory request are evicted first.
+		return "raise memory_request in the cluster's resources"
+	case backend.RestartNodeDrained:
+		return "turn on protect_from_drain in the cluster's settings"
+	}
+	return ""
+}
+
 // RunEndReason is why a run of an instance's dev container ended without a
 // Fleet stop.
 type RunEndReason string
@@ -298,9 +314,12 @@ func (t *track) resetLoop() {
 	t.recent, t.loop = nil, nil
 }
 
-// wanted reports whether the StatefulSet asks for a pod.
+// wanted reports whether the StatefulSet asks for a pod: true while it has
+// not been seen (the two informers deliver in their own order), so a pod
+// that goes then is judged when the replacement comes, and a scale to 0
+// seen in between makes it a stop.
 func (t *track) wanted() bool {
-	return t.set != nil && (t.set.Spec.Replicas == nil || *t.set.Spec.Replicas > 0)
+	return t.set == nil || t.set.Spec.Replicas == nil || *t.set.Spec.Replicas > 0
 }
 
 func loopOf(pod *corev1.Pod, restarts int, backOff bool) *CrashLoop {

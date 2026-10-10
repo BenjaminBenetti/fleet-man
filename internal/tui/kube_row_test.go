@@ -42,7 +42,7 @@ func TestViewFleetListShowsSessionsReset(t *testing.T) {
 		st:     &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha", Instances: []*fleet.Instance{inst, stopped}}}},
 		config: &state.Config{},
 		runtime: map[string]*fleetgrpc.InstanceRuntime{
-			"alpha/epsilon": {Fleet: "alpha", Instance: "epsilon", Kube: &fleetgrpc.KubeInstanceRuntime{RestartCause: "node drained"}},
+			"alpha/epsilon": {Fleet: "alpha", Instance: "epsilon", Kube: &fleetgrpc.KubeInstanceRuntime{RestartCause: "node drained", RestartHint: "turn on protect_from_drain"}},
 			"alpha/gamma":   {Fleet: "alpha", Instance: "gamma", Kube: &fleetgrpc.KubeInstanceRuntime{RestartCause: "crashed"}},
 		},
 		sessionStore: NewSessionStore(),
@@ -51,6 +51,13 @@ func TestViewFleetListShowsSessionsReset(t *testing.T) {
 	view := fp.viewFleetList(m)
 	if !strings.Contains(view, "running · sessions reset: node drained") {
 		t.Fatalf("the running row has no notice:\n%s", view)
+	}
+	if strings.Contains(view, "protect_from_drain") {
+		t.Fatalf("an unselected row shows the hint:\n%s", view)
+	}
+	fp.cursor = 1 // the epsilon row
+	if view := fp.viewFleetList(m); !strings.Contains(view, "sessions reset: node drained (turn on protect_from_drain)") {
+		t.Fatalf("the selected row has no hint:\n%s", view)
 	}
 	// A stopped row's warning explains it; the notice is for running rows.
 	if strings.Contains(view, "sessions reset: crashed") {

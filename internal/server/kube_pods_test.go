@@ -300,7 +300,8 @@ func TestKubePodsActsOnARestart(t *testing.T) {
 	// The next restart is another one.
 	r.pool.observe(sts, kubernetes.Observation{Live: backend.LiveStatusRunning, Restart: &backend.Restart{ID: "u2/0", Cause: backend.RestartNodeDrained, At: at}})
 	r.eventually("the second restart", func() bool {
-		return len(r.restarts()) == 2 && r.runtime("one").GetKube().GetRestartCause() == string(backend.RestartNodeDrained)
+		k := r.runtime("one").GetKube()
+		return len(r.restarts()) == 2 && k.GetRestartCause() == string(backend.RestartNodeDrained) && k.GetRestartHint() == kubernetes.RestartHint(backend.RestartNodeDrained)
 	})
 }
 

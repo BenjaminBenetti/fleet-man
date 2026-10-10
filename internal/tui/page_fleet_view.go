@@ -296,7 +296,11 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			} else {
 				status = renderStatus(instance.Status)
 				if instance.Status == fleet.StatusRunning {
-					if note := kubeRowNote(m.runtime[rtKey(r.fleetName, instance.Name)]); note != "" {
+					rt := m.runtime[rtKey(r.fleetName, instance.Name)]
+					if note := kubeRowNote(rt); note != "" {
+						if hint := rt.GetKube().GetRestartHint(); hint != "" && isSelected {
+							note += " (" + hint + ")"
+						}
 						status += dimStyle.Render(" · " + note)
 					}
 				}
