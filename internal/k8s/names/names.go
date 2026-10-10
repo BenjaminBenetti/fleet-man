@@ -260,8 +260,9 @@ const (
 )
 
 // reservedClusterIDs would collide with other entries of ~/.fleet/kube, where
-// each connection has a directory named by its id.
-var reservedClusterIDs = map[string]bool{"jobs": true}
+// each connection has a directory named by its id: the job journal and the
+// gateway image cache.
+var reservedClusterIDs = map[string]bool{"jobs": true, "images": true}
 
 // NewClusterID returns a new KubeCluster record id: a slug of hint (the
 // context name, say) and a random suffix, "<slug>-<6 random>", which taken

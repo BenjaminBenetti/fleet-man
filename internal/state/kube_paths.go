@@ -53,7 +53,8 @@ func KubeJobPath(key string) string {
 
 // KubeClusterDir holds one connection's state (~/.fleet/kube/<cluster id>).
 // Connection ids are single path segments (names.ValidateClusterID) and never
-// "jobs"; a malformed one is still reduced to one safe segment here.
+// "jobs" or "images"; a malformed one is still reduced to one safe segment
+// here.
 func KubeClusterDir(clusterID string) string {
 	return filepath.Join(KubeDir(), safeLogSegment(clusterID))
 }
@@ -62,4 +63,13 @@ func KubeClusterDir(clusterID string) string {
 // (~/.fleet/kube/<cluster id>/images.json).
 func KubeImagesPath(clusterID string) string {
 	return filepath.Join(KubeClusterDir(clusterID), "images.json")
+}
+
+// KubeImageCacheDir is the gateway image cache
+// (~/.fleet/kube/images): the manifests and blobs fleetd serves to clusters
+// through the gateway, content-addressed, with their index (store.json). It
+// is not backed up: everything in it is made again from the daemon host's
+// docker.
+func KubeImageCacheDir() string {
+	return filepath.Join(KubeDir(), "images")
 }
