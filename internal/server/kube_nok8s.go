@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
 // kube_nok8s.go is the Kubernetes side of a -tags nok8s build (the in-pod
@@ -22,3 +23,5 @@ func (*kubeManager) run(ctx context.Context) { <-ctx.Done() }
 func (*kubeManager) deployTargets(bool) []fleet.DeployTargetOption { return nil }
 
 func (*kubeManager) defaultCluster(string) string { return "" }
+
+func (*kubeManager) createAllowed(*state.State, fleet.DeployTarget) error { return nil }

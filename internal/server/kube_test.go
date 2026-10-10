@@ -814,3 +814,47 @@ func TestRemoveKubeClusterRefusesWithoutState(t *testing.T) {
 		t.Fatal("the connection was removed")
 	}
 }
+
+// A Kubernetes create needs an existing connection with room under its
+// quotas.
+func TestKubeCreateAllowed(t *testing.T) {
+	f := newKubeFixture(t)
+	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube", MaxInstances: 2, MaxTotalDisk: "120Gi", DiskSize: "50Gi"}).GetCluster().GetId()
+	target := fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: id}
+	st := &state.State{Fleets: map[string]*fleet.Fleet{}}
+	if err := f.svc.kube.createAllowed(st, target); err != nil {
+		t.Fatalf("an empty connection: %v", err)
+	}
+	if err := f.svc.kube.createAllowed(st, fleet.DeployTarget{Backend: fleet.BackendDevcontainer}); err != nil {
+		t.Fatalf("devcontainer: %v", err)
+	}
+	for _, tc := range []struct {
+		target fleet.DeployTarget
+		code   codes.Code
+	}{
+		{fleet.DeployTarget{Backend: fleet.BackendKubernetes}, codes.InvalidArgument},
+		{fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "gone-aaaaaa"}, codes.NotFound},
+	} {
+		if err := f.svc.kube.createAllowed(st, tc.target); status.Code(err) != tc.code {
+			t.Errorf("%+v = %v, want %v", tc.target, err, tc.code)
+		}
+	}
+	st.Fleets["alpha"] = &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{
+		{Name: "one", KubeCluster: id, Status: fleet.StatusRunning},
+		{Name: "leaving", KubeCluster: id, Status: fleet.StatusDeleting},
+	}}
+	// One instance: a second 50Gi disk makes 100Gi, under 120Gi.
+	if err := f.svc.kube.createAllowed(st, target); err != nil {
+		t.Errorf("one used: %v", err)
+	}
+	st.Fleets["alpha"].Instances = append(st.Fleets["alpha"].Instances, &fleet.Instance{Name: "two", KubeCluster: id, Status: fleet.StatusStopped})
+	if err := f.svc.kube.createAllowed(st, target); status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "allows 2 instances") {
+		t.Errorf("at max_instances = %v", err)
+	}
+	if _, err := f.svc.UpdateKubeCluster(context.Background(), &fleetgrpc.UpdateKubeClusterRequest{Id: id, Cluster: &fleetgrpc.KubeCluster{}, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"max_instances"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.kube.createAllowed(st, target); status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "of instance disks") {
+		t.Errorf("over max_total_disk = %v", err)
+	}
+}

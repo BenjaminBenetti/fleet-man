@@ -531,6 +531,11 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		if err := fleet.ValidateBackendType(target.Backend); err != nil {
 			return status.Error(codes.InvalidArgument, err.Error())
 		}
+		// A cluster target names a connection that exists and has room
+		// under its quotas.
+		if err := s.kube.createAllowed(st, target); err != nil {
+			return err
+		}
 		if err := validateTemplateRemote(remote, req.GetBranch(), target.Backend, wsDir); err != nil {
 			return err
 		}

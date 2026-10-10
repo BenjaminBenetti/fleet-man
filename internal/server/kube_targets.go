@@ -5,10 +5,16 @@ package server
 import (
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/resource"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/preflight"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
 // deployTargets lists one Deploy option per connection, in registry order,
@@ -75,4 +81,53 @@ func (m *kubeManager) defaultCluster(remembered string) string {
 		return statuses[0].GetCluster().GetId()
 	}
 	return ""
+}
+
+// createAllowed checks a Kubernetes create against its connection before
+// the CREATING record is written: the connection must exist, and its
+// quotas (max_instances, max_total_disk) must have room for one more
+// instance. st is the state the record will be added to. Other targets pass.
+func (m *kubeManager) createAllowed(st *state.State, target fleet.DeployTarget) error {
+	if target.Backend != fleet.BackendKubernetes {
+		return nil
+	}
+	if target.KubeCluster == "" {
+		return status.Error(codes.InvalidArgument, "name the Kubernetes connection to create the instance on (there is no remembered or only one)")
+	}
+	rec, ok := m.record(target.KubeCluster)
+	if !ok {
+		return status.Errorf(codes.NotFound, "no Kubernetes connection %q", target.KubeCluster)
+	}
+	used := 0
+	for _, f := range st.Fleets {
+		for _, inst := range f.Instances {
+			if inst.KubeCluster == rec.ID && inst.Status != fleet.StatusDeleting {
+				used++
+			}
+		}
+	}
+	if rec.MaxInstances > 0 && used >= rec.MaxInstances {
+		return status.Errorf(codes.ResourceExhausted, "kubernetes:quota: connection %q allows %d instances and has %d", rec.GetDisplayName(), rec.MaxInstances, used)
+	}
+	if rec.MaxTotalDisk != "" {
+		max, err := resource.ParseQuantity(rec.MaxTotalDisk)
+		disk, derr := resource.ParseQuantity(orDefaultString(rec.DiskSize, fleet.DefaultKubeDiskSize))
+		if err == nil && derr == nil {
+			total := disk.DeepCopy()
+			for i := 0; i < used; i++ {
+				total.Add(disk)
+			}
+			if total.Cmp(max) > 0 {
+				return status.Errorf(codes.ResourceExhausted, "kubernetes:quota: connection %q allows %s of instance disks; %d more of %s would take %s", rec.GetDisplayName(), max.String(), used+1, disk.String(), total.String())
+			}
+		}
+	}
+	return nil
+}
+
+func orDefaultString(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
