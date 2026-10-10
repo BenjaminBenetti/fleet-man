@@ -58,7 +58,7 @@ func newKubeRemoveDialog(m *model, id string) *kubeRemoveDialog {
 	input.CharLimit = 128
 	d := &kubeRemoveDialog{id: id, name: id, input: input, gen: m.watchGen}
 	if st := m.kubeStatus(id); st != nil {
-		d.name = kubeDisplayName(st.GetCluster())
+		d.name = st.GetCluster().DisplayNameOrID()
 	}
 	d.instances, d.agents = kubeUsers(m, id)
 	return d
@@ -131,7 +131,7 @@ func (d *kubeRemoveDialog) key(m *model, page *settingsPage, st *fleetgrpc.KubeC
 			d.input.Blur()
 			return nil
 		case "enter":
-			if strings.TrimSpace(d.input.Value()) != kubeDisplayName(st.GetCluster()) {
+			if strings.TrimSpace(d.input.Value()) != st.GetCluster().DisplayNameOrID() {
 				d.err = "that is not its name"
 				return nil
 			}
@@ -173,7 +173,7 @@ func (d *kubeRemoveDialog) key(m *model, page *settingsPage, st *fleetgrpc.KubeC
 			if d.forgetNeedsName(st) {
 				d.typing = true
 				d.input.SetValue("")
-				d.input.Placeholder = kubeDisplayName(st.GetCluster())
+				d.input.Placeholder = st.GetCluster().DisplayNameOrID()
 				return d.input.Focus()
 			}
 			return d.remove(fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_FORGET, "forgetting…")
@@ -250,7 +250,7 @@ func (d *kubeRemoveDialog) view(m *model, _ *settingsPage) string {
 	if st == nil {
 		return kubeDialogFrame(m, dimStyle.Render("This connection is gone.")+"\n"+dialogHint.Render("[esc] close"), maxWidth)
 	}
-	name := kubeDisplayName(st.GetCluster())
+	name := st.GetCluster().DisplayNameOrID()
 	lines := []string{dialogTitle.Render("Disconnect " + kubeGlyphCluster + " " + name)}
 	if !d.used() {
 		lines = append(lines, dimStyle.Render("No instance or agent uses this cluster."),

@@ -111,7 +111,7 @@ func kubePluginTools(m *model) []deps.ToolStatus {
 		out = append(out, deps.ToolStatus{
 			Name:        filepath.Base(p.command),
 			Binary:      p.command,
-			Description: "Logs in to " + kubeGlyphCluster + " " + kubeDisplayName(c) + ".",
+			Description: "Logs in to " + kubeGlyphCluster + " " + c.DisplayNameOrID() + ".",
 			InstallURL:  kubePluginInstallURL(p.command),
 			Found:       found,
 		})

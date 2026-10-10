@@ -269,7 +269,7 @@ func (e *kubeEditor) enter(m *model, page *settingsPage, st *fleetgrpc.KubeClust
 		return nil
 	case kubeEditorRowStatus:
 		if e.button == 2 {
-			m.message = fmt.Sprintf("Running the login plugin of %s %s on fleetd…", kubeGlyphCluster, kubeDisplayName(st.GetCluster()))
+			m.message = fmt.Sprintf("Running the login plugin of %s %s on fleetd…", kubeGlyphCluster, st.GetCluster().DisplayNameOrID())
 			return m.startKubeLogin(e.id)
 		}
 		return m.startKubeTest(kubeTestKey(e.id), e.id, &fleetgrpc.TestKubeClusterRequest{Id: e.id})
@@ -452,7 +452,7 @@ func (e *kubeEditor) view(m *model, _ *settingsPage) string {
 		return kubeDialogFrame(m, dialogTitle.Render("Edit cluster")+"\n\n"+dimStyle.Render("This connection is gone.")+"\n"+dialogHint.Render("[esc] close"), maxWidth)
 	}
 	c := st.GetCluster()
-	head := []string{dialogTitle.Render("Edit cluster " + kubeGlyphCluster + " " + kubeDisplayName(c))}
+	head := []string{dialogTitle.Render("Edit cluster " + kubeGlyphCluster + " " + c.DisplayNameOrID())}
 
 	var body []string
 	cursorStart, cursorEnd := 0, 1

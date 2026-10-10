@@ -98,7 +98,7 @@ func (settingsPage *settingsPage) renderKubeClusterRow(m *model, st *fleetgrpc.K
 	for _, w := range st.GetWarnings() {
 		value += indent + kubeWarningLine(w)
 	}
-	label := kubeGlyphCluster + " " + kubeShortContext(kubeDisplayName(c), 15)
+	label := kubeGlyphCluster + " " + kubeShortContext(c.DisplayNameOrID(), 15)
 	return kubeHangingIndent(settingsPage.renderSettingsRow(m, active, label, value), width, valueCol)
 }
 
@@ -166,7 +166,7 @@ func (settingsPage *settingsPage) enterKubeClusterRow(m *model, i int) tea.Cmd {
 	id := st.GetCluster().GetId()
 	switch {
 	case settingsPage.kubeTestFocused:
-		m.message = fmt.Sprintf("Testing %s %s…", kubeGlyphCluster, kubeDisplayName(st.GetCluster()))
+		m.message = fmt.Sprintf("Testing %s %s…", kubeGlyphCluster, st.GetCluster().DisplayNameOrID())
 		return m.startKubeTest(kubeTestKey(id), id, &fleetgrpc.TestKubeClusterRequest{Id: id})
 	case settingsPage.kubeDeleteFocused:
 		settingsPage.resetKubeRowFocus()
@@ -253,7 +253,7 @@ func (settingsPage *settingsPage) onKubeTestDone(m *model, run *kubeTestRun) tea
 		m.message = "Test failed: " + kubeTestError(run.err)
 		return nil
 	}
-	m.message = fmt.Sprintf("%s %s: %s", kubeGlyphCluster, kubeDisplayName(run.result.GetCluster()), kubeStateLine(run.result))
+	m.message = fmt.Sprintf("%s %s: %s", kubeGlyphCluster, run.result.GetCluster().DisplayNameOrID(), kubeStateLine(run.result))
 	return nil
 }
 

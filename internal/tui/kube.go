@@ -149,21 +149,12 @@ func (m *model) resetKube() {
 	m.kubeHost = ""
 }
 
-// kubeDisplayName is what a connection is called in every view.
-func kubeDisplayName(c *fleetgrpc.KubeCluster) string {
-	if c.GetDisplayName() != "" {
-		return c.GetDisplayName()
-	}
-	return c.GetId()
-}
+// A connection is called (*fleetgrpc.KubeCluster).DisplayNameOrID() in every
+// view, and fleetgrpc.KubeClusterState.Usable() decides whether creates can go
+// to it, the same rules `fleet cluster` and the MCP cluster tools use.
 
-// kubeUsable reports whether creates can go to a connection in this state.
-func kubeUsable(state fleetgrpc.KubeClusterState) bool {
-	return state == fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY ||
-		state == fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED
-}
-
-// kubeStateWords names each state the way a badge reads.
+// kubeStateWords names each state the way a badge reads. It differs from
+// KubeClusterState.Display() on purpose ("checking…", "login plugin missing").
 var kubeStateWords = map[fleetgrpc.KubeClusterState]string{
 	fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CHECKING:        "checking…",
 	fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY:           "ready",
@@ -641,7 +632,7 @@ func (m *model) handleKubeLoginMsg(msg kubeLoginMsg) tea.Cmd {
 			run.err = msg.err
 			m.message = "Login failed: " + kubeRPCError(msg.err)
 		} else if run.result != nil {
-			name := kubeDisplayName(run.result.GetCluster())
+			name := run.result.GetCluster().DisplayNameOrID()
 			m.message = fmt.Sprintf("Logged in: %s %s is %s", kubeGlyphCluster, name, kubeStateWord(run.result.GetState()))
 		}
 		return nil

@@ -167,7 +167,7 @@ const kubeNameMaxBytes = 63
 func kubeDefaultName(m *model, context, ns string) string {
 	taken := map[string]bool{}
 	for _, st := range m.kubeStatuses() {
-		taken[strings.ToLower(kubeDisplayName(st.GetCluster()))] = true
+		taken[strings.ToLower(st.GetCluster().DisplayNameOrID())] = true
 	}
 	for _, name := range []string{context, context + "/" + ns} {
 		if strings.ContainsFunc(name, unicode.IsControl) {
@@ -235,7 +235,7 @@ func (p *kubePicker) update(m *model, page *settingsPage, msg tea.Msg) (tea.Cmd,
 		m.kubeUpsert(msg.status)
 		page.closeKubeDialog(m)
 		page.cursorToKubeCluster(m, msg.status.GetCluster().GetId())
-		m.message = fmt.Sprintf("Connected %s %s: %s", kubeGlyphCluster, kubeDisplayName(msg.status.GetCluster()), kubeStateLine(msg.status))
+		m.message = fmt.Sprintf("Connected %s %s: %s", kubeGlyphCluster, msg.status.GetCluster().DisplayNameOrID(), kubeStateLine(msg.status))
 		return loadKubePluginsCmd(m.watchGen, m.kubeStatuses()), true
 	case kubeRepointedMsg:
 		if msg.picker != p {
@@ -249,7 +249,7 @@ func (p *kubePicker) update(m *model, page *settingsPage, msg tea.Msg) (tea.Cmd,
 		m.kubeUpsert(msg.status)
 		page.closeKubeDialog(m)
 		page.cursorToKubeCluster(m, msg.status.GetCluster().GetId())
-		m.message = fmt.Sprintf("%s %s now uses context %s", kubeGlyphCluster, kubeDisplayName(msg.status.GetCluster()), msg.status.GetCluster().GetContext())
+		m.message = fmt.Sprintf("%s %s now uses context %s", kubeGlyphCluster, msg.status.GetCluster().DisplayNameOrID(), msg.status.GetCluster().GetContext())
 		return nil, true
 	case kubeNamespaceMsg:
 		if p.ns == nil || msg.panel != p.ns {
@@ -500,7 +500,7 @@ func (p *kubePicker) onTestDone(m *model, run *kubeTestRun) tea.Cmd {
 		// what was tested connects. The result stays for when it is back.
 		return nil
 	}
-	if run.err == nil && kubeUsable(run.result.GetState()) {
+	if run.err == nil && run.result.GetState().Usable() {
 		return p.add(m, p.draft(m, c))
 	}
 	p.failed = true
@@ -523,7 +523,7 @@ func (p *kubePicker) view(m *model, _ *settingsPage) string {
 
 	title := "Connect a Kubernetes cluster"
 	if st := m.kubeStatus(p.repoint); st != nil {
-		title = fmt.Sprintf("Re-point %s %s", kubeGlyphCluster, kubeDisplayName(st.GetCluster()))
+		title = fmt.Sprintf("Re-point %s %s", kubeGlyphCluster, st.GetCluster().DisplayNameOrID())
 	}
 	head = append(head, dialogTitle.Render(title))
 	where := "contexts on fleetd"

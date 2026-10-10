@@ -117,7 +117,7 @@ func deployTargetLabel(m *model, target fleet.DeployTarget) string {
 		return backendTypeLabel(target.Backend)
 	}
 	if st := m.kubeStatus(target.KubeCluster); st != nil {
-		return kubeGlyphCluster + " " + kubeDisplayName(st.GetCluster())
+		return kubeGlyphCluster + " " + st.GetCluster().DisplayNameOrID()
 	}
 	return kubeGlyphCluster + " " + target.KubeCluster
 }
