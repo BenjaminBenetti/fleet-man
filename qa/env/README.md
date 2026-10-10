@@ -106,7 +106,9 @@ context and waits for the node, as `.devcontainer/minikube.sh on` does in the
 devcontainer. The cluster lives and dies with the container. If it fails to
 come up the entrypoint carries on without it, and `qa-verify-toolchain` reports
 the cluster unreachable; the `minikube start` output is in
-`/tmp/qa-minikube.log`.
+`/tmp/qa-minikube.log`. On a shared daemon (a mounted host socket) it won't
+start if the daemon already has a `minikube` container it didn't create, since
+`minikube start` would delete that container as abandoned.
 
 ```bash
 docker run --rm -it --privileged -e FLEET_QA_START_MINIKUBE=1 \

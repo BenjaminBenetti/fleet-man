@@ -107,6 +107,14 @@ start_minikube() {
   local log_file=/tmp/qa-minikube.log
   if minikube status >/dev/null 2>&1; then
     log "minikube already running"
+  elif [ "$(minikube profile list -o json 2>/dev/null \
+             | jq 'any(.valid[], .invalid[]; .Name == "minikube")' 2>/dev/null)" != true ] \
+       && docker container inspect minikube >/dev/null 2>&1; then
+    # A shared daemon (a mounted host socket) can hold another minikube's node,
+    # such as the devcontainer's. Without its profile here, `minikube start`
+    # takes that container for an abandoned one and deletes it.
+    log "the daemon already has a minikube container this one didn't create; leaving it alone"
+    return 1
   else
     log "starting minikube (docker driver)…"
     # shellcheck disable=SC2086 # FLEET_QA_MINIKUBE_FLAGS is a list of flags

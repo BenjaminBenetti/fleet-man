@@ -20,7 +20,7 @@ for arg in "$@"; do
     --no-daemon) CHECK_DAEMON=0 ;;
     --k8s)       CHECK_K8S=1 ;;
     --smoke)     SMOKE=1 ;;
-    -h|--help)   sed -n '2,12p' "$0"; exit 0 ;;
+    -h|--help)   sed -n '2,11p' "$0"; exit 0 ;;
     *) echo "unknown arg: ${arg}" >&2; exit 2 ;;
   esac
 done
