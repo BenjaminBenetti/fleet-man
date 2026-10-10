@@ -93,7 +93,7 @@ func firstOperand(args []string) string {
 // opened for appending, so concurrent shims (the CLI runs `docker events`
 // beside its other calls) never interleave within an entry.
 func appendCall(path string, c Call) {
-	c.Args = redact.EnvArgs(c.Args)
+	c.Args = redactArgv(c.Args)
 	data, err := json.Marshal(c)
 	if err != nil {
 		return
@@ -104,6 +104,31 @@ func appendCall(path string, c Call) {
 	}
 	_, _ = f.Write(append(data, '\n'))
 	_ = f.Close()
+}
+
+// redactArgv returns a copy of a docker argv (after the binary) with its
+// environment values hidden: the -e options of run, create and exec read with
+// their grammar (flagSet.redactEnv), and redact.EnvArgs over the whole argv
+// for the rest and for the devcontainer.metadata label's env objects.
+func redactArgv(args []string) []string {
+	out := append([]string(nil), args...)
+	_, verb, rest, err := splitGlobals(args)
+	if err == nil && verb == "container" {
+		verb, rest = subcommand(rest)
+	}
+	if err == nil {
+		var fs *flagSet
+		switch verb {
+		case "run", "create":
+			fs = runFlags
+		case "exec":
+			fs = execFlags
+		}
+		if fs != nil {
+			copy(out[len(out)-len(rest):], fs.redactEnv(rest))
+		}
+	}
+	return redact.EnvArgs(out)
 }
 
 // readCalls reads the journal at path; a missing journal is an empty one.

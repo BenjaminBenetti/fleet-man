@@ -12,8 +12,11 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 func testContainer() Container {
@@ -222,6 +225,53 @@ func TestPodModeExecTransportFailures(t *testing.T) {
 	}
 }
 
+// TestPodModeExecOnATerminal: `exec -t` from a terminal sends the terminal's
+// size with the request and forwards its resizes after it.
+func TestPodModeExecOnATerminal(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Skipf("no pty: %v", err)
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 30, Cols: 100}); err != nil {
+		t.Fatal(err)
+	}
+	c := testContainer()
+	s := newTestShim(t, Config{Mode: ModePod, Pod: &PodConfig{Container: c}})
+	servePod(t, s, ExecerFunc(func(ctx context.Context, req ExecRequest, stdio ExecStdio) (int, error) {
+		if !req.TTY || req.Size == nil || *req.Size != (WindowSize{Rows: 30, Cols: 100}) {
+			return 10, nil
+		}
+		if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 40, Cols: 120}); err != nil {
+			return 11, nil
+		}
+		_ = syscall.Kill(os.Getpid(), syscall.SIGWINCH)
+		select {
+		case ws := <-stdio.Resize:
+			if ws != (WindowSize{Rows: 40, Cols: 120}) {
+				return 12, nil
+			}
+			return 0, nil
+		case <-time.After(5 * time.Second):
+			return 13, nil
+		}
+	}))
+	var stdout, stderr bytes.Buffer
+	code := run(invocation{
+		args:       []string{s.dir.Docker(), "exec", "-t", c.ContainerID, "sh"},
+		stdin:      tty,
+		stdout:     &stdout,
+		stderr:     &stderr,
+		getenv:     func(string) (string, bool) { return "", false },
+		cwd:        s.cwd,
+		isTerminal: isTerminal,
+	})
+	if code != 0 {
+		t.Errorf("exit %d (10: no size, 12: wrong resize, 13: no resize); stderr %q", code, stderr.String())
+	}
+}
+
 // TestServeExecCancelsWhenTheShimGoes: an exec whose shim disconnects is
 // cancelled, and ServeExec cancels what still runs when it stops.
 func TestServeExecCancelsWhenTheShimGoes(t *testing.T) {
@@ -261,6 +311,52 @@ func TestServeExecCancelsWhenTheShimGoes(t *testing.T) {
 	stop()
 	if err := <-done; err != nil {
 		t.Errorf("ServeExec: %v", err)
+	}
+}
+
+// TestServeExecCancelsWhenTheListenerFails: a listener that fails under
+// ServeExec ends it with the error, and the execs still running are
+// cancelled rather than waited out.
+func TestServeExecCancelsWhenTheListenerFails(t *testing.T) {
+	sock := filepath.Join(shortTempDir(t), "x.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- ServeExec(context.Background(), ln, ExecerFunc(func(ctx context.Context, req ExecRequest, stdio ExecStdio) (int, error) {
+			close(started)
+			<-ctx.Done()
+			close(cancelled)
+			return 0, ctx.Err()
+		}))
+	}()
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	payload, _ := json.Marshal(ExecRequest{Argv: []string{"sleep", "100"}})
+	if err := (&frameWriter{w: conn}).write(frameRequest, payload); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	_ = ln.Close()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Errorf("ServeExec returned nil for a failed listener")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ServeExec waited out a running exec after its listener failed")
+	}
+	select {
+	case <-cancelled:
+	default:
+		t.Errorf("the running exec was not cancelled")
 	}
 }
 

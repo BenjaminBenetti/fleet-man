@@ -20,9 +20,13 @@ const requestTimeout = 10 * time.Second
 // It returns nil when ctx ended it.
 func ServeExec(ctx context.Context, ln net.Listener, ex Execer) error {
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	var wg sync.WaitGroup
-	defer wg.Wait()
+	// Cancel first, then wait: however the loop ends (ctx, or ln failing),
+	// the execs still running are told to end rather than waited out.
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
 	go func() {
 		<-ctx.Done()
 		_ = ln.Close()

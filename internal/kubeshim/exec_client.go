@@ -25,16 +25,15 @@ func runExecClient(inv invocation, socket string, req ExecRequest) int {
 	defer conn.Close()
 	fw := &frameWriter{w: conn}
 
-	var restore func()
+	// The server reads the request first, so resizes are forwarded only once
+	// it is sent; the terminal is raw before then, as with docker exec -t.
+	requestSent := make(chan struct{})
 	if req.TTY && inv.isTerminal(inv.stdin) {
 		f := inv.stdin.(*os.File)
 		if cols, rows, err := term.GetSize(f.Fd()); err == nil && cols > 0 && rows > 0 {
 			req.Size = &WindowSize{Rows: uint16(rows), Cols: uint16(cols)}
 		}
-		restore = rawTerminal(f, fw)
-	}
-	if restore != nil {
-		defer restore()
+		defer rawTerminal(f, fw, requestSent)()
 	}
 
 	payload, err := json.Marshal(req)
@@ -46,6 +45,7 @@ func runExecClient(inv invocation, socket string, req ExecRequest) int {
 		fmt.Fprintf(inv.stderr, "kubeshim: exec: sending the request: %v\n", err)
 		return exitShim
 	}
+	close(requestSent)
 	if req.Stdin {
 		go pumpExecStdin(fw, inv.stdin)
 	}
@@ -95,9 +95,9 @@ func pumpExecStdin(fw *frameWriter, stdin io.Reader) {
 }
 
 // rawTerminal puts the terminal f in raw mode, as docker exec -t does, and
-// forwards its resizes. The returned func restores it; it also runs when a
-// signal ends the shim.
-func rawTerminal(f *os.File, fw *frameWriter) func() {
+// forwards its resizes once ready is closed (the request has gone first). The
+// returned func restores it; it also runs when a signal ends the shim.
+func rawTerminal(f *os.File, fw *frameWriter, ready <-chan struct{}) func() {
 	state, rawErr := term.MakeRaw(f.Fd())
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
@@ -108,6 +108,11 @@ func rawTerminal(f *os.File, fw *frameWriter) func() {
 		}
 	}
 	go func() {
+		select {
+		case <-ready:
+		case <-done:
+			return
+		}
 		for {
 			select {
 			case <-done:

@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/redact"
 )
 
 // testShim is a shim directory driven in-process.
@@ -205,8 +207,9 @@ func TestCaptureModeCapturesTheRun(t *testing.T) {
 func TestRedactedCaptureHidesEveryValue(t *testing.T) {
 	c := &Capture{
 		Format: CaptureFormat, Verb: "run",
-		Args: []string{"-e", "SECRET=s3cr3t", "--env=OTHER=0th3r", "-l", `devcontainer.metadata=[{"containerEnv":{"K":"m3t4"}}]`, "img"},
-		Env:  []EnvVar{{Name: "SECRET", Value: "s3cr3t", Source: "flag"}, {Name: "GONE", Unset: true, Source: "host"}},
+		Args: []string{"-e", "SECRET=s3cr3t", "--env=OTHER=0th3r", "-e=EQ=3qu4l", "-ie", "BUNDLED=bundl3d", "-eATTACHED=4tt4ch3d",
+			"-l", `devcontainer.metadata=[{"containerEnv":{"K":"m3t4"}}]`, "img"},
+		Env: []EnvVar{{Name: "SECRET", Value: "s3cr3t", Source: "flag"}, {Name: "GONE", Unset: true, Source: "host"}},
 		Labels: map[string]string{
 			"devcontainer.metadata": `[{"containerEnv":{"K":"m3t4"}}]`,
 			"plain":                 "kept",
@@ -214,12 +217,12 @@ func TestRedactedCaptureHidesEveryValue(t *testing.T) {
 	}
 	r := c.Redacted()
 	data, _ := json.Marshal(r)
-	for _, secret := range []string{"s3cr3t", "0th3r", "m3t4"} {
+	for _, secret := range []string{"s3cr3t", "0th3r", "3qu4l", "bundl3d", "4tt4ch3d", "m3t4"} {
 		if strings.Contains(string(data), secret) {
 			t.Errorf("redacted capture holds %q: %s", secret, data)
 		}
 	}
-	for _, kept := range []string{"SECRET=", "OTHER=", "kept", "GONE"} {
+	for _, kept := range []string{"SECRET=", "OTHER=", `"-e=EQ=\u003credacted\u003e"`, `"-ie","BUNDLED=`, "-eATTACHED=", "kept", "GONE"} {
 		if !strings.Contains(string(data), kept) {
 			t.Errorf("redacted capture lost %q: %s", kept, data)
 		}
@@ -229,6 +232,39 @@ func TestRedactedCaptureHidesEveryValue(t *testing.T) {
 	}
 	if c.Env[0].Value != "s3cr3t" || c.Args[1] != "SECRET=s3cr3t" {
 		t.Errorf("Redacted changed the original")
+	}
+}
+
+// TestRedactArgv: the journal hides env values in every form docker's
+// grammar takes for run, create and exec, and leaves everything else alone.
+func TestRedactArgv(t *testing.T) {
+	p := redact.Placeholder
+	for _, tc := range []struct {
+		args, want []string
+	}{
+		{[]string{"run", "-e=K=v1", "-ie", "B=v2", "--env", "L=v3", "-e", "BARE", "img", "-e", "CMD=kept?"},
+			[]string{"run", "-e=K=" + p, "-ie", "B=" + p, "--env", "L=" + p, "-e", "BARE", "img", "-e", "CMD=" + p}},
+		{[]string{"--context", "c", "container", "create", "-de=K=v", "img"},
+			[]string{"--context", "c", "container", "create", "-de=K=" + p, "img"}},
+		{[]string{"exec", "-iu", "root", "-e=K=v", "-w", "/w", "cid", "sh"},
+			[]string{"exec", "-iu", "root", "-e=K=" + p, "-w", "/w", "cid", "sh"}},
+		{[]string{"buildx", "build", "-t", "img", "."}, []string{"buildx", "build", "-t", "img", "."}},
+		{[]string{"run", "--frobnicate", "-e", "K=v"}, []string{"run", "--frobnicate", "-e", "K=" + p}},
+	} {
+		if got := redactArgv(tc.args); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("redactArgv(%q)\n got %q\nwant %q", tc.args, got, tc.want)
+		}
+	}
+	// Through the shim: the journal of a refused and of a captured run.
+	s := newTestShim(t, Config{Mode: ModeCapture, Docker: "/usr/bin/docker"})
+	s.docker("run", "-e=K=s3cr3t-1", "--frobnicate", "img")
+	s.docker("run", "-ie", "K=s3cr3t-2", "img")
+	data, err := os.ReadFile(filepath.Join(s.dir.Path(), callsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "s3cr3t") {
+		t.Errorf("the journal holds an env value:\n%s", data)
 	}
 }
 

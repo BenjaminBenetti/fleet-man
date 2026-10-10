@@ -25,8 +25,8 @@ import (
 type Tools struct {
 	// CLI is the devcontainer CLI; "" means "devcontainer" on PATH.
 	CLI string
-	// Docker is the real docker capture mode hands builds to; "" means
-	// "docker" on PATH.
+	// Docker is the real docker capture mode hands builds to: a path, or a
+	// name looked up on PATH; "" means "docker".
 	Docker string
 	// Exe is the fleet executable the shim links point at; "" means
 	// os.Executable().
@@ -44,10 +44,16 @@ func (t Tools) cli() (string, error) {
 	return path, nil
 }
 
+// docker is the real docker as an absolute path: the shim runs it from
+// whatever directory the CLI is in, and never by PATH, where its own docker
+// link may come first.
 func (t Tools) docker() (string, error) {
 	path := t.Docker
 	if path == "" {
-		found, err := exec.LookPath("docker")
+		path = "docker"
+	}
+	if !strings.Contains(path, "/") {
+		found, err := exec.LookPath(path)
 		if err != nil {
 			return "", fmt.Errorf("docker is not installed on the daemon host: %w", err)
 		}

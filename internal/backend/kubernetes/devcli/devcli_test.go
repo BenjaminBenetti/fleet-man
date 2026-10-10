@@ -524,3 +524,33 @@ func containsRun(args, want []string) bool {
 }
 
 func hostArch() string { return runtime.GOARCH }
+
+// TestToolsDocker: the real docker is handed to the shim as an absolute
+// path, a bare name found on PATH as docker would be.
+func TestToolsDocker(t *testing.T) {
+	bin := t.TempDir()
+	for _, name := range []string{"docker", "other-docker"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for in, want := range map[string]string{
+		"":              filepath.Join(bin, "docker"),
+		"other-docker":  filepath.Join(bin, "other-docker"),
+		"./rel/docker":  filepath.Join(cwd, "rel", "docker"),
+		"/abs/x/docker": "/abs/x/docker",
+	} {
+		got, err := Tools{Docker: in}.docker()
+		if err != nil || got != want {
+			t.Errorf("Docker %q: %q, %v; want %q", in, got, err, want)
+		}
+	}
+	if _, err := (Tools{Docker: "missing-docker"}).docker(); err == nil {
+		t.Errorf("a docker name not on PATH should fail")
+	}
+}

@@ -58,13 +58,14 @@ func (c *Capture) Run() (*RunArgs, error) {
 
 // Redacted returns a copy of c that can be stored or logged: every
 // environment value hidden (redact.Placeholder), in Env, in the -e options of
-// Args (redact.EnvArgs) and in the containerEnv and remoteEnv objects of the
+// Args (read with docker run's grammar, so every form docker takes is
+// covered) and in the containerEnv and remoteEnv objects of the
 // devcontainer.metadata label (redact.EnvObjects), which repeat them. Names
 // stay, so a reader still sees what was set.
 func (c *Capture) Redacted() *Capture {
 	out := *c
 	out.Globals = append([]string(nil), c.Globals...)
-	out.Args = redact.EnvArgs(c.Args)
+	out.Args = redact.EnvArgs(runFlags.redactEnv(c.Args))
 	out.Env = make([]EnvVar, len(c.Env))
 	for i, e := range c.Env {
 		if !e.Unset {

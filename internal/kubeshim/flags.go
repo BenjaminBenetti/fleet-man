@@ -3,6 +3,8 @@ package kubeshim
 import (
 	"fmt"
 	"strings"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/redact"
 )
 
 // flagSpec describes one docker CLI option the way docker's own flag parser
@@ -78,18 +80,48 @@ func (e *UnknownFlagError) Error() string {
 // options in order with the arguments that follow them (the first of which is
 // the positional argument).
 func (fs *flagSet) parse(args []string) ([]Flag, []string, error) {
-	return fs.parseArgs(args, false)
+	located, rest, err := fs.parseArgs(args, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	return flagsOf(located), rest, nil
 }
 
 // parseInterspersed parses options anywhere among the operands, as docker
 // does for commands that take no command line of their own (inspect, ps), and
 // returns the options and the operands. Everything after "--" is an operand.
 func (fs *flagSet) parseInterspersed(args []string) ([]Flag, []string, error) {
-	return fs.parseArgs(args, true)
+	located, operands, err := fs.parseArgs(args, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	return flagsOf(located), operands, nil
 }
 
-func (fs *flagSet) parseArgs(args []string, interspersed bool) ([]Flag, []string, error) {
-	var flags []Flag
+// locatedFlag is a parsed option with where its value was written: the
+// value of an option that takes one is always the tail of one argument,
+// args[arg][start:] ("--env=K=V", "-eK=V", "-e=K=V", or the whole argument
+// after "-e"). arg is -1 for a boolean.
+type locatedFlag struct {
+	Flag
+	arg, start int
+}
+
+func flagsOf(located []locatedFlag) []Flag {
+	if located == nil {
+		return nil
+	}
+	out := make([]Flag, len(located))
+	for i, f := range located {
+		out[i] = f.Flag
+	}
+	return out
+}
+
+// parseArgs parses args. On an error it returns the options parsed before
+// it (for redactEnv); parse and parseInterspersed return none.
+func (fs *flagSet) parseArgs(args []string, interspersed bool) ([]locatedFlag, []string, error) {
+	var flags []locatedFlag
 	var operands []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -105,27 +137,27 @@ func (fs *flagSet) parseArgs(args []string, interspersed bool) ([]Flag, []string
 			name, value, hasValue := strings.Cut(arg[2:], "=")
 			spec, ok := fs.long[name]
 			if !ok {
-				return nil, nil, &UnknownFlagError{Flag: "--" + name}
+				return flags, nil, &UnknownFlagError{Flag: "--" + name}
 			}
 			switch {
 			case !spec.value:
 				v, err := boolValue(arg, value, hasValue)
 				if err != nil {
-					return nil, nil, err
+					return flags, nil, err
 				}
-				flags = append(flags, Flag{Name: spec.canonicalName(), Value: v})
+				flags = append(flags, locatedFlag{Flag{Name: spec.canonicalName(), Value: v}, -1, 0})
 			case hasValue:
-				flags = append(flags, Flag{Name: spec.canonicalName(), Value: value})
+				flags = append(flags, locatedFlag{Flag{Name: spec.canonicalName(), Value: value}, i, len("--" + name + "=")})
 			case i+1 < len(args):
 				i++
-				flags = append(flags, Flag{Name: spec.canonicalName(), Value: args[i]})
+				flags = append(flags, locatedFlag{Flag{Name: spec.canonicalName(), Value: args[i]}, i, 0})
 			default:
-				return nil, nil, fmt.Errorf("flag needs an argument: %s", arg)
+				return flags, nil, fmt.Errorf("flag needs an argument: %s", arg)
 			}
 		default:
-			parsed, consumedNext, err := fs.parseShorthands(arg, args[i+1:])
+			parsed, consumedNext, err := fs.parseShorthands(arg, i, args[i+1:])
 			if err != nil {
-				return nil, nil, err
+				return flags, nil, err
 			}
 			flags = append(flags, parsed...)
 			if consumedNext {
@@ -136,11 +168,12 @@ func (fs *flagSet) parseArgs(args []string, interspersed bool) ([]Flag, []string
 	return flags, operands, nil
 }
 
-// parseShorthands parses one "-abc" argument: bundled booleans, and at most
-// one shorthand taking a value, whose value is the rest of the argument
-// ("-eKEY=VALUE", "-u=root") or, when nothing follows it, the next argument.
-func (fs *flagSet) parseShorthands(arg string, rest []string) ([]Flag, bool, error) {
-	var flags []Flag
+// parseShorthands parses one "-abc" argument, args[at]: bundled booleans, and
+// at most one shorthand taking a value, whose value is the rest of the
+// argument ("-eKEY=VALUE", "-u=root") or, when nothing follows it, the next
+// argument.
+func (fs *flagSet) parseShorthands(arg string, at int, rest []string) ([]locatedFlag, bool, error) {
+	var flags []locatedFlag
 	letters := arg[1:]
 	for len(letters) > 0 {
 		c := letters[0]
@@ -155,24 +188,46 @@ func (fs *flagSet) parseShorthands(arg string, rest []string) ([]Flag, bool, err
 				if err != nil {
 					return nil, false, err
 				}
-				return append(flags, Flag{Name: spec.canonicalName(), Value: v}), false, nil
+				return append(flags, locatedFlag{Flag{Name: spec.canonicalName(), Value: v}, -1, 0}), false, nil
 			}
-			flags = append(flags, Flag{Name: spec.canonicalName(), Value: "true"})
+			flags = append(flags, locatedFlag{Flag{Name: spec.canonicalName(), Value: "true"}, -1, 0})
 			letters = after
 			continue
 		}
+		offset := len(arg) - len(after) // where after starts in arg
 		switch {
 		case strings.HasPrefix(after, "=") && len(after) > 1:
-			return append(flags, Flag{Name: spec.canonicalName(), Value: after[1:]}), false, nil
+			return append(flags, locatedFlag{Flag{Name: spec.canonicalName(), Value: after[1:]}, at, offset + 1}), false, nil
 		case after != "":
-			return append(flags, Flag{Name: spec.canonicalName(), Value: after}), false, nil
+			return append(flags, locatedFlag{Flag{Name: spec.canonicalName(), Value: after}, at, offset}), false, nil
 		case len(rest) > 0:
-			return append(flags, Flag{Name: spec.canonicalName(), Value: rest[0]}), true, nil
+			return append(flags, locatedFlag{Flag{Name: spec.canonicalName(), Value: rest[0]}, at + 1, 0}), true, nil
 		default:
 			return nil, false, fmt.Errorf("flag needs an argument: '%c' in %s", c, arg)
 		}
 	}
 	return flags, false, nil
+}
+
+// redactEnv returns a copy of args with the value of every environment
+// option (-e, --env) hidden (redact.Placeholder), read with fs's grammar up
+// to the first positional argument, so every form docker takes is covered:
+// "-e K=V", "--env K=V", "--env=K=V", "-eK=V", "-e=K=V" and a bundle ending
+// in e ("-ie K=V"). KEY= stays; a bare name ("-e K", which docker fills in
+// from its own environment) has no value and is kept. When args do not parse
+// (an unknown option), the options before the one that failed are redacted.
+func (fs *flagSet) redactEnv(args []string) []string {
+	out := append([]string(nil), args...)
+	located, _, _ := fs.parseArgs(args, false)
+	for _, f := range located {
+		if f.Name != "env" || f.arg < 0 {
+			continue
+		}
+		if name, _, ok := strings.Cut(f.Value, "="); ok {
+			out[f.arg] = args[f.arg][:f.start] + name + "=" + redact.Placeholder
+		}
+	}
+	return out
 }
 
 // canonicalName is the name a parsed option is reported under.

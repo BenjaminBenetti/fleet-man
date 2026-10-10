@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/redact"
 	"github.com/charmbracelet/x/term"
 )
 
@@ -187,7 +186,7 @@ func (s *shim) record(outcome Outcome, detail string) {
 // shows the message in its log, and the journal keeps it for the job's error.
 func (s *shim) refuse(why string) int {
 	s.record(OutcomeRefused, why)
-	fmt.Fprintf(s.inv.stderr, "kubeshim (%s mode): refusing `%s %s`: %s\n", s.cfg.Mode, s.binary, strings.Join(redact.EnvArgs(s.args), " "), why)
+	fmt.Fprintf(s.inv.stderr, "kubeshim (%s mode): refusing `%s %s`: %s\n", s.cfg.Mode, s.binary, strings.Join(redactArgv(s.args), " "), why)
 	return exitShim
 }
 
