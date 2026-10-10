@@ -7,6 +7,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime/svcruntimetest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -57,6 +58,9 @@ func TestCreateFleetPersistsAndIsIdempotent(t *testing.T) {
 
 func TestDestroyFleetRejectsNonEmptyAndIsIdempotent(t *testing.T) {
 	isolateFleetDir(t)
+	// The teardown would otherwise remove the host docker's containers and
+	// network for any real fleet named "empty" or "ghost".
+	stubHostServices(t, svcruntimetest.New("docker"))
 	svc := newService()
 	ctx := context.Background()
 
