@@ -62,3 +62,23 @@ jobs:
         run: |
           go test -c -o "$RUNNER_TEMP/execas.test" ./internal/execas
           sudo FLEET_EXECAS_REQUIRE_ROOT=1 "$RUNNER_TEMP/execas.test" -test.run 'AsRoot' -test.v
+
+      # The seed copier keeps owners, file capabilities, root-owned setuid
+      # files, device nodes and ACLs, and pod-init drops to containerUser:
+      # both need root to be tested for real. FLEET_PODSEED_REQUIRE_ROOT turns
+      # the root tests' skip into a failure.
+      - name: podseed and podinit as root
+        run: |
+          go test -c -o "$RUNNER_TEMP/podseed.test" ./internal/podseed
+          go test -c -o "$RUNNER_TEMP/podinit.test" ./internal/podinit
+          sudo FLEET_PODSEED_REQUIRE_ROOT=1 "$RUNNER_TEMP/podseed.test" -test.v
+          sudo FLEET_PODSEED_REQUIRE_ROOT=1 "$RUNNER_TEMP/podinit.test" -test.v
+
+      # pod-init as PID 1 of a privileged container with a memory limit, in a
+      # private and in the host cgroup namespace (the shapes cri-dockerd and
+      # containerd give a privileged pod): the cgroup layout, an OOM that
+      # leaves the container running, the stop signal and the rolling file.
+      - name: pod-init as PID 1 in docker
+        env:
+          FLEET_PODINIT_DOCKER: "1"
+        run: go test -count=1 -run TestPodInitAsPID1InDocker -v ./internal/podinit
