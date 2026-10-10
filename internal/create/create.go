@@ -85,6 +85,7 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 		// Template fleet: copy the local template dir into the workspace
 		// (the cp stands in for git clone), then provision.
 		if err := copyTemplateTree(ctx, remoteURL, wsDir); err != nil {
+			err = cancelledOr(ctx, err)
 			setFailed(fleetName, instanceName, err)
 			return err
 		}
@@ -102,6 +103,11 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 		cloneArgs = append(cloneArgs, "--", remoteURL, wsDir)
 		out, err := gitutil.Clone(ctx, remoteURL, cloneArgs, os.Stderr)
 		if err != nil {
+			// A cancelled clone was killed: report why, not "signal: killed".
+			if cerr := checkCancelled(ctx); cerr != nil {
+				setFailed(fleetName, instanceName, cerr)
+				return cerr
+			}
 			detail := string(out)
 			if hint := gitutil.CloneFailureHint(detail, remoteURL, agentsock.CloneForwarding()); hint != "" {
 				detail = strings.TrimRight(detail, "\n") + "\n" + hint + "\n"
@@ -127,10 +133,9 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 		setFailed(fleetName, instanceName, err)
 		return err
 	}
-	// Up takes no context, so a destroy may have cancelled the run while it
-	// worked: tear the new container down rather than provision it further.
-	if err := discardIfCancelled(ctx, instanceBackend, fleetName, instanceName, result.ContainerID); err != nil {
-		setFailed(fleetName, instanceName, err)
+	// Up takes no context, so the run may have been cancelled while it
+	// worked: stop here rather than provision the new container further.
+	if err := stopIfCancelled(ctx, instanceBackend, fleetName, instanceName, result.ContainerID); err != nil {
 		return err
 	}
 

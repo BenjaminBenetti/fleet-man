@@ -84,9 +84,11 @@ func RunRebuild(ctx context.Context, fleetName, instanceName string, verbose boo
 		setFailed(fleetName, instanceName, err)
 		return err
 	}
-	// Rebuild takes no context: tear down a container the run no longer wants.
-	if err := discardIfCancelled(ctx, instanceBackend, fleetName, instanceName, result.ContainerID); err != nil {
-		setFailed(fleetName, instanceName, err)
+	// Rebuild takes no context: stop a rebuild the run was cancelled during.
+	// Only a destroy's cancellation tears the container down (abandonRun): on
+	// a shutdown it is the instance's only container (for codespaces, the
+	// codespace itself), so the failed record keeps it.
+	if err := stopIfCancelled(ctx, instanceBackend, fleetName, instanceName, result.ContainerID); err != nil {
 		return err
 	}
 

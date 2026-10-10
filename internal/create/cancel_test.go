@@ -62,24 +62,26 @@ func loadInstance(t *testing.T, name string) *fleet.Instance {
 }
 
 // TestCommitRunning covers the commit a provisioning run ends with: a live run
-// records its container, while a run whose job was cancelled, or whose record
-// was destroyed or marked deleting, tears the container down and commits
-// nothing — the destroy-cancels-create half that lives in the run itself.
+// records its container; a run whose record was destroyed or marked deleting
+// tears the container down and commits nothing (the destroy-cancels-create
+// half that lives in the run itself); a run the daemon's shutdown cancelled
+// keeps its container on the failed record.
 func TestCommitRunning(t *testing.T) {
 	cases := []struct {
-		name        string
-		status      fleet.InstanceStatus
-		remove      bool // the record is gone (a destroy already removed it)
-		cancel      bool
-		wantErr     error
-		wantStatus  fleet.InstanceStatus
-		wantRunning bool
+		name          string
+		status        fleet.InstanceStatus
+		remove        bool // the record is gone (a destroy already removed it)
+		cancel        bool
+		wantErr       error
+		wantStatus    fleet.InstanceStatus
+		wantContainer bool // the record holds cid-1
+		wantDiscard   bool // cid-1 was torn down
 	}{
-		{name: "live run commits", status: fleet.StatusCreating, wantStatus: fleet.StatusRunning, wantRunning: true},
-		{name: "cancelled run fails", status: fleet.StatusCreating, cancel: true, wantErr: errCancelled, wantStatus: fleet.StatusFailed},
-		{name: "deleting record is left to the destroy", status: fleet.StatusDeleting, wantErr: errAbandoned, wantStatus: fleet.StatusDeleting},
-		{name: "cancelled and deleting", status: fleet.StatusDeleting, cancel: true, wantErr: errCancelled, wantStatus: fleet.StatusDeleting},
-		{name: "removed record", remove: true, wantErr: errAbandoned},
+		{name: "live run commits", status: fleet.StatusCreating, wantStatus: fleet.StatusRunning, wantContainer: true},
+		{name: "shutdown keeps the container on the failed record", status: fleet.StatusCreating, cancel: true, wantErr: errCancelled, wantStatus: fleet.StatusFailed, wantContainer: true},
+		{name: "deleting record is left to the destroy", status: fleet.StatusDeleting, wantErr: errAbandoned, wantStatus: fleet.StatusDeleting, wantDiscard: true},
+		{name: "cancelled and deleting", status: fleet.StatusDeleting, cancel: true, wantErr: errCancelled, wantStatus: fleet.StatusDeleting, wantDiscard: true},
+		{name: "removed record", remove: true, wantErr: errAbandoned, wantDiscard: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -96,20 +98,14 @@ func TestCommitRunning(t *testing.T) {
 
 			err := commitRunning(ctx, b, "alpha", "i1", "cid-1")
 
-			if tc.wantErr == nil {
-				if err != nil {
-					t.Fatalf("commitRunning: %v", err)
-				}
-				if len(b.downs) != 0 {
-					t.Fatalf("a committed container must not be torn down: %v", b.downs)
-				}
-			} else {
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("err = %v, want %v", err, tc.wantErr)
-				}
-				if len(b.downs) != 1 || b.downs[0] != "cid-1" {
-					t.Fatalf("an abandoned run must tear its container down, downs = %v", b.downs)
-				}
+			if tc.wantErr == nil && err != nil {
+				t.Fatalf("commitRunning: %v", err)
+			}
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if discarded := len(b.downs) == 1 && b.downs[0] == "cid-1"; discarded != tc.wantDiscard || len(b.downs) > 1 {
+				t.Fatalf("downs = %v, want discard=%v", b.downs, tc.wantDiscard)
 			}
 			inst := loadInstance(t, "i1")
 			if tc.remove {
@@ -121,8 +117,8 @@ func TestCommitRunning(t *testing.T) {
 			if inst.Status != tc.wantStatus {
 				t.Fatalf("status = %s, want %s", inst.Status, tc.wantStatus)
 			}
-			if tc.wantRunning != (inst.ContainerID == "cid-1") {
-				t.Fatalf("container id recorded = %q, want recorded=%v", inst.ContainerID, tc.wantRunning)
+			if tc.wantContainer != (inst.ContainerID == "cid-1") {
+				t.Fatalf("container id recorded = %q, want recorded=%v", inst.ContainerID, tc.wantContainer)
 			}
 		})
 	}
@@ -141,21 +137,64 @@ func TestCancelledRunNamesTheCause(t *testing.T) {
 	}
 }
 
-func TestDiscardIfCancelled(t *testing.T) {
-	b := &downRecorder{}
-	if err := discardIfCancelled(context.Background(), b, "alpha", "i1", "cid-1"); err != nil || len(b.downs) != 0 {
-		t.Fatalf("a live run must keep its container: err=%v downs=%v", err, b.downs)
+// TestStopIfCancelled: after a step produced a container, a live run goes on;
+// a cancelled run stops there, tearing the container down only when a destroy
+// has its record. A shutdown leaves the record failed and holding the
+// container, the one a rebuild just made included: for codespaces that is the
+// codespace itself, which a teardown would delete with the user's work.
+func TestStopIfCancelled(t *testing.T) {
+	cases := []struct {
+		name          string
+		status        fleet.InstanceStatus
+		prior         string // the record's ContainerID before the step
+		ctx           context.Context
+		containerID   string
+		wantErr       bool
+		wantDiscard   bool
+		wantStatus    fleet.InstanceStatus
+		wantContainer string
+	}{
+		{name: "live run goes on", status: fleet.StatusCreating, ctx: context.Background(), containerID: "cid-1", wantStatus: fleet.StatusCreating},
+		{name: "destroy tears the container down", status: fleet.StatusDeleting, ctx: cancelledCtx(), containerID: "cid-1", wantErr: true, wantDiscard: true, wantStatus: fleet.StatusDeleting},
+		{name: "destroy before any container", status: fleet.StatusDeleting, ctx: cancelledCtx(), wantErr: true, wantStatus: fleet.StatusDeleting},
+		{name: "shutdown keeps a new container", status: fleet.StatusCreating, ctx: cancelledCtx(), containerID: "cid-1", wantErr: true, wantStatus: fleet.StatusFailed, wantContainer: "cid-1"},
+		{name: "shutdown keeps a rebuilt codespace", status: fleet.StatusRebuilding, prior: "cs-1", ctx: cancelledCtx(), containerID: "cs-1", wantErr: true, wantStatus: fleet.StatusFailed, wantContainer: "cs-1"},
+		{name: "shutdown before any container keeps the old one", status: fleet.StatusRebuilding, prior: "old", ctx: cancelledCtx(), wantErr: true, wantStatus: fleet.StatusFailed, wantContainer: "old"},
 	}
-	if err := discardIfCancelled(cancelledCtx(), b, "alpha", "i1", "cid-1"); !errors.Is(err, errCancelled) || !errors.Is(err, errTestDestroyed) {
-		t.Fatalf("err = %v, want the cancellation and its cause", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			seedInstance(t, &fleet.Instance{Name: "i1", Status: tc.status, ContainerID: tc.prior})
+			b := &downRecorder{}
+			err := stopIfCancelled(tc.ctx, b, "alpha", "i1", tc.containerID)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, want error=%v", err, tc.wantErr)
+			}
+			if err != nil && (!errors.Is(err, errCancelled) || !errors.Is(err, errTestDestroyed)) {
+				t.Fatalf("err = %v, want the cancellation and its cause", err)
+			}
+			if discarded := len(b.downs) == 1 && b.downs[0] == tc.containerID; discarded != tc.wantDiscard || len(b.downs) > 1 {
+				t.Fatalf("downs = %v, want discard=%v", b.downs, tc.wantDiscard)
+			}
+			inst := loadInstance(t, "i1")
+			if inst.Status != tc.wantStatus || inst.ContainerID != tc.wantContainer {
+				t.Fatalf("record = %s %q, want %s %q", inst.Status, inst.ContainerID, tc.wantStatus, tc.wantContainer)
+			}
+			if tc.wantStatus == fleet.StatusFailed && inst.Error != err.Error() {
+				t.Fatalf("recorded error = %q, want %q", inst.Error, err.Error())
+			}
+		})
 	}
-	if len(b.downs) != 1 || b.downs[0] != "cid-1" {
-		t.Fatalf("a cancelled run must tear its container down, downs = %v", b.downs)
+}
+
+// TestCancelledOr: a step that failed because the run was cancelled (a killed
+// git clone or copy) reports the cancellation; any other failure is its own.
+func TestCancelledOr(t *testing.T) {
+	stepErr := errors.New("signal: killed")
+	if err := cancelledOr(context.Background(), stepErr); err != stepErr {
+		t.Fatalf("live run: err = %v, want the step's error", err)
 	}
-	// No container yet: nothing to tear down.
-	b.downs = nil
-	if err := discardIfCancelled(cancelledCtx(), b, "alpha", "i1", ""); err == nil || len(b.downs) != 0 {
-		t.Fatalf("err=%v downs=%v, want an error and no teardown", err, b.downs)
+	if err := cancelledOr(cancelledCtx(), stepErr); !errors.Is(err, errCancelled) || !errors.Is(err, errTestDestroyed) {
+		t.Fatalf("cancelled run: err = %v, want the cancellation and its cause", err)
 	}
 }
 

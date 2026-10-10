@@ -20,9 +20,10 @@ import (
 // A run that was abandoned meanwhile commits nothing: when ctx is cancelled the
 // cancellation is returned, and when the record is gone or StatusDeleting (a
 // destroy removed it, or marked it before cancelling this run's job) it returns
-// errAbandoned. Both checks run under the state lock, so a destroy either sees
-// the container on the record (and tears it down itself) or the run sees the
-// destroy (and tears it down here, in commitRunning) — never neither.
+// errAbandoned. commitRunning then hands the run to abandonRun, which decides
+// under the state lock again, so a destroy either sees the container on the
+// record (and tears it down itself) or the run sees the destroy (and tears it
+// down there) — never neither.
 func markInstanceRunning(ctx context.Context, fleetName, instanceName, containerID string) error {
 	// Atomic RMW (load fresh, mutate just this instance, save) so the long
 	// provisioning steps that ran before this point can't have their concurrent

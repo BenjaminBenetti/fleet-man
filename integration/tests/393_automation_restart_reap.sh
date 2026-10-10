@@ -141,10 +141,14 @@ done
 
 # fleet.log may have been cut into logs/fleetd/<date>.log by a daemon's startup
 # log rotation (it rotates once a day, at the first check past 3am), so search
-# both.
-cat "${HOME}/.fleet/fleet.log" "${HOME}/.fleet/logs/fleetd/"*.log 2>/dev/null \
-  | grep -q "automation: watch list restored" \
-  || fail "the restarted daemon did not log restoring the watch list"
+# both. The run must come back from watch.json (runs=1), not by adoption: an
+# adopted instance would be reaped on the same idle rule, proving nothing about
+# the file.
+restored_line=$(cat "${HOME}/.fleet/fleet.log" "${HOME}/.fleet/logs/fleetd/"*.log 2>/dev/null \
+  | grep "automation: watch list restored" | tail -1 || true)
+[ -n "${restored_line}" ] || fail "the restarted daemon did not log restoring the watch list"
+assert_contains "${restored_line}" "runs=1 dropped=0 adopted=0" \
+  "the run was not restored from watch.json"
 # Every firing writes one event log for the trigger (trigger_logs.go).
 fires=$(find "${HOME}/.fleet/logs/${FIXTURE_REPO_NAME}/trigger/fire" -name 'event-*.log' 2>/dev/null | wc -l | tr -d ' ')
 assert_equals "1" "${fires}" "the trigger fired ${fires} times; a restart must not fire it again"

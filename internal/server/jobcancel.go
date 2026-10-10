@@ -18,7 +18,8 @@ import (
 // recorded. Now the destroy marks the targets StatusDeleting, cancels their
 // jobs, and waits (bounded) for them to exit before tearing anything down; a
 // cancelled run stops at its next step and removes any container it already
-// started (internal/create/cancel.go).
+// started for a record being destroyed (internal/create/cancel.go). A run the
+// daemon's shutdown cancelled keeps its container on the failed record.
 
 var (
 	// errInstanceDestroyed is the cancellation cause of a job whose instance is

@@ -98,6 +98,7 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 		return err
 	}
 	if err := copyWorkspaceTree(ctx, src.WorkspaceDir, destWorkspaceDir); err != nil {
+		err = cancelledOr(ctx, err)
 		setFailed(fleetName, destInstance, err)
 		return err
 	}
@@ -140,9 +141,8 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 		setFailed(fleetName, destInstance, err)
 		return err
 	}
-	// Clone takes no context: tear down a clone the run no longer wants.
-	if err := discardIfCancelled(ctx, instanceBackend, fleetName, destInstance, result.ContainerID); err != nil {
-		setFailed(fleetName, destInstance, err)
+	// Clone takes no context: stop a clone the run was cancelled during.
+	if err := stopIfCancelled(ctx, instanceBackend, fleetName, destInstance, result.ContainerID); err != nil {
 		return err
 	}
 
