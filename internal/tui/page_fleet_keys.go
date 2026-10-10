@@ -557,7 +557,6 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 
 	switch r.kind {
 	case rowSettings:
-		m.toolStatus = checkTools()
 		return m.ChangeRoute(routeSettings)
 
 	case rowLeaveFocus:

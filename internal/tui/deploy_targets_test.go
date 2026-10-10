@@ -123,6 +123,54 @@ func TestAddInstanceKeyOpensOnFirstAvailableWhenDefaultIsNot(t *testing.T) {
 	}
 }
 
+// A newer daemon may offer a kind of target this build can't name: it reads
+// back as the zero target and must not be offered as a second Devcontainer,
+// nor picked as the default.
+func TestAddInstanceKeySkipsTargetsThisBuildCannotName(t *testing.T) {
+	future := &fleetgrpc.DeployTarget{Backend: fleetgrpc.BackendType(99)}
+	stubListDeployTargets(t, &fleetgrpc.ListDeployTargetsReply{
+		Targets: []*fleetgrpc.DeployTargetOption{
+			{Target: protoconv.DeployTargetToProto(devcontainerTarget), Available: true},
+			{Target: future, Available: true},
+			{Target: protoconv.DeployTargetToProto(codespacesTarget), Available: true},
+		},
+		DefaultTarget: future,
+	}, nil)
+
+	fp, m := pressAddOnFleet(t, nil)
+	if fp.mode != viewAddInstance || fp.addInst.target != devcontainerTarget {
+		t.Fatalf("mode %v target %v, want the dialog open on devcontainer (message %q)", fp.mode, fp.addInst.target, m.message)
+	}
+	want := []fleet.DeployTarget{devcontainerTarget, codespacesTarget}
+	if len(fp.addInst.targets) != len(want) || fp.addInst.targets[0] != want[0] || fp.addInst.targets[1] != want[1] {
+		t.Fatalf("Deploy row cycles %v, want %v (the unknown target left out)", fp.addInst.targets, want)
+	}
+}
+
+// The Codespaces "set the Machine field" dialog sends the user to Settings.
+// The Codespaces section there is gated on this machine's gh, which opening
+// the New instance dialog used to look up on the way: Settings must check it
+// itself, or the Machine field the dialog points at is hidden.
+func TestSettingsFromTheCodespacesMachineDialogShowsTheMachineField(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubCheckTools(t, allToolsFound())
+	fp := newFleetPage()
+	fp.mode = viewCodespacesMachine
+	m := &model{config: state.DefaultConfig(), fleetPage: fp, currentPage: fp, creating: map[string]bool{}}
+
+	fp.updateCodespacesMachine(m, tea.KeyMsg{Type: tea.KeyEnter})
+	sp, ok := m.currentPage.(*settingsPage)
+	if !ok {
+		t.Fatalf("current page = %T, want the settings page", m.currentPage)
+	}
+	if settingsPositionOf(sp, m, settingsItemCodespacesMachine) < 0 {
+		t.Fatal("the Codespaces Machine field is hidden although gh is installed here")
+	}
+	if got := toolStatusItems(sp, m); len(got) != len(allToolsFound()) {
+		t.Fatalf("tool status rows = %v, want one per tool on this machine", got)
+	}
+}
+
 func TestAddInstanceKeyWithNoAvailableTarget(t *testing.T) {
 	stubListDeployTargets(t, deployTargetsReply(devcontainerTarget,
 		unavailable(devcontainerTarget), unavailable(coderTarget), unavailable(codespacesTarget)), nil)

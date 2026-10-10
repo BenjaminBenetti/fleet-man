@@ -237,6 +237,11 @@ func (settingsPage *settingsPage) Init(m *model) tea.Cmd {
 	// Baseline for remoteSaveBounced: the page opens showing the server's
 	// config, so its remote settings are what the server currently runs with.
 	settingsPage.serverRemote = snapshotRemoteSettings(m.config)
+	// This machine's tools feed Tool Status and gate the Codespaces section
+	// (its gh). Checked here, on every route in (the Settings row, the
+	// Codespaces "set the Machine field" dialog), now that opening the New
+	// instance dialog no longer fills them in on the way.
+	m.toolStatus = checkTools()
 	// Refresh the armada registry and start the status-sweep tick that keeps
 	// the per-remote connection indicators live while the page is open. The
 	// armed-flag guard stops a re-entered page from stacking a second loop.

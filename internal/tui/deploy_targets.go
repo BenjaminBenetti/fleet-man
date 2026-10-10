@@ -29,11 +29,14 @@ type deployTargetList struct {
 	def fleet.DeployTarget
 }
 
-// available returns the targets a create can go to now, in dialog order.
+// available returns the targets a create can go to now, in dialog order. A
+// target this build can't name (a newer daemon's kind) reads back as the zero
+// target; it is left out rather than offered, and created on, as a second
+// "Devcontainer".
 func (l deployTargetList) available() []fleet.DeployTarget {
 	var out []fleet.DeployTarget
 	for _, option := range l.options {
-		if option.Available {
+		if option.Available && !option.Target.IsZero() {
 			out = append(out, option.Target)
 		}
 	}
