@@ -43,73 +43,8 @@ const remoteKubeToken = "remote-kube-SECRET-token"
 // allow_privileged and extra_path are set, it is tested and removed, and no
 // reply carries the kubeconfig's token.
 func TestKubeRPCsOverArmadaSSH(t *testing.T) {
-	for _, tool := range []string{"ssh", "sh"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			t.Skipf("no %s on PATH", tool)
-		}
-	}
-	// Not t.TempDir(): fleetd's unix socket lives under HOME, and its path is
-	// capped near 104 bytes.
-	home, err := os.MkdirTemp("", "fleetd")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(home) })
-	t.Setenv("HOME", home)
-	t.Setenv(agentsock.EnvOverride, "off")
-	t.Setenv("SSH_AUTH_SOCK", "")
-	fleetDir := filepath.Join(home, ".fleet")
-	writeFile(t, filepath.Join(fleetDir, "config.json"), `{"remote_mcp_settings": {"fleet_enabled": true, "fleet_mode": "ssh"}}`)
-	kubeconfig := filepath.Join(home, "kube", "remote-config")
-	writeFile(t, kubeconfig, fmt.Sprintf(`apiVersion: v1
-kind: Config
-clusters:
-- name: remote
-  cluster: {server: "https://127.0.0.1:1"}
-contexts:
-- name: remote-ctx
-  context: {cluster: remote, user: remote, namespace: team}
-users:
-- name: remote
-  user: {token: %s}
-`, remoteKubeToken))
-	extra := filepath.Join(home, "sdk", "bin")
-	if err := os.MkdirAll(extra, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	served := make(chan error, 1)
-	go func() { served <- server.Serve(ctx) }()
-	t.Cleanup(func() {
-		// The serve loop's first backup runs in the background under HOME:
-		// let it finish before HOME goes away.
-		for wait := time.Now().Add(10 * time.Second); time.Now().Before(wait); time.Sleep(20 * time.Millisecond) {
-			if archives, _ := filepath.Glob(filepath.Join(fleetDir, "backup", "*", "*.tar.xz")); len(archives) > 0 {
-				break
-			}
-		}
-		cancel()
-		select {
-		case <-served:
-		case <-time.After(20 * time.Second):
-			t.Error("fleetd did not stop")
-		}
-	})
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if _, err := os.Stat(filepath.Join(fleetDir, "ssh.port")); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("fleetd never opened its SSH listener")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	_, clientPub, finish := sshtunnel.ClientSSHHome(t)
-	srv := sshtunnel.StartTestSSHServer(t, clientPub, home)
-	finish(srv)
+	d := startSSHModeFleetd(t)
+	ctx, kubeconfig, extra, srv := d.ctx, d.kubeconfig, d.extra, d.srv
 	m := sshtunnel.New(ctx)
 	defer m.Close()
 	rctx, rcancel := context.WithTimeout(ctx, 60*time.Second)
@@ -212,6 +147,94 @@ users:
 	if err != nil || !removed.GetRemoved() {
 		t.Fatalf("RemoveKubeCluster over Armada SSH = %v, %v", removed, err)
 	}
+}
+
+// sshModeFleetd is a real fleetd serving in Remote Fleet via SSH mode under
+// a temp HOME, with an in-process SSH server standing in for the daemon
+// host's sshd (its sessions run under the same HOME, so the discovery
+// script finds this daemon).
+type sshModeFleetd struct {
+	ctx context.Context
+	// kubeconfig is a kubeconfig on the daemon host whose context remote-ctx
+	// (namespace team) reaches nothing and authenticates with
+	// remoteKubeToken; extra is an existing directory for extra_path.
+	kubeconfig, extra string
+	srv               *sshtunnel.TestSSHServer
+}
+
+// url is the daemon's ssh:// Armada URL.
+func (d *sshModeFleetd) url() string { return "ssh://tester@" + d.srv.Addr() }
+
+func startSSHModeFleetd(t *testing.T) *sshModeFleetd {
+	t.Helper()
+	for _, tool := range []string{"ssh", "sh"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("no %s on PATH", tool)
+		}
+	}
+	// Not t.TempDir(): fleetd's unix socket lives under HOME, and its path is
+	// capped near 104 bytes.
+	home, err := os.MkdirTemp("", "fleetd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	t.Setenv("HOME", home)
+	t.Setenv(agentsock.EnvOverride, "off")
+	t.Setenv("SSH_AUTH_SOCK", "")
+	fleetDir := filepath.Join(home, ".fleet")
+	writeFile(t, filepath.Join(fleetDir, "config.json"), `{"remote_mcp_settings": {"fleet_enabled": true, "fleet_mode": "ssh"}}`)
+	kubeconfig := filepath.Join(home, "kube", "remote-config")
+	writeFile(t, kubeconfig, fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- name: remote
+  cluster: {server: "https://127.0.0.1:1"}
+contexts:
+- name: remote-ctx
+  context: {cluster: remote, user: remote, namespace: team}
+users:
+- name: remote
+  user: {token: %s}
+`, remoteKubeToken))
+	extra := filepath.Join(home, "sdk", "bin")
+	if err := os.MkdirAll(extra, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(ctx) }()
+	t.Cleanup(func() {
+		// The serve loop's first backup runs in the background under HOME:
+		// let it finish before HOME goes away.
+		for wait := time.Now().Add(10 * time.Second); time.Now().Before(wait); time.Sleep(20 * time.Millisecond) {
+			if archives, _ := filepath.Glob(filepath.Join(fleetDir, "backup", "*", "*.tar.xz")); len(archives) > 0 {
+				break
+			}
+		}
+		cancel()
+		select {
+		case <-served:
+		case <-time.After(20 * time.Second):
+			t.Error("fleetd did not stop")
+		}
+	})
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(fleetDir, "ssh.port")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("fleetd never opened its SSH listener")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	_, clientPub, finish := sshtunnel.ClientSSHHome(t)
+	srv := sshtunnel.StartTestSSHServer(t, clientPub, home)
+	finish(srv)
+	return &sshModeFleetd{ctx: ctx, kubeconfig: kubeconfig, extra: extra, srv: srv}
 }
 
 func writeFile(t *testing.T, path, content string) {
