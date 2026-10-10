@@ -387,6 +387,16 @@ func (g *Gateway) repoint(ctx context.Context, prefix string) {
 		if err != nil || old == prefix {
 			continue
 		}
+		if g.servesOnlyProbes(c) {
+			// Nothing in the cluster names the probe image (its pods are
+			// gone after each test, and the next one serves it under the
+			// current prefix): the prefix is just recorded.
+			if err := g.Store.SetPrefix(c, prefix); err != nil {
+				flog.Warn("gateway image re-point: recording the prefix", "cluster", c, "err", err)
+				failed = true
+			}
+			continue
+		}
 		cctx, cancel := context.WithTimeout(ctx, repointTimeout)
 		err = g.repointCluster(cctx, c, old, prefix)
 		cancel()
@@ -424,6 +434,17 @@ func (g *Gateway) retryRepoint(prefix string, failed bool) {
 	}
 	g.retryWait = min(max(2*g.retryWait, lo), repointRetryMax)
 	g.retryTimer = time.AfterFunc(g.retryWait, func() { g.repoint(context.Background(), prefix) })
+}
+
+// servesOnlyProbes reports a connection that serves nothing but the probe
+// image (Probe).
+func (g *Gateway) servesOnlyProbes(clusterID string) bool {
+	for _, d := range g.Store.servedManifests(clusterID) {
+		if !isProbeDigest(d) {
+			return false
+		}
+	}
+	return true
 }
 
 // errNoConnections: the daemon cannot reach the clusters yet.

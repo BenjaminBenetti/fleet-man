@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
 )
@@ -183,3 +184,34 @@ func TestPullStep(t *testing.T) {
 }
 
 var _ kubeimage.Gateway = (*Gateway)(nil)
+
+// A connection that serves only the probe image has nothing in its cluster
+// to re-point: a new registry prefix is recorded without reaching the
+// cluster. One that also serves a delivered image is re-pointed as before.
+func TestGatewayRegistryChangeRecordsAProbeOnlyConnection(t *testing.T) {
+	f := newGatewayFixture(t)
+	conns := &fakeConnections{targets: map[string]kubeimage.Target{"kc-1": f.target}, called: make(chan struct{}, 4)}
+	f.gw.Connections = conns
+	if _, err := f.gw.Probe(context.Background(), f.target); err != nil {
+		t.Fatal(err)
+	}
+	newPrefix := "gw2.example.com/" + strings.Repeat("c", 64)
+	f.tunnel.set(newPrefix)
+	f.gw.RegistryChanged(newPrefix)
+	waitFor(t, "the new prefix recorded", func() bool { p, _ := f.gw.Store.Prefix("kc-1"); return p == newPrefix })
+	if len(conns.repoints) != 0 || len(conns.called) != 0 {
+		t.Fatalf("a probe-only connection was re-pointed in its cluster: %v", conns.repoints)
+	}
+
+	if _, err := f.gw.Deliver(context.Background(), f.target, f.image()); err != nil {
+		t.Fatal(err)
+	}
+	third := "gw3.example.com/" + strings.Repeat("d", 64)
+	f.tunnel.set(third)
+	f.gw.RegistryChanged(third)
+	select {
+	case <-conns.called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a connection serving a delivered image was not re-pointed")
+	}
+}
