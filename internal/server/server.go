@@ -80,6 +80,10 @@ func Serve(ctx context.Context) error {
 	}
 
 	svc := newService()
+	// Records a previous daemon left mid-create/clone/rebuild have no job to
+	// finish them any more: fail them before any RPC or the scheduler can start
+	// a job of ours (interrupted_jobs.go).
+	svc.failInterruptedJobs()
 
 	// Start the hub (the broadcast-model owner) and the state poller (the
 	// non-authoritative source of truth that re-Loads state.json) on a context

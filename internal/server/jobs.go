@@ -49,8 +49,8 @@ import (
 
 var jobRunCreate = create.RunContext
 
-var jobRunClone = func(fleetName, srcInstance, destInstance string, verbose bool) error {
-	return create.RunClone(fleetName, srcInstance, destInstance, verbose)
+var jobRunClone = func(ctx context.Context, fleetName, srcInstance, destInstance string, verbose bool) error {
+	return create.RunClone(ctx, fleetName, srcInstance, destInstance, verbose)
 }
 
 var jobRunStart = func(fleetName, instanceName string) error {
@@ -63,8 +63,8 @@ var jobRunStop = func(fleetName, instanceName string) error {
 	return err
 }
 
-var jobRunRebuild = func(fleetName, instanceName string) error {
-	return create.RunRebuild(fleetName, instanceName, false)
+var jobRunRebuild = func(ctx context.Context, fleetName, instanceName string) error {
+	return create.RunRebuild(ctx, fleetName, instanceName, false)
 }
 
 // stopBuildkitServer is the buildkit teardown seam (a package var so the destroy
@@ -185,15 +185,29 @@ func newJobManager() *jobManager {
 type job struct {
 	summary *fleetgrpc.JobSummary
 
+	// ctx is the job's own context (jobcancel.go): derived from the daemon's
+	// background context, so it ends at shutdown, and cancellable on its own —
+	// a destroy cancels the provisioning jobs of its targets. cancel ends it with
+	// a cause; exited closes once runJob has returned.
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+	exited chan struct{}
+
 	mu      sync.Mutex
 	history []*fleetgrpc.JobEvent
 	subs    map[chan *fleetgrpc.JobEvent]struct{}
 	done    bool
 }
 
-func (m *jobManager) start(kind fleetgrpc.JobKind, fleetName, instanceName string, startedAt time.Time) *job {
+// start registers a new in-flight job whose context derives from parent (the
+// daemon's background context, s.bgCtx) — see newJobContext.
+func (m *jobManager) start(parent context.Context, kind fleetgrpc.JobKind, fleetName, instanceName string, startedAt time.Time) *job {
 	id := fmt.Sprintf("job-%d-%d", os.Getpid(), atomic.AddInt64(&m.seq, 1))
+	ctx, cancel := newJobContext(parent)
 	j := &job{
+		ctx:    ctx,
+		cancel: cancel,
+		exited: make(chan struct{}),
 		summary: &fleetgrpc.JobSummary{
 			JobId:     id,
 			Kind:      kind,
@@ -325,6 +339,8 @@ func (j *job) outcome() *fleetgrpc.JobDone {
 // finished/failed) so fleet.log carries an operation-level trail for ALL
 // lifecycle jobs — including those whose work has no logging of its own.
 func (s *service) runJob(j *job, work func() (finalInstance *fleetgrpc.Instance, warnings []string, err error)) {
+	defer close(j.exited)
+	defer j.cancel(errJobFinished)
 	start := time.Now()
 	kind := jobKindName(j.summary.Kind)
 	flog.Info("job started", "job", j.summary.JobId, "kind", kind, "fleet", j.summary.Fleet, "instance", j.summary.Instance)
@@ -516,9 +532,9 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 	}
 	s.pushState()
 
-	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, fleetName, instanceName, time.Now())
+	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, fleetName, instanceName, time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
-		ctx := gitutil.WithHostKeyPrompt(s.bgCtx, s.gitHostKeys.ask)
+		ctx := gitutil.WithHostKeyPrompt(j.ctx, s.gitHostKeys.ask)
 		err := jobRunCreate(ctx, fleetName, instanceName, remote, req.GetBranch(), req.GetVerbose(), backendType)
 		return loadInstanceSnapshot(fleetName, instanceName), nil, err
 	})
@@ -631,9 +647,9 @@ func (s *service) startCloneInstanceJob(req *fleetgrpc.CloneInstanceRequest) (*j
 	}
 	s.pushState()
 
-	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_CLONE_INSTANCE, fleetName, destName, time.Now())
+	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_CLONE_INSTANCE, fleetName, destName, time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
-		err := jobRunClone(fleetName, srcName, destName, false)
+		err := jobRunClone(j.ctx, fleetName, srcName, destName, false)
 		return loadInstanceSnapshot(fleetName, destName), nil, err
 	})
 	return j, nil
@@ -652,7 +668,7 @@ func (s *service) startStartInstanceJob(req *fleetgrpc.StartInstanceRequest) (*j
 	if req.GetFleet() == "" || req.GetInstance() == "" {
 		return nil, status.Error(codes.InvalidArgument, "fleet and instance are required")
 	}
-	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_START_INSTANCE, req.GetFleet(), req.GetInstance(), time.Now())
+	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_START_INSTANCE, req.GetFleet(), req.GetInstance(), time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
 		err := jobRunStart(req.GetFleet(), req.GetInstance())
 		return loadInstanceSnapshot(req.GetFleet(), req.GetInstance()), nil, err
@@ -672,7 +688,7 @@ func (s *service) startStopInstanceJob(req *fleetgrpc.StopInstanceRequest) (*job
 	if req.GetFleet() == "" || req.GetInstance() == "" {
 		return nil, status.Error(codes.InvalidArgument, "fleet and instance are required")
 	}
-	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_STOP_INSTANCE, req.GetFleet(), req.GetInstance(), time.Now())
+	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_STOP_INSTANCE, req.GetFleet(), req.GetInstance(), time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
 		err := jobRunStop(req.GetFleet(), req.GetInstance())
 		return loadInstanceSnapshot(req.GetFleet(), req.GetInstance()), nil, err
@@ -733,9 +749,9 @@ func (s *service) startRebuildInstanceJob(req *fleetgrpc.RebuildInstanceRequest)
 	}
 	s.pushState()
 
-	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_REBUILD_INSTANCE, fleetName, instanceName, time.Now())
+	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_REBUILD_INSTANCE, fleetName, instanceName, time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
-		err := jobRunRebuild(fleetName, instanceName)
+		err := jobRunRebuild(j.ctx, fleetName, instanceName)
 		return loadInstanceSnapshot(fleetName, instanceName), nil, err
 	})
 	return j, nil
@@ -763,8 +779,11 @@ func isTransitionalStatus(s fleet.InstanceStatus) bool {
 	return false
 }
 
-// startDestroyInstanceJob validates the target, marks it deleting, and starts
-// the teardown job for one instance or (destroy_fleet) the whole fleet.
+// startDestroyInstanceJob validates the target, marks it deleting, cancels any
+// create/clone/rebuild still working on it, and starts the teardown job for
+// one instance or (destroy_fleet) the whole fleet. The teardown first waits (up
+// to destroyCancelWait) for the cancelled jobs to exit, so it never removes a
+// record and workspace out from under a run that is still provisioning them.
 // Best-effort: container/workspace failures become warnings, and the record is
 // removed regardless.
 func (s *service) startDestroyInstanceJob(req *fleetgrpc.DestroyInstanceRequest) (*job, error) {
@@ -808,11 +827,21 @@ func (s *service) startDestroyInstanceJob(req *fleetgrpc.DestroyInstanceRequest)
 		}
 		return nil
 	})
+	// Cancel the targets' in-flight create/clone/rebuild jobs AFTER marking them
+	// deleting: a run commits only under the state lock and only to a record
+	// that is not StatusDeleting, so from here on none of them can record a
+	// container this destroy would miss.
+	scope := target
+	if req.GetDestroyFleet() {
+		scope = ""
+	}
+	cancelled := s.jobs.cancelProvisioning(fleetName, scope, errInstanceDestroyed)
 	s.pushState()
 
-	j := s.jobs.start(fleetgrpc.JobKind_JOB_KIND_DESTROY_INSTANCE, fleetName, target, time.Now())
+	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_DESTROY_INSTANCE, fleetName, target, time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
-		return nil, s.destroy(fleetName, target, req.GetDestroyFleet()), nil
+		warnings := awaitCancelledJobs(j.ctx, cancelled)
+		return nil, append(warnings, s.destroy(fleetName, target, req.GetDestroyFleet())...), nil
 	})
 	return j, nil
 }

@@ -11,12 +11,16 @@ import (
 // already decided to bail, so it must not mask the original error with a
 // secondary one. The failure itself (with timing) is logged by the caller
 // (Run / RunClone), so setFailed does not log.
+//
+// A StatusDeleting record is left alone: a destroy marked it before cancelling
+// this run and is about to remove it, so flipping it to failed would only make
+// the row flash "failed" on its way out.
 func setFailed(fleetName, instanceName string, origErr error) {
 	// Atomic RMW so a concurrent provisioning job marking a different instance
 	// running cannot clobber this failure annotation (or vice versa).
 	_ = state.Update(func(st *state.State) error {
 		if f, ok := st.Fleets[fleetName]; ok {
-			if instance, err := f.GetInstance(instanceName); err == nil {
+			if instance, err := f.GetInstance(instanceName); err == nil && instance.Status != fleet.StatusDeleting {
 				instance.Status = fleet.StatusFailed
 				instance.Error = origErr.Error()
 			}

@@ -41,31 +41,47 @@ import (
 const triggerEventLogKeep = 100
 
 // logTriggerEvent records one trigger firing to the trigger's on-host event log
-// directory, then prunes to the newest triggerEventLogKeep files. It is a
-// package-var seam (overridden in tests) and strictly best-effort: a logging
-// failure is warned and never blocks the firing — the log is a debugging aid,
-// not part of the automation's critical path.
-var logTriggerEvent = func(fleetName string, ev *triggerEvent) {
+// directory, then prunes to the newest triggerEventLogKeep files, returning the
+// log's file name ("" when it could not be written). It is a package-var seam
+// (overridden in tests) and strictly best-effort: a logging failure is warned
+// and never blocks the firing — the log is a debugging aid, not part of the
+// automation's critical path. The name lets the watch list (automation_watch.go)
+// recover the payload of a run a daemon restart caught before its launch.
+var logTriggerEvent = func(fleetName string, ev *triggerEvent) string {
 	dir := state.TriggerLogsDir(fleetName, ev.triggerName)
 	// 0700 dir / 0600 file: a webhook body can carry signatures or secrets, and
 	// these logs persist durably on the host (unlike the payload's previous home
 	// inside an ephemeral instance), so keep them readable only by the owner.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		flog.Warn("automation: trigger log mkdir failed", "fleet", fleetName, "trigger", ev.triggerName, "err", err)
-		return
+		return ""
 	}
 	path := uniqueTriggerLogPath(dir, ev.firedAt)
 	if err := os.WriteFile(path, triggerEventLogContent(ev), 0o600); err != nil {
 		flog.Warn("automation: trigger log write failed", "fleet", fleetName, "trigger", ev.triggerName, "err", err)
-		return
+		return ""
 	}
 	pruneTriggerLogs(dir, triggerEventLogKeep)
+	return filepath.Base(path)
 }
 
 // triggerEventLogContent renders one event log: a short header naming the firing
 // followed by its payload, so a concatenated dump is self-describing. The
 // payload mirrors exactly what the spawned agent received (triggerEvent.payload).
 func triggerEventLogContent(ev *triggerEvent) []byte {
+	var b strings.Builder
+	b.WriteString(triggerEventLogHeader(ev))
+	payload := ev.payload()
+	b.Write(payload)
+	if len(payload) == 0 || payload[len(payload)-1] != '\n' {
+		b.WriteByte('\n')
+	}
+	return []byte(b.String())
+}
+
+// triggerEventLogHeader is the header triggerEventLogContent puts in front of
+// the payload, ending in the blank separator line.
+func triggerEventLogHeader(ev *triggerEvent) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# trigger: %s\n", ev.triggerName)
 	fmt.Fprintf(&b, "# type:    %s\n", ev.kind)
@@ -74,12 +90,29 @@ func triggerEventLogContent(ev *triggerEvent) []byte {
 	}
 	fmt.Fprintf(&b, "# fired:   %s\n", ev.firedAt.UTC().Format(time.RFC3339))
 	b.WriteByte('\n')
-	payload := ev.payload()
-	b.Write(payload)
-	if len(payload) == 0 || payload[len(payload)-1] != '\n' {
-		b.WriteByte('\n')
+	return b.String()
+}
+
+// readTriggerEventBody reads back the body (the first size payload bytes) of
+// the firing ev that logTriggerEvent recorded as name in its trigger's log
+// directory. It fails when the log is gone (pruned) or does not describe ev.
+func readTriggerEventBody(fleetName string, ev *triggerEvent, name string, size int) ([]byte, error) {
+	if name == "" || name != filepath.Base(name) || !strings.HasPrefix(name, "event-") {
+		return nil, fmt.Errorf("invalid trigger log name %q", name)
 	}
-	return []byte(b.String())
+	data, err := os.ReadFile(filepath.Join(state.TriggerLogsDir(fleetName, ev.triggerName), name))
+	if err != nil {
+		return nil, err
+	}
+	header := triggerEventLogHeader(ev)
+	if !strings.HasPrefix(string(data), header) {
+		return nil, fmt.Errorf("trigger log %s does not record this firing", name)
+	}
+	rest := data[len(header):]
+	if size < 0 || len(rest) < size {
+		return nil, fmt.Errorf("trigger log %s is shorter than its payload", name)
+	}
+	return rest[:size], nil
 }
 
 // uniqueTriggerLogPath returns event-<UTC timestamp>.log in dir, suffixing a

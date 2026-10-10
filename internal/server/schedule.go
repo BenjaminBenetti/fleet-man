@@ -79,10 +79,12 @@ func envDurationDefault(name string, def time.Duration) time.Duration {
 const maxAutomationProbeConcurrency = 8
 
 // watchedAgent tracks one automation-spawned instance from creation through
-// launch to idle reaping.
+// launch to idle reaping. The watch list is persisted across daemon restarts
+// (automation_watch.go).
 type watchedAgent struct {
 	fleet        string
 	instance     string
+	agent        string // the agent's name, for the persisted record
 	command      string
 	prompt       string
 	systemPrompt string
@@ -96,9 +98,18 @@ type watchedAgent struct {
 	detectorTool state.AgentTool
 	// event describes the trigger firing that spawned this agent. At launch its
 	// payload is written into the instance and a note pointing at that file is
-	// appended to the prompt, so the agent knows what fired it. Nil only if a
-	// future caller spawns an agent outside the trigger path.
+	// appended to the prompt, so the agent knows what fired it. Nil for an
+	// adopted run (one the scheduler found rather than spawned).
 	event *triggerEvent
+	// eventLog names the firing's trigger event log (logTriggerEvent), from
+	// which a restarted daemon reads the payload of a run it has yet to launch.
+	eventLog string
+	// adopted marks a run the scheduler took over at start without having a
+	// record of it (an Automated instance missing from watch.json). It is never
+	// launched; hasAgentSession, refreshed by each activity probe, tells whether
+	// its agent session still exists (see idleLimit).
+	adopted         bool
+	hasAgentSession bool
 }
 
 // triggerEvent carries the context of the trigger firing that spawned an agent:
@@ -135,6 +146,11 @@ func (w *watchedAgent) key() string { return w.fleet + "/" + w.instance }
 type scheduler struct {
 	lastFired map[string]time.Time     // "fleet\x00trigger" -> minute it last fired
 	watched   map[string]*watchedAgent // "fleet/instance" -> tracked agent
+	// watchPath is where the watch list and lastFired persist across restarts
+	// (automation_watch.go); "" keeps them in memory only, as tests do. saved is
+	// the last content written, so an unchanged list is not rewritten.
+	watchPath string
+	saved     []byte
 }
 
 func newScheduler() *scheduler {
@@ -202,18 +218,25 @@ var bashProbeSem = make(chan struct{}, maxBashProbeConcurrency)
 // drains async fires (webhook events, passing bash probes) between ticks so a
 // produced fire spawns its agents promptly. Both paths run on THIS goroutine, so
 // sched's maps stay lock-free.
+//
+// It starts from the watch list a previous daemon persisted (scheduler.restore),
+// so runs spawned before a restart are still launched and reaped.
 func (s *service) runScheduler(ctx context.Context) {
 	sched := newScheduler()
+	sched.watchPath = state.AutomationWatchPath()
+	sched.restore(time.Now())
 	ticker := time.NewTicker(scheduleTickInterval)
 	defer ticker.Stop()
 	for {
 		s.schedulerTick(ctx, sched, time.Now())
+		sched.persist()
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		case batch := <-s.triggerFires:
 			s.fireTriggerBatch(sched, batch, time.Now())
+			sched.persist()
 		}
 	}
 }
@@ -257,7 +280,13 @@ func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.
 		return
 	}
 	fired := false
-	for _, due := range dueCronTriggers(st.Fleets, now, sched.lastFired) {
+	dues := dueCronTriggers(st.Fleets, now, sched.lastFired)
+	if len(dues) > 0 {
+		// Record the fire minutes before acting on them, so a daemon restarted
+		// within the minute neither fires them again nor re-runs a bash probe.
+		sched.persist()
+	}
+	for _, due := range dues {
 		agents := agentsForTrigger(st.Fleets[due.fleet], due.trigger)
 		if due.trigger.Type == fleet.TriggerBash {
 			// A bash trigger's cron only schedules a poll — it fires its agents only
@@ -309,7 +338,7 @@ func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger 
 		webhookName: trigger.WebhookName,
 		body:        body,
 	}
-	logTriggerEvent(fleetName, ev)
+	eventLog := logTriggerEvent(fleetName, ev)
 	fired := false
 	for _, ag := range agents {
 		instName, err := createAutomationInstance(s, fleetName, ag, now)
@@ -321,15 +350,21 @@ func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger 
 		w := &watchedAgent{
 			fleet:        fleetName,
 			instance:     instName,
+			agent:        ag.Name,
 			command:      ag.Command,
 			prompt:       trigger.Prompt,
 			systemPrompt: ag.SystemPrompt,
 			spawnedAt:    now,
 			lastActive:   now,
 			event:        ev,
+			eventLog:     eventLog,
 		}
 		sched.watched[w.key()] = w
 		fired = true
+	}
+	if fired {
+		// Persist the new runs at once: their CREATING records already exist.
+		sched.persist()
 	}
 	return fired
 }
@@ -361,7 +396,7 @@ func dueCronTriggers(fleets map[string]*fleet.Fleet, now time.Time, lastFired ma
 			if !t.Type.IsCron() {
 				continue
 			}
-			key := name + "\x00" + t.Name
+			key := firedKey(name, t.Name)
 			current[key] = struct{}{}
 			if t.Disabled {
 				continue // disabled triggers are kept but never fire
@@ -480,7 +515,7 @@ func (s *service) serviceWatched(ctx context.Context, sched *scheduler, st *stat
 			c.w.lastActive = now
 			continue
 		}
-		if now.Sub(c.w.lastActive) >= automationIdleTimeout {
+		if now.Sub(c.w.lastActive) >= c.w.idleLimit() {
 			flog.Info("automation: reaping idle agent", "fleet", c.w.fleet, "instance", c.w.instance, "idle", now.Sub(c.w.lastActive).Round(time.Second).String())
 			reapAutomationInstance(s, c.w.fleet, c.w.instance)
 			delete(sched.watched, c.key)
@@ -669,6 +704,7 @@ var automationActivity = func(s *service, w *watchedAgent, inst *fleet.Instance,
 		w.detector = agentdetect.NewDetector(tool)
 		w.detectorTool = tool
 	}
+	_, w.hasAgentSession = caps.Sessions[tui.ResolveSessionName(inst.Name, "agent")]
 	return w.detector.Detect(caps, now), true
 }
 
