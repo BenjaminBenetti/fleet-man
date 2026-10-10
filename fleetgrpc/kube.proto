@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package fleetgrpc;
 
+import "domain.proto";
+import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
@@ -48,10 +50,11 @@ message KubeCluster {
   string namespace = 5;
   // server is the API server URL the context pointed at when last checked.
   string server = 6;
-  // cluster_uid is the kube-system namespace UID, recorded when the
-  // connection is added. A connection in use may be re-pointed to another
-  // context or kubeconfig only when the new target reports the same UID (and
-  // its instances' objects are found there).
+  // cluster_uid is the kube-system namespace UID, recorded by the first probe
+  // that reaches the cluster (it needs kube-system to be readable). A
+  // connection in use may be re-pointed to another context or kubeconfig only
+  // when the new target reports the same UID (and its instances' objects are
+  // found there).
   string cluster_uid = 7;
   // extra_path is prepended to PATH for the kubeconfig's exec credential
   // plugins (aws, gke-gcloud-auth-plugin, kubelogin, ...) on the daemon host.
@@ -184,10 +187,14 @@ message KubeCluster {
   // ---- bookkeeping (daemon-owned; clients cannot set these) ----
 
   google.protobuf.Timestamp created_at = 46;
+  // updated_at is when a client last changed the record (Add, Update).
   google.protobuf.Timestamp updated_at = 47;
   // verified_at is when the last full preflight passed.
   google.protobuf.Timestamp verified_at = 48;
-  // revision increases on every change to the record.
+  // revision increases on every change a client makes (Add, Update), so an
+  // editor can refuse to save over a newer one
+  // (UpdateKubeClusterRequest.expected_revision). The daemon's own
+  // bookkeeping (server, cluster_uid, verified_at) leaves it alone.
   int64 revision = 49;
 }
 
@@ -537,4 +544,235 @@ message ShareSyncStatus {
   int32 pending = 3;
   int32 conflicts = 4;
   google.protobuf.Timestamp last_synced_at = 5;
+}
+
+// =====================================================================
+// CLUSTER CONNECTION RPCS
+// =====================================================================
+//
+// Every kube RPC is served the same over the local socket, the gateway tunnel
+// and the Armada SSH listener: a remote client lists contexts, adds, edits
+// and removes connections, tests and prunes them, and runs a login on the
+// daemon, with every field settable. Cluster I/O always runs in fleetd, so no
+// reply carries kubeconfig contents, a token or the gateway credential.
+
+// KubeContext is one context of a kubeconfig on the daemon host.
+message KubeContext {
+  string name = 1;
+  // cluster and user are the kubeconfig entries the context names.
+  string cluster = 2;
+  string server = 3;
+  // namespace is the context's default namespace (empty when it sets none).
+  string namespace = 4;
+  string user = 5;
+  // auth is how the context authenticates: "exec-plugin", "client-cert",
+  // "token", "token-file", "basic", "none", or "auth-provider:<name>" (which
+  // fleet refuses).
+  string auth = 6;
+  // plugin is an exec credential plugin's command as the kubeconfig writes
+  // it; plugin_path where fleetd finds it, and plugin_missing why it does not
+  // (empty when found, or for no plugin).
+  string plugin = 7;
+  string plugin_path = 8;
+  string plugin_missing = 9;
+  // source is the kubeconfig file that defines the context.
+  string source = 10;
+  // current: the kubeconfig's current-context.
+  bool current = 11;
+  // connected lists the connections (KubeCluster.id) that use this context.
+  repeated string connected = 12;
+}
+
+message ListKubeContextsRequest {
+  // kubeconfig_paths are files on the daemon host to read, in precedence
+  // order. Empty = kubectl's defaults in fleetd's environment ($KUBECONFIG,
+  // else ~/.kube/config).
+  repeated string kubeconfig_paths = 1;
+}
+
+message ListKubeContextsReply {
+  repeated KubeContext contexts = 1;
+  // kubeconfig_paths are the files read: what AddKubeCluster pins when it is
+  // given none.
+  repeated string kubeconfig_paths = 2;
+  // host is the daemon host's name ("contexts on fleetd @ <host>").
+  string host = 3;
+}
+
+message ListKubeClustersRequest {}
+
+message ListKubeClustersReply {
+  // clusters is every connection with its health, as Watch pushes them.
+  repeated KubeClusterStatus clusters = 1;
+}
+
+message AddKubeClusterRequest {
+  // cluster is the new connection. context is required. The daemon assigns
+  // id and the bookkeeping fields (it ignores any sent); empty
+  // kubeconfig_paths pin fleetd's defaults (ListKubeContextsReply), and an
+  // empty namespace takes the context's, else "default". The daemon tests the
+  // connection in the background and pushes its health.
+  KubeCluster cluster = 1;
+}
+
+message AddKubeClusterReply {
+  KubeClusterStatus cluster = 1;
+}
+
+message UpdateKubeClusterRequest {
+  string id = 1;
+  // cluster carries the new values of the fields update_mask names.
+  KubeCluster cluster = 2;
+  // update_mask names the KubeCluster fields to replace ("allow_privileged",
+  // "image.mode", "resources", "node_selector", ...); a message field replaces
+  // the whole message, a repeated or map field the whole list. Required. The
+  // bookkeeping fields, id, server and cluster_uid are refused. Changing
+  // context or kubeconfig_paths of a connection instances or agents use
+  // (re-point) needs the new target to report the same cluster_uid and to see
+  // the instances' objects; namespace cannot change while it is in use.
+  google.protobuf.FieldMask update_mask = 3;
+  // expected_revision, when non-zero, refuses the update (ABORTED) if the
+  // record's revision has moved since the caller read it.
+  int64 expected_revision = 4;
+}
+
+message UpdateKubeClusterReply {
+  KubeClusterStatus cluster = 1;
+}
+
+// KubeRemoveMode is what RemoveKubeCluster does with the instances and agents
+// that use the connection.
+enum KubeRemoveMode {
+  // UNSPECIFIED is REFUSE_IF_USED.
+  KUBE_REMOVE_MODE_UNSPECIFIED = 0;
+  // REFUSE_IF_USED removes only an unused connection, else lists the users.
+  KUBE_REMOVE_MODE_REFUSE_IF_USED = 1;
+  // DESTROY_INSTANCES destroys every instance on the connection, then removes
+  // it. Refused while an agent still targets it.
+  KUBE_REMOVE_MODE_DESTROY_INSTANCES = 2;
+  // FORGET removes the connection and leaves its objects in the cluster
+  // (scaled to 0 when reachable); its instances go FAILED
+  // kubernetes:cluster_missing and its agents show the cluster missing.
+  KUBE_REMOVE_MODE_FORGET = 3;
+}
+
+// KubeClusterUser is an instance or an agent that uses a connection.
+message KubeClusterUser {
+  string fleet = 1;
+  // instance is set for an instance, agent for an automation agent.
+  string instance = 2;
+  string agent = 3;
+  InstanceStatus status = 4;
+}
+
+message RemoveKubeClusterRequest {
+  string id = 1;
+  KubeRemoveMode mode = 2;
+}
+
+message RemoveKubeClusterReply {
+  // removed: the connection is gone. False only for REFUSE_IF_USED with
+  // users.
+  bool removed = 1;
+  // users are the instances and agents on the connection: the blockers of a
+  // refusal, else what was destroyed or left behind.
+  repeated KubeClusterUser users = 2;
+  repeated string warnings = 3;
+}
+
+message TestKubeClusterRequest {
+  // id tests a saved connection, and the result becomes its pushed health.
+  string id = 1;
+  // cluster, when id is empty, tests an unsaved connection (the context
+  // picker's test & connect) without saving or claiming anything; defaults
+  // apply as on AddKubeCluster.
+  KubeCluster cluster = 2;
+}
+
+// TestKubeClusterEvent is one step of a streamed preflight.
+message TestKubeClusterEvent {
+  oneof kind {
+    // check reports a check starting (RUNNING) and then its result.
+    KubeCheck check = 1;
+    // result is the final status, the stream's last event.
+    KubeClusterStatus result = 2;
+  }
+}
+
+message PruneKubeClusterRequest {
+  string id = 1;
+  // apply deletes what the listing marks for deletion; without it nothing is
+  // touched. Refused unless this daemon holds the connection's owner Lease.
+  bool apply = 2;
+  // fleet also deletes the objects of this fleet, which still exists and is
+  // otherwise kept.
+  string fleet = 3;
+}
+
+// KubePruneObject is one object labelled for this daemon and connection that
+// no instance record accounts for.
+message KubePruneObject {
+  // kind is the lower-case resource kind ("pvc", "sts", "job", "secret",
+  // "configmap", "svc", "deploy", "netpol", "pdb", "pod").
+  string kind = 1;
+  string name = 2;
+  google.protobuf.Timestamp created_at = 3;
+  // mounted, for a PVC: a live pod mounts it.
+  bool mounted = 4;
+  // action is what the prune did or would do: "would delete", "deleted",
+  // "skip (younger than 1h)", "skip (mounted)", "kept: fleet exists",
+  // "failed: <reason>".
+  string action = 5;
+}
+
+message PruneKubeClusterReply {
+  // owner is this daemon's owner label value.
+  string owner = 1;
+  // lease_held: this daemon holds the connection's owner Lease; otherwise
+  // lease_holder and lease_holder_host name who does.
+  bool lease_held = 2;
+  string lease_holder = 3;
+  string lease_holder_host = 4;
+  repeated KubePruneObject objects = 5;
+  int32 deleted = 6;
+}
+
+message LoginKubeClusterRequest {
+  string id = 1;
+}
+
+// KubeDeviceCode is what a login plugin asks the user to do: open url and
+// enter code. Only these two values of the plugin's output are relayed.
+message KubeDeviceCode {
+  string url = 1;
+  string code = 2;
+}
+
+// LoginKubeClusterEvent is one step of a login run on the daemon host.
+message LoginKubeClusterEvent {
+  oneof kind {
+    KubeDeviceCode device_code = 1;
+    // result is the connection's status once the plugin succeeded, the
+    // stream's last event. A failed login ends the stream with an error.
+    KubeClusterStatus result = 2;
+  }
+}
+
+message CreateKubeNamespaceRequest {
+  // id names a saved connection; cluster, when id is empty, an unsaved one.
+  string id = 1;
+  KubeCluster cluster = 2;
+  // namespace to create. Empty = the connection's.
+  string namespace = 3;
+  // labels the namespace gets (e.g. pod-security.kubernetes.io/enforce).
+  // Empty = app.kubernetes.io/managed-by=fleet.
+  map<string, string> labels = 4;
+  // dry_run returns the manifest without creating anything.
+  bool dry_run = 5;
+}
+
+message CreateKubeNamespaceReply {
+  // manifest is the namespace as YAML, to show or to copy and apply.
+  string manifest = 1;
+  bool created = 2;
 }

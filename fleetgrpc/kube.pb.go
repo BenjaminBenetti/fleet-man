@@ -9,6 +9,7 @@ package fleetgrpc
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	fieldmaskpb "google.golang.org/protobuf/types/known/fieldmaskpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
@@ -278,6 +279,67 @@ func (ShareSyncState) EnumDescriptor() ([]byte, []int) {
 	return file_kube_proto_rawDescGZIP(), []int{3}
 }
 
+// KubeRemoveMode is what RemoveKubeCluster does with the instances and agents
+// that use the connection.
+type KubeRemoveMode int32
+
+const (
+	// UNSPECIFIED is REFUSE_IF_USED.
+	KubeRemoveMode_KUBE_REMOVE_MODE_UNSPECIFIED KubeRemoveMode = 0
+	// REFUSE_IF_USED removes only an unused connection, else lists the users.
+	KubeRemoveMode_KUBE_REMOVE_MODE_REFUSE_IF_USED KubeRemoveMode = 1
+	// DESTROY_INSTANCES destroys every instance on the connection, then removes
+	// it. Refused while an agent still targets it.
+	KubeRemoveMode_KUBE_REMOVE_MODE_DESTROY_INSTANCES KubeRemoveMode = 2
+	// FORGET removes the connection and leaves its objects in the cluster
+	// (scaled to 0 when reachable); its instances go FAILED
+	// kubernetes:cluster_missing and its agents show the cluster missing.
+	KubeRemoveMode_KUBE_REMOVE_MODE_FORGET KubeRemoveMode = 3
+)
+
+// Enum value maps for KubeRemoveMode.
+var (
+	KubeRemoveMode_name = map[int32]string{
+		0: "KUBE_REMOVE_MODE_UNSPECIFIED",
+		1: "KUBE_REMOVE_MODE_REFUSE_IF_USED",
+		2: "KUBE_REMOVE_MODE_DESTROY_INSTANCES",
+		3: "KUBE_REMOVE_MODE_FORGET",
+	}
+	KubeRemoveMode_value = map[string]int32{
+		"KUBE_REMOVE_MODE_UNSPECIFIED":       0,
+		"KUBE_REMOVE_MODE_REFUSE_IF_USED":    1,
+		"KUBE_REMOVE_MODE_DESTROY_INSTANCES": 2,
+		"KUBE_REMOVE_MODE_FORGET":            3,
+	}
+)
+
+func (x KubeRemoveMode) Enum() *KubeRemoveMode {
+	p := new(KubeRemoveMode)
+	*p = x
+	return p
+}
+
+func (x KubeRemoveMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (KubeRemoveMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_kube_proto_enumTypes[4].Descriptor()
+}
+
+func (KubeRemoveMode) Type() protoreflect.EnumType {
+	return &file_kube_proto_enumTypes[4]
+}
+
+func (x KubeRemoveMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use KubeRemoveMode.Descriptor instead.
+func (KubeRemoveMode) EnumDescriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{4}
+}
+
 // KubeCluster is one cluster connection and every per-cluster setting.
 type KubeCluster struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -298,10 +360,11 @@ type KubeCluster struct {
 	Namespace string `protobuf:"bytes,5,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	// server is the API server URL the context pointed at when last checked.
 	Server string `protobuf:"bytes,6,opt,name=server,proto3" json:"server,omitempty"`
-	// cluster_uid is the kube-system namespace UID, recorded when the
-	// connection is added. A connection in use may be re-pointed to another
-	// context or kubeconfig only when the new target reports the same UID (and
-	// its instances' objects are found there).
+	// cluster_uid is the kube-system namespace UID, recorded by the first probe
+	// that reaches the cluster (it needs kube-system to be readable). A
+	// connection in use may be re-pointed to another context or kubeconfig only
+	// when the new target reports the same UID (and its instances' objects are
+	// found there).
 	ClusterUid string `protobuf:"bytes,7,opt,name=cluster_uid,json=clusterUid,proto3" json:"cluster_uid,omitempty"`
 	// extra_path is prepended to PATH for the kubeconfig's exec credential
 	// plugins (aws, gke-gcloud-auth-plugin, kubelogin, ...) on the daemon host.
@@ -410,10 +473,14 @@ type KubeCluster struct {
 	// daemon host before it rebuilds. Empty = auto.
 	RebuildExport string                 `protobuf:"bytes,45,opt,name=rebuild_export,json=rebuildExport,proto3" json:"rebuild_export,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,46,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,47,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// updated_at is when a client last changed the record (Add, Update).
+	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,47,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	// verified_at is when the last full preflight passed.
 	VerifiedAt *timestamppb.Timestamp `protobuf:"bytes,48,opt,name=verified_at,json=verifiedAt,proto3" json:"verified_at,omitempty"`
-	// revision increases on every change to the record.
+	// revision increases on every change a client makes (Add, Update), so an
+	// editor can refuse to save over a newer one
+	// (UpdateKubeClusterRequest.expected_revision). The daemon's own
+	// bookkeeping (server, cluster_uid, verified_at) leaves it alone.
 	Revision      int64 `protobuf:"varint,49,opt,name=revision,proto3" json:"revision,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2445,12 +2512,1441 @@ func (x *ShareSyncStatus) GetLastSyncedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+// KubeContext is one context of a kubeconfig on the daemon host.
+type KubeContext struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// cluster and user are the kubeconfig entries the context names.
+	Cluster string `protobuf:"bytes,2,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	Server  string `protobuf:"bytes,3,opt,name=server,proto3" json:"server,omitempty"`
+	// namespace is the context's default namespace (empty when it sets none).
+	Namespace string `protobuf:"bytes,4,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	User      string `protobuf:"bytes,5,opt,name=user,proto3" json:"user,omitempty"`
+	// auth is how the context authenticates: "exec-plugin", "client-cert",
+	// "token", "token-file", "basic", "none", or "auth-provider:<name>" (which
+	// fleet refuses).
+	Auth string `protobuf:"bytes,6,opt,name=auth,proto3" json:"auth,omitempty"`
+	// plugin is an exec credential plugin's command as the kubeconfig writes
+	// it; plugin_path where fleetd finds it, and plugin_missing why it does not
+	// (empty when found, or for no plugin).
+	Plugin        string `protobuf:"bytes,7,opt,name=plugin,proto3" json:"plugin,omitempty"`
+	PluginPath    string `protobuf:"bytes,8,opt,name=plugin_path,json=pluginPath,proto3" json:"plugin_path,omitempty"`
+	PluginMissing string `protobuf:"bytes,9,opt,name=plugin_missing,json=pluginMissing,proto3" json:"plugin_missing,omitempty"`
+	// source is the kubeconfig file that defines the context.
+	Source string `protobuf:"bytes,10,opt,name=source,proto3" json:"source,omitempty"`
+	// current: the kubeconfig's current-context.
+	Current bool `protobuf:"varint,11,opt,name=current,proto3" json:"current,omitempty"`
+	// connected lists the connections (KubeCluster.id) that use this context.
+	Connected     []string `protobuf:"bytes,12,rep,name=connected,proto3" json:"connected,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KubeContext) Reset() {
+	*x = KubeContext{}
+	mi := &file_kube_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KubeContext) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KubeContext) ProtoMessage() {}
+
+func (x *KubeContext) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KubeContext.ProtoReflect.Descriptor instead.
+func (*KubeContext) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *KubeContext) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *KubeContext) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
+}
+
+func (x *KubeContext) GetServer() string {
+	if x != nil {
+		return x.Server
+	}
+	return ""
+}
+
+func (x *KubeContext) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *KubeContext) GetUser() string {
+	if x != nil {
+		return x.User
+	}
+	return ""
+}
+
+func (x *KubeContext) GetAuth() string {
+	if x != nil {
+		return x.Auth
+	}
+	return ""
+}
+
+func (x *KubeContext) GetPlugin() string {
+	if x != nil {
+		return x.Plugin
+	}
+	return ""
+}
+
+func (x *KubeContext) GetPluginPath() string {
+	if x != nil {
+		return x.PluginPath
+	}
+	return ""
+}
+
+func (x *KubeContext) GetPluginMissing() string {
+	if x != nil {
+		return x.PluginMissing
+	}
+	return ""
+}
+
+func (x *KubeContext) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *KubeContext) GetCurrent() bool {
+	if x != nil {
+		return x.Current
+	}
+	return false
+}
+
+func (x *KubeContext) GetConnected() []string {
+	if x != nil {
+		return x.Connected
+	}
+	return nil
+}
+
+type ListKubeContextsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// kubeconfig_paths are files on the daemon host to read, in precedence
+	// order. Empty = kubectl's defaults in fleetd's environment ($KUBECONFIG,
+	// else ~/.kube/config).
+	KubeconfigPaths []string `protobuf:"bytes,1,rep,name=kubeconfig_paths,json=kubeconfigPaths,proto3" json:"kubeconfig_paths,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ListKubeContextsRequest) Reset() {
+	*x = ListKubeContextsRequest{}
+	mi := &file_kube_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListKubeContextsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListKubeContextsRequest) ProtoMessage() {}
+
+func (x *ListKubeContextsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListKubeContextsRequest.ProtoReflect.Descriptor instead.
+func (*ListKubeContextsRequest) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ListKubeContextsRequest) GetKubeconfigPaths() []string {
+	if x != nil {
+		return x.KubeconfigPaths
+	}
+	return nil
+}
+
+type ListKubeContextsReply struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Contexts []*KubeContext         `protobuf:"bytes,1,rep,name=contexts,proto3" json:"contexts,omitempty"`
+	// kubeconfig_paths are the files read: what AddKubeCluster pins when it is
+	// given none.
+	KubeconfigPaths []string `protobuf:"bytes,2,rep,name=kubeconfig_paths,json=kubeconfigPaths,proto3" json:"kubeconfig_paths,omitempty"`
+	// host is the daemon host's name ("contexts on fleetd @ <host>").
+	Host          string `protobuf:"bytes,3,opt,name=host,proto3" json:"host,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListKubeContextsReply) Reset() {
+	*x = ListKubeContextsReply{}
+	mi := &file_kube_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListKubeContextsReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListKubeContextsReply) ProtoMessage() {}
+
+func (x *ListKubeContextsReply) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListKubeContextsReply.ProtoReflect.Descriptor instead.
+func (*ListKubeContextsReply) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ListKubeContextsReply) GetContexts() []*KubeContext {
+	if x != nil {
+		return x.Contexts
+	}
+	return nil
+}
+
+func (x *ListKubeContextsReply) GetKubeconfigPaths() []string {
+	if x != nil {
+		return x.KubeconfigPaths
+	}
+	return nil
+}
+
+func (x *ListKubeContextsReply) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+type ListKubeClustersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListKubeClustersRequest) Reset() {
+	*x = ListKubeClustersRequest{}
+	mi := &file_kube_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListKubeClustersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListKubeClustersRequest) ProtoMessage() {}
+
+func (x *ListKubeClustersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListKubeClustersRequest.ProtoReflect.Descriptor instead.
+func (*ListKubeClustersRequest) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{21}
+}
+
+type ListKubeClustersReply struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// clusters is every connection with its health, as Watch pushes them.
+	Clusters      []*KubeClusterStatus `protobuf:"bytes,1,rep,name=clusters,proto3" json:"clusters,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListKubeClustersReply) Reset() {
+	*x = ListKubeClustersReply{}
+	mi := &file_kube_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListKubeClustersReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListKubeClustersReply) ProtoMessage() {}
+
+func (x *ListKubeClustersReply) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListKubeClustersReply.ProtoReflect.Descriptor instead.
+func (*ListKubeClustersReply) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *ListKubeClustersReply) GetClusters() []*KubeClusterStatus {
+	if x != nil {
+		return x.Clusters
+	}
+	return nil
+}
+
+type AddKubeClusterRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// cluster is the new connection. context is required. The daemon assigns
+	// id and the bookkeeping fields (it ignores any sent); empty
+	// kubeconfig_paths pin fleetd's defaults (ListKubeContextsReply), and an
+	// empty namespace takes the context's, else "default". The daemon tests the
+	// connection in the background and pushes its health.
+	Cluster       *KubeCluster `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddKubeClusterRequest) Reset() {
+	*x = AddKubeClusterRequest{}
+	mi := &file_kube_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddKubeClusterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddKubeClusterRequest) ProtoMessage() {}
+
+func (x *AddKubeClusterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddKubeClusterRequest.ProtoReflect.Descriptor instead.
+func (*AddKubeClusterRequest) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *AddKubeClusterRequest) GetCluster() *KubeCluster {
+	if x != nil {
+		return x.Cluster
+	}
+	return nil
+}
+
+type AddKubeClusterReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cluster       *KubeClusterStatus     `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddKubeClusterReply) Reset() {
+	*x = AddKubeClusterReply{}
+	mi := &file_kube_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddKubeClusterReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddKubeClusterReply) ProtoMessage() {}
+
+func (x *AddKubeClusterReply) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddKubeClusterReply.ProtoReflect.Descriptor instead.
+func (*AddKubeClusterReply) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *AddKubeClusterReply) GetCluster() *KubeClusterStatus {
+	if x != nil {
+		return x.Cluster
+	}
+	return nil
+}
+
+type UpdateKubeClusterRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// cluster carries the new values of the fields update_mask names.
+	Cluster *KubeCluster `protobuf:"bytes,2,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	// update_mask names the KubeCluster fields to replace ("allow_privileged",
+	// "image.mode", "resources", "node_selector", ...); a message field replaces
+	// the whole message, a repeated or map field the whole list. Required. The
+	// bookkeeping fields, id, server and cluster_uid are refused. Changing
+	// context or kubeconfig_paths of a connection instances or agents use
+	// (re-point) needs the new target to report the same cluster_uid and to see
+	// the instances' objects; namespace cannot change while it is in use.
+	UpdateMask *fieldmaskpb.FieldMask `protobuf:"bytes,3,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
+	// expected_revision, when non-zero, refuses the update (ABORTED) if the
+	// record's revision has moved since the caller read it.
+	ExpectedRevision int64 `protobuf:"varint,4,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *UpdateKubeClusterRequest) Reset() {
+	*x = UpdateKubeClusterRequest{}
+	mi := &file_kube_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateKubeClusterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateKubeClusterRequest) ProtoMessage() {}
+
+func (x *UpdateKubeClusterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateKubeClusterRequest.ProtoReflect.Descriptor instead.
+func (*UpdateKubeClusterRequest) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *UpdateKubeClusterRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *UpdateKubeClusterRequest) GetCluster() *KubeCluster {
+	if x != nil {
+		return x.Cluster
+	}
+	return nil
+}
+
+func (x *UpdateKubeClusterRequest) GetUpdateMask() *fieldmaskpb.FieldMask {
+	if x != nil {
+		return x.UpdateMask
+	}
+	return nil
+}
+
+func (x *UpdateKubeClusterRequest) GetExpectedRevision() int64 {
+	if x != nil {
+		return x.ExpectedRevision
+	}
+	return 0
+}
+
+type UpdateKubeClusterReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cluster       *KubeClusterStatus     `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateKubeClusterReply) Reset() {
+	*x = UpdateKubeClusterReply{}
+	mi := &file_kube_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateKubeClusterReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateKubeClusterReply) ProtoMessage() {}
+
+func (x *UpdateKubeClusterReply) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateKubeClusterReply.ProtoReflect.Descriptor instead.
+func (*UpdateKubeClusterReply) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *UpdateKubeClusterReply) GetCluster() *KubeClusterStatus {
+	if x != nil {
+		return x.Cluster
+	}
+	return nil
+}
+
+// KubeClusterUser is an instance or an agent that uses a connection.
+type KubeClusterUser struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Fleet string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	// instance is set for an instance, agent for an automation agent.
+	Instance      string         `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
+	Agent         string         `protobuf:"bytes,3,opt,name=agent,proto3" json:"agent,omitempty"`
+	Status        InstanceStatus `protobuf:"varint,4,opt,name=status,proto3,enum=fleetgrpc.InstanceStatus" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KubeClusterUser) Reset() {
+	*x = KubeClusterUser{}
+	mi := &file_kube_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KubeClusterUser) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KubeClusterUser) ProtoMessage() {}
+
+func (x *KubeClusterUser) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KubeClusterUser.ProtoReflect.Descriptor instead.
+func (*KubeClusterUser) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *KubeClusterUser) GetFleet() string {
+	if x != nil {
+		return x.Fleet
+	}
+	return ""
+}
+
+func (x *KubeClusterUser) GetInstance() string {
+	if x != nil {
+		return x.Instance
+	}
+	return ""
+}
+
+func (x *KubeClusterUser) GetAgent() string {
+	if x != nil {
+		return x.Agent
+	}
+	return ""
+}
+
+func (x *KubeClusterUser) GetStatus() InstanceStatus {
+	if x != nil {
+		return x.Status
+	}
+	return InstanceStatus_INSTANCE_STATUS_UNSPECIFIED
+}
+
+type RemoveKubeClusterRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Mode          KubeRemoveMode         `protobuf:"varint,2,opt,name=mode,proto3,enum=fleetgrpc.KubeRemoveMode" json:"mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveKubeClusterRequest) Reset() {
+	*x = RemoveKubeClusterRequest{}
+	mi := &file_kube_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveKubeClusterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveKubeClusterRequest) ProtoMessage() {}
+
+func (x *RemoveKubeClusterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveKubeClusterRequest.ProtoReflect.Descriptor instead.
+func (*RemoveKubeClusterRequest) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *RemoveKubeClusterRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *RemoveKubeClusterRequest) GetMode() KubeRemoveMode {
+	if x != nil {
+		return x.Mode
+	}
+	return KubeRemoveMode_KUBE_REMOVE_MODE_UNSPECIFIED
+}
+
+type RemoveKubeClusterReply struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// removed: the connection is gone. False only for REFUSE_IF_USED with
+	// users.
+	Removed bool `protobuf:"varint,1,opt,name=removed,proto3" json:"removed,omitempty"`
+	// users are the instances and agents on the connection: the blockers of a
+	// refusal, else what was destroyed or left behind.
+	Users         []*KubeClusterUser `protobuf:"bytes,2,rep,name=users,proto3" json:"users,omitempty"`
+	Warnings      []string           `protobuf:"bytes,3,rep,name=warnings,proto3" json:"warnings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveKubeClusterReply) Reset() {
+	*x = RemoveKubeClusterReply{}
+	mi := &file_kube_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveKubeClusterReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveKubeClusterReply) ProtoMessage() {}
+
+func (x *RemoveKubeClusterReply) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveKubeClusterReply.ProtoReflect.Descriptor instead.
+func (*RemoveKubeClusterReply) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *RemoveKubeClusterReply) GetRemoved() bool {
+	if x != nil {
+		return x.Removed
+	}
+	return false
+}
+
+func (x *RemoveKubeClusterReply) GetUsers() []*KubeClusterUser {
+	if x != nil {
+		return x.Users
+	}
+	return nil
+}
+
+func (x *RemoveKubeClusterReply) GetWarnings() []string {
+	if x != nil {
+		return x.Warnings
+	}
+	return nil
+}
+
+type TestKubeClusterRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// id tests a saved connection, and the result becomes its pushed health.
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// cluster, when id is empty, tests an unsaved connection (the context
+	// picker's test & connect) without saving or claiming anything; defaults
+	// apply as on AddKubeCluster.
+	Cluster       *KubeCluster `protobuf:"bytes,2,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TestKubeClusterRequest) Reset() {
+	*x = TestKubeClusterRequest{}
+	mi := &file_kube_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TestKubeClusterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TestKubeClusterRequest) ProtoMessage() {}
+
+func (x *TestKubeClusterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TestKubeClusterRequest.ProtoReflect.Descriptor instead.
+func (*TestKubeClusterRequest) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *TestKubeClusterRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *TestKubeClusterRequest) GetCluster() *KubeCluster {
+	if x != nil {
+		return x.Cluster
+	}
+	return nil
+}
+
+// TestKubeClusterEvent is one step of a streamed preflight.
+type TestKubeClusterEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Kind:
+	//
+	//	*TestKubeClusterEvent_Check
+	//	*TestKubeClusterEvent_Result
+	Kind          isTestKubeClusterEvent_Kind `protobuf_oneof:"kind"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TestKubeClusterEvent) Reset() {
+	*x = TestKubeClusterEvent{}
+	mi := &file_kube_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TestKubeClusterEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TestKubeClusterEvent) ProtoMessage() {}
+
+func (x *TestKubeClusterEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TestKubeClusterEvent.ProtoReflect.Descriptor instead.
+func (*TestKubeClusterEvent) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *TestKubeClusterEvent) GetKind() isTestKubeClusterEvent_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return nil
+}
+
+func (x *TestKubeClusterEvent) GetCheck() *KubeCheck {
+	if x != nil {
+		if x, ok := x.Kind.(*TestKubeClusterEvent_Check); ok {
+			return x.Check
+		}
+	}
+	return nil
+}
+
+func (x *TestKubeClusterEvent) GetResult() *KubeClusterStatus {
+	if x != nil {
+		if x, ok := x.Kind.(*TestKubeClusterEvent_Result); ok {
+			return x.Result
+		}
+	}
+	return nil
+}
+
+type isTestKubeClusterEvent_Kind interface {
+	isTestKubeClusterEvent_Kind()
+}
+
+type TestKubeClusterEvent_Check struct {
+	// check reports a check starting (RUNNING) and then its result.
+	Check *KubeCheck `protobuf:"bytes,1,opt,name=check,proto3,oneof"`
+}
+
+type TestKubeClusterEvent_Result struct {
+	// result is the final status, the stream's last event.
+	Result *KubeClusterStatus `protobuf:"bytes,2,opt,name=result,proto3,oneof"`
+}
+
+func (*TestKubeClusterEvent_Check) isTestKubeClusterEvent_Kind() {}
+
+func (*TestKubeClusterEvent_Result) isTestKubeClusterEvent_Kind() {}
+
+type PruneKubeClusterRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// apply deletes what the listing marks for deletion; without it nothing is
+	// touched. Refused unless this daemon holds the connection's owner Lease.
+	Apply bool `protobuf:"varint,2,opt,name=apply,proto3" json:"apply,omitempty"`
+	// fleet also deletes the objects of this fleet, which still exists and is
+	// otherwise kept.
+	Fleet         string `protobuf:"bytes,3,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PruneKubeClusterRequest) Reset() {
+	*x = PruneKubeClusterRequest{}
+	mi := &file_kube_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PruneKubeClusterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PruneKubeClusterRequest) ProtoMessage() {}
+
+func (x *PruneKubeClusterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PruneKubeClusterRequest.ProtoReflect.Descriptor instead.
+func (*PruneKubeClusterRequest) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *PruneKubeClusterRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *PruneKubeClusterRequest) GetApply() bool {
+	if x != nil {
+		return x.Apply
+	}
+	return false
+}
+
+func (x *PruneKubeClusterRequest) GetFleet() string {
+	if x != nil {
+		return x.Fleet
+	}
+	return ""
+}
+
+// KubePruneObject is one object labelled for this daemon and connection that
+// no instance record accounts for.
+type KubePruneObject struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// kind is the lower-case resource kind ("pvc", "sts", "job", "secret",
+	// "configmap", "svc", "deploy", "netpol", "pdb", "pod").
+	Kind      string                 `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
+	Name      string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// mounted, for a PVC: a live pod mounts it.
+	Mounted bool `protobuf:"varint,4,opt,name=mounted,proto3" json:"mounted,omitempty"`
+	// action is what the prune did or would do: "would delete", "deleted",
+	// "skip (younger than 1h)", "skip (mounted)", "kept: fleet exists",
+	// "failed: <reason>".
+	Action        string `protobuf:"bytes,5,opt,name=action,proto3" json:"action,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KubePruneObject) Reset() {
+	*x = KubePruneObject{}
+	mi := &file_kube_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KubePruneObject) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KubePruneObject) ProtoMessage() {}
+
+func (x *KubePruneObject) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KubePruneObject.ProtoReflect.Descriptor instead.
+func (*KubePruneObject) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *KubePruneObject) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *KubePruneObject) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *KubePruneObject) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *KubePruneObject) GetMounted() bool {
+	if x != nil {
+		return x.Mounted
+	}
+	return false
+}
+
+func (x *KubePruneObject) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+type PruneKubeClusterReply struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// owner is this daemon's owner label value.
+	Owner string `protobuf:"bytes,1,opt,name=owner,proto3" json:"owner,omitempty"`
+	// lease_held: this daemon holds the connection's owner Lease; otherwise
+	// lease_holder and lease_holder_host name who does.
+	LeaseHeld       bool               `protobuf:"varint,2,opt,name=lease_held,json=leaseHeld,proto3" json:"lease_held,omitempty"`
+	LeaseHolder     string             `protobuf:"bytes,3,opt,name=lease_holder,json=leaseHolder,proto3" json:"lease_holder,omitempty"`
+	LeaseHolderHost string             `protobuf:"bytes,4,opt,name=lease_holder_host,json=leaseHolderHost,proto3" json:"lease_holder_host,omitempty"`
+	Objects         []*KubePruneObject `protobuf:"bytes,5,rep,name=objects,proto3" json:"objects,omitempty"`
+	Deleted         int32              `protobuf:"varint,6,opt,name=deleted,proto3" json:"deleted,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PruneKubeClusterReply) Reset() {
+	*x = PruneKubeClusterReply{}
+	mi := &file_kube_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PruneKubeClusterReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PruneKubeClusterReply) ProtoMessage() {}
+
+func (x *PruneKubeClusterReply) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PruneKubeClusterReply.ProtoReflect.Descriptor instead.
+func (*PruneKubeClusterReply) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *PruneKubeClusterReply) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
+func (x *PruneKubeClusterReply) GetLeaseHeld() bool {
+	if x != nil {
+		return x.LeaseHeld
+	}
+	return false
+}
+
+func (x *PruneKubeClusterReply) GetLeaseHolder() string {
+	if x != nil {
+		return x.LeaseHolder
+	}
+	return ""
+}
+
+func (x *PruneKubeClusterReply) GetLeaseHolderHost() string {
+	if x != nil {
+		return x.LeaseHolderHost
+	}
+	return ""
+}
+
+func (x *PruneKubeClusterReply) GetObjects() []*KubePruneObject {
+	if x != nil {
+		return x.Objects
+	}
+	return nil
+}
+
+func (x *PruneKubeClusterReply) GetDeleted() int32 {
+	if x != nil {
+		return x.Deleted
+	}
+	return 0
+}
+
+type LoginKubeClusterRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LoginKubeClusterRequest) Reset() {
+	*x = LoginKubeClusterRequest{}
+	mi := &file_kube_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LoginKubeClusterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LoginKubeClusterRequest) ProtoMessage() {}
+
+func (x *LoginKubeClusterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LoginKubeClusterRequest.ProtoReflect.Descriptor instead.
+func (*LoginKubeClusterRequest) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *LoginKubeClusterRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+// KubeDeviceCode is what a login plugin asks the user to do: open url and
+// enter code. Only these two values of the plugin's output are relayed.
+type KubeDeviceCode struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Url           string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
+	Code          string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KubeDeviceCode) Reset() {
+	*x = KubeDeviceCode{}
+	mi := &file_kube_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KubeDeviceCode) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KubeDeviceCode) ProtoMessage() {}
+
+func (x *KubeDeviceCode) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KubeDeviceCode.ProtoReflect.Descriptor instead.
+func (*KubeDeviceCode) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *KubeDeviceCode) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *KubeDeviceCode) GetCode() string {
+	if x != nil {
+		return x.Code
+	}
+	return ""
+}
+
+// LoginKubeClusterEvent is one step of a login run on the daemon host.
+type LoginKubeClusterEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Kind:
+	//
+	//	*LoginKubeClusterEvent_DeviceCode
+	//	*LoginKubeClusterEvent_Result
+	Kind          isLoginKubeClusterEvent_Kind `protobuf_oneof:"kind"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LoginKubeClusterEvent) Reset() {
+	*x = LoginKubeClusterEvent{}
+	mi := &file_kube_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LoginKubeClusterEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LoginKubeClusterEvent) ProtoMessage() {}
+
+func (x *LoginKubeClusterEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LoginKubeClusterEvent.ProtoReflect.Descriptor instead.
+func (*LoginKubeClusterEvent) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *LoginKubeClusterEvent) GetKind() isLoginKubeClusterEvent_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return nil
+}
+
+func (x *LoginKubeClusterEvent) GetDeviceCode() *KubeDeviceCode {
+	if x != nil {
+		if x, ok := x.Kind.(*LoginKubeClusterEvent_DeviceCode); ok {
+			return x.DeviceCode
+		}
+	}
+	return nil
+}
+
+func (x *LoginKubeClusterEvent) GetResult() *KubeClusterStatus {
+	if x != nil {
+		if x, ok := x.Kind.(*LoginKubeClusterEvent_Result); ok {
+			return x.Result
+		}
+	}
+	return nil
+}
+
+type isLoginKubeClusterEvent_Kind interface {
+	isLoginKubeClusterEvent_Kind()
+}
+
+type LoginKubeClusterEvent_DeviceCode struct {
+	DeviceCode *KubeDeviceCode `protobuf:"bytes,1,opt,name=device_code,json=deviceCode,proto3,oneof"`
+}
+
+type LoginKubeClusterEvent_Result struct {
+	// result is the connection's status once the plugin succeeded, the
+	// stream's last event. A failed login ends the stream with an error.
+	Result *KubeClusterStatus `protobuf:"bytes,2,opt,name=result,proto3,oneof"`
+}
+
+func (*LoginKubeClusterEvent_DeviceCode) isLoginKubeClusterEvent_Kind() {}
+
+func (*LoginKubeClusterEvent_Result) isLoginKubeClusterEvent_Kind() {}
+
+type CreateKubeNamespaceRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// id names a saved connection; cluster, when id is empty, an unsaved one.
+	Id      string       `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Cluster *KubeCluster `protobuf:"bytes,2,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	// namespace to create. Empty = the connection's.
+	Namespace string `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	// labels the namespace gets (e.g. pod-security.kubernetes.io/enforce).
+	// Empty = app.kubernetes.io/managed-by=fleet.
+	Labels map[string]string `protobuf:"bytes,4,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// dry_run returns the manifest without creating anything.
+	DryRun        bool `protobuf:"varint,5,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateKubeNamespaceRequest) Reset() {
+	*x = CreateKubeNamespaceRequest{}
+	mi := &file_kube_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateKubeNamespaceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateKubeNamespaceRequest) ProtoMessage() {}
+
+func (x *CreateKubeNamespaceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateKubeNamespaceRequest.ProtoReflect.Descriptor instead.
+func (*CreateKubeNamespaceRequest) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *CreateKubeNamespaceRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *CreateKubeNamespaceRequest) GetCluster() *KubeCluster {
+	if x != nil {
+		return x.Cluster
+	}
+	return nil
+}
+
+func (x *CreateKubeNamespaceRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *CreateKubeNamespaceRequest) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
+}
+
+func (x *CreateKubeNamespaceRequest) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
+type CreateKubeNamespaceReply struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// manifest is the namespace as YAML, to show or to copy and apply.
+	Manifest      string `protobuf:"bytes,1,opt,name=manifest,proto3" json:"manifest,omitempty"`
+	Created       bool   `protobuf:"varint,2,opt,name=created,proto3" json:"created,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateKubeNamespaceReply) Reset() {
+	*x = CreateKubeNamespaceReply{}
+	mi := &file_kube_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateKubeNamespaceReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateKubeNamespaceReply) ProtoMessage() {}
+
+func (x *CreateKubeNamespaceReply) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateKubeNamespaceReply.ProtoReflect.Descriptor instead.
+func (*CreateKubeNamespaceReply) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *CreateKubeNamespaceReply) GetManifest() string {
+	if x != nil {
+		return x.Manifest
+	}
+	return ""
+}
+
+func (x *CreateKubeNamespaceReply) GetCreated() bool {
+	if x != nil {
+		return x.Created
+	}
+	return false
+}
+
 var File_kube_proto protoreflect.FileDescriptor
 
 const file_kube_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"kube.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc3\x12\n" +
+	"kube.proto\x12\tfleetgrpc\x1a\fdomain.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc3\x12\n" +
 	"\vKubeCluster\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x18\n" +
@@ -2670,7 +4166,103 @@ const file_kube_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x18\n" +
 	"\apending\x18\x03 \x01(\x05R\apending\x12\x1c\n" +
 	"\tconflicts\x18\x04 \x01(\x05R\tconflicts\x12@\n" +
-	"\x0elast_synced_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\flastSyncedAt*\x9c\x03\n" +
+	"\x0elast_synced_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\flastSyncedAt\"\xc9\x02\n" +
+	"\vKubeContext\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\acluster\x18\x02 \x01(\tR\acluster\x12\x16\n" +
+	"\x06server\x18\x03 \x01(\tR\x06server\x12\x1c\n" +
+	"\tnamespace\x18\x04 \x01(\tR\tnamespace\x12\x12\n" +
+	"\x04user\x18\x05 \x01(\tR\x04user\x12\x12\n" +
+	"\x04auth\x18\x06 \x01(\tR\x04auth\x12\x16\n" +
+	"\x06plugin\x18\a \x01(\tR\x06plugin\x12\x1f\n" +
+	"\vplugin_path\x18\b \x01(\tR\n" +
+	"pluginPath\x12%\n" +
+	"\x0eplugin_missing\x18\t \x01(\tR\rpluginMissing\x12\x16\n" +
+	"\x06source\x18\n" +
+	" \x01(\tR\x06source\x12\x18\n" +
+	"\acurrent\x18\v \x01(\bR\acurrent\x12\x1c\n" +
+	"\tconnected\x18\f \x03(\tR\tconnected\"D\n" +
+	"\x17ListKubeContextsRequest\x12)\n" +
+	"\x10kubeconfig_paths\x18\x01 \x03(\tR\x0fkubeconfigPaths\"\x8a\x01\n" +
+	"\x15ListKubeContextsReply\x122\n" +
+	"\bcontexts\x18\x01 \x03(\v2\x16.fleetgrpc.KubeContextR\bcontexts\x12)\n" +
+	"\x10kubeconfig_paths\x18\x02 \x03(\tR\x0fkubeconfigPaths\x12\x12\n" +
+	"\x04host\x18\x03 \x01(\tR\x04host\"\x19\n" +
+	"\x17ListKubeClustersRequest\"Q\n" +
+	"\x15ListKubeClustersReply\x128\n" +
+	"\bclusters\x18\x01 \x03(\v2\x1c.fleetgrpc.KubeClusterStatusR\bclusters\"I\n" +
+	"\x15AddKubeClusterRequest\x120\n" +
+	"\acluster\x18\x01 \x01(\v2\x16.fleetgrpc.KubeClusterR\acluster\"M\n" +
+	"\x13AddKubeClusterReply\x126\n" +
+	"\acluster\x18\x01 \x01(\v2\x1c.fleetgrpc.KubeClusterStatusR\acluster\"\xc6\x01\n" +
+	"\x18UpdateKubeClusterRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x120\n" +
+	"\acluster\x18\x02 \x01(\v2\x16.fleetgrpc.KubeClusterR\acluster\x12;\n" +
+	"\vupdate_mask\x18\x03 \x01(\v2\x1a.google.protobuf.FieldMaskR\n" +
+	"updateMask\x12+\n" +
+	"\x11expected_revision\x18\x04 \x01(\x03R\x10expectedRevision\"P\n" +
+	"\x16UpdateKubeClusterReply\x126\n" +
+	"\acluster\x18\x01 \x01(\v2\x1c.fleetgrpc.KubeClusterStatusR\acluster\"\x8c\x01\n" +
+	"\x0fKubeClusterUser\x12\x14\n" +
+	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
+	"\binstance\x18\x02 \x01(\tR\binstance\x12\x14\n" +
+	"\x05agent\x18\x03 \x01(\tR\x05agent\x121\n" +
+	"\x06status\x18\x04 \x01(\x0e2\x19.fleetgrpc.InstanceStatusR\x06status\"Y\n" +
+	"\x18RemoveKubeClusterRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12-\n" +
+	"\x04mode\x18\x02 \x01(\x0e2\x19.fleetgrpc.KubeRemoveModeR\x04mode\"\x80\x01\n" +
+	"\x16RemoveKubeClusterReply\x12\x18\n" +
+	"\aremoved\x18\x01 \x01(\bR\aremoved\x120\n" +
+	"\x05users\x18\x02 \x03(\v2\x1a.fleetgrpc.KubeClusterUserR\x05users\x12\x1a\n" +
+	"\bwarnings\x18\x03 \x03(\tR\bwarnings\"Z\n" +
+	"\x16TestKubeClusterRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x120\n" +
+	"\acluster\x18\x02 \x01(\v2\x16.fleetgrpc.KubeClusterR\acluster\"\x84\x01\n" +
+	"\x14TestKubeClusterEvent\x12,\n" +
+	"\x05check\x18\x01 \x01(\v2\x14.fleetgrpc.KubeCheckH\x00R\x05check\x126\n" +
+	"\x06result\x18\x02 \x01(\v2\x1c.fleetgrpc.KubeClusterStatusH\x00R\x06resultB\x06\n" +
+	"\x04kind\"U\n" +
+	"\x17PruneKubeClusterRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
+	"\x05apply\x18\x02 \x01(\bR\x05apply\x12\x14\n" +
+	"\x05fleet\x18\x03 \x01(\tR\x05fleet\"\xa6\x01\n" +
+	"\x0fKubePruneObject\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x129\n" +
+	"\n" +
+	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x18\n" +
+	"\amounted\x18\x04 \x01(\bR\amounted\x12\x16\n" +
+	"\x06action\x18\x05 \x01(\tR\x06action\"\xeb\x01\n" +
+	"\x15PruneKubeClusterReply\x12\x14\n" +
+	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x1d\n" +
+	"\n" +
+	"lease_held\x18\x02 \x01(\bR\tleaseHeld\x12!\n" +
+	"\flease_holder\x18\x03 \x01(\tR\vleaseHolder\x12*\n" +
+	"\x11lease_holder_host\x18\x04 \x01(\tR\x0fleaseHolderHost\x124\n" +
+	"\aobjects\x18\x05 \x03(\v2\x1a.fleetgrpc.KubePruneObjectR\aobjects\x12\x18\n" +
+	"\adeleted\x18\x06 \x01(\x05R\adeleted\")\n" +
+	"\x17LoginKubeClusterRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"6\n" +
+	"\x0eKubeDeviceCode\x12\x10\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\x12\x12\n" +
+	"\x04code\x18\x02 \x01(\tR\x04code\"\x95\x01\n" +
+	"\x15LoginKubeClusterEvent\x12<\n" +
+	"\vdevice_code\x18\x01 \x01(\v2\x19.fleetgrpc.KubeDeviceCodeH\x00R\n" +
+	"deviceCode\x126\n" +
+	"\x06result\x18\x02 \x01(\v2\x1c.fleetgrpc.KubeClusterStatusH\x00R\x06resultB\x06\n" +
+	"\x04kind\"\x9b\x02\n" +
+	"\x1aCreateKubeNamespaceRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x120\n" +
+	"\acluster\x18\x02 \x01(\v2\x16.fleetgrpc.KubeClusterR\acluster\x12\x1c\n" +
+	"\tnamespace\x18\x03 \x01(\tR\tnamespace\x12I\n" +
+	"\x06labels\x18\x04 \x03(\v21.fleetgrpc.CreateKubeNamespaceRequest.LabelsEntryR\x06labels\x12\x17\n" +
+	"\adry_run\x18\x05 \x01(\bR\x06dryRun\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"P\n" +
+	"\x18CreateKubeNamespaceReply\x12\x1a\n" +
+	"\bmanifest\x18\x01 \x01(\tR\bmanifest\x12\x18\n" +
+	"\acreated\x18\x02 \x01(\bR\acreated*\x9c\x03\n" +
 	"\x10KubeClusterState\x12\"\n" +
 	"\x1eKUBE_CLUSTER_STATE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bKUBE_CLUSTER_STATE_CHECKING\x10\x01\x12\x1c\n" +
@@ -2700,7 +4292,12 @@ const file_kube_proto_rawDesc = "" +
 	"\x1cSHARE_SYNC_STATE_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18SHARE_SYNC_STATE_IN_SYNC\x10\x01\x12\x1c\n" +
 	"\x18SHARE_SYNC_STATE_SYNCING\x10\x02\x12\x1b\n" +
-	"\x17SHARE_SYNC_STATE_PAUSED\x10\x03B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
+	"\x17SHARE_SYNC_STATE_PAUSED\x10\x03*\x9c\x01\n" +
+	"\x0eKubeRemoveMode\x12 \n" +
+	"\x1cKUBE_REMOVE_MODE_UNSPECIFIED\x10\x00\x12#\n" +
+	"\x1fKUBE_REMOVE_MODE_REFUSE_IF_USED\x10\x01\x12&\n" +
+	"\"KUBE_REMOVE_MODE_DESTROY_INSTANCES\x10\x02\x12\x1b\n" +
+	"\x17KUBE_REMOVE_MODE_FORGET\x10\x03B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
 
 var (
 	file_kube_proto_rawDescOnce sync.Once
@@ -2714,69 +4311,114 @@ func file_kube_proto_rawDescGZIP() []byte {
 	return file_kube_proto_rawDescData
 }
 
-var file_kube_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_kube_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_kube_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_kube_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
 var file_kube_proto_goTypes = []any{
-	(KubeClusterState)(0),         // 0: fleetgrpc.KubeClusterState
-	(KubeCheckResult)(0),          // 1: fleetgrpc.KubeCheckResult
-	(KubeAgentState)(0),           // 2: fleetgrpc.KubeAgentState
-	(ShareSyncState)(0),           // 3: fleetgrpc.ShareSyncState
-	(*KubeCluster)(nil),           // 4: fleetgrpc.KubeCluster
-	(*KubeResources)(nil),         // 5: fleetgrpc.KubeResources
-	(*KubeToleration)(nil),        // 6: fleetgrpc.KubeToleration
-	(*KubeCacheSizes)(nil),        // 7: fleetgrpc.KubeCacheSizes
-	(*KubeServiceImages)(nil),     // 8: fleetgrpc.KubeServiceImages
-	(*KubeImageSettings)(nil),     // 9: fleetgrpc.KubeImageSettings
-	(*KubeCheck)(nil),             // 10: fleetgrpc.KubeCheck
-	(*KubeClusterStatus)(nil),     // 11: fleetgrpc.KubeClusterStatus
-	(*KubeClusters)(nil),          // 12: fleetgrpc.KubeClusters
-	(*KubeCapabilities)(nil),      // 13: fleetgrpc.KubeCapabilities
-	(*KubeAdmission)(nil),         // 14: fleetgrpc.KubeAdmission
-	(*KubeStorageClass)(nil),      // 15: fleetgrpc.KubeStorageClass
-	(*KubeNode)(nil),              // 16: fleetgrpc.KubeNode
-	(*KubeQuotaHeadroom)(nil),     // 17: fleetgrpc.KubeQuotaHeadroom
-	(*KubeImageDelivery)(nil),     // 18: fleetgrpc.KubeImageDelivery
-	(*KubeOrphans)(nil),           // 19: fleetgrpc.KubeOrphans
-	(*KubeInstanceRuntime)(nil),   // 20: fleetgrpc.KubeInstanceRuntime
-	(*ShareSyncStatus)(nil),       // 21: fleetgrpc.ShareSyncStatus
-	nil,                           // 22: fleetgrpc.KubeCluster.NodeSelectorEntry
-	(*timestamppb.Timestamp)(nil), // 23: google.protobuf.Timestamp
+	(KubeClusterState)(0),              // 0: fleetgrpc.KubeClusterState
+	(KubeCheckResult)(0),               // 1: fleetgrpc.KubeCheckResult
+	(KubeAgentState)(0),                // 2: fleetgrpc.KubeAgentState
+	(ShareSyncState)(0),                // 3: fleetgrpc.ShareSyncState
+	(KubeRemoveMode)(0),                // 4: fleetgrpc.KubeRemoveMode
+	(*KubeCluster)(nil),                // 5: fleetgrpc.KubeCluster
+	(*KubeResources)(nil),              // 6: fleetgrpc.KubeResources
+	(*KubeToleration)(nil),             // 7: fleetgrpc.KubeToleration
+	(*KubeCacheSizes)(nil),             // 8: fleetgrpc.KubeCacheSizes
+	(*KubeServiceImages)(nil),          // 9: fleetgrpc.KubeServiceImages
+	(*KubeImageSettings)(nil),          // 10: fleetgrpc.KubeImageSettings
+	(*KubeCheck)(nil),                  // 11: fleetgrpc.KubeCheck
+	(*KubeClusterStatus)(nil),          // 12: fleetgrpc.KubeClusterStatus
+	(*KubeClusters)(nil),               // 13: fleetgrpc.KubeClusters
+	(*KubeCapabilities)(nil),           // 14: fleetgrpc.KubeCapabilities
+	(*KubeAdmission)(nil),              // 15: fleetgrpc.KubeAdmission
+	(*KubeStorageClass)(nil),           // 16: fleetgrpc.KubeStorageClass
+	(*KubeNode)(nil),                   // 17: fleetgrpc.KubeNode
+	(*KubeQuotaHeadroom)(nil),          // 18: fleetgrpc.KubeQuotaHeadroom
+	(*KubeImageDelivery)(nil),          // 19: fleetgrpc.KubeImageDelivery
+	(*KubeOrphans)(nil),                // 20: fleetgrpc.KubeOrphans
+	(*KubeInstanceRuntime)(nil),        // 21: fleetgrpc.KubeInstanceRuntime
+	(*ShareSyncStatus)(nil),            // 22: fleetgrpc.ShareSyncStatus
+	(*KubeContext)(nil),                // 23: fleetgrpc.KubeContext
+	(*ListKubeContextsRequest)(nil),    // 24: fleetgrpc.ListKubeContextsRequest
+	(*ListKubeContextsReply)(nil),      // 25: fleetgrpc.ListKubeContextsReply
+	(*ListKubeClustersRequest)(nil),    // 26: fleetgrpc.ListKubeClustersRequest
+	(*ListKubeClustersReply)(nil),      // 27: fleetgrpc.ListKubeClustersReply
+	(*AddKubeClusterRequest)(nil),      // 28: fleetgrpc.AddKubeClusterRequest
+	(*AddKubeClusterReply)(nil),        // 29: fleetgrpc.AddKubeClusterReply
+	(*UpdateKubeClusterRequest)(nil),   // 30: fleetgrpc.UpdateKubeClusterRequest
+	(*UpdateKubeClusterReply)(nil),     // 31: fleetgrpc.UpdateKubeClusterReply
+	(*KubeClusterUser)(nil),            // 32: fleetgrpc.KubeClusterUser
+	(*RemoveKubeClusterRequest)(nil),   // 33: fleetgrpc.RemoveKubeClusterRequest
+	(*RemoveKubeClusterReply)(nil),     // 34: fleetgrpc.RemoveKubeClusterReply
+	(*TestKubeClusterRequest)(nil),     // 35: fleetgrpc.TestKubeClusterRequest
+	(*TestKubeClusterEvent)(nil),       // 36: fleetgrpc.TestKubeClusterEvent
+	(*PruneKubeClusterRequest)(nil),    // 37: fleetgrpc.PruneKubeClusterRequest
+	(*KubePruneObject)(nil),            // 38: fleetgrpc.KubePruneObject
+	(*PruneKubeClusterReply)(nil),      // 39: fleetgrpc.PruneKubeClusterReply
+	(*LoginKubeClusterRequest)(nil),    // 40: fleetgrpc.LoginKubeClusterRequest
+	(*KubeDeviceCode)(nil),             // 41: fleetgrpc.KubeDeviceCode
+	(*LoginKubeClusterEvent)(nil),      // 42: fleetgrpc.LoginKubeClusterEvent
+	(*CreateKubeNamespaceRequest)(nil), // 43: fleetgrpc.CreateKubeNamespaceRequest
+	(*CreateKubeNamespaceReply)(nil),   // 44: fleetgrpc.CreateKubeNamespaceReply
+	nil,                                // 45: fleetgrpc.KubeCluster.NodeSelectorEntry
+	nil,                                // 46: fleetgrpc.CreateKubeNamespaceRequest.LabelsEntry
+	(*timestamppb.Timestamp)(nil),      // 47: google.protobuf.Timestamp
+	(*fieldmaskpb.FieldMask)(nil),      // 48: google.protobuf.FieldMask
+	(InstanceStatus)(0),                // 49: fleetgrpc.InstanceStatus
 }
 var file_kube_proto_depIdxs = []int32{
-	7,  // 0: fleetgrpc.KubeCluster.cache_sizes:type_name -> fleetgrpc.KubeCacheSizes
-	8,  // 1: fleetgrpc.KubeCluster.service_images:type_name -> fleetgrpc.KubeServiceImages
-	5,  // 2: fleetgrpc.KubeCluster.resources:type_name -> fleetgrpc.KubeResources
-	22, // 3: fleetgrpc.KubeCluster.node_selector:type_name -> fleetgrpc.KubeCluster.NodeSelectorEntry
-	6,  // 4: fleetgrpc.KubeCluster.tolerations:type_name -> fleetgrpc.KubeToleration
-	9,  // 5: fleetgrpc.KubeCluster.image:type_name -> fleetgrpc.KubeImageSettings
-	23, // 6: fleetgrpc.KubeCluster.created_at:type_name -> google.protobuf.Timestamp
-	23, // 7: fleetgrpc.KubeCluster.updated_at:type_name -> google.protobuf.Timestamp
-	23, // 8: fleetgrpc.KubeCluster.verified_at:type_name -> google.protobuf.Timestamp
+	8,  // 0: fleetgrpc.KubeCluster.cache_sizes:type_name -> fleetgrpc.KubeCacheSizes
+	9,  // 1: fleetgrpc.KubeCluster.service_images:type_name -> fleetgrpc.KubeServiceImages
+	6,  // 2: fleetgrpc.KubeCluster.resources:type_name -> fleetgrpc.KubeResources
+	45, // 3: fleetgrpc.KubeCluster.node_selector:type_name -> fleetgrpc.KubeCluster.NodeSelectorEntry
+	7,  // 4: fleetgrpc.KubeCluster.tolerations:type_name -> fleetgrpc.KubeToleration
+	10, // 5: fleetgrpc.KubeCluster.image:type_name -> fleetgrpc.KubeImageSettings
+	47, // 6: fleetgrpc.KubeCluster.created_at:type_name -> google.protobuf.Timestamp
+	47, // 7: fleetgrpc.KubeCluster.updated_at:type_name -> google.protobuf.Timestamp
+	47, // 8: fleetgrpc.KubeCluster.verified_at:type_name -> google.protobuf.Timestamp
 	1,  // 9: fleetgrpc.KubeCheck.result:type_name -> fleetgrpc.KubeCheckResult
-	4,  // 10: fleetgrpc.KubeClusterStatus.cluster:type_name -> fleetgrpc.KubeCluster
+	5,  // 10: fleetgrpc.KubeClusterStatus.cluster:type_name -> fleetgrpc.KubeCluster
 	0,  // 11: fleetgrpc.KubeClusterStatus.state:type_name -> fleetgrpc.KubeClusterState
-	13, // 12: fleetgrpc.KubeClusterStatus.capabilities:type_name -> fleetgrpc.KubeCapabilities
-	10, // 13: fleetgrpc.KubeClusterStatus.checks:type_name -> fleetgrpc.KubeCheck
-	23, // 14: fleetgrpc.KubeClusterStatus.checked_at:type_name -> google.protobuf.Timestamp
-	23, // 15: fleetgrpc.KubeClusterStatus.deep_checked_at:type_name -> google.protobuf.Timestamp
-	11, // 16: fleetgrpc.KubeClusters.clusters:type_name -> fleetgrpc.KubeClusterStatus
-	14, // 17: fleetgrpc.KubeCapabilities.admission:type_name -> fleetgrpc.KubeAdmission
-	15, // 18: fleetgrpc.KubeCapabilities.storage_classes:type_name -> fleetgrpc.KubeStorageClass
-	16, // 19: fleetgrpc.KubeCapabilities.nodes:type_name -> fleetgrpc.KubeNode
-	17, // 20: fleetgrpc.KubeCapabilities.quota:type_name -> fleetgrpc.KubeQuotaHeadroom
-	18, // 21: fleetgrpc.KubeCapabilities.image_delivery:type_name -> fleetgrpc.KubeImageDelivery
-	23, // 22: fleetgrpc.KubeCapabilities.credentials_expire_at:type_name -> google.protobuf.Timestamp
-	19, // 23: fleetgrpc.KubeCapabilities.orphans:type_name -> fleetgrpc.KubeOrphans
-	10, // 24: fleetgrpc.KubeStorageClass.multi_node_test:type_name -> fleetgrpc.KubeCheck
+	14, // 12: fleetgrpc.KubeClusterStatus.capabilities:type_name -> fleetgrpc.KubeCapabilities
+	11, // 13: fleetgrpc.KubeClusterStatus.checks:type_name -> fleetgrpc.KubeCheck
+	47, // 14: fleetgrpc.KubeClusterStatus.checked_at:type_name -> google.protobuf.Timestamp
+	47, // 15: fleetgrpc.KubeClusterStatus.deep_checked_at:type_name -> google.protobuf.Timestamp
+	12, // 16: fleetgrpc.KubeClusters.clusters:type_name -> fleetgrpc.KubeClusterStatus
+	15, // 17: fleetgrpc.KubeCapabilities.admission:type_name -> fleetgrpc.KubeAdmission
+	16, // 18: fleetgrpc.KubeCapabilities.storage_classes:type_name -> fleetgrpc.KubeStorageClass
+	17, // 19: fleetgrpc.KubeCapabilities.nodes:type_name -> fleetgrpc.KubeNode
+	18, // 20: fleetgrpc.KubeCapabilities.quota:type_name -> fleetgrpc.KubeQuotaHeadroom
+	19, // 21: fleetgrpc.KubeCapabilities.image_delivery:type_name -> fleetgrpc.KubeImageDelivery
+	47, // 22: fleetgrpc.KubeCapabilities.credentials_expire_at:type_name -> google.protobuf.Timestamp
+	20, // 23: fleetgrpc.KubeCapabilities.orphans:type_name -> fleetgrpc.KubeOrphans
+	11, // 24: fleetgrpc.KubeStorageClass.multi_node_test:type_name -> fleetgrpc.KubeCheck
 	2,  // 25: fleetgrpc.KubeInstanceRuntime.agent:type_name -> fleetgrpc.KubeAgentState
-	23, // 26: fleetgrpc.KubeInstanceRuntime.restarted_at:type_name -> google.protobuf.Timestamp
+	47, // 26: fleetgrpc.KubeInstanceRuntime.restarted_at:type_name -> google.protobuf.Timestamp
 	3,  // 27: fleetgrpc.ShareSyncStatus.state:type_name -> fleetgrpc.ShareSyncState
-	23, // 28: fleetgrpc.ShareSyncStatus.last_synced_at:type_name -> google.protobuf.Timestamp
-	29, // [29:29] is the sub-list for method output_type
-	29, // [29:29] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	47, // 28: fleetgrpc.ShareSyncStatus.last_synced_at:type_name -> google.protobuf.Timestamp
+	23, // 29: fleetgrpc.ListKubeContextsReply.contexts:type_name -> fleetgrpc.KubeContext
+	12, // 30: fleetgrpc.ListKubeClustersReply.clusters:type_name -> fleetgrpc.KubeClusterStatus
+	5,  // 31: fleetgrpc.AddKubeClusterRequest.cluster:type_name -> fleetgrpc.KubeCluster
+	12, // 32: fleetgrpc.AddKubeClusterReply.cluster:type_name -> fleetgrpc.KubeClusterStatus
+	5,  // 33: fleetgrpc.UpdateKubeClusterRequest.cluster:type_name -> fleetgrpc.KubeCluster
+	48, // 34: fleetgrpc.UpdateKubeClusterRequest.update_mask:type_name -> google.protobuf.FieldMask
+	12, // 35: fleetgrpc.UpdateKubeClusterReply.cluster:type_name -> fleetgrpc.KubeClusterStatus
+	49, // 36: fleetgrpc.KubeClusterUser.status:type_name -> fleetgrpc.InstanceStatus
+	4,  // 37: fleetgrpc.RemoveKubeClusterRequest.mode:type_name -> fleetgrpc.KubeRemoveMode
+	32, // 38: fleetgrpc.RemoveKubeClusterReply.users:type_name -> fleetgrpc.KubeClusterUser
+	5,  // 39: fleetgrpc.TestKubeClusterRequest.cluster:type_name -> fleetgrpc.KubeCluster
+	11, // 40: fleetgrpc.TestKubeClusterEvent.check:type_name -> fleetgrpc.KubeCheck
+	12, // 41: fleetgrpc.TestKubeClusterEvent.result:type_name -> fleetgrpc.KubeClusterStatus
+	47, // 42: fleetgrpc.KubePruneObject.created_at:type_name -> google.protobuf.Timestamp
+	38, // 43: fleetgrpc.PruneKubeClusterReply.objects:type_name -> fleetgrpc.KubePruneObject
+	41, // 44: fleetgrpc.LoginKubeClusterEvent.device_code:type_name -> fleetgrpc.KubeDeviceCode
+	12, // 45: fleetgrpc.LoginKubeClusterEvent.result:type_name -> fleetgrpc.KubeClusterStatus
+	5,  // 46: fleetgrpc.CreateKubeNamespaceRequest.cluster:type_name -> fleetgrpc.KubeCluster
+	46, // 47: fleetgrpc.CreateKubeNamespaceRequest.labels:type_name -> fleetgrpc.CreateKubeNamespaceRequest.LabelsEntry
+	48, // [48:48] is the sub-list for method output_type
+	48, // [48:48] is the sub-list for method input_type
+	48, // [48:48] is the sub-list for extension type_name
+	48, // [48:48] is the sub-list for extension extendee
+	0,  // [0:48] is the sub-list for field type_name
 }
 
 func init() { file_kube_proto_init() }
@@ -2784,16 +4426,25 @@ func file_kube_proto_init() {
 	if File_kube_proto != nil {
 		return
 	}
+	file_domain_proto_init()
 	file_kube_proto_msgTypes[0].OneofWrappers = []any{}
 	file_kube_proto_msgTypes[2].OneofWrappers = []any{}
 	file_kube_proto_msgTypes[5].OneofWrappers = []any{}
+	file_kube_proto_msgTypes[31].OneofWrappers = []any{
+		(*TestKubeClusterEvent_Check)(nil),
+		(*TestKubeClusterEvent_Result)(nil),
+	}
+	file_kube_proto_msgTypes[37].OneofWrappers = []any{
+		(*LoginKubeClusterEvent_DeviceCode)(nil),
+		(*LoginKubeClusterEvent_Result)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kube_proto_rawDesc), len(file_kube_proto_rawDesc)),
-			NumEnums:      4,
-			NumMessages:   19,
+			NumEnums:      5,
+			NumMessages:   42,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
