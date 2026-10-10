@@ -562,3 +562,48 @@ func TestPlanWithoutAProberRunsNoProbe(t *testing.T) {
 		t.Fatalf("env = %v", env)
 	}
 }
+
+// TestResolve: the identity a file operation runs as is the one Plan gives the
+// same class and user, with the runtime's groups, and this process's own in
+// single-uid mode.
+func TestResolve(t *testing.T) {
+	m := newMatrixHost(t)
+	cases := []struct {
+		class  Class
+		user   string
+		uid    uint32
+		groups []uint32
+		code   int
+	}{
+		{ClassExec, "", 1000, []uint32{1000, 27, 998, 4000}, 0},
+		{ClassScript, "", 1000, []uint32{1000, 27, 998, 4000}, 0},
+		{ClassExplicit, "", 1001, []uint32{1001, 998, 4000}, 0},
+		{ClassRoot, "", 0, []uint32{0, 4000}, 0},
+		{ClassScript, "svc", 2000, []uint32{2000, 3000, 4000}, 0},
+		{ClassScript, "nobody-here", 0, nil, ExitCannotRun},
+		{ClassRoot, "vscode", 0, nil, ExitFailed},
+		{"nope", "", 0, nil, ExitFailed},
+	}
+	for _, tc := range cases {
+		id, err := m.host.Resolve(tc.class, tc.user)
+		if code := ExitCode(err); code != tc.code {
+			t.Errorf("Resolve(%s, %q): %v, want exit code %d", tc.class, tc.user, err, tc.code)
+			continue
+		}
+		if tc.code != 0 {
+			continue
+		}
+		if id.UID != tc.uid || !slices.Equal(id.Groups, tc.groups) {
+			t.Errorf("Resolve(%s, %q) = uid %d groups %v, want %d %v", tc.class, tc.user, id.UID, id.Groups, tc.uid, tc.groups)
+		}
+		plan, err := m.host.Plan(context.Background(), Request{Class: tc.class, User: tc.user, Argv: []string{"tool"}})
+		if err != nil || !reflect.DeepEqual(plan.Identity, id) {
+			t.Errorf("Resolve(%s, %q) is not Plan's identity %+v (%v)", tc.class, tc.user, plan, err)
+		}
+	}
+	m.host.SingleUID = true
+	m.host.Self = Creds{UID: 1000650000, GID: 0, Groups: []uint32{0}}
+	if id, err := m.host.Resolve(ClassRoot, ""); err != nil || id.UID != 1000650000 || id.Name != "fleetpod" {
+		t.Fatalf("single-uid: %+v %v", id, err)
+	}
+}
