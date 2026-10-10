@@ -513,14 +513,13 @@ func (r *kubeRecovery) startUndo(fleetName, instanceName string, j kubernetes.Jo
 func (r *kubeRecovery) undo(ctx context.Context, plog *provisioningLog, fleetName, instanceName string, j kubernetes.Journal) error {
 	key := fleetName + "/" + instanceName
 	progress := func(step string) { plog.Step(fleet.StepRollback, step) }
-	if _, ok := r.svc.kube.record(j.Cluster); !ok {
-		msg := fmt.Sprintf("%s: %s during rebuild, and its connection %s is gone", codeInterrupted, interruptedByRestart, j.Cluster)
-		r.finishUndo(fleetName, instanceName, j, fleet.StatusFailed, msg, true)
-		return errors.New(msg)
-	}
 	var lastErr error
 	for attempt := 1; ; attempt++ {
-		if err := r.awaitUsable(ctx, j.Cluster, progress); err != nil {
+		if err := r.awaitUsable(ctx, j.Cluster, progress); errors.Is(err, errConnectionGone) {
+			msg := fmt.Sprintf("%s: %s during rebuild, and its connection %s is gone", codeInterrupted, interruptedByRestart, j.Cluster)
+			r.finishUndo(fleetName, instanceName, j, fleet.StatusFailed, msg, true)
+			return errors.New(msg)
+		} else if err != nil {
 			return err
 		}
 		res, err := r.pool().UndoRebuild(ctx, j, progress)
@@ -562,14 +561,21 @@ func (r *kubeRecovery) undo(ctx context.Context, plog *provisioningLog, fleetNam
 	return errors.New(msg)
 }
 
+// errConnectionGone is an undo whose connection was removed.
+var errConnectionGone = errors.New("the connection is gone")
+
 // awaitUsable waits for the connection's next usable judgement with the
-// Lease held (now, if it has one).
+// Lease held (now, if it has one); errConnectionGone once the connection is
+// removed.
 func (r *kubeRecovery) awaitUsable(ctx context.Context, clusterID string, progress func(string)) error {
 	said := false
 	for {
 		r.mu.Lock()
 		edge := r.edge
 		r.mu.Unlock()
+		if _, ok := r.svc.kube.record(clusterID); !ok {
+			return errConnectionGone
+		}
 		if r.usable(clusterID) {
 			return nil
 		}

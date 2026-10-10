@@ -594,3 +594,23 @@ func TestDestroyTombstonesTheKey(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// An undo whose connection is removed while it waits fails saying so.
+func TestUndoWhoseConnectionGoes(t *testing.T) {
+	r := newRecoveryFixture(t)
+	r.record("rb", "dddddddd", fleet.StatusRebuilding, "")
+	r.journal("rb", "dddddddd", kubernetes.OpRebuild, "seed", nil)
+	r.svc.failInterruptedJobs()
+	r.startRecovery()
+	time.Sleep(50 * time.Millisecond)
+	if err := state.UpdateKubeClusters(func(k *state.KubeClusters) error {
+		k.Remove(r.id)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inst := r.awaitStatus("rb", fleet.StatusFailed)
+	if !strings.Contains(inst.Error, "its connection "+r.id+" is gone") || r.pool.undoCount() != 0 || journalExists("dddddddd") {
+		t.Fatalf("after the connection went: %+v, %d undos", inst, r.pool.undoCount())
+	}
+}
