@@ -340,6 +340,11 @@ func (lb *liveBackend) lifecycle(t *testing.T, lv *live, name string, write func
 		// /workspaces is root's, as the workspace mount's parent is on
 		// docker.
 		sh("sudo sh -c 'echo persisted > /usr/local/bin/fleet-live-marker && mkdir /workspaces/sibling && chown " + user + ": /workspaces/sibling' && echo sib > /workspaces/sibling/file")
+		if os.Getenv("FLEET_KUBE_TEST_NO_APT") == "" {
+			// A package apt installs (its binary in /usr/bin) is the
+			// persisted root's too.
+			sh("sudo sh -c 'apt-get update -qq >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends tree >/dev/null' && tree --version")
+		}
 	} else {
 		sh("echo persisted > ~/fleet-live-marker")
 	}
@@ -360,6 +365,11 @@ func (lb *liveBackend) lifecycle(t *testing.T, lv *live, name string, write func
 	if user != "" {
 		if got := sh("cat /usr/local/bin/fleet-live-marker /workspaces/sibling/file"); got != "persisted\nsib" {
 			t.Errorf("after stop and start: %q", got)
+		}
+		if os.Getenv("FLEET_KUBE_TEST_NO_APT") == "" {
+			if got := sh("command -v tree && dpkg-query -W -f '${Status}' tree"); got != "/usr/bin/tree\ninstall ok installed" {
+				t.Errorf("the apt-installed package after stop and start: %q", got)
+			}
 		}
 	} else if got := sh("cat ~/fleet-live-marker"); got != "persisted" {
 		t.Errorf("after stop and start: %q", got)

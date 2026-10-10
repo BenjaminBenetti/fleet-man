@@ -449,54 +449,45 @@ func TestPollsWithoutASession(t *testing.T) {
 }
 
 // A Job's pod gets the workspace only when it is the pod fleetd rendered,
-// running the image fleetd delivered.
+// running the image fleetd delivered; a node-loaded image's id is learned
+// from it, whichever of the image's tags the kubelet names.
 func TestCheckJobPod(t *testing.T) {
 	want := corev1.PodSpec{Containers: []corev1.Container{{Name: podspec.JobContainer, Image: "img", Command: []string{"sh"}}}}
 	digest := "sha256:" + strings.Repeat("d", 64)
+	nodeID := "sha256:" + strings.Repeat("e", 64)
 	pod := func(spec corev1.PodSpec, image, imageID string) *corev1.Pod {
 		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "ns"}, Spec: spec,
 			Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: podspec.JobContainer, Image: image, ImageID: imageID}}}}
 	}
 	changed := *want.DeepCopy()
 	changed.Containers[0].Command = []string{"sh", "-c", "steal"}
+	registry := &kubeimage.Delivery{Strategy: kubeimage.StrategyRegistry, Ref: "repo@" + digest, Digest: digest}
+	nodeLoad := &kubeimage.Delivery{Strategy: kubeimage.StrategyNodeLoad, Ref: "fleet.invalid/x/devcontainer:abc"}
 	var tampered *TamperedError
 	for name, tc := range map[string]struct {
-		pod *corev1.Pod
-		ok  bool
+		pod     *corev1.Pod
+		del     *kubeimage.Delivery
+		ok      bool
+		learned string
 	}{
-		"rendered, delivered digest": {pod(want, "repo@"+digest, "repo@"+digest), true},
-		"not started yet":            {pod(want, "", ""), true},
-		"node-loaded, its own name":  {pod(want, "fleet.invalid/x/devcontainer:abc", "sha256:"+strings.Repeat("e", 64)), true},
-		"another spec":               {pod(changed, "repo@"+digest, "repo@"+digest), false},
-		"another image":              {pod(want, "evil", "sha256:"+strings.Repeat("f", 64)), false},
+		"rendered, delivered digest":    {pod(want, "repo@"+digest, "repo@"+digest), registry, true, ""},
+		"not started yet":               {pod(want, "", ""), registry, true, ""},
+		"node-loaded, its own name":     {pod(want, nodeLoad.Ref, "docker://"+nodeID), nodeLoad, true, nodeID},
+		"node-loaded, another tag":      {pod(want, "fleet.invalid/y/devcontainer:def", nodeID), nodeLoad, true, nodeID},
+		"another spec":                  {pod(changed, "repo@"+digest, "repo@"+digest), registry, false, ""},
+		"another spec, node-loaded":     {pod(changed, nodeLoad.Ref, nodeID), nodeLoad, false, ""},
+		"another image from a registry": {pod(want, "evil", "sha256:"+strings.Repeat("f", 64)), registry, false, ""},
 	} {
-		err := checkJobPod(tc.pod, &want, "fleet.invalid/x/devcontainer:abc", []string{digest})
-		if tc.ok != (err == nil) || (err != nil && !errors.As(err, &tampered)) {
-			t.Errorf("%s: %v", name, err)
-		}
-	}
-}
-
-func TestSameImage(t *testing.T) {
-	for _, tc := range []struct {
-		status, ref string
-		want        bool
-	}{
-		{"fleet.invalid/x/devcontainer:abc", "fleet.invalid/x/devcontainer:abc", true},
-		{"docker.io/library/alpine:3", "alpine:3", true},
-		{"docker.io/me/app:1", "me/app:1", true},
-		{"alpine:3", "alpine:4", false},
-		{"", "alpine:3", false},
-		{"alpine:3", "", false},
-	} {
-		if got := sameImage(tc.status, tc.ref); got != tc.want {
-			t.Errorf("sameImage(%q, %q) = %v", tc.status, tc.ref, got)
+		learned, err := checkJobPod(tc.pod, &want, tc.del, []string{digest})
+		if tc.ok != (err == nil) || (err != nil && !errors.As(err, &tampered)) || learned != tc.learned {
+			t.Errorf("%s: learned %q, %v", name, learned, err)
 		}
 	}
 }
 
 // The id a node gives a node-loaded image is learned from the instance's
-// first pod; any other image the pod runs is refused.
+// first pod when the seed's pod did not show it; any other image the pod
+// runs is refused.
 func TestLearnNodeImage(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	digest := "sha256:" + strings.Repeat("c", 64)
@@ -506,7 +497,8 @@ func TestLearnNodeImage(t *testing.T) {
 	c := &creation{}
 	nodeLoad := &kubeimage.Delivery{Strategy: kubeimage.StrategyNodeLoad, Ref: "fleet.invalid/d/devcontainer:abc"}
 	rec := InstanceRecord{Cluster: handleCluster, Key: handleKey, StatefulSet: handleSTS(), Gen: 1, ImageDigests: []string{"sha256:" + strings.Repeat("1", 64)}}
-	if err := c.learnNodeImage(running(nodeLoad.Ref, digest), &rec, nodeLoad); err != nil {
+	// The kubelet may name the image by another of its tags.
+	if err := c.learnNodeImage(running("fleet.invalid/other/devcontainer:def", digest), &rec, nodeLoad); err != nil {
 		t.Fatal(err)
 	}
 	if len(rec.ImageDigests) != 2 || rec.ImageDigests[1] != digest {
@@ -515,9 +507,14 @@ func TestLearnNodeImage(t *testing.T) {
 	if saved, err := LoadInstanceRecord(handleCluster, handleKey); err != nil || len(saved.ImageDigests) != 2 {
 		t.Fatalf("saved %+v, %v", saved, err)
 	}
+	if err := c.learnNodeImage(running(nodeLoad.Ref, digest), &rec, nodeLoad); err != nil {
+		t.Errorf("the learned id: %v", err)
+	}
+	// Once the seed's pod showed the node's id, the instance's pod runs it.
+	seeded := &creation{nodeImage: digest}
 	var tampered *TamperedError
-	if err := c.learnNodeImage(running("evil:1", "sha256:"+strings.Repeat("e", 64)), &rec, nodeLoad); !errors.As(err, &tampered) {
-		t.Errorf("another image on a node-loaded instance: %v", err)
+	if err := seeded.learnNodeImage(running(nodeLoad.Ref, "sha256:"+strings.Repeat("e", 64)), &rec, nodeLoad); !errors.As(err, &tampered) {
+		t.Errorf("another image than the seed's on a node-loaded instance: %v", err)
 	}
 	registry := &kubeimage.Delivery{Strategy: kubeimage.StrategyRegistry, Ref: "reg/fleet/x@" + digest, Digest: digest}
 	rec2 := InstanceRecord{Cluster: handleCluster, Key: handleKey, StatefulSet: handleSTS(), Gen: 1, ImageDigests: []string{digest}}

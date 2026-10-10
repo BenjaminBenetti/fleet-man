@@ -120,6 +120,9 @@ type creation struct {
 	// started: the StatefulSet was applied, so a failure scales it down.
 	started  bool
 	warnings []string
+	// nodeImage is the id the node gave a node-loaded image, learned from
+	// the seed Job's pod (the first to run it).
+	nodeImage string
 }
 
 func (c *creation) run(ctx context.Context) (*backend.UpResult, error) {
@@ -236,6 +239,7 @@ func (c *creation) provision(ctx context.Context, cfg *devcli.Config) (*backend.
 	}
 	rec.addImageDigest(del.Digest)
 	rec.addImageDigest(del.ImageID)
+	rec.addImageDigest(c.nodeImage)
 	c.started = true
 	uid, err := c.applyUID(ctx, KindStatefulSet, o.StatefulSet.Name, false, o.StatefulSet)
 	if err != nil {
@@ -553,7 +557,13 @@ func (c *creation) seed(ctx context.Context, adm *podspec.Admitted, capture *dev
 		Progress: func(pr jobboot.Progress) {
 			backend.ReportStep(ctx, fleet.StepSeed, seedProgress(pr))
 		},
-		Check: func(pod *corev1.Pod) error { return checkJobPod(pod, &want, del.Ref, digests) },
+		Check: func(pod *corev1.Pod) error {
+			id, err := checkJobPod(pod, &want, del, digests)
+			if id != "" {
+				c.nodeImage = id
+			}
+			return err
+		},
 	})
 	if err != nil {
 		return nil, classify(err)
@@ -586,44 +596,41 @@ func seedProgress(p jobboot.Progress) string {
 
 // checkJobPod verifies a Job's pod before it gets anything (the workspace,
 // which may hold secrets): its spec is the one fleetd rendered (want) and its
-// container runs the image fleetd delivered: one of digests, or, for a
-// node-loaded image (which no digest names before a node gives it one), the
-// image reference fleetd loaded.
-func checkJobPod(pod *corev1.Pod, want *corev1.PodSpec, ref string, digests []string) error {
+// container runs the image fleetd delivered, one of digests. A node-loaded
+// image has no digest before a node gives it an id: its pod runs whatever
+// image the node holds under the tag only fleet daemons load (the spec, which
+// names that tag with pull policy Never, is fleet's), and checkJobPod returns
+// that id to be learned. The status's image name is not compared: a kubelet
+// names a running image by any of its tags, and an image whose config another
+// load gave the node too (a rebuild, another daemon's load) has several.
+func checkJobPod(pod *corev1.Pod, want *corev1.PodSpec, del *kubeimage.Delivery, digests []string) (string, error) {
 	var reasons []string
 	if podspec.SpecHash(&pod.Spec) != podspec.SpecHash(want) {
 		reasons = append(reasons, "its spec differs from fleet's render")
 	}
-	if st := containerStatus(pod, podspec.JobContainer); st != nil && st.ImageID != "" && !digestIn(st.ImageID, digests) && !sameImage(st.Image, ref) {
-		reasons = append(reasons, fmt.Sprintf("its %s container runs %s, not the image fleet delivered", podspec.JobContainer, st.ImageID))
+	learned := ""
+	if st := containerStatus(pod, podspec.JobContainer); st != nil && st.ImageID != "" && !digestIn(st.ImageID, digests) {
+		if del.Strategy == kubeimage.StrategyNodeLoad {
+			learned = imageDigest(st.ImageID)
+		} else {
+			reasons = append(reasons, fmt.Sprintf("its %s container runs %s, not the image fleet delivered", podspec.JobContainer, st.ImageID))
+		}
 	}
 	if len(reasons) > 0 {
-		return &TamperedError{Namespace: pod.Namespace, Pod: pod.Name, Reasons: reasons}
+		return "", &TamperedError{Namespace: pod.Namespace, Pod: pod.Name, Reasons: reasons}
 	}
-	return nil
+	return learned, nil
 }
 
-// sameImage reports whether a container status's image is the reference a
-// pod spec named (the kubelet normalizes docker.io references).
-func sameImage(status, ref string) bool {
-	if status == "" || ref == "" {
-		return false
-	}
-	if status == ref {
-		return true
-	}
-	return strings.TrimPrefix(strings.TrimPrefix(status, "docker.io/"), "library/") == strings.TrimPrefix(strings.TrimPrefix(ref, "docker.io/"), "library/")
-}
-
-// learnNodeImage adds to the record the id the node gave a node-loaded
-// image, which no digest fleetd knows names: the instance's first pod, which
-// fleetd itself just started from the reference only fleetd loads, says it.
+// learnNodeImage checks the instance's first pod's image: one the record
+// holds, or, for a node-loaded image whose id the seed's pod did not show,
+// the id the node gave it, learned (as checkJobPod's).
 func (c *creation) learnNodeImage(pod *corev1.Pod, rec *InstanceRecord, del *kubeimage.Delivery) error {
 	st := containerStatus(pod, DevContainer)
 	if st == nil || st.ImageID == "" || digestIn(st.ImageID, rec.ImageDigests) {
 		return nil
 	}
-	if del.Strategy != kubeimage.StrategyNodeLoad || !sameImage(st.Image, del.Ref) {
+	if del.Strategy != kubeimage.StrategyNodeLoad || c.nodeImage != "" {
 		return &TamperedError{Namespace: pod.Namespace, Pod: pod.Name, Reasons: []string{fmt.Sprintf("its %s container runs %s, not the image fleet delivered", DevContainer, st.ImageID)}}
 	}
 	rec.addImageDigest(imageDigest(st.ImageID))
