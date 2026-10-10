@@ -30,7 +30,7 @@ func TestWorkspaceReaderForPrefersTheBackendsOwnReader(t *testing.T) {
 		t.Fatal("a backend implementing WorkspaceReader must be used as its own reader")
 	}
 	for _, bt := range []fleet.BackendType{fleet.BackendDevcontainer, fleet.BackendCodespaces, fleet.BackendCoder} {
-		if _, ok := WorkspaceReaderFor(New(bt, false)).(HostWorkspaceReader); !ok {
+		if _, ok := WorkspaceReaderFor(NewForInstance(&fleet.Instance{Backend: bt}, false)).(HostWorkspaceReader); !ok {
 			t.Fatalf("%s: want the host reader (the checkout lives on the daemon host)", bt)
 		}
 	}

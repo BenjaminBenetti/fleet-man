@@ -409,7 +409,7 @@ func TestBrowserCustomizationsReadThroughTheWorkspaceReader(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(host, ".devcontainer.json"), []byte(`{"customizations":{"fleet":{"browser":{"initialUrl":"http://host"}}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fc, err = loadWorkspaceCustomizations(ctx, backendutil.New(fleet.BackendDevcontainer, false), host)
+	fc, err = loadWorkspaceCustomizations(ctx, backendutil.NewForInstance(&fleet.Instance{Backend: fleet.BackendDevcontainer}, false), host)
 	if err != nil || fc.Browser.InitialURL != "http://host" {
 		t.Fatalf("devcontainer: got %q, %v; want the host checkout's file", fc.Browser.InitialURL, err)
 	}
