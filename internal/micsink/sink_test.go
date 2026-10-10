@@ -32,6 +32,10 @@ state="` + fake.state + `"
 echo "$*" >> "$state/calls"
 case "$*" in
   info) exit 0 ;;
+  "list short sinks")
+    [ -e "$state/output" ] && printf '2\tfleetoutput\tmodule-null-sink.c\n' ;;
+  "set-default-source fleetnull.monitor")
+    [ -e "$state/fail-default-source" ] && exit 1 ;;
   "list short sources")
     [ -e "$state/fail-sources" ] && exit 1
     printf '0\tfleetnull.monitor\tmodule-null-sink.c\n1\t` + SourceName + `\tmodule-pipe-source.c\n' ;;
@@ -85,6 +89,21 @@ func (f *fakePulse) event() {
 }
 
 func (f *fakePulse) heard() []byte { return readAvailable(f.t, f.fifo) }
+
+func TestStopPreservesRoutingWhenFallbackFails(t *testing.T) {
+	pulse := newFakePulse(t)
+	for _, flag := range []string{"output", "fail-default-source"} {
+		if err := os.WriteFile(filepath.Join(pulse.state, flag), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Stop(); err == nil {
+		t.Fatal("Stop did not report the fallback failure")
+	}
+	if calls := pulse.calls(); strings.Contains(calls, "unload-module module-pipe-source\n") {
+		t.Fatalf("failed fallback must not unload the mic and un-pin live output recorders:\n%s", calls)
+	}
+}
 
 // runningSink is a Run in flight: its protocol lines, and a pipe to its stdin.
 type runningSink struct {

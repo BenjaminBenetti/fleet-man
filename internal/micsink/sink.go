@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -42,10 +44,22 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 		fmt.Fprintf(stdout, format+"\n", args...)
 	}
 
-	if err := Ensure(); err != nil {
+	var feed *os.File
+	if err := withAudioLock(func() error {
+		var err error
+		feed, err = lockMicFeed(syscall.LOCK_SH)
+		if err != nil {
+			return err
+		}
+		return ensureAudio(true)
+	}); err != nil {
+		if feed != nil {
+			feed.Close()
+		}
 		emit(EventError+" %s", oneLine(err.Error()))
 		return err
 	}
+	defer feed.Close()
 	pipe, err := openFIFO(path("pcm"))
 	if err != nil {
 		emit(EventError+" open fifo: %s", oneLine(err.Error()))
