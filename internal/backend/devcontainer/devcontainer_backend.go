@@ -750,7 +750,7 @@ func (devcontainerBackend *DevcontainerBackend) MicSinkCommand(containerID strin
 	if user := devcontainerBackend.containerUser(containerID); user != "" {
 		args = append(args, "-u", user)
 	}
-	args = append(args, containerID, fleetlaunch.RemotePath, "mic", "sink")
+	args = append(append(args, containerID), fleetlaunch.MicSinkArgv()...)
 	return exec.Command("docker", args...), true
 }
 
@@ -759,7 +759,7 @@ func (devcontainerBackend *DevcontainerBackend) OutputSourceCommand(containerID 
 	if user := devcontainerBackend.containerUser(containerID); user != "" {
 		args = append(args, "-u", user)
 	}
-	args = append(args, containerID, fleetlaunch.RemotePath, "output", "source")
+	args = append(append(args, containerID), fleetlaunch.OutputSourceArgv()...)
 	return exec.Command("docker", args...), true
 }
 
