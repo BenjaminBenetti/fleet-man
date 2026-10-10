@@ -32,6 +32,8 @@ message ExecIn {
     ExecStart start = 1;
     bytes stdin = 2;
     ExecResize resize = 3;
+    // pod_start is the first frame of a PodExec stream (in place of start).
+    PodExecStart pod_start = 4;
   }
 }
 
@@ -41,6 +43,38 @@ message ExecStart {
   repeated string argv = 3;
   bool tty = 4;
   map<string, string> env = 5;
+}
+
+// PodExecStart starts a PodExec stream: one command in a Kubernetes
+// instance's pod, named the way the daemon-host `fleet kube-exec` shim's argv
+// names it. The daemon runs it only in a pod of one of its own instances,
+// verified, through the pod's agent; the stream then carries stdin, resizes
+// and the command's output and exit exactly as an Exec stream does.
+message PodExecStart {
+  // cluster_id is the connection (KubeCluster.id), namespace its namespace
+  // (empty: the connection's), pod the instance's pod and container its dev
+  // container (empty: the dev container).
+  string cluster_id = 1;
+  string namespace = 2;
+  string pod = 3;
+  string container = 4;
+  // class is whom the command runs as: exec (as ExecCommand: the remote
+  // user with the devcontainer's environment, in the workspace folder),
+  // script (the session user, as `docker exec -u`), root, or explicit
+  // (user and cwd as given, as the docker shim's `docker exec -u -w`).
+  // Empty is exec.
+  string class = 5;
+  string user = 6;
+  string cwd = 7;
+  repeated string argv = 8;
+  map<string, string> env = 9;
+  bool tty = 10;
+  uint32 rows = 11;
+  uint32 cols = 12;
+  // bulk runs the command on the pod's bulk session (a folder's tar in or
+  // out), so a large transfer does not hold up the latency-sensitive traffic
+  // of the agent's main session. It is never set with tty.
+  bool bulk = 13;
 }
 
 message ExecResize {

@@ -25,10 +25,20 @@ message IssueKubeExecCredentialRequest {
   // refresh discards fleetd's cached credential and mints a new one: the API
   // server refused the last one.
   bool refresh = 2;
+  // pod, when set, is the instance pod the shim is about to attach to (in
+  // the connection's namespace): fleetd verifies it as it verifies a pod
+  // before its own agent session (its image, its spec, its controller) and
+  // refuses the credential for a pod that is not one of its instances' or
+  // does not verify.
+  string pod = 3;
 }
 
 message IssueKubeExecCredentialReply {
   KubeExecCredential credential = 1;
+  // pod_uid is the verified pod's uid when the request named a pod: the
+  // shim binds its attach to it, so a re-dial never reaches a pod that
+  // replaced it unverified.
+  string pod_uid = 2;
 }
 
 // KubeExecCredential is the complete transport fleetd reaches a connection's
