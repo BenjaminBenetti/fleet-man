@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -54,6 +55,28 @@ func (c *Connection) Login(ctx context.Context, onCode func(DeviceCode)) (Creden
 		defer cancel()
 	}
 	return c.Plugin.login(ctx, onCode)
+}
+
+// LoginCommand is the connection's credential plugin set up to log in in
+// the caller's own terminal: the TUI's "Run login here", offered only over
+// the local socket, where the caller's machine is the daemon host. The
+// ExecCredential request is marked interactive and the environment is the one
+// fleetd gives the plugin (built from the caller's), so a sign-in it completes
+// lands in the same token caches fleetd's own runs read. Stdin and stderr are
+// left unset for the caller to connect to the terminal; stdout carries the
+// credential, so it goes nowhere and is never shown.
+func (c *Connection) LoginCommand() (*exec.Cmd, error) {
+	if c.Auth != AuthExecPlugin || c.Plugin == nil {
+		return nil, ErrNoLoginPlugin
+	}
+	info, err := c.Plugin.loginExecInfo()
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(c.Plugin.Path, c.Plugin.Args...)
+	cmd.Env = c.Plugin.environ(info)
+	cmd.Stdout = io.Discard
+	return cmd, nil
 }
 
 func (p *Plugin) login(ctx context.Context, onCode func(DeviceCode)) (Credential, error) {

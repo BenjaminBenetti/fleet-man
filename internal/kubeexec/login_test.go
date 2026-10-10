@@ -5,6 +5,7 @@ package kubeexec
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,6 +50,66 @@ printf '%s' '{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredent
 	}
 	if !strings.Contains(string(data), `"interactive":true`) {
 		t.Errorf("the login request is not interactive: %s", data)
+	}
+}
+
+// LoginCommand runs the plugin as a login in the caller's terminal: the
+// request is interactive, stdin and stderr are the caller's to connect, and
+// the credential on stdout goes nowhere. A connection without a plugin has
+// none to run.
+func TestLoginCommand(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, filepath.Join(dir, "config"), kubeconfig{server: "https://x.example", user: execUser}.yaml(), 0o600)
+	info := filepath.Join(dir, "exec-info")
+	writeFile(t, filepath.Join(dir, "fake-plugin"), `#!/bin/sh
+printf '%s' "$KUBERNETES_EXEC_INFO" > `+info+`
+read answer
+echo "signed in as $answer" >&2
+printf '%s' '{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredential","status":{"token":"tok-SECRET-123"}}'
+`, 0o755)
+	conn, err := Load(fleet.KubeCluster{Context: "ctx", KubeconfigPaths: []string{path}, ExtraPath: []string{dir}},
+		Options{Environ: []string{"PATH=/usr/bin:/bin", "DAEMON_SECRET=s3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := conn.LoginCommand()
+	if err != nil {
+		t.Fatalf("LoginCommand: %v", err)
+	}
+	if cmd.Stdin != nil || cmd.Stderr != nil {
+		t.Fatal("stdin and stderr must be left for the caller's terminal")
+	}
+	if cmd.Stdout != io.Discard {
+		t.Fatalf("stdout = %v: the credential must go nowhere", cmd.Stdout)
+	}
+	for _, e := range cmd.Env {
+		if e == "DAEMON_SECRET=s3" {
+			t.Fatal("the caller's other variables must reach the plugin blanked, as fleetd's do")
+		}
+	}
+	var stderr strings.Builder
+	cmd.Stdin, cmd.Stderr = strings.NewReader("ben\n"), &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if stderr.String() != "signed in as ben\n" {
+		t.Errorf("stderr = %q: the plugin must talk to the terminal", stderr.String())
+	}
+	data, err := os.ReadFile(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"interactive":true`) {
+		t.Errorf("the login request is not interactive: %s", data)
+	}
+
+	static := writeFile(t, filepath.Join(dir, "static"), kubeconfig{server: "https://x.example", user: "    token: t\n"}.yaml(), 0o600)
+	conn, err = Load(fleet.KubeCluster{Context: "ctx", KubeconfigPaths: []string{static}}, Options{Environ: []string{"PATH=/usr/bin:/bin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.LoginCommand(); !errors.Is(err, ErrNoLoginPlugin) {
+		t.Fatalf("LoginCommand on a token context = %v, want ErrNoLoginPlugin", err)
 	}
 }
 
