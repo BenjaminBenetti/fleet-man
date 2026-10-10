@@ -57,6 +57,11 @@ linters:
             # where none of the server's internals exist: held to the boundary
             # like micsink.
             - "**/internal/execas/**"
+            # The pod agent and its wire protocol run inside pods too (the
+            # protocol is fleetd's side as well, so it may not reach into the
+            # daemon either: fleetd hands it a logger).
+            - "**/internal/podagent/**"
+            - "**/internal/podwire/**"
             # The SSH-agent provider runs where the human's ssh-agent is (TUI,
             # CLI), possibly far from the daemon: client code, like internal/mic.
             - "**/internal/agentfwd/**"
