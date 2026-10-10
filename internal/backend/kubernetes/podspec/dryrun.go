@@ -3,6 +3,7 @@
 package podspec
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -240,8 +241,12 @@ func ApplyBody(obj any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Numbers stay as written: an int64 (a toleration's seconds) is not
+	// a float64.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
 	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
+	if err := dec.Decode(&m); err != nil {
 		return nil, err
 	}
 	delete(m, "status")

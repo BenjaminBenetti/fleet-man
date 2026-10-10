@@ -339,6 +339,11 @@ func (r *renderer) checkSupported() {
 	if r.pod.DooD && !hasMountKind(r.pod.Mounts, MountDockerSocket) {
 		r.refuse(CodeUnsupportedMount, "the run reaches the docker engine, which needs the pod's docker-in-docker sidecar; fleet does not provide it on Kubernetes yet")
 	}
+	if r.in.Identity.NonRoot && r.pod.Security.Privileged {
+		// A pod without root never escalates (allowPrivilegeEscalation
+		// false), which the API server refuses beside privileged.
+		r.refuse(CodePrivileged, "%s runs instances without root, and a pod without root cannot be privileged: the devcontainer asks for --privileged, which needs a namespace whose pod security admits privileged pods", clusterLabel(r.cluster))
+	}
 	if strings.TrimSpace(r.cluster.PodOverridesYAML) != "" {
 		r.refuse(CodeSettings, "%s has pod_overrides_yaml set, which this version of fleet does not apply to pods; clear it to create instances there", clusterLabel(r.cluster))
 	}
@@ -744,9 +749,11 @@ func (r *renderer) containerSecurity(s Security, id Identity) *corev1.SecurityCo
 	}
 	if s.NoNewPrivileges && !id.NonRoot {
 		// Kubernetes refuses allowPrivilegeEscalation=false beside privileged
-		// or CAP_SYS_ADMIN, which already allow escalating.
-		if s.Privileged || containsString(add, "SYS_ADMIN") || containsString(add, "ALL") {
-			r.warn("--security-opt no-new-privileges: a pod that is privileged or has SYS_ADMIN cannot refuse privilege escalation; it is not applied")
+		// (and beside a capability spelled CAP_SYS_ADMIN, which the
+		// translation never writes: SYS_ADMIN beside it is admitted, and
+		// runs with no_new_privs as on docker).
+		if s.Privileged {
+			r.warn("--security-opt no-new-privileges: a privileged pod cannot refuse privilege escalation; it is not applied")
 		} else {
 			sc.AllowPrivilegeEscalation = ptr(false)
 		}

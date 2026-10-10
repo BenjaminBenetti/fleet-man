@@ -172,6 +172,22 @@ func TestLiveAdmission(t *testing.T) {
 	if _, err := admit("fixture", restricted, fleet.KubeCluster{}, nonRoot); err != nil {
 		t.Errorf("non-root under restricted: %v", err)
 	}
+	// A pod without root cannot be privileged: refused by name, before the
+	// API server would call it invalid.
+	_, err = admit("fixture-dind", restricted, fleet.KubeCluster{}, nonRoot)
+	wantCode("privileged without root", err, CodePrivileged, "without root")
+
+	// no-new-privileges beside SYS_ADMIN is admitted, and kept.
+	nnp := baseInput([]string{"--cap-add", "SYS_ADMIN", "--security-opt", "no-new-privileges"}, nil, nil)
+	local(&nnp)
+	nnp.Cluster.ID, nnp.Cluster.Namespace = "minikube", open
+	nnpRender := testRenderInput(nnp)
+	nnpRender.Image = ImageRef{Ref: liveImage, ID: "sha256:" + strings.Repeat("0", 64)}
+	if a, err := Admit(ctx, c.api, nnp, nnpRender); err != nil {
+		t.Errorf("no-new-privileges beside SYS_ADMIN: %v", err)
+	} else if ape := devOf(a.Objects).SecurityContext.AllowPrivilegeEscalation; ape == nil || *ape {
+		t.Errorf("no-new-privileges beside SYS_ADMIN: allowPrivilegeEscalation %s", jsonString(ape))
+	}
 
 	// A quota without room, and a LimitRange maximum under the limit fleet
 	// sets when the LimitRange's default would be lower.

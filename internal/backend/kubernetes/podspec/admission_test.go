@@ -5,6 +5,7 @@ package podspec
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -113,6 +114,12 @@ func TestDenialOf(t *testing.T) {
 		{"invalid", apierrors.NewInvalid(schema.GroupKind{Kind: "Pod"}, "dev-0", nil), DeniedInvalid},
 		{"namespace", apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, "gone"), DeniedNamespace},
 		{"webhook call", apierrors.NewInternalError(errors.New(`failed calling webhook "x": context deadline exceeded`)), DeniedWebhook},
+		// Admission's own decisions, whatever status code they came with: a
+		// policy's reason Invalid answers 422, a webhook picks its own code.
+		{"policy reason Invalid", statusErr(422, metav1.StatusReasonInvalid, refusalMessages[9].msg), DeniedPolicy},
+		{"webhook 422", statusErr(422, "", refusalMessages[7].msg), DeniedWebhook},
+		{"webhook 400", statusErr(400, metav1.StatusReasonBadRequest, refusalMessages[8].msg), DeniedWebhook},
+		{"webhook 500", statusErr(500, metav1.StatusReasonInternalError, refusalMessages[7].msg), DeniedWebhook},
 		{"exists", apierrors.NewAlreadyExists(pods, "dev-0"), ""},
 		{"other not found", apierrors.NewNotFound(pods, "dev-0"), ""},
 		{"internal", apierrors.NewInternalError(errors.New("etcd")), ""},
@@ -126,6 +133,28 @@ func TestDenialOf(t *testing.T) {
 		case tt.kind != "" && (d == nil || d.Kind != tt.kind):
 			t.Errorf("%s: %+v, want %s", tt.name, d, tt.kind)
 		}
+	}
+}
+
+func statusErr(code int32, reason metav1.StatusReason, msg string) error {
+	return &apierrors.StatusError{ErrStatus: metav1.Status{Status: metav1.StatusFailure, Code: code, Reason: reason, Message: msg}}
+}
+
+// A webhook that could not be called refused nothing the debug grants
+// decide; one that answered did.
+func TestDenialPolicy(t *testing.T) {
+	call := ClassifyFailedCreate("Job seed", `Error creating: Internal error occurred: failed calling webhook "policy.example.com": failed to call webhook: context deadline exceeded`)
+	if call == nil || call.Kind != DeniedWebhook || call.Policy() {
+		t.Errorf("webhook call failure %+v: policy %v", call, call != nil && call.Policy())
+	}
+	if d := classifyMessage("Pod dev-0", refusalMessages[7].msg); !d.Policy() {
+		t.Errorf("webhook denial %+v is no policy", d)
+	}
+	// A webhook's message that happens to say "is invalid" is still the
+	// webhook's.
+	msg := `admission webhook "v.example.com" denied the request: spec.containers[0] is invalid: privileged`
+	if d := ClassifyFailedCreate("StatefulSet dev", "create Pod dev-0 in StatefulSet dev failed error: "+msg); d == nil || d.Kind != DeniedWebhook {
+		t.Errorf("FailedCreate %+v", d)
 	}
 }
 
@@ -364,7 +393,10 @@ func containsCap(sc *corev1.SecurityContext, c string) bool {
 }
 
 func TestApplyBody(t *testing.T) {
-	o := mustRender(t, nil, nil)
+	long := int64(1<<62 + 1)
+	o := mustRender(t, nil, func(_ *Input, r *RenderInput) {
+		r.Cluster.Tolerations = []fleet.KubeToleration{{Key: "k", Operator: "Exists", Effect: "NoExecute", TolerationSeconds: &long}}
+	})
 	data, err := ApplyBody(o.StatefulSet)
 	if err != nil {
 		t.Fatal(err)
@@ -375,7 +407,8 @@ func TestApplyBody(t *testing.T) {
 			t.Errorf("the apply body holds %s: %s", gone, body)
 		}
 	}
-	for _, kept := range []string{`"apiVersion":"apps/v1"`, `"kind":"StatefulSet"`, `"name":"` + o.StatefulSet.Name + `"`, `"serviceName"`, `"volumeMounts"`} {
+	for _, kept := range []string{`"apiVersion":"apps/v1"`, `"kind":"StatefulSet"`, `"name":"` + o.StatefulSet.Name + `"`, `"serviceName"`, `"volumeMounts"`,
+		`"tolerationSeconds":` + strconv.FormatInt(long, 10)} {
 		if !strings.Contains(body, kept) {
 			t.Errorf("the apply body lacks %s", kept)
 		}

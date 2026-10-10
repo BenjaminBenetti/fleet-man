@@ -418,6 +418,11 @@ func TestRenderNonRoot(t *testing.T) {
 			t.Errorf("%+v: fsGroup %v", tt.id, jsonString(got))
 		}
 	}
+	// A pod without root cannot be privileged: refused by name, not left
+	// to the API server's "invalid".
+	if _, err := renderOf(t, []string{"--privileged"}, func(_ *Input, r *RenderInput) { r.Identity = id }); err == nil || !strings.HasPrefix(err.Error(), CodePrivileged+": ") {
+		t.Errorf("privileged without root: %v", err)
+	}
 	// A tool Job may run as another identity than the instance.
 	other := Identity{NonRoot: true, UID: ptr(int64(1000))}
 	res, err := Translate(baseInput(nil, nil, nil))
@@ -476,10 +481,16 @@ func TestRenderCapabilities(t *testing.T) {
 	if ape := devOf(o).SecurityContext.AllowPrivilegeEscalation; ape == nil || *ape || len(o.Warnings) > 0 {
 		t.Errorf("no-new-privileges: %v %v", ape, o.Warnings)
 	}
-	for _, args := range [][]string{{"--privileged"}, {"--cap-add", "SYS_ADMIN"}} {
+	o = mustRender(t, []string{"--security-opt", "no-new-privileges", "--privileged"}, nil)
+	if devOf(o).SecurityContext.AllowPrivilegeEscalation != nil || len(o.Warnings) != 1 || !strings.Contains(o.Warnings[0], "no-new-privileges") {
+		t.Errorf("privileged: allowPrivilegeEscalation %v, warnings %v", devOf(o).SecurityContext.AllowPrivilegeEscalation, o.Warnings)
+	}
+	// The API server takes it beside SYS_ADMIN (it refuses only the
+	// CAP_SYS_ADMIN spelling) and ALL, and docker applies it there.
+	for _, args := range [][]string{{"--cap-add", "SYS_ADMIN"}, {"--cap-add", "ALL"}} {
 		o = mustRender(t, append([]string{"--security-opt", "no-new-privileges"}, args...), nil)
-		if devOf(o).SecurityContext.AllowPrivilegeEscalation != nil || len(o.Warnings) != 1 || !strings.Contains(o.Warnings[0], "no-new-privileges") {
-			t.Errorf("%v: allowPrivilegeEscalation %v, warnings %v", args, devOf(o).SecurityContext.AllowPrivilegeEscalation, o.Warnings)
+		if ape := devOf(o).SecurityContext.AllowPrivilegeEscalation; ape == nil || *ape || len(o.Warnings) > 0 {
+			t.Errorf("%v: allowPrivilegeEscalation %v, warnings %v", args, jsonString(ape), o.Warnings)
 		}
 	}
 	// AppArmor, SELinux options (with the share-group's level), seccomp.

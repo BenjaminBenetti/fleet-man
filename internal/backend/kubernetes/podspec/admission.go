@@ -65,7 +65,11 @@ type Denial struct {
 // the rest refuse whatever the grants.
 func (d *Denial) Policy() bool {
 	switch d.Kind {
-	case DeniedPodSecurity, DeniedWebhook, DeniedPolicy, DeniedAdmission:
+	case DeniedWebhook:
+		// A webhook that could not be called decided nothing about the
+		// grants.
+		return !strings.Contains(d.Message, "failed calling webhook")
+	case DeniedPodSecurity, DeniedPolicy, DeniedAdmission:
 		return true
 	}
 	return false
@@ -124,7 +128,9 @@ func (d *Denial) Error() string { return d.Refusal().Error() }
 
 // Decide is Denied for a classified denial: a policy denial follows the
 // connection's debug-capabilities policy for pod (rerender: render without
-// the debug grants), any other is the create's error as it is.
+// the debug grants), any other is the create's error as it is. Like Denied,
+// it cannot tell a denial of the debug grants alone from one of something
+// else as well; Admit, which asks again without them, can.
 func (d *Denial) Decide(cluster *fleet.KubeCluster, pod *PodSpec) (rerender bool, err error) {
 	if !d.Policy() {
 		return false, d.Refusal()
@@ -148,6 +154,10 @@ func DenialOf(object string, err error) *Denial {
 		msg = err.Error()
 	}
 	switch {
+	case admissionRefusal(msg):
+		// Whatever status it chose: a webhook or an admission policy may
+		// answer 400 or 422 (a policy's reason Invalid).
+		return classifyMessage(object, msg)
 	case apierrors.IsInvalid(err):
 		return &Denial{Kind: DeniedInvalid, Object: object, Message: msg}
 	case apierrors.IsNotFound(err):
@@ -180,6 +190,9 @@ func ClassifyFailedCreate(object, message string) *Denial {
 	if strings.Contains(msg, "failed calling webhook") {
 		return &Denial{Kind: DeniedWebhook, Object: object, Message: msg}
 	}
+	if admissionRefusal(msg) {
+		return classifyMessage(object, msg)
+	}
 	if strings.Contains(msg, " is invalid: ") {
 		return &Denial{Kind: DeniedInvalid, Object: object, Message: msg}
 	}
@@ -205,6 +218,14 @@ var (
 	limitRangeRE    = regexp.MustCompile(`(maximum|minimum) [a-z.-]+ usage per (Container|Pod|PersistentVolumeClaim)|limit to request ratio per (Container|Pod)`)
 	forbiddenRE     = regexp.MustCompile(`^.*? is forbidden: `)
 )
+
+// admissionRefusal reports whether msg is an admission decision that names
+// what made it: pod security, a webhook's denial, an admission policy's.
+func admissionRefusal(msg string) bool {
+	return strings.Contains(msg, `violates PodSecurity "`) ||
+		(strings.Contains(msg, `admission webhook "`) && strings.Contains(msg, `denied the request`)) ||
+		(strings.Contains(msg, "ValidatingAdmissionPolicy '") && strings.Contains(msg, "denied request"))
+}
 
 // classifyMessage classifies a refusal by its message.
 func classifyMessage(object, msg string) *Denial {
