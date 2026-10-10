@@ -41,8 +41,9 @@ const (
 	DefaultBackoffBase = time.Second
 	DefaultBackoffCap  = 30 * time.Second
 	// DefaultHandshakeTimeout bounds a whole bootstrap: verification, probe,
-	// stage and the agent's handshake.
-	DefaultHandshakeTimeout = 2 * time.Minute
+	// stage and the agent's handshake (FLEET_KUBE_AGENT_TIMEOUT overrides
+	// it).
+	DefaultHandshakeTimeout = DefaultAgentTimeout
 	// DefaultBulkIdle is how long an idle bulk session stays open.
 	DefaultBulkIdle = 60 * time.Second
 	// DefaultFallbackRate and DefaultFallbackBurst pace the fallback execs of
@@ -119,6 +120,9 @@ type PoolOptions struct {
 	// win when both are set).
 	OnChange func(clusterID, sts string)
 	RunEnded func(context.Context, RunEnd)
+	// OwnerGate is the owner check every deletion runs first (SetOwnerGate
+	// wins when both are set).
+	OwnerGate OwnerGate
 
 	MaxBootstraps           int
 	BackoffBase, BackoffCap time.Duration
@@ -170,7 +174,7 @@ func (o PoolOptions) withDefaults() PoolOptions {
 		o.BackoffCap = DefaultBackoffCap
 	}
 	if o.HandshakeTimeout <= 0 {
-		o.HandshakeTimeout = DefaultHandshakeTimeout
+		o.HandshakeTimeout = DefaultDeadlines().Agent
 	}
 	if o.BulkIdle <= 0 {
 		o.BulkIdle = DefaultBulkIdle
@@ -230,6 +234,7 @@ type Pool struct {
 	hookMu       sync.Mutex
 	changeHook   func(clusterID, sts string)
 	runEndedHook func(context.Context, RunEnd)
+	ownerGate    OwnerGate
 
 	ownerMu  sync.Mutex
 	ownerVal string
