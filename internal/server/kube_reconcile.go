@@ -330,13 +330,27 @@ func (r *kubeRecovery) pass(ctx context.Context, clusterID string) {
 		flog.Warn("kube reconcile: the connection does not load", "cluster", clusterID, "err", err)
 		return
 	}
+	// The journals and tombstones are read before the records: a job's
+	// record is saved before its journal is begun, and a destroy's DELETING
+	// mark before its tombstone, so the records read next hold every record
+	// that wrote what was read (one read before them could miss a job or a
+	// destroy started meanwhile, and take its journal for garbage or its
+	// tombstone for a key held again).
+	files, err := kubernetes.ListJournals(r.jobsDir())
+	if err != nil {
+		flog.Warn("kube reconcile: reading the job journals", "err", err)
+	}
+	fp, err := kubernetes.LoadFootprint()
+	if err != nil {
+		flog.Warn("kube reconcile: reading the footprint", "err", err)
+	}
 	st, err := state.Load()
 	if err != nil {
 		flog.Warn("kube reconcile: load state", "err", err)
 		return
 	}
-	pendingJournals, deletedJournals := r.passJournals(ctx, scope, st)
-	pendingKeys, deletedKeys := r.passTombstones(ctx, scope, st)
+	pendingJournals, deletedJournals := r.passJournals(ctx, scope, st, files)
+	pendingKeys, deletedKeys, waiting := r.passTombstones(ctx, scope, st, fp)
 	pending := pendingJournals + pendingKeys
 	r.mu.Lock()
 	changed := r.pending[clusterID] != pending
@@ -345,9 +359,10 @@ func (r *kubeRecovery) pass(ctx context.Context, clusterID string) {
 	if changed {
 		r.svc.kube.publish()
 	}
-	if pending > 0 && deletedJournals+deletedKeys > 0 {
-		// Deletions under way (a foreground delete takes its time): look
-		// again soon, not at the next full preflight.
+	if (pending > 0 && deletedJournals+deletedKeys > 0) || waiting {
+		// Deletions under way (a foreground delete takes its time), or a
+		// cancelled job still winding down: look again soon, not at the
+		// next full preflight.
 		time.AfterFunc(kubePassFollowUp, func() { r.want(clusterID) })
 	}
 }
@@ -367,15 +382,10 @@ func holder(st *state.State, clusterID, key string) (string, *fleet.Instance) {
 	return "", nil
 }
 
-// passJournals handles the connection's journals no job is writing,
-// returning how many are known garbage still there and how many objects it
-// deleted.
-func (r *kubeRecovery) passJournals(ctx context.Context, scope kubernetes.Scope, st *state.State) (pending, deleted int) {
-	files, err := kubernetes.ListJournals(r.jobsDir())
-	if err != nil {
-		flog.Warn("kube reconcile: reading the job journals", "err", err)
-		return 0, 0
-	}
+// passJournals handles the connection's journals (files, read before st) no
+// job is writing, returning how many are known garbage still there and how
+// many objects it deleted.
+func (r *kubeRecovery) passJournals(ctx context.Context, scope kubernetes.Scope, st *state.State, files []kubernetes.JournalFile) (pending, deleted int) {
 	for _, f := range files {
 		j := f.Journal
 		if f.Err != nil || j.Cluster != scope.Cluster {
@@ -408,6 +418,12 @@ func (r *kubeRecovery) passJournals(ctx context.Context, scope kubernetes.Scope,
 			// A destroy (or a job) is on it.
 		case j.Op == kubernetes.OpClone && inst.Status == fleet.StatusFailed:
 			td, err := r.pool().UndoClone(ctx, j)
+			var stale *kubernetes.StaleJournalError
+			if errors.As(err, &stale) {
+				flog.Info("kube reconcile: discarded a clone journal the cluster no longer matches", "instance", fleetName+"/"+inst.Name, "why", stale.Why)
+				_ = kubernetes.RemoveJournal(f.Path)
+				continue
+			}
 			if err != nil {
 				flog.Warn("kube reconcile: deleting an interrupted clone's copiers", "instance", fleetName+"/"+inst.Name, "err", err)
 				continue
@@ -425,20 +441,17 @@ func (r *kubeRecovery) passJournals(ctx context.Context, scope kubernetes.Scope,
 }
 
 // passTombstones deletes what is left of the connection's destroyed
-// instances, returning how many keys still have objects and how many
-// objects it deleted.
-func (r *kubeRecovery) passTombstones(ctx context.Context, scope kubernetes.Scope, st *state.State) (pending, deleted int) {
-	fp, err := kubernetes.LoadFootprint()
-	if err != nil {
-		flog.Warn("kube reconcile: reading the footprint", "err", err)
-		if fp == nil {
-			return 0, 0
-		}
+// instances (fp, read before st), returning how many keys still have
+// objects, how many objects it deleted, and whether a key with nothing left
+// is kept for a cancelled job of its instance that still winds down.
+func (r *kubeRecovery) passTombstones(ctx context.Context, scope kubernetes.Scope, st *state.State, fp *kubernetes.Footprint) (pending, deleted int, waiting bool) {
+	if fp == nil {
+		return 0, 0, false
 	}
 	for _, t := range fp.TombstonesOf(scope.Cluster) {
 		if _, inst := holder(st, t.Cluster, t.Key); inst != nil && inst.Status != fleet.StatusDeleting {
 			flog.Info("kube reconcile: a record holds a destroyed key again; forgetting its tombstone", "cluster", t.Cluster, "key", t.Key)
-			_ = kubernetes.DropTombstone(t.Cluster, t.Key)
+			_ = kubernetes.DropTombstoneOf(t)
 			continue
 		}
 		left, err := scope.ListByKey(ctx, t.Key)
@@ -448,7 +461,13 @@ func (r *kubeRecovery) passTombstones(ctx context.Context, scope kubernetes.Scop
 			continue
 		}
 		if len(left) == 0 {
-			_ = kubernetes.DropTombstone(t.Cluster, t.Key)
+			if t.Fleet != "" && r.svc.jobs.hasProvisioningJob(t.Fleet, t.Instance) {
+				// A cancelled job of the instance that has not ended yet
+				// may still write an object: keep the key until it ends.
+				waiting = true
+				continue
+			}
+			_ = kubernetes.DropTombstoneOf(t)
 			continue
 		}
 		pending++
@@ -462,7 +481,7 @@ func (r *kubeRecovery) passTombstones(ctx context.Context, scope kubernetes.Scop
 			flog.Info("kube reconcile: deleted what was left of a destroyed instance", "cluster", t.Cluster, "key", t.Key, "fleet", t.Fleet, "instance", t.Instance, "deleted", len(td.Deleted))
 		}
 	}
-	return pending, deleted
+	return pending, deleted, waiting
 }
 
 // destroying tombstones the key of a Kubernetes record a destroy is about

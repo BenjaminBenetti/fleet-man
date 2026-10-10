@@ -58,6 +58,9 @@ func TestPodWaitDeadlines(t *testing.T) {
 		{"disk never binds", func(int) (*corev1.Pod, *corev1.PersistentVolumeClaim) {
 			return waitPod(unschedulableBecause("0/1 nodes are available: pod has unbound immediate PersistentVolumeClaims.")), pvcIn(corev1.ClaimPending)
 		}, 5, CodePVCPending, "storage class standard"},
+		{"another claim never binds", func(int) (*corev1.Pod, *corev1.PersistentVolumeClaim) {
+			return waitPod(unschedulableBecause("0/1 nodes are available: pod has unbound immediate PersistentVolumeClaims.")), pvcIn(corev1.ClaimBound)
+		}, 3, CodeUnschedulable, "unbound immediate PersistentVolumeClaims"},
 		{"never scheduled", func(int) (*corev1.Pod, *corev1.PersistentVolumeClaim) {
 			return waitPod(unschedulableBecause("0/3 nodes are available: 3 Insufficient memory.")), pvcIn(corev1.ClaimBound)
 		}, 3, CodeUnschedulable, "Insufficient memory"},

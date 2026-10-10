@@ -32,6 +32,8 @@ type fakeRecoveryPool struct {
 	undo   func(kubernetes.Journal) (kubernetes.RebuildUndo, error)
 	undos  []kubernetes.Journal
 	clones []kubernetes.Journal
+	// cloneErr is what UndoClone returns (nil: it deleted a copier).
+	cloneErr error
 }
 
 func (p *fakeRecoveryPool) Scope(id string) (kubernetes.Scope, error) {
@@ -62,6 +64,9 @@ func (p *fakeRecoveryPool) UndoClone(_ context.Context, j kubernetes.Journal) (k
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.clones = append(p.clones, j)
+	if p.cloneErr != nil {
+		return kubernetes.Teardown{}, p.cloneErr
+	}
 	return kubernetes.Teardown{Deleted: []string{"job/copier"}}, nil
 }
 
@@ -612,5 +617,134 @@ func TestUndoWhoseConnectionGoes(t *testing.T) {
 	inst := r.awaitStatus("rb", fleet.StatusFailed)
 	if !strings.Contains(inst.Error, "its connection "+r.id+" is gone") || r.pool.undoCount() != 0 || journalExists("dddddddd") {
 		t.Fatalf("after the connection went: %+v, %d undos", inst, r.pool.undoCount())
+	}
+}
+
+// A pass reads the journals and tombstones before the records: a destroy
+// and a job that start while it reads (here, as it lists the journals) are
+// in the records it judges them by. A destroy's tombstone is then not taken
+// for a key a record holds again, and the journal of a record saved after
+// the pass began is not taken for garbage.
+func TestReconcilerPassReadsTheRecordsLast(t *testing.T) {
+	r := newRecoveryFixture(t)
+	cs := r.apis["minikube"]
+	ctx := context.Background()
+	createObjects(t, cs,
+		&appsv1.StatefulSet{ObjectMeta: objMeta("fi-alpha-doomed-tttttttt", r.id, "tttttttt", "u-t1")},
+		&corev1.Secret{ObjectMeta: objMeta("fi-alpha-fresh-ffffffff-spec-g1", r.id, "ffffffff", "u-f1")},
+	)
+	r.record("doomed", "tttttttt", fleet.StatusRunning, "")
+	var once sync.Once
+	r.svc.kubeRecovery.jobsDir = func() string {
+		once.Do(func() {
+			// A destroy starts: DELETING, then the tombstone.
+			if err := state.Update(func(st *state.State) error {
+				findInstance(st, "alpha", "doomed").Status = fleet.StatusDeleting
+				return nil
+			}); err != nil {
+				t.Error(err)
+			}
+			if err := kubernetes.AddTombstone(kubernetes.Tombstone{Cluster: r.id, Key: "tttttttt", Fleet: "alpha", Instance: "doomed"}); err != nil {
+				t.Error(err)
+			}
+			// A job saved its record, journaled its first object and
+			// finished.
+			r.record("fresh", "ffffffff", fleet.StatusRunning, "")
+			r.journal("fresh", "ffffffff", kubernetes.OpCreate, "render", func(j *kubernetes.Journal) {
+				j.Objects = []kubernetes.JournalObject{{Kind: kubernetes.KindSecret, Name: "fi-alpha-fresh-ffffffff-spec-g1", UID: "u-f1", Created: true}}
+			})
+		})
+		return state.KubeJobsDir()
+	}
+	r.startRecovery()
+	r.start()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for journalExists("ffffffff") || r.svc.kubeRecovery.pendingTeardowns(r.id) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("no pass: journal kept %v, pending %d", journalExists("ffffffff"), r.svc.kubeRecovery.pendingTeardowns(r.id))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := cs.CoreV1().Secrets("fleet").Get(ctx, "fi-alpha-fresh-ffffffff-spec-g1", metav1.GetOptions{}); err != nil {
+		t.Fatal("the pass took a running instance's object for garbage")
+	}
+	if fp, _ := kubernetes.LoadFootprint(); len(fp.TombstonesOf(r.id)) != 1 {
+		t.Fatalf("the destroy's tombstone went: %+v", fp.Tombstones)
+	}
+	if _, err := cs.AppsV1().StatefulSets("fleet").Get(ctx, "fi-alpha-doomed-tttttttt", metav1.GetOptions{}); err == nil {
+		t.Fatal("the destroyed instance's objects are left")
+	}
+}
+
+// A tombstone with nothing left is kept while a cancelled job of its
+// instance winds down (it may still write an object), and dropped once the
+// job ends.
+func TestReconcilerKeepsATombstoneForAJobWindingDown(t *testing.T) {
+	r := newRecoveryFixture(t)
+	old := kubePassFollowUp
+	kubePassFollowUp = 20 * time.Millisecond
+	t.Cleanup(func() { kubePassFollowUp = old })
+	if err := kubernetes.AddTombstone(kubernetes.Tombstone{Cluster: r.id, Key: "tttttttt", Fleet: "alpha", Instance: "dead"}); err != nil {
+		t.Fatal(err)
+	}
+	stuck := r.svc.jobs.start(context.Background(), fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, "alpha", "dead", time.Now())
+	r.startRecovery()
+	r.start()
+	r.awaitState(r.id, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
+	time.Sleep(100 * time.Millisecond)
+	if fp, _ := kubernetes.LoadFootprint(); len(fp.TombstonesOf(r.id)) != 1 {
+		t.Fatal("the tombstone went while the instance's job still ran")
+	}
+	r.svc.jobs.finish(stuck.summary.GetJobId())
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		fp, _ := kubernetes.LoadFootprint()
+		if len(fp.TombstonesOf(r.id)) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the tombstone is kept after the job ended")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A clone journal the cluster no longer matches is discarded, and one whose
+// undo failed is kept for the next pass.
+func TestReconcilerPassClones(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		kept bool
+	}{
+		{"stale", &kubernetes.StaleJournalError{Why: "the job finished"}, false},
+		{"failed", errors.New("the cluster did not answer"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRecoveryFixture(t)
+			r.pool.cloneErr = tc.err
+			r.record("copy", "cccccccc", fleet.StatusFailed, "kubernetes:interrupted: ...")
+			r.journal("copy", "cccccccc", kubernetes.OpClone, "copy", nil)
+			r.startRecovery()
+			r.start()
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				r.pool.mu.Lock()
+				n := len(r.pool.clones)
+				r.pool.mu.Unlock()
+				if n > 0 && journalExists("cccccccc") == tc.kept {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("%d clone undos, journal kept %v", n, journalExists("cccccccc"))
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			time.Sleep(50 * time.Millisecond)
+			if journalExists("cccccccc") != tc.kept {
+				t.Fatalf("journal kept %v, want %v", !tc.kept, tc.kept)
+			}
+		})
 	}
 }

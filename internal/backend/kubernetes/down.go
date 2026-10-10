@@ -84,16 +84,21 @@ func (p *Pool) DeleteByKey(ctx context.Context, clusterID, key string) (Teardown
 // cancelled create applies one more object later), is known garbage the
 // reconciler deletes once it can; then every object of the key and its job
 // journal. The tombstone stays until the reconciler finds nothing of the
-// key left.
+// key left. A tombstone that cannot be written (a newer fleet's footprint,
+// a full disk) does not stop the teardown, which is then all there is.
 func (p *Pool) DownByKey(ctx context.Context, t Tombstone) (Teardown, error) {
 	if !names.ValidHash(t.Key) {
 		return Teardown{}, fmt.Errorf("%q is not an instance key", t.Key)
 	}
-	if err := AddTombstone(t); err != nil {
-		return Teardown{}, err
+	tombErr := AddTombstone(t)
+	if tombErr != nil {
+		p.opts.Logger.Warn("kube: recording a destroyed instance's key", "cluster", t.Cluster, "key", t.Key, "err", tombErr)
 	}
 	td, err := p.DeleteByKey(ctx, t.Cluster, t.Key)
-	if err != nil {
+	switch {
+	case err != nil && tombErr != nil:
+		return td, fmt.Errorf("%w (and fleet could not record the key to delete what is left later: %v)", err, tombErr)
+	case err != nil:
 		return td, fmt.Errorf("%w (fleet deletes what is left once the cluster lets it)", err)
 	}
 	return td, nil

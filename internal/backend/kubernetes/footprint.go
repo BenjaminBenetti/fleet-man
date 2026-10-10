@@ -212,6 +212,23 @@ func DropTombstone(cluster, key string) error {
 	})
 }
 
+// DropTombstoneOf is DropTombstone of t, the tombstone as it was read: one
+// a later destroy of the key wrote since (another DestroyedAt) is kept.
+func DropTombstoneOf(t Tombstone) error {
+	return UpdateFootprint(func(f *Footprint) error {
+		for _, cur := range f.Tombstones {
+			if cur.Cluster == t.Cluster && cur.Key == t.Key {
+				if !cur.DestroyedAt.Equal(t.DestroyedAt) {
+					return ErrFootprintUnchanged
+				}
+				f.DropTombstone(t.Cluster, t.Key)
+				return nil
+			}
+		}
+		return ErrFootprintUnchanged
+	})
+}
+
 // ErrFootprintUnchanged, returned by an UpdateFootprint fn, ends the update
 // without writing and without an error.
 var ErrFootprintUnchanged = errors.New("footprint unchanged")

@@ -69,6 +69,33 @@ func TestTombstones(t *testing.T) {
 	}
 }
 
+// A tombstone dropped as it was read survives a later destroy of its key,
+// which tombstoned it again meanwhile.
+func TestDropTombstoneOf(t *testing.T) {
+	useFootprintAt(t)
+	at := time.Unix(1700000000, 0).UTC()
+	read := Tombstone{Cluster: "c1", Key: "aaaaaaaa", DestroyedAt: at}
+	if err := AddTombstone(read); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddTombstone(Tombstone{Cluster: "c1", Key: "aaaaaaaa", DestroyedAt: at.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := DropTombstoneOf(read); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := LoadFootprint()
+	if ts := f.TombstonesOf("c1"); len(ts) != 1 || !ts[0].DestroyedAt.Equal(at.Add(time.Minute)) {
+		t.Fatalf("the later tombstone went: %+v", ts)
+	}
+	if err := DropTombstoneOf(f.TombstonesOf("c1")[0]); err != nil {
+		t.Fatal(err)
+	}
+	if f, _ := LoadFootprint(); len(f.TombstonesOf("c1")) != 0 {
+		t.Fatalf("the tombstone as read is kept: %+v", f.Tombstones)
+	}
+}
+
 // Fields a newer fleet recorded survive this one's writes; a newer version
 // is never written.
 func TestFootprintKeepsWhatItDoesNotKnow(t *testing.T) {

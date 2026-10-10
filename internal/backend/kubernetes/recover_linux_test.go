@@ -275,6 +275,21 @@ func TestUndoClone(t *testing.T) {
 		{Kind: KindJob, Name: rbSTS + "-copier-g1", UID: "u-copier", Created: true},
 		{Kind: KindVolumeSnapshot, Name: "fi-src-two-bbbbbbbb-clone", Created: true},
 	}}
+	// A journal the cluster no longer matches (the clone finished: its mark
+	// is gone) deletes nothing.
+	pvcs := h.cs.CoreV1().PersistentVolumeClaims(jobNS)
+	if _, err := pvcs.Patch(context.Background(), rbSTS, types.MergePatchType, annotationPatch(names.AnnotationOp, nil), metav1.PatchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	var stale *StaleJournalError
+	if td, err := h.pool.UndoClone(context.Background(), j); !errors.As(err, &stale) || len(td.Deleted) != 0 || !h.exists(KindJob, rbSTS+"-copier-g1") {
+		t.Fatalf("undo of a stale clone journal: %+v %v", td, err)
+	}
+	mark := MarkFor(OpClone, "copy")
+	if _, err := pvcs.Patch(context.Background(), rbSTS, types.MergePatchType, annotationPatch(names.AnnotationOp, &mark), metav1.PatchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
 	td, err := h.pool.UndoClone(context.Background(), j)
 	if err != nil || strings.Join(td.Deleted, ",") != "job/"+rbSTS+"-copier-g1" {
 		t.Fatalf("undo clone: %+v %v", td, err)
@@ -393,6 +408,16 @@ func TestDownByKey(t *testing.T) {
 	}
 	if _, err := os.Stat(other); err != nil {
 		t.Fatal("removed another connection's journal")
+	}
+
+	// A footprint this fleet may not write (a newer fleet's) loses the
+	// tombstone, never the teardown.
+	h.seed(&corev1.Secret{ObjectMeta: instMeta(rbSTS+"-spec-g1", "u-spec", "", "")})
+	if err := os.WriteFile(FootprintPath(), []byte(`{"v":99,"tombstones":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if td, err := h.pool.DownByKey(context.Background(), ts); err != nil || len(td.Deleted) != 1 || h.exists(KindSecret, rbSTS+"-spec-g1") {
+		t.Fatalf("teardown without a tombstone: %+v %v", td, err)
 	}
 }
 

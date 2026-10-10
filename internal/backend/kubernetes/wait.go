@@ -65,7 +65,8 @@ func (w *podWait) observe(now time.Time, pod *corev1.Pod, pvc *corev1.Persistent
 	blocked := false
 	defer func() { w.blocked = blocked }()
 
-	if pvc != nil && pvc.Status.Phase != corev1.ClaimBound {
+	diskPending := pvc != nil && pvc.Status.Phase != corev1.ClaimBound
+	if diskPending {
 		blocked = true
 		if w.pvcSince.IsZero() {
 			w.pvcSince = now
@@ -81,8 +82,10 @@ func (w *podWait) observe(now time.Time, pod *corev1.Pod, pvc *corev1.Persistent
 		if c := unschedulable(pod); c != nil {
 			blocked = true
 			// A pod held back for its unbound disk waits on the disk,
-			// which has its own deadline.
-			if pvc == nil || !waitsOnClaims(c.Message) {
+			// which has its own deadline; held back for another claim
+			// (the disk is bound, or not watched), it waits on the
+			// scheduler's.
+			if !diskPending || !waitsOnClaims(c.Message) {
 				if w.schedSince.IsZero() {
 					w.schedSince = now
 				}

@@ -232,7 +232,8 @@ func (s Scope) applyStatefulSet(ctx context.Context, body []byte, replicas *int3
 
 // UndoClone deletes the copier Jobs and snapshots of the interrupted clone j
 // records (its source is not touched; the destination's other objects stay
-// with its failed record, to be retried or destroyed by key).
+// with its failed record, to be retried or destroyed by key). A journal the
+// cluster no longer matches is a *StaleJournalError and nothing is deleted.
 func (p *Pool) UndoClone(ctx context.Context, j Journal) (Teardown, error) {
 	if j.Op != OpClone {
 		return Teardown{}, fmt.Errorf("not a clone journal (%s)", j.Op)
@@ -251,6 +252,9 @@ func undoClone(ctx context.Context, s Scope, j Journal) (Teardown, error) {
 	check, err := s.CheckJournal(ctx, j)
 	if err != nil {
 		return Teardown{}, err
+	}
+	if !check.Current {
+		return Teardown{}, &StaleJournalError{Why: check.Why}
 	}
 	t, err := s.DeleteJournalObjects(ctx, j, check, func(o JournalObject) bool {
 		return o.Created && (o.Kind == KindJob || o.Kind == KindVolumeSnapshot)
