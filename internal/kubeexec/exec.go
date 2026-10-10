@@ -18,6 +18,11 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 )
 
+// restConfigType is k8s.io/client-go/rest.Config under a package-local name,
+// so internal/kubeexec/transport.go can keep client-go out of its own imports
+// (it names only this alias).
+type restConfigType = rest.Config
+
 // Exec protocols. A pod exec rides a WebSocket (the v5 channel protocol,
 // which can half-close stdin), falling back to SPDY only when the API server
 // or a proxy in between cannot upgrade to WebSocket. WebSocket comes first

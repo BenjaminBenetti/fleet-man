@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
@@ -50,15 +52,36 @@ func (s *service) ResolveExecCommand(_ context.Context, req *fleetgrpc.ResolveEx
 	if err != nil {
 		return nil, err
 	}
-	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir, req.GetArgv()).Cmd
+	b := backendutil.NewForInstance(inst, false)
 	if req.GetAttach() {
 		s.kubePods.attached(req.GetFleet(), req.GetInstance())
+		ensureInstanceTmux(b)
 	}
+	cmd := b.ExecCommand(inst.WorkspaceDir, req.GetArgv()).Cmd
 	return &fleetgrpc.ResolveExecCommandReply{
 		Argv: cmd.Args,
 		Env:  envSliceToMap(cmd.Env),
 	}, nil
 }
+
+// ensureInstanceTmux makes tmux resolvable in a backend whose images may lack
+// it (the Kubernetes backend's bundled tmux), before an attach runs its tmux
+// command. Bounded and best-effort; a backend without the capability is left
+// alone.
+func ensureInstanceTmux(b backend.Backend) {
+	e, ok := b.(backend.TmuxEnsurer)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ensureTmuxBudget)
+	defer cancel()
+	if err := e.EnsureTmux(ctx); err != nil {
+		flog.Info("ensure tmux before an attach", "err", err)
+	}
+}
+
+// ensureTmuxBudget bounds the pre-attach tmux check and one-time install.
+const ensureTmuxBudget = 3 * time.Minute
 
 // Logs streams an instance's container logs to the client. The server runs the
 // backend's logs command and forwards stdout+stderr line-by-line as LogLine.

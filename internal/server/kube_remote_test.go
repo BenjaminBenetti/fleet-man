@@ -145,6 +145,10 @@ func TestKubeRPCsHaveRemoteParity(t *testing.T) {
 	if !localOnlyMethods[fleetgrpc.FleetService_IssueKubeExecCredential_FullMethodName] {
 		t.Error("IssueKubeExecCredential must be local-only")
 	}
+	// PodExec (the kube-exec shim's daemon mode) joins it for the same reason.
+	if !localOnlyMethods[fleetgrpc.FleetService_PodExec_FullMethodName] {
+		t.Error("PodExec must be local-only")
+	}
 	stubKubeExecCredential(t, func(_ context.Context, id string, _ bool) (fleet.KubeExecCredential, error) {
 		return fleet.KubeExecCredential{ClusterID: id, BearerToken: "shim-only"}, nil
 	})

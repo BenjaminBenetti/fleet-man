@@ -126,3 +126,37 @@ func substituteContainerEnv(value string, env *envList) (string, error) {
 	})
 	return out, err
 }
+
+// addBundles appends each bundle's programs to the END of PATH and its
+// terminfo to the end of TERMINFO_DIRS (after the system's own databases, an
+// empty entry being ncurses' default search), each only once. Last, not
+// first, so the image's own program (its own tmux, say) is preferred and the
+// bundled one is only the fallback for an image that lacks it.
+func addBundles(env *envList, bundles []Bundle) {
+	for _, b := range bundles {
+		if b.Bin == "" {
+			continue
+		}
+		path, ok := env.get("PATH")
+		if !ok {
+			path = DefaultPath
+		}
+		if !slices.Contains(strings.Split(path, ":"), b.Bin) {
+			env.set("PATH", path+":"+b.Bin)
+		}
+	}
+	for _, b := range bundles {
+		if b.Terminfo == "" {
+			continue
+		}
+		dirs, ok := env.get("TERMINFO_DIRS")
+		if !ok {
+			// The system's databases first, as ncurses searches them.
+			dirs = ""
+		}
+		if slices.Contains(strings.Split(dirs, ":"), b.Terminfo) {
+			continue
+		}
+		env.set("TERMINFO_DIRS", dirs+":"+b.Terminfo)
+	}
+}

@@ -92,10 +92,23 @@ func runRemoteShell(ctx context.Context, fleetName, instanceName string, argv []
 		return err
 	}
 	if code != 0 {
+		// A pod replaced under a remote attach ends the command with exit 75
+		// (the rejoin signal); the caller's wrapper (a TUI pane, a full-screen
+		// attach) re-runs it. Exit with that code so the signal survives
+		// `fleet shell`, instead of main's generic exit 1.
+		if code == kubeRejoinExitCode {
+			exitRemoteShell(code)
+		}
 		return fmt.Errorf("exit status %d", code)
 	}
 	return nil
 }
+
+// kubeRejoinExitCode is podwire.ExitHeldStreamGone: a replaced pod, the attach
+// wrapper's signal to re-run. exitRemoteShell is os.Exit (a var for tests).
+const kubeRejoinExitCode = 75
+
+var exitRemoteShell = os.Exit
 
 // logsStdout is the sink for streamLogs, overridable in tests.
 var logsStdout io.Writer = os.Stdout

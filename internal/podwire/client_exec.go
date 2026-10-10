@@ -26,6 +26,15 @@ var (
 	ErrReplyTooLarge = fmt.Errorf("reply is over %d bytes", MaxReply)
 )
 
+// ExitHeldStreamGone is the exit code a command whose held stream is gone
+// (ErrHeldStreamGone: its pod was replaced, so its processes ended with it)
+// ends with where an exit code is all a caller sees: the kube-exec shim
+// exits with it, and the TUI's pane and full-screen wrappers, and `fleet
+// shell`, take it to mean "attach again" (their tmux session is gone with
+// the pod, and `tmux new-session -A` starts a fresh one). It is sysexits'
+// EX_TEMPFAIL.
+const ExitHeldStreamGone = 75
+
 // StartError is a command the agent could not start, with the exit code
 // `docker exec` gives for the same failure (125, 126, 127).
 type StartError struct {

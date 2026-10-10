@@ -23,6 +23,11 @@ const (
 
 	pidFileName = ".pod-agent.pid"
 	heldDirName = "held"
+
+	// DefaultTmuxDir is where fleet stages its static tmux in a pod whose
+	// image has none (fleetd's install dir and bundle name): bin/ holds
+	// tmux, share/terminfo the terminal descriptions it reads.
+	DefaultTmuxDir = "/opt/fleet/tmux"
 )
 
 // Environment the agent reads in a pod.
@@ -69,6 +74,13 @@ type Options struct {
 	// Methods are RPCs beyond the built-in ones.
 	Methods map[string]Method
 
+	// Bundles are the program bundles fleet may stage into the pod (the
+	// static tmux): each one that is installed, when a command is planned,
+	// is first on the command's PATH whatever its class (see
+	// execas.Host.Bundles), so an image without tmux gets the bundled one
+	// and never an install from a package mirror.
+	Bundles []execas.Bundle
+
 	// HoldGrace and MaxHeld bound held commands.
 	HoldGrace time.Duration
 	MaxHeld   int
@@ -107,6 +119,7 @@ func DefaultOptions() Options {
 		// CRI-O with crun starts exec'd processes at -999, not the
 		// container's score.
 		InitOOMScore: "/proc/1/oom_score_adj",
+		Bundles:      []execas.Bundle{{Bin: DefaultTmuxDir + "/bin", Terminfo: DefaultTmuxDir + "/share/terminfo"}},
 	}
 	if d, err := time.ParseDuration(os.Getenv(EnvHoldGrace)); err == nil && d > 0 {
 		o.HoldGrace = d

@@ -24,13 +24,14 @@ import (
 
 // fakeKubePool is the pool as kubePods sees it.
 type fakeKubePool struct {
-	mu       sync.Mutex
-	tracks   [][]kubernetes.Tracked
-	obs      map[string]kubernetes.Observation // by StatefulSet
-	parked   []string
-	parkErr  error
-	forgot   []string
-	onChange func(clusterID, sts string)
+	mu         sync.Mutex
+	tracks     [][]kubernetes.Tracked
+	obs        map[string]kubernetes.Observation // by StatefulSet
+	parked     []string
+	parkErr    error
+	forgot     []string
+	onChange   func(clusterID, sts string)
+	onRunEnded func(context.Context, kubernetes.RunEnd)
 }
 
 func (f *fakeKubePool) Track(items []kubernetes.Tracked) {
@@ -52,6 +53,12 @@ func (f *fakeKubePool) OnChange(fn func(string, string)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.onChange = fn
+}
+
+func (f *fakeKubePool) OnRunEnded(fn func(context.Context, kubernetes.RunEnd)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onRunEnded = fn
 }
 
 func (f *fakeKubePool) Park(_ context.Context, _, sts string) error {
@@ -494,6 +501,17 @@ func TestKubePodsNoticeClearsOnATTYExec(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubExecCommand(t)
+	// The kubernetes backend is a StreamExecer, so the Exec RPC opens the
+	// command through it, not a host command. Stand in an in-memory stream
+	// that exits at once (no cluster here); the notice-clearing this test is
+	// about runs when a TTY attaches.
+	origOpen := openExecStream
+	openExecStream = func(_ context.Context, _ *fleet.Instance, _ *fleetgrpc.ExecStart) (backend.ExecStream, error) {
+		s := newFakeExecStream()
+		s.exit(0, nil)
+		return s, nil
+	}
+	t.Cleanup(func() { openExecStream = origOpen })
 	svc, client, cleanup := newTestServer(t)
 	defer cleanup()
 	pool := &fakeKubePool{obs: map[string]kubernetes.Observation{}}

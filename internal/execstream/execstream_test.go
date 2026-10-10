@@ -258,3 +258,38 @@ func TestOutputCollectsStdoutAndExitCode(t *testing.T) {
 		t.Fatal("CloseSend was not called (one-shot must half-close immediately)")
 	}
 }
+
+// TestRunPodSendsPodStart: Options.Pod makes the first frame a PodExecStart
+// naming the pod and whom the command runs as (the kube-exec shim's daemon
+// mode), not an ExecStart.
+func TestRunPodSendsPodStart(t *testing.T) {
+	fake := newGatedFake(outStdout("hi"), outExit(0, ""))
+	var stdout bytes.Buffer
+	code, err := run(fake, Options{
+		Pod: &PodExecTarget{
+			Cluster: "prod-abc", Namespace: "ns", Pod: "fi-f-i-k8-0", Container: "dev",
+			Class: "script", User: "vscode", Cwd: "/w", Bulk: true,
+		},
+		Argv:   []string{"id", "-u"},
+		Stdout: &stdout,
+	})
+	if err != nil || code != 0 || stdout.String() != "hi" {
+		t.Fatalf("code=%d err=%v out=%q", code, err, stdout.String())
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.sent[0].GetStart() != nil {
+		t.Fatal("first frame is an ExecStart, want a PodExecStart")
+	}
+	ps := fake.sent[0].GetPodStart()
+	if ps == nil {
+		t.Fatalf("first frame is not pod_start: %v", fake.sent[0])
+	}
+	if ps.GetClusterId() != "prod-abc" || ps.GetPod() != "fi-f-i-k8-0" || ps.GetContainer() != "dev" ||
+		ps.GetClass() != "script" || ps.GetUser() != "vscode" || ps.GetCwd() != "/w" || !ps.GetBulk() {
+		t.Fatalf("pod_start = %+v", ps)
+	}
+	if got := ps.GetArgv(); len(got) != 2 || got[0] != "id" {
+		t.Fatalf("pod_start argv = %v", got)
+	}
+}
