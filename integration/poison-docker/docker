@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Stand-in `docker` the itest harness puts first on the daemon's PATH (see
+# itest_poison_docker in common.sh). Every call is appended to
+# $FLEET_ITEST_DOCKER_LOG as "<pass|refused> <args...>".
+#
+#   FLEET_ITEST_DOCKER_MODE=record  every call goes to the real docker
+#   FLEET_ITEST_DOCKER_MODE=poison  container verbs are refused (exit 125),
+#                                   everything else goes to the real docker
+#
+# FLEET_ITEST_REAL_DOCKER is the real docker binary. FLEET_ITEST_POISON_VERBS
+# overrides the space-separated list of refused verbs.
+set -u
+
+real="${FLEET_ITEST_REAL_DOCKER:-}"
+if [ -z "${real}" ] || [ ! -x "${real}" ]; then
+  echo "poison docker: FLEET_ITEST_REAL_DOCKER is not an executable (${real:-unset})" >&2
+  exit 125
+fi
+
+# Container verbs: everything that acts on or lists containers. `inspect` is
+# refused unless it names an image (--type image), since builds inspect images.
+verbs="${FLEET_ITEST_POISON_VERBS:-attach commit container cp create diff exec export inspect kill logs pause port ps rename restart rm run start stats stop top unpause update wait}"
+
+# The verb is the first argument that is not a global option; --context,
+# --config, --host/-H, --log-level/-l and --tlscacert/--tlscert/--tlskey take a
+# value.
+verb=""
+skip=""
+for arg in "$@"; do
+  if [ -n "${skip}" ]; then skip=""; continue; fi
+  case "${arg}" in
+    --context|--config|--host|-H|--log-level|-l|--tlscacert|--tlscert|--tlskey) skip=1 ;;
+    -*) ;;
+    *) verb="${arg}"; break ;;
+  esac
+done
+
+refuse=""
+if [ "${FLEET_ITEST_DOCKER_MODE:-record}" = "poison" ] && [ -n "${verb}" ]; then
+  for v in ${verbs}; do
+    [ "${v}" = "${verb}" ] && refuse=1 && break
+  done
+  if [ -n "${refuse}" ] && [ "${verb}" = "inspect" ]; then
+    case " $* " in
+      *" --type image "*|*" --type=image "*) refuse="" ;;
+    esac
+  fi
+fi
+
+if [ -n "${FLEET_ITEST_DOCKER_LOG:-}" ]; then
+  outcome=pass
+  [ -n "${refuse}" ] && outcome=refused
+  # One line per call: newlines inside arguments (scripts passed to exec) are
+  # written as \n.
+  line="$*"
+  printf '%s %s\n' "${outcome}" "${line//$'\n'/\\n}" >> "${FLEET_ITEST_DOCKER_LOG}" 2>/dev/null || true
+fi
+
+if [ -n "${refuse}" ]; then
+  echo "poison docker: refused 'docker $*' (container verb '${verb}')" >&2
+  exit 125
+fi
+exec "${real}" "$@"

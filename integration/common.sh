@@ -618,6 +618,108 @@ itest_control_mode() { _be_control_mode "$(_itest_ref "$1")" "$2"; }
 # share tree (itest_share_dir) agree. Instant on devcontainer, a bind mount.
 itest_share_sync() { _be_share_sync "$1"; }
 
+# --- instance root filesystem: reached through `fleet exec` on every backend ---
+
+# itest_install_local_deb <ref> <package> — build a one-file .deb named
+# <package> inside the instance and apt-install it from that file, so the
+# instance's dpkg database and /usr gain a package exactly as `apt install`
+# leaves them, with no network or mirror involved. The package's only file is
+# /usr/bin/<package>, which prints "<package>-ok". Fails the test, with apt's
+# output, when the install fails.
+itest_install_local_deb() {
+  local ref out
+  ref=$(_itest_ref "$1")
+  if ! out=$("${FLEET_BIN}" exec "${ref}" -- sh -c '
+      set -e
+      umask 022
+      pkg="$1"
+      d=$(mktemp -d)
+      mkdir -p "$d/root/DEBIAN" "$d/root/usr/bin"
+      printf "Package: %s\nVersion: 1.0\nArchitecture: all\nMaintainer: fleet itest <itest@fleet-man.local>\nDescription: fleet integration test package\n" \
+        "$pkg" > "$d/root/DEBIAN/control"
+      printf "#!/bin/sh\necho %s-ok\n" "$pkg" > "$d/root/usr/bin/$pkg"
+      chmod 0755 "$d/root/usr/bin/$pkg"
+      dpkg-deb --root-owner-group --build "$d/root" "$d/$pkg.deb"
+      chmod 0755 "$d"  # apt reads the .deb as its _apt sandbox user
+      sudo apt-get install -y -qq "$d/$pkg.deb"
+      rm -rf "$d"
+    ' sh "$2" 2>&1); then
+    fail "installing the local package $2 in ${ref} failed: ${out}"
+  fi
+}
+
+# itest_local_deb_status <ref> <package> — "installed" when dpkg lists the
+# package as installed and its binary runs, otherwise what was found instead.
+itest_local_deb_status() {
+  local ref
+  ref=$(_itest_ref "$1")
+  "${FLEET_BIN}" exec "${ref}" -- sh -c '
+      st=$(dpkg-query -W -f="\${Status}" "$1" 2>/dev/null) || st="not in the dpkg database"
+      [ "$st" = "install ok installed" ] || { echo "$st"; exit 0; }
+      [ "$("$1" 2>/dev/null)" = "$1-ok" ] || { echo "installed, but /usr/bin/$1 does not run"; exit 0; }
+      echo installed
+    ' sh "$2" 2>&1 || true
+}
+
+# --- poison docker: a docker stand-in on the PATH of the daemon under test ---
+#
+# itest_poison_docker <record|poison> puts integration/poison-docker/docker
+# ahead of the real docker on PATH, so every docker call the daemon (and the
+# devcontainer CLI it runs) makes goes through it, and logs each call (see
+# itest_poison_docker_log). record passes every call through to the real
+# docker. poison refuses the container verbs (run, exec, start, stop, inspect
+# of a container, ps, logs, stats, ...; see the shim for the list) with exit
+# code 125 and passes the rest (build, image, network, version, ...) through,
+# so a backend that must never treat its instances as docker containers fails
+# loudly the moment it does.
+#
+# The daemon inherits PATH from the client that spawns it, so this stops any
+# daemon of the binary under test first; call it after setup_test and before
+# the first fleet command. A test that calls it must stop the daemon in its
+# itest_cleanup, so the shim does not outlive the test.
+itest_poison_docker() {
+  case "$1" in
+    record|poison) ;;
+    *) fail "itest_poison_docker: unknown mode '$1' (want record or poison)" ;;
+  esac
+  local shim_dir="${INTEGRATION_DIR}/poison-docker" real
+  # The real docker: the first one on PATH that is not the shim itself.
+  real=$(
+    PATH=$(printf '%s' "${PATH}" | tr ':' '\n' | grep -vxF "${shim_dir}" | paste -sd: -)
+    command -v docker
+  ) || fail "itest_poison_docker: no real docker on PATH"
+  export FLEET_ITEST_DOCKER_MODE="$1"
+  export FLEET_ITEST_REAL_DOCKER="${real}"
+  export FLEET_ITEST_DOCKER_LOG="${TEST_SCRATCH_DIR}/poison-docker.log"
+  : > "${FLEET_ITEST_DOCKER_LOG}"
+  case ":${PATH}:" in
+    *":${shim_dir}:"*) ;;
+    *) export PATH="${shim_dir}:${PATH}" ;;
+  esac
+  _itest_poison_docker_stop_daemons
+}
+
+# itest_poison_docker_log — every docker call the shim saw since
+# itest_poison_docker, one per line: "<pass|refused> <args...>".
+itest_poison_docker_log() { cat "${FLEET_ITEST_DOCKER_LOG}" 2>/dev/null || true; }
+
+# itest_poison_docker_saw <ERE> — true when a logged call matches <ERE>, e.g.
+# '^refused exec '. Reads the log file directly: the log gets long, and a
+# grep -q at the end of a pipe would trip pipefail with SIGPIPE.
+itest_poison_docker_saw() { grep -qE -- "$1" "${FLEET_ITEST_DOCKER_LOG}" 2>/dev/null; }
+
+# _itest_poison_docker_stop_daemons — stop every daemon of the binary under
+# test and wait until they are gone, so the next fleet command cold-spawns one
+# with the shim on its PATH.
+_itest_poison_docker_stop_daemons() {
+  pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true
+  local deadline=$(( $(date +%s) + $(_scale_timeout 10) ))
+  while [ "$(server_count)" != "0" ]; do
+    [ "$(date +%s)" -lt "${deadline}" ] || fail "itest_poison_docker: a daemon of ${FLEET_BIN} would not exit"
+    sleep 0.2
+  done
+}
+
 # === MCP ===
 
 # itest_mcp_call <tool> <arguments-json> [<field>] — call one tool on the
@@ -882,6 +984,43 @@ tui_wait_for_absent() {
     "${C_RED}" "${C_RESET}" "${timeout}" "${needle}" >&2
   printf -- '--- final screen ---\n%s\n--- end screen ---\n' "${screen}" >&2
   return 1
+}
+
+# tui_delete_fleet_cache <row label> <done message>
+# From the fleet list with the cursor on a fleet's header, press the
+# [ Delete cache ] button of one cache in the fleet options dialog (e →
+# Caching → the row named <row label>, e.g. "Deb package cache"), confirm it,
+# wait for <done message> (e.g. "Deb cache cleared") and close the dialog. Finds
+# rows by the "> " cursor rather than by counting keypresses, so new rows above
+# them do not break it.
+tui_delete_fleet_cache() {
+  local label="$1" done_msg="$2"
+  tui_send e
+  tui_wait_for "Edit fleet" 5 || fail "the fleet options dialog did not open"
+  for _ in $(seq 1 30); do
+    tui_capture | grep -qF "> ▶ Caching" && break
+    tui_capture | grep -qF "> ▼ Caching" && break
+    tui_send j
+    sleep 0.1
+  done
+  if ! tui_capture | grep -qF "> ▼ Caching"; then
+    tui_send l
+    tui_wait_for "${label}" 5 || fail "the Caching section did not expand"
+  fi
+  for _ in $(seq 1 10); do
+    tui_capture | grep -qF ">   [x] ${label}" && break
+    tui_send j
+    sleep 0.1
+  done
+  tui_capture | grep -qF ">   [x] ${label}" \
+    || { tui_capture >&2; fail "could not put the cursor on the enabled '${label}' row"; }
+  tui_send l
+  tui_send Enter
+  tui_wait_for "Delete cache?" 5 || fail "the Delete cache button did not ask to confirm"
+  tui_send Enter
+  tui_wait_for "${done_msg}" 120 || fail "the cache delete never reported '${done_msg}'"
+  tui_send Escape
+  tui_wait_for_absent "Edit fleet" 5 || fail "the fleet options dialog did not close"
 }
 
 # tui_kill [session]
