@@ -48,6 +48,10 @@ up)
   "$docker" ps -q -a --filter "label=devcontainer.local_folder=$ws" >/dev/null
   # Like node, the CLI gives the watcher pipes of its own, not its stdio.
   "$docker" events --format '{{json .}}' --filter event=start </dev/null >/dev/null 2>&1 &
+  # The real CLI has the watcher running before it runs the container.
+  i=0; until grep -q '"events"' "$(dirname "$docker")/calls.jsonl" 2>/dev/null; do
+    i=$((i+1)); [ $i -gt 500 ] && break; sleep 0.01
+  done
   echo "[time] Start: Run: docker run -e SECRET_TOKEN=hunter2 ..." >&2
   "$docker" run --sig-proxy=false -a STDOUT -a STDERR \
     --mount "type=bind,source=$ws,target=/workspaces/app" \
