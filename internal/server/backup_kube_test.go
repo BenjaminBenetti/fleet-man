@@ -123,15 +123,16 @@ func TestBackupTwoClustersRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	kubeFiles := map[string]string{
-		"daemon_id":                        "0123456789abcdef0123456789abcdef\n",
-		"kube/footprint.json":              `{"v":1,"tombstones":["aaaa2345"]}`,
-		"kube/jobs/aaaa2345.json":          `{"v":1,"op":"create","cluster":"minikube-abc234"}`,
-		"kube/jobs/bbbb2345.json":          `{"v":1,"op":"rebuild","cluster":"prod-eu-xyz234"}`,
-		"kube/minikube-abc234/images.json": `{"images":["a"]}`,
-		"kube/prod-eu-xyz234/images.json":  `{"images":["b"]}`,
-		"kube/incarnation.json":            `{"v":1,"nonce":"aaaaaaaaaaaaaaaa"}`, // never backed up
-		"kube/jobs/.aaaa2345.json-1.tmp":   "torn",                               // an atomicfile temp
-		"kube/minikube-abc234/notes.txt":   "not a backup source",
+		"daemon_id":                                    "0123456789abcdef0123456789abcdef\n",
+		"kube/footprint.json":                          `{"v":1,"tombstones":["aaaa2345"]}`,
+		"kube/jobs/aaaa2345.json":                      `{"v":1,"op":"create","cluster":"minikube-abc234"}`,
+		"kube/jobs/bbbb2345.json":                      `{"v":1,"op":"rebuild","cluster":"prod-eu-xyz234"}`,
+		"kube/minikube-abc234/images.json":             `{"images":["a"]}`,
+		"kube/prod-eu-xyz234/images.json":              `{"images":["b"]}`,
+		"kube/minikube-abc234/instances/aaaa2345.json": `{"v":1,"gen":1}`,
+		"kube/incarnation.json":                        `{"v":1,"nonce":"aaaaaaaaaaaaaaaa"}`, // never backed up
+		"kube/jobs/.aaaa2345.json-1.tmp":               "torn",                               // an atomicfile temp
+		"kube/minikube-abc234/notes.txt":               "not a backup source",
 		// The gateway image cache is made again from docker, never backed up.
 		"kube/images/store.json":                               `{"version":1}`,
 		"kube/images/blobs/sha256/" + strings.Repeat("ab", 32): "layer bytes",
@@ -150,8 +151,8 @@ func TestBackupTwoClustersRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("writeBackup: %v", err)
 	}
-	if n != 10 {
-		t.Errorf("captured %d files, want 10", n)
+	if n != 11 {
+		t.Errorf("captured %d files, want 11", n)
 	}
 	entries := readArchiveEntries(t, archive)
 	var dirs []string
@@ -169,7 +170,7 @@ func TestBackupTwoClustersRoundTrip(t *testing.T) {
 			t.Errorf("unexpected entry %s", e.name)
 		}
 	}
-	if strings.Join(dirs, " ") != "kube/ kube/jobs/ kube/minikube-abc234/ kube/prod-eu-xyz234/" {
+	if strings.Join(dirs, " ") != "kube/ kube/jobs/ kube/minikube-abc234/ kube/prod-eu-xyz234/ kube/minikube-abc234/instances/" {
 		t.Errorf("directory entries = %v", dirs)
 	}
 
@@ -258,7 +259,7 @@ func TestMcpRestoreBackupDocumentsKubernetes(t *testing.T) {
 // Every documented file is a backup source and every source is documented.
 func TestMcpRestoreBackupContentsMatchSources(t *testing.T) {
 	home := writeFleetState(t, nil)
-	for _, rel := range []string{"kube/jobs/abcd2345.json", "kube/c-abc234/images.json"} {
+	for _, rel := range []string{"kube/jobs/abcd2345.json", "kube/c-abc234/images.json", "kube/c-abc234/instances/abcd2345.json"} {
 		path := filepath.Join(home, ".fleet", filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)

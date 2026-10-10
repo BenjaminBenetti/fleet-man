@@ -230,14 +230,16 @@ func TestKubePaths(t *testing.T) {
 	t.Setenv("HOME", home)
 	fleetDir := home + "/.fleet"
 	for got, want := range map[string]string{
-		KubeClustersPath():                fleetDir + "/kube_clusters.json",
-		DaemonIDPath():                    fleetDir + "/daemon_id",
-		KubeIncarnationPath():             fleetDir + "/kube/incarnation.json",
-		KubeFootprintPath():               fleetDir + "/kube/footprint.json",
-		KubeJobPath("abcd2345"):           fleetDir + "/kube/jobs/abcd2345.json",
-		KubeImagesPath("minikube-abc234"): fleetDir + "/kube/minikube-abc234/images.json",
-		KubeImagesPath("../../etc"):       fleetDir + "/kube/.._.._etc/images.json",
-		KubeJobPath("../x"):               fleetDir + "/kube/jobs/.._x.json",
+		KubeClustersPath():                              fleetDir + "/kube_clusters.json",
+		DaemonIDPath():                                  fleetDir + "/daemon_id",
+		KubeIncarnationPath():                           fleetDir + "/kube/incarnation.json",
+		KubeFootprintPath():                             fleetDir + "/kube/footprint.json",
+		KubeJobPath("abcd2345"):                         fleetDir + "/kube/jobs/abcd2345.json",
+		KubeImagesPath("minikube-abc234"):               fleetDir + "/kube/minikube-abc234/images.json",
+		KubeImagesPath("../../etc"):                     fleetDir + "/kube/.._.._etc/images.json",
+		KubeJobPath("../x"):                             fleetDir + "/kube/jobs/.._x.json",
+		KubeInstancePath("minikube-abc234", "abcd2345"): fleetDir + "/kube/minikube-abc234/instances/abcd2345.json",
+		KubeInstancePath("c", "../y"):                   fleetDir + "/kube/c/instances/.._y.json",
 	} {
 		if got != want {
 			t.Errorf("path = %s, want %s", got, want)
