@@ -635,8 +635,11 @@ type Config struct {
 	Dotfiles   *DotfilesSettings      `protobuf:"bytes,3,opt,name=dotfiles,proto3" json:"dotfiles,omitempty"`
 	Codespaces *CodespacesSettings    `protobuf:"bytes,5,opt,name=codespaces,proto3" json:"codespaces,omitempty"`
 	Browser    *BrowserSettings       `protobuf:"bytes,6,opt,name=browser,proto3" json:"browser,omitempty"`
-	// Feeds CreateInstanceRequest's UNSPECIFIED-backend resolution. UNSPECIFIED
-	// means "no default recorded" (-> DEVCONTAINER).
+	// The remembered default deploy target: feeds CreateInstanceRequest's
+	// UNSPECIFIED-backend resolution. UNSPECIFIED means "no default recorded"
+	// (-> DEVCONTAINER). Server-owned: written by
+	// CreateInstanceRequest.remember_default, and SetConfig keeps the stored value
+	// whatever the request carries, so a client's stale copy can't undo it.
 	DefaultBackend BackendType         `protobuf:"varint,7,opt,name=default_backend,json=defaultBackend,proto3,enum=fleetgrpc.BackendType" json:"default_backend,omitempty"`
 	RemoteMcp      *RemoteMcpSettings  `protobuf:"bytes,8,opt,name=remote_mcp,json=remoteMcp,proto3" json:"remote_mcp,omitempty"`
 	Mic            *MicSettings        `protobuf:"bytes,21,opt,name=mic,proto3" json:"mic,omitempty"`
@@ -835,7 +838,8 @@ func (x *GetConfigReply) GetConfig() *Config {
 }
 
 // SetConfig replaces the whole Config (the settings page sends the full edited
-// Config). Returns the post-mutation Config so the caller stays consistent.
+// Config), except default_backend, which only remember_default writes. Returns
+// the post-mutation Config so the caller stays consistent.
 type SetConfigRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Config        *Config                `protobuf:"bytes,1,opt,name=config,proto3" json:"config,omitempty"`

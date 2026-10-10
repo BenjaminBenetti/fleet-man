@@ -60,6 +60,7 @@ const (
 	FleetService_SSHAgent_FullMethodName               = "/fleetgrpc.FleetService/SSHAgent"
 	FleetService_CopyFile_FullMethodName               = "/fleetgrpc.FleetService/CopyFile"
 	FleetService_CopyInto_FullMethodName               = "/fleetgrpc.FleetService/CopyInto"
+	FleetService_ListDeployTargets_FullMethodName      = "/fleetgrpc.FleetService/ListDeployTargets"
 	FleetService_InspectRepo_FullMethodName            = "/fleetgrpc.FleetService/InspectRepo"
 	FleetService_GetCoderTemplateParams_FullMethodName = "/fleetgrpc.FleetService/GetCoderTemplateParams"
 	FleetService_GetBrowserConfig_FullMethodName       = "/fleetgrpc.FleetService/GetBrowserConfig"
@@ -168,6 +169,11 @@ type FleetServiceClient interface {
 	// Client-streaming: first chunk is the open header, the rest are data. Backs
 	// the scp-style upload (and instance→instance relay) direction of `fleet copy`.
 	CopyInto(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CopyIntoChunk, CopyIntoReply], error)
+	// ---- Deploy targets ----
+	// ListDeployTargets lists where this daemon can create an instance (judged
+	// on the daemon host), the remembered default, and the daemon host's build
+	// tools. Served to remote clients exactly as to local ones.
+	ListDeployTargets(ctx context.Context, in *ListDeployTargetsRequest, opts ...grpc.CallOption) (*ListDeployTargetsReply, error)
 	// ---- Repo inspection (server-side clone + checks) ----
 	// InspectRepo shallow-clones remote_url on the DAEMON's host and reports
 	// devcontainer presence (and optionally the detected container home dir).
@@ -701,6 +707,16 @@ func (c *fleetServiceClient) CopyInto(ctx context.Context, opts ...grpc.CallOpti
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_CopyIntoClient = grpc.ClientStreamingClient[CopyIntoChunk, CopyIntoReply]
 
+func (c *fleetServiceClient) ListDeployTargets(ctx context.Context, in *ListDeployTargetsRequest, opts ...grpc.CallOption) (*ListDeployTargetsReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListDeployTargetsReply)
+	err := c.cc.Invoke(ctx, FleetService_ListDeployTargets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) InspectRepo(ctx context.Context, in *InspectRepoRequest, opts ...grpc.CallOption) (*InspectRepoReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(InspectRepoReply)
@@ -843,6 +859,11 @@ type FleetServiceServer interface {
 	// Client-streaming: first chunk is the open header, the rest are data. Backs
 	// the scp-style upload (and instance→instance relay) direction of `fleet copy`.
 	CopyInto(grpc.ClientStreamingServer[CopyIntoChunk, CopyIntoReply]) error
+	// ---- Deploy targets ----
+	// ListDeployTargets lists where this daemon can create an instance (judged
+	// on the daemon host), the remembered default, and the daemon host's build
+	// tools. Served to remote clients exactly as to local ones.
+	ListDeployTargets(context.Context, *ListDeployTargetsRequest) (*ListDeployTargetsReply, error)
 	// ---- Repo inspection (server-side clone + checks) ----
 	// InspectRepo shallow-clones remote_url on the DAEMON's host and reports
 	// devcontainer presence (and optionally the detected container home dir).
@@ -986,6 +1007,9 @@ func (UnimplementedFleetServiceServer) CopyFile(*CopyFileRequest, grpc.ServerStr
 }
 func (UnimplementedFleetServiceServer) CopyInto(grpc.ClientStreamingServer[CopyIntoChunk, CopyIntoReply]) error {
 	return status.Errorf(codes.Unimplemented, "method CopyInto not implemented")
+}
+func (UnimplementedFleetServiceServer) ListDeployTargets(context.Context, *ListDeployTargetsRequest) (*ListDeployTargetsReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListDeployTargets not implemented")
 }
 func (UnimplementedFleetServiceServer) InspectRepo(context.Context, *InspectRepoRequest) (*InspectRepoReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InspectRepo not implemented")
@@ -1618,6 +1642,24 @@ func _FleetService_CopyInto_Handler(srv interface{}, stream grpc.ServerStream) e
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FleetService_CopyIntoServer = grpc.ClientStreamingServer[CopyIntoChunk, CopyIntoReply]
 
+func _FleetService_ListDeployTargets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListDeployTargetsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ListDeployTargets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ListDeployTargets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ListDeployTargets(ctx, req.(*ListDeployTargetsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_InspectRepo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(InspectRepoRequest)
 	if err := dec(in); err != nil {
@@ -1796,6 +1838,10 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListOutputTargets",
 			Handler:    _FleetService_ListOutputTargets_Handler,
+		},
+		{
+			MethodName: "ListDeployTargets",
+			Handler:    _FleetService_ListDeployTargets_Handler,
 		},
 		{
 			MethodName: "InspectRepo",

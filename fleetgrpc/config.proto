@@ -142,8 +142,11 @@ message Config {
   reserved "coder";
   CodespacesSettings codespaces = 5;
   BrowserSettings browser = 6;
-  // Feeds CreateInstanceRequest's UNSPECIFIED-backend resolution. UNSPECIFIED
-  // means "no default recorded" (-> DEVCONTAINER).
+  // The remembered default deploy target: feeds CreateInstanceRequest's
+  // UNSPECIFIED-backend resolution. UNSPECIFIED means "no default recorded"
+  // (-> DEVCONTAINER). Server-owned: written by
+  // CreateInstanceRequest.remember_default, and SetConfig keeps the stored value
+  // whatever the request carries, so a client's stale copy can't undo it.
   BackendType default_backend = 7;
   RemoteMcpSettings remote_mcp = 8;
 
@@ -162,7 +165,8 @@ message GetConfigReply {
 }
 
 // SetConfig replaces the whole Config (the settings page sends the full edited
-// Config). Returns the post-mutation Config so the caller stays consistent.
+// Config), except default_backend, which only remember_default writes. Returns
+// the post-mutation Config so the caller stays consistent.
 message SetConfigRequest {
   Config config = 1;
 }

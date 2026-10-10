@@ -4,6 +4,7 @@ package fleetgrpc;
 
 import "google/protobuf/timestamp.proto";
 import "domain.proto";
+import "deploy.proto";
 
 option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
 
@@ -96,6 +97,10 @@ message JobStarted {
   string fleet = 3;
   string instance = 4;
   google.protobuf.Timestamp started_at = 5;
+  // target is where a create job's instance goes: the server-resolved deploy
+  // target (the remembered default when the request left it UNSPECIFIED).
+  // Unset for other job kinds.
+  DeployTarget target = 6;
 }
 
 // JobProgress reports advancing through a JobStep. step_done marks the step
@@ -147,10 +152,12 @@ message JobDone {
 // state write — this is what eliminates the #63 client-write race), runs the
 // job, and streams JobEvents.
 //
-// BACKEND RESOLUTION: when backend == UNSPECIFIED the server resolves it (since
-// ParseBackendType rejects empty today): use config.json DefaultBackend if set
-// and valid, else BACKEND_TYPE_DEVCONTAINER. config.json is server-owned (see
-// config.proto), so this source is part of the contract, not hidden fs access.
+// TARGET RESOLUTION: when backend == UNSPECIFIED the server resolves it to the
+// remembered default target (config.json DefaultBackend, written only through
+// remember_default) if set and valid, else BACKEND_TYPE_DEVCONTAINER; a file://
+// template fleet narrows a remembered target it cannot use to devcontainer.
+// ListDeployTargets reports the same default, and JobStarted.target names what
+// the create resolved to.
 message CreateInstanceRequest {
   string fleet = 1;
   string instance = 2;
@@ -162,6 +169,10 @@ message CreateInstanceRequest {
   BackendType backend = 4;
   optional string branch = 5;
   bool verbose = 6;
+  // remember_default makes the resolved target the remembered default (what
+  // later UNSPECIFIED creates resolve to) once the create is accepted. The TUI
+  // New instance dialog sets it; the CLI and MCP do not.
+  bool remember_default = 7;
 }
 
 // DestroyInstanceRequest destroys a single instance, or (destroy_fleet=true)
