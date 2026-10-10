@@ -41,16 +41,20 @@ tui_send j
 sleep 0.3
 tui_send b
 # The first open installs the proxy inside the instance (a package install).
-tui_wait_for "Browser opened (proxy on localhost:" 300
-proxy_port=$(tui_capture | grep -oE 'proxy on localhost:[0-9]+' | head -n 1 | grep -oE '[0-9]+$')
-[ -n "${proxy_port}" ] || fail "no proxy port in the TUI message"
+# The stand-in's record is the evidence; the TUI's status line is transient.
+deadline=$(( $(date +%s) + $(_scale_timeout 300) ))
+until [ -s "${launches}" ]; do
+  if tui_capture | grep -q "Browser proxy error"; then fail "'b' failed: $(tui_capture)"; fi
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "the browser was never launched: $(tui_capture)"
+  sleep 1
+done
+launch=$(head -n 1 "${launches}")
+proxy_port=$(printf '%s\n' "${launch}" | grep -oE -- '--proxy-server=http://localhost:[0-9]+' | grep -oE '[0-9]+$' || true)
+[ -n "${proxy_port}" ] || fail "the browser was launched without a proxy: ${launch}"
 proxy="http://127.0.0.1:${proxy_port}"
 info "proxy forward on localhost:${proxy_port}"
 
 info "the browser was launched through the proxy, opening the landing page"
-[ -s "${launches}" ] || fail "the browser stub was never launched"
-launch=$(head -n 1 "${launches}")
-assert_contains "${launch}" "--proxy-server=http://localhost:${proxy_port}" "the browser should be routed through the proxy forward"
 assert_contains "${launch}" "--proxy-bypass-list=<-loopback>" "the browser must not bypass the proxy for localhost"
 # The fixture configures a Fleet Launch block and no browser.initialUrl.
 assert_equals "http://localhost:16767" "${launch##* }" "the browser should open on the landing page"

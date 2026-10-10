@@ -57,7 +57,11 @@ tui_wait_for "○ idle" 60
 tui_send j
 sleep 0.3
 tui_send c
-tui_wait_for "Opened VS Code for alpha" 15
+deadline=$(( $(date +%s) + $(_scale_timeout 15) ))
+until grep -qx -- '--' "${runs}"; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "'c' never ran the editor: $(tui_capture)"
+  sleep 0.25
+done
 assert_equals "${want}" "$(cat "${runs}")" "the arguments the TUI gave the editor"
 
 if itest_backend_is devcontainer; then
