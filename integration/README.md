@@ -123,6 +123,11 @@ kubernetes run leaves it out. run.sh fails a test whose markers are malformed
 k8s parity of the selected tests (marked `k8s`, devcontainer-only, not ported
 yet, host-only) and lists each exemption with its reason.
 
+Any line that starts with `# itest:` counts, heredocs included, so a test that
+writes such a line for another file builds it with `printf`.
+`tests/005_itest_harness.sh` covers the markers, the helpers and run.sh's
+kubernetes selection.
+
 ## Prerequisites
 
 - Go toolchain (for building `fleet`)
