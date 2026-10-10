@@ -200,7 +200,10 @@ func (s *service) UpdateKubeCluster(ctx context.Context, req *fleetgrpc.UpdateKu
 	repoint := next.Context != cur.Context || !samePaths(next.KubeconfigPaths, cur.KubeconfigPaths)
 	forget := false // the probe's notes about the old target go
 	if repoint || next.Namespace != cur.Namespace {
-		users := s.kubeUsers(cur.ID)
+		users, err := s.kubeUsers(cur.ID)
+		if err != nil {
+			return nil, err
+		}
 		switch {
 		case len(users) > 0 && next.Namespace != cur.Namespace:
 			return nil, status.Errorf(codes.FailedPrecondition, "connection %q is in use (%s): its namespace cannot change; add another connection for namespace %q", cur.GetDisplayName(), describeUsers(users), next.Namespace)
@@ -305,11 +308,13 @@ func (s *service) verifyRepoint(ctx context.Context, cur, next fleet.KubeCluster
 	return nil
 }
 
-// kubeUsers are the instances and agents that use a connection.
-func (s *service) kubeUsers(id string) []*fleetgrpc.KubeClusterUser {
+// kubeUsers are the instances and agents that use a connection. An
+// unreadable state.json is an error, never "no users": a removal or a
+// re-point must not proceed on a guess.
+func (s *service) kubeUsers(id string) ([]*fleetgrpc.KubeClusterUser, error) {
 	st, err := state.Load()
 	if err != nil {
-		return nil
+		return nil, status.Errorf(codes.Internal, "load state: %v", err)
 	}
 	var users []*fleetgrpc.KubeClusterUser
 	for _, name := range sortedStateFleets(st) {
@@ -325,7 +330,7 @@ func (s *service) kubeUsers(id string) []*fleetgrpc.KubeClusterUser {
 			}
 		}
 	}
-	return users
+	return users, nil
 }
 
 func sortedStateFleets(st *state.State) []string {
@@ -372,7 +377,10 @@ func (s *service) RemoveKubeCluster(ctx context.Context, req *fleetgrpc.RemoveKu
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "no Kubernetes connection %q", req.GetId())
 	}
-	users := s.kubeUsers(rec.ID)
+	users, err := s.kubeUsers(rec.ID)
+	if err != nil {
+		return nil, err
+	}
 	reply := &fleetgrpc.RemoveKubeClusterReply{Users: users}
 	switch req.GetMode() {
 	case fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_UNSPECIFIED, fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_REFUSE_IF_USED:
@@ -390,7 +398,7 @@ func (s *service) RemoveKubeCluster(ctx context.Context, req *fleetgrpc.RemoveKu
 	default:
 		return nil, invalidf("unknown remove mode %v", req.GetMode())
 	}
-	err := state.UpdateKubeClusters(func(k *state.KubeClusters) error {
+	err = state.UpdateKubeClusters(func(k *state.KubeClusters) error {
 		if !k.Remove(rec.ID) {
 			return status.Errorf(codes.NotFound, "no Kubernetes connection %q", rec.ID)
 		}

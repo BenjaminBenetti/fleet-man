@@ -795,3 +795,19 @@ func TestResolveTargetPicksTheCluster(t *testing.T) {
 		t.Errorf("explicit: %+v", got)
 	}
 }
+
+// An unreadable state.json refuses a removal rather than guessing that no
+// instance uses the connection.
+func TestRemoveKubeClusterRefusesWithoutState(t *testing.T) {
+	f := newKubeFixture(t)
+	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube"}).GetCluster().GetId()
+	if err := os.WriteFile(state.StatePath(), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.RemoveKubeCluster(context.Background(), &fleetgrpc.RemoveKubeClusterRequest{Id: id}); status.Code(err) != codes.Internal {
+		t.Fatalf("remove with a broken state.json = %v", err)
+	}
+	if reg, _ := state.LoadKubeClusters(); len(reg.Clusters) != 1 {
+		t.Fatal("the connection was removed")
+	}
+}
