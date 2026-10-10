@@ -26,7 +26,8 @@ func ConfigToProto(c *configutil.Config) *fleetgrpc.Config {
 			WebhookEnabled: c.RemoteMcpSettings.WebhookEnabled,
 			FleetMode:      c.RemoteMcpSettings.FleetMode,
 		},
-		DefaultBackend: BackendToProto(fleet.BackendType(c.DefaultBackend)),
+		DefaultBackend:     BackendToProto(fleet.BackendType(c.DefaultBackend)),
+		DefaultKubeCluster: c.DefaultKubeCluster,
 		Mic: &fleetgrpc.MicSettings{
 			Enabled: c.MicSettings.Enabled,
 			Device:  c.MicSettings.Device,
@@ -170,5 +171,6 @@ func ConfigFromProto(pc *fleetgrpc.Config, base *configutil.Config) *configutil.
 	}
 
 	c.DefaultBackend = string(BackendFromProto(pc.GetDefaultBackend()))
+	c.DefaultKubeCluster = pc.GetDefaultKubeCluster()
 	return c
 }

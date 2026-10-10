@@ -236,7 +236,7 @@ func TestSubmitAddInstanceRemembersTheTargetServerSide(t *testing.T) {
 	t.Cleanup(func() { createInstanceRemote = origCreate })
 
 	stubListDeployTargets(t, deployTargetsReply(devcontainerTarget, available(devcontainerTarget), available(codespacesTarget)), nil)
-	fp, m := pressAddOnFleet(t, &configutil.Config{DefaultBackend: string(fleet.BackendDevcontainer)})
+	fp, m := pressAddOnFleet(t, &configutil.Config{DefaultBackend: string(fleet.BackendDevcontainer), DefaultKubeCluster: "stale"})
 	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyEsc})
 	fp.updateAddInstance(m, tea.KeyMsg{Type: tea.KeyTab})
 	fp.textInput.SetValue("i1")
@@ -248,16 +248,23 @@ func TestSubmitAddInstanceRemembersTheTargetServerSide(t *testing.T) {
 	if got != codespacesTarget {
 		t.Fatalf("created on %v, want codespaces", got)
 	}
-	if m.config.DefaultBackend != string(fleet.BackendCodespaces) {
-		t.Fatalf("config copy default = %q, want it to mirror codespaces for the agent dialog", m.config.DefaultBackend)
+	if m.config.DefaultBackend != string(fleet.BackendCodespaces) || m.config.DefaultKubeCluster != "" {
+		t.Fatalf("config copy default = %q/%q, want it to mirror codespaces (no cluster) for the agent dialog",
+			m.config.DefaultBackend, m.config.DefaultKubeCluster)
 	}
 	if !strings.Contains(m.message, "(Codespaces)") {
 		t.Fatalf("message = %q", m.message)
 	}
 
 	req := newCreateInstanceRequest("alpha", "i1", "git@x:alpha.git", "", codespacesTarget)
-	if !req.GetRememberDefault() || req.GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES {
+	if !req.GetRememberDefault() || req.GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES || req.GetKubeCluster() != "" {
 		t.Fatalf("create request = %v, want codespaces with remember_default", req)
+	}
+	// A cluster target sends its connection with the backend.
+	cluster := fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "prod-eu"}
+	req = newCreateInstanceRequest("alpha", "i1", "git@x:alpha.git", "", cluster)
+	if req.GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES || req.GetKubeCluster() != "prod-eu" {
+		t.Fatalf("create request = %v, want kubernetes on prod-eu", req)
 	}
 }
 
@@ -389,5 +396,21 @@ func TestFetchDaemonTools(t *testing.T) {
 	stubListDeployTargets(t, nil, errors.New("boom"))
 	if got := fetchDaemonTools(); !strings.Contains(got.err, "boom") {
 		t.Fatalf("error: %+v", got)
+	}
+}
+
+// Every backend type has a label of its own: a new one must not show as a
+// second "Devcontainer".
+func TestBackendTypeLabelNamesEveryBackendType(t *testing.T) {
+	seen := map[string]fleet.BackendType{}
+	for _, backendType := range fleet.BackendTypes() {
+		label := backendTypeLabel(backendType)
+		if other, dup := seen[label]; dup {
+			t.Errorf("%q and %q share the label %q", other, backendType, label)
+		}
+		seen[label] = backendType
+	}
+	if got := backendTypeLabel(""); got != "Devcontainer" {
+		t.Errorf(`backendTypeLabel("") = %q, want Devcontainer`, got)
 	}
 }

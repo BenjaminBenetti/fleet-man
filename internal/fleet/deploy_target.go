@@ -1,14 +1,16 @@
 package fleet
 
-// DeployTarget names where an instance runs. Today that is a backend type; a
-// backend whose instances run somewhere it has to name (a Kubernetes cluster
-// connection) adds that here, so code that picks, remembers or reports a
-// target carries it without new plumbing.
+// DeployTarget names where an instance runs: a backend type and, for
+// Kubernetes, the cluster connection its instances run on. Code that picks,
+// remembers or reports a target carries both.
 //
 // The zero value is "unspecified": a create request that leaves its target
 // unspecified gets the daemon's remembered default.
 type DeployTarget struct {
 	Backend BackendType
+	// KubeCluster is the cluster connection (KubeCluster.ID) of a Kubernetes
+	// target; empty for every other backend.
+	KubeCluster string
 }
 
 // DeployTargetOption is a DeployTarget as the daemon offers it: whether a
@@ -19,8 +21,10 @@ type DeployTargetOption struct {
 	Reason    string
 }
 
-// deployTargets lists every target this build knows, in the order the New
-// instance dialog cycles them.
+// deployTargets lists every target this build knows that needs no
+// connection, in the order the New instance dialog cycles them. Kubernetes has
+// one target per cluster connection, which only the daemon knows, so it lists
+// them itself (after these).
 var deployTargets = []DeployTarget{
 	{Backend: BackendDevcontainer},
 	{Backend: BackendCoder},
@@ -33,9 +37,13 @@ var deployTargetTools = map[BackendType]string{
 	BackendDevcontainer: "devcontainer",
 	BackendCoder:        "coder",
 	BackendCodespaces:   "gh",
+	// A cluster's image is built on the daemon host by the devcontainer CLI
+	// (which also needs docker there).
+	BackendKubernetes: "devcontainer",
 }
 
-// DeployTargets returns every target this build knows, in dialog order.
+// DeployTargets returns every target this build knows that needs no
+// connection, in dialog order (see deployTargets).
 func DeployTargets() []DeployTarget {
 	return append([]DeployTarget(nil), deployTargets...)
 }
@@ -45,8 +53,12 @@ func (t DeployTarget) IsZero() bool {
 	return t == DeployTarget{}
 }
 
-// String is the target's CLI form ("devcontainer").
+// String is the target's CLI form: the backend ("devcontainer"), and for a
+// cluster target the connection after a colon ("kubernetes:minikube").
 func (t DeployTarget) String() string {
+	if t.KubeCluster != "" {
+		return string(t.Backend) + ":" + t.KubeCluster
+	}
 	return string(t.Backend)
 }
 
@@ -78,5 +90,5 @@ func (i *Instance) DeployTarget() DeployTarget {
 	if i.Backend == "" {
 		return DeployTarget{Backend: BackendDevcontainer}
 	}
-	return DeployTarget{Backend: i.Backend}
+	return DeployTarget{Backend: i.Backend, KubeCluster: i.KubeCluster}
 }

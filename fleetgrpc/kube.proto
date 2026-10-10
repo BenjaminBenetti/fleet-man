@@ -1,0 +1,540 @@
+syntax = "proto3";
+
+package fleetgrpc;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
+
+// =====================================================================
+// KUBERNETES — cluster connections, their health, and the live state of
+// the instances that run on them
+// =====================================================================
+//
+// A KubeCluster is one daemon-owned connection to a namespace on a
+// Kubernetes cluster, persisted in ~/.fleet/kube_clusters.json on the daemon
+// host and mirrored field for field by internal/fleet.KubeCluster (protoconv
+// converts). Every knob lives on the connection: a different namespace is
+// another connection. Remote clients (gateway, Armada SSH) read and set every
+// field exactly as a local one does; the only value that never travels is
+// the gateway image credential, which has no field here at all.
+//
+// Settings are "unset = default" throughout: an empty string (string-valued
+// enums included) or an absent optional takes the default documented on the
+// field, so a record written before a knob existed keeps working. Sizes are
+// Kubernetes quantities ("50Gi") and durations Go durations ("30s", "72h");
+// the daemon validates both. String-valued enums match the Go model's string
+// types (internal/fleet), as Trigger.type does, so they travel as plain
+// strings.
+
+// KubeCluster is one cluster connection and every per-cluster setting.
+message KubeCluster {
+  // ---- identity ----
+
+  // id names the connection for good: object labels (fleet.dev/cluster),
+  // instance records (Instance.kube_cluster), ContainerIDs and deploy targets
+  // carry it. The daemon assigns it when the connection is added and never
+  // changes it.
+  string id = 1;
+  // display_name is the user-facing name ("prod-eu"); unique among the
+  // daemon's connections. Empty shows the id.
+  string display_name = 2;
+  // context is the kubeconfig context the connection uses.
+  string context = 3;
+  // kubeconfig_paths are the kubeconfig files on the DAEMON host the context
+  // is read from, pinned when the connection is added.
+  repeated string kubeconfig_paths = 4;
+  // namespace every object of this connection lives in.
+  string namespace = 5;
+  // server is the API server URL the context pointed at when last checked.
+  string server = 6;
+  // cluster_uid is the kube-system namespace UID, recorded when the
+  // connection is added. A connection in use may be re-pointed to another
+  // context or kubeconfig only when the new target reports the same UID (and
+  // its instances' objects are found there).
+  string cluster_uid = 7;
+  // extra_path is prepended to PATH for the kubeconfig's exec credential
+  // plugins (aws, gke-gcloud-auth-plugin, kubelogin, ...) on the daemon host.
+  repeated string extra_path = 8;
+  // plugin_env is environment for the exec credential plugins, one variable
+  // per entry: "NAME" passes the daemon's own value through, "NAME=value"
+  // sets it. Names are allowlisted, and a value is refused for a name that
+  // looks secret (*SECRET*, *TOKEN*, *PASSWORD*, *KEY*), so the record, which
+  // every client can read, never holds a credential. The daemon validates
+  // entries.
+  repeated string plugin_env = 9;
+
+  // ---- instance storage ----
+
+  // storage_class for each instance's root disk. Empty = auto (a RWO block
+  // class with WaitForFirstConsumer binding, expansion and a snapshot class).
+  string storage_class = 10;
+  // disk_size of each instance's root disk. Empty = 50Gi.
+  string disk_size = 11;
+  // auto_expand_disk grows a disk by 50% at 90% full where the class allows
+  // expansion. Absent = on.
+  optional bool auto_expand_disk = 12;
+  // snapshot_class used for clone snapshots. Empty = auto.
+  string snapshot_class = 13;
+  // clone_method: "" or "auto" (best available), "snapshot", "csi-clone",
+  // "copy".
+  string clone_method = 14;
+  // clone_consistency: "" or "auto", or "stop-source" (scale the source to 0
+  // for the final copy).
+  string clone_consistency = 15;
+  // backup_workspace_on_stop exports the workspace to the daemon host on every
+  // stop (for node-local storage).
+  bool backup_workspace_on_stop = 16;
+  // node_local_ack acknowledges that node-local storage on a multi-node
+  // cluster loses an instance's data with its node.
+  bool node_local_ack = 17;
+
+  // ---- fleet share ----
+
+  // shared_storage_class for each fleet's share. Empty = auto (a class that
+  // passes the multi-node test, else the instance class in single-node mode).
+  string shared_storage_class = 18;
+  // share_size of each fleet's share. Empty = 10Gi.
+  string share_size = 19;
+  // share_retention on fleet destroy: "" or "delete", or "retain".
+  string share_retention = 20;
+  // credential_scope of agent logins: "" or "location" (one login per
+  // location), or "fleet" (shared across locations).
+  string credential_scope = 21;
+
+  // ---- caches ----
+
+  // cache_storage_class for the fleet cache volumes. Empty = auto.
+  string cache_storage_class = 22;
+  // cache_sizes of the fleet cache volumes.
+  KubeCacheSizes cache_sizes = 23;
+  // service_images overrides the digest-pinned images of the services fleet
+  // runs in the namespace.
+  KubeServiceImages service_images = 24;
+  // allow_shared_buildkit permits a fleet's shared buildkit server on this
+  // cluster (the fleet's own toggle decides). Absent = allowed.
+  optional bool allow_shared_buildkit = 25;
+  // delete_cache_volumes_on_destroy deletes a fleet's cache volumes with the
+  // fleet instead of keeping them for a warm restart.
+  bool delete_cache_volumes_on_destroy = 26;
+  // dind_address_pool is the address pool docker-in-docker networks use
+  // inside instances. Empty = docker's default.
+  string dind_address_pool = 27;
+  // block_metadata denies pod egress to the cloud metadata range (DNS still
+  // allowed). Absent = on.
+  optional bool block_metadata = 28;
+
+  // ---- pod shape and security ----
+
+  // resources requested by each instance pod.
+  KubeResources resources = 29;
+  // memory_limit set explicitly when a LimitRange would inject a lower one.
+  // Empty = 8Gi.
+  string memory_limit = 30;
+  // node_selector and tolerations place instance pods (e.g. on a dedicated
+  // node pool for privileged pods).
+  map<string, string> node_selector = 31;
+  repeated KubeToleration tolerations = 32;
+  // allow_privileged permits privileged pods (DinD, rootful buildkit, host
+  // devices): the node becomes the isolation boundary. Absent = auto (on
+  // for a detected local cluster: minikube, kind, k3d, Docker Desktop; off
+  // elsewhere).
+  optional bool allow_privileged = 33;
+  // debug_capabilities (SYS_PTRACE, unconfined seccomp): "" or "auto" (asked
+  // for, dropped with a warning when admission denies them), or "require"
+  // (the create fails instead).
+  string debug_capabilities = 34;
+  // runtime_class for instance pods (e.g. sysbox). Empty = the cluster's.
+  string runtime_class = 35;
+  // service_account instance pods run as. Empty = the namespace default.
+  string service_account = 36;
+  // pod_overrides_yaml is merged into every instance pod spec (allowlisted
+  // fields; host namespaces and hostPath only with allow_privileged).
+  string pod_overrides_yaml = 37;
+  // protect_from_drain adds a PodDisruptionBudget to each instance.
+  bool protect_from_drain = 38;
+  // host_gateway mirrors the daemon host's listening ports into pods for
+  // host.docker.internal: "" or "auto" (when the devcontainer declares
+  // host-gateway), or "off".
+  string host_gateway = 39;
+
+  // ---- quotas ----
+
+  // max_instances on this connection. 0 = no limit.
+  int32 max_instances = 40;
+  // max_total_disk across this connection's instance disks. Empty = no limit.
+  string max_total_disk = 41;
+  // automation_fire_interval is the shortest time between two firings of one
+  // trigger whose agent runs here. Empty = 30s; "0" turns the limit off.
+  string automation_fire_interval = 42;
+  // automation_max_per_agent caps one agent's concurrent runs here. Absent =
+  // 4; 0 turns the limit off.
+  optional int32 automation_max_per_agent = 43;
+
+  // ---- image ----
+
+  KubeImageSettings image = 44;
+
+  // ---- workspace ----
+
+  // rebuild_export is how Rebuild brings an instance's workspace back to the
+  // daemon host before it rebuilds. Empty = auto.
+  string rebuild_export = 45;
+
+  // ---- bookkeeping (daemon-owned; clients cannot set these) ----
+
+  google.protobuf.Timestamp created_at = 46;
+  google.protobuf.Timestamp updated_at = 47;
+  // verified_at is when the last full preflight passed.
+  google.protobuf.Timestamp verified_at = 48;
+  // revision increases on every change to the record.
+  int64 revision = 49;
+}
+
+// KubeResources is what each instance pod requests.
+message KubeResources {
+  // Empty = 500m.
+  string cpu_request = 1;
+  // Empty = 2Gi.
+  string memory_request = 2;
+  // autopilot_memory is the memory request on GKE Autopilot, where limits
+  // equal requests. Empty = 4Gi.
+  string autopilot_memory = 3;
+}
+
+// KubeToleration mirrors a core/v1 Toleration.
+message KubeToleration {
+  string key = 1;
+  // "Exists" or "Equal" (empty = Equal).
+  string operator = 2;
+  string value = 3;
+  // "NoSchedule", "PreferNoSchedule", "NoExecute" (empty = all).
+  string effect = 4;
+  optional int64 toleration_seconds = 5;
+}
+
+// KubeCacheSizes sizes each fleet cache volume; one field per shared service
+// (fleet.SharedService).
+message KubeCacheSizes {
+  // Empty = 20Gi.
+  string buildkit = 1;
+  // apt-cacher-ng. Empty = 10Gi.
+  string debcache = 2;
+  // registry pull-through mirror. Empty = 20Gi.
+  string imagecache = 3;
+}
+
+// KubeServiceImages overrides the images of the services fleet runs. Empty =
+// the digest-pinned default.
+message KubeServiceImages {
+  // Rootful buildkit (only with privileged pods allowed).
+  string buildkit = 1;
+  // Rootless buildkit (the default buildkit image).
+  string buildkit_rootless = 2;
+  string debcache = 3;
+  string imagecache = 4;
+  // The docker-in-docker sidecar for docker-outside-of-docker devcontainers.
+  string dind = 5;
+}
+
+// KubeImageSettings is how built devcontainer images reach the cluster.
+message KubeImageSettings {
+  // mode: "" or "auto" (node load on a local cluster, else the registry when
+  // one is set, else the gateway), "node-load", "registry", "gateway".
+  string mode = 1;
+  // registry images are pushed to ("registry.example.com/team").
+  string registry = 2;
+  // insecure_registry allows plain HTTP or an untrusted certificate.
+  bool insecure_registry = 3;
+  // pull_secrets are existing image pull Secrets in the namespace.
+  repeated string pull_secrets = 4;
+  // managed_pull_secret builds a pull Secret from the registry's own scoped
+  // credential on the daemon host. Absent = on.
+  optional bool managed_pull_secret = 5;
+  // builder is the docker buildx builder the daemon builds with. Empty = the
+  // default builder.
+  string builder = 6;
+  // platform to build for ("linux/arm64"). Empty = the nodes' platform.
+  string platform = 7;
+  // retention of pushed images nothing uses any more. Empty = 72h.
+  string retention = 8;
+  // upload_pace_percent caps registry uploads through the gateway at this
+  // share of the measured uplink. Absent = 80; 0 turns pacing off.
+  optional int32 upload_pace_percent = 9;
+}
+
+// =====================================================================
+// CLUSTER HEALTH (Watch Event.kube_clusters)
+// =====================================================================
+
+// KubeClusterState is a connection's health.
+enum KubeClusterState {
+  KUBE_CLUSTER_STATE_UNSPECIFIED = 0;
+  // CHECKING: the first probe has not returned yet.
+  KUBE_CLUSTER_STATE_CHECKING = 1;
+  // READY: every check passed.
+  KUBE_CLUSTER_STATE_READY = 2;
+  // LIMITED: usable, with at least one degraded capability (the warn checks
+  // say which).
+  KUBE_CLUSTER_STATE_LIMITED = 3;
+  KUBE_CLUSTER_STATE_UNREACHABLE = 4;
+  // UNAUTHORIZED: the credentials were refused or have expired.
+  KUBE_CLUSTER_STATE_UNAUTHORIZED = 5;
+  // FORBIDDEN: authenticated, but RBAC denies what fleet needs.
+  KUBE_CLUSTER_STATE_FORBIDDEN = 6;
+  // CONTEXT_MISSING: the context is gone from the pinned kubeconfig.
+  KUBE_CLUSTER_STATE_CONTEXT_MISSING = 7;
+  // PLUGIN_MISSING: the context's exec credential plugin is not on the
+  // daemon's PATH (plus extra_path).
+  KUBE_CLUSTER_STATE_PLUGIN_MISSING = 8;
+  // MISCONFIGURED: reachable, but unusable as configured (e.g. no block
+  // storage class, a missing namespace).
+  KUBE_CLUSTER_STATE_MISCONFIGURED = 9;
+  // OWNER_CONFLICT: another live daemon incarnation holds this daemon's
+  // owner Lease; adoption and GC are refused.
+  KUBE_CLUSTER_STATE_OWNER_CONFLICT = 10;
+}
+
+// KubeCheckResult is one preflight check's outcome.
+enum KubeCheckResult {
+  KUBE_CHECK_RESULT_UNSPECIFIED = 0;
+  KUBE_CHECK_RESULT_RUNNING = 1;
+  KUBE_CHECK_RESULT_PASS = 2;
+  KUBE_CHECK_RESULT_WARN = 3;
+  KUBE_CHECK_RESULT_FAIL = 4;
+  KUBE_CHECK_RESULT_SKIPPED = 5;
+}
+
+// KubeCheck is one preflight check ("kubeconfig", "credentials",
+// "reachable", "identity", "namespace", "rbac", "admission",
+// "root_storage", "shared_storage", "attach_limits", "snapshots", "limits",
+// "metrics", "nodes", "runtime_classes", "image_delivery", ...).
+message KubeCheck {
+  string name = 1;
+  KubeCheckResult result = 2;
+  // detail says what was found ("namespace 'fleet' does not exist").
+  string detail = 3;
+  // fix names the remedy, when there is a known one.
+  string fix = 4;
+}
+
+// KubeClusterStatus is one connection with its health. The record carries
+// every field a client can see; the daemon fills the rest from its probes.
+message KubeClusterStatus {
+  KubeCluster cluster = 1;
+  KubeClusterState state = 2;
+  // message is the one-line reason for a non-READY state ("credentials
+  // expired 2h ago").
+  string message = 3;
+  KubeCapabilities capabilities = 4;
+  // warnings are the exposure lines shown with the capabilities, never
+  // blocking ("privileged allowed: the node is the isolation boundary").
+  repeated string warnings = 5;
+  // checks are the last preflight's results, in check order.
+  repeated KubeCheck checks = 6;
+  // checked_at is when the last probe returned.
+  google.protobuf.Timestamp checked_at = 7;
+  // deep_checked_at is when the last deep test (throwaway pods) finished.
+  google.protobuf.Timestamp deep_checked_at = 8;
+}
+
+// KubeClusters is every connection this daemon holds, with its health,
+// pushed as Watch Event.kube_clusters whenever a record or its health
+// changes. Server-owned and conflatable like ActiveJobs: each push replaces
+// the last one whole, and the initial snapshot carries the current set
+// (empty when there is none).
+message KubeClusters {
+  repeated KubeClusterStatus clusters = 1;
+}
+
+// KubeCapabilities is what the last probes found on a connection.
+message KubeCapabilities {
+  // Server version ("v1.37.0"), the identity fleet acts as, and the nodes'
+  // architectures ("amd64").
+  string version = 1;
+  string user = 2;
+  repeated string node_archs = 3;
+
+  // local_cluster: minikube, kind, k3d or Docker Desktop was detected.
+  bool local_cluster = 4;
+  // privileged_allowed is the effective allow_privileged (auto resolved).
+  bool privileged_allowed = 5;
+
+  KubeAdmission admission = 6;
+  // psa_level is the namespace's enforced pod-security level ("baseline").
+  string psa_level = 7;
+  // injection_labels are service-mesh injection labels on the namespace.
+  repeated string injection_labels = 8;
+
+  repeated KubeStorageClass storage_classes = 9;
+  repeated string snapshot_classes = 10;
+  // multi_pod_rwo: one RWO volume mounts from two pods on one node (deep
+  // test).
+  bool multi_pod_rwo = 11;
+  // share_mode in effect: "multi-node", "single-node" or "copy".
+  string share_mode = 12;
+  // single_node_fleet_cap is how many instances one fleet fits in
+  // single-node mode (0 when not in that mode).
+  int32 single_node_fleet_cap = 13;
+  // clone_tier in effect: "snapshot", "csi-clone" or "copy".
+  string clone_tier = 14;
+
+  repeated KubeNode nodes = 15;
+  bool metrics_available = 16;
+  repeated string runtime_classes = 17;
+
+  // limit_range_memory_limit is the default memory limit a LimitRange
+  // injects (empty when none does).
+  string limit_range_memory_limit = 18;
+  repeated KubeQuotaHeadroom quota = 19;
+
+  KubeImageDelivery image_delivery = 20;
+
+  bool network_policy_enforced = 21;
+  // metadata_reachable: pods reach the cloud metadata service.
+  bool metadata_reachable = 22;
+  bool selinux_enforcing = 23;
+  int64 inotify_max_user_watches = 24;
+  int64 inotify_max_user_instances = 25;
+  // audio_capable: instances here can run the virtual microphone and audio
+  // output.
+  bool audio_capable = 26;
+  // buildkit_admitted: the shared buildkit pod passes admission;
+  // buildkit_reason says why not.
+  bool buildkit_admitted = 27;
+  string buildkit_reason = 28;
+
+  // credentials_expire_at is when the exec plugin's credential expires
+  // (absent when it does not say).
+  google.protobuf.Timestamp credentials_expire_at = 29;
+  // node_cordoned_moving: a fleet is being moved off a cordoned node.
+  bool node_cordoned_moving = 30;
+
+  KubeOrphans orphans = 31;
+  // pending_teardowns counts deletions waiting for the cluster.
+  int32 pending_teardowns = 32;
+}
+
+// KubeAdmission is the result of the dry-run canaries.
+message KubeAdmission {
+  bool unprivileged = 1;
+  bool debug_capabilities = 2;
+  bool privileged = 3;
+  // denial is the first refusal's message.
+  string denial = 4;
+}
+
+// KubeStorageClass is one StorageClass as fleet classified it.
+message KubeStorageClass {
+  string name = 1;
+  string provisioner = 2;
+  bool is_default = 3;
+  bool block = 4;
+  bool node_local = 5;
+  // binding_mode: "WaitForFirstConsumer" or "Immediate".
+  string binding_mode = 6;
+  bool allow_expansion = 7;
+  // reclaim_policy: "Delete" or "Retain".
+  string reclaim_policy = 8;
+  bool csi_clone = 9;
+  bool selinux_mount = 10;
+  // multi_node_test is the cached result of the multi-node share test.
+  KubeCheck multi_node_test = 11;
+}
+
+// KubeNode is one node's capacity as preflight read it.
+message KubeNode {
+  string name = 1;
+  string arch = 2;
+  string allocatable_cpu = 3;
+  string allocatable_memory = 4;
+  // attach_limit is the CSI driver's per-node volume limit; attached the
+  // volumes already attached (0 when unknown).
+  int32 attach_limit = 5;
+  int32 attached = 6;
+  bool cordoned = 7;
+}
+
+// KubeQuotaHeadroom is one ResourceQuota resource.
+message KubeQuotaHeadroom {
+  string resource = 1;
+  string used = 2;
+  string hard = 3;
+}
+
+// KubeImageDelivery is how images reach this cluster.
+message KubeImageDelivery {
+  // mode resolved from KubeImageSettings.mode: "node-load", "registry",
+  // "gateway", or "none" (reason says why).
+  string mode = 1;
+  bool registry_reachable = 2;
+  bool registry_delete_supported = 3;
+  // gateway_registry: the gateway offers image delivery for this daemon.
+  bool gateway_registry = 4;
+  // gateway_manifest_ok: the daemon fetched a manifest through the gateway.
+  bool gateway_manifest_ok = 5;
+  string reason = 6;
+}
+
+// KubeOrphans counts fleet objects no record owns.
+message KubeOrphans {
+  int32 instances = 1;
+  int32 shares = 2;
+  int32 cache_volumes = 3;
+  int32 snapshot_contents = 4;
+}
+
+// =====================================================================
+// INSTANCE RUNTIME (InstanceRuntime.kube, InstanceRuntime.share_sync)
+// =====================================================================
+
+// KubeAgentState is the in-pod agent session as the daemon sees it.
+enum KubeAgentState {
+  KUBE_AGENT_STATE_UNSPECIFIED = 0;
+  KUBE_AGENT_STATE_CONNECTED = 1;
+  KUBE_AGENT_STATE_RECONNECTING = 2;
+  // UNKNOWN: probes keep failing (e.g. the cluster is unreachable).
+  KUBE_AGENT_STATE_UNKNOWN = 3;
+}
+
+// KubeInstanceRuntime is the live view of an instance that runs on a
+// cluster, beyond what every backend reports.
+message KubeInstanceRuntime {
+  // pod_reason is why the pod is not ready ("ImagePullBackOff",
+  // "Unschedulable"); empty when it is.
+  string pod_reason = 1;
+  string node = 2;
+  KubeAgentState agent = 3;
+  // restart_cause names the last restart the cluster made on its own
+  // ("oom-killed", "evicted", "node-drained", "node-lost", "fleet-moved",
+  // "crashed"); cleared by the next attach.
+  string restart_cause = 4;
+  google.protobuf.Timestamp restarted_at = 5;
+  // sessions_ended: that restart killed every process (an out-of-memory kill
+  // on an unprivileged pod), not only the sessions.
+  bool sessions_ended = 6;
+  // node_cordoned_moving: the pod is being moved off a cordoned node.
+  bool node_cordoned_moving = 7;
+}
+
+// ShareSyncState is how far the fleet share on a cluster lags the daemon
+// host's copy.
+enum ShareSyncState {
+  SHARE_SYNC_STATE_UNSPECIFIED = 0;
+  SHARE_SYNC_STATE_IN_SYNC = 1;
+  SHARE_SYNC_STATE_SYNCING = 2;
+  // PAUSED: a root cannot sync (size cap, share full, low disk on the daemon
+  // host); reason says which. Nothing is dropped.
+  SHARE_SYNC_STATE_PAUSED = 3;
+}
+
+// ShareSyncStatus is the sync between an instance's fleet share on its
+// cluster and the canonical host directories.
+message ShareSyncStatus {
+  ShareSyncState state = 1;
+  string reason = 2;
+  // pending counts changes not yet applied on the other side.
+  int32 pending = 3;
+  int32 conflicts = 4;
+  google.protobuf.Timestamp last_synced_at = 5;
+}

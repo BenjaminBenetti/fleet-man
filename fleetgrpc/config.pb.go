@@ -646,8 +646,13 @@ type Config struct {
 	Theme          *ThemeSettings      `protobuf:"bytes,22,opt,name=theme,proto3" json:"theme,omitempty"`
 	ClaudeCode     *ClaudeCodeSettings `protobuf:"bytes,23,opt,name=claude_code,json=claudeCode,proto3" json:"claude_code,omitempty"`
 	Output         *OutputSettings     `protobuf:"bytes,24,opt,name=output,proto3" json:"output,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The remembered default cluster connection (KubeCluster.id): the cluster a
+	// KUBERNETES default_backend deploys to. Empty unless default_backend is
+	// KUBERNETES. Server-owned like default_backend: only
+	// CreateInstanceRequest.remember_default writes it.
+	DefaultKubeCluster string `protobuf:"bytes,25,opt,name=default_kube_cluster,json=defaultKubeCluster,proto3" json:"default_kube_cluster,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *Config) Reset() {
@@ -757,6 +762,13 @@ func (x *Config) GetOutput() *OutputSettings {
 	return nil
 }
 
+func (x *Config) GetDefaultKubeCluster() string {
+	if x != nil {
+		return x.DefaultKubeCluster
+	}
+	return ""
+}
+
 type GetConfigRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -838,7 +850,8 @@ func (x *GetConfigReply) GetConfig() *Config {
 }
 
 // SetConfig replaces the whole Config (the settings page sends the full edited
-// Config), except default_backend, which only remember_default writes. Returns
+// Config), except default_backend and default_kube_cluster, which only
+// remember_default writes. Returns
 // the post-mutation Config so the caller stays consistent.
 type SetConfigRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -991,7 +1004,7 @@ const file_config_proto_rawDesc = "" +
 	"\x12ClaudeCodeSettings\x12\"\n" +
 	"\n" +
 	"status_mod\x18\x01 \x01(\bH\x00R\tstatusMod\x88\x01\x01B\r\n" +
-	"\v_status_mod\"\xfa\x04\n" +
+	"\v_status_mod\"\xac\x05\n" +
 	"\x06Config\x124\n" +
 	"\ageneral\x18\x01 \x01(\v2\x1a.fleetgrpc.GeneralSettingsR\ageneral\x12.\n" +
 	"\x05agent\x18\x02 \x01(\v2\x18.fleetgrpc.AgentSettingsR\x05agent\x127\n" +
@@ -1007,7 +1020,8 @@ const file_config_proto_rawDesc = "" +
 	"\x05theme\x18\x16 \x01(\v2\x18.fleetgrpc.ThemeSettingsR\x05theme\x12>\n" +
 	"\vclaude_code\x18\x17 \x01(\v2\x1d.fleetgrpc.ClaudeCodeSettingsR\n" +
 	"claudeCode\x121\n" +
-	"\x06output\x18\x18 \x01(\v2\x19.fleetgrpc.OutputSettingsR\x06outputJ\x04\b\x04\x10\x05J\x04\b\t\x10\x15R\x05coder\"\x12\n" +
+	"\x06output\x18\x18 \x01(\v2\x19.fleetgrpc.OutputSettingsR\x06output\x120\n" +
+	"\x14default_kube_cluster\x18\x19 \x01(\tR\x12defaultKubeClusterJ\x04\b\x04\x10\x05J\x04\b\t\x10\x15R\x05coder\"\x12\n" +
 	"\x10GetConfigRequest\";\n" +
 	"\x0eGetConfigReply\x12)\n" +
 	"\x06config\x18\x01 \x01(\v2\x11.fleetgrpc.ConfigR\x06config\"=\n" +

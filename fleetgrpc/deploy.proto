@@ -10,11 +10,15 @@ option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
 // DEPLOY TARGETS — where a new instance can be created
 // =====================================================================
 
-// DeployTarget names where an instance runs: today a backend type. A create
-// request resolves to one (CreateInstanceRequest.backend, or the remembered
-// default when that is UNSPECIFIED), and the New instance dialog cycles them.
+// DeployTarget names where an instance runs: a backend type and, for
+// KUBERNETES, the cluster connection. A create request resolves to one
+// (CreateInstanceRequest.backend and kube_cluster, or the remembered default
+// when the backend is UNSPECIFIED), and the New instance dialog cycles them.
 message DeployTarget {
   BackendType backend = 1;
+  // kube_cluster is the cluster connection (KubeCluster.id) of a KUBERNETES
+  // target; empty for every other backend.
+  string kube_cluster = 2;
 }
 
 // DeployTargetOption is one entry of ListDeployTargets.

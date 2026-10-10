@@ -243,7 +243,8 @@ func TestInstancePresenceRules(t *testing.T) {
 	if pi.ContainerId == nil || pi.Config == nil || pi.WorkspaceDir == nil {
 		t.Error("container_id/config/workspace_dir must always be present")
 	}
-	if pi.DisplayName != nil || pi.Error != nil || pi.Tag != nil || pi.Color != nil || pi.Branch != nil || pi.LastBranch != nil {
+	if pi.DisplayName != nil || pi.Error != nil || pi.Tag != nil || pi.Color != nil || pi.Branch != nil || pi.LastBranch != nil ||
+		pi.KubeCluster != nil || pi.KubeKey != nil {
 		t.Error("unset omitempty scalars must be absent from the wire")
 	}
 	if pi.CreatedAt != nil {

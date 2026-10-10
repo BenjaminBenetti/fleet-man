@@ -77,8 +77,9 @@ func deployTargetOptions(remote string) []fleet.DeployTargetOption {
 }
 
 // rememberedTarget returns the remembered default target (config.json
-// DefaultBackend), or the zero target when none is recorded, the config can't
-// be read, or it names a backend this build doesn't know.
+// DefaultBackend, and DefaultKubeCluster for a cluster target), or the zero
+// target when none is recorded, the config can't be read, or it names a
+// backend a new instance can't use.
 func rememberedTarget() fleet.DeployTarget {
 	cfg, err := state.LoadConfig()
 	if err != nil {
@@ -88,7 +89,16 @@ func rememberedTarget() fleet.DeployTarget {
 	if fleet.ValidateBackendType(backendType) != nil {
 		return fleet.DeployTarget{}
 	}
-	return fleet.DeployTarget{Backend: backendType}
+	return targetFor(backendType, cfg.DefaultKubeCluster)
+}
+
+// targetFor builds the target for a backend type and the cluster a request or
+// the config names, which only a Kubernetes target carries.
+func targetFor(backendType fleet.BackendType, kubeCluster string) fleet.DeployTarget {
+	if backendType != fleet.BackendKubernetes {
+		kubeCluster = ""
+	}
+	return fleet.DeployTarget{Backend: backendType, KubeCluster: kubeCluster}
 }
 
 // defaultTarget is what an unspecified create in a fleet with this remote
@@ -105,10 +115,11 @@ func defaultTarget(remote string) fleet.DeployTarget {
 
 // resolveTarget turns a create request's target into a concrete one: an
 // explicit backend wins (a template fleet still refuses one it can't use, in
-// validateTemplateRemote), and UNSPECIFIED takes defaultTarget(remote).
-func (s *service) resolveTarget(requested fleetgrpc.BackendType, remote string) fleet.DeployTarget {
-	if backendType := protoconv.BackendFromProto(requested); backendType != "" {
-		return fleet.DeployTarget{Backend: backendType}
+// validateTemplateRemote), with the request's cluster for a Kubernetes one,
+// and UNSPECIFIED takes defaultTarget(remote).
+func (s *service) resolveTarget(req *fleetgrpc.CreateInstanceRequest, remote string) fleet.DeployTarget {
+	if backendType := protoconv.BackendFromProto(req.GetBackend()); backendType != "" {
+		return targetFor(backendType, req.GetKubeCluster())
 	}
 	return defaultTarget(remote)
 }
@@ -126,9 +137,10 @@ func (s *service) rememberDefaultTarget(target fleet.DeployTarget) error {
 	if err != nil {
 		return err
 	}
-	if cfg.DefaultBackend == string(target.Backend) {
+	if cfg.DefaultBackend == string(target.Backend) && cfg.DefaultKubeCluster == target.KubeCluster {
 		return nil
 	}
 	cfg.DefaultBackend = string(target.Backend)
+	cfg.DefaultKubeCluster = target.KubeCluster
 	return state.SaveConfig(cfg)
 }

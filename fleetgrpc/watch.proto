@@ -7,6 +7,7 @@ import "runtime.proto";
 import "jobs.proto";
 import "exec.proto";
 import "output.proto";
+import "kube.proto";
 
 option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
 
@@ -71,6 +72,9 @@ message WatchRequest {
 // devices (exec.proto) — what the Settings selector offers. Server-owned and
 // conflatable exactly like RemoteMcpStatus, and likewise part of the initial
 // snapshot.
+//
+// KubeClusters is every Kubernetes cluster connection with its health
+// (kube.proto), conflatable and part of the initial snapshot the same way.
 message Event {
   oneof kind {
     StateChanged state_changed = 1;
@@ -84,7 +88,7 @@ message Event {
     FileCopy file_copy = 9;
     MicSources mic_sources = 10;
     OutputTargets output_targets = 11;
-    // 12 is kept for the Kubernetes cluster-health event.
+    KubeClusters kube_clusters = 12;
     ActiveJobs active_jobs = 13;
   }
 }

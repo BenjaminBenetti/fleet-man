@@ -145,12 +145,15 @@ var createInstanceRemote = func(fleetName, instanceName, remote, branch string, 
 	})
 }
 
-// newCreateInstanceRequest is the New instance dialog's create request.
+// newCreateInstanceRequest is the New instance dialog's create request. It
+// carries the whole target: the backend and, for a cluster target, its
+// connection.
 func newCreateInstanceRequest(fleetName, instanceName, remote, branch string, target fleet.DeployTarget) *fleetgrpc.CreateInstanceRequest {
 	req := &fleetgrpc.CreateInstanceRequest{
 		Fleet:           fleetName,
 		Instance:        instanceName,
 		Backend:         protoconv.BackendToProto(target.Backend),
+		KubeCluster:     target.KubeCluster,
 		RememberDefault: true,
 	}
 	if remote != "" {

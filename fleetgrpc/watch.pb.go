@@ -183,6 +183,9 @@ func (x *WatchRequest) GetReattachJobIds() []string {
 // devices (exec.proto) — what the Settings selector offers. Server-owned and
 // conflatable exactly like RemoteMcpStatus, and likewise part of the initial
 // snapshot.
+//
+// KubeClusters is every Kubernetes cluster connection with its health
+// (kube.proto), conflatable and part of the initial snapshot the same way.
 type Event struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Kind:
@@ -198,6 +201,7 @@ type Event struct {
 	//	*Event_FileCopy
 	//	*Event_MicSources
 	//	*Event_OutputTargets
+	//	*Event_KubeClusters
 	//	*Event_ActiveJobs
 	Kind          isEvent_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
@@ -340,6 +344,15 @@ func (x *Event) GetOutputTargets() *OutputTargets {
 	return nil
 }
 
+func (x *Event) GetKubeClusters() *KubeClusters {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_KubeClusters); ok {
+			return x.KubeClusters
+		}
+	}
+	return nil
+}
+
 func (x *Event) GetActiveJobs() *ActiveJobs {
 	if x != nil {
 		if x, ok := x.Kind.(*Event_ActiveJobs); ok {
@@ -397,8 +410,11 @@ type Event_OutputTargets struct {
 	OutputTargets *OutputTargets `protobuf:"bytes,11,opt,name=output_targets,json=outputTargets,proto3,oneof"`
 }
 
+type Event_KubeClusters struct {
+	KubeClusters *KubeClusters `protobuf:"bytes,12,opt,name=kube_clusters,json=kubeClusters,proto3,oneof"`
+}
+
 type Event_ActiveJobs struct {
-	// 12 is kept for the Kubernetes cluster-health event.
 	ActiveJobs *ActiveJobs `protobuf:"bytes,13,opt,name=active_jobs,json=activeJobs,proto3,oneof"`
 }
 
@@ -423,6 +439,8 @@ func (*Event_FileCopy) isEvent_Kind() {}
 func (*Event_MicSources) isEvent_Kind() {}
 
 func (*Event_OutputTargets) isEvent_Kind() {}
+
+func (*Event_KubeClusters) isEvent_Kind() {}
 
 func (*Event_ActiveJobs) isEvent_Kind() {}
 
@@ -870,11 +888,12 @@ const file_watch_proto_rawDesc = "" +
 	"\n" +
 	"\vwatch.proto\x12\tfleetgrpc\x1a\fdomain.proto\x1a\rruntime.proto\x1a\n" +
 	"jobs.proto\x1a\n" +
-	"exec.proto\x1a\foutput.proto\"\x99\x01\n" +
+	"exec.proto\x1a\foutput.proto\x1a\n" +
+	"kube.proto\"\x99\x01\n" +
 	"\fWatchRequest\x122\n" +
 	"\x15include_initial_state\x18\x01 \x01(\bR\x13includeInitialState\x12+\n" +
 	"\x11subscribe_runtime\x18\x02 \x01(\bR\x10subscribeRuntime\x12(\n" +
-	"\x10reattach_job_ids\x18\x03 \x03(\tR\x0ereattachJobIds\"\xdd\x05\n" +
+	"\x10reattach_job_ids\x18\x03 \x03(\tR\x0ereattachJobIds\"\x9d\x06\n" +
 	"\x05Event\x12>\n" +
 	"\rstate_changed\x18\x01 \x01(\v2\x17.fleetgrpc.StateChangedH\x00R\fstateChanged\x128\n" +
 	"\vjob_started\x18\x02 \x01(\v2\x15.fleetgrpc.JobStartedH\x00R\n" +
@@ -889,7 +908,8 @@ const file_watch_proto_rawDesc = "" +
 	"\vmic_sources\x18\n" +
 	" \x01(\v2\x15.fleetgrpc.MicSourcesH\x00R\n" +
 	"micSources\x12A\n" +
-	"\x0eoutput_targets\x18\v \x01(\v2\x18.fleetgrpc.OutputTargetsH\x00R\routputTargets\x128\n" +
+	"\x0eoutput_targets\x18\v \x01(\v2\x18.fleetgrpc.OutputTargetsH\x00R\routputTargets\x12>\n" +
+	"\rkube_clusters\x18\f \x01(\v2\x17.fleetgrpc.KubeClustersH\x00R\fkubeClusters\x128\n" +
 	"\vactive_jobs\x18\r \x01(\v2\x15.fleetgrpc.ActiveJobsH\x00R\n" +
 	"activeJobsB\x06\n" +
 	"\x04kind\"7\n" +
@@ -958,9 +978,10 @@ var file_watch_proto_goTypes = []any{
 	(*JobDone)(nil),         // 12: fleetgrpc.JobDone
 	(*MicSources)(nil),      // 13: fleetgrpc.MicSources
 	(*OutputTargets)(nil),   // 14: fleetgrpc.OutputTargets
-	(*JobSummary)(nil),      // 15: fleetgrpc.JobSummary
-	(*State)(nil),           // 16: fleetgrpc.State
-	(*InstanceRuntime)(nil), // 17: fleetgrpc.InstanceRuntime
+	(*KubeClusters)(nil),    // 15: fleetgrpc.KubeClusters
+	(*JobSummary)(nil),      // 16: fleetgrpc.JobSummary
+	(*State)(nil),           // 17: fleetgrpc.State
+	(*InstanceRuntime)(nil), // 18: fleetgrpc.InstanceRuntime
 }
 var file_watch_proto_depIdxs = []int32{
 	5,  // 0: fleetgrpc.Event.state_changed:type_name -> fleetgrpc.StateChanged
@@ -974,16 +995,17 @@ var file_watch_proto_depIdxs = []int32{
 	8,  // 8: fleetgrpc.Event.file_copy:type_name -> fleetgrpc.FileCopy
 	13, // 9: fleetgrpc.Event.mic_sources:type_name -> fleetgrpc.MicSources
 	14, // 10: fleetgrpc.Event.output_targets:type_name -> fleetgrpc.OutputTargets
-	3,  // 11: fleetgrpc.Event.active_jobs:type_name -> fleetgrpc.ActiveJobs
-	15, // 12: fleetgrpc.ActiveJobs.jobs:type_name -> fleetgrpc.JobSummary
-	0,  // 13: fleetgrpc.RemoteMcpStatus.state:type_name -> fleetgrpc.RemoteMcpConn
-	16, // 14: fleetgrpc.StateChanged.state:type_name -> fleetgrpc.State
-	17, // 15: fleetgrpc.RuntimeChanged.runtime:type_name -> fleetgrpc.InstanceRuntime
-	16, // [16:16] is the sub-list for method output_type
-	16, // [16:16] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	15, // 11: fleetgrpc.Event.kube_clusters:type_name -> fleetgrpc.KubeClusters
+	3,  // 12: fleetgrpc.Event.active_jobs:type_name -> fleetgrpc.ActiveJobs
+	16, // 13: fleetgrpc.ActiveJobs.jobs:type_name -> fleetgrpc.JobSummary
+	0,  // 14: fleetgrpc.RemoteMcpStatus.state:type_name -> fleetgrpc.RemoteMcpConn
+	17, // 15: fleetgrpc.StateChanged.state:type_name -> fleetgrpc.State
+	18, // 16: fleetgrpc.RuntimeChanged.runtime:type_name -> fleetgrpc.InstanceRuntime
+	17, // [17:17] is the sub-list for method output_type
+	17, // [17:17] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_watch_proto_init() }
@@ -996,6 +1018,7 @@ func file_watch_proto_init() {
 	file_jobs_proto_init()
 	file_exec_proto_init()
 	file_output_proto_init()
+	file_kube_proto_init()
 	file_watch_proto_msgTypes[1].OneofWrappers = []any{
 		(*Event_StateChanged)(nil),
 		(*Event_JobStarted)(nil),
@@ -1008,6 +1031,7 @@ func file_watch_proto_init() {
 		(*Event_FileCopy)(nil),
 		(*Event_MicSources)(nil),
 		(*Event_OutputTargets)(nil),
+		(*Event_KubeClusters)(nil),
 		(*Event_ActiveJobs)(nil),
 	}
 	file_watch_proto_msgTypes[6].OneofWrappers = []any{}

@@ -53,14 +53,15 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	// So is the Claude Code group: an older TUI never sends it, and a zero base
 	// would turn a fleet status mod the user switched off back on.
 	//
-	// The remembered default deploy target is not the caller's to set at all:
-	// only CreateInstanceRequest.remember_default writes it (deploy_targets.go).
-	// Every client sends the whole Config, so taking the field from the request
-	// would let any client's stale copy undo a target another client (or this
-	// one, since its copy was fetched) remembered.
+	// The remembered default deploy target (backend and cluster) is not the
+	// caller's to set at all: only CreateInstanceRequest.remember_default
+	// writes it (deploy_targets.go). Every client sends the whole Config, so
+	// taking the fields from the request would let any client's stale copy
+	// undo a target another client (or this one, since its copy was fetched)
+	// remembered.
 	base := &state.Config{}
 	micWasEnabled := false
-	defaultBackend := ""
+	defaultBackend, defaultKubeCluster := "", ""
 	if previous, err := state.LoadConfig(); err == nil {
 		micWasEnabled = previous.MicSettings.Enabled
 		base.MicSettings = previous.MicSettings
@@ -68,10 +69,12 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 		base.ThemeSettings = previous.ThemeSettings
 		base.ClaudeCodeSettings = previous.ClaudeCodeSettings
 		defaultBackend = previous.DefaultBackend
+		defaultKubeCluster = previous.DefaultKubeCluster
 	}
 
 	next := protoconv.ConfigFromProto(req.GetConfig(), base)
 	next.DefaultBackend = defaultBackend
+	next.DefaultKubeCluster = defaultKubeCluster
 	if err := state.SaveConfig(next); err != nil {
 		return nil, status.Errorf(codes.Internal, "save config: %v", err)
 	}

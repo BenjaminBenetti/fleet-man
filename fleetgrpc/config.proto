@@ -156,6 +156,11 @@ message Config {
   ThemeSettings theme = 22;
   ClaudeCodeSettings claude_code = 23;
   OutputSettings output = 24;
+  // The remembered default cluster connection (KubeCluster.id): the cluster a
+  // KUBERNETES default_backend deploys to. Empty unless default_backend is
+  // KUBERNETES. Server-owned like default_backend: only
+  // CreateInstanceRequest.remember_default writes it.
+  string default_kube_cluster = 25;
 }
 
 message GetConfigRequest {}
@@ -165,7 +170,8 @@ message GetConfigReply {
 }
 
 // SetConfig replaces the whole Config (the settings page sends the full edited
-// Config), except default_backend, which only remember_default writes. Returns
+// Config), except default_backend and default_kube_cluster, which only
+// remember_default writes. Returns
 // the post-mutation Config so the caller stays consistent.
 message SetConfigRequest {
   Config config = 1;

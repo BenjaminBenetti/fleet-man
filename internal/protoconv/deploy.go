@@ -12,13 +12,19 @@ func DeployTargetToProto(t fleet.DeployTarget) *fleetgrpc.DeployTarget {
 	if t.IsZero() {
 		return nil
 	}
-	return &fleetgrpc.DeployTarget{Backend: BackendToProto(t.Backend)}
+	return &fleetgrpc.DeployTarget{Backend: BackendToProto(t.Backend), KubeCluster: t.KubeCluster}
 }
 
-// DeployTargetFromProto is the inverse of DeployTargetToProto; nil (and an
-// UNSPECIFIED backend) is the zero target.
+// DeployTargetFromProto is the inverse of DeployTargetToProto. nil, an
+// UNSPECIFIED backend and one this build doesn't know are all the zero target,
+// whatever cluster they name: a target this build can't name is never read
+// as one it can.
 func DeployTargetFromProto(pt *fleetgrpc.DeployTarget) fleet.DeployTarget {
-	return fleet.DeployTarget{Backend: BackendFromProto(pt.GetBackend())}
+	backend := BackendFromProto(pt.GetBackend())
+	if backend == "" {
+		return fleet.DeployTarget{}
+	}
+	return fleet.DeployTarget{Backend: backend, KubeCluster: pt.GetKubeCluster()}
 }
 
 // DeployTargetOptionsToProto maps ListDeployTargets entries to the proto

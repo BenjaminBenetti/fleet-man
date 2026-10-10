@@ -53,6 +53,8 @@ func backendTypeLabel(backendType fleet.BackendType) string {
 		return "Coder"
 	case fleet.BackendCodespaces:
 		return "Codespaces"
+	case fleet.BackendKubernetes:
+		return "Kubernetes"
 	default:
 		return "Devcontainer"
 	}
@@ -290,6 +292,7 @@ func (fleetPage *fleetPage) submitAddInstance(m *model) tea.Cmd {
 	// into view.
 	if m.config != nil {
 		m.config.DefaultBackend = string(target.Backend)
+		m.config.DefaultKubeCluster = target.KubeCluster
 	}
 
 	key := fleetName + "/" + name

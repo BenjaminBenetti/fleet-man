@@ -17,6 +17,7 @@
 //   control.proto   — Hello/Shutdown/GetState + synchronous state mutations
 //   config.proto    — server-owned config.json
 //   exec.proto      — interactive backend ops (Exec/Logs/PortForward)
+//   kube.proto      — Kubernetes cluster connections, their health, pod runtime
 //   service.proto   — the FleetService that ties them together
 
 package fleetgrpc
@@ -130,6 +131,9 @@ const (
 	BackendType_BACKEND_TYPE_DEVCONTAINER BackendType = 1
 	BackendType_BACKEND_TYPE_CODER        BackendType = 2
 	BackendType_BACKEND_TYPE_CODESPACES   BackendType = 3
+	// KUBERNETES runs the instance as a pod on a cluster connection
+	// (KubeCluster, kube.proto) that Instance.kube_cluster names.
+	BackendType_BACKEND_TYPE_KUBERNETES BackendType = 4
 )
 
 // Enum value maps for BackendType.
@@ -139,12 +143,14 @@ var (
 		1: "BACKEND_TYPE_DEVCONTAINER",
 		2: "BACKEND_TYPE_CODER",
 		3: "BACKEND_TYPE_CODESPACES",
+		4: "BACKEND_TYPE_KUBERNETES",
 	}
 	BackendType_value = map[string]int32{
 		"BACKEND_TYPE_UNSPECIFIED":  0,
 		"BACKEND_TYPE_DEVCONTAINER": 1,
 		"BACKEND_TYPE_CODER":        2,
 		"BACKEND_TYPE_CODESPACES":   3,
+		"BACKEND_TYPE_KUBERNETES":   4,
 	}
 )
 
@@ -234,6 +240,15 @@ type Instance struct {
 	// FleetSettings *Mount flags — the zero value carries the common case, so no
 	// optional is needed.
 	Automated bool `protobuf:"varint,31,opt,name=automated,proto3" json:"automated,omitempty"`
+	// The cluster connection (KubeCluster.id) a KUBERNETES instance runs on
+	// (JSON kube_cluster,omitempty). Empty for every other backend — optional.
+	KubeCluster *string `protobuf:"bytes,33,opt,name=kube_cluster,json=kubeCluster,proto3,oneof" json:"kube_cluster,omitempty"`
+	// The instance's key on its cluster (JSON kube_key,omitempty): it labels
+	// every object the instance owns and is written on the CREATING/CLONING
+	// record before any object exists, so a create that failed or was
+	// interrupted can still be torn down by key. Empty for every other backend,
+	// and until the cluster backend assigns it — optional.
+	KubeKey *string `protobuf:"bytes,34,opt,name=kube_key,json=kubeKey,proto3,oneof" json:"kube_key,omitempty"`
 	// The last branch a live workspace read saw checked out (JSON
 	// last_branch,omitempty): written whenever a read reports a different named
 	// branch and again just before Stop. It is the fallback, ahead of the
@@ -371,6 +386,20 @@ func (x *Instance) GetAutomated() bool {
 		return x.Automated
 	}
 	return false
+}
+
+func (x *Instance) GetKubeCluster() string {
+	if x != nil && x.KubeCluster != nil {
+		return *x.KubeCluster
+	}
+	return ""
+}
+
+func (x *Instance) GetKubeKey() string {
+	if x != nil && x.KubeKey != nil {
+		return *x.KubeKey
+	}
+	return ""
 }
 
 func (x *Instance) GetLastBranch() string {
@@ -782,11 +811,14 @@ func (x *LayoutPreset) GetPaneCommands() []string {
 // and it is always persisted explicitly). backend reuses Instance.backend's enum
 // (UNSPECIFIED -> devcontainer at normalization).
 type Agent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Command       string                 `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
-	SystemPrompt  string                 `protobuf:"bytes,4,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
-	Backend       BackendType            `protobuf:"varint,5,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Name         string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Command      string                 `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
+	SystemPrompt string                 `protobuf:"bytes,4,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
+	Backend      BackendType            `protobuf:"varint,5,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
+	// kube_cluster names the cluster connection (KubeCluster.id) a KUBERNETES
+	// agent's instances are created on. Empty for every other backend.
+	KubeCluster   string `protobuf:"bytes,7,opt,name=kube_cluster,json=kubeCluster,proto3" json:"kube_cluster,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -847,6 +879,13 @@ func (x *Agent) GetBackend() BackendType {
 		return x.Backend
 	}
 	return BackendType_BACKEND_TYPE_UNSPECIFIED
+}
+
+func (x *Agent) GetKubeCluster() string {
+	if x != nil {
+		return x.KubeCluster
+	}
+	return ""
 }
 
 // Trigger mirrors internal/fleet.Trigger — an automation trigger (issue #188).
@@ -1220,7 +1259,7 @@ var File_domain_proto protoreflect.FileDescriptor
 
 const file_domain_proto_rawDesc = "" +
 	"\n" +
-	"\fdomain.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa1\x05\n" +
+	"\fdomain.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"\x87\x06\n" +
 	"\bInstance\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12&\n" +
 	"\fdisplay_name\x18\x02 \x01(\tH\x00R\vdisplayName\x88\x01\x01\x12&\n" +
@@ -1237,8 +1276,11 @@ const file_domain_proto_rawDesc = "" +
 	"\x05color\x18\v \x01(\tH\x06R\x05color\x88\x01\x01\x12\x1b\n" +
 	"\x06branch\x18\f \x01(\tH\aR\x06branch\x88\x01\x01\x12\x1a\n" +
 	"\bwarnings\x18\r \x03(\tR\bwarnings\x12\x1c\n" +
-	"\tautomated\x18\x1f \x01(\bR\tautomated\x12$\n" +
-	"\vlast_branch\x18# \x01(\tH\bR\n" +
+	"\tautomated\x18\x1f \x01(\bR\tautomated\x12&\n" +
+	"\fkube_cluster\x18! \x01(\tH\bR\vkubeCluster\x88\x01\x01\x12\x1e\n" +
+	"\bkube_key\x18\" \x01(\tH\tR\akubeKey\x88\x01\x01\x12$\n" +
+	"\vlast_branch\x18# \x01(\tH\n" +
+	"R\n" +
 	"lastBranch\x88\x01\x01B\x0f\n" +
 	"\r_display_nameB\x0f\n" +
 	"\r_container_idB\t\n" +
@@ -1247,7 +1289,9 @@ const file_domain_proto_rawDesc = "" +
 	"\x06_errorB\x06\n" +
 	"\x04_tagB\b\n" +
 	"\x06_colorB\t\n" +
-	"\a_branchB\x0e\n" +
+	"\a_branchB\x0f\n" +
+	"\r_kube_clusterB\v\n" +
+	"\t_kube_keyB\x0e\n" +
 	"\f_last_branchJ\x04\b\x0e\x10\x1fJ\x04\b \x10!\"\xff\x06\n" +
 	"\rFleetSettings\x12*\n" +
 	"\x11claude_code_mount\x18\x01 \x01(\bR\x0fclaudeCodeMount\x12\x1f\n" +
@@ -1289,12 +1333,13 @@ const file_domain_proto_rawDesc = "" +
 	"\fLayoutPreset\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06layout\x18\x02 \x01(\tR\x06layout\x12#\n" +
-	"\rpane_commands\x18\x03 \x03(\tR\fpaneCommands\"\x98\x01\n" +
+	"\rpane_commands\x18\x03 \x03(\tR\fpaneCommands\"\xbb\x01\n" +
 	"\x05Agent\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12#\n" +
 	"\rsystem_prompt\x18\x04 \x01(\tR\fsystemPrompt\x120\n" +
-	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackendJ\x04\b\x03\x10\x04J\x04\b\x06\x10\a\"\xc8\x02\n" +
+	"\abackend\x18\x05 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackend\x12!\n" +
+	"\fkube_cluster\x18\a \x01(\tR\vkubeClusterJ\x04\b\x03\x10\x04J\x04\b\x06\x10\a\"\xc8\x02\n" +
 	"\aTrigger\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1f\n" +
@@ -1347,12 +1392,13 @@ const file_domain_proto_rawDesc = "" +
 	"\x18INSTANCE_STATUS_STOPPING\x10\x06\x12\x1c\n" +
 	"\x18INSTANCE_STATUS_STARTING\x10\a\x12\x1c\n" +
 	"\x18INSTANCE_STATUS_DELETING\x10\b\x12\x1e\n" +
-	"\x1aINSTANCE_STATUS_REBUILDING\x10\t*\x7f\n" +
+	"\x1aINSTANCE_STATUS_REBUILDING\x10\t*\x9c\x01\n" +
 	"\vBackendType\x12\x1c\n" +
 	"\x18BACKEND_TYPE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19BACKEND_TYPE_DEVCONTAINER\x10\x01\x12\x16\n" +
 	"\x12BACKEND_TYPE_CODER\x10\x02\x12\x1b\n" +
-	"\x17BACKEND_TYPE_CODESPACES\x10\x03B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
+	"\x17BACKEND_TYPE_CODESPACES\x10\x03\x12\x1b\n" +
+	"\x17BACKEND_TYPE_KUBERNETES\x10\x04B:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
 
 var (
 	file_domain_proto_rawDescOnce sync.Once
