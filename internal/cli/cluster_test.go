@@ -475,7 +475,7 @@ func TestClusterTest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a limited cluster's test failed: %v", err)
 	}
-	if req := f.last(t, "TestKubeCluster").(*fleetgrpc.TestKubeClusterRequest); req.GetId() != "prod-d4e5f6" || req.GetCluster() != nil {
+	if req := f.last(t, "TestKubeCluster").(*fleetgrpc.TestKubeClusterRequest); req.GetId() != "prod-d4e5f6" || req.GetCluster() != nil || req.GetDeep() {
 		t.Errorf("test %v", req)
 	}
 	want := `CHECK                   RESULT  DETAIL
@@ -509,6 +509,18 @@ limited: privileged denied · each fleet on one node
 	if _, _, err := runClusterCLI(t, f, "cluster", "test", "prod-eu"); err == nil || !strings.Contains(err.Error(), "without a result") {
 		t.Errorf("no result = %v", err)
 	}
+
+	// --deep asks the daemon for the throwaway-pod probes too.
+	f.testEvents = []*fleetgrpc.TestKubeClusterEvent{
+		checkEvent("image_pull", fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, "a pod pulled the probe image through gw.example.com", ""),
+		resultEvent(limited),
+	}
+	if _, _, err := runClusterCLI(t, f, "cluster", "test", "--deep", "prod-eu"); err != nil {
+		t.Fatalf("deep test: %v", err)
+	}
+	if req := f.last(t, "TestKubeCluster").(*fleetgrpc.TestKubeClusterRequest); req.GetId() != "prod-d4e5f6" || !req.GetDeep() {
+		t.Errorf("deep test %v", req)
+	}
 }
 
 func TestClusterTestDraft(t *testing.T) {
@@ -538,6 +550,7 @@ func TestClusterTestDraft(t *testing.T) {
 		{"cluster", "test", "prod-eu", "--kubeconfig", "/a"},
 		{"cluster", "test", "prod-eu", "-n", "x"},
 		{"cluster", "test", "--context", "c", "notafield"},
+		{"cluster", "test", "--context", "c", "--deep"},
 		{"cluster", "test"},
 		{"cluster", "test", "a", "b"},
 	} {

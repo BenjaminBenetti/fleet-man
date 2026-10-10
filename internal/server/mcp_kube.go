@@ -33,6 +33,7 @@ type mcpKubeCluster struct {
 	Message         string         `json:"message,omitempty" jsonschema:"why the state is not ready"`
 	Warnings        []string       `json:"warnings,omitempty" jsonschema:"exposure warnings that never block (e.g. privileged pods allowed)"`
 	CheckedAt       string         `json:"checked_at,omitempty"`
+	DeepCheckedAt   string         `json:"deep_checked_at,omitempty" jsonschema:"when the last deep test (fleet_cluster_test deep) finished"`
 	Settings        map[string]any `json:"settings" jsonschema:"every field the connection sets, by its kube.proto KubeCluster field name; an absent field takes its default"`
 	Capabilities    map[string]any `json:"capabilities,omitempty" jsonschema:"what the last full check found (version, admission, storage classes, nodes, quotas, ...), by kube.proto KubeCapabilities field name"`
 }
@@ -54,6 +55,9 @@ func toMCPKubeCluster(st *fleetgrpc.KubeClusterStatus) (mcpKubeCluster, error) {
 	}
 	if ts := st.GetCheckedAt(); ts != nil {
 		out.CheckedAt = ts.AsTime().UTC().Format(time.RFC3339)
+	}
+	if ts := st.GetDeepCheckedAt(); ts != nil {
+		out.DeepCheckedAt = ts.AsTime().UTC().Format(time.RFC3339)
 	}
 	var err error
 	if out.Settings, err = protoObject(c); err != nil {
@@ -121,6 +125,7 @@ func (s *service) mcpClusterList(ctx context.Context, _ *mcp.CallToolRequest, in
 
 type FleetClusterTestInput struct {
 	Cluster string `json:"cluster" jsonschema:"the connection to test: its id, name or context"`
+	Deep    bool   `json:"deep,omitempty" jsonschema:"also run the throwaway-pod probes (a pod pulls through the gateway); takes minutes"`
 }
 
 type FleetClusterTestOutput struct {
@@ -141,7 +146,7 @@ func (s *service) mcpClusterTest(ctx context.Context, _ *mcp.CallToolRequest, in
 		return nil, FleetClusterTestOutput{}, err
 	}
 	c := &streamCollector[fleetgrpc.TestKubeClusterEvent]{ctx: ctx}
-	if err := s.TestKubeCluster(&fleetgrpc.TestKubeClusterRequest{Id: st.GetCluster().GetId()}, c); err != nil {
+	if err := s.TestKubeCluster(&fleetgrpc.TestKubeClusterRequest{Id: st.GetCluster().GetId(), Deep: in.Deep}, c); err != nil {
 		return nil, FleetClusterTestOutput{}, mcpErr(err)
 	}
 	var result *fleetgrpc.KubeClusterStatus

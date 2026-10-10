@@ -85,6 +85,15 @@ func TestMCPClusterTest(t *testing.T) {
 			t.Errorf("check %s = %q; checks %+v", want, names[want], out.Checks)
 		}
 	}
+	if out.Cluster.DeepCheckedAt != "" {
+		t.Errorf("a test without deep ran the deep test: deep_checked_at %s", out.Cluster.DeepCheckedAt)
+	}
+
+	// deep also runs the deep test's throwaway-pod probes.
+	callJSON(t, cs, "fleet_cluster_test", map[string]any{"cluster": "dev", "deep": true}, &out)
+	if out.Cluster.ID != dev.GetId() || out.Cluster.DeepCheckedAt == "" {
+		t.Errorf("deep test result = %+v", out.Cluster)
+	}
 
 	callJSON(t, cs, "fleet_cluster_test", map[string]any{"cluster": "prod"}, &out)
 	if out.Cluster.State != "limited" || !out.Cluster.Usable {
