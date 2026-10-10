@@ -20,6 +20,10 @@ const (
 	PullCertificate PullFailureKind = "certificate"
 	// PullCredential: the pull credential was refused.
 	PullCredential PullFailureKind = "credential"
+	// PullRegistryOff: the daemon serves no images through the gateway now
+	// (Enable Image Registry is off, the tunnel is off, the gateway stopped
+	// offering it), so the gateway answers not found.
+	PullRegistryOff PullFailureKind = "registry_off"
 	// PullStaleReference: the pod names a registry id or host the daemon
 	// no longer has; the re-point gives it the current one.
 	PullStaleReference PullFailureKind = "stale_reference"
@@ -93,9 +97,16 @@ func (g *Gateway) ClassifyPull(clusterID, ref, reason, message string) (PullFail
 }
 
 func (g *Gateway) classifyNotFound(clusterID, refPrefix, digest string) PullFailure {
-	current := ""
+	current, why := "", ""
 	if g.Tunnel != nil {
-		current, _ = g.Tunnel.Registry()
+		current, why = g.Tunnel.Registry()
+	}
+	if current == "" && why != "" {
+		// The gateway 404s a session without the registry like a reaped
+		// one; the daemon is up and says why it has none.
+		return PullFailure{Kind: PullRegistryOff,
+			Message: "the daemon does not serve images through the gateway now: " + why,
+			Hint:    unavailableHint}
 	}
 	if current == "" && g.Store != nil {
 		current, _ = g.Store.Prefix(clusterID)

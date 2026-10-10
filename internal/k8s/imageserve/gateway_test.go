@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -54,11 +55,16 @@ type fakeSecrets struct {
 	mu      sync.Mutex
 	applied []kubeimage.PullSecret
 	deleted []string
+	// fail fails every apply.
+	fail error
 }
 
 func (f *fakeSecrets) ApplyPullSecret(_ context.Context, s kubeimage.PullSecret) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.fail != nil {
+		return f.fail
+	}
 	f.applied = append(f.applied, s)
 	return nil
 }
@@ -268,6 +274,17 @@ func TestGatewayDeliverFailures(t *testing.T) {
 	if _, err := f.gw.Deliver(context.Background(), f.target, f.image()); err == nil {
 		t.Fatal("delivered with nowhere to keep the pull Secret")
 	}
+
+	// A delivery that fails after the export leaves the connection serving
+	// nothing: kubeimage records no entry, so its GC would never let go.
+	f = newGatewayFixture(t)
+	f.secrets.fail = errors.New("secrets is forbidden")
+	if _, err := f.gw.Deliver(context.Background(), f.target, f.image()); err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("a failed pull Secret: %v", err)
+	}
+	if f.gw.Store.Serves("kc-1", f.img.manifestDigest) {
+		t.Fatal("a failed delivery left the connection holding the image")
+	}
 }
 
 func TestGatewayThroughKubeimage(t *testing.T) {
@@ -456,6 +473,16 @@ func TestClassifyPull(t *testing.T) {
 	if _, ok := f.gw.ClassifyPull("kc-1", d.Ref, "CrashLoopBackOff", "back-off"); ok {
 		t.Error("a non-pull reason was classified")
 	}
+
+	// With the registry off (the toggle, the tunnel) the gateway 404s the
+	// session like a reaped one, but the daemon is up and knows why.
+	f.tunnel.mu.Lock()
+	f.tunnel.prefix, f.tunnel.why = "", "Enable Image Registry is off"
+	f.tunnel.mu.Unlock()
+	got, ok := f.gw.ClassifyPull("kc-1", d.Ref, "ErrImagePull", resolveErr(d.Ref, d.Ref+": not found"))
+	if !ok || got.Kind != PullRegistryOff || !strings.Contains(got.Message, "Enable Image Registry is off") || got.Redeliver {
+		t.Errorf("a pull while the registry is off: %+v, %v", got, ok)
+	}
 }
 
 func TestGatewayDeliverAfterAPrefixChangeRepointsTheOlderImages(t *testing.T) {
@@ -496,5 +523,231 @@ func TestGatewayDeliverAfterAPrefixChangeRepointsTheOlderImages(t *testing.T) {
 	}
 	if got, _ := f.gw.Store.Prefix("kc-1"); got != newPrefix {
 		t.Fatalf("recorded prefix %q", got)
+	}
+}
+
+// lockedClock is a fake clock that timers may read.
+type lockedClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *lockedClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *lockedClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestGatewaySweepsWhatTheGCLetGo(t *testing.T) {
+	// The sweep a GC pass runs keeps what the pass just let go for
+	// sweepGrace, and later passes sweep only when they collect something
+	// too: a follow-up sweep must take it.
+	f := newGatewayFixture(t)
+	clock := &lockedClock{t: time.Unix(1_800_000_000, 0)}
+	f.gw.Store.Now = clock.now
+	f.gw.sweepDelay = time.Hour // fired by hand below
+	f.target.Cluster.Image.Retention = "0"
+	idx := t.TempDir()
+	m := &kubeimage.Manager{IndexPath: func(id string) string { return filepath.Join(idx, id, "images.json") }, Gateway: f.gw, Now: clock.now}
+	if _, err := m.Deliver(context.Background(), f.target, f.image(), "inst-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Release("kc-1", "inst-1"); err != nil {
+		t.Fatal(err)
+	}
+	clock.advance(2 * time.Minute)
+	if res, err := m.GC(context.Background(), f.target, kubeimage.GCOptions{}); err != nil || len(res.Deleted) != 1 {
+		t.Fatalf("GC: %+v, %v", res, err)
+	}
+	if n, _ := f.gw.Store.Size(); n == 0 {
+		t.Fatal("the GC pass swept inside the grace")
+	}
+	// Hours of passes with nothing to collect sweep nothing.
+	clock.advance(time.Hour)
+	if _, err := m.GC(context.Background(), f.target, kubeimage.GCOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	f.gw.sweepMu.Lock()
+	timer := f.gw.sweepTimer
+	f.gw.sweepMu.Unlock()
+	if timer == nil {
+		t.Fatal("no follow-up sweep was armed")
+	}
+	timer.Reset(time.Millisecond)
+	waitFor(t, "the follow-up sweep", func() bool { n, _ := f.gw.Store.Size(); return n == 0 })
+
+	// One that meets an import tries again later.
+	f.gw.sweepMu.Lock()
+	f.gw.sweepTimer.Stop()
+	f.gw.sweepTimer = nil
+	f.gw.sweepMu.Unlock()
+	f.gw.Store.gc.RLock()
+	f.gw.sweepNow()
+	f.gw.Store.gc.RUnlock()
+	f.gw.sweepMu.Lock()
+	rearmed := f.gw.sweepTimer != nil
+	f.gw.sweepMu.Unlock()
+	if !rearmed {
+		t.Fatal("a sweep that met an import was not tried again")
+	}
+}
+
+// slowSave wraps the fixture's docker so `docker save` waits for release():
+// the export of a big image, during which the gateway may change.
+func slowSave(t *testing.T, f *gatewayFixture) (started <-chan struct{}, release func()) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\nif [ \"$1\" = save ]; then\n\t: > '" + dir + "/started'\n\twhile [ ! -f '" + dir + "/go' ]; do sleep 0.01; done\nfi\nexec '" + f.docker.path() + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.gw.Store.Docker = filepath.Join(dir, "docker")
+	ch := make(chan struct{})
+	go func() {
+		for {
+			if _, err := os.Stat(filepath.Join(dir, "started")); err == nil {
+				close(ch)
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	return ch, func() { _ = os.WriteFile(filepath.Join(dir, "go"), nil, 0o600) }
+}
+
+func TestGatewayPrefixChangeDuringAnExport(t *testing.T) {
+	// The gateway hands out a new registry id while a big image exports:
+	// the delivery names the new one and must not re-point the connection
+	// back to the old.
+	f := newGatewayFixture(t)
+	idx := t.TempDir()
+	m := &kubeimage.Manager{IndexPath: func(id string) string { return filepath.Join(idx, id, "images.json") }, Gateway: f.gw}
+	conns := &fakeConnections{targets: map[string]kubeimage.Target{"kc-1": f.target}, called: make(chan struct{}, 8)}
+	f.gw.Connections, f.gw.Index = conns, m
+	first, err := m.Deliver(context.Background(), f.target, f.image(), "inst-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPrefix, _ := f.tunnel.Registry()
+
+	second := newTestImage(t, "arm64", "v8", true, layerTar(t, map[string]string{"bin/app": "v2"}))
+	archive, id := containerdArchive(t, []testImage{second})
+	f.docker.add(t, id, archive)
+	started, release := slowSave(t, f)
+	type result struct {
+		d   *kubeimage.Delivery
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		d, err := m.Deliver(context.Background(), f.target, kubeimage.Image{Ref: "vsc-app-v2", Config: kubeshim.ImageConfig{ID: id}, Built: true}, "inst-2")
+		done <- result{d, err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("docker save never ran")
+	}
+	// The registration's change, re-pointed while the export runs.
+	newPrefix := "gw.example.com/" + strings.Repeat("f", 64)
+	f.tunnel.set(newPrefix)
+	f.gw.repoint(context.Background(), newPrefix)
+	release()
+	r := <-done
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	time.Sleep(50 * time.Millisecond) // any re-point the delivery set off
+	f.gw.repointMu.Lock()
+	f.gw.repointMu.Unlock()
+
+	if r.d.Ref != Ref(newPrefix, second.manifestDigest) {
+		t.Fatalf("the delivery names %s, want the new prefix", r.d.Ref)
+	}
+	if got, _ := f.gw.Store.Prefix("kc-1"); got != newPrefix {
+		t.Fatalf("recorded prefix %q, want %q", got, newPrefix)
+	}
+	if got, _ := m.Lookup("kc-1", "inst-1"); got == nil || got.Ref != Ref(newPrefix, first.Digest) {
+		t.Fatalf("the older image's entry names %+v", got)
+	}
+	conns.mu.Lock()
+	defer conns.mu.Unlock()
+	for _, refs := range conns.repoints {
+		for from, to := range refs {
+			if strings.HasPrefix(to, oldPrefix+"/") {
+				t.Errorf("re-pointed %s back to the old prefix (%s)", from, to)
+			}
+		}
+	}
+	if host, _, _ := secretLogin(t, f.secrets.last(t)); host != "gw.example.com" {
+		t.Errorf("the pull Secret is for %s", host)
+	}
+
+	// A pass for a prefix the tunnel has since replaced does nothing.
+	n := len(conns.repoints)
+	conns.mu.Unlock()
+	f.gw.repoint(context.Background(), oldPrefix)
+	conns.mu.Lock()
+	if len(conns.repoints) != n {
+		t.Errorf("a pass for the old prefix re-pointed: %v", conns.repoints[n:])
+	}
+	if got, _ := f.gw.Store.Prefix("kc-1"); got != newPrefix {
+		t.Errorf("a pass for the old prefix recorded %q", got)
+	}
+}
+
+func TestGatewayRetriesAFailedRepoint(t *testing.T) {
+	// The tunnel reports a prefix only when it changes, so a re-point that
+	// met an unreachable cluster is retried by the gateway itself.
+	f := newGatewayFixture(t)
+	idx := t.TempDir()
+	m := &kubeimage.Manager{IndexPath: func(id string) string { return filepath.Join(idx, id, "images.json") }, Gateway: f.gw}
+	conns := &fakeConnections{targets: map[string]kubeimage.Target{"kc-1": f.target}, called: make(chan struct{}, 8), fail: errors.New("apiserver down")}
+	f.gw.Connections, f.gw.Index = conns, m
+	f.gw.retryMin = 20 * time.Millisecond
+	d, err := m.Deliver(context.Background(), f.target, f.image(), "inst-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPrefix := "gw.example.com/" + strings.Repeat("9", 64)
+	f.tunnel.set(newPrefix)
+	f.gw.RegistryChanged(newPrefix)
+	select {
+	case <-conns.called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no re-point")
+	}
+	conns.mu.Lock()
+	conns.fail = nil
+	conns.mu.Unlock()
+	waitFor(t, "the retried re-point", func() bool { p, _ := f.gw.Store.Prefix("kc-1"); return p == newPrefix })
+	f.gw.repointMu.Lock()
+	defer f.gw.repointMu.Unlock()
+	conns.mu.Lock()
+	defer conns.mu.Unlock()
+	if len(conns.repoints) != 1 || conns.repoints[0][d.Ref] != Ref(newPrefix, d.Digest) {
+		t.Fatalf("re-points %v", conns.repoints)
+	}
+	f.gw.retryMu.Lock()
+	defer f.gw.retryMu.Unlock()
+	if f.gw.retryTimer != nil || f.gw.retryWait != 0 {
+		t.Fatal("retries go on after a pass that did everything")
 	}
 }
