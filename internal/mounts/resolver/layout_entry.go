@@ -2,8 +2,8 @@ package resolver
 
 import "os"
 
-// Modes the resolver enforces on the paths it creates; ensureHostDir and
-// ensureHostFile explain why they are world-writable.
+// Modes the resolver enforces on the paths it creates; hostLayout.ensureDir and
+// hostLayout.ensureFile apply them and explain why they are world-writable.
 const (
 	layoutDirMode  os.FileMode = 0777
 	layoutFileMode os.FileMode = 0666

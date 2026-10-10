@@ -54,8 +54,8 @@ func (l *hostLayout) Close() error {
 }
 
 // ensureDir creates the directory rel (relative to the mount root) and any
-// missing parents, then sets rel itself to 0777. Parents get 0777 before umask
-// and no chmod, as os.MkdirAll gave them.
+// missing parents, then sets rel itself to layoutDirMode (0777). Parents get
+// 0777 before umask and no chmod, as os.MkdirAll gave them.
 //
 // Why 0777 rather than 0700: these directories are bind-mounted into
 // containers whose user may have a different UID from the host user
@@ -73,14 +73,14 @@ func (l *hostLayout) ensureDir(rel string) error {
 	}
 	defer dir.Close()
 	// "." is the walked directory itself, never a link.
-	return dir.Chmod(".", 0777)
+	return dir.Chmod(".", layoutDirMode)
 }
 
 // ensureFile creates an empty file at rel (relative to the mount root) when
-// none exists, and sets it to 0666 either way. Content of an existing file is
-// preserved. 0666 for the UID-mismatch reason on ensureDir: the agent that
-// owns the symlinked target inside the container must be able to write
-// through to the host file.
+// none exists, and sets it to layoutFileMode (0666) either way. Content of an
+// existing file is preserved. 0666 for the UID-mismatch reason on ensureDir:
+// the agent that owns the symlinked target inside the container must be able
+// to write through to the host file.
 func (l *hostLayout) ensureFile(rel string) error {
 	dir, err := l.openDir(filepath.Dir(rel))
 	if err != nil {
@@ -92,7 +92,7 @@ func (l *hostLayout) ensureFile(rel string) error {
 	// O_EXCL never follows a link, so a symlink planted since the Lstat makes
 	// the create fail rather than write through it.
 	info, err := lstatOrCreate(dir, name, func() error {
-		file, err := dir.OpenFile(name, os.O_RDONLY|os.O_CREATE|os.O_EXCL, 0666)
+		file, err := dir.OpenFile(name, os.O_RDONLY|os.O_CREATE|os.O_EXCL, layoutFileMode)
 		if err != nil {
 			return err
 		}
@@ -106,7 +106,7 @@ func (l *hostLayout) ensureFile(rel string) error {
 	}
 	// fchmodat(AT_SYMLINK_NOFOLLOW) inside dir: a link swapped in after the
 	// Lstat can only resolve within dir, which holds nothing but these files.
-	return dir.Chmod(name, 0666)
+	return dir.Chmod(name, layoutFileMode)
 }
 
 // openDir walks rel from the mount root one component at a time, creating a
