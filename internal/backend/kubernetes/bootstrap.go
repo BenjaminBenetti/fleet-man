@@ -69,6 +69,9 @@ type podSlot struct {
 type bootFlight struct {
 	done    chan struct{}
 	restage bool
+	// ticket is the bootstrap's place in the connection's limiter, raised
+	// to the priority of every caller that joins it.
+	ticket  *ticket
 	session *AgentSession
 	err     error
 }
@@ -101,9 +104,13 @@ func (p *Pool) slot(c *Cluster, t PodTarget) (*podSlot, error) {
 // is up (or t.Restage asks for the daemon's build and the session runs
 // another): verify, probe (skipped on the fast path), stage when needed,
 // then the agent exec and its handshake. Concurrent calls for one pod share
-// one bootstrap; ctx bounds only this caller's wait. A pod whose bootstrap
-// failed waits a full-jitter backoff before the next one, and every
-// bootstrap waits for one of its connection's slots.
+// one bootstrap, which runs at the highest priority among them; ctx bounds
+// only this caller's wait. A pod whose bootstrap failed waits a full-jitter
+// backoff before the next one, and every bootstrap waits for one of its
+// connection's slots. A lazy restage never costs a pod its working session:
+// when it fails, or a recent failure's backoff is still running, the
+// session of the older build is returned. Only a pod that no longer
+// verifies loses its session (kubernetes:tampered).
 func (p *Pool) EnsureAgent(ctx context.Context, t PodTarget) (*AgentSession, error) {
 	if t.StatefulSet == "" {
 		return nil, errors.New("no StatefulSet named for the pod")
@@ -118,15 +125,21 @@ func (p *Pool) EnsureAgent(ctx context.Context, t PodTarget) (*AgentSession, err
 	}
 	for attempt := 0; ; attempt++ {
 		slot.mu.Lock()
-		if s := slot.session; s != nil && s.alive() && !(t.Restage && s.Stale()) {
-			slot.mu.Unlock()
-			return s, nil
+		if s := slot.session; s != nil && s.alive() {
+			// The restage of a stale session that failed a moment ago waits
+			// out its backoff on the session it has.
+			if !(t.Restage && s.Stale()) || (slot.flight == nil && slot.retryAt.After(p.opts.Now())) {
+				slot.mu.Unlock()
+				return s, nil
+			}
 		}
 		f := slot.flight
 		if f == nil {
-			f = &bootFlight{done: make(chan struct{}), restage: t.Restage}
+			f = &bootFlight{done: make(chan struct{}), restage: t.Restage, ticket: newTicket(t.Priority)}
 			slot.flight = f
 			go slot.boot(c, t, f)
+		} else {
+			f.ticket.raise(t.Priority)
 		}
 		slot.mu.Unlock()
 		select {
@@ -135,6 +148,11 @@ func (p *Pool) EnsureAgent(ctx context.Context, t PodTarget) (*AgentSession, err
 			return nil, ctx.Err()
 		}
 		if f.err != nil {
+			if t.Restage {
+				if s := slot.live(); s != nil {
+					return s, nil
+				}
+			}
 			return nil, f.err
 		}
 		// A restage joined a bootstrap that was not one: ask again, once.
@@ -143,6 +161,16 @@ func (p *Pool) EnsureAgent(ctx context.Context, t PodTarget) (*AgentSession, err
 		}
 		return f.session, nil
 	}
+}
+
+// live is the slot's session while it runs.
+func (s *podSlot) live() *AgentSession {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sess := s.session; sess != nil && sess.alive() {
+		return sess
+	}
+	return nil
 }
 
 // Session is the pod's live agent session, if one is up; it never
@@ -158,27 +186,24 @@ func (p *Pool) Session(t PodTarget) *AgentSession {
 	if slot == nil {
 		return nil
 	}
-	slot.mu.Lock()
-	defer slot.mu.Unlock()
-	if s := slot.session; s != nil && s.alive() {
-		return s
-	}
-	return nil
+	return slot.live()
 }
 
 // Forget drops what the pool keeps for the pod: its session, fast path and
-// backoff (the instance was destroyed or rebuilt).
+// backoff (the instance was destroyed or rebuilt). It needs no working
+// connection: a pod is forgotten even while its kubeconfig does not load.
 func (p *Pool) Forget(t PodTarget) {
-	c, err := p.Cluster(t.Cluster)
-	if err != nil {
-		return
-	}
-	key := podKey{c.Record.ID, c.Namespace(), t.Pod()}
+	pod := t.Pod()
+	var gone []*podSlot
 	p.mu.Lock()
-	slot := p.slots[key]
-	delete(p.slots, key)
+	for key, slot := range p.slots {
+		if key.cluster == t.Cluster && key.pod == pod {
+			gone = append(gone, slot)
+			delete(p.slots, key)
+		}
+	}
 	p.mu.Unlock()
-	if slot != nil {
+	for _, slot := range gone {
 		slot.forget()
 	}
 }
@@ -215,8 +240,9 @@ func (p *Pool) verify(ctx context.Context, c *Cluster, t PodTarget) (*corev1.Pod
 
 // boot runs one bootstrap for the slot and publishes its result.
 func (s *podSlot) boot(c *Cluster, t PodTarget, f *bootFlight) {
-	sess, err := s.bootstrap(c, t)
+	sess, err := s.bootstrap(c, t, f.ticket)
 	p := s.pool
+	var tampered *TamperedError
 	s.mu.Lock()
 	var replaced *AgentSession
 	switch {
@@ -228,6 +254,15 @@ func (s *podSlot) boot(c *Cluster, t PodTarget, f *bootFlight) {
 	default:
 		s.failures++
 		s.retryAt = p.opts.Now().Add(fullJitter(s.failures, p.opts.BackoffBase, p.opts.BackoffCap, p.opts.Rand()))
+		switch old := s.session; {
+		case old == nil || !old.alive():
+		case errors.As(err, &tampered):
+			// The pod a session runs in no longer verifies (an
+			// ephemeral container was added, say): it gets nothing more.
+			replaced, s.session = old, nil
+		case f.restage:
+			p.opts.Logger.Warn("kube agent: restage failed; keeping the pod's older agent", "fleet", t.Fleet, "instance", t.Instance, "agent_version", versionOrDev(old.Hello().Version), "err", err)
+		}
 	}
 	f.session, f.err = sess, err
 	s.flight = nil
@@ -267,9 +302,10 @@ func (s *podSlot) watch(sess *AgentSession) {
 	}
 }
 
-// bootstrap is one attempt: backoff, a connection slot, verification, the
-// probe (or the fast path), a stage when needed, and the agent.
-func (s *podSlot) bootstrap(c *Cluster, t PodTarget) (*AgentSession, error) {
+// bootstrap is one attempt: backoff, a connection slot (at the ticket's
+// priority), verification, the probe (or the fast path), a stage when
+// needed, and the agent.
+func (s *podSlot) bootstrap(c *Cluster, t PodTarget, tk *ticket) (*AgentSession, error) {
 	p := s.pool
 	s.mu.Lock()
 	wait := s.retryAt.Sub(p.opts.Now())
@@ -283,7 +319,7 @@ func (s *podSlot) bootstrap(c *Cluster, t PodTarget) (*AgentSession, error) {
 			return nil, p.ctx.Err()
 		}
 	}
-	release, err := c.gates.boot.acquire(p.ctx, t.Priority)
+	release, err := c.gates.boot.acquireTicket(p.ctx, tk)
 	if err != nil {
 		return nil, err
 	}

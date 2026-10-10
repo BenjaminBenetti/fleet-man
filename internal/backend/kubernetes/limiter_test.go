@@ -163,3 +163,49 @@ func TestTokenBucket(t *testing.T) {
 		t.Fatal("the bucket held more than its burst")
 	}
 }
+
+// A queued ticket raised by a more urgent caller moves ahead of waiters it
+// now outranks, keeping its arrival order among equals.
+func TestLimiterRaisesAQueuedTicket(t *testing.T) {
+	l := newLimiter(1)
+	hold, _ := l.acquire(context.Background(), PriorityBackground)
+	order := make(chan string, 3)
+	queued := 0
+	start := func(name string, tk *ticket) {
+		go func() {
+			release, err := l.acquireTicket(context.Background(), tk)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			order <- name
+			release()
+		}()
+		queued++
+		waitQueued(t, l, queued)
+	}
+	poke := newTicket(PriorityBackground)
+	start("poke", poke)
+	start("state", newTicket(PriorityState))
+	start("interactive", newTicket(PriorityInteractive))
+	// A pane opens on the poked pod: its bootstrap is now interactive, and
+	// it was queued before the other interactive one.
+	poke.raise(PriorityInteractive)
+	poke.raise(PriorityBackground) // never lowered
+	hold()
+	var got []string
+	for range 3 {
+		got = append(got, <-order)
+	}
+	want := []string{"poke", "interactive", "state"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("granted %v, want %v", got, want)
+		}
+	}
+	// Raising a granted ticket is a no-op.
+	poke.raise(PriorityInteractive + 1)
+	if n := l.inFlight(); n != 0 {
+		t.Fatalf("%d slots taken", n)
+	}
+}

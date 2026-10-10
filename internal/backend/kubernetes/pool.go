@@ -453,9 +453,12 @@ func (a apiObjects) StatefulSet(ctx context.Context, ns, name string) (*appsv1.S
 	return a.cs.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
 }
 
-// Close ends every session at once and the pool with them.
+// Close ends every session at once, without waiting on any agent, and the
+// pool with them.
 func (p *Pool) Close() {
-	p.Shutdown(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	p.Shutdown(ctx)
 }
 
 // Shutdown tells every pod's agent and bulk sessions to close and waits,

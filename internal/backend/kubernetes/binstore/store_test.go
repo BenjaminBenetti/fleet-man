@@ -331,6 +331,103 @@ func TestBinaryFromTheDaemonsRelease(t *testing.T) {
 	}
 }
 
+// A failed release download is not tried again by the next lookups (every
+// bootstrap looks its build up), only once downloadRetry has passed.
+func TestFailedDownloadsAreNotRetriedAtOnce(t *testing.T) {
+	var mu sync.Mutex
+	asked := 0
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		asked++
+		mu.Unlock()
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(down.Close)
+	s := testStore(t, Identity{Version: "v9.9.9"}, nil)
+	s.ReleaseBase = down.URL + "/"
+	for range 3 {
+		if _, err := s.Binary(context.Background(), "amd64"); err == nil || !strings.Contains(err.Error(), "503") {
+			t.Fatalf("an unreachable release: %v", err)
+		}
+	}
+	mu.Lock()
+	if asked != 1 {
+		t.Fatalf("the release was asked %d times, want once", asked)
+	}
+	mu.Unlock()
+
+	// A refused asset is not fetched again either.
+	other := program(t, "linux", "amd64", true, "v9.9.8")
+	data, _ := os.ReadFile(other)
+	sum := sha256.Sum256(data)
+	srv2, hits2 := releaseServer(t, "v9.9.9", map[string][]byte{BinaryAsset("amd64"): data}, map[string]string{BinaryAsset("amd64"): hex.EncodeToString(sum[:])})
+	s = testStore(t, Identity{Version: "v9.9.9"}, nil)
+	s.ReleaseBase = srv2.URL + "/"
+	for range 2 {
+		if _, err := s.Binary(context.Background(), "amd64"); err == nil || !strings.Contains(err.Error(), "v9.9.8") {
+			t.Fatalf("a release asset of another version: %v", err)
+		}
+	}
+	if n, _ := hits2.Load(BinaryAsset("amd64")); *n.(*int) != 1 {
+		t.Fatalf("the refused asset was downloaded %d times, want once", *n.(*int))
+	}
+
+	old := downloadRetry
+	downloadRetry = 0
+	t.Cleanup(func() { downloadRetry = old })
+	_, _ = s.Binary(context.Background(), "amd64")
+	if n, _ := hits2.Load(BinaryAsset("amd64")); *n.(*int) != 2 {
+		t.Fatalf("after the retry wait: downloaded %d times, want 2", *n.(*int))
+	}
+}
+
+// A caller that gives up on a slow download leaves it running: the next
+// lookup gets the binary without downloading it again.
+func TestADownloadOutlivesItsCaller(t *testing.T) {
+	bin := program(t, "linux", "amd64", true, "v9.9.9")
+	data, _ := os.ReadFile(bin)
+	sum := sha256.Sum256(data)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	downloads := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v9.9.9/" + ChecksumsAsset:
+			fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), BinaryAsset("amd64"))
+		case "/v9.9.9/" + BinaryAsset("amd64"):
+			mu.Lock()
+			downloads++
+			mu.Unlock()
+			<-release
+			_, _ = w.Write(data)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	s := testStore(t, Identity{Version: "v9.9.9"}, nil)
+	s.ReleaseBase = srv.URL + "/"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := s.Binary(ctx, "amd64"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a lookup that gave up: %v", err)
+	}
+	unblock()
+	a, err := s.Binary(context.Background(), "amd64")
+	if err != nil || a.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("the next lookup: %+v %v", a, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if downloads != 1 {
+		t.Fatalf("downloaded %d times, want once", downloads)
+	}
+}
+
 // tmuxBundle writes a bundle whose bin/tmux is elfBinary, plus a terminfo
 // entry and a hard link to it, as the real bundle has.
 func tmuxBundle(t *testing.T, elfBinary string, extra ...tar.Header) string {

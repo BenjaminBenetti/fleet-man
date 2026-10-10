@@ -69,6 +69,12 @@ const (
 	keepStaged = 6
 )
 
+// downloadRetry is how long a release asset whose download (or check)
+// failed is not fetched again. Every bootstrap looks its pod's build up, so a
+// daemon host that cannot reach the release must not wait on it, or fetch a
+// refused asset again, for every pod. A var for tests.
+var downloadRetry = time.Minute
+
 // BinaryAsset is the pod binary's name for arch (a GOARCH).
 func BinaryAsset(arch string) string { return "fleet-pod-linux-" + arch }
 
@@ -153,6 +159,12 @@ type Store struct {
 	selfSHA   string
 	fetching  map[string]*fetch
 	copying   map[string]*fetch
+	failed    map[string]failedFetch
+}
+
+type failedFetch struct {
+	err error
+	at  time.Time
 }
 
 type fileHash struct {
@@ -236,18 +248,55 @@ func (s *Store) find(ctx context.Context, kind Kind, arch string) (*Artifact, er
 		}
 		return nil, &MissingError{Kind: kind, Arch: arch, Tried: tried, Hint: hint}
 	}
+	unreachable := "check the daemon host can reach github.com, or point " + envName + " at one"
+	if f, ok := s.recentFailure(asset); ok {
+		tried = append(tried, f.err.Error()+" ("+time.Since(f.at).Round(time.Second).String()+" ago)")
+		return nil, &MissingError{Kind: kind, Arch: arch, Tried: tried, Hint: unreachable}
+	}
 	path, err := s.download(ctx, asset)
+	if err != nil && ctx.Err() != nil {
+		// The caller gave up; the download goes on without it.
+		return nil, fmt.Errorf("downloading %s from the %s release: %w", asset, s.Self.Version, ctx.Err())
+	}
 	if err != nil {
 		tried = append(tried, err.Error())
-		return nil, &MissingError{Kind: kind, Arch: arch, Tried: tried, Hint: "check the daemon host can reach github.com, or point " + envName + " at one"}
+		return nil, &MissingError{Kind: kind, Arch: arch, Tried: tried, Hint: unreachable}
 	}
 	a, err := s.check(kind, arch, path, SourceRelease)
 	if err != nil {
 		_ = os.Remove(path)
-		tried = append(tried, "the "+s.Self.Version+" release's: "+err.Error())
+		err = fmt.Errorf("the %s release's: %w", s.Self.Version, err)
+		s.noteFailure(asset, err)
+		tried = append(tried, err.Error())
 		return nil, &MissingError{Kind: kind, Arch: arch, Tried: tried}
 	}
 	return a, nil
+}
+
+// recentFailure is asset's failed download, while it is too recent to try
+// again.
+func (s *Store) recentFailure(asset string) (failedFetch, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.failed[asset]
+	if !ok || time.Since(f.at) >= downloadRetry {
+		return failedFetch{}, false
+	}
+	return f, true
+}
+
+// noteFailure records asset's download failing with err (nil: succeeding).
+func (s *Store) noteFailure(asset string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err == nil {
+		delete(s.failed, asset)
+		return
+	}
+	if s.failed == nil {
+		s.failed = map[string]failedFetch{}
+	}
+	s.failed[asset] = failedFetch{err: err, at: time.Now()}
 }
 
 func (s *Store) getenv(name string) string {
@@ -527,12 +576,19 @@ func (s *Store) finish(m *map[string]*fetch, key string, f *fetch) {
 }
 
 // download fetches the daemon's release's asset into the cache, checked
-// against the release's checksums, and returns its path.
+// against the release's checksums, and returns its path. The download is no
+// one caller's: one that gives up (its ctx ends) leaves it running, bounded
+// by downloadTimeout, for the others and for its own next attempt.
 func (s *Store) download(ctx context.Context, asset string) (string, error) {
 	f, leader := s.join(&s.fetching, asset)
 	if leader {
-		f.path, f.err = s.fetchAsset(ctx, asset)
-		s.finish(&s.fetching, asset, f)
+		go func() {
+			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), downloadTimeout)
+			defer cancel()
+			f.path, f.err = s.fetchAsset(dctx, asset)
+			s.noteFailure(asset, f.err)
+			s.finish(&s.fetching, asset, f)
+		}()
 	}
 	select {
 	case <-f.done:

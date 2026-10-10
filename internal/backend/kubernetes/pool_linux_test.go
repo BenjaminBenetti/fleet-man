@@ -917,3 +917,199 @@ func TestPoolShutdownClosesEverySession(t *testing.T) {
 		t.Fatal("a closed pool bootstrapped")
 	}
 }
+
+// A bootstrap someone joins runs at the joiner's priority: a pane opened on
+// a pod whose background bootstrap is queued goes ahead of the pods queued
+// after it.
+func TestPoolJoinedBootstrapTakesTheJoinersPriority(t *testing.T) {
+	h := newHarness(t, PoolOptions{MaxBootstraps: 1})
+	a, b, c := h.addPod("a"), h.addPod("b"), h.addPod("c")
+	b.Priority, c.Priority = PriorityBackground, PriorityInteractive
+	unblock := make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(unblock) }) })
+	blocked := make(chan struct{}, 1)
+	var mu sync.Mutex
+	var probes []string
+	h.onExec = func(e execRecord) {
+		if e.kind != "probe" {
+			return
+		}
+		mu.Lock()
+		probes = append(probes, e.pod)
+		mu.Unlock()
+		if e.pod == a.Pod() {
+			blocked <- struct{}{}
+			<-unblock
+		}
+	}
+	ctx := context.Background()
+	errs := make(chan error, 4)
+	ensure := func(tg PodTarget) {
+		go func() {
+			_, err := h.pool.EnsureAgent(ctx, tg)
+			errs <- err
+		}()
+	}
+	ensure(a)
+	<-blocked // a holds the connection's only slot
+	cl, err := h.pool.Cluster(testCluster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ensure(b) // an informer poke: background
+	waitQueued(t, cl.gates.boot, 1)
+	ensure(c)
+	waitQueued(t, cl.gates.boot, 2)
+	joined := b
+	joined.Priority = PriorityInteractive // then a pane opens on b
+	ensure(joined)
+	// The join raises b's queued bootstrap before a lets go.
+	h.pool.mu.Lock()
+	slot := h.pool.slots[podKey{testCluster, h.ns, b.Pod()}]
+	h.pool.mu.Unlock()
+	slot.mu.Lock()
+	tk := slot.flight.ticket
+	slot.mu.Unlock()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		tk.mu.Lock()
+		raised := tk.prio == PriorityInteractive
+		tk.mu.Unlock()
+		if raised {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the join did not raise b's bootstrap")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	once.Do(func() { close(unblock) })
+	for range 4 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{a.Pod(), b.Pod(), c.Pod()}; strings.Join(probes, " ") != strings.Join(want, " ") {
+		t.Fatalf("probed %v, want %v", probes, want)
+	}
+}
+
+// upgrade is the harness's daemon after an upgrade to vtest-2: a new pool
+// whose store serves the v2 build, its execs going through exec.
+func (h *harness) upgrade(t *testing.T, exec ExecFunc) *Pool {
+	t.Helper()
+	h.envMu.Lock()
+	h.env[binstore.EnvBinaryPrefix+strings.ToUpper(runtime.GOARCH)] = fakePod(t, "vtest-2")
+	h.envMu.Unlock()
+	opts := h.pool.opts
+	opts.Bins = &binstore.Store{Dir: t.TempDir(), Self: binstore.Identity{Version: "vtest-2"}, Getenv: h.store.Getenv}
+	opts.Version = "vtest-2"
+	opts.Rand = func() float64 { return 0.5 }
+	if exec != nil {
+		opts.Exec = exec
+	}
+	upgraded := NewPool(opts)
+	t.Cleanup(upgraded.Close)
+	return upgraded
+}
+
+// A lazy restage that fails leaves the pod on its working, older agent: the
+// caller gets that session, and the restage is not tried again until the
+// backoff has passed.
+func TestPoolKeepsTheOlderAgentWhenARestageFails(t *testing.T) {
+	h := newHarness(t, PoolOptions{})
+	target := h.addPod("one")
+	ctx := context.Background()
+	if _, err := h.pool.EnsureAgent(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	var stageFails atomic.Bool
+	stageFails.Store(true)
+	upgraded := h.upgrade(t, func(ctx context.Context, c *Cluster, req kubeexec.ExecRequest, stdio kubeexec.Stdio) error {
+		if execKind(req.Command) == "stage" && stageFails.Load() {
+			_ = h.exec(ctx, c, req, kubeexec.Stdio{Stdout: io.Discard, Stderr: io.Discard})
+			return errors.New("no space left on device")
+		}
+		return h.exec(ctx, c, req, stdio)
+	})
+	old, err := upgraded.EnsureAgent(ctx, target)
+	if err != nil || !old.Stale() {
+		t.Fatalf("the upgraded daemon's first session: stale %v, %v", old != nil && old.Stale(), err)
+	}
+	restage := target
+	restage.Restage = true
+	got, err := upgraded.EnsureAgent(ctx, restage)
+	if err != nil || got != old {
+		t.Fatalf("a failed restage: %p %v, want the older agent's session %p", got, err, old)
+	}
+	before := h.counts(target.Pod())
+	if got, err := upgraded.EnsureAgent(ctx, restage); err != nil || got != old {
+		t.Fatalf("a restage during the backoff: %p %v", got, err)
+	}
+	if after := h.counts(target.Pod()); after["stage"] != before["stage"] || after["serve"] != before["serve"] {
+		t.Fatalf("a restage during the backoff ran execs: %v, then %v", before, after)
+	}
+	if out := run(t, old.Client(), "echo still"); out != "still\n" {
+		t.Fatalf("the older agent ran %q", out)
+	}
+
+	// Once the backoff has passed, the next lazy moment restages.
+	stageFails.Store(false)
+	h.now.Store(ptrTime(upgraded.opts.Now().Add(DefaultBackoffCap)))
+	s, err := upgraded.EnsureAgent(ctx, restage)
+	if err != nil || s == old || s.Stale() || s.Hello().Version != "vtest-2" {
+		t.Fatalf("the restage after the backoff: %v", err)
+	}
+}
+
+// A bootstrap that finds the pod no longer verifies (here a restage after a
+// volume was added) closes the session it had: a tampered pod gets nothing.
+func TestPoolDropsTheSessionOfAPodThatNoLongerVerifies(t *testing.T) {
+	h := newHarness(t, PoolOptions{})
+	target := h.addPod("one")
+	ctx := context.Background()
+	if _, err := h.pool.EnsureAgent(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	upgraded := h.upgrade(t, nil)
+	old, err := upgraded.EnsureAgent(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := h.cs.CoreV1().Pods(h.ns).Get(ctx, target.Pod(), metav1.GetOptions{})
+	p.Spec.Volumes = append(p.Spec.Volumes, corev1.Volume{Name: "host", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/"}}})
+	_, _ = h.cs.CoreV1().Pods(h.ns).Update(ctx, p, metav1.UpdateOptions{})
+	restage := target
+	restage.Restage = true
+	var tampered *TamperedError
+	if s, err := upgraded.EnsureAgent(ctx, restage); !errors.As(err, &tampered) || s != nil {
+		t.Fatalf("restage of a tampered pod: %p %v", s, err)
+	}
+	waitDone(t, old.Done(), "the tampered pod's session")
+	if upgraded.Session(target) != nil {
+		t.Fatal("the tampered pod still has a session")
+	}
+}
+
+// Forget needs no working connection: a destroyed instance's pod is
+// forgotten, its session closed, while the kubeconfig does not load.
+func TestPoolForgetsAPodWhoseConnectionDoesNotLoad(t *testing.T) {
+	h := newHarness(t, PoolOptions{})
+	target := h.addPod("one")
+	s, err := h.pool.EnsureAgent(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(h.rec.KubeconfigPaths[0], []byte("not: [a kubeconfig"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.now.Store(ptrTime(h.pool.opts.Now().Add(stampCheck)))
+	if _, err := h.pool.Cluster(testCluster); err == nil {
+		t.Fatal("a broken kubeconfig loaded")
+	}
+	h.pool.Forget(target)
+	waitDone(t, s.Done(), "the forgotten pod's session")
+}

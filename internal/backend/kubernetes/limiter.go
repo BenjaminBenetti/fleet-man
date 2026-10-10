@@ -49,18 +49,61 @@ type waiter struct {
 	granted bool
 }
 
+// ticket is one bootstrap's claim on its connection's limiter. Every caller
+// that joins the bootstrap raises it to its own priority, so a pod someone
+// is waiting on interactively is not left queued at the priority of the
+// background poke that started its bootstrap.
+type ticket struct {
+	mu   sync.Mutex
+	prio Priority
+	l    *limiter
+	w    *waiter // while queued
+}
+
+func newTicket(prio Priority) *ticket { return &ticket{prio: prio} }
+
+// raise lifts the ticket to prio (never lowers it), moving it up the queue
+// when it is waiting.
+func (t *ticket) raise(prio Priority) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if prio <= t.prio {
+		return
+	}
+	t.prio = prio
+	if t.w != nil {
+		t.l.raise(t.w, prio)
+	}
+}
+
 // acquire waits, within ctx, for a slot; release gives it back.
 func (l *limiter) acquire(ctx context.Context, prio Priority) (release func(), err error) {
+	return l.acquireTicket(ctx, newTicket(prio))
+}
+
+// acquireTicket is acquire at the ticket's priority, which may rise while it
+// waits.
+func (l *limiter) acquireTicket(ctx context.Context, t *ticket) (release func(), err error) {
+	// Lock order: the ticket, then the limiter (as raise takes them).
+	t.mu.Lock()
 	l.mu.Lock()
 	if l.running < l.max && l.queue.Len() == 0 {
 		l.running++
 		l.mu.Unlock()
+		t.mu.Unlock()
 		return l.releaser(), nil
 	}
 	l.seq++
-	w := &waiter{prio: prio, seq: l.seq, ready: make(chan struct{})}
+	w := &waiter{prio: t.prio, seq: l.seq, ready: make(chan struct{})}
 	heap.Push(&l.queue, w)
+	t.l, t.w = l, w
 	l.mu.Unlock()
+	t.mu.Unlock()
+	defer func() {
+		t.mu.Lock()
+		t.w = nil
+		t.mu.Unlock()
+	}()
 	select {
 	case <-w.ready:
 		return l.releaser(), nil
@@ -93,6 +136,18 @@ func (l *limiter) releaser() func() {
 			}
 		})
 	}
+}
+
+// raise lifts a queued waiter to prio; a granted or abandoned one is left
+// alone.
+func (l *limiter) raise(w *waiter, prio Priority) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if w.granted || w.index < 0 || prio <= w.prio {
+		return
+	}
+	w.prio = prio
+	heap.Fix(&l.queue, w.index)
 }
 
 // inFlight is how many slots are taken.
