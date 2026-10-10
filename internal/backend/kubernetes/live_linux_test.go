@@ -38,6 +38,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/execas"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
 	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
 )
@@ -252,12 +253,22 @@ type live struct {
 	dir   string
 }
 
+// liveOwner is the owner label value of the live tests' instances (the
+// pools' informers select by it).
+const liveOwner = "liveowner123"
+
 func newLive(t *testing.T, kctx string) *live {
+	t.Helper()
+	return newLiveIn(t, kctx, "fleet-it-p2-10a-pool-")
+}
+
+// newLiveIn is newLive in a namespace named prefix + a random suffix.
+func newLiveIn(t *testing.T, kctx, prefix string) *live {
 	t.Helper()
 	paths := kubeexec.DefaultKubeconfigPaths(os.Environ())
 	var suffix [3]byte
 	_, _ = rand.Read(suffix[:])
-	lv := &live{t: t, ns: "fleet-it-p2-10a-pool-" + hex.EncodeToString(suffix[:]), dir: t.TempDir()}
+	lv := &live{t: t, ns: prefix + hex.EncodeToString(suffix[:]), dir: t.TempDir()}
 	lv.rec = fleet.KubeCluster{ID: "live-" + hex.EncodeToString(suffix[:]), Context: kctx, KubeconfigPaths: paths, Namespace: lv.ns}
 	conn, err := kubeexec.Load(lv.rec, kubeexec.Options{})
 	if err != nil {
@@ -328,6 +339,7 @@ func (lv *live) pool(art *binstore.Artifact) (*Pool, *execCounter) {
 		Records: func() ([]fleet.KubeCluster, error) { return []fleet.KubeCluster{lv.rec}, nil },
 		Bins:    store,
 		Version: art.Info.Version,
+		Owner:   func() (string, error) { return liveOwner, nil },
 		Logger:  slog.New(slog.NewTextHandler(testLog{lv.t}, nil)),
 		Exec: func(ctx context.Context, c *Cluster, req kubeexec.ExecRequest, stdio kubeexec.Stdio) error {
 			counter.add(execKind(req.Command))
@@ -351,8 +363,14 @@ func (l testLog) Write(p []byte) (int, error) {
 // and the spec hash of the pod as rendered (what fleetd journals).
 func (lv *live) applyInstance(image string) (*appsv1.StatefulSet, string, string) {
 	lv.t.Helper()
+	return lv.applyInstanceNamed("fi-live-one-k8sl1ve0", image, nil)
+}
+
+// applyInstanceNamed is applyInstance of StatefulSet name, its pod spec
+// changed by shape (nil: none) before it is created.
+func (lv *live) applyInstanceNamed(name, image string, shape func(*corev1.PodSpec)) (*appsv1.StatefulSet, string, string) {
+	lv.t.Helper()
 	ctx := context.Background()
-	name := "fi-live-one-k8sl1ve0"
 	secret := name + "-spec-g1"
 	execSpec, _ := json.Marshal(execas.Spec{RemoteUser: "vscode", WorkspaceFolder: "/home/vscode", WorkingDir: "/"})
 	pid1, _ := json.Marshal(map[string]any{"format": 1, "argv": []string{"sleep", "infinity"}})
@@ -363,7 +381,10 @@ func (lv *live) applyInstance(image string) (*appsv1.StatefulSet, string, string
 		lv.t.Fatal(err)
 	}
 	one, no, mode := int32(1), false, int32(0o400)
-	labels := map[string]string{"app.kubernetes.io/managed-by": "fleet", "fleet.dev/key": "k8sl1ve0"}
+	// An instance's labels, which the pools' informers select by.
+	labels := names.Base(liveOwner, lv.rec.ID)
+	labels[names.LabelRole] = string(names.RoleInstance)
+	labels[names.LabelKey] = name[len(name)-8:]
 	set := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
 		Spec: appsv1.StatefulSetSpec{
@@ -395,6 +416,9 @@ func (lv *live) applyInstance(image string) (*appsv1.StatefulSet, string, string
 				},
 			},
 		},
+	}
+	if shape != nil {
+		shape(&set.Spec.Template.Spec)
 	}
 	rendered := podspec.SpecHash(&set.Spec.Template.Spec)
 	got, err := lv.cs.AppsV1().StatefulSets(lv.ns).Create(ctx, set, metav1.CreateOptions{FieldManager: DefaultFieldManager})

@@ -155,8 +155,11 @@ type expectation struct {
 func (p *Pool) trackLocked(k trackKey, ns string) *track {
 	t := p.tracks[k]
 	if t == nil {
-		t = &track{ns: ns}
+		t = &track{}
 		p.tracks[k] = t
+	}
+	if ns != "" {
+		t.ns = ns
 	}
 	return t
 }
