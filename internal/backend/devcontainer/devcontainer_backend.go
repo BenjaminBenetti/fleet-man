@@ -14,6 +14,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/devmeta"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
@@ -103,20 +104,13 @@ func (devcontainerBackend *DevcontainerBackend) containerUser(containerID string
 // rejected so it can't be cached and route every `docker exec -u` to a user that
 // doesn't exist — re-creating the very bug this resolves.
 func (devcontainerBackend *DevcontainerBackend) resolveContainerUser(containerID string) string {
-	if user := remoteUserFromMetadata(containerID); looksLikeUsername(user) {
+	if user := remoteUserFromMetadata(containerID); devmeta.LooksLikeUsername(user) {
 		return user
 	}
-	if user := devcontainerBackend.remoteUserViaExec(containerID); looksLikeUsername(user) {
+	if user := devcontainerBackend.remoteUserViaExec(containerID); devmeta.LooksLikeUsername(user) {
 		return user
 	}
 	return containerUserHeuristic(containerID)
-}
-
-// looksLikeUsername reports whether s is a plausible single-token Unix username:
-// non-empty, no whitespace, and free of shell-expansion leftovers like an
-// unsubstituted ${...} that a metadata template may carry.
-func looksLikeUsername(s string) bool {
-	return s != "" && !strings.ContainsAny(s, " \t\r\n") && !strings.Contains(s, "${")
 }
 
 // remoteUserViaExec asks the devcontainer CLI who it execs as. --default-user-env-probe
@@ -135,7 +129,7 @@ func (devcontainerBackend *DevcontainerBackend) remoteUserViaExec(containerID st
 	}
 	// Take the last line: with --default-user-env-probe none the username is the
 	// only stdout, but this is belt-and-suspenders against a stray banner line.
-	// resolveContainerUser validates the token via looksLikeUsername.
+	// resolveContainerUser validates the token via devmeta.LooksLikeUsername.
 	out = bytes.TrimSpace(out)
 	if i := bytes.LastIndexByte(out, '\n'); i >= 0 {
 		out = bytes.TrimSpace(out[i+1:])
