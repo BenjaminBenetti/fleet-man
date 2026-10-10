@@ -166,6 +166,9 @@ func (t *translation) finishProcess() {
 	}
 	t.spec.PID1.User = c.User
 	t.spec.PID1.WorkingDir = c.WorkingDir
+	// A pod without root runs as a uid the image may not name; pod-init
+	// gives it remoteUser's home and shell.
+	t.spec.PID1.RemoteUser = t.merged.RemoteUser
 	if t.spec.PID1.StopSignal == "" && t.in.Image.Config.StopSignal != "" {
 		sig, err := canonicalSignal(t.in.Image.Config.StopSignal)
 		if err != nil {

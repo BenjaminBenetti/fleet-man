@@ -14,7 +14,8 @@
         "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
         "-"
       ],
-      "user": "root"
+      "user": "root",
+      "remote_user": "vscode"
     },
     "security": {},
     "resources": {

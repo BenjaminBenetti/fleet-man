@@ -24,7 +24,8 @@
         }
       ],
       "hostname": "kubeshim-host",
-      "privileged": true
+      "privileged": true,
+      "remote_user": "vscode"
     },
     "env": [
       {
