@@ -27,8 +27,8 @@ done
 # The hidden internal command must NOT show in the public help — surfacing
 # it would invite users to call it directly, breaking the TUI contract.
 assert_not_contains "${root_help}" "_create-instance" "internal command should remain hidden"
-# So must the in-pod commands (a pod's PID 1 and its Jobs' process).
-for internal in exec-as pod-init pod-job; do
+# So must the in-pod commands (a pod's PID 1, its Jobs' process and its agent).
+for internal in exec-as pod-init pod-job pod-agent; do
   assert_not_contains "${root_help}" "${internal}" "in-pod command ${internal} should remain hidden"
 done
 
