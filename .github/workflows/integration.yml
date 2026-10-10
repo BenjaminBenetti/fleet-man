@@ -156,6 +156,50 @@ jobs:
           FLEET_KUBEIMAGE_DOCKER: "1"
         run: go test -count=1 -timeout 10m -v -run TestRealDocker ./internal/backend/kubernetes/kubeimage
 
+  # Gateway image delivery against the runner's real docker: `docker save` of
+  # its image store (containerd or classic), served by the image server and
+  # pulled back by docker. Not in the aggregate check, like kubeimage-docker.
+  imageserve-docker:
+    name: imageserve docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run the imageserve docker test
+        env:
+          FLEET_IMAGESERVE_DOCKER: "1"
+        run: go test -count=1 -timeout 10m -v -run TestRealDocker ./internal/k8s/imageserve
+
+  # The OCI distribution-spec conformance suite's pull workflow, read-only,
+  # against the image server through an in-process gateway and fleetd's
+  # tunnel client. Not in the aggregate check.
+  oci-conformance:
+    name: OCI conformance (pull)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build the conformance suite
+        run: |
+          git clone --depth 1 --branch v1.1.1 https://github.com/opencontainers/distribution-spec "$RUNNER_TEMP/distribution-spec"
+          cd "$RUNNER_TEMP/distribution-spec/conformance"
+          go test -c -o "$RUNNER_TEMP/oci-conformance.test" .
+
+      - name: Run the pull workflow against the image server
+        env:
+          FLEET_OCI_CONFORMANCE: ${{ runner.temp }}/oci-conformance.test
+        run: go test -count=1 -timeout 10m -v -run TestOCIConformancePull ./internal/k8s/imageserve
+
   # Single aggregate check: green only when every shard passed. Preserves one
   # stable "integration" status name for branch protection / the review loop,
   # independent of how many shards the matrix expands to.

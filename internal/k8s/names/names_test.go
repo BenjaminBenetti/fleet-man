@@ -254,6 +254,7 @@ func TestValidateClusterID(t *testing.T) {
 		"a.b":                   false,
 		"a_b":                   false,
 		"jobs":                  false, // ~/.fleet/kube/jobs
+		"images":                false, // ~/.fleet/kube/images
 		"..":                    false,
 	} {
 		if err := ValidateClusterID(id); (err == nil) != ok {

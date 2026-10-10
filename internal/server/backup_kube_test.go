@@ -103,7 +103,8 @@ func snapshotTree(t *testing.T, root string, skip func(rel string) bool) map[str
 // A backup of a daemon with two Kubernetes connections unpacks into an empty
 // ~/.fleet as the very files it was taken from, each at its own path: the
 // two connections' image indexes do not collide, the kube directories come
-// back owner-only, and the incarnation nonce (and temp files) stay out.
+// back owner-only, and the incarnation nonce, the gateway image cache (and
+// temp files) stay out.
 func TestBackupTwoClustersRoundTrip(t *testing.T) {
 	home := writeFleetState(t, map[string]string{
 		"config.json": `{"cfg":1}`,
@@ -131,6 +132,9 @@ func TestBackupTwoClustersRoundTrip(t *testing.T) {
 		"kube/incarnation.json":            `{"v":1,"nonce":"aaaaaaaaaaaaaaaa"}`, // never backed up
 		"kube/jobs/.aaaa2345.json-1.tmp":   "torn",                               // an atomicfile temp
 		"kube/minikube-abc234/notes.txt":   "not a backup source",
+		// The gateway image cache is made again from docker, never backed up.
+		"kube/images/store.json":                               `{"version":1}`,
+		"kube/images/blobs/sha256/" + strings.Repeat("ab", 32): "layer bytes",
 	}
 	for rel, content := range kubeFiles {
 		path := filepath.Join(fleetDir, filepath.FromSlash(rel))
@@ -170,7 +174,7 @@ func TestBackupTwoClustersRoundTrip(t *testing.T) {
 	}
 
 	excluded := func(rel string) bool {
-		return rel == "backup/" || rel == "kube/incarnation.json" || strings.HasSuffix(rel, ".tmp") || strings.HasSuffix(rel, "notes.txt")
+		return rel == "backup/" || rel == "kube/incarnation.json" || strings.HasSuffix(rel, ".tmp") || strings.HasSuffix(rel, "notes.txt") || strings.HasPrefix(rel, "kube/images/")
 	}
 	want := snapshotTree(t, fleetDir, excluded)
 
