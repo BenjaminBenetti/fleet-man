@@ -247,6 +247,26 @@ func (r *registry) attachTarget(secret string) *session {
 	return s
 }
 
+// attachRegistry installs ym as s's registry connection, superseding (and
+// closing) an older one, and reports whether it stuck. The attach was checked
+// against s before its handshake reply, so meanwhile s may have been reaped or
+// have dropped the registry feature on a re-registration. Both close the
+// registry connection they find, but ym may land after they looked, and would
+// then stay bound to a dead or registry-less session. Checking again after the
+// install closes that gap: either the check sees the change, or the change
+// comes after the install and closes ym itself.
+func (r *registry) attachRegistry(s *session, ym *yamux.Session) bool {
+	if old := s.setRegistryYamux(ym); old != nil && old != ym {
+		_ = old.Close()
+	}
+	if s.registry.Load() && r.lookupRegistry(s.registryID) == s {
+		return true
+	}
+	s.clearRegistryYamux(ym)
+	_ = ym.Close()
+	return false
+}
+
 // reap evicts sessions whose tunnel has been closed past ttl. The grace window
 // is what makes sticky reconnect work across a brief drop: a disconnected
 // session keeps its URL reserved (its secret stays claimable) until ttl elapses

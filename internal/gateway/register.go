@@ -209,8 +209,9 @@ func (s *Server) bindAttachment(ctx context.Context, conn net.Conn, req tunnel.R
 		s.log.Warn("gateway: yamux server (registry)", "remote", remote, "err", err)
 		return err
 	}
-	if old := sess.setRegistryYamux(ym); old != nil && old != ym {
-		_ = old.Close()
+	if !s.reg.attachRegistry(sess, ym) {
+		s.log.Warn("gateway: attach rejected", "remote", remote, "err", errNoAttachTarget)
+		return errNoAttachTarget
 	}
 	s.log.Info("gateway: registry connection attached", "remote", remote, "public_url", sess.publicURL)
 

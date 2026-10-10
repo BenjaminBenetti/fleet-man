@@ -514,3 +514,38 @@ func TestRegistryAttachTarget(t *testing.T) {
 		}
 	}
 }
+
+// TestRegistryAttachRegistryRechecksTheSession: a registry connection whose
+// session dropped the registry feature, or was reaped, after the attach was
+// checked does not stay bound to it: attachRegistry closes it instead.
+func TestRegistryAttachRegistryRechecksTheSession(t *testing.T) {
+	r := newRegistry("https://gw", "", 16, testSigner(t, ""))
+	s, _, _, _ := r.claim(tunnel.RegisterRequest{})
+	main := fakeTunnel(t)
+	r.bind(s, main)
+	s.registry.Store(true)
+
+	live := fakeTunnel(t)
+	if !r.attachRegistry(s, live) || s.currentRegistryYamux() != live {
+		t.Fatal("a bound registry session must keep its registry connection")
+	}
+
+	// A re-registration without the feature ran between the check and the
+	// install.
+	s.registry.Store(false)
+	dropped := fakeTunnel(t)
+	if r.attachRegistry(s, dropped) || !dropped.IsClosed() || s.currentRegistryYamux() != nil {
+		t.Fatal("a session without the registry feature must not keep a registry connection")
+	}
+
+	// The session was reaped between the check and the install.
+	s.registry.Store(true)
+	_ = main.Close()
+	now := time.Now()
+	r.reap(now, sessionTTL)
+	r.reap(now.Add(2*sessionTTL), sessionTTL)
+	late := fakeTunnel(t)
+	if r.attachRegistry(s, late) || !late.IsClosed() || s.currentRegistryYamux() != nil {
+		t.Fatal("a reaped session must not keep a registry connection")
+	}
+}
