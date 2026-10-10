@@ -445,6 +445,26 @@ func (s *Store) servedManifests(clusterID string) []string {
 	return out
 }
 
+// heldOnlyBy reports whether holder is the only holder of everything the
+// connection serves (true when it serves nothing; false when the cache is
+// unreadable).
+func (s *Store) heldOnlyBy(clusterID, holder string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := s.state()
+	if err != nil {
+		return false
+	}
+	for _, m := range st.Manifests {
+		for _, h := range m.Refs[clusterID] {
+			if h != holder {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // Serves reports whether the connection serves the manifest.
 func (s *Store) Serves(clusterID, digest string) bool {
 	_, ok := s.manifestFor(clusterID, digest)

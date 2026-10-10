@@ -351,6 +351,19 @@ func TestKubeRegistryChangeRejudgesGatewayConnections(t *testing.T) {
 	if lastFull(reg) != before[reg] {
 		t.Fatal("a registry connection was judged again")
 	}
+
+	// A connection whose last full preflight began after the change judged
+	// it already: no second run.
+	kubeRegistrySettle = 200 * time.Millisecond
+	settled := lastFull(gw)
+	f.svc.kube.registryStateChanged("", "Enable Image Registry is off")
+	f.svc.kube.mu.Lock()
+	f.svc.kube.registryChangedAt = time.Now().Add(-time.Hour)
+	f.svc.kube.mu.Unlock()
+	time.Sleep(600 * time.Millisecond)
+	if lastFull(gw) != settled {
+		t.Fatal("a connection judged after the change was judged again")
+	}
 }
 
 // A connection's status carries its last pull through the gateway (live),
@@ -452,23 +465,27 @@ func testImageArchive(t *testing.T) ([]byte, string) {
 }
 
 // usesGateway is which connections a registry change concerns: set to the
-// gateway, or Auto on a cluster that is neither local nor given a registry.
+// gateway, or Auto, when the last full preflight resolved to the gateway or
+// to nothing.
 func TestUsesGateway(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		image fleet.KubeImageSettings
-		local bool
-		want  bool
+		name     string
+		image    fleet.KubeImageSettings
+		resolved string
+		want     bool
 	}{
-		{"set to gateway", fleet.KubeImageSettings{Mode: fleet.KubeImageGateway}, true, true},
-		{"auto on a cloud cluster", fleet.KubeImageSettings{}, false, true},
-		{"auto spelled out", fleet.KubeImageSettings{Mode: fleet.KubeImageAuto}, false, true},
-		{"auto on a local cluster", fleet.KubeImageSettings{}, true, false},
-		{"auto with a registry", fleet.KubeImageSettings{Registry: "registry.example.com"}, false, false},
-		{"set to registry", fleet.KubeImageSettings{Mode: fleet.KubeImageRegistry}, false, false},
-		{"set to node load", fleet.KubeImageSettings{Mode: fleet.KubeImageNodeLoad}, false, false},
+		{"set to gateway", fleet.KubeImageSettings{Mode: fleet.KubeImageGateway}, "gateway", true},
+		{"set to gateway, unavailable", fleet.KubeImageSettings{Mode: fleet.KubeImageGateway}, "none", true},
+		{"auto through the gateway", fleet.KubeImageSettings{}, "gateway", true},
+		{"auto spelled out", fleet.KubeImageSettings{Mode: fleet.KubeImageAuto}, "gateway", true},
+		{"auto with nothing to deliver", fleet.KubeImageSettings{}, "none", true},
+		{"auto on a local cluster", fleet.KubeImageSettings{}, "node-load", false},
+		{"auto with a registry", fleet.KubeImageSettings{Registry: "registry.example.com"}, "registry", false},
+		{"not judged yet", fleet.KubeImageSettings{}, "", false},
+		{"set to registry", fleet.KubeImageSettings{Mode: fleet.KubeImageRegistry}, "none", false},
+		{"set to node load", fleet.KubeImageSettings{Mode: fleet.KubeImageNodeLoad}, "none", false},
 	} {
-		if got := usesGateway(fleet.KubeCluster{Image: tc.image}, tc.local); got != tc.want {
+		if got := usesGateway(fleet.KubeCluster{Image: tc.image}, tc.resolved); got != tc.want {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
 		}
 	}

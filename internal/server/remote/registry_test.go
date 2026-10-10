@@ -156,11 +156,25 @@ func TestRegistryPrefixAndReasons(t *testing.T) {
 		t.Fatalf("emitted %q", emitted)
 	}
 	mu.Unlock()
-	// A reconnect to the same gateway keeps the prefix while it connects.
+	// A reconnect to the same gateway keeps the prefix while it connects,
+	// and the registration that confirms it is told again, unchanged: what
+	// was judged while the tunnel was down (a route check) is stale.
 	m.registryConnecting(desiredState{mcp: true, registry: true, gatewayURL: gatewayURL})
 	if again, _ := m.Registry(); again != p {
 		t.Fatalf("reconnecting: %q", again)
 	}
+	mu.Lock()
+	if len(states) != 2 {
+		t.Fatalf("a kept prefix was told while connecting: %+v", states)
+	}
+	mu.Unlock()
+	m.setRegistry(gatewayURL, p, "", true)
+	m.setRegistry(gatewayURL, p, "", true)
+	mu.Lock()
+	if len(states) != 3 || states[2] != (told{p, ""}) {
+		t.Fatalf("the re-registration was not told once: %+v", states)
+	}
+	mu.Unlock()
 	// A fresh daemon starts from the session file.
 	fresh, _ := newM(WithRegistryListener(registryServer(t)))
 	fresh.registryConnecting(desiredState{mcp: true, registry: true, gatewayURL: gatewayURL})
@@ -408,5 +422,28 @@ func TestRegistryReasonsNameTheCause(t *testing.T) {
 	unwired.registryTunnelOff(desiredState{registry: true})
 	if _, why := unwired.Registry(); why != whyRegistryNotWired {
 		t.Errorf("no listener: %q", why)
+	}
+}
+
+// The CONNECTING status of an attempt names that attempt's registry state:
+// right after Enable Image Registry is turned on it says the tunnel is
+// connecting, not that the toggle is off (the state of the attempt before).
+func TestConnectingStatusNamesThisAttemptsRegistry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	statusCh := make(chan *fleetgrpc.RemoteMcpStatus, 64)
+	m := NewManager(1, "vtest", func(st *fleetgrpc.RemoteMcpStatus) { statusCh <- st },
+		WithRegistryListener(NewChanListener()),
+		WithDialFunc(func(ctx context.Context, _ string) (net.Conn, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}))
+	startManager(t, m)
+	m.Reconcile(true, false, false, false, "https://gw.example.com")
+	if st := waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTING, 5*time.Second); st.GetRegistryError() != "" {
+		t.Fatalf("registry off: the status names %q", st.GetRegistryError())
+	}
+	m.Reconcile(true, false, false, true, "https://gw.example.com")
+	if st := waitForState(t, statusCh, fleetgrpc.RemoteMcpConn_REMOTE_MCP_CONN_CONNECTING, 5*time.Second); st.GetRegistryError() != whyRegistryPending {
+		t.Fatalf("registry just turned on: the CONNECTING status names %q, want %q", st.GetRegistryError(), whyRegistryPending)
 	}
 }

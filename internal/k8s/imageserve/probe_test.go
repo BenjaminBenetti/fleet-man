@@ -195,6 +195,11 @@ func TestGatewayRegistryChangeRecordsAProbeOnlyConnection(t *testing.T) {
 	if _, err := f.gw.Probe(context.Background(), f.target); err != nil {
 		t.Fatal(err)
 	}
+	// As after a restart: this process has built no probe image yet.
+	probeDigests.Range(func(d, _ any) bool {
+		probeDigests.Delete(d)
+		return true
+	})
 	newPrefix := "gw2.example.com/" + strings.Repeat("c", 64)
 	f.tunnel.set(newPrefix)
 	f.gw.RegistryChanged(newPrefix)

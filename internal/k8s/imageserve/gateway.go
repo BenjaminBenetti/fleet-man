@@ -284,12 +284,14 @@ func (g *Gateway) Warm() {
 
 // Forget is the end of a connection (it is being removed, after its last GC
 // pass): the cache stops serving it anything and the gateway pull Secret is
-// deleted. The credential goes with the connection's record.
+// deleted. The credential goes with the connection's record. Like Remove it
+// never waits out an import (the removal RPC calls it): the follow-up sweep
+// takes what it let go.
 func (g *Gateway) Forget(ctx context.Context, t kubeimage.Target) error {
 	if err := g.Store.Forget(t.Cluster.ID); err != nil {
 		return err
 	}
-	if _, err := g.Store.Sweep(); err != nil {
+	if _, _, err := g.Store.TrySweep(); err != nil {
 		return err
 	}
 	g.sweepSoon()
@@ -437,14 +439,10 @@ func (g *Gateway) retryRepoint(prefix string, failed bool) {
 }
 
 // servesOnlyProbes reports a connection that serves nothing but the probe
-// image (Probe).
+// image (Probe). It goes by the holder the Store records, not by the probe
+// digests this process has built: after a restart none is built yet.
 func (g *Gateway) servesOnlyProbes(clusterID string) bool {
-	for _, d := range g.Store.servedManifests(clusterID) {
-		if !isProbeDigest(d) {
-			return false
-		}
-	}
-	return true
+	return g.Store.heldOnlyBy(clusterID, probeHolder)
 }
 
 // errNoConnections: the daemon cannot reach the clusters yet.

@@ -167,9 +167,10 @@ func WithRegistryChange(fn func(prefix string)) Option {
 }
 
 // WithRegistryState registers fn to be told the image registry's state, its
-// prefix and why there is none (Registry), whenever either changes: the
-// cluster connections re-judge Gateway delivery. Like WithRegistryChange, fn
-// runs on the Manager's goroutine and must not block.
+// prefix and why there is none (Registry), whenever either changes, and
+// after a registration that confirmed the prefix kept while the tunnel was
+// down: the cluster connections re-judge Gateway delivery. Like
+// WithRegistryChange, fn runs on the Manager's goroutine and must not block.
 func WithRegistryState(fn func(prefix, why string)) Option {
 	return func(m *Manager) { m.onRegistryState = fn }
 }
@@ -305,6 +306,10 @@ func (m *Manager) Run(ctx context.Context) {
 			continue
 		}
 
+		// The registry state first, so the CONNECTING status names this
+		// attempt's, not the last one's (e.g. "Enable Image Registry is off"
+		// just after it was turned on).
+		m.registryConnecting(d)
 		m.emit(statusConnecting(), d)
 		registered, err := m.connectAndServe(attemptCtx, d)
 		cancel()

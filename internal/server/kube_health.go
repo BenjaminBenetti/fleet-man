@@ -165,10 +165,12 @@ type kubeManager struct {
 	workers map[string]*kubeWorker
 	// images is the daemon's image delivery (kube_image.go); nil until
 	// Serve starts it, so a connection judged without it skips the image
-	// delivery check. pullPush and registrySettle are its pending pushes.
-	images         *kubeImages
-	pullPush       *time.Timer
-	registrySettle *time.Timer
+	// delivery check. pullPush and registrySettle are its pending pushes,
+	// registryChangedAt when the gateway's image registry last changed.
+	images            *kubeImages
+	pullPush          *time.Timer
+	registrySettle    *time.Timer
+	registryChangedAt time.Time
 }
 
 func newKubeManager(svc *service) *kubeManager {

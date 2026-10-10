@@ -371,6 +371,33 @@ func TestGatewayForgetAndRotate(t *testing.T) {
 	}
 }
 
+// Forget runs on the removal RPC, so it must not wait for an import (a
+// large docker save for another connection) to finish.
+func TestGatewayForgetDoesNotWaitForAnImport(t *testing.T) {
+	f := newGatewayFixture(t)
+	d, err := f.gw.Deliver(context.Background(), f.target, f.image())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.gw.Store.gc.RLock() // an import in flight
+	done := make(chan error, 1)
+	go func() { done <- f.gw.Forget(context.Background(), f.target) }()
+	select {
+	case err := <-done:
+		f.gw.Store.gc.RUnlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		f.gw.Store.gc.RUnlock()
+		<-done
+		t.Fatal("Forget waited for the import")
+	}
+	if f.gw.Store.Serves("kc-1", d.Digest) {
+		t.Fatal("a forgotten connection still serves")
+	}
+}
+
 func TestGatewayRepointsOnARegistryChange(t *testing.T) {
 	f := newGatewayFixture(t)
 	idx := t.TempDir()

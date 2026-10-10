@@ -136,12 +136,14 @@ func (m *kubeManager) pullProgress(string) {
 // registryStateChanged is told the tunnel's image registry state
 // (remote.WithRegistryState). The statuses show Gateway delivery's
 // availability live at once; once the state has settled, every connection
-// that can deliver through the gateway runs a full preflight, so its
-// resolved delivery and manifest check follow.
+// whose delivery the gateway decides and whose last full preflight began
+// before the change runs another, so its resolved delivery and manifest
+// check follow.
 func (m *kubeManager) registryStateChanged(string, string) {
 	go m.publish()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.registryChangedAt = m.now()
 	if m.registrySettle != nil {
 		m.registrySettle.Reset(kubeRegistrySettle)
 		return
@@ -149,6 +151,7 @@ func (m *kubeManager) registryStateChanged(string, string) {
 	m.registrySettle = time.AfterFunc(kubeRegistrySettle, func() {
 		m.mu.Lock()
 		m.registrySettle = nil
+		changed := m.registryChangedAt
 		workers := make([]*kubeWorker, 0, len(m.workers))
 		for _, w := range m.workers {
 			workers = append(workers, w)
@@ -156,7 +159,7 @@ func (m *kubeManager) registryStateChanged(string, string) {
 		m.mu.Unlock()
 		for _, w := range workers {
 			w.mu.Lock()
-			gw := w.haveFull && usesGateway(w.rec, w.full.Capabilities.GetLocalCluster())
+			gw := w.haveFull && !w.fullStarted.After(changed) && usesGateway(w.rec, w.full.Capabilities.GetImageDelivery().GetMode())
 			if gw {
 				w.fullWanted = true
 			}
@@ -168,15 +171,16 @@ func (m *kubeManager) registryStateChanged(string, string) {
 	})
 }
 
-// usesGateway reports whether a connection's delivery can resolve to the
-// gateway: set to it, or Auto on a cluster that is not local and has no
-// registry.
-func usesGateway(rec fleet.KubeCluster, local bool) bool {
+// usesGateway reports whether the gateway decides a connection's delivery,
+// given what its last full preflight resolved: set to Gateway, or Auto, when
+// it resolved to the gateway or to nothing. Node load and a set registry
+// come first in Auto's order (a local cluster whose tool is missing on the
+// daemon host falls through to the gateway too); a connection not judged yet
+// has its first full preflight to come.
+func usesGateway(rec fleet.KubeCluster, resolved string) bool {
 	switch rec.Image.Mode {
-	case fleet.KubeImageGateway:
-		return true
-	case "", fleet.KubeImageAuto:
-		return !local && strings.TrimSpace(rec.Image.Registry) == ""
+	case fleet.KubeImageGateway, "", fleet.KubeImageAuto:
+		return resolved == string(kubeimage.StrategyGateway) || resolved == string(kubeimage.StrategyNone)
 	}
 	return false
 }

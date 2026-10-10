@@ -88,15 +88,18 @@ func (m *Manager) WarmRegistry() {
 }
 
 // setRegistry records the registry state and tells onRegistry of a changed
-// prefix, and onRegistryState of a changed prefix or reason.
+// prefix, and onRegistryState of a changed prefix or reason, or of a
+// registration that confirmed a kept prefix: what was judged while the
+// tunnel was down (a manifest check through the gateway) is stale now.
 func (m *Manager) setRegistry(gatewayURL, prefix, why string, live bool) {
 	m.regMu.Lock()
+	confirmed := live && !m.reg.live
 	m.reg.gatewayURL, m.reg.prefix, m.reg.why, m.reg.live = gatewayURL, prefix, why, live
 	emit := m.onRegistry != nil && m.reg.emitted != prefix
 	if emit {
 		m.reg.emitted = prefix
 	}
-	tell := m.onRegistryState != nil && (!m.reg.told || m.reg.toldPrefix != prefix || m.reg.toldWhy != why)
+	tell := m.onRegistryState != nil && (!m.reg.told || m.reg.toldPrefix != prefix || m.reg.toldWhy != why || confirmed)
 	if tell {
 		m.reg.told, m.reg.toldPrefix, m.reg.toldWhy = true, prefix, why
 	}
@@ -135,6 +138,10 @@ func (m *Manager) registryConnecting(d desiredState) {
 	default:
 		m.regMu.Lock()
 		keep := m.reg.gatewayURL == d.gatewayURL && m.reg.prefix != ""
+		if keep {
+			// Kept, but unconfirmed until the registration.
+			m.reg.live = false
+		}
 		m.regMu.Unlock()
 		if keep {
 			return
