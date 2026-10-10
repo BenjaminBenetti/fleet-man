@@ -306,6 +306,38 @@ func TestProberRunsOneProbeForConcurrentCallers(t *testing.T) {
 	}
 }
 
+func TestProberWaiterProbesAgainWhenTheLeaderIsCancelled(t *testing.T) {
+	p := NewProber("")
+	var runs atomic.Int32
+	started := make(chan struct{})
+	p.run = func(ctx context.Context, _ ProbeTarget) (map[string]string, bool) {
+		if runs.Add(1) == 1 {
+			close(started)
+			<-ctx.Done()
+			return nil, false
+		}
+		return map[string]string{"A": "1"}, true
+	}
+	target := probeTarget(t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	leader := make(chan map[string]string, 1)
+	go func() { leader <- p.ProbeEnv(ctx, target) }()
+	<-started
+	waiter := make(chan map[string]string, 1)
+	go func() { waiter <- p.ProbeEnv(context.Background(), target) }()
+	time.Sleep(100 * time.Millisecond) // the waiter now waits on the leader's probe
+	cancel()
+	if env := <-leader; env != nil {
+		t.Fatalf("the cancelled caller got %v", env)
+	}
+	if env := <-waiter; env["A"] != "1" {
+		t.Fatalf("a caller whose context is live got %v from a probe another caller cancelled", env)
+	}
+	if runs.Load() != 2 {
+		t.Fatalf("%d probes, want the cancelled one and the waiter's own", runs.Load())
+	}
+}
+
 func TestProberMemoryCacheIsBounded(t *testing.T) {
 	p := NewProber("")
 	p.run = func(context.Context, ProbeTarget) (map[string]string, bool) { return map[string]string{}, true }

@@ -70,7 +70,7 @@ type Plan struct {
 
 // Plan resolves req: whom it runs as, its environment, its working directory
 // and its executable. A failure is an *ExitError with the code `docker exec`
-// gives for it.
+// gives for it; ctx ending during the exec class's probe is one (ExitFailed).
 func (h *Host) Plan(ctx context.Context, req Request) (*Plan, error) {
 	if err := req.Validate(); err != nil {
 		return nil, failed(err)
@@ -226,6 +226,12 @@ func (h *Host) addUserEnv(ctx context.Context, env, cenv *envList, id Identity) 
 			Env:      start.entries(),
 			Dir:      h.probeDir(),
 		}))
+		// A probe cut short by ctx answered nothing: the request was
+		// cancelled, so it gets no plan rather than one without the user's
+		// environment.
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("probe the user environment: %w", err)
+		}
 	}
 	if h.Spec.SSHAuthSock != "" {
 		env.set("SSH_AUTH_SOCK", h.Spec.SSHAuthSock)

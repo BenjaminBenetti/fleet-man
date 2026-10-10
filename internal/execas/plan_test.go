@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // stubProber answers a probe the way a login shell would: it keeps the
@@ -527,6 +528,26 @@ func TestPlanFailuresCarryDockersExitCodes(t *testing.T) {
 				t.Fatalf("err = %v, want exit %d containing %q", err, tc.code, tc.want)
 			}
 		})
+	}
+}
+
+// ctxProber blocks until its caller's context ends, as a probe whose shell is
+// still starting would.
+type ctxProber struct{}
+
+func (ctxProber) ProbeEnv(ctx context.Context, _ ProbeTarget) map[string]string {
+	<-ctx.Done()
+	return nil
+}
+
+func TestPlanCancelledDuringTheProbeFails(t *testing.T) {
+	m := newMatrixHost(t)
+	m.host.Prober = ctxProber{}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	plan, err := m.host.Plan(ctx, Request{Class: ClassExec, Argv: []string{"tool"}})
+	if plan != nil || ExitCode(err) != ExitFailed || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("plan %v, err %v: want no plan and exit %d for a request cancelled mid-probe", plan, err, ExitFailed)
 	}
 }
 

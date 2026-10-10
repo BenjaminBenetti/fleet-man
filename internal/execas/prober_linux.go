@@ -70,6 +70,10 @@ type probeEntry struct {
 type probeCall struct {
 	done chan struct{}
 	env  map[string]string
+	// cancelled is set when the probe stopped because its own caller's
+	// context ended. That says nothing about the shell, so a waiter whose
+	// context is still live probes again instead of going without.
+	cancelled bool
 }
 
 // NewProber is a Prober caching under cacheDir ("" caches in memory only). The
@@ -105,6 +109,9 @@ func (p *Prober) ProbeEnv(ctx context.Context, t ProbeTarget) map[string]string 
 		p.mu.Unlock()
 		select {
 		case <-call.done:
+			if call.cancelled && ctx.Err() == nil {
+				return p.ProbeEnv(ctx, t)
+			}
 			return maps.Clone(call.env)
 		case <-ctx.Done():
 			return nil
@@ -128,6 +135,8 @@ func (p *Prober) ProbeEnv(ctx context.Context, t ProbeTarget) map[string]string 
 	if ok {
 		p.remember(key, entry)
 		call.env = entry.Env
+	} else {
+		call.cancelled = ctx.Err() != nil
 	}
 	p.mu.Unlock()
 	close(call.done)
