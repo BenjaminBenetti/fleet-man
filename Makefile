@@ -111,14 +111,19 @@ check-nok8s:
 	$(BUILDCHECK) nok8s ./cmd/fleet
 
 ## check-pod-tmux: run the tmux bundles in $(DIST) in each of $(TMUX_SMOKE_IMAGES).
+## --mount, not -v: -v would create a missing bundle as a root-owned directory.
 check-pod-tmux:
-	@set -e; for arch in $(POD_ARCHES); do for img in $(TMUX_SMOKE_IMAGES); do \
-	  echo "== $$img linux/$$arch"; \
-	  docker run --rm --platform linux/$$arch \
-	    -v "$(abspath $(DIST))/fleet-tmux-linux-$$arch.tar.gz:/bundle.tar.gz:ro" \
-	    -v "$(abspath deploy/tmux/smoke.sh):/smoke.sh:ro" $$img \
-	    sh -c 'mkdir -p /opt/fleet/tmux && tar -xzf /bundle.tar.gz -C /opt/fleet/tmux && sh /smoke.sh /opt/fleet/tmux'; \
-	done; done
+	@set -e; for arch in $(POD_ARCHES); do \
+	  bundle="$(abspath $(DIST))/fleet-tmux-linux-$$arch.tar.gz"; \
+	  test -f "$$bundle" || { echo "check-pod-tmux: no $$bundle; run make pod-tmux POD_BIN_DIR=$(DIST)" >&2; exit 1; }; \
+	  for img in $(TMUX_SMOKE_IMAGES); do \
+	    echo "== $$img linux/$$arch"; \
+	    docker run --rm --platform linux/$$arch \
+	      --mount "type=bind,src=$$bundle,dst=/bundle.tar.gz,readonly" \
+	      --mount "type=bind,src=$(abspath deploy/tmux/smoke.sh),dst=/smoke.sh,readonly" $$img \
+	      sh -c 'mkdir -p /opt/fleet/tmux && tar -xzf /bundle.tar.gz -C /opt/fleet/tmux && sh /smoke.sh /opt/fleet/tmux'; \
+	  done; \
+	done
 
 # BASE_REF: what startup-budget measures against (a local clone may want main).
 BASE_REF      ?= origin/main

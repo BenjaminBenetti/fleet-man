@@ -13,7 +13,9 @@ make pod-binaries                   # fleet-pod + static tmux per arch into ~/.f
 ```
 
 Every linux release binary is static (`CGO_ENABLED=0`). `fleet-pod` is the
-`-tags nok8s` build for Kubernetes pods, without client-go.
+`-tags nok8s` build for Kubernetes pods, without client-go. The tmux bundle builds
+natively per arch, so a foreign arch needs QEMU binfmt; without it, pass
+`POD_ARCHES=amd64` (or your host arch).
 
 ## Test
 
