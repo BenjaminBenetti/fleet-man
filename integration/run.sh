@@ -191,7 +191,7 @@ if [ "${FLEET_ITEST_BACKEND}" = "kubernetes" ]; then
     esac
   done
   # Same bash-3.2 constraint as above: length check before expanding.
-  say "Kubernetes subset: ${#k8s_tests[@]} test(s) marked k8s or devcontainer-only"
+  say "Kubernetes subset: ${#k8s_tests[@]} test(s): marked k8s, or to report as devcontainer-only or malformed"
   if [ "${#k8s_tests[@]}" -eq 0 ]; then
     say "No kubernetes tests in shard — nothing to do"
     exit 0
@@ -328,7 +328,7 @@ fi
 
 # Kubernetes parity of the selected tests (counted before the kubernetes run's
 # own selection), then each devcontainer-only exemption with its reason.
-parity_line="k8s parity of these ${parity_total} tests: ${parity_k8s} marked k8s, ${parity_exempt} devcontainer-only, ${parity_pending} not ported yet, ${parity_host} host-only"
+parity_line="k8s parity of ${parity_total} test(s): ${parity_k8s} marked k8s, ${parity_exempt} devcontainer-only, ${parity_pending} not ported yet, ${parity_host} host-only"
 printf "%b==>%b Backend %s; %s\n" "${BOLD}" "${RESET}" "${FLEET_ITEST_BACKEND}" "${parity_line}"
 if [ "${#exemptions[@]}" -gt 0 ]; then
   for row in "${exemptions[@]}"; do

@@ -28,7 +28,7 @@ info "asserting /fleet-mounts/control is a directory inside the container"
 "${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- test -d /fleet-mounts/control \
   || fail "/fleet-mounts/control is missing or not a directory inside the instance"
 
-info "asserting /fleet-mounts/control is a real bind mount"
+info "asserting /fleet-mounts/control is a mount point"
 mountinfo=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /proc/self/mountinfo)
 assert_contains "${mountinfo}" " /fleet-mounts/control " \
   "/fleet-mounts/control is not a mount point"
