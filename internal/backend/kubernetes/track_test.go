@@ -262,6 +262,19 @@ func TestTrackStopAndStartAreNoRestart(t *testing.T) {
 	}
 }
 
+// A stop and start whose pod events the watch missed (a relist shows the
+// new pod as an update of the old one) is still no restart: the scale to 0
+// was seen.
+func TestTrackStopAndStartWithTheDeletionMissed(t *testing.T) {
+	tr := newTracker(t)
+	tr.set(1)
+	tr.pod(trackedPod("u1", 0))
+	tr.set(0)
+	tr.set(1)
+	tr.pod(trackedPod("u2", 0))
+	tr.wantNoRestart()
+}
+
 func TestTrackExpectedReplacement(t *testing.T) {
 	tr := newTracker(t)
 	tr.set(1)
