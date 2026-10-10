@@ -19,6 +19,10 @@ func newStartCmd() *cobra.Command {
 				return err
 			}
 
+			if handled, err := lifecycleInDaemon(cmd.Context(), target, true); handled {
+				return err
+			}
+
 			result, err := instanceops.StartInstance(target.Fleet, target.Instance)
 			if err != nil {
 				return err

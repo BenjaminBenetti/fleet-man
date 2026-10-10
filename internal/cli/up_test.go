@@ -47,31 +47,7 @@ func (c *fakeCreateClient) CreateInstance(_ context.Context, req *fleetgrpc.Crea
 // runInstanceJob does, and returns what it printed.
 func runUp(t *testing.T, client *fakeCreateClient, args ...string) (string, error) {
 	t.Helper()
-	origJob, origState := runInstanceJob, fetchFleetState
-	t.Cleanup(func() { runInstanceJob, fetchFleetState = origJob, origState })
-	fetchFleetState = func(context.Context) (*fleetgrpc.State, error) {
-		return &fleetgrpc.State{Fleets: map[string]*fleetgrpc.Fleet{"alpha": {Name: "alpha", Remote: "git@x:alpha.git"}}}, nil
-	}
-	runInstanceJob = func(ctx context.Context, _ bool, open func(context.Context, fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error)) error {
-		stream, err := open(ctx, client)
-		if err != nil {
-			return err
-		}
-		for {
-			if _, err := stream.Recv(); err == io.EOF {
-				return nil
-			} else if err != nil {
-				return err
-			}
-		}
-	}
-
-	var out bytes.Buffer
-	cmd := newUpCmd()
-	cmd.SetOut(&out)
-	cmd.SetArgs(args)
-	err := cmd.Execute()
-	return out.String(), err
+	return runUpWith(t, client, args...)
 }
 
 func TestUpWithoutBackendLeavesTheTargetToTheDaemon(t *testing.T) {
@@ -130,4 +106,72 @@ func TestUpAgainstADaemonWithoutJobStartedTarget(t *testing.T) {
 	if !strings.Contains(out, "(backend: fleetd default)") {
 		t.Fatalf("output = %q", out)
 	}
+}
+
+// clusterCreateClient also answers ListKubeClusters.
+type clusterCreateClient struct {
+	*fakeCreateClient
+	clusters []*fleetgrpc.KubeClusterStatus
+}
+
+func (c *clusterCreateClient) ListKubeClusters(context.Context, *fleetgrpc.ListKubeClustersRequest, ...grpc.CallOption) (*fleetgrpc.ListKubeClustersReply, error) {
+	return &fleetgrpc.ListKubeClustersReply{Clusters: c.clusters}, nil
+}
+
+// TestUpOnACluster: --cluster names a connection by id, name or context and
+// runs the instance on Kubernetes there; a non-Kubernetes --backend beside
+// it is refused, as is a connection the daemon does not have.
+func TestUpOnACluster(t *testing.T) {
+	clusters := []*fleetgrpc.KubeClusterStatus{
+		{Cluster: &fleetgrpc.KubeCluster{Id: "minikube-abc234", DisplayName: "laptop", Context: "minikube"}},
+		{Cluster: &fleetgrpc.KubeCluster{Id: "prod-eu-xyz234", DisplayName: "prod", Context: "arn:aws:eks:eu-west-1:1:cluster/prod"}},
+	}
+	for _, ref := range []string{"prod-eu-xyz234", "prod", "arn:aws:eks:eu-west-1:1:cluster/prod"} {
+		client := &clusterCreateClient{fakeCreateClient: &fakeCreateClient{}, clusters: clusters}
+		if _, err := runUpWith(t, client, "alpha/i1", "--cluster", ref); err != nil {
+			t.Fatalf("--cluster %s: %v", ref, err)
+		}
+		if got := client.got; got.GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES || got.GetKubeCluster() != "prod-eu-xyz234" {
+			t.Errorf("--cluster %s sent backend %v cluster %q", ref, got.GetBackend(), got.GetKubeCluster())
+		}
+	}
+	client := &clusterCreateClient{fakeCreateClient: &fakeCreateClient{}, clusters: clusters}
+	if _, err := runUpWith(t, client, "alpha/i1", "--cluster", "laptop", "--backend", "kubernetes"); err != nil || client.got.GetKubeCluster() != "minikube-abc234" {
+		t.Errorf("--cluster with --backend kubernetes: %v, %v", err, client.got)
+	}
+	if _, err := runUpWith(t, &clusterCreateClient{fakeCreateClient: &fakeCreateClient{}, clusters: clusters}, "alpha/i1", "--cluster", "prod", "--backend", "coder"); err == nil {
+		t.Error("--cluster with --backend coder was accepted")
+	}
+	if _, err := runUpWith(t, &clusterCreateClient{fakeCreateClient: &fakeCreateClient{}, clusters: clusters}, "alpha/i1", "--cluster", "nope"); err == nil {
+		t.Error("--cluster naming no connection was accepted")
+	}
+}
+
+// runUpWith is runUp against any fake service.
+func runUpWith(t *testing.T, client fleetgrpc.FleetServiceClient, args ...string) (string, error) {
+	t.Helper()
+	origJob, origState := runInstanceJob, fetchFleetState
+	t.Cleanup(func() { runInstanceJob, fetchFleetState = origJob, origState })
+	fetchFleetState = func(context.Context) (*fleetgrpc.State, error) {
+		return &fleetgrpc.State{Fleets: map[string]*fleetgrpc.Fleet{"alpha": {Name: "alpha", Remote: "git@x:alpha.git"}}}, nil
+	}
+	runInstanceJob = func(ctx context.Context, _ bool, open func(context.Context, fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error)) error {
+		stream, err := open(ctx, client)
+		if err != nil {
+			return err
+		}
+		for {
+			if _, err := stream.Recv(); err == io.EOF {
+				return nil
+			} else if err != nil {
+				return err
+			}
+		}
+	}
+	var out bytes.Buffer
+	cmd := newUpCmd()
+	cmd.SetOut(&out)
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return out.String(), err
 }
