@@ -68,3 +68,13 @@ func TestTmuxSetupArgsTerminalFeaturesLast(t *testing.T) {
 		}
 	}
 }
+
+// TestTmuxSetupArgsQuotesTheBinary checks new-session's lone shell-command,
+// which tmux hands to the shell, keeps a binary path with spaces in one word.
+func TestTmuxSetupArgsQuotesTheBinary(t *testing.T) {
+	cmds := tmuxCommands(tmuxSetupArgs("fleet-abc123", "/Users/Jane Doe/bin/fleet", false))
+	want := []string{"new-session", "-d", "-s", "fleet-abc123", "'/Users/Jane Doe/bin/fleet'"}
+	if !slices.Equal(cmds[0], want) {
+		t.Fatalf("first command = %q, want %q", cmds[0], want)
+	}
+}

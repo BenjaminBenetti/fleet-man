@@ -11,6 +11,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/doctor"
 	"github.com/BenjaminBenetti/fleet-man/internal/platform"
+	"github.com/BenjaminBenetti/fleet-man/internal/shellquote"
 	"github.com/BenjaminBenetti/fleet-man/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -122,7 +123,9 @@ func relaunchInTmux() error {
 // so terminal-features (tmux 3.2+) must stay last.
 func tmuxSetupArgs(session, self string, vimKeys bool) []string {
 	args := []string{
-		"tmux", "new-session", "-d", "-s", session, self,
+		// A lone shell-command argument goes to the shell, so the binary's
+		// path is quoted (it may hold spaces).
+		"tmux", "new-session", "-d", "-s", session, shellquote.Single(self),
 		";", "set", "-g", "set-clipboard", "on",
 		";", "set", "-g", "mouse", "on",
 		// The TUI provides all the UI; the outer status bar is dead

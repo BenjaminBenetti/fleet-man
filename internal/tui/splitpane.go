@@ -179,12 +179,20 @@ func bindHostSplitKeys(instanceName, groupID string) {
 	if err != nil {
 		return
 	}
-	shellCmd := fmt.Sprintf("%s shell %s", self, instanceName)
+	var flags []string
 	if groupID != "" {
-		shellCmd += fmt.Sprintf(" --group %s", groupID)
+		flags = []string{"--group", groupID}
 	}
+	shellCmd := fleetShellCmd(self, instanceName, flags...)
 	_ = exec.Command("tmux", "bind-key", "%", "split-window", "-h", shellCmd).Run()
 	_ = exec.Command("tmux", "bind-key", `"`, "split-window", "-v", shellCmd).Run()
+}
+
+// fleetShellCmd is the shell command line running `<self> shell <target>
+// <flags...>`. tmux and respawn-pane hand it to the shell, so every word is
+// quoted: the binary's path may hold spaces.
+func fleetShellCmd(self, target string, flags ...string) string {
+	return quoteArgs(append([]string{self, "shell", target}, flags...))
 }
 
 // unbindHostSplitKeys restores the default tmux split-window bindings.
@@ -647,7 +655,7 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 				break
 			}
 			paneID := paneSlots[i]
-			shellCmd := fmt.Sprintf("%s shell %s --session %s", self, qualifiedName, sessName)
+			shellCmd := fleetShellCmd(self, qualifiedName, "--session", sessName)
 			ranCmds = append(ranCmds, shellCmd)
 			script := shellCmd + `; __rc=$?; if [ $__rc -ne 0 ]; then echo; echo "exited with code $__rc — closing in 3s"; sleep 3; fi; exit $__rc`
 			if sessName != "" {
