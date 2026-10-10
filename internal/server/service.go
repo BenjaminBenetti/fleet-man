@@ -47,6 +47,12 @@ type service struct {
 	// that use newService() without a serve loop, so callers must nil-check.
 	remote *remote.Manager
 
+	// kube runs the Kubernetes connections: their probes, owner Leases and
+	// health push (kube_health.go; inert in a -tags nok8s build). The serve
+	// loop starts it once fleetd serves; without it (newService() tests) the
+	// kube RPCs still work and connections stay CHECKING.
+	kube *kubeManager
+
 	// sshListen serves the token-gated gRPC server on a loopback port while
 	// remote fleet is enabled in SSH mode (sshlisten.go); sshTunnels maintains
 	// this machine's OUTBOUND ssh forwards to ssh:// armada remotes
@@ -101,6 +107,7 @@ func newService() *service {
 		triggerFires: make(chan []triggerFire, triggerFireBuffer),
 	}
 	svc.instanceMCP = newInstanceMCP(svc)
+	svc.kube = newKubeManager(svc)
 	// The in-flight jobs and their current steps are pushed over Watch. The
 	// set is taken on the hub loop, so pushes land in the order they happen
 	// and the last one is always current.

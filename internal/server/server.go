@@ -309,6 +309,11 @@ func Serve(ctx context.Context) error {
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- grpcServer.Serve(lis) }()
+	// Kubernetes connections: every cluster call (probes, Lease renewals,
+	// credential plugins) starts here, after fleetd serves, so a cluster that
+	// is unreachable or a login plugin that hangs never delays a Hello. Stops
+	// with hubCtx.
+	go svc.kube.run(hubCtx)
 
 	select {
 	case <-ctx.Done():

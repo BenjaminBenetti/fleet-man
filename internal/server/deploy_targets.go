@@ -47,7 +47,7 @@ func (s *service) ListDeployTargets(_ context.Context, req *fleetgrpc.ListDeploy
 	}
 	host, _ := daemonHostname()
 	return &fleetgrpc.ListDeployTargetsReply{
-		Targets:       protoconv.DeployTargetOptionsToProto(deployTargetOptions(remote)),
+		Targets:       protoconv.DeployTargetOptionsToProto(s.deployTargetOptions(remote)),
 		DefaultTarget: protoconv.DeployTargetToProto(defaultTarget(remote)),
 		HostTools:     protoconv.HostToolsToProto(deps.HostBuildTools(daemonLookPath)),
 		Host:          host,
@@ -57,7 +57,8 @@ func (s *service) ListDeployTargets(_ context.Context, req *fleetgrpc.ListDeploy
 // deployTargetOptions lists, in dialog order, the targets a fleet with this
 // remote can use: a file:// template fleet drops the targets that cannot copy
 // a template. Each is available when the CLI it needs is on this host's PATH.
-func deployTargetOptions(remote string) []fleet.DeployTargetOption {
+// The connected clusters follow, one target each (kube_targets.go).
+func (s *service) deployTargetOptions(remote string) []fleet.DeployTargetOption {
 	template := fleet.IsTemplateRemote(remote)
 	var out []fleet.DeployTargetOption
 	for _, target := range fleet.DeployTargets() {
@@ -73,7 +74,7 @@ func deployTargetOptions(remote string) []fleet.DeployTargetOption {
 		}
 		out = append(out, option)
 	}
-	return out
+	return append(out, s.kube.deployTargets(template)...)
 }
 
 // rememberedTarget returns the remembered default target (config.json
@@ -115,11 +116,20 @@ func defaultTarget(remote string) fleet.DeployTarget {
 
 // resolveTarget turns a create request's target into a concrete one: an
 // explicit backend wins (a template fleet still refuses one it can't use, in
-// validateTemplateRemote), with the request's cluster for a Kubernetes one,
-// and UNSPECIFIED takes defaultTarget(remote).
+// validateTemplateRemote), with the request's cluster for a Kubernetes one
+// (the remembered cluster, else the only one, when it names none), and
+// UNSPECIFIED takes defaultTarget(remote).
 func (s *service) resolveTarget(req *fleetgrpc.CreateInstanceRequest, remote string) fleet.DeployTarget {
 	if backendType := protoconv.BackendFromProto(req.GetBackend()); backendType != "" {
-		return targetFor(backendType, req.GetKubeCluster())
+		cluster := req.GetKubeCluster()
+		if backendType == fleet.BackendKubernetes && cluster == "" {
+			remembered := ""
+			if cfg, err := state.LoadConfig(); err == nil {
+				remembered = cfg.DefaultKubeCluster
+			}
+			cluster = s.kube.defaultCluster(remembered)
+		}
+		return targetFor(backendType, cluster)
 	}
 	return defaultTarget(remote)
 }
