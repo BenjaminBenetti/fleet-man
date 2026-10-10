@@ -243,8 +243,10 @@ func watchOnce(ctx context.Context, program *tea.Program, gen int) bool {
 			program.Send(micSourcesMsg{sources: k.MicSources, gen: gen})
 		case *fleetgrpc.Event_OutputTargets:
 			program.Send(outputTargetsMsg{targets: k.OutputTargets, gen: gen})
+		case *fleetgrpc.Event_ActiveJobs:
+			program.Send(activeJobsMsg{jobs: k.ActiveJobs, gen: gen})
 		default:
-			// Job* events are not consumed by the TUI in P2.
+			// The per-job Job* events are not sent on Watch (ActiveJobs is).
 		}
 	}
 }
