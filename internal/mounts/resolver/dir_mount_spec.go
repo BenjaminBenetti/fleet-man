@@ -1,6 +1,8 @@
 package resolver
 
 import (
+	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -23,6 +25,19 @@ type dirMountSpec struct {
 	// containerPath is the absolute path inside the container where
 	// the host directory should appear.
 	containerPath string
+	// custom marks a user-defined custom mount (FleetSettings.CustomMounts).
+	custom bool
+}
+
+// prepareError wraps a failure to prepare the spec's host directory. A
+// symlink in the way names the fix: a custom mount's supported replacement for
+// a symlinked .mnt folder is a host folder chosen in the fleet options; a
+// managed mount folder must be a real folder.
+func (spec dirMountSpec) prepareError(err error) error {
+	if spec.custom && errors.As(err, new(*SymlinkError)) {
+		return fmt.Errorf("%s: %w; pick a host folder for this mount in the fleet options instead", spec.name, err)
+	}
+	return fmt.Errorf("preparing %s mount: %w%s", spec.name, err, symlinkFix(err, "replace it with a real folder"))
 }
 
 // dirMountSpecsFor returns the dirMountSpecs implied by the enabled
@@ -76,6 +91,7 @@ func dirMountSpecsFor(fleetSettings fleet.FleetSettings, containerHome string) [
 			name:          "custom mount " + containerPath,
 			hostSubdir:    filepath.Join(customMountHostSubdir, strings.TrimPrefix(containerPath, "/")),
 			containerPath: containerPath,
+			custom:        true,
 		})
 	}
 

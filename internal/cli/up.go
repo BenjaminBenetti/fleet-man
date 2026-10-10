@@ -77,8 +77,7 @@ func newUpCmd() *cobra.Command {
 				if f := st.GetFleets()[target.Fleet]; f != nil {
 					for _, inst := range f.GetInstances() {
 						if inst.GetName() == target.Instance {
-							cid := inst.GetContainerId()
-							fmt.Printf("Instance %s/%s is running (container: %s)\n", target.Fleet, target.Instance, cid[:min(12, len(cid))])
+							fmt.Printf("Instance %s/%s is running (container: %s)\n", target.Fleet, target.Instance, fleet.ShortContainerID(inst.GetContainerId()))
 						}
 					}
 				}

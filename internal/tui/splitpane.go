@@ -11,6 +11,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/shellquote"
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/sys/unix"
 )
@@ -179,12 +180,22 @@ func bindHostSplitKeys(instanceName, groupID string) {
 	if err != nil {
 		return
 	}
-	shellCmd := fmt.Sprintf("%s shell %s", self, instanceName)
+	var flags []string
 	if groupID != "" {
-		shellCmd += fmt.Sprintf(" --group %s", groupID)
+		flags = []string{"--group", groupID}
 	}
+	shellCmd := fleetShellCmd(self, instanceName, flags...)
 	_ = exec.Command("tmux", "bind-key", "%", "split-window", "-h", shellCmd).Run()
 	_ = exec.Command("tmux", "bind-key", `"`, "split-window", "-v", shellCmd).Run()
+}
+
+// fleetShellCmd is the shell command line running `<self> shell <target>
+// <flags...>`. The bound split keys hand it to the user's default-shell and
+// the group restore to sh, so every argument is quoted, and the binary's path
+// only when it needs it (spaces): a non-POSIX default-shell would print a
+// quoted command word instead of running it.
+func fleetShellCmd(self, target string, flags ...string) string {
+	return shellquote.CommandWord(self) + " " + quoteArgs(append([]string{"shell", target}, flags...))
 }
 
 // unbindHostSplitKeys restores the default tmux split-window bindings.
@@ -647,7 +658,7 @@ func (fleetPage *fleetPage) restoreGroupCmd(m *model, fleetName string, instance
 				break
 			}
 			paneID := paneSlots[i]
-			shellCmd := fmt.Sprintf("%s shell %s --session %s", self, qualifiedName, sessName)
+			shellCmd := fleetShellCmd(self, qualifiedName, "--session", sessName)
 			ranCmds = append(ranCmds, shellCmd)
 			script := shellCmd + `; __rc=$?; if [ $__rc -ne 0 ]; then echo; echo "exited with code $__rc — closing in 3s"; sleep 3; fi; exit $__rc`
 			if sessName != "" {

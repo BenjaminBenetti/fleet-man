@@ -7,12 +7,13 @@
 package resolver
 
 import (
+	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -59,28 +60,40 @@ const sharedFilesContainerPath = "/fleet-mounts/files"
 // detector existed still get a working mount on the common case.
 //
 // Returns a zero-value Resolved when no mounts are enabled. An error
-// is returned only when a host directory or file cannot be created,
-// leaving the caller to decide whether to abort provisioning or
-// proceed without the mount.
+// is returned when a host directory or file cannot be created, or when
+// a symlink sits at (or above) one of them under the fleet's mount root
+// (a SymlinkError, refused and logged rather than followed; see
+// hostLayout), leaving the caller to decide whether to abort
+// provisioning or proceed without the mount.
 func Resolve(fleetName string, fleetSettings fleet.FleetSettings) (Resolved, error) {
 	containerHome := fleetSettings.HomeDir
 	if containerHome == "" {
 		containerHome = defaultContainerHome
 	}
 
+	dirSpecs := dirMountSpecsFor(fleetSettings, containerHome)
+	fileSpecs := fileMountSpecsFor(fleetSettings, containerHome)
+	if len(dirSpecs) == 0 && len(fileSpecs) == 0 {
+		return Resolved{}, nil
+	}
+
 	var resolved Resolved
 	fleetMountRoot := fleetMountDir(fleetName)
+	layout, err := openHostLayout(fleetMountRoot)
+	if err != nil {
+		return Resolved{}, fmt.Errorf("preparing fleet mount root: %w", err)
+	}
+	defer layout.Close()
 
 	// Directory mounts.
-	for _, spec := range dirMountSpecsFor(fleetSettings, containerHome) {
-		hostPath := filepath.Join(fleetMountRoot, spec.hostSubdir)
-		if err := ensureHostDir(hostPath); err != nil {
-			return Resolved{}, fmt.Errorf("preparing %s mount: %w", spec.name, err)
+	for _, spec := range dirSpecs {
+		if err := layout.ensureDir(spec.hostSubdir); err != nil {
+			return Resolved{}, logRefusal(fleetName, spec.prepareError(err))
 		}
 		subPath := filepath.ToSlash(spec.hostSubdir)
 		resolved.Layout = append(resolved.Layout, LayoutEntry{Path: subPath, Dir: true, Mode: layoutDirMode})
 		resolved.Mounts = append(resolved.Mounts, backend.Mount{
-			LocalPath:     hostPath,
+			LocalPath:     filepath.Join(fleetMountRoot, spec.hostSubdir),
 			ContainerPath: spec.containerPath,
 			Scope:         backend.MountScopeFleetShared,
 			SubPath:       subPath,
@@ -90,23 +103,22 @@ func Resolve(fleetName string, fleetSettings fleet.FleetSettings) (Resolved, err
 	// File mounts: one shared host directory bind-mounted into the
 	// container, plus a symlink per file pointing the agent's
 	// expected path at the file inside the shared mount.
-	fileSpecs := fileMountSpecsFor(fleetSettings, containerHome)
 	if len(fileSpecs) > 0 {
-		sharedHostDir := filepath.Join(fleetMountRoot, sharedFilesSubdir)
-		if err := ensureHostDir(sharedHostDir); err != nil {
-			return Resolved{}, fmt.Errorf("preparing shared files mount: %w", err)
+		if err := layout.ensureDir(sharedFilesSubdir); err != nil {
+			return Resolved{}, logRefusal(fleetName, fmt.Errorf("preparing shared files mount: %w%s",
+				err, symlinkFix(err, "replace it with a real folder")))
 		}
 		resolved.Layout = append(resolved.Layout, LayoutEntry{Path: sharedFilesSubdir, Dir: true, Mode: layoutDirMode})
 		resolved.Mounts = append(resolved.Mounts, backend.Mount{
-			LocalPath:     sharedHostDir,
+			LocalPath:     filepath.Join(fleetMountRoot, sharedFilesSubdir),
 			ContainerPath: sharedFilesContainerPath,
 			Scope:         backend.MountScopeFleetShared,
 			SubPath:       sharedFilesSubdir,
 		})
 		for _, spec := range fileSpecs {
-			hostFile := filepath.Join(sharedHostDir, spec.filename)
-			if err := ensureHostFile(hostFile); err != nil {
-				return Resolved{}, fmt.Errorf("preparing %s file: %w", spec.name, err)
+			if err := layout.ensureFile(filepath.Join(sharedFilesSubdir, spec.filename)); err != nil {
+				return Resolved{}, logRefusal(fleetName, fmt.Errorf("preparing %s file: %w%s",
+					spec.name, err, symlinkFix(err, "replace it with a regular file")))
 			}
 			resolved.Layout = append(resolved.Layout, LayoutEntry{Path: sharedFilesSubdir + "/" + spec.filename, Mode: layoutFileMode})
 			resolved.Symlinks = append(resolved.Symlinks, Symlink{
@@ -131,44 +143,13 @@ func fleetMountDir(fleetName string) string {
 	return filepath.Join(state.WorkspacesDir(), fleetName)
 }
 
-// ensureHostDir creates path with 0777 permissions if it does not yet
-// exist, and re-chmods existing paths to the same so older fleets get
-// upgraded on the next provision.
-//
-// Why 0777 rather than 0700: these directories are bind-mounted into
-// containers whose user may have a different UID from the host user
-// running fleet (e.g. host root vs container "node" UID 1000). Without
-// world-writable perms the container user can't write its own state
-// into the mount. Privacy still holds at the parent level: the dirs
-// live under ~/.fleet/workspaces/<fleet>/ which is already inside the
-// user's HOME, and the agents (Claude/Codex) write their token files
-// with their own 0600 perms.
-func ensureHostDir(path string) error {
-	if err := os.MkdirAll(path, 0777); err != nil {
-		return err
+// logRefusal records a refused symlink in fleet.log and returns err unchanged.
+// The instance's error carries the same message; the log keeps the path for
+// later, after the record is gone.
+func logRefusal(fleetName string, err error) error {
+	var symlinkErr *SymlinkError
+	if errors.As(err, &symlinkErr) {
+		flog.Warn("mount refused: symlink in fleet mount layout", "fleet", fleetName, "path", symlinkErr.Path, "err", err)
 	}
-	// Explicit chmod since MkdirAll is subject to umask and existing
-	// directories from older fleets may have been created at 0700.
-	return os.Chmod(path, 0777)
-}
-
-// ensureHostFile creates an empty file at path with 0666 permissions
-// when one does not already exist, and re-chmods existing files to the
-// same. Empty content of an existing file is preserved.
-//
-// 0666 is chosen for the same UID-mismatch reason described on
-// ensureHostDir — the agent that owns the symlinked target inside the
-// container must be able to write through to the host file.
-func ensureHostFile(path string) error {
-	if _, err := os.Stat(path); err == nil {
-		return os.Chmod(path, 0666)
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0666)
-	if err != nil {
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0666)
+	return err
 }

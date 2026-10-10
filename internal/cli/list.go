@@ -78,10 +78,6 @@ func newListCmd() *cobra.Command {
 					continue
 				}
 				for _, instance := range f.GetInstances() {
-					containerShort := instance.GetContainerId()
-					if len(containerShort) > 12 {
-						containerShort = containerShort[:12]
-					}
 					created := ""
 					if ts := instance.GetCreatedAt(); ts != nil {
 						created = ts.AsTime().Local().Format("2006-01-02 15:04")
@@ -90,7 +86,7 @@ func newListCmd() *cobra.Command {
 						name,
 						instance.GetName(),
 						instance.GetStatus().Display(),
-						containerShort,
+						fleet.ShortContainerID(instance.GetContainerId()),
 						created,
 						fleet.DisplayBranch(liveBranch[name+"/"+instance.GetName()], instance.GetLastBranch(), instance.GetBranch()),
 					)

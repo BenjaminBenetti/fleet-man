@@ -255,7 +255,7 @@ func repoFromRemote(remoteURL string) string {
 // has time to read before the TUI redraws.
 func logsCommand(fleetName string, instance *fleet.Instance) *exec.Cmd {
 	logPath := filepath.Join(fleetpaths.Dir(), "logs", fleetName+"-"+instance.Name+".log")
-	creationLog := fmt.Sprintf("cat %q 2>/dev/null", logPath)
+	creationLog := fmt.Sprintf("cat %s 2>/dev/null", shQuote(logPath))
 
 	var inner string
 	switch instance.Status {
@@ -264,14 +264,16 @@ func logsCommand(fleetName string, instance *fleet.Instance) *exec.Cmd {
 	default:
 		// Show creation log, then container runtime logs. The runtime-logs argv
 		// is resolved by the server (it owns backend access); embed it in the
-		// pager script. A resolve failure degrades to just the creation log.
+		// pager script, every word quoted since a backend's argv may carry
+		// paths with spaces or shell metacharacters. A resolve failure degrades
+		// to just the creation log.
 		argv, err := resolveLogsArgv(fleetName, instance.Name)
 		if err != nil || len(argv) == 0 {
 			inner = fmt.Sprintf("%s || echo 'No creation log found.'", creationLog)
 		} else {
 			inner = fmt.Sprintf(
 				"%s; echo; echo '=== Container runtime logs ==='; echo; %s",
-				creationLog, strings.Join(argv, " "),
+				creationLog, quoteArgs(argv),
 			)
 		}
 	}
@@ -313,7 +315,7 @@ func daemonLogStreamCommand(level daemonLogLevel) *exec.Cmd {
 	// the import-boundary lint bars clients (the TUI) from importing the
 	// server-owned flog package; the filename mirrors flog's logFileName.
 	path := filepath.Join(fleetpaths.Dir(), "fleet.log")
-	stream := fmt.Sprintf("tail -n 200 -F %q", path)
+	stream := fmt.Sprintf("tail -n 200 -F %s", shQuote(path))
 	if level.grep != "" {
 		stream += fmt.Sprintf(" | grep --line-buffered -E '%s'", level.grep)
 	}
