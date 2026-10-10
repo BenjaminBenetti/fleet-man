@@ -21,7 +21,7 @@ func newPodAgentCmd() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 	}
-	cmd.AddCommand(newPodAgentServeCmd(), newPodAgentExecCmd(), newPodAgentSelfVersionCmd(), newPodAgentShepherdCmd())
+	cmd.AddCommand(newPodAgentServeCmd(), newPodAgentExecCmd(), newPodAgentSelfVersionCmd(), newPodAgentShepherdCmd(), newPodAgentInstallBundleCmd())
 	return cmd
 }
 
@@ -109,3 +109,40 @@ func newPodAgentShepherdCmd() *cobra.Command {
 		},
 	}
 }
+
+// exitBundleMissing is `install-bundle --check`'s exit code for a bundle
+// that is not the installed one.
+const exitBundleMissing = 3
+
+func newPodAgentInstallBundleCmd() *cobra.Command {
+	var opts podagent.BundleOptions
+	var check bool
+	cmd := &cobra.Command{
+		Use:           "install-bundle --dir DIR --name NAME --sha256 SHA",
+		Short:         "Install the gzip tar on stdin as DIR/NAME, content-addressed",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if check {
+				if !podagent.BundleInstalled(opts) {
+					exitPodAgent(exitBundleMissing)
+				}
+				return nil
+			}
+			if err := podagent.InstallBundle(cmd.InOrStdin(), opts); err != nil {
+				fmt.Fprintf(os.Stderr, "fleet pod-agent install-bundle: %v\n", err)
+				return err
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&opts.Dir, "dir", "/opt/fleet", "directory to install into")
+	cmd.Flags().StringVar(&opts.Name, "name", "", "the bundle's link name")
+	cmd.Flags().StringVar(&opts.SHA256, "sha256", "", "the archive's sha256")
+	cmd.Flags().BoolVar(&check, "check", false, "exit 0 if installed, 3 if not; read nothing")
+	return cmd
+}
+
+// exitPodAgent is os.Exit; a var so tests can catch it.
+var exitPodAgent = os.Exit
