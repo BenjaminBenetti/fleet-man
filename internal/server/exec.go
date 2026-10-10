@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
@@ -50,15 +52,50 @@ func (s *service) ResolveExecCommand(_ context.Context, req *fleetgrpc.ResolveEx
 	if err != nil {
 		return nil, err
 	}
-	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir, req.GetArgv()).Cmd
+	b := backendutil.NewForInstance(inst, false)
 	if req.GetAttach() {
 		s.kubePods.attached(req.GetFleet(), req.GetInstance())
+		ensureInstanceTmux(b)
 	}
+	cmd := b.ExecCommand(inst.WorkspaceDir, req.GetArgv()).Cmd
 	return &fleetgrpc.ResolveExecCommandReply{
 		Argv: cmd.Args,
 		Env:  envSliceToMap(cmd.Env),
 	}, nil
 }
+
+// ensureInstanceTmux makes tmux resolvable in a backend whose images may lack
+// it (the Kubernetes backend's bundled tmux), before an attach runs its tmux
+// command. Best-effort; a backend without the capability is left alone. The
+// attach waits for it at most ensureTmuxWait (the check needs the pod's agent,
+// which may be reconnecting, while a direct attach does not, and the TUI
+// gives a resolve 10s); past that the check, or the one-time install, goes
+// on in the background, bounded by ensureTmuxBudget.
+func ensureInstanceTmux(b backend.Backend) {
+	e, ok := b.(backend.TmuxEnsurer)
+	if !ok {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ctx, cancel := context.WithTimeout(context.Background(), ensureTmuxBudget)
+		defer cancel()
+		if err := e.EnsureTmux(ctx); err != nil {
+			flog.Info("ensure tmux before an attach", "err", err)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(ensureTmuxWait):
+	}
+}
+
+// ensureTmuxBudget bounds the pre-attach tmux check and one-time install;
+// ensureTmuxWait is how long the attach waits for them (a var for tests).
+const ensureTmuxBudget = 3 * time.Minute
+
+var ensureTmuxWait = 5 * time.Second
 
 // Logs streams an instance's container logs to the client. The server runs the
 // backend's logs command and forwards stdout+stderr line-by-line as LogLine.

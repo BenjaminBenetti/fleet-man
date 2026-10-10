@@ -56,6 +56,7 @@ type kubePodPool interface {
 	OnChange(func(clusterID, sts string))
 	Park(ctx context.Context, clusterID, sts string) error
 	Forget(kubernetes.PodTarget)
+	OnRunEnded(func(context.Context, kubernetes.RunEnd))
 }
 
 // kubePostRestart redoes a Fleet start's post-start work in an instance the
@@ -69,7 +70,11 @@ func kubePostRestart(fleetName string, inst *fleet.Instance, homeDir string) {
 		return
 	}
 	if err := ps.RunPostStart(inst.ContainerID); err != nil {
+		// The backend's post-start (the devcontainer's start hooks through
+		// the pod agent) failed: the pod is not reachable, so fleet's own
+		// hook (fleet.rc, also over the agent) would only fail the same way.
 		state.WriteWarn(fleetName, inst.Name, fmt.Sprintf("post-start after the cluster restarted the instance: %v", err))
+		return
 	}
 	instanceops.RunPostStartHook(fleetName, inst, homeDir)
 }
@@ -122,6 +127,11 @@ type kubePods struct {
 	// stand in for the backend).
 	targetFor   func(*fleet.Instance) *kubernetes.PodTarget
 	postRestart func(fleetName string, inst *fleet.Instance, homeDir string)
+	// logs saves a run's container output when the pool sees it end, and
+	// readBack recovers the runs it could not from pod-init's rolling copy
+	// (kubePods.readBackRolling; tests stand in for the backend).
+	logs     *kubeLogs
+	readBack func(ctx context.Context, fleetName string, inst *fleet.Instance)
 
 	wake chan struct{}
 
@@ -137,7 +147,7 @@ type kubePods struct {
 }
 
 func newKubePods(svc *service) *kubePods {
-	return &kubePods{
+	k := &kubePods{
 		svc:           svc,
 		pool:          func() kubePodPool { return kubernetes.DefaultPool() },
 		now:           time.Now,
@@ -147,11 +157,41 @@ func newKubePods(svc *service) *kubePods {
 		parkRetry:     kubeParkRetry,
 		targetFor:     kubeTargetFor,
 		postRestart:   kubePostRestart,
+		logs:          newKubeLogs(),
 		wake:          make(chan struct{}, 1),
 		pending:       map[kubeRef]bool{},
 		insts:         map[kubeRef]*kubeInst{},
 		byName:        map[string]kubeRef{},
 	}
+	k.readBack = k.readBackRolling
+	return k
+}
+
+// readBackRolling saves inst's runs that pod-init's rolling copy holds and
+// container.log does not (kubeLogs.readBackRolling), through its backend.
+func (k *kubePods) readBackRolling(ctx context.Context, fleetName string, inst *fleet.Instance) {
+	if r, ok := backendutil.NewForInstance(inst, false).(rollingReader); ok {
+		k.logs.readBackRolling(ctx, fleetName, inst.Name, r)
+	}
+}
+
+// started is told that Fleet started an instance: a Kubernetes one's runs
+// that ended unsaved (its pod went before its log was read, or while fleetd
+// was down) are recovered from the rolling copy, in the background.
+func (k *kubePods) started(fleetName, instance string) {
+	st, err := state.Load()
+	if err != nil {
+		return
+	}
+	f := st.Fleets[fleetName]
+	if f == nil {
+		return
+	}
+	inst, err := f.GetInstance(instance)
+	if err != nil || !isKubeInstance(inst) {
+		return
+	}
+	go k.readBack(context.Background(), fleetName, inst)
 }
 
 func (k *kubePods) signal() {
@@ -230,6 +270,7 @@ func (k *kubePods) run(ctx context.Context) {
 		}
 		if !hooked && k.hasWork() {
 			k.pool().OnChange(k.poke)
+			k.pool().OnRunEnded(k.logs.onRunEnded)
 			hooked = true
 		}
 		k.process(ctx)
@@ -421,6 +462,10 @@ func (k *kubePods) evaluate(ctx context.Context, ref kubeRef) {
 		id, fleetName, inst, home := ki.seenRestart, ki.fleet, ki.inst, ki.homeDir
 		ki.postStartBusy = true
 		postStart = func() {
+			// Recover any runs lost to a node failure first (the API-server
+			// log of the old node is gone; pod-init's rolling copy on the
+			// persisted disk survived), then re-run the post-start work.
+			k.readBack(ctx, fleetName, &inst)
 			k.postRestart(fleetName, &inst, home)
 			k.mu.Lock()
 			if cur := k.insts[ref]; cur != nil {

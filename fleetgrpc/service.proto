@@ -103,6 +103,13 @@ service FleetService {
   // (kube_exec.proto), so its direct-mode attaches run no credential plugin
   // of their own. Local-only: remote clients exec through Exec instead.
   rpc IssueKubeExecCredential(IssueKubeExecCredentialRequest) returns (IssueKubeExecCredentialReply);
+  // PodExec runs one command in a Kubernetes instance's pod for the
+  // daemon-host `fleet kube-exec` shim's daemon mode (a command without a
+  // terminal: every ExecCommand of a Kubernetes instance), through the pod's
+  // agent session. The first ExecIn carries pod_start. Local-only, like
+  // IssueKubeExecCredential: remote clients run the same commands through
+  // Exec.
+  rpc PodExec(stream ExecIn) returns (stream ExecOut);
 
   // TriggerLogs returns an automation trigger's recorded event logs (the
   // payloads of its recent firings, concatenated for viewing). The daemon owns

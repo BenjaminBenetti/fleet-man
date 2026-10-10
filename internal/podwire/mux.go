@@ -42,6 +42,9 @@ type Refusal struct {
 const (
 	RefusedUnsupported = "unsupported"
 	RefusedBusy        = "busy"
+	// RefusedOtherPod: the stream named another pod (ExecHeader.PodUID)
+	// than the one the agent runs in; it was replaced.
+	RefusedOtherPod = "other_pod"
 )
 
 // ErrRefused wraps a refused stream's error.

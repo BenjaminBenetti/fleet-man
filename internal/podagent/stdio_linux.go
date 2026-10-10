@@ -85,6 +85,12 @@ func ExecStdio(ctx context.Context, stdin io.Reader, stdout io.Writer, opts Opti
 		resumeHeld(o, cl, h, proto)
 		return nil
 	}
+	if o.PodUID != "" && h.PodUID != "" && h.PodUID != o.PodUID {
+		// The shim verified another pod (by its uid) than the one its exec
+		// reached: this pod replaced it since, unverified.
+		open(podwire.OpenReply{Refused: podwire.RefusedOtherPod, Error: fmt.Sprintf("this is pod %s, not %s", o.PodUID, h.PodUID), Proto: proto})
+		return nil
+	}
 	host := loadHost(o, log)
 	plan, err := host.Plan(ctx, h.Request)
 	if err != nil {

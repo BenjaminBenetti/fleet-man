@@ -28,7 +28,13 @@ type IssueKubeExecCredentialRequest struct {
 	ClusterId string `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
 	// refresh discards fleetd's cached credential and mints a new one: the API
 	// server refused the last one.
-	Refresh       bool `protobuf:"varint,2,opt,name=refresh,proto3" json:"refresh,omitempty"`
+	Refresh bool `protobuf:"varint,2,opt,name=refresh,proto3" json:"refresh,omitempty"`
+	// pod, when set, is the instance pod the shim is about to attach to (in
+	// the connection's namespace): fleetd verifies it as it verifies a pod
+	// before its own agent session (its image, its spec, its controller) and
+	// refuses the credential for a pod that is not one of its instances' or
+	// does not verify.
+	Pod           string `protobuf:"bytes,3,opt,name=pod,proto3" json:"pod,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -77,9 +83,20 @@ func (x *IssueKubeExecCredentialRequest) GetRefresh() bool {
 	return false
 }
 
+func (x *IssueKubeExecCredentialRequest) GetPod() string {
+	if x != nil {
+		return x.Pod
+	}
+	return ""
+}
+
 type IssueKubeExecCredentialReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Credential    *KubeExecCredential    `protobuf:"bytes,1,opt,name=credential,proto3" json:"credential,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Credential *KubeExecCredential    `protobuf:"bytes,1,opt,name=credential,proto3" json:"credential,omitempty"`
+	// pod_uid is the verified pod's uid when the request named a pod: the
+	// shim binds its attach to it, so a re-dial never reaches a pod that
+	// replaced it unverified.
+	PodUid        string `protobuf:"bytes,2,opt,name=pod_uid,json=podUid,proto3" json:"pod_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -119,6 +136,13 @@ func (x *IssueKubeExecCredentialReply) GetCredential() *KubeExecCredential {
 		return x.Credential
 	}
 	return nil
+}
+
+func (x *IssueKubeExecCredentialReply) GetPodUid() string {
+	if x != nil {
+		return x.PodUid
+	}
+	return ""
 }
 
 // KubeExecCredential is the complete transport fleetd reaches a connection's
@@ -399,15 +423,17 @@ var File_kube_exec_proto protoreflect.FileDescriptor
 
 const file_kube_exec_proto_rawDesc = "" +
 	"\n" +
-	"\x0fkube_exec.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"Y\n" +
+	"\x0fkube_exec.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"k\n" +
 	"\x1eIssueKubeExecCredentialRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x18\n" +
-	"\arefresh\x18\x02 \x01(\bR\arefresh\"]\n" +
+	"\arefresh\x18\x02 \x01(\bR\arefresh\x12\x10\n" +
+	"\x03pod\x18\x03 \x01(\tR\x03pod\"v\n" +
 	"\x1cIssueKubeExecCredentialReply\x12=\n" +
 	"\n" +
 	"credential\x18\x01 \x01(\v2\x1d.fleetgrpc.KubeExecCredentialR\n" +
-	"credential\"\xd1\x04\n" +
+	"credential\x12\x17\n" +
+	"\apod_uid\x18\x02 \x01(\tR\x06podUid\"\xd1\x04\n" +
 	"\x12KubeExecCredential\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x16\n" +

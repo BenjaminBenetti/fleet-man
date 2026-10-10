@@ -186,6 +186,11 @@ func (r *RollingLog) Close() error {
 // RunOutput is one run's output as the rolling file still holds it.
 type RunOutput struct {
 	RunMark
+	// PodSeq is the run's place among the runs of its pod the index still
+	// records, from 0: the pod's n-th start of pod-init, which the kubelet
+	// counts as its container's restart n (while no earlier run of the pod
+	// has rotated out of the index; fleetd names a run by it).
+	PodSeq int
 	// Data is the run's output; Truncated when its start rotated away.
 	Data      []byte
 	Truncated bool
@@ -247,7 +252,10 @@ func (r Rolling) Runs() []RunOutput {
 		return []RunOutput{{RunMark: RunMark{Offset: r.Start}, Data: r.all, End: r.End}}
 	}
 	var out []RunOutput
+	seq := map[string]int{}
 	for i, run := range r.runs {
+		n := seq[run.PodUID]
+		seq[run.PodUID] = n + 1
 		to := r.End
 		if i+1 < len(r.runs) {
 			to = min(r.runs[i+1].Offset, r.End)
@@ -256,7 +264,7 @@ func (r Rolling) Runs() []RunOutput {
 		if to <= r.Start || from > to {
 			continue
 		}
-		out = append(out, RunOutput{RunMark: run, Data: r.all[from-r.Start : to-r.Start], Truncated: run.Offset < r.Start, End: to})
+		out = append(out, RunOutput{RunMark: run, PodSeq: n, Data: r.all[from-r.Start : to-r.Start], Truncated: run.Offset < r.Start, End: to})
 	}
 	return out
 }

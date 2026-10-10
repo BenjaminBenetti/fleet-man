@@ -107,7 +107,24 @@ func loadHost(o Options, log *Logger) *execas.Host {
 		log.Error("no exec spec; commands get the container's defaults", "path", o.SpecPath, "err", err.Error())
 		spec = execas.Spec{}
 	}
-	return execas.NewHost(spec, o.CacheDir)
+	host := execas.NewHost(spec, o.CacheDir)
+	if len(o.Bundles) > 0 {
+		candidates := o.Bundles
+		host.Bundles = func() []execas.Bundle { return installedBundles(candidates) }
+	}
+	return host
+}
+
+// installedBundles is the bundles of candidates that are installed now (their
+// bin directory exists).
+func installedBundles(candidates []execas.Bundle) []execas.Bundle {
+	var out []execas.Bundle
+	for _, b := range candidates {
+		if fi, err := os.Stat(b.Bin); err == nil && fi.IsDir() {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 // handshake accepts the control stream, sends Hello and reads HelloAck.

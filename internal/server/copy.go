@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
@@ -223,8 +224,7 @@ func (s *service) copyDirOut(inst *fleet.Instance, req *fleetgrpc.CopyFileReques
 		return err
 	}
 
-	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir,
-		[]string{"tar", "-C", filePath, "-cf", "-", "."})
+	cmd := folderExecCommand(inst, []string{"tar", "-C", filePath, "-cf", "-", "."})
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
@@ -283,6 +283,22 @@ func streamRawTar(r io.Reader, send func(*fleetgrpc.CopyFileChunk) error) error 
 			return status.Errorf(codes.Internal, "read tar: %v", readErr)
 		}
 	}
+}
+
+// folderExecCommand builds the host-side exec that moves a folder's tar in or
+// out. On a backend with a separate bulk lane (the Kubernetes backend, which
+// runs it on the pod's bulk session) it uses that lane so a large directory
+// transfer does not hold up the main channel; every other backend falls back
+// to ExecCommandQuiet. A package var so tests can stub the whole backend
+// layer. The *exec.Cmd is driven with Start/Wait and pipes, like
+// copyIntoExecCommand.
+var folderExecCommand = func(inst *fleet.Instance, argv []string) *exec.Cmd {
+	if fe, ok := backendutil.NewForInstance(inst, false).(backend.FolderExecer); ok {
+		return fe.FolderExecCommand(inst.WorkspaceDir, argv).Cmd
+	}
+	// Other backends have no separate bulk lane; the folder tar runs the same
+	// way a single-file copy's exec does (copyIntoExecCommand).
+	return copyIntoExecCommand(inst, argv)
 }
 
 // copyIntoExecCommand builds the host-side container exec used by CopyInto.
@@ -475,7 +491,7 @@ func (s *service) copyDirInto(inst *fleet.Instance, open *fleetgrpc.CopyIntoOpen
 		return err
 	}
 
-	cmd := copyIntoExecCommand(inst, []string{"tar", "-xf", "-", "-C", targetRoot})
+	cmd := folderExecCommand(inst, []string{"tar", "-xf", "-", "-C", targetRoot})
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdin, err := cmd.StdinPipe()

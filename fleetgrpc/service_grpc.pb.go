@@ -52,6 +52,7 @@ const (
 	FleetService_ResolveLogsCommand_FullMethodName      = "/fleetgrpc.FleetService/ResolveLogsCommand"
 	FleetService_Logs_FullMethodName                    = "/fleetgrpc.FleetService/Logs"
 	FleetService_IssueKubeExecCredential_FullMethodName = "/fleetgrpc.FleetService/IssueKubeExecCredential"
+	FleetService_PodExec_FullMethodName                 = "/fleetgrpc.FleetService/PodExec"
 	FleetService_TriggerLogs_FullMethodName             = "/fleetgrpc.FleetService/TriggerLogs"
 	FleetService_Forward_FullMethodName                 = "/fleetgrpc.FleetService/Forward"
 	FleetService_Mic_FullMethodName                     = "/fleetgrpc.FleetService/Mic"
@@ -154,6 +155,13 @@ type FleetServiceClient interface {
 	// (kube_exec.proto), so its direct-mode attaches run no credential plugin
 	// of their own. Local-only: remote clients exec through Exec instead.
 	IssueKubeExecCredential(ctx context.Context, in *IssueKubeExecCredentialRequest, opts ...grpc.CallOption) (*IssueKubeExecCredentialReply, error)
+	// PodExec runs one command in a Kubernetes instance's pod for the
+	// daemon-host `fleet kube-exec` shim's daemon mode (a command without a
+	// terminal: every ExecCommand of a Kubernetes instance), through the pod's
+	// agent session. The first ExecIn carries pod_start. Local-only, like
+	// IssueKubeExecCredential: remote clients run the same commands through
+	// Exec.
+	PodExec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecIn, ExecOut], error)
 	// TriggerLogs returns an automation trigger's recorded event logs (the
 	// payloads of its recent firings, concatenated for viewing). The daemon owns
 	// the log files (~/.fleet/logs/<fleet>/trigger/<trigger>/), so reading them
@@ -642,6 +650,19 @@ func (c *fleetServiceClient) IssueKubeExecCredential(ctx context.Context, in *Is
 	return out, nil
 }
 
+func (c *fleetServiceClient) PodExec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecIn, ExecOut], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[10], FleetService_PodExec_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ExecIn, ExecOut]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_PodExecClient = grpc.BidiStreamingClient[ExecIn, ExecOut]
+
 func (c *fleetServiceClient) TriggerLogs(ctx context.Context, in *TriggerLogsRequest, opts ...grpc.CallOption) (*TriggerLogsReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TriggerLogsReply)
@@ -654,7 +675,7 @@ func (c *fleetServiceClient) TriggerLogs(ctx context.Context, in *TriggerLogsReq
 
 func (c *fleetServiceClient) Forward(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardChunk, ForwardChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[10], FleetService_Forward_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[11], FleetService_Forward_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -667,7 +688,7 @@ type FleetService_ForwardClient = grpc.BidiStreamingClient[ForwardChunk, Forward
 
 func (c *fleetServiceClient) Mic(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[MicUp, MicDown], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[11], FleetService_Mic_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[12], FleetService_Mic_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -690,7 +711,7 @@ func (c *fleetServiceClient) ListMicSources(ctx context.Context, in *ListMicSour
 
 func (c *fleetServiceClient) Output(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[OutputUp, OutputDown], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[12], FleetService_Output_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[13], FleetService_Output_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -713,7 +734,7 @@ func (c *fleetServiceClient) ListOutputTargets(ctx context.Context, in *ListOutp
 
 func (c *fleetServiceClient) SSHAgent(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SSHAgentUp, SSHAgentDown], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[13], FleetService_SSHAgent_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[14], FleetService_SSHAgent_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -726,7 +747,7 @@ type FleetService_SSHAgentClient = grpc.BidiStreamingClient[SSHAgentUp, SSHAgent
 
 func (c *fleetServiceClient) CopyFile(ctx context.Context, in *CopyFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CopyFileChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[14], FleetService_CopyFile_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[15], FleetService_CopyFile_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -745,7 +766,7 @@ type FleetService_CopyFileClient = grpc.ServerStreamingClient[CopyFileChunk]
 
 func (c *fleetServiceClient) CopyInto(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CopyIntoChunk, CopyIntoReply], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[15], FleetService_CopyInto_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[16], FleetService_CopyInto_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -818,7 +839,7 @@ func (c *fleetServiceClient) RemoveKubeCluster(ctx context.Context, in *RemoveKu
 
 func (c *fleetServiceClient) TestKubeCluster(ctx context.Context, in *TestKubeClusterRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TestKubeClusterEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[16], FleetService_TestKubeCluster_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[17], FleetService_TestKubeCluster_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -847,7 +868,7 @@ func (c *fleetServiceClient) PruneKubeCluster(ctx context.Context, in *PruneKube
 
 func (c *fleetServiceClient) LoginKubeCluster(ctx context.Context, in *LoginKubeClusterRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LoginKubeClusterEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[17], FleetService_LoginKubeCluster_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[18], FleetService_LoginKubeCluster_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -991,6 +1012,13 @@ type FleetServiceServer interface {
 	// (kube_exec.proto), so its direct-mode attaches run no credential plugin
 	// of their own. Local-only: remote clients exec through Exec instead.
 	IssueKubeExecCredential(context.Context, *IssueKubeExecCredentialRequest) (*IssueKubeExecCredentialReply, error)
+	// PodExec runs one command in a Kubernetes instance's pod for the
+	// daemon-host `fleet kube-exec` shim's daemon mode (a command without a
+	// terminal: every ExecCommand of a Kubernetes instance), through the pod's
+	// agent session. The first ExecIn carries pod_start. Local-only, like
+	// IssueKubeExecCredential: remote clients run the same commands through
+	// Exec.
+	PodExec(grpc.BidiStreamingServer[ExecIn, ExecOut]) error
 	// TriggerLogs returns an automation trigger's recorded event logs (the
 	// payloads of its recent firings, concatenated for viewing). The daemon owns
 	// the log files (~/.fleet/logs/<fleet>/trigger/<trigger>/), so reading them
@@ -1169,6 +1197,9 @@ func (UnimplementedFleetServiceServer) Logs(*LogsRequest, grpc.ServerStreamingSe
 }
 func (UnimplementedFleetServiceServer) IssueKubeExecCredential(context.Context, *IssueKubeExecCredentialRequest) (*IssueKubeExecCredentialReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method IssueKubeExecCredential not implemented")
+}
+func (UnimplementedFleetServiceServer) PodExec(grpc.BidiStreamingServer[ExecIn, ExecOut]) error {
+	return status.Errorf(codes.Unimplemented, "method PodExec not implemented")
 }
 func (UnimplementedFleetServiceServer) TriggerLogs(context.Context, *TriggerLogsRequest) (*TriggerLogsReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TriggerLogs not implemented")
@@ -1776,6 +1807,13 @@ func _FleetService_IssueKubeExecCredential_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FleetService_PodExec_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(FleetServiceServer).PodExec(&grpc.GenericServerStream[ExecIn, ExecOut]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FleetService_PodExecServer = grpc.BidiStreamingServer[ExecIn, ExecOut]
+
 func _FleetService_TriggerLogs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TriggerLogsRequest)
 	if err := dec(in); err != nil {
@@ -2326,6 +2364,12 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "Logs",
 			Handler:       _FleetService_Logs_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "PodExec",
+			Handler:       _FleetService_PodExec_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 		{
 			StreamName:    "Forward",

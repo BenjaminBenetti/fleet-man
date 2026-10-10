@@ -239,6 +239,9 @@ func (b *Backend) teardown() error {
 	if rerr := RemoveInstanceRecord(cluster, key); rerr != nil {
 		flog.Warn("kube down: removing the instance's record", "cluster", cluster, "key", key, "err", rerr)
 	}
+	if fleetName != "" {
+		RemoveContainerLog(fleetName, b.inst.Name)
+	}
 	if err != nil {
 		return classify(err)
 	}

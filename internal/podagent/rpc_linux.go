@@ -27,6 +27,11 @@ type HeldInfo struct {
 	Max   int `json:"max"`
 }
 
+// agentStats is this agent process's stats sampler: the last sample is kept
+// across sessions, so a poll's CPU usage covers the time since the previous
+// poll.
+var agentStats = newStatsSampler()
+
 // methods are the RPCs the agent serves: the built-in ones, then Options'.
 func (a *agent) methods() map[string]Method {
 	m := map[string]Method{
@@ -43,6 +48,9 @@ func (a *agent) methods() map[string]Method {
 				}
 			}
 			return HeldInfo{Count: n, Max: a.opts.MaxHeld}, nil
+		},
+		podwire.MethodStats: func(ctx context.Context, _ json.RawMessage) (any, error) {
+			return agentStats.stats(ctx)
 		},
 	}
 	for name, fn := range a.opts.Methods {

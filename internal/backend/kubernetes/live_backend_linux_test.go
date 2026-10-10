@@ -5,6 +5,7 @@ package kubernetes
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -101,6 +102,98 @@ func TestLiveBackendLifecycle(t *testing.T) {
 			"/usr/local/go/bin/go version | cut -d' ' -f3 | cut -c1-6": "go1.24",
 		})
 	})
+	t.Run("exec-surface", func(t *testing.T) {
+		lb.execSurface(t, open, image)
+	})
+	t.Run("sessions", func(t *testing.T) {
+		restricted := lb.connect(t, map[string]string{"pod-security.kubernetes.io/enforce": "restricted"}, false)
+		lb.sessions(t, restricted, "tiercsess", image)
+	})
+}
+
+// execSurface exercises the backend's exec surface on a real pod: OpenExec
+// runs a command and reports its exit code and streams apart, and CopyFile
+// streams a file into the pod as the remote user.
+func (lb *liveBackend) execSurface(t *testing.T, lv *live, image string) {
+	inst, _ := lb.instance(t, lv, "exec", func(ws string) { writeLiveWorkspace(t, ws, map[string]any{"image": image}) })
+	b := newHandle(inst, lb.pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	res, err := b.UpContext(backend.WithJobLog(ctx, &lineLog{t: t}), backend.UpRequest{WorkspaceDir: inst.WorkspaceDir})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	inst.ContainerID, inst.Status = res.ContainerID, fleet.StatusRunning
+	b = newHandle(inst, lb.pool)
+	defer func() {
+		if err := b.Down(res.ContainerID); err != nil {
+			t.Errorf("down: %v", err)
+		}
+		lb.waitNothingLeft(t, lv, inst.KubeKey)
+	}()
+
+	stream, err := b.OpenExec(ctx, backend.ExecRequest{Class: backend.ExecClassExec, ContainerID: res.ContainerID, Argv: []string{"sh", "-c", "printf out; printf err >&2; exit 4"}})
+	if err != nil {
+		t.Fatalf("OpenExec: %v", err)
+	}
+	var out, errb strings.Builder
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); _, _ = io.Copy(&out, stream.Stdout()) }()
+	go func() { defer wg.Done(); _, _ = io.Copy(&errb, stream.Stderr()) }()
+	_ = stream.Stdin().Close()
+	code, werr := stream.Wait()
+	wg.Wait()
+	if werr != nil || code != 4 || out.String() != "out" || errb.String() != "err" {
+		t.Errorf("OpenExec: code %d err %v stdout %q stderr %q", code, werr, out.String(), errb.String())
+	}
+
+	payload := "copied-in\n"
+	if err := b.CopyFile(inst.WorkspaceDir, strings.NewReader(payload), "/tmp/fleet-copy-test", 0o644); err != nil {
+		t.Fatalf("CopyFile: %v", err)
+	}
+	if got, err := b.RunScript(res.ContainerID, "cat /tmp/fleet-copy-test"); err != nil || got != payload {
+		t.Errorf("the copied file reads %q (%v), want %q", got, err, payload)
+	}
+}
+
+// sessions proves a tmux-less image gets tmux sessions through the bundled
+// static tmux, with nothing run from a package mirror, and the session list
+// shows them (twouser).
+func (lb *liveBackend) sessions(t *testing.T, lv *live, name, image string) {
+	if os.Getenv(binstore.EnvTmuxPrefix+strings.ToUpper(runtime.GOARCH)) == "" {
+		t.Skipf("set %s%s=<fleet-tmux-linux-%s.tar.gz> (build with `make pod-tmux`) to test the bundled tmux", binstore.EnvTmuxPrefix, strings.ToUpper(runtime.GOARCH), runtime.GOARCH)
+	}
+	inst, _ := lb.instance(t, lv, name, func(ws string) { writeLiveWorkspace(t, ws, map[string]any{"image": image}) })
+	b := newHandle(inst, lb.pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	res, err := b.UpContext(backend.WithJobLog(ctx, &lineLog{t: t}), backend.UpRequest{WorkspaceDir: inst.WorkspaceDir})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	inst.ContainerID, inst.Status = res.ContainerID, fleet.StatusRunning
+	b = newHandle(inst, lb.pool)
+	defer func() {
+		if err := b.Down(res.ContainerID); err != nil {
+			t.Errorf("down: %v", err)
+		}
+		lb.waitNothingLeft(t, lv, inst.KubeKey)
+	}()
+
+	if err := b.EnsureTmux(ctx); err != nil {
+		t.Fatalf("EnsureTmux: %v", err)
+	}
+	if _, err := b.RunScript(res.ContainerID, "tmux new-session -d -s one 'sleep 600'; tmux new-session -d -s two 'sleep 600'"); err != nil {
+		t.Fatalf("create tmux sessions through the bundle: %v", err)
+	}
+	list := b.ListSessions(res.ContainerID)
+	if !strings.Contains(list, "one:") || !strings.Contains(list, "two:") {
+		t.Errorf("ListSessions %q, want sessions one and two", list)
+	}
+	if out, _ := b.RunScript(res.ContainerID, "cat /var/log/apt/history.log 2>/dev/null || echo no-apt"); strings.Contains(out, "tmux") {
+		t.Errorf("tmux looks apt-installed, not bundled:\n%s", out)
+	}
 }
 
 // groupAdd: a runArgs --group-add naming a group of the image becomes its
@@ -201,7 +294,15 @@ func newLiveBackend(t *testing.T, kctx string) *liveBackend {
 			defer lb.mu.Unlock()
 			return append([]fleet.KubeCluster(nil), lb.recs...), nil
 		},
-		Bins:    &binstore.Store{Dir: filepath.Dir(art.Path), Self: art.Info.Identity, Getenv: envOf(nil)},
+		// The pod binary is served from the store dir; a tmux bundle, when
+		// one is built, comes from FLEET_POD_TMUX_<ARCH> in the real
+		// environment (the sessions subtest needs it and skips without it).
+		Bins: &binstore.Store{Dir: filepath.Dir(art.Path), Self: art.Info.Identity, Getenv: func(k string) string {
+			if strings.HasPrefix(k, binstore.EnvTmuxPrefix) {
+				return os.Getenv(k)
+			}
+			return ""
+		}},
 		Version: art.Info.Version,
 		Logger:  slog.New(slog.NewTextHandler(testLog{t}, nil)),
 	})

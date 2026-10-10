@@ -723,6 +723,9 @@ func (s *service) startStartInstanceJob(req *fleetgrpc.StartInstanceRequest) (*j
 	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_START_INSTANCE, req.GetFleet(), req.GetInstance(), time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
 		err := jobRunStart(req.GetFleet(), req.GetInstance())
+		if err == nil {
+			s.kubePods.started(req.GetFleet(), req.GetInstance())
+		}
 		return loadInstanceSnapshot(req.GetFleet(), req.GetInstance()), nil, err
 	})
 	return j, nil

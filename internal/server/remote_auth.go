@@ -42,6 +42,12 @@ var localOnlyMethods = map[string]bool{
 	// its own connection, so cluster tokens never leave the daemon host. This
 	// is the one exception the remote full-control rule allows.
 	"/fleetgrpc.FleetService/IssueKubeExecCredential": true,
+	// Same reason as IssueKubeExecCredential: PodExec serves the daemon-host
+	// `fleet kube-exec` shim's daemon mode, one command in a pod on the
+	// daemon's own connection. A remote client runs the same command through
+	// the streaming Exec RPC, so a cluster is never reached on a remote
+	// caller's behalf through this path.
+	"/fleetgrpc.FleetService/PodExec": true,
 }
 
 // bearerAuthInterceptors returns unary + stream interceptors that require

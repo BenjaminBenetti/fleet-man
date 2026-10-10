@@ -28,7 +28,7 @@ done
 # it would invite users to call it directly, breaking the TUI contract.
 assert_not_contains "${root_help}" "_create-instance" "internal command should remain hidden"
 # So must the in-pod commands (a pod's PID 1, its Jobs' process and its agent).
-for internal in exec-as pod-init pod-job pod-agent; do
+for internal in exec-as pod-init pod-job pod-agent kube-exec; do
   assert_not_contains "${root_help}" "${internal}" "in-pod command ${internal} should remain hidden"
 done
 

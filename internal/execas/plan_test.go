@@ -607,3 +607,39 @@ func TestResolve(t *testing.T) {
 		t.Fatalf("single-uid: %+v %v", id, err)
 	}
 }
+
+// TestPlanPutsBundlesLast: a bundle fleet staged (the static tmux of an image
+// without one) is last on every class's PATH, its program found there, and
+// its terminfo searched after the system's; a bundle installed after the Host
+// was made counts at the next plan.
+func TestPlanPutsBundlesLast(t *testing.T) {
+	m := newMatrixHost(t)
+	tmux := t.TempDir()
+	writeExecutable(t, filepath.Join(tmux, "bundled-tmux"), 0o755)
+	var bundles []Bundle
+	m.host.Bundles = func() []Bundle { return bundles }
+	if _, err := m.host.Plan(context.Background(), Request{Class: ClassScript, Argv: []string{"bundled-tmux"}}); ExitCode(err) != ExitNotFound {
+		t.Fatalf("before the bundle: %v, want not found", err)
+	}
+	bundles = []Bundle{{Bin: tmux, Terminfo: "/opt/fleet/tmux/share/terminfo"}}
+	for _, class := range Classes() {
+		plan, err := m.host.Plan(context.Background(), Request{Class: class, Argv: []string{"bundled-tmux"}})
+		if err != nil {
+			t.Fatalf("%s: %v", class, err)
+		}
+		env := envMap(plan.Env)
+		if plan.Path != filepath.Join(tmux, "bundled-tmux") || !strings.HasSuffix(env["PATH"], ":"+tmux) {
+			t.Errorf("%s: tmux at %q, PATH %q; want the bundle's last", class, plan.Path, env["PATH"])
+		}
+		if env["TERMINFO_DIRS"] != ":/opt/fleet/tmux/share/terminfo" {
+			t.Errorf("%s: TERMINFO_DIRS %q, want the system's then the bundle's", class, env["TERMINFO_DIRS"])
+		}
+	}
+	plan, err := m.host.Plan(context.Background(), Request{Class: ClassExplicit, Argv: []string{"bundled-tmux"}, Env: map[string]string{"PATH": tmux + ":/bin", "TERMINFO_DIRS": "/usr/share/terminfo"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env := envMap(plan.Env); env["PATH"] != tmux+":/bin" || env["TERMINFO_DIRS"] != "/usr/share/terminfo:/opt/fleet/tmux/share/terminfo" {
+		t.Errorf("a request already naming the bundle: PATH %q TERMINFO_DIRS %q, want each once", env["PATH"], env["TERMINFO_DIRS"])
+	}
+}

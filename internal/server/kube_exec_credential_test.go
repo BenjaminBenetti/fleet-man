@@ -148,3 +148,67 @@ users:
 		t.Fatalf("an unknown connection: %v", err)
 	}
 }
+
+// A request naming the pod a direct attach reaches gets the credential only
+// once the pod verifies, with its uid; a pod that does not verify gets
+// nothing (and never Unavailable, which the shim would go around with the
+// kubeconfig).
+func TestIssueKubeExecCredentialVerifiesThePod(t *testing.T) {
+	isolateFleetDir(t)
+	issued := 0
+	stubKubeExecCredential(t, func(_ context.Context, id string, _ bool) (fleet.KubeExecCredential, error) {
+		issued++
+		return fleet.KubeExecCredential{ClusterID: id, Server: "https://api.example:6443", BearerToken: "tok", Auth: string(kubeexec.AuthToken)}, nil
+	})
+	var verifyErr error
+	var asked string
+	old := verifyKubeExecPod
+	verifyKubeExecPod = func(_ context.Context, clusterID, pod string) (string, error) {
+		asked = clusterID + "/" + pod
+		if verifyErr != nil {
+			return "", verifyErr
+		}
+		return "uid-123", nil
+	}
+	t.Cleanup(func() { verifyKubeExecPod = old })
+	local := grpc.NewServer()
+	fleetgrpc.RegisterFleetServiceServer(local, newService())
+	c := dialBuf(t, local)
+
+	reply, err := c.IssueKubeExecCredential(context.Background(), &fleetgrpc.IssueKubeExecCredentialRequest{ClusterId: "mk-a", Pod: "fi-web-0"})
+	if err != nil || reply.GetPodUid() != "uid-123" || asked != "mk-a/fi-web-0" || issued != 1 {
+		t.Fatalf("a verified pod: reply %v err %v (asked %q, issued %d)", reply, err, asked, issued)
+	}
+
+	verifyErr = status.Error(kubePodVerifyCode(&kubernetes.TamperedError{}), "tampered")
+	if _, err := c.IssueKubeExecCredential(context.Background(), &fleetgrpc.IssueKubeExecCredentialRequest{ClusterId: "mk-a", Pod: "fi-web-0"}); status.Code(err) != codes.PermissionDenied || issued != 1 {
+		t.Fatalf("a tampered pod: %v (issued %d), want PermissionDenied and no credential", err, issued)
+	}
+
+	// No pod named (the logs path): no verification.
+	asked = ""
+	if reply, err := c.IssueKubeExecCredential(context.Background(), &fleetgrpc.IssueKubeExecCredentialRequest{ClusterId: "mk-a"}); err != nil || reply.GetPodUid() != "" || asked != "" {
+		t.Fatalf("no pod: reply %v err %v asked %q", reply, err, asked)
+	}
+}
+
+// A pod that is not one of the daemon's instances' is refused by the real
+// verifier before any cluster call.
+func TestVerifyKubeExecPodRefusesAStrangePod(t *testing.T) {
+	isolateFleetDir(t)
+	if _, err := verifyKubeExecPod(context.Background(), "mk-a", "someone-else-0"); status.Code(err) != codes.NotFound {
+		t.Fatalf("a pod of no instance: %v, want NotFound", err)
+	}
+	for _, tc := range []struct {
+		err  error
+		want codes.Code
+	}{
+		{&kubernetes.TamperedError{}, codes.PermissionDenied},
+		{context.DeadlineExceeded, codes.DeadlineExceeded},
+		{kubernetes.ErrPodNotReady, codes.FailedPrecondition},
+	} {
+		if got := kubePodVerifyCode(tc.err); got != tc.want {
+			t.Errorf("kubePodVerifyCode(%v) = %v, want %v", tc.err, got, tc.want)
+		}
+	}
+}

@@ -169,6 +169,17 @@ func TestExecStdioRefuses(t *testing.T) {
 	if _, err = podwire.OpenExec(ctx, startDirect(t, d), h, podwire.ExecOptions{}); !errors.As(err, &se) || se.Code != execas.ExitNotFound {
 		t.Fatalf("missing command: %v", err)
 	}
+
+	// An attach the shim verified for another pod (the one this pod
+	// replaced) is refused before anything runs.
+	h = directHeader("touch " + d.run + "/ran")
+	h.PodUID = "pod-uid-replaced"
+	if _, err = podwire.OpenExec(ctx, startDirect(t, d), h, podwire.ExecOptions{}); !errors.Is(err, podwire.ErrRefused) || !strings.Contains(err.Error(), "not pod-uid-replaced") {
+		t.Fatalf("another pod's attach: %v", err)
+	}
+	if _, err := os.Stat(d.run + "/ran"); err == nil {
+		t.Fatal("another pod's command ran")
+	}
 }
 
 // gateWriter passes writes on until it is shut, then blocks them until it is

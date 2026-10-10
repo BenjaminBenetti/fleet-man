@@ -102,3 +102,39 @@ func waitFor(ch func() <-chan struct{}) <-chan struct{} {
 	}()
 	return done
 }
+
+// DetachSignal is never nil: a select on it while the command is attached
+// sees the next drop, and after a re-attach it is a fresh channel for the one
+// after.
+func TestExecDetachSignal(t *testing.T) {
+	id := strings.Repeat("ef", 16)
+	conn, _ := fakeDirect(t, FrameOpen, OpenReply{ResumeID: id, PID: 7}, false)
+	h := ExecHeader{Request: execas.Request{Class: execas.ClassExec, Argv: []string{"sh"}}, Resumable: true}
+	e, err := OpenExec(context.Background(), conn, h, ExecOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := e.DetachSignal()
+	if sig == nil || e.Detached() != nil {
+		t.Fatal("an attached command: DetachSignal nil or Detached set")
+	}
+	_ = conn.Close()
+	select {
+	case <-sig:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the drop was not signalled")
+	}
+	conn2, out := fakeDirect(t, FrameResume, ResumeReply{PID: 7}, false)
+	if err := e.ReattachOver(context.Background(), conn2); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-e.DetachSignal():
+		t.Fatal("a re-attached command still signals the old drop")
+	default:
+	}
+	_ = out.WriteJSON(FrameExit, ExitStatus{Code: 0})
+	if code, err := e.Wait(); code != 0 || err != nil {
+		t.Fatalf("wait: %d %v", code, err)
+	}
+}

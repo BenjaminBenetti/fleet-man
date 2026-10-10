@@ -51,6 +51,30 @@ func DialLocal(ctx context.Context) (*Conn, error) {
 	return dialEndpoint(ctx, localEndpoint{socket: fleetpaths.SocketPath()})
 }
 
+// DialSocket connects to the daemon already serving the unix socket at socket
+// (fleetpaths.SocketPath() when empty), as it is: it never spawns one and runs
+// no version reconcile, so it never restarts the daemon it reaches. It backs
+// fleetd's own plumbing children (the Kubernetes `fleet kube-exec` shim), which
+// must reach the daemon that started them, and fail at once (to their own
+// fallback) when none answers.
+func DialSocket(ctx context.Context, socket string) (*Conn, error) {
+	if socket == "" {
+		socket = fleetpaths.SocketPath()
+	}
+	ep := localEndpoint{socket: socket}
+	conn, err := grpc.NewClient(ep.Target(), ep.DialOptions()...)
+	if err != nil {
+		return nil, fmt.Errorf("create client for %s: %w", ep, err)
+	}
+	svc := fleetgrpc.NewFleetServiceClient(conn)
+	reply, err := hello(ctx, svc)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("fleet server not reachable at %s: %w", ep, err)
+	}
+	return &Conn{conn: conn, svc: svc, serverVersion: reply.GetServerVersion()}, nil
+}
+
 // RestartLocalServer stops the running local fleet daemon and relaunches it from
 // the current binary — the same drain-and-respawn mechanic the version handshake
 // uses, exposed for a manual "restart daemon" action in the TUI. It always

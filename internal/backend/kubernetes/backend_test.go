@@ -195,11 +195,9 @@ func TestHandleCapabilities(t *testing.T) {
 	unavailableCode("Clone", err)
 	_, err = b.Rebuild("cid", "/ws", nil)
 	unavailableCode("Rebuild", err)
-	unavailableCode("Exec", b.Exec("/ws", []string{"true"}))
-	unavailableCode("ExecCommand", b.ExecCommand("/ws", []string{"true"}).Run())
-	unavailableCode("ExecCommandQuiet", b.ExecCommandQuiet("/ws", []string{"true"}).Run())
-	unavailableCode("CopyFile", b.CopyFile("/ws", strings.NewReader("x"), "/tmp/x", 0o644))
-	unavailableCode("LogsCommand", b.LogsCommand("cid", false).Run())
+	// The exec surface (Exec, ExecCommand, CopyFile, Logs) reaches the pod
+	// now; its shape is checked in cmd_test.go, not run here against a
+	// cluster. Editor, mic and forwarding are still later units'.
 	if uri, ok := b.EditorURI("/ws", "p"); ok || uri != "" {
 		t.Error("an editor URI")
 	}

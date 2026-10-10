@@ -29,6 +29,19 @@ type Host struct {
 	SingleUID bool
 	// Prober reads the exec class's user environment; nil probes nothing.
 	Prober EnvProber
+	// Bundles, when set, lists the program bundles fleet staged into the pod
+	// (the static tmux of an image that has none). Every command, whatever
+	// its class, finds their programs last on its PATH (the image's own come
+	// first) and their terminfo after the system's. It is asked on every
+	// Plan, so a bundle installed after this Host was made counts.
+	Bundles func() []Bundle
+}
+
+// Bundle is one program bundle in a pod: Bin holds its programs, Terminfo
+// ("" for none) the terminal descriptions they were built to read.
+type Bundle struct {
+	Bin      string
+	Terminfo string
 }
 
 // NewHost is the Host this process runs in, inside a pod: the container's
@@ -100,6 +113,9 @@ func (h *Host) Plan(ctx context.Context, req Request) (*Plan, error) {
 		}
 	}
 	env.merge(req.Env)
+	if h.Bundles != nil {
+		addBundles(env, h.Bundles())
+	}
 	env.setDefault("HOME", id.Home)
 	if req.TTY {
 		env.setDefault("TERM", "xterm")

@@ -35,10 +35,6 @@ import (
 
 // Backend is the handle on one Kubernetes instance.
 type Backend struct {
-	// unavailable answers the exec surface (kube-exec, CopyFile, logs,
-	// stats, forwards) until it lands.
-	unavailable
-
 	pool *Pool
 	inst fleet.Instance
 
@@ -56,10 +52,9 @@ var (
 	_ backend.PostStarter    = (*Backend)(nil)
 	_ TargetProvider         = (*Backend)(nil)
 	_ fleetlaunch.Stager     = (*Backend)(nil)
+	_ backend.StreamExecer   = (*Backend)(nil)
+	_ backend.TmuxEnsurer    = (*Backend)(nil)
 )
-
-// errExecSurface is what the methods that need the kube-exec shim answer.
-var errExecSurface = notYet{what: "reaching into an instance from outside the daemon (exec, files, logs, stats, port forwards)"}
 
 // ForInstance is the handle on inst, a Kubernetes record. It keeps a copy
 // of the record and does no I/O.
@@ -67,7 +62,7 @@ func ForInstance(inst *fleet.Instance) backend.Backend { return newHandle(inst, 
 
 // newHandle binds inst to pool (nil: the daemon's).
 func newHandle(inst *fleet.Instance, pool *Pool) *Backend {
-	b := &Backend{unavailable: unavailable{err: errExecSurface}, pool: pool}
+	b := &Backend{pool: pool}
 	if inst != nil {
 		b.inst = *inst
 	}
