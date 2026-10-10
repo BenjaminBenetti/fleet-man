@@ -100,6 +100,12 @@ func newService() *service {
 		triggerFires: make(chan []triggerFire, triggerFireBuffer),
 	}
 	svc.instanceMCP = newInstanceMCP(svc)
+	// The in-flight jobs and their current steps are pushed over Watch. The
+	// set is taken on the hub loop, so pushes land in the order they happen
+	// and the last one is always current.
+	svc.jobs.onChange = func() {
+		svc.hub.post(func(h *hub) { h.broadcastActiveJobs(svc.jobs.activeJobs()) })
+	}
 	svc.output.configMu = &svc.muWrite
 	svc.output.onChange = func(snapshot *fleetgrpc.OutputTargets) {
 		svc.hub.post(func(h *hub) { h.broadcastOutputTargets(snapshot) })

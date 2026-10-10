@@ -40,9 +40,14 @@ func HooksFrom(ctx context.Context) Hooks {
 
 type jobLogKey struct{}
 
-// WithJobLog returns a copy of ctx whose provisioning-log sink is w. An
-// UpContext implementation writes the output of each provisioning step there,
-// on top of what it logs to fleet.log.
+// WithJobLog returns a copy of ctx whose provisioning-log sink is w. A
+// provisioning run (create, clone, rebuild) and the UpContext / RebuildContext
+// implementations it calls write the output of each provisioning step there,
+// on top of what they log to fleet.log, and report steps and warnings through
+// ReportStep / ReportWarning. w must take writes from several goroutines and
+// should never fail them: it is teed into the commands a step runs. Writers
+// hand it raw output; hiding secrets in it is w's job (the daemon's
+// provisioning log runs every line through redact.EnvLine).
 func WithJobLog(ctx context.Context, w io.Writer) context.Context {
 	return context.WithValue(ctx, jobLogKey{}, w)
 }

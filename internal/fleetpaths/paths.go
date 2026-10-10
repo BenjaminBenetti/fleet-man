@@ -123,3 +123,12 @@ func WorkspacesDir() string {
 func WarnPath(fleetName, instanceName string) string {
 	return filepath.Join(Dir(), "logs", fleetName+"-"+instanceName+".warn")
 }
+
+// InstanceCreationLogPath is the creation log of a single instance: what its
+// latest provisioning job (create, clone or rebuild) printed, with the step
+// it reached and each warning. The daemon writes it (0600) and removes it with
+// the instance; the TUI's logs view shows it. Like WarnPath this is the one
+// definition both sides use.
+func InstanceCreationLogPath(fleetName, instanceName string) string {
+	return filepath.Join(Dir(), "logs", fleetName+"-"+instanceName+".log")
+}

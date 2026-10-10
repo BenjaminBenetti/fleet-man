@@ -112,7 +112,9 @@ surfaces as a tool error.
   workspace** — the git checkout and uncommitted edits survive. Only the
   `devcontainer` and `codespaces` backends support it; `coder` does not.
 - `fleet_job_status {job_id}` reports a lifecycle job:
-  `{state: running|succeeded|failed, error?, warnings?, result?}`. A failed job
+  `{state: running|succeeded|failed, step?, error?, warnings?, result?}`; while
+  a create, clone or rebuild runs, `step` names where it is (`cloning
+  repository`, `starting container`, …). A failed job
   is data here (`state: "failed"`), not a tool error. An unknown `job_id`
   (daemon restarted, or the result expired) is a tool error — fall back to the
   instance's `status`/`error` in `fleet_list`.

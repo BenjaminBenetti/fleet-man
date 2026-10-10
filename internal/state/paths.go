@@ -42,6 +42,13 @@ func WarnPath(fleetName, instanceName string) string {
 	return fleetpaths.WarnPath(fleetName, instanceName)
 }
 
+// InstanceCreationLogPath returns the path of an instance's creation log, the
+// file a provisioning job writes its output to (see
+// fleetpaths.InstanceCreationLogPath; the TUI reads the same path).
+func InstanceCreationLogPath(fleetName, instanceName string) string {
+	return fleetpaths.InstanceCreationLogPath(fleetName, instanceName)
+}
+
 // TriggerLogsDir returns the host directory that holds an automation trigger's
 // recorded event logs: ~/.fleet/logs/<fleet>/trigger/<trigger>/. The daemon
 // writes one event-<timestamp>.log per firing here (keeping the most recent

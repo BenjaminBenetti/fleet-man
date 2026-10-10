@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -40,10 +42,13 @@ import (
 // does NOT own the job: if the client disconnects the goroutine keeps running,
 // and a JobSummary stays on GetState so a watcher can learn the job exists.
 //
-// Progress granularity is intentionally COARSE here (JobStarted -> work ->
-// JobDone): per the proto's terminal-truth note the authoritative terminal state
-// is the StateChanged snapshot, and the job stream is best-effort progress UI.
-// Fine-grained JobStep progress can be threaded through create.Run later.
+// Per the proto's terminal-truth note the authoritative terminal state is the
+// StateChanged snapshot, and the job stream is best-effort progress UI. The
+// provisioning jobs (create, clone, rebuild) fill it in between: their run
+// writes to a provisioningLog (provisioning_log.go), which turns its steps,
+// output and warnings into JobProgress and JobLog events and the instance's
+// creation log. The lifecycle jobs (start, stop, destroy) stay coarse
+// (JobStarted -> work -> JobDone).
 
 // --- work seams (overridable in tests so the engine is exercised without docker) ---
 
@@ -167,10 +172,19 @@ func downInstance(b backend.Backend, inst *fleet.Instance) error {
 // holds the durable status/error.
 const finishedJobRetention = 256
 
+// jobLogHistory bounds the JobLog events a job's history keeps for a watcher
+// that attaches late: the most recent ones survive. A create can print many
+// thousands of build lines; the instance's creation log keeps all of them.
+const jobLogHistory = 200
+
 type jobManager struct {
 	seq    int64
 	mu     sync.Mutex
 	active map[string]*job
+	// onChange, when set, is called (outside every lock) whenever the set of
+	// active jobs or one's current step changes: a job started, moved to another
+	// step, or finished. The service pushes the new set to Watch (ActiveJobs).
+	onChange func()
 	// finished retains terminal jobs (bounded by finishedJobRetention) so an
 	// async caller — e.g. the MCP fleet_job_status tool — can still read a job's
 	// outcome after it completes. finishedIDs is the FIFO eviction order.
@@ -196,10 +210,16 @@ type job struct {
 	cancel context.CancelCauseFunc
 	exited chan struct{}
 
+	// onChange is the manager's (see jobManager.onChange), called when this
+	// job's current step changes.
+	onChange func()
+
 	mu      sync.Mutex
 	history []*fleetgrpc.JobEvent
-	subs    map[chan *fleetgrpc.JobEvent]struct{}
-	done    bool
+	// logEvents counts the JobLog events in history (at most jobLogHistory).
+	logEvents int
+	subs      map[chan *fleetgrpc.JobEvent]struct{}
+	done      bool
 }
 
 // start registers a new in-flight job whose context derives from parent (the
@@ -218,12 +238,21 @@ func (m *jobManager) start(parent context.Context, kind fleetgrpc.JobKind, fleet
 			Instance:  instanceName,
 			StartedAt: timestamppb.New(startedAt),
 		},
-		subs: make(map[chan *fleetgrpc.JobEvent]struct{}),
+		subs:     make(map[chan *fleetgrpc.JobEvent]struct{}),
+		onChange: m.onChange,
 	}
 	m.mu.Lock()
 	m.active[id] = j
 	m.mu.Unlock()
+	m.changed()
 	return j
+}
+
+// changed tells onChange (if set) that the active jobs changed.
+func (m *jobManager) changed() {
+	if m.onChange != nil {
+		m.onChange()
+	}
 }
 
 func (m *jobManager) finish(id string) {
@@ -241,6 +270,7 @@ func (m *jobManager) finish(id string) {
 	m.mu.Unlock()
 	if j != nil {
 		j.closeSubs()
+		m.changed()
 	}
 }
 
@@ -255,36 +285,87 @@ func (m *jobManager) get(id string) *job {
 	return m.finished[id]
 }
 
-// summaries snapshots the in-flight jobs for GetState/Watch.
+// summaries snapshots the in-flight jobs for GetState/Watch, oldest first.
+// Each summary is a copy taken under its job's lock, since a running job moves
+// its current step while a caller marshals the snapshot.
 func (m *jobManager) summaries() []*fleetgrpc.JobSummary {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	out := make([]*fleetgrpc.JobSummary, 0, len(m.active))
 	for _, j := range m.active {
-		out = append(out, j.summary)
+		out = append(out, j.snapshot())
 	}
+	m.mu.Unlock()
+	sort.Slice(out, func(a, b int) bool {
+		ta, tb := out[a].GetStartedAt().AsTime(), out[b].GetStartedAt().AsTime()
+		if !ta.Equal(tb) {
+			return ta.Before(tb)
+		}
+		return out[a].GetJobId() < out[b].GetJobId()
+	})
 	return out
+}
+
+// activeJobs is the Watch ActiveJobs set: every in-flight job's summary.
+func (m *jobManager) activeJobs() *fleetgrpc.ActiveJobs {
+	return &fleetgrpc.ActiveJobs{Jobs: m.summaries()}
+}
+
+// snapshot is a copy of the job's summary, current step included.
+func (j *job) snapshot() *fleetgrpc.JobSummary {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return proto.Clone(j.summary).(*fleetgrpc.JobSummary)
+}
+
+// currentStep is the step the job last reported.
+func (j *job) currentStep() fleetgrpc.JobStep {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.summary.GetCurrentStep()
 }
 
 // emit appends an event to the job history and fans it out to live subscribers.
 // The non-blocking send under the lock can't race a closeSubs (also locked), so
-// it never sends on a closed channel; a full buffer drops (coarse jobs — a few
-// events — never fill the 64-slot buffer, and a re-subscribe always replays the
-// full history).
+// it never sends on a closed channel; a full buffer drops (a subscriber that
+// falls behind a burst of log lines misses some, and relay still delivers the
+// JobDone). History keeps every event but JobLog, of which it keeps the
+// jobLogHistory most recent, so a re-subscribe replays the whole progress.
 func (j *job) emit(ev *fleetgrpc.JobEvent) {
 	j.mu.Lock()
-	defer j.mu.Unlock()
 	j.history = append(j.history, ev)
+	if ev.GetLog() != nil {
+		j.logEvents++
+		if j.logEvents > jobLogHistory {
+			j.dropOldestLogLocked()
+		}
+	}
 	if ev.GetDone() != nil {
 		j.done = true
 	}
-	if p := ev.GetProgress(); p != nil {
+	stepChanged := false
+	if p := ev.GetProgress(); p != nil && p.GetStep() != j.summary.GetCurrentStep() {
 		j.summary.CurrentStep = p.GetStep()
+		stepChanged = true
 	}
 	for ch := range j.subs {
 		select {
 		case ch <- ev:
 		default:
+		}
+	}
+	j.mu.Unlock()
+	if stepChanged && j.onChange != nil {
+		j.onChange()
+	}
+}
+
+// dropOldestLogLocked removes the oldest JobLog event from the history.
+func (j *job) dropOldestLogLocked() {
+	for i, ev := range j.history {
+		if ev.GetLog() != nil {
+			j.history = append(j.history[:i], j.history[i+1:]...)
+			j.logEvents--
+			return
 		}
 	}
 }
@@ -413,6 +494,12 @@ func relay(j *job, stream interface {
 			return stream.Context().Err()
 		case ev, ok := <-ch:
 			if !ok {
+				// The job finished. Its JobDone can have been dropped from a
+				// full buffer (a burst of log lines); the stream's contract
+				// ends on one, so send it from the history.
+				if d := j.outcome(); d != nil {
+					return stream.Send(&fleetgrpc.JobEvent{JobId: j.summary.GetJobId(), Event: &fleetgrpc.JobEvent_Done{Done: d}})
+				}
 				return nil
 			}
 			if err := stream.Send(ev); err != nil {
@@ -546,8 +633,10 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, fleetName, instanceName, time.Now())
 	j.target = protoconv.DeployTargetToProto(target)
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
-		ctx := gitutil.WithHostKeyPrompt(j.ctx, s.gitHostKeys.ask)
+		plog := openProvisioningLog(j, fleetName, instanceName, "create")
+		ctx := backend.WithJobLog(gitutil.WithHostKeyPrompt(j.ctx, s.gitHostKeys.ask), plog)
 		err := jobRunCreate(ctx, fleetName, instanceName, remote, req.GetBranch(), req.GetVerbose(), target.Backend)
+		plog.finish(err)
 		return loadInstanceSnapshot(fleetName, instanceName), nil, err
 	})
 	return j, nil
@@ -661,7 +750,9 @@ func (s *service) startCloneInstanceJob(req *fleetgrpc.CloneInstanceRequest) (*j
 
 	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_CLONE_INSTANCE, fleetName, destName, time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
-		err := jobRunClone(j.ctx, fleetName, srcName, destName, false)
+		plog := openProvisioningLog(j, fleetName, destName, "clone of "+srcName)
+		err := jobRunClone(backend.WithJobLog(j.ctx, plog), fleetName, srcName, destName, false)
+		plog.finish(err)
 		return loadInstanceSnapshot(fleetName, destName), nil, err
 	})
 	return j, nil
@@ -763,7 +854,9 @@ func (s *service) startRebuildInstanceJob(req *fleetgrpc.RebuildInstanceRequest)
 
 	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_REBUILD_INSTANCE, fleetName, instanceName, time.Now())
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
-		err := jobRunRebuild(j.ctx, fleetName, instanceName)
+		plog := openProvisioningLog(j, fleetName, instanceName, "rebuild")
+		err := jobRunRebuild(backend.WithJobLog(j.ctx, plog), fleetName, instanceName)
+		plog.finish(err)
 		return loadInstanceSnapshot(fleetName, instanceName), nil, err
 	})
 	return j, nil
@@ -903,6 +996,7 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 				warnings = append(warnings, fmt.Sprintf("remove workspace %s: %v", t.workspaceDir, err))
 			}
 		}
+		removeCreationLog(fleetName, t.name)
 	}
 
 	// Fleet-level teardown: once every instance is down, remove the fleet's

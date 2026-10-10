@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetlaunch"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
@@ -108,12 +109,14 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 		setFailed(fleetName, destInstance, err)
 		return err
 	}
+	backend.ReportStep(ctx, fleet.StepCopyWorkspace, "from "+srcInstance)
 	if err := copyWorkspaceTree(ctx, src.WorkspaceDir, destWorkspaceDir); err != nil {
 		err = cancelledOr(ctx, err)
 		setFailed(fleetName, destInstance, err)
 		return err
 	}
 
+	backend.ReportStep(ctx, fleet.StepResolveMounts, "")
 	resolvedMounts, err := resolveCustomMounts(instanceBackend, fleetName)
 	if err != nil {
 		setFailed(fleetName, destInstance, err)
@@ -129,7 +132,7 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 	if instanceBackend.SupportsCustomMounts() {
 		mount, err := controlMount(fleetName, destInstance)
 		if err != nil {
-			state.WriteWarn(fleetName, destInstance, fmt.Sprintf("control mount: %v", err))
+			provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("control mount: %v", err))
 		} else {
 			resolvedMounts.Mounts = append(resolvedMounts.Mounts, mount)
 		}
@@ -138,7 +141,7 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 	// Bind the fleet's shared buildkit socket into the clone too (ensuring the
 	// server is up), so the clone shares the same build cache. Non-fatal.
 	if mount, ok, err := prepareBuildkitMount(instanceBackend, fleetName); err != nil {
-		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("buildkit server: %v", err))
+		provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("buildkit server: %v", err))
 	} else if ok {
 		resolvedMounts.Mounts = append(resolvedMounts.Mounts, mount)
 	}
@@ -147,6 +150,7 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 		setFailed(fleetName, destInstance, err)
 		return err
 	}
+	backend.ReportStep(ctx, fleet.StepBackendClone, "from "+srcInstance)
 	result, err := instanceBackend.Clone(src.ContainerID, destWorkspaceDir, resolvedMounts.Mounts)
 	if err != nil {
 		setFailed(fleetName, destInstance, err)
@@ -165,26 +169,32 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 	// which is cheap (small file, one exec) and also re-stamps
 	// FLEET_INSTANCE_NAME with the clone's own name rather than the
 	// source's. Non-fatal like in Run.
+	backend.ReportStep(ctx, fleet.StepStageFleetLaunch, "")
 	if _, err := fleetlaunch.EnsureFresh(instanceBackend, destWorkspaceDir, nil); err != nil {
-		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("stage fleet-launch: %v", err))
+		provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("stage fleet-launch: %v", err))
 	}
+	backend.ReportStep(ctx, fleet.StepStageFleetRC, "")
 	if err := fleetlaunch.EnsureFleetRC(instanceBackend, destWorkspaceDir, homeDirForFleet(fleetName), destInstance); err != nil {
-		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("stage fleet.rc: %v", err))
+		provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("stage fleet.rc: %v", err))
 	}
 
 	// Materialise post-clone symlinks the same way Up does so agent
 	// state mounts (e.g. ~/.claude.json) are re-linked inside the clone.
 	// Non-fatal: surface as a warning if it fails.
+	if len(resolvedMounts.Symlinks) > 0 {
+		backend.ReportStep(ctx, fleet.StepApplyMountSymlinks, "")
+	}
 	if err := applyMountSymlinks(instanceBackend, destWorkspaceDir, resolvedMounts.Symlinks); err != nil {
-		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("setting up agentic mount symlinks: %v", err))
+		provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("setting up agentic mount symlinks: %v", err))
 	}
 
 	// Re-point the clone's docker buildx at the fleet's shared buildkit server.
 	// The committed image may carry the source's builder config; the
 	// remove-then-create in ConfigureInstanceBuildx makes this idempotent.
 	// Non-fatal, and a silent no-op without docker/buildx.
+	backend.ReportStep(ctx, fleet.StepConfigureCaches, "")
 	if err := configureBuildkit(instanceBackend, fleetName, destWorkspaceDir); err != nil {
-		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("configure buildkit buildx: %v", err))
+		provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("configure buildkit buildx: %v", err))
 	}
 
 	// Wire the clone into the fleet's shared deb/image caches the same way Run
@@ -192,12 +202,13 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 	// The committed image may carry the source's apt/docker config; the writes
 	// are idempotent. Best-effort, silent no-op without apt / a local dockerd.
 	if err := setupDebCache(instanceBackend, fleetName, result.ContainerID, destWorkspaceDir); err != nil {
-		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("deb cache: %v", err))
+		provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("deb cache: %v", err))
 	}
 	if err := setupImageCache(instanceBackend, fleetName, destInstance, result.ContainerID, destWorkspaceDir); err != nil {
-		state.WriteWarn(fleetName, destInstance, fmt.Sprintf("image cache: %v", err))
+		provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("image cache: %v", err))
 	}
 
+	backend.ReportStep(ctx, fleet.StepMarkRunning, "")
 	if err := commitRunning(ctx, instanceBackend, fleetName, destInstance, result.ContainerID); err != nil {
 		return err
 	}
@@ -223,7 +234,7 @@ func copyWorkspaceTree(ctx context.Context, src, dest string) error {
 	cmd := exec.CommandContext(ctx, "cp", "-a", src+"/.", dest+"/")
 	var buf bytes.Buffer
 	cmd.Stdout = io.MultiWriter(os.Stdout, &buf)
-	cmd.Stderr = io.MultiWriter(os.Stderr, &buf)
+	cmd.Stderr = io.MultiWriter(stepOutput(ctx), &buf)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("cp -a %s -> %s: %w\n%s", src, dest, err, buf.String())
 	}

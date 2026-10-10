@@ -249,12 +249,13 @@ func repoFromRemote(remoteURL string) string {
 }
 
 // logsCommand returns an *exec.Cmd for viewing instance logs.
-// It always shows the creation log file first (devcontainer up output),
-// then appends container runtime logs for running instances.
+// It always shows the creation log file first (the latest provisioning job's
+// output, steps and warnings, which the daemon writes as the job runs), then
+// appends container runtime logs for running instances.
 // Output is always followed by a "press Enter" prompt so the user
 // has time to read before the TUI redraws.
 func logsCommand(fleetName string, instance *fleet.Instance) *exec.Cmd {
-	logPath := filepath.Join(fleetpaths.Dir(), "logs", fleetName+"-"+instance.Name+".log")
+	logPath := fleetpaths.InstanceCreationLogPath(fleetName, instance.Name)
 	creationLog := fmt.Sprintf("cat %s 2>/dev/null", shQuote(logPath))
 
 	var inner string

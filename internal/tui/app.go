@@ -103,6 +103,10 @@ type model struct {
 	spinner      spinner.Model
 	agentSpinner spinner.Model   // pulse throbber rendered next to running agents' instance names
 	creating     map[string]bool // "fleet/instance" keys currently being created
+	// jobSteps is the step each in-flight provisioning job is on, by rtKey,
+	// from the daemon's pushed ActiveJobs (job_steps.go). nil until the first
+	// push, and against a daemon that predates it.
+	jobSteps map[string]fleet.JobStep
 
 	daemonRestarting bool // true while the settings "Restart daemon" action is in flight
 
@@ -988,6 +992,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.micSources = msg.sources
 		m.adoptMicSettings(msg.sources.GetSettings())
+		return m, spinCmd
+
+	case activeJobsMsg:
+		if msg.gen == m.watchGen {
+			m.jobSteps = jobStepsFrom(msg.jobs)
+		}
 		return m, spinCmd
 
 	case outputTargetsMsg:

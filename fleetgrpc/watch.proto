@@ -19,10 +19,10 @@ option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
 // WatchRequest opens a subscription.
 //
 // include_initial_state: emit one StateChanged snapshot, one RuntimeChanged
-// snapshot (if subscribe_runtime), and one JobStarted per in-flight job up
-// front — all taken in the SAME model-loop turn that registers the subscriber,
-// so they reflect every mutation up to that instant and arrive before any live
-// event.
+// snapshot (if subscribe_runtime), and one ActiveJobs set of the in-flight jobs
+// up front — all taken in the SAME model-loop turn that registers the
+// subscriber, so they reflect every mutation up to that instant and arrive
+// before any live event.
 //
 // subscribe_runtime: opt in to the high-frequency InstanceRuntime stream
 // (RuntimeChanged). The server only runs the expensive backend pollers (stats,
@@ -52,7 +52,9 @@ message WatchRequest {
 //
 // The Job* variants surface job activity to a watcher that did not itself start
 // the job. JobStarted is here (not only on the job RPC) so a Watch-only client
-// learns a job's identity/kind/target/started_at.
+// learns a job's identity/kind/target/started_at. The server does not send the
+// per-job variants on Watch; ActiveJobs carries every in-flight job's summary
+// (kind, target, current step) instead.
 //
 // BrowserOpen is pushed when the server's per-instance control listener receives
 // a browser.open envelope from inside a container; the SERVER owns the control
@@ -82,7 +84,18 @@ message Event {
     FileCopy file_copy = 9;
     MicSources mic_sources = 10;
     OutputTargets output_targets = 11;
+    // 12 is kept for the Kubernetes cluster-health event.
+    ActiveJobs active_jobs = 13;
   }
+}
+
+// ActiveJobs is every in-flight job, as GetStateReply.active_jobs lists them,
+// pushed whenever a job starts, reaches another step (current_step) or ends.
+// Server-owned and conflatable like MicSources: each push replaces the last
+// one whole, and the initial snapshot carries the current set (empty when no
+// job runs), so a watcher can show the step every provisioning row is on.
+message ActiveJobs {
+  repeated JobSummary jobs = 1;
 }
 
 // RemoteMcpConn is the connection state of the outbound MCP gateway tunnel.

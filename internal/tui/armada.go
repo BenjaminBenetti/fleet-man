@@ -830,6 +830,7 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	syncAudioFromConfig(m.config)
 	clear(m.runtime)
 	clear(m.creating)
+	m.jobSteps = nil
 	m.remoteMcpStatus = nil
 	m.micSources = nil // the other daemon has its own set of microphone clients
 	m.outputTargets = nil
