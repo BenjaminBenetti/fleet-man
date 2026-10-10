@@ -143,6 +143,18 @@ message RemoteMcpStatus {
   // ssh_error carries the SSH listener's last failure (bind error, missing
   // token) while it is enabled but not listening; empty otherwise.
   string ssh_error = 8;
+  // public_registry is the registry prefix the gateway assigned this daemon
+  // for image delivery ("<host[:port]>/<registry id>"; an image is
+  // <prefix>/devcontainer@<digest>). Empty while Enable Image Registry is off
+  // or the gateway does not offer it.
+  string public_registry = 9;
+  // registry_error says why the gateway serves no images for this daemon
+  // while Enable Image Registry is on ("the gateway does not offer image
+  // delivery: no --session-key", "the gateway predates image delivery",
+  // "the gateway tunnel is connecting"); empty when it serves them or the
+  // toggle is off. The Settings row and the cluster editor's greyed-out
+  // Gateway option show it.
+  string registry_error = 10;
 }
 
 // StateChanged is pushed whenever the authoritative PERSISTED model mutates. It

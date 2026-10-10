@@ -110,7 +110,7 @@ func (s *service) SetConfig(_ context.Context, req *fleetgrpc.SetConfigRequest) 
 	// The remote-gateway fields are the ones whose effects outlive this RPC (the
 	// tunnel supervisor reacts to them), so call them out; the manager logs the
 	// resulting connection transitions itself.
-	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "remoteFleet", saved.RemoteMcpSettings.FleetEnabled, "webhook", saved.RemoteMcpSettings.WebhookEnabled, "gateway", saved.RemoteMcpSettings.GatewayURL, "mic", saved.MicSettings.Enabled)
+	flog.Info("config updated", "remoteMcp", saved.RemoteMcpSettings.Enabled, "remoteFleet", saved.RemoteMcpSettings.FleetEnabled, "webhook", saved.RemoteMcpSettings.WebhookEnabled, "imageRegistry", saved.RemoteMcpSettings.ImageRegistryEnabled, "gateway", saved.RemoteMcpSettings.GatewayURL, "mic", saved.MicSettings.Enabled)
 
 	return &fleetgrpc.SetConfigReply{Config: protoconv.ConfigToProto(saved), OutputRevision: outputRevision}, nil
 }
@@ -130,7 +130,7 @@ func (s *service) reconcileRemote(rm state.RemoteMcpSettings) {
 		s.agent.maybeRedirect()
 	}
 	if s.remote != nil {
-		s.remote.Reconcile(rm.Enabled, rm.FleetViaGateway(), rm.WebhookEnabled, rm.GatewayURL)
+		s.remote.Reconcile(rm.Enabled, rm.FleetViaGateway(), rm.WebhookEnabled, rm.ImageRegistryEnabled, rm.GatewayURL)
 	}
 	if s.sshListen != nil {
 		s.sshListen.Reconcile(rm.FleetViaSSH())

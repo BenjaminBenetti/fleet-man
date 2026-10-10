@@ -95,6 +95,12 @@ type RegisterReply struct {
 	// set when the registry feature is negotiated; empty otherwise (incl. from
 	// an old gateway). A pull secret is keyed by the host[:port] part.
 	PublicRegistry string `json:"public_registry,omitempty"`
+	// RegistryOff says why a gateway that knows the registry feature does not
+	// offer it ("no --session-key", "--public-url is not https", "--public-url
+	// has a path prefix"), set only when fleetd requested FeatureRegistry and
+	// did not get it. Empty from an old gateway that predates the feature, so
+	// fleetd can tell "too old" from "configured without it".
+	RegistryOff string `json:"registry_off,omitempty"`
 	// SessionToken is a JWT, signed with the gateway's session key, encoding
 	// this session's ids. fleetd persists it with the session id and presents
 	// both on reconnect, so the session (and its public URL) survives a gateway

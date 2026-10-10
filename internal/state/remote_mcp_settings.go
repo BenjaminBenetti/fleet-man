@@ -48,6 +48,15 @@ type RemoteMcpSettings struct {
 	// Enabled/FleetEnabled — all three ride the SAME outbound tunnel.
 	WebhookEnabled bool `json:"webhook_enabled,omitempty"`
 
+	// ImageRegistryEnabled ("Enable Image Registry") serves the images this
+	// daemon builds for Kubernetes clusters set to Gateway delivery through
+	// the gateway, at <public host>/<registry id>/devcontainer@<digest>
+	// (FeatureRegistry, internal/k8s/imageserve). When off, fleetd does not
+	// negotiate the registry tunnel feature, so the gateway 404s the /v2/
+	// route for this daemon. Off by default; like the other three it rides
+	// the same outbound tunnel, and on its own it brings that tunnel up.
+	ImageRegistryEnabled bool `json:"image_registry_enabled,omitempty"`
+
 	// FleetMode selects HOW remote fleet control is reached: FleetModeGateway
 	// (the default; "" reads as gateway) rides the gateway tunnel, FleetModeSSH
 	// serves the token-gated gRPC server on a loopback port for an SSH tunnel.
@@ -79,7 +88,8 @@ func (s RemoteMcpSettings) FleetViaGateway() bool {
 }
 
 // TunnelDesired reports whether the outbound gateway tunnel should be up: any of
-// the three gateway surfaces (MCP / gateway-mode gRPC / webhook) is enabled AND
+// the four gateway surfaces (MCP / gateway-mode gRPC / webhook / image
+// registry) is enabled AND
 // a gateway URL is configured. It is the single source of truth for that
 // predicate — the manager's desiredState.on() (internal/server/remote/manager.go)
 // delegates here for the dial decision, and the TUI's remote-connection
@@ -88,5 +98,5 @@ func (s RemoteMcpSettings) FleetViaGateway() bool {
 // rather than showing a misleading "connecting" state forever. Remote fleet in
 // SSH mode does not want the tunnel at all.
 func (s RemoteMcpSettings) TunnelDesired() bool {
-	return (s.Enabled || s.FleetViaGateway() || s.WebhookEnabled) && strings.TrimSpace(s.GatewayURL) != ""
+	return (s.Enabled || s.FleetViaGateway() || s.WebhookEnabled || s.ImageRegistryEnabled) && strings.TrimSpace(s.GatewayURL) != ""
 }

@@ -163,7 +163,7 @@ func TestConfigWirePlacement(t *testing.T) {
 	pinArity[state.DotfilesSettings](t, 3)
 	pinArity[state.CodespacesSettings](t, 3)
 	pinArity[state.BrowserSettings](t, 2)
-	pinArity[state.RemoteMcpSettings](t, 5)
+	pinArity[state.RemoteMcpSettings](t, 6)
 	pinArity[state.MicSettings](t, 3)
 	pinArity[state.OutputSettings](t, 3)
 	pinArity[state.ThemeSettings](t, 1)
@@ -224,7 +224,7 @@ func TestConfigWirePlacement(t *testing.T) {
 		t.Fatalf("default kube cluster wire placement wrong: %q", pc.GetDefaultKubeCluster())
 	}
 
-	// RemoteMcp's three bools, one per iteration (same rationale as the
+	// RemoteMcp's four bools, one per iteration (same rationale as the
 	// FleetSettings toggles).
 	rmBools := []struct {
 		name string
@@ -234,6 +234,7 @@ func TestConfigWirePlacement(t *testing.T) {
 		{"Enabled", func(r *state.RemoteMcpSettings) { r.Enabled = true }, (*fleetgrpc.RemoteMcpSettings).GetEnabled},
 		{"FleetEnabled", func(r *state.RemoteMcpSettings) { r.FleetEnabled = true }, (*fleetgrpc.RemoteMcpSettings).GetFleetEnabled},
 		{"WebhookEnabled", func(r *state.RemoteMcpSettings) { r.WebhookEnabled = true }, (*fleetgrpc.RemoteMcpSettings).GetWebhookEnabled},
+		{"ImageRegistryEnabled", func(r *state.RemoteMcpSettings) { r.ImageRegistryEnabled = true }, (*fleetgrpc.RemoteMcpSettings).GetImageRegistryEnabled},
 	}
 	for _, rb := range rmBools {
 		var c state.Config

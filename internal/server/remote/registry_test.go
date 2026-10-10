@@ -105,26 +105,46 @@ func TestRegistryPrefixAndReasons(t *testing.T) {
 	}
 
 	m, ch := newM()
-	serveAttempt(t, m, ch, desiredState{mcp: true, registry: true, gatewayURL: gatewayURL})
+	st := serveAttempt(t, m, ch, desiredState{mcp: true, registry: true, gatewayURL: gatewayURL})
 	if p, why := m.Registry(); p != "" || why != whyRegistryNotWired {
 		t.Fatalf("no listener: %q %q", p, why)
 	}
+	if st.GetRegistryError() != whyRegistryNotWired || st.GetPublicRegistry() != "" {
+		t.Fatalf("no listener: status %v", st)
+	}
 
 	m, ch = newM(WithRegistryListener(registryServer(t)))
-	serveAttempt(t, m, ch, desiredState{mcp: true, gatewayURL: gatewayURL})
+	st = serveAttempt(t, m, ch, desiredState{mcp: true, gatewayURL: gatewayURL})
 	if p, why := m.Registry(); p != "" || why != whyRegistryOff {
 		t.Fatalf("not wanted: %q %q", p, why)
+	}
+	if st.GetRegistryError() != "" || st.GetPublicRegistry() != "" {
+		t.Fatalf("a status while the registry is off names it: %v", st)
 	}
 
 	var mu sync.Mutex
 	var emitted []string
+	type told struct{ prefix, why string }
+	var states []told
 	m, ch = newM(WithRegistryListener(registryServer(t)), WithRegistryChange(func(p string) {
 		mu.Lock()
 		defer mu.Unlock()
 		emitted = append(emitted, p)
+	}), WithRegistryState(func(p, why string) {
+		mu.Lock()
+		defer mu.Unlock()
+		states = append(states, told{p, why})
 	}))
-	serveAttempt(t, m, ch, desiredState{mcp: true, registry: true, gatewayURL: gatewayURL})
+	st = serveAttempt(t, m, ch, desiredState{mcp: true, registry: true, gatewayURL: gatewayURL})
 	p, why := m.Registry()
+	if st.GetPublicRegistry() != p || st.GetRegistryError() != "" {
+		t.Fatalf("connected status %v, want public registry %q", st, p)
+	}
+	mu.Lock()
+	if len(states) != 2 || states[0] != (told{"", whyRegistryPending}) || states[1] != (told{p, ""}) {
+		t.Fatalf("registry states told %+v", states)
+	}
+	mu.Unlock()
 	if !strings.HasPrefix(p, "gw.example.com/") || len(p) != len("gw.example.com/")+64 || why != "" {
 		t.Fatalf("negotiated: %q %q", p, why)
 	}
@@ -171,9 +191,13 @@ func TestRegistryNotOfferedByTheGateway(t *testing.T) {
 	statusCh := make(chan *fleetgrpc.RemoteMcpStatus, 64)
 	m := NewManager(mcp.port(t), "vtest", func(st *fleetgrpc.RemoteMcpStatus) { statusCh <- st },
 		WithDialFunc(plainRegisterDial(grpcLn.Addr().String())), WithRegistryListener(registryServer(t)))
-	serveAttempt(t, m, statusCh, desiredState{mcp: true, registry: true, gatewayURL: "https://gw.example.com"})
-	if p, why := m.Registry(); p != "" || why != whyRegistryOffered {
-		t.Fatalf("a gateway without the feature: %q %q", p, why)
+	st := serveAttempt(t, m, statusCh, desiredState{mcp: true, registry: true, gatewayURL: "https://gw.example.com"})
+	want := whyRegistryNotOffered + "no --session-key"
+	if p, why := m.Registry(); p != "" || why != want {
+		t.Fatalf("a gateway without the feature: %q %q, want %q", p, why, want)
+	}
+	if st.GetRegistryError() != want {
+		t.Fatalf("the connected status names %q, want %q", st.GetRegistryError(), want)
 	}
 	m.WarmRegistry()
 	time.Sleep(200 * time.Millisecond)
@@ -316,14 +340,13 @@ func TestRegistryAttachRetriesRefusalsAndDrops(t *testing.T) {
 	}
 }
 
-func TestReconcileKeepsTheRegistryFlag(t *testing.T) {
+func TestReconcileCarriesTheRegistryFlag(t *testing.T) {
 	m := NewManager(1, "vtest", func(*fleetgrpc.RemoteMcpStatus) {})
-	m.ReconcileRegistry(true)
-	m.Reconcile(true, false, false, "https://gw.example.com")
+	m.Reconcile(true, false, false, true, "https://gw.example.com")
 	if d := m.desired; !d.registry || !d.mcp {
 		t.Fatalf("desired %+v", d)
 	}
-	m.ReconcileRegistry(false)
+	m.Reconcile(true, false, false, false, "https://gw.example.com")
 	if d := m.desired; d.registry || !d.mcp {
 		t.Fatalf("desired %+v", d)
 	}
@@ -332,10 +355,58 @@ func TestReconcileKeepsTheRegistryFlag(t *testing.T) {
 	case <-m.wake:
 	default:
 	}
-	m.ReconcileRegistry(false)
+	m.Reconcile(true, false, false, false, "https://gw.example.com")
 	select {
 	case <-m.wake:
-		t.Fatal("an unchanged ReconcileRegistry woke the supervisor")
+		t.Fatal("an unchanged Reconcile woke the supervisor")
 	default:
+	}
+}
+
+// The image registry alone brings the tunnel up (TunnelDesired includes
+// it), and asks for nothing but FeatureRegistry.
+func TestRegistryAloneWantsTheTunnel(t *testing.T) {
+	d := desiredState{registry: true, gatewayURL: "https://gw.example.com"}
+	if !d.on() {
+		t.Fatal("Enable Image Registry alone must bring the tunnel up")
+	}
+	if (desiredState{registry: true}).on() {
+		t.Fatal("no tunnel without a gateway URL")
+	}
+	m := NewManager(1, "vtest", func(*fleetgrpc.RemoteMcpStatus) {}, WithRegistryListener(NewChanListener()))
+	if got := m.features(d); len(got) != 1 || got[0] != tunnel.FeatureRegistry {
+		t.Fatalf("features %v, want only the registry", got)
+	}
+}
+
+// The reasons for having no registry name what to change: a gateway too old
+// to know the feature (it gives no reason of its own), one configured
+// without it (its reason), no gateway, or the toggle.
+func TestRegistryReasonsNameTheCause(t *testing.T) {
+	m := NewManager(1, "vtest", func(*fleetgrpc.RemoteMcpStatus) {}, WithRegistryListener(NewChanListener()))
+	on := desiredState{registry: true, gatewayURL: "https://gw.example.com"}
+	for _, tc := range []struct {
+		name string
+		set  func()
+		want string
+	}{
+		{"old gateway", func() { m.registryNotNegotiated(on, "") }, whyRegistryTooOld},
+		{"no session key", func() { m.registryNotNegotiated(on, "no --session-key") }, whyRegistryNotOffered + "no --session-key"},
+		{"path prefix", func() { m.registryNotNegotiated(on, "--public-url has a path prefix") }, whyRegistryNotOffered + "--public-url has a path prefix"},
+		{"toggle off", func() {
+			m.registryNotNegotiated(desiredState{mcp: true, gatewayURL: on.gatewayURL}, "no --session-key")
+		}, whyRegistryOff},
+		{"tunnel off: toggle", func() { m.registryTunnelOff(desiredState{gatewayURL: on.gatewayURL}) }, whyRegistryOff},
+		{"tunnel off: no gateway", func() { m.registryTunnelOff(desiredState{registry: true}) }, whyRegistryNoGateway},
+	} {
+		tc.set()
+		if p, why := m.Registry(); p != "" || why != tc.want {
+			t.Errorf("%s: %q %q, want %q", tc.name, p, why, tc.want)
+		}
+	}
+	unwired := NewManager(1, "vtest", func(*fleetgrpc.RemoteMcpStatus) {})
+	unwired.registryTunnelOff(desiredState{registry: true})
+	if _, why := unwired.Registry(); why != whyRegistryNotWired {
+		t.Errorf("no listener: %q", why)
 	}
 }

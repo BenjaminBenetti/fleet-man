@@ -116,7 +116,7 @@ func webhookStackWith(t *testing.T, triggers ...fleet.Trigger) (publicWebhookBas
 		remote.WithWebhookListener(webhookLis),
 	)
 	go mgr.Run(ctx)
-	mgr.Reconcile(false, false, true, "https://gw.example.com")
+	mgr.Reconcile(false, false, true, false, "https://gw.example.com")
 
 	deadline := time.After(10 * time.Second)
 	for {

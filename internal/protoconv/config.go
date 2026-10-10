@@ -25,6 +25,9 @@ func ConfigToProto(c *configutil.Config) *fleetgrpc.Config {
 			FleetEnabled:   c.RemoteMcpSettings.FleetEnabled,
 			WebhookEnabled: c.RemoteMcpSettings.WebhookEnabled,
 			FleetMode:      c.RemoteMcpSettings.FleetMode,
+			// Always present: absence is how the server tells a client
+			// that predates the field.
+			ImageRegistryEnabled: boolptr(c.RemoteMcpSettings.ImageRegistryEnabled),
 		},
 		DefaultBackend:     BackendToProto(fleet.BackendType(c.DefaultBackend)),
 		DefaultKubeCluster: c.DefaultKubeCluster,
@@ -147,6 +150,10 @@ func ConfigFromProto(pc *fleetgrpc.Config, base *configutil.Config) *configutil.
 		c.RemoteMcpSettings.FleetEnabled = rm.GetFleetEnabled()
 		c.RemoteMcpSettings.WebhookEnabled = rm.GetWebhookEnabled()
 		c.RemoteMcpSettings.FleetMode = rm.GetFleetMode()
+		// Absent = sent by a client built before the field: keep base's.
+		if rm.ImageRegistryEnabled != nil {
+			c.RemoteMcpSettings.ImageRegistryEnabled = rm.GetImageRegistryEnabled()
+		}
 	}
 
 	if mic := pc.GetMic(); mic != nil {

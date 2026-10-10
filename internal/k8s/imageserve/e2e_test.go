@@ -293,8 +293,7 @@ func startFleetd(t testing.TB, o fleetdOptions) *fleetd {
 		defer close(done)
 		f.mgr.Run(ctx)
 	}()
-	f.mgr.ReconcileRegistry(true)
-	f.mgr.Reconcile(true, o.grpc, false, o.gatewayURL)
+	f.mgr.Reconcile(true, o.grpc, false, true, o.gatewayURL)
 	var once sync.Once
 	f.stop = func() {
 		once.Do(func() {
@@ -463,7 +462,7 @@ func TestEndToEndPullThroughTheGateway(t *testing.T) {
 
 	// The daemon turns the registry off: its session no longer has the
 	// feature, and its registry id 404s like an unknown one.
-	f.mgr.ReconcileRegistry(false)
+	f.mgr.Reconcile(true, false, false, false, "https://gw.example.com")
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		resp, body = get(t, http.MethodHead, base+"manifests/"+a.Manifest, user, pass)

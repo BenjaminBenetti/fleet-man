@@ -526,7 +526,19 @@ type RemoteMcpStatus struct {
 	SshAddr string `protobuf:"bytes,7,opt,name=ssh_addr,json=sshAddr,proto3" json:"ssh_addr,omitempty"`
 	// ssh_error carries the SSH listener's last failure (bind error, missing
 	// token) while it is enabled but not listening; empty otherwise.
-	SshError      string `protobuf:"bytes,8,opt,name=ssh_error,json=sshError,proto3" json:"ssh_error,omitempty"`
+	SshError string `protobuf:"bytes,8,opt,name=ssh_error,json=sshError,proto3" json:"ssh_error,omitempty"`
+	// public_registry is the registry prefix the gateway assigned this daemon
+	// for image delivery ("<host[:port]>/<registry id>"; an image is
+	// <prefix>/devcontainer@<digest>). Empty while Enable Image Registry is off
+	// or the gateway does not offer it.
+	PublicRegistry string `protobuf:"bytes,9,opt,name=public_registry,json=publicRegistry,proto3" json:"public_registry,omitempty"`
+	// registry_error says why the gateway serves no images for this daemon
+	// while Enable Image Registry is on ("the gateway does not offer image
+	// delivery: no --session-key", "the gateway predates image delivery",
+	// "the gateway tunnel is connecting"); empty when it serves them or the
+	// toggle is off. The Settings row and the cluster editor's greyed-out
+	// Gateway option show it.
+	RegistryError string `protobuf:"bytes,10,opt,name=registry_error,json=registryError,proto3" json:"registry_error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -613,6 +625,20 @@ func (x *RemoteMcpStatus) GetSshAddr() string {
 func (x *RemoteMcpStatus) GetSshError() string {
 	if x != nil {
 		return x.SshError
+	}
+	return ""
+}
+
+func (x *RemoteMcpStatus) GetPublicRegistry() string {
+	if x != nil {
+		return x.PublicRegistry
+	}
+	return ""
+}
+
+func (x *RemoteMcpStatus) GetRegistryError() string {
+	if x != nil {
+		return x.RegistryError
 	}
 	return ""
 }
@@ -915,7 +941,7 @@ const file_watch_proto_rawDesc = "" +
 	"\x04kind\"7\n" +
 	"\n" +
 	"ActiveJobs\x12)\n" +
-	"\x04jobs\x18\x01 \x03(\v2\x15.fleetgrpc.JobSummaryR\x04jobs\"\xad\x02\n" +
+	"\x04jobs\x18\x01 \x03(\v2\x15.fleetgrpc.JobSummaryR\x04jobs\"\xfd\x02\n" +
 	"\x0fRemoteMcpStatus\x12.\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x18.fleetgrpc.RemoteMcpConnR\x05state\x12\x1d\n" +
 	"\n" +
@@ -925,7 +951,10 @@ const file_watch_proto_rawDesc = "" +
 	"\x0fgateway_version\x18\x05 \x01(\tR\x0egatewayVersion\x12,\n" +
 	"\x12public_webhook_url\x18\x06 \x01(\tR\x10publicWebhookUrl\x12\x19\n" +
 	"\bssh_addr\x18\a \x01(\tR\asshAddr\x12\x1b\n" +
-	"\tssh_error\x18\b \x01(\tR\bsshError\"6\n" +
+	"\tssh_error\x18\b \x01(\tR\bsshError\x12'\n" +
+	"\x0fpublic_registry\x18\t \x01(\tR\x0epublicRegistry\x12%\n" +
+	"\x0eregistry_error\x18\n" +
+	" \x01(\tR\rregistryError\"6\n" +
 	"\fStateChanged\x12&\n" +
 	"\x05state\x18\x01 \x01(\v2\x10.fleetgrpc.StateR\x05state\"F\n" +
 	"\x0eRuntimeChanged\x124\n" +

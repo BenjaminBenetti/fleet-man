@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/tunnel"
 	"github.com/hashicorp/yamux"
@@ -50,8 +51,11 @@ type registryState struct {
 	// live: prefix came from a registration of this run (else the session
 	// file's, while the tunnel connects).
 	live bool
-	// emitted is the prefix last passed to onRegistry.
-	emitted string
+	// emitted is the prefix last passed to onRegistry; toldPrefix and toldWhy
+	// what onRegistryState was last told (told: it was told anything).
+	emitted             string
+	toldPrefix, toldWhy string
+	told                bool
 	// warmAt is the last WarmRegistry.
 	warmAt time.Time
 	// attached reports a live registry connection; attaches counts them.
@@ -84,7 +88,7 @@ func (m *Manager) WarmRegistry() {
 }
 
 // setRegistry records the registry state and tells onRegistry of a changed
-// prefix.
+// prefix, and onRegistryState of a changed prefix or reason.
 func (m *Manager) setRegistry(gatewayURL, prefix, why string, live bool) {
 	m.regMu.Lock()
 	m.reg.gatewayURL, m.reg.prefix, m.reg.why, m.reg.live = gatewayURL, prefix, why, live
@@ -92,19 +96,30 @@ func (m *Manager) setRegistry(gatewayURL, prefix, why string, live bool) {
 	if emit {
 		m.reg.emitted = prefix
 	}
+	tell := m.onRegistryState != nil && (!m.reg.told || m.reg.toldPrefix != prefix || m.reg.toldWhy != why)
+	if tell {
+		m.reg.told, m.reg.toldPrefix, m.reg.toldWhy = true, prefix, why
+	}
 	m.regMu.Unlock()
 	if emit {
 		m.onRegistry(prefix)
 	}
+	if tell {
+		m.onRegistryState(prefix, why)
+	}
 }
 
-// Reasons Registry gives for having no prefix.
+// Reasons Registry gives for having no prefix. The cluster editor greys
+// Gateway delivery out with them, and Settings shows them beside Enable Image
+// Registry.
 const (
-	whyRegistryNotWired  = "image delivery through the gateway is not available in this daemon"
-	whyRegistryOff       = "Enable Image Registry is off"
-	whyRegistryOffered   = "the gateway does not offer image delivery (it predates it, runs without --session-key, or its --public-url is not https at the host root)"
-	whyRegistryPending   = "the gateway tunnel is connecting"
-	whyRegistryTunnelOff = "the gateway tunnel is off"
+	whyRegistryNotWired   = "image delivery through the gateway is not available in this daemon"
+	whyRegistryOff        = "Enable Image Registry is off"
+	whyRegistryNoGateway  = "fleetd has no gateway (set the Gateway URL in Settings)"
+	whyRegistryTooOld     = "the gateway predates image delivery (upgrade it)"
+	whyRegistryNotOffered = "the gateway does not offer image delivery: "
+	whyRegistryPending    = "the gateway tunnel is connecting"
+	whyRegistryTunnelOff  = "the gateway tunnel is off"
 )
 
 // registryConnecting updates the registry state as an attempt starts:
@@ -133,15 +148,52 @@ func (m *Manager) registryConnecting(d desiredState) {
 }
 
 // registryNotNegotiated records a registration without FeatureRegistry.
-func (m *Manager) registryNotNegotiated(d desiredState) {
-	why := whyRegistryOffered
+// off is the gateway's own reason (RegisterReply.RegistryOff): a gateway
+// that knows the feature says why it does not offer it, and one that does not
+// know it says nothing.
+func (m *Manager) registryNotNegotiated(d desiredState, off string) {
+	var why string
 	switch {
 	case m.registryLis == nil:
 		why = whyRegistryNotWired
 	case !d.registry:
 		why = whyRegistryOff
+	case off != "":
+		why = whyRegistryNotOffered + off
+	default:
+		why = whyRegistryTooOld
+	}
+	if m.registryLis != nil && d.registry {
+		flog.Warn("remote gateway serves no images for this daemon", "gateway", d.gatewayURL, "reason", why)
 	}
 	m.setRegistry(d.gatewayURL, "", why, true)
+}
+
+// registryTunnelOff records the registry state while the tunnel is off.
+func (m *Manager) registryTunnelOff(d desiredState) {
+	why := whyRegistryTunnelOff
+	switch {
+	case m.registryLis == nil:
+		why = whyRegistryNotWired
+	case !d.registry:
+		why = whyRegistryOff
+	case d.gatewayURL == "":
+		why = whyRegistryNoGateway
+	}
+	m.setRegistry(d.gatewayURL, "", why, false)
+}
+
+// emit publishes a status, stamped with the image registry's state while it
+// is wanted: the prefix the gateway assigned, or why there is none.
+func (m *Manager) emit(st *fleetgrpc.RemoteMcpStatus, d desiredState) {
+	if d.registry {
+		prefix, why := m.Registry()
+		st.PublicRegistry = prefix
+		if prefix == "" {
+			st.RegistryError = why
+		}
+	}
+	m.publish(st)
 }
 
 func (m *Manager) registryIdleTimeout() time.Duration {

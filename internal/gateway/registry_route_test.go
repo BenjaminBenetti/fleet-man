@@ -2,15 +2,20 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/tunnel"
 )
@@ -577,5 +582,58 @@ func TestNewOffersRegistry(t *testing.T) {
 	}
 	if got := off.supportedFeatures(); len(got) != len(gatewayFeatures) {
 		t.Fatalf("supported features %v, want %v", got, gatewayFeatures)
+	}
+}
+
+// A gateway that knows the registry feature but cannot offer it says why in
+// the reply of a registration that asked for it (and only then), so the
+// daemon's settings can name the cause instead of guessing.
+func TestGatewayRegistryOffReason(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{"no session key", Config{PublicURL: "https://gw.example.com"}, "no --session-key"},
+		{"plain http", Config{PublicURL: "http://gw.example.com", SessionKey: "k"}, "--public-url is not https"},
+		{"path prefix", Config{PublicURL: "https://gw.example.com/fleet", SessionKey: "k"}, "--public-url has a path prefix"},
+		{"offered", Config{PublicURL: "https://gw.example.com", SessionKey: "k"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.cfg.MaxSessions = 8
+			gw, err := New(tc.cfg)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			gw.log = slog.New(slog.NewTextHandler(io.Discard, nil))
+			publicLn, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			grpcLn, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			go func() { _ = gw.ServeListeners(ctx, publicLn, grpcLn) }()
+
+			asked := connectFake(t, grpcLn.Addr().String(), insecure.NewCredentials(),
+				tunnel.RegisterRequest{Features: []string{tunnel.FeatureRegistry, tunnel.FeatureWebhook}}, nil, mcpRoot)
+			if asked.reply.Error != "" {
+				t.Fatalf("register: %s", asked.reply.Error)
+			}
+			if asked.reply.RegistryOff != tc.want {
+				t.Fatalf("RegistryOff = %q, want %q", asked.reply.RegistryOff, tc.want)
+			}
+			if negotiated := tunnel.HasFeature(asked.reply.Features, tunnel.FeatureRegistry); negotiated != (tc.want == "") || negotiated != (asked.reply.PublicRegistry != "") {
+				t.Fatalf("features %v, public registry %q", asked.reply.Features, asked.reply.PublicRegistry)
+			}
+			notAsked := connectFake(t, grpcLn.Addr().String(), insecure.NewCredentials(),
+				tunnel.RegisterRequest{Features: []string{tunnel.FeatureWebhook}}, nil, mcpRoot)
+			if notAsked.reply.RegistryOff != "" {
+				t.Fatalf("a registration that did not ask for the registry got RegistryOff %q", notAsked.reply.RegistryOff)
+			}
+		})
 	}
 }

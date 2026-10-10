@@ -126,6 +126,11 @@ func (s *Server) bindTunnel(ctx context.Context, conn net.Conn, remote string) e
 	sess.registry.Store(registryOn)
 	if !registryOn {
 		reply.PublicRegistry = ""
+		if tunnel.HasFeature(req.Features, tunnel.FeatureRegistry) {
+			// Asked for and not offered: say why, so the daemon's settings
+			// can show it instead of guessing.
+			reply.RegistryOff = s.registryOff
+		}
 		// A re-registration that dropped the feature (Enable Image Registry
 		// turned off) leaves no use for a registry connection.
 		sess.closeRegistry()
