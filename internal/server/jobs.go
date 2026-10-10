@@ -524,7 +524,13 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		// remembered default, which a template fleet narrows to devcontainer
 		// (the only target that can consume a copied directory), as
 		// ListDeployTargets does. An explicit coder/codespaces still fails fast.
-		target = s.resolveTarget(req.GetBackend(), remote)
+		target = s.resolveTarget(req, remote)
+		// Refused before the record exists: a backend a new instance can't
+		// use (Kubernetes, until this build can run instances on a cluster)
+		// would otherwise leave a FAILED record behind.
+		if err := fleet.ValidateBackendType(target.Backend); err != nil {
+			return status.Error(codes.InvalidArgument, err.Error())
+		}
 		if err := validateTemplateRemote(remote, req.GetBranch(), target.Backend, wsDir); err != nil {
 			return err
 		}
@@ -539,6 +545,7 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 			CreatedAt:    time.Now(),
 			Status:       fleet.StatusCreating,
 			Backend:      target.Backend,
+			KubeCluster:  target.KubeCluster,
 			Branch:       req.GetBranch(),
 			Automated:    automated,
 		})
@@ -645,6 +652,9 @@ func (s *service) startCloneInstanceJob(req *fleetgrpc.CloneInstanceRequest) (*j
 		if req.NewDisplayName != nil && req.GetNewDisplayName() != "" {
 			display = req.GetNewDisplayName()
 		}
+		// A clone runs where its source does: the same backend and, on a
+		// cluster, the same connection. Its KubeKey is its own (the cluster
+		// backend assigns it), never the source's.
 		dest := &fleet.Instance{
 			Name:         destName,
 			DisplayName:  display,
@@ -653,6 +663,7 @@ func (s *service) startCloneInstanceJob(req *fleetgrpc.CloneInstanceRequest) (*j
 			CreatedAt:    time.Now(),
 			Status:       fleet.StatusCloning,
 			Backend:      src.Backend,
+			KubeCluster:  src.KubeCluster,
 			Tag:          src.Tag,
 			Color:        src.Color,
 			Branch:       src.Branch,

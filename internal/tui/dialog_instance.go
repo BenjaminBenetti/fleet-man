@@ -53,6 +53,8 @@ func backendTypeLabel(backendType fleet.BackendType) string {
 		return "Coder"
 	case fleet.BackendCodespaces:
 		return "Codespaces"
+	case fleet.BackendKubernetes:
+		return "Kubernetes"
 	default:
 		return "Devcontainer"
 	}

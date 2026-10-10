@@ -391,3 +391,19 @@ func TestFetchDaemonTools(t *testing.T) {
 		t.Fatalf("error: %+v", got)
 	}
 }
+
+// Every backend type has a label of its own: a new one must not show as a
+// second "Devcontainer".
+func TestBackendTypeLabelNamesEveryBackendType(t *testing.T) {
+	seen := map[string]fleet.BackendType{}
+	for _, backendType := range fleet.BackendTypes() {
+		label := backendTypeLabel(backendType)
+		if other, dup := seen[label]; dup {
+			t.Errorf("%q and %q share the label %q", other, backendType, label)
+		}
+		seen[label] = backendType
+	}
+	if got := backendTypeLabel(""); got != "Devcontainer" {
+		t.Errorf(`backendTypeLabel("") = %q, want Devcontainer`, got)
+	}
+}
