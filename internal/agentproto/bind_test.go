@@ -126,14 +126,21 @@ func TestForwardingBindAppliesTheAgentsDestinationConstraints(t *testing.T) {
 	if err := BindAsForwarded(bound, key); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
-	keys := listKeys(t, bound)
+	// One client for the connection: x/crypto's agent client reads replies on
+	// a goroutine of its own, so a second client on the same connection would
+	// never see its reply.
+	client := agent.NewClient(bound)
+	keys, err := client.List()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
 	if hasKey(keys, constrained) {
 		t.Fatal("a destination-constrained key must not be offered through the relay")
 	}
 	if !hasKey(keys, free) {
 		t.Fatalf("the unconstrained key must still be offered, got %v", keys)
 	}
-	sig, err := agent.NewClient(bound).Sign(free, []byte("data"))
+	sig, err := client.Sign(free, []byte("data"))
 	if err != nil {
 		t.Fatalf("sign with the unconstrained key: %v", err)
 	}
