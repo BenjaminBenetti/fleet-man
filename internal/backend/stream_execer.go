@@ -62,7 +62,10 @@ type ExecRequest struct {
 type ExecStream interface {
 	// Stdin feeds the command. Closing it half-closes: the command reads EOF
 	// and keeps running. With a TTY there is no half-close and closing it does
-	// nothing; input ends in-band (^D).
+	// nothing; input ends in-band (^D). Once the command has exited or the
+	// stream is closed, a write fails instead of blocking and a close does
+	// nothing: the daemon's input pump may still be writing then, and it ends
+	// on that error.
 	Stdin() io.WriteCloser
 	// Stdout is the command's output, read until it returns an error (io.EOF
 	// once the command is done). With a TTY it carries stdout and stderr

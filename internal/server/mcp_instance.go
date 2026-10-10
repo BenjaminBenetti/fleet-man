@@ -76,9 +76,10 @@ func (m *instanceMCP) run(ctx context.Context) {
 }
 
 // sync listens for every instance, with a mounted host control directory
-// (controlDirTarget), of the fleets that have the Fleet MCP on, and stops listening for the rest: the
-// setting turned off, the instance destroyed. Status does not matter (a socket
-// on a stopped instance costs nothing, and is there when it starts).
+// (controlDirTarget), of the fleets that have the Fleet MCP on, and stops
+// listening for the rest: the setting turned off, the instance destroyed.
+// Status does not matter (a socket on a stopped instance costs nothing, and is
+// there when it starts).
 func (m *instanceMCP) sync(st *state.State) {
 	if st == nil {
 		return
