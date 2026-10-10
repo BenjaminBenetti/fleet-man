@@ -73,7 +73,14 @@ check_installed() {  # <when>
 
 info "fleet up alpha (dotfiles auto-install)"
 up_out=$(fleet_up alpha 2>&1) || fail "fleet up failed: ${up_out}"
-assert_not_contains "${up_out}" "dotfiles install failed" "a working dotfiles install should not warn"
+# Provisioning warnings land in the instance's creation log, not in `fleet up`
+# output.
+alpha_log="${HOME}/.fleet/logs/${FIXTURE_REPO_NAME}-alpha.log"
+assert_file_exists "${alpha_log}"
+if grep -qF "dotfiles install failed" "${alpha_log}"; then
+  cat "${alpha_log}"
+  fail "a working dotfiles install should not warn in the creation log"
+fi
 check_installed "after create"
 assert_equals "1" "$(runs)" "create should run the install script once"
 

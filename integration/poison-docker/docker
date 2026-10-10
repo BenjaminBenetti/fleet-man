@@ -21,7 +21,7 @@ fi
 # refused unless it names an image (--type image), since builds inspect images.
 verbs="${FLEET_ITEST_POISON_VERBS:-attach commit container cp create diff exec export inspect kill logs pause port ps rename restart rm run start stats stop top unpause update wait}"
 
-# The verb is the first argument that is not a global option; --context,
+# The verb is the first argument that is not a global option; --context/-c,
 # --config, --host/-H, --log-level/-l and --tlscacert/--tlscert/--tlskey take a
 # value.
 verb=""
@@ -29,7 +29,7 @@ skip=""
 for arg in "$@"; do
   if [ -n "${skip}" ]; then skip=""; continue; fi
   case "${arg}" in
-    --context|--config|--host|-H|--log-level|-l|--tlscacert|--tlscert|--tlskey) skip=1 ;;
+    --context|-c|--config|--host|-H|--log-level|-l|--tlscacert|--tlscert|--tlskey) skip=1 ;;
     -*) ;;
     *) verb="${arg}"; break ;;
   esac

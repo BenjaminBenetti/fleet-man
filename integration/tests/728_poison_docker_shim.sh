@@ -47,7 +47,8 @@ fi
 itest_poison_docker poison
 for args in "exec c1 true" "run --rm img" "start c1" "stop c1" "rm -f c1" "logs c1" "stats --no-stream" \
   "ps -a" "commit c1 img" "cp c1:/x /y" "inspect c1" "inspect --type container c1" "container ls" \
-  "--context ctx exec c1 true" "-H unix:///sock ps" "--log-level debug start c1"; do
+  "--context ctx exec c1 true" "-c ctx exec c1 true" "--context=ctx exec c1 true" "-H unix:///sock ps" \
+  "--log-level debug start c1" "-D --tlsverify --tlscert c.pem ps"; do
   got=$(run ${args})
   case "${got}" in
     "125|poison docker: refused 'docker ${args}'"*) ;;

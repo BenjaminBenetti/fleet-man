@@ -40,13 +40,18 @@ in_instance() { "${FLEET_BIN}" exec "${inst}" -- "$@"; }
 mirror_of_inner_dockerd() {
   in_instance docker info --format '{{range .RegistryConfig.Mirrors}}{{.}} {{end}}' 2>/dev/null | sed 's/ *$//'
 }
-wait_mirror() {  # <when>
+# wait_mirror <when> — wait for the instance's dockerd to get a mirror and set
+# mirror_now to it. Not run in $(...), so a timeout fails the test only once.
+mirror_now=""
+wait_mirror() {
   # fleet configures the mirror once the instance's dockerd is up, polling for
   # it in the background (it starts after the container does).
-  local deadline=$(( $(date +%s) + $(_scale_timeout 180) )) m=""
+  local deadline=$(( $(date +%s) + $(_scale_timeout 180) ))
+  mirror_now=""
   while [ "$(date +%s)" -lt "${deadline}" ]; do
-    m=$(mirror_of_inner_dockerd)
-    [ -n "${m}" ] && { printf '%s\n' "${m}"; return 0; }
+    # docker info fails until the instance's dockerd answers.
+    mirror_now=$(mirror_of_inner_dockerd) || mirror_now=""
+    [ -n "${mirror_now}" ] && return 0
     sleep 3
   done
   fail "the instance's dockerd never got a registry mirror (${1}); daemon.json: $(in_instance sh -c 'cat /etc/docker/daemon.json 2>&1')"
@@ -58,7 +63,8 @@ catalog() {
 
 info "fleet up alpha (docker-in-docker, image cache on)"
 fleet_up alpha
-mirror=$(wait_mirror "after create")
+wait_mirror "after create"
+mirror=${mirror_now}
 info "inner dockerd mirror: ${mirror}"
 if itest_backend_is devcontainer; then
   # Docker reaches the mirror by its container name on the fleet's network.
@@ -75,7 +81,8 @@ assert_contains "${run_out}" "Hello from Docker!" "the image pulled through the 
 info "fleet stop + start alpha"
 "${FLEET_BIN}" stop "${inst}" >/dev/null
 "${FLEET_BIN}" start "${inst}" >/dev/null
-assert_equals "${mirror}" "$(wait_mirror "after a stop and start")" "the instance's dockerd should keep the mirror across a restart"
+wait_mirror "after a stop and start"
+assert_equals "${mirror}" "${mirror_now}" "the instance's dockerd should keep the mirror across a restart"
 # A repository the mirror has not seen yet, so the catalog shows this pull.
 assert_not_contains "$(catalog)" "library/busybox" "the mirror should not hold busybox yet"
 pull_out=$(in_instance docker pull busybox 2>&1) || fail "docker pull after a restart failed: ${pull_out}"

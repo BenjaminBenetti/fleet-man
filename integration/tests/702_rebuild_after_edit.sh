@@ -84,11 +84,13 @@ assert_equals "alpha" "$(in_instance bash -c '. "$HOME/.fleet/fleet.rc" >/dev/nu
   "rebuild should re-stage fleet.rc for the instance"
 
 # --- edit 2, rebuilt while stopped: a feature option and containerEnv ---
-info "fleet stop alpha, then edit the feature option and containerEnv"
-"${FLEET_BIN}" stop "${inst}" >/dev/null
-assert_container_stopped "${second_container}" "alpha should be stopped before the second rebuild"
+# Edited before the stop: a cluster backend reaches the workspace only through
+# the running instance. The rebuild reads it either way.
+info "edit the feature option and containerEnv, then fleet stop alpha"
 itest_workspace_write "${inst}" .devcontainer/devcontainer.json \
   "$(devcontainer_json build-arg-edit-1 greeting-edit-2 containerEnv-edit-2)"
+"${FLEET_BIN}" stop "${inst}" >/dev/null
+assert_container_stopped "${second_container}" "alpha should be stopped before the second rebuild"
 
 info "fleet rebuild alpha (stopped)"
 rebuild_out=$("${FLEET_BIN}" rebuild "${inst}" 2>&1) || fail "rebuild of a stopped instance failed: ${rebuild_out}"

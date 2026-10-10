@@ -28,12 +28,13 @@ fleet_up alpha
 assert_equals "${create_hooks}" "$(hook_log)" "create should run every in-container hook once, in spec order"
 assert_equals "1" "$(init_count)" "create should run initializeCommand once on the daemon host"
 
+# The log is read only while the instance runs (a cluster backend reaches the
+# workspace through it); a hook run by stop would still show up after the start.
 info "fleet stop + start alpha"
 "${FLEET_BIN}" stop "${inst}" >/dev/null
-assert_equals "${create_hooks}" "$(hook_log)" "stop must not run any hook"
 "${FLEET_BIN}" start "${inst}" >/dev/null
 assert_equals "${create_hooks} ${start_hooks}" "$(hook_log)" \
-  "start should re-run only postStart and postAttach"
+  "stop must run no hook, and start should re-run only postStart and postAttach"
 assert_equals "1" "$(init_count)" "start must not re-run initializeCommand"
 
 info "fleet start alpha again (already running)"

@@ -82,6 +82,16 @@ if itest_workspace_test "${dst}" -e ALPHA_ONLY.txt; then
 fi
 
 # --- removing the clone leaves the source alone ---
+if itest_backend_is devcontainer; then
+  # Docker clones by committing the source into a fleet-clone-* image that the
+  # clone runs from, which down must remove with it. Clusters copy volumes.
+  clone_image=$(docker inspect --format '{{.Config.Image}}' "${dst_container}")
+  info "beta runs from the committed image ${clone_image}"
+  case "${clone_image}" in
+    fleet-clone-*) ;;
+    *) fail "the clone should run from a committed fleet-clone-* image, not ${clone_image}" ;;
+  esac
+fi
 info "fleet down beta"
 "${FLEET_BIN}" down "${dst}" >/dev/null
 assert_container_absent "${dst_container}" "down should remove the clone's container"
@@ -91,10 +101,9 @@ assert_equals "installed" "$(itest_local_deb_status "${src}" fleet-itest-clone)"
   "removing the clone must leave the source's package alone"
 
 if itest_backend_is devcontainer; then
-  # Docker clones by committing the source into a fleet-clone-* image, which
-  # down must remove with the clone. Clusters copy volumes instead.
-  leaked=$(docker images --format '{{.Repository}}' | grep '^fleet-clone-' || true)
-  [ -z "${leaked}" ] || fail "down left the clone's committed image behind: ${leaked}"
+  if docker image inspect "${clone_image}" >/dev/null 2>&1; then
+    fail "down left the clone's committed image ${clone_image} behind"
+  fi
 fi
 
 pass "clone keeps rootfs, \$HOME and uncommitted work; source unaffected"
