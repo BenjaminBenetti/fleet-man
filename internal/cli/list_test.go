@@ -119,16 +119,15 @@ func TestListShortensContainerIDs(t *testing.T) {
 			},
 		},
 	}
-	prevFetch := fetchFleetState
-	fetchFleetState = func(context.Context) (*fleetgrpc.State, error) { return st, nil }
-	defer func() { fetchFleetState = prevFetch }()
+	prevFetch := fetchListState
+	fetchListState = func(context.Context) (*fleetgrpc.GetStateReply, error) {
+		return &fleetgrpc.GetStateReply{State: st}, nil
+	}
+	defer func() { fetchListState = prevFetch }()
 	var out bytes.Buffer
 	prevOutput := listOutput
 	listOutput = &out
 	defer func() { listOutput = prevOutput }()
-	prevBranchName := listBranchName
-	listBranchName = func(string) string { return "" }
-	defer func() { listBranchName = prevBranchName }()
 
 	cmd := newListCmd()
 	if err := cmd.RunE(cmd, []string{"alpha"}); err != nil {
