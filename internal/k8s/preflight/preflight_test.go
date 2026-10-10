@@ -374,6 +374,27 @@ func TestFullRBAC(t *testing.T) {
 	}
 }
 
+// TestFullRBACDisruptionBudget: podspec applies the budget server-side and
+// prune lists it, so protect_from_drain needs patch and list on it too.
+func TestFullRBACDisruptionBudget(t *testing.T) {
+	c := newCluster(t, minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath"))
+	all := authorizationv1.ResourceRule{Verbs: []string{"*"}, APIGroups: []string{"", "apps", "batch", "networking.k8s.io", "coordination.k8s.io"}, Resources: []string{"*"}}
+	for _, verb := range []string{"patch", "list"} {
+		var verbs []string
+		for _, v := range []string{"create", "get", "list", "patch", "delete"} {
+			if v != verb {
+				verbs = append(verbs, v)
+			}
+		}
+		c.rules = []authorizationv1.ResourceRule{all, {Verbs: verbs, APIGroups: []string{"policy"}, Resources: []string{"poddisruptionbudgets"}}}
+		res := Full(context.Background(), target(c, fleet.KubeCluster{ProtectFromDrain: true}), nil)
+		wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_FORBIDDEN, "missing "+verb+" poddisruptionbudgets")
+	}
+	c.rules = []authorizationv1.ResourceRule{all, {Verbs: []string{"create", "get", "list", "patch", "delete"}, APIGroups: []string{"policy"}, Resources: []string{"poddisruptionbudgets"}}}
+	res := Full(context.Background(), target(c, fleet.KubeCluster{ProtectFromDrain: true}), nil)
+	wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, "")
+}
+
 func TestFullOwnerConflict(t *testing.T) {
 	c := newCluster(t, minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath"))
 	tgt := target(c, fleet.KubeCluster{})

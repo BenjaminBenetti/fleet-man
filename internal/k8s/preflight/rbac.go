@@ -57,8 +57,10 @@ var optionalPermissions = []permission{
 	{"metrics.k8s.io", "pods", []string{"list"}},
 }
 
-// pdbPermission backs protect_from_drain, which makes it required.
-var pdbPermission = permission{"policy", "poddisruptionbudgets", []string{"create", "get", "delete"}}
+// pdbPermission backs protect_from_drain, which makes it required. The
+// budget is applied server-side (patch) and pruned by label (list), like the
+// other objects.
+var pdbPermission = permission{"policy", "poddisruptionbudgets", objects}
 
 func (r *run) rbac(ctx context.Context) {
 	if !r.nsExists {
