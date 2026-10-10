@@ -19,5 +19,8 @@ type ImageConfig struct {
 		Labels       map[string]string   `json:"Labels,omitempty"`
 		StopSignal   string              `json:"StopSignal,omitempty"`
 		ExposedPorts map[string]struct{} `json:"ExposedPorts,omitempty"`
+		// Volumes are the image's VOLUME paths, each an anonymous volume in
+		// a container docker creates from it.
+		Volumes map[string]struct{} `json:"Volumes,omitempty"`
 	} `json:"Config"`
 }

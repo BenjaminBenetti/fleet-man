@@ -1,0 +1,6 @@
+{
+  "error": "kubernetes:unsupported:privileged: --privileged needs privileged pods, which prod-eu does not allow (it is not a local cluster, where they are allowed by default). Turn on Allow privileged pods for prod-eu in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node), or use a cluster with a sysbox runtime class for --privileged",
+  "refusals": [
+    "kubernetes:unsupported:privileged"
+  ]
+}

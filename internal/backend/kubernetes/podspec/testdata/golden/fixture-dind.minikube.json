@@ -1,0 +1,145 @@
+{
+  "pod": {
+    "image": {
+      "ref": "vsc-fixture-dind-0000000000000000000000000000000000000000000000000000000000000000-features",
+      "id": "sha256:0c761906e160ad654c63ab454470b7b8b1d96ebcad11cafa74aef4ef95bb60ac",
+      "os": "linux",
+      "arch": "amd64"
+    },
+    "pid1": {
+      "format": 1,
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n/usr/local/share/docker-init.sh\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "user": "root",
+      "privileged": true
+    },
+    "security": {
+      "privileged": true
+    },
+    "resources": {
+      "requests": {
+        "cpu": "500m",
+        "memory": "2Gi"
+      }
+    },
+    "diskSize": "50Gi",
+    "mounts": [
+      {
+        "kind": "workspace",
+        "target": "/workspaces/fixture-dind",
+        "source": "/home/dev/src/fixture-dind"
+      },
+      {
+        "kind": "volume",
+        "target": "/var/lib/docker",
+        "source": "dind-var-lib-docker-0gh7fqu2tpangqdk0hjucv6olf076u8sjvbj86lndfc0aa3j5ide",
+        "subPath": "vol/dind-var-lib-docker-0gh7fqu2tpangqdk0hjucv6olf076u8sjvbj86lndfc0aa3j5ide",
+        "copyUp": true
+      }
+    ],
+    "nodeSelector": {
+      "kubernetes.io/arch": "amd64",
+      "kubernetes.io/os": "linux"
+    },
+    "options": [
+      {
+        "option": "attach",
+        "outcome": "ignore"
+      },
+      {
+        "option": "entrypoint",
+        "outcome": "map"
+      },
+      {
+        "option": "label",
+        "outcome": "map"
+      },
+      {
+        "option": "mount",
+        "outcome": "map"
+      },
+      {
+        "option": "privileged",
+        "outcome": "map"
+      },
+      {
+        "option": "sig-proxy",
+        "outcome": "ignore"
+      }
+    ]
+  },
+  "specFiles": {
+    "capture.json": {
+      "args": [
+        "--sig-proxy=false",
+        "-a",
+        "STDOUT",
+        "-a",
+        "STDERR",
+        "--mount",
+        "type=bind,source=/home/dev/src/fixture-dind,target=/workspaces/fixture-dind",
+        "--mount",
+        "type=volume,src=dind-var-lib-docker-0gh7fqu2tpangqdk0hjucv6olf076u8sjvbj86lndfc0aa3j5ide,dst=/var/lib/docker",
+        "-l",
+        "devcontainer.local_folder=/home/dev/src/fixture-dind",
+        "-l",
+        "devcontainer.config_file=/home/dev/src/fixture-dind/.devcontainer/devcontainer.json",
+        "--privileged",
+        "--entrypoint",
+        "/bin/sh",
+        "vsc-fixture-dind-0000000000000000000000000000000000000000000000000000000000000000-features",
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n/usr/local/share/docker-init.sh\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "env": [],
+      "format": 1,
+      "labels": {
+        "devcontainer.config_file": "/home/dev/src/fixture-dind/.devcontainer/devcontainer.json",
+        "devcontainer.local_folder": "/home/dev/src/fixture-dind"
+      },
+      "verb": "run"
+    },
+    "exec.json": {
+      "container_user": "root",
+      "remote_user": "vscode",
+      "ssh_auth_sock": "/fleet-mounts/control/ssh-agent.sock",
+      "workspace_folder": "/workspaces/fixture-dind"
+    },
+    "inspect.json": {
+      "cmd": [
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n/usr/local/share/docker-init.sh\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "containerId": "",
+      "created": "0001-01-01T00:00:00Z",
+      "entrypoint": [
+        "/bin/sh"
+      ],
+      "env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "DOCKER_BUILDKIT=1"
+      ],
+      "image": "vsc-fixture-dind-0000000000000000000000000000000000000000000000000000000000000000-features",
+      "imageId": "sha256:0c761906e160ad654c63ab454470b7b8b1d96ebcad11cafa74aef4ef95bb60ac",
+      "labels": {
+        "dev.containers.id": "base-debian",
+        "dev.containers.release": "v0.4.19",
+        "dev.containers.source": "https://github.com/devcontainers/images",
+        "dev.containers.timestamp": "Thu, 16 Oct 2025 10:40:40 GMT",
+        "dev.containers.variant": "bookworm",
+        "devcontainer.config_file": "/home/dev/src/fixture-dind/.devcontainer/devcontainer.json",
+        "devcontainer.local_folder": "/home/dev/src/fixture-dind",
+        "devcontainer.metadata": "[ {\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"}, {\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}}, {\"remoteUser\":\"vscode\"}, {\"id\":\"ghcr.io/devcontainers/features/docker-in-docker:2\",\"privileged\":true,\"entrypoint\":\"/usr/local/share/docker-init.sh\",\"mounts\":[{\"source\":\"dind-var-lib-docker-${devcontainerId}\",\"target\":\"/var/lib/docker\",\"type\":\"volume\"}],\"customizations\":{\"vscode\":{\"extensions\":[\"ms-azuretools.vscode-containers\"],\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes the Docker CLI (`docker`) pre-installed and available on the `PATH` for running and managing containers using a dedicated Docker daemon running inside the dev container.\"}]}}}} ]",
+        "version": "2.0.2"
+      },
+      "startedAt": "0001-01-01T00:00:00Z",
+      "user": "root"
+    }
+  }
+}

@@ -1,0 +1,159 @@
+{
+  "pod": {
+    "image": {
+      "ref": "vsc-fixture-dockerfile-0000000000000000000000000000000000000000000000000000000000000000",
+      "id": "sha256:8b4e3c3b6443b107a4c6b24312a0235622e2d534113a883e9d2c07c5ec0d05a2",
+      "os": "linux",
+      "arch": "amd64"
+    },
+    "pid1": {
+      "format": 1,
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "user": "root"
+    },
+    "env": [
+      {
+        "name": "ITEST_CONTAINER_ENV",
+        "key": "ITEST_CONTAINER_ENV"
+      }
+    ],
+    "security": {},
+    "resources": {
+      "requests": {
+        "cpu": "500m",
+        "memory": "2Gi"
+      },
+      "limits": {
+        "memory": "8Gi"
+      }
+    },
+    "diskSize": "50Gi",
+    "mounts": [
+      {
+        "kind": "workspace",
+        "target": "/workspaces/fixture-dockerfile",
+        "source": "/home/dev/src/fixture-dockerfile"
+      }
+    ],
+    "nodeSelector": {
+      "kubernetes.io/arch": "amd64",
+      "kubernetes.io/os": "linux"
+    },
+    "warnings": [
+      "LimitRange: default memory limit 1Gi → fleet sets 8Gi explicitly (memory_limit on prod-eu)"
+    ],
+    "options": [
+      {
+        "option": "attach",
+        "outcome": "ignore"
+      },
+      {
+        "option": "entrypoint",
+        "outcome": "map"
+      },
+      {
+        "option": "env",
+        "outcome": "map"
+      },
+      {
+        "option": "label",
+        "outcome": "map"
+      },
+      {
+        "option": "mount",
+        "outcome": "map"
+      },
+      {
+        "option": "sig-proxy",
+        "outcome": "ignore"
+      }
+    ]
+  },
+  "specFiles": {
+    "capture.json": {
+      "args": [
+        "--sig-proxy=false",
+        "-a",
+        "STDOUT",
+        "-a",
+        "STDERR",
+        "--mount",
+        "type=bind,source=/home/dev/src/fixture-dockerfile,target=/workspaces/fixture-dockerfile",
+        "-l",
+        "devcontainer.local_folder=/home/dev/src/fixture-dockerfile",
+        "-l",
+        "devcontainer.config_file=/home/dev/src/fixture-dockerfile/.devcontainer/devcontainer.json",
+        "-e",
+        "ITEST_CONTAINER_ENV=<redacted>",
+        "--entrypoint",
+        "/bin/sh",
+        "vsc-fixture-dockerfile-0000000000000000000000000000000000000000000000000000000000000000",
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "env": [
+        {
+          "name": "ITEST_CONTAINER_ENV",
+          "source": "flag",
+          "value": "<redacted>"
+        }
+      ],
+      "format": 1,
+      "labels": {
+        "devcontainer.config_file": "/home/dev/src/fixture-dockerfile/.devcontainer/devcontainer.json",
+        "devcontainer.local_folder": "/home/dev/src/fixture-dockerfile"
+      },
+      "verb": "run"
+    },
+    "exec.json": {
+      "container_user": "root",
+      "remote_env": {
+        "ITEST_REMOTE_ENV": "from-remoteEnv"
+      },
+      "remote_user": "vscode",
+      "ssh_auth_sock": "/fleet-mounts/control/ssh-agent.sock",
+      "workspace_folder": "/workspaces/fixture-dockerfile"
+    },
+    "inspect.json": {
+      "cmd": [
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "containerId": "",
+      "created": "0001-01-01T00:00:00Z",
+      "entrypoint": [
+        "/bin/sh"
+      ],
+      "env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "ITEST_FEATURE_ENV=from-feature",
+        "ITEST_CONTAINER_ENV=from-containerEnv"
+      ],
+      "image": "vsc-fixture-dockerfile-0000000000000000000000000000000000000000000000000000000000000000",
+      "imageId": "sha256:8b4e3c3b6443b107a4c6b24312a0235622e2d534113a883e9d2c07c5ec0d05a2",
+      "labels": {
+        "dev.containers.id": "base-debian",
+        "dev.containers.release": "v0.4.19",
+        "dev.containers.source": "https://github.com/devcontainers/images",
+        "dev.containers.timestamp": "Thu, 16 Oct 2025 10:40:40 GMT",
+        "dev.containers.variant": "bookworm",
+        "devcontainer.config_file": "/home/dev/src/fixture-dockerfile/.devcontainer/devcontainer.json",
+        "devcontainer.local_folder": "/home/dev/src/fixture-dockerfile",
+        "devcontainer.metadata": "[ {\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"}, {\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}}, {\"remoteUser\":\"vscode\"}, {\"id\":\"./itest-feature\"}, {\"containerEnv\":{\"ITEST_CONTAINER_ENV\":\"from-containerEnv\"},\"remoteUser\":\"vscode\",\"remoteEnv\":{\"ITEST_REMOTE_ENV\":\"from-remoteEnv\"}} ]",
+        "version": "2.0.2"
+      },
+      "startedAt": "0001-01-01T00:00:00Z",
+      "user": "root"
+    }
+  },
+  "env": {
+    "ITEST_CONTAINER_ENV": "from-containerEnv"
+  }
+}

@@ -135,7 +135,7 @@ jobs:
       - name: Run the kubeshim CLI tests
         env:
           FLEET_KUBESHIM_CLI: "1"
-        run: go test -count=1 -timeout 25m -v ./internal/kubeshim ./internal/backend/kubernetes/devcli
+        run: go test -count=1 -timeout 25m -v ./internal/kubeshim ./internal/backend/kubernetes/devcli ./internal/backend/kubernetes/podspec
 
   # Single aggregate check: green only when every shard passed. Preserves one
   # stable "integration" status name for branch protection / the review loop,
