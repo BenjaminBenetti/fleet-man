@@ -66,8 +66,10 @@ var (
 	// failed on a reachable cluster.
 	kubeUndoAttempts = 3
 	kubeUndoRetry    = 30 * time.Second
-	// kubePassTimeout bounds one background pass of a connection.
-	kubePassTimeout = 5 * time.Minute
+	// kubePassTimeout bounds one background pass of a connection;
+	// kubePassFollowUp is when a pass that deleted something looks again.
+	kubePassTimeout  = 5 * time.Minute
+	kubePassFollowUp = 30 * time.Second
 )
 
 // kubeRecoveryPool is the part of the pool the reconciler drives
@@ -98,27 +100,26 @@ type kubeRecovery struct {
 	failedAt map[string]kubernetes.Journal
 	// wanted are the connections whose background pass is due.
 	wanted map[string]bool
-	// reachedAt is when each connection was last judged usable with its
-	// Lease held; edge is closed (and replaced) at each such judgement.
-	reachedAt map[string]time.Time
-	edge      chan struct{}
+	// edge is closed (and replaced) each time a connection is judged usable
+	// with its Lease held.
+	edge chan struct{}
 	// pending counts each connection's known garbage not yet gone.
 	pending map[string]int
+	looping bool
 }
 
 func newKubeRecovery(svc *service) *kubeRecovery {
 	return &kubeRecovery{
-		svc:       svc,
-		pool:      func() kubeRecoveryPool { return kubernetes.DefaultPool() },
-		jobsDir:   state.KubeJobsDir,
-		wake:      make(chan struct{}, 1),
-		journals:  map[string]kubernetes.JournalFile{},
-		claimed:   map[string]kubernetes.Journal{},
-		failedAt:  map[string]kubernetes.Journal{},
-		wanted:    map[string]bool{},
-		reachedAt: map[string]time.Time{},
-		edge:      make(chan struct{}),
-		pending:   map[string]int{},
+		svc:      svc,
+		pool:     func() kubeRecoveryPool { return kubernetes.DefaultPool() },
+		jobsDir:  state.KubeJobsDir,
+		wake:     make(chan struct{}, 1),
+		journals: map[string]kubernetes.JournalFile{},
+		claimed:  map[string]kubernetes.Journal{},
+		failedAt: map[string]kubernetes.Journal{},
+		wanted:   map[string]bool{},
+		edge:     make(chan struct{}),
+		pending:  map[string]int{},
 	}
 }
 
@@ -131,6 +132,7 @@ func (r *kubeRecovery) load() {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.journals = map[string]kubernetes.JournalFile{}
 	for _, f := range files {
 		if f.Err != nil {
 			flog.Warn("kube reconcile: leaving a job journal alone", "path", f.Path, "err", f.Err)
@@ -241,21 +243,24 @@ func (r *kubeRecovery) start(ctx context.Context) {
 	r.mu.Lock()
 	claimed := r.claimed
 	r.claimed = map[string]kubernetes.Journal{}
+	loop := !r.looping
+	r.looping = true
 	r.mu.Unlock()
 	for key, j := range claimed {
 		fleetName, instanceName, _ := strings.Cut(key, "/")
 		r.startUndo(fleetName, instanceName, j)
 	}
-	go r.loop(ctx)
+	if loop {
+		go r.loop(ctx)
+	}
 }
 
 // reachable is told by a connection's worker each time a full preflight
-// finds it usable with this daemon holding its owner Lease: the REACHABLE
-// edge (the first judgement after start among them). Undo jobs waiting on
-// it go, and its background pass is due.
+// finds it usable with this daemon holding its owner Lease (the first one
+// after start, or after the cluster was unreachable, is the REACHABLE
+// edge). Undo jobs waiting on it go, and its background pass is due.
 func (r *kubeRecovery) reachable(clusterID string) {
 	r.mu.Lock()
-	r.reachedAt[clusterID] = time.Now()
 	close(r.edge)
 	r.edge = make(chan struct{})
 	r.mu.Unlock()
@@ -330,13 +335,20 @@ func (r *kubeRecovery) pass(ctx context.Context, clusterID string) {
 		flog.Warn("kube reconcile: load state", "err", err)
 		return
 	}
-	pending := r.passJournals(ctx, scope, st) + r.passTombstones(ctx, scope, st)
+	pendingJournals, deletedJournals := r.passJournals(ctx, scope, st)
+	pendingKeys, deletedKeys := r.passTombstones(ctx, scope, st)
+	pending := pendingJournals + pendingKeys
 	r.mu.Lock()
 	changed := r.pending[clusterID] != pending
 	r.pending[clusterID] = pending
 	r.mu.Unlock()
 	if changed {
 		r.svc.kube.publish()
+	}
+	if pending > 0 && deletedJournals+deletedKeys > 0 {
+		// Deletions under way (a foreground delete takes its time): look
+		// again soon, not at the next full preflight.
+		time.AfterFunc(kubePassFollowUp, func() { r.want(clusterID) })
 	}
 }
 
@@ -356,14 +368,14 @@ func holder(st *state.State, clusterID, key string) (string, *fleet.Instance) {
 }
 
 // passJournals handles the connection's journals no job is writing,
-// returning how many are known garbage still there.
-func (r *kubeRecovery) passJournals(ctx context.Context, scope kubernetes.Scope, st *state.State) int {
+// returning how many are known garbage still there and how many objects it
+// deleted.
+func (r *kubeRecovery) passJournals(ctx context.Context, scope kubernetes.Scope, st *state.State) (pending, deleted int) {
 	files, err := kubernetes.ListJournals(r.jobsDir())
 	if err != nil {
 		flog.Warn("kube reconcile: reading the job journals", "err", err)
-		return 0
+		return 0, 0
 	}
-	pending := 0
 	for _, f := range files {
 		j := f.Journal
 		if f.Err != nil || j.Cluster != scope.Cluster {
@@ -376,6 +388,7 @@ func (r *kubeRecovery) passJournals(ctx context.Context, scope kubernetes.Scope,
 		switch {
 		case inst == nil:
 			td, err := scope.DeleteGarbage(ctx, j)
+			deleted += len(td.Deleted)
 			var stale *kubernetes.StaleJournalError
 			if errors.As(err, &stale) {
 				flog.Info("kube reconcile: discarded a job journal no record holds that the cluster no longer matches; its objects, if any, are left to `fleet cluster gc`", "cluster", j.Cluster, "key", j.Key, "op", j.Op, "why", stale.Why)
@@ -408,20 +421,20 @@ func (r *kubeRecovery) passJournals(ctx context.Context, scope kubernetes.Scope,
 			_ = kubernetes.RemoveJournal(f.Path)
 		}
 	}
-	return pending
+	return pending, deleted
 }
 
 // passTombstones deletes what is left of the connection's destroyed
-// instances, returning how many keys still have objects.
-func (r *kubeRecovery) passTombstones(ctx context.Context, scope kubernetes.Scope, st *state.State) int {
+// instances, returning how many keys still have objects and how many
+// objects it deleted.
+func (r *kubeRecovery) passTombstones(ctx context.Context, scope kubernetes.Scope, st *state.State) (pending, deleted int) {
 	fp, err := kubernetes.LoadFootprint()
 	if err != nil {
 		flog.Warn("kube reconcile: reading the footprint", "err", err)
 		if fp == nil {
-			return 0
+			return 0, 0
 		}
 	}
-	pending := 0
 	for _, t := range fp.TombstonesOf(scope.Cluster) {
 		if _, inst := holder(st, t.Cluster, t.Key); inst != nil && inst.Status != fleet.StatusDeleting {
 			flog.Info("kube reconcile: a record holds a destroyed key again; forgetting its tombstone", "cluster", t.Cluster, "key", t.Key)
@@ -440,6 +453,7 @@ func (r *kubeRecovery) passTombstones(ctx context.Context, scope kubernetes.Scop
 		}
 		pending++
 		td, err := scope.DeleteByKey(ctx, t.Key)
+		deleted += len(td.Deleted)
 		if err != nil {
 			flog.Warn("kube reconcile: deleting a destroyed instance's objects", "cluster", t.Cluster, "key", t.Key, "deleted", len(td.Deleted), "err", err)
 			continue
@@ -448,7 +462,30 @@ func (r *kubeRecovery) passTombstones(ctx context.Context, scope kubernetes.Scop
 			flog.Info("kube reconcile: deleted what was left of a destroyed instance", "cluster", t.Cluster, "key", t.Key, "fleet", t.Fleet, "instance", t.Instance, "deleted", len(td.Deleted))
 		}
 	}
-	return pending
+	return pending, deleted
+}
+
+// destroying tombstones the key of a Kubernetes record a destroy is about
+// to tear down: whatever of it the teardown does not delete (the cluster is
+// unreachable, the daemon dies halfway, its backend leaves something) is
+// known garbage the background pass deletes.
+func (r *kubeRecovery) destroying(fleetName string, inst *fleet.Instance) {
+	if inst == nil || inst.Backend != fleet.BackendKubernetes || inst.KubeCluster == "" || inst.KubeKey == "" {
+		return
+	}
+	t := kubernetes.Tombstone{Cluster: inst.KubeCluster, Key: inst.KubeKey, Fleet: fleetName, Instance: inst.Name}
+	if err := kubernetes.AddTombstone(t); err != nil {
+		flog.Warn("kube reconcile: recording a destroyed instance's key", "cluster", t.Cluster, "key", t.Key, "err", err)
+	}
+}
+
+// destroyed asks for the background pass of a destroyed Kubernetes
+// record's connection, once the record is gone.
+func (r *kubeRecovery) destroyed(inst *fleet.Instance) {
+	if r == nil || inst == nil || inst.Backend != fleet.BackendKubernetes || inst.KubeCluster == "" || inst.KubeKey == "" {
+		return
+	}
+	r.want(inst.KubeCluster)
 }
 
 // startUndo runs the undo of an interrupted rebuild as a rebuild job of its
@@ -505,7 +542,8 @@ func (r *kubeRecovery) undo(ctx context.Context, plog *provisioningLog, fleetNam
 				status = fleet.StatusStopped
 			}
 			r.finishUndo(fleetName, instanceName, j, status, j.PrevError, true)
-			return nil
+			// The job is the rebuild's, which did not happen.
+			return fmt.Errorf("the rebuild was interrupted by a daemon restart and undone; the instance is %s as before", status)
 		case ctx.Err() != nil:
 			return ctx.Err()
 		}

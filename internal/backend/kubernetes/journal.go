@@ -119,10 +119,10 @@ type JournalObject struct {
 }
 
 // Rollback is what undoing a rebuild past StepReset needs, recorded before
-// the reset: generation Gen's StatefulSet as fleet applied it, re-applied
-// once the rollback tool Job (Job, a role=tool Job rendered for the
-// instance's disk) has put generation Gen's root back. Both are server-side
-// apply bodies (podspec.ApplyBody).
+// the reset: the previous generation's (Gen-1) StatefulSet as fleet applied
+// it, re-applied once the rollback tool Job (Job, a role=tool Job rendered
+// for the instance's disk at podspec.JobDiskPath) has put that generation's
+// root back. Both are server-side apply bodies (podspec.ApplyBody).
 type Rollback struct {
 	StatefulSet json.RawMessage `json:"statefulSet,omitempty"`
 	Job         json.RawMessage `json:"job,omitempty"`
@@ -158,7 +158,6 @@ type Journal struct {
 	PrevSpecSecret string               `json:"prevSpecSecret,omitempty"`
 	PrevStatus     fleet.InstanceStatus `json:"prevStatus,omitempty"`
 	PrevError      string               `json:"prevError,omitempty"`
-	ContainerID    string               `json:"containerId,omitempty"`
 	Rollback       *Rollback            `json:"rollback,omitempty"`
 	StartedAt      time.Time            `json:"startedAt"`
 }

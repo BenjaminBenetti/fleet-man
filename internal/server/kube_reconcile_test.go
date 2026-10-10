@@ -253,13 +253,24 @@ func TestUndoInterruptedRebuild(t *testing.T) {
 			if r.pool.undoCount() != 0 || r.inst("rb").Status != fleet.StatusRebuilding {
 				t.Fatalf("the undo did not wait for its cluster: %d undos, %+v", r.pool.undoCount(), r.inst("rb"))
 			}
-			if jobs := r.svc.jobs.activeJobs().GetJobs(); len(jobs) != 1 || jobs[0].GetKind() != fleetgrpc.JobKind_JOB_KIND_REBUILD_INSTANCE {
+			jobs := r.svc.jobs.activeJobs().GetJobs()
+			if len(jobs) != 1 || jobs[0].GetKind() != fleetgrpc.JobKind_JOB_KIND_REBUILD_INSTANCE {
 				t.Fatalf("active jobs %v", jobs)
 			}
+			undoJob := r.svc.jobs.get(jobs[0].GetJobId())
 			r.start()
 			inst := r.awaitStatus("rb", tc.status)
 			if !strings.HasPrefix(inst.Error, tc.errPrefix) {
 				t.Fatalf("error %q, want %q", inst.Error, tc.errPrefix)
+			}
+			select {
+			case <-undoJob.exited:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the undo job did not end")
+			}
+			// The rebuild did not happen, whatever the undo did.
+			if done := undoJob.outcome(); done == nil || done.GetSuccess() || done.GetError() == "" {
+				t.Fatalf("undo job outcome %v", done)
 			}
 			if journalExists("dddddddd") != tc.journal {
 				t.Fatalf("journal kept = %v, want %v", !tc.journal, tc.journal)
@@ -527,4 +538,59 @@ func TestServeReconcilesKubernetesJobs(t *testing.T) {
 	}
 	shutdownAndWait(t, client, served)
 	awaitFirstBackup(t)
+}
+
+// A destroy tombstones a Kubernetes record's key before its teardown, and
+// the pass then deletes whatever the teardown left.
+func TestDestroyTombstonesTheKey(t *testing.T) {
+	r := newRecoveryFixture(t)
+	old := kubePassFollowUp
+	kubePassFollowUp = 20 * time.Millisecond
+	t.Cleanup(func() { kubePassFollowUp = old })
+	oldDown := jobDownInstance
+	jobDownInstance = func(inst *fleet.Instance) error {
+		// The backend's teardown failed: the cluster keeps the objects.
+		if fp, _ := kubernetes.LoadFootprint(); len(fp.TombstonesOf(inst.KubeCluster)) != 1 {
+			t.Error("the teardown ran before the key was tombstoned")
+		}
+		return errors.New("the cluster did not answer")
+	}
+	t.Cleanup(func() { jobDownInstance = oldDown })
+	cs := r.apis["minikube"]
+	createObjects(t, cs, &corev1.PersistentVolumeClaim{ObjectMeta: objMeta("fi-alpha-doomed-dddddddd", r.id, "dddddddd", "u-d1")})
+	r.record("doomed", "dddddddd", fleet.StatusRunning, "")
+	r.startRecovery()
+	r.start()
+	r.awaitState(r.id, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
+	j, err := r.svc.startDestroyInstanceJob(&fleetgrpc.DestroyInstanceRequest{Fleet: "alpha", Instance: ptrTo("doomed")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-j.exited
+	if r.inst("doomed") != nil {
+		t.Fatal("the record is left")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, err := cs.CoreV1().PersistentVolumeClaims("fleet").Get(context.Background(), "fi-alpha-doomed-dddddddd", metav1.GetOptions{})
+		if err != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the destroyed instance's disk is left")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The pass that deleted something looks again soon, and then drops the
+	// tombstone of a key with nothing left.
+	for {
+		fp, _ := kubernetes.LoadFootprint()
+		if len(fp.TombstonesOf(r.id)) == 0 && r.svc.kubeRecovery.pendingTeardowns(r.id) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("tombstones %+v", fp.Tombstones)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

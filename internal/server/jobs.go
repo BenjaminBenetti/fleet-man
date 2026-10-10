@@ -929,6 +929,9 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 	}
 
 	for _, t := range targets {
+		// A Kubernetes instance's key is tombstoned first: what of it the
+		// teardown leaves is known garbage (kube_reconcile.go).
+		s.kubeRecovery.destroying(fleetName, t.inst)
 		if err := jobDownInstance(t.inst); err != nil {
 			warnings = append(warnings, fmt.Sprintf("teardown %s/%s container: %v", fleetName, t.name, err))
 		}
@@ -961,6 +964,9 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 		_ = f.RemoveInstance(instanceName)
 		return nil
 	})
+	for _, t := range targets {
+		s.kubeRecovery.destroyed(t.inst)
+	}
 	s.pushState()
 	return warnings
 }

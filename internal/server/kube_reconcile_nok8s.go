@@ -26,3 +26,7 @@ func (*kubeRecovery) interruptedError(string, *fleet.Instance) string { return i
 func (*kubeRecovery) settle() {}
 
 func (*kubeRecovery) start(context.Context) {}
+
+func (*kubeRecovery) destroying(string, *fleet.Instance) {}
+
+func (*kubeRecovery) destroyed(*fleet.Instance) {}
