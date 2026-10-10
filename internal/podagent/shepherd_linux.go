@@ -167,7 +167,13 @@ func RunShepherd() error {
 		report(shepherdReport{Error: err.Error(), Code: execas.ExitFailed})
 		return err
 	}
-	signal.Ignore(syscall.SIGHUP, syscall.SIGPIPE)
+	// A hangup must not end the shepherd. It is caught, never ignored: an
+	// ignored signal stays ignored in the command and everything it runs
+	// (pipelines would print "Broken pipe" were SIGPIPE ignored, and a shell
+	// cannot trap a signal ignored on entry), while a caught one is reset for
+	// them. SIGPIPE needs nothing: the shepherd's stdio is /dev/null, and Go
+	// turns it into EPIPE on every other descriptor.
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGHUP)
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	syscall.Umask(0o077)

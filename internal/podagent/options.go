@@ -84,6 +84,11 @@ type Options struct {
 	// NoTakeover skips the pid file: for agents a test runs side by side.
 	NoTakeover bool
 
+	// InitOOMScore is the oom_score_adj file whose value the agent takes for
+	// itself, and so for everything it starts: PID 1's in a pod. "" keeps
+	// the agent's own.
+	InitOOMScore string
+
 	// Stderr is where the agent writes what it cannot send fleetd.
 	Stderr io.Writer
 }
@@ -99,6 +104,9 @@ func DefaultOptions() Options {
 		RunDir:     DefaultRunDir,
 		PodUID:     os.Getenv(EnvPodUID),
 		Version:    version.Version,
+		// CRI-O with crun starts exec'd processes at -999, not the
+		// container's score.
+		InitOOMScore: "/proc/1/oom_score_adj",
 	}
 	if d, err := time.ParseDuration(os.Getenv(EnvHoldGrace)); err == nil && d > 0 {
 		o.HoldGrace = d

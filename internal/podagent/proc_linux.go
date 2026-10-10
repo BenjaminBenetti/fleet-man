@@ -50,11 +50,15 @@ type proc struct {
 	inQueue     []byte
 	// inEOF: the client half-closed stdin; inClosed: the command's stdin is
 	// gone (it closed it, or ended), so what still arrives is dropped.
-	inEOF           bool
-	inClosed        bool
-	inRecv, inOff   int64
-	inAcked         int64
-	att             *attachment
+	inEOF         bool
+	inClosed      bool
+	inRecv, inOff int64
+	inAcked       int64
+	att           *attachment
+	// attached: an attachment has served the proc. Before the first one
+	// (the agent writing OPEN, or a shepherd waiting for its agent) a proc
+	// with none is not orphaned: its status is still to be sent.
+	attached        bool
 	finished        bool
 	finishedCh      chan struct{}
 	onDetach        func()
@@ -224,7 +228,7 @@ func (p *proc) wait() {
 	p.mu.Lock()
 	p.exited = true
 	p.status = exitStatus(st, err)
-	orphaned := p.att == nil && (!p.resumable || p.aborted)
+	orphaned := p.att == nil && p.attached && (!p.resumable || p.aborted)
 	p.cond.Broadcast()
 	p.mu.Unlock()
 	if orphaned {
@@ -295,6 +299,7 @@ func (p *proc) attach(att *attachment, fromOut, fromErr int64, hello func(stdin 
 	}
 	att.sentOut, att.sentErr = fromOut, fromErr
 	p.att = att
+	p.attached = true
 	var first any
 	if hello != nil {
 		first = hello(p.inRecv)
@@ -338,6 +343,11 @@ func (p *proc) send(att *attachment) {
 			ack = &podwire.Ping{Stdin: p.inOff}
 		}
 		sendExit := len(out) == 0 && len(errOut) == 0 && p.exitReady(att)
+		if sendExit {
+			// Before it goes out: the client's answering EXIT may come
+			// back before this goroutine runs again, and must count.
+			att.exitSent = true
+		}
 		st := p.status
 		p.mu.Unlock()
 
@@ -365,9 +375,6 @@ func (p *proc) send(att *attachment) {
 		if !p.resumable {
 			p.out.Trim(att.sentOut)
 			p.errOut.Trim(att.sentErr)
-		}
-		if sendExit {
-			att.exitSent = true
 		}
 		p.cond.Broadcast()
 		p.mu.Unlock()

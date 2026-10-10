@@ -50,19 +50,24 @@ func dialShepherd(heldDir string, h podwire.ExecHeader) (*net.UnixConn, *podwire
 }
 
 // relay copies frames between a client and a shepherd until the shepherd's
-// side ends. A lost client transport just closes the shepherd connection,
-// which holds the command; the client's FIN becomes ABORT.
+// side ends, or the relay lets go of it. A lost client transport just closes
+// the shepherd connection, which holds the command; the client's FIN becomes
+// ABORT. Once it lets go the relay returns at once: a write to the client
+// that a dropped exec left blocked (containerd stops reading a cut stream's
+// output) must not keep a direct exec's process alive.
 func relay(cl relayClient, sc *net.UnixConn, sr *podwire.FrameReader) {
 	sw := podwire.NewFrameWriter(sc)
 	var lastRecv atomic.Int64
 	lastRecv.Store(time.Now().UnixNano())
 	done := make(chan struct{})
+	held := make(chan struct{})
 	var closeOnce sync.Once
 	var holding atomic.Bool
 	hold := func() {
 		closeOnce.Do(func() {
 			holding.Store(true)
 			_ = sc.Close()
+			close(held)
 		})
 	}
 	// After the client's FIN (abort) it sends nothing more, not even the
@@ -132,17 +137,23 @@ func relay(cl relayClient, sc *net.UnixConn, sr *podwire.FrameReader) {
 			select {
 			case <-done:
 				return
+			case <-held:
+				return
 			case <-t.C:
 				if time.Since(time.Unix(0, lastRecv.Load())) > cl.silence {
 					// A silent transport is a dropped one.
 					hold()
 					_ = cl.c.Close()
-					<-done
 					return
 				}
-				_ = cl.w.Write(podwire.FramePing, nil)
+				// In a goroutine: a ping must never wait on a transport
+				// that stopped reading, or silence would go unseen.
+				go func() { _ = cl.w.Write(podwire.FramePing, nil) }()
 			}
 		}
 	}
-	<-done
+	select {
+	case <-done:
+	case <-held:
+	}
 }

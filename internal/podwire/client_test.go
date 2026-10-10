@@ -1,6 +1,7 @@
 package podwire
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,8 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -177,6 +180,48 @@ func TestClientLogsAgentRecords(t *testing.T) {
 			msgs = append(msgs, r.Message)
 		}
 		t.Fatalf("records %q", msgs)
+	}
+}
+
+// TestPodSessionsShareALogLimiter: a pod's agent and bulk sessions given one
+// limiter share the pod's limit, and ending one session leaves the limiter
+// working for the other.
+func TestPodSessionsShareALogLimiter(t *testing.T) {
+	c := &capture{}
+	limiter := NewLogLimiter(slog.New(c), 3, time.Hour)
+	main, fm, err := dialFake(t, goodHello(), ClientOptions{LogLimiter: limiter}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bulkHello := goodHello()
+	bulkHello.Role = RoleBulk
+	_, fb, err := dialFake(t, bulkHello, ClientOptions{Role: RoleBulk, LogLimiter: limiter}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func(fa *fakeAgent, msg string) {
+		_ = fa.ctlW.WriteJSON(FrameData, ControlMessage{Type: MsgLog, Log: &LogRecord{Level: "warn", Msg: msg}})
+	}
+	waitRecords := func(n int) {
+		deadline := time.Now().Add(2 * time.Second)
+		for len(c.snapshot()) < n && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	send(fm, "main-1")
+	send(fb, "bulk-1")
+	waitRecords(2)
+	_ = main.Close()
+	send(fb, "bulk-2")
+	waitRecords(3)
+	send(fb, "bulk-3") // over the pod's limit
+	time.Sleep(50 * time.Millisecond)
+	if n := len(c.snapshot()); n != 3 {
+		t.Fatalf("%d records, want the pod's limit of 3", n)
+	}
+	limiter.Close()
+	if recs := c.snapshot(); len(recs) != 4 || !strings.Contains(recs[3].Message, "suppressed") {
+		t.Fatalf("%d records after close", len(recs))
 	}
 }
 
@@ -407,5 +452,83 @@ func TestClientWaitsForAStreamSlot(t *testing.T) {
 		if err := <-errs; !IsCode(err, CodeNotFound) {
 			t.Fatalf("got %v", err)
 		}
+	}
+}
+
+// TestWriteFileReturnsAnEarlyAnswer: an agent that answers a write before it
+// has read all the data (a write error, or more than the session carries)
+// reads nothing more; the client still returns that answer at once, not when
+// the write blocked on the stream's window gives up.
+func TestWriteFileReturnsAnEarlyAnswer(t *testing.T) {
+	handlers := map[Tag]Handler{TagFileWrite: func(s *Stream) {
+		_, _ = s.R.Next()
+		time.Sleep(200 * time.Millisecond) // the client fills the window meanwhile
+		_ = s.W.WriteJSON(FrameExit, Result{Code: CodeFailed, Error: "no space left on device"})
+	}}
+	cl, _, err := dialFake(t, goodHello(), ClientOptions{}, handlers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	err = cl.WriteFile(ctx, FileWriteHeader{Path: "/x", Size: -1}, bytes.NewReader(make([]byte, 8<<20)))
+	if !IsCode(err, CodeFailed) || time.Since(start) > 3*time.Second {
+		t.Fatalf("got %v after %v, want the agent's answer at once", err, time.Since(start))
+	}
+}
+
+// stallConn is a transport whose writes block, once stalled, until it is
+// closed: a peer that stopped reading.
+type stallConn struct {
+	net.Conn
+	stalled atomic.Bool
+	closed  chan struct{}
+	once    sync.Once
+}
+
+func (c *stallConn) Write(p []byte) (int, error) {
+	if c.stalled.Load() {
+		<-c.closed
+		return 0, net.ErrClosed
+	}
+	return c.Conn.Write(p)
+}
+
+func (c *stallConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+// TestShutdownIsBoundedOnAStalledTransport: Shutdown (and Close) return within
+// their bound even when the Close message cannot go out.
+func TestShutdownIsBoundedOnAStalledTransport(t *testing.T) {
+	for _, name := range []string{"shutdown", "close"} {
+		a, b := net.Pipe()
+		agentCh := startFakeAgent(t, a, goodHello(), nil)
+		conn := &stallConn{Conn: b, closed: make(chan struct{})}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cl, err := Dial(ctx, conn, ClientOptions{})
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-agentCh
+		conn.stalled.Store(true)
+		start := time.Now()
+		if name == "shutdown" {
+			sctx, scancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			_ = cl.Shutdown(sctx)
+			scancel()
+		} else {
+			_ = cl.Close()
+		}
+		if took := time.Since(start); took > 2*time.Second {
+			t.Fatalf("%s took %v on a stalled transport", name, took)
+		}
+		if !errors.Is(cl.Err(), ErrClosed) {
+			t.Fatalf("%s: err %v", name, cl.Err())
+		}
+		_ = a.Close()
 	}
 }

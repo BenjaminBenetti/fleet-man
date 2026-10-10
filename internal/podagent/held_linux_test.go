@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -365,5 +366,42 @@ func TestExitWhileDetachedIsKept(t *testing.T) {
 	<-out.done
 	if out.buf.String() != "late\n" {
 		t.Fatalf("%q", out.buf.String())
+	}
+}
+
+// TestHeldCommandsKeepTheirSignals: a held command, run by its shepherd,
+// ignores no signal a plain one does not (a shell cannot trap a signal ignored
+// on entry, and pipelines print "Broken pipe" with SIGPIPE ignored), for a
+// TTY too.
+func TestHeldCommandsKeepTheirSignals(t *testing.T) {
+	d := newTestDirs(t)
+	s := startAgent(t, d.options())
+	ignored := func(h podwire.ExecHeader) uint64 {
+		t.Helper()
+		e, err := s.c.Exec(context.Background(), h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, _ := io.ReadAll(e.Stdout())
+		if code, err := e.Wait(); code != 0 || err != nil {
+			t.Fatalf("%v: code %d %v", h.Argv, code, err)
+		}
+		line := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(out)), "SigIgn:"))
+		mask, err := strconv.ParseUint(line, 16, 64)
+		if err != nil {
+			t.Fatalf("SigIgn %q: %v", out, err)
+		}
+		return mask
+	}
+	probe := sh(`grep SigIgn /proc/$$/status`)
+	plain := ignored(probe)
+	held := ignored(resumable(probe))
+	tty := resumable(probe)
+	tty.TTY, tty.Rows, tty.Cols = true, 24, 80
+	heldTTY := ignored(tty)
+	for name, mask := range map[string]uint64{"held": held, "held tty": heldTTY} {
+		if extra := mask &^ plain; extra != 0 {
+			t.Errorf("a %s command ignores signals %#x a plain one does not (plain %#x)", name, extra, plain)
+		}
 	}
 }

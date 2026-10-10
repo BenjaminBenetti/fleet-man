@@ -24,7 +24,8 @@ import (
 // re-attaches it. Both sides send a PING every stream ping interval.
 func ExecStdio(ctx context.Context, stdin io.Reader, stdout io.Writer, opts Options, resume string) error {
 	o := opts.withDefaults()
-	log := newLogger(o.Stderr)
+	log := newStderrLogger(o.Stderr)
+	takeInitOOMScore(o, log)
 	w := podwire.NewFrameWriter(stdout)
 	open := func(r podwire.OpenReply) { _ = w.WriteJSON(podwire.FrameOpen, r) }
 

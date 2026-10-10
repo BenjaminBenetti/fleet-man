@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"time"
 )
 
 // FileTrailer is the EOF frame's payload that ends a file write: what the
@@ -35,9 +36,14 @@ func (c *Client) WriteFile(ctx context.Context, h FileWriteHeader, data io.Reade
 	defer stop()
 
 	// The agent may answer early (a refusal, or an error as it writes); the
-	// answer is read while the data goes out.
+	// answer is read while the data goes out. The agent reads nothing more
+	// after it answers, so a write blocked on the stream's window is woken.
 	results := make(chan error, 1)
-	go func() { results <- readResult(NewFrameReader(t), nil) }()
+	go func() {
+		err := readResult(NewFrameReader(t), nil)
+		results <- err
+		_ = t.SetWriteDeadline(time.Now())
+	}()
 
 	w := NewFrameWriter(t)
 	sum := sha256.New()

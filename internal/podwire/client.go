@@ -33,6 +33,11 @@ type ClientOptions struct {
 	// LogLimit and LogWindow override the limiter's LogLimit and LogWindow.
 	LogLimit  int
 	LogWindow time.Duration
+	// LogLimiter, when set, takes the records instead of a limiter of the
+	// session's own (Logger, LogLimit and LogWindow are then unused): give a
+	// pod's agent and bulk sessions one between them, so the pod's limit
+	// holds across both. The session never closes a limiter it was given.
+	LogLimiter *LogLimiter
 	// Handlers serve the streams the agent opens (the socket relays). A kind
 	// without a handler is refused.
 	Handlers map[Tag]Handler
@@ -66,7 +71,9 @@ type Client struct {
 	hello Hello
 	proto int
 	logs  *LogLimiter
-	mux   *Mux
+	// ownLogs: logs is the session's own, closed with it.
+	ownLogs bool
+	mux     *Mux
 
 	done     chan struct{}
 	failOnce sync.Once
@@ -117,7 +124,10 @@ func Dial(ctx context.Context, conn io.ReadWriteCloser, opts ClientOptions) (*Cl
 		return nil, fmt.Errorf("pod agent handshake: %w", ctx.Err())
 	}
 	c.hello = hello
-	c.logs = NewLogLimiter(opts.Logger, opts.LogLimit, opts.LogWindow)
+	c.logs = opts.LogLimiter
+	if c.logs == nil {
+		c.logs, c.ownLogs = NewLogLimiter(opts.Logger, opts.LogLimit, opts.LogWindow), true
+	}
 	c.touch()
 	c.idleSince.Store(time.Now().UnixNano())
 	c.mux = &Mux{Handlers: opts.Handlers, Refused: c.streamRefused}
@@ -175,11 +185,15 @@ func (c *Client) handshake() (Hello, *yamux.Stream, *FrameReader, error) {
 	} else {
 		ack.Proto = proto
 	}
-	if werr := c.ctlW.WriteJSON(FrameData, ControlMessage{Type: MsgHelloAck, HelloAck: &ack}); werr != nil {
-		return Hello{}, nil, nil, fmt.Errorf("write hello ack: %w", werr)
-	}
+	werr := c.ctlW.WriteJSON(FrameData, ControlMessage{Type: MsgHelloAck, HelloAck: &ack})
 	if !ack.Accept {
+		// Refused whether or not the ack went out: a refused agent ends the
+		// session as soon as it reads it, which can fail the write that
+		// delivered it.
 		return Hello{}, nil, nil, &RefusedError{Hello: hello, Reason: ack.Reason}
+	}
+	if werr != nil {
+		return Hello{}, nil, nil, fmt.Errorf("write hello ack: %w", werr)
 	}
 	c.proto = proto
 	return hello, ctl, r, nil
@@ -241,7 +255,9 @@ func (c *Client) fail(err error) {
 		c.err = err
 		_ = c.sess.Close()
 		close(c.done)
-		c.logs.Close()
+		if c.ownLogs {
+			c.logs.Close()
+		}
 	})
 }
 
@@ -267,10 +283,16 @@ func (c *Client) Err() error {
 	}
 }
 
+// closeSendWait bounds Close's attempt to tell the agent before it closes: a
+// stalled transport must not hold Close up for yamux's write timeout.
+const closeSendWait = 500 * time.Millisecond
+
 // Close ends the session at once: it tells the agent this is a clean close
 // (it holds its resumable commands and aborts the rest), then closes.
 func (c *Client) Close() error {
-	_ = c.ctlW.WriteJSON(FrameData, ControlMessage{Type: MsgClose})
+	ctx, cancel := context.WithTimeout(context.Background(), closeSendWait)
+	defer cancel()
+	_ = c.sendClose(ctx)
 	c.fail(ErrClosed)
 	return nil
 }
@@ -278,7 +300,7 @@ func (c *Client) Close() error {
 // Shutdown tells the agent to close and waits, within ctx, for it to end the
 // session, then closes whatever is left.
 func (c *Client) Shutdown(ctx context.Context) error {
-	if err := c.ctlW.WriteJSON(FrameData, ControlMessage{Type: MsgClose}); err == nil {
+	if err := c.sendClose(ctx); err == nil {
 		select {
 		case <-c.done:
 		case <-ctx.Done():
@@ -286,6 +308,20 @@ func (c *Client) Shutdown(ctx context.Context) error {
 	}
 	c.fail(ErrClosed)
 	return nil
+}
+
+// sendClose sends Close on the control stream, giving up when ctx ends first.
+func (c *Client) sendClose(ctx context.Context) error {
+	sent := make(chan error, 1)
+	go func() { sent <- c.ctlW.WriteJSON(FrameData, ControlMessage{Type: MsgClose}) }()
+	select {
+	case err := <-sent:
+		return err
+	case <-c.done:
+		return c.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Active is how many streams fleetd has open on the session.

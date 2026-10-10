@@ -46,6 +46,8 @@ type ExecOptions struct {
 	// StreamSilence without a frame as a lost transport: for a stream that
 	// crosses the network on its own, not on a session that has its own.
 	Heartbeat bool
+	// PingInterval and Silence override StreamPingInterval and StreamSilence.
+	PingInterval, Silence time.Duration
 }
 
 // Exec is a command an agent runs. It is a backend.ExecStream, plus what a
@@ -243,12 +245,12 @@ func (e *Exec) finishReattach(ctx context.Context, rw io.ReadWriteCloser) error 
 		}
 		e.mu.Lock()
 		ok := reply.Stdout == e.outOff && reply.Stderr == e.errOff
+		if ok && reply.PID != 0 {
+			e.pid = reply.PID
+		}
 		e.mu.Unlock()
 		if !ok {
 			return errors.New("re-attach: the agent replays from other offsets")
-		}
-		if reply.PID != 0 {
-			e.pid = reply.PID
 		}
 		return e.attach(rw, r, &reply)
 	case FrameOpen:
@@ -400,7 +402,14 @@ func (e *Exec) received(w *FrameWriter, out, errOut int64) {
 // heartbeat pings the agent on a self-standing transport, acknowledging what
 // arrived, and drops a transport that went silent.
 func (e *Exec) heartbeat(gen int, w *FrameWriter) {
-	t := time.NewTicker(StreamPingInterval)
+	interval, silence := StreamPingInterval, StreamSilence
+	if e.opts.PingInterval > 0 {
+		interval = e.opts.PingInterval
+	}
+	if e.opts.Silence > 0 {
+		silence = e.opts.Silence
+	}
+	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
 		select {
@@ -409,11 +418,13 @@ func (e *Exec) heartbeat(gen int, w *FrameWriter) {
 		case <-t.C:
 		}
 		e.mu.Lock()
-		if e.gen != gen {
+		if e.gen != gen || e.conn == nil {
+			// Re-attached (the new attachment has its own heartbeat), or
+			// detached: nothing to ping until a re-attach.
 			e.mu.Unlock()
 			return
 		}
-		silent := time.Since(e.lastRecv) > StreamSilence
+		silent := time.Since(e.lastRecv) > silence
 		conn := e.conn
 		p := Ping{}
 		if e.resumable {
@@ -422,10 +433,12 @@ func (e *Exec) heartbeat(gen int, w *FrameWriter) {
 		}
 		e.mu.Unlock()
 		if silent {
-			e.lost(gen, conn, errors.New("no frame for "+StreamSilence.String()))
+			e.lost(gen, conn, errors.New("no frame for "+silence.String()))
 			return
 		}
-		_ = w.WriteJSON(FramePing, p)
+		// In a goroutine: a ping must never wait on a transport that stopped
+		// reading, or the silence would go unseen.
+		go func() { _ = w.WriteJSON(FramePing, p) }()
 	}
 }
 
@@ -437,7 +450,9 @@ func (e *Exec) lost(gen int, rw io.ReadWriteCloser, cause error) {
 		_ = rw.Close()
 	}
 	e.mu.Lock()
-	if gen != e.gen || e.exited {
+	// An attachment is lost once: its reader and its heartbeat may both see
+	// it go, and a detached command has no transport left to lose.
+	if gen != e.gen || e.exited || e.conn == nil {
 		e.mu.Unlock()
 		return
 	}
@@ -488,7 +503,11 @@ func (e *Exec) Fail(err error) {
 func (e *Exec) ResumeID() string { return e.id }
 
 // PID is the command's pid in the pod.
-func (e *Exec) PID() int { return e.pid }
+func (e *Exec) PID() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.pid
+}
 
 // Resumable reports whether the command survives a lost transport.
 func (e *Exec) Resumable() bool { return e.resumable }

@@ -17,17 +17,24 @@ const logQueue = 64
 // Logger is how the agent reports its own warnings and errors: as LOG
 // records on the control stream, which fleetd writes to fleet.log at the same
 // level, tagged with the pod's fleet and instance. Before the control stream
-// is up, records wait (up to logQueue); without one they go to stderr. It is
-// safe for concurrent use.
+// is up, records wait (up to logQueue); without one (it is gone, or there
+// never is one) they go to stderr. It is safe for concurrent use.
 type Logger struct {
 	mu      sync.Mutex
 	w       *podwire.FrameWriter
 	queue   []podwire.LogRecord
 	dropped int
-	stderr  io.Writer
+	// detached: no control stream is coming, so records go to stderr.
+	detached bool
+	stderr   io.Writer
 }
 
+// newLogger keeps records until attach gives it the control stream.
 func newLogger(stderr io.Writer) *Logger { return &Logger{stderr: stderr} }
+
+// newStderrLogger writes every record to stderr: for a direct exec, which
+// has no control stream.
+func newStderrLogger(stderr io.Writer) *Logger { return &Logger{stderr: stderr, detached: true} }
 
 // Error, Warn and Info log msg with key/value pairs.
 func (l *Logger) Error(msg string, kv ...string) { l.log("error", msg, kv) }
@@ -44,6 +51,11 @@ func (l *Logger) log(level, msg string, kv []string) {
 	}
 	l.mu.Lock()
 	w := l.w
+	if w == nil && l.detached {
+		l.mu.Unlock()
+		l.toStderr(rec)
+		return
+	}
 	if w == nil {
 		if len(l.queue) < logQueue {
 			l.queue = append(l.queue, rec)
@@ -74,11 +86,12 @@ func (l *Logger) attach(w *podwire.FrameWriter) {
 	}
 }
 
-// detach stops sending: the control stream is gone. Queued records go to
-// stderr from now on.
+// detach stops sending: the control stream is gone (or never came). Queued
+// records, and every later one, go to stderr.
 func (l *Logger) detach() {
 	l.mu.Lock()
 	l.w = nil
+	l.detached = true
 	queue := l.queue
 	l.queue = nil
 	l.mu.Unlock()

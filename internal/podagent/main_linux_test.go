@@ -102,6 +102,7 @@ func helperOptions() Options {
 		ShepherdArgs: []string{"pod-agent", "shepherd"},
 		ShepherdEnv:  shepherdEnv(),
 		NoTakeover:   os.Getenv("PODAGENT_TEST_NO_TAKEOVER") == "1",
+		InitOOMScore: os.Getenv("PODAGENT_TEST_OOM_FROM"),
 	}
 	durations := map[string]*time.Duration{
 		"PODAGENT_TEST_ASK":            &o.TakeoverAsk,
@@ -157,22 +158,40 @@ func newTestDirs(t *testing.T) testDirs {
 	return d
 }
 
-// killShepherds ends the shepherds a test left behind.
+// killShepherds ends the shepherds a test left behind, and their commands
+// (each a session of its own, led by a child of its shepherd).
 func killShepherds(root string) {
 	markers, _ := filepath.Glob(filepath.Join(root, "r", heldDirName, "*.sock"))
 	if len(markers) == 0 {
 		return
 	}
 	procs, _ := os.ReadDir("/proc")
+	shepherds := map[int]bool{}
+	parents := map[int]int{}
 	for _, p := range procs {
 		pid, err := strconv.Atoi(p.Name())
 		if err != nil || pid == os.Getpid() {
 			continue
 		}
+		if stat, err := os.ReadFile("/proc/" + p.Name() + "/stat"); err == nil {
+			if i := bytes.LastIndexByte(stat, ')'); i > 0 {
+				if f := strings.Fields(string(stat[i+1:])); len(f) > 1 {
+					parents[pid], _ = strconv.Atoi(f[1])
+				}
+			}
+		}
 		environ, err := os.ReadFile("/proc/" + p.Name() + "/environ")
 		if err == nil && bytes.Contains(environ, []byte(helperEnv+"=shepherd")) && bytes.Contains(environ, []byte(root)) {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
+			shepherds[pid] = true
 		}
+	}
+	for pid, ppid := range parents {
+		if shepherds[ppid] {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+		}
+	}
+	for pid := range shepherds {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
 	}
 }
 

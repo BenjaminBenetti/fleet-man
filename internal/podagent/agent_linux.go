@@ -57,17 +57,20 @@ func Serve(ctx context.Context, conn io.ReadWriteCloser, opts Options) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	a := &agent{opts: o, ctx: ctx, cancel: cancel, sess: sess, log: newLogger(o.Stderr)}
+	// Last: whatever is logged without the control stream (before a failed
+	// handshake, or after the session) goes to stderr.
+	defer a.log.detach()
 	defer a.end()
 	stop := context.AfterFunc(ctx, a.end)
 	defer stop()
 
+	takeInitOOMScore(o, a.log)
 	a.host = loadHost(o, a.log)
 	ctl, r, err := a.handshake()
 	if err != nil {
 		return err
 	}
 	a.log.attach(a.ctlW)
-	defer a.log.detach()
 	a.rpc = a.methods()
 	if o.Role == podwire.RoleMain && !o.NoTakeover {
 		lock, err := a.takeOver()
