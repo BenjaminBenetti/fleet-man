@@ -3,7 +3,8 @@ package tui
 import (
 	"fmt"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -12,7 +13,19 @@ import (
 // Fleet Page
 // ===========================================
 
-var resolveWorkspaceBranch = gitutil.BranchName
+// instanceBranch is the branch shown on an instance row. The daemon reads it
+// from the workspace (InstanceRuntime.current_branch, pushed over Watch); the
+// TUI never reads a checkout itself, since it may run on another machine than
+// the daemon. Without a live read (no push yet, or a workspace that can't be
+// read while the instance is stopped) it falls back to the last branch seen,
+// then the requested one.
+func instanceBranch(rt *fleetgrpc.InstanceRuntime, instance *fleet.Instance) string {
+	var live *string
+	if rt != nil {
+		live = rt.CurrentBranch
+	}
+	return fleet.DisplayBranch(live, instance.LastBranch, instance.Branch)
+}
 
 // fleetPage holds fleet-list-specific state.
 type fleetPage struct {

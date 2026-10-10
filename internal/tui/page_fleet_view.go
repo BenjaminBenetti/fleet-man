@@ -385,7 +385,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				backendIcon = "⏣"
 			}
 			branchItem := ""
-			if branch := resolveWorkspaceBranch(instance.WorkspaceDir); branch != "" {
+			if branch := instanceBranch(m.runtime[rtKey(r.fleetName, instance.Name)], instance); branch != "" {
 				branchItem = dimStyle.Render("  " + branch + " " + backendIcon)
 			} else {
 				branchItem = dimStyle.Render("  " + backendIcon)

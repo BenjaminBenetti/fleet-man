@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,28 +71,43 @@ func neutralizeConflictingMounts(workspaceDir string, fleetMounts []backend.Moun
 	return restore, nil
 }
 
-// findDevcontainerJSON returns the path and raw bytes of the
-// devcontainer.json that `devcontainer up --workspace-folder
-// workspaceDir` will use. Search order matches the CLI: the canonical
+// devcontainerJSONPaths are the workspace-relative (slash-separated)
+// locations of the devcontainer.json that `devcontainer up
+// --workspace-folder` uses, in the CLI's search order: the canonical
 // .devcontainer/devcontainer.json first, then the repo-root
 // .devcontainer.json. The subfolder multi-config layout requires the
 // caller to pass --config, which fleet does not do, so it is not
 // covered here.
+var devcontainerJSONPaths = []string{".devcontainer/devcontainer.json", ".devcontainer.json"}
+
+// findDevcontainerJSON returns the path and raw bytes of the
+// devcontainer.json under workspaceDir on this machine (see
+// devcontainerJSONPaths).
 func findDevcontainerJSON(workspaceDir string) (string, []byte, error) {
-	candidates := []string{
-		filepath.Join(workspaceDir, ".devcontainer", "devcontainer.json"),
-		filepath.Join(workspaceDir, ".devcontainer.json"),
+	relPath, configBytes, err := findDevcontainerJSONWith(func(relPath string) ([]byte, error) {
+		return os.ReadFile(filepath.Join(workspaceDir, filepath.FromSlash(relPath)))
+	})
+	if err != nil {
+		return "", nil, err
 	}
-	for _, candidate := range candidates {
-		configBytes, err := os.ReadFile(candidate)
+	return filepath.Join(workspaceDir, filepath.FromSlash(relPath)), configBytes, nil
+}
+
+// findDevcontainerJSONWith is findDevcontainerJSON over readFile, which
+// reads a workspace file by its slash-separated relative path and reports
+// a missing one with an error satisfying errors.Is(err, fs.ErrNotExist).
+// It returns the relative path it found.
+func findDevcontainerJSONWith(readFile func(relPath string) ([]byte, error)) (string, []byte, error) {
+	for _, relPath := range devcontainerJSONPaths {
+		configBytes, err := readFile(relPath)
 		if err == nil {
-			return candidate, configBytes, nil
+			return relPath, configBytes, nil
 		}
-		if !errors.Is(err, os.ErrNotExist) {
+		if !errors.Is(err, fs.ErrNotExist) {
 			return "", nil, err
 		}
 	}
-	return "", nil, os.ErrNotExist
+	return "", nil, fs.ErrNotExist
 }
 
 // stripConflictingMounts removes every mount entry in original whose

@@ -55,8 +55,10 @@ All tools return structured JSON — no text output to parse.
 
 **Inspect state.** `fleet_status` summarizes every fleet (instance counts by
 running/stopped/other, plus the repo remote). `fleet_list` returns per-instance
-records (fleet, instance, status, branch, tag, backend, container_id,
-workspace_dir, created_at, error), optionally filtered to one fleet. `fleet_version` reports
+records (fleet, instance, status, branch, current_branch, tag, backend,
+container_id, workspace_dir, created_at, error), optionally filtered to one
+fleet. `branch` is the branch the instance was created from; `current_branch`
+is the one its workspace has checked out now. `fleet_version` reports
 the daemon's version and liveness. `fleet_logs` returns an instance's container
 logs (use `tail` to cap to the last N lines).
 

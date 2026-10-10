@@ -185,14 +185,20 @@ func (s *service) onTUIConnected() {
 // (cli up/down/... ) still mutate state.json directly until Phase 4, so a cached
 // snapshot here could clobber or hide their writes — a re-read can't. The
 // authoritative in-memory model (and the actual #63 fix) arrive in Phase 4 when
-// the last client-side writer is removed. Runtime + active_jobs are empty until
-// Phase 2 (Watch/pollers) and Phase 4 (jobs).
-func (s *service) GetState(_ context.Context, _ *fleetgrpc.GetStateRequest) (*fleetgrpc.GetStateReply, error) {
+// the last client-side writer is removed. The live runtime streams over Watch;
+// here it carries only current_branch, read on demand when the caller sets
+// fresh_branches (branches.go), since the runtime pollers run only while a TUI
+// watches.
+func (s *service) GetState(ctx context.Context, req *fleetgrpc.GetStateRequest) (*fleetgrpc.GetStateReply, error) {
 	st, err := state.Load()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load state: %v", err)
 	}
-	return &fleetgrpc.GetStateReply{State: protoconv.StateToProto(st), ActiveJobs: s.jobs.summaries()}, nil
+	reply := &fleetgrpc.GetStateReply{State: protoconv.StateToProto(st), ActiveJobs: s.jobs.summaries()}
+	if req.GetFreshBranches() {
+		reply.Runtime = s.hub.freshBranches(ctx, st)
+	}
+	return reply, nil
 }
 
 // Shutdown asks the server to stop. Phase 1 has no jobs, so a drain is

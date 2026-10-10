@@ -123,40 +123,68 @@ func TestUpdateNormalStopShortcutSkipsCreatingInstance(t *testing.T) {
 	}
 }
 
+// TestViewFleetListShowsBranchItemForInstance checks the row's branch comes
+// from the server: the live read pushed as InstanceRuntime.current_branch wins;
+// without one (a stopped instance whose workspace can't be read, or no push
+// yet) the row shows the last branch the server saw, then the requested one.
+// The TUI never reads a checkout itself.
 func TestViewFleetListShowsBranchItemForInstance(t *testing.T) {
-	inst := &fleet.Instance{
-		Name:         "agent-1",
-		Status:       fleet.StatusRunning,
-		WorkspaceDir: "/workspace/alpha/agent-1",
+	str := func(s string) *string { return &s }
+	tests := []struct {
+		name       string
+		rt         *fleetgrpc.InstanceRuntime
+		lastBranch string
+		branch     string
+		want       string
+		wantAbsent []string
+	}{
+		{name: "live read", rt: &fleetgrpc.InstanceRuntime{CurrentBranch: str("feature/status-line")},
+			lastBranch: "old", branch: "requested", want: "feature/status-line", wantAbsent: []string{"old", "requested"}},
+		{name: "no live read shows the last branch seen", rt: &fleetgrpc.InstanceRuntime{},
+			lastBranch: "feature/last-seen", branch: "requested", want: "feature/last-seen", wantAbsent: []string{"requested"}},
+		{name: "no runtime yet, never seen: the requested branch", branch: "feature/requested", want: "feature/requested"},
+		{name: "a detached live read stays blank", rt: &fleetgrpc.InstanceRuntime{CurrentBranch: str("")},
+			lastBranch: "feature/last-seen", wantAbsent: []string{"feature/last-seen"}},
 	}
-	fp := newFleetPage()
-	fp.rows = []row{
-		{kind: rowFleetHeader, fleetName: "alpha"},
-		{kind: rowInstance, fleetName: "alpha", instance: inst},
-		{kind: rowSettings},
-	}
-	m := &model{
-		st: &state.State{
-			Fleets: map[string]*fleet.Fleet{
-				"alpha": {Name: "alpha", Instances: []*fleet.Instance{inst}},
-			},
-		},
-		sessionStore: NewSessionStore(),
-		fleetPage:    fp,
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inst := &fleet.Instance{
+				Name:         "agent-1",
+				Status:       fleet.StatusStopped,
+				WorkspaceDir: "/workspace/alpha/agent-1",
+				LastBranch:   tt.lastBranch,
+				Branch:       tt.branch,
+			}
+			fp := newFleetPage()
+			fp.rows = []row{
+				{kind: rowFleetHeader, fleetName: "alpha"},
+				{kind: rowInstance, fleetName: "alpha", instance: inst},
+				{kind: rowSettings},
+			}
+			m := &model{
+				st: &state.State{
+					Fleets: map[string]*fleet.Fleet{
+						"alpha": {Name: "alpha", Instances: []*fleet.Instance{inst}},
+					},
+				},
+				sessionStore: NewSessionStore(),
+				fleetPage:    fp,
+				runtime:      map[string]*fleetgrpc.InstanceRuntime{},
+			}
+			if tt.rt != nil {
+				m.runtime[rtKey("alpha", "agent-1")] = tt.rt
+			}
 
-	prevResolveBranch := resolveWorkspaceBranch
-	resolveWorkspaceBranch = func(workspaceDir string) string {
-		if workspaceDir == "/workspace/alpha/agent-1" {
-			return "feature/status-line"
-		}
-		return ""
-	}
-	defer func() { resolveWorkspaceBranch = prevResolveBranch }()
-
-	view := fp.viewFleetList(m)
-	if !strings.Contains(view, "feature/status-line") {
-		t.Fatalf("view missing branch item:\n%s", view)
+			view := fp.viewFleetList(m)
+			if tt.want != "" && !strings.Contains(view, tt.want+" ⬡") {
+				t.Fatalf("view missing branch item %q:\n%s", tt.want, view)
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(view, absent) {
+					t.Fatalf("view unexpectedly shows %q:\n%s", absent, view)
+				}
+			}
+		})
 	}
 }
 
@@ -434,10 +462,6 @@ func TestViewFleetListOmitsBranchItemWhenBranchIsUnavailable(t *testing.T) {
 		fleetPage:    fp,
 	}
 
-	prevResolveBranch := resolveWorkspaceBranch
-	resolveWorkspaceBranch = func(string) string { return "" }
-	defer func() { resolveWorkspaceBranch = prevResolveBranch }()
-
 	view := fp.viewFleetList(m)
 	if strings.Contains(view, "feature/status-line") {
 		t.Fatalf("view unexpectedly contains branch item:\n%s", view)
@@ -477,10 +501,6 @@ func TestViewFleetListShowsAgentWorkingIndicator(t *testing.T) {
 		sessionStore: NewSessionStore(),
 		fleetPage:    fp,
 	}
-
-	prevResolveBranch := resolveWorkspaceBranch
-	resolveWorkspaceBranch = func(string) string { return "" }
-	defer func() { resolveWorkspaceBranch = prevResolveBranch }()
 
 	view := fp.viewFleetList(m)
 	if !strings.Contains(view, "\u25b6") || !strings.Contains(view, "Claude Code") {
@@ -522,10 +542,6 @@ func TestViewFleetListShowsAgentWaitingIndicator(t *testing.T) {
 		fleetPage:    fp,
 	}
 
-	prevResolveBranch := resolveWorkspaceBranch
-	resolveWorkspaceBranch = func(string) string { return "" }
-	defer func() { resolveWorkspaceBranch = prevResolveBranch }()
-
 	view := fp.viewFleetList(m)
 	if !strings.Contains(view, "\u23f8") || !strings.Contains(view, "Claude Code") {
 		t.Fatalf("view missing waiting indicator:\n%s", view)
@@ -557,10 +573,6 @@ func TestViewFleetListShowsAgentOffIndicator(t *testing.T) {
 		sessionStore: NewSessionStore(),
 		fleetPage:    fp,
 	}
-
-	prevResolveBranch := resolveWorkspaceBranch
-	resolveWorkspaceBranch = func(string) string { return "" }
-	defer func() { resolveWorkspaceBranch = prevResolveBranch }()
 
 	view := fp.viewFleetList(m)
 	if !strings.Contains(view, "idle") {
@@ -596,10 +608,6 @@ func TestViewFleetListNoAgentIndicatorForStoppedInstance(t *testing.T) {
 		sessionStore: NewSessionStore(),
 		fleetPage:    fp,
 	}
-
-	prevResolveBranch := resolveWorkspaceBranch
-	resolveWorkspaceBranch = func(string) string { return "" }
-	defer func() { resolveWorkspaceBranch = prevResolveBranch }()
 
 	view := fp.viewFleetList(m)
 	if strings.Contains(view, "Claude Code") || strings.Contains(view, "idle") {
@@ -671,10 +679,6 @@ func TestEditInstanceRenamesViaDisplayName(t *testing.T) {
 	if inst.DisplayName != "auth-fix" {
 		t.Fatalf("DisplayName = %q, want %q", inst.DisplayName, "auth-fix")
 	}
-
-	prevResolveBranch := resolveWorkspaceBranch
-	resolveWorkspaceBranch = func(string) string { return "" }
-	defer func() { resolveWorkspaceBranch = prevResolveBranch }()
 
 	view := fp.viewFleetList(m)
 	if !strings.Contains(view, "auth-fix") {

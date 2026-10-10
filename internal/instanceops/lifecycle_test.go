@@ -58,6 +58,54 @@ func TestStopInstanceTransitionsRunningToStopped(t *testing.T) {
 	}
 }
 
+// TestStopInstanceRecordsLastBranch locks the read-before-stop: the branch the
+// workspace is on is saved as LastBranch with the stopped status, since a
+// workspace that lives only in the running instance can't be read afterwards.
+// A read that fails (or finds a detached HEAD) keeps the previous value.
+func TestStopInstanceRecordsLastBranch(t *testing.T) {
+	tests := []struct {
+		name   string
+		branch string
+		ok     bool
+		want   string
+	}{
+		{"read before stop", "feature/x", true, "feature/x"},
+		{"detached head keeps the last named branch", "", true, "main"},
+		{"failed read keeps the last named branch", "", false, "main"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			client := &fakeClient{}
+			restore := stubLifecycleClient(client)
+			defer restore()
+			writeLifecycleState(t, fleet.StatusRunning)
+			if err := state.Update(func(st *state.State) error {
+				st.Fleets["alpha"].Instances[0].LastBranch = "main"
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			var readBeforeStop bool
+			readWorkspaceBranch = func(inst *fleet.Instance) (string, bool) {
+				readBeforeStop = len(client.stopCalls) == 0
+				return tt.branch, tt.ok
+			}
+
+			if _, err := StopInstance("alpha", "agent-1"); err != nil {
+				t.Fatalf("StopInstance() error = %v", err)
+			}
+			if !readBeforeStop {
+				t.Fatal("the branch must be read before the backend stops the instance")
+			}
+			if got := loadLifecycleInstance(t).LastBranch; got != tt.want {
+				t.Fatalf("saved LastBranch = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStartInstanceTransitionsStoppedToRunning(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -141,11 +189,14 @@ func TestStartInstanceNoOpsWhenAlreadyRunning(t *testing.T) {
 func stubLifecycleClient(client containerController) func() {
 	prevClient := newClient
 	prevHook := postStartHook
+	prevBranch := readWorkspaceBranch
 	newClient = func(backendType fleet.BackendType) containerController { return client }
 	postStartHook = func(string, *fleet.Instance, string) {}
+	readWorkspaceBranch = func(*fleet.Instance) (string, bool) { return "", false }
 	return func() {
 		newClient = prevClient
 		postStartHook = prevHook
+		readWorkspaceBranch = prevBranch
 	}
 }
 

@@ -10,14 +10,10 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
-	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
 	"github.com/spf13/cobra"
 )
 
-var (
-	listOutput     io.Writer = os.Stdout
-	listBranchName           = gitutil.BranchName
-)
+var listOutput io.Writer = os.Stdout
 
 // fetchFleetState retrieves the current state from the fleet server. It is a
 // package var so unit tests can inject a canned snapshot instead of spinning up
@@ -36,6 +32,19 @@ var fetchFleetState = func(ctx context.Context) (*fleetgrpc.State, error) {
 	return reply.GetState(), nil
 }
 
+// fetchListState is fetchFleetState for `fleet ls`, which also asks the server
+// to read each instance's checked-out branch (GetStateRequest.fresh_branches):
+// the checkout lives with the daemon, possibly on another machine. A package
+// var, like fetchFleetState, so tests can inject a canned reply.
+var fetchListState = func(ctx context.Context) (*fleetgrpc.GetStateReply, error) {
+	conn, err := fleetclient.Dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	return conn.Service().GetState(ctx, &fleetgrpc.GetStateRequest{FreshBranches: true})
+}
+
 func newListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list [fleet]",
@@ -43,9 +52,14 @@ func newListCmd() *cobra.Command {
 		Short:   "List devcontainer instances",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := fetchFleetState(cmd.Context())
+			reply, err := fetchListState(cmd.Context())
 			if err != nil {
 				return err
+			}
+			st := reply.GetState()
+			liveBranch := make(map[string]*string, len(reply.GetRuntime()))
+			for _, rt := range reply.GetRuntime() {
+				liveBranch[rt.GetFleet()+"/"+rt.GetInstance()] = rt.CurrentBranch
 			}
 
 			var fleetFilter string
@@ -78,7 +92,7 @@ func newListCmd() *cobra.Command {
 						instance.GetStatus().Display(),
 						containerShort,
 						created,
-						listBranchName(instance.GetWorkspaceDir()),
+						fleet.DisplayBranch(liveBranch[name+"/"+instance.GetName()], instance.GetLastBranch(), instance.GetBranch()),
 					)
 				}
 			}

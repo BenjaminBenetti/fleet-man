@@ -1,6 +1,7 @@
 package gitutil
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,13 +15,13 @@ func TestBranchNameReturnsBranchForGitRepo(t *testing.T) {
 	repo := initCommittedRepo(t)
 	runGit(t, repo, "checkout", "-b", "feature/status-line")
 
-	if got := BranchName(repo); got != "feature/status-line" {
+	if got := BranchName(context.Background(), repo); got != "feature/status-line" {
 		t.Fatalf("BranchName() = %q, want %q", got, "feature/status-line")
 	}
 }
 
 func TestBranchNameReturnsEmptyForNonRepoDirectory(t *testing.T) {
-	if got := BranchName(t.TempDir()); got != "" {
+	if got := BranchName(context.Background(), t.TempDir()); got != "" {
 		t.Fatalf("BranchName() = %q, want empty string", got)
 	}
 }
@@ -31,14 +32,14 @@ func TestBranchNameReturnsEmptyForDetachedHEAD(t *testing.T) {
 	repo := initCommittedRepo(t)
 	runGit(t, repo, "checkout", "--detach")
 
-	if got := BranchName(repo); got != "" {
+	if got := BranchName(context.Background(), repo); got != "" {
 		t.Fatalf("BranchName() = %q, want empty string", got)
 	}
 }
 
 func TestBranchNameReturnsEmptyForMissingWorkspace(t *testing.T) {
 	missingPath := filepath.Join(t.TempDir(), "missing")
-	if got := BranchName(missingPath); got != "" {
+	if got := BranchName(context.Background(), missingPath); got != "" {
 		t.Fatalf("BranchName() = %q, want empty string", got)
 	}
 }

@@ -1,6 +1,8 @@
 package devcontainer
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -449,5 +451,47 @@ func TestLoadFleetCustomizationsFromFileMissing(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist.json")
 	if _, err := LoadFleetCustomizationsFromFile(missing); err == nil {
 		t.Fatal("LoadFleetCustomizationsFromFile on missing file = nil, want error")
+	}
+}
+
+// TestReadFleetCustomizationsThroughAReader verifies the reader-based loader
+// (the daemon passes a backend WorkspaceReader) asks for the same files in
+// the CLI's order, treats every candidate missing as defaults, and surfaces a
+// genuine read failure instead of falling through to the next candidate.
+func TestReadFleetCustomizationsThroughAReader(t *testing.T) {
+	files := map[string]string{
+		".devcontainer.json": `{
+			// JSONC, like the host loader
+			"customizations": { "fleet": { "browser": { "initialUrl": "http://localhost:8080" } } },
+		}`,
+	}
+	var asked []string
+	read := func(relPath string) ([]byte, error) {
+		asked = append(asked, relPath)
+		if body, ok := files[relPath]; ok {
+			return []byte(body), nil
+		}
+		return nil, fs.ErrNotExist
+	}
+
+	fc, err := ReadFleetCustomizations(read)
+	if err != nil {
+		t.Fatalf("ReadFleetCustomizations = %v, want nil", err)
+	}
+	if got, want := fc.Browser.InitialURL, "http://localhost:8080"; got != want {
+		t.Errorf("InitialURL = %q, want %q", got, want)
+	}
+	if want := []string{".devcontainer/devcontainer.json", ".devcontainer.json"}; strings.Join(asked, ",") != strings.Join(want, ",") {
+		t.Errorf("read order = %v, want %v", asked, want)
+	}
+
+	files = map[string]string{}
+	if fc, err := ReadFleetCustomizations(read); err != nil || fc.Browser.InitialURL != "" {
+		t.Errorf("no devcontainer.json: got %+v, %v; want the zero value and no error", fc, err)
+	}
+
+	boom := errors.New("agent unreachable")
+	if _, err := ReadFleetCustomizations(func(string) ([]byte, error) { return nil, boom }); !errors.Is(err, boom) {
+		t.Errorf("read failure: err = %v, want %v", err, boom)
 	}
 }
