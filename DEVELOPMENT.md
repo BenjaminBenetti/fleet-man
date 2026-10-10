@@ -105,11 +105,15 @@ work, and a private cluster in a QA container for integration tests:
 2. Give integration tests that need a cluster a private one: add
    `FLEET_QA_START_MINIKUBE=1` to the QA container recipe above. Its entrypoint
    starts a minikube on the container's own Docker daemon and waits for the
-   node, so tests never touch the dev cluster or each other:
+   node, so tests never touch the dev cluster or each other.
+   `FLEET_ITEST_BACKEND=kubernetes` then runs the suite on it: only the tests
+   marked `# itest: k8s`, against the current context (`minikube`) unless
+   `FLEET_ITEST_CLUSTER` names another (see `integration/README.md`):
 
    ```bash
    docker run --rm --privileged --name "fleet-itest-$RANDOM" \
      -e FLEET_QA_START_MINIKUBE=1 -e FLEET_QA_MINIKUBE_FLAGS="--memory=4g --cpus=2" \
+     -e FLEET_ITEST_BACKEND=kubernetes \
      -v fleet-qa-minikube:/home/qa/.minikube/cache \
      ...                                # mounts, image and command as above
    ```
