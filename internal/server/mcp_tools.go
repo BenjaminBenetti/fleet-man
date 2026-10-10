@@ -568,6 +568,7 @@ type FleetJobStatusOutput struct {
 	Fleet     string       `json:"fleet"`
 	Instance  string       `json:"instance,omitempty"`
 	State     string       `json:"state"`
+	Step      string       `json:"step,omitempty" jsonschema:"while running, the provisioning step the job is on (e.g. cloning repository, starting container)"`
 	StartedAt string       `json:"started_at,omitempty"`
 	Ms        int64        `json:"ms,omitempty"`
 	Error     string       `json:"error,omitempty"`
@@ -593,7 +594,11 @@ func (s *service) mcpJobStatus(_ context.Context, _ *mcp.CallToolRequest, in Fle
 	if ts := j.summary.GetStartedAt(); ts != nil {
 		out.StartedAt = ts.AsTime().UTC().Format(time.RFC3339)
 	}
-	if d := j.outcome(); d != nil {
+	d := j.outcome()
+	if d == nil {
+		out.Step = protoconv.JobStepFromProto(j.currentStep()).Label()
+	}
+	if d != nil {
 		out.State = "succeeded"
 		if !d.GetSuccess() {
 			out.State = "failed"

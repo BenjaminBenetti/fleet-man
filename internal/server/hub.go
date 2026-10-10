@@ -54,6 +54,10 @@ type hub struct {
 	// mic hub (mic.go).
 	micSources    *fleetgrpc.MicSources
 	outputTargets *fleetgrpc.OutputTargets
+	// activeJobs is every in-flight job's summary (owned by the loop), pushed
+	// over Watch whenever a job starts, changes step or ends, and cached for a
+	// new subscriber's initial snapshot. Produced by the job manager.
+	activeJobs *fleetgrpc.ActiveJobs
 
 	// runtimeWanted is true while at least one subscriber asked for runtime;
 	// the runtime pollers read it lock-free to gate their expensive work.
@@ -101,6 +105,7 @@ func newHub() *hub {
 		remoteMcp:     &fleetgrpc.RemoteMcpStatus{}, // state == UNSPECIFIED (not connected)
 		micSources:    &fleetgrpc.MicSources{},
 		outputTargets: &fleetgrpc.OutputTargets{},
+		activeJobs:    &fleetgrpc.ActiveJobs{},
 	}
 	h.branches = newBranchResolver(h.readBranch)
 	return h
@@ -282,6 +287,19 @@ func (h *hub) broadcastOutputTargets(targets *fleetgrpc.OutputTargets) {
 	}
 }
 
+// broadcastActiveJobs caches the in-flight jobs and fans them out to every
+// subscriber. Conflatable like the microphone clients: only the current set
+// matters, and an unchanged one is dropped. Runs on the hub loop.
+func (h *hub) broadcastActiveJobs(jobs *fleetgrpc.ActiveJobs) {
+	if jobs == nil || proto.Equal(h.activeJobs, jobs) {
+		return
+	}
+	h.activeJobs = jobs
+	for sub := range h.subs {
+		sub.enqueueActiveJobs(jobs)
+	}
+}
+
 // subscriber is one Watch stream's conflating buffer. pendingState keeps the
 // newest State (older ones are dropped — a full snapshot supersedes them);
 // pendingRuntime merges by key so a stats-only update and a live-status-only
@@ -308,6 +326,7 @@ type subscriber struct {
 	// (conflated the same way).
 	pendingMicSources    *fleetgrpc.MicSources
 	pendingOutputTargets *fleetgrpc.OutputTargets
+	pendingActiveJobs    *fleetgrpc.ActiveJobs
 
 	notify chan struct{}
 }
@@ -394,6 +413,23 @@ func (s *subscriber) takeOutputTargets() *fleetgrpc.OutputTargets {
 	targets := s.pendingOutputTargets
 	s.pendingOutputTargets = nil
 	return targets
+}
+
+func (s *subscriber) enqueueActiveJobs(jobs *fleetgrpc.ActiveJobs) {
+	s.mu.Lock()
+	s.pendingActiveJobs = jobs
+	s.mu.Unlock()
+	s.signal()
+}
+
+// takeActiveJobs takes the pending in-flight job set, if any, out of the
+// buffer for sending.
+func (s *subscriber) takeActiveJobs() *fleetgrpc.ActiveJobs {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	jobs := s.pendingActiveJobs
+	s.pendingActiveJobs = nil
+	return jobs
 }
 
 // drain takes the pending state + runtime + browser-opens + file-copies +

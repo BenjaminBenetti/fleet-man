@@ -12,9 +12,10 @@ import (
 // single hub turn, then pumps conflated StateChanged / RuntimeChanged events to
 // the client until it disconnects or the server shuts down.
 //
-// In P2 the persisted snapshots come from the state poller (disk re-Load) and
-// the runtime sidecar from the runtime pollers; JobStarted/BrowserOpen and
-// reattach_job_ids are not emitted yet (jobs land in P4, control in P3).
+// The persisted snapshots come from the state poller (disk re-Load) and job
+// writes, the runtime sidecar from the runtime pollers, and the in-flight jobs
+// (ActiveJobs) from the job manager. The per-job Job* events and
+// reattach_job_ids are not used: a job's own stream carries its events.
 func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreamingServer[fleetgrpc.Event]) error {
 	ctx := stream.Context()
 	sub := newSubscriber(req.GetSubscribeRuntime())
@@ -46,6 +47,11 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 			}
 			if h.outputTargets != nil {
 				sub.enqueueOutputTargets(h.outputTargets)
+			}
+			// The in-flight jobs, so provisioning rows show their step at once
+			// (and a reconnecting client drops the steps of jobs that ended).
+			if h.activeJobs != nil {
+				sub.enqueueActiveJobs(h.activeJobs)
 			}
 		}
 		close(registered)
@@ -111,6 +117,11 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 			}
 			if targets := sub.takeOutputTargets(); targets != nil {
 				if err := stream.Send(&fleetgrpc.Event{Kind: &fleetgrpc.Event_OutputTargets{OutputTargets: targets}}); err != nil {
+					return err
+				}
+			}
+			if jobs := sub.takeActiveJobs(); jobs != nil {
+				if err := stream.Send(&fleetgrpc.Event{Kind: &fleetgrpc.Event_ActiveJobs{ActiveJobs: jobs}}); err != nil {
 					return err
 				}
 			}

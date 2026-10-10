@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
@@ -43,6 +44,9 @@ func (s *service) failInterruptedJobs() {
 	}
 	for _, key := range failed {
 		flog.Warn("instance job interrupted by daemon restart; marked failed", "instance", key)
+		if fleetName, instanceName, ok := strings.Cut(key, "/"); ok {
+			appendCreationLogError(fleetName, instanceName, interruptedByRestart)
+		}
 	}
 }
 
