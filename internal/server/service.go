@@ -52,6 +52,11 @@ type service struct {
 	// loop starts it once fleetd serves; without it (newService() tests) the
 	// kube RPCs still work and connections stay CHECKING.
 	kube *kubeManager
+	// kubePods drives the pool from fleetd's state and acts on what its
+	// informers see of the Kubernetes instances' pods: restarts the cluster
+	// made, crash loops, agent sessions (kube_pods.go; inert in a -tags nok8s
+	// build). Started by the serve loop once fleetd serves.
+	kubePods *kubePods
 
 	// sshListen serves the token-gated gRPC server on a loopback port while
 	// remote fleet is enabled in SSH mode (sshlisten.go); sshTunnels maintains
@@ -108,6 +113,8 @@ func newService() *service {
 	}
 	svc.instanceMCP = newInstanceMCP(svc)
 	svc.kube = newKubeManager(svc)
+	svc.kubePods = newKubePods(svc)
+	svc.hub.stateListeners = append(svc.hub.stateListeners, svc.kubePods.onState)
 	// The in-flight jobs and their current steps are pushed over Watch. The
 	// set is taken on the hub loop, so pushes land in the order they happen
 	// and the last one is always current.

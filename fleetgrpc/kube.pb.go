@@ -2496,9 +2496,11 @@ type KubeInstanceRuntime struct {
 	PodReason string         `protobuf:"bytes,1,opt,name=pod_reason,json=podReason,proto3" json:"pod_reason,omitempty"`
 	Node      string         `protobuf:"bytes,2,opt,name=node,proto3" json:"node,omitempty"`
 	Agent     KubeAgentState `protobuf:"varint,3,opt,name=agent,proto3,enum=fleetgrpc.KubeAgentState" json:"agent,omitempty"`
-	// restart_cause names the last restart the cluster made on its own
-	// ("oom-killed", "evicted", "node-drained", "node-lost", "fleet-moved",
-	// "crashed"); cleared by the next attach.
+	// restart_cause names the last restart the cluster made on its own, in
+	// the words the instance row shows after "sessions reset: " ("OOM-killed",
+	// "evicted", "node drained", "node lost", "fleet moved", "crashed", "pod
+	// deleted"; backend.RestartCause); "" when there was none, or the next
+	// attach cleared it.
 	RestartCause string                 `protobuf:"bytes,4,opt,name=restart_cause,json=restartCause,proto3" json:"restart_cause,omitempty"`
 	RestartedAt  *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=restarted_at,json=restartedAt,proto3" json:"restarted_at,omitempty"`
 	// sessions_ended: that restart killed every process (an out-of-memory kill

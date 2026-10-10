@@ -558,9 +558,11 @@ message KubeInstanceRuntime {
   string pod_reason = 1;
   string node = 2;
   KubeAgentState agent = 3;
-  // restart_cause names the last restart the cluster made on its own
-  // ("oom-killed", "evicted", "node-drained", "node-lost", "fleet-moved",
-  // "crashed"); cleared by the next attach.
+  // restart_cause names the last restart the cluster made on its own, in
+  // the words the instance row shows after "sessions reset: " ("OOM-killed",
+  // "evicted", "node drained", "node lost", "fleet moved", "crashed", "pod
+  // deleted"; backend.RestartCause); "" when there was none, or the next
+  // attach cleared it.
   string restart_cause = 4;
   google.protobuf.Timestamp restarted_at = 5;
   // sessions_ended: that restart killed every process (an out-of-memory kill

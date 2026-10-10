@@ -45,8 +45,10 @@ const browserPrepareTimeout = 3 * time.Minute
 const coderFetchTimeout = 30 * time.Second
 
 // resolveExecArgv asks the server for the argv (+ env) to run argv inside the
-// instance. A package var so tests can stub the whole RPC.
-var resolveExecArgv = func(fleetName, instanceName string, argv []string) ([]string, map[string]string, error) {
+// instance; attach says a terminal attaches with it (which clears the
+// instance's "sessions reset" notice). A package var so tests can stub the
+// whole RPC.
+var resolveExecArgv = func(fleetName, instanceName string, argv []string, attach bool) ([]string, map[string]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), execResolveTimeout)
 	defer cancel()
 	conn, err := dialMutation(ctx)
@@ -57,6 +59,7 @@ var resolveExecArgv = func(fleetName, instanceName string, argv []string) ([]str
 		Fleet:    fleetName,
 		Instance: instanceName,
 		Argv:     argv,
+		Attach:   attach,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -67,8 +70,8 @@ var resolveExecArgv = func(fleetName, instanceName string, argv []string) ([]str
 // resolveExecCmd resolves the exec argv for the instance and builds a local
 // *exec.Cmd with the server-supplied env merged over the client's. The caller
 // sets stdio / reads .Args / runs it (Output/CombinedOutput/Run/tea.Exec).
-func resolveExecCmd(fleetName, instanceName string, argv []string) (*exec.Cmd, error) {
-	resolved, env, err := resolveExecArgv(fleetName, instanceName, argv)
+func resolveExecCmd(fleetName, instanceName string, argv []string, attach bool) (*exec.Cmd, error) {
+	resolved, env, err := resolveExecArgv(fleetName, instanceName, argv, attach)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +106,7 @@ var runInstanceCommand = func(fleetName, instanceName string, argv []string) (st
 		out, code, err := execstream.Output(ctx, conn.Service(), fleetName, instanceName, argv)
 		return string(out), code, err
 	}
-	cmd, err := resolveExecCmd(fleetName, instanceName, argv)
+	cmd, err := resolveExecCmd(fleetName, instanceName, argv, false)
 	if err != nil {
 		return "", 0, err
 	}
@@ -135,7 +138,7 @@ var runInstanceCommand = func(fleetName, instanceName string, argv []string) (st
 // package var so tests can stub it.
 var attachExecCmd = func(fleetName, instanceName string, argv []string) (*exec.Cmd, error) {
 	if !fleetclient.IsRemote() {
-		return resolveExecCmd(fleetName, instanceName, argv)
+		return resolveExecCmd(fleetName, instanceName, argv, true)
 	}
 	self, err := os.Executable()
 	if err != nil {

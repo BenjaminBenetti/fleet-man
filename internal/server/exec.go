@@ -51,6 +51,9 @@ func (s *service) ResolveExecCommand(_ context.Context, req *fleetgrpc.ResolveEx
 		return nil, err
 	}
 	cmd := backendutil.NewForInstance(inst, false).ExecCommand(inst.WorkspaceDir, req.GetArgv()).Cmd
+	if req.GetAttach() {
+		s.kubePods.attached(req.GetFleet(), req.GetInstance())
+	}
 	return &fleetgrpc.ResolveExecCommandReply{
 		Argv: cmd.Args,
 		Env:  envSliceToMap(cmd.Env),

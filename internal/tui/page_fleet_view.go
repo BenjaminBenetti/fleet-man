@@ -295,6 +295,11 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 					m.jobStepSuffix(r.fleetName, instance)
 			} else {
 				status = renderStatus(instance.Status)
+				if instance.Status == fleet.StatusRunning {
+					if note := kubeRowNote(m.runtime[rtKey(r.fleetName, instance.Name)]); note != "" {
+						status += dimStyle.Render(" · " + note)
+					}
+				}
 			}
 
 			ref := InstanceRef{Fleet: r.fleetName, Instance: instance.Name}

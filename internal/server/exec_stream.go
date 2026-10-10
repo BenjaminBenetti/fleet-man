@@ -109,6 +109,11 @@ func (s *service) Exec(stream fleetgrpc.FleetService_ExecServer) error {
 		flog.Error("exec session", append(logArgs, "ms", flog.MillisSince(began), "err", err)...)
 		return err
 	}
+	if start.GetTty() {
+		// A terminal attached: the instance's "sessions reset" notice has
+		// been seen.
+		s.kubePods.attached(start.GetFleet(), start.GetInstance())
+	}
 	snd := &execSender{stream: stream}
 	code, errMsg := runExecStream(stream, snd, proc, start.GetTty())
 	logArgs = append(logArgs, "code", code, "ms", flog.MillisSince(began))
