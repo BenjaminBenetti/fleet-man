@@ -178,6 +178,11 @@ func NormalizeAgent(a Agent) (Agent, error) {
 	if err := ValidateBackendType(a.Backend); err != nil {
 		return Agent{}, fmt.Errorf("agent %q: %w", a.Name, err)
 	}
+	if a.Backend == BackendKubernetes {
+		// An agent fires unattended into a cluster, which needs the caps
+		// and queue cluster agents get; until then they run on docker.
+		return Agent{}, fmt.Errorf("agent %q: agents cannot run on a Kubernetes cluster yet", a.Name)
+	}
 	return a, nil
 }
 
