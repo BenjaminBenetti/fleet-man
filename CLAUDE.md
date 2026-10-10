@@ -21,3 +21,11 @@ any of them:
 - `on` passes extra flags to `minikube start` (e.g. `--memory=8g --cpus=4`);
   `minikube delete` wipes the cluster.
 - Turn it off when you no longer need it.
+
+## Integration tests
+
+Never run `integration/run.sh` or `integration/tests/*.sh` directly here. This
+devcontainer is a fleet instance, and the TUI tests bind, unbind and kill on the
+tmux server hosting your own session. Run them in a throwaway QA container; the
+recipe, and the one for Kubernetes tests (`FLEET_QA_START_MINIKUBE=1`), is in
+DEVELOPMENT.md under "Integration tests" and "Dev loop".
