@@ -469,11 +469,17 @@ func (c *copier) selfCheck() error {
 	return fmt.Errorf("seed self-check: %s", strings.Join(bad, "; "))
 }
 
-// scan records the self-check's expectations for the tree src as it should
-// be at dst, copying nothing: how a tree cp copied is checked.
+// scan readies a tree cp copied from src to dst for the self-check: it copies
+// the extended attributes cp was not given (every one but security.selinux,
+// which `cp --preserve=xattr` would carry over) and records the self-check's
+// expectations for every file capability and setuid/setgid bit, as the copier
+// itself would have.
 func (c *copier) scan(src, dst string) error {
 	var st unix.Stat_t
 	if err := unix.Lstat(src, &st); err != nil {
+		return err
+	}
+	if err := c.adopt(src, dst, &st); err != nil {
 		return err
 	}
 	img := c.imagePath(src)
@@ -490,25 +496,42 @@ func (c *copier) scan(src, dst string) error {
 		if err := unix.Lstat(csrc, &cst); err != nil {
 			continue
 		}
-		switch cst.Mode & unix.S_IFMT {
-		case unix.S_IFDIR:
+		typ := cst.Mode & unix.S_IFMT
+		if typ != unix.S_IFDIR && c.mounts[c.imagePath(csrc)] {
+			continue
+		}
+		if typ == unix.S_IFDIR {
 			if err := c.scan(csrc, cdst); err != nil {
 				return err
 			}
-		case unix.S_IFREG:
-			if c.mounts[c.imagePath(csrc)] {
-				continue
-			}
-			caps, err := getXattr(csrc, -1, capabilityXattr)
-			if err != nil {
-				caps = nil
-			}
-			if caps != nil || cst.Mode&(unix.S_ISUID|unix.S_ISGID) != 0 {
-				c.mu.Lock()
-				c.expects = append(c.expects, expectation{dst: cdst, caps: caps, mode: cst.Mode & 0o7777, uid: cst.Uid, gid: cst.Gid})
-				c.mu.Unlock()
-			}
+			continue
 		}
+		if err := c.adopt(csrc, cdst, &cst); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// adopt gives the entry cp made of src at dst src's extended attributes (but
+// security.selinux), and records a regular file's self-check expectation from
+// the source: a file cp did not make still gets one, which then fails.
+func (c *copier) adopt(src, dst string, st *unix.Stat_t) error {
+	typ := st.Mode & unix.S_IFMT
+	var dstSt unix.Stat_t
+	var caps []byte
+	if unix.Lstat(dst, &dstSt) == nil && dstSt.Mode&unix.S_IFMT == typ {
+		var err error
+		if caps, err = c.copyXattrs(src, dst, -1, -1, typ == unix.S_IFLNK); err != nil {
+			return fmt.Errorf("copy %s: %w", c.imagePath(src), err)
+		}
+	} else if typ == unix.S_IFREG {
+		caps, _ = getXattr(src, -1, capabilityXattr)
+	}
+	if typ == unix.S_IFREG && (caps != nil || st.Mode&(unix.S_ISUID|unix.S_ISGID) != 0) {
+		c.mu.Lock()
+		c.expects = append(c.expects, expectation{dst: dst, caps: caps, mode: st.Mode & 0o7777, uid: st.Uid, gid: st.Gid})
+		c.mu.Unlock()
 	}
 	return nil
 }

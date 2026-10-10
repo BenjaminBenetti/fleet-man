@@ -316,6 +316,10 @@ func TestDockerMTU(t *testing.T) {
 	if fi, _ := os.Stat(cfg); fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v", fi.Mode())
 	}
+	_ = os.WriteFile(cfg, []byte("null\n"), 0o644)
+	if changed, err := mergeDockerMTU(cfg, 1450); err != nil || !changed {
+		t.Fatalf("a null config: %v %v", changed, err)
+	}
 	_ = os.WriteFile(cfg, []byte("not json"), 0o644)
 	if _, err := mergeDockerMTU(cfg, 1450); err == nil {
 		t.Fatal("a broken config was overwritten")

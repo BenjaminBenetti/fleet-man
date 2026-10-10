@@ -126,13 +126,15 @@ func gnuCP() (string, bool) {
 	return cp, true
 }
 
-// cpTree copies src to the new dir dst with GNU cp, keeping what the Go
-// copier keeps but security.selinux (cp leaves it alone without
-// --preserve=context); without root it does not try to keep owners.
+// cpTree copies src to the new dir dst with GNU cp: owners (not without
+// root), modes and ACLs, times, hard links and holes. Extended attributes are
+// left to the copier's scan: `--preserve=xattr` copies security.selinux too
+// (libattr skips only what /etc/xattr.conf lists), which would impose the
+// image's label, or fail the copy where the node's policy refuses it.
 func cpTree(ctx context.Context, cp, src, dst string, singleUID bool) error {
-	preserve := "--preserve=mode,ownership,timestamps,links,xattr"
+	preserve := "--preserve=mode,ownership,timestamps,links"
 	if singleUID {
-		preserve = "--preserve=mode,timestamps,links,xattr"
+		preserve = "--preserve=mode,timestamps,links"
 	}
 	cmd := exec.CommandContext(ctx, cp, "-dR", preserve, "--sparse=auto",
 		"--one-file-system", "--", src, dst)

@@ -71,6 +71,11 @@ func mergeDockerMTU(file string, mtu int) (bool, error) {
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			return false, fmt.Errorf("%s is not a JSON object, left as it is: %w", file, err)
 		}
+		if cfg == nil {
+			// A JSON null: no settings to keep (and a nil map to write
+			// into would panic PID 1).
+			cfg = map[string]any{}
+		}
 	}
 	if cur, ok := cfg["mtu"].(float64); ok && int(cur) == mtu {
 		return false, nil

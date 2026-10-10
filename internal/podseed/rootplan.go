@@ -39,24 +39,36 @@ type rootPlan struct {
 }
 
 // planRoot decides a generation's layout from the image's top-level entries
-// and the instance's mount targets.
+// and the instance's mount targets. A target that is a whole top-level dir
+// (a workspace at /workspace, a volume at /data) needs no parent, and hides
+// whatever the image has there: that dir is neither copied nor created, and
+// the pod mounts only the target's own source at it (a pod may not mount two
+// sources at one path).
 func planRoot(tops map[string]topKind, spec SeedSpec) rootPlan {
 	plan := rootPlan{mountpoints: map[string]bool{}}
 	excluded := map[string]bool{}
 	for _, name := range append(slices.Clone(alwaysExcluded), spec.Exclude...) {
 		excluded[name] = true
 	}
+	targets := outermost(spec.MountDirs)
+	covered := map[string]bool{}
+	for _, target := range targets {
+		top, rest, _ := strings.Cut(strings.TrimPrefix(target, "/"), "/")
+		if rest == "" && tops[top] != topOther {
+			covered[top] = true
+		}
+	}
 	for name, kind := range tops {
-		if kind == topDir && !excluded[name] {
+		if kind == topDir && !excluded[name] && !covered[name] {
 			plan.dirs = append(plan.dirs, name)
 		}
 	}
 	sort.Strings(plan.dirs)
 
 	extra := map[string]bool{}
-	for _, target := range outermost(spec.MountDirs) {
+	for _, target := range targets {
 		top, _, _ := strings.Cut(strings.TrimPrefix(target, "/"), "/")
-		if excluded[top] {
+		if excluded[top] || covered[top] {
 			continue
 		}
 		switch kind, ok := tops[top]; {

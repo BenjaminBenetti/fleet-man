@@ -32,7 +32,8 @@ type Manifest struct {
 	// Dirs are the image's top-level dirs persisted under root/, sorted:
 	// the instance pod mounts each root/<d> at /<d>.
 	Dirs []string `json:"dirs"`
-	// RootExtra are the top-level dirs under root-extra/, sorted.
+	// RootExtra are the top-level dirs under root-extra/, sorted. Neither
+	// list holds a dir that a mount target covers whole.
 	RootExtra []string `json:"root_extra,omitempty"`
 	// Volumes are the volumes this seed copied up (new ones only).
 	Volumes []string `json:"volumes,omitempty"`

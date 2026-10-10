@@ -147,6 +147,13 @@ func (s *Server) Workspace(ctx context.Context, stall time.Duration) (*Workspace
 	for {
 		left := stall - s.idleFor()
 		if left <= 0 {
+			// A transfer that already arrived is no stall.
+			select {
+			case ws := <-s.attempts:
+				ws.stall = stall
+				return ws, nil
+			default:
+			}
 			return nil, ErrStalled
 		}
 		timer := time.NewTimer(left)
@@ -198,11 +205,23 @@ func (s *Server) Finish(ctx context.Context, r Result, hold time.Duration) error
 	s.result = &r
 	cur := s.cur
 	s.mu.Unlock()
-	if cur != nil {
-		cur.send(outFrame{t: FrameResult, payload: data})
-	}
 	timer := time.NewTimer(hold)
 	defer timer.Stop()
+	if cur != nil {
+		// The hold bounds this too: a connection whose reader stopped keeps
+		// its queue full until it ends, and a newer connection gets the
+		// result from serve.
+		select {
+		case cur.out <- outFrame{t: FrameResult, payload: data}:
+		case <-cur.done:
+		case <-timer.C:
+			return ErrNotCollected
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.closed:
+			return net.ErrClosed
+		}
+	}
 	select {
 	case <-s.acked:
 		return nil
@@ -317,16 +336,14 @@ func (s *Server) readLoop(conn *serverConn) error {
 			if conn.stream != nil {
 				return errors.New("a workspace transfer started inside another")
 			}
-			s.mu.Lock()
-			wanted := s.opts.Workspace && !s.wsDone
-			s.mu.Unlock()
-			if !wanted {
+			ws := s.newAttempt(conn)
+			if ws == nil {
 				rejecting = true
 				conn.sendJSON(FrameError, ErrorMessage{Error: "the job takes no workspace now", Workspace: true})
 				continue
 			}
 			rejecting = false
-			conn.stream = s.newAttempt(conn)
+			conn.stream = ws
 		case FrameData:
 			if rejecting {
 				continue
@@ -371,8 +388,15 @@ func (s *Server) readLoop(conn *serverConn) error {
 }
 
 // newAttempt starts a workspace transfer on conn and offers it to the job,
-// replacing an older transfer the job has not taken.
+// replacing an older transfer the job has not taken; nil when the job takes
+// no workspace now. Every offer is made under mu, right after emptying the
+// slot, so it never blocks; Accept closes the slot under mu too.
 func (s *Server) newAttempt(conn *serverConn) *WorkspaceStream {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.opts.Workspace || s.wsDone {
+		return nil
+	}
 	ws := &WorkspaceStream{
 		srv:   s,
 		conn:  conn,
@@ -381,15 +405,20 @@ func (s *Server) newAttempt(conn *serverConn) *WorkspaceStream {
 		hash:  sha256.New(),
 		stall: DefaultStallTimeout,
 	}
+	s.dropStaleAttemptLocked()
+	s.attempts <- ws
+	return ws
+}
+
+// dropStaleAttemptLocked abandons the transfer waiting in the slot, if any:
+// the job never took it, so nobody reads it, and closing it frees its
+// connection's read loop to skip the rest of its data. s.mu is held.
+func (s *Server) dropStaleAttemptLocked() {
 	select {
 	case stale := <-s.attempts:
-		// The job never took it, so nobody reads it: abandon it, which
-		// also frees its connection's read loop.
 		_ = stale.Close()
 	default:
 	}
-	s.attempts <- ws
-	return ws
 }
 
 // wsItem is the next piece of a transfer: data, or its end (err nil when it
@@ -473,6 +502,13 @@ func (ws *WorkspaceStream) Read(p []byte) (int, error) {
 	for {
 		left := ws.stall - ws.srv.idleFor()
 		if left <= 0 {
+			// What already arrived is read first: a stall is fleetd's
+			// silence with nothing left to read, not a slow extraction.
+			select {
+			case item := <-ws.items:
+				return ws.take(item, p)
+			default:
+			}
 			ws.err = ErrStalled
 			return 0, ws.err
 		}
@@ -480,16 +516,7 @@ func (ws *WorkspaceStream) Read(p []byte) (int, error) {
 		select {
 		case item := <-ws.items:
 			timer.Stop()
-			if item.final {
-				ws.err = item.err
-				if ws.err == nil {
-					ws.err = io.EOF
-				}
-				return 0, ws.err
-			}
-			n := copy(p, item.data)
-			ws.buf = item.data[n:]
-			return n, nil
+			return ws.take(item, p)
 		case <-ws.srv.closed:
 			timer.Stop()
 			ws.err = net.ErrClosed
@@ -499,12 +526,29 @@ func (ws *WorkspaceStream) Read(p []byte) (int, error) {
 	}
 }
 
+// take hands Read one item of the transfer.
+func (ws *WorkspaceStream) take(item wsItem, p []byte) (int, error) {
+	if item.final {
+		ws.err = item.err
+		if ws.err == nil {
+			ws.err = io.EOF
+		}
+		return 0, ws.err
+	}
+	n := copy(p, item.data)
+	ws.buf = item.data[n:]
+	return n, nil
+}
+
 // Accept tells fleetd the transfer was extracted (files entries, bytes of
-// content); the job takes no other.
+// content); the job takes no other. A transfer a newer connection started
+// meanwhile is abandoned, so that connection's read loop skips its data
+// instead of blocking on it (and missing the acknowledgement of the result).
 func (ws *WorkspaceStream) Accept(files, bytes int64) {
 	ws.Close()
 	ws.srv.mu.Lock()
 	ws.srv.wsDone = true
+	ws.srv.dropStaleAttemptLocked()
 	ws.srv.mu.Unlock()
 	data, _ := json.Marshal(Progress{Phase: "workspace", Detail: "received", Files: files, Bytes: bytes, Done: true})
 	ws.conn.send(outFrame{t: FrameProgress, payload: data})

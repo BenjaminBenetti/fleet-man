@@ -150,11 +150,13 @@ func StageScript(f StageFile) (string, error) {
 	} else {
 		fmt.Fprintf(&b, "head -c %s > \"$t\"\n", itoa(f.Size))
 	}
-	fmt.Fprintf(&b, "n=$(wc -c < \"$t\" | tr -d ' ')\n[ \"$n\" = %s ] || { echo \"stage %s: got $n bytes, want %s\" >&2; exit 1; }\n",
-		itoa(f.Size), shellquote.EscapeSingle(f.Path), itoa(f.Size))
+	// The path reaches the messages as a printf argument, quoted like every
+	// other use of it, never spliced into a format or a double-quoted string.
+	fmt.Fprintf(&b, "n=$(wc -c < \"$t\" | tr -d ' ')\n[ \"$n\" = %s ] || { printf 'stage %%s: got %%s bytes, want %%s\\n' %s \"$n\" %s >&2; exit 1; }\n",
+		itoa(f.Size), q(f.Path), itoa(f.Size))
 	if f.CheckSHA {
-		fmt.Fprintf(&b, "s=$(sha256sum < \"$t\" | cut -d' ' -f1)\n[ \"$s\" = %s ] || { echo \"stage %s: sha256 $s, want %s\" >&2; exit 1; }\n",
-			f.SHA256, shellquote.EscapeSingle(f.Path), f.SHA256)
+		fmt.Fprintf(&b, "s=$(sha256sum < \"$t\" | cut -d' ' -f1)\n[ \"$s\" = %s ] || { printf 'stage %%s: sha256 %%s, want %%s\\n' %s \"$s\" %s >&2; exit 1; }\n",
+			f.SHA256, q(f.Path), f.SHA256)
 	}
 	fmt.Fprintf(&b, "chmod %04o \"$t\"\nmv -f \"$t\" %s\ntrap - EXIT\n", mode, q(f.Path))
 	if f.Ready {

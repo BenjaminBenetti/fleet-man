@@ -424,3 +424,101 @@ func TestRunPipeGivesUpWithoutASocket(t *testing.T) {
 		t.Fatal("RunPipe to no socket succeeded")
 	}
 }
+
+// sendTransfer writes one whole, well-formed transfer of data in frames of at
+// most chunk bytes. It reports the first write error rather than failing the
+// test, so it may run in a goroutine of its own.
+func (rc *rawClient) sendTransfer(data []byte, chunk int) error {
+	if err := WriteFrame(rc.c, FrameWorkspace, nil); err != nil {
+		return err
+	}
+	for off := 0; off < len(data); off += chunk {
+		if err := WriteFrame(rc.c, FrameData, data[off:min(off+chunk, len(data))]); err != nil {
+			return err
+		}
+	}
+	return WriteJSON(rc.c, FrameEnd, WorkspaceEnd{Bytes: int64(len(data)), SHA256: sha(data)})
+}
+
+func TestAcceptAbandonsATransferANewerConnectionStarted(t *testing.T) {
+	srv, sock := listen(t, ServerOptions{Workspace: true})
+	ctx := context.Background()
+	first := newRawClient(t, sock)
+	if err := first.sendTransfer([]byte("the workspace"), 4); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := srv.Workspace(ctx, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := io.ReadAll(ws); err != nil || string(data) != "the workspace" {
+		t.Fatalf("read %q, %v", data, err)
+	}
+
+	// Before the job accepts it, fleetd reconnects and sends the workspace
+	// again: more frames than the transfer buffers, so the newer
+	// connection's read loop waits on a transfer nobody will read.
+	second := newRawClient(t, sock)
+	go func() { _ = second.sendTransfer(bytes.Repeat([]byte("x"), 64), 2) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(srv.attempts) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the second transfer never reached the job")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	ws.Accept(1, 13)
+
+	// The result goes to the newer connection, and its acknowledgement must
+	// get through.
+	finished := make(chan error, 1)
+	go func() { finished <- srv.Finish(ctx, Result{OK: true}, 3*time.Second) }()
+	for {
+		typ, _ := second.read()
+		if typ == FrameResult {
+			break
+		}
+	}
+	second.write(FrameAck, nil)
+	if err := <-finished; err != nil {
+		t.Fatalf("Finish = %v, want the acknowledged result", err)
+	}
+}
+
+func TestFinishHoldsNoLongerThanTheHoldOnAStuckConnection(t *testing.T) {
+	srv, sock := listen(t, ServerOptions{})
+	newRawClient(t, sock) // and never reads again
+	// Progress fills the socket and then the connection's queue.
+	big := Progress{Phase: "copy", Detail: string(bytes.Repeat([]byte("p"), 64<<10))}
+	for range 200 {
+		srv.Progress(big)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- srv.Finish(context.Background(), Result{OK: true}, 300*time.Millisecond) }()
+	select {
+	case err := <-finished:
+		if !errors.Is(err, ErrNotCollected) {
+			t.Fatalf("Finish = %v, want ErrNotCollected", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Finish blocked past its hold on a connection that does not read")
+	}
+}
+
+func TestAStallNeverHidesWhatAlreadyArrived(t *testing.T) {
+	srv, sock := listen(t, ServerOptions{Workspace: true})
+	data := randomBytes(3000)
+	if err := newRawClient(t, sock).sendTransfer(data, 1000); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := srv.Workspace(context.Background(), 200*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The job is slow (its disk, say) and fleetd has nothing more to send.
+	time.Sleep(500 * time.Millisecond)
+	got, err := io.ReadAll(ws)
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read %d bytes, %v; want the whole verified transfer", len(got), err)
+	}
+}

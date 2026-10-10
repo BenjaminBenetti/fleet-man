@@ -156,6 +156,35 @@ func TestStageScriptRefusesAShortOrWrongStream(t *testing.T) {
 	}
 }
 
+func TestStageScriptQuotesThePathInItsMessages(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), `it's $(touch pwned) 100%s`)
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "fleet")
+	data := []byte("the real binary")
+	f := StageFile{Path: target, Size: int64(len(data)), SHA256: sha(data)}
+	if _, err := exec.LookPath("sha256sum"); err == nil {
+		f.CheckSHA = true
+	}
+	for name, stdin := range map[string][]byte{"short": data[:3], "wrong sha": []byte("the fake binary")} {
+		if name == "wrong sha" && !f.CheckSHA {
+			continue
+		}
+		out, err := runStage(t, f, stdin)
+		if err == nil {
+			t.Fatalf("%s: stage succeeded", name)
+		}
+		if !strings.Contains(out, "stage "+target+": ") {
+			t.Errorf("%s: message %q does not name %s as it is", name, out, target)
+		}
+	}
+	if _, err := os.Stat("pwned"); err == nil {
+		_ = os.Remove("pwned")
+		t.Fatal("the path in a message ran as a command")
+	}
+}
+
 func TestStageScriptGunzips(t *testing.T) {
 	if _, err := exec.LookPath("gzip"); err != nil {
 		t.Skip("no gzip here")

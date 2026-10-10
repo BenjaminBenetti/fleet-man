@@ -158,8 +158,25 @@ func workspaceTar(t *testing.T, files map[string]string) []byte {
 
 func TestSeedJobEndToEnd(t *testing.T) {
 	e := newJobEnv(t)
+	// Content for volumes copied up from inside remoteUser's home, and from
+	// a dir holding it.
+	mustMkdir(t, filepath.Join(e.img.root, "home/vscode/.config"), 0o755)
+	mustMkdir(t, filepath.Join(e.img.root, "home/other"), 0o755)
+	for _, f := range []string{"home/vscode/.config/app.conf", "home/other/notes"} {
+		if err := os.WriteFile(filepath.Join(e.img.root, f), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if os.Geteuid() == 0 {
+		mustChown(t, filepath.Join(e.img.root, "home/vscode/.config"), 1000, 1000)
+		mustChown(t, filepath.Join(e.img.root, "home/vscode/.config/app.conf"), 1000, 1000)
+		mustChown(t, filepath.Join(e.img.root, "home/other/notes"), 2000, 2000)
+	}
 	spec := e.seedSpec(1)
 	spec.Seed.Workspace = &Workspace{Owner: &IDs{UID: 4321, GID: 4321}}
+	spec.Seed.Volumes = append(spec.Seed.Volumes,
+		Volume{Name: "config", Target: "/home/vscode/.config", CopyUp: true},
+		Volume{Name: "homes", Target: "/home", CopyUp: true})
 	code, res, log := e.runJob(t, spec, true, workspaceTar(t, map[string]string{"README.md": "# fleet-man\n"}))
 	if code != 0 || !res.OK {
 		t.Fatalf("exit %d, result %+v\n%s", code, res, log)
@@ -177,7 +194,7 @@ func TestSeedJobEndToEnd(t *testing.T) {
 	if m.Gen != 1 || m.Binary != e.binarySHA || m.Files == 0 || m.Bytes == 0 || m.Setuid != 1 {
 		t.Errorf("manifest %+v", m)
 	}
-	if want := []string{"docker", "cache"}; !reflect.DeepEqual(m.Volumes, want) {
+	if want := []string{"docker", "cache", "config", "homes"}; !reflect.DeepEqual(m.Volumes, want) {
 		t.Errorf("volumes %v", m.Volumes)
 	}
 	onDisk, err := os.ReadFile(filepath.Join(e.pvc, ManifestFile))
@@ -241,6 +258,17 @@ func TestSeedJobEndToEnd(t *testing.T) {
 		}
 		if m.Remap == nil || !m.Remap.Changed || home.Uid != 4321 || ws.Uid != 4321 {
 			t.Errorf("remap %+v, home owner %d, ws owner %d", m.Remap, home.Uid, ws.Uid)
+		}
+		// Volumes are filled from the image as the CLI's uid layer left it:
+		// remoteUser's home remapped, the rest as it was.
+		for p, want := range map[string]uint32{
+			"vol/config": 4321, "vol/config/app.conf": 4321,
+			"vol/homes/vscode": 4321, "vol/homes/vscode/.bashrc": 4321,
+			"vol/homes/other/notes": 2000, "vol/docker/image-content": 0,
+		} {
+			if st := lstat(t, filepath.Join(e.pvc, p)); st.Uid != want {
+				t.Errorf("%s: owner %d, want %d", p, st.Uid, want)
+			}
 		}
 		if st := lstat(t, filepath.Join(e.pvc, "root/etc/passwd")); st.Mode&0o777 != 0o644 || st.Uid != 0 {
 			t.Errorf("rewritten passwd: mode %o owner %d", st.Mode, st.Uid)
@@ -412,5 +440,53 @@ func TestSeedJobFallsBackToCpForADirTheCopierFails(t *testing.T) {
 	}
 	if target, _ := os.Readlink(filepath.Join(e.pvc, "root/usr/bin/fleet")); target != CurrentBinary {
 		t.Errorf("/usr/bin/fleet -> %q after the fallback", target)
+	}
+	// The xattrs cp is not given still arrive.
+	if want, err := getXattr(filepath.Join(e.img.root, "usr/bin/tool"), -1, "user.fleet.test"); err == nil {
+		if got, err := getXattr(filepath.Join(e.pvc, "root/usr/bin/tool"), -1, "user.fleet.test"); err != nil || !bytes.Equal(got, want) {
+			t.Errorf("user xattr after cp: %q %v", got, err)
+		}
+	}
+	if e.img.caps {
+		if got, err := getXattr(filepath.Join(e.pvc, "root/usr/bin/ping"), -1, capabilityXattr); err != nil || !bytes.Equal(got, pingCaps()) {
+			t.Errorf("file capability after cp: %x %v", got, err)
+		}
+	}
+}
+
+func TestCPFallbackKeepsXattrsButNotTheImagesSELinuxLabel(t *testing.T) {
+	requireRoot(t)
+	if _, ok := gnuCP(); !ok {
+		t.Skip("no GNU cp here")
+	}
+	e := newJobEnv(t)
+	injectAt(t, "copy:/etc/os-release")
+	code, res, log := e.runJob(t, e.seedSpec(1), true, nil)
+	if code != 0 || !res.OK {
+		t.Fatalf("exit %d %+v\n%s", code, res, log)
+	}
+	if m, _ := ParseManifest(res.Output); !reflect.DeepEqual(m.Fallback, []string{"etc"}) {
+		t.Fatalf("fallback %v", m.Fallback)
+	}
+	src, dst := filepath.Join(e.img.root, "etc/os-release"), filepath.Join(e.pvc, "root/etc/os-release")
+	if e.img.selinux {
+		// The node labels the new file where it has SELinux; the image's own
+		// label must never arrive.
+		want, _ := getXattr(src, -1, selinuxXattr)
+		if got, err := getXattr(dst, -1, selinuxXattr); err == nil && bytes.Equal(got, want) {
+			t.Errorf("cp carried security.selinux %q over", got)
+		}
+	} else {
+		t.Log("security.selinux cannot be set here; unchecked")
+	}
+	if e.img.acl {
+		if got, err := getXattr(dst, -1, "system.posix_acl_access"); err != nil || !bytes.Equal(got, userACL()) {
+			t.Errorf("ACL after cp: %x %v", got, err)
+		}
+	}
+	if e.img.trusted {
+		if got, err := getXattr(dst, -1, "trusted.fleet"); err != nil || string(got) != "t" {
+			t.Errorf("trusted xattr after cp: %q %v", got, err)
+		}
 	}
 }

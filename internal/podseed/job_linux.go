@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -248,9 +249,6 @@ func (r *seedRun) seedRoot(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := r.copyVolumes(ctx, mounts, plan.mountpoints); err != nil {
-		return err
-	}
 	for _, top := range plan.extra {
 		if err := mkdirOwned(filepath.Join(r.pvc, DirRootExtra, top), 0o755); err != nil {
 			return fmt.Errorf("create root-extra/%s: %w", top, err)
@@ -261,6 +259,11 @@ func (r *seedRun) seedRoot(ctx context.Context) error {
 		return err
 	}
 	if err := r.remap(g); err != nil {
+		return err
+	}
+	// After the remap: a volume is filled from the image as the CLI's uid
+	// layer left it.
+	if err := r.copyVolumes(ctx, mounts, plan.mountpoints); err != nil {
 		return err
 	}
 	return r.installFleet(g)
@@ -343,7 +346,12 @@ func (r *seedRun) copyTop(ctx context.Context, top string, mounts, mountpoints m
 		return fmt.Errorf("copy /%s: %w (then %w)", top, err, cerr)
 	}
 	c.resetChecks()
-	if serr := c.scan(src, dst); serr != nil {
+	seen := len(c.warnings)
+	serr := c.scan(src, dst)
+	for _, w := range c.warnings[seen:] {
+		r.m.addWarning("%s", w)
+	}
+	if serr != nil {
 		return fmt.Errorf("check /%s after cp: %w", top, serr)
 	}
 	if serr := c.selfCheck(); serr != nil {
@@ -369,7 +377,8 @@ func (r *seedRun) copyVolumes(ctx context.Context, mounts, mountpoints map[strin
 		}
 		src := filepath.Join(r.src, strings.TrimPrefix(v.Target, "/"))
 		fi, err := os.Stat(src)
-		if v.CopyUp && err == nil && fi.IsDir() {
+		copyUp := v.CopyUp && err == nil && fi.IsDir()
+		if copyUp {
 			// The volume's own target is a mountpoint of the root copy; its
 			// content is exactly what this copy is for.
 			own := map[string]bool{}
@@ -387,6 +396,9 @@ func (r *seedRun) copyVolumes(ctx context.Context, mounts, mountpoints map[strin
 			}
 			for _, w := range c.warnings {
 				r.m.addWarning("%s", w)
+			}
+			if err := r.remapVolume(v, tmp); err != nil {
+				return err
 			}
 		} else if err := mkdirOwned(tmp, 0o755); err != nil {
 			return err
@@ -478,6 +490,37 @@ func (r *seedRun) remap(g genRoot) error {
 	return chownTree(home, res.UID, res.GID)
 }
 
+// remapVolume chowns what the volume v, just copied up into dir, holds of
+// remoteUser's home: on docker the CLI's uid layer chowns the home in the
+// image, and a new volume is then filled from that image, so its copy of the
+// home carries the new ids too. A volume at or below the home is chowned
+// whole; one holding the home (a volume at /home), only the home's part.
+func (r *seedRun) remapVolume(v Volume, dir string) error {
+	res := r.m.Remap
+	if res == nil || !res.Changed || res.Home == "" {
+		return nil
+	}
+	home := path.Clean(res.Home)
+	if home == "/" || !path.IsAbs(home) {
+		return nil
+	}
+	switch target := path.Clean(v.Target); {
+	case target == home || strings.HasPrefix(target, home+"/"):
+	case strings.HasPrefix(home, target+"/"):
+		sub, err := plainSubdir(dir, strings.TrimPrefix(home, target+"/"))
+		if err != nil {
+			return nil // the volume holds no copy of the home
+		}
+		dir = sub
+	default:
+		return nil
+	}
+	if err := chownTree(dir, res.UID, res.GID); err != nil {
+		return fmt.Errorf("uid remap: volume %s: %w", v.Name, err)
+	}
+	return nil
+}
+
 func remapSummary(res RemapResult) string {
 	if !res.Changed {
 		return res.Note
@@ -534,6 +577,26 @@ func (r *seedRun) receiveWorkspace(ctx context.Context) (WorkspaceStats, error) 
 		r.logf("workspace transfer failed, waiting for another: %v", err)
 		ws.Reject(err)
 	}
+}
+
+// plainSubdir is dir/rel when every component of rel is a directory, never a
+// symlink: a path inside a copied tree that nothing can redirect out of it.
+func plainSubdir(dir, rel string) (string, error) {
+	cur := dir
+	for _, c := range splitPath(rel) {
+		if c == "." || c == ".." {
+			return "", fmt.Errorf("%q is not a plain relative path", rel)
+		}
+		cur = filepath.Join(cur, c)
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			return "", err
+		}
+		if !fi.IsDir() {
+			return "", fmt.Errorf("%s is not a directory", cur)
+		}
+	}
+	return cur, nil
 }
 
 // mkdirOwned creates dir (and parents) with mode, owned by the job's own uid,

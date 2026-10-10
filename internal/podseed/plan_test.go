@@ -15,7 +15,7 @@ func TestPlanRoot(t *testing.T) {
 		"etc": topDir, "usr": topDir, "var": topDir, "home": topDir, "opt": topDir, "tmp": topDir,
 		"proc": topDir, "sys": topMount, "dev": topMount,
 		"bin": topOther, "lib": topOther, "app.jar": topOther,
-		"fleet-pvc": topMount, "fleet-tools": topMount, "cache": topDir,
+		"fleet-pvc": topMount, "fleet-tools": topMount, "cache": topDir, "srv": topDir,
 	}
 	plan := planRoot(tops, SeedSpec{
 		Exclude: []string{"cache"},
@@ -27,13 +27,14 @@ func TestPlanRoot(t *testing.T) {
 			"/dev/shm",       // the runtime's
 			"/bin/tool",      // /bin is a symlink in the image
 			"/fleet-tools/x", // the seed pod's own mount is not the image's
-			"/data",
+			"/data",          // a whole top-level dir: no parent, nothing persisted
+			"/srv",           // the same over an image dir: not copied
 		},
 	})
 	if want := []string{"etc", "home", "opt", "tmp", "usr", "var"}; !reflect.DeepEqual(plan.dirs, want) {
 		t.Errorf("dirs %v, want %v", plan.dirs, want)
 	}
-	if want := []string{"data", "fleet-mounts", "fleet-tools", "workspaces"}; !reflect.DeepEqual(plan.extra, want) {
+	if want := []string{"fleet-mounts", "fleet-tools", "workspaces"}; !reflect.DeepEqual(plan.extra, want) {
 		t.Errorf("extra %v, want %v", plan.extra, want)
 	}
 	if want := map[string]bool{"/var/lib/docker": true, "/opt/fleet": true}; !reflect.DeepEqual(plan.mountpoints, want) {

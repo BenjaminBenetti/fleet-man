@@ -73,7 +73,9 @@ type SeedSpec struct {
 	// MountDirs are the instance pod's directory mount targets (the
 	// workspace folder, volumes, tmpfs, share mounts, /opt/fleet and the
 	// rest), absolute. A target's top-level dir that the image lacks gets a
-	// root-extra/ dir; image content under a target is not copied.
+	// root-extra/ dir; image content under a target is not copied. A target
+	// that is itself a top-level dir (/workspace) gets neither root/ nor
+	// root-extra/: the mount is all there is at that path.
 	MountDirs []string `json:"mount_dirs,omitempty"`
 	// Hostname is the instance pod's hostname, written to meta/hostname.
 	Hostname string `json:"hostname"`
