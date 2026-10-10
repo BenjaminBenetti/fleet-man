@@ -123,9 +123,10 @@ func relaunchInTmux() error {
 // so terminal-features (tmux 3.2+) must stay last.
 func tmuxSetupArgs(session, self string, vimKeys bool) []string {
 	args := []string{
-		// A lone shell-command argument goes to the shell, so the binary's
-		// path is quoted (it may hold spaces).
-		"tmux", "new-session", "-d", "-s", session, shellquote.Single(self),
+		// tmux hands a lone shell-command to the user's default-shell, so
+		// the binary's path is quoted only when it needs it (spaces): a
+		// non-POSIX default-shell would print a quoted path, not run it.
+		"tmux", "new-session", "-d", "-s", session, shellquote.CommandWord(self),
 		";", "set", "-g", "set-clipboard", "on",
 		";", "set", "-g", "mouse", "on",
 		// The TUI provides all the UI; the outer status bar is dead

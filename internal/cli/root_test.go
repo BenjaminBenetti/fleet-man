@@ -70,11 +70,18 @@ func TestTmuxSetupArgsTerminalFeaturesLast(t *testing.T) {
 }
 
 // TestTmuxSetupArgsQuotesTheBinary checks new-session's lone shell-command,
-// which tmux hands to the shell, keeps a binary path with spaces in one word.
+// which tmux hands to the user's default-shell, keeps a binary path with
+// spaces in one word, and leaves a plain path bare: PowerShell, nushell and
+// xonsh print a quoted command word instead of running it.
 func TestTmuxSetupArgsQuotesTheBinary(t *testing.T) {
-	cmds := tmuxCommands(tmuxSetupArgs("fleet-abc123", "/Users/Jane Doe/bin/fleet", false))
-	want := []string{"new-session", "-d", "-s", "fleet-abc123", "'/Users/Jane Doe/bin/fleet'"}
-	if !slices.Equal(cmds[0], want) {
-		t.Fatalf("first command = %q, want %q", cmds[0], want)
+	for self, word := range map[string]string{
+		"/Users/Jane Doe/bin/fleet": "'/Users/Jane Doe/bin/fleet'",
+		"/usr/local/bin/fleet":      "/usr/local/bin/fleet",
+	} {
+		cmds := tmuxCommands(tmuxSetupArgs("fleet-abc123", self, false))
+		want := []string{"new-session", "-d", "-s", "fleet-abc123", word}
+		if !slices.Equal(cmds[0], want) {
+			t.Fatalf("first command = %q, want %q", cmds[0], want)
+		}
 	}
 }

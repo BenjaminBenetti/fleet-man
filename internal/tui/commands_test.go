@@ -86,6 +86,11 @@ func TestFleetShellCmdQuotesEveryWord(t *testing.T) {
 		{"group", []string{"--group", "g~1"}, "[shell]\n[alpha/agent-1]\n[--group]\n[g~1]\n"},
 		{"session", []string{"--session", "agent-1~g $x"}, "[shell]\n[alpha/agent-1]\n[--session]\n[agent-1~g $x]\n"},
 	}
+	// A plain binary path stays a bare command word: the bound split keys run
+	// this line in the user's default-shell, which may not be POSIX.
+	if got, want := fleetShellCmd("/usr/local/bin/fleet", "alpha/agent-1"), "/usr/local/bin/fleet 'shell' 'alpha/agent-1'"; got != want {
+		t.Errorf("fleetShellCmd with a plain path = %q, want %q", got, want)
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := exec.Command("sh", "-c", fleetShellCmd(self, "alpha/agent-1", tc.flags...)).CombinedOutput()
@@ -96,5 +101,26 @@ func TestFleetShellCmdQuotesEveryWord(t *testing.T) {
 				t.Errorf("got\n%s\nwant\n%s", out, tc.want)
 			}
 		})
+	}
+}
+
+// TestDaemonLogStreamCommandQuotesTheLogPath runs the daemon log stream's
+// script with tail stubbed out and checks fleet.log's path reaches tail as one
+// word under a HOME the shell would otherwise expand.
+func TestDaemonLogStreamCommandQuotesTheLogPath(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "my $HOME `x` \"q\""))
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "tail"), []byte("#!/bin/sh\nprintf '[%s]' \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := daemonLogStreamCommand(daemonLogLevels[0])
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("log stream script failed: %v\n%s", err, out)
+	}
+	if want := "[-n][200][-F][" + filepath.Join(fleetpaths.Dir(), "fleet.log") + "]"; !strings.Contains(string(out), want) {
+		t.Errorf("tail got\n%s\nwant it to contain\n%s", out, want)
 	}
 }

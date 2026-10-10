@@ -11,6 +11,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/shellquote"
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/sys/unix"
 )
@@ -189,10 +190,12 @@ func bindHostSplitKeys(instanceName, groupID string) {
 }
 
 // fleetShellCmd is the shell command line running `<self> shell <target>
-// <flags...>`. tmux and respawn-pane hand it to the shell, so every word is
-// quoted: the binary's path may hold spaces.
+// <flags...>`. The bound split keys hand it to the user's default-shell and
+// the group restore to sh, so every argument is quoted, and the binary's path
+// only when it needs it (spaces): a non-POSIX default-shell would print a
+// quoted command word instead of running it.
 func fleetShellCmd(self, target string, flags ...string) string {
-	return quoteArgs(append([]string{self, "shell", target}, flags...))
+	return shellquote.CommandWord(self) + " " + quoteArgs(append([]string{"shell", target}, flags...))
 }
 
 // unbindHostSplitKeys restores the default tmux split-window bindings.

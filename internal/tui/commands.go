@@ -315,7 +315,7 @@ func daemonLogStreamCommand(level daemonLogLevel) *exec.Cmd {
 	// the import-boundary lint bars clients (the TUI) from importing the
 	// server-owned flog package; the filename mirrors flog's logFileName.
 	path := filepath.Join(fleetpaths.Dir(), "fleet.log")
-	stream := fmt.Sprintf("tail -n 200 -F %q", path)
+	stream := fmt.Sprintf("tail -n 200 -F %s", shQuote(path))
 	if level.grep != "" {
 		stream += fmt.Sprintf(" | grep --line-buffered -E '%s'", level.grep)
 	}
