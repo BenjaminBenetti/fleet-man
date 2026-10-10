@@ -1,0 +1,699 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"strings"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
+)
+
+// fakeStream replays events, then io.EOF (or err).
+type fakeStream[T any] struct {
+	grpc.ClientStream
+	events []*T
+	err    error
+}
+
+func (s *fakeStream[T]) Recv() (*T, error) {
+	if len(s.events) == 0 {
+		if s.err != nil {
+			return nil, s.err
+		}
+		return nil, io.EOF
+	}
+	ev := s.events[0]
+	s.events = s.events[1:]
+	return ev, nil
+}
+
+// fakeKube is a daemon's kube RPCs: canned replies, and every request kept.
+type fakeKube struct {
+	fleetgrpc.FleetServiceClient
+	clusters    []*fleetgrpc.KubeClusterStatus
+	contexts    *fleetgrpc.ListKubeContextsReply
+	removeReply *fleetgrpc.RemoveKubeClusterReply
+	testEvents  []*fleetgrpc.TestKubeClusterEvent
+	pruneReply  *fleetgrpc.PruneKubeClusterReply
+	loginEvents []*fleetgrpc.LoginKubeClusterEvent
+	nsReply     *fleetgrpc.CreateKubeNamespaceReply
+	nsErr       error
+	err         error // every RPC's error, when set
+
+	calls    []string
+	requests []proto.Message
+}
+
+func (f *fakeKube) record(name string, req proto.Message) error {
+	f.calls = append(f.calls, name)
+	f.requests = append(f.requests, req)
+	return f.err
+}
+
+func (f *fakeKube) ListKubeContexts(_ context.Context, req *fleetgrpc.ListKubeContextsRequest, _ ...grpc.CallOption) (*fleetgrpc.ListKubeContextsReply, error) {
+	return f.contexts, f.record("ListKubeContexts", req)
+}
+
+func (f *fakeKube) ListKubeClusters(_ context.Context, req *fleetgrpc.ListKubeClustersRequest, _ ...grpc.CallOption) (*fleetgrpc.ListKubeClustersReply, error) {
+	return &fleetgrpc.ListKubeClustersReply{Clusters: f.clusters}, f.record("ListKubeClusters", req)
+}
+
+func (f *fakeKube) AddKubeCluster(_ context.Context, req *fleetgrpc.AddKubeClusterRequest, _ ...grpc.CallOption) (*fleetgrpc.AddKubeClusterReply, error) {
+	c := proto.Clone(req.GetCluster()).(*fleetgrpc.KubeCluster)
+	c.Id = c.GetContext() + "-a1b2c3"
+	if c.Namespace == "" {
+		c.Namespace = "default"
+	}
+	return &fleetgrpc.AddKubeClusterReply{Cluster: &fleetgrpc.KubeClusterStatus{Cluster: c, State: fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_CHECKING}}, f.record("AddKubeCluster", req)
+}
+
+func (f *fakeKube) UpdateKubeCluster(_ context.Context, req *fleetgrpc.UpdateKubeClusterRequest, _ ...grpc.CallOption) (*fleetgrpc.UpdateKubeClusterReply, error) {
+	st, _ := fleetgrpc.FindKubeCluster(f.clusters, req.GetId())
+	return &fleetgrpc.UpdateKubeClusterReply{Cluster: st}, f.record("UpdateKubeCluster", req)
+}
+
+func (f *fakeKube) RemoveKubeCluster(_ context.Context, req *fleetgrpc.RemoveKubeClusterRequest, _ ...grpc.CallOption) (*fleetgrpc.RemoveKubeClusterReply, error) {
+	reply := f.removeReply
+	if reply == nil {
+		reply = &fleetgrpc.RemoveKubeClusterReply{Removed: true}
+	}
+	return reply, f.record("RemoveKubeCluster", req)
+}
+
+func (f *fakeKube) TestKubeCluster(_ context.Context, req *fleetgrpc.TestKubeClusterRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[fleetgrpc.TestKubeClusterEvent], error) {
+	return &fakeStream[fleetgrpc.TestKubeClusterEvent]{events: f.testEvents}, f.record("TestKubeCluster", req)
+}
+
+func (f *fakeKube) PruneKubeCluster(_ context.Context, req *fleetgrpc.PruneKubeClusterRequest, _ ...grpc.CallOption) (*fleetgrpc.PruneKubeClusterReply, error) {
+	return f.pruneReply, f.record("PruneKubeCluster", req)
+}
+
+func (f *fakeKube) LoginKubeCluster(_ context.Context, req *fleetgrpc.LoginKubeClusterRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[fleetgrpc.LoginKubeClusterEvent], error) {
+	return &fakeStream[fleetgrpc.LoginKubeClusterEvent]{events: f.loginEvents}, f.record("LoginKubeCluster", req)
+}
+
+func (f *fakeKube) CreateKubeNamespace(_ context.Context, req *fleetgrpc.CreateKubeNamespaceRequest, _ ...grpc.CallOption) (*fleetgrpc.CreateKubeNamespaceReply, error) {
+	if err := f.record("CreateKubeNamespace", req); err != nil {
+		return nil, err
+	}
+	return f.nsReply, f.nsErr
+}
+
+// last is the newest request of the named RPC.
+func (f *fakeKube) last(t *testing.T, name string) proto.Message {
+	t.Helper()
+	for i := len(f.calls) - 1; i >= 0; i-- {
+		if f.calls[i] == name {
+			return f.requests[i]
+		}
+	}
+	t.Fatalf("no %s call; calls %v", name, f.calls)
+	return nil
+}
+
+func kubeStatus(id, name, context, namespace string, state fleetgrpc.KubeClusterState, msg string) *fleetgrpc.KubeClusterStatus {
+	return &fleetgrpc.KubeClusterStatus{
+		Cluster: &fleetgrpc.KubeCluster{Id: id, DisplayName: name, Context: context, Namespace: namespace, KubeconfigPaths: []string{"/home/me/.kube/config"}},
+		State:   state, Message: msg,
+	}
+}
+
+func newFakeKube() *fakeKube {
+	return &fakeKube{clusters: []*fleetgrpc.KubeClusterStatus{
+		kubeStatus("minikube-a1b2c3", "minikube", "minikube", "default", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, ""),
+		kubeStatus("prod-d4e5f6", "prod-eu", "gke_acme_europe_prod", "fleet", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, "privileged denied · each fleet on one node"),
+	}}
+}
+
+// runClusterCLI runs `fleet <args>` against the fake daemon; stdout and
+// stderr go to separate buffers.
+func runClusterCLI(t *testing.T, f *fakeKube, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	orig := dialCluster
+	t.Cleanup(func() { dialCluster = orig })
+	dialCluster = func(context.Context) (fleetgrpc.FleetServiceClient, func(), error) { return f, func() {}, nil }
+	cmd := NewRootCmd()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs(args)
+	err = cmd.Execute()
+	return out.String(), errOut.String(), err
+}
+
+func TestClusterLs(t *testing.T) {
+	f := newFakeKube()
+	out, _, err := runClusterCLI(t, f, "cluster", "ls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"NAME      ID               CONTEXT               NAMESPACE  STATE    DETAIL",
+		"minikube  minikube-a1b2c3  minikube              default    ready",
+		"prod-eu   prod-d4e5f6      gke_acme_europe_prod  fleet      limited  privileged denied · each fleet on one node",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("ls output lacks %q:\n%s", want, out)
+		}
+	}
+
+	f.clusters[1].Warnings = []string{"privileged allowed: the node is the isolation boundary"}
+	f.clusters[1].Cluster.AllowPrivileged = ptrTo(true)
+	out, _, err = runClusterCLI(t, f, "cluster", "list", "prod-eu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "minikube-a1b2c3") {
+		t.Errorf("ls <cluster> lists the others:\n%s", out)
+	}
+	for _, want := range []string{"warning: privileged allowed: the node is the isolation boundary\n", "\nid=prod-d4e5f6\n", "\nallow_privileged=true\n", "\nkubeconfig_paths=/home/me/.kube/config\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("ls <cluster> lacks %q:\n%s", want, out)
+		}
+	}
+
+	out, _, err = runClusterCLI(t, f, "cluster", "ls", "--json", "minikube")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed fleetgrpc.KubeClusters
+	if err := protojson.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("ls --json is not KubeClusters JSON: %v\n%s", err, out)
+	}
+	if len(parsed.GetClusters()) != 1 || !proto.Equal(parsed.GetClusters()[0], f.clusters[0]) {
+		t.Errorf("ls --json minikube = %v", parsed.GetClusters())
+	}
+	if !strings.Contains(out, "\n  \"clusters\": [\n") {
+		t.Errorf("ls --json is not stably indented:\n%s", out)
+	}
+
+	out, _, err = runClusterCLI(t, &fakeKube{}, "cluster", "ls")
+	if err != nil || !strings.Contains(out, "No cluster connections") {
+		t.Errorf("empty ls = %q, %v", out, err)
+	}
+	if _, _, err := runClusterCLI(t, f, "cluster", "ls", "nope"); err == nil || err.Error() != `no Kubernetes connection "nope"` {
+		t.Errorf("ls nope = %v", err)
+	}
+}
+
+func TestClusterContexts(t *testing.T) {
+	f := newFakeKube()
+	f.contexts = &fleetgrpc.ListKubeContextsReply{
+		KubeconfigPaths: []string{"/home/me/.kube/config"}, Host: "devbox",
+		Contexts: []*fleetgrpc.KubeContext{
+			{Name: "minikube", Cluster: "minikube", Namespace: "", Auth: "client-cert", Current: true, Connected: []string{"minikube-a1b2c3"}},
+			{Name: "gke_acme_europe_prod", Cluster: "gke_acme", Namespace: "team", Auth: "exec-plugin", Plugin: "gke-gcloud-auth-plugin", PluginMissing: "not found"},
+		},
+	}
+	// A path is the daemon host's: it goes as typed, never expanded here.
+	out, errOut, err := runClusterCLI(t, f, "cluster", "contexts", "--kubeconfig", "~/.kube/config", "--kubeconfig", "rel/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.last(t, "ListKubeContexts").(*fleetgrpc.ListKubeContextsRequest).GetKubeconfigPaths(); strings.Join(got, ",") != "~/.kube/config,rel/config" {
+		t.Errorf("kubeconfig paths sent = %v", got)
+	}
+	if errOut != "/home/me/.kube/config on fleetd @ devbox\n" {
+		t.Errorf("stderr = %q", errOut)
+	}
+	for _, want := range []string{
+		"CURRENT  NAME                  CLUSTER   NAMESPACE  AUTH                                          CONNECTED",
+		"*        minikube              minikube             client-cert                                   minikube\n",
+		"         gke_acme_europe_prod  gke_acme  team       exec-plugin:gke-gcloud-auth-plugin (missing)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("contexts output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestClusterAdd(t *testing.T) {
+	f := newFakeKube()
+	out, _, err := runClusterCLI(t, f, "cluster", "add", "kind-dev", "--kubeconfig", "/srv/kube/config", "-n", "fleet",
+		"allow_privileged=true", "extra_path=/opt/bin", "image.mode=node-load")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := f.last(t, "AddKubeCluster").(*fleetgrpc.AddKubeClusterRequest).GetCluster()
+	want := &fleetgrpc.KubeCluster{DisplayName: "kind-dev", Context: "kind-dev", KubeconfigPaths: []string{"/srv/kube/config"}, Namespace: "fleet",
+		AllowPrivileged: ptrTo(true), ExtraPath: []string{"/opt/bin"}, Image: &fleetgrpc.KubeImageSettings{Mode: "node-load"}}
+	if !proto.Equal(got, want) {
+		t.Errorf("added %v, want %v", got, want)
+	}
+	if out != "Added cluster \"kind-dev\" (kind-dev-a1b2c3): context kind-dev, namespace fleet; checking\n" {
+		t.Errorf("output = %q", out)
+	}
+
+	// The context's name is taken: the namespace tells them apart; with
+	// no namespace given, the daemon's id names it.
+	if _, _, err := runClusterCLI(t, f, "cluster", "add", "minikube", "-n", "team"); err != nil {
+		t.Fatal(err)
+	}
+	if name := f.last(t, "AddKubeCluster").(*fleetgrpc.AddKubeClusterRequest).GetCluster().GetDisplayName(); name != "minikube-team" {
+		t.Errorf("default name of a second minikube = %q", name)
+	}
+	if _, _, err := runClusterCLI(t, f, "cluster", "add", "MINIKUBE"); err != nil {
+		t.Fatal(err)
+	}
+	if c := f.last(t, "AddKubeCluster").(*fleetgrpc.AddKubeClusterRequest).GetCluster(); c.GetDisplayName() != "" || len(c.GetKubeconfigPaths()) != 0 || c.GetNamespace() != "" {
+		t.Errorf("defaults left to the daemon: %v", c)
+	}
+	if _, _, err := runClusterCLI(t, f, "cluster", "add", "minikube", "--name", "lab"); err != nil {
+		t.Fatal(err)
+	}
+	if name := f.last(t, "AddKubeCluster").(*fleetgrpc.AddKubeClusterRequest).GetCluster().GetDisplayName(); name != "lab" {
+		t.Errorf("--name = %q", name)
+	}
+	long := strings.Repeat("x", 64)
+	if _, _, err := runClusterCLI(t, f, "cluster", "add", long); err != nil {
+		t.Fatal(err)
+	}
+	if name := f.last(t, "AddKubeCluster").(*fleetgrpc.AddKubeClusterRequest).GetCluster().GetDisplayName(); name != "" {
+		t.Errorf("a context too long to be a name became %q", name)
+	}
+
+	for _, tc := range []struct {
+		args []string
+		err  string
+	}{
+		{[]string{"cluster", "add", "c", "-n", "a", "namespace=b"}, "not both"},
+		{[]string{"cluster", "add", "c", "--kubeconfig", "/a", "kubeconfig_paths=/b"}, "not both"},
+		{[]string{"cluster", "add", "c", "context=d"}, "give the context once"},
+		{[]string{"cluster", "add", "c", "--namespace-label", "a=b"}, "--namespace-label needs --create-namespace"},
+		{[]string{"cluster", "add", "c", "--create-namespace", "--namespace-label", "nope"}, "not key=value"},
+		{[]string{"cluster", "add", "c", "id=x"}, "id is set by fleetd"},
+	} {
+		f := newFakeKube()
+		if _, _, err := runClusterCLI(t, f, tc.args...); err == nil || !strings.Contains(err.Error(), tc.err) {
+			t.Errorf("%v = %v, want %q", tc.args, err, tc.err)
+		}
+		for _, c := range f.calls {
+			if c == "AddKubeCluster" {
+				t.Errorf("%v added a connection", tc.args)
+			}
+		}
+	}
+}
+
+func TestClusterAddCreatesTheNamespaceFirst(t *testing.T) {
+	f := newFakeKube()
+	f.nsReply = &fleetgrpc.CreateKubeNamespaceReply{Created: true, Manifest: "apiVersion: v1\nkind: Namespace\n"}
+	out, _, err := runClusterCLI(t, f, "cluster", "add", "kind-dev", "-n", "fleet-base", "--create-namespace",
+		"--namespace-label", "pod-security.kubernetes.io/enforce=baseline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(f.calls, ",") != "ListKubeClusters,CreateKubeNamespace,AddKubeCluster" {
+		t.Errorf("calls = %v", f.calls)
+	}
+	ns := f.last(t, "CreateKubeNamespace").(*fleetgrpc.CreateKubeNamespaceRequest)
+	if ns.GetId() != "" || ns.GetCluster().GetContext() != "kind-dev" || ns.GetCluster().GetNamespace() != "fleet-base" ||
+		ns.GetLabels()["pod-security.kubernetes.io/enforce"] != "baseline" || ns.GetDryRun() {
+		t.Errorf("namespace request = %v", ns)
+	}
+	if !strings.HasPrefix(out, "Created namespace:\napiVersion: v1\nkind: Namespace\nAdded cluster") {
+		t.Errorf("output = %q", out)
+	}
+
+	// One that exists is fine; a refusal stops before the add.
+	f = newFakeKube()
+	f.nsErr = status.Error(codes.AlreadyExists, `namespace "fleet" already exists`)
+	out, _, err = runClusterCLI(t, f, "cluster", "add", "kind-dev", "--create-namespace")
+	if err != nil || !strings.HasPrefix(out, "namespace \"fleet\" already exists\nAdded cluster") {
+		t.Errorf("existing namespace: %q, %v", out, err)
+	}
+	f = newFakeKube()
+	f.nsErr = status.Error(codes.PermissionDenied, `creating namespace "fleet": forbidden`)
+	if _, _, err := runClusterCLI(t, f, "cluster", "add", "kind-dev", "--create-namespace"); err == nil || err.Error() != `creating namespace "fleet": forbidden` {
+		t.Errorf("forbidden namespace = %v", err)
+	}
+	if f.calls[len(f.calls)-1] != "CreateKubeNamespace" {
+		t.Errorf("added after a refused namespace: %v", f.calls)
+	}
+}
+
+func TestClusterSet(t *testing.T) {
+	f := newFakeKube()
+	out, _, err := runClusterCLI(t, f, "cluster", "set", "prod-eu", "allow_privileged=true", "extra_path=/opt/a", "extra_path=/opt/b",
+		"resources.cpu_request=2", "storage_class=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := f.last(t, "UpdateKubeCluster").(*fleetgrpc.UpdateKubeClusterRequest)
+	if req.GetId() != "prod-d4e5f6" || req.GetExpectedRevision() != 0 {
+		t.Errorf("update %v", req)
+	}
+	if got := strings.Join(req.GetUpdateMask().GetPaths(), ","); got != "allow_privileged,extra_path,resources.cpu_request,storage_class" {
+		t.Errorf("mask = %s", got)
+	}
+	want := &fleetgrpc.KubeCluster{AllowPrivileged: ptrTo(true), ExtraPath: []string{"/opt/a", "/opt/b"}, Resources: &fleetgrpc.KubeResources{CpuRequest: "2"}}
+	if !proto.Equal(req.GetCluster(), want) {
+		t.Errorf("values = %v, want %v", req.GetCluster(), want)
+	}
+	if out != "Updated cluster \"prod-eu\": allow_privileged, extra_path, resources.cpu_request, storage_class\n" {
+		t.Errorf("output = %q", out)
+	}
+	// By id and by context too.
+	for _, ref := range []string{"prod-d4e5f6", "gke_acme_europe_prod"} {
+		if _, _, err := runClusterCLI(t, f, "cluster", "set", ref, "max_instances=3"); err != nil {
+			t.Fatal(err)
+		}
+		if id := f.last(t, "UpdateKubeCluster").(*fleetgrpc.UpdateKubeClusterRequest).GetId(); id != "prod-d4e5f6" {
+			t.Errorf("set %s updated %s", ref, id)
+		}
+	}
+	if _, _, err := runClusterCLI(t, f, "cluster", "set", "prod-eu", "nope=1"); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Errorf("unknown field = %v", err)
+	}
+	if _, _, err := runClusterCLI(t, f, "cluster", "set", "prod-eu"); err == nil {
+		t.Error("set with no fields succeeded")
+	}
+	f.err = status.Error(codes.Aborted, `connection "prod-eu" changed since it was read`)
+	if _, _, err := runClusterCLI(t, f, "cluster", "set", "prod-eu", "max_instances=3"); err == nil || err.Error() != `connection "prod-eu" changed since it was read` {
+		t.Errorf("RPC error = %v", err)
+	}
+}
+
+func TestClusterRemove(t *testing.T) {
+	f := newFakeKube()
+	out, _, err := runClusterCLI(t, f, "cluster", "rm", "minikube")
+	if err != nil || out != "Removed cluster \"minikube\"\n" {
+		t.Fatalf("rm = %q, %v", out, err)
+	}
+	if req := f.last(t, "RemoveKubeCluster").(*fleetgrpc.RemoveKubeClusterRequest); req.GetId() != "minikube-a1b2c3" || req.GetMode() != fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_REFUSE_IF_USED {
+		t.Errorf("remove %v", req)
+	}
+
+	users := []*fleetgrpc.KubeClusterUser{
+		{Fleet: "alpha", Instance: "i1", Status: fleetgrpc.InstanceStatus_INSTANCE_STATUS_RUNNING},
+		{Fleet: "alpha", Agent: "builder"},
+	}
+	f.removeReply = &fleetgrpc.RemoveKubeClusterReply{Users: users}
+	_, _, err = runClusterCLI(t, f, "cluster", "remove", "minikube")
+	if err == nil || !strings.Contains(err.Error(), "cluster \"minikube\" is in use:\n  alpha/i1 (running)\n  alpha: agent builder\nuse --destroy-instances") {
+		t.Errorf("refused rm = %v", err)
+	}
+
+	f.removeReply = &fleetgrpc.RemoveKubeClusterReply{Removed: true, Users: users[:1], Warnings: []string{"the instances were left running"}}
+	out, _, err = runClusterCLI(t, f, "cluster", "rm", "minikube", "--forget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req := f.last(t, "RemoveKubeCluster").(*fleetgrpc.RemoveKubeClusterRequest); req.GetMode() != fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_FORGET {
+		t.Errorf("--forget sent %v", req.GetMode())
+	}
+	if out != "warning: the instances were left running\nRemoved cluster \"minikube\"\nleft in namespace default:\n  alpha/i1 (running)\n" {
+		t.Errorf("forget output = %q", out)
+	}
+	out, _, err = runClusterCLI(t, f, "cluster", "rm", "minikube", "--destroy-instances")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req := f.last(t, "RemoveKubeCluster").(*fleetgrpc.RemoveKubeClusterRequest); req.GetMode() != fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_DESTROY_INSTANCES {
+		t.Errorf("--destroy-instances sent %v", req.GetMode())
+	}
+	if !strings.Contains(out, "destroyed:\n  alpha/i1 (running)\n") {
+		t.Errorf("destroy output = %q", out)
+	}
+	if _, _, err := runClusterCLI(t, f, "cluster", "rm", "minikube", "--forget", "--destroy-instances"); err == nil || !strings.Contains(err.Error(), "exclude each other") {
+		t.Errorf("both modes = %v", err)
+	}
+}
+
+func checkEvent(name string, result fleetgrpc.KubeCheckResult, detail, fix string) *fleetgrpc.TestKubeClusterEvent {
+	return &fleetgrpc.TestKubeClusterEvent{Kind: &fleetgrpc.TestKubeClusterEvent_Check{Check: &fleetgrpc.KubeCheck{Name: name, Result: result, Detail: detail, Fix: fix}}}
+}
+
+func resultEvent(st *fleetgrpc.KubeClusterStatus) *fleetgrpc.TestKubeClusterEvent {
+	return &fleetgrpc.TestKubeClusterEvent{Kind: &fleetgrpc.TestKubeClusterEvent_Result{Result: st}}
+}
+
+func TestClusterTest(t *testing.T) {
+	f := newFakeKube()
+	limited := proto.Clone(f.clusters[1]).(*fleetgrpc.KubeClusterStatus)
+	limited.Warnings = []string{"privileged allowed: the node is the isolation boundary"}
+	f.testEvents = []*fleetgrpc.TestKubeClusterEvent{
+		checkEvent("kubeconfig", fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_RUNNING, "", ""),
+		checkEvent("kubeconfig", fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, "~/.kube/config: gke_acme_europe_prod", ""),
+		checkEvent("admission_unprivileged", fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, "", ""),
+		checkEvent("admission_privileged", fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, "violates PodSecurity \"baseline:latest\"", "label the namespace privileged"),
+		checkEvent("limits", fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN, "LimitRange default memory 1Gi\n→ explicit 8Gi limit", ""),
+		resultEvent(limited),
+	}
+	out, _, err := runClusterCLI(t, f, "cluster", "test", "prod-eu")
+	if err != nil {
+		t.Fatalf("a limited cluster's test failed: %v", err)
+	}
+	if req := f.last(t, "TestKubeCluster").(*fleetgrpc.TestKubeClusterRequest); req.GetId() != "prod-d4e5f6" || req.GetCluster() != nil {
+		t.Errorf("test %v", req)
+	}
+	want := `CHECK                   RESULT  DETAIL
+kubeconfig              pass    ~/.kube/config: gke_acme_europe_prod
+admission unprivileged  pass
+admission privileged    fail    violates PodSecurity "baseline:latest"
+                                fix: label the namespace privileged
+limits                  warn    LimitRange default memory 1Gi
+                                → explicit 8Gi limit
+warning: privileged allowed: the node is the isolation boundary
+limited: privileged denied · each fleet on one node
+`
+	if out != want {
+		t.Errorf("test output:\n%s\nwant:\n%s", out, want)
+	}
+
+	// Anything but ready or limited exits 1, after the result line only.
+	f.testEvents = []*fleetgrpc.TestKubeClusterEvent{
+		checkEvent("reachable", fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, "dial tcp 10.0.0.1:443: i/o timeout", ""),
+		resultEvent(kubeStatus("prod-d4e5f6", "prod-eu", "gke", "fleet", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNREACHABLE, "the API server does not answer")),
+	}
+	out, errOut, err := runClusterCLI(t, f, "cluster", "test", "prod-eu")
+	if err == nil {
+		t.Fatal("an unreachable cluster's test passed")
+	}
+	if !strings.HasSuffix(out, "unreachable: the API server does not answer\n") || errOut != "" {
+		t.Errorf("failed test: out %q, err %q", out, errOut)
+	}
+
+	f.testEvents = nil
+	if _, _, err := runClusterCLI(t, f, "cluster", "test", "prod-eu"); err == nil || !strings.Contains(err.Error(), "without a result") {
+		t.Errorf("no result = %v", err)
+	}
+}
+
+func TestClusterTestDraft(t *testing.T) {
+	f := newFakeKube()
+	f.testEvents = []*fleetgrpc.TestKubeClusterEvent{resultEvent(kubeStatus("", "", "kind-dev", "fleet", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, ""))}
+	out, _, err := runClusterCLI(t, f, "cluster", "test", "--context", "kind-dev", "--kubeconfig", "/srv/kube/config", "-n", "fleet", "allow_privileged=false")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := f.last(t, "TestKubeCluster").(*fleetgrpc.TestKubeClusterRequest)
+	want := &fleetgrpc.KubeCluster{Context: "kind-dev", KubeconfigPaths: []string{"/srv/kube/config"}, Namespace: "fleet", AllowPrivileged: ptrTo(false)}
+	if req.GetId() != "" || !proto.Equal(req.GetCluster(), want) {
+		t.Errorf("draft test %v", req)
+	}
+	if !strings.HasSuffix(out, "\nready\n") {
+		t.Errorf("output %q", out)
+	}
+	for _, args := range [][]string{
+		{"cluster", "test", "prod-eu", "--kubeconfig", "/a"},
+		{"cluster", "test", "prod-eu", "-n", "x"},
+		{"cluster", "test", "--context", "c", "notafield"},
+		{"cluster", "test"},
+		{"cluster", "test", "a", "b"},
+	} {
+		if _, _, err := runClusterCLI(t, f, args...); err == nil {
+			t.Errorf("%v succeeded", args)
+		}
+	}
+}
+
+func TestClusterGC(t *testing.T) {
+	now := time.Now()
+	ago := func(d time.Duration) *timestamppb.Timestamp { return timestamppb.New(now.Add(-d)) }
+	f := newFakeKube()
+	f.pruneReply = &fleetgrpc.PruneKubeClusterReply{Owner: "3fa2c91e0b77", LeaseHeld: true, Objects: []*fleetgrpc.KubePruneObject{
+		{Kind: "sts", Name: "fi-fleet-man-old-1a2b3c4d", CreatedAt: ago(9 * 24 * time.Hour), Action: "would delete"},
+		{Kind: "pvc", Name: "fi-fleet-man-old-1a2b3c4d", CreatedAt: ago(9 * 24 * time.Hour), Action: "would delete"},
+		{Kind: "pvc", Name: "fi-fleet-man-new-5e6f7a8b", CreatedAt: ago(20 * time.Minute), Mounted: true, Action: "skip (younger than 1h)"},
+	}}
+	out, _, err := runClusterCLI(t, f, "cluster", "gc", "minikube")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req := f.last(t, "PruneKubeCluster").(*fleetgrpc.PruneKubeClusterRequest); req.GetId() != "minikube-a1b2c3" || req.GetApply() || req.GetFleet() != "" {
+		t.Errorf("gc %v", req)
+	}
+	want := `owner 3fa2c91e0b77 · lease held by this daemon
+KIND  NAME                       AGE  MOUNTED  ACTION
+sts   fi-fleet-man-old-1a2b3c4d  9d   -        would delete
+pvc   fi-fleet-man-old-1a2b3c4d  9d   no       would delete
+pvc   fi-fleet-man-new-5e6f7a8b  20m  yes      skip (younger than 1h)
+3 objects; run with --apply to delete
+`
+	if out != want {
+		t.Errorf("gc output:\n%s\nwant:\n%s", out, want)
+	}
+
+	f.pruneReply = &fleetgrpc.PruneKubeClusterReply{Owner: "3fa2c91e0b77", LeaseHeld: true, Deleted: 1, Objects: []*fleetgrpc.KubePruneObject{
+		{Kind: "pvc", Name: "fs-alpha-h8-share", Action: "deleted"},
+	}}
+	out, _, err = runClusterCLI(t, f, "cluster", "gc", "minikube", "--apply", "--fleet", "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req := f.last(t, "PruneKubeCluster").(*fleetgrpc.PruneKubeClusterRequest); !req.GetApply() || req.GetFleet() != "alpha" {
+		t.Errorf("gc --apply %v", req)
+	}
+	if !strings.Contains(out, "pvc   fs-alpha-h8-share  -    no       deleted\n1 deleted\n") {
+		t.Errorf("apply output:\n%s", out)
+	}
+
+	f.pruneReply = &fleetgrpc.PruneKubeClusterReply{Owner: "3fa2c91e0b77", LeaseHolder: "9e8d7c6b5a49-0011223344556677", LeaseHolderHost: "laptop",
+		Objects: []*fleetgrpc.KubePruneObject{{Kind: "sts", Name: "x", Action: "would delete"}}}
+	out, _, _ = runClusterCLI(t, f, "cluster", "gc", "minikube")
+	if !strings.HasPrefix(out, "owner 3fa2c91e0b77 · lease held by 9e8d7c6b5a49-0011223344556677 on laptop\n") ||
+		!strings.HasSuffix(out, "1 object; --apply is refused while another daemon holds the owner Lease\n") {
+		t.Errorf("conflict output:\n%s", out)
+	}
+
+	f.pruneReply = &fleetgrpc.PruneKubeClusterReply{Owner: "3fa2c91e0b77", LeaseHeld: true}
+	out, _, _ = runClusterCLI(t, f, "cluster", "gc", "minikube")
+	if out != "owner 3fa2c91e0b77 · lease held by this daemon\nno objects to collect\n" {
+		t.Errorf("empty gc = %q", out)
+	}
+	f.err = status.Error(codes.FailedPrecondition, "owner_conflict: another daemon holds the Lease")
+	if _, _, err := runClusterCLI(t, f, "cluster", "gc", "minikube", "--apply"); err == nil || err.Error() != "owner_conflict: another daemon holds the Lease" {
+		t.Errorf("refused apply = %v", err)
+	}
+}
+
+func TestShortAge(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		-time.Second: "0s", 45 * time.Second: "45s", 20 * time.Minute: "20m", 3 * time.Hour: "3h", 47 * time.Hour: "47h", 9 * 24 * time.Hour: "9d",
+	} {
+		if got := shortAge(d); got != want {
+			t.Errorf("shortAge(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+func TestClusterLogin(t *testing.T) {
+	f := newFakeKube()
+	f.loginEvents = []*fleetgrpc.LoginKubeClusterEvent{
+		{Kind: &fleetgrpc.LoginKubeClusterEvent_DeviceCode{DeviceCode: &fleetgrpc.KubeDeviceCode{Url: "https://microsoft.com/devicelogin", Code: "ABCD-EFGH"}}},
+		{Kind: &fleetgrpc.LoginKubeClusterEvent_Result{Result: f.clusters[1]}},
+	}
+	out, _, err := runClusterCLI(t, f, "cluster", "login", "prod-eu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req := f.last(t, "LoginKubeCluster").(*fleetgrpc.LoginKubeClusterRequest); req.GetId() != "prod-d4e5f6" {
+		t.Errorf("login %v", req)
+	}
+	want := "To log in, open https://microsoft.com/devicelogin and enter the code ABCD-EFGH\n" +
+		"Logged in; cluster \"prod-eu\" is limited: privileged denied · each fleet on one node\n"
+	if out != want {
+		t.Errorf("login output %q", out)
+	}
+	f.loginEvents = nil
+	if _, _, err := runClusterCLI(t, f, "cluster", "login", "prod-eu"); err == nil {
+		t.Error("a login without a result succeeded")
+	}
+}
+
+func TestClusterErrors(t *testing.T) {
+	f := newFakeKube()
+	f.err = status.Error(codes.Unimplemented, "unknown method ListKubeClusters")
+	out, errOut, err := runClusterCLI(t, f, "cluster", "ls")
+	if err == nil || err.Error() != "this fleetd has no Kubernetes support (update it)" {
+		t.Errorf("old daemon = %v", err)
+	}
+	// A failed RPC prints its error, not the usage.
+	if strings.Contains(out+errOut, "Usage:") {
+		t.Errorf("RPC failure printed the usage:\n%s%s", out, errOut)
+	}
+	// An argument mistake does print it.
+	out, errOut, _ = runClusterCLI(t, newFakeKube(), "cluster", "rm")
+	if !strings.Contains(out+errOut, "Usage:") {
+		t.Errorf("an argument error printed no usage:\n%s%s", out, errOut)
+	}
+}
+
+// Every command and flag sends the same requests whatever daemon the CLI
+// points at: nothing on the client side depends on where fleetd runs, so a
+// remote daemon (gateway, Armada SSH, FLEET_SERVER) gets exactly what a
+// local one does.
+func TestClusterCommandsAreTheSameForRemoteDaemons(t *testing.T) {
+	scripts := [][]string{
+		{"cluster", "ls"},
+		{"cluster", "ls", "prod-eu", "--json"},
+		{"cluster", "contexts", "--kubeconfig", "/srv/kube/config"},
+		{"cluster", "add", "kind-dev", "--name", "dev", "--kubeconfig", "/srv/kube/config", "-n", "fleet", "--create-namespace",
+			"--namespace-label", "a=b", "extra_path=/opt/bin", "plugin_env=AWS_PROFILE", "allow_privileged=true", "pod_overrides_yaml=hostNetwork: true"},
+		append([]string{"cluster", "set", "prod-eu"}, clusterFieldLines(everyClusterField())...),
+		{"cluster", "test", "prod-eu"},
+		{"cluster", "test", "--context", "kind-dev", "--kubeconfig", "/srv/kube/config", "-n", "fleet", "extra_path=/opt/bin"},
+		{"cluster", "gc", "minikube", "--apply", "--fleet", "alpha"},
+		{"cluster", "rm", "minikube", "--forget"},
+		{"cluster", "rm", "prod-eu", "--destroy-instances"},
+		{"cluster", "login", "prod-eu"},
+	}
+	run := func(env map[string]string) [][]proto.Message {
+		for _, k := range []string{fleetclient.EnvGateway, fleetclient.EnvSSH, fleetclient.EnvServer, fleetclient.EnvToken} {
+			t.Setenv(k, env[k])
+		}
+		var all [][]proto.Message
+		for _, args := range scripts {
+			f := newFakeKube()
+			f.testEvents = []*fleetgrpc.TestKubeClusterEvent{resultEvent(f.clusters[0])}
+			f.pruneReply = &fleetgrpc.PruneKubeClusterReply{LeaseHeld: true}
+			f.loginEvents = []*fleetgrpc.LoginKubeClusterEvent{{Kind: &fleetgrpc.LoginKubeClusterEvent_Result{Result: f.clusters[1]}}}
+			f.nsReply = &fleetgrpc.CreateKubeNamespaceReply{Created: true}
+			if _, _, err := runClusterCLI(t, f, args...); err != nil {
+				t.Fatalf("%v with %v: %v", args, env, err)
+			}
+			all = append(all, f.requests)
+		}
+		return all
+	}
+	local := run(nil)
+	for _, env := range []map[string]string{
+		{fleetclient.EnvGateway: "https://gw.example.com/grpc/abc", fleetclient.EnvToken: "t"},
+		{fleetclient.EnvSSH: "ssh://me@daemon-host"},
+		{fleetclient.EnvServer: "daemon-host:7000"},
+	} {
+		remote := run(env)
+		for i := range scripts {
+			if len(remote[i]) != len(local[i]) {
+				t.Fatalf("%v sent %d requests remotely (%v), %d locally", scripts[i], len(remote[i]), env, len(local[i]))
+			}
+			for j := range local[i] {
+				if !proto.Equal(remote[i][j], local[i][j]) {
+					t.Errorf("%v with %v sent %v, locally %v", scripts[i], env, remote[i][j], local[i][j])
+				}
+			}
+		}
+	}
+	// The set script carries every settable field: a remote daemon is sent
+	// all of them.
+	f := newFakeKube()
+	if _, _, err := runClusterCLI(t, f, scripts[4]...); err != nil {
+		t.Fatal(err)
+	}
+	req := f.last(t, "UpdateKubeCluster").(*fleetgrpc.UpdateKubeClusterRequest)
+	if !proto.Equal(req.GetCluster(), everyClusterField()) {
+		t.Errorf("set of every field sent %v", req.GetCluster())
+	}
+}
