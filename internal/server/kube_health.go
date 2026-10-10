@@ -387,9 +387,8 @@ type kubeWorker struct {
 	m *kubeManager
 
 	wake chan struct{}
-	// cancel and done are set by start.
+	// cancel is set by start.
 	cancel context.CancelFunc
-	done   chan struct{}
 
 	mu  sync.Mutex
 	rec fleet.KubeCluster
@@ -411,7 +410,12 @@ type kubeWorker struct {
 	// full one (UNSPECIFIED when it found none).
 	probeFail    fleetgrpc.KubeClusterState
 	probeFailMsg string
-	leaseHeld    bool
+	// reachFailed: the last full run failed where a shallow probe looks too
+	// (loading, credentials, reach), so a shallow probe that passes means it
+	// recovered. A failure only a full run sees (a missing namespace, RBAC)
+	// waits for the next full run, an edit or a test.
+	reachFailed bool
+	leaseHeld   bool
 	// cred is the credential's last known expiry, credErr why re-reading it
 	// failed, credAt when it was read.
 	cred    kubeexec.Credential
@@ -423,7 +427,6 @@ type kubeWorker struct {
 
 func (w *kubeWorker) start(ctx context.Context) {
 	ctx, w.cancel = context.WithCancel(ctx)
-	w.done = make(chan struct{})
 	go w.loop(ctx)
 }
 
@@ -493,7 +496,6 @@ func releaseLease(l kubeLease, id string) {
 }
 
 func (w *kubeWorker) loop(ctx context.Context) {
-	defer close(w.done)
 	for {
 		w.mu.Lock()
 		full, wait := w.nextLocked(w.m.now())
@@ -657,6 +659,7 @@ func (w *kubeWorker) applyFull(rec fleet.KubeCluster, link *kubeLink, res prefli
 	w.probeFail, w.probeFailMsg = fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNSPECIFIED, ""
 	w.cred, w.credErr, w.credAt = res.Credential, nil, res.CheckedAt
 	w.leaseHeld = res.Lease != nil && res.Lease.Held
+	w.reachFailed = link == nil || failedBeforeReach(res)
 	w.mu.Unlock()
 	w.m.publish()
 	if link != nil {
@@ -693,7 +696,7 @@ func (w *kubeWorker) runShallow(ctx context.Context) {
 	}
 	held := res.Lease != nil && res.Lease.Held
 	w.mu.Lock()
-	recovered := w.probeFail != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNSPECIFIED || preflight.Failed(w.full.State)
+	recovered := w.probeFail != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNSPECIFIED || w.reachFailed
 	leaseChanged := res.Lease != nil && held != w.leaseHeld
 	w.lastProbe = res.CheckedAt
 	w.probeFail, w.probeFailMsg = fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNSPECIFIED, ""
@@ -707,6 +710,19 @@ func (w *kubeWorker) runShallow(ctx context.Context) {
 		w.recheckCredential(ctx, link)
 	}
 	w.m.publish()
+}
+
+// failedBeforeReach: a full run stopped at its credentials or reach check.
+func failedBeforeReach(res preflight.Result) bool {
+	for _, c := range res.Checks {
+		if c.GetResult() == fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL {
+			switch c.GetName() {
+			case preflight.CheckKubeconfig, preflight.CheckCredentials, preflight.CheckReachable:
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (w *kubeWorker) applyShallowFailure(res preflight.Result) {

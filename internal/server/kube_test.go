@@ -330,6 +330,9 @@ func TestUpdateKubeClusterRepoint(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := repoint("not-in-the-kubeconfig", "team"); status.Code(err) != codes.NotFound {
+		t.Errorf("re-point to a context the kubeconfig lacks = %v", err)
+	}
 	if err := repoint("prod", "team"); err != nil {
 		t.Fatalf("re-point of an unused connection: %v", err)
 	}

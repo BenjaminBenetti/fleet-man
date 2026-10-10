@@ -170,14 +170,11 @@ type run struct {
 	ownerConflict string
 
 	// what the checks learned, for the ones after them
-	user       string
-	groups     []string
-	nsExists   bool
-	nsReadable bool
-	multiNode  bool
-	nodeCount  int
-	csiLimits  map[string]map[string]int32 // node -> CSI driver -> attach limit
-	rootClass  *fleetgrpc.KubeStorageClass
+	user      string
+	nsExists  bool
+	multiNode bool
+	csiLimits map[string]map[string]int32 // node -> CSI driver -> attach limit
+	rootClass *fleetgrpc.KubeStorageClass
 }
 
 // Full runs every check, passing each to report as it starts (RUNNING) and
@@ -411,7 +408,7 @@ func (r *run) identity(ctx context.Context) {
 	defer cancel()
 	review, err := r.t.Client.AuthenticationV1().SelfSubjectReviews().Create(cctx, &authenticationv1.SelfSubjectReview{}, metav1.CreateOptions{})
 	if err == nil {
-		r.user, r.groups = review.Status.UserInfo.Username, review.Status.UserInfo.Groups
+		r.user = review.Status.UserInfo.Username
 		r.caps.User = r.user
 	}
 	ns, uidErr := r.t.Client.CoreV1().Namespaces().Get(cctx, "kube-system", metav1.GetOptions{})
@@ -483,7 +480,7 @@ func (r *run) namespace(ctx context.Context) {
 		r.nsExists = true
 		return
 	}
-	r.nsExists, r.nsReadable = true, true
+	r.nsExists = true
 	parts := []string{ns + " exists"}
 	if level := obj.Labels[labelPSAEnforce]; level != "" {
 		r.caps.PsaLevel = level

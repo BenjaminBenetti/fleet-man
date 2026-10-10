@@ -30,7 +30,6 @@ func (r *run) nodes(ctx context.Context) {
 		r.warn(CheckNodes, "listing nodes: "+Message(err), "")
 		return
 	}
-	r.nodeCount = len(list.Items)
 	r.multiNode = len(list.Items) > 1
 	r.csiLimits = r.attachLimits(ctx)
 	archs := map[string]bool{}

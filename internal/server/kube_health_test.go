@@ -240,3 +240,25 @@ func TestKubeWorkerRecordChanges(t *testing.T) {
 		t.Error("a re-pointed connection kept its old client")
 	}
 }
+
+// A failure only a full run sees (here a missing namespace) is not
+// "recovered" by every passing shallow probe: no full run every minute.
+func TestKubeShallowProbeDoesNotRerunFullOnContentFailures(t *testing.T) {
+	f := newKubeFixture(t)
+	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube", Namespace: "missing-ns"}).GetCluster().GetId()
+	w := f.svc.kube.newWorker(f.stored(id))
+	w.runFull(context.Background(), nil)
+	if st := w.status(); st.GetState() != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_MISCONFIGURED {
+		t.Fatalf("missing namespace = %v %q", st.GetState(), st.GetMessage())
+	}
+	w.runShallow(context.Background())
+	w.mu.Lock()
+	full, _ := w.nextLocked(f.svc.kube.now())
+	w.mu.Unlock()
+	if full {
+		t.Error("a passing shallow probe asked for a full run of a namespace that is still missing")
+	}
+	if st := w.status(); st.GetState() != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_MISCONFIGURED {
+		t.Errorf("after the shallow probe = %v", st.GetState())
+	}
+}

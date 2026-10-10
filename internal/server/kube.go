@@ -70,22 +70,31 @@ func (s *service) kubeDefaults(rec *fleet.KubeCluster) error {
 		}
 		rec.KubeconfigPaths[i] = filepath.Clean(p)
 	}
+	kc, err := findContext(*rec)
+	if err != nil {
+		return err
+	}
+	if rec.Namespace == "" {
+		rec.Namespace = kc.Namespace
+	}
+	if rec.Namespace == "" {
+		rec.Namespace = "default"
+	}
+	return nil
+}
+
+// findContext is a record's context in its kubeconfig files.
+func findContext(rec fleet.KubeCluster) (kubeexec.KubeContext, error) {
 	contexts, err := kubeexec.ListContexts(rec.KubeconfigPaths)
 	if err != nil {
-		return status.Errorf(codes.FailedPrecondition, "reading the kubeconfig: %s", preflight.Message(err))
+		return kubeexec.KubeContext{}, status.Errorf(codes.FailedPrecondition, "reading the kubeconfig: %s", preflight.Message(err))
 	}
 	for _, c := range contexts {
 		if c.Name == rec.Context {
-			if rec.Namespace == "" {
-				rec.Namespace = c.Namespace
-			}
-			if rec.Namespace == "" {
-				rec.Namespace = "default"
-			}
-			return nil
+			return c, nil
 		}
 	}
-	return status.Errorf(codes.NotFound, "no context %q in %v on the daemon host", rec.Context, rec.KubeconfigPaths)
+	return kubeexec.KubeContext{}, status.Errorf(codes.NotFound, "no context %q in %v on the daemon host", rec.Context, rec.KubeconfigPaths)
 }
 
 // ListKubeContexts lists the contexts of kubeconfig files on the daemon host.
@@ -198,6 +207,11 @@ func (s *service) UpdateKubeCluster(ctx context.Context, req *fleetgrpc.UpdateKu
 		return nil, err
 	}
 	repoint := next.Context != cur.Context || !samePaths(next.KubeconfigPaths, cur.KubeconfigPaths)
+	if repoint {
+		if _, err := findContext(next); err != nil {
+			return nil, err
+		}
+	}
 	forget := false // the probe's notes about the old target go
 	if repoint || next.Namespace != cur.Namespace {
 		users, err := s.kubeUsers(cur.ID)
