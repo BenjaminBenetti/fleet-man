@@ -58,6 +58,10 @@ type JobRun struct {
 	Deadlines *Deadlines
 	// Interval is the time between looks at the Job (DefaultWaitInterval).
 	Interval time.Duration
+	// Check, when set, verifies the Job's pod once it runs, before anything
+	// is staged into it or fed to it (the workspace may hold secrets): its
+	// error ends the run.
+	Check func(*corev1.Pod) error
 }
 
 // ApplyJob creates (or updates) a Job from its server-side apply body
@@ -122,6 +126,12 @@ func (p *Pool) RunJob(ctx context.Context, r JobRun) (jobboot.Result, error) {
 	pod, err := p.waitJobPod(ctx, cs, ns, job, r, d, interval)
 	if err != nil {
 		return jobboot.Result{}, err
+	}
+	if r.Check != nil {
+		if err := r.Check(pod); err != nil {
+			p.opts.Logger.Error("kube job: refused a Job pod that is not the one fleet made", "cluster", r.Cluster, "job", ns+"/"+r.Job, "err", err)
+			return jobboot.Result{}, err
+		}
 	}
 
 	paths := jobboot.Paths{Dir: r.Spec.Tools}

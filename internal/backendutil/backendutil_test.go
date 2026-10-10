@@ -48,7 +48,7 @@ func TestNewForInstanceRegistersCoderName(t *testing.T) {
 // backend itself reports, so a client never offers an action the server
 // refuses, or hides one it would run.
 func TestBackendCapabilitiesMatchBackends(t *testing.T) {
-	for _, backendType := range []fleet.BackendType{fleet.BackendDevcontainer, fleet.BackendCoder, fleet.BackendCodespaces} {
+	for _, backendType := range fleet.BackendTypes() {
 		t.Run(string(backendType), func(t *testing.T) {
 			b := CapabilitiesFor(&fleet.Instance{Backend: backendType})
 			hints := backendType.Capabilities()

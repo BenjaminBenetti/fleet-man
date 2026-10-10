@@ -5,6 +5,7 @@ import (
 	coderbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/coder"
 	codespacesbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/codespaces"
 	devcontainerbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
+	kubernetesbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 )
 
@@ -40,8 +41,13 @@ func newForType(backendType fleet.BackendType, verbose bool) backend.Backend {
 // the codespace/coder name mapping when applicable so that Exec/ExecCommand
 // use the correct container ID. It is the one constructor for a backend that
 // does anything to an instance (create, clone dest, rebuild, start/stop, down,
-// exec, pollers); an empty Backend type means devcontainer.
+// exec, pollers); an empty Backend type means devcontainer. A Kubernetes
+// handle is bound to the instance's whole identity (its connection, key,
+// fleet and creation time), which names every object of it.
 func NewForInstance(instance *fleet.Instance, verbose bool) backend.Backend {
+	if instance.Backend == fleet.BackendKubernetes {
+		return kubernetesbackend.ForInstance(instance)
+	}
 	instanceBackend := newForType(instance.Backend, verbose)
 	// devcontainer finds what a failed create left (OrphanDowner) by the
 	// workspace folder, so it is bound with or without a ContainerID.
@@ -73,6 +79,9 @@ func NewForInstance(instance *fleet.Instance, verbose bool) backend.Backend {
 // can bind that, but it registers no names and does no I/O, so it is safe under
 // the state lock. Use NewForInstance to act on the instance.
 func CapabilitiesFor(instance *fleet.Instance) backend.Capabilities {
+	if instance.Backend == fleet.BackendKubernetes {
+		return kubernetesbackend.ForInstance(instance)
+	}
 	return newForType(instance.Backend, false)
 }
 
