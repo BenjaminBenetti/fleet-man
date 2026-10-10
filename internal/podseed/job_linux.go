@@ -272,7 +272,11 @@ func (r *seedRun) seedRoot(ctx context.Context) error {
 func (r *seedRun) prepare() error {
 	for _, dir := range []string{DirVolumes, DirWorkspace, FleetBinDir, FleetLogDir,
 		DirFleet + "/spec", DirFleet + "/run", DirMeta} {
-		if err := mkdirOwned(filepath.Join(r.pvc, dir), 0o755); err != nil {
+		mode := os.FileMode(0o755)
+		if dir == FleetLogDir {
+			mode = 0o700 // PID 1's output: root's (fleetd's) to read
+		}
+		if err := mkdirOwned(filepath.Join(r.pvc, dir), mode); err != nil {
 			return fmt.Errorf("lay out the instance disk: %w", err)
 		}
 	}

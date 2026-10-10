@@ -68,12 +68,14 @@ func OpenRolling(dir string, max int64, run RunMark) (*RollingLog, error) {
 	if max <= 0 {
 		max = DefaultLogMax
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// Only root (and fleetd, through the agent) reads PID 1's output, as only
+	// the docker host reads a container's log.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	r := &RollingLog{dir: dir, segMax: max / 2}
 	r.state = readRollingState(dir)
-	f, err := os.OpenFile(filepath.Join(dir, RollingName), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(filepath.Join(dir, RollingName), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -96,13 +98,14 @@ func OpenRolling(dir string, max int64, run RunMark) (*RollingLog, error) {
 }
 
 func readRollingState(dir string) rollingState {
+	data, _ := os.ReadFile(filepath.Join(dir, rollingIndex))
+	return parseRollingState(data)
+}
+
+func parseRollingState(data []byte) rollingState {
 	st := rollingState{V: rollingVersion}
-	data, err := os.ReadFile(filepath.Join(dir, rollingIndex))
-	if err != nil {
-		return st
-	}
 	var got rollingState
-	if json.Unmarshal(data, &got) != nil || got.V != rollingVersion || got.Base < got.PrevBase {
+	if len(data) == 0 || json.Unmarshal(data, &got) != nil || got.V != rollingVersion || got.Base < got.PrevBase {
 		return st
 	}
 	return got
@@ -114,7 +117,7 @@ func (r *RollingLog) saveState() error {
 		return err
 	}
 	tmp := filepath.Join(r.dir, "."+rollingIndex+".tmp")
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, filepath.Join(r.dir, rollingIndex))
@@ -159,7 +162,7 @@ func (r *RollingLog) rotate() error {
 		}
 	}
 	r.state.Runs = runs
-	f, err := os.OpenFile(cur, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(cur, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND, 0o600)
 	if err != nil {
 		r.f = nil
 		return err
@@ -190,69 +193,104 @@ type RunOutput struct {
 	End int64
 }
 
-// loadRolling reads the segments: everything still held, and the offsets of
-// its first byte and just past its last.
-func loadRolling(dir string) (st rollingState, all []byte, start, end int64, err error) {
-	st = readRollingState(dir)
-	prev, err := os.ReadFile(filepath.Join(dir, rollingPrev))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return st, nil, 0, 0, err
-	}
-	cur, err := os.ReadFile(filepath.Join(dir, RollingName))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return st, nil, 0, 0, err
-	}
-	// After a crash mid-rotate the index may disagree with the files: trust
-	// the files.
-	st.PrevBase = st.Base - int64(len(prev))
-	all = append(prev, cur...)
-	return st, all, st.PrevBase, st.Base + int64(len(cur)), nil
+// RollingFiles are the rolling file's three parts, as fleetd fetches them
+// from a pod (in RollingDirFiles order): the index, the previous segment and
+// the current one. A missing part is nil.
+type RollingFiles struct {
+	Index, Prev, Cur []byte
 }
 
-// ReadRolling reads what the rolling file in dir holds, run by run, oldest
-// first. fleetd reads it back on the next start to save what a lost node's
-// container log never delivered: the runs it has no log of, or the bytes past
-// the offset it saved up to (ReadRollingSince).
+// RollingDirFiles are the rolling file's parts, relative to its dir.
+var RollingDirFiles = []string{rollingIndex, rollingPrev, RollingName}
+
+// Rolling is a parsed rolling file: everything it still holds, with offsets.
+type Rolling struct {
+	runs []RunMark
+	all  []byte
+	// Start and End are the offsets of the first byte still held and just
+	// past the last.
+	Start, End int64
+}
+
+// ParseRolling parses the rolling file's parts.
+func ParseRolling(f RollingFiles) Rolling {
+	st := parseRollingState(f.Index)
+	// After a crash mid-rotate the index may disagree with the segments:
+	// trust the segments.
+	start := st.Base - int64(len(f.Prev))
+	all := append(append([]byte(nil), f.Prev...), f.Cur...)
+	return Rolling{runs: st.Runs, all: all, Start: start, End: st.Base + int64(len(f.Cur))}
+}
+
+// LoadRolling reads and parses the rolling file in dir.
+func LoadRolling(dir string) (Rolling, error) {
+	var f RollingFiles
+	for i, part := range []*[]byte{&f.Index, &f.Prev, &f.Cur} {
+		data, err := os.ReadFile(filepath.Join(dir, RollingDirFiles[i]))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return Rolling{}, err
+		}
+		*part = data
+	}
+	return ParseRolling(f), nil
+}
+
+// Runs is what the rolling file holds, run by run, oldest first. fleetd reads
+// it back on the next start to save what a lost node's container log never
+// delivered: the runs it has no log of, or the bytes past the offset it saved
+// up to (Since).
+func (r Rolling) Runs() []RunOutput {
+	if len(r.runs) == 0 {
+		if len(r.all) == 0 {
+			return nil
+		}
+		return []RunOutput{{RunMark: RunMark{Offset: r.Start}, Data: r.all, End: r.End}}
+	}
+	var out []RunOutput
+	for i, run := range r.runs {
+		to := r.End
+		if i+1 < len(r.runs) {
+			to = min(r.runs[i+1].Offset, r.End)
+		}
+		from := max(run.Offset, r.Start)
+		if to <= r.Start || from > to {
+			continue
+		}
+		out = append(out, RunOutput{RunMark: run, Data: r.all[from-r.Start : to-r.Start], Truncated: run.Offset < r.Start, End: to})
+	}
+	return out
+}
+
+// Since is the bytes from offset on, and how many bytes from offset on had
+// already rotated away.
+func (r Rolling) Since(offset int64) (data []byte, lost int64) {
+	if offset < r.Start {
+		lost, offset = r.Start-offset, r.Start
+	}
+	if offset >= r.End {
+		return nil, lost
+	}
+	return r.all[offset-r.Start:], lost
+}
+
+// ReadRolling reads the runs of the rolling file in dir (LoadRolling, Runs).
 func ReadRolling(dir string) ([]RunOutput, error) {
-	st, all, start, end, err := loadRolling(dir)
+	r, err := LoadRolling(dir)
 	if err != nil {
 		return nil, err
 	}
-	if len(st.Runs) == 0 {
-		if len(all) == 0 {
-			return nil, nil
-		}
-		return []RunOutput{{RunMark: RunMark{Offset: start}, Data: all, End: end}}, nil
-	}
-	var out []RunOutput
-	for i, run := range st.Runs {
-		to := end
-		if i+1 < len(st.Runs) {
-			to = min(st.Runs[i+1].Offset, end)
-		}
-		from := max(run.Offset, start)
-		if to <= start || from > to {
-			continue
-		}
-		out = append(out, RunOutput{RunMark: run, Data: all[from-start : to-start], Truncated: run.Offset < start, End: to})
-	}
-	return out, nil
+	return r.Runs(), nil
 }
 
 // ReadRollingSince is the rolling file's bytes from offset on, the offset just
 // past them, and how many bytes from offset on had already rotated away.
 func ReadRollingSince(dir string, offset int64) (data []byte, next int64, lost int64, err error) {
-	_, all, start, end, err := loadRolling(dir)
+	r, err := LoadRolling(dir)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	if offset < start {
-		lost, offset = start-offset, start
-	}
-	if offset >= end {
-		return nil, end, lost, nil
-	}
-	return all[offset-start:], end, lost, nil
+	data, lost = r.Since(offset)
+	return data, r.End, lost, nil
 }
 
 // teeWriter writes to w and the rolling log; the log never fails it.

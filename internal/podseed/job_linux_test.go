@@ -214,6 +214,9 @@ func TestSeedJobEndToEnd(t *testing.T) {
 	if target, _ := os.Readlink(filepath.Join(e.pvc, FleetBinDir, "fleet")); target != BinaryName(e.binarySHA) {
 		t.Errorf("fleet/bin/fleet -> %q", target)
 	}
+	if fi, err := os.Stat(filepath.Join(e.pvc, FleetLogDir)); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("fleet/log: %v %v, want a private dir", fi, err)
+	}
 	for _, dir := range []string{"root-extra/workspaces", "root-extra/fleet-mounts", "fleet/log", "fleet/spec", "fleet/run", "vol/cache"} {
 		if fi, err := os.Stat(filepath.Join(e.pvc, dir)); err != nil || !fi.IsDir() {
 			t.Errorf("%s: %v", dir, err)

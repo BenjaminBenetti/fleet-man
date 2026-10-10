@@ -122,8 +122,9 @@ func TestRollingLogRotatesAndKeepsOffsets(t *testing.T) {
 	_ = r.Close()
 	total := int64(all.Len())
 	// 160 bytes in 50-byte segments: the oldest rotated away.
-	if fi, _ := os.Stat(filepath.Join(dir, RollingName)); fi.Size() > 50 {
-		t.Fatalf("current segment is %d bytes, over half the cap", fi.Size())
+	fi, _ := os.Stat(filepath.Join(dir, RollingName))
+	if fi.Size() > 50 || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("current segment is %d bytes (over half the cap?), mode %v", fi.Size(), fi.Mode())
 	}
 	data, next, lost, err := ReadRollingSince(dir, 0)
 	if err != nil {
@@ -159,6 +160,22 @@ func TestRollingLogRotatesAndKeepsOffsets(t *testing.T) {
 	}
 	if !strings.HasSuffix(all.String(), string(runs[0].Data)) {
 		t.Fatalf("first run's data %q", runs[0].Data)
+	}
+
+	// fleetd parses the parts it fetched from the pod the same way.
+	var parts RollingFiles
+	for i, p := range []*[]byte{&parts.Index, &parts.Prev, &parts.Cur} {
+		*p, _ = os.ReadFile(filepath.Join(dir, RollingDirFiles[i]))
+	}
+	remote := ParseRolling(parts)
+	if got := remote.Runs(); len(got) != 2 || string(got[1].Data) != "second run\n" || remote.End != total+11 {
+		t.Fatalf("parsed from fetched parts: %+v end %d", got, remote.End)
+	}
+	if data, lost := remote.Since(total); string(data) != "second run\n" || lost != 0 {
+		t.Fatalf("since %d: %q %d", total, data, lost)
+	}
+	if empty := ParseRolling(RollingFiles{}); empty.Runs() != nil || empty.Start != 0 || empty.End != 0 {
+		t.Fatalf("no parts: %+v", empty)
 	}
 }
 

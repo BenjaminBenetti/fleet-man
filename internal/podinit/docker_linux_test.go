@@ -139,6 +139,8 @@ head -c 900m /dev/zero | tail > /dev/null`
 	if code := strings.TrimSpace(docker(t, "inspect", "-f", "{{.State.ExitCode}}", name)); code != "3" {
 		t.Errorf("exit code %s, want the script's 3 from its INT trap\n%s", code, docker(t, "logs", name))
 	}
+	// The rolling file is root's (0600); open it up to read it here.
+	docker(t, "run", "--rm", "-v", fleet+":/opt/fleet", image, "chmod", "-R", "a+rX", "/opt/fleet/log")
 	runs, err := ReadRolling(filepath.Join(fleet, "log"))
 	if err != nil || len(runs) != 1 || !strings.Contains(string(runs[0].Data), "ready") || !strings.Contains(string(runs[0].Data), "got-int") {
 		t.Errorf("rolling file: %+v %v", runs, err)
