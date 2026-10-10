@@ -31,6 +31,13 @@ integration/
 │                               # portsAttributes
 ├── net/                        # net.sh (itest_net_* helpers) + client.py, the host end
 │                               # of the forwarding / browser-proxy tests
+├── fixture-lifecycle/          # every lifecycle hook logs its name (hook counts)
+├── fixture-dockerfile/         # Dockerfile build (args, repo-root context) + a local
+│                               # feature with an option, containerEnv/remoteEnv
+├── fixture-go-feature/         # the published Go feature (debug grants, init)
+├── fixture-dind/               # the published docker-in-docker feature
+├── fixture-hostbind/           # a read-write dir and a read-only file host bind
+├── poison-docker/docker        # docker stand-in that logs or refuses calls (itest_poison_docker)
 └── tests/
     ├── 010_up_and_ls.sh        # CLI — up + ls
     ├── 020_exec.sh             # CLI — exec
@@ -111,6 +118,8 @@ helpers in `common.sh`, which dispatch to `backends/<backend>.sh`:
 | `itest_workspace_exists`, `assert_workspace_exists` / `_absent`, `itest_workspace_test`, `_read`, `_write`, `_git` | the instance's checkout |
 | `itest_control_test`, `_read`, `_mode` | the instance's `/fleet-mounts/control` dir |
 | `itest_share_dir`, `itest_share_sync` | the fleet's shared-mount tree on the daemon host, and waiting for it to sync |
+| `itest_install_local_deb`, `itest_local_deb_status` | apt-install a one-file package built inside the instance (no network), and whether it is still installed |
+| `itest_poison_docker`, `itest_poison_docker_saw`, `itest_poison_docker_log` | put the docker stand-in on the daemon's PATH (`record` or `poison`), and read what it saw |
 | `itest_backend_is` | for the rare step with no counterpart elsewhere (a host bind) |
 
 `<ref>` is `<fleet>/<instance>`, as `fleet exec` takes it. A step that only
@@ -120,6 +129,16 @@ a comment saying why.
 To drive the daemon's MCP tools, `itest_mcp_call <tool> <arguments-json>
 [<field>]` calls one tool on the local MCP endpoint and prints its result (or
 one field of it); `itest_json_field <path>` reads a field out of JSON on stdin.
+
+`itest_poison_docker` puts `poison-docker/docker` first on PATH and restarts
+the daemon so it (and the devcontainer CLI it runs) calls docker through it.
+`record` passes every call through; `poison` refuses the container verbs (run,
+exec, start, stop, ps, logs, inspect of a container, ...) with exit code 125 and
+lets image, build and version calls through. Each call is logged on one line as
+`pass|refused <args>`. A cluster backend runs its lifecycle with docker
+poisoned, so treating an instance as a docker container fails loudly;
+`tests/726_poison_docker.sh` is the lifecycle check and
+`tests/728_poison_docker_shim.sh` tests the shim itself.
 
 `# itest:` lines in a test file mark how it relates to the backends:
 

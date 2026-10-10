@@ -1,0 +1,14 @@
+{
+  "name": "fleet-man Dockerfile + features fixture",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "..",
+    "args": { "ITEST_BUILD_ARG": "from-build-args" }
+  },
+  "features": {
+    "./itest-feature": { "greeting": "hello-from-feature-option" }
+  },
+  "containerEnv": { "ITEST_CONTAINER_ENV": "from-containerEnv" },
+  "remoteEnv": { "ITEST_REMOTE_ENV": "from-remoteEnv" },
+  "remoteUser": "vscode"
+}
