@@ -559,6 +559,11 @@ itest_container_stop() { _be_container_stop "$1"; }
 # in the container as <user>, bypassing fleet.
 itest_container_exec_as() { _be_container_exec_as "$@"; }
 
+# itest_container_label <container_id> <label> — the value of a label the
+# devcontainer CLI stamped on the container (e.g. devcontainer.metadata, the
+# merged config an editor's attach applies); empty when it has none.
+itest_container_label() { _be_container_label "$1" "$2"; }
+
 # --- workspace: the instance's checkout ---
 
 # itest_workspace_exists <ref>

@@ -1,0 +1,5 @@
+{
+  "name": "fleet-man integration host-gateway fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "runArgs": ["--add-host=host.docker.internal:host-gateway"]
+}

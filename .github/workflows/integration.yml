@@ -19,7 +19,7 @@ jobs:
   # SLOWEST shard — not the whole 80+-test suite — sets the wall-clock. Each
   # shard runs integration/run.sh with FLEET_ITEST_RANGE; run.sh filters to the
   # tests whose numeric filename prefix falls in [START, END). The open-ended
-  # "600-" shard catches any future high-numbered tests so none are dropped.
+  # last shard ("760-") catches any future high-numbered tests so none are dropped.
   integration-shard:
     name: integration ${{ matrix.range }}
     runs-on: ubuntu-latest
@@ -36,7 +36,10 @@ jobs:
           - "300-400"
           - "400-500"
           - "500-600"
-          - "600-"
+          - "600-700"
+          - "700-730"
+          - "730-760"
+          - "760-"
     steps:
       - uses: actions/checkout@v5
 
