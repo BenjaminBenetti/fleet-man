@@ -92,9 +92,11 @@ surfaces as a tool error.
   than cloning (a template fleet takes no `branch` and only the `devcontainer`
   backend).
   `backend` selects where it runs: `devcontainer`, `coder`, or `codespaces`.
-  Omitted, it falls back to the host's configured default backend
-  (`devcontainer` out of the box) — the others need prior configuration, so
-  leave it unset or pass `devcontainer` unless the user says otherwise.
+  Omitted, the daemon uses its remembered default deploy target (the one last
+  picked in a TUI New instance dialog; `devcontainer` out of the box), and the
+  reply's `target` names the backend it used. The others need prior
+  configuration, so leave it unset or pass `devcontainer` unless the user says
+  otherwise.
 - `fleet_start` / `fleet_stop {fleet, instance}` resume / pause an instance.
   Stop preserves the workspace; start brings it back. These always block —
   they finish in seconds.

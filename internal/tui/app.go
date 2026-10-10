@@ -131,6 +131,11 @@ type model struct {
 
 	toolStatus []deps.ToolStatus // cached tool install statuses for settings page
 
+	// daemonTools is the daemon host's build tools, for the fleetd rows of
+	// Settings -> Tool Status. Fetched each time the page opens; nil until the
+	// answer arrives (and after an armada switch).
+	daemonTools *daemonToolStatus
+
 	// Port forwarding
 	portForwards *portforward.Manager // manages active port forward processes
 
@@ -971,6 +976,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// state + computed Public MCP URL). Cache it for the settings page to
 		// render; a redraw picks it up on the next frame.
 		m.remoteMcpStatus = msg.status
+		return m, spinCmd
+
+	case daemonToolsMsg:
+		m.handleDaemonToolsMsg(msg)
 		return m, spinCmd
 
 	case micSourcesMsg:

@@ -23,9 +23,16 @@ func newUpCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
-			backendType, err := fleet.ParseBackendType(backendFlag)
-			if err != nil {
-				return err
+			// No --backend leaves the target to the daemon: its remembered
+			// default (the target last picked in a TUI New instance dialog),
+			// else devcontainer.
+			backend := fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED
+			if backendFlag != "" {
+				backendType, err := fleet.ParseBackendType(backendFlag)
+				if err != nil {
+					return err
+				}
+				backend = protoconv.BackendToProto(backendType)
 			}
 
 			target, err := fleet.Resolve(name, repoFlag)
@@ -53,12 +60,10 @@ func newUpCmd() *cobra.Command {
 				}
 			}
 
-			fmt.Printf("Creating %s/%s (backend: %s)...\n", target.Fleet, target.Instance, backendType)
-
 			req := &fleetgrpc.CreateInstanceRequest{
 				Fleet:    target.Fleet,
 				Instance: target.Instance,
-				Backend:  protoconv.BackendToProto(backendType),
+				Backend:  backend,
 				Verbose:  true,
 			}
 			if remoteURL != "" {
@@ -67,8 +72,17 @@ func newUpCmd() *cobra.Command {
 			if branchFlag != "" {
 				req.Branch = &branchFlag
 			}
+			out := cmd.OutOrStdout()
 			if err := runInstanceJob(cmd.Context(), true, func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (grpc.ServerStreamingClient[fleetgrpc.JobEvent], error) {
-				return svc.CreateInstance(ctx, req)
+				stream, err := svc.CreateInstance(ctx, req)
+				if err != nil {
+					return nil, err
+				}
+				// Announced once the daemon has accepted the create, so the line
+				// names the target it resolved, not one guessed here.
+				return onJobStarted(stream, func(started *fleetgrpc.JobStarted) {
+					fmt.Fprintf(out, "Creating %s/%s (backend: %s)...\n", target.Fleet, target.Instance, startedTargetLabel(started, backendFlag))
+				}), nil
 			}); err != nil {
 				return err
 			}
@@ -87,7 +101,7 @@ func newUpCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&repoFlag, "repo", "", "Git remote URL to clone, or file:///abs/dir to copy a local template (needs <fleet>/<name>)")
-	cmd.Flags().StringVar(&backendFlag, "backend", "devcontainer", "Backend type: devcontainer, coder, or codespaces")
+	cmd.Flags().StringVar(&backendFlag, "backend", "", "Backend: devcontainer, coder, or codespaces (default: fleetd's remembered target)")
 	cmd.Flags().StringVar(&branchFlag, "branch", "", "Git branch to check out (defaults to the repository's default branch)")
 	return cmd
 }

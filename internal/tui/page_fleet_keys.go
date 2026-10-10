@@ -5,15 +5,10 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	tea "github.com/charmbracelet/bubbletea"
+	grpcstatus "google.golang.org/grpc/status"
 )
-
-// checkTools is the deps.CheckTools seam the add-instance key uses to refresh
-// the deploy-target list; tests stub it so the dialog opens regardless of what
-// CLIs the host has installed.
-var checkTools = deps.CheckTools
 
 // updateNormal handles keyboard input in the default fleet list mode.
 func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
@@ -269,30 +264,27 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "No fleet selected"
 				break
 			}
-			// Must precede availableBackendTypes: a template fleet narrows
-			// the deploy targets to devcontainer.
+			// The daemon decides where this fleet's instances can go (it runs
+			// the backend CLIs) and which target it remembered last; a
+			// template fleet is narrowed to devcontainer.
 			fleetPage.addInst.template = false
 			if f, ok := m.st.Fleets[fleetName]; ok {
 				fleetPage.addInst.template = fleet.IsTemplateRemote(f.Remote)
 			}
-			m.toolStatus = checkTools()
-			available := fleetPage.availableBackendTypes(m)
-			if len(available) == 0 {
-				m.message = "No deploy targets available – install devcontainer or coder CLI"
+			targets, err := loadDeployTargets(m, fleetName, fleetPage.addInst.template)
+			if err != nil {
+				m.message = "Could not list deploy targets: " + grpcstatus.Convert(err).Message()
+				break
+			}
+			preferred, ok := targets.preferred()
+			if !ok {
+				m.message = noDeployTargetsMessage()
 				break
 			}
 			fleetPage.mode = viewAddInstance
 			fleetPage.dlg.fleet = fleetName
-			fleetPage.addInst.backend = available[0]
-			if m.config != nil {
-				preferred := fleet.BackendType(m.config.DefaultBackend)
-				for _, backendType := range available {
-					if backendType == preferred {
-						fleetPage.addInst.backend = preferred
-						break
-					}
-				}
-			}
+			fleetPage.addInst.targets = targets.available()
+			fleetPage.addInst.target = preferred
 			fleetPage.addInst.color = instanceColorWhite
 			fleetPage.dlg.row = addInstanceRowName
 			fleetPage.addInst.editing = false
@@ -397,9 +389,9 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "Select an instance"
 				break
 			}
-			// Gate on the backend type's capability hints. Pure check — no
+			// Gate on the deploy target's capability hints. Pure check — no
 			// backend construction; the clone job re-checks the live backend.
-			if !instance.Backend.Capabilities().Clone {
+			if !instance.DeployTarget().Capabilities().Clone {
 				m.message = fmt.Sprintf("Clone not supported by %s backend", instance.Backend)
 				break
 			}
@@ -421,10 +413,10 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "Select an instance"
 				break
 			}
-			// Gate on the backend type's capability hints (coder has no rebuild
+			// Gate on the deploy target's capability hints (coder has no rebuild
 			// primitive). Pure check — no backend construction; the server
 			// re-checks the live backend before it marks the instance rebuilding.
-			if !instance.Backend.Capabilities().Rebuild {
+			if !instance.DeployTarget().Capabilities().Rebuild {
 				m.message = fmt.Sprintf("Rebuild not supported by %s backend", instance.Backend)
 				break
 			}
@@ -565,7 +557,6 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 
 	switch r.kind {
 	case rowSettings:
-		m.toolStatus = deps.CheckTools()
 		return m.ChangeRoute(routeSettings)
 
 	case rowLeaveFocus:

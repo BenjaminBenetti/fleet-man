@@ -835,6 +835,8 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	m.outputTargets = nil
 	m.outputStatus = output.Status{}
 	m.outputRevision = 0
+	// The fleetd rows of Tool Status describe the daemon being left.
+	m.daemonTools = nil
 	m.codespaceMachines = nil
 	m.codespaceFetchingMachines = false
 	m.sessionStore = NewSessionStore()

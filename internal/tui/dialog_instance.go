@@ -8,35 +8,42 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// backendToolRequirements maps each backend type to the CLI binary it
-// requires. An empty string means no external tool is needed.
-var backendToolRequirements = map[fleet.BackendType]string{
-	fleet.BackendDevcontainer: "devcontainer",
-	fleet.BackendCoder:        "coder",
-	fleet.BackendCodespaces:   "gh",
+// allBackendTypes is every backend type, in the deploy targets' dialog order
+// (the automation agent dialog cycles it).
+var allBackendTypes = backendTypesOf(fleet.DeployTargets())
+
+// backendTypesOf returns the targets' backend types, in order.
+func backendTypesOf(targets []fleet.DeployTarget) []fleet.BackendType {
+	out := make([]fleet.BackendType, 0, len(targets))
+	for _, target := range targets {
+		out = append(out, target.Backend)
+	}
+	return out
 }
 
-// allBackendTypes is the ordered master list of every backend type.
-var allBackendTypes = []fleet.BackendType{
-	fleet.BackendDevcontainer,
-	fleet.BackendCoder,
-	fleet.BackendCodespaces,
-}
-
-// nextBackendType cycles through the given options list from current.
-func nextBackendType(current fleet.BackendType, direction int, options []fleet.BackendType) fleet.BackendType {
+// cycleOption steps direction places through options from current, wrapping;
+// a current not among the options counts as the first.
+func cycleOption[T comparable](current T, direction int, options []T) T {
 	if len(options) == 0 {
 		return current
 	}
 	idx := 0
-	for i, backendType := range options {
-		if backendType == current {
+	for i, option := range options {
+		if option == current {
 			idx = i
 			break
 		}
 	}
 	idx = (idx + direction + len(options)) % len(options)
 	return options[idx]
+}
+
+// cycleDeployTarget moves the New instance dialog's Deploy row through the
+// available targets.
+func (fleetPage *fleetPage) cycleDeployTarget(direction int) {
+	if len(fleetPage.addInst.targets) > 1 {
+		fleetPage.addInst.target = cycleOption(fleetPage.addInst.target, direction, fleetPage.addInst.targets)
+	}
 }
 
 // backendTypeLabel returns a human-readable label for a backend type.
@@ -81,10 +88,8 @@ func (fleetPage *fleetPage) openEditInstanceDialog(m *model) tea.Cmd {
 	fleetPage.addInst.template = fleet.IsTemplateRemote(f.Remote)
 	fleetPage.dlg.fleet = f.Name
 	fleetPage.dlg.inst = instance.Name
-	fleetPage.addInst.backend = instance.Backend
-	if fleetPage.addInst.backend == "" {
-		fleetPage.addInst.backend = fleet.BackendDevcontainer
-	}
+	fleetPage.addInst.target = instance.DeployTarget()
+	fleetPage.addInst.targets = nil
 	fleetPage.addInst.color = instance.Color
 	if fleetPage.addInst.color == "" {
 		fleetPage.addInst.color = instanceColorWhite
@@ -126,10 +131,7 @@ func (fleetPage *fleetPage) updateAddInstance(m *model, msg tea.Msg) tea.Cmd {
 			if fleetPage.addInst.editing {
 				return nil
 			}
-			opts := fleetPage.availableBackendTypes(m)
-			if len(opts) > 1 {
-				fleetPage.addInst.backend = nextBackendType(fleetPage.addInst.backend, 1, opts)
-			}
+			fleetPage.cycleDeployTarget(1)
 			return nil
 
 		case "shift+tab":
@@ -150,10 +152,7 @@ func (fleetPage *fleetPage) updateAddInstance(m *model, msg tea.Msg) tea.Cmd {
 
 		case "left":
 			if fleetPage.dlg.row == addInstanceRowDeploy && !fleetPage.addInst.editing {
-				opts := fleetPage.availableBackendTypes(m)
-				if len(opts) > 1 {
-					fleetPage.addInst.backend = nextBackendType(fleetPage.addInst.backend, -1, opts)
-				}
+				fleetPage.cycleDeployTarget(-1)
 				return nil
 			}
 			if fleetPage.dlg.row == addInstanceRowColor {
@@ -166,10 +165,7 @@ func (fleetPage *fleetPage) updateAddInstance(m *model, msg tea.Msg) tea.Cmd {
 				return fleetPage.activateAddInstanceField()
 			}
 			if fleetPage.dlg.row == addInstanceRowDeploy && !fleetPage.addInst.editing {
-				opts := fleetPage.availableBackendTypes(m)
-				if len(opts) > 1 {
-					fleetPage.addInst.backend = nextBackendType(fleetPage.addInst.backend, 1, opts)
-				}
+				fleetPage.cycleDeployTarget(1)
 				return nil
 			}
 			if fleetPage.dlg.row == addInstanceRowColor {
@@ -195,10 +191,7 @@ func (fleetPage *fleetPage) updateAddInstance(m *model, msg tea.Msg) tea.Cmd {
 		}
 		if isDialogLeftKey(msg.String()) {
 			if fleetPage.dlg.row == addInstanceRowDeploy && !fleetPage.addInst.editing {
-				opts := fleetPage.availableBackendTypes(m)
-				if len(opts) > 1 {
-					fleetPage.addInst.backend = nextBackendType(fleetPage.addInst.backend, -1, opts)
-				}
+				fleetPage.cycleDeployTarget(-1)
 				return nil
 			}
 			if fleetPage.dlg.row == addInstanceRowColor {
@@ -208,10 +201,7 @@ func (fleetPage *fleetPage) updateAddInstance(m *model, msg tea.Msg) tea.Cmd {
 		}
 		if isDialogRightKey(msg.String()) {
 			if fleetPage.dlg.row == addInstanceRowDeploy && !fleetPage.addInst.editing {
-				opts := fleetPage.availableBackendTypes(m)
-				if len(opts) > 1 {
-					fleetPage.addInst.backend = nextBackendType(fleetPage.addInst.backend, 1, opts)
-				}
+				fleetPage.cycleDeployTarget(1)
 				return nil
 			}
 			if fleetPage.dlg.row == addInstanceRowColor {
@@ -274,9 +264,9 @@ func (fleetPage *fleetPage) submitAddInstance(m *model) tea.Cmd {
 		return nil
 	}
 
-	backendType := fleetPage.addInst.backend
-	if backendType == "" {
-		backendType = fleet.BackendDevcontainer
+	target := fleetPage.addInst.target
+	if target.IsZero() {
+		target = fleet.DeployTarget{Backend: fleet.BackendDevcontainer}
 	}
 
 	color := fleetPage.addInst.color
@@ -291,21 +281,24 @@ func (fleetPage *fleetPage) submitAddInstance(m *model) tea.Cmd {
 		branch = ""
 	}
 
-	// Record the chosen backend as the new default. The instance record itself
-	// is pre-created server-side by the CreateInstance job (no client-side state
-	// write — the #63 fix); instanceSpawnedMsg reload()s it into view.
+	// The daemon remembers the chosen target as the new default when it
+	// accepts the create (remember_default), so there is no config save here.
+	// This copy of the config only mirrors it for the automation agent
+	// dialog's preselect; SetConfig never writes it back. The instance record
+	// itself is pre-created server-side by the CreateInstance job (no
+	// client-side state write — the #63 fix); instanceSpawnedMsg reload()s it
+	// into view.
 	if m.config != nil {
-		m.config.DefaultBackend = string(backendType)
-		_ = setConfigRemote(m.config)
+		m.config.DefaultBackend = string(target.Backend)
 	}
 
 	key := fleetName + "/" + name
 	m.creating[key] = true
 	fleetPage.mode = viewNormal
 	fleetPage.blurDialogFields()
-	m.message = fmt.Sprintf("Creating %s (%s)...", key, backendTypeLabel(backendType))
+	m.message = fmt.Sprintf("Creating %s (%s)...", key, deployTargetLabel(target))
 
-	return createInstanceCmd(fleetName, name, f.Remote, branch, color, backendType)
+	return createInstanceCmd(fleetName, name, f.Remote, branch, color, target)
 }
 
 func (fleetPage *fleetPage) cancelAddInstance(m *model) tea.Cmd {
@@ -599,46 +592,28 @@ func (fleetPage *fleetPage) saveCloneInstance(m *model) tea.Cmd {
 // addInstanceState holds the add/edit-instance form's non-shared fields (the
 // target fleet/instance live in fleetPage.dlg).
 type addInstanceState struct {
-	backend fleet.BackendType
+	// target is the Deploy row: where the new instance goes, or (editing)
+	// where the instance runs.
+	target fleet.DeployTarget
+	// targets are the available deploy targets the New instance dialog's
+	// Deploy row cycles, from the daemon (ListDeployTargets) as the dialog
+	// opened. Empty while editing: the target can't change.
+	targets []fleet.DeployTarget
 	color   string
 	editing bool
 	// template is set when the target fleet's remote is a file:// template
-	// dir: the branch row is disabled and only the devcontainer backend (the
-	// one that provisions from a local workspace copy) is offered.
+	// dir: the branch row is disabled and the daemon offers only the
+	// devcontainer target (the one that provisions from a local workspace
+	// copy).
 	template bool
-}
-
-// availableBackendTypes returns the subset of backend types whose
-// required CLI tool is found on the system. A template fleet is further
-// narrowed to devcontainer — coder and codespaces clone a git URL on their
-// own side and cannot consume a copied local directory.
-func (fleetPage *fleetPage) availableBackendTypes(m *model) []fleet.BackendType {
-	var out []fleet.BackendType
-	for _, backendType := range allBackendTypes {
-		if fleetPage.addInst.template && backendType != fleet.BackendDevcontainer {
-			continue
-		}
-		bin := backendToolRequirements[backendType]
-		if bin == "" {
-			out = append(out, backendType)
-			continue
-		}
-		for _, t := range m.toolStatus {
-			if t.Binary == bin && t.Found {
-				out = append(out, backendType)
-				break
-			}
-		}
-	}
-	return out
 }
 
 func (fleetPage *fleetPage) renderAddInstanceDialog(m *model) string {
 	var b strings.Builder
 	b.WriteString("\n")
-	backendType := fleetPage.addInst.backend
-	if backendType == "" {
-		backendType = fleet.BackendDevcontainer
+	target := fleetPage.addInst.target
+	if target.IsZero() {
+		target = fleet.DeployTarget{Backend: fleet.BackendDevcontainer}
 	}
 	colorName := fleetPage.addInst.color
 	if colorName == "" {
@@ -663,14 +638,14 @@ func (fleetPage *fleetPage) renderAddInstanceDialog(m *model) string {
 			}
 		}
 		branchField = dimStyle.Render(branchDisplay)
-		deployField = dimStyle.Render(fmt.Sprintf("[ %s ]", backendTypeLabel(backendType)))
+		deployField = dimStyle.Render(fmt.Sprintf("[ %s ]", deployTargetLabel(target)))
 	} else {
 		title = "New instance"
 		if fleetPage.dlg.fieldActive {
 			hint = "[enter] Create  [esc] Done editing  [ctrl+c] Cancel"
 		} else {
 			hint = "[j/k] Select  [h/l/space] Cycle  [shift+tab] Color  [enter] Edit/Create  [q/esc] Cancel"
-			if len(fleetPage.availableBackendTypes(m)) > 1 {
+			if len(fleetPage.addInst.targets) > 1 {
 				hint = "[j/k] Select  [h/l/space/tab] Cycle  [shift+tab] Color  [enter] Edit/Create  [q/esc] Cancel"
 			}
 		}
@@ -679,7 +654,7 @@ func (fleetPage *fleetPage) renderAddInstanceDialog(m *model) string {
 		if fleetPage.addInst.template {
 			branchField = dimStyle.Render(templateBranchDisplay)
 		}
-		deployField = fmt.Sprintf("[ %s ]", backendTypeLabel(backendType))
+		deployField = fmt.Sprintf("[ %s ]", deployTargetLabel(target))
 	}
 
 	rowMarker := func(r int) string {

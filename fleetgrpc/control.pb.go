@@ -590,8 +590,9 @@ func (*DeleteImageCacheReply) Descriptor() ([]byte, []int) {
 type GetStateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// fresh_branches asks the server to read every instance's checked-out branch
-	// through its backend's workspace reader (bounded concurrency, results
-	// cached ~10s) and return them as GetStateReply.runtime entries carrying
+	// through its backend's workspace reader (bounded concurrency; reads made
+	// inside an instance are cached ~10s, host checkout reads never are) and
+	// return them as GetStateReply.runtime entries carrying
 	// current_branch. Callers without a Watch subscription (fleet ls, the MCP
 	// fleet_list tool) set it: the runtime pollers only run while a TUI watches.
 	FreshBranches bool `protobuf:"varint,1,opt,name=fresh_branches,json=freshBranches,proto3" json:"fresh_branches,omitempty"`

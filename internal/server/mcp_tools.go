@@ -68,7 +68,7 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	// --- lifecycle ---
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_up",
-		Description: "Create (provision) a new instance in a fleet. Returns immediately with a job_id to poll via fleet_job_status (provisioning takes minutes); pass wait:true to block until done instead. Provide remote (a git URL, or file:///abs/dir for a local template directory that is copied per instance) when creating the first instance of a new fleet.",
+		Description: "Create (provision) a new instance in a fleet. Returns immediately with a job_id to poll via fleet_job_status (provisioning takes minutes); pass wait:true to block until done instead. Provide remote (a git URL, or file:///abs/dir for a local template directory that is copied per instance) when creating the first instance of a new fleet. Without backend the instance goes to the daemon's remembered default deploy target (the one last picked in a TUI New instance dialog, else devcontainer), not necessarily devcontainer; the reply's target names where it went.",
 	}, s.mcpUp)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_start",
@@ -207,11 +207,19 @@ func toMCPInstance(fleetName string, inst *fleetgrpc.Instance) *mcpInstance {
 // non-fatal issues from an otherwise-successful job (e.g. a best-effort
 // teardown step).
 type FleetJobOutput struct {
-	JobID    string       `json:"job_id,omitempty"`
-	Done     bool         `json:"done"`
-	Success  bool         `json:"success,omitempty"`
-	Instance *mcpInstance `json:"instance,omitempty"`
-	Warnings []string     `json:"warnings,omitempty"`
+	JobID    string           `json:"job_id,omitempty"`
+	Done     bool             `json:"done"`
+	Success  bool             `json:"success,omitempty"`
+	Target   *mcpDeployTarget `json:"target,omitempty" jsonschema:"fleet_up only: where the instance was created"`
+	Instance *mcpInstance     `json:"instance,omitempty"`
+	Warnings []string         `json:"warnings,omitempty"`
+}
+
+// mcpDeployTarget names where fleet_up put an instance, so a caller that left
+// backend out learns which target the daemon's remembered default resolved to.
+type mcpDeployTarget struct {
+	Backend   string `json:"backend" jsonschema:"the backend the instance was created on"`
+	Defaulted bool   `json:"defaulted,omitempty" jsonschema:"true when backend was omitted, so the daemon picked the target: its remembered default deploy target, else devcontainer"`
 }
 
 // jobResult turns a completed lifecycle outcome into a tool result: a failed
@@ -376,7 +384,7 @@ type FleetUpInput struct {
 	Instance string `json:"instance" jsonschema:"instance name"`
 	Remote   string `json:"remote,omitempty" jsonschema:"git remote URL, or file:///abs/dir naming a local template directory on the daemon host that is copied into each instance instead of cloned; required only when creating the first instance of a new fleet"`
 	Branch   string `json:"branch,omitempty" jsonschema:"git branch to check out; defaults to the repository's default branch. Not allowed for a file:// template fleet"`
-	Backend  string `json:"backend,omitempty" jsonschema:"backend type: devcontainer (default), coder, or codespaces"`
+	Backend  string `json:"backend,omitempty" jsonschema:"backend type: devcontainer, coder, or codespaces; omit to use the daemon's remembered default deploy target (the one last picked in a TUI New instance dialog, else devcontainer). A file:// template fleet always uses devcontainer"`
 	Wait     bool   `json:"wait,omitempty" jsonschema:"block until provisioning completes instead of returning a job handle immediately; provisioning takes minutes, so only set this with a generous tool-call timeout"`
 }
 
@@ -406,13 +414,26 @@ func (s *service) mcpUp(ctx context.Context, _ *mcp.CallToolRequest, in FleetUpI
 	if err != nil {
 		return nil, FleetJobOutput{}, mcpErr(err)
 	}
-	if !in.Wait {
-		return asyncJobResult(in.Fleet, j)
+	target := &mcpDeployTarget{
+		Backend:   protoconv.DeployTargetFromProto(j.target).String(),
+		Defaulted: in.Backend == "",
 	}
-	jctx, cancel := mergeCtx(s.bgCtx, ctx)
-	defer cancel()
-	final, warnings, err := awaitJob(jctx, j)
-	return jobResult(in.Fleet, j.summary.GetJobId(), final, warnings, err)
+	var (
+		result *mcp.CallToolResult
+		out    FleetJobOutput
+	)
+	if !in.Wait {
+		result, out, err = asyncJobResult(in.Fleet, j)
+	} else {
+		jctx, cancel := mergeCtx(s.bgCtx, ctx)
+		defer cancel()
+		final, warnings, jobErr := awaitJob(jctx, j)
+		result, out, err = jobResult(in.Fleet, j.summary.GetJobId(), final, warnings, jobErr)
+	}
+	if err == nil {
+		out.Target = target
+	}
+	return result, out, err
 }
 
 func (s *service) mcpStart(ctx context.Context, _ *mcp.CallToolRequest, in FleetInstanceInput) (*mcp.CallToolResult, FleetJobOutput, error) {

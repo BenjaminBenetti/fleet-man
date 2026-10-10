@@ -10,6 +10,7 @@ import "config.proto";
 import "exec.proto";
 import "output.proto";
 import "inspect.proto";
+import "deploy.proto";
 
 option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
 
@@ -127,6 +128,12 @@ service FleetService {
   // Client-streaming: first chunk is the open header, the rest are data. Backs
   // the scp-style upload (and instance→instance relay) direction of `fleet copy`.
   rpc CopyInto(stream CopyIntoChunk) returns (CopyIntoReply);
+
+  // ---- Deploy targets ----
+  // ListDeployTargets lists where this daemon can create an instance (judged
+  // on the daemon host), the remembered default, and the daemon host's build
+  // tools. Served to remote clients exactly as to local ones.
+  rpc ListDeployTargets(ListDeployTargetsRequest) returns (ListDeployTargetsReply);
 
   // ---- Repo inspection (server-side clone + checks) ----
   // InspectRepo shallow-clones remote_url on the DAEMON's host and reports
