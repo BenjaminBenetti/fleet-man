@@ -255,6 +255,13 @@ const fakeDockerScript = `#!/bin/sh
 d=$(dirname "$0")
 echo "$*" >> "$d/docker.log"
 case "$1" in
+image)
+	# image inspect --format {{.Id}} -- <id>
+	for a; do id=$a; done
+	if [ ! -f "$d/saves/${id#sha256:}.tar" ]; then
+		echo "Error response from daemon: No such image: $id" >&2; exit 1
+	fi
+	echo "$id" ;;
 save)
 	f="$d/saves/${2#sha256:}.tar"
 	if [ ! -f "$f" ]; then

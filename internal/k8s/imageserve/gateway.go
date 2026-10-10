@@ -174,7 +174,9 @@ func (g *Gateway) Remove(_ context.Context, t kubeimage.Target, e kubeimage.Entr
 	if err := g.Store.Unref(t.Cluster.ID, e.Digest, e.ImageID); err != nil {
 		return err
 	}
-	_, err := g.Store.Sweep()
+	// The collection pass must not wait out an import: what it let go is
+	// swept by the next pass.
+	_, _, err := g.Store.TrySweep()
 	return err
 }
 

@@ -457,3 +457,44 @@ func TestClassifyPull(t *testing.T) {
 		t.Error("a non-pull reason was classified")
 	}
 }
+
+func TestGatewayDeliverAfterAPrefixChangeRepointsTheOlderImages(t *testing.T) {
+	// A delivery that meets a new prefix before the registration's change
+	// reached the re-point must not mark the connection re-pointed: its older
+	// references still name the old prefix.
+	f := newGatewayFixture(t)
+	idx := t.TempDir()
+	m := &kubeimage.Manager{IndexPath: func(id string) string { return filepath.Join(idx, id, "images.json") }, Gateway: f.gw}
+	conns := &fakeConnections{targets: map[string]kubeimage.Target{"kc-1": f.target}, called: make(chan struct{}, 4)}
+	f.gw.Connections, f.gw.Index = conns, m
+	old, err := m.Deliver(context.Background(), f.target, f.image(), "inst-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPrefix := "gw.example.com/" + strings.Repeat("e", 64)
+	f.tunnel.set(newPrefix)
+
+	second := newTestImage(t, "arm64", "v8", true, layerTar(t, map[string]string{"bin/app": "v2"}))
+	archive, id := containerdArchive(t, []testImage{second})
+	f.docker.add(t, id, archive)
+	d, err := m.Deliver(context.Background(), f.target, kubeimage.Image{Ref: "vsc-app-v2", Config: kubeshim.ImageConfig{ID: id}, Built: true}, "inst-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Ref != Ref(newPrefix, second.manifestDigest) {
+		t.Fatalf("the new delivery names %s", d.Ref)
+	}
+	select {
+	case <-conns.called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the older image was not re-pointed")
+	}
+	f.gw.repointMu.Lock()
+	f.gw.repointMu.Unlock()
+	if len(conns.repoints) != 1 || conns.repoints[0][old.Ref] != Ref(newPrefix, old.Digest) {
+		t.Fatalf("re-points %v, want %s -> the new prefix", conns.repoints, old.Ref)
+	}
+	if got, _ := f.gw.Store.Prefix("kc-1"); got != newPrefix {
+		t.Fatalf("recorded prefix %q", got)
+	}
+}

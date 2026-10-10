@@ -527,10 +527,26 @@ type SweepResult struct {
 
 // Sweep deletes every manifest no connection has served for sweepGrace,
 // every blob no remaining manifest lists (orphans an interrupted import left
-// included), and stale import staging.
+// included), and stale import staging. It waits for running imports.
 func (s *Store) Sweep() (SweepResult, error) {
 	s.gc.Lock()
 	defer s.gc.Unlock()
+	return s.sweepLocked()
+}
+
+// TrySweep is Sweep, unless an import is running (a large `docker save` can
+// take minutes): then it does nothing, and a later sweep catches up.
+func (s *Store) TrySweep() (SweepResult, bool, error) {
+	if !s.gc.TryLock() {
+		return SweepResult{}, false, nil
+	}
+	defer s.gc.Unlock()
+	res, err := s.sweepLocked()
+	return res, true, err
+}
+
+// sweepLocked sweeps; callers hold s.gc for writing.
+func (s *Store) sweepLocked() (SweepResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st, err := s.state()

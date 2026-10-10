@@ -197,3 +197,18 @@ func TestStoreCachedTouchesAnUnreferencedManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestStoreTrySweepSkipsWhileAnImportRuns(t *testing.T) {
+	clock := &fakeClock{t: time.Unix(1_800_000_000, 0)}
+	s := &Store{Dir: t.TempDir(), Now: clock.now}
+	p, _ := importImage(t, s, map[string]string{"a": "1"})
+	clock.advance(time.Hour)
+	s.gc.RLock() // an import in flight
+	if res, ran, err := s.TrySweep(); ran || err != nil || len(res.Manifests) != 0 {
+		t.Fatalf("TrySweep during an import: %+v, %v, %v", res, ran, err)
+	}
+	s.gc.RUnlock()
+	if res, ran, err := s.TrySweep(); !ran || err != nil || len(res.Manifests) != 1 || res.Manifests[0] != p.Digest {
+		t.Fatalf("TrySweep after the import: %+v, %v, %v", res, ran, err)
+	}
+}

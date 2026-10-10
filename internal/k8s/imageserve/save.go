@@ -62,6 +62,17 @@ func (s *Store) saveAndImport(ctx context.Context, imageID string, p platform) (
 	if err != nil {
 		return Prepared{}, err
 	}
+	// Ask first: a save of a missing image fails differently on each image
+	// store (the classic one names a file in its image database).
+	if out, err := exec.CommandContext(ctx, docker, "image", "inspect", "--format", "{{.Id}}", "--", imageID).CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			return Prepared{}, ctx.Err()
+		}
+		if isNoSuchImage(string(out)) {
+			return Prepared{}, &ImageGoneError{ImageID: imageID}
+		}
+		return Prepared{}, fmt.Errorf("docker image inspect %s: %v: %s", short(imageID), err, strings.TrimSpace(string(out)))
+	}
 	fmt.Fprintf(backend.JobLogFrom(ctx), "exporting image %s for gateway delivery (docker save)\n", short(imageID))
 	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
@@ -87,8 +98,7 @@ func (s *Store) saveAndImport(ctx context.Context, imageID string, p platform) (
 		return Prepared{}, err
 	}
 	if msg := strings.TrimSpace(stderr.String()); werr != nil && (ierr == nil || msg != "") {
-		low := strings.ToLower(msg)
-		if strings.Contains(low, "no such image") || strings.Contains(low, "reference does not exist") {
+		if isNoSuchImage(msg) {
 			return Prepared{}, &ImageGoneError{ImageID: imageID}
 		}
 		return Prepared{}, fmt.Errorf("docker save %s: %v: %s", short(imageID), werr, msg)
@@ -97,6 +107,13 @@ func (s *Store) saveAndImport(ctx context.Context, imageID string, p platform) (
 		return Prepared{}, ierr
 	}
 	return prep, nil
+}
+
+// isNoSuchImage reports whether docker's message says the image is not
+// there.
+func isNoSuchImage(msg string) bool {
+	low := strings.ToLower(msg)
+	return strings.Contains(low, "no such image") || strings.Contains(low, "reference does not exist")
 }
 
 // ImageGoneError: the daemon host no longer has an image that was never
