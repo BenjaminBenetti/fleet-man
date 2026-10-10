@@ -15,7 +15,8 @@
         "-"
       ],
       "user": "root",
-      "privileged": true
+      "privileged": true,
+      "remote_user": "vscode"
     },
     "security": {
       "privileged": true

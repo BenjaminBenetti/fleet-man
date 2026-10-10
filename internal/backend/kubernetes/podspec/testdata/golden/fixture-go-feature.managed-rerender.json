@@ -15,7 +15,8 @@
         "-"
       ],
       "user": "root",
-      "init": true
+      "init": true,
+      "remote_user": "vscode"
     },
     "security": {},
     "resources": {

@@ -1,0 +1,7 @@
+{
+  "error": "kubernetes:unsupported:mount: /home/dev/host/agent.sock at /run/itest-host-ssh-agent.sock (ssh-agent): a bind of the ssh-agent socket needs fleet's agent relay in the pod, which fleet does not provide on Kubernetes yet; kubernetes:unsupported:mount: /home/dev/host/gnupg/S.gpg-agent at /run/itest-host-gpg-agent.sock (host-socket): a bind of a daemon-host socket needs fleet's socket relay in the pod, which fleet does not provide on Kubernetes yet",
+  "refusals": [
+    "kubernetes:unsupported:mount",
+    "kubernetes:unsupported:mount"
+  ]
+}

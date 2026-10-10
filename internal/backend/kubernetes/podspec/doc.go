@@ -33,4 +33,18 @@
 // grants (SYS_PTRACE, unconfined seccomp or AppArmor) are requested, and the
 // create drops them with a warning when admission denies only them
 // (debug_capabilities auto) or fails (require): see Denied.
+//
+// Render turns a translation into one instance generation's objects: the
+// instance disk (a PVC), the spec and env Secrets, the StatefulSet (its pod
+// running pod-init as root over the disk's persisted root, or as one uid on
+// a restricted cluster: Identity), an optional PodDisruptionBudget and the
+// seed Job; RenderJob renders the instance's other Jobs. Every workload goes
+// through Harden (no service account token or service links, seccomp
+// RuntimeDefault, no service-mesh sidecar, OnRootMismatch, one SELinux level
+// per share-group). SpecHash is the hash pod verification recomputes. The
+// renderers are pure and build only in the full binary (!nok8s), as do
+// DryRun, which has the API server admit a render without creating it, and
+// Admit, which translates, renders and dry-runs with the debug-capabilities
+// policy applied. ClassifyFailedCreate names the same refusals when a
+// controller records them after an apply.
 package podspec

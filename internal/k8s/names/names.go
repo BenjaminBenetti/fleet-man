@@ -19,6 +19,7 @@ import (
 	"encoding/base32"
 	"encoding/binary"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -177,6 +178,34 @@ func Instance(fleet, instance, key string) string {
 
 // Pod is the name of the one pod of an instance's StatefulSet.
 func Pod(statefulSet string) string { return statefulSet + "-0" }
+
+// MaxGeneration is the highest root generation (rebuild-gen) an instance's
+// generation-named objects take: "<sts>-seed-g9999" is the longest Job name
+// whose pods' job-name label still fits a label value.
+const MaxGeneration = 9999
+
+// ValidGeneration reports whether gen is a root generation the
+// generation-named objects can carry: 1 to MaxGeneration.
+func ValidGeneration(gen int) bool { return gen >= 1 && gen <= MaxGeneration }
+
+// SpecSecret is the name of the Secret holding generation gen's spec files
+// (pid1.json, exec.json, ...): "<sts>-spec-g<gen>". Each generation has its
+// own, so a failed rebuild re-applies the previous one.
+func SpecSecret(statefulSet string, gen int) string {
+	return statefulSet + "-spec-g" + strconv.Itoa(gen)
+}
+
+// EnvSecret is the name of the Secret holding generation gen's container
+// environment values: "<sts>-env-g<gen>".
+func EnvSecret(statefulSet string, gen int) string {
+	return statefulSet + "-env-g" + strconv.Itoa(gen)
+}
+
+// SeedJob is the name of the Job that seeds generation gen of an instance's
+// root: "<sts>-seed-g<gen>", at most 63 characters for a valid gen.
+func SeedJob(statefulSet string, gen int) string {
+	return statefulSet + "-seed-g" + strconv.Itoa(gen)
+}
 
 // The suffixes of the per-(fleet, connection) objects (FleetObject).
 const (

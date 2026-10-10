@@ -16,12 +16,14 @@ func init() {
 		ours := map[string]bool{
 			"statefulset": IsDNS1123Label(value) && len(value) <= MaxInstanceName,
 			"pod":         IsDNS1123Label(value),
+			"job":         IsDNS1123Label(value) && IsLabelValue(value),
 			"service":     IsDNS1035Label(value),
 			"label value": IsLabelValue(value),
 		}
 		theirs := map[string]bool{
 			"statefulset": len(validation.IsDNS1123Label(value)) == 0 && len(value) <= MaxInstanceName,
 			"pod":         len(validation.IsDNS1123Label(value)) == 0,
+			"job":         len(validation.IsDNS1123Label(value)) == 0 && len(validation.IsValidLabelValue(value)) == 0,
 			"service":     len(validation.IsDNS1035Label(value)) == 0,
 			"label value": len(validation.IsValidLabelValue(value)) == 0,
 		}

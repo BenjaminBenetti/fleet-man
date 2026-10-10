@@ -16,7 +16,8 @@
       ],
       "user": "root",
       "working_dir": "/go",
-      "init": true
+      "init": true,
+      "remote_user": "vscode"
     },
     "security": {
       "capAdd": [

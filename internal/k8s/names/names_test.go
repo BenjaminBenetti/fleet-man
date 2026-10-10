@@ -137,6 +137,30 @@ func TestInstance(t *testing.T) {
 	}
 }
 
+func TestGenerationNames(t *testing.T) {
+	sts := "fi-a-b-" + InstanceKey(testDaemonID, "f", "i", testCreated)
+	for _, tt := range []struct{ got, want string }{
+		{SpecSecret(sts, 1), sts + "-spec-g1"},
+		{EnvSecret(sts, 12), sts + "-env-g12"},
+		{SeedJob(sts, 9999), sts + "-seed-g9999"},
+	} {
+		if tt.got != tt.want {
+			t.Errorf("got %q, want %q", tt.got, tt.want)
+		}
+	}
+	for gen, want := range map[int]bool{0: false, 1: true, MaxGeneration: true, MaxGeneration + 1: false, -1: false} {
+		if ValidGeneration(gen) != want {
+			t.Errorf("ValidGeneration(%d) = %v", gen, !want)
+		}
+	}
+	// The longest StatefulSet name with the highest generation still gives a
+	// Job name whose pods' job-name label is a label value.
+	long := Instance(strings.Repeat("f", 80), strings.Repeat("i", 80), InstanceKey(testDaemonID, "f", "i", testCreated))
+	if job := SeedJob(long, MaxGeneration); len(job) != 63 || !IsDNS1123Label(job) || !IsLabelValue(job) {
+		t.Errorf("SeedJob of the longest name = %q (%d)", job, len(job))
+	}
+}
+
 func TestFleetObject(t *testing.T) {
 	h := FleetHash(testDaemonID, "c", "fleet-man")
 	if got := FleetObject("fleet-man", h, SuffixShare); got != "fs-fleet-man-"+h+"-share" {
@@ -300,6 +324,19 @@ func FuzzK8sName(f *testing.F) {
 			t.Fatalf("Pod(%q) = %q: not a DNS label", sts, pod)
 		}
 		crossCheck(t, "pod", pod)
+		for _, gen := range []int{1, int(uint64(nanos)%MaxGeneration) + 1, MaxGeneration} {
+			job := SeedJob(sts, gen)
+			if !IsDNS1123Label(job) || !IsLabelValue(job) {
+				t.Fatalf("SeedJob(%q, %d) = %q: not a Job name", sts, gen, job)
+			}
+			crossCheck(t, "job", job)
+			for _, secret := range []string{SpecSecret(sts, gen), EnvSecret(sts, gen)} {
+				if !IsDNS1123Label(secret) {
+					t.Fatalf("Secret name %q is not a DNS label", secret)
+				}
+				crossCheck(t, "pod", secret)
+			}
+		}
 		// The pod's controller-revision-hash label: the name, '-', 10 characters.
 		if rev := sts + "-" + strings.Repeat("a", 10); !IsLabelValue(rev) {
 			t.Fatalf("controller-revision-hash %q is not a label value", rev)
