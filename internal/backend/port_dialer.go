@@ -8,8 +8,8 @@ import (
 // PortDialer is an optional capability for backends that open a TCP
 // connection to a port inside an instance from the daemon process itself:
 // Kubernetes takes one stream pair on a pooled port-forward connection to the
-// pod. The server's Forward data plane tries it before anything else, and
-// when a backend has it the other ways in are not used: no direct dial
+// pod. The server's Forward data plane tries it before anything else, and for
+// a backend that has it uses no other way in: no direct dial
 // (ResolveHostname) and no process per connection (ForwardStdioCommand,
 // PortForwardCommand).
 type PortDialer interface {
