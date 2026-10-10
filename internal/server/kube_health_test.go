@@ -5,8 +5,10 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,7 +18,10 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/owner"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
 // testClock is a settable clock for the kube manager.
@@ -260,5 +265,177 @@ func TestKubeShallowProbeDoesNotRerunFullOnContentFailures(t *testing.T) {
 	}
 	if st := w.status(); st.GetState() != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_MISCONFIGURED {
 		t.Errorf("after the shallow probe = %v", st.GetState())
+	}
+}
+
+// A sync that read the registry before a removal never brings the removed
+// connection's worker back after the removal's own sync: each sync applies
+// what it read as one step, in order.
+func TestKubeSyncNeverRevivesARemovedConnection(t *testing.T) {
+	f := newKubeFixture(t)
+	m := f.svc.kube
+	// No connection reaches a cluster, so no worker writes bookkeeping (and
+	// syncs) on its own.
+	m.connect = func(rec fleet.KubeCluster, _ []string) (*kubeLink, error) {
+		return nil, fmt.Errorf("%w: offline", kubeexec.ErrContextMissing)
+	}
+	var armed atomic.Bool
+	read, release := make(chan struct{}), make(chan struct{})
+	m.loadRegistry = func() (*state.KubeClusters, error) {
+		reg, err := state.LoadKubeClusters()
+		if armed.CompareAndSwap(true, false) {
+			close(read)
+			<-release
+		}
+		return reg, err
+	}
+	f.start()
+	f.add(&fleetgrpc.KubeCluster{Context: "minikube"})
+	gone := f.add(&fleetgrpc.KubeCluster{Context: "prod"}).GetCluster().GetId()
+
+	// A slow sync reads the registry while gone is still in it ...
+	armed.Store(true)
+	stale := make(chan struct{})
+	go func() { m.sync(); close(stale) }()
+	<-read
+	// ... and the removal (with its own sync) happens before it applies.
+	removed := make(chan error, 1)
+	go func() {
+		_, err := f.svc.RemoveKubeCluster(context.Background(), &fleetgrpc.RemoveKubeClusterRequest{Id: gone})
+		removed <- err
+	}()
+	select {
+	case err := <-removed:
+		removed <- err
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	<-stale
+	if err := <-removed; err != nil {
+		t.Fatal(err)
+	}
+	if m.worker(gone) != nil {
+		t.Error("the removed connection has a worker (and claims its Lease) again")
+	}
+	for _, st := range m.statuses() {
+		if st.GetCluster().GetId() == gone {
+			t.Error("the removed connection is listed again")
+		}
+	}
+}
+
+// A context can come to reach another cluster (a minikube recreated under
+// the same name, a rewritten kubeconfig). A connection without instances
+// takes the new cluster's id, or a later re-point would be judged against a
+// cluster that is gone; one with instances keeps the id they were made under
+// and warns that they are not there.
+func TestKubeClusterUIDFollowsARecreatedCluster(t *testing.T) {
+	f := newKubeFixture(t)
+	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube", Namespace: "fleet"}).GetCluster().GetId()
+	setUID := func(uid string) {
+		t.Helper()
+		if err := state.UpdateKubeClusters(func(k *state.KubeClusters) error {
+			k.Find(id).ClusterUID = uid
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const gone = "11111111-2222-3333-4444-555555555555"
+	setUID(gone)
+	w := f.svc.kube.newWorker(f.stored(id))
+	w.runFull(context.Background(), nil)
+	if got := f.stored(id).ClusterUID; got != fakeClusterUID {
+		t.Errorf("an unused connection kept the old cluster's id %q, want %q", got, fakeClusterUID)
+	}
+
+	setUID(gone)
+	seedKubeInstance(t, "alpha", "one", id, names.InstanceKey(testIdentity.DaemonID, "alpha", "one", time.Unix(1700000000, 0)))
+	w = f.svc.kube.newWorker(f.stored(id))
+	w.runFull(context.Background(), nil)
+	if got := f.stored(id).ClusterUID; got != gone {
+		t.Errorf("a connection with instances took the new cluster's id %q", got)
+	}
+	if warnings := strings.Join(w.status().GetWarnings(), "\n"); !strings.Contains(warnings, "now reaches another cluster") {
+		t.Errorf("warnings = %q", warnings)
+	}
+}
+
+// orderLease records the Lease calls of the connection's successive targets.
+type orderLease struct {
+	n   int
+	log *eventLog
+}
+
+type eventLog struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (l *eventLog) add(e string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = append(l.events, e)
+}
+
+func (l *eventLog) get() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.events...)
+}
+
+func (l *orderLease) Ensure(context.Context) (owner.LeaseStatus, error) {
+	l.log.add(fmt.Sprintf("ensure %d", l.n))
+	return owner.LeaseStatus{Held: true}, nil
+}
+func (l *orderLease) Holding() bool { return true }
+func (l *orderLease) Release(context.Context) error {
+	time.Sleep(100 * time.Millisecond) // a slow API server
+	l.log.add(fmt.Sprintf("release %d", l.n))
+	return nil
+}
+
+// A re-point on the same cluster and namespace names the same Lease object:
+// the old target's Lease is released before the new one claims it, or the
+// late delete would remove the Lease the new claim just renewed.
+func TestKubeRepointReleasesTheOldLeaseFirst(t *testing.T) {
+	f := newKubeFixture(t)
+	log := &eventLog{}
+	n := 0
+	f.svc.kube.newLease = func(*kubeLink, fleet.KubeCluster, owner.Identity) kubeLease {
+		n++
+		return &orderLease{n: n, log: log}
+	}
+	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube", Namespace: "fleet"}).GetCluster().GetId()
+	rec := f.stored(id)
+	w := f.svc.kube.newWorker(rec)
+	w.runFull(context.Background(), nil)
+	moved := rec
+	moved.Context = "minikube-alias" // the same cluster through another context
+	w.setRecord(moved)
+	w.runFull(context.Background(), nil)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(log.get()) < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := strings.Join(log.get(), ", "); got != "ensure 1, release 1, ensure 2" {
+		t.Errorf("lease calls = %s", got)
+	}
+}
+
+// A test whose client goes away mid-run is no verdict: the full run an edit
+// asked for is still owed.
+func TestKubeCancelledRunKeepsTheWantedFullRun(t *testing.T) {
+	f := newKubeFixture(t)
+	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube"}).GetCluster().GetId()
+	w := f.svc.kube.newWorker(f.stored(id))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w.runFull(ctx, nil)
+	w.mu.Lock()
+	wanted, have := w.fullWanted, w.haveFull
+	w.mu.Unlock()
+	if !wanted || have {
+		t.Errorf("after a cancelled run: full wanted %v, result kept %v", wanted, have)
 	}
 }

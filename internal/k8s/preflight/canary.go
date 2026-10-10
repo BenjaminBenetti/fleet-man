@@ -235,6 +235,12 @@ func judge(err error) verdict {
 		return verdict{err: err}
 	case apierrors.IsForbidden(err) && strings.Contains(err.Error(), "cannot create resource"):
 		return verdict{err: err} // RBAC, not admission
+	case apierrors.IsForbidden(err) && strings.Contains(err.Error(), "exceeded quota"):
+		// A full ResourceQuota (fleet's own instances may have filled it)
+		// refuses even a dry run, but it is judged last: pod security and
+		// the policy webhooks already let the pod through. The quota check
+		// reports the headroom.
+		return verdict{admitted: true}
 	case apierrors.IsForbidden(err), apierrors.IsInvalid(err), apierrors.IsBadRequest(err):
 		return verdict{denial: statusMessage(err)}
 	}

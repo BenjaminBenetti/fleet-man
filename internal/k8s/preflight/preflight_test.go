@@ -215,7 +215,10 @@ func TestFullOnMinikubeIsReady(t *testing.T) {
 		storageClass("standard", "k8s.io/minikube-hostpath", isDefault),
 		storageClass("csi-hostpath-sc", "hostpath.csi.k8s.io"))
 	tgt := target(c, fleet.KubeCluster{})
-	tgt.Raw = func(context.Context, string) ([]byte, error) {
+	tgt.Raw = func(_ context.Context, path string) ([]byte, error) {
+		if path != "/apis/snapshot.storage.k8s.io/v1/volumesnapshotclasses" {
+			return nil, apierrors.NewNotFound(schema.GroupResource{}, path)
+		}
 		return []byte(`{"items":[{"metadata":{"name":"csi-hostpath-snapclass"},"driver":"hostpath.csi.k8s.io"}]}`), nil
 	}
 	var reported []string
@@ -425,6 +428,54 @@ func TestFullLimitsAndQuota(t *testing.T) {
 	wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, "memory limit above the LimitRange maximum · quota full")
 	if f := check(t, res, CheckLimits).GetFix(); f != "set the memory limit to at most 4Gi" {
 		t.Errorf("limits fix = %q", f)
+	}
+}
+
+// A ResourceQuota that fleet's own instances filled refuses even the dry-run
+// canaries ("exceeded quota"), but quota is judged after pod security and
+// the policy webhooks: the namespace still admits fleet's pods, and the
+// connection is LIMITED by the full quota, never MISCONFIGURED.
+func TestFullQuotaExhaustedIsNotAnAdmissionDenial(t *testing.T) {
+	quota := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "q", Namespace: testNS}, Status: corev1.ResourceQuotaStatus{
+		Hard: corev1.ResourceList{corev1.ResourcePods: resource.MustParse("4")},
+		Used: corev1.ResourceList{corev1.ResourcePods: resource.MustParse("4")},
+	}}
+	c := newCluster(t, minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath"), quota)
+	c.deny = func(*corev1.Pod) string {
+		return "exceeded quota: q, requested: pods=1, used: pods=4, limited: pods=4"
+	}
+	res := Full(context.Background(), target(c, fleet.KubeCluster{}), nil)
+	wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, "quota full")
+	for _, name := range []string{CheckAdmissionUnprivileged, CheckAdmissionDebug, CheckAdmissionPrivileged, CheckBuildkit} {
+		if ch := check(t, res, name); ch.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS {
+			t.Errorf("%s = %v", name, ch)
+		}
+	}
+	if a := res.Capabilities.GetAdmission(); !a.GetUnprivileged() || !a.GetPrivileged() {
+		t.Errorf("admission = %v", a)
+	}
+}
+
+// The metrics probe goes through the context-aware raw reader, bounded like
+// every other call: discovery's own call takes no context, and a stalled API
+// server would hold the run (and the Lease renewals behind it) for good.
+func TestFullMetricsProbeIsBounded(t *testing.T) {
+	c := newCluster(t, minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath"))
+	tgt := target(c, fleet.KubeCluster{})
+	bounded := false
+	tgt.Raw = func(ctx context.Context, path string) ([]byte, error) {
+		if path == "/apis/metrics.k8s.io/v1beta1" {
+			_, bounded = ctx.Deadline()
+			return []byte(`{"kind":"APIResourceList","groupVersion":"metrics.k8s.io/v1beta1"}`), nil
+		}
+		return nil, apierrors.NewNotFound(schema.GroupResource{}, path)
+	}
+	res := Full(context.Background(), tgt, nil)
+	if !bounded {
+		t.Error("the metrics probe ran without a deadline")
+	}
+	if !res.Capabilities.GetMetricsAvailable() || check(t, res, CheckMetrics).GetDetail() != "metrics.k8s.io available" {
+		t.Errorf("metrics = %v (%v)", res.Capabilities.GetMetricsAvailable(), check(t, res, CheckMetrics))
 	}
 }
 

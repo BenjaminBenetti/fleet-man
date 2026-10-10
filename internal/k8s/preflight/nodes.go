@@ -143,7 +143,17 @@ func (r *run) fillAttachLimits(ctx context.Context, driver string) {
 
 func (r *run) metrics(ctx context.Context) {
 	r.running(CheckMetrics)
-	_, err := r.t.Client.Discovery().ServerResourcesForGroupVersion("metrics.k8s.io/v1beta1")
+	var err error
+	if r.t.Raw != nil {
+		// Discovery's own call takes no context and the client sets no
+		// timeout: a stalled API server would hold the whole run (and the
+		// connection's Lease renewals) for good.
+		cctx, cancel := call(ctx)
+		_, err = r.t.Raw(cctx, "/apis/metrics.k8s.io/v1beta1")
+		cancel()
+	} else {
+		_, err = r.t.Client.Discovery().ServerResourcesForGroupVersion("metrics.k8s.io/v1beta1")
+	}
 	if err != nil {
 		r.pass(CheckMetrics, "metrics API not served (stats come from the instance agent)")
 		return

@@ -146,10 +146,16 @@ type kubeManager struct {
 	now          func() time.Time
 	loadIdentity func() (owner.Identity, error)
 	newLease     func(link *kubeLink, rec fleet.KubeCluster, id owner.Identity) kubeLease
+	loadRegistry func() (*state.KubeClusters, error)
 
 	idOnce sync.Once
 	id     owner.Identity
 	idErr  error
+
+	// syncMu makes a sync's registry read and its application one step, so
+	// a sync that read the file before a removal can never bring the removed
+	// connection's worker (and its Lease) back after the removal's own sync.
+	syncMu sync.Mutex
 
 	mu sync.Mutex
 	// ctx is the serve loop's; nil until run starts the workers.
@@ -169,7 +175,8 @@ func newKubeManager(svc *service) *kubeManager {
 		newLease: func(link *kubeLink, rec fleet.KubeCluster, id owner.Identity) kubeLease {
 			return owner.NewLease(link.client.CoordinationV1(), rec.Namespace, rec.ID, id, owner.LeaseOptions{})
 		},
-		workers: map[string]*kubeWorker{},
+		loadRegistry: state.LoadKubeClusters,
+		workers:      map[string]*kubeWorker{},
 	}
 }
 
@@ -215,8 +222,10 @@ func (m *kubeManager) run(ctx context.Context) {
 // get a worker, changed ones a fresh full preflight, removed ones lose
 // theirs (and their Lease). Then the set is pushed.
 func (m *kubeManager) sync() {
-	reg, err := state.LoadKubeClusters()
+	m.syncMu.Lock()
+	reg, err := m.loadRegistry()
 	if err != nil {
+		m.syncMu.Unlock()
 		flog.Error("kube: load connections", "err", err)
 		return
 	}
@@ -243,6 +252,7 @@ func (m *kubeManager) sync() {
 		}
 	}
 	m.mu.Unlock()
+	m.syncMu.Unlock()
 	for _, w := range stopped {
 		w.stop()
 		go w.releaseLease()
@@ -337,9 +347,11 @@ func (m *kubeManager) publish() {
 
 // persistBookkeeping records what a probe learned about a connection (its
 // API server, its cluster's id, a passing preflight) unless the record was
-// re-pointed meanwhile. Client-facing revision and updated_at stay as they
-// are: these are the daemon's own notes.
-func (m *kubeManager) persistBookkeeping(rec fleet.KubeCluster, server, clusterUID string, verified time.Time) {
+// re-pointed meanwhile. A recorded cluster id is replaced only with
+// replaceUID (the connection's context now reaches another cluster and no
+// instance was made on the old one). Client-facing revision and updated_at
+// stay as they are: these are the daemon's own notes.
+func (m *kubeManager) persistBookkeeping(rec fleet.KubeCluster, server, clusterUID string, replaceUID bool, verified time.Time) {
 	key := kubeConnectionKey(rec)
 	changed := false
 	err := state.UpdateKubeClusters(func(k *state.KubeClusters) error {
@@ -350,7 +362,7 @@ func (m *kubeManager) persistBookkeeping(rec fleet.KubeCluster, server, clusterU
 		if server != "" && cur.Server != server {
 			cur.Server, changed = server, true
 		}
-		if clusterUID != "" && cur.ClusterUID == "" {
+		if clusterUID != "" && cur.ClusterUID != clusterUID && (cur.ClusterUID == "" || replaceUID) {
 			cur.ClusterUID, changed = clusterUID, true
 		}
 		if !verified.IsZero() && verified.Sub(cur.VerifiedAt) >= kubeVerifiedEvery {
@@ -389,6 +401,8 @@ type kubeWorker struct {
 	wake chan struct{}
 	// cancel is set by start.
 	cancel context.CancelFunc
+	// claimMu orders releasing retired Leases before making a new one.
+	claimMu sync.Mutex
 
 	mu  sync.Mutex
 	rec fleet.KubeCluster
@@ -396,6 +410,11 @@ type kubeWorker struct {
 	link    *kubeLink
 	linkKey string
 	lease   kubeLease
+	// retired are the Leases of the targets a re-point left, released before
+	// the next one is claimed: on the same cluster and namespace they are the
+	// same Lease object, and a release that landed after the new claim's
+	// renewal would delete the Lease the new one thinks it holds.
+	retired []kubeLease
 	// fullWanted asks for a full preflight at the next turn.
 	fullWanted bool
 
@@ -444,15 +463,18 @@ func (w *kubeWorker) poke() {
 }
 
 // setRecord takes a changed record: a re-pointed one drops its client (and
-// its Lease, released in the background); any change asks for a full run.
+// its Lease, released by the next probe before it claims the new target's);
+// any change asks for a full run.
 func (w *kubeWorker) setRecord(rec fleet.KubeCluster) {
 	w.mu.Lock()
 	old := w.rec
 	w.rec = rec
-	var released kubeLease
 	if kubeConnectionKey(old) != kubeConnectionKey(rec) {
 		w.link, w.linkKey = nil, ""
-		released, w.lease = w.lease, nil
+		if w.lease != nil {
+			w.retired = append(w.retired, w.lease)
+		}
+		w.lease = nil
 		w.haveFull, w.probeFail = false, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNSPECIFIED
 	}
 	changed := !kubeRecordsEqual(old, rec)
@@ -460,11 +482,20 @@ func (w *kubeWorker) setRecord(rec fleet.KubeCluster) {
 		w.fullWanted = true
 	}
 	w.mu.Unlock()
-	if released != nil {
-		go releaseLease(released, rec.ID)
-	}
 	if changed {
 		w.poke()
+	}
+}
+
+// releaseRetired releases the Leases re-points left behind, in order, before
+// the worker claims another.
+func (w *kubeWorker) releaseRetired() {
+	w.mu.Lock()
+	retired, id := w.retired, w.rec.ID
+	w.retired = nil
+	w.mu.Unlock()
+	for _, l := range retired {
+		releaseLease(l, id)
 	}
 }
 
@@ -477,6 +508,7 @@ func kubeRecordsEqual(a, b fleet.KubeCluster) bool {
 }
 
 func (w *kubeWorker) releaseLease() {
+	w.releaseRetired()
 	w.mu.Lock()
 	l := w.lease
 	w.lease = nil
@@ -566,6 +598,11 @@ func (w *kubeWorker) ensureLink(reload bool) (*kubeLink, kubeLease, fleet.KubeCl
 		w.mu.Unlock()
 		return link, lease, rec, nil
 	}
+	// The Leases a re-point retired are gone before a new one is made, and
+	// a concurrent probe (a test beside the loop) waits for that too.
+	w.claimMu.Lock()
+	defer w.claimMu.Unlock()
+	w.releaseRetired()
 	link, err := w.m.connect(rec, w.m.environ())
 	if err != nil {
 		return nil, nil, rec, err
@@ -603,6 +640,7 @@ func (w *kubeWorker) target(rec fleet.KubeCluster, link *kubeLink, lease kubeLea
 func (w *kubeWorker) runFull(ctx context.Context, report func(*fleetgrpc.KubeCheck)) preflight.Result {
 	started := w.m.now()
 	w.mu.Lock()
+	wanted := w.fullWanted
 	w.fullWanted = false
 	w.mu.Unlock()
 	done := w.watchdog("full preflight", preflight.FullTimeout+time.Minute)
@@ -621,7 +659,15 @@ func (w *kubeWorker) runFull(ctx context.Context, report func(*fleetgrpc.KubeChe
 	}
 	done()
 	if ctx.Err() != nil && err == nil {
-		return res // shutdown, or the caller gave up: not a verdict
+		// Shutdown, or the caller gave up (a test whose client went away):
+		// not a verdict, so the run an edit asked for is still owed.
+		if wanted {
+			w.mu.Lock()
+			w.fullWanted = true
+			w.mu.Unlock()
+			w.poke()
+		}
+		return res
 	}
 	w.applyFull(rec, link, res, started)
 	return res
@@ -649,6 +695,21 @@ func (w *kubeWorker) countOrphans(ctx context.Context, rec fleet.KubeCluster, li
 }
 
 func (w *kubeWorker) applyFull(rec fleet.KubeCluster, link *kubeLink, res preflight.Result, started time.Time) {
+	// The context reaches a cluster other than the one recorded (recreated
+	// behind the same context, or the kubeconfig rewritten). A connection
+	// without instances simply takes the new id, or a later re-point would
+	// be checked against a cluster that is gone; one with instances keeps the
+	// id they were made under and says they are not there.
+	replaceUID := false
+	if uid := res.ClusterUID; link != nil && uid != "" && rec.ClusterUID != "" && uid != rec.ClusterUID {
+		if w.m.instancesOn(rec.ID) {
+			res.Warnings = append(append([]string(nil), res.Warnings...), fmt.Sprintf(
+				"context %s now reaches another cluster (id %s, the connection's is %s): its instances are not there", rec.Context, shortClusterUID(uid), shortClusterUID(rec.ClusterUID)))
+		} else {
+			replaceUID = true
+			flog.Info("kube: the connection reaches another cluster now", "cluster", rec.ID, "was", rec.ClusterUID, "now", uid)
+		}
+	}
 	w.mu.Lock()
 	if started.Before(w.fullStarted) || kubeConnectionKey(w.rec) != kubeConnectionKey(rec) {
 		w.mu.Unlock()
@@ -667,8 +728,25 @@ func (w *kubeWorker) applyFull(rec fleet.KubeCluster, link *kubeLink, res prefli
 		if preflight.Usable(res.State) {
 			verified = res.CheckedAt
 		}
-		w.m.persistBookkeeping(rec, link.server, res.ClusterUID, verified)
+		w.m.persistBookkeeping(rec, link.server, res.ClusterUID, replaceUID, verified)
 	}
+}
+
+// instancesOn reports whether instance records name a connection (agents
+// make nothing until they fire); an unreadable state.json counts as yes.
+func (m *kubeManager) instancesOn(id string) bool {
+	if m.svc == nil {
+		return true
+	}
+	users, err := m.svc.kubeUsers(id)
+	return err != nil || hasInstances(users)
+}
+
+func shortClusterUID(uid string) string {
+	if len(uid) > 8 {
+		return uid[:8]
+	}
+	return uid
 }
 
 // runShallow probes reach and renews the Lease between full runs. A probe
