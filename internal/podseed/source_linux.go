@@ -128,10 +128,13 @@ func gnuCP() (string, bool) {
 
 // cpTree copies src to the new dir dst with GNU cp, keeping what the Go
 // copier keeps but security.selinux (cp leaves it alone without
-// --preserve=context).
-func cpTree(ctx context.Context, cp, src, dst string) error {
-	cmd := exec.CommandContext(ctx, cp, "-dR",
-		"--preserve=mode,ownership,timestamps,links,xattr", "--sparse=auto",
+// --preserve=context); without root it does not try to keep owners.
+func cpTree(ctx context.Context, cp, src, dst string, singleUID bool) error {
+	preserve := "--preserve=mode,ownership,timestamps,links,xattr"
+	if singleUID {
+		preserve = "--preserve=mode,timestamps,links,xattr"
+	}
+	cmd := exec.CommandContext(ctx, cp, "-dR", preserve, "--sparse=auto",
 		"--one-file-system", "--", src, dst)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

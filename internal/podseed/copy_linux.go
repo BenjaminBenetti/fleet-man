@@ -188,6 +188,9 @@ func (c *copier) walk(ctx context.Context, src, dst string, st *unix.Stat_t, job
 			}
 			return fmt.Errorf("stat %s: %w", csrc, err)
 		}
+		if err := failpoint("copy:" + c.imagePath(csrc)); err != nil {
+			return err
+		}
 		typ := cst.Mode & unix.S_IFMT
 		if typ != unix.S_IFDIR && c.mounts[c.imagePath(csrc)] {
 			// A file the seed pod's runtime mounted (/etc/hosts and friends):

@@ -65,7 +65,7 @@ func receive(ctx context.Context, srv *Server, stall time.Duration) ([]byte, []e
 		}
 		data, err := io.ReadAll(ws)
 		if err == nil {
-			ws.Accept()
+			ws.Accept(1, int64(len(data)))
 			return data, failures, nil
 		}
 		failures = append(failures, err)

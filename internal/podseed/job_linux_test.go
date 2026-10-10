@@ -382,3 +382,32 @@ func TestSeedJobCrashMidResetIsFinishedByARerun(t *testing.T) {
 		t.Fatalf("after the rerun: %+v %v", m, err)
 	}
 }
+
+func TestSeedJobFallsBackToCpForADirTheCopierFails(t *testing.T) {
+	if _, ok := gnuCP(); !ok {
+		t.Skip("no GNU cp here")
+	}
+	e := newJobEnv(t)
+	injectAt(t, "copy:/usr/bin/tool")
+	code, res, log := e.runJob(t, e.seedSpec(1), true, nil)
+	if code != 0 || !res.OK {
+		t.Fatalf("exit %d %+v\n%s", code, res, log)
+	}
+	m, _ := ParseManifest(res.Output)
+	if !reflect.DeepEqual(m.Fallback, []string{"usr"}) || !strings.Contains(log, "copying it again with cp") {
+		t.Fatalf("fallback %v\n%s", m.Fallback, log)
+	}
+	for _, p := range []string{"usr/bin/tool", "usr/lib/libx.so"} {
+		a, _ := os.ReadFile(filepath.Join(e.img.root, p))
+		b, err := os.ReadFile(filepath.Join(e.pvc, "root", p))
+		if err != nil || !bytes.Equal(a, b) {
+			t.Errorf("%s after cp: %v", p, err)
+		}
+	}
+	if st := lstat(t, filepath.Join(e.pvc, "root/usr/bin/sudo")); st.Mode&0o7777 != 0o4755 {
+		t.Errorf("cp lost the setuid bit: %o", st.Mode)
+	}
+	if target, _ := os.Readlink(filepath.Join(e.pvc, "root/usr/bin/fleet")); target != CurrentBinary {
+		t.Errorf("/usr/bin/fleet -> %q after the fallback", target)
+	}
+}

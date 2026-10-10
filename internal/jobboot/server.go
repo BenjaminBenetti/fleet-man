@@ -263,24 +263,23 @@ func (s *Server) serve(c net.Conn) {
 		conn.writeLoop()
 	}()
 
+	// The hello is queued before the connection becomes current, so a
+	// result Finish sends to it can never overtake it. A fresh queue always
+	// has room for both frames.
 	s.mu.Lock()
 	old := s.cur
-	s.cur = conn
-	reply := Hello{Proto: ProtoVersion, Op: s.opts.Op, Gen: s.opts.Gen,
-		Workspace: s.opts.Workspace && !s.wsDone, Done: s.result != nil}
-	var result []byte
+	replyData, _ := json.Marshal(Hello{Proto: ProtoVersion, Op: s.opts.Op, Gen: s.opts.Gen,
+		Workspace: s.opts.Workspace && !s.wsDone, Done: s.result != nil})
+	conn.out <- outFrame{t: FrameHello, payload: replyData}
 	if s.result != nil {
-		result, _ = json.Marshal(*s.result)
+		result, _ := json.Marshal(*s.result)
+		conn.out <- outFrame{t: FrameResult, payload: result}
 	}
+	s.cur = conn
 	s.mu.Unlock()
 	if old != nil {
 		s.logf("jobboot: a newer connection replaces the current one")
 		old.close()
-	}
-	replyData, _ := json.Marshal(reply)
-	conn.send(outFrame{t: FrameHello, payload: replyData})
-	if result != nil {
-		conn.send(outFrame{t: FrameResult, payload: result})
 	}
 
 	err = s.readLoop(conn)
@@ -500,13 +499,14 @@ func (ws *WorkspaceStream) Read(p []byte) (int, error) {
 	}
 }
 
-// Accept tells fleetd the transfer was extracted; the job takes no other.
-func (ws *WorkspaceStream) Accept() {
+// Accept tells fleetd the transfer was extracted (files entries, bytes of
+// content); the job takes no other.
+func (ws *WorkspaceStream) Accept(files, bytes int64) {
 	ws.Close()
 	ws.srv.mu.Lock()
 	ws.srv.wsDone = true
 	ws.srv.mu.Unlock()
-	data, _ := json.Marshal(Progress{Phase: "workspace", Detail: "received", Done: true})
+	data, _ := json.Marshal(Progress{Phase: "workspace", Detail: "received", Files: files, Bytes: bytes, Done: true})
 	ws.conn.send(outFrame{t: FrameProgress, payload: data})
 }
 

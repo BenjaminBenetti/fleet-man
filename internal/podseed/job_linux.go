@@ -207,6 +207,7 @@ func (r *seedRun) run(ctx context.Context) jobOutcome {
 		}
 		return jobOutcome{err: err}
 	}
+	r.setPhase("image root")
 	r.progress(true)
 
 	r.setPhase("sync")
@@ -327,14 +328,14 @@ func (r *seedRun) copyTop(ctx context.Context, top string, mounts, mountpoints m
 		return nil
 	}
 	cp, ok := gnuCP()
-	if !ok || c.singleUID || !fallbackable(err) {
+	if !ok || !fallbackable(err) || ctx.Err() != nil {
 		return fmt.Errorf("copy /%s: %w", top, err)
 	}
 	r.logf("copy /%s: %v; copying it again with cp", top, err)
 	if derr := discard(dst, filepath.Join(r.pvc, DirRoot, "."+top+".partial")); derr != nil {
 		return derr
 	}
-	if cerr := cpTree(ctx, cp, src, dst); cerr != nil {
+	if cerr := cpTree(ctx, cp, src, dst, c.singleUID); cerr != nil {
 		return fmt.Errorf("copy /%s: %w (then %w)", top, err, cerr)
 	}
 	c.resetChecks()
@@ -518,7 +519,7 @@ func (r *seedRun) receiveWorkspace(ctx context.Context) (WorkspaceStats, error) 
 			r.srv.Progress(jobboot.Progress{Phase: "workspace", Bytes: st.Bytes, Files: st.Files})
 		})
 		if err == nil {
-			ws.Accept()
+			ws.Accept(st.Files, st.Bytes)
 			r.logf("workspace: %d files, %d bytes", st.Files, st.Bytes)
 			return st, nil
 		}

@@ -53,6 +53,30 @@ const (
 	DefaultResultHold = 2 * time.Minute
 )
 
+// The Job object's own bounds, for the renderer.
+const (
+	// BackoffLimit: a failed job is never retried by the Job controller;
+	// fleetd decides what happens next.
+	BackoffLimit = 0
+	// TTLAfterFinished is how long a finished Job (and its pod's log and
+	// termination message) stays: ttlSecondsAfterFinished.
+	TTLAfterFinished = 600 * time.Second
+	// seedBaseDeadline and seedPerGB make a seed's activeDeadlineSeconds:
+	// 900s plus 60s per GB of image.
+	seedBaseDeadline = 900 * time.Second
+	seedPerGB        = 60 * time.Second
+)
+
+// SeedDeadline is a seed Job's activeDeadlineSeconds for an image of
+// imageBytes: 15 minutes plus a minute per GB (rounded up).
+func SeedDeadline(imageBytes int64) time.Duration {
+	const gb = 1 << 30
+	if imageBytes < 0 {
+		imageBytes = 0
+	}
+	return seedBaseDeadline + time.Duration((imageBytes+gb-1)/gb)*seedPerGB
+}
+
 // Paths is where a Job pod's tools live.
 type Paths struct {
 	// Dir is the tools emptyDir's mount path; "" is ToolsDir.

@@ -235,3 +235,14 @@ func TestParseProbe(t *testing.T) {
 		}
 	}
 }
+
+func TestSeedDeadline(t *testing.T) {
+	for bytes, want := range map[int64]time.Duration{
+		0: 15 * time.Minute, 1: 16 * time.Minute, 1 << 30: 16 * time.Minute,
+		1<<30 + 1: 17 * time.Minute, 10 << 30: 25 * time.Minute, -5: 15 * time.Minute,
+	} {
+		if got := SeedDeadline(bytes); got != want {
+			t.Errorf("SeedDeadline(%d) = %s, want %s", bytes, got, want)
+		}
+	}
+}

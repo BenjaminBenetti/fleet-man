@@ -59,6 +59,11 @@ func Run(specPath string, stdout, stderr *os.File) int {
 	pipes := make(chan os.Signal, 1)
 	signal.Notify(pipes, unix.SIGPIPE)
 	defer signal.Stop(pipes)
+	// Signals that arrive before the start script exists (a pod deleted
+	// while it boots) wait here and reach it once it starts.
+	sigs := make(chan os.Signal, 64)
+	signal.Notify(sigs, forwardedSignals()...)
+	defer signal.Stop(sigs)
 
 	spec, err := LoadSpec(specPath)
 	if err != nil {
@@ -107,7 +112,7 @@ func Run(specPath string, stdout, stderr *os.File) int {
 		warnf("start %s: %v", spec.Argv[0], err)
 		return execas.ExitCode(err)
 	}
-	return supervise(spec, plan, layout, out, errOut, warnf)
+	return supervise(spec, plan, layout, sigs, out, errOut, warnf)
 }
 
 // prepare does what docker's runtime does before the container's process:
@@ -212,10 +217,7 @@ func planStart(spec Spec) (*execas.Plan, error) {
 }
 
 // supervise starts the start script and is its PID 1 until it exits.
-func supervise(spec Spec, plan *execas.Plan, layout *Layout, out, errOut io.Writer, warnf func(string, ...any)) int {
-	sigs := make(chan os.Signal, 64)
-	signal.Notify(sigs, forwardedSignals()...)
-	defer signal.Stop(sigs)
+func supervise(spec Spec, plan *execas.Plan, layout *Layout, sigs <-chan os.Signal, out, errOut io.Writer, warnf func(string, ...any)) int {
 	stopSignal := unix.SIGTERM
 	if spec.StopSignal != "" {
 		if n, err := SignalNumber(spec.StopSignal); err == nil {
