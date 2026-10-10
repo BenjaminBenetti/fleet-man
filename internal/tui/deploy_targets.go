@@ -110,6 +110,17 @@ func noDeployTargetsMessage() string {
 	return "No deploy targets available – install devcontainer or coder CLI"
 }
 
+// boundTargetLabel is the deploy target an existing instance is bound to,
+// as the Edit instance dialog shows it: a cluster the daemon no longer
+// connects to (removed with Forget) is named so.
+func boundTargetLabel(m *model, target fleet.DeployTarget) string {
+	label := deployTargetLabel(m, target)
+	if target.KubeCluster != "" && m.kubeClusters != nil && m.kubeStatus(target.KubeCluster) == nil {
+		label += " (missing)"
+	}
+	return label
+}
+
 // deployTargetLabel is a target's human-readable name: a cluster target is
 // "☸ <its connection's name>".
 func deployTargetLabel(m *model, target fleet.DeployTarget) string {

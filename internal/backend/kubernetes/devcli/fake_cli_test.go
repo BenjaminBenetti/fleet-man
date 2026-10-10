@@ -85,6 +85,9 @@ case "$1 $2" in
   "context show") echo "${FAKE_CONTEXT:-desktop-linux}" ;;
   "image inspect")
     [ -f "$FAKE_DIR/image.json" ] || { echo "Error response from daemon: No such image: $4" >&2; exit 1; }
+    # A containerd image store answers a platform's inspect with that
+    # platform's manifest (image.platform.json, when the test gives one).
+    if [ "$3" = --platform ] && [ -f "$FAKE_DIR/image.platform.json" ]; then cat "$FAKE_DIR/image.platform.json"; exit 0; fi
     cat "$FAKE_DIR/image.json" ;;
   "pull --platform"|"pull --")
     [ -f "$FAKE_DIR/image.remote.json" ] || { echo "pull access denied" >&2; exit 1; }

@@ -641,7 +641,7 @@ func (fleetPage *fleetPage) renderAddInstanceDialog(m *model) string {
 			}
 		}
 		branchField = dimStyle.Render(branchDisplay)
-		deployField = dimStyle.Render(fmt.Sprintf("[ %s ]", deployTargetLabel(m, target)))
+		deployField = dimStyle.Render(fmt.Sprintf("[ %s ]", boundTargetLabel(m, target)))
 	} else {
 		title = "New instance"
 		if fleetPage.dlg.fieldActive {

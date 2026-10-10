@@ -12,14 +12,16 @@ import (
 )
 
 // kube_target_test.go covers what the daemon does with Kubernetes deploy
-// targets while this build cannot run instances on a cluster: it carries the
-// cluster wherever a target travels, and refuses a create before any record
-// exists.
+// targets: it carries the cluster wherever a target travels, refuses a
+// create before any record exists while it runs without
+// FLEET_EXPERIMENTAL_K8S, and gives an accepted create's record its key.
 
-// A create that names Kubernetes is refused up front (no FAILED record left
-// behind, nothing remembered), from the local socket as from any client.
+// Without FLEET_EXPERIMENTAL_K8S, a create that names Kubernetes is refused
+// up front (no FAILED record left behind, nothing remembered), from the
+// local socket as from any client.
 func TestCreateInstanceRefusesKubernetesBeforeAnyRecord(t *testing.T) {
 	isolateFleetDir(t)
+	t.Setenv(fleet.EnvExperimentalK8s, "")
 	ran := false
 	orig := jobRunCreate
 	jobRunCreate = func(context.Context, string, string, string, string, bool, fleet.BackendType) error {
