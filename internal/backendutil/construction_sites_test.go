@@ -45,8 +45,12 @@ func TestBackendsAreConstructedOnlyThroughNewForInstance(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			// Skip hidden dirs (.git, .claude worktrees) and vendored trees.
-			if path != root && (strings.HasPrefix(d.Name(), ".") || d.Name() == "vendor" || d.Name() == "node_modules") {
+			// Skip what the go tool skips (hidden dirs such as .git and the
+			// .claude worktrees, _-prefixed dirs, testdata fixtures) and
+			// vendored trees.
+			name := d.Name()
+			if path != root && (strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") ||
+				name == "testdata" || name == "vendor" || name == "node_modules") {
 				return filepath.SkipDir
 			}
 			return nil
