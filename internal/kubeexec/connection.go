@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"k8s.io/client-go/kubernetes"
@@ -271,6 +273,28 @@ func ListContexts(paths []string) ([]KubeContext, error) {
 		}
 	}
 	return out, nil
+}
+
+// CurrentContext is the current-context of the kubeconfig files paths, as
+// kubectl merges them (the first file that sets one wins); empty when none
+// does. Missing files are skipped.
+func CurrentContext(paths []string) (string, error) {
+	rules := &clientcmd.ClientConfigLoadingRules{Precedence: paths}
+	merged, err := rules.Load()
+	if err != nil {
+		return "", fmt.Errorf("%w: reading kubeconfig: %v", ErrMisconfigured, err)
+	}
+	return merged.CurrentContext, nil
+}
+
+// LookupPlugin finds an exec credential plugin the way Load does for a
+// connection with extraPath: an absolute command as it is, a bare name
+// through extraPath and then the absolute entries of environ's PATH. The
+// error says where it looked.
+func LookupPlugin(command string, extraPath, environ []string) (string, error) {
+	dirs := append([]string(nil), extraPath...)
+	dirs = append(dirs, splitList(envMap(environ)["PATH"])...)
+	return resolvePlugin(command, strings.Join(dirs, string(filepath.ListSeparator)))
 }
 
 func describeContext(merged *clientcmdapi.Config, name, source string) KubeContext {
