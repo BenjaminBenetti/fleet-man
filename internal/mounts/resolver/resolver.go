@@ -48,7 +48,9 @@ const sharedFilesContainerPath = "/fleet-mounts/files"
 // setting it ensures the host-side directory exists; for each enabled
 // single-file setting it ensures the host file exists and adds both a
 // shared parent-dir mount and a Symlink that the caller must create
-// inside the container after Up.
+// inside the container after Up. Every mount it returns is
+// MountScopeFleetShared, and every path it creates is recorded in
+// Resolved.Layout.
 //
 // Home-level mounts are rooted at fleetSettings.HomeDir; project file links
 // are relative to the remote workspace. When HomeDir is empty Resolve falls
@@ -75,9 +77,13 @@ func Resolve(fleetName string, fleetSettings fleet.FleetSettings) (Resolved, err
 		if err := ensureHostDir(hostPath); err != nil {
 			return Resolved{}, fmt.Errorf("preparing %s mount: %w", spec.name, err)
 		}
+		subPath := filepath.ToSlash(spec.hostSubdir)
+		resolved.Layout = append(resolved.Layout, LayoutEntry{Path: subPath, Dir: true, Mode: layoutDirMode})
 		resolved.Mounts = append(resolved.Mounts, backend.Mount{
 			LocalPath:     hostPath,
 			ContainerPath: spec.containerPath,
+			Scope:         backend.MountScopeFleetShared,
+			SubPath:       subPath,
 		})
 	}
 
@@ -90,15 +96,19 @@ func Resolve(fleetName string, fleetSettings fleet.FleetSettings) (Resolved, err
 		if err := ensureHostDir(sharedHostDir); err != nil {
 			return Resolved{}, fmt.Errorf("preparing shared files mount: %w", err)
 		}
+		resolved.Layout = append(resolved.Layout, LayoutEntry{Path: sharedFilesSubdir, Dir: true, Mode: layoutDirMode})
 		resolved.Mounts = append(resolved.Mounts, backend.Mount{
 			LocalPath:     sharedHostDir,
 			ContainerPath: sharedFilesContainerPath,
+			Scope:         backend.MountScopeFleetShared,
+			SubPath:       sharedFilesSubdir,
 		})
 		for _, spec := range fileSpecs {
 			hostFile := filepath.Join(sharedHostDir, spec.filename)
 			if err := ensureHostFile(hostFile); err != nil {
 				return Resolved{}, fmt.Errorf("preparing %s file: %w", spec.name, err)
 			}
+			resolved.Layout = append(resolved.Layout, LayoutEntry{Path: sharedFilesSubdir + "/" + spec.filename, Mode: layoutFileMode})
 			resolved.Symlinks = append(resolved.Symlinks, Symlink{
 				Source:      sharedFilesContainerPath + "/" + spec.filename,
 				Target:      spec.symlinkTarget,

@@ -279,7 +279,11 @@ func buildCloneRunArgs(imageTag, destWorkspaceDir, workspaceTarget string, inspe
 		args = append(args, "--mount", "type=bind,source="+sock+",target="+containerSSHSocketPath)
 	}
 
-	args = append(args, customMountArgs(mounts)...)
+	mountArgs, err := customMountArgs(mounts)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, mountArgs...)
 	args = append(args, imageTag)
 	return args, nil
 }

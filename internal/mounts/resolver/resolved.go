@@ -18,4 +18,11 @@ type Resolved struct {
 	// mounts are in place — typically used for single-file shares
 	// where a direct bind mount would break atomic-write semantics.
 	Symlinks []Symlink
+	// Layout lists, in creation order, every path Resolve created on the
+	// host under the fleet's mount root. That host tree is canonical; a
+	// backend that keeps the fleet's shared state elsewhere (a cluster's
+	// share volume) replays Layout there so every Mounts SubPath exists
+	// with the same kind and mode. Each Mounts entry's SubPath is a Dir
+	// entry here.
+	Layout []LayoutEntry
 }

@@ -193,6 +193,12 @@ func (devcontainerBackend *DevcontainerBackend) SupportsRebuild() bool {
 // design — the user's per-fleet agent state should override whatever
 // the repo's devcontainer.json was pointing at.
 func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts []backend.Mount, extraArgs []string) (*backend.UpResult, error) {
+	// Refuse unsupported mounts before anything is pruned or rewritten.
+	mountArgs, err := customMountArgs(mounts)
+	if err != nil {
+		return nil, err
+	}
+
 	// Drop any docker container still labelled with this workspace
 	// folder before provisioning. The devcontainer CLI matches existing
 	// containers by `devcontainer.local_folder=<wsDir>` and silently
@@ -236,7 +242,7 @@ func (devcontainerBackend *DevcontainerBackend) up(workspaceDir string, mounts [
 		return nil, err
 	}
 	args = append(args, sshArgs...)
-	args = append(args, customMountArgs(mounts)...)
+	args = append(args, mountArgs...)
 	cmd := exec.Command("devcontainer", args...)
 	// ${localEnv:SSH_AUTH_SOCK} in the config (a project's own agent mount)
 	// must resolve to the user's real agent, not the daemon's relay socket.
@@ -674,18 +680,29 @@ func (devcontainerBackend *DevcontainerBackend) SupportsCustomMounts() bool {
 // customMountArgs translates a slice of backend.Mount values into the
 // `--mount type=bind,...` flag pairs accepted by `devcontainer up`.
 // Returns nil for an empty input so callers can append unconditionally.
-func customMountArgs(mounts []backend.Mount) []string {
+// Every scope binds its LocalPath: docker shares the daemon host's
+// filesystem.
+//
+// A ReadOnly mount is refused: `devcontainer up --mount` only accepts
+// type, source, target and external, so it cannot be made read-only, and
+// mounting it writable would silently drop the request. Clone's `docker
+// run` refuses it too, so an instance gets the same mounts however it was
+// made.
+func customMountArgs(mounts []backend.Mount) ([]string, error) {
 	if len(mounts) == 0 {
-		return nil
+		return nil, nil
 	}
 	args := make([]string, 0, len(mounts)*2)
 	for _, mount := range mounts {
 		if mount.LocalPath == "" || mount.ContainerPath == "" {
 			continue
 		}
+		if mount.ReadOnly {
+			return nil, fmt.Errorf("mount %s: the devcontainer backend cannot mount read-only", mount.ContainerPath)
+		}
 		args = append(args, "--mount", "type=bind,source="+mount.LocalPath+",target="+mount.ContainerPath)
 	}
-	return args
+	return args, nil
 }
 
 // EditorURI returns a VS Code devcontainer remote URI.
