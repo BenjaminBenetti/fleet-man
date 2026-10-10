@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -214,5 +215,38 @@ func TestTakeoverNeverSignalsAStaleRecord(t *testing.T) {
 	}
 	if got := readPidFile(t, d); got.PID != os.Getpid() {
 		t.Fatalf("pid file %+v", got)
+	}
+}
+
+// /proc/locks names a btrfs file's filesystem device, not the subvolume's
+// anonymous one stat reports: the holder is still found by its inode.
+func TestFlockHolderMatchesBtrfsDevices(t *testing.T) {
+	const listing = `15: FLOCK  ADVISORY  WRITE 2593072 00:f8:198570269 0 EOF
+38: OFDLCK ADVISORY  READ -1 00:24:269210274 0 EOF
+82: FLOCK  ADVISORY  WRITE 15 00:24:269210274 0 EOF
+83: FLOCK  ADVISORY  WRITE 99 00:24:7 0 EOF
+83: -> FLOCK  ADVISORY  WRITE 100 00:24:7 0 EOF
+`
+	for _, tt := range []struct {
+		dev  string
+		ino  uint64
+		want int
+	}{
+		{"00:24", 269210274, 15}, // the device matches
+		{"00:26", 269210274, 15}, // btrfs: stat's anonymous device
+		{"00:26", 12345, 0},      // no lock on the inode
+		{"00:f8", 198570269, 2593072},
+	} {
+		if got := flockHolder(strings.NewReader(listing), tt.dev, tt.ino); got != tt.want {
+			t.Errorf("holder of %s:%d = %d, want %d", tt.dev, tt.ino, got, tt.want)
+		}
+	}
+	// Two flocks on inodes of that number on other devices name no one.
+	two := "1: FLOCK  ADVISORY  WRITE 10 00:24:7 0 EOF\n2: FLOCK  ADVISORY  WRITE 11 00:25:7 0 EOF\n"
+	if got := flockHolder(strings.NewReader(two), "00:26", 7); got != 0 {
+		t.Errorf("ambiguous inode named pid %d", got)
+	}
+	if got := flockHolder(strings.NewReader(two), "00:25", 7); got != 11 {
+		t.Errorf("the exact device among two: %d", got)
 	}
 }
