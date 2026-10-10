@@ -90,6 +90,7 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 		dest = &fleet.Instance{Name: destInstance, WorkspaceDir: destWorkspaceDir, Status: fleet.StatusCloning, Backend: src.Backend}
 	}
 	instanceBackend := newInstanceBackend(dest, verbose)
+	services := sharedServicesFor(dest)
 	if !instanceBackend.SupportsClone() {
 		err := fmt.Errorf("backend %q does not support cloning", dest.Backend)
 		setFailed(fleetName, destInstance, err)
@@ -116,34 +117,17 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 		return err
 	}
 
+	// The clone gets the same mounts a create would, for the destination: the
+	// fleet's shared and custom mounts, its own control directory (so the host
+	// fleet TUI can drive the in-instance `fleet launch` browser control over
+	// a unix socket) and the shared buildkit server's (ensuring the server is
+	// up), so it shares the same build cache. Only the shared-mount resolution
+	// can fail the clone; the rest only warns.
 	backend.ReportStep(ctx, fleet.StepResolveMounts, "")
-	resolvedMounts, err := resolveCustomMounts(instanceBackend, fleetName)
+	resolvedMounts, err := resolveProvisionMounts(ctx, instanceBackend, services, fleetName, destInstance)
 	if err != nil {
 		setFailed(fleetName, destInstance, err)
 		return err
-	}
-
-	// Bind-mount the per-instance control directory into the clone, the same
-	// way Run does, so the host fleet TUI can drive the in-instance
-	// `fleet launch` browser control over a unix socket. Guard with
-	// SupportsCustomMounts (only devcontainer-style backends honor mounts)
-	// and treat a host-directory failure as non-fatal — surface a warning
-	// and keep going rather than aborting the clone.
-	if instanceBackend.SupportsCustomMounts() {
-		mount, err := controlMount(fleetName, destInstance)
-		if err != nil {
-			provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("control mount: %v", err))
-		} else {
-			resolvedMounts.Mounts = append(resolvedMounts.Mounts, mount)
-		}
-	}
-
-	// Bind the fleet's shared buildkit socket into the clone too (ensuring the
-	// server is up), so the clone shares the same build cache. Non-fatal.
-	if mount, ok, err := prepareBuildkitMount(instanceBackend, fleetName); err != nil {
-		provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("buildkit server: %v", err))
-	} else if ok {
-		resolvedMounts.Mounts = append(resolvedMounts.Mounts, mount)
 	}
 
 	if err := checkCancelled(ctx); err != nil {
@@ -193,18 +177,18 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 	// remove-then-create in ConfigureInstanceBuildx makes this idempotent.
 	// Non-fatal, and a silent no-op without docker/buildx.
 	backend.ReportStep(ctx, fleet.StepConfigureCaches, "")
-	if err := configureBuildkit(instanceBackend, fleetName, destWorkspaceDir); err != nil {
+	if err := configureBuildkit(services, instanceBackend, fleetName, destWorkspaceDir); err != nil {
 		provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("configure buildkit buildx: %v", err))
 	}
 
 	// Wire the clone into the fleet's shared deb/image caches the same way Run
-	// does (ensure server, join the fleet network, write in-instance config).
+	// does (ensure server, connect the clone, write in-instance config).
 	// The committed image may carry the source's apt/docker config; the writes
 	// are idempotent. Best-effort, silent no-op without apt / a local dockerd.
-	if err := setupDebCache(instanceBackend, fleetName, result.ContainerID, destWorkspaceDir); err != nil {
+	if err := setupDebCache(services, instanceBackend, fleetName, result.ContainerID, destWorkspaceDir); err != nil {
 		provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("deb cache: %v", err))
 	}
-	if err := setupImageCache(instanceBackend, fleetName, destInstance, result.ContainerID, destWorkspaceDir); err != nil {
+	if err := setupImageCache(services, instanceBackend, fleetName, destInstance, result.ContainerID, destWorkspaceDir); err != nil {
 		provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("image cache: %v", err))
 	}
 

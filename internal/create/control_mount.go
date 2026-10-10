@@ -36,7 +36,7 @@ import (
 // Returning the mount (rather than appending it directly) keeps this helper
 // pure and testable: it only touches the host directory and reports what mount
 // the backend should honor, leaving the caller to decide whether the backend
-// supports custom mounts at all.
+// mounts the host control directory at all (mountsHostControlDir).
 func controlMount(fleetName, instanceName string) (backend.Mount, error) {
 	dir := state.ControlDir(fleetName, instanceName)
 	if err := os.MkdirAll(dir, 0777); err != nil {
@@ -60,3 +60,13 @@ func controlMount(fleetName, instanceName string) (backend.Mount, error) {
 // open the instance's SSH-agent relay socket there, so a postCreate command
 // already finds its agent.
 var ControlDirReady func(fleetName, instanceName string)
+
+// mountsHostControlDir reports whether provisioning through b bind-mounts the
+// instance's host control directory (controlMount): b honors mounts at all
+// (SupportsSharedMounts), and it does not carry the instance's control channel
+// itself (backend.HasControlChannel). For a backend that does, nothing of the
+// channel lives on the host, so neither the directory nor its marker is made,
+// and ControlDirReady never opens the instance's sockets there.
+func mountsHostControlDir(b backend.Backend) bool {
+	return b.SupportsSharedMounts() && !backend.HasControlChannel(b)
+}

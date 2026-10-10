@@ -14,8 +14,9 @@
 // service. Only HTTP apt sources are cached (the default Debian/Ubuntu
 // archives); HTTPS sources bypass the proxy and go direct.
 //
-// Gated to backends that report SupportsCustomMounts()==true (devcontainer);
-// callers must check that before invoking EnsureSharedServer.
+// Callers reach it through the shared-service runtime for the daemon host's
+// docker (internal/svcruntime/dockerrt), which svcruntime.ForInstance hands
+// out only for instances on that docker (devcontainer).
 package debcache
 
 import (
@@ -123,7 +124,7 @@ func dockerRunArgs(fleetName, network string) []string {
 // on every instance create/start: a running container is reused, a stopped one
 // is started, an absent one is created — all on the fleet's shared network.
 //
-// Callers MUST only invoke this for backends that SupportsCustomMounts.
+// Callers MUST only invoke this for instances on the daemon host's docker.
 func EnsureSharedServer(fleetName string) (string, error) {
 	lock := fleetLock(fleetName)
 	lock.Lock()

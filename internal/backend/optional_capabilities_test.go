@@ -9,7 +9,7 @@ import (
 // backendutil.CapabilitiesFor hands a caller that only asks.
 type capsOnly struct{}
 
-func (capsOnly) SupportsCustomMounts() bool { return true }
+func (capsOnly) SupportsSharedMounts() bool { return true }
 func (capsOnly) SupportsClone() bool        { return true }
 func (capsOnly) SupportsRebuild() bool      { return true }
 func (capsOnly) SupportsMicSink() bool      { return true }

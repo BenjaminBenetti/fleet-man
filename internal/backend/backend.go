@@ -16,25 +16,32 @@ type OutputBackend interface {
 // monitoring, and introspection of containerized workspaces.
 type Backend interface {
 	// Up creates and starts a workspace from a workspace directory.
-	// The mounts argument carries optional custom bind mounts requested
-	// by the caller (e.g. shared agentic context dirs). Backends that
-	// return false from SupportsCustomMounts may ignore mounts entirely;
-	// callers should consult SupportsCustomMounts and pass nil when not
-	// supported to avoid wasted host-side preparation.
+	// The mounts argument carries the mounts the caller requests (the
+	// fleet's shared agent-state and custom folders, the control
+	// directory, a shared service's socket). Backends that return false
+	// from SupportsSharedMounts may ignore mounts entirely; callers
+	// should consult SupportsSharedMounts and pass nil when not supported
+	// to avoid wasted host-side preparation.
 	Up(workspaceDir string, mounts []Mount) (*UpResult, error)
 
-	// SupportsCustomMounts reports whether this backend can honor the
-	// mounts argument passed to Up. Backends that do not control the
-	// container's filesystem layer (managed cloud workspaces, for example)
-	// should return false.
-	SupportsCustomMounts() bool
+	// SupportsSharedMounts reports whether this backend honors the mounts
+	// argument passed to Up, Clone and Rebuild: above all the fleet's
+	// shared folders (MountScopeFleetShared: agent state, shared files,
+	// custom mounts), which every instance of the fleet sees as one
+	// directory. Backends that do not control the container's filesystem
+	// layer (managed cloud workspaces, for example) return false.
+	//
+	// It answers only for mounts. Whether provisioning also mounts the
+	// host control directory is backend.HasControlChannel's question, and
+	// where the fleet's shared services run is svcruntime.ForInstance's.
+	SupportsSharedMounts() bool
 
 	// Clone snapshots an existing workspace and starts a new one from
 	// that snapshot bound to destWorkspaceDir. The clone must preserve
 	// state inside the source container (e.g. manually installed
 	// packages) — callers rely on this to fan out hand-configured
 	// instances. mounts carry the same caller-supplied bind mounts as
-	// Up; backends that return false from SupportsCustomMounts may
+	// Up; backends that return false from SupportsSharedMounts may
 	// ignore them.
 	//
 	// Returns the same shape of UpResult as Up so callers can persist
@@ -59,7 +66,7 @@ type Backend interface {
 	// workspace-folder label). mounts carry the same caller-supplied bind mounts
 	// as Up and must be re-applied so the rebuilt container keeps its control
 	// socket / shared-cache / agent-state mounts; backends returning false from
-	// SupportsCustomMounts ignore them.
+	// SupportsSharedMounts ignore them.
 	//
 	// Returns the same UpResult shape as Up so callers can persist the new
 	// ContainerID (it CHANGES for devcontainer; it is stable for codespaces).

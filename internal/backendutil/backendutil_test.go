@@ -80,12 +80,12 @@ func TestCapabilitiesForAnswersByInstanceWithoutBinding(t *testing.T) {
 		inst := &fleet.Instance{Name: "i", Backend: tc.backend, ContainerID: "c"}
 		caps := CapabilitiesFor(inst)
 		acting := NewForInstance(inst, false)
-		if caps.SupportsCustomMounts() != tc.mounts || caps.SupportsRebuild() != tc.rebuild ||
+		if caps.SupportsSharedMounts() != tc.mounts || caps.SupportsRebuild() != tc.rebuild ||
 			caps.SupportsClone() != tc.clone || caps.SupportsMicSink() != tc.micSink {
 			t.Fatalf("CapabilitiesFor(%q) = mounts %v rebuild %v clone %v mic %v, want %+v", tc.backend,
-				caps.SupportsCustomMounts(), caps.SupportsRebuild(), caps.SupportsClone(), caps.SupportsMicSink(), tc)
+				caps.SupportsSharedMounts(), caps.SupportsRebuild(), caps.SupportsClone(), caps.SupportsMicSink(), tc)
 		}
-		if caps.SupportsCustomMounts() != acting.SupportsCustomMounts() || caps.SupportsRebuild() != acting.SupportsRebuild() ||
+		if caps.SupportsSharedMounts() != acting.SupportsSharedMounts() || caps.SupportsRebuild() != acting.SupportsRebuild() ||
 			caps.SupportsClone() != acting.SupportsClone() || caps.SupportsMicSink() != acting.SupportsMicSink() {
 			t.Fatalf("CapabilitiesFor(%q) disagrees with NewForInstance", tc.backend)
 		}
