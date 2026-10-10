@@ -114,7 +114,7 @@ func (codespacesBackend *CodespacesBackend) generateSSHConfig(csName, workspaceD
 	}
 
 	config := &sshConfig{configPath: configPath, host: host}
-	codespacesBackend.sshConfigs[csName] = *config
+	codespacesBackend.cacheSSHConfig(csName, *config)
 	return config, nil
 }
 
@@ -133,7 +133,7 @@ func (codespacesBackend *CodespacesBackend) loadSSHConfig(csName, workspaceDir s
 	}
 
 	config := &sshConfig{configPath: configPath, host: host}
-	codespacesBackend.sshConfigs[csName] = *config
+	codespacesBackend.cacheSSHConfig(csName, *config)
 	return config
 }
 
@@ -147,7 +147,7 @@ func (codespacesBackend *CodespacesBackend) loadSSHConfig(csName, workspaceDir s
 // commands like tmux. Falls back to `gh codespace ssh` when no config
 // is cached.
 func (codespacesBackend *CodespacesBackend) sshCommand(csName string, command []string, allocPTY bool) *exec.Cmd {
-	if config, ok := codespacesBackend.sshConfigs[csName]; ok {
+	if config, ok := codespacesBackend.cachedSSHConfig(csName); ok {
 		args := nativeSSHArgs(&config, command, allocPTY)
 		return exec.Command("ssh", args...)
 	}
