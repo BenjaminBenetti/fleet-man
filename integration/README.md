@@ -23,6 +23,14 @@ integration/
 │                               # config, used by new-fleet check-flow tests
 ├── fixture-launch/             # devcontainer with a customizations.fleet.fleetLaunch
 │                               # block (Links + Apps), used by the launch tests
+├── fixture-net/                # itest-net.pl (in-instance HTTP/WebSocket/TCP servers),
+│                               # socat, and a Fleet Launch block pointing at them
+├── fixture-hostsock/           # binds the host's SSH_AUTH_SOCK and gpg-agent sockets
+├── fixture-hostgw/             # --add-host=host.docker.internal:host-gateway
+├── fixture-vscode/             # customizations.vscode, postAttachCommand, forwardPorts,
+│                               # portsAttributes
+├── net/                        # net.sh (itest_net_* helpers) + client.py, the host end
+│                               # of the forwarding / browser-proxy tests
 └── tests/
     ├── 010_up_and_ls.sh        # CLI — up + ls
     ├── 020_exec.sh             # CLI — exec
@@ -99,6 +107,7 @@ helpers in `common.sh`, which dispatch to `backends/<backend>.sh`:
 | `itest_container_status`, `itest_container_exists`, `assert_container_running` / `_stopped` / `_absent` | the container behind an id |
 | `itest_container_belongs_to`, `itest_container_leftovers` | the identity fleet matches an instance's container by, and containers left for it |
 | `itest_container_logs`, `itest_container_stop`, `itest_container_exec_as` | logs, a stop behind fleet's back, a command as another user |
+| `itest_container_label` | a label `devcontainer up` stamped on the container (e.g. `devcontainer.metadata`) |
 | `itest_workspace_exists`, `assert_workspace_exists` / `_absent`, `itest_workspace_test`, `_read`, `_write`, `_git` | the instance's checkout |
 | `itest_control_test`, `_read`, `_mode` | the instance's `/fleet-mounts/control` dir |
 | `itest_share_dir`, `itest_share_sync` | the fleet's shared-mount tree on the daemon host, and waiting for it to sync |

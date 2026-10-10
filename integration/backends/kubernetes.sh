@@ -69,6 +69,8 @@ _be_container_leftovers()  { _be_not_yet itest_container_leftovers P2.13; }
 _be_container_logs()       { _be_not_yet itest_container_logs P2.13; }
 _be_container_stop()       { _be_not_yet itest_container_stop P2.13; }
 _be_container_exec_as()    { _be_not_yet itest_container_exec_as P2.13; }
+# The labels `devcontainer up` captured for the pod spec (kubeshim).
+_be_container_label()      { _be_not_yet itest_container_label P2.13; }
 
 # --- workspace: the checkout on the instance's volume (P2.13) ---
 

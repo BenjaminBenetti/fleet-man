@@ -1,0 +1,17 @@
+{
+  "name": "fleet-man integration VS Code customizations fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "postStartCommand": "nohup perl -MIO::Socket::INET -e 'my $s = IO::Socket::INET->new(LocalPort => 17390, Listen => 8, ReuseAddr => 1) or die \"listen: $!\"; while (my $c = $s->accept) { print $c \"fleet-itest-forwarded\\n\"; close $c }' >/tmp/itest-forwarded.log 2>&1 </dev/null &",
+  "postAttachCommand": "echo attached >> \"$HOME/.fleet-postattach.log\"",
+  "forwardPorts": [17390],
+  "portsAttributes": {
+    "17390": { "label": "Itest Forwarded", "onAutoForward": "silent" }
+  },
+  "otherPortsAttributes": { "onAutoForward": "ignore" },
+  "customizations": {
+    "vscode": {
+      "extensions": ["fleet-itest.fixture-extension"],
+      "settings": { "fleetItest.fromFixture": "customized" }
+    }
+  }
+}

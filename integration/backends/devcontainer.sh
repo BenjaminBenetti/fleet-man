@@ -82,6 +82,10 @@ _be_container_exec_as() {  # <container_id> <user> <cmd> [args...]
   docker exec -u "${user}" "${cid}" "$@"
 }
 
+_be_container_label() {  # <container_id> <label>
+  docker inspect --format "{{ index .Config.Labels \"$2\" }}" "$1" 2>/dev/null || true
+}
+
 # --- workspace: the instance's checkout, which is the host checkout itself ---
 
 _be_workspace_exists() {  # <ref>
