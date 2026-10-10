@@ -139,10 +139,14 @@ for _ in $(seq 1 60); do
 done
 [ -n "${reaped}" ] || fail "the restarted daemon never reaped the automation run"
 
-log="${HOME}/.fleet/fleet.log"
-grep -q "automation: watch list restored" "${log}" \
+# fleet.log may have been cut into logs/fleetd/<date>.log by a daemon's startup
+# log rotation (it rotates once a day, at the first check past 3am), so search
+# both.
+cat "${HOME}/.fleet/fleet.log" "${HOME}/.fleet/logs/fleetd/"*.log 2>/dev/null \
+  | grep -q "automation: watch list restored" \
   || fail "the restarted daemon did not log restoring the watch list"
-fires=$(grep -c "automation: trigger fired" "${log}" || true)
+# Every firing writes one event log for the trigger (trigger_logs.go).
+fires=$(find "${HOME}/.fleet/logs/${FIXTURE_REPO_NAME}/trigger/fire" -name 'event-*.log' 2>/dev/null | wc -l | tr -d ' ')
 assert_equals "1" "${fires}" "the trigger fired ${fires} times; a restart must not fire it again"
 
 pass "automation: a run launched before a fleetd restart is still reaped after it"
