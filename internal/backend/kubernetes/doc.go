@@ -49,7 +49,22 @@
 // naming what they were stuck on (WaitReady, RunJob, the agent handshake).
 // RunJob drives the jobboot Jobs (seed, rollback, tool) to their result.
 //
+// ForInstance is the backend handle of one Kubernetes instance (what
+// backendutil.NewForInstance returns for one): bound to the instance's
+// connection, key, fleet and creation time, which name every object of it,
+// and to fleetd's record of what it rendered and delivered
+// (instance_record.go), which the instance's pod is verified against. Its
+// UpContext is the create (create.go): capture-up on the daemon host, image
+// delivery, admission, the seed, the StatefulSet, the agent and the
+// devcontainer's lifecycle hooks, every API server write journaled. Stop and
+// Start scale the StatefulSet (the disk keeps the instance), Down and
+// DownByKey delete every object of the key (lifecycle.go). The daemon hands
+// the handles its image delivery and each connection's preflight findings
+// (SetEnvironment).
+//
 // Everything that needs client-go builds only in the full binary (!nok8s);
-// this file and the pure ones beside it (journal, footprint, deadlines)
-// build in the pod build too, so the package always exists.
+// this file and the pure ones beside it (journal, footprint, deadlines, the
+// instance record) build in the pod build too, so the package always
+// exists, and ForInstance there answers that the build has no Kubernetes
+// backend.
 package kubernetes

@@ -80,6 +80,58 @@ func TestLiveBackendLifecycle(t *testing.T) {
 	t.Run("failed create", func(t *testing.T) {
 		lb.failedCreate(t, open, image)
 	})
+	// The integration fixtures the P2 exit criteria name: a Dockerfile with
+	// build args, a context above .devcontainer and a local feature; and the
+	// go feature (whose debug grants an unlabelled namespace admits).
+	t.Run("fixture-dockerfile", func(t *testing.T) {
+		lb.fixture(t, open, "dockerfile", "fixture-dockerfile", map[string]string{
+			"cat /etc/fleet-itest-build-arg":                  "from-build-args",
+			"cat /etc/fleet-itest-context-readme | head -c 1": "#",
+			"cat /usr/local/share/itest-feature-greeting":     "hello-from-feature-option",
+			"itest-feature":                "itest-feature-ok",
+			"printenv ITEST_CONTAINER_ENV": "from-containerEnv",
+		})
+	})
+	t.Run("fixture-go-feature", func(t *testing.T) {
+		lb.fixture(t, open, "gofeature", "fixture-go-feature", map[string]string{
+			"/usr/local/go/bin/go version | cut -d' ' -f3 | cut -c1-6": "go1.24",
+		})
+	})
+}
+
+// fixture creates an instance from an integration fixture, checks what the
+// scripts print, and destroys it.
+func (lb *liveBackend) fixture(t *testing.T, lv *live, name, fixture string, checks map[string]string) {
+	src := filepath.Join("..", "..", "..", "integration", fixture)
+	inst, _ := lb.instance(t, lv, name, func(ws string) {
+		if err := os.MkdirAll(ws, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("cp", "-a", src+"/.", ws).CombinedOutput(); err != nil {
+			t.Fatalf("copying %s: %v\n%s", fixture, err, out)
+		}
+	})
+	b := newHandle(inst, lb.pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	start := time.Now()
+	res, err := b.UpContext(backend.WithJobLog(ctx, &lineLog{t: t}), backend.UpRequest{WorkspaceDir: inst.WorkspaceDir})
+	if err != nil {
+		t.Fatalf("create from %s: %v", fixture, err)
+	}
+	t.Logf("created %s from %s in %v", res.ContainerID, fixture, time.Since(start).Round(time.Second))
+	inst.ContainerID = res.ContainerID
+	b = newHandle(inst, lb.pool)
+	for script, want := range checks {
+		out, err := b.RunScript(res.ContainerID, script)
+		if got := strings.TrimSpace(out); err != nil || got != want {
+			t.Errorf("%q = %q (%v), want %q", script, got, err, want)
+		}
+	}
+	if err := b.Down(res.ContainerID); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	lb.waitNothingLeft(t, lv, inst.KubeKey)
 }
 
 // liveBackend is the daemon side of the live tests: the pool, the
