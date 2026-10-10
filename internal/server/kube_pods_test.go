@@ -460,3 +460,51 @@ func TestKubeHandlesWithoutTheCapabilitiesAreOnlyWatched(t *testing.T) {
 		t.Fatalf("post-start on a handle without it wrote a warning: %v", err)
 	}
 }
+
+// A terminal attached over the Exec stream (a remote TUI's pane, `fleet
+// shell` through a remote daemon) clears the notice; a one-shot does not.
+func TestKubePodsNoticeClearsOnATTYExec(t *testing.T) {
+	isolateFleetDir(t)
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Instances: []*fleet.Instance{kubeInstance("one", fleet.StatusRunning)}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	stubExecCommand(t)
+	svc, client, cleanup := newTestServer(t)
+	defer cleanup()
+	pool := &fakeKubePool{obs: map[string]kubernetes.Observation{}}
+	svc.kubePods.pool = func() kubePodPool { return pool }
+	svc.kubePods.targetFor = func(*fleet.Instance) *kubernetes.PodTarget { return nil }
+	svc.kubePods.postRestart = func(string, *fleet.Instance, string) {}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go svc.kubePods.run(ctx)
+	loadAndPush(svc.hub)
+	r := &kubePodsRig{t: t, svc: svc, pool: pool}
+	r.waitTracked()
+	pool.observe(kubeSTS("one"), kubernetes.Observation{Live: backend.LiveStatusRunning, Restart: &backend.Restart{ID: "u2/0", Cause: backend.RestartNodeLost}})
+	r.eventually("the notice", func() bool { return r.runtime("one").GetKube().GetRestartCause() == string(backend.RestartNodeLost) })
+
+	exec := func(tty bool) {
+		t.Helper()
+		sctx, scancel := context.WithTimeout(ctx, 30*time.Second)
+		defer scancel()
+		stream, err := client.Exec(sctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := stream.Send(execStartFrame("alpha", "one", []string{"true"}, tty, nil)); err != nil {
+			t.Fatal(err)
+		}
+		_ = stream.CloseSend()
+		drainExec(t, stream)
+	}
+	exec(false)
+	time.Sleep(50 * time.Millisecond)
+	if c := r.runtime("one").GetKube().GetRestartCause(); c == "" {
+		t.Fatal("a one-shot exec cleared the notice")
+	}
+	exec(true)
+	r.eventually("the cleared notice", func() bool { return r.runtime("one").GetKube().GetRestartCause() == "" })
+}
