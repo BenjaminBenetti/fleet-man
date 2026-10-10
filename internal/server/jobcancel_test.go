@@ -11,6 +11,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime/svcruntimetest"
 )
 
 // provisioningStub replaces the create, clone and rebuild seams with runs that
@@ -166,7 +167,7 @@ func destroyOne(t *testing.T, s *service, inst string) *job {
 // with errInstanceDestroyed, and waits for it to exit before removing the
 // record, so the run never has its record pulled out from under it.
 func TestDestroyCancelsInFlightProvisioning(t *testing.T) {
-	stubCacheTeardown(t)
+	stubHostServices(t, svcruntimetest.New("docker"))
 	cases := []struct {
 		kind fleetgrpc.JobKind
 		inst string
@@ -211,7 +212,7 @@ func TestDestroyCancelsInFlightProvisioning(t *testing.T) {
 // no context cannot exit when cancelled; the destroy waits destroyCancelWait,
 // then tears down anyway with a warning naming the job.
 func TestDestroyProceedsPastAStuckJob(t *testing.T) {
-	stubCacheTeardown(t)
+	stubHostServices(t, svcruntimetest.New("docker"))
 	seedProvisioningFleet(t)
 	stub := stubProvisioning(t, true)
 	orig := destroyCancelWait
@@ -243,7 +244,7 @@ func TestDestroyProceedsPastAStuckJob(t *testing.T) {
 // other provisioning jobs (and other fleets') alone; a fleet destroy cancels
 // every one in that fleet and none elsewhere.
 func TestDestroyCancelsOnlyItsTargets(t *testing.T) {
-	stubCacheTeardown(t)
+	stubHostServices(t, svcruntimetest.New("docker"))
 	seedProvisioningFleet(t)
 	stub := stubProvisioning(t, false)
 	s := newService()
