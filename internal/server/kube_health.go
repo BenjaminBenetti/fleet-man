@@ -905,6 +905,8 @@ func (w *kubeWorker) stateLocked(now time.Time) (fleetgrpc.KubeClusterState, str
 // status is the connection's status as clients see it now.
 func (w *kubeWorker) status() *fleetgrpc.KubeClusterStatus {
 	now := w.m.now()
+	// Read before w.mu: the manager's lock is taken before a worker's.
+	im := w.m.imagesOrNil()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	st := &fleetgrpc.KubeClusterStatus{Cluster: protoconv.KubeClusterToProto(w.rec)}
@@ -925,10 +927,8 @@ func (w *kubeWorker) status() *fleetgrpc.KubeClusterStatus {
 	if !w.deepAt.IsZero() {
 		st.DeepCheckedAt = timestamppb.New(w.deepAt)
 	}
-	if del := st.Capabilities.GetImageDelivery(); del != nil {
-		if im := w.m.imagesOrNil(); im != nil {
-			im.live(del, w.rec)
-		}
+	if del := st.Capabilities.GetImageDelivery(); del != nil && im != nil {
+		im.live(del, w.rec)
 	}
 	if exp := w.cred.ExpiresAt; !exp.IsZero() {
 		if st.Capabilities == nil {
