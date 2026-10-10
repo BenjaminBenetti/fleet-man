@@ -58,6 +58,7 @@ func (r *run) nodes(ctx context.Context) {
 		r.caps.Nodes = append(r.caps.Nodes, kn)
 	}
 	local := localcluster.Detect(facts)
+	r.res.Local, r.res.Platform = local, nodePlatform(list.Items)
 	r.caps.NodeArchs = sortedKeys(archs)
 	r.caps.LocalCluster = local.Local()
 	r.caps.PrivilegedAllowed = r.t.Cluster.AllowsPrivileged(local.Local())

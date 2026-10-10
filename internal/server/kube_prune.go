@@ -252,7 +252,9 @@ func listPruneObjects(ctx context.Context, cs kubernetes.Interface, rec fleet.Ku
 	known, fleets := accountedFor(st, rec, id)
 	kept := objects[:0]
 	for _, o := range objects {
-		if o.labels[names.LabelRole] == string(names.RoleOwner) || known[o.labels[names.LabelKey]] {
+		// The owner Lease and the managed pull Secrets belong to the
+		// connection itself (the latter are deleted with it).
+		if role := o.labels[names.LabelRole]; role == string(names.RoleOwner) || role == string(names.RolePullSecret) || known[o.labels[names.LabelKey]] {
 			continue
 		}
 		o.mounted = o.kind == "pvc" && mounted[o.name]

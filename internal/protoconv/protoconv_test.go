@@ -308,3 +308,25 @@ func TestConfigFromProtoMicClientPresence(t *testing.T) {
 		t.Error("ConfigToProto must always set mic.client, the empty string included")
 	}
 }
+
+// Enable Image Registry has presence on the wire: a client built before the
+// field saves the remote group without it, which must leave the daemon's
+// setting alone (clusters set to Gateway delivery depend on it), while a
+// current client's explicit false turns it off.
+func TestConfigFromProtoImageRegistryPresence(t *testing.T) {
+	base := func() *state.Config {
+		return &state.Config{RemoteMcpSettings: state.RemoteMcpSettings{GatewayURL: "https://gw", ImageRegistryEnabled: true}}
+	}
+	absent := &fleetgrpc.Config{RemoteMcp: &fleetgrpc.RemoteMcpSettings{GatewayUrl: "https://gw2", WebhookEnabled: true}}
+	if got := ConfigFromProto(absent, base()).RemoteMcpSettings; !got.ImageRegistryEnabled || got.GatewayURL != "https://gw2" || !got.WebhookEnabled {
+		t.Errorf("absent field: got %+v, want the base's image registry kept and the rest applied", got)
+	}
+	off := false
+	explicit := &fleetgrpc.Config{RemoteMcp: &fleetgrpc.RemoteMcpSettings{GatewayUrl: "https://gw", ImageRegistryEnabled: &off}}
+	if got := ConfigFromProto(explicit, base()).RemoteMcpSettings; got.ImageRegistryEnabled {
+		t.Error("an explicit false must turn the image registry off")
+	}
+	if sent := ConfigToProto(&state.Config{}).GetRemoteMcp(); sent.ImageRegistryEnabled == nil {
+		t.Error("ConfigToProto must always set remote_mcp.image_registry_enabled, false included")
+	}
+}

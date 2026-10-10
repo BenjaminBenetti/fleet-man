@@ -62,6 +62,7 @@ const (
 	settingsItemRemoteWebhookEnabled   = 708 // expose the automation webhook endpoint through the gateway
 	settingsItemRemoteWebhookPublicURL = 709 // copy the gateway-assigned public webhook base URL
 	settingsItemRemoteFleetMode        = 710 // "Remote Fleet via" [Gateway] [SSH] segmented selector
+	settingsItemRemoteRegistryEnabled  = 711 // serve built images to Kubernetes clusters through the gateway
 
 	// Fleet armada: the "+ Remote Fleet" button has a fixed id; registered
 	// remotes get base+i. The base is placed FAR above every other block (and
@@ -193,8 +194,10 @@ type remoteSettingsSnapshot struct {
 	mcpEnabled     bool
 	fleetEnabled   bool
 	webhookEnabled bool
-	gatewayURL     string
-	fleetMode      string
+	// registryEnabled is Enable Image Registry.
+	registryEnabled bool
+	gatewayURL      string
+	fleetMode       string
 }
 
 // snapshotRemoteSettings extracts the tunnel-relevant settings from config.
@@ -203,11 +206,12 @@ func snapshotRemoteSettings(config *configutil.Config) remoteSettingsSnapshot {
 		return remoteSettingsSnapshot{}
 	}
 	return remoteSettingsSnapshot{
-		mcpEnabled:     config.RemoteMcpSettings.Enabled,
-		fleetEnabled:   config.RemoteMcpSettings.FleetEnabled,
-		webhookEnabled: config.RemoteMcpSettings.WebhookEnabled,
-		gatewayURL:     config.RemoteMcpSettings.GatewayURL,
-		fleetMode:      config.RemoteMcpSettings.FleetMode,
+		mcpEnabled:      config.RemoteMcpSettings.Enabled,
+		fleetEnabled:    config.RemoteMcpSettings.FleetEnabled,
+		webhookEnabled:  config.RemoteMcpSettings.WebhookEnabled,
+		registryEnabled: config.RemoteMcpSettings.ImageRegistryEnabled,
+		gatewayURL:      config.RemoteMcpSettings.GatewayURL,
+		fleetMode:       config.RemoteMcpSettings.FleetMode,
 	}
 }
 
@@ -424,7 +428,7 @@ var settingsSections = []settingsSection{
 			if m.config != nil && m.config.RemoteMcpSettings.FleetEnabled {
 				items = append(items, settingsItemRemoteFleetMode)
 			}
-			items = append(items, settingsItemRemoteWebhookEnabled, settingsItemRemoteMcpGatewayURL)
+			items = append(items, settingsItemRemoteWebhookEnabled, settingsItemRemoteRegistryEnabled, settingsItemRemoteMcpGatewayURL)
 			if m.config != nil && m.config.RemoteMcpSettings.Enabled {
 				items = append(items, settingsItemRemoteMcpPublicURL)
 			}
@@ -815,6 +819,52 @@ func (settingsPage *settingsPage) toggleRemoteWebhookEnabled(m *model) {
 	m.message = fmt.Sprintf("Webhook set to %s", label)
 }
 
+// toggleRemoteRegistryEnabled flips "Enable Image Registry" — serving the
+// images this daemon builds for Kubernetes clusters set to Gateway delivery
+// through the gateway — and saves. Like Enable Webhook it reveals no rows, so
+// the cursor stays put; it reverts on a failed save unless the failure is the
+// expected tunnel bounce from a remote client.
+func (settingsPage *settingsPage) toggleRemoteRegistryEnabled(m *model) {
+	if m.config == nil {
+		m.config = placeholderConfig()
+	}
+	current := m.config.RemoteMcpSettings.ImageRegistryEnabled
+	next := !current
+	m.config.RemoteMcpSettings.ImageRegistryEnabled = next
+	if err := setConfigRemote(m.config); err != nil {
+		if settingsPage.remoteSaveBounced(m, err) {
+			settingsPage.serverRemote = snapshotRemoteSettings(m.config)
+			m.message = remoteSettingsSavedMsg
+			return
+		}
+		m.config.RemoteMcpSettings.ImageRegistryEnabled = current
+		m.message = fmt.Sprintf("Failed to save settings: %v", err)
+		return
+	}
+	settingsPage.serverRemote = snapshotRemoteSettings(m.config)
+	label := "off"
+	if next {
+		label = "on"
+	}
+	m.message = fmt.Sprintf("Image Registry set to %s", label)
+}
+
+// remoteRegistryStatusValue is the Enable Image Registry row's live line
+// while it is on: where the gateway serves this daemon's images, or why it
+// serves none.
+func remoteRegistryStatusValue(m *model) string {
+	st := m.remoteMcpStatus
+	switch {
+	case st != nil && st.GetPublicRegistry() != "":
+		host, _, _ := strings.Cut(st.GetPublicRegistry(), "/")
+		return statusRunningStyle.Render("serving") + "  " + dimStyle.Render("clusters pull from "+host)
+	case st != nil && st.GetRegistryError() != "":
+		return statusCreatingStyle.Render("not serving") + "  " + dimStyle.Render(st.GetRegistryError())
+	default:
+		return dimStyle.Render("(not connected)")
+	}
+}
+
 // toggleAutoInstall toggles the dotfiles auto-install setting.
 func (settingsPage *settingsPage) toggleAutoInstall(m *model) {
 	if m.config == nil {
@@ -1138,6 +1188,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.setRemoteFleetMode(m, configutil.FleetModeGateway)
 			} else if item == settingsItemRemoteWebhookEnabled {
 				settingsPage.toggleRemoteWebhookEnabled(m)
+			} else if item == settingsItemRemoteRegistryEnabled {
+				settingsPage.toggleRemoteRegistryEnabled(m)
 			} else if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, -1)
 			} else if item == settingsItemTheme {
@@ -1192,6 +1244,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				settingsPage.setRemoteFleetMode(m, configutil.FleetModeSSH)
 			} else if item == settingsItemRemoteWebhookEnabled {
 				settingsPage.toggleRemoteWebhookEnabled(m)
+			} else if item == settingsItemRemoteRegistryEnabled {
+				settingsPage.toggleRemoteRegistryEnabled(m)
 			} else if item == settingsItemCodespacesMachine {
 				settingsPage.cycleCodespacesMachine(m, 1)
 			} else if item == settingsItemTheme {
@@ -1263,6 +1317,10 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			}
 			if item == settingsItemRemoteWebhookEnabled {
 				settingsPage.toggleRemoteWebhookEnabled(m)
+				return nil
+			}
+			if item == settingsItemRemoteRegistryEnabled {
+				settingsPage.toggleRemoteRegistryEnabled(m)
 				return nil
 			}
 			if item == settingsItemRemoteMcpCopyLocal {
@@ -1973,6 +2031,14 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			}
 			webhookEnabledValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Expose automation webhook triggers at the gateway public url so remote systems can fire them")
 			recordRow(settingsItemRemoteWebhookEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteWebhookEnabled, "Enable Webhook", webhookEnabledValue))
+			listContent.WriteString("\n")
+
+			registryValue := "[ off ]"
+			if config.RemoteMcpSettings.ImageRegistryEnabled {
+				registryValue = "[ on ]  " + remoteRegistryStatusValue(m)
+			}
+			registryValue += "\n" + strings.Repeat(" ", 21) + dimStyle.Render("Serve the images this daemon builds to Kubernetes clusters set to Gateway delivery")
+			recordRow(settingsItemRemoteRegistryEnabled, settingsPage.renderSettingsRow(m, currentItem == settingsItemRemoteRegistryEnabled, "Enable Image Registry", registryValue))
 			listContent.WriteString("\n")
 
 			gatewayValue := config.RemoteMcpSettings.GatewayURL

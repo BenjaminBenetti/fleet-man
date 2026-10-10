@@ -2,7 +2,7 @@ package state
 
 import "testing"
 
-// TestTunnelDesired pins the "tunnel should be up" predicate: any of the three
+// TestTunnelDesired pins the "tunnel should be up" predicate: any of the four
 // gateway surfaces enabled AND a (non-blank) gateway URL set. It must mirror the
 // manager's desiredState.on() so the TUI indicator and the actual dial agree.
 // Remote fleet in SSH mode is NOT a gateway surface.
@@ -24,6 +24,9 @@ func TestTunnelDesired(t *testing.T) {
 		{name: "grpc on in ssh mode + url: no tunnel", s: RemoteMcpSettings{FleetEnabled: true, FleetMode: FleetModeSSH, GatewayURL: "https://gw"}, want: false},
 		{name: "ssh mode grpc + mcp on + url: tunnel for mcp", s: RemoteMcpSettings{Enabled: true, FleetEnabled: true, FleetMode: FleetModeSSH, GatewayURL: "https://gw"}, want: true},
 		{name: "webhook on + url", s: RemoteMcpSettings{WebhookEnabled: true, GatewayURL: "https://gw"}, want: true},
+		{name: "image registry on, no url", s: RemoteMcpSettings{ImageRegistryEnabled: true}, want: false},
+		{name: "image registry alone + url", s: RemoteMcpSettings{ImageRegistryEnabled: true, GatewayURL: "https://gw"}, want: true},
+		{name: "image registry + ssh-mode fleet + url", s: RemoteMcpSettings{ImageRegistryEnabled: true, FleetEnabled: true, FleetMode: FleetModeSSH, GatewayURL: "https://gw"}, want: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

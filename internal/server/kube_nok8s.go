@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/server/remote"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -19,6 +20,11 @@ type kubeManager struct{}
 func newKubeManager(*service) *kubeManager { return &kubeManager{} }
 
 func (*kubeManager) run(ctx context.Context) { <-ctx.Done() }
+
+// No connections, so no image delivery and no gateway image server.
+func (*kubeManager) startImages(context.Context, bool) []remote.Option { return nil }
+
+func (*kubeManager) attachTunnel(*remote.Manager) {}
 
 func (*kubeManager) deployTargets(bool) []fleet.DeployTargetOption { return nil }
 

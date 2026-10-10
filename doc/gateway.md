@@ -1,9 +1,10 @@
 # The Fleet Gateway
 
 The **fleet gateway** lets a user expose their local fleet daemon (`fleetd`) to
-the internet — its **MCP server** (for remote AI agents) and its **gRPC API**
-(for full remote control) — without opening a single inbound port on their
-machine.
+the internet — its **MCP server** (for remote AI agents), its **gRPC API**
+(for full remote control), its automation **webhooks**, and a pull-only
+**image registry** for the Kubernetes clusters it deploys to — without opening
+a single inbound port on their machine.
 
 This document explains how the pieces fit together and how a request travels
 end‑to‑end for both the MCP and gRPC paths.
@@ -67,16 +68,18 @@ the whole gateway.
 | **fleetd tunnel client** | `internal/server/remote` | `Manager` dials the gateway, registers, and serves inbound streams; `serveTunnel` demuxes them to the MCP, gRPC, or webhook server by tag. |
 | **fleetd MCP server** | `internal/server/mcp.go` | The loopback MCP server (`127.0.0.1:<port>`), bearer‑token gated. |
 | **fleetd gRPC server (tunnel)** | `internal/server` | A second `grpc.Server` (same `FleetService`) behind a bearer‑token interceptor, fed by the demux. The local unix‑socket server stays auth‑less. |
+| **fleetd image server** | `internal/k8s/imageserve` | A pull-only OCI registry fed by the demux (`TagRegistry`, and the dedicated registry connection): manifests and blobs by digest, only what fleetd built for the cluster a request's Basic credential names. See [§6a](#6a-image-delivery-the-v2-route). |
 | **fleetd webhook receiver** | `internal/server/webhook.go` | An `http.Server` fed by the demux (`TagWebhook`) that routes an inbound `POST /<name>` to the matching automation webhook trigger(s) and fires their agents. **Unauthenticated** — the unguessable public URL is the capability, like the MCP proxy. |
-| **The gateway** | `internal/gateway` | Two listeners — public HTTP/1.1 (serving `/mcp/<id>` AND `/webhook/<id>/<name>`) and native gRPC (HTTP/2). The gRPC server hosts the transparent control proxy AND the fleetd `Register` method (`register.go`); plus the session registry. An **isolated module** — imports only `internal/tunnel`, the stdlib, and `google.golang.org/grpc` (no fleetd internals). |
+| **The gateway** | `internal/gateway` | Two listeners — public HTTP/1.1 (serving `/mcp/<id>`, `/webhook/<id>/<name>` and `/v2/<rid>/…`) and native gRPC (HTTP/2). The gRPC server hosts the transparent control proxy AND the fleetd `Register` method (`register.go`); plus the session registry. An **isolated module** — imports only `internal/tunnel`, the stdlib, and `google.golang.org/grpc` (no fleetd internals). |
 | **Remote `fleet` client** | `internal/fleetclient` | `gatewayEndpoint` — an ordinary gRPC dial to the gateway's gRPC listener, routing by the `fleet-session` metadata header. |
 
 ---
 
 ## 3. Registration (over the gRPC tunnel stream)
 
-When the user enables remote MCP (or remote fleet — either toggle brings the
-tunnel up), `fleetd`'s `remote.Manager` opens a long‑lived
+When the user enables remote MCP (or Remote Fleet, Webhook or Image Registry —
+any of the four toggles brings the tunnel up), `fleetd`'s `remote.Manager`
+opens a long‑lived
 gRPC **bidi** stream — the `Register` method (`tunnel.RegisterMethod`) on the
 gateway's gRPC endpoint. Both ends wrap that stream as a `net.Conn`
 (`tunnel.StreamConn`, a raw‑codec adapter), so the *exact same* handshake + yamux
@@ -128,12 +131,15 @@ Key points:
   `--session-key` the signing key is random per boot and a restart hands out
   fresh URLs (the pre‑token behavior).
 
-- **Feature negotiation.** `fleetd` advertises the capabilities it supports
-  (`features: ["grpc"]`); the gateway replies with the **intersection** of what
-  *both* support. gRPC tunneling (and the per‑stream tag in §4) only activates
-  when `grpc` is in that negotiated set. An un‑upgraded gateway or daemon simply
-  negotiates nothing and the tunnel stays the legacy MCP‑only wire — so a
-  version‑skewed rollout is always safe.
+- **Feature negotiation.** `fleetd` advertises the capabilities it wants
+  (`features: ["grpc", "webhook", "registry"]`, each only while its toggle is
+  on); the gateway replies with the **intersection** of what *both* support.
+  The per‑stream tag in §4 activates when any of the three is negotiated. An
+  un‑upgraded gateway or daemon simply negotiates nothing and the tunnel stays
+  the legacy MCP‑only wire — so a version‑skewed rollout is always safe. A
+  gateway that knows `registry` but cannot offer it says why in the reply
+  (`registry_off`: no `--session-key`, a `--public-url` that is not https or has
+  a path), and fleetd shows that reason in Settings.
 
 ---
 
@@ -147,6 +153,8 @@ negotiated, every stream the gateway opens begins with a single **tag byte** so
 |-----|-------|---------|
 | `TagMCP` | `0x00` | The stream carries an **HTTP request** for the loopback MCP server. |
 | `TagGRPC` | `0x01` | The stream carries a **native‑gRPC (HTTP/2, h2c)** connection the gateway reverse‑proxies to the tunnel gRPC server. |
+| `TagWebhook` | `0x02` | The stream carries an **HTTP request** for the automation webhook receiver. |
+| `TagRegistry` | `0x03` | The stream carries an **HTTP registry request** (`GET`/`HEAD /v2/…`) for the image server. |
 
 The tag is written by the gateway as the *first bytes* of the stream, before any
 payload, so `fleetd` reads it immediately without guessing. On a legacy
@@ -163,7 +171,9 @@ On the daemon side, `serveTunnel` is the demultiplexer:
       │      ├─ ReadTag()
       │      │     ├─ 0x00 → push to the MCP http.Server   ──▶ reverse‑proxy to 127.0.0.1:<mcpPort>
       │      │     ├─ 0x01 → push to the gRPC ChanListener  ──▶ the token‑gated tunnel grpc.Server
-      │      │     └─ else → close the stream
+      │      │     ├─ 0x02 → push to the webhook ChanListener ──▶ the webhook receiver
+      │      │     ├─ 0x03 → push to the registry ChanListener ─▶ the image server
+      │      │     └─ else (or a kind not negotiated) → close the stream
       │      ▼
       └─ (loop)
 ```
@@ -273,6 +283,86 @@ All of gRPC works through the reverse proxy — unary, server‑streaming (`Watc
 
 ---
 
+## 6a. Image delivery: the /v2/ route
+
+A Kubernetes cluster with no registry can pull the images fleetd builds for it
+through the gateway (the cluster's image **Delivery** set to Gateway, or Auto
+with no registry on a cluster that is not local). The gateway already has what
+the cluster's nodes need: a public address and an HTTPS certificate they trust.
+fleetd still opens no port: both fleetd and the node dial out to the gateway.
+
+```
+ node containerd ──HTTPS──▶ gateway /v2/<rid>/devcontainer/manifests/sha256:…
+                                │  rid → session; rid stripped
+                                ▼
+                     registry connection (or the main tunnel)
+                                │  TagRegistry
+                                ▼
+                     fleetd image server  /v2/devcontainer/…  (Basic auth)
+```
+
+- **Turn it on:** Settings → Fleet MCP → **Enable Image Registry** (off by
+  default; `remote_mcp_settings.image_registry_enabled`). On its own it brings the
+  tunnel up. fleetd then requests the `registry` feature at registration.
+- **The gateway offers it only with `--session-key` and an `https` `--public-url`
+  at the host root** (no path, query or userinfo): registry paths always start at
+  `/v2/` on the host, and without a session key the registry id would change on
+  every gateway restart (including the one a direct-TLS gateway needs to load a
+  renewed certificate). Otherwise it logs `image registry route off reason=…` and
+  tells registering daemons the same reason, which the Settings row and the
+  cluster editor's greyed-out Gateway option show.
+- **A separate registry id.** An image is
+  `<public host>/<rid>/devcontainer@sha256:<digest>`. `rid` is a second 256-bit
+  id (never the public id in the MCP and webhook URLs, which is their only
+  credential), carried in the session-resume token so it survives gateway
+  restarts. The register reply's `public_registry` is `<host[:port]>/<rid>`; fleetd
+  shows the host in Settings and re-points its gateway-delivered workloads when it
+  changes.
+- **Routes.** Bare `/v2/` is answered by the gateway with a `Basic` challenge
+  (docker and CRI-O ask for it; containerd does not). `/v2/<rid>/…` is
+  reverse-proxied to the daemon with the rid stripped; GET and HEAD only. An
+  unknown rid, or a session without the feature, gets `404 NAME_UNKNOWN`, like a
+  webhook-disabled daemon; a session whose tunnel is down gets `502`.
+- **Auth.** Each cluster connection has its own random pull credential
+  (`image.gateway_credential` on the record in `~/.fleet/kube_clusters.json`):
+  made by fleetd, never returned over any RPC, never settable, gone with the
+  connection. It lives in one long-lived pull Secret per connection
+  (`fleet-gwpull-<owner>-<cluster>`), rewritten in place on rotation. The gateway
+  forwards `Authorization` untouched and fleetd answers `401` with a `Basic`
+  challenge when it is missing or wrong; a credential only reaches its own
+  cluster's images.
+- **A dedicated registry connection.** Layers would otherwise queue ahead of MCP,
+  webhooks and remote gRPC on the one tunnel, so pulls get a connection of their
+  own: a second `Register` stream whose handshake is
+  `{attach: "registry", session_id: <secret>}`, bound as the session's registry
+  slot (one per session, not counted against `--max-sessions`), with a 4 MiB yamux
+  stream window, at most 8 concurrent registry streams and a 60s keepalive
+  timeout. fleetd opens it when it starts a pull (a create, start or evacuation)
+  or when a pull arrives on the main tunnel, and closes it after 60s idle; while
+  none is attached the gateway sends pulls down the main tunnel.
+- **Upload pacing.** Registry uploads are paced to 80% of the daemon host's
+  measured uplink by default (the cluster's `image.upload_pace_percent`; 0 turns
+  pacing off), so the main tunnel keeps its latency during a multi-GB pull.
+- **When fleetd is offline.** For 10 minutes after fleetd drops off the gateway
+  answers `502`; after that it reaps the session and answers `404`. fleetd
+  classifies both as "the daemon was offline", not "digest not found", once it is
+  back. Pods that stay on their node are unaffected; a node pulls only when a pod
+  first lands on it.
+- **Checking it.** `fleet cluster test` (and the cluster editor's test) fetches a
+  tiny probe image's manifest through the gateway's public URL from the daemon
+  host with the connection's credential and names the step that failed: route,
+  TLS, credential or digest. The daemon host's trust store may hold a CA the
+  nodes lack, so the deep test (`--deep`, `[ deep test ]`) also has a throwaway
+  pod pull the probe image through the gateway, which is the real proof.
+- **Cost and trust.** The bytes go up the daemon host's upload link and through
+  the gateway, and the gateway (and any TLS-terminating proxy in front of it)
+  sees every layer and the pull credential in the clear, as it sees MCP traffic
+  and the bearer token. With the kubelet's default `serializeImagePulls: true`, a
+  slow gateway pull also delays the node's other pulls; a registry stays the
+  better choice for heavy or always-on clusters.
+
+---
+
 ## 7. Authentication and trust model
 
 | | MCP path | gRPC path |
@@ -360,7 +450,7 @@ list. The full set:
 | `--tls-cert` | `FLEET_GATEWAY_TLS_CERT` | (optional) | Path to the TLS certificate (PEM). Set with `--tls-key` to enable TLS — see [§7a](#7a-deployment-modes-direct-tls-vs-reverse-proxy) |
 | `--tls-key` | `FLEET_GATEWAY_TLS_KEY` | (optional) | Path to the TLS private key (PEM). Set with `--tls-cert` to enable TLS |
 | `--max-sessions` | `FLEET_GATEWAY_MAX_SESSIONS` | `1024` | Cap on concurrent tunnels |
-| `--session-key` | `FLEET_GATEWAY_SESSION_KEY` | (random per boot) | Secret key signing the session-resume tokens daemons present on reconnect. Set it so daemons keep the **same session URL across gateway restarts**; left unset, a restart hands every daemon a fresh URL |
+| `--session-key` | `FLEET_GATEWAY_SESSION_KEY` | (random per boot) | Secret key signing the session-resume tokens daemons present on reconnect. Set it so daemons keep the **same session URL across gateway restarts**; left unset, a restart hands every daemon a fresh URL. Required for the image registry route ([§6a](#6a-image-delivery-the-v2-route)), which also needs an `https` `--public-url` with no path |
 
 Semantics (a `PreRunE` on the gateway command fills any flag not given on the
 command line from its variable, through the flag's own parser):
@@ -383,8 +473,9 @@ command line from its variable, through the flag's own parser):
   TTL, then a reaper frees it — so a `kill -9`'d daemon's URL is released, but a
   brief network blip keeps the URL stable.
 - **Status.** `fleetd` publishes the live connection state and the assigned public
-  URLs (MCP, and gRPC when negotiated) over its Watch stream, so the TUI's settings
-  page shows them in real time. The computed Public MCP URL / Public GRPC URL are
+  URLs (MCP, gRPC and webhook when negotiated, and the image registry's host or
+  why there is none) over its Watch stream, so the TUI's settings page shows them
+  in real time. The computed Public MCP URL / Public GRPC URL are
   *never* stored in config — only pushed over Watch.
 
 ---

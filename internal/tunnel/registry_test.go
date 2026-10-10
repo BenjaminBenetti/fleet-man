@@ -67,6 +67,14 @@ func TestRegistryFieldsRoundTrip(t *testing.T) {
 	}
 
 	reply := RegisterReply{SessionID: "s", PublicRegistry: "gw.example.com/rid", Features: []string{FeatureRegistry}}
+	off := RegisterReply{SessionID: "s", RegistryOff: "no --session-key"}
+	if err := WriteFrame(&buf, off); err != nil {
+		t.Fatalf("WriteFrame: %v", err)
+	}
+	var gotOff RegisterReply
+	if err := ReadFrame(&buf, &gotOff); err != nil || !reflect.DeepEqual(gotOff, off) {
+		t.Fatalf("reply round trip: got %+v (%v) want %+v", gotOff, err, off)
+	}
 	if err := WriteFrame(&buf, reply); err != nil {
 		t.Fatalf("WriteFrame: %v", err)
 	}

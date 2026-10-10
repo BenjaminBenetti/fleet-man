@@ -87,6 +87,14 @@ message RemoteMcpSettings {
   // reaches over an SSH tunnel (no gateway involved). Mirrors
   // state.FleetModeGateway / state.FleetModeSSH; an unknown value is gateway.
   string fleet_mode = 5;
+  // image_registry_enabled gates gateway image delivery ("Enable Image
+  // Registry"): fleetd serves the images it builds for Kubernetes clusters
+  // set to Gateway delivery through the gateway's /v2/ route, negotiating
+  // the registry tunnel feature. Off by default; on its own it brings the
+  // tunnel up. optional: a client built before the field sends the group
+  // without it, which must read as "unchanged", not as turning delivery off
+  // under every cluster that uses it when that client saves another setting.
+  optional bool image_registry_enabled = 6;
 }
 
 // MicSettings mirrors internal/state.MicSettings — the virtual microphone.

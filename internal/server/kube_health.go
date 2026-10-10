@@ -163,6 +163,14 @@ type kubeManager struct {
 	loaded  bool
 	records []fleet.KubeCluster // registry order
 	workers map[string]*kubeWorker
+	// images is the daemon's image delivery (kube_image.go); nil until
+	// Serve starts it, so a connection judged without it skips the image
+	// delivery check. pullPush and registrySettle are its pending pushes,
+	// registryChangedAt when the gateway's image registry last changed.
+	images            *kubeImages
+	pullPush          *time.Timer
+	registrySettle    *time.Timer
+	registryChangedAt time.Time
 }
 
 func newKubeManager(svc *service) *kubeManager {
@@ -418,11 +426,13 @@ type kubeWorker struct {
 	// fullWanted asks for a full preflight at the next turn.
 	fullWanted bool
 
-	// The last full preflight, when it started, and when it returned.
+	// The last full preflight, when it started, and when it returned;
+	// deepAt is when the last deep test finished.
 	haveFull    bool
 	full        preflight.Result
 	fullStarted time.Time
 	lastFull    time.Time
+	deepAt      time.Time
 	// lastProbe is when the last probe of either kind returned.
 	lastProbe time.Time
 	// probeFail is the failure the last shallow probe found since the last
@@ -628,6 +638,8 @@ func (w *kubeWorker) target(rec fleet.KubeCluster, link *kubeLink, lease kubeLea
 		Cluster: rec, Client: link.client, Raw: link.raw, Credential: link.credential,
 		Auth: link.auth, Plugin: link.plugin, Source: link.source,
 		Owner: w.m.ownerLabel(), Now: w.m.now,
+		// A draft (the context picker's test) has no id yet.
+		Delivery: w.m.delivery(rec, link, rec.ID != ""),
 	}
 	if lease != nil {
 		t.Lease = lease
@@ -638,12 +650,21 @@ func (w *kubeWorker) target(rec fleet.KubeCluster, link *kubeLink, lease kubeLea
 // runFull runs a full preflight and makes it the connection's health,
 // unless one that started later already did. report receives each check.
 func (w *kubeWorker) runFull(ctx context.Context, report func(*fleetgrpc.KubeCheck)) preflight.Result {
+	return w.runFullDeep(ctx, report, false)
+}
+
+// runFullDeep is runFull, with deep the deep test's probes too.
+func (w *kubeWorker) runFullDeep(ctx context.Context, report func(*fleetgrpc.KubeCheck), deep bool) preflight.Result {
 	started := w.m.now()
 	w.mu.Lock()
 	wanted := w.fullWanted
 	w.fullWanted = false
 	w.mu.Unlock()
-	done := w.watchdog("full preflight", preflight.FullTimeout+time.Minute)
+	bound := preflight.FullTimeout + time.Minute
+	if deep {
+		bound += preflight.DeepTimeout
+	}
+	done := w.watchdog("full preflight", bound)
 	link, lease, rec, err := w.ensureLink(true)
 	var res preflight.Result
 	if err != nil {
@@ -654,7 +675,9 @@ func (w *kubeWorker) runFull(ctx context.Context, report func(*fleetgrpc.KubeChe
 			}
 		}
 	} else {
-		res = preflight.Full(ctx, w.target(rec, link, lease), report)
+		tgt := w.target(rec, link, lease)
+		tgt.Deep = deep
+		res = preflight.Full(ctx, tgt, report)
 		w.countOrphans(ctx, rec, link, &res)
 	}
 	done()
@@ -717,6 +740,9 @@ func (w *kubeWorker) applyFull(rec fleet.KubeCluster, link *kubeLink, res prefli
 	}
 	w.haveFull, w.full, w.fullStarted = true, res, started
 	w.lastFull, w.lastProbe = res.CheckedAt, res.CheckedAt
+	if !res.DeepCheckedAt.IsZero() {
+		w.deepAt = res.DeepCheckedAt
+	}
 	w.probeFail, w.probeFailMsg = fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNSPECIFIED, ""
 	w.cred, w.credErr, w.credAt = res.Credential, nil, res.CheckedAt
 	w.leaseHeld = res.Lease != nil && res.Lease.Held
@@ -881,6 +907,8 @@ func (w *kubeWorker) stateLocked(now time.Time) (fleetgrpc.KubeClusterState, str
 // status is the connection's status as clients see it now.
 func (w *kubeWorker) status() *fleetgrpc.KubeClusterStatus {
 	now := w.m.now()
+	// Read before w.mu: the manager's lock is taken before a worker's.
+	im := w.m.imagesOrNil()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	st := &fleetgrpc.KubeClusterStatus{Cluster: protoconv.KubeClusterToProto(w.rec)}
@@ -897,6 +925,12 @@ func (w *kubeWorker) status() *fleetgrpc.KubeClusterStatus {
 	}
 	if !w.lastProbe.IsZero() {
 		st.CheckedAt = timestamppb.New(w.lastProbe)
+	}
+	if !w.deepAt.IsZero() {
+		st.DeepCheckedAt = timestamppb.New(w.deepAt)
+	}
+	if del := st.Capabilities.GetImageDelivery(); del != nil && im != nil {
+		im.live(del, w.rec)
 	}
 	if exp := w.cred.ExpiresAt; !exp.IsZero() {
 		if st.Capabilities == nil {
