@@ -29,6 +29,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/imageserve"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/preflight"
@@ -448,4 +449,27 @@ func testImageArchive(t *testing.T) ([]byte, string) {
 	}
 	_ = aw.Close()
 	return out.Bytes(), digest(cfg)
+}
+
+// usesGateway is which connections a registry change concerns: set to the
+// gateway, or Auto on a cluster that is neither local nor given a registry.
+func TestUsesGateway(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		image fleet.KubeImageSettings
+		local bool
+		want  bool
+	}{
+		{"set to gateway", fleet.KubeImageSettings{Mode: fleet.KubeImageGateway}, true, true},
+		{"auto on a cloud cluster", fleet.KubeImageSettings{}, false, true},
+		{"auto spelled out", fleet.KubeImageSettings{Mode: fleet.KubeImageAuto}, false, true},
+		{"auto on a local cluster", fleet.KubeImageSettings{}, true, false},
+		{"auto with a registry", fleet.KubeImageSettings{Registry: "registry.example.com"}, false, false},
+		{"set to registry", fleet.KubeImageSettings{Mode: fleet.KubeImageRegistry}, false, false},
+		{"set to node load", fleet.KubeImageSettings{Mode: fleet.KubeImageNodeLoad}, false, false},
+	} {
+		if got := usesGateway(fleet.KubeCluster{Image: tc.image}, tc.local); got != tc.want {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+	}
 }
