@@ -1,0 +1,103 @@
+{
+  "cli": "0.89.0",
+  "workspaceDir": "/home/dev/src/fixture-hostgw",
+  "workspaceFolder": "/workspaces/fixture-hostgw",
+  "capture": {
+    "format": 1,
+    "verb": "run",
+    "args": [
+      "--sig-proxy=false",
+      "-a",
+      "STDOUT",
+      "-a",
+      "STDERR",
+      "--mount",
+      "type=bind,source=/home/dev/src/fixture-hostgw,target=/workspaces/fixture-hostgw",
+      "-l",
+      "devcontainer.local_folder=/home/dev/src/fixture-hostgw",
+      "-l",
+      "devcontainer.config_file=/home/dev/src/fixture-hostgw/.devcontainer/devcontainer.json",
+      "--add-host=host.docker.internal:host-gateway",
+      "--entrypoint",
+      "/bin/sh",
+      "-l",
+      "devcontainer.metadata=[{\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"},{\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}},{\"remoteUser\":\"vscode\"}]",
+      "mcr.microsoft.com/devcontainers/base:debian-12",
+      "-c",
+      "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+      "-"
+    ],
+    "env": null,
+    "labels": {
+      "devcontainer.config_file": "/home/dev/src/fixture-hostgw/.devcontainer/devcontainer.json",
+      "devcontainer.local_folder": "/home/dev/src/fixture-hostgw",
+      "devcontainer.metadata": "[{\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"},{\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}},{\"remoteUser\":\"vscode\"}]"
+    }
+  },
+  "image": {
+    "Id": "sha256:23fa69fed758b7927c60061317d73baf7d66b9fca5c344e80bce3a940b229af0",
+    "RepoTags": [
+      "mcr.microsoft.com/devcontainers/base:debian-12"
+    ],
+    "RepoDigests": [
+      "mcr.microsoft.com/devcontainers/base@sha256:23fa69fed758b7927c60061317d73baf7d66b9fca5c344e80bce3a940b229af0"
+    ],
+    "Architecture": "amd64",
+    "Os": "linux",
+    "Config": {
+      "User": "root",
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ],
+      "Cmd": [
+        "bash"
+      ],
+      "Labels": {
+        "dev.containers.id": "base-debian",
+        "dev.containers.release": "v0.4.19",
+        "dev.containers.source": "https://github.com/devcontainers/images",
+        "dev.containers.timestamp": "Thu, 16 Oct 2025 10:40:40 GMT",
+        "dev.containers.variant": "bookworm",
+        "devcontainer.metadata": "[ {\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"}, {\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}}, {\"remoteUser\":\"vscode\"} ]",
+        "version": "2.0.2"
+      }
+    }
+  },
+  "merged": {
+    "name": "fleet-man integration host-gateway fixture",
+    "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+    "runArgs": [
+      "--add-host=host.docker.internal:host-gateway"
+    ],
+    "configFilePath": {
+      "$mid": 1,
+      "fsPath": "/home/dev/src/fixture-hostgw/.devcontainer/devcontainer.json",
+      "path": "/home/dev/src/fixture-hostgw/.devcontainer/devcontainer.json",
+      "scheme": "vscode-fileHost"
+    },
+    "init": false,
+    "privileged": false,
+    "customizations": {
+      "vscode": [
+        {
+          "settings": {
+            "github.copilot.chat.codeGeneration.instructions": [
+              {
+                "text": "This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "onCreateCommands": [],
+    "updateContentCommands": [],
+    "postCreateCommands": [],
+    "postStartCommands": [],
+    "postAttachCommands": [],
+    "remoteUser": "vscode",
+    "remoteEnv": {},
+    "containerEnv": {},
+    "portsAttributes": {}
+  }
+}

@@ -1,0 +1,156 @@
+{
+  "pod": {
+    "image": {
+      "ref": "mcr.microsoft.com/devcontainers/base:debian-12",
+      "id": "sha256:23fa69fed758b7927c60061317d73baf7d66b9fca5c344e80bce3a940b229af0",
+      "os": "linux",
+      "arch": "amd64"
+    },
+    "pid1": {
+      "format": 1,
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "user": "root"
+    },
+    "env": [
+      {
+        "name": "KUBESHIM_CONTAINER_ENV",
+        "key": "KUBESHIM_CONTAINER_ENV"
+      }
+    ],
+    "security": {},
+    "resources": {
+      "requests": {
+        "cpu": "500m",
+        "memory": "2Gi"
+      }
+    },
+    "diskSize": "50Gi",
+    "mounts": [
+      {
+        "kind": "workspace",
+        "target": "/workspaces/hooks",
+        "source": "/home/dev/src/hooks"
+      }
+    ],
+    "nodeSelector": {
+      "kubernetes.io/arch": "amd64",
+      "kubernetes.io/os": "linux"
+    },
+    "options": [
+      {
+        "option": "attach",
+        "outcome": "ignore"
+      },
+      {
+        "option": "entrypoint",
+        "outcome": "map"
+      },
+      {
+        "option": "env",
+        "outcome": "map"
+      },
+      {
+        "option": "label",
+        "outcome": "map"
+      },
+      {
+        "option": "mount",
+        "outcome": "map"
+      },
+      {
+        "option": "sig-proxy",
+        "outcome": "ignore"
+      }
+    ]
+  },
+  "specFiles": {
+    "capture.json": {
+      "args": [
+        "--sig-proxy=false",
+        "-a",
+        "STDOUT",
+        "-a",
+        "STDERR",
+        "--mount",
+        "type=bind,source=/home/dev/src/hooks,target=/workspaces/hooks",
+        "-l",
+        "devcontainer.local_folder=/home/dev/src/hooks",
+        "-l",
+        "devcontainer.config_file=/home/dev/src/hooks/.devcontainer/devcontainer.json",
+        "-e",
+        "KUBESHIM_CONTAINER_ENV=<redacted>",
+        "--entrypoint",
+        "/bin/sh",
+        "-l",
+        "devcontainer.metadata=[{\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"},{\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}},{\"remoteUser\":\"vscode\"},{\"onCreateCommand\":\"echo onCreate >> \\\"${containerWorkspaceFolder}/.hooks.log\\\"\",\"updateContentCommand\":\"echo updateContent >> \\\"${containerWorkspaceFolder}/.hooks.log\\\"\",\"postCreateCommand\":\"echo postCreate >> \\\"${containerWorkspaceFolder}/.hooks.log\\\" && { id -un; pwd; echo \\\"$KUBESHIM_CONTAINER_ENV\\\"; echo \\\"$KUBESHIM_REMOTE_ENV\\\"; echo \\\"$KUBESHIM_REMOTE_FROM_CONTAINER\\\"; } > \\\"${containerWorkspaceFolder}/.hooks.env\\\"\",\"postStartCommand\":\"echo postStart >> \\\"${containerWorkspaceFolder}/.hooks.log\\\"\",\"postAttachCommand\":\"echo postAttach >> \\\"${containerWorkspaceFolder}/.hooks.log\\\"\",\"containerEnv\":{\"KUBESHIM_CONTAINER_ENV\":\"<redacted>\"},\"remoteUser\":\"vscode\",\"remoteEnv\":{\"KUBESHIM_REMOTE_ENV\":\"<redacted>\",\"KUBESHIM_REMOTE_FROM_CONTAINER\":\"<redacted>\"}}]",
+        "mcr.microsoft.com/devcontainers/base:debian-12",
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "env": [
+        {
+          "name": "KUBESHIM_CONTAINER_ENV",
+          "source": "flag",
+          "value": "<redacted>"
+        }
+      ],
+      "format": 1,
+      "labels": {
+        "devcontainer.config_file": "/home/dev/src/hooks/.devcontainer/devcontainer.json",
+        "devcontainer.local_folder": "/home/dev/src/hooks",
+        "devcontainer.metadata": "[{\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"},{\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}},{\"remoteUser\":\"vscode\"},{\"onCreateCommand\":\"echo onCreate >> \\\"${containerWorkspaceFolder}/.hooks.log\\\"\",\"updateContentCommand\":\"echo updateContent >> \\\"${containerWorkspaceFolder}/.hooks.log\\\"\",\"postCreateCommand\":\"echo postCreate >> \\\"${containerWorkspaceFolder}/.hooks.log\\\" && { id -un; pwd; echo \\\"$KUBESHIM_CONTAINER_ENV\\\"; echo \\\"$KUBESHIM_REMOTE_ENV\\\"; echo \\\"$KUBESHIM_REMOTE_FROM_CONTAINER\\\"; } > \\\"${containerWorkspaceFolder}/.hooks.env\\\"\",\"postStartCommand\":\"echo postStart >> \\\"${containerWorkspaceFolder}/.hooks.log\\\"\",\"postAttachCommand\":\"echo postAttach >> \\\"${containerWorkspaceFolder}/.hooks.log\\\"\",\"containerEnv\":{\"KUBESHIM_CONTAINER_ENV\":\"<redacted>\"},\"remoteUser\":\"vscode\",\"remoteEnv\":{\"KUBESHIM_REMOTE_ENV\":\"<redacted>\",\"KUBESHIM_REMOTE_FROM_CONTAINER\":\"<redacted>\"}}]"
+      },
+      "verb": "run"
+    },
+    "exec.json": {
+      "container_user": "root",
+      "remote_env": {
+        "KUBESHIM_REMOTE_ENV": "from-remoteEnv",
+        "KUBESHIM_REMOTE_FROM_CONTAINER": "${containerEnv:KUBESHIM_CONTAINER_ENV}"
+      },
+      "remote_user": "vscode",
+      "ssh_auth_sock": "/fleet-mounts/control/ssh-agent.sock",
+      "workspace_folder": "/workspaces/hooks"
+    },
+    "inspect.json": {
+      "cmd": [
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "containerId": "",
+      "created": "0001-01-01T00:00:00Z",
+      "entrypoint": [
+        "/bin/sh"
+      ],
+      "env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "KUBESHIM_CONTAINER_ENV=from-containerEnv with spaces"
+      ],
+      "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+      "imageId": "sha256:23fa69fed758b7927c60061317d73baf7d66b9fca5c344e80bce3a940b229af0",
+      "labels": {
+        "dev.containers.id": "base-debian",
+        "dev.containers.release": "v0.4.19",
+        "dev.containers.source": "https://github.com/devcontainers/images",
+        "dev.containers.timestamp": "Thu, 16 Oct 2025 10:40:40 GMT",
+        "dev.containers.variant": "bookworm",
+        "devcontainer.config_file": "/home/dev/src/hooks/.devcontainer/devcontainer.json",
+        "devcontainer.local_folder": "/home/dev/src/hooks",
+        "devcontainer.metadata": "[{\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"},{\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}},{\"remoteUser\":\"vscode\"},{\"onCreateCommand\":\"echo onCreate >> \\\"${containerWorkspaceFolder}/.hooks.log\\\"\",\"updateContentCommand\":\"echo updateContent >> \\\"${containerWorkspaceFolder}/.hooks.log\\\"\",\"postCreateCommand\":\"echo postCreate >> \\\"${containerWorkspaceFolder}/.hooks.log\\\" && { id -un; pwd; echo \\\"$KUBESHIM_CONTAINER_ENV\\\"; echo \\\"$KUBESHIM_REMOTE_ENV\\\"; echo \\\"$KUBESHIM_REMOTE_FROM_CONTAINER\\\"; } > \\\"${containerWorkspaceFolder}/.hooks.env\\\"\",\"postStartCommand\":\"echo postStart >> \\\"${containerWorkspaceFolder}/.hooks.log\\\"\",\"postAttachCommand\":\"echo postAttach >> \\\"${containerWorkspaceFolder}/.hooks.log\\\"\",\"containerEnv\":{\"KUBESHIM_CONTAINER_ENV\":\"from-containerEnv with spaces\"},\"remoteUser\":\"vscode\",\"remoteEnv\":{\"KUBESHIM_REMOTE_ENV\":\"from-remoteEnv\",\"KUBESHIM_REMOTE_FROM_CONTAINER\":\"${containerEnv:KUBESHIM_CONTAINER_ENV}\"}}]",
+        "version": "2.0.2"
+      },
+      "startedAt": "0001-01-01T00:00:00Z",
+      "user": "root"
+    }
+  },
+  "env": {
+    "KUBESHIM_CONTAINER_ENV": "from-containerEnv with spaces"
+  }
+}
