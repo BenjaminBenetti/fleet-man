@@ -360,9 +360,9 @@ func daemonLogStreamCmd(level daemonLogLevel) tea.Cmd {
 // pre-creates the StatusCreating record (no client-side state write — the #63
 // fix) and provisions in a server-owned goroutine. The cmd returns once the job
 // has started; pollCreating + reload track it to running.
-func createInstanceCmd(fleetName, instanceName, remoteURL, branch, color string, backendType fleet.BackendType) tea.Cmd {
+func createInstanceCmd(fleetName, instanceName, remoteURL, branch, color string, target fleet.DeployTarget) tea.Cmd {
 	return func() tea.Msg {
-		if err := createInstanceRemote(fleetName, instanceName, remoteURL, branch, backendType); err != nil {
+		if err := createInstanceRemote(fleetName, instanceName, remoteURL, branch, target); err != nil {
 			return instanceCreateErrMsg{fleetName, instanceName, err}
 		}
 		// CreateInstance doesn't carry the UI color; once the record exists

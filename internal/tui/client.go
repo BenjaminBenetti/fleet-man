@@ -136,22 +136,43 @@ func awaitJobDone(open func(context.Context, fleetgrpc.FleetServiceClient) (jobS
 }
 
 // createInstanceRemote dispatches a CreateInstance job and returns once it has
-// started (record pre-created server-side).
-var createInstanceRemote = func(fleetName, instanceName, remote, branch string, backendType fleet.BackendType) error {
+// started (record pre-created server-side). The picked target becomes the
+// daemon's remembered default (remember_default), which is what the next
+// unspecified create anywhere — fleet up, MCP, this dialog — starts from.
+var createInstanceRemote = func(fleetName, instanceName, remote, branch string, target fleet.DeployTarget) error {
 	return awaitJobStart(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) (jobStream, error) {
-		req := &fleetgrpc.CreateInstanceRequest{
-			Fleet:    fleetName,
-			Instance: instanceName,
-			Backend:  protoconv.BackendToProto(backendType),
-		}
-		if remote != "" {
-			req.Remote = &remote
-		}
-		if branch != "" {
-			req.Branch = &branch
-		}
-		return svc.CreateInstance(ctx, req)
+		return svc.CreateInstance(ctx, newCreateInstanceRequest(fleetName, instanceName, remote, branch, target))
 	})
+}
+
+// newCreateInstanceRequest is the New instance dialog's create request.
+func newCreateInstanceRequest(fleetName, instanceName, remote, branch string, target fleet.DeployTarget) *fleetgrpc.CreateInstanceRequest {
+	req := &fleetgrpc.CreateInstanceRequest{
+		Fleet:           fleetName,
+		Instance:        instanceName,
+		Backend:         protoconv.BackendToProto(target.Backend),
+		RememberDefault: true,
+	}
+	if remote != "" {
+		req.Remote = &remote
+	}
+	if branch != "" {
+		req.Branch = &branch
+	}
+	return req
+}
+
+// listDeployTargetsRemote asks the daemon where a create in fleetName can go,
+// judged on the daemon's host, plus its remembered default and its build
+// tools. Package var so tests can stub it.
+var listDeployTargetsRemote = func(fleetName string) (*fleetgrpc.ListDeployTargetsReply, error) {
+	var reply *fleetgrpc.ListDeployTargetsReply
+	err := mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
+		var err error
+		reply, err = svc.ListDeployTargets(ctx, &fleetgrpc.ListDeployTargetsRequest{Fleet: fleetName})
+		return err
+	})
+	return reply, err
 }
 
 // cloneInstanceRemote dispatches a CloneInstance job (the server copies the
@@ -398,7 +419,8 @@ var setLastSeenVersionRemote = func(version string) error {
 }
 
 // setConfigRemote replaces the whole config (the settings page sends the full
-// edited Config).
+// edited Config). The daemon keeps its remembered default deploy target
+// whatever DefaultBackend this copy carries.
 var setConfigRemote = func(c *configutil.Config) error {
 	return mutate(func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
 		_, err := svc.SetConfig(ctx, &fleetgrpc.SetConfigRequest{Config: protoconv.ConfigToProto(c)})

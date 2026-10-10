@@ -8,6 +8,8 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 func newAddFleetModel(fleets map[string]*fleet.Fleet) (*fleetPage, *model) {
@@ -227,21 +229,24 @@ func (e errString) Error() string { return string(e) }
 // A template fleet's New instance dialog has no branch to offer and only the
 // devcontainer backend can consume a copied directory.
 func TestAddInstanceTemplateFleetSkipsBranchAndLocksBackend(t *testing.T) {
+	stubCheckTools(t, allToolsFound())
 	fp := newFleetPage()
 	m := &model{
-		st:         &state.State{Fleets: map[string]*fleet.Fleet{"scratch": {Name: "scratch", Remote: "file:///home/me/scratch"}}},
-		fleetPage:  fp,
-		toolStatus: allToolsFound(),
-		creating:   map[string]bool{},
+		st:        &state.State{Fleets: map[string]*fleet.Fleet{"scratch": {Name: "scratch", Remote: "file:///home/me/scratch"}}},
+		fleetPage: fp,
+		creating:  map[string]bool{},
 	}
+	devcontainer := fleet.DeployTarget{Backend: fleet.BackendDevcontainer}
 	fp.mode = viewAddInstance
 	fp.dlg.fleet = "scratch"
 	fp.addInst.template = true
-	fp.addInst.backend = fleet.BackendDevcontainer
+	fp.addInst.target = devcontainer
+	fp.addInst.targets = []fleet.DeployTarget{devcontainer}
 	fp.addInst.color = instanceColorWhite
 
-	if got := fp.availableBackendTypes(m); len(got) != 1 || got[0] != fleet.BackendDevcontainer {
-		t.Fatalf("availableBackendTypes = %v, want [devcontainer]", got)
+	// A daemon too old to list targets is judged here, narrowed the same way.
+	if got := legacyDeployTargets(m, true).available(); len(got) != 1 || got[0] != devcontainer {
+		t.Fatalf("legacy template targets = %v, want [devcontainer]", got)
 	}
 	if fp.addInstanceRowEnabled(addInstanceRowBranch) {
 		t.Fatal("branch row must be disabled for a template fleet")
@@ -259,7 +264,7 @@ func TestAddInstanceTemplateFleetSkipsBranchAndLocksBackend(t *testing.T) {
 	// A stale branch value must not leak into the create request.
 	var gotBranch, gotRemote string
 	orig := createInstanceRemote
-	createInstanceRemote = func(fleetName, instanceName, remote, branch string, backendType fleet.BackendType) error {
+	createInstanceRemote = func(fleetName, instanceName, remote, branch string, _ fleet.DeployTarget) error {
 		gotRemote, gotBranch = remote, branch
 		return nil
 	}
@@ -281,12 +286,13 @@ func TestAddInstanceTemplateFleetSkipsBranchAndLocksBackend(t *testing.T) {
 
 // Pressing 'a' on a template fleet header must arm the template flag before
 // the backend list is computed, and open the dialog locked to devcontainer
-// even when every backend CLI is installed.
+// even when every backend CLI is installed. This is the path against a daemon
+// that predates ListDeployTargets; TestAddInstanceKeyUsesTheDaemonsTargets
+// covers a current one.
 func TestAddInstanceKeySetsTemplateFlagFromFleetRemote(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	origCheck := checkTools
-	checkTools = allToolsFound
-	t.Cleanup(func() { checkTools = origCheck })
+	stubCheckTools(t, allToolsFound())
+	stubListDeployTargets(t, nil, grpcstatus.Error(grpccodes.Unimplemented, "unknown method"))
 
 	fp := newFleetPage()
 	fp.rows = []row{{kind: rowFleetHeader, fleetName: "scratch"}}
@@ -302,8 +308,8 @@ func TestAddInstanceKeySetsTemplateFlagFromFleetRemote(t *testing.T) {
 	if fp.mode != viewAddInstance {
 		t.Fatalf("mode = %v, want viewAddInstance (message: %q)", fp.mode, m.message)
 	}
-	if fp.addInst.backend != fleet.BackendDevcontainer {
-		t.Fatalf("backend = %v, want devcontainer for a template fleet even with coder as the configured default", fp.addInst.backend)
+	if fp.addInst.target.Backend != fleet.BackendDevcontainer {
+		t.Fatalf("target = %v, want devcontainer for a template fleet even with coder as the configured default", fp.addInst.target)
 	}
 }
 

@@ -141,13 +141,13 @@ func (fleetPage *fleetPage) updateAutomationAgent(m *model, msg tea.Msg) tea.Cmd
 		return fleetPage.agentRowEnter(m)
 	case "left", "h":
 		if st.row == agentRowBackend {
-			st.backend = nextBackendType(st.backend, -1, allBackendTypes)
+			st.backend = cycleOption(st.backend, -1, allBackendTypes)
 			fleetPage.autosaveAgent(m)
 		}
 		return nil
 	case "right", "l":
 		if st.row == agentRowBackend {
-			st.backend = nextBackendType(st.backend, 1, allBackendTypes)
+			st.backend = cycleOption(st.backend, 1, allBackendTypes)
 			fleetPage.autosaveAgent(m)
 		}
 		return nil
@@ -178,7 +178,7 @@ func (fleetPage *fleetPage) agentRowEnter(m *model) tea.Cmd {
 		// The system prompt is often many lines — edit it in $EDITOR, not inline.
 		return editorCmd(editorTargetAgentSysPrompt, "sysprompt", st.systemPrompt)
 	case agentRowBackend:
-		st.backend = nextBackendType(st.backend, 1, allBackendTypes)
+		st.backend = cycleOption(st.backend, 1, allBackendTypes)
 		fleetPage.autosaveAgent(m)
 	case agentRowSave:
 		return fleetPage.saveAutomationAgent(m)

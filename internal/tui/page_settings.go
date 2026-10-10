@@ -12,6 +12,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/agent"
 	"github.com/BenjaminBenetti/fleet-man/internal/configutil"
+	"github.com/BenjaminBenetti/fleet-man/internal/deps"
 	"github.com/BenjaminBenetti/fleet-man/internal/doctor"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/theme"
@@ -74,7 +75,8 @@ const (
 	settingsItemDaemonRestart = 900 // "Restart daemon" action row (below the tool-status band)
 	settingsItemDaemonLogs    = 901 // "Logs" level selector + fleet.log stream launcher
 
-	settingsItemToolStatusBase = 1000 // tool status rows start here
+	settingsItemToolStatusBase = 1000 // tool status rows (this machine) start here
+	settingsItemDaemonToolBase = 1500 // tool status rows for the daemon host start here
 	settingsItemDoctor         = 2000 // doctor action row
 	settingsItemKeybindings    = 2001 // keybindings dialog row
 )
@@ -95,10 +97,6 @@ func isCopyRow(item int) bool {
 	}
 	return false
 }
-
-// toolStatusCount is the number of rows rendered in the Tool Status
-// section. Must match the length of deps.CheckTools().
-const toolStatusCount = 5
 
 // dotfilesSetupPrompt is the instruction sent to the coding agent for
 // guided dotfiles setup.
@@ -242,7 +240,9 @@ func (settingsPage *settingsPage) Init(m *model) tea.Cmd {
 	// Refresh the armada registry and start the status-sweep tick that keeps
 	// the per-remote connection indicators live while the page is open. The
 	// armed-flag guard stops a re-entered page from stacking a second loop.
-	cmds := []tea.Cmd{fetchArmadaCmd()}
+	// The fleetd rows of Tool Status are the daemon host's tools, asked fresh
+	// each visit like this machine's.
+	cmds := []tea.Cmd{fetchArmadaCmd(), loadDaemonToolsCmd(m.watchGen)}
 	if m.config != nil && m.config.OutputSettings.Enabled {
 		syncOutputFromConfig(m.config)
 		cmds = append(cmds, relistOutputTargetsCmd())
@@ -412,11 +412,16 @@ var settingsSections = []settingsSection{
 		},
 	},
 	{
+		// This machine's tools, then the daemon host's (whose rows appear once
+		// its answer arrives). The row count follows both lists.
 		Title: "Tool Status",
-		Items: func(_ *model) []int {
-			items := make([]int, toolStatusCount)
-			for i := range items {
-				items[i] = settingsItemToolStatusBase + i
+		Items: func(m *model) []int {
+			items := make([]int, 0, len(m.toolStatus)+daemonToolCount(m))
+			for i := range m.toolStatus {
+				items = append(items, settingsItemToolStatusBase+i)
+			}
+			for i := range daemonToolCount(m) {
+				items = append(items, settingsItemDaemonToolBase+i)
 			}
 			return items
 		},
@@ -1315,6 +1320,17 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				}
 				return execProcess(cmd, func(err error) tea.Msg { return execDoneMsg{err} })
 			}
+			if item >= settingsItemDaemonToolBase && item < settingsItemDoctor {
+				// The install page opens here, where the user reads it, even
+				// for a tool missing on the daemon host.
+				idx := item - settingsItemDaemonToolBase
+				if idx < daemonToolCount(m) {
+					url := m.daemonTools.tools[idx].InstallURL
+					openURL(url)
+					m.message = fmt.Sprintf("Opening %s", url)
+				}
+				return nil
+			}
 			if item >= settingsItemToolStatusBase {
 				idx := item - settingsItemToolStatusBase
 				if idx < len(m.toolStatus) {
@@ -1965,15 +1981,25 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				if i > 0 {
 					listContent.WriteString("\n")
 				}
-				var badge string
-				if tool.Found {
-					badge = statusRunningStyle.Render("installed")
-				} else {
-					badge = statusCreatingStyle.Render("not found")
-				}
-				value := badge + "  " + dimStyle.Render(tool.Description)
 				itemID := settingsItemToolStatusBase + i
-				recordRow(itemID, settingsPage.renderSettingsRow(m, currentItem == itemID, tool.Name, value))
+				recordRow(itemID, settingsPage.renderSettingsRow(m, currentItem == itemID, tool.Name, toolStatusValue(tool, "this machine")))
+			}
+			if len(m.toolStatus) > 0 {
+				listContent.WriteString("\n")
+			}
+			switch {
+			case m.daemonTools == nil:
+				listContent.WriteString("  " + dimStyle.Render("checking the tools where fleetd runs…"))
+			case len(m.daemonTools.tools) == 0:
+				listContent.WriteString("  " + dimStyle.Render("fleetd tools: "+m.daemonTools.err))
+			default:
+				for i, tool := range m.daemonTools.tools {
+					if i > 0 {
+						listContent.WriteString("\n")
+					}
+					itemID := settingsItemDaemonToolBase + i
+					recordRow(itemID, settingsPage.renderSettingsRow(m, currentItem == itemID, tool.Name, toolStatusValue(tool, m.daemonTools.where())))
+				}
 			}
 
 		case "Fleet Daemon":
@@ -2198,12 +2224,31 @@ func (settingsPage *settingsPage) renderSettingsRow(m *model, active bool, label
 	return fmt.Sprintf("%s%s %s", cursor, formattedLabel, value)
 }
 
+// daemonToolCount is the number of fleetd rows in Tool Status.
+func daemonToolCount(m *model) int {
+	if m.daemonTools == nil {
+		return 0
+	}
+	return len(m.daemonTools.tools)
+}
+
+// toolStatusValue renders a Tool Status row's value: whether the tool is
+// installed, where (this machine, or the daemon host), and what it is for.
+func toolStatusValue(tool deps.ToolStatus, where string) string {
+	badge := statusCreatingStyle.Render("not found")
+	if tool.Found {
+		badge = statusRunningStyle.Render("installed")
+	}
+	return badge + "  " + dimStyle.Render(where+" · "+tool.Description)
+}
+
 // ===========================================
 // URL Helper
 // ===========================================
 
-// openURL opens the given URL in the user's default browser.
-func openURL(url string) {
+// openURL opens the given URL in the user's default browser. A package var so
+// tests can stub it.
+var openURL = func(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":

@@ -1762,7 +1762,7 @@ func TestAddInstanceDialogVimKeysRespectActiveField(t *testing.T) {
 	fp := newFleetPage()
 	fp.mode = viewAddInstance
 	fp.dlg.fleet = "alpha"
-	fp.addInst.backend = fleet.BackendDevcontainer
+	fp.addInst.target = fleet.DeployTarget{Backend: fleet.BackendDevcontainer}
 	fp.addInst.color = instanceColorWhite
 	fp.dlg.row = addInstanceRowName
 	fp.dlg.fieldActive = true
