@@ -29,10 +29,20 @@ var errNothingInterrupted = errors.New("no interrupted records")
 // failInterruptedJobs marks every interrupted record FAILED. Serve calls it
 // before it accepts RPCs or starts the scheduler, so no job of this daemon can
 // exist yet; the live-job check keeps it correct if it ever runs later.
+//
+// Kubernetes records go by their job journals (kube_reconcile.go): an
+// interrupted rebuild is claimed for an undo that keeps it REBUILDING until
+// it is done, and the others fail with kubernetes:interrupted, naming the
+// job and step the journal recorded.
 func (s *service) failInterruptedJobs() {
-	var failed []string
+	s.kubeRecovery.load()
+	var failed []interruptedRecord
 	err := state.Update(func(st *state.State) error {
-		failed = markInterrupted(st, s.jobs.hasProvisioningJob)
+		s.kubeRecovery.claim(st)
+		live := func(fleetName, instanceName string) bool {
+			return s.jobs.hasProvisioningJob(fleetName, instanceName) || s.kubeRecovery.claims(fleetName, instanceName)
+		}
+		failed = markInterrupted(st, live, s.kubeRecovery.interruptedError)
 		if len(failed) == 0 {
 			return errNothingInterrupted
 		}
@@ -42,19 +52,26 @@ func (s *service) failInterruptedJobs() {
 		flog.Warn("reconcile interrupted jobs failed", "err", err)
 		return
 	}
-	for _, key := range failed {
-		flog.Warn("instance job interrupted by daemon restart; marked failed", "instance", key)
-		if fleetName, instanceName, ok := strings.Cut(key, "/"); ok {
-			appendCreationLogError(fleetName, instanceName, interruptedByRestart)
+	for _, f := range failed {
+		flog.Warn("instance job interrupted by daemon restart; marked failed", "instance", f.key)
+		if fleetName, instanceName, ok := strings.Cut(f.key, "/"); ok {
+			appendCreationLogError(fleetName, instanceName, f.err)
 		}
 	}
+	s.kubeRecovery.settle()
+}
+
+// interruptedRecord is a record failed at start and the error it got.
+type interruptedRecord struct {
+	key string // "fleet/instance"
+	err string
 }
 
 // markInterrupted flips each CREATING, CLONING or REBUILDING record for which
-// live reports no provisioning job to FAILED, returning the "fleet/instance"
-// keys it changed.
-func markInterrupted(st *state.State, live func(fleetName, instanceName string) bool) []string {
-	var failed []string
+// live reports no provisioning job to FAILED, with the error why gives it
+// (nil: interruptedByRestart), returning the records it changed.
+func markInterrupted(st *state.State, live func(fleetName, instanceName string) bool, why func(fleetName string, inst *fleet.Instance) string) []interruptedRecord {
+	var failed []interruptedRecord
 	for fleetName, f := range st.Fleets {
 		if f == nil {
 			continue
@@ -68,9 +85,13 @@ func markInterrupted(st *state.State, live func(fleetName, instanceName string) 
 			if live(fleetName, inst.Name) {
 				continue
 			}
+			msg := interruptedByRestart
+			if why != nil {
+				msg = why(fleetName, inst)
+			}
 			inst.Status = fleet.StatusFailed
-			inst.Error = interruptedByRestart
-			failed = append(failed, fleetName+"/"+inst.Name)
+			inst.Error = msg
+			failed = append(failed, interruptedRecord{key: fleetName + "/" + inst.Name, err: msg})
 		}
 	}
 	return failed

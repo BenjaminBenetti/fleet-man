@@ -716,7 +716,7 @@ func printPrune(out io.Writer, reply *fleetgrpc.PruneKubeClusterReply, apply boo
 		if o.GetCreatedAt() != nil {
 			age = shortAge(now.Sub(o.GetCreatedAt().AsTime()))
 		}
-		if o.GetAction() == "would delete" {
+		if o.GetAction() == fleetgrpc.KubePruneWouldDelete {
 			marked++
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", o.GetKind(), o.GetName(), age, mounted, o.GetAction())

@@ -40,11 +40,11 @@ const (
 
 // Prune actions, as PruneKubeClusterReply lists them.
 const (
-	pruneWouldDelete = "would delete"
-	pruneDeleted     = "deleted"
-	pruneYoung       = "skip (younger than 1h)"
-	pruneMounted     = "skip (mounted)"
-	pruneFleetExists = "kept: fleet exists"
+	pruneWouldDelete = fleetgrpc.KubePruneWouldDelete
+	pruneDeleted     = fleetgrpc.KubePruneDeleted
+	pruneYoung       = fleetgrpc.KubePruneYoung
+	pruneMounted     = fleetgrpc.KubePruneMounted
+	pruneFleetExists = fleetgrpc.KubePruneFleetExists
 )
 
 // pruneObject is one labelled object and what a prune makes of it.

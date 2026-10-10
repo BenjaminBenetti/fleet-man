@@ -31,9 +31,16 @@ func interruptedFixture() *state.State {
 // status, and a record a job is still working on, is left alone.
 func TestMarkInterrupted(t *testing.T) {
 	st := interruptedFixture()
-	failed := markInterrupted(st, func(fleetName, instanceName string) bool {
+	records := markInterrupted(st, func(fleetName, instanceName string) bool {
 		return fleetName == "alpha" && instanceName == "live"
-	})
+	}, nil)
+	var failed []string
+	for _, r := range records {
+		if r.err != interruptedByRestart {
+			t.Errorf("%s failed with %q, want %q", r.key, r.err, interruptedByRestart)
+		}
+		failed = append(failed, r.key)
+	}
 	sort.Strings(failed)
 	want := []string{"alpha/cloning", "alpha/creating", "alpha/rebuilding"}
 	if len(failed) != len(want) {

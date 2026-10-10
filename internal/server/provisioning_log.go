@@ -90,6 +90,28 @@ func openProvisioningLog(j *job, fleetName, instanceName, what string) *provisio
 	return l
 }
 
+// continueProvisioningLog is openProvisioningLog for a job that carries on
+// from an earlier one's log (the rollback of a rebuild a daemon restart
+// interrupted): its lines are appended to the instance's creation log.
+func continueProvisioningLog(j *job, fleetName, instanceName, what string) *provisioningLog {
+	l := &provisioningLog{job: j, path: state.InstanceCreationLogPath(fleetName, instanceName)}
+	err := os.MkdirAll(filepath.Dir(l.path), 0o700)
+	var f *os.File
+	if err == nil {
+		f, err = os.OpenFile(l.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	}
+	if err != nil {
+		flog.Warn("creation log unavailable", "fleet", fleetName, "instance", instanceName, "path", l.path, "err", err)
+	} else {
+		l.file = f
+	}
+	l.mu.Lock()
+	l.lineLocked(fleetgrpc.LogLevel_LOG_LEVEL_INFO, "",
+		fmt.Sprintf("==> fleet %s: %s/%s at %s", what, fleetName, instanceName, time.Now().Format(time.RFC3339)), "")
+	l.mu.Unlock()
+	return l
+}
+
 // createLogFile creates path afresh, 0600, in a 0700 directory when it has
 // to make one: a temp file in the same directory renamed over path.
 func createLogFile(path string) (*os.File, error) {

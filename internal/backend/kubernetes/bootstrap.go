@@ -273,6 +273,9 @@ func (p *Pool) verify(ctx context.Context, c *Cluster, t PodTarget) (*corev1.Pod
 func (s *podSlot) boot(c *Cluster, t PodTarget, f *bootFlight) {
 	sess, err := s.bootstrap(c, t, f.ticket)
 	p := s.pool
+	if err != nil && errors.Is(err, context.DeadlineExceeded) && p.ctx.Err() == nil {
+		err = &DeadlineError{Kind: CodeTimeout, Wait: "the pod agent to connect", After: p.opts.HandshakeTimeout, Detail: err.Error(), Env: EnvAgentTimeout, Err: err}
+	}
 	var tampered *TamperedError
 	s.mu.Lock()
 	var replaced *AgentSession
