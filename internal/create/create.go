@@ -62,6 +62,7 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 
 	wsDir := filepath.Join(state.WorkspacesDir(), fleetName, instanceName, fleetName)
 
+	backend.ReportStep(ctx, fleet.StepBuildBackend, string(backendType))
 	instanceBackend := createBackend(createRecord(fleetName, instanceName, wsDir, branch, backendType), fleetName, remoteURL, branch, verbose)
 
 	if err := checkCancelled(ctx); err != nil {
@@ -75,6 +76,7 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 	case fleet.IsTemplateRemote(remoteURL):
 		// Template fleet: copy the local template dir into the workspace
 		// (the cp stands in for git clone), then provision.
+		backend.ReportStep(ctx, fleet.StepCopyWorkspace, "template "+remoteURL)
 		if err := copyTemplateTree(ctx, remoteURL, wsDir); err != nil {
 			err = cancelledOr(ctx, err)
 			setFailed(fleetName, instanceName, err)
@@ -92,7 +94,8 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 			cloneArgs = append(cloneArgs, "--branch", branch)
 		}
 		cloneArgs = append(cloneArgs, "--", remoteURL, wsDir)
-		out, err := gitutil.Clone(ctx, remoteURL, cloneArgs, os.Stderr)
+		backend.ReportStep(ctx, fleet.StepGitClone, branchDetail(branch))
+		out, err := gitutil.Clone(ctx, remoteURL, cloneArgs, stepOutput(ctx))
 		if err != nil {
 			// A cancelled clone was killed: report why, not "signal: killed".
 			if cerr := checkCancelled(ctx); cerr != nil {
@@ -109,7 +112,8 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 		}
 	}
 
-	resolvedMounts, err := resolveProvisionMounts(instanceBackend, fleetName, instanceName)
+	backend.ReportStep(ctx, fleet.StepResolveMounts, "")
+	resolvedMounts, err := resolveProvisionMounts(ctx, instanceBackend, fleetName, instanceName)
 	if err != nil {
 		setFailed(fleetName, instanceName, err)
 		return err
@@ -119,6 +123,7 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 		setFailed(fleetName, instanceName, err)
 		return err
 	}
+	backend.ReportStep(ctx, fleet.StepBackendUp, string(backendType))
 	// UpContext hands the job's ctx (cancellation, JobLog, Hooks) to a backend
 	// whose provisioning is a cancellable multi-step sequence, and falls back to
 	// the plain Up for the rest.
@@ -139,7 +144,7 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 	// scripts, Claude hooks, shared caches). Shared with RunRebuild so a
 	// rebuilt container ends up equivalently provisioned. Every step is
 	// best-effort — the instance is marked running even if one fails.
-	finishProvision(instanceBackend, fleetName, instanceName, wsDir, result.ContainerID, resolvedMounts.Symlinks)
+	finishProvision(ctx, instanceBackend, fleetName, instanceName, wsDir, result.ContainerID, resolvedMounts.Symlinks)
 
 	// Template worktree/submodule check LAST, and prepended: every provisioning
 	// step above WriteWarns (replacing the banner) on failure, and the TUI shows
@@ -147,14 +152,24 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 	if fleet.IsTemplateRemote(remoteURL) {
 		if warn := templateGitFileWarning(wsDir); warn != "" {
 			state.PrependWarn(fleetName, instanceName, warn)
+			backend.ReportWarning(ctx, warn)
 		}
 	}
 
 	// Success: update state (instance is running even if dotfiles failed),
 	// unless the run was abandoned during the provisioning steps above.
+	backend.ReportStep(ctx, fleet.StepMarkRunning, "")
 	if err := commitRunning(ctx, instanceBackend, fleetName, instanceName, result.ContainerID); err != nil {
 		return err
 	}
 	flog.Info("instance created", "fleet", fleetName, "instance", instanceName, "backend", backendType, "container", result.ContainerID, "ms", flog.MillisSince(start))
 	return nil
+}
+
+// branchDetail names the branch a clone checks out, for its step line.
+func branchDetail(branch string) string {
+	if branch == "" {
+		return ""
+	}
+	return "branch " + branch
 }

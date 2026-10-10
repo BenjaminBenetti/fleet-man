@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -21,7 +23,7 @@ import (
 //  3. Resolve the same mounts a fresh Up would (control socket, shared
 //     buildkit, agent-state mounts) — they must be re-applied to the new
 //     container.
-//  4. Hand off to backend.Rebuild, which tears down the old container and
+//  4. Hand off to the backend's Rebuild, which tears down the old container and
 //     provisions a fresh one from the (possibly edited) devcontainer config,
 //     PRESERVING the workspace (the git checkout and uncommitted edits survive).
 //  5. Re-run the full post-Up provisioning so the rebuilt container is
@@ -68,7 +70,8 @@ func RunRebuild(ctx context.Context, fleetName, instanceName string, verbose boo
 		return err
 	}
 
-	resolvedMounts, err := resolveProvisionMounts(instanceBackend, fleetName, instanceName)
+	backend.ReportStep(ctx, fleet.StepResolveMounts, "")
+	resolvedMounts, err := resolveProvisionMounts(ctx, instanceBackend, fleetName, instanceName)
 	if err != nil {
 		setFailed(fleetName, instanceName, err)
 		return err
@@ -78,23 +81,29 @@ func RunRebuild(ctx context.Context, fleetName, instanceName string, verbose boo
 		setFailed(fleetName, instanceName, err)
 		return err
 	}
-	result, err := instanceBackend.Rebuild(inst.ContainerID, inst.WorkspaceDir, resolvedMounts.Mounts)
+	// RebuildContext hands the job's ctx (cancellation, JobLog) to a backend
+	// that takes one, and falls back to the plain Rebuild for the rest.
+	backend.ReportStep(ctx, fleet.StepBackendUp, "rebuild "+string(inst.Backend))
+	result, err := backend.RebuildContext(ctx, instanceBackend, inst.ContainerID, backend.UpRequest{WorkspaceDir: inst.WorkspaceDir, Mounts: resolvedMounts.Mounts})
 	if err != nil {
+		// A ctx-aware backend stopped by the cancellation reports why.
+		err = cancelledOr(ctx, err)
 		setFailed(fleetName, instanceName, err)
 		return err
 	}
-	// Rebuild takes no context: stop a rebuild the run was cancelled during.
-	// Only a destroy's cancellation tears the container down (abandonRun): on
-	// a shutdown it is the instance's only container (for codespaces, the
-	// codespace itself), so the failed record keeps it.
+	// A plain Rebuild takes no context: stop a rebuild the run was cancelled
+	// during. Only a destroy's cancellation tears the container down
+	// (abandonRun): on a shutdown it is the instance's only container (for
+	// codespaces, the codespace itself), so the failed record keeps it.
 	if err := stopIfCancelled(ctx, instanceBackend, fleetName, instanceName, result.ContainerID); err != nil {
 		return err
 	}
 
 	// Re-run the post-Up provisioning so the fresh container ends up equivalent
 	// to a newly created one. All best-effort (warnings, never fatal).
-	finishProvision(instanceBackend, fleetName, instanceName, inst.WorkspaceDir, result.ContainerID, resolvedMounts.Symlinks)
+	finishProvision(ctx, instanceBackend, fleetName, instanceName, inst.WorkspaceDir, result.ContainerID, resolvedMounts.Symlinks)
 
+	backend.ReportStep(ctx, fleet.StepMarkRunning, "")
 	if err := commitRunning(ctx, instanceBackend, fleetName, instanceName, result.ContainerID); err != nil {
 		return err
 	}
