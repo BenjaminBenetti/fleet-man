@@ -302,7 +302,7 @@ func (m *Manager) Run(ctx context.Context) {
 			m.mu.Lock()
 			m.attemptCancel = nil
 			m.mu.Unlock()
-			m.setRegistry(d.gatewayURL, "", "the gateway tunnel is off", false)
+			m.setRegistry(d.gatewayURL, "", whyRegistryTunnelOff, false)
 			m.publish(statusDisabled())
 			if !m.wait(ctx) {
 				return

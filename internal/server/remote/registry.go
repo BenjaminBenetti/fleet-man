@@ -100,10 +100,11 @@ func (m *Manager) setRegistry(gatewayURL, prefix, why string, live bool) {
 
 // Reasons Registry gives for having no prefix.
 const (
-	whyRegistryNotWired = "image delivery through the gateway is not available in this daemon"
-	whyRegistryOff      = "Enable Image Registry is off"
-	whyRegistryOffered  = "the gateway does not offer image delivery (it predates it, runs without --session-key, or its --public-url is not https at the host root)"
-	whyRegistryPending  = "the gateway tunnel is connecting"
+	whyRegistryNotWired  = "image delivery through the gateway is not available in this daemon"
+	whyRegistryOff       = "Enable Image Registry is off"
+	whyRegistryOffered   = "the gateway does not offer image delivery (it predates it, runs without --session-key, or its --public-url is not https at the host root)"
+	whyRegistryPending   = "the gateway tunnel is connecting"
+	whyRegistryTunnelOff = "the gateway tunnel is off"
 )
 
 // registryConnecting updates the registry state as an attempt starts:
