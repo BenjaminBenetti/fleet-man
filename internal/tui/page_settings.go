@@ -72,6 +72,13 @@ const (
 	settingsItemArmadaAdd  = 800
 	settingsItemArmadaBase = 100000
 
+	// Kubernetes: the "+ Kubernetes Cluster" button has a fixed id; connected
+	// clusters get base+i, in a band of 50000 up to (not including) the armada
+	// base. Like the armada rows they are matched (isKubeClusterItem) before
+	// the `>= settingsItemToolStatusBase` catch-all.
+	settingsItemKubeAdd  = 850
+	settingsItemKubeBase = 50000
+
 	settingsItemDaemonRestart = 900 // "Restart daemon" action row (below the tool-status band)
 	settingsItemDaemonLogs    = 901 // "Logs" level selector + fleet.log stream launcher
 
@@ -84,6 +91,11 @@ const (
 // isArmadaRemoteItem reports whether an item ID is one of the registered-remote
 // rows (base+i). Open-ended: nothing else lives at or above the armada base.
 func isArmadaRemoteItem(item int) bool { return item >= settingsItemArmadaBase }
+
+// isKubeClusterItem reports whether an item ID is a connected cluster's row.
+func isKubeClusterItem(item int) bool {
+	return item >= settingsItemKubeBase && item < settingsItemArmadaBase
+}
 
 // isCopyRow reports whether an item ID is a Fleet MCP copy action — a row whose
 // enter copies to the clipboard rather than editing or cycling a value. Used to
@@ -154,6 +166,13 @@ type settingsPage struct {
 	armadaDeleteFocused bool   // sub-cursor on the [ delete ] button of the current remote row
 	armadaDeleteConfirm bool   // "[ delete? ]" armed (first enter on the button)
 	armadaBusy          bool   // an add/delete persistence RPC is in flight
+
+	// Kubernetes section state: the sub-cursor of a cluster row (l/→ steps
+	// onto [ test ], then [ delete ]), and the open context picker, cluster
+	// editor or disconnect dialog, which takes over the page while open.
+	kubeTestFocused   bool
+	kubeDeleteFocused bool
+	kubeDialog        kubeDialog
 }
 
 // armadaAddStage is the "+ Remote Fleet" flow's state machine.
@@ -247,7 +266,7 @@ func (settingsPage *settingsPage) Init(m *model) tea.Cmd {
 	// armed-flag guard stops a re-entered page from stacking a second loop.
 	// The fleetd rows of Tool Status are the daemon host's tools, asked fresh
 	// each visit like this machine's.
-	cmds := []tea.Cmd{fetchArmadaCmd(), loadDaemonToolsCmd(m.watchGen)}
+	cmds := []tea.Cmd{fetchArmadaCmd(), loadDaemonToolsCmd(m.watchGen), loadKubePluginsCmd(m.watchGen, m.kubeStatuses())}
 	if m.config != nil && m.config.OutputSettings.Enabled {
 		syncOutputFromConfig(m.config)
 		cmds = append(cmds, relistOutputTargetsCmd())
@@ -275,6 +294,11 @@ func (settingsPage *settingsPage) Init(m *model) tea.Cmd {
 
 // Update dispatches settings page messages to the appropriate handler.
 func (settingsPage *settingsPage) Update(m *model, msg tea.Msg) tea.Cmd {
+	// The Kubernetes dialogs take every key while open, and their RPC answers
+	// come back here whichever mode the page is in.
+	if cmd, handled := settingsPage.updateKube(m, msg); handled {
+		return cmd
+	}
 	if settingsPage.showKeybindings {
 		return settingsPage.updateKeybindingsDialog(m, msg)
 	}
@@ -324,6 +348,20 @@ var settingsSections = []settingsSection{
 		Tool:  "gh",
 		Items: func(_ *model) []int {
 			return []int{settingsItemCodespacesMachine}
+		},
+	},
+	{
+		// One row per cluster connection the daemon holds (pushed over Watch
+		// with its health), then the add button, which opens the context
+		// picker on the daemon host's kubeconfig.
+		Title: "Kubernetes",
+		Items: func(m *model) []int {
+			clusters := m.kubeStatuses()
+			items := make([]int, 0, len(clusters)+1)
+			for i := range clusters {
+				items = append(items, settingsItemKubeBase+i)
+			}
+			return append(items, settingsItemKubeAdd)
 		},
 	},
 	{
@@ -1054,6 +1092,7 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			settingsPage.armadaAgentFocused = false
 			settingsPage.armadaDeleteFocused = false
 			settingsPage.armadaDeleteConfirm = false
+			settingsPage.resetKubeRowFocus()
 			return nil
 
 		case "down", "j":
@@ -1061,10 +1100,15 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			settingsPage.armadaAgentFocused = false
 			settingsPage.armadaDeleteFocused = false
 			settingsPage.armadaDeleteConfirm = false
+			settingsPage.resetKubeRowFocus()
 			return nil
 
 		case "left", "h":
 			item := settingsPage.settingsCursorItem(m)
+			if isKubeClusterItem(item) {
+				settingsPage.stepKubeRowFocus(-1)
+				return nil
+			}
 			if isArmadaRemoteItem(item) {
 				// Step back along the row: [ delete ] → [ agent ] → the row.
 				if settingsPage.armadaDeleteFocused {
@@ -1115,6 +1159,10 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 
 		case "right", "l":
 			item := settingsPage.settingsCursorItem(m)
+			if isKubeClusterItem(item) {
+				settingsPage.stepKubeRowFocus(1)
+				return nil
+			}
 			if isArmadaRemoteItem(item) {
 				// Step along the row: the row → [ agent ] → [ delete ]
 				// (cache-clear UX pattern for the delete button).
@@ -1167,6 +1215,12 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 			item := settingsPage.settingsCursorItem(m)
 			if item == settingsItemArmadaAdd {
 				return settingsPage.beginArmadaAdd(m)
+			}
+			if item == settingsItemKubeAdd {
+				return settingsPage.openKubePicker(m, "")
+			}
+			if isKubeClusterItem(item) {
+				return settingsPage.enterKubeClusterRow(m, item-settingsItemKubeBase)
 			}
 			if isArmadaRemoteItem(item) {
 				return settingsPage.enterArmadaRemoteRow(m, item-settingsItemArmadaBase)
@@ -1329,8 +1383,8 @@ func (settingsPage *settingsPage) updateSettingsNav(m *model, msg tea.Msg) tea.C
 				// The install page opens here, where the user reads it, even
 				// for a tool missing on the daemon host.
 				idx := item - settingsItemDaemonToolBase
-				if idx < daemonToolCount(m) {
-					url := m.daemonTools.tools[idx].InstallURL
+				if rows := daemonToolRows(m); idx < len(rows) {
+					url := rows[idx].InstallURL
 					openURL(url)
 					m.message = fmt.Sprintf("Opening %s", url)
 				}
@@ -1625,6 +1679,9 @@ func (settingsPage *settingsPage) updateSettingsEditing(m *model, msg tea.Msg) t
 
 // viewSettings renders the settings page.
 func (settingsPage *settingsPage) viewSettings(m *model) string {
+	if settingsPage.kubeDialog != nil {
+		return settingsPage.viewKubeDialog(m)
+	}
 	var b strings.Builder
 
 	b.WriteString(renderGradient(nameToBanner("Settings")))
@@ -1686,6 +1743,11 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 		}
 
 		listContent.WriteString(fleetExpandedStyle.Render(section.Title))
+		if section.Title == "Kubernetes" {
+			// Contexts and kubeconfig paths are the daemon host's, even from a
+			// remote TUI: say whose.
+			listContent.WriteString("  " + dimStyle.Render("contexts from "+strings.TrimPrefix(daemonWhere(m), "on ")))
+		}
 		listContent.WriteString("\n")
 		listContent.WriteString(dimStyle.Render(strings.Repeat("─", contentWidth)))
 		listContent.WriteString("\n\n")
@@ -1760,6 +1822,20 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 				}
 			}
 			recordRow(settingsItemCodespacesMachine, settingsPage.renderSettingsRow(m, currentItem == settingsItemCodespacesMachine, "Machine", machineValue))
+
+		case "Kubernetes":
+			for i, st := range m.kubeStatuses() {
+				item := settingsItemKubeBase + i
+				recordRow(item, settingsPage.renderKubeClusterRow(m, st, currentItem == item, contentWidth))
+				listContent.WriteString("\n")
+			}
+			addActive := currentItem == settingsItemKubeAdd
+			recordRow(settingsItemKubeAdd, settingsPage.renderSettingsRow(m, addActive, "+ Kubernetes Cluster",
+				dimStyle.Render("connect a kube context from fleetd's kubeconfig")))
+			listContent.WriteString("\n")
+			// Not navigable: who else can reach what a connection holds. Wrapped
+			// here like the microphone Status line, since it bypasses recordRow.
+			listContent.WriteString(kubeHangingIndent("  "+kubeTrustLine(), contentWidth, 4))
 
 		case "Browser":
 			multipleValue := "[ off ]"
@@ -1992,19 +2068,21 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 			if len(m.toolStatus) > 0 {
 				listContent.WriteString("\n")
 			}
+			rows := daemonToolRows(m)
 			switch {
 			case m.daemonTools == nil:
 				listContent.WriteString("  " + dimStyle.Render("checking the tools where fleetd runs…"))
 			case len(m.daemonTools.tools) == 0:
 				listContent.WriteString("  " + dimStyle.Render("fleetd tools: "+m.daemonTools.err))
-			default:
-				for i, tool := range m.daemonTools.tools {
-					if i > 0 {
-						listContent.WriteString("\n")
-					}
-					itemID := settingsItemDaemonToolBase + i
-					recordRow(itemID, settingsPage.renderSettingsRow(m, currentItem == itemID, tool.Name, toolStatusValue(tool, m.daemonTools.where())))
+			}
+			// The daemon host's tools, then each connection's login plugin
+			// (which can show before the tools have answered).
+			for i, tool := range rows {
+				if i > 0 || m.daemonTools == nil || len(m.daemonTools.tools) == 0 {
+					listContent.WriteString("\n")
 				}
+				itemID := settingsItemDaemonToolBase + i
+				recordRow(itemID, settingsPage.renderSettingsRow(m, currentItem == itemID, tool.Name, toolStatusValue(tool, daemonWhere(m))))
 			}
 
 		case "Fleet Daemon":
@@ -2059,6 +2137,10 @@ func (settingsPage *settingsPage) viewSettings(m *model) string {
 	if settingsPage.showKeybindings {
 		tail.WriteString("\n")
 		tail.WriteString(keybindingsDialogBox.Render(settingsPage.renderKeybindingsDialog()))
+		tail.WriteString("\n")
+	}
+	if hint := settingsPage.kubeRowFooter(currentItem); hint != "" {
+		tail.WriteString(dimStyle.Render(wrapToWidth(hint, m.width)))
 		tail.WriteString("\n")
 	}
 	if isArmadaRemoteItem(currentItem) && settingsPage.armadaAddStage == armadaAddNone {
@@ -2229,12 +2311,10 @@ func (settingsPage *settingsPage) renderSettingsRow(m *model, active bool, label
 	return fmt.Sprintf("%s%s %s", cursor, formattedLabel, value)
 }
 
-// daemonToolCount is the number of fleetd rows in Tool Status.
+// daemonToolCount is the number of fleetd rows in Tool Status: the daemon
+// host's tools and the connections' login plugins.
 func daemonToolCount(m *model) int {
-	if m.daemonTools == nil {
-		return 0
-	}
-	return len(m.daemonTools.tools)
+	return len(daemonToolRows(m))
 }
 
 // toolStatusValue renders a Tool Status row's value: whether the tool is

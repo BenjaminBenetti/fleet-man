@@ -1053,6 +1053,71 @@ tui_assert_not_contains() {
   fi
 }
 
+# tui_cursor_to <ERE> [session]
+# Press j until the cursor ("> ") is on a line matching the extended regex.
+# By looking, not by counting: the rows above a target vary with the tools
+# installed and the rows other features add.
+tui_cursor_to() {
+  local pattern="$1" session="${2:-${TUI_SESSION}}" _
+  for _ in $(seq 1 90); do
+    if tui_capture "${session}" | grep -Eq ">[[:space:]]+${pattern}"; then
+      return 0
+    fi
+    tui_send j "${session}"
+    sleep 0.15
+  done
+  tui_capture "${session}" >&2
+  fail "could not put the cursor on '${pattern}'"
+}
+
+# itest_kube_clusters <perl>
+# Evaluate perl with @c = the Kubernetes connections in
+# ~/.fleet/kube_clusters.json (fleetd's registry), e.g.
+# `itest_kube_clusters 'print scalar @c'`.
+itest_kube_clusters() {
+  perl -MJSON::PP -e 'local $/; my $j = decode_json(<STDIN>); my @c = @{$j->{clusters} || []}; '"$1" \
+    < "${HOME}/.fleet/kube_clusters.json"
+}
+
+# itest_fake_kubeconfig <file>
+# Write a kubeconfig no cluster answers: context itest-dead (a token, namespace
+# team, the current context) and itest-plugin (an exec login plugin,
+# itest-login-plugin, that is not on any PATH).
+itest_fake_kubeconfig() {
+  cat > "$1" <<'KUBECONFIG'
+apiVersion: v1
+kind: Config
+clusters:
+- name: dead
+  cluster:
+    server: https://127.0.0.1:9
+- name: lab
+  cluster:
+    server: https://127.0.0.1:10
+users:
+- name: tok
+  user:
+    token: itest-not-a-real-token
+- name: plug
+  user:
+    exec:
+      apiVersion: client.authentication.k8s.io/v1
+      command: itest-login-plugin
+      interactiveMode: Never
+contexts:
+- name: itest-dead
+  context:
+    cluster: dead
+    user: tok
+    namespace: team
+- name: itest-plugin
+  context:
+    cluster: lab
+    user: plug
+current-context: itest-dead
+KUBECONFIG
+}
+
 # server_count — number of live `fleet server` daemons for this suite's
 # binary. Shared here because macOS pgrep has no -c flag (the old per-test
 # `pgrep -fc` printed nothing there and every count assertion failed); the

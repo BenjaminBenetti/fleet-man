@@ -838,6 +838,13 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	m.outputRevision = 0
 	// The fleetd rows of Tool Status describe the daemon being left.
 	m.daemonTools = nil
+	// So do its Kubernetes connections, and the tests and logins still
+	// streaming from it.
+	m.resetKube()
+	if page, ok := m.currentPage.(*settingsPage); ok {
+		page.kubeDialog = nil
+		page.resetKubeRowFocus()
+	}
 	m.codespaceMachines = nil
 	m.codespaceFetchingMachines = false
 	m.sessionStore = NewSessionStore()

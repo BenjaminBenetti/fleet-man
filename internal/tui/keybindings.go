@@ -72,6 +72,10 @@ func keybindingsData() []keybindingGroup {
 			},
 		},
 		{
+			Title:   "Kubernetes (Settings)",
+			Entries: kubeKeybindingEntries(),
+		},
+		{
 			Title: "Tmux (inner session)",
 			Entries: []keybindingEntry{
 				{"ctrl+x", "Prefix key (nested)"},

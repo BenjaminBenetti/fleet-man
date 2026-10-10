@@ -13,6 +13,9 @@ import (
 // Deps Check Page
 // ===========================================
 
+// kubeFirstRunLine is the first-run check's one line on Kubernetes.
+const kubeFirstRunLine = "Kubernetes clusters connect in Settings → Kubernetes, and need docker and the devcontainer CLI where fleetd runs."
+
 // depsCheckPage holds state for the first-startup dependency check screen.
 type depsCheckPage struct {
 	result []deps.Dependency
@@ -95,6 +98,8 @@ func (depsCheckPage *depsCheckPage) View(m *model) string {
 		}
 	}
 
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render(kubeFirstRunLine))
 	lines = append(lines, "")
 	lines = append(lines, dialogHint.Render("[enter] Continue"))
 
