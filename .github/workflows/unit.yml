@@ -82,3 +82,11 @@ jobs:
         env:
           FLEET_PODINIT_DOCKER: "1"
         run: go test -count=1 -run TestPodInitAsPID1InDocker -v ./internal/podinit
+
+      # The pod agent writes and reads files as the pod's users (a per-thread
+      # file system identity) and runs commands as them, under shepherds too;
+      # FLEET_PODAGENT_REQUIRE_ROOT turns the skip into a failure.
+      - name: pod agent identities as root
+        run: |
+          go test -c -o "$RUNNER_TEMP/podagent.test" ./internal/podagent
+          sudo FLEET_PODAGENT_REQUIRE_ROOT=1 "$RUNNER_TEMP/podagent.test" -test.run 'AsRoot' -test.v

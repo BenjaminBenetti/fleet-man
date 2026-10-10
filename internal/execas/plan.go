@@ -134,6 +134,26 @@ func (h *Host) Plan(ctx context.Context, req Request) (*Plan, error) {
 	}, nil
 }
 
+// Resolve is whom a request of class, naming user (docker's user[:group]; ""
+// for the class's own), runs as: the identity Plan resolves, for work that
+// starts no command, such as the pod agent's file writes and reads. In
+// single-uid mode it is this process. A failure is an *ExitError, as Plan's.
+func (h *Host) Resolve(class Class, user string) (Identity, error) {
+	req := Request{Class: class, User: user, Argv: []string{"true"}}
+	if err := req.Validate(); err != nil {
+		return Identity{}, failed(err)
+	}
+	db, err := LoadDB(h.root())
+	if err != nil {
+		return Identity{}, failed(err)
+	}
+	id, err := h.identity(db, req)
+	if err != nil {
+		return Identity{}, cannotRun(err)
+	}
+	return id, nil
+}
+
 func (h *Host) root() string {
 	if h.Root == "" {
 		return "/"
