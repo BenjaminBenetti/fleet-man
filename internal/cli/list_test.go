@@ -83,6 +83,46 @@ func TestListIncludesBranchColumnAndValues(t *testing.T) {
 	}
 }
 
+// TestListShortensContainerIDs checks the CONTAINER column goes through
+// fleet.ShortContainerID: docker's 12-character short ID, and <ns>/<sts> for a
+// Kubernetes ContainerID instead of a cut-off "k8s:<cluster>/..." prefix.
+func TestListShortensContainerIDs(t *testing.T) {
+	sp := func(s string) *string { return &s }
+	st := &fleetgrpc.State{
+		Fleets: map[string]*fleetgrpc.Fleet{
+			"alpha": {
+				Name: "alpha",
+				Instances: []*fleetgrpc.Instance{
+					{Name: "docker-1", ContainerId: sp("abc123456789999")},
+					{Name: "kube-1", ContainerId: sp("k8s:c-7f3a9b/fleet/fi-alpha-kube-1-0a1b2c3d@g2")},
+				},
+			},
+		},
+	}
+	prevFetch := fetchFleetState
+	fetchFleetState = func(context.Context) (*fleetgrpc.State, error) { return st, nil }
+	defer func() { fetchFleetState = prevFetch }()
+	var out bytes.Buffer
+	prevOutput := listOutput
+	listOutput = &out
+	defer func() { listOutput = prevOutput }()
+	prevBranchName := listBranchName
+	listBranchName = func(string) string { return "" }
+	defer func() { listBranchName = prevBranchName }()
+
+	cmd := newListCmd()
+	if err := cmd.RunE(cmd, []string{"alpha"}); err != nil {
+		t.Fatalf("RunE() error = %v", err)
+	}
+	output := out.String()
+	if line := findLine(output, "docker-1"); !strings.Contains(line, " abc123456789 ") || strings.Contains(line, "abc1234567899") {
+		t.Errorf("docker-1 line should show the 12-char short ID:\n%s", line)
+	}
+	if line := findLine(output, "kube-1"); !strings.Contains(line, " fleet/fi-alpha-kube-1-0a1b2c3d ") || strings.Contains(line, "k8s:") {
+		t.Errorf("kube-1 line should show <ns>/<sts>:\n%s", line)
+	}
+}
+
 func findLine(output, needle string) string {
 	for _, line := range strings.Split(output, "\n") {
 		if strings.Contains(line, needle) {

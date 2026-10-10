@@ -1335,7 +1335,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								m.message = fmt.Sprintf("Instance %s is running — %s (press L for details)", key, firstLine)
 							} else {
 								m.message = fmt.Sprintf("Instance %s is running (container: %s)",
-									key, instance.ContainerID[:min(12, len(instance.ContainerID))])
+									key, fleet.ShortContainerID(instance.ContainerID))
 							}
 						case fleet.StatusFailed:
 							delete(m.creating, key)
