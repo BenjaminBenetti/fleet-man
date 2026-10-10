@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -455,17 +456,31 @@ func TestKubePodsNoticeClearsOnAnAttach(t *testing.T) {
 	r.eventually("the cleared notice", func() bool { return r.runtime("one").GetKube().GetRestartCause() == "" })
 }
 
-func TestKubeHandlesWithoutTheCapabilitiesAreOnlyWatched(t *testing.T) {
+// The backend handle of a Kubernetes instance names its pod from fleetd's
+// record of it: without one the instance is only watched. Post-start work the
+// handle cannot do becomes the instance's warning.
+func TestKubeHandlesNameTheirRecordedPod(t *testing.T) {
 	isolateFleetDir(t)
-	// No backend handle of a Kubernetes instance provides a pod target or
-	// post-start work yet: it is watched, and nothing is run in it.
 	inst := kubeInstance("one", fleet.StatusRunning)
+	inst.WorkspaceDir = filepath.Join(state.WorkspacesDir(), "alpha", "one", "alpha")
 	if tgt := kubeTargetFor(inst); tgt != nil {
-		t.Fatalf("target %+v from a handle that provides none", tgt)
+		t.Fatalf("target %+v of an instance fleetd has no record of", tgt)
 	}
+	rec := kubernetes.InstanceRecord{Cluster: "c1", Namespace: "ns", Key: kubeTestKey, Fleet: "alpha", Instance: "one",
+		StatefulSet: kubeSTS("one"), StatefulSetUID: "uid-1", Gen: 1, SpecHash: "sha256:abc", ImageDigests: []string{"sha256:" + strings.Repeat("1", 64)}}
+	if err := kubernetes.SaveInstanceRecord(rec); err != nil {
+		t.Fatal(err)
+	}
+	tgt := kubeTargetFor(inst)
+	if tgt == nil || tgt.Cluster != "c1" || tgt.StatefulSet != kubeSTS("one") || tgt.Expect.SpecHash != "sha256:abc" ||
+		string(tgt.Expect.StatefulSetUID) != "uid-1" || tgt.SpecSecret != names.SpecSecret(kubeSTS("one"), 1) {
+		t.Fatalf("target %+v", tgt)
+	}
+	// The connection is not one the pool knows: the hooks cannot run, and
+	// the instance's banner says why.
 	kubePostRestart("alpha", inst, "")
-	if _, err := os.Stat(state.WarnPath("alpha", "one")); !os.IsNotExist(err) {
-		t.Fatalf("post-start on a handle without it wrote a warning: %v", err)
+	if data, err := os.ReadFile(state.WarnPath("alpha", "one")); err != nil || !strings.Contains(string(data), "kubernetes:") {
+		t.Fatalf("warning %q, %v", data, err)
 	}
 }
 

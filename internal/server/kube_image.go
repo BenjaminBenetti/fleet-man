@@ -12,18 +12,14 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/kubernetes"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	kubebackend "github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/imageserve"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/localcluster"
-	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/preflight"
 	"github.com/BenjaminBenetti/fleet-man/internal/server/remote"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -84,6 +80,9 @@ func (m *kubeManager) startImages(ctx context.Context, withGateway bool) []remot
 			Uplink:   im.uplink,
 			Index:    im.manager,
 			OnPull:   m.pullProgress,
+			// A registry id or host change re-points the gateway-delivered
+			// instances at once.
+			Connections: kubebackend.ImageConnections{},
 		}
 		im.manager.Gateway = im.gateway
 		lis := remote.NewChanListener()
@@ -100,6 +99,7 @@ func (m *kubeManager) startImages(ctx context.Context, withGateway bool) []remot
 	m.mu.Lock()
 	m.images = im
 	m.mu.Unlock()
+	m.setBackendEnvironment(im)
 	return opts
 }
 
@@ -217,9 +217,7 @@ const draftClusterID = "draft"
 
 // pullSecretLabels are the labels of a connection's managed pull Secrets.
 func pullSecretLabels(owner, clusterID string) map[string]string {
-	labels := names.Base(owner, clusterID)
-	labels[names.LabelRole] = string(names.RolePullSecret)
-	return labels
+	return kubebackend.PullSecretLabels(owner, clusterID)
 }
 
 func (d *kubeDelivery) target(local localcluster.Cluster, platform string) kubeimage.Target {
@@ -319,7 +317,7 @@ func (d *kubeDelivery) PullProbe(ctx context.Context, platform string) (string, 
 		return "", "", errors.New("save the connection to test a pull through the gateway")
 	}
 	t := d.target(localcluster.Cluster{}, platform)
-	t.Secrets = kubePullSecrets{client: d.link.client, namespace: d.rec.Namespace}
+	t.Secrets = kubebackend.PullSecrets{Client: d.link.client, Namespace: d.rec.Namespace}
 	p, err := d.im.gateway.Probe(ctx, t)
 	if err != nil {
 		return "", "", err
@@ -386,35 +384,6 @@ func (im *kubeImages) cacheSize() int64 {
 	return im.size
 }
 
-// kubePullSecrets keeps a connection's managed pull Secrets in its namespace
-// (kubeimage.Secrets), applied server-side so a rotation rewrites the
-// Secret in place.
-type kubePullSecrets struct {
-	client    kubernetes.Interface
-	namespace string
-}
-
-// kubeFieldManager is the server-side apply field manager.
-const kubeFieldManager = "fleet"
-
-func (s kubePullSecrets) ApplyPullSecret(ctx context.Context, ps kubeimage.PullSecret) error {
-	b, err := ps.Manifest()
-	if err != nil {
-		return err
-	}
-	force := true
-	_, err = s.client.CoreV1().Secrets(s.namespace).Patch(ctx, ps.Name, types.ApplyPatchType, b, metav1.PatchOptions{FieldManager: kubeFieldManager, Force: &force})
-	return err
-}
-
-func (s kubePullSecrets) DeletePullSecret(ctx context.Context, name string) error {
-	err := s.client.CoreV1().Secrets(s.namespace).Delete(ctx, name, metav1.DeleteOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-	return err
-}
-
 // leaseHeld reports whether this daemon holds a connection's owner Lease
 // (its running worker's).
 func (m *kubeManager) leaseHeld(id string) bool {
@@ -453,7 +422,7 @@ func (m *kubeManager) releaseImages(rec fleet.KubeCluster, leaseHeld bool) {
 		defer cancel()
 		if leaseHeld {
 			if link, err := m.connect(rec, m.environ()); err == nil {
-				t.Secrets = kubePullSecrets{client: link.client, namespace: rec.Namespace}
+				t.Secrets = kubebackend.PullSecrets{Client: link.client, Namespace: rec.Namespace}
 			}
 		}
 		if _, err := os.Stat(state.KubeImagesPath(rec.ID)); err == nil {

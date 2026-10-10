@@ -735,16 +735,15 @@ func TestKubeDeployTargets(t *testing.T) {
 	if len(got) != 2 || got[0].Target.KubeCluster != ready || got[1].Target.KubeCluster != broken {
 		t.Fatalf("cluster targets = %+v", got)
 	}
-	if got[0].Available || !strings.Contains(got[0].Reason, "cannot create Kubernetes instances yet") {
-		t.Errorf("while the backend is unbuilt: %+v", got[0])
-	}
-	orig := kubeBackendCreatable
-	kubeBackendCreatable = func() bool { return true }
-	t.Cleanup(func() { kubeBackendCreatable = orig })
-	got = clusterTargets()
 	if !got[0].Available || got[1].Available || !strings.HasPrefix(got[1].Reason, "cluster context missing: ") {
 		t.Errorf("targets = %+v", got)
 	}
+	orig := kubeBackendCreatable
+	kubeBackendCreatable = func() bool { return false }
+	if got := clusterTargets(); got[0].Available || !strings.Contains(got[0].Reason, "cannot create Kubernetes instances yet") {
+		t.Errorf("from a build that cannot create them: %+v", got[0])
+	}
+	kubeBackendCreatable = orig
 	stubDaemonHost(t, "h", "devcontainer")
 	if got = clusterTargets(); got[0].Available || got[0].Reason != "docker not found where fleetd runs" {
 		t.Errorf("without docker: %+v", got[0])
