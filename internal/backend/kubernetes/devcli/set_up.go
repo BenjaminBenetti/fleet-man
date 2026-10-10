@@ -67,6 +67,11 @@ func SetUp(ctx context.Context, req SetUpRequest) (*SetUpResult, error) {
 	if req.Container.ContainerID == "" || req.Execer == nil {
 		return nil, errors.New("devcli.SetUp needs a container and an Execer")
 	}
+	// The markers compare these: a zero Created would run the creation hooks
+	// once ever, a zero StartedAt postStart once ever.
+	if req.Container.Created.IsZero() || req.Container.StartedAt.IsZero() {
+		return nil, errors.New("devcli.SetUp needs the container's Created and StartedAt")
+	}
 	folder := req.DataFolder
 	if folder == "" {
 		folder = DefaultDataFolder

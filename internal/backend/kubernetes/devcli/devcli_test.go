@@ -472,6 +472,11 @@ func TestSetUpFailures(t *testing.T) {
 	if _, err := SetUp(ctx, SetUpRequest{Tools: f.Tools, Execer: &recordingExecer{}}); err == nil {
 		t.Errorf("SetUp without a container")
 	}
+	noStart := c
+	noStart.StartedAt = time.Time{}
+	if _, err := SetUp(ctx, SetUpRequest{Tools: f.Tools, Container: noStart, Execer: &recordingExecer{}}); err == nil || !strings.Contains(err.Error(), "StartedAt") {
+		t.Errorf("SetUp without a StartedAt: %v", err)
+	}
 }
 
 func TestTestedCLIVersionsHaveSignatures(t *testing.T) {
