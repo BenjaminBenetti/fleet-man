@@ -62,3 +62,14 @@ jobs:
         run: |
           go test -c -o "$RUNNER_TEMP/execas.test" ./internal/execas
           sudo FLEET_EXECAS_REQUIRE_ROOT=1 "$RUNNER_TEMP/execas.test" -test.run 'AsRoot' -test.v
+
+      # The seed copier keeps owners, file capabilities, root-owned setuid
+      # files, device nodes and ACLs, and pod-init drops to containerUser:
+      # both need root to be tested for real. FLEET_PODSEED_REQUIRE_ROOT turns
+      # the root tests' skip into a failure.
+      - name: podseed and podinit as root
+        run: |
+          go test -c -o "$RUNNER_TEMP/podseed.test" ./internal/podseed
+          go test -c -o "$RUNNER_TEMP/podinit.test" ./internal/podinit
+          sudo FLEET_PODSEED_REQUIRE_ROOT=1 "$RUNNER_TEMP/podseed.test" -test.v
+          sudo FLEET_PODSEED_REQUIRE_ROOT=1 "$RUNNER_TEMP/podinit.test" -test.v

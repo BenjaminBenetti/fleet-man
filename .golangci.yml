@@ -57,6 +57,12 @@ linters:
             # where none of the server's internals exist: held to the boundary
             # like micsink.
             - "**/internal/execas/**"
+            # The in-pod Job and PID 1 halves (`fleet pod-job`, `fleet
+            # pod-init`) and the Job bootstrap protocol they share with the
+            # daemon run inside pods too: the same boundary.
+            - "**/internal/podseed/**"
+            - "**/internal/podinit/**"
+            - "**/internal/jobboot/**"
             # The SSH-agent provider runs where the human's ssh-agent is (TUI,
             # CLI), possibly far from the daemon: client code, like internal/mic.
             - "**/internal/agentfwd/**"
