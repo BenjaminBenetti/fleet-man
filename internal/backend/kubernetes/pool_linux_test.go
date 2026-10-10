@@ -31,6 +31,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/execas"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
 	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
 )
@@ -109,7 +110,10 @@ type harness struct {
 	onExec func(execRecord)
 }
 
-const testCluster = "test-cluster-a1b2c3"
+const (
+	testCluster = "test-cluster-a1b2c3"
+	testOwner   = "owner1234567"
+)
 
 func newHarness(t *testing.T, opts PoolOptions) *harness {
 	t.Helper()
@@ -138,6 +142,9 @@ func newHarness(t *testing.T, opts PoolOptions) *harness {
 	opts.Exec = h.exec
 	opts.Clientset = func(*Cluster) (kclient.Interface, error) { return h.cs, nil }
 	opts.Version = "vtest-1"
+	if opts.Owner == nil {
+		opts.Owner = func() (string, error) { return testOwner, nil }
+	}
 	opts.Now = func() time.Time {
 		if now := h.now.Load(); now != nil {
 			return *now
@@ -177,6 +184,8 @@ func (h *harness) addPod(name string) PodTarget {
 	h.t.Helper()
 	sts := "fi-fleet-" + name + "-k8sk8sk8"
 	set, pod := instanceObjects(h.ns, sts, types.UID("uid-"+name))
+	// The instance labels the pool's informers select by.
+	set.Labels, pod.Labels = instanceLabels(), instanceLabels()
 	ctx := context.Background()
 	// The tracker keeps the managedFields as given (a Create through the
 	// fake drops them).
@@ -207,6 +216,14 @@ func (h *harness) addPod(name string) PodTarget {
 	_ = os.WriteFile(filepath.Join(root, "exec.json"), spec, 0o600)
 	h.roots[pod.Name] = root
 	return PodTarget{Cluster: testCluster, Fleet: "fleet", Instance: name, StatefulSet: sts, Expect: expectFor(set, pod), SpecSecret: secret.Name, Priority: PriorityInteractive}
+}
+
+// instanceLabels are an instance object's labels on the harness's
+// connection (names.Base plus role=instance).
+func instanceLabels() map[string]string {
+	l := names.Base(testOwner, testCluster)
+	l[names.LabelRole] = string(names.RoleInstance)
+	return l
 }
 
 // rootPath maps a pod path to the pod's local root.
@@ -242,10 +259,13 @@ func (h *harness) exec(ctx context.Context, c *Cluster, req kubeexec.ExecRequest
 		}
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	pod, _ := h.cs.CoreV1().Pods(h.ns).Get(ctx, req.Pod, metav1.GetOptions{})
+	// The tracker, not the clientset: the harness's own read is no API
+	// call of the pool's.
 	uid := ""
-	if pod != nil {
-		uid = string(pod.UID)
+	if obj, err := h.cs.Tracker().Get(corev1.SchemeGroupVersion.WithResource("pods"), h.ns, req.Pod); err == nil {
+		if pod, ok := obj.(*corev1.Pod); ok {
+			uid = string(pod.UID)
+		}
 	}
 	cmd.Env = append(os.Environ(), "FAKEPOD_ROOT="+root, "FLEET_POD_UID="+uid)
 	cmd.Stdout, cmd.Stderr = stdio.Stdout, stdio.Stderr

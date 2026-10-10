@@ -41,9 +41,10 @@ type AgentSession struct {
 	cluster *Cluster
 	pod     PodRef
 	probe   jobboot.Probe
-	// want is the sha of the daemon's build for the pod's arch ("" when the
+	// want is the sha of the daemon's build for the pod's arch ("" while the
 	// store has none): a session of another build is Stale.
-	want string
+	wantMu sync.Mutex
+	want   string
 
 	main   *podwire.Client
 	stream *kubeexec.Stream
@@ -77,7 +78,33 @@ func (s *AgentSession) Arch() string { return s.probe.Arch }
 
 // Stale reports whether the agent is another build than the daemon's: it is
 // accepted (same protocol major) and restaged lazily (PodTarget.Restage).
-func (s *AgentSession) Stale() bool { return s.want != "" && s.main.Hello().SHA != s.want }
+func (s *AgentSession) Stale() bool {
+	s.wantMu.Lock()
+	want := s.want
+	s.wantMu.Unlock()
+	return want != "" && s.main.Hello().SHA != want
+}
+
+func (s *AgentSession) setWant(sha string) {
+	s.wantMu.Lock()
+	s.want = sha
+	s.wantMu.Unlock()
+}
+
+// refreshWant asks the store again for the daemon's build when it had none
+// for the pod's arch when the session started (a restage moment calls it),
+// so such a session is not current for good.
+func (s *AgentSession) refreshWant(ctx context.Context) {
+	s.wantMu.Lock()
+	known := s.want != ""
+	s.wantMu.Unlock()
+	if known {
+		return
+	}
+	if art, err := s.pool.bins().Binary(ctx, s.probe.Arch); err == nil {
+		s.setWant(art.SHA256)
+	}
+}
 
 // Activity is the pod's audio activity, which paces the bulk session (and
 // orders reconnects): the mic and output paths feed it.
