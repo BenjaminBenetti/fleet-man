@@ -57,6 +57,11 @@ type service struct {
 	// made, crash loops, agent sessions (kube_pods.go; inert in a -tags nok8s
 	// build). Started by the serve loop once fleetd serves.
 	kubePods *kubePods
+	// kubeRecovery reconciles the Kubernetes jobs a previous daemon died in
+	// and deletes known garbage (kube_reconcile.go; inert in a -tags nok8s
+	// build). failInterruptedJobs uses its journals at start; the serve
+	// loop starts its undo jobs and background passes.
+	kubeRecovery *kubeRecovery
 
 	// sshListen serves the token-gated gRPC server on a loopback port while
 	// remote fleet is enabled in SSH mode (sshlisten.go); sshTunnels maintains
@@ -114,6 +119,7 @@ func newService() *service {
 	svc.instanceMCP = newInstanceMCP(svc)
 	svc.kube = newKubeManager(svc)
 	svc.kubePods = newKubePods(svc)
+	svc.kubeRecovery = newKubeRecovery(svc)
 	svc.hub.stateListeners = append(svc.hub.stateListeners, svc.kubePods.onState)
 	// The in-flight jobs and their current steps are pushed over Watch. The
 	// set is taken on the hub loop, so pushes land in the order they happen

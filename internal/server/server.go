@@ -80,10 +80,6 @@ func Serve(ctx context.Context) error {
 	}
 
 	svc := newService()
-	// Records a previous daemon left mid-create/clone/rebuild have no job to
-	// finish them any more: fail them before any RPC or the scheduler can start
-	// a job of ours (interrupted_jobs.go).
-	svc.failInterruptedJobs()
 
 	// Start the hub (the broadcast-model owner) and the state poller (the
 	// non-authoritative source of truth that re-Loads state.json) on a context
@@ -96,6 +92,11 @@ func Serve(ctx context.Context) error {
 	// reconcile) derives from hubCtx so it stops on shutdown. Set before Serve
 	// starts accepting RPCs, so no handler observes the zero value.
 	svc.bgCtx = hubCtx
+	// Records a previous daemon left mid-create/clone/rebuild have no job to
+	// finish them any more: fail them before any RPC or the scheduler can start
+	// a job of ours (interrupted_jobs.go), except the Kubernetes rebuilds the
+	// reconciler undoes (kube_reconcile.go), which stay REBUILDING for it.
+	svc.failInterruptedJobs()
 	// SSH-agent relay: every agent connection made on this host — the daemon's
 	// own git clones (through SSH_AUTH_SOCK, redirected to it) and processes in
 	// devcontainer instances (through a socket in each control directory) — is
@@ -138,6 +139,10 @@ func Serve(ctx context.Context) error {
 
 	go svc.hub.run(hubCtx)
 	go runStatePoller(hubCtx, svc.hub)
+	// The undo jobs of the interrupted Kubernetes rebuilds, and the
+	// reconciler's background passes. Both wait for their cluster to be
+	// judged usable, which happens only once fleetd serves.
+	svc.kubeRecovery.start(hubCtx)
 	// Runtime pollers (live status / stats+activity / sessions). Gated on a
 	// runtime subscriber, so they stay idle until a TUI connects with
 	// subscribe_runtime — no backend traffic for plain `fleet ls`.

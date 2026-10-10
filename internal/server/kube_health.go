@@ -747,8 +747,14 @@ func (w *kubeWorker) applyFull(rec fleet.KubeCluster, link *kubeLink, res prefli
 	w.cred, w.credErr, w.credAt = res.Credential, nil, res.CheckedAt
 	w.leaseHeld = res.Lease != nil && res.Lease.Held
 	w.reachFailed = link == nil || failedBeforeReach(res)
+	leaseHeld := w.leaseHeld
 	w.mu.Unlock()
 	w.m.publish()
+	// The REACHABLE edge: the reconciler's undo jobs and background pass
+	// for this connection go (kube_reconcile.go).
+	if link != nil && preflight.Usable(res.State) && leaseHeld && rec.ID != "" && w.m.svc != nil && w.m.svc.kubeRecovery != nil {
+		w.m.svc.kubeRecovery.reachable(rec.ID)
+	}
 	if link != nil {
 		var verified time.Time
 		if preflight.Usable(res.State) {
@@ -931,6 +937,9 @@ func (w *kubeWorker) status() *fleetgrpc.KubeClusterStatus {
 	}
 	if del := st.Capabilities.GetImageDelivery(); del != nil && im != nil {
 		im.live(del, w.rec)
+	}
+	if st.Capabilities != nil && w.m.svc != nil && w.m.svc.kubeRecovery != nil {
+		st.Capabilities.PendingTeardowns = w.m.svc.kubeRecovery.pendingTeardowns(w.rec.ID)
 	}
 	if exp := w.cred.ExpiresAt; !exp.IsZero() {
 		if st.Capabilities == nil {
