@@ -1,0 +1,4 @@
+services:
+  app:
+    image: mcr.microsoft.com/devcontainers/base:debian-12
+    command: sleep infinity

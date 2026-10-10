@@ -1,0 +1,71 @@
+package devcli
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os/exec"
+	"strings"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/kubeshim"
+)
+
+// imageFor reads the config of the image a captured run names, pulling it
+// first when the daemon host does not have it: an image-only configuration is
+// never built, and the docker run the CLI asked for, which would have pulled
+// it, was captured instead. The pull's output goes to jobLog.
+func imageFor(ctx context.Context, docker, image, platform string, jobLog io.Writer) (kubeshim.ImageConfig, error) {
+	img, inspectErr := inspectImage(ctx, docker, image, platform)
+	if inspectErr == nil {
+		return img, nil
+	}
+	args := []string{"pull"}
+	if platform != "" {
+		args = append(args, "--platform", platform)
+	}
+	args = append(args, "--", image)
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, docker, args...)
+	cmd.Stdout = jobLog
+	cmd.Stderr = io.MultiWriter(&stderr, jobLog)
+	if err := cmd.Run(); err != nil {
+		return kubeshim.ImageConfig{}, fmt.Errorf("%w; docker pull %s: %v: %s", inspectErr, image, err, strings.TrimSpace(stderr.String()))
+	}
+	return inspectImage(ctx, docker, image, platform)
+}
+
+// inspectImage reads image's config from the real docker. With a platform
+// it asks for that platform's image, which a containerd image store needs
+// when the build was for another architecture (docker 28+); an older docker
+// without the option is asked without it.
+func inspectImage(ctx context.Context, docker, image, platform string) (kubeshim.ImageConfig, error) {
+	img, err := dockerImageInspect(ctx, docker, image, platform)
+	if err != nil && platform != "" && strings.Contains(err.Error(), "unknown flag") {
+		img, err = dockerImageInspect(ctx, docker, image, "")
+	}
+	return img, err
+}
+
+func dockerImageInspect(ctx context.Context, docker, image, platform string) (kubeshim.ImageConfig, error) {
+	args := []string{"image", "inspect"}
+	if platform != "" {
+		args = append(args, "--platform", platform)
+	}
+	args = append(args, "--", image)
+	cmd := exec.CommandContext(ctx, docker, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return kubeshim.ImageConfig{}, fmt.Errorf("docker image inspect %s: %w: %s", image, err, strings.TrimSpace(stderr.String()))
+	}
+	var imgs []kubeshim.ImageConfig
+	if err := json.Unmarshal(stdout.Bytes(), &imgs); err != nil {
+		return kubeshim.ImageConfig{}, fmt.Errorf("parsing docker image inspect %s: %w", image, err)
+	}
+	if len(imgs) != 1 {
+		return kubeshim.ImageConfig{}, fmt.Errorf("docker image inspect %s returned %d images", image, len(imgs))
+	}
+	return imgs[0], nil
+}
