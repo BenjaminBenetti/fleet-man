@@ -3,7 +3,9 @@ package backendutil
 import (
 	"testing"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	coderbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/coder"
+	devcontainerbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 )
 
@@ -103,5 +105,29 @@ func TestCapabilitiesForAnswersByInstanceWithoutBinding(t *testing.T) {
 	}
 	if uri, _ := coder.EditorURI(inst.WorkspaceDir, "alpha"); uri != "coder-vscode://alpha-agent-1" {
 		t.Fatalf("capability handle EditorURI = %q; it registered the instance's name", uri)
+	}
+}
+
+// TestNewForInstanceBindsTheDevcontainerWorkspace: the devcontainer handle
+// tears down a failed create by its workspace folder (OrphanDowner), so
+// NewForInstance binds it even before there is a ContainerID; the
+// capability-only handle stays unbound.
+func TestNewForInstanceBindsTheDevcontainerWorkspace(t *testing.T) {
+	for _, bt := range []fleet.BackendType{"", fleet.BackendDevcontainer} {
+		inst := &fleet.Instance{Name: "i1", Backend: bt, WorkspaceDir: "/home/u/.fleet/workspaces/alpha/i1/alpha"}
+		b := NewForInstance(inst, false)
+		if _, ok := b.(backend.OrphanDowner); !ok {
+			t.Fatalf("%q: the devcontainer handle is not an OrphanDowner", bt)
+		}
+		dc, ok := b.(*devcontainerbackend.DevcontainerBackend)
+		if !ok {
+			t.Fatalf("%q: not a DevcontainerBackend", bt)
+		}
+		if got := dc.BoundWorkspace(); got != inst.WorkspaceDir {
+			t.Errorf("%q: bound to %q, want %q", bt, got, inst.WorkspaceDir)
+		}
+		if caps := CapabilitiesFor(inst).(*devcontainerbackend.DevcontainerBackend); caps.BoundWorkspace() != "" {
+			t.Errorf("%q: CapabilitiesFor bound %q", bt, caps.BoundWorkspace())
+		}
 	}
 }

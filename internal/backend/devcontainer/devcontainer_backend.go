@@ -26,6 +26,10 @@ import (
 type DevcontainerBackend struct {
 	verbose bool
 
+	// workspaceDir is the workspace folder of the instance the backend was
+	// bound to (BindWorkspace); DownByKey removes what was made for it.
+	workspaceDir string
+
 	userCache   map[string]string
 	userMissAt  map[string]time.Time // last failed user resolution, to throttle re-resolves
 	userCacheMu sync.Mutex

@@ -43,6 +43,11 @@ func newForType(backendType fleet.BackendType, verbose bool) backend.Backend {
 // exec, pollers); an empty Backend type means devcontainer.
 func NewForInstance(instance *fleet.Instance, verbose bool) backend.Backend {
 	instanceBackend := newForType(instance.Backend, verbose)
+	// devcontainer finds what a failed create left (OrphanDowner) by the
+	// workspace folder, so it is bound with or without a ContainerID.
+	if devcontainerBackend, ok := instanceBackend.(*devcontainerbackend.DevcontainerBackend); ok {
+		devcontainerBackend.BindWorkspace(instance.WorkspaceDir)
+	}
 	if instance.ContainerID == "" {
 		return instanceBackend
 	}
