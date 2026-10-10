@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -33,6 +34,7 @@ const PodUIDEnv = "FLEET_POD_UID"
 var (
 	selfExe        = "/proc/self/exe"
 	procSelfCgroup = "/proc/self/cgroup"
+	procSelfOOM    = "/proc/self/oom_score_adj"
 	// etcRoot holds the etc/passwd and etc/group execas resolves the
 	// start script's user from.
 	etcRoot    = "/"
@@ -106,6 +108,11 @@ func Run(specPath string, stdout, stderr *os.File) int {
 	if spec.Cgroups != CgroupsOff {
 		layout = layoutCgroups(spec, warnf)
 	}
+	// Last, so pod-init's own files and cgroups keep their modes; the start
+	// script inherits it.
+	if mask, err := spec.umask(); spec.Umask != "" && err == nil {
+		unix.Umask(mask)
+	}
 
 	plan, err := planStart(spec)
 	if err != nil {
@@ -116,9 +123,10 @@ func Run(specPath string, stdout, stderr *os.File) int {
 }
 
 // prepare does what docker's runtime does before the container's process:
-// the fleet link, a passwd entry for an unknown uid, the hostname, the DinD
-// MTU and the rlimits. Each is best-effort with a warning: the start script
-// runs regardless, as docker's would.
+// the fleet link, a passwd entry for an unknown uid, the host and domain
+// names, the DinD MTU, the rlimits and the OOM score (set on PID 1, so the
+// start script and the agent's execs inherit it). Each is best-effort with a
+// warning: the start script runs regardless, as docker's would.
 func prepare(spec Spec, warnf func(string, ...any)) {
 	if _, err := os.Lstat(fleetLink); errors.Is(err, fs.ErrNotExist) {
 		if fi, err := os.Stat(path.Dir(fleetLink)); err == nil && fi.IsDir() {
@@ -136,6 +144,18 @@ func prepare(spec Spec, warnf func(string, ...any)) {
 		if cur, _ := os.Hostname(); cur != spec.Hostname {
 			if err := unix.Sethostname([]byte(spec.Hostname)); err != nil {
 				warnf("set the hostname %s: %v (the pod keeps %s)", spec.Hostname, err, cur)
+			}
+		}
+	}
+	if spec.Domainname != "" {
+		var uts unix.Utsname
+		cur := ""
+		if unix.Uname(&uts) == nil {
+			cur = unix.ByteSliceToString(uts.Domainname[:])
+		}
+		if cur != spec.Domainname {
+			if err := unix.Setdomainname([]byte(spec.Domainname)); err != nil {
+				warnf("set the domain name %s: %v (the pod keeps %s)", spec.Domainname, err, cur)
 			}
 		}
 	}
@@ -157,6 +177,11 @@ func prepare(spec Spec, warnf func(string, ...any)) {
 	}
 	for _, w := range applyRlimits(spec.Rlimits) {
 		warnf("%s", w)
+	}
+	if adj := spec.OOMScoreAdj; adj != nil {
+		if err := os.WriteFile(procSelfOOM, []byte(strconv.Itoa(*adj)), 0); err != nil {
+			warnf("set the OOM score adjustment %d: %v", *adj, err)
+		}
 	}
 }
 

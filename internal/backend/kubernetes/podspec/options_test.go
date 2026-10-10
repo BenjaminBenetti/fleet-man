@@ -463,6 +463,7 @@ func TestOptionGoldens(t *testing.T) {
 			}
 			r.Changes = changes(t, strip(base.Pod), strip(res.Pod))
 			checkNoEnvValues(t, c.name, res, in)
+			checkPID1Boots(t, c.name, res)
 		}
 		for name, o := range r.Outcomes {
 			if exercised[name] == nil {

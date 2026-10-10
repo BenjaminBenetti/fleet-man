@@ -16,6 +16,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/devcli"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeshim"
+	"github.com/BenjaminBenetti/fleet-man/internal/podinit"
 )
 
 // The fixture goldens: each integration fixture's real capture-up (recorded
@@ -155,6 +156,7 @@ func goldenOf(t *testing.T, in Input, res *Result, err error) goldenResult {
 			if err := json.Unmarshal(data, &pid1); err != nil || !reflect.DeepEqual(pid1, res.Pod.PID1) {
 				t.Errorf("pid1.json is not the pod's PID1: %s", data)
 			}
+			checkPID1Boots(t, "pid1.json", res)
 			continue
 		}
 		var v any
@@ -325,4 +327,17 @@ func normalizeCapture(t *testing.T, rc *recordedCapture, ws, newWS, host string)
 		t.Fatalf("the normalized capture still holds a path of the recording: ...%s...", text[max(0, i-40):min(len(text), i+80)])
 	}
 	return &out
+}
+
+// checkPID1Boots fails when pod-init would refuse the pid1.json a translation
+// rendered: the pod would crash-loop before the start script runs.
+func checkPID1Boots(t *testing.T, name string, res *Result) {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), PID1File)
+	if err := os.WriteFile(file, res.Secrets.Spec[PID1File], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := podinit.LoadSpec(file); err != nil {
+		t.Errorf("%s: pod-init refuses the rendered pid1.json: %v", name, err)
+	}
 }

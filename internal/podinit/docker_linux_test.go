@@ -69,7 +69,7 @@ echo "nofile=$(ulimit -n)"
 trap 'echo got-int; exit 3' INT
 echo "ready $$"
 while :; do sleep 1 & wait $!; done`
-	spec := Spec{V: SpecVersion, Argv: []string{"/bin/sh", "-c", script}, User: "nobody", StopSignal: "SIGINT",
+	spec := Spec{Format: SpecVersion, Argv: []string{"/bin/sh", "-c", script}, User: "nobody", StopSignal: "SIGINT",
 		Rlimits: []Rlimit{{Name: "nofile", Soft: 2048, Hard: 2048}}, BinarySHA256: sha}
 	specData, _ := json.Marshal(spec)
 	if err := os.WriteFile(filepath.Join(fleet, "spec", "pid1.json"), specData, 0o644); err != nil {

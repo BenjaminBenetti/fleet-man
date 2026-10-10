@@ -21,17 +21,22 @@ import (
 )
 
 func validSpec() Spec {
+	adj := -500
 	return Spec{
-		V:          SpecVersion,
-		Argv:       []string{"/bin/sh", "-c", "echo Container started\ntrap \"exit 0\" 15\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done", "-"},
-		User:       "vscode",
-		WorkingDir: "/workspaces/fleet-man",
-		Env:        map[string]string{"LABEL_ONLY": "x"},
-		StopSignal: "SIGINT",
-		Rlimits:    []Rlimit{{Name: "nofile", Soft: 1024, Hard: 4096}, {Name: "core", Soft: -1, Hard: -1}},
-		Hostname:   "devbox",
-		DockerMTU:  &DockerMTU{},
-		RemoteUser: "vscode",
+		Format:      SpecVersion,
+		Argv:        []string{"/bin/sh", "-c", "echo Container started\ntrap \"exit 0\" 15\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done", "-"},
+		User:        "vscode",
+		WorkingDir:  "/workspaces/fleet-man",
+		Env:         map[string]string{"LABEL_ONLY": "x"},
+		StopSignal:  "SIGINT",
+		Rlimits:     []Rlimit{{Name: "nofile", Soft: 1024, Hard: 4096}, {Name: "core", Soft: -1, Hard: -1}},
+		Umask:       "0027",
+		OOMScoreAdj: &adj,
+		Hostname:    "devbox",
+		Domainname:  "example.test",
+		Privileged:  true,
+		DockerMTU:   &DockerMTU{},
+		RemoteUser:  "vscode",
 	}
 }
 
@@ -40,7 +45,7 @@ func TestSpecValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*Spec){
-		"version":      func(s *Spec) { s.V = 2 },
+		"format":       func(s *Spec) { s.Format = 2 },
 		"no argv":      func(s *Spec) { s.Argv = nil },
 		"empty argv0":  func(s *Spec) { s.Argv = []string{""} },
 		"nul":          func(s *Spec) { s.Argv = []string{"a\x00b"} },
@@ -51,6 +56,10 @@ func TestSpecValidate(t *testing.T) {
 		"ulimit order": func(s *Spec) { s.Rlimits = []Rlimit{{Name: "nofile", Soft: 10, Hard: 5}} },
 		"ulimit inf":   func(s *Spec) { s.Rlimits = []Rlimit{{Name: "nofile", Soft: -1, Hard: 5}} },
 		"hostname":     func(s *Spec) { s.Hostname = "a b" },
+		"domainname":   func(s *Spec) { s.Domainname = "a/b" },
+		"umask":        func(s *Spec) { s.Umask = "0999" },
+		"umask range":  func(s *Spec) { s.Umask = "1777" },
+		"oom score":    func(s *Spec) { n := 1001; s.OOMScoreAdj = &n },
 		"mtu":          func(s *Spec) { s.DockerMTU = &DockerMTU{MTU: 100} },
 		"daemon json":  func(s *Spec) { s.DockerMTU = &DockerMTU{DaemonJSON: "daemon.json"} },
 		"sha":          func(s *Spec) { s.BinarySHA256 = "abc" },
@@ -72,7 +81,7 @@ func TestLoadSpec(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "pid1.json")
 	want := validSpec()
 	data, _ := json.Marshal(want)
-	data = bytes.Replace(data, []byte(`{"v":1`), []byte(`{"v":1,"newer_field":[1,2]`), 1)
+	data = bytes.Replace(data, []byte(`{"format":1`), []byte(`{"format":1,"newer_field":[1,2]`), 1)
 	if err := os.WriteFile(file, data, 0o400); err != nil {
 		t.Fatal(err)
 	}

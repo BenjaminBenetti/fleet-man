@@ -393,7 +393,7 @@ func (k *kube) runJob(name, pvc string, spec JobSpec, workspace []byte) (jobboot
 // Secret, and PID 1 = fleet pod-init.
 func (k *kube) applyInstance(sts string, m Manifest, replicas int) {
 	k.t.Helper()
-	pid1 := podinit.Spec{V: podinit.SpecVersion, RemoteUser: "vscode", BinarySHA256: m.Binary,
+	pid1 := podinit.Spec{Format: podinit.SpecVersion, RemoteUser: "vscode", BinarySHA256: m.Binary,
 		Argv: []string{"/bin/sh", "-c", "echo Container started\ntrap \"exit 0\" 15\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done", "-"}}
 	pid1Data, _ := json.Marshal(pid1)
 	k.apply(map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]any{"name": sts + "-spec"},

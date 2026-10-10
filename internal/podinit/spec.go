@@ -35,11 +35,15 @@ const (
 	CgroupsOff = "off"
 )
 
-// Spec is pid1.json, rendered by the daemon from the captured `docker run`.
-// Unknown fields are ignored, so an older pod binary boots a newer daemon's
-// spec; a newer V is refused.
+// Spec is pid1.json, rendered by the daemon from the captured `docker run`
+// (podspec.PID1 is this type). Fields docker applies to the container itself,
+// which a pod cannot express, are carried out by pod-init instead: the user,
+// the working directory, the stop signal, rlimits, the umask, the OOM score,
+// the hostname. Unknown fields are ignored, so an older pod binary boots a
+// newer daemon's spec; a newer Format is refused.
 type Spec struct {
-	V int `json:"v"`
+	// Format is SpecVersion.
+	Format int `json:"format"`
 	// Argv is what docker would have run as the container's process: the
 	// entrypoint and command, the devcontainer CLI's start script.
 	Argv []string `json:"argv"`
@@ -59,8 +63,18 @@ type Spec struct {
 	StopSignal string `json:"stop_signal,omitempty"`
 	// Rlimits are the --ulimit settings.
 	Rlimits []Rlimit `json:"rlimits,omitempty"`
-	// Hostname is --hostname, set when the pod may (CAP_SYS_ADMIN).
-	Hostname string `json:"hostname,omitempty"`
+	// Umask is --umask, in octal ("0022").
+	Umask string `json:"umask,omitempty"`
+	// OOMScoreAdj is --oom-score-adj.
+	OOMScoreAdj *int `json:"oom_score_adj,omitempty"`
+	// Hostname and Domainname are --hostname and --domainname, set when the
+	// pod may (privileged or CAP_SYS_ADMIN, and not on the host network,
+	// whose UTS namespace is the node's); "" keeps the pod's own.
+	Hostname   string `json:"hostname,omitempty"`
+	Domainname string `json:"domainname,omitempty"`
+	// Privileged marks a privileged pod. The cgroup layout (Cgroups) probes
+	// the cgroupfs itself, so this is the renderer's record of it.
+	Privileged bool `json:"privileged,omitempty"`
 	// DockerMTU writes the pod network's MTU into the image's dockerd
 	// config for DinD.
 	DockerMTU *DockerMTU `json:"docker_mtu,omitempty"`
@@ -186,8 +200,8 @@ var hexSHA = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // Validate checks the spec can be run as written.
 func (s Spec) Validate() error {
-	if s.V != SpecVersion {
-		return fmt.Errorf("pid1 spec version %d, this fleet runs %d", s.V, SpecVersion)
+	if s.Format != SpecVersion {
+		return fmt.Errorf("pid1 spec format %d, this fleet runs %d", s.Format, SpecVersion)
 	}
 	if len(s.Argv) == 0 || s.Argv[0] == "" {
 		return errors.New("no start command")
@@ -221,8 +235,18 @@ func (s Spec) Validate() error {
 			return fmt.Errorf("ulimit %s: soft %d is above hard %d", r.Name, r.Soft, r.Hard)
 		}
 	}
-	if s.Hostname != "" && (len(s.Hostname) > 64 || strings.ContainsAny(s.Hostname, "/\x00 \n")) {
-		return fmt.Errorf("hostname %q is not usable", s.Hostname)
+	if s.Umask != "" {
+		if _, err := s.umask(); err != nil {
+			return err
+		}
+	}
+	if s.OOMScoreAdj != nil && (*s.OOMScoreAdj < -1000 || *s.OOMScoreAdj > 1000) {
+		return fmt.Errorf("oom score adj %d is out of range", *s.OOMScoreAdj)
+	}
+	for what, name := range map[string]string{"hostname": s.Hostname, "domainname": s.Domainname} {
+		if name != "" && (len(name) > 64 || strings.ContainsAny(name, "/\x00 \n")) {
+			return fmt.Errorf("%s %q is not usable", what, name)
+		}
 	}
 	if m := s.DockerMTU; m != nil {
 		if m.MTU < 0 || (m.MTU != 0 && m.MTU < 576) || m.MTU > 65535 {
@@ -252,4 +276,13 @@ func (s Spec) Validate() error {
 		return fmt.Errorf("log dir %q is not absolute", s.LogDir)
 	}
 	return nil
+}
+
+// umask is Umask's mode.
+func (s Spec) umask() (int, error) {
+	n, err := strconv.ParseUint(s.Umask, 8, 32)
+	if err != nil || n > 0o777 {
+		return 0, fmt.Errorf("umask %q is not an octal mode", s.Umask)
+	}
+	return int(n), nil
 }

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -109,7 +110,7 @@ type podInit struct {
 // start runs pod-init on spec in the fake pod.
 func (p *fakePod) start(t *testing.T, spec Spec, env ...string) *podInit {
 	t.Helper()
-	spec.V = SpecVersion
+	spec.Format = SpecVersion
 	if spec.Cgroups == "" {
 		spec.Cgroups = CgroupsOff
 	}
@@ -296,6 +297,31 @@ func TestPodInitAppliesRlimits(t *testing.T) {
 	}
 	if got := strings.TrimSpace(pi.stdout.String()); got != strconv.FormatUint(cur.Max, 10) {
 		t.Fatalf("soft limit %q, want it clamped to the hard %d", got, cur.Max)
+	}
+}
+
+func TestPodInitAppliesUmaskAndOOMScore(t *testing.T) {
+	cur, err := os.ReadFile("/proc/self/oom_score_adj")
+	if err != nil {
+		t.Skip(err)
+	}
+	// A raise needs no privilege.
+	adj, _ := strconv.Atoi(strings.TrimSpace(string(cur)))
+	adj = min(adj+100, 1000)
+	p := newFakePod(t)
+	spec := Spec{Umask: "0027", OOMScoreAdj: &adj, Argv: sh("umask; cat /proc/self/oom_score_adj")}
+	if os.Geteuid() != 0 {
+		spec.Domainname = "pod-init.test" // root would rename the host's
+	}
+	pi := p.start(t, spec)
+	if code := pi.wait(t); code != 0 {
+		t.Fatalf("exit %d\n%s", code, pi.stderr)
+	}
+	if got, want := strings.Fields(pi.stdout.String()), []string{"0027", strconv.Itoa(adj)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("umask and OOM score %q, want %q\n%s", got, want, pi.stderr)
+	}
+	if spec.Domainname != "" && !strings.Contains(pi.stderr.String(), "set the domain name pod-init.test") {
+		t.Fatalf("stderr %q: a refused domain name should warn and run on", pi.stderr)
 	}
 }
 
