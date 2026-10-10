@@ -11,8 +11,7 @@ func TestParseBackendType(t *testing.T) {
 		{value: "devcontainer", want: BackendDevcontainer},
 		{value: "coder", want: BackendCoder},
 		{value: "codespaces", want: BackendCodespaces},
-		// A known type, but not one a new instance can name yet.
-		{value: "kubernetes", wantErr: true},
+		{value: "kubernetes", want: BackendKubernetes},
 		{value: "bogus", wantErr: true},
 		{value: "", wantErr: true},
 	}
@@ -49,7 +48,7 @@ func TestBackendTypesListEveryKnownType(t *testing.T) {
 	}
 
 	// Every type a new instance can name is a known type.
-	for _, value := range []string{"devcontainer", "coder", "codespaces"} {
+	for _, value := range []string{"devcontainer", "coder", "codespaces", "kubernetes"} {
 		backendType, err := ParseBackendType(value)
 		if err != nil {
 			t.Fatalf("ParseBackendType(%q) error = %v", value, err)
@@ -67,5 +66,24 @@ func TestBackendTypesListEveryKnownType(t *testing.T) {
 	got[0] = "mutated"
 	if BackendTypes()[0] != BackendDevcontainer {
 		t.Fatal("BackendTypes() shares its backing array with the caller")
+	}
+}
+
+func TestValidateBackendTypeGatesKubernetes(t *testing.T) {
+	t.Setenv(EnvExperimentalK8s, "")
+	if err := ValidateBackendType(BackendKubernetes); err != ErrKubernetesExperimental {
+		t.Fatalf("ValidateBackendType(kubernetes) without the gate = %v, want ErrKubernetesExperimental", err)
+	}
+	for _, bt := range []BackendType{BackendDevcontainer, BackendCoder, BackendCodespaces} {
+		if err := ValidateBackendType(bt); err != nil {
+			t.Errorf("ValidateBackendType(%s) = %v", bt, err)
+		}
+	}
+	if err := ValidateBackendType("bogus"); err == nil {
+		t.Error("ValidateBackendType(bogus) = nil")
+	}
+	t.Setenv(EnvExperimentalK8s, "1")
+	if err := ValidateBackendType(BackendKubernetes); err != nil {
+		t.Fatalf("ValidateBackendType(kubernetes) with the gate = %v", err)
 	}
 }

@@ -334,6 +334,11 @@ func (s *service) kubeUsers(id string) ([]*fleetgrpc.KubeClusterUser, error) {
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load state: %v", err)
 	}
+	return kubeUsersIn(st, id), nil
+}
+
+// kubeUsersIn is kubeUsers of st.
+func kubeUsersIn(st *state.State, id string) []*fleetgrpc.KubeClusterUser {
 	var users []*fleetgrpc.KubeClusterUser
 	for _, name := range sortedStateFleets(st) {
 		f := st.Fleets[name]
@@ -348,7 +353,7 @@ func (s *service) kubeUsers(id string) ([]*fleetgrpc.KubeClusterUser, error) {
 			}
 		}
 	}
-	return users, nil
+	return users
 }
 
 func sortedStateFleets(st *state.State) []string {
@@ -418,13 +423,34 @@ func (s *service) RemoveKubeCluster(ctx context.Context, req *fleetgrpc.RemoveKu
 	}
 	// Asked before the removal stops the worker (and releases its Lease).
 	leaseHeld := s.kube.leaseHeld(rec.ID)
-	err = state.UpdateKubeClusters(func(k *state.KubeClusters) error {
-		if !k.Remove(rec.ID) {
-			return status.Errorf(codes.NotFound, "no Kubernetes connection %q", rec.ID)
+	// The users are looked at again, and the record removed, under the state
+	// lock a create holds while it checks its connection and adds its
+	// record: a create cannot slip in between and leave an instance on a
+	// connection that is gone. A forget takes whatever is there with it.
+	refuse := req.GetMode() != fleetgrpc.KubeRemoveMode_KUBE_REMOVE_MODE_FORGET
+	beforeKubeRemove()
+	var late []*fleetgrpc.KubeClusterUser
+	err = state.Update(func(st *state.State) error {
+		if refuse {
+			if late = kubeUsersIn(st, rec.ID); len(late) > 0 {
+				return errKeepState
+			}
 		}
-		return nil
+		if err := state.UpdateKubeClusters(func(k *state.KubeClusters) error {
+			if !k.Remove(rec.ID) {
+				return status.Errorf(codes.NotFound, "no Kubernetes connection %q", rec.ID)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		return errKeepState
 	})
-	if err != nil {
+	switch {
+	case len(late) > 0:
+		reply.Users = late
+		return reply, nil
+	case err != nil && !errors.Is(err, errKeepState):
 		return nil, kubeStoreError(err)
 	}
 	s.forgetDefaultKubeCluster(rec.ID)
@@ -434,6 +460,14 @@ func (s *service) RemoveKubeCluster(ctx context.Context, req *fleetgrpc.RemoveKu
 	reply.Removed = true
 	return reply, nil
 }
+
+// errKeepState ends a state.Update that only needed the state lock.
+var errKeepState = errors.New("nothing to write")
+
+// beforeKubeRemove runs between a removal's first look at the connection's
+// users and its removal under the state lock (a seam for tests: a create
+// that lands in between).
+var beforeKubeRemove = func() {}
 
 // destroyKubeInstances destroys every instance on the connection and waits
 // for the teardowns. Agents block it: they would recreate instances there.

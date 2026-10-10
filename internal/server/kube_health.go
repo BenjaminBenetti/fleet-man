@@ -171,6 +171,8 @@ type kubeManager struct {
 	pullPush          *time.Timer
 	registrySettle    *time.Timer
 	registryChangedAt time.Time
+	// imageGC paces each connection's image collection (kube_backend.go).
+	imageGC kubeImageGC
 }
 
 func newKubeManager(svc *service) *kubeManager {
@@ -216,6 +218,9 @@ func (m *kubeManager) run(ctx context.Context) {
 	m.mu.Unlock()
 	_, _ = m.identity()
 	m.sync()
+	// A daemon that died mid-build or mid-hook left its docker shim
+	// directories behind, the capture's environment values in them.
+	go sweepKubeShimDirs(m.now())
 	<-ctx.Done()
 	m.mu.Lock()
 	workers := m.workers
@@ -754,6 +759,11 @@ func (w *kubeWorker) applyFull(rec fleet.KubeCluster, link *kubeLink, res prefli
 	// for this connection go (kube_reconcile.go).
 	if link != nil && preflight.Usable(res.State) && leaseHeld && rec.ID != "" && w.m.svc != nil && w.m.svc.kubeRecovery != nil {
 		w.m.svc.kubeRecovery.reachable(rec.ID)
+	}
+	// Images no instance holds any more go once past their retention, only
+	// while this daemon owns the connection.
+	if link != nil && preflight.Usable(res.State) && leaseHeld {
+		w.m.collectImages(rec, link)
 	}
 	if link != nil {
 		var verified time.Time

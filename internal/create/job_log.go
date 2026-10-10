@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -29,4 +30,19 @@ func provisionWarning(ctx context.Context, fleetName, instanceName, message stri
 // process's stderr, as before, and the job's provisioning log.
 func stepOutput(ctx context.Context) io.Writer {
 	return io.MultiWriter(os.Stderr, backend.JobLogFrom(ctx))
+}
+
+// prependBackendWarnings puts an Up's warnings (UpResult.Warnings) in front
+// of the instance's banner, which the best-effort provisioning steps replace
+// as they warn: they stay in view, with the steps' warnings kept below them.
+func prependBackendWarnings(fleetName, instanceName string, warnings []string) {
+	var lines []string
+	for _, w := range warnings {
+		if w = strings.TrimSpace(w); w != "" {
+			lines = append(lines, w)
+		}
+	}
+	if len(lines) > 0 {
+		state.PrependWarn(fleetName, instanceName, strings.Join(lines, "\n"))
+	}
 }

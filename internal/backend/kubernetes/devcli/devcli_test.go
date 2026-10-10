@@ -291,6 +291,31 @@ func TestCaptureUpPullsAnImageTheHostLacks(t *testing.T) {
 	}
 }
 
+// TestCaptureUpReportsTheIDDockerAddressesTheImageBy: on a containerd image
+// store a platform's inspect names that platform's manifest, which docker
+// cannot tag or save; the image's own id (its index's) is what delivery
+// takes, the config the platform's.
+func TestCaptureUpReportsTheIDDockerAddressesTheImageBy(t *testing.T) {
+	f := newFakeTools(t)
+	ws, configFile := appWorkspace(t, nil)
+	f.writeConfigs(t, configFile, `,"image":"base:1"`)
+	if err := os.WriteFile(filepath.Join(f.dir, "image.platform.json"), []byte(`[{"Id":"sha256:arm64manifest","Architecture":"arm64","Os":"linux","Config":{"User":"arm-user"}}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := CaptureUp(context.Background(), CaptureRequest{Tools: f.Tools, WorkspaceDir: ws, Platform: "linux/arm64", Remote: offlineRegistry()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Image.ID != "sha256:built" || res.Image.Architecture != "arm64" || res.Image.Config.User != "arm-user" {
+		t.Errorf("image %+v", res.Image)
+	}
+	// Without a platform there is one inspect, and its id.
+	res, err = CaptureUp(context.Background(), CaptureRequest{Tools: f.Tools, WorkspaceDir: ws, Remote: offlineRegistry()})
+	if err != nil || res.Image.ID != "sha256:built" || res.Image.Architecture != "amd64" {
+		t.Errorf("without a platform: %+v, %v", res.Image, err)
+	}
+}
+
 func TestCaptureUpWarnsAboutAnUntestedCLI(t *testing.T) {
 	f := newFakeTools(t)
 	ws, configFile := appWorkspace(t, nil)

@@ -102,7 +102,12 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 		instance.Error = ""
 	}
 
-	if err := state.Save(st); err != nil {
+	// The outcome goes onto the record as it is now, not the state loaded
+	// before the backend ran: a stop or start can take minutes (a Kubernetes
+	// pod waits for its node, its image and its hooks), and saving that
+	// snapshot would undo every write made meanwhile (another instance's
+	// create, a destroy).
+	if err := commitTransition(fleetName, instanceName, instance); err != nil {
 		return nil, err
 	}
 
@@ -110,6 +115,34 @@ func transitionLoadedInstance(st *state.State, instance *fleet.Instance, fleetNa
 	result.Changed = true
 	flog.Info("instance status changed", "fleet", fleetName, "instance", instanceName, "from", result.PreviousStatus, "to", targetStatus, "ms", flog.MillisSince(start))
 	return result, nil
+}
+
+// commitTransition writes a transition's outcome onto fleetName/instanceName's
+// current record: its status, the error a start clears, and the branch a stop
+// read. A record removed meanwhile, or one a destroy has taken, is left as it
+// is, and the transition fails.
+func commitTransition(fleetName, instanceName string, done *fleet.Instance) error {
+	return state.Update(func(st *state.State) error {
+		f, ok := st.Fleets[fleetName]
+		if !ok {
+			return fmt.Errorf("fleet %q not found", fleetName)
+		}
+		cur, err := f.GetInstance(instanceName)
+		if err != nil {
+			return err
+		}
+		if cur.Status == fleet.StatusDeleting {
+			return fmt.Errorf("instance %s/%s is being destroyed", fleetName, instanceName)
+		}
+		cur.Status = done.Status
+		if done.Status == fleet.StatusRunning {
+			cur.Error = ""
+		}
+		if done.LastBranch != "" {
+			cur.LastBranch = done.LastBranch
+		}
+		return nil
+	})
 }
 
 // LoadInstance loads the global state, looks up the named fleet, and resolves

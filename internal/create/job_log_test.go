@@ -133,6 +133,25 @@ func TestProvisionWarningWritesTheBannerAndTheJobLog(t *testing.T) {
 	}
 }
 
+// TestBackendWarningsStayOnTopOfTheBanner: the provisioning steps replace the
+// banner as they warn, so an Up's own warnings (a Kubernetes create's dropped
+// debug grants) are put in front of it after them, the steps' text kept
+// below; an Up without warnings leaves the banner as the steps left it.
+func TestBackendWarningsStayOnTopOfTheBanner(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	provisionWarning(context.Background(), "alpha", "i1", "stage fleet.rc: boom")
+	prependBackendWarnings("alpha", "i1", []string{"debug capabilities dropped", " ", "needs a pull login"})
+	banner, err := os.ReadFile(state.WarnPath("alpha", "i1"))
+	if err != nil || string(banner) != "debug capabilities dropped\nneeds a pull login\nstage fleet.rc: boom" {
+		t.Fatalf("banner = %q, %v", banner, err)
+	}
+
+	prependBackendWarnings("alpha", "i2", nil)
+	if _, err := os.Stat(state.WarnPath("alpha", "i2")); !os.IsNotExist(err) {
+		t.Fatalf("an Up without warnings wrote a banner: %v", err)
+	}
+}
+
 // rebuildingJobBackend rebuilds through RebuildContext, failing with upErr.
 type rebuildingJobBackend struct {
 	fakeJobBackend

@@ -70,6 +70,9 @@ func backupSources() []string {
 	}
 	sources = append(sources, globFiles(filepath.Join(state.KubeJobsDir(), "*.json"))...)       // kube/jobs/<key>.json
 	sources = append(sources, globFiles(filepath.Join(state.KubeDir(), "*", "images.json"))...) // kube/<cluster>/images.json
+	// kube/<cluster>/instances/<key>.json: what a restored daemon verifies its
+	// instances' pods against.
+	sources = append(sources, globFiles(filepath.Join(state.KubeDir(), "*", "instances", "*.json"))...)
 	return sources
 }
 
@@ -488,6 +491,7 @@ func (s *service) mcpRestoreBackup(_ context.Context, _ *mcp.CallToolRequest, _ 
 			{Name: "kube/footprint.json", Description: "what this daemon created and destroyed in its clusters."},
 			{Name: "kube/jobs/<key>.json", Description: "journal of the Kubernetes create, clone and rebuild jobs that were running, one file per instance."},
 			{Name: "kube/<cluster>/images.json", Description: "index of the images this daemon delivered to one Kubernetes connection."},
+			{Name: "kube/<cluster>/instances/<key>.json", Description: "what this daemon rendered and delivered for each of its Kubernetes instances, which their pods are verified against."},
 		},
 		Kubernetes: "Instance disks live in their clusters, not in the archive: a restore brings back the connections and fleetd's records, and every disk stays where it is. Instances created in a cluster after the snapshot are kept there, never deleted, and `fleet cluster gc` lists them; job records older than the live objects are discarded when fleetd starts. The restored daemon_id owns the same cluster objects as the original: while both daemons run, the clusters' owner Leases let only the first act as owner and show OWNER_CONFLICT on the other.",
 		Available:  archives,

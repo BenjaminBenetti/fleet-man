@@ -19,6 +19,10 @@ func newStopCmd() *cobra.Command {
 				return err
 			}
 
+			if handled, err := lifecycleInDaemon(cmd.Context(), target, false); handled {
+				return err
+			}
+
 			result, err := instanceops.StopInstance(target.Fleet, target.Instance)
 			if err != nil {
 				return err

@@ -542,7 +542,7 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		if _, err := f.GetInstance(instanceName); err == nil {
 			return status.Errorf(codes.AlreadyExists, "instance %s/%s already exists", fleetName, instanceName)
 		}
-		return f.AddInstance(&fleet.Instance{
+		inst := &fleet.Instance{
 			Name:         instanceName,
 			DisplayName:  instanceName,
 			Config:       ".devcontainer/devcontainer.json",
@@ -553,7 +553,15 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 			KubeCluster:  target.KubeCluster,
 			Branch:       req.GetBranch(),
 			Automated:    automated,
-		})
+		}
+		if target.Backend == fleet.BackendKubernetes {
+			// The key every object of the instance carries, on the record
+			// before the job applies any.
+			if err := assignKubeKey(st, fleetName, inst); err != nil {
+				return status.Error(codes.FailedPrecondition, err.Error())
+			}
+		}
+		return f.AddInstance(inst)
 	})
 	if err != nil {
 		return nil, err

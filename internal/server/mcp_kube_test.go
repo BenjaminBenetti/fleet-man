@@ -11,6 +11,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
 // fleet_cluster_list returns every connection with its health and settings,
@@ -128,5 +130,44 @@ func TestMCPClusterTest(t *testing.T) {
 	}
 	if msg := callErr(t, cs, "fleet_cluster_test", map[string]any{"cluster": ""}); !strings.Contains(msg, "cluster is required") {
 		t.Errorf("no cluster: %q", msg)
+	}
+}
+
+// fleet_up's cluster names a connection by id, name or context and runs the
+// instance on Kubernetes there; the reply says where it went.
+func TestMCPUpOnACluster(t *testing.T) {
+	f := newKubeFixture(t)
+	t.Setenv(fleet.EnvExperimentalK8s, "1")
+	stubDaemonIdentity(t)
+	dev := f.add(&fleetgrpc.KubeCluster{Context: "minikube", DisplayName: "dev", Namespace: "fleet"}).GetCluster()
+	if err := state.Update(func(st *state.State) error {
+		st.GetOrCreateFleet("alpha", "git@x:a.git")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	orig := jobRunCreate
+	jobRunCreate = func(context.Context, string, string, string, string, bool, fleet.BackendType) error { return nil }
+	t.Cleanup(func() { jobRunCreate = orig })
+	cs := mcpConnect(t, f.svc)
+
+	var out FleetJobOutput
+	callJSON(t, cs, "fleet_up", map[string]any{"fleet": "alpha", "instance": "k1", "cluster": "dev"}, &out)
+	if out.Target == nil || out.Target.Backend != string(fleet.BackendKubernetes) || out.Target.Cluster != dev.GetId() || out.Target.Defaulted {
+		t.Fatalf("target %+v", out.Target)
+	}
+	st, err := state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst, err := st.Fleets["alpha"].GetInstance("k1")
+	if err != nil || inst.KubeCluster != dev.GetId() || inst.Backend != fleet.BackendKubernetes || inst.KubeKey == "" {
+		t.Fatalf("record %+v, %v", inst, err)
+	}
+	if msg := callErr(t, cs, "fleet_up", map[string]any{"fleet": "alpha", "instance": "k2", "cluster": "dev", "backend": "coder"}); !strings.Contains(msg, "not coder") {
+		t.Errorf("cluster with another backend: %q", msg)
+	}
+	if msg := callErr(t, cs, "fleet_up", map[string]any{"fleet": "alpha", "instance": "k3", "cluster": "nope"}); !strings.Contains(msg, "nope") {
+		t.Errorf("an unknown cluster: %q", msg)
 	}
 }

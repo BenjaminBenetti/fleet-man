@@ -148,6 +148,10 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 	// best-effort — the instance is marked running even if one fails.
 	finishProvision(ctx, instanceBackend, services, fleetName, instanceName, wsDir, result.ContainerID, resolvedMounts.Symlinks)
 
+	// The backend's own warnings go in front of what the steps above wrote
+	// over the banner (the template warning below still takes the first line).
+	prependBackendWarnings(fleetName, instanceName, result.Warnings)
+
 	// Template worktree/submodule check LAST, and prepended: every provisioning
 	// step above WriteWarns (replacing the banner) on failure, and the TUI shows
 	// the banner's first line — this warning must win that slot.

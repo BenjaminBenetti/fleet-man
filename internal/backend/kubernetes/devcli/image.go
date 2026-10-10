@@ -55,12 +55,24 @@ func imageFor(ctx context.Context, docker, image, platform string, remote kubeim
 // it asks for that platform's image, which a containerd image store needs
 // when the build was for another architecture (docker 28+); an older docker
 // without the option is asked without it.
+//
+// The id it returns is the one docker addresses the image by (what `docker
+// tag`, `docker save` and a push take): on a containerd image store a
+// platform's inspect reports the id of that platform's manifest, which docker
+// does not address, so the image's own id (its index's) is asked for
+// separately; the config stays the platform's.
 func inspectImage(ctx context.Context, docker, image, platform string) (kubeshim.ImageConfig, error) {
 	img, err := dockerImageInspect(ctx, docker, image, platform)
 	if err != nil && platform != "" && strings.Contains(err.Error(), "unknown flag") {
-		img, err = dockerImageInspect(ctx, docker, image, "")
+		return dockerImageInspect(ctx, docker, image, "")
 	}
-	return img, err
+	if err != nil || platform == "" {
+		return img, err
+	}
+	if own, err := dockerImageInspect(ctx, docker, image, ""); err == nil && own.ID != "" && own.ID != img.ID {
+		img.ID = own.ID
+	}
+	return img, nil
 }
 
 func dockerImageInspect(ctx context.Context, docker, image, platform string) (kubeshim.ImageConfig, error) {

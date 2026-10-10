@@ -103,6 +103,15 @@ func TestPreflightCapture(t *testing.T) {
 	if run.Image != PreflightImage {
 		t.Errorf("image %s", run.Image)
 	}
+	// A group named, not numbered, is the built image's to resolve: the
+	// preflight leaves it to the real capture's admission.
+	c, err = PreflightCapture([]byte(`{"runArgs":["--group-add","docker","--group-add=999"]}`), "/ws", "/workspaces/ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run, err = c.Run(); err != nil || strings.Join(run.Values("group-add"), ",") != "999" {
+		t.Errorf("--group-add in the preflight: %v (%v)", run.Values("group-add"), err)
+	}
 	// A runArgs option docker run has not: the code the real capture would
 	// fail with.
 	if _, err := PreflightCapture([]byte(`{"runArgs":["--no-such-option"]}`), "/ws", "/workspaces/ws"); err == nil || !strings.HasPrefix(err.Error(), kubeshim.UnsupportedFlag("no-such-option")+": ") {
