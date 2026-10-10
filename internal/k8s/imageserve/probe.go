@@ -310,7 +310,7 @@ func (g *Gateway) CheckRoute(ctx context.Context, clusterID, digest string) Rout
 		return rc
 	case resp.StatusCode == http.StatusUnauthorized:
 		rc.Step, rc.Message = StepCredential, "the gateway pull credential was refused"
-		rc.Hint = "the credential lives on the connection's record; re-adding the connection makes a new one"
+		rc.Hint = "a proxy in front of the gateway must pass the Authorization header through"
 	case resp.StatusCode == http.StatusNotFound && user != "" && ociErrorCode(body) == "MANIFEST_UNKNOWN":
 		rc.Step, rc.Message = StepDigest, "fleetd's image server does not serve the probe image to this connection (HTTP 404)"
 	case resp.StatusCode == http.StatusNotFound:
