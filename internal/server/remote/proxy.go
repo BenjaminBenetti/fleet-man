@@ -81,6 +81,9 @@ type tunnelListeners struct {
 	grpc     *ChanListener
 	webhook  *ChanListener
 	registry *ChanListener
+	// registryHit, when set, is called for every registry stream (the main
+	// tunnel's, to open the registry connection).
+	registryHit func()
 }
 
 // serveTunnel serves a session whose streams are TAG-prefixed (a tagging feature
@@ -130,6 +133,9 @@ func dispatchStream(stream net.Conn, mcpLis *ChanListener, lis tunnelListeners) 
 	case tag == tunnel.TagWebhook && lis.webhook != nil:
 		lis.webhook.Push(stream)
 	case tag == tunnel.TagRegistry && lis.registry != nil:
+		if lis.registryHit != nil {
+			lis.registryHit()
+		}
 		lis.registry.Push(stream)
 	default:
 		_ = stream.Close()
