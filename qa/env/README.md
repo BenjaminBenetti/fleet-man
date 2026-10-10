@@ -41,6 +41,10 @@ ghcr.io/benjaminbenetti/fleet-man/qa:latest
 ghcr.io/benjaminbenetti/fleet-man/qa:sha-<short-sha>   # immutable, pin this in automation
 ```
 
+Changes to `qa/env/**` on the `feat/kubernetes` integration branch (or a
+manual dispatch from it) publish `qa:feat-kubernetes` plus the sha tag, never
+`latest`. Use that tag to QA work on the branch.
+
 Images are multi-arch (`linux/amd64`, `linux/arm64`). Authentication uses the
 workflow's built-in `GITHUB_TOKEN` — no external secrets.
 
