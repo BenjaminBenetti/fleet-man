@@ -54,3 +54,11 @@ jobs:
         env:
           FLEET_TEST_REQUIRE_PULSE: "1"
         run: go test ./...
+
+      # The exec identity matrix switches users for real (setuid, initgroups,
+      # PTY chown), which needs root. FLEET_EXECAS_REQUIRE_ROOT turns the
+      # tests' skip into a failure, so they cannot quietly stop running.
+      - name: execas identity matrix as root
+        run: |
+          go test -c -o "$RUNNER_TEMP/execas.test" ./internal/execas
+          sudo FLEET_EXECAS_REQUIRE_ROOT=1 "$RUNNER_TEMP/execas.test" -test.run 'AsRoot' -test.v

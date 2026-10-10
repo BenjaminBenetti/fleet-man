@@ -52,6 +52,11 @@ linters:
             # (internal/cli runs it as `fleet mic sink`), so it is held to the
             # same boundary rather than being a package the linter never sees.
             - "**/internal/micsink/**"
+            # The in-pod exec identity layer (`fleet exec-as`, the pod agent's
+            # spawner) is linked into the same binary and runs inside pods,
+            # where none of the server's internals exist: held to the boundary
+            # like micsink.
+            - "**/internal/execas/**"
             # The SSH-agent provider runs where the human's ssh-agent is (TUI,
             # CLI), possibly far from the daemon: client code, like internal/mic.
             - "**/internal/agentfwd/**"
