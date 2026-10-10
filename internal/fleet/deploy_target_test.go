@@ -29,6 +29,18 @@ func TestDeployTargetsListEveryBackendTypeInDialogOrder(t *testing.T) {
 		}
 	}
 
+	// Every known type is a target here except Kubernetes, whose targets are
+	// one per cluster connection and come from the daemon.
+	for _, backendType := range BackendTypes() {
+		found := false
+		for _, target := range got {
+			found = found || target.Backend == backendType
+		}
+		if found == (backendType == BackendKubernetes) {
+			t.Errorf("BackendType %q: in DeployTargets() = %v", backendType, found)
+		}
+	}
+
 	// The returned slice is the caller's own.
 	got[0].Backend = "mutated"
 	if DeployTargets()[0].Backend != BackendDevcontainer {
@@ -41,6 +53,7 @@ func TestDeployTargetTool(t *testing.T) {
 		BackendDevcontainer: "devcontainer",
 		BackendCoder:        "coder",
 		BackendCodespaces:   "gh",
+		BackendKubernetes:   "devcontainer",
 		"":                  "",
 	}
 	for backendType, want := range tests {
@@ -58,7 +71,7 @@ func TestDeployTargetTool(t *testing.T) {
 // CopiesTemplates must agree with the create-time rule, so the dialog never
 // offers a target the server then rejects for a template fleet.
 func TestDeployTargetCopiesTemplatesMatchesValidateTemplateCreate(t *testing.T) {
-	for _, target := range DeployTargets() {
+	for _, target := range append(DeployTargets(), DeployTarget{Backend: BackendKubernetes, KubeCluster: "minikube"}) {
 		err := ValidateTemplateCreate("file:///tmp/template", "", target.Backend)
 		if got := err == nil; got != target.CopiesTemplates() {
 			t.Errorf("%v: CopiesTemplates() = %v but ValidateTemplateCreate error = %v", target, target.CopiesTemplates(), err)
@@ -76,6 +89,25 @@ func TestDeployTargetZeroAndString(t *testing.T) {
 	}
 	if target.String() != "coder" {
 		t.Fatalf("String() = %q, want coder", target.String())
+	}
+
+	cluster := DeployTarget{Backend: BackendKubernetes, KubeCluster: "minikube"}
+	if cluster.IsZero() {
+		t.Fatal("cluster target should not be IsZero")
+	}
+	if cluster.String() != "kubernetes:minikube" {
+		t.Fatalf("String() = %q, want kubernetes:minikube", cluster.String())
+	}
+}
+
+func TestInstanceDeployTargetCarriesItsCluster(t *testing.T) {
+	inst := &Instance{Backend: BackendKubernetes, KubeCluster: "prod-eu"}
+	want := DeployTarget{Backend: BackendKubernetes, KubeCluster: "prod-eu"}
+	if got := inst.DeployTarget(); got != want {
+		t.Fatalf("DeployTarget() = %+v, want %+v", got, want)
+	}
+	if got := inst.DeployTarget().Capabilities(); got != BackendKubernetes.Capabilities() {
+		t.Fatalf("cluster target capabilities %+v differ from the backend type's", got)
 	}
 }
 

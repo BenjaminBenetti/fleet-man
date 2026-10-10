@@ -99,6 +99,10 @@ type Agent struct {
 	// same set offered when creating an instance. Empty falls back to
 	// BackendDevcontainer.
 	Backend BackendType `json:"backend,omitempty"`
+
+	// KubeCluster is the cluster connection (KubeCluster.ID) a Kubernetes
+	// agent's instances are created on; empty for every other backend.
+	KubeCluster string `json:"kube_cluster,omitempty"`
 }
 
 // Trigger is an automation trigger: it activates one or more Agents with a

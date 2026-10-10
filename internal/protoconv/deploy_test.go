@@ -35,15 +35,21 @@ func TestDeployTargetUnspecified(t *testing.T) {
 	if got := DeployTargetFromProto(&fleetgrpc.DeployTarget{}); !got.IsZero() {
 		t.Fatalf("UNSPECIFIED target read back as %v", got)
 	}
+	// A backend this build can't name stays the zero target even with a
+	// cluster, so the dialog never offers it as one it can.
+	unknown := &fleetgrpc.DeployTarget{Backend: fleetgrpc.BackendType(99), KubeCluster: "kc"}
+	if got := DeployTargetFromProto(unknown); !got.IsZero() {
+		t.Fatalf("unknown backend target read back as %v", got)
+	}
 }
 
 func TestDeployTargetWirePlacement(t *testing.T) {
-	pinArity[fleet.DeployTarget](t, 1)
+	pinArity[fleet.DeployTarget](t, 2)
 	pinArity[fleet.DeployTargetOption](t, 3)
 
-	pt := DeployTargetToProto(fleet.DeployTarget{Backend: fleet.BackendCodespaces})
-	if pt.GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES {
-		t.Fatalf("deploy target backend wire placement wrong: %v", pt)
+	pt := DeployTargetToProto(fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "kc"})
+	if pt.GetBackend() != fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES || pt.GetKubeCluster() != "kc" {
+		t.Fatalf("deploy target wire placement wrong: %v", pt)
 	}
 	opts := DeployTargetOptionsToProto([]fleet.DeployTargetOption{{
 		Target:    fleet.DeployTarget{Backend: fleet.BackendCoder},

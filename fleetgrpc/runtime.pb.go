@@ -722,7 +722,14 @@ type InstanceRuntime struct {
 	// Aggregated GitHub PR state — the "auto tag" shown when the instance has no
 	// user-set tag. nil until first probed, or when gh is unavailable / no PR is
 	// open (see PrStatus).
-	PrStatus      *PrStatus `protobuf:"bytes,11,opt,name=pr_status,json=prStatus,proto3" json:"pr_status,omitempty"`
+	PrStatus *PrStatus `protobuf:"bytes,11,opt,name=pr_status,json=prStatus,proto3" json:"pr_status,omitempty"`
+	// The live state of an instance on a Kubernetes cluster (pod, agent
+	// session, restarts the cluster made). nil for every other backend.
+	Kube *KubeInstanceRuntime `protobuf:"bytes,21,opt,name=kube,proto3" json:"kube,omitempty"`
+	// The sync between the instance's fleet share on its cluster and the
+	// daemon host's directories. nil when nothing syncs (every non-cluster
+	// backend).
+	ShareSync     *ShareSyncStatus `protobuf:"bytes,22,opt,name=share_sync,json=shareSync,proto3" json:"share_sync,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -834,11 +841,26 @@ func (x *InstanceRuntime) GetPrStatus() *PrStatus {
 	return nil
 }
 
+func (x *InstanceRuntime) GetKube() *KubeInstanceRuntime {
+	if x != nil {
+		return x.Kube
+	}
+	return nil
+}
+
+func (x *InstanceRuntime) GetShareSync() *ShareSyncStatus {
+	if x != nil {
+		return x.ShareSync
+	}
+	return nil
+}
+
 var File_runtime_proto protoreflect.FileDescriptor
 
 const file_runtime_proto_rawDesc = "" +
 	"\n" +
-	"\rruntime.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\"T\n" +
+	"\rruntime.proto\x12\tfleetgrpc\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\n" +
+	"kube.proto\"T\n" +
 	"\x0eContainerStats\x12%\n" +
 	"\x0ecpu_millicores\x18\x01 \x01(\x01R\rcpuMillicores\x12\x1b\n" +
 	"\tmemory_mb\x18\x02 \x01(\x01R\bmemoryMb\"W\n" +
@@ -866,7 +888,7 @@ const file_runtime_proto_rawDesc = "" +
 	"\fchecks_total\x18\x05 \x01(\x05R\vchecksTotal\x128\n" +
 	"\rchecks_signal\x18\x06 \x01(\x0e2\x13.fleetgrpc.PrSignalR\fchecksSignal\x12\"\n" +
 	"\x03prs\x18\a \x03(\v2\x10.fleetgrpc.PrRefR\x03prs\x12!\n" +
-	"\fclosed_count\x18\b \x01(\x05R\vclosedCount\"\xd4\x04\n" +
+	"\fclosed_count\x18\b \x01(\x05R\vclosedCount\"\xc3\x05\n" +
 	"\x0fInstanceRuntime\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12?\n" +
@@ -882,7 +904,10 @@ const file_runtime_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\n" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x120\n" +
-	"\tpr_status\x18\v \x01(\v2\x13.fleetgrpc.PrStatusR\bprStatusB\x11\n" +
+	"\tpr_status\x18\v \x01(\v2\x13.fleetgrpc.PrStatusR\bprStatus\x122\n" +
+	"\x04kube\x18\x15 \x01(\v2\x1e.fleetgrpc.KubeInstanceRuntimeR\x04kube\x129\n" +
+	"\n" +
+	"share_sync\x18\x16 \x01(\v2\x1a.fleetgrpc.ShareSyncStatusR\tshareSyncB\x11\n" +
 	"\x0f_current_branchJ\x04\b\f\x10\x15*\xc8\x01\n" +
 	"\x13LiveContainerStatus\x12%\n" +
 	"!LIVE_CONTAINER_STATUS_UNSPECIFIED\x10\x00\x12!\n" +
@@ -942,6 +967,8 @@ var file_runtime_proto_goTypes = []any{
 	(*PrStatus)(nil),              // 9: fleetgrpc.PrStatus
 	(*InstanceRuntime)(nil),       // 10: fleetgrpc.InstanceRuntime
 	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
+	(*KubeInstanceRuntime)(nil),   // 12: fleetgrpc.KubeInstanceRuntime
+	(*ShareSyncStatus)(nil),       // 13: fleetgrpc.ShareSyncStatus
 }
 var file_runtime_proto_depIdxs = []int32{
 	3,  // 0: fleetgrpc.PrStatus.pr_signal:type_name -> fleetgrpc.PrSignal
@@ -956,11 +983,13 @@ var file_runtime_proto_depIdxs = []int32{
 	7,  // 9: fleetgrpc.InstanceRuntime.forwarded_ports:type_name -> fleetgrpc.ForwardedPort
 	11, // 10: fleetgrpc.InstanceRuntime.updated_at:type_name -> google.protobuf.Timestamp
 	9,  // 11: fleetgrpc.InstanceRuntime.pr_status:type_name -> fleetgrpc.PrStatus
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	12, // 12: fleetgrpc.InstanceRuntime.kube:type_name -> fleetgrpc.KubeInstanceRuntime
+	13, // 13: fleetgrpc.InstanceRuntime.share_sync:type_name -> fleetgrpc.ShareSyncStatus
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_runtime_proto_init() }
@@ -968,6 +997,7 @@ func file_runtime_proto_init() {
 	if File_runtime_proto != nil {
 		return
 	}
+	file_kube_proto_init()
 	file_runtime_proto_msgTypes[2].OneofWrappers = []any{}
 	file_runtime_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}

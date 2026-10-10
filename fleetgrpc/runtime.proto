@@ -3,6 +3,7 @@ syntax = "proto3";
 package fleetgrpc;
 
 import "google/protobuf/timestamp.proto";
+import "kube.proto";
 
 option go_package = "github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpc";
 
@@ -199,4 +200,13 @@ message InstanceRuntime {
   PrStatus pr_status = 11;
 
   reserved 12 to 20;
+
+  // The live state of an instance on a Kubernetes cluster (pod, agent
+  // session, restarts the cluster made). nil for every other backend.
+  KubeInstanceRuntime kube = 21;
+
+  // The sync between the instance's fleet share on its cluster and the
+  // daemon host's directories. nil when nothing syncs (every non-cluster
+  // backend).
+  ShareSyncStatus share_sync = 22;
 }

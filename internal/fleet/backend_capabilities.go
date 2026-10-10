@@ -19,6 +19,7 @@ var backendCapabilities = map[BackendType]BackendCapabilities{
 	BackendDevcontainer: {Clone: true, Rebuild: true},
 	BackendCodespaces:   {Rebuild: true},
 	BackendCoder:        {},
+	BackendKubernetes:   {Clone: true, Rebuild: true},
 }
 
 // allCapabilities is what a type without a row reports.

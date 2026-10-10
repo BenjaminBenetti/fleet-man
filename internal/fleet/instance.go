@@ -32,6 +32,14 @@ type Instance struct {
 	// (issue #188), as opposed to one a user created. Set once at creation and
 	// never cleared; the TUI shows a marker in front of its name.
 	Automated bool `json:"automated,omitempty"`
+	// KubeCluster is the cluster connection (KubeCluster.ID) a Kubernetes
+	// instance runs on; empty for every other backend.
+	KubeCluster string `json:"kube_cluster,omitempty"`
+	// KubeKey is the instance's key on its cluster: it labels every object
+	// the instance owns, and it is recorded on the CREATING/CLONING record
+	// before any of them exists, so a failed or interrupted create can still
+	// be torn down by key. Empty for every other backend.
+	KubeKey string `json:"kube_key,omitempty"`
 }
 
 // GetDisplayName returns the user-facing label for the instance. Legacy

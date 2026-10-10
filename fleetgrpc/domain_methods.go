@@ -47,6 +47,8 @@ func (b BackendType) Display() string {
 		return "coder"
 	case BackendType_BACKEND_TYPE_CODESPACES:
 		return "codespaces"
+	case BackendType_BACKEND_TYPE_KUBERNETES:
+		return "kubernetes"
 	default:
 		return ""
 	}

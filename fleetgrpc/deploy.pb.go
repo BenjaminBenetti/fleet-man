@@ -21,12 +21,16 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// DeployTarget names where an instance runs: today a backend type. A create
-// request resolves to one (CreateInstanceRequest.backend, or the remembered
-// default when that is UNSPECIFIED), and the New instance dialog cycles them.
+// DeployTarget names where an instance runs: a backend type and, for
+// KUBERNETES, the cluster connection. A create request resolves to one
+// (CreateInstanceRequest.backend and kube_cluster, or the remembered default
+// when the backend is UNSPECIFIED), and the New instance dialog cycles them.
 type DeployTarget struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Backend       BackendType            `protobuf:"varint,1,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Backend BackendType            `protobuf:"varint,1,opt,name=backend,proto3,enum=fleetgrpc.BackendType" json:"backend,omitempty"`
+	// kube_cluster is the cluster connection (KubeCluster.id) of a KUBERNETES
+	// target; empty for every other backend.
+	KubeCluster   string `protobuf:"bytes,2,opt,name=kube_cluster,json=kubeCluster,proto3" json:"kube_cluster,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -66,6 +70,13 @@ func (x *DeployTarget) GetBackend() BackendType {
 		return x.Backend
 	}
 	return BackendType_BACKEND_TYPE_UNSPECIFIED
+}
+
+func (x *DeployTarget) GetKubeCluster() string {
+	if x != nil {
+		return x.KubeCluster
+	}
+	return ""
 }
 
 // DeployTargetOption is one entry of ListDeployTargets.
@@ -338,9 +349,10 @@ var File_deploy_proto protoreflect.FileDescriptor
 
 const file_deploy_proto_rawDesc = "" +
 	"\n" +
-	"\fdeploy.proto\x12\tfleetgrpc\x1a\fdomain.proto\"@\n" +
+	"\fdeploy.proto\x12\tfleetgrpc\x1a\fdomain.proto\"c\n" +
 	"\fDeployTarget\x120\n" +
-	"\abackend\x18\x01 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackend\"{\n" +
+	"\abackend\x18\x01 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackend\x12!\n" +
+	"\fkube_cluster\x18\x02 \x01(\tR\vkubeCluster\"{\n" +
 	"\x12DeployTargetOption\x12/\n" +
 	"\x06target\x18\x01 \x01(\v2\x17.fleetgrpc.DeployTargetR\x06target\x12\x1c\n" +
 	"\tavailable\x18\x02 \x01(\bR\tavailable\x12\x16\n" +

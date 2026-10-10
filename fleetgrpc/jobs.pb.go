@@ -820,7 +820,9 @@ func (x *JobDone) GetWarnings() []string {
 // remember_default) if set and valid, else BACKEND_TYPE_DEVCONTAINER; a file://
 // template fleet narrows a remembered target it cannot use to devcontainer.
 // ListDeployTargets reports the same default, and JobStarted.target names what
-// the create resolved to.
+// the create resolved to. A target a new instance can't use (KUBERNETES, while
+// this daemon cannot run instances on a cluster) is refused with
+// INVALID_ARGUMENT before any record exists.
 type CreateInstanceRequest struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Fleet    string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
@@ -837,8 +839,11 @@ type CreateInstanceRequest struct {
 	// later UNSPECIFIED creates resolve to) once the create is accepted. The TUI
 	// New instance dialog sets it; the CLI and MCP do not.
 	RememberDefault bool `protobuf:"varint,7,opt,name=remember_default,json=rememberDefault,proto3" json:"remember_default,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// kube_cluster names the cluster connection (KubeCluster.id) a
+	// BACKEND_TYPE_KUBERNETES create goes to; ignored for every other backend.
+	KubeCluster   string `protobuf:"bytes,8,opt,name=kube_cluster,json=kubeCluster,proto3" json:"kube_cluster,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateInstanceRequest) Reset() {
@@ -918,6 +923,13 @@ func (x *CreateInstanceRequest) GetRememberDefault() bool {
 		return x.RememberDefault
 	}
 	return false
+}
+
+func (x *CreateInstanceRequest) GetKubeCluster() string {
+	if x != nil {
+		return x.KubeCluster
+	}
+	return ""
 }
 
 // DestroyInstanceRequest destroys a single instance, or (destroy_fleet=true)
@@ -1153,8 +1165,9 @@ func (x *StopInstanceRequest) GetInstance() string {
 // CloneInstanceRequest clones a running source instance into a new one.
 //
 // COPY CONTRACT (authoritative — reproduces cli/clone.go + tui/dialogs.go): the
-// server READS the source record and copies Config, Backend, Tag, Color, and
-// Branch into the new instance; DisplayName is set from new_display_name
+// server READS the source record and copies Config, Backend, KubeCluster, Tag,
+// Color, and Branch into the new instance (never KubeKey: a clone's key is its
+// own); DisplayName is set from new_display_name
 // (falling back to new_instance); Status starts as CLONING. The optional
 // override fields override the copied Tag/Color/Branch without clobbering the
 // rest; absent override == use the source value.
@@ -1298,7 +1311,7 @@ const file_jobs_proto_rawDesc = "" +
 	"\binstance\x18\x03 \x01(\v2\x13.fleetgrpc.InstanceR\binstance\x12\x0e\n" +
 	"\x02ms\x18\x04 \x01(\x03R\x02ms\x12\x1a\n" +
 	"\bwarnings\x18\x05 \x03(\tR\bwarningsB\b\n" +
-	"\x06_error\"\x90\x02\n" +
+	"\x06_error\"\xb3\x02\n" +
 	"\x15CreateInstanceRequest\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12\x1b\n" +
@@ -1306,7 +1319,8 @@ const file_jobs_proto_rawDesc = "" +
 	"\abackend\x18\x04 \x01(\x0e2\x16.fleetgrpc.BackendTypeR\abackend\x12\x1b\n" +
 	"\x06branch\x18\x05 \x01(\tH\x01R\x06branch\x88\x01\x01\x12\x18\n" +
 	"\averbose\x18\x06 \x01(\bR\averbose\x12)\n" +
-	"\x10remember_default\x18\a \x01(\bR\x0frememberDefaultB\t\n" +
+	"\x10remember_default\x18\a \x01(\bR\x0frememberDefault\x12!\n" +
+	"\fkube_cluster\x18\b \x01(\tR\vkubeClusterB\t\n" +
 	"\a_remoteB\t\n" +
 	"\a_branch\"\x81\x01\n" +
 	"\x16DestroyInstanceRequest\x12\x14\n" +

@@ -143,6 +143,12 @@ func InstanceToProto(i *fleet.Instance) *fleetgrpc.Instance {
 	if i.LastBranch != "" {
 		pi.LastBranch = strptr(i.LastBranch)
 	}
+	if i.KubeCluster != "" {
+		pi.KubeCluster = strptr(i.KubeCluster)
+	}
+	if i.KubeKey != "" {
+		pi.KubeKey = strptr(i.KubeKey)
+	}
 	pi.Automated = i.Automated
 	// Warnings is proto-only (populated by jobs); it has no legacy field.
 	return pi
@@ -165,6 +171,8 @@ func InstanceFromProto(pi *fleetgrpc.Instance) *fleet.Instance {
 		Branch:       pi.GetBranch(),
 		LastBranch:   pi.GetLastBranch(),
 		Automated:    pi.GetAutomated(),
+		KubeCluster:  pi.GetKubeCluster(),
+		KubeKey:      pi.GetKubeKey(),
 	}
 	if ts := pi.GetCreatedAt(); ts != nil {
 		inst.CreatedAt = ts.AsTime()
@@ -254,6 +262,7 @@ func AgentsToProto(in []fleet.Agent) []*fleetgrpc.Agent {
 			Command:      a.Command,
 			SystemPrompt: a.SystemPrompt,
 			Backend:      BackendToProto(a.Backend),
+			KubeCluster:  a.KubeCluster,
 		})
 	}
 	return out
@@ -271,6 +280,7 @@ func AgentsFromProto(in []*fleetgrpc.Agent) []fleet.Agent {
 			Command:      a.GetCommand(),
 			SystemPrompt: a.GetSystemPrompt(),
 			Backend:      BackendFromProto(a.GetBackend()),
+			KubeCluster:  a.GetKubeCluster(),
 		})
 	}
 	return out
@@ -501,6 +511,8 @@ func BackendToProto(b fleet.BackendType) fleetgrpc.BackendType {
 		return fleetgrpc.BackendType_BACKEND_TYPE_CODER
 	case fleet.BackendCodespaces:
 		return fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES
+	case fleet.BackendKubernetes:
+		return fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES
 	default:
 		return fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED
 	}
@@ -517,6 +529,8 @@ func BackendFromProto(b fleetgrpc.BackendType) fleet.BackendType {
 		return fleet.BackendCoder
 	case fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES:
 		return fleet.BackendCodespaces
+	case fleetgrpc.BackendType_BACKEND_TYPE_KUBERNETES:
+		return fleet.BackendKubernetes
 	default:
 		return ""
 	}
