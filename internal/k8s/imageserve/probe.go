@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"runtime"
 	"strings"
 	"sync"
@@ -283,6 +284,12 @@ func (g *Gateway) CheckRoute(ctx context.Context, clusterID, digest string) Rout
 	client := &http.Client{Transport: g.Transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {
+		// The request's URL (with the registry id) says nothing the host
+		// does not.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
 		if isCertificateError(err) {
 			rc.Step = StepTLS
 			rc.Message = "the daemon host does not trust the TLS certificate of the gateway at " + host + ": " + err.Error()
