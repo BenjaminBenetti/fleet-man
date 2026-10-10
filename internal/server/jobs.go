@@ -184,6 +184,9 @@ func newJobManager() *jobManager {
 
 type job struct {
 	summary *fleetgrpc.JobSummary
+	// target is where a create job's instance goes, echoed on JobStarted. Set
+	// before the job's goroutine starts; nil for other kinds.
+	target *fleetgrpc.DeployTarget
 
 	// ctx is the job's own context (jobcancel.go): derived from the daemon's
 	// background context, so it ends at shutdown, and cancellable on its own —
@@ -350,6 +353,7 @@ func (s *service) runJob(j *job, work func() (finalInstance *fleetgrpc.Instance,
 		Fleet:     j.summary.Fleet,
 		Instance:  j.summary.Instance,
 		StartedAt: j.summary.StartedAt,
+		Target:    j.target,
 	}}})
 
 	finalInstance, warnings, err := work()
@@ -470,10 +474,12 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	backendType := s.resolveBackend(req.GetBackend())
 	wsDir := filepath.Join(state.WorkspacesDir(), fleetName, instanceName, fleetName)
 
-	var remote string
+	var (
+		remote string
+		target fleet.DeployTarget
+	)
 	err := state.Update(func(st *state.State) error {
 		f, ok := st.Fleets[fleetName]
 		if !ok {
@@ -502,14 +508,12 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 		} else {
 			remote = f.Remote
 		}
-		// An UNSPECIFIED backend resolved to the host default (which may be
-		// coder) — for a template fleet, devcontainer is the only backend that
-		// can consume a copied directory, so narrow it the way the TUI's add-
-		// instance dialog does. An explicit coder/codespaces still fails fast.
-		if req.GetBackend() == fleetgrpc.BackendType_BACKEND_TYPE_UNSPECIFIED && fleet.IsTemplateRemote(remote) {
-			backendType = fleet.BackendDevcontainer
-		}
-		if err := validateTemplateRemote(remote, req.GetBranch(), backendType, wsDir); err != nil {
+		// Resolved once the remote is known: an UNSPECIFIED target takes the
+		// remembered default, which a template fleet narrows to devcontainer
+		// (the only target that can consume a copied directory), as
+		// ListDeployTargets does. An explicit coder/codespaces still fails fast.
+		target = s.resolveTarget(req.GetBackend(), remote)
+		if err := validateTemplateRemote(remote, req.GetBranch(), target.Backend, wsDir); err != nil {
 			return err
 		}
 		if _, err := f.GetInstance(instanceName); err == nil {
@@ -522,7 +526,7 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 			WorkspaceDir: wsDir,
 			CreatedAt:    time.Now(),
 			Status:       fleet.StatusCreating,
-			Backend:      backendType,
+			Backend:      target.Backend,
 			Branch:       req.GetBranch(),
 			Automated:    automated,
 		})
@@ -530,12 +534,20 @@ func (s *service) startCreateInstanceJob(req *fleetgrpc.CreateInstanceRequest, a
 	if err != nil {
 		return nil, err
 	}
+	if req.GetRememberDefault() {
+		// The create is accepted either way; a target that couldn't be
+		// remembered only means the next unspecified create gets the old one.
+		if err := s.rememberDefaultTarget(target); err != nil {
+			flog.Warn("remember default deploy target failed", "target", target.String(), "err", err)
+		}
+	}
 	s.pushState()
 
 	j := s.jobs.start(s.bgCtx, fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, fleetName, instanceName, time.Now())
+	j.target = protoconv.DeployTargetToProto(target)
 	go s.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
 		ctx := gitutil.WithHostKeyPrompt(j.ctx, s.gitHostKeys.ask)
-		err := jobRunCreate(ctx, fleetName, instanceName, remote, req.GetBranch(), req.GetVerbose(), backendType)
+		err := jobRunCreate(ctx, fleetName, instanceName, remote, req.GetBranch(), req.GetVerbose(), target.Backend)
 		return loadInstanceSnapshot(fleetName, instanceName), nil, err
 	})
 	return j, nil
@@ -925,25 +937,4 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 	})
 	s.pushState()
 	return warnings
-}
-
-// resolveBackend turns the request's BackendType into a concrete backend: an
-// explicit value wins; UNSPECIFIED falls back to config.json's DefaultBackend
-// (when valid) and finally devcontainer.
-func (s *service) resolveBackend(b fleetgrpc.BackendType) fleet.BackendType {
-	switch b {
-	case fleetgrpc.BackendType_BACKEND_TYPE_CODER:
-		return fleet.BackendCoder
-	case fleetgrpc.BackendType_BACKEND_TYPE_CODESPACES:
-		return fleet.BackendCodespaces
-	case fleetgrpc.BackendType_BACKEND_TYPE_DEVCONTAINER:
-		return fleet.BackendDevcontainer
-	default:
-		if cfg, err := state.LoadConfig(); err == nil {
-			if bt := fleet.BackendType(cfg.DefaultBackend); fleet.ValidateBackendType(bt) == nil {
-				return bt
-			}
-		}
-		return fleet.BackendDevcontainer
-	}
 }
