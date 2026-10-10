@@ -362,3 +362,67 @@ func TestClaudeStatusFollowsTheSetting(t *testing.T) {
 		t.Fatal("a leftover file survived a daemon started with the setting off")
 	}
 }
+
+// TestClaudeStatusWritesThroughTheControlChannel: an instance whose backend
+// carries its control channel gets its file through that channel, whatever its
+// host directory holds: every change and heartbeat at once, an unchanged file
+// again once it may have been lost (controlChannelRepairInterval), and removed
+// through the channel with the setting off.
+func TestClaudeStatusWritesThroughTheControlChannel(t *testing.T) {
+	st := statusFleets(t)
+	channels := stubChannelInstances(t, "delta", "old") // delta: running, no host mount; old: stopped
+	delta := channels["delta"]
+	c := newClaudeStatus(newHub())
+	acts := map[string]fleetgrpc.AgentActivity{"web/alpha": working}
+	writes := func() int { _, n, _ := delta.snapshot(); return n }
+
+	t0 := time.UnixMilli(1_000_000)
+	c.update(st, acts, t0, t0)
+	files, _, _ := delta.snapshot()
+	var f agentstrategy.StatusModFile
+	if err := json.Unmarshal(files[agentstrategy.StatusModFileName], &f); err != nil {
+		t.Fatalf("no status file through the channel: %v (%q)", err, files)
+	}
+	if !f.Live || f.Fleet != "api" || f.Instance != "delta" || f.Working != 1 || f.UpdatedAt != t0.UnixMilli() {
+		t.Fatalf("file through the channel = %+v, want delta's live file", f)
+	}
+	if mode := delta.modes[agentstrategy.StatusModFileName]; mode != 0o644 {
+		t.Fatalf("mode = %o, want 0644", mode)
+	}
+	if _, ok := readStatusFile(t, "api", "delta"); ok {
+		t.Fatal("a channel instance's file was written to its host directory")
+	}
+	if _, n, _ := channels["old"].snapshot(); n != 0 {
+		t.Fatal("a stopped channel instance got a file")
+	}
+
+	c.update(st, acts, t0, t0.Add(claudeStatusInterval))
+	if got := writes(); got != 1 {
+		t.Fatalf("writes = %d before the heartbeat, want 1", got)
+	}
+	c.update(st, acts, t0, t0.Add(claudeStatusHeartbeat))
+	if got := writes(); got != 2 {
+		t.Fatalf("writes = %d after the heartbeat, want 2", got)
+	}
+
+	// Not live: no heartbeat, but the file is sent again once it may be gone.
+	tOff := t0.Add(2 * claudeStatusHeartbeat)
+	c.pause()
+	c.update(st, nil, time.Time{}, tOff)
+	c.update(st, nil, time.Time{}, tOff.Add(controlChannelRepairInterval-claudeStatusInterval))
+	if got := writes(); got != 3 {
+		t.Fatalf("writes = %d before the repair interval, want 3", got)
+	}
+	c.update(st, nil, time.Time{}, tOff.Add(controlChannelRepairInterval))
+	if got := writes(); got != 4 {
+		t.Fatalf("writes = %d at the repair interval, want 4", got)
+	}
+
+	c.removeAll(st)
+	for _, name := range []string{"delta", "old"} {
+		files, _, removes := channels[name].snapshot()
+		if len(files) != 0 || len(removes) != 1 || removes[0] != agentstrategy.StatusModFileName {
+			t.Fatalf("%s after removeAll: files %q, removes %q; want the file removed through the channel", name, files, removes)
+		}
+	}
+}

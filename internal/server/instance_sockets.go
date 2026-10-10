@@ -336,8 +336,12 @@ func (s *instanceSocketSet) close() {
 }
 
 // controlDirTarget returns an instance's target when its control directory
-// exists on the host.
+// exists on the host. An instance whose backend carries the control channel
+// itself has none to serve: its sockets are the backend's.
 func controlDirTarget(fleetName string, inst *fleet.Instance) (instanceTarget, bool) {
+	if instanceHasControlChannel(inst) {
+		return instanceTarget{}, false
+	}
 	dir := state.ControlDir(fleetName, inst.Name)
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		return instanceTarget{}, false
