@@ -180,6 +180,40 @@ func TestStartInstanceNoOpsWhenAlreadyRunning(t *testing.T) {
 	}
 }
 
+// TestTransitionsBindControllerToInstanceRecord pins the stop/start
+// construction site: the controller is built for the persisted instance record
+// (backendutil.NewForInstance), not for a bare backend type, so a backend whose
+// handle needs more of the instance's identity than its type gets it.
+func TestTransitionsBindControllerToInstanceRecord(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	client := &fakeClient{}
+	restore := stubLifecycleClient(client)
+	defer restore()
+	var bound []*fleet.Instance
+	newClient = func(instance *fleet.Instance) containerController {
+		bound = append(bound, instance)
+		return client
+	}
+
+	writeLifecycleState(t, fleet.StatusRunning)
+	if _, err := StopInstance("alpha", "agent-1"); err != nil {
+		t.Fatalf("StopInstance() error = %v", err)
+	}
+	if _, err := StartInstance("alpha", "agent-1"); err != nil {
+		t.Fatalf("StartInstance() error = %v", err)
+	}
+
+	if len(bound) != 2 {
+		t.Fatalf("controller built %d times, want 2 (stop + start)", len(bound))
+	}
+	for _, instance := range bound {
+		if instance.Name != "agent-1" || instance.ContainerID != "abc123" || instance.WorkspaceDir != "/tmp/alpha/agent-1/alpha" {
+			t.Fatalf("controller bound to %+v, want the persisted agent-1 record", instance)
+		}
+	}
+}
+
 // stubLifecycleClient swaps the package-level client + post-start hook
 // for test doubles. Both are reset together because every transition
 // test goes through the same path: build a client, call Start/Stop, run
@@ -190,7 +224,7 @@ func stubLifecycleClient(client containerController) func() {
 	prevClient := newClient
 	prevHook := postStartHook
 	prevBranch := readWorkspaceBranch
-	newClient = func(backendType fleet.BackendType) containerController { return client }
+	newClient = func(*fleet.Instance) containerController { return client }
 	postStartHook = func(string, *fleet.Instance, string) {}
 	readWorkspaceBranch = func(*fleet.Instance) (string, bool) { return "", false }
 	return func() {

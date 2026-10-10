@@ -138,17 +138,23 @@ func teardownFleetNetwork(fleetName string, enabled bool) []string {
 	return nil
 }
 
-// jobDownInstance tears down one provisioned instance's container. Best-effort:
-// a backend failure is returned so the caller can WARN, but teardown proceeds.
+// jobDownInstance tears down one instance's container. Best-effort: a backend
+// failure is returned so the caller can WARN, but teardown proceeds.
 var jobDownInstance = func(inst *fleet.Instance) error {
+	return downInstance(backendutil.NewForInstance(inst, false), inst)
+}
+
+// downInstance tears inst down through b, its NewForInstance backend. An
+// instance with a ContainerID goes through Down. One without never finished
+// provisioning: a backend that can find what a failed or interrupted create
+// allocated by the instance's key (backend.OrphanDowner) removes that, and for
+// every other backend there is nothing to remove.
+func downInstance(b backend.Backend, inst *fleet.Instance) error {
 	if inst.ContainerID == "" {
+		if od, ok := b.(backend.OrphanDowner); ok {
+			return od.DownByKey()
+		}
 		return nil
-	}
-	var b backend.Backend
-	if inst.Backend == "" {
-		b = backendutil.New(fleet.BackendDevcontainer, false)
-	} else {
-		b = backendutil.NewForInstance(inst, false)
 	}
 	return b.Down(inst.ContainerID)
 }
@@ -714,9 +720,9 @@ func (s *service) startRebuildInstanceJob(req *fleetgrpc.RebuildInstanceRequest)
 		if isTransitionalStatus(inst.Status) {
 			return status.Errorf(codes.FailedPrecondition, "instance %s/%s is %s; wait for it to settle before rebuilding", fleetName, instanceName, inst.Status)
 		}
-		// SupportsRebuild is a pure capability check, so construct by type
-		// (no RegisterName / SSH-config file I/O under the state lock).
-		if !backendutil.New(inst.Backend, false).SupportsRebuild() {
+		// SupportsRebuild is a pure capability check, so use the capability-only
+		// handle (no RegisterName / SSH-config file I/O under the state lock).
+		if !backendutil.CapabilitiesFor(inst).SupportsRebuild() {
 			return status.Errorf(codes.FailedPrecondition, "backend %q does not support rebuild", inst.Backend)
 		}
 		inst.Status = fleet.StatusRebuilding

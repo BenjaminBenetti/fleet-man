@@ -320,12 +320,27 @@ func statsActivityPass(h *hub) {
 		}
 	}
 
-	activeKeys := make([]string, 0, len(items))
-	for _, it := range items {
+	// Capture and tool probe per instance, on the bounded worker pool: each
+	// worker fills only its own slot, merged into the maps below.
+	type probed struct {
+		capture backend.AllSessions
+		tool    string
+		toolOK  bool
+	}
+	probedAt := make([]probed, len(items))
+	forEachBounded(len(items), pollerWorkers, func(i int) {
+		it := items[i]
 		b := h.backendFor(it.inst)
-		captures[it.containerID] = b.CaptureAllSessions(it.containerID)
-		if tool, ok := b.AgentToolProbe(it.containerID); ok {
-			probes[it.containerID] = tool
+		p := &probedAt[i]
+		p.capture = b.CaptureAllSessions(it.containerID)
+		p.tool, p.toolOK = b.AgentToolProbe(it.containerID)
+	})
+	activeKeys := make([]string, 0, len(items))
+	for i, it := range items {
+		p := probedAt[i]
+		captures[it.containerID] = p.capture
+		if p.toolOK {
+			probes[it.containerID] = p.tool
 		}
 		expectedIDs = append(expectedIDs, it.containerID)
 		activeKeys = append(activeKeys, backendCacheKey(it.inst))
@@ -408,6 +423,7 @@ func sessionsPass(h *hub) {
 	}
 	type result struct {
 		fleetName, instance string
+		inst                *fleet.Instance
 		sessions            []*fleetgrpc.TmuxSession
 	}
 	var results []result
@@ -416,18 +432,21 @@ func sessionsPass(h *hub) {
 			if inst.ContainerID == "" || inst.Status != fleet.StatusRunning {
 				continue
 			}
-			// ListSessions execs directly against the container ID (no
-			// devcontainer Node cold start) and returns "" on failure — which,
-			// like a tmux server that isn't running, parses to an empty list and
-			// clears any stale sessions.
-			b := h.backendFor(inst)
-			sessions := parseTmuxSessionsProto(b.ListSessions(inst.ContainerID))
-			results = append(results, result{fleetName, inst.Name, sessions})
+			results = append(results, result{fleetName: fleetName, instance: inst.Name, inst: inst})
 		}
 	}
 	if len(results) == 0 {
 		return
 	}
+	// ListSessions execs directly against the container ID (no devcontainer
+	// Node cold start) and returns "" on failure — which, like a tmux server
+	// that isn't running, parses to an empty list and clears any stale
+	// sessions. Instances are listed on the bounded worker pool, each worker
+	// writing only its own result.
+	forEachBounded(len(results), pollerWorkers, func(i int) {
+		r := &results[i]
+		r.sessions = parseTmuxSessionsProto(h.backendFor(r.inst).ListSessions(r.inst.ContainerID))
+	})
 	h.post(func(h *hub) {
 		ups := make([]runtimeUpdate, 0, len(results))
 		for _, r := range results {

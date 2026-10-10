@@ -10,7 +10,6 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
-	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/gitutil"
@@ -60,15 +59,7 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 
 	wsDir := filepath.Join(state.WorkspacesDir(), fleetName, instanceName, fleetName)
 
-	var instanceBackend backend.Backend
-	switch backendType {
-	case fleet.BackendCoder:
-		instanceBackend = buildCoderBackend(fleetName, instanceName, remoteURL, branch, verbose)
-	case fleet.BackendCodespaces:
-		instanceBackend = buildCodespacesBackend(remoteURL, branch, verbose)
-	default:
-		instanceBackend = backendutil.New(backendType, verbose)
-	}
+	instanceBackend := createBackend(createRecord(fleetName, instanceName, wsDir, branch, backendType), fleetName, remoteURL, branch, verbose)
 
 	switch {
 	case backendType == fleet.BackendCoder || backendType == fleet.BackendCodespaces:
@@ -110,7 +101,10 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 		return err
 	}
 
-	result, err := instanceBackend.Up(wsDir, resolvedMounts.Mounts)
+	// UpContext hands the job's ctx (cancellation, JobLog, Hooks) to a backend
+	// whose provisioning is a cancellable multi-step sequence, and falls back to
+	// the plain Up for the rest.
+	result, err := backend.UpContext(ctx, instanceBackend, backend.UpRequest{WorkspaceDir: wsDir, Mounts: resolvedMounts.Mounts})
 	if err != nil {
 		setFailed(fleetName, instanceName, err)
 		return err

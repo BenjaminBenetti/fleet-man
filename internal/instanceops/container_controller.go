@@ -14,9 +14,10 @@ type containerController interface {
 	Stop(containerID string) error
 }
 
-// newClient builds the containerController for a backend type. It is a
-// package-level var so tests can replace it with a constructor that returns
+// newClient builds the containerController for an instance, bound to its
+// record through backendutil.NewForInstance (not just its backend type). It is
+// a package-level var so tests can replace it with a constructor that returns
 // a double.
-var newClient = func(backendType fleet.BackendType) containerController {
-	return backendutil.New(backendType, false)
+var newClient = func(instance *fleet.Instance) containerController {
+	return backendutil.NewForInstance(instance, false)
 }

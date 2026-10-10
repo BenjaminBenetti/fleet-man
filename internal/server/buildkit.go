@@ -93,14 +93,15 @@ func ensureConfiguredBuildkitServers(ctx context.Context) {
 
 // fleetHasCustomMountInstance reports whether any instance in the fleet runs on
 // a backend that honors custom mounts (devcontainer). An empty Backend defaults
-// to devcontainer, matching backendutil.New / jobDownInstance. Cloud-only and
-// instance-less fleets return false so they are skipped by the reconcile.
+// to devcontainer, matching backendutil.NewForInstance / jobDownInstance.
+// Cloud-only and instance-less fleets return false so they are skipped by the
+// reconcile.
 func fleetHasCustomMountInstance(f *fleet.Fleet) bool {
 	for _, inst := range f.Instances {
 		if inst == nil {
 			continue // tolerate a malformed/hand-edited state.json
 		}
-		if backendutil.New(inst.Backend, false).SupportsCustomMounts() {
+		if backendutil.CapabilitiesFor(inst).SupportsCustomMounts() {
 			return true
 		}
 	}
