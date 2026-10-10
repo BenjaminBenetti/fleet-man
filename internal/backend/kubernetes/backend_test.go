@@ -677,3 +677,35 @@ func TestReportWarningsGoOnTheBanner(t *testing.T) {
 		t.Errorf("banner %q, %v", data, err)
 	}
 }
+
+// A start whose pod does not come up fails with why, and leaves the
+// instance stopped: scaled back to 0, not left crash looping.
+func TestStartThatFailsScalesBackDown(t *testing.T) {
+	sts := handleSTS()
+	zero := int32(0)
+	r := newHandleRig(t, &appsv1.StatefulSet{ObjectMeta: handleMeta(sts), Spec: appsv1.StatefulSetSpec{Replicas: &zero}},
+		&corev1.PersistentVolumeClaim{ObjectMeta: handleMeta(sts), Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound}})
+	if err := SaveInstanceRecord(InstanceRecord{Cluster: handleCluster, Key: handleKey, StatefulSet: sts, Gen: 1, Fleet: "alpha", Instance: "web"}); err != nil {
+		t.Fatal(err)
+	}
+	// The controller makes a pod that keeps crashing.
+	r.cs.PrependReactor("patch", "statefulsets", func(a k8stesting.Action) (bool, kruntime.Object, error) {
+		if strings.Contains(string(a.(k8stesting.PatchAction).GetPatch()), `"replicas":1`) {
+			pod := &corev1.Pod{ObjectMeta: handleMeta(names.Pod(sts)), Status: corev1.PodStatus{Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{Name: DevContainer, RestartCount: 3,
+					State:                corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+					LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 2}}}}}}
+			_ = r.cs.Tracker().Add(pod)
+		}
+		return false, nil, nil
+	})
+	b := newHandle(r.inst(), r.pool)
+	err := b.Start(ContainerID(handleCluster, handleNS, sts, 1))
+	if code, _ := kubeerr.Of(err); code != kubeerr.CrashLoop {
+		t.Fatalf("start of a crash-looping instance: %v", err)
+	}
+	set, _ := r.cs.AppsV1().StatefulSets(handleNS).Get(context.Background(), sts, metav1.GetOptions{})
+	if *set.Spec.Replicas != 0 {
+		t.Fatalf("the failed start left replicas at %d", *set.Spec.Replicas)
+	}
+}

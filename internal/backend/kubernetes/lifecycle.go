@@ -55,7 +55,8 @@ func (b *Backend) Stop(containerID string) error {
 // again when the node lost it), connects its agent (restaging the daemon's
 // fleet build into it) and runs the devcontainer's start hooks
 // (postStart, postAttach). A hook that fails is a warning, as on docker: the
-// instance runs.
+// instance runs. A pod that does not come up, or whose agent does not
+// connect, fails the start, scaled back to 0.
 func (b *Backend) Start(containerID string) error {
 	w, err := b.where(containerID)
 	if err != nil {
@@ -75,6 +76,17 @@ func (b *Backend) Start(containerID string) error {
 	if err := p.Scale(ctx, w.cluster, w.sts, 1); err != nil {
 		return classify(err)
 	}
+	// A start that fails leaves the instance stopped, as a docker container
+	// that does not start is: its pod is not left to crash loop, or to wait
+	// on its image, behind a record that says stopped.
+	failed := func(err error) error {
+		down, cancel := context.WithTimeout(context.Background(), finishTimeout)
+		defer cancel()
+		if serr := p.Scale(down, w.cluster, w.sts, 0); serr != nil {
+			flog.Warn("kube start: scaling the instance that did not start back down", "cluster", w.cluster, "sts", w.sts, "err", serr)
+		}
+		return classify(err)
+	}
 	redelivered := false
 	pod, err := p.WaitReady(ctx, w.cluster, w.sts, WaitOptions{PVC: w.sts, Check: func(ctx context.Context) error {
 		if !redelivered && b.redeliver(ctx, rec) {
@@ -83,13 +95,13 @@ func (b *Backend) Start(containerID string) error {
 		return nil
 	}})
 	if err != nil {
-		return classify(err)
+		return failed(err)
 	}
 	t := rec.target()
 	t.Priority, t.Restage = PriorityInteractive, true
 	sess, err := p.EnsureAgent(ctx, t)
 	if err != nil {
-		return classify(err)
+		return failed(err)
 	}
 	if err := b.startHooks(ctx, sess, pod, rec, containerID); err != nil {
 		state.WriteWarn(id.fleet, id.name, fmt.Sprintf("lifecycle hooks after start: %v", err))
