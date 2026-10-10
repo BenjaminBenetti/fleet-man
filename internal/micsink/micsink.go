@@ -31,6 +31,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/mic"
@@ -57,10 +58,17 @@ const (
 	FIFOPath = Dir + "/pcm"
 	// SourceName is the pipe-source's PulseAudio name.
 	SourceName = mic.VirtualSourceName
+	// The silent fallback keeps fleetoutput.monitor from becoming the default
+	// source while the mic is off. PulseAudio lets streams opened on the
+	// current default follow later default changes, even with --device set.
+	silentSource = "fleetnull.monitor"
 
 	// serverStartTimeout bounds how long Ensure waits for a freshly-started
 	// server to answer.
 	serverStartTimeout = 5 * time.Second
+	// Allow the old sink to finish closing after daemon stdin EOF. This stays
+	// well below the audio lock's 20 s bound so new startup can wait safely.
+	micFeedStopTimeout = 3 * time.Second
 )
 
 // The sink's stdout protocol: one event per line, "<event>[ <detail>]". The
@@ -97,7 +105,7 @@ func serverScript() string {
 
 func audioServerScript(microphone bool) string {
 	if !microphone {
-		return fmt.Sprintf("load-module module-native-protocol-unix socket=%s auth-anonymous=1\nload-module module-null-sink sink_name=fleetnull sink_properties=device.description=FleetNull\nset-default-sink fleetnull\n", path("pulse.sock"))
+		return fmt.Sprintf("load-module module-native-protocol-unix socket=%s auth-anonymous=1\nload-module module-null-sink sink_name=fleetnull sink_properties=device.description=FleetNull\nset-default-sink fleetnull\nset-default-source %s\n", path("pulse.sock"), silentSource)
 	}
 	return fmt.Sprintf(`load-module module-native-protocol-unix socket=%s auth-anonymous=1
 load-module module-null-sink sink_name=fleetnull sink_properties=device.description=FleetNull
@@ -197,7 +205,11 @@ func ensureAudio(microphone bool) error {
 			return nil
 		}
 		if mic = micPresent(); mic == yes {
-			return nil
+			// A failed shutdown can leave the module loaded after selecting
+			// the silent fallback (including a command whose result was lost).
+			// Re-enabling must restore default capture, not just the module.
+			_, err := pactl(context.Background(), "set-default-source", SourceName)
+			return err
 		}
 		if mic == unknown {
 			// Up, and we could not ask what it carries. It may be serving a
@@ -292,9 +304,19 @@ func ensureAudio(microphone bool) error {
 
 // Stop shuts the instance's virtual-microphone server down, if it is running.
 // Used when the feature is turned off: recorders then find no microphone at
-// all, rather than a silent one.
+// all. If routing cannot be made safe for live output recorders, it returns an
+// error and leaves the microphone module loaded. The daemon disables capture
+// and closes the microphone feed before calling Stop.
 func Stop() error {
 	return withAudioLock(func() error {
+		// A daemon cleanup may arrive late, after the user re-enabled the mic.
+		// Check in the instance, under the same lock as Run's startup: a host-side
+		// settings check alone cannot protect against a delayed remote command.
+		feed, err := lockMicFeed(syscall.LOCK_EX)
+		if err != nil {
+			return err
+		}
+		defer feed.Close()
 		if _, err := lookPath("pactl"); err != nil || serverAnswers() == no {
 			return nil
 		}
@@ -306,11 +328,49 @@ func Stop() error {
 			if micPresent() == no {
 				return nil
 			}
-			_, err := pactl(context.Background(), "unload-module", "module-pipe-source")
+			// Set the fallback BEFORE removing the mic. Making the output
+			// monitor default un-pins even a live recorder, which then follows
+			// the default onto the mic when it is re-enabled. Retry a transient
+			// control failure once; otherwise preserve routing and report it.
+			for attempt := 0; attempt < 2; attempt++ {
+				_, err = pactl(context.Background(), "set-default-source", silentSource)
+				if err == nil {
+					break
+				}
+			}
+			if err != nil {
+				return fmt.Errorf("leaving microphone loaded to preserve output routing: set silent default source: %w", err)
+			}
+			_, err = pactl(context.Background(), "unload-module", "module-pipe-source")
 			return err
 		}
 		return stopServer()
 	})
+}
+
+// lockMicFeed is called with audio.lock held. Run keeps a shared lease until
+// its watcher and FIFO have closed; Stop needs an exclusive lease. Kernel file
+// locks also release on process death, so a killed sink cannot block cleanup.
+func lockMicFeed(mode int) (*os.File, error) {
+	f, err := os.OpenFile(path("mic-feed.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(micFeedStopTimeout)
+	for {
+		err := syscall.Flock(int(f.Fd()), mode|syscall.LOCK_NB)
+		if err == nil {
+			return f, nil
+		}
+		if mode != syscall.LOCK_EX || !errors.Is(err, syscall.EWOULDBLOCK) || time.Now().After(deadline) {
+			f.Close()
+			return nil, fmt.Errorf("microphone feed still active; deferring cleanup: %w", err)
+		}
+		// Run releases its lease only after the watcher and FIFO are closed.
+		// Waiting here lets ordinary off complete without a spurious warning;
+		// a re-enabled active feed keeps its lease and is never interrupted.
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func stopServer() error {
