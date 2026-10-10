@@ -137,6 +137,25 @@ jobs:
           FLEET_KUBESHIM_CLI: "1"
         run: go test -count=1 -timeout 25m -v ./internal/kubeshim ./internal/backend/kubernetes/devcli ./internal/backend/kubernetes/podspec
 
+  # Image delivery against the runner's real docker and registry:2 (push,
+  # digest, managed pull secret, DELETE detection, retention GC). Not in the
+  # aggregate check, like kubeshim-cli.
+  kubeimage-docker:
+    name: kubeimage docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run the kubeimage docker tests
+        env:
+          FLEET_KUBEIMAGE_DOCKER: "1"
+        run: go test -count=1 -timeout 10m -v -run TestRealDocker ./internal/backend/kubernetes/kubeimage
+
   # Single aggregate check: green only when every shard passed. Preserves one
   # stable "integration" status name for branch protection / the review loop,
   # independent of how many shards the matrix expands to.

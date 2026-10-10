@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeshim"
 )
@@ -38,6 +39,10 @@ type CaptureRequest struct {
 	GPU bool
 	// NoCache builds without the layer cache (--build-no-cache).
 	NoCache bool
+	// Remote reaches the registry of an image-only configuration's image,
+	// which is read from there when the daemon host lacks it for Platform;
+	// the zero value uses the daemon host's docker logins.
+	Remote kubeimage.RemoteOptions
 }
 
 // CaptureResult is a capture-up's outcome.
@@ -145,7 +150,7 @@ func CaptureUp(ctx context.Context, req CaptureRequest) (*CaptureResult, error) 
 	argv, _ := json.Marshal(capture.Redacted().Args)
 	fmt.Fprintf(jobLog, "captured: docker %s %s\n", capture.Verb, argv)
 
-	if res.Image, err = imageFor(ctx, docker, res.Run.Image, req.Platform, jobLog); err != nil {
+	if res.Image, err = imageFor(ctx, docker, res.Run.Image, req.Platform, req.Remote, jobLog); err != nil {
 		return nil, err
 	}
 	if res.Container, err = kubeshim.ContainerFor(capture, res.Image); err != nil {
