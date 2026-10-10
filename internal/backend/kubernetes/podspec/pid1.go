@@ -41,8 +41,9 @@ type PID1 struct {
 	// OOMScoreAdj is --oom-score-adj.
 	OOMScoreAdj *int `json:"oom_score_adj,omitempty"`
 	// Hostname and Domainname are --hostname and --domainname, set by
-	// pod-init when the pod may (it is privileged or has SYS_ADMIN); "" when
-	// the pod keeps the name its StatefulSet gives it.
+	// pod-init when the pod may (it is privileged or has SYS_ADMIN, and is not
+	// on the host network, whose UTS namespace is the node's); "" when the pod
+	// keeps the name it has.
 	Hostname   string `json:"hostname,omitempty"`
 	Domainname string `json:"domainname,omitempty"`
 	// Privileged marks a privileged pod, whose PID 1 may lay out its own

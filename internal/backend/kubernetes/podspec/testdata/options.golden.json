@@ -45,6 +45,36 @@
       "--add-host host.docker.internal:host-gateway: host.docker.internal resolves to 127.0.0.2, but host_gateway is off on prod-eu, so no daemon-host port is mirrored there"
     ]
   },
+  "add-host/host-gateway-other-name": {
+    "args": [
+      "--add-host=gw:host-gateway"
+    ],
+    "outcomes": {
+      "add-host": "map"
+    },
+    "changes": {
+      "/hostAliases/0/hostnames/0": "gw",
+      "/hostAliases/0/hostnames/1": "host.docker.internal",
+      "/hostAliases/0/ip": "127.0.0.2",
+      "/hostGateway": true
+    }
+  },
+  "add-host/host-gateway-own-address": {
+    "args": [
+      "--add-host=gw:host-gateway",
+      "--add-host=host.docker.internal:10.0.0.9"
+    ],
+    "outcomes": {
+      "add-host": "map"
+    },
+    "changes": {
+      "/hostAliases/0/hostnames/0": "gw",
+      "/hostAliases/0/ip": "127.0.0.2",
+      "/hostAliases/1/hostnames/0": "host.docker.internal",
+      "/hostAliases/1/ip": "10.0.0.9",
+      "/hostGateway": true
+    }
+  },
   "add-host/invalid": {
     "args": [
       "--add-host=db:not-an-ip"
@@ -761,7 +791,10 @@
       "/ports/2/hostIP": "127.0.0.1",
       "/ports/2/hostPort": 0,
       "/ports/2/protocol": "TCP"
-    }
+    },
+    "warnings": [
+      "--publish-all: only TCP is forwarded from a pod; 53/udp, 5353/udp not published"
+    ]
   },
   "gpus": {
     "args": [
@@ -968,6 +1001,34 @@
     },
     "warnings": [
       "--hostname devbox: the pod keeps the hostname its StatefulSet gives it (setting another needs SYS_ADMIN); devbox resolves to 127.0.0.1"
+    ]
+  },
+  "hostname/host-network": {
+    "args": [
+      "-h",
+      "devbox",
+      "--domainname",
+      "corp.example",
+      "--privileged",
+      "--network",
+      "host"
+    ],
+    "outcomes": {
+      "domainname": "delta",
+      "hostname": "delta",
+      "network": "map",
+      "privileged": "map"
+    },
+    "changes": {
+      "/hostAliases/0/hostnames/0": "devbox",
+      "/hostAliases/0/ip": "127.0.0.1",
+      "/hostNetwork": true,
+      "/pid1/privileged": true,
+      "/security/privileged": true
+    },
+    "warnings": [
+      "--hostname devbox: the pod keeps the hostname its StatefulSet gives it (a host-network pod shares the node's hostname, which fleet never changes); devbox resolves to 127.0.0.1",
+      "--domainname corp.example: the pod keeps its own domain name (a host-network pod shares the node's hostname, which fleet never changes)"
     ]
   },
   "hostname/privileged": {
@@ -1186,7 +1247,24 @@
       "log-opt": "delta"
     },
     "warnings": [
-      "--log-opt max-size=10m, max-file=3: the kubelet keeps the container's log; `fleet logs` reads it"
+      "--log-opt max-size, max-file: the kubelet keeps the container's log; `fleet logs` reads it"
+    ]
+  },
+  "log-opt/credentials": {
+    "args": [
+      "--log-driver",
+      "splunk",
+      "--log-opt",
+      "splunk-token=hunter22",
+      "--log-opt",
+      "splunk-url=https://splunk.example:8088"
+    ],
+    "outcomes": {
+      "log-driver": "delta",
+      "log-opt": "delta"
+    },
+    "warnings": [
+      "--log-driver splunk, --log-opt splunk-token, splunk-url: the kubelet keeps the container's log; `fleet logs` reads it"
     ]
   },
   "mac-address": {
@@ -2011,7 +2089,10 @@
       "/ports/0/hostIP": "127.0.0.1",
       "/ports/0/hostPort": 8080,
       "/ports/0/protocol": "TCP"
-    }
+    },
+    "warnings": [
+      "--publish-all: only TCP is forwarded from a pod; 5353/udp not published"
+    ]
   },
   "publish/address": {
     "args": [

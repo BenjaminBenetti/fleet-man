@@ -195,7 +195,7 @@ func TestEnvKey(t *testing.T) {
 			t.Errorf("envKey(%q) = %q, want %q", name, got, want)
 		}
 	}
-	for _, name := range []string{"with space", "x-already-hashed-looking", "ünïcode", strings.Repeat("A", 254), "a/b"} {
+	for _, name := range []string{"with space", "x-already-hashed-looking", "ünïcode", strings.Repeat("A", 254), "a/b", ".", "..", "..x"} {
 		got := envKey(name)
 		if !strings.HasPrefix(got, "x-") || len(got) != 18 || !secretKeyRE.MatchString(got) {
 			t.Errorf("envKey(%q) = %q, want x-<16 hex>", name, got)
@@ -203,6 +203,36 @@ func TestEnvKey(t *testing.T) {
 	}
 	if envKey("a b") == envKey("a  b") {
 		t.Error("two names share a key")
+	}
+}
+
+// A host-network pod is in the node's UTS namespace: pod-init must never
+// set a hostname there, however privileged the pod is.
+func TestHostNetworkNeverRenamesTheNode(t *testing.T) {
+	for _, grant := range [][]string{{"--privileged"}, {"--cap-add", "SYS_ADMIN"}} {
+		args := append([]string{"--network", "host", "-h", "devbox", "--domainname", "corp.example"}, grant...)
+		in := baseInput(args, nil, nil)
+		in.Facts.Local = true
+		res, err := Translate(in)
+		if err != nil {
+			t.Fatalf("%v: %v", grant, err)
+		}
+		if !res.Pod.HostNetwork || res.Pod.PID1.Hostname != "" || res.Pod.PID1.Domainname != "" {
+			t.Errorf("%v: hostNetwork %v, pid1 hostname %q domainname %q; want no name set on a host-network pod",
+				grant, res.Pod.HostNetwork, res.Pod.PID1.Hostname, res.Pod.PID1.Domainname)
+		}
+	}
+}
+
+// A log driver's options carry its credentials: messages name them by key.
+func TestLogOptValuesStayOutOfWarnings(t *testing.T) {
+	res, err := Translate(baseInput([]string{"--log-driver", "splunk", "--log-opt", "splunk-token=hunter22"}, nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(res.Pod.Warnings, "\n")
+	if strings.Contains(joined, "hunter22") || !strings.Contains(joined, "splunk-token") {
+		t.Errorf("warnings %q, want the key without its value", joined)
 	}
 }
 

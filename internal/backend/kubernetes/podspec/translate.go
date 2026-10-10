@@ -98,6 +98,8 @@ type translation struct {
 	// publishAll is -P; exposed are --expose's ports.
 	publishAll bool
 	exposed    []int
+	// exposedOther are --expose's ports of another protocol, as written.
+	exposedOther []string
 	// runMounts are the run's mounts in the order given, before fleet's
 	// mounts and the image's volumes join them.
 	runMounts []runMount
@@ -157,7 +159,11 @@ func (t *translation) applyOptions() {
 			if _, ok := deltaFlags[opt.Reason]; !ok {
 				deltaReasons = append(deltaReasons, opt.Reason)
 			}
-			deltaFlags[opt.Reason] = append(deltaFlags[opt.Reason], flagValues(opt.Name, vals))
+			shown := flagValues(opt.Name, vals)
+			if keysOnly[opt.Name] {
+				shown = flagKeys(opt.Name, vals)
+			}
+			deltaFlags[opt.Reason] = append(deltaFlags[opt.Reason], shown)
 		case opt.Outcome == Refuse:
 			t.refuse(refuseOption(opt.Name, flagValues(opt.Name, vals)+": "+opt.Reason))
 		}
@@ -210,8 +216,23 @@ func allFalse(vals []string) bool {
 	return len(vals) > 0
 }
 
+// keysOnly are the key=value options a message names by key alone: a log
+// driver's options carry its credentials (splunk-token, ...).
+var keysOnly = map[string]bool{"log-opt": true}
+
+// flagKeys writes a key=value option with the keys it was given:
+// "--log-opt max-size, splunk-token".
+func flagKeys(name string, vals []string) string {
+	var keys []string
+	for _, v := range vals {
+		k, _, _ := strings.Cut(v, "=")
+		keys = appendUnique(keys, k)
+	}
+	return flagText(name, strings.Join(keys, ", "))
+}
+
 // flagValues writes an option with every value it was given:
-// "--log-opt max-size=1m, max-file=3", or "--rm" for a boolean.
+// "--storage-opt size=120G", or "--rm" for a boolean.
 func flagValues(name string, vals []string) string {
 	var shown []string
 	for _, v := range vals {

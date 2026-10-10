@@ -65,7 +65,12 @@ func (t *translation) optPID(vals []string) Outcome {
 	return ""
 }
 
+// hostDockerInternal is the name docker gives the daemon host; a run that
+// declares host-gateway under any name gets it too.
+const hostDockerInternal = "host.docker.internal"
+
 func (t *translation) optAddHost(vals []string) Outcome {
+	gateway := false
 	for _, v := range vals {
 		// docker takes host=ip, and host:ip from before IPv6 needed "=".
 		name, addr, ok := strings.Cut(v, "=")
@@ -77,6 +82,7 @@ func (t *translation) optAddHost(vals []string) Outcome {
 			continue
 		}
 		if addr == "host-gateway" {
+			gateway = true
 			t.addHostAlias(HostGatewayIP, name)
 			if t.cluster.MirrorsHostGateway() {
 				t.spec.HostGateway = true
@@ -92,7 +98,22 @@ func (t *translation) optAddHost(vals []string) Outcome {
 		}
 		t.addHostAlias(ip.String(), name)
 	}
+	if gateway {
+		t.aliasHostDockerInternal()
+	}
 	return ""
+}
+
+// aliasHostDockerInternal names the host-gateway address host.docker.internal
+// as well, for a run that declared host-gateway, unless the run gives that
+// name an address of its own.
+func (t *translation) aliasHostDockerInternal() {
+	for _, a := range t.spec.HostAliases {
+		if containsString(a.Hostnames, hostDockerInternal) {
+			return
+		}
+	}
+	t.addHostAlias(HostGatewayIP, hostDockerInternal)
 }
 
 // addHostAlias adds name for ip to the pod's /etc/hosts, after the names ip
@@ -172,15 +193,23 @@ func (t *translation) optDomainname(vals []string) Outcome {
 // finishHostname gives the pod the run's hostname and domain name where it
 // can: pod-init sets them when the pod has SYS_ADMIN. Otherwise the pod keeps
 // the name its StatefulSet gives it, and the run's name resolves locally.
+//
+// A host-network pod is in the node's UTS namespace (docker's --network host
+// keeps a private one), so setting the name there would rename the node: it
+// keeps the node's name whatever the pod may do.
 func (t *translation) finishHostname() {
-	canSet := t.hasCap("SYS_ADMIN") || t.sysbox
+	canSet := (t.hasCap("SYS_ADMIN") || t.sysbox) && !t.spec.HostNetwork
+	why := "setting another needs SYS_ADMIN"
+	if t.spec.HostNetwork {
+		why = "a host-network pod shares the node's hostname, which fleet never changes"
+	}
 	if t.hostname != "" {
 		if canSet {
 			t.spec.PID1.Hostname = t.hostname
 			t.setOutcome("hostname", Map)
 		} else {
 			t.addHostAlias("127.0.0.1", t.hostname)
-			t.warn("--hostname %s: the pod keeps the hostname its StatefulSet gives it (setting another needs SYS_ADMIN); %s resolves to 127.0.0.1", t.hostname, t.hostname)
+			t.warn("--hostname %s: the pod keeps the hostname its StatefulSet gives it (%s); %s resolves to 127.0.0.1", t.hostname, why, t.hostname)
 		}
 	}
 	if t.domainname != "" {
@@ -188,7 +217,7 @@ func (t *translation) finishHostname() {
 			t.spec.PID1.Domainname = t.domainname
 			t.setOutcome("domainname", Map)
 		} else {
-			t.warn("--domainname %s: the pod keeps its own domain name (setting another needs SYS_ADMIN)", t.domainname)
+			t.warn("--domainname %s: the pod keeps its own domain name (%s)", t.domainname, why)
 		}
 	}
 }
@@ -310,6 +339,7 @@ func (t *translation) optExpose(vals []string) Outcome {
 			continue
 		}
 		if proto != "" && !strings.EqualFold(proto, "tcp") {
+			t.exposedOther = appendUnique(t.exposedOther, strings.ToLower(v))
 			continue
 		}
 		for p := lo; p <= hi; p++ {
@@ -330,14 +360,19 @@ func (t *translation) finishPorts() {
 		published[p.ContainerPort] = true
 	}
 	ports := append([]int(nil), t.exposed...)
+	other := append([]string(nil), t.exposedOther...)
 	for _, key := range sortedKeys(t.in.Image.Config.ExposedPorts) {
 		raw, proto, _ := strings.Cut(key, "/")
 		if proto != "" && !strings.EqualFold(proto, "tcp") {
+			other = appendUnique(other, strings.ToLower(key))
 			continue
 		}
 		if p, err := portNumber(raw); err == nil {
 			ports = append(ports, p)
 		}
+	}
+	if len(other) > 0 {
+		t.warn("--publish-all: only TCP is forwarded from a pod; %s not published", strings.Join(other, ", "))
 	}
 	for _, p := range ports {
 		if published[p] {

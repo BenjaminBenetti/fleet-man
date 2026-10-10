@@ -46,14 +46,15 @@ const (
 // limit less room for the object's metadata.
 const maxSecretData = 1<<20 - 16<<10
 
-// secretKeyRE is a valid Secret data key.
+// secretKeyRE is the character set of a Secret data key, which also must
+// not be "." or start with "..".
 var secretKeyRE = regexp.MustCompile(`^[-._a-zA-Z0-9]+$`)
 
 // envKey is the Secret key a variable's value is kept under: its name when
 // that is a valid key, else a digest of it (an environment variable name
 // may hold characters a key cannot).
 func envKey(name string) string {
-	if len(name) <= 253 && secretKeyRE.MatchString(name) && !strings.HasPrefix(name, "x-") {
+	if len(name) <= 253 && secretKeyRE.MatchString(name) && name != "." && !strings.HasPrefix(name, "..") && !strings.HasPrefix(name, "x-") {
 		return name
 	}
 	sum := sha256.Sum256([]byte(name))
@@ -124,9 +125,12 @@ func (t *translation) secrets() (Secrets, error) {
 	}
 	s.Spec[MergedFile] = merged
 
-	for name, data := range map[string]map[string][]byte{"spec": s.Spec, "env": s.Env} {
-		if n := secretSize(data); n > maxSecretData {
-			return Secrets{}, &Refusal{Code: CodeSpecTooLarge, Reason: fmt.Sprintf("the instance's %s Secret would hold %d bytes; a Secret holds at most %d", name, n, maxSecretData)}
+	for _, sec := range []struct {
+		name string
+		data map[string][]byte
+	}{{"spec", s.Spec}, {"env", s.Env}} {
+		if n := secretSize(sec.data); n > maxSecretData {
+			return Secrets{}, &Refusal{Code: CodeSpecTooLarge, Reason: fmt.Sprintf("the instance's %s Secret would hold %d bytes; a Secret holds at most %d", sec.name, n, maxSecretData)}
 		}
 	}
 	return s, nil

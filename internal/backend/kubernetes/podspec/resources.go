@@ -352,7 +352,8 @@ func (t *translation) finishNodeSelector() {
 	for k, v := range t.nodeSelector {
 		sel[k] = v
 	}
-	for k, v := range t.cluster.NodeSelector {
+	for _, k := range sortedKeys(t.cluster.NodeSelector) {
+		v := t.cluster.NodeSelector[k]
 		if have, ok := sel[k]; ok && have != v {
 			t.refuse(&Refusal{Code: CodeSettings, Reason: fmt.Sprintf("%s's node_selector %s=%s conflicts with the image, which needs %s=%s", t.clusterName(), k, v, k, have)})
 			continue
