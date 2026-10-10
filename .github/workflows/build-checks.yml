@@ -42,6 +42,12 @@ jobs:
       - name: Static and flavor checks
         run: make check-static
 
+      # Each linux daemon build's BinStore serves the fleet-pod builds beside
+      # it (the same build of the source, the pod flavor), never its own
+      # executable.
+      - name: BinStore version equality
+        run: make check-binstore
+
       - name: No client-go in the pod build
         run: make check-nok8s
 

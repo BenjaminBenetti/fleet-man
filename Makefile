@@ -13,7 +13,7 @@ PROTOC_GEN_GO_VERSION      := v1.36.11
 PROTOC_GEN_GO_GRPC_VERSION := v1.5.1
 
 .PHONY: proto proto-check lint build test mod-test
-.PHONY: dist fleet-pod pod-tmux pod-binaries check-static check-nok8s check-pod-tmux startup-budget
+.PHONY: dist fleet-pod pod-tmux pod-binaries check-static check-binstore check-nok8s check-pod-tmux startup-budget
 
 ## proto: regenerate the fleetgrpc Go stubs from the .proto contract.
 ## Requires `buf` on PATH (installed by the devcontainer).
@@ -105,6 +105,13 @@ check-static:
 	$(BUILDCHECK) static $(wildcard $(DIST)/fleet-linux-* $(DIST)/fleet-pod-linux-* $(DIST)/fleet-tmux-linux-*.tar.gz)
 	$(BUILDCHECK) flavor -want full $(wildcard $(DIST)/fleet-linux-* $(DIST)/fleet-darwin-*)
 	$(BUILDCHECK) flavor -want pod $(wildcard $(DIST)/fleet-pod-linux-*)
+
+## check-binstore: each linux daemon build in $(DIST) serves the pod builds
+## beside it (same version, pod flavor) through its BinStore, never itself.
+check-binstore:
+	@set -e; for arch in $(POD_ARCHES); do \
+	  $(BUILDCHECK) binstore -daemon $(DIST)/fleet-linux-$$arch -dir $(DIST) -arch "$(POD_ARCHES)"; \
+	done
 
 ## check-nok8s: no k8s.io module reaches the pod build's import graph.
 check-nok8s:

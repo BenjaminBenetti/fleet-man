@@ -4,6 +4,7 @@
 //	buildcheck flavor -want full|pod FILE...  binaries are the build their names say
 //	buildcheck nok8s [-platforms LIST] PKG    no k8s.io module in PKG's pod-build import graph
 //	buildcheck startup [flags]                cold start and RSS budgets against a base build
+//	buildcheck binstore -daemon F -dir D      the daemon's BinStore serves the pod builds in D
 //
 // Run it with `go run ./internal/tools/buildcheck`; see the check-* and
 // startup-budget targets in the Makefile.
@@ -34,6 +35,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = runNoK8s(args[1:], stdout)
 	case "startup":
 		err = runStartup(args[1:], stdout)
+	case "binstore":
+		err = runBinStore(args[1:], stdout)
 	case "-h", "-help", "--help", "help":
 		usage(stdout)
 		return 0
@@ -56,5 +59,7 @@ func usage(w io.Writer) {
   flavor -want full|pod FILE...   binaries are the build their names say
   nok8s [-platforms LIST] PKG     no k8s.io module in PKG's -tags nok8s import graph
   startup [flags]                 cold start and RSS budgets against a base build
+  binstore -daemon F -dir D       the daemon F's BinStore serves version-equal pod builds from D,
+                                  never F itself
 `)
 }
