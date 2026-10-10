@@ -572,3 +572,27 @@ func TestInterruptedJobsEndTheirCreationLog(t *testing.T) {
 		t.Fatalf("an instance without a creation log got one: %v", err)
 	}
 }
+
+// A job that carries on from an earlier one's log appends to it.
+func TestContinueProvisioningLogAppends(t *testing.T) {
+	isolateFleetDir(t)
+	path := state.InstanceCreationLogPath("alpha", "one")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("==> fleet rebuild: alpha/one\nseeding\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	j := newJobManager().start(context.Background(), fleetgrpc.JobKind_JOB_KIND_REBUILD_INSTANCE, "alpha", "one", time.Now())
+	l := continueProvisioningLog(j, "alpha", "one", "rollback of the interrupted rebuild")
+	l.Step(fleet.StepRollback, "restoring")
+	l.finish(nil)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.HasPrefix(got, "==> fleet rebuild: alpha/one\nseeding\n==> fleet rollback of the interrupted rebuild: alpha/one at ") || !strings.Contains(got, "==> rolling back: restoring\n") {
+		t.Fatalf("log:\n%s", got)
+	}
+}

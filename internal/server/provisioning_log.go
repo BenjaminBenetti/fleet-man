@@ -95,12 +95,15 @@ func openProvisioningLog(j *job, fleetName, instanceName, what string) *provisio
 // interrupted): its lines are appended to the instance's creation log.
 func continueProvisioningLog(j *job, fleetName, instanceName, what string) *provisioningLog {
 	l := &provisioningLog{job: j, path: state.InstanceCreationLogPath(fleetName, instanceName)}
-	if err := os.MkdirAll(filepath.Dir(l.path), 0o700); err == nil {
-		l.file, err = os.OpenFile(l.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
-		if err != nil {
-			l.file = nil
-			flog.Warn("creation log unavailable", "fleet", fleetName, "instance", instanceName, "path", l.path, "err", err)
-		}
+	err := os.MkdirAll(filepath.Dir(l.path), 0o700)
+	var f *os.File
+	if err == nil {
+		f, err = os.OpenFile(l.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	}
+	if err != nil {
+		flog.Warn("creation log unavailable", "fleet", fleetName, "instance", instanceName, "path", l.path, "err", err)
+	} else {
+		l.file = f
 	}
 	l.mu.Lock()
 	l.lineLocked(fleetgrpc.LogLevel_LOG_LEVEL_INFO, "",
