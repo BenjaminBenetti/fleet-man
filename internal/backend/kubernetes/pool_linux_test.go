@@ -195,7 +195,14 @@ func (h *harness) addPod(name string) PodTarget {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	h.t.Cleanup(func() { _ = os.RemoveAll(root) })
+	h.t.Cleanup(func() {
+		// The pod's agents end with the pool; whatever they still write as
+		// they exit goes with a second sweep.
+		h.pool.Close()
+		_ = os.RemoveAll(root)
+		time.Sleep(200 * time.Millisecond)
+		_ = os.RemoveAll(root)
+	})
 	spec, _ := json.Marshal(execas.Spec{UserEnvProbe: execas.ProbeNone, WorkingDir: "/"})
 	_ = os.WriteFile(filepath.Join(root, "exec.json"), spec, 0o600)
 	h.roots[pod.Name] = root
