@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"testing"
@@ -108,5 +109,42 @@ func TestReadRegisterRequestTimeout(t *testing.T) {
 	_, err := ReadRegisterRequest(conn, 50*time.Millisecond)
 	if !errors.Is(err, ErrHandshakeTimeout) {
 		t.Fatalf("ReadRegisterRequest err = %v, want ErrHandshakeTimeout", err)
+	}
+}
+
+// TestStreamConnSplitsLargeWrites verifies a write larger than maxStreamFrame
+// leaves as several messages, none above the cap, that the peer reads back as
+// the same bytes. A registry connection's 4 MiB window lets yamux write a
+// 4 MiB data frame in one call, the gRPC default receive-message limit.
+func TestStreamConnSplitsLargeWrites(t *testing.T) {
+	pipe := make(chan []byte, 8)
+	writer := NewStreamConn(&memStream{out: pipe}, nil)
+	reader := NewStreamConn(&memStream{in: pipe}, nil)
+
+	payload := make([]byte, 2*maxStreamFrame+maxStreamFrame/2)
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	n, err := writer.Write(payload)
+	if err != nil || n != len(payload) {
+		t.Fatalf("write = (%d, %v), want (%d, nil)", n, err, len(payload))
+	}
+	if len(pipe) != 3 {
+		t.Fatalf("a %d-byte write sent %d messages, want 3", len(payload), len(pipe))
+	}
+	for i := 0; i < 3; i++ {
+		frame := <-pipe
+		if len(frame) > maxStreamFrame {
+			t.Fatalf("message %d is %d bytes, above the %d cap", i, len(frame), maxStreamFrame)
+		}
+		pipe <- frame
+	}
+	close(pipe)
+	got, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatal("split write did not reassemble to the same bytes")
 	}
 }

@@ -2,16 +2,19 @@ package tunnel
 
 import "io"
 
-// tag.go defines the per-stream type tag used once the FeatureGRPC capability is
-// negotiated. Every yamux stream the gateway opens then begins with a single TAG
-// byte that tells fleetd how to handle the rest of the stream:
+// tag.go defines the per-stream type tag used once a tagging feature (see Tagged)
+// is negotiated. Every yamux stream the gateway opens then begins with a single
+// TAG byte that tells fleetd how to handle the rest of the stream:
 //
-//	TagMCP     → the stream carries an HTTP request for the loopback MCP server.
-//	TagGRPC    → the stream carries a raw native-gRPC (HTTP/2) connection that fleetd
-//	             splices to its gRPC server.
-//	TagWebhook → the stream carries an HTTP request for the automation webhook
-//	             receiver (an inbound POST the gateway accepted at
-//	             <public-url>/webhook/<name>).
+//	TagMCP      → the stream carries an HTTP request for the loopback MCP server.
+//	TagGRPC     → the stream carries a raw native-gRPC (HTTP/2) connection that
+//	              fleetd splices to its gRPC server.
+//	TagWebhook  → the stream carries an HTTP request for the automation webhook
+//	              receiver (an inbound POST the gateway accepted at
+//	              <public-url>/webhook/<name>).
+//	TagRegistry → the stream carries an HTTP request for fleetd's pull-only image
+//	              registry (a node pulling <public-host>/<rid>/... through the
+//	              gateway's /v2/ route).
 //
 // The gateway writes the tag as the FIRST bytes of the stream, before relaying
 // any client/payload bytes, so fleetd can read it immediately without sniffing
@@ -20,13 +23,15 @@ import "io"
 // RegisterRequest/RegisterReply handshake.
 //
 // Because an un-upgraded peer does not know about tags, tags are used ONLY when
-// a tagging feature (FeatureGRPC or FeatureWebhook) is in the negotiated feature
-// set (see tunnel.go); otherwise the tunnel stays byte-for-byte the legacy
-// MCP-only stream.
+// a tagging feature (FeatureGRPC, FeatureWebhook or FeatureRegistry) is in the
+// negotiated feature set (see Tagged in tunnel.go); otherwise the tunnel stays
+// byte-for-byte the legacy MCP-only stream. A registry attach connection
+// (AttachRegistry) is always tagged, and carries only TagRegistry streams.
 const (
-	TagMCP     byte = 0x00
-	TagGRPC    byte = 0x01
-	TagWebhook byte = 0x02
+	TagMCP      byte = 0x00
+	TagGRPC     byte = 0x01
+	TagWebhook  byte = 0x02
+	TagRegistry byte = 0x03
 )
 
 // WriteTag writes a single stream-type tag byte.
