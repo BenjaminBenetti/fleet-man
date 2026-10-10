@@ -21,6 +21,13 @@ import (
 // client on its unix socket plus the channel Serve's result lands on.
 func startServe(t *testing.T) (fleetgrpc.FleetServiceClient, <-chan error) {
 	t.Helper()
+	return startServeSeeded(t, nil)
+}
+
+// startServeSeeded is startServe with seed run against the throwaway HOME
+// before the daemon starts, to lay down the ~/.fleet a previous daemon left.
+func startServeSeeded(t *testing.T, seed func()) (fleetgrpc.FleetServiceClient, <-chan error) {
+	t.Helper()
 	// Not t.TempDir(): the socket lives under HOME and a unix socket path is
 	// capped near 104 bytes, which a test-named temp dir can exceed.
 	home, err := os.MkdirTemp("", "fleetd")
@@ -31,6 +38,12 @@ func startServe(t *testing.T) (fleetgrpc.FleetServiceClient, <-chan error) {
 	t.Setenv("HOME", home)
 	// The relay would point this test process's SSH_AUTH_SOCK at itself.
 	t.Setenv(agentsock.EnvOverride, "off")
+	if seed != nil {
+		if err := os.MkdirAll(fleetpaths.Dir(), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		seed()
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
