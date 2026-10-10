@@ -1,0 +1,143 @@
+name: Build Checks
+
+# The release builds and their budgets, checked on every change rather than only
+# at release time: every linux binary static (CGO_ENABLED=0), the fleet-pod
+# build (-tags nok8s) free of client-go, the static tmux bundle, and the
+# start-up/RSS budgets against main. Branch builds are never released, so the
+# fleet-pod binaries and tmux bundles are uploaded per arch as artifacts for
+# daemons running a branch build (FLEET_POD_BINARY_<ARCH> or ~/.fleet/bin).
+
+on:
+  pull_request:
+    branches: [main, feat/kubernetes]
+  # feat/kubernetes is a long-lived integration branch that work merges into
+  # directly, so its pushes run the checks too.
+  push:
+    branches: [feat/kubernetes]
+
+# Serialize branch pushes: a newer push replaces a queued run but never cancels
+# one in flight. PR runs keep one group per run, so they never wait on each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  static:
+    name: static builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build release binaries
+        run: make dist
+
+      # No program interpreter or shared-library dependency (ldd agrees for
+      # amd64), CGO_ENABLED=0 in the build info, and each binary the flavor
+      # (full or pod) its name says.
+      - name: Static and flavor checks
+        run: make check-static
+
+      - name: No client-go in the pod build
+        run: make check-nok8s
+
+      - name: Vet and test the pod build
+        run: |
+          go vet -tags nok8s ./...
+          go test -tags nok8s ./internal/buildflavor/ ./internal/tools/...
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fleet-pod-linux-amd64
+          path: dist/fleet-pod-linux-amd64
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fleet-pod-linux-arm64
+          path: dist/fleet-pod-linux-arm64
+          if-no-files-found: error
+
+  pod-tmux:
+    name: pod tmux ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    # arm64 builds under QEMU; a cold cache takes a while.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Set up QEMU
+        if: matrix.arch != 'amd64'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # The gha cache backend needs the runtime token and cache URLs, which
+      # only JavaScript actions see: export them to the `docker buildx` that
+      # make runs.
+      - name: Expose the Actions cache to buildx
+        uses: actions/github-script@v7
+        with:
+          script: |
+            for (const key of ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RUNTIME_URL', 'ACTIONS_CACHE_URL',
+                               'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2']) {
+              if (process.env[key]) core.exportVariable(key, process.env[key])
+            }
+
+      # The Dockerfile's verify stage already runs the smoke test in a bare
+      # Alpine (no tmux, no terminfo) and checks `tmux -V` against the pin.
+      - name: Build the tmux bundle
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          make pod-tmux POD_ARCHES="$ARCH" POD_BIN_DIR=dist \
+            TMUX_BUILD_FLAGS="--cache-from type=gha,scope=pod-tmux-$ARCH --cache-to type=gha,mode=max,scope=pod-tmux-$ARCH,ignore-error=true"
+
+      - name: Smoke-test it on other distros
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: make check-pod-tmux POD_ARCHES="$ARCH"
+
+      - name: Static check
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: go run ./internal/tools/buildcheck static "dist/fleet-tmux-linux-$ARCH.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fleet-tmux-linux-${{ matrix.arch }}
+          path: dist/fleet-tmux-linux-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  # Cold start and RSS of the pod build (`version`) and the host build
+  # (`version`, `__complete`, which the shell runs on every Tab press) against
+  # main: each may grow at most 15ms, and the pod build stays under 40 MiB.
+  startup-budget:
+    name: start-up budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Fetch main
+        run: git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: Measure against main
+        run: make startup-budget BASE_REF=origin/main STARTUP_FLAGS="-summary $GITHUB_STEP_SUMMARY"

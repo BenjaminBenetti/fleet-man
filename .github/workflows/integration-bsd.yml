@@ -66,8 +66,9 @@ jobs:
           docker version
           docker info
 
+      # Static (CGO_ENABLED=0), as released: see the Makefile's dist target.
       - name: Build fleet binary
-        run: go build -o /usr/local/bin/fleet ./cmd/fleet
+        run: CGO_ENABLED=0 go build -o /usr/local/bin/fleet ./cmd/fleet
 
       - name: Run integration tests under BSD shims
         env:
