@@ -1,0 +1,7 @@
+{
+  "error": "kubernetes:unsupported:mount: /home/dev/host/hostbind/aws at /home/vscode/.aws (host-dir): a bind of a daemon-host directory needs fleet's host-bind sync, which fleet does not provide on Kubernetes yet; kubernetes:unsupported:mount: /home/dev/host/hostbind/gitconfig at /home/vscode/.gitconfig-host (host-file): a bind of a daemon-host file needs fleet's host-bind sync, which fleet does not provide on Kubernetes yet",
+  "refusals": [
+    "kubernetes:unsupported:mount",
+    "kubernetes:unsupported:mount"
+  ]
+}

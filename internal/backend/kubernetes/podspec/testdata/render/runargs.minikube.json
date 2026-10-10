@@ -1,0 +1,6 @@
+{
+  "error": "kubernetes:unsupported:mount: kubeshim-fixture-volume at /kubeshim-volume (shared-volume): a named volume other containers share lives on the fleet's share, which fleet does not provide on Kubernetes yet",
+  "refusals": [
+    "kubernetes:unsupported:mount"
+  ]
+}

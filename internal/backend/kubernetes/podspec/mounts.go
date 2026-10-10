@@ -16,6 +16,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
+	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
 )
 
 // The mount options. Each mount is read as docker reads it, then classified
@@ -335,10 +336,10 @@ func (t *translation) addVolume(m rawMount, target string) {
 	switch {
 	case m.source == "":
 		mt.Anonymous = true
-		mt.SubPath = "vol/anon-" + sha8(target)
+		mt.SubPath = podseed.VolumeSubPath("anon-" + sha8(target))
 	case t.devID != "" && strings.Contains(m.source, t.devID):
 		// ${devcontainerId}: this container's own volume.
-		mt.SubPath = "vol/" + m.source + sub
+		mt.SubPath = podseed.VolumeSubPath(m.source) + sub
 	default:
 		mt.Kind = MountSharedVolume
 		mt.SubPath = ".vol/" + sha8(m.source) + sub
@@ -503,7 +504,7 @@ func (t *translation) finishMounts() {
 			continue
 		}
 		seen[target] = true
-		mounts = append(mounts, Mount{Kind: MountVolume, Target: target, SubPath: "vol/anon-" + sha8(target), CopyUp: true, Anonymous: true})
+		mounts = append(mounts, Mount{Kind: MountVolume, Target: target, SubPath: podseed.VolumeSubPath("anon-" + sha8(target)), CopyUp: true, Anonymous: true})
 	}
 	t.spec.Mounts = mounts
 }

@@ -29,6 +29,16 @@ const (
 	CodeSettings = "kubernetes:misconfigured"
 	// CodeAdmissionDenied starts the error of a render admission refused.
 	CodeAdmissionDenied = "kubernetes:admission_denied"
+	// CodeUnsupportedMount is a mount fleet cannot provide in a pod yet (a
+	// host socket or directory, the fleet's share, the docker engine).
+	CodeUnsupportedMount = "kubernetes:unsupported:mount"
+	// CodeQuota is a ResourceQuota that has no room for the instance.
+	CodeQuota = "kubernetes:quota"
+	// CodeForbidden is a permission fleet's credential lacks.
+	CodeForbidden = "kubernetes:forbidden"
+	// CodeInvalidSpec is a spec the API server finds invalid: something
+	// the run asked for that this cluster's API does not take.
+	CodeInvalidSpec = "kubernetes:unsupported:spec"
 )
 
 // Refusal is one reason a run cannot become a pod.
@@ -56,6 +66,11 @@ func Refusals(err error) []*Refusal {
 	walk = func(err error) {
 		if r, ok := err.(*Refusal); ok {
 			out = append(out, r)
+			return
+		}
+		// A classified denial (DryRun's) is a refusal too.
+		if r, ok := err.(interface{ Refusal() *Refusal }); ok {
+			out = append(out, r.Refusal())
 			return
 		}
 		if j, ok := err.(interface{ Unwrap() []error }); ok {
