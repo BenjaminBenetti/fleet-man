@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -77,6 +78,9 @@ func TestLiveBackendLifecycle(t *testing.T) {
 		restricted := lb.connect(t, map[string]string{"pod-security.kubernetes.io/enforce": "restricted"}, false)
 		lb.lifecycle(t, restricted, "tierc", func(ws string) { writeLiveWorkspace(t, ws, map[string]any{"image": image}) }, "")
 	})
+	t.Run("group-add", func(t *testing.T) {
+		lb.groupAdd(t, open, image)
+	})
 	t.Run("failed create", func(t *testing.T) {
 		lb.failedCreate(t, open, image)
 	})
@@ -97,6 +101,32 @@ func TestLiveBackendLifecycle(t *testing.T) {
 			"/usr/local/go/bin/go version | cut -d' ' -f3 | cut -c1-6": "go1.24",
 		})
 	})
+}
+
+// groupAdd: a runArgs --group-add naming a group of the image becomes its
+// gid in the pod's supplementalGroups.
+func (lb *liveBackend) groupAdd(t *testing.T, lv *live, image string) {
+	inst, sts := lb.instance(t, lv, "groups", func(ws string) {
+		writeLiveWorkspace(t, ws, map[string]any{"image": image, "runArgs": []string{"--group-add", "users"}})
+	})
+	b := newHandle(inst, lb.pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	res, err := b.UpContext(backend.WithJobLog(ctx, &lineLog{t: t}), backend.UpRequest{WorkspaceDir: inst.WorkspaceDir})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	set, err := lv.cs.AppsV1().StatefulSets(lv.ns).Get(ctx, sts, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc := set.Spec.Template.Spec.SecurityContext; sc == nil || !slices.Contains(sc.SupplementalGroups, 100) {
+		t.Errorf("the pod's security context %+v, want the image's users group (100) in its supplementalGroups", sc)
+	}
+	if err := b.Down(res.ContainerID); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	lb.waitNothingLeft(t, lv, inst.KubeKey)
 }
 
 // fixture creates an instance from an integration fixture, checks what the

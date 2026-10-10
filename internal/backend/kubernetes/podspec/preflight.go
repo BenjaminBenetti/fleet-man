@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/devmeta"
@@ -125,11 +126,21 @@ func PreflightCapture(merged json.RawMessage, workspaceDir, workspaceFolder stri
 			return nil, fmt.Errorf("reading the devcontainer's runArgs: %w", err)
 		}
 		for _, f := range run.Flags {
-			if !preflightDropped[f.Name] {
-				args = append(args, "--"+f.Name+"="+resolve(f.Value))
+			if preflightDropped[f.Name] || f.Name == "group-add" && !numericID(f.Value) {
+				// A group named rather than numbered resolves against the
+				// built image's /etc/group (Input.LookupGroup), which the
+				// admission of the real capture has and this one does not.
+				continue
 			}
+			args = append(args, "--"+f.Name+"="+resolve(f.Value))
 		}
 	}
 	args = append(args, PreflightImage, "/bin/sh", "-c", "exit 0")
 	return &kubeshim.Capture{Format: kubeshim.CaptureFormat, Verb: "run", Args: args, Labels: labels}, nil
+}
+
+// numericID is whether s is a uid or gid docker takes as a number.
+func numericID(s string) bool {
+	n, err := strconv.ParseInt(s, 10, 64)
+	return err == nil && n >= 0
 }

@@ -184,6 +184,7 @@ func (c *creation) provision(ctx context.Context, cfg *devcli.Config) (*backend.
 		return nil, err
 	}
 	in := c.input(capture.Capture, capture.Image, cfg)
+	in.LookupGroup = c.groupsOf(ctx, capture.Image.ID).lookup(ctx)
 	r := c.renderInput(imageRefOf(del), c.seedJob(ctx, capture.Image.ID))
 	adm, err := podspec.Admit(ctx, c.cs, in, r)
 	if err != nil {
@@ -381,16 +382,30 @@ func (c *creation) imageSize(ctx context.Context, imageID string) int64 {
 	if imageID == "" {
 		return 0
 	}
-	docker := c.env.Tools.Docker
-	if docker == "" {
-		docker = "docker"
-	}
-	out, err := exec.CommandContext(ctx, docker, "image", "inspect", "--format", "{{.Size}}", imageID).Output()
+	out, err := exec.CommandContext(ctx, c.docker(), "image", "inspect", "--format", "{{.Size}}", imageID).Output()
 	if err != nil {
 		return 0
 	}
 	n, _ := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
 	return n
+}
+
+// docker is the daemon host's docker.
+func (c *creation) docker() string {
+	if c.env.Tools.Docker != "" {
+		return c.env.Tools.Docker
+	}
+	return "docker"
+}
+
+// groupsOf resolves the run's --group-add names against image imageID's
+// /etc/group; a failed read goes to the job's log, beside the refusal of the
+// name it leaves unresolved.
+func (c *creation) groupsOf(ctx context.Context, imageID string) *imageGroups {
+	return &imageGroups{docker: c.docker(), image: imageID, platform: c.facts.Platform, report: func(err error) {
+		backend.ReportWarning(ctx, err.Error())
+		flog.Warn("kube create: reading the image's groups", "cluster", c.id.cluster, "key", c.id.key, "err", err)
+	}}
 }
 
 // imageTarget is where the image goes: the connection, as its preflight
