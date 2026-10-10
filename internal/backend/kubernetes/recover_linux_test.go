@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -172,6 +173,20 @@ func TestUndoRebuildAfterReset(t *testing.T) {
 	h.mu.Unlock()
 	if spec.Op != podseed.OpRollback || spec.Gen != 2 || spec.PVC != podspec.JobDiskPath {
 		t.Fatalf("rollback spec %+v", spec)
+	}
+	// The re-apply itself carries the instance's replicas: a stopped
+	// instance is not started by its own rollback, not even for a moment.
+	applied := false
+	for _, a := range h.cs.Actions() {
+		if pa, ok := a.(k8stesting.PatchActionImpl); ok && pa.GetResource().Resource == "statefulsets" && pa.GetPatchType() == types.ApplyPatchType {
+			applied = true
+			if !strings.Contains(string(pa.GetPatch()), `"replicas":0`) {
+				t.Fatalf("re-applied with %s", pa.GetPatch())
+			}
+		}
+	}
+	if !applied {
+		t.Fatal("generation 2's StatefulSet was not re-applied")
 	}
 	sts := h.sts()
 	if *sts.Spec.Replicas != 0 || sts.Annotations[names.AnnotationRebuildGen] != "2" || sts.Annotations[names.AnnotationOp] != "" {

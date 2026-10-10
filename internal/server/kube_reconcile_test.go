@@ -335,6 +335,8 @@ func TestReconcilerPass(t *testing.T) {
 		&corev1.Secret{ObjectMeta: objMeta("fi-alpha-gone-gggggggg-env-g1", r.id, "gggggggg", "u-g3")},
 		// A journal no record holds whose job finished (a restored one).
 		&corev1.PersistentVolumeClaim{ObjectMeta: objMeta("fi-alpha-later-llllllll", r.id, "llllllll", "u-l1")},
+		// A journal a job of this daemon's still writes.
+		markedObj(&corev1.PersistentVolumeClaim{ObjectMeta: objMeta("fi-alpha-busy-uuuuuuuu", r.id, "uuuuuuuu", "u-u1")}, "create@seed"),
 		&corev1.PersistentVolumeClaim{ObjectMeta: objMeta("fi-alpha-ran-rrrrrrrr", r.id, "rrrrrrrr", "u-r1")},
 		&appsv1.StatefulSet{ObjectMeta: objMeta("fi-alpha-dead-tttttttt", r.id, "tttttttt", "u-t1")},
 		&corev1.PersistentVolumeClaim{ObjectMeta: objMeta("fi-alpha-dead-tttttttt", r.id, "tttttttt", "u-t2")},
@@ -349,6 +351,11 @@ func TestReconcilerPass(t *testing.T) {
 	r.journal("later", "llllllll", kubernetes.OpCreate, "seed", func(j *kubernetes.Journal) {
 		j.Objects = []kubernetes.JournalObject{{Kind: kubernetes.KindPVC, Name: "fi-alpha-later-llllllll", UID: "u-l1", Created: true, Anchor: true}}
 	})
+	r.journal("busy", "uuuuuuuu", kubernetes.OpCreate, "seed", func(j *kubernetes.Journal) {
+		j.Objects = []kubernetes.JournalObject{{Kind: kubernetes.KindPVC, Name: "fi-alpha-busy-uuuuuuuu", UID: "u-u1", Created: true, Anchor: true}}
+	})
+	busy := r.svc.jobs.start(context.Background(), fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, "alpha", "busy", time.Now())
+	t.Cleanup(func() { r.svc.jobs.finish(busy.summary.GetJobId()) })
 	r.record("ran", "rrrrrrrr", fleet.StatusRunning, "")
 	r.journal("ran", "rrrrrrrr", kubernetes.OpCreate, "finish", func(j *kubernetes.Journal) {
 		j.Objects = []kubernetes.JournalObject{{Kind: kubernetes.KindPVC, Name: "fi-alpha-ran-rrrrrrrr", UID: "u-r1", Created: true, Anchor: true}}
@@ -386,7 +393,7 @@ func TestReconcilerPass(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if gone("secret", "fi-alpha-gone-gggggggg-env-g1") || gone("pvc", "fi-alpha-later-llllllll") || gone("pvc", "fi-alpha-ran-rrrrrrrr") || gone("pvc", "fi-alpha-back-bbbbbbbb") {
+	if gone("secret", "fi-alpha-gone-gggggggg-env-g1") || gone("pvc", "fi-alpha-later-llllllll") || gone("pvc", "fi-alpha-busy-uuuuuuuu") || !journalExists("uuuuuuuu") || gone("pvc", "fi-alpha-ran-rrrrrrrr") || gone("pvc", "fi-alpha-back-bbbbbbbb") {
 		t.Fatal("the pass deleted what is not known garbage")
 	}
 	if journalExists("gggggggg") || journalExists("rrrrrrrr") || journalExists("llllllll") {
