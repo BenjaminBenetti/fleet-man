@@ -613,6 +613,103 @@ itest_control_mode() { _be_control_mode "$(_itest_ref "$1")" "$2"; }
 # share tree (itest_share_dir) agree. Instant on devcontainer, a bind mount.
 itest_share_sync() { _be_share_sync "$1"; }
 
+# === MCP ===
+
+# itest_mcp_call <tool> <arguments-json> [<field>] — call one tool on the
+# daemon's local MCP server (streamable HTTP on ~/.fleet/mcp.port, bearer token
+# ~/.fleet/mcp.token): initialize, initialized, tools/call, then close the
+# session. Prints the tool result as JSON ({content, structuredContent,
+# isError}), or with <field> just that value (see itest_json_field). A tool
+# error is a result with isError true, not a failure. Retries while a fresh
+# daemon brings its listener up; returns 1 when it never answers or the call is
+# a JSON-RPC error.
+itest_mcp_call() {
+  local tool="$1" args="$2" field="${3:-}"
+  local hdr port token url sid body="" result rc
+  hdr=$(mktemp)
+  for _ in $(seq 1 20); do
+    port=$(cat "${HOME}/.fleet/mcp.port" 2>/dev/null || true)
+    token=$(cat "${HOME}/.fleet/mcp.token" 2>/dev/null || true)
+    url="http://127.0.0.1:${port}/"
+    if [ -n "${port}" ] && [ -n "${token}" ] && curl -sf -D "${hdr}" -o /dev/null -X POST "${url}" \
+        -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' \
+        -H 'Accept: application/json, text/event-stream' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"itest","version":"0"}}}'; then
+      sid=$(grep -i '^mcp-session-id:' "${hdr}" | head -n 1 | cut -d: -f2- | tr -d ' \r')
+      curl -sf -o /dev/null -X POST "${url}" \
+        -H "Authorization: Bearer ${token}" -H "Mcp-Session-Id: ${sid}" \
+        -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+        -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' || true
+      body=$(curl -sf -X POST "${url}" \
+        -H "Authorization: Bearer ${token}" -H "Mcp-Session-Id: ${sid}" \
+        -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"${tool}\",\"arguments\":${args}}}" || true)
+      curl -sf -o /dev/null -X DELETE "${url}" \
+        -H "Authorization: Bearer ${token}" -H "Mcp-Session-Id: ${sid}" || true
+      rc=0
+      result=$(printf '%s' "${body}" | _itest_mcp_result) || rc=$?
+      if [ "${rc}" -eq 0 ]; then
+        rm -f "${hdr}"
+        if [ -n "${field}" ]; then
+          printf '%s' "${result}" | itest_json_field "${field}"
+        else
+          printf '%s' "${result}"
+        fi
+        return 0
+      fi
+      # A JSON-RPC error is the server's answer: retrying would not change it.
+      if [ "${rc}" -eq 2 ]; then
+        break
+      fi
+    fi
+    sleep 0.5
+  done
+  rm -f "${hdr}"
+  printf 'MCP %s failed (port=%s): %s\n' "${tool}" "${port:-none}" "${body}" >&2
+  return 1
+}
+
+# _itest_mcp_result — the result object of the JSON-RPC reply with id 2 on
+# stdin (a plain JSON body or an SSE stream of data: lines), as JSON. Exits 1
+# when there is no such reply, 2 when it is a JSON-RPC error.
+_itest_mcp_result() {
+  perl -MJSON::PP -e '
+    my $body = do { local $/; <STDIN> };
+    my @msgs = map { /^data:\s?(.*)$/ ? ($1) : () } split /\r?\n/, $body;
+    @msgs = ($body) unless @msgs;
+    my $json = JSON::PP->new->utf8->canonical;
+    for my $m (@msgs) {
+      my $reply = eval { $json->decode($m) } or next;
+      next unless ref $reply eq "HASH" && defined $reply->{id} && $reply->{id} eq "2";
+      exit 2 unless ref $reply->{result} eq "HASH";
+      print $json->encode($reply->{result});
+      exit 0;
+    }
+    exit 1;
+  '
+}
+
+# itest_json_field <path> — the value at a dotted <path> in the JSON document on
+# stdin (structuredContent.sessions.0.session; numeric segments index arrays):
+# strings raw, true/false for booleans, objects and arrays as compact JSON with
+# sorted keys, nothing when the path does not resolve. Fails on invalid JSON.
+itest_json_field() {
+  perl -MJSON::PP -e '
+    my ($path) = @ARGV;
+    my $json = JSON::PP->new->utf8->canonical;
+    my $v = $json->decode(do { local $/; <STDIN> });
+    for my $k (split /\./, $path) {
+      if (ref $v eq "HASH") { $v = $v->{$k} }
+      elsif (ref $v eq "ARRAY" && $k =~ /^\d+$/) { $v = $v->[$k] }
+      else { undef $v }
+      exit 0 unless defined $v;
+    }
+    if (JSON::PP::is_bool($v)) { print $v ? "true" : "false" }
+    elsif (ref $v) { print $json->encode($v) }
+    else { binmode STDOUT, ":encoding(UTF-8)"; print $v }
+  ' "$1"
+}
+
 # === TUI helpers ===
 #
 # The fleet TUI is a bubbletea app. Tests drive it the same way a human

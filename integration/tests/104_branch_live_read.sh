@@ -18,43 +18,9 @@ ls_branch() {
 }
 
 # mcp_current_branch prints alpha's current_branch from the daemon's MCP
-# fleet_list tool, over the local streamable-HTTP endpoint (initialize, then
-# tools/call in that session). Retries while a freshly spawned daemon is still
-# bringing its MCP listener up.
+# fleet_list tool (the fleet holds one instance).
 mcp_current_branch() {
-  local attempt port token hdr sid body url
-  hdr="$(mktemp)"
-  for attempt in $(seq 1 20); do
-    port="$(cat "${HOME}/.fleet/mcp.port" 2>/dev/null || true)"
-    token="$(cat "${HOME}/.fleet/mcp.token" 2>/dev/null || true)"
-    url="http://127.0.0.1:${port}/"
-    if [ -n "${port}" ] && [ -n "${token}" ] && curl -sf -D "${hdr}" -o /dev/null -X POST "${url}" \
-        -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' \
-        -H 'Accept: application/json, text/event-stream' \
-        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"itest","version":"0"}}}'; then
-      sid="$(grep -i '^mcp-session-id:' "${hdr}" | head -n 1 | cut -d: -f2- | tr -d ' \r')"
-      curl -sf -o /dev/null -X POST "${url}" \
-        -H "Authorization: Bearer ${token}" -H "Mcp-Session-Id: ${sid}" \
-        -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-        -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' || true
-      body="$(curl -sf -X POST "${url}" \
-        -H "Authorization: Bearer ${token}" -H "Mcp-Session-Id: ${sid}" \
-        -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-        -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fleet_list\",\"arguments\":{\"fleet\":\"${FIXTURE_REPO_NAME}\"}}}" || true)"
-      if printf '%s' "${body}" | grep -q '"instances"'; then
-        rm -f "${hdr}"
-        # The structured result is plain JSON; the text copy of it is escaped
-        # (\"current_branch\"), so this pattern only matches the former. The
-        # fleet holds one instance.
-        printf '%s' "${body}" | grep -o '"current_branch":"[^"]*"' | head -n 1 | sed 's/.*:"\(.*\)"/\1/'
-        return 0
-      fi
-    fi
-    sleep 0.5
-  done
-  rm -f "${hdr}"
-  echo "MCP fleet_list never answered (port=${port:-none})" >&2
-  return 1
+  itest_mcp_call fleet_list "{\"fleet\":\"${FIXTURE_REPO_NAME}\"}" structuredContent.instances.0.current_branch
 }
 
 # A host checkout read (devcontainer) is repeated on every call, so a switch

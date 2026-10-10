@@ -108,6 +108,10 @@ helpers in `common.sh`, which dispatch to `backends/<backend>.sh`:
 makes sense on one backend goes inside `if itest_backend_is devcontainer`, with
 a comment saying why.
 
+To drive the daemon's MCP tools, `itest_mcp_call <tool> <arguments-json>
+[<field>]` calls one tool on the local MCP endpoint and prints its result (or
+one field of it); `itest_json_field <path>` reads a field out of JSON on stdin.
+
 `# itest:` lines in a test file mark how it relates to the backends:
 
 | Marker | Meaning |
