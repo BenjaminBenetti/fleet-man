@@ -10,6 +10,15 @@ import (
 // surface names a state and finds a connection the same way. Pure, like
 // domain_methods.go: client packages import fleetgrpc.
 
+// The actions a prune lists for an object (KubePruneObject.action).
+const (
+	KubePruneWouldDelete = "would delete"
+	KubePruneDeleted     = "deleted"
+	KubePruneYoung       = "skip (younger than 1h)"
+	KubePruneMounted     = "skip (mounted)"
+	KubePruneFleetExists = "kept: fleet exists"
+)
+
 // Display is the lower-case form of a connection's state ("ready",
 // "owner conflict"); "unknown" for the unspecified zero value.
 func (s KubeClusterState) Display() string {
