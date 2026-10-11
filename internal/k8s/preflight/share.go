@@ -261,14 +261,9 @@ func (r *run) whyNotMultiNode(picked string) (string, string) {
 			untested = append(untested, name)
 		}
 	}
-	var parts []string
-	switch {
-	case len(failed)+len(unsure) == 0 && len(untested) == 0:
-		parts = append(parts, fmt.Sprintf("no class can pass the multi-node test (%d block or node-local)", len(r.caps.StorageClasses)))
-	case len(failed)+len(unsure) == 0:
-		parts = append(parts, "no class passed the multi-node test")
-	default:
-		parts = append(parts, "no class passed the multi-node test")
+	parts := []string{"no class passed the multi-node test"}
+	if len(failed)+len(unsure)+len(untested) == 0 {
+		parts[0] = fmt.Sprintf("no class can pass the multi-node test (%d block or node-local)", len(r.caps.StorageClasses))
 	}
 	if len(failed) > 0 {
 		parts = append(parts, "failed: "+strings.Join(failed, ", "))
