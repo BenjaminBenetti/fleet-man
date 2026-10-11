@@ -43,10 +43,12 @@ func parseMerged(raw json.RawMessage) (*mergedConfig, error) {
 }
 
 // size reads a hostRequirements memory or storage value in bytes; 0 when it
-// is absent.
+// is absent. The CLI merges the largest value across the image's metadata
+// layers, which for an image with none (busybox) is JavaScript's -Infinity,
+// written as "-Infinity": no requirement either.
 func (h *hostRequirements) size(raw json.RawMessage) (int64, error) {
 	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) || bytes.Equal(raw, []byte(`"-Infinity"`)) {
 		return 0, nil
 	}
 	var s string

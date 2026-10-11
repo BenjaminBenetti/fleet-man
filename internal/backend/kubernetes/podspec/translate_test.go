@@ -52,6 +52,19 @@ func TestHostRequirements(t *testing.T) {
 	if got := res.Pod.Resources.Requests; got["cpu"] != "500m" || got["memory"] != "2Gi" || res.Pod.DiskSize != "51200Mi" || len(res.Pod.Warnings) > 0 {
 		t.Errorf("requests %v disk %s warnings %v", got, res.Pod.DiskSize, res.Pod.Warnings)
 	}
+
+	// An image with no metadata layers (busybox): the CLI's merge of no
+	// values is -Infinity, which asks for nothing.
+	in = baseInput(nil, nil, nil)
+	in.Merged = json.RawMessage(`{"hostRequirements":{"cpus":null,"memory":"-Infinity","storage":"-Infinity"}}`)
+	in.Cluster.DiskSize = "51200Mi"
+	res, err = Translate(in)
+	if err != nil {
+		t.Fatalf("an image without metadata: %v", err)
+	}
+	if got := res.Pod.Resources.Requests; got["cpu"] != "500m" || got["memory"] != "2Gi" || res.Pod.DiskSize != "51200Mi" {
+		t.Errorf("requests %v disk %s", got, res.Pod.DiskSize)
+	}
 }
 
 // A LimitRange default below memory_limit gets an explicit limit, which is
