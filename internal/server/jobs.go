@@ -958,8 +958,12 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 	// leave them up — the fleet's other instances may still use them. Cache
 	// directories are intentionally kept on disk, and the deb/image caches go
 	// whatever the current setting (see teardownFleetSharedServices).
+	var destroyed []*fleet.Instance
+	for _, t := range targets {
+		destroyed = append(destroyed, t.inst)
+	}
 	if destroyFleet {
-		warnings = append(warnings, teardownFleetSharedServices(fleetName, buildkitEnabled)...)
+		warnings = append(warnings, teardownFleetSharedServices(fleetName, buildkitEnabled, destroyed)...)
 	}
 
 	_ = state.Update(func(st *state.State) error {
@@ -976,6 +980,13 @@ func (s *service) destroy(fleetName, instanceName string, destroyFleet bool) []s
 	})
 	for _, t := range targets {
 		s.kubeRecovery.destroyed(t.inst)
+	}
+	// A runtime the fleet's last instance there just left lets go of what it
+	// kept for the fleet (a cluster: the fleet's objects but its caches'
+	// volumes). Records first: a runtime asks state.json whether the fleet is
+	// still there.
+	if !destroyFleet {
+		warnings = append(warnings, releaseFleetRuntimes(fleetName, destroyed)...)
 	}
 	s.pushState()
 	return warnings

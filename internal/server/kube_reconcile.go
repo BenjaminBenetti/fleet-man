@@ -16,6 +16,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/preflight"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime/kubert"
 )
 
 // kube_reconcile.go is what a daemon does with the Kubernetes jobs a
@@ -47,8 +48,9 @@ import (
 //
 // The background pass also deletes known garbage, which needs no `fleet
 // cluster gc --apply`: the objects of a journal no record holds any more,
-// and every object of a destroyed instance's key (its footprint tombstone)
-// until none is left. All of it only while this daemon holds the
+// every object of a destroyed instance's key (its footprint tombstone)
+// until none is left, and the objects of a fleet that left the cluster while
+// it could not be reached (its pending teardown, svcruntime/kubert). All of it only while this daemon holds the
 // connection's owner Lease, checked before each deletion.
 
 // Error codes the reconciler leaves on a record.
@@ -250,6 +252,9 @@ func (r *kubeRecovery) settle() {
 func (r *kubeRecovery) start(ctx context.Context) {
 	p := r.pool()
 	p.SetOwnerGate(r.svc.kube.ownerGate)
+	// The connections' shared-service runtimes work on a cluster only while
+	// the daemon judges it usable.
+	kubert.SetHooks(kubert.Hooks{Usable: func(id string) bool { return preflight.Usable(r.svc.kube.status(id).GetState()) }})
 	r.mu.Lock()
 	claimed := r.claimed
 	r.claimed = map[string]kubernetes.Journal{}
@@ -262,6 +267,7 @@ func (r *kubeRecovery) start(ctx context.Context) {
 	}
 	if loop {
 		go r.loop(ctx)
+		go runSharedServiceUpkeep(ctx)
 	}
 }
 
@@ -361,7 +367,10 @@ func (r *kubeRecovery) pass(ctx context.Context, clusterID string) {
 	}
 	pendingJournals, deletedJournals := r.passJournals(ctx, scope, st, files)
 	pendingKeys, deletedKeys, waiting := r.passTombstones(ctx, scope, st, fp)
-	pending := pendingJournals + pendingKeys
+	// The fleet teardowns owed here (a fleet that left the cluster while it
+	// could not be reached).
+	pendingFleets := kubert.RunPendingTeardowns(ctx, clusterID)
+	pending := pendingJournals + pendingKeys + pendingFleets
 	r.mu.Lock()
 	changed := r.pending[clusterID] != pending
 	r.pending[clusterID] = pending

@@ -111,8 +111,9 @@ func TestSharedServicesSweepFiltering(t *testing.T) {
 }
 
 // TestSharedServicesSweepFiltersAllOut is the zero-match boundary: only
-// disabled / empty / cloud-only fleets → nothing is ensured, and no runtime is
-// even asked whether it is reachable.
+// disabled / empty / cloud-only fleets → nothing is ensured; only the fleet
+// with an instance on the runtime is prepared there, and no runtime that no
+// fleet uses is even asked whether it is reachable.
 func TestSharedServicesSweepFiltersAllOut(t *testing.T) {
 	isolateFleetDir(t)
 	all := fleet.FleetSettings{BuildkitServer: true, DebCacheServer: true, ImageCacheServer: true}
@@ -127,8 +128,21 @@ func TestSharedServicesSweepFiltersAllOut(t *testing.T) {
 
 	ensureConfiguredSharedServices(context.Background())
 
+	want := []svcruntimetest.Call{{Method: "Reachable"}, {Method: "PrepareFleet", Fleet: "disabled"}}
+	if calls := rec.Calls(); !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %+v, want %+v (nothing ensured)", calls, want)
+	}
+
+	// With no fleet using the runtime at all, it is asked nothing.
+	seedFleets(t, map[string]*fleet.Fleet{
+		"enabled-empty": {Name: "enabled-empty", Settings: all},
+		"enabled-cloud": {Name: "enabled-cloud", Settings: all,
+			Instances: []*fleet.Instance{{Name: "i1", Backend: fleet.BackendCodespaces}}},
+	})
+	rec.Reset()
+	ensureConfiguredSharedServices(context.Background())
 	if calls := rec.Calls(); len(calls) != 0 {
-		t.Fatalf("calls = %+v, want none (all fleets filtered)", calls)
+		t.Fatalf("calls = %+v, want none (no fleet uses the runtime)", calls)
 	}
 }
 
@@ -148,6 +162,7 @@ func TestSharedServicesSweepEnsuresEachServiceOnce(t *testing.T) {
 
 	want := []svcruntimetest.Call{
 		{Method: "Reachable"},
+		{Method: "PrepareFleet", Fleet: "alpha"},
 		{Method: "EnsureService", Fleet: "alpha", Service: fleet.ServiceBuildkit},
 		{Method: "EnsureService", Fleet: "alpha", Service: fleet.ServiceDebCache},
 		{Method: "EnsureService", Fleet: "alpha", Service: fleet.ServiceImageCache},
@@ -407,7 +422,7 @@ func TestDeleteCacheRPCs(t *testing.T) {
 			if err := rpc.call(svc, "alpha"); err != nil {
 				t.Fatalf("delete alpha's %s: %v", rpc.svc, err)
 			}
-			want := []svcruntimetest.Call{{Method: "WipeService", Fleet: "alpha", Service: rpc.svc}}
+			want := []svcruntimetest.Call{{Method: "Reachable"}, {Method: "WipeService", Fleet: "alpha", Service: rpc.svc}}
 			if got := rec.Calls(); !reflect.DeepEqual(got, want) {
 				t.Fatalf("calls = %+v, want %+v", got, want)
 			}
@@ -439,9 +454,10 @@ func TestDeleteCacheRPCs(t *testing.T) {
 }
 
 // fleetTeardown is what a whole-fleet teardown asks of the host runtime, in
-// order: each server (buildkit only when it is on), then the network.
+// order: whether it is reachable, each server (buildkit only when it is on),
+// then the network.
 func fleetTeardown(fleetName string, buildkit bool) []svcruntimetest.Call {
-	var calls []svcruntimetest.Call
+	calls := []svcruntimetest.Call{{Method: "Reachable"}}
 	if buildkit {
 		calls = append(calls, svcruntimetest.Call{Method: "StopService", Fleet: fleetName, Service: fleet.ServiceBuildkit})
 	}
@@ -567,7 +583,7 @@ func TestTeardownFleetSharedServicesWarns(t *testing.T) {
 	rec.FailOn("TeardownFleet", errors.New("in use"))
 	stubHostServices(t, rec)
 
-	got := teardownFleetSharedServices("alpha", true)
+	got := teardownFleetSharedServices("alpha", true, nil)
 
 	want := []string{
 		"stop buildkit server: boom",
@@ -591,5 +607,290 @@ func TestSharedServiceTextNamesEveryService(t *testing.T) {
 		if !ok || text.setting == "" || text.cache == "" || text.server == "" {
 			t.Errorf("%q: sharedServiceText = %+v", svc, text)
 		}
+	}
+}
+
+// clusterRecorders makes every Kubernetes connection a recorder of its own
+// (keyed "kubernetes:<id>"), for sharedServicesFor and clusterSharedServices
+// alike, with host the daemon host's docker; present stands in for the
+// connections the footprint recorded a fleet on.
+func clusterRecorders(t *testing.T, host *svcruntimetest.Recorder, present map[string][]string, ids ...string) map[string]*svcruntimetest.Recorder {
+	t.Helper()
+	recs := map[string]*svcruntimetest.Recorder{}
+	for _, id := range ids {
+		r := svcruntimetest.New("kubernetes:" + id)
+		r.Reconfigure = false
+		recs[id] = r
+	}
+	stubHostServices(t, host)
+	stubServicesFor(t, func(inst *fleet.Instance) svcruntime.Runtime {
+		if inst.Backend == fleet.BackendKubernetes {
+			if r := recs[inst.KubeCluster]; r != nil {
+				return r
+			}
+			return nil
+		}
+		if svcruntime.ForInstance(inst) == nil {
+			return nil
+		}
+		return host
+	})
+	origCluster, origPresent := clusterSharedServices, fleetPresentClusters
+	clusterSharedServices = func(id string) svcruntime.Runtime {
+		if r := recs[id]; r != nil {
+			return r
+		}
+		return nil
+	}
+	fleetPresentClusters = func(f string) []string { return present[f] }
+	t.Cleanup(func() { clusterSharedServices, fleetPresentClusters = origCluster, origPresent })
+	return recs
+}
+
+func methods(rec *svcruntimetest.Recorder) []string {
+	var out []string
+	for _, c := range rec.Calls() {
+		m := c.Method
+		if c.Service != "" {
+			m += " " + string(c.Service)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// TestFleetTeardownCoversEveryRuntimeOfTheFleet: a whole-fleet teardown acts
+// on the daemon host's docker, on each cluster an instance of the fleet ran
+// on, and on each cluster the fleet was recorded on (its cache volumes may be
+// there); one not reachable now goes straight to its teardown (which records
+// what it owes), and its warning names it.
+func TestFleetTeardownCoversEveryRuntimeOfTheFleet(t *testing.T) {
+	isolateFleetDir(t)
+	host := svcruntimetest.New("docker")
+	recs := clusterRecorders(t, host, map[string][]string{"alpha": {"c3", "c1"}}, "c1", "c2", "c3")
+	recs["c2"].Unreachable = true
+	recs["c2"].FailOn("TeardownFleet", errors.New("the fleet's objects on connection c2 are deleted once it can be reached"))
+	instances := []*fleet.Instance{
+		{Name: "i1", Backend: fleet.BackendDevcontainer},
+		{Name: "k1", Backend: fleet.BackendKubernetes, KubeCluster: "c1"},
+		{Name: "k2", Backend: fleet.BackendKubernetes, KubeCluster: "c2"},
+		{Name: "k3", Backend: fleet.BackendKubernetes, KubeCluster: "c1"},
+	}
+
+	warnings := teardownFleetSharedServices("alpha", false, instances)
+
+	stops := []string{"Reachable", "StopService debcache", "StopService imagecache", "TeardownFleet"}
+	for name, rec := range map[string]*svcruntimetest.Recorder{"docker": host, "c1": recs["c1"], "c3": recs["c3"]} {
+		if got := methods(rec); !reflect.DeepEqual(got, stops) {
+			t.Errorf("%s: calls %v, want %v", name, got, stops)
+		}
+	}
+	if got := methods(recs["c2"]); !reflect.DeepEqual(got, []string{"Reachable", "TeardownFleet"}) {
+		t.Errorf("unreachable c2: calls %v", got)
+	}
+	if !reflect.DeepEqual(warnings, []string{"kubernetes:c2: the fleet's objects on connection c2 are deleted once it can be reached"}) {
+		t.Errorf("warnings %q", warnings)
+	}
+}
+
+// TestSingleInstanceDestroyReleasesItsRuntime: destroying one instance
+// releases the runtime it used (a cluster then lets go of the fleet's
+// objects there once no instance of the fleet is left on it), after its
+// record is gone, and never touches the others or tears the fleet down.
+func TestSingleInstanceDestroyReleasesItsRuntime(t *testing.T) {
+	isolateFleetDir(t)
+	seedFleets(t, map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{DebCacheServer: true},
+			Instances: []*fleet.Instance{{Name: "i1"}, {Name: "i2"}}},
+	})
+	host := svcruntimetest.New("docker")
+	var recordGone bool
+	host.OnCall = func(c svcruntimetest.Call) {
+		if c.Method == "ReleaseFleet" {
+			st, _ := state.Load()
+			_, err := st.Fleets["alpha"].GetInstance("i1")
+			recordGone = err != nil
+		}
+	}
+	clusterRecorders(t, host, nil)
+
+	newService().destroy("alpha", "i1", false)
+
+	if got := methods(host); !reflect.DeepEqual(got, []string{"ReleaseFleet"}) {
+		t.Fatalf("calls %v, want only the release", got)
+	}
+	if !recordGone {
+		t.Fatal("the runtime was released while the destroyed record was still in state.json")
+	}
+	if got := releaseFleetRuntimes("alpha", []*fleet.Instance{{Name: "x", Backend: fleet.BackendCodespaces}, nil}); len(got) != 0 {
+		t.Fatalf("a cloud instance released something: %v", got)
+	}
+}
+
+// TestDeleteCacheWipesEveryRuntimeTheFleetUses: the wipe acts on each place
+// the fleet's instances reach a copy of the cache; one not reachable now is
+// reported, and the others are still wiped.
+func TestDeleteCacheWipesEveryRuntimeTheFleetUses(t *testing.T) {
+	isolateFleetDir(t)
+	seedFleets(t, map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{DebCacheServer: true}, Instances: []*fleet.Instance{
+			{Name: "i1", Backend: fleet.BackendDevcontainer},
+			{Name: "k1", Backend: fleet.BackendKubernetes, KubeCluster: "c1"},
+			{Name: "k2", Backend: fleet.BackendKubernetes, KubeCluster: "c2"},
+		}},
+		"beta": {Name: "beta", Settings: fleet.FleetSettings{DebCacheServer: true}, Instances: []*fleet.Instance{
+			{Name: "k1", Backend: fleet.BackendKubernetes, KubeCluster: "c1"},
+		}},
+	})
+	host := svcruntimetest.New("docker")
+	recs := clusterRecorders(t, host, nil, "c1", "c2")
+	recs["c2"].Unreachable = true
+	svc := newService()
+
+	_, err := svc.DeleteDebCache(context.Background(), &fleetgrpc.DeleteDebCacheRequest{Fleet: "alpha"})
+	if status.Code(err) != codes.Internal || !strings.Contains(err.Error(), "kubernetes:c2: not reachable now") {
+		t.Fatalf("wipe = %v, want the unreachable connection named", err)
+	}
+	for name, rec := range map[string]*svcruntimetest.Recorder{"docker": host, "c1": recs["c1"]} {
+		if got := methods(rec); !reflect.DeepEqual(got, []string{"Reachable", "WipeService debcache"}) {
+			t.Errorf("%s: calls %v", name, got)
+		}
+	}
+
+	// A fleet only on a cluster wipes that cluster's cache, not the host's.
+	host.Reset()
+	recs["c1"].Reset()
+	if _, err := svc.DeleteDebCache(context.Background(), &fleetgrpc.DeleteDebCacheRequest{Fleet: "beta"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := methods(host); len(got) != 0 {
+		t.Errorf("the host was asked %v for a cluster-only fleet", got)
+	}
+	if got := methods(recs["c1"]); !reflect.DeepEqual(got, []string{"Reachable", "WipeService debcache"}) {
+		t.Errorf("c1: calls %v", got)
+	}
+}
+
+// usageRecorder is a recorder whose services run on volumes of a fixed
+// size, and that has upkeep.
+type usageRecorder struct {
+	*svcruntimetest.Recorder
+	usage      []fleet.CacheUsage
+	err        error
+	maintained []string
+}
+
+func (u *usageRecorder) CacheUsage(_ context.Context, fleetName string) ([]fleet.CacheUsage, error) {
+	return u.usage, u.err
+}
+
+func (u *usageRecorder) Maintain(_ context.Context, fleetName string, services []fleet.SharedService) error {
+	var s []string
+	for _, svc := range services {
+		s = append(s, string(svc))
+	}
+	u.maintained = append(u.maintained, fleetName+":"+strings.Join(s, ","))
+	return nil
+}
+
+// TestGetCacheUsage: the report holds each cluster's volumes of the fleet;
+// the host's docker (whose caches grow with its disk) has none, and a
+// cluster that cannot answer is named.
+func TestGetCacheUsage(t *testing.T) {
+	isolateFleetDir(t)
+	seedFleets(t, map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{DebCacheServer: true}, Instances: []*fleet.Instance{
+			{Name: "i1", Backend: fleet.BackendDevcontainer},
+			{Name: "k1", Backend: fleet.BackendKubernetes, KubeCluster: "c1"},
+			{Name: "k2", Backend: fleet.BackendKubernetes, KubeCluster: "c2"},
+		}},
+	})
+	host := svcruntimetest.New("docker")
+	c1 := &usageRecorder{Recorder: svcruntimetest.New("kubernetes:c1"), usage: []fleet.CacheUsage{{Service: fleet.ServiceDebCache, Cluster: "c1", Location: "minikube", UsedBytes: 1, CapacityBytes: 10, State: "ready"}}}
+	c2 := &usageRecorder{Recorder: svcruntimetest.New("kubernetes:c2"), err: errors.New("boom")}
+	stubHostServices(t, host)
+	stubServicesFor(t, func(inst *fleet.Instance) svcruntime.Runtime {
+		switch inst.KubeCluster {
+		case "c1":
+			return c1
+		case "c2":
+			return c2
+		}
+		return host
+	})
+	svc := newService()
+	reply, err := svc.GetCacheUsage(context.Background(), &fleetgrpc.GetCacheUsageRequest{Fleet: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.GetCaches()) != 1 || reply.GetCaches()[0].GetLocation() != "minikube" || reply.GetCaches()[0].GetService() != "debcache" {
+		t.Fatalf("caches %v", reply.GetCaches())
+	}
+	if !reflect.DeepEqual(reply.GetUnavailable(), []string{"kubernetes:c2: boom"}) {
+		t.Fatalf("unavailable %v", reply.GetUnavailable())
+	}
+	if _, err := svc.GetCacheUsage(context.Background(), &fleetgrpc.GetCacheUsageRequest{Fleet: "ghost"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("unknown fleet: %v", err)
+	}
+	if _, err := svc.GetCacheUsage(context.Background(), &fleetgrpc.GetCacheUsageRequest{}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("no fleet: %v", err)
+	}
+}
+
+// TestMaintainSharedServices: the upkeep runs on each runtime that has some,
+// for each fleet with services on and an instance there.
+func TestMaintainSharedServices(t *testing.T) {
+	isolateFleetDir(t)
+	seedFleets(t, map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{DebCacheServer: true, ImageCacheServer: true}, Instances: []*fleet.Instance{
+			{Name: "i1", Backend: fleet.BackendDevcontainer},
+			{Name: "k1", Backend: fleet.BackendKubernetes, KubeCluster: "c1"},
+		}},
+		"bare": {Name: "bare", Instances: []*fleet.Instance{{Name: "k1", Backend: fleet.BackendKubernetes, KubeCluster: "c1"}}},
+	})
+	host := svcruntimetest.New("docker")
+	c1 := &usageRecorder{Recorder: svcruntimetest.New("kubernetes:c1")}
+	stubServicesFor(t, func(inst *fleet.Instance) svcruntime.Runtime {
+		if inst.KubeCluster == "c1" {
+			return c1
+		}
+		return host
+	})
+	maintainSharedServices(context.Background())
+	if !reflect.DeepEqual(c1.maintained, []string{"alpha:debcache,imagecache"}) {
+		t.Fatalf("maintained %v", c1.maintained)
+	}
+	if got := methods(host); len(got) != 0 {
+		t.Fatalf("the host was asked %v", got)
+	}
+
+	t.Setenv("FLEET_KUBE_CACHE_CHECK_INTERVAL", "5s")
+	if d := sharedServiceUpkeepEvery(); d != 5*time.Second {
+		t.Fatalf("interval %v", d)
+	}
+	t.Setenv("FLEET_KUBE_CACHE_CHECK_INTERVAL", "soon")
+	if d := sharedServiceUpkeepEvery(); d != sharedServiceUpkeepInterval {
+		t.Fatalf("a bad interval gave %v", d)
+	}
+}
+
+// TestSharedServicesSweepKeepsToTheRuntimesBudget: a runtime's sweep stops
+// at its ReconcileBudget, whatever is left.
+func TestSharedServicesSweepKeepsToTheRuntimesBudget(t *testing.T) {
+	isolateFleetDir(t)
+	seedFleets(t, map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{DebCacheServer: true}, Instances: []*fleet.Instance{{Name: "i1"}}},
+	})
+	rec := svcruntimetest.New("slow")
+	rec.Budget = 10 * time.Millisecond
+	rec.OnCall = func(c svcruntimetest.Call) {
+		if c.Method == "PrepareFleet" {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	stubInstanceServices(t, rec)
+	ensureConfiguredSharedServices(context.Background())
+	if got := ensured(rec); len(got) != 0 {
+		t.Fatalf("ensured %v past the budget", got)
 	}
 }

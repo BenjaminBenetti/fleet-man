@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
@@ -457,6 +458,11 @@ func (s *service) RemoveKubeCluster(ctx context.Context, req *fleetgrpc.RemoveKu
 	flog.Info("kube: connection removed", "cluster", rec.ID, "mode", req.GetMode().String())
 	s.kube.sync()
 	s.kube.releaseImages(rec, leaseHeld)
+	// The fleets' objects there are out of reach now; a fleet teardown owed
+	// there with them.
+	if err := kubernetes.ForgetClusterFleets(rec.ID); err != nil {
+		flog.Warn("kube: forgetting a removed connection's fleets", "cluster", rec.ID, "err", err)
+	}
 	reply.Removed = true
 	return reply, nil
 }
