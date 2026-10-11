@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # itest: k8s
-# Description: in-instance `fleet open` (fo) delegates to the attached TUI: the human confirms an "Open request", the file lands in ~/Downloads and is handed to the opener.
+# Description: in-instance `fleet open` (fo) delegates to the attached TUI: the human confirms an "Open request", the file lands in ~/Downloads and is handed to the opener; in-instance `fleet copy` (fc) of a folder to this machine and of a file from it go through the same TUI's "Copy request".
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -83,4 +83,37 @@ tui_wait_for "Opened :/tmp/fo-itest.txt" 30
 assert_equals "opened-bytes" "$(cat "${HOME}/Downloads/fo-itest.txt")" "the file should land in ~/Downloads"
 assert_equals "${HOME}/Downloads/fo-itest.txt" "$(cat "${log}")" "the opener should receive the delivered path"
 
-pass "in-instance fleet open"
+# ---- in-instance fleet copy (fc), through the same TUI ----
+info "the staged fleet.rc provides the fc alias"
+alias_out=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- bash -ic 'type fc' 2>/dev/null || true)
+assert_contains "${alias_out}" "fleet copy" "fc should be an alias for fleet copy"
+
+info "fc of a folder from the instance to this machine: a Copy request the human allows"
+"${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- sh -c \
+  "mkdir -p /tmp/fc-tree/sub && printf 'fc-top' > /tmp/fc-tree/top.txt && printf 'fc-nested' > /tmp/fc-tree/sub/nested.txt"
+tui_wait_for_absent "Open request from" 10 || fail "the open request's dialog stayed open"
+out=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- fleet copy /tmp/fc-tree "host:${workdir}/fc-tree" 2>&1)
+info "output: ${out}"
+tui_wait_for "Copy request from ${FIXTURE_REPO_NAME}/alpha" 15
+tui_send a
+tui_wait_for "Copied :/tmp/fc-tree" 30
+assert_equals "fc-top" "$(cat "${workdir}/fc-tree/top.txt")" "the folder's top file on this machine"
+assert_equals "fc-nested" "$(cat "${workdir}/fc-tree/sub/nested.txt")" "the folder's nested file on this machine"
+
+info "fc of a file from this machine into the instance"
+printf 'fc-down' > "${workdir}/fc-src.txt"
+tui_wait_for_absent "Copy request from" 10 || fail "the first copy request's dialog stayed open"
+out=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- fleet copy "host:${workdir}/fc-src.txt" /tmp/fc-down.txt 2>&1)
+info "output: ${out}"
+tui_wait_for "Copy request from ${FIXTURE_REPO_NAME}/alpha" 15
+tui_send a
+got=""
+deadline=$(( $(date +%s) + $(_scale_timeout 30) ))
+while [ "$(date +%s)" -lt "${deadline}" ]; do
+  got=$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/alpha" -- cat /tmp/fc-down.txt 2>/dev/null || true)
+  [ "${got}" = fc-down ] && break
+  sleep 0.5
+done
+assert_equals "fc-down" "${got}" "the file from this machine in the instance"
+
+pass "in-instance fleet open and fleet copy"
