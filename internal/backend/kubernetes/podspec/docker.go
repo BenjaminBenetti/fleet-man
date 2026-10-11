@@ -48,6 +48,15 @@ func (t *translation) finishDocker() {
 		engines = true
 	}
 	if len(t.dood) > 0 && (t.doodPrivileged || t.sysbox) {
+		if t.spec.HostNetwork {
+			// On docker such a run reaches the host's own engine; a new
+			// one in the node's network namespace would rewrite the
+			// node's firewall and bridges for every pod on it.
+			t.refuse(&Refusal{Code: CodeDooDHostNetwork, Reason: fmt.Sprintf(
+				"%s binds the docker engine's socket, and --network host puts the pod on the node's network; on a cluster that engine is the pod's own, which there would take over the node's iptables and bridges. Drop --network host, or the docker.sock bind",
+				joinNames(t.dood))})
+			return
+		}
 		if minor, ok := kubeMinor(t.in.Facts.ServerVersion); ok && minor < 29 {
 			t.refuse(&Refusal{Code: CodeDooDNeedsSidecars, Reason: fmt.Sprintf(
 				"%s binds the docker engine's socket; on a cluster that engine is the pod's own, a native sidecar, which needs Kubernetes 1.29 or later, and %s runs %s",

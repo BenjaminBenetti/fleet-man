@@ -39,8 +39,10 @@ func TestDockerEngines(t *testing.T) {
 			in: func(in *Input) { in.Cluster.AllowPrivileged = &yes }, dood: "privileged"},
 		{name: "dood under sysbox", args: []string{"--mount", dockerSockBind},
 			in: func(in *Input) { in.Facts.RuntimeClasses = []string{"sysbox-runc"} }, dood: "unprivileged", dind: true, runtime: "sysbox-runc", warn: "sysbox-runc runtime class"},
-		{name: "dood beside host networking is never sysbox", args: []string{"--mount", dockerSockBind, "--network", "host"},
-			in: func(in *Input) { local(in); in.Facts.RuntimeClasses = []string{"sysbox-runc"} }, dood: "privileged"},
+		// The engine would run in the node's network namespace (and host
+		// networking never runs under sysbox).
+		{name: "dood beside host networking", args: []string{"--mount", dockerSockBind, "--network", "host"},
+			in: func(in *Input) { local(in); in.Facts.RuntimeClasses = []string{"sysbox-runc"} }, code: CodeDooDHostNetwork},
 		{name: "api socket", args: []string{"--use-api-socket"}, in: local, dood: "privileged"},
 		// The engine is never the daemon host's, so a host without a
 		// socket there (a rootless or remote docker) changes nothing.

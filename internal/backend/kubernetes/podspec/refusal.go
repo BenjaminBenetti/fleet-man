@@ -29,6 +29,10 @@ const (
 	// cluster too old for native sidecars (Kubernetes 1.29), which the
 	// pod's engine runs as.
 	CodeDooDNeedsSidecars = "kubernetes:unsupported:dood-needs-sidecars"
+	// CodeDooDHostNetwork is a run that reaches the docker engine from the
+	// node's network (--network host): the pod's own engine would take over
+	// the node's iptables and bridges.
+	CodeDooDHostNetwork = "kubernetes:unsupported:dood-host-network"
 	// CodeNoCommand is a run with nothing to run.
 	CodeNoCommand = "kubernetes:unsupported:no-command"
 	// CodeSpecTooLarge is a spec that does not fit in a Secret.
