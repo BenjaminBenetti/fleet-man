@@ -284,6 +284,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.mode = viewAddInstance
 			fleetPage.dlg.fleet = fleetName
 			fleetPage.addInst.targets = targets.available()
+			fleetPage.addInst.unavailable = targets.unavailableClusters()
 			fleetPage.addInst.target = preferred
 			fleetPage.addInst.color = instanceColorWhite
 			fleetPage.dlg.row = addInstanceRowName
@@ -650,6 +651,11 @@ func (fleetPage *fleetPage) handleEnter(m *model) tea.Cmd {
 		if instance == nil {
 			break
 		}
+		// A failed Kubernetes instance, or one the cluster parked, has no
+		// shell to open: enter explains what happened instead.
+		if fleetPage.openKubeRecovery(r.fleetName, instance) {
+			return nil
+		}
 		instFleetName := r.fleetName
 		instRef := InstanceRef{Fleet: instFleetName, Instance: instance.Name}
 		if m.inHostTmux {
@@ -789,8 +795,16 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 
 	case rowInstance:
 		keys := []string{"j/k: navigate"}
+		_, _, recoverable := kubeRecoveryCode(r.instance)
 		if r.instance != nil {
 			switch {
+			case recoverable && r.instance.Status == fleet.StatusStopped:
+				keys = append(keys,
+					"enter: details", "e: edit", "s: start",
+					"d: delete", "t: tag", "L: logs", "r: refresh", "q: quit",
+				)
+			case recoverable:
+				keys = append(keys, "enter: details", "d: delete", "L: logs", "r: refresh", "q: quit")
 			case r.instance.Status == fleet.StatusRunning:
 				keys = append(keys,
 					"space: show sessions", "enter: open shell", "e: edit",

@@ -289,20 +289,35 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			instance := r.instance
 
 			transitional := isTransitional(instance.Status)
+			rt := m.runtime[rtKey(r.fleetName, instance.Name)]
+			// agentUnknown: the instance's captures keep failing (or its
+			// cluster does not answer), so its agent and stats are not known.
+			agentUnknown := rt.GetAgentActivity() == fleetgrpc.AgentActivity_AGENT_ACTIVITY_UNKNOWN
+			agentReconnecting := false
 			var status string
 			if transitional {
 				status = strings.TrimRight(m.spinner.View(), "\n") + " " + statusCreatingStyle.Render(string(instance.Status)) +
 					m.jobStepSuffix(r.fleetName, instance)
 			} else {
 				status = renderStatus(instance.Status)
-				if instance.Status == fleet.StatusRunning && instance.Backend == fleet.BackendKubernetes {
-					rt := m.runtime[rtKey(r.fleetName, instance.Name)]
-					if note := kubeRowNote(rt); note != "" {
-						if hint := rt.GetKube().GetRestartHint(); hint != "" && isSelected {
-							note += " (" + hint + ")"
-						}
-						status += dimStyle.Render(" · " + note)
+				var notes []string
+				switch {
+				case instance.Status == fleet.StatusRunning && instance.Backend == fleet.BackendKubernetes:
+					notes, agentUnknown = m.kubeRunningNotes(instance, rt)
+					agentReconnecting = rt.GetKube().GetAgent() == fleetgrpc.KubeAgentState_KUBE_AGENT_STATE_RECONNECTING
+					if hint := rt.GetKube().GetRestartHint(); hint != "" && isSelected && len(notes) > 0 && notes[len(notes)-1] == kubeRowNote(rt) {
+						notes[len(notes)-1] += " (" + hint + ")"
 					}
+				case instance.Backend == fleet.BackendKubernetes:
+					if note := kubeFailedNote(instance); note != "" {
+						notes = append(notes, note)
+					}
+				}
+				if instance.Status == fleet.StatusRunning && agentUnknown {
+					notes = append(notes, "agent ?")
+				}
+				if len(notes) > 0 {
+					status += dimStyle.Render(" · " + strings.Join(notes, " · "))
 				}
 			}
 
@@ -325,12 +340,13 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			// non-transitional render branch.
 			throbber := agentOffStyle.Render("○")
 			agentStr := ""
-			if instance.Status == fleet.StatusRunning {
+			// An unknown agent is drawn grey and still, its state left to the
+			// "agent ?" note; a reconnecting one's notes say so.
+			if instance.Status == fleet.StatusRunning && !agentUnknown && !agentReconnecting {
 				// Live agent state comes from the server's runtime sidecar
 				// (P2 Step 7). A missing entry / UNSPECIFIED activity renders as
 				// "○ idle" (same as NOT_RUNNING), so a running row shows idle
 				// immediately, before the first runtime push lands.
-				rt := m.runtime[rtKey(r.fleetName, instance.Name)]
 				label := agentToolLabelProto(rt.GetAgentTool())
 				switch rt.GetAgentActivity() {
 				case fleetgrpc.AgentActivity_AGENT_ACTIVITY_WORKING:
@@ -387,18 +403,20 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 			// name + marker + padding together fill the fixed name column.
 			paddedName := arrowStyled + throbber + " " + nameStyled + markerSuffix + pad
 
-			backendIcon := "⬡"
+			backendIcon := dimStyle.Render("⬡")
 			switch instance.Backend {
 			case fleet.BackendCoder:
-				backendIcon = "⌨"
+				backendIcon = dimStyle.Render("⌨")
 			case fleet.BackendCodespaces:
-				backendIcon = "⏣"
+				backendIcon = dimStyle.Render("⏣")
+			case fleet.BackendKubernetes:
+				backendIcon = m.kubeRowTarget(instance)
 			}
 			branchItem := ""
-			if branch := instanceBranch(m.runtime[rtKey(r.fleetName, instance.Name)], instance); branch != "" {
-				branchItem = dimStyle.Render("  " + branch + " " + backendIcon)
+			if branch := instanceBranch(rt, instance); branch != "" {
+				branchItem = dimStyle.Render("  "+branch+" ") + backendIcon
 			} else {
-				branchItem = dimStyle.Render("  " + backendIcon)
+				branchItem = dimStyle.Render("  ") + backendIcon
 			}
 
 			var line string
@@ -408,7 +426,7 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 				)
 			} else {
 				statsStr := ""
-				if s := m.runtime[rtKey(r.fleetName, instance.Name)].GetStats(); s != nil {
+				if s := rt.GetStats(); s != nil && !agentUnknown {
 					statsStr = dimStyle.Render(fmt.Sprintf("  %4.0f mcpu  %6.1f MB", s.GetCpuMillicores(), s.GetMemoryMb()))
 				}
 
@@ -568,6 +586,8 @@ func (fleetPage *fleetPage) viewActiveDialog(m *model) string {
 		return fleetPage.renderCodespacesMachineDialog(m)
 	case viewCodespacesLimit:
 		return fleetPage.renderCodespacesLimitDialog(m)
+	case viewKubeRecovery:
+		return fleetPage.renderKubeRecoveryDialog(m)
 	case viewCreateSession:
 		return fleetPage.renderCreateSessionDialog(m)
 	case viewAutomationTrigger:

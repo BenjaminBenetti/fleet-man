@@ -1265,6 +1265,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		key := msg.fleet + "/" + msg.instance
 		delete(m.creating, key)
 		m.reload()
+		// A Kubernetes create refused with a code (no room under the
+		// connection's quotas) gets the recovery dialog.
+		if msg.cluster != "" && m.fleetPage != nil && m.fleetPage.openKubeRecoveryForRefusal(msg.fleet, msg.cluster, msg.err) {
+			m.message = ""
+			break
+		}
 		m.message = fmt.Sprintf("Failed to create %s: %v", key, msg.err)
 
 	case splitPaneMsg:
@@ -1404,6 +1410,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								fleetPage.mode = viewCodespacesLimit
 								fleetPage.dlg.fleet = fleetName
 								fleetPage.dlg.inst = instName
+								m.message = ""
+							} else if fleetPage.mode == viewNormal && fleetPage.openKubeRecovery(fleetName, instance) {
 								m.message = ""
 							} else {
 								m.message = fmt.Sprintf("Failed to create %s: %s", key, instance.Error)
