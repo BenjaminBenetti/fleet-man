@@ -20,12 +20,20 @@ var outputClientConfig = "/etc/pulse/client.conf.d/00-fleet-mic.conf"
 // UserClientConfig is where the audio setup script points the session user's
 // pulse clients at the private server when the instance has no root to write
 // /etc (a cluster that runs every container as one non-root uid, on an image
-// that ships the audio packages), relative to the user's home.
-const UserClientConfig = ".config/pulse/client.conf.d/00-fleet-mic.conf"
+// that ships the audio packages), relative to the user's home; under
+// $XDG_CONFIG_HOME instead when that is set, as the script (and libpulse)
+// has it.
+const UserClientConfig = ".config/" + userPulseDropIn
 
-// userClientConfig is UserClientConfig under the session user's home ("" when
-// there is none); a var for tests.
+// userPulseDropIn is the user's drop-in relative to their config directory.
+const userPulseDropIn = "pulse/client.conf.d/00-fleet-mic.conf"
+
+// userClientConfig is the session user's drop-in ("" when they have no
+// home); a var for tests.
 var userClientConfig = func() string {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return filepath.Join(dir, userPulseDropIn)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""

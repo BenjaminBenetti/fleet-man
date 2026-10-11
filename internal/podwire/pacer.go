@@ -316,6 +316,11 @@ func (c *FrameClock) SetThreshold(d time.Duration) {
 	}
 }
 
+// Reset restarts the clock: the next frame starts a new schedule. For a
+// stream that paused on purpose (a source that sends nothing while it is
+// quiet), whose next frame is not late however long the pause.
+func (c *FrameClock) Reset() { c.next = time.Time{} }
+
 // Arrived records a frame's arrival at now and reports whether it was late.
 // A gap of more than a second restarts the clock (the stream paused).
 func (c *FrameClock) Arrived(now time.Time) bool {

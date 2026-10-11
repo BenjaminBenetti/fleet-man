@@ -148,6 +148,21 @@ func TestOutputHeartbeatWhileQuiet(t *testing.T) {
 	}
 }
 
+// The user's drop-in is under $XDG_CONFIG_HOME when that is set, where the
+// setup script writes it, else under ~/.config.
+func TestUserClientConfigFollowsXDGConfigHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if got, want := userClientConfig(), filepath.Join(home, UserClientConfig); got != want {
+		t.Fatalf("without XDG_CONFIG_HOME: %s, want %s", got, want)
+	}
+	t.Setenv("XDG_CONFIG_HOME", "/xdg")
+	if got, want := userClientConfig(), "/xdg/pulse/client.conf.d/00-fleet-mic.conf"; got != want {
+		t.Fatalf("with XDG_CONFIG_HOME: %s, want %s", got, want)
+	}
+}
+
 // Without root the setup script points the session user's own pulse clients
 // at the server (UserClientConfig): that routes output as the system drop-in
 // would.

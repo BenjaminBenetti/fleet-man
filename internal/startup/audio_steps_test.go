@@ -184,15 +184,17 @@ func TestAudioScriptSteps(t *testing.T) {
 // command ran as and runs it on the host.
 type rootFake struct {
 	backend.Backend
-	capable bool
-	mu      sync.Mutex
-	ran     []string // "root" / "user", in order
-	fail    string   // whom a command fails as
+	capable  bool
+	mu       sync.Mutex
+	ran      []string // "root" / "user", in order
+	commands []string // each command's argv, joined
+	fail     string   // whom a command fails as
 }
 
 func (f *rootFake) record(who string, command []string) *backend.Cmd {
 	f.mu.Lock()
 	f.ran = append(f.ran, who)
+	f.commands = append(f.commands, strings.Join(command, " "))
 	fail := f.fail == who
 	f.mu.Unlock()
 	if fail {
@@ -239,6 +241,30 @@ func TestRunPutsPrivilegedStepsOnTheRootClass(t *testing.T) {
 				t.Fatalf("the failure does not say it ran as root: %v", errs[0])
 			}
 		})
+	}
+}
+
+// A root step's log directory is under root's own home, not a HOME the
+// image's environment sets for every exec (the session user's home, whose
+// ~/.fleet must not become root's).
+func TestRootStepLogsUnderRootsHome(t *testing.T) {
+	b := &rootFake{capable: true}
+	Run(b, "/ws", []Script{{Name: "audio", Body: "all", Privileged: "system", Unprivileged: "user"}})
+	if len(b.commands) != 2 || !strings.Contains(b.commands[0], rootHome+"mkdir -p "+logDir) {
+		t.Fatalf("the root step does not set root's home before its log directory: %q", b.commands)
+	}
+	if strings.Contains(b.commands[1], rootHome) {
+		t.Fatal("the user step's home was changed")
+	}
+	userHome := filepath.Join(t.TempDir(), "home", "vscode")
+	cmd := exec.Command("sh", "-c", rootHome+`printf %s "$HOME"`)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + userHome}
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if home := string(out); home == userHome || !filepath.IsAbs(home) {
+		t.Fatalf("HOME %q for the root step, want root's own", home)
 	}
 }
 

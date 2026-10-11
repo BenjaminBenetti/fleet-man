@@ -267,3 +267,22 @@ func TestFrameClockThreshold(t *testing.T) {
 		t.Fatalf("onLate called %d times", late)
 	}
 }
+
+// A stream that paused on purpose restarts its clock: its next frame is on
+// time however long (under a second) the pause was.
+func TestFrameClockReset(t *testing.T) {
+	late := 0
+	c := NewFrameClock(20*time.Millisecond, func() { late++ })
+	at := time.Unix(1000, 0)
+	c.Arrived(at)
+	c.Reset()
+	if c.Arrived(at.Add(400 * time.Millisecond)) {
+		t.Fatal("the first frame after a reset counted late")
+	}
+	if c.Arrived(at.Add(420 * time.Millisecond)) {
+		t.Fatal("the next frame on its new schedule counted late")
+	}
+	if late != 0 {
+		t.Fatalf("onLate called %d times", late)
+	}
+}

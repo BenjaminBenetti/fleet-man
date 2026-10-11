@@ -9,6 +9,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/output"
+	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -139,6 +140,46 @@ func TestOutputFeedsTheInstancesAudioFlow(t *testing.T) {
 	eventually(t, "audible and late frames to reach the flow", func() bool {
 		_, audible, late := flow.snapshot()
 		return audible == 4 && late >= 2
+	})
+}
+
+// A source that went quiet sends nothing past its silent tail, so the first
+// frame after a pause in what it plays (between two sounds, between words)
+// is not late, however long the pause; a frame held up within a burst is.
+func TestOutputPauseIsNotLate(t *testing.T) {
+	flow := &recordedFlow{}
+	withAudioFlow(t, flow)
+	t.Setenv(EnvAudioLateThreshold, "")
+	_, c, fake, _ := serveFake(t)
+	fake.emit("ready")
+	burst := func(frames ...[]byte) {
+		for _, f := range frames {
+			_, _ = fake.eventsW.Write(f)
+			takeOutput(t, c)
+		}
+	}
+	tail := make([][]byte, outputQuietFrames)
+	for i := range tail {
+		tail[i] = level(0)
+	}
+	// A sound, its tail, a pause well past the late threshold, the next
+	// sound: frames ahead of their schedule, then a new one.
+	burst(level(5000), level(5000), level(5000))
+	burst(tail...)
+	time.Sleep(4 * podwire.LateThreshold)
+	burst(level(5000), level(5000))
+	time.Sleep(50 * time.Millisecond)
+	if _, _, late := flow.snapshot(); late != 0 {
+		t.Fatalf("a pause after a sound's tail counted %d late frames", late)
+	}
+	// Within a burst (two silent frames, then the rest held up), the
+	// held-up frame is late.
+	burst(level(5000), level(0), level(0))
+	time.Sleep(4 * podwire.LateThreshold)
+	burst(level(5000))
+	eventually(t, "the held-up frame to count late", func() bool {
+		_, _, late := flow.snapshot()
+		return late >= 1
 	})
 }
 

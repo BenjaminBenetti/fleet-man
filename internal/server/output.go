@@ -575,13 +575,22 @@ func (h *outputHub) serveSource(ctx context.Context, key string, s *outputSource
 			return true, true, err
 		}
 		alive.Reset(outputAliveDeadline)
+		if clock != nil {
+			// Every frame of a burst is due on the burst's schedule, its
+			// silent tail's too. Past the tail a source sends nothing until
+			// it is audible again (or its heartbeat): a frame after that
+			// pause starts a new schedule, not a late one.
+			if quiet >= outputQuietFrames {
+				clock.Reset()
+			}
+			clock.Arrived(time.Now())
+		}
 		if output.Silent(pcm) {
 			quiet++
 		} else {
 			quiet = 0
 			if flow != nil {
 				flow.OutputAudible()
-				clock.Arrived(time.Now())
 			}
 		}
 		if quiet <= outputQuietFrames {
