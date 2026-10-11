@@ -24,7 +24,8 @@ type SideOptions struct {
 	Again time.Duration
 	// NoWatch polls every root instead of watching it.
 	NoWatch bool
-	// Urgent reports paths to scan at once, without the debounce (logins).
+	// Urgent reports paths to scan at once, without the debounce; nil is
+	// the tree's login files (LoginPaths).
 	Urgent func(root, path string) bool
 	// ReportSize is the most changes in one report: 512.
 	ReportSize int
@@ -69,6 +70,9 @@ func NewSide(info SideInfo, tree *Tree, rep Reporter, opts SideOptions) *Side {
 	if opts.ReportSize == 0 {
 		opts.ReportSize = 512
 	}
+	if opts.Urgent == nil {
+		opts.Urgent = LoginPaths(tree.table)
+	}
 	log := opts.Logger
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -110,11 +114,32 @@ func (s *Side) Fetch(ctx context.Context, root, path string, e Entry, offset int
 	return s.tree.Fetch(ctx, root, path, e, offset)
 }
 
-// Rescan is Peer.Rescan: every root scanned and reported now.
+// Rescan is Peer.Rescan: every root scanned and reported now. A settings
+// or login file written a moment ago is waited for once (MergeSettle), so
+// a flush does not leave it out.
 func (s *Side) Rescan(ctx context.Context) error {
 	var errs []error
 	for _, root := range s.tree.Roots() {
 		errs = append(errs, s.scan(ctx, root, nil))
+	}
+	settling := map[string][]string{}
+	for _, root := range s.tree.Roots() {
+		if paths := s.tree.settling(root); len(paths) > 0 {
+			settling[root] = paths
+		}
+	}
+	if len(settling) == 0 {
+		return errors.Join(errs...)
+	}
+	wait := time.NewTimer(s.tree.opts.MergeSettle)
+	defer wait.Stop()
+	select {
+	case <-ctx.Done():
+		return errors.Join(append(errs, ctx.Err())...)
+	case <-wait.C:
+	}
+	for root, paths := range settling {
+		errs = append(errs, s.scan(ctx, root, paths))
 	}
 	return errors.Join(errs...)
 }

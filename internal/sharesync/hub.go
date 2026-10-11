@@ -183,7 +183,7 @@ func (h *Hub) Attach(ctx context.Context, info SideInfo, peer Peer, hello Hello)
 				continue
 			}
 			var cur *hubEntry
-			if k, _, ok := root.keyFor(held.Path, info.Location); ok {
+			if k, _, ok := root.keyFor(held.Path, info.logins()); ok {
 				cur = root.entries[k]
 			}
 			switch {
@@ -209,7 +209,7 @@ func (h *Hub) Attach(ctx context.Context, info SideInfo, peer Peer, hello Hello)
 			}
 		}
 		for k, e := range root.entries {
-			if k.loc != "" && k.loc != info.Location {
+			if k.loc != "" && k.loc != info.logins() {
 				continue
 			}
 			if rev, ok := sr.held[k.path]; e.Entry.Live() && (!ok || rev != e.Rev) {
@@ -328,7 +328,7 @@ func (h *Hub) openContent(ctx context.Context, root *hubRoot, k key, e Entry, re
 	}
 	var holders []*hubSide
 	for id, sr := range root.sides {
-		if id == except || sr.held[k.path] != rev || rev == 0 || k.loc != "" && sr.side.info.Location != k.loc {
+		if id == except || sr.held[k.path] != rev || rev == 0 || k.loc != "" && sr.side.info.logins() != k.loc {
 			continue
 		}
 		holders = append(holders, sr.side)

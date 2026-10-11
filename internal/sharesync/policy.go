@@ -47,6 +47,10 @@ type MergeInput struct {
 	// Fast is set when the change was made on the path's current state:
 	// nothing else changed the path since the side last synced it.
 	Fast bool
+	// BaseRev is the rev of the state the change was made on: 0 when the
+	// side held none of the path (or holds it at a rev the hub cannot vouch
+	// for, after the hub's state was lost).
+	BaseRev uint64
 	// Current is the path's current state, or nil when the hub has never
 	// had the path (or has forgotten an old delete of it).
 	Current *Version
@@ -76,16 +80,24 @@ type Version struct {
 	Side string
 
 	open func(ctx context.Context) (io.ReadCloser, error)
+	// data is the content once read, so a policy and the hub's history
+	// fetch it once.
+	data []byte
+	read bool
 }
 
 // Content reads a file version's content: ErrTooLarge over MaxMergeSize,
-// nil for anything but a file.
+// nil for anything but a file. The content is read once; the caller must
+// not change it.
 func (v *Version) Content(ctx context.Context) ([]byte, error) {
 	if v.Entry.Kind != File {
 		return nil, nil
 	}
 	if v.Entry.Size > MaxMergeSize {
 		return nil, ErrTooLarge
+	}
+	if v.read {
+		return v.data, nil
 	}
 	if v.open == nil {
 		return nil, ErrNoSource
@@ -102,6 +114,7 @@ func (v *Version) Content(ctx context.Context) ([]byte, error) {
 	if int64(len(data)) != v.Entry.Size {
 		return nil, ErrStale
 	}
+	v.data, v.read = data, true
 	return data, nil
 }
 
@@ -135,12 +148,15 @@ type MergeResult struct {
 // none: its paths are never scanned or sent.
 type Policies map[syncpolicy.Policy]Merger
 
-// DefaultPolicies returns the policies this package implements: mirror and
-// append-union. Credential, JSON3 and TOML3 come from their own Mergers.
+// DefaultPolicies returns the implementation of every sync policy:
+// mirror, append-union, credential, json3 and toml3.
 func DefaultPolicies() Policies {
 	return Policies{
 		syncpolicy.Mirror:      Mirror{},
 		syncpolicy.AppendUnion: AppendUnion{},
+		syncpolicy.Credential:  Credential{},
+		syncpolicy.JSON3:       JSON3{},
+		syncpolicy.TOML3:       TOML3{},
 	}
 }
 

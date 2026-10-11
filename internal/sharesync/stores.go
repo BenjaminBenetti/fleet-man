@@ -74,6 +74,13 @@ func (b *blobStore) open(hash string, offset int64) (io.ReadCloser, error) {
 	return f, nil
 }
 
+// remove drops one blob.
+func (b *blobStore) remove(hash string) {
+	if validHash(hash) {
+		os.Remove(b.path(hash))
+	}
+}
+
 // gc removes the blobs keep does not name that are older than before.
 func (b *blobStore) gc(keep map[string]bool, before time.Time) {
 	entries, err := os.ReadDir(b.dir)

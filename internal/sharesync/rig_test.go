@@ -400,6 +400,9 @@ type faultyPeer struct {
 	mu    sync.Mutex
 	// down fails every call as unreachable.
 	down bool
+	// deaf fails only Apply: the side still reports and serves content,
+	// but hears nothing back.
+	deaf bool
 	// lose applies a batch but loses its results.
 	lose bool
 	// fetchFail fails fetches.
@@ -410,7 +413,7 @@ type faultyPeer struct {
 
 func (f *faultyPeer) Apply(ctx context.Context, b Batch) ([]Result, error) {
 	f.mu.Lock()
-	down, lose := f.down, f.lose
+	down, lose := f.down || f.deaf, f.lose
 	f.calls++
 	f.mu.Unlock()
 	if down {

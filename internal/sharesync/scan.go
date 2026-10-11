@@ -144,11 +144,15 @@ func (t *Tree) Scan(ctx context.Context, root string, paths []string) (Report, [
 	tr.mu.Unlock()
 
 	examined := cands[:0]
+	// looked are the files examined, whose settle (MergeSettle) the scan
+	// has judged.
+	looked := map[string]bool{}
 	for _, c := range cands {
 		if err := ctx.Err(); err != nil {
 			return Report{}, nil, err
 		}
 		if !c.gone {
+			looked[c.name] = true
 			entry, err := tr.examine(c)
 			switch {
 			case err == nil:
@@ -177,6 +181,12 @@ func (t *Tree) Scan(ctx context.Context, root string, paths []string) (Report, [
 	for name := range tr.failing {
 		if _, still := failed[name]; !still && inAny(name, areas) {
 			delete(tr.failing, name)
+		}
+	}
+	for name := range tr.settling {
+		// One gone, or back to what was synced, is settling no more.
+		if !looked[name] && inAny(name, areas) {
+			delete(tr.settling, name)
 		}
 	}
 	for _, c := range examined {
@@ -246,6 +256,9 @@ func (tr *treeRoot) examine(c candidate) (Entry, error) {
 	}
 	settle := tr.tree.opts.Settle
 	if c.info.Size() > BulkSize && settle > 0 && tr.tree.opts.Now().Sub(c.info.ModTime()) < settle {
+		return Entry{}, errUnsettled
+	}
+	if !tr.settled(c) {
 		return Entry{}, errUnsettled
 	}
 	f, err := tr.fs.Open(c.name)

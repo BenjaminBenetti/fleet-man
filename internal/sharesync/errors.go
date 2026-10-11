@@ -25,6 +25,11 @@ var (
 	ErrClosed = errors.New("sync is closed")
 	// ErrNoSource: no side holds the content an op needs right now.
 	ErrNoSource = errors.New("no copy of the content is reachable")
+	// ErrIncomplete: a reported file is not a whole one of its kind (a
+	// settings or login file that does not parse, or is empty): a write
+	// still under way, which the side reports again once it is done. A
+	// policy returns it to leave the change waiting on its side.
+	ErrIncomplete = errors.New("not a whole file of its kind")
 	// errNoSpace marks a write that found too little room.
 	errNoSpace = errors.New("no space left")
 )
