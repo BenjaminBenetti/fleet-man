@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet up` rejects creating an instance with a name that already exists in the fleet.
 set -euo pipefail
 

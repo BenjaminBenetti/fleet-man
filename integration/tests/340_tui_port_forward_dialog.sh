@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI 'p' opens the port-forward dialog on running instances, validates input, and closes on esc; refuses on stopped instances.
 set -euo pipefail
 

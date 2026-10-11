@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet logs` streams the container's own log output, including the entrypoint banner.
 set -euo pipefail
 

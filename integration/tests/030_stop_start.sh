@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Stop/start preserves container identity and runs postStart once per start (#229).
 set -euo pipefail
 

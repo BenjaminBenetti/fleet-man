@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Full TUI lifecycle — create fleet, create instance, shell in (split pane), run cmd, delete instance.
 set -euo pipefail
 

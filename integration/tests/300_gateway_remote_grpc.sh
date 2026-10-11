@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: remote gRPC control through the fleet gateway — a remote `fleet` client drives a registered fleetd over the gateway and the commanded action takes effect.
 set -euo pipefail
 
@@ -52,6 +53,7 @@ cat > "${HOME}/.fleet/config.json" <<EOF
   }
 }
 EOF
+itest_config_written
 
 # 2. Start the gateway in the background, cert-less (plain HTTP public + h2c gRPC).
 #    --public-grpc-url makes the gateway hand grpc-negotiating daemons their

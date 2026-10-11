@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI o opens an external terminal on the selected instance — with a stub terminal emulator first on PATH, o launches it with the attach argv, and the window it opens is a plain (non-tmux) shell inside the instance.
 set -euo pipefail
 

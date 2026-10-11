@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI tag instance — save tag via Enter, cancel via Esc, verify persistence
 set -euo pipefail
 

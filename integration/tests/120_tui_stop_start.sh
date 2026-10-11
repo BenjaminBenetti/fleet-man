@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Pressing `s` on a running instance toggles its status to stopped and back.
 set -euo pipefail
 

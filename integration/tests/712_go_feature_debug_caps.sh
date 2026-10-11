@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: an instance with the published Go feature gets the debug grants the feature asks for (CAP_SYS_PTRACE, seccomp unconfined), runs under an init process, has the feature's Go toolchain and env, and keeps them across stop/start.
 set -euo pipefail
 
@@ -33,11 +34,21 @@ check_debug_grants() {  # <when>
 check_debug_grants "after create"
 
 # init: true — PID 1 is an init process reaping orphans, not the entrypoint.
-pid1=$(in_instance cat /proc/1/comm)
-case "${pid1}" in
-  docker-init|tini|catatonit|dumb-init) info "PID 1 is ${pid1}" ;;
-  *) fail "PID 1 should be an init process (the feature sets init: true), got ${pid1}" ;;
-esac
+if itest_backend_is kubernetes; then
+  # A pod's PID 1 is always fleet's pod-init, which init: true puts in its
+  # reaper mode (forwarding every signal, as tini does).
+  pid1=$(in_instance sh -c "tr '\\0' ' ' </proc/1/cmdline")
+  assert_contains "${pid1}" "pod-init" "PID 1 should be fleet's pod-init"
+  pid1_spec=$(itest_k8s_spec_file "$(itest_container_id "${inst}")" pid1.json)
+  printf '%s' "${pid1_spec}" | grep -qE '"init": *true' \
+    || fail "pod-init should run in its reaper mode (the feature sets init: true): ${pid1_spec}"
+else
+  pid1=$(in_instance cat /proc/1/comm)
+  case "${pid1}" in
+    docker-init|tini|catatonit|dumb-init) info "PID 1 is ${pid1}" ;;
+    *) fail "PID 1 should be an init process (the feature sets init: true), got ${pid1}" ;;
+  esac
+fi
 
 # The feature's payload and containerEnv.
 go_out=$(in_instance bash -lc 'go version')

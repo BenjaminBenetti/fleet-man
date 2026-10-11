@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: the poison-docker shim intercepts every docker call fleetd, the devcontainer CLI and the fleet CLI make: in record mode a devcontainer lifecycle passes through it and is logged, and in poison mode container verbs are refused (exit 125) while image, build and version calls still pass.
 set -euo pipefail
 

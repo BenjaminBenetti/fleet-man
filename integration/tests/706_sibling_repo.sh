@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: repos cloned or created next to the workspace in /workspaces (the workspace mount's parent) keep their commits, uncommitted changes and git integrity across stop/start, beside an untouched workspace.
 set -euo pipefail
 

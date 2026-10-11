@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: tabs inside a session — in a session opened from the TUI, prefix+c (ctrl+x c in the split pane) creates a tab: the session gains a second tmux window, the in-pane tab bar appears, the session row shows "(2 tabs)", and prefix+p / n / 0 switch between the tabs.
 set -euo pipefail
 

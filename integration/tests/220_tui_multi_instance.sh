@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI creates a fleet and two instances; verifies header count and both rows
 set -euo pipefail
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Pressing `q` exits the TUI and the tmux session dies.
 set -euo pipefail
 

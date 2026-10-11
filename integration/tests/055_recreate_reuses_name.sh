@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet up` with a reused name prunes any stale container left behind, so `fleet exec` does not hit runc's mount-namespace check (#51).
 set -euo pipefail
 
@@ -41,7 +42,22 @@ if [ "${old_container}" = "${new_container}" ]; then
   fail "new container should be different from the stale one — pre-prune did not run"
 fi
 
-assert_container_absent "${old_container}" "stale container should have been pruned"
+if itest_backend_is kubernetes; then
+  # On a cluster each instance's objects are named by its key, which a new
+  # create never shares, so a stale StatefulSet is never reused: it is an
+  # orphan no record accounts for, which `fleet cluster gc` lists (and, once
+  # it is an hour old, deletes with --apply).
+  old_sts="${old_container#k8s:*/*/}"
+  old_sts="${old_sts%@g*}"
+  gc_out=$("${FLEET_BIN}" cluster gc itest)
+  printf '%s\n' "${gc_out}"
+  printf '%s\n' "${gc_out}" | grep -E "^sts +${old_sts} " >/dev/null \
+    || fail "fleet cluster gc does not list the stale StatefulSet ${old_sts}"
+  itest_container_belongs_to "${new_container}" "${inst}" \
+    || fail "the new StatefulSet should be the re-created instance's"
+else
+  assert_container_absent "${old_container}" "stale container should have been pruned"
+fi
 
 # Final regression check: `fleet exec` must succeed against the fresh
 # container. Pre-fix this is the call that surfaced runc's "current

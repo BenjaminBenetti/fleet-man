@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: session tools CLI round trip — spawn-session creates a detached tmux session in the instance, exec-in-session runs a command in its shell, and read-session prints the screen, with --scrollback reaching lines above it (N lines, then the full history).
 set -euo pipefail
 

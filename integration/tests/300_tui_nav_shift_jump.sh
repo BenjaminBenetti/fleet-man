@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI shift+j/k jumps between instance rows skipping session rows and wrapping
 set -euo pipefail
 

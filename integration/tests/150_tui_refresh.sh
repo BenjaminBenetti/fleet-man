@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Pressing `r` refreshes state and surfaces new instances created via the CLI.
 set -euo pipefail
 

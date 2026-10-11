@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: devcontainer lifecycle hooks run the right number of times, in spec order: create runs initialize/onCreate/updateContent/postCreate/postStart/postAttach once each, start re-runs only postStart/postAttach, and rebuild runs the full set again.
 set -euo pipefail
 
@@ -41,17 +42,21 @@ info "fleet start alpha again (already running)"
 "${FLEET_BIN}" start "${inst}" >/dev/null
 assert_equals "${create_hooks} ${start_hooks}" "$(hook_log)" "an already-running start must not run any hook"
 
-info "fleet rebuild alpha"
-"${FLEET_BIN}" rebuild "${inst}" >/dev/null
-assert_equals "${create_hooks} ${start_hooks} ${create_hooks}" "$(hook_log)" \
-  "rebuild should run the full create-time set again"
-assert_equals "2" "$(init_count)" "rebuild should run initializeCommand again"
+if itest_backend_rebuilds; then
+  info "fleet rebuild alpha"
+  "${FLEET_BIN}" rebuild "${inst}" >/dev/null
+  assert_equals "${create_hooks} ${start_hooks} ${create_hooks}" "$(hook_log)" \
+    "rebuild should run the full create-time set again"
+  assert_equals "2" "$(init_count)" "rebuild should run initializeCommand again"
 
-info "fleet stop + start alpha after the rebuild"
-"${FLEET_BIN}" stop "${inst}" >/dev/null
-"${FLEET_BIN}" start "${inst}" >/dev/null
-assert_equals "${create_hooks} ${start_hooks} ${create_hooks} ${start_hooks}" "$(hook_log)" \
-  "a start after a rebuild should again re-run only postStart and postAttach"
-assert_equals "2" "$(init_count)" "start must not re-run initializeCommand"
+  info "fleet stop + start alpha after the rebuild"
+  "${FLEET_BIN}" stop "${inst}" >/dev/null
+  "${FLEET_BIN}" start "${inst}" >/dev/null
+  assert_equals "${create_hooks} ${start_hooks} ${create_hooks} ${start_hooks}" "$(hook_log)" \
+    "a start after a rebuild should again re-run only postStart and postAttach"
+  assert_equals "2" "$(init_count)" "start must not re-run initializeCommand"
+else
+  info "this backend cannot rebuild yet: the rebuild steps are left out"
+fi
 
 pass "lifecycle hooks: once per create, postStart/postAttach once per start, full set on rebuild"

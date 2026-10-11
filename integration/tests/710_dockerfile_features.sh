@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: an instance builds from a Dockerfile (build args, repo-root build context) plus a local feature with an option, and runs as remoteUser with containerEnv, remoteEnv and the feature's containerEnv set.
 set -euo pipefail
 

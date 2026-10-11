@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Renamed instance display_name renders in the row and survives a TUI restart.
 set -euo pipefail
 

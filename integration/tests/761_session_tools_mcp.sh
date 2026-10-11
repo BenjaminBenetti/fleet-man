@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: session tools over MCP — fleet_exec returns a command's stdout, stderr and exit code; fleet_session_spawn / fleet_session_exec / fleet_session_read (with scrollback) / fleet_session_list drive a tmux session in the instance, sharing it with the CLI session tools; a stopped instance is refused with a tool error.
 set -euo pipefail
 

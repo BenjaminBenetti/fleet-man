@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI Armada selector renders in the border and opens via the `A` key
 set -euo pipefail
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Re-opening the tag dialog with empty input clears the tag line from the expanded instance and from state.json.
 set -euo pipefail
 

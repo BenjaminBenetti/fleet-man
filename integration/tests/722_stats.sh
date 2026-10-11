@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: the TUI's instance row shows live CPU (mcpu) and memory (MB) for a running instance, with a fleet total: both climb under load inside the instance and fall back once it ends.
 set -euo pipefail
 

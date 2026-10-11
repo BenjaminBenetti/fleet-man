@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet destroy` removes every instance in a fleet and the fleet record itself.
 set -euo pipefail
 

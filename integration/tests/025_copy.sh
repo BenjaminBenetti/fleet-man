@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet copy` is bidirectional scp-style — out of, into, and between instances, preserving content and mode.
 set -euo pipefail
 

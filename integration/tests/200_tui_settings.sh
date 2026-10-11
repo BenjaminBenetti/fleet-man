@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI settings page opens from fleet list and closes with esc and q
 set -euo pipefail
 
