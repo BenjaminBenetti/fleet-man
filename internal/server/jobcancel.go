@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 )
 
@@ -26,8 +27,9 @@ var (
 	// being destroyed. A cancelled run reports "cancelled: instance destroyed".
 	errInstanceDestroyed = errors.New("instance destroyed")
 	// errDaemonShutdown is the cancellation cause of every job still running
-	// when the daemon shuts down.
-	errDaemonShutdown = errors.New("fleet daemon shutting down")
+	// when the daemon shuts down (shared with the backends, which tell it
+	// from a destroy's: backend.ShutdownCut).
+	errDaemonShutdown = backend.ErrDaemonShutdown
 	// errJobFinished releases a job's context once its work has returned.
 	errJobFinished = errors.New("job finished")
 )
@@ -83,6 +85,19 @@ func (m *jobManager) provisioningJobs(fleetName, instanceName string) []*job {
 			continue
 		}
 		out = append(out, j)
+	}
+	return out
+}
+
+// allProvisioningJobs returns every in-flight provisioning job.
+func (m *jobManager) allProvisioningJobs() []*job {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*job
+	for _, j := range m.active {
+		if isProvisioningJob(j.summary.GetKind()) {
+			out = append(out, j)
+		}
 	}
 	return out
 }

@@ -79,6 +79,9 @@ func kubePodVerifyCode(err error) codes.Code {
 // its own connection; that is how the remote full-control rule holds without
 // a cluster credential ever leaving the daemon host.
 func (s *service) IssueKubeExecCredential(ctx context.Context, req *fleetgrpc.IssueKubeExecCredentialRequest) (*fleetgrpc.IssueKubeExecCredentialReply, error) {
+	if err := s.shuttingDown(); err != nil {
+		return nil, err
+	}
 	if req.GetClusterId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "no Kubernetes connection named")
 	}

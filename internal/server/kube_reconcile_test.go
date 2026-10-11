@@ -26,12 +26,14 @@ import (
 // fakeRecoveryPool stands in for the pool: its scope is the fixture's fake
 // cluster, and the undos are the test's.
 type fakeRecoveryPool struct {
-	mu     sync.Mutex
-	scope  kubernetes.Scope
-	gate   kubernetes.OwnerGate
-	undo   func(kubernetes.Journal) (kubernetes.RebuildUndo, error)
-	undos  []kubernetes.Journal
-	clones []kubernetes.Journal
+	mu    sync.Mutex
+	scope kubernetes.Scope
+	gate  kubernetes.OwnerGate
+	undo  func(kubernetes.Journal) (kubernetes.RebuildUndo, error)
+	// undoCtx, when set, is the undo instead, with its context.
+	undoCtx func(context.Context, kubernetes.Journal) (kubernetes.RebuildUndo, error)
+	undos   []kubernetes.Journal
+	clones  []kubernetes.Journal
 	// cloneErr is what UndoClone returns (nil: it deleted a copier).
 	cloneErr error
 }
@@ -48,12 +50,15 @@ func (p *fakeRecoveryPool) Scope(id string) (kubernetes.Scope, error) {
 	return s, nil
 }
 
-func (p *fakeRecoveryPool) UndoRebuild(_ context.Context, j kubernetes.Journal, progress func(string)) (kubernetes.RebuildUndo, error) {
+func (p *fakeRecoveryPool) UndoRebuild(ctx context.Context, j kubernetes.Journal, progress func(string)) (kubernetes.RebuildUndo, error) {
 	p.mu.Lock()
 	p.undos = append(p.undos, j)
-	undo := p.undo
+	undo, undoCtx := p.undo, p.undoCtx
 	p.mu.Unlock()
 	progress("restoring")
+	if undoCtx != nil {
+		return undoCtx(ctx, j)
+	}
 	if undo == nil {
 		return kubernetes.RebuildUndo{}, nil
 	}
@@ -318,6 +323,71 @@ func TestDestroyCancelsAWaitingUndo(t *testing.T) {
 	}
 	if r.inst("rb") != nil || r.pool.undoCount() != 0 {
 		t.Fatalf("after the destroy: %+v, %d undos", r.inst("rb"), r.pool.undoCount())
+	}
+}
+
+// An undo the daemon's shutdown cuts, whether still waiting for its cluster
+// or in the middle of the rollback, is left at its checkpoint: the record
+// stays rebuilding and the journal stays, and the next start claims and
+// undoes it again.
+func TestShutdownLeavesAnUndoForTheNextStart(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		usable bool
+	}{
+		{"waiting for its cluster", false},
+		{"rolling back", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRecoveryFixture(t)
+			rolling := make(chan struct{}, 1)
+			r.pool.undoCtx = func(ctx context.Context, _ kubernetes.Journal) (kubernetes.RebuildUndo, error) {
+				rolling <- struct{}{}
+				<-ctx.Done()
+				return kubernetes.RebuildUndo{}, ctx.Err()
+			}
+			r.record("rb", "dddddddd", fleet.StatusRebuilding, "")
+			r.journal("rb", "dddddddd", kubernetes.OpRebuild, "seed-reset", nil)
+			r.svc.failInterruptedJobs()
+			bg, shutdown := context.WithCancel(context.Background())
+			t.Cleanup(shutdown)
+			r.svc.bgCtx = bg
+			r.svc.kubeRecovery.start(bg)
+			jobs := r.svc.jobs.activeJobs().GetJobs()
+			if len(jobs) != 1 {
+				t.Fatalf("active jobs %v", jobs)
+			}
+			undoJob := r.svc.jobs.get(jobs[0].GetJobId())
+			if tc.usable {
+				r.start()
+				select {
+				case <-rolling:
+				case <-time.After(10 * time.Second):
+					t.Fatal("the undo never started")
+				}
+			} else {
+				time.Sleep(50 * time.Millisecond)
+			}
+
+			shutdown()
+			select {
+			case <-undoJob.exited:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the undo outlived the shutdown")
+			}
+			if inst := r.inst("rb"); inst.Status != fleet.StatusRebuilding || inst.Error != "" {
+				t.Fatalf("after the shutdown: %s %q, want it left rebuilding", inst.Status, inst.Error)
+			}
+			if !journalExists("dddddddd") {
+				t.Fatal("the shutdown lost the rebuild's journal")
+			}
+			next := newService()
+			next.kubeRecovery.load()
+			next.failInterruptedJobs()
+			if !next.kubeRecovery.claims("alpha", "rb") {
+				t.Fatal("the next start did not claim the undo")
+			}
+		})
 	}
 }
 

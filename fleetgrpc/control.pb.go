@@ -197,9 +197,15 @@ func (x *ShutdownRequest) GetReason() string {
 // (snapshotted in the same model-loop turn that flips to draining), so the
 // caller can show progress.
 type ShutdownReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
-	DrainingJobs  int32                  `protobuf:"varint,2,opt,name=draining_jobs,json=drainingJobs,proto3" json:"draining_jobs,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Accepted     bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	DrainingJobs int32                  `protobuf:"varint,2,opt,name=draining_jobs,json=drainingJobs,proto3" json:"draining_jobs,omitempty"`
+	// hard_limit_ms is how long the daemon's own shutdown may take, cleanup
+	// included, before it exits whatever it was still doing (its hard limit). A
+	// restarting client waits that long plus 2s for the process to go before it
+	// kills it, so a shutdown still flushing is never killed; 0 (an older
+	// daemon) means it reports none, and the client keeps its fixed 8s.
+	HardLimitMs   int64 `protobuf:"varint,3,opt,name=hard_limit_ms,json=hardLimitMs,proto3" json:"hard_limit_ms,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -244,6 +250,13 @@ func (x *ShutdownReply) GetAccepted() bool {
 func (x *ShutdownReply) GetDrainingJobs() int32 {
 	if x != nil {
 		return x.DrainingJobs
+	}
+	return 0
+}
+
+func (x *ShutdownReply) GetHardLimitMs() int64 {
+	if x != nil {
+		return x.HardLimitMs
 	}
 	return 0
 }
@@ -1159,10 +1172,11 @@ const file_control_proto_rawDesc = "" +
 	"\x0fShutdownRequest\x12\x14\n" +
 	"\x05drain\x18\x01 \x01(\bR\x05drain\x12\x1b\n" +
 	"\x06reason\x18\x02 \x01(\tH\x00R\x06reason\x88\x01\x01B\t\n" +
-	"\a_reason\"P\n" +
+	"\a_reason\"t\n" +
 	"\rShutdownReply\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12#\n" +
-	"\rdraining_jobs\x18\x02 \x01(\x05R\fdrainingJobs\"\x1a\n" +
+	"\rdraining_jobs\x18\x02 \x01(\x05R\fdrainingJobs\x12\"\n" +
+	"\rhard_limit_ms\x18\x03 \x01(\x03R\vhardLimitMs\"\x1a\n" +
 	"\x18FleetTUIConnectedRequest\"\x18\n" +
 	"\x16FleetTUIConnectedReply\"2\n" +
 	"\x1aDeleteBuildkitCacheRequest\x12\x14\n" +

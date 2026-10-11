@@ -104,7 +104,7 @@ func (p *Pool) slot(c *Cluster, t PodTarget) (*podSlot, error) {
 	key := podKey{c.Record.ID, c.Namespace(), t.Pod()}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.closed {
+	if p.closed || p.sessionsClosed {
 		return nil, errors.New("the Kubernetes pool is closed")
 	}
 	s, ok := p.slots[key]

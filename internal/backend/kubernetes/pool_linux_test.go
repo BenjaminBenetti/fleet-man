@@ -108,6 +108,12 @@ type harness struct {
 	execs  []execRecord
 	// onExec runs at the start of every exec.
 	onExec func(execRecord)
+
+	// deaf: what fleetd sends the pods from now on is held back until the
+	// test ends (an agent that no longer answers).
+	deaf     atomic.Bool
+	unheard  chan struct{}
+	hearOnce sync.Once
 }
 
 const (
@@ -120,7 +126,8 @@ func newHarness(t *testing.T, opts PoolOptions) *harness {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("no go toolchain to build the fake pod binary")
 	}
-	h := &harness{t: t, ns: "fleet-test", cs: fake.NewClientset(), env: map[string]string{}, roots: map[string]string{}, fail: map[string]error{}}
+	h := &harness{t: t, ns: "fleet-test", cs: fake.NewClientset(), env: map[string]string{}, roots: map[string]string{}, fail: map[string]error{}, unheard: make(chan struct{})}
+	t.Cleanup(func() { h.hearOnce.Do(func() { close(h.unheard) }) })
 	now := time.Now()
 	h.now.Store(&now)
 	h.env[binstore.EnvBinaryPrefix+strings.ToUpper(runtime.GOARCH)] = fakePod(t, "vtest-1")
@@ -284,7 +291,7 @@ func (h *harness) exec(ctx context.Context, c *Cluster, req kubeexec.ExecRequest
 	}
 	if stdin != nil {
 		go func() {
-			_, _ = io.Copy(stdin, stdio.Stdin)
+			_, _ = io.Copy(stdin, deafReader{h, stdio.Stdin})
 			_ = stdin.Close()
 		}()
 	}
@@ -294,6 +301,20 @@ func (h *harness) exec(ctx context.Context, c *Cluster, req kubeexec.ExecRequest
 		return &kubeexec.ExitError{Code: exitErr.ExitCode()}
 	}
 	return err
+}
+
+// deafReader is a pod's stdin, held back while the harness is deaf.
+type deafReader struct {
+	h *harness
+	r io.Reader
+}
+
+func (d deafReader) Read(p []byte) (int, error) {
+	n, err := d.r.Read(p)
+	if d.h.deaf.Load() {
+		<-d.h.unheard
+	}
+	return n, err
 }
 
 func execKind(argv []string) string {
@@ -936,6 +957,55 @@ func TestPoolShutdownClosesEverySession(t *testing.T) {
 	if _, err := h.pool.EnsureAgent(ctx, a); err == nil {
 		t.Fatal("a closed pool bootstrapped")
 	}
+}
+
+// The shutdown's "close the sessions" step ends every session and lets no
+// pod have another, but keeps the connection up for what the shutdown still
+// does on the cluster (a cancelled create scaling its pod down) until the
+// pool itself ends.
+func TestPoolCloseSessionsKeepsTheConnection(t *testing.T) {
+	h := newHarness(t, PoolOptions{})
+	a := h.addPod("a")
+	ctx := context.Background()
+	s, err := h.pool.EnsureAgent(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	h.pool.CloseSessions(sctx)
+	waitDone(t, s.Done(), "the session at CloseSessions")
+	if _, err := h.pool.EnsureAgent(ctx, a); err == nil {
+		t.Fatal("a pod got a session after CloseSessions")
+	}
+	if err := h.pool.Scale(ctx, testCluster, a.StatefulSet, 0); err != nil {
+		t.Fatalf("the connection went with the sessions: %v", err)
+	}
+	h.pool.Close()
+	if err := h.pool.Scale(ctx, testCluster, a.StatefulSet, 0); err == nil {
+		t.Fatal("a closed pool still reached the cluster")
+	}
+}
+
+// An agent that never answers the Close does not hold the shutdown: the
+// sessions close when the step's deadline passes.
+func TestPoolCloseSessionsIsBoundedByItsDeadline(t *testing.T) {
+	h := newHarness(t, PoolOptions{})
+	a := h.addPod("a")
+	ctx := context.Background()
+	s, err := h.pool.EnsureAgent(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.deaf.Store(true)
+	sctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	h.pool.CloseSessions(sctx)
+	if d := time.Since(start); d < 250*time.Millisecond || d > 2*time.Second {
+		t.Fatalf("CloseSessions took %v, want its deadline (300ms)", d)
+	}
+	waitDone(t, s.Done(), "the deaf pod's session")
 }
 
 // A bootstrap someone joins runs at the joiner's priority: a pane opened on

@@ -222,7 +222,10 @@ type Pool struct {
 	refreshedAt time.Time
 	slots       map[podKey]*podSlot
 	watchers    map[string]*watcher
-	closed      bool
+	// sessionsClosed: no pod gets a session any more (CloseSessions);
+	// closed: the pool is shut down.
+	sessionsClosed bool
+	closed         bool
 
 	// instMu guards what the informers and the supervisor know of each
 	// instance (never held with mu).
@@ -300,15 +303,39 @@ func stampFiles(paths []string) []fileStamp {
 }
 
 var (
-	defaultPoolOnce sync.Once
-	defaultPool     *Pool
+	defaultPoolMu sync.Mutex
+	defaultPool   *Pool
 )
 
 // DefaultPool is the daemon's pool. It does nothing until first used: no
 // cluster is contacted at startup.
 func DefaultPool() *Pool {
-	defaultPoolOnce.Do(func() { defaultPool = NewPool(PoolOptions{}) })
+	defaultPoolMu.Lock()
+	defer defaultPoolMu.Unlock()
+	if defaultPool == nil {
+		defaultPool = NewPool(PoolOptions{})
+	}
 	return defaultPool
+}
+
+// RenewDefaultPool replaces the daemon's pool with a fresh one when the
+// current one was shut down: for a daemon served again in the same process
+// (fleetd serves once and exits; tests serve many times), whose last
+// shutdown ended the pool. Whoever still holds the old one keeps it, shut
+// down, so nothing of the last daemon reaches a cluster through the new one.
+func RenewDefaultPool() {
+	defaultPoolMu.Lock()
+	defer defaultPoolMu.Unlock()
+	if defaultPool != nil && defaultPool.isClosed() {
+		defaultPool = NewPool(PoolOptions{})
+	}
+}
+
+// isClosed reports whether the pool was shut down.
+func (p *Pool) isClosed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.closed
 }
 
 // NewPool makes a pool.
@@ -568,12 +595,25 @@ func (p *Pool) Close() {
 	p.Shutdown(ctx)
 }
 
-// Shutdown tells every pod's agent and bulk sessions to close and waits,
-// within ctx, for them to end (the bounded shutdown's "close the sessions"
-// step), then closes whatever is left. The pool is unusable afterwards.
+// Shutdown is CloseSessions, then the end of the pool: its informers stop,
+// and so does every cluster call made under its lifetime (a cancelled
+// create's clean-up). The pool is unusable afterwards.
 func (p *Pool) Shutdown(ctx context.Context) {
+	p.CloseSessions(ctx)
 	p.mu.Lock()
 	p.closed = true
+	p.mu.Unlock()
+	p.cancel()
+}
+
+// CloseSessions tells every pod's agent and bulk sessions to close and
+// waits, within ctx, for them to end (the bounded shutdown's "close the
+// sessions" step), then closes whatever is left; no pod gets a session
+// afterwards. The connections stay up, informers included, for what the
+// shutdown still does on them before Shutdown.
+func (p *Pool) CloseSessions(ctx context.Context) {
+	p.mu.Lock()
+	p.sessionsClosed = true
 	slots := make([]*podSlot, 0, len(p.slots))
 	for key, s := range p.slots {
 		slots = append(slots, s)
@@ -589,5 +629,4 @@ func (p *Pool) Shutdown(ctx context.Context) {
 		}()
 	}
 	wg.Wait()
-	p.cancel()
 }

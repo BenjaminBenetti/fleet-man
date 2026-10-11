@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime/svcruntimetest"
@@ -334,11 +335,18 @@ func TestJobContextCauses(t *testing.T) {
 	if !errors.Is(context.Cause(ctx), errDaemonShutdown) {
 		t.Fatalf("cause = %v, want errDaemonShutdown", context.Cause(ctx))
 	}
+	// The backends tell it from a destroy's.
+	if !backend.ShutdownCut(ctx) {
+		t.Fatal("a backend does not see the shutdown in a job's context")
+	}
 
 	ctx2, cancel2 := newJobContext(context.Background())
 	cancel2(errInstanceDestroyed)
 	if !errors.Is(context.Cause(ctx2), errInstanceDestroyed) {
 		t.Fatalf("cause = %v, want errInstanceDestroyed", context.Cause(ctx2))
+	}
+	if backend.ShutdownCut(ctx2) {
+		t.Fatal("a destroy reads as the shutdown")
 	}
 }
 

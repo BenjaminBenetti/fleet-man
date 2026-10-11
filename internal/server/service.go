@@ -86,6 +86,8 @@ type service struct {
 
 	shutdownOnce sync.Once
 	shutdownCh   chan struct{}
+	// stopping is set as the shutdown begins (beginShutdown, shutdown.go).
+	stopping atomic.Bool
 
 	// sharedServicesReconciling coalesces the TUI-connect shared-service
 	// re-ensure so that several TUIs opening at once trigger one sweep, not one
@@ -228,11 +230,13 @@ func (s *service) GetState(ctx context.Context, req *fleetgrpc.GetStateRequest) 
 	return reply, nil
 }
 
-// Shutdown asks the server to stop. Phase 1 has no jobs, so a drain is
-// immediate. The serve loop watches shutdownCh; GracefulStop there waits for
-// THIS RPC to return before tearing the server down, so the caller still gets
-// its reply.
+// Shutdown asks the server to stop. Running jobs are not waited for (the
+// Kubernetes ones stop at a checkpoint, shutdown.go). The serve loop watches
+// shutdownCh; GracefulStop there waits for THIS RPC to return before tearing
+// the server down, so the caller still gets its reply, which says how long
+// the shutdown may take before the daemon exits regardless (its hard limit):
+// what a restarting client waits for before it kills the process.
 func (s *service) Shutdown(_ context.Context, _ *fleetgrpc.ShutdownRequest) (*fleetgrpc.ShutdownReply, error) {
 	s.shutdownOnce.Do(func() { close(s.shutdownCh) })
-	return &fleetgrpc.ShutdownReply{Accepted: true, DrainingJobs: 0}, nil
+	return &fleetgrpc.ShutdownReply{Accepted: true, DrainingJobs: 0, HardLimitMs: shutdownHardLimit.Milliseconds()}, nil
 }

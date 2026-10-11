@@ -79,6 +79,9 @@ func Serve(ctx context.Context) error {
 		return fmt.Errorf("chmod socket: %w", err)
 	}
 
+	// The Kubernetes pool a daemon served before in this process (tests)
+	// ended with its shutdown: this one starts with a live one.
+	renewKubePool()
 	svc := newService()
 
 	// Start the hub (the broadcast-model owner) and the state poller (the
@@ -353,8 +356,18 @@ func Serve(ctx context.Context) error {
 		flog.Error("fleet server shutdown wedged; exiting", "pid", os.Getpid(), "after", shutdownHardLimit)
 		exitProcess(1)
 	})
+	// The bounded shutdown (shutdown.go): the shim's RPCs are refused first,
+	// then every stream, loop and job is cancelled (hubCtx), and the ordered
+	// steps run in their budget alongside the gRPC drain.
+	svc.beginShutdown()
 	cancelHub()
-	stopGRPC(grpcServer, drainTimeout)
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		stopGRPC(grpcServer, drainTimeout)
+	}()
+	runShutdownSteps(shutdownBudget, svc.shutdownSteps())
+	<-drained
 	return nil
 }
 
