@@ -398,7 +398,7 @@ func (rb *rebuilding) reseed(ctx context.Context, adm *podspec.Admitted, r podsp
 	if err := rb.step(ctx, stepApply, fleet.StepApplyManifests, ""); err != nil {
 		return nil, err
 	}
-	if err := rb.recordRollback(adm, r); err != nil {
+	if err := rb.recordRollback(r); err != nil {
 		return nil, err
 	}
 	if err := rb.applyGeneration(ctx, adm); err != nil {
@@ -417,15 +417,18 @@ func (rb *rebuilding) reseed(ctx context.Context, adm *podspec.Admitted, r podsp
 
 // recordRollback records what undoing the rebuild past its reset needs: the
 // StatefulSet as it is now (generation prevGen), and the tool Job that puts
-// prevGen's root back from trash, rendered to run the image prevGen runs.
-func (rb *rebuilding) recordRollback(adm *podspec.Admitted, r podspec.RenderInput) error {
+// prevGen's root back from trash, rendered to run the image prevGen runs
+// where prevGen's pods run (toolResult): the new generation's placement (an
+// architecture, a runtime class) may be what it failed on, and must not keep
+// the rollback from scheduling on the disk's node too.
+func (rb *rebuilding) recordRollback(r podspec.RenderInput) error {
 	stsBody, err := statefulSetBody(rb.sts)
 	if err != nil {
 		return err
 	}
 	ri := r
 	ri.Gen, ri.CreatedAt, ri.Image, ri.Seed = rb.prevGen, rb.prev.Created, liveImage(rb.sts, rb.prev), nil
-	job, err := podspec.RenderJob(adm.Result, ri, podspec.JobInput{Name: names.RollbackJob(rb.sts.Name, rb.prevGen), Resources: toolResources()}, names.RoleTool)
+	job, err := podspec.RenderJob(toolResult(rb.sts), ri, podspec.JobInput{Name: names.RollbackJob(rb.sts.Name, rb.prevGen), Resources: toolResources()}, names.RoleTool)
 	if err != nil {
 		return classify(err)
 	}
@@ -492,6 +495,20 @@ func rebuildHolder(key string, gen int) string { return key + "@g" + strconv.Ito
 func releaseRebuildHold(clusterID, key string, gen int) {
 	if err := currentEnvironment().images().Release(clusterID, rebuildHolder(key, gen)); err != nil {
 		flog.Warn("kube rebuild: releasing the rebuild's image", "cluster", clusterID, "key", key, "gen", gen, "err", err)
+	}
+}
+
+// releaseRebuildHolds lets go, for a destroy, of the image a rebuild of
+// instance key that never ended holds (its undo failed and kept its journal,
+// or the destroy cancelled the reconciler's undo): its holder names the
+// generation it made, the one fleetd's record of the pod is at or the next.
+func releaseRebuildHolds(clusterID, key string) {
+	rec, err := LoadInstanceRecord(clusterID, key)
+	if err != nil {
+		return
+	}
+	for _, gen := range []int{rec.Gen, rec.Gen + 1} {
+		releaseRebuildHold(clusterID, key, gen)
 	}
 }
 

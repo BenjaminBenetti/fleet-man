@@ -349,9 +349,12 @@ func TestTeardown(t *testing.T) {
 	if err := SaveInstanceRecord(InstanceRecord{Cluster: handleCluster, Key: handleKey, StatefulSet: sts, Gen: 1}); err != nil {
 		t.Fatal(err)
 	}
-	// The image the instance holds, in the connection's index.
+	// The image the instance holds, in the connection's index, and the one
+	// a rebuild to generation 2 that never ended (its undo failed) holds.
 	idx := kubeimage.Index{Version: 1, Images: []kubeimage.Entry{{ImageID: "sha256:" + strings.Repeat("1", 64), Strategy: kubeimage.StrategyPassthrough,
-		Location: "mcr.microsoft.com/x", Ref: "mcr.microsoft.com/x@sha256:" + strings.Repeat("2", 64), Holders: []string{handleKey}, DeliveredAt: time.Now()}}}
+		Location: "mcr.microsoft.com/x", Ref: "mcr.microsoft.com/x@sha256:" + strings.Repeat("2", 64), Holders: []string{handleKey}, DeliveredAt: time.Now()},
+		{ImageID: "sha256:" + strings.Repeat("3", 64), Strategy: kubeimage.StrategyPassthrough,
+			Location: "mcr.microsoft.com/y", Ref: "mcr.microsoft.com/y@sha256:" + strings.Repeat("4", 64), Holders: []string{rebuildHolder(handleKey, 2)}, DeliveredAt: time.Now()}}}
 	writeIndex(t, state.KubeImagesPath(handleCluster), idx)
 	images := &kubeimage.Manager{IndexPath: state.KubeImagesPath}
 	SetEnvironment(Environment{Images: images})
@@ -373,6 +376,9 @@ func TestTeardown(t *testing.T) {
 	}
 	if d, err := images.Lookup(handleCluster, handleKey); err != nil || d != nil {
 		t.Errorf("the instance still holds its image: %+v, %v", d, err)
+	}
+	if d, err := images.Lookup(handleCluster, rebuildHolder(handleKey, 2)); err != nil || d != nil {
+		t.Errorf("the unfinished rebuild still holds its image: %+v, %v", d, err)
 	}
 	if _, err := LoadInstanceRecord(handleCluster, handleKey); !errors.Is(err, errNoInstanceRecord) {
 		t.Errorf("the record outlived the teardown: %v", err)

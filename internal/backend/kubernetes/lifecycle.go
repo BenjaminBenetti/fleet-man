@@ -239,6 +239,7 @@ func (b *Backend) teardown() error {
 	if rerr := currentEnvironment().images().Release(cluster, key); rerr != nil {
 		flog.Warn("kube down: releasing the instance's image", "cluster", cluster, "key", key, "err", rerr)
 	}
+	releaseRebuildHolds(cluster, key)
 	if rerr := RemoveInstanceRecord(cluster, key); rerr != nil {
 		flog.Warn("kube down: removing the instance's record", "cluster", cluster, "key", key, "err", rerr)
 	}

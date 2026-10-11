@@ -213,6 +213,11 @@ func syncAll(pvc string) error {
 	return nil
 }
 
+// RemoveTree is removeTree for fleetd: a checkout an export replaced keeps
+// the workspace's read-only dirs (a Go module cache), and the daemon user is
+// rarely root.
+func RemoveTree(p string) error { return removeTree(p) }
+
 // removeTree is os.RemoveAll that also deletes a tree holding read-only dirs
 // when the job is not root (capability tier C): the image's 0555 dirs, copied
 // faithfully, would refuse their entries' deletion. Root needs no help.

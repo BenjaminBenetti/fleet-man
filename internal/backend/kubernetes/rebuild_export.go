@@ -236,7 +236,7 @@ func oldDir(wsDir string) string    { return wsDir + ".fleet-old" }
 // daemon user owning every entry, counting and hashing the stream.
 func (rb *rebuilding) receive(ctx context.Context, r io.Reader) (received, error) {
 	got := received{dir: exportDir(rb.req.WorkspaceDir)}
-	if err := os.RemoveAll(got.dir); err != nil {
+	if err := podseed.RemoveTree(got.dir); err != nil {
 		return got, err
 	}
 	h := sha256.New()
@@ -266,11 +266,11 @@ func (rb *rebuilding) finishExport(ctx context.Context, got received, rerr, werr
 		err = fmt.Errorf("the workspace export arrived damaged: %d bytes with sha256 %s, the instance sent %d with %s", got.size, got.sha, sum.Size, sum.SHA256)
 	}
 	if err != nil {
-		_ = os.RemoveAll(got.dir)
+		_ = podseed.RemoveTree(got.dir)
 		return err
 	}
 	if err := swapCheckout(rb.req.WorkspaceDir, got.dir); err != nil {
-		_ = os.RemoveAll(got.dir)
+		_ = podseed.RemoveTree(got.dir)
 		return fmt.Errorf("replacing the daemon host's checkout with the export: %w", err)
 	}
 	if len(sum.Unreadable) > 0 {
@@ -288,7 +288,7 @@ func (rb *rebuilding) finishExport(ctx context.Context, got received, rerr, werr
 // wsDir, the old one deleted once it is out of the way.
 func swapCheckout(wsDir, dir string) error {
 	old := oldDir(wsDir)
-	if err := os.RemoveAll(old); err != nil {
+	if err := podseed.RemoveTree(old); err != nil {
 		return err
 	}
 	had := true
@@ -305,7 +305,7 @@ func swapCheckout(wsDir, dir string) error {
 		return err
 	}
 	if had {
-		if err := os.RemoveAll(old); err != nil {
+		if err := podseed.RemoveTree(old); err != nil {
 			flog.Warn("kube rebuild: deleting the replaced checkout", "dir", old, "err", err)
 		}
 	}

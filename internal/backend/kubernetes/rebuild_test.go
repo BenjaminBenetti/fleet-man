@@ -496,6 +496,70 @@ func TestToolJobOfTheGeneration(t *testing.T) {
 	}
 }
 
+// The rollback Job runs where the generation it restores ran: the new
+// generation's placement (another architecture, a runtime class) may be what
+// the rebuild failed on, and the disk is on a node the old one fits.
+func TestRollbackJobRunsWhereTheGenerationRan(t *testing.T) {
+	r := newHandleRig(t)
+	rb := rebuildRigOn(t, r, fleet.KubeCluster{ID: handleCluster})
+	sts := rb.id.sts
+	zero := int32(0)
+	rb.sts = &appsv1.StatefulSet{ObjectMeta: handleMeta(sts), Spec: appsv1.StatefulSetSpec{Replicas: &zero, Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+		NodeSelector: map[string]string{"kubernetes.io/arch": "amd64"},
+		Containers:   []corev1.Container{{Name: DevContainer, Image: "reg/dev@sha256:aa"}},
+	}}}}
+	jj, err := BeginJournal(Journal{Op: OpRebuild, Fleet: "alpha", Instance: "web", Cluster: handleCluster, Namespace: handleNS, Key: handleKey, Gen: 2, Step: stepApply,
+		Objects: []JournalObject{{Kind: KindStatefulSet, Name: sts, UID: "uid-" + sts, Gen: 1, Anchor: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rb.jj = jj
+	in := podspec.RenderInput{
+		Cluster: &fleet.KubeCluster{ID: handleCluster}, Namespace: handleNS, Name: sts, Key: handleKey, Owner: handleOwner, ClusterID: handleCluster,
+		FleetName: "alpha", FleetHash: "abcd2345", InstanceName: "web", Gen: 2, Image: podspec.ImageRef{Ref: "reg/new@sha256:bb"},
+	}
+	if err := rb.recordRollback(in); err != nil {
+		t.Fatal(err)
+	}
+	var job batchv1.Job
+	if err := json.Unmarshal(rb.jj.Journal().Rollback.Job, &job); err != nil {
+		t.Fatal(err)
+	}
+	spec := job.Spec.Template.Spec
+	if spec.NodeSelector["kubernetes.io/arch"] != "amd64" || spec.RuntimeClassName != nil {
+		t.Errorf("the rollback Job runs at %v (runtime class %v), not where generation 1 ran", spec.NodeSelector, spec.RuntimeClassName)
+	}
+	if job.Name != names.RollbackJob(sts, 1) || spec.Containers[0].Image != "reg/dev@sha256:aa" {
+		t.Errorf("rollback Job %s runs %s", job.Name, spec.Containers[0].Image)
+	}
+}
+
+// A checkout the export replaces is deleted even where it holds read-only
+// dirs (a Go module cache), as is one an earlier rebuild left on its way
+// out: either would otherwise fail every later rebuild.
+func TestSwapCheckoutOverReadOnlyDirs(t *testing.T) {
+	ws := filepath.Join(t.TempDir(), "ws")
+	readOnly := func(root string) {
+		writeTree(t, root, map[string]string{"pkg/mod/m@v1/go.mod": "module m\n"})
+		if err := os.Chmod(filepath.Join(root, "pkg/mod/m@v1"), 0o555); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readOnly(ws)
+	readOnly(oldDir(ws))
+	export := exportDir(ws)
+	writeTree(t, export, map[string]string{"a": "1"})
+	if err := swapCheckout(ws, export); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(ws, "a")); err != nil || string(data) != "1" {
+		t.Errorf("checkout %q %v", data, err)
+	}
+	if _, err := os.Stat(oldDir(ws)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the replaced checkout is still there: %v", err)
+	}
+}
+
 func writeTree(t *testing.T, root string, files map[string]string) {
 	t.Helper()
 	for rel, body := range files {
