@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"os"
+	"path/filepath"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -99,6 +100,9 @@ type HostFS interface {
 	// Stat follows symlinks, as a bind mount does.
 	Stat(name string) (fs.FileInfo, error)
 	ReadDir(name string) ([]fs.DirEntry, error)
+	// EvalSymlinks is name with its links followed, as a bind mount
+	// follows them.
+	EvalSymlinks(name string) (string, error)
 }
 
 // osFS is the real filesystem.
@@ -106,3 +110,4 @@ type osFS struct{}
 
 func (osFS) Stat(name string) (fs.FileInfo, error)      { return os.Stat(name) }
 func (osFS) ReadDir(name string) ([]fs.DirEntry, error) { return os.ReadDir(name) }
+func (osFS) EvalSymlinks(name string) (string, error)   { return filepath.EvalSymlinks(name) }

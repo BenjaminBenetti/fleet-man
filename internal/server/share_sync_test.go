@@ -95,9 +95,12 @@ func (f *fakeSpokes) dir(side string) string {
 	return filepath.Join(f.base, strings.NewReplacer(":", "_", "/", "_").Replace(side))
 }
 
-func (f *fakeSpokes) serve(ctx context.Context, _, key string, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func()) error {
+func (f *fakeSpokes) serve(ctx context.Context, _, key string, served []podshare.SpokeRoot, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func()) error {
 	f.mu.Lock()
 	share := f.shares[key]
+	if len(served) > 0 {
+		share.Roots = served
+	}
 	stop := f.stops[key]
 	_, up := f.running[key]
 	f.served = append(f.served, key)

@@ -69,6 +69,10 @@ func RunSpoke(ctx context.Context, o SpokeOptions) error {
 	if err := enterTree(o.Sync, o.Dir); err != nil {
 		return err
 	}
+	// Before dropping root: RootsDir is root's.
+	if err := makeRoots(".", o.Spec); err != nil {
+		return err
+	}
 	if err := dropTo(o.Spec.UID, o.Spec.GID); err != nil {
 		return err
 	}

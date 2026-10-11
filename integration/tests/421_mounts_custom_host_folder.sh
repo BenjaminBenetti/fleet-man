@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # itest: k8s
-# Description: a custom mount given a daemon-host folder (`fleet mount add --host`) binds that folder in every instance instead of the fleet's .mnt folder: host files show in the instance, its writes reach the folder as the host user, the folder's mode is never changed and no .mnt folder is made; a folder overlapping ~/.fleet is refused, a missing one warns; without --host the next instance is back on the .mnt folder.
+# Description: a custom mount given a daemon-host folder (`fleet mount add --host`) binds that folder in every instance instead of the fleet's .mnt folder: host files show in the instance, its writes reach the folder as the host user, the folder's mode is never changed and no .mnt folder is made; a folder overlapping ~/.fleet is refused, a missing one warns; without --host the next instance is back on the .mnt folder, its writes reaching it (on a cluster also while the older instance keeps the share's sync).
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -57,6 +57,12 @@ if "${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/beta" -- test -e /opt/data/seed.txt
   fail "an instance made after the host folder was cleared still binds it"
 fi
 assert_file_exists "${mnt_dir}"
+# alpha (no .mnt folder of its own) is the older instance; on a cluster its
+# pod may keep the share's sync, and must keep beta's folders too.
+"${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/beta" -- sh -c 'printf "from-beta\n" > /opt/data/beta.txt'
+itest_share_sync "${FIXTURE_REPO_NAME}"
+assert_file_exists "${mnt_dir}/beta.txt"
+assert_contains "$(cat "${mnt_dir}/beta.txt")" "from-beta" "beta's write to its .mnt folder did not reach the host"
 assert_contains "$(cat "${host_dir}/seed.txt")" "from-host" "clearing the host folder touched it"
 
 pass "custom mount host folder bound as is, synced, cleared"

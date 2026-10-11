@@ -154,3 +154,76 @@ func TestHotPathWaitsForBoundFiles(t *testing.T) {
 		}
 	}
 }
+
+// TestShareSyncKeepsEveryInstancesFoldersOnTheShare: a share's spoke keeps
+// the folders of every instance that mounts the share, not only of the one
+// whose pod runs it: an instance binding a host folder the older instance
+// (the spoke's pod) does not gets the host's files, and its writes reach the
+// host, also when another cluster's share had that bind already (the
+// fleet's folders unchanged).
+func TestShareSyncKeepsEveryInstancesFoldersOnTheShare(t *testing.T) {
+	r := newSyncRig(t)
+	r.hostLayout()
+	const otherCluster = "kind-b4c5d6"
+	claimA, claimB := "fs-f-1a2b3c4d-share", "fs-f-5e6f7a8b-share"
+	sideA, sideB := shareSide(claimA), "k8s:"+otherCluster+"/"+claimB
+	aws := filepath.Join(t.TempDir(), "aws")
+	syncWrite(t, filepath.Join(aws, "config"), "[default]\n")
+	withAWS := func(claim string) kubernetes.ShareRecord {
+		s := hostBindShare(claim, aws, filepath.Join(t.TempDir(), "gitconfig"), true)
+		s.HostBinds, s.Roots = s.HostBinds[:1], s.Roots[:len(s.Roots)-1]
+		return s
+	}
+	r.instanceWith(syncCluster, "alpha", "aaaaaaaa", withAWS(claimA), fleet.StatusRunning)
+	r.instanceOn(otherCluster, "beta", "bbbbbbbb", claimB, syncRoots, fleet.StatusRunning)
+	r.spokes.up("aaaaaaaa")
+	r.spokes.up("bbbbbbbb")
+	r.wait()
+	if got := syncRead(filepath.Join(r.share(sideA, hostbind.Name(aws)), "config")); got != "[default]\n" {
+		t.Fatalf("alpha's copy of the bound folder = %q", got)
+	}
+
+	// gamma binds it on beta's share; beta's pod (the older) runs its spoke.
+	r.instanceWith(otherCluster, "gamma", "cccccccc", withAWS(claimB), fleet.StatusRunning)
+	r.spokes.up("cccccccc")
+	r.m.signal()
+	eventually(t, "gamma's copy of the bound folder holds the host's file", func() bool {
+		return syncRead(filepath.Join(r.share(sideB, hostbind.Name(aws)), "config")) == "[default]\n"
+	})
+	syncWrite(t, filepath.Join(r.share(sideB, hostbind.Name(aws)), "from-gamma"), "g\n")
+	r.wait()
+	if got := syncRead(filepath.Join(aws, "from-gamma")); got != "g\n" {
+		t.Errorf("gamma's write in the bound folder did not reach the host: %q", got)
+	}
+	if served := r.spokes.servedKeys(); slices.Contains(served, "cccccccc") {
+		t.Errorf("gamma's pod ran a spoke (%v); beta's, the older, keeps the share", served)
+	}
+}
+
+// TestHostRootRefusesFleetsOwnStateThroughALink: a bind whose host path
+// leads into fleet's own ~/.fleet through a link (or is ~/.fleet's real
+// folder when ~/.fleet is a link) never becomes a synced root.
+func TestHostRootRefusesFleetsOwnStateThroughALink(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	real := filepath.Join(t.TempDir(), "fleet-state")
+	if err := os.MkdirAll(filepath.Join(real, "workspaces"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(home, ".fleet")); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "to-state")
+	if err := os.Symlink(filepath.Join(home, ".fleet", "workspaces"), link); err != nil {
+		t.Fatal(err)
+	}
+	for name, p := range map[string]string{"~/.fleet's real folder": real, "a link into it": link, "its parent": filepath.Dir(real)} {
+		if _, _, err := hostRoot(podshare.SpokeRoot{Name: hostbind.Name(p)}, hostBindWant{path: p}); err == nil {
+			t.Errorf("%s (%s) became a synced root", name, p)
+		}
+	}
+	ok := filepath.Join(t.TempDir(), "aws")
+	if _, _, err := hostRoot(podshare.SpokeRoot{Name: hostbind.Name(ok)}, hostBindWant{path: ok}); err != nil {
+		t.Errorf("a plain bound folder: %v", err)
+	}
+}

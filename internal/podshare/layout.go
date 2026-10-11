@@ -238,6 +238,34 @@ func (a applier) volume(name string, uid, gid int) error {
 	return a.own(name, volumeMode, uid, gid)
 }
 
+// makeRoots makes each of s's root folders that is missing from the tree in
+// dir (MountDir), as Apply makes a layout path's missing parents (the spec's
+// owner, parentMode): the spoke keeps every instance's folders on the share,
+// and one whose pod has not laid out its tree yet (or never will: its create
+// failed) has none there; its layout gives the folder its mode when it runs.
+// A root folder there, or a symlink in its place, is Apply's to deal with.
+func makeRoots(dir string, s SpokeSpec) error {
+	r, err := safefs.Open(dir, safefs.Options{})
+	if err != nil {
+		return fmt.Errorf("the fleet's share at %s: %w", dir, err)
+	}
+	defer r.Close()
+	a := applier{r: r, top: dir}
+	for _, root := range s.Roots {
+		name := root.Dir()
+		if info, err := r.Lstat(name); err == nil && info.IsDir() {
+			continue
+		}
+		if err := a.parents(name, s.UID, s.GID); err != nil {
+			return err
+		}
+		if err := a.dir(name, parentMode, s.UID, s.GID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // applier replays one layout.
 type applier struct {
 	r   *safefs.Root

@@ -108,9 +108,10 @@ type shareSpokes interface {
 	// elect is the key of the instance whose pod runs the spoke of the share
 	// the instance key mounts ("" when no pod of it runs).
 	elect(ctx context.Context, cluster, fleetName, key string, share kubernetes.ShareRecord) (string, error)
-	// serve runs that spoke in key's pod, attached to hub as info, until it
-	// ends or ctx does; attached hears once it is attached.
-	serve(ctx context.Context, cluster, key string, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func()) error
+	// serve runs that spoke in key's pod, keeping roots (the folders of
+	// every instance that mounts the share), attached to hub as info, until
+	// it ends or ctx does; attached hears once it is attached.
+	serve(ctx context.Context, cluster, key string, roots []podshare.SpokeRoot, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func()) error
 	// usage is the fleet's share on cluster (ok false: none there).
 	usage(ctx context.Context, cluster, fleetName string) (fleet.ShareUsage, bool, error)
 	// retire deletes the fleet's share on cluster, or with keep labels it an
@@ -130,8 +131,8 @@ func (poolSpokes) elect(ctx context.Context, cluster, fleetName, key string, sha
 	return kubernetes.DefaultPool().ElectShareSpoke(ctx, cluster, fleetName, key, share)
 }
 
-func (poolSpokes) serve(ctx context.Context, cluster, key string, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func()) error {
-	return kubernetes.DefaultPool().ServeShareSpoke(ctx, cluster, key, hub, info, func(uint64) { attached() })
+func (poolSpokes) serve(ctx context.Context, cluster, key string, roots []podshare.SpokeRoot, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func()) error {
+	return kubernetes.DefaultPool().ServeShareSpoke(ctx, cluster, key, roots, hub, info, func(uint64) { attached() })
 }
 
 func (poolSpokes) usage(ctx context.Context, cluster, fleetName string) (fleet.ShareUsage, bool, error) {
@@ -257,8 +258,10 @@ type localSide struct {
 
 // spokeRun is a share's spoke being served.
 type spokeRun struct {
-	key      string
-	info     sharesync.SideInfo
+	key  string
+	info sharesync.SideInfo
+	// roots are the folders it keeps (shareWant.roots as it started).
+	roots    []podshare.SpokeRoot
 	cancel   context.CancelFunc
 	done     chan struct{}
 	attached atomic.Bool
@@ -294,6 +297,10 @@ type shareWant struct {
 	info    sharesync.SideInfo
 	// keys are the instances that mount it, in name order.
 	keys []string
+	// roots are the folders its spoke keeps: every one of those instances'
+	// (one may bind a host folder the others do not, or mount a custom
+	// mount added since they were made), whichever pod runs the spoke.
+	roots []podshare.SpokeRoot
 	// active: one of them runs, or is coming up.
 	active bool
 }
@@ -415,6 +422,7 @@ func (m *shareSync) wants(st *state.State) map[string]*fleetWant {
 				w.shares[info.ID] = sw
 			}
 			sw.keys = append(sw.keys, inst.KubeKey)
+			sw.roots = mergeRoots(sw.roots, share.Roots)
 			sw.active = sw.active || shareActive(inst.Status) || urgent[info.ID]
 			w.insts = append(w.insts, instWant{name: inst.Name, cluster: inst.KubeCluster, key: inst.KubeKey, side: info.ID, running: inst.Status == fleet.StatusRunning})
 		}
@@ -676,16 +684,20 @@ func (m *shareSync) openHost(name, dir string, roots []podshare.SpokeRoot, binds
 // folder itself, or the folder a bound file is in, holding only it (Only).
 // A missing bound folder is made, as docker makes a missing -v source (a
 // custom mount's chosen folder is never missing: its create refused that);
-// one overlapping fleet's own ~/.fleet is never synced (its create refused
-// that too). A read-only bind's folder is never written (ReadOnly); a
+// one overlapping fleet's own ~/.fleet, as written or through a link, is
+// never synced (its create refused that too). A read-only bind's folder is never written (ReadOnly); a
 // read-write one must pass safefs's self-test on its own, so one the daemon
 // cannot write leaves only itself unsynced.
 func hostRoot(r podshare.SpokeRoot, b hostBindWant) (sharesync.TreeRoot, hostFolder, error) {
 	if b.path == "" || !filepath.IsAbs(b.path) {
 		return sharesync.TreeRoot{}, hostFolder{}, fmt.Errorf("no host path is recorded for it")
 	}
-	if own := state.FleetDir(); hostbind.Overlaps(b.path, own) {
-		return sharesync.TreeRoot{}, hostFolder{}, fmt.Errorf("%s overlaps fleet's own state (%s)", b.path, own)
+	for _, own := range realPaths(state.FleetDir()) {
+		for _, p := range realPaths(b.path) {
+			if hostbind.Overlaps(p, own) {
+				return sharesync.TreeRoot{}, hostFolder{}, fmt.Errorf("%s overlaps fleet's own state (%s)", b.path, own)
+			}
+		}
 	}
 	dir := filepath.Clean(b.path)
 	tr := sharesync.TreeRoot{Name: r.Name, Skip: r.Skip}
@@ -878,10 +890,11 @@ func (m *shareSync) convergeSpokes(ctx context.Context, fs *fleetSync, w *fleetW
 		switch {
 		case run.ended():
 			m.ended(fs, id, run)
-		case sw == nil || !sw.active || sw.info != run.info || !slices.Contains(sw.keys, run.key):
+		case sw == nil || !sw.active || sw.info != run.info || !slices.Contains(sw.keys, run.key) || !sameRoots(sw.roots, run.roots):
 			// Its share is gone or idle, its instance no longer mounts it,
-			// or it is to be attached as another side (the connection's
-			// credential_scope changed).
+			// it is to be attached as another side (the connection's
+			// credential_scope changed), or the share's folders changed (an
+			// instance mounting one the others lack came or went).
 			run.cancel()
 		}
 	}
@@ -918,12 +931,12 @@ func (m *shareSync) convergeSpokes(ctx context.Context, fs *fleetSync, w *fleetW
 // startSpoke serves sw's spoke in key's pod.
 func (m *shareSync) startSpoke(fs *fleetSync, sw *shareWant, key string) {
 	ctx, cancel := context.WithCancel(m.ctx)
-	run := &spokeRun{key: key, info: sw.info, cancel: cancel, done: make(chan struct{})}
+	run := &spokeRun{key: key, info: sw.info, roots: sw.roots, cancel: cancel, done: make(chan struct{})}
 	fs.spokes[sw.info.ID] = run
 	hub, cluster := fs.hub, sw.cluster
 	go func() {
 		defer close(run.done)
-		err := m.spokes.serve(ctx, cluster, key, hub, run.info, func() {
+		err := m.spokes.serve(ctx, cluster, key, run.roots, hub, run.info, func() {
 			run.attached.Store(true)
 			m.notify()
 		})

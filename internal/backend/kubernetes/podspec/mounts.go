@@ -409,6 +409,16 @@ func (t *translation) addBind(m rawMount, target string) {
 		if !t.hostBindable(m.option, source) {
 			return
 		}
+		if mt.Kind == MountHostFile {
+			// A bound file that is a link (a dotfiles manager's
+			// ~/.gitconfig) binds the file it links to, as docker does: the
+			// copy is of that file, kept in step with it, never a link that
+			// dangles in the pod (nor one a pod's write turns into a file
+			// over the user's link on the daemon host).
+			if real, err := t.host.EvalSymlinks(source); err == nil && real != source {
+				source, mt.Source = real, real
+			}
+		}
 		mt.SubPath = hostbind.Name(source)
 	}
 	t.runMounts = append(t.runMounts, runMount{mt, optionOf(m)})
@@ -417,13 +427,31 @@ func (t *translation) addBind(m rawMount, target string) {
 // hostBindable reports whether a daemon-host folder or file can be bound
 // into a pod, whose copy of it fleet's sync keeps: never fleet's own state
 // (the daemon's files would be copied into the pod, and the pod's back over
-// them), refused naming the option.
+// them), as written or with links followed, refused naming the option.
 func (t *translation) hostBindable(option, source string) bool {
-	if own := t.in.FleetDir; own != "" && hostbind.Overlaps(source, own) {
-		t.refuse(&Refusal{Code: CodeHostMount, Reason: fmt.Sprintf("%s: %s overlaps fleet's own state on the daemon host (%s), which never syncs into a pod", option, source, own)})
-		return false
+	own := t.in.FleetDir
+	if own == "" {
+		return true
+	}
+	for _, o := range t.realPaths(own) {
+		for _, p := range t.realPaths(source) {
+			if hostbind.Overlaps(p, o) {
+				t.refuse(&Refusal{Code: CodeHostMount, Reason: fmt.Sprintf("%s: %s overlaps fleet's own state on the daemon host (%s), which never syncs into a pod", option, source, own)})
+				return false
+			}
+		}
 	}
 	return true
+}
+
+// realPaths is daemon-host path p cleaned, and with its links followed when
+// that differs.
+func (t *translation) realPaths(p string) []string {
+	out := []string{filepath.Clean(p)}
+	if real, err := t.host.EvalSymlinks(p); err == nil && real != out[0] {
+		out = append(out, real)
+	}
+	return out
 }
 
 // SharedVolumeSubPath is the folder on the fleet's share of the named volume

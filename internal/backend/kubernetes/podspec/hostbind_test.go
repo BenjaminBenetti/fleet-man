@@ -5,6 +5,7 @@ package podspec
 import (
 	"encoding/json"
 	"io/fs"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -202,5 +203,73 @@ func TestRenderOneFolderPerBoundFile(t *testing.T) {
 	}
 	if n != 1 || len(res.Pod.PID1.Links) != 2 {
 		t.Errorf("%d mounts of the copy's folder, links %+v", n, res.Pod.PID1.Links)
+	}
+}
+
+// linkFS is a fakeFS with links: each in links leads to its target.
+type linkFS struct {
+	fakeFS
+	links map[string]string
+}
+
+func (f linkFS) resolve(name string) string {
+	name = filepath.Clean(name)
+	if to, ok := f.links[name]; ok {
+		return to
+	}
+	return name
+}
+
+func (f linkFS) Stat(name string) (fs.FileInfo, error) { return f.fakeFS.Stat(f.resolve(name)) }
+func (f linkFS) EvalSymlinks(name string) (string, error) {
+	return f.fakeFS.EvalSymlinks(f.resolve(name))
+}
+
+// TestTranslateFollowsABoundFilesLink: a bound file that is a link (a
+// dotfiles manager's ~/.gitconfig) binds the file it leads to, as docker
+// does: its copy, its synced root and the target's link name that file, not
+// the link (which would dangle in the pod); a bound file or folder leading
+// into fleet's own state is refused.
+func TestTranslateFollowsABoundFilesLink(t *testing.T) {
+	host := linkFS{fakeFS: fakeFS{}, links: map[string]string{
+		"/home/dev/.gitconfig": "/home/dev/dotfiles/gitconfig",
+		"/home/dev/.npmrc":     "/home/dev/.fleet/npmrc",
+		"/home/dev/state":      "/home/dev/.fleet",
+	}}
+	for k, v := range baseHost {
+		host.fakeFS[k] = v
+	}
+	host.fakeFS["/home/dev/dotfiles"] = fs.ModeDir | 0o755
+	host.fakeFS["/home/dev/dotfiles/gitconfig"] = 0o644
+	host.fakeFS["/home/dev/.fleet"] = fs.ModeDir | 0o700
+	host.fakeFS["/home/dev/.fleet/npmrc"] = 0o600
+
+	in := baseInput([]string{"-v", "/home/dev/.gitconfig:/home/vscode/.gitconfig"}, nil, nil)
+	in.Host, in.FleetDir = host, "/home/dev/.fleet"
+	res, err := Translate(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := "/home/dev/dotfiles/gitconfig"
+	var m Mount
+	for _, x := range res.Pod.Mounts {
+		if x.Target == "/home/vscode/.gitconfig" {
+			m = x
+		}
+	}
+	if m.Kind != MountHostFile || m.Source != real || m.SubPath != hostbind.Name(real) {
+		t.Fatalf("mount %+v, want the linked file %s bound", m, real)
+	}
+	wantLink := podinit.Link{Path: "/home/vscode/.gitconfig", Target: hostbind.FileDir(hostbind.Name(real)) + "/gitconfig"}
+	if !slices.Contains(res.Pod.PID1.Links, wantLink) {
+		t.Errorf("links %+v, want %+v", res.Pod.PID1.Links, wantLink)
+	}
+
+	for _, bind := range []string{"/home/dev/.npmrc:/home/vscode/.npmrc", "/home/dev/state:/state"} {
+		in = baseInput([]string{"-v", bind}, nil, nil)
+		in.Host, in.FleetDir = host, "/home/dev/.fleet"
+		if _, err := Translate(in); func() bool { rs := Refusals(err); return len(rs) != 1 || rs[0].Code != CodeHostMount }() {
+			t.Errorf("-v %s, linking into fleet's own state: %v, want one %s", bind, err, CodeHostMount)
+		}
 	}
 }
