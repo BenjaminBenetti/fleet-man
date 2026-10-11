@@ -3,6 +3,7 @@ package podwire
 import (
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -85,6 +86,9 @@ type Pacer struct {
 	now     func() time.Time
 	sleep   func(time.Duration)
 
+	// onPaced is told each time pacing starts (the paced rate) or ends (0).
+	onPaced atomic.Pointer[func(rate float64)]
+
 	mu sync.Mutex
 	// rate is the paced rate in bytes a second; 0 is unpaced.
 	rate float64
@@ -108,6 +112,24 @@ func NewPacer(flowing func() bool) *Pacer {
 	return &Pacer{flowing: flowing, now: time.Now, sleep: time.Sleep}
 }
 
+// OnPaced sets fn to be told, outside the pacer's lock, each time pacing
+// starts (with the paced rate) and each time it ends (0): when audio stops
+// flowing, or the rate recovered to where pacing began.
+func (p *Pacer) OnPaced(fn func(rate float64)) {
+	if fn == nil {
+		p.onPaced.Store(nil)
+		return
+	}
+	p.onPaced.Store(&fn)
+}
+
+// notify tells onPaced of a start (rate > 0) or an end (0).
+func (p *Pacer) notify(rate float64) {
+	if fn := p.onPaced.Load(); fn != nil {
+		(*fn)(rate)
+	}
+}
+
 // Late records that a PCM frame on the pod arrived more than LateThreshold
 // late. While audio flows it starts pacing at half the measured throughput, or
 // halves the paced rate, at most once per paceHoldoff and never below
@@ -117,12 +139,13 @@ func (p *Pacer) Late() {
 		return
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	now := p.now()
 	if !p.lastCut.IsZero() && now.Sub(p.lastCut) < paceHoldoff {
+		p.mu.Unlock()
 		return
 	}
-	if p.rate == 0 {
+	started := p.rate == 0
+	if started {
 		p.target = max(p.measured, 2*PaceFloor)
 		p.rate = max(p.measured/2, PaceFloor)
 		p.tokens, p.lastFill = 0, now
@@ -130,17 +153,31 @@ func (p *Pacer) Late() {
 		p.rate = max(p.rate/2, PaceFloor)
 	}
 	p.lastCut, p.lastRecover = now, now
+	rate := p.rate
+	p.mu.Unlock()
+	if started {
+		p.notify(rate)
+	}
 }
 
 // Rate is the current paced rate in bytes a second; 0 is unpaced.
 func (p *Pacer) Rate() float64 {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.rate > 0 && !p.flowing() {
+		// Audio stopped: unpaced, as take finds it (the next time audio
+		// flows starts unpaced).
+		p.rate = 0
+		p.mu.Unlock()
+		p.notify(0)
 		return 0
 	}
-	p.recoverLocked(p.now())
-	return p.rate
+	ended := p.recoverLocked(p.now())
+	rate := p.rate
+	p.mu.Unlock()
+	if ended {
+		p.notify(0)
+	}
+	return rate
 }
 
 // take accounts for n bytes crossing the bulk session, sleeping first when
@@ -149,14 +186,20 @@ func (p *Pacer) take(n int) {
 	p.mu.Lock()
 	now := p.now()
 	p.measureLocked(now, n)
+	ended := false
 	if p.rate > 0 && !p.flowing() {
 		// Audio stopped: back to unpaced at once, so the next time it
 		// flows starts unpaced too.
-		p.rate = 0
+		p.rate, ended = 0, true
 	}
-	p.recoverLocked(now)
+	if p.recoverLocked(now) {
+		ended = true
+	}
 	if p.rate == 0 {
 		p.mu.Unlock()
+		if ended {
+			p.notify(0)
+		}
 		return
 	}
 	burst := max(p.rate/10, paceChunk)
@@ -174,20 +217,22 @@ func (p *Pacer) take(n int) {
 }
 
 // recoverLocked adds PaceStep for each whole second since the last cut or
-// step; reaching the target ends pacing.
-func (p *Pacer) recoverLocked(now time.Time) {
+// step; reaching the target ends pacing, which it reports.
+func (p *Pacer) recoverLocked(now time.Time) bool {
 	if p.rate == 0 {
-		return
+		return false
 	}
 	steps := int(now.Sub(p.lastRecover) / time.Second)
 	if steps <= 0 {
-		return
+		return false
 	}
 	p.rate += float64(steps) * PaceStep
 	p.lastRecover = p.lastRecover.Add(time.Duration(steps) * time.Second)
 	if p.rate >= p.target {
 		p.rate = 0
+		return true
 	}
+	return false
 }
 
 // measureLocked keeps a smoothed throughput over measureWindow windows.
@@ -247,14 +292,23 @@ func (c *pacedConn) Close() error { return c.rw.Close() }
 // microphone's), each counted late when it arrives more than LateThreshold
 // after it was due. It is not safe for concurrent use: one per stream.
 type FrameClock struct {
-	interval time.Duration
-	onLate   func()
-	next     time.Time
+	interval  time.Duration
+	threshold time.Duration
+	onLate    func()
+	next      time.Time
 }
 
 // NewFrameClock calls onLate (a Pacer's Late) for each late frame.
 func NewFrameClock(interval time.Duration, onLate func()) *FrameClock {
-	return &FrameClock{interval: interval, onLate: onLate}
+	return &FrameClock{interval: interval, threshold: LateThreshold, onLate: onLate}
+}
+
+// SetThreshold sets how late a frame must arrive to count as late (default
+// LateThreshold); a threshold <= 0 is ignored.
+func (c *FrameClock) SetThreshold(d time.Duration) {
+	if d > 0 {
+		c.threshold = d
+	}
 }
 
 // Arrived records a frame's arrival at now and reports whether it was late.
@@ -264,7 +318,7 @@ func (c *FrameClock) Arrived(now time.Time) bool {
 		c.next = now.Add(c.interval)
 		return false
 	}
-	if now.Sub(c.next) > LateThreshold {
+	if now.Sub(c.next) > c.threshold {
 		c.next = now.Add(c.interval)
 		if c.onLate != nil {
 			c.onLate()

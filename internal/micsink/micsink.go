@@ -16,11 +16,18 @@
 // The sink speaks a tiny protocol with the daemon over its stdio:
 //
 //	stdin   raw PCM (mic.SampleRate, mono, s16le)
-//	stdout  one event per line: "ready", "demand 1", "demand 0", "error <why>"
+//	stdout  one event per line: "ready", "demand 1", "demand 0", "alive",
+//	        "late", "error <why>"
 //
 // "demand" is what keeps the human's real microphone closed until it is needed:
 // the sink reports when a recorder attaches to (and detaches from) the virtual
 // source, the daemon relays that to the client, and only then is audio captured.
+// "alive" comes right after "ready" and every AliveInterval after: a daemon that
+// hears nothing from a sink for AliveDeadline takes the path to it for dead and
+// closes it, which ends its demand — so a path that dies silently (a cluster
+// session that stops answering) still closes the human's microphone. "late"
+// says audio frames are reaching the instance behind their schedule, which a
+// daemon whose bulk transfers share the path answers by pacing them.
 package micsink
 
 import (
@@ -77,9 +84,20 @@ const (
 const (
 	EventReady  = "ready"  // the virtual microphone is up; no detail
 	EventDemand = "demand" // detail: DemandOn / DemandOff
+	EventAlive  = "alive"  // the sink still runs; no detail
+	EventLate   = "late"   // audio frames arrive behind their schedule; no detail
 	EventError  = "error"  // detail: why the sink is giving up
 	DemandOn    = "1"
 	DemandOff   = "0"
+)
+
+// The heartbeat. A sink says "alive" every AliveInterval; the daemon closes
+// one it has heard nothing from for AliveDeadline (three missed beats). Older
+// sinks never say it, so the daemon only holds a sink to the deadline once its
+// first "alive" arrived.
+const (
+	AliveInterval = 5 * time.Second
+	AliveDeadline = 15 * time.Second
 )
 
 // ErrMissingDeps means the instance lacks PulseAudio. The daemon reacts by

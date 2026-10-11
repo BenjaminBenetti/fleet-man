@@ -2,6 +2,7 @@ package micsink
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -106,9 +107,13 @@ func TestStopPreservesRoutingWhenFallbackFails(t *testing.T) {
 }
 
 // runningSink is a Run in flight: its protocol lines, and a pipe to its stdin.
+// The heartbeat and late reports come on their own channels, so a test that
+// follows the demand protocol is not interleaved with them.
 type runningSink struct {
 	stdin *io.PipeWriter
 	lines chan string
+	alive chan time.Time
+	late  chan time.Time
 	done  chan error
 }
 
@@ -116,7 +121,7 @@ func startSink(t *testing.T) *runningSink {
 	t.Helper()
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
-	sink := &runningSink{stdin: stdinW, lines: make(chan string, 16), done: make(chan error, 1)}
+	sink := &runningSink{stdin: stdinW, lines: make(chan string, 16), alive: make(chan time.Time, 64), late: make(chan time.Time, 64), done: make(chan error, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan struct{})
 	go func() {
@@ -127,7 +132,20 @@ func startSink(t *testing.T) *runningSink {
 	go func() {
 		scanner := bufio.NewScanner(stdoutR)
 		for scanner.Scan() {
-			sink.lines <- scanner.Text()
+			switch line := scanner.Text(); line {
+			case EventAlive:
+				select {
+				case sink.alive <- time.Now():
+				default:
+				}
+			case EventLate:
+				select {
+				case sink.late <- time.Now():
+				default:
+				}
+			default:
+				sink.lines <- line
+			}
 		}
 	}()
 	// Runs BEFORE newFakePulse's cleanup restores the package seams (LIFO), and
@@ -315,5 +333,63 @@ func TestEnsureLeavesAServerItCannotQueryAlone(t *testing.T) {
 		if _, statErr := os.Stat(leftover); statErr != nil {
 			t.Fatalf("Ensure unlinked %s of a live server: %v", leftover, statErr)
 		}
+	}
+}
+
+// The heartbeat: "alive" right after "ready" (so a daemon holds the sink to
+// its deadline from the start), then every aliveInterval.
+func TestRunSaysAliveEveryInterval(t *testing.T) {
+	orig := aliveInterval
+	aliveInterval = 100 * time.Millisecond
+	t.Cleanup(func() { aliveInterval = orig })
+	newFakePulse(t)
+	sink := startSink(t)
+	sink.expect(t, EventReady)
+	var beats []time.Time
+	deadline := time.After(5 * time.Second)
+	for len(beats) < 4 {
+		select {
+		case at := <-sink.alive:
+			beats = append(beats, at)
+		case <-deadline:
+			t.Fatalf("heard %d heartbeats in 5s", len(beats))
+		}
+	}
+	for i := 2; i < len(beats); i++ {
+		if gap := beats[i].Sub(beats[i-1]); gap < 50*time.Millisecond || gap > time.Second {
+			t.Fatalf("heartbeat %d came %v after the one before, want about 100ms", i, gap)
+		}
+	}
+}
+
+// Frames that arrive behind their 40ms schedule are reported "late" (at most
+// every lateEvery); frames on time are not.
+func TestRunReportsLateFrames(t *testing.T) {
+	origLate := lateEvery
+	lateEvery = 0
+	t.Cleanup(func() { lateEvery = origLate })
+	pulse := newFakePulse(t)
+	sink := startSink(t)
+	sink.expect(t, EventReady)
+	pulse.recorders(1)
+	sink.expect(t, EventDemand+" "+DemandOn)
+
+	frame := make([]byte, 1280)
+	for range 10 {
+		_, _ = sink.stdin.Write(frame)
+		time.Sleep(40 * time.Millisecond)
+	}
+	select {
+	case <-sink.late:
+		t.Fatal("frames on schedule reported late")
+	case <-time.After(100 * time.Millisecond):
+	}
+	// A 300ms stall, then the backlog at once: the first frame after it is late.
+	time.Sleep(300 * time.Millisecond)
+	_, _ = sink.stdin.Write(bytes.Repeat(frame, 8))
+	select {
+	case <-sink.late:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stalled frame was not reported late")
 	}
 }

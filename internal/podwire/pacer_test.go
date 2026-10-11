@@ -204,3 +204,59 @@ func TestFrameClock(t *testing.T) {
 		t.Fatal("a resumed stream's first frame counted late")
 	}
 }
+
+// OnPaced hears each start and each end of pacing, once: what fleetd logs so
+// a paced bulk session shows in fleet.log.
+func TestPacerTellsWhenPacingStartsAndEnds(t *testing.T) {
+	flowing := true
+	p, clock := newTestPacer(&flowing)
+	var told []float64
+	p.OnPaced(func(rate float64) { told = append(told, rate) })
+	pump(p, clock, 16<<20, time.Second)
+	if len(told) != 0 {
+		t.Fatalf("told %v before any late frame", told)
+	}
+	p.Late()
+	clock.advance(paceHoldoff)
+	p.Late() // a further cut is no new start
+	if len(told) != 1 || told[0] <= 0 {
+		t.Fatalf("told %v, want one start with the paced rate", told)
+	}
+	flowing = false
+	p.take(paceChunk)
+	p.take(paceChunk)
+	if len(told) != 2 || told[1] != 0 {
+		t.Fatalf("told %v, want the end once audio stopped", told)
+	}
+
+	// Recovering to where pacing began ends it too.
+	flowing = true
+	pump(p, clock, 16<<20, time.Second)
+	p.Late()
+	clock.advance(time.Minute)
+	_ = p.Rate()
+	if len(told) != 4 || told[2] <= 0 || told[3] != 0 {
+		t.Fatalf("told %v, want a second start and its end on recovery", told)
+	}
+	p.OnPaced(nil)
+	pump(p, clock, 16<<20, time.Second)
+	p.Late()
+	if len(told) != 4 {
+		t.Fatalf("told %v after OnPaced(nil)", told)
+	}
+}
+
+func TestFrameClockThreshold(t *testing.T) {
+	late := 0
+	c := NewFrameClock(20*time.Millisecond, func() { late++ })
+	c.SetThreshold(time.Millisecond)
+	c.SetThreshold(0) // ignored
+	at := time.Unix(1000, 0)
+	c.Arrived(at)
+	if !c.Arrived(at.Add(25 * time.Millisecond)) {
+		t.Fatal("5ms late past a 1ms threshold not counted")
+	}
+	if late != 1 {
+		t.Fatalf("onLate called %d times", late)
+	}
+}
