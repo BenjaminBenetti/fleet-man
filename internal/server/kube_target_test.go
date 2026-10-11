@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/buildflavor"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -153,7 +154,10 @@ func TestCloneDestinationInheritsTheSourceCluster(t *testing.T) {
 	}
 
 	// The connection allows two instances: a third clone is refused before
-	// any record exists.
+	// any record exists (by a daemon with the Kubernetes backend).
+	if buildflavor.Current == buildflavor.Pod {
+		return
+	}
 	stream, err = client.CloneInstance(context.Background(), &fleetgrpc.CloneInstanceRequest{Fleet: "alpha", SourceInstance: "src", NewInstance: "third"})
 	if err == nil {
 		_, err = stream.Recv()
