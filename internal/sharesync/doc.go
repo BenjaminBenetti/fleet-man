@@ -37,7 +37,9 @@
 // apply a batch, fetch content, rescan) and Reporter (side to hub: report
 // changes), so the daemon host's own Tree is driven in process and a pod's
 // spoke over the agent and bulk sessions with the same engine; the messages
-// are plain JSON-ready structs. Lanes say how soon a change travels and on
+// are plain JSON-ready structs. ServeRemote (the hub's end) and Spoke (the
+// side's) carry them between processes: one control connection, and a
+// connection of its own for content over InlineMax. Lanes say how soon a change travels and on
 // which session: priority at once, normal after 100ms, bulk (files over 1MiB)
 // after 1s. A side attaches with a Hello (what it holds); revs of another
 // epoch than the hub's (the hub's state is new to it), or a rev the hub would
