@@ -196,3 +196,58 @@ func TestRelayUsablePublishedByADeadDaemon(t *testing.T) {
 		}
 	}
 }
+
+// TestPodSourceFor is where a Kubernetes pod's ssh-agent socket is served
+// from, on a Linux and a macOS daemon: the relay unless the override names a
+// live socket on the daemon host (a path only a Docker VM has falls back to
+// the relay, saying so), and off when forwarding is off. macOS daemons use
+// the relay for pods, never Docker Desktop's VM socket.
+func TestPodSourceFor(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		for _, tc := range []struct {
+			name     string
+			override string
+			live     bool
+			want     PodSource
+			fellBack bool
+		}{
+			{"relay", "", false, PodAgentRelay, false},
+			{"live override", "/run/user/1000/agent.sock", true, PodAgentOverride, false},
+			{"missing override", "/run/host-services/ssh-auth.sock", false, PodAgentRelay, true},
+			{"off", "off", false, PodAgentOff, false},
+			{"none", "None", false, PodAgentOff, false},
+		} {
+			t.Run(goos+"/"+tc.name, func(t *testing.T) {
+				got, fellBack := PodSourceFor(tc.override, goos, tc.live)
+				if got != tc.want || fellBack != tc.fellBack {
+					t.Fatalf("PodSourceFor(%q, %s, %v) = %v, %v; want %v, %v", tc.override, goos, tc.live, got, fellBack, tc.want, tc.fellBack)
+				}
+			})
+		}
+	}
+}
+
+// TestCurrentPodSource reads the override's liveness off the daemon host: a
+// path with a socket bound is dialled, the same path without one is not.
+func TestCurrentPodSource(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "agent.sock")
+	t.Setenv(EnvOverride, sock)
+	if src, fellBack := CurrentPodSource(); src != PodAgentRelay || !fellBack {
+		t.Fatalf("missing override: %v %v", src, fellBack)
+	}
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if src, fellBack := CurrentPodSource(); src != PodAgentOverride || fellBack {
+		t.Fatalf("live override: %v %v", src, fellBack)
+	}
+	if !PodAgentUsable(PodAgentOverride) || PodAgentUsable(PodAgentOff) {
+		t.Fatal("usability of the override and of off")
+	}
+	t.Setenv(EnvOverride, "off")
+	if src, _ := CurrentPodSource(); src != PodAgentOff {
+		t.Fatalf("off: %v", src)
+	}
+}

@@ -114,7 +114,7 @@ func (m *instanceMCP) ensureInstance(fleetName, instanceName string) {
 	if f := st.Fleets[fleetName]; f == nil || !f.Settings.FleetMCP {
 		return
 	}
-	if t := loadInstanceTarget(fleetName, instanceName); controlDirMounted(t.dir) {
+	if t, ok := loadInstanceTarget(fleetName, instanceName); ok && controlDirMounted(t.dir) {
 		m.sockets.ensure(fleetName+"/"+instanceName, t)
 	}
 }

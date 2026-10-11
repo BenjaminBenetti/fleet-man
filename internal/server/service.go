@@ -57,6 +57,14 @@ type service struct {
 	// made, crash loops, agent sessions (kube_pods.go; inert in a -tags nok8s
 	// build). Started by the serve loop once fleetd serves.
 	kubePods *kubePods
+	// podAgents is the daemon's side of the Kubernetes pods' in-pod sockets:
+	// what each pod binds and the connections they relay (podagent_hub.go;
+	// inert in a -tags nok8s build). Started by the serve loop.
+	podAgents *podAgentHub
+	// control is the control-socket registry: the host sockets, and the
+	// envelope handler the pods' relayed control connections share. Set by
+	// the serve loop; nil in newService() tests.
+	control *controlRegistry
 	// kubeRecovery reconciles the Kubernetes jobs a previous daemon died in
 	// and deletes known garbage (kube_reconcile.go; inert in a -tags nok8s
 	// build). failInterruptedJobs uses its journals at start; the serve
@@ -121,8 +129,9 @@ func newService() *service {
 	svc.instanceMCP = newInstanceMCP(svc)
 	svc.kube = newKubeManager(svc)
 	svc.kubePods = newKubePods(svc)
+	svc.podAgents = newPodAgentHub(svc)
 	svc.kubeRecovery = newKubeRecovery(svc)
-	svc.hub.stateListeners = append(svc.hub.stateListeners, svc.kubePods.onState)
+	svc.hub.stateListeners = append(svc.hub.stateListeners, svc.kubePods.onState, svc.podAgents.onState)
 	// The in-flight jobs and their current steps are pushed over Watch. The
 	// set is taken on the hub loop, so pushes land in the order they happen
 	// and the last one is always current.
