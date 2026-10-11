@@ -116,23 +116,27 @@ func TestSyncStreamsReachTheSpoke(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(share, "roots/.claude/big.bin"), []byte(big), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// A Flush before ServeRemote attached the pod's side has only the host
+	// side to wait for, so it can succeed with nothing crossed yet: flush
+	// until both files are across.
+	crossed := func() (string, []byte) {
+		toPod, _ := os.ReadFile(filepath.Join(share, "roots/.claude/CLAUDE.md"))
+		toHost, _ := os.ReadFile(filepath.Join(host, ".claude/big.bin"))
+		return string(toPod), toHost
+	}
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		fctx, fcancel := context.WithTimeout(ctx, 5*time.Second)
 		err := hub.Flush(fctx)
 		fcancel()
-		if err == nil {
+		if toPod, toHost := crossed(); err == nil && toPod == "from the host" && string(toHost) == big {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("Flush: %v", err)
+			toPod, toHost := crossed()
+			t.Fatalf("after 20s (last Flush: %v): the pod's share has %q, want the host's file; the host's copy of the pod's large file is %d bytes, want %d", err, toPod, len(toHost), len(big))
 		}
-	}
-	if data, _ := os.ReadFile(filepath.Join(share, "roots/.claude/CLAUDE.md")); string(data) != "from the host" {
-		t.Errorf("the pod's share has %q, want the host's file", data)
-	}
-	if data, _ := os.ReadFile(filepath.Join(host, ".claude/big.bin")); string(data) != big {
-		t.Errorf("the host's copy of the pod's large file is %d bytes, want %d", len(data), len(big))
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	_ = ctl.Close()
