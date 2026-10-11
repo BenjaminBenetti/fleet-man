@@ -233,7 +233,7 @@ func (r *Runtime) EnsureService(fleetName string, svc fleet.SharedService) error
 	if err := c.ensureService(ctx, m, svc); err != nil {
 		return fmt.Errorf("the %s on %s: %w", serviceText(svc), c.rec.GetDisplayName(), err)
 	}
-	watchReady(r.cluster, m, svc)
+	watchReady(c, m, svc)
 	return nil
 }
 

@@ -94,7 +94,8 @@ func newLiveRig(t *testing.T, kctx string) *liveRig {
 	fleetExists = func(string) bool { return false }
 	t.Cleanup(func() { pool, daemonID, fleetUsesCluster, fleetExists = origPool, origDaemon, origUses, origExists })
 	SetHooks(Hooks{})
-	t.Cleanup(func() { SetHooks(Hooks{}) })
+	stopWatches := watchFor(t)
+	t.Cleanup(func() { stopWatches(); SetHooks(Hooks{}) })
 	return r
 }
 

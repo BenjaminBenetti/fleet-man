@@ -109,7 +109,9 @@ func useFake(t *testing.T, objs ...runtime.Object) *fakePool {
 	origPoll, origGone := pollInterval, goneTimeout
 	pollInterval, goneTimeout = time.Millisecond, time.Second
 	SetHooks(Hooks{})
+	stopWatches := watchFor(t)
 	t.Cleanup(func() {
+		stopWatches()
 		pool, daemonID, connectionFacts, fleetUsesCluster, fleetExists = origPool, origDaemon, origFacts, origUses, origExists
 		kubernetes.FootprintPath = origFP
 		pollInterval, goneTimeout = origPoll, origGone
@@ -119,6 +121,23 @@ func useFake(t *testing.T, objs ...runtime.Object) *fakePool {
 		readyMu.Unlock()
 	})
 	return f
+}
+
+// watchFor runs the test's server watches under a context of its own; the
+// func it returns ends them and waits for them to be gone.
+func watchFor(t *testing.T) func() {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	watchMu.Lock()
+	watchBase = ctx
+	watchMu.Unlock()
+	return func() {
+		cancel()
+		watchers.Wait()
+		watchMu.Lock()
+		watchBase = context.Background()
+		watchMu.Unlock()
+	}
 }
 
 // giveUIDs makes the fake's server-side applies create objects with a UID,
@@ -364,23 +383,24 @@ func TestWipeService(t *testing.T) {
 	available(f)
 	rt := For(testCluster)
 	m := meta("alpha")
+	// Reactors go in before the server's watch reads the fake.
+	var scaled atomic.Bool
+	f.cs.PrependReactor("patch", "deployments", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if p := a.(k8stesting.PatchAction); p.GetPatchType() == types.MergePatchType && strings.Contains(string(p.GetPatch()), `"replicas":0`) {
+			scaled.Store(true)
+		}
+		return false, nil, nil
+	})
 	if err := rt.EnsureService("alpha", fleet.ServiceDebCache); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := f.cs.CoreV1().PersistentVolumeClaims("fleet").Get(context.Background(), m.name(names.SuffixAptCache), metav1.GetOptions{})
-	var scaled bool
-	f.cs.PrependReactor("patch", "deployments", func(a k8stesting.Action) (bool, runtime.Object, error) {
-		if p := a.(k8stesting.PatchAction); p.GetPatchType() == types.MergePatchType && strings.Contains(string(p.GetPatch()), `"replicas":0`) {
-			scaled = true
-		}
-		return false, nil, nil
-	})
 	if err := rt.WipeService("alpha", fleet.ServiceDebCache); err != nil {
 		t.Fatal(err)
 	}
 	after, err := f.cs.CoreV1().PersistentVolumeClaims("fleet").Get(context.Background(), m.name(names.SuffixAptCache), metav1.GetOptions{})
-	if err != nil || after.UID == before.UID || !scaled {
-		t.Fatalf("volume before %q after %q (%v), scaled %v", before.UID, after.UID, err, scaled)
+	if err != nil || after.UID == before.UID || !scaled.Load() {
+		t.Fatalf("volume before %q after %q (%v), scaled %v", before.UID, after.UID, err, scaled.Load())
 	}
 	if st := readyState(testCluster, m, fleet.ServiceDebCache); st != stateReady {
 		t.Fatalf("state %q", st)
@@ -433,6 +453,12 @@ func TestReleaseFleet(t *testing.T) {
 // the fleet there.
 func TestTeardownFleet(t *testing.T) {
 	for _, deleteCaches := range []bool{false, true} {
+		t.Run(fmt.Sprintf("delete caches %v", deleteCaches), func(t *testing.T) { teardownFleet(t, deleteCaches) })
+	}
+}
+
+func teardownFleet(t *testing.T, deleteCaches bool) {
+	{
 		f := useFake(t)
 		f.rec.DeleteCacheVolumesOnDestroy = deleteCaches
 		rt := For(testCluster)

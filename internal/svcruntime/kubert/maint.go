@@ -76,11 +76,20 @@ func forgetFleetReady(cluster string, m fleetMeta) {
 	}
 }
 
+// The watches of servers coming up: they run under watchBase (tests end
+// them), and watchers counts them.
+var (
+	watchMu   sync.Mutex
+	watchBase = context.Background()
+	watchers  sync.WaitGroup
+)
+
 // watchReady follows svc's server coming up in the background (at most one
 // watch per server), recording its state for CacheUsage and fleet.log: an
 // ensure never waits for the server, whose first image pull can take
 // minutes. A server already known up is not watched again.
-func watchReady(cluster string, m fleetMeta, svc fleet.SharedService) {
+func watchReady(c *conn, m fleetMeta, svc fleet.SharedService) {
+	cluster := c.cluster
 	key := readyKey(cluster, m, svc)
 	readyMu.Lock()
 	if watching[key] || ready[key] == stateReady {
@@ -92,19 +101,18 @@ func watchReady(cluster string, m fleetMeta, svc fleet.SharedService) {
 		ready[key] = stateStarting
 	}
 	readyMu.Unlock()
+	watchMu.Lock()
+	base := watchBase
+	watchMu.Unlock()
+	watchers.Add(1)
 	go func() {
+		defer watchers.Done()
 		defer func() {
 			readyMu.Lock()
 			delete(watching, key)
 			readyMu.Unlock()
 		}()
-		r := For(cluster)
-		c, err := r.connect()
-		if err != nil {
-			setReady(cluster, m, svc, "failed: "+err.Error())
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), readyTimeout)
+		ctx, cancel := context.WithTimeout(base, readyTimeout)
 		defer cancel()
 		start := now()
 		if err := c.waitAvailable(ctx, m, svc); err != nil {
