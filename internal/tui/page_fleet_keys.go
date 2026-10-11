@@ -1,9 +1,7 @@
 package tui
 
 import (
-	"encoding/hex"
 	"fmt"
-	"os/exec"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	tea "github.com/charmbracelet/bubbletea"
@@ -359,30 +357,11 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = "Select an instance"
 				break
 			}
+			// The daemon says how (the Dev Containers URI, Remote-SSH, or the
+			// Coder/Codespaces CLIs), exactly as for `fleet code`.
 			r := fleetPage.rows[fleetPage.cursor]
-			var codeCmd *exec.Cmd
-			// Each backend opens VS Code with a local CLI; no container access is
-			// needed, so these are computed client-side (no internal/backend) —
-			// the editor URI/args are pure and small enough to inline.
-			switch instance.Backend {
-			case fleet.BackendCoder:
-				codeCmd = exec.Command("coder", "open", "vscode", instance.ContainerID)
-			case fleet.BackendCodespaces:
-				codeCmd = exec.Command("gh", "codespace", "code", "-c", instance.ContainerID)
-			default:
-				// Devcontainer: VS Code's dev-container remote URI (hex of the host
-				// workspace path + the in-container /workspaces/<project> folder).
-				uri := fmt.Sprintf("vscode-remote://dev-container+%s/workspaces/%s",
-					hex.EncodeToString([]byte(instance.WorkspaceDir)), r.fleetName)
-				codeCmd = exec.Command("code", "--folder-uri", uri)
-			}
-			if codeCmd != nil {
-				if err := codeCmd.Run(); err != nil {
-					m.message = fmt.Sprintf("VS Code error: %v", err)
-				} else {
-					m.message = fmt.Sprintf("Opened VS Code for %s", instance.GetDisplayName())
-				}
-			}
+			m.message = fmt.Sprintf("Opening VS Code for %s…", instance.GetDisplayName())
+			return openVSCodeCmd(r.fleetName, instance.Name, instance.GetDisplayName())
 
 		case "C":
 			_, instance := fleetPage.selectedInstance(m)

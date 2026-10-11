@@ -38,4 +38,5 @@ const (
 	viewAutomationAgent
 	viewConfirmDeleteAutomation
 	viewKubeRecovery
+	viewEditorConsent
 )

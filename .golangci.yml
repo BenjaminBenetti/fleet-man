@@ -74,6 +74,12 @@ linters:
             # The SSH-agent provider runs where the human's ssh-agent is (TUI,
             # CLI), possibly far from the daemon: client code, like internal/mic.
             - "**/internal/agentfwd/**"
+            # The editor launch (`c`, `fleet code`, `fleet ssh-proxy`) runs on
+            # the editor's machine, the alias grammar is shared with it, and
+            # `fleet ssh-server` runs inside instances: client code, all three.
+            - "**/internal/editorlaunch/**"
+            - "**/internal/sshalias/**"
+            - "**/internal/sshserver/**"
           deny:
             - pkg: github.com/BenjaminBenetti/fleet-man/internal/state
               desc: client code must go through the fleet server (fleetgrpc), not internal/state

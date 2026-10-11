@@ -55,6 +55,8 @@ type fleetPage struct {
 	lpFlow     *layoutPresetFlow  // open preset creation/edit flow (nil unless mode == viewLayoutPreset)
 	// kubeRecovery is the Kubernetes recovery dialog (mode == viewKubeRecovery).
 	kubeRecovery kubeRecoveryState
+	// vscodeDlg is the VS Code Remote-SSH consent dialog (mode == viewEditorConsent).
+	vscodeDlg vscodeConsentState
 
 	// rightSelected is true when the cursor row's right-hand element is
 	// horizontally selected — →/l selects it (drawn pink), ←/h deselects, enter
@@ -200,6 +202,12 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		}
 		return nil
 
+	case vscodeResolvedMsg:
+		return fleetPage.handleVSCodeResolved(m, msg.(vscodeResolvedMsg))
+
+	case vscodeOpenedMsg:
+		return fleetPage.handleVSCodeOpened(m, msg.(vscodeOpenedMsg))
+
 	case externalURLOpenedMsg:
 		if u := msg.(externalURLOpenedMsg); u.err != nil {
 			m.message = fmt.Sprintf("Could not open browser: %v", u.err)
@@ -253,6 +261,8 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.updateCodespacesMachine(m, msg)
 	case viewKubeRecovery:
 		return fleetPage.updateKubeRecovery(m, msg)
+	case viewEditorConsent:
+		return fleetPage.updateEditorConsent(m, msg)
 	case viewConfirmDeleteSession:
 		return fleetPage.updateConfirmDeleteSession(m, msg)
 	case viewConfirmBrowserSwitch:
