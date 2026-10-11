@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 )
 
@@ -97,7 +98,10 @@ func (w *podWait) observe(now time.Time, pod *corev1.Pod, pvc *corev1.Persistent
 			w.schedSince = time.Time{}
 		}
 		dev := containerStatus(pod, w.container)
-		if dev != nil && dev.State.Waiting != nil && pullReason(dev.State.Waiting.Reason) {
+		// The docker engine's sidecar, which the dev container waits for.
+		docker := initContainerStatus(pod, podspec.DockerSidecar)
+		switch {
+		case dev != nil && dev.State.Waiting != nil && pullReason(dev.State.Waiting.Reason):
 			blocked = true
 			if w.pullSince.IsZero() {
 				w.pullSince = now
@@ -105,7 +109,15 @@ func (w *podWait) observe(now time.Time, pod *corev1.Pod, pvc *corev1.Persistent
 			if now.Sub(w.pullSince) >= w.d.ImagePull {
 				return &DeadlineError{Kind: CodeImagePull, Wait: w.what + "'s image to pull", After: w.d.ImagePull, Detail: waitingReason(dev), Env: EnvImagePullTimeout}
 			}
-		} else {
+		case docker != nil && docker.State.Waiting != nil && pullReason(docker.State.Waiting.Reason):
+			blocked = true
+			if w.pullSince.IsZero() {
+				w.pullSince = now
+			}
+			if now.Sub(w.pullSince) >= w.d.ImagePull {
+				return &DeadlineError{Kind: CodeImagePull, Wait: "the docker engine's image (the " + podspec.DockerSidecar + " sidecar) to pull", After: w.d.ImagePull, Detail: waitingReason(docker), Env: EnvImagePullTimeout}
+			}
+		default:
 			w.pullSince = time.Time{}
 		}
 		if dev != nil && dev.State.Waiting != nil && dev.State.Waiting.Reason == "CrashLoopBackOff" {
@@ -115,6 +127,14 @@ func (w *podWait) observe(now time.Time, pod *corev1.Pod, pvc *corev1.Persistent
 				detail += fmt.Sprintf(" (%s, exit code %d)", l.Reason, l.ExitCode)
 			}
 			return &PodError{Kind: l.Code(), Detail: detail}
+		}
+		if docker != nil && docker.State.Waiting != nil && docker.State.Waiting.Reason == "CrashLoopBackOff" {
+			detail := fmt.Sprintf("the docker engine (the %s sidecar) keeps exiting before it answers", podspec.DockerSidecar)
+			if term := docker.LastTerminationState.Terminated; term != nil {
+				detail += fmt.Sprintf(" (%s, exit code %d)", term.Reason, term.ExitCode)
+			}
+			detail += fmt.Sprintf("; `kubectl logs %s -c %s` says why", pod.Name, podspec.DockerSidecar)
+			return &PodError{Kind: CodeCrashLoop, Detail: detail}
 		}
 	}
 

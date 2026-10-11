@@ -1,5 +1,7 @@
 package podspec
 
+import "github.com/BenjaminBenetti/fleet-man/internal/fleet"
+
 // PodSpec is an instance pod as Translate decided it: everything the
 // captured docker run, its image and the cluster connection say about the
 // dev container and its pod, in terms a renderer maps onto Kubernetes
@@ -72,10 +74,10 @@ type PodSpec struct {
 	// Annotations the pod needs for what was translated (the sysbox user
 	// namespace mode). They never hold a run's values.
 	Annotations map[string]string `json:"annotations,omitempty"`
-	// DooD marks a run that reaches the docker engine (a docker.sock bind,
-	// --use-api-socket): the pod gets a docker-in-docker sidecar, which needs
-	// privileged pods allowed.
-	DooD bool `json:"dood,omitempty"`
+	// DooD is the docker engine of a run that reaches one (a docker.sock
+	// bind, --use-api-socket): the pod's own, a sidecar, which needs
+	// privileged pods allowed or a sysbox runtime class. nil without one.
+	DooD *DooD `json:"dood,omitempty"`
 
 	// DebugGrants are the debug-only grants the run asked for (SYS_PTRACE,
 	// unconfined seccomp or AppArmor), as written ("--cap-add SYS_PTRACE").
@@ -91,6 +93,22 @@ type PodSpec struct {
 	Warnings []string `json:"warnings,omitempty"`
 	// Options is every option the run gave, with its outcome in the table.
 	Options []OptionOutcome `json:"options"`
+}
+
+// DooD is the docker-outside-of-docker sidecar (DockerSidecar): a docker
+// engine in the pod whose socket the dev container sees at each
+// MountDockerSocket target, its data on the instance disk
+// (vol/fleet-docker), its config shared with the dev container
+// (DockerConfig), and its networks at the pod network's MTU. The containers
+// it runs are pod-local.
+type DooD struct {
+	// Privileged runs the sidecar privileged; false under a sysbox runtime
+	// class, which gives the engine what it needs without privilege on the
+	// node.
+	Privileged bool `json:"privileged,omitempty"`
+	// AddressPools are the engine's default-address-pools (the connection's
+	// dind_address_pool); none keeps docker's own.
+	AddressPools []fleet.DockerAddressPool `json:"addressPools,omitempty"`
 }
 
 // Image is the image a run names.
@@ -196,8 +214,9 @@ const (
 	// the fleet's sync (both ways, or host to pod for a read-only bind).
 	MountHostDir  MountKind = "host-dir"
 	MountHostFile MountKind = "host-file"
-	// MountDockerSocket is a bind of the docker engine's socket: the pod's
-	// docker-in-docker sidecar serves it (DooD).
+	// MountDockerSocket is a bind of the docker engine's socket: the target
+	// becomes a link to the socket of the pod's own engine, the DooD sidecar
+	// (DockerSocket).
 	MountDockerSocket MountKind = "docker-socket"
 	// MountDevice is --device: the node's device node, in a privileged pod.
 	MountDevice MountKind = "device"

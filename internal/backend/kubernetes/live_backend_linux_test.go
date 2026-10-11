@@ -284,6 +284,8 @@ type liveBackend struct {
 	kctx     string
 	pool     *Pool
 	daemonID string
+	// prefix starts the names of the namespaces connect makes.
+	prefix string
 
 	mu      sync.Mutex
 	recs    []fleet.KubeCluster
@@ -346,10 +348,17 @@ func newLiveBackend(t *testing.T, kctx string) *liveBackend {
 }
 
 // connect adds a connection to a fresh namespace with labels, whose facts
-// say whether root pods are admitted.
-func (lb *liveBackend) connect(t *testing.T, labels map[string]string, rootAdmitted bool) *live {
+// say whether root pods are admitted, its record changed by edits.
+func (lb *liveBackend) connect(t *testing.T, labels map[string]string, rootAdmitted bool, edits ...func(*fleet.KubeCluster)) *live {
 	t.Helper()
-	lv := newLiveIn(t, lb.kctx, "fleet-it-p2-12a-k8s-backend-")
+	prefix := lb.prefix
+	if prefix == "" {
+		prefix = "fleet-it-p2-12a-k8s-backend-"
+	}
+	lv := newLiveIn(t, lb.kctx, prefix)
+	for _, edit := range edits {
+		edit(&lv.rec)
+	}
 	if len(labels) > 0 {
 		ns, err := lv.cs.CoreV1().Namespaces().Get(context.Background(), lv.ns, metav1.GetOptions{})
 		if err != nil {

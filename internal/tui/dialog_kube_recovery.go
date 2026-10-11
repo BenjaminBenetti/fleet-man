@@ -53,7 +53,7 @@ var kubeRecoveryKeys = []kubeKey{
 // kubeFixes is the cluster editor field that fixes each class, and the
 // button that opens the editor on it. A class missing here has no setting to
 // change (an interrupted job, a tampered pod, a build error).
-var kubeFixes = map[kubeerr.Code]struct{ field, label string }{
+var kubeFixes = map[kubeerr.Code]kubeFix{
 	kubeerr.OOMKilled:       {"memory_limit", "Raise memory (cluster resources)"},
 	kubeerr.Quota:           {"max_instances", "Raise the quotas (cluster resources)"},
 	kubeerr.Unschedulable:   {"resources.cpu_request", "Lower the requests (cluster resources)"},
@@ -66,6 +66,28 @@ var kubeFixes = map[kubeerr.Code]struct{ field, label string }{
 	kubeerr.Forbidden:       {"", "Open the cluster connection"},
 	kubeerr.Misconfigured:   {"", "Open the cluster connection"},
 	kubeerr.OwnerConflict:   {"", "Open the cluster connection"},
+}
+
+// kubeFix is the cluster editor field that fixes an error, and its
+// button's label.
+type kubeFix struct{ field, label string }
+
+// kubeCodeFixes are the fixes of narrower codes, which win over their
+// class's: a devcontainer that needs privileged pods (docker-in-docker,
+// docker-outside-of-docker, a device) is fixed by the cluster's Allow
+// privileged pods.
+var kubeCodeFixes = map[kubeerr.Code]kubeFix{
+	kubeerr.Unsupported.Narrow("privileged"):            {"allow_privileged", "Allow privileged pods (cluster settings)"},
+	kubeerr.Unsupported.Narrow("dood-needs-privileged"): {"allow_privileged", "Allow privileged pods (cluster settings)"},
+}
+
+// fixFor is the fix of code: its own, else its class's.
+func fixFor(code kubeerr.Code) (kubeFix, bool) {
+	if fix, ok := kubeCodeFixes[code]; ok {
+		return fix, true
+	}
+	fix, ok := kubeFixes[code.Class()]
+	return fix, ok
 }
 
 // openKubeRecovery opens the dialog for inst's coded error. ok is false
@@ -115,7 +137,7 @@ func (fleetPage *fleetPage) openKubeRecoveryForRefusal(fleetName, cluster string
 // actions are the dialog's buttons, in order.
 func (d *kubeRecoveryState) actions() []kubeRecoveryAction {
 	var out []kubeRecoveryAction
-	if fix, ok := kubeFixes[d.code.Class()]; ok && fix.label != "" && d.cluster != "" {
+	if fix, ok := fixFor(d.code); ok && fix.label != "" && d.cluster != "" {
 		out = append(out, kubeRecoverySettings)
 	}
 	if d.inst != "" {
@@ -132,7 +154,8 @@ func (d *kubeRecoveryState) actions() []kubeRecoveryAction {
 func (d *kubeRecoveryState) actionLabel(a kubeRecoveryAction) string {
 	switch a {
 	case kubeRecoverySettings:
-		return "[ " + kubeFixes[d.code.Class()].label + " ]"
+		fix, _ := fixFor(d.code)
+		return "[ " + fix.label + " ]"
 	case kubeRecoveryLogs:
 		if d.status == fleet.StatusFailed {
 			return "[ View the creation log ]"
@@ -206,7 +229,8 @@ func (fleetPage *fleetPage) runKubeRecovery(m *model, a kubeRecoveryAction) tea.
 	fleetPage.mode = viewNormal
 	switch a {
 	case kubeRecoverySettings:
-		return m.openKubeEditorAt(d.cluster, kubeFixes[d.code.Class()].field)
+		fix, _ := fixFor(d.code)
+		return m.openKubeEditorAt(d.cluster, fix.field)
 	case kubeRecoveryLogs:
 		inst := fleetPage.recoveryInstance(m)
 		if inst == nil {

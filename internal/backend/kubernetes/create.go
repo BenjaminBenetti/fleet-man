@@ -403,7 +403,7 @@ func (c *creation) input(capture *kubeshim.Capture, image kubeshim.ImageConfig, 
 	return podspec.Input{
 		Capture: capture, Image: image, Merged: cfg.Merged,
 		WorkspaceDir: c.req.WorkspaceDir, WorkspaceFolder: cfg.WorkspaceFolder,
-		FleetMounts: c.req.Mounts, Cluster: &rec, Facts: clusterFacts(c.facts),
+		FleetMounts: c.req.Mounts, Cluster: &rec, Facts: clusterFacts(c.facts, rec.StorageClass),
 	}
 }
 
@@ -805,16 +805,26 @@ func shareIDs() (int, int) {
 	return 1000, 1000
 }
 
-// clusterFacts is the translation's view of the preflight's findings.
-func clusterFacts(f Facts) podspec.ClusterFacts {
+// clusterFacts is the translation's view of the preflight's findings, for
+// an instance disk of StorageClass class ("" is the cluster's default).
+func clusterFacts(f Facts, class string) podspec.ClusterFacts {
 	caps := f.Capabilities
 	out := podspec.ClusterFacts{
 		Local:                 caps.GetLocalCluster() || f.Local.Local(),
 		LimitRangeMemoryLimit: caps.GetLimitRangeMemoryLimit(),
 		RuntimeClasses:        caps.GetRuntimeClasses(),
+		ServerVersion:         caps.GetVersion(),
 	}
 	for _, n := range caps.GetNodes() {
 		out.Nodes = append(out.Nodes, podspec.Node{Arch: n.GetArch(), AllocatableCPU: n.GetAllocatableCpu(), AllocatableMemory: n.GetAllocatableMemory()})
+	}
+	for _, sc := range caps.GetStorageClasses() {
+		if (class != "" && sc.GetName() == class) || (class == "" && sc.GetIsDefault()) {
+			if !sc.GetBlock() {
+				out.DiskFileShare = sc.GetName()
+			}
+			break
+		}
 	}
 	return out
 }

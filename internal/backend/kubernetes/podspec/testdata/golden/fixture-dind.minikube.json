@@ -16,6 +16,7 @@
       ],
       "user": "root",
       "privileged": true,
+      "docker": {},
       "remote_user": "vscode"
     },
     "security": {

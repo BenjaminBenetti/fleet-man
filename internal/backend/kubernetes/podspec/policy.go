@@ -15,10 +15,12 @@ import (
 // (fleet.KubeCluster.AllowsPrivileged: auto on a local cluster, the
 // connection's "Allow privileged pods" toggle elsewhere, because a
 // privileged pod makes the node the isolation boundary). When the cluster
-// offers a sysbox runtime class, --privileged runs under it instead: sysbox
-// gives the container what docker-in-docker needs without privilege on the
-// node. Nothing is granted that the run did not ask for, except the
-// privileged flag --device needs to reach its device.
+// offers a sysbox runtime class, --privileged and the docker engine's
+// sidecar run under it instead: sysbox gives a container what
+// docker-in-docker needs without privilege on the node. Nothing is granted
+// that the run did not ask for, except the privileged flag --device needs to
+// reach its device, and the privileged sidecar a docker.sock bind gets (its
+// engine is the pod's own; see docker.go).
 //
 // Debug grants: SYS_PTRACE and unconfined seccomp or AppArmor (the Go, Rust
 // and C++ features add them for debuggers) are requested like any other
@@ -34,7 +36,7 @@ const sysboxUsernsAnnotation = "io.kubernetes.cri-o.userns-mode"
 
 // needsPrivilegeAllowed records that what the run asked for (as written)
 // needs privileged pods allowed on the connection, though not a privileged
-// dev container: host namespaces, or the docker-in-docker sidecar.
+// dev container: host namespaces.
 func (t *translation) needsPrivilegeAllowed(what string) {
 	t.needsAllowed = append(t.needsAllowed, what)
 }
@@ -46,7 +48,8 @@ func (t *translation) finishPrivilege() {
 		t.spec.RuntimeClassName = rc
 	}
 	privileged := t.privileged
-	if privileged && len(t.needsPrivileged) == 0 && len(t.needsAllowed) == 0 {
+	dood := len(t.dood) > 0
+	if (privileged || dood) && len(t.needsPrivileged) == 0 && len(t.needsAllowed) == 0 {
 		if class := t.sysboxClass(); class != "" {
 			t.sysbox = true
 			privileged = false
@@ -55,7 +58,22 @@ func (t *translation) finishPrivilege() {
 				t.spec.Annotations = map[string]string{}
 			}
 			t.spec.Annotations[sysboxUsernsAnnotation] = "auto:size=65536"
-			t.warn("--privileged: the pod runs under the %s runtime class instead of privileged, which gives docker-in-docker what it needs without privilege on the node", class)
+			what := "--privileged"
+			if !t.privileged {
+				what = "the docker engine's sidecar"
+			} else if dood {
+				what = "--privileged and the docker engine's sidecar"
+			}
+			t.warn("%s: the pod runs under the %s runtime class instead of privileged, which gives docker-in-docker what it needs without privilege on the node", what, class)
+		}
+	}
+	allowed := t.cluster.AllowsPrivileged(t.in.Facts.Local)
+	if dood && !t.sysbox {
+		if allowed {
+			t.doodPrivileged = true
+		} else {
+			// After the dev container's own refusal, which leads.
+			defer t.refuseDooD()
 		}
 	}
 	var asks []string
@@ -67,7 +85,7 @@ func (t *translation) finishPrivilege() {
 	if len(asks) == 0 {
 		return
 	}
-	if !t.cluster.AllowsPrivileged(t.in.Facts.Local) {
+	if !allowed {
 		t.refusePrivileged(asks, privileged)
 		return
 	}
@@ -96,6 +114,18 @@ func (t *translation) refusePrivileged(asks []string, privileged bool) {
 	t.refuse(&Refusal{Code: CodePrivileged, Reason: fmt.Sprintf(
 		"%s %s privileged pods, which %s does not allow (%s). Turn on Allow privileged pods for %s in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node)%s",
 		joinNames(asks), verb, t.clusterName(), where, t.clusterName(), hint)})
+}
+
+// refuseDooD refuses a run that reaches the docker engine on a connection
+// that allows neither privileged pods nor offers a sysbox runtime class.
+func (t *translation) refuseDooD() {
+	where := "Allow privileged pods is off for it"
+	if t.cluster.AllowPrivileged == nil {
+		where = "it is not a local cluster, where they are allowed by default"
+	}
+	t.refuse(&Refusal{Code: CodeDooDNeedsPrivileged, Reason: fmt.Sprintf(
+		"%s binds the docker engine's socket; on a cluster that engine is the pod's own, a sidecar that needs privileged pods, which %s does not allow (%s). Turn on Allow privileged pods for %s in Settings → Kubernetes (the node becomes the isolation boundary: a privileged pod can reach every pod on its node), or use a cluster with a sysbox runtime class",
+		joinNames(t.dood), t.clusterName(), where, t.clusterName())})
 }
 
 // sysboxClass is the sysbox runtime class --privileged can run under: the

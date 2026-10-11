@@ -11,6 +11,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 )
 
 func waitPod(mutate func(*corev1.Pod)) *corev1.Pod {
@@ -28,6 +30,20 @@ func waitPod(mutate func(*corev1.Pod)) *corev1.Pod {
 func waiting(reason, msg string) func(*corev1.Pod) {
 	return func(p *corev1.Pod) {
 		p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: DevContainer, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: reason, Message: msg}}}}
+	}
+}
+
+// sidecarWaiting is a pod whose docker engine sidecar waits for reason
+// (with exit code 1 from its last run when exit is set), its dev container
+// held back.
+func sidecarWaiting(reason, msg string, exit int32) func(*corev1.Pod) {
+	return func(p *corev1.Pod) {
+		waiting("PodInitializing", "")(p)
+		st := corev1.ContainerStatus{Name: podspec.DockerSidecar, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: reason, Message: msg}}}
+		if exit != 0 {
+			st.LastTerminationState.Terminated = &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: exit}
+		}
+		p.Status.InitContainerStatuses = []corev1.ContainerStatus{st}
 	}
 }
 
@@ -83,6 +99,14 @@ func TestPodWaitDeadlines(t *testing.T) {
 					LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled", ExitCode: 137}}}}
 			}), nil
 		}, 0, CodeOOMKilled, "OOMKilled"},
+		// The docker engine's sidecar, which the dev container waits for
+		// (PodInitializing), names itself when it is what is stuck.
+		{"the docker sidecar's image never pulls", func(int) (*corev1.Pod, *corev1.PersistentVolumeClaim) {
+			return waitPod(sidecarWaiting("ImagePullBackOff", "Back-off pulling image \"docker:29-dind\"", 0)), pvcIn(corev1.ClaimBound)
+		}, 15, CodeImagePull, "the fleet-docker sidecar"},
+		{"the docker sidecar crash-loops", func(int) (*corev1.Pod, *corev1.PersistentVolumeClaim) {
+			return waitPod(sidecarWaiting("CrashLoopBackOff", "", 1)), pvcIn(corev1.ClaimBound)
+		}, 0, CodeCrashLoop, "kubectl logs fi-a-one-aaaaaaaa-0 -c fleet-docker"},
 		{"bound and scheduled in time", func(m int) (*corev1.Pod, *corev1.PersistentVolumeClaim) {
 			if m < 4 {
 				return waitPod(unschedulableBecause("pod has unbound immediate PersistentVolumeClaims")), pvcIn(corev1.ClaimPending)

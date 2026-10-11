@@ -20,6 +20,15 @@ const (
 	// CodePrivileged is a run that needs a privileged pod on a connection
 	// that does not allow them.
 	CodePrivileged = "kubernetes:unsupported:privileged"
+	// CodeDooDNeedsPrivileged is a run that reaches the docker engine (a
+	// docker.sock bind) on a connection that allows neither privileged
+	// pods nor a sysbox runtime class: the engine is the pod's own sidecar,
+	// which needs one of them.
+	CodeDooDNeedsPrivileged = "kubernetes:unsupported:dood-needs-privileged"
+	// CodeDooDNeedsSidecars is a run that reaches the docker engine on a
+	// cluster too old for native sidecars (Kubernetes 1.29), which the
+	// pod's engine runs as.
+	CodeDooDNeedsSidecars = "kubernetes:unsupported:dood-needs-sidecars"
 	// CodeNoCommand is a run with nothing to run.
 	CodeNoCommand = "kubernetes:unsupported:no-command"
 	// CodeSpecTooLarge is a spec that does not fit in a Secret.
@@ -30,7 +39,7 @@ const (
 	// CodeAdmissionDenied starts the error of a render admission refused.
 	CodeAdmissionDenied = "kubernetes:admission_denied"
 	// CodeUnsupportedMount is a mount fleet cannot provide in a pod yet (a
-	// host socket or directory, the fleet's share, the docker engine).
+	// host socket or directory, the fleet's share).
 	CodeUnsupportedMount = "kubernetes:unsupported:mount"
 	// CodeQuota is a ResourceQuota that has no room for the instance.
 	CodeQuota = "kubernetes:quota"

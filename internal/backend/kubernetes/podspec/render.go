@@ -305,7 +305,6 @@ var unsupportedMounts = map[MountKind]string{
 	MountHostDir:       "a bind of a daemon-host directory needs fleet's host-bind sync",
 	MountHostFile:      "a bind of a daemon-host file needs fleet's host-bind sync",
 	MountSharedVolume:  "a named volume other containers share lives on the fleet's share",
-	MountDockerSocket:  "the docker engine socket needs the pod's docker-in-docker sidecar",
 }
 
 // checkSupported refuses what the run asks for that this version of fleet
@@ -336,8 +335,9 @@ func (r *renderer) checkSupported() {
 	if len(shared) > 0 {
 		r.refuse(CodeUnsupportedMount, "fleet's shared mounts (%s) live on the fleet's share, which fleet does not provide on Kubernetes yet", strings.Join(shared, ", "))
 	}
-	if r.pod.DooD && !hasMountKind(r.pod.Mounts, MountDockerSocket) {
-		r.refuse(CodeUnsupportedMount, "the run reaches the docker engine, which needs the pod's docker-in-docker sidecar; fleet does not provide it on Kubernetes yet")
+	if r.in.Identity.NonRoot && r.pod.DooD != nil {
+		// The engine runs as root, which a pod without root never has.
+		r.refuse(CodeDooDNeedsPrivileged, "%s runs instances without root, and the docker engine a docker.sock bind gets (the pod's own %s sidecar) runs as root: it needs a namespace whose pod security admits privileged pods", clusterLabel(r.cluster), DockerSidecar)
 	}
 	if r.in.Identity.NonRoot && r.pod.Security.Privileged {
 		// A pod without root never escalates (allowPrivilegeEscalation
@@ -494,6 +494,9 @@ const (
 	volumeSpec    = "spec"
 	volumeRun     = "run"
 	volumeControl = "control"
+	// volumeDocker is the folder the docker engine's sidecar shares with the
+	// dev container (DockerDir).
+	volumeDocker = "docker"
 )
 
 // instanceTemplate is the StatefulSet's pod template, hardened.
@@ -526,6 +529,12 @@ func (r *renderer) instanceTemplate() (corev1.PodTemplateSpec, error) {
 		TTY:                      p.TTY,
 	}
 	spec := r.podSpec(r.in.Identity)
+	if p.DooD != nil {
+		volumes = append(volumes, corev1.Volume{Name: volumeDocker, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
+		dev.VolumeMounts = append(dev.VolumeMounts, corev1.VolumeMount{Name: volumeDocker, MountPath: DockerDir})
+		dev.Env = r.env(corev1.EnvVar{Name: DockerConfigEnv, Value: DockerConfig})
+		spec.InitContainers = []corev1.Container{r.dockerSidecar()}
+	}
 	spec.Volumes = volumes
 	spec.Containers = []corev1.Container{dev}
 	spec.RestartPolicy = corev1.RestartPolicyAlways
@@ -632,10 +641,11 @@ func (r *renderer) pullPolicy() corev1.PullPolicy {
 }
 
 // env is the dev container's environment: the run's, every value from the
-// env Secret, so no value reaches the kubelet's $(VAR) expansion; then the
-// pod's uid for pod-init (podinit.PodUIDEnv, which it keeps from the start
-// script), last so it wins over a run variable of that name.
-func (r *renderer) env() []corev1.EnvVar {
+// env Secret, so no value reaches the kubelet's $(VAR) expansion; fleet's
+// own (fixed paths, such as DockerConfigEnv); then the pod's uid for
+// pod-init (podinit.PodUIDEnv, which it keeps from the start script), last
+// so it wins over a run variable of that name.
+func (r *renderer) env(fleets ...corev1.EnvVar) []corev1.EnvVar {
 	secret := names.EnvSecret(r.in.Name, r.in.Gen)
 	var env []corev1.EnvVar
 	for _, e := range r.pod.Env {
@@ -643,6 +653,7 @@ func (r *renderer) env() []corev1.EnvVar {
 			SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secret}, Key: e.Key},
 		}})
 	}
+	env = append(env, fleets...)
 	return append(env, corev1.EnvVar{Name: podinit.PodUIDEnv, ValueFrom: &corev1.EnvVarSource{
 		FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.uid"},
 	}})
@@ -825,6 +836,13 @@ func (r *renderer) instanceMounts() ([]corev1.VolumeMount, []corev1.Volume, erro
 			name := "dev-" + sha8(m.Target)
 			volumes = append(volumes, corev1.Volume{Name: name, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: m.Source, Type: ptr(corev1.HostPathCharDev)}}})
 			add(corev1.VolumeMount{Name: name, MountPath: m.Target})
+		case MountDockerSocket:
+			// pod-init links the target to the sidecar's socket
+			// (pid1.json links), which the dev container sees in the
+			// folder they share.
+			if p.DooD == nil {
+				return nil, nil, fmt.Errorf("podspec: a docker socket mount at %s without the docker engine's sidecar", m.Target)
+			}
 		default:
 			// checkSupported refused every other kind.
 			return nil, nil, fmt.Errorf("podspec: no rendering for a %s mount", m.Kind)

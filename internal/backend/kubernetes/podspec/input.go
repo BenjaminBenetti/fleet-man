@@ -73,6 +73,13 @@ type ClusterFacts struct {
 	// GPUResource is the extended resource the nodes offer GPUs as
 	// ("nvidia.com/gpu"); "" when none does.
 	GPUResource string
+	// ServerVersion is the API server's version ("v1.37.0"); "" when it is
+	// not known.
+	ServerVersion string
+	// DiskFileShare names the instance disk's StorageClass when it is a
+	// network file share (NFS, EFS, Azure Files, ...) rather than a block
+	// disk; "" for a block class, or one not known.
+	DiskFileShare string
 }
 
 // Node is one node's architecture and allocatable resources (quantities).

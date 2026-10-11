@@ -1,0 +1,157 @@
+{
+  "pod": {
+    "image": {
+      "ref": "vsc-fixture-dood-0000000000000000000000000000000000000000000000000000000000000000-features",
+      "id": "sha256:91d1db06b81d5f493f116c5ed118cdf8eaab5ed853cbf812dd41f484060492bb",
+      "os": "linux",
+      "arch": "amd64"
+    },
+    "pid1": {
+      "format": 1,
+      "argv": [
+        "/bin/sh",
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n/usr/local/share/docker-init.sh\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "user": "root",
+      "links": [
+        {
+          "path": "/var/run/docker-host.sock",
+          "target": "/opt/fleet/docker/docker.sock"
+        }
+      ],
+      "remote_user": "vscode"
+    },
+    "security": {
+      "seLinux": {
+        "type": "spc_t"
+      }
+    },
+    "resources": {
+      "requests": {
+        "cpu": "500m",
+        "memory": "2Gi"
+      }
+    },
+    "diskSize": "50Gi",
+    "mounts": [
+      {
+        "kind": "workspace",
+        "target": "/workspaces/fixture-dood",
+        "source": "/home/dev/src/fixture-dood"
+      },
+      {
+        "kind": "docker-socket",
+        "target": "/var/run/docker-host.sock",
+        "source": "/var/run/docker.sock"
+      }
+    ],
+    "nodeSelector": {
+      "kubernetes.io/arch": "amd64",
+      "kubernetes.io/os": "linux"
+    },
+    "dood": {
+      "privileged": true
+    },
+    "warnings": [
+      "/var/run/docker-host.sock: the docker engine is the pod's own (the fleet-docker sidecar), not the daemon host's: the containers it runs are pod-local siblings, whose published ports are on the instance's localhost and whose binds see the workspace and nothing else of the instance, and its images live on the instance disk"
+    ],
+    "options": [
+      {
+        "option": "attach",
+        "outcome": "ignore"
+      },
+      {
+        "option": "entrypoint",
+        "outcome": "map"
+      },
+      {
+        "option": "label",
+        "outcome": "map"
+      },
+      {
+        "option": "mount",
+        "outcome": "map"
+      },
+      {
+        "option": "security-opt",
+        "outcome": "map"
+      },
+      {
+        "option": "sig-proxy",
+        "outcome": "ignore"
+      }
+    ]
+  },
+  "specFiles": {
+    "capture.json": {
+      "args": [
+        "--sig-proxy=false",
+        "-a",
+        "STDOUT",
+        "-a",
+        "STDERR",
+        "--mount",
+        "type=bind,source=/home/dev/src/fixture-dood,target=/workspaces/fixture-dood",
+        "--mount",
+        "type=bind,src=/var/run/docker.sock,dst=/var/run/docker-host.sock",
+        "-l",
+        "devcontainer.local_folder=/home/dev/src/fixture-dood",
+        "-l",
+        "devcontainer.config_file=/home/dev/src/fixture-dood/.devcontainer/devcontainer.json",
+        "--security-opt",
+        "label=disable",
+        "--entrypoint",
+        "/bin/sh",
+        "vsc-fixture-dood-0000000000000000000000000000000000000000000000000000000000000000-features",
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n/usr/local/share/docker-init.sh\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "env": [],
+      "format": 1,
+      "labels": {
+        "devcontainer.config_file": "/home/dev/src/fixture-dood/.devcontainer/devcontainer.json",
+        "devcontainer.local_folder": "/home/dev/src/fixture-dood"
+      },
+      "verb": "run"
+    },
+    "exec.json": {
+      "container_user": "root",
+      "remote_user": "vscode",
+      "ssh_auth_sock": "/fleet-mounts/control/ssh-agent.sock",
+      "workspace_folder": "/workspaces/fixture-dood"
+    },
+    "inspect.json": {
+      "cmd": [
+        "-c",
+        "echo Container started\ntrap \"exit 0\" 15\n/usr/local/share/docker-init.sh\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+        "-"
+      ],
+      "containerId": "",
+      "created": "0001-01-01T00:00:00Z",
+      "entrypoint": [
+        "/bin/sh"
+      ],
+      "env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ],
+      "image": "vsc-fixture-dood-0000000000000000000000000000000000000000000000000000000000000000-features",
+      "imageId": "sha256:91d1db06b81d5f493f116c5ed118cdf8eaab5ed853cbf812dd41f484060492bb",
+      "labels": {
+        "dev.containers.id": "base-debian",
+        "dev.containers.release": "v0.4.19",
+        "dev.containers.source": "https://github.com/devcontainers/images",
+        "dev.containers.timestamp": "Thu, 16 Oct 2025 10:40:40 GMT",
+        "dev.containers.variant": "bookworm",
+        "devcontainer.config_file": "/home/dev/src/fixture-dood/.devcontainer/devcontainer.json",
+        "devcontainer.local_folder": "/home/dev/src/fixture-dood",
+        "devcontainer.metadata": "[ {\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"}, {\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}}, {\"remoteUser\":\"vscode\"}, {\"id\":\"ghcr.io/devcontainers/features/docker-outside-of-docker:1\",\"securityOpt\":[\"label=disable\"],\"entrypoint\":\"/usr/local/share/docker-init.sh\",\"mounts\":[{\"source\":\"/var/run/docker.sock\",\"target\":\"/var/run/docker-host.sock\",\"type\":\"bind\"}],\"customizations\":{\"vscode\":{\"extensions\":[\"ms-azuretools.vscode-containers\"],\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes the Docker CLI (`docker`) pre-installed and available on the `PATH` for running and managing containers using the Docker daemon on the host machine.\"}]}}}} ]",
+        "version": "2.0.2"
+      },
+      "startedAt": "0001-01-01T00:00:00Z",
+      "user": "root"
+    }
+  }
+}

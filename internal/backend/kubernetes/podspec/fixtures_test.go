@@ -56,6 +56,7 @@ var captureFixtures = []struct {
 	{name: "fixture-go-feature", path: "integration/fixture-go-feature"},
 	{name: "go-image", path: "internal/backend/kubernetes/podspec/testdata/fixtures/go-image"},
 	{name: "fixture-dind", path: "integration/fixture-dind"},
+	{name: "fixture-dood", path: "integration/fixture-dood"},
 	{name: "fixture-twouser", path: "integration/fixture-twouser"},
 	{name: "fixture-hostsock", path: "integration/fixture-hostsock",
 		env: map[string]string{"SSH_AUTH_SOCK": "agent.sock", "FLEET_ITEST_GPG_SOCK": "gnupg/S.gpg-agent"}},

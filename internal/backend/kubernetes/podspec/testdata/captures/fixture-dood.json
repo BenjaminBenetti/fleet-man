@@ -1,0 +1,130 @@
+{
+  "cli": "0.89.0",
+  "workspaceDir": "/home/dev/src/fixture-dood",
+  "workspaceFolder": "/workspaces/fixture-dood",
+  "capture": {
+    "format": 1,
+    "verb": "run",
+    "args": [
+      "--sig-proxy=false",
+      "-a",
+      "STDOUT",
+      "-a",
+      "STDERR",
+      "--mount",
+      "type=bind,source=/home/dev/src/fixture-dood,target=/workspaces/fixture-dood",
+      "--mount",
+      "type=bind,src=/var/run/docker.sock,dst=/var/run/docker-host.sock",
+      "-l",
+      "devcontainer.local_folder=/home/dev/src/fixture-dood",
+      "-l",
+      "devcontainer.config_file=/home/dev/src/fixture-dood/.devcontainer/devcontainer.json",
+      "--security-opt",
+      "label=disable",
+      "--entrypoint",
+      "/bin/sh",
+      "vsc-fixture-dood-0000000000000000000000000000000000000000000000000000000000000000-features",
+      "-c",
+      "echo Container started\ntrap \"exit 0\" 15\n/usr/local/share/docker-init.sh\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done",
+      "-"
+    ],
+    "env": null,
+    "labels": {
+      "devcontainer.config_file": "/home/dev/src/fixture-dood/.devcontainer/devcontainer.json",
+      "devcontainer.local_folder": "/home/dev/src/fixture-dood"
+    }
+  },
+  "image": {
+    "Id": "sha256:91d1db06b81d5f493f116c5ed118cdf8eaab5ed853cbf812dd41f484060492bb",
+    "RepoTags": [
+      "vsc-fixture-dood-0000000000000000000000000000000000000000000000000000000000000000-features:latest"
+    ],
+    "RepoDigests": [
+      "vsc-fixture-dood-0000000000000000000000000000000000000000000000000000000000000000-features@sha256:91d1db06b81d5f493f116c5ed118cdf8eaab5ed853cbf812dd41f484060492bb"
+    ],
+    "Architecture": "amd64",
+    "Os": "linux",
+    "Config": {
+      "User": "root",
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ],
+      "Cmd": [
+        "bash"
+      ],
+      "Labels": {
+        "dev.containers.id": "base-debian",
+        "dev.containers.release": "v0.4.19",
+        "dev.containers.source": "https://github.com/devcontainers/images",
+        "dev.containers.timestamp": "Thu, 16 Oct 2025 10:40:40 GMT",
+        "dev.containers.variant": "bookworm",
+        "devcontainer.metadata": "[ {\"id\":\"ghcr.io/devcontainers/features/common-utils:2\"}, {\"id\":\"ghcr.io/devcontainers/features/git:1\",\"customizations\":{\"vscode\":{\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`.\"}]}}}}, {\"remoteUser\":\"vscode\"}, {\"id\":\"ghcr.io/devcontainers/features/docker-outside-of-docker:1\",\"securityOpt\":[\"label=disable\"],\"entrypoint\":\"/usr/local/share/docker-init.sh\",\"mounts\":[{\"source\":\"/var/run/docker.sock\",\"target\":\"/var/run/docker-host.sock\",\"type\":\"bind\"}],\"customizations\":{\"vscode\":{\"extensions\":[\"ms-azuretools.vscode-containers\"],\"settings\":{\"github.copilot.chat.codeGeneration.instructions\":[{\"text\":\"This dev container includes the Docker CLI (`docker`) pre-installed and available on the `PATH` for running and managing containers using the Docker daemon on the host machine.\"}]}}}} ]",
+        "version": "2.0.2"
+      }
+    }
+  },
+  "merged": {
+    "name": "fleet-man docker-outside-of-docker fixture",
+    "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+    "features": {
+      "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+        "dockerDashComposeVersion": "none"
+      }
+    },
+    "configFilePath": {
+      "$mid": 1,
+      "fsPath": "/home/dev/src/fixture-dood/.devcontainer/devcontainer.json",
+      "path": "/home/dev/src/fixture-dood/.devcontainer/devcontainer.json",
+      "scheme": "vscode-fileHost"
+    },
+    "init": false,
+    "privileged": false,
+    "securityOpt": [
+      "label=disable"
+    ],
+    "entrypoints": [
+      "/usr/local/share/docker-init.sh"
+    ],
+    "mounts": [
+      {
+        "source": "/var/run/docker.sock",
+        "target": "/var/run/docker-host.sock",
+        "type": "bind"
+      }
+    ],
+    "customizations": {
+      "vscode": [
+        {
+          "settings": {
+            "github.copilot.chat.codeGeneration.instructions": [
+              {
+                "text": "This dev container includes an up-to-date version of Git, built from source as needed, pre-installed and available on the `PATH`."
+              }
+            ]
+          }
+        },
+        {
+          "extensions": [
+            "ms-azuretools.vscode-containers"
+          ],
+          "settings": {
+            "github.copilot.chat.codeGeneration.instructions": [
+              {
+                "text": "This dev container includes the Docker CLI (`docker`) pre-installed and available on the `PATH` for running and managing containers using the Docker daemon on the host machine."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "onCreateCommands": [],
+    "updateContentCommands": [],
+    "postCreateCommands": [],
+    "postStartCommands": [],
+    "postAttachCommands": [],
+    "remoteUser": "vscode",
+    "remoteEnv": {},
+    "containerEnv": {},
+    "portsAttributes": {}
+  }
+}
