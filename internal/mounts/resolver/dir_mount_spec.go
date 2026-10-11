@@ -43,7 +43,9 @@ func (spec dirMountSpec) prepareError(err error) error {
 // dirMountSpecsFor returns the dirMountSpecs implied by the enabled
 // fields of fleetSettings, anchored at the given containerHome.
 // Adding a new directory mount toggle is one new entry here plus one
-// new bool on fleet.FleetSettings.
+// new bool on fleet.FleetSettings, plus a sync root for the folder in
+// internal/mounts/syncpolicy/defaults.go with a credential rule for the
+// tool's login file (TestSyncPolicyCoversEveryMount fails without it).
 func dirMountSpecsFor(fleetSettings fleet.FleetSettings, containerHome string) []dirMountSpec {
 	var specs []dirMountSpec
 	if fleetSettings.ClaudeCodeMount {

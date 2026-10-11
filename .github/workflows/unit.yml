@@ -55,6 +55,22 @@ jobs:
           FLEET_TEST_REQUIRE_PULSE: "1"
         run: go test ./...
 
+      # internal/safefs (sharesync's host writer) must never leave its tree or
+      # follow a symlink in it while another party swaps entries for links.
+      # Fuzz that race on both of Linux's walks (openat2 and the portable one)
+      # for a bounded time; minimization is bounded too, since the race makes
+      # coverage vary between runs and unbounded minimization stalls the job.
+      - name: safefs symlink-swap race fuzz
+        run: go test -run '^$' -fuzz '^FuzzSymlinkSwap$' -fuzztime 60s -fuzzminimizetime 10x ./internal/safefs
+
+      - name: Upload the safefs fuzz failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safefs-fuzz-linux
+          path: internal/safefs/testdata/fuzz
+          if-no-files-found: ignore
+
       # The exec identity matrix switches users for real (setuid, initgroups,
       # PTY chown), which needs root. FLEET_EXECAS_REQUIRE_ROOT turns the
       # tests' skip into a failure, so they cannot quietly stop running.

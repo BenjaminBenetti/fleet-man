@@ -1,0 +1,118 @@
+package safefs
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"math/rand/v2"
+	"os"
+	"strings"
+	"syscall"
+)
+
+// TempPrefix starts the name of every temp file WriteFile makes beside its
+// target. A scanner of a tree safefs writes into skips names IsTemp reports.
+const TempPrefix = ".fleet-safefs-"
+
+// tempSuffix ends every temp file name.
+const tempSuffix = ".tmp"
+
+// IsTemp reports whether name, a single path element, is a WriteFile temp
+// file.
+func IsTemp(name string) bool {
+	return strings.HasPrefix(name, TempPrefix) && strings.HasSuffix(name, tempSuffix)
+}
+
+// tempName returns a fresh temp file name.
+func tempName() string {
+	return fmt.Sprintf("%s%016x%s", TempPrefix, rand.Uint64(), tempSuffix)
+}
+
+// WriteFile replaces the regular file name with the content of data and
+// perm's permission bits (not masked by the umask), atomically: it writes a
+// temp file created O_CREAT|O_EXCL in name's folder and renames it over name
+// there, so a reader sees the old file or the new one, never part of either.
+// What name held (a file, or a symlink, which is replaced and never followed)
+// is gone; a folder at name is refused. The parent folder must exist. Like
+// internal/atomicfile it does not fsync.
+//
+// It returns the Lstat of the file it wrote. ErrChanged means another party
+// replaced the temp file before the rename (nothing is renamed into place)
+// or the result right after it; a retry writes again.
+func (r *Root) WriteFile(name string, data io.Reader, perm fs.FileMode) (fs.FileInfo, error) {
+	if err := r.checkAboveReserved("write", name); err != nil {
+		return nil, err
+	}
+	d, leaf, err := r.parent("write", name)
+	if err != nil {
+		return nil, err
+	}
+	defer d.close()
+	if info, err := d.root.Lstat(leaf); err == nil && info.IsDir() {
+		return nil, pathError("write", d.host(leaf), syscall.EISDIR)
+	}
+
+	tmp, f, err := createTemp(d)
+	if err != nil {
+		return nil, pathError("write", d.host(leaf), err)
+	}
+	renamed := false
+	defer func() {
+		if !renamed {
+			d.root.Remove(tmp)
+		}
+	}()
+	written, err := fillTemp(f, data, perm)
+	if err != nil {
+		return nil, pathError("write", d.host(leaf), err)
+	}
+	// A party that can write the folder can swap the temp file for its own
+	// entry before the rename. That gains it nothing it could not do to name
+	// directly, but the write would then not be fleet's, so it is refused.
+	if now, err := d.root.Lstat(tmp); err != nil || !os.SameFile(now, written) {
+		return nil, pathError("write", d.host(leaf), ErrChanged)
+	}
+	if err := d.root.Rename(tmp, leaf); err != nil {
+		return nil, pathError("write", d.host(leaf), err)
+	}
+	renamed = true
+	info, err := d.root.Lstat(leaf)
+	if err == nil && !os.SameFile(info, written) {
+		err = ErrChanged
+	}
+	if err != nil {
+		return nil, pathError("write", d.host(leaf), err)
+	}
+	return info, nil
+}
+
+// createTemp creates a fresh temp file in d, retrying on a name that exists.
+func createTemp(d *dir) (string, *os.File, error) {
+	for range 10 {
+		name := tempName()
+		f, err := d.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		return name, f, err
+	}
+	return "", nil, fs.ErrExist
+}
+
+// fillTemp writes data into the temp file f, sets perm on it through the file
+// (never by name) and closes it, returning its Stat.
+func fillTemp(f *os.File, data io.Reader, perm fs.FileMode) (fs.FileInfo, error) {
+	_, err := io.Copy(f, data)
+	if err == nil {
+		err = f.Chmod(createMode(perm))
+	}
+	var info fs.FileInfo
+	if err == nil {
+		info, err = f.Stat()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return info, err
+}
