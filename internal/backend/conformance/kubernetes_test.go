@@ -125,7 +125,6 @@ func kubernetesTarget(t *testing.T, sel backendtest.Selection) backendtest.Targe
 		ListSessionsP95: 15 * time.Millisecond,
 		Skip: map[string]string{
 			"up-again":        "a cluster create always gets a key of its own: the daemon never runs a second Up on one, so there is nothing to adopt or prune",
-			"forward":         "port forwarding to a pod lands with P3.3 (PortDialer)",
 			"editor-uri":      "the editor launch for a pod lands with P7.0 (Remote-SSH)",
 			"rebuild":         "rebuild on a cluster lands with P6.1",
 			"rebuild-stopped": "rebuild on a cluster lands with P6.1",

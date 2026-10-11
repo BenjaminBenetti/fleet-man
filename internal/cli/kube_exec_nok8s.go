@@ -16,3 +16,7 @@ func runKubeExecDirect(context.Context, kubeExecFlags, []string, bool) (int, err
 }
 
 func runKubeExecLogs(context.Context, kubeExecLogsFlags) error { return errNoKubeExec }
+
+func runKubeExecForwardStdio(context.Context, kubeExecFlags, int) error { return errNoKubeExec }
+
+func runKubeExecPortForward(context.Context, kubeExecFlags, int, int) error { return errNoKubeExec }

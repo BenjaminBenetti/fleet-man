@@ -21,8 +21,9 @@ const (
 	TagFileWrite Tag = 0x13
 	// TagFileRead reads one file as the exec user.
 	TagFileRead Tag = 0x14
-	// TagForward is a TCP connection to a pod port, the fallback when the
-	// cluster denies pods/portforward.
+	// TagForward is a TCP connection to a pod port (ForwardHeader): the
+	// fallback when the cluster denies pods/portforward, and the path of a
+	// forward that needs a true half-close.
 	TagForward Tag = 0x15
 	// TagHostDial is a pod connection to a daemon-host port (host-gateway).
 	TagHostDial Tag = 0x16
