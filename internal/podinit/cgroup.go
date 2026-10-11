@@ -17,15 +17,30 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
 )
 
-// The container cgroup's children.
+// The container cgroup's children, and the user cgroup's.
 const (
 	// AgentCgroup holds PID 1, the pod agent and every exec the kubelet
 	// starts (runtimes join an exec to PID 1's cgroup). It is never frozen.
 	AgentCgroup = "fleet-agent"
-	// UserCgroup holds the start script and everything users run: what a
-	// clone's final delta freezes, and what an OOM kill picks from.
+	// UserCgroup is everything users run: what a clone's final delta
+	// freezes, under a memory.max just below the container's, and what an
+	// OOM kill picks from. It holds no process of its own, so its children
+	// get the controllers too: the processes are in UserProcsCgroup, and a
+	// docker engine the dev container runs (docker-in-docker) puts its
+	// containers' cgroups in UserDockerCgroup beside them, as docker's own
+	// --cgroupns=private gives a docker-in-docker container a cgroup of
+	// its own to nest in.
 	UserCgroup = "fleet-user"
+	// UserProcsCgroup holds the start script and every process started for
+	// a user.
+	UserProcsCgroup = "procs"
+	// UserDockerCgroup is the cgroup parent of a nested docker engine's
+	// containers.
+	UserDockerCgroup = "docker"
 )
+
+// LayoutVersion is the version of the layout pod-init records.
+const LayoutVersion = 2
 
 // LayoutFile is where pod-init records the layout for the pod agent, which
 // moves the processes it spawns for users into the user cgroup.
@@ -64,19 +79,32 @@ func (osCgroupFS) WriteFile(name string, data []byte) error {
 
 func (osCgroupFS) Mkdir(name string) error { return os.Mkdir(name, 0o755) }
 
-// Layout is the cgroup layout pod-init made, as LayoutFile records it.
+// Layout is the cgroup layout pod-init made, as LayoutFile records it. Its
+// paths are cgroupfs directories:
+//
+//	<container>/fleet-agent        Agent: PID 1, the pod agent, kube execs
+//	<container>/fleet-user         UserTree: frozen whole, memory.max
+//	<container>/fleet-user/procs   User: the start script, user processes
+//	<container>/fleet-user/docker  Docker: a nested engine's containers
 type Layout struct {
-	V int `json:"v"`
-	// Container, Agent and User are cgroupfs directories.
+	V         int    `json:"v"`
 	Container string `json:"container"`
 	Agent     string `json:"agent"`
-	User      string `json:"user"`
-	// Controllers are the ones enabled for the children.
+	// User is the cgroup a process started for a user goes in.
+	User string `json:"user"`
+	// UserTree is fleet-user, User's parent: what a clone's final delta
+	// freezes (cgroup.freeze), and the memory.max just under the
+	// container's.
+	UserTree string `json:"user_tree"`
+	// Docker is where a docker engine in the dev container makes its
+	// containers' cgroups (its cgroup-parent; see DockerParent).
+	Docker string `json:"docker"`
+	// Controllers are the ones enabled for the children (and theirs).
 	Controllers []string `json:"controllers,omitempty"`
 	// OOMGroup is whether pod-init keeps the container's memory.oom.group
 	// at 0 (one process dies on an OOM, not the container).
 	OOMGroup bool `json:"oom_group"`
-	// UserMemoryMax is the user cgroup's memory.max, -1 with no limit.
+	// UserMemoryMax is the user tree's memory.max, -1 with no limit.
 	UserMemoryMax int64 `json:"user_memory_max"`
 
 	fs           cgroupFS
@@ -116,17 +144,20 @@ const (
 var cgroupSleep = time.Sleep
 
 // setupCgroups lays out the container's cgroup (dir, a cgroupfs path): the
-// two children, every process moved into the agent one, the controllers
-// enabled for them, memory.oom.group 0 and the user cgroup's memory.max. A
-// read-only cgroupfs is errNoLayout.
+// agent and user children, every process moved into the agent one, the
+// controllers enabled for them and for the user cgroup's own children,
+// memory.oom.group 0 and the user tree's memory.max. A read-only cgroupfs is
+// errNoLayout.
 func setupCgroups(cfs cgroupFS, dir string, margin int64) (*Layout, error) {
 	controllers, err := cfs.ReadFile(path.Join(dir, "cgroup.controllers"))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s is not a cgroup v2 dir: %v", errNoLayout, dir, err)
 	}
-	l := &Layout{V: 1, Container: dir, Agent: path.Join(dir, AgentCgroup), User: path.Join(dir, UserCgroup),
+	tree := path.Join(dir, UserCgroup)
+	l := &Layout{V: LayoutVersion, Container: dir, Agent: path.Join(dir, AgentCgroup), UserTree: tree,
+		User: path.Join(tree, UserProcsCgroup), Docker: path.Join(tree, UserDockerCgroup),
 		UserMemoryMax: -1, fs: cfs, margin: margin, containerMax: -1}
-	for _, child := range []string{l.Agent, l.User} {
+	for _, child := range []string{l.Agent, l.UserTree} {
 		if err := cfs.Mkdir(child); err != nil && !errors.Is(err, fs.ErrExist) {
 			if errors.Is(err, syscall.EROFS) || errors.Is(err, fs.ErrPermission) {
 				return nil, fmt.Errorf("%w: the cgroupfs is read-only (an unprivileged pod)", errNoLayout)
@@ -146,6 +177,9 @@ func setupCgroups(cfs cgroupFS, dir string, margin int64) (*Layout, error) {
 		}
 	}
 	if err := l.moveAndEnable(enable); err != nil {
+		return nil, err
+	}
+	if err := l.nestUser(enable); err != nil {
 		return nil, err
 	}
 	if err := cfs.WriteFile(path.Join(dir, "memory.oom.group"), []byte("0")); err == nil {
@@ -197,6 +231,41 @@ func (l *Layout) moveAndEnable(enable []string) error {
 	return fmt.Errorf("enable the children's controllers: processes kept arriving: %w", lastErr)
 }
 
+// nestUser makes the user cgroup's children and enables the controllers for
+// them, and for the docker engine's containers below Docker: a cgroup with
+// controllers enabled below it may hold no process of its own, so nothing
+// runs in the user cgroup itself. No process is in either yet (execs join
+// the agent cgroup), so one write each does.
+func (l *Layout) nestUser(enable []string) error {
+	for _, child := range []string{l.User, l.Docker} {
+		if err := l.fs.Mkdir(child); err != nil && !errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("create %s: %w", child, err)
+		}
+	}
+	if len(enable) == 0 {
+		return nil
+	}
+	var plus []string
+	for _, c := range enable {
+		plus = append(plus, "+"+c)
+	}
+	for _, dir := range []string{l.UserTree, l.Docker} {
+		if err := l.fs.WriteFile(path.Join(dir, "cgroup.subtree_control"), []byte(strings.Join(plus, " "))); err != nil {
+			return fmt.Errorf("enable %s below %s: %w", strings.Join(enable, ", "), dir, err)
+		}
+	}
+	return nil
+}
+
+// DockerParent is the cgroup parent of a docker engine in the dev container
+// (daemon.json's cgroup-parent): Docker, as a path in the container's cgroup
+// namespace. The engine's cgroupfs driver makes each container's cgroup below
+// it, and its runc nests them by writing each parent's subtree_control.
+func (l *Layout) DockerParent() string {
+	rel := strings.TrimPrefix(l.Docker, cgroupMount)
+	return path.Clean("/" + rel)
+}
+
 // memoryMargin is how far below a limit the user cgroup's memory.max goes:
 // enough for the agent, PID 1 and an exec or two; a thirty-second of the
 // limit within [64 MiB, 256 MiB], never more than a quarter of it.
@@ -232,7 +301,7 @@ func (l *Layout) syncMemoryMax() bool {
 		userMax = limit - memoryMargin(limit, l.margin)
 		value = strconv.FormatInt(userMax, 10)
 	}
-	if err := l.fs.WriteFile(path.Join(l.User, "memory.max"), []byte(value)); err != nil {
+	if err := l.fs.WriteFile(path.Join(l.UserTree, "memory.max"), []byte(value)); err != nil {
 		return false
 	}
 	l.UserMemoryMax = userMax
@@ -275,7 +344,8 @@ func (l *Layout) write(file string) error {
 }
 
 // ReadLayout reads the layout pod-init recorded; the pod agent uses it to put
-// user processes into the user cgroup. fs.ErrNotExist means none was made.
+// user processes into the user cgroup (Layout.User). fs.ErrNotExist means
+// none was made.
 func ReadLayout(file string) (Layout, error) {
 	data, err := os.ReadFile(file)
 	if err != nil {

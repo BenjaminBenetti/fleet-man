@@ -109,8 +109,8 @@ func TestKubeSeedAndPodInit(t *testing.T) {
 			t.Errorf("fleet-user memory.max %q", got)
 		}
 		script := sh(`for p in /proc/[0-9]*; do [ "$(cat $p/comm 2>/dev/null)" = sleep ] && sed -n 's/^0:://p' $p/cgroup && break; done`)
-		if !strings.HasSuffix(script, "/fleet-user") {
-			t.Errorf("the start script's sleep runs in %q, want fleet-user", script)
+		if !strings.HasSuffix(script, "/fleet-user/procs") {
+			t.Errorf("the start script's sleep runs in %q, want fleet-user/procs", script)
 		}
 		if layout := sh("cat /opt/fleet/run/cgroup.json"); !strings.Contains(layout, `"oom_group":true`) {
 			t.Errorf("cgroup.json %s", layout)

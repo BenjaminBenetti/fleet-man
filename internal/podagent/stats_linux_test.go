@@ -55,6 +55,24 @@ func TestStatsReadsTheContainersCgroupV2(t *testing.T) {
 	}
 }
 
+// The container's cgroup from any of pod-init's groups, the user cgroup's
+// own child included.
+func TestContainerOf(t *testing.T) {
+	for in, want := range map[string]string{
+		"/pod/ctr/fleet-agent":       "/pod/ctr",
+		"/pod/ctr/fleet-user":        "/pod/ctr",
+		"/pod/ctr/fleet-user/procs":  "/pod/ctr",
+		"/pod/ctr":                   "/pod/ctr",
+		"/pod/ctr/procs":             "/pod/ctr/procs",
+		"/fleet-user/procs":          "/",
+		"/pod/ctr/fleet-user/docker": "/pod/ctr/fleet-user/docker",
+	} {
+		if got := containerOf(in); got != want {
+			t.Errorf("containerOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // With no recent sample the first call samples a short window itself; a
 // cgroup v1 node reads the controllers' own files.
 func TestStatsSamplesAWindowOnV1(t *testing.T) {

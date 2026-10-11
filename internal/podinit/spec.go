@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path"
 	"regexp"
@@ -75,9 +76,14 @@ type Spec struct {
 	// Privileged marks a privileged pod. The cgroup layout (Cgroups) probes
 	// the cgroupfs itself, so this is the renderer's record of it.
 	Privileged bool `json:"privileged,omitempty"`
-	// DockerMTU writes the pod network's MTU into the image's dockerd
-	// config for DinD.
-	DockerMTU *DockerMTU `json:"docker_mtu,omitempty"`
+	// Docker configures the docker engine a docker-in-docker image runs:
+	// pod-init writes it into the engine's daemon.json before the start
+	// script starts it (see docker.go).
+	Docker *Docker `json:"docker,omitempty"`
+	// Links are symlinks pod-init makes before the start script runs: a
+	// socket a sidecar serves (the docker engine's, for a run that binds
+	// the daemon host's), at the path the run bound it to.
+	Links []Link `json:"links,omitempty"`
 	// BinarySHA256 is the fleet binary the spec was rendered for;
 	// FallbackSHA256 the one before it. pod-init re-execs fleet-<sha> from
 	// the bin dir when it is neither.
@@ -104,14 +110,33 @@ type Rlimit struct {
 	Hard int64  `json:"hard"`
 }
 
-// DockerMTU configures the DinD daemon's MTU.
-type DockerMTU struct {
-	// MTU to write; 0 reads the pod network's (the default route's
-	// interface).
+// Docker is what pod-init writes into the config of a docker engine the dev
+// container runs (docker-in-docker). Where it laid out cgroups, it also sets
+// the engine's cgroup parent inside the user cgroup.
+type Docker struct {
+	// MTU of the engine's networks; 0 reads the pod network's (the default
+	// route's interface), so a nested network never fragments under an
+	// overlay CNI.
 	MTU int `json:"mtu,omitempty"`
-	// DaemonJSON is the dockerd config to merge it into; "" is
+	// AddressPools are the engine's default-address-pools (the connection's
+	// dind_address_pool); none keeps docker's own.
+	AddressPools []AddressPool `json:"address_pools,omitempty"`
+	// DaemonJSON is the dockerd config to merge them into; "" is
 	// /etc/docker/daemon.json.
 	DaemonJSON string `json:"daemon_json,omitempty"`
+}
+
+// AddressPool is one of docker's default-address-pools: networks take
+// Size-bit subnets of Base.
+type AddressPool struct {
+	Base string `json:"base"`
+	Size int    `json:"size"`
+}
+
+// Link is a symlink at Path to Target.
+type Link struct {
+	Path   string `json:"path"`
+	Target string `json:"target"`
 }
 
 // rlimitNames are the --ulimit names docker accepts.
@@ -248,12 +273,22 @@ func (s Spec) Validate() error {
 			return fmt.Errorf("%s %q is not usable", what, name)
 		}
 	}
-	if m := s.DockerMTU; m != nil {
-		if m.MTU < 0 || (m.MTU != 0 && m.MTU < 576) || m.MTU > 65535 {
-			return fmt.Errorf("docker mtu %d is out of range", m.MTU)
+	if d := s.Docker; d != nil {
+		if d.MTU < 0 || (d.MTU != 0 && d.MTU < 576) || d.MTU > 65535 {
+			return fmt.Errorf("docker mtu %d is out of range", d.MTU)
 		}
-		if m.DaemonJSON != "" && !path.IsAbs(m.DaemonJSON) {
-			return fmt.Errorf("docker daemon config %q is not absolute", m.DaemonJSON)
+		if d.DaemonJSON != "" && !path.IsAbs(d.DaemonJSON) {
+			return fmt.Errorf("docker daemon config %q is not absolute", d.DaemonJSON)
+		}
+		for _, p := range d.AddressPools {
+			if err := p.validate(); err != nil {
+				return err
+			}
+		}
+	}
+	for _, l := range s.Links {
+		if !path.IsAbs(l.Path) || path.Clean(l.Path) != l.Path || l.Path == "/" || !path.IsAbs(l.Target) || strings.ContainsAny(l.Path+l.Target, "\x00\n") {
+			return fmt.Errorf("link %q -> %q is not an absolute path to an absolute target", l.Path, l.Target)
 		}
 	}
 	for name, sha := range map[string]string{"binary_sha256": s.BinarySHA256, "fallback_sha256": s.FallbackSHA256} {
@@ -274,6 +309,15 @@ func (s Spec) Validate() error {
 	}
 	if s.LogDir != "" && !path.IsAbs(s.LogDir) {
 		return fmt.Errorf("log dir %q is not absolute", s.LogDir)
+	}
+	return nil
+}
+
+// validate checks a pool is a CIDR and a subnet size within it.
+func (p AddressPool) validate() error {
+	prefix, err := netip.ParsePrefix(p.Base)
+	if err != nil || p.Size < prefix.Bits() || p.Size > prefix.Addr().BitLen() {
+		return fmt.Errorf("docker address pool %s/%d is not a CIDR with a subnet size inside it", p.Base, p.Size)
 	}
 	return nil
 }

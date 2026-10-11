@@ -39,6 +39,9 @@ func TestMain(m *testing.M) {
 				*v = s
 			}
 		}
+		if dirs := os.Getenv("PODINIT_TEST_DOCKERD_DIRS"); dirs != "" {
+			dockerdDirs = filepath.SplitList(dirs)
+		}
 		if root := os.Getenv("PODINIT_TEST_ETC_ROOT"); root != "" {
 			etcRoot, etcPasswd, etcGroup = root, filepath.Join(root, "etc/passwd"), filepath.Join(root, "etc/group")
 		}
@@ -333,16 +336,28 @@ func TestPodInitPreparesThePod(t *testing.T) {
 	mustMkdirAll(t, filepath.Join(dir, "net/net0"))
 	_ = os.WriteFile(filepath.Join(dir, "net/net0/mtu"), []byte("1430\n"), 0o644)
 	daemonJSON := filepath.Join(dir, "etc/docker/daemon.json")
-	pi := p.start(t, Spec{RemoteUser: "vscode", DockerMTU: &DockerMTU{DaemonJSON: daemonJSON}, Argv: sh("readlink " + p.link)},
-		"PODINIT_TEST_ROUTE="+route, "PODINIT_TEST_SYSNET="+filepath.Join(dir, "net"))
+	dockerd := filepath.Join(dir, "usr/bin")
+	mustMkdirAll(t, dockerd)
+	if err := os.WriteFile(filepath.Join(dockerd, "dockerd"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "run/docker-host.sock")
+	spec := Spec{RemoteUser: "vscode", Argv: sh("readlink " + p.link + " " + sock),
+		Docker: &Docker{DaemonJSON: daemonJSON, AddressPools: []AddressPool{{Base: "10.200.0.0/16", Size: 24}}},
+		Links:  []Link{{Path: sock, Target: "/opt/fleet/docker/docker.sock"}}}
+	pi := p.start(t, spec, "PODINIT_TEST_ROUTE="+route, "PODINIT_TEST_SYSNET="+filepath.Join(dir, "net"), "PODINIT_TEST_DOCKERD_DIRS="+dockerd)
 	if code := pi.wait(t); code != 0 {
 		t.Fatalf("exit %d\n%s", code, pi.stderr)
 	}
-	if strings.TrimSpace(pi.stdout.String()) != podseed.CurrentBinary {
-		t.Fatalf("/usr/bin/fleet -> %q, want it restored", pi.stdout)
+	if got := strings.Fields(pi.stdout.String()); !reflect.DeepEqual(got, []string{podseed.CurrentBinary, "/opt/fleet/docker/docker.sock"}) {
+		t.Fatalf("/usr/bin/fleet and the socket link -> %q, want both made before the start script", pi.stdout)
 	}
-	if data, _ := os.ReadFile(daemonJSON); !strings.Contains(string(data), `"mtu": 1430`) {
+	data, _ := os.ReadFile(daemonJSON)
+	if !strings.Contains(string(data), `"mtu": 1430`) || !strings.Contains(string(data), `"base": "10.200.0.0/16"`) {
 		t.Fatalf("daemon.json %s", data)
+	}
+	if strings.Contains(string(data), "cgroup-parent") {
+		t.Fatalf("daemon.json %s: a cgroup parent without a cgroup layout", data)
 	}
 	passwd, _ := os.ReadFile(filepath.Join(p.etc, "etc/passwd"))
 	if os.Geteuid() != 0 {
