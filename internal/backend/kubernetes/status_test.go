@@ -13,10 +13,17 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 )
 
 func replicas(n int32) *appsv1.StatefulSet {
 	return &appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{Replicas: &n}}
+}
+
+// movingOff marks set as its fleet being moved off node.
+func movingOff(set *appsv1.StatefulSet, node string) *appsv1.StatefulSet {
+	set.Annotations = map[string]string{names.AnnotationMovingOff: node}
+	return set
 }
 
 func podIn(phase corev1.PodPhase, mutate ...func(*corev1.Pod)) *corev1.Pod {
@@ -68,6 +75,10 @@ func TestStatusTable(t *testing.T) {
 		{"tampered", statusInput{set: replicas(1), pod: podIn(corev1.PodRunning, devRunning(true)), tampered: &TamperedError{}}, backend.LiveStatusUnknown, CodeTampered, AgentNone},
 		{"scaled to 0", statusInput{set: replicas(0), supervised: true}, backend.LiveStatusStopped, "", AgentNone},
 		{"scaled to 0, pod still going", statusInput{set: replicas(0), pod: podIn(corev1.PodRunning, devRunning(true), func(p *corev1.Pod) { p.DeletionTimestamp = &now })}, backend.LiveStatusStopped, "", AgentNone},
+		// A move's stop is no Fleet stop: a conclusive probe would record the
+		// running instance stopped, and the move leave it so.
+		{"scaled to 0 by a move", statusInput{set: movingOff(replicas(0), "n1"), supervised: true}, backend.LiveStatusUnknown, "", AgentNone},
+		{"running again, still marked", statusInput{set: movingOff(replicas(1), "n1"), pod: podIn(corev1.PodRunning, devRunning(true))}, backend.LiveStatusRunning, "", AgentNone},
 		{"crash loop, OOM", statusInput{set: replicas(1), pod: podIn(corev1.PodRunning, devWaiting("CrashLoopBackOff", "")), loop: &CrashLoop{OOM: true}}, backend.LiveStatusUnknown, "crash loop: OOMKilled", AgentNone},
 		{"crash loop", statusInput{set: replicas(1), pod: podIn(corev1.PodRunning), loop: &CrashLoop{Reason: "Error"}}, backend.LiveStatusUnknown, "crash loop: Error", AgentNone},
 		{"no pod yet", statusInput{set: replicas(1)}, backend.LiveStatusUnknown, "no pod yet", AgentNone},

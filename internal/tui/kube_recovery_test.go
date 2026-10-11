@@ -200,8 +200,8 @@ func TestKubeFailedRowNotes(t *testing.T) {
 			t.Errorf("%s: row %q, retry hint wanted %v", tc.inst.Name, line, strings.HasSuffix(tc.want, kubeRetryHint))
 		}
 	}
-	// A stopped instance of a fleet that is moving says so (its start would
-	// wait for the move); a failed one does not.
+	// A stopped instance of a fleet that is moving says so; a failed one does
+	// not.
 	for _, tc := range []struct {
 		inst *fleet.Instance
 		want string

@@ -488,6 +488,13 @@ func (k *kubePods) sync(st *state.State) {
 		}
 		k.svc.hub.post(func(h *hub) { h.applyRuntime(ups) })
 	}
+	runningFleets := map[evacKey]bool{}
+	for _, e := range entries {
+		if e.inst.Status == fleet.StatusRunning {
+			runningFleets[evacKey{e.ref.cluster, e.f.Name}] = true
+		}
+	}
+	k.evac.prune(runningFleets)
 	pool := k.pool()
 	for _, ref := range gone {
 		// Destroyed (or its record replaced): nothing of its pod is kept.
@@ -573,19 +580,28 @@ func (k *kubePods) evaluate(ctx context.Context, ref kubeRef) {
 	inst := ki.inst
 	k.mu.Unlock()
 
-	if running {
-		switch {
-		case obs.Holder && obs.Disrupted != "":
-			// Its pod holds the fleet's share on a node the cluster empties:
-			// the fleet moves off it together.
-			k.evac.want(ctx, ref.cluster, fleetName, obs.Node, obs.Disrupted)
-		case obs.MovingOff != "" && (obs.Live != backend.LiveStatusRunning || obs.Node == obs.MovingOff):
-			// A move a daemon began and did not finish (it stopped before
-			// starting the fleet again).
-			k.evac.want(ctx, ref.cluster, fleetName, obs.MovingOff, "the daemon restarted during a move")
-		case obs.Holder && obs.Node != "":
-			k.evac.settled(ref.cluster, fleetName)
+	switch {
+	case !running:
+		if obs.MovingOff != "" && !moving && inst.Status == fleet.StatusStopped {
+			// Stopped since: whatever move it was in is over.
+			k.evac.unmark(ctx, ref, fleetName)
 		}
+	case obs.Holder && obs.Disrupted != "":
+		// Its pod holds the fleet's share on a node the cluster empties:
+		// the fleet moves off it together.
+		k.evac.want(ctx, ref.cluster, fleetName, obs.Node, obs.Disrupted)
+	case obs.MovingOff != "" && obs.Live != backend.LiveStatusRunning:
+		// A move a daemon began and did not finish (it stopped before
+		// starting the fleet again).
+		k.evac.want(ctx, ref.cluster, fleetName, obs.MovingOff, "the daemon restarted during a move")
+	case obs.MovingOff != "" && !moving:
+		// It runs again, and no move of its fleet is in progress: the mark
+		// outlived its move (the daemon stopped while starting the fleet
+		// again). Left, the next time its pod is not running would move the
+		// whole fleet.
+		k.evac.unmark(ctx, ref, fleetName)
+	case obs.Holder && obs.Node != "":
+		k.evac.settled(ref.cluster, fleetName)
 	}
 
 	// A running instance's published ports listen on this host; a stopped

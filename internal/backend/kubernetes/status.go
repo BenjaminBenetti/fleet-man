@@ -24,6 +24,8 @@ import (
 //	API unreachable, 401/403                     | missing
 //	StatefulSet gone (a synced, answering cache)  | missing
 //	pod refused by verification                  | unknown + kubernetes:tampered
+//	replicas 0 during a move off a node          | unknown (not a stop: the
+//	(AnnotationMovingOff)                        | record stays running)
 //	replicas 0                                   | stopped
 //	crash loop not parked yet                    | unknown + the loop
 //	no pod, Pending, ContainerCreating,          | unknown + reason
@@ -110,6 +112,11 @@ func observe(in statusInput) Observation {
 		o.Live = backend.LiveStatusMissing
 	case in.tampered != nil:
 		o.Live, o.Reason = backend.LiveStatusUnknown, CodeTampered
+	case in.set != nil && in.set.Spec.Replicas != nil && *in.set.Spec.Replicas == 0 && in.set.Annotations[names.AnnotationMovingOff] != "":
+		// Stopped by a move (evacuate.go), which starts it again: not a stop
+		// a conclusive probe may record (the live-status pass would record
+		// the instance stopped, and the move then leave it so).
+		o.Live = backend.LiveStatusUnknown
 	case in.set != nil && in.set.Spec.Replicas != nil && *in.set.Spec.Replicas == 0:
 		o.Live = backend.LiveStatusStopped
 	case in.loop != nil:

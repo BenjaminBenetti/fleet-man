@@ -132,6 +132,11 @@ func (w *nodeWatch) current() string {
 // syncNodeWatches starts a watch of every node a single-node holder of the
 // connection is on and stops those no holder is on any more.
 func (p *Pool) syncNodeWatches(clusterID string) {
+	// One at a time: what one call read of the holders must not be applied
+	// after a later call applied newer news (a holder's move off a node and a
+	// Forget at once would stop the watch of the node it moved to).
+	p.nodeSync.Lock()
+	defer p.nodeSync.Unlock()
 	want := map[string]bool{}
 	p.instMu.Lock()
 	for k, t := range p.tracks {

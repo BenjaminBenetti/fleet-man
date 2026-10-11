@@ -268,9 +268,11 @@ type Pool struct {
 	pf     *portForwards
 
 	// nodeMu guards the node watches (nodes.go), by connection (never held
-	// with instMu).
-	nodeMu sync.Mutex
-	nodes  map[string]*nodeWatches
+	// with instMu); nodeSync serializes syncNodeWatches (taken before
+	// either).
+	nodeMu   sync.Mutex
+	nodes    map[string]*nodeWatches
+	nodeSync sync.Mutex
 }
 
 // clusterGates are a connection's limits, kept across reloads of its

@@ -374,6 +374,31 @@ func TestEvacuateStoppedMidMoveLeavesItsMarks(t *testing.T) {
 	}
 }
 
+// A mark that outlived its move is removed; an instance gone meanwhile is no
+// failure.
+func TestClearMovingOff(t *testing.T) {
+	objs := evacObjects("a")
+	for _, o := range objs {
+		if set, ok := o.(*appsv1.StatefulSet); ok {
+			set.Annotations = map[string]string{names.AnnotationMovingOff: "n1", "keep": "me"}
+		}
+	}
+	r := newEvacRig(t, objs...)
+	if err := r.pool.ClearMovingOff(context.Background(), handleCluster, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := r.annotation("a"); ok {
+		t.Fatalf("still marked moving off %q", v)
+	}
+	set, err := r.cs.AppsV1().StatefulSets(handleNS).Get(context.Background(), "a", metav1.GetOptions{})
+	if err != nil || set.Annotations["keep"] != "me" {
+		t.Fatalf("the other annotations: %v, %v", set.GetAnnotations(), err)
+	}
+	if err := r.pool.ClearMovingOff(context.Background(), handleCluster, "gone"); err != nil {
+		t.Fatalf("an instance gone meanwhile: %v", err)
+	}
+}
+
 // A fleet whose volumes (or pods) cannot leave the node is not touched.
 func TestEvacuateLeavesAPinnedFleet(t *testing.T) {
 	onN1 := &corev1.VolumeNodeAffinity{Required: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{
@@ -413,6 +438,12 @@ func TestEvacuateLeavesAPinnedFleet(t *testing.T) {
 				return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "persistentvolumes"}, "", errors.New("cluster-scoped"))
 			})
 		}, want: "its share is node-local, class block"},
+		// A node-local class's volume may name its node by the driver's own
+		// key (csi-hostpath, TopoLVM), or not at all (minikube's hostpath).
+		{name: "a node-local class's volume pinned by the driver's key", facts: true, mutate: withPV("pv-fs-alpha-share", &corev1.VolumeNodeAffinity{Required: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+			MatchExpressions: []corev1.NodeSelectorRequirement{{Key: "topology.hostpath.csi/node", Operator: corev1.NodeSelectorOpIn, Values: []string{"n1"}}},
+		}}}}), want: "its share is node-local, class block"},
+		{name: "a node-local class's volume naming no node", facts: true, want: "its share is node-local, class block"},
 		{name: "unreadable volumes of a class preflight does not know", react: func(r *evacRig) {
 			r.cs.PrependReactor("get", "persistentvolumes", func(k8stesting.Action) (bool, kruntime.Object, error) {
 				return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "persistentvolumes"}, "", errors.New("cluster-scoped"))

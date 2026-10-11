@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # itest: k8s
-# Description: a fleet in single-node mode leaves a node the cluster empties: draining the node its share's holders run on moves the fleet as one (stopped there, started together on another node, the connection saying "node cordoned: fleet moving" meanwhile), an instance protected from drains (a PodDisruptionBudget the drain cannot pass) included, the files on its share and on each disk kept, a stopped sibling started afterwards beside them, and a move fleetd is killed in the middle of finished by the next fleetd; a fleet whose share is on the node's own disk is left running there, the connection saying why it can't move. Needs two schedulable nodes and a StorageClass whose volumes any node mounts (FLEET_ITEST_MOVABLE_CLASS, default fleet-shared-path, as integration/clusters/kind-shared-path.sh makes); elsewhere it passes as not run.
+# Description: a fleet in single-node mode leaves a node the cluster empties: draining the node its share's holders run on moves the fleet as one (stopped there, started together on another node, the connection saying "node cordoned: fleet moving" meanwhile), an instance protected from drains (a PodDisruptionBudget the drain cannot pass) included, the files on its share and on each disk kept, a stopped sibling started afterwards beside them, and a move fleetd is killed in the middle of finished by the next fleetd, a mark that outlived its move removed without moving anything; a fleet whose share is on the node's own disk is left running there, the connection saying why it can't move. Needs two schedulable nodes and a StorageClass whose volumes any node mounts (FLEET_ITEST_MOVABLE_CLASS, default fleet-shared-path, as integration/clusters/kind-shared-path.sh makes); elsewhere it passes as not run.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -172,5 +172,22 @@ while [ -n "$(itest_k8s_kubectl get statefulset "${beta_sts}" -o 'jsonpath={.met
 done
 assert_equals "on-the-share" "$(run_in "${gamma}" 'cat ~/.claude/moved.txt')" "the share came back"
 assert_equals "on-beta-disk" "$(run_in "${beta}" 'cat ~/disk.txt')" "beta's disk came back"
+
+info "a mark that outlived its move (fleetd died while starting the fleet) is removed, moving nothing"
+itest_k8s_kubectl uncordon "${to}" >/dev/null
+uids=()
+for ref in "${alpha}" "${beta}" "${gamma}"; do uids+=("$(uid_of "${ref}")"); done
+alpha_sts=$(itest_k8s_sts "$(itest_container_id "${alpha}")")
+itest_k8s_kubectl annotate statefulset "${alpha_sts}" "fleet.dev/moving-off=${home}" >/dev/null
+deadline=$(( $(date +%s) + $(_scale_timeout 120) ))
+while [ -n "$(itest_k8s_kubectl get statefulset "${alpha_sts}" -o 'jsonpath={.metadata.annotations.fleet\.dev/moving-off}')" ]; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "the stale mark was never removed"
+  sleep 1
+done
+i=0
+for ref in "${alpha}" "${beta}" "${gamma}"; do
+  assert_equals "${uids[${i}]}" "$(uid_of "${ref}")" "${ref} was left running"
+  i=$((i + 1))
+done
 
 pass "evacuate: a drained node's single-node fleet moves together, nothing lost, finished by the next fleetd when one dies mid-move; a node-local one stays, saying why"

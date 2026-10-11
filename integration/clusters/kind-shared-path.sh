@@ -58,7 +58,8 @@ up() {
   image=$(k -n local-path-storage get deployment local-path-provisioner -o 'jsonpath={.spec.template.spec.containers[0].image}')
   helper=$(k -n local-path-storage get configmap local-path-config -o 'jsonpath={.data.helperPod\.yaml}' | awk '/image:/ {print $2; exit}')
   [ -n "${image}" ] && [ -n "${helper}" ] || { echo "kind-shared-path: kind's local-path provisioner not found" >&2; exit 1; }
-  k apply -f - <<EOF
+  # Only the context goes to stdout (ctx=$(… up)).
+  k apply -f - >/dev/null <<EOF
 apiVersion: v1
 kind: ConfigMap
 metadata: {name: fleet-shared-path-config, namespace: local-path-storage}

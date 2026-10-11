@@ -242,6 +242,26 @@ func (p *Pool) protectedFromDrains(ctx context.Context, cs kclient.Interface, ns
 	return false
 }
 
+// ClearMovingOff removes the instance's AnnotationMovingOff, the mark of a
+// move that is over though the mark stayed (the daemon that made the move
+// stopped while starting the fleet again, or could not remove it): left, it
+// would make the instance's next pod that is not running a move of its
+// fleet.
+func (p *Pool) ClearMovingOff(ctx context.Context, clusterID, sts string) error {
+	c, err := p.Cluster(clusterID)
+	if err != nil {
+		return classify(err)
+	}
+	cs, err := p.clientset(c)
+	if err != nil {
+		return classify(err)
+	}
+	if err := markMoving(ctx, cs, c.Namespace(), sts, ""); err != nil && !apierrors.IsNotFound(err) {
+		return classify(err)
+	}
+	return nil
+}
+
 // markMoving sets (node "" removes) the StatefulSet's AnnotationMovingOff.
 func markMoving(ctx context.Context, cs kclient.Interface, ns, sts, node string) error {
 	var v any = node
@@ -256,9 +276,9 @@ func markMoving(ctx context.Context, cs kclient.Interface, ns, sts, node string)
 // moveBlocked says, in a few words, why the fleet cannot leave node ("" when
 // it can): one of its volumes is on the node's own disk ("its share is
 // node-local, class standard"), or its pods are required on the node by name
-// ("its pods are pinned to the node"). A volume that is not readable (a PersistentVolume is
-// cluster-scoped) is judged by its StorageClass as the connection's last
-// preflight found it.
+// ("its pods are pinned to the node"). A volume is judged by its own node
+// affinity when it is readable (a PersistentVolume is cluster-scoped), and
+// by its StorageClass as the connection's last preflight found it.
 func (p *Pool) moveBlocked(ctx context.Context, cs kclient.Interface, ns string, e Evacuation) string {
 	var nodeLocal map[string]bool
 	classLocal := func(class string) bool {
@@ -291,13 +311,14 @@ func (p *Pool) moveBlocked(ctx context.Context, cs kclient.Interface, ns string,
 		}
 		if name := pvc.Spec.VolumeName; name != "" {
 			pv, err := cs.CoreV1().PersistentVolumes().Get(ctx, name, metav1.GetOptions{})
-			if err == nil {
-				if pinnedTo(topology.VolumeTerms(pv), e.Node) {
-					return fmt.Sprintf("%s is node-local, class %s", what, orDefault(class, "default"))
-				}
-				return ""
+			if err == nil && pinnedTo(topology.VolumeTerms(pv), e.Node) {
+				return fmt.Sprintf("%s is node-local, class %s", what, orDefault(class, "default"))
 			}
 		}
+		// Also for a readable volume: a node-local class may name its node by
+		// a key of its own (csi-hostpath, TopoLVM) or not at all (minikube's
+		// hostpath), and a pod started elsewhere would wait for the node, or
+		// find an empty folder.
 		if classLocal(class) {
 			return fmt.Sprintf("%s is node-local, class %s", what, orDefault(class, "default"))
 		}

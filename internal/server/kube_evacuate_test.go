@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,28 @@ type evacStub struct {
 	failed  map[string]kubernetes.EvacuationOutcome
 	hold    chan struct{}
 	ended   chan kubernetes.EvacuationResult
+	// cleared are the StatefulSets whose stale mark was removed, each
+	// removal held until clearHold is closed when it is set.
+	cleared   []string
+	clearHold chan struct{}
+	clearErr  error
+}
+
+func (s *evacStub) clearMark(_ context.Context, _, sts string) error {
+	s.mu.Lock()
+	s.cleared = append(s.cleared, sts)
+	hold, err := s.clearHold, s.clearErr
+	s.mu.Unlock()
+	if hold != nil {
+		<-hold
+	}
+	return err
+}
+
+func (s *evacStub) clearedMarks() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.cleared...)
 }
 
 func (s *evacStub) evacuate(_ context.Context, e kubernetes.Evacuation) (kubernetes.EvacuationResult, error) {
@@ -75,6 +98,7 @@ func newEvacRig(t *testing.T, stub *evacStub, instances ...*fleet.Instance) *kub
 	stub.ended = make(chan kubernetes.EvacuationResult, 10)
 	r := newKubePodsRigWith(t, func(k *kubePods) {
 		k.evac.evacuate = stub.evacuate
+		k.evac.clearMark = stub.clearMark
 		k.evac.members = func(cluster, fleetName string) (string, []evacMember) {
 			st, _ := state.Load()
 			var ms []evacMember
@@ -267,21 +291,40 @@ func TestKubeEvacuationCutShortRecordsNothing(t *testing.T) {
 
 // A move a previous daemon began (the mark on a running record's
 // StatefulSet, its pod gone) is finished; a mark left on an instance that
-// runs elsewhere is not a move.
+// runs again (on the node it marks too) is not a move, and is removed, as
+// is one on an instance stopped since.
 func TestKubeEvacuationFinishesAMoveBegunBefore(t *testing.T) {
 	stub := &evacStub{}
-	r := newEvacRig(t, stub, kubeInstance("one", fleet.StatusRunning))
+	r := newEvacRig(t, stub, kubeInstance("one", fleet.StatusRunning), kubeInstance("two", fleet.StatusStopped))
 	r.waitTracked()
-	r.pool.observe(kubeSTS("one"), kubernetes.Observation{Live: backend.LiveStatusRunning, Node: "n2", Holder: true, MovingOff: "n1"})
-	time.Sleep(30 * time.Millisecond)
+	r.pool.observe(kubeSTS("one"), kubernetes.Observation{Live: backend.LiveStatusRunning, Node: "n1", Holder: true, MovingOff: "n1"})
+	r.eventually("the stale mark removed", func() bool { return slices.Contains(stub.clearedMarks(), kubeSTS("one")) })
 	if n := stub.count(); n != 0 {
 		t.Fatalf("a lingering mark moved the fleet (%d)", n)
 	}
-	r.pool.observe(kubeSTS("one"), kubernetes.Observation{Live: backend.LiveStatusStopped, MovingOff: "n1"})
+	r.pool.observe(kubeSTS("two"), kubernetes.Observation{Live: backend.LiveStatusUnknown, MovingOff: "n1"})
+	r.eventually("the stopped one's mark removed", func() bool { return slices.Contains(stub.clearedMarks(), kubeSTS("two")) })
+
+	stub.mu.Lock()
+	stub.hold = make(chan struct{})
+	stub.mu.Unlock()
+	r.pool.observe(kubeSTS("one"), kubernetes.Observation{Live: backend.LiveStatusUnknown, MovingOff: "n1"})
 	r.eventually("the move finished", func() bool { return stub.count() == 1 })
 	if e := stub.last(); e.Node != "n1" || e.Why != "the daemon restarted during a move" {
 		t.Fatalf("move %+v", e)
 	}
+	// While the move runs, its marks are its own. (A removal begun before
+	// it had done its part before the move could begin.)
+	stub.mu.Lock()
+	stub.cleared = nil
+	stub.mu.Unlock()
+	r.pool.observe(kubeSTS("one"), kubernetes.Observation{Live: backend.LiveStatusRunning, Node: "n2", Holder: true, MovingOff: "n1"})
+	r.pool.observe(kubeSTS("two"), kubernetes.Observation{Live: backend.LiveStatusUnknown, MovingOff: "n1"})
+	time.Sleep(30 * time.Millisecond)
+	if got := stub.clearedMarks(); len(got) != 0 {
+		t.Fatalf("marks removed during the move: %v", got)
+	}
+	close(stub.hold)
 	r.waitMoveEnded(stub)
 }
 
@@ -320,4 +363,72 @@ func TestKubeEvacuationMembersFromTheRecords(t *testing.T) {
 	if recordStopped("alpha", "one", "zzzzzzzz", "x") {
 		t.Fatal("recorded another key's instance stopped")
 	}
+}
+
+// A move asked for while a stale mark of the fleet is being removed waits for
+// the removal, which would otherwise land on the move's own mark.
+func TestKubeEvacuationWaitsForAMarksRemoval(t *testing.T) {
+	stub := &evacStub{clearHold: make(chan struct{})}
+	r := newEvacRig(t, stub, kubeInstance("one", fleet.StatusRunning), kubeInstance("two", fleet.StatusRunning))
+	r.waitTracked()
+	r.pool.observe(kubeSTS("two"), kubernetes.Observation{Live: backend.LiveStatusRunning, Node: "n1", Holder: true, MovingOff: "n1"})
+	r.eventually("the removal begun", func() bool { return len(stub.clearedMarks()) == 1 })
+	r.pool.observe(kubeSTS("two"), cordoned())
+	r.pool.observe(kubeSTS("one"), cordoned())
+	r.eventually("the move put off", func() bool {
+		r.svc.kubePods.evac.mu.Lock()
+		defer r.svc.kubePods.evac.mu.Unlock()
+		return r.svc.kubePods.evac.deferred[evacKey{"c1", "alpha"}]
+	})
+	time.Sleep(30 * time.Millisecond)
+	if n := stub.count(); n != 0 {
+		t.Fatalf("a move began during the removal (%d)", n)
+	}
+	// Done: the fleet is looked at again, and its move begins.
+	close(stub.clearHold)
+	r.eventually("the move", func() bool { return stub.count() == 1 })
+	r.waitMoveEnded(stub)
+}
+
+// A removal that fails is not tried again at once (an unreachable cluster
+// fails it at once, and the move it holds up asks again).
+func TestKubeEvacuationPacesAFailedMarkRemoval(t *testing.T) {
+	stub := &evacStub{clearErr: errors.New("connection refused")}
+	r := newEvacRig(t, stub, kubeInstance("one", fleet.StatusRunning), kubeInstance("two", fleet.StatusRunning))
+	r.waitTracked()
+	r.pool.observe(kubeSTS("two"), kubernetes.Observation{Live: backend.LiveStatusRunning, Node: "n1", Holder: true, MovingOff: "n1"})
+	r.eventually("the removal tried", func() bool { return len(stub.clearedMarks()) == 1 })
+	r.pool.observe(kubeSTS("one"), cordoned())
+	r.eventually("the move", func() bool { return stub.count() == 1 })
+	r.waitMoveEnded(stub)
+	r.pool.observe(kubeSTS("two"), kubernetes.Observation{Live: backend.LiveStatusRunning, Node: "n2", Holder: true, MovingOff: "n1"})
+	time.Sleep(50 * time.Millisecond)
+	if got := stub.clearedMarks(); len(got) != 1 {
+		t.Fatalf("a failed removal tried again at once: %v", got)
+	}
+}
+
+// A fleet that could not move, stopped (or destroyed) since, has nothing on
+// the node: the connection's status no longer says it stays there.
+func TestKubeEvacuationForgetsAStoppedFleetThatCouldNotMove(t *testing.T) {
+	stub := &evacStub{blocked: "its share is node-local, class standard"}
+	r := newEvacRig(t, stub, kubeInstance("one", fleet.StatusRunning))
+	r.waitTracked()
+	r.pool.observe(kubeSTS("one"), cordoned())
+	r.waitMoveEnded(stub)
+	if _, warnings := r.svc.kubePods.evac.status("c1"); len(warnings) != 1 {
+		t.Fatalf("warnings %q", warnings)
+	}
+	if err := state.Update(func(st *state.State) error {
+		st.Fleets["alpha"].Instances[0].Status = fleet.StatusStopped
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loadAndPush(r.svc.hub)
+	r.eventually("the warning gone", func() bool {
+		_, warnings := r.svc.kubePods.evac.status("c1")
+		return len(warnings) == 0
+	})
+	r.eventually("the row cleared", func() bool { return r.runtime("one").GetKube().GetMoveBlocked() == "" })
 }

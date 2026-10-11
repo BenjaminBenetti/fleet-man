@@ -60,6 +60,9 @@ type evacHold struct {
 // again (while the fleet is still on the node).
 const evacRetry = time.Minute
 
+// evacUnmarkTimeout bounds the removal of a stale moving mark.
+const evacUnmarkTimeout = 30 * time.Second
+
 // kubeEvacuations runs kubePods' moves.
 type kubeEvacuations struct {
 	k *kubePods
@@ -67,10 +70,21 @@ type kubeEvacuations struct {
 	// fleetd's records (kubePods.evacMembers); tests stand in their own.
 	evacuate func(ctx context.Context, e kubernetes.Evacuation) (kubernetes.EvacuationResult, error)
 	members  func(cluster, fleetName string) (share string, ms []evacMember)
+	// clearMark is the pool's ClearMovingOff (tests stand in their own).
+	clearMark func(ctx context.Context, cluster, sts string) error
 
 	mu     sync.Mutex
 	moving map[evacKey]evacMove
 	held   map[evacKey]evacHold
+	// unmarking are the instances whose stale mark is being removed, with
+	// their fleets: a move of one waits for it (the removal must not land on
+	// the move's own mark).
+	unmarking map[kubeRef]evacKey
+	// deferred are the fleets whose move waited for a removal: looked at
+	// again once it is done. unmarkAfter is when a removal that failed may
+	// be tried again.
+	deferred    map[evacKey]bool
+	unmarkAfter map[kubeRef]time.Time
 	// retry is evacRetry (tests shorten it); done is told when a move ends
 	// (tests).
 	retry time.Duration
@@ -89,9 +103,15 @@ func newKubeEvacuations(k *kubePods) *kubeEvacuations {
 		evacuate: func(ctx context.Context, ev kubernetes.Evacuation) (kubernetes.EvacuationResult, error) {
 			return kubernetes.DefaultPool().Evacuate(ctx, ev)
 		},
-		moving: map[evacKey]evacMove{},
-		held:   map[evacKey]evacHold{},
-		retry:  evacRetry,
+		clearMark: func(ctx context.Context, cluster, sts string) error {
+			return kubernetes.DefaultPool().ClearMovingOff(ctx, cluster, sts)
+		},
+		moving:      map[evacKey]evacMove{},
+		held:        map[evacKey]evacHold{},
+		unmarking:   map[kubeRef]evacKey{},
+		deferred:    map[evacKey]bool{},
+		unmarkAfter: map[kubeRef]time.Time{},
+		retry:       evacRetry,
 	}
 	e.members = e.recordMembers
 	return e
@@ -110,6 +130,14 @@ func (e *kubeEvacuations) want(ctx context.Context, cluster, fleetName, node, wh
 	if h, ok := e.held[key]; ok && h.node == node && (h.until.IsZero() || now.Before(h.until)) {
 		e.mu.Unlock()
 		return
+	}
+	for _, k := range e.unmarking {
+		if k == key {
+			// Asked again once the removal is done.
+			e.deferred[key] = true
+			e.mu.Unlock()
+			return
+		}
 	}
 	delete(e.held, key)
 	e.moving[key] = evacMove{node: node, why: why, since: now}
@@ -131,6 +159,78 @@ func (e *kubeEvacuations) settled(cluster, fleetName string) {
 	}
 	e.mu.Unlock()
 	if ok && h.blocked != "" {
+		e.changed(key)
+	}
+}
+
+// unmark removes the moving mark an instance of fleetName kept after its
+// move was over (it runs again, or was stopped, and no move of its fleet is
+// in progress), in the background; a failure is tried again at an
+// evaluation after the retry pause.
+func (e *kubeEvacuations) unmark(ctx context.Context, ref kubeRef, fleetName string) {
+	key := evacKey{ref.cluster, fleetName}
+	e.mu.Lock()
+	if _, busy := e.unmarking[ref]; busy {
+		e.mu.Unlock()
+		return
+	}
+	if _, busy := e.moving[key]; busy {
+		e.mu.Unlock()
+		return
+	}
+	if after, ok := e.unmarkAfter[ref]; ok && e.k.now().Before(after) {
+		e.mu.Unlock()
+		return
+	}
+	e.unmarking[ref] = key
+	e.mu.Unlock()
+	go func() {
+		uctx, cancel := context.WithTimeout(ctx, evacUnmarkTimeout)
+		err := e.clearMark(uctx, ref.cluster, ref.sts)
+		cancel()
+		e.mu.Lock()
+		delete(e.unmarking, ref)
+		if err != nil {
+			e.unmarkAfter[ref] = e.k.now().Add(e.retry)
+		} else {
+			delete(e.unmarkAfter, ref)
+		}
+		again := e.deferred[key]
+		for _, k := range e.unmarking {
+			again = again && k != key
+		}
+		if again {
+			delete(e.deferred, key)
+		}
+		e.mu.Unlock()
+		if again {
+			// A move asked for meanwhile waited for this.
+			e.k.pokeFleet(key.cluster, key.fleet)
+		}
+		if err != nil && ctx.Err() == nil {
+			flog.Warn("kube evacuate: removing the mark of a move that is over", "cluster", ref.cluster, "sts", ref.sts, "err", err)
+			return
+		}
+		flog.Info("kube evacuate: removed the mark of a move that is over", "cluster", ref.cluster, "sts", ref.sts)
+	}()
+}
+
+// prune forgets the holds of the fleets of which no instance runs on the
+// connection any more (all stopped, or destroyed): none is on the node, and
+// the connection's status must not say one stays there.
+func (e *kubeEvacuations) prune(running map[evacKey]bool) {
+	var gone []evacKey
+	e.mu.Lock()
+	for key, h := range e.held {
+		if !running[key] {
+			delete(e.held, key)
+			if h.blocked != "" {
+				gone = append(gone, key)
+			}
+		}
+	}
+	e.mu.Unlock()
+	for _, key := range gone {
 		e.changed(key)
 	}
 }
