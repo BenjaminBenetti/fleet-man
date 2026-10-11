@@ -32,8 +32,8 @@ type Case struct {
 //
 // Not covered yet, each waiting on the unit that brings what it needs: the
 // daemon-level scenarios (a create interrupted by a fleetd kill then
-// rebuilt, a daemon kill mid-rebuild reconciled), rebuild-failure rollback,
-// clone consistency while the source writes (T1/T2 tiers), the DinD volume
+// rebuilt, a daemon kill mid-rebuild reconciled: bash itests 820-822 on a
+// cluster), clone consistency while the source writes (T1/T2 tiers), the DinD volume
 // and the image-cache mirror across stop/start and rebuild, the mic sink and
 // audio output EOF, CopyFile while audio output streams, and the fleet binary
 // after a rebuild (provisioning, above the Backend).
@@ -63,6 +63,7 @@ func Cases() []Case {
 		{Name: "stop-start", Kind: Scenario, Run: caseStopStart},
 		{Name: "rebuild", Kind: Scenario, Run: caseRebuild},
 		{Name: "rebuild-stopped", Kind: Scenario, Run: caseRebuildStopped},
+		{Name: "rebuild-rollback", Kind: Scenario, Run: caseRebuildRollback},
 		{Name: "clone", Kind: Scenario, Run: caseClone},
 		{Name: "failed-create", Kind: Scenario, Run: caseFailedCreate},
 	}

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet rebuild` after editing the instance's own devcontainer config (Dockerfile, devcontainer.json, a feature option) builds and runs the edited config, from a running and from a stopped instance, keeping the workspace and resetting the root filesystem.
 set -euo pipefail
 
