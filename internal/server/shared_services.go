@@ -262,6 +262,42 @@ func teardownFleetSharedServices(fleetName string, buildkitEnabled bool, instanc
 	return warnings
 }
 
+// prepareClusterFleets re-prepares every fleet with an instance on
+// Kubernetes connection clusterID (svcruntime.Runtime.PrepareFleet), so a
+// change of what the fleets' pods get there (its metadata block) reaches the
+// pods already running. Best-effort, logged.
+func prepareClusterFleets(clusterID string) {
+	rt := clusterSharedServices(clusterID)
+	if rt == nil {
+		return
+	}
+	st, err := state.Load()
+	if err != nil {
+		flog.Warn("shared services: load state failed", "err", err)
+		return
+	}
+	names := make([]string, 0, len(st.Fleets))
+	for name, f := range st.Fleets {
+		if f == nil {
+			continue
+		}
+		for _, inst := range f.Instances {
+			if inst != nil && inst.Backend == fleet.BackendKubernetes && inst.KubeCluster == clusterID {
+				names = append(names, name)
+				break
+			}
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := rt.PrepareFleet(name); err != nil {
+			flog.Warn("shared services: re-preparing a fleet on a connection failed", "runtime", rt.Key(), "fleet", name, "err", err)
+			continue
+		}
+		flog.Info("shared services: re-prepared a fleet on a connection", "runtime", rt.Key(), "fleet", name)
+	}
+}
+
 // releaseFleetRuntimes runs after a single-instance destroy removed the
 // records of destroyed: each runtime one of them used is released
 // (svcruntime.Runtime.ReleaseFleet), which a runtime that keeps something for

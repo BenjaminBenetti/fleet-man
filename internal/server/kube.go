@@ -264,6 +264,12 @@ func (s *service) UpdateKubeCluster(ctx context.Context, req *fleetgrpc.UpdateKu
 	}
 	flog.Info("kube: connection updated", "cluster", cur.ID, "fields", req.GetUpdateMask().GetPaths())
 	s.kube.sync()
+	if next.BlocksMetadata() != cur.BlocksMetadata() {
+		// A security setting of the fleets' pods there, not of new
+		// instances only: every fleet on the connection gets its egress
+		// policy (or loses it) now.
+		go prepareClusterFleets(cur.ID)
+	}
 	return &fleetgrpc.UpdateKubeClusterReply{Cluster: s.kube.status(cur.ID)}, nil
 }
 

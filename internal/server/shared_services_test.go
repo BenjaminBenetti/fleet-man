@@ -894,3 +894,22 @@ func TestSharedServicesSweepKeepsToTheRuntimesBudget(t *testing.T) {
 		t.Fatalf("ensured %v past the budget", got)
 	}
 }
+
+// TestPrepareClusterFleets: every fleet with an instance on the connection is
+// prepared there again (a change of its metadata block reaches running pods).
+func TestPrepareClusterFleets(t *testing.T) {
+	isolateFleetDir(t)
+	seedFleets(t, map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Instances: []*fleet.Instance{{Name: "k1", Backend: fleet.BackendKubernetes, KubeCluster: "c1"}}},
+		"beta":  {Name: "beta", Instances: []*fleet.Instance{{Name: "k1", Backend: fleet.BackendKubernetes, KubeCluster: "c2"}}},
+		"gamma": {Name: "gamma", Instances: []*fleet.Instance{{Name: "i1"}, {Name: "k2", Backend: fleet.BackendKubernetes, KubeCluster: "c1"}}},
+	})
+	recs := clusterRecorders(t, svcruntimetest.New("docker"), nil, "c1", "c2")
+	prepareClusterFleets("c1")
+	if got, want := recs["c1"].Calls(), []svcruntimetest.Call{{Method: "PrepareFleet", Fleet: "alpha"}, {Method: "PrepareFleet", Fleet: "gamma"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("c1 calls %+v, want %+v", got, want)
+	}
+	if got := recs["c2"].Calls(); len(got) != 0 {
+		t.Fatalf("c2 calls %+v", got)
+	}
+}
