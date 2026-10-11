@@ -140,6 +140,12 @@ func (s shell) checkNetworks(pool string) {
 	}
 	s.must("docker network rm fleet-live-net >/dev/null")
 	s.t.Logf("pod MTU %s; a new network got %s", podMTU, subnet)
+	// A container's own traffic crosses the engine's bridge and the pod
+	// network: a fetch of a megabyte over TLS, full-size packets both ways,
+	// which a bridge MTU above the pod's stalls under an overlay CNI.
+	if out, err := s.run("timeout 120 docker run --rm alpine:3.20 sh -c 'apk update >/dev/null && echo fetched' 2>&1 | tail -n 3"); err != nil || !strings.Contains(out, "fetched") {
+		s.t.Errorf("a container's HTTPS fetch through the engine's bridge: %v\n%s", err, out)
+	}
 }
 
 func (lb *liveBackend) dind(t *testing.T, lv *live) {
