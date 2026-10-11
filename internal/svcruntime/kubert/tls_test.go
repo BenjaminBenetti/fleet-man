@@ -11,11 +11,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -410,6 +412,74 @@ func TestMaintainRenewsTheServersCertificate(t *testing.T) {
 		t.Fatal("the upkeep made a CA again for a fleet that left the connection")
 	}
 	sameList(t, "objects of a fleet that left", f.objects(t), want(m, "pvc/buildkit"))
+}
+
+// TestBuildkitGCFollowsItsVolume: the server's cache limit is 80% of its
+// volume, in its config and on its pod template; once the volume has grown
+// (its capacity, not just its request) the upkeep gives the server the new
+// limit, replacing its pod, and leaves a server whose limit is current
+// alone.
+func TestBuildkitGCFollowsItsVolume(t *testing.T) {
+	f := useFake(t)
+	rt := For(testCluster)
+	m := meta("alpha")
+	if err := rt.EnsureService("alpha", fleet.ServiceBuildkit); err != nil {
+		t.Fatal(err)
+	}
+	limit := func() (string, string) {
+		t.Helper()
+		cm, err := f.cs.CoreV1().ConfigMaps("fleet").Get(context.Background(), m.name(names.SuffixBuildkit), metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		toml := cm.Data["buildkitd.toml"]
+		i := strings.Index(toml, "maxUsedSpace = ")
+		if i < 0 {
+			t.Fatalf("no maxUsedSpace:\n%s", toml)
+		}
+		return strings.Trim(strings.Fields(toml[i+len("maxUsedSpace = "):])[0], `"`), buildkitDeployment(t, f, m).Annotations[annotationBuildkitGC]
+	}
+	want20 := strconv.FormatInt(gcLimit(resource.MustParse(fleet.DefaultKubeCacheSizes.Buildkit)), 10)
+	if cfg, ann := limit(); cfg != want20 || ann != want20 {
+		t.Fatalf("a new server's limit: config %s, template %s, want %s", cfg, ann, want20)
+	}
+	maintain := func() {
+		t.Helper()
+		if err := rt.Maintain(context.Background(), "alpha", []fleet.SharedService{fleet.ServiceBuildkit}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	maintain()
+	if _, ann := limit(); ann != want20 {
+		t.Fatalf("the upkeep changed a current limit: %s", ann)
+	}
+	// A growth asked for (the request) but not done (the capacity): the
+	// filesystem is still the old size, so the limit stays.
+	pvcs := f.cs.CoreV1().PersistentVolumeClaims("fleet")
+	pvc, err := pvcs.Get(context.Background(), m.name(names.SuffixBuildkit), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	pvc.Spec.Resources.Requests[corev1.ResourceStorage] = resource.MustParse("30Gi")
+	pvc.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: old}
+	if pvc, err = pvcs.Update(context.Background(), pvc, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	maintain()
+	if cfg, ann := limit(); cfg != want20 || ann != want20 {
+		t.Fatalf("a growth under way changed the limit: config %s, template %s", cfg, ann)
+	}
+	// The growth done: the limit follows.
+	pvc.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("30Gi")}
+	if _, err := pvcs.Update(context.Background(), pvc, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	maintain()
+	want30 := strconv.FormatInt(gcLimit(resource.MustParse("30Gi")), 10)
+	if cfg, ann := limit(); cfg != want30 || ann != want30 {
+		t.Fatalf("after the growth: config %s, template %s, want %s", cfg, ann, want30)
+	}
 }
 
 // TestEnsureCAKeepsAGoodServerCertificateWhenTheClockGoesBack: a clock set

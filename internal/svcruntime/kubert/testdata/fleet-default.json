@@ -278,7 +278,7 @@
 {
   "apiVersion": "v1",
   "data": {
-    "buildkitd.toml": "# Written by fleet: the shared Buildkit server of fleet \"fleet-man\".\n[worker.oci]\n  gc = true\n  maxUsedSpace = \"80%\"\n[worker.containerd]\n  enabled = false\n"
+    "buildkitd.toml": "# Written by fleet: the shared Buildkit server of fleet \"fleet-man\".\n# Its cache stays under 80% of its 20Gi volume.\n[worker.oci]\n  gc = true\n  maxUsedSpace = \"17179869184\"\n[worker.containerd]\n  enabled = false\n"
   },
   "kind": "ConfigMap",
   "metadata": {
@@ -377,6 +377,7 @@
       "metadata": {
         "annotations": {
           "consul.hashicorp.com/connect-inject": "false",
+          "fleet.dev/buildkit-gc": "17179869184",
           "fleet.dev/buildkit-tls": "4a1e1c14794adfff",
           "kuma.io/sidecar-injection": "disabled",
           "linkerd.io/inject": "disabled",

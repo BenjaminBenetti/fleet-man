@@ -87,8 +87,8 @@ func fleetObjects(t *testing.T, rec *fleet.KubeCluster, rootful bool) []metav1.O
 		objs = append(objs, cacheVolume(testMeta, rec, svc, size))
 		in := deploymentInput{Rec: rec, Rootful: rootful}
 		if svc == fleet.ServiceBuildkit {
-			objs = append(objs, buildkitConfig(testMeta, testAnchor), buildkitSecret(testMeta, testAnchor, testCA))
-			in.TLSHash = testCA.tlsHash()
+			objs = append(objs, buildkitConfig(testMeta, testAnchor, size), buildkitSecret(testMeta, testAnchor, testCA))
+			in.TLSHash, in.GCLimit = testCA.tlsHash(), gcLimit(size)
 		}
 		dep, err := cacheDeployment(testMeta, svc, testAnchor, in)
 		if err != nil {
@@ -278,13 +278,17 @@ func TestFleetNetwork(t *testing.T) {
 }
 
 // TestCacheCleanup: each cache cleans up below its volume. Buildkit's GC
-// keeps the cache under 80% of the disk it is on; the registry mirror may
-// delete what it proxied (its 7-day expiry); the deb cache's expiry run is
-// apt-cacher-ng's own.
+// keeps the cache under 80% of its volume, as a size (buildkit's own
+// percentage is of the filesystem, the node's whole disk on a hostpath
+// class); the registry mirror may delete what it proxied (its 7-day
+// expiry); the deb cache's expiry run is apt-cacher-ng's own.
 func TestCacheCleanup(t *testing.T) {
-	cm := buildkitConfig(testMeta, testAnchor)
-	if toml := cm.Data["buildkitd.toml"]; !strings.Contains(toml, "gc = true") || !strings.Contains(toml, `maxUsedSpace = "80%"`) {
+	cm := buildkitConfig(testMeta, testAnchor, resource.MustParse("20Gi"))
+	if toml := cm.Data["buildkitd.toml"]; !strings.Contains(toml, "gc = true") || !strings.Contains(toml, `maxUsedSpace = "17179869184"`) {
 		t.Errorf("buildkitd.toml:\n%s", toml)
+	}
+	if got := gcLimit(resource.MustParse("30Gi")); got != 30<<30*80/100 {
+		t.Errorf("gcLimit(30Gi) = %d", got)
 	}
 	for _, rootful := range []bool{false, true} {
 		dep, _ := cacheDeployment(testMeta, fleet.ServiceBuildkit, testAnchor, deploymentInput{Rootful: rootful})

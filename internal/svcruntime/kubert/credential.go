@@ -6,7 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
@@ -187,13 +191,39 @@ func (r *Runtime) refreshBuildkit(ctx context.Context, c *conn, m fleetMeta) err
 	if r.leftCluster(m.Fleet, "refresh buildkit") || c.buildkitRefusal(ctx) != nil {
 		return nil
 	}
-	if _, changed, err := ensureCA(c.cluster, m, now()); err != nil || !changed {
+	_, changed, err := ensureCA(c.cluster, m, now())
+	if err != nil {
 		return err
+	}
+	stale := !changed && c.buildkitGCStale(ctx, m)
+	if !changed && !stale {
+		return nil
 	}
 	if err := c.ensureService(ctx, m, fleet.ServiceBuildkit); err != nil {
 		return err
 	}
 	watchReady(c, m, fleet.ServiceBuildkit)
+	if stale {
+		flog.Info("kube buildkit: the server's cache limit follows its volume", "cluster", c.cluster, "fleet", m.Fleet)
+		return nil
+	}
 	flog.Info("kube buildkit: the server has a new certificate", "cluster", c.cluster, "fleet", m.Fleet)
 	return nil
+}
+
+// buildkitGCStale reports whether fleet m's Buildkit server runs with a
+// cache limit its volume no longer has (the volume grew since, or the server
+// predates the limit). No server, or one that cannot be read: false.
+func (c *conn) buildkitGCStale(ctx context.Context, m fleetMeta) bool {
+	name := m.name(names.SuffixBuildkit)
+	d, err := c.scope.Client.AppsV1().Deployments(m.Namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	pvc, err := c.scope.Client.CoreV1().PersistentVolumeClaims(m.Namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	want := strconv.FormatInt(gcLimit(volumeSize(pvc.Spec.Resources.Requests[corev1.ResourceStorage], pvc)), 10)
+	return d.Spec.Template.Annotations[annotationBuildkitGC] != want
 }

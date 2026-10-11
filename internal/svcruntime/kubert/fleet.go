@@ -105,17 +105,20 @@ func (c *conn) ensureService(ctx context.Context, m fleetMeta, svc fleet.SharedS
 	if err != nil {
 		return err
 	}
-	if err := c.ensureVolume(ctx, m, svc); err != nil {
+	volume, err := c.ensureVolume(ctx, m, svc)
+	if err != nil {
 		return err
 	}
 	in := deploymentInput{Rec: &c.rec}
 	if svc == fleet.ServiceBuildkit {
-		// Its config, and its certificate with the CA it takes instances'
-		// certificates of; rootful where the connection allows privileged
-		// pods, else rootless.
-		if _, err := c.apply(ctx, buildkitConfig(m, owner)); err != nil {
+		// Its config (its GC limit a share of its volume), and its
+		// certificate with the CA it takes instances' certificates of;
+		// rootful where the connection allows privileged pods, else
+		// rootless.
+		if _, err := c.apply(ctx, buildkitConfig(m, owner, volume)); err != nil {
 			return err
 		}
+		in.GCLimit = gcLimit(volume)
 		ca, _, err := ensureCA(c.cluster, m, now())
 		if err != nil {
 			return err
@@ -139,18 +142,20 @@ func (c *conn) ensureService(ctx context.Context, m fleetMeta, svc fleet.SharedS
 // ensureVolume applies svc's volume at its configured size, or the size it
 // has when that is larger (a volume only grows: an expanded one keeps its
 // size, and a smaller setting applies to the next volume, after a wipe). An
-// existing volume keeps its StorageClass, which cannot change.
-func (c *conn) ensureVolume(ctx context.Context, m fleetMeta, svc fleet.SharedService) error {
+// existing volume keeps its StorageClass, which cannot change. It returns
+// the volume's size: its request, or the capacity it has while a growth is
+// under way (its filesystem is still the smaller one).
+func (c *conn) ensureVolume(ctx context.Context, m fleetMeta, svc fleet.SharedService) (resource.Quantity, error) {
 	size, err := cacheSize(&c.rec, svc)
 	if err != nil {
-		return err
+		return resource.Quantity{}, err
 	}
 	want := cacheVolume(m, &c.rec, svc, size)
 	live, err := c.scope.Client.CoreV1().PersistentVolumeClaims(m.Namespace).Get(ctx, want.Name, metav1.GetOptions{})
 	switch {
 	case gone(err):
 	case err != nil:
-		return fmt.Errorf("reading %s/%s: %w", kubernetes.KindPVC, want.Name, err)
+		return resource.Quantity{}, fmt.Errorf("reading %s/%s: %w", kubernetes.KindPVC, want.Name, err)
 	default:
 		have := live.Spec.Resources.Requests[corev1.ResourceStorage]
 		if have.Cmp(size) > 0 {
@@ -167,7 +172,21 @@ func (c *conn) ensureVolume(ctx context.Context, m fleetMeta, svc fleet.SharedSe
 		want.Spec.Resources.Requests[corev1.ResourceStorage] = have.DeepCopy()
 		_, err = c.apply(ctx, want)
 	}
-	return err
+	if err != nil {
+		return resource.Quantity{}, err
+	}
+	return volumeSize(want.Spec.Resources.Requests[corev1.ResourceStorage], live), nil
+}
+
+// volumeSize is a cache volume's size: its request, or live's capacity
+// while that is smaller (a growth not done yet). live may be nil or empty.
+func volumeSize(request resource.Quantity, live *corev1.PersistentVolumeClaim) resource.Quantity {
+	if live != nil {
+		if capacity, ok := live.Status.Capacity[corev1.ResourceStorage]; ok && !capacity.IsZero() && capacity.Cmp(request) < 0 {
+			return capacity.DeepCopy()
+		}
+	}
+	return request.DeepCopy()
 }
 
 // isResizeRefused reports an API server refusal to grow a volume.

@@ -5,6 +5,8 @@ package kubert
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -318,18 +320,22 @@ func cacheService(m fleetMeta, svc fleet.SharedService, owner metav1.OwnerRefere
 }
 
 // buildkitConfig is buildkitd.toml: its GC keeps the cache under
-// gcKeepPercent of the volume, a share of the disk the cache is on, so it
-// follows the volume when it grows. (Buildkit 0.17 renamed the limit:
-// maxUsedSpace is the most the cache may use; gckeepstorage now sets the
-// floor it never prunes below.)
-func buildkitConfig(m fleetMeta, owner metav1.OwnerReference) *corev1.ConfigMap {
+// gcKeepPercent of its volume, whose size is volume (gcLimit). The limit is
+// a size, not buildkit's own percentage: that is of the filesystem the cache
+// is on, which for a class whose volumes are folders of the node's disk
+// (hostpath, local-path) is the node's whole disk. A grown volume gets its
+// new limit at the next upkeep (refreshBuildkit). (Buildkit 0.17 renamed
+// the limit: maxUsedSpace is the most the cache may use; gckeepstorage now
+// sets the floor it never prunes below.)
+func buildkitConfig(m fleetMeta, owner metav1.OwnerReference, volume resource.Quantity) *corev1.ConfigMap {
 	toml := fmt.Sprintf(`# Written by fleet: the shared Buildkit server of fleet %q.
+# Its cache stays under %d%% of its %s volume.
 [worker.oci]
   gc = true
-  maxUsedSpace = "%d%%"
+  maxUsedSpace = "%d"
 [worker.containerd]
   enabled = false
-`, m.Fleet, gcKeepPercent)
+`, m.Fleet, gcKeepPercent, volume.String(), gcLimit(volume))
 	om := m.objectMeta(names.SuffixBuildkit, m.serviceLabels(fleet.ServiceBuildkit), &owner)
 	return &corev1.ConfigMap{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
@@ -347,10 +353,27 @@ type deploymentInput struct {
 	// TLSHash names buildkit's server certificate and CA (buildkitCA's
 	// tlsHash): a new one replaces its pod.
 	TLSHash string
+	// GCLimit is buildkit's cache limit in bytes (gcLimit of its volume):
+	// buildkitd reads its config at start, so a new one (a grown volume)
+	// replaces its pod.
+	GCLimit int64
 }
 
 // annotationBuildkitTLS on buildkit's pod template is its TLSHash.
 const annotationBuildkitTLS = "fleet.dev/buildkit-tls"
+
+// annotationBuildkitGC on buildkit's pod template is its GCLimit.
+const annotationBuildkitGC = "fleet.dev/buildkit-gc"
+
+// gcLimit is the most Buildkit's cache may use on a volume of size volume:
+// gcKeepPercent of it, in bytes.
+func gcLimit(volume resource.Quantity) int64 {
+	v := volume.Value()
+	if v > math.MaxInt64/gcKeepPercent {
+		return v / 100 * gcKeepPercent
+	}
+	return v * gcKeepPercent / 100
+}
 
 // cacheDeployment is svc's Deployment: one pod, replaced (Recreate) rather
 // than rolled, since its volume mounts on one node at a time; placed like
@@ -386,7 +409,7 @@ func cacheDeployment(m fleetMeta, svc fleet.SharedService, owner metav1.OwnerRef
 	}
 	template := corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: m.serviceLabels(svc)}, Spec: spec}
 	if svc == fleet.ServiceBuildkit {
-		template.Annotations = map[string]string{annotationBuildkitTLS: in.TLSHash}
+		template.Annotations = map[string]string{annotationBuildkitTLS: in.TLSHash, annotationBuildkitGC: strconv.FormatInt(in.GCLimit, 10)}
 		if !in.Rootful {
 			// The rootless server's user owns its volume and reads its
 			// Secret through the pod's group.
