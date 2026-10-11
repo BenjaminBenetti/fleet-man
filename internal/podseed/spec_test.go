@@ -38,6 +38,25 @@ func TestJobSpecValidate(t *testing.T) {
 	if err := reset.Validate(); err != nil {
 		t.Fatalf("a reset: %v", err)
 	}
+	cached := validSeedSpec()
+	cached.Seed.Cache = "abc234def567"
+	if err := cached.Validate(); err != nil {
+		t.Fatalf("a seed from a seed cache: %v", err)
+	}
+	if err := (JobSpec{V: 1, Op: OpSeedCache, Gen: 1, PVC: "/p", Cache: "abc234def567"}).Validate(); err != nil {
+		t.Fatalf("a seed cache trim: %v", err)
+	}
+	for name, spec := range map[string]JobSpec{
+		"trim without an id":    {V: 1, Op: OpSeedCache, Gen: 1, PVC: "/p"},
+		"trim with a seed":      {V: 1, Op: OpSeedCache, Gen: 1, PVC: "/p", Cache: "abc", Seed: validSeedSpec().Seed},
+		"an id on another op":   {V: 1, Op: OpCommit, Gen: 1, PVC: "/p", Cache: "abc"},
+		"an id that is a path":  {V: 1, Op: OpSeedCache, Gen: 1, PVC: "/p", Cache: "../abc"},
+		"an id in another case": {V: 1, Op: OpSeedCache, Gen: 1, PVC: "/p", Cache: "ABC"},
+	} {
+		if err := spec.Validate(); err == nil {
+			t.Errorf("%s: Validate accepted %+v", name, spec)
+		}
+	}
 	for name, mutate := range map[string]func(*JobSpec){
 		"version":         func(s *JobSpec) { s.V = 2 },
 		"gen":             func(s *JobSpec) { s.Gen = 0 },
@@ -65,6 +84,8 @@ func TestJobSpecValidate(t *testing.T) {
 		"volume target":   func(s *JobSpec) { s.Seed.Volumes[0].Target = "x" },
 		"workspace owner": func(s *JobSpec) { s.Seed.Workspace.Owner.GID = -2 },
 		"workers":         func(s *JobSpec) { s.Seed.Workers = -1 },
+		"cache id":        func(s *JobSpec) { s.Seed.Cache = "a/b" },
+		"cache on reset":  func(s *JobSpec) { s.Gen, s.Seed.Reset, s.Seed.PrevGen, s.Seed.Cache = 2, true, 1, "abc" },
 	} {
 		s := validSeedSpec()
 		seed := *s.Seed
