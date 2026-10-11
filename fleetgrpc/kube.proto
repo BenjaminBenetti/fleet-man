@@ -425,6 +425,21 @@ message KubeCapabilities {
   KubeOrphans orphans = 31;
   // pending_teardowns counts deletions waiting for the cluster.
   int32 pending_teardowns = 32;
+
+  // shared_storage_class is the StorageClass new fleet shares are made in:
+  // the connection's shared_storage_class, else Auto's pick (a class that
+  // passed the multi-node test, else the instance disks' in single-node
+  // mode); empty for the cluster's default class, and on the copy tier.
+  string shared_storage_class = 33;
+  // instance_storage_class is the StorageClass new instance disks are made
+  // in: the connection's storage_class, else Auto's pick; empty for the
+  // cluster's default class (StorageClasses not readable).
+  string instance_storage_class = 34;
+  // share_refused says why no fleet share can be made on the connection (a
+  // shared_storage_class that fails the multi-node test's file system
+  // checks): an instance with fleet mounts is refused with it. Empty while
+  // shares can be made.
+  string share_refused = 35;
 }
 
 // KubeAdmission is the result of the dry-run canaries.
@@ -450,7 +465,15 @@ message KubeStorageClass {
   string reclaim_policy = 8;
   bool csi_clone = 9;
   bool selinux_mount = 10;
-  // multi_node_test is the cached result of the multi-node share test.
+  // multi_node_test is the cached result of the multi-node share test (an
+  // RWX volume of the class mounted by two pods on two nodes, and the file
+  // system checks across them): PASS for a class fleet shares can use from
+  // any node; WARN when it could not tell or the volume works but not
+  // across nodes (one node ran both pods); FAIL with the check that failed,
+  // or when no ReadWriteMany volume of the class could be mounted from a
+  // second node; SKIPPED with why it was not tested (node-local, block
+  // disks only, a large minimum size awaiting consent). Absent when the
+  // connection never tested it.
   KubeCheck multi_node_test = 11;
 }
 
@@ -919,6 +942,11 @@ message TestKubeClusterRequest {
   // step (route, TLS, credential or digest) is named. Saved connections only;
   // a draft skips them.
   bool deep = 3;
+  // storage_classes run the multi-node storage test on these StorageClasses
+  // now, cached result or not, a class whose volumes have a large minimum
+  // size (Filestore) included: naming it is the consent Auto asks for
+  // before it tests one. Saved connections only.
+  repeated string storage_classes = 4;
 }
 
 // TestKubeClusterEvent is one step of a streamed preflight.

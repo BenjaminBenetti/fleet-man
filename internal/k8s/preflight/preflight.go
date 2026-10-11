@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -58,8 +59,10 @@ const (
 	callTimeout = 15 * time.Second
 	// CredentialTimeout bounds one run of the credential plugin.
 	CredentialTimeout = 30 * time.Second
-	// FullTimeout bounds a whole full preflight.
-	FullTimeout = 3 * time.Minute
+	// FullTimeout bounds a whole full preflight: its checks (a few minutes
+	// at most), and the multi-node storage test of a class it has no
+	// result for.
+	FullTimeout = 3*time.Minute + StorageTestTimeout
 )
 
 // LeaseClaimer is the connection's owner Lease (owner.Lease).
@@ -97,8 +100,17 @@ type Target struct {
 	Deep bool
 	// MultiPodRWO is what the last deep test found of two pods on one node
 	// mounting one RWO volume (share_pods), which a full run without one
-	// keeps: nil when none has told.
+	// keeps: nil when none has told (then StorageCache's, if it has one).
 	MultiPodRWO *bool
+	// StorageCache is the connection's storage test cache
+	// (OpenStorageCache): the multi-node tests' results, which a run reads
+	// and adds to. nil runs no test (a draft connection): every class is
+	// then as untested.
+	StorageCache *StorageCache
+	// TestStorage are StorageClasses to run the multi-node test on now,
+	// cached result or not (TestKubeClusterRequest.storage_classes): the
+	// consent a class with a large minimum size needs before Auto tests it.
+	TestStorage []string
 	// Now replaces time.Now (tests).
 	Now func() time.Time
 }
@@ -137,7 +149,7 @@ type Result struct {
 	DeepCheckedAt time.Time
 	// MultiPodRWO is what this run's deep test found of two pods on one
 	// node mounting one RWO volume (nil when it did not tell), for the next
-	// run's Target.
+	// run's Target (and kept in its StorageCache).
 	MultiPodRWO *bool
 }
 
@@ -198,14 +210,26 @@ type run struct {
 	ownerConflict string
 
 	// what the checks learned, for the ones after them
-	user      string
-	nsExists  bool
-	multiNode bool
-	csiLimits map[string]map[string]int32 // node -> CSI driver -> attach limit
-	rootClass *fleetgrpc.KubeStorageClass
+	user     string
+	nsExists bool
+	// multiNode: the nodes were read and are several; nodesKnown: they
+	// were read. providers are their provider ids, by name.
+	multiNode  bool
+	nodesKnown bool
+	providers  map[string]string
+	csiLimits  map[string]map[string]int32 // node -> CSI driver -> attach limit
+	rootClass  *fleetgrpc.KubeStorageClass
+	// classObjs are the StorageClasses as listed, by name;
+	// classesUnreadable says the listing was forbidden.
+	classObjs         map[string]*storagev1.StorageClass
+	classesUnreadable bool
 	// multiPodRWO is the two-pod probe's word: the last deep test's, then
 	// this one's.
 	multiPodRWO *bool
+	// storage are the multi-node test results of this run, by class;
+	// storageFresh the keys tested in it.
+	storage      map[string]StorageTest
+	storageFresh map[string]bool
 }
 
 // Full runs every check, passing each to report as it starts (RUNNING) and
@@ -218,7 +242,11 @@ func Full(ctx context.Context, t Target, report func(*fleetgrpc.KubeCheck)) Resu
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	r := &run{t: &t, report: report, caps: &fleetgrpc.KubeCapabilities{}, multiPodRWO: t.MultiPodRWO}
+	multiPod := t.MultiPodRWO
+	if multiPod == nil {
+		multiPod = t.StorageCache.MultiPodRWO()
+	}
+	r := &run{t: &t, report: report, caps: &fleetgrpc.KubeCapabilities{}, multiPodRWO: multiPod}
 	r.full(ctx)
 	return r.finish(true)
 }

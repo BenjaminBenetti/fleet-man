@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/execas"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeshim"
@@ -160,6 +161,39 @@ func TestExecSpec(t *testing.T) {
 	in.Merged = json.RawMessage(`{"userEnvProbe":"bogus"}`)
 	if _, err := Translate(in); len(Refusals(err)) != 1 || Refusals(err)[0].Code != CodeSettings {
 		t.Errorf("an unknown userEnvProbe: %v", err)
+	}
+}
+
+// TestExecSpecKeepsCodexSQLitePodLocal: on a fleet share mounted from
+// several nodes, with Codex's home on it, every command gets
+// CODEX_SQLITE_HOME below its home (the instance's own disk); one node's
+// share, or no Codex mount, sets nothing.
+func TestExecSpecKeepsCodexSQLitePodLocal(t *testing.T) {
+	codex := []backend.Mount{{LocalPath: "/h/.fleet/workspaces/f/.codex", ContainerPath: "/home/vscode/.codex", Scope: backend.MountScopeFleetShared, SubPath: ".codex"}}
+	claude := []backend.Mount{{LocalPath: "/h/.fleet/workspaces/f/.claude", ContainerPath: "/home/vscode/.claude", Scope: backend.MountScopeFleetShared, SubPath: ".claude"}}
+	for _, tc := range []struct {
+		name   string
+		multi  bool
+		mounts []backend.Mount
+		want   map[string]string
+	}{
+		{"multi-node with Codex", true, codex, map[string]string{CodexSQLiteHomeEnv: CodexSQLiteHome}},
+		{"single-node", false, codex, nil},
+		{"no Codex mount", true, claude, nil},
+	} {
+		in := baseInput(nil, nil, nil)
+		in.MultiNodeShare, in.FleetMounts = tc.multi, tc.mounts
+		res, err := Translate(in)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		var spec execas.Spec
+		if err := json.Unmarshal(res.Secrets.Spec[ExecFile], &spec); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(spec.HomeEnv, tc.want) {
+			t.Errorf("%s: home_env %v, want %v", tc.name, spec.HomeEnv, tc.want)
+		}
 	}
 }
 

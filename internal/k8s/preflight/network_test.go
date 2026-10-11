@@ -43,6 +43,21 @@ func TestParseNetworkProbe(t *testing.T) {
 	}
 }
 
+// TestParseNetworkProbeReadsInotifyLimits: the client pod's node's inotify
+// limits come with the verdict (0 when the node has none to read).
+func TestParseNetworkProbeReadsInotifyLimits(t *testing.T) {
+	v, err := parseNetworkProbe("metadata=unreached\npeer=unreached\ninotify_instances=128\ninotify_watches=43485\n")
+	if err != nil || v.inotifyInstances != 128 || v.inotifyWatches != 43485 {
+		t.Fatalf("%+v %v", v, err)
+	}
+	if v, _ := parseNetworkProbe("metadata=unreached\npeer=unreached\ninotify_instances=\ninotify_watches=x\n"); v.inotifyInstances != 0 || v.inotifyWatches != 0 {
+		t.Fatalf("unread limits: %+v", v)
+	}
+	if !strings.Contains(probeScript("10.0.0.7"), "/proc/sys/fs/inotify/max_user_instances") {
+		t.Fatal("the client does not read the inotify limits")
+	}
+}
+
 // The client tries the metadata address and the target, one wget each, and
 // counts any HTTP answer (busybox's "server returned error") as reached.
 func TestProbeScript(t *testing.T) {

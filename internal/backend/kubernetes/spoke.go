@@ -31,7 +31,9 @@ import (
 // pods of a fleet's share elect the oldest running one (ElectSpoke), and the
 // share's lease (a lock on the share, whose epoch counts its spokes) keeps a
 // second from running beside it; fleetd refuses a spoke whose epoch is older
-// than one it already saw for the same tree (it lost the lease).
+// than one it already saw for the same tree (it lost the lease). On a share
+// mounted from several nodes, the other pods hint the spoke of their nodes'
+// changes (sharehint.go).
 
 // spokeLeases are the newest lease epoch fleetd saw for each tree (by
 // connection and the share's PVC, or instance key on the copy tier).
@@ -73,7 +75,9 @@ type SpokeLink struct {
 	// Ctl is the spoke's control connection.
 	Ctl  net.Conn
 	sess *AgentSession
-	tree string
+	// tree is its lease tree (leaseTree), share its ShareTree (where its
+	// pods' hints go).
+	tree, share string
 }
 
 // OpenBulk opens one of the spoke's bulk connections: a TagSyncBulk stream
@@ -105,7 +109,7 @@ func (p *Pool) OpenSpoke(ctx context.Context, t PodTarget, key string, share Sha
 	if err != nil {
 		return nil, fmt.Errorf("starting the share's spoke in pod %s: %w", t.Pod(), err)
 	}
-	return &SpokeLink{Ctl: ctl, sess: sess, tree: tree}, nil
+	return &SpokeLink{Ctl: ctl, sess: sess, tree: tree, share: ShareTree(t.Cluster, key, share)}, nil
 }
 
 // leaseTree names the tree whose lease epochs a spoke's go by: its
@@ -139,8 +143,13 @@ func (p *Pool) leaseTree(ctx context.Context, clusterID, key string, share Share
 // the pod's bulk session; a spoke with a stale lease is refused.
 func (p *Pool) ServeSpoke(ctx context.Context, link *SpokeLink, hub sharesync.RemoteHub, info sharesync.SideInfo, attached func(lease uint64)) error {
 	defer link.Close()
+	// The share's other pods' hints of changes on their nodes come here
+	// while it is served (sharehint.go).
+	hints, release := takeHints(link.share)
+	defer release()
 	return sharesync.ServeRemote(ctx, link.Ctl, hub, info, sharesync.RemoteOptions{
 		OpenBulk: link.OpenBulk,
+		Hints:    hints,
 		Accept:   func(lease uint64) error { return acceptLease(link.tree, lease) },
 		Attached: func(lease uint64) {
 			flog.Info("kube share: the spoke is attached", "side", info.ID, "pod", link.sess.Pod().Name, "lease", lease)

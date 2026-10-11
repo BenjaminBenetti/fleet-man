@@ -8,10 +8,15 @@
 // incomplete), the owner Lease, nodes, admission dry-runs of generic Pod,
 // StatefulSet and Job canaries in the unprivileged, debug-capability and
 // privileged shapes (and the shared Buildkit pod), StorageClass
-// classification, snapshot classes, LimitRange and ResourceQuota headroom,
+// classification with Auto's instance-disk class, fleet shares' mode and
+// class (the multi-node storage test of a class it has no cached result for:
+// an RWX volume mounted by pods on two nodes, storagetest.go), snapshot
+// classes, LimitRange and ResourceQuota headroom,
 // the metrics API, runtime classes and a scan of the namespace's RoleBindings
-// for other subjects that can reach into instances. Shallow is the cheap
-// probe between full runs: reach and the owner Lease.
+// for other subjects that can reach into instances. With Deep it then runs
+// the throwaway-pod probes: a pull through the gateway, the pods' network,
+// two pods on one RWO volume, and the multi-node storage tests again.
+// Shallow is the cheap probe between full runs: reach and the owner Lease.
 //
 // The result's state follows from what the checks found, not from their
 // pass/warn/fail marks: LIMITED is reserved for degraded usability

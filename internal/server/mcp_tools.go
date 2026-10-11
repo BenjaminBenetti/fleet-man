@@ -162,7 +162,7 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	}, s.mcpClusterList)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_cluster_test",
-		Description: "Run every check of a Kubernetes cluster connection (by id, name or context) on the daemon and return each check's result with the resulting health; usable is true when the cluster is ready or limited. deep also runs the throwaway-pod probes (a pod pulls through the gateway). Blocks for the run, usually seconds (at most a few minutes).",
+		Description: "Run every check of a Kubernetes cluster connection (by id, name or context) on the daemon and return each check's result with the resulting health; usable is true when the cluster is ready or limited. deep also runs the throwaway-pod probes (a pod pulls through the gateway); storage_classes runs the multi-node storage test on those StorageClasses now (the consent a class with a large minimum size needs before Auto tests it). Blocks for the run, usually seconds (at most a few minutes).",
 	}, s.mcpClusterTest)
 }
 

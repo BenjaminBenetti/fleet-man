@@ -220,6 +220,13 @@ FLEET_ITEST_BACKEND=kubernetes FLEET_ITEST_CLUSTER="${ctx}" FLEET_ITEST_RANGE=81
 ./integration/clusters/kind-shared-path.sh down p405
 ```
 
+`tests/823_k8s_share_multi_node.sh` (multi-node mode: Auto's tested
+ReadWriteMany class, siblings on two nodes) needs two schedulable nodes and a
+StorageClass of csi-driver-nfs (`nfs.csi.k8s.io`): a kind cluster with two
+workers, an NFS server and the driver installed (its manifests, and
+`deploy/example/nfs-provisioner` for the server, on a tmpfs volume: an overlay
+folder cannot be exported); elsewhere it passes saying it did not run.
+
 ## Prerequisites
 
 - Go toolchain (for building `fleet`)

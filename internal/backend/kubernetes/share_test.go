@@ -243,7 +243,7 @@ func TestPrepareShareRefusesImmediateBindingOnManyNodes(t *testing.T) {
 	// A multi-node share is mounted from any node: its class may bind at
 	// once.
 	multi := shareCaps(wffc, immediate)
-	multi.ShareMode = string(topology.MultiNode)
+	multi.ShareMode, multi.SharedStorageClass = string(topology.MultiNode), "fast"
 	mcs := fake.NewClientset()
 	go func() {
 		for {
@@ -307,13 +307,19 @@ func TestLayoutOf(t *testing.T) {
 	}
 }
 
+// TestShareModeOf: a new share takes the preflight's mode, multi-node only
+// in the class that passed the multi-node test (one set since is not known
+// to).
 func TestShareModeOf(t *testing.T) {
 	for mode, want := range map[string]topology.Mode{"": topology.SingleNode, "single-node": topology.SingleNode, "copy": topology.Copy, "multi-node": topology.MultiNode, "bogus": topology.SingleNode} {
-		if got := shareModeOf(&fleetgrpc.KubeCapabilities{ShareMode: mode}); got != want {
+		if got := shareModeOf(&fleetgrpc.KubeCapabilities{ShareMode: mode, SharedStorageClass: "nfs"}, "nfs"); got != want {
 			t.Errorf("shareModeOf(%q) = %s, want %s", mode, got, want)
 		}
 	}
-	if shareModeOf(nil) != topology.SingleNode {
+	if got := shareModeOf(&fleetgrpc.KubeCapabilities{ShareMode: "multi-node", SharedStorageClass: "nfs"}, "cephfs"); got != topology.SingleNode {
+		t.Errorf("a class the multi-node test did not pass is %s", got)
+	}
+	if shareModeOf(nil, "") != topology.SingleNode {
 		t.Error("no preflight yet: not single-node")
 	}
 }

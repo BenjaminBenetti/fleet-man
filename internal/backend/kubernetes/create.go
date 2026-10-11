@@ -6,9 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +28,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/jobboot"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/owner"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/topology"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeshim"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
@@ -164,6 +163,9 @@ type creation struct {
 	// share is where the instance's fleet mounts live (share.go); nil
 	// without any.
 	share *shareState
+	// keptDiskClass is the StorageClass of the disk a rebuild keeps (""
+	// for a new disk: diskClass resolves it).
+	keptDiskClass string
 }
 
 // what is the job, for its messages.
@@ -531,9 +533,10 @@ func (c *creation) input(capture *kubeshim.Capture, image kubeshim.ImageConfig, 
 	return podspec.Input{
 		Capture: capture, Image: image, Merged: cfg.Merged,
 		WorkspaceDir: c.req.WorkspaceDir, WorkspaceFolder: cfg.WorkspaceFolder,
-		FleetMounts: c.req.Mounts, Cluster: &rec, Facts: clusterFacts(c.facts, rec.StorageClass),
+		FleetMounts: c.req.Mounts, Cluster: &rec, Facts: clusterFacts(c.facts, c.diskClass()),
 		HostAgentSockets: agentsock.HostAgentPaths(),
 		SSHAuthSock:      agentsock.ContainerSocketPath,
+		MultiNodeShare:   c.share != nil && c.share.mode == topology.MultiNode,
 	}
 }
 
@@ -563,7 +566,7 @@ func (c *creation) renderInput(image podspec.ImageRef, seed *podspec.JobInput) p
 		Cluster: &rec, Namespace: c.ns, Name: c.id.sts, Key: c.id.key, Owner: c.owner, ClusterID: c.id.cluster,
 		FleetName: c.id.fleet, FleetHash: names.FleetHash(c.daemonID, c.id.cluster, c.id.fleet),
 		InstanceName: c.id.name, Gen: c.gen, CreatedAt: c.created, Replicas: 1,
-		Image: image, StorageClass: rec.StorageClass, Identity: c.identity,
+		Image: image, StorageClass: c.diskClass(), Identity: c.identity,
 		SELinuxLevel: podspec.SELinuxLevel(names.FleetHash(c.daemonID, c.id.cluster, c.id.fleet)),
 		SELinuxMount: c.share != nil && c.share.selinuxMount,
 		Share:        c.share.input(),
@@ -977,16 +980,8 @@ func instanceIdentity(caps *fleetgrpc.KubeCapabilities) podspec.Identity {
 }
 
 // shareIDs are the uid and gid the remote user is remapped to and the
-// workspace is owned by: the daemon host user's on a Linux daemon (what the
-// devcontainer CLI's own remap gives a docker instance there), else 1000.
-func shareIDs() (int, int) {
-	if runtime.GOOS == "linux" {
-		if uid, gid := os.Getuid(), os.Getgid(); uid > 0 && gid > 0 {
-			return uid, gid
-		}
-	}
-	return 1000, 1000
-}
+// workspace is owned by (podspec.ShareIDs).
+func shareIDs() (int, int) { return podspec.ShareIDs() }
 
 // clusterFacts is the translation's view of the preflight's findings, for
 // an instance disk of StorageClass class ("" is the cluster's default).

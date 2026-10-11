@@ -21,14 +21,19 @@ import (
 // share.go is how a connection holds its fleets' shares (the volume a
 // fleet's agent dirs, shared files and custom mounts live on): the share
 // mode and its StorageClass (shared_storage), and the deep test's two-pod
-// probe of one ReadWriteOnce volume (share_pods). Until the StorageClass
-// picker's multi-node test, every share is in single-node mode: the fleet's
-// instances run together on the node holding it, in the connection's shared
-// class, else the instance disks'. When two pods on one node cannot mount
-// one RWO volume (share_pods failed), fleets get no share at all: each
-// instance keeps its own copy of the fleet's folders (the copy tier), and
-// agent logins may need repeating, since copies that each refresh a login
-// race (the P4 refresh spike ruled the single-refresher fix unsafe).
+// probe of one ReadWriteOnce volume (share_pods).
+//
+// A class that passed the multi-node test (storagetest.go) holds shares in
+// multi-node mode: the fleet's instances run on any node, sharing one
+// ReadWriteMany volume. Auto picks one (the connection's shared class when
+// it names one: one that fails the test's file system checks is refused);
+// without one, the share is in single-node mode: the fleet's instances run
+// together on the node holding it, in the shared class, else the instance
+// disks'. When two pods on one node cannot mount one RWO volume (share_pods
+// failed), fleets get no share at all: each instance keeps its own copy of
+// the fleet's folders (the copy tier), and agent logins may need repeating,
+// since copies that each refresh a login race (the P4 refresh spike ruled
+// the single-refresher fix unsafe).
 
 // Check names of the share checks.
 const (
@@ -38,6 +43,14 @@ const (
 
 // LimitedCopyTier is the LIMITED reason of a connection on the copy tier.
 const LimitedCopyTier = "logins may need repeating"
+
+// LimitedOneNode is the LIMITED reason of a connection of several nodes
+// whose fleets each run on one node (single-node mode).
+const LimitedOneNode = "each fleet on one node"
+
+// OneNodeWarning is the capability line of single-node mode on a cluster
+// of several nodes.
+const OneNodeWarning = "Each fleet's instances run together on one node"
 
 // The other LIMITED reasons shared_storage gives.
 const (
@@ -57,14 +70,21 @@ var (
 	sharePodsPoll    = 2 * time.Second
 )
 
-// shareClass is the class a new fleet share takes, as a create picks it:
-// the shared class, else the instance disks', else the cluster's default.
-// ok is false when the class named is not one the listing has.
+// shareClass is the class a fleet share takes in single-node mode, as a
+// create picks it: the shared class, else the instance disks', else the
+// cluster's default. ok is false when the class named is not one the
+// listing has.
 func (r *run) shareClass() (*fleetgrpc.KubeStorageClass, string, bool) {
 	name := r.t.Cluster.SharedStorageClass
 	if name == "" {
-		name = r.t.Cluster.StorageClass
+		name = r.caps.InstanceStorageClass
 	}
+	return r.listedClass(name)
+}
+
+// listedClass is class name as listed ("" the default class); ok false
+// when the listing has none such.
+func (r *run) listedClass(name string) (*fleetgrpc.KubeStorageClass, string, bool) {
 	for _, c := range r.caps.StorageClasses {
 		if (name != "" && c.Name == name) || (name == "" && c.IsDefault) {
 			return c, c.Name, true
@@ -76,9 +96,44 @@ func (r *run) shareClass() (*fleetgrpc.KubeStorageClass, string, bool) {
 // sharedStorage reports the share mode and its class.
 func (r *run) sharedStorage(ctx context.Context) {
 	r.running(CheckSharedStorage)
-	// The deep test's probe runs this again with its word: what the first
-	// run limited the connection by goes, as its check's result does.
-	r.unlimit(LimitedCopyTier, limitedSharesUnavailable, limitedSharesImmediate)
+	// The deep test's probes run this again with their word: what an
+	// earlier evaluation limited the connection by goes, as its check's
+	// result does.
+	r.unlimit(LimitedCopyTier, limitedSharesUnavailable, limitedSharesImmediate, LimitedOneNode)
+	r.res.Warnings = slices.DeleteFunc(r.res.Warnings, func(w string) bool { return w == OneNodeWarning })
+	r.caps.ShareRefused, r.caps.SharedStorageClass, r.caps.ShareMode = "", "", ""
+	r.testStorage(ctx, false)
+
+	picked := r.t.Cluster.SharedStorageClass
+	if picked != "" {
+		_, _, listed := r.listedClass(picked)
+		t, tested := r.storage[picked]
+		switch {
+		case !listed && len(r.caps.StorageClasses) > 0:
+			msg := fmt.Sprintf("storage class %q for fleet shares does not exist", picked)
+			r.fail(CheckSharedStorage, msg, "pick one the cluster offers, or clear the setting for Auto")
+			r.limit(limitedSharesUnavailable)
+			r.caps.ShareRefused = msg
+			return
+		case tested && t.Refused():
+			msg := fmt.Sprintf("storage class %s fails the multi-node test: %s", picked, t.Detail)
+			fix := t.Fix
+			if fix == "" {
+				fix = "pick a class that passes it, or clear the setting for Auto"
+			}
+			r.fail(CheckSharedStorage, msg, fix)
+			r.limit(limitedSharesUnavailable)
+			r.caps.ShareRefused = msg
+			return
+		case tested && t.Passed():
+			r.multiNodeMode(picked, false)
+			return
+		}
+	} else if best := r.bestStorage(); best != "" {
+		r.multiNodeMode(best, true)
+		return
+	}
+
 	if r.multiPodRWO != nil && !*r.multiPodRWO {
 		r.caps.ShareMode = string(topology.Copy)
 		r.limit(LimitedCopyTier)
@@ -86,22 +141,61 @@ func (r *run) sharedStorage(ctx context.Context) {
 			"a StorageClass whose volumes two pods on one node can mount, for the shared or the instance disk class")
 		return
 	}
+	r.singleNodeMode(ctx)
+}
+
+// multiNodeMode holds new fleet shares in class, which passed the
+// multi-node test (auto: Auto picked it).
+func (r *run) multiNodeMode(class string, auto bool) {
+	r.caps.ShareMode = string(topology.MultiNode)
+	r.caps.SharedStorageClass = class
+	if r.multiPodRWO != nil && *r.multiPodRWO {
+		r.caps.MultiPodRwo = true
+	}
+	traits := []string{"ReadWriteMany"}
+	if c, _, ok := r.listedClass(class); ok {
+		if c.AllowExpansion {
+			traits = append(traits, "expandable")
+		} else {
+			traits = append(traits, "not expandable: a nearly full share only warns")
+		}
+	}
+	detail := fmt.Sprintf("multi-node mode: each fleet's instances run on any node, sharing its share (%s, %s; passed the multi-node test)", class, strings.Join(traits, ", "))
+	if auto {
+		detail = "auto → " + class + ": " + detail
+	}
+	r.pass(CheckSharedStorage, detail)
+}
+
+// singleNodeMode holds new fleet shares in single-node mode, in the shared
+// class, else the instance disks'.
+func (r *run) singleNodeMode(ctx context.Context) {
 	r.caps.ShareMode = string(topology.SingleNode)
 	if r.multiPodRWO != nil {
 		r.caps.MultiPodRwo = true
 	}
+	picked := r.t.Cluster.SharedStorageClass
 	class, name, ok := r.shareClass()
-	switch {
-	case !ok && r.t.Cluster.SharedStorageClass != "" && len(r.caps.StorageClasses) > 0:
-		r.fail(CheckSharedStorage, fmt.Sprintf("storage class %q for fleet shares does not exist", name), "pick one the cluster offers, or clear the setting to use the instance disks' class")
-		r.limit(limitedSharesUnavailable)
-		return
-	case !ok:
+	r.caps.SharedStorageClass = name
+	// On a cluster of several nodes, single-node mode is a degradation:
+	// say why no class gave multi-node mode.
+	why, fix := "", ""
+	if r.multiNode {
+		r.limit(LimitedOneNode)
+		r.warning(OneNodeWarning)
+		why, fix = r.whyNotMultiNode(picked)
+	}
+	if !ok {
 		what := "the cluster's default class"
 		if name != "" {
 			what = "class " + name
 		}
-		r.pass(CheckSharedStorage, "single-node mode: each fleet's instances run together on the node holding its share ("+what+")")
+		detail := "single-node mode: each fleet's instances run together on the node holding its share (" + what + ")"
+		if why != "" {
+			r.warn(CheckSharedStorage, why+"; "+detail, fix)
+			return
+		}
+		r.pass(CheckSharedStorage, detail)
 		return
 	}
 	traits := []string{bindingLabel(class.BindingMode)}
@@ -114,6 +208,9 @@ func (r *run) sharedStorage(ctx context.Context) {
 		traits = append(traits, "not expandable: a nearly full share only warns")
 	}
 	detail := fmt.Sprintf("single-node mode: each fleet's instances run together on the node holding its share (%s, %s)", class.Name, strings.Join(traits, ", "))
+	if picked == "" && why != "" {
+		detail = "auto → " + class.Name + ": " + detail
+	}
 	tc := topology.Class{Name: class.Name, Immediate: class.BindingMode == string(storagev1.VolumeBindingImmediate), NodeLocal: class.NodeLocal}
 	if tc.Immediate {
 		cctx, cancel := call(ctx)
@@ -122,12 +219,90 @@ func (r *run) sharedStorage(ctx context.Context) {
 		}
 		cancel()
 	}
-	if why := topology.ImmediateProblem(tc, len(r.caps.Nodes)); why != "" {
-		r.warn(CheckSharedStorage, detail+": "+why, topology.ImmediateFix)
+	if problem := topology.ImmediateProblem(tc, len(r.caps.Nodes)); problem != "" {
+		if why != "" {
+			detail = why + "; " + detail
+		}
+		r.warn(CheckSharedStorage, detail+": "+problem, topology.ImmediateFix)
 		r.limit(limitedSharesImmediate)
 		return
 	}
+	if why != "" {
+		r.warn(CheckSharedStorage, why+"; "+detail, fix)
+		return
+	}
 	r.pass(CheckSharedStorage, detail)
+}
+
+// whyNotMultiNode says why no class gave multi-node mode on a cluster of
+// several nodes, with the remedy.
+func (r *run) whyNotMultiNode(picked string) (string, string) {
+	if picked != "" {
+		if t, ok := r.storage[picked]; ok {
+			return fmt.Sprintf("%s does not give multi-node mode: %s", picked, t.Detail), t.Fix
+		}
+		if c, _, ok := r.listedClass(picked); ok && (c.NodeLocal || blockOnlyProvisioners[c.Provisioner]) {
+			return fmt.Sprintf("%s does not give multi-node mode: its volumes mount on one node at a time", picked), "a ReadWriteMany class that passes the multi-node test, or clear the setting for Auto"
+		}
+		return fmt.Sprintf("%s is not tested yet for the multi-node test", picked), ""
+	}
+	var failed, unsure, untested []string
+	for _, c := range r.caps.StorageClasses {
+		name := c.GetName()
+		if t, ok := r.storage[name]; ok {
+			if t.Inconclusive {
+				unsure = append(unsure, name)
+			} else {
+				failed = append(failed, name)
+			}
+			continue
+		}
+		if storageSkip(c, true, true, false) == "" {
+			untested = append(untested, name)
+		}
+	}
+	parts := []string{"no class passed the multi-node test"}
+	if len(failed)+len(unsure)+len(untested) == 0 {
+		parts[0] = fmt.Sprintf("no class can pass the multi-node test (%d block or node-local)", len(r.caps.StorageClasses))
+	}
+	if len(failed) > 0 {
+		parts = append(parts, "failed: "+strings.Join(failed, ", "))
+	}
+	if len(unsure) > 0 {
+		parts = append(parts, "could not tell: "+strings.Join(unsure, ", "))
+	}
+	if len(untested) > 0 {
+		what := "not tested yet: " + strings.Join(untested, ", ")
+		if r.t.StorageCache == nil || r.t.Cluster.ID == "" {
+			what = "not tested (save the connection to test them): " + strings.Join(untested, ", ")
+		}
+		parts = append(parts, what)
+	}
+	return strings.Join(parts, " · "), noClassFix(r.caps.Nodes, r.providers)
+}
+
+// bestStorage is Auto's shared class: of the classes that passed the
+// multi-node test, the cluster's default, then an expandable one, then by
+// name ("" when none passed).
+func (r *run) bestStorage() string {
+	best, bestScore := "", -1
+	for _, c := range r.caps.StorageClasses {
+		t, ok := r.storage[c.GetName()]
+		if !ok || !t.Passed() {
+			continue
+		}
+		score := 0
+		if c.GetIsDefault() {
+			score += 2
+		}
+		if c.GetAllowExpansion() {
+			score++
+		}
+		if score > bestScore || (score == bestScore && c.GetName() < best) {
+			best, bestScore = c.GetName(), score
+		}
+	}
+	return best
 }
 
 // unlimit drops reasons from the LIMITED reasons found so far.
@@ -192,6 +367,9 @@ func (r *run) reportSharePods(ctx context.Context, mounted bool, why string, err
 		r.multiPodRWO = &no
 		r.res.MultiPodRWO = &no
 		r.fail(CheckSharePods, "a second pod on the node could not mount the volume the first one had: "+why, "")
+	}
+	if err := r.t.StorageCache.SetMultiPodRWO(*r.multiPodRWO); err != nil {
+		r.warning("storage test cache: " + err.Error())
 	}
 	r.sharedStorage(ctx)
 }

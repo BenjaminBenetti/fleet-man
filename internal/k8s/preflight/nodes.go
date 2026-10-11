@@ -30,7 +30,8 @@ func (r *run) nodes(ctx context.Context) {
 		r.warn(CheckNodes, "listing nodes: "+Message(err), "")
 		return
 	}
-	r.multiNode = len(list.Items) > 1
+	r.multiNode, r.nodesKnown = len(list.Items) > 1, true
+	r.providers = map[string]string{}
 	r.csiLimits = r.attachLimits(ctx)
 	archs := map[string]bool{}
 	cordoned := 0
@@ -38,6 +39,7 @@ func (r *run) nodes(ctx context.Context) {
 	for i := range list.Items {
 		n := &list.Items[i]
 		facts = append(facts, localcluster.Node{Name: n.Name, Labels: n.Labels, ProviderID: n.Spec.ProviderID})
+		r.providers[n.Name] = n.Spec.ProviderID
 		arch := n.Status.NodeInfo.Architecture
 		if arch == "" {
 			arch = n.Labels[corev1.LabelArchStable]

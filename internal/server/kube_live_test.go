@@ -89,7 +89,7 @@ func TestLiveKubeConnections(t *testing.T) {
 	}
 	test := func(id string) *fleetgrpc.KubeClusterStatus {
 		t.Helper()
-		st, err := m.test(ctx, id, false, nil)
+		st, err := m.test(ctx, id, fullRun{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -162,7 +162,7 @@ func TestLiveKubeConnections(t *testing.T) {
 	other := testIdentity
 	other.Nonce, other.Host = "bbbbbbbbbbbbbbbb", "restored-host"
 	restored.kube.loadIdentity = func() (owner.Identity, error) { return other, nil }
-	st, err = restored.kube.test(ctx, ready, false, nil)
+	st, err = restored.kube.test(ctx, ready, fullRun{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

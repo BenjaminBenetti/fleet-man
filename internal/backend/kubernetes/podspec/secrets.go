@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/execas"
 )
 
@@ -184,9 +185,33 @@ func (t *translation) finishExec() {
 	if len(unset) > 0 {
 		t.warn("remoteEnv %s: null does not unset a variable in a pod's execs; each keeps the container's value", strings.Join(unset, ", "))
 	}
+	if t.in.MultiNodeShare && sharesCodex(t.in.FleetMounts) {
+		spec.HomeEnv = map[string]string{CodexSQLiteHomeEnv: CodexSQLiteHome}
+	}
 	if err := spec.Validate(); err != nil {
 		t.refuse(&Refusal{Code: CodeSettings, Reason: fmt.Sprintf("the devcontainer's exec settings: %v", err)})
 		return
 	}
 	t.exec = spec
+}
+
+// CodexSQLiteHomeEnv is the variable that moves Codex's SQLite databases
+// (and their write-ahead logs) out of CODEX_HOME; CodexSQLiteHome is where
+// an instance's go on a fleet share mounted from several nodes, below the
+// home of whoever runs Codex: on the instance's own disk, as SQLite's
+// write-ahead log corrupts when two nodes share it (Codex makes the
+// folder).
+const (
+	CodexSQLiteHomeEnv = "CODEX_SQLITE_HOME"
+	CodexSQLiteHome    = ".local/state/fleet/codex-sqlite"
+)
+
+// sharesCodex reports whether the fleet's mounts share Codex's home.
+func sharesCodex(mounts []backend.Mount) bool {
+	for _, m := range mounts {
+		if m.Scope == backend.MountScopeFleetShared && (m.SubPath == ".codex" || strings.HasSuffix(m.ContainerPath, "/.codex")) {
+			return true
+		}
+	}
+	return false
 }

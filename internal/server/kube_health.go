@@ -150,6 +150,9 @@ type kubeManager struct {
 	// configurePool hands the daemon's pool the connections
 	// (configureKubePool).
 	configurePool func([]fleet.KubeCluster)
+	// storageCache opens a connection's storage test cache (nil runs no
+	// multi-node storage test).
+	storageCache func(id string) *preflight.StorageCache
 
 	idOnce sync.Once
 	id     owner.Identity
@@ -190,7 +193,10 @@ func newKubeManager(svc *service) *kubeManager {
 		},
 		loadRegistry:  state.LoadKubeClusters,
 		configurePool: configureKubePool,
-		workers:       map[string]*kubeWorker{},
+		storageCache: func(id string) *preflight.StorageCache {
+			return preflight.OpenStorageCache(state.KubeStorageTestsPath(id))
+		},
+		workers: map[string]*kubeWorker{},
 	}
 }
 
@@ -446,8 +452,11 @@ type kubeWorker struct {
 	deepAt      time.Time
 	// multiPodRWO is what the last deep test found of two pods on one node
 	// mounting one RWO volume (nil before one told): full runs without a
-	// deep test keep it (it decides the connection's share mode).
+	// deep test keep it (it decides the connection's share mode), as its
+	// storage test cache does across restarts.
 	multiPodRWO *bool
+	// storage is the connection's storage test cache, opened on first use.
+	storage *preflight.StorageCache
 	// lastProbe is when the last probe of either kind returned.
 	lastProbe time.Time
 	// probeFail is the failure the last shallow probe found since the last
@@ -658,6 +667,13 @@ func (w *kubeWorker) target(rec fleet.KubeCluster, link *kubeLink, lease kubeLea
 	}
 	w.mu.Lock()
 	t.MultiPodRWO = w.multiPodRWO
+	// A draft (no id) keeps nothing: it tests no StorageClass.
+	if rec.ID != "" && w.m.storageCache != nil {
+		if w.storage == nil {
+			w.storage = w.m.storageCache(rec.ID)
+		}
+		t.StorageCache = w.storage
+	}
 	w.mu.Unlock()
 	if lease != nil {
 		t.Lease = lease
@@ -668,11 +684,25 @@ func (w *kubeWorker) target(rec fleet.KubeCluster, link *kubeLink, lease kubeLea
 // runFull runs a full preflight and makes it the connection's health,
 // unless one that started later already did. report receives each check.
 func (w *kubeWorker) runFull(ctx context.Context, report func(*fleetgrpc.KubeCheck)) preflight.Result {
-	return w.runFullDeep(ctx, report, false)
+	return w.runFullDeep(ctx, report, fullRun{})
 }
 
-// runFullDeep is runFull, with deep the deep test's probes too.
-func (w *kubeWorker) runFullDeep(ctx context.Context, report func(*fleetgrpc.KubeCheck), deep bool) preflight.Result {
+// fullPreflight runs a full preflight (preflight.Full; tests watch what it
+// is asked).
+var fullPreflight = preflight.Full
+
+// fullRun is what a full run does besides its checks.
+type fullRun struct {
+	// deep: the deep test's probes too.
+	deep bool
+	// storage are StorageClasses to run the multi-node test on now
+	// (preflight.Target.TestStorage).
+	storage []string
+}
+
+// runFullDeep is runFull, with what o asks.
+func (w *kubeWorker) runFullDeep(ctx context.Context, report func(*fleetgrpc.KubeCheck), o fullRun) preflight.Result {
+	deep := o.deep
 	started := w.m.now()
 	w.mu.Lock()
 	wanted := w.fullWanted
@@ -694,8 +724,8 @@ func (w *kubeWorker) runFullDeep(ctx context.Context, report func(*fleetgrpc.Kub
 		}
 	} else {
 		tgt := w.target(rec, link, lease)
-		tgt.Deep = deep
-		res = preflight.Full(ctx, tgt, report)
+		tgt.Deep, tgt.TestStorage = deep, o.storage
+		res = fullPreflight(ctx, tgt, report)
 		w.countOrphans(ctx, rec, link, &res)
 	}
 	done()

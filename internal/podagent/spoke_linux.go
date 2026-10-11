@@ -98,6 +98,8 @@ func (a *agent) serveSyncCtl(s *podwire.Stream) {
 		return
 	}
 	a.log.Info("the share's spoke started", "lease", fmt.Sprint(lease))
+	a.spokes.Add(1)
+	defer a.spokes.Add(-1)
 	splice(conn, up)
 }
 

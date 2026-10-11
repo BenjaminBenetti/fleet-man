@@ -19,8 +19,9 @@ import (
 )
 
 // storage.go classifies the cluster's StorageClasses for instance disks and
-// picks auto's class. The multi-node share test and the StorageClass picker
-// that builds on it come with fleet shares; this is what one listing tells.
+// picks auto's class (KubeCapabilities.instance_storage_class, which new
+// instance disks are made in). Fleet shares' class is share.go's, from the
+// multi-node test (storagetest.go).
 
 // nodeLocalProvisioners keep a volume on one node's disk: its data goes with
 // the node.
@@ -171,8 +172,10 @@ func (r *run) rootStorage(ctx context.Context) {
 	defer cancel()
 	list, err := r.t.Client.StorageV1().StorageClasses().List(cctx, metav1.ListOptions{})
 	want := r.t.Cluster.StorageClass
+	r.caps.InstanceStorageClass = want
 	if err != nil {
 		if apierrors.IsForbidden(err) {
+			r.classesUnreadable = true
 			if want != "" {
 				r.warn(CheckRootStorage, fmt.Sprintf("StorageClasses are not readable; using %q as set", want), "")
 			} else {
@@ -189,7 +192,9 @@ func (r *run) rootStorage(ctx context.Context) {
 			drivers[dl.Items[i].Name] = &dl.Items[i]
 		}
 	}
+	r.classObjs = map[string]*storagev1.StorageClass{}
 	for i := range list.Items {
+		r.classObjs[list.Items[i].Name] = &list.Items[i]
 		r.caps.StorageClasses = append(r.caps.StorageClasses, ClassifyStorageClass(&list.Items[i], drivers))
 	}
 	sort.Slice(r.caps.StorageClasses, func(i, j int) bool { return r.caps.StorageClasses[i].Name < r.caps.StorageClasses[j].Name })
@@ -218,6 +223,7 @@ func (r *run) rootStorage(ctx context.Context) {
 		}
 	}
 	r.rootClass = chosen
+	r.caps.InstanceStorageClass = chosen.Name
 	r.fillAttachLimits(ctx, chosen.Provisioner)
 	switch {
 	case snapDrivers[chosen.Provisioner]:

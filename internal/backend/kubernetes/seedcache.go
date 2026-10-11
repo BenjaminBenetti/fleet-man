@@ -165,7 +165,7 @@ func (c *creation) seedCacheFor(ctx context.Context, spec *podseed.SeedSpec, ima
 		return nil
 	}
 	size := disk.Spec.Resources.Requests[corev1.ResourceStorage]
-	id := seedCacheID(c.daemonID, c.id.cluster, image, spec, c.identity.NonRoot, c.rec.StorageClass, size.String())
+	id := seedCacheID(c.daemonID, c.id.cluster, image, spec, c.identity.NonRoot, c.diskClass(), size.String())
 	plan := &seedCachePlan{id: id, name: names.SeedCache(id), image: image}
 	pvc, err := c.cs.CoreV1().PersistentVolumeClaims(c.ns).Get(ctx, plan.name, metav1.GetOptions{})
 	switch {

@@ -5,9 +5,9 @@ import "path/filepath"
 // The daemon's Kubernetes state on its host. Everything here is daemon-owned:
 // clients reach it only through the kube RPCs. The hourly backup captures
 // kube_clusters.json, daemon_id, the footprint, the job journal, each
-// connection's image index, its instance records and its fleets' Buildkit
-// CAs (internal/server/backup.go), under these same paths relative to
-// ~/.fleet.
+// connection's image index, its storage test cache, its instance records and
+// its fleets' Buildkit CAs (internal/server/backup.go), under these same
+// paths relative to ~/.fleet.
 
 // KubeClustersPath is the registry of Kubernetes connections
 // (~/.fleet/kube_clusters.json, see KubeClusters).
@@ -71,6 +71,14 @@ func KubeImagesPath(clusterID string) string {
 // cache made and since when none does.
 func KubeSeedCachesPath(clusterID string) string {
 	return filepath.Join(KubeClusterDir(clusterID), "seedcaches.json")
+}
+
+// KubeStorageTestsPath is one connection's storage test cache
+// (~/.fleet/kube/<cluster id>/storage.json): each StorageClass's multi-node
+// test result, by provisioner and parameters, and whether two pods on one
+// node mount one ReadWriteOnce volume (the deep test's share probe).
+func KubeStorageTestsPath(clusterID string) string {
+	return filepath.Join(KubeClusterDir(clusterID), "storage.json")
 }
 
 // KubeBuildkitCAPath is the CA of a fleet's shared Buildkit on a connection,

@@ -45,6 +45,14 @@ type Spec struct {
 	// what fleet passes as --remote-env on docker, while a socket is there
 	// (Host.AgentSocket). "" exports none.
 	SSHAuthSock string `json:"ssh_auth_sock,omitempty"`
+	// HomeEnv are fleet's own variables naming a folder below the home of
+	// whoever a command runs as (a slash-separated path relative to it):
+	// every class gets each, the home joined with its path, unless its
+	// environment already sets the variable (the container's, the user's,
+	// remoteEnv or the request's). On a fleet share mounted from several
+	// nodes, CODEX_SQLITE_HOME keeps Codex's SQLite state on the instance's
+	// own disk this way.
+	HomeEnv map[string]string `json:"home_env,omitempty"`
 }
 
 // LoadSpec reads and checks the exec spec at file.
@@ -91,6 +99,14 @@ func (s Spec) Validate() error {
 	for name, value := range s.RemoteEnv {
 		if err := checkEnvVar(name, value); err != nil {
 			return fmt.Errorf("remote_env: %w", err)
+		}
+	}
+	for name, rel := range s.HomeEnv {
+		if err := checkEnvVar(name, rel); err != nil {
+			return fmt.Errorf("home_env: %w", err)
+		}
+		if rel == "" || path.IsAbs(rel) || path.Clean(rel) != rel || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+			return fmt.Errorf("home_env %s: %q is not a clean path below the home", name, rel)
 		}
 	}
 	return nil

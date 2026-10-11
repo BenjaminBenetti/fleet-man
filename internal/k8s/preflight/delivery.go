@@ -60,7 +60,8 @@ type DeliveryCheck struct {
 const (
 	deliveryTimeout = 45 * time.Second
 	// DeepTimeout bounds the deep test's probes, on top of FullTimeout: the
-	// pull through the gateway, then the network probe.
+	// pull through the gateway, then the network probe, beside the two-pod
+	// probe and the multi-node storage tests.
 	DeepTimeout = 5 * time.Minute
 	// pullTimeout bounds the probe pod's pull.
 	pullTimeout = 2 * time.Minute
@@ -114,12 +115,17 @@ func (r *run) imageDelivery(ctx context.Context) {
 }
 
 // deep runs the throwaway-pod probes: a pull through the gateway, the pods'
-// network (network.go), and one RWO volume from two pods (share.go).
+// network (network.go), one RWO volume from two pods (share.go), and the
+// multi-node storage test again (storagetest.go), after which the share
+// mode is judged again.
 func (r *run) deep(ctx context.Context) {
 	sharePods := r.startSharePods(ctx)
+	storage := r.startStorageTests(ctx)
 	r.imagePull(ctx)
 	r.networkProbe(ctx)
+	storage()
 	sharePods()
+	r.sharedStorage(ctx)
 	r.res.DeepCheckedAt = r.t.now()
 }
 

@@ -5,7 +5,9 @@ package podspec
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path"
+	"runtime"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -27,6 +29,19 @@ import (
 // with the fleet's modes, owned by the share uid, and no symlink sits where
 // a fleet folder belongs: the kubelet makes a missing subPath root-owned,
 // makes a missing file a folder, and follows a link inside the volume.
+
+// ShareIDs are the share uid and gid: what the remote user is remapped to
+// and the workspace and a fleet's share are owned by. The daemon host user's
+// on a Linux daemon (what the devcontainer CLI's own remap gives a docker
+// instance there), else 1000.
+func ShareIDs() (int, int) {
+	if runtime.GOOS == "linux" {
+		if uid, gid := os.Getuid(), os.Getgid(); uid > 0 && gid > 0 {
+			return uid, gid
+		}
+	}
+	return 1000, 1000
+}
 
 // ShareInit is the share-layout init container's name.
 const ShareInit = "fleet-share"

@@ -15,8 +15,8 @@
 // affinity on the node, with the scheduler's self-affinity exception for
 // the first one): a zonal disk attaches to one node at a time.
 //
-// In multi-node mode (the share's class passed the test, P4.4) only the
-// share volume's own topology applies, and in copy mode (one RWO volume
+// In multi-node mode (the share's class passed the multi-node storage test)
+// only the share volume's own topology applies, and in copy mode (one RWO volume
 // cannot be mounted by two pods on a node) there is no shared volume at
 // all: each instance keeps its own copy on its disk.
 package topology

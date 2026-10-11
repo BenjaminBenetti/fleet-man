@@ -72,6 +72,7 @@ func backupSources() []string {
 	sources = append(sources, globFiles(filepath.Join(state.KubeJobsDir(), "*.json"))...)           // kube/jobs/<key>.json
 	sources = append(sources, globFiles(filepath.Join(state.KubeDir(), "*", "images.json"))...)     // kube/<cluster>/images.json
 	sources = append(sources, globFiles(filepath.Join(state.KubeDir(), "*", "seedcaches.json"))...) // kube/<cluster>/seedcaches.json
+	sources = append(sources, globFiles(filepath.Join(state.KubeDir(), "*", "storage.json"))...)    // kube/<cluster>/storage.json
 	// kube/<cluster>/instances/<key>.json: what a restored daemon verifies its
 	// instances' pods against.
 	sources = append(sources, globFiles(filepath.Join(state.KubeDir(), "*", "instances", "*.json"))...)
@@ -498,6 +499,7 @@ func (s *service) mcpRestoreBackup(_ context.Context, _ *mcp.CallToolRequest, _ 
 			{Name: "kube/jobs/<key>.json", Description: "journal of the Kubernetes create, clone and rebuild jobs that were running, one file per instance."},
 			{Name: "kube/<cluster>/images.json", Description: "index of the images this daemon delivered to one Kubernetes connection."},
 			{Name: "kube/<cluster>/seedcaches.json", Description: "index of the seed caches (cached image roots automation disks are cloned from) on one Kubernetes connection, and which instances each made."},
+			{Name: "kube/<cluster>/storage.json", Description: "storage test cache of one Kubernetes connection: each StorageClass's multi-node test result (which decides where fleet shares live), keyed by its provisioner and parameters, and the deep test's two-pod probe of one ReadWriteOnce volume."},
 			{Name: "kube/<cluster>/instances/<key>.json", Description: "what this daemon rendered and delivered for each of its Kubernetes instances, which their pods are verified against."},
 			{Name: "kube/<cluster>/buildkit/<fleet>.json", Description: "the CA of one fleet's shared Buildkit on one Kubernetes connection, which signs its server's and its instances' certificates — holds the CA's private key, SECRET."},
 		},

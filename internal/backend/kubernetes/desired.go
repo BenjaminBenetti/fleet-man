@@ -43,6 +43,9 @@ type InboundHandler func(t PodTarget, s *podwire.Stream)
 // binds' and the mirrored gateway ports'.
 var InboundTags = append(append([]podwire.Tag(nil), podwire.SockTags...), podwire.TagSockHost, podwire.TagHostDial)
 
+// The pool serves the agents' share hints itself (sharehint.go): they go
+// to the share's spoke, not the daemon.
+
 // desiredApplyWait bounds a new session's wait for its agent to apply the
 // first state.
 const desiredApplyWait = 15 * time.Second
@@ -200,7 +203,7 @@ func (p *Pool) desiredState(t PodTarget) (podwire.DesiredState, desiredMark) {
 		files, mark.version = e.list(), e.version
 	}
 	p.desiredGen++
-	ds := podwire.DesiredState{Gen: p.desiredGen, Files: files}
+	ds := podwire.DesiredState{Gen: p.desiredGen, Files: files, ShareHint: shareHintOf(t.Share)}
 	p.desiredMu.Unlock()
 	if src != nil {
 		ds.Sockets = src(t)
@@ -301,7 +304,8 @@ const mcpLiveWindow = 2 * time.Second
 // while there is none), and the pod's MCP streams are counted, so a session
 // that drops with one live reconnects first.
 func (p *Pool) inboundHandlers(slot *podSlot, t PodTarget) map[podwire.Tag]podwire.Handler {
-	h := make(map[podwire.Tag]podwire.Handler, len(InboundTags))
+	h := make(map[podwire.Tag]podwire.Handler, len(InboundTags)+1)
+	h[podwire.TagShareHint] = func(st *podwire.Stream) { p.serveShareHint(t, st) }
 	for _, tag := range InboundTags {
 		h[tag] = func(st *podwire.Stream) {
 			p.desiredMu.Lock()

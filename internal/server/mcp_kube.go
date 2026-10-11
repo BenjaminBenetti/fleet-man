@@ -126,6 +126,8 @@ func (s *service) mcpClusterList(ctx context.Context, _ *mcp.CallToolRequest, in
 type FleetClusterTestInput struct {
 	Cluster string `json:"cluster" jsonschema:"the connection to test: its id, name or context"`
 	Deep    bool   `json:"deep,omitempty" jsonschema:"also run the throwaway-pod probes (a pod pulls through the gateway; pods test NetworkPolicy enforcement and reach to 169.254.169.254); takes minutes"`
+	// StorageClasses run the multi-node storage test now.
+	StorageClasses []string `json:"storage_classes,omitempty" jsonschema:"StorageClasses to run the multi-node storage test on now (an RWX volume mounted by pods on two nodes; about a minute each), cached result or not; naming a class whose volumes have a large minimum size (Filestore, 1Ti) is the consent Auto asks for before it tests one"`
 }
 
 type FleetClusterTestOutput struct {
@@ -146,7 +148,7 @@ func (s *service) mcpClusterTest(ctx context.Context, _ *mcp.CallToolRequest, in
 		return nil, FleetClusterTestOutput{}, err
 	}
 	c := &streamCollector[fleetgrpc.TestKubeClusterEvent]{ctx: ctx}
-	if err := s.TestKubeCluster(&fleetgrpc.TestKubeClusterRequest{Id: st.GetCluster().GetId(), Deep: in.Deep}, c); err != nil {
+	if err := s.TestKubeCluster(&fleetgrpc.TestKubeClusterRequest{Id: st.GetCluster().GetId(), Deep: in.Deep, StorageClasses: in.StorageClasses}, c); err != nil {
 		return nil, FleetClusterTestOutput{}, mcpErr(err)
 	}
 	var result *fleetgrpc.KubeClusterStatus

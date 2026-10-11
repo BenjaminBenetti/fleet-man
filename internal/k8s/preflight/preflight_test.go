@@ -323,8 +323,13 @@ func TestFullPrivilegedPolicyOffLocal(t *testing.T) {
 
 	yes := true
 	res = Full(context.Background(), target(c, fleet.KubeCluster{AllowPrivileged: &yes}), nil)
-	wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, "")
-	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "node is the isolation boundary") {
+	// Allowed, privileged pods no longer limit it: only its fleets' shares
+	// do, as no class of the cluster can pass the multi-node test.
+	wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, LimitedOneNode)
+	if strings.Contains(res.Message, "privileged") {
+		t.Errorf("still limited by privileged pods: %q", res.Message)
+	}
+	if len(res.Warnings) != 2 || !strings.Contains(res.Warnings[0], "node is the isolation boundary") || res.Warnings[1] != OneNodeWarning {
 		t.Errorf("warnings = %v", res.Warnings)
 	}
 }

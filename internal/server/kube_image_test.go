@@ -115,7 +115,7 @@ func TestKubeGatewayDelivery(t *testing.T) {
 	id := f.add(&fleetgrpc.KubeCluster{Context: "prod"}).GetCluster().GetId()
 	host, _, _ := strings.Cut(tunnel.prefix, "/")
 
-	st, err := f.svc.kube.test(context.Background(), id, false, nil)
+	st, err := f.svc.kube.test(context.Background(), id, fullRun{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestKubeGatewayDelivery(t *testing.T) {
 	// The registry id is not routed (the gateway forgot the session): the
 	// manifest check names the route.
 	tunnel.set(host+"/"+strings.Repeat("2", 64), "")
-	st, _ = f.svc.kube.test(context.Background(), id, false, nil)
+	st, _ = f.svc.kube.test(context.Background(), id, fullRun{}, nil)
 	if c := kubeCheckOf(t, st, preflight.CheckImageDelivery); c.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL || !strings.HasPrefix(c.GetDetail(), "gateway route: ") {
 		t.Fatalf("an unrouted registry id %v", c)
 	}
@@ -164,7 +164,7 @@ func TestKubeGatewayDelivery(t *testing.T) {
 
 	// Enable Image Registry off: Auto finds nothing, and Gateway says why.
 	tunnel.set("", "Enable Image Registry is off")
-	st, _ = f.svc.kube.test(context.Background(), id, false, nil)
+	st, _ = f.svc.kube.test(context.Background(), id, fullRun{}, nil)
 	del = st.GetCapabilities().GetImageDelivery()
 	if del.GetMode() != "none" || del.GetGatewayRegistry() || del.GetGatewayReason() != "Enable Image Registry is off" {
 		t.Fatalf("no registry: %v", del)
@@ -208,7 +208,7 @@ func TestKubeDeliveryOrder(t *testing.T) {
 	f := newKubeFixture(t)
 	withGatewayImages(t, f)
 	reg := f.add(&fleetgrpc.KubeCluster{Context: "prod", Image: &fleetgrpc.KubeImageSettings{Registry: "127.0.0.1:1/team", InsecureRegistry: true}}).GetCluster().GetId()
-	st, _ := f.svc.kube.test(context.Background(), reg, false, nil)
+	st, _ := f.svc.kube.test(context.Background(), reg, fullRun{}, nil)
 	if del := st.GetCapabilities().GetImageDelivery(); del.GetMode() != "registry" || del.GetRegistryReachable() {
 		t.Fatalf("an unreachable registry: %v", del)
 	}
@@ -222,7 +222,7 @@ func TestKubeDeliveryOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	local := f.add(&fleetgrpc.KubeCluster{Context: "minikube", ExtraPath: []string{bin}}).GetCluster().GetId()
-	st, _ = f.svc.kube.test(context.Background(), local, false, nil)
+	st, _ = f.svc.kube.test(context.Background(), local, fullRun{}, nil)
 	if c := kubeCheckOf(t, st, preflight.CheckImageDelivery); st.GetCapabilities().GetImageDelivery().GetMode() != "node-load" || c.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS || !strings.HasPrefix(c.GetDetail(), "node load: local cluster (minikube:minikube)") {
 		t.Fatalf("a local cluster: %v %v", st.GetCapabilities().GetImageDelivery(), c)
 	}
@@ -258,7 +258,7 @@ func TestKubeDeepTestPullsThroughTheGateway(t *testing.T) {
 		return true, pod, nil
 	})
 
-	st, err := f.svc.kube.test(context.Background(), id, true, nil)
+	st, err := f.svc.kube.test(context.Background(), id, fullRun{deep: true}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +295,7 @@ func TestKubeDeepTestPullsThroughTheGateway(t *testing.T) {
 		}
 	}
 	// A later full run without the deep test keeps when it last ran.
-	st, _ = f.svc.kube.test(context.Background(), id, false, nil)
+	st, _ = f.svc.kube.test(context.Background(), id, fullRun{}, nil)
 	if st.GetDeepCheckedAt() == nil {
 		t.Fatal("a full run forgot the deep test")
 	}

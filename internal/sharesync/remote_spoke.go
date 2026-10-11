@@ -188,6 +188,8 @@ func (s *Spoke) read(ctx context.Context) {
 			go s.fetch(ctx, m)
 		case msgRescan:
 			go s.rescan(ctx, m)
+		case msgHint:
+			go s.hint(m)
 		default:
 			if m.ID != 0 {
 				s.w.answerErr(m.ID, fmt.Errorf("sharesync: the spoke does not take %q", m.T))
@@ -312,6 +314,21 @@ func (s *Spoke) rescan(ctx context.Context, m wireMsg) {
 		return
 	}
 	s.w.answer(m.ID, wireMsg{T: msgDone})
+}
+
+// hint has the side scan what the hub says changed on another node.
+func (s *Spoke) hint(m wireMsg) {
+	if m.Hint == nil {
+		return
+	}
+	select {
+	case <-s.welcomed:
+	case <-s.w.done:
+		return
+	case <-time.After(hintWait):
+		return
+	}
+	s.side.Hint(m.Hint.Root, m.Hint.Paths)
 }
 
 // awaitWelcome waits until the spoke is attached; false when the connection

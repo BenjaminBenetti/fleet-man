@@ -131,6 +131,7 @@ func (h *Host) Plan(ctx context.Context, req Request) (*Plan, error) {
 		addBundles(env, h.Bundles())
 	}
 	env.setDefault("HOME", id.Home)
+	h.addHomeEnv(env, id)
 	if req.TTY {
 		env.setDefault("TERM", "xterm")
 	}
@@ -251,6 +252,24 @@ func (h *Host) defaultDir(class Class, env *envList, id Identity) string {
 		return home
 	}
 	return id.Home
+}
+
+// addHomeEnv sets the spec's HomeEnv variables env leaves unset, each the
+// home's folder its path names (the command's HOME, else its user's).
+func (h *Host) addHomeEnv(env *envList, id Identity) {
+	if len(h.Spec.HomeEnv) == 0 {
+		return
+	}
+	home, _ := env.get("HOME")
+	if !path.IsAbs(home) {
+		home = id.Home
+	}
+	if !path.IsAbs(home) {
+		return
+	}
+	for _, name := range slices.Sorted(maps.Keys(h.Spec.HomeEnv)) {
+		env.setDefault(name, path.Join(home, h.Spec.HomeEnv[name]))
+	}
 }
 
 // addUserEnv layers what `devcontainer exec` passes as -e over env: the

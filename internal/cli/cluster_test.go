@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -546,6 +547,15 @@ limited: privileged denied · each fleet on one node
 	if req := f.last(t, "TestKubeCluster").(*fleetgrpc.TestKubeClusterRequest); req.GetId() != "prod-d4e5f6" || !req.GetDeep() {
 		t.Errorf("deep test %v", req)
 	}
+
+	// --storage names the StorageClasses to test across two nodes now.
+	f.testEvents = []*fleetgrpc.TestKubeClusterEvent{resultEvent(limited)}
+	if _, _, err := runClusterCLI(t, f, "cluster", "test", "--storage", "filestore", "--storage", "nfs", "prod-eu"); err != nil {
+		t.Fatalf("storage test: %v", err)
+	}
+	if req := f.last(t, "TestKubeCluster").(*fleetgrpc.TestKubeClusterRequest); req.GetDeep() || !slices.Equal(req.GetStorageClasses(), []string{"filestore", "nfs"}) {
+		t.Errorf("storage test %v", req)
+	}
 }
 
 func TestClusterTestDraft(t *testing.T) {
@@ -576,6 +586,7 @@ func TestClusterTestDraft(t *testing.T) {
 		{"cluster", "test", "prod-eu", "-n", "x"},
 		{"cluster", "test", "--context", "c", "notafield"},
 		{"cluster", "test", "--context", "c", "--deep"},
+		{"cluster", "test", "--context", "c", "--storage", "nfs"},
 		{"cluster", "test"},
 		{"cluster", "test", "a", "b"},
 	} {
