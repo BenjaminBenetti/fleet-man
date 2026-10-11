@@ -42,7 +42,8 @@ type Spec struct {
 	// environment at exec time, as the CLI resolves them.
 	RemoteEnv map[string]string `json:"remote_env,omitempty"`
 	// SSHAuthSock is the agent socket the exec class exports as SSH_AUTH_SOCK,
-	// what fleet passes as --remote-env on docker. "" exports none.
+	// what fleet passes as --remote-env on docker, while a socket is there
+	// (Host.AgentSocket). "" exports none.
 	SSHAuthSock string `json:"ssh_auth_sock,omitempty"`
 }
 

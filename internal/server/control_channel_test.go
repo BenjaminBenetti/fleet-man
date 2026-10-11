@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -172,5 +173,55 @@ func TestControlDirTargetSkipsChannelInstances(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(state.ControlDir("on", "pod"), mcpbridge.SocketName)); !os.IsNotExist(err) {
 		t.Fatalf("a channel instance got a host MCP socket (%v)", err)
+	}
+}
+
+// TestHostSocketSyncsSkipKubernetesInstances: a Kubernetes record, in any
+// build, carries its control channel in its pod: the control registry, the
+// SSH-agent relay and the in-instance MCP open nothing in a host control
+// directory for it, whichever way they are asked (their reconciles, and the
+// ensure provisioning calls), even when such a directory exists.
+func TestHostSocketSyncsSkipKubernetesInstances(t *testing.T) {
+	shortHome(t)
+	t.Setenv(agentsock.EnvOverride, "")
+	pod := &fleet.Instance{Name: "pod", Backend: fleet.BackendKubernetes, KubeCluster: "kc-1", KubeKey: "abcdefgh",
+		Status: fleet.StatusRunning, ContainerID: "k8s:kc-1/ns/fi-on-pod-abcdefgh@g1"}
+	if !instanceHasControlChannel(pod) {
+		t.Fatal("a Kubernetes record has no control channel of its own")
+	}
+	st := &state.State{Fleets: map[string]*fleet.Fleet{"on": {
+		Name: "on", Settings: fleet.FleetSettings{FleetMCP: true}, Instances: []*fleet.Instance{pod},
+	}}}
+	if err := state.Save(st); err != nil {
+		t.Fatal(err)
+	}
+	dir := provisionControlDir(t, "on", "pod", true)
+	if _, ok := controlDirTarget("on", pod); ok {
+		t.Fatal("controlDirTarget targeted a Kubernetes instance")
+	}
+	if _, ok := loadInstanceTarget("on", "pod"); ok {
+		t.Fatal("loadInstanceTarget targeted a Kubernetes instance")
+	}
+
+	r := newControlRegistry(nil, nil, nil)
+	defer r.shutdown()
+	r.syncRunning(st)
+	if _, ok := r.servers["on/pod"]; ok {
+		t.Fatal("the control registry listens for a Kubernetes instance")
+	}
+	if !instanceSocketsSupported {
+		return
+	}
+	svc := newService()
+	t.Cleanup(svc.instanceMCP.close)
+	t.Cleanup(svc.agent.close)
+	svc.agent.syncInstances(st)
+	svc.agent.ensureInstance("on", "pod")
+	svc.instanceMCP.sync(st)
+	svc.instanceMCP.ensureInstance("on", "pod")
+	for _, name := range []string{control.SocketName, agentsock.SocketName, mcpbridge.SocketName} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("a host %s was opened for a Kubernetes instance (%v)", name, err)
+		}
 	}
 }

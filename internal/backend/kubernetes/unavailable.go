@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"io"
+	"io/fs"
 	"os/exec"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
@@ -54,6 +55,14 @@ func (u unavailable) SupportsMicSink() bool                             { return
 func (u unavailable) MicSinkCommand(string) (*exec.Cmd, bool)           { return nil, false }
 func (u unavailable) ResolveHostname(string) (string, bool)             { return "", false }
 func (u unavailable) Status(string) backend.LiveStatus                  { return backend.LiveStatusUnknown }
+
+// A Kubernetes instance's control channel is its pod's, in any build: its
+// handle never has a host control directory to serve, even where the backend
+// is missing and every write fails.
+var _ backend.ControlChannel = unavailable{}
+
+func (u unavailable) WriteControlFile(string, []byte, fs.FileMode) error { return u.err }
+func (u unavailable) RemoveControlFile(string) error                     { return u.err }
 
 // cmd is a command that fails with u.err when started: a caller that runs
 // what a method returned gets the reason, not a missing program's error.

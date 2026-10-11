@@ -68,9 +68,13 @@ type podSlot struct {
 	// held is every resumable command started on the pod's sessions
 	// (AgentSession.Exec), re-attached to the next session after a drop.
 	held map[*podwire.Exec]*heldExec
-	// flowingAtDrop: audio was flowing on the pod when its last session
-	// dropped, so its reconnect is interactive.
-	flowingAtDrop bool
+	// interactiveAtDrop: audio was flowing on the pod, or an in-pod MCP
+	// stream was live, when its last session dropped, so its reconnect is
+	// interactive. mcpOpen counts the session's open MCP streams, mcpLast is
+	// when one last opened or closed.
+	interactiveAtDrop bool
+	mcpOpen           int
+	mcpLast           time.Time
 	// quickDrops counts the pod's sessions in a row that ended within
 	// quickDrop of their handshake: past the first, the next bootstrap waits
 	// a full-jitter backoff, so an agent that dies as soon as it connects
@@ -234,6 +238,7 @@ func (p *Pool) Forget(t PodTarget) {
 	delete(p.supervised, k)
 	delete(p.watched, k)
 	p.instMu.Unlock()
+	p.forgetDesired(k)
 	for _, slot := range gone {
 		slot.forget()
 	}
@@ -287,7 +292,7 @@ func (s *podSlot) boot(c *Cluster, t PodTarget, f *bootFlight) {
 		err = ErrSessionClosed
 	case err == nil:
 		s.failures, s.retryAt = 0, time.Time{}
-		s.flowingAtDrop = false
+		s.interactiveAtDrop = false
 		replaced, s.session = s.session, sess
 	case errors.Is(err, ErrPodNotReady):
 		// Not a failure of the pod's: it is starting (or going), and the
@@ -329,6 +334,7 @@ func (s *podSlot) boot(c *Cluster, t PodTarget, f *bootFlight) {
 	if err == nil {
 		go s.watch(sess)
 		go s.reattach(sess)
+		go sess.sendDesired()
 		if sts, ok := cutPodSuffix(s.key.pod); ok {
 			p.changed(trackKey{s.key.cluster, sts})
 		}
@@ -350,7 +356,7 @@ func (s *podSlot) watch(sess *AgentSession) {
 	current := s.session == sess
 	if current {
 		s.session = nil
-		s.flowingAtDrop = s.activity.Flowing()
+		s.interactiveAtDrop = s.activity.Flowing() || s.mcpLiveLocked()
 		if time.Since(sess.connected) < quickDrop {
 			s.quickDrops++
 			if s.quickDrops > 1 {
@@ -445,7 +451,7 @@ func (s *podSlot) bootstrap(c *Cluster, t PodTarget, tk *ticket) (*AgentSession,
 		p.opts.Logger.Warn("kube agent: no fleet build of the daemon's version to stage; using the pod's", "fleet", t.Fleet, "instance", t.Instance, "pod_version", fast.build.Version, "err", artErr)
 	}
 
-	client, stream, err := p.dialAgent(ctx, c, s, ref, podwire.RoleMain, nil)
+	client, stream, err := p.dialAgent(ctx, c, s, ref, podwire.RoleMain, nil, p.inboundHandlers(s, t))
 	if err != nil {
 		s.dropFast()
 		return nil, err
@@ -454,9 +460,15 @@ func (s *podSlot) bootstrap(c *Cluster, t PodTarget, tk *ticket) (*AgentSession,
 	s.mu.Lock()
 	s.fast = &fastPath{uid: string(pod.UID), probe: fast.probe, build: &podBuild{Version: h.Version, SHA: h.SHA, ProtoMin: h.ProtoMin, ProtoMax: h.ProtoMax}}
 	s.mu.Unlock()
-	sess := &AgentSession{pool: p, slot: s, cluster: c, pod: ref, probe: fast.probe, main: client, stream: stream, pacer: podwire.NewPacer(s.activity.Flowing), connected: time.Now()}
+	sess := &AgentSession{pool: p, slot: s, cluster: c, pod: ref, probe: fast.probe, main: client, stream: stream, pacer: podwire.NewPacer(s.activity.Flowing), connected: time.Now(),
+		target: t, desiredKick: make(chan struct{}, 1)}
 	if art != nil {
 		sess.setWant(art.SHA256)
+	}
+	// Before the session is handed out: what runs first in it (the
+	// creation hooks) finds the sockets the pod should have.
+	if err := p.applyDesired(ctx, sess); err != nil && client.Err() == nil {
+		p.opts.Logger.Warn("kube agent: the pod's control directory is not as fleetd wants it", "fleet", t.Fleet, "instance", t.Instance, "err", err)
 	}
 	p.opts.Logger.Info("kube agent: connected", "fleet", t.Fleet, "instance", t.Instance, "pod", ref.Namespace+"/"+ref.Name,
 		"probed", probed, "staged", staged != "", "agent_version", versionOrDev(h.Version), "stale", sess.Stale(), "ms", p.opts.Now().Sub(start).Milliseconds())

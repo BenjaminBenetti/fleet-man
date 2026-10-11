@@ -3,24 +3,20 @@
 package kubernetes
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io/fs"
-	"strings"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
-	"github.com/BenjaminBenetti/fleet-man/internal/control"
 	"github.com/BenjaminBenetti/fleet-man/internal/execas"
 	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
 )
 
 // agent.go is the handle's work over the pod's agent session: the session
 // polls (tmux sessions, their screens, the agent tool), scripts, the control
-// directory's files and the fleet binary's staging. The polls never start a
+// directory's files (desired.go delivers them) and the fleet binary's
+// staging. The polls never start a
 // session (the supervisor keeps one up in every running instance, and a poll
 // that found none would otherwise cost an API server exec upgrade each
 // time): without one they report nothing. A script, a control file or a
@@ -138,57 +134,30 @@ func (b *Backend) RunScript(containerID, text string) (string, error) {
 	return out, nil
 }
 
-// controlPath is a control file's path in the pod; name must be a base name.
-func controlPath(name string) (string, error) {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") {
-		return "", fmt.Errorf("control file name %q is not a base name", name)
-	}
-	return control.ContainerMountDir + "/" + name, nil
-}
-
-// errNoSession is a control file write while the pod has no agent session:
-// the caller writes it again later.
-var errNoSession = fmt.Errorf("the instance's pod agent is not connected")
-
 // WriteControlFile writes a file of the instance's control directory
-// (backend.ControlChannel) through its live agent session, as root (the
-// directory is root's), atomically (the agent writes a temp file and renames
-// it, which replaces a link planted at the name). Without a session it fails
-// and the caller writes it again later.
+// (backend.ControlChannel): it becomes one of the files the pod's agent keeps
+// there (Pool.SetControlFile), written at once (atomically, as root: the
+// directory is root's) while the pod has an agent session, and again by
+// every later session. Only base names fleet's control files may have are
+// taken.
 func (b *Backend) WriteControlFile(name string, data []byte, mode fs.FileMode) error {
-	path, err := controlPath(name)
+	w, err := b.where("")
 	if err != nil {
 		return err
 	}
-	s := b.liveSession("")
-	if s == nil {
-		return errNoSession
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), pollTimeout)
-	defer cancel()
-	sum := sha256.Sum256(data)
-	return s.Client().WriteFile(ctx, podwire.FileWriteHeader{Path: path, Mode: mode, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), Class: execas.ClassRoot}, bytes.NewReader(data))
+	return b.p().SetControlFile(w.cluster, w.sts, name, data, mode)
 }
 
 // RemoveControlFile removes a file of the instance's control directory.
 func (b *Backend) RemoveControlFile(name string) error {
-	path, err := controlPath(name)
+	if !podwire.ValidControlFileName(name) {
+		return fmt.Errorf("control file name %q is not allowed", name)
+	}
+	w, err := b.where("")
 	if err != nil {
 		return err
 	}
-	s := b.liveSession("")
-	if s == nil {
-		return errNoSession
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), pollTimeout)
-	defer cancel()
-	res, err := s.Client().Run(ctx, podwire.ExecHeader{Request: execas.Request{Class: execas.ClassRoot, Argv: []string{"rm", "-f", "--", path}}}, nil)
-	if err != nil {
-		return err
-	}
-	if res.Code != 0 {
-		return fmt.Errorf("removing %s: exit %d%s", path, res.Code, detail(string(res.Stderr)))
-	}
+	b.p().RemoveControlFile(w.cluster, w.sts, name)
 	return nil
 }
 

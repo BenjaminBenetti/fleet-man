@@ -243,6 +243,16 @@ type Pool struct {
 	ownerVal string
 	ownerErr error
 	ownerAt  time.Time
+
+	// desiredMu guards what fleetd wants in the pods' control directories
+	// (desired.go) and the daemon's hooks for it (never held with mu).
+	desiredMu  sync.Mutex
+	desiredSrc DesiredSource
+	inbound    InboundHandler
+	desired    map[trackKey]*desiredEntry
+	// socketsEpoch counts RefreshDesired calls, desiredGen the states sent.
+	socketsEpoch uint64
+	desiredGen   uint64
 }
 
 // clusterGates are a connection's limits, kept across reloads of its
@@ -352,6 +362,7 @@ func NewPool(opts PoolOptions) *Pool {
 		tracks:     map[trackKey]*track{},
 		watched:    map[trackKey]bool{},
 		supervised: map[trackKey]*supervision{},
+		desired:    map[trackKey]*desiredEntry{},
 	}
 }
 

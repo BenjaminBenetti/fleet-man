@@ -184,7 +184,12 @@ func Serve(ctx context.Context) error {
 			})
 		})
 	}, svc.hub.hasSubscribers)
+	svc.control = controlReg
 	go controlReg.run(hubCtx)
+	// The Kubernetes pods' in-pod sockets: which each pod binds, and the
+	// connections their agents relay, served by the same handlers as the host
+	// sockets' (control registry, agent relay, instance MCP).
+	go svc.podAgents.run(hubCtx)
 
 	// Virtual microphone: keeps a sink inside every running instance while a
 	// microphone provider (a TUI's Mic stream) is attached and the feature is on.

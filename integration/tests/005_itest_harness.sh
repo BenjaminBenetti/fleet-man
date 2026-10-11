@@ -122,16 +122,23 @@ assert_contains "${out}" "ok" "devcontainer dispatch"
 assert_contains "${out}" "rc=0" "devcontainer dispatch exit code"
 
 info "kubernetes stubs end the test with one clear failure, in \$(...) and in conditions"
-out=$(in_backend kubernetes 's=$(itest_control_read x/y fleet.sock); echo unreachable')
-assert_contains "${out}" "itest_control_read is not wired yet (P3.0)" "control stub message in \$(...)"
-assert_contains "${out}" "rc=1" "control stub exit code"
+out=$(in_backend kubernetes 's=$(itest_share_sync x); echo unreachable')
+assert_contains "${out}" "itest_share_sync is not wired yet (P4.6)" "share-sync stub message in \$(...)"
+assert_contains "${out}" "rc=1" "stub exit code"
 assert_not_contains "${out}" "unreachable" "the test must stop at the stub"
 # In a condition set -e is off, so only an exit stops the test there.
-out=$(in_backend kubernetes 'if itest_control_test x/y -e fleet.sock; then echo present; fi; echo unreachable')
-assert_contains "${out}" "itest_control_test is not wired yet (P3.0)" "control stub message"
-assert_not_contains "${out}" "unreachable" "the test must stop at a stub inside a condition"
-out=$(in_backend kubernetes 'itest_share_sync x; echo unreachable')
+out=$(in_backend kubernetes 'if itest_share_sync x; then echo synced; fi; echo unreachable')
 assert_contains "${out}" "itest_share_sync is not wired yet (P4.6)" "share-sync stub message"
+assert_not_contains "${out}" "unreachable" "the test must stop at a stub inside a condition"
+
+info "kubernetes control-dir helpers look in the pod's /fleet-mounts/control through fleet exec"
+stand_in="${work}/fleet-stand-in.sh"
+printf '#!/bin/sh\nprintf "%%s|" "$@"; echo\n' > "${stand_in}"
+chmod +x "${stand_in}"
+out=$(in_backend kubernetes 'itest_control_test x/y -S ssh-agent.sock; itest_control_read x/y claude-status.json; itest_control_mode x/y mcp.sock' FLEET_BIN="${stand_in}")
+assert_contains "${out}" "exec|x/y|--|test|-S|/fleet-mounts/control/ssh-agent.sock|" "itest_control_test in the pod"
+assert_contains "${out}" "exec|x/y|--|cat|/fleet-mounts/control/claude-status.json|" "itest_control_read in the pod"
+assert_contains "${out}" "exec|x/y|--|stat|-c|%a|/fleet-mounts/control/mcp.sock|" "itest_control_mode in the pod"
 out=$(in_backend kubernetes '_be_teardown; echo after-teardown' FLEET_BIN=/nonexistent/fleet)
 assert_contains "${out}" "after-teardown" "the kubernetes teardown must never exit"
 

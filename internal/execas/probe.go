@@ -13,6 +13,18 @@ import (
 // with the pod.
 const DefaultCacheDir = "/opt/fleet/run/execas"
 
+// DefaultProbeDeps are the files besides the startup files whose state a
+// probed environment depends on in a pod: the in-pod sockets the agent binds
+// in the control directory, which fleet.rc tests (it hands agents the fleet
+// MCP only while mcp.sock is there) as a user's rc files may test the agent
+// socket. A socket bound or unbound changes the fingerprint, so a cached
+// environment never outlives the socket state it was probed with.
+var DefaultProbeDeps = []string{
+	"/fleet-mounts/control/fleet.sock",
+	"/fleet-mounts/control/ssh-agent.sock",
+	"/fleet-mounts/control/mcp.sock",
+}
+
 // ProbeMode is devcontainer.json's userEnvProbe: which kind of shell the exec
 // class starts once to read the user's environment.
 type ProbeMode string
@@ -55,6 +67,10 @@ type ProbeTarget struct {
 	// `docker exec -u` would give it.
 	Env []string
 	Dir string
+	// Deps are files besides the shell's startup files whose state its
+	// answer depends on (Host.ProbeDeps); they count in the cache's
+	// fingerprint.
+	Deps []string
 }
 
 // EnvProber reads a user's environment the way the devcontainer CLI's

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: in-instance `fleet open` (fo) delegates to the attached TUI: the human confirms an "Open request", the file lands in ~/Downloads and is handed to the opener.
 set -euo pipefail
 

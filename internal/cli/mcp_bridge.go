@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/mcpbridge"
 	"github.com/spf13/cobra"
@@ -14,6 +15,7 @@ import (
 // instance's control directory — meaningless on the host, hence hidden.
 func newMCPBridgeCmd() *cobra.Command {
 	var socket string
+	var wait time.Duration
 	cmd := &cobra.Command{
 		Use:    mcpbridge.Subcommand,
 		Short:  "Relay the fleet MCP server to stdio inside an instance (internal)",
@@ -26,10 +28,12 @@ func newMCPBridgeCmd() *cobra.Command {
 				Dial: mcpbridge.Dialer(socket),
 				In:   os.Stdin,
 				Out:  os.Stdout,
+				Wait: wait,
 			}
 			return b.Run(cmd.Context())
 		},
 	}
 	cmd.Flags().StringVar(&socket, "socket", mcpbridge.ContainerSocketPath, "the daemon's MCP socket")
+	cmd.Flags().DurationVar(&wait, "wait", 0, "how long a call waits for the daemon (default 10s)")
 	return cmd
 }

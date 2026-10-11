@@ -108,9 +108,9 @@ fleetd serves its pods the pod build of the fleet under test, which
 `FLEET_POD_BINARY_<ARCH>` names (run.sh builds one beside `FLEET_BIN` when it
 builds that too); `FLEET_POD_TMUX_<ARCH>` names the tmux bundle images without
 tmux need. Teardown deletes what is left of the test's connection by label
-and stops the test's daemons. The control-dir helpers (P3.0) and the share
-sync (P4.6) still fail the test as "not wired yet", naming the unit that
-wires them.
+and stops the test's daemons. The control-dir helpers look in the pod's own
+`/fleet-mounts/control` through `fleet exec`; the share sync (P4.6) still
+fails the test as "not wired yet", naming the unit that wires it.
 
 Tests other than devcontainer-only ones never inspect a backend directly (no
 `docker inspect`, `docker exec`, `kubectl`, or

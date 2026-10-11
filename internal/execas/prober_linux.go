@@ -42,8 +42,9 @@ const (
 )
 
 // Prober runs the devcontainer CLI's userEnvProbe and caches the result. A
-// cached environment is used while the shell's startup files are unchanged
-// (their fingerprint: size, times and inode of each) and it is younger than
+// cached environment is used while the shell's startup files (and the
+// target's Deps) are unchanged (their fingerprint: size, times and inode of
+// each) and it is younger than
 // probeMaxAge, so a command in the exec class costs a shell start only after
 // something changed. The cache lives in memory and, when cacheDir is usable, in
 // files there, so one-shot `fleet exec-as` runs share it with the agent.
@@ -217,7 +218,7 @@ func rcFingerprint(t ProbeTarget) string {
 	dirs := []string{"/etc/profile.d", "/etc/fish/conf.d", filepath.Join(xdg, "fish", "conf.d")}
 
 	h := sha256.New()
-	for _, f := range files {
+	for _, f := range append(files, t.Deps...) {
 		writeFileState(h, f)
 	}
 	for _, d := range dirs {

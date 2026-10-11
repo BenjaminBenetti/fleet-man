@@ -27,6 +27,9 @@ import (
 //     (agentsock.ModeRelay): on macOS a host socket cannot cross into Docker
 //     Desktop's VM. They are an instanceSocketSet (instance_sockets.go), which
 //     binds them safely and checks every connection's peer.
+//
+// A Kubernetes pod's agent binds the pod's socket itself and relays each
+// connection to it here (serveFromPod, podagent_hub.go), on any daemon OS.
 
 // agentSyncInterval is how often the per-instance sockets are reconciled
 // against the instances in state.json.
@@ -88,6 +91,27 @@ func (h *agentHub) serveFrom(origin string) func(net.Conn) {
 		defer h.untrack(conn)
 		h.serveConn(conn, origin)
 	}
+}
+
+// serveFromPod serves one connection a Kubernetes pod relayed from its
+// in-pod ssh-agent socket, for the instance keyed origin: to the socket
+// FLEET_SSH_AGENT_SOCK names when that is a live socket on the daemon host
+// (with the same request allowlist and forwarding bind as the daemon's own
+// agent), else through the relay, as the instance sockets are. The pod's
+// gate (forwarding off) was judged by the caller.
+func (h *agentHub) serveFromPod(conn net.Conn, origin string) {
+	src, _ := agentsock.CurrentPodSource()
+	if src != agentsock.PodAgentOverride {
+		h.serveFrom(origin)(conn)
+		return
+	}
+	if !h.track(conn) {
+		_ = conn.Close()
+		return
+	}
+	defer h.untrack(conn)
+	defer conn.Close()
+	h.serveFromAgent(conn, agentsock.Override(), origin)
 }
 
 // listenHost starts the host relay socket at path.
@@ -177,7 +201,9 @@ func (h *agentHub) ensureInstance(fleetName, instanceName string) {
 	if agentsock.CurrentMode() != agentsock.ModeRelay {
 		return
 	}
-	h.sockets.ensure(fleetName+"/"+instanceName, loadInstanceTarget(fleetName, instanceName))
+	if t, ok := loadInstanceTarget(fleetName, instanceName); ok {
+		h.sockets.ensure(fleetName+"/"+instanceName, t)
+	}
 }
 
 // close stops every socket, ends every live connection, and waits for their

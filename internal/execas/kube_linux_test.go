@@ -69,10 +69,12 @@ func TestKubeExecAs(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Stage the binary and the spec as the supervisor stages them: over exec
-	// stdin. The root pod also gets a group membership and a login-file
-	// variable to find.
+	// stdin. The root pod also gets a group membership, a login-file variable
+	// to find, and a socket at the spec's SSHAuthSock (the exec class exports
+	// it only while one is there, as the agent binds it).
 	setup := map[string]string{
-		"execas-root": `groupadd -g 998 dockerish && usermod -aG dockerish vscode &&
+		"execas-root": `perl -MIO::Socket::UNIX -e 'IO::Socket::UNIX->new(Local => "/tmp/agent.sock", Listen => 1) or die "$!"' &&
+groupadd -g 998 dockerish && usermod -aG dockerish vscode &&
 for f in .profile .bash_profile .zshenv; do echo 'export PROBED_FROM_PROFILE=1' >> /home/vscode/$f; done &&
 chown vscode: /home/vscode/.profile /home/vscode/.bash_profile /home/vscode/.zshenv && install -d -o vscode /tmp/ws`,
 		"execas-tierc": `mkdir -p /tmp/ws`,

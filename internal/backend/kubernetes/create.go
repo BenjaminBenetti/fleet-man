@@ -19,6 +19,7 @@ import (
 	kclient "k8s.io/client-go/kubernetes"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/agentsock"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/devcli"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
@@ -490,13 +491,17 @@ func (c *creation) preflight(ctx context.Context, cfg *devcli.Config) error {
 	return nil
 }
 
-// input is the translation's input for a captured run.
+// input is the translation's input for a captured run. Exec-class commands
+// get the in-pod ssh-agent socket as SSH_AUTH_SOCK while the agent has it
+// bound (whether the daemon can serve the pod an agent is decided as they
+// start, not here).
 func (c *creation) input(capture *kubeshim.Capture, image kubeshim.ImageConfig, cfg *devcli.Config) podspec.Input {
 	rec := c.rec
 	return podspec.Input{
 		Capture: capture, Image: image, Merged: cfg.Merged,
 		WorkspaceDir: c.req.WorkspaceDir, WorkspaceFolder: cfg.WorkspaceFolder,
 		FleetMounts: c.req.Mounts, Cluster: &rec, Facts: clusterFacts(c.facts, rec.StorageClass),
+		SSHAuthSock: agentsock.ContainerSocketPath,
 	}
 }
 

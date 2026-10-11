@@ -33,7 +33,7 @@ func TestServeHandshake(t *testing.T) {
 	if err := s.c.Call(context.Background(), "version", nil, &v); err != nil {
 		t.Fatal(err)
 	}
-	if v.Role != podwire.RoleMain || v.Proto != 1 || v.PID != os.Getpid() || v.SHA != h.SHA {
+	if v.Role != podwire.RoleMain || v.Proto != podwire.ProtoMax || v.PID != os.Getpid() || v.SHA != h.SHA {
 		t.Fatalf("version %+v", v)
 	}
 }

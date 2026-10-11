@@ -35,6 +35,15 @@ type Host struct {
 	// first) and their terminfo after the system's. It is asked on every
 	// Plan, so a bundle installed after this Host was made counts.
 	Bundles func() []Bundle
+	// ProbeDeps are files besides the startup files whose state the probed
+	// environment depends on (DefaultProbeDeps in a pod).
+	ProbeDeps []string
+	// AgentSocket reports whether the exec class's SSH_AUTH_SOCK (the spec's
+	// SSHAuthSock) is there to export; nil looks for a socket at the path.
+	// The pod agent binds it only while the daemon can serve the pod an
+	// agent, so a command started without one gets no SSH_AUTH_SOCK that
+	// could only fail, as docker passes none then.
+	AgentSocket func(path string) bool
 }
 
 // Bundle is one program bundle in a pod: Bin holds its programs, Terminfo
@@ -56,6 +65,7 @@ func NewHost(spec Spec, cacheDir string) *Host {
 		Self:       CurrentCreds(),
 		SingleUID:  !CanSwitchUser(),
 		Prober:     NewProber(cacheDir),
+		ProbeDeps:  DefaultProbeDeps,
 	}
 }
 
@@ -261,6 +271,7 @@ func (h *Host) addUserEnv(ctx context.Context, env, cenv *envList, id Identity) 
 			Switch:   !h.SingleUID,
 			Env:      start.entries(),
 			Dir:      h.probeDir(),
+			Deps:     h.ProbeDeps,
 		}))
 		// A probe cut short by ctx answered nothing: the request was
 		// cancelled, so it gets no plan rather than one without the user's
@@ -269,8 +280,8 @@ func (h *Host) addUserEnv(ctx context.Context, env, cenv *envList, id Identity) 
 			return fmt.Errorf("probe the user environment: %w", err)
 		}
 	}
-	if h.Spec.SSHAuthSock != "" {
-		env.set("SSH_AUTH_SOCK", h.Spec.SSHAuthSock)
+	if sock := h.Spec.SSHAuthSock; sock != "" && h.agentSocket(sock) {
+		env.set("SSH_AUTH_SOCK", sock)
 	}
 	for _, name := range slices.Sorted(maps.Keys(h.Spec.RemoteEnv)) {
 		value, err := substituteContainerEnv(h.Spec.RemoteEnv[name], cenv)
@@ -280,6 +291,15 @@ func (h *Host) addUserEnv(ctx context.Context, env, cenv *envList, id Identity) 
 		env.set(name, value)
 	}
 	return nil
+}
+
+// agentSocket reports whether the agent socket at path is there to export.
+func (h *Host) agentSocket(path string) bool {
+	if h.AgentSocket != nil {
+		return h.AgentSocket(path)
+	}
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode()&os.ModeSocket != 0
 }
 
 // probeDir is where the probe shell starts: the container's working directory,

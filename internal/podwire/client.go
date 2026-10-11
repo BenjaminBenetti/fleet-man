@@ -85,6 +85,12 @@ type Client struct {
 
 	slotsMu sync.Mutex
 	slots   map[Tag]chan struct{}
+
+	// ackMu guards the agent's latest DesiredAck; ackCh is closed (and
+	// replaced) whenever one arrives.
+	ackMu sync.Mutex
+	ack   DesiredAck
+	ackCh chan struct{}
 }
 
 // Dial runs the handshake over conn (a `pod-agent serve` exec's stdio) and
@@ -110,7 +116,7 @@ func Dial(ctx context.Context, conn io.ReadWriteCloser, opts ClientOptions) (*Cl
 	stop := context.AfterFunc(ctx, func() { _ = sess.Close() })
 	defer stop()
 
-	c := &Client{opts: opts, sess: sess, done: make(chan struct{})}
+	c := &Client{opts: opts, sess: sess, done: make(chan struct{}), ackCh: make(chan struct{})}
 	hello, ctl, r, err := c.handshake()
 	if err != nil {
 		_ = sess.Close()
@@ -199,7 +205,8 @@ func (c *Client) handshake() (Hello, *yamux.Stream, *FrameReader, error) {
 	return hello, ctl, r, nil
 }
 
-// readControl reads the control stream: heartbeats and LOG records.
+// readControl reads the control stream: heartbeats, LOG records and
+// DesiredAcks.
 func (c *Client) readControl(ctl *yamux.Stream, r *FrameReader) {
 	defer ctl.Close()
 	for {
@@ -216,8 +223,61 @@ func (c *Client) readControl(ctl *yamux.Stream, r *FrameReader) {
 		if DecodeFrame(f, &m) != nil {
 			continue
 		}
-		if m.Type == MsgLog && m.Log != nil {
+		switch {
+		case m.Type == MsgLog && m.Log != nil:
 			c.logs.Log(*m.Log)
+		case m.Type == MsgDesiredAck && m.DesiredAck != nil:
+			c.noteAck(*m.DesiredAck)
+		}
+	}
+}
+
+func (c *Client) noteAck(ack DesiredAck) {
+	c.ackMu.Lock()
+	defer c.ackMu.Unlock()
+	if ack.Gen < c.ack.Gen {
+		return
+	}
+	c.ack = ack
+	close(c.ackCh)
+	c.ackCh = make(chan struct{})
+}
+
+// SupportsDesired reports whether the agent applies DesiredState (it speaks
+// ProtoDesiredState or later).
+func (c *Client) SupportsDesired() bool { return c.proto >= ProtoDesiredState }
+
+// SendDesired sends the whole state ds on the control stream; the agent
+// applies it and acks (WaitDesired).
+func (c *Client) SendDesired(ds DesiredState) error {
+	if !c.SupportsDesired() {
+		return ErrNoDesiredState
+	}
+	if err := ds.Validate(); err != nil {
+		return err
+	}
+	if err := c.Err(); err != nil {
+		return fmt.Errorf("pod agent session: %w", err)
+	}
+	return c.ctlW.WriteJSON(FrameData, ControlMessage{Type: MsgDesired, Desired: &ds})
+}
+
+// WaitDesired waits, within ctx, until the agent has applied state gen (or a
+// later one), and returns its ack.
+func (c *Client) WaitDesired(ctx context.Context, gen uint64) (DesiredAck, error) {
+	for {
+		c.ackMu.Lock()
+		ack, ch := c.ack, c.ackCh
+		c.ackMu.Unlock()
+		if ack.Gen >= gen {
+			return ack, nil
+		}
+		select {
+		case <-ch:
+		case <-c.done:
+			return DesiredAck{}, fmt.Errorf("pod agent session: %w", c.err)
+		case <-ctx.Done():
+			return DesiredAck{}, fmt.Errorf("waiting for the pod agent to apply the desired state: %w", ctx.Err())
 		}
 	}
 }

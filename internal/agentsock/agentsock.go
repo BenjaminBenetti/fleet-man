@@ -106,6 +106,62 @@ func ModeFor(override, goos string) Mode {
 	}
 }
 
+// PodSource is where the daemon serves a Kubernetes pod's in-pod ssh-agent
+// socket from (each connection to it reaches the daemon over the pod's agent
+// session, whatever the daemon's OS).
+type PodSource int
+
+const (
+	// PodAgentRelay: the relay, as for the host's own clones: the newest
+	// provider that can serve, else the agent the daemon was started with.
+	// On macOS too: a pod never gets Docker Desktop's VM-only socket.
+	PodAgentRelay PodSource = iota
+	// PodAgentOff: FLEET_SSH_AGENT_SOCK=off, which turns pods' agent off too.
+	PodAgentOff
+	// PodAgentOverride: FLEET_SSH_AGENT_SOCK names a live socket on the
+	// daemon host, which the daemon dials for every pod connection.
+	PodAgentOverride
+)
+
+// PodSourceFor is the pure core of CurrentPodSource. live reports whether
+// override names a live socket on the daemon host. fellBack is set when an
+// override path is not one (it may exist only inside a Docker VM, as colima's
+// or a Podman machine's do): pods use the relay, and the daemon says so.
+func PodSourceFor(override, goos string, live bool) (src PodSource, fellBack bool) {
+	switch ModeFor(override, goos) {
+	case ModeOff:
+		return PodAgentOff, false
+	case ModeOverride:
+		if live {
+			return PodAgentOverride, false
+		}
+		return PodAgentRelay, true
+	}
+	// ModeRelay, and ModeDockerDesktop on macOS: the relay.
+	return PodAgentRelay, false
+}
+
+// CurrentPodSource is PodSourceFor for this process's environment and
+// platform, with the override's liveness now.
+func CurrentPodSource() (PodSource, bool) {
+	override := Override()
+	live := ModeFor(override, runtime.GOOS) == ModeOverride && LiveSocket(override)
+	return PodSourceFor(override, runtime.GOOS, live)
+}
+
+// PodAgentUsable reports whether a pod pointed at its in-pod ssh-agent
+// socket can get an agent now from src: the override socket is live, or the
+// relay can back an agent (RelayUsable).
+func PodAgentUsable(src PodSource) bool {
+	switch src {
+	case PodAgentOff:
+		return false
+	case PodAgentOverride:
+		return true
+	}
+	return RelayUsable()
+}
+
 // HostSocketPath is the daemon's host-side relay socket, in a 0700 directory
 // under ~/.fleet.
 func HostSocketPath() string {
