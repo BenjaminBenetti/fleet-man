@@ -181,7 +181,10 @@ message KubeCluster {
   // ---- workspace ----
 
   // rebuild_export is how Rebuild brings an instance's workspace back to the
-  // daemon host before it rebuilds. Empty = auto.
+  // daemon host before it rebuilds: "" or "auto" exports it from wherever
+  // the instance is (the running pod, or a stopped one's disk) over the
+  // daemon host's checkout, so the rebuild builds what the instance holds;
+  // "off" builds from the checkout as it is.
   string rebuild_export = 45;
 
   // ---- bookkeeping (daemon-owned; clients cannot set these) ----

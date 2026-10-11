@@ -179,8 +179,11 @@ func TestWhere(t *testing.T) {
 // naming it; what it never does without I/O it answers at once.
 func TestHandleCapabilities(t *testing.T) {
 	b := newHandle((&handleRig{}).inst(), nil)
-	if !b.SupportsSharedMounts() || b.SupportsClone() || b.SupportsRebuild() || b.SupportsMicSink() {
+	if !b.SupportsSharedMounts() || b.SupportsClone() || !b.SupportsRebuild() || b.SupportsMicSink() {
 		t.Fatal("capabilities")
+	}
+	if _, ok := any(b).(backend.RebuildContexter); !ok {
+		t.Fatal("the handle rebuilds without its job's context")
 	}
 	if !backend.HasControlChannel(b) {
 		t.Fatal("no control channel: provisioning would mount a host control directory")
@@ -193,8 +196,6 @@ func TestHandleCapabilities(t *testing.T) {
 	}
 	_, err := b.Clone("cid", "/ws", nil)
 	unavailableCode("Clone", err)
-	_, err = b.Rebuild("cid", "/ws", nil)
-	unavailableCode("Rebuild", err)
 	// The exec surface (Exec, ExecCommand, CopyFile, Logs) reaches the pod
 	// now; its shape is checked in cmd_test.go, not run here against a
 	// cluster. Editor, mic and forwarding are still later units'.

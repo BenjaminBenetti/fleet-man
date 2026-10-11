@@ -158,8 +158,12 @@ type Journal struct {
 	PrevSpecSecret string               `json:"prevSpecSecret,omitempty"`
 	PrevStatus     fleet.InstanceStatus `json:"prevStatus,omitempty"`
 	PrevError      string               `json:"prevError,omitempty"`
-	Rollback       *Rollback            `json:"rollback,omitempty"`
-	StartedAt      time.Time            `json:"startedAt"`
+	// PrevRecord is fleetd's record of the instance's pod before a rebuild
+	// replaced it (InstanceRecord), put back by an undo so the restored
+	// generation's pod verifies again.
+	PrevRecord *InstanceRecord `json:"prevRecord,omitempty"`
+	Rollback   *Rollback       `json:"rollback,omitempty"`
+	StartedAt  time.Time       `json:"startedAt"`
 }
 
 // Mark is the journal's mirror: the fleet.dev/op value its anchor carries.
@@ -380,6 +384,11 @@ func (j Journal) clone() Journal {
 	if j.Rollback != nil {
 		rb := *j.Rollback
 		c.Rollback = &rb
+	}
+	if j.PrevRecord != nil {
+		rec := *j.PrevRecord
+		rec.ImageDigests = append([]string(nil), j.PrevRecord.ImageDigests...)
+		c.PrevRecord = &rec
 	}
 	return c
 }

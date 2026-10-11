@@ -45,15 +45,16 @@ type Backend struct {
 
 // The interfaces the handle provides besides backend.Backend.
 var (
-	_ backend.UpContexter    = (*Backend)(nil)
-	_ backend.OrphanDowner   = (*Backend)(nil)
-	_ backend.ControlChannel = (*Backend)(nil)
-	_ backend.RestartAware   = (*Backend)(nil)
-	_ backend.PostStarter    = (*Backend)(nil)
-	_ TargetProvider         = (*Backend)(nil)
-	_ fleetlaunch.Stager     = (*Backend)(nil)
-	_ backend.StreamExecer   = (*Backend)(nil)
-	_ backend.TmuxEnsurer    = (*Backend)(nil)
+	_ backend.UpContexter      = (*Backend)(nil)
+	_ backend.RebuildContexter = (*Backend)(nil)
+	_ backend.OrphanDowner     = (*Backend)(nil)
+	_ backend.ControlChannel   = (*Backend)(nil)
+	_ backend.RestartAware     = (*Backend)(nil)
+	_ backend.PostStarter      = (*Backend)(nil)
+	_ TargetProvider           = (*Backend)(nil)
+	_ fleetlaunch.Stager       = (*Backend)(nil)
+	_ backend.StreamExecer     = (*Backend)(nil)
+	_ backend.TmuxEnsurer      = (*Backend)(nil)
 )
 
 // ForInstance is the handle on inst, a Kubernetes record. It keeps a copy
@@ -184,25 +185,17 @@ func ContainerID(clusterID, ns, sts string, gen int) string {
 // rather than dropping them.
 func (b *Backend) SupportsSharedMounts() bool { return true }
 
-// SupportsClone and SupportsRebuild are false until cluster clone and
-// rebuild land; SupportsMicSink until audio does.
+// SupportsRebuild is true (rebuild.go); SupportsClone is false until
+// cluster clone lands, SupportsMicSink until audio does.
 func (b *Backend) SupportsClone() bool   { return false }
-func (b *Backend) SupportsRebuild() bool { return false }
+func (b *Backend) SupportsRebuild() bool { return true }
 func (b *Backend) SupportsMicSink() bool { return false }
 
-var (
-	errClone   = notYet{what: "cloning an instance"}
-	errRebuild = notYet{what: "rebuilding an instance"}
-)
+var errClone = notYet{what: "cloning an instance"}
 
 // Clone is not available on a cluster yet.
 func (b *Backend) Clone(string, string, []backend.Mount) (*backend.UpResult, error) {
 	return nil, errClone
-}
-
-// Rebuild is not available on a cluster yet.
-func (b *Backend) Rebuild(string, string, []backend.Mount) (*backend.UpResult, error) {
-	return nil, errRebuild
 }
 
 // Up is UpContext without a job's context.
@@ -212,7 +205,10 @@ func (b *Backend) Up(workspaceDir string, mounts []backend.Mount) (*backend.UpRe
 
 // Status is the instance's row of the pool's status table (no API call):
 // unknown until the pool watches the instance's connection, never missing
-// while the cluster cannot be asked, and unknown for no container at all.
+// while the cluster cannot be asked, and unknown for no container at all. A
+// ContainerID of a generation a rebuild replaced is missing, as a docker
+// container a rebuild removed is (fleetd's record of the pod says which
+// generation runs).
 func (b *Backend) Status(containerID string) backend.LiveStatus {
 	if containerID == "" {
 		return backend.LiveStatusUnknown
@@ -221,7 +217,20 @@ func (b *Backend) Status(containerID string) backend.LiveStatus {
 	if err != nil {
 		return backend.LiveStatusUnknown
 	}
+	if b.replacedGeneration(w) {
+		return backend.LiveStatusMissing
+	}
 	return b.p().Observe(w.cluster, w.sts).Live
+}
+
+// replacedGeneration reports whether w names an older generation of the
+// instance than the one fleetd's record of its pod runs.
+func (b *Backend) replacedGeneration(w where) bool {
+	if b.inst.KubeCluster != w.cluster || !names.ValidHash(b.inst.KubeKey) {
+		return false
+	}
+	rec, err := LoadInstanceRecord(w.cluster, b.inst.KubeKey)
+	return err == nil && rec.StatefulSet == w.sts && w.gen < rec.Gen
 }
 
 // LastRestart is the latest restart the cluster made of the instance on its

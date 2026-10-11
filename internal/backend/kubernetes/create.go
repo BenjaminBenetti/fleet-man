@@ -95,7 +95,7 @@ func (b *Backend) UpContext(ctx context.Context, req backend.UpRequest) (*backen
 	if err != nil {
 		return nil, err
 	}
-	c := &creation{b: b, p: b.p(), id: id, env: currentEnvironment(), req: req, start: time.Now()}
+	c := newCreation(b, id, req)
 	res, err := c.run(ctx)
 	if err != nil {
 		flog.Error("kube create failed", "fleet", id.fleet, "instance", id.name, "cluster", id.cluster, "key", id.key, "ms", time.Since(c.start).Milliseconds(), "err", err)
@@ -105,7 +105,13 @@ func (b *Backend) UpContext(ctx context.Context, req backend.UpRequest) (*backen
 	return res, nil
 }
 
-// creation is one create in progress.
+// newCreation is a create of generation 1 of the instance id names.
+func newCreation(b *Backend, id bound, req backend.UpRequest) *creation {
+	return &creation{b: b, p: b.p(), id: id, env: currentEnvironment(), req: req, start: time.Now(),
+		gen: 1, created: id.created, holder: id.key}
+}
+
+// creation is one create in progress, or the generation a rebuild makes.
 type creation struct {
 	b     *Backend
 	p     *Pool
@@ -122,6 +128,20 @@ type creation struct {
 	owner    string
 	facts    Facts
 	identity podspec.Identity
+
+	// gen is the root generation the job makes (1 for a create, N+1 for a
+	// rebuild), created the time its container counts as created (the
+	// container-created annotation set-up's creation markers compare): the
+	// instance's own for a create, the rebuild's for a rebuild, whose
+	// creation hooks run again.
+	gen     int
+	created time.Time
+	// prevGen is the generation a rebuild replaces (0 for a create): the
+	// seed resets it to trash and keeps the workspace.
+	prevGen int
+	// holder holds the job's image (kubeimage): the instance's key for a
+	// create, a holder of the rebuild's own until it succeeds.
+	holder string
 
 	jj *JobJournal
 	// started: the StatefulSet was applied, so a failure scales it down.
@@ -144,7 +164,7 @@ func (c *creation) run(ctx context.Context) (*backend.UpResult, error) {
 		return nil, kubeerr.Wrap(kubeerr.ImageBuild, err)
 	}
 
-	jj, err := BeginJournal(Journal{Op: OpCreate, Fleet: c.id.fleet, Instance: c.id.name, Cluster: c.id.cluster, Namespace: c.ns, Key: c.id.key, Gen: 1, Step: stepPreflight})
+	jj, err := BeginJournal(Journal{Op: OpCreate, Fleet: c.id.fleet, Instance: c.id.name, Cluster: c.id.cluster, Namespace: c.ns, Key: c.id.key, Gen: c.gen, Step: stepPreflight})
 	if errors.Is(err, ErrJournalExists) {
 		return nil, kubeerr.New(kubeerr.Interrupted, "an earlier job of this instance left its journal behind; destroy the instance and create it again")
 	}
@@ -192,7 +212,47 @@ func (c *creation) provision(ctx context.Context, cfg *devcli.Config) (*backend.
 	if err := c.preflight(ctx, cfg); err != nil {
 		return nil, err
 	}
+	img, err := c.build(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.step(ctx, stepAdmit, fleet.StepApplyManifests, "admission"); err != nil {
+		return nil, err
+	}
+	adm, r, err := c.admit(ctx, img, cfg)
+	if err != nil {
+		return nil, err
+	}
 
+	if err := c.step(ctx, stepApply, fleet.StepApplyManifests, ""); err != nil {
+		return nil, err
+	}
+	if err := c.apply(ctx, KindPVC, adm.Objects.Disk.Name, true, adm.Objects.Disk); err != nil {
+		return nil, err
+	}
+	if err := c.applyGeneration(ctx, adm); err != nil {
+		return nil, err
+	}
+
+	if err := c.step(ctx, stepSeed, fleet.StepSeed, ""); err != nil {
+		return nil, err
+	}
+	manifest, err := c.seed(ctx, adm, img)
+	if err != nil {
+		return nil, err
+	}
+	return c.launch(ctx, adm, r, manifest, img, cfg)
+}
+
+// built is the job's image: capture-up's result, delivered.
+type built struct {
+	capture *devcli.CaptureResult
+	del     *kubeimage.Delivery
+}
+
+// build builds the image on the daemon host (capture-up) and delivers it to
+// the cluster, held by c.holder.
+func (c *creation) build(ctx context.Context, cfg *devcli.Config) (*built, error) {
 	if err := c.step(ctx, stepBuild, fleet.StepImageBuild, ""); err != nil {
 		return nil, err
 	}
@@ -211,77 +271,84 @@ func (c *creation) provision(ctx context.Context, cfg *devcli.Config) (*backend.
 	if err != nil {
 		return nil, err
 	}
-	del, err := c.env.images().Deliver(ctx, t, kubeimage.NewImage(capture.Run.Image, capture.Image, capture.Calls), c.id.key)
+	del, err := c.env.images().Deliver(ctx, t, kubeimage.NewImage(capture.Run.Image, capture.Image, capture.Calls), c.holder)
 	if err != nil {
 		return nil, kubeerr.Wrap(kubeerr.ImagePush, err)
 	}
 	for _, w := range del.Warnings {
 		c.warn(ctx, w)
 	}
+	return &built{capture: capture, del: del}, nil
+}
 
-	if err := c.step(ctx, stepAdmit, fleet.StepApplyManifests, "admission"); err != nil {
-		return nil, err
-	}
-	in := c.input(capture.Capture, capture.Image, cfg)
-	in.LookupGroup = c.groupsOf(ctx, capture.Image.ID).lookup(ctx)
-	r := c.renderInput(imageRefOf(del), c.seedJob(ctx, capture.Image.ID))
+// admit translates the captured run into generation c.gen's objects, as the
+// cluster's admission takes them (debug grants dropped where only they are
+// refused), and returns them with their render's input.
+func (c *creation) admit(ctx context.Context, img *built, cfg *devcli.Config) (*podspec.Admitted, podspec.RenderInput, error) {
+	in := c.input(img.capture.Capture, img.capture.Image, cfg)
+	in.LookupGroup = c.groupsOf(ctx, img.capture.Image.ID).lookup(ctx)
+	r := c.renderInput(imageRefOf(img.del), c.seedJob(ctx, img.capture.Image.ID))
 	adm, err := podspec.Admit(ctx, c.cs, in, r)
 	if err != nil {
-		return nil, classify(err)
+		return nil, r, classify(err)
 	}
 	for _, w := range append(append([]string(nil), adm.Result.Pod.Warnings...), adm.Objects.Warnings...) {
 		c.warn(ctx, w)
 	}
+	return adm, r, nil
+}
 
-	if err := c.step(ctx, stepApply, fleet.StepApplyManifests, ""); err != nil {
-		return nil, err
-	}
+// applyGeneration applies generation c.gen's spec and env Secrets and its
+// seed Job.
+func (c *creation) applyGeneration(ctx context.Context, adm *podspec.Admitted) error {
 	o := adm.Objects
-	if err := c.apply(ctx, KindPVC, o.Disk.Name, true, o.Disk); err != nil {
-		return nil, err
-	}
 	for _, s := range []*corev1.Secret{o.SpecSecret, o.EnvSecret} {
 		if err := c.apply(ctx, KindSecret, s.Name, false, s); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	if err := c.apply(ctx, KindJob, o.Seed.Job.Name, false, o.Seed.Job); err != nil {
-		return nil, err
-	}
+	return c.apply(ctx, KindJob, o.Seed.Job.Name, false, o.Seed.Job)
+}
 
-	if err := c.step(ctx, stepSeed, fleet.StepSeed, ""); err != nil {
-		return nil, err
-	}
-	manifest, err := c.seed(ctx, adm, capture, del)
-	if err != nil {
-		return nil, err
-	}
-
+// launch starts generation c.gen once the seed made its root: the
+// StatefulSet rendered over the seeded layout, fleetd's record of its pod,
+// the pod waited for and verified, its agent, the shared state, the
+// devcontainer's lifecycle hooks.
+func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.RenderInput, manifest *podseed.Manifest, img *built, cfg *devcli.Config) (*backend.UpResult, error) {
+	capture, del := img.capture, img.del
 	if err := c.step(ctx, stepStart, fleet.StepWaitPod, ""); err != nil {
 		return nil, err
 	}
 	r.Root, r.Seed = podspec.RootLayout{Dirs: manifest.Dirs, Extra: manifest.RootExtra}, nil
-	o, err = podspec.Render(adm.Result, r)
+	o, err := podspec.Render(adm.Result, r)
 	if err != nil {
 		return nil, classify(err)
 	}
 	rec := InstanceRecord{
 		Cluster: c.id.cluster, Namespace: c.ns, Key: c.id.key, Fleet: c.id.fleet, Instance: c.id.name,
-		StatefulSet: c.id.sts, Gen: 1, SpecHash: podspec.SpecHash(&o.StatefulSet.Spec.Template.Spec),
+		StatefulSet: c.id.sts, Gen: c.gen, SpecHash: podspec.SpecHash(&o.StatefulSet.Spec.Template.Spec),
 		Image: del.Ref, Strategy: string(del.Strategy), RemoteUser: capture.RemoteUser,
-		WorkspaceFolder: cfg.WorkspaceFolder, NonRoot: c.identity.NonRoot, Created: c.id.created,
+		WorkspaceFolder: cfg.WorkspaceFolder, NonRoot: c.identity.NonRoot, Created: c.created,
 	}
 	rec.addImageDigest(del.Digest)
 	rec.addImageDigest(del.ImageID)
 	rec.addImageDigest(c.nodeImage)
 	c.started = true
-	uid, err := c.applyUID(ctx, KindStatefulSet, o.StatefulSet.Name, false, o.StatefulSet)
+	// A create makes the StatefulSet; a rebuild changes the one it has,
+	// and mirrors its steps on it.
+	rebuild := c.prevGen > 0
+	uid, err := c.applyJournaled(ctx, JournalObject{Kind: KindStatefulSet, Name: o.StatefulSet.Name, Gen: c.gen, Created: !rebuild, Anchor: rebuild}, o.StatefulSet)
 	if err != nil {
 		return nil, err
 	}
 	rec.StatefulSetUID = uid
 	if b := o.DisruptionBudget; b != nil {
-		if err := c.apply(ctx, KindPDB, b.Name, false, b); err != nil {
+		created := true
+		if rebuild {
+			_, err := c.cs.PolicyV1().PodDisruptionBudgets(c.ns).Get(ctx, b.Name, metav1.GetOptions{})
+			created = gone(err)
+		}
+		if _, err := c.applyJournaled(ctx, JournalObject{Kind: KindPDB, Name: b.Name, Gen: c.gen, Created: created}, b); err != nil {
 			return nil, err
 		}
 	}
@@ -322,10 +389,10 @@ func (c *creation) provision(ctx context.Context, cfg *devcli.Config) (*backend.
 	if err := c.step(ctx, stepHooks, fleet.StepLifecycleHooks, ""); err != nil {
 		return nil, err
 	}
-	containerID := ContainerID(c.id.cluster, c.ns, c.id.sts, 1)
+	containerID := ContainerID(c.id.cluster, c.ns, c.id.sts, c.gen)
 	err = setUp{
 		session: sess, pod: pod, container: capture.Container, containerID: containerID,
-		created: c.id.created, workspaceFolder: cfg.WorkspaceFolder, tools: c.env.Tools,
+		created: c.created, workspaceFolder: cfg.WorkspaceFolder, tools: c.env.Tools,
 	}.run(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("the devcontainer's lifecycle hooks: %w", err)
@@ -362,12 +429,16 @@ func (c *creation) connect(ctx context.Context) error {
 }
 
 // step journals and reports that the create moved to step, after checking
-// it was not cancelled meanwhile.
+// it was not cancelled meanwhile. Before its journal begins (a rebuild's
+// export and build) a step is only reported.
 func (c *creation) step(ctx context.Context, step Step, js fleet.JobStep, detail string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("cancelled: %w", context.Cause(ctx))
 	}
 	backend.ReportStep(ctx, js, detail)
+	if c.jj == nil {
+		return nil
+	}
 	if err := c.jj.Step(step); err != nil {
 		return err
 	}
@@ -407,13 +478,13 @@ func (c *creation) input(capture *kubeshim.Capture, image kubeshim.ImageConfig, 
 	}
 }
 
-// renderInput is the render's input for the instance's first generation.
+// renderInput is the render's input for generation c.gen.
 func (c *creation) renderInput(image podspec.ImageRef, seed *podspec.JobInput) podspec.RenderInput {
 	rec := c.rec
 	return podspec.RenderInput{
 		Cluster: &rec, Namespace: c.ns, Name: c.id.sts, Key: c.id.key, Owner: c.owner, ClusterID: c.id.cluster,
 		FleetName: c.id.fleet, FleetHash: names.FleetHash(c.daemonID, c.id.cluster, c.id.fleet),
-		InstanceName: c.id.name, Gen: 1, CreatedAt: c.id.created, Replicas: 1,
+		InstanceName: c.id.name, Gen: c.gen, CreatedAt: c.created, Replicas: 1,
 		Image: image, StorageClass: rec.StorageClass, Identity: c.identity,
 		SELinuxLevel: podspec.SELinuxLevel(names.FleetHash(c.daemonID, c.id.cluster, c.id.fleet)),
 		Seed:         seed,
@@ -423,7 +494,7 @@ func (c *creation) renderInput(image podspec.ImageRef, seed *podspec.JobInput) p
 // seedJob is the seed Job's input: bounded by the seed deadline for an
 // image of its size.
 func (c *creation) seedJob(ctx context.Context, imageID string) *podspec.JobInput {
-	return &podspec.JobInput{Name: names.SeedJob(c.id.sts, 1), ActiveDeadline: DefaultDeadlines().SeedDeadline(c.imageSize(ctx, imageID))}
+	return &podspec.JobInput{Name: names.SeedJob(c.id.sts, c.gen), ActiveDeadline: DefaultDeadlines().SeedDeadline(c.imageSize(ctx, imageID))}
 }
 
 // imageSize is the image's size on the daemon host (0 when unknown).
@@ -525,10 +596,17 @@ func (c *creation) apply(ctx context.Context, kind, name string, anchor bool, ob
 }
 
 func (c *creation) applyUID(ctx context.Context, kind, name string, anchor bool, obj metav1.Object) (string, error) {
+	return c.applyJournaled(ctx, JournalObject{Kind: kind, Name: name, Gen: c.gen, Created: true, Anchor: anchor}, obj)
+}
+
+// applyJournaled server-side applies obj as the journal object jo says (an
+// object the job makes, or one it changes), and returns its UID.
+func (c *creation) applyJournaled(ctx context.Context, jo JournalObject, obj metav1.Object) (string, error) {
+	kind, name, anchor := jo.Kind, jo.Name, jo.Anchor
 	if err := ctx.Err(); err != nil {
 		return "", fmt.Errorf("cancelled: %w", context.Cause(ctx))
 	}
-	if err := c.jj.Intend(JournalObject{Kind: kind, Name: name, Gen: 1, Created: true, Anchor: anchor}); err != nil {
+	if err := c.jj.Intend(jo); err != nil {
 		return "", err
 	}
 	if anchor {
@@ -591,7 +669,10 @@ func applyObject(ctx context.Context, cs kclient.Interface, ns, kind, name strin
 
 // seed runs the seed Job: the image root onto the disk, the workspace in,
 // the share uid remap; it returns the seeded generation's manifest.
-func (c *creation) seed(ctx context.Context, adm *podspec.Admitted, capture *devcli.CaptureResult, del *kubeimage.Delivery) (*podseed.Manifest, error) {
+// A rebuild's seed (c.prevGen set) first moves the generation it replaces to
+// trash and keeps the workspace on the disk as it is.
+func (c *creation) seed(ctx context.Context, adm *podspec.Admitted, img *built) (*podseed.Manifest, error) {
+	capture, del := img.capture, img.del
 	spec := podspec.SeedSpec(adm.Result, adm.Objects)
 	uid, gid := shareIDs()
 	if c.identity.NonRoot {
@@ -604,14 +685,18 @@ func (c *creation) seed(ctx context.Context, adm *podspec.Admitted, capture *dev
 			spec.Remap = &podseed.Remap{User: u, UID: uid, GID: gid}
 		}
 	}
+	workspace := workspaceTar(c.req.WorkspaceDir)
+	if c.prevGen > 0 {
+		spec.Reset, spec.PrevGen, spec.Workspace, workspace = true, c.prevGen, nil, nil
+	}
 	job := adm.Objects.Seed
 	want := job.Job.Spec.Template.Spec
 	digests := []string{del.Digest, del.ImageID}
 	res, err := c.p.RunJob(ctx, JobRun{
 		Cluster:   c.id.cluster,
 		Job:       job.Job.Name,
-		Spec:      podseed.JobSpec{Op: podseed.OpSeed, Gen: 1, PVC: podspec.JobDiskPath, Seed: spec},
-		Workspace: workspaceTar(c.req.WorkspaceDir),
+		Spec:      podseed.JobSpec{Op: podseed.OpSeed, Gen: c.gen, PVC: podspec.JobDiskPath, Seed: spec},
+		Workspace: workspace,
 		PVC:       adm.Objects.Disk.Name,
 		Progress: func(pr jobboot.Progress) {
 			backend.ReportStep(ctx, fleet.StepSeed, seedProgress(pr))

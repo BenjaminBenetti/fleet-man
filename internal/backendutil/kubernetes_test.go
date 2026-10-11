@@ -25,12 +25,13 @@ func TestNewForInstanceBindsTheKubernetesHandle(t *testing.T) {
 		t.Fatalf("NewForInstance(kubernetes) = %T", b)
 	}
 	for name, ok := range map[string]bool{
-		"ControlChannel": backend.HasControlChannel(b),
-		"OrphanDowner":   is[backend.OrphanDowner](b),
-		"UpContexter":    is[backend.UpContexter](b),
-		"RestartAware":   is[backend.RestartAware](b),
-		"PostStarter":    is[backend.PostStarter](b),
-		"TargetProvider": is[kubernetesbackend.TargetProvider](b),
+		"ControlChannel":   backend.HasControlChannel(b),
+		"OrphanDowner":     is[backend.OrphanDowner](b),
+		"UpContexter":      is[backend.UpContexter](b),
+		"RebuildContexter": is[backend.RebuildContexter](b),
+		"RestartAware":     is[backend.RestartAware](b),
+		"PostStarter":      is[backend.PostStarter](b),
+		"TargetProvider":   is[kubernetesbackend.TargetProvider](b),
 	} {
 		if !ok {
 			t.Errorf("the Kubernetes handle is not a %s", name)
@@ -40,7 +41,7 @@ func TestNewForInstanceBindsTheKubernetesHandle(t *testing.T) {
 	if _, ok := caps.(*kubernetesbackend.Backend); !ok || !backend.HasControlChannel(caps) {
 		t.Errorf("CapabilitiesFor(kubernetes) = %T", caps)
 	}
-	if !caps.SupportsSharedMounts() || caps.SupportsClone() || caps.SupportsRebuild() || caps.SupportsMicSink() {
+	if !caps.SupportsSharedMounts() || caps.SupportsClone() || !caps.SupportsRebuild() || caps.SupportsMicSink() {
 		t.Errorf("Kubernetes capabilities: shared %v clone %v rebuild %v mic %v", caps.SupportsSharedMounts(), caps.SupportsClone(), caps.SupportsRebuild(), caps.SupportsMicSink())
 	}
 }

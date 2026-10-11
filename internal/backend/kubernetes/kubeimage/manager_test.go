@@ -203,6 +203,53 @@ func TestDeliverHolderMovesAndRelease(t *testing.T) {
 	}
 }
 
+// A rebuild holds its new image under a holder of its own; once it
+// succeeded the instance's key takes it over and lets its old one go.
+func TestMoveHold(t *testing.T) {
+	h := newHarness(t)
+	tgt := h.target(h.cluster(), minikubeDev)
+	old, next := imageID("old"), imageID("next")
+	if _, err := h.m.Deliver(context.Background(), tgt, builtImage(old), "inst"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.m.Deliver(context.Background(), tgt, builtImage(old), "other"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.m.Deliver(context.Background(), tgt, builtImage(next), "inst@g2"); err != nil {
+		t.Fatal(err)
+	}
+	holders := func() map[string][]string {
+		out := map[string][]string{}
+		for _, e := range h.indexOf(t, tgt.Cluster.ID).Images {
+			out[e.ImageID] = e.Holders
+		}
+		return out
+	}
+	if got := holders(); !slices.Equal(got[old], []string{"inst", "other"}) || !slices.Equal(got[next], []string{"inst@g2"}) {
+		t.Fatalf("while rebuilding: %v", got)
+	}
+	// Nothing held by the rebuild's holder (a rolled-back rebuild released
+	// it): the key keeps its image.
+	if err := h.m.MoveHold(tgt.Cluster.ID, "nobody", "inst"); err != nil {
+		t.Fatal(err)
+	}
+	if got := holders(); !slices.Equal(got[old], []string{"inst", "other"}) {
+		t.Fatalf("an empty move changed the holds: %v", got)
+	}
+	if err := h.m.MoveHold(tgt.Cluster.ID, "inst@g2", "inst"); err != nil {
+		t.Fatal(err)
+	}
+	if got := holders(); !slices.Equal(got[old], []string{"other"}) || !slices.Equal(got[next], []string{"inst"}) {
+		t.Fatalf("after the move: %v", got)
+	}
+	if d, err := h.m.Lookup(tgt.Cluster.ID, "inst"); err != nil || d == nil || d.ImageID != next {
+		t.Errorf("Lookup after the move = %+v, %v", d, err)
+	}
+	if err := h.m.MoveHold(tgt.Cluster.ID, "inst", "inst"); err == nil {
+		t.Error("a move onto itself")
+	}
+}
+
 func TestDeliverNodeLoad(t *testing.T) {
 	id := imageID("local")
 	tag := "fleet.invalid/3fa2c91e/devcontainer:" + id12(id)

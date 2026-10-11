@@ -139,7 +139,8 @@ type KubeCluster struct {
 	// --- workspace ---
 
 	// RebuildExport is how Rebuild brings the workspace back to the daemon
-	// host before it rebuilds; empty = auto.
+	// host before it rebuilds: "" or "auto" exports it from the instance,
+	// "off" builds from the daemon host's checkout as it is.
 	RebuildExport string `json:"rebuild_export,omitempty"`
 
 	// --- bookkeeping (daemon-owned) ---
