@@ -238,7 +238,7 @@ var options = []Option{
 	{Name: "umask", Outcome: Map, apply: (*translation).optUmask,
 		Reason: "pid1.json: pod-init sets the umask"},
 	{Name: "use-api-socket", Outcome: Map, apply: (*translation).optUseAPISocket,
-		Reason: "the docker engine's socket, served by a docker-in-docker sidecar, which needs privileged pods allowed"},
+		Reason: "the docker engine's socket, served by the pod's own engine (the fleet-docker sidecar), which needs privileged pods allowed or a sysbox runtime class"},
 	{Name: "user", Outcome: Map,
 		Reason: "pid1.json: pod-init runs the process as that user (the container itself runs as root)"},
 	{Name: "userns", Outcome: Map, apply: (*translation).optUserNS,

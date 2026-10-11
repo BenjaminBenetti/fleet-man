@@ -24,6 +24,9 @@ func makeLinks(links []Link) []string {
 	var warns []string
 	for _, l := range links {
 		if cur, err := os.Readlink(l.Path); err == nil && cur == l.Target {
+			// An earlier run's, on the persisted root: the socket's
+			// group may have changed with the sidecar's image.
+			ownLikeTarget(l.Path, l.Target)
 			continue
 		}
 		fi, err := os.Lstat(l.Path)

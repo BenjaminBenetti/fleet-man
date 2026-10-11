@@ -32,9 +32,14 @@ import (
 // dockerSidecarScript is the sidecar's script; its arguments are dockerd
 // options of the connection's (the address pools). It is fleet's own text:
 // it never holds "$(" or "$$", which the kubelet expands in a command
-// (TestDockerSidecarScriptPassesKubeletExpansion).
+// (TestDockerSidecarScriptPassesKubeletExpansion). The shared folder (an
+// emptyDir, 0777) becomes root's 0755 first, as /etc/docker is on a docker
+// host: the engine reloads its daemon.json, whose runtimes run as root in
+// this privileged container, so no user of the dev container but root may
+// replace that file or the socket beside it.
 const dockerSidecarScript = `set -eu
 dir=` + DockerDir + `
+chmod 0755 "$dir" 2>/dev/null || :
 sock="$dir/docker.sock"
 cfg="$dir/daemon.json"
 [ -s "$cfg" ] || echo '{}' > "$cfg"

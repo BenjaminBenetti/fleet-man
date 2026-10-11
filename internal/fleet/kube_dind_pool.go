@@ -77,14 +77,3 @@ func parseDockerAddressPool(field string) (DockerAddressPool, error) {
 	}
 	return DockerAddressPool{Base: prefix.String(), Size: n}, nil
 }
-
-// DinDAddressPools is the connection's dind_address_pool, parsed; nil for
-// docker's defaults, or for a setting that does not parse (a record is
-// checked when it is saved).
-func (k *KubeCluster) DinDAddressPools() []DockerAddressPool {
-	pools, err := ParseDockerAddressPools(k.DinDAddressPool)
-	if err != nil {
-		return nil
-	}
-	return pools
-}

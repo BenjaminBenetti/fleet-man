@@ -34,12 +34,17 @@ import (
 // finishDocker decides the pod's docker engines, once the privilege policy
 // has run.
 func (t *translation) finishDocker() {
+	underSysbox := t.sysbox || strings.Contains(t.spec.RuntimeClassName, "sysbox")
+	dood := len(t.dood) > 0 && (t.doodPrivileged || t.sysbox)
+	if !t.spec.Security.Privileged && !underSysbox && !dood {
+		// No engine: the connection's pools do not concern the pod.
+		return
+	}
 	pools, err := fleet.ParseDockerAddressPools(t.cluster.DinDAddressPool)
 	if err != nil {
 		t.refuse(&Refusal{Code: CodeSettings, Reason: fmt.Sprintf("%s has dind_address_pool set to %q, which does not read: %v", t.clusterName(), t.cluster.DinDAddressPool, err)})
 		return
 	}
-	underSysbox := t.sysbox || strings.Contains(t.spec.RuntimeClassName, "sysbox")
 	engines := false
 	if t.spec.Security.Privileged || underSysbox {
 		// A dev container that can run dockerd; pod-init configures one
@@ -47,7 +52,7 @@ func (t *translation) finishDocker() {
 		t.spec.PID1.Docker = &podinit.Docker{AddressPools: podinitPools(pools)}
 		engines = true
 	}
-	if len(t.dood) > 0 && (t.doodPrivileged || t.sysbox) {
+	if dood {
 		if t.spec.HostNetwork {
 			// On docker such a run reaches the host's own engine; a new
 			// one in the node's network namespace would rewrite the

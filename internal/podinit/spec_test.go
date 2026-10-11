@@ -486,6 +486,19 @@ func TestMakeLinks(t *testing.T) {
 	if fi, err := os.Lstat(owned); err != nil || fi.Sys().(*syscall.Stat_t).Gid != uint32(gid) {
 		t.Fatalf("the link's group: %v %v, want %d", fi, err, gid)
 	}
+	// An earlier run's link follows the socket to a new group (another
+	// sidecar image's docker gid).
+	if os.Geteuid() == 0 {
+		if err := os.Chown(target, 0, 2376); err != nil {
+			t.Fatal(err)
+		}
+		if warns := makeLinks([]Link{{Path: owned, Target: target}}); len(warns) != 0 {
+			t.Fatalf("warnings %v", warns)
+		}
+		if fi, err := os.Lstat(owned); err != nil || fi.Sys().(*syscall.Stat_t).Gid != 2376 {
+			t.Fatalf("the kept link's group: %v %v, want 2376", fi, err)
+		}
+	}
 }
 
 func mustMkdirAll(t *testing.T, p string) {

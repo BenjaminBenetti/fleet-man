@@ -34,7 +34,8 @@ const (
 	DockerSocket = DockerDir + "/docker.sock"
 	// DockerConfig is the engine's daemon.json: the sidecar reloads the
 	// engine (SIGHUP) whenever it changes, as the dev container cannot
-	// signal another container's processes.
+	// signal another container's processes. Like the folder, it is root's:
+	// the dev container writes it as root, as /etc/docker/daemon.json.
 	DockerConfig = DockerDir + "/daemon.json"
 	// DockerConfigEnv names DockerConfig in the dev container's
 	// environment: fleet's image cache step merges its registry mirror

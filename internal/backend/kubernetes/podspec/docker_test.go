@@ -56,6 +56,9 @@ func TestDockerEngines(t *testing.T) {
 		{name: "dood on a managed cluster's version", args: []string{"--mount", dockerSockBind}, in: func(in *Input) { local(in); in.Facts.ServerVersion = "v1.30.5-gke.1014001" }, dood: "privileged"},
 		{name: "dind on a file share", args: []string{"--privileged"}, in: func(in *Input) { local(in); in.Facts.DiskFileShare = "nfs-csi" }, dind: true, warn: "nfs-csi is a network file share"},
 		{name: "a pool that does not read", args: []string{"--privileged"}, in: func(in *Input) { local(in); in.Cluster.DinDAddressPool = "10.200.0.0" }, code: CodeSettings},
+		{name: "a pool that does not read for a sidecar", args: []string{"--mount", dockerSockBind}, in: func(in *Input) { local(in); in.Cluster.DinDAddressPool = "10.200.0.0" }, code: CodeSettings},
+		// A pod without an engine does not read the pools.
+		{name: "a pool that does not read, no engine", in: func(in *Input) { local(in); in.Cluster.DinDAddressPool = "10.200.0.0" }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			in := baseInput(tt.args, nil, nil)

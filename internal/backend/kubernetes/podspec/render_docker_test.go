@@ -201,6 +201,10 @@ func TestDockerSidecarScript(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// An emptyDir is world-writable.
+	if err := os.Chmod(filepath.Join(dir, "shared"), 0o777); err != nil {
+		t.Fatal(err)
+	}
 	dockerd := `#!/bin/sh
 echo "$@" > "$OUT/args"
 trap 'echo HUP >> "$OUT/signals"' HUP
@@ -263,6 +267,11 @@ while :; do sleep 0.05; done
 	}
 	if data, _ := os.ReadFile(filepath.Join(shared, "daemon.json")); strings.TrimSpace(string(data)) != "{}" {
 		t.Errorf("daemon.json %q, want an empty config made for the engine", data)
+	}
+	// Only the folder's owner (root, in the pod) may replace the engine's
+	// config or socket.
+	if fi, err := os.Stat(shared); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Errorf("the shared folder: %v %v, want 0755", fi.Mode(), err)
 	}
 	time.Sleep(2500 * time.Millisecond)
 	if s := read("signals"); s != "" {

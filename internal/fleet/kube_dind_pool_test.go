@@ -40,12 +40,4 @@ func TestParseDockerAddressPools(t *testing.T) {
 			t.Errorf("%q = %+v, %v; want %+v", tt.in, got, err, tt.want)
 		}
 	}
-	k := &KubeCluster{DinDAddressPool: "not a pool"}
-	if got := k.DinDAddressPools(); got != nil {
-		t.Errorf("an unparsable setting gives %+v, want docker's defaults (nil)", got)
-	}
-	k.DinDAddressPool = "10.200.0.0/16"
-	if got := k.DinDAddressPools(); len(got) != 1 || got[0].Size != 24 {
-		t.Errorf("DinDAddressPools = %+v", got)
-	}
 }

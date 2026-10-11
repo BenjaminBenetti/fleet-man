@@ -56,6 +56,12 @@ assert_equals "1" "$(grep -c 'pod-local siblings' "${log}")" "the warning in the
 # The shared daemon.json: the image cache step's file; a change reloads it.
 cfg=$(in_instance printenv FLEET_DOCKERD_CONFIG)
 assert_equals "/opt/fleet/docker/daemon.json" "${cfg}" "FLEET_DOCKERD_CONFIG"
+# Root's, as /etc/docker on a docker host: its runtimes run as root in the
+# privileged sidecar.
+assert_equals "755:0" "$(in_instance stat -c %a:%u /opt/fleet/docker)" "the shared folder's mode and owner"
+if in_instance sh -c "echo '{}' > ${cfg}.new && mv ${cfg}.new ${cfg}" >/dev/null 2>&1; then
+  fail "the remote user replaced the engine's daemon.json"
+fi
 in_instance sh -c "echo '{\"registry-mirrors\":[\"http://itest-mirror.invalid:5000\"]}' | sudo tee ${cfg} >/dev/null"
 deadline=$(( $(date +%s) + $(_scale_timeout 30) ))
 until in_instance docker info --format '{{.RegistryConfig.Mirrors}}' 2>/dev/null | grep -q itest-mirror.invalid; do

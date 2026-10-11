@@ -243,6 +243,14 @@ func (lb *liveBackend) dood(t *testing.T, lv *live) {
 	if cfgFile != podspec.DockerConfig {
 		t.Fatalf("%s=%q", podspec.DockerConfigEnv, cfgFile)
 	}
+	// Only root may replace it (its runtimes would run as root in the
+	// privileged sidecar), as /etc/docker/daemon.json on a docker host.
+	if got := sh.must("stat -c %a:%u " + podspec.DockerDir); got != "755:0" {
+		t.Errorf("the shared folder is %s, want root's 755", got)
+	}
+	if out, err := sh.run(fmt.Sprintf(`echo '{}' > %[1]s.new && mv %[1]s.new %[1]s`, cfgFile)); err == nil {
+		t.Errorf("the remote user replaced the engine's config: %s", out)
+	}
 	sh.must(fmt.Sprintf(`echo '{"registry-mirrors":["http://fleet-live-mirror.invalid:5000"]}' | sudo tee %s >/dev/null`, cfgFile))
 	deadline := time.Now().Add(30 * time.Second)
 	for {
