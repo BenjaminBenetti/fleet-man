@@ -16,6 +16,8 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime"
+	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime/svcruntimetest"
 )
 
 // recordingJobLog is a provisioning-log sink that keeps the output written to
@@ -264,11 +266,20 @@ func TestRunRebuildRetriesACreateFromAFreshCheckout(t *testing.T) {
 			}
 			fake := &checkoutSeeingBackend{rebuildingJobBackend: rebuildingJobBackend{fakeJobBackend: fakeJobBackend{rebuild: true, upErr: errors.New("stop here")}}}
 			stubInstanceBackend(t, fake)
+			// A cluster record's runtime would dial its connection: the
+			// rebuild prepares the fleet there before the backend runs.
+			services := svcruntimetest.New(string(inst.Backend))
+			orig := sharedServicesFor
+			sharedServicesFor = func(*fleet.Instance) svcruntime.Runtime { return services }
+			t.Cleanup(func() { sharedServicesFor = orig })
 			if err := RunRebuild(context.Background(), "alpha", "i1", false); err == nil || err.Error() != "stop here" {
 				t.Fatalf("RunRebuild = %v", err)
 			}
 			if fake.sawCheckout != tc.wantCheckout {
 				t.Fatalf("the checkout was there when the rebuild began: %v, want %v", fake.sawCheckout, tc.wantCheckout)
+			}
+			if calls := services.Calls(); len(calls) == 0 || calls[0] != (svcruntimetest.Call{Method: "PrepareFleet", Fleet: "alpha"}) {
+				t.Fatalf("runtime calls = %+v, want PrepareFleet(alpha) first", calls)
 			}
 		})
 	}
