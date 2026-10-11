@@ -327,3 +327,81 @@ func TestRunLeavesACheckpointedRecord(t *testing.T) {
 		t.Fatalf("record = %s %q, want it left creating", inst.Status, inst.Error)
 	}
 }
+
+// ownerCloneBackend keeps its workspaces itself (backend.WorkspaceOwner) and
+// clones through CloneContext, as the Kubernetes backend does.
+type ownerCloneBackend struct {
+	fakeJobBackend
+	cloneErr error
+	gotSrc   string
+	gotReq   backend.UpRequest
+	cancel   context.CancelCauseFunc
+}
+
+func (o *ownerCloneBackend) OwnsWorkspace() bool { return true }
+
+func (o *ownerCloneBackend) CloneContext(_ context.Context, src string, req backend.UpRequest) (*backend.UpResult, error) {
+	o.gotSrc, o.gotReq = src, req
+	if o.cancel != nil {
+		o.cancel(backend.ErrDaemonShutdown)
+	}
+	return nil, o.cloneErr
+}
+
+func (o *ownerCloneBackend) Clone(string, string, []backend.Mount) (*backend.UpResult, error) {
+	return nil, errors.New("plain Clone called on a CloneContexter")
+}
+
+func seedClone(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	// The source's host workspace does not exist: a host copy would fail.
+	seedFleet(t,
+		&fleet.Instance{Name: "src", Status: fleet.StatusRunning, Backend: fleet.BackendKubernetes, ContainerID: "k8s:c/ns/fi-src@g1", WorkspaceDir: "/nonexistent/src"},
+		&fleet.Instance{Name: "dest", Status: fleet.StatusCloning, Backend: fleet.BackendKubernetes},
+	)
+}
+
+// TestRunCloneOfAWorkspaceOwnerSkipsTheHostCopy: a backend that keeps its
+// workspaces copies the source's with the rest of the instance; RunClone
+// makes no host copy and hands the backend the job's request.
+func TestRunCloneOfAWorkspaceOwnerSkipsTheHostCopy(t *testing.T) {
+	seedClone(t)
+	b := &ownerCloneBackend{fakeJobBackend: fakeJobBackend{clone: true}, cloneErr: errors.New("the copier failed")}
+	stubInstanceBackend(t, b)
+
+	err := RunClone(context.Background(), "alpha", "src", "dest", false)
+	if err == nil || err.Error() != "the copier failed" {
+		t.Fatalf("err = %v, want the backend's clone error", err)
+	}
+	wantWS := filepath.Join(state.WorkspacesDir(), "alpha", "dest", "alpha")
+	if b.gotSrc != "k8s:c/ns/fi-src@g1" || b.gotReq.WorkspaceDir != wantWS {
+		t.Fatalf("CloneContext got src %q req %+v", b.gotSrc, b.gotReq)
+	}
+	if _, err := os.Stat(wantWS); !os.IsNotExist(err) {
+		t.Fatalf("a host copy of the workspace was made: %v", err)
+	}
+	if got := findInstance(t, "dest"); got.Status != fleet.StatusFailed || got.Error != "the copier failed" {
+		t.Fatalf("dest = %s %q", got.Status, got.Error)
+	}
+}
+
+// TestRunCloneLeavesACheckpointedRecord: a clone the backend checkpointed at
+// the daemon's shutdown leaves the destination record cloning, for the next
+// start to fail from the clone's journal.
+func TestRunCloneLeavesACheckpointedRecord(t *testing.T) {
+	seedClone(t)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	b := &ownerCloneBackend{fakeJobBackend: fakeJobBackend{clone: true}, cancel: cancel,
+		cloneErr: fmt.Errorf("kubernetes:interrupted: the daemon shut down during the clone (at step copy): %w", backend.ErrCheckpointed)}
+	stubInstanceBackend(t, b)
+
+	err := RunClone(ctx, "alpha", "src", "dest", false)
+	if !errors.Is(err, backend.ErrCheckpointed) {
+		t.Fatalf("err = %v, want the checkpoint", err)
+	}
+	if got := findInstance(t, "dest"); got.Status != fleet.StatusCloning || got.Error != "" {
+		t.Fatalf("dest = %s %q, want it left cloning", got.Status, got.Error)
+	}
+}

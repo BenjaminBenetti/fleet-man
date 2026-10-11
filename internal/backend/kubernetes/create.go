@@ -133,6 +133,26 @@ type creation struct {
 	// nodeImage is the id the node gave a node-loaded image, learned from
 	// the seed Job's pod (the first to run it).
 	nodeImage string
+	// gen is the root generation the job writes (0: 1, a create's), and
+	// verb what it is, for its messages (""; "create").
+	gen  int
+	verb string
+}
+
+// generation is the root generation the job writes.
+func (c *creation) generation() int {
+	if c.gen > 0 {
+		return c.gen
+	}
+	return 1
+}
+
+// what is the job, for its messages.
+func (c *creation) what() string {
+	if c.verb != "" {
+		return c.verb
+	}
+	return "create"
 }
 
 func (c *creation) run(ctx context.Context) (*backend.UpResult, error) {
@@ -183,8 +203,8 @@ func (c *creation) checkpoint() error {
 	c.checkpointed = true
 	c.stopFailed()
 	step := c.jj.Journal().Step
-	flog.Info("kube create: the daemon is shutting down; the job is left for the next start", "fleet", c.id.fleet, "instance", c.id.name, "cluster", c.id.cluster, "key", c.id.key, "step", step)
-	return kubeerr.Wrap(kubeerr.Interrupted, fmt.Errorf("the daemon shut down during the create (at step %s): %w", step, backend.ErrCheckpointed))
+	flog.Info("kube "+c.what()+": the daemon is shutting down; the job is left for the next start", "fleet", c.id.fleet, "instance", c.id.name, "cluster", c.id.cluster, "key", c.id.key, "step", step)
+	return kubeerr.Wrap(kubeerr.Interrupted, fmt.Errorf("the daemon shut down during the %s (at step %s): %w", c.what(), step, backend.ErrCheckpointed))
 }
 
 // provision is the create after its journal began.
@@ -528,7 +548,7 @@ func (c *creation) applyUID(ctx context.Context, kind, name string, anchor bool,
 	if err := ctx.Err(); err != nil {
 		return "", fmt.Errorf("cancelled: %w", context.Cause(ctx))
 	}
-	if err := c.jj.Intend(JournalObject{Kind: kind, Name: name, Gen: 1, Created: true, Anchor: anchor}); err != nil {
+	if err := c.jj.Intend(JournalObject{Kind: kind, Name: name, Gen: c.generation(), Created: true, Anchor: anchor}); err != nil {
 		return "", err
 	}
 	if anchor {
@@ -580,6 +600,8 @@ func applyObject(ctx context.Context, cs kclient.Interface, ns, kind, name strin
 		m, err = cs.AppsV1().StatefulSets(ns).Patch(ctx, name, types.ApplyPatchType, body, opts)
 	case KindPDB:
 		m, err = cs.PolicyV1().PodDisruptionBudgets(ns).Patch(ctx, name, types.ApplyPatchType, body, opts)
+	case KindVolumeSnapshot:
+		return applySnapshot(ctx, cs, ns, name, body)
 	default:
 		return "", fmt.Errorf("applying a %s is not something a create does", kind)
 	}

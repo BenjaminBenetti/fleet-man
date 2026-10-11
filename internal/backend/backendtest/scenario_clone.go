@@ -3,6 +3,7 @@ package backendtest
 import (
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 )
@@ -56,6 +57,72 @@ func caseClone(c *C) {
 	}
 }
 
+// caseCloneStopped: a stopped instance clones too (on a cluster, a CSI clone
+// of its disk where the driver can, else a copy), and stays stopped.
+func caseCloneStopped(c *C) {
+	src := c.NewInstance(Fixture{})
+	if !src.B.SupportsClone() {
+		c.Skipf("%s cannot clone", c.Target().Name)
+	}
+	marker := randHex(6)
+	leaveState(c, src, marker)
+	stop(c, src)
+
+	dest := cloneOf(c, src)
+	waitStatus(c, dest, dest.ID(), backend.LiveStatusRunning, lifecycleTimeout)
+	checkState(c, dest, marker, "a clone of a stopped instance")
+	if got := src.B.Status(src.ID()); got != backend.LiveStatusStopped {
+		c.Errorf("the source is %q after the clone, want it left %q", got, backend.LiveStatusStopped)
+	}
+}
+
+// churnLoop is a writer the consistency case runs in the source while it is
+// cloned: commits in the workspace's repo and appends to a file, as fast as
+// it can, detached from the exec that starts it.
+const churnLoop = `set -e
+git init -q churn-repo
+cd churn-repo
+git -c user.name=c -c user.email=c@example.invalid commit -q --allow-empty -m 0
+setsid sh -c 'n=0; while [ ! -e ../churn.stop ]; do n=$((n+1)); echo "$n" >> ../churn.log; echo "$n" > f; git add f; git -c user.name=c -c user.email=c@example.invalid commit -qm "$n" || true; done' >/dev/null 2>&1 </dev/null &`
+
+// caseCloneConsistent: an instance whose pod can be held still (privileged,
+// as docker-in-docker's are) clones consistently while it writes: the clone's
+// git repo passes fsck and its dpkg database --audit, wherever the copy was
+// cut. The source runs on.
+func caseCloneConsistent(c *C) {
+	src := c.NewInstance(Fixture{Privileged: true})
+	if !src.B.SupportsClone() {
+		c.Skipf("%s cannot clone", c.Target().Name)
+	}
+	if c.Target().HostProcesses || !c.NeedTool(src, "git") || !c.NeedTool(src, "setsid") {
+		c.Skipf("no git repo or detached writer in %s's instances", c.Target().Name)
+	}
+	marker := randHex(6)
+	leaveState(c, src, marker)
+	c.Sh(src, churnLoop)
+	c.Eventually("the source's writer to commit", lifecycleTimeout, func() (bool, string) {
+		n := c.Sh(src, `git -C churn-repo rev-list --count HEAD 2>/dev/null || echo 0`)
+		return n != "0" && n != "1", n + " commits"
+	})
+
+	dest := cloneOf(c, src)
+	waitStatus(c, dest, dest.ID(), backend.LiveStatusRunning, lifecycleTimeout)
+	c.Sh(src, `touch churn.stop`)
+	checkState(c, dest, marker, "a clone of an instance that wrote throughout")
+	if r := c.Exec(dest, ShArgv("git -C churn-repo fsck --full --no-progress"), nil); r.Err != nil {
+		c.Errorf("git fsck of the repo the source committed to throughout the clone: %s", r)
+	}
+	if got := c.Sh(dest, `git -C churn-repo rev-list --count HEAD`); got == "" || got == "0" {
+		c.Errorf("the clone's repo has %q commits", got)
+	}
+	if got := src.B.Status(src.ID()); got != backend.LiveStatusRunning {
+		c.Errorf("the source is %q after the clone, want %q", got, backend.LiveStatusRunning)
+	}
+	if strings.Contains(strings.Join(dest.resultWarnings(), "\n"), "best-effort") {
+		c.Errorf("a clone of a pod that can be held still is best-effort: %v", dest.resultWarnings())
+	}
+}
+
 // cloneOf clones src the way a clone job does: the destination record is bound
 // (no ContainerID yet), the source's workspace is copied on the host unless
 // the backend owns its workspaces, then Clone. The clone is torn down when the
@@ -77,7 +144,7 @@ func cloneOf(c *C, src *Instance) *Instance {
 			c.Fatalf("copy the workspace: %v\n%s", err, out)
 		}
 	}
-	r, err := dest.B.Clone(src.ID(), rec.WorkspaceDir, nil)
+	r, err := backend.CloneContext(c.Ctx, dest.B, src.ID(), backend.UpRequest{WorkspaceDir: rec.WorkspaceDir})
 	if err != nil {
 		c.Fatalf("Clone: %v", err)
 	}

@@ -143,6 +143,8 @@ func TestGenerationNames(t *testing.T) {
 		{SpecSecret(sts, 1), sts + "-spec-g1"},
 		{EnvSecret(sts, 12), sts + "-env-g12"},
 		{SeedJob(sts, 9999), sts + "-seed-g9999"},
+		{CopierJob(sts, 3), sts + "-copy-g3"},
+		{CloneSnapshot(sts, 2), sts + "-snap-g2"},
 	} {
 		if tt.got != tt.want {
 			t.Errorf("got %q, want %q", tt.got, tt.want)
@@ -158,6 +160,11 @@ func TestGenerationNames(t *testing.T) {
 	long := Instance(strings.Repeat("f", 80), strings.Repeat("i", 80), InstanceKey(testDaemonID, "f", "i", testCreated))
 	if job := SeedJob(long, MaxGeneration); len(job) != 63 || !IsDNS1123Label(job) || !IsLabelValue(job) {
 		t.Errorf("SeedJob of the longest name = %q (%d)", job, len(job))
+	}
+	for _, name := range []string{CopierJob(long, MaxGeneration), CloneSnapshot(long, MaxGeneration)} {
+		if len(name) > 63 || !IsDNS1123Label(name) || !IsLabelValue(name) {
+			t.Errorf("a clone object of the longest name = %q (%d)", name, len(name))
+		}
 	}
 }
 
@@ -331,6 +338,13 @@ func FuzzK8sName(f *testing.F) {
 				t.Fatalf("SeedJob(%q, %d) = %q: not a Job name", sts, gen, job)
 			}
 			crossCheck(t, "job", job)
+			if copier := CopierJob(sts, gen); !IsDNS1123Label(copier) || !IsLabelValue(copier) {
+				t.Fatalf("CopierJob(%q, %d) = %q: not a Job name", sts, gen, copier)
+			}
+			crossCheck(t, "job", CopierJob(sts, gen))
+			if snap := CloneSnapshot(sts, gen); !IsDNS1123Label(snap) {
+				t.Fatalf("CloneSnapshot(%q, %d) = %q: not a DNS label", sts, gen, snap)
+			}
 			for _, secret := range []string{SpecSecret(sts, gen), EnvSecret(sts, gen)} {
 				if !IsDNS1123Label(secret) {
 					t.Fatalf("Secret name %q is not a DNS label", secret)

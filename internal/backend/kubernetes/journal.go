@@ -159,7 +159,25 @@ type Journal struct {
 	PrevStatus     fleet.InstanceStatus `json:"prevStatus,omitempty"`
 	PrevError      string               `json:"prevError,omitempty"`
 	Rollback       *Rollback            `json:"rollback,omitempty"`
-	StartedAt      time.Time            `json:"startedAt"`
+	// Source is a clone's source instance, which the clone leaves as it found
+	// it: one it stopped for its final copy (clone_consistency stop-source)
+	// is started again when the clone is undone.
+	Source    *JournalSource `json:"source,omitempty"`
+	StartedAt time.Time      `json:"startedAt"`
+}
+
+// JournalSource is a clone's source.
+type JournalSource struct {
+	// StatefulSet and Key name the source instance (its key labels its
+	// objects); UID is its StatefulSet's.
+	StatefulSet string `json:"statefulSet"`
+	Key         string `json:"key"`
+	UID         string `json:"uid,omitempty"`
+	// Stopped: the clone scaled the source to 0 (its replicas were
+	// PrevReplicas); set before the scale, cleared once the source is
+	// started again.
+	Stopped      bool   `json:"stopped,omitempty"`
+	PrevReplicas *int32 `json:"prevReplicas,omitempty"`
 }
 
 // Mark is the journal's mirror: the fleet.dev/op value its anchor carries.
@@ -380,6 +398,14 @@ func (j Journal) clone() Journal {
 	if j.Rollback != nil {
 		rb := *j.Rollback
 		c.Rollback = &rb
+	}
+	if j.Source != nil {
+		src := *j.Source
+		if j.Source.PrevReplicas != nil {
+			n := *j.Source.PrevReplicas
+			src.PrevReplicas = &n
+		}
+		c.Source = &src
 	}
 	return c
 }

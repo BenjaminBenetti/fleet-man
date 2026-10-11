@@ -184,21 +184,13 @@ func ContainerID(clusterID, ns, sts string, gen int) string {
 // rather than dropping them.
 func (b *Backend) SupportsSharedMounts() bool { return true }
 
-// SupportsClone and SupportsRebuild are false until cluster clone and
-// rebuild land; SupportsMicSink until audio does.
-func (b *Backend) SupportsClone() bool   { return false }
+// SupportsClone is true (clone.go); SupportsRebuild is false until cluster
+// rebuild lands, SupportsMicSink until audio does.
+func (b *Backend) SupportsClone() bool   { return true }
 func (b *Backend) SupportsRebuild() bool { return false }
 func (b *Backend) SupportsMicSink() bool { return false }
 
-var (
-	errClone   = notYet{what: "cloning an instance"}
-	errRebuild = notYet{what: "rebuilding an instance"}
-)
-
-// Clone is not available on a cluster yet.
-func (b *Backend) Clone(string, string, []backend.Mount) (*backend.UpResult, error) {
-	return nil, errClone
-}
+var errRebuild = notYet{what: "rebuilding an instance"}
 
 // Rebuild is not available on a cluster yet.
 func (b *Backend) Rebuild(string, string, []backend.Mount) (*backend.UpResult, error) {

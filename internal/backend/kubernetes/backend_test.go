@@ -179,7 +179,7 @@ func TestWhere(t *testing.T) {
 // naming it; what it never does without I/O it answers at once.
 func TestHandleCapabilities(t *testing.T) {
 	b := newHandle((&handleRig{}).inst(), nil)
-	if !b.SupportsSharedMounts() || b.SupportsClone() || b.SupportsRebuild() || b.SupportsMicSink() {
+	if !b.SupportsSharedMounts() || !b.SupportsClone() || b.SupportsRebuild() || b.SupportsMicSink() || !backend.OwnsWorkspace(b) {
 		t.Fatal("capabilities")
 	}
 	if !backend.HasControlChannel(b) {
@@ -191,9 +191,7 @@ func TestHandleCapabilities(t *testing.T) {
 			t.Errorf("%s: %v, want kubernetes:unavailable", what, err)
 		}
 	}
-	_, err := b.Clone("cid", "/ws", nil)
-	unavailableCode("Clone", err)
-	_, err = b.Rebuild("cid", "/ws", nil)
+	_, err := b.Rebuild("cid", "/ws", nil)
 	unavailableCode("Rebuild", err)
 	// The exec surface (Exec, ExecCommand, CopyFile, Logs) reaches the pod
 	// now; its shape is checked in cmd_test.go, not run here against a

@@ -29,6 +29,11 @@ const (
 	EnvPodReadyTimeout    = "FLEET_KUBE_POD_READY_TIMEOUT"
 	EnvAgentTimeout       = "FLEET_KUBE_AGENT_TIMEOUT"
 	EnvSharedStateTimeout = "FLEET_KUBE_SHARED_STATE_TIMEOUT"
+	// EnvSnapshotTimeout bounds a clone's wait for its snapshot of the
+	// source's disk to be ready to restore from.
+	EnvSnapshotTimeout = "FLEET_KUBE_SNAPSHOT_TIMEOUT"
+	// EnvCopyTimeout bounds a clone's copier Job.
+	EnvCopyTimeout = "FLEET_KUBE_COPY_TIMEOUT"
 )
 
 // The deadlines' defaults.
@@ -50,6 +55,12 @@ const (
 	// DefaultSharedStateTimeout is how long a create or start waits for the
 	// shared state to sync into the pod before it goes on with a warning.
 	DefaultSharedStateTimeout = 60 * time.Second
+	// DefaultSnapshotTimeout covers a large disk's snapshot on a cloud
+	// driver, which uploads it before it is ready.
+	DefaultSnapshotTimeout = 30 * time.Minute
+	// DefaultCopyTimeout bounds a copier: a 50 GiB disk copied twice at
+	// tens of MiB/s, with room.
+	DefaultCopyTimeout = 2 * time.Hour
 )
 
 // The error codes of a wait that ran out.
@@ -71,6 +82,8 @@ type Deadlines struct {
 	PodReady    time.Duration
 	Agent       time.Duration
 	SharedState time.Duration
+	Snapshot    time.Duration
+	Copy        time.Duration
 }
 
 var (
@@ -102,6 +115,8 @@ func LoadDeadlines(getenv func(string) string) (Deadlines, []string) {
 		PodReady:      DefaultPodReadyTimeout,
 		Agent:         DefaultAgentTimeout,
 		SharedState:   DefaultSharedStateTimeout,
+		Snapshot:      DefaultSnapshotTimeout,
+		Copy:          DefaultCopyTimeout,
 	}
 	var bad []string
 	for _, o := range []struct {
@@ -115,6 +130,8 @@ func LoadDeadlines(getenv func(string) string) (Deadlines, []string) {
 		{EnvPodReadyTimeout, &d.PodReady},
 		{EnvAgentTimeout, &d.Agent},
 		{EnvSharedStateTimeout, &d.SharedState},
+		{EnvSnapshotTimeout, &d.Snapshot},
+		{EnvCopyTimeout, &d.Copy},
 	} {
 		v := strings.TrimSpace(getenv(o.env))
 		if v == "" {

@@ -122,3 +122,50 @@ func TestRebuildContextPrefersRebuildContexterAndFallsBack(t *testing.T) {
 		t.Fatalf("plain backend: got %+v, %v (id %q dir %q); want its Rebuild result", res, err, plain.gotID, plain.gotDir)
 	}
 }
+
+// cloneOnly has only the plain Clone.
+type cloneOnly struct {
+	Backend
+	gotSrc, gotDir string
+}
+
+func (c *cloneOnly) Clone(src, destWorkspaceDir string, _ []Mount) (*UpResult, error) {
+	c.gotSrc, c.gotDir = src, destWorkspaceDir
+	return &UpResult{ContainerID: "plain"}, nil
+}
+
+// cloneWithContext also has CloneContext; its plain Clone must never run.
+type cloneWithContext struct {
+	cloneOnly
+	gotCtx context.Context
+	gotReq UpRequest
+}
+
+func (c *cloneWithContext) Clone(string, string, []Mount) (*UpResult, error) {
+	return nil, errors.New("plain Clone called on a CloneContexter")
+}
+
+func (c *cloneWithContext) CloneContext(ctx context.Context, src string, req UpRequest) (*UpResult, error) {
+	c.gotCtx, c.gotSrc, c.gotReq = ctx, src, req
+	return &UpResult{ContainerID: "ctx"}, nil
+}
+
+func TestCloneContextPrefersCloneContexterAndFallsBack(t *testing.T) {
+	req := UpRequest{WorkspaceDir: "/dest"}
+	ctx := context.WithValue(context.Background(), ctxMarker{}, "job")
+
+	withCtx := &cloneWithContext{}
+	res, err := CloneContext(ctx, withCtx, "src", req)
+	if err != nil || res.ContainerID != "ctx" {
+		t.Fatalf("CloneContexter: got %+v, %v", res, err)
+	}
+	if withCtx.gotCtx.Value(ctxMarker{}) != "job" || withCtx.gotSrc != "src" || withCtx.gotReq.WorkspaceDir != "/dest" {
+		t.Fatalf("CloneContext got ctx=%v src=%q req=%+v", withCtx.gotCtx, withCtx.gotSrc, withCtx.gotReq)
+	}
+
+	plain := &cloneOnly{}
+	res, err = CloneContext(ctx, plain, "src", req)
+	if err != nil || res.ContainerID != "plain" || plain.gotSrc != "src" || plain.gotDir != "/dest" {
+		t.Fatalf("plain backend: got %+v, %v (src %q dir %q)", res, err, plain.gotSrc, plain.gotDir)
+	}
+}

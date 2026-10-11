@@ -36,6 +36,11 @@ func init() {
 	targets[backendtest.BackendKubernetes] = kubernetesTarget
 }
 
+// envConformanceStorageClass names the StorageClass of the run's instance
+// disks; unset leaves it to the connection's auto pick.
+const envConformanceStorageClass = "FLEET_CONFORMANCE_KUBE_STORAGE_CLASS"
+
+
 // kubernetesTarget is the kubernetes backend as fleetd binds it, on a
 // connection to the selected kube context (the current one when none is
 // named) in a namespace of its own, fleet-it-conformance-<random>, deleted
@@ -75,6 +80,10 @@ func kubernetesTarget(t *testing.T, sel backendtest.Selection) backendtest.Targe
 	rec := fleet.KubeCluster{
 		ID: names.NewClusterID("conformance", nil), Context: kctx, KubeconfigPaths: paths,
 		Namespace: "fleet-it-conformance-" + names.NewClusterID("x", nil)[2:],
+		// The instance disks' class picks the clone tiers the run covers:
+		// a class with snapshots (csi-hostpath-sc) clones by snapshot and CSI
+		// clone, one without (minikube's standard) by copying.
+		StorageClass: os.Getenv(envConformanceStorageClass),
 	}
 	conn, err := kubeexec.Load(rec, kubeexec.Options{})
 	if err != nil {
@@ -129,7 +138,6 @@ func kubernetesTarget(t *testing.T, sel backendtest.Selection) backendtest.Targe
 			"editor-uri":      "the editor launch for a pod lands with P7.0 (Remote-SSH)",
 			"rebuild":         "rebuild on a cluster lands with P6.1",
 			"rebuild-stopped": "rebuild on a cluster lands with P6.1",
-			"clone":           "clone on a cluster lands with P6.0",
 		},
 	}
 }

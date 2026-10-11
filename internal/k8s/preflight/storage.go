@@ -37,6 +37,30 @@ var nodeLocalProvisioners = map[string]bool{
 	"kubevirt.io.hostpath-provisioner": true,
 }
 
+// cloneDrivers are CSI drivers known to clone volumes (a PVC whose
+// dataSource is another PVC): a clone of a stopped instance on them is a CSI
+// clone of its disk (T1b) without the connection saying so (clone_method
+// csi-clone). A driver this list misses still clones where the connection
+// asks for it; one that cannot is caught by the clone itself (the restored
+// disk comes up empty, or the provisioner refuses the data source).
+var cloneDrivers = map[string]bool{
+	"hostpath.csi.k8s.io":     true,
+	"pd.csi.storage.gke.io":   true,
+	"disk.csi.azure.com":      true,
+	"rbd.csi.ceph.com":        true,
+	"cephfs.csi.ceph.com":     true,
+	"driver.longhorn.io":      true,
+	"zfs.csi.openebs.io":      true,
+	"csi.vsphere.vmware.com":  true,
+	"pxd.portworx.com":        true,
+	"csi.trident.netapp.io":   true,
+	"linodebs.csi.linode.com": true,
+	"topolvm.io":              true,
+}
+
+// ClonesVolumes reports whether CSI driver is known to clone volumes.
+func ClonesVolumes(driver string) bool { return cloneDrivers[driver] }
+
 // fileShareMarkers mark provisioners of shared network file systems, which
 // are not block disks.
 var fileShareMarkers = []string{"nfs", "efs.csi.aws.com", "file.csi.azure.com", "azure-file", "filestore.csi.storage.gke.io", "cephfs", "smb", "glusterfs"}
@@ -81,6 +105,9 @@ func ClassifyStorageClass(sc *storagev1.StorageClass, drivers map[string]*storag
 	if d := drivers[sc.Provisioner]; d != nil && d.Spec.SELinuxMount != nil {
 		ks.SelinuxMount = *d.Spec.SELinuxMount
 	}
+	// A CSI clone needs a CSI driver: an in-tree or external provisioner
+	// takes a data source it does not know for an empty disk.
+	ks.CsiClone = drivers[sc.Provisioner] != nil && ClonesVolumes(sc.Provisioner)
 	return ks
 }
 
@@ -215,9 +242,12 @@ func (r *run) rootStorage(ctx context.Context) {
 	}
 	r.rootClass = chosen
 	r.fillAttachLimits(ctx, chosen.Provisioner)
-	if snapDrivers[chosen.Provisioner] {
+	switch {
+	case snapDrivers[chosen.Provisioner]:
 		r.caps.CloneTier = "snapshot"
-	} else {
+	case chosen.CsiClone:
+		r.caps.CloneTier = "csi-clone"
+	default:
 		r.caps.CloneTier = "copy"
 	}
 
@@ -283,6 +313,8 @@ func (r *run) reportSnapshots(snaps []snapshotClass, ok bool, why string) {
 	switch {
 	case !ok:
 		r.skip(CheckSnapshots, why)
+	case len(snaps) == 0 && r.caps.CloneTier == "csi-clone":
+		r.pass(CheckSnapshots, "no snapshot classes (clone: a CSI clone of a stopped instance, a copy of a running one)")
 	case len(snaps) == 0:
 		r.pass(CheckSnapshots, "no snapshot classes (clone copies files)")
 	default:

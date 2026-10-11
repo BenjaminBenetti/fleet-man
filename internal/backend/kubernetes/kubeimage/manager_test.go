@@ -203,6 +203,31 @@ func TestDeliverHolderMovesAndRelease(t *testing.T) {
 	}
 }
 
+// TestShareKeepsTheImageForTheClone: a clone holds its source's image, which
+// a destroy of the source then leaves held.
+func TestShareKeepsTheImageForTheClone(t *testing.T) {
+	h := newHarness(t)
+	tgt := h.target(h.cluster(), minikubeDev)
+	a := imageID("a")
+	if _, err := h.m.Deliver(context.Background(), tgt, builtImage(a), "src"); err != nil {
+		t.Fatal(err)
+	}
+	d, err := h.m.Share(tgt.Cluster.ID, "src", "clone")
+	if err != nil || d == nil || d.ImageID != a {
+		t.Fatalf("Share = %+v, %v", d, err)
+	}
+	if err := h.m.Release(tgt.Cluster.ID, "src"); err != nil {
+		t.Fatal(err)
+	}
+	ix := h.indexOf(t, tgt.Cluster.ID)
+	if len(ix.Images) != 1 || !slices.Equal(ix.Images[0].Holders, []string{"clone"}) || !ix.Images[0].ReleasedAt.IsZero() {
+		t.Fatalf("after the source's release: %+v", ix.Images)
+	}
+	if d, err := h.m.Share(tgt.Cluster.ID, "nobody", "x"); err != nil || d != nil {
+		t.Fatalf("Share of a holder of nothing = %+v, %v", d, err)
+	}
+}
+
 func TestDeliverNodeLoad(t *testing.T) {
 	id := imageID("local")
 	tag := "fleet.invalid/3fa2c91e/devcontainer:" + id12(id)

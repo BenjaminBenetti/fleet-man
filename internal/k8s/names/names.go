@@ -213,6 +213,21 @@ func SeedJob(statefulSet string, gen int) string {
 	return statefulSet + "-seed-g" + strconv.Itoa(gen)
 }
 
+// CopierJob is the name of the Job that makes generation gen of a clone's
+// disk from its source's (a copier, or the fix-ups of a restored disk):
+// "<sts>-copy-g<gen>", named by the clone's StatefulSet, at most 63
+// characters for a valid gen.
+func CopierJob(statefulSet string, gen int) string {
+	return statefulSet + "-copy-g" + strconv.Itoa(gen)
+}
+
+// CloneSnapshot is the name of the VolumeSnapshot of a clone's source disk
+// that the clone's disk is restored from: "<sts>-snap-g<gen>", named by the
+// clone's StatefulSet (it belongs to the clone, and goes with it).
+func CloneSnapshot(statefulSet string, gen int) string {
+	return statefulSet + "-snap-g" + strconv.Itoa(gen)
+}
+
 // The suffixes of the per-(fleet, connection) objects (FleetObject).
 const (
 	SuffixAnchor          = "anchor"

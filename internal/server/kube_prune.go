@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	kubernetesbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
@@ -232,6 +233,18 @@ func listPruneObjects(ctx context.Context, cs kubernetes.Interface, rec fleet.Ku
 		}
 	}
 
+	// VolumeSnapshots are a clone's (of its source's disk), a CRD a cluster
+	// may lack.
+	snaps, err := kubernetesbackend.ListSnapshots(ctx, cs, ns, opts.LabelSelector)
+	if err != nil {
+		return nil, err
+	}
+	for _, o := range snaps {
+		add("volumesnapshot", o, func(ctx context.Context, name string, opts metav1.DeleteOptions) error {
+			return kubernetesbackend.DeleteSnapshot(ctx, cs, ns, name, opts)
+		})
+	}
+
 	// Claims a live pod mounts, whoever's pod it is.
 	mounted := map[string]bool{}
 	allPods, err := cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
@@ -296,7 +309,7 @@ func accountedFor(st *state.State, rec fleet.KubeCluster, id owner.Identity) (ke
 }
 
 func pruneKindOrder(kind string) int {
-	for i, k := range []string{"pvc", "sts", "deploy", "job", "pod", "svc", "netpol", "pdb", "secret", "configmap"} {
+	for i, k := range []string{"pvc", "sts", "deploy", "job", "pod", "svc", "netpol", "pdb", "secret", "configmap", "volumesnapshot"} {
 		if k == kind {
 			return i
 		}
@@ -305,7 +318,8 @@ func pruneKindOrder(kind string) int {
 }
 
 // kubeOrphans counts a connection's unaccounted objects for its
-// capabilities: instance StatefulSets, fleet shares and cache volumes.
+// capabilities: instance StatefulSets, fleet shares, cache volumes and the
+// snapshots clones left.
 func kubeOrphans(objects []*pruneObject) *fleetgrpc.KubeOrphans {
 	o := &fleetgrpc.KubeOrphans{}
 	for _, obj := range objects {
@@ -316,6 +330,8 @@ func kubeOrphans(objects []*pruneObject) *fleetgrpc.KubeOrphans {
 			o.Shares++
 		case obj.kind == "pvc" && (strings.HasSuffix(obj.name, "-"+names.SuffixAptCache) || strings.HasSuffix(obj.name, "-"+names.SuffixImageCache) || strings.HasSuffix(obj.name, "-"+names.SuffixBuildkit)):
 			o.CacheVolumes++
+		case obj.kind == "volumesnapshot":
+			o.SnapshotContents++
 		}
 	}
 	return o

@@ -3,6 +3,7 @@ package create
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -32,9 +33,12 @@ import (
 //  3. Copy the source workspace directory onto the destination
 //     workspace dir. Bind mounts overlay the committed image layer, so
 //     the workspace tree must exist on disk before the new container
-//     starts.
-//  4. Hand off to backend.Clone, which captures the source's filesystem
-//     state and starts the new container.
+//     starts. A backend that keeps the workspace itself
+//     (backend.WorkspaceOwner: Kubernetes, on the instance's disk) copies
+//     it with the rest of the instance instead, and the host copy is
+//     skipped.
+//  4. Hand off to the backend's clone (backend.CloneContext), which captures
+//     the source's filesystem state and starts the new container.
 //  5. Persist the new ContainerID and flip the instance to
 //     StatusRunning.
 //
@@ -105,16 +109,19 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 
 	// Copy the source workspace tree. `cp -a` preserves permissions,
 	// timestamps, and symlinks — important for git's working tree
-	// metadata and any tooling that inspects mtimes.
+	// metadata and any tooling that inspects mtimes. A backend that owns its
+	// workspaces copies the source's with the rest of the instance.
 	if err := checkCancelled(ctx); err != nil {
 		setFailed(fleetName, destInstance, err)
 		return err
 	}
-	backend.ReportStep(ctx, fleet.StepCopyWorkspace, "from "+srcInstance)
-	if err := copyWorkspaceTree(ctx, src.WorkspaceDir, destWorkspaceDir); err != nil {
-		err = cancelledOr(ctx, err)
-		setFailed(fleetName, destInstance, err)
-		return err
+	if !backend.OwnsWorkspace(instanceBackend) {
+		backend.ReportStep(ctx, fleet.StepCopyWorkspace, "from "+srcInstance)
+		if err := copyWorkspaceTree(ctx, src.WorkspaceDir, destWorkspaceDir); err != nil {
+			err = cancelledOr(ctx, err)
+			setFailed(fleetName, destInstance, err)
+			return err
+		}
 	}
 
 	// The clone gets the same mounts a create would, for the destination: the
@@ -135,12 +142,23 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 		return err
 	}
 	backend.ReportStep(ctx, fleet.StepBackendClone, "from "+srcInstance)
-	result, err := instanceBackend.Clone(src.ContainerID, destWorkspaceDir, resolvedMounts.Mounts)
+	// CloneContext hands the job's ctx (cancellation, JobLog, Hooks) to a
+	// backend whose clone is a cancellable multi-step sequence, and falls back
+	// to the plain Clone for the rest.
+	result, err := backend.CloneContext(ctx, instanceBackend, src.ContainerID, backend.UpRequest{WorkspaceDir: destWorkspaceDir, Mounts: resolvedMounts.Mounts})
 	if err != nil {
+		if errors.Is(err, backend.ErrCheckpointed) {
+			// The daemon is shutting down, and the backend left the clone at
+			// a checkpoint (its journal) that the next start settles the
+			// record from: the record stays as it is until then.
+			return err
+		}
+		err = cancelledOr(ctx, err)
 		setFailed(fleetName, destInstance, err)
 		return err
 	}
-	// Clone takes no context: stop a clone the run was cancelled during.
+	// A plain Clone takes no context: stop a clone the run was cancelled
+	// during.
 	if err := stopIfCancelled(ctx, instanceBackend, fleetName, destInstance, result.ContainerID); err != nil {
 		return err
 	}
@@ -191,6 +209,10 @@ func RunClone(ctx context.Context, fleetName, srcInstance, destInstance string, 
 	if err := setupImageCache(services, instanceBackend, fleetName, destInstance, result.ContainerID, destWorkspaceDir); err != nil {
 		provisionWarning(ctx, fleetName, destInstance, fmt.Sprintf("image cache: %v", err))
 	}
+
+	// The backend's own warnings (a clone copied live, best-effort) go in
+	// front of what the steps above wrote over the banner.
+	prependBackendWarnings(fleetName, destInstance, result.Warnings)
 
 	backend.ReportStep(ctx, fleet.StepMarkRunning, "")
 	if err := commitRunning(ctx, instanceBackend, fleetName, destInstance, result.ContainerID); err != nil {
