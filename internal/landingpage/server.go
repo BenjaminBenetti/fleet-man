@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -27,7 +29,7 @@ const healthTimeout = 5 * time.Second
 
 // DefaultPort is the port the landing page listens on inside the
 // instance. fleet-man's browser opens to http://localhost:<DefaultPort>,
-// routed through the privoxy proxy into the container's localhost.
+// routed through the browser proxy into the container's localhost.
 const DefaultPort = 16767
 
 //go:embed templates/*.html
@@ -35,7 +37,7 @@ var templatesFS embed.FS
 
 // staticFS holds client-side assets (htmx, etc.) served under /static.
 // They are vendored and embedded rather than loaded from a CDN: the page
-// is served inside the instance and reached through the privoxy proxy, so
+// is served inside the instance and reached through the browser proxy, so
 // it cannot assume public internet access — and embedding keeps the whole
 // feature inside the single fleet binary.
 //
@@ -86,8 +88,13 @@ func Run(cfg Config) error {
 	}
 	srv.routes(router, assets)
 
-	addr := ":" + strconv.Itoa(cfg.Port)
-	return router.Run(addr)
+	ln, err := net.Listen("tcp", net.JoinHostPort(cfg.Addr, strconv.Itoa(cfg.Port)))
+	if err != nil {
+		return err
+	}
+	// fleetd waits for this line before it opens the browser on the page.
+	fmt.Fprintf(os.Stderr, "fleet landing-page: listening on %s\n", ln.Addr())
+	return router.RunListener(ln)
 }
 
 // server holds the request-handling state for the landing page.
