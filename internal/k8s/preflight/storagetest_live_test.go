@@ -25,8 +25,9 @@ import (
 // share could use from any node and picks FLEET_PREFLIGHT_STORAGE_PASS (an
 // RWX class, as nfs-csi), whose test pods ran on two nodes, for multi-node
 // mode; FLEET_PREFLIGHT_STORAGE_FAIL (as minikube's hostpath, which Auto
-// skips as node-local), named to test, does not pass. Nothing the tests
-// made is left.
+// skips as node-local), named to test, does not pass. With
+// FLEET_PREFLIGHT_STORAGE_DEEP=1 a deep run then tests it again and reads
+// the nodes' inotify limits. Nothing the tests made is left.
 func TestLiveStorageTest(t *testing.T) {
 	kctx := os.Getenv("FLEET_PREFLIGHT_STORAGE_LIVE")
 	pass := os.Getenv("FLEET_PREFLIGHT_STORAGE_PASS")
@@ -97,6 +98,26 @@ func TestLiveStorageTest(t *testing.T) {
 		}
 		if res.Capabilities.GetSharedStorageClass() != pass {
 			t.Fatalf("after testing %s Auto picked %q", fail, res.Capabilities.GetSharedStorageClass())
+		}
+	}
+
+	// The deep test tests the class again (its cache notwithstanding) and
+	// reads the nodes' inotify limits.
+	if os.Getenv("FLEET_PREFLIGHT_STORAGE_DEEP") == "1" {
+		tgt.TestStorage, tgt.Deep = nil, true
+		before := time.Now()
+		res = Full(ctx, tgt, nil)
+		t.Logf("deep run: state %s %q; inotify %d instances, %d watches", res.State, res.Message, res.Capabilities.GetInotifyMaxUserInstances(), res.Capabilities.GetInotifyMaxUserWatches())
+		obj, err := cs.StorageV1().StorageClasses().Get(ctx, pass, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, ok := cache.Lookup(StorageTestKey(obj, pass, true), time.Now())
+		if !ok || !again.At.After(before) || !again.Passed() || res.Capabilities.GetShareMode() != "multi-node" {
+			t.Fatalf("after the deep test: %+v %v, mode %q", again, ok, res.Capabilities.GetShareMode())
+		}
+		if res.Capabilities.GetInotifyMaxUserInstances() <= 0 {
+			t.Errorf("the deep test read no inotify limits")
 		}
 	}
 
