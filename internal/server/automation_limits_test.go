@@ -67,10 +67,22 @@ func limitState(agents []fleet.Agent, insts ...*fleet.Instance) *state.State {
 	}}
 }
 
+// planOne plans and commits one firing of trigger in fleet alpha of st,
+// which gets the trigger first when it lacks it (the drain refuses a run
+// whose trigger is gone).
 func planOne(l *automationLimiter, c runChecks, st *state.State, trigger fleet.Trigger, now time.Time) *firingPlan {
+	withTrigger(st, trigger)
 	p := l.plan(c, func() *state.State { return st }, []firingItem{{fleet: "alpha", trigger: trigger}}, now)[0]
 	l.commit(p, &triggerEvent{triggerName: trigger.Name, firedAt: now}, "event-x.log")
 	return p
+}
+
+// withTrigger adds trigger to fleet alpha of st unless it has it.
+func withTrigger(st *state.State, trigger fleet.Trigger) {
+	f := st.Fleets["alpha"]
+	if _, ok := fleet.FindTrigger(f.Settings.Triggers, trigger.Name); !ok {
+		f.Settings.Triggers = append(f.Settings.Triggers, trigger)
+	}
 }
 
 func runNames(runs []*queuedRun) []string {
@@ -357,6 +369,40 @@ func TestLimiterDrainRefusesAndExpires(t *testing.T) {
 	}
 }
 
+// A queued run of a trigger that was deleted, disabled, or no longer
+// names its agent is refused: the trigger would not fire it now.
+func TestLimiterDrainRefusesRunsTheirTriggerNoLongerFires(t *testing.T) {
+	l := newAutomationLimiter()
+	c := (&fakeChecks{limits: map[string]clusterLimits{"c1": {name: "prod", maxPerAgent: 1}}}).checks()
+	agents := []fleet.Agent{clusterAgent("a", "c1"), clusterAgent("b", "c1"), clusterAgent("c", "c1"), clusterAgent("d", "c1")}
+	st := limitState(agents)
+	now := time.Now()
+	for _, ag := range agents {
+		trig := fleet.Trigger{Name: "t-" + ag.Name, AgentNames: []string{ag.Name}}
+		p := planOne(l, c, st, trig, now)
+		l.started(p.start[0], "alpha/"+ag.Name+"-1")
+		planOne(l, c, st, trig, now) // waits for the slot
+		l.release("alpha/" + ag.Name + "-1")
+	}
+	f := st.Fleets["alpha"]
+	f.Settings.Triggers = []fleet.Trigger{
+		{Name: "t-b", AgentNames: []string{"b"}, Disabled: true},
+		{Name: "t-c", AgentNames: []string{"other"}},
+		{Name: "t-d", AgentNames: []string{"d"}},
+	}
+	d := l.due(c, func() *state.State { return st }, now)
+	why := map[string]string{}
+	for _, r := range d.refused {
+		why[r.agent] = r.why
+	}
+	if why["a"] != "trigger t-a no longer exists" || why["b"] != "trigger t-b is disabled" || why["c"] != "trigger t-c no longer fires agent c" || len(why) != 3 {
+		t.Errorf("refused %v", why)
+	}
+	if got := runNames(d.start); len(got) != 1 || !strings.HasPrefix(got[0], "d#") {
+		t.Errorf("started %v, want d's alone", got)
+	}
+}
+
 // The queues survive a restart: the runs a snapshot lists come back in
 // order, and new firings number after them.
 func TestLimiterRestoresQueuedRuns(t *testing.T) {
@@ -385,6 +431,7 @@ func TestLimiterIsSafeForConcurrentUse(t *testing.T) {
 	st := limitState([]fleet.Agent{clusterAgent("k", "c1")})
 	load := func() *state.State { return st }
 	trig := fleet.Trigger{Name: "t", AgentNames: []string{"k"}}
+	withTrigger(st, trig)
 	var wg sync.WaitGroup
 	for g := range 8 {
 		wg.Add(1)

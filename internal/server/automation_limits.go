@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -508,9 +509,11 @@ type queueDrain struct {
 }
 
 // due takes the runs out of the queues that may start now (reserving
-// them), that are refused now, or that expired, in firing order, leaving
-// the others waiting with why they wait. The agents are as the state load
-// reads (under the lock, as plan's) has them.
+// them), that are refused now (their agent, its connection or its login is
+// gone, or their trigger no longer fires it), or that expired, in firing
+// order, leaving the others waiting with why they wait. The agents and
+// triggers are as the state load reads (under the lock, as plan's) has
+// them.
 func (l *automationLimiter) due(c runChecks, load func() *state.State, now time.Time) queueDrain {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -520,6 +523,22 @@ func (l *automationLimiter) due(c runChecks, load func() *state.State, now time.
 			return fleet.FindAgent(f.Settings.Agents, agentName)
 		}
 		return fleet.Agent{}, false
+	}
+	// noLongerFires says why the run's trigger, as the state has it now,
+	// would not fire its agent ("" when it would): a disabled or deleted
+	// trigger, or one that no longer names the agent, starts none of the
+	// runs it queued.
+	noLongerFires := func(r *queuedRun) string {
+		t, ok := fleet.FindTrigger(st.Fleets[r.fleet].Settings.Triggers, r.trigger)
+		switch {
+		case !ok:
+			return fmt.Sprintf("trigger %s no longer exists", r.trigger)
+		case t.Disabled:
+			return fmt.Sprintf("trigger %s is disabled", r.trigger)
+		case !slices.Contains(t.AgentNames, r.agent):
+			return fmt.Sprintf("trigger %s no longer fires agent %s", r.trigger, r.agent)
+		}
+		return ""
 	}
 	var d queueDrain
 	keys := make([]string, 0, len(l.queues))
@@ -543,6 +562,11 @@ func (l *automationLimiter) due(c runChecks, load func() *state.State, now time.
 			ag, ok := agentOf(r.fleet, r.agent)
 			if !ok {
 				r.why = fmt.Sprintf("agent %s no longer exists", r.agent)
+				d.refused = append(d.refused, r)
+				continue
+			}
+			if why := noLongerFires(r); why != "" {
+				r.why = why
 				d.refused = append(d.refused, r)
 				continue
 			}

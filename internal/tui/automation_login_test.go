@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -62,6 +63,8 @@ func TestLogInOpensTheToolOnARunningInstanceThere(t *testing.T) {
 	f := m.st.Fleets["alpha"]
 	f.Instances = []*fleet.Instance{
 		{Name: "elsewhere", Status: fleet.StatusRunning, Backend: fleet.BackendDevcontainer},
+		// An automation run there is reaped once its agent idles.
+		{Name: "a-run", Status: fleet.StatusRunning, Backend: fleet.BackendKubernetes, KubeCluster: "dev-abc234", Automated: true},
 		{Name: "there", Status: fleet.StatusRunning, Backend: fleet.BackendKubernetes, KubeCluster: "dev-abc234"},
 	}
 	var ran []string
@@ -123,5 +126,20 @@ func TestLogInCreatesAnInstanceWhenNoneRunsThere(t *testing.T) {
 	inst.Status, inst.Error = fleet.StatusFailed, "kubernetes:quota: full"
 	if fp.checkPendingLogin(m) != nil || fp.pendingLogin != nil || !strings.Contains(m.message, "kubernetes:quota: full") {
 		t.Fatalf("a failed instance: pending %+v, message %q", fp.pendingLogin, m.message)
+	}
+}
+
+// A Log in whose instance could not even be created waits no more.
+func TestLogInStopsWaitingWhenItsCreateIsRefused(t *testing.T) {
+	m, fp := loginAgentModel(t)
+	m.currentPage = fp
+	fp.pendingLogin = &pendingLogin{fleet: "alpha", instance: "login-claude", tool: "claude"}
+	next, _ := m.Update(instanceCreateErrMsg{fleet: "alpha", instance: "other", err: errors.New("no")})
+	if got := next.(model).fleetPage.pendingLogin; got == nil {
+		t.Fatal("another instance's refused create dropped the pending login")
+	}
+	next, _ = next.(model).Update(instanceCreateErrMsg{fleet: "alpha", instance: "login-claude", err: errors.New("kubernetes:quota: full")})
+	if got := next.(model).fleetPage.pendingLogin; got != nil {
+		t.Fatalf("pending login after its create was refused = %+v", got)
 	}
 }

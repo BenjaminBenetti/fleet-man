@@ -1282,6 +1282,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// "creating" marker, refresh, and surface the error.
 		key := msg.fleet + "/" + msg.instance
 		delete(m.creating, key)
+		// A Log in action waiting for this instance waits no more.
+		if m.fleetPage.pendingLoginFor(msg.fleet, msg.instance) != nil {
+			m.fleetPage.pendingLogin = nil
+		}
 		m.reload()
 		// A Kubernetes create refused with a code (no room under the
 		// connection's quotas) gets the recovery dialog, unless another

@@ -107,6 +107,18 @@ func (fleetPage *fleetPage) logInAgent(m *model, fleetName string, idx int) tea.
 	return createInstanceCmd(fleetName, name, "", "", "", target)
 }
 
+// pendingLoginFor is the Log in action waiting for instance of fleetName,
+// or nil.
+func (fleetPage *fleetPage) pendingLoginFor(fleetName, instance string) *pendingLogin {
+	if fleetPage == nil {
+		return nil
+	}
+	if p := fleetPage.pendingLogin; p != nil && p.fleet == fleetName && p.instance == instance {
+		return p
+	}
+	return nil
+}
+
 // checkPendingLogin opens the login a Log in action waits for once its
 // instance runs (or gives up when it failed or took too long).
 func (fleetPage *fleetPage) checkPendingLogin(m *model) tea.Cmd {
@@ -133,10 +145,12 @@ func (fleetPage *fleetPage) checkPendingLogin(m *model) tea.Cmd {
 	return nil
 }
 
-// runningInstanceOn is a running instance of f on target, or nil.
+// runningInstanceOn is a running instance of f on target, or nil. An
+// automation run's instance is never one: the scheduler reaps it once its
+// agent idles, login session and all.
 func runningInstanceOn(f *fleet.Fleet, target fleet.DeployTarget) *fleet.Instance {
 	for _, inst := range f.Instances {
-		if inst.Status == fleet.StatusRunning && inst.Backend == target.Backend && inst.KubeCluster == target.KubeCluster {
+		if inst.Status == fleet.StatusRunning && !inst.Automated && inst.Backend == target.Backend && inst.KubeCluster == target.KubeCluster {
 			return inst
 		}
 	}
