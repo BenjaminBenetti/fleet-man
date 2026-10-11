@@ -84,6 +84,7 @@ func TestCloneLoadsAVerifiedSource(t *testing.T) {
 func TestCloneRecordCarriesTheSources(t *testing.T) {
 	sts, rec := cloneSourceObjects(t, nil)
 	rec.Strategy, rec.RemoteUser, rec.WorkspaceFolder, rec.NonRoot = "push", "vscode", "/workspaces/web", true
+	rec.AudioMissing = true
 	rec.Created = time.Unix(1700000000, 0)
 	rec.Ports = []backend.PublishedPort{{HostIP: "127.0.0.1", HostPort: 3000, ContainerPort: 3000}}
 	rec.HostSockets = []hostrelay.Socket{{Target: "/run/gpg.sock", Source: "/home/u/.gnupg/S.gpg-agent.extra", Mode: 0o700}}
@@ -103,6 +104,9 @@ func TestCloneRecordCarriesTheSources(t *testing.T) {
 	}
 	if got.Key != "dest2345" || got.StatefulSet != c.id.sts || got.Instance != "copy" || !slices.Equal(got.Ports, rec.Ports) {
 		t.Fatalf("clone record %+v", got)
+	}
+	if !got.NonRoot || !got.AudioMissing {
+		t.Fatalf("clone of an audio-less pod without root: nonRoot %v audioMissing %v", got.NonRoot, got.AudioMissing)
 	}
 	if !slices.Equal(got.HostSockets, rec.HostSockets) || !got.HostGateway || !slices.Equal(got.GatewaySkip, rec.GatewaySkip) {
 		t.Fatalf("clone host relays %+v %v %v", got.HostSockets, got.HostGateway, got.GatewaySkip)

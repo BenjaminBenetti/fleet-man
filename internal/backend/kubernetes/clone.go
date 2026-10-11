@@ -659,8 +659,9 @@ func (c *cloning) diskRefused(pvc string) func(context.Context) error {
 }
 
 // cloneRecord is fleetd's record of the clone's pod: the source's (its
-// image, user, creation time, published ports and host relays: its pod
-// template is the source's), under the clone's name, key and spec hash.
+// image, user, creation time, published ports, host relays and whether it
+// lacks the audio stack: its pod template is the source's), under the
+// clone's name, key and spec hash.
 // StatefulSetUID comes once the StatefulSet is applied.
 func (c *cloning) cloneRecord(o *podspec.Objects) InstanceRecord {
 	src := c.srcRec
@@ -668,7 +669,7 @@ func (c *cloning) cloneRecord(o *podspec.Objects) InstanceRecord {
 		Cluster: c.id.cluster, Namespace: c.ns, Key: c.id.key, Fleet: c.id.fleet, Instance: c.id.name,
 		StatefulSet: c.id.sts, Gen: c.gen, SpecHash: podspec.SpecHash(&o.StatefulSet.Spec.Template.Spec),
 		Image: src.Image, ImageDigests: slices.Clone(src.ImageDigests), Strategy: src.Strategy, RemoteUser: src.RemoteUser,
-		WorkspaceFolder: src.WorkspaceFolder, NonRoot: src.NonRoot, Created: src.Created, Ports: slices.Clone(src.Ports),
+		WorkspaceFolder: src.WorkspaceFolder, NonRoot: src.NonRoot, AudioMissing: src.AudioMissing, Created: src.Created, Ports: slices.Clone(src.Ports),
 		HostSockets: slices.Clone(src.HostSockets), HostGateway: src.HostGateway, GatewaySkip: slices.Clone(src.GatewaySkip),
 	}
 }
