@@ -298,6 +298,38 @@ func TestTrackExpectedReplacement(t *testing.T) {
 	tr.wantRestart("u4/0", backend.RestartPodDeleted)
 }
 
+// An evacuation stops the instance and starts it again on another node:
+// though a stop and a start, the cluster ended its processes, so the new pod
+// is a restart, told as the fleet's move, even when the drain evicted the
+// pod first.
+func TestTrackAMoveIsARestart(t *testing.T) {
+	tr := newTracker(t)
+	tr.set(1)
+	tr.pod(trackedPod("u1", 0))
+	tr.set(0)
+	tr.deleted(trackedPod("u1", 0))
+	tr.pool.ExpectReplacement("c1", trackSTS, backend.RestartFleetMoved)
+	tr.set(1)
+	tr.pod(trackedPod("u2", 0))
+	tr.wantRestart("u2/0", backend.RestartFleetMoved)
+
+	// The drain evicted it first; the StatefulSet's replacement waited on
+	// the cordoned node until the move stopped it.
+	tr.pod(going(trackedPod("u2", 0, disrupted("EvictionByEvictionAPI"))))
+	tr.deleted(trackedPod("u2", 0))
+	tr.pod(trackedPod("u3", 0, func(p *corev1.Pod) { p.Status.Phase = corev1.PodPending }))
+	tr.wantRestart("u3/0", backend.RestartNodeDrained)
+	tr.set(0)
+	tr.deleted(trackedPod("u3", 0))
+	tr.pool.ExpectReplacement("c1", trackSTS, backend.RestartFleetMoved)
+	tr.set(1)
+	tr.pod(trackedPod("u4", 0))
+	tr.wantRestart("u4/0", backend.RestartFleetMoved)
+	if l := tr.pool.Observe("c1", trackSTS).CrashLoop; l != nil {
+		t.Fatalf("a move counted toward a crash loop: %+v", l)
+	}
+}
+
 func TestTrackCrashLoop(t *testing.T) {
 	t.Run("three restarts in five minutes", func(t *testing.T) {
 		tr := newTracker(t)

@@ -158,6 +158,11 @@ type track struct {
 	// expected is a replacement fleet itself announced.
 	expected *expectation
 
+	// holderNode is the node the instance's pod holds its fleet's share on
+	// in single-node mode ("" when it is no such holder, or has no pod
+	// there): the node watches follow it (nodes.go).
+	holderNode string
+
 	last     *backend.Restart
 	ended    bool // the last restart killed every process (an OOM kill)
 	recent   []time.Time
@@ -279,7 +284,16 @@ func (p *Pool) podEvent(w *watcher, sts string, pod *corev1.Pod, deleted bool) {
 			t.loop = loopOf(pod, 0, true)
 		}
 	}
+	// The node the node watches follow (an old pod's late deletion leaves
+	// the current one's).
+	moved := false
+	if node := holderNode(pod, deleted); (!deleted || pod.UID == t.uid) && node != t.holderNode {
+		t.holderNode, moved = node, true
+	}
 	p.instMu.Unlock()
+	if moved {
+		p.syncNodeWatches(k.cluster)
+	}
 	if hook := p.runEnded(); hook != nil {
 		for _, e := range ends {
 			go hook(p.ctx, e)

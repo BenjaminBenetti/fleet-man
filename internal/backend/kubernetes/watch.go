@@ -285,11 +285,19 @@ func (p *Pool) watcherFor(c *Cluster) (*watcher, error) {
 		p.mu.Unlock()
 		return w, nil
 	}
+	reloaded := w != nil
 	if w != nil {
 		delete(p.watchers, c.Record.ID)
 		w.stop()
 	}
 	p.mu.Unlock()
+	if reloaded {
+		// The node watches run on the old client too.
+		p.nodeMu.Lock()
+		p.stopNodeWatchesLocked(c.Record.ID)
+		p.nodeMu.Unlock()
+		defer p.syncNodeWatches(c.Record.ID)
+	}
 	nw, err := p.startWatcher(c)
 	if err != nil {
 		return nil, err

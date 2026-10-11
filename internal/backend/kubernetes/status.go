@@ -12,6 +12,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 )
 
 // status.go is the instance status table: what fleetd tells of an instance
@@ -64,6 +65,18 @@ type Observation struct {
 	CrashLoop *CrashLoop
 	// Tampered is the verification failure of the pod, when it was refused.
 	Tampered *TamperedError
+	// Holder: the pod holds its fleet's share in single-node mode (it is
+	// required beside the share group's running pods), so its fleet moves
+	// off a node only as a whole (evacuate.go).
+	Holder bool
+	// Disrupted says why the cluster is emptying the node a holder's pod is
+	// on ("cordoned"; NodeDisruption), "" when it is not (or the node is not
+	// watched).
+	Disrupted string
+	// MovingOff is the node the instance's fleet is being moved off (its
+	// StatefulSet's AnnotationMovingOff): set from before the move stops it
+	// until it runs again.
+	MovingOff string
 }
 
 // statusInput is what the table is computed from.
@@ -266,6 +279,15 @@ func (p *Pool) Observe(clusterID, sts string) Observation {
 		o.CrashLoop = nil
 	}
 	o.Tampered = in.tampered
+	if in.set != nil {
+		o.MovingOff = in.set.Annotations[names.AnnotationMovingOff]
+	}
+	if in.pod != nil && in.pod.DeletionTimestamp == nil && singleNodeHolder(in.pod) {
+		o.Holder = true
+		if o.Node != "" {
+			o.Disrupted = p.NodeDisruptionOf(clusterID, o.Node)
+		}
+	}
 	return o
 }
 

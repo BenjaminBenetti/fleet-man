@@ -266,6 +266,11 @@ type Pool struct {
 	// pf is the port-forward pool (pfpool.go), made on first use.
 	pfOnce sync.Once
 	pf     *portForwards
+
+	// nodeMu guards the node watches (nodes.go), by connection (never held
+	// with instMu).
+	nodeMu sync.Mutex
+	nodes  map[string]*nodeWatches
 }
 
 // clusterGates are a connection's limits, kept across reloads of its
@@ -376,6 +381,7 @@ func NewPool(opts PoolOptions) *Pool {
 		watched:    map[trackKey]bool{},
 		supervised: map[trackKey]*supervision{},
 		desired:    map[trackKey]*desiredEntry{},
+		nodes:      map[string]*nodeWatches{},
 	}
 }
 
@@ -451,6 +457,11 @@ func (p *Pool) Configure(records []fleet.KubeCluster) {
 		slot.forget()
 	}
 	if len(removed) > 0 {
+		p.nodeMu.Lock()
+		for _, id := range removed {
+			p.stopNodeWatchesLocked(id)
+		}
+		p.nodeMu.Unlock()
 		p.instMu.Lock()
 		for _, id := range removed {
 			for k := range p.tracks {
