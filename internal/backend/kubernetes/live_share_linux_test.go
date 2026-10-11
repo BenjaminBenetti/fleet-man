@@ -192,9 +192,11 @@ func TestLiveShare(t *testing.T) {
 		t.Fatalf("OpenSpoke: %v", err)
 	}
 	served := make(chan error, 1)
+	attached := make(chan struct{})
 	go func() {
-		served <- lb.pool.ServeSpoke(ctx, link, hub, ShareSide(lv.rec.ID, alpha.inst.KubeKey, share), nil)
+		served <- lb.pool.ServeSpoke(ctx, link, hub, ShareSide(lv.rec.ID, alpha.inst.KubeKey, share), func(uint64) { close(attached) })
 	}()
+	waitAttached(t, attached)
 	if err := os.WriteFile(filepath.Join(host, ".claude", "from-host.md"), []byte("written on the host"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -302,6 +304,17 @@ func flushLive(t *testing.T, ctx context.Context, hub *sharesync.Hub) {
 			st, _ := json.Marshal(hub.Status())
 			t.Fatalf("Flush: %v\n%s", err, st)
 		}
+	}
+}
+
+// waitAttached waits for a spoke to be attached to its hub (a flush counts
+// only the sides attached).
+func waitAttached(t *testing.T, attached <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-attached:
+	case <-time.After(2 * time.Minute):
+		t.Fatal("the spoke never attached")
 	}
 }
 
@@ -425,7 +438,11 @@ func TestLiveShareCopyTier(t *testing.T) {
 			t.Fatalf("OpenSpoke %s: %v", m.inst.Name, err)
 		}
 		defer link.Close()
-		go func() { _ = lb.pool.ServeSpoke(ctx, link, hub, ShareSide(lv.rec.ID, m.inst.KubeKey, share), nil) }()
+		attached := make(chan struct{})
+		go func() {
+			_ = lb.pool.ServeSpoke(ctx, link, hub, ShareSide(lv.rec.ID, m.inst.KubeKey, share), func(uint64) { close(attached) })
+		}()
+		waitAttached(t, attached)
 	}
 	if err := os.WriteFile(filepath.Join(host, ".claude", "host.md"), []byte("from the host"), 0o644); err != nil {
 		t.Fatal(err)
@@ -445,5 +462,118 @@ func TestLiveShareCopyTier(t *testing.T) {
 		if got := sh(m, "cat ~/.claude/host.md"); got != "from the host" {
 			t.Errorf("%s has %q of the host's write", m.inst.Name, got)
 		}
+	}
+}
+
+// TestLiveShareWithoutRoot runs a fleet's share in a restricted namespace
+// (no root anywhere: one uid runs everything, capability tier C): the
+// share-layout init container lays the share out as the pod's uid, the
+// folders are that uid's to write, and the spoke (which keeps that uid) syncs
+// a host write in. Gated like TestLiveShare.
+func TestLiveShareWithoutRoot(t *testing.T) {
+	kctx := os.Getenv("FLEET_KUBE_TEST_CONTEXT")
+	if kctx == "" {
+		t.Skip("set FLEET_KUBE_TEST_CONTEXT=<context> to run a fleet share on a cluster")
+	}
+	image := os.Getenv("FLEET_KUBE_TEST_IMAGE")
+	if image == "" {
+		image = "mcr.microsoft.com/devcontainers/base:debian-12"
+	}
+	lb := newLiveBackend(t, kctx)
+	lb.prefix = "fleet-it-p4-03-share-tierc-"
+	lv := lb.connect(t, map[string]string{"pod-security.kubernetes.io/enforce": "restricted"}, false)
+	lb.classifyStorage(t, lv)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	resolved, err := resolver.Resolve("live", fleet.FleetSettings{ClaudeCodeMount: true, HomeDir: "/home/vscode"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := filepath.Join(state.WorkspacesDir(), "live")
+	for _, e := range resolved.Layout {
+		if p := filepath.Join(host, e.Path); !e.Dir && e.Seed != "" {
+			if fi, err := os.Stat(p); err == nil && fi.Size() == 0 {
+				_ = os.WriteFile(p, []byte(e.Seed), 0o666)
+			}
+		}
+	}
+	inst, _ := lb.instance(t, lv, "tierc", func(ws string) { writeLiveWorkspace(t, ws, map[string]any{"image": image}) })
+	b := newHandle(inst, lb.pool)
+	res, err := b.UpContext(backend.WithJobLog(ctx, &lineLog{t: t}), backend.UpRequest{WorkspaceDir: inst.WorkspaceDir, Mounts: resolved.Mounts, Layout: resolved.Layout})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	inst.ContainerID, inst.Status = res.ContainerID, fleet.StatusRunning
+	b = newHandle(inst, lb.pool)
+	defer func() {
+		_ = b.Down(res.ContainerID)
+		lb.waitNothingLeft(t, lv, inst.KubeKey)
+	}()
+	sh := func(script string) string {
+		t.Helper()
+		out, err := b.RunScript(res.ContainerID, script)
+		if err != nil {
+			t.Fatalf("%q: %v\n%s", script, err, out)
+		}
+		return strings.TrimSpace(out)
+	}
+	uid := sh("id -u")
+	if uid == "0" {
+		t.Fatal("a restricted pod runs as root")
+	}
+	sh("echo mine > ~/.claude/pod.txt")
+	if got := sh("stat -c %u ~/.claude/pod.txt"); got != uid {
+		t.Errorf("a file the pod wrote in its share is %s's, want the pod's %s", got, uid)
+	}
+	if got := sh("cat /fleet-mounts/files/.claude.json"); got != "{}" {
+		t.Errorf("the shared .claude.json holds %q", got)
+	}
+
+	target, share, err := InstanceShare(lv.rec.ID, inst.KubeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if share.UID != -1 {
+		t.Errorf("a pod without root records share uid %d, want none (-1)", share.UID)
+	}
+	var roots []sharesync.TreeRoot
+	var rootNames []string
+	for _, r := range share.Roots {
+		roots = append(roots, sharesync.TreeRoot{Name: r.Name, Dir: filepath.Join(host, r.Name), Reserved: r.Reserved, Skip: r.Skip})
+		rootNames = append(rootNames, r.Name)
+	}
+	syncDir := filepath.Join(state.FleetDir(), "sync-live")
+	hub, err := sharesync.OpenHub(filepath.Join(syncDir, "hub"), syncpolicy.Defaults(), rootNames, sharesync.HubOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+	tree, err := sharesync.OpenTree(roots, sharesync.TreeOptions{StateDir: filepath.Join(syncDir, "host")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tree.Close()
+	if err := sharesync.NewSide(sharesync.SideInfo{ID: "host", Location: "host"}, tree, hub, sharesync.SideOptions{NoWatch: true}).Attach(ctx, hub); err != nil {
+		t.Fatal(err)
+	}
+	link, err := lb.pool.OpenSpoke(ctx, target, inst.KubeKey, share)
+	if err != nil {
+		t.Fatalf("OpenSpoke: %v", err)
+	}
+	defer link.Close()
+	attached := make(chan struct{})
+	go func() {
+		_ = lb.pool.ServeSpoke(ctx, link, hub, ShareSide(lv.rec.ID, inst.KubeKey, share), func(uint64) { close(attached) })
+	}()
+	waitAttached(t, attached)
+	if err := os.WriteFile(filepath.Join(host, ".claude", "host.md"), []byte("from the host"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	flushLive(t, ctx, hub)
+	if got := sh("cat ~/.claude/host.md"); got != "from the host" {
+		t.Errorf("the host's write is %q in the pod", got)
+	}
+	if data, _ := os.ReadFile(filepath.Join(host, ".claude", "pod.txt")); string(data) != "mine\n" {
+		t.Errorf("the pod's write is %q on the host", data)
 	}
 }

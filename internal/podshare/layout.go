@@ -138,8 +138,13 @@ func Apply(dir string, l Layout) error {
 		treeUID, treeGID = 0, 0
 	}
 	a := applier{r: r, top: dir}
-	if err := a.own(".", treeMode, treeUID, treeGID); err != nil {
-		return err
+	// The volume's root is the provisioner's (root's): only root makes it
+	// the tree's. Without root the volume takes the pod's writes as it is
+	// (an fsGroup, or a provisioner's open mode).
+	if root {
+		if err := a.own(".", treeMode, treeUID, treeGID); err != nil {
+			return err
+		}
 	}
 	if err := a.dir(RootsDir, treeMode, treeUID, treeGID); err != nil {
 		return err
