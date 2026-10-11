@@ -71,6 +71,10 @@ type podGateway struct {
 	ports     []hostrelay.Port
 	scannedAt time.Time
 	scanErr   string
+	// unsent: a listing found a set other than the last one, which the
+	// pods have not been told of yet (a listing made for one pod's state or
+	// one connection tells only that pod, or none).
+	unsent bool
 	// pods are the pods that mirror the ports, as last asked about, by
 	// connection and StatefulSet.
 	pods map[string]gatewayPod
@@ -196,13 +200,12 @@ func (g *podGateway) current(ctx context.Context) []hostrelay.Port {
 	if fresh {
 		return ports
 	}
-	ports, _ = g.rescan(ctx)
-	return ports
+	return g.rescan(ctx)
 }
 
-// rescan lists the daemon host's listening ports; changed reports a set
-// other than the last one. A failure is logged once, until it changes.
-func (g *podGateway) rescan(ctx context.Context) (ports []hostrelay.Port, changed bool) {
+// rescan lists the daemon host's listening ports, noting a set other than
+// the last one as unsent. A failure is logged once, until it changes.
+func (g *podGateway) rescan(ctx context.Context) []hostrelay.Port {
 	ports, err := g.scan(ctx)
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -215,15 +218,20 @@ func (g *podGateway) rescan(ctx context.Context) (ports []hostrelay.Port, change
 	} else {
 		g.scanErr = ""
 	}
-	changed = !slices.Equal(ports, g.ports)
+	// The first listing changes nothing a pod was told: none was told of an
+	// earlier one.
+	if !g.scannedAt.IsZero() && !slices.Equal(ports, g.ports) {
+		g.unsent = true
+	}
 	g.ports, g.scannedAt = ports, time.Now()
-	return ports, changed
+	return ports
 }
 
 // tick is the hub's periodic check while pods mirror the ports: it forgets
 // the pods that have had no session (live) since podGatewayForget after they
 // were last asked about, and reports whether what the others mirror changed
-// (the ports, or a connection's host_gateway).
+// (the ports, or a connection's host_gateway) since the last tick that said
+// so, whichever listing found it.
 func (g *podGateway) tick(ctx context.Context, live func(kubernetes.PodTarget) bool) bool {
 	g.mu.Lock()
 	pods := make([]gatewayPod, 0, len(g.pods))
@@ -260,7 +268,11 @@ func (g *podGateway) tick(ctx context.Context, live func(kubernetes.PodTarget) b
 		}
 	}
 	g.mu.Unlock()
-	_, changed := g.rescan(ctx)
+	g.rescan(ctx)
+	g.mu.Lock()
+	changed := g.unsent
+	g.unsent = false
+	g.mu.Unlock()
 	return changed || turned
 }
 
@@ -294,6 +306,9 @@ func (h *podAgentHub) serveHostSocket(t kubernetes.PodTarget, st *podwire.Stream
 	}
 	source, ok := recordedSource(t, open.Target)
 	if !ok {
+		// The agent binds only the targets fleetd sent it: one that names
+		// another broke the protocol (and is slowed, as its warnings are).
+		st.Penalize()
 		flog.Warn("pod relay: refused a host socket fleet did not record for the instance", "fleet", t.Fleet, "instance", t.Instance, "target", open.Target)
 		podwire.RefuseSock(st, podwire.RefusedGate, "fleet recorded no host socket at "+strconv.Quote(open.Target)+" for the instance")
 		return

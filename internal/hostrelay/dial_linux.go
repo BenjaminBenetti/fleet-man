@@ -14,32 +14,39 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// maxSunPath is the longest path a unix socket address holds (sun_path, its
-// NUL excluded).
-const maxSunPath = 107
+// beforeConnect runs between the socket's check and the connect (a seam
+// for tests, which swap the name there).
+var beforeConnect func()
 
 func dialNoFollow(ctx context.Context, path string) (net.Conn, error) {
 	dir, base := filepath.Split(path)
-	fd, err := openDirNoFollow(path, dir)
+	dfd, err := openDirNoFollow(path, dir)
 	if err != nil {
 		return nil, err
 	}
+	defer unix.Close(dfd)
+	// The socket itself, as an O_PATH descriptor of what is at the name now
+	// (a link there is opened as the link): connect(2) follows a link at a
+	// socket's name, so the dial goes through this descriptor, and reaches
+	// exactly the socket checked, whatever is put at the name since.
+	fd, err := unix.Openat(dfd, base, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, &fs.PathError{Op: "dial", Path: path, Err: err}
+	}
 	defer unix.Close(fd)
 	var st unix.Stat_t
-	if err := unix.Fstatat(fd, base, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+	if err := unix.Fstat(fd, &st); err != nil {
 		return nil, &fs.PathError{Op: "dial", Path: path, Err: err}
 	}
 	if st.Mode&unix.S_IFMT != unix.S_IFSOCK {
 		return nil, notSocketError(path, statMode(st.Mode))
 	}
-	// The directory the walk opened, by its descriptor: the kernel resolves
-	// /proc/self/fd/N to exactly it.
-	addr := fmt.Sprintf("/proc/self/fd/%d/%s", fd, base)
-	if len(addr) > maxSunPath {
-		return nil, &fs.PathError{Op: "dial", Path: path, Err: fmt.Errorf("the socket's name is longer than a unix socket address holds")}
+	if beforeConnect != nil {
+		beforeConnect()
 	}
+	// The kernel resolves /proc/self/fd/N to exactly the socket opened.
 	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", addr)
+	conn, err := d.DialContext(ctx, "unix", fmt.Sprintf("/proc/self/fd/%d", fd))
 	if err != nil {
 		// The error names the descriptor path; the caller's names the real
 		// one.

@@ -142,6 +142,21 @@ const (
 	MaxSocketPath   = 107
 )
 
+// ReservedHostSocketDirs are where a pod's agent binds no host socket
+// (nor in its control directory): fleet's own install, and the kernel's.
+var ReservedHostSocketDirs = []string{"/opt/fleet", "/proc", "/sys", "/dev"}
+
+// ReservedHostSocketDir is the directory of ReservedHostSocketDirs that p is
+// in, or "".
+func ReservedHostSocketDir(p string) string {
+	for _, dir := range ReservedHostSocketDirs {
+		if p == dir || strings.HasPrefix(p, dir+"/") {
+			return dir
+		}
+	}
+	return ""
+}
+
 // ValidHostSocketTarget reports whether p may be a host-socket bind's target
 // in the pod: absolute, clean, not the root, short enough for a unix socket
 // address, without NUL or newline.

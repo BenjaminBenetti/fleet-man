@@ -193,6 +193,50 @@ func TestPodGatewayTickFollowsTheHost(t *testing.T) {
 	}
 }
 
+// TestPodGatewayTickTellsOfAChangeAnotherListingFound: a new listening set
+// found by a listing made for one pod's state or one connection (the last
+// tick's listing gone stale) still has every pod told at the next tick.
+func TestPodGatewayTickTellsOfAChangeAnotherListingFound(t *testing.T) {
+	isolateFleetDir(t)
+	g := newPodGateway()
+	fg := &fakeGateway{}
+	fg.install(g)
+	fg.set(port(8080, "127.0.0.1:8080"))
+	ctx := context.Background()
+	alive := func(kubernetes.PodTarget) bool { return true }
+	target := gatewayTarget("/s")
+	g.portsFor(ctx, target)
+	g.tick(ctx, alive)
+	if g.tick(ctx, alive) {
+		t.Fatal("an unchanged set counted as a change")
+	}
+
+	stale := func() {
+		g.mu.Lock()
+		g.scannedAt = time.Now().Add(-2 * g.interval)
+		g.mu.Unlock()
+	}
+	fg.set(port(8080, "127.0.0.1:8080"), port(9000, "127.0.0.1:9000"))
+	stale()
+	if got := g.portsFor(ctx, target); !reflect.DeepEqual(got, []uint16{8080, 9000}) {
+		t.Fatalf("ports %v", got)
+	}
+	if !g.tick(ctx, alive) {
+		t.Fatal("a new port one pod's state found was never told to the others")
+	}
+	fg.set(port(9000, "127.0.0.1:9000"))
+	stale()
+	if addr, why := g.dialAddr(ctx, target, 8080); why == "" {
+		t.Fatalf("dialled %v at a port that went", addr)
+	}
+	if !g.tick(ctx, alive) {
+		t.Fatal("a port a connection's listing found gone was never told")
+	}
+	if g.tick(ctx, alive) {
+		t.Fatal("a change counted twice")
+	}
+}
+
 // TestPodHostSocketRelay: a connection to a host-socket bind reaches the
 // daemon-host socket recorded for its target, half-close included; a target
 // fleetd did not record is refused, and so is a recorded one it cannot

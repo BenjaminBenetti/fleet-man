@@ -34,6 +34,15 @@ import (
 // finishHostRelays records the host-socket binds, links the ssh-agent binds
 // and settles host-gateway, once the mounts and ports are final.
 func (t *translation) finishHostRelays() {
+	// A bind at one of a bound socket directory's sockets is that socket, as
+	// the deeper mount is on docker (the targets a pod's agent binds are
+	// distinct, or the pod gets no state at all).
+	bound := map[string]bool{}
+	for _, m := range t.spec.Mounts {
+		if m.Kind == MountSSHAgent || m.Kind == MountHostSocket {
+			bound[m.Target] = true
+		}
+	}
 	for _, m := range t.spec.Mounts {
 		switch m.Kind {
 		case MountSSHAgent:
@@ -47,8 +56,9 @@ func (t *translation) finishHostRelays() {
 				continue
 			}
 			for _, e := range entries {
-				if e.Type()&fs.ModeSocket != 0 {
-					t.addHostSocket(path.Join(m.Target, e.Name()), filepath.Join(m.Source, e.Name()))
+				target := path.Join(m.Target, e.Name())
+				if e.Type()&fs.ModeSocket != 0 && !bound[target] {
+					t.addHostSocket(target, filepath.Join(m.Source, e.Name()))
 				}
 			}
 		}
@@ -64,6 +74,11 @@ func (t *translation) finishHostRelays() {
 func (t *translation) addHostSocket(target, source string) {
 	if !podwire.ValidHostSocketTarget(target) {
 		t.refuse(&Refusal{Code: CodeUnsupportedMount, Reason: fmt.Sprintf("the socket bind at %s: a unix socket's path holds at most %d bytes", target, podwire.MaxSocketPath)})
+		return
+	}
+	if dir := podwire.ReservedHostSocketDir(target); dir != "" {
+		// The pod's agent would not bind it.
+		t.refuse(&Refusal{Code: CodeUnsupportedMount, Reason: fmt.Sprintf("the socket bind at %s: fleet relays no daemon-host socket into %s in a pod", target, dir)})
 		return
 	}
 	var perm fs.FileMode

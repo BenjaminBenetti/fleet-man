@@ -24,10 +24,10 @@ var ErrNotSocket = errors.New("not a unix socket")
 // Dial connects to the unix socket at path on this host, a recorded Source:
 // absolute and clean, every component of it what it was when it was recorded
 // (a directory, never a symbolic link) and a socket at its end. On Linux the
-// connection is made through the directory it checked (an O_PATH descriptor
-// opened component by component with O_NOFOLLOW), so nothing can be swapped
-// in between the check and the connect; elsewhere each component is checked
-// with lstat just before.
+// connection is made through the socket it checked (an O_PATH descriptor of
+// it, opened component by component with O_NOFOLLOW), so nothing can be
+// swapped in between the check and the connect; elsewhere each component is
+// checked with lstat just before.
 func Dial(ctx context.Context, path string) (net.Conn, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || path == "/" {
 		return nil, &fs.PathError{Op: "dial", Path: path, Err: errors.New("not a clean absolute path")}

@@ -36,10 +36,6 @@ import (
 // hostDirMode is the mode of a directory made for a host-socket bind.
 const hostDirMode = 0o700
 
-// reservedHostDirs are where a host-socket bind cannot go (besides the
-// control directory): fleet's own install, and the kernel's.
-var reservedHostDirs = []string{"/opt/fleet", "/proc", "/sys", "/dev"}
-
 // syncHostsLocked binds the host sockets of want and unbinds the others (and
 // those whose mode changed). It returns what failed.
 func (c *controlDir) syncHostsLocked(want []podwire.HostSocket) []string {
@@ -111,16 +107,18 @@ func (c *controlDir) bindHostLocked(h podwire.HostSocket) error {
 }
 
 // checkHostTarget refuses a target in the control directory or a reserved
-// one: the translator refuses binds there, so a state naming one is not
-// fleetd's.
+// one (podwire.ReservedHostSocketDirs): the translator refuses binds there,
+// so a state naming one is not fleetd's.
 func (c *controlDir) checkHostTarget(target string) error {
 	if !podwire.ValidHostSocketTarget(target) {
 		return fmt.Errorf("bind the host socket %q: not a clean absolute socket path", target)
 	}
-	for _, dir := range append([]string{c.dir}, reservedHostDirs...) {
-		if target == dir || strings.HasPrefix(target, strings.TrimSuffix(dir, "/")+"/") {
-			return fmt.Errorf("bind the host socket %s: %s is fleet's or the kernel's", target, dir)
-		}
+	dir := podwire.ReservedHostSocketDir(target)
+	if ctl := strings.TrimSuffix(c.dir, "/"); target == ctl || strings.HasPrefix(target, ctl+"/") {
+		dir = c.dir
+	}
+	if dir != "" {
+		return fmt.Errorf("bind the host socket %s: %s is fleet's or the kernel's", target, dir)
 	}
 	return nil
 }

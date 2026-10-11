@@ -40,6 +40,51 @@ func TestHostSocketBinds(t *testing.T) {
 	}
 }
 
+// TestHostSocketBindsShadowASocketDirectorysSocket: a bind at one of a bound
+// socket directory's sockets (a socket, or the user's agent) is that socket,
+// as the deeper mount is on docker: each target is the pod agent's once,
+// since a state naming one twice is refused whole.
+func TestHostSocketBindsShadowASocketDirectorysSocket(t *testing.T) {
+	for name, bind := range map[string]string{
+		"a socket":  "/home/dev/host/S.gpg-agent:/tmp/.X11-unix/X0",
+		"the agent": "/home/dev/host/agent.sock:/tmp/.X11-unix/X0",
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := baseInput([]string{"-v", "/home/dev/host/x11:/tmp/.X11-unix", "-v", bind}, nil, nil)
+			res, err := Translate(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var socks []podwire.HostSocket
+			for _, s := range res.Pod.HostSockets {
+				if s.Target == "/tmp/.X11-unix/X0" && s.Source != strings.Split(bind, ":")[0] {
+					t.Fatalf("the directory's socket is relayed under the bind: %+v", res.Pod.HostSockets)
+				}
+				socks = append(socks, podwire.HostSocket{Target: s.Target, Mode: s.Mode})
+			}
+			if err := (podwire.DesiredState{Sockets: podwire.Sockets{Host: socks}}).Validate(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestHostSocketBindsWhereTheAgentBindsNone: a socket bound into a directory
+// the pod's agent binds no host socket in (the kernel's, fleet's install) is
+// refused at create, never left unbound.
+func TestHostSocketBindsWhereTheAgentBindsNone(t *testing.T) {
+	for _, target := range []string{"/dev/log", "/sys/fs/s.sock", "/proc/s.sock"} {
+		in := baseInput([]string{"-v", "/home/dev/host/S.gpg-agent:" + target}, nil, nil)
+		if _, err := Translate(in); err == nil || !strings.Contains(err.Error(), CodeUnsupportedMount) || !strings.Contains(err.Error(), target) {
+			t.Errorf("%s: %v", target, err)
+		}
+	}
+	in := baseInput([]string{"-v", "/home/dev/host/x11:/dev/x11"}, nil, nil)
+	if _, err := Translate(in); err == nil || !strings.Contains(err.Error(), "/dev/x11/X0") {
+		t.Errorf("a socket directory: %v", err)
+	}
+}
+
 // TestHostSocketBindsPastTheLimits: a socket target a unix socket address
 // cannot hold, and more sockets than a pod's agent relays, are refused, never
 // dropped.
