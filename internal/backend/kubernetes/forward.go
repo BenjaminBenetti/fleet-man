@@ -21,8 +21,9 @@ import (
 // itself (backend.PortDialer): one stream pair on the pod's pooled
 // port-forward connection (pfpool.go), or, where the cluster forbids
 // pods/portforward, a forward stream on the pod's agent session, which also
-// carries the forwards that need a true half-close (the cluster's runtime ends
-// a port-forward about a second after the local EOF). The *exec.Cmd forms
+// carries the forwards that need a true half-close (the cluster's runtime
+// drops a port-forward's half-close and ends it about a second later). The
+// *exec.Cmd forms
 // (ForwardStdioCommand, PortForwardCommand) are the daemon-host shim's, for
 // callers outside fleetd.
 

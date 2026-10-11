@@ -70,9 +70,10 @@ func (k *Kubelet) Forbid(on bool) {
 	k.mu.Unlock()
 }
 
-// EarlyClose ends a forwarded connection d after the client half-closes it,
-// as containerd does (about a second): a reply later than that is lost. Zero
-// keeps a true half-close.
+// EarlyClose makes a forwarded connection behave as containerd's does: the
+// client's half-close is not passed on (the peer reads no EOF), and the
+// connection ends d after it (containerd: a second), so a peer that answers
+// only after the EOF never does. Zero keeps a true half-close.
 func (k *Kubelet) EarlyClose(d time.Duration) {
 	k.mu.Lock()
 	k.early = d
@@ -242,7 +243,7 @@ func (k *Kubelet) forward(conn httpstream.Connection, errStream, data httpstream
 	go func() {
 		defer close(up)
 		_, _ = io.Copy(tcp, data)
-		if cw, ok := tcp.(interface{ CloseWrite() error }); ok {
+		if cw, ok := tcp.(interface{ CloseWrite() error }); ok && early == 0 {
 			_ = cw.CloseWrite()
 		}
 	}()
@@ -261,8 +262,8 @@ func (k *Kubelet) forward(conn httpstream.Connection, errStream, data httpstream
 			select {
 			case <-down:
 			case <-time.After(early):
-				// The runtime gives up on the connection: what the peer
-				// answers later never reaches the client.
+				// The runtime gives up on the connection: the peer never
+				// read the client's EOF.
 				_ = data.Reset()
 				_ = tcp.Close()
 			}

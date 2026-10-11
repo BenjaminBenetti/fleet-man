@@ -16,10 +16,11 @@ import (
 
 // TargetOptions tune the connections a target opens.
 type TargetOptions struct {
-	// HalfClose asks the server for connections that keep reading after this
-	// side's half-close (ForwardOpen.half_close): on Kubernetes the cluster's
-	// port-forward ends a connection about a second after it, so a peer that
-	// answers later needs the pod agent's path. Other backends ignore it.
+	// HalfClose asks the server for connections that pass this side's
+	// half-close on and keep reading after it (ForwardOpen.half_close): on
+	// Kubernetes the cluster's port-forward drops the half-close and ends the
+	// connection a second later, so a peer that answers after the EOF needs
+	// the pod agent's path. Other backends ignore it.
 	HalfClose bool
 }
 

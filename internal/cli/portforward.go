@@ -57,9 +57,9 @@ func newPortForwardAddCmd() *cobra.Command {
 		Long: `Forward one or more local ports to ports inside an instance.
 Runs until interrupted with Ctrl+C.
 
-On Kubernetes a connection closes about a second after the local side
-half-closes it; --half-close goes through the pod's fleet agent instead,
-so the peer can still answer after EOF.`,
+On Kubernetes the peer never sees the local side's half-close, and the
+connection closes a second later; --half-close goes through the pod's
+fleet agent instead, so the peer reads EOF and can still answer.`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target, instance, err := resolveInstance(args[0], "")

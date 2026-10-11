@@ -146,8 +146,9 @@ func lateExchange(dial func(port int) (io.ReadWriteCloser, error), port int) (st
 }
 
 // recordLateReply logs whether a surface keeps a reply that comes seconds
-// after the half-close (a cluster's port-forward closes about a second after
-// it; a stdio bridge's socat half a second): parity, not a requirement.
+// after the half-close (a cluster's port-forward drops the half-close and
+// closes a second later; a stdio bridge's socat half a second after it):
+// parity, not a requirement.
 func recordLateReply(c *C, surface string, dial func(port int) (io.ReadWriteCloser, error), port int) {
 	start := time.Now()
 	got, err := lateExchange(dial, port)

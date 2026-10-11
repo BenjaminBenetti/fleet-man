@@ -65,9 +65,10 @@ func (p *Pool) pfState() *portForwards {
 
 // DialPort connects to port on the loopback of t's pod: one stream pair on
 // the pod's pooled port-forward connection. The pod is verified first. The
-// connection's CloseWrite is a half-close (through the cluster's runtime,
-// which may end the connection soon after); a port nothing listens on shows
-// as the first Read failing (*kubeexec.PortError). An error wrapping
+// connection's CloseWrite ends the stream's write side, which the cluster's
+// runtime does not pass on to the pod's peer (containerd ends the connection
+// a second later instead); a port nothing listens on shows as the first Read
+// failing (*kubeexec.PortError). An error wrapping
 // kubeexec.ErrPortForwardForbidden is the cluster refusing port-forwards.
 func (p *Pool) DialPort(ctx context.Context, t PodTarget, port int) (io.ReadWriteCloser, error) {
 	pf, err := p.portForward(ctx, t)

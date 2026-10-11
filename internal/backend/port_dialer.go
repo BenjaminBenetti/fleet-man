@@ -19,13 +19,14 @@ type PortDialer interface {
 	DialPort(ctx context.Context, containerID string, port int) (io.ReadWriteCloser, error)
 }
 
-// HalfCloseDialer is a PortDialer whose connections may end soon after the
-// daemon's side half-closes them (Kubernetes: the cluster's runtime closes a
-// port-forward about a second after it reads the local EOF, so a peer that
-// answers later loses its answer). DialPortHalfClose opens a connection that
-// keeps a true half-close (Kubernetes: through the pod agent), for a forward
-// that asks for one (`fleet port-forward add --half-close`). Backends whose
-// connections already keep it have no need of it.
+// HalfCloseDialer is a PortDialer whose connections may not pass the daemon
+// side's half-close on (Kubernetes: the cluster's runtime drops it, so the
+// peer never reads EOF, and ends the connection about a second later; a peer
+// that answers after the EOF never answers). DialPortHalfClose opens a
+// connection that keeps a true half-close (Kubernetes: through the pod
+// agent), for a forward that asks for one (`fleet port-forward add
+// --half-close`). Backends whose connections already keep it have no need of
+// it.
 type HalfCloseDialer interface {
 	DialPortHalfClose(ctx context.Context, containerID string, port int) (io.ReadWriteCloser, error)
 }

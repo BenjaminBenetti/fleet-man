@@ -942,11 +942,12 @@ type ForwardOpen struct {
 	Fleet      string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
 	Instance   string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
 	RemotePort int32                  `protobuf:"varint,3,opt,name=remote_port,json=remotePort,proto3" json:"remote_port,omitempty"`
-	// half_close asks for a connection that keeps reading after the client's
-	// half-close (CloseSend): on Kubernetes, through the pod agent instead of
-	// the cluster's port-forward, whose runtime ends the connection about a
-	// second after the EOF. Backends whose connections keep a true half-close
-	// anyway ignore it.
+	// half_close asks for a connection that passes the client's half-close
+	// (CloseSend) on and keeps reading after it: on Kubernetes, through the pod
+	// agent instead of the cluster's port-forward, whose runtime drops the
+	// half-close (the peer reads no EOF) and ends the connection about a second
+	// later. Backends whose connections keep a true half-close anyway ignore
+	// it.
 	HalfClose     bool `protobuf:"varint,4,opt,name=half_close,json=halfClose,proto3" json:"half_close,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

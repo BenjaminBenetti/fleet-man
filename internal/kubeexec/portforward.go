@@ -27,9 +27,10 @@ import (
 // portforward.go is the pods/portforward client: one upgraded connection to a
 // pod (WebSocket-tunnelled SPDY, falling back to plain SPDY as kubectl does),
 // on which every TCP connection to one of the pod's ports is a stream pair, an
-// error stream and a data stream. Closing the data stream's write side is a
-// FIN to the pod's peer; the kubelet answers a refused port on the error
-// stream. The connection lives as long as its owner keeps it: one connection
+// error stream and a data stream. Closing the data stream's write side sends
+// its FIN to the kubelet (whether the pod's peer reads EOF is the runtime's
+// business: containerd does not pass it on, and ends the connection a second
+// later); the kubelet answers a refused port on the error stream. The connection lives as long as its owner keeps it: one connection
 // carries any number of TCP connections, so a pool of them costs one API
 // server upgrade per pod.
 
@@ -266,8 +267,8 @@ func (e *PortError) Error() string {
 }
 
 // PortConn is one forwarded TCP connection. Reads and writes are the data
-// stream; CloseWrite half-closes it (the pod's peer reads EOF and can still
-// answer); Close ends it both ways.
+// stream; CloseWrite half-closes the stream (a runtime that passes it on
+// gives the pod's peer an EOF it can still answer); Close ends it both ways.
 type PortConn struct {
 	f         *PortForward
 	port      int
@@ -313,7 +314,7 @@ func (c *PortConn) refusal() error {
 
 func (c *PortConn) Write(p []byte) (int, error) { return c.data.Write(p) }
 
-// CloseWrite sends the stream's FIN: the pod's peer reads EOF.
+// CloseWrite sends the stream's FIN.
 func (c *PortConn) CloseWrite() error { return c.data.Close() }
 
 // Close ends the connection both ways and frees its streams.

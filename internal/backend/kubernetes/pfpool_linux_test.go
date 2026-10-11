@@ -380,9 +380,10 @@ func TestHandleDialPortFallsBackToTheAgent(t *testing.T) {
 	}
 }
 
-// The cluster's runtime ends a port-forward soon after the local EOF (the
-// fake kubelet does so at 200ms here, containerd at about a second): a late
-// answer is lost on the pool's path and kept on the half-close path.
+// The cluster's runtime drops a port-forward's half-close and ends the
+// connection soon after (the fake kubelet at 200ms here, containerd at about
+// a second): the answer of a peer that waits for EOF is lost on the pool's
+// path and kept on the half-close path.
 func TestHandleHalfCloseKeepsALateAnswer(t *testing.T) {
 	r := newPFRig(t, PoolOptions{})
 	r.kubelet.EarlyClose(200 * time.Millisecond)

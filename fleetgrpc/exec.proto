@@ -156,11 +156,12 @@ message ForwardOpen {
   string fleet = 1;
   string instance = 2;
   int32 remote_port = 3;
-  // half_close asks for a connection that keeps reading after the client's
-  // half-close (CloseSend): on Kubernetes, through the pod agent instead of
-  // the cluster's port-forward, whose runtime ends the connection about a
-  // second after the EOF. Backends whose connections keep a true half-close
-  // anyway ignore it.
+  // half_close asks for a connection that passes the client's half-close
+  // (CloseSend) on and keeps reading after it: on Kubernetes, through the pod
+  // agent instead of the cluster's port-forward, whose runtime drops the
+  // half-close (the peer reads no EOF) and ends the connection about a second
+  // later. Backends whose connections keep a true half-close anyway ignore
+  // it.
   bool half_close = 4;
 }
 

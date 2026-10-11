@@ -154,9 +154,9 @@ func (fleetPage *fleetPage) portForwardHint() string {
 }
 
 // portForwardHalfCloseLine is the dialog's half-close toggle: whether the
-// next forward keeps reading after the local side's EOF (on Kubernetes,
-// through the pod agent rather than the cluster's port-forward, which closes
-// about a second after it).
+// next forward passes the local side's EOF on and keeps reading after it (on
+// Kubernetes, through the pod agent rather than the cluster's port-forward,
+// which drops the half-close and closes a second later).
 func (fleetPage *fleetPage) portForwardHalfCloseLine() string {
 	state := dimStyle.Render("off")
 	if fleetPage.pfHalfClose {
