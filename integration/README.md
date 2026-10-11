@@ -202,7 +202,20 @@ on one that does not. `tests/818_k8s_share_single_node.sh` (a fleet's pods
 placed by its share) needs two schedulable nodes and a WaitForFirstConsumer
 default class, as a kind cluster with two workers has (`kind create cluster
 --config` in the QA container, then `FLEET_ITEST_CLUSTER=kind-<name>`); on one
-node it passes saying it did not run.
+node it passes saying it did not run. `tests/819_k8s_evacuate_drain.sh` (a
+fleet moved off a drained node, and one on a node-local class left there)
+also needs a class whose volumes every node mounts
+(`FLEET_ITEST_MOVABLE_CLASS`, default `fleet-shared-path`).
+`clusters/kind-shared-path.sh up [name] [workers]` makes such a cluster in
+the QA container (two nodes that both take pods, kind's node-local default
+class, and `fleet-shared-path` on a host folder every node mounts) and prints
+its context; `down [name]` deletes it:
+
+```bash
+ctx=$(./integration/clusters/kind-shared-path.sh up p405)
+FLEET_ITEST_BACKEND=kubernetes FLEET_ITEST_CLUSTER="${ctx}" FLEET_ITEST_RANGE=818-820 ./integration/run.sh
+./integration/clusters/kind-shared-path.sh down p405
+```
 
 ## Prerequisites
 
