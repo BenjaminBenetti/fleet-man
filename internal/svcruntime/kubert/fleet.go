@@ -113,6 +113,8 @@ func (c *conn) ensureService(ctx context.Context, m fleetMeta, svc fleet.SharedS
 			return err
 		}
 	}
+	// Buildkit, the one service with a rootful shape, is not served on a
+	// cluster yet: the rest run as their images do.
 	dep, err := cacheDeployment(m, svc, owner, deploymentInput{Rec: &c.rec})
 	if err != nil {
 		return err

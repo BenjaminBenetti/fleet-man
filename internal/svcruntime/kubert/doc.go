@@ -35,7 +35,9 @@
 // volumes too, on a fleet destroy, where the connection deletes them with
 // the fleet). A teardown the cluster cannot take now is recorded in
 // ~/.fleet/kube/footprint.json and finished by the reconciler once the
-// connection is usable again (RunPendingTeardowns).
+// connection is usable again (RunPendingTeardowns). A connection removed
+// (not forgotten) takes its fleets' objects, cache volumes too, with it
+// (PurgeConnection).
 //
 // Everything that needs client-go builds only in the full binary (!nok8s);
 // this file builds everywhere, so the package always exists.

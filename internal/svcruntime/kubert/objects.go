@@ -77,11 +77,6 @@ func (m fleetMeta) serviceLabels(svc fleet.SharedService) map[string]string {
 	return l
 }
 
-// fleetSelector selects every object of the fleet on the connection.
-func (m fleetMeta) fleetSelector() string {
-	return names.Selector(m.Owner, m.Cluster) + "," + names.LabelFleet + "=" + m.Hash
-}
-
 // info is the fleet.dev/info annotation of the fleet's objects: whose they
 // are, in fields that are never secret, for listing orphans.
 func (m fleetMeta) info(svc fleet.SharedService) map[string]string {
