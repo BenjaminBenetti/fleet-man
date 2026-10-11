@@ -21,6 +21,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/backendtest"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/binstore"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
 	"github.com/BenjaminBenetti/fleet-man/internal/backendutil"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
@@ -97,6 +98,9 @@ func kubernetesTarget(t *testing.T, sel backendtest.Selection) backendtest.Targe
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// Registered before the daemon starts, so it runs once the daemon has
+	// stopped.
+	t.Cleanup(func() { collectKubeImages(t, rec) })
 	startDaemon(t)
 	id, err := owner.LoadIdentity()
 	if err != nil {
@@ -131,6 +135,40 @@ func kubernetesTarget(t *testing.T, sel backendtest.Selection) backendtest.Targe
 			"rebuild-stopped": "rebuild on a cluster lands with P6.1",
 			"clone":           "clone on a cluster lands with P6.0",
 		},
+	}
+}
+
+// collectKubeImages collects every image the run's daemon delivered to the
+// connection, from the nodes and the daemon host's docker, with the pass
+// fleetd makes over a connection it removes (no holder left, no retention):
+// the daemon id is the run's own, so no later GC would ever find them. Then
+// no node load tag of the daemon may be left on the host.
+func collectKubeImages(t *testing.T, rec fleet.KubeCluster) {
+	if _, err := os.Stat(state.KubeImagesPath(rec.ID)); err != nil {
+		return // nothing was delivered
+	}
+	id, err := owner.LoadIdentity()
+	if err != nil {
+		t.Errorf("the run's daemon id: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	m := &kubeimage.Manager{IndexPath: state.KubeImagesPath}
+	res, err := m.GC(ctx, kubeimage.Target{Cluster: &rec, DaemonID: id.DaemonID}, kubeimage.GCOptions{All: true, Live: func(string) bool { return false }})
+	if err != nil {
+		t.Errorf("collect the images delivered to %s: %v", rec.ID, err)
+		return
+	}
+	for _, e := range res.Kept {
+		t.Errorf("image %s was not collected: %s", e.Ref, e.GCError)
+	}
+	repo := kubeimage.NodeLoadRepository(id.DaemonID)
+	out, err := exec.Command("docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}", "--filter", "reference="+repo).Output()
+	if err != nil {
+		t.Errorf("list the host's %s images: %v", repo, err)
+	} else if left := strings.Fields(string(out)); len(left) > 0 {
+		t.Errorf("the run left images on the host's docker: %v", left)
 	}
 }
 

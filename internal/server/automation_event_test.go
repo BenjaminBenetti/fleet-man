@@ -132,6 +132,8 @@ func TestWriteAutomationEventFile(t *testing.T) {
 // triggerEvent off each watched agent: a webhook carries its body, a schedule
 // carries none (its payload is synthesized from the fire time at launch).
 func TestFireTriggerAgentsAttachesEvent(t *testing.T) {
+	// Each firing writes its trigger's event log under ~/.fleet.
+	isolateFleetDir(t)
 	st := &state.State{Fleets: map[string]*fleet.Fleet{
 		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{
 			Agents: []fleet.Agent{{Name: "a", Backend: fleet.BackendDevcontainer}},

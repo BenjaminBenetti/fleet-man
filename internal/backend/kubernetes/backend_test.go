@@ -659,6 +659,11 @@ func TestEveryCodeIsAKubeerrClass(t *testing.T) {
 
 func TestAPICode(t *testing.T) {
 	gr := schema.GroupResource{Resource: "pods"}
+	// A dial to a host that never answers, ended by its deadline: it Is
+	// context.DeadlineExceeded, as client-go's own dial timeout often is.
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	_, dialTimeout := (&net.Dialer{}).DialContext(expired, "tcp", "192.0.2.1:443")
 	for name, tc := range map[string]struct {
 		err  error
 		want kubeerr.Code
@@ -668,6 +673,7 @@ func TestAPICode(t *testing.T) {
 		"quota":          {apierrors.NewForbidden(gr, "x", errors.New("exceeded quota: q, requested: pods=1")), kubeerr.Quota},
 		"unavailable":    {apierrors.NewServiceUnavailable("down"), kubeerr.Unreachable},
 		"dial":           {&net.OpError{Op: "dial", Err: errors.New("refused")}, kubeerr.Unreachable},
+		"dial timeout":   {fmt.Errorf("instance StatefulSet ns/x: %w", dialTimeout), kubeerr.Unreachable},
 		"connection":     {fmt.Errorf("pool: %w", ErrClusterNotFound), kubeerr.ClusterMissing},
 		"kubeconfig":     {fmt.Errorf("load: %w", kubeexec.ErrContextMissing), kubeerr.Misconfigured},
 		"owner":          {ErrOwnerConflict, kubeerr.OwnerConflict},

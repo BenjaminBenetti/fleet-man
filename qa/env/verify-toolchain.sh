@@ -68,6 +68,7 @@ report node                node --version
 report npm                 npm --version
 report devcontainer        devcontainer --version
 report tmux                tmux -V
+report sshd                sshd -V
 report golangci-lint       golangci-lint version
 report buf                 buf --version
 report protoc-gen-go       protoc-gen-go --version

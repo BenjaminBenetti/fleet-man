@@ -187,6 +187,10 @@ run's context and namespace, the objects of an instance key, its pod).
 - `tmux` (used by the TUI tests as a headless terminal)
 - `perl` (the state.json readers use its core JSON::PP)
 - for `FLEET_ITEST_BACKEND=kubernetes`: `kubectl` and a reachable cluster
+- for `203_tui_kube_settings_ssh.sh` (a TUI over Armada SSH): Linux and
+  passwordless sudo. For the test's length it adds a throwaway user and runs an
+  sshd on a free loopback port (the QA image has openssh-server; elsewhere it is
+  apt-installed); without them the test passes saying it did not run
 
 ## Running
 

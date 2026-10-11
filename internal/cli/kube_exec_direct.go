@@ -21,6 +21,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
+	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
 	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
@@ -31,9 +32,11 @@ import (
 // terminal attach (and the raw fallback) straight to the API server with the
 // transport fleetd itself uses, re-attached after a drop so a pane outlives
 // an apiserver rollout, a network blip or a fleetd restart; and the saved +
-// live container logs. The cluster is reached only through internal/kubeexec
-// (the client-go leaf; the transport is opaque here), so the -tags nok8s pod
-// build gets a stub (kube_exec_nok8s.go) — the pod never runs the shim.
+// live container logs. A cluster the shim cannot reach itself fails with
+// kubernetes:unreachable (fleetd's answers carry their own codes). The
+// cluster is reached only through internal/kubeexec (the client-go leaf; the
+// transport is opaque here), so the -tags nok8s pod build gets a stub
+// (kube_exec_nok8s.go) — the pod never runs the shim.
 
 // redialBackoff paces re-dials after a drop.
 var redialBackoff = []time.Duration{0, time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second}
@@ -82,7 +85,7 @@ func runKubeExecAgent(ctx context.Context, t *kubeexec.Transport, f kubeExecFlag
 			fmt.Fprintln(os.Stderr, se.Message)
 			return se.Code, nil
 		}
-		return -1, err
+		return -1, kubeerr.Unreached(err)
 	}
 	go bridgeStdin(e)
 	if tty {
@@ -207,7 +210,7 @@ func runKubeExecRaw(ctx context.Context, t *kubeexec.Transport, f kubeExecFlags,
 	case errors.As(err, &exit):
 		return exit.Code, nil
 	}
-	return -1, err
+	return -1, kubeerr.Unreached(err)
 }
 
 // runKubeExecLogs prints the saved container.log (every earlier run) then the
@@ -230,7 +233,7 @@ func runKubeExecLogs(ctx context.Context, f kubeExecLogsFlags) error {
 	}
 	err = t.PodLogs(ctx, kubeexec.PodLogsRequest{Namespace: f.namespace, Pod: f.pod, Container: f.container, Follow: f.follow}, os.Stdout)
 	if err != nil && !isPodNotRunning(err) {
-		return err
+		return kubeerr.Unreached(err)
 	}
 	return nil
 }

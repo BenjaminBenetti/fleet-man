@@ -58,10 +58,16 @@ func RegistryTag(reg Registry, daemonID, imageID string) string {
 	return RegistryRepository(reg, daemonID) + ":" + id12(imageID)
 }
 
+// NodeLoadRepository is the repository of the daemon's node load tags:
+// "fleet.invalid/<daemon8>/devcontainer".
+func NodeLoadRepository(daemonID string) string {
+	return nodeLoadDomain + "/" + daemon8(daemonID) + "/" + repoName
+}
+
 // NodeLoadTag is the tag node load gives an image on the daemon host and on
 // the nodes: "fleet.invalid/<daemon8>/devcontainer:<id12>".
 func NodeLoadTag(daemonID, imageID string) string {
-	return nodeLoadDomain + "/" + daemon8(daemonID) + "/" + repoName + ":" + id12(imageID)
+	return NodeLoadRepository(daemonID) + ":" + id12(imageID)
 }
 
 // isOwnRepository reports whether repo (a full repository, registry

@@ -240,13 +240,16 @@ func (p *Pool) Forget(t PodTarget) {
 }
 
 // Verify reads the target's StatefulSet and pod and verifies the pod
-// (VerifyPod).
+// (VerifyPod). Its errors carry their kubernetes: code (a cluster that does
+// not answer is kubernetes:unreachable), as fleetd hands them on to the
+// kube-exec shim.
 func (p *Pool) Verify(ctx context.Context, t PodTarget) (*corev1.Pod, error) {
 	c, err := p.Cluster(t.Cluster)
 	if err != nil {
-		return nil, err
+		return nil, classify(err)
 	}
-	return p.verify(ctx, c, t)
+	pod, err := p.verify(ctx, c, t)
+	return pod, classify(err)
 }
 
 func (p *Pool) verify(ctx context.Context, c *Cluster, t PodTarget) (*corev1.Pod, error) {

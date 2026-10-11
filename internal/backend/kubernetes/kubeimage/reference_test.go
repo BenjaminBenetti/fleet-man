@@ -115,6 +115,9 @@ func TestNames(t *testing.T) {
 	if got := NodeLoadTag(strings.ToUpper(testDaemonID), id); got != "fleet.invalid/3fa2c91e/devcontainer:38410210f893" {
 		t.Errorf("NodeLoadTag = %q", got)
 	}
+	if got := NodeLoadRepository(testDaemonID); got != "fleet.invalid/3fa2c91e/devcontainer" {
+		t.Errorf("NodeLoadRepository = %q", got)
+	}
 	for _, ref := range []string{RegistryTag(reg, testDaemonID, id), NodeLoadTag(testDaemonID, id)} {
 		if _, err := ParseReference(ref); err != nil {
 			t.Errorf("%s does not parse: %v", ref, err)

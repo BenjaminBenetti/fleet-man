@@ -5,9 +5,7 @@ package kubernetes
 import (
 	"context"
 	"errors"
-	"net"
 	"strings"
-	"syscall"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -20,7 +18,6 @@ import (
 // server's answer, or why it gave none. "" for an error it says nothing
 // about.
 func apiCode(err error) kubeerr.Code {
-	var netErr net.Error
 	switch {
 	case err == nil:
 		return ""
@@ -42,11 +39,11 @@ func apiCode(err error) kubeerr.Code {
 		return kubeerr.Unreachable
 	case errors.Is(err, context.Canceled):
 		return ""
+	case kubeerr.IsUnreachable(err):
+		// Before the deadline: a dial that timed out is the cluster's.
+		return kubeerr.Unreachable
 	case errors.Is(err, context.DeadlineExceeded):
 		return kubeerr.Timeout
-	case errors.As(err, &netErr), errors.Is(err, syscall.ECONNREFUSED), errors.Is(err, syscall.ECONNRESET),
-		errors.Is(err, syscall.EHOSTUNREACH), errors.Is(err, syscall.ENETUNREACH):
-		return kubeerr.Unreachable
 	}
 	return ""
 }

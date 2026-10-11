@@ -11,8 +11,9 @@
 # (.github/workflows/{unit,integration}.yml) so QA runs match what a PR sees:
 #   Go (pinned to go.mod), Docker engine + buildx + compose, Node + the
 #   devcontainer CLI, tmux (TUI tests), golangci-lint (import-boundary lint),
-#   buf + protoc plugins (proto contract), git, gh, and the Kubernetes tools
-#   for the kubernetes backend (kubectl, minikube, kind, k3s).
+#   buf + protoc plugins (proto contract), git, gh, an sshd (the TUI tests
+#   over Armada SSH), and the Kubernetes tools for the kubernetes backend
+#   (kubectl, minikube, kind, k3s).
 #
 # Published to GitHub Container Registry by .github/workflows/qa-image.yml.
 
@@ -57,7 +58,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl wget gnupg lsb-release apt-transport-https \
-        git openssh-client \
+        git openssh-client openssh-server \
         build-essential make pkg-config \
         tmux \
         jq ripgrep unzip zip xz-utils \
@@ -65,6 +66,9 @@ RUN set -eux; \
         sudo less vim nano bash-completion \
         procps iproute2 iptables uidmap kmod \
         iputils-ping netcat-openbsd dnsutils; \
+    # No sshd runs by default; a test that needs one starts it. Its host keys
+    # are made per container (ssh-keygen -A), never shipped in the image.
+    rm -f /etc/ssh/ssh_host_*; \
     rm -rf /var/lib/apt/lists/*
 
 # --- Docker engine (CE) + buildx + compose --------------------------------

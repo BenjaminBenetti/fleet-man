@@ -270,6 +270,8 @@ func TestSchedulerTickKeepsWatchAfterFiring(t *testing.T) {
 	// serviceWatched, so the just-created instance wasn't visible and the watch
 	// entry was deleted the same tick — the agent never launched.
 	rec := stubAutomationSeams(t)
+	// The firing writes its trigger's event log under ~/.fleet.
+	isolateFleetDir(t)
 
 	st := &state.State{Fleets: map[string]*fleet.Fleet{
 		"alpha": {Name: "alpha", Remote: "file:///x", Settings: fleet.FleetSettings{
@@ -370,6 +372,8 @@ func TestServiceWatchedConcurrentProbesReapAll(t *testing.T) {
 // goroutine: a delivered fire batch resolves the trigger's agents and registers
 // each as a watched instance (the same lifecycle scheduled triggers use).
 func TestFireWebhookBatchSpawns(t *testing.T) {
+	// The firing writes its trigger's event log under ~/.fleet.
+	isolateFleetDir(t)
 	st := &state.State{Fleets: map[string]*fleet.Fleet{
 		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{
 			Agents: []fleet.Agent{
