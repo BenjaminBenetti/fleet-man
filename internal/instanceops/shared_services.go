@@ -68,6 +68,25 @@ func reviveSharedServices(fleetName, instanceName string, instance *fleet.Instan
 	}
 }
 
+// ReviveSharedServices does a start's work for the instance's shared services
+// (reviveSharedServices, with the fleet's settings from the state) for an
+// instance that is running again without a Fleet start: a Kubernetes pod the
+// cluster restarted on its own (an OOM kill, a crash, an eviction). Its
+// fleet's caches outlived it there, but a fresh pod's own docker engine (the
+// fleet-docker sidecar's daemon.json is pod-local) has lost the image mirror.
+func ReviveSharedServices(fleetName string, instance *fleet.Instance) {
+	st, err := state.Load()
+	if err != nil {
+		flog.Warn("shared services after a restart: load state failed", "fleet", fleetName, "instance", instance.Name, "err", err)
+		return
+	}
+	f, ok := st.Fleets[fleetName]
+	if !ok || f == nil {
+		return
+	}
+	reviveSharedServices(fleetName, instance.Name, instance, f.Settings)
+}
+
 // configureImageMirror points instance's own dockerd at its fleet's image
 // cache's endpoint on services, with the same sync-then-background poll as
 // create (an instance without a dockerd never configures, which is fine; nor

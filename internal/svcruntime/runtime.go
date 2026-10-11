@@ -66,7 +66,8 @@ type Runtime interface {
 	InstanceMounts(fleetName string, svc fleet.SharedService) []backend.Mount
 
 	// Endpoint is where an instance on this runtime reaches fleetName's svc
-	// (ErrNoEndpoint: nowhere it is pointed at). It does no I/O.
+	// (ErrNoEndpoint: nowhere it is pointed at). It talks to nothing (a
+	// cluster's reads the daemon's id, which its names hash).
 	Endpoint(fleetName string, svc fleet.SharedService) (Endpoint, error)
 
 	// ConnectInstance lets the instance with containerID reach fleetName's

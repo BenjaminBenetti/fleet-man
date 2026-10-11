@@ -16,6 +16,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/imagecache"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
 )
 
@@ -311,4 +312,13 @@ func (l *syncLog) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.b.String()
+}
+
+// The image cache step finds the pod's engine by the names the pod gives it
+// (FLEET_DOCKERD_CONFIG, the shared folder's socket and daemon.json).
+func TestImageCacheFindsThePodEngine(t *testing.T) {
+	if imagecache.DockerdConfigEnv != DockerConfigEnv || imagecache.PodEngineConfig != DockerConfig || imagecache.PodEngineSocket != DockerSocket {
+		t.Fatalf("imagecache looks for %s=%s and %s; the pod has %s=%s and %s",
+			imagecache.DockerdConfigEnv, imagecache.PodEngineConfig, imagecache.PodEngineSocket, DockerConfigEnv, DockerConfig, DockerSocket)
+	}
 }

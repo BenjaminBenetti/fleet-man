@@ -14,9 +14,13 @@
 // service. Only HTTP apt sources are cached (the default Debian/Ubuntu
 // archives); HTTPS sources bypass the proxy and go direct.
 //
-// Callers reach it through the shared-service runtime for the daemon host's
-// docker (internal/svcruntime/dockerrt), which svcruntime.ForInstance hands
-// out only for instances on that docker (devcontainer).
+// Callers reach the server side through the shared-service runtime for the
+// daemon host's docker (internal/svcruntime/dockerrt), which
+// svcruntime.ForInstance hands out only for instances on that docker
+// (devcontainer). The in-instance side (ConfigureInstanceApt) serves every
+// runtime, pointed at its svcruntime.Endpoint: a cluster's cache
+// (internal/svcruntime/kubert) is apt's proxy only while it answers
+// (ProxyDetector).
 package debcache
 
 import (

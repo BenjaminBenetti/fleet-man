@@ -65,10 +65,11 @@ type kubePodPool interface {
 // kubePostRestart redoes a Fleet start's post-start work in an instance the
 // cluster restarted on its own: the devcontainer's start hooks through its
 // backend (backend.PostStarter), then fleet's own hook (the in-instance
-// fleet binary and fleet.rc). A backend that is not a PostStarter gets
-// neither.
+// fleet binary and fleet.rc), then the start's shared-service work (the image
+// mirror in the pod's docker engine, whose config a fresh pod lost). A
+// backend that is not a PostStarter gets none of them.
 func kubePostRestart(fleetName string, inst *fleet.Instance, homeDir string) {
-	ps, ok := backendutil.NewForInstance(inst, false).(backend.PostStarter)
+	ps, ok := kubePostStarter(inst)
 	if !ok {
 		return
 	}
@@ -80,7 +81,19 @@ func kubePostRestart(fleetName string, inst *fleet.Instance, homeDir string) {
 		return
 	}
 	instanceops.RunPostStartHook(fleetName, inst, homeDir)
+	kubeReviveSharedServices(fleetName, inst)
 }
+
+// kubePostStarter is inst's backend handle as a backend.PostStarter (false:
+// it is none), and kubeReviveSharedServices instanceops.ReviveSharedServices;
+// package vars so tests stand in their own.
+var (
+	kubePostStarter = func(inst *fleet.Instance) (backend.PostStarter, bool) {
+		ps, ok := backendutil.NewForInstance(inst, false).(backend.PostStarter)
+		return ps, ok
+	}
+	kubeReviveSharedServices = instanceops.ReviveSharedServices
+)
 
 // kubePublishFor is a running instance's published ports and the dial into
 // it that serves them: its backend handle's (backend.PortPublisher and

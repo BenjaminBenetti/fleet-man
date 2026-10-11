@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -503,6 +504,44 @@ func TestKubeHandlesNameTheirRecordedPod(t *testing.T) {
 	kubePostRestart("alpha", inst, "")
 	if data, err := os.ReadFile(state.WarnPath("alpha", "one")); err != nil || !strings.Contains(string(data), "kubernetes:") {
 		t.Fatalf("warning %q, %v", data, err)
+	}
+}
+
+// postStarterFunc is a backend.PostStarter answering err.
+type postStarterFunc func(string) error
+
+func (f postStarterFunc) RunPostStart(containerID string) error { return f(containerID) }
+
+// After a restart the cluster made, the start's shared-service work runs once
+// the start hooks have (a fresh pod's engine lost the image mirror), and not
+// when the hooks could not reach the pod.
+func TestKubePostRestartRevivesSharedServices(t *testing.T) {
+	isolateFleetDir(t)
+	inst := kubeInstance("one", fleet.StatusRunning)
+	origStarter, origRevive := kubePostStarter, kubeReviveSharedServices
+	t.Cleanup(func() { kubePostStarter, kubeReviveSharedServices = origStarter, origRevive })
+	var revived []string
+	kubeReviveSharedServices = func(fleetName string, inst *fleet.Instance) {
+		revived = append(revived, fleetName+"/"+inst.Name)
+	}
+	var hookErr error
+	kubePostStarter = func(*fleet.Instance) (backend.PostStarter, bool) {
+		return postStarterFunc(func(string) error { return hookErr }), true
+	}
+
+	kubePostRestart("alpha", inst, "")
+	if want := []string{"alpha/one"}; !reflect.DeepEqual(revived, want) {
+		t.Fatalf("revived %v, want %v", revived, want)
+	}
+	revived, hookErr = nil, errors.New("kubernetes:unreachable: the pod")
+	kubePostRestart("alpha", inst, "")
+	if len(revived) != 0 {
+		t.Fatalf("revived %v though the pod was not reachable", revived)
+	}
+	kubePostStarter = func(*fleet.Instance) (backend.PostStarter, bool) { return nil, false }
+	kubePostRestart("alpha", inst, "")
+	if len(revived) != 0 {
+		t.Fatalf("revived %v on a backend with no post-start", revived)
 	}
 }
 

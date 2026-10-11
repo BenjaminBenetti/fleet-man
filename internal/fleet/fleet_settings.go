@@ -79,10 +79,13 @@ type FleetSettings struct {
 	// (/etc/apt/apt.conf.d/01fleet-proxy) pointing at the cache. Plain bool
 	// (default off), matching BuildkitServer.
 	//
-	// Intent only: honored where BuildkitServer is; cloud backends silently
-	// skip it. Best-effort — instances without apt (or where
-	// apt.conf.d is not writable) are skipped without error. Caches only HTTP
-	// apt sources (the default Debian/Ubuntu archives); HTTPS sources go direct.
+	// Intent only: honored where the instance's shared services run
+	// (svcruntime.ForInstance: the daemon host's docker, or a cluster, where
+	// the cache is a Deployment and apt uses it only while it answers, else
+	// goes direct); cloud backends silently skip it. Best-effort — instances
+	// without apt (or where apt.conf.d is not writable) are skipped without
+	// error. Caches only HTTP apt sources (the default Debian/Ubuntu
+	// archives); HTTPS sources go direct.
 	DebCacheServer bool `json:"debCacheServer,omitempty"`
 
 	// ImageCacheServer enables a shared registry pull-through cache (a
@@ -94,9 +97,11 @@ type FleetSettings struct {
 	// /etc/docker/daemon.json, then a SIGHUP reload). Plain bool (default off).
 	//
 	// Intent only and best-effort like the others. It only helps instances that
-	// run their OWN docker daemon (docker-in-docker); docker-outside-of-docker
-	// and no-docker instances are silently skipped. Only docker.io images are
-	// mirrored (that is all docker registry-mirrors ever applies to).
+	// run their OWN docker daemon (docker-in-docker, or on a cluster the
+	// pod's docker-outside-of-docker engine, FLEET_DOCKERD_CONFIG);
+	// docker-outside-of-docker on a docker host and no-docker instances are
+	// silently skipped. Only docker.io images are mirrored (that is all docker
+	// registry-mirrors ever applies to).
 	ImageCacheServer bool `json:"imageCacheServer,omitempty"`
 
 	// FleetMCP provides the fleet MCP server — the full one: every tool,
