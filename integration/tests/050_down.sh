@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet down` removes the container, wipes the workspace, and drops the state entry.
 set -euo pipefail
 

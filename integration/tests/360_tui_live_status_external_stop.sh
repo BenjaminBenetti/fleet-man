@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI startup live-status probe reconciles drift when the container was stopped externally.
 set -euo pipefail
 

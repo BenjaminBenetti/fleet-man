@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet start` on an already-running instance is a no-op (mirror of stop's already-stopped path).
 set -euo pipefail
 

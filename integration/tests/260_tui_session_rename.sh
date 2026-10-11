@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI rename tmux session (esc-cancel + rename end-to-end)
 set -euo pipefail
 

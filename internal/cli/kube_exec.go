@@ -45,6 +45,7 @@ type kubeExecFlags struct {
 	cwd        string
 	raw        bool
 	bulk       bool
+	quiet      bool
 }
 
 func newKubeExecCmd() *cobra.Command {
@@ -73,6 +74,7 @@ func newKubeExecCmd() *cobra.Command {
 	bindKubeExecFlags(cmd, &f)
 	cmd.Flags().BoolVar(&f.raw, "raw", false, "run with the pod's own shell (no fleet binary)")
 	cmd.Flags().BoolVar(&f.bulk, "bulk", false, "run on the pod's bulk session (a folder tar)")
+	cmd.Flags().BoolVar(&f.quiet, "quiet", false, "keep the command out of fleetd's event log")
 	cmd.AddCommand(newKubeExecLogsCmd())
 	return cmd
 }
@@ -151,7 +153,7 @@ func runKubeExecDaemon(ctx context.Context, f kubeExecFlags, argv []string) (int
 	return execstream.Run(ctx, conn.Service(), execstream.Options{
 		Pod: &execstream.PodExecTarget{
 			Cluster: f.cluster, Namespace: f.namespace, Pod: f.pod, Container: f.container,
-			Class: f.class, User: f.user, Cwd: f.cwd, Bulk: f.bulk,
+			Class: f.class, User: f.user, Cwd: f.cwd, Bulk: f.bulk, Quiet: f.quiet,
 		},
 		Argv:   argv,
 		TTY:    false,

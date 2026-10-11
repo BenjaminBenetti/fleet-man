@@ -466,6 +466,9 @@ func TestPollsWithoutASession(t *testing.T) {
 	if st := b.Status(inst.ContainerID); st != backend.LiveStatusUnknown {
 		t.Errorf("status of an unwatched instance %s", st)
 	}
+	if st := b.Status(""); st != backend.LiveStatusUnknown {
+		t.Errorf("status of no container %s", st)
+	}
 	if _, ok := b.LastRestart(inst.ContainerID); ok {
 		t.Error("a restart nobody saw")
 	}

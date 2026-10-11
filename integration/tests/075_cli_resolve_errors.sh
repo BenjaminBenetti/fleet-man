@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: CLI error paths — missing fleets, missing instances, and malformed targets fail with non-zero status.
 set -euo pipefail
 

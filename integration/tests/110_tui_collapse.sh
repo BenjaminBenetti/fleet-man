@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Pressing space on the fleet header collapses / expands the instance list.
 set -euo pipefail
 

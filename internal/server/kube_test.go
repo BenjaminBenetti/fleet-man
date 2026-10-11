@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -726,9 +727,8 @@ func TestCreateKubeNamespace(t *testing.T) {
 	}
 }
 
-// Cluster deploy targets appear only behind FLEET_EXPERIMENTAL_K8S, one per
-// connection, available only when it is healthy and fleetd has docker and the
-// devcontainer CLI.
+// Cluster deploy targets are one per connection, available only when it is
+// healthy and fleetd has docker and the devcontainer CLI.
 func TestKubeDeployTargets(t *testing.T) {
 	f := newKubeFixture(t)
 	stubDaemonHost(t, "h", "devcontainer", "docker")
@@ -747,10 +747,6 @@ func TestKubeDeployTargets(t *testing.T) {
 		}
 		return out
 	}
-	if got := clusterTargets(); len(got) != 0 {
-		t.Fatalf("cluster targets without the experimental flag: %+v", got)
-	}
-	t.Setenv(fleet.EnvExperimentalK8s, "1")
 	got := clusterTargets()
 	if len(got) != 2 || got[0].Target.KubeCluster != ready || got[1].Target.KubeCluster != broken {
 		t.Fatalf("cluster targets = %+v", got)
@@ -758,12 +754,6 @@ func TestKubeDeployTargets(t *testing.T) {
 	if !got[0].Available || got[1].Available || !strings.HasPrefix(got[1].Reason, "cluster context missing: ") {
 		t.Errorf("targets = %+v", got)
 	}
-	orig := kubeBackendCreatable
-	kubeBackendCreatable = func() bool { return false }
-	if got := clusterTargets(); got[0].Available || !strings.Contains(got[0].Reason, "cannot create Kubernetes instances yet") {
-		t.Errorf("from a build that cannot create them: %+v", got[0])
-	}
-	kubeBackendCreatable = orig
 	stubDaemonHost(t, "h", "devcontainer")
 	if got = clusterTargets(); got[0].Available || got[0].Reason != "docker not found where fleetd runs" {
 		t.Errorf("without docker: %+v", got[0])
@@ -875,5 +865,23 @@ func TestKubeCreateAllowed(t *testing.T) {
 	}
 	if err := f.svc.kube.createAllowed(st, target); status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "of instance disks") {
 		t.Errorf("over max_total_disk = %v", err)
+	}
+}
+
+// The daemon's pool learns a connection the moment it is added (and forgets
+// it when it is removed), so a create on a connection added a moment ago
+// finds it rather than waiting for the pool's own re-read.
+func TestKubeConnectionsReachThePoolAtOnce(t *testing.T) {
+	f := newKubeFixture(t)
+	f.start()
+	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube"}).GetCluster().GetId()
+	if got := f.pooledIDs(); !slices.Contains(got, id) {
+		t.Fatalf("after the add the pool has %v, want %s", got, id)
+	}
+	if _, err := f.svc.RemoveKubeCluster(context.Background(), &fleetgrpc.RemoveKubeClusterRequest{Id: id}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.pooledIDs(); slices.Contains(got, id) {
+		t.Fatalf("after the remove the pool still has %v", got)
 	}
 }

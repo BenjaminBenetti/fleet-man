@@ -51,6 +51,36 @@ func TestExecCommandBuildsTheKubeExecArgv(t *testing.T) {
 	}
 }
 
+// A process that is not the fleet binary (the conformance suite's test
+// binary running fleetd) names the one to hand out: the argvs and the
+// capture shim run it, and "" puts this process's own back.
+func TestSetFleetExecutable(t *testing.T) {
+	r := newHandleRig(t)
+	writeHandleCluster(t)
+	inst := r.inst()
+	inst.ContainerID = ContainerID(handleCluster, handleNS, handleSTS(), 1)
+	b := newHandle(inst, r.pool)
+	SetFleetExecutable("/opt/itest/fleet")
+	t.Cleanup(func() { SetFleetExecutable("") })
+	if argv := b.ExecCommand("/ws", []string{"true"}).Args; argv[0] != "/opt/itest/fleet" {
+		t.Errorf("ExecCommand runs %q", argv[0])
+	}
+	if argv := b.LogsCommand(inst.ContainerID, false).Args; argv[0] != "/opt/itest/fleet" {
+		t.Errorf("LogsCommand runs %q", argv[0])
+	}
+	if exe := currentEnvironment().Tools.Exe; exe != "/opt/itest/fleet" {
+		t.Errorf("the capture shim runs %q", exe)
+	}
+	SetFleetExecutable("")
+	self, _ := os.Executable()
+	if argv := b.ExecCommand("/ws", []string{"true"}).Args; argv[0] != self {
+		t.Errorf("after the reset ExecCommand runs %q, want %q", argv[0], self)
+	}
+	if exe := currentEnvironment().Tools.Exe; exe != "" {
+		t.Errorf("after the reset the capture shim runs %q, want the default", exe)
+	}
+}
+
 // LogsCommand builds the `fleet kube-exec logs` argv, carrying the fleet and
 // instance (for the saved log) and -f when following.
 func TestLogsCommandBuildsTheKubeExecLogsArgv(t *testing.T) {
@@ -93,6 +123,25 @@ func TestFolderExecCommandIsBulk(t *testing.T) {
 	argv := b.FolderExecCommand("/ws", []string{"tar", "-cf", "-", "."}).Args
 	if indexOf(argv, "--bulk") < 0 || indexOf(argv, "--") < 0 {
 		t.Fatalf("FolderExecCommand argv not a bulk kube-exec: %v", argv)
+	}
+	if indexOf(argv, "--quiet") < 0 {
+		t.Errorf("FolderExecCommand should be quiet: %v", argv)
+	}
+}
+
+// ExecCommandQuiet's argv asks fleetd to leave the command out of its log
+// (a poll loop's command would flood it); ExecCommand's does not.
+func TestExecCommandQuietIsQuiet(t *testing.T) {
+	r := newHandleRig(t)
+	writeHandleCluster(t)
+	inst := r.inst()
+	inst.ContainerID = ContainerID(handleCluster, handleNS, handleSTS(), 1)
+	b := newHandle(inst, r.pool)
+	if argv := b.ExecCommandQuiet("/ws", []string{"true"}).Args; indexOf(argv, "--quiet") < 0 || indexOf(argv, "--quiet") > indexOf(argv, "--") {
+		t.Errorf("ExecCommandQuiet argv has no --quiet shim flag: %v", argv)
+	}
+	if argv := b.ExecCommand("/ws", []string{"true"}).Args; indexOf(argv, "--quiet") >= 0 {
+		t.Errorf("ExecCommand argv is quiet: %v", argv)
 	}
 }
 
@@ -150,3 +199,63 @@ func indexOf(argv []string, want string) int {
 }
 
 func filepathBase(p string) string { return filepath.Base(p) }
+
+// A create applies the connection's settings as they are now: the pool keeps
+// a connection's client (and its copy of the record) across a change of the
+// settings the client does not read, so the registry's record is the one
+// read.
+func TestCurrentRecordFollowsTheRegistry(t *testing.T) {
+	newHandleRig(t)
+	kubeconfig := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(kubeconfig, []byte(`apiVersion: v1
+kind: Config
+clusters:
+- name: c
+  cluster: {server: "https://127.0.0.1:1"}
+contexts:
+- name: ctx
+  context: {cluster: c, user: u}
+users:
+- name: u
+  user: {token: tok}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := fleet.KubeCluster{ID: handleCluster, Context: "ctx", KubeconfigPaths: []string{kubeconfig}, Namespace: handleNS}
+	set := func(mode fleet.KubeImageMode) {
+		t.Helper()
+		r := rec
+		r.Image.Mode = mode
+		if err := state.UpdateKubeClusters(func(k *state.KubeClusters) error {
+			k.Clusters = []fleet.KubeCluster{r}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set("")
+	p := NewPool(PoolOptions{Owner: func() (string, error) { return handleOwner, nil }})
+	t.Cleanup(p.Close)
+	p.Configure([]fleet.KubeCluster{rec})
+	cl, err := p.Cluster(handleCluster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set(fleet.KubeImageGateway)
+	gw := rec
+	gw.Image.Mode = fleet.KubeImageGateway
+	p.Configure([]fleet.KubeCluster{gw}) // the same connection: the client is kept
+	if again, _ := p.Cluster(handleCluster); again != cl || again.Record.Image.Mode != "" {
+		t.Fatalf("the pool reloaded the connection for a settings change (mode %q)", again.Record.Image.Mode)
+	}
+	if got := currentRecord(cl); got.Image.Mode != fleet.KubeImageGateway {
+		t.Fatalf("currentRecord image mode %q, want the registry's %q", got.Image.Mode, fleet.KubeImageGateway)
+	}
+	// Without a readable registry, the pool's copy.
+	if err := os.Remove(state.KubeClustersPath()); err != nil {
+		t.Fatal(err)
+	}
+	if got := currentRecord(cl); got.ID != handleCluster {
+		t.Fatalf("currentRecord without the registry = %+v", got)
+	}
+}

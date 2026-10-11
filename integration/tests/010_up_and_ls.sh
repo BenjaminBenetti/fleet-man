@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet up` creates a running container and `fleet ls` reports it.
 set -euo pipefail
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: concurrent `fleet up` of distinct instances all land — no lost state writes (#63).
 set -euo pipefail
 

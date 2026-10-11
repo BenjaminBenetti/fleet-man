@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: After tagging an instance, the tag renders on its own line under the expanded instance row, stays hidden while collapsed, and survives a TUI restart.
 set -euo pipefail
 

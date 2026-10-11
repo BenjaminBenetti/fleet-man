@@ -53,6 +53,8 @@ type fleetPage struct {
 	browserDlg browserDialogState // switch-browser dialog
 	choosePR   choosePRState      // multi-PR chooser (open which PR?)
 	lpFlow     *layoutPresetFlow  // open preset creation/edit flow (nil unless mode == viewLayoutPreset)
+	// kubeRecovery is the Kubernetes recovery dialog (mode == viewKubeRecovery).
+	kubeRecovery kubeRecoveryState
 
 	// rightSelected is true when the cursor row's right-hand element is
 	// horizontally selected — →/l selects it (drawn pink), ←/h deselects, enter
@@ -243,6 +245,8 @@ func (fleetPage *fleetPage) Update(m *model, msg tea.Msg) tea.Cmd {
 		return fleetPage.updateCodespacesLimit(m, msg)
 	case viewCodespacesMachine:
 		return fleetPage.updateCodespacesMachine(m, msg)
+	case viewKubeRecovery:
+		return fleetPage.updateKubeRecovery(m, msg)
 	case viewConfirmDeleteSession:
 		return fleetPage.updateConfirmDeleteSession(m, msg)
 	case viewConfirmBrowserSwitch:

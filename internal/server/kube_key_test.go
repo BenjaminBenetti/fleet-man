@@ -26,7 +26,6 @@ func stubDaemonIdentity(t *testing.T) {
 // its job runs, which applies nothing without it.
 func TestCreateInstanceGivesAKubernetesRecordItsKey(t *testing.T) {
 	isolateFleetDir(t)
-	t.Setenv(fleet.EnvExperimentalK8s, "1")
 	stubDaemonIdentity(t)
 	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha", Remote: "git@x:a.git"}}}); err != nil {
 		t.Fatal(err)

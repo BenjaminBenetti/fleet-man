@@ -48,6 +48,9 @@ func sweepKubeShimDirs(now time.Time) {
 	}
 }
 
+// configureKubePool hands the daemon's pool the connections.
+func configureKubePool(records []fleet.KubeCluster) { kubernetes.DefaultPool().Configure(records) }
+
 // setBackendEnvironment gives the backend handles the daemon's image
 // delivery (and the gateway image server, when it runs) and connection facts.
 func (m *kubeManager) setBackendEnvironment(im *kubeImages) {

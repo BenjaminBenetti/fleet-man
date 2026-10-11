@@ -254,7 +254,11 @@ type PodExecStart struct {
 	// bulk runs the command on the pod's bulk session (a folder's tar in or
 	// out), so a large transfer does not hold up the latency-sensitive traffic
 	// of the agent's main session. It is never set with tty.
-	Bulk          bool `protobuf:"varint,13,opt,name=bulk,proto3" json:"bulk,omitempty"`
+	Bulk bool `protobuf:"varint,13,opt,name=bulk,proto3" json:"bulk,omitempty"`
+	// quiet keeps the command out of fleet.log: the shim's argv for a
+	// backend's ExecCommandQuiet (polls, probes), whose callers would
+	// otherwise flood the log.
+	Quiet         bool `protobuf:"varint,14,opt,name=quiet,proto3" json:"quiet,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -376,6 +380,13 @@ func (x *PodExecStart) GetCols() uint32 {
 func (x *PodExecStart) GetBulk() bool {
 	if x != nil {
 		return x.Bulk
+	}
+	return false
+}
+
+func (x *PodExecStart) GetQuiet() bool {
+	if x != nil {
+		return x.Quiet
 	}
 	return false
 }
@@ -3536,7 +3547,7 @@ const file_exec_proto_rawDesc = "" +
 	"\x03env\x18\x05 \x03(\v2\x1d.fleetgrpc.ExecStart.EnvEntryR\x03env\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x85\x03\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9b\x03\n" +
 	"\fPodExecStart\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x1c\n" +
@@ -3552,7 +3563,8 @@ const file_exec_proto_rawDesc = "" +
 	" \x01(\bR\x03tty\x12\x12\n" +
 	"\x04rows\x18\v \x01(\rR\x04rows\x12\x12\n" +
 	"\x04cols\x18\f \x01(\rR\x04cols\x12\x12\n" +
-	"\x04bulk\x18\r \x01(\bR\x04bulk\x1a6\n" +
+	"\x04bulk\x18\r \x01(\bR\x04bulk\x12\x14\n" +
+	"\x05quiet\x18\x0e \x01(\bR\x05quiet\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"4\n" +

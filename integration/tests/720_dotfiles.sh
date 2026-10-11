@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: with dotfiles auto-install on, a new instance clones the dotfiles repo to ~/dotfiles and runs its install script once; stop/start leaves it alone, rebuild installs it again, and a hanging install is cut off and retried without blocking the instance.
 set -euo pipefail
 
@@ -42,6 +43,7 @@ write_dotfiles_config() {  # <install script>
   }
 }
 EOF
+  itest_config_written
 }
 write_dotfiles_config itest-dotfiles/install.sh
 
@@ -90,12 +92,16 @@ info "fleet stop + start alpha"
 check_installed "after a stop and start"
 assert_equals "1" "$(runs)" "start must not run the install script again"
 
-info "fleet rebuild alpha"
-"${FLEET_BIN}" rebuild "${inst}" >/dev/null
-# The rebuilt container starts from the image again, so the clone and the log
-# are fresh: the install ran once in it.
-check_installed "after a rebuild"
-assert_equals "1" "$(runs)" "rebuild should install the dotfiles once into the new container"
+if itest_backend_rebuilds; then
+  info "fleet rebuild alpha"
+  "${FLEET_BIN}" rebuild "${inst}" >/dev/null
+  # The rebuilt container starts from the image again, so the clone and the
+  # log are fresh: the install ran once in it.
+  check_installed "after a rebuild"
+  assert_equals "1" "$(runs)" "rebuild should install the dotfiles once into the new container"
+else
+  info "this backend cannot rebuild yet: the rebuild step is left out"
+fi
 
 info "fleet up beta with a dotfiles install script that hangs"
 write_dotfiles_config itest-dotfiles/hang.sh

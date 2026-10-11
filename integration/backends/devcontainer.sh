@@ -17,6 +17,14 @@ _be_preflight() { :; }
 # provisions on the local Docker daemon by default.
 _be_setup() { :; }
 
+# _be_config_written — devcontainer is the default target already, and setup
+# starts no daemon.
+_be_config_written() { :; }
+
+_be_row_target() { printf '%s\n' "⬡"; }
+
+_be_rebuilds() { :; }
+
 # _be_teardown — backend backstop teardown_test runs after `fleet destroy`.
 _be_teardown() {
   command -v docker >/dev/null 2>&1 || return 0
@@ -37,6 +45,19 @@ _be_teardown() {
   bk=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^fleet-.*-buildkit$' || true)
   if [ -n "${bk}" ]; then
     docker rm -f ${bk} >/dev/null 2>&1 || true
+  fi
+
+  # A privileged buildkit server writes a ROOT-owned cache into the
+  # bind-mounted .buildkit/cache dir. Fleet deliberately keeps that cache
+  # across `destroy` (it's the point of a shared cache), but the test harness
+  # wants a pristine ~/.fleet between tests and runs as a non-root user — so
+  # reclaim ownership via a throwaway root container before the wipe. The
+  # buildkit image is guaranteed present whenever such root-owned files exist
+  # (they were written by a buildkit server that already pulled it).
+  if [ -d "${HOME}/.fleet" ] \
+    && find "${HOME}/.fleet" ! -user "$(id -un)" -print -quit 2>/dev/null | grep -q .; then
+    docker run --rm --entrypoint chown -v "${HOME}/.fleet:/reclaim" \
+      moby/buildkit:latest -R "$(id -u):$(id -g)" /reclaim >/dev/null 2>&1 || true
   fi
 }
 

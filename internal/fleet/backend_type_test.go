@@ -69,21 +69,13 @@ func TestBackendTypesListEveryKnownType(t *testing.T) {
 	}
 }
 
-func TestValidateBackendTypeGatesKubernetes(t *testing.T) {
-	t.Setenv(EnvExperimentalK8s, "")
-	if err := ValidateBackendType(BackendKubernetes); err != ErrKubernetesExperimental {
-		t.Fatalf("ValidateBackendType(kubernetes) without the gate = %v, want ErrKubernetesExperimental", err)
-	}
-	for _, bt := range []BackendType{BackendDevcontainer, BackendCoder, BackendCodespaces} {
+func TestValidateBackendType(t *testing.T) {
+	for _, bt := range BackendTypes() {
 		if err := ValidateBackendType(bt); err != nil {
 			t.Errorf("ValidateBackendType(%s) = %v", bt, err)
 		}
 	}
 	if err := ValidateBackendType("bogus"); err == nil {
 		t.Error("ValidateBackendType(bogus) = nil")
-	}
-	t.Setenv(EnvExperimentalK8s, "1")
-	if err := ValidateBackendType(BackendKubernetes); err != nil {
-		t.Fatalf("ValidateBackendType(kubernetes) with the gate = %v", err)
 	}
 }

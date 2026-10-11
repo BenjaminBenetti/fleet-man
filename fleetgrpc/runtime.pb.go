@@ -147,8 +147,8 @@ func (AgentTool) EnumDescriptor() ([]byte, []int) {
 	return file_runtime_proto_rawDescGZIP(), []int{1}
 }
 
-// AgentActivity mirrors internal/agentdetect.State — the three-state activity
-// indicator (the throbber) for a detected agent.
+// AgentActivity mirrors internal/agentdetect.State — the activity indicator
+// (the throbber) for a detected agent.
 type AgentActivity int32
 
 const (
@@ -156,6 +156,11 @@ const (
 	AgentActivity_AGENT_ACTIVITY_NOT_RUNNING AgentActivity = 1 // no agent process detected
 	AgentActivity_AGENT_ACTIVITY_WORKING     AgentActivity = 2 // actively producing output
 	AgentActivity_AGENT_ACTIVITY_WAITING     AgentActivity = 3 // alive but idle / awaiting input
+	// UNKNOWN: the instance's captures have failed several times in a row
+	// (about 15s; the instance or its cluster is unreachable), so neither the
+	// agent's state nor the instance's stats are known. Drawn grey and still;
+	// the next good capture reports the state afresh.
+	AgentActivity_AGENT_ACTIVITY_UNKNOWN AgentActivity = 4
 )
 
 // Enum value maps for AgentActivity.
@@ -165,12 +170,14 @@ var (
 		1: "AGENT_ACTIVITY_NOT_RUNNING",
 		2: "AGENT_ACTIVITY_WORKING",
 		3: "AGENT_ACTIVITY_WAITING",
+		4: "AGENT_ACTIVITY_UNKNOWN",
 	}
 	AgentActivity_value = map[string]int32{
 		"AGENT_ACTIVITY_UNSPECIFIED": 0,
 		"AGENT_ACTIVITY_NOT_RUNNING": 1,
 		"AGENT_ACTIVITY_WORKING":     2,
 		"AGENT_ACTIVITY_WAITING":     3,
+		"AGENT_ACTIVITY_UNKNOWN":     4,
 	}
 )
 
@@ -922,12 +929,13 @@ const file_runtime_proto_rawDesc = "" +
 	"\x10AGENT_TOOL_CODEX\x10\x03\x12\x15\n" +
 	"\x11AGENT_TOOL_GEMINI\x10\x04\x12\x16\n" +
 	"\x12AGENT_TOOL_COPILOT\x10\x05\x12\x15\n" +
-	"\x11AGENT_TOOL_AUGGIE\x10\x06*\x87\x01\n" +
+	"\x11AGENT_TOOL_AUGGIE\x10\x06*\xa3\x01\n" +
 	"\rAgentActivity\x12\x1e\n" +
 	"\x1aAGENT_ACTIVITY_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aAGENT_ACTIVITY_NOT_RUNNING\x10\x01\x12\x1a\n" +
 	"\x16AGENT_ACTIVITY_WORKING\x10\x02\x12\x1a\n" +
-	"\x16AGENT_ACTIVITY_WAITING\x10\x03*y\n" +
+	"\x16AGENT_ACTIVITY_WAITING\x10\x03\x12\x1a\n" +
+	"\x16AGENT_ACTIVITY_UNKNOWN\x10\x04*y\n" +
 	"\bPrSignal\x12\x19\n" +
 	"\x15PR_SIGNAL_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fPR_SIGNAL_GREEN\x10\x01\x12\x14\n" +

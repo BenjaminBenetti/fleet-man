@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Pressing `L` on a running instance shows its logs and Enter returns to the TUI.
 set -euo pipefail
 

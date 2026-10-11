@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Layout presets survive a full fleetd restart (issue #150 persistence) — create a preset, kill the daemon + TUI, relaunch, and confirm the preset is still there.
 set -euo pipefail
 

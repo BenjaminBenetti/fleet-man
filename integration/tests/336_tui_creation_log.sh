@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: While an instance is created its row shows the current step and
 # ~/.fleet/logs/<fleet>-<instance>.log (0600) fills with each step and the
 # devcontainer CLI's output, containerEnv values redacted; down removes the log.
@@ -38,15 +39,23 @@ tui_spawn
 tui_wait_for "alpha" 30 || { cat "${up_log}"; fail "the creating instance never showed in the TUI"; }
 
 # devcontainer up (image pull, docker run, postCreateCommand) is the long step:
-# the row names it while it runs, pushed from the daemon over Watch.
+# the row names it while it runs, pushed from the daemon over Watch. On a
+# cluster the long step is seeding the instance's disk (after the image is
+# built and delivered).
+long_step="starting container"
+log_step="==> starting container: devcontainer"
+if itest_backend_is kubernetes; then
+  long_step="seeding disk"
+  log_step="==> seeding disk"
+fi
 info "waiting for the row to show the current step"
-tui_wait_for "creating · starting container" 180 || { cat "${up_log}"; fail "the creating row never showed its step"; }
+tui_wait_for "creating · ${long_step}" 180 || { cat "${up_log}"; fail "the creating row never showed its step"; }
 
 info "the creation log exists while the instance is creating"
 assert_file_exists "${log_path}"
 mode=$(file_mode "${log_path}")
 assert_equals "600" "${mode}" "creation log mode"
-grep -qF "==> starting container: devcontainer" "${log_path}" \
+grep -qF "${log_step}" "${log_path}" \
   || { cat "${log_path}"; fail "creation log does not show the step being run"; }
 
 up_rc=0
@@ -59,7 +68,13 @@ printf -- '--- creation log ---\n%s\n--- end ---\n' "${log}"
 assert_contains "${log}" "==> fleet create: ${FIXTURE_REPO_NAME}/alpha" "creation log header"
 assert_contains "${log}" "==> cloning repository" "clone step"
 assert_contains "${log}" "Cloning into" "git clone output"
-assert_contains "${log}" "Run: docker run" "devcontainer CLI output"
+# The devcontainer CLI's own output: its docker run, which on a cluster the
+# kubeshim captures instead of running.
+if itest_backend_is kubernetes; then
+  assert_contains "${log}" "kubeshim: captured docker run" "devcontainer CLI output"
+else
+  assert_contains "${log}" "Run: docker run" "devcontainer CLI output"
+fi
 assert_contains "${log}" "FLEET_ITEST_SECRET=<redacted>" "the -e flag is logged with its value hidden"
 assert_not_contains "${log}" "${secret}" "the containerEnv value leaked into the creation log"
 assert_contains "${log}" "==> running startup scripts" "post-up provisioning steps"

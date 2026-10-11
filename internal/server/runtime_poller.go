@@ -385,9 +385,15 @@ func statsActivityPass(h *hub) {
 		ups := make([]runtimeUpdate, 0, len(items))
 		for _, it := range items {
 			cid := it.containerID
-			activity := agentActivityToProto(h.agent.State(cid))
+			agentState := h.agent.State(cid)
+			activity := agentActivityToProto(agentState)
 			tool := agentToolToProto(h.agent.Tool(cid))
 			stats := statsToProto(statsByID[cid])
+			if agentState == agentdetect.StateUnknown {
+				// Nothing about an instance that keeps failing its captures
+				// is current: its row shows no numbers rather than old ones.
+				stats = nil
+			}
 			ups = append(ups, runtimeUpdate{it.fleetName, it.instance, func(r *fleetgrpc.InstanceRuntime) {
 				r.AgentActivity = activity
 				r.AgentTool = tool

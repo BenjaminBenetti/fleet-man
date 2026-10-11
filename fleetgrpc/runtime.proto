@@ -50,13 +50,18 @@ enum AgentTool {
   AGENT_TOOL_AUGGIE = 6;
 }
 
-// AgentActivity mirrors internal/agentdetect.State — the three-state activity
-// indicator (the throbber) for a detected agent.
+// AgentActivity mirrors internal/agentdetect.State — the activity indicator
+// (the throbber) for a detected agent.
 enum AgentActivity {
   AGENT_ACTIVITY_UNSPECIFIED = 0;  // not yet determined
   AGENT_ACTIVITY_NOT_RUNNING = 1;  // no agent process detected
   AGENT_ACTIVITY_WORKING = 2;      // actively producing output
   AGENT_ACTIVITY_WAITING = 3;      // alive but idle / awaiting input
+  // UNKNOWN: the instance's captures have failed several times in a row
+  // (about 15s; the instance or its cluster is unreachable), so neither the
+  // agent's state nor the instance's stats are known. Drawn grey and still;
+  // the next good capture reports the state afresh.
+  AGENT_ACTIVITY_UNKNOWN = 4;
 }
 
 // ContainerStats mirrors internal/backend.ContainerStats (the dim mcpu/MB in the

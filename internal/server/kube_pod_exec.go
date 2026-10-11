@@ -89,9 +89,12 @@ func (s *service) PodExec(stream fleetgrpc.FleetService_PodExecServer) error {
 	}
 	code, errMsg, sendErr := execserve.Serve(stream, proc, ps.GetTty())
 	logArgs = append(logArgs, "code", code, "ms", flog.MillisSince(began))
-	if errMsg != nil {
+	switch {
+	case errMsg != nil:
 		flog.Error("pod exec", append(logArgs, "err", *errMsg)...)
-	} else {
+	case !ps.GetQuiet():
+		// A quiet one (a backend's ExecCommandQuiet: polls, probes) is left
+		// out, so a poll loop cannot flood the log.
 		flog.Info("pod exec", logArgs...)
 	}
 	return sendErr

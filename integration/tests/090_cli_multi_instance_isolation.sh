@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: stop/start/down only affect the named instance; other instances in the same fleet are untouched.
 set -euo pipefail
 

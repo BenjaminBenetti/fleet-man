@@ -55,6 +55,9 @@ type instanceCreateErrMsg struct {
 	fleet    string
 	instance string
 	err      error
+	// cluster is the Kubernetes connection the create was for ("" for any
+	// other target), for the recovery dialog of a refusal.
+	cluster string
 }
 
 type pollCreatingTickMsg struct{}
@@ -364,7 +367,7 @@ func daemonLogStreamCmd(level daemonLogLevel) tea.Cmd {
 func createInstanceCmd(fleetName, instanceName, remoteURL, branch, color string, target fleet.DeployTarget) tea.Cmd {
 	return func() tea.Msg {
 		if err := createInstanceRemote(fleetName, instanceName, remoteURL, branch, target); err != nil {
-			return instanceCreateErrMsg{fleetName, instanceName, err}
+			return instanceCreateErrMsg{fleet: fleetName, instance: instanceName, err: err, cluster: target.KubeCluster}
 		}
 		// CreateInstance doesn't carry the UI color; once the record exists
 		// (the job has started) apply it as instance metadata.
@@ -381,7 +384,7 @@ func createInstanceCmd(fleetName, instanceName, remoteURL, branch, color string,
 func cloneInstanceCmd(fleetName, srcInstance, destInstance string) tea.Cmd {
 	return func() tea.Msg {
 		if err := cloneInstanceRemote(fleetName, srcInstance, destInstance); err != nil {
-			return instanceCreateErrMsg{fleetName, destInstance, err}
+			return instanceCreateErrMsg{fleet: fleetName, instance: destInstance, err: err}
 		}
 		return instanceSpawnedMsg{fleetName, destInstance}
 	}

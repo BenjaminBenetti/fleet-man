@@ -53,7 +53,7 @@ func execClass(c backend.ExecClass) execas.Class {
 // OpenExec starts req's command in the instance's pod (backend.StreamExecer).
 // ctx bounds the start: a wait for the pod's agent when none is connected.
 func (b *Backend) OpenExec(ctx context.Context, req backend.ExecRequest) (backend.ExecStream, error) {
-	return b.OpenPodExec(ctx, PodCommand{Class: execClass(req.Class), Argv: req.Argv, Env: req.Env, TTY: req.TTY, Bulk: req.Bulk})
+	return b.OpenPodExec(ctx, PodCommand{Class: execClass(req.Class), Argv: req.Argv, Env: req.Env, TTY: req.TTY, Rows: req.Rows, Cols: req.Cols, Bulk: req.Bulk})
 }
 
 // OpenPodExec starts cmd in the instance's pod. ctx bounds the start.

@@ -92,6 +92,7 @@ func (fleetPage *fleetPage) openEditInstanceDialog(m *model) tea.Cmd {
 	fleetPage.dlg.inst = instance.Name
 	fleetPage.addInst.target = instance.DeployTarget()
 	fleetPage.addInst.targets = nil
+	fleetPage.addInst.unavailable = nil
 	fleetPage.addInst.color = instance.Color
 	if fleetPage.addInst.color == "" {
 		fleetPage.addInst.color = instanceColorWhite
@@ -602,8 +603,11 @@ type addInstanceState struct {
 	// Deploy row cycles, from the daemon (ListDeployTargets) as the dialog
 	// opened. Empty while editing: the target can't change.
 	targets []fleet.DeployTarget
-	color   string
-	editing bool
+	// unavailable are the cluster targets the daemon cannot create on now,
+	// with its reasons, listed under the Deploy row.
+	unavailable []fleet.DeployTargetOption
+	color       string
+	editing     bool
 	// template is set when the target fleet's remote is a file:// template
 	// dir: the branch row is disabled and the daemon offers only the
 	// devcontainer target (the one that provisions from a local workspace
@@ -658,6 +662,13 @@ func (fleetPage *fleetPage) renderAddInstanceDialog(m *model) string {
 			branchField = dimStyle.Render(templateBranchDisplay)
 		}
 		deployField = fmt.Sprintf("[ %s ]", deployTargetLabel(m, target))
+		if st := m.kubeStatus(target.KubeCluster); st != nil {
+			deployField += "  " + kubeBadgeShort(st, 40)
+		}
+		for _, option := range fleetPage.addInst.unavailable {
+			deployField += "\n            " + dimStyle.Render(deployTargetLabel(m, option.Target)+"  ") +
+				kubeErrStyle.Render(kubeGlyphFailed+" "+option.Reason)
+		}
 	}
 
 	rowMarker := func(r int) string {

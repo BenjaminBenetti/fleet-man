@@ -17,14 +17,13 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
-// deployTargets lists one Deploy option per connection, in registry order,
-// while FLEET_EXPERIMENTAL_K8S is on (the backend is still being built). A
-// cluster target is available when the connection is READY or LIMITED and
+// deployTargets lists one Deploy option per connection, in registry order.
+// A cluster target is available when the connection is READY or LIMITED and
 // the daemon host has docker and the devcontainer CLI (images are built
 // there); otherwise the reason says which is missing. Template (file://)
 // fleets list none: copying a template into a pod is not supported yet.
 func (m *kubeManager) deployTargets(template bool) []fleet.DeployTargetOption {
-	if !fleet.ExperimentalK8s() || template {
+	if template {
 		return nil
 	}
 	var missingTools []string
@@ -33,13 +32,10 @@ func (m *kubeManager) deployTargets(template bool) []fleet.DeployTargetOption {
 			missingTools = append(missingTools, tool.Binary)
 		}
 	}
-	creatable := kubeBackendCreatable()
 	var out []fleet.DeployTargetOption
 	for _, st := range m.statuses() {
 		option := fleet.DeployTargetOption{Target: fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: st.GetCluster().GetId()}, Available: true}
 		switch {
-		case !creatable:
-			option.Available, option.Reason = false, "this fleet build cannot create Kubernetes instances yet"
 		case !preflight.Usable(st.GetState()):
 			option.Available, option.Reason = false, clusterStateReason(st)
 		case len(missingTools) > 0:
@@ -49,10 +45,6 @@ func (m *kubeManager) deployTargets(template bool) []fleet.DeployTargetOption {
 	}
 	return out
 }
-
-// kubeBackendCreatable reports whether this build creates Kubernetes
-// instances; a seam for tests until the backend lands.
-var kubeBackendCreatable = func() bool { return fleet.ValidateBackendType(fleet.BackendKubernetes) == nil }
 
 // clusterStateReason says why a connection in st cannot take a create.
 func clusterStateReason(st *fleetgrpc.KubeClusterStatus) string {

@@ -71,9 +71,10 @@ func assertGlyphSlots(t *testing.T, view string, out string, th theme.Theme) {
 	}
 }
 
-// Settings → Kubernetes, the context picker, the cluster editor and the
-// disconnect dialog draw every badge (●, ✓, ▲, ⚠, ✕) in its theme slot under
-// all 8 themes, so the light themes keep them readable.
+// Settings → Kubernetes, the context picker, the cluster editor, the
+// disconnect dialog, cluster instance rows and the Deploy row draw every
+// badge (●, ✓, ▲, ⚠, ✕) in its theme slot under all 8 themes, so the light
+// themes keep them readable.
 func TestKubeBadgesUseThemeSlotsInEveryTheme(t *testing.T) {
 	resetTheme(t)
 	prev := lipgloss.ColorProfile()
@@ -115,6 +116,20 @@ func TestKubeBadgesUseThemeSlotsInEveryTheme(t *testing.T) {
 		d.err = "refused"
 		sp.kubeDialog = d
 		assertGlyphSlots(t, "the disconnect dialog", sp.viewSettings(m), th)
+
+		// Cluster instance rows: on a connection that cannot be used (✕),
+		// with every note; and the New instance dialog's Deploy row, with
+		// the picked cluster's health and an unavailable one's reason.
+		rm, fp := kubeRowModel(t, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_UNREACHABLE,
+			kubeInst("eta", fleet.StatusRunning, ""), kubeInst("delta", fleet.StatusFailed, interruptedErr), kubeInst("zeta", fleet.StatusStopped, oomParkedErr))
+		rm.runtime["alpha/eta"] = &fleetgrpc.InstanceRuntime{Kube: &fleetgrpc.KubeInstanceRuntime{PodReason: "ImagePullBackOff",
+			Agent: fleetgrpc.KubeAgentState_KUBE_AGENT_STATE_RECONNECTING, RestartCause: "node drained"}}
+		assertGlyphSlots(t, "cluster instance rows", fp.viewFleetList(rm), th)
+		rm.kubeClusters.Clusters = append(rm.kubeClusters.Clusters, kubeSt("ok-1", "ok", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY))
+		fp.mode, fp.dlg.fleet = viewAddInstance, "alpha"
+		fp.addInst.target = fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "ok-1"}
+		fp.addInst.unavailable = []fleet.DeployTargetOption{{Target: fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "mk-1"}, Reason: "cluster unreachable"}}
+		assertGlyphSlots(t, "the Deploy row", fp.renderAddInstanceDialog(rm), th)
 	}
 }
 

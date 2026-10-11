@@ -18,20 +18,30 @@ if [ -z "${real}" ] || [ ! -x "${real}" ]; then
 fi
 
 # Container verbs: everything that acts on or lists containers. `inspect` is
-# refused unless it names an image (--type image), since builds inspect images.
-verbs="${FLEET_ITEST_POISON_VERBS:-attach commit container cp create diff exec export inspect kill logs pause port ps rename restart rm run start stats stop top unpause update wait}"
+# refused unless it names an image (--type image), since builds inspect images;
+# `network` only to connect or disconnect a container; `compose` (it runs
+# containers) except `compose version`.
+verbs="${FLEET_ITEST_POISON_VERBS:-attach commit compose container cp create diff exec export inspect kill logs network pause port ps rename restart rm run start stats stop top unpause update wait}"
 
 # The verb is the first argument that is not a global option; --context/-c,
 # --config, --host/-H, --log-level/-l and --tlscacert/--tlscert/--tlskey take a
 # value.
 verb=""
+sub=""
 skip=""
 for arg in "$@"; do
   if [ -n "${skip}" ]; then skip=""; continue; fi
   case "${arg}" in
     --context|-c|--config|--host|-H|--log-level|-l|--tlscacert|--tlscert|--tlskey) skip=1 ;;
     -*) ;;
-    *) verb="${arg}"; break ;;
+    *)
+      if [ -z "${verb}" ]; then
+        verb="${arg}"
+      else
+        sub="${arg}"
+        break
+      fi
+      ;;
   esac
 done
 
@@ -44,6 +54,15 @@ if [ "${FLEET_ITEST_DOCKER_MODE:-record}" = "poison" ] && [ -n "${verb}" ]; then
     case " $* " in
       *" --type image "*|*" --type=image "*) refuse="" ;;
     esac
+  fi
+  if [ -n "${refuse}" ] && [ "${verb}" = "network" ]; then
+    case "${sub}" in
+      connect|disconnect) ;;
+      *) refuse="" ;;
+    esac
+  fi
+  if [ -n "${refuse}" ] && [ "${verb}" = "compose" ] && [ "${sub}" = "version" ]; then
+    refuse=""
   fi
 fi
 

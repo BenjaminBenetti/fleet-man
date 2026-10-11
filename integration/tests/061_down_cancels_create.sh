@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet down` on an instance still being created cancels the create:
 # the running `fleet up` fails with "instance destroyed", the record and workspace
 # go, and no container is left behind once `devcontainer up` returns (before,

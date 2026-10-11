@@ -53,6 +53,9 @@ type ExecRequest struct {
 	// TTY runs the command on a pseudo-terminal: its output then comes merged
 	// on Stdout, and Resize sets the window size.
 	TTY bool
+	// Rows and Cols are the terminal's size when the command starts (zero:
+	// not known yet, the first Resize sets it).
+	Rows, Cols uint16
 	// Bulk says the command moves bulk data (a folder's tar in or out): a
 	// backend with a separate lane for bulk transfers runs it there, so it
 	// does not hold up the latency-sensitive traffic of its other commands.

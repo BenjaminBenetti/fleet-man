@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet up --branch <branch>` clones that branch and `fleet ls` reports it in the BRANCH column.
 set -euo pipefail
 

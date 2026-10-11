@@ -43,6 +43,20 @@ func (l deployTargetList) available() []fleet.DeployTarget {
 	return out
 }
 
+// unavailableClusters returns the cluster targets a create cannot go to now,
+// each with the daemon's reason: the New instance dialog lists them under its
+// Deploy row, so a connection that is down, or a daemon host without docker,
+// says why rather than leaving the cluster out.
+func (l deployTargetList) unavailableClusters() []fleet.DeployTargetOption {
+	var out []fleet.DeployTargetOption
+	for _, option := range l.options {
+		if !option.Available && option.Target.Backend == fleet.BackendKubernetes && option.Target.KubeCluster != "" {
+			out = append(out, option)
+		}
+	}
+	return out
+}
+
 // preferred returns the target the dialog opens on: the default when it is
 // available, else the first available target. ok is false when none is.
 func (l deployTargetList) preferred() (fleet.DeployTarget, bool) {

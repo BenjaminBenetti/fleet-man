@@ -33,6 +33,7 @@ func keybindingsData() []keybindingGroup {
 				{"j / k", "Navigate up / down"},
 				{"space / tab", "Expand / collapse"},
 				{"enter / e", "Open shell or settings"},
+				{"enter (failed / parked ☸, refused pod)", "Kubernetes recovery: what happened, what to do"},
 				{"s", "Start / stop instance"},
 				{"a", "Add instance"},
 				{"n", "New fleet"},

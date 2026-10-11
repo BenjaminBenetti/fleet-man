@@ -191,8 +191,18 @@ var forwardDialer = func(fleetName, instanceName string, remotePort int) (portfo
 }
 
 // resolveLogsArgv resolves the host-side container-logs command for the
-// instance; the logs view embeds it in its pager script.
+// instance; the logs view embeds it in its pager script. A remote daemon's
+// argv would run here, on the wrong host (its docker, its saved Kubernetes
+// container.log), so for one this fleet binary's `logs <fleet>/<instance>`
+// reads them through the Logs RPC instead.
 var resolveLogsArgv = func(fleetName, instanceName string) ([]string, error) {
+	if fleetclient.IsRemote() {
+		self, err := os.Executable()
+		if err != nil {
+			self = "fleet"
+		}
+		return []string{self, "logs", fleetName + "/" + instanceName}, nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), execResolveTimeout)
 	defer cancel()
 	conn, err := dialMutation(ctx)

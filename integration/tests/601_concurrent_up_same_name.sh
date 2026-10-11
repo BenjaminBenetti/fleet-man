@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: concurrent `fleet up` of the SAME name — exactly one wins, the rest fail cleanly, no corruption.
 set -euo pipefail
 

@@ -55,8 +55,10 @@ func startTTY(c *C, i *Instance) *ttySession {
 	argv := ShArgv(ttyScript)
 	s := &ttySession{read: make(chan struct{})}
 	if execer, ok := i.B.(backend.StreamExecer); ok {
+		// A stream backend starts the terminal at the size the request
+		// asks for, as a PTY started with a size does.
 		stream, err := execer.OpenExec(c.Ctx, backend.ExecRequest{
-			Class: backend.ExecClassExec, WorkspaceDir: i.WorkspaceDir(), ContainerID: i.ID(), Argv: argv, TTY: true,
+			Class: backend.ExecClassExec, WorkspaceDir: i.WorkspaceDir(), ContainerID: i.ID(), Argv: argv, TTY: true, Rows: 24, Cols: 80,
 		})
 		if err != nil {
 			c.Fatalf("OpenExec with a TTY: %v", err)

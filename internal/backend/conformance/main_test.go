@@ -12,7 +12,8 @@ import (
 
 // TestMain moves a selected run into a HOME of its own before any backend
 // runs. docker's client config (contexts, credential helpers) stays reachable
-// through DOCKER_CONFIG.
+// through DOCKER_CONFIG, and so do the kubeconfig (KUBECONFIG) and minikube's
+// profiles (MINIKUBE_HOME), which a cluster run reaches its cluster with.
 func TestMain(m *testing.M) {
 	if strings.TrimSpace(os.Getenv(backendtest.EnvVar)) == "" {
 		os.Exit(m.Run())
@@ -22,10 +23,17 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if os.Getenv("DOCKER_CONFIG") == "" {
-		if real, err := os.UserHomeDir(); err == nil {
-			if info, err := os.Stat(filepath.Join(real, ".docker")); err == nil && info.IsDir() {
-				_ = os.Setenv("DOCKER_CONFIG", filepath.Join(real, ".docker"))
+	if real, err := os.UserHomeDir(); err == nil {
+		for _, keep := range []struct{ env, path string }{
+			{"DOCKER_CONFIG", ".docker"},
+			{"KUBECONFIG", filepath.Join(".kube", "config")},
+			{"MINIKUBE_HOME", ".minikube"},
+		} {
+			if os.Getenv(keep.env) != "" {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(real, keep.path)); err == nil {
+				_ = os.Setenv(keep.env, filepath.Join(real, keep.path))
 			}
 		}
 	}

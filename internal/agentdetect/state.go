@@ -19,4 +19,8 @@ const (
 	// StateWaiting means the agent is alive but idle (e.g., waiting
 	// for user input or a tool result).
 	StateWaiting
+	// StateUnknown means the container could not be captured for a while
+	// (it, or the cluster it runs on, does not answer), so whether an agent
+	// runs is not known.
+	StateUnknown
 )

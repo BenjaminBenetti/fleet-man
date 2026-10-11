@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI delete tmux session - exercises both cancel and confirm paths
 set -euo pipefail
 

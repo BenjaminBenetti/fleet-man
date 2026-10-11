@@ -96,12 +96,12 @@ assert_branch "${expected}" "after a daemon restart"
 
 info "TUI shows the branch on the stopped row"
 tui_spawn
-tui_wait_for "${expected} ⬡" 20 || fail "TUI row should show ${expected}"
+tui_wait_for "${expected} $(itest_row_target)" 20 || fail "TUI row should show ${expected}"
 
 info "fleet start alpha, then switch inside the instance with the TUI open"
 "${FLEET_BIN}" start "${inst}"
 "${FLEET_BIN}" exec "${inst}" -- git -c safe.directory='*' checkout -q -b feature/after-restart
-tui_wait_for "feature/after-restart ⬡" 20 || fail "TUI row should follow the in-instance switch"
+tui_wait_for "feature/after-restart $(itest_row_target)" 20 || fail "TUI row should follow the in-instance switch"
 assert_branch "feature/after-restart" "after start and another switch"
 
 pass "branch switched inside the instance is reported by ls, fleet_list and the TUI across stop and daemon restart"

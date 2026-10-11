@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI installs a prefix + H binding that refocuses the fleet TUI pane
 set -euo pipefail
 

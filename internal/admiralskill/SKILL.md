@@ -85,19 +85,23 @@ tool-call timeout allows it. A blocking call returns
 `{job_id, done: true, success, instance, warnings}`, and a failed blocking job
 surfaces as a tool error.
 
-- `fleet_up {fleet, instance, remote?, branch?, backend?, wait?}` creates and
+- `fleet_up {fleet, instance, remote?, branch?, backend?, cluster?, wait?}` creates and
   starts an instance. `remote` is required only when creating the first
   instance of a new fleet; after that the fleet's recorded remote is used. It
   is normally a git URL, but `file:///abs/dir` names a local TEMPLATE directory
   on the daemon host instead: fleet copies it into each new instance rather
   than cloning (a template fleet takes no `branch` and only the `devcontainer`
   backend).
-  `backend` selects where it runs: `devcontainer`, `coder`, or `codespaces`.
+  `backend` selects where it runs: `devcontainer`, `coder`, `codespaces`, or
+  `kubernetes` (a pod on one of the daemon's cluster connections).
+  `cluster` names that connection by id, name or kube context (see
+  `fleet_cluster_list`) and implies `kubernetes`; with `backend: kubernetes`
+  and no `cluster`, the remembered or only connection is used.
   Omitted, the daemon uses its remembered default deploy target (the one last
-  picked in a TUI New instance dialog; `devcontainer` out of the box), and the
-  reply's `target` names the backend it used. The others need prior
-  configuration, so leave it unset or pass `devcontainer` unless the user says
-  otherwise.
+  picked in a TUI New instance dialog, which may be a cluster; `devcontainer`
+  out of the box), and the reply's `target` names the backend and cluster it
+  used. The others need prior configuration, so leave it unset or pass
+  `devcontainer` unless the user says otherwise.
 - `fleet_start` / `fleet_stop {fleet, instance}` resume / pause an instance.
   Stop preserves the workspace; start brings it back. These always block —
   they finish in seconds.
@@ -221,7 +225,7 @@ INSPECT
   fleet_restore_backup                              # docs only: where state backups are + how to restore
 
 LIFECYCLE  (async-first: returns {job_id, done:false} in seconds; wait:true blocks)
-  fleet_up {fleet, instance, remote?, branch?, backend?, wait?}
+  fleet_up {fleet, instance, remote?, branch?, backend?, cluster?, wait?}
   fleet_clone {fleet, source, destination, display_name?, tag?, color?, branch?, wait?}
   fleet_rebuild {fleet, instance, wait?}            # recreate container, keep workspace (devcontainer/codespaces)
   fleet_down {fleet, instance, wait?}               # remove one instance      (irreversible)

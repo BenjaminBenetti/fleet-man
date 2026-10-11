@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI session list resolves the devcontainer remoteUser even when a second container user holds a tmux socket (containerUser regression)
 set -euo pipefail
 

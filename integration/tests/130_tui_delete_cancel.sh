@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Pressing `d` opens the delete dialog; pressing `n` cancels without removing.
 set -euo pipefail
 

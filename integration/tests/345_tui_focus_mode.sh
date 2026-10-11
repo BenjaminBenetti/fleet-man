@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI 'f' enters focus mode — the "settings" row becomes
 # "[ leave focus ]" and the help bar is hidden; esc, q, and the leave-focus row
 # all exit focus (focus behaves like a dialog for q/esc).

@@ -4,6 +4,7 @@ package kubernetes
 
 import (
 	"context"
+	"os"
 	"sync"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -67,8 +68,41 @@ func SetEnvironment(e Environment) {
 
 func currentEnvironment() Environment {
 	envMu.Lock()
-	defer envMu.Unlock()
-	return env
+	e := env
+	envMu.Unlock()
+	if e.Tools.Exe == "" {
+		e.Tools.Exe = executableOverride()
+	}
+	return e
+}
+
+var (
+	exeMu       sync.Mutex
+	exeOverride string
+)
+
+// SetFleetExecutable names the fleet executable the backend hands out to run
+// (the `fleet kube-exec` argvs, capture-up's docker shim) for a process that
+// is not itself the fleet binary: the conformance suite runs fleetd in its
+// test binary. "" puts back the default, this process's own executable.
+func SetFleetExecutable(path string) {
+	exeMu.Lock()
+	exeOverride = path
+	exeMu.Unlock()
+}
+
+func executableOverride() string {
+	exeMu.Lock()
+	defer exeMu.Unlock()
+	return exeOverride
+}
+
+// fleetExecutable is the fleet executable the backend's argvs run.
+func fleetExecutable() (string, error) {
+	if p := executableOverride(); p != "" {
+		return p, nil
+	}
+	return os.Executable()
 }
 
 // images is the environment's image delivery, or one of this process's own

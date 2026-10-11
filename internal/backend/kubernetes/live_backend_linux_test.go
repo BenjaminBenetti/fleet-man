@@ -155,6 +155,27 @@ func (lb *liveBackend) execSurface(t *testing.T, lv *live, image string) {
 	if got, err := b.RunScript(res.ContainerID, "cat /tmp/fleet-copy-test"); err != nil || got != payload {
 		t.Errorf("the copied file reads %q (%v), want %q", got, err, payload)
 	}
+
+	// The workspace is read in the pod (WorkspaceReader), where a branch
+	// switched inside the instance is.
+	// As the remote user (the exec class), whose checkout it is.
+	gitInit, err := b.OpenExec(ctx, backend.ExecRequest{Class: backend.ExecClassExec, ContainerID: res.ContainerID,
+		Argv: []string{"sh", "-c", "cd " + res.RemoteWorkspaceFolder + " && git init -q -b live-branch && printf '{}' > .devcontainer/extra.json"}})
+	if err != nil {
+		t.Fatalf("OpenExec: %v", err)
+	}
+	_ = gitInit.Stdin().Close()
+	go func() { _, _ = io.Copy(io.Discard, gitInit.Stdout()) }()
+	go func() { _, _ = io.Copy(io.Discard, gitInit.Stderr()) }()
+	if code, err := gitInit.Wait(); err != nil || code != 0 {
+		t.Fatalf("git init in the pod: code %d %v", code, err)
+	}
+	if branch, ok := b.Branch(ctx, inst.WorkspaceDir); !ok || branch != "live-branch" {
+		t.Errorf("Branch = %q %v, want live-branch from the pod", branch, ok)
+	}
+	if data, err := b.ReadWorkspaceFile(ctx, inst.WorkspaceDir, ".devcontainer/extra.json"); err != nil || string(data) != "{}" {
+		t.Errorf("ReadWorkspaceFile of a file made in the pod = %q %v", data, err)
+	}
 }
 
 // sessions proves a tmux-less image gets tmux sessions through the bundled

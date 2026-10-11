@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet up` without --backend uses fleetd's remembered deploy target; the TUI New instance dialog opens on it and remembers the target it creates on.
 set -euo pipefail
 
@@ -33,14 +34,23 @@ recorded_backend() {
 }
 
 # ===========================================
-# Nothing remembered: an unspecified create goes to devcontainer.
+# Nothing remembered: an unspecified create goes to devcontainer. On a
+# cluster the setup remembered the run's connection, so it goes there.
 # ===========================================
-info "fleet up alpha without --backend, nothing remembered"
+default_backend=devcontainer
+default_label=devcontainer
+remembered_default=""
+if itest_backend_is kubernetes; then
+  default_backend=kubernetes
+  default_label="kubernetes:$(jq -r '.default_kube_cluster' "${config}")"
+  remembered_default=kubernetes
+fi
+info "fleet up alpha without --backend, ${remembered_default:-nothing} remembered"
 out=$("${FLEET_BIN}" up alpha --repo "${FIXTURE_REPO_URL}" 2>&1) || fail "fleet up alpha failed: ${out}"
 printf '%s\n' "${out}"
-assert_contains "${out}" "Creating ${FIXTURE_REPO_NAME}/alpha (backend: devcontainer)" "fleet up should name the target fleetd resolved"
-assert_equals "devcontainer" "$(recorded_backend alpha)" "alpha should be a devcontainer instance"
-assert_equals "" "$(remembered_target)" "the CLI must not remember a default target"
+assert_contains "${out}" "Creating ${FIXTURE_REPO_NAME}/alpha (backend: ${default_label})" "fleet up should name the target fleetd resolved"
+assert_equals "${default_backend}" "$(recorded_backend alpha)" "alpha should be a ${default_backend} instance"
+assert_equals "${remembered_default}" "$(remembered_target)" "the CLI must not remember a default target"
 
 # ===========================================
 # A remembered target is where `fleet up` without --backend goes. Nothing in
@@ -79,7 +89,13 @@ if command -v gh >/dev/null 2>&1; then
   info "cycling the Deploy row to Devcontainer"
   tui_send Escape
   sleep 0.3
-  tui_send Tab
+  # Past every target after Codespaces (a connected cluster's, on a
+  # kubernetes run) and around to Devcontainer.
+  for _ in 1 2 3 4; do
+    tui_send Tab
+    sleep 0.3
+    tui_capture | grep -qF "[ Devcontainer ]" && break
+  done
   tui_wait_for "[ Devcontainer ]" 5
 else
   info "no gh where fleetd runs: codespaces is unavailable, so the dialog opens on Devcontainer"
@@ -116,5 +132,15 @@ info "fleet up delta without --backend now goes to the newly remembered devconta
 out=$("${FLEET_BIN}" up "${FIXTURE_REPO_NAME}/delta" 2>&1) || fail "fleet up delta failed: ${out}"
 printf '%s\n' "${out}"
 assert_contains "${out}" "Creating ${FIXTURE_REPO_NAME}/delta (backend: devcontainer)" "fleet up should follow the remembered target"
+
+if itest_backend_is kubernetes; then
+  # A cluster remembered again (as a TUI create on it leaves it) is where
+  # `fleet up` without --backend goes.
+  itest_config_written
+  out=$("${FLEET_BIN}" up "${FIXTURE_REPO_NAME}/epsilon" 2>&1) || fail "fleet up epsilon failed: ${out}"
+  printf '%s\n' "${out}"
+  assert_contains "${out}" "Creating ${FIXTURE_REPO_NAME}/epsilon (backend: ${default_label})" "fleet up should follow a remembered cluster"
+  assert_equals "kubernetes" "$(recorded_backend epsilon)" "epsilon should run on the cluster"
+fi
 
 pass "fleet up and the New instance dialog share fleetd's remembered deploy target"

@@ -32,12 +32,23 @@ if [ -n "${FLEET_ITEST_BSD_SHIMS:-}" ]; then
   say "FLEET_ITEST_BSD_SHIMS set: host PATH now fronts BSD-behavior shims"
 fi
 
-# 1. Build fleet binary unless caller provided one.
+# 1. Build fleet binary unless caller provided one. On a cluster the daemon
+#    also serves its pods the pod build of the same source; it is built beside
+#    it unless FLEET_POD_BINARY_<ARCH> names one (it must be the same build).
 if [ -z "${FLEET_BIN:-}" ]; then
   build_dir="$(mktemp -d)"
   FLEET_BIN="${build_dir}/fleet"
   say "Building fleet -> ${FLEET_BIN}"
   (cd "${REPO_ROOT}" && go build -o "${FLEET_BIN}" ./cmd/fleet)
+  if [ "${FLEET_ITEST_BACKEND:-}" = "kubernetes" ]; then
+    pod_arch=$(go env GOARCH)
+    pod_var="FLEET_POD_BINARY_$(printf '%s' "${pod_arch}" | tr '[:lower:]' '[:upper:]')"
+    if [ -z "${!pod_var:-}" ]; then
+      say "Building the pod build -> ${build_dir}/fleet-pod-linux-${pod_arch}"
+      (cd "${REPO_ROOT}" && CGO_ENABLED=0 GOOS=linux go build -tags nok8s -o "${build_dir}/fleet-pod-linux-${pod_arch}" ./cmd/fleet)
+      export "${pod_var}=${build_dir}/fleet-pod-linux-${pod_arch}"
+    fi
+  fi
 fi
 export FLEET_BIN
 say "Using fleet binary: ${FLEET_BIN}"

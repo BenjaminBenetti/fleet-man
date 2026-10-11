@@ -99,9 +99,18 @@ state so the next test starts clean.
 `FLEET_ITEST_BACKEND` picks the backend instances are provisioned on:
 `devcontainer` (the default) or `kubernetes`, with `FLEET_ITEST_CLUSTER`
 naming the kubeconfig context (default: the current one; run.sh checks it
-answers before the first test). The kubernetes side is a scaffold: only its
-preflight works, and every other helper fails the test as "not wired yet",
-naming the unit that wires it.
+answers before the first test). On kubernetes each test's `setup_test`
+connects that context to the fresh `~/.fleet` as the connection `itest`, in
+`FLEET_ITEST_NAMESPACE` (default `fleet-itest`, created when missing), makes
+it the remembered deploy target (so `fleet up`, MCP fleet_up and the TUI's
+New instance dialog create on it), and waits until fleetd judges it usable.
+fleetd serves its pods the pod build of the fleet under test, which
+`FLEET_POD_BINARY_<ARCH>` names (run.sh builds one beside `FLEET_BIN` when it
+builds that too); `FLEET_POD_TMUX_<ARCH>` names the tmux bundle images without
+tmux need. Teardown deletes what is left of the test's connection by label
+and stops the test's daemons. The control-dir helpers (P3.0) and the share
+sync (P4.6) still fail the test as "not wired yet", naming the unit that
+wires them.
 
 Tests other than devcontainer-only ones never inspect a backend directly (no
 `docker inspect`, `docker exec`, `kubectl`, or
@@ -121,6 +130,9 @@ helpers in `common.sh`, which dispatch to `backends/<backend>.sh`:
 | `itest_install_local_deb`, `itest_local_deb_status` | apt-install a one-file package built inside the instance (no network), and whether it is still installed |
 | `itest_poison_docker`, `itest_poison_docker_saw`, `itest_poison_docker_log` | put the docker stand-in on the daemon's PATH (`record` or `poison`), and read what it saw |
 | `itest_backend_is` | for the rare step with no counterpart elsewhere (a host bind) |
+| `itest_backend_rebuilds` | the backend can rebuild an instance in place: a test's rebuild steps go inside it |
+| `itest_config_written` | after a test writes `~/.fleet/config.json` itself: creates still land on the backend under test, and the next daemon starts with that config |
+| `itest_row_target` | what a TUI instance row shows beside its branch (`⬡`, `☸ itest`) |
 
 `<ref>` is `<fleet>/<instance>`, as `fleet exec` takes it. A step that only
 makes sense on one backend goes inside `if itest_backend_is devcontainer`, with
@@ -160,6 +172,13 @@ writes such a line for another file builds it with `printf`.
 `tests/005_itest_harness.sh` covers the markers, the helpers and run.sh's
 kubernetes selection.
 
+The `8xx_k8s_*` tests check what only a cluster has (a fleetd stopped
+mid-seed, a substituted pod, a crash loop parked, a cut to the API server, a
+restricted namespace, a compose refusal, exec upgrades). They are marked
+`k8s` and pass at once on devcontainer, saying so. They reach the cluster
+through the `itest_k8s_*` helpers of `backends/kubernetes.sh` (kubectl on the
+run's context and namespace, the objects of an instance key, its pod).
+
 ## Prerequisites
 
 - Go toolchain (for building `fleet`)
@@ -181,7 +200,8 @@ Use a prebuilt binary:
 FLEET_BIN=/path/to/fleet ./integration/run.sh
 ```
 
-On a cluster (only the `# itest: k8s` tests run):
+On a cluster (only the `# itest: k8s` tests run; run.sh builds the pod build
+too, or with a prebuilt `FLEET_BIN` takes it from `FLEET_POD_BINARY_<ARCH>`):
 
 ```
 FLEET_ITEST_BACKEND=kubernetes FLEET_ITEST_CLUSTER=minikube ./integration/run.sh
@@ -191,6 +211,10 @@ Inside a fleet instance, run the suite in a QA container instead; see
 DEVELOPMENT.md "Integration tests" and, for a private cluster, "Dev loop".
 
 ## CI
+
+`.github/workflows/integration-k8s.yml` runs the kubernetes subset sharded on
+a minikube in each runner, beside the backend conformance suite and the
+cluster-gated Go tests (non-required until the Kubernetes backend merges).
 
 Two PR checks run this suite end-to-end on every PR to `main`:
 

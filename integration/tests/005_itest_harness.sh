@@ -122,9 +122,9 @@ assert_contains "${out}" "ok" "devcontainer dispatch"
 assert_contains "${out}" "rc=0" "devcontainer dispatch exit code"
 
 info "kubernetes stubs end the test with one clear failure, in \$(...) and in conditions"
-out=$(in_backend kubernetes 's=$(itest_container_status abc); echo unreachable')
-assert_contains "${out}" "itest_container_status is not wired yet (P2.13)" "container stub message"
-assert_contains "${out}" "rc=1" "container stub exit code"
+out=$(in_backend kubernetes 's=$(itest_control_read x/y fleet.sock); echo unreachable')
+assert_contains "${out}" "itest_control_read is not wired yet (P3.0)" "control stub message in \$(...)"
+assert_contains "${out}" "rc=1" "control stub exit code"
 assert_not_contains "${out}" "unreachable" "the test must stop at the stub"
 # In a condition set -e is off, so only an exit stops the test there.
 out=$(in_backend kubernetes 'if itest_control_test x/y -e fleet.sock; then echo present; fi; echo unreachable')
@@ -132,8 +132,22 @@ assert_contains "${out}" "itest_control_test is not wired yet (P3.0)" "control s
 assert_not_contains "${out}" "unreachable" "the test must stop at a stub inside a condition"
 out=$(in_backend kubernetes 'itest_share_sync x; echo unreachable')
 assert_contains "${out}" "itest_share_sync is not wired yet (P4.6)" "share-sync stub message"
-out=$(in_backend kubernetes '_be_teardown; echo after-teardown')
+out=$(in_backend kubernetes '_be_teardown; echo after-teardown' FLEET_BIN=/nonexistent/fleet)
 assert_contains "${out}" "after-teardown" "the kubernetes teardown must never exit"
+
+info "kubernetes container ids and instance names"
+out=$(in_backend kubernetes '_be_cid_parts "k8s:mk-abc234/fleet-itest/fi-itest-fleet-alpha-abcdefgh@g3"')
+assert_contains "${out}" "mk-abc234 fleet-itest fi-itest-fleet-alpha-abcdefgh" "a container id's connection, namespace and StatefulSet"
+out=$(in_backend kubernetes 'itest_container_status c0ffee')
+assert_contains "${out}" "absent" "a docker id is no StatefulSet"
+# The StatefulSet names of names.Instance (internal/k8s/names): each part
+# slugged and cut to fit, the key last.
+out=$(in_backend kubernetes '_be_sts_prefix itest-fleet/alpha; _be_sts_prefix "My_Fleet.Name-very-long-indeed/An Instance With A Very Long Name Indeed"; _be_sts_prefix itest-fleet/x--y')
+assert_contains "${out}" "fi-itest-fleet-alpha-" "a short name"
+assert_contains "${out}" "fi-my-fleet-name-ve-an-instance-with-a-very-" "long names are cut as names.Instance cuts them"
+assert_contains "${out}" "fi-itest-fleet-x-y-" "runs of other characters are one dash"
+assert_equals "⬡" "$(in_backend devcontainer itest_row_target | head -n 1)" "a devcontainer row's target"
+assert_equals "☸ itest" "$(in_backend kubernetes itest_row_target | head -n 1)" "a cluster row's target"
 
 # A stand-in kubectl that knows one context, fake-ctx; FAKE_KUBE_DOWN=1 makes
 # the API server unreachable.
@@ -151,7 +165,12 @@ chmod +x "${work}/bin/kubectl"
 
 info "kubernetes preflight"
 fake_path="${work}/bin:${PATH}"
-out=$(in_backend kubernetes 'unset FLEET_ITEST_CLUSTER; _be_preflight && echo "cluster=${FLEET_ITEST_CLUSTER}"' PATH="${fake_path}")
+pod_var="FLEET_POD_BINARY_$(in_backend kubernetes _be_arch | head -n 1 | tr '[:lower:]' '[:upper:]')"
+: > "${work}/fleet-pod"
+out=$(in_backend kubernetes 'unset FLEET_ITEST_CLUSTER; _be_preflight' PATH="${fake_path}" "${pod_var}=")
+assert_contains "${out}" "${pod_var} names no file" "the preflight wants the pod build"
+assert_contains "${out}" "rc=1" "no pod build fails the preflight"
+out=$(in_backend kubernetes 'unset FLEET_ITEST_CLUSTER; _be_preflight && echo "cluster=${FLEET_ITEST_CLUSTER}"' PATH="${fake_path}" "${pod_var}=${work}/fleet-pod")
 assert_contains "${out}" "cluster=fake-ctx" "FLEET_ITEST_CLUSTER defaults to the current context"
 out=$(in_backend kubernetes 'FLEET_ITEST_CLUSTER=nope; _be_preflight' PATH="${fake_path}")
 assert_contains "${out}" "no kubeconfig context named nope" "an unknown context"
@@ -197,7 +216,7 @@ nested_run() {
   out=$(cd "${h}" && env -u FLEET_ITEST_RANGE -u FLEET_ITEST_SKIP -u FLEET_ITEST_CLUSTER \
     HOME="${work}/nested-home" TEST_SCRATCH_DIR="${work}/nested-scratch" \
     TUI_SESSION="fleet-itest-harness-$$" RAN_DIR="${work}/ran" PATH="${fake_path}" FLEET_BIN="${FLEET_BIN}" \
-    GITHUB_STEP_SUMMARY="${work}/summary.md" FLEET_ITEST_NO_DOCKER=1 \
+    GITHUB_STEP_SUMMARY="${work}/summary.md" FLEET_ITEST_NO_DOCKER=1 "${pod_var}=${work}/fleet-pod" \
     FLEET_ITEST_BACKEND="${backend}" "$@" ./run.sh 2>&1) || rc=$?
   printf '%s\nrc=%s\nran:[%s]\n' "${out}" "${rc}" "$(ls "${work}/ran" | tr '\n' ' ' | sed 's/ $//')"
 }

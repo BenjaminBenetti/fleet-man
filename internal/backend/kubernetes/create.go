@@ -31,6 +31,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeshim"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
 // create.go is an instance's create on its cluster (UpContext), after the
@@ -329,6 +330,10 @@ func (c *creation) provision(ctx context.Context, cfg *devcli.Config) (*backend.
 	if err != nil {
 		return nil, fmt.Errorf("the devcontainer's lifecycle hooks: %w", err)
 	}
+	// After the hooks, which may install the image's own tmux.
+	if err := ensureTmuxOn(ctx, sess); err != nil {
+		c.warn(ctx, fmt.Sprintf("tmux for the instance's sessions: %v", err))
+	}
 	return &backend.UpResult{Outcome: "success", ContainerID: containerID, RemoteUser: capture.RemoteUser, RemoteWorkspaceFolder: cfg.WorkspaceFolder}, nil
 }
 
@@ -350,7 +355,7 @@ func (c *creation) connect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	c.cluster, c.cs, c.ns, c.rec = cl, cs, cl.Namespace(), cl.Record
+	c.cluster, c.cs, c.ns, c.rec = cl, cs, cl.Namespace(), currentRecord(cl)
 	c.daemonID, c.owner, c.facts = ident.DaemonID, ident.Owner(), facts
 	c.identity = instanceIdentity(facts.Capabilities)
 	return nil
@@ -452,6 +457,20 @@ func (c *creation) groupsOf(ctx context.Context, imageID string) *imageGroups {
 	}}
 }
 
+// currentRecord is connection cl's record as kube_clusters.json holds it
+// now: the pool keeps a connection's client across a change of the settings
+// it does not read (image delivery, resources, storage, ...), so its own copy
+// of the record can be older than what a create or start must apply. The
+// pool's copy stands in when the registry cannot be read.
+func currentRecord(cl *Cluster) fleet.KubeCluster {
+	if k, err := state.LoadKubeClusters(); err == nil {
+		if rec := k.Find(cl.Record.ID); rec != nil {
+			return *rec
+		}
+	}
+	return cl.Record
+}
+
 // imageTarget is where the image goes: the connection, as its preflight
 // found it, with its managed pull Secrets in its namespace.
 func (c *creation) imageTarget() (kubeimage.Target, error) {
@@ -478,7 +497,7 @@ func (b *Backend) imageTarget(ctx context.Context, cl *Cluster) (kubeimage.Targe
 	if err != nil {
 		return kubeimage.Target{}, err
 	}
-	rec := cl.Record
+	rec := currentRecord(cl)
 	return kubeimage.Target{
 		Cluster: &rec, DaemonID: ident.DaemonID, Local: facts.Local, Platform: facts.Platform,
 		Secrets: PullSecrets{Client: cs, Namespace: cl.Namespace()}, Labels: PullSecretLabels(ident.Owner(), rec.ID),

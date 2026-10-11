@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI 'a' on fleet header opens new-instance dialog; 'esc' cancels without creating instance
 set -euo pipefail
 

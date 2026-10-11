@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: TUI j/k navigation cycles through rows and the Armada selector, wrapping
 set -euo pipefail
 
