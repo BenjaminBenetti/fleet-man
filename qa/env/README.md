@@ -18,6 +18,7 @@ depends on — or pollutes — the host.
 | **Docker** engine + CLI + buildx + compose | integration tests drive a real daemon; runs in-container (DinD) |
 | **Node + `@devcontainers/cli`** | fleet's devcontainer backend |
 | **tmux** | the TUI integration tests run `fleet` in a headless tmux |
+| **openssh-server** | the TUI tests over Armada SSH reach a second user's fleetd through a local `sshd` (not started by default) |
 | **golangci-lint** (`v2.11.4`) | the client/server import-boundary lint CI enforces |
 | **buf** + **protoc-gen-go** / **protoc-gen-go-grpc** | the `fleetgrpc` proto contract (`make proto` / `make proto-check`) |
 | **git**, **gh** | check out PRs, report results |
