@@ -5,6 +5,7 @@ package podspec
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path"
 	"sort"
 	"strconv"
@@ -21,8 +22,10 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/control"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/topology"
 	"github.com/BenjaminBenetti/fleet-man/internal/podinit"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
+	"github.com/BenjaminBenetti/fleet-man/internal/podshare"
 )
 
 // The renderers turn a translation (Result) into the Kubernetes objects of
@@ -118,6 +121,14 @@ type RenderInput struct {
 	// Affinity holds the placement constraints (the fleet share's
 	// topology); nil adds none.
 	Affinity *corev1.Affinity
+	// Share is where the run's fleet mounts live (share.go): the fleet's
+	// share volume or the instance disk's copy. nil refuses a run with
+	// fleet mounts.
+	Share *Share
+	// Placement places the pods by the fleet's share (internal/k8s/topology):
+	// the instance pod beside it (and its running holders), the Jobs where
+	// it can be used. Merged with Affinity; nil adds nothing.
+	Placement *topology.Placement
 	// Seed renders the generation's seed Job too; nil renders none.
 	Seed *JobInput
 }
@@ -232,9 +243,21 @@ func Render(res *Result, in RenderInput) (*Objects, error) {
 	if err != nil {
 		return nil, err
 	}
+	spec := res.Secrets.Spec
+	if in.Share != nil {
+		layout, err := in.Share.layoutFile()
+		if err != nil {
+			return nil, err
+		}
+		spec = maps.Clone(spec)
+		if spec == nil {
+			spec = map[string][]byte{}
+		}
+		spec[podshare.LayoutFile] = layout
+	}
 	o := &Objects{
 		Disk:       r.disk(),
-		SpecSecret: r.secret(names.SpecSecret(in.Name, in.Gen), res.Secrets.Spec),
+		SpecSecret: r.secret(names.SpecSecret(in.Name, in.Gen), spec),
 		EnvSecret:  r.secret(names.EnvSecret(in.Name, in.Gen), res.Secrets.Env),
 	}
 	o.StatefulSet = r.statefulSet(template)
@@ -311,11 +334,7 @@ var unsupportedMounts = map[MountKind]string{
 // checkSupported refuses what the run asks for that this version of fleet
 // cannot render, and connection settings it does not apply.
 func (r *renderer) checkSupported() {
-	var shared []string
 	for _, m := range r.pod.Mounts {
-		if m.Kind == MountFleet {
-			shared = append(shared, m.Target)
-		}
 		if why, ok := unsupportedMounts[m.Kind]; ok {
 			what := m.Target
 			if m.Source != "" {
@@ -333,8 +352,8 @@ func (r *renderer) checkSupported() {
 			}
 		}
 	}
-	if len(shared) > 0 {
-		r.refuse(CodeUnsupportedMount, "fleet's shared mounts (%s) live on the fleet's share, which fleet does not provide on Kubernetes yet", strings.Join(shared, ", "))
+	if shared := r.fleetMountsWithoutShare(); len(shared) > 0 && r.in.Share == nil {
+		r.refuse(CodeUnsupportedMount, "fleet's shared mounts (%s) live on the fleet's share, which this render was given none of", strings.Join(shared, ", "))
 	}
 	if r.in.Identity.NonRoot && r.pod.DooD != nil {
 		// The engine runs as root, which a pod without root never has.
@@ -527,11 +546,17 @@ func (r *renderer) instanceTemplate() (corev1.PodTemplateSpec, error) {
 		TTY:                      p.TTY,
 	}
 	spec := r.podSpec(r.in.Identity)
+	spec.Affinity = r.affinity(true)
+	if sh := r.in.Share; sh != nil {
+		// First: a sidecar after it starts only once it is done.
+		volumes = append(volumes, sh.shareVolumes()...)
+		spec.InitContainers = append(spec.InitContainers, r.shareInit(sh))
+	}
 	if p.DooD != nil {
 		volumes = append(volumes, corev1.Volume{Name: volumeDocker, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
 		dev.VolumeMounts = append(dev.VolumeMounts, corev1.VolumeMount{Name: volumeDocker, MountPath: DockerDir})
 		dev.Env = r.env(corev1.EnvVar{Name: DockerConfigEnv, Value: DockerConfig})
-		spec.InitContainers = []corev1.Container{r.dockerSidecar()}
+		spec.InitContainers = append(spec.InitContainers, r.dockerSidecar())
 	}
 	spec.Volumes = volumes
 	spec.Containers = []corev1.Container{dev}
@@ -565,6 +590,17 @@ func (r *renderer) instanceTemplate() (corev1.PodTemplateSpec, error) {
 	return t, nil
 }
 
+// affinity is a pod's affinity: the render's own and the share's placement
+// (holder: the pod mounts the share, so it goes beside the running pods that
+// do).
+func (r *renderer) affinity(holder bool) *corev1.Affinity {
+	var p *corev1.Affinity
+	if r.in.Placement != nil {
+		p = r.in.Placement.Affinity(holder)
+	}
+	return topology.Merge(r.in.Affinity, p)
+}
+
 // podAnnotations are a pod's annotations: what the translation needs (the
 // sysbox user namespace mode), the disruption guards, and the container
 // kubectl picks.
@@ -588,7 +624,6 @@ func (r *renderer) podSpec(id Identity) corev1.PodSpec {
 	spec := corev1.PodSpec{
 		DNSPolicy:          corev1.DNSClusterFirst,
 		ServiceAccountName: r.cluster.ServiceAccount,
-		Affinity:           r.in.Affinity.DeepCopy(),
 		SecurityContext:    podSecurity(id),
 	}
 	if len(p.NodeSelector) > 0 {
@@ -807,6 +842,9 @@ func (r *renderer) instanceMounts() ([]corev1.VolumeMount, []corev1.Volume, erro
 	add(corev1.VolumeMount{Name: volumeSpec, MountPath: podseed.SpecDir, ReadOnly: true})
 	add(corev1.VolumeMount{Name: volumeRun, MountPath: podseed.RunDir})
 	add(corev1.VolumeMount{Name: volumeControl, MountPath: control.ContainerMountDir})
+	if sh := r.in.Share; sh != nil {
+		add(sh.treeMount())
+	}
 
 	for _, m := range p.Mounts {
 		switch m.Kind {
@@ -841,6 +879,9 @@ func (r *renderer) instanceMounts() ([]corev1.VolumeMount, []corev1.Volume, erro
 			if p.DooD == nil {
 				return nil, nil, fmt.Errorf("podspec: a docker socket mount at %s without the docker engine's sidecar", m.Target)
 			}
+		case MountFleet:
+			// checkSupported refused one without a share.
+			add(r.in.Share.fleetMount(m))
 		case MountSSHAgent, MountHostSocket, MountHostSocketDir:
 			// No volume: pod-init links an ssh-agent bind's target to the
 			// agent relay (pid1.json links), and the pod agent binds the

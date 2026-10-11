@@ -67,6 +67,15 @@ const (
 	// AnnotationSeedCacheReady marks a seed cache whose build finished (its
 	// value the time): only then is it cloned from.
 	AnnotationSeedCacheReady = "fleet.dev/seed-cache-ready"
+	// AnnotationShareMode is a fleet share's mode on its connection
+	// (topology.Mode), fixed when the share is made, so every instance of
+	// the fleet there is placed alike.
+	AnnotationShareMode = "fleet.dev/share-mode"
+	// AnnotationShareTopology is where a fleet share's bound volume can be
+	// used (JSON node selector terms, "[]" for anywhere), recorded once it is
+	// known: a volume's topology never changes, and reading it again needs a
+	// cluster-scoped permission fleet may lack.
+	AnnotationShareTopology = "fleet.dev/share-topology"
 )
 
 // Role is LabelRole's value: what an object is for.
@@ -99,6 +108,9 @@ const (
 	// RoleCache marks a fleet's shared services: each one's volume,
 	// Deployment, pods and Service (LabelService says which service).
 	RoleCache Role = "cache"
+	// RoleShare marks a fleet's share on a connection: the volume its
+	// agents' state, shared files and custom mounts live on.
+	RoleShare Role = "share"
 )
 
 // Base returns the labels every object of one connection carries: managed-by,

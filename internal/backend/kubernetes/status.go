@@ -163,6 +163,14 @@ func podLive(pod *corev1.Pod) (backend.LiveStatus, string) {
 		}
 		return backend.LiveStatusUnknown, "not ready"
 	case corev1.PodPending:
+		if s := initContainerStatus(pod, podspec.ShareInit); s != nil {
+			if t := s.State.Terminated; t != nil && t.ExitCode != 0 {
+				return backend.LiveStatusUnknown, podspec.ShareInit + ": " + joinReason("", firstNonEmpty(t.Message, t.Reason))
+			}
+			if s.State.Waiting != nil && s.State.Waiting.Reason != "PodInitializing" {
+				return backend.LiveStatusUnknown, podspec.ShareInit + ": " + waitingReason(s)
+			}
+		}
 		// The dev container waits on the docker engine's sidecar
 		// (PodInitializing) while that one cannot start.
 		if s := initContainerStatus(pod, podspec.DockerSidecar); s != nil && s.State.Waiting != nil && s.State.Waiting.Reason != "PodInitializing" {
@@ -259,4 +267,14 @@ func (p *Pool) Observe(clusterID, sts string) Observation {
 	}
 	o.Tampered = in.tampered
 	return o
+}
+
+// firstNonEmpty is the first of vs that is not empty.
+func firstNonEmpty(vs ...string) string {
+	for _, v := range vs {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return ""
 }

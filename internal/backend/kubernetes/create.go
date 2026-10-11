@@ -161,6 +161,9 @@ type creation struct {
 	// verb is what the job is, for its messages ("" is "create"; a clone's
 	// is "clone").
 	verb string
+	// share is where the instance's fleet mounts live (share.go); nil
+	// without any.
+	share *shareState
 }
 
 // what is the job, for its messages.
@@ -175,6 +178,10 @@ func (c *creation) run(ctx context.Context) (*backend.UpResult, error) {
 	if err := c.connect(ctx); err != nil {
 		return nil, err
 	}
+	if err := c.prepareShare(ctx); err != nil {
+		return nil, err
+	}
+	defer c.share.done()
 	cfg, err := devcli.ReadMerged(ctx, devcli.ReadRequest{Tools: c.env.Tools, WorkspaceDir: c.req.WorkspaceDir})
 	if err != nil {
 		return nil, kubeerr.Wrap(kubeerr.ImageBuild, err)
@@ -358,6 +365,8 @@ func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.
 		return nil, err
 	}
 	r.Root, r.Seed = podspec.RootLayout{Dirs: manifest.Dirs, Extra: manifest.RootExtra}, nil
+	// Placed now: a share the seed bound has its topology only since.
+	r.Placement = c.share.placementFor()
 	o, err := podspec.Render(adm.Result, r)
 	if err != nil {
 		return nil, classify(err)
@@ -370,6 +379,7 @@ func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.
 		Ports:       publishedPorts(adm.Result.Pod.Ports),
 		HostSockets: recordedHostSockets(adm.Result.Pod.HostSockets),
 		HostGateway: adm.Result.Pod.HostGateway, GatewaySkip: adm.Result.Pod.GatewaySkip,
+		Share: c.share.record(),
 	}
 	rec.addImageDigest(del.Digest)
 	rec.addImageDigest(del.ImageID)
@@ -555,6 +565,9 @@ func (c *creation) renderInput(image podspec.ImageRef, seed *podspec.JobInput) p
 		InstanceName: c.id.name, Gen: c.gen, CreatedAt: c.created, Replicas: 1,
 		Image: image, StorageClass: rec.StorageClass, Identity: c.identity,
 		SELinuxLevel: podspec.SELinuxLevel(names.FleetHash(c.daemonID, c.id.cluster, c.id.fleet)),
+		SELinuxMount: c.share != nil && c.share.selinuxMount,
+		Share:        c.share.input(),
+		Placement:    c.share.placementFor(),
 		Seed:         seed,
 	}
 }
@@ -562,7 +575,7 @@ func (c *creation) renderInput(image podspec.ImageRef, seed *podspec.JobInput) p
 // seedJob is the seed Job's input: bounded by the seed deadline for an
 // image of its size.
 func (c *creation) seedJob(ctx context.Context, imageID string) *podspec.JobInput {
-	return &podspec.JobInput{Name: names.SeedJob(c.id.sts, c.gen), ActiveDeadline: DefaultDeadlines().SeedDeadline(c.imageSize(ctx, imageID))}
+	return &podspec.JobInput{Name: names.SeedJob(c.id.sts, c.gen), ActiveDeadline: DefaultDeadlines().SeedDeadline(c.imageSize(ctx, imageID)), Claims: c.share.seedClaims()}
 }
 
 // imageSize is the image's size on the daemon host (0 when unknown).
@@ -785,9 +798,15 @@ func (c *creation) seed(ctx context.Context, adm *podspec.Admitted, img *built, 
 			if id != "" {
 				c.nodeImage = id
 			}
+			if c.share != nil && c.share.bind {
+				c.share.seedNode = pod.Spec.NodeName
+			}
 			return err
 		},
 	})
+	if serr := c.finishShare(ctx, err == nil && res.OK); serr != nil && err == nil && res.OK {
+		return nil, serr
+	}
 	if err != nil {
 		return nil, classify(err)
 	}

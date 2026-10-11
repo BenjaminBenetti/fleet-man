@@ -671,6 +671,7 @@ func (c *cloning) cloneRecord(o *podspec.Objects) InstanceRecord {
 		Image: src.Image, ImageDigests: slices.Clone(src.ImageDigests), Strategy: src.Strategy, RemoteUser: src.RemoteUser,
 		WorkspaceFolder: src.WorkspaceFolder, NonRoot: src.NonRoot, AudioMissing: src.AudioMissing, Created: src.Created, Ports: slices.Clone(src.Ports),
 		HostSockets: slices.Clone(src.HostSockets), HostGateway: src.HostGateway, GatewaySkip: slices.Clone(src.GatewaySkip),
+		Share: src.Share.clone(),
 	}
 }
 

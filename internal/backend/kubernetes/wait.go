@@ -4,15 +4,18 @@ package kubernetes
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kclient "k8s.io/client-go/kubernetes"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
+	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
 )
 
 // wait.go waits for a pod fleet started (an instance's, a Job's) with the
@@ -97,7 +100,13 @@ func (w *podWait) observe(now time.Time, pod *corev1.Pod, pvc *corev1.Persistent
 		} else {
 			w.schedSince = time.Time{}
 		}
+		if err := shareLayoutFailed(pod); err != nil {
+			return err
+		}
 		dev := containerStatus(pod, w.container)
+		if err := subPathRefused(pod, dev); err != nil {
+			return err
+		}
 		// The docker engine's sidecar, which the dev container waits for.
 		docker := initContainerStatus(pod, podspec.DockerSidecar)
 		switch {
@@ -152,6 +161,84 @@ func (w *podWait) observe(now time.Time, pod *corev1.Pod, pvc *corev1.Persistent
 		}
 	}
 	return nil
+}
+
+// shareLayoutFailed is the share-layout init container failing: it lays out
+// the same tree each time, so the reason it gave (its termination message)
+// does not go away by waiting.
+func shareLayoutFailed(pod *corev1.Pod) error {
+	s := initContainerStatus(pod, podspec.ShareInit)
+	if s == nil {
+		return nil
+	}
+	t := s.State.Terminated
+	if t == nil {
+		t = s.LastTerminationState.Terminated
+	}
+	if t == nil || t.ExitCode == 0 {
+		return nil
+	}
+	why := strings.TrimSpace(t.Message)
+	if why == "" {
+		why = fmt.Sprintf("%s, exit code %d; `kubectl logs %s -c %s` says why", t.Reason, t.ExitCode, pod.Name, podspec.ShareInit)
+	}
+	return &PodError{Kind: string(kubeerr.Misconfigured.Narrow("share")), Detail: "the fleet's share could not be laid out for the pod: " + why}
+}
+
+// subPathRefused is the kubelet refusing to mount one of the pod's folders
+// (CreateContainerConfigError "failed to prepare subPath"): a symlink there
+// leaves its volume, which only something in the pod (or another of the
+// fleet's) can have made, and which waiting never mends.
+func subPathRefused(pod *corev1.Pod, st *corev1.ContainerStatus) error {
+	if st == nil || st.State.Waiting == nil || st.State.Waiting.Reason != "CreateContainerConfigError" || !strings.Contains(st.State.Waiting.Message, "subPath") {
+		return nil
+	}
+	return &PodError{Kind: string(kubeerr.Misconfigured.Narrow("subpath")), Detail: fmt.Sprintf(
+		"the kubelet will not mount a folder of the pod: %s; a symlink there points out of its volume: remove it (a fleet folder on the share is laid out again at the pod's next start), or destroy the instance",
+		joinReason("", st.State.Waiting.Message))}
+}
+
+// mountTrouble is the latest of the kubelet's FailedMount and
+// FailedAttachVolume events for pod ("" when none): what a pod stuck in
+// ContainerCreating waits on (a volume attached elsewhere, an SELinux
+// label another pod on the node mounted it with).
+func mountTrouble(ctx context.Context, cs kclient.Interface, pod *corev1.Pod) string {
+	if pod == nil || pod.Spec.NodeName == "" {
+		return ""
+	}
+	var latest *corev1.Event
+	for _, reason := range []string{"FailedMount", "FailedAttachVolume"} {
+		evs, err := cs.CoreV1().Events(pod.Namespace).List(ctx, metav1.ListOptions{FieldSelector: "involvedObject.kind=Pod,involvedObject.name=" + pod.Name + ",reason=" + reason})
+		if err != nil {
+			continue
+		}
+		for i := range evs.Items {
+			ev := &evs.Items[i]
+			if ev.InvolvedObject.UID != "" && pod.UID != "" && ev.InvolvedObject.UID != pod.UID {
+				continue
+			}
+			if latest == nil || eventTime(*ev).After(eventTime(*latest)) {
+				latest = ev
+			}
+		}
+	}
+	if latest == nil {
+		return ""
+	}
+	return joinReason(latest.Reason, latest.Message)
+}
+
+// explainMount adds the kubelet's latest mount trouble to a start deadline
+// that ran out on a scheduled pod.
+func explainMount(ctx context.Context, cs kclient.Interface, pod *corev1.Pod, err error) error {
+	var de *DeadlineError
+	if !errors.As(err, &de) || de.Kind != CodeTimeout {
+		return err
+	}
+	if why := mountTrouble(ctx, cs, pod); why != "" {
+		de.Detail += "; the kubelet says " + why
+	}
+	return err
 }
 
 // unschedulable is the pod's PodScheduled=False Unschedulable condition.
@@ -267,7 +354,7 @@ func (p *Pool) WaitReady(ctx context.Context, clusterID, sts string, opts WaitOp
 			pvc = got
 		}
 		if err := w.observe(p.opts.Now(), pod, pvc); err != nil {
-			return nil, err
+			return nil, explainMount(ctx, cs, pod, err)
 		}
 		if opts.Check != nil {
 			if err := opts.Check(ctx); err != nil {

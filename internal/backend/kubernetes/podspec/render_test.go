@@ -27,6 +27,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeshim"
 	"github.com/BenjaminBenetti/fleet-man/internal/podinit"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
+	"github.com/BenjaminBenetti/fleet-man/internal/podshare"
 )
 
 // The render goldens: each recorded fixture's translation (TestFixtureGoldens)
@@ -73,6 +74,12 @@ func testRenderInput(in Input) RenderInput {
 			DiskPath:       testDiskPath,
 			ActiveDeadline: 16 * time.Minute,
 		},
+	}
+	for _, m := range in.FleetMounts {
+		if m.Scope == backend.MountScopeFleetShared {
+			r.Share = testShare(in, names.FleetObject(testFleet, r.FleetHash, names.SuffixShare))
+			break
+		}
 	}
 	if in.Facts.Local {
 		r.Image = ImageRef{Ref: "fleet.local/0123456789ab/devcontainer:111111111111", PullPolicy: corev1.PullNever, ID: testImageID}
@@ -183,7 +190,18 @@ func checkObjects(t *testing.T, res *Result, r RenderInput, o *Objects) {
 	if dev := tmpl.Spec.Containers[0]; jsonString(dev.Command) != jsonString(Command()) || len(dev.Args) > 0 || len(tmpl.Spec.Containers) != 1 {
 		t.Errorf("the instance pod runs %q %q", dev.Command, dev.Args)
 	}
-	if n := len(tmpl.Spec.InitContainers); (n > 0) != (res.Pod.DooD != nil) || n > 1 || (n == 1 && !isDockerSidecar(tmpl.Spec.InitContainers[0])) {
+	inits := tmpl.Spec.InitContainers
+	if r.Share != nil {
+		if len(inits) == 0 || inits[0].Name != ShareInit || jsonString(inits[0].Command) != jsonString([]string{podseed.CurrentBinary, "pod-layout", "--spec", "/opt/fleet/spec/layout.json"}) || len(inits[0].Env) > 0 {
+			t.Errorf("the instance pod's first init container is %+v, want the share layout", inits)
+		} else {
+			inits = inits[1:]
+		}
+		if _, ok := o.SpecSecret.Data["layout.json"]; !ok {
+			t.Error("the spec Secret has no layout.json for the share's init container")
+		}
+	}
+	if n := len(inits); (n > 0) != (res.Pod.DooD != nil) || n > 1 || (n == 1 && !isDockerSidecar(inits[0])) {
 		t.Errorf("the instance pod's init containers %+v (docker engine %+v)", tmpl.Spec.InitContainers, res.Pod.DooD)
 	}
 	if o.Seed != nil {
@@ -371,6 +389,10 @@ func TestNoRunStringReachesKubeletExpansion(t *testing.T) {
 						if strings.Contains(a, "$(") || strings.Contains(a, "$$") {
 							t.Errorf("%s: the docker sidecar's option %q would be expanded", name, a)
 						}
+					}
+				} else if i == 0 && c.Name == ShareInit {
+					if jsonString(c.Command) != jsonString([]string{podseed.CurrentBinary, "pod-layout", "--spec", podshare.LayoutPath}) || len(c.Args) > 0 {
+						t.Errorf("%s: the share's init container runs %q %q", name, c.Command, c.Args)
 					}
 				} else if strings.Join(c.Command, "\x00") != strings.Join(want, "\x00") || len(c.Args) > 0 {
 					t.Errorf("%s: container %s runs %q %q", name, c.Name, c.Command, c.Args)

@@ -368,7 +368,7 @@ func (p *Pool) waitJobPod(ctx context.Context, cs kclient.Interface, ns string, 
 			pvc = got
 		}
 		if err := w.observe(p.opts.Now(), pod, pvc); err != nil {
-			return nil, err
+			return nil, explainMount(ctx, cs, pod, err)
 		}
 		if r.Pending != nil {
 			if err := r.Pending(ctx); err != nil {
