@@ -84,6 +84,9 @@ type shareMoveInfo struct {
 	Node string `json:"node,omitempty"`
 	// Size is the share's size.
 	Size string `json:"size"`
+	// Unused is the share's AnnotationVolumesUnused (named volumes its
+	// upkeep is to remove), which the new share keeps.
+	Unused string `json:"unused,omitempty"`
 }
 
 func readMoveInfo(meta metav1.ObjectMeta) (shareMoveInfo, bool) {
@@ -454,7 +457,8 @@ func (p *Pool) MoveShare(ctx context.Context, clusterID, fleetName string, repor
 		info = s.shareInfo
 	}
 	if !m.Begun {
-		info = shareMoveInfo{From: m.From, To: m.To, Mode: m.Mode, OldMode: topology.Mode(s.share.Annotations[names.AnnotationShareMode]), Size: s.shareSize()}
+		info = shareMoveInfo{From: m.From, To: m.To, Mode: m.Mode, OldMode: topology.Mode(s.share.Annotations[names.AnnotationShareMode]), Size: s.shareSize(),
+			Unused: s.share.Annotations[names.AnnotationVolumesUnused]}
 		if !info.OldMode.Shared() {
 			info.OldMode = topology.SingleNode
 		}
@@ -659,6 +663,9 @@ func (s *moveScope) applyClaim(ctx context.Context, name string, info shareMoveI
 	annotations := map[string]string{names.AnnotationInfo: string(fleetInfo), names.AnnotationShareMove: info.annotation()}
 	if share {
 		annotations[names.AnnotationShareMode] = string(info.Mode)
+		if info.Unused != "" {
+			annotations[names.AnnotationVolumesUnused] = info.Unused
+		}
 	}
 	pvc := &corev1.PersistentVolumeClaim{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaim"},

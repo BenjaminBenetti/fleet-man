@@ -70,7 +70,7 @@ func newMoveRig(t *testing.T, oldMode topology.Mode) *moveRig {
 	terms, _ := json.Marshal([]corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{Key: corev1.LabelHostname, Operator: corev1.NodeSelectorOpIn, Values: []string{"node-a"}}}}})
 	share := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: r.claim, Namespace: jobNS, UID: "share-uid-1", Labels: shareLabels(ident.Owner(), testCluster, r.h8),
-			Annotations: map[string]string{names.AnnotationShareMode: string(oldMode), names.AnnotationShareTopology: string(terms)}},
+			Annotations: map[string]string{names.AnnotationShareMode: string(oldMode), names.AnnotationShareTopology: string(terms), names.AnnotationVolumesUnused: "a1b2c3d4"}},
 		Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &standard, AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("10Gi")}}},
 		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound, Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("15Gi")}},
@@ -148,7 +148,7 @@ func TestMoveShare(t *testing.T) {
 	if share == nil || classOf(share) != "nfs" || share.UID == "share-uid-1" || share.Spec.AccessModes[0] != corev1.ReadWriteMany {
 		t.Fatalf("the new share: %+v", share)
 	}
-	if share.Annotations[names.AnnotationShareMode] != string(topology.MultiNode) || share.Annotations[names.AnnotationShareTopology] != "[]" {
+	if share.Annotations[names.AnnotationShareMode] != string(topology.MultiNode) || share.Annotations[names.AnnotationShareTopology] != "[]" || share.Annotations[names.AnnotationVolumesUnused] != "a1b2c3d4" {
 		t.Fatalf("the new share's annotations: %v", share.Annotations)
 	}
 	if _, moving := share.Annotations[names.AnnotationShareMove]; moving {
