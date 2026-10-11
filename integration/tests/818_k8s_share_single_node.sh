@@ -50,6 +50,11 @@ info "with every instance stopped, a new one still lands beside the share"
 "${FLEET_BIN}" stop "${alpha}" >/dev/null
 fleet_up beta
 assert_equals "${home}" "$(node_of "${beta}")" "beta runs on the share's node though no pod holds it"
+# Not luck: its pod and its seed's are required on that node.
+beta_sts=$(itest_k8s_sts "$(itest_container_id "${beta}")")
+assert_contains "$(itest_k8s_kubectl get statefulset "${beta_sts}" -o 'jsonpath={.spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution}')" "${home}" "beta's pod is required on the share's node"
+assert_contains "$(itest_k8s_kubectl get statefulset "${beta_sts}" -o 'jsonpath={.spec.template.spec.affinity.podAffinity}')" "fleet.dev/share-group" "beta's pod goes beside the share's running holders"
+assert_contains "$(itest_k8s_kubectl get job "${beta_sts}-seed-g1" -o 'jsonpath={.spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution}')" "${home}" "beta's seed was required on the share's node"
 assert_equals "kept" "$(run_in "${beta}" 'cat ~/.claude/kept.txt')" "beta sees what alpha left"
 "${FLEET_BIN}" start "${alpha}" >/dev/null
 assert_equals "${home}" "$(node_of "${alpha}")" "alpha starts again beside the share"
