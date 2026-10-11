@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/instanceops"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/topology"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -578,7 +580,18 @@ func (k *kubePods) evaluate(ctx context.Context, ref kubeRef) {
 	kr.MoveBlocked = blocked
 	fleetName, name := ki.fleet, ki.name
 	inst := ki.inst
+	wanting := 0
+	if running && strings.HasPrefix(kr.PodReason, "Unschedulable") {
+		for r, other := range k.insts {
+			if r.cluster == ref.cluster && other.fleet == fleetName && other.inst.Status == fleet.StatusRunning {
+				wanting++
+			}
+		}
+	}
 	k.mu.Unlock()
+	if wanting > 0 {
+		kr.PodReason = k.explainPending(ref.cluster, inst.KubeKey, kr.PodReason, wanting)
+	}
 
 	switch {
 	case !running:
@@ -634,6 +647,30 @@ func (k *kubePods) publish(ref kubeRef, fleetName string, inst *fleet.Instance) 
 		return nil
 	}
 	return k.ports.sync(ref.key(), publishedLabel(fleetName, inst.Name), inst.ContainerID, ports, dial)
+}
+
+// explainPending words a pod the scheduler keeps Pending for want of room
+// on its node (its volume attach limit, CPU or memory) as
+// kubernetes.ExplainUnschedulable does, from the connection's last
+// preflight: the limit, what the fleet's wanting instances ask for together
+// in single-node mode, and the fleet-size cap. Any other reason is kept.
+func (k *kubePods) explainPending(clusterID, key, reason string, wanting int) string {
+	if k.svc == nil || k.svc.kube == nil {
+		return reason
+	}
+	caps := k.svc.kube.status(clusterID).GetCapabilities()
+	rec, ok := k.svc.kube.record(clusterID)
+	if caps == nil || !ok {
+		return reason
+	}
+	f := kubernetes.PendingFacts{Capabilities: caps, Cluster: rec, Instances: wanting}
+	if r, err := kubernetes.LoadInstanceRecord(clusterID, key); err == nil && r.Share != nil {
+		f.SingleNode = topology.Mode(r.Share.Mode) == topology.SingleNode
+	}
+	if note, _, ok := kubernetes.ExplainUnschedulable(reason, f); ok {
+		return "pending: " + note
+	}
+	return reason
 }
 
 // kubeRuntime is the instance's InstanceRuntime.kube. Called with k.mu held.

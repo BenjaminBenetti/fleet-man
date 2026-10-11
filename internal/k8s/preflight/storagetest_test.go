@@ -656,7 +656,7 @@ func TestStorageTestPodsWithoutRoot(t *testing.T) {
 	c := newCluster(t)
 	tgt := target(c, fleet.KubeCluster{})
 	r := &run{t: &tgt, caps: &fleetgrpc.KubeCapabilities{Admission: &fleetgrpc.KubeAdmission{Unprivileged: false}}}
-	pod, err := r.storagePod("p", "g", "a", "claim")
+	pod, err := r.storagePod("p", "g", "a", "claim", StorageTestTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}

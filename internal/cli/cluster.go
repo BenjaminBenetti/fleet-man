@@ -165,6 +165,13 @@ func printClusterDetail(out io.Writer, st *fleetgrpc.KubeClusterStatus) {
 	if w := fleet.HostGatewayWarning(st.GetCluster().GetHostGateway(), fleetclient.IsRemote()); w != "" {
 		fmt.Fprintf(out, "warning: %s\n", w)
 	}
+	for _, m := range st.GetShareMigrations() {
+		fmt.Fprintf(out, "share move: %s %s → %s: %s", m.GetFleet(), orDefaultClass(m.GetFromClass()), orDefaultClass(m.GetToClass()), m.GetState())
+		if d := oneLine(m.GetDetail()); d != "" {
+			fmt.Fprintf(out, " (%s)", d)
+		}
+		fmt.Fprintln(out)
+	}
 	fmt.Fprintln(out)
 	for _, line := range clusterFieldLines(st.GetCluster()) {
 		fmt.Fprintln(out, line)
@@ -183,6 +190,14 @@ func printClustersJSON(out io.Writer, clusters []*fleetgrpc.KubeClusterStatus) e
 	}
 	_, err = fmt.Fprintln(out, b.String())
 	return err
+}
+
+// orDefaultClass names a StorageClass ("" being the cluster's default).
+func orDefaultClass(class string) string {
+	if class == "" {
+		return "default"
+	}
+	return class
 }
 
 // oneLine is s with its line breaks folded, for a table cell.

@@ -46,12 +46,21 @@ func TestJobSpecValidate(t *testing.T) {
 	if err := (JobSpec{V: 1, Op: OpSeedCache, Gen: 1, PVC: "/p", Cache: "abc234def567"}).Validate(); err != nil {
 		t.Fatalf("a seed cache trim: %v", err)
 	}
+	if err := (JobSpec{V: 1, Op: OpShareCopy, Gen: 1, PVC: "/p", ShareCopy: &ShareCopySpec{Source: "/src"}}).Validate(); err != nil {
+		t.Fatalf("a share copy: %v", err)
+	}
 	for name, spec := range map[string]JobSpec{
 		"trim without an id":    {V: 1, Op: OpSeedCache, Gen: 1, PVC: "/p"},
 		"trim with a seed":      {V: 1, Op: OpSeedCache, Gen: 1, PVC: "/p", Cache: "abc", Seed: validSeedSpec().Seed},
 		"an id on another op":   {V: 1, Op: OpCommit, Gen: 1, PVC: "/p", Cache: "abc"},
 		"an id that is a path":  {V: 1, Op: OpSeedCache, Gen: 1, PVC: "/p", Cache: "../abc"},
 		"an id in another case": {V: 1, Op: OpSeedCache, Gen: 1, PVC: "/p", Cache: "ABC"},
+		"share copy w/o spec":   {V: 1, Op: OpShareCopy, Gen: 1, PVC: "/p"},
+		"share copy into src":   {V: 1, Op: OpShareCopy, Gen: 1, PVC: "/p", ShareCopy: &ShareCopySpec{Source: "/p"}},
+		"share copy below src":  {V: 1, Op: OpShareCopy, Gen: 1, PVC: "/p/q", ShareCopy: &ShareCopySpec{Source: "/p"}},
+		"share copy of /":       {V: 1, Op: OpShareCopy, Gen: 1, PVC: "/p", ShareCopy: &ShareCopySpec{Source: "/"}},
+		"share copy relative":   {V: 1, Op: OpShareCopy, Gen: 1, PVC: "/p", ShareCopy: &ShareCopySpec{Source: "src"}},
+		"share copy on a tool":  {V: 1, Op: OpTool, Gen: 1, PVC: "/p", ShareCopy: &ShareCopySpec{Source: "/src"}},
 	} {
 		if err := spec.Validate(); err == nil {
 			t.Errorf("%s: Validate accepted %+v", name, spec)

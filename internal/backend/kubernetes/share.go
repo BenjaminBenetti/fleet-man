@@ -134,6 +134,14 @@ func (s *shareState) placementFor() *topology.Placement {
 	return &p
 }
 
+// modeOf is the share's mode ("" without a share).
+func (s *shareState) modeOf() topology.Mode {
+	if s == nil {
+		return ""
+	}
+	return s.mode
+}
+
 // done releases the fleet's bind lock, if held.
 func (s *shareState) done() {
 	if s != nil && s.release != nil {
@@ -309,6 +317,11 @@ func (c *creation) needShare(ctx context.Context, pod *podspec.PodSpec) error {
 // prepareShareFor is prepareShare of a share whose fleet folders are
 // entries.
 func (c *creation) prepareShareFor(ctx context.Context, entries []backend.LayoutEntry) error {
+	// A move of the fleet's share to another class is called off, or
+	// waited for: the share is used where it is, or where it went.
+	if err := c.shareMoveGate(ctx); err != nil {
+		return err
+	}
 	uid, gid := shareIDs()
 	if c.identity.NonRoot {
 		uid, gid = -1, -1
@@ -661,13 +674,13 @@ func (c *creation) checkBinding(ctx context.Context, class string) error {
 	if sc == nil {
 		return nil
 	}
-	tc := topology.Class{Name: sc.GetName(), Immediate: sc.GetBindingMode() == string(storagev1.VolumeBindingImmediate), NodeLocal: sc.GetNodeLocal()}
+	tc := topology.Class{Name: sc.GetName(), Immediate: sc.GetBindingMode() == string(storagev1.VolumeBindingImmediate), NodeLocal: sc.GetNodeLocal(), TopologyFree: sc.GetTopologyFree()}
 	if tc.Immediate {
 		if obj, err := c.cs.StorageV1().StorageClasses().Get(ctx, sc.GetName(), metav1.GetOptions{}); err == nil {
 			tc.AllowedTopologies = obj.AllowedTopologies
 		}
 	}
-	if why := topology.ImmediateProblem(tc, len(c.facts.Capabilities.GetNodes())); why != "" {
+	if why := topology.ImmediateProblem(tc, usableNodes(c.facts.Capabilities)); why != "" {
 		return &kubeerr.Error{Code: kubeerr.Misconfigured.Narrow("share_binding"), Err: errors.New(why), Hint: topology.ImmediateFix}
 	}
 	return nil
@@ -678,13 +691,28 @@ func (c *creation) checkBinding(ctx context.Context, class string) error {
 // disk is made on some node before its seed and pod are placed.
 func (c *creation) checkDiskBinding() error {
 	sc := c.classFacts(c.diskClass())
-	nodes := len(c.facts.Capabilities.GetNodes())
+	nodes := usableNodes(c.facts.Capabilities)
 	if sc == nil || !sc.GetNodeLocal() || sc.GetBindingMode() != string(storagev1.VolumeBindingImmediate) || nodes <= 1 {
 		return nil
 	}
 	return &kubeerr.Error{Code: kubeerr.Misconfigured.Narrow("disk_binding"),
 		Err:  fmt.Errorf("storage class %s puts each instance disk on one node's disk as soon as it is made (volumeBindingMode Immediate), so on a cluster of %d nodes a disk can be made on another node than its pod", sc.GetName(), nodes),
 		Hint: "use a StorageClass with volumeBindingMode WaitForFirstConsumer for instance disks (storage_class)"}
+}
+
+// usableNodes counts the nodes the connection's pods may run on, as the
+// preflight found them (every node it listed when it excluded them all).
+func usableNodes(caps *fleetgrpc.KubeCapabilities) int {
+	n := 0
+	for _, node := range caps.GetNodes() {
+		if node.GetExcluded() == "" {
+			n++
+		}
+	}
+	if n == 0 {
+		return len(caps.GetNodes())
+	}
+	return n
 }
 
 // notOurs says why an object's labels are not those want names ("" when

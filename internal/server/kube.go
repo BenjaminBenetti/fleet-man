@@ -616,7 +616,7 @@ func (s *service) TestKubeCluster(req *fleetgrpc.TestKubeClusterRequest, stream 
 	}
 	var result *fleetgrpc.KubeClusterStatus
 	if id := req.GetId(); id != "" {
-		st, err := s.kube.test(ctx, id, fullRun{deep: req.GetDeep(), storage: req.GetStorageClasses()}, report)
+		st, err := s.kube.test(ctx, id, fullRun{deep: req.GetDeep(), storage: req.GetStorageClasses(), forceStorage: req.GetTestStorage()}, report)
 		if err != nil {
 			return err
 		}
@@ -651,11 +651,44 @@ func (m *kubeManager) test(ctx context.Context, id string, o fullRun, report fun
 		}
 		w = m.newWorker(rec)
 	}
+	// A class to test that the cluster does not list is refused at once
+	// when the last run listed them; one the cluster gained since is
+	// judged after this run.
+	if err := unlistedStorage(w.status(), o.storage); err != nil {
+		return nil, err
+	}
 	w.runFullDeep(ctx, report, o)
 	if ctx.Err() != nil {
 		return nil, status.FromContextError(ctx.Err()).Err()
 	}
-	return w.status(), nil
+	st := w.status()
+	if err := unlistedStorage(st, o.storage); err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
+// unlistedStorage refuses StorageClasses named for the multi-node test
+// that a connection whose classes are readable does not list; nil while
+// they were never listed, or are not readable (a class is then tested by
+// name).
+func unlistedStorage(st *fleetgrpc.KubeClusterStatus, named []string) error {
+	caps := st.GetCapabilities()
+	if len(named) == 0 || len(caps.GetStorageClasses()) == 0 || caps.GetStorageClassesUnreadable() {
+		return nil
+	}
+	listed := map[string]bool{}
+	var all []string
+	for _, sc := range caps.GetStorageClasses() {
+		listed[sc.GetName()] = true
+		all = append(all, sc.GetName())
+	}
+	for _, n := range named {
+		if !listed[n] {
+			return status.Errorf(codes.InvalidArgument, "no StorageClass %q on %s (it has %s)", n, st.GetCluster().DisplayNameOrID(), strings.Join(all, ", "))
+		}
+	}
+	return nil
 }
 
 // testDraft judges an unsaved connection: nothing is saved or claimed.

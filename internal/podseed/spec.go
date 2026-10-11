@@ -49,7 +49,28 @@ const (
 	// its hostname, a reset of its volumes to what the image copies up, and
 	// none of the source's logs or leftovers.
 	OpClone Op = "clone"
+	// OpShareCopy makes the PVC (a fleet share, or the copy a share moving
+	// to another StorageClass goes through) a copy of the share mounted at
+	// ShareCopy.Source: whatever the PVC held is replaced, and every entry
+	// is copied as it is (owners, modes, links, extended attributes), then
+	// checked. Gen is 1: a share holds no root generation.
+	OpShareCopy Op = "share-copy"
 )
+
+// ShareCopySpec is an OpShareCopy's work.
+type ShareCopySpec struct {
+	// Source is where the share to copy mounts in the job, whole (read-only).
+	Source string `json:"source"`
+	// Workers is how many files are copied at once; 0 is 8.
+	Workers int `json:"workers,omitempty"`
+}
+
+// ShareCopyResult is an OpShareCopy's result document: what it copied.
+type ShareCopyResult struct {
+	Files int64 `json:"files"`
+	Dirs  int64 `json:"dirs"`
+	Bytes int64 `json:"bytes"`
+}
 
 // ToolResult is an OpTool job's result document.
 type ToolResult struct {
@@ -103,6 +124,8 @@ type JobSpec struct {
 	Cache string `json:"cache,omitempty"`
 	// Clone is what an OpClone copies.
 	Clone *CloneSpec `json:"clone,omitempty"`
+	// ShareCopy is what an OpShareCopy copies.
+	ShareCopy *ShareCopySpec `json:"share_copy,omitempty"`
 }
 
 // CloneSpec is an OpClone's work.
@@ -278,7 +301,7 @@ func (s JobSpec) Validate() error {
 		}
 		return s.Seed.validate(s.Gen)
 	case OpRollback, OpCommit, OpTool:
-		if s.Seed != nil || s.Clone != nil {
+		if s.Seed != nil || s.Clone != nil || s.ShareCopy != nil {
 			return fmt.Errorf("a %s job takes no seed or clone spec", s.Op)
 		}
 		return nil
@@ -295,8 +318,27 @@ func (s JobSpec) Validate() error {
 			return errors.New("a clone job needs its clone spec, and no seed spec")
 		}
 		return s.Clone.validate()
+	case OpShareCopy:
+		if s.ShareCopy == nil || s.Seed != nil || s.Clone != nil {
+			return errors.New("a share copy job needs its share copy spec, and no seed or clone spec")
+		}
+		return s.ShareCopy.validate(s.PVC)
 	}
 	return fmt.Errorf("unknown op %q", s.Op)
+}
+
+func (s ShareCopySpec) validate(pvc string) error {
+	if err := checkAbs("source", s.Source); err != nil {
+		return err
+	}
+	src, dst := path.Clean(s.Source), path.Clean(pvc)
+	if src == "/" || src == dst || strings.HasPrefix(dst, src+"/") || strings.HasPrefix(src, dst+"/") {
+		return fmt.Errorf("the share copy's source %s and its pvc %s must be apart, and neither /", s.Source, pvc)
+	}
+	if s.Workers < 0 {
+		return fmt.Errorf("workers %d is negative", s.Workers)
+	}
+	return nil
 }
 
 func (s SeedSpec) validate(gen int) error {

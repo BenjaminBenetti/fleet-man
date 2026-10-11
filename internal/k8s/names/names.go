@@ -95,6 +95,12 @@ const (
 	// upkeep removes them once one runs, and a create naming one first
 	// finds it fresh.
 	AnnotationVolumesUnused = "fleet.dev/volumes-unused"
+	// AnnotationShareMove records a fleet share's move to another
+	// StorageClass (JSON: the classes, the mode it takes, how far the move
+	// got), on the move's copy (SuffixShareMove) and on the new share until
+	// its copy is filled, so a daemon that restarts in between finishes it
+	// and nothing uses a share half moved.
+	AnnotationShareMove = "fleet.dev/share-move"
 )
 
 // Role is LabelRole's value: what an object is for.
@@ -328,8 +334,13 @@ func CloneSnapshot(statefulSet string, gen int) string {
 
 // The suffixes of the per-(fleet, connection) objects (FleetObject).
 const (
-	SuffixAnchor          = "anchor"
-	SuffixShare           = "share"
+	SuffixAnchor = "anchor"
+	SuffixShare  = "share"
+	// SuffixShareMove is the copy a share moving to another StorageClass
+	// goes through, SuffixShareCopy the Jobs that copy it (with the step,
+	// "-1" and "-2").
+	SuffixShareMove       = "share-mv"
+	SuffixShareCopy       = "share-cp"
 	SuffixNet             = "net"
 	SuffixAptCache        = "aptcache"
 	SuffixImageCache      = "imgcache"

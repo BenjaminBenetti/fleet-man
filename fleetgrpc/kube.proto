@@ -348,6 +348,26 @@ message KubeClusterStatus {
   google.protobuf.Timestamp checked_at = 7;
   // deep_checked_at is when the last deep test (throwaway pods) finished.
   google.protobuf.Timestamp deep_checked_at = 8;
+  // share_migrations are the fleets whose share is in another StorageClass
+  // than the one new shares take (the connection's shared class changed):
+  // each moves with a one-time copy Job once all its instances on the
+  // connection are stopped.
+  repeated KubeShareMigration share_migrations = 9;
+}
+
+// KubeShareMigration is one fleet's share moving to the connection's
+// shared StorageClass.
+message KubeShareMigration {
+  string fleet = 1;
+  // from_class is the class the share is in; to_class the one it moves to
+  // (empty: the cluster's default).
+  string from_class = 2;
+  string to_class = 3;
+  // state: "waiting" (instances still run), "moving", "failed" (retried
+  // when the fleet is next stopped) or "blocked" (it cannot move: detail
+  // says why).
+  string state = 4;
+  string detail = 5;
 }
 
 // KubeClusters is every connection this daemon holds, with its health,
@@ -386,7 +406,12 @@ message KubeCapabilities {
   // share_mode in effect: "multi-node", "single-node" or "copy".
   string share_mode = 12;
   // single_node_fleet_cap is how many instances one fleet fits in
-  // single-node mode (0 when not in that mode).
+  // single-node mode: on the roomiest node fleet pods may run on, the
+  // smaller of its allocatable CPU and memory over an instance's requests
+  // and its volume attach limit (CSINode) less the volumes attached there
+  // and the share (0 when not in that mode, or nothing could be read).
+  // single_node_fleet_cap_reason says what bounds it ("node memory; attach
+  // limit 127").
   int32 single_node_fleet_cap = 13;
   // clone_tier in effect: "snapshot", "csi-clone" or "copy".
   string clone_tier = 14;
@@ -440,6 +465,10 @@ message KubeCapabilities {
   // checks): an instance with fleet mounts is refused with it. Empty while
   // shares can be made.
   string share_refused = 35;
+  // storage_classes_unreadable: listing StorageClasses is forbidden, so
+  // classes are set by name (the multi-node test still validates one).
+  bool storage_classes_unreadable = 36;
+  string single_node_fleet_cap_reason = 37;
 }
 
 // KubeAdmission is the result of the dry-run canaries.
@@ -475,6 +504,21 @@ message KubeStorageClass {
   // disks only, a large minimum size awaiting consent). Absent when the
   // connection never tested it.
   KubeCheck multi_node_test = 11;
+  // large_minimum is the smallest volume the class's provisioner makes
+  // when it is large ("1Ti" for Filestore): Auto tests it only once asked
+  // (TestKubeClusterRequest.storage_classes). Empty for any other class.
+  string large_minimum = 12;
+  // share_hint is what fleet shares on the class are expected to do before
+  // it is tested, for the classes whose outcome is known ("SMB Azure Files
+  // keeps no owners, modes or symlinks: use an NFS Azure Files class").
+  string share_hint = 13;
+  // disk_hint warns about the class for instance disks ("an NFS class:
+  // root_squash breaks package installs"); empty when it suits them.
+  string disk_hint = 14;
+  // topology_free: the class's CSI driver reports no topology on any node
+  // (CSINode topologyKeys), so its volumes attach on any node: one that
+  // binds Immediately still keeps a fleet together.
+  bool topology_free = 15;
 }
 
 // KubeNode is one node's capacity as preflight read it.
@@ -488,6 +532,10 @@ message KubeNode {
   int32 attach_limit = 5;
   int32 attached = 6;
   bool cordoned = 7;
+  // excluded says why the connection's pods cannot run on the node
+  // ("cordoned", "node selector", "taint key=value:NoSchedule"); empty
+  // when they can.
+  string excluded = 8;
 }
 
 // KubeQuotaHeadroom is one ResourceQuota resource.
@@ -947,6 +995,11 @@ message TestKubeClusterRequest {
   // size (Filestore) included: naming it is the consent Auto asks for
   // before it tests one. Saved connections only.
   repeated string storage_classes = 4;
+  // test_storage runs the multi-node storage test again on the classes a
+  // fleet share could use (Auto's candidates, or the connection's shared
+  // class), cached results or not, as the deep test does (the editor's
+  // [ test storage ]). Saved connections only.
+  bool test_storage = 5;
 }
 
 // TestKubeClusterEvent is one step of a streamed preflight.

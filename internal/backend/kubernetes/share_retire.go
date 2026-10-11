@@ -46,6 +46,15 @@ func (p *Pool) RetireShare(ctx context.Context, clusterID, fleetName string, kee
 	}
 	h8 := names.FleetHash(ident.DaemonID, clusterID, fleetName)
 	claim := ShareClaim(fleetName, h8)
+	if !keep {
+		// A move the fleet's share was in the middle of leaves its copy:
+		// what it holds is on the daemon host, as the share's is.
+		defer func() {
+			if err := p.RetireShareCopy(ctx, clusterID, fleetName); err != nil {
+				flog.Warn("kube share: deleting the copy of the destroyed fleet's share move", "cluster", clusterID, "fleet", fleetName, "err", err)
+			}
+		}()
+	}
 	pvcs := cs.CoreV1().PersistentVolumeClaims(c.Namespace())
 	pvc, err := pvcs.Get(ctx, claim, metav1.GetOptions{})
 	if gone(err) {

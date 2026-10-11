@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/localcluster"
 )
 
@@ -32,7 +33,7 @@ func (r *run) nodes(ctx context.Context) {
 	}
 	r.multiNode, r.nodesKnown = len(list.Items) > 1, true
 	r.providers = map[string]string{}
-	r.csiLimits = r.attachLimits(ctx)
+	r.csiLimits, r.csiTopology = r.attachLimits(ctx)
 	archs := map[string]bool{}
 	cordoned := 0
 	facts := make([]localcluster.Node, 0, len(list.Items))
@@ -50,7 +51,7 @@ func (r *run) nodes(ctx context.Context) {
 		if n.Spec.Unschedulable {
 			cordoned++
 		}
-		kn := &fleetgrpc.KubeNode{Name: n.Name, Arch: arch, Cordoned: n.Spec.Unschedulable}
+		kn := &fleetgrpc.KubeNode{Name: n.Name, Arch: arch, Cordoned: n.Spec.Unschedulable, Excluded: r.excluded(n)}
 		if q, ok := n.Status.Allocatable[corev1.ResourceCPU]; ok {
 			kn.AllocatableCpu = q.String()
 		}
@@ -97,18 +98,21 @@ func (r *run) nodes(ctx context.Context) {
 }
 
 // attachLimits reads each node's per-driver CSI volume limits (CSINode
-// allocatable): node -> driver -> count. Optional: an unreadable CSINode
-// list leaves the limits unknown.
-func (r *run) attachLimits(ctx context.Context) map[string]map[string]int32 {
+// allocatable): node -> driver -> count, and whether each driver reports a
+// topology on some node (its volumes are then placed by it): driver ->
+// true. Optional: an unreadable CSINode list leaves both nil (unknown).
+func (r *run) attachLimits(ctx context.Context) (map[string]map[string]int32, map[string]bool) {
 	cctx, cancel := call(ctx)
 	defer cancel()
 	list, err := r.t.Client.StorageV1().CSINodes().List(cctx, metav1.ListOptions{})
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	limits := map[string]map[string]int32{}
+	topo := map[string]bool{}
 	for _, n := range list.Items {
 		for _, d := range n.Spec.Drivers {
+			topo[d.Name] = topo[d.Name] || len(d.TopologyKeys) > 0
 			if d.Allocatable == nil || d.Allocatable.Count == nil {
 				continue
 			}
@@ -118,7 +122,56 @@ func (r *run) attachLimits(ctx context.Context) map[string]map[string]int32 {
 			limits[n.Name][d.Name] = *d.Allocatable.Count
 		}
 	}
-	return limits
+	return limits, topo
+}
+
+// excluded says why the connection's pods cannot run on node n ("" when
+// they can): cordoned, not matched by its node selector, or tainted with a
+// NoSchedule or NoExecute taint its tolerations do not cover.
+func (r *run) excluded(n *corev1.Node) string {
+	if n.Spec.Unschedulable {
+		return "cordoned"
+	}
+	for _, k := range sortedKeys(r.t.Cluster.NodeSelector) {
+		if v, ok := n.Labels[k]; !ok || v != r.t.Cluster.NodeSelector[k] {
+			return "node selector " + k + "=" + r.t.Cluster.NodeSelector[k]
+		}
+	}
+	for _, taint := range n.Spec.Taints {
+		if taint.Effect != corev1.TaintEffectNoSchedule && taint.Effect != corev1.TaintEffectNoExecute {
+			continue
+		}
+		if !tolerated(r.t.Cluster.Tolerations, taint) {
+			what := taint.Key
+			if taint.Value != "" {
+				what += "=" + taint.Value
+			}
+			return "taint " + what + ":" + string(taint.Effect)
+		}
+	}
+	return ""
+}
+
+// tolerated reports whether one of tolerations covers taint, as the
+// scheduler matches them: the key (any with an empty key and Exists), the
+// value (Equal, the default operator) and the effect (any when empty).
+func tolerated(tolerations []fleet.KubeToleration, taint corev1.Taint) bool {
+	for _, t := range tolerations {
+		if t.Effect != "" && t.Effect != string(taint.Effect) {
+			continue
+		}
+		switch {
+		case t.Key == "" && t.Operator == string(corev1.TolerationOpExists):
+			return true
+		case t.Key != taint.Key:
+			continue
+		case t.Operator == string(corev1.TolerationOpExists):
+			return true
+		case t.Value == taint.Value:
+			return true
+		}
+	}
+	return false
 }
 
 // fillAttachLimits records, on each node, the attach limit of driver (the
