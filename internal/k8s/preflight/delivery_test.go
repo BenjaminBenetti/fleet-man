@@ -163,9 +163,13 @@ func (p *probePods) install(c *cluster) {
 		return false, nil, nil
 	})
 	c.cs.PrependReactor("delete", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		name := a.(k8stesting.DeleteAction).GetName()
+		if !strings.HasPrefix(name, "fleet-probe-pull-") {
+			return false, nil, nil
+		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		p.deleted = append(p.deleted, a.(k8stesting.DeleteAction).GetName())
+		p.deleted = append(p.deleted, name)
 		return true, nil, nil
 	})
 }
@@ -182,6 +186,10 @@ func waiting(reason, message string) corev1.PodStatus {
 func TestDeepImagePull(t *testing.T) {
 	defer func(d time.Duration) { pullPoll = d }(pullPoll)
 	pullPoll = time.Millisecond
+	// The network probe's pods never run in a fake cluster: it gives up at
+	// once (network_test.go covers it).
+	defer func(d time.Duration) { networkProbeTimeout = d }(networkProbeTimeout)
+	networkProbeTimeout = 20 * time.Millisecond
 	setup := func(status func(int) corev1.PodStatus) (*cluster, *probePods, *fakeDelivery, Target) {
 		c := newCluster(t, minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath", isDefault))
 		p := &probePods{status: status}

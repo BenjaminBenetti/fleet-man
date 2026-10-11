@@ -59,8 +59,9 @@ type DeliveryCheck struct {
 // Timeouts of the delivery checks.
 const (
 	deliveryTimeout = 45 * time.Second
-	// DeepTimeout bounds the deep test's probes, on top of FullTimeout.
-	DeepTimeout = 3 * time.Minute
+	// DeepTimeout bounds the deep test's probes, on top of FullTimeout: the
+	// pull through the gateway, then the network probe.
+	DeepTimeout = 5 * time.Minute
 	// pullTimeout bounds the probe pod's pull.
 	pullTimeout = 2 * time.Minute
 )
@@ -112,9 +113,11 @@ func (r *run) imageDelivery(ctx context.Context) {
 	}
 }
 
-// deep runs the throwaway-pod probes.
+// deep runs the throwaway-pod probes: a pull through the gateway, and the
+// pods' network (network.go).
 func (r *run) deep(ctx context.Context) {
 	r.imagePull(ctx)
+	r.networkProbe(ctx)
 	r.res.DeepCheckedAt = r.t.now()
 }
 

@@ -47,6 +47,8 @@ const (
 	CheckImageDelivery         = "image_delivery"
 	// CheckImagePull is the deep test's pull through the gateway.
 	CheckImagePull = "image_pull"
+	// CheckNetworkPolicy and CheckMetadata (network.go) are the deep test's
+	// look at the pods' network.
 )
 
 // Timeouts: one API call, and a whole full run.

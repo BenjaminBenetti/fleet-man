@@ -535,7 +535,8 @@ func newClusterTestCmd() *cobra.Command {
 		Short: "Run a cluster connection's checks on the daemon",
 		Long: "Run every check of a cluster connection on the daemon and print them.\n" +
 			"With --deep, also run the throwaway-pod probes (a pod pulls through\n" +
-			"the gateway). With --context, test a context that is not connected\n" +
+			"the gateway; pods test NetworkPolicy enforcement and reach to\n" +
+			"169.254.169.254). With --context, test a context that is not connected\n" +
 			"(fields as for `set`). Exits 0 when the cluster is ready or limited,\n" +
 			"1 otherwise.",
 		Args: func(cmd *cobra.Command, args []string) error {
