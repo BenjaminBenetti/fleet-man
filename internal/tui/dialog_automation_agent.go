@@ -464,7 +464,7 @@ func agentTargets(m *model, fleetName string, current fleet.DeployTarget) ([]fle
 		options = append(options, option)
 	}
 	if !current.IsZero() && !seen[current] {
-		options = append([]fleet.DeployTargetOption{{Target: current, Reason: missingTargetMessage(m, current)}}, options...)
+		options = append([]fleet.DeployTargetOption{{Target: current, Reason: unlistedTargetMessage(m, current)}}, options...)
 	}
 	def := fleet.DeployTarget{Backend: fleet.BackendDevcontainer}
 	for _, option := range options {
@@ -530,4 +530,15 @@ func agentTargetMissing(m *model, target fleet.DeployTarget) bool {
 // gone.
 func missingTargetMessage(m *model, target fleet.DeployTarget) string {
 	return deployTargetLabel(m, target) + " is no longer connected: pick another target"
+}
+
+// unlistedTargetMessage is why an agent's own target is not among the ones
+// the daemon lists for its fleet: its connection is gone, or the target
+// cannot create this fleet's instances (Coder or Codespaces for a template
+// fleet).
+func unlistedTargetMessage(m *model, target fleet.DeployTarget) string {
+	if agentTargetMissing(m, target) {
+		return missingTargetMessage(m, target)
+	}
+	return deployTargetLabel(m, target) + " cannot create this fleet's instances: pick another target"
 }

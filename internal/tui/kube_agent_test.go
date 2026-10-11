@@ -150,3 +150,28 @@ func TestAgentTargetsWithoutTheDaemon(t *testing.T) {
 		t.Fatalf("default %v, want devcontainer", def)
 	}
 }
+
+// An agent whose own target the daemon does not list for its fleet (Coder
+// in a template fleet, which only devcontainer and the clusters can copy)
+// stays on the Backend row with why, and that reason is not the forgotten
+// connection's: nothing about it was disconnected.
+func TestAgentOnAnUnlistedTargetSaysWhy(t *testing.T) {
+	m, fp := kubeAgentModel(t, devcontainerTarget, available(devcontainerTarget), available(devClusterTarget))
+	f := m.st.Fleets["alpha"]
+	f.Remote = "file:///home/me/scratch"
+	f.Settings.Agents = []fleet.Agent{{Name: "c", Backend: fleet.BackendCoder, Command: "claude"}}
+	fp.openEditAgentDialog(m, "alpha", 0)
+	st := &fp.agentDlg
+	if st.target != coderTarget || st.errMsg != "" {
+		t.Fatalf("edit dialog target %v, errMsg %q; want the agent's own, no error", st.target, st.errMsg)
+	}
+	view := flatText(fp.renderAutomationAgentDialog(m))
+	if !strings.Contains(view, "cannot create this fleet's instances") || strings.Contains(view, "no longer connected") {
+		t.Fatalf("an unlisted target should say it cannot take the fleet's instances:\n%s", view)
+	}
+	// A forgotten cluster keeps its own reason.
+	gone := fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "prod-xyz567"}
+	if got := unlistedTargetMessage(m, gone); !strings.Contains(got, "no longer connected") {
+		t.Fatalf("unlistedTargetMessage(forgotten cluster) = %q", got)
+	}
+}

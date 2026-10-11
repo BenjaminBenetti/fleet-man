@@ -276,9 +276,9 @@ func TestInspectRepoTemplateDirInPlace(t *testing.T) {
 }
 
 // An UNSPECIFIED backend normally resolves to the host default; for a template
-// remote it must narrow to devcontainer (as the TUI does) instead of failing
-// with "requires the devcontainer backend (got coder)". An explicit coder is
-// still rejected.
+// remote a remembered Coder default must narrow to devcontainer (as the TUI
+// does) instead of failing with "requires the devcontainer or kubernetes
+// backend (got coder)". An explicit coder is still rejected.
 func TestCreateInstanceTemplateNarrowsUnspecifiedBackend(t *testing.T) {
 	isolateFleetDir(t)
 	seen := stubCreateJob(t)
