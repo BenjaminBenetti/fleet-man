@@ -371,3 +371,52 @@ func TestFirstFleetRepoSkipsTemplateFleets(t *testing.T) {
 		t.Fatalf("firstFleetRepo = %q, want org/real", got)
 	}
 }
+
+// A template fleet's Deploy row is the daemon's too: it keeps the cluster
+// targets (the copied workspace seeds the pod) and opens on a remembered
+// cluster, and the create goes there with no branch.
+func TestAddInstanceTemplateFleetOffersTheDaemonsClusters(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cluster := fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "minikube-abc234"}
+	devcontainer := fleet.DeployTarget{Backend: fleet.BackendDevcontainer}
+	asked := stubListDeployTargets(t, deployTargetsReply(cluster, available(devcontainer), available(cluster)), nil)
+
+	fp := newFleetPage()
+	fp.rows = []row{{kind: rowFleetHeader, fleetName: "scratch"}}
+	m := &model{
+		st:        &state.State{Fleets: map[string]*fleet.Fleet{"scratch": {Name: "scratch", Remote: "file:///home/me/scratch"}}},
+		fleetPage: fp,
+		creating:  map[string]bool{},
+	}
+	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if fp.mode != viewAddInstance || !fp.addInst.template {
+		t.Fatalf("mode %v template %v, want the template fleet's dialog open (message %q)", fp.mode, fp.addInst.template, m.message)
+	}
+	if len(*asked) != 1 || (*asked)[0] != "scratch" {
+		t.Fatalf("ListDeployTargets asked for %v, want [scratch]", *asked)
+	}
+	if fp.addInst.target != cluster {
+		t.Fatalf("dialog opened on %v, want the remembered cluster", fp.addInst.target)
+	}
+	if len(fp.addInst.targets) != 2 || fp.addInst.targets[1] != cluster {
+		t.Fatalf("Deploy row cycles %v, want devcontainer and the cluster", fp.addInst.targets)
+	}
+
+	var gotTarget fleet.DeployTarget
+	var gotBranch string
+	orig := createInstanceRemote
+	createInstanceRemote = func(_, _, _, branch string, target fleet.DeployTarget) error {
+		gotTarget, gotBranch = target, branch
+		return nil
+	}
+	t.Cleanup(func() { createInstanceRemote = orig })
+	fp.textInput.SetValue("agent-1")
+	cmd := fp.submitAddInstance(m)
+	if cmd == nil {
+		t.Fatal("submit should return the create cmd")
+	}
+	cmd()
+	if gotTarget != cluster || gotBranch != "" {
+		t.Fatalf("created on %v with branch %q, want the cluster and no branch", gotTarget, gotBranch)
+	}
+}

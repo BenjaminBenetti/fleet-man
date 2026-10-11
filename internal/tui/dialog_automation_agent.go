@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,7 +12,8 @@ import (
 
 // dialog_automation_agent.go is the add/edit-agent modal (issue #188). An agent
 // defines how an automation worker is launched: a command (with ${PROMPT}/
-// ${SYS_PROMPT} placeholders), a system prompt, and an env backend. The command
+// ${SYS_PROMPT} placeholders), a system prompt, and the deploy target its
+// instances are created on (a backend, or a cluster connection). The command
 // always runs in a tmux session so the user can open it in the TUI and watch.
 
 // agentRow identifies a focusable field in the agent dialog.
@@ -37,29 +39,32 @@ type automationAgentState struct {
 	name         string
 	command      string
 	systemPrompt string
-	backend      fleet.BackendType
-	errMsg       string
+	// target is where the agent's instances are created; targets are what
+	// the Backend row cycles (agentTargets).
+	target  fleet.DeployTarget
+	targets []fleet.DeployTargetOption
+	errMsg  string
 }
 
 // openAddAgentDialog opens the agent editor for a new agent. The command field
 // defaults to the most recently defined agent's command (the issue's "remember
-// the last value" behavior), falling back to fleet.DefaultAgentCommand; backend
-// defaults to the user's default backend.
+// the last value" behavior), falling back to fleet.DefaultAgentCommand; the
+// target is the daemon's remembered deploy target, as the New instance dialog
+// opens on, and is stored concretely when the agent is saved (a later change
+// of the remembered default never moves an agent).
 func (fleetPage *fleetPage) openAddAgentDialog(m *model, fleetName string) tea.Cmd {
 	command := fleet.DefaultAgentCommand
 	if agents := fleetAgents(m, fleetName); len(agents) > 0 {
 		command = agents[len(agents)-1].Command
 	}
-	backend := fleet.BackendDevcontainer
-	if m.config != nil && m.config.DefaultBackend != "" {
-		backend = fleet.BackendType(m.config.DefaultBackend)
-	}
+	targets, def := agentTargets(m, fleetName, fleet.DeployTarget{})
 	fleetPage.agentDlg = automationAgentState{
 		fleetName: fleetName,
 		editIdx:   -1,
 		input:     fleetPage.agentDlg.input,
 		command:   command,
-		backend:   backend,
+		target:    def,
+		targets:   targets,
 	}
 	fleetPage.mode = viewAutomationAgent
 	return nil
@@ -75,10 +80,8 @@ func (fleetPage *fleetPage) openEditAgentDialog(m *model, fleetName string, idx 
 	if a == nil {
 		return nil
 	}
-	backend := a.Backend
-	if backend == "" {
-		backend = fleet.BackendDevcontainer
-	}
+	target := a.DeployTarget()
+	targets, _ := agentTargets(m, fleetName, target)
 	fleetPage.agentDlg = automationAgentState{
 		fleetName:    fleetName,
 		editIdx:      idx,
@@ -86,7 +89,11 @@ func (fleetPage *fleetPage) openEditAgentDialog(m *model, fleetName string, idx 
 		name:         a.Name,
 		command:      a.Command,
 		systemPrompt: a.SystemPrompt,
-		backend:      backend,
+		target:       target,
+		targets:      targets,
+	}
+	if agentTargetMissing(m, target) {
+		fleetPage.agentDlg.errMsg = missingTargetMessage(m, target)
 	}
 	fleetPage.mode = viewAutomationAgent
 	return nil
@@ -141,13 +148,13 @@ func (fleetPage *fleetPage) updateAutomationAgent(m *model, msg tea.Msg) tea.Cmd
 		return fleetPage.agentRowEnter(m)
 	case "left", "h":
 		if st.row == agentRowBackend {
-			st.backend = cycleOption(st.backend, -1, allBackendTypes)
+			st.cycleTarget(-1)
 			fleetPage.autosaveAgent(m)
 		}
 		return nil
 	case "right", "l":
 		if st.row == agentRowBackend {
-			st.backend = cycleOption(st.backend, 1, allBackendTypes)
+			st.cycleTarget(1)
 			fleetPage.autosaveAgent(m)
 		}
 		return nil
@@ -178,7 +185,7 @@ func (fleetPage *fleetPage) agentRowEnter(m *model) tea.Cmd {
 		// The system prompt is often many lines — edit it in $EDITOR, not inline.
 		return editorCmd(editorTargetAgentSysPrompt, "sysprompt", st.systemPrompt)
 	case agentRowBackend:
-		st.backend = cycleOption(st.backend, 1, allBackendTypes)
+		st.cycleTarget(1)
 		fleetPage.autosaveAgent(m)
 	case agentRowSave:
 		return fleetPage.saveAutomationAgent(m)
@@ -251,6 +258,9 @@ func (fleetPage *fleetPage) agentFormError(m *model) error {
 	if !ok || st.editIdx < 0 || st.editIdx >= len(f.Settings.Agents) {
 		return nil
 	}
+	if agentTargetMissing(m, st.target) {
+		return errors.New(missingTargetMessage(m, st.target))
+	}
 	oldName := f.Settings.Agents[st.editIdx].Name
 	_, err := fleet.UpdateAgent(f.Settings, oldName, fleetPage.agentCandidate())
 	return err
@@ -263,7 +273,8 @@ func (fleetPage *fleetPage) agentCandidate() fleet.Agent {
 		Name:         st.name,
 		Command:      st.command,
 		SystemPrompt: st.systemPrompt,
-		Backend:      st.backend,
+		Backend:      st.target.Backend,
+		KubeCluster:  st.target.KubeCluster,
 	}
 }
 
@@ -280,6 +291,12 @@ func (fleetPage *fleetPage) autosaveAgent(m *model) {
 	}
 	f, ok := m.st.Fleets[st.fleetName]
 	if !ok || st.editIdx >= len(f.Settings.Agents) {
+		return
+	}
+	// A target whose connection is gone (a Forget) must be replaced before
+	// anything else about the agent saves: every firing would be refused.
+	if agentTargetMissing(m, st.target) {
+		st.errMsg = missingTargetMessage(m, st.target)
 		return
 	}
 	oldName := f.Settings.Agents[st.editIdx].Name
@@ -305,6 +322,10 @@ func (fleetPage *fleetPage) saveAutomationAgent(m *model) tea.Cmd {
 	f, ok := m.st.Fleets[st.fleetName]
 	if !ok {
 		return fleetPage.cancelAutomationAgent(m)
+	}
+	if agentTargetMissing(m, st.target) {
+		st.errMsg = missingTargetMessage(m, st.target)
+		return nil
 	}
 
 	// fleet.AddAgent/UpdateAgent own the shared invariants (normalize, reject a
@@ -363,7 +384,11 @@ func (fleetPage *fleetPage) renderAutomationAgentDialog(m *model) string {
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowName), dialogLabel.Render("Name:    "), field(agentRowName, st.name, "agent-name"))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowCommand), dialogLabel.Render("Command: "), field(agentRowCommand, st.command, fleet.DefaultAgentCommand))
 	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowSystemPrompt), dialogLabel.Render("Sys prompt:"), promptFieldPreview(st.systemPrompt, "(optional, injected into ${SYS_PROMPT})"))
-	fmt.Fprintf(&body, "%s%s [ %s ]\n", marker(agentRowBackend), dialogLabel.Render("Backend: "), backendTypeLabel(st.backend))
+	backendRow := fmt.Sprintf("[ %s ]", boundTargetLabel(m, st.target))
+	if reason := st.targetReason(); reason != "" {
+		backendRow += dimStyle.Render("  " + reason)
+	}
+	fmt.Fprintf(&body, "%s%s %s\n", marker(agentRowBackend), dialogLabel.Render("Backend: "), backendRow)
 	// Editing instant-saves, so there is no Save row; a new agent keeps it.
 	if st.editIdx < 0 {
 		fmt.Fprintf(&body, "%s%s\n", marker(agentRowSave), saveButtonLabel(st.row == agentRowSave))
@@ -407,4 +432,113 @@ func automationHint(fieldActive, onEditorField, isEdit bool) string {
 		return "[enter] Edit in $EDITOR  [j/k] Move  " + closeKey
 	}
 	return "[j/k] Move  [enter] Edit/Toggle  [h/l] Cycle  " + closeKey
+}
+
+// agentTargets lists the targets the agent dialog's Backend row cycles for a
+// fleet, and the one a new agent opens on: every target the daemon lists for
+// the fleet (ListDeployTargets, so a template fleet drops Coder and
+// Codespaces), available now or not (an agent fires later; the row says why
+// one is not), opening on the daemon's remembered default. current, an
+// existing agent's target, is kept in the list when the daemon no longer
+// has it (a forgotten cluster), so the row can show it and move off it. A
+// daemon that cannot answer leaves the targets this TUI knows: every backend
+// and the pushed connections, opening on its config's default.
+func agentTargets(m *model, fleetName string, current fleet.DeployTarget) ([]fleet.DeployTargetOption, fleet.DeployTarget) {
+	template := false
+	if f := m.st.Fleets[fleetName]; f != nil {
+		template = fleet.IsTemplateRemote(f.Remote)
+	}
+	var list deployTargetList
+	if fetched, err := loadDeployTargets(m, fleetName, template); err == nil && len(fetched.options) > 0 {
+		list = fetched
+	} else {
+		list = knownAgentTargets(m, template)
+	}
+	var options []fleet.DeployTargetOption
+	seen := map[fleet.DeployTarget]bool{}
+	for _, option := range list.options {
+		if option.Target.IsZero() || seen[option.Target] {
+			continue
+		}
+		seen[option.Target] = true
+		options = append(options, option)
+	}
+	if !current.IsZero() && !seen[current] {
+		options = append([]fleet.DeployTargetOption{{Target: current, Reason: unlistedTargetMessage(m, current)}}, options...)
+	}
+	def := fleet.DeployTarget{Backend: fleet.BackendDevcontainer}
+	for _, option := range options {
+		if option.Target == list.def {
+			def = list.def
+		}
+	}
+	return options, def
+}
+
+// knownAgentTargets is agentTargets' list without the daemon's: every backend
+// (but the ones a template fleet cannot use) and each connection this TUI
+// was pushed, opening on its config's default target.
+func knownAgentTargets(m *model, template bool) deployTargetList {
+	var list deployTargetList
+	for _, target := range fleet.DeployTargets() {
+		if template && !target.CopiesTemplates() {
+			continue
+		}
+		list.options = append(list.options, fleet.DeployTargetOption{Target: target, Available: true})
+	}
+	for _, st := range m.kubeStatuses() {
+		target := fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: st.GetCluster().GetId()}
+		list.options = append(list.options, fleet.DeployTargetOption{Target: target, Available: true})
+	}
+	if m.config != nil && m.config.DefaultBackend != "" {
+		list.def = fleet.DeployTarget{Backend: fleet.BackendType(m.config.DefaultBackend)}
+		if list.def.Backend == fleet.BackendKubernetes {
+			list.def.KubeCluster = m.config.DefaultKubeCluster
+		}
+	}
+	return list
+}
+
+// cycleTarget moves the Backend row direction places through st.targets.
+func (st *automationAgentState) cycleTarget(direction int) {
+	targets := make([]fleet.DeployTarget, len(st.targets))
+	for i, option := range st.targets {
+		targets[i] = option.Target
+	}
+	st.target = cycleOption(st.target, direction, targets)
+}
+
+// targetReason is why the selected target cannot take a create now, as the
+// daemon said; "" when it can (or nobody said).
+func (st *automationAgentState) targetReason() string {
+	for _, option := range st.targets {
+		if option.Target == st.target && !option.Available {
+			return option.Reason
+		}
+	}
+	return ""
+}
+
+// agentTargetMissing reports whether target is a cluster connection the
+// daemon no longer has (removed with Forget): an agent there has every
+// firing refused, so the dialog asks for another target before it saves.
+func agentTargetMissing(m *model, target fleet.DeployTarget) bool {
+	return target.KubeCluster != "" && m.kubeClusters != nil && m.kubeStatus(target.KubeCluster) == nil
+}
+
+// missingTargetMessage asks for a new target for one whose connection is
+// gone.
+func missingTargetMessage(m *model, target fleet.DeployTarget) string {
+	return deployTargetLabel(m, target) + " is no longer connected: pick another target"
+}
+
+// unlistedTargetMessage is why an agent's own target is not among the ones
+// the daemon lists for its fleet: its connection is gone, or the target
+// cannot create this fleet's instances (Coder or Codespaces for a template
+// fleet).
+func unlistedTargetMessage(m *model, target fleet.DeployTarget) string {
+	if agentTargetMissing(m, target) {
+		return missingTargetMessage(m, target)
+	}
+	return deployTargetLabel(m, target) + " cannot create this fleet's instances: pick another target"
 }

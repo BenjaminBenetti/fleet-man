@@ -111,3 +111,31 @@ func TestFindKubeCluster(t *testing.T) {
 		}
 	}
 }
+
+// An empty ref names the only connection, and is an error with none or
+// several; a ref is resolved as FindKubeCluster does.
+func TestFindOrOnlyKubeCluster(t *testing.T) {
+	status := func(id, name string) *KubeClusterStatus {
+		return &KubeClusterStatus{Cluster: &KubeCluster{Id: id, DisplayName: name}}
+	}
+	one := []*KubeClusterStatus{status("minikube-a1b2c3", "dev")}
+	two := append(one, status("prod-d4e5f6", "Prod-EU"))
+	if got, err := FindOrOnlyKubeCluster(one, ""); err != nil || got.GetCluster().GetId() != "minikube-a1b2c3" {
+		t.Errorf("the only connection: %v, %v", got, err)
+	}
+	if got, err := FindOrOnlyKubeCluster(two, "prod-eu"); err != nil || got.GetCluster().GetId() != "prod-d4e5f6" {
+		t.Errorf("a named connection: %v, %v", got, err)
+	}
+	for _, tc := range []struct {
+		clusters []*KubeClusterStatus
+		ref, err string
+	}{
+		{nil, "", "no Kubernetes connection"},
+		{two, "", "2 Kubernetes connections (dev, Prod-EU): name one"},
+		{two, "nope", `no Kubernetes connection "nope"`},
+	} {
+		if got, err := FindOrOnlyKubeCluster(tc.clusters, tc.ref); err == nil || !strings.Contains(err.Error(), tc.err) {
+			t.Errorf("FindOrOnlyKubeCluster(%d, %q) = %v, %v; want error %q", len(tc.clusters), tc.ref, got, err, tc.err)
+		}
+	}
+}

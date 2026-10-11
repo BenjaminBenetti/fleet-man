@@ -1,6 +1,9 @@
 package fleet
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNormalizeAgentDefaults(t *testing.T) {
 	a, err := NormalizeAgent(Agent{Name: "  build  "})
@@ -24,6 +27,43 @@ func TestNormalizeAgentErrors(t *testing.T) {
 	}
 	if _, err := NormalizeAgent(Agent{Name: "x", Backend: "nope"}); err == nil {
 		t.Error("invalid backend: want error")
+	}
+}
+
+// A Kubernetes agent stores its connection; no other agent keeps one.
+func TestNormalizeAgentCluster(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      Agent
+		want    DeployTarget
+		wantErr string
+	}{
+		{"kubernetes keeps its cluster", Agent{Name: "a", Backend: BackendKubernetes, KubeCluster: " prod-eu "}, DeployTarget{Backend: BackendKubernetes, KubeCluster: "prod-eu"}, ""},
+		{"kubernetes without a cluster", Agent{Name: "a", Backend: BackendKubernetes}, DeployTarget{}, "needs the cluster connection"},
+		{"a cluster id is one word", Agent{Name: "a", Backend: BackendKubernetes, KubeCluster: "prod eu"}, DeployTarget{}, "not a cluster connection id"},
+		{"devcontainer drops a stray cluster", Agent{Name: "a", Backend: BackendDevcontainer, KubeCluster: "prod-eu"}, DeployTarget{Backend: BackendDevcontainer}, ""},
+		{"no backend is devcontainer", Agent{Name: "a", KubeCluster: "prod-eu"}, DeployTarget{Backend: BackendDevcontainer}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NormalizeAgent(tt.in)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("NormalizeAgent(%+v) error = %v, want %q", tt.in, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NormalizeAgent(%+v): %v", tt.in, err)
+			}
+			if got.DeployTarget() != tt.want {
+				t.Fatalf("target = %+v, want %+v", got.DeployTarget(), tt.want)
+			}
+		})
+	}
+	// A record from before the Backend field runs on devcontainer.
+	if got := (Agent{Name: "old"}).DeployTarget(); got != (DeployTarget{Backend: BackendDevcontainer}) {
+		t.Fatalf("legacy agent target = %+v", got)
 	}
 }
 

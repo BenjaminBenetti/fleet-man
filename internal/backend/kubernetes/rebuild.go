@@ -408,7 +408,7 @@ func (rb *rebuilding) reseed(ctx context.Context, adm *podspec.Admitted, r podsp
 	if err := rb.step(ctx, StepReset, fleet.StepSeed, fmt.Sprintf("generation %d", rb.gen)); err != nil {
 		return nil, err
 	}
-	manifest, err := rb.seed(ctx, adm, img)
+	manifest, err := rb.seed(ctx, adm, img, rb.seedSpec(adm, img.capture))
 	if err != nil {
 		return nil, err
 	}

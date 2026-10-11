@@ -20,12 +20,10 @@ import (
 // deployTargets lists one Deploy option per connection, in registry order.
 // A cluster target is available when the connection is READY or LIMITED and
 // the daemon host has docker and the devcontainer CLI (images are built
-// there); otherwise the reason says which is missing. Template (file://)
-// fleets list none: copying a template into a pod is not supported yet.
-func (m *kubeManager) deployTargets(template bool) []fleet.DeployTargetOption {
-	if template {
-		return nil
-	}
+// there); otherwise the reason says which is missing. A template (file://)
+// fleet lists them too: its workspace is copied on the daemon host, and the
+// seed takes it into the pod from there, as it does a clone.
+func (m *kubeManager) deployTargets() []fleet.DeployTargetOption {
 	var missingTools []string
 	for _, tool := range deps.HostBuildTools(daemonLookPath) {
 		if !tool.Found {
@@ -73,6 +71,12 @@ func (m *kubeManager) defaultCluster(remembered string) string {
 		return statuses[0].GetCluster().GetId()
 	}
 	return ""
+}
+
+// connected reports whether id is one of the daemon's connections.
+func (m *kubeManager) connected(id string) bool {
+	_, ok := m.record(id)
+	return ok
 }
 
 // createAllowed checks a Kubernetes create against its connection before

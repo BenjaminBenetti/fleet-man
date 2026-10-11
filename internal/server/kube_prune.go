@@ -252,9 +252,10 @@ func listPruneObjects(ctx context.Context, cs kubernetes.Interface, rec fleet.Ku
 	known, fleets := accountedFor(st, rec, id)
 	kept := objects[:0]
 	for _, o := range objects {
-		// The owner Lease and the managed pull Secrets belong to the
-		// connection itself (the latter are deleted with it).
-		if role := o.labels[names.LabelRole]; role == string(names.RoleOwner) || role == string(names.RolePullSecret) || known[o.labels[names.LabelKey]] {
+		// The owner Lease, the managed pull Secrets and the seed caches
+		// belong to the connection itself (the latter two are deleted with
+		// it, the caches also once unused for a week).
+		if role := names.Role(o.labels[names.LabelRole]); role == names.RoleOwner || role == names.RolePullSecret || role == names.RoleSeedCache || known[o.labels[names.LabelKey]] {
 			continue
 		}
 		o.mounted = o.kind == "pvc" && mounted[o.name]

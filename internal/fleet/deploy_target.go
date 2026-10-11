@@ -69,11 +69,12 @@ func (t DeployTarget) Tool() string {
 }
 
 // CopiesTemplates reports whether the target can provision from a file://
-// template directory copied into the workspace. Coder and Codespaces clone a
-// git URL on their own side, so only devcontainer can (ValidateTemplateCreate
-// enforces the same rule at create time).
+// template directory copied into the workspace on the daemon host:
+// devcontainer, and a cluster, whose seed takes the workspace from there.
+// Coder and Codespaces clone a git URL on their own side, so they cannot
+// (ValidateTemplateCreate enforces the same rule at create time).
 func (t DeployTarget) CopiesTemplates() bool {
-	return t.Backend == BackendDevcontainer
+	return t.Backend.CopiesTemplates()
 }
 
 // Capabilities returns the target's clone/rebuild hints (see

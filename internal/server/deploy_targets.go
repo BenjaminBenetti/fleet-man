@@ -56,8 +56,9 @@ func (s *service) ListDeployTargets(_ context.Context, req *fleetgrpc.ListDeploy
 
 // deployTargetOptions lists, in dialog order, the targets a fleet with this
 // remote can use: a file:// template fleet drops the targets that cannot copy
-// a template. Each is available when the CLI it needs is on this host's PATH.
-// The connected clusters follow, one target each (kube_targets.go).
+// a template (Coder, Codespaces). Each is available when the CLI it needs is
+// on this host's PATH. The connected clusters follow, one target each
+// (kube_targets.go), for a template fleet too.
 func (s *service) deployTargetOptions(remote string) []fleet.DeployTargetOption {
 	template := fleet.IsTemplateRemote(remote)
 	var out []fleet.DeployTargetOption
@@ -74,7 +75,7 @@ func (s *service) deployTargetOptions(remote string) []fleet.DeployTargetOption 
 		}
 		out = append(out, option)
 	}
-	return append(out, s.kube.deployTargets(template)...)
+	return append(out, s.kube.deployTargets()...)
 }
 
 // rememberedTarget returns the remembered default target (config.json
@@ -104,8 +105,8 @@ func targetFor(backendType fleet.BackendType, kubeCluster string) fleet.DeployTa
 
 // defaultTarget is what an unspecified create in a fleet with this remote
 // resolves to: the remembered target, unless there is none or it cannot serve
-// the remote (a template fleet only copies onto devcontainer), and then
-// devcontainer.
+// the remote (a template fleet copies onto devcontainer or a cluster, never
+// Coder or Codespaces), and then devcontainer.
 func defaultTarget(remote string) fleet.DeployTarget {
 	target := rememberedTarget()
 	if target.IsZero() || (fleet.IsTemplateRemote(remote) && !target.CopiesTemplates()) {

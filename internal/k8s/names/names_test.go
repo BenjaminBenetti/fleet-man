@@ -166,6 +166,32 @@ func TestGenerationNames(t *testing.T) {
 	}
 }
 
+// A seed cache's id is its inputs' (each field counted on its own), its
+// disk name a DNS label, and its trim Job's name fits the longest instance.
+func TestSeedCacheNames(t *testing.T) {
+	id := SeedCacheID(testDaemonID, "c", "sha256:abc", "/workspaces/x")
+	if len(id) != SeedCacheIDLen || SeedCacheID(testDaemonID, "c", "sha256:abc", "/workspaces/x") != id {
+		t.Fatalf("SeedCacheID = %q, want %d stable characters", id, SeedCacheIDLen)
+	}
+	for _, other := range []string{
+		SeedCacheID(testDaemonID, "c", "sha256:abd", "/workspaces/x"),
+		SeedCacheID(testDaemonID, "d", "sha256:abc", "/workspaces/x"),
+		SeedCacheID("other-daemon", "c", "sha256:abc", "/workspaces/x"),
+		SeedCacheID(testDaemonID, "c", "sha256:abc/workspaces/x"),
+	} {
+		if other == id {
+			t.Errorf("another input gave the same id %q", id)
+		}
+	}
+	if name := SeedCache(id); name != "fi-seedcache-"+id || !IsDNS1123Label(name) || !IsLabelValue(name) {
+		t.Errorf("SeedCache = %q", name)
+	}
+	long := Instance(strings.Repeat("f", 80), strings.Repeat("i", 80), InstanceKey(testDaemonID, "f", "i", testCreated))
+	if job := SeedCacheJob(long); !IsDNS1123Label(job) || !IsLabelValue(job) {
+		t.Errorf("SeedCacheJob of the longest name = %q (%d)", job, len(job))
+	}
+}
+
 func TestFleetObject(t *testing.T) {
 	h := FleetHash(testDaemonID, "c", "fleet-man")
 	if got := FleetObject("fleet-man", h, SuffixShare); got != "fs-fleet-man-"+h+"-share" {

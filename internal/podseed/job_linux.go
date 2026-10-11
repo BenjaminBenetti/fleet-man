@@ -86,6 +86,8 @@ func RunJob(ctx context.Context, specPath string, log io.Writer) int {
 		out = outcomeOf(commitGeneration(spec.PVC, spec.Gen), spec.PVC)
 	case OpTool:
 		out = toolOutcome(spec.PVC)
+	case OpSeedCache:
+		out = outcomeOf(trimSeedCache(spec.PVC, spec.Gen, spec.Cache), spec.PVC)
 	}
 
 	term := jobboot.Termination{OK: out.err == nil, SHA256: out.sha, Bytes: out.bytes}
@@ -157,6 +159,9 @@ type seedRun struct {
 	m        Manifest
 	mu       sync.Mutex
 	phase    string
+	// cached is the seed cache's manifest when the disk was cloned from
+	// one whose root/ is kept (SeedSpec.Cache); nil seeds the root in full.
+	cached *Manifest
 }
 
 func (r *seedRun) setPhase(p string) {
@@ -234,6 +239,12 @@ func (r *seedRun) run(ctx context.Context) jobOutcome {
 	r.m.SeededAt = time.Now().UTC()
 	r.m.Files, r.m.Bytes, r.m.Hardlinks = r.stats.files.Load(), r.stats.bytes.Load(), r.stats.hardlinks.Load()
 	r.m.Capabilities, r.m.Setuid = r.stats.caps.Load(), r.stats.setuid.Load()
+	if c := r.cached; c != nil {
+		// The root came whole from the cache: its counts are the cache's.
+		r.m.Files, r.m.Bytes, r.m.Hardlinks = r.m.Files+c.Files, r.m.Bytes+c.Bytes, r.m.Hardlinks+c.Hardlinks
+		r.m.Capabilities, r.m.Setuid = r.m.Capabilities+c.Capabilities, r.m.Setuid+c.Setuid
+		r.m.Fallback, r.m.FromCache = append([]string(nil), c.Fallback...), r.seed.Cache
+	}
 	data, sha := r.m.encode()
 	if err := writeDurable(filepath.Join(r.pvc, ManifestFile), data, 0o644); err != nil {
 		return jobOutcome{err: fmt.Errorf("write the manifest: %w", err)}
@@ -255,12 +266,23 @@ func (r *seedRun) seedRoot(ctx context.Context) error {
 		return err
 	}
 	plan := planRoot(tops, r.seed)
-	for _, w := range plan.warnings {
-		r.m.addWarning("%s", w)
+	if err := r.keepCachedRoot(plan.dirs); err != nil {
+		return err
+	}
+	if c := r.cached; c != nil {
+		// The cache's warnings are its seed's: the same plan and copy.
+		r.m.Warnings = append([]string(nil), c.Warnings...)
+	} else {
+		for _, w := range plan.warnings {
+			r.m.addWarning("%s", w)
+		}
 	}
 	r.m.Dirs, r.m.RootExtra = plan.dirs, plan.extra
 
 	for _, top := range plan.dirs {
+		if r.cached != nil {
+			break // root/ is the cache's
+		}
 		if err := r.copyTop(ctx, top, mounts, plan.mountpoints); err != nil {
 			return err
 		}
@@ -274,7 +296,12 @@ func (r *seedRun) seedRoot(ctx context.Context) error {
 	if err := r.writeKubeletFiles(g); err != nil {
 		return err
 	}
-	if err := r.remap(g); err != nil {
+	if c := r.cached; c != nil {
+		// The cache's root was remapped by its own seed, with the same
+		// remap (the cache id covers it); a volume copied up below still
+		// takes the home's new owner from it.
+		r.m.Remap = c.Remap
+	} else if err := r.remap(g); err != nil {
 		return err
 	}
 	// After the remap: a volume is filled from the image as the CLI's uid
@@ -310,10 +337,18 @@ func (r *seedRun) prepare() error {
 				return fmt.Errorf("the instance disk holds root generation %d; seeding generation %d over it needs a reset", m.Gen, r.spec.Gen)
 			}
 		}
+		if c, ok := cachedRoot(r.pvc, r.spec.Gen, r.seed.Cache); ok {
+			r.cached = c
+		} else if r.seed.Cache != "" {
+			r.logf("the disk holds no seed cache %s: seeding the root in full", r.seed.Cache)
+		}
 		if err := removePartials(r.pvc); err != nil {
 			return err
 		}
 		for _, dir := range persistedDirs {
+			if r.cached != nil && dir == DirRoot {
+				continue // the seed cache's, kept
+			}
 			if err := discard(filepath.Join(r.pvc, dir), filepath.Join(r.pvc, partialDir(dir, r.spec.Gen))); err != nil {
 				return err
 			}
@@ -328,6 +363,28 @@ func (r *seedRun) prepare() error {
 		}
 	}
 	return nil
+}
+
+// keepCachedRoot checks the root a seed cache gave the disk against this
+// image's plan: its top-level dirs must be the ones the plan copies, or the
+// cache is not this image's after all and the root is seeded in full.
+func (r *seedRun) keepCachedRoot(dirs []string) error {
+	c := r.cached
+	if c == nil {
+		return nil
+	}
+	if slices.Equal(c.Dirs, dirs) {
+		r.setPhase("seed cache " + r.seed.Cache)
+		r.logf("root from seed cache %s: %d files", r.seed.Cache, c.Files)
+		return nil
+	}
+	r.logf("seed cache %s holds dirs %v, not this image's %v: seeding the root in full", r.seed.Cache, c.Dirs, dirs)
+	r.cached = nil
+	root := filepath.Join(r.pvc, DirRoot)
+	if err := discard(root, filepath.Join(r.pvc, partialDir(DirRoot, r.spec.Gen))); err != nil {
+		return err
+	}
+	return mkdirOwned(root, 0o755)
 }
 
 // copyTop copies one top-level dir of the image into root/, again with GNU cp

@@ -81,6 +81,8 @@ func TestPruneKubeCluster(t *testing.T) {
 		&appsv1.StatefulSet{ObjectMeta: labelled("fi-theirs-one-dddddddd", other, 48*time.Hour, instance)},
 		// the connection's own managed pull Secret: never listed
 		&corev1.Secret{ObjectMeta: labelled("fleet-gwpull-"+testIdentity.Owner()+"-"+id, id, 48*time.Hour, map[string]string{names.LabelRole: string(names.RolePullSecret)})},
+		// the connection's seed cache (no instance key): never listed
+		&corev1.PersistentVolumeClaim{ObjectMeta: labelled(names.SeedCache("abc234def567"), id, 48*time.Hour, map[string]string{names.LabelRole: string(names.RoleSeedCache)})},
 		// another daemon's
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "not-ours", Namespace: "fleet", Labels: names.Base("ffffffffffff", id), CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour))}},
 	)

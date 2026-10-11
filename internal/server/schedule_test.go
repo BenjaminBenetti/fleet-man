@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -733,5 +734,77 @@ func TestServiceWatchedDropsGoneInstance(t *testing.T) {
 	s.serviceWatched(context.Background(), sched, &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha"}}}, now)
 	if _, still := sched.watched["alpha/agent-1"]; still {
 		t.Fatal("vanished instance should be dropped from the watch set")
+	}
+}
+
+// A cluster run still creating past automationCreateTimeout is destroyed and
+// dropped, and its firing's trigger log says why; a run on another backend
+// keeps waiting, as before, and so does a cluster run inside the deadline.
+func TestServiceWatchedDestroysAnOverdueClusterCreate(t *testing.T) {
+	isolateFleetDir(t)
+	rec := stubAutomationSeams(t)
+	s := &service{}
+	t0 := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
+	ev := &triggerEvent{kind: fleet.TriggerWebhook, triggerName: "hook", firedAt: t0, webhookName: "gh", body: []byte(`{"a":1}`)}
+	logName := logTriggerEvent("alpha", ev)
+	if logName == "" {
+		t.Fatal("the trigger log was not written")
+	}
+	sched := newScheduler()
+	for _, name := range []string{"k8s-1", "docker-1"} {
+		sched.watched["alpha/"+name] = &watchedAgent{fleet: "alpha", instance: name, agent: "builder", spawnedAt: t0, lastActive: t0, event: ev, eventLog: logName}
+	}
+	st := &state.State{Fleets: map[string]*fleet.Fleet{"alpha": {Name: "alpha", Instances: []*fleet.Instance{
+		{Name: "k8s-1", Status: fleet.StatusCreating, Backend: fleet.BackendKubernetes, KubeCluster: "minikube-abc234"},
+		{Name: "docker-1", Status: fleet.StatusCreating, Backend: fleet.BackendDevcontainer},
+	}}}}
+
+	s.serviceWatched(context.Background(), sched, st, t0.Add(automationCreateTimeout-time.Second))
+	if len(rec.reaped) != 0 || len(sched.watched) != 2 {
+		t.Fatalf("reaped %v inside the deadline", rec.reaped)
+	}
+	s.serviceWatched(context.Background(), sched, st, t0.Add(automationCreateTimeout))
+	if len(rec.reaped) != 1 || rec.reaped[0] != "k8s-1" {
+		t.Fatalf("reaped %v past the deadline, want only the cluster run", rec.reaped)
+	}
+	if _, ok := sched.watched["alpha/k8s-1"]; ok {
+		t.Fatal("the destroyed run is still watched")
+	}
+	if _, ok := sched.watched["alpha/docker-1"]; !ok {
+		t.Fatal("the docker run lost its watch")
+	}
+
+	logs, _, err := readTriggerLogs("alpha", "hook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# outcome: 2026-10-11T09:20:00Z builder: create of k8s-1 did not finish within 20m0s (FLEET_AUTOMATION_CREATE_TIMEOUT); the instance was destroyed"
+	if !strings.Contains(logs, want) {
+		t.Fatalf("trigger log lacks the outcome %q:\n%s", want, logs)
+	}
+	// The payload still reads back for a run a restart has yet to launch.
+	body, err := readTriggerEventBody("alpha", ev, logName, len(ev.body))
+	if err != nil || string(body) != `{"a":1}` {
+		t.Fatalf("payload after the outcome = %q, %v", body, err)
+	}
+}
+
+// An outcome goes only to a firing's own log: an adopted run has none, and
+// a log name that is not a plain event log is ignored.
+func TestRecordTriggerOutcomeNeedsTheFiringsLog(t *testing.T) {
+	isolateFleetDir(t)
+	var wrote []string
+	orig := appendTriggerOutcome
+	appendTriggerOutcome = func(_, _, name string, _ time.Time, _, msg string) { wrote = append(wrote, name+": "+msg) }
+	t.Cleanup(func() { appendTriggerOutcome = orig })
+	now := time.Now()
+	recordTriggerOutcome(&watchedAgent{fleet: "alpha", instance: "adopted-1", adopted: true}, now, "x")
+	if len(wrote) != 0 {
+		t.Fatalf("an adopted run wrote %v", wrote)
+	}
+	appendTriggerOutcome = orig
+	orig("alpha", "hook", "../escape.log", now, "a", "x")
+	if _, err := os.Stat(filepath.Join(state.TriggerLogsDir("alpha", "hook"), "..", "escape.log")); err == nil {
+		t.Fatal("an outcome escaped the trigger's log directory")
 	}
 }

@@ -54,6 +54,26 @@ func (c *KubeCluster) DisplayNameOrID() string {
 	return c.GetDisplayName()
 }
 
+// FindOrOnlyKubeCluster is FindKubeCluster, except that an empty ref names
+// the only connection: what an agent saved with the kubernetes backend and
+// no cluster runs on.
+func FindOrOnlyKubeCluster(clusters []*KubeClusterStatus, ref string) (*KubeClusterStatus, error) {
+	if ref != "" {
+		return FindKubeCluster(clusters, ref)
+	}
+	switch len(clusters) {
+	case 0:
+		return nil, fmt.Errorf("no Kubernetes connection: connect a cluster first")
+	case 1:
+		return clusters[0], nil
+	}
+	names := make([]string, len(clusters))
+	for i, st := range clusters {
+		names[i] = st.GetCluster().DisplayNameOrID()
+	}
+	return nil, fmt.Errorf("%d Kubernetes connections (%s): name one", len(clusters), strings.Join(names, ", "))
+}
+
 // FindKubeCluster finds the connection ref names: its id, else its display
 // name (in any case: the daemon keeps display names unique regardless of
 // case), else the context it uses when exactly one connection uses it.

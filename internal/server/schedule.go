@@ -56,6 +56,13 @@ var (
 	// Overridable via FLEET_AUTOMATION_IDLE_TIMEOUT (a Go duration) for the same
 	// reason — production keeps the 2m default.
 	automationIdleTimeout = envDurationDefault("FLEET_AUTOMATION_IDLE_TIMEOUT", 2*time.Minute)
+	// automationCreateTimeout bounds an automation run's create on a
+	// cluster: a run still creating past it is destroyed (its pod and disk
+	// with it) and the firing's trigger log says so, so a create stuck on a
+	// paid cluster (an unschedulable pod, a slow pull) stops costing.
+	// Overridable via FLEET_AUTOMATION_CREATE_TIMEOUT (a Go duration). Runs
+	// on the other backends keep no deadline, as before.
+	automationCreateTimeout = envDurationDefault("FLEET_AUTOMATION_CREATE_TIMEOUT", 20*time.Minute)
 )
 
 // envDurationDefault returns the Go duration parsed from the named env var, or
@@ -472,8 +479,14 @@ func (s *service) serviceWatched(ctx context.Context, sched *scheduler, st *stat
 			continue
 		case fleet.StatusRunning:
 			// fall through
+		case fleet.StatusCreating:
+			if createOverdue(w, inst, now) {
+				s.abandonOverdueCreate(w, inst, now)
+				delete(sched.watched, k)
+			}
+			continue
 		default:
-			continue // still creating / transitional
+			continue // transitional
 		}
 
 		if !w.launched {
@@ -523,6 +536,23 @@ func (s *service) serviceWatched(ctx context.Context, sched *scheduler, st *stat
 	}
 }
 
+// createOverdue reports whether w's run, still creating, has outlived
+// automationCreateTimeout: only a cluster run has the deadline.
+func createOverdue(w *watchedAgent, inst *fleet.Instance, now time.Time) bool {
+	return !w.launched && inst.Backend == fleet.BackendKubernetes && automationCreateTimeout > 0 &&
+		now.Sub(w.spawnedAt) >= automationCreateTimeout
+}
+
+// abandonOverdueCreate destroys a run whose create outlived the deadline (the
+// destroy cancels the create job and tears down what it made) and records
+// the outcome in the firing's trigger log.
+func (s *service) abandonOverdueCreate(w *watchedAgent, inst *fleet.Instance, now time.Time) {
+	took := now.Sub(w.spawnedAt).Round(time.Second)
+	flog.Warn("automation: create deadline passed; destroying the run", "fleet", w.fleet, "instance", w.instance, "agent", w.agent, "after", took.String(), "deadline", automationCreateTimeout.String())
+	recordTriggerOutcome(w, now, fmt.Sprintf("create of %s did not finish within %s (FLEET_AUTOMATION_CREATE_TIMEOUT); the instance was destroyed", inst.Name, automationCreateTimeout))
+	reapAutomationInstance(s, w.fleet, w.instance)
+}
+
 func findInstance(st *state.State, fleetName, instanceName string) *fleet.Instance {
 	f, ok := st.Fleets[fleetName]
 	if !ok {
@@ -569,17 +599,26 @@ func sanitizeAutomationName(s string) string {
 // --- Live operation seams (overridden in tests) ----------------------------
 
 // createAutomationInstance spawns a new instance for an agent run and returns
-// its name. It reuses the same job path as the CreateInstance RPC.
+// its name. It reuses the same job path as the CreateInstance RPC, on the
+// agent's stored target: its backend and, for a Kubernetes agent, its
+// cluster connection (whose quotas the create checks).
 var createAutomationInstance = func(s *service, fleetName string, ag fleet.Agent, now time.Time) (string, error) {
 	instName := automationInstanceName(ag.Name, now)
-	if _, err := s.startCreateInstanceJob(&fleetgrpc.CreateInstanceRequest{
-		Fleet:    fleetName,
-		Instance: instName,
-		Backend:  protoconv.BackendToProto(ag.Backend),
-	}, true); err != nil {
+	if _, err := s.startCreateInstanceJob(automationCreateRequest(fleetName, instName, ag), true); err != nil {
 		return "", err
 	}
 	return instName, nil
+}
+
+// automationCreateRequest is the create of an agent run's instance.
+func automationCreateRequest(fleetName, instName string, ag fleet.Agent) *fleetgrpc.CreateInstanceRequest {
+	target := ag.DeployTarget()
+	return &fleetgrpc.CreateInstanceRequest{
+		Fleet:       fleetName,
+		Instance:    instName,
+		Backend:     protoconv.BackendToProto(target.Backend),
+		KubeCluster: target.KubeCluster,
+	}
 }
 
 // launchAutomationCommand starts the agent's command in a fresh tmux session

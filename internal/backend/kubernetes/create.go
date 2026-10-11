@@ -101,7 +101,7 @@ func (b *Backend) UpContext(ctx context.Context, req backend.UpRequest) (*backen
 		flog.Error("kube create failed", "fleet", id.fleet, "instance", id.name, "cluster", id.cluster, "key", id.key, "ms", time.Since(c.start).Milliseconds(), "err", err)
 		return nil, err
 	}
-	flog.Info("kube create: instance running", "fleet", id.fleet, "instance", id.name, "cluster", id.cluster, "container", res.ContainerID, "ms", time.Since(c.start).Milliseconds())
+	flog.Info("kube create: instance running", "fleet", id.fleet, "instance", id.name, "cluster", id.cluster, "container", res.ContainerID, "ms", time.Since(c.start).Milliseconds(), "seed_cache", c.seedCacheUse)
 	return res, nil
 }
 
@@ -153,6 +153,9 @@ type creation struct {
 	// nodeImage is the id the node gave a node-loaded image, learned from
 	// the seed Job's pod (the first to run it).
 	nodeImage string
+	// seedCacheUse says how the create used its image's seed cache, for
+	// its outcome line ("" without one).
+	seedCacheUse string
 }
 
 func (c *creation) run(ctx context.Context) (*backend.UpResult, error) {
@@ -227,7 +230,17 @@ func (c *creation) provision(ctx context.Context, cfg *devcli.Config) (*backend.
 	if err := c.step(ctx, stepApply, fleet.StepApplyManifests, ""); err != nil {
 		return nil, err
 	}
-	if err := c.apply(ctx, KindPVC, adm.Objects.Disk.Name, true, adm.Objects.Disk); err != nil {
+	o := adm.Objects
+	spec := c.seedSpec(adm, img.capture)
+	cache := c.seedCacheFor(ctx, spec, img.capture.Image.ID, o.Disk)
+	if cache != nil && cache.build {
+		defer seedCaches.release(c.id.cluster, cache.id)
+	}
+	if cache != nil && cache.clone {
+		cache.cloneFrom(o.Disk)
+	}
+	applied := time.Now()
+	if err := c.apply(ctx, KindPVC, o.Disk.Name, true, o.Disk); err != nil {
 		return nil, err
 	}
 	if err := c.applyGeneration(ctx, adm); err != nil {
@@ -237,9 +250,18 @@ func (c *creation) provision(ctx context.Context, cfg *devcli.Config) (*backend.
 	if err := c.step(ctx, stepSeed, fleet.StepSeed, ""); err != nil {
 		return nil, err
 	}
-	manifest, err := c.seed(ctx, adm, img)
+	if cache != nil && cache.clone {
+		backend.ReportStep(ctx, fleet.StepSeed, "cloning the disk from seed cache "+cache.name)
+		if err := c.seedFromCache(ctx, o, spec, cache, applied); err != nil {
+			return nil, err
+		}
+	}
+	manifest, err := c.seed(ctx, adm, img, spec)
 	if err != nil {
 		return nil, err
+	}
+	if cache != nil && cache.build {
+		c.buildSeedCache(ctx, adm, r, img.del, cache)
 	}
 	return c.launch(ctx, adm, r, manifest, img, cfg)
 }
@@ -667,12 +689,11 @@ func applyObject(ctx context.Context, cs kclient.Interface, ns, kind, name strin
 	return string(m.GetUID()), nil
 }
 
-// seed runs the seed Job: the image root onto the disk, the workspace in,
-// the share uid remap; it returns the seeded generation's manifest.
-// A rebuild's seed (c.prevGen set) first moves the generation it replaces to
-// trash and keeps the workspace on the disk as it is.
-func (c *creation) seed(ctx context.Context, adm *podspec.Admitted, img *built) (*podseed.Manifest, error) {
-	capture, del := img.capture, img.del
+// seedSpec is the seed Job's work: the image root onto the disk, the
+// workspace in, the share uid remap. A rebuild's seed (c.prevGen set) first
+// moves the generation it replaces to trash and keeps the workspace on the
+// disk as it is.
+func (c *creation) seedSpec(adm *podspec.Admitted, capture *devcli.CaptureResult) *podseed.SeedSpec {
 	spec := podspec.SeedSpec(adm.Result, adm.Objects)
 	uid, gid := shareIDs()
 	if c.identity.NonRoot {
@@ -685,9 +706,19 @@ func (c *creation) seed(ctx context.Context, adm *podspec.Admitted, img *built) 
 			spec.Remap = &podseed.Remap{User: u, UID: uid, GID: gid}
 		}
 	}
+	if c.prevGen > 0 {
+		spec.Reset, spec.PrevGen, spec.Workspace = true, c.prevGen, nil
+	}
+	return spec
+}
+
+// seed runs the seed Job of spec; it returns the seeded generation's
+// manifest. A rebuild's keeps the workspace on the disk: no tar goes in.
+func (c *creation) seed(ctx context.Context, adm *podspec.Admitted, img *built, spec *podseed.SeedSpec) (*podseed.Manifest, error) {
+	del := img.del
 	workspace := workspaceTar(c.req.WorkspaceDir)
 	if c.prevGen > 0 {
-		spec.Reset, spec.PrevGen, spec.Workspace, workspace = true, c.prevGen, nil, nil
+		workspace = nil
 	}
 	job := adm.Objects.Seed
 	want := job.Job.Spec.Template.Spec

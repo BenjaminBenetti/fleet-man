@@ -61,6 +61,9 @@ const (
 	// AnnotationHolderHost names the host of the daemon holding an owner
 	// Lease, for the OWNER_CONFLICT message.
 	AnnotationHolderHost = "fleet.dev/holder-host"
+	// AnnotationSeedCacheReady marks a seed cache whose build finished (its
+	// value the time): only then is it cloned from.
+	AnnotationSeedCacheReady = "fleet.dev/seed-cache-ready"
 )
 
 // Role is LabelRole's value: what an object is for.
@@ -79,6 +82,9 @@ const (
 	RolePullSecret Role = "pull-secret"
 	// RoleProbe marks the deep test's throwaway pods.
 	RoleProbe Role = "probe"
+	// RoleSeedCache marks a seed cache: an image's seeded root on its own
+	// disk, which automation instances' disks are cloned from (SeedCache).
+	RoleSeedCache Role = "seed-cache"
 )
 
 // Base returns the labels every object of one connection carries: managed-by,
@@ -112,13 +118,18 @@ var hashEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPa
 // hash8 hashes a domain tag and fields, each length-prefixed so no two field
 // lists hash the same input, to HashLen characters.
 func hash8(domain string, fields ...string) string {
+	return hashN(HashLen, domain, fields...)
+}
+
+// hashN is hash8 to n characters (at most 52).
+func hashN(n int, domain string, fields ...string) string {
 	h := sha256.New()
-	var n [binary.MaxVarintLen64]byte
+	var l [binary.MaxVarintLen64]byte
 	for _, f := range append([]string{domain}, fields...) {
-		h.Write(n[:binary.PutUvarint(n[:], uint64(len(f)))])
+		h.Write(l[:binary.PutUvarint(l[:], uint64(len(f)))])
 		h.Write([]byte(f))
 	}
-	return hashEncoding.EncodeToString(h.Sum(nil))[:HashLen]
+	return hashEncoding.EncodeToString(h.Sum(nil))[:n]
 }
 
 // InstanceKey is an instance's key8: the hash of the daemon, fleet, instance
@@ -232,6 +243,27 @@ func RollbackJob(statefulSet string, gen int) string {
 // generation gen once a rebuild to gen succeeded: "<sts>-cmit-g<gen>".
 func CommitJob(statefulSet string, gen int) string {
 	return statefulSet + "-cmit-g" + strconv.Itoa(gen)
+}
+
+// SeedCacheJob is the name of the Job that trims the clone of an instance's
+// freshly seeded disk into a seed cache: "<sts>-cache".
+func SeedCacheJob(statefulSet string) string {
+	return statefulSet + "-cache"
+}
+
+// SeedCacheIDLen is the length of a SeedCacheID.
+const SeedCacheIDLen = 12
+
+// SeedCacheID is the id12 of a seed cache: the hash of the daemon, the
+// connection and fields, which name what the cached root was seeded from
+// (the image and the seed's root-shaping inputs).
+func SeedCacheID(daemonID, clusterID string, fields ...string) string {
+	return hashN(SeedCacheIDLen, "fleet.dev/seed-cache", append([]string{daemonID, clusterID}, fields...)...)
+}
+
+// SeedCache is the name of seed cache id12's disk: "fi-seedcache-<id12>".
+func SeedCache(id12 string) string {
+	return instancePrefix + "seedcache-" + id12
 }
 
 // The suffixes of the per-(fleet, connection) objects (FleetObject).

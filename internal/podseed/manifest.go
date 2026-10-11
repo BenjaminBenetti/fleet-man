@@ -55,6 +55,12 @@ type Manifest struct {
 	Remap *RemapResult `json:"remap,omitempty"`
 	// Binary is the sha256 of the fleet binary the seed installed.
 	Binary string `json:"binary,omitempty"`
+	// SeedCache marks a seed cache (OpSeedCache): this disk holds only the
+	// generation's root/ and this manifest, and its id is SeedCache.
+	SeedCache string `json:"seed_cache,omitempty"`
+	// FromCache is the seed cache this generation's root/ was cloned from
+	// (SeedSpec.Cache); "" when the seed copied the root itself.
+	FromCache string `json:"from_cache,omitempty"`
 	// Warnings are what the seed could not keep (at most 50).
 	Warnings []string `json:"warnings,omitempty"`
 }

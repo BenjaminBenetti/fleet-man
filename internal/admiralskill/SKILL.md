@@ -91,7 +91,7 @@ surfaces as a tool error.
   is normally a git URL, but `file:///abs/dir` names a local TEMPLATE directory
   on the daemon host instead: fleet copies it into each new instance rather
   than cloning (a template fleet takes no `branch` and only the `devcontainer`
-  backend).
+  or `kubernetes` backend).
   `backend` selects where it runs: `devcontainer`, `coder`, `codespaces`, or
   `kubernetes` (a pod on one of the daemon's cluster connections).
   `cluster` names that connection by id, name or kube context (see
@@ -166,10 +166,13 @@ These tools let you set that up for the user.
 - `fleet_automation_list {fleet}` returns the fleet's `{agents, triggers}`.
   Read it first before an update — updates are field-merges, so you send only
   what changes.
-- `fleet_agent_create {fleet, name, command?, system_prompt?, backend?}` and
+- `fleet_agent_create {fleet, name, command?, system_prompt?, backend?, cluster?}` and
   `fleet_agent_update {fleet, name, new_name?, command?, system_prompt?,
-  backend?}` (omit a field to keep it; `new_name` renames and rewrites the
-  triggers that reference it). `fleet_agent_delete {fleet, name}` refuses while
+  backend?, cluster?}` (omit a field to keep it; `new_name` renames and rewrites the
+  triggers that reference it). `cluster` (a connection's id, name or kube
+  context) runs the agent's instances on that Kubernetes connection; with
+  neither `backend` nor `cluster` an agent runs on `devcontainer`, never on the
+  remembered default, since it fires unattended. `fleet_agent_delete {fleet, name}` refuses while
   a trigger still references the agent — detach it first.
 - `fleet_trigger_create {fleet, name, type, agents[], prompt?, ...}` where
   `type` is `schedule` (needs `cron`), `bash` (needs `cron` + `script`, a command

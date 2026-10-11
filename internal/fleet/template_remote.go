@@ -124,8 +124,8 @@ func ValidateTemplateCreate(remote, branch string, backendType BackendType) erro
 	if branch != "" {
 		return fmt.Errorf("a branch cannot be checked out for a %s template fleet (the template dir is copied as-is)", TemplateScheme)
 	}
-	if backendType != BackendDevcontainer {
-		return fmt.Errorf("a %s template fleet requires the devcontainer backend (got %s)", TemplateScheme, backendType)
+	if !backendType.CopiesTemplates() {
+		return fmt.Errorf("a %s template fleet requires the devcontainer or kubernetes backend (got %s)", TemplateScheme, backendType)
 	}
 	return nil
 }

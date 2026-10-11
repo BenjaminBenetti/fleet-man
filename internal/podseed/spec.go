@@ -37,6 +37,11 @@ const (
 	// workspace export, `fleet pod-job ws-export`). Gen is the generation
 	// the disk holds.
 	OpTool Op = "tool"
+	// OpSeedCache trims the clone of an instance disk whose seed made root
+	// generation Gen down to that generation's root and manifest, and marks
+	// it as seed cache Cache: the disk later automation instances' disks
+	// are cloned from (SeedSpec.Cache).
+	OpSeedCache Op = "seed-cache"
 )
 
 // ToolResult is an OpTool job's result document.
@@ -70,6 +75,8 @@ type JobSpec struct {
 	ResultHold   string `json:"result_hold,omitempty"`
 	// Seed is what an OpSeed copies.
 	Seed *SeedSpec `json:"seed,omitempty"`
+	// Cache is the seed cache id an OpSeedCache marks its disk as.
+	Cache string `json:"cache,omitempty"`
 }
 
 // SeedSpec is an OpSeed's work.
@@ -101,6 +108,12 @@ type SeedSpec struct {
 	Workspace *Workspace `json:"workspace,omitempty"`
 	// Workers is how many files are copied at once; 0 is 8.
 	Workers int `json:"workers,omitempty"`
+	// Cache, when set, says the disk was cloned from seed cache Cache: its
+	// root/ is kept, and only the rest is seeded (the workspace, volumes,
+	// the binary, the kubelet files), when the disk's manifest marks it as
+	// that cache and lists this image's top-level dirs; otherwise the root
+	// is seeded in full.
+	Cache string `json:"cache,omitempty"`
 }
 
 // Remap is the devcontainer CLI's updateRemoteUserUID, done in the seed:
@@ -189,6 +202,9 @@ func (s JobSpec) Validate() error {
 			return fmt.Errorf("%s %q is not a positive duration", name, d)
 		}
 	}
+	if s.Cache != "" && (s.Op != OpSeedCache || !isCacheID(s.Cache)) {
+		return fmt.Errorf("cache %q is not a seed cache id of a %s job", s.Cache, OpSeedCache)
+	}
 	switch s.Op {
 	case OpSeed:
 		if s.Seed == nil {
@@ -198,6 +214,14 @@ func (s JobSpec) Validate() error {
 	case OpRollback, OpCommit, OpTool:
 		if s.Seed != nil {
 			return fmt.Errorf("a %s job takes no seed spec", s.Op)
+		}
+		return nil
+	case OpSeedCache:
+		if s.Seed != nil {
+			return fmt.Errorf("a %s job takes no seed spec", s.Op)
+		}
+		if s.Cache == "" {
+			return fmt.Errorf("a %s job needs the cache id", s.Op)
 		}
 		return nil
 	}
@@ -250,7 +274,29 @@ func (s SeedSpec) validate(gen int) error {
 	if s.Workers < 0 {
 		return fmt.Errorf("workers %d is negative", s.Workers)
 	}
+	if s.Cache != "" {
+		if !isCacheID(s.Cache) {
+			return fmt.Errorf("cache %q is not a seed cache id", s.Cache)
+		}
+		if s.Reset {
+			return errors.New("a rebuild's reset does not seed from a seed cache")
+		}
+	}
 	return nil
+}
+
+// isCacheID reports whether id can be a seed cache id: one short word of
+// [a-z0-9].
+func isCacheID(id string) bool {
+	if id == "" || len(id) > 63 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if c := id[i]; (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // checkAbs reports whether p is a clean absolute path.

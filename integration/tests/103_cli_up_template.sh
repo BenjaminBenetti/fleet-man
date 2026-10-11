@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Description: `fleet up <fleet>/<name> --repo file:///dir` copies a local template dir into each instance instead of cloning.
+# itest: k8s
+# Description: `fleet up <fleet>/<name> --repo file:///dir` copies a local template dir into each instance instead of cloning, on fleetd's remembered target when no --backend is given (a cluster on kubernetes).
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -84,6 +85,11 @@ assert_contains "${ls_out}" "running"  "instance should be running"
 
 state=$(cat "${HOME}/.fleet/state.json")
 assert_contains "${state}" "\"remote\": \"${template_url}\"" "fleet record should keep the file:// remote"
+# No --backend: the remembered target (the run's connection on kubernetes,
+# which a template fleet keeps) rather than a hard-coded devcontainer.
+assert_equals "${FLEET_ITEST_BACKEND}" \
+  "$(jq -r '.fleets.scratch.instances[] | select(.name == "alpha") | .backend' "${HOME}/.fleet/state.json")" \
+  "the template instance should run on the remembered target"
 
 # ===========================================
 # Isolation: editing the instance never touches the template, and a second
