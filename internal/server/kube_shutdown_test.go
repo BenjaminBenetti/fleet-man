@@ -332,3 +332,51 @@ func TestCheckpointKubeJobs(t *testing.T) {
 		t.Fatalf("checkpoint with a stuck job took %v, want its 200ms deadline", took)
 	}
 }
+
+// A daemon served again in the same process starts with a live pool: the
+// last one's shutdown ended the pool it had.
+func TestServeAgainGetsALivePool(t *testing.T) {
+	client, served := startServe(t)
+	// This daemon's shutdown ends the real pool.
+	kubeShutdownPool = defaultKubeShutdownPool
+	shutdownAndWait(t, client, served)
+	if _, err := kubernetes.DefaultPool().Cluster("nope-aaaaaa"); errors.Is(err, kubernetes.ErrClusterNotFound) {
+		t.Fatal("the shutdown left the pool up")
+	}
+
+	client, served = startServe(t)
+	if _, err := kubernetes.DefaultPool().Cluster("nope-aaaaaa"); !errors.Is(err, kubernetes.ErrClusterNotFound) {
+		t.Fatalf("the next daemon's pool: %v, want a live one", err)
+	}
+	shutdownAndWait(t, client, served)
+}
+
+// The pool ends only once the Kubernetes jobs reached their checkpoint (or
+// the budget ran out): a cancelled create still scales its pod down through
+// it while it winds down.
+func TestKubeShutdownEndsThePoolAfterTheCheckpoint(t *testing.T) {
+	isolateFleetDir(t)
+	if err := state.Update(func(st *state.State) error {
+		return st.GetOrCreateFleet("alpha", "https://example.invalid/a.git").AddInstance(
+			&fleet.Instance{Name: "pod", Status: fleet.StatusCreating, Backend: fleet.BackendKubernetes, KubeCluster: "mk-abc", KubeKey: "aaaaaaaa"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stubServeShutdownPool(t)
+	pool := servePool
+	svc := newService()
+	bg, shutdown := context.WithCancel(context.Background())
+	defer shutdown()
+	j := svc.jobs.start(bg, fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, "alpha", "pod", time.Now())
+	go svc.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
+		<-j.ctx.Done()
+		time.Sleep(200 * time.Millisecond)
+		pool.record("job stopped")
+		return nil, nil, errors.New("cancelled")
+	})
+	shutdown()
+	runShutdownSteps(5*time.Second, svc.kubeShutdownSteps())
+	if got, want := pool.recorded(), []string{"sessions", "job stopped", "close"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("shutdown %v, want %v", got, want)
+	}
+}
