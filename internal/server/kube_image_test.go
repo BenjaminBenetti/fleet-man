@@ -234,9 +234,8 @@ func TestKubeDeliveryOrder(t *testing.T) {
 func TestKubeDeepTestPullsThroughTheGateway(t *testing.T) {
 	f := newKubeFixture(t)
 	withGatewayImages(t, f)
-	id := f.add(&fleetgrpc.KubeCluster{Context: "prod"}).GetCluster().GetId()
-	f.start()
-	f.awaitFull(id)
+	// The reactor goes in before the daemon's workers use the clientset
+	// (PrependReactor is not safe beside a running caller).
 	cs := f.apis["prod"]
 	var pulled []string
 	var mu sync.Mutex
@@ -257,6 +256,9 @@ func TestKubeDeepTestPullsThroughTheGateway(t *testing.T) {
 			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "StartError", ExitCode: 128}}}}
 		return true, pod, nil
 	})
+	id := f.add(&fleetgrpc.KubeCluster{Context: "prod"}).GetCluster().GetId()
+	f.start()
+	f.awaitFull(id)
 
 	st, err := f.svc.kube.test(context.Background(), id, fullRun{deep: true}, nil)
 	if err != nil {
