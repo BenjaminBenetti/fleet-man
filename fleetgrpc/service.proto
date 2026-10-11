@@ -93,6 +93,10 @@ service FleetService {
   // Trust one host key the daemon offered (UnknownSSHHostKey detail) for an
   // ssh:// remote, then resolve it again. Local-only, like ResolveArmadaRemote.
   rpc TrustSSHHostKey(TrustSSHHostKeyRequest) returns (TrustSSHHostKeyReply);
+  // Remember / look up a remote daemon an editor alias leads to (armada.proto,
+  // editor_endpoints.json). Local-only, like Get/SetArmada.
+  rpc SaveEditorEndpoint(SaveEditorEndpointRequest) returns (SaveEditorEndpointReply);
+  rpc ResolveEditorEndpoint(ResolveEditorEndpointRequest) returns (ResolveEditorEndpointReply);
 
   // Interactive approval of unknown git-host keys on THIS daemon's host.
   // Unlike Armada trust, this is available to authenticated remote clients.
@@ -102,6 +106,8 @@ service FleetService {
   rpc Exec(stream ExecIn) returns (stream ExecOut);
   rpc ResolveExecCommand(ResolveExecCommandRequest) returns (ResolveExecCommandReply);
   rpc ResolveLogsCommand(ResolveLogsCommandRequest) returns (ResolveLogsCommandReply);
+  // How the caller opens VS Code on an instance (exec.proto).
+  rpc ResolveEditorLaunch(ResolveEditorLaunchRequest) returns (ResolveEditorLaunchReply);
   rpc Logs(LogsRequest) returns (stream LogLine);
   // IssueKubeExecCredential hands the daemon-host `fleet kube-exec` shim the
   // transport fleetd reaches a Kubernetes connection's API server with

@@ -47,10 +47,13 @@ const (
 	FleetService_SetArmada_FullMethodName               = "/fleetgrpc.FleetService/SetArmada"
 	FleetService_ResolveArmadaRemote_FullMethodName     = "/fleetgrpc.FleetService/ResolveArmadaRemote"
 	FleetService_TrustSSHHostKey_FullMethodName         = "/fleetgrpc.FleetService/TrustSSHHostKey"
+	FleetService_SaveEditorEndpoint_FullMethodName      = "/fleetgrpc.FleetService/SaveEditorEndpoint"
+	FleetService_ResolveEditorEndpoint_FullMethodName   = "/fleetgrpc.FleetService/ResolveEditorEndpoint"
 	FleetService_GitHostKeys_FullMethodName             = "/fleetgrpc.FleetService/GitHostKeys"
 	FleetService_Exec_FullMethodName                    = "/fleetgrpc.FleetService/Exec"
 	FleetService_ResolveExecCommand_FullMethodName      = "/fleetgrpc.FleetService/ResolveExecCommand"
 	FleetService_ResolveLogsCommand_FullMethodName      = "/fleetgrpc.FleetService/ResolveLogsCommand"
+	FleetService_ResolveEditorLaunch_FullMethodName     = "/fleetgrpc.FleetService/ResolveEditorLaunch"
 	FleetService_Logs_FullMethodName                    = "/fleetgrpc.FleetService/Logs"
 	FleetService_IssueKubeExecCredential_FullMethodName = "/fleetgrpc.FleetService/IssueKubeExecCredential"
 	FleetService_PodExec_FullMethodName                 = "/fleetgrpc.FleetService/PodExec"
@@ -148,6 +151,10 @@ type FleetServiceClient interface {
 	// Trust one host key the daemon offered (UnknownSSHHostKey detail) for an
 	// ssh:// remote, then resolve it again. Local-only, like ResolveArmadaRemote.
 	TrustSSHHostKey(ctx context.Context, in *TrustSSHHostKeyRequest, opts ...grpc.CallOption) (*TrustSSHHostKeyReply, error)
+	// Remember / look up a remote daemon an editor alias leads to (armada.proto,
+	// editor_endpoints.json). Local-only, like Get/SetArmada.
+	SaveEditorEndpoint(ctx context.Context, in *SaveEditorEndpointRequest, opts ...grpc.CallOption) (*SaveEditorEndpointReply, error)
+	ResolveEditorEndpoint(ctx context.Context, in *ResolveEditorEndpointRequest, opts ...grpc.CallOption) (*ResolveEditorEndpointReply, error)
 	// Interactive approval of unknown git-host keys on THIS daemon's host.
 	// Unlike Armada trust, this is available to authenticated remote clients.
 	GitHostKeys(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GitHostKeyAnswer, GitHostKeyPrompt], error)
@@ -155,6 +162,8 @@ type FleetServiceClient interface {
 	Exec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecIn, ExecOut], error)
 	ResolveExecCommand(ctx context.Context, in *ResolveExecCommandRequest, opts ...grpc.CallOption) (*ResolveExecCommandReply, error)
 	ResolveLogsCommand(ctx context.Context, in *ResolveLogsCommandRequest, opts ...grpc.CallOption) (*ResolveLogsCommandReply, error)
+	// How the caller opens VS Code on an instance (exec.proto).
+	ResolveEditorLaunch(ctx context.Context, in *ResolveEditorLaunchRequest, opts ...grpc.CallOption) (*ResolveEditorLaunchReply, error)
 	Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error)
 	// IssueKubeExecCredential hands the daemon-host `fleet kube-exec` shim the
 	// transport fleetd reaches a Kubernetes connection's API server with
@@ -591,6 +600,26 @@ func (c *fleetServiceClient) TrustSSHHostKey(ctx context.Context, in *TrustSSHHo
 	return out, nil
 }
 
+func (c *fleetServiceClient) SaveEditorEndpoint(ctx context.Context, in *SaveEditorEndpointRequest, opts ...grpc.CallOption) (*SaveEditorEndpointReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SaveEditorEndpointReply)
+	err := c.cc.Invoke(ctx, FleetService_SaveEditorEndpoint_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) ResolveEditorEndpoint(ctx context.Context, in *ResolveEditorEndpointRequest, opts ...grpc.CallOption) (*ResolveEditorEndpointReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveEditorEndpointReply)
+	err := c.cc.Invoke(ctx, FleetService_ResolveEditorEndpoint_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fleetServiceClient) GitHostKeys(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[GitHostKeyAnswer, GitHostKeyPrompt], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &FleetService_ServiceDesc.Streams[7], FleetService_GitHostKeys_FullMethodName, cOpts...)
@@ -631,6 +660,16 @@ func (c *fleetServiceClient) ResolveLogsCommand(ctx context.Context, in *Resolve
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ResolveLogsCommandReply)
 	err := c.cc.Invoke(ctx, FleetService_ResolveLogsCommand_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fleetServiceClient) ResolveEditorLaunch(ctx context.Context, in *ResolveEditorLaunchRequest, opts ...grpc.CallOption) (*ResolveEditorLaunchReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveEditorLaunchReply)
+	err := c.cc.Invoke(ctx, FleetService_ResolveEditorLaunch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1020,6 +1059,10 @@ type FleetServiceServer interface {
 	// Trust one host key the daemon offered (UnknownSSHHostKey detail) for an
 	// ssh:// remote, then resolve it again. Local-only, like ResolveArmadaRemote.
 	TrustSSHHostKey(context.Context, *TrustSSHHostKeyRequest) (*TrustSSHHostKeyReply, error)
+	// Remember / look up a remote daemon an editor alias leads to (armada.proto,
+	// editor_endpoints.json). Local-only, like Get/SetArmada.
+	SaveEditorEndpoint(context.Context, *SaveEditorEndpointRequest) (*SaveEditorEndpointReply, error)
+	ResolveEditorEndpoint(context.Context, *ResolveEditorEndpointRequest) (*ResolveEditorEndpointReply, error)
 	// Interactive approval of unknown git-host keys on THIS daemon's host.
 	// Unlike Armada trust, this is available to authenticated remote clients.
 	GitHostKeys(grpc.BidiStreamingServer[GitHostKeyAnswer, GitHostKeyPrompt]) error
@@ -1027,6 +1070,8 @@ type FleetServiceServer interface {
 	Exec(grpc.BidiStreamingServer[ExecIn, ExecOut]) error
 	ResolveExecCommand(context.Context, *ResolveExecCommandRequest) (*ResolveExecCommandReply, error)
 	ResolveLogsCommand(context.Context, *ResolveLogsCommandRequest) (*ResolveLogsCommandReply, error)
+	// How the caller opens VS Code on an instance (exec.proto).
+	ResolveEditorLaunch(context.Context, *ResolveEditorLaunchRequest) (*ResolveEditorLaunchReply, error)
 	Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error
 	// IssueKubeExecCredential hands the daemon-host `fleet kube-exec` shim the
 	// transport fleetd reaches a Kubernetes connection's API server with
@@ -1204,6 +1249,12 @@ func (UnimplementedFleetServiceServer) ResolveArmadaRemote(context.Context, *Res
 func (UnimplementedFleetServiceServer) TrustSSHHostKey(context.Context, *TrustSSHHostKeyRequest) (*TrustSSHHostKeyReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TrustSSHHostKey not implemented")
 }
+func (UnimplementedFleetServiceServer) SaveEditorEndpoint(context.Context, *SaveEditorEndpointRequest) (*SaveEditorEndpointReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SaveEditorEndpoint not implemented")
+}
+func (UnimplementedFleetServiceServer) ResolveEditorEndpoint(context.Context, *ResolveEditorEndpointRequest) (*ResolveEditorEndpointReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResolveEditorEndpoint not implemented")
+}
 func (UnimplementedFleetServiceServer) GitHostKeys(grpc.BidiStreamingServer[GitHostKeyAnswer, GitHostKeyPrompt]) error {
 	return status.Errorf(codes.Unimplemented, "method GitHostKeys not implemented")
 }
@@ -1215,6 +1266,9 @@ func (UnimplementedFleetServiceServer) ResolveExecCommand(context.Context, *Reso
 }
 func (UnimplementedFleetServiceServer) ResolveLogsCommand(context.Context, *ResolveLogsCommandRequest) (*ResolveLogsCommandReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ResolveLogsCommand not implemented")
+}
+func (UnimplementedFleetServiceServer) ResolveEditorLaunch(context.Context, *ResolveEditorLaunchRequest) (*ResolveEditorLaunchReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResolveEditorLaunch not implemented")
 }
 func (UnimplementedFleetServiceServer) Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error {
 	return status.Errorf(codes.Unimplemented, "method Logs not implemented")
@@ -1770,6 +1824,42 @@ func _FleetService_TrustSSHHostKey_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FleetService_SaveEditorEndpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SaveEditorEndpointRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).SaveEditorEndpoint(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_SaveEditorEndpoint_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).SaveEditorEndpoint(ctx, req.(*SaveEditorEndpointRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_ResolveEditorEndpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveEditorEndpointRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ResolveEditorEndpoint(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ResolveEditorEndpoint_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ResolveEditorEndpoint(ctx, req.(*ResolveEditorEndpointRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FleetService_GitHostKeys_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(FleetServiceServer).GitHostKeys(&grpc.GenericServerStream[GitHostKeyAnswer, GitHostKeyPrompt]{ServerStream: stream})
 }
@@ -1816,6 +1906,24 @@ func _FleetService_ResolveLogsCommand_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FleetServiceServer).ResolveLogsCommand(ctx, req.(*ResolveLogsCommandRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FleetService_ResolveEditorLaunch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveEditorLaunchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FleetServiceServer).ResolveEditorLaunch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FleetService_ResolveEditorLaunch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FleetServiceServer).ResolveEditorLaunch(ctx, req.(*ResolveEditorLaunchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2286,12 +2394,24 @@ var FleetService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _FleetService_TrustSSHHostKey_Handler,
 		},
 		{
+			MethodName: "SaveEditorEndpoint",
+			Handler:    _FleetService_SaveEditorEndpoint_Handler,
+		},
+		{
+			MethodName: "ResolveEditorEndpoint",
+			Handler:    _FleetService_ResolveEditorEndpoint_Handler,
+		},
+		{
 			MethodName: "ResolveExecCommand",
 			Handler:    _FleetService_ResolveExecCommand_Handler,
 		},
 		{
 			MethodName: "ResolveLogsCommand",
 			Handler:    _FleetService_ResolveLogsCommand_Handler,
+		},
+		{
+			MethodName: "ResolveEditorLaunch",
+			Handler:    _FleetService_ResolveEditorLaunch_Handler,
 		},
 		{
 			MethodName: "IssueKubeExecCredential",

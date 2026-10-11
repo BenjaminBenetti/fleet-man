@@ -283,10 +283,6 @@ func (b *Backend) Stats(containerIDs []string) (map[string]*backend.ContainerSta
 	return out, nil
 }
 
-// EditorURI has no editor integration on a cluster yet (Remote-SSH lands in
-// a later unit).
-func (b *Backend) EditorURI(string, string) (string, bool) { return "", false }
-
 // MicSinkCommand: the virtual microphone on a cluster is a later unit.
 func (b *Backend) MicSinkCommand(string) (*exec.Cmd, bool) { return nil, false }
 

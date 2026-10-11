@@ -508,6 +508,42 @@ message ResolveLogsCommandReply {
   repeated string argv = 1;
 }
 
+// ResolveEditorLaunch says how the caller opens VS Code on an instance (the
+// TUI's `c`, `fleet code`). The daemon picks the mode: a local caller opens a
+// local devcontainer instance through the Dev Containers URI; a remote caller
+// (gateway, Armada SSH, FLEET_SERVER) and every Kubernetes instance go through
+// VS Code Remote-SSH to the in-instance `fleet ssh-server`; Coder and
+// Codespaces keep their own CLIs.
+message ResolveEditorLaunchRequest {
+  string fleet = 1;
+  string instance = 2;
+}
+
+enum EditorLaunchMode {
+  EDITOR_LAUNCH_MODE_UNSPECIFIED = 0;
+  // DEVCONTAINER_URI: run argv (`code --folder-uri vscode-remote://dev-container+…`).
+  EDITOR_LAUNCH_MODE_DEVCONTAINER_URI = 1;
+  // CODER_CLI: run argv (`coder open vscode <workspace>`).
+  EDITOR_LAUNCH_MODE_CODER_CLI = 2;
+  // CODESPACES_CLI: run argv (`gh codespace code -c <name>`).
+  EDITOR_LAUNCH_MODE_CODESPACES_CLI = 3;
+  // REMOTE_SSH: the client opens `vscode-remote://ssh-remote+<alias><workspace_folder>`,
+  // where alias is the instance's `*.fleet` host, which ~/.ssh/fleet_config
+  // routes through `fleet ssh-proxy`. argv is empty: the alias names the
+  // daemon the client reached, which only the client knows.
+  EDITOR_LAUNCH_MODE_REMOTE_SSH = 4;
+}
+
+message ResolveEditorLaunchReply {
+  EditorLaunchMode mode = 1;
+  // argv the client runs for the DEVCONTAINER_URI, CODER_CLI and
+  // CODESPACES_CLI modes.
+  repeated string argv = 2;
+  // REMOTE_SSH: the folder VS Code opens inside the instance (the
+  // devcontainer's workspaceFolder).
+  string workspace_folder = 3;
+}
+
 // TriggerLogs reads back an automation trigger's recorded event logs. Each time
 // a trigger fires, the daemon writes the firing's payload (the webhook body, or
 // the schedule fire-time) to a per-trigger log directory, keeping the most
