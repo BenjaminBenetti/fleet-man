@@ -105,10 +105,10 @@ info "alias ${alias}"
 commit=c0ffee1234
 itest_editor_fake_vscode "${inst}" "${commit}"
 installs() {
-  "${FLEET_BIN}" exec "${inst}" -- sh -c 'cat "$HOME/.vscode-server/fake-installs.log" 2>/dev/null' || true
+  "${FLEET_BIN}" exec "${inst}" -- sh -c 'cat "$HOME/.vscode-server/fake-installs.log" 2>/dev/null; true' || true
 }
 machine_settings() {
-  "${FLEET_BIN}" exec "${inst}" -- sh -c 'cat "$HOME/.vscode-server/data/Machine/settings.json" 2>/dev/null' || true
+  "${FLEET_BIN}" exec "${inst}" -- sh -c 'cat "$HOME/.vscode-server/data/Machine/settings.json" 2>/dev/null; true' || true
 }
 wait_attach_runs() {
   local want="$1" deadline

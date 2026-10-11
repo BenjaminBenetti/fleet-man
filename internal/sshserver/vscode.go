@@ -26,9 +26,13 @@ import (
 //   - Each connection watches for VS Code's server in the account's home
 //     (~/.vscode-server, and -insiders: bin/<commit>/bin/code-server, or
 //     cli/servers/<quality>-<commit>/server/bin/code-server for the exec
-//     server Remote-SSH now installs). Once one is there, every extension in
-//     the merged config is installed with its `--install-extension`, each
-//     attempted once per container generation (EditorConfig.Gen), and the
+//     server Remote-SSH now installs). Once one runs (a process runs from
+//     its directory: Remote-SSH unpacks the server in place, its launcher
+//     long before the node_modules it needs, and starts it only once it is
+//     whole), every extension in the merged config is installed with its
+//     `--install-extension`, each attempted once per container generation
+//     (EditorConfig.Gen; an install the connection's end cut short was not
+//     an attempt), and the
 //     merged settings, port attributes included, are merged into the
 //     server's machine settings (data/Machine/settings.json) three ways:
 //     against what fleet last wrote, so a value the user changed or a key
@@ -58,6 +62,10 @@ type VSCodeOptions struct {
 	// is listened on by a process whose executable is under one of dirs
 	// (default: socketOwnedBy, from /proc; never off Linux).
 	Owned func(network, address string, dirs []string) bool
+	// Running reports whether a process whose executable is under dir runs:
+	// a server install directory's own node, once VS Code started it
+	// (default: runsFrom, from /proc; never off Linux).
+	Running func(dir string) bool
 }
 
 func (o VSCodeOptions) withDefaults() VSCodeOptions {
@@ -72,6 +80,9 @@ func (o VSCodeOptions) withDefaults() VSCodeOptions {
 	}
 	if o.Owned == nil {
 		o.Owned = socketOwnedBy
+	}
+	if o.Running == nil {
+		o.Running = runsFrom
 	}
 	return o
 }
@@ -142,7 +153,9 @@ func (w *vscodeWatch) roots() []serverFlavour {
 	return out
 }
 
-// watch looks for VS Code's server until the connection ends.
+// watch looks for VS Code's server until the connection ends. A server
+// counts once it runs: its launcher is there from early in the unpacking,
+// and an install before the rest is would fail for good.
 func (w *vscodeWatch) watch(ctx context.Context) {
 	t := time.NewTicker(w.opts.Poll)
 	defer t.Stop()
@@ -151,11 +164,14 @@ func (w *vscodeWatch) watch(ctx context.Context) {
 			for _, server := range findServers(root) {
 				w.mu.Lock()
 				done := w.applied[server]
+				w.mu.Unlock()
+				if done || !w.opts.Running(serverDir(server)) {
+					continue
+				}
+				w.mu.Lock()
 				w.applied[server] = true
 				w.mu.Unlock()
-				if !done {
-					w.apply(ctx, root, server)
-				}
+				w.apply(ctx, root, server)
 			}
 		}
 		select {
@@ -182,6 +198,12 @@ func findServers(root serverFlavour) []string {
 	}
 	sort.SliceStable(found, func(i, j int) bool { return modTime(found[i]).After(modTime(found[j])) })
 	return found
+}
+
+// serverDir is the install directory of a server's launcher (<dir>/bin/
+// code-server), which holds the node it runs on.
+func serverDir(launcher string) string {
+	return filepath.Dir(filepath.Dir(launcher))
 }
 
 func modTime(path string) time.Time {
@@ -302,10 +324,10 @@ func (w *vscodeWatch) apply(ctx context.Context, root serverFlavour, server stri
 		w.c.rep.printf("==> vscode: installing %d extension(s) with %s", len(pending), tildePath(server, w.c.opts.User.Home))
 	}
 	for _, id := range pending {
-		if ctx.Err() != nil {
-			return // the connection went; the next one installs the rest
+		result, ok := w.install(ctx, server, id)
+		if !ok {
+			return // the connection went; the next one installs this and the rest
 		}
-		result := w.install(ctx, server, id)
 		st.Extensions[strings.ToLower(id)] = result
 		saveCustomizationState(statePath, st)
 	}
@@ -325,20 +347,28 @@ func (w *vscodeWatch) apply(ctx context.Context, root serverFlavour, server stri
 }
 
 // install runs `<server> --install-extension id`, reporting how it went.
-func (w *vscodeWatch) install(ctx context.Context, server, id string) string {
-	ctx, cancel := context.WithTimeout(ctx, w.opts.InstallTimeout)
+// False when the connection ended first (ctx): the install was cut short,
+// not tried, so nothing is recorded.
+func (w *vscodeWatch) install(ctx context.Context, server, id string) (string, bool) {
+	if ctx.Err() != nil {
+		return "", false
+	}
+	installCtx, cancel := context.WithTimeout(ctx, w.opts.InstallTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, server, "--install-extension", id)
+	cmd := exec.CommandContext(installCtx, server, "--install-extension", id)
 	cmd.Env = w.env()
 	cmd.Dir = w.c.opts.User.Home
 	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		w.c.rep.printf("==> vscode extension %s: installed", id)
-		return "installed"
+		return "installed", true
+	}
+	if ctx.Err() != nil {
+		return "", false
 	}
 	detail := lastLine(string(out))
-	if ctx.Err() == context.DeadlineExceeded {
+	if installCtx.Err() == context.DeadlineExceeded {
 		err = fmt.Errorf("no answer in %s", w.opts.InstallTimeout)
 	}
 	msg := err.Error()
@@ -346,7 +376,7 @@ func (w *vscodeWatch) install(ctx context.Context, server, id string) string {
 		msg += ": " + detail
 	}
 	w.c.rep.printf("warning: vscode extension %s: %s", id, msg)
-	return "failed: " + msg
+	return "failed: " + msg, true
 }
 
 // env is the environment commands fleet runs for VS Code get: a session's,

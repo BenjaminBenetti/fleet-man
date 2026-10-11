@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,8 +15,8 @@ import (
 )
 
 // fakeServer installs a stand-in for VS Code's server launcher under home:
-// it records each `--install-extension <id>` in installs.log, and fails
-// for ids starting with "bad.".
+// it records each `--install-extension <id>` in installs.log, fails for ids
+// starting with "bad.", and never finishes for ids starting with "slow.".
 func fakeServer(t *testing.T, home, rel string) (launcher, installs string) {
 	t.Helper()
 	launcher = filepath.Join(home, rel)
@@ -26,7 +27,7 @@ func fakeServer(t *testing.T, home, rel string) (launcher, installs string) {
 	script := "#!/bin/sh\n" +
 		"[ \"$1\" = --install-extension ] || exit 2\n" +
 		"echo \"$2\" >> " + installs + "\n" +
-		"case \"$2\" in bad.*) echo \"Extension '$2' not found.\"; exit 1;; esac\n" +
+		"case \"$2\" in bad.*) echo \"Extension '$2' not found.\"; exit 1;; slow.*) exec sleep 30;; esac\n" +
 		"echo \"Extension '$2' was successfully installed.\"\n"
 	if err := os.WriteFile(launcher, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -50,7 +51,8 @@ func vscodeRig(t *testing.T) *rig {
 	t.Helper()
 	r := newRig(t)
 	r.opts.VSCode = &VSCodeOptions{Poll: 20 * time.Millisecond, ConfigWait: 2 * time.Second, InstallTimeout: 10 * time.Second,
-		Owned: func(string, string, []string) bool { return false }}
+		Owned:   func(string, string, []string) bool { return false },
+		Running: func(string) bool { return true }}
 	return r
 }
 
@@ -123,6 +125,55 @@ func TestCustomizationsApplyOnceTheServerAppears(t *testing.T) {
 	writeEditorConfig(t, r.opts.EditorConfig, devmeta.EditorConfig{Gen: "g2", Extensions: []string{"a.one"}})
 	_, done = r.connect()
 	waitFor(t, func() bool { return len(lines(installs)) == 3 })
+	done()
+}
+
+// A server's launcher is unpacked long before the rest of it (node_modules
+// last): nothing is installed from it until the server runs, which
+// Remote-SSH starts only once it is whole.
+func TestCustomizationsWaitForTheServerToRun(t *testing.T) {
+	r := vscodeRig(t)
+	var running atomic.Bool
+	var asked atomic.Value
+	r.opts.VSCode.Running = func(dir string) bool {
+		asked.Store(dir)
+		return running.Load()
+	}
+	writeEditorConfig(t, r.opts.EditorConfig, devmeta.EditorConfig{Gen: "g1", Extensions: []string{"a.one"},
+		Settings: map[string]json.RawMessage{"x": json.RawMessage(`1`)}})
+	launcher, installs := fakeServer(t, r.home, ".vscode-server/cli/servers/Stable-abc/server/bin/code-server")
+	_, done := r.connect()
+	defer done()
+	waitFor(t, func() bool { return asked.Load() != nil })
+	time.Sleep(200 * time.Millisecond)
+	if fileExists(installs) || fileExists(filepath.Join(r.home, ".vscode-server", "data", "Machine", "settings.json")) {
+		t.Fatal("customizations applied before the server ran")
+	}
+	if got, want := asked.Load(), filepath.Dir(filepath.Dir(launcher)); got != want {
+		t.Errorf("asked whether %v runs, want %s", got, want)
+	}
+	running.Store(true)
+	waitFor(t, func() bool { return len(lines(installs)) == 1 })
+}
+
+// An install the connection's end cuts short was not an attempt: the next
+// connection installs that extension again.
+func TestAnInterruptedInstallIsTriedAgain(t *testing.T) {
+	r := vscodeRig(t)
+	writeEditorConfig(t, r.opts.EditorConfig, devmeta.EditorConfig{Gen: "g1", Extensions: []string{"slow.one"}})
+	_, installs := fakeServer(t, r.home, ".vscode-server/bin/abc/bin/code-server")
+	_, done := r.connect()
+	waitFor(t, func() bool { return len(lines(installs)) == 1 })
+	done()
+	st := loadCustomizationState(filepath.Join(r.home, ".vscode-server", customizationStateFile))
+	if result, ok := st.Extensions["slow.one"]; ok {
+		t.Fatalf("an install the disconnect cut short was recorded: %q", result)
+	}
+	if strings.Contains(r.log.String(), "warning: vscode extension") {
+		t.Errorf("a cut-short install was reported as failed:\n%s", r.log.String())
+	}
+	_, done = r.connect()
+	waitFor(t, func() bool { return len(lines(installs)) == 2 })
 	done()
 }
 

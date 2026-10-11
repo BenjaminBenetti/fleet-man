@@ -23,10 +23,11 @@ import (
 //
 // (https://update.code.visualstudio.com/latest/server-linux-x64/stable).
 // The server is unpacked where Remote-SSH puts it, ~/.vscode-server/bin/<commit>;
-// its own `code-server --install-extension` installs the extension from the
-// marketplace (network) and fails a made-up one; the machine settings land
-// where the server reads them; and a forward to the real server's port is
-// found to be VS Code's through /proc, which runs postAttachCommand.
+// once it runs, its own `code-server --install-extension` installs the
+// extension from the marketplace (network) and fails a made-up one; the
+// machine settings land where the server reads them; and a forward to the
+// real server's port is found to be VS Code's through /proc, which runs
+// postAttachCommand.
 func TestRealVSCodeServer(t *testing.T) {
 	tarball := os.Getenv("FLEET_VSCODE_SERVER_TARBALL")
 	if tarball == "" {
@@ -50,7 +51,7 @@ func realVSCodeServer(t *testing.T, tarball, ext string, layout func(commit stri
 	r := newRig(t)
 	r.opts.VSCode = &VSCodeOptions{Poll: 200 * time.Millisecond, ConfigWait: 5 * time.Second, InstallTimeout: 5 * time.Minute}
 
-	// Unpack it as Remote-SSH does.
+	// The server's commit names its directory.
 	product := filepath.Join(t.TempDir(), "product.json")
 	out, err := exec.Command("sh", "-c", `tar -xzf "$1" -O vscode-server-linux-x64/product.json > "$2"`, "sh", tarball, product).CombinedOutput()
 	if err != nil {
@@ -61,14 +62,6 @@ func realVSCodeServer(t *testing.T, tarball, ext string, layout func(commit stri
 	if err := json.Unmarshal(data, &p); err != nil || p.Commit == "" {
 		t.Fatalf("product.json %s: %v", data, err)
 	}
-	root := filepath.Join(r.home, ".vscode-server", layout(p.Commit))
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("tar", "-xzf", tarball, "-C", root, "--strip-components", "1").CombinedOutput(); err != nil {
-		t.Fatalf("unpack: %v %s", err, out)
-	}
-	server := filepath.Join(root, "bin", "code-server")
 
 	marker := filepath.Join(t.TempDir(), "attached")
 	writeEditorConfig(t, r.opts.EditorConfig, devmeta.EditorConfig{Gen: "real", WorkspaceFolder: r.home,
@@ -80,38 +73,24 @@ func realVSCodeServer(t *testing.T, tarball, ext string, layout func(commit stri
 		PostAttach: []json.RawMessage{json.RawMessage(`"echo attached > ` + marker + `"`)},
 	})
 
+	// The connection is there first, as Remote-SSH's is: it unpacks the
+	// server in place (its launcher early, its node_modules last), then
+	// starts it.
 	c, done := r.connect()
-	statePath := filepath.Join(r.home, ".vscode-server", customizationStateFile)
-	deadline := time.Now().Add(6 * time.Minute)
-	for {
-		st := loadCustomizationState(statePath)
-		if len(st.Extensions) == 2 && st.Settings != nil {
-			if st.Extensions[strings.ToLower(ext)] != "installed" {
-				t.Fatalf("%s: %q\n%s", ext, st.Extensions[strings.ToLower(ext)], r.log.String())
-			}
-			if !strings.HasPrefix(st.Extensions["fleet-itest.no-such-extension"], "failed") {
-				t.Fatalf("a made-up extension: %q", st.Extensions["fleet-itest.no-such-extension"])
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the installs never finished: %+v\n%s", st, r.log.String())
-		}
-		time.Sleep(500 * time.Millisecond)
+	root := filepath.Join(r.home, ".vscode-server", layout(p.Commit))
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("report:\n%s", r.log.String())
-	list := exec.Command(server, "--list-extensions")
-	list.Env = append(os.Environ(), "HOME="+r.home)
-	listed, err := list.CombinedOutput()
-	if err != nil || !strings.Contains(strings.ToLower(string(listed)), strings.ToLower(ext)) {
-		t.Fatalf("the server does not list %s: %v\n%s", ext, err, listed)
+	if out, err := exec.Command("tar", "-xzf", tarball, "-C", root, "--strip-components", "1").CombinedOutput(); err != nil {
+		t.Fatalf("unpack: %v %s", err, out)
 	}
-	settings := readJSON(t, filepath.Join(r.home, ".vscode-server", "data", "Machine", "settings.json"))
-	if settings["editor.tabSize"] != 3.0 || settings["remote.portsAttributes"] == nil {
-		t.Fatalf("machine settings %v", settings)
+	server := filepath.Join(root, "bin", "code-server")
+
+	if st := loadCustomizationState(filepath.Join(r.home, ".vscode-server", customizationStateFile)); len(st.Extensions) > 0 {
+		t.Fatalf("extensions tried before the server ran: %v", st.Extensions)
 	}
 
-	// Run the real server and forward to it: a VS Code connection.
+	// Run the real server, as Remote-SSH does once it is unpacked.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	srv := exec.CommandContext(ctx, server, "--host", "127.0.0.1", "--port", "0", "--without-connection-token", "--accept-server-license-terms")
@@ -145,6 +124,37 @@ func realVSCodeServer(t *testing.T, tarball, ext string, layout func(commit stri
 		for sc.Scan() {
 		}
 	}()
+	statePath := filepath.Join(r.home, ".vscode-server", customizationStateFile)
+	deadline := time.Now().Add(6 * time.Minute)
+	for {
+		st := loadCustomizationState(statePath)
+		if len(st.Extensions) == 2 && st.Settings != nil {
+			if st.Extensions[strings.ToLower(ext)] != "installed" {
+				t.Fatalf("%s: %q\n%s", ext, st.Extensions[strings.ToLower(ext)], r.log.String())
+			}
+			if !strings.HasPrefix(st.Extensions["fleet-itest.no-such-extension"], "failed") {
+				t.Fatalf("a made-up extension: %q", st.Extensions["fleet-itest.no-such-extension"])
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the installs never finished: %+v\n%s", st, r.log.String())
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Logf("report:\n%s", r.log.String())
+	list := exec.Command(server, "--list-extensions")
+	list.Env = append(os.Environ(), "HOME="+r.home)
+	listed, err := list.CombinedOutput()
+	if err != nil || !strings.Contains(strings.ToLower(string(listed)), strings.ToLower(ext)) {
+		t.Fatalf("the server does not list %s: %v\n%s", ext, err, listed)
+	}
+	settings := readJSON(t, filepath.Join(r.home, ".vscode-server", "data", "Machine", "settings.json"))
+	if settings["editor.tabSize"] != 3.0 || settings["remote.portsAttributes"] == nil {
+		t.Fatalf("machine settings %v", settings)
+	}
+
+	// Forward to it: a VS Code connection.
 	conn, err := c.Dial("tcp", "127.0.0.1:"+port)
 	if err != nil {
 		t.Fatal(err)

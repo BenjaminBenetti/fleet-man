@@ -98,6 +98,11 @@ func (fleetPage *fleetPage) handleVSCodeResolved(m *model, msg vscodeResolvedMsg
 		return nil
 	}
 	if msg.launch.RemoteSSH() && msg.launch.NeedsInclude {
+		if fleetPage.mode != viewNormal {
+			// Another dialog opened while the daemon answered: leave it be.
+			m.message = fmt.Sprintf("VS Code for %s needs consent to add `%s` to ~/.ssh/config: press c again", msg.name, sshalias.IncludeLine)
+			return nil
+		}
 		fleetPage.vscodeDlg = vscodeConsentState{name: msg.name, launch: msg.launch}
 		fleetPage.mode = viewEditorConsent
 		return nil

@@ -103,7 +103,7 @@ var editorStaged sync.Map
 // prepareEditorSession readies inst, of fleetName, for an editor session:
 // its staged fleet binary is the daemon's (it must know ssh-server), and its
 // control directory holds its current EditorConfig, which ssh-server reads
-// once VS Code's server appears. Best-effort: a failure costs the
+// once VS Code's server runs. Best-effort: a failure costs the
 // customizations, not the connection, and is logged.
 func prepareEditorSession(ctx context.Context, fleetName string, inst *fleet.Instance) {
 	b := editorBackend(inst)

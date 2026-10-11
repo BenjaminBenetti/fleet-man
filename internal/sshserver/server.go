@@ -15,7 +15,7 @@
 //
 // It also applies the devcontainer's customizations.vscode the way the Dev
 // Containers extension does on attach (vscode.go): once VS Code's server
-// appears in the instance it installs the extensions and merges the machine
+// runs in the instance it installs the extensions and merges the machine
 // settings, and on each VS Code connection it runs postAttachCommand.
 //
 // BOUNDARY: in-instance code, held to depguard's client rule.

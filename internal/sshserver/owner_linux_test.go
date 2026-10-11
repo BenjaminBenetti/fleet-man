@@ -52,3 +52,25 @@ func TestSocketOwnedBy(t *testing.T) {
 		t.Error("a missing socket has an owner")
 	}
 }
+
+// A directory runs when a process's executable is under it: this test
+// binary's directory does, an empty one does not.
+func TestRunsFrom(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !runsFrom(filepath.Dir(exe)) {
+		t.Errorf("%s: this process runs from it", filepath.Dir(exe))
+	}
+	if runsFrom(t.TempDir()) {
+		t.Error("an empty directory runs")
+	}
+	if runsFrom(filepath.Join(t.TempDir(), "missing")) {
+		t.Error("a missing directory runs")
+	}
+}

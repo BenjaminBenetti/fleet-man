@@ -129,3 +129,25 @@ func TestCAsksBeforeAddingTheInclude(t *testing.T) {
 		t.Fatalf("second open: mode %v ran %d includes %d", fp.mode, len(s.ran), s.includes)
 	}
 }
+
+// The daemon answers off the update loop: a dialog opened meanwhile stays,
+// and the consent waits for the next c.
+func TestConsentLeavesADialogOpenedMeanwhile(t *testing.T) {
+	remote := editorlaunch.Launch{Mode: fleetgrpc.EditorLaunchMode_EDITOR_LAUNCH_MODE_REMOTE_SSH, Alias: "web.alpha.fleet", NeedsInclude: true,
+		Argv: []string{"code", "--folder-uri", "vscode-remote://ssh-remote+web.alpha.fleet/workspaces/alpha"}}
+	s := &vscodeStubs{launch: remote}
+	stubVSCode(t, s)
+	m, fp := vscodeModel()
+
+	resolve := fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if resolve == nil {
+		t.Fatal("c resolved nothing")
+	}
+	fp.mode = viewKubeRecovery
+	if cmd := fp.Update(m, resolve()); cmd != nil {
+		t.Fatal("the answer ran something")
+	}
+	if fp.mode != viewKubeRecovery || s.includes != 0 || len(s.ran) != 0 || !strings.Contains(m.message, "press c again") {
+		t.Fatalf("mode %v includes %d ran %q message %q", fp.mode, s.includes, s.ran, m.message)
+	}
+}

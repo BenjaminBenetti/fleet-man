@@ -71,6 +71,25 @@ func socketOwnedBy(network, address string, dirs []string) bool {
 	return false
 }
 
+// runsFrom reports whether a process the account may look at runs an
+// executable under dir (a VS Code server install directory: its node, once
+// the server started).
+func runsFrom(dir string) bool {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	prefix := strings.TrimSuffix(real, "/") + "/"
+	pids, _ := filepath.Glob("/proc/[0-9]*")
+	for _, pid := range pids {
+		exe, err := os.Readlink(filepath.Join(pid, "exe"))
+		if err == nil && strings.HasPrefix(strings.TrimSuffix(exe, " (deleted)"), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // listeningTCP are the inodes of the sockets listening on port in a
 // /proc/net/tcp-format table.
 func listeningTCP(table string, port int) map[string]bool {
