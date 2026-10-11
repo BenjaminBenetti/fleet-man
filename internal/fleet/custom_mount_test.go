@@ -13,10 +13,10 @@ func TestNormalizeCustomMountValid(t *testing.T) {
 		want string
 	}{
 		{"/opt/data", "/opt/data"},
-		{"  /opt/data  ", "/opt/data"},   // whitespace trimmed
-		{"/opt/data/", "/opt/data"},      // trailing slash collapsed
-		{"/opt//data", "/opt/data"},      // double slash collapsed
-		{"/opt/./data", "/opt/data"},     // "." segment collapsed
+		{"  /opt/data  ", "/opt/data"}, // whitespace trimmed
+		{"/opt/data/", "/opt/data"},    // trailing slash collapsed
+		{"/opt//data", "/opt/data"},    // double slash collapsed
+		{"/opt/./data", "/opt/data"},   // "." segment collapsed
 		{"/var/cache/shared", "/var/cache/shared"},
 		{"/srv", "/srv"},
 	}
@@ -36,15 +36,15 @@ func TestNormalizeCustomMountValid(t *testing.T) {
 // traversal paths are rejected — the traversal cases are the security boundary.
 func TestNormalizeCustomMountInvalid(t *testing.T) {
 	bad := []string{
-		"",                // empty
-		"   ",             // whitespace only
-		"relative/path",   // not absolute
-		"opt/data",        // not absolute
-		"/",               // container root
-		"/opt/../../etc",  // explicit traversal escaping .mnt
-		"/../etc",         // traversal at the root
-		"/opt/..",         // trailing traversal
-		"..",              // bare traversal, also relative
+		"",               // empty
+		"   ",            // whitespace only
+		"relative/path",  // not absolute
+		"opt/data",       // not absolute
+		"/",              // container root
+		"/opt/../../etc", // explicit traversal escaping .mnt
+		"/../etc",        // traversal at the root
+		"/opt/..",        // trailing traversal
+		"..",             // bare traversal, also relative
 	}
 	for _, in := range bad {
 		if got, err := NormalizeCustomMount(in); err == nil {
