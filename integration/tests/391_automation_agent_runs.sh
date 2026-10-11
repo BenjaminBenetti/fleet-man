@@ -2,8 +2,9 @@
 # itest: k8s
 # Description: end-to-end automation (issue #188) — a fired Schedule trigger
 # spawns an instance, launches the agent (which RUNS with the trigger's prompt),
-# and then the idle instance is reaped; `fleet trigger logs` records each
-# outcome (the instance it got, then the reap). The fixture installs a fake
+# and then the idle instance is reaped; `fleet trigger logs`, fleet_trigger_logs
+# and the TUI's L on the trigger row record each outcome (the instance it got,
+# then the reap). The fixture installs a fake
 # `claude` under ~/.local/bin (on PATH only via .bashrc, like the real install)
 # that records its args to /tmp/automation_agent_out then sleeps; we assert the
 # prompt reaches it AND that the idle agent's instance is torn down. This is the
@@ -12,9 +13,11 @@
 # On kubernetes the agent runs on the run's connection, and the cluster limits
 # are proven too: a burst of 5 webhook deliveries to one trigger is queued
 # (202) and every event gets its run, spaced by the connection's fire interval
-# and at most automation_max_per_agent at once; a full queue answers 429 with
-# Retry-After; an agent whose tool has no login on the cluster, and one whose
-# connection was forgotten, are refused with the reason in its trigger log.
+# and at most automation_max_per_agent at once; a runaway webhook never holds
+# more instances than the connection's max_instances, its extra firings queued
+# and run later; a full queue answers 429 with Retry-After; an agent whose tool
+# has no login on the cluster, and one whose connection was forgotten, are
+# refused with the reason in its trigger log and on its agent row.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -25,6 +28,7 @@ GONE_NS=""
 # into a later test's scheduler (mirrors 601/611), and the gateway and the
 # second connection's namespace the kubernetes half makes.
 itest_cleanup() {
+  tui_kill
   pkill -f "${FLEET_BIN} server" >/dev/null 2>&1 || true
   if [ -n "${GW_PID}" ]; then
     kill "${GW_PID}" 2>/dev/null || true
@@ -183,8 +187,30 @@ logs=$("${FLEET_BIN}" trigger logs "${FLEET}" fire 2>&1) || fail "fleet trigger 
 assert_contains "${logs}" "writer: instance ${inst} (${target_label})" "the trigger log should name the run's instance"
 assert_contains "${logs}" "writer: instance ${inst} reaped after" "the trigger log should record the reap"
 
+# The same outcome lines through the MCP tool and the TUI's L on the trigger
+# row (both page the daemon's TriggerLogs).
+info "the firing's outcomes through fleet_trigger_logs"
+mcp_logs=$(itest_mcp_call fleet_trigger_logs "{\"fleet\":\"${FLEET}\",\"trigger\":\"fire\"}" structuredContent.logs) \
+  || fail "fleet_trigger_logs failed"
+assert_contains "${mcp_logs}" "writer: instance ${inst} (${target_label})" "fleet_trigger_logs should name the run's instance"
+assert_contains "${mcp_logs}" "writer: instance ${inst} reaped after" "fleet_trigger_logs should record the reap"
+
+info "the firing's outcomes through the TUI's L on the trigger row"
+tui_spawn
+tui_wait_for "${FLEET}" 15
+tui_send m
+tui_wait_for "triggers" 10
+tui_cursor_to "fire"
+tui_send L
+tui_wait_for "writer: instance ${inst} reaped after" 15 \
+  || fail "the TUI's L on the trigger row should page the reap outcome"
+tui_assert_contains "# outcome:" "L should page the outcome lines"
+tui_assert_contains "writer: instance ${inst} (${target_label})" "L should page the run's instance outcome"
+tui_send q
+tui_kill
+
 if ! itest_backend_is kubernetes; then
-  pass "automation: fired trigger ran the agent with the prompt, then reaped the idle instance; trigger logs record both"
+  pass "automation: fired trigger ran the agent with the prompt, then reaped the idle instance; trigger logs record both (CLI, MCP, TUI L)"
   exit 0
 fi
 
@@ -312,6 +338,60 @@ while read -r stamp; do
   prev="${t}"
 done < <(printf '%s\n' "${logs}" | sed -nE 's/^# outcome: ([^ ]+) burster: instance burster-[0-9]+-[0-9]+ \(☸ itest\)$/\1/p' | sort)
 
+# A runaway webhook against the connection's max_instances: with the fire
+# interval and the per-agent limit off, only max_instances holds it back. Two
+# runs start at once, the rest wait in the queue (202), never more than two
+# instances hold the cluster at a time, and every event still gets its run.
+info "kubernetes: max_instances caps a runaway webhook"
+# The burst's runs count until they are reaped.
+deadline=$(( $(date +%s) + $(_scale_timeout 300) ))
+while grep -qE '"burster-[0-9]+-[0-9]+"' "${HOME}/.fleet/state.json" 2>/dev/null; do
+  [ "$(date +%s)" -lt "${deadline}" ] || fail "the burst's runs were never reaped"
+  sleep 3
+done
+out=$("${FLEET_BIN}" cluster set itest max_instances=2 automation_fire_interval=0 automation_max_per_agent=0 2>&1) \
+  || fail "fleet cluster set itest max_instances=2: ${out}"
+out=$("${FLEET_BIN}" agent create "${FLEET}" runner --cluster itest \
+  --command "ANTHROPIC_API_KEY=itest claude '\${PROMPT}'" 2>&1) || fail "agent create runner: ${out}"
+out=$("${FLEET_BIN}" trigger create "${FLEET}" runaway --type webhook --agent runner \
+  --webhook-name itest-runaway --filter-type regex --regex '.*' --prompt RUNAWAY 2>&1) || fail "trigger create runaway: ${out}"
+for n in 51 52; do
+  code=$(deliver itest-runaway "${n}")
+  assert_equals "200" "${code}" "runaway delivery ${n} should fire under max_instances: $(cat "${TEST_SCRATCH_DIR}/reply.${n}" 2>/dev/null)"
+done
+for n in 53 54; do
+  code=$(deliver itest-runaway "${n}")
+  assert_equals "202" "${code}" "runaway delivery ${n} should wait for max_instances: $(cat "${TEST_SCRATCH_DIR}/reply.${n}" 2>/dev/null)"
+  assert_contains "$(cat "${TEST_SCRATCH_DIR}/reply.${n}")" "received: 0 fired, 1 queued" "runaway delivery ${n}'s reply"
+done
+# runners — the runaway's instances holding the cluster now (a record with
+# an instance key, not on its way out: what max_instances counts).
+runners() {
+  jq -r --arg f "${FLEET}" '[.fleets[$f].instances[]? | select((.name | startswith("runner-")) and (.kube_key // "") != "" and .status != "deleting")] | length' \
+    "${HOME}/.fleet/state.json" 2>/dev/null || echo 0
+}
+most=0
+started=0
+deadline=$(( $(date +%s) + $(_scale_timeout 600) ))
+while [ "$(date +%s)" -lt "${deadline}" ]; do
+  now=$(runners)
+  [ "${now}" -gt "${most}" ] && most=${now}
+  logs=$("${FLEET_BIN}" trigger logs "${FLEET}" runaway 2>/dev/null || true)
+  started=$(printf '%s\n' "${logs}" | grep -cE '^# outcome: [^ ]+ runner: instance runner-[0-9]+-[0-9]+ \(☸ itest\)$' || true)
+  [ "${started}" -ge 4 ] && break
+  sleep 2
+done
+printf '%s\n' "${logs}" | grep '^# outcome:' || true
+assert_equals "4" "${started}" "every runaway delivery should get its run"
+[ "${most}" -le 2 ] || fail "${most} runaway instances held the cluster at once, over max_instances=2"
+[ "${most}" -ge 1 ] || fail "no runaway instance was ever seen"
+queued=$(printf '%s\n' "${logs}" | grep -c 'runner: queued: ' || true)
+assert_equals "2" "${queued}" "two runaway firings should have waited for max_instances"
+# Nothing of it may start again: the trigger goes, its runs are reaped.
+out=$("${FLEET_BIN}" trigger delete "${FLEET}" runaway 2>&1) || fail "trigger delete runaway: ${out}"
+out=$("${FLEET_BIN}" cluster set itest max_instances=0 automation_fire_interval=${INTERVAL}s automation_max_per_agent=3 2>&1) \
+  || fail "fleet cluster set itest (limits back): ${out}"
+
 # A full queue: with an hour between runs every delivery waits, the queue
 # holds 20 firings, and the next is refused with 429 and Retry-After,
 # enqueueing nothing.
@@ -373,4 +453,16 @@ if grep -qE '"(needlogin|goner)-[0-9]+-[0-9]+"' "${HOME}/.fleet/state.json"; the
   fail "a refused agent got an instance: $(grep -oE '"(needlogin|goner)-[0-9]+-[0-9]+"' "${HOME}/.fleet/state.json")"
 fi
 
-pass "automation on kubernetes: the run is reaped and logged; a 5-delivery burst queues (202) and every event runs ${INTERVAL}s apart; a full queue gets 429; no-login and forgotten-cluster agents are refused with the reason in their trigger logs"
+# The agents' rows say why: the login it lacks (L logs in), the connection
+# it names that is gone.
+info "kubernetes: the refused agents' rows name why"
+tui_spawn
+tui_wait_for "${FLEET}" 15
+tui_send m
+tui_wait_for "agents (" 10
+tui_wait_for "⚠ log in to Claude once for this fleet on ☸ itest (L)" 20 \
+  || fail "the needlogin agent's row should name the login it lacks"
+tui_assert_contains "☸ ${gone_id} (missing)" "the goner agent's row should name its forgotten connection"
+tui_kill
+
+pass "automation on kubernetes: the run is reaped and logged (CLI, MCP, TUI L); a 5-delivery burst queues (202) and every event runs ${INTERVAL}s apart; max_instances caps a runaway webhook; a full queue gets 429; no-login and forgotten-cluster agents are refused with the reason in their trigger logs and on their rows"
