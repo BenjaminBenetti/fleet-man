@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // TempPrefix starts the name of every temp file WriteFile makes beside its
@@ -41,6 +42,20 @@ func tempName() string {
 // replaced the temp file before the rename (nothing is renamed into place)
 // or the result right after it; a retry writes again.
 func (r *Root) WriteFile(name string, data io.Reader, perm fs.FileMode) (fs.FileInfo, error) {
+	return r.ReplaceFile(name, data, perm, time.Time{}, nil)
+}
+
+// ReplaceFile is WriteFile with a modification time and a precondition, for
+// a writer that must not replace content it has not seen (sharesync applying
+// a change over a file a local docker instance may have just rewritten). A
+// non-zero mtime is set on the temp file (and its access time with it)
+// before the rename, so the file never shows another time and a write made
+// to it after the rename shows as a new time. Once data is in the temp file,
+// and just before the rename, expect is called with the Lstat of what name
+// holds then, or nil when nothing does. An error from expect leaves name as
+// it is, removes the temp file and is returned as it is. Only the rename
+// itself happens after the check. A nil expect skips the check.
+func (r *Root) ReplaceFile(name string, data io.Reader, perm fs.FileMode, mtime time.Time, expect func(fs.FileInfo) error) (fs.FileInfo, error) {
 	if err := r.checkAboveReserved("write", name); err != nil {
 		return nil, err
 	}
@@ -67,11 +82,30 @@ func (r *Root) WriteFile(name string, data io.Reader, perm fs.FileMode) (fs.File
 	if err != nil {
 		return nil, pathError("write", d.host(leaf), err)
 	}
+	if !mtime.IsZero() {
+		// By name, never following it: a temp file swapped meanwhile is
+		// caught by the identity check below.
+		if err := chtimesAt(d, tmp, mtime, mtime); err != nil {
+			return nil, pathError("write", d.host(leaf), err)
+		}
+	}
 	// A party that can write the folder can swap the temp file for its own
 	// entry before the rename. That gains it nothing it could not do to name
 	// directly, but the write would then not be fleet's, so it is refused.
 	if now, err := d.root.Lstat(tmp); err != nil || !os.SameFile(now, written) {
 		return nil, pathError("write", d.host(leaf), ErrChanged)
+	}
+	if expect != nil {
+		current, err := d.root.Lstat(leaf)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			current = nil
+		case err != nil:
+			return nil, pathError("write", d.host(leaf), err)
+		}
+		if err := expect(current); err != nil {
+			return nil, err
+		}
 	}
 	if err := d.root.Rename(tmp, leaf); err != nil {
 		return nil, pathError("write", d.host(leaf), err)
