@@ -105,15 +105,24 @@ func diskHint(ks *fleetgrpc.KubeStorageClass) string {
 	return ""
 }
 
+// staticProvisioner is the provisioner of a class whose volumes are made by
+// hand (local static PVs): nothing makes a new disk's volume there.
+const staticProvisioner = "kubernetes.io/no-provisioner"
+
 // PickInstanceClass is auto's instance-disk class: a block class, preferring
 // (in this order) one that is not node-local on a multi-node cluster, one
 // with a snapshot class for fast clones, WaitForFirstConsumer binding,
 // expansion, and the cluster default. Only file-share classes left: the best
-// of those. None: nil.
+// of those. Never a class of static volumes (kubernetes.io/no-provisioner),
+// where every new disk would wait for a volume someone makes by hand; such
+// a class is still used when storage_class names it. None: nil.
 func PickInstanceClass(classes []*fleetgrpc.KubeStorageClass, snapshotDrivers map[string]bool, multiNode bool) *fleetgrpc.KubeStorageClass {
 	var best *fleetgrpc.KubeStorageClass
 	bestScore := -1
 	for _, c := range classes {
+		if c.Provisioner == staticProvisioner {
+			continue
+		}
 		score := 0
 		if c.Block {
 			score += 64
@@ -228,7 +237,12 @@ func (r *run) rootStorage(ctx context.Context) {
 		chosen = PickInstanceClass(r.caps.StorageClasses, snapDrivers, r.multiNode)
 		if chosen == nil {
 			msg := "no StorageClass: instance disks (the persistent root) need one"
-			r.fail(CheckRootStorage, msg, "install a CSI driver with a block StorageClass")
+			fix := "install a CSI driver with a block StorageClass"
+			if len(r.caps.StorageClasses) > 0 {
+				msg = "no StorageClass that provisions volumes: instance disks (the persistent root) need one"
+				fix += ", or set storage_class to a class whose volumes you make ahead"
+			}
+			r.fail(CheckRootStorage, msg, fix)
 			r.failState(fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_MISCONFIGURED, msg)
 			return
 		}

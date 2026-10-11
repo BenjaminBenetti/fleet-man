@@ -527,6 +527,16 @@ func TestFullStorage(t *testing.T) {
 		{name: "network beats node-local on several nodes", nodes: []runtime.Object{cloudNode("a"), cloudNode("b")},
 			classes: []runtime.Object{storageClass("local-path", "rancher.io/local-path", isDefault, wffc), storageClass("gp3", "ebs.csi.aws.com", wffc, retain)},
 			state:   fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, msg: "privileged not allowed", detail: "auto → gp3 (RWO, WFFC, network): reclaim policy Retain: disks outlive the instances they belonged to", warning: "keeps disks after destroy"},
+		// A class of hand-made volumes (local static PVs) outscores minikube's
+		// Immediate default on WaitForFirstConsumer, but a new disk there
+		// would wait for a volume nobody makes: auto never picks it.
+		{name: "static volumes are never auto's", nodes: []runtime.Object{minikubeNode()},
+			classes: []runtime.Object{storageClass("standard", "k8s.io/minikube-hostpath", isDefault), storageClass("local-storage", "kubernetes.io/no-provisioner", wffc)},
+			state:   fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, detail: "auto → standard (RWO, Immediate, node-local)"},
+		{name: "only static volumes", nodes: []runtime.Object{minikubeNode()}, classes: []runtime.Object{storageClass("local-storage", "kubernetes.io/no-provisioner", wffc)},
+			state: fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_MISCONFIGURED, msg: "no StorageClass that provisions volumes"},
+		{name: "static volumes when named", nodes: []runtime.Object{minikubeNode()}, classes: []runtime.Object{storageClass("local-storage", "kubernetes.io/no-provisioner", wffc)},
+			rec: fleet.KubeCluster{StorageClass: "local-storage"}, state: fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, detail: "local-storage (RWO, WFFC, node-local)"},
 		{name: "nfs only", nodes: []runtime.Object{minikubeNode()}, classes: []runtime.Object{storageClass("nfs", "nfs.csi.k8s.io")},
 			state: fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, msg: "instance disks on a file share", detail: "auto → nfs (file share, Immediate, network): an NFS class for instance disks: root_squash breaks package installs"},
 	} {
