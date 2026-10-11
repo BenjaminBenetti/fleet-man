@@ -18,6 +18,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/podshare"
 	"github.com/BenjaminBenetti/fleet-man/internal/sharesync"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -512,6 +513,32 @@ func TestShareSyncRemembersAStopThatCouldNotFlush(t *testing.T) {
 	r.m.retireFleet(r.fleet, r.m.beforeDestroy(r.fleet, "", true))
 	if got := r.spokes.retired; len(got) != 1 || !strings.HasSuffix(got[0], "keep=true") {
 		t.Errorf("retired %v, want the share kept", got)
+	}
+}
+
+// TestShareSyncAnEvacuationFlushesBeforeItsStop: moving a fleet off a node
+// the cluster empties stops each instance as a Fleet stop does, its share's
+// last changes flushed first: one that could not flush is remembered, and a
+// destroy keeps it.
+func TestShareSyncAnEvacuationFlushesBeforeItsStop(t *testing.T) {
+	r := newSyncRig(t)
+	r.hostLayout()
+	claim := "fs-f-1a2b3c4d-share"
+	r.spokes.deaf[shareSide(claim)] = true
+	r.instance("alpha", "aaaaaaaa", claim, fleet.StatusRunning)
+	if err := kubernetes.SaveInstanceRecord(kubernetes.InstanceRecord{Cluster: syncCluster, Namespace: "ns", Key: "aaaaaaaa", Fleet: r.fleet, Instance: "alpha",
+		StatefulSet: names.Instance(r.fleet, "alpha", "aaaaaaaa"), Gen: 1, Share: &kubernetes.ShareRecord{Mode: "single-node", Claim: claim}}); err != nil {
+		t.Fatal(err)
+	}
+	r.spokes.up("aaaaaaaa")
+	_, ms := r.svc.kubePods.evac.members(syncCluster, r.fleet)
+	if len(ms) != 1 || ms[0].name != "alpha" {
+		t.Fatalf("members %+v", ms)
+	}
+	// The pod itself is a stand-in: the backend's stop finds no cluster.
+	_ = ms[0].stop()
+	if got := loadUnflushed(state.SyncFleetDir(r.fleet)); !got[shareSide(claim)] {
+		t.Fatalf("unflushed %v, want the moved instance's share", got)
 	}
 }
 

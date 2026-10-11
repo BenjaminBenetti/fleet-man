@@ -72,6 +72,9 @@ type kubeEvacuations struct {
 	members  func(cluster, fleetName string) (share string, ms []evacMember)
 	// clearMark is the pool's ClearMovingOff (tests stand in their own).
 	clearMark func(ctx context.Context, cluster, sts string) error
+	// flushBeforeStop is the share sync's flush before a Fleet stop
+	// (shareSync.beforeStop), run by each member before its pod stops.
+	flushBeforeStop func(fleetName, instance string)
 
 	mu     sync.Mutex
 	moving map[evacKey]evacMove
@@ -105,6 +108,13 @@ func newKubeEvacuations(k *kubePods) *kubeEvacuations {
 		},
 		clearMark: func(ctx context.Context, cluster, sts string) error {
 			return kubernetes.DefaultPool().ClearMovingOff(ctx, cluster, sts)
+		},
+		// Looked up when called: the service makes its share sync after
+		// kubePods.
+		flushBeforeStop: func(fleetName, instance string) {
+			if svc := k.svc; svc != nil && svc.shareSync != nil {
+				svc.shareSync.beforeStop(fleetName, instance)
+			}
 		},
 		moving:      map[evacKey]evacMove{},
 		held:        map[evacKey]evacHold{},
@@ -342,9 +352,10 @@ func (e *kubeEvacuations) run(ctx context.Context, key evacKey, node, why string
 
 // recordMembers are the fleet's instances on the connection that fleetd's
 // state says run and whose record says their share is in single-node mode,
-// each stopped and started through its backend handle, the start followed by
-// fleet's own post-start work as after a Fleet start; and the fleet's share
-// PVC.
+// each stopped and started through its backend handle, the stop preceded by
+// the share sync's flush as a Fleet stop's is (the start carries the Ready
+// gate itself), the start followed by fleet's own post-start work as after a
+// Fleet start; and the fleet's share PVC.
 func (e *kubeEvacuations) recordMembers(cluster, fleetName string) (string, []evacMember) {
 	st, err := state.Load()
 	if err != nil {
@@ -370,7 +381,13 @@ func (e *kubeEvacuations) recordMembers(cluster, fleetName string) (string, []ev
 		home := f.Settings.HomeDir
 		out = append(out, evacMember{
 			name: i.Name, sts: rec.StatefulSet, key: i.KubeKey,
-			stop: func() error { return backendutil.NewForInstance(&i, false).Stop(i.ContainerID) },
+			stop: func() error {
+				// The pod's last changes to the fleet's shared folders reach
+				// the daemon host first (bounded; a share that could not
+				// flush is remembered, and a destroy keeps it).
+				e.flushBeforeStop(fleetName, i.Name)
+				return backendutil.NewForInstance(&i, false).Stop(i.ContainerID)
+			},
 			start: func() error {
 				if err := backendutil.NewForInstance(&i, false).Start(i.ContainerID); err != nil {
 					return err
