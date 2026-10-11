@@ -32,6 +32,13 @@ var sharedServicesFor = svcruntime.ForInstance
 // create-time daemon.json write can be missed (a docker-in-docker daemon not up
 // yet) or lost with the image, so the instance's dockerd is pointed at the
 // mirror on every start. The merge is idempotent.
+//
+// So is a runtime whose shared buildkit server authenticates each instance
+// (svcruntime.CredentialIssuer: a cluster's): the instance gets a fresh
+// credential on every start, and the shared builder if it has none yet (the
+// fleet turned buildkit on after it was made, or docker came later). Where
+// the runtime does not serve it (a cluster that does not allow it), the
+// instance starts without it, and its banner says why.
 func reviveSharedServices(fleetName, instanceName string, instance *fleet.Instance, settings fleet.FleetSettings) {
 	services := sharedServicesFor(instance)
 	if services == nil {
@@ -66,6 +73,22 @@ func reviveSharedServices(fleetName, instanceName string, instance *fleet.Instan
 	if settings.ImageCacheServer {
 		configureImageMirror(services, fleetName, instanceName, instance)
 	}
+	if _, issues := services.(svcruntime.CredentialIssuer); issues && settings.BuildkitServer {
+		if err := configureBuildkitOnStart(services, fleetName, instanceName, instance); err != nil {
+			warn("buildkit server: %v", err)
+		}
+	}
+}
+
+// configureBuildkitOnStart renews instance's shared buildkit credential and
+// gives it the shared builder when it has none (svcruntime.ConfigureBuildkit).
+// A package var so tests can see the call without a container.
+var configureBuildkitOnStart = func(services svcruntime.Runtime, fleetName, instanceName string, instance *fleet.Instance) error {
+	configured, err := svcruntime.ConfigureBuildkit(services, backendutil.NewForInstance(instance, false), fleetName, instanceName, instance.WorkspaceDir, svcruntime.BuildkitStart)
+	if err == nil && configured {
+		flog.Info("instance buildx configured on start", "fleet", fleetName, "instance", instanceName)
+	}
+	return err
 }
 
 // ReviveSharedServices does a start's work for the instance's shared services

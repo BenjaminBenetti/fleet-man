@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
-	"github.com/BenjaminBenetti/fleet-man/internal/buildkit"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -32,24 +31,22 @@ func prepareBuildkitMounts(services svcruntime.Runtime, fleetName string) ([]bac
 }
 
 // configureBuildkit points the instance's docker buildx at the fleet's shared
-// buildkit server. It is a no-op (nil) when the feature does not apply. When it
-// does, ConfigureInstanceBuildx itself silently skips images that lack
-// docker/buildx, so an error here is only a real configuration failure — which
-// the caller should treat as non-fatal.
-func configureBuildkit(services svcruntime.Runtime, instanceBackend backend.Backend, fleetName, workspaceDir string) error {
+// buildkit server (svcruntime.ConfigureBuildkit: on a cluster, after giving
+// the instance a client certificate of its own). It is a no-op (nil) when the
+// feature does not apply, and when the runtime points no instance at its
+// server (prepareBuildkitMounts already warned why there is none). When it
+// does apply, an image that lacks docker/buildx is skipped silently, so an
+// error here is only a real configuration failure — which the caller should
+// treat as non-fatal.
+func configureBuildkit(services svcruntime.Runtime, instanceBackend backend.Backend, fleetName, instanceName, workspaceDir string) error {
 	if services == nil || !fleetBuildkitEnabled(fleetName) {
 		return nil
 	}
-	// A runtime that points no instance at its buildkit server leaves buildx
-	// alone (prepareBuildkitMounts already warned why there is no server).
-	if _, err := services.Endpoint(fleetName, fleet.ServiceBuildkit); err != nil {
+	configured, err := svcruntime.ConfigureBuildkit(services, instanceBackend, fleetName, instanceName, workspaceDir, svcruntime.BuildkitCreate)
+	if err != nil {
 		if errors.Is(err, svcruntime.ErrNoEndpoint) {
 			return nil
 		}
-		return err
-	}
-	configured, err := buildkit.ConfigureInstanceBuildx(instanceBackend, workspaceDir)
-	if err != nil {
 		return err
 	}
 	if configured {

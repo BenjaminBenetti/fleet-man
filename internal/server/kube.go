@@ -271,6 +271,11 @@ func (s *service) UpdateKubeCluster(ctx context.Context, req *fleetgrpc.UpdateKu
 		// policy (or loses it) now.
 		go prepareClusterFleets(cur.ID)
 	}
+	if next.AllowsSharedBuildkit() != cur.AllowsSharedBuildkit() {
+		// A permission, not a setting of new instances: the fleets'
+		// servers there go (or come back) now.
+		go reensureClusterBuildkit(s.bgCtx, cur.ID)
+	}
 	return &fleetgrpc.UpdateKubeClusterReply{Cluster: s.kube.status(cur.ID)}, nil
 }
 

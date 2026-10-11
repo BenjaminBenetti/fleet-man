@@ -2,6 +2,7 @@ package instanceops
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"testing"
@@ -175,5 +176,68 @@ func TestReviveSharedServicesAfterARestart(t *testing.T) {
 	ReviveSharedServices("gone", inst)
 	if len(*mirrored) != 1 {
 		t.Errorf("a fleet the state does not have was revived: %v", *mirrored)
+	}
+}
+
+// TestStartRenewsBuildkitCredentials: where the runtime authenticates each
+// instance to its shared Buildkit (a cluster's), a start with buildkit on
+// gives the instance a fresh credential (and the builder it lacks), and
+// nothing is re-ensured; a server the runtime does not run is the instance's
+// banner. Buildkit off, or a runtime that issues none (docker), asks nothing.
+func TestStartRenewsBuildkitCredentials(t *testing.T) {
+	refused := fmt.Errorf("%w: shared Buildkit is not allowed on minikube (its Allow shared Buildkit setting, allow_shared_buildkit, is off)", svcruntime.ErrNoEndpoint)
+	for _, tt := range []struct {
+		name     string
+		issuer   bool
+		settings fleet.FleetSettings
+		err      error
+		want     int
+		banner   string
+	}{
+		{name: "cluster, buildkit on", issuer: true, settings: fleet.FleetSettings{BuildkitServer: true}, want: 1},
+		{name: "cluster, buildkit off", issuer: true, settings: fleet.FleetSettings{DebCacheServer: true}},
+		{name: "docker, buildkit on", settings: fleet.FleetSettings{BuildkitServer: true}},
+		{name: "cluster that does not run it", issuer: true, settings: fleet.FleetSettings{BuildkitServer: true}, err: refused, want: 1, banner: "buildkit server: " + refused.Error()},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			restore := stubLifecycleClient(&fakeClient{})
+			defer restore()
+			writeLifecycleState(t, fleet.StatusStopped)
+			setLifecycleSettings(t, tt.settings)
+			var rt svcruntime.Runtime = svcruntimetest.New("docker")
+			if tt.issuer {
+				rt = svcruntimetest.NewIssuer("kubernetes:c1")
+			}
+			stubStartServices(t, rt)
+			orig := configureBuildkitOnStart
+			t.Cleanup(func() { configureBuildkitOnStart = orig })
+			var asked []string
+			configureBuildkitOnStart = func(services svcruntime.Runtime, fleetName, instanceName string, instance *fleet.Instance) error {
+				if services != rt {
+					t.Errorf("configured through runtime %v, not the instance's", services)
+				}
+				asked = append(asked, fleetName+"/"+instanceName+"@"+instance.ContainerID)
+				return tt.err
+			}
+
+			if _, err := StartInstance("alpha", "agent-1"); err != nil {
+				t.Fatalf("StartInstance() error = %v", err)
+			}
+			if len(asked) != tt.want {
+				t.Fatalf("buildkit configured on start %v, want %d", asked, tt.want)
+			}
+			if tt.issuer {
+				for _, c := range rt.(*svcruntimetest.Issuer).Calls() {
+					if c.Method == "EnsureService" {
+						t.Errorf("a runtime whose services persist was ensured on start: %+v", c)
+					}
+				}
+			}
+			banner, _ := os.ReadFile(state.WarnPath("alpha", "agent-1"))
+			if string(banner) != tt.banner {
+				t.Fatalf("banner = %q, want %q", banner, tt.banner)
+			}
+		})
 	}
 }
