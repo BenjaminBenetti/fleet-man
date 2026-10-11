@@ -44,8 +44,8 @@ func TestResolveLayoutListsEveryCreatedPath(t *testing.T) {
 		{Path: ".mnt/opt/data", Dir: true, Mode: 0777},
 		{Path: ".mnt/var/cache/shared", Dir: true, Mode: 0777},
 		{Path: "files", Dir: true, Mode: 0777},
-		{Path: "files/.claude.json", Mode: 0666},
-		{Path: "files/claude-settings.local.json", Mode: 0666},
+		{Path: "files/.claude.json", Mode: 0666, Seed: "{}"},
+		{Path: "files/claude-settings.local.json", Mode: 0666, Seed: "{}"},
 	}
 	if !slices.Equal(resolved.Layout, want) {
 		t.Fatalf("Layout =\n%+v\nwant\n%+v", resolved.Layout, want)

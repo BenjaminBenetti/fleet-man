@@ -114,7 +114,7 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 	// UpContext hands the job's ctx (cancellation, JobLog, Hooks) to a backend
 	// whose provisioning is a cancellable multi-step sequence, and falls back to
 	// the plain Up for the rest.
-	result, err := backend.UpContext(ctx, instanceBackend, backend.UpRequest{WorkspaceDir: wsDir, Mounts: resolvedMounts.Mounts})
+	result, err := backend.UpContext(ctx, instanceBackend, backend.UpRequest{WorkspaceDir: wsDir, Mounts: resolvedMounts.Mounts, Layout: resolvedMounts.Layout})
 	if err != nil {
 		if errors.Is(err, backend.ErrCheckpointed) {
 			// The daemon is shutting down, and the backend left the run at

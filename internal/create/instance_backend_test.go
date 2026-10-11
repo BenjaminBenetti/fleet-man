@@ -219,3 +219,54 @@ func TestCreateRecordFallsBackToTheJobArguments(t *testing.T) {
 		t.Fatalf("persisted record = %+v, want the record with the job's backend", rec)
 	}
 }
+
+// sharedMountsJobBackend is fakeJobBackend for a backend that takes the
+// fleet's shared mounts.
+type sharedMountsJobBackend struct{ fakeJobBackend }
+
+func (f *sharedMountsJobBackend) SupportsSharedMounts() bool { return true }
+
+// TestRunContextHandsTheBackendTheSharedLayout pins that a backend taking the
+// fleet's shared mounts gets the tree the resolver made on the host with them
+// (UpRequest.Layout), seeds included: a cluster backend replays it on the
+// fleet's share.
+func TestRunContextHandsTheBackendTheSharedLayout(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{ClaudeCodeMount: true, HomeDir: "/home/node"}, Instances: []*fleet.Instance{
+			{Name: "i1", Status: fleet.StatusCreating, Backend: fleet.BackendDevcontainer, CreatedAt: time.Now()},
+		}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	tmpl := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpl, ".devcontainer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpl, ".devcontainer", "devcontainer.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := &sharedMountsJobBackend{fakeJobBackend{upErr: errors.New("stop here")}}
+	stubInstanceBackend(t, fake)
+
+	if err := RunContext(context.Background(), "alpha", "i1", "file://"+tmpl, "", false, fleet.BackendDevcontainer); err == nil {
+		t.Fatal("RunContext succeeded past the failing UpContext")
+	}
+	want := map[string]backend.LayoutEntry{
+		".claude":            {Path: ".claude", Dir: true, Mode: 0o777},
+		"files":              {Path: "files", Dir: true, Mode: 0o777},
+		"files/.claude.json": {Path: "files/.claude.json", Mode: 0o666, Seed: "{}"},
+	}
+	got := map[string]backend.LayoutEntry{}
+	for _, e := range fake.upReq.Layout {
+		got[e.Path] = e
+	}
+	for p, w := range want {
+		if got[p] != w {
+			t.Errorf("Layout entry %s = %+v, want %+v (layout %+v)", p, got[p], w, fake.upReq.Layout)
+		}
+	}
+	if len(fake.upReq.Mounts) == 0 {
+		t.Fatal("the backend got no shared mounts")
+	}
+}
