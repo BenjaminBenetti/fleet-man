@@ -280,16 +280,30 @@ func TestCheckpointKubeJobs(t *testing.T) {
 	svc := newService()
 	bg, shutdown := context.WithCancel(context.Background())
 	defer shutdown()
+	release := make(chan struct{})
+	var jobs []*job
+	// The jobs end before the test does, while HOME is still its own: a job
+	// writes its outcome to state.json as it ends, which after the test would
+	// be the invoking user's.
+	t.Cleanup(func() {
+		close(release)
+		for _, j := range jobs {
+			select {
+			case <-j.exited:
+			case <-time.After(10 * time.Second):
+				t.Errorf("job %s did not end", j.summary.GetInstance())
+			}
+		}
+	})
 	run := func(kind fleetgrpc.JobKind, inst string, work func(ctx context.Context)) *job {
 		j := svc.jobs.start(bg, kind, "alpha", inst, time.Now())
+		jobs = append(jobs, j)
 		go svc.runJob(j, func() (*fleetgrpc.Instance, []string, error) {
 			work(j.ctx)
 			return nil, nil, errors.New("cancelled")
 		})
 		return j
 	}
-	release := make(chan struct{})
-	defer close(release)
 	// Winds down a moment after its cancellation, as a create does at its
 	// next step.
 	create := run(fleetgrpc.JobKind_JOB_KIND_CREATE_INSTANCE, "pod", func(ctx context.Context) {
