@@ -74,7 +74,7 @@ func TestPodAudioPacesTheBulkSessionOnlyWhileAudioFlows(t *testing.T) {
 		t.Fatal("no audio flow for a pod with a session")
 	}
 	var paced []float64
-	s.Pacer().OnPaced(func(rate float64) { paced = append(paced, rate) })
+	s.Pacer().OnPaced(func(c podwire.PaceChange) { paced = append(paced, c.Rate) })
 
 	// Bulk traffic, for the pacer to measure.
 	bulk, err := s.Bulk(ctx)

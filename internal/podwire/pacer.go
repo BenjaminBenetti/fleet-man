@@ -87,7 +87,7 @@ type Pacer struct {
 	sleep   func(time.Duration)
 
 	// onPaced is told each time pacing starts (the paced rate) or ends (0).
-	onPaced atomic.Pointer[func(rate float64)]
+	onPaced atomic.Pointer[func(PaceChange)]
 
 	mu sync.Mutex
 	// rate is the paced rate in bytes a second; 0 is unpaced.
@@ -112,10 +112,17 @@ func NewPacer(flowing func() bool) *Pacer {
 	return &Pacer{flowing: flowing, now: time.Now, sleep: time.Sleep}
 }
 
+// PaceChange is pacing starting (Rate > 0) or ending (Rate 0, Recovered
+// telling an end by recovery from one because audio stopped flowing).
+type PaceChange struct {
+	Rate      float64
+	Recovered bool
+}
+
 // OnPaced sets fn to be told, outside the pacer's lock, each time pacing
-// starts (with the paced rate) and each time it ends (0): when audio stops
+// starts (with the paced rate) and each time it ends: when audio stops
 // flowing, or the rate recovered to where pacing began.
-func (p *Pacer) OnPaced(fn func(rate float64)) {
+func (p *Pacer) OnPaced(fn func(PaceChange)) {
 	if fn == nil {
 		p.onPaced.Store(nil)
 		return
@@ -123,10 +130,10 @@ func (p *Pacer) OnPaced(fn func(rate float64)) {
 	p.onPaced.Store(&fn)
 }
 
-// notify tells onPaced of a start (rate > 0) or an end (0).
-func (p *Pacer) notify(rate float64) {
+// notify tells onPaced of a change.
+func (p *Pacer) notify(c PaceChange) {
 	if fn := p.onPaced.Load(); fn != nil {
-		(*fn)(rate)
+		(*fn)(c)
 	}
 }
 
@@ -156,7 +163,7 @@ func (p *Pacer) Late() {
 	rate := p.rate
 	p.mu.Unlock()
 	if started {
-		p.notify(rate)
+		p.notify(PaceChange{Rate: rate})
 	}
 }
 
@@ -168,14 +175,14 @@ func (p *Pacer) Rate() float64 {
 		// flows starts unpaced).
 		p.rate = 0
 		p.mu.Unlock()
-		p.notify(0)
+		p.notify(PaceChange{})
 		return 0
 	}
-	ended := p.recoverLocked(p.now())
+	recovered := p.recoverLocked(p.now())
 	rate := p.rate
 	p.mu.Unlock()
-	if ended {
-		p.notify(0)
+	if recovered {
+		p.notify(PaceChange{Recovered: true})
 	}
 	return rate
 }
@@ -186,19 +193,17 @@ func (p *Pacer) take(n int) {
 	p.mu.Lock()
 	now := p.now()
 	p.measureLocked(now, n)
-	ended := false
+	stopped := false
 	if p.rate > 0 && !p.flowing() {
 		// Audio stopped: back to unpaced at once, so the next time it
 		// flows starts unpaced too.
-		p.rate, ended = 0, true
+		p.rate, stopped = 0, true
 	}
-	if p.recoverLocked(now) {
-		ended = true
-	}
+	recovered := p.recoverLocked(now)
 	if p.rate == 0 {
 		p.mu.Unlock()
-		if ended {
-			p.notify(0)
+		if stopped || recovered {
+			p.notify(PaceChange{Recovered: recovered})
 		}
 		return
 	}

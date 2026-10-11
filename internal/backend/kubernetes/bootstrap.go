@@ -479,13 +479,16 @@ func (s *podSlot) bootstrap(c *Cluster, t PodTarget, tk *ticket) (*AgentSession,
 // pacingLogger logs each start and end of the pacing of a pod's bulk
 // session: it is paced only while audio flows on the pod and PCM frames
 // arrive late, so a slow copy shows why in fleet.log.
-func (p *Pool) pacingLogger(t PodTarget) func(rate float64) {
-	return func(rate float64) {
-		if rate > 0 {
-			p.opts.Logger.Info("kube agent: bulk session paced while audio flows", "fleet", t.Fleet, "instance", t.Instance, "rate_mib_s", fmt.Sprintf("%.1f", rate/(1<<20)))
-			return
+func (p *Pool) pacingLogger(t PodTarget) func(podwire.PaceChange) {
+	return func(c podwire.PaceChange) {
+		switch {
+		case c.Rate > 0:
+			p.opts.Logger.Info("kube agent: bulk session paced while audio flows", "fleet", t.Fleet, "instance", t.Instance, "rate_mib_s", fmt.Sprintf("%.1f", c.Rate/(1<<20)))
+		case c.Recovered:
+			p.opts.Logger.Info("kube agent: bulk session unpaced: the audio's frames are on time again", "fleet", t.Fleet, "instance", t.Instance)
+		default:
+			p.opts.Logger.Info("kube agent: bulk session unpaced: audio stopped flowing", "fleet", t.Fleet, "instance", t.Instance)
 		}
-		p.opts.Logger.Info("kube agent: bulk session unpaced", "fleet", t.Fleet, "instance", t.Instance)
 	}
 }
 

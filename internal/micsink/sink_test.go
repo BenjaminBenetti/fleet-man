@@ -340,14 +340,15 @@ func TestEnsureLeavesAServerItCannotQueryAlone(t *testing.T) {
 // its deadline from the start), then every aliveInterval.
 func TestRunSaysAliveEveryInterval(t *testing.T) {
 	orig := aliveInterval
-	aliveInterval = 100 * time.Millisecond
+	aliveInterval = 400 * time.Millisecond
 	t.Cleanup(func() { aliveInterval = orig })
 	newFakePulse(t)
 	sink := startSink(t)
 	sink.expect(t, EventReady)
+	ready := time.Now()
 	var beats []time.Time
 	deadline := time.After(5 * time.Second)
-	for len(beats) < 4 {
+	for len(beats) < 3 {
 		select {
 		case at := <-sink.alive:
 			beats = append(beats, at)
@@ -355,9 +356,12 @@ func TestRunSaysAliveEveryInterval(t *testing.T) {
 			t.Fatalf("heard %d heartbeats in 5s", len(beats))
 		}
 	}
-	for i := 2; i < len(beats); i++ {
-		if gap := beats[i].Sub(beats[i-1]); gap < 50*time.Millisecond || gap > time.Second {
-			t.Fatalf("heartbeat %d came %v after the one before, want about 100ms", i, gap)
+	if first := beats[0].Sub(ready); first > 200*time.Millisecond {
+		t.Fatalf("the first heartbeat came %v after ready, want it at once", first)
+	}
+	for i := 1; i < len(beats); i++ {
+		if gap := beats[i].Sub(beats[i-1]); gap < 200*time.Millisecond || gap > 2*time.Second {
+			t.Fatalf("heartbeat %d came %v after the one before, want about 400ms", i, gap)
 		}
 	}
 }

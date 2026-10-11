@@ -62,11 +62,25 @@ func TestMicSinkThatMissesItsHeartbeatIsClosed(t *testing.T) {
 	provider.expectDemand(t, false)
 	sink := h.nextSink(t)
 	sink.emit("ready")
+	sink.emit("demand 1")
+	provider.expectDemand(t, true, "alpha/i1")
+	// Its first heartbeat holds it to the deadline at once.
+	sink.emit("alive")
+	start := time.Now()
+	provider.expectDemand(t, false)
+	if waited := time.Since(start); waited > micAliveDeadline+2*time.Second {
+		t.Fatalf("the demand closed %v after the only heartbeat", waited)
+	}
+	if !sink.isClosed() {
+		t.Fatal("the silent sink's demand ended but it was not closed")
+	}
+
+	// A fresh sink: heartbeats keep it open past the deadline.
+	sink = h.nextSink(t)
+	sink.emit("ready")
 	sink.emit("alive")
 	sink.emit("demand 1")
 	provider.expectDemand(t, true, "alpha/i1")
-
-	// Heartbeats keep it open past the deadline.
 	for range 4 {
 		time.Sleep(micAliveDeadline / 2)
 		sink.emit("alive")
@@ -75,7 +89,7 @@ func TestMicSinkThatMissesItsHeartbeatIsClosed(t *testing.T) {
 		t.Fatal("a sink that kept saying alive was closed")
 	}
 
-	start := time.Now()
+	start = time.Now()
 	provider.expectDemand(t, false) // then silence: the deadline closes it
 	if !sink.isClosed() {
 		t.Fatal("the silent sink's demand ended but it was not closed")

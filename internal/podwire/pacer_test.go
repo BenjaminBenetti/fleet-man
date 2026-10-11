@@ -211,7 +211,11 @@ func TestPacerTellsWhenPacingStartsAndEnds(t *testing.T) {
 	flowing := true
 	p, clock := newTestPacer(&flowing)
 	var told []float64
-	p.OnPaced(func(rate float64) { told = append(told, rate) })
+	var recovered []bool
+	p.OnPaced(func(c PaceChange) {
+		told = append(told, c.Rate)
+		recovered = append(recovered, c.Recovered)
+	})
 	pump(p, clock, 16<<20, time.Second)
 	if len(told) != 0 {
 		t.Fatalf("told %v before any late frame", told)
@@ -237,6 +241,9 @@ func TestPacerTellsWhenPacingStartsAndEnds(t *testing.T) {
 	_ = p.Rate()
 	if len(told) != 4 || told[2] <= 0 || told[3] != 0 {
 		t.Fatalf("told %v, want a second start and its end on recovery", told)
+	}
+	if recovered[1] || !recovered[3] {
+		t.Fatalf("recovered %v: the first end is audio stopping, the second a recovery", recovered)
 	}
 	p.OnPaced(nil)
 	pump(p, clock, 16<<20, time.Second)

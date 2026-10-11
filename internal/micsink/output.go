@@ -223,12 +223,22 @@ func forwardOutput(ctx context.Context, pcm io.Reader, out io.Writer) error {
 		_, err := out.Write(frame)
 		return err
 	}
-	stop := make(chan struct{})
-	defer close(stop)
+	// The heartbeat goroutine ends with forwardOutput (unless it is stuck in
+	// a write to out, which fails once the daemon's end of out goes).
+	interval := outputAliveInterval
+	stop, beatDone := make(chan struct{}), make(chan struct{})
+	defer func() {
+		close(stop)
+		select {
+		case <-beatDone:
+		case <-time.After(time.Second):
+		}
+	}()
 	beatErr := make(chan error, 1)
 	go func() {
+		defer close(beatDone)
 		silence := make([]byte, output.ChunkBytes)
-		tick := time.NewTicker(max(outputAliveInterval/5, 10*time.Millisecond))
+		tick := time.NewTicker(max(interval/5, 10*time.Millisecond))
 		defer tick.Stop()
 		for {
 			select {
@@ -239,7 +249,7 @@ func forwardOutput(ctx context.Context, pcm io.Reader, out io.Writer) error {
 			case <-tick.C:
 			}
 			mu.Lock()
-			due := time.Since(last) >= outputAliveInterval
+			due := time.Since(last) >= interval
 			mu.Unlock()
 			if due {
 				if err := send(silence); err != nil {
