@@ -215,6 +215,8 @@ func TestKubeKeysInKeybindingsAndFooters(t *testing.T) {
 	m.kubeClusters.Clusters = []*fleetgrpc.KubeClusterStatus{st}
 	e := newKubeEditor("mk-1")
 	editorRowOf(t, e, "clone_method")
+	// y / n answer a consent to test a large StorageClass.
+	e.consent = &kubeConsent{classes: []string{"filestore"}, minimum: "1Ti"}
 	footerHas("editor", e.footer(m, st), kubeEditorKeys)
 	footerHas("namespace panel", (&kubeNamespacePanel{name: "fleet"}).view(m, 80), kubeNamespaceKeys)
 	footerHas("disconnect dialog", flatText(newKubeRemoveDialog(m, "mk-1").view(m, sp)), kubeRemoveKeys)

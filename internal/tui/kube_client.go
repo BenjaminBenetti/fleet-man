@@ -32,6 +32,10 @@ const (
 	// throwaway-pod probes (the pull through the gateway and the network
 	// probe: 5 more minutes at most).
 	kubeDeepTestTimeout = kubeTestTimeout + 5*time.Minute
+	// kubeLargeStorageTimeout is how much longer a test runs that may test
+	// a StorageClass with a large minimum size (Filestore makes a whole file
+	// server for its volume: the daemon gives that test 12 minutes, not 3).
+	kubeLargeStorageTimeout = 9 * time.Minute
 	// kubeRemoveTimeout bounds RemoveKubeCluster, which with
 	// DESTROY_INSTANCES waits for every teardown.
 	kubeRemoveTimeout = 10 * time.Minute
@@ -143,4 +147,16 @@ var openKubeLoginRemote = func(ctx context.Context, id string) (kubeLoginStream,
 		return nil, err
 	}
 	return conn.Service().LoginKubeCluster(ctx, &fleetgrpc.LoginKubeClusterRequest{Id: id})
+}
+
+// getShareSyncRemote reports each fleet's shared-state sync, its shares'
+// usage on each cluster included (GetShareSync, every fleet).
+var getShareSyncRemote = func() (*fleetgrpc.GetShareSyncReply, error) {
+	var reply *fleetgrpc.GetShareSyncReply
+	err := kubeCall(kubeRPCTimeout, func(ctx context.Context, svc fleetgrpc.FleetServiceClient) error {
+		var err error
+		reply, err = svc.GetShareSync(ctx, &fleetgrpc.GetShareSyncRequest{})
+		return err
+	})
+	return reply, err
 }

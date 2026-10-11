@@ -78,6 +78,12 @@ var kubeTopFields = []kubeField{
 var kubeGroups = []kubeGroup{
 	{key: "capabilities", title: "Capabilities", open: true},
 	{key: "storage", title: "Storage", open: true, fields: []kubeField{
+		{path: "shared_storage_class", label: "Shared storage", kind: kubeKindClass, classes: kubeClassStorage, def: "auto",
+			note: "the fleets' shares; a new class moves each fleet's share once it is stopped"},
+		{path: "share_size", label: "Share size", kind: kubeKindText, def: "10Gi"},
+		{path: "share_retention", label: "Share on destroy", kind: kubeKindChoice, options: []string{"", "retain"}, def: "delete"},
+		{path: "credential_scope", label: "Agent logins", kind: kubeKindChoice, options: []string{"", "fleet"}, def: "location",
+			note: "fleet: experimental, can sign every location out"},
 		{path: "storage_class", label: "Instance disks", kind: kubeKindClass, classes: kubeClassStorage, def: "auto"},
 		{path: "disk_size", label: "Disk size", kind: kubeKindText, def: "50Gi", note: "each, automation too"},
 		{path: "auto_expand_disk", label: "Auto-expand disks", kind: kubeKindTri, def: "on", note: "+50% at 90% full"},
@@ -87,11 +93,6 @@ var kubeGroups = []kubeGroup{
 			note: "stop-source scales the source to 0 for the final copy"},
 		{path: "backup_workspace_on_stop", label: "Back up on stop", kind: kubeKindBool, note: "export the workspace to fleetd's host"},
 		{path: "node_local_ack", label: "Node-local OK", kind: kubeKindBool, note: "accept losing a disk with its node"},
-		{path: "shared_storage_class", label: "Shared storage", kind: kubeKindClass, classes: kubeClassStorage, def: "auto"},
-		{path: "share_size", label: "Share size", kind: kubeKindText, def: "10Gi"},
-		{path: "share_retention", label: "Share on destroy", kind: kubeKindChoice, options: []string{"", "retain"}, def: "delete"},
-		{path: "credential_scope", label: "Agent logins", kind: kubeKindChoice, options: []string{"", "fleet"}, def: "location",
-			note: "fleet: experimental, can sign every location out"},
 	}},
 	{key: "caches", title: "Caches", fields: []kubeField{
 		{path: "cache_storage_class", label: "Cache storage", kind: kubeKindClass, classes: kubeClassStorage, def: "auto"},

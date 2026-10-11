@@ -55,6 +55,8 @@ var kubeEditorKeys = []kubeKey{
 	{keys: []string{"left", "right", "h", "l"}, label: "← / → (editor)", hint: "[←/→] change", desc: "Cycle a choice, step to a row's buttons"},
 	{keys: []string{"c"}, label: "c", hint: "[c] create namespace", desc: "Create the missing namespace (shows labels)"},
 	{keys: []string{"L"}, label: "L", hint: "[L] login here", desc: "Run the login plugin here (local fleetd only)"},
+	{keys: []string{"y"}, label: "y (editor)", hint: "[y] yes", desc: "Editor: test a StorageClass whose volumes are large"},
+	{keys: []string{"n"}, label: "n (editor)", hint: "[n] no", desc: "Editor: do not test it"},
 	kubeDialogClose,
 }
 

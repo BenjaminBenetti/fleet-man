@@ -451,6 +451,9 @@ func (m *model) startKubeTest(key, id string, req *fleetgrpc.TestKubeClusterRequ
 	if req.GetDeep() {
 		timeout = kubeDeepTestTimeout
 	}
+	if len(req.GetStorageClasses()) > 0 || req.GetTestStorage() {
+		timeout += kubeLargeStorageTimeout
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	run := &kubeTestRun{key: key, id: id, gen: m.watchGen, cancel: cancel}
 	if m.kubeRuns == nil {

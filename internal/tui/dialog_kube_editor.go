@@ -34,6 +34,8 @@ const (
 	kubeEditorRowField kubeEditorRowKind = iota
 	kubeEditorRowGroup
 	kubeEditorRowStatus
+	// kubeEditorRowAction is a button row in a group ([ test storage ]).
+	kubeEditorRowAction
 )
 
 // kubeEditorRow is one navigable row.
@@ -41,6 +43,8 @@ type kubeEditorRow struct {
 	kind  kubeEditorRowKind
 	field *kubeField
 	group *kubeGroup
+	// action names an action row's button.
+	action string
 }
 
 // kubeEditor is the cluster editor dialog.
@@ -71,6 +75,12 @@ type kubeEditor struct {
 	own      map[int64]int64
 	fieldErr map[string]string
 	ns       *kubeNamespacePanel
+
+	// consent is a test of a StorageClass with a large minimum size waiting
+	// for a yes (kube_storage.go); usage the fleets' shares on the cluster.
+	consent  *kubeConsent
+	usage    []*fleetgrpc.KubeShareUsage
+	usageErr error
 }
 
 // kubeSave is one field's save waiting for the one in flight.
@@ -122,6 +132,9 @@ func (e *kubeEditor) rows() []kubeEditorRow {
 		out = append(out, kubeEditorRow{kind: kubeEditorRowGroup, group: g})
 		if !e.open[g.key] {
 			continue
+		}
+		if g.key == "storage" {
+			out = append(out, kubeEditorRow{kind: kubeEditorRowAction, group: g, action: kubeEditorActionTestStorage})
 		}
 		for fi := range g.fields {
 			out = append(out, kubeEditorRow{kind: kubeEditorRowField, field: &g.fields[fi], group: g})
@@ -175,6 +188,12 @@ func (e *kubeEditor) update(m *model, page *settingsPage, msg tea.Msg) (tea.Cmd,
 			return m.startKubeTest(kubeTestKey(e.id), e.id, &fleetgrpc.TestKubeClusterRequest{Id: e.id}), true
 		}
 		return nil, true
+	case kubeShareUsageMsg:
+		if msg.editor != e {
+			return nil, false
+		}
+		e.usage, e.usageErr = msg.shares, msg.err
+		return nil, true
 	case kubeLoginHereDoneMsg:
 		if msg.owner != kubeDialog(e) {
 			return nil, false
@@ -217,6 +236,9 @@ func (e *kubeEditor) key(m *model, page *settingsPage, st *fleetgrpc.KubeCluster
 			if strings.TrimSpace(e.input.Value()) == strings.TrimSpace(f.text(st.GetCluster())) {
 				return nil
 			}
+			if e.askConsent(st, f, e.input.Value(), e.editRev) {
+				return nil
+			}
 			return e.save(f, e.input.Value(), e.editRev)
 		}
 		var cmd tea.Cmd
@@ -224,6 +246,11 @@ func (e *kubeEditor) key(m *model, page *settingsPage, st *fleetgrpc.KubeCluster
 		return cmd
 	}
 
+	if e.consent != nil {
+		if cmd, ok := e.consentKey(m, key.String()); ok {
+			return cmd
+		}
+	}
 	row := e.current()
 	switch key.String() {
 	case "esc", "q":
@@ -268,6 +295,11 @@ func (e *kubeEditor) enter(m *model, page *settingsPage, st *fleetgrpc.KubeClust
 	switch row.kind {
 	case kubeEditorRowGroup:
 		e.open[row.group.key] = !e.open[row.group.key]
+		return nil
+	case kubeEditorRowAction:
+		if row.action == kubeEditorActionTestStorage {
+			return e.testStorage(m, st)
+		}
 		return nil
 	case kubeEditorRowStatus:
 		switch e.button {
@@ -319,6 +351,9 @@ func (e *kubeEditor) cycle(st *fleetgrpc.KubeClusterStatus, f kubeField, dir int
 	next := f.next(st, dir)
 	if next == f.text(st.GetCluster()) {
 		return nil // nothing else to pick (a class list fleetd could not read)
+	}
+	if e.askConsent(st, f, next, st.GetCluster().GetRevision()) {
+		return nil
 	}
 	return e.save(f, next, st.GetCluster().GetRevision())
 }
@@ -509,6 +544,14 @@ func (e *kubeEditor) view(m *model, _ *settingsPage) string {
 				body = kubeLines(body, kubeHangingIndent(line, inner, kubeEditorValueCol), strings.Repeat(" ", kubeEditorValueCol)+buttons)
 			}
 			body = kubeLines(body, e.statusLines(m, st, inner)...)
+		case kubeEditorRowAction:
+			line := marker + "  " + kubeButton("[ test storage ]", i == e.row)
+			if run := m.kubeRuns[kubeTestKey(e.id)]; run.running() {
+				line += "  " + m.spinner.View() + " " + dimStyle.Render("testing…")
+			} else {
+				line += "  " + dimStyle.Render("the multi-node test again: a volume on two nodes, about a minute per class")
+			}
+			body = kubeLines(body, kubeHangingIndent(line, inner, 8))
 		case kubeEditorRowGroup:
 			arrow := "▶ "
 			if e.open[row.group.key] {
@@ -547,6 +590,15 @@ func (e *kubeEditor) view(m *model, _ *settingsPage) string {
 			// machine's, once the daemon is remote.
 			if w := fleet.HostGatewayWarning(st.GetCluster().GetHostGateway(), fleetclient.IsRemote()); f.path == "host_gateway" && w != "" {
 				body = kubeLines(body, kubeHangingIndent("      "+indent+kubeWarnStyle.Render(kubeGlyphWarn+" "+w), inner, 8+len(indent)))
+			}
+			for _, line := range e.storageFieldLines(st, f) {
+				body = kubeLines(body, kubeHangingIndent("      "+indent+line, inner, 8+len(indent)))
+			}
+			// The group's own lines under its last field.
+			if g := row.group; g != nil && g.key == "storage" && f.path == g.fields[len(g.fields)-1].path {
+				for _, line := range e.storageTailLines(st) {
+					body = kubeLines(body, kubeHangingIndent("      "+line, inner, 8))
+				}
 			}
 		}
 		if i == e.row {
@@ -608,8 +660,16 @@ func (e *kubeEditor) fieldValue(m *model, st *fleetgrpc.KubeClusterStatus, f kub
 			if f.kind == kubeKindTri && f.path == "allow_privileged" {
 				shown += " → " + onOff(st.GetCapabilities().GetPrivilegedAllowed())
 			}
+			if auto := kubeAutoClass(st, f.path); auto != "" {
+				shown += " → " + auto
+			}
 		}
 		value = "[ " + shown + " ]"
+		if f.path == kubeSharedClassPath {
+			if badge := kubeShareModeBadge(st); badge != "" {
+				value += "  " + badge
+			}
+		}
 	case kubeKindBool:
 		value = "[ " + text + " ]"
 	case kubeKindInt:
@@ -727,6 +787,8 @@ func (e *kubeEditor) footer(m *model, st *fleetgrpc.KubeClusterStatus) string {
 	row := e.current()
 	return kubeFooter(kubeEditorKeys, func(k kubeKey) bool {
 		switch {
+		case kubeKeyIs(k, "y") || kubeKeyIs(k, "n"):
+			return e.consent != nil
 		case kubeKeyIs(k, "c"):
 			return kubeNamespaceMissing(st.GetChecks())
 		case kubeKeyIs(k, "L"):
@@ -769,6 +831,8 @@ func kubeGroupSummary(key string, st *fleetgrpc.KubeClusterStatus) string {
 		return strings.Join(append(parts, runs+" runs/agent"), " · ")
 	case "advanced":
 		return "pod overrides · extra PATH · plugin env · placement"
+	case "storage":
+		return kubeStorageSummary(st)
 	case "capabilities":
 		return fmt.Sprintf("%d checks", len(st.GetChecks()))
 	}
@@ -806,12 +870,15 @@ func kubeGroupInfo(key string, st *fleetgrpc.KubeClusterStatus) []string {
 			out = append(out, strings.Join(passed, "  "))
 		}
 		for _, c := range st.GetChecks() {
-			if c.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS {
+			// The storage checks are the Storage group's.
+			if c.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS && !kubeStorageChecks[c.GetName()] {
 				checkLine(c.GetName())
 			}
 		}
 		for _, w := range st.GetWarnings() {
-			out = append(out, kubeWarningLine(w))
+			if kubeOneNode(&fleetgrpc.KubeClusterStatus{Warnings: []string{w}}) == "" {
+				out = append(out, kubeWarningLine(w))
+			}
 		}
 		if lr := caps.GetLimitRangeMemoryLimit(); lr != "" {
 			limit := st.GetCluster().GetMemoryLimit()
@@ -828,15 +895,9 @@ func kubeGroupInfo(key string, st *fleetgrpc.KubeClusterStatus) []string {
 				o.GetInstances(), o.GetShares(), o.GetCacheVolumes())))
 		}
 	case "storage":
-		checkLine("root_storage")
-		checkLine("snapshots")
-		for i, sc := range caps.GetStorageClasses() {
-			if i == 6 {
-				out = append(out, dimStyle.Render(fmt.Sprintf("… %d more classes", len(caps.GetStorageClasses())-6)))
-				break
-			}
-			out = append(out, dimStyle.Render("class "+kubeStorageClassLine(sc)))
-		}
+		// The checks of storage go with the pickers and under the
+		// group's last field (kube_storage.go).
+		out = append(out, storageHeadLines(st)...)
 	case "caches":
 		checkLine("buildkit")
 		if !caps.GetBuildkitAdmitted() && caps.GetBuildkitReason() != "" {
@@ -888,6 +949,9 @@ func kubeStorageClassLine(sc *fleetgrpc.KubeStorageClass) string {
 	}
 	if sc.GetReclaimPolicy() != "" {
 		traits = append(traits, sc.GetReclaimPolicy())
+	}
+	if len(traits) == 0 {
+		return sc.GetName()
 	}
 	return sc.GetName() + " (" + strings.Join(traits, ", ") + ")"
 }
