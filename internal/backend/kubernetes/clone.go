@@ -25,7 +25,6 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/jobboot"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
-	"github.com/BenjaminBenetti/fleet-man/internal/k8s/preflight"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
 	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
@@ -345,7 +344,7 @@ func (c *cloning) cloneFacts(ctx context.Context) (CloneFacts, error) {
 			f.Driver = "" // not a CSI volume: no snapshot or clone of it is fleet's to take
 		}
 	}
-	f.CSIClone = f.CSIClone || preflight.ClonesVolumes(f.Driver)
+	f.CSIClone = f.CSIClone || podspec.ClonesVolumes(f.Driver)
 	f.SnapshotClass = snapshotClassOf(ctx, c.cs, f.Driver, c.rec.SnapshotClass)
 	if _, refused := refusedDrivers.Load(c.id.cluster + "|" + f.Driver); refused && (f.Method == "" || f.Method == fleet.KubeCloneAuto) {
 		f.CSIClone, f.SnapshotClass = false, "" // it refused this run: copy at once

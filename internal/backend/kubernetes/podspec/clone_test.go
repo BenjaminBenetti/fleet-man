@@ -144,6 +144,14 @@ func TestCloneDiskFromASnapshot(t *testing.T) {
 	}
 }
 
+// A driver known to clone volumes clones a stopped instance's disk (T1b)
+// unasked; one only known to snapshot does not.
+func TestClonesVolumes(t *testing.T) {
+	if !ClonesVolumes("hostpath.csi.k8s.io") || ClonesVolumes("ebs.csi.aws.com") || ClonesVolumes("") {
+		t.Error("ClonesVolumes")
+	}
+}
+
 func TestCloneObjectsRefuseAnIncompleteInput(t *testing.T) {
 	src, r := cloneSource(t)
 	in := cloneInputFor(r)

@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 )
 
 // storage.go classifies the cluster's StorageClasses for instance disks and
@@ -36,30 +37,6 @@ var nodeLocalProvisioners = map[string]bool{
 	"docker.io/hostpath":               true,
 	"kubevirt.io.hostpath-provisioner": true,
 }
-
-// cloneDrivers are CSI drivers known to clone volumes (a PVC whose
-// dataSource is another PVC): a clone of a stopped instance on them is a CSI
-// clone of its disk (T1b) without the connection saying so (clone_method
-// csi-clone). A driver this list misses still clones where the connection
-// asks for it; one that cannot is caught by the clone itself (the restored
-// disk comes up empty, or the provisioner refuses the data source).
-var cloneDrivers = map[string]bool{
-	"hostpath.csi.k8s.io":     true,
-	"pd.csi.storage.gke.io":   true,
-	"disk.csi.azure.com":      true,
-	"rbd.csi.ceph.com":        true,
-	"cephfs.csi.ceph.com":     true,
-	"driver.longhorn.io":      true,
-	"zfs.csi.openebs.io":      true,
-	"csi.vsphere.vmware.com":  true,
-	"pxd.portworx.com":        true,
-	"csi.trident.netapp.io":   true,
-	"linodebs.csi.linode.com": true,
-	"topolvm.io":              true,
-}
-
-// ClonesVolumes reports whether CSI driver is known to clone volumes.
-func ClonesVolumes(driver string) bool { return cloneDrivers[driver] }
 
 // fileShareMarkers mark provisioners of shared network file systems, which
 // are not block disks.
@@ -107,7 +84,7 @@ func ClassifyStorageClass(sc *storagev1.StorageClass, drivers map[string]*storag
 	}
 	// A CSI clone needs a CSI driver: an in-tree or external provisioner
 	// takes a data source it does not know for an empty disk.
-	ks.CsiClone = drivers[sc.Provisioner] != nil && ClonesVolumes(sc.Provisioner)
+	ks.CsiClone = drivers[sc.Provisioner] != nil && podspec.ClonesVolumes(sc.Provisioner)
 	return ks
 }
 

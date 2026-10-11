@@ -691,7 +691,4 @@ func TestClassifyStorageClassCSIClone(t *testing.T) {
 			t.Errorf("%s: csi_clone %v, want %v", tc.provisioner, got, tc.want)
 		}
 	}
-	if !ClonesVolumes("hostpath.csi.k8s.io") || ClonesVolumes("ebs.csi.aws.com") {
-		t.Error("ClonesVolumes")
-	}
 }

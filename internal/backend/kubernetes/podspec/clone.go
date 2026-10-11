@@ -363,6 +363,32 @@ func CloneCreated(sts *appsv1.StatefulSet) time.Time {
 	return t
 }
 
+// cloneDrivers are CSI drivers known to clone volumes (a PVC whose
+// dataSource is another PVC): a clone of a stopped instance on them is a CSI
+// clone of its disk (T1b) without the connection saying so (clone_method
+// csi-clone). A driver this list misses still clones where the connection
+// asks for it; one that cannot is caught by the clone itself (the restored
+// disk comes up empty, or the provisioner refuses the data source).
+var cloneDrivers = map[string]bool{
+	"hostpath.csi.k8s.io":     true,
+	"pd.csi.storage.gke.io":   true,
+	"disk.csi.azure.com":      true,
+	"rbd.csi.ceph.com":        true,
+	"cephfs.csi.ceph.com":     true,
+	"driver.longhorn.io":      true,
+	"zfs.csi.openebs.io":      true,
+	"csi.vsphere.vmware.com":  true,
+	"pxd.portworx.com":        true,
+	"csi.trident.netapp.io":   true,
+	"linodebs.csi.linode.com": true,
+	"topolvm.io":              true,
+}
+
+// ClonesVolumes reports whether CSI driver is known to clone volumes. The
+// list lives here, beside the clone's objects, so the backend reads it
+// without preflight (which imports kubert, which imports the backend).
+func ClonesVolumes(driver string) bool { return cloneDrivers[driver] }
+
 // GenOf is a rendered StatefulSet's root generation (its rebuild-gen), 0
 // when it has none.
 func GenOf(sts *appsv1.StatefulSet) int {
