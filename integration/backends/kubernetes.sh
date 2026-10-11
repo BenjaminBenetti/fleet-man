@@ -16,9 +16,10 @@
 #
 # Containers are an instance's StatefulSet and its pod, named by the
 # container id fleet records: k8s:<connection>/<namespace>/<statefulset>@g<gen>.
-# The workspace is the checkout on the instance's disk, reached through
-# `fleet exec`. The control dir (P3.0) and the share sync (P4.6) are not
-# wired yet: their helpers fail the calling test, naming the unit.
+# The workspace is the checkout on the instance's disk, and the control dir
+# the pod's /fleet-mounts/control, both reached through `fleet exec`. The
+# share sync (P4.6) is not wired yet: its helper fails the calling test,
+# naming the unit.
 
 # _be_not_yet <what> <unit> — fail the calling test: <what> has no kubernetes
 # implementation yet. It exits rather than calling fail, so a call inside $(...)
@@ -405,11 +406,22 @@ _be_workspace_git() {  # <ref> <git-args...>
   "${FLEET_BIN}" exec "${ref}" -- git "$@"
 }
 
-# --- control dir: /fleet-mounts/control inside the pod (P3.0) ---
+# --- control dir: /fleet-mounts/control, the pod's own, through `fleet exec` ---
+#
+# The pod agent keeps it: the in-pod sockets fleetd wants bound and the files
+# it keeps there (the status mod's). There is no host side.
 
-_be_control_test() { _be_not_yet itest_control_test P3.0; }
-_be_control_read() { _be_not_yet itest_control_read P3.0; }
-_be_control_mode() { _be_not_yet itest_control_mode P3.0; }
+_be_control_test() {  # <ref> <test-op> <name>
+  "${FLEET_BIN}" exec "$1" -- test "$2" "/fleet-mounts/control/$3"
+}
+
+_be_control_read() {  # <ref> <name>
+  "${FLEET_BIN}" exec "$1" -- cat "/fleet-mounts/control/$2"
+}
+
+_be_control_mode() {  # <ref> <name>
+  "${FLEET_BIN}" exec "$1" -- stat -c %a "/fleet-mounts/control/$2"
+}
 
 # --- shared fleet mounts: wait for the share to sync both ways (P4.6) ---
 

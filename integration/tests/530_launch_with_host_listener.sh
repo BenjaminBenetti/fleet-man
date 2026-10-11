@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: with a host TUI attached, in-container `fleet launch <name>` succeeds (the control socket is open).
 set -euo pipefail
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: instances reach the daemon's SSH agent through the per-instance relay socket — including a container user with another uid — and keep it across a daemon restart.
 set -euo pipefail
 

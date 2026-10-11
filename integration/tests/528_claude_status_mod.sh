@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Description: Fleet status mod — every devcontainer instance's shells load the
+# itest: k8s
+# Description: Fleet status mod — every instance's shells load the
 # fleet-status Claude Code mod (CLAUDE_CODE_PLUGIN_DIRS → a plugin of function
 # hooks the fleet binary carries), and the daemon keeps the mod's status file in
 # each instance's control directory: readable inside the instance, naming it,
-# live (with the agent counts) only while a TUI has the runtime polled. Turning
-# the global "Fleet status mod" setting off removes the file (the mod then draws
-# nothing); turning it on brings it back for the running instance.
+# live (with the agent counts) only while a TUI has the runtime polled, and kept
+# fresh there by its heartbeat (the mod hides counts in a file 15s stale).
+# Turning the global "Fleet status mod" setting off removes the file (the mod
+# then draws nothing); turning it on brings it back for the running instance.
 set -euo pipefail
 
 source "$(dirname "$0")/../common.sh"
@@ -80,6 +82,20 @@ assert_contains "${host}" "\"fleet\":\"${FIXTURE_REPO_NAME}\"" "the status file 
 assert_contains "${host}" '"instance":"alpha"' "the status file does not name the instance"
 assert_contains "${host}" '"working":0' "the status file has no working count"
 assert_contains "${host}" '"idle":0' "the status file has no idle count"
+
+info "a minute on the counts still show: the heartbeat keeps the file fresh in the instance"
+sleep 60
+updated_at() { sed -n 's/.*"updated_at":\([0-9]*\).*/\1/p'; }
+first=$(itest_control_read "${inst}" "${status_file}" | updated_at)
+sleep 6
+out=$(in_instance 'echo "NOW=$(date +%s%3N)"; cat /fleet-mounts/control/claude-status.json')
+printf 'a minute on: %s\n' "${out}"
+assert_contains "${out}" '"live":true' "the status file stopped being live"
+second=$(printf '%s\n' "${out}" | updated_at)
+now=$(printf '%s\n' "${out}" | sed -n 's/^NOW=\([0-9]*\).*/\1/p')
+[ -n "${first}" ] && [ -n "${second}" ] && [ "${second}" -gt "${first}" ] \
+  || fail "the status file was not rewritten by its heartbeat (${first} then ${second})"
+[ $(( now - second )) -lt 15000 ] || fail "the status file is $(( now - second ))ms old in the instance, past the mod's 15s"
 
 out=$(in_instance 'cat /fleet-mounts/control/claude-status.json')
 assert_contains "${out}" '"instance":"alpha"' "the instance cannot read its status file: ${out}"

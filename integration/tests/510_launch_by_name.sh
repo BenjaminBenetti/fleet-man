@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet launch <name>` resolves names (unknown vs unique prefix)
 # and reports a missing host control socket instead of crashing.
 set -euo pipefail

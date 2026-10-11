@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet launch list` inside an instance prints the configured fleetLaunch Links and Apps.
 set -euo pipefail
 

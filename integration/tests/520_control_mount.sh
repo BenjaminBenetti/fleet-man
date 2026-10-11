@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: creating an instance mounts the per-instance control dir into
 # the container at /fleet-mounts/control (host <-> instance IPC channel).
 set -euo pipefail
