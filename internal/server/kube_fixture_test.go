@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -87,6 +88,21 @@ type kubeFixture struct {
 	// real lists contexts that connect through kubeexec for real (exec
 	// plugins) instead of a fake API server.
 	real map[string]bool
+	// pooled is the last set of connections handed to the daemon's pool
+	// (configureKubePool, stubbed so the process-wide pool is left alone).
+	pooledMu sync.Mutex
+	pooled   []fleet.KubeCluster
+}
+
+// pooledIDs are the ids of the connections the pool was last handed.
+func (f *kubeFixture) pooledIDs() []string {
+	f.pooledMu.Lock()
+	defer f.pooledMu.Unlock()
+	var ids []string
+	for _, rec := range f.pooled {
+		ids = append(ids, rec.ID)
+	}
+	return ids
 }
 
 // newKubeFixture isolates HOME and builds a service whose kube manager
@@ -117,6 +133,13 @@ func newKubeFixture(t *testing.T) *kubeFixture {
 	f.apis["minikube"], f.apis["minikube-alias"] = minikube, minikube
 	f.apis["prod"] = newFakeKubeAPI(t, "0d3c1f9e-aaaa-bbbb-cccc-000000000002", false, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team"}})
 
+	orig := configureKubePool
+	configureKubePool = func(records []fleet.KubeCluster) {
+		f.pooledMu.Lock()
+		f.pooled = append([]fleet.KubeCluster(nil), records...)
+		f.pooledMu.Unlock()
+	}
+	t.Cleanup(func() { configureKubePool = orig })
 	f.svc = newService()
 	m := f.svc.kube
 	m.environ = func() []string { return []string{"PATH=/usr/bin:/bin", "HOME=" + home, "KUBECONFIG=" + f.kubeconfig} }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -864,5 +865,23 @@ func TestKubeCreateAllowed(t *testing.T) {
 	}
 	if err := f.svc.kube.createAllowed(st, target); status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "of instance disks") {
 		t.Errorf("over max_total_disk = %v", err)
+	}
+}
+
+// The daemon's pool learns a connection the moment it is added (and forgets
+// it when it is removed), so a create on a connection added a moment ago
+// finds it rather than waiting for the pool's own re-read.
+func TestKubeConnectionsReachThePoolAtOnce(t *testing.T) {
+	f := newKubeFixture(t)
+	f.start()
+	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube"}).GetCluster().GetId()
+	if got := f.pooledIDs(); !slices.Contains(got, id) {
+		t.Fatalf("after the add the pool has %v, want %s", got, id)
+	}
+	if _, err := f.svc.RemoveKubeCluster(context.Background(), &fleetgrpc.RemoveKubeClusterRequest{Id: id}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.pooledIDs(); slices.Contains(got, id) {
+		t.Fatalf("after the remove the pool still has %v", got)
 	}
 }

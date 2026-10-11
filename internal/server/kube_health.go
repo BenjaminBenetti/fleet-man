@@ -233,7 +233,8 @@ func (m *kubeManager) run(ctx context.Context) {
 
 // sync reloads the registry and converges the workers on it: new records
 // get a worker, changed ones a fresh full preflight, removed ones lose
-// theirs (and their Lease). Then the set is pushed.
+// theirs (and their Lease). The pool learns the set at once too, so a create
+// on a connection added a moment ago finds it. Then the set is pushed.
 func (m *kubeManager) sync() {
 	m.syncMu.Lock()
 	reg, err := m.loadRegistry()
@@ -242,6 +243,7 @@ func (m *kubeManager) sync() {
 		flog.Error("kube: load connections", "err", err)
 		return
 	}
+	configureKubePool(reg.Clusters)
 	m.mu.Lock()
 	m.records, m.loaded = reg.Clusters, true
 	var stopped []*kubeWorker
