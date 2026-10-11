@@ -1,7 +1,4 @@
 {
-  "warnings": [
-    "host-gateway: 127.0.0.2 resolves in the pod, but fleet does not mirror the daemon host's ports there yet"
-  ],
   "disk": {
     "kind": "PersistentVolumeClaim",
     "apiVersion": "v1",

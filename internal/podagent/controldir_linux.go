@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/execas"
 	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
 	"golang.org/x/sys/unix"
 )
@@ -40,6 +41,12 @@ import (
 // again. The sockets live only as long as the session: when it ends they are
 // unbound and their connections cut, as a docker instance's go when its daemon
 // stops. The files stay; the status mod tells a stale one by its age.
+//
+// The same session binds the host relays the state names (hostsock_linux.go,
+// gateway_linux.go): a socket at each of the devcontainer's daemon-host
+// socket binds, owned by the devcontainer's user, and a listener on
+// podwire.HostGatewayAddr at each of the daemon host's listening ports for a
+// devcontainer that declares host-gateway.
 
 // controlDir is the main agent's work in the control directory.
 type controlDir struct {
@@ -47,12 +54,20 @@ type controlDir struct {
 	log *Logger
 	// dial opens a relay stream to fleetd for one in-pod connection.
 	dial func(podwire.Tag, podwire.SockOpen) (net.Conn, error)
+	// owner is whom the host-socket binds belong to: the devcontainer's
+	// user, and whether the agent can act as it (false in single-uid mode,
+	// where the agent is that uid itself).
+	owner func() (execas.Identity, bool, error)
 
 	mu     sync.Mutex
 	closed bool
 	want   podwire.Sockets
 	socks  map[podwire.Tag]*inPodSocket
 	files  map[string]writtenFile
+	// hosts are the bound host-socket binds, by target; gateway the
+	// mirrored daemon-host ports, by port.
+	hosts   map[string]*inPodSocket
+	gateway map[uint16]*mirrorPort
 	// loaded: the manifest of the files earlier agents wrote was read into
 	// files (on the first state); manifest is what the manifest holds.
 	loaded   bool
@@ -76,6 +91,14 @@ type inPodSocket struct {
 	ln   *net.UnixListener
 	id   fileID
 	done chan struct{}
+	// A host-socket bind's: its target (what its relay streams name) and
+	// mode, where it was bound (bound: path's directory resolved, when root
+	// bound it in a directory only root can change), and owner, set when
+	// it was bound as that user (it is unlinked as them too).
+	target string
+	mode   fs.FileMode
+	bound  string
+	owner  *execas.Identity
 }
 
 // fileID is what tells one file from another at a name.
@@ -92,13 +115,15 @@ type writtenFile struct {
 	mtime time.Time
 }
 
-func newControlDir(dir string, log *Logger, dial func(podwire.Tag, podwire.SockOpen) (net.Conn, error)) *controlDir {
+func newControlDir(dir string, log *Logger, dial func(podwire.Tag, podwire.SockOpen) (net.Conn, error), owner func() (execas.Identity, bool, error)) *controlDir {
 	return &controlDir{
-		dir: dir, log: log, dial: dial,
-		socks:  map[podwire.Tag]*inPodSocket{},
-		files:  map[string]writtenFile{},
-		conns:  map[net.Conn]struct{}{},
-		failed: map[string]string{},
+		dir: dir, log: log, dial: dial, owner: owner,
+		socks:   map[podwire.Tag]*inPodSocket{},
+		files:   map[string]writtenFile{},
+		hosts:   map[string]*inPodSocket{},
+		gateway: map[uint16]*mirrorPort{},
+		conns:   map[net.Conn]struct{}{},
+		failed:  map[string]string{},
 	}
 }
 
@@ -155,6 +180,8 @@ func (c *controlDir) apply(ds podwire.DesiredState) string {
 			c.unbindLocked(tag)
 		}
 	}
+	problems = append(problems, c.syncHostsLocked(ds.Sockets.Host)...)
+	c.syncGatewayLocked(ds.Sockets.Gateway)
 	keep := make(map[string]bool, len(ds.Files))
 	for _, f := range ds.Files {
 		keep[f.Name] = true
@@ -236,7 +263,8 @@ func (c *controlDir) saveManifestLocked() error {
 	return nil
 }
 
-// check binds again every wanted socket whose file is no longer its own.
+// check binds again every wanted socket whose file is no longer its own,
+// and tries again the host relays that could not be bound.
 func (c *controlDir) check() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -248,6 +276,10 @@ func (c *controlDir) check() {
 			_ = c.ensureLocked(tag)
 		}
 	}
+	for _, h := range c.want.Host {
+		_ = c.ensureHostLocked(h)
+	}
+	c.syncGatewayLocked(c.want.Gateway)
 }
 
 // run checks the sockets every interval until done closes.
@@ -280,6 +312,12 @@ func (c *controlDir) close() {
 	c.closed = true
 	for _, tag := range podwire.SockTags {
 		c.unbindLocked(tag)
+	}
+	for target := range c.hosts {
+		c.unbindHostLocked(target)
+	}
+	for port := range c.gateway {
+		c.unbindPortLocked(port)
 	}
 	c.mu.Unlock()
 	c.connMu.Lock()
@@ -378,7 +416,7 @@ func (c *controlDir) accept(s *inPodSocket) {
 			_ = conn.Close()
 			continue
 		}
-		go c.relay(s.tag, conn)
+		go c.relay(s, conn)
 	}
 }
 
@@ -400,19 +438,29 @@ func (c *controlDir) untrack(conn net.Conn) {
 	c.relays.Done()
 }
 
-// relay carries one in-pod connection to fleetd: the end of either side's
-// input is a half-close of that direction on the other.
-func (c *controlDir) relay(tag podwire.Tag, conn *net.UnixConn) {
+// relay carries one connection to the in-pod socket s to fleetd.
+func (c *controlDir) relay(s *inPodSocket, conn *net.UnixConn) {
 	defer c.untrack(conn)
 	defer conn.Close()
-	up, err := c.dial(tag, podwire.SockOpen{Peer: peerOf(conn)})
+	name := podwire.SockName(s.tag)
+	if s.target != "" {
+		name = s.target
+	}
+	up, err := c.dial(s.tag, podwire.SockOpen{Peer: peerOf(conn), Target: s.target})
 	if err != nil {
-		if !podwire.IsSockRefused(err, podwire.RefusedGate) {
-			// fleetd says why it refuses a gated socket in its own log.
-			c.log.Warn("could not relay a connection to fleetd", "socket", podwire.SockName(tag), "err", err.Error())
+		if !podwire.IsSockRefused(err, podwire.RefusedGate) && !podwire.IsSockRefused(err, podwire.RefusedUnreachable) {
+			// fleetd says why it refuses a gated socket, or one it could
+			// not reach on the daemon host, in its own log.
+			c.log.Warn("could not relay a connection to fleetd", "socket", name, "err", err.Error())
 		}
 		return
 	}
+	splice(conn, up)
+}
+
+// splice relays conn and up until both directions end: the end of either
+// side's input is a half-close of that direction on the other.
+func splice(conn, up net.Conn) {
 	defer up.Close()
 	done := make(chan struct{}, 2)
 	go func() {
@@ -425,7 +473,7 @@ func (c *controlDir) relay(tag podwire.Tag, conn *net.UnixConn) {
 	}()
 	go func() {
 		if _, err := io.Copy(conn, up); err == nil {
-			_ = conn.CloseWrite()
+			closeWrite(conn)
 		} else {
 			_ = conn.Close()
 		}

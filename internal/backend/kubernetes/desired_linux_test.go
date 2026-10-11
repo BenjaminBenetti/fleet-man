@@ -4,6 +4,7 @@ package kubernetes
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -252,4 +253,69 @@ func TestMCPStreamAtTheDropReconnectsFirst(t *testing.T) {
 	_ = s.Close()
 	waitDone(t, s.Done(), "the session with an MCP stream")
 	waitFor(t, "the drop to be noted", func() bool { return h.pool.droppedInteractive(target) })
+}
+
+// TestInboundRelaysCarryTheHostRelays: the agent binds the host-socket
+// targets and mirrors the gateway ports the daemon's source names for the
+// pod, and their connections reach the daemon's handler, tagged with the
+// pod's target and naming the target or the port.
+func TestInboundRelaysCarryTheHostRelays(t *testing.T) {
+	h := newHarness(t, PoolOptions{})
+	target := h.addPod("one")
+	dir, err := os.MkdirTemp("/tmp", "khr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "gnupg", "S.gpg-agent")
+	probe, err := net.Listen("tcp4", podwire.HostGatewayAddr+":0")
+	if err != nil {
+		t.Skipf("cannot listen on %s: %v", podwire.HostGatewayAddr, err)
+	}
+	gw := uint16(probe.Addr().(*net.TCPAddr).Port)
+	_ = probe.Close()
+	h.pool.SetDesiredSource(func(PodTarget) podwire.Sockets {
+		return podwire.Sockets{Host: []podwire.HostSocket{{Target: sock, Mode: 0o600}}, Gateway: []uint16{gw}}
+	})
+	got := make(chan string, 2)
+	h.pool.SetInbound(func(t PodTarget, st *podwire.Stream) {
+		var open podwire.SockOpen
+		_ = podwire.DecodeHeader(st.Header, &open)
+		conn, err := podwire.AcceptSock(st)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		got <- fmt.Sprintf("%s %s/%s %s %d", st.Tag, t.Fleet, t.Instance, open.Target, open.Port)
+		_, _ = conn.Write([]byte("served"))
+	})
+	if _, err := h.pool.EnsureAgent(context.Background(), target); err != nil {
+		t.Fatal(err)
+	}
+	read := func(network, addr string) string {
+		t.Helper()
+		conn, err := net.Dial(network, addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+		out, _ := io.ReadAll(conn)
+		return string(out)
+	}
+	if out := read("unix", sock); out != "served" {
+		t.Fatalf("host socket answered %q", out)
+	}
+	if g := <-got; g != "sock-host fleet/one "+sock+" 0" {
+		t.Fatalf("the handler got %q", g)
+	}
+	if out := read("tcp4", net.JoinHostPort(podwire.HostGatewayAddr, fmt.Sprint(gw))); out != "served" {
+		t.Fatalf("gateway port answered %q", out)
+	}
+	if g := <-got; g != fmt.Sprintf("host-dial fleet/one  %d", gw) {
+		t.Fatalf("the handler got %q", g)
+	}
+	if !h.pool.Live(target) {
+		t.Fatal("the pod's session is not live")
+	}
 }

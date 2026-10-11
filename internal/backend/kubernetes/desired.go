@@ -39,8 +39,9 @@ type DesiredSource func(t PodTarget) podwire.Sockets
 type InboundHandler func(t PodTarget, s *podwire.Stream)
 
 // InboundTags are the kinds of streams the agent opens that the pool hands
-// the daemon's InboundHandler.
-var InboundTags = podwire.SockTags
+// the daemon's InboundHandler: the in-pod sockets' relays, the host-socket
+// binds' and the mirrored gateway ports'.
+var InboundTags = append(append([]podwire.Tag(nil), podwire.SockTags...), podwire.TagSockHost, podwire.TagHostDial)
 
 // desiredApplyWait bounds a new session's wait for its agent to apply the
 // first state.
@@ -94,6 +95,10 @@ func (p *Pool) RefreshDesired() {
 		}
 	}
 }
+
+// Live reports whether the pod of t has a live agent session (it never
+// bootstraps one).
+func (p *Pool) Live(t PodTarget) bool { return p.Session(t) != nil }
 
 // SetControlFile makes name hold data, with mode, in the control directory
 // of the pod of the instance whose StatefulSet is sts on connection cluster:

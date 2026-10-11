@@ -15,6 +15,12 @@
         "-"
       ],
       "user": "root",
+      "links": [
+        {
+          "path": "/run/itest-host-ssh-agent.sock",
+          "target": "/fleet-mounts/control/ssh-agent.sock"
+        }
+      ],
       "remote_user": "vscode"
     },
     "security": {},
@@ -43,6 +49,13 @@
         "kind": "host-socket",
         "target": "/run/itest-host-gpg-agent.sock",
         "source": "/home/dev/host/gnupg/S.gpg-agent"
+      }
+    ],
+    "hostSockets": [
+      {
+        "target": "/run/itest-host-gpg-agent.sock",
+        "source": "/home/dev/host/gnupg/S.gpg-agent",
+        "mode": 384
       }
     ],
     "nodeSelector": {

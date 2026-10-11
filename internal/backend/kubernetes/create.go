@@ -26,6 +26,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/hostrelay"
 	"github.com/BenjaminBenetti/fleet-man/internal/jobboot"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/owner"
@@ -363,7 +364,9 @@ func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.
 		StatefulSet: c.id.sts, Gen: c.gen, SpecHash: podspec.SpecHash(&o.StatefulSet.Spec.Template.Spec),
 		Image: del.Ref, Strategy: string(del.Strategy), RemoteUser: capture.RemoteUser,
 		WorkspaceFolder: cfg.WorkspaceFolder, NonRoot: c.identity.NonRoot, Created: c.created,
-		Ports: publishedPorts(adm.Result.Pod.Ports),
+		Ports:       publishedPorts(adm.Result.Pod.Ports),
+		HostSockets: recordedHostSockets(adm.Result.Pod.HostSockets),
+		HostGateway: adm.Result.Pod.HostGateway, GatewaySkip: adm.Result.Pod.GatewaySkip,
 	}
 	rec.addImageDigest(del.Digest)
 	rec.addImageDigest(del.ImageID)
@@ -513,8 +516,28 @@ func (c *creation) input(capture *kubeshim.Capture, image kubeshim.ImageConfig, 
 		Capture: capture, Image: image, Merged: cfg.Merged,
 		WorkspaceDir: c.req.WorkspaceDir, WorkspaceFolder: cfg.WorkspaceFolder,
 		FleetMounts: c.req.Mounts, Cluster: &rec, Facts: clusterFacts(c.facts, rec.StorageClass),
-		SSHAuthSock: agentsock.ContainerSocketPath,
+		HostAgentSockets: agentsock.HostAgentPaths(),
+		SSHAuthSock:      agentsock.ContainerSocketPath,
 	}
+}
+
+// recordedHostSockets is the host-socket binds as the instance record keeps
+// them: each source resolved now, so a link that appears on the way later is
+// refused rather than followed (hostrelay.Dial). A source that cannot be
+// resolved (it went since the translation stat-ed it) is kept as written; a
+// dial then finds what is there.
+func recordedHostSockets(socks []hostrelay.Socket) []hostrelay.Socket {
+	if len(socks) == 0 {
+		return nil
+	}
+	out := make([]hostrelay.Socket, len(socks))
+	for i, s := range socks {
+		if real, err := hostrelay.Resolve(s.Source); err == nil {
+			s.Source = real
+		}
+		out[i] = s
+	}
+	return out
 }
 
 // renderInput is the render's input for generation c.gen.

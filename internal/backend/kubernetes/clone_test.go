@@ -19,6 +19,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/hostrelay"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
 )
@@ -85,6 +86,8 @@ func TestCloneRecordCarriesTheSources(t *testing.T) {
 	rec.Strategy, rec.RemoteUser, rec.WorkspaceFolder, rec.NonRoot = "push", "vscode", "/workspaces/web", true
 	rec.Created = time.Unix(1700000000, 0)
 	rec.Ports = []backend.PublishedPort{{HostIP: "127.0.0.1", HostPort: 3000, ContainerPort: 3000}}
+	rec.HostSockets = []hostrelay.Socket{{Target: "/run/gpg.sock", Source: "/home/u/.gnupg/S.gpg-agent.extra", Mode: 0o700}}
+	rec.HostGateway, rec.GatewaySkip = true, []uint16{3000}
 	c := cloneRig(t, sts, rec)
 	c.srcRec, c.gen = rec, rec.Gen
 	got := c.cloneRecord(&podspec.Objects{StatefulSet: sts})
@@ -101,8 +104,11 @@ func TestCloneRecordCarriesTheSources(t *testing.T) {
 	if got.Key != "dest2345" || got.StatefulSet != c.id.sts || got.Instance != "copy" || !slices.Equal(got.Ports, rec.Ports) {
 		t.Fatalf("clone record %+v", got)
 	}
-	got.Ports[0].HostPort, got.ImageDigests[0] = 1, "x"
-	if rec.Ports[0].HostPort != 3000 || rec.ImageDigests[0] != "sha256:aa" {
+	if !slices.Equal(got.HostSockets, rec.HostSockets) || !got.HostGateway || !slices.Equal(got.GatewaySkip, rec.GatewaySkip) {
+		t.Fatalf("clone host relays %+v %v %v", got.HostSockets, got.HostGateway, got.GatewaySkip)
+	}
+	got.Ports[0].HostPort, got.ImageDigests[0], got.HostSockets[0].Target, got.GatewaySkip[0] = 1, "x", "/x", 1
+	if rec.Ports[0].HostPort != 3000 || rec.ImageDigests[0] != "sha256:aa" || rec.HostSockets[0].Target != "/run/gpg.sock" || rec.GatewaySkip[0] != 3000 {
 		t.Fatal("the clone's record shares the source's lists")
 	}
 }

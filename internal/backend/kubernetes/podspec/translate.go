@@ -253,6 +253,7 @@ func flagValues(name string, vals []string) string {
 func (t *translation) finish() {
 	t.finishMounts()
 	t.finishPorts()
+	t.finishHostRelays()
 	t.finishPrivilege()
 	t.finishDocker()
 	t.finishDebug()

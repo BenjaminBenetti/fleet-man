@@ -11,6 +11,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/internal/atomicfile"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/hostrelay"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -68,6 +69,15 @@ type InstanceRecord struct {
 	// Ports are the run's published ports (-p, appPort), which the daemon
 	// serves on its host while the instance runs.
 	Ports []backend.PublishedPort `json:"ports,omitempty"`
+	// HostSockets are the daemon-host sockets the devcontainer binds, their
+	// sources resolved when recorded: what the pod's agent binds, and the
+	// only daemon-host paths fleetd dials for the pod.
+	HostSockets []hostrelay.Socket `json:"hostSockets,omitempty"`
+	// HostGateway: the devcontainer declares host-gateway, so the pod
+	// mirrors the daemon host's listening ports (all but GatewaySkip, the
+	// ports it serves itself) while its connection allows it.
+	HostGateway bool     `json:"hostGateway,omitempty"`
+	GatewaySkip []uint16 `json:"gatewaySkip,omitempty"`
 }
 
 // ErrInstanceRecordNewer is a record a newer fleet wrote: read-only to this

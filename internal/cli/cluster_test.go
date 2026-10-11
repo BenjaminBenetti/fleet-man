@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 )
 
@@ -208,6 +209,30 @@ func TestClusterLs(t *testing.T) {
 	}
 	if _, _, err := runClusterCLI(t, f, "cluster", "ls", "nope"); err == nil || err.Error() != `no Kubernetes connection "nope"` {
 		t.Errorf("ls nope = %v", err)
+	}
+}
+
+// `ls <cluster>` of a remote daemon's connection that mirrors the daemon
+// host's ports says whose ports those are; a local daemon's, or one with
+// host_gateway off, does not.
+func TestClusterLsWarnsOfARemoteDaemonsHostGateway(t *testing.T) {
+	for _, k := range []string{fleetclient.EnvGateway, fleetclient.EnvSSH, fleetclient.EnvServer} {
+		t.Setenv(k, "")
+	}
+	f := newFakeKube()
+	out, _, err := runClusterCLI(t, f, "cluster", "ls", "prod-eu")
+	if err != nil || strings.Contains(out, fleet.HostGatewayRemoteWarning) {
+		t.Fatalf("a local daemon: %v\n%s", err, out)
+	}
+	t.Setenv(fleetclient.EnvSSH, "ssh://me@daemon-host")
+	out, _, err = runClusterCLI(t, f, "cluster", "ls", "prod-eu")
+	if err != nil || !strings.Contains(out, "warning: "+fleet.HostGatewayRemoteWarning+"\n") {
+		t.Fatalf("a remote daemon: %v\n%s", err, out)
+	}
+	f.clusters[1].Cluster.HostGateway = "off"
+	out, _, err = runClusterCLI(t, f, "cluster", "ls", "prod-eu")
+	if err != nil || strings.Contains(out, fleet.HostGatewayRemoteWarning) {
+		t.Fatalf("host_gateway off: %v\n%s", err, out)
 	}
 }
 

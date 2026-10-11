@@ -188,6 +188,32 @@ func notRelay(sock string) string {
 	return sock
 }
 
+// HostAgentPaths are the daemon host's paths to the user's ssh-agent: the
+// relay socket, the agent the daemon was started with, its SSH_AUTH_SOCK
+// now, and a FLEET_SSH_AGENT_SOCK path. A devcontainer's bind of one of
+// them (${localEnv:SSH_AUTH_SOCK}) forwards the user's agent: on Kubernetes
+// it becomes a link to the pod's agent relay socket.
+func HostAgentPaths() []string {
+	var out []string
+	add := func(p string) {
+		if p == "" || Disabled(p) {
+			return
+		}
+		p = filepath.Clean(p)
+		for _, have := range out {
+			if have == p {
+				return
+			}
+		}
+		out = append(out, p)
+	}
+	add(HostSocketPath())
+	add(OriginSock())
+	add(os.Getenv(EnvAuthSock))
+	add(Override())
+	return out
+}
+
 // LiveSocket reports whether path names an existing unix socket.
 func LiveSocket(path string) bool {
 	if path == "" {

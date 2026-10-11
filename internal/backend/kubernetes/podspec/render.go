@@ -45,6 +45,8 @@ import (
 //	tmpfs, --shm-size          emptyDir, memory-backed
 //	/opt/fleet/docker          emptyDir shared with the fleet-docker sidecar
 //	                           (a docker.sock bind; see render_docker.go)
+//	socket binds               none: pod-init links an ssh-agent bind to the
+//	                           agent relay, the pod agent binds the others
 //
 // Every workload goes through Harden.
 
@@ -301,12 +303,9 @@ func (r *renderer) refuse(code, format string, args ...any) {
 // What fleet cannot provide on a cluster yet. Each is refused by name, never
 // dropped: the run would be missing what it asked for.
 var unsupportedMounts = map[MountKind]string{
-	MountSSHAgent:      "a bind of the ssh-agent socket needs fleet's agent relay in the pod",
-	MountHostSocket:    "a bind of a daemon-host socket needs fleet's socket relay in the pod",
-	MountHostSocketDir: "a bind of a daemon-host socket directory needs fleet's socket relay in the pod",
-	MountHostDir:       "a bind of a daemon-host directory needs fleet's host-bind sync",
-	MountHostFile:      "a bind of a daemon-host file needs fleet's host-bind sync",
-	MountSharedVolume:  "a named volume other containers share lives on the fleet's share",
+	MountHostDir:      "a bind of a daemon-host directory needs fleet's host-bind sync",
+	MountHostFile:     "a bind of a daemon-host file needs fleet's host-bind sync",
+	MountSharedVolume: "a named volume other containers share lives on the fleet's share",
 }
 
 // checkSupported refuses what the run asks for that this version of fleet
@@ -348,9 +347,6 @@ func (r *renderer) checkSupported() {
 	}
 	if strings.TrimSpace(r.cluster.PodOverridesYAML) != "" {
 		r.refuse(CodeSettings, "%s has pod_overrides_yaml set, which this version of fleet does not apply to pods; clear it to create instances there", clusterLabel(r.cluster))
-	}
-	if r.pod.HostGateway {
-		r.warn("host-gateway: %s resolves in the pod, but fleet does not mirror the daemon host's ports there yet", HostGatewayIP)
 	}
 }
 
@@ -845,6 +841,10 @@ func (r *renderer) instanceMounts() ([]corev1.VolumeMount, []corev1.Volume, erro
 			if p.DooD == nil {
 				return nil, nil, fmt.Errorf("podspec: a docker socket mount at %s without the docker engine's sidecar", m.Target)
 			}
+		case MountSSHAgent, MountHostSocket, MountHostSocketDir:
+			// No volume: pod-init links an ssh-agent bind's target to the
+			// agent relay (pid1.json links), and the pod agent binds the
+			// other sockets at their targets (PodSpec.HostSockets).
 		default:
 			// checkSupported refused every other kind.
 			return nil, nil, fmt.Errorf("podspec: no rendering for a %s mount", m.Kind)

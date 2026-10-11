@@ -11,10 +11,12 @@ import (
 )
 
 // A relay stream is one connection a process in the pod made to an in-pod
-// socket (TagSockControl, TagSockAgent, TagSockMCP). The agent opens it with
-// a SockOpen preamble; fleetd answers with OPEN (SockReply), and from then on
-// the connection's bytes flow raw both ways, a FIN ending one direction (a
-// half-close) as the end of input does on the in-pod connection.
+// socket (TagSockControl, TagSockAgent, TagSockMCP, a host-socket bind's
+// TagSockHost) or to a mirrored gateway port (TagHostDial). The agent opens
+// it with a SockOpen preamble; fleetd answers with OPEN (SockReply), and from
+// then on the connection's bytes flow raw both ways, a FIN ending one
+// direction (a half-close) as the end of input does on the in-pod
+// connection.
 
 // SockOpen is a relay stream's preamble header.
 type SockOpen struct {
@@ -22,6 +24,14 @@ type SockOpen struct {
 	// (SO_PEERCRED): for the audit line only. Who is served is fleetd's
 	// decision, from the verified session the stream arrived on.
 	Peer *Peer `json:"peer,omitempty"`
+	// Target is the host-socket bind a TagSockHost stream's connection was
+	// made to (a HostSocket's Target): fleetd serves it only when it recorded
+	// that target for the instance, and dials only the path it recorded.
+	Target string `json:"target,omitempty"`
+	// Port is the gateway port a TagHostDial stream's connection was made to
+	// (on HostGatewayAddr): fleetd serves it only while the daemon host
+	// listens there.
+	Port uint16 `json:"port,omitempty"`
 }
 
 // Peer is a process's credentials.
@@ -37,8 +47,13 @@ type Peer struct {
 type SockReply = Refusal
 
 // RefusedGate: fleetd does not serve the socket for the pod now (no TUI is
-// attached, agent forwarding is off, the fleet's Fleet MCP is off).
+// attached, agent forwarding is off, the fleet's Fleet MCP is off), or never
+// (a host socket or port it did not record or find for the instance).
 const RefusedGate = "gate"
+
+// RefusedUnreachable: fleetd could not reach what the stream asks for on the
+// daemon host (the recorded socket, the port); its log says why.
+const RefusedUnreachable = "unreachable"
 
 // SockRefusedError is a relay stream fleetd refused.
 type SockRefusedError struct {

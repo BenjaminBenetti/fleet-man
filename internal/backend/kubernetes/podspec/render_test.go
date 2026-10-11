@@ -670,18 +670,14 @@ func TestRenderInputValidation(t *testing.T) {
 }
 
 func TestRenderRefusesWhatItCannotProvide(t *testing.T) {
-	sock := "/home/dev/host/S.gpg-agent"
 	for name, tt := range map[string]struct {
 		args []string
 		edit func(*Input, *RenderInput)
 		code string
 	}{
-		"ssh-agent":       {args: []string{"-v", "/home/dev/host/agent.sock:/ssh.sock"}, code: CodeUnsupportedMount},
-		"host socket":     {args: []string{"-v", sock + ":/gpg.sock"}, code: CodeUnsupportedMount},
-		"host socket dir": {args: []string{"-v", "/home/dev/host/x11:/tmp/.X11-unix"}, code: CodeUnsupportedMount},
-		"host dir":        {args: []string{"-v", "/home/dev/host/aws:/root/.aws"}, code: CodeUnsupportedMount},
-		"host file":       {args: []string{"-v", "/home/dev/host/gitconfig:/root/.gitconfig"}, code: CodeUnsupportedMount},
-		"shared volume":   {args: []string{"-v", "cache:/cache"}, code: CodeUnsupportedMount},
+		"host dir":      {args: []string{"-v", "/home/dev/host/aws:/root/.aws"}, code: CodeUnsupportedMount},
+		"host file":     {args: []string{"-v", "/home/dev/host/gitconfig:/root/.gitconfig"}, code: CodeUnsupportedMount},
+		"shared volume": {args: []string{"-v", "cache:/cache"}, code: CodeUnsupportedMount},
 		"fleet mounts": {edit: func(in *Input, _ *RenderInput) {
 			in.FleetMounts = []backend.Mount{
 				{ContainerPath: "/home/vscode/.claude", Scope: backend.MountScopeFleetShared, SubPath: "claude"},
@@ -700,9 +696,10 @@ func TestRenderRefusesWhatItCannotProvide(t *testing.T) {
 			}
 		})
 	}
-	o := mustRender(t, []string{"--add-host", "host.docker.internal:host-gateway"}, nil)
-	if len(o.Warnings) != 1 || !strings.Contains(o.Warnings[0], "host-gateway") {
-		t.Errorf("host-gateway warnings %v", o.Warnings)
+	// host-gateway renders as it translated: the mirror is the pod agent's,
+	// its deltas the translation's warning.
+	if o := mustRender(t, []string{"--add-host", "host.docker.internal:host-gateway"}, nil); len(o.Warnings) != 0 {
+		t.Errorf("host-gateway render warnings %v", o.Warnings)
 	}
 	// An image VOLUME at a path fleet reserves.
 	for _, vol := range []string{"/opt/fleet", "/opt/fleet/run", control.ContainerMountDir} {
@@ -713,7 +710,7 @@ func TestRenderRefusesWhatItCannotProvide(t *testing.T) {
 			t.Errorf("image VOLUME %s: %v", vol, err)
 		}
 	}
-	o = mustRender(t, []string{"--device", "/dev/kvm"}, nil)
+	o := mustRender(t, []string{"--device", "/dev/kvm"}, nil)
 	var dev corev1.Volume
 	for _, v := range o.StatefulSet.Spec.Template.Spec.Volumes {
 		if v.HostPath != nil {
@@ -933,5 +930,29 @@ func TestSeedSpecFollowsTheRender(t *testing.T) {
 	}())
 	if dirs := strings.Join(SeedSpec(res2, o).MountDirs, " "); strings.Contains(dirs, "/dev/kvm") || !strings.Contains(dirs, "/scratch") {
 		t.Errorf("mount dirs %s", dirs)
+	}
+}
+
+// TestRenderRelaysTheSocketBinds: a socket bind renders no volume or mount at
+// its target (the dev container's own root holds the link pod-init makes, or
+// the socket the pod agent binds there); the ssh-agent bind's link is in
+// pid1.json.
+func TestRenderRelaysTheSocketBinds(t *testing.T) {
+	o := mustRender(t, []string{
+		"-v", "/home/dev/host/agent.sock:/ssh.sock",
+		"-v", "/home/dev/host/S.gpg-agent:/run/gpg.sock",
+		"-v", "/home/dev/host/x11:/tmp/.X11-unix",
+	}, nil)
+	for _, target := range []string{"/ssh.sock", "/run/gpg.sock", "/tmp/.X11-unix"} {
+		if m, ok := mountAt(devOf(o), target); ok {
+			t.Errorf("a mount at %s: %+v", target, m)
+		}
+	}
+	var pid1 PID1
+	if err := json.Unmarshal(o.SpecSecret.Data[PID1File], &pid1); err != nil {
+		t.Fatal(err)
+	}
+	if len(pid1.Links) != 1 || pid1.Links[0].Path != "/ssh.sock" || pid1.Links[0].Target != "/fleet-mounts/control/ssh-agent.sock" {
+		t.Fatalf("pid1 links %+v", pid1.Links)
 	}
 }

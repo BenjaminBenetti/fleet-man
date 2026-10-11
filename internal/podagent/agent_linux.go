@@ -81,7 +81,7 @@ func Serve(ctx context.Context, conn io.ReadWriteCloser, opts Options) error {
 		if err := prepareControlDir(o.ControlDir); err != nil {
 			a.log.Warn("could not make the control directory root's alone", "dir", o.ControlDir, "err", err.Error())
 		}
-		a.ctl = newControlDir(o.ControlDir, a.log, a.dialSock)
+		a.ctl = newControlDir(o.ControlDir, a.log, a.dialSock, a.relayOwner)
 	}
 	if o.Role == podwire.RoleMain && !o.NoTakeover {
 		lock, err := a.takeOver()
@@ -113,6 +113,16 @@ func Serve(ctx context.Context, conn io.ReadWriteCloser, opts Options) error {
 // dialSock opens a relay stream to fleetd for an in-pod connection.
 func (a *agent) dialSock(tag podwire.Tag, open podwire.SockOpen) (net.Conn, error) {
 	return podwire.DialSock(a.sess, tag, open)
+}
+
+// relayOwner is whom the host-socket binds belong to: the devcontainer's
+// user (the exec class's), unless the agent cannot switch users.
+func (a *agent) relayOwner() (execas.Identity, bool, error) {
+	if a.host.SingleUID {
+		return execas.Identity{}, false, nil
+	}
+	id, err := a.host.Resolve(execas.ClassExec, "")
+	return id, true, err
 }
 
 // applyDesired makes the control directory match ds and acks it.

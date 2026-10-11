@@ -8,13 +8,16 @@ import (
 
 // mergedConfig is the part of the merged devcontainer configuration
 // Translate reads: what `devcontainer exec` knows about the instance
-// (exec.json) and the host requirements.
+// (exec.json), the host requirements and the forwarded ports.
 type mergedConfig struct {
 	RemoteUser   string `json:"remoteUser"`
 	UserEnvProbe string `json:"userEnvProbe"`
 	// RemoteEnv values are nil for a variable set to null.
 	RemoteEnv        map[string]*string `json:"remoteEnv"`
 	HostRequirements *hostRequirements  `json:"hostRequirements"`
+	// ForwardPorts are the ports the devcontainer forwards (a number, or
+	// "host:port"): ones the pod serves itself.
+	ForwardPorts []json.RawMessage `json:"forwardPorts"`
 }
 
 // hostRequirements is the merged hostRequirements: the largest of each

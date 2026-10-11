@@ -24,3 +24,18 @@ func (k *KubeCluster) RequiresDebugCapabilities() bool {
 func (k *KubeCluster) MirrorsHostGateway() bool {
 	return k.HostGateway != KubeHostGatewayOff
 }
+
+// HostGatewayRemoteWarning is what a client of a remote daemon is told of a
+// connection that mirrors the daemon host's ports (MirrorsHostGateway): the
+// host its pods reach is the daemon's, not the client's machine.
+const HostGatewayRemoteWarning = "fleetd runs on another host: pods that declare host-gateway reach every TCP port listening there, loopback-only ones too"
+
+// HostGatewayWarning is the warning for a connection whose host_gateway is
+// hostGateway, seen from a client whose daemon is remote or not: "" unless
+// the daemon is remote and the mirror is on.
+func HostGatewayWarning(hostGateway string, remote bool) string {
+	if !remote || KubeHostGateway(hostGateway) == KubeHostGatewayOff {
+		return ""
+	}
+	return HostGatewayRemoteWarning
+}
