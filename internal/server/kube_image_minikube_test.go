@@ -199,7 +199,7 @@ func TestKubeGatewayDeepTestMinikube(t *testing.T) {
 	id := added.GetCluster().GetCluster().GetId()
 	deep := func() *fleetgrpc.KubeClusterStatus {
 		t.Helper()
-		st, err := m.test(ctx, id, true, func(c *fleetgrpc.KubeCheck) {
+		st, err := m.test(ctx, id, fullRun{deep: true}, func(c *fleetgrpc.KubeCheck) {
 			if c.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_RUNNING && strings.HasPrefix(c.GetName(), "image_") {
 				t.Logf("  %s %s: %s %s", c.GetName(), strings.TrimPrefix(c.GetResult().String(), "KUBE_CHECK_RESULT_"), c.GetDetail(), c.GetFix())
 			}

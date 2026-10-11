@@ -1566,8 +1566,22 @@ type KubeCapabilities struct {
 	Orphans            *KubeOrphans `protobuf:"bytes,31,opt,name=orphans,proto3" json:"orphans,omitempty"`
 	// pending_teardowns counts deletions waiting for the cluster.
 	PendingTeardowns int32 `protobuf:"varint,32,opt,name=pending_teardowns,json=pendingTeardowns,proto3" json:"pending_teardowns,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// shared_storage_class is the StorageClass new fleet shares are made in:
+	// the connection's shared_storage_class, else Auto's pick (a class that
+	// passed the multi-node test, else the instance disks' in single-node
+	// mode); empty for the cluster's default class, and on the copy tier.
+	SharedStorageClass string `protobuf:"bytes,33,opt,name=shared_storage_class,json=sharedStorageClass,proto3" json:"shared_storage_class,omitempty"`
+	// instance_storage_class is the StorageClass new instance disks are made
+	// in: the connection's storage_class, else Auto's pick; empty for the
+	// cluster's default class (StorageClasses not readable).
+	InstanceStorageClass string `protobuf:"bytes,34,opt,name=instance_storage_class,json=instanceStorageClass,proto3" json:"instance_storage_class,omitempty"`
+	// share_refused says why no fleet share can be made on the connection (a
+	// shared_storage_class that fails the multi-node test's file system
+	// checks): an instance with fleet mounts is refused with it. Empty while
+	// shares can be made.
+	ShareRefused  string `protobuf:"bytes,35,opt,name=share_refused,json=shareRefused,proto3" json:"share_refused,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *KubeCapabilities) Reset() {
@@ -1824,6 +1838,27 @@ func (x *KubeCapabilities) GetPendingTeardowns() int32 {
 	return 0
 }
 
+func (x *KubeCapabilities) GetSharedStorageClass() string {
+	if x != nil {
+		return x.SharedStorageClass
+	}
+	return ""
+}
+
+func (x *KubeCapabilities) GetInstanceStorageClass() string {
+	if x != nil {
+		return x.InstanceStorageClass
+	}
+	return ""
+}
+
+func (x *KubeCapabilities) GetShareRefused() string {
+	if x != nil {
+		return x.ShareRefused
+	}
+	return ""
+}
+
 // KubeAdmission is the result of the dry-run canaries.
 type KubeAdmission struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -1909,7 +1944,15 @@ type KubeStorageClass struct {
 	ReclaimPolicy string `protobuf:"bytes,8,opt,name=reclaim_policy,json=reclaimPolicy,proto3" json:"reclaim_policy,omitempty"`
 	CsiClone      bool   `protobuf:"varint,9,opt,name=csi_clone,json=csiClone,proto3" json:"csi_clone,omitempty"`
 	SelinuxMount  bool   `protobuf:"varint,10,opt,name=selinux_mount,json=selinuxMount,proto3" json:"selinux_mount,omitempty"`
-	// multi_node_test is the cached result of the multi-node share test.
+	// multi_node_test is the cached result of the multi-node share test (an
+	// RWX volume of the class mounted by two pods on two nodes, and the file
+	// system checks across them): PASS for a class fleet shares can use from
+	// any node; WARN when it could not tell or the volume works but not
+	// across nodes (one node ran both pods); FAIL with the check that failed,
+	// or when no ReadWriteMany volume of the class could be mounted from a
+	// second node; SKIPPED with why it was not tested (node-local, block
+	// disks only, a large minimum size awaiting consent). Absent when the
+	// connection never tested it.
 	MultiNodeTest *KubeCheck `protobuf:"bytes,11,opt,name=multi_node_test,json=multiNodeTest,proto3" json:"multi_node_test,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3539,9 +3582,14 @@ type TestKubeClusterRequest struct {
 	// delivery, a pod pulls a tiny image through the gateway and the failing
 	// step (route, TLS, credential or digest) is named. Saved connections only;
 	// a draft skips them.
-	Deep          bool `protobuf:"varint,3,opt,name=deep,proto3" json:"deep,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Deep bool `protobuf:"varint,3,opt,name=deep,proto3" json:"deep,omitempty"`
+	// storage_classes run the multi-node storage test on these StorageClasses
+	// now, cached result or not, a class whose volumes have a large minimum
+	// size (Filestore) included: naming it is the consent Auto asks for
+	// before it tests one. Saved connections only.
+	StorageClasses []string `protobuf:"bytes,4,rep,name=storage_classes,json=storageClasses,proto3" json:"storage_classes,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *TestKubeClusterRequest) Reset() {
@@ -3593,6 +3641,13 @@ func (x *TestKubeClusterRequest) GetDeep() bool {
 		return x.Deep
 	}
 	return false
+}
+
+func (x *TestKubeClusterRequest) GetStorageClasses() []string {
+	if x != nil {
+		return x.StorageClasses
+	}
+	return nil
 }
 
 // TestKubeClusterEvent is one step of a streamed preflight.
@@ -4359,7 +4414,7 @@ const file_kube_proto_rawDesc = "" +
 	"checked_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcheckedAt\x12B\n" +
 	"\x0fdeep_checked_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\rdeepCheckedAt\"H\n" +
 	"\fKubeClusters\x128\n" +
-	"\bclusters\x18\x01 \x03(\v2\x1c.fleetgrpc.KubeClusterStatusR\bclusters\"\xd2\v\n" +
+	"\bclusters\x18\x01 \x03(\v2\x1c.fleetgrpc.KubeClusterStatusR\bclusters\"\xdf\f\n" +
 	"\x10KubeCapabilities\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x12\n" +
 	"\x04user\x18\x02 \x01(\tR\x04user\x12\x1d\n" +
@@ -4396,7 +4451,10 @@ const file_kube_proto_rawDesc = "" +
 	"\x15credentials_expire_at\x18\x1d \x01(\v2\x1a.google.protobuf.TimestampR\x13credentialsExpireAt\x120\n" +
 	"\x14node_cordoned_moving\x18\x1e \x01(\bR\x12nodeCordonedMoving\x120\n" +
 	"\aorphans\x18\x1f \x01(\v2\x16.fleetgrpc.KubeOrphansR\aorphans\x12+\n" +
-	"\x11pending_teardowns\x18  \x01(\x05R\x10pendingTeardowns\"\x9a\x01\n" +
+	"\x11pending_teardowns\x18  \x01(\x05R\x10pendingTeardowns\x120\n" +
+	"\x14shared_storage_class\x18! \x01(\tR\x12sharedStorageClass\x124\n" +
+	"\x16instance_storage_class\x18\" \x01(\tR\x14instanceStorageClass\x12#\n" +
+	"\rshare_refused\x18# \x01(\tR\fshareRefused\"\x9a\x01\n" +
 	"\rKubeAdmission\x12\"\n" +
 	"\funprivileged\x18\x01 \x01(\bR\funprivileged\x12-\n" +
 	"\x12debug_capabilities\x18\x02 \x01(\bR\x11debugCapabilities\x12\x1e\n" +
@@ -4530,11 +4588,12 @@ const file_kube_proto_rawDesc = "" +
 	"\x16RemoveKubeClusterReply\x12\x18\n" +
 	"\aremoved\x18\x01 \x01(\bR\aremoved\x120\n" +
 	"\x05users\x18\x02 \x03(\v2\x1a.fleetgrpc.KubeClusterUserR\x05users\x12\x1a\n" +
-	"\bwarnings\x18\x03 \x03(\tR\bwarnings\"n\n" +
+	"\bwarnings\x18\x03 \x03(\tR\bwarnings\"\x97\x01\n" +
 	"\x16TestKubeClusterRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x120\n" +
 	"\acluster\x18\x02 \x01(\v2\x16.fleetgrpc.KubeClusterR\acluster\x12\x12\n" +
-	"\x04deep\x18\x03 \x01(\bR\x04deep\"\x84\x01\n" +
+	"\x04deep\x18\x03 \x01(\bR\x04deep\x12'\n" +
+	"\x0fstorage_classes\x18\x04 \x03(\tR\x0estorageClasses\"\x84\x01\n" +
 	"\x14TestKubeClusterEvent\x12,\n" +
 	"\x05check\x18\x01 \x01(\v2\x14.fleetgrpc.KubeCheckH\x00R\x05check\x126\n" +
 	"\x06result\x18\x02 \x01(\v2\x1c.fleetgrpc.KubeClusterStatusH\x00R\x06resultB\x06\n" +

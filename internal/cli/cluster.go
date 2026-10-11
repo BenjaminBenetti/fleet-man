@@ -531,22 +531,23 @@ func describeClusterUsers(users []*fleetgrpc.KubeClusterUser) string {
 func newClusterTestCmd() *cobra.Command {
 	var (
 		kubeContext, namespace string
-		kubeconfigs            []string
+		kubeconfigs, storage   []string
 		deep                   bool
 	)
 	cmd := &cobra.Command{
-		Use:   "test [--deep] <cluster> | --context <context> [<field>=<value>...]",
+		Use:   "test [--deep] [--storage <class>...] <cluster> | --context <context> [<field>=<value>...]",
 		Short: "Run a cluster connection's checks on the daemon",
 		Long: "Run every check of a cluster connection on the daemon and print them.\n" +
 			"With --deep, also run the throwaway-pod probes (a pod pulls through\n" +
-			"the gateway; pods test NetworkPolicy enforcement and reach to\n" +
-			"169.254.169.254). With --context, test a context that is not connected\n" +
-			"(fields as for `set`). Exits 0 when the cluster is ready or limited,\n" +
-			"1 otherwise.",
+			"the gateway; pods test NetworkPolicy enforcement, reach to\n" +
+			"169.254.169.254 and the StorageClasses). --storage tests a StorageClass\n" +
+			"across two nodes now. With --context, test a context that is not\n" +
+			"connected (fields as for `set`). Exits 0 when the cluster is ready or\n" +
+			"limited, 1 otherwise.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("context") {
-				if deep {
-					return errors.New("--deep tests a connected cluster")
+				if deep || len(storage) > 0 {
+					return errors.New("--deep and --storage test a connected cluster")
 				}
 				for _, a := range args {
 					if !isClusterFieldArg(a) {
@@ -561,7 +562,7 @@ func newClusterTestCmd() *cobra.Command {
 			return cobra.ExactArgs(1)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			req := &fleetgrpc.TestKubeClusterRequest{Deep: deep}
+			req := &fleetgrpc.TestKubeClusterRequest{Deep: deep, StorageClasses: storage}
 			if cmd.Flags().Changed("context") {
 				c, _, err := parseClusterFields(args)
 				if err != nil {
@@ -593,6 +594,7 @@ func newClusterTestCmd() *cobra.Command {
 	f.StringArrayVar(&kubeconfigs, "kubeconfig", nil, "kubeconfig `path` on the daemon host, with --context (repeatable)")
 	f.StringVarP(&namespace, "namespace", "n", "", "namespace, with --context")
 	f.BoolVar(&deep, "deep", false, "also run the throwaway-pod probes (minutes)")
+	f.StringArrayVar(&storage, "storage", nil, "run the multi-node storage test on StorageClass `class` now (repeatable)")
 	return cmd
 }
 

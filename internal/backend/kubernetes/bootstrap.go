@@ -49,6 +49,10 @@ type PodTarget struct {
 	HostSockets []hostrelay.Socket
 	HostGateway bool
 	GatewaySkip []uint16
+	// Share is where the instance's fleet mounts live (InstanceRecord's):
+	// on a share mounted from several nodes, the pod's agent hints its
+	// changes (sharehint.go). nil without fleet mounts.
+	Share *ShareRecord
 }
 
 // Pod is the target's pod name.

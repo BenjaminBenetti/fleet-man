@@ -41,6 +41,14 @@ type agent struct {
 	lastRecv atomic.Int64
 	streams  sync.WaitGroup
 	endOnce  sync.Once
+
+	// spokes counts the share spokes this agent relays to (serveSyncCtl):
+	// while one runs, the pod's share changes need no hints.
+	spokes atomic.Int32
+	// hinter is the main agent's watch of a multi-node share
+	// (sharehint_linux.go).
+	hintMu sync.Mutex
+	hinter *shareHinter
 }
 
 // Serve is `pod-agent serve`: it serves one agent session over conn (the
@@ -102,6 +110,7 @@ func Serve(ctx context.Context, conn io.ReadWriteCloser, opts Options) error {
 	}}
 	_ = mux.Serve(sess)
 	a.end()
+	a.stopShareHint()
 	// Before the pid file's lock goes: the next agent binds the sockets.
 	if a.ctl != nil {
 		a.ctl.close()
@@ -132,6 +141,7 @@ func (a *agent) applyDesired(ds podwire.DesiredState) {
 		ack.Error = fmt.Sprintf("the %s agent keeps no control directory", a.opts.Role)
 	} else {
 		ack.Error = a.ctl.apply(ds)
+		a.setShareHint(ds.ShareHint)
 	}
 	_ = a.ctlW.WriteJSON(podwire.FrameData, podwire.ControlMessage{Type: podwire.MsgDesiredAck, DesiredAck: &ack})
 }

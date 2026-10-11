@@ -63,6 +63,7 @@ const (
 	msgNeed    = "need"    // spoke: content of an op of a batch it is applying
 	msgData    = "data"    // either: content inline, or Bulk on a connection of its own
 	msgRescan  = "rescan"  // hub: scan and report now
+	msgHint    = "hint"    // hub: paths changed on another node (no answer)
 	msgDone    = "done"    // spoke: the rescan finished
 	msgError   = "error"   // either: the request failed (Stale for ErrStale)
 )
@@ -88,6 +89,7 @@ type wireMsg struct {
 	Bulk    bool      `json:"bulk,omitempty"`
 	Err     string    `json:"err,omitempty"`
 	Stale   bool      `json:"stale,omitempty"`
+	Hint    *Hint     `json:"hint,omitempty"`
 }
 
 // wireGet names content a side holds.

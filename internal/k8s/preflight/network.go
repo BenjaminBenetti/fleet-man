@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,7 +23,8 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime/kubert"
 )
 
-// network.go is the deep test's look at the pods' network: whether the
+// network.go is the deep test's look at the pods' network (and, from its
+// client pod, the node's inotify limits a share's watch draws on): whether the
 // namespace's network plugin enforces NetworkPolicies (fleet's isolation of
 // a fleet's pods and its metadata block are only advice where it does not),
 // and whether a pod shaped like fleet's reaches the cloud metadata service at
@@ -56,10 +58,14 @@ var (
 // labelProbe tells the probe's pods apart for its NetworkPolicies.
 const labelProbe = "fleet.dev/probe"
 
-// networkVerdict is what the client pod found.
+// networkVerdict is what the client pod found, with its node's inotify
+// limits (0 when unread): what a spoke's watch of a share may use, shared by
+// every pod of one uid on the node.
 type networkVerdict struct {
 	metadataReachable bool
 	peerReachable     bool
+	inotifyInstances  int64
+	inotifyWatches    int64
 }
 
 // networkProbe runs the probe and reports CheckNetworkPolicy and
@@ -88,6 +94,7 @@ func (r *run) networkProbe(ctx context.Context) {
 	}
 	r.caps.NetworkPolicyEnforced = !v.peerReachable
 	r.caps.MetadataReachable = v.metadataReachable
+	r.caps.InotifyMaxUserInstances, r.caps.InotifyMaxUserWatches = v.inotifyInstances, v.inotifyWatches
 	if v.peerReachable {
 		line := "NetworkPolicies are not enforced here: a fleet's pod isolation and metadata block are advisory"
 		r.warning(line)
@@ -198,6 +205,8 @@ func probeScript(targetIP string) string {
 }
 probe metadata http://` + metadataAddress + `/
 probe peer http://` + podAddress(targetIP) + `:` + fmt.Sprint(probeTargetPort) + `/
+echo "inotify_instances=$(cat /proc/sys/fs/inotify/max_user_instances 2>/dev/null)"
+echo "inotify_watches=$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null)"
 `
 }
 
@@ -215,7 +224,23 @@ func parseNetworkProbe(out string) (networkVerdict, error) {
 	seen := map[string]bool{}
 	for _, line := range strings.Split(out, "\n") {
 		k, val, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if !ok || (val != "reached" && val != "unreached") {
+		if !ok {
+			continue
+		}
+		switch k {
+		case "inotify_instances", "inotify_watches":
+			n, err := strconv.ParseInt(val, 10, 64)
+			if err != nil || n < 0 {
+				continue
+			}
+			if k == "inotify_instances" {
+				v.inotifyInstances = n
+			} else {
+				v.inotifyWatches = n
+			}
+			continue
+		}
+		if val != "reached" && val != "unreached" {
 			continue
 		}
 		seen[k] = true

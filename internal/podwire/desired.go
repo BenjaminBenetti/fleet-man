@@ -22,6 +22,10 @@ type DesiredState struct {
 	// mod's). A file the pod's agents wrote for an earlier state that this
 	// one leaves out is removed, by whichever agent gets this one.
 	Files []ControlFile `json:"files,omitempty"`
+	// ShareHint names the folders of the fleet's share whose changes the
+	// agent hints to fleetd (sharehint.go): set while the share is mounted
+	// from several nodes. An older agent ignores it.
+	ShareHint *ShareHint `json:"share_hint,omitempty"`
 }
 
 // Sockets says which in-pod sockets the agent binds. Each connection to one
@@ -211,6 +215,9 @@ func (ds DesiredState) Validate() error {
 	}
 	if total > maxControlTotal {
 		return fmt.Errorf("control files are %d bytes in all, at most %d", total, maxControlTotal)
+	}
+	if err := ds.ShareHint.Validate(); err != nil {
+		return err
 	}
 	return ds.Sockets.validateRelays()
 }

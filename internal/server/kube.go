@@ -616,7 +616,7 @@ func (s *service) TestKubeCluster(req *fleetgrpc.TestKubeClusterRequest, stream 
 	}
 	var result *fleetgrpc.KubeClusterStatus
 	if id := req.GetId(); id != "" {
-		st, err := s.kube.test(ctx, id, req.GetDeep(), report)
+		st, err := s.kube.test(ctx, id, fullRun{deep: req.GetDeep(), storage: req.GetStorageClasses()}, report)
 		if err != nil {
 			return err
 		}
@@ -637,9 +637,10 @@ func (s *service) TestKubeCluster(req *fleetgrpc.TestKubeClusterRequest, stream 
 	return stream.Send(&fleetgrpc.TestKubeClusterEvent{Kind: &fleetgrpc.TestKubeClusterEvent_Result{Result: result}})
 }
 
-// test runs a full preflight on a saved connection, with deep the deep
-// test's probes too; the result becomes its health.
-func (m *kubeManager) test(ctx context.Context, id string, deep bool, report func(*fleetgrpc.KubeCheck)) (*fleetgrpc.KubeClusterStatus, error) {
+// test runs a full preflight on a saved connection, with what o asks (the
+// deep test's probes, StorageClasses to test now); the result becomes its
+// health.
+func (m *kubeManager) test(ctx context.Context, id string, o fullRun, report func(*fleetgrpc.KubeCheck)) (*fleetgrpc.KubeClusterStatus, error) {
 	w := m.worker(id)
 	if w == nil {
 		// No serve loop runs the connection (a newService test, or the
@@ -650,7 +651,7 @@ func (m *kubeManager) test(ctx context.Context, id string, deep bool, report fun
 		}
 		w = m.newWorker(rec)
 	}
-	w.runFullDeep(ctx, report, deep)
+	w.runFullDeep(ctx, report, o)
 	if ctx.Err() != nil {
 		return nil, status.FromContextError(ctx.Err()).Err()
 	}
@@ -670,7 +671,7 @@ func (m *kubeManager) testDraft(ctx context.Context, rec fleet.KubeCluster, repo
 		}
 	} else {
 		w := &kubeWorker{m: m, rec: rec}
-		res = preflight.Full(ctx, w.target(rec, link, nil), report)
+		res = fullPreflight(ctx, w.target(rec, link, nil), report)
 	}
 	w := &kubeWorker{m: m, rec: rec, haveFull: true, full: res, lastFull: res.CheckedAt, lastProbe: res.CheckedAt, cred: res.Credential}
 	return w.status()
@@ -710,7 +711,7 @@ func (s *service) LoginKubeCluster(req *fleetgrpc.LoginKubeClusterRequest, strea
 		return status.Errorf(codes.Unauthenticated, "login failed: %s", preflight.Message(err))
 	}
 	flog.Info("kube: login on daemon succeeded", "cluster", rec.ID)
-	result, err := s.kube.test(ctx, rec.ID, false, nil)
+	result, err := s.kube.test(ctx, rec.ID, fullRun{}, nil)
 	if err != nil {
 		return err
 	}

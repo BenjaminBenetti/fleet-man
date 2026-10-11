@@ -25,11 +25,12 @@ func immediateOne(sc *storagev1.StorageClass) {
 	sc.VolumeBindingMode = &m
 }
 
-// TestSharedStorage: until the multi-node test, a connection holds fleet
-// shares in single-node mode, in the shared class else the instance disks';
-// a class binding Immediately on several nodes is flagged with the fix;
-// where the deep test found two pods cannot mount one RWO volume, the copy
-// tier, LIMITED as logins may need repeating.
+// TestSharedStorage: without a class that passed the multi-node test, a
+// connection holds fleet shares in single-node mode, in the shared class
+// else the instance disks', LIMITED on a cluster of several nodes (each
+// fleet on one node) with why; a class binding Immediately on several nodes
+// is flagged with the fix; where the deep test found two pods cannot mount
+// one RWO volume, the copy tier, LIMITED as logins may need repeating.
 func TestSharedStorage(t *testing.T) {
 	no, yes := false, true
 	for _, tc := range []struct {
@@ -45,12 +46,14 @@ func TestSharedStorage(t *testing.T) {
 	}{
 		{name: "minikube", objects: []runtime.Object{minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath", isDefault)},
 			result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, mode: "single-node", detail: "single-node mode: each fleet's instances run together on the node holding its share (standard, Immediate, node-local, not expandable"},
-		{name: "a shared class", objects: []runtime.Object{cloudNode("a"), cloudNode("b"), storageClass("gp3", "ebs.csi.aws.com", isDefault, wffc), storageClass("nfs", "nfs.csi.k8s.io", wffc, expandable)},
-			rec: fleet.KubeCluster{SharedStorageClass: "nfs"}, result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS, mode: "single-node", detail: "(nfs, WFFC, expandable)"},
+		{name: "a shared class not tested", objects: []runtime.Object{cloudNode("a"), cloudNode("b"), storageClass("gp3", "ebs.csi.aws.com", isDefault, wffc), storageClass("nfs", "nfs.csi.k8s.io", wffc, expandable)},
+			rec: fleet.KubeCluster{SharedStorageClass: "nfs"}, result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN, mode: "single-node", detail: "nfs is not tested yet for the multi-node test; single-node mode: each fleet's instances run together on the node holding its share (nfs, WFFC, expandable)", limited: LimitedOneNode},
+		{name: "a block shared class", objects: []runtime.Object{cloudNode("a"), cloudNode("b"), storageClass("gp3", "ebs.csi.aws.com", isDefault, wffc)},
+			rec: fleet.KubeCluster{SharedStorageClass: "gp3"}, result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN, mode: "single-node", detail: "gp3 does not give multi-node mode: its volumes mount on one node at a time", limited: LimitedOneNode},
 		{name: "Immediate on two nodes", objects: []runtime.Object{cloudNode("a"), cloudNode("b"), storageClass("fast", "ebs.csi.aws.com", isDefault, immediateOne)},
 			result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN, mode: "single-node", detail: "binds each volume as soon as it is made", limited: "fleet shares: Immediate binding"},
 		{name: "a missing shared class", objects: []runtime.Object{minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath", isDefault)},
-			rec: fleet.KubeCluster{SharedStorageClass: "nope"}, result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, detail: `"nope" for fleet shares does not exist`, limited: "fleet shares unavailable", mode: "single-node"},
+			rec: fleet.KubeCluster{SharedStorageClass: "nope"}, result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_FAIL, detail: `"nope" for fleet shares does not exist`, limited: "fleet shares unavailable"},
 		{name: "the copy tier", objects: []runtime.Object{minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath", isDefault)},
 			multiPod: &no, result: fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_WARN, mode: "copy", detail: "copy tier", limited: LimitedCopyTier},
 		{name: "tested", objects: []runtime.Object{minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath", isDefault)},
@@ -70,8 +73,11 @@ func TestSharedStorage(t *testing.T) {
 			}
 			if tc.limited != "" {
 				wantState(t, res, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_LIMITED, tc.limited)
-			} else if strings.Contains(res.Message, "fleet shares") || strings.Contains(res.Message, LimitedCopyTier) {
+			} else if strings.Contains(res.Message, "fleet shares") || strings.Contains(res.Message, LimitedCopyTier) || strings.Contains(res.Message, LimitedOneNode) {
 				t.Fatalf("limited by the share: %q", res.Message)
+			}
+			if tc.mode == "" && res.Capabilities.GetShareRefused() == "" {
+				t.Fatal("no share mode, and no refusal saying why")
 			}
 		})
 	}

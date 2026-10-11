@@ -51,6 +51,11 @@ type Input struct {
 	// DropDebugGrants renders without the debug grants (the re-render after
 	// admission denied them; see Denied).
 	DropDebugGrants bool
+
+	// MultiNodeShare: the fleet's share is mounted from several nodes
+	// (multi-node mode), so what only works on one kernel stays on the
+	// instance's own disk: Codex's SQLite state (CodexSQLiteHome).
+	MultiNodeShare bool
 }
 
 // ClusterFacts is what a connection's preflight found about the cluster and

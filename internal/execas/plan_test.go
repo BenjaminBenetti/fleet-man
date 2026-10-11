@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -685,5 +686,52 @@ func TestPlanPutsBundlesLast(t *testing.T) {
 	}
 	if env := envMap(plan.Env); env["PATH"] != tmux+":/bin" || env["TERMINFO_DIRS"] != "/usr/share/terminfo:/opt/fleet/tmux/share/terminfo" {
 		t.Errorf("a request already naming the bundle: PATH %q TERMINFO_DIRS %q, want each once", env["PATH"], env["TERMINFO_DIRS"])
+	}
+}
+
+// TestPlanSetsTheHomeEnv: the spec's home variables are the command's home
+// joined with each path, in every class (a tmux server a script starts
+// passes them to its sessions), and unset only: a value the environment
+// already has (the container's, remoteEnv's, the request's) is kept.
+func TestPlanSetsTheHomeEnv(t *testing.T) {
+	m := newMatrixHost(t)
+	m.host.Spec.HomeEnv = map[string]string{"CODEX_SQLITE_HOME": ".local/state/fleet/codex-sqlite"}
+	for _, class := range []Class{ClassExec, ClassScript, ClassRoot} {
+		p, err := m.host.Plan(context.Background(), Request{Class: class, Argv: []string{"/bin/sh"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := envMap(p.Env)
+		if want := path.Join(env["HOME"], ".local/state/fleet/codex-sqlite"); env["CODEX_SQLITE_HOME"] != want || !path.IsAbs(want) {
+			t.Errorf("%s: CODEX_SQLITE_HOME = %q, want %q", class, env["CODEX_SQLITE_HOME"], want)
+		}
+	}
+	p, err := m.host.Plan(context.Background(), Request{Class: ClassScript, Argv: []string{"/bin/sh"}, Env: map[string]string{"CODEX_SQLITE_HOME": "/mine"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := envMap(p.Env)["CODEX_SQLITE_HOME"]; got != "/mine" {
+		t.Errorf("a request's own value became %q", got)
+	}
+	m.host.Spec.RemoteEnv = map[string]string{"CODEX_SQLITE_HOME": "/remote"}
+	p, err = m.host.Plan(context.Background(), Request{Class: ClassExec, Argv: []string{"/bin/sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := envMap(p.Env)["CODEX_SQLITE_HOME"]; got != "/remote" {
+		t.Errorf("remoteEnv's value became %q", got)
+	}
+}
+
+// TestSpecRefusesABadHomeEnv: a home variable's path must be a clean one
+// below the home.
+func TestSpecRefusesABadHomeEnv(t *testing.T) {
+	for _, rel := range []string{"", "/abs", "../up", "a/../../b", ".", "a//b"} {
+		if err := (Spec{HomeEnv: map[string]string{"X": rel}}).Validate(); err == nil {
+			t.Errorf("home_env %q accepted", rel)
+		}
+	}
+	if err := (Spec{HomeEnv: map[string]string{"X": ".local/state/x"}}).Validate(); err != nil {
+		t.Errorf("a good home_env: %v", err)
 	}
 }

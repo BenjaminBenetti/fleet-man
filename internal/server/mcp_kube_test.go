@@ -5,7 +5,10 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/preflight"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -238,5 +241,71 @@ func TestMCPAgentOnACluster(t *testing.T) {
 	}
 	if msg := callErr(t, cs, "fleet_agent_create", map[string]any{"fleet": "alpha", "name": "y", "cluster": "nope"}); !strings.Contains(msg, "nope") {
 		t.Errorf("an unknown cluster: %q", msg)
+	}
+}
+
+// TestClusterTestNamesStorageClasses: the classes TestKubeCluster (and
+// fleet_cluster_test) names reach the preflight as the ones to test now,
+// with the connection's storage test cache; an unsaved connection's draft
+// gets none.
+func TestClusterTestNamesStorageClasses(t *testing.T) {
+	f := newKubeFixture(t)
+	f.start()
+	dev := f.add(&fleetgrpc.KubeCluster{Context: "minikube", DisplayName: "dev", Namespace: "fleet"}).GetCluster()
+	var mu sync.Mutex
+	var asked []preflight.Target
+	old := fullPreflight
+	fullPreflight = func(ctx context.Context, t preflight.Target, report func(*fleetgrpc.KubeCheck)) preflight.Result {
+		mu.Lock()
+		asked = append(asked, t)
+		mu.Unlock()
+		return old(ctx, t, report)
+	}
+	defer func() { fullPreflight = old }()
+	// The connection's worker runs its own preflights meanwhile: find the
+	// one asked for these classes.
+	find := func(classes ...string) (preflight.Target, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, a := range asked {
+			if slices.Equal(a.TestStorage, classes) {
+				return a, true
+			}
+		}
+		return preflight.Target{}, false
+	}
+
+	c := &streamCollector[fleetgrpc.TestKubeClusterEvent]{ctx: context.Background()}
+	if err := f.svc.TestKubeCluster(&fleetgrpc.TestKubeClusterRequest{Id: dev.GetId(), StorageClasses: []string{"filestore"}}, c); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := find("filestore"); !ok || got.StorageCache == nil || got.Deep {
+		t.Fatalf("the RPC's preflight: asked %v, cache %v deep %v", ok, got.StorageCache != nil, got.Deep)
+	}
+
+	cs := mcpConnect(t, f.svc)
+	var out FleetClusterTestOutput
+	callJSON(t, cs, "fleet_cluster_test", map[string]any{"cluster": "dev", "storage_classes": []string{"nfs", "cephfs"}}, &out)
+	if _, ok := find("nfs", "cephfs"); !ok {
+		t.Fatal("fleet_cluster_test did not ask the preflight for its classes")
+	}
+
+	draft := &streamCollector[fleetgrpc.TestKubeClusterEvent]{ctx: context.Background()}
+	if err := f.svc.TestKubeCluster(&fleetgrpc.TestKubeClusterRequest{Cluster: &fleetgrpc.KubeCluster{Context: "minikube", Namespace: "fleet"}}, draft); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	drafts := 0
+	for _, a := range asked {
+		if a.Cluster.ID == "" {
+			drafts++
+			if a.StorageCache != nil {
+				t.Fatal("a draft has a storage test cache")
+			}
+		}
+	}
+	if drafts != 1 {
+		t.Fatalf("%d draft preflights, want 1", drafts)
 	}
 }

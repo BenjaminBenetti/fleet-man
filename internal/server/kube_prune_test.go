@@ -155,7 +155,7 @@ func TestTwoKubeRecordsOnOneNamespaceStayIsolated(t *testing.T) {
 	a := f.add(&fleetgrpc.KubeCluster{Context: "minikube", Namespace: "fleet"}).GetCluster().GetId()
 	b := f.add(&fleetgrpc.KubeCluster{Context: "minikube-alias", Namespace: "fleet"}).GetCluster().GetId()
 	for _, id := range []string{a, b} {
-		if st, err := f.svc.kube.test(context.Background(), id, false, nil); err != nil || st.GetState() != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY {
+		if st, err := f.svc.kube.test(context.Background(), id, fullRun{}, nil); err != nil || st.GetState() != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY {
 			t.Fatalf("%s: %v %v", id, st.GetState(), err)
 		}
 	}
@@ -175,7 +175,7 @@ func TestTwoKubeRecordsOnOneNamespaceStayIsolated(t *testing.T) {
 	}
 	// The orphan counts in each one's capabilities are its own.
 	for _, id := range []string{a, b} {
-		res, err := f.svc.kube.test(context.Background(), id, false, nil)
+		res, err := f.svc.kube.test(context.Background(), id, fullRun{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

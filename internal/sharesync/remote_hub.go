@@ -32,6 +32,9 @@ type RemoteOptions struct {
 	Attached func(lease uint64)
 	// HelloTimeout bounds the wait for the spoke's whole hello: 2 minutes.
 	HelloTimeout time.Duration
+	// Hints are changes on nodes the spoke does not watch (hint.go): each
+	// is passed on to it once it is attached. nil passes none.
+	Hints <-chan Hint
 	// Logger gets the connection's warnings; nil discards them.
 	Logger *slog.Logger
 }
@@ -82,6 +85,9 @@ func ServeRemote(ctx context.Context, conn net.Conn, hub RemoteHub, info SideInf
 	r.w.answer(final, wireMsg{T: msgWelcome, Welcome: &w})
 	if opts.Attached != nil {
 		opts.Attached(lease)
+	}
+	if opts.Hints != nil {
+		go r.forwardHints(ctx, opts.Hints)
 	}
 	<-r.w.done
 	if err := ctx.Err(); err != nil {

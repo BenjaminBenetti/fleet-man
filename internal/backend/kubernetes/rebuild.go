@@ -297,6 +297,11 @@ func (rb *rebuilding) load(ctx context.Context) error {
 	if sts.Spec.Replicas != nil {
 		rb.replicas = *sts.Spec.Replicas
 	}
+	// The disk stays: the render describes it as it is, whatever Auto
+	// would pick for a new one now.
+	if disk, err := rb.cs.CoreV1().PersistentVolumeClaims(rb.ns).Get(ctx, prev.StatefulSet, metav1.GetOptions{}); err == nil && disk.Spec.StorageClassName != nil {
+		rb.keptDiskClass = *disk.Spec.StorageClassName
+	}
 	return nil
 }
 

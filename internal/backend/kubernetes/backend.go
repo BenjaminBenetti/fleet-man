@@ -256,6 +256,7 @@ func (r InstanceRecord) target() PodTarget {
 		Expect:      r.expect(),
 		SpecSecret:  names.SpecSecret(r.StatefulSet, r.Gen),
 		HostSockets: r.HostSockets, HostGateway: r.HostGateway, GatewaySkip: r.GatewaySkip,
+		Share: r.Share.clone(),
 	}
 }
 

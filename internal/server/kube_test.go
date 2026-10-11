@@ -604,7 +604,7 @@ func TestKubeHealthIsPushedOverWatch(t *testing.T) {
 func TestKubeOwnerConflictFromARestoredDaemonID(t *testing.T) {
 	f := newKubeFixture(t)
 	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube", Namespace: "fleet"}).GetCluster().GetId()
-	if st, err := f.svc.kube.test(context.Background(), id, false, nil); err != nil || st.GetState() != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY {
+	if st, err := f.svc.kube.test(context.Background(), id, fullRun{}, nil); err != nil || st.GetState() != fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY {
 		t.Fatalf("original daemon: %v %v", st.GetState(), err)
 	}
 
@@ -613,7 +613,7 @@ func TestKubeOwnerConflictFromARestoredDaemonID(t *testing.T) {
 	other := testIdentity
 	other.Nonce, other.Host = "bbbbbbbbbbbbbbbb", "desktop"
 	restored.kube.loadIdentity = func() (owner.Identity, error) { return other, nil }
-	st, err := restored.kube.test(context.Background(), id, false, nil)
+	st, err := restored.kube.test(context.Background(), id, fullRun{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -36,19 +36,25 @@ import (
 // pod of the fleet mounts by subPath (podspec/share.go).
 //
 // Its mode, fixed when the share is made (AnnotationShareMode), places the
-// fleet's pods (internal/k8s/topology). In single-node mode (no StorageClass
-// passed the multi-node share test, which comes with the StorageClass
-// picker) the share is in the connection's shared class, else the instance
-// disks' class, ReadWriteOnce, and every pod of the fleet runs where it can
-// be used: the first instance's seed mounts it beside its own disk, so a
-// WaitForFirstConsumer class binds both on one node, and from then on the
-// share volume's topology (recorded on the PVC, AnnotationShareTopology, as
-// reading a PV takes a cluster-scoped permission) is a required node affinity
-// on all of them. A class that binds Immediately is refused there unless the
-// cluster is one node, or the class pins one zone. When the deep test found
-// that two pods on one node cannot mount one ReadWriteOnce volume, the fleet
-// has no share at all (the copy tier): each instance keeps its own copy on
-// its disk.
+// fleet's pods (internal/k8s/topology). In multi-node mode (the connection's
+// shared class, or Auto's, passed the multi-node test: the preflight's
+// share_mode and shared_storage_class) the share is ReadWriteMany in that
+// class, and the fleet's pods run on any node its volume's own topology
+// allows; Codex's SQLite state stays on each instance's own disk
+// (CODEX_SQLITE_HOME), as SQLite's write-ahead log cannot be shared across
+// nodes. In single-node mode (no class passed) the share is in the
+// connection's shared class, else the instance disks' class, ReadWriteOnce,
+// and every pod of the fleet runs where it can be used: the first instance's
+// seed mounts it beside its own disk, so a WaitForFirstConsumer class binds
+// both on one node, and from then on the share volume's topology (recorded
+// on the PVC, AnnotationShareTopology, as reading a PV takes a
+// cluster-scoped permission) is a required node affinity on all of them. A
+// class that binds Immediately is refused there unless the cluster is one
+// node, or the class pins one zone. When the deep test found that two pods
+// on one node cannot mount one ReadWriteOnce volume, the fleet has no share
+// at all (the copy tier): each instance keeps its own copy on its disk. A
+// shared class that fails the multi-node test's file system checks makes no
+// share (share_refused): a create with fleet mounts is refused.
 //
 // The share outlives its instances; destroying the fleet deletes it (after a
 // flush, P4.6). It grows by half when 90% full where its class allows
@@ -170,14 +176,19 @@ func podLayout(entries []backend.LayoutEntry, uid, gid int) podshare.Layout {
 	return l
 }
 
-// shareModeOf is the mode a new share takes on a connection whose preflight
-// found caps: the copy tier when the deep test found two pods on one node
-// cannot mount one RWO volume, the mode the StorageClass picker's test chose
-// (multi-node) when it did, else single-node.
-func shareModeOf(caps *fleetgrpc.KubeCapabilities) topology.Mode {
+// shareModeOf is the mode a new share in class takes on a connection whose
+// preflight found caps: the copy tier when the deep test found two pods on
+// one node cannot mount one RWO volume, multi-node when class is the one
+// that passed the multi-node test (a class set since the preflight ran is
+// not), else single-node.
+func shareModeOf(caps *fleetgrpc.KubeCapabilities, class string) topology.Mode {
 	switch m := topology.Mode(caps.GetShareMode()); m {
-	case topology.Copy, topology.MultiNode:
+	case topology.Copy:
 		return m
+	case topology.MultiNode:
+		if class == caps.GetSharedStorageClass() {
+			return m
+		}
 	}
 	return topology.SingleNode
 }
@@ -239,17 +250,28 @@ func (c *creation) prepareShare(ctx context.Context) error {
 	pvc, err := pvcs.Get(ctx, s.claim, metav1.GetOptions{})
 	switch {
 	case gone(err):
-		s.mode = shareModeOf(c.facts.Capabilities)
+		if why := c.facts.Capabilities.GetShareRefused(); why != "" {
+			return &kubeerr.Error{Code: kubeerr.Misconfigured.Narrow("shared_storage"), Err: fmt.Errorf("the fleet's share cannot be made on %s: %s", clusterName(c.rec), why),
+				Hint: "pick a shared StorageClass that passes the multi-node test, or clear the setting for Auto; then test the cluster again"}
+		}
+		s.class = c.shareClass()
+		s.mode = shareModeOf(c.facts.Capabilities, s.class)
 		if s.mode == topology.Copy {
+			s.class = ""
 			c.share = s
 			return nil
 		}
-		s.class = c.shareClass()
 		// Only one node's pods mount a single-node share: one an Immediate
 		// class put elsewhere than the instances' disks cannot be used. A
-		// multi-node share is mounted from any node.
-		if s.mode == topology.SingleNode {
+		// multi-node share is mounted from any node, so only the disk's
+		// binding matters there.
+		switch s.mode {
+		case topology.SingleNode:
 			if err := c.checkBinding(ctx, s.class); err != nil {
+				return err
+			}
+		case topology.MultiNode:
+			if err := c.checkDiskBinding(); err != nil {
 				return err
 			}
 		}
@@ -273,12 +295,22 @@ func (c *creation) prepareShare(ctx context.Context) error {
 	s.placement.Mode = s.mode
 	s.selinuxMount = c.selinuxMountFor(s.class)
 	c.share = s
-	if s.mode == topology.SingleNode {
+	switch s.mode {
+	case topology.SingleNode:
 		// The instance's disk binds where its pod lands, which must be where
 		// the share can be used.
-		if err := c.checkBinding(ctx, c.rec.StorageClass); err != nil {
+		if err := c.checkBinding(ctx, c.diskClass()); err != nil {
 			return err
 		}
+	case topology.MultiNode:
+		// The fleet's pods go anywhere: an instance disk on one node's disk
+		// that binds before its pod is placed may be made on another node
+		// than its pod (minikube's hostpath class gives such a volume no
+		// topology at all, so its pod does not follow it).
+		if err := c.checkDiskBinding(); err != nil {
+			return err
+		}
+		c.checkCodexSQLiteHome(ctx)
 	}
 	return c.placeShare(ctx, pvc)
 }
@@ -368,9 +400,12 @@ func (c *creation) waitShareBound(ctx context.Context, claim string) (*corev1.Pe
 }
 
 // learnShareTopology fills the placement from the bound share pvc: the
-// topology recorded on it, else its volume's (recorded then), else the node
-// a pod mounting it runs on (recorded then; a node-local volume's, and a
-// tighter bound than a zone for a network one).
+// topology recorded on it, else its volume's (recorded then), else, in
+// single-node mode, the node a pod mounting it runs on (recorded then; a
+// node-local volume's, and a tighter bound than a zone for a network one).
+// A multi-node share is placed by its volume's own topology alone: one whose
+// volume cannot be read places nothing (its pods go anywhere, as its
+// volume mounts from any node), and is read again by the next create.
 func (c *creation) learnShareTopology(ctx context.Context, pvc *corev1.PersistentVolumeClaim) error {
 	s := c.share
 	if raw, ok := pvc.Annotations[names.AnnotationShareTopology]; ok {
@@ -389,6 +424,10 @@ func (c *creation) learnShareTopology(ctx context.Context, pvc *corev1.Persisten
 		case !apierrors.IsForbidden(err) && !apierrors.IsNotFound(err):
 			return classify(fmt.Errorf("reading the fleet share's volume %s: %w", name, err))
 		}
+	}
+	if !known && s.mode == topology.MultiNode {
+		flog.Info("kube share: the multi-node share's volume is not readable; its pods go on any node", "cluster", c.id.cluster, "fleet", c.id.fleet, "claim", pvc.Name)
+		return nil
 	}
 	if !known {
 		node := s.seedNode
@@ -487,13 +526,30 @@ func shareAccess(m topology.Mode) corev1.PersistentVolumeAccessMode {
 }
 
 // shareClass is the class a new share takes: the connection's shared class,
-// else (single-node mode) the instance disks' ("" being the cluster's
-// default).
+// else the one the preflight resolved Auto to (a class that passed the
+// multi-node test, else the instance disks'), else the instance disks' (""
+// being the cluster's default).
 func (c *creation) shareClass() string {
 	if c.rec.SharedStorageClass != "" {
 		return c.rec.SharedStorageClass
 	}
-	return c.rec.StorageClass
+	if class := c.facts.Capabilities.GetSharedStorageClass(); class != "" {
+		return class
+	}
+	return c.diskClass()
+}
+
+// diskClass is the class the instance's disk is in: a rebuild's disk's own;
+// for a new one the connection's storage_class, else the one the preflight
+// picked for Auto ("" being the cluster's default, when it could not pick).
+func (c *creation) diskClass() string {
+	if c.keptDiskClass != "" {
+		return c.keptDiskClass
+	}
+	if c.rec.StorageClass != "" {
+		return c.rec.StorageClass
+	}
+	return c.facts.Capabilities.GetInstanceStorageClass()
 }
 
 // classFacts is what the preflight found of class ("" the default).
@@ -537,6 +593,20 @@ func (c *creation) checkBinding(ctx context.Context, class string) error {
 		return &kubeerr.Error{Code: kubeerr.Misconfigured.Narrow("share_binding"), Err: errors.New(why), Hint: topology.ImmediateFix}
 	}
 	return nil
+}
+
+// checkDiskBinding refuses, in multi-node mode, an instance disk class on
+// one node's disk that binds Immediately on a cluster of several nodes: its
+// disk is made on some node before its seed and pod are placed.
+func (c *creation) checkDiskBinding() error {
+	sc := c.classFacts(c.diskClass())
+	nodes := len(c.facts.Capabilities.GetNodes())
+	if sc == nil || !sc.GetNodeLocal() || sc.GetBindingMode() != string(storagev1.VolumeBindingImmediate) || nodes <= 1 {
+		return nil
+	}
+	return &kubeerr.Error{Code: kubeerr.Misconfigured.Narrow("disk_binding"),
+		Err:  fmt.Errorf("storage class %s puts each instance disk on one node's disk as soon as it is made (volumeBindingMode Immediate), so on a cluster of %d nodes a disk can be made on another node than its pod", sc.GetName(), nodes),
+		Hint: "use a StorageClass with volumeBindingMode WaitForFirstConsumer for instance disks (storage_class)"}
 }
 
 // notOurs says why an object's labels are not those want names ("" when
