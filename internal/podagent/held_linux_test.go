@@ -405,3 +405,28 @@ func TestHeldCommandsKeepTheirSignals(t *testing.T) {
 		}
 	}
 }
+
+// TestHeldCommandsKeepTheUmask: a held command gets the umask a plain one
+// does, not the one its shepherd keeps its socket private with (a file it
+// writes as root is as readable as one a plain command writes).
+func TestHeldCommandsKeepTheUmask(t *testing.T) {
+	d := newTestDirs(t)
+	s := startAgent(t, d.options())
+	umask := func(h podwire.ExecHeader) string {
+		t.Helper()
+		e, err := s.c.Exec(context.Background(), h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, _ := io.ReadAll(e.Stdout())
+		if code, err := e.Wait(); code != 0 || err != nil {
+			t.Fatalf("%v: code %d %v", h.Argv, code, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	probe := sh(`umask`)
+	plain := umask(probe)
+	if held := umask(resumable(probe)); held != plain {
+		t.Errorf("a held command's umask is %s, a plain one's %s", held, plain)
+	}
+}

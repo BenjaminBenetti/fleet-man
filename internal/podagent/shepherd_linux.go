@@ -176,9 +176,13 @@ func RunShepherd() error {
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGHUP)
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
-	syscall.Umask(0o077)
 
+	// The socket is the shepherd's alone; the umask that keeps it so is put
+	// back before the command starts, which gets the umask a plain one does
+	// (files a held command writes are as readable as anyone's).
+	mask := syscall.Umask(0o077)
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: cfg.Socket, Net: "unix"})
+	syscall.Umask(mask)
 	if err != nil {
 		report(shepherdReport{Error: "listen: " + err.Error(), Code: execas.ExitFailed})
 		return err
