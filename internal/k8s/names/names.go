@@ -43,6 +43,9 @@ const (
 	LabelRole = "fleet.dev/role"
 	// LabelShareGroup holds the FleetHash of the share an instance mounts.
 	LabelShareGroup = "fleet.dev/share-group"
+	// LabelService holds the shared service (fleet.SharedService: buildkit,
+	// debcache, imagecache) a RoleCache object belongs to.
+	LabelService = "fleet.dev/service"
 
 	// ManagedBy is LabelManagedBy's value.
 	ManagedBy = "fleet"
@@ -79,6 +82,17 @@ const (
 	RolePullSecret Role = "pull-secret"
 	// RoleProbe marks the deep test's throwaway pods.
 	RoleProbe Role = "probe"
+	// RoleAnchor marks a fleet's anchor ConfigMap on a connection: the owner
+	// of the fleet's other objects there, so deleting it deletes them.
+	RoleAnchor Role = "anchor"
+	// RoleNet marks a fleet's headless Service, which gives its instances
+	// each other's DNS names.
+	RoleNet Role = "net"
+	// RolePolicy marks a fleet's NetworkPolicies.
+	RolePolicy Role = "policy"
+	// RoleCache marks a fleet's shared services: each one's volume,
+	// Deployment, pods and Service (LabelService says which service).
+	RoleCache Role = "cache"
 )
 
 // Base returns the labels every object of one connection carries: managed-by,
