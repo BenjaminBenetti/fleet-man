@@ -406,7 +406,9 @@ type KubeCluster struct {
 	// share_retention on fleet destroy: "" or "delete", or "retain".
 	ShareRetention string `protobuf:"bytes,20,opt,name=share_retention,json=shareRetention,proto3" json:"share_retention,omitempty"`
 	// credential_scope of agent logins: "" or "location" (one login per
-	// location), or "fleet" (shared across locations).
+	// location), or "fleet" (shared across locations; experimental: the agents
+	// rotate their refresh tokens, so two locations refreshing at once can
+	// sign every location out).
 	CredentialScope string `protobuf:"bytes,21,opt,name=credential_scope,json=credentialScope,proto3" json:"credential_scope,omitempty"`
 	// cache_storage_class for the fleet cache volumes. Empty = auto.
 	CacheStorageClass string `protobuf:"bytes,22,opt,name=cache_storage_class,json=cacheStorageClass,proto3" json:"cache_storage_class,omitempty"`

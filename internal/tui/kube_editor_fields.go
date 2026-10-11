@@ -91,7 +91,7 @@ var kubeGroups = []kubeGroup{
 		{path: "share_size", label: "Share size", kind: kubeKindText, def: "10Gi"},
 		{path: "share_retention", label: "Share on destroy", kind: kubeKindChoice, options: []string{"", "retain"}, def: "delete"},
 		{path: "credential_scope", label: "Agent logins", kind: kubeKindChoice, options: []string{"", "fleet"}, def: "location",
-			note: "location: one login per location"},
+			note: "fleet: experimental, can sign every location out"},
 	}},
 	{key: "caches", title: "Caches", fields: []kubeField{
 		{path: "cache_storage_class", label: "Cache storage", kind: kubeKindClass, classes: kubeClassStorage, def: "auto"},

@@ -700,3 +700,20 @@ func TestEditorDeliverySelector(t *testing.T) {
 		t.Fatalf("enter must step to Registry, then round past Gateway to Auto: %+v", *calls)
 	}
 }
+
+// The P4 refresh spike found sharing one login across locations unsafe
+// (rotating refresh tokens, refresh on any 401): the editor keeps "fleet"
+// selectable but says what it risks wherever the row is shown.
+func TestEditorCredentialScopeFleetIsMarkedExperimental(t *testing.T) {
+	st := kubeSt("eu-1", "prod-eu", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY)
+	m, sp := kubeTestModel(t, st)
+	e := openEditor(m, sp, "eu-1")
+	editorRowOf(t, e, "credential_scope")
+	if !slices.Contains(e.rows()[e.row].field.options, "fleet") {
+		t.Fatal("fleet credential scope must stay selectable")
+	}
+	view := flatText(e.view(m, sp))
+	if !strings.Contains(view, "Agent logins") || !strings.Contains(view, "fleet: experimental, can sign every location out") {
+		t.Fatalf("the Agent logins row must warn that fleet scope is experimental:\n%s", view)
+	}
+}
