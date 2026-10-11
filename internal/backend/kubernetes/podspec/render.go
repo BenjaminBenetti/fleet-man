@@ -829,7 +829,14 @@ func (r *renderer) instanceMounts() ([]corev1.VolumeMount, []corev1.Volume, erro
 		add(sh.treeMount())
 	}
 
-	seenHostFiles := map[string]bool{}
+	// A bound file's copy's folder mounts once, whatever its targets (each a
+	// link into it): read-write when any of them is.
+	seenHostFiles, rwHostFiles := map[string]bool{}, map[string]bool{}
+	for _, m := range p.Mounts {
+		if m.Kind == MountHostFile && !m.ReadOnly {
+			rwHostFiles[m.SubPath] = true
+		}
+	}
 	for _, m := range p.Mounts {
 		switch m.Kind {
 		case MountWorkspace:
@@ -871,6 +878,7 @@ func (r *renderer) instanceMounts() ([]corev1.VolumeMount, []corev1.Volume, erro
 			// into (PID1.Links); one per bound file, whatever its targets.
 			if mount := r.in.Share.hostFileMount(m); !seenHostFiles[mount.MountPath] {
 				seenHostFiles[mount.MountPath] = true
+				mount.ReadOnly = !rwHostFiles[m.SubPath]
 				add(mount)
 			}
 		case MountSharedVolume:

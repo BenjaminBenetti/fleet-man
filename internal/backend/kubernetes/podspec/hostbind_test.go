@@ -170,3 +170,37 @@ func withArgs(in *Input, extra ...string) []string {
 	}
 	return append(args, extra...)
 }
+
+// TestRenderOneFolderPerBoundFile: a host file bound at two targets mounts
+// its copy's folder once, read-write when one of them is, both targets
+// linked to the file there.
+func TestRenderOneFolderPerBoundFile(t *testing.T) {
+	in := baseInput([]string{
+		"--mount", "type=bind,source=/home/dev/host/gitconfig,target=/home/vscode/.gitconfig,readonly",
+		"-v", "/home/dev/host/gitconfig:/root/.gitconfig",
+	}, nil, nil)
+	local(&in)
+	res, err := Translate(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := testRenderInput(in)
+	giveShare(&r, in, res)
+	o, err := Render(res, r)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	dir := hostbind.FileDir(hostbind.Name("/home/dev/host/gitconfig"))
+	n := 0
+	for _, m := range devOf(o).VolumeMounts {
+		if m.MountPath == dir {
+			n++
+			if m.ReadOnly {
+				t.Errorf("the copy's folder is read-only though one target binds it read-write")
+			}
+		}
+	}
+	if n != 1 || len(res.Pod.PID1.Links) != 2 {
+		t.Errorf("%d mounts of the copy's folder, links %+v", n, res.Pod.PID1.Links)
+	}
+}
