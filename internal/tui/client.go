@@ -258,12 +258,30 @@ var destroyFleetRemote = func(name string) error {
 	})
 }
 
-// deleteCacheTimeout bounds the buildkit cache-wipe RPC. It is much longer than
-// the ordinary mutationTimeout because the server stops the container, removes
-// the cache, and restarts the server — which on first run may pull the
-// moby/buildkit image and then waits up to ~15s for the new socket. 120s keeps
-// the common case from timing out before the server reports success.
-const deleteCacheTimeout = 120 * time.Second
+// deleteCacheTimeout bounds the cache-wipe RPCs. It is much longer than the
+// ordinary mutationTimeout because the server stops each server, removes the
+// cache, and restarts the server — which on first run may pull its image and
+// then waits up to ~15s for the new socket — and on a cluster scales the
+// server down, deletes and remakes its volume and waits for the new pod
+// (the daemon bounds that at 270s). 300s keeps those from timing out before
+// the server reports how it went.
+const deleteCacheTimeout = 300 * time.Second
+
+// cacheUsageTimeout bounds the cache usage report (the daemon measures each
+// cluster cache in its server's pod, within 30s).
+const cacheUsageTimeout = 35 * time.Second
+
+// getCacheUsageRemote asks the server how full the fleet's cache volumes are
+// on its clusters.
+var getCacheUsageRemote = func(fleetName string) (*fleetgrpc.GetCacheUsageReply, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), cacheUsageTimeout)
+	defer cancel()
+	conn, err := dialMutation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return conn.Service().GetCacheUsage(ctx, &fleetgrpc.GetCacheUsageRequest{Fleet: fleetName})
+}
 
 // deleteBuildkitCacheRemote asks the server to wipe a fleet's shared build cache
 // and restart the (empty) buildkit server. Uses its own longer deadline.
