@@ -225,6 +225,10 @@ func toStrictJSON(jsoncBytes []byte) []byte {
 	return stripTrailingCommas(stripJSONCComments(jsoncBytes))
 }
 
+// ToStrictJSON is toStrictJSON for readers of devcontainer.json outside
+// this package (the automation login check reads its env names).
+func ToStrictJSON(jsoncBytes []byte) []byte { return toStrictJSON(jsoncBytes) }
+
 // stripJSONCComments removes // line comments and /* block comments
 // from a JSONC payload, leaving comment markers inside string
 // literals untouched. Line endings of stripped line comments are

@@ -4,6 +4,7 @@ package kubernetes
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	kruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
@@ -61,14 +63,19 @@ func TestSeedCacheIDCoversTheRootsInputs(t *testing.T) {
 	mounts.MountDirs = append(mounts.MountDirs, "/data")
 	remap := cacheSeedSpec()
 	remap.Remap.UID = 1001
+	origBinary := seedCacheBinary
+	seedCacheBinary = func() string { return "v9.9.9" }
+	otherBuild := seedCacheID("d", "c", "sha256:aa", cacheSeedSpec(), false, "", "50Gi")
+	seedCacheBinary = origBinary
 	for name, id := range map[string]string{
-		"image":    seedCacheID("d", "c", "sha256:bb", cacheSeedSpec(), false, "", "50Gi"),
-		"mounts":   seedCacheID("d", "c", "sha256:aa", mounts, false, "", "50Gi"),
-		"remap":    seedCacheID("d", "c", "sha256:aa", remap, false, "", "50Gi"),
-		"non-root": seedCacheID("d", "c", "sha256:aa", cacheSeedSpec(), true, "", "50Gi"),
-		"class":    seedCacheID("d", "c", "sha256:aa", cacheSeedSpec(), false, "csi-hostpath-sc", "50Gi"),
-		"size":     seedCacheID("d", "c", "sha256:aa", cacheSeedSpec(), false, "", "20Gi"),
-		"cluster":  seedCacheID("d", "other", "sha256:aa", cacheSeedSpec(), false, "", "50Gi"),
+		"fleet build": otherBuild,
+		"image":       seedCacheID("d", "c", "sha256:bb", cacheSeedSpec(), false, "", "50Gi"),
+		"mounts":      seedCacheID("d", "c", "sha256:aa", mounts, false, "", "50Gi"),
+		"remap":       seedCacheID("d", "c", "sha256:aa", remap, false, "", "50Gi"),
+		"non-root":    seedCacheID("d", "c", "sha256:aa", cacheSeedSpec(), true, "", "50Gi"),
+		"class":       seedCacheID("d", "c", "sha256:aa", cacheSeedSpec(), false, "csi-hostpath-sc", "50Gi"),
+		"size":        seedCacheID("d", "c", "sha256:aa", cacheSeedSpec(), false, "", "20Gi"),
+		"cluster":     seedCacheID("d", "other", "sha256:aa", cacheSeedSpec(), false, "", "50Gi"),
 	} {
 		if id == base {
 			t.Errorf("another %s kept the id %s", name, id)
@@ -299,6 +306,29 @@ func TestAwaitClaim(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "did not bind within") || !cloneFailure(err) {
 		t.Fatalf("a clone that never binds: %v", err)
 	}
+
+	// A read that fails is tried again, and a wait that never read the
+	// clone says so; that is no clone failure (the caches stay on).
+	flaky := fake.NewClientset(bound)
+	fails := 3
+	flaky.PrependReactor("get", "persistentvolumeclaims", func(k8stesting.Action) (bool, kruntime.Object, error) {
+		if fails > 0 {
+			fails--
+			return true, nil, errors.New("etcdserver: leader changed")
+		}
+		return false, nil, nil
+	})
+	if err := awaitClaim(context.Background(), flaky, "fleet", "d", since); err != nil {
+		t.Fatalf("a clone read after three failures: %v", err)
+	}
+	down := fake.NewClientset(bound)
+	down.PrependReactor("get", "persistentvolumeclaims", func(k8stesting.Action) (bool, kruntime.Object, error) {
+		return true, nil, errors.New("etcdserver: request timed out")
+	})
+	err = awaitClaim(context.Background(), down, "fleet", "d", since)
+	if err == nil || !strings.Contains(err.Error(), "reading the clone d: etcdserver: request timed out") || cloneFailure(err) {
+		t.Fatalf("a clone never read: %v (clone failure %v)", err, err != nil && cloneFailure(err))
+	}
 }
 
 // A collection deletes a cache no live instance was made from for the TTL
@@ -482,5 +512,57 @@ func TestSeedFromCacheFallsBackToAFullSeed(t *testing.T) {
 	}
 	if !anchored {
 		t.Fatalf("the journal does not hold the replacement disk: %+v", jj.Journal().Objects)
+	}
+}
+
+// A clone the API would not let fleet read (a transient error, never a
+// failed clone) still falls back to a full seed, but leaves the
+// connection's seed caches on.
+func TestSeedFromCacheKeepsCachesOnAReadError(t *testing.T) {
+	r := newHandleRig(t)
+	origTimeout, origInterval := seedCacheBindTimeout, seedCacheWaitInterval
+	seedCacheBindTimeout, seedCacheWaitInterval = 300*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() {
+		seedCacheBindTimeout, seedCacheWaitInterval = origTimeout, origInterval
+		seedCaches.turnOff(handleCluster, time.Time{})
+	})
+	seedCaches.turnOff(handleCluster, time.Time{})
+	jj, err := BeginJournalAt(filepath.Join(t.TempDir(), "job.json"), Journal{Op: OpCreate, Fleet: "alpha", Instance: "web", Cluster: handleCluster, Namespace: handleNS, Key: handleKey, Gen: 1, Step: stepApply})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &creation{b: newHandle(r.inst(), r.pool), p: r.pool, cs: r.cs, ns: handleNS, owner: handleOwner, jj: jj,
+		id: bound{cluster: handleCluster, key: handleKey, fleet: "alpha", name: "web", sts: handleSTS()}}
+	p := &seedCachePlan{id: "abc234def567", name: names.SeedCache("abc234def567"), clone: true}
+	disk := cacheTestDisk()
+	disk.Name, disk.Spec.VolumeName = handleSTS(), ""
+	disk.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaim"}
+	p.cloneFrom(disk)
+	job := &batchv1.Job{TypeMeta: metav1.TypeMeta{APIVersion: "batch/v1", Kind: "Job"}, ObjectMeta: handleMeta(names.SeedJob(handleSTS(), 1))}
+	o := &podspec.Objects{Disk: disk, Seed: &podspec.JobObjects{Job: job}}
+	if err := c.apply(context.Background(), KindPVC, disk.Name, true, disk); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.apply(context.Background(), KindJob, job.Name, false, job); err != nil {
+		t.Fatal(err)
+	}
+	// Every read of the clone fails while seedFromCache waits for it.
+	start := time.Now()
+	r.cs.PrependReactor("get", "persistentvolumeclaims", func(k8stesting.Action) (bool, kruntime.Object, error) {
+		if time.Since(start) < 350*time.Millisecond {
+			return true, nil, errors.New("etcdserver: request timed out")
+		}
+		return false, nil, nil
+	})
+
+	spec := cacheSeedSpec()
+	if err := c.seedFromCache(context.Background(), o, spec, p, start); err != nil {
+		t.Fatalf("seedFromCache: %v", err)
+	}
+	if spec.Cache != "" || p.clone {
+		t.Fatalf("the seed still takes the cache: spec %q plan %+v", spec.Cache, p)
+	}
+	if seedCaches.isOff(handleCluster, time.Now()) {
+		t.Fatal("a read error turned the connection's seed caches off")
 	}
 }

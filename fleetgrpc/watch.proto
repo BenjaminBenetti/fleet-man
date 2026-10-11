@@ -75,6 +75,10 @@ message WatchRequest {
 //
 // KubeClusters is every Kubernetes cluster connection with its health
 // (kube.proto), conflatable and part of the initial snapshot the same way.
+//
+// AutomationStatus is the automation scheduler's view of the agents that are
+// refused, queued or running, conflatable and part of the initial snapshot
+// the same way.
 message Event {
   oneof kind {
     StateChanged state_changed = 1;
@@ -90,7 +94,35 @@ message Event {
     OutputTargets output_targets = 11;
     KubeClusters kube_clusters = 12;
     ActiveJobs active_jobs = 13;
+    AutomationStatus automation_status = 14;
   }
+}
+
+// AutomationStatus is every automation agent the scheduler has something to
+// say about: one whose firings the login check refuses, or with runs queued or
+// running. Pushed whenever it changes; server-owned and conflatable like
+// ActiveJobs: each push replaces the last one whole, and the initial snapshot
+// carries the current set (empty when there is none).
+message AutomationStatus {
+  repeated AutomationAgentStatus agents = 1;
+}
+
+// AutomationAgentStatus is one agent of a fleet in AutomationStatus.
+message AutomationAgentStatus {
+  string fleet = 1;
+  string agent = 2;
+  // login is why the automation login check refuses the agent's firings
+  // ("log in to Claude once for this fleet on ☸ prod-eu"); empty when it
+  // lets them run. Logins are per location: this one is the agent's cluster.
+  string login = 3;
+  // login_tool is the agent tool to log in to (fleet.LoginTool.Tool,
+  // "claude"), set with login.
+  string login_tool = 4;
+  // queued is how many of the agent's runs wait in its triggers' queues
+  // (Kubernetes agents only).
+  int32 queued = 5;
+  // running is how many of its runs have an instance the scheduler watches.
+  int32 running = 6;
 }
 
 // ActiveJobs is every in-flight job, as GetStateReply.active_jobs lists them,

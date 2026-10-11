@@ -64,6 +64,10 @@ type hub struct {
 	// and cached for a new subscriber's initial snapshot. Produced by the
 	// kube manager (kube_health.go).
 	kubeClusters *fleetgrpc.KubeClusters
+	// automationStatus is the scheduler's view of the automation agents
+	// (owned by the loop), pushed as Watch Event.automation_status and part
+	// of the initial snapshot.
+	automationStatus *fleetgrpc.AutomationStatus
 
 	// runtimeWanted is true while at least one subscriber asked for runtime;
 	// the runtime pollers read it lock-free to gate their expensive work.
@@ -107,18 +111,19 @@ type hub struct {
 
 func newHub() *hub {
 	h := &hub{
-		in:            make(chan func(*hub), 64),
-		done:          make(chan struct{}),
-		st:            &fleetgrpc.State{},
-		runtime:       make(map[string]*fleetgrpc.InstanceRuntime),
-		subs:          make(map[*subscriber]struct{}),
-		agent:         newAgentTracker(),
-		runtimeEdge:   make(chan struct{}, 1),
-		remoteMcp:     &fleetgrpc.RemoteMcpStatus{}, // state == UNSPECIFIED (not connected)
-		micSources:    &fleetgrpc.MicSources{},
-		outputTargets: &fleetgrpc.OutputTargets{},
-		activeJobs:    &fleetgrpc.ActiveJobs{},
-		kubeClusters:  &fleetgrpc.KubeClusters{},
+		in:               make(chan func(*hub), 64),
+		done:             make(chan struct{}),
+		st:               &fleetgrpc.State{},
+		runtime:          make(map[string]*fleetgrpc.InstanceRuntime),
+		subs:             make(map[*subscriber]struct{}),
+		agent:            newAgentTracker(),
+		runtimeEdge:      make(chan struct{}, 1),
+		remoteMcp:        &fleetgrpc.RemoteMcpStatus{}, // state == UNSPECIFIED (not connected)
+		micSources:       &fleetgrpc.MicSources{},
+		outputTargets:    &fleetgrpc.OutputTargets{},
+		activeJobs:       &fleetgrpc.ActiveJobs{},
+		kubeClusters:     &fleetgrpc.KubeClusters{},
+		automationStatus: &fleetgrpc.AutomationStatus{},
 	}
 	h.branches = newBranchResolver(h.readBranch)
 	return h
@@ -327,6 +332,19 @@ func (h *hub) broadcastKubeClusters(clusters *fleetgrpc.KubeClusters) {
 	}
 }
 
+// broadcastAutomationStatus caches the scheduler's view of the automation
+// agents and fans it out to every subscriber, conflated like the Kubernetes
+// connections. Runs on the hub loop.
+func (h *hub) broadcastAutomationStatus(st *fleetgrpc.AutomationStatus) {
+	if st == nil || proto.Equal(h.automationStatus, st) {
+		return
+	}
+	h.automationStatus = st
+	for sub := range h.subs {
+		sub.enqueueAutomationStatus(st)
+	}
+}
+
 // subscriber is one Watch stream's conflating buffer. pendingState keeps the
 // newest State (older ones are dropped — a full snapshot supersedes them);
 // pendingRuntime merges by key so a stats-only update and a live-status-only
@@ -355,6 +373,7 @@ type subscriber struct {
 	pendingOutputTargets *fleetgrpc.OutputTargets
 	pendingActiveJobs    *fleetgrpc.ActiveJobs
 	pendingKubeClusters  *fleetgrpc.KubeClusters
+	pendingAutomation    *fleetgrpc.AutomationStatus
 
 	notify chan struct{}
 }
@@ -475,6 +494,23 @@ func (s *subscriber) takeKubeClusters() *fleetgrpc.KubeClusters {
 	clusters := s.pendingKubeClusters
 	s.pendingKubeClusters = nil
 	return clusters
+}
+
+func (s *subscriber) enqueueAutomationStatus(st *fleetgrpc.AutomationStatus) {
+	s.mu.Lock()
+	s.pendingAutomation = st
+	s.mu.Unlock()
+	s.signal()
+}
+
+// takeAutomationStatus takes the pending automation status, if any, out of
+// the buffer for sending.
+func (s *subscriber) takeAutomationStatus() *fleetgrpc.AutomationStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.pendingAutomation
+	s.pendingAutomation = nil
+	return st
 }
 
 // drain takes the pending state + runtime + browser-opens + file-copies +

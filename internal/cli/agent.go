@@ -62,7 +62,7 @@ func newAgentCreateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fleetName, name := args[0], args[1]
 			flags := cmd.Flags()
-			err := mutateAutomation(cmd.Context(), fleetName, func(s fleet.FleetSettings) (fleet.FleetSettings, error) {
+			warnings, err := mutateAutomation(cmd.Context(), fleetName, func(s fleet.FleetSettings) (fleet.FleetSettings, error) {
 				a := fleet.Agent{
 					Name:         name,
 					Command:      command,
@@ -78,6 +78,7 @@ func newAgentCreateCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Created agent %q in fleet %q\n", name, fleetName)
+			printWarnings(cmd.ErrOrStderr(), warnings)
 			return nil
 		},
 	}
@@ -98,7 +99,7 @@ func newAgentEditCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fleetName, name := args[0], args[1]
 			flags := cmd.Flags()
-			err := mutateAutomation(cmd.Context(), fleetName, func(s fleet.FleetSettings) (fleet.FleetSettings, error) {
+			warnings, err := mutateAutomation(cmd.Context(), fleetName, func(s fleet.FleetSettings) (fleet.FleetSettings, error) {
 				a, ok := fleet.FindAgent(s.Agents, name)
 				if !ok {
 					return s, fmt.Errorf("agent %q not found", name)
@@ -123,6 +124,7 @@ func newAgentEditCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Updated agent %q in fleet %q\n", name, fleetName)
+			printWarnings(cmd.ErrOrStderr(), warnings)
 			return nil
 		},
 	}
@@ -192,7 +194,7 @@ func newAgentDeleteCmd() *cobra.Command {
 		Args:    cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fleetName, name := args[0], args[1]
-			err := mutateAutomation(cmd.Context(), fleetName, func(s fleet.FleetSettings) (fleet.FleetSettings, error) {
+			_, err := mutateAutomation(cmd.Context(), fleetName, func(s fleet.FleetSettings) (fleet.FleetSettings, error) {
 				return fleet.DeleteAgent(s, name)
 			})
 			if err != nil {

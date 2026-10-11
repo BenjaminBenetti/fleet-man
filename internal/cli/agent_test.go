@@ -21,16 +21,43 @@ func stubMutate(t *testing.T, seed fleet.FleetSettings) (gotFleet *string, resul
 	result = new(fleet.FleetSettings)
 	orig := mutateAutomation
 	t.Cleanup(func() { mutateAutomation = orig })
-	mutateAutomation = func(_ context.Context, fleetName string, fn func(fleet.FleetSettings) (fleet.FleetSettings, error)) error {
+	mutateAutomation = func(_ context.Context, fleetName string, fn func(fleet.FleetSettings) (fleet.FleetSettings, error)) ([]string, error) {
 		*gotFleet = fleetName
 		out, err := fn(seed)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		*result = out
-		return nil
+		return nil, nil
 	}
 	return gotFleet, result
+}
+
+// The daemon's warnings about a saved agent (its login check will refuse
+// its firings) reach the user on stderr, after the confirmation.
+func TestAgentCreatePrintsTheDaemonsWarnings(t *testing.T) {
+	orig := mutateAutomation
+	t.Cleanup(func() { mutateAutomation = orig })
+	mutateAutomation = func(_ context.Context, _ string, fn func(fleet.FleetSettings) (fleet.FleetSettings, error)) ([]string, error) {
+		if _, err := fn(fleet.FleetSettings{}); err != nil {
+			return nil, err
+		}
+		return []string{"agent w: log in to Claude once for this fleet on ☸ prod; until then its firings are refused"}, nil
+	}
+	cmd := NewRootCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"agent", "create", "alpha", "w"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), `Created agent "w"`) {
+		t.Errorf("stdout = %q", stdout.String())
+	}
+	if want := "warning: agent w: log in to Claude once for this fleet on ☸ prod; until then its firings are refused\n"; stderr.String() != want {
+		t.Errorf("stderr = %q, want %q", stderr.String(), want)
+	}
 }
 
 func runCLI(t *testing.T, args ...string) (string, error) {

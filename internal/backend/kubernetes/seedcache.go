@@ -20,6 +20,7 @@ import (
 	kclient "k8s.io/client-go/kubernetes"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/binstore"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/kubeimage"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -130,8 +131,13 @@ type seedCachePlan struct {
 	clone, build bool
 }
 
+// seedCacheBinary names the fleet build whose pod binary seeds the root (a
+// var for tests): a seed of another build may make another root, so its
+// caches are its own (the old ones go with the TTL).
+var seedCacheBinary = func() string { return binstore.Self().String() }
+
 // seedCacheID is the id12 of the cache a seed of spec (with nonRoot, onto a
-// disk of class and size) from image would use.
+// disk of class and size) from image would use, by this fleet build.
 func seedCacheID(daemonID, cluster, image string, spec *podseed.SeedSpec, nonRoot bool, class, size string) string {
 	exclude := slices.Clone(spec.Exclude)
 	slices.Sort(exclude)
@@ -141,7 +147,7 @@ func seedCacheID(daemonID, cluster, image string, spec *podseed.SeedSpec, nonRoo
 	if r := spec.Remap; r != nil {
 		remap = r.User + ":" + strconv.Itoa(r.UID) + ":" + strconv.Itoa(r.GID)
 	}
-	return names.SeedCacheID(daemonID, cluster, "v"+strconv.Itoa(podseed.ManifestVersion), image, spec.Source,
+	return names.SeedCacheID(daemonID, cluster, "v"+strconv.Itoa(podseed.ManifestVersion), seedCacheBinary(), image, spec.Source,
 		strings.Join(exclude, "\x00"), strings.Join(mounts, "\x00"), remap, strconv.FormatBool(nonRoot), class, size)
 }
 
@@ -212,26 +218,35 @@ func (p *seedCachePlan) cloneFrom(disk *corev1.PersistentVolumeClaim) {
 
 // awaitClaim waits, at most seedCacheBindTimeout, for claim name, a clone,
 // to bind: a ProvisioningFailed event on it (a driver that cannot clone)
-// ends the wait at once.
+// ends the wait at once. A read of the claim that fails is tried again
+// until then: a wait that only ever failed to read it ends with that
+// error, which is no clone failure (cloneFailure).
 func awaitClaim(ctx context.Context, cs kclient.Interface, ns, name string, since time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, seedCacheBindTimeout)
 	defer cancel()
+	var readErr error
+	read := false
 	for {
 		pvc, err := cs.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{})
 		switch {
 		case err != nil && ctx.Err() == nil:
-			return fmt.Errorf("reading the clone %s: %w", name, err)
+			readErr = err
 		case err == nil && pvc.Status.Phase == corev1.ClaimBound:
 			return nil
+		case err == nil:
+			read = true
 		}
 		if msg := provisioningFailed(ctx, cs, ns, name, since); msg != "" {
 			return fmt.Errorf("the clone %s did not provision: %s", name, msg)
 		}
 		if err := sleepCtx(ctx, seedCacheWaitInterval); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				return fmt.Errorf("the clone %s did not bind within %s", name, seedCacheBindTimeout)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				return err
 			}
-			return err
+			if !read && readErr != nil {
+				return fmt.Errorf("reading the clone %s: %w", name, readErr)
+			}
+			return fmt.Errorf("the clone %s did not bind within %s", name, seedCacheBindTimeout)
 		}
 	}
 }
@@ -438,7 +453,11 @@ func (c *creation) seedFromCache(ctx context.Context, o *podspec.Objects, spec *
 		return fmt.Errorf("cancelled: %w", context.Cause(ctx))
 	}
 	flog.Warn("kube create: the disk did not clone from the seed cache; seeding in full", "cluster", c.id.cluster, "cache", p.name, "err", err)
-	seedCaches.turnOff(c.id.cluster, time.Now())
+	// Only a clone that failed says the driver does not clone; one the API
+	// would not let fleet look at (a transient error) says nothing of it.
+	if cloneFailure(err) {
+		seedCaches.turnOff(c.id.cluster, time.Now())
+	}
 	p.clone = false
 	return c.uncloneDisk(ctx, o)
 }

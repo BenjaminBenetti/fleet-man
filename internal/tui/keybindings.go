@@ -59,7 +59,7 @@ func keybindingsData() []keybindingGroup {
 				{"a", "Add trigger / agent"},
 				{"enter / e", "Edit trigger / agent"},
 				{"s", "Enable / disable trigger"},
-				{"L", "View trigger event logs"},
+				{"L", "View trigger event logs / log an agent's tool in where it runs"},
 				{"d", "Delete trigger / agent"},
 			},
 		},

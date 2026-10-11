@@ -481,10 +481,14 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.rightSelected = false
 
 		case "L":
-			// On a trigger row, page its recorded event logs; otherwise the
-			// instance container/creation logs.
+			// On a trigger row, page its recorded event logs; on an agent row,
+			// log its tool in where it runs; otherwise the instance
+			// container/creation logs.
 			if r := fleetPage.currentRow(); r != nil && r.kind == rowTrigger {
 				return fleetPage.openTriggerLogs(m, r.fleetName, r.autoIdx)
+			}
+			if r := fleetPage.currentRow(); r != nil && r.kind == rowAgent {
+				return fleetPage.logInAgent(m, r.fleetName, r.autoIdx)
 			}
 			_, instance := fleetPage.selectedInstance(m)
 			if instance == nil {
@@ -794,9 +798,11 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 		})
 
 	case rowAgent:
-		return withArmadaHint([]string{
-			"j/k: navigate", "enter/e: edit", "a: add agent", "d: delete", "m: instances", "q: quit",
-		})
+		keys := []string{"j/k: navigate", "enter/e: edit"}
+		if a := agentAt(m.st.Fleets[r.fleetName], r.autoIdx); a != nil && m.automationAgentStatus(r.fleetName, a.Name).GetLogin() != "" {
+			keys = append(keys, "L: log in")
+		}
+		return withArmadaHint(append(keys, "a: add agent", "d: delete", "m: instances", "q: quit"))
 
 	case rowNewTrigger, rowNewAgent:
 		return withArmadaHint([]string{

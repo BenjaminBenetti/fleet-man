@@ -36,7 +36,13 @@ import (
 //     predates the file, or one whose write failed) is adopted: reaped on the
 //     idle rule, or, while it has no agent session, once idle for
 //     automationAdoptGrace;
-//   - a cron trigger that already fired this minute does not fire again.
+//   - a cron trigger that already fired this minute does not fire again;
+//   - a run waiting in its trigger's queue (automation_limits.go) for less
+//     than automationQueueTTL waits again, its payload read back from the
+//     firing's event log; an older one expires, which its log records;
+//   - a failed cluster run whose pod and disk were not released yet (or
+//     whose create the restart interrupted) is taken up again, so the first
+//     tick releases (or destroys) it, even with no record of it in the file.
 
 // automationAdoptGrace is how long an adopted run with no agent session may
 // stay idle before it is reaped. Longer than the idle timeout: without the
@@ -49,9 +55,24 @@ var automationAdoptGrace = envDurationDefault("FLEET_AUTOMATION_ADOPT_GRACE", 10
 const watchFileVersion = 1
 
 type watchFile struct {
-	Version int          `json:"v"`
-	Runs    []watchRun   `json:"runs"`
-	Fired   []watchFired `json:"fired,omitempty"`
+	Version int           `json:"v"`
+	Runs    []watchRun    `json:"runs"`
+	Fired   []watchFired  `json:"fired,omitempty"`
+	Queued  []watchQueued `json:"queued,omitempty"`
+}
+
+// watchQueued is one queued cluster run (queuedRun).
+type watchQueued struct {
+	ID       uint64         `json:"id"`
+	Firing   uint64         `json:"firing"`
+	Fleet    string         `json:"fleet"`
+	Trigger  string         `json:"trigger"`
+	Agent    string         `json:"agent"`
+	Prompt   string         `json:"prompt,omitempty"`
+	Cluster  string         `json:"cluster,omitempty"`
+	QueuedAt time.Time      `json:"queuedAt"`
+	Why      string         `json:"why,omitempty"`
+	Event    *watchRunEvent `json:"event,omitempty"`
 }
 
 // watchRun is one persisted watchedAgent.
@@ -137,6 +158,18 @@ func (sched *scheduler) snapshot() ([]byte, error) {
 		}
 		return wf.Fired[i].Trigger < wf.Fired[j].Trigger
 	})
+	if sched.lim != nil {
+		for _, r := range sched.lim.queuedRuns() {
+			q := watchQueued{
+				ID: r.id, Firing: r.firing, Fleet: r.fleet, Trigger: r.trigger, Agent: r.agent,
+				Prompt: r.prompt, Cluster: r.cluster, QueuedAt: r.queuedAt, Why: r.why,
+			}
+			if ev := r.event; ev != nil {
+				q.Event = &watchRunEvent{Kind: ev.kind, FiredAt: ev.firedAt, Webhook: ev.webhookName, LogFile: r.eventLog, PayloadSize: len(ev.body)}
+			}
+			wf.Queued = append(wf.Queued, q)
+		}
+	}
 	return json.MarshalIndent(wf, "", "  ")
 }
 
@@ -252,12 +285,13 @@ func (sched *scheduler) restore(now time.Time) {
 				}
 			}
 		}
-		sched.watched[w.key()] = w
+		sched.watch(w)
 		restored++
 	}
 	for _, f := range wf.Fired {
 		sched.lastFired[firedKey(f.Fleet, f.Trigger)] = f.Minute
 	}
+	queued, expired := sched.restoreQueued(wf.Queued, now)
 
 	adopted := 0
 	if st != nil {
@@ -266,7 +300,7 @@ func (sched *scheduler) restore(now time.Time) {
 				continue
 			}
 			for _, inst := range f.Instances {
-				if !inst.Automated || inst.Status == fleet.StatusFailed {
+				if !inst.Automated || (inst.Status == fleet.StatusFailed && !failedRunHolds(inst)) {
 					continue
 				}
 				w := &watchedAgent{
@@ -280,16 +314,57 @@ func (sched *scheduler) restore(now time.Time) {
 				if _, ok := sched.watched[w.key()]; ok {
 					continue
 				}
-				sched.watched[w.key()] = w
+				sched.watch(w)
 				adopted++
 				flog.Info("automation: adopted an unwatched automation instance", "fleet", fleetName, "instance", inst.Name, "status", inst.Status)
 			}
 		}
 	}
-	if restored+dropped+adopted > 0 {
-		flog.Info("automation: watch list restored", "runs", restored, "dropped", dropped, "adopted", adopted)
+	if restored+dropped+adopted+queued+expired > 0 {
+		flog.Info("automation: watch list restored", "runs", restored, "dropped", dropped, "adopted", adopted, "queued", queued, "expired", expired)
 	}
 	sched.persist()
+}
+
+// failedRunHolds reports whether a failed automation run still holds what
+// the scheduler gives back for one on a cluster: its pod and disk (it has
+// its instance key), or the whole instance (a create a restart interrupted).
+func failedRunHolds(inst *fleet.Instance) bool {
+	return inst.Backend == fleet.BackendKubernetes && (inst.KubeKey != "" || interruptedCreate(inst))
+}
+
+// restoreQueued puts the runs a previous daemon queued back in their
+// queues, their payloads read back from the firings' event logs, and
+// records in its log each one that waited past automationQueueTTL.
+func (sched *scheduler) restoreQueued(saved []watchQueued, now time.Time) (queued, expired int) {
+	var runs []*queuedRun
+	for _, q := range saved {
+		r := &queuedRun{
+			id: q.ID, firing: q.Firing, fleet: q.Fleet, trigger: q.Trigger, agent: q.Agent,
+			prompt: q.Prompt, cluster: q.Cluster, queuedAt: q.QueuedAt, why: q.Why,
+		}
+		if q.Event != nil {
+			r.event = &triggerEvent{kind: q.Event.Kind, triggerName: q.Trigger, firedAt: q.Event.FiredAt, webhookName: q.Event.Webhook}
+			r.eventLog = q.Event.LogFile
+		}
+		if now.Sub(q.QueuedAt) >= automationQueueTTL {
+			appendTriggerOutcome(r.fleet, r.trigger, r.eventLog, now, r.agent,
+				fmt.Sprintf("expired after %s in the queue; it waited because %s", automationQueueTTL, r.why))
+			expired++
+			continue
+		}
+		if r.event != nil && q.Event.PayloadSize > 0 {
+			body, err := readTriggerEventBody(r.fleet, r.event, r.eventLog, q.Event.PayloadSize)
+			if err != nil {
+				flog.Warn("automation: restored queued run lost its event payload", "fleet", r.fleet, "trigger", r.trigger, "agent", r.agent, "err", err)
+			} else {
+				r.event.body = body
+			}
+		}
+		runs = append(runs, r)
+	}
+	sched.lim.restoreQueued(runs)
+	return len(runs), expired
 }
 
 // idleLimit is how long w may stay idle before it is reaped: the idle timeout,

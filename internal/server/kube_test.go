@@ -859,14 +859,22 @@ func TestKubeCreateAllowed(t *testing.T) {
 		}
 	}
 	st.Fleets["alpha"] = &fleet.Fleet{Name: "alpha", Instances: []*fleet.Instance{
-		{Name: "one", KubeCluster: id, Status: fleet.StatusRunning},
-		{Name: "leaving", KubeCluster: id, Status: fleet.StatusDeleting},
+		{Name: "one", KubeCluster: id, KubeKey: "aaaaaaaa", Status: fleet.StatusRunning},
+		{Name: "leaving", KubeCluster: id, KubeKey: "bbbbbbbb", Status: fleet.StatusDeleting},
+		// A failed automation run whose pod and disk were released holds
+		// no key, and nothing in the cluster.
+		{Name: "released", KubeCluster: id, Status: fleet.StatusFailed, Automated: true},
 	}}
 	// One instance: a second 50Gi disk makes 100Gi, under 120Gi.
 	if err := f.svc.kube.createAllowed(st, target); err != nil {
 		t.Errorf("one used: %v", err)
 	}
-	st.Fleets["alpha"].Instances = append(st.Fleets["alpha"].Instances, &fleet.Instance{Name: "two", KubeCluster: id, Status: fleet.StatusStopped})
+	// One more about to be created (an automation run's reservation) fills
+	// max_instances.
+	if err := f.svc.kube.quotaRoom(st, id, 1); status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "allows 2 instances and has 2") {
+		t.Errorf("one used and one reserved = %v", err)
+	}
+	st.Fleets["alpha"].Instances = append(st.Fleets["alpha"].Instances, &fleet.Instance{Name: "two", KubeCluster: id, KubeKey: "cccccccc", Status: fleet.StatusFailed})
 	if err := f.svc.kube.createAllowed(st, target); status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "allows 2 instances") {
 		t.Errorf("at max_instances = %v", err)
 	}

@@ -20,6 +20,8 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/protoconv"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 	"github.com/BenjaminBenetti/fleet-man/internal/tui"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // schedule.go is the server-side automation scheduler (issue #188). It runs as
@@ -149,7 +151,8 @@ func (e *triggerEvent) payload() []byte {
 
 func (w *watchedAgent) key() string { return w.fleet + "/" + w.instance }
 
-// scheduler holds the loop's per-process state (single-goroutine, no locks).
+// scheduler holds the loop's per-process state (single-goroutine, no locks;
+// lim, which the webhook receiver shares, has its own).
 type scheduler struct {
 	lastFired map[string]time.Time     // "fleet\x00trigger" -> minute it last fired
 	watched   map[string]*watchedAgent // "fleet/instance" -> tracked agent
@@ -158,13 +161,29 @@ type scheduler struct {
 	// the last content written, so an unchanged list is not rewritten.
 	watchPath string
 	saved     []byte
+	// lim is the automation limiter (automation_limits.go): the service's
+	// in the serve loop, a scheduler's own in tests.
+	lim *automationLimiter
 }
 
 func newScheduler() *scheduler {
 	return &scheduler{
 		lastFired: make(map[string]time.Time),
 		watched:   make(map[string]*watchedAgent),
+		lim:       newAutomationLimiter(),
 	}
+}
+
+// watch tracks w, holding a slot of its agent's.
+func (sched *scheduler) watch(w *watchedAgent) {
+	sched.watched[w.key()] = w
+	sched.lim.hold(w.fleet, w.agent, w.key())
+}
+
+// unwatch stops tracking the run under k and gives its agent's slot back.
+func (sched *scheduler) unwatch(k string) {
+	delete(sched.watched, k)
+	sched.lim.release(k)
 }
 
 // triggerFireBuffer is how many matched fires (webhook events or passing bash
@@ -184,6 +203,10 @@ type triggerFire struct {
 	fleet   string
 	trigger fleet.Trigger
 	body    []byte
+	// plan is the firing as the webhook receiver planned it (and reserved
+	// its runs) before it replied; nil for a bash probe's fire, which the
+	// scheduler plans when it takes it.
+	plan *firingPlan
 }
 
 // bashProbeTimeout bounds how long a bash trigger's command may run before it is
@@ -228,19 +251,33 @@ var bashProbeSem = make(chan struct{}, maxBashProbeConcurrency)
 //
 // It starts from the watch list a previous daemon persisted (scheduler.restore),
 // so runs spawned before a restart are still launched and reaped.
+//
+// Besides its ticks, it looks again when a queued run's fire interval ends
+// (so a queue drains at the pace of its interval, not of the tick) and when
+// a settings change wakes it (wakeScheduler).
 func (s *service) runScheduler(ctx context.Context) {
 	sched := newScheduler()
+	sched.lim = s.limiter()
 	sched.watchPath = state.AutomationWatchPath()
 	sched.restore(time.Now())
 	ticker := time.NewTicker(scheduleTickInterval)
 	defer ticker.Stop()
+	due := time.NewTimer(time.Hour)
+	due.Stop()
+	defer due.Stop()
 	for {
-		s.schedulerTick(ctx, sched, time.Now())
+		next := s.schedulerTick(ctx, sched, time.Now())
 		sched.persist()
+		due.Stop()
+		if !next.IsZero() {
+			due.Reset(max(time.Until(next), 0))
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-due.C:
+		case <-s.schedulerWake:
 		case batch := <-s.triggerFires:
 			s.fireTriggerBatch(sched, batch, time.Now())
 			sched.persist()
@@ -256,22 +293,59 @@ func (s *service) runScheduler(ctx context.Context) {
 // next loop iteration's schedulerTick reloads state and services the
 // freshly-watched agents (launch on running, reap on idle), so async-fired agents
 // ride the exact same lifecycle as scheduled ones.
+//
+// A webhook's fires come planned (the receiver reserved their runs before it
+// replied); a bash probe's are planned here.
 func (s *service) fireTriggerBatch(sched *scheduler, batch []triggerFire, now time.Time) {
 	if len(batch) == 0 {
 		return
 	}
-	st, err := scheduleLoadState()
-	if err != nil {
-		flog.Warn("automation: fire batch load state failed", "err", err)
-		return
+	var unplanned []firingItem
+	var at []int
+	for i, f := range batch {
+		if f.plan == nil {
+			unplanned = append(unplanned, firingItem{fleet: f.fleet, trigger: f.trigger})
+			at = append(at, i)
+		}
+	}
+	if len(unplanned) > 0 {
+		for i, p := range sched.lim.plan(s.runChecks(), loadScheduleState, unplanned, now) {
+			batch[at[i]].plan = p
+		}
 	}
 	for _, f := range batch {
-		agents := agentsForTrigger(st.Fleets[f.fleet], f.trigger)
-		if len(agents) == 0 {
-			flog.Warn("automation: fired trigger has no live agents", "fleet", f.fleet, "trigger", f.trigger.Name)
-			continue
-		}
-		s.fireTriggerAgents(sched, f.fleet, f.trigger, agents, now, f.body)
+		s.runFiring(sched, f.plan, f.body, now)
+	}
+}
+
+// loadScheduleState is scheduleLoadState for the limiter: nil when the
+// state does not read (the limiter then plans against no records).
+func loadScheduleState() *state.State {
+	st, err := scheduleLoadState()
+	if err != nil {
+		flog.Warn("automation: load state failed", "err", err)
+		return nil
+	}
+	return st
+}
+
+// runChecks are the daemon's answers to the limiter's questions about a
+// cluster run (automation_limits.go).
+func (s *service) runChecks() runChecks {
+	return runChecks{
+		limits: func(id string) (clusterLimits, bool) {
+			if s.kube == nil {
+				return clusterLimits{}, false
+			}
+			return s.kube.automationLimits(id)
+		},
+		quota: func(st *state.State, id string, extra int) error {
+			if s.kube == nil {
+				return nil
+			}
+			return s.kube.quotaRoom(st, id, extra)
+		},
+		login: loginCheck,
 	}
 }
 
@@ -279,12 +353,14 @@ func (s *service) fireTriggerBatch(sched *scheduler, batch []triggerFire, now ti
 // tests can drive schedulerTick deterministically.
 var scheduleLoadState = state.Load
 
-// schedulerTick fires due triggers and services watched agents for one tick.
-func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.Time) {
+// schedulerTick fires due triggers, services watched agents and starts the
+// queued runs the limits allow for one tick, returning when the next queued
+// run's fire interval ends (zero when none waits on one).
+func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.Time) time.Time {
 	st, err := scheduleLoadState()
 	if err != nil {
 		flog.Warn("automation: load state failed", "err", err)
-		return
+		return time.Time{}
 	}
 	fired := false
 	dues := dueCronTriggers(st.Fleets, now, sched.lastFired)
@@ -325,6 +401,9 @@ func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.
 		}
 	}
 	s.serviceWatched(ctx, sched, st, now)
+	next := s.serviceQueue(sched, now)
+	s.publishAutomationStatus(sched)
+	return next
 }
 
 // fireTriggerAgents spawns one instance per agent the trigger activates and
@@ -335,45 +414,157 @@ func (s *service) schedulerTick(ctx context.Context, sched *scheduler, now time.
 // webhook path; it only mutates sched.watched, so it MUST run on the scheduler
 // goroutine.
 func (s *service) fireTriggerAgents(sched *scheduler, fleetName string, trigger fleet.Trigger, agents []fleet.Agent, now time.Time, body []byte) bool {
+	if len(agents) == 0 {
+		return false
+	}
+	plans := sched.lim.plan(s.runChecks(), loadScheduleState, []firingItem{{fleet: fleetName, trigger: trigger, agents: agents}}, now)
+	return s.runFiring(sched, plans[0], body, now)
+}
+
+// runFiring carries out a planned firing on the scheduler goroutine: it
+// records the firing in its trigger's event log (logTriggerEvent), starts
+// the runs the plan starts, and appends each agent's outcome to the log as
+// it happens: the instance it got, or why it got none (refused, queued,
+// dropped, not created). It returns whether it created an instance.
+func (s *service) runFiring(sched *scheduler, p *firingPlan, body []byte, now time.Time) bool {
+	if p == nil {
+		return false
+	}
+	if p.dropped == "" && len(p.direct)+len(p.start)+len(p.queued)+len(p.refused) == 0 {
+		flog.Warn("automation: fired trigger has no live agents", "fleet", p.fleet, "trigger", p.trigger.Name)
+		return false
+	}
 	// One event describes this firing; it's shared (read-only) by every agent the
 	// trigger spawns and recorded once to the trigger's on-host event log so the
 	// firing is debuggable after the instances are reaped (see trigger_logs.go).
 	ev := &triggerEvent{
-		kind:        trigger.Type,
-		triggerName: trigger.Name,
+		kind:        p.trigger.Type,
+		triggerName: p.trigger.Name,
 		firedAt:     now,
-		webhookName: trigger.WebhookName,
+		webhookName: p.trigger.WebhookName,
 		body:        body,
 	}
-	eventLog := logTriggerEvent(fleetName, ev)
+	eventLog := logTriggerEvent(p.fleet, ev)
+	sched.lim.commit(p, ev, eventLog)
+	outcome := func(agent, msg string) {
+		appendTriggerOutcome(p.fleet, p.trigger.Name, eventLog, now, agent, msg)
+	}
+	if p.dropped != "" {
+		flog.Warn("automation: firing dropped", "fleet", p.fleet, "trigger", p.trigger.Name, "why", p.dropped)
+		outcome(strings.Join(p.trigger.AgentNames, ","), "dropped: "+p.dropped)
+		return false
+	}
+	for _, r := range p.refused {
+		flog.Warn("automation: run refused", "fleet", p.fleet, "trigger", p.trigger.Name, "agent", r.agent, "why", r.why)
+		outcome(r.agent, "refused: "+r.why)
+	}
+	for _, r := range p.queued {
+		flog.Info("automation: run queued", "fleet", p.fleet, "trigger", p.trigger.Name, "agent", r.agent, "why", r.why)
+		outcome(r.agent, "queued: "+r.why)
+	}
 	fired := false
-	for _, ag := range agents {
-		instName, err := createAutomationInstance(s, fleetName, ag, now)
-		if err != nil {
-			flog.Warn("automation: create instance failed", "fleet", fleetName, "agent", ag.Name, "err", err)
-			continue
+	for _, ag := range p.direct {
+		if s.startRun(sched, p.fleet, ag, p.trigger.Prompt, ev, eventLog, nil, now) {
+			fired = true
 		}
-		flog.Info("automation: trigger fired", "fleet", fleetName, "trigger", trigger.Name, "agent", ag.Name, "instance", instName)
-		w := &watchedAgent{
-			fleet:        fleetName,
-			instance:     instName,
-			agent:        ag.Name,
-			command:      ag.Command,
-			prompt:       trigger.Prompt,
-			systemPrompt: ag.SystemPrompt,
-			spawnedAt:    now,
-			lastActive:   now,
-			event:        ev,
-			eventLog:     eventLog,
+	}
+	for _, r := range p.start {
+		if s.startRun(sched, p.fleet, r.def, r.prompt, ev, eventLog, r, now) {
+			fired = true
 		}
-		sched.watched[w.key()] = w
-		fired = true
 	}
 	if fired {
 		// Persist the new runs at once: their CREATING records already exist.
 		sched.persist()
 	}
 	return fired
+}
+
+// startRun creates the instance of one agent run and watches it, appending
+// the outcome to the firing's event log. r is the run's reservation for a
+// cluster agent (nil for the others): a create the connection's quotas
+// refuse after all puts it back in the queue.
+func (s *service) startRun(sched *scheduler, fleetName string, ag fleet.Agent, prompt string, ev *triggerEvent, eventLog string, r *queuedRun, now time.Time) bool {
+	trigger := ""
+	if ev != nil {
+		trigger = ev.triggerName
+	}
+	outcome := func(msg string) { appendTriggerOutcome(fleetName, trigger, eventLog, now, ag.Name, msg) }
+	instName, err := createAutomationInstance(s, fleetName, ag, now)
+	if err != nil {
+		msg := status.Convert(err).Message()
+		if r != nil && status.Code(err) == codes.ResourceExhausted {
+			sched.lim.requeue(r, msg)
+			flog.Info("automation: run queued", "fleet", fleetName, "trigger", trigger, "agent", ag.Name, "why", msg)
+			outcome("queued: " + msg)
+			return false
+		}
+		if r != nil {
+			sched.lim.started(r, "")
+		}
+		flog.Warn("automation: create instance failed", "fleet", fleetName, "agent", ag.Name, "err", err)
+		outcome("not created: " + msg)
+		return false
+	}
+	flog.Info("automation: trigger fired", "fleet", fleetName, "trigger", trigger, "agent", ag.Name, "instance", instName)
+	w := &watchedAgent{
+		fleet:        fleetName,
+		instance:     instName,
+		agent:        ag.Name,
+		command:      ag.Command,
+		prompt:       prompt,
+		systemPrompt: ag.SystemPrompt,
+		spawnedAt:    now,
+		lastActive:   now,
+		event:        ev,
+		eventLog:     eventLog,
+	}
+	sched.watched[w.key()] = w
+	if r != nil {
+		sched.lim.started(r, w.key())
+	} else {
+		sched.lim.hold(fleetName, ag.Name, w.key())
+	}
+	outcome(fmt.Sprintf("instance %s (%s)", instName, s.targetLabel(ag.DeployTarget())))
+	return true
+}
+
+// targetLabel names a run's target in an outcome line: the backend, or
+// "☸ <connection>" for a cluster.
+func (s *service) targetLabel(t fleet.DeployTarget) string {
+	if t.Backend != fleet.BackendKubernetes {
+		return string(t.Backend)
+	}
+	if lim, ok := s.runChecks().limits(t.KubeCluster); ok && lim.name != "" {
+		return kubeGlyph + " " + lim.name
+	}
+	return kubeGlyph + " " + t.KubeCluster
+}
+
+// serviceQueue starts the queued runs the limits now allow, in firing
+// order, and records the ones that expired or can no longer run, returning
+// when the next run waiting on a fire interval may start.
+func (s *service) serviceQueue(sched *scheduler, now time.Time) time.Time {
+	d := sched.lim.due(s.runChecks(), loadScheduleState, now)
+	for _, r := range d.expired {
+		flog.Warn("automation: queued run expired", "fleet", r.fleet, "trigger", r.trigger, "agent", r.agent, "why", r.why)
+		appendTriggerOutcome(r.fleet, r.trigger, r.eventLog, now, r.agent,
+			fmt.Sprintf("expired after %s in the queue; it waited because %s", automationQueueTTL, r.why))
+	}
+	for _, r := range d.refused {
+		flog.Warn("automation: queued run refused", "fleet", r.fleet, "trigger", r.trigger, "agent", r.agent, "why", r.why)
+		appendTriggerOutcome(r.fleet, r.trigger, r.eventLog, now, r.agent, "refused: "+r.why)
+	}
+	fired := false
+	for _, r := range d.start {
+		if s.startRun(sched, r.fleet, r.def, r.prompt, r.event, r.eventLog, r, now) {
+			fired = true
+		}
+	}
+	if fired || len(d.expired)+len(d.refused) > 0 {
+		sched.persist()
+	}
+	return d.next
 }
 
 // scheduledFire is one cron trigger that is due now (a schedule or bash trigger).
@@ -469,20 +660,22 @@ func (s *service) serviceWatched(ctx context.Context, sched *scheduler, st *stat
 	for k, w := range sched.watched {
 		inst := findInstance(st, w.fleet, w.instance)
 		if inst == nil {
-			delete(sched.watched, k) // instance gone (reaped / destroyed)
+			sched.unwatch(k) // instance gone (reaped / destroyed)
 			continue
 		}
 		switch inst.Status {
 		case fleet.StatusFailed:
-			// Provisioning failed; stop tracking and leave the record for the user.
-			delete(sched.watched, k)
+			// Provisioning failed; stop tracking and leave the record for the
+			// user (on a cluster, without its pod and disk).
+			s.failedRun(w, inst, now)
+			sched.unwatch(k)
 			continue
 		case fleet.StatusRunning:
 			// fall through
 		case fleet.StatusCreating:
 			if createOverdue(w, inst, now) {
 				s.abandonOverdueCreate(w, inst, now)
-				delete(sched.watched, k)
+				sched.unwatch(k)
 			}
 			continue
 		default:
@@ -528,10 +721,11 @@ func (s *service) serviceWatched(ctx context.Context, sched *scheduler, st *stat
 			c.w.lastActive = now
 			continue
 		}
-		if now.Sub(c.w.lastActive) >= c.w.idleLimit() {
-			flog.Info("automation: reaping idle agent", "fleet", c.w.fleet, "instance", c.w.instance, "idle", now.Sub(c.w.lastActive).Round(time.Second).String())
-			reapAutomationInstance(s, c.w.fleet, c.w.instance)
-			delete(sched.watched, c.key)
+		if idle := now.Sub(c.w.lastActive); idle >= c.w.idleLimit() {
+			flog.Info("automation: reaping idle agent", "fleet", c.w.fleet, "instance", c.w.instance, "idle", idle.Round(time.Second).String())
+			err := reapAutomationInstance(s, c.w.fleet, c.w.instance)
+			recordTriggerOutcome(c.w, now, fmt.Sprintf("instance %s reaped after %s idle; %s", c.w.instance, idle.Round(time.Second), destroyWords(err)))
+			sched.unwatch(c.key)
 		}
 	}
 }
@@ -549,9 +743,89 @@ func createOverdue(w *watchedAgent, inst *fleet.Instance, now time.Time) bool {
 func (s *service) abandonOverdueCreate(w *watchedAgent, inst *fleet.Instance, now time.Time) {
 	took := now.Sub(w.spawnedAt).Round(time.Second)
 	flog.Warn("automation: create deadline passed; destroying the run", "fleet", w.fleet, "instance", w.instance, "agent", w.agent, "after", took.String(), "deadline", automationCreateTimeout.String())
-	recordTriggerOutcome(w, now, fmt.Sprintf("create of %s did not finish within %s (FLEET_AUTOMATION_CREATE_TIMEOUT); the instance was destroyed", inst.Name, automationCreateTimeout))
-	reapAutomationInstance(s, w.fleet, w.instance)
+	err := reapAutomationInstance(s, w.fleet, w.instance)
+	recordTriggerOutcome(w, now, fmt.Sprintf("create of %s did not finish within %s (FLEET_AUTOMATION_CREATE_TIMEOUT); %s", inst.Name, automationCreateTimeout, destroyWords(err)))
 }
+
+// destroyWords says what became of a run's destroy (reapAutomationInstance's
+// error), for its outcome line.
+func destroyWords(err error) string {
+	if err != nil {
+		return "destroying it failed: " + status.Convert(err).Message()
+	}
+	return "it is being destroyed"
+}
+
+// interruptedCreate reports whether a FAILED record's error is a create a
+// daemon restart interrupted (interrupted_jobs.go, kube_reconcile.go).
+func interruptedCreate(inst *fleet.Instance) bool {
+	return inst.Error == interruptedByRestart || strings.HasPrefix(inst.Error, "kubernetes:interrupted")
+}
+
+// failedRun deals with a run whose create failed, and records it in the
+// firing's trigger log. On a cluster nobody will press Retry on an
+// automation run: one a daemon restart interrupted is destroyed, and any
+// other keeps its record and reason, as on Docker, but its pod and disk are
+// released at once (releaseFailedRun), so a failed run holds no billable
+// disk and counts against neither quota.
+func (s *service) failedRun(w *watchedAgent, inst *fleet.Instance, now time.Time) {
+	reason := strings.TrimSpace(inst.Error)
+	if reason == "" {
+		reason = "no reason recorded"
+	}
+	switch {
+	case inst.Backend == fleet.BackendKubernetes && interruptedCreate(inst):
+		flog.Warn("automation: destroying a run a daemon restart interrupted", "fleet", w.fleet, "instance", inst.Name)
+		err := reapAutomationInstance(s, w.fleet, w.instance)
+		recordTriggerOutcome(w, now, fmt.Sprintf("create of %s was interrupted by a daemon restart; %s", inst.Name, destroyWords(err)))
+	case inst.Backend == fleet.BackendKubernetes:
+		releaseFailedRun(s, w.fleet, inst)
+		recordTriggerOutcome(w, now, fmt.Sprintf("create of %s failed: %s; the record is kept, its pod and disk are released", inst.Name, reason))
+	case interruptedCreate(inst):
+		recordTriggerOutcome(w, now, fmt.Sprintf("create of %s was interrupted by a daemon restart; the record is kept", inst.Name))
+	default:
+		recordTriggerOutcome(w, now, fmt.Sprintf("create of %s failed: %s", inst.Name, reason))
+	}
+}
+
+// releaseFailedRun gives a failed cluster run's pod and disk back, keeping
+// its FAILED record and reason. The record lets go of its instance key
+// first, under the state lock (from then on nothing reaches the objects
+// through it, and it counts against neither quota); then the objects are
+// deleted by that key in the background, the key's tombstone letting the
+// reconciler finish what the teardown cannot (an unreachable cluster). A
+// package var so tests can see it called.
+var releaseFailedRun = func(s *service, fleetName string, inst *fleet.Instance) {
+	var held *fleet.Instance
+	_ = state.Update(func(st *state.State) error {
+		cur := findInstance(st, fleetName, inst.Name)
+		if cur == nil || cur.Status != fleet.StatusFailed || cur.KubeKey == "" || cur.KubeKey != inst.KubeKey {
+			return errNothingToRelease
+		}
+		c := *cur
+		held = &c
+		cur.KubeKey, cur.ContainerID = "", ""
+		return nil
+	})
+	if held == nil {
+		return
+	}
+	flog.Info("automation: releasing a failed run's pod and disk", "fleet", fleetName, "instance", held.Name, "cluster", held.KubeCluster, "key", held.KubeKey)
+	s.pushState()
+	go func() {
+		if s.kubeRecovery != nil {
+			s.kubeRecovery.destroying(fleetName, held)
+		}
+		if err := jobDownInstance(held); err != nil {
+			flog.Warn("automation: releasing a failed run's pod and disk", "fleet", fleetName, "instance", held.Name, "err", err)
+		}
+		s.kubeRecovery.destroyed(held)
+	}()
+}
+
+// errNothingToRelease aborts releaseFailedRun's state update: the record is
+// gone, retried, or released already.
+var errNothingToRelease = errors.New("nothing to release")
 
 func findInstance(st *state.State, fleetName, instanceName string) *fleet.Instance {
 	f, ok := st.Fleets[fleetName]
@@ -747,15 +1021,18 @@ var automationActivity = func(s *service, w *watchedAgent, inst *fleet.Instance,
 	return w.detector.Detect(caps, now), true
 }
 
-// reapAutomationInstance tears down an idle automation instance (container +
-// record) via the same destroy job the CLI/TUI use.
-var reapAutomationInstance = func(s *service, fleetName, instanceName string) {
+// reapAutomationInstance tears down an automation instance (container +
+// record) via the same destroy job the CLI/TUI use, returning why the
+// destroy could not start.
+var reapAutomationInstance = func(s *service, fleetName, instanceName string) error {
 	if _, err := s.startDestroyInstanceJob(&fleetgrpc.DestroyInstanceRequest{
 		Fleet:    fleetName,
 		Instance: &instanceName,
 	}); err != nil {
 		flog.Error("automation: reap failed", "fleet", fleetName, "instance", instanceName, "err", err)
+		return err
 	}
+	return nil
 }
 
 // startBashProbe runs a bash trigger's command off the scheduler goroutine and,

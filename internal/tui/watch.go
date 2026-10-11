@@ -247,6 +247,8 @@ func watchOnce(ctx context.Context, program *tea.Program, gen int) bool {
 			program.Send(activeJobsMsg{jobs: k.ActiveJobs, gen: gen})
 		case *fleetgrpc.Event_KubeClusters:
 			program.Send(kubeClustersMsg{clusters: k.KubeClusters, gen: gen})
+		case *fleetgrpc.Event_AutomationStatus:
+			program.Send(automationStatusMsg{status: k.AutomationStatus, gen: gen})
 		default:
 			// The per-job Job* events are not sent on Watch (ActiveJobs is).
 		}
