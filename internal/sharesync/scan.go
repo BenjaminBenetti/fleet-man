@@ -248,6 +248,9 @@ func (tr *treeRoot) examine(c candidate) (Entry, error) {
 	if c.info.Size() > BulkSize && settle > 0 && tr.tree.opts.Now().Sub(c.info.ModTime()) < settle {
 		return Entry{}, errUnsettled
 	}
+	if !tr.settled(c) {
+		return Entry{}, errUnsettled
+	}
 	f, err := tr.fs.Open(c.name)
 	if err != nil {
 		return Entry{}, err

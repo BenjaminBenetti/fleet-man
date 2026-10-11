@@ -162,7 +162,7 @@ func TestAppendUnionDecisions(t *testing.T) {
 	if res, _ := (AppendUnion{}).Merge(ctx, &MergeInput{Current: &cur, Incoming: big}); res.Decision != Accept || !res.Conflict {
 		t.Errorf("too large to merge: %+v, want mirror's newer-wins", res)
 	}
-	failing := cur
+	failing := version("a\nb\n", 100, "x")
 	failing.open = func(context.Context) (io.ReadCloser, error) { return nil, ErrNoSource }
 	if _, err := (AppendUnion{}).Merge(ctx, &MergeInput{Current: &failing, Incoming: inc}); !errors.Is(err, ErrNoSource) {
 		t.Errorf("unreadable content: %v, want the error (the change waits)", err)
@@ -170,28 +170,31 @@ func TestAppendUnionDecisions(t *testing.T) {
 }
 
 // TestPoliciesCoverTheTable checks a hub refuses a root whose policies are
-// not all implemented: the defaults' credential, json3 and toml3 need part
-// of sharesync that is not this package's mirror and append-union.
+// not all implemented, and the defaults implement every policy the
+// defaults' roots use.
 func TestPoliciesCoverTheTable(t *testing.T) {
-	err := DefaultPolicies().covers(syncpolicy.Defaults(), ".claude")
-	if err == nil || !strings.Contains(err.Error(), "credential") {
-		t.Errorf(".claude with the default policies: %v, want a missing credential policy", err)
-	}
-	if err := DefaultPolicies().covers(syncpolicy.Defaults(), ".mnt"); err != nil {
-		t.Errorf(".mnt: %v", err)
-	}
-	full := DefaultPolicies()
-	for _, p := range []syncpolicy.Policy{syncpolicy.Credential, syncpolicy.JSON3, syncpolicy.TOML3} {
-		full[p] = Mirror{}
-	}
 	for _, root := range syncpolicy.Defaults().Roots() {
-		if err := full.covers(syncpolicy.Defaults(), root.Path); err != nil {
-			t.Errorf("%s with every policy: %v", root.Path, err)
+		if err := DefaultPolicies().covers(syncpolicy.Defaults(), root.Path); err != nil {
+			t.Errorf("%s with the default policies: %v", root.Path, err)
 		}
 	}
-	if _, err := OpenHub(t.TempDir(), syncpolicy.Table{}, []string{".claude"}, HubOptions{}); err == nil {
+	partial := DefaultPolicies()
+	delete(partial, syncpolicy.Credential)
+	err := partial.covers(syncpolicy.Defaults(), ".claude")
+	if err == nil || !strings.Contains(err.Error(), "credential") {
+		t.Errorf(".claude without a credential policy: %v, want it named", err)
+	}
+	if err := partial.covers(syncpolicy.Defaults(), ".mnt"); err != nil {
+		t.Errorf(".mnt: %v", err)
+	}
+	if _, err := OpenHub(t.TempDir(), syncpolicy.Table{}, []string{".claude"}, HubOptions{Policies: partial}); err == nil {
 		t.Error("OpenHub took .claude without a credential policy")
 	}
+	h, err := OpenHub(t.TempDir(), syncpolicy.Table{}, []string{".claude", ".codex", ".config/gh", ".augment", "files", ".mnt", ".hostbind"}, HubOptions{})
+	if err != nil {
+		t.Fatalf("OpenHub with the defaults: %v", err)
+	}
+	h.Close()
 }
 
 // TestEntryCheck refuses entries no scan reports.

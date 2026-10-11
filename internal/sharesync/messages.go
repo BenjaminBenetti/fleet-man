@@ -18,6 +18,20 @@ type SideInfo struct {
 	// cluster. A policy of location scope (logins) keeps one state per
 	// location; every side of a location sees the same.
 	Location string `json:"location"`
+	// Logins is the location whose state of location scope (its logins)
+	// the side shares, when not its own: a cluster whose credential_scope
+	// is fleet (experimental) shares the daemon host's, so one login there
+	// serves it too, and a refresh, a logout or a lost refresh race in any
+	// location sharing it reaches all of them. "" is Location.
+	Logins string `json:"logins,omitempty"`
+}
+
+// logins returns the location whose logins the side keeps.
+func (s SideInfo) logins() string {
+	if s.Logins != "" {
+		return s.Logins
+	}
+	return s.Location
 }
 
 // Change is one path a side found different from what it last synced.
@@ -47,6 +61,10 @@ const (
 	// Superseded: the hub has the change and decided otherwise (a newer
 	// change won, the copies merged, a stale delete was refused); an op
 	// with the outcome follows. The side may now be overwritten there.
+	// Ack.Rev is the rev of the state that stands, or 0 when the hub
+	// refused a change made on its current state (a policy's guard: the
+	// '{}' seed, a cleared login); the side then holds no rev of the
+	// hub's there.
 	Superseded
 	// Deferred: the hub cannot take the change yet (the root is over its
 	// cap, or a conflict copy could not be kept). The side keeps it and

@@ -31,7 +31,7 @@ func scopeRig(t *testing.T, policy Merger, sides ...string) *rig {
 	pol[syncpolicy.Credential] = policy
 	pol[syncpolicy.JSON3] = policy
 	r.hopts = HubOptions{NormalDelay: time.Millisecond, BulkDelay: time.Millisecond, Logger: r.logs.logger(), Policies: pol}
-	r.topts = func(string) TreeOptions { return TreeOptions{Settle: -1} }
+	r.topts = func(string) TreeOptions { return TreeOptions{Settle: -1, MergeSettle: -1} }
 	r.openHub()
 	t.Cleanup(r.close)
 	for i := 0; i+1 < len(sides); i += 2 {

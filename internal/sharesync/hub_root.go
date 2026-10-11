@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -226,7 +228,7 @@ func (root *hubRoot) setEntry(k key, e Entry, origin string, base uint64, hist [
 func (root *hubRoot) markDirty(k key, except string) {
 	now := root.hub.now()
 	for id, sr := range root.sides {
-		if id == except || k.loc != "" && sr.side.info.Location != k.loc {
+		if id == except || k.loc != "" && sr.side.info.logins() != k.loc {
 			continue
 		}
 		sr.mark(k.path, now)
@@ -321,7 +323,7 @@ func (h *Hub) process(ctx context.Context, root *hubRoot, side *hubSide, c Chang
 		h.log.Warn("sharesync: ignoring a malformed change", "root", root.name, "side", side.info.ID, "path", c.Path)
 		return ack
 	}
-	k, m, ok := root.keyFor(c.Path, side.info.Location)
+	k, m, ok := root.keyFor(c.Path, side.info.logins())
 	if !ok {
 		return ack
 	}
@@ -336,7 +338,13 @@ func (h *Hub) process(ctx context.Context, root *hubRoot, side *hubSide, c Chang
 		}
 		res, extra, err := h.decide(ctx, root, p)
 		if err != nil {
-			h.log.Warn("sharesync: change deferred", "root", root.name, "side", side.info.ID, "path", c.Path, "err", err)
+			level := slog.LevelWarn
+			if errors.Is(err, ErrIncomplete) {
+				// A write under way (a login written in place, a settings
+				// file mid-save): routine, and reported again when done.
+				level = slog.LevelDebug
+			}
+			h.log.Log(ctx, level, "sharesync: change deferred", "root", root.name, "side", side.info.ID, "path", c.Path, "err", err)
 			ack.Status = Deferred
 			return ack
 		}
@@ -427,7 +435,7 @@ type planExtra struct {
 func (h *Hub) decide(ctx context.Context, root *hubRoot, p *plan) (MergeResult, planExtra, error) {
 	var extra planExtra
 	in := &MergeInput{
-		Root: root.name, Path: p.c.Path, Side: p.side.info, Fast: p.fast,
+		Root: root.name, Path: p.c.Path, Side: p.side.info, Fast: p.fast, BaseRev: p.base,
 		Incoming: Version{Entry: p.c.Entry, Side: p.side.info.ID, open: func(ctx context.Context) (io.ReadCloser, error) {
 			return p.side.peer.Fetch(ctx, root.name, p.c.Path, p.c.Entry, 0)
 		}},
@@ -594,7 +602,10 @@ func (root *hubRoot) commitPlan(p *plan, res MergeResult, extra planExtra) (Ack,
 			sr.mark(p.c.Path, root.hub.now())
 		}
 		ack.Status = Superseded
-		if now != nil {
+		if now != nil && !p.fast {
+			// A change made on the current state and refused (the seed, a
+			// cleared login) answers rev 0: what the side holds is no state
+			// of the hub's, so its next change there is no fast forward.
 			ack.Rev = now.Rev
 		}
 		return ack, false
@@ -608,9 +619,9 @@ func (root *hubRoot) commitPlan(p *plan, res MergeResult, extra planExtra) (Ack,
 	if res.Decision == Merged {
 		entry, origin, except = extra.merged, "", ""
 	}
-	var hist []histRev
+	var hist, before []histRev
 	if now != nil {
-		hist = now.Hist
+		hist, before = now.Hist, now.Hist
 	}
 	if extra.hist != "" {
 		hist = append(append([]histRev(nil), hist...), histRev{Rev: root.rev + 1, Hash: extra.hist})
@@ -618,11 +629,22 @@ func (root *hubRoot) commitPlan(p *plan, res MergeResult, extra planExtra) (Ack,
 			hist = hist[len(hist)-n:]
 		}
 	}
+	if !entry.Live() {
+		// A change after a delete is never merged with what was deleted:
+		// the earlier contents (a logged-out login among them) go.
+		hist = nil
+	}
 	ne, err := root.setEntry(p.k, entry, origin, p.c.Base, hist, except)
 	if err != nil {
 		root.hub.log.Error("sharesync: recording state", "root", root.name, "err", err)
 		ack.Status = Deferred
 		return ack, false
+	}
+	if p.m.Scope() == ScopeLocation {
+		// A replaced or logged-out login is not kept until compaction.
+		// (Other contents wait for it: a merge in flight may name the same
+		// blob before it commits.)
+		root.forget(before, hist)
 	}
 	ack.Rev = ne.Rev
 	if res.Decision == Merged {
@@ -637,6 +659,29 @@ func (root *hubRoot) commitPlan(p *plan, res MergeResult, extra planExtra) (Ack,
 	}
 	ack.Status = Accepted
 	return ack, false
+}
+
+// forget drops the blobs of earlier contents a state kept before and no
+// longer does at once, unless another state still names them. Called with
+// root.mu held.
+func (root *hubRoot) forget(before, kept []histRev) {
+	for _, hr := range before {
+		if slices.ContainsFunc(kept, func(k histRev) bool { return k.Hash == hr.Hash }) || root.names(hr.Hash) {
+			continue
+		}
+		root.blobs.remove(hr.Hash)
+	}
+}
+
+// names reports whether a state of the root keeps the blob hash. Called
+// with root.mu held.
+func (root *hubRoot) names(hash string) bool {
+	for _, e := range root.entries {
+		if e.Origin == "" && e.Entry.Kind == File && e.Entry.Hash == hash || slices.ContainsFunc(e.Hist, func(hr histRev) bool { return hr.Hash == hash }) {
+			return true
+		}
+	}
+	return false
 }
 
 // resurrect brings back the deleted folders above an accepted change.

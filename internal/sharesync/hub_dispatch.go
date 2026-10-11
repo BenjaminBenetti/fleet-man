@@ -196,7 +196,7 @@ func earliest(a, b time.Time) time.Time {
 // opFor returns the op that brings the side to p's state, or false when it
 // holds it.
 func (root *hubRoot) opFor(sr *sideRoot, p string) (Op, bool) {
-	k, _, ok := root.keyFor(p, sr.side.info.Location)
+	k, _, ok := root.keyFor(p, sr.side.info.logins())
 	held, holds := sr.held[p]
 	if !ok {
 		return Op{}, false
@@ -311,7 +311,7 @@ func (root *hubRoot) collect(s *hubSide, now time.Time, flush bool) ([]Batch, ti
 func (root *hubRoot) contentFor(s *hubSide) ContentFunc {
 	return func(ctx context.Context, op Op, offset int64) (io.ReadCloser, error) {
 		root.mu.Lock()
-		k, _, ok := root.keyFor(op.Path, s.info.Location)
+		k, _, ok := root.keyFor(op.Path, s.info.logins())
 		e := root.entries[k]
 		root.mu.Unlock()
 		if !ok || e == nil || e.Rev != op.Rev {

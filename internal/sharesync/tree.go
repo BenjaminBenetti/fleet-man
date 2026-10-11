@@ -55,6 +55,15 @@ type TreeOptions struct {
 	// scan reports it, so a file still being copied in is sent once. 0 is
 	// 1s; negative is none.
 	Settle time.Duration
+	// MergeSettle is how long a settings or login file (a json3, toml3 or
+	// credential path) must go unmodified before a scan reports it, so one
+	// rewritten in place (Codex's auth.json) is never caught half written:
+	// a TOML or YAML file cut short often still parses, and would be taken
+	// for a change that removed what it lacks. Unmodified means by its
+	// modification time, or, for a file whose clock runs ahead of the
+	// scan's (an NFS server's), seen unchanged that long. 0 is 100ms;
+	// negative is none.
+	MergeSettle time.Duration
 	// Logger gets the tree's warnings; nil discards them.
 	Logger *slog.Logger
 	// Now is the clock; nil is time.Now.
@@ -99,6 +108,15 @@ type treeRoot struct {
 	journal *journal
 	// failing are the paths scans cannot read, warned of once.
 	failing map[string]bool
+	// settling are the merging files seen modified too recently, as first
+	// seen (MergeSettle).
+	settling map[string]settleMark
+}
+
+// settleMark is a file as a scan first saw it unsettled.
+type settleMark struct {
+	fp fingerprint
+	at time.Time
 }
 
 // record is what a side last synced of one path.
@@ -143,6 +161,9 @@ func OpenTree(roots []TreeRoot, opts TreeOptions) (*Tree, error) {
 	if t.opts.Settle == 0 {
 		t.opts.Settle = time.Second
 	}
+	if t.opts.MergeSettle == 0 {
+		t.opts.MergeSettle = 100 * time.Millisecond
+	}
 	if t.opts.FullReason == "" {
 		t.opts.FullReason = "disk full"
 	}
@@ -182,7 +203,7 @@ func (t *Tree) openRoot(spec TreeRoot) (*treeRoot, error) {
 		sroot.Close()
 		return nil, fmt.Errorf("sharesync: root %s: %w", spec.Name, err)
 	}
-	tr := &treeRoot{TreeRoot: spec, tree: t, policy: t.table, fs: sroot, opened: opened, records: map[string]*record{}, failing: map[string]bool{}}
+	tr := &treeRoot{TreeRoot: spec, tree: t, policy: t.table, fs: sroot, opened: opened, records: map[string]*record{}, failing: map[string]bool{}, settling: map[string]settleMark{}}
 	j, raw, err := openJournal(filepath.Join(t.opts.StateDir, stateFile(spec.Name)))
 	if err != nil {
 		sroot.Close()
@@ -391,6 +412,12 @@ func (t *Tree) Acked(root string, reply Reply) error {
 			}
 			// The hub has seen it: the op it sends may replace it.
 			rec.Sent = false
+			if ack.Rev == 0 {
+				// Refused though made on the hub's current state: the side
+				// holds no rev of the hub's there, and a change made on
+				// what it holds is not one made on that rev.
+				rec.Rev = 0
+			}
 		default:
 			continue
 		}
@@ -452,6 +479,59 @@ func (tr *treeRoot) stillThere() error {
 		return fmt.Errorf("sharesync: root %s (%s): %w", tr.Name, tr.Dir, ErrRootMoved)
 	}
 	return nil
+}
+
+// settling returns the paths of a root a scan found too recently modified
+// to report yet (MergeSettle).
+func (t *Tree) settling(root string) []string {
+	if t.enter() != nil {
+		return nil
+	}
+	defer t.use.RUnlock()
+	tr := t.roots[root]
+	if tr == nil {
+		return nil
+	}
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	out := make([]string, 0, len(tr.settling))
+	for p := range tr.settling {
+		out = append(out, p)
+	}
+	return out
+}
+
+// merging reports whether name's policy merges (or vets) a file's content:
+// json3, toml3, credential.
+func (tr *treeRoot) merging(name string) bool {
+	policy, _ := tr.policy.PolicyFor(path.Join(tr.Name, name))
+	return policy == syncpolicy.JSON3 || policy == syncpolicy.TOML3 || policy == syncpolicy.Credential
+}
+
+// settled reports whether a changed file of a merging policy has gone
+// unmodified for MergeSettle (any other file is settled). Called without
+// tr.mu.
+func (tr *treeRoot) settled(c candidate) bool {
+	wait := tr.tree.opts.MergeSettle
+	if wait <= 0 || !tr.merging(c.name) {
+		return true
+	}
+	now := tr.tree.opts.Now()
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if age := now.Sub(c.info.ModTime()); age >= wait {
+		delete(tr.settling, c.name)
+		return true
+	}
+	mark, ok := tr.settling[c.name]
+	if ok && mark.fp == c.fp && now.Sub(mark.at) >= wait {
+		delete(tr.settling, c.name)
+		return true
+	}
+	if !ok || mark.fp != c.fp {
+		tr.settling[c.name] = settleMark{fp: c.fp, at: now}
+	}
+	return false
 }
 
 // synced reports whether the tree syncs name (relative to the root): not a

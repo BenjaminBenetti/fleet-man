@@ -18,11 +18,15 @@
 // and every report names the rev its change was made on (its base). A change
 // on the current rev is a fast forward; any other is concurrent with what the
 // hub accepted since, and the path's policy (internal/mounts/syncpolicy)
-// decides: mirror keeps the newest change and a conflict copy of the other,
-// append-union merges the lines, and the policies of part B (credentials,
-// json3, toml3) plug in through the same Merger interface: a policy's scope
-// (fleet-wide or per location), its lane, the earlier contents it keeps for
-// a three-way merge, and a decision to accept, keep or merge. Nothing is
+// decides through the Merger interface (its scope, fleet-wide or per
+// location; its lane; the earlier contents it keeps for a three-way merge;
+// and a decision to accept, keep or merge): mirror keeps the newest change
+// and a conflict copy of the other; append-union merges the lines; json3
+// and toml3 merge settings three ways, keeping what each copy changed, and
+// never take the '{}' seed over content or a file that does not parse;
+// credential keeps one login per location (or shared, for a side whose
+// SideInfo.Logins names another), on the priority lane, with logouts as
+// tombstones and stale or cleared logins refused. Nothing is
 // dropped: a change the hub cannot take now (a root over its cap) waits on
 // the side that made it, a side that cannot take a change (its disk full) is
 // paused for files and catches up later, and a change that loses to a newer
