@@ -257,3 +257,21 @@ func TestShareRecordKeepsTheHostBinds(t *testing.T) {
 		t.Errorf("clone %+v differs or shares its slices", cl)
 	}
 }
+
+// TestTeardownTakesTheLastUsersNamedVolumes: a destroy (Down) removes, before
+// the instance's objects go, the fleet's named volumes only it mounted.
+func TestTeardownTakesTheLastUsersNamedVolumes(t *testing.T) {
+	r := newVolumeRig(t)
+	r.record("api", "0000000b")
+	sts := handleSTS()
+	if err := SaveInstanceRecord(InstanceRecord{Cluster: handleCluster, Namespace: handleNS, Key: handleKey, Fleet: "alpha", Instance: "web", StatefulSet: sts, Gen: 1,
+		Share: &ShareRecord{Mode: "single-node", Claim: r.claim, Volumes: []string{"0000000a", "0000000b"}}}); err != nil {
+		t.Fatal(err)
+	}
+	inst := r.inst()
+	inst.ContainerID = ContainerID(handleCluster, handleNS, sts, 1)
+	_ = newHandle(inst, r.pool).Down(inst.ContainerID)
+	if !reflect.DeepEqual(r.removed, [][]string{{"0000000a"}}) {
+		t.Errorf("removed %v, want the volume only the destroyed instance mounted", r.removed)
+	}
+}
