@@ -357,8 +357,8 @@ func (s *service) DeleteImageCache(_ context.Context, req *fleetgrpc.DeleteImage
 // without such instances, as always). It only wipes for a fleet that has svc
 // on: otherwise the restart step would spin up a server the fleet never asked
 // for. (The TUI only shows the button when it is on; this protects
-// direct/stale callers.) A runtime that cannot be reached now is reported, and
-// the others are still wiped.
+// direct/stale callers.) The runtimes are wiped concurrently; a runtime that
+// cannot be reached now is reported, and the others are still wiped.
 func wipeSharedService(fleetName string, svc fleet.SharedService) error {
 	if fleetName == "" {
 		return status.Error(codes.InvalidArgument, "fleet is required")
@@ -375,18 +375,32 @@ func wipeSharedService(fleetName string, svc fleet.SharedService) error {
 		return status.Errorf(codes.FailedPrecondition, "fleet %q does not have the %s enabled", fleetName, sharedServiceText[svc].setting)
 	}
 	runtimes := instanceRuntimes(f.Instances)
-	var failed []string
-	for _, rt := range runtimes {
+	// The runtimes wipe at once: a cluster's waits for its new server (up
+	// to 270s), and the clients give the whole call 300s.
+	outcomes := make([]string, len(runtimes))
+	var wg sync.WaitGroup
+	for i, rt := range runtimes {
 		prefix := ""
 		if len(runtimes) > 1 || rt.Key() != hostSharedServices().Key() {
 			prefix = rt.Key() + ": "
 		}
-		if !rt.Reachable(context.Background()) {
-			failed = append(failed, prefix+"not reachable now")
-			continue
-		}
-		if err := rt.WipeService(fleetName, svc); err != nil {
-			failed = append(failed, prefix+err.Error())
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if !rt.Reachable(context.Background()) {
+				outcomes[i] = prefix + "not reachable now"
+				return
+			}
+			if err := rt.WipeService(fleetName, svc); err != nil {
+				outcomes[i] = prefix + err.Error()
+			}
+		}()
+	}
+	wg.Wait()
+	var failed []string
+	for _, o := range outcomes {
+		if o != "" {
+			failed = append(failed, o)
 		}
 	}
 	if len(failed) > 0 {

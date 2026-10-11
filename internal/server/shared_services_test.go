@@ -771,6 +771,49 @@ func TestDeleteCacheWipesEveryRuntimeTheFleetUses(t *testing.T) {
 	}
 }
 
+// TestDeleteCacheWipesTheRuntimesAtOnce: a mixed fleet's wipes run
+// concurrently, so a cluster's (which waits for its new server) and the
+// host's together fit the clients' deadline.
+func TestDeleteCacheWipesTheRuntimesAtOnce(t *testing.T) {
+	isolateFleetDir(t)
+	seedFleets(t, map[string]*fleet.Fleet{
+		"alpha": {Name: "alpha", Settings: fleet.FleetSettings{DebCacheServer: true}, Instances: []*fleet.Instance{
+			{Name: "i1", Backend: fleet.BackendDevcontainer},
+			{Name: "k1", Backend: fleet.BackendKubernetes, KubeCluster: "c1"},
+		}},
+	})
+	host := svcruntimetest.New("docker")
+	recs := clusterRecorders(t, host, nil, "c1")
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	hold := func(c svcruntimetest.Call) {
+		if c.Method == "WipeService" {
+			started <- c.Fleet
+			select {
+			case <-release:
+			case <-time.After(5 * time.Second):
+			}
+		}
+	}
+	host.OnCall, recs["c1"].OnCall = hold, hold
+	done := make(chan error, 1)
+	go func() {
+		_, err := newService().DeleteDebCache(context.Background(), &fleetgrpc.DeleteDebCacheRequest{Fleet: "alpha"})
+		done <- err
+	}()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(3 * time.Second):
+			t.Fatal("the runtimes were wiped one after the other")
+		}
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 // usageRecorder is a recorder whose services run on volumes of a fixed
 // size, and that has upkeep.
 type usageRecorder struct {

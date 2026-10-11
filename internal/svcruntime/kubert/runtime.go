@@ -13,6 +13,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/owner"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
@@ -144,6 +145,21 @@ func (r *Runtime) lock(fleetName string) func() {
 	return mu.Unlock
 }
 
+// leftCluster reports, under the fleet's lock, that no record of fleetName
+// names the connection any more: its last instance there was destroyed (and
+// the fleet's objects there released) after the caller read the state, as a
+// TUI-connect reconcile may have. Making the objects again would leave them,
+// and a cache server, running for a fleet with no instance there. Every
+// other caller (a create, a rebuild, a re-prepare) holds a record that names
+// the connection.
+func (r *Runtime) leftCluster(fleetName, what string) bool {
+	if fleetUsesCluster(fleetName, r.cluster) {
+		return false
+	}
+	flog.Info("kube caches: no instance of the fleet on the connection; nothing made", "cluster", r.cluster, "fleet", fleetName, "op", what)
+	return true
+}
+
 // conn is the connection as the runtime acts on it: the pool's scope (its
 // client, namespace, owner label and the owner check before deletions), its
 // current record, and the daemon's id, which the fleets' h8s hash.
@@ -189,10 +205,14 @@ func opContext() (context.Context, context.CancelFunc) {
 // PrepareFleet applies fleetName's anchor, its headless Service and its
 // NetworkPolicies (the egress block only while the connection blocks
 // metadata; turned off, the policy goes), and records the fleet on the
-// connection (footprint.json), voiding a teardown owed there.
+// connection (footprint.json), voiding a teardown owed there. It makes
+// nothing for a fleet no record names on the connection (see leftCluster).
 func (r *Runtime) PrepareFleet(fleetName string) error {
 	unlock := r.lock(fleetName)
 	defer unlock()
+	if r.leftCluster(fleetName, "prepare") {
+		return nil
+	}
 	c, err := r.connect()
 	if err != nil {
 		return err
@@ -213,7 +233,8 @@ func (r *Runtime) PrepareFleet(fleetName string) error {
 // (and the anchor they hang off, when it is missing) and returns without
 // waiting for the server to be up: watchReady follows it, and CacheUsage
 // says how it went. Shared Buildkit is not served on a cluster yet: it needs
-// per-instance TLS.
+// per-instance TLS. Like PrepareFleet, it makes nothing for a fleet no
+// record names on the connection.
 func (r *Runtime) EnsureService(fleetName string, svc fleet.SharedService) error {
 	if _, err := lookup(svc); err != nil {
 		return err
@@ -223,6 +244,9 @@ func (r *Runtime) EnsureService(fleetName string, svc fleet.SharedService) error
 	}
 	unlock := r.lock(fleetName)
 	defer unlock()
+	if r.leftCluster(fleetName, "ensure "+string(svc)) {
+		return nil
+	}
 	c, err := r.connect()
 	if err != nil {
 		return err

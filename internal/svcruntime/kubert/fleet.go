@@ -354,6 +354,11 @@ func (r *Runtime) teardown(fleetName string, gone bool) error {
 	}
 	pending := kubernetes.PendingTeardown{FleetGone: gone}
 	if err != nil {
+		// The connection's record still says whether its cache volumes go
+		// with the fleet, when its client does not load now.
+		if rec, rerr := pool().Record(r.cluster); rerr == nil {
+			pending.DeleteCaches = gone && rec.DeleteCacheVolumesOnDestroy
+		}
 		return r.pend(fleetName, "", pending, err)
 	}
 	m := c.meta(fleetName)

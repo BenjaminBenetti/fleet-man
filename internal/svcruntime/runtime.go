@@ -49,11 +49,14 @@ type Runtime interface {
 	// before any of them is created there, whichever services the fleet has
 	// on (on a cluster: the fleet's anchor, its headless Service for sibling
 	// DNS and its NetworkPolicies). A create fails when it does. Nothing on
-	// docker, whose fleet network comes with the first service.
+	// docker, whose fleet network comes with the first service. A cluster's
+	// makes nothing for a fleet no record names there any more (its last
+	// instance there left after the caller read the state).
 	PrepareFleet(fleetName string) error
 
 	// EnsureService makes fleetName's svc exist and run, reusing a running
-	// server, starting a stopped one and creating a missing one.
+	// server, starting a stopped one and creating a missing one (on a
+	// cluster, while a record of the fleet names it, as PrepareFleet).
 	EnsureService(fleetName string, svc fleet.SharedService) error
 
 	// InstanceMounts returns the mounts an instance needs to reach

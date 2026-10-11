@@ -44,6 +44,9 @@ type fakePool struct {
 	cs   *fake.Clientset
 	rec  fleet.KubeCluster
 	gate func(context.Context) error
+	// scopeErr, when set, is the connection's client not loading (its
+	// record still reads).
+	scopeErr error
 
 	mu    sync.Mutex
 	execs [][]string
@@ -53,6 +56,9 @@ type fakePool struct {
 func (f *fakePool) Scope(id string) (kubernetes.Scope, error) {
 	if id != testCluster {
 		return kubernetes.Scope{}, kubernetes.ErrClusterNotFound
+	}
+	if f.scopeErr != nil {
+		return kubernetes.Scope{}, f.scopeErr
 	}
 	return kubernetes.Scope{Client: f.cs, Namespace: "fleet", Owner: testOwner, Cluster: testCluster, Gate: f.gate}, nil
 }
@@ -101,7 +107,9 @@ func useFake(t *testing.T, objs ...runtime.Object) *fakePool {
 	connectionFacts = func(context.Context, string) (kubernetes.Facts, error) {
 		return kubernetes.Facts{}, errors.New("no facts")
 	}
-	fleetUsesCluster = func(string, string) bool { return false }
+	// Every fleet has an instance on the connection unless a test says
+	// otherwise (a release, a pending teardown, a purge).
+	fleetUsesCluster = func(string, string) bool { return true }
 	fleetExists = func(string) bool { return false }
 	fp := filepath.Join(t.TempDir(), "footprint.json")
 	origFP := kubernetes.FootprintPath
@@ -515,6 +523,7 @@ func TestTeardownWaitsForTheCluster(t *testing.T) {
 	}
 
 	reachable = true
+	fleetUsesCluster = func(string, string) bool { return false }
 	if left := RunPendingTeardowns(context.Background(), testCluster); left != 0 {
 		t.Fatalf("still pending %d", left)
 	}
@@ -524,9 +533,11 @@ func TestTeardownWaitsForTheCluster(t *testing.T) {
 	}
 
 	// An owner check that refuses is a pending teardown too.
+	fleetUsesCluster = func(fleetName, _ string) bool { return fleetName == "beta" }
 	if err := rt.PrepareFleet("beta"); err != nil {
 		t.Fatal(err)
 	}
+	fleetUsesCluster = func(string, string) bool { return false }
 	f.gate = func(context.Context) error { return kubernetes.ErrOwnerConflict }
 	if err := rt.ReleaseFleet("beta"); !errors.As(err, &pending) || !errors.Is(err, kubernetes.ErrOwnerConflict) {
 		t.Fatalf("release under another owner = %v", err)
@@ -558,6 +569,53 @@ func TestTeardownWaitsForTheCluster(t *testing.T) {
 		t.Fatalf("present clusters %v", got)
 	}
 	_ = m
+}
+
+// TestNothingIsMadeForAFleetThatLeftTheCluster: a prepare or an ensure for
+// a fleet no record names on the connection (a TUI-connect reconcile that
+// read the state before the fleet's last instance there was destroyed and
+// its objects released) makes nothing and records nothing.
+func TestNothingIsMadeForAFleetThatLeftTheCluster(t *testing.T) {
+	f := useFake(t)
+	rt := For(testCluster)
+	fleetUsesCluster = func(string, string) bool { return false }
+	if err := rt.PrepareFleet("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.EnsureService("alpha", fleet.ServiceDebCache); err != nil {
+		t.Fatal(err)
+	}
+	sameList(t, "objects", f.objects(t), nil)
+	if got := PresentClusters("alpha"); len(got) != 0 {
+		t.Fatalf("a fleet with no instance there is recorded on %v", got)
+	}
+}
+
+// TestTeardownOfAConnectionThatDoesNotLoad: a fleet destroy whose
+// connection's client does not load now is owed with the cache volumes'
+// deletion its record asks for, and the pass deletes them.
+func TestTeardownOfAConnectionThatDoesNotLoad(t *testing.T) {
+	f := useFake(t)
+	f.rec.DeleteCacheVolumesOnDestroy = true
+	rt := For(testCluster)
+	if err := rt.EnsureService("alpha", fleet.ServiceDebCache); err != nil {
+		t.Fatal(err)
+	}
+	f.scopeErr = errors.New(`context "gone" not found in the kubeconfig`)
+	var pending *PendingError
+	if err := rt.TeardownFleet("alpha"); !errors.As(err, &pending) {
+		t.Fatalf("teardown = %v, want a PendingError", err)
+	}
+	fp, _ := kubernetes.LoadFootprint()
+	if p := fp.Presence(testCluster, "alpha"); p == nil || p.PendingTeardown == nil || !p.PendingTeardown.FleetGone || !p.PendingTeardown.DeleteCaches {
+		t.Fatalf("presence %+v", p)
+	}
+	f.scopeErr = nil
+	fleetUsesCluster = func(string, string) bool { return false }
+	if left := RunPendingTeardowns(context.Background(), testCluster); left != 0 {
+		t.Fatalf("still pending %d", left)
+	}
+	sameList(t, "objects after the pass", f.objects(t), nil)
 }
 
 // TestTeardownOfARemovedConnection: nothing can reach what is left there,
@@ -649,6 +707,41 @@ func TestCacheUsageAndUpkeep(t *testing.T) {
 	usage, _ = rt.CacheUsage(context.Background(), "alpha")
 	if len(usage) != 1 || !strings.Contains(usage[0].Warning, "auto-expand is off") {
 		t.Fatalf("usage %+v", usage)
+	}
+}
+
+// TestCacheUsageStateIsTheServers: the state a usage report gives is the
+// server's as the cluster shows it now, not what was known of it earlier
+// (a server once up may have been deleted, or replaced by one still
+// starting); while it is not up, a reason the watch found is kept.
+func TestCacheUsageStateIsTheServers(t *testing.T) {
+	f := useFake(t)
+	rt := For(testCluster)
+	m := meta("alpha")
+	if err := rt.EnsureService("alpha", fleet.ServiceDebCache); err != nil {
+		t.Fatal(err)
+	}
+	state := func() string {
+		t.Helper()
+		usage, err := rt.CacheUsage(context.Background(), "alpha")
+		if err != nil || len(usage) != 1 {
+			t.Fatalf("usage %+v %v", usage, err)
+		}
+		return usage[0].State
+	}
+	setReady(testCluster, m, fleet.ServiceDebCache, stateReady)
+	if got := state(); got != stateStarting {
+		t.Fatalf("a server with no pod up reads %q", got)
+	}
+	setReady(testCluster, m, fleet.ServiceDebCache, "failed: its image does not pull: not found")
+	if got := state(); got != "failed: its image does not pull: not found" {
+		t.Fatalf("the watch's reason is lost: %q", got)
+	}
+	if err := f.cs.AppsV1().Deployments("fleet").Delete(context.Background(), m.name(names.SuffixAptCache), metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := state(); got != "stopped" {
+		t.Fatalf("a deleted server reads %q", got)
 	}
 }
 

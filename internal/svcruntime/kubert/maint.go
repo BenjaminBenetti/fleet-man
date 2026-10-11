@@ -169,9 +169,14 @@ func (c *conn) usage(ctx context.Context, m fleetMeta, svc fleet.SharedService) 
 	}
 	u.CapacityBytes = capacity.Value()
 	u.Expandable = c.rec.AutoExpandsDisk() && c.classExpands(ctx, pvc)
-	u.State = readyState(c.cluster, m, svc)
-	if u.State == "" {
-		u.State = c.serverState(ctx, m, svc)
+	// The server as the cluster shows it now (one known up earlier may have
+	// been deleted or be crash-looping since); while it is not up, the
+	// watch's reason when it found one (an image that does not pull, say).
+	u.State = c.serverState(ctx, m, svc)
+	if u.State == stateStarting {
+		if s := readyState(c.cluster, m, svc); strings.HasPrefix(s, "failed") {
+			u.State = s
+		}
 	}
 	if used, err := c.measure(ctx, m, svc); err == nil {
 		u.UsedBytes = used

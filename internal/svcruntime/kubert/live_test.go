@@ -90,7 +90,9 @@ func newLiveRig(t *testing.T, kctx string) *liveRig {
 	origPool, origDaemon, origUses, origExists := pool, daemonID, fleetUsesCluster, fleetExists
 	pool = func() access { return r.pool }
 	daemonID = func() (string, error) { return testDaemon, nil }
-	fleetUsesCluster = func(string, string) bool { return false }
+	// The test's fleets have instances on the connection until a step says
+	// otherwise.
+	fleetUsesCluster = func(string, string) bool { return true }
 	fleetExists = func(string) bool { return false }
 	t.Cleanup(func() { pool, daemonID, fleetUsesCluster, fleetExists = origPool, origDaemon, origUses, origExists })
 	SetHooks(Hooks{})
