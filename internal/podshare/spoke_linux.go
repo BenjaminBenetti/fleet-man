@@ -80,7 +80,7 @@ func RunSpoke(ctx context.Context, o SpokeOptions) error {
 
 	var roots []sharesync.TreeRoot
 	for _, r := range o.Spec.Roots {
-		roots = append(roots, sharesync.TreeRoot{Name: r.Name, Dir: r.Dir(), Reserved: r.Reserved, Skip: r.Skip})
+		roots = append(roots, sharesync.TreeRoot{Name: r.Name, Dir: r.Dir(), Reserved: r.Reserved, Skip: r.Skip, Only: r.Only})
 	}
 	tree, err := sharesync.OpenTree(roots, sharesync.TreeOptions{StateDir: StateDir, FullReason: "share full", Logger: log})
 	if err != nil {

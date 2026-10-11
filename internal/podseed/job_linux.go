@@ -312,6 +312,9 @@ func (r *seedRun) seedRoot(ctx context.Context) error {
 	if err := r.copyVolumes(ctx, mounts, plan.mountpoints); err != nil {
 		return err
 	}
+	if err := r.copySharedVolumes(ctx, mounts, plan.mountpoints); err != nil {
+		return err
+	}
 	return r.installFleet(g)
 }
 
@@ -485,6 +488,177 @@ func (r *seedRun) copyVolumes(ctx context.Context, mounts, mountpoints map[strin
 		r.m.Volumes = append(r.m.Volumes, v.Name)
 	}
 	return nil
+}
+
+// sharedPartialAge is how old a shared volume's partial copy must be before
+// a seed takes it for one an interrupted seed left: a seed of a sibling may
+// be filling it right now.
+const sharedPartialAge = 6 * time.Hour
+
+// copySharedVolumes fills the fleet's named volumes this instance mounts
+// that are missing or empty on the share: copied up from the image at their
+// target, as docker fills a new or empty named volume, else (a missing one)
+// made empty. A missing volume is copied into a partial folder of its own,
+// then renamed into place, so a sibling's seed filling it at the same time
+// loses nothing: the first rename wins and the other copy goes. An empty one
+// is filled where it is, as docker fills one (a running sibling may have it
+// mounted, and would not see a folder renamed over it). A volume holding
+// anything is the fleet's, kept as it is.
+func (r *seedRun) copySharedVolumes(ctx context.Context, mounts, mountpoints map[string]bool) error {
+	if len(r.seed.SharedVolumes) == 0 {
+		return nil
+	}
+	dir := filepath.Join(r.seed.Share, SharedVolumesDir)
+	if err := mkdirOwned(dir, 0o755); err != nil {
+		return fmt.Errorf("the share's volumes: %w", err)
+	}
+	removeStalePartials(dir, time.Now().Add(-sharedPartialAge))
+	for _, v := range r.seed.SharedVolumes {
+		dst := filepath.Join(dir, v.Name)
+		empty := false
+		switch fi, err := os.Lstat(dst); {
+		case err == nil && fi.Mode()&fs.ModeSymlink != 0:
+			// Something in a pod put a link in its place: never followed.
+			if err := os.Remove(dst); err != nil {
+				return fmt.Errorf("shared volume %s: %w", v.Name, err)
+			}
+		case err == nil && !fi.IsDir():
+			return fmt.Errorf("shared volume %s: %s is not a folder; remove it from the share", v.Name, dst)
+		case err == nil && !isEmptyDir(dst):
+			continue
+		case err == nil:
+			empty = true
+		case !errors.Is(err, fs.ErrNotExist):
+			return fmt.Errorf("shared volume %s: %w", v.Name, err)
+		}
+		if empty && !r.copiesUp(v) {
+			continue // nothing to fill it with
+		}
+		r.setPhase("shared volume " + v.Name)
+		tmp, err := os.MkdirTemp(dir, "."+v.Name+".partial-")
+		if err != nil {
+			return fmt.Errorf("shared volume %s: %w", v.Name, err)
+		}
+		if err := r.fillVolume(ctx, v, tmp, mounts, mountpoints); err != nil {
+			removeTree(tmp)
+			return fmt.Errorf("copy up shared volume %s: %w", v.Name, err)
+		}
+		filled, err := placeVolume(tmp, dst, empty)
+		removeTree(tmp)
+		if err != nil {
+			return fmt.Errorf("shared volume %s: %w", v.Name, err)
+		}
+		if filled {
+			r.m.SharedVolumes = append(r.m.SharedVolumes, v.Name)
+		}
+	}
+	return nil
+}
+
+// copiesUp reports whether volume v takes content from the image: it copies
+// up and the image has a folder at its target.
+func (r *seedRun) copiesUp(v Volume) bool {
+	fi, err := os.Stat(filepath.Join(r.src, strings.TrimPrefix(v.Target, "/")))
+	return v.CopyUp && err == nil && fi.IsDir()
+}
+
+// placeVolume puts the filled folder tmp in place at dst: renamed there when
+// dst is missing (false when a sibling's seed put its own there first), or,
+// for an empty dst, its content moved into it and its owner and mode given
+// to it (false when something filled dst meanwhile).
+func placeVolume(tmp, dst string, empty bool) (bool, error) {
+	if !empty {
+		if err := os.Rename(tmp, dst); err != nil {
+			if errors.Is(err, fs.ErrExist) || errors.Is(err, unix.ENOTEMPTY) || errors.Is(err, unix.EEXIST) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	}
+	if !isEmptyDir(dst) {
+		return false, nil
+	}
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		return false, err
+	}
+	for _, e := range entries {
+		// renameat2 RENAME_NOREPLACE: what something put there meanwhile
+		// is kept.
+		if err := unix.Renameat2(unix.AT_FDCWD, filepath.Join(tmp, e.Name()), unix.AT_FDCWD, filepath.Join(dst, e.Name()), unix.RENAME_NOREPLACE); err != nil && !errors.Is(err, unix.EEXIST) {
+			return false, err
+		}
+	}
+	var st unix.Stat_t
+	if err := unix.Lstat(tmp, &st); err != nil {
+		return false, err
+	}
+	if os.Geteuid() == 0 {
+		if err := os.Lchown(dst, int(st.Uid), int(st.Gid)); err != nil {
+			return false, err
+		}
+	}
+	return true, unix.Chmod(dst, st.Mode&0o7777)
+}
+
+// fillVolume fills dir (a new folder) as volume v starts: the image's content
+// at its target when it copies up and the image has a folder there (the
+// home's part remapped), else empty, 0755.
+func (r *seedRun) fillVolume(ctx context.Context, v Volume, dir string, mounts, mountpoints map[string]bool) error {
+	src := filepath.Join(r.src, strings.TrimPrefix(v.Target, "/"))
+	fi, err := os.Stat(src)
+	if !v.CopyUp || err != nil || !fi.IsDir() {
+		return os.Chmod(dir, 0o755)
+	}
+	// The volume's own target is a mountpoint of the root copy; its content
+	// is exactly what this copy is for.
+	own := map[string]bool{}
+	for p := range mountpoints {
+		if p != v.Target {
+			own[p] = true
+		}
+	}
+	c, err := newCopier(r.src, mounts, own, r.seed.Workers, &r.stats)
+	if err != nil {
+		return err
+	}
+	if err := c.copyTree(ctx, src, dir); err != nil {
+		return err
+	}
+	for _, w := range c.warnings {
+		r.m.addWarning("%s", w)
+	}
+	return r.remapVolume(v, dir)
+}
+
+// isEmptyDir reports whether dir has nothing in it (an unreadable one counts
+// as full: it is kept).
+func isEmptyDir(dir string) bool {
+	f, err := os.Open(dir)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(1)
+	return len(names) == 0 && errors.Is(err, io.EOF)
+}
+
+// removeStalePartials removes the partial copies in dir older than before:
+// left by a seed that was cut short.
+func removeStalePartials(dir string, before time.Time) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), ".") || !strings.Contains(e.Name(), ".partial-") {
+			continue
+		}
+		if info, err := e.Info(); err == nil && info.ModTime().Before(before) {
+			removeTree(filepath.Join(dir, e.Name()))
+		}
+	}
 }
 
 // writeKubeletFiles writes the placeholders in root/etc and the files the pod

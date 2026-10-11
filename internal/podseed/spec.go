@@ -155,6 +155,16 @@ type SeedSpec struct {
 	Remap *Remap `json:"remap,omitempty"`
 	// Volumes are copied up from the image on first use.
 	Volumes []Volume `json:"volumes,omitempty"`
+	// Share is where the fleet's share tree (internal/podshare) is in the
+	// job: the share mounted whole, or the copy tier's tree on the instance
+	// disk; "" when it has none. Required with SharedVolumes.
+	Share string `json:"share,omitempty"`
+	// SharedVolumes are the fleet's named volumes the instance mounts (one
+	// a volume's name every instance of the fleet naming it shares), each
+	// the share's SharedVolumesDir/<Name>. One missing or empty there is
+	// copied up from the image at Target (CopyUp), as docker fills a new or
+	// empty named volume; one holding anything is the fleet's, kept.
+	SharedVolumes []Volume `json:"shared_volumes,omitempty"`
 	// Workspace makes the job wait for the workspace tar on its socket;
 	// nil seeds none (a rebuild keeps ws/).
 	Workspace *Workspace `json:"workspace,omitempty"`
@@ -322,6 +332,24 @@ func (s SeedSpec) validate(gen int) error {
 		}
 		seen[v.Name] = true
 		if err := checkAbs("volume target", v.Target); err != nil {
+			return err
+		}
+	}
+	if s.Share != "" {
+		if err := checkAbs("share", s.Share); err != nil {
+			return err
+		}
+	}
+	if len(s.SharedVolumes) > 0 && s.Share == "" {
+		return errors.New("shared volumes need the share")
+	}
+	shared := map[string]bool{}
+	for _, v := range s.SharedVolumes {
+		if !volumeName.MatchString(v.Name) || shared[v.Name] {
+			return fmt.Errorf("shared volume name %q is not one unique path component", v.Name)
+		}
+		shared[v.Name] = true
+		if err := checkAbs("shared volume target", v.Target); err != nil {
 			return err
 		}
 	}

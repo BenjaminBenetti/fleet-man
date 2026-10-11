@@ -41,7 +41,7 @@ func TestLayoutRoots(t *testing.T) {
 }
 
 func TestSpokeSpecValidate(t *testing.T) {
-	good := SpokeSpec{V: SpokeVersion, Roots: []SpokeRoot{{Name: ".claude"}, {Name: ".mnt", Reserved: []string{"opt/data"}}}, UID: 1000, GID: 1000}
+	good := SpokeSpec{V: SpokeVersion, Roots: []SpokeRoot{{Name: ".claude"}, {Name: ".mnt", Reserved: []string{"opt/data"}}, {Name: ".hostbind/0a1b2c3d", Only: []string{"gitconfig"}}}, UID: 1000, GID: 1000}
 	if err := good.Validate(); err != nil {
 		t.Fatalf("Validate(good) = %v", err)
 	}
@@ -53,6 +53,8 @@ func TestSpokeSpecValidate(t *testing.T) {
 		"bad reserved": {V: 1, Roots: []SpokeRoot{{Name: "a", Reserved: []string{"/etc"}}}},
 		"half owner":   {V: 1, Roots: good.Roots, UID: 1000, GID: -1},
 		"bad rescan":   {V: 1, Roots: good.Roots, Rescan: "soon"},
+		"only a path":  {V: 1, Roots: []SpokeRoot{{Name: ".hostbind/0a1b2c3d", Only: []string{"a/b"}}}},
+		"only escapes": {V: 1, Roots: []SpokeRoot{{Name: ".hostbind/0a1b2c3d", Only: []string{".."}}}},
 	} {
 		if err := s.Validate(); err == nil {
 			t.Errorf("%s: Validate took it", name)
