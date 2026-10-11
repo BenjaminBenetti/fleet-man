@@ -50,11 +50,17 @@ func parsePortMappingArg(mapping string) (int, int, error) {
 
 // newPortForwardAddCmd creates the `port-forward add` command.
 func newPortForwardAddCmd() *cobra.Command {
-	return &cobra.Command{
+	var halfClose bool
+	cmd := &cobra.Command{
 		Use:   "add <instance> <local:remote> [local:remote...]",
 		Short: "Forward local ports to an instance",
-		Long:  "Forward one or more local ports to ports inside an instance.\nRuns until interrupted with Ctrl+C.",
-		Args:  cobra.MinimumNArgs(2),
+		Long: `Forward one or more local ports to ports inside an instance.
+Runs until interrupted with Ctrl+C.
+
+On Kubernetes a connection closes about a second after the local side
+half-closes it; --half-close goes through the pod's fleet agent instead,
+so the peer can still answer after EOF.`,
+		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target, instance, err := resolveInstance(args[0], "")
 			if err != nil {
@@ -83,8 +89,8 @@ func newPortForwardAddCmd() *cobra.Command {
 					manager.Shutdown()
 					return err
 				}
-				dial := portforward.NewGRPCTarget(conn.Service(), target.Fleet, target.Instance, remote)
-				if err := manager.Add(key, local, remote, dial); err != nil {
+				dial := portforward.NewGRPCTarget(conn.Service(), target.Fleet, target.Instance, remote, portforward.TargetOptions{HalfClose: halfClose})
+				if err := manager.Add(key, portforward.Forward{LocalPort: local, RemotePort: remote, HalfClose: halfClose}, dial); err != nil {
 					manager.Shutdown()
 					return err
 				}
@@ -102,6 +108,8 @@ func newPortForwardAddCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&halfClose, "half-close", false, "keep reading after the local side half-closes (Kubernetes: through the pod agent)")
+	return cmd
 }
 
 // newPortForwardRemoveCmd creates the `port-forward remove` command.

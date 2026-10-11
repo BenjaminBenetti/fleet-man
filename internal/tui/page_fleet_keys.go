@@ -527,6 +527,7 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 			fleetPage.dlg.fleet = fleetPage.currentFleetName()
 			fleetPage.dlg.inst = instance.Name
 			fleetPage.pfCursor = 0
+			fleetPage.pfHalfClose = false
 			fleetPage.textInput.SetValue("")
 			fleetPage.textInput.Placeholder = "local:remote (e.g. 8080:80)"
 			fleetPage.textInput.CharLimit = 11

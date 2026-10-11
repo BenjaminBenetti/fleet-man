@@ -73,6 +73,10 @@ type fleetPage struct {
 	coderParamInput    textinput.Model // edit-fleet Coder section: shared input for the focused parameter row
 
 	pfCursor int
+	// pfHalfClose is the port-forward dialog's half-close toggle: the next
+	// forward it adds keeps a true half-close (`fleet port-forward add
+	// --half-close`).
+	pfHalfClose bool
 
 	split       splitState // open split pane + session-group restore bookkeeping
 	savedGroups map[string]savedGroup

@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/portforward"
 )
 
 // updatePortForward handles the port forward management dialog.
@@ -23,6 +25,9 @@ func (fleetPage *fleetPage) updatePortForward(m *model, msg tea.Msg) tea.Cmd {
 				return nil
 			case "ctrl+c":
 				return fleetPage.closePortForward(m, key)
+			case "tab":
+				fleetPage.pfHalfClose = !fleetPage.pfHalfClose
+				return nil
 			}
 			var cmd tea.Cmd
 			fleetPage.textInput, cmd = fleetPage.textInput.Update(msg)
@@ -46,6 +51,10 @@ func (fleetPage *fleetPage) updatePortForward(m *model, msg tea.Msg) tea.Cmd {
 				}
 				return nil
 			}
+
+		case "h", "tab":
+			fleetPage.pfHalfClose = !fleetPage.pfHalfClose
+			return nil
 
 		case "up", "k":
 			if fleetPage.pfCursor > 0 {
@@ -85,18 +94,22 @@ func (fleetPage *fleetPage) addPortForward(m *model, key string) tea.Cmd {
 	// The server owns backend access: each accepted connection is tunnelled
 	// to the instance over the server's Forward stream (the data plane), so
 	// the forward works even against a remote server.
-	dial, err := forwardDialer(fleetPage.dlg.fleet, fleetPage.dlg.inst, remote)
+	halfClose := fleetPage.pfHalfClose
+	dial, err := forwardDialer(fleetPage.dlg.fleet, fleetPage.dlg.inst, remote, halfClose)
 	if err != nil {
 		m.message = err.Error()
 		return nil
 	}
-	if err := m.portForwards.Add(key, local, remote, dial); err != nil {
+	if err := m.portForwards.Add(key, portforward.Forward{LocalPort: local, RemotePort: remote, HalfClose: halfClose}, dial); err != nil {
 		m.message = err.Error()
 		return nil
 	}
 
 	fleetPage.textInput.SetValue("")
 	m.message = fmt.Sprintf("Forwarding localhost:%d -> %s:%d", local, fleetPage.dlg.inst, remote)
+	if halfClose {
+		m.message += " (half-close)"
+	}
 	return nil
 }
 
@@ -135,9 +148,21 @@ func parsePortMapping(raw string) (int, int, error) {
 
 func (fleetPage *fleetPage) portForwardHint() string {
 	if fleetPage.dlg.fieldActive {
-		return "[enter] Add  [esc] List  [ctrl+c] Close"
+		return "[enter] Add  [tab] Half-close  [esc] List  [ctrl+c] Close"
 	}
-	return "[j/k] Navigate  [d] Delete selected  [enter] Edit add field  [q/esc] Close"
+	return "[j/k] Navigate  [d] Delete selected  [h] Half-close  [enter] Edit add field  [q/esc] Close"
+}
+
+// portForwardHalfCloseLine is the dialog's half-close toggle: whether the
+// next forward keeps reading after the local side's EOF (on Kubernetes,
+// through the pod agent rather than the cluster's port-forward, which closes
+// about a second after it).
+func (fleetPage *fleetPage) portForwardHalfCloseLine() string {
+	state := dimStyle.Render("off")
+	if fleetPage.pfHalfClose {
+		state = portForwardStyle.Render("on") + dimStyle.Render(" (Kubernetes: via the pod agent)")
+	}
+	return dialogLabel.Render("Half-close:") + " " + state
 }
 
 // ===========================================
@@ -159,21 +184,27 @@ func (fleetPage *fleetPage) renderPortForwardDialog(m *model) string {
 			if i == fleetPage.pfCursor {
 				pfCursor = cursorStyle.Render("> ")
 			}
-			fwdLines.WriteString(fmt.Sprintf("%s%s\n",
+			mark := ""
+			if f.HalfClose {
+				mark = dimStyle.Render(" half-close")
+			}
+			fwdLines.WriteString(fmt.Sprintf("%s%s%s\n",
 				pfCursor,
 				portForwardStyle.Render(f.Label()),
+				mark,
 			))
 		}
 	}
 
 	dialog := fmt.Sprintf(
-		"%s\n\n%s %s\n\n%s\n\n%s %s\n\n%s",
+		"%s\n\n%s %s\n\n%s\n\n%s %s\n%s\n\n%s",
 		dialogTitle.Render("Port forwards"),
 		dialogLabel.Render("Instance:"),
 		fleetExpandedStyle.Render(fleetPage.dlg.fleet+"/"+fleetPage.dlg.inst),
 		strings.TrimRight(fwdLines.String(), "\n"),
 		dialogLabel.Render("Add:"),
 		fleetPage.textInput.View(),
+		fleetPage.portForwardHalfCloseLine(),
 		dialogHint.Render(fleetPage.portForwardHint()),
 	)
 	b.WriteString(portForwardBox.Render(dialog))
