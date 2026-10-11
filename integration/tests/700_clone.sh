@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet clone` copies a running instance into a new one with its own container: the clone keeps the source's apt-installed package, $HOME and uncommitted workspace changes, is stamped with its own name, and the two diverge afterwards.
 set -euo pipefail
 

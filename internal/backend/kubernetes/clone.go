@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -75,19 +76,32 @@ var (
 	// cloneFreeze is how long a freeze of the source may last before the
 	// pod's watchdog thaws it.
 	cloneFreeze = podwire.DefaultFreezeWatchdog
-	// cloneCutWait bounds a frozen source's wait for its snapshot's cut:
-	// what is left of the freeze's watchdog, less a margin.
-	cloneCutWait = cloneFreeze - 5*time.Second
-	// copierResources are a copier's requests: it runs beside the running
-	// source, on its node.
-	copierResources = corev1.ResourceRequirements{Requests: corev1.ResourceList{
+	// cloneFreezeRenew is how often fleetd renews the freeze while it holds
+	// the source, and cloneHoldMax the longest it holds a source frozen: a
+	// snapshot not cut by then (a driver that copies the disk to cut it) or a
+	// final delta not done is of the running source, and the clone
+	// best-effort.
+	cloneFreezeRenew = 10 * time.Second
+	cloneHoldMax     = 2 * time.Minute
+)
+
+// copierResources are a copier's requests: it runs beside the running
+// source, on its node, and asks for little.
+func copierResources() *corev1.ResourceRequirements {
+	return &corev1.ResourceRequirements{Requests: corev1.ResourceList{
 		corev1.ResourceCPU:    resource.MustParse("250m"),
 		corev1.ResourceMemory: resource.MustParse("256Mi"),
 	}}
-)
+}
 
 // The source disk's mount path in a copier.
 const cloneSourcePath = "/fleet-src"
+
+// EnvCloneHoldPause holds a clone's source this long once it is held still
+// (frozen or stopped) before the copy goes on: a knob for tests of a daemon
+// that dies while it holds a source (the pod's watchdog then thaws it).
+// Unset, the hold lasts as long as the copy does.
+const EnvCloneHoldPause = "FLEET_KUBE_CLONE_HOLD_PAUSE"
 
 // The interfaces the handle provides for a clone.
 var (
@@ -139,11 +153,17 @@ type cloning struct {
 	srcEnv  *corev1.Secret
 	running bool
 	srcNode string
+	driver  string
 	plan    ClonePlan
 
+	// jobCtx is the clone job's (its log).
+	jobCtx context.Context
 	// held is the hold on the source in force; bestEffort, when set, says
-	// why the clone is not of one point in time.
+	// why the clone is not of one point in time. holdMu orders the freeze,
+	// its renewals and the thaw.
+	holdMu     sync.Mutex
 	mu         sync.Mutex
+	renewStop  chan struct{}
 	frozen     bool
 	stopped    bool
 	restarting chan error
@@ -154,6 +174,7 @@ type cloning struct {
 }
 
 func (c *cloning) run(ctx context.Context) (*backend.UpResult, error) {
+	c.jobCtx = ctx
 	if err := c.connect(ctx); err != nil {
 		return nil, err
 	}
@@ -309,6 +330,10 @@ func (c *cloning) cloneFacts(ctx context.Context) (CloneFacts, error) {
 	}
 	f.CSIClone = f.CSIClone || preflight.ClonesVolumes(f.Driver)
 	f.SnapshotClass = snapshotClassOf(ctx, c.cs, f.Driver, c.rec.SnapshotClass)
+	if _, refused := refusedDrivers.Load(c.id.cluster + "|" + f.Driver); refused && (f.Method == "" || f.Method == fleet.KubeCloneAuto) {
+		f.CSIClone, f.SnapshotClass = false, "" // it refused this run: copy at once
+	}
+	c.driver = f.Driver
 	return f, nil
 }
 
@@ -336,11 +361,8 @@ func (c *cloning) provision(ctx context.Context) (*backend.UpResult, error) {
 	if err := c.step(ctx, stepApply, fleet.StepApplyManifests, ""); err != nil {
 		return nil, err
 	}
-	o, err := podspec.CloneObjects(podspec.CloneSource{StatefulSet: c.srcSet, SpecSecret: c.srcSpec, EnvSecret: c.srcEnv, Disk: c.srcDisk, Gen: c.gen}, c.cloneInput(source, size))
+	o, err := c.applyDisk(ctx, source, size)
 	if err != nil {
-		return nil, err
-	}
-	if err := c.apply(ctx, KindPVC, o.Disk.Name, true, o.Disk); err != nil {
 		return nil, err
 	}
 	for _, s := range []*corev1.Secret{o.SpecSecret, o.EnvSecret} {
@@ -352,7 +374,17 @@ func (c *cloning) provision(ctx context.Context) (*backend.UpResult, error) {
 	if err := c.step(ctx, stepCloneCopy, fleet.StepSeed, string(c.plan.Tier)); err != nil {
 		return nil, err
 	}
-	if err := c.copyDisk(ctx, o); err != nil {
+	err = c.copyDisk(ctx, o)
+	var refused *diskRefusedError
+	if errors.As(err, &refused) && c.plan.Tier != TierCopy && (c.rec.CloneMethod == "" || c.rec.CloneMethod == fleet.KubeCloneAuto) {
+		// The driver did not make the disk from the source's: it is copied
+		// instead, and the next clones on the connection copy at once.
+		o, err = c.fallBackToCopy(ctx, refused)
+		if err == nil {
+			err = c.copyDisk(ctx, o)
+		}
+	}
+	if err != nil {
 		return nil, err
 	}
 	c.letGo()
@@ -362,6 +394,77 @@ func (c *cloning) provision(ctx context.Context) (*backend.UpResult, error) {
 	}
 	return c.startClone(ctx, o)
 }
+
+// applyDisk renders the clone's objects, its disk made from source (nil: an
+// empty disk a copier fills), and applies the disk.
+func (c *cloning) applyDisk(ctx context.Context, source *corev1.TypedLocalObjectReference, size string) (*podspec.Objects, error) {
+	o, err := podspec.CloneObjects(podspec.CloneSource{StatefulSet: c.srcSet, SpecSecret: c.srcSpec, EnvSecret: c.srcEnv, Disk: c.srcDisk, Gen: c.gen}, c.cloneInput(source, size))
+	if err != nil {
+		return nil, err
+	}
+	if err := c.apply(ctx, KindPVC, o.Disk.Name, true, o.Disk); err != nil {
+		return nil, err
+	}
+	return o, nil
+}
+
+// fallBackToCopy gives up on a disk the driver would not restore or clone:
+// the disk and the Job waiting on it go, and an empty disk is made for a
+// copier, which the source is held still for as the plan says.
+func (c *cloning) fallBackToCopy(ctx context.Context, refused *diskRefusedError) (*podspec.Objects, error) {
+	flog.Warn("kube clone: the driver did not make the clone's disk; copying it instead", "fleet", c.id.fleet, "instance", c.id.name, "tier", c.plan.Tier, "driver", refused.driver, "err", refused)
+	backend.ReportWarning(ctx, fmt.Sprintf("%s; copying the source's disk instead", refused.Error()))
+	refusedDrivers.Store(c.id.cluster+"|"+refused.driver, true)
+	c.letGo()
+	c.deleteTransient()
+	ctx2, cancel := c.cleanupContext()
+	defer cancel()
+	s, _ := c.scope()
+	if _, err := s.deleteAll(ctx2, []objectMeta{{Kind: KindPVC, Name: c.id.sts}}); err != nil {
+		return nil, fmt.Errorf("deleting the clone's refused disk: %w", err)
+	}
+	for {
+		if _, err := c.cs.CoreV1().PersistentVolumeClaims(c.ns).Get(ctx, c.id.sts, metav1.GetOptions{}); gone(err) {
+			break
+		} else if err != nil {
+			return nil, classify(err)
+		}
+		if err := sleepCtx(ctx, time.Second); err != nil {
+			return nil, fmt.Errorf("cancelled: %w", context.Cause(ctx))
+		}
+	}
+	// A source stopped for the restore is running again before the copier
+	// holds it (or stops it) anew.
+	if err := c.waitRestart(); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	c.stopped, c.restarting = false, nil
+	c.mu.Unlock()
+	c.plan = ClonePlan{Tier: TierCopy, Hold: c.plan.Hold, Why: "the driver did not make the disk from the source's"}
+	backend.ReportStep(ctx, fleet.StepSeed, "copy (the driver did not make the disk from the source's)")
+	return c.applyDisk(ctx, nil, "")
+}
+
+// refusedDrivers are the connections' drivers that refused to make a
+// clone's disk from its source's this run (cluster|driver): later clones
+// there copy at once.
+var refusedDrivers sync.Map
+
+// diskRefusedError is a clone's disk its driver would not make from the
+// source's.
+type diskRefusedError struct {
+	tier   CloneTier
+	driver string
+	why    string
+}
+
+func (e *diskRefusedError) Error() string {
+	return fmt.Sprintf("%s: %s did not make the clone's disk from the source's (%s): %s", kubeerr.Misconfigured, e.driver, e.tier, e.why)
+}
+
+// Code is the error's kubernetes: code.
+func (e *diskRefusedError) Code() string { return string(kubeerr.Misconfigured) }
 
 // cloneInput is who the clone is, for its objects.
 func (c *cloning) cloneInput(source *corev1.TypedLocalObjectReference, size string) podspec.CloneInput {
@@ -399,7 +502,6 @@ func (c *cloning) snapshot(ctx context.Context) (string, string, error) {
 	}
 	d := DefaultDeadlines()
 	deadline := time.Now().Add(d.Snapshot)
-	cutBy := time.Now().Add(cloneCutWait)
 	for {
 		v, err := readSnapshot(ctx, c.cs, c.ns, name)
 		if err != nil && !gone(err) {
@@ -414,9 +516,6 @@ func (c *cloning) snapshot(ctx context.Context) (string, string, error) {
 		}
 		if st.cut() || st.ready() {
 			c.letGo()
-		} else if c.isFrozen() && time.Now().After(cutBy) {
-			c.letGo()
-			c.markBestEffort(ctx, "the snapshot was not cut within the source's freeze; it is of the running disk")
 		}
 		if st.ready() {
 			return name, st.RestoreSize, nil
@@ -444,8 +543,13 @@ func (c *cloning) copyDisk(ctx context.Context, o *podspec.Objects) error {
 		spec.Live = live
 		job.Claims = []podspec.JobClaim{{ClaimName: c.srcDisk.Name, Path: cloneSourcePath, ReadOnly: true}}
 		if c.running {
+			// Where the source runs now (it may have been started again
+			// since it was read).
+			if pod, err := c.p.Verify(ctx, c.srcRec.target()); err == nil {
+				c.srcNode = pod.Spec.NodeName
+			}
 			// Beside the running source: its disk is attached to its node.
-			job.Node, job.Resources = c.srcNode, copierResources.DeepCopy()
+			job.Node, job.Resources = c.srcNode, copierResources()
 		}
 	}
 	if job.Resources == nil {
@@ -489,7 +593,7 @@ func (c *cloning) copyDisk(ctx context.Context, o *podspec.Objects) error {
 	}
 	if !res.OK {
 		if strings.Contains(res.Error, podseed.ErrNoInstance.Error()) && c.plan.Tier != TierCopy {
-			return kubeerr.New(kubeerr.Misconfigured, "the clone's disk, restored by %s from the source's, came up empty: its driver did not restore it; set clone_method to copy", c.plan.Tier)
+			return &diskRefusedError{tier: c.plan.Tier, driver: c.driver, why: "the disk came up empty"}
 		}
 		return fmt.Errorf("the clone's disk: %s", res.Error)
 	}
@@ -503,13 +607,15 @@ func (c *cloning) copyDisk(ctx context.Context, o *podspec.Objects) error {
 	return nil
 }
 
-// diskRefused is a copier Job's Pending check: a disk restored from a
-// snapshot or cloned that the provisioner refused (a driver that cannot
-// restore or clone it) fails at once, naming why.
+// diskRefused is a copier Job's Pending check: a disk to restore from a
+// snapshot or clone that the provisioner keeps refusing (a driver that cannot
+// restore or clone it, or whose copy outlasts the provisioner's deadline)
+// fails at once, naming why, rather than waiting out the disk's deadline.
 func (c *cloning) diskRefused(pvc string) func(context.Context) error {
 	if c.plan.Tier == TierCopy {
 		return nil
 	}
+	driver := c.driver
 	return func(ctx context.Context) error {
 		evs, err := c.cs.CoreV1().Events(c.ns).List(ctx, metav1.ListOptions{FieldSelector: "involvedObject.kind=PersistentVolumeClaim,involvedObject.name=" + pvc + ",reason=ProvisioningFailed"})
 		if err != nil {
@@ -520,8 +626,9 @@ func (c *cloning) diskRefused(pvc string) func(context.Context) error {
 				continue
 			}
 			msg := strings.ToLower(ev.Message)
-			if strings.Contains(msg, "data source") || strings.Contains(msg, "datasource") || strings.Contains(msg, "clon") || strings.Contains(msg, "snapshot") {
-				return kubeerr.New(kubeerr.Misconfigured, "the provisioner did not make the clone's disk from the source's (%s): %s; set clone_method to copy", c.plan.Tier, ev.Message)
+			outright := strings.Contains(msg, "data source") || strings.Contains(msg, "datasource") || strings.Contains(msg, "not support") || strings.Contains(msg, "unimplemented")
+			if outright || ev.Count >= 3 {
+				return &diskRefusedError{tier: c.plan.Tier, driver: driver, why: ev.Message}
 			}
 		}
 		return nil
@@ -612,9 +719,16 @@ func (c *cloning) hold(ctx context.Context) error {
 	switch c.plan.Hold {
 	case HoldFreeze:
 		c.freeze(ctx)
-		return nil
 	case HoldStopSource:
-		return c.stopSource(ctx)
+		if err := c.stopSource(ctx); err != nil {
+			return err
+		}
+	}
+	if pause, ok := parseTimeout(os.Getenv(EnvCloneHoldPause)); ok && c.isHeld() {
+		flog.Info("kube clone: holding the source ("+EnvCloneHoldPause+")", "fleet", c.id.fleet, "src", c.src.sts, "pause", pause.String())
+		if err := sleepCtx(ctx, pause); err != nil {
+			return fmt.Errorf("cancelled: %w", context.Cause(ctx))
+		}
 	}
 	return nil
 }
@@ -623,12 +737,6 @@ func (c *cloning) isHeld() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.frozen || c.stopped
-}
-
-func (c *cloning) isFrozen() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.frozen
 }
 
 // sourceSession is the running source's agent session.
@@ -640,17 +748,24 @@ func (c *cloning) sourceSession(ctx context.Context) (*AgentSession, error) {
 }
 
 // freeze freezes the source's user processes; where it cannot, the clone
-// goes on live and is best-effort.
+// goes on live and is best-effort. The freeze's watchdog thaws the source
+// cloneFreeze after fleetd last renewed it, which fleetd does while the hold
+// lasts, for at most cloneHoldMax: a fleetd that dies leaves the source
+// frozen no longer than the watchdog.
 func (c *cloning) freeze(ctx context.Context) {
+	c.holdMu.Lock()
+	defer c.holdMu.Unlock()
 	sess, err := c.sourceSession(ctx)
 	if err == nil {
 		var info podwire.FreezeInfo
 		err = sess.Client().Call(ctx, podwire.MethodFreeze, podwire.FreezeArgs{WatchdogMS: cloneFreeze.Milliseconds()}, &info)
 		if err == nil {
+			stop := make(chan struct{})
 			c.mu.Lock()
-			c.frozen = true
+			c.frozen, c.renewStop = true, stop
 			c.mu.Unlock()
 			flog.Info("kube clone: froze the source", "fleet", c.id.fleet, "src", c.src.sts, "settle_ms", info.SettleMS, "sync_ms", info.SyncMS)
+			go c.renewFreeze(stop, time.Now())
 			return
 		}
 	}
@@ -661,7 +776,42 @@ func (c *cloning) freeze(ctx context.Context) {
 	case err != nil:
 		why = "freezing it failed: " + err.Error()
 	}
-	c.markBestEffort(ctx, "the source ran on while it was copied ("+why+"); files written meanwhile may differ (set clone_consistency to stop-source to stop it instead)")
+	c.markBestEffort("the source ran on while it was copied (" + why + "); files written meanwhile may differ (set clone_consistency to stop-source to stop it instead)")
+}
+
+// renewFreeze renews the source's freeze every cloneFreezeRenew until stop,
+// and lets the source go once it has been frozen cloneHoldMax.
+func (c *cloning) renewFreeze(stop <-chan struct{}, since time.Time) {
+	t := time.NewTicker(cloneFreezeRenew)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+		}
+		if time.Since(since) >= cloneHoldMax {
+			c.markBestEffort(fmt.Sprintf("the copy outlasted the longest fleet holds a source frozen (%s), so the source ran on before it ended", cloneHoldMax))
+			c.letGo()
+			return
+		}
+		c.holdMu.Lock()
+		c.mu.Lock()
+		frozen := c.frozen
+		c.mu.Unlock()
+		if frozen {
+			ctx, cancel := context.WithTimeout(c.p.ctx, cloneFreezeRenew)
+			sess, err := c.sourceSession(ctx)
+			if err == nil {
+				err = sess.Client().Call(ctx, podwire.MethodFreeze, podwire.FreezeArgs{WatchdogMS: cloneFreeze.Milliseconds()}, nil)
+			}
+			cancel()
+			if err != nil {
+				flog.Warn("kube clone: renewing the source's freeze; its watchdog thaws it", "fleet", c.id.fleet, "src", c.src.sts, "err", err)
+			}
+		}
+		c.holdMu.Unlock()
+	}
 }
 
 // syncSource flushes the running source's disk.
@@ -717,9 +867,15 @@ func (c *cloning) sourceHandle() *Backend {
 // best-effort when the watchdog thawed it first), a stopped one started
 // again, which the clone waits for before it ends (waitRestart).
 func (c *cloning) letGo() {
+	c.holdMu.Lock()
+	defer c.holdMu.Unlock()
 	c.mu.Lock()
 	frozen, stopped := c.frozen, c.stopped && c.restarting == nil
 	c.frozen = false
+	if c.renewStop != nil {
+		close(c.renewStop)
+		c.renewStop = nil
+	}
 	if stopped {
 		c.restarting = make(chan error, 1)
 	}
@@ -736,9 +892,9 @@ func (c *cloning) letGo() {
 		switch {
 		case err != nil:
 			flog.Warn("kube clone: thawing the source; its watchdog thaws it", "fleet", c.id.fleet, "src", c.src.sts, "err", err)
-			c.markBestEffort(context.Background(), "the source's thaw could not be confirmed, so the copy may have outlasted its freeze")
+			c.markBestEffort("the source's thaw could not be confirmed, so the copy may have outlasted its freeze")
 		case th.ByWatchdog:
-			c.markBestEffort(context.Background(), fmt.Sprintf("the copy outlasted the source's freeze (%s), so the source ran on before it ended", cloneFreeze))
+			c.markBestEffort(fmt.Sprintf("the source's freeze ended (its %s watchdog) before the copy did, so the source ran on before it ended", cloneFreeze))
 		default:
 			flog.Info("kube clone: thawed the source", "fleet", c.id.fleet, "src", c.src.sts)
 		}
@@ -769,12 +925,13 @@ func (c *cloning) waitRestart() error {
 
 // markBestEffort marks the clone best-effort, with why, once: its banner
 // says so.
-func (c *cloning) markBestEffort(ctx context.Context, why string) {
+func (c *cloning) markBestEffort(why string) {
 	c.mu.Lock()
 	first := c.bestEffort == ""
 	if first {
 		c.bestEffort = why
 	}
+	ctx := c.jobCtx
 	c.mu.Unlock()
 	if first {
 		c.warn(ctx, "best-effort clone: "+why)

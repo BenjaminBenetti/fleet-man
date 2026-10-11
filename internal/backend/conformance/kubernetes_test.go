@@ -40,6 +40,12 @@ func init() {
 // disks; unset leaves it to the connection's auto pick.
 const envConformanceStorageClass = "FLEET_CONFORMANCE_KUBE_STORAGE_CLASS"
 
+// envConformanceSnapshotClass sets the connection's snapshot_class, and
+// envConformanceCloneConsistency its clone_consistency.
+const (
+	envConformanceSnapshotClass    = "FLEET_CONFORMANCE_KUBE_SNAPSHOT_CLASS"
+	envConformanceCloneConsistency = "FLEET_CONFORMANCE_KUBE_CLONE_CONSISTENCY"
+)
 
 // kubernetesTarget is the kubernetes backend as fleetd binds it, on a
 // connection to the selected kube context (the current one when none is
@@ -84,6 +90,11 @@ func kubernetesTarget(t *testing.T, sel backendtest.Selection) backendtest.Targe
 		// a class with snapshots (csi-hostpath-sc) clones by snapshot and CSI
 		// clone, one without (minikube's standard) by copying.
 		StorageClass: os.Getenv(envConformanceStorageClass),
+		// A snapshot class that does not exist leaves a stopped instance's
+		// clone to a CSI clone (and its fallback to a copy).
+		SnapshotClass: os.Getenv(envConformanceSnapshotClass),
+		// stop-source has a clone stop its running source for the final copy.
+		CloneConsistency: fleet.KubeCloneConsistency(os.Getenv(envConformanceCloneConsistency)),
 	}
 	conn, err := kubeexec.Load(rec, kubeexec.Options{})
 	if err != nil {

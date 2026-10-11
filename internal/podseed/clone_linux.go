@@ -33,11 +33,6 @@ var cloneImageRoot = "/"
 // is the source's alone.
 var cloneTops = []string{DirRoot, DirRootExtra, DirWorkspace, DirFleet, DirMeta}
 
-// ErrNoInstance is a disk that holds no instance root: a snapshot or CSI clone
-// that came up empty (a driver that ignored the data source), or a copier
-// pointed at the wrong disk.
-var ErrNoInstance = errors.New("the disk holds no instance root (no root manifest)")
-
 // cloneExcluded names what a copier never copies, relative to the disk: the
 // source's PID 1 logs and trashed manifests.
 func cloneExcluded(rel string) bool {

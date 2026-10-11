@@ -52,6 +52,11 @@ const (
 // its final delta.
 const DefaultClonePasses = 3
 
+// ErrNoInstance is a disk that holds no instance root: a snapshot or CSI clone
+// that came up empty (a driver that ignored the data source), or a copier
+// pointed at the wrong disk.
+var ErrNoInstance = errors.New("the disk holds no instance root (no root manifest)")
+
 // JobSpec is job.json, what fleetd stages for `fleet pod-job`. Unknown fields
 // are ignored, so an older pod binary still runs a newer daemon's spec; a
 // newer V is refused.

@@ -19,7 +19,8 @@ func TestSelectCloneTier(t *testing.T) {
 		refused string
 	}{
 		{"running, snapshots", CloneFacts{SourceRunning: true, Driver: csi, SnapshotClass: "snap", CSIClone: true}, TierSnapshot, HoldFreeze, "snap", ""},
-		{"stopped, CSI clone", CloneFacts{Driver: csi, SnapshotClass: "snap", CSIClone: true}, TierCSIClone, HoldNone, "", ""},
+		{"stopped, snapshots and CSI clone", CloneFacts{Driver: csi, SnapshotClass: "snap", CSIClone: true}, TierSnapshot, HoldNone, "snap", ""},
+		{"stopped, CSI clone", CloneFacts{Driver: csi, CSIClone: true}, TierCSIClone, HoldNone, "", ""},
 		{"stopped, snapshots only", CloneFacts{Driver: csi, SnapshotClass: "snap"}, TierSnapshot, HoldNone, "snap", ""},
 		{"running, CSI clone only", CloneFacts{SourceRunning: true, Driver: csi, CSIClone: true}, TierCopy, HoldFreeze, "", ""},
 		{"running, nothing", CloneFacts{SourceRunning: true, Driver: "ebs.csi.aws.com"}, TierCopy, HoldFreeze, "", ""},

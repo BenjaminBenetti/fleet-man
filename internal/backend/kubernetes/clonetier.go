@@ -12,8 +12,9 @@ import (
 //	               source's disk is flushed (and its user processes frozen,
 //	               where the pod can be) and snapshotted at one point in time,
 //	               and the clone's disk restored from the snapshot.
-//	T1b csi-clone  the source is stopped and its driver clones volumes: the
-//	               clone's disk is a CSI clone of the source's.
+//	T1b csi-clone  no snapshot class, the source is stopped and its driver
+//	               clones volumes: the clone's disk is a CSI clone of the
+//	               source's.
 //	T2  copy       any disk: a copier Job beside the source copies it live in
 //	               passes, then takes the final delta while the source is held
 //	               still (frozen, or stopped with clone_consistency
@@ -114,10 +115,10 @@ func selectCloneTier(f CloneFacts) (ClonePlan, error) {
 		return ClonePlan{Tier: TierCopy, Hold: hold, Why: "clone_method copy"}, nil
 	}
 	switch {
-	case f.Driver != "" && !f.SourceRunning && f.CSIClone:
-		return ClonePlan{Tier: TierCSIClone, Hold: HoldNone, Why: "the instance is stopped and " + f.Driver + " clones volumes"}, nil
 	case f.Driver != "" && f.SnapshotClass != "":
 		return snapshot("snapshot class " + f.SnapshotClass + " serves " + f.Driver), nil
+	case f.Driver != "" && !f.SourceRunning && f.CSIClone:
+		return ClonePlan{Tier: TierCSIClone, Hold: HoldNone, Why: "the instance is stopped and " + f.Driver + " clones volumes"}, nil
 	case f.Driver == "":
 		return ClonePlan{Tier: TierCopy, Hold: hold, Why: "the instance's disk is not a CSI volume"}, nil
 	}
