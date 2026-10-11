@@ -151,3 +151,23 @@ _be_control_mode() {  # <ref> <name>
 # The share tree is bind-mounted into every instance: writes on either side are
 # visible on the other at once.
 _be_share_sync() { :; }  # <fleet>
+
+# _be_service_container <fleet> <service> — the server's container name.
+_be_service_container() {
+  case "$2" in
+    buildkit) printf 'fleet-%s-buildkit\n' "$1" ;;
+    debcache) printf 'fleet-%s-aptcache\n' "$1" ;;
+    imagecache) printf 'fleet-%s-imgcache\n' "$1" ;;
+    *) fail "no shared service $2" ;;
+  esac
+}
+
+_be_service_status() {  # <fleet> <service>
+  local running
+  running=$(docker inspect -f '{{.State.Running}}' "$(_be_service_container "$1" "$2")" 2>/dev/null) || { echo absent; return 0; }
+  if [ "${running}" = "true" ]; then echo running; else echo stopped; fi
+}
+
+_be_service_remove() {  # <fleet> <service>
+  docker rm -f "$(_be_service_container "$1" "$2")" >/dev/null 2>&1 || true
+}

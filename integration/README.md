@@ -127,6 +127,7 @@ helpers in `common.sh`, which dispatch to `backends/<backend>.sh`:
 | `itest_workspace_exists`, `assert_workspace_exists` / `_absent`, `itest_workspace_test`, `_read`, `_write`, `_git` | the instance's checkout |
 | `itest_control_test`, `_read`, `_mode` | the instance's `/fleet-mounts/control` dir |
 | `itest_share_dir`, `itest_share_sync` | the fleet's shared-mount tree on the daemon host, and waiting for it to sync |
+| `itest_service_status`, `itest_service_remove`, `itest_wait_service` | a fleet's shared service server (`buildkit`, `debcache`, `imagecache`): a host container, or a Deployment on a cluster |
 | `itest_install_local_deb`, `itest_local_deb_status` | apt-install a one-file package built inside the instance (no network), and whether it is still installed |
 | `itest_poison_docker`, `itest_poison_docker_saw`, `itest_poison_docker_log` | put the docker stand-in on the daemon's PATH (`record` or `poison`), and read what it saw |
 | `itest_backend_is` | for the rare step with no counterpart elsewhere (a host bind) |
@@ -174,10 +175,14 @@ kubernetes selection.
 
 The `8xx_k8s_*` tests check what only a cluster has (a fleetd stopped
 mid-seed, a substituted pod, a crash loop parked, a cut to the API server, a
-restricted namespace, a compose refusal, exec upgrades). They are marked
-`k8s` and pass at once on devcontainer, saying so. They reach the cluster
-through the `itest_k8s_*` helpers of `backends/kubernetes.sh` (kubectl on the
-run's context and namespace, the objects of an instance key, its pod).
+restricted namespace, a compose refusal, exec upgrades, a fleet's own
+objects, the cloud metadata block). They are marked `k8s` and pass at once on
+devcontainer, saying so. They reach the cluster through the `itest_k8s_*`
+helpers of `backends/kubernetes.sh` (kubectl on the run's context and
+namespace, the objects of an instance key, its pod, a fleet's objects).
+`tests/811_k8s_metadata_block.sh` needs a network plugin that enforces
+NetworkPolicies (`FLEET_QA_MINIKUBE_FLAGS=--cni=calico`) and passes saying so
+on one that does not.
 
 ## Prerequisites
 

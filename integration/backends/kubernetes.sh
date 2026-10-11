@@ -415,6 +415,61 @@ _be_control_mode() { _be_not_yet itest_control_mode P3.0; }
 
 _be_share_sync() { _be_not_yet itest_share_sync P4.6; }
 
+# --- a fleet's own objects (svcruntime/kubert) ---
+
+# _be_fleet_prefix <fleet> — "fs-<fleet>-", what the fleet's objects on the
+# connection are named up to their h8 (names.FleetObject).
+_be_fleet_prefix() { printf 'fs-%s-\n' "$(_be_slug "$1" 24)"; }
+
+# itest_k8s_fleet_objects <fleet> [kinds] — the fleet's objects on the test's
+# connection (its anchor, Services, NetworkPolicies, Deployments and cache
+# volumes by default), kind/name per line, those being deleted included.
+itest_k8s_fleet_objects() {
+  local id prefix
+  id=$(_be_cluster_id)
+  prefix=$(_be_fleet_prefix "$1")
+  [ -n "${id}" ] || return 0
+  itest_k8s_kubectl get "${2:-configmaps,services,networkpolicies,deployments,persistentvolumeclaims}" \
+    -l "app.kubernetes.io/managed-by=fleet,fleet.dev/cluster=${id},fleet.dev/fleet" -o name 2>/dev/null \
+    | awk -F/ -v p="${prefix}" '
+        # fs-<fleet>-<h8>-<suffix>: exactly the h8 and a suffix after the
+        # prefix, so fleet "itest" never takes fleet "itest-fleet"'\''s.
+        substr($2, 1, length(p)) == p {
+          rest = substr($2, length(p) + 1)
+          if (index(rest, "-") == 9 && index(substr(rest, 10), "-") == 0) print
+        }' || true
+}
+
+# itest_k8s_fleet_object <fleet> <kind> <suffix> — the name of one of the
+# fleet's objects (suffix: anchor, net, instances, caches, egress, aptcache,
+# imgcache, buildkit); empty when there is none.
+itest_k8s_fleet_object() {
+  itest_k8s_fleet_objects "$1" "$2" | awk -F/ -v s="-$3" 'substr($2, length($2) - length(s) + 1) == s { print $2; exit }'
+}
+
+_be_service_suffix() {
+  case "$1" in
+    buildkit) echo buildkit ;;
+    debcache) echo aptcache ;;
+    imagecache) echo imgcache ;;
+    *) fail "no shared service $1" ;;
+  esac
+}
+
+_be_service_status() {  # <fleet> <service>
+  local d avail
+  d=$(itest_k8s_fleet_object "$1" deployments "$(_be_service_suffix "$2")")
+  [ -n "${d}" ] || { echo absent; return 0; }
+  avail=$(itest_k8s_kubectl get deployment "${d}" -o 'jsonpath={.status.availableReplicas}' 2>/dev/null || true)
+  if [ "${avail:-0}" -ge 1 ] 2>/dev/null; then echo running; else echo starting; fi
+}
+
+_be_service_remove() {  # <fleet> <service>
+  local d
+  d=$(itest_k8s_fleet_object "$1" deployments "$(_be_service_suffix "$2")")
+  [ -z "${d}" ] || itest_k8s_kubectl delete deployment "${d}" --wait=true >/dev/null 2>&1 || true
+}
+
 # --- for the Kubernetes-only tests (8xx) ---
 #
 # Tests that check what only a cluster has (a pod replaced behind fleet's
