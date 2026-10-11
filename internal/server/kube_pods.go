@@ -188,6 +188,9 @@ type kubePods struct {
 	// (kubePublishFor; tests stand in for the backend) gives them.
 	ports      *portPublisher
 	publishFor func(*fleet.Instance) ([]backend.PublishedPort, portDial, bool)
+	// evac moves a fleet off a node the cluster empties
+	// (kube_evacuate.go).
+	evac *kubeEvacuations
 
 	wake chan struct{}
 
@@ -223,6 +226,7 @@ func newKubePods(svc *service) *kubePods {
 		byName:        map[string]kubeRef{},
 	}
 	k.readBack = k.readBackRolling
+	k.evac = newKubeEvacuations(k)
 	return k
 }
 
@@ -273,6 +277,19 @@ func (k *kubePods) onState(st *state.State) {
 func (k *kubePods) poke(clusterID, sts string) {
 	k.mu.Lock()
 	k.pending[kubeRef{clusterID, sts}] = true
+	k.mu.Unlock()
+	k.signal()
+}
+
+// pokeFleet marks every instance of the fleet on the connection for
+// evaluation.
+func (k *kubePods) pokeFleet(clusterID, fleetName string) {
+	k.mu.Lock()
+	for ref, ki := range k.insts {
+		if ref.cluster == clusterID && ki.fleet == fleetName {
+			k.pending[ref] = true
+		}
+	}
 	k.mu.Unlock()
 	k.signal()
 }
@@ -512,6 +529,11 @@ func (k *kubePods) evaluate(ctx context.Context, ref kubeRef) {
 			restart := *r
 			ki.notice, ki.sessionsEnded = &restart, obs.SessionsEnded
 			flog.Warn("kube: the cluster restarted an instance; its sessions ended", "fleet", ki.fleet, "instance", ki.name, "cause", string(r.Cause))
+			if r.Cause == backend.RestartFleetMoved {
+				// The move started it again as a Fleet start does, its
+				// post-start work included.
+				ki.postStarted = r.ID
+			}
 		} else {
 			// Fleet itself is starting or stopping it: its own start runs
 			// the post-start work.
@@ -544,9 +566,27 @@ func (k *kubePods) evaluate(ctx context.Context, ref kubeRef) {
 		park = func() { k.park(ctx, ref, fleetName, name, key, l) }
 	}
 	kr := kubeRuntime(obs, ki)
+	moving, blocked := k.evac.state(ref.cluster, ki.fleet)
+	kr.NodeCordonedMoving = moving || (obs.MovingOff != "" && obs.Live != backend.LiveStatusRunning)
+	kr.MoveBlocked = blocked
 	fleetName, name := ki.fleet, ki.name
 	inst := ki.inst
 	k.mu.Unlock()
+
+	if running {
+		switch {
+		case obs.Holder && obs.Disrupted != "":
+			// Its pod holds the fleet's share on a node the cluster empties:
+			// the fleet moves off it together.
+			k.evac.want(ctx, ref.cluster, fleetName, obs.Node, obs.Disrupted)
+		case obs.MovingOff != "" && (obs.Live != backend.LiveStatusRunning || obs.Node == obs.MovingOff):
+			// A move a daemon began and did not finish (it stopped before
+			// starting the fleet again).
+			k.evac.want(ctx, ref.cluster, fleetName, obs.MovingOff, "the daemon restarted during a move")
+		case obs.Holder && obs.Node != "":
+			k.evac.settled(ref.cluster, fleetName)
+		}
+	}
 
 	// A running instance's published ports listen on this host; a stopped
 	// one's close.

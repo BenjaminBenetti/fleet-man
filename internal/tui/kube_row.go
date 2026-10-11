@@ -36,6 +36,20 @@ func kubeRowNote(rt *fleetgrpc.InstanceRuntime) string {
 	return "sessions reset: " + k.GetRestartCause()
 }
 
+// kubeMoveNote is what a Kubernetes instance's row says of a node the
+// cluster is emptying under its fleet: the fleet being moved off it
+// together, or why it cannot be ("its share is node-local, class
+// standard"); "" otherwise.
+func kubeMoveNote(k *fleetgrpc.KubeInstanceRuntime) string {
+	switch {
+	case k.GetNodeCordonedMoving():
+		return "node cordoned: fleet moving"
+	case k.GetMoveBlocked() != "":
+		return "node cordoned: fleet can't move (" + k.GetMoveBlocked() + ")"
+	}
+	return ""
+}
+
 // kubeClusterNote is what a connection's health means for the instances on
 // it: "cluster unreachable" when its API server does not answer, "cluster
 // login expired" when it refuses the connection's credentials, "" otherwise
@@ -88,9 +102,7 @@ func (m *model) kubeRunningNotes(inst *fleet.Instance, rt *fleetgrpc.InstanceRun
 		notes = append(notes, note)
 	}
 	add(kubePodNote(k.GetPodReason()))
-	if k.GetNodeCordonedMoving() {
-		add("node cordoned: fleet moving")
-	}
+	add(kubeMoveNote(k))
 	agentUnknown = rt.GetAgentActivity() == fleetgrpc.AgentActivity_AGENT_ACTIVITY_UNKNOWN || cluster != "" ||
 		k.GetAgent() == fleetgrpc.KubeAgentState_KUBE_AGENT_STATE_UNKNOWN
 	if k.GetAgent() == fleetgrpc.KubeAgentState_KUBE_AGENT_STATE_RECONNECTING && cluster == "" {

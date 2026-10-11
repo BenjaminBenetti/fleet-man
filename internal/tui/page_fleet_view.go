@@ -312,6 +312,11 @@ func (fleetPage *fleetPage) viewFleetList(m *model) string {
 					if note := kubeFailedNote(instance); note != "" {
 						notes = append(notes, note)
 					}
+					if note := kubeMoveNote(rt.GetKube()); note != "" && instance.Status == fleet.StatusStopped {
+						// Its fleet is moving (a start waits for it), or is
+						// stuck on the node.
+						notes = append(notes, note)
+					}
 				}
 				if instance.Status == fleet.StatusRunning && agentUnknown {
 					notes = append(notes, "agent ?")

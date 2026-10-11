@@ -967,6 +967,16 @@ func (w *kubeWorker) status() *fleetgrpc.KubeClusterStatus {
 	if st.Capabilities != nil && w.m.svc != nil && w.m.svc.kubeRecovery != nil {
 		st.Capabilities.PendingTeardowns = w.m.svc.kubeRecovery.pendingTeardowns(w.rec.ID)
 	}
+	if w.m.svc != nil && w.m.svc.kubePods != nil {
+		// A fleet moving off a node the cluster empties, or unable to.
+		if moving, warnings := w.m.svc.kubePods.evac.status(w.rec.ID); moving || len(warnings) > 0 {
+			if st.Capabilities == nil {
+				st.Capabilities = &fleetgrpc.KubeCapabilities{}
+			}
+			st.Capabilities.NodeCordonedMoving = moving
+			st.Warnings = append(st.Warnings, warnings...)
+		}
+	}
 	if exp := w.cred.ExpiresAt; !exp.IsZero() {
 		if st.Capabilities == nil {
 			st.Capabilities = &fleetgrpc.KubeCapabilities{}

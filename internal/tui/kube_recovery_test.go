@@ -96,6 +96,9 @@ func TestKubeRunningRowNotes(t *testing.T) {
 		{"moving", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY,
 			&fleetgrpc.InstanceRuntime{Kube: &fleetgrpc.KubeInstanceRuntime{NodeCordonedMoving: true}},
 			[]string{"running · node cordoned: fleet moving"}, nil, false},
+		{"cannot move", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY,
+			&fleetgrpc.InstanceRuntime{Kube: &fleetgrpc.KubeInstanceRuntime{MoveBlocked: "its share is node-local, class standard"}},
+			[]string{"running · node cordoned: fleet can't move (its share is node-local, class standard)"}, []string{"fleet moving"}, false},
 		{"tampered", fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY,
 			&fleetgrpc.InstanceRuntime{Kube: &fleetgrpc.KubeInstanceRuntime{PodReason: "kubernetes:tampered"}},
 			[]string{"running · pod tampered with: refused"}, nil, false},
@@ -195,6 +198,22 @@ func TestKubeFailedRowNotes(t *testing.T) {
 		// Only a job a rebuild retries says R retries it.
 		if strings.Contains(line, kubeRetryHint) != strings.HasSuffix(tc.want, kubeRetryHint) {
 			t.Errorf("%s: row %q, retry hint wanted %v", tc.inst.Name, line, strings.HasSuffix(tc.want, kubeRetryHint))
+		}
+	}
+	// A stopped instance of a fleet that is moving says so (its start would
+	// wait for the move); a failed one does not.
+	for _, tc := range []struct {
+		inst *fleet.Instance
+		want string
+	}{
+		{kubeInst("gamma", fleet.StatusStopped, ""), "stopped · node cordoned: fleet moving"},
+		{kubeInst("delta", fleet.StatusFailed, "devcontainer up failed"), "failed"},
+	} {
+		m, fp := kubeRowModel(t, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, tc.inst)
+		m.runtime["alpha/"+tc.inst.Name] = &fleetgrpc.InstanceRuntime{Fleet: "alpha", Instance: tc.inst.Name, Kube: &fleetgrpc.KubeInstanceRuntime{NodeCordonedMoving: true}}
+		line := rowLine(t, m, fp, tc.inst.Name)
+		if !strings.Contains(line, tc.want) || (tc.want == "failed" && strings.Contains(line, "cordoned")) {
+			t.Errorf("%s: row %q, want %q", tc.inst.Name, line, tc.want)
 		}
 	}
 	// Only cluster rows read kubernetes codes.
