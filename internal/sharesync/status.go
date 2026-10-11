@@ -10,6 +10,9 @@ import (
 // status` and the fleet options.
 type Status struct {
 	Roots []RootStatus
+	// HostPaused says why decisions that keep a conflict copy wait (the
+	// daemon host's disk is too full for the copy).
+	HostPaused string
 }
 
 // RootStatus is one root's state.
@@ -54,6 +57,7 @@ func (s Status) PauseReasons() []string {
 			out = append(out, reason)
 		}
 	}
+	add(s.HostPaused)
 	for _, r := range s.Roots {
 		add(r.Paused)
 		add(r.Broken)
@@ -67,6 +71,9 @@ func (s Status) PauseReasons() []string {
 // Status returns a snapshot of the hub.
 func (h *Hub) Status() Status {
 	var st Status
+	if reason := h.hostFull.Load(); reason != nil {
+		st.HostPaused = *reason
+	}
 	for _, root := range h.order {
 		root.mu.Lock()
 		rs := RootStatus{Root: root.name, Rev: root.rev, Bytes: root.total, Cap: root.cap}

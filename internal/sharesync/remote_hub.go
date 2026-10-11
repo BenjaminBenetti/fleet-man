@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -99,6 +100,9 @@ type remoteSide struct {
 	ctx  context.Context
 
 	hellos chan wireMsg
+	// reports and needs count the spoke's calls being served
+	// (maxRemoteReports, maxRemoteNeeds).
+	reports, needs atomic.Int32
 
 	mu       sync.Mutex
 	attached bool
@@ -140,9 +144,25 @@ func (r *remoteSide) read() {
 				return
 			}
 		case msgReport:
-			go r.report(m)
+			if r.reports.Add(1) > maxRemoteReports {
+				r.reports.Add(-1)
+				r.w.answerErr(m.ID, errBusy)
+				continue
+			}
+			go func() {
+				defer r.reports.Add(-1)
+				r.report(m)
+			}()
 		case msgNeed:
-			go r.need(m)
+			if r.needs.Add(1) > maxRemoteNeeds {
+				r.needs.Add(-1)
+				r.w.answerErr(m.ID, errBusy)
+				continue
+			}
+			go func() {
+				defer r.needs.Add(-1)
+				r.need(m)
+			}()
 		default:
 			if m.ID != 0 {
 				r.w.answerErr(m.ID, fmt.Errorf("sharesync: the hub does not take %q", m.T))
@@ -150,6 +170,9 @@ func (r *remoteSide) read() {
 		}
 	}
 }
+
+// errBusy refuses a spoke's call past what the hub serves of it at once.
+var errBusy = errors.New("sharesync: the hub is serving as many of the spoke's calls as it takes at once; try again")
 
 // awaitHello reads the spoke's hello, chunk by chunk, bounded. final is the
 // ID of its last chunk, which the answer goes to (0 when none came).

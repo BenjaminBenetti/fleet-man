@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -341,5 +342,86 @@ func TestSpokeBulkEndsWithItsContext(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("ServeBulk still waits on a bulk connection after its context ended")
+	}
+}
+
+// slowHub is a RemoteHub whose reports wait until released.
+type slowHub struct {
+	release chan struct{}
+	served  atomic.Int32
+}
+
+func (h *slowHub) Attach(context.Context, SideInfo, Peer, Hello) (Welcome, error) {
+	return Welcome{Epochs: map[string]string{}}, nil
+}
+
+func (h *slowHub) Report(ctx context.Context, _ string, r Report) (Reply, error) {
+	h.served.Add(1)
+	select {
+	case <-h.release:
+	case <-ctx.Done():
+	}
+	return Reply{}, nil
+}
+
+// TestRemoteHubBoundsTheSpokesCallsInFlight: a spoke that floods the hub
+// with reports gets the ones past maxRemoteReports refused at once, never a
+// goroutine each, and is served again once the hub catches up.
+func TestRemoteHubBoundsTheSpokesCallsInFlight(t *testing.T) {
+	hub := &slowHub{release: make(chan struct{})}
+	hubEnd, spokeEnd := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		_ = ServeRemote(ctx, hubEnd, hub, SideInfo{ID: "pod", Location: "c"}, RemoteOptions{HelloTimeout: 2 * time.Second})
+	}()
+	w := newWire(spokeEnd)
+	go func() {
+		for {
+			m, err := w.recv()
+			if err != nil {
+				w.fail(err)
+				return
+			}
+			if answers[m.T] {
+				w.deliver(m)
+			}
+		}
+	}()
+	defer w.fail(nil)
+	if a, err := w.call(ctx, 0, wireMsg{T: msgHello, Hello: &Hello{}}); err != nil || a.T != msgWelcome {
+		t.Fatalf("hello: %v %v", err, a.T)
+	}
+	report := wireMsg{T: msgReport, Report: &Report{Root: "tool"}}
+	errs := make(chan error, maxRemoteReports+5)
+	for range maxRemoteReports + 5 {
+		go func() {
+			_, err := w.call(ctx, 0, report)
+			errs <- err
+		}()
+	}
+	busy := 0
+	for range 5 {
+		select {
+		case err := <-errs:
+			if err == nil || !strings.Contains(err.Error(), "try again") {
+				t.Fatalf("a report past the cap: %v, want refused as busy", err)
+			}
+			busy++
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d of the reports past the cap were refused", busy)
+		}
+	}
+	if n := hub.served.Load(); n > maxRemoteReports {
+		t.Errorf("the hub serves %d reports at once, over %d", n, maxRemoteReports)
+	}
+	close(hub.release)
+	for range maxRemoteReports {
+		if err := <-errs; err != nil {
+			t.Errorf("a report within the cap: %v", err)
+		}
+	}
+	if _, err := w.call(ctx, 0, report); err != nil {
+		t.Errorf("a report once the hub caught up: %v", err)
 	}
 }

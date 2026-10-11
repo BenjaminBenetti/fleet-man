@@ -24,6 +24,11 @@ type SideInfo struct {
 	// serves it too, and a refresh, a logout or a lost refresh race in any
 	// location sharing it reaches all of them. "" is Location.
 	Logins string `json:"logins,omitempty"`
+	// LoginsOnly: the side keeps only the state of location scope (its
+	// location's logins), as a location's login store on the daemon host
+	// does. The hub sends it nothing else and takes nothing else from it.
+	// fleetd's own setting, never on the wire.
+	LoginsOnly bool `json:"-"`
 }
 
 // logins returns the location whose logins the side keeps.
