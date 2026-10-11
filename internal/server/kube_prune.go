@@ -273,6 +273,12 @@ func listPruneObjects(ctx context.Context, cs kubernetes.Interface, rec fleet.Ku
 		}
 		o.mounted = o.kind == "pvc" && mounted[o.name]
 		owningFleet := fleets[o.labels[names.LabelFleet]]
+		if names.Role(o.labels[names.LabelRole]) == names.RoleShare && owningFleet != "" {
+			// A fleet's share is the fleet's while it exists, whether an
+			// instance mounts it now or not (it outlives them); a destroyed
+			// fleet's share kept as an orphan (its flush failed) is counted.
+			continue
+		}
 		switch {
 		case owningFleet != "" && owningFleet != fleetName:
 			o.action = pruneFleetExists

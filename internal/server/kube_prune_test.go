@@ -18,6 +18,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
+	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
 // labelled is the metadata of an object this daemon made for connection
@@ -182,5 +183,51 @@ func TestTwoKubeRecordsOnOneNamespaceStayIsolated(t *testing.T) {
 		if o := res.GetCapabilities().GetOrphans(); o.GetInstances() != 1 {
 			t.Errorf("%s orphans = %v, want its 1 instance", id, o)
 		}
+	}
+}
+
+// A fleet's share is the fleet's while it exists: neither listed by a prune
+// nor counted an orphan in Settings, whether an instance mounts it or not;
+// the share a destroyed fleet left (kept as an orphan when its flush
+// failed) is both.
+func TestPruneCountsOnlyTheSharesOfGoneFleets(t *testing.T) {
+	f := newKubeFixture(t)
+	id := f.add(&fleetgrpc.KubeCluster{Context: "minikube", Namespace: "fleet"}).GetCluster().GetId()
+	seedKubeInstance(t, "alpha", "one", id, names.InstanceKey(testIdentity.DaemonID, "alpha", "one", time.Unix(1700000000, 0)))
+	alpha := names.FleetHash(testIdentity.DaemonID, id, "alpha")
+	gone := names.FleetHash(testIdentity.DaemonID, id, "gone")
+	share := func(fleetName, h8 string, extra map[string]string) *corev1.PersistentVolumeClaim {
+		labels := map[string]string{names.LabelFleet: h8, names.LabelRole: string(names.RoleShare), names.LabelShareGroup: h8}
+		for k, v := range extra {
+			labels[k] = v
+		}
+		return &corev1.PersistentVolumeClaim{ObjectMeta: labelled(names.FleetObject(fleetName, h8, names.SuffixShare), id, 48*time.Hour, labels)}
+	}
+	createObjects(t, f.apis["minikube"],
+		share("alpha", alpha, nil),
+		share("gone", gone, map[string]string{names.LabelOrphan: names.OrphanFlushFailed}),
+	)
+	reply, err := f.svc.PruneKubeCluster(context.Background(), &fleetgrpc.PruneKubeClusterRequest{Id: id, Fleet: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listed []string
+	for _, o := range reply.GetObjects() {
+		listed = append(listed, o.GetName()+": "+o.GetAction())
+	}
+	if want := []string{names.FleetObject("gone", gone, names.SuffixShare) + ": would delete"}; strings.Join(listed, "\n") != strings.Join(want, "\n") {
+		t.Errorf("prune lists %q, want %q", listed, want)
+	}
+	rec, _ := f.svc.kube.record(id)
+	st, err := state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects, err := listPruneObjects(context.Background(), f.apis["minikube"], rec, testIdentity, st, "", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o := kubeOrphans(objects); o.GetShares() != 1 {
+		t.Errorf("orphan shares %d, want the gone fleet's alone", o.GetShares())
 	}
 }

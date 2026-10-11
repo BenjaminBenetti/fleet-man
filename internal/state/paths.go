@@ -75,7 +75,17 @@ func AutomationWatchPath() string {
 // login check reads it, so a firing needs no cluster call. Both names are
 // reduced to safe single path segments, like TriggerLogsDir's.
 func SyncLocationDir(fleetName, location string) string {
-	return filepath.Join(FleetDir(), "sync", safeLogSegment(fleetName), "loc", safeLogSegment(location))
+	return filepath.Join(SyncFleetDir(fleetName), "loc", safeLogSegment(location))
+}
+
+// SyncFleetDir returns the host folder of a fleet's shared-state sync
+// (~/.fleet/sync/<fleet>/): the sync hub's state (hub/, blobs/, conflicts/),
+// the daemon host's and each login store's manifests, and the login stores
+// (loc/, SyncLocationDir). Kept when the fleet is destroyed, like its shared
+// folders under WorkspacesDir, so a fleet made again under its name picks up
+// where it left off.
+func SyncFleetDir(fleetName string) string {
+	return filepath.Join(FleetDir(), "sync", safeLogSegment(fleetName))
 }
 
 // safeLogSegment reduces name to one filesystem-safe path segment: it keeps

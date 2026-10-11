@@ -339,6 +339,11 @@ func Serve(ctx context.Context) error {
 	// and agent supervision, with or without a TUI. Like the connections,
 	// nothing reaches a cluster before fleetd serves.
 	go svc.kubePods.run(hubCtx)
+	// The fleets' shared folders on their clusters, kept converged with the
+	// daemon host's; the shutdown flushes them after hubCtx is gone, so the
+	// sync runs on a context of its own.
+	shareKick = svc.shareSync.kickCluster
+	go svc.shareSync.run(hubCtx)
 
 	select {
 	case <-ctx.Done():
