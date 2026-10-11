@@ -266,6 +266,12 @@ func (c *creation) prepareShare(ctx context.Context) error {
 		if !s.mode.Shared() {
 			s.mode = topology.SingleNode
 		}
+		if pvc.Labels[names.LabelOrphan] != "" {
+			// A share its destroyed fleet left (its last changes never
+			// reached the daemon host) is the fleet's again: they come back
+			// with it.
+			c.adoptShare(ctx, pvc.Name)
+		}
 		if pvc.Spec.StorageClassName != nil {
 			s.class = *pvc.Spec.StorageClassName
 		}

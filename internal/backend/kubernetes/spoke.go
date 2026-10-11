@@ -229,8 +229,8 @@ func mountsClaim(pod *corev1.Pod, claim string) bool {
 	return false
 }
 
-// errNoShare is an instance without fleet mounts: it has no spoke.
-var errNoShare = errors.New("the instance has no fleet mounts on its cluster")
+// ErrNoShare is an instance without fleet mounts: it has no spoke.
+var ErrNoShare = errors.New("the instance has no fleet mounts on its cluster")
 
 // InstanceShare is the share of the instance with key on connection
 // clusterID, as its record keeps it, with the pod to reach.
@@ -240,7 +240,7 @@ func InstanceShare(clusterID, key string) (PodTarget, ShareRecord, error) {
 		return PodTarget{}, ShareRecord{}, err
 	}
 	if rec.Share == nil {
-		return PodTarget{}, ShareRecord{}, errNoShare
+		return PodTarget{}, ShareRecord{}, ErrNoShare
 	}
 	return rec.target(), *rec.Share, nil
 }

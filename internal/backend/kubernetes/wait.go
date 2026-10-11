@@ -163,9 +163,15 @@ func (w *podWait) observe(now time.Time, pod *corev1.Pod, pvc *corev1.Persistent
 	return nil
 }
 
-// shareLayoutFailed is the share-layout init container failing: it lays out
-// the same tree each time, so the reason it gave (its termination message)
-// does not go away by waiting.
+// shareLayoutAttempts is how many times the share-layout init container
+// fails before the wait ends: the kubelet runs it again, and a failure that
+// passes (the share briefly full, a folder another pod was laying out) must
+// not fail a create at once.
+const shareLayoutAttempts = 3
+
+// shareLayoutFailed is the share-layout init container failing again and
+// again: it lays out the same tree each time, so the reason it gave (its
+// termination message) does not go away by waiting more.
 func shareLayoutFailed(pod *corev1.Pod) error {
 	s := initContainerStatus(pod, podspec.ShareInit)
 	if s == nil {
@@ -176,6 +182,10 @@ func shareLayoutFailed(pod *corev1.Pod) error {
 		t = s.LastTerminationState.Terminated
 	}
 	if t == nil || t.ExitCode == 0 {
+		return nil
+	}
+	// The kubelet counts the runs after the first.
+	if failures := s.RestartCount + 1; failures < shareLayoutAttempts {
 		return nil
 	}
 	why := strings.TrimSpace(t.Message)
