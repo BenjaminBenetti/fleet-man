@@ -294,9 +294,6 @@ func (b *Backend) PortForwardCommand(string, int, int) *exec.Cmd {
 }
 func (b *Backend) ForwardStdioCommand(string, int) (*exec.Cmd, bool) { return nil, false }
 
-// MicSinkCommand: the virtual microphone on a cluster is a later unit.
-func (b *Backend) MicSinkCommand(string) (*exec.Cmd, bool) { return nil, false }
-
 // ResolveHostname: a pod has no host-reachable address fleetd dials
 // directly.
 func (b *Backend) ResolveHostname(string) (string, bool) { return "", false }

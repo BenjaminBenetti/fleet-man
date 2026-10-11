@@ -579,6 +579,10 @@ message KubeInstanceRuntime {
   // happening again ("raise memory_limit in the cluster's resources"); ""
   // when none does, or there is no restart_cause.
   string restart_hint = 8;
+  // audio_unavailable says why the instance can have no virtual microphone
+  // or audio output ("no root": a cluster that runs containers without root,
+  // on an image without PulseAudio and ALSA); "" when it can.
+  string audio_unavailable = 9;
 }
 
 // ShareSyncState is how far the fleet share on a cluster lags the daemon

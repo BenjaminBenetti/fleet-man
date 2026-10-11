@@ -61,6 +61,11 @@ type InstanceRecord struct {
 	WorkspaceFolder string `json:"workspaceFolder,omitempty"`
 	// NonRoot: the pod runs without root (capability tier C).
 	NonRoot bool `json:"nonRoot,omitempty"`
+	// AudioMissing: a NonRoot pod whose image lacks the audio stack, which
+	// nothing there can install: the instance has no virtual microphone or
+	// audio output (audio.go). Checked when a create or rebuild starts its
+	// pod.
+	AudioMissing bool `json:"audioMissing,omitempty"`
 	// Created is the instance container's creation time (the
 	// container-created annotation the lifecycle hooks' markers compare).
 	Created time.Time `json:"created"`

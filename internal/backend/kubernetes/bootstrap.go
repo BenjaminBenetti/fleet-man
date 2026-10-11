@@ -462,6 +462,7 @@ func (s *podSlot) bootstrap(c *Cluster, t PodTarget, tk *ticket) (*AgentSession,
 	s.mu.Unlock()
 	sess := &AgentSession{pool: p, slot: s, cluster: c, pod: ref, probe: fast.probe, main: client, stream: stream, pacer: podwire.NewPacer(s.activity.Flowing), connected: time.Now(),
 		target: t, desiredKick: make(chan struct{}, 1)}
+	sess.pacer.OnPaced(p.pacingLogger(t))
 	if art != nil {
 		sess.setWant(art.SHA256)
 	}
@@ -473,6 +474,19 @@ func (s *podSlot) bootstrap(c *Cluster, t PodTarget, tk *ticket) (*AgentSession,
 	p.opts.Logger.Info("kube agent: connected", "fleet", t.Fleet, "instance", t.Instance, "pod", ref.Namespace+"/"+ref.Name,
 		"probed", probed, "staged", staged != "", "agent_version", versionOrDev(h.Version), "stale", sess.Stale(), "ms", p.opts.Now().Sub(start).Milliseconds())
 	return sess, nil
+}
+
+// pacingLogger logs each start and end of the pacing of a pod's bulk
+// session: it is paced only while audio flows on the pod and PCM frames
+// arrive late, so a slow copy shows why in fleet.log.
+func (p *Pool) pacingLogger(t PodTarget) func(rate float64) {
+	return func(rate float64) {
+		if rate > 0 {
+			p.opts.Logger.Info("kube agent: bulk session paced while audio flows", "fleet", t.Fleet, "instance", t.Instance, "rate_mib_s", fmt.Sprintf("%.1f", rate/(1<<20)))
+			return
+		}
+		p.opts.Logger.Info("kube agent: bulk session unpaced", "fleet", t.Fleet, "instance", t.Instance)
+	}
 }
 
 func (s *podSlot) dropFast() {

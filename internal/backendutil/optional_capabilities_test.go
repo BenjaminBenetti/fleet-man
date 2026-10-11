@@ -10,7 +10,8 @@ import (
 
 // TestTodaysBackendsHaveNoClusterCapabilities: the optional capabilities the
 // server prefers when a backend has them (StreamExecer, PortDialer,
-// ControlChannel, WorkspaceOwner, RestartAware, fleetlaunch.Stager) are for
+// ControlChannel, WorkspaceOwner, RestartAware, fleetlaunch.Stager, and the
+// audio ones: AudioGate, AudioFlows, RootExecer) are for
 // backends whose instances run out of the daemon host's reach. devcontainer,
 // codespaces and coder have none of them, so they keep their host-side paths
 // (docker exec, the stdio forwarder, the bind-mounted control directory, the
@@ -37,6 +38,17 @@ func TestTodaysBackendsHaveNoClusterCapabilities(t *testing.T) {
 			}
 			if _, ok := b.(fleetlaunch.Stager); ok {
 				t.Errorf("%s: is a fleetlaunch.Stager", bt)
+			}
+			// Their audio: always available (sudo installs it), never paced
+			// against bulk transfers, never through a root class of fleet's.
+			if _, ok := b.(backend.AudioGate); ok {
+				t.Errorf("%s: is an AudioGate", bt)
+			}
+			if _, ok := b.(backend.AudioFlows); ok {
+				t.Errorf("%s: has AudioFlows", bt)
+			}
+			if _, ok := b.(backend.RootExecer); ok {
+				t.Errorf("%s: is a RootExecer", bt)
 			}
 		}
 	}

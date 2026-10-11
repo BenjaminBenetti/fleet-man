@@ -186,10 +186,9 @@ func ContainerID(clusterID, ns, sts string, gen int) string {
 func (b *Backend) SupportsSharedMounts() bool { return true }
 
 // SupportsRebuild is true (rebuild.go); SupportsClone is false until
-// cluster clone lands, SupportsMicSink until audio does.
+// cluster clone lands. SupportsMicSink is audio.go's.
 func (b *Backend) SupportsClone() bool   { return false }
 func (b *Backend) SupportsRebuild() bool { return true }
-func (b *Backend) SupportsMicSink() bool { return false }
 
 var errClone = notYet{what: "cloning an instance"}
 

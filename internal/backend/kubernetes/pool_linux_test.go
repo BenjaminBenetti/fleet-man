@@ -189,7 +189,12 @@ users:
 // Secret, and a local root for the pod, and returns the target.
 func (h *harness) addPod(name string) PodTarget {
 	h.t.Helper()
-	sts := "fi-fleet-" + name + "-k8sk8sk8"
+	return h.addPodAs(name, "fi-fleet-"+name+"-k8sk8sk8")
+}
+
+// addPodAs is addPod with the StatefulSet named sts.
+func (h *harness) addPodAs(name, sts string) PodTarget {
+	h.t.Helper()
 	set, pod := instanceObjects(h.ns, sts, types.UID("uid-"+name))
 	// The instance labels the pool's informers select by.
 	set.Labels, pod.Labels = instanceLabels(), instanceLabels()

@@ -81,9 +81,18 @@ esac
 // builds and image inspects to.
 const fakeDockerScript = `#!/bin/sh
 echo "$*" >> "$FAKE_DIR/docker.log"
+eval "last=\${$#}"
 case "$1 $2" in
   "context show") echo "${FAKE_CONTEXT:-desktop-linux}" ;;
+  "build --iidfile")
+    cp "$5" "$FAKE_DIR/layer.Dockerfile"
+    ls "$6" > "$FAKE_DIR/layer.context"
+    for f in "$6"/*; do cp "$f" "$FAKE_DIR/layer.file.$(basename "$f")"; done
+    env > "$FAKE_DIR/layer.env"
+    [ -z "${FAKE_BUILD_FAIL:-}" ] || { echo "step 4/5: E: Unable to locate package pulseaudio" >&2; exit 1; }
+    echo "sha256:layered" > "$3" ;;
   "image inspect")
+    if [ "$last" = sha256:layered ] && [ -f "$FAKE_DIR/layered.json" ]; then cat "$FAKE_DIR/layered.json"; exit 0; fi
     [ -f "$FAKE_DIR/image.json" ] || { echo "Error response from daemon: No such image: $4" >&2; exit 1; }
     # A containerd image store answers a platform's inspect with that
     # platform's manifest (image.platform.json, when the test gives one).

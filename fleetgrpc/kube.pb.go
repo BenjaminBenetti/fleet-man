@@ -2516,9 +2516,13 @@ type KubeInstanceRuntime struct {
 	// restart_hint is the setting that keeps a restart of restart_cause from
 	// happening again ("raise memory_limit in the cluster's resources"); ""
 	// when none does, or there is no restart_cause.
-	RestartHint   string `protobuf:"bytes,8,opt,name=restart_hint,json=restartHint,proto3" json:"restart_hint,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	RestartHint string `protobuf:"bytes,8,opt,name=restart_hint,json=restartHint,proto3" json:"restart_hint,omitempty"`
+	// audio_unavailable says why the instance can have no virtual microphone
+	// or audio output ("no root": a cluster that runs containers without root,
+	// on an image without PulseAudio and ALSA); "" when it can.
+	AudioUnavailable string `protobuf:"bytes,9,opt,name=audio_unavailable,json=audioUnavailable,proto3" json:"audio_unavailable,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *KubeInstanceRuntime) Reset() {
@@ -2603,6 +2607,13 @@ func (x *KubeInstanceRuntime) GetNodeCordonedMoving() bool {
 func (x *KubeInstanceRuntime) GetRestartHint() string {
 	if x != nil {
 		return x.RestartHint
+	}
+	return ""
+}
+
+func (x *KubeInstanceRuntime) GetAudioUnavailable() string {
+	if x != nil {
+		return x.AudioUnavailable
 	}
 	return ""
 }
@@ -4357,7 +4368,7 @@ const file_kube_proto_rawDesc = "" +
 	"\tinstances\x18\x01 \x01(\x05R\tinstances\x12\x16\n" +
 	"\x06shares\x18\x02 \x01(\x05R\x06shares\x12#\n" +
 	"\rcache_volumes\x18\x03 \x01(\x05R\fcacheVolumes\x12+\n" +
-	"\x11snapshot_contents\x18\x04 \x01(\x05R\x10snapshotContents\"\xd9\x02\n" +
+	"\x11snapshot_contents\x18\x04 \x01(\x05R\x10snapshotContents\"\x86\x03\n" +
 	"\x13KubeInstanceRuntime\x12\x1d\n" +
 	"\n" +
 	"pod_reason\x18\x01 \x01(\tR\tpodReason\x12\x12\n" +
@@ -4367,7 +4378,8 @@ const file_kube_proto_rawDesc = "" +
 	"\frestarted_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vrestartedAt\x12%\n" +
 	"\x0esessions_ended\x18\x06 \x01(\bR\rsessionsEnded\x120\n" +
 	"\x14node_cordoned_moving\x18\a \x01(\bR\x12nodeCordonedMoving\x12!\n" +
-	"\frestart_hint\x18\b \x01(\tR\vrestartHint\"\xd4\x01\n" +
+	"\frestart_hint\x18\b \x01(\tR\vrestartHint\x12+\n" +
+	"\x11audio_unavailable\x18\t \x01(\tR\x10audioUnavailable\"\xd4\x01\n" +
 	"\x0fShareSyncStatus\x12/\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x19.fleetgrpc.ShareSyncStateR\x05state\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x18\n" +

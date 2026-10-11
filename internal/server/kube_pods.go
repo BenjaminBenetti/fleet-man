@@ -79,6 +79,16 @@ func kubePostRestart(fleetName string, inst *fleet.Instance, homeDir string) {
 	instanceops.RunPostStartHook(fleetName, inst, homeDir)
 }
 
+// kubeAudioFor is why an instance can have no audio, as InstanceRuntime.kube
+// carries it (kubernetes.AudioNoRoot); "" when it can, or its handle does not
+// say.
+func kubeAudioFor(inst *fleet.Instance) string {
+	if a, ok := backendutil.NewForInstance(inst, false).(interface{ AudioReason() string }); ok {
+		return a.AudioReason()
+	}
+	return ""
+}
+
 // kubeTargetFor is the pod the supervisor keeps an agent up in for a running
 // instance: its backend handle's (kubernetes.TargetProvider), nil when the
 // handle provides none.
@@ -112,6 +122,8 @@ type kubeInst struct {
 	// notice is the "sessions reset" restart shown until the next attach.
 	notice        *backend.Restart
 	sessionsEnded bool
+	// audio is why the instance can have no audio ("" when it can).
+	audio string
 
 	parking   bool
 	parkAfter time.Time
@@ -123,9 +135,10 @@ type kubePods struct {
 	now  func() time.Time
 	// Cadences (the consts; tests shorten them before run).
 	backstop, priorityCheck, parkTimeout, parkRetry time.Duration
-	// targetFor and postRestart are kubeTargetFor and kubePostRestart (tests
-	// stand in for the backend).
+	// targetFor, audioFor and postRestart are kubeTargetFor, kubeAudioFor and
+	// kubePostRestart (tests stand in for the backend).
 	targetFor   func(*fleet.Instance) *kubernetes.PodTarget
+	audioFor    func(*fleet.Instance) string
 	postRestart func(fleetName string, inst *fleet.Instance, homeDir string)
 	// logs saves a run's container output when the pool sees it end, and
 	// readBack recovers the runs it could not from pod-init's rolling copy
@@ -156,6 +169,7 @@ func newKubePods(svc *service) *kubePods {
 		parkTimeout:   kubeParkTimeout,
 		parkRetry:     kubeParkRetry,
 		targetFor:     kubeTargetFor,
+		audioFor:      kubeAudioFor,
 		postRestart:   kubePostRestart,
 		logs:          newKubeLogs(),
 		wake:          make(chan struct{}, 1),
@@ -341,10 +355,11 @@ func (k *kubePods) sync(st *state.State) {
 		mic = cfg.MicSettings.Enabled
 	}
 	type entry struct {
-		ref  kubeRef
-		ki   *kubeInst
-		inst *fleet.Instance
-		f    *fleet.Fleet
+		ref   kubeRef
+		ki    *kubeInst
+		inst  *fleet.Instance
+		f     *fleet.Fleet
+		audio string
 	}
 	var entries []entry
 	for fleetName, f := range st.Fleets {
@@ -353,7 +368,7 @@ func (k *kubePods) sync(st *state.State) {
 				continue
 			}
 			ref := kubeRef{inst.KubeCluster, names.Instance(fleetName, inst.Name, inst.KubeKey)}
-			entries = append(entries, entry{ref: ref, inst: inst, f: f})
+			entries = append(entries, entry{ref: ref, inst: inst, f: f, audio: k.audioFor(inst)})
 		}
 	}
 	items := make([]kubernetes.Tracked, 0, len(entries))
@@ -381,7 +396,7 @@ func (k *kubePods) sync(st *state.State) {
 			ki = &kubeInst{}
 			k.insts[e.ref] = ki
 		}
-		ki.fleet, ki.name, ki.inst, ki.homeDir = e.f.Name, e.inst.Name, *e.inst, e.f.Settings.HomeDir
+		ki.fleet, ki.name, ki.inst, ki.homeDir, ki.audio = e.f.Name, e.inst.Name, *e.inst, e.f.Settings.HomeDir, e.audio
 		k.byName[ki.fleet+"/"+ki.name] = e.ref
 		k.pending[e.ref] = true
 	}
@@ -503,7 +518,7 @@ func (k *kubePods) evaluate(ctx context.Context, ref kubeRef) {
 
 // kubeRuntime is the instance's InstanceRuntime.kube. Called with k.mu held.
 func kubeRuntime(obs kubernetes.Observation, ki *kubeInst) *fleetgrpc.KubeInstanceRuntime {
-	kr := &fleetgrpc.KubeInstanceRuntime{PodReason: obs.Reason, Node: obs.Node, Agent: kubeAgentToProto(obs.Agent)}
+	kr := &fleetgrpc.KubeInstanceRuntime{PodReason: obs.Reason, Node: obs.Node, Agent: kubeAgentToProto(obs.Agent), AudioUnavailable: ki.audio}
 	if n := ki.notice; n != nil {
 		kr.RestartCause = string(n.Cause)
 		kr.RestartHint = kubernetes.RestartHint(n.Cause)

@@ -32,6 +32,11 @@ func TestNewForInstanceBindsTheKubernetesHandle(t *testing.T) {
 		"RestartAware":     is[backend.RestartAware](b),
 		"PostStarter":      is[backend.PostStarter](b),
 		"TargetProvider":   is[kubernetesbackend.TargetProvider](b),
+		"StreamExecer":     is[backend.StreamExecer](b),
+		"OutputBackend":    is[backend.OutputBackend](b),
+		"AudioGate":        is[backend.AudioGate](b),
+		"AudioFlows":       is[backend.AudioFlows](b),
+		"RootExecer":       is[backend.RootExecer](b),
 	} {
 		if !ok {
 			t.Errorf("the Kubernetes handle is not a %s", name)
@@ -41,7 +46,8 @@ func TestNewForInstanceBindsTheKubernetesHandle(t *testing.T) {
 	if _, ok := caps.(*kubernetesbackend.Backend); !ok || !backend.HasControlChannel(caps) {
 		t.Errorf("CapabilitiesFor(kubernetes) = %T", caps)
 	}
-	if !caps.SupportsSharedMounts() || caps.SupportsClone() || !caps.SupportsRebuild() || caps.SupportsMicSink() {
+	// The microphone: an instance whose record does not say it has no audio.
+	if !caps.SupportsSharedMounts() || caps.SupportsClone() || !caps.SupportsRebuild() || !caps.SupportsMicSink() {
 		t.Errorf("Kubernetes capabilities: shared %v clone %v rebuild %v mic %v", caps.SupportsSharedMounts(), caps.SupportsClone(), caps.SupportsRebuild(), caps.SupportsMicSink())
 	}
 }
