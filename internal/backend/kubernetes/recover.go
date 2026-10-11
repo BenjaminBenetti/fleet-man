@@ -76,6 +76,17 @@ func (p *Pool) UndoRebuild(ctx context.Context, j Journal, progress func(string)
 		return RebuildUndo{}, fmt.Errorf("the rebuild journal names no StatefulSet")
 	}
 	var undo RebuildUndo
+	// fleetd's record of the restored generation's pod, back before that
+	// pod comes back: the pod is verified against it.
+	restoreRecord := func() error {
+		if j.PrevRecord == nil {
+			return nil
+		}
+		if err := SaveInstanceRecord(*j.PrevRecord); err != nil {
+			return fmt.Errorf("restoring fleet's record of generation %d's pod: %w", j.Gen-1, err)
+		}
+		return nil
+	}
 	if j.ResetStarted {
 		if j.Rollback == nil || len(j.Rollback.Job) == 0 || len(j.Rollback.StatefulSet) == 0 {
 			return undo, fmt.Errorf("the rebuild was past its reset, and its journal holds no rollback: generation %d's root cannot be put back", j.Gen-1)
@@ -87,11 +98,20 @@ func (p *Pool) UndoRebuild(ctx context.Context, j Journal, progress func(string)
 		if err := p.waitPodGone(ctx, s, names.Pod(anchor.Name)); err != nil {
 			return undo, err
 		}
+		// A seed the daemon died in goes on copying into the disk on its
+		// own: it has to be gone before the rollback moves the root it
+		// writes into.
+		if err := p.stopJobs(ctx, s, j, check); err != nil {
+			return undo, err
+		}
 		say(fmt.Sprintf("restoring generation %d's root", j.Gen-1))
 		if err := p.runRollbackJob(ctx, s, j); err != nil {
 			return undo, err
 		}
 		undo.RolledBack = true
+		if err := restoreRecord(); err != nil {
+			return undo, err
+		}
 		say(fmt.Sprintf("re-applying generation %d's StatefulSet", j.Gen-1))
 		if err := s.applyStatefulSet(ctx, j.Rollback.StatefulSet, j.PrevReplicas); err != nil {
 			return undo, err
@@ -107,6 +127,9 @@ func (p *Pool) UndoRebuild(ctx context.Context, j Journal, progress func(string)
 	if err != nil {
 		return undo, err
 	}
+	if err := restoreRecord(); err != nil {
+		return undo, err
+	}
 	if j.PrevReplicas != nil {
 		say("restoring the StatefulSet's replicas")
 		if err := p.Scale(ctx, j.Cluster, anchor.Name, *j.PrevReplicas); err != nil {
@@ -116,7 +139,27 @@ func (p *Pool) UndoRebuild(ctx context.Context, j Journal, progress func(string)
 	if err := s.ClearMark(ctx, j); err != nil {
 		s.logger().Warn("kube: clearing the rebuild's mark", "cluster", j.Cluster, "err", err)
 	}
+	// The image the rebuild delivered for its generation is no longer
+	// wanted; the instance's key still holds the one it runs.
+	releaseRebuildHold(j.Cluster, j.Key, j.Gen)
 	return undo, nil
+}
+
+// stopJobs deletes the Jobs j made (its seed), waiting for each to be gone
+// with its pod.
+func (p *Pool) stopJobs(ctx context.Context, s Scope, j Journal, check JournalCheck) error {
+	jobs := func(o JournalObject) bool { return o.Created && o.Kind == KindJob }
+	if _, err := s.DeleteJournalObjects(ctx, j, check, jobs); err != nil {
+		return err
+	}
+	for _, o := range j.Objects {
+		if jobs(o) {
+			if err := p.waitJobGone(ctx, s, o.Name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // rollbackJobName is the rollback tool Job's name in j's Rollback.

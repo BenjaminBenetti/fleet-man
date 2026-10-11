@@ -425,7 +425,15 @@ func (fleetPage *fleetPage) updateNormal(m *model, msg tea.Msg) tea.Cmd {
 				m.message = fmt.Sprintf("Instance %s/%s is %s", fleetPage.currentFleetName(), instance.Name, instance.Status)
 				break
 			}
-			if instance.ContainerID == "" {
+			// A failed cluster job a rebuild retries: the recovery dialog,
+			// on its Retry button, says what failed first.
+			if kubeRetryable(instance) && fleetPage.openKubeRecovery(fleetPage.currentFleetName(), instance) {
+				fleetPage.kubeRecovery.focus(kubeRecoveryRetry)
+				break
+			}
+			// A failed cluster create has no container, but its rebuild is
+			// the retry of the create (by its key).
+			if instance.ContainerID == "" && !kubeRetryRecord(instance) {
 				m.message = "Instance has not finished provisioning; nothing to rebuild yet"
 				break
 			}
@@ -810,6 +818,8 @@ func (fleetPage *fleetPage) contextualHelpKeysBase(m *model) []string {
 					"enter: details", "e: edit", "s: start",
 					"d: delete", "t: tag", "L: logs", "r: refresh", "q: quit",
 				)
+			case recoverable && kubeRetryable(r.instance):
+				keys = append(keys, "enter: details", "R: rebuild (retry)", "d: delete", "L: logs", "r: refresh", "q: quit")
 			case recoverable:
 				keys = append(keys, "enter: details", "d: delete", "L: logs", "r: refresh", "q: quit")
 			case r.instance.Status == fleet.StatusRunning:

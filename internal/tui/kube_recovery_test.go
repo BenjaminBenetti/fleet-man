@@ -170,9 +170,10 @@ func TestKubeFailedRowNotes(t *testing.T) {
 		inst *fleet.Instance
 		want string
 	}{
-		{kubeInst("a", fleet.StatusFailed, interruptedErr), "failed · interrupted · d delete"},
-		{kubeInst("b", fleet.StatusFailed, "kubernetes:rebuild_failed: generation 2 was restored"), "failed · rebuild failed"},
+		{kubeInst("a", fleet.StatusFailed, interruptedErr), "failed · interrupted · R rebuild (retry)"},
+		{kubeInst("b", fleet.StatusFailed, "kubernetes:rebuild_failed: generation 2 was restored"), "failed · rebuild failed · R rebuild (retry)"},
 		{kubeInst("c", fleet.StatusFailed, "kubernetes:tampered: pod fi-x-0: image digest sha256:1 is not the one fleet delivered"), "failed · pod tampered with"},
+		{kubeInst("c2", fleet.StatusFailed, "kubernetes:image_build: the build failed"), "failed · image build failed"},
 		{kubeInst("d", fleet.StatusFailed, "kubernetes:quota: exceeded quota: compute"), "failed · over quota"},
 		{kubeInst("e", fleet.StatusStopped, oomParkedErr), "stopped · parked: out of memory"},
 		{kubeInst("f", fleet.StatusStopped, "kubernetes:crash_loop: the dev container kept crashing"), "stopped · parked: crash loop"},
@@ -191,6 +192,10 @@ func TestKubeFailedRowNotes(t *testing.T) {
 				t.Errorf("%s: row %q has a note", tc.inst.Name, line)
 			}
 		}
+		// Only a job a rebuild retries says R retries it.
+		if strings.Contains(line, kubeRetryHint) != strings.HasSuffix(tc.want, kubeRetryHint) {
+			t.Errorf("%s: row %q, retry hint wanted %v", tc.inst.Name, line, strings.HasSuffix(tc.want, kubeRetryHint))
+		}
 	}
 	// Only cluster rows read kubernetes codes.
 	docker := &fleet.Instance{Name: "z", Status: fleet.StatusFailed, Backend: fleet.BackendDevcontainer, Error: interruptedErr}
@@ -206,7 +211,8 @@ func TestEnterOpensKubeRecovery(t *testing.T) {
 		inst *fleet.Instance
 		want []kubeRecoveryAction
 	}{
-		{kubeInst("a", fleet.StatusFailed, interruptedErr), []kubeRecoveryAction{kubeRecoveryLogs, kubeRecoveryDestroy, kubeRecoveryClose}},
+		{kubeInst("a", fleet.StatusFailed, interruptedErr), []kubeRecoveryAction{kubeRecoveryRetry, kubeRecoveryLogs, kubeRecoveryDestroy, kubeRecoveryClose}},
+		{kubeInst("a2", fleet.StatusFailed, "kubernetes:rebuild_failed: the rebuild failed; generation 1 was restored: x"), []kubeRecoveryAction{kubeRecoveryRetry, kubeRecoveryLogs, kubeRecoveryDestroy, kubeRecoveryClose}},
 		{kubeInst("b", fleet.StatusStopped, oomParkedErr), []kubeRecoveryAction{kubeRecoverySettings, kubeRecoveryLogs, kubeRecoveryStart, kubeRecoveryDestroy, kubeRecoveryClose}},
 		{kubeInst("c", fleet.StatusFailed, "kubernetes:tampered: refused"), []kubeRecoveryAction{kubeRecoveryLogs, kubeRecoveryDestroy, kubeRecoveryClose}},
 		{kubeInst("d", fleet.StatusFailed, "kubernetes:quota: exceeded quota"), []kubeRecoveryAction{kubeRecoverySettings, kubeRecoveryLogs, kubeRecoveryDestroy, kubeRecoveryClose}},
@@ -230,13 +236,70 @@ func TestEnterOpensKubeRecovery(t *testing.T) {
 	fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyEnter})
 	view := flatText(fp.viewFleetList(m))
 	for _, want := range []string{"was interrupted on ☸ minikube", "interrupted by daemon restart during create (at step seed)",
-		kubeerr.Hint(kubeerr.Interrupted), "[ View the creation log ]", "[ Destroy instance ]", "[ Close ]"} {
+		kubeerr.Hint(kubeerr.Interrupted), "[ Retry (rebuild) ]", "[ View the creation log ]", "[ Destroy instance ]", "[ Close ]"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the interrupted dialog lacks %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "Retry") {
-		t.Errorf("the dialog offers a retry before rebuild exists:\n%s", view)
+	if fp.kubeRecovery.cursor != 0 {
+		t.Errorf("enter opened the dialog on button %d, want the first", fp.kubeRecovery.cursor)
+	}
+}
+
+// R on a failed cluster row whose job a rebuild retries opens the recovery
+// dialog on Retry; on a failed create with another code (no container, but a
+// key) it asks to rebuild, which retries the create; with neither a container
+// nor a key there is nothing to rebuild.
+func TestRebuildKeyRetriesAFailedClusterJob(t *testing.T) {
+	press := func(fp *fleetPage, m *model) { fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")}) }
+
+	settings := kubeInst("s", fleet.StatusFailed, "kubernetes:quota: exceeded quota")
+	m, fp := kubeRowModel(t, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, kubeInst("a", fleet.StatusFailed, interruptedErr), settings)
+	press(fp, m)
+	if fp.mode != viewKubeRecovery {
+		t.Fatalf("R on an interrupted row left mode %v", fp.mode)
+	}
+	if got := fp.kubeRecovery.actions()[fp.kubeRecovery.cursor]; got != kubeRecoveryRetry {
+		t.Fatalf("R opened the dialog on %v, want Retry", got)
+	}
+	if cmd := fp.Update(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+		t.Fatal("Retry ran nothing")
+	}
+	if inst, _ := m.st.Fleets["alpha"].GetInstance("a"); fp.mode != viewNormal || inst.Status != fleet.StatusRebuilding {
+		t.Fatalf("Retry: mode %v status %s", fp.mode, inst.Status)
+	}
+
+	// A retryable row behind a settings fix: Retry still gets the cursor.
+	d := kubeRecoveryState{inst: "x", cluster: "mk-1", status: fleet.StatusFailed, code: kubeerr.Interrupted}
+	d.focus(kubeRecoveryRetry)
+	if got := d.actions()[d.cursor]; got != kubeRecoveryRetry {
+		t.Errorf("focus put the cursor on %v", got)
+	}
+
+	created := kubeInst("c", fleet.StatusFailed, "kubernetes:image_build: the build failed")
+	created.ContainerID = ""
+	m, fp = kubeRowModel(t, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, created)
+	press(fp, m)
+	if fp.mode != viewConfirmRebuild || fp.dlg.inst != "c" {
+		t.Fatalf("R on a failed create with a key: mode %v dlg %+v (%s)", fp.mode, fp.dlg, m.message)
+	}
+	if view := flatText(fp.renderConfirmRebuildDialog(m)); !strings.Contains(view, "Retry the create of alpha/c?") {
+		t.Errorf("the confirmation of a create's retry:\n%s", view)
+	}
+
+	keyless := kubeInst("k", fleet.StatusFailed, "")
+	keyless.ContainerID, keyless.KubeKey = "", ""
+	m, fp = kubeRowModel(t, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, keyless)
+	press(fp, m)
+	if fp.mode != viewNormal || !strings.Contains(m.message, "nothing to rebuild yet") {
+		t.Fatalf("R on a failed create without a key: mode %v message %q", fp.mode, m.message)
+	}
+
+	docker := &fleet.Instance{Name: "d", Status: fleet.StatusFailed, Backend: fleet.BackendDevcontainer, Error: "devcontainer up failed"}
+	m, fp = kubeRowModel(t, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, docker)
+	press(fp, m)
+	if fp.mode != viewNormal || !strings.Contains(m.message, "nothing to rebuild yet") {
+		t.Fatalf("R on a docker row without a container: mode %v message %q", fp.mode, m.message)
 	}
 }
 
@@ -287,7 +350,7 @@ func TestKubeRecoveryActions(t *testing.T) {
 	t.Run("destroy", func(t *testing.T) {
 		m, fp := kubeRowModel(t, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, kubeInst("a", fleet.StatusFailed, interruptedErr))
 		fp.updateNormal(m, tea.KeyMsg{Type: tea.KeyEnter})
-		fp.kubeRecovery.cursor = 1
+		fp.kubeRecovery.focus(kubeRecoveryDestroy)
 		fp.Update(m, tea.KeyMsg{Type: tea.KeyEnter})
 		if fp.mode != viewConfirmDelete || fp.dlg.fleet != "alpha" || fp.dlg.inst != "a" {
 			t.Fatalf("destroy: mode %v dlg %+v", fp.mode, fp.dlg)
@@ -379,30 +442,48 @@ func TestKubeRecoveryKeysAreDocumented(t *testing.T) {
 func kubePage(fp *fleetPage) Page { return fp }
 
 // The footer of a failed or parked cluster row names every key that acts on
-// it, and the keybindings list names enter's meaning there.
+// it (R as the retry on a row a rebuild retries), and the keybindings list
+// names enter's and R's meaning there.
 func TestKubeRecoverableRowFooter(t *testing.T) {
-	for _, inst := range []*fleet.Instance{kubeInst("a", fleet.StatusFailed, interruptedErr), kubeInst("b", fleet.StatusStopped, oomParkedErr)} {
-		m, fp := kubeRowModel(t, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, inst)
+	for _, tc := range []struct {
+		inst  *fleet.Instance
+		retry bool
+	}{
+		{kubeInst("a", fleet.StatusFailed, interruptedErr), true},
+		{kubeInst("r", fleet.StatusFailed, "kubernetes:rebuild_failed: the rebuild failed; generation 1 was restored: x"), true},
+		{kubeInst("q", fleet.StatusFailed, "kubernetes:quota: exceeded quota"), false},
+		{kubeInst("b", fleet.StatusStopped, oomParkedErr), false},
+	} {
+		m, fp := kubeRowModel(t, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, tc.inst)
 		keys := strings.Join(fp.contextualHelpKeys(m), "  ")
 		for _, want := range []string{"enter: details", "d: delete", "L: logs"} {
 			if !strings.Contains(keys, want) {
-				t.Errorf("%s footer %q lacks %q", inst.Status, keys, want)
+				t.Errorf("%s footer %q lacks %q", tc.inst.Name, keys, want)
 			}
 		}
-		if strings.Contains(keys, "open shell") || strings.Contains(keys, "R: rebuild") {
-			t.Errorf("%s footer %q offers what the row cannot do", inst.Status, keys)
+		if strings.Contains(keys, "open shell") {
+			t.Errorf("%s footer %q offers what the row cannot do", tc.inst.Name, keys)
+		}
+		if strings.Contains(keys, "R: rebuild (retry)") != tc.retry || (!tc.retry && strings.Contains(keys, "R: rebuild")) {
+			t.Errorf("%s footer %q, retry wanted %v", tc.inst.Name, keys, tc.retry)
 		}
 	}
-	found := false
+	enter, retry := false, false
 	for _, g := range keybindingsData() {
 		for _, e := range g.Entries {
 			if strings.Contains(e.Key, "failed / parked ☸") {
-				found = true
+				enter = true
+			}
+			if e.Key == "R" && strings.Contains(e.Desc, "retry a failed create or rebuild") {
+				retry = true
 			}
 		}
 	}
-	if !found {
+	if !enter {
 		t.Error("the keybindings list does not say what enter does on a failed cluster row")
+	}
+	if !retry {
+		t.Error("the keybindings list does not say R retries a failed create or rebuild")
 	}
 }
 

@@ -177,10 +177,12 @@ var kubeClassWords = map[kubeerr.Code]string{
 	kubeerr.Unavailable:     "not available yet",
 }
 
+// kubeRetryHint is what a retryable failed row (kubeRetryable) says R does.
+const kubeRetryHint = "R rebuild (retry)"
+
 // kubeFailedNote is the note after a failed or parked Kubernetes row's
-// status: what its error code says ("interrupted · d delete", "parked: out of
-// memory"); "" for any other row. An interrupted create is not retried yet,
-// so its row offers what is: destroy it and create it again.
+// status: what its error code says ("interrupted · R rebuild (retry)",
+// "parked: out of memory"); "" for any other row.
 func kubeFailedNote(inst *fleet.Instance) string {
 	code, _, ok := kubeRecoveryCode(inst)
 	if !ok {
@@ -190,8 +192,24 @@ func kubeFailedNote(inst *fleet.Instance) string {
 	switch {
 	case inst.Status == fleet.StatusStopped:
 		return "parked: " + words
-	case code.Is(kubeerr.Interrupted):
-		return words + " · d delete"
+	case kubeRetryable(inst):
+		return words + " · " + kubeRetryHint
 	}
 	return words
+}
+
+// kubeRetryable reports whether inst is a failed Kubernetes instance whose
+// job a rebuild retries: an interrupted create (or clone, or rebuild), or a
+// rebuild that failed and was undone. R opens the recovery dialog on Retry
+// for it.
+func kubeRetryable(inst *fleet.Instance) bool {
+	code, _, ok := kubeRecoveryCode(inst)
+	return ok && inst.Status == fleet.StatusFailed && (code.Is(kubeerr.Interrupted) || code.Is(kubeerr.RebuildFailed))
+}
+
+// kubeRetryRecord reports whether inst is a failed Kubernetes instance that
+// never reached running but has a key: a rebuild is the retry of its create
+// (what it left is found by the key), though it has no container to rebuild.
+func kubeRetryRecord(inst *fleet.Instance) bool {
+	return inst != nil && inst.Backend == fleet.BackendKubernetes && inst.Status == fleet.StatusFailed && inst.KubeKey != ""
 }

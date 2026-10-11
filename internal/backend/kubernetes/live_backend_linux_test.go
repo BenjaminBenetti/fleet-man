@@ -393,7 +393,13 @@ func hostImageTags(t *testing.T, repo string) []string {
 // say whether root pods are admitted.
 func (lb *liveBackend) connect(t *testing.T, labels map[string]string, rootAdmitted bool) *live {
 	t.Helper()
-	lv := newLiveIn(t, lb.kctx, "fleet-it-p2-12a-k8s-backend-")
+	return lb.connectIn(t, "fleet-it-p2-12a-k8s-backend-", labels, rootAdmitted)
+}
+
+// connectIn is connect to a namespace named with prefix.
+func (lb *liveBackend) connectIn(t *testing.T, prefix string, labels map[string]string, rootAdmitted bool) *live {
+	t.Helper()
+	lv := newLiveIn(t, lb.kctx, prefix)
 	if len(labels) > 0 {
 		ns, err := lv.cs.CoreV1().Namespaces().Get(context.Background(), lv.ns, metav1.GetOptions{})
 		if err != nil {

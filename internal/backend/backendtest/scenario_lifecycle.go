@@ -177,6 +177,44 @@ func caseRebuild(c *C) { rebuild(c, false) }
 // running.
 func caseRebuildStopped(c *C) { rebuild(c, true) }
 
+// caseRebuildRollback: on a backend that keeps the previous generation until
+// the new one runs, a rebuild that fails (the devcontainer.json edited in the
+// instance gets a postCreateCommand that exits non-zero) is undone: the error
+// carries the hook's output, the instance runs its previous container again
+// with the root filesystem it had, and the workspace keeps the edit (to fix,
+// then rebuild again).
+func caseRebuildRollback(c *C) {
+	c.Helper()
+	if !c.Target().RebuildRollsBack {
+		c.Skipf("%s removes the old container before it builds the new one: a failed rebuild has nothing to roll back to", c.Target().Name)
+	}
+	const said = "conformance-rebuild-rollback"
+	i := c.NewInstance(Fixture{})
+	marker := randHex(6)
+	c.Sh(i, `printf '%s' "$1" > "$HOME/rebuild-rollback-root"`, marker)
+	config := "/workspaces/" + FixtureRepo + "/.devcontainer/devcontainer.json"
+	c.Sh(i, `sed -i 's/^\(  "postCreateCommand": \).*$/\1"echo `+said+` >\&2; exit 7",/' "$1" && grep -q `+said+` "$1"`, config)
+	old := i.ID()
+	log := &lockedBuffer{}
+	_, err := backend.RebuildContext(backend.WithJobLog(c.Ctx, log), i.B, old, backend.UpRequest{WorkspaceDir: i.WorkspaceDir()})
+	if err == nil {
+		c.Fatalf("the rebuild succeeded though its postCreateCommand fails")
+	}
+	if !strings.Contains(err.Error(), said) {
+		c.Errorf("the rebuild error does not carry the failing command's output %q:\n%v", said, err)
+	}
+	waitStatus(c, i, old, backend.LiveStatusRunning, lifecycleTimeout)
+	if got := c.Sh(i, `cat "$HOME/rebuild-rollback-root" 2>/dev/null || true`); got != marker {
+		c.Errorf("after the failed rebuild the previous root's file reads %q, want %q (the generation was not restored)", got, marker)
+	}
+	if got := c.Sh(i, `grep -c `+said+` "$1" || true`, config); got != "1" {
+		c.Errorf("after the failed rebuild the workspace lost the edit (grep -c = %q)", got)
+	}
+	if got := c.Sh(i, `cat "$1"`, SeedFile); got != strings.TrimRight(SeedContent, "\n") {
+		c.Errorf("after the failed rebuild the workspace's %s reads %q", SeedFile, got)
+	}
+}
+
 // caseFailedCreate: a create whose postCreateCommand fails reports the
 // failure with the command's output, and the daemon's teardown of the failed
 // record (which has no ContainerID) leaves nothing behind.

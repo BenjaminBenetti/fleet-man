@@ -51,6 +51,12 @@ type Target struct {
 	// the shared instance. Zero only measures and logs it.
 	ListSessionsP95 time.Duration
 
+	// RebuildRollsBack says a rebuild keeps the instance's previous
+	// container (generation) until the new one runs, and puts it back when
+	// the rebuild fails (Kubernetes). Docker's rebuild removes the old
+	// container first, so the rebuild-rollback case skips elsewhere.
+	RebuildRollsBack bool
+
 	// Skip names cases this target cannot run yet (by Case.Name), each with
 	// the reason the case prints when it skips.
 	Skip map[string]string

@@ -143,6 +143,9 @@ func TestGenerationNames(t *testing.T) {
 		{SpecSecret(sts, 1), sts + "-spec-g1"},
 		{EnvSecret(sts, 12), sts + "-env-g12"},
 		{SeedJob(sts, 9999), sts + "-seed-g9999"},
+		{ExportJob(sts, 3), sts + "-xprt-g3"},
+		{RollbackJob(sts, 3), sts + "-rlbk-g3"},
+		{CommitJob(sts, 4), sts + "-cmit-g4"},
 	} {
 		if tt.got != tt.want {
 			t.Errorf("got %q, want %q", tt.got, tt.want)
@@ -156,8 +159,10 @@ func TestGenerationNames(t *testing.T) {
 	// The longest StatefulSet name with the highest generation still gives a
 	// Job name whose pods' job-name label is a label value.
 	long := Instance(strings.Repeat("f", 80), strings.Repeat("i", 80), InstanceKey(testDaemonID, "f", "i", testCreated))
-	if job := SeedJob(long, MaxGeneration); len(job) != 63 || !IsDNS1123Label(job) || !IsLabelValue(job) {
-		t.Errorf("SeedJob of the longest name = %q (%d)", job, len(job))
+	for _, job := range []string{SeedJob(long, MaxGeneration), ExportJob(long, MaxGeneration), RollbackJob(long, MaxGeneration), CommitJob(long, MaxGeneration)} {
+		if len(job) != 63 || !IsDNS1123Label(job) || !IsLabelValue(job) {
+			t.Errorf("Job of the longest name = %q (%d)", job, len(job))
+		}
 	}
 }
 
@@ -326,11 +331,12 @@ func FuzzK8sName(f *testing.F) {
 		}
 		crossCheck(t, "pod", pod)
 		for _, gen := range []int{1, int(uint64(nanos)%MaxGeneration) + 1, MaxGeneration} {
-			job := SeedJob(sts, gen)
-			if !IsDNS1123Label(job) || !IsLabelValue(job) {
-				t.Fatalf("SeedJob(%q, %d) = %q: not a Job name", sts, gen, job)
+			for _, job := range []string{SeedJob(sts, gen), ExportJob(sts, gen), RollbackJob(sts, gen), CommitJob(sts, gen)} {
+				if !IsDNS1123Label(job) || !IsLabelValue(job) {
+					t.Fatalf("Job name %q (gen %d): not a Job name", job, gen)
+				}
+				crossCheck(t, "job", job)
 			}
-			crossCheck(t, "job", job)
 			for _, secret := range []string{SpecSecret(sts, gen), EnvSecret(sts, gen)} {
 				if !IsDNS1123Label(secret) {
 					t.Fatalf("Secret name %q is not a DNS label", secret)

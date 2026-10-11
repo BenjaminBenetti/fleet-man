@@ -470,7 +470,10 @@ type KubeCluster struct {
 	AutomationMaxPerAgent *int32             `protobuf:"varint,43,opt,name=automation_max_per_agent,json=automationMaxPerAgent,proto3,oneof" json:"automation_max_per_agent,omitempty"`
 	Image                 *KubeImageSettings `protobuf:"bytes,44,opt,name=image,proto3" json:"image,omitempty"`
 	// rebuild_export is how Rebuild brings an instance's workspace back to the
-	// daemon host before it rebuilds. Empty = auto.
+	// daemon host before it rebuilds: "" or "auto" exports it from wherever
+	// the instance is (the running pod, or a stopped one's disk) over the
+	// daemon host's checkout, so the rebuild builds what the instance holds;
+	// "off" builds from the checkout as it is.
 	RebuildExport string                 `protobuf:"bytes,45,opt,name=rebuild_export,json=rebuildExport,proto3" json:"rebuild_export,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,46,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// updated_at is when a client last changed the record (Add, Update).

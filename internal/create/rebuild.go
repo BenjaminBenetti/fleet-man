@@ -2,7 +2,10 @@ package create
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
@@ -31,6 +34,11 @@ import (
 //     carries none of the prior fleet-launch / dotfiles / hook state.
 //  6. Persist the new ContainerID (it changes for devcontainer) and flip back
 //     to StatusRunning.
+//
+// A Kubernetes instance that never reached running (an interrupted or failed
+// create: no ContainerID) is rebuilt as the retry of its create, which needs
+// the daemon host's checkout: one that is gone is cloned (or copied from the
+// fleet's template) again first.
 //
 // ctx is the daemon job's: cancelling it (a destroy of the instance, or the
 // daemon shutting down) stops the rebuild at the next step, tearing down a
@@ -70,6 +78,12 @@ func RunRebuild(ctx context.Context, fleetName, instanceName string, verbose boo
 		setFailed(fleetName, instanceName, err)
 		return err
 	}
+	if inst.Backend == fleet.BackendKubernetes && inst.ContainerID == "" {
+		if err := ensureCheckout(ctx, f.Remote, inst.Branch, inst.WorkspaceDir); err != nil {
+			setFailed(fleetName, instanceName, err)
+			return err
+		}
+	}
 
 	backend.ReportStep(ctx, fleet.StepResolveMounts, "")
 	resolvedMounts, err := resolveProvisionMounts(ctx, instanceBackend, services, fleetName, instanceName)
@@ -87,6 +101,12 @@ func RunRebuild(ctx context.Context, fleetName, instanceName string, verbose boo
 	backend.ReportStep(ctx, fleet.StepBackendUp, "rebuild "+string(inst.Backend))
 	result, err := backend.RebuildContext(ctx, instanceBackend, inst.ContainerID, backend.UpRequest{WorkspaceDir: inst.WorkspaceDir, Mounts: resolvedMounts.Mounts})
 	if err != nil {
+		if errors.Is(err, backend.ErrCheckpointed) {
+			// The daemon is shutting down, and the backend left the rebuild
+			// at a checkpoint (its journal) that the next start undoes and
+			// settles the record from: the record stays as it is until then.
+			return err
+		}
 		// A ctx-aware backend stopped by the cancellation reports why.
 		err = cancelledOr(ctx, err)
 		setFailed(fleetName, instanceName, err)
@@ -103,6 +123,7 @@ func RunRebuild(ctx context.Context, fleetName, instanceName string, verbose boo
 	// Re-run the post-Up provisioning so the fresh container ends up equivalent
 	// to a newly created one. All best-effort (warnings, never fatal).
 	finishProvision(ctx, instanceBackend, services, fleetName, instanceName, inst.WorkspaceDir, result.ContainerID, resolvedMounts.Symlinks)
+	prependBackendWarnings(fleetName, instanceName, result.Warnings)
 
 	backend.ReportStep(ctx, fleet.StepMarkRunning, "")
 	if err := commitRunning(ctx, instanceBackend, fleetName, instanceName, result.ContainerID); err != nil {
@@ -110,4 +131,24 @@ func RunRebuild(ctx context.Context, fleetName, instanceName string, verbose boo
 	}
 	flog.Info("instance rebuilt", "fleet", fleetName, "instance", instanceName, "container", result.ContainerID, "ms", flog.MillisSince(start))
 	return nil
+}
+
+// ensureCheckout makes sure the daemon host's checkout of an instance is at
+// wsDir, cloning remoteURL (at branch) into it, or copying the fleet's
+// template, when it is gone or empty.
+func ensureCheckout(ctx context.Context, remoteURL, branch, wsDir string) error {
+	if wsDir == "" {
+		return errors.New("the instance record names no workspace directory")
+	}
+	if entries, err := os.ReadDir(wsDir); err == nil && len(entries) > 0 {
+		return nil
+	}
+	if fleet.IsTemplateRemote(remoteURL) {
+		backend.ReportStep(ctx, fleet.StepCopyWorkspace, "template "+remoteURL)
+		return cancelledOr(ctx, copyTemplateTree(ctx, remoteURL, wsDir))
+	}
+	if err := os.MkdirAll(filepath.Dir(wsDir), 0o755); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+	return cloneWorkspace(ctx, remoteURL, branch, wsDir)
 }

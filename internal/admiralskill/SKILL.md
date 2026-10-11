@@ -114,8 +114,11 @@ surfaces as a tool error.
   `color`, `branch` overrides).
 - `fleet_rebuild {fleet, instance, wait?}` recreates an instance's container in
   place (e.g. after its devcontainer config changed), **preserving the
-  workspace** — the git checkout and uncommitted edits survive. Only the
-  `devcontainer` and `codespaces` backends support it; `coder` does not.
+  workspace** — the git checkout and uncommitted edits survive. The
+  `devcontainer`, `codespaces` and `kubernetes` backends support it; `coder`
+  does not. It is also the **retry** of a failed `kubernetes` instance: one
+  whose create was interrupted or failed (what it left is deleted and the
+  create runs again), or whose rebuild failed and was rolled back.
 - `fleet_job_status {job_id}` reports a lifecycle job:
   `{state: running|succeeded|failed, step?, error?, warnings?, result?}`; while
   a create, clone or rebuild runs, `step` names where it is (`cloning
@@ -227,7 +230,7 @@ INSPECT
 LIFECYCLE  (async-first: returns {job_id, done:false} in seconds; wait:true blocks)
   fleet_up {fleet, instance, remote?, branch?, backend?, cluster?, wait?}
   fleet_clone {fleet, source, destination, display_name?, tag?, color?, branch?, wait?}
-  fleet_rebuild {fleet, instance, wait?}            # recreate container, keep workspace (devcontainer/codespaces)
+  fleet_rebuild {fleet, instance, wait?}            # recreate container, keep workspace; retries a failed cluster create/rebuild
   fleet_down {fleet, instance, wait?}               # remove one instance      (irreversible)
   fleet_destroy_fleet {fleet, wait?}                # remove fleet + instances (irreversible)
   fleet_job_status {job_id}                         # poll: running | succeeded | failed

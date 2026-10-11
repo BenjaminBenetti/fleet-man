@@ -62,7 +62,17 @@ type JobRun struct {
 	// is staged into it or fed to it (the workspace may hold secrets): its
 	// error ends the run.
 	Check func(*corev1.Pod) error
+	// While, when set, runs once the Job's pod has fleet's binary and the
+	// spec, before the job's result is collected: what fleetd does in the
+	// pod beside the job (a tool Job's workspace export), with exec running
+	// a command in the Job's container. The job is collected all the same,
+	// so its pod ends; While's error is then RunJob's.
+	While func(ctx context.Context, exec JobExec) error
 }
+
+// JobExec runs argv in a Job's container (as its user, in its own exec),
+// its output to stdout and stderr; a non-zero exit is an error.
+type JobExec func(ctx context.Context, argv []string, stdout, stderr io.Writer) error
 
 // ApplyJob creates (or updates) a Job from its server-side apply body
 // (podspec.ApplyBody of a podspec.RenderJob), under fleet's field manager.
@@ -179,7 +189,17 @@ func (p *Pool) RunJob(ctx context.Context, r JobRun) (jobboot.Result, error) {
 	}
 	p.opts.Logger.Info("kube job: staged", "cluster", r.Cluster, "job", ns+"/"+r.Job, "op", spec.Op, "gen", spec.Gen, "fleet_sha", art.SHA256[:12])
 
+	var whileErr error
+	if r.While != nil {
+		whileErr = r.While(ctx, func(ctx context.Context, argv []string, stdout, stderr io.Writer) error {
+			req := kubeexec.ExecRequest{Namespace: ns, Pod: pod.Name, Container: podspec.JobContainer, Command: argv}
+			return p.exec(ctx, c, req, kubeexec.Stdio{Stdout: stdout, Stderr: stderr})
+		})
+	}
 	res, err := p.feedJob(ctx, c, ns, pod.Name, paths, r)
+	if whileErr != nil {
+		return res, whileErr
+	}
 	if err == nil {
 		return res, nil
 	}

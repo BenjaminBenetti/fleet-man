@@ -500,6 +500,40 @@ func (m *Manager) Release(clusterID, holder string) error {
 	})
 }
 
+// MoveHold hands what from holds on the connection to to, and to lets go of
+// everything else it held: a rebuild that held its new image under a holder
+// of its own while it could still be rolled back gives it to the instance's
+// key once it succeeded, and the image the instance ran before starts its
+// retention clock. A from that holds nothing changes nothing (the key keeps
+// its image).
+func (m *Manager) MoveHold(clusterID, from, to string) error {
+	if err := m.checkIndex(clusterID); err != nil {
+		return err
+	}
+	if from == "" || to == "" || from == to {
+		return errors.New("image delivery: moving a hold needs two holders")
+	}
+	now := m.now()
+	return m.files.update(m.IndexPath(clusterID), func(ix *Index) error {
+		held := false
+		for i := range ix.Images {
+			held = held || slices.Contains(ix.Images[i].Holders, from)
+		}
+		if !held {
+			return nil
+		}
+		for i := range ix.Images {
+			e := &ix.Images[i]
+			if e.release(from, now) {
+				e.hold(to)
+			} else {
+				e.release(to, now)
+			}
+		}
+		return nil
+	})
+}
+
 // Lookup returns the delivery of the image holder holds on the connection
 // (the latest delivered when it holds several), or nil: what Start needs to
 // re-deliver it. Its PullSecrets name only a Secret the strategy brought

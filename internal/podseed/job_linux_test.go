@@ -490,3 +490,26 @@ func TestCPFallbackKeepsXattrsButNotTheImagesSELinuxLabel(t *testing.T) {
 		}
 	}
 }
+
+// A tool Job reports the disk's space and holds its pod until fleetd
+// collects that: the workspace export ran beside it meanwhile.
+func TestToolJobReportsTheDisk(t *testing.T) {
+	e := newJobEnv(t)
+	if code, res, log := e.runJob(t, e.seedSpec(1), true, nil); code != 0 || !res.OK {
+		t.Fatalf("gen 1: %d %+v\n%s", code, res, log)
+	}
+	code, res, log := e.runJob(t, e.spec(OpTool, 1), true, nil)
+	if code != 0 || !res.OK {
+		t.Fatalf("tool: %d %+v\n%s", code, res, log)
+	}
+	var tr ToolResult
+	if err := json.Unmarshal(res.Output, &tr); err != nil {
+		t.Fatalf("tool output %s: %v", res.Output, err)
+	}
+	if tr.Disk.Total <= 0 || tr.Disk.Free <= 0 || tr.Disk.Free > tr.Disk.Total {
+		t.Fatalf("tool disk %+v", tr.Disk)
+	}
+	if term := e.termination(t); !term.OK {
+		t.Fatalf("termination %+v", term)
+	}
+}

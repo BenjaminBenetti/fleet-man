@@ -145,7 +145,8 @@ var kubeGroups = []kubeGroup{
 		{path: "plugin_env", label: "Plugin env", kind: kubeKindList, note: "NAME passes fleetd's value, NAME=value sets it"},
 		{path: "node_selector", label: "Node selector", kind: kubeKindMap, def: "none"},
 		{path: "tolerations", label: "Tolerations", kind: kubeKindTolerations, def: "none"},
-		{path: "rebuild_export", label: "Rebuild export", kind: kubeKindText, def: "auto"},
+		{path: "rebuild_export", label: "Rebuild export", kind: kubeKindChoice, options: []string{"", "off"}, def: "auto",
+			note: "auto: a rebuild builds from the instance's workspace; off: from the daemon host's copy as it is"},
 	}},
 }
 

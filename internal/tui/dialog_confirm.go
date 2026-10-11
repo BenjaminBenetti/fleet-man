@@ -208,6 +208,10 @@ func (fleetPage *fleetPage) renderConfirmRebuildDialog(m *model) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	body := fmt.Sprintf("Rebuild %s/%s? This recreates the container from its devcontainer config. Your workspace — the git checkout and any uncommitted changes — is preserved.", fleetPage.dlg.fleet, fleetPage.dlg.inst)
+	if inst := fleetPage.dlgInstance(m); inst != nil && inst.ContainerID == "" && kubeRetryRecord(inst) {
+		// A failed cluster create: the rebuild is its retry.
+		body = fmt.Sprintf("Retry the create of %s/%s? What the failed create left on the cluster is deleted, and the instance is created again from its checkout.", fleetPage.dlg.fleet, fleetPage.dlg.inst)
+	}
 	dialog := fmt.Sprintf(
 		"%s\n\n%s\n\n%s",
 		dialogTitle.Render("Rebuild instance"),
@@ -281,4 +285,21 @@ func (fleetPage *fleetPage) renderConfirmDeleteSessionDialog(m *model) string {
 	b.WriteString("\n")
 
 	return b.String()
+}
+
+// dlgInstance is the instance the open dialog is about, as the TUI has it,
+// or nil.
+func (fleetPage *fleetPage) dlgInstance(m *model) *fleet.Instance {
+	if m.st == nil {
+		return nil
+	}
+	f, ok := m.st.Fleets[fleetPage.dlg.fleet]
+	if !ok {
+		return nil
+	}
+	inst, err := f.GetInstance(fleetPage.dlg.inst)
+	if err != nil {
+		return nil
+	}
+	return inst
 }

@@ -132,8 +132,8 @@ _be_config_written() {
 
 _be_row_target() { printf '%s\n' "☸ itest"; }
 
-# Rebuild on a cluster lands with P6.1, which turns this on.
-_be_rebuilds() { return 1; }
+# A cluster instance rebuilds (a new root generation on its disk).
+_be_rebuilds() { return 0; }
 
 # itest_remember_cluster_target <connection-id> — make the connection the
 # remembered deploy target in ~/.fleet/config.json, keeping every other
@@ -206,21 +206,28 @@ _be_cid_parts() {
 
 # _be_container_status <container_id> — "running" while its pod runs and is
 # ready, "absent" once the StatefulSet is gone or being deleted (a down's
-# foreground delete keeps it until its pod has terminated), "stopped" at 0
+# foreground delete keeps it until its pod has terminated) or runs a later
+# root generation than the id names (a rebuild replaced it), "stopped" at 0
 # replicas, else the pod's phase (lowercased) or "starting" while it has none
 # yet.
 _be_container_status() {
-  local parts ns sts replicas ready phase
+  local parts ns sts replicas ready phase gen live_gen deleting
   parts=$(_be_cid_parts "$1") || { echo absent; return 0; }
   read -r _ ns sts <<<"${parts}"
-  if ! replicas=$(_be_kubectl -n "${ns}" get statefulset "${sts}" -o 'jsonpath={.spec.replicas} {.metadata.deletionTimestamp}' 2>/dev/null); then
+  gen="${1##*@g}"
+  if ! replicas=$(_be_kubectl -n "${ns}" get statefulset "${sts}" -o 'jsonpath={.spec.replicas}|{.metadata.annotations.fleet\.dev/rebuild-gen}|{.metadata.deletionTimestamp}' 2>/dev/null); then
     echo absent
     return 0
   fi
-  case "${replicas}" in
-    *" "?*) echo absent; return 0 ;;
+  IFS='|' read -r replicas live_gen deleting <<<"${replicas}"
+  if [ -n "${deleting:-}" ]; then
+    echo absent
+    return 0
+  fi
+  case "${gen}" in
+    ''|*[!0-9]*) ;;
+    *) if [ -n "${live_gen}" ] && [ "${live_gen}" -gt "${gen}" ]; then echo absent; return 0; fi ;;
   esac
-  replicas="${replicas% }"
   if [ "${replicas}" = "0" ]; then
     echo stopped
     return 0

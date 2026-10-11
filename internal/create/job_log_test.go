@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -195,5 +196,80 @@ func TestRunRebuildRebuildsThroughRebuildContext(t *testing.T) {
 	}
 	if got := loadInstance(t, "i1"); got.Status != fleet.StatusFailed || got.Error != "rebuild failed" {
 		t.Fatalf("record = %s %q, want failed with the rebuild error", got.Status, got.Error)
+	}
+}
+
+// TestRunRebuildLeavesACheckpointedRecord: a rebuild the backend left at its
+// journal when the daemon shut down keeps its record rebuilding, for the
+// next start to undo; the run reports the checkpoint.
+func TestRunRebuildLeavesACheckpointedRecord(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	seedFleet(t, &fleet.Instance{Name: "i1", Status: fleet.StatusRebuilding, Backend: fleet.BackendDevcontainer, ContainerID: "old-cid", WorkspaceDir: "/ws/i1"})
+	checkpoint := fmt.Errorf("kubernetes:interrupted: the daemon shut down during the rebuild (at step reset): %w", backend.ErrCheckpointed)
+	stubInstanceBackend(t, &rebuildingJobBackend{fakeJobBackend: fakeJobBackend{rebuild: true, upErr: checkpoint}})
+	err := RunRebuild(context.Background(), "alpha", "i1", false)
+	if !errors.Is(err, backend.ErrCheckpointed) {
+		t.Fatalf("err = %v, want the checkpoint", err)
+	}
+	if got := loadInstance(t, "i1"); got.Status != fleet.StatusRebuilding || got.Error != "" {
+		t.Fatalf("record = %s %q, want it left rebuilding", got.Status, got.Error)
+	}
+}
+
+// checkoutSeeingBackend records whether the workspace was there when the
+// rebuild began.
+type checkoutSeeingBackend struct {
+	rebuildingJobBackend
+	sawCheckout bool
+}
+
+func (c *checkoutSeeingBackend) RebuildContext(ctx context.Context, containerID string, req backend.UpRequest) (*backend.UpResult, error) {
+	_, err := os.Stat(filepath.Join(req.WorkspaceDir, ".devcontainer", "devcontainer.json"))
+	c.sawCheckout = err == nil
+	return c.rebuildingJobBackend.RebuildContext(ctx, containerID, req)
+}
+
+// TestRunRebuildRetriesACreateFromAFreshCheckout: the rebuild of a cluster
+// instance that never reached running is the retry of its create, which
+// builds from the daemon host's checkout: one that is gone is made again
+// from the fleet's remote (here a template) first. A rebuild of an instance
+// that ran exports its workspace instead, and of another backend's touches
+// nothing.
+func TestRunRebuildRetriesACreateFromAFreshCheckout(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		inst         fleet.Instance
+		wantCheckout bool
+	}{
+		{"failed cluster create", fleet.Instance{Backend: fleet.BackendKubernetes, Status: fleet.StatusRebuilding, KubeCluster: "c", KubeKey: "abcd2345"}, true},
+		{"cluster instance that ran", fleet.Instance{Backend: fleet.BackendKubernetes, Status: fleet.StatusRebuilding, KubeCluster: "c", KubeKey: "abcd2345", ContainerID: "k8s:c/ns/sts@g1"}, false},
+		{"docker instance", fleet.Instance{Backend: fleet.BackendDevcontainer, Status: fleet.StatusRebuilding}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			tmpl := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(tmpl, ".devcontainer"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(tmpl, ".devcontainer", "devcontainer.json"), []byte("{}"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			inst := tc.inst
+			inst.Name = "i1"
+			inst.WorkspaceDir = filepath.Join(state.WorkspacesDir(), "alpha", "i1", "alpha")
+			if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
+				"alpha": {Name: "alpha", Remote: "file://" + tmpl, Instances: []*fleet.Instance{&inst}},
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			fake := &checkoutSeeingBackend{rebuildingJobBackend: rebuildingJobBackend{fakeJobBackend: fakeJobBackend{rebuild: true, upErr: errors.New("stop here")}}}
+			stubInstanceBackend(t, fake)
+			if err := RunRebuild(context.Background(), "alpha", "i1", false); err == nil || err.Error() != "stop here" {
+				t.Fatalf("RunRebuild = %v", err)
+			}
+			if fake.sawCheckout != tc.wantCheckout {
+				t.Fatalf("the checkout was there when the rebuild began: %v, want %v", fake.sawCheckout, tc.wantCheckout)
+			}
+		})
 	}
 }

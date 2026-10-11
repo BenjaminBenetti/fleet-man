@@ -92,7 +92,7 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	}, s.mcpClone)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_rebuild",
-		Description: "Rebuild an instance's container in place (e.g. after editing its devcontainer config), preserving the workspace — the git checkout and uncommitted edits survive. Only devcontainer and codespaces backends support rebuild; coder does not. Returns immediately with a job_id to poll via fleet_job_status; pass wait:true to block until done.",
+		Description: "Rebuild an instance's container in place (e.g. after editing its devcontainer config), preserving the workspace — the git checkout and uncommitted edits survive. The devcontainer, codespaces and kubernetes backends support rebuild; coder does not. On kubernetes it is also the retry of a failed instance: an interrupted or failed create (what it left is deleted and the create runs again), or a rebuild that failed and was rolled back. Returns immediately with a job_id to poll via fleet_job_status; pass wait:true to block until done.",
 	}, s.mcpRebuild)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_job_status",

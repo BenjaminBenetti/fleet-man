@@ -213,6 +213,27 @@ func SeedJob(statefulSet string, gen int) string {
 	return statefulSet + "-seed-g" + strconv.Itoa(gen)
 }
 
+// ExportJob is the name of the tool Job that holds generation gen's disk
+// while a rebuild exports a stopped instance's workspace:
+// "<sts>-xprt-g<gen>". The tool Jobs' names are as long as the seed's at
+// most, and each is its own, so a finished one waiting out its TTL never
+// stands in the way of the next.
+func ExportJob(statefulSet string, gen int) string {
+	return statefulSet + "-xprt-g" + strconv.Itoa(gen)
+}
+
+// RollbackJob is the name of the tool Job that puts generation gen's root
+// back from trash after a failed rebuild: "<sts>-rlbk-g<gen>".
+func RollbackJob(statefulSet string, gen int) string {
+	return statefulSet + "-rlbk-g" + strconv.Itoa(gen)
+}
+
+// CommitJob is the name of the tool Job that deletes the trash older than
+// generation gen once a rebuild to gen succeeded: "<sts>-cmit-g<gen>".
+func CommitJob(statefulSet string, gen int) string {
+	return statefulSet + "-cmit-g" + strconv.Itoa(gen)
+}
+
 // The suffixes of the per-(fleet, connection) objects (FleetObject).
 const (
 	SuffixAnchor          = "anchor"

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: `fleet rebuild` recreates the container (new id) while preserving the workspace, and the instance stays usable.
 set -euo pipefail
 

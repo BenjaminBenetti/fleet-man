@@ -4,6 +4,7 @@ package podseed
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -83,6 +84,8 @@ func RunJob(ctx context.Context, specPath string, log io.Writer) int {
 		out = outcomeOf(rollbackGeneration(spec.PVC, spec.Gen), spec.PVC)
 	case OpCommit:
 		out = outcomeOf(commitGeneration(spec.PVC, spec.Gen), spec.PVC)
+	case OpTool:
+		out = toolOutcome(spec.PVC)
 	}
 
 	term := jobboot.Termination{OK: out.err == nil, SHA256: out.sha, Bytes: out.bytes}
@@ -124,6 +127,19 @@ func outcomeOf(err error, pvc string) jobOutcome {
 	data, err := os.ReadFile(filepath.Join(pvc, ManifestFile))
 	if err != nil {
 		return jobOutcome{}
+	}
+	return jobOutcome{output: data, sha: sha256Hex(data)}
+}
+
+// toolOutcome is an OpTool's outcome: the disk's space as its output.
+func toolOutcome(pvc string) jobOutcome {
+	disk, err := DiskUsage(pvc)
+	if err != nil {
+		return jobOutcome{err: err}
+	}
+	data, err := json.Marshal(ToolResult{Disk: disk})
+	if err != nil {
+		return jobOutcome{err: err}
 	}
 	return jobOutcome{output: data, sha: sha256Hex(data)}
 }

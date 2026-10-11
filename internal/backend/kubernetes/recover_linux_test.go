@@ -158,12 +158,21 @@ func TestUndoRebuildAfterReset(t *testing.T) {
 	j := h.interruptedRebuild("seed", true)
 	zero := int32(0)
 	j.PrevReplicas, j.PrevStatus = &zero, fleet.StatusStopped
+	// fleetd's record of generation 2's pod, which the rebuild replaced.
+	t.Setenv("HOME", t.TempDir())
+	j.PrevRecord = &InstanceRecord{Cluster: testCluster, Namespace: jobNS, Key: rbKey, StatefulSet: rbSTS, Gen: 2, SpecHash: "sha256:gen2"}
+	if err := SaveInstanceRecord(InstanceRecord{Cluster: testCluster, Namespace: jobNS, Key: rbKey, StatefulSet: rbSTS, Gen: 3, SpecHash: "sha256:gen3"}); err != nil {
+		t.Fatal(err)
+	}
 	undo, err := h.pool.UndoRebuild(context.Background(), j, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !undo.RolledBack {
 		t.Fatal("not rolled back")
+	}
+	if rec, err := LoadInstanceRecord(testCluster, rbKey); err != nil || rec.Gen != 2 || rec.SpecHash != "sha256:gen2" {
+		t.Fatalf("fleet's record after the rollback: %+v %v, want generation 2's back", rec, err)
 	}
 	if got := h.execKinds(); got != "probe,stage,stage,feed" {
 		t.Fatalf("the rollback Job's execs: %s", got)
@@ -202,6 +211,24 @@ func TestUndoRebuildAfterReset(t *testing.T) {
 	}
 	if !h.exists(KindSecret, rbSTS+"-spec-g2") {
 		t.Error("generation 2's spec went")
+	}
+	// The seed the daemon died in is gone before the rollback Job is
+	// made: it would go on writing into the root the rollback moves.
+	seedGone, rollbackMade := -1, -1
+	for i, a := range h.cs.Actions() {
+		switch {
+		case a.GetVerb() == "delete" && a.GetResource().Resource == "jobs" && a.(k8stesting.DeleteAction).GetName() == rbSTS+"-seed-g3":
+			if seedGone < 0 {
+				seedGone = i
+			}
+		case a.GetVerb() == "patch" && a.GetResource().Resource == "jobs" && a.(k8stesting.PatchAction).GetName() == rbSTS+"-rollback-g2":
+			if rollbackMade < 0 {
+				rollbackMade = i
+			}
+		}
+	}
+	if seedGone < 0 || rollbackMade < 0 || seedGone > rollbackMade {
+		t.Errorf("the seed was deleted at action %d, the rollback Job made at %d: the seed must go first", seedGone, rollbackMade)
 	}
 }
 

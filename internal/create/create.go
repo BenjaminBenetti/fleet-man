@@ -92,26 +92,9 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 			return fmt.Errorf("mkdir: %w", err)
 		}
 
-		cloneArgs := []string{"clone"}
-		if branch != "" {
-			cloneArgs = append(cloneArgs, "--branch", branch)
-		}
-		cloneArgs = append(cloneArgs, "--", remoteURL, wsDir)
-		backend.ReportStep(ctx, fleet.StepGitClone, branchDetail(branch))
-		out, err := gitutil.Clone(ctx, remoteURL, cloneArgs, stepOutput(ctx))
-		if err != nil {
-			// A cancelled clone was killed: report why, not "signal: killed".
-			if cerr := checkCancelled(ctx); cerr != nil {
-				setFailed(fleetName, instanceName, cerr)
-				return cerr
-			}
-			detail := string(out)
-			if hint := gitutil.CloneFailureHint(detail, remoteURL, agentsock.CloneForwarding()); hint != "" {
-				detail = strings.TrimRight(detail, "\n") + "\n" + hint + "\n"
-			}
-			wrapped := fmt.Errorf("git clone failed: %w\n%s", err, detail)
-			setFailed(fleetName, instanceName, wrapped)
-			return wrapped
+		if err := cloneWorkspace(ctx, remoteURL, branch, wsDir); err != nil {
+			setFailed(fleetName, instanceName, err)
+			return err
 		}
 	}
 
@@ -176,6 +159,31 @@ func RunContext(ctx context.Context, fleetName, instanceName, remoteURL, branch 
 		return err
 	}
 	flog.Info("instance created", "fleet", fleetName, "instance", instanceName, "backend", backendType, "container", result.ContainerID, "ms", flog.MillisSince(start))
+	return nil
+}
+
+// cloneWorkspace git clones remoteURL (at branch, when set) into wsDir,
+// whose parent exists. A clone that fails says why, with a hint for the
+// failures a fix is known for; a cancelled one reports the cancellation.
+func cloneWorkspace(ctx context.Context, remoteURL, branch, wsDir string) error {
+	cloneArgs := []string{"clone"}
+	if branch != "" {
+		cloneArgs = append(cloneArgs, "--branch", branch)
+	}
+	cloneArgs = append(cloneArgs, "--", remoteURL, wsDir)
+	backend.ReportStep(ctx, fleet.StepGitClone, branchDetail(branch))
+	out, err := gitutil.Clone(ctx, remoteURL, cloneArgs, stepOutput(ctx))
+	if err != nil {
+		// A cancelled clone was killed: report why, not "signal: killed".
+		if cerr := checkCancelled(ctx); cerr != nil {
+			return cerr
+		}
+		detail := string(out)
+		if hint := gitutil.CloneFailureHint(detail, remoteURL, agentsock.CloneForwarding()); hint != "" {
+			detail = strings.TrimRight(detail, "\n") + "\n" + hint + "\n"
+		}
+		return fmt.Errorf("git clone failed: %w\n%s", err, detail)
+	}
 	return nil
 }
 

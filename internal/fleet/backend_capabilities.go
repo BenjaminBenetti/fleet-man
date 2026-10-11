@@ -19,9 +19,10 @@ var backendCapabilities = map[BackendType]BackendCapabilities{
 	BackendDevcontainer: {Clone: true, Rebuild: true},
 	BackendCodespaces:   {Rebuild: true},
 	BackendCoder:        {},
-	// Clone and rebuild of cluster instances (the copier and reseed paths)
-	// are not built yet; the handle refuses both until they are.
-	BackendKubernetes: {},
+	// A cluster instance rebuilds by reseeding its disk (which is also how a
+	// failed create is retried); its clone (the copier path) is not built
+	// yet, and the handle refuses it until it is.
+	BackendKubernetes: {Rebuild: true},
 }
 
 // allCapabilities is what a type without a row reports.
