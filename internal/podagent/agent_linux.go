@@ -287,13 +287,21 @@ func (a *agent) handlers() map[podwire.Tag]podwire.Handler {
 			fn(s)
 		}
 	}
-	return map[podwire.Tag]podwire.Handler{
+	h := map[podwire.Tag]podwire.Handler{
 		podwire.TagRPC:       track(a.serveRPC),
 		podwire.TagExec:      track(a.serveExec),
 		podwire.TagFileWrite: track(a.serveFileWrite),
 		podwire.TagFileRead:  track(a.serveFileRead),
 		podwire.TagForward:   track(a.serveForward),
 	}
+	// The share's spoke: its control connection rides the agent session, its
+	// content the bulk one (spoke_linux.go).
+	if a.opts.Role == podwire.RoleMain {
+		h[podwire.TagSyncCtl] = track(a.serveSyncCtl)
+	} else {
+		h[podwire.TagSyncBulk] = track(a.serveSyncBulk)
+	}
+	return h
 }
 
 // waitStreams waits, at most d, for the streams being served to end.

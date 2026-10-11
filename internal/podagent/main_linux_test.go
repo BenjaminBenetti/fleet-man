@@ -48,6 +48,12 @@ func runTestHelper(role string) int {
 			return 1
 		}
 		return 0
+	case "spoke":
+		if err := RunSpoke(); err != nil {
+			fmt.Fprintln(os.Stderr, "helper spoke:", err)
+			return 1
+		}
+		return 0
 	case "agent":
 		conn, err := TakeStdio()
 		if err != nil {

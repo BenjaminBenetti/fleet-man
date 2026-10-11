@@ -10,6 +10,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/execas"
 	"github.com/BenjaminBenetti/fleet-man/internal/podinit"
 	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
+	"github.com/BenjaminBenetti/fleet-man/internal/podshare"
 	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 )
@@ -73,6 +74,14 @@ type Options struct {
 	// shepherd").
 	Exe          string
 	ShepherdArgs []string
+	// SpokeArgs start the share's spoke: the argv after Exe ("pod-agent
+	// spoke"); SpokeEnv is its environment (this process's by default).
+	SpokeArgs []string
+	SpokeEnv  []string
+	// ShareDir is where the fleet's share (its tree) mounts in the pod, and
+	// ShareSync the root-only folder it mounts in (podshare.MountDir and
+	// SyncDir by default).
+	ShareDir, ShareSync string
 	// ShepherdEnv is the shepherds' environment (this process's by default).
 	ShepherdEnv []string
 
@@ -169,6 +178,18 @@ func (o Options) withDefaults() Options {
 	}
 	if o.ShepherdArgs == nil {
 		o.ShepherdArgs = []string{"pod-agent", "shepherd"}
+	}
+	if o.SpokeArgs == nil {
+		o.SpokeArgs = []string{"pod-agent", "spoke"}
+	}
+	if o.SpokeEnv == nil {
+		o.SpokeEnv = os.Environ()
+	}
+	if o.ShareDir == "" {
+		o.ShareDir = podshare.MountDir
+	}
+	if o.ShareSync == "" {
+		o.ShareSync = podshare.SyncDir
 	}
 	if o.ShepherdEnv == nil {
 		o.ShepherdEnv = os.Environ()

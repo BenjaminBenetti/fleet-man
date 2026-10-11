@@ -75,6 +75,9 @@ linters:
             # spoke alike, so it never reaches into the daemon either: the
             # caller hands it its folders, state directory and logger.
             - "**/internal/sharesync/**"
+            # The pod's half of the fleet's share (the share-layout init
+            # container, the spoke) runs inside pods too.
+            - "**/internal/podshare/**"
             # The SSH-agent provider runs where the human's ssh-agent is (TUI,
             # CLI), possibly far from the daemon: client code, like internal/mic.
             - "**/internal/agentfwd/**"

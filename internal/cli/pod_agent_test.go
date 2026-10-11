@@ -18,7 +18,7 @@ import (
 
 func TestPodAgentIsHidden(t *testing.T) {
 	root := NewRootCmd()
-	for _, path := range [][]string{{"pod-agent"}, {"pod-agent", "serve"}, {"pod-agent", "exec"}, {"pod-agent", "self-version"}, {"pod-agent", "shepherd"}, {"pod-agent", "install-bundle"}} {
+	for _, path := range [][]string{{"pod-agent"}, {"pod-agent", "serve"}, {"pod-agent", "exec"}, {"pod-agent", "self-version"}, {"pod-agent", "shepherd"}, {"pod-agent", "spoke"}, {"pod-agent", "install-bundle"}} {
 		cmd, _, err := root.Find(path)
 		if err != nil || cmd.Name() != path[len(path)-1] {
 			t.Fatalf("%v not registered: %v", path, err)

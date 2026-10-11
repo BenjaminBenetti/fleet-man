@@ -21,7 +21,7 @@ func newPodAgentCmd() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 	}
-	cmd.AddCommand(newPodAgentServeCmd(), newPodAgentExecCmd(), newPodAgentSelfVersionCmd(), newPodAgentShepherdCmd(), newPodAgentInstallBundleCmd())
+	cmd.AddCommand(newPodAgentServeCmd(), newPodAgentExecCmd(), newPodAgentSelfVersionCmd(), newPodAgentShepherdCmd(), newPodAgentSpokeCmd(), newPodAgentInstallBundleCmd())
 	return cmd
 }
 
@@ -106,6 +106,20 @@ func newPodAgentShepherdCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(*cobra.Command, []string) error {
 			return podagent.RunShepherd()
+		},
+	}
+}
+
+func newPodAgentSpokeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:           "spoke",
+		Short:         "Keep the fleet's share in sync for the pod agent (internal)",
+		Hidden:        true,
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(*cobra.Command, []string) error {
+			return podagent.RunSpoke()
 		},
 	}
 }
