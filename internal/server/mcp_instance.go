@@ -30,7 +30,9 @@ import (
 // instances of fleets with the setting on get one, and only that instance's
 // own processes (or the daemon's user, or root) are served
 // (instanceSocketSet). Devcontainer instances on a Linux host only: elsewhere
-// no socket can be served into the instance.
+// no socket can be served into the instance. A Kubernetes pod's agent binds
+// the socket itself, and the connections it relays are served here too
+// (podagent_hub.go).
 
 const (
 	// mcpInstanceSyncInterval is how often the sockets are reconciled against

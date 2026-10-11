@@ -27,6 +27,9 @@ import (
 //     (agentsock.ModeRelay): on macOS a host socket cannot cross into Docker
 //     Desktop's VM. They are an instanceSocketSet (instance_sockets.go), which
 //     binds them safely and checks every connection's peer.
+//
+// A Kubernetes pod's agent binds the pod's socket itself and relays each
+// connection to it here (serveFromPod, podagent_hub.go), on any daemon OS.
 
 // agentSyncInterval is how often the per-instance sockets are reconciled
 // against the instances in state.json.

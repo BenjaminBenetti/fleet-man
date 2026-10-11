@@ -21,6 +21,8 @@ import (
 // This moves the listeners off the thin client: the server owns ~/.fleet and
 // all socket files, and the remote-TUI goal needs the URL resolved server-side
 // with the client only launching the browser (see watch.proto BrowserOpen).
+// A Kubernetes pod's control socket is its agent's, which relays each
+// connection to handlerFor's handler (podagent_hub.go).
 
 // controlSyncInterval is how often the registry reconciles its listener set
 // against the running instances. The control socket only matters for running
