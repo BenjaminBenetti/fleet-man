@@ -90,14 +90,28 @@ func (m *kubeManager) createAllowed(st *state.State, target fleet.DeployTarget) 
 	if target.KubeCluster == "" {
 		return status.Error(codes.InvalidArgument, "name the Kubernetes connection to create the instance on (there is no remembered or only one)")
 	}
-	rec, ok := m.record(target.KubeCluster)
+	return m.quotaRoom(st, target.KubeCluster, 0)
+}
+
+// quotaRoom checks that connection id's quotas have room for one more
+// instance beyond the records of st and extra creates not in st yet (the
+// automation runs about to be created): kubernetes:quota
+// (RESOURCE_EXHAUSTED) when they do not, NOT_FOUND without the connection.
+//
+// An instance counts while its record holds an instance key, which is to
+// say objects in the cluster: a FAILED automation run whose pod and disk
+// were released (releaseFailedRun) holds none, and a record being
+// destroyed is on its way out. Seed caches (fi-seedcache-*) are fleet's own
+// and do not count: one per image, gone a week after their last use.
+func (m *kubeManager) quotaRoom(st *state.State, id string, extra int) error {
+	rec, ok := m.record(id)
 	if !ok {
-		return status.Errorf(codes.NotFound, "no Kubernetes connection %q", target.KubeCluster)
+		return status.Errorf(codes.NotFound, "no Kubernetes connection %q", id)
 	}
-	used := 0
+	used := extra
 	for _, f := range st.Fleets {
 		for _, inst := range f.Instances {
-			if inst.KubeCluster == rec.ID && inst.Status != fleet.StatusDeleting {
+			if inst.KubeCluster == rec.ID && inst.KubeKey != "" && inst.Status != fleet.StatusDeleting {
 				used++
 			}
 		}
@@ -119,6 +133,17 @@ func (m *kubeManager) createAllowed(st *state.State, target fleet.DeployTarget) 
 		}
 	}
 	return nil
+}
+
+// automationLimits are connection id's limits on automation runs (its
+// name, fire interval and per-agent run limit); ok is false without the
+// connection.
+func (m *kubeManager) automationLimits(id string) (clusterLimits, bool) {
+	rec, ok := m.record(id)
+	if !ok {
+		return clusterLimits{}, false
+	}
+	return clusterLimits{name: rec.GetDisplayName(), interval: rec.AutomationInterval(), maxPerAgent: rec.AutomationRunLimit()}, true
 }
 
 func orDefaultString(s, def string) string {

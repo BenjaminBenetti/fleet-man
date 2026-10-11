@@ -151,6 +151,11 @@ type model struct {
 	kubePlugins  map[string]kubePlugin
 	kubeHost     string
 
+	// automationStatus is the daemon's pushed automation status
+	// (automation_login.go), by "fleet\x00agent"; nil until the first push
+	// and after an armada switch.
+	automationStatus map[string]*fleetgrpc.AutomationAgentStatus
+
 	// Port forwarding
 	portForwards *portforward.Manager // manages active port forward processes
 
@@ -912,14 +917,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.fleetPage.buildRows(&m)
 			}
 		}
+		// A Log in action waiting for the instance it created opens its
+		// login once that runs.
+		var loginCmd tea.Cmd
+		if m.fleetPage != nil {
+			loginCmd = m.fleetPage.checkPendingLogin(&m)
+		}
 		// The new daemon is answering: if a switch's synchronous config reload
 		// failed (slow endpoint), refetch config now so it isn't stuck on the
 		// placeholder default. Fires once per switch.
 		if m.armadaConfigPending {
 			m.armadaConfigPending = false
-			return m, tea.Batch(spinCmd, reloadConfigCmd(m.watchGen))
+			return m, tea.Batch(spinCmd, loginCmd, reloadConfigCmd(m.watchGen))
 		}
-		return m, spinCmd
+		return m, tea.Batch(spinCmd, loginCmd)
 
 	case runtimeChangedMsg:
 		if msg.gen != m.watchGen {
@@ -1000,6 +1011,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case kubeClustersMsg:
 		return m, tea.Batch(spinCmd, m.handleKubeClustersMsg(msg))
+
+	case automationStatusMsg:
+		m.handleAutomationStatusMsg(msg)
+		return m, spinCmd
+
+	case loginSessionMsg:
+		return m, tea.Batch(spinCmd, m.handleLoginSessionMsg(msg))
 
 	case kubeTestMsg:
 		return m, tea.Batch(spinCmd, m.handleKubeTestMsg(msg))

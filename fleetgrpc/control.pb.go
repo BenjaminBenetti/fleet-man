@@ -1111,9 +1111,13 @@ func (x *SetLastSeenVersionRequest) GetVersion() string {
 }
 
 // Generic reply for the synchronous mutations: the post-mutation State.
+// warnings are what the mutation accepted but the caller should know
+// (SetFleetSettings: an automation agent whose firings the login check will
+// refuse).
 type MutationReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	State         *State                 `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
+	Warnings      []string               `protobuf:"bytes,2,rep,name=warnings,proto3" json:"warnings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1151,6 +1155,13 @@ func (*MutationReply) Descriptor() ([]byte, []int) {
 func (x *MutationReply) GetState() *State {
 	if x != nil {
 		return x.State
+	}
+	return nil
+}
+
+func (x *MutationReply) GetWarnings() []string {
+	if x != nil {
+		return x.Warnings
 	}
 	return nil
 }
@@ -1220,9 +1231,10 @@ const file_control_proto_rawDesc = "" +
 	"\n" +
 	"fleet_name\x18\x03 \x01(\tR\tfleetName\"5\n" +
 	"\x19SetLastSeenVersionRequest\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\tR\aversion\"7\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\"S\n" +
 	"\rMutationReply\x12&\n" +
-	"\x05state\x18\x01 \x01(\v2\x10.fleetgrpc.StateR\x05stateB:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
+	"\x05state\x18\x01 \x01(\v2\x10.fleetgrpc.StateR\x05state\x12\x1a\n" +
+	"\bwarnings\x18\x02 \x03(\tR\bwarningsB:Z8github.com/BenjaminBenetti/fleet-man/fleetgrpc;fleetgrpcb\x06proto3"
 
 var (
 	file_control_proto_rawDescOnce sync.Once

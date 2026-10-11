@@ -104,6 +104,38 @@ type service struct {
 	// rather than block (see webhook.go). Drained only while runScheduler is
 	// running (the real serve loop); tests that use newService() read it directly.
 	triggerFires chan []triggerFire
+
+	// automation is the automation limiter (automation_limits.go): the
+	// cluster agents' limits and their triggers' queues, shared by the
+	// scheduler and the webhook receiver; made on first use (limiter), so a
+	// zero service in a test has one too.
+	automation     *automationLimiter
+	automationOnce sync.Once
+	// schedulerWake asks the scheduler to look at its queues and status
+	// again (a settings change) without waiting for its next tick.
+	schedulerWake chan struct{}
+}
+
+// limiter is the service's automation limiter.
+func (s *service) limiter() *automationLimiter {
+	s.automationOnce.Do(func() {
+		if s.automation == nil {
+			s.automation = newAutomationLimiter()
+		}
+	})
+	return s.automation
+}
+
+// wakeScheduler asks the running scheduler to look again at once; a no-op
+// without one.
+func (s *service) wakeScheduler() {
+	if s.schedulerWake == nil {
+		return
+	}
+	select {
+	case s.schedulerWake <- struct{}{}:
+	default:
+	}
 }
 
 func newService() *service {
@@ -117,6 +149,9 @@ func newService() *service {
 		shutdownCh:   make(chan struct{}),
 		bgCtx:        context.Background(),
 		triggerFires: make(chan []triggerFire, triggerFireBuffer),
+		// Buffered by one: a wake while the scheduler is busy is kept, more
+		// are the same wake.
+		schedulerWake: make(chan struct{}, 1),
 	}
 	svc.instanceMCP = newInstanceMCP(svc)
 	svc.kube = newKubeManager(svc)

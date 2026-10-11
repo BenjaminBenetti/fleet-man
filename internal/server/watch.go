@@ -14,8 +14,9 @@ import (
 //
 // The persisted snapshots come from the state poller (disk re-Load) and job
 // writes, the runtime sidecar from the runtime pollers, the in-flight jobs
-// (ActiveJobs) from the job manager, and the Kubernetes connections
-// (KubeClusters) from the kube manager. The per-job Job* events and
+// (ActiveJobs) from the job manager, the Kubernetes connections
+// (KubeClusters) from the kube manager, and the automation agents'
+// status (AutomationStatus) from the scheduler. The per-job Job* events and
 // reattach_job_ids are not used: a job's own stream carries its events.
 func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreamingServer[fleetgrpc.Event]) error {
 	ctx := stream.Context()
@@ -59,6 +60,11 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 			// there are none).
 			if h.kubeClusters != nil {
 				sub.enqueueKubeClusters(h.kubeClusters)
+			}
+			// The automation agents refused, queued or running, so the
+			// automation view's agent rows say so from the start.
+			if h.automationStatus != nil {
+				sub.enqueueAutomationStatus(h.automationStatus)
 			}
 		}
 		close(registered)
@@ -134,6 +140,11 @@ func (s *service) Watch(req *fleetgrpc.WatchRequest, stream grpc.ServerStreaming
 			}
 			if clusters := sub.takeKubeClusters(); clusters != nil {
 				if err := stream.Send(&fleetgrpc.Event{Kind: &fleetgrpc.Event_KubeClusters{KubeClusters: clusters}}); err != nil {
+					return err
+				}
+			}
+			if auto := sub.takeAutomationStatus(); auto != nil {
+				if err := stream.Send(&fleetgrpc.Event{Kind: &fleetgrpc.Event_AutomationStatus{AutomationStatus: auto}}); err != nil {
 					return err
 				}
 			}

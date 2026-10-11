@@ -67,6 +67,17 @@ func AutomationWatchPath() string {
 	return filepath.Join(FleetDir(), "automation", "watch.json")
 }
 
+// SyncLocationDir returns the host folder that keeps a fleet's own copy of
+// one location's agent login files (~/.fleet/sync/<fleet>/loc/<location>/,
+// location a cluster connection's id): each tool's credential file at its
+// path below the fleet's mount root (syncpolicy.Table.Credentials), written
+// by that location's sync and removed by a logout there. The automation
+// login check reads it, so a firing needs no cluster call. Both names are
+// reduced to safe single path segments, like TriggerLogsDir's.
+func SyncLocationDir(fleetName, location string) string {
+	return filepath.Join(FleetDir(), "sync", safeLogSegment(fleetName), "loc", safeLogSegment(location))
+}
+
 // safeLogSegment reduces name to one filesystem-safe path segment: it keeps
 // letters, digits, and -._, maps everything else to '_', and collapses the
 // empty / "." / ".." forms (which would escape or alias a directory) to "_".

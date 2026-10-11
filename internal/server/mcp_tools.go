@@ -152,7 +152,7 @@ func registerMCPTools(srv *mcp.Server, s *service) {
 	}, s.mcpTriggerDelete)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "fleet_trigger_logs",
-		Description: "Read an automation trigger's recorded event logs: the payloads of its recent firings (webhook body, bash command stdout, or schedule fire-time), captured on the daemon so you can debug what fired it. Returns {logs, count} with the firings concatenated, oldest first.",
+		Description: "Read an automation trigger's recorded event logs: the payloads of its recent firings (webhook body, bash command stdout, or schedule fire-time), captured on the daemon so you can debug what fired it, each followed by `# outcome:` lines saying what became of it for each agent (the instance it got, or why not: queued, refused, dropped, not created, failed, reaped). Returns {logs, count} with the firings concatenated, oldest first.",
 	}, s.mcpTriggerLogs)
 
 	// --- Kubernetes cluster connections ---

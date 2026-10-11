@@ -126,3 +126,28 @@ func TestKubeClusterJSONRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// The automation limits take their defaults when unset, and 0 turns either
+// off.
+func TestKubeClusterAutomationLimits(t *testing.T) {
+	zero, two, neg := 0, 2, -1
+	for _, tc := range []struct {
+		interval string
+		max      *int
+		wantI    time.Duration
+		wantMax  int
+	}{
+		{"", nil, DefaultKubeAutomationFireInterval, DefaultKubeAutomationMaxPerAgent},
+		{"0", &zero, 0, 0},
+		{"45s", &two, 45 * time.Second, 2},
+		{"bogus", &neg, DefaultKubeAutomationFireInterval, 0},
+	} {
+		k := &KubeCluster{AutomationFireInterval: tc.interval, AutomationMaxPerAgent: tc.max}
+		if got := k.AutomationInterval(); got != tc.wantI {
+			t.Errorf("AutomationInterval(%q) = %v, want %v", tc.interval, got, tc.wantI)
+		}
+		if got := k.AutomationRunLimit(); got != tc.wantMax {
+			t.Errorf("AutomationRunLimit(%v) = %d, want %d", tc.max, got, tc.wantMax)
+		}
+	}
+}

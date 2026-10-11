@@ -195,6 +195,10 @@ message SetLastSeenVersionRequest {
 }
 
 // Generic reply for the synchronous mutations: the post-mutation State.
+// warnings are what the mutation accepted but the caller should know
+// (SetFleetSettings: an automation agent whose firings the login check will
+// refuse).
 message MutationReply {
   State state = 1;
+  repeated string warnings = 2;
 }

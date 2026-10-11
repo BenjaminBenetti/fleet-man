@@ -196,26 +196,35 @@ func (p *seedCachePlan) cloneFrom(disk *corev1.PersistentVolumeClaim) {
 
 // awaitClaim waits, at most seedCacheBindTimeout, for claim name, a clone,
 // to bind: a ProvisioningFailed event on it (a driver that cannot clone)
-// ends the wait at once.
+// ends the wait at once. A read of the claim that fails is tried again
+// until then: a wait that only ever failed to read it ends with that
+// error, which is no clone failure (cloneFailure).
 func awaitClaim(ctx context.Context, cs kclient.Interface, ns, name string, since time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, seedCacheBindTimeout)
 	defer cancel()
+	var readErr error
+	read := false
 	for {
 		pvc, err := cs.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{})
 		switch {
 		case err != nil && ctx.Err() == nil:
-			return fmt.Errorf("reading the clone %s: %w", name, err)
+			readErr = err
 		case err == nil && pvc.Status.Phase == corev1.ClaimBound:
 			return nil
+		case err == nil:
+			read = true
 		}
 		if msg := provisioningFailed(ctx, cs, ns, name, since); msg != "" {
 			return fmt.Errorf("the clone %s did not provision: %s", name, msg)
 		}
 		if err := sleepCtx(ctx, seedCacheWaitInterval); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				return fmt.Errorf("the clone %s did not bind within %s", name, seedCacheBindTimeout)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				return err
 			}
-			return err
+			if !read && readErr != nil {
+				return fmt.Errorf("reading the clone %s: %w", name, readErr)
+			}
+			return fmt.Errorf("the clone %s did not bind within %s", name, seedCacheBindTimeout)
 		}
 	}
 }
@@ -422,7 +431,11 @@ func (c *creation) seedFromCache(ctx context.Context, o *podspec.Objects, spec *
 		return fmt.Errorf("cancelled: %w", context.Cause(ctx))
 	}
 	flog.Warn("kube create: the disk did not clone from the seed cache; seeding in full", "cluster", c.id.cluster, "cache", p.name, "err", err)
-	seedCaches.turnOff(c.id.cluster, time.Now())
+	// Only a clone that failed says the driver does not clone; one the API
+	// would not let fleet look at (a transient error) says nothing of it.
+	if cloneFailure(err) {
+		seedCaches.turnOff(c.id.cluster, time.Now())
+	}
 	p.clone = false
 	return c.uncloneDisk(ctx, o)
 }

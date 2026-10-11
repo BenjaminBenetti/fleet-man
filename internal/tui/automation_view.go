@@ -148,6 +148,10 @@ func triggerSummary(t fleet.Trigger) string {
 // agentSummary is the dim description shown beside an agent's name: where it
 // runs ("☸ <cluster>" for a cluster agent, "(missing)" once that connection
 // is gone) and how many triggers reference it (the issue's "<- x" indicator).
+//
+// The daemon's automation status adds the agent's runs ("2 running",
+// "3 queued") and, when the login check refuses its firings, why and the
+// key that logs in ("⚠ log in to Claude once for this fleet on ☸ prod (L)").
 func agentSummary(m *model, f *fleet.Fleet, a fleet.Agent) string {
 	n := triggerCountForAgent(f, a.Name)
 	parts := []string{boundTargetLabel(m, a.DeployTarget())}
@@ -156,6 +160,9 @@ func agentSummary(m *model, f *fleet.Fleet, a fleet.Agent) string {
 		suffix = ""
 	}
 	parts = append(parts, fmt.Sprintf("← %d trigger%s", n, suffix))
+	if f != nil {
+		parts = append(parts, agentStatusParts(m.automationAgentStatus(f.Name, a.Name))...)
+	}
 	return strings.Join(parts, " · ")
 }
 

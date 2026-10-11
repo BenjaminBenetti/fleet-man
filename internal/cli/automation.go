@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -67,22 +68,24 @@ var triggerLogs = func(ctx context.Context, fleetName, triggerName string) (stri
 // mutateAutomation reads the named fleet's settings, applies fn to its
 // (domain) agent/trigger lists, and writes the result back — preserving every
 // other settings field. fn returns the modified settings (the shared fleet.*
-// mutators do exactly this) or an error that aborts the write.
-var mutateAutomation = func(ctx context.Context, fleetName string, fn func(fleet.FleetSettings) (fleet.FleetSettings, error)) error {
+// mutators do exactly this) or an error that aborts the write. It returns
+// the warnings the daemon saved the change with (an agent its login check
+// will refuse).
+var mutateAutomation = func(ctx context.Context, fleetName string, fn func(fleet.FleetSettings) (fleet.FleetSettings, error)) ([]string, error) {
 	conn, err := fleetclient.Dial(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer conn.Close()
 	svc := conn.Service()
 
 	reply, err := svc.GetState(ctx, &fleetgrpc.GetStateRequest{})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pf := reply.GetState().GetFleets()[fleetName]
 	if pf == nil {
-		return fmt.Errorf("fleet %q not found", fleetName)
+		return nil, fmt.Errorf("fleet %q not found", fleetName)
 	}
 	// Keep the live proto settings as the carrier so all the fields this command
 	// doesn't touch (mounts, presets, home dir, ...) survive the wholesale write.
@@ -97,13 +100,21 @@ var mutateAutomation = func(ctx context.Context, fleetName string, fn func(fleet
 	}
 	settings, err = fn(settings)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ps.Agents = protoconv.AgentsToProto(settings.Agents)
 	ps.Triggers = protoconv.TriggersToProto(settings.Triggers)
 
-	if _, err := svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{Fleet: fleetName, Settings: ps}); err != nil {
-		return err
+	saved, err := svc.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{Fleet: fleetName, Settings: ps})
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	return saved.GetWarnings(), nil
+}
+
+// printWarnings writes the daemon's warnings to w, one per line.
+func printWarnings(w io.Writer, warnings []string) {
+	for _, line := range warnings {
+		fmt.Fprintln(w, "warning: "+line)
+	}
 }

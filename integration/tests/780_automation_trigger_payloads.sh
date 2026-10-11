@@ -117,9 +117,12 @@ agent_target=(--backend devcontainer)
 if itest_backend_is kubernetes; then
   agent_target=(--cluster itest)
 fi
+# The command sets claude's API key, which signs it in wherever it runs: the
+# automation login check refuses a claude agent on a cluster where Claude was
+# never logged in for the fleet (the fake claude ignores the key).
 for agent in hooker basher; do
   out=$("${FLEET_BIN}" agent create "${FLEET}" "${agent}" "${agent_target[@]}" \
-    --command "claude --system-prompt '\${SYS_PROMPT}' '\${PROMPT}'" --system-prompt "be-terse" 2>&1) \
+    --command "ANTHROPIC_API_KEY=itest claude --system-prompt '\${SYS_PROMPT}' '\${PROMPT}'" --system-prompt "be-terse" 2>&1) \
     || fail "agent create ${agent} failed: ${out}"
 done
 out=$("${FLEET_BIN}" trigger create "${FLEET}" hook --type webhook --agent hooker \

@@ -95,6 +95,9 @@ type fleetPage struct {
 	triggerDlg    automationTriggerState // add/edit-trigger dialog
 	agentDlg      automationAgentState   // add/edit-agent dialog
 	autoDel       autoDeleteState        // pending trigger/agent delete (viewConfirmDeleteAutomation)
+	// pendingLogin is a Log in action waiting for the instance it created to
+	// run (automation_login.go); nil when none waits.
+	pendingLogin *pendingLogin
 }
 
 // newFleetPage creates a new fleet page with default state.

@@ -841,6 +841,11 @@ func (m *model) switchArmada(entry armadaEntry) tea.Cmd {
 	// So do its Kubernetes connections, and the tests and logins still
 	// streaming from it.
 	m.resetKube()
+	// And its automation status, and a Log in waiting on one of its instances.
+	m.automationStatus = nil
+	if m.fleetPage != nil {
+		m.fleetPage.pendingLogin = nil
+	}
 	if page, ok := m.currentPage.(*settingsPage); ok {
 		page.kubeDialog = nil
 		page.resetKubeRowFocus()

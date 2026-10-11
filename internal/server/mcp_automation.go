@@ -56,6 +56,14 @@ type mcpTrigger struct {
 type AutomationOutput struct {
 	Agents   []mcpAgent   `json:"agents"`
 	Triggers []mcpTrigger `json:"triggers"`
+	// Warnings are what the change was saved with but the caller should
+	// know: an agent whose firings the login check will refuse.
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+func withWarnings(out AutomationOutput, warnings []string) AutomationOutput {
+	out.Warnings = warnings
+	return out
 }
 
 func toMCPAutomation(s fleet.FleetSettings) AutomationOutput {
@@ -139,20 +147,21 @@ func (s *service) automationSettings(ctx context.Context, fleetName string) (fle
 
 // mutateAutomation reads the fleet's full settings, applies fn to them, and
 // writes the result back — preserving every settings field fn doesn't touch.
-// It returns the settings as persisted.
-func (s *service) mutateAutomation(ctx context.Context, fleetName string, fn func(fleet.FleetSettings) (fleet.FleetSettings, error)) (fleet.FleetSettings, error) {
+// It returns the settings as persisted, and SetFleetSettings' warnings.
+func (s *service) mutateAutomation(ctx context.Context, fleetName string, fn func(fleet.FleetSettings) (fleet.FleetSettings, error)) (fleet.FleetSettings, []string, error) {
 	settings, err := s.automationSettings(ctx, fleetName)
 	if err != nil {
-		return fleet.FleetSettings{}, err
+		return fleet.FleetSettings{}, nil, err
 	}
 	settings, err = fn(settings)
 	if err != nil {
-		return fleet.FleetSettings{}, err
+		return fleet.FleetSettings{}, nil, err
 	}
-	if _, err := s.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{Fleet: fleetName, Settings: protoconv.FleetSettingsToProto(settings)}); err != nil {
-		return fleet.FleetSettings{}, mcpErr(err)
+	reply, err := s.SetFleetSettings(ctx, &fleetgrpc.SetFleetSettingsRequest{Fleet: fleetName, Settings: protoconv.FleetSettingsToProto(settings)})
+	if err != nil {
+		return fleet.FleetSettings{}, nil, mcpErr(err)
 	}
-	return settings, nil
+	return settings, reply.GetWarnings(), nil
 }
 
 // --- read ---
@@ -191,7 +200,7 @@ func (s *service) mcpAgentCreate(ctx context.Context, _ *mcp.CallToolRequest, in
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	settings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
+	settings, warnings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
 		return fleet.AddAgent(st, fleet.Agent{
 			Name:         in.Name,
 			Command:      in.Command,
@@ -203,7 +212,7 @@ func (s *service) mcpAgentCreate(ctx context.Context, _ *mcp.CallToolRequest, in
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	return nil, toMCPAutomation(settings), nil
+	return nil, withWarnings(toMCPAutomation(settings), warnings), nil
 }
 
 type FleetAgentUpdateInput struct {
@@ -220,7 +229,7 @@ func (s *service) mcpAgentUpdate(ctx context.Context, _ *mcp.CallToolRequest, in
 	if in.Fleet == "" || in.Name == "" {
 		return nil, AutomationOutput{}, errors.New("fleet and name are required")
 	}
-	settings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
+	settings, warnings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
 		a, ok := fleet.FindAgent(st.Agents, in.Name)
 		if !ok {
 			return st, fmt.Errorf("agent %q not found", in.Name)
@@ -255,7 +264,7 @@ func (s *service) mcpAgentUpdate(ctx context.Context, _ *mcp.CallToolRequest, in
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	return nil, toMCPAutomation(settings), nil
+	return nil, withWarnings(toMCPAutomation(settings), warnings), nil
 }
 
 // FleetAutomationItemInput identifies one automation item (agent or trigger) by
@@ -269,13 +278,13 @@ func (s *service) mcpAgentDelete(ctx context.Context, _ *mcp.CallToolRequest, in
 	if in.Fleet == "" || in.Name == "" {
 		return nil, AutomationOutput{}, errors.New("fleet and name are required")
 	}
-	settings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
+	settings, warnings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
 		return fleet.DeleteAgent(st, in.Name)
 	})
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	return nil, toMCPAutomation(settings), nil
+	return nil, withWarnings(toMCPAutomation(settings), warnings), nil
 }
 
 // --- triggers ---
@@ -315,13 +324,13 @@ func (s *service) mcpTriggerCreate(ctx context.Context, _ *mcp.CallToolRequest, 
 	if in.Fleet == "" || in.Name == "" {
 		return nil, AutomationOutput{}, errors.New("fleet and name are required")
 	}
-	settings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
+	settings, warnings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
 		return fleet.AddTrigger(st, triggerFromCreate(in))
 	})
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	return nil, toMCPAutomation(settings), nil
+	return nil, withWarnings(toMCPAutomation(settings), warnings), nil
 }
 
 type FleetTriggerUpdateInput struct {
@@ -344,7 +353,7 @@ func (s *service) mcpTriggerUpdate(ctx context.Context, _ *mcp.CallToolRequest, 
 	if in.Fleet == "" || in.Name == "" {
 		return nil, AutomationOutput{}, errors.New("fleet and name are required")
 	}
-	settings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
+	settings, warnings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
 		t, ok := fleet.FindTrigger(st.Triggers, in.Name)
 		if !ok {
 			return st, fmt.Errorf("trigger %q not found", in.Name)
@@ -388,20 +397,20 @@ func (s *service) mcpTriggerUpdate(ctx context.Context, _ *mcp.CallToolRequest, 
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	return nil, toMCPAutomation(settings), nil
+	return nil, withWarnings(toMCPAutomation(settings), warnings), nil
 }
 
 func (s *service) mcpTriggerDelete(ctx context.Context, _ *mcp.CallToolRequest, in FleetAutomationItemInput) (*mcp.CallToolResult, AutomationOutput, error) {
 	if in.Fleet == "" || in.Name == "" {
 		return nil, AutomationOutput{}, errors.New("fleet and name are required")
 	}
-	settings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
+	settings, warnings, err := s.mutateAutomation(ctx, in.Fleet, func(st fleet.FleetSettings) (fleet.FleetSettings, error) {
 		return fleet.DeleteTrigger(st, in.Name)
 	})
 	if err != nil {
 		return nil, AutomationOutput{}, err
 	}
-	return nil, toMCPAutomation(settings), nil
+	return nil, withWarnings(toMCPAutomation(settings), warnings), nil
 }
 
 // --- trigger event logs ---

@@ -255,6 +255,32 @@ func (k *KubeCluster) GetDisplayName() string {
 	return k.DisplayName
 }
 
+// AutomationInterval is the shortest time between two firings of one
+// trigger whose agent runs here: DefaultKubeAutomationFireInterval when
+// unset (or unparseable, which validation refuses), 0 when turned off.
+func (k *KubeCluster) AutomationInterval() time.Duration {
+	if k.AutomationFireInterval == "" {
+		return DefaultKubeAutomationFireInterval
+	}
+	if k.AutomationFireInterval == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(k.AutomationFireInterval)
+	if err != nil || d < 0 {
+		return DefaultKubeAutomationFireInterval
+	}
+	return d
+}
+
+// AutomationRunLimit is how many runs one agent may have here at once:
+// DefaultKubeAutomationMaxPerAgent when unset, 0 for no limit.
+func (k *KubeCluster) AutomationRunLimit() int {
+	if k.AutomationMaxPerAgent == nil {
+		return DefaultKubeAutomationMaxPerAgent
+	}
+	return max(*k.AutomationMaxPerAgent, 0)
+}
+
 // AutoExpandsDisk reports whether disks grow when nearly full (default on).
 func (k *KubeCluster) AutoExpandsDisk() bool { return boolOr(k.AutoExpandDisk, true) }
 
