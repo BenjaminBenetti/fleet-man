@@ -97,16 +97,17 @@ func DockerSidecarCommand(args ...string) []string {
 // its socket.
 var dockerReadyCommand = []string{"docker", "--host", "unix://" + DockerSocket, "version", "--format", "{{.Server.Version}}"}
 
-// The sidecar's startup probe allows its engine this long to come up (a first
-// start on a fresh disk sets up its storage and networks).
+// The sidecar's startup probe allows its engine three minutes to come up (a
+// first start on a fresh disk sets up its storage and networks).
 const (
-	dockerProbePeriod    = 1
-	dockerProbeFailures  = 180
-	dockerProbeTimeout   = 5
-	dockerDataMountPath  = "/var/lib/docker"
-	dockerVolumeSubPath  = "vol/" + DockerDataVolume
-	dockerSidecarRunUser = int64(0)
+	dockerProbePeriod   = 1
+	dockerProbeFailures = 180
+	dockerProbeTimeout  = 5
 )
+
+// dockerDataMountPath is where the engine keeps its data, from the instance
+// disk's vol/fleet-docker.
+const dockerDataMountPath = "/var/lib/docker"
 
 // dockerImage is the sidecar's image: the connection's service_images.dind,
 // else DefaultDockerImage.
@@ -124,7 +125,8 @@ func (r *renderer) dockerSidecar() corev1.Container {
 	for _, p := range d.AddressPools {
 		args = append(args, "--default-address-pool", "base="+p.Base+",size="+strconv.Itoa(p.Size))
 	}
-	sc := &corev1.SecurityContext{RunAsUser: ptr(dockerSidecarRunUser), RunAsGroup: ptr(dockerSidecarRunUser)}
+	// Root, as docker's engine runs.
+	sc := &corev1.SecurityContext{RunAsUser: ptr(int64(0)), RunAsGroup: ptr(int64(0))}
 	if d.Privileged {
 		sc.Privileged = ptr(true)
 	}
@@ -154,7 +156,7 @@ func (r *renderer) dockerSidecar() corev1.Container {
 func (r *renderer) dockerSidecarMounts() []corev1.VolumeMount {
 	mounts := []corev1.VolumeMount{
 		{Name: volumeDocker, MountPath: DockerDir},
-		{Name: volumeDisk, MountPath: dockerDataMountPath, SubPath: dockerVolumeSubPath},
+		{Name: volumeDisk, MountPath: dockerDataMountPath, SubPath: podseed.VolumeSubPath(DockerDataVolume)},
 	}
 	taken := map[string]bool{DockerDir: true, dockerDataMountPath: true}
 	add := func(at, sub string, ro bool) {

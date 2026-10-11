@@ -43,6 +43,8 @@ import (
 //	/opt/fleet/run             emptyDir
 //	/fleet-mounts/control      emptyDir, memory-backed
 //	tmpfs, --shm-size          emptyDir, memory-backed
+//	/opt/fleet/docker          emptyDir shared with the fleet-docker sidecar
+//	                           (a docker.sock bind; see render_docker.go)
 //
 // Every workload goes through Harden.
 
