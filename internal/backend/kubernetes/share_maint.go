@@ -187,8 +187,12 @@ func (p *Pool) measureShare(ctx context.Context, clusterID, h8, claim string) (i
 		return 0, false
 	}
 	for _, cand := range cands {
-		key := cand.StatefulSet[len(cand.StatefulSet)-names.HashLen:]
-		rec, err := LoadInstanceRecord(clusterID, key)
+		// The pod's labels name its record: a pod some other hand made with
+		// fleet's labels names none of ours.
+		if cand.Key == "" {
+			continue
+		}
+		rec, err := LoadInstanceRecord(clusterID, cand.Key)
 		if err != nil || rec.StatefulSet != cand.StatefulSet {
 			continue
 		}

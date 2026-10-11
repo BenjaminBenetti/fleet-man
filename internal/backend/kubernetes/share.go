@@ -245,8 +245,13 @@ func (c *creation) prepareShare(ctx context.Context) error {
 			return nil
 		}
 		s.class = c.shareClass()
-		if err := c.checkBinding(ctx, s.class); err != nil {
-			return err
+		// Only one node's pods mount a single-node share: one an Immediate
+		// class put elsewhere than the instances' disks cannot be used. A
+		// multi-node share is mounted from any node.
+		if s.mode == topology.SingleNode {
+			if err := c.checkBinding(ctx, s.class); err != nil {
+				return err
+			}
 		}
 		if pvc, err = c.applyShare(ctx, s, h8); err != nil {
 			return err

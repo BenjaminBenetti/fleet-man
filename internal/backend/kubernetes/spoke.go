@@ -34,7 +34,7 @@ import (
 // than one it already saw for the same tree (it lost the lease).
 
 // spokeLeases are the newest lease epoch fleetd saw for each tree (by
-// connection and claim, or instance key on the copy tier).
+// connection and the share's PVC, or instance key on the copy tier).
 var spokeLeases = struct {
 	mu     sync.Mutex
 	newest map[string]uint64
@@ -93,6 +93,10 @@ func (l *SpokeLink) Close() error { return l.Ctl.Close() }
 // record's), and returns its connection. The pod gets its agent session
 // first (verified, as for anything fleetd sends a pod).
 func (p *Pool) OpenSpoke(ctx context.Context, t PodTarget, key string, share ShareRecord) (*SpokeLink, error) {
+	tree, err := p.leaseTree(ctx, t.Cluster, key, share)
+	if err != nil {
+		return nil, err
+	}
 	sess, err := p.EnsureAgent(ctx, t)
 	if err != nil {
 		return nil, err
@@ -101,7 +105,32 @@ func (p *Pool) OpenSpoke(ctx context.Context, t PodTarget, key string, share Sha
 	if err != nil {
 		return nil, fmt.Errorf("starting the share's spoke in pod %s: %w", t.Pod(), err)
 	}
-	return &SpokeLink{Ctl: ctl, sess: sess, tree: ShareTree(t.Cluster, key, share)}, nil
+	return &SpokeLink{Ctl: ctl, sess: sess, tree: tree}, nil
+}
+
+// leaseTree names the tree whose lease epochs a spoke's go by: its
+// ShareTree, and for a share the PVC's UID too. The lease lives on the
+// share, so a share made again under the same name (its fleet destroyed and
+// made again, the PVC deleted by hand) counts its epochs from 1 again, and
+// would be refused as older than the old share's.
+func (p *Pool) leaseTree(ctx context.Context, clusterID, key string, share ShareRecord) (string, error) {
+	tree := ShareTree(clusterID, key, share)
+	if share.Claim == "" || !topology.Mode(share.Mode).Shared() {
+		return tree, nil
+	}
+	c, err := p.Cluster(clusterID)
+	if err != nil {
+		return "", err
+	}
+	cs, err := p.clientset(c)
+	if err != nil {
+		return "", err
+	}
+	pvc, err := cs.CoreV1().PersistentVolumeClaims(c.Namespace()).Get(ctx, share.Claim, metav1.GetOptions{})
+	if err != nil {
+		return "", classify(fmt.Errorf("reading the fleet's share %s: %w", share.Claim, err))
+	}
+	return tree + "@" + string(pvc.UID), nil
 }
 
 // ServeSpoke serves link's spoke on hub as the side info names (fleetd's
@@ -129,6 +158,8 @@ type SpokeCandidate struct {
 	StatefulSet string
 	// Started is when the pod started.
 	Started time.Time
+	// Key is the instance's key (its pod's LabelKey).
+	Key string
 }
 
 // ElectSpoke picks the pod of a share that runs its spoke: the oldest
@@ -183,7 +214,7 @@ func (p *Pool) ShareCandidates(ctx context.Context, clusterID, h8, claim string)
 		if pod.Status.StartTime != nil {
 			started = pod.Status.StartTime.Time
 		}
-		out = append(out, SpokeCandidate{StatefulSet: sts, Started: started})
+		out = append(out, SpokeCandidate{StatefulSet: sts, Started: started, Key: pod.Labels[names.LabelKey]})
 	}
 	return out, nil
 }

@@ -45,9 +45,24 @@ func TestMaintainSharesVisitsEachFleetOnEachCluster(t *testing.T) {
 	prev := sharePool
 	sharePool = func() shareMaintainer { return rec }
 	t.Cleanup(func() { sharePool = prev })
+	down := map[string]bool{}
+	asked := map[string]int{}
+	prevUsable := shareClusterUsable
+	shareClusterUsable = func(_ context.Context, cluster string) bool { asked[cluster]++; return !down[cluster] }
+	t.Cleanup(func() { shareClusterUsable = prevUsable })
 	maintainShares(context.Background())
 	want := []fleetShare{{"c1", "alpha"}, {"c1", "beta"}, {"c2", "alpha"}}
 	if !reflect.DeepEqual(rec.seen, want) {
 		t.Fatalf("maintained %v, want %v", rec.seen, want)
+	}
+
+	// A connection that is not usable now is skipped, asked once a round.
+	rec.seen, asked, down["c1"] = nil, map[string]int{}, true
+	maintainShares(context.Background())
+	if want := []fleetShare{{"c2", "alpha"}}; !reflect.DeepEqual(rec.seen, want) {
+		t.Fatalf("with c1 down, maintained %v, want %v", rec.seen, want)
+	}
+	if asked["c1"] != 1 || asked["c2"] != 1 {
+		t.Fatalf("asked whether each connection is usable %v times, want once each", asked)
 	}
 }

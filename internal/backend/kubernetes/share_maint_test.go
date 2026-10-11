@@ -82,3 +82,24 @@ func TestShareUsageWithoutAShare(t *testing.T) {
 		t.Fatalf("ShareUsage = %v, %v", ok, err)
 	}
 }
+
+// TestMeasureShareSkipsAPodWithoutAKey: a pod with fleet's labels but no
+// instance key (one some other hand made, its name too short to hold one)
+// is never measured in, nor does it stop the upkeep.
+func TestMeasureShareSkipsAPodWithoutAKey(t *testing.T) {
+	claim := "fs-alpha-abcdefgh-share"
+	labels := names.Base(handleOwner, handleCluster)
+	labels[names.LabelShareGroup] = "abcdefgh"
+	labels[names.LabelRole] = string(names.RoleInstance)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "x-0", Namespace: handleNS, Labels: labels},
+		Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "share", VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim},
+		}}}},
+		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
+	}
+	r := newHandleRig(t, pod)
+	if used, ok := r.pool.measureShare(context.Background(), handleCluster, "abcdefgh", claim); ok || used != 0 {
+		t.Fatalf("measureShare = %d, %v, want nothing measured", used, ok)
+	}
+}

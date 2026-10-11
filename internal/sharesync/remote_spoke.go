@@ -339,8 +339,12 @@ func (s *Spoke) Report(ctx context.Context, _ string, r Report) (Reply, error) {
 
 // ServeBulk serves one of the hub's bulk connections: the content of an op
 // the spoke asked for (BulkPut), or content the hub fetches (BulkGet). It
-// returns once the connection is done with.
+// returns once the connection is done with, or ctx ends, which closes it: a
+// hub that stopped reading never holds the spoke (and its lease) past its
+// control connection.
 func (s *Spoke) ServeBulk(ctx context.Context, conn net.Conn) error {
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	var h BulkHeader
 	if err := readMsg(conn, &h); err != nil {
 		_ = conn.Close()

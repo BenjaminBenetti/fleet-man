@@ -240,6 +240,23 @@ func TestPrepareShareRefusesImmediateBindingOnManyNodes(t *testing.T) {
 	if single.share.bind || len(single.share.placement.Terms) != 1 {
 		t.Fatalf("an Immediately bound share: bind %v, placed by %+v", single.share.bind, single.share.placement.Terms)
 	}
+	// A multi-node share is mounted from any node: its class may bind at
+	// once.
+	multi := shareCaps(wffc, immediate)
+	multi.ShareMode = string(topology.MultiNode)
+	mcs := fake.NewClientset()
+	go func() {
+		for {
+			if _, err := mcs.CoreV1().PersistentVolumeClaims(handleNS).Get(context.Background(), ShareClaim("alpha", h8()), metav1.GetOptions{}); err == nil {
+				bindShare(t, mcs, "node-b")
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	if err := shareCreation(mcs, "web", multi, fleet.KubeCluster{SharedStorageClass: "fast"}).prepareShare(context.Background()); err != nil {
+		t.Fatalf("an Immediate class for a multi-node share: %v", err)
+	}
 }
 
 // TestPrepareShareRefusesAForeignClaim: a PVC of the share's name that is not

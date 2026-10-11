@@ -4,6 +4,7 @@ package preflight
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -181,5 +182,31 @@ func TestDeepSharePods(t *testing.T) {
 				t.Fatalf("deleted %v, want both pods and the volume", f.deleted)
 			}
 		})
+	}
+}
+
+// TestDeepSharePodsLiftsTheCopyTier: a connection an earlier deep test put on
+// the copy tier, whose probe now mounts the volume from two pods, is back in
+// single-node mode and no longer LIMITED for it.
+func TestDeepSharePodsLiftsTheCopyTier(t *testing.T) {
+	defer func(a, b, c time.Duration) { sharePodsTimeout, sharePodsMount, sharePodsPoll = a, b, c }(sharePodsTimeout, sharePodsMount, sharePodsPoll)
+	sharePodsTimeout, sharePodsMount, sharePodsPoll = 5*time.Second, 50*time.Millisecond, time.Millisecond
+	c := newCluster(t, minikubeNode(), storageClass("standard", "k8s.io/minikube-hostpath", isDefault))
+	f := &sharePodsFake{second: func(p *corev1.Pod) { p.Status.Phase = corev1.PodSucceeded }}
+	f.install(c)
+	tgt := target(c, fleet.KubeCluster{})
+	no := false
+	r := &run{t: &tgt, caps: &fleetgrpc.KubeCapabilities{}, nsExists: true, multiPodRWO: &no}
+	r.caps.StorageClasses = []*fleetgrpc.KubeStorageClass{{Name: "standard", IsDefault: true, BindingMode: "Immediate"}}
+	r.sharedStorage(context.Background())
+	if r.caps.GetShareMode() != "copy" || !slices.Contains(r.limited, LimitedCopyTier) {
+		t.Fatalf("before the probe: share mode %q, limited %q", r.caps.GetShareMode(), r.limited)
+	}
+	r.sharePods(context.Background())
+	if got := check(t, r.res, CheckSharedStorage); got.GetResult() != fleetgrpc.KubeCheckResult_KUBE_CHECK_RESULT_PASS || r.caps.GetShareMode() != "single-node" {
+		t.Fatalf("after a passing probe: shared_storage %v, share mode %q", got, r.caps.GetShareMode())
+	}
+	if len(r.limited) != 0 {
+		t.Fatalf("after a passing probe the connection is still limited by %q", r.limited)
 	}
 }

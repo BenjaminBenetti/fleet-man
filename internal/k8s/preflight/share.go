@@ -5,6 +5,7 @@ package preflight
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -38,6 +39,12 @@ const (
 // LimitedCopyTier is the LIMITED reason of a connection on the copy tier.
 const LimitedCopyTier = "logins may need repeating"
 
+// The other LIMITED reasons shared_storage gives.
+const (
+	limitedSharesUnavailable = "fleet shares unavailable"
+	limitedSharesImmediate   = "fleet shares: Immediate binding"
+)
+
 // sharePodsTimeout bounds the two-pod probe, sharePodsStart how long its
 // first pod (and the volume it binds) may take to run, sharePodsMount how
 // long its second pod may take to mount the volume once the first runs
@@ -69,6 +76,9 @@ func (r *run) shareClass() (*fleetgrpc.KubeStorageClass, string, bool) {
 // sharedStorage reports the share mode and its class.
 func (r *run) sharedStorage(ctx context.Context) {
 	r.running(CheckSharedStorage)
+	// The deep test's probe runs this again with its word: what the first
+	// run limited the connection by goes, as its check's result does.
+	r.unlimit(LimitedCopyTier, limitedSharesUnavailable, limitedSharesImmediate)
 	if r.multiPodRWO != nil && !*r.multiPodRWO {
 		r.caps.ShareMode = string(topology.Copy)
 		r.limit(LimitedCopyTier)
@@ -84,7 +94,7 @@ func (r *run) sharedStorage(ctx context.Context) {
 	switch {
 	case !ok && r.t.Cluster.SharedStorageClass != "" && len(r.caps.StorageClasses) > 0:
 		r.fail(CheckSharedStorage, fmt.Sprintf("storage class %q for fleet shares does not exist", name), "pick one the cluster offers, or clear the setting to use the instance disks' class")
-		r.limit("fleet shares unavailable")
+		r.limit(limitedSharesUnavailable)
 		return
 	case !ok:
 		what := "the cluster's default class"
@@ -114,10 +124,15 @@ func (r *run) sharedStorage(ctx context.Context) {
 	}
 	if why := topology.ImmediateProblem(tc, len(r.caps.Nodes)); why != "" {
 		r.warn(CheckSharedStorage, detail+": "+why, topology.ImmediateFix)
-		r.limit("fleet shares: Immediate binding")
+		r.limit(limitedSharesImmediate)
 		return
 	}
 	r.pass(CheckSharedStorage, detail)
+}
+
+// unlimit drops reasons from the LIMITED reasons found so far.
+func (r *run) unlimit(reasons ...string) {
+	r.limited = slices.DeleteFunc(r.limited, func(have string) bool { return slices.Contains(reasons, have) })
 }
 
 // sharePods is the deep test's two-pod probe: one RWO volume of the share's

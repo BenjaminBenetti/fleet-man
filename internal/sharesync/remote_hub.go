@@ -310,6 +310,10 @@ func (r *remoteSide) need(m wireMsg) {
 	go func() {
 		defer conn.Close()
 		defer rc.Close()
+		// A spoke that stopped reading holds the copy no longer than its
+		// control connection lasts.
+		stop := context.AfterFunc(r.ctx, func() { _ = conn.Close() })
+		defer stop()
 		_, _ = io.Copy(conn, io.MultiReader(bytes.NewReader(data), rc))
 	}()
 	r.w.answer(m.ID, wireMsg{T: msgData, Bulk: true})

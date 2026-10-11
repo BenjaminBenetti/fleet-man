@@ -319,3 +319,27 @@ func TestWireMessagesAreBounded(t *testing.T) {
 		t.Fatal("readMsg took an oversized length")
 	}
 }
+
+// TestSpokeBulkEndsWithItsContext: a bulk connection the hub opened and then
+// left (no header, or content it stopped reading) is closed once the spoke's
+// context ends, so the spoke can end and give up its lease.
+func TestSpokeBulkEndsWithItsContext(t *testing.T) {
+	ctl, other := net.Pipe()
+	defer ctl.Close()
+	defer other.Close()
+	s := NewSpoke(ctl, nil, SpokeOptions{})
+	hub, spoke := net.Pipe()
+	defer hub.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.ServeBulk(ctx, spoke) }()
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("ServeBulk of a connection that sent nothing succeeded")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ServeBulk still waits on a bulk connection after its context ended")
+	}
+}

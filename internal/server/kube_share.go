@@ -11,6 +11,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
+	"github.com/BenjaminBenetti/fleet-man/internal/svcruntime/kubert"
 )
 
 // kube_share.go is the upkeep of the fleets' shares on their clusters (the
@@ -29,16 +30,34 @@ type shareMaintainer interface {
 	MaintainShare(ctx context.Context, clusterID, fleetName string) (fleet.ShareUsage, bool, error)
 }
 
+// shareClusterUsable reports whether a connection is usable now, as its
+// last probe found (a seam for tests).
+var shareClusterUsable = func(ctx context.Context, clusterID string) bool {
+	return kubert.For(clusterID).Reachable(ctx)
+}
+
 // maintainShares runs the upkeep of every fleet's share on every connection
-// it has an instance on, one at a time; best-effort, logged.
+// it has an instance on, one at a time; best-effort, logged. A connection
+// that is not usable now is left for the next round: each of its fleets
+// would wait out its timeout, holding up the upkeep loop (and the Buildkit
+// credentials' renewal it runs too).
 func maintainShares(ctx context.Context) {
 	st, err := state.Load()
 	if err != nil {
 		return
 	}
+	usable := map[string]bool{}
 	for _, s := range fleetShares(st) {
 		if ctx.Err() != nil {
 			return
+		}
+		ok, seen := usable[s.cluster]
+		if !seen {
+			ok = shareClusterUsable(ctx, s.cluster)
+			usable[s.cluster] = ok
+		}
+		if !ok {
+			continue
 		}
 		sctx, cancel := context.WithTimeout(ctx, shareUpkeepTimeout)
 		if _, _, err := sharePool().MaintainShare(sctx, s.cluster, s.fleet); err != nil && ctx.Err() == nil {
