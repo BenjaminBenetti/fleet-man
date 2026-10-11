@@ -211,6 +211,10 @@ func TestFailInterruptedKubernetesJobs(t *testing.T) {
 		if inst.Status != fleet.StatusFailed || !strings.HasPrefix(inst.Error, want) {
 			t.Errorf("%s = %s %q, want failed %q", name, inst.Status, inst.Error, want)
 		}
+		// The advice names only what the backend can do.
+		if want := ": " + interruptedRetry(fleet.BackendKubernetes); !strings.HasSuffix(inst.Error, want) {
+			t.Errorf("%s error %q does not end %q", name, inst.Error, want)
+		}
 	}
 	if d := r.inst("docker"); d.Status != fleet.StatusFailed || d.Error != interruptedByRestart {
 		t.Errorf("devcontainer record = %+v", d)
@@ -816,5 +820,24 @@ func TestReconcilerPassClones(t *testing.T) {
 				t.Fatalf("journal kept %v, want %v", !tc.kept, tc.kept)
 			}
 		})
+	}
+}
+
+// An interrupted job's advice names a rebuild only where the backend can
+// rebuild.
+func TestInterruptedRetryNamesOnlyWhatTheBackendCan(t *testing.T) {
+	for _, tc := range []struct {
+		backend fleet.BackendType
+		rebuild bool
+	}{
+		{fleet.BackendDevcontainer, true},
+		{fleet.BackendCodespaces, true},
+		{fleet.BackendCoder, false},
+		{fleet.BackendKubernetes, fleet.BackendKubernetes.Capabilities().Rebuild},
+	} {
+		got := interruptedRetry(tc.backend)
+		if strings.Contains(got, "rebuild") != tc.rebuild {
+			t.Errorf("%s: %q, rebuild advised = %v, want %v", tc.backend, got, !tc.rebuild, tc.rebuild)
+		}
 	}
 }

@@ -208,7 +208,17 @@ func (r *kubeRecovery) interruptedError(fleetName string, inst *fleet.Instance) 
 	if ok {
 		msg += fmt.Sprintf(" (at step %s)", j.Step)
 	}
-	return msg + "; it was not resumed: rebuild it to retry, or destroy it"
+	return msg + "; it was not resumed: " + interruptedRetry(inst.Backend)
+}
+
+// interruptedRetry is how to retry an interrupted job on backend t: a
+// rebuild where the backend can rebuild, else destroying the instance and
+// creating it again.
+func interruptedRetry(t fleet.BackendType) string {
+	if t.Capabilities().Rebuild {
+		return "rebuild it to retry, or destroy it"
+	}
+	return "destroy it and create it again"
 }
 
 // settle finishes what start-up marking left of the failed records'
