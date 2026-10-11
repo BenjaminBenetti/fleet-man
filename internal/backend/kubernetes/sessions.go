@@ -13,9 +13,10 @@ import (
 // sessions.go selects the tmux an instance's sessions use: the image's own
 // when it has one, else the static tmux fleet bundles (installed into the
 // pod, then on every spawn's PATH via the agent's bundle wiring). Nothing in
-// a pod ever runs apt. An attach calls EnsureTmux before it runs `tmux
-// new-session -A`, so a tmux-less image's first attach finds the bundled
-// binary rather than failing.
+// a pod ever runs apt. A create and a start make sure of it once the agent is
+// up (so a session made without an attach, `fleet spawn-session` or MCP
+// fleet_session_spawn, finds tmux too), and an attach calls EnsureTmux again
+// before it runs `tmux new-session -A`.
 
 // ensureTmuxTimeout bounds the probe and the one-time bundle install.
 const ensureTmuxTimeout = 3 * time.Minute
@@ -31,6 +32,11 @@ func (b *Backend) EnsureTmux(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	return ensureTmuxOn(ctx, s)
+}
+
+// ensureTmuxOn is EnsureTmux on a session that is up.
+func ensureTmuxOn(ctx context.Context, s *AgentSession) error {
 	// `command -v tmux` finds the image's tmux, or the bundle once it is
 	// installed (the agent puts the bundle's bin last on PATH).
 	res, err := s.Client().Run(ctx, podwire.ExecHeader{Request: execas.Request{Class: execas.ClassScript, Argv: []string{"sh", "-c", "command -v tmux"}}}, nil)

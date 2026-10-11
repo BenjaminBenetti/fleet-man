@@ -109,6 +109,9 @@ func (b *Backend) Start(containerID string) error {
 	if err := b.startHooks(ctx, sess, pod, rec, containerID); err != nil {
 		state.WriteWarn(id.fleet, id.name, fmt.Sprintf("lifecycle hooks after start: %v", err))
 	}
+	if err := ensureTmuxOn(ctx, sess); err != nil {
+		state.WriteWarn(id.fleet, id.name, fmt.Sprintf("tmux for the instance's sessions: %v", err))
+	}
 	return nil
 }
 

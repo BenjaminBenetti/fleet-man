@@ -329,6 +329,10 @@ func (c *creation) provision(ctx context.Context, cfg *devcli.Config) (*backend.
 	if err != nil {
 		return nil, fmt.Errorf("the devcontainer's lifecycle hooks: %w", err)
 	}
+	// After the hooks, which may install the image's own tmux.
+	if err := ensureTmuxOn(ctx, sess); err != nil {
+		c.warn(ctx, fmt.Sprintf("tmux for the instance's sessions: %v", err))
+	}
 	return &backend.UpResult{Outcome: "success", ContainerID: containerID, RemoteUser: capture.RemoteUser, RemoteWorkspaceFolder: cfg.WorkspaceFolder}, nil
 }
 
