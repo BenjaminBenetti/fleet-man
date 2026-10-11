@@ -33,9 +33,10 @@ import (
 // transport fleetd itself uses, re-attached after a drop so a pane outlives
 // an apiserver rollout, a network blip or a fleetd restart; and the saved +
 // live container logs. A cluster the shim cannot reach itself fails with
-// kubernetes:unreachable (fleetd's answers carry their own codes). The cluster is reached only through internal/kubeexec
-// (the client-go leaf; the transport is opaque here), so the -tags nok8s pod
-// build gets a stub (kube_exec_nok8s.go) — the pod never runs the shim.
+// kubernetes:unreachable (fleetd's answers carry their own codes). The
+// cluster is reached only through internal/kubeexec (the client-go leaf; the
+// transport is opaque here), so the -tags nok8s pod build gets a stub
+// (kube_exec_nok8s.go) — the pod never runs the shim.
 
 // redialBackoff paces re-dials after a drop.
 var redialBackoff = []time.Duration{0, time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second}

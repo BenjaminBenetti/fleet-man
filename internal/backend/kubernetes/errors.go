@@ -39,10 +39,11 @@ func apiCode(err error) kubeerr.Code {
 		return kubeerr.Unreachable
 	case errors.Is(err, context.Canceled):
 		return ""
+	case kubeerr.IsUnreachable(err):
+		// Before the deadline: a dial that timed out is the cluster's.
+		return kubeerr.Unreachable
 	case errors.Is(err, context.DeadlineExceeded):
 		return kubeerr.Timeout
-	case kubeerr.IsUnreachable(err):
-		return kubeerr.Unreachable
 	}
 	return ""
 }

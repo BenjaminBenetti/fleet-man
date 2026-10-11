@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // refusedGet is what client-go returns for a GET to an API server nobody
@@ -31,8 +32,29 @@ func refusedGet(t *testing.T) error {
 	return err
 }
 
+// endedDial is the error of a dial to an address that never answers whose
+// context ended first: with an expired deadline it is the "i/o timeout"
+// that Is context.DeadlineExceeded, which net also gives about half the
+// times a dialer's own Timeout ends such a dial.
+func endedDial(t *testing.T, ctx context.Context) error {
+	t.Helper()
+	_, err := (&net.Dialer{}).DialContext(ctx, "tcp", "192.0.2.1:443")
+	if err == nil {
+		t.Fatal("a dial with an ended context connected")
+	}
+	return err
+}
+
 func TestUnreached(t *testing.T) {
 	refused := refusedGet(t)
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelExpired()
+	timedOut := endedDial(t, expired)
+	if !errors.Is(timedOut, context.DeadlineExceeded) {
+		t.Fatalf("the timed out dial %v is not a deadline", timedOut)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
 	for name, tc := range map[string]struct {
 		err  error
 		code Code
@@ -41,6 +63,10 @@ func TestUnreached(t *testing.T) {
 		"reset":       {fmt.Errorf("stream: %w", os.NewSyscallError("read", syscall.ECONNRESET)), Unreachable},
 		"no route":    {&net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.EHOSTUNREACH)}, Unreachable},
 		"dns":         {&url.Error{Op: "Get", URL: "https://api.lab.invalid", Err: &net.DNSError{Err: "no such host", Name: "api.lab.invalid", IsNotFound: true}}, Unreachable},
+		// A host that never answers: no connection was made, whichever
+		// deadline ended the dial.
+		"dial timeout": {&url.Error{Op: "Get", URL: "https://192.0.2.1:443/api", Err: timedOut}, Unreachable},
+		"dial cancel":  {&url.Error{Op: "Get", URL: "https://192.0.2.1:443/api", Err: endedDial(t, cancelled)}, ""},
 		// A code it already has wins (an expired login read off a 401).
 		"coded": {Wrap(Unauthorized, refused), Unauthorized},
 		// The caller gave up, or its deadline passed: not the cluster's doing.
