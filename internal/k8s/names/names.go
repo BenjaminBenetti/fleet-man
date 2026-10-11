@@ -76,6 +76,11 @@ const (
 	// known: a volume's topology never changes, and reading it again needs a
 	// cluster-scoped permission fleet may lack.
 	AnnotationShareTopology = "fleet.dev/share-topology"
+	// AnnotationMovingOff, on an instance's StatefulSet, names the node its
+	// fleet is being moved off (an evacuation in progress): set before the
+	// instance is stopped and removed once it runs again, so a daemon that
+	// restarts in between finishes the move.
+	AnnotationMovingOff = "fleet.dev/moving-off"
 )
 
 // Role is LabelRole's value: what an object is for.

@@ -241,10 +241,14 @@ func (p *Pool) Forget(t PodTarget) {
 	p.mu.Unlock()
 	k := trackKey{t.Cluster, t.StatefulSet}
 	p.instMu.Lock()
+	held := p.tracks[k] != nil && p.tracks[k].holderNode != ""
 	delete(p.tracks, k)
 	delete(p.supervised, k)
 	delete(p.watched, k)
 	p.instMu.Unlock()
+	if held {
+		p.syncNodeWatches(t.Cluster)
+	}
 	p.forgetDesired(k)
 	for _, slot := range gone {
 		slot.forget()

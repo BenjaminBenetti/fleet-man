@@ -2511,7 +2511,10 @@ type KubeInstanceRuntime struct {
 	// sessions_ended: that restart killed every process (an out-of-memory kill
 	// on an unprivileged pod), not only the sessions.
 	SessionsEnded bool `protobuf:"varint,6,opt,name=sessions_ended,json=sessionsEnded,proto3" json:"sessions_ended,omitempty"`
-	// node_cordoned_moving: the pod is being moved off a cordoned node.
+	// node_cordoned_moving: the instance's fleet is being moved off the node
+	// its pod was on, which the cluster is emptying (cordoned, drained, or
+	// being removed): its pods are stopped there and started together on
+	// another node.
 	NodeCordonedMoving bool `protobuf:"varint,7,opt,name=node_cordoned_moving,json=nodeCordonedMoving,proto3" json:"node_cordoned_moving,omitempty"`
 	// restart_hint is the setting that keeps a restart of restart_cause from
 	// happening again ("raise memory_limit in the cluster's resources"); ""
@@ -2526,8 +2529,13 @@ type KubeInstanceRuntime struct {
 	// on an image without PulseAudio and ALSA); "" when it can. (9 is
 	// published_ports.)
 	AudioUnavailable string `protobuf:"bytes,10,opt,name=audio_unavailable,json=audioUnavailable,proto3" json:"audio_unavailable,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// move_blocked says why the instance's fleet stays on the node the
+	// cluster is emptying ("its share is node-local": a volume on the node's
+	// own disk, or pods pinned to the node by name), so a drain stops it until
+	// the node is back; "" otherwise.
+	MoveBlocked   string `protobuf:"bytes,11,opt,name=move_blocked,json=moveBlocked,proto3" json:"move_blocked,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *KubeInstanceRuntime) Reset() {
@@ -2626,6 +2634,13 @@ func (x *KubeInstanceRuntime) GetPublishedPorts() []*KubePublishedPort {
 func (x *KubeInstanceRuntime) GetAudioUnavailable() string {
 	if x != nil {
 		return x.AudioUnavailable
+	}
+	return ""
+}
+
+func (x *KubeInstanceRuntime) GetMoveBlocked() string {
+	if x != nil {
+		return x.MoveBlocked
 	}
 	return ""
 }
@@ -4458,7 +4473,7 @@ const file_kube_proto_rawDesc = "" +
 	"\tinstances\x18\x01 \x01(\x05R\tinstances\x12\x16\n" +
 	"\x06shares\x18\x02 \x01(\x05R\x06shares\x12#\n" +
 	"\rcache_volumes\x18\x03 \x01(\x05R\fcacheVolumes\x12+\n" +
-	"\x11snapshot_contents\x18\x04 \x01(\x05R\x10snapshotContents\"\xcd\x03\n" +
+	"\x11snapshot_contents\x18\x04 \x01(\x05R\x10snapshotContents\"\xf0\x03\n" +
 	"\x13KubeInstanceRuntime\x12\x1d\n" +
 	"\n" +
 	"pod_reason\x18\x01 \x01(\tR\tpodReason\x12\x12\n" +
@@ -4471,7 +4486,8 @@ const file_kube_proto_rawDesc = "" +
 	"\frestart_hint\x18\b \x01(\tR\vrestartHint\x12E\n" +
 	"\x0fpublished_ports\x18\t \x03(\v2\x1c.fleetgrpc.KubePublishedPortR\x0epublishedPorts\x12+\n" +
 	"\x11audio_unavailable\x18\n" +
-	" \x01(\tR\x10audioUnavailable\"\x87\x01\n" +
+	" \x01(\tR\x10audioUnavailable\x12!\n" +
+	"\fmove_blocked\x18\v \x01(\tR\vmoveBlocked\"\x87\x01\n" +
 	"\x11KubePublishedPort\x12\x18\n" +
 	"\aaddress\x18\x01 \x01(\tR\aaddress\x12\x1b\n" +
 	"\thost_port\x18\x02 \x01(\x05R\bhostPort\x12%\n" +

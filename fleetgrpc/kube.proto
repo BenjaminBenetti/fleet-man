@@ -573,7 +573,10 @@ message KubeInstanceRuntime {
   // sessions_ended: that restart killed every process (an out-of-memory kill
   // on an unprivileged pod), not only the sessions.
   bool sessions_ended = 6;
-  // node_cordoned_moving: the pod is being moved off a cordoned node.
+  // node_cordoned_moving: the instance's fleet is being moved off the node
+  // its pod was on, which the cluster is emptying (cordoned, drained, or
+  // being removed): its pods are stopped there and started together on
+  // another node.
   bool node_cordoned_moving = 7;
   // restart_hint is the setting that keeps a restart of restart_cause from
   // happening again ("raise memory_limit in the cluster's resources"); ""
@@ -588,6 +591,11 @@ message KubeInstanceRuntime {
   // on an image without PulseAudio and ALSA); "" when it can. (9 is
   // published_ports.)
   string audio_unavailable = 10;
+  // move_blocked says why the instance's fleet stays on the node the
+  // cluster is emptying ("its share is node-local": a volume on the node's
+  // own disk, or pods pinned to the node by name), so a drain stops it until
+  // the node is back; "" otherwise.
+  string move_blocked = 11;
 }
 
 // KubePublishedPort is one published port of a Kubernetes instance: a listener

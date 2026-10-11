@@ -24,7 +24,7 @@ func (r *run) nodes(ctx context.Context) {
 	if err != nil {
 		r.caps.PrivilegedAllowed = r.t.Cluster.AllowsPrivileged(false)
 		if apierrors.IsForbidden(err) {
-			r.skip(CheckNodes, "nodes are not readable (optional): architectures, capacity and local-cluster detection unknown")
+			r.skip(CheckNodes, "nodes are not readable (optional): architectures, capacity and local-cluster detection unknown, and a fleet on one node is not moved off a node being drained")
 			return
 		}
 		r.warn(CheckNodes, "listing nodes: "+Message(err), "")
