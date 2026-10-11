@@ -329,3 +329,71 @@ func TestDeletedFolderTakesLocalFiles(t *testing.T) {
 		t.Errorf("c1 tool/ide survived its delete: %v", err)
 	}
 }
+
+// TestAnOpNeverUndoesALocalDelete checks an op for a path below a folder the
+// side deleted (and has not reported yet) waits rather than make the folder
+// again.
+func TestAnOpNeverUndoesALocalDelete(t *testing.T) {
+	r := newRig(t, "host", "c1")
+	r.write("host", "user", "a/b/f", "x")
+	r.sync()
+	os.RemoveAll(r.path("c1", "user", "a"))
+	tree := r.sides["c1"].tree
+	res, err := tree.Apply(context.Background(), Batch{Root: "user", Epoch: tree.roots["user"].epoch, Ops: []Op{{
+		Path: "a/b/new", Rev: 99, Entry: Entry{Kind: Dir, Mode: 0o755},
+	}}})
+	if err != nil || len(res) != 1 || res[0].Status != Changed {
+		t.Fatalf("an op below a folder deleted here: %+v, %v; want changed", res, err)
+	}
+	if _, err := os.Lstat(r.path("c1", "user", "a")); !os.IsNotExist(err) {
+		t.Errorf("the deleted folder was made again: %v", err)
+	}
+}
+
+// TestScanOfAPathBelowAReplacedFolder checks a scan asked for a path whose
+// folder was replaced by a file (as an op's Changed result asks) finds the
+// replacement, so the side reports it and the hub's op can go.
+func TestScanOfAPathBelowAReplacedFolder(t *testing.T) {
+	r := newRig(t, "host", "c1")
+	r.write("host", "user", "a/b/f", "x")
+	r.sync()
+	os.RemoveAll(r.path("c1", "user", "a"))
+	r.write("c1", "user", "a", "a file now")
+	rep, _, err := r.sides["c1"].tree.Scan(context.Background(), "user", []string{"a/b/f"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Kind{}
+	for _, c := range rep.Changes {
+		got[c.Path] = c.Entry.Kind
+	}
+	if got["a"] != File || got["a/b"] != Gone || got["a/b/f"] != Gone {
+		t.Errorf("changes = %v, want a a file and a/b, a/b/f gone", got)
+	}
+}
+
+// TestFolderWithUnseenContentIsNotReplaced checks a folder replaced by a
+// file on one side, while another side added to the folder, stays a folder
+// with what was added, and the file is kept as a conflict copy.
+func TestFolderWithUnseenContentIsNotReplaced(t *testing.T) {
+	r := newRig(t, "host", "c1")
+	r.write("host", "user", "d/old", "old")
+	r.sync()
+	s := r.sides["c1"]
+	s.stop()
+	r.hub.Detach("c1")
+	r.write("host", "user", "d/new", "added")
+	r.sync()
+	os.RemoveAll(r.path("c1", "user", "d"))
+	r.write("c1", "user", "d", "a file instead")
+	s.tree.Close()
+	r.openSide(s)
+	r.sync()
+	r.assertConverged()
+	if got := r.read("c1", "user", "d/new"); got != "added" {
+		t.Errorf("c1 user/d/new = %q, want the folder back with what was added", got)
+	}
+	if got := r.conflicts(); !slices.Equal(got, []string{"user/d=a file instead"}) {
+		t.Errorf("conflicts = %q, want the file kept", got)
+	}
+}

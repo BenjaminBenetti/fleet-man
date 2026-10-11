@@ -132,7 +132,7 @@ func (ps *propState) crashHook(id string) func(root, p string) error {
 // logf traces the test's steps when SHARESYNC_TRACE is set.
 func (ps *propState) logf(format string, args ...any) {
 	if ps.trace {
-		ps.t.Logf(format, args...)
+		ps.t.Logf("%s "+format, append([]any{time.Now().UTC().Format("05.000000")}, args...)...)
 	}
 }
 
@@ -146,21 +146,24 @@ func (ps *propState) step() {
 	ps.logf("step %d: %s %s/%s", k, id, root, name)
 	switch {
 	case k < 6:
-		ps.writeFile(id, root, name)
+		ps.edit(id, root, func() { ps.writeFile(id, root, name) })
 	case k < 8:
-		ps.appendHistory(id)
+		ps.edit(id, "tool", func() { ps.appendHistory(id) })
 	case k < 10:
-		ps.remove(id, root, name)
+		ps.edit(id, root, func() { ps.remove(id, root, name) })
 	case k < 11:
-		ps.symlink(id, root, name)
+		ps.edit(id, root, func() { ps.symlink(id, root, name) })
 	case k < 12:
-		ps.mkdir(id, root, name)
+		ps.edit(id, root, func() { ps.mkdir(id, root, name) })
 	case k < 13:
-		if p := r.path(id, root, name); isFile(p) {
-			os.Chmod(p, fs.FileMode(0o600+ps.rng.IntN(2)*0o155))
-		}
+		ps.edit(id, root, func() {
+			if p := r.path(id, root, name); isFile(p) {
+				os.Chmod(p, fs.FileMode(0o600+ps.rng.IntN(2)*0o155))
+			}
+		})
 	case k < 15:
-		r.sides[id].side.scan(context.Background(), root, []string{name})
+		err := r.sides[id].side.scan(context.Background(), root, []string{name})
+		ps.logf("  scanned %s %s/%s: %v", id, root, name, err)
 	case k < 17:
 		r.flushErr(50 * time.Millisecond)
 	case k < 18:
@@ -176,6 +179,20 @@ func (ps *propState) step() {
 			r.restartHub()
 		}
 	}
+}
+
+// edit makes a user's edit on a side: what the side holds is looked at and
+// replaced with no apply in between (applies take the root's lock to check
+// and replace), so what the test marks as replaced knowingly is what the
+// user replaced. Without it the test would race the dispatchers on its own
+// bookkeeping, and an edit would land in the instant between an apply's
+// check and its rename, which a rename-based replace cannot close (see
+// writeFile).
+func (ps *propState) edit(id, root string, do func()) {
+	tr := ps.r.sides[id].tree.roots[root]
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	do()
 }
 
 // content returns a fresh content to write.
@@ -229,11 +246,10 @@ func (ps *propState) writeFile(id, root, name string) {
 		}
 	}
 	c := ps.content(id)
-	if ps.r.sides[id].tree.roots[root].synced(name) {
+	ps.logf("  write %s %s = %s", id, name, c)
+	if err := os.WriteFile(p, []byte(c), 0o644); err == nil && ps.r.sides[id].tree.roots[root].synced(name) {
 		ps.written[c] = true
 	}
-	ps.logf("  write %s %s = %s", id, name, c)
-	os.WriteFile(p, []byte(c), 0o644)
 }
 
 func (ps *propState) appendHistory(id string) {
@@ -244,6 +260,7 @@ func (ps *propState) appendHistory(id string) {
 	ps.n++
 	line := fmt.Sprintf(`{"%s":%d}`, id, ps.n)
 	ps.lines = append(ps.lines, line)
+	ps.logf("  append %s %s", id, line)
 	f, err := os.OpenFile(p, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
 	if err != nil {
 		ps.t.Fatal(err)
@@ -266,11 +283,10 @@ func (ps *propState) symlink(id, root, name string) {
 		os.RemoveAll(p)
 	}
 	target := "target-" + ps.content(id)
-	if ps.r.sides[id].tree.roots[root].synced(name) {
+	ps.logf("  symlink %s %s -> %s", id, name, target)
+	if err := os.Symlink(target, p); err == nil && ps.r.sides[id].tree.roots[root].synced(name) {
 		ps.written["link:"+target] = true
 	}
-	ps.logf("  symlink %s %s -> %s", id, name, target)
-	os.Symlink(target, p)
 }
 
 func (ps *propState) mkdir(id, root, name string) {

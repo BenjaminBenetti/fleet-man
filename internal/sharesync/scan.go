@@ -51,7 +51,7 @@ func (t *Tree) Scan(ctx context.Context, root string, paths []string) (Report, [
 		// .claude) is not a delete of everything in it to send everywhere.
 		return Report{}, nil, err
 	}
-	areas := cover(paths)
+	areas := tr.reach(cover(paths))
 	observed := map[string]fs.FileInfo{}
 	var problems, again []string
 	for _, area := range areas {
@@ -192,6 +192,9 @@ func (t *Tree) Scan(ctx context.Context, root string, paths []string) (Report, [
 		return Report{}, nil, err
 	}
 	sortChanges(changes)
+	for _, c := range changes {
+		t.log.Debug("sharesync: tree reports", "root", root, "path", c.Path, "base", c.Base, "kind", c.Entry.Kind, "size", c.Entry.Size)
+	}
 	return Report{Root: root, Epoch: tr.epoch, Changes: changes}, again, nil
 }
 
@@ -261,6 +264,23 @@ func cannotExist(err error) bool {
 func transient(err error) bool {
 	status, _ := classify(err)
 	return status == Changed || errors.Is(err, fs.ErrNotExist)
+}
+
+// reach widens each area a scan cannot reach (it is gone, or a folder above
+// it is now a file or a symlink) to its nearest ancestor that is there, so
+// the change that made it unreachable is the scan's to find.
+func (tr *treeRoot) reach(areas []string) []string {
+	var out []string
+	for _, area := range areas {
+		for area != "." {
+			if _, err := tr.fs.Lstat(area); err == nil || !cannotExist(err) {
+				break
+			}
+			area = path.Dir(area)
+		}
+		out = append(out, area)
+	}
+	return cover(out)
 }
 
 // cover returns the folders a scan of paths walks: the shortest that cover

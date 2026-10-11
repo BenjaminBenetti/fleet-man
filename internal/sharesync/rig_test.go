@@ -129,7 +129,7 @@ func (r *rig) openSide(s *rigSide) {
 	opts := r.topts(s.info.ID)
 	opts.StateDir = filepath.Join(r.base, "state", s.info.ID)
 	opts.Table = r.table
-	opts.Logger = r.logs.logger()
+	opts.Logger = r.logs.logger().With("tree", s.info.ID)
 	tree, err := OpenTree(roots, opts)
 	if err != nil {
 		r.t.Fatalf("OpenTree(%s): %v", s.info.ID, err)

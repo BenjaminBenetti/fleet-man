@@ -70,19 +70,24 @@ func TestReplaceFileChecksJustBeforeTheRename(t *testing.T) {
 	eachWalk(t, func(t *testing.T, portable bool) {
 		fx := newFixture(t, portable)
 		var seen fs.FileInfo
-		_, err := fx.r.ReplaceFile("a/f", strings.NewReader("new"), 0o644, time.Time{}, func(current fs.FileInfo) error {
-			seen = current
-			// A local writer gets in between the content and the rename.
+		_, err := fx.r.ReplaceFile("a/f", strings.NewReader("new"), 0o644, time.Time{}, func(lstat func() (fs.FileInfo, error)) error {
+			// A local writer gets in between the content and the check: the
+			// check, made after it, sees it.
 			if err := os.WriteFile(fx.path("a/f"), []byte("theirs"), 0o644); err != nil {
 				t.Fatal(err)
 			}
+			current, err := lstat()
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen = current
 			return errMine
 		})
 		if !errors.Is(err, errMine) {
 			t.Fatalf("ReplaceFile with a refusing expect: %v, want its error", err)
 		}
-		if seen == nil || seen.Name() != "f" {
-			t.Errorf("expect saw %v, want a/f", seen)
+		if seen == nil || seen.Name() != "f" || seen.Size() != int64(len("theirs")) {
+			t.Errorf("expect saw %v, want a/f as the local writer left it", seen)
 		}
 		assertFile(t, fx.path("a/f"), "theirs", 0o644)
 		entries, _ := os.ReadDir(fx.path("a"))
@@ -95,9 +100,10 @@ func TestReplaceFileChecksJustBeforeTheRename(t *testing.T) {
 		seen = nil
 		called := false
 		mtime := time.Date(2020, 1, 2, 3, 4, 5, 6789, time.UTC)
-		info, err := fx.r.ReplaceFile("a/fresh", strings.NewReader("one"), 0o600, mtime, func(current fs.FileInfo) error {
+		info, err := fx.r.ReplaceFile("a/fresh", strings.NewReader("one"), 0o600, mtime, func(lstat func() (fs.FileInfo, error)) error {
+			current, err := lstat()
 			called, seen = true, current
-			return nil
+			return err
 		})
 		if err != nil {
 			t.Fatalf("ReplaceFile(fresh): %v", err)

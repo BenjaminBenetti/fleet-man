@@ -51,11 +51,13 @@ func (r *Root) WriteFile(name string, data io.Reader, perm fs.FileMode) (fs.File
 // non-zero mtime is set on the temp file (and its access time with it)
 // before the rename, so the file never shows another time and a write made
 // to it after the rename shows as a new time. Once data is in the temp file,
-// and just before the rename, expect is called with the Lstat of what name
-// holds then, or nil when nothing does. An error from expect leaves name as
-// it is, removes the temp file and is returned as it is. Only the rename
-// itself happens after the check. A nil expect skips the check.
-func (r *Root) ReplaceFile(name string, data io.Reader, perm fs.FileMode, mtime time.Time, expect func(fs.FileInfo) error) (fs.FileInfo, error) {
+// and just before the rename, expect is called with lstat, which reports
+// what name holds at the moment it is called (nil, nil when nothing), Lstat-
+// ed through the folder the rename goes into: a caller that serializes with
+// other writers takes its lock first and then looks. An error from expect
+// leaves name as it is, removes the temp file and is returned as it is. Only
+// the rename itself happens after the check. A nil expect skips the check.
+func (r *Root) ReplaceFile(name string, data io.Reader, perm fs.FileMode, mtime time.Time, expect func(lstat func() (fs.FileInfo, error)) error) (fs.FileInfo, error) {
 	if err := r.checkAboveReserved("write", name); err != nil {
 		return nil, err
 	}
@@ -96,14 +98,17 @@ func (r *Root) ReplaceFile(name string, data io.Reader, perm fs.FileMode, mtime 
 		return nil, pathError("write", d.host(leaf), ErrChanged)
 	}
 	if expect != nil {
-		current, err := d.root.Lstat(leaf)
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			current = nil
-		case err != nil:
-			return nil, pathError("write", d.host(leaf), err)
+		lstat := func() (fs.FileInfo, error) {
+			current, err := d.root.Lstat(leaf)
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+				return nil, nil
+			case err != nil:
+				return nil, pathError("write", d.host(leaf), err)
+			}
+			return current, nil
 		}
-		if err := expect(current); err != nil {
+		if err := expect(lstat); err != nil {
 			return nil, err
 		}
 	}

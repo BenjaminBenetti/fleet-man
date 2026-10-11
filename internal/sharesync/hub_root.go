@@ -342,7 +342,7 @@ func (h *Hub) process(ctx context.Context, root *hubRoot, side *hubSide, c Chang
 		}
 		answer, retry := root.commitPlan(p, res, extra)
 		h.log.Debug("sharesync: change", "root", root.name, "side", side.info.ID, "path", c.Path, "kind", c.Entry.Kind,
-			"base", c.Base, "fast", p.fast, "decision", res.Decision, "ack", answer.Status, "rev", answer.Rev, "retry", retry)
+			"size", c.Entry.Size, "base", c.Base, "fast", p.fast, "decision", res.Decision, "ack", answer.Status, "rev", answer.Rev, "retry", retry)
 		if !retry && answer.Status == Deferred && extra.conflict != "" {
 			h.conflicts.remove(extra.conflict)
 		}

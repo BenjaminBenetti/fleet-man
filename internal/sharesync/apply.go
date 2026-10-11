@@ -53,6 +53,7 @@ func (t *Tree) Apply(ctx context.Context, b Batch) ([]Result, error) {
 		if status == NoSpace && reason == "" {
 			reason = t.opts.FullReason
 		}
+		t.log.Debug("sharesync: tree applied", "root", b.Root, "path", op.Path, "rev", op.Rev, "kind", op.Entry.Kind, "size", op.Entry.Size, "status", status, "reason", reason)
 		results = append(results, Result{Path: op.Path, Rev: op.Rev, Status: status, Reason: reason})
 	}
 	return results, nil
@@ -298,7 +299,10 @@ func (tr *treeRoot) makeLink(op Op, at local) error {
 
 // mkdirParents creates p's missing parent folders. The hub sends a folder
 // before what is in it, so a missing one is a folder this side does not
-// sync (its own op sets its mode if it is synced).
+// sync (its own op sets its mode if it is synced). A missing folder the
+// side has a record of was deleted here and not reported yet: making it
+// again would undo that, so the op waits for the report. Called with tr.mu
+// held.
 func (tr *treeRoot) mkdirParents(p string) error {
 	parent := path.Dir(p)
 	if parent == "." {
@@ -307,6 +311,13 @@ func (tr *treeRoot) mkdirParents(p string) error {
 	if info, err := tr.fs.Lstat(parent); err == nil && info.IsDir() {
 		return nil
 	}
+	for _, a := range append(ancestors(parent), parent) {
+		if rec := tr.records[a]; rec != nil && rec.Entry.Live() {
+			if info, err := tr.fs.Lstat(a); err != nil || !info.IsDir() {
+				return localChange(a)
+			}
+		}
+	}
 	return tr.fs.MkdirAll(parent, 0o755)
 }
 
@@ -314,7 +325,11 @@ func (tr *treeRoot) mkdirParents(p string) error {
 // holds a content the new one grew from (checked against the whole
 // content's hash first), the whole file replaced through a temp file
 // otherwise. Content is read without the lock; the lock is taken again for
-// the precondition check and the record.
+// the precondition check and the record. A local write landing between
+// that check and the rename (one system call), or made through a file
+// opened before the rename, is lost with the replaced inode: a
+// rename-based atomic replace cannot close that window, and the in-place
+// append, the path an appended log takes, has none.
 func (tr *treeRoot) writeFile(ctx context.Context, op Op, at local, content ContentFunc) error {
 	if content == nil {
 		return ErrNoSource
@@ -362,11 +377,17 @@ func (tr *treeRoot) writeFile(ctx context.Context, op Op, at local, content Cont
 		}
 	}()
 	src := &verifier{r: rc, h: sha256.New(), want: op.Entry.Hash, size: op.Entry.Size}
-	_, err = tr.fs.ReplaceFile(op.Path, src, op.Entry.Mode, time.Unix(0, op.Entry.MTime), func(current fs.FileInfo) error {
+	_, err = tr.fs.ReplaceFile(op.Path, src, op.Entry.Mode, time.Unix(0, op.Entry.MTime), func(lstat func() (fs.FileInfo, error)) error {
+		// The lock first, then the look: a local write made before the
+		// lock is seen, and none is made after it until the rename.
 		tr.mu.Lock()
 		locked = true
 		if tr.records[op.Path] != at.rec {
 			return localChange(op.Path)
+		}
+		current, err := lstat()
+		if err != nil {
+			return err
 		}
 		switch {
 		case current == nil && !at.exists:
