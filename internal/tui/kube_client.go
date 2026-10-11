@@ -25,8 +25,9 @@ const (
 	// cluster reads behind a re-point or a namespace create at 30s.
 	kubeRPCTimeout = 45 * time.Second
 	// kubeTestTimeout bounds a streamed TestKubeCluster (the daemon's full
-	// preflight gives up after 3 minutes).
-	kubeTestTimeout = 4 * time.Minute
+	// preflight gives up after 6 minutes: 3 for its checks, 3 for the
+	// multi-node storage test of a StorageClass it has no result for).
+	kubeTestTimeout = 7 * time.Minute
 	// kubeDeepTestTimeout bounds a deep test: the full preflight, then the
 	// throwaway-pod probes (the pull through the gateway and the network
 	// probe: 5 more minutes at most).

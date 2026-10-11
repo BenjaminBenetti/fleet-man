@@ -348,6 +348,60 @@ func TestDeepTestsStorageAgain(t *testing.T) {
 	}
 }
 
+// TestStorageTestsShareOneTestsTime: a full run's tests together take at
+// most one test's time, so its later checks keep theirs; a class cut short
+// has no verdict and is not cached (a later run tests it).
+func TestStorageTestsShareOneTestsTime(t *testing.T) {
+	old := storageBatchTimeout
+	storageBatchTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { storageBatchTimeout = old })
+	oldRun := runStorageTest
+	runStorageTest = func(r *run, ctx context.Context, req storageTestRequest) StorageTest {
+		<-ctx.Done()
+		return StorageTest{Class: req.class, Key: req.key, At: r.t.now(), Inconclusive: true, Detail: "the test could not tell: cut short"}
+	}
+	t.Cleanup(func() { runStorageTest = oldRun })
+	c := newCluster(t, cloudNode("a"), cloudNode("b"), storageClass("nfs", "nfs.csi.k8s.io"), storageClass("pd", "pd.csi.storage.gke.io", isDefault, wffc))
+	tgt := target(c, fleet.KubeCluster{})
+	tgt.StorageCache = OpenStorageCache(filepath.Join(t.TempDir(), "storage.json"))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r := &run{t: &tgt, caps: &fleetgrpc.KubeCapabilities{}, nsExists: true, multiNode: true, nodesKnown: true}
+	r.rootStorage(ctx)
+	r.sharedStorage(ctx)
+	if ctx.Err() != nil {
+		t.Fatal("the storage tests spent the run's time")
+	}
+	if got := r.storage["nfs"]; !got.Inconclusive {
+		t.Fatalf("nfs %+v", got)
+	}
+	if _, ok := tgt.StorageCache.Lookup(r.storage["nfs"].Key, time.Now()); ok {
+		t.Fatal("a test cut short was cached")
+	}
+}
+
+// TestAutoWithoutTheNodes: with the nodes unreadable Auto cannot tell the
+// cluster has several, tests nothing and says so on each class it would
+// have tested.
+func TestAutoWithoutTheNodes(t *testing.T) {
+	ctx := context.Background()
+	ran := stubStorageTests(t, map[string]StorageTest{})
+	c := newCluster(t, storageClass("nfs", "nfs.csi.k8s.io"), storageClass("pd", "pd.csi.storage.gke.io", isDefault, wffc))
+	tgt := target(c, fleet.KubeCluster{})
+	tgt.StorageCache = OpenStorageCache(filepath.Join(t.TempDir(), "storage.json"))
+	r := &run{t: &tgt, caps: &fleetgrpc.KubeCapabilities{}, nsExists: true}
+	r.rootStorage(ctx)
+	r.sharedStorage(ctx)
+	if len(*ran) != 0 || r.caps.GetShareMode() != "single-node" {
+		t.Fatalf("nodes unreadable: %d tests, mode %q", len(*ran), r.caps.GetShareMode())
+	}
+	for _, sc := range r.caps.GetStorageClasses() {
+		if sc.GetName() == "nfs" && !strings.Contains(sc.GetMultiNodeTest().GetDetail(), "nodes are not readable") {
+			t.Fatalf("nfs multi_node_test %v", sc.GetMultiNodeTest())
+		}
+	}
+}
+
 // storageFake plays the test's pods: each is scheduled on its node and
 // runs; their logs are logs's.
 type storageFake struct {
@@ -454,7 +508,7 @@ func TestStorageTestPods(t *testing.T) {
 	ok := []storageLine{{Check: "visible", OK: true}, {Check: "chmod", OK: true}}
 	for _, tc := range []struct {
 		name    string
-		b       []storageLine
+		a, b    []storageLine
 		nodes   map[string]string
 		waiting map[string]string
 		events  []corev1.Event
@@ -472,6 +526,33 @@ func TestStorageTestPods(t *testing.T) {
 					t.Fatalf("%+v", res)
 				}
 			}},
+		{name: "a lock the first pod cannot take", nodes: map[string]string{"a": "node-a", "b": "node-b"},
+			a: []storageLine{{Check: "unix_socket", OK: true}, {Check: "flock", OK: false, Detail: "taking a lock on the first node: [Errno 37] No locks available"}},
+			b: []storageLine{{Check: "visible", OK: true}, {Check: "append", OK: true}, {Check: "flock", OK: false, Detail: "this pod took a lock the pod on the other node held"}},
+			check: func(t *testing.T, res StorageTest) {
+				if !res.Refused() || res.Failed != "flock" || !strings.Contains(res.Detail, "No locks available") {
+					t.Fatalf("%+v", res)
+				}
+			}},
+		{name: "the pods lose step", nodes: map[string]string{"a": "node-a", "b": "node-b"},
+			a: []storageLine{{Check: "unix_socket", OK: true}, {Check: "steps", OK: false, Detail: "the pod on the other node did not reach step 2 within 30s"}},
+			b: []storageLine{{Check: "visible", OK: true}, {Check: "steps", OK: false, Detail: "the pod on the other node did not reach step 2 within 30s"}},
+			check: func(t *testing.T, res StorageTest) {
+				// No check failed: no verdict, tried again later.
+				if res.Refused() || !res.Inconclusive || res.Failed != "" || !strings.Contains(res.Detail, "lost step") {
+					t.Fatalf("%+v", res)
+				}
+			}},
+		{name: "the first pod cannot write the volume", nodes: map[string]string{"a": "node-a", "b": "node-b"},
+			a: []storageLine{{Check: "visible", OK: false, Detail: "on the first node: [Errno 13] Permission denied: 'new.txt'"}},
+			b: []storageLine{{Check: "visible", OK: false, Detail: "a file the pod on the other node wrote was not seen here within 30s"}},
+			check: func(t *testing.T, res StorageTest) {
+				// Not two nodes that never see each other's files: a volume
+				// the pods cannot write, refused.
+				if !res.Refused() || res.Failed != "visible" || !strings.Contains(res.Detail, "Permission denied") {
+					t.Fatalf("%+v", res)
+				}
+			}},
 		{name: "each node its own files", nodes: map[string]string{"a": "node-a", "b": "node-b"},
 			b: []storageLine{{Check: "visible", OK: false, Detail: "a file the pod on the other node wrote was not seen here within 30s"}},
 			check: func(t *testing.T, res StorageTest) {
@@ -486,6 +567,17 @@ func TestStorageTestPods(t *testing.T) {
 			Message: "failed to provision volume: requested access mode RWX is not supported", LastTimestamp: metav1.NewTime(time.Now().Add(time.Minute)),
 		}}, check: func(t *testing.T, res StorageTest) {
 			if res.Mounted || res.Inconclusive || res.MultiNode || !strings.Contains(res.Detail, "no ReadWriteMany volume of the class: failed to provision") {
+				t.Fatalf("%+v", res)
+			}
+		}},
+		{name: "a provisioning failure that may pass", waiting: map[string]string{"a": "ContainerCreating"}, events: []corev1.Event{{
+			ObjectMeta:     metav1.ObjectMeta{Name: "e", Namespace: testNS},
+			InvolvedObject: corev1.ObjectReference{Kind: "PersistentVolumeClaim"}, Reason: "ProvisioningFailed",
+			Message: "failed to provision volume with StorageClass \"azurefile-csi-nfs\": rpc error: code = DeadlineExceeded desc = context deadline exceeded", LastTimestamp: metav1.NewTime(time.Now().Add(time.Minute)),
+		}}, check: func(t *testing.T, res StorageTest) {
+			// A cloud file share still being made is no refusal of RWX: no
+			// verdict, tried again later.
+			if !res.Inconclusive || res.Mounted || !strings.Contains(res.Detail, "did not make the test volume") || !strings.Contains(res.Detail, "DeadlineExceeded") {
 				t.Fatalf("%+v", res)
 			}
 		}},
@@ -507,7 +599,11 @@ func TestStorageTestPods(t *testing.T) {
 			c := newCluster(t, cloudNode("node-a"), cloudNode("node-b"))
 			f := &storageFake{nodes: tc.nodes, waiting: tc.waiting, events: tc.events}
 			f.install(c)
-			fakeLogs(t, ok, tc.b)
+			a := tc.a
+			if a == nil {
+				a = ok
+			}
+			fakeLogs(t, a, tc.b)
 			tgt := target(c, fleet.KubeCluster{})
 			r := &run{t: &tgt, caps: &fleetgrpc.KubeCapabilities{Admission: &fleetgrpc.KubeAdmission{Unprivileged: true}}, nsExists: true, multiNode: true, nodesKnown: true}
 			sc := storageClass("azurefile", "file.csi.azure.com", params("skuName", "Standard_LRS"))
@@ -608,6 +704,64 @@ func TestStorageScript(t *testing.T) {
 		if !seen[want] {
 			t.Errorf("the second pod never ran %s", want)
 		}
+	}
+}
+
+// TestStorageScriptNamesALockItCannotTake: a lock the first pod cannot
+// take (NFS without its lock manager: ENOLCK) fails the lock check, in both
+// pods, which still finish their steps; it is not mistaken for the pods not
+// seeing each other's files.
+func TestStorageScriptNamesALockItCannotTake(t *testing.T) {
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("no python3")
+	}
+	dir := t.TempDir()
+	bin := t.TempDir()
+	script := filepath.Join(bin, "s.py")
+	wrap := filepath.Join(bin, "wrap.py")
+	if err := os.WriteFile(script, []byte(storageScript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The first pod's flock fails as on an NFS mount without lockd.
+	const wrapper = `import errno, fcntl, sys
+real = fcntl.flock
+def flock(f, op):
+    if sys.argv[1] == "a":
+        raise OSError(errno.ENOLCK, "No locks available")
+    return real(f, op)
+fcntl.flock = flock
+src = open(sys.argv.pop(1)).read()
+exec(compile(src, "s.py", "exec"))
+`
+	if err := os.WriteFile(wrap, []byte(wrapper), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outs := make([][]byte, 2)
+	var wg sync.WaitGroup
+	for i, role := range []string{"a", "b"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			outs[i], _ = exec.CommandContext(ctx, py, "-I", wrap, script, role, "30", "4321", dir).CombinedOutput()
+		}()
+	}
+	wg.Wait()
+	var all []storageLine
+	for i, out := range outs {
+		lines, err := parseStorageLog(string(out))
+		if err != nil {
+			t.Fatalf("pod %d: %v\n%s", i, err, out)
+		}
+		if !strings.Contains(string(out), `"done"`) {
+			t.Errorf("pod %d did not finish its steps:\n%s", i, out)
+		}
+		all = append(all, lines...)
+	}
+	if failed, detail := firstFailure(all); failed != "flock" || !strings.Contains(detail, "No locks available") {
+		t.Fatalf("first failure %s (%s), want flock\n%s\n%s", failed, detail, outs[0], outs[1])
 	}
 }
 

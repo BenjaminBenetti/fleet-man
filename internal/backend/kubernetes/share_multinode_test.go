@@ -123,6 +123,29 @@ func TestMultiNodeRefusesAnImmediateNodeLocalDisk(t *testing.T) {
 	}
 }
 
+// TestRebuildChecksTheDiskItKeeps: a rebuild keeps its disk, so its share's
+// checks judge that disk's class, not the one Auto picks for new disks now
+// (an Immediate node-local class that a new instance would be refused).
+func TestRebuildChecksTheDiskItKeeps(t *testing.T) {
+	hostpath := &fleetgrpc.KubeStorageClass{Name: "standard", NodeLocal: true, BindingMode: string(storagev1.VolumeBindingImmediate)}
+	kept := &fleetgrpc.KubeStorageClass{Name: "kept", Block: true, BindingMode: string(storagev1.VolumeBindingWaitForFirstConsumer)}
+	caps := shareCaps(hostpath, kept, nfsClass)
+	caps.ShareMode, caps.SharedStorageClass, caps.InstanceStorageClass = string(topology.MultiNode), "nfs", "standard"
+	cs := fake.NewClientset()
+	bindShareAnywhere(t, cs)
+	rb := &rebuilding{creation: shareCreation(cs, "web", caps, fleet.KubeCluster{})}
+	disk := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: rb.id.sts, Namespace: handleNS}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: ptrTo("kept")}}
+	if _, err := cs.CoreV1().PersistentVolumeClaims(handleNS).Create(context.Background(), disk, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rb.prepare(context.Background()); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if rb.diskClass() != "kept" || rb.share == nil || rb.share.mode != topology.MultiNode {
+		t.Fatalf("disk class %q, share %+v", rb.diskClass(), rb.share)
+	}
+}
+
 // TestMultiNodeShareWithoutItsVolume: a multi-node share whose volume
 // cannot be read (no cluster-scoped read) places nothing, and records
 // nothing, so a later create reads it again; it never pins the fleet to a

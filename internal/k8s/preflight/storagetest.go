@@ -38,6 +38,9 @@ import (
 // StorageTestTimeout bounds one class's multi-node test.
 const StorageTestTimeout = 3 * time.Minute
 
+// storageBatchTimeout bounds a full run's tests together (tests shorten it).
+var storageBatchTimeout = StorageTestTimeout
+
 // The test's phases (tests shorten them): the volume and the first pod,
 // the second pod, the checks.
 var (
@@ -62,8 +65,10 @@ const storageTestImage = "docker.io/library/python:3.13-alpine@sha256:2d9aefe2fe
 // storageTestOwner is the uid:gid the test chowns a file to (as root).
 const storageTestOwner = 4321
 
-// The file system checks, in the order a failure is named.
-var storageChecks = []string{"visible", "rename", "symlink", "chmod", "uid", "chown", "unix_socket", "append", "flock"}
+// The file system checks, in the order a failure is named. "steps" is no
+// check: a pod that stopped seeing the other's later steps (the other
+// stopped, or a lock held it up), which leaves the test without a verdict.
+var storageChecks = []string{"visible", "rename", "symlink", "chmod", "uid", "chown", "unix_socket", "append", "flock", "steps"}
 
 // storageCheckWhat says what each check is about, for its failure line.
 var storageCheckWhat = map[string]string{
@@ -258,6 +263,14 @@ func (r *run) probeStorage(ctx context.Context, req storageTestRequest) storageO
 	}
 	out.mounted = true
 	if failed, detail := firstFailure(bLines); failed == "visible" {
+		// The first pod may have said why it wrote nothing (it could not
+		// write the volume): its log so far, not waited for.
+		if lines := r.peekChecks(rctx, first); len(lines) > 0 {
+			if f, d := firstFailure(lines); f != "" && f != "steps" {
+				out.failed, out.failDetail = f, d
+				return out
+			}
+		}
 		out.mounted, out.why = false, fmt.Sprintf("pods on %s and %s do not see each other's files on the volume (%s)", nodeA, nodeB, detail)
 		if nodeA == nodeB {
 			out.mounted, out.failed, out.failDetail = true, failed, detail
@@ -270,6 +283,12 @@ func (r *run) probeStorage(ctx context.Context, req storageTestRequest) storageO
 		return out
 	}
 	out.failed, out.failDetail = firstFailure(append(aLines, bLines...))
+	if out.failed == "steps" {
+		// No check failed: the pods lost step (an NFS server in its grace
+		// period holds a lock for a minute and a half).
+		out.failed, out.inconclusive = "", "the test's pods lost step with each other: "+out.failDetail
+		out.failDetail = ""
+	}
 	return out
 }
 
@@ -287,6 +306,20 @@ func (r *run) podChecks(ctx context.Context, name string) ([]storageLine, error)
 		return nil, fmt.Errorf("test pod %s: %v", name, err)
 	}
 	return lines, nil
+}
+
+// peekChecks reads the checks test pod name printed so far (nil when none
+// failed and it has not finished, or its log cannot be read).
+func (r *run) peekChecks(ctx context.Context, name string) []storageLine {
+	log, err := clientLog(r, ctx, name)
+	if err != nil {
+		return nil
+	}
+	lines, err := parseStorageLog(log)
+	if err != nil {
+		return nil
+	}
+	return lines
 }
 
 // waitStoragePod waits for a test pod to run and returns its node; on ""
@@ -315,8 +348,11 @@ func (r *run) waitStoragePod(ctx context.Context, name, claim string, since time
 				last = "unschedulable: " + u
 			}
 		}
+		// The provisioner refusing the access mode is the class's answer;
+		// another failure may pass (a cloud share still being made): the
+		// claim is waited for.
 		if first {
-			if msg := r.claimEvent(ctx, claim, since); msg != "" {
+			if msg := r.claimEvent(ctx, claim, since); msg != "" && refusesAccessMode(msg) {
 				return "", storageOutcome{why: "no ReadWriteMany volume of the class: " + msg}
 			}
 		}
@@ -337,10 +373,13 @@ func (r *run) waitStoragePod(ctx context.Context, name, claim string, since time
 				}
 				return "", storageOutcome{inconclusive: "the second test pod did not run (" + last + ")"}
 			}
-			if msg := r.claimEvent(lctx, claim, since); msg != "" {
-				return "", storageOutcome{why: "no ReadWriteMany volume of the class: " + msg}
-			}
 			if bound := r.claimBound(claim); !bound {
+				if msg := r.claimEvent(lctx, claim, since); msg != "" {
+					if refusesAccessMode(msg) {
+						return "", storageOutcome{why: "no ReadWriteMany volume of the class: " + msg}
+					}
+					return "", storageOutcome{inconclusive: "the class did not make the test volume: " + msg}
+				}
 				return "", storageOutcome{inconclusive: "no ReadWriteMany volume of the class bound (" + last + ")"}
 			}
 			return "", storageOutcome{inconclusive: "the first test pod did not run (" + last + ")"}
@@ -403,6 +442,15 @@ func (r *run) claimEvent(ctx context.Context, claim string, since time.Time) str
 	}
 	return firstLines(latest.Message, 2)
 }
+
+// accessModeRefusals are what a provisioner's refusal of an access mode
+// says (CSI's MULTI_NODE_MULTI_WRITER for ReadWriteMany): other failures,
+// such as a timeout while a cloud file share is made, may pass.
+var accessModeRefusals = []string{"access mode", "accessmode", "multi_node", "readwritemany", "capabilit", "not supported", "unsupported"}
+
+// refusesAccessMode reports whether a ProvisioningFailed message is the
+// provisioner refusing the volume's access mode.
+func refusesAccessMode(msg string) bool { return containsAny(msg, accessModeRefusals) }
 
 // eventTime is when an event last happened.
 func eventTime(ev *corev1.Event) time.Time {
@@ -597,13 +645,15 @@ func noClassFix(nodes []*fleetgrpc.KubeNode, providers map[string]string) string
 
 // storageSkip is why Auto does not test class sc ("" when it does); multi
 // says the cluster has several nodes (else Auto tests nothing: every pod
-// shares the one node).
-func storageSkip(sc *fleetgrpc.KubeStorageClass, multi, consented bool) string {
+// shares the one node), nodesKnown that the nodes were read.
+func storageSkip(sc *fleetgrpc.KubeStorageClass, multi, nodesKnown, consented bool) string {
 	switch {
 	case sc.GetNodeLocal():
 		return "not tested: its volumes are on one node's disk"
 	case blockOnlyProvisioners[sc.GetProvisioner()]:
 		return "not tested: its provisioner makes block disks only"
+	case !multi && !nodesKnown:
+		return "not tested: the nodes are not readable, so Auto cannot tell the cluster has several; test it by name to use it"
 	case !multi:
 		return "not tested: on a cluster of one node every pod shares the node"
 	case largeMinimum[sc.GetProvisioner()] != "" && !consented:
@@ -649,7 +699,12 @@ func (r *run) testStorage(ctx context.Context, force bool) {
 	todo := r.planStorageTests(force)
 	if len(todo) > 0 {
 		r.storageRunning(todo)
-		r.recordStorageTests(ctx, execStorageTests(r, ctx, todo))
+		// More classes than run at once share one test's time, which is
+		// all FullTimeout counts for them: the run's later checks keep
+		// theirs, and a class cut short is tested by a later run.
+		tctx, cancel := context.WithTimeout(ctx, storageBatchTimeout)
+		r.recordStorageTests(tctx, execStorageTests(r, tctx, todo))
+		cancel()
 	}
 	r.showStorage()
 }
@@ -723,14 +778,14 @@ func (r *run) planStorageTests(force bool) []storageTestRequest {
 			// mount on two nodes: then it simply holds shares in
 			// single-node mode.
 			if c.GetNodeLocal() || blockOnlyProvisioners[c.GetProvisioner()] {
-				skip = storageSkip(c, true, true)
+				skip = storageSkip(c, true, true, true)
 			} else {
 				wanted = true
 			}
 		case picked != "":
 			skip = "not tested: the connection names its own shared class"
 		default:
-			skip = storageSkip(c, r.multiNode, false)
+			skip = storageSkip(c, r.multiNode, r.nodesKnown, false)
 			wanted = skip == ""
 		}
 		consider(name, r.classObjs[name], c.GetProvisioner(), skip, wanted)
@@ -838,15 +893,18 @@ def put(name, data):
         f.flush()
         os.fsync(f.fileno())
 
-def seen(name, timeout):
+def seen(name, timeout, full=False):
     # The folder is listed first: a network file system lists a new file
-    # well before it opens one by a name it looked up and missed.
+    # well before it opens one by a name it looked up and missed. full waits
+    # for its content too (another node may list it before its writes land).
     deadline = time.time() + timeout
     while True:
         try:
             if name in os.listdir("."):
                 with open(name) as f:
-                    return f.read()
+                    data = f.read()
+                if data or not full:
+                    return data
         except OSError:
             pass
         if time.time() > deadline:
@@ -856,10 +914,16 @@ def seen(name, timeout):
 def mark(n, data=""):
     put(".step-" + role + n, data)
 
-def step(n, timeout):
-    data = seen(".step-" + other + n, timeout)
+def step(n, timeout, full=False):
+    data = seen(".step-" + other + n, timeout, full)
     if data is None:
-        say("visible", False, "a file the pod on the other node wrote was not seen here within %ds" % timeout)
+        # The first step's file is the other pod's first: not seeing it is
+        # not seeing its files. A later one's, after files were seen, is the
+        # other pod stopping (its own log says why).
+        if n == "1":
+            say("visible", False, "a file the pod on the other node wrote was not seen here within %ds" % timeout)
+        else:
+            say("steps", False, "the pod on the other node did not reach step %s within %ds" % (n, timeout))
         sys.exit(0)
     return data
 
@@ -908,6 +972,15 @@ def append(line):
     with open("append.log", "a") as f:
         f.write(line + "\n")
 
+def a_wait_b1():
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        os.listdir(".")
+        with open("append.log") as f:
+            if "b1" in f.read():
+                return
+        time.sleep(0.2)
+
 if role == "a":
     setup("visible", lambda: put("new.txt", "written by a\n"))
     setup("rename", a_rename)
@@ -919,25 +992,27 @@ if role == "a":
     check("unix_socket", a_socket)
     mark("1", json.dumps({"uid": os.getuid(), "gid": os.getgid(), "root": root}))
     step("1", first_wait)
-    deadline = time.time() + 20
-    while time.time() < deadline:
-        os.listdir(".")
-        with open("append.log") as f:
-            if "b1" in f.read():
-                break
-        time.sleep(0.2)
-    append("a2")
-    lock = open("lock", "a")
-    fcntl.flock(lock, fcntl.LOCK_EX)
+    setup("append", a_wait_b1)
+    setup("append", lambda: append("a2"))
+    # A lock this pod cannot take (NFS without its lock manager: ENOLCK)
+    # is the lock check failing; the steps go on, so the other pod ends too.
+    lock = None
+    try:
+        lock = open("lock", "a")
+        fcntl.flock(lock, fcntl.LOCK_EX)
+    except OSError as e:
+        say("flock", False, "taking a lock on the first node: %s" % e)
+        lock = None
     mark("2")
     step("2", 30)
-    fcntl.flock(lock, fcntl.LOCK_UN)
+    if lock is not None:
+        setup("flock", lambda: fcntl.flock(lock, fcntl.LOCK_UN))
     mark("3")
     step("3", 30)
     say("done", True)
     sys.exit(0)
 
-info = json.loads(step("1", first_wait))
+info = json.loads(step("1", first_wait, True))
 body = seen("new.txt", 20)
 check("visible", lambda: (body == "written by a\n", "a new file written on the other node read %r here" % body))
 
@@ -982,24 +1057,32 @@ def b_append():
     return log == "a1\nb1\na2\n", "appends from both pods read %r" % log
 check("append", b_append)
 
-lock = open("lock", "a")
-held = False
+lock, held, lock_err = None, False, ""
 try:
-    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    fcntl.flock(lock, fcntl.LOCK_UN)
+    lock = open("lock", "a")
 except OSError as e:
-    held = e.errno in (errno.EAGAIN, errno.EACCES)
+    lock_err = str(e)
+if lock is not None:
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+    except OSError as e:
+        held = e.errno in (errno.EAGAIN, errno.EACCES)
+        if not held:
+            lock_err = str(e)
 mark("2")
 step("3", 30)
 got = False
 deadline = time.time() + 15
-while time.time() < deadline and not got:
+while held and time.time() < deadline and not got:
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         got = True
     except OSError:
         time.sleep(0.2)
-if not held:
+if lock_err:
+    say("flock", False, "taking a lock here: %s" % lock_err)
+elif not held:
     say("flock", False, "this pod took a lock the pod on the other node held")
 else:
     say("flock", got, "" if got else "a lock the other pod let go of stayed held here")

@@ -5,7 +5,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"github.com/BenjaminBenetti/fleet-man/internal/k8s/preflight"
 	"slices"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/preflight"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 

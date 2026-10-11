@@ -201,7 +201,7 @@ func (rb *rebuilding) run(ctx context.Context) (*backend.UpResult, error) {
 	if err := rb.connect(ctx); err != nil {
 		return nil, rb.unchanged(err)
 	}
-	if err := rb.prepareShare(ctx); err != nil {
+	if err := rb.prepare(ctx); err != nil {
 		return nil, rb.unchanged(err)
 	}
 	defer rb.share.done()
@@ -297,12 +297,17 @@ func (rb *rebuilding) load(ctx context.Context) error {
 	if sts.Spec.Replicas != nil {
 		rb.replicas = *sts.Spec.Replicas
 	}
-	// The disk stays: the render describes it as it is, whatever Auto
-	// would pick for a new one now.
-	if disk, err := rb.cs.CoreV1().PersistentVolumeClaims(rb.ns).Get(ctx, prev.StatefulSet, metav1.GetOptions{}); err == nil && disk.Spec.StorageClassName != nil {
+	return nil
+}
+
+// prepare learns the class of the disk the rebuild keeps, then readies the
+// fleet's share: the share's checks of the disk's binding and the render
+// describe that disk as it is, whatever Auto would pick for a new one now.
+func (rb *rebuilding) prepare(ctx context.Context) error {
+	if disk, err := rb.cs.CoreV1().PersistentVolumeClaims(rb.ns).Get(ctx, rb.id.sts, metav1.GetOptions{}); err == nil && disk.Spec.StorageClassName != nil {
 		rb.keptDiskClass = *disk.Spec.StorageClassName
 	}
-	return nil
+	return rb.prepareShare(ctx)
 }
 
 func rootWords(nonRoot bool) string {

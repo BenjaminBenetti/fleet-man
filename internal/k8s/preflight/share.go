@@ -257,7 +257,7 @@ func (r *run) whyNotMultiNode(picked string) (string, string) {
 			}
 			continue
 		}
-		if storageSkip(c, true, false) == "" {
+		if storageSkip(c, true, true, false) == "" {
 			untested = append(untested, name)
 		}
 	}
