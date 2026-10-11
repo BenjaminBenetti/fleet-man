@@ -352,6 +352,7 @@ func (c *creation) launch(ctx context.Context, adm *podspec.Admitted, r podspec.
 		StatefulSet: c.id.sts, Gen: c.gen, SpecHash: podspec.SpecHash(&o.StatefulSet.Spec.Template.Spec),
 		Image: del.Ref, Strategy: string(del.Strategy), RemoteUser: capture.RemoteUser,
 		WorkspaceFolder: cfg.WorkspaceFolder, NonRoot: c.identity.NonRoot, Created: c.created,
+		Ports: publishedPorts(adm.Result.Pod.Ports),
 	}
 	rec.addImageDigest(del.Digest)
 	rec.addImageDigest(del.ImageID)

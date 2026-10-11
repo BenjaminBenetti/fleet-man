@@ -145,6 +145,39 @@ func TestExecCommandQuietIsQuiet(t *testing.T) {
 	}
 }
 
+// The forwarding seams are self-contained `fleet kube-exec forward-stdio`
+// and `port-forward` argvs naming the pod, its connection and the ports.
+func TestForwardCommandsBuildTheShimArgv(t *testing.T) {
+	r := newHandleRig(t)
+	writeHandleCluster(t)
+	inst := r.inst()
+	inst.ContainerID = ContainerID(handleCluster, handleNS, handleSTS(), 1)
+	b := newHandle(inst, r.pool)
+	cmd, ok := b.ForwardStdioCommand(inst.ContainerID, 8080)
+	if !ok {
+		t.Fatal("the handle should offer a stdio forward")
+	}
+	argv := cmd.Args
+	if argv[1] != KubeExecVerb || argv[2] != "forward-stdio" || argv[len(argv)-1] != "8080" {
+		t.Fatalf("forward-stdio argv %v", argv)
+	}
+	for flag, val := range map[string]string{"--cluster": handleCluster, "-n": handleNS, "--pod": names.Pod(handleSTS()), "--context": "ctx"} {
+		if got := flagValue(argv, flag); got != val {
+			t.Errorf("%s = %q, want %q (argv %v)", flag, got, val, argv)
+		}
+	}
+	if flagValue(argv, "--kubeconfig") == "" || flagValue(argv, "--socket") == "" {
+		t.Errorf("no --kubeconfig or --socket in %v", argv)
+	}
+	pf := b.PortForwardCommand(inst.ContainerID, 18080, 80).Args
+	if pf[2] != "port-forward" || pf[len(pf)-2] != "18080" || pf[len(pf)-1] != "80" || flagValue(pf, "--pod") != names.Pod(handleSTS()) {
+		t.Fatalf("port-forward argv %v", pf)
+	}
+	if err := newHandle(&fleet.Instance{Name: "web", Backend: fleet.BackendKubernetes}, r.pool).PortForwardCommand("", 1, 2).Run(); err == nil {
+		t.Fatal("a handle with no connection should fail to forward")
+	}
+}
+
 // peek reports a small reader's exact size and a large one as over the cap,
 // and hands back all the bytes either way.
 func TestPeekSizesTheInput(t *testing.T) {

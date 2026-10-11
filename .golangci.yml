@@ -52,6 +52,9 @@ linters:
             # (internal/cli runs it as `fleet mic sink`), so it is held to the
             # same boundary rather than being a package the linter never sees.
             - "**/internal/micsink/**"
+            # The browser proxy (`fleet browser-proxy`) runs inside instances
+            # too, from the same binary: the same boundary.
+            - "**/internal/browserproxy/**"
             # The in-pod exec identity layer (`fleet exec-as`, the pod agent's
             # spawner) is linked into the same binary and runs inside pods,
             # where none of the server's internals exist: held to the boundary

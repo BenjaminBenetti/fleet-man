@@ -982,3 +982,37 @@ func TestRenewDefaultPool(t *testing.T) {
 		t.Fatal("the old pool came back to life")
 	}
 }
+
+// The handle's published ports are the ones its create recorded, from the
+// translation's list (a record made before fleet recorded them has none).
+func TestHandlePublishedPorts(t *testing.T) {
+	r := newHandleRig(t)
+	b := newHandle(r.inst(), r.pool)
+	var pub backend.PortPublisher = b
+	if _, err := pub.PublishedPorts(""); err == nil {
+		t.Fatal("no record should read as an error")
+	}
+	rec := InstanceRecord{Cluster: handleCluster, Namespace: handleNS, Key: handleKey, Fleet: "alpha", Instance: "web",
+		StatefulSet: handleSTS(), StatefulSetUID: "u", Gen: 1, SpecHash: "sha256:h"}
+	if err := SaveInstanceRecord(rec); err != nil {
+		t.Fatal(err)
+	}
+	if ports, err := pub.PublishedPorts(""); err != nil || len(ports) != 0 {
+		t.Fatalf("an older record: %v, %v", ports, err)
+	}
+	rec.Ports = publishedPorts([]podspec.Port{
+		{HostIP: "127.0.0.1", HostPort: 3000, ContainerPort: 3000, Protocol: "TCP"},
+		{HostIP: "0.0.0.0", ContainerPort: 8080, Protocol: "TCP"},
+	})
+	if err := SaveInstanceRecord(rec); err != nil {
+		t.Fatal(err)
+	}
+	ports, err := pub.PublishedPorts(ContainerID(handleCluster, handleNS, handleSTS(), 1))
+	want := []backend.PublishedPort{{HostIP: "127.0.0.1", HostPort: 3000, ContainerPort: 3000}, {HostIP: "0.0.0.0", ContainerPort: 8080}}
+	if err != nil || fmt.Sprint(ports) != fmt.Sprint(want) {
+		t.Fatalf("ports %v, %v; want %v", ports, err, want)
+	}
+	if _, err := pub.PublishedPorts("not-a-kube-id"); err == nil {
+		t.Fatal("another container id should be refused")
+	}
+}

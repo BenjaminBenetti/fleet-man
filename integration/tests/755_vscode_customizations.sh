@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: a devcontainer.json with customizations.vscode, postAttachCommand, forwardPorts and portsAttributes: postAttachCommand runs once per create and per start (never per exec), fleet does not forward forwardPorts itself, and the merged config an editor attach applies carries the extensions, settings and port attributes.
 set -euo pipefail
 

@@ -282,6 +282,7 @@ func (a *agent) handlers() map[podwire.Tag]podwire.Handler {
 		podwire.TagExec:      track(a.serveExec),
 		podwire.TagFileWrite: track(a.serveFileWrite),
 		podwire.TagFileRead:  track(a.serveFileRead),
+		podwire.TagForward:   track(a.serveForward),
 	}
 }
 

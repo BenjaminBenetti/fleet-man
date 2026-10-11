@@ -156,6 +156,13 @@ message ForwardOpen {
   string fleet = 1;
   string instance = 2;
   int32 remote_port = 3;
+  // half_close asks for a connection that passes the client's half-close
+  // (CloseSend) on and keeps reading after it: on Kubernetes, through the pod
+  // agent instead of the cluster's port-forward, whose runtime drops the
+  // half-close (the peer reads no EOF) and ends the connection about a second
+  // later. Backends whose connections keep a true half-close anyway ignore
+  // it.
+  bool half_close = 4;
 }
 
 // Mic is the virtual-microphone DATA PLANE: one bidi stream per microphone-
@@ -553,9 +560,10 @@ message GetCoderTemplateParamsReply {
 // =====================================================================
 //
 // The host browser process (Chrome) stays on the CLIENT; everything that
-// touches the container — installing/starting the privoxy proxy, reading the
-// workspace devcontainer.json customization, staging + running the Fleet Launch
-// landing-page server — is owned by the SERVER and driven through these RPCs.
+// touches the container — starting the in-instance browser proxy (`fleet
+// browser-proxy`), reading the workspace devcontainer.json customization,
+// staging + running the Fleet Launch landing-page server — is owned by the
+// SERVER and driven through these RPCs.
 
 // GetBrowserConfig reads the workspace's devcontainer.json fleet customization
 // so the TUI can decide whether to show the launch chooser (both an initial URL
@@ -573,7 +581,7 @@ message GetBrowserConfigReply {
 }
 
 // PrepareBrowser does all the container-side work for a browser open: ensure the
-// privoxy proxy is installed + running, then resolve the page to open —
+// browser proxy is running, then resolve the page to open —
 // honouring an explicit target_url, else the devcontainer.json initialUrl /
 // Fleet Launch landing page (starting the landing-page server when chosen) /
 // the default. It returns the URL the client's browser should open.

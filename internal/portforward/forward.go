@@ -11,6 +11,9 @@ type Forward struct {
 	LocalPort    int  `json:"local_port"`
 	RemotePort   int  `json:"remote_port"`
 	BrowserProxy bool `json:"browser_proxy"` // true when this forward serves a browser proxy
+	// HalfClose: its connections keep reading after the local side's
+	// half-close (TargetOptions.HalfClose).
+	HalfClose bool `json:"half_close,omitempty"`
 
 	listener net.Listener
 	done     chan struct{} // closed when the accept loop stops

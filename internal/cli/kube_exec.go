@@ -75,7 +75,7 @@ func newKubeExecCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&f.raw, "raw", false, "run with the pod's own shell (no fleet binary)")
 	cmd.Flags().BoolVar(&f.bulk, "bulk", false, "run on the pod's bulk session (a folder tar)")
 	cmd.Flags().BoolVar(&f.quiet, "quiet", false, "keep the command out of fleetd's event log")
-	cmd.AddCommand(newKubeExecLogsCmd())
+	cmd.AddCommand(newKubeExecLogsCmd(), newKubeExecForwardStdioCmd(), newKubeExecPortForwardCmd())
 	return cmd
 }
 

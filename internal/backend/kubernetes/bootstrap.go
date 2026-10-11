@@ -242,6 +242,7 @@ func (p *Pool) Forget(t PodTarget) {
 	for _, slot := range gone {
 		slot.forget()
 	}
+	p.forgetPortForward(t.Cluster, pod)
 }
 
 // Verify reads the target's StatefulSet and pod and verifies the pod

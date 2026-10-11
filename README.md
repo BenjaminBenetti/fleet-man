@@ -1103,7 +1103,8 @@ unique prefix is enough (so `fleet launch graf` opens "Grafana"). If a prefix
 matches more than one, the candidates are listed so you can type more.
 
 The browser lives on the **host** (it is proxied into the container by
-privoxy), so the in-instance TUI can't open it directly. Instead it drives the
+fleet's own browser proxy, `fleet browser-proxy`), so the in-instance TUI can't
+open it directly. Instead it drives the
 host browser over a **control socket** — a unix domain socket the host `fleet`
 TUI creates per instance and bind-mounts into the instance (the same mechanism
 as mounting `docker.sock`). The running host `fleet` TUI listens on that socket

@@ -14,6 +14,7 @@ import (
 // meaningless — it reads the local devcontainer.json's
 // customizations.fleet.fleetLaunch block and serves it.
 func newLandingPageCmd() *cobra.Command {
+	var addr string
 	var port int
 	var workspace string
 
@@ -23,13 +24,15 @@ func newLandingPageCmd() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return landingpage.Run(landingpage.Config{
+			return landingpage.Run(cmd.Context(), landingpage.Config{
+				Addr:         addr,
 				Port:         port,
 				WorkspaceDir: workspace,
 			})
 		},
 	}
 
+	cmd.Flags().StringVar(&addr, "addr", "", "address to listen on (default every interface)")
 	cmd.Flags().IntVar(&port, "port", landingpage.DefaultPort, "port to listen on")
 	cmd.Flags().StringVar(&workspace, "workspace", ".", "workspace dir whose devcontainer.json configures the page")
 

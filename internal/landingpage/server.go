@@ -8,11 +8,15 @@
 package landingpage
 
 import (
+	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
+	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -27,7 +31,7 @@ const healthTimeout = 5 * time.Second
 
 // DefaultPort is the port the landing page listens on inside the
 // instance. fleet-man's browser opens to http://localhost:<DefaultPort>,
-// routed through the privoxy proxy into the container's localhost.
+// routed through the browser proxy into the container's localhost.
 const DefaultPort = 16767
 
 //go:embed templates/*.html
@@ -35,7 +39,7 @@ var templatesFS embed.FS
 
 // staticFS holds client-side assets (htmx, etc.) served under /static.
 // They are vendored and embedded rather than loaded from a CDN: the page
-// is served inside the instance and reached through the privoxy proxy, so
+// is served inside the instance and reached through the browser proxy, so
 // it cannot assume public internet access — and embedding keeps the whole
 // feature inside the single fleet binary.
 //
@@ -43,10 +47,11 @@ var templatesFS embed.FS
 var staticFS embed.FS
 
 // Run loads the landing-page configuration from the workspace's
-// devcontainer.json and serves the page until the process is killed.
-// It blocks; callers (the `fleet landing-page` subcommand) run it as the
-// foreground of the injected process.
-func Run(cfg Config) error {
+// devcontainer.json and serves the page until ctx ends (fleet's commands end
+// it on SIGTERM, which is how fleet stops the page before it restages the
+// binary). It blocks; callers (the `fleet landing-page` subcommand) run it as
+// the foreground of the injected process.
+func Run(ctx context.Context, cfg Config) error {
 	if cfg.Port == 0 {
 		cfg.Port = DefaultPort
 	}
@@ -86,8 +91,19 @@ func Run(cfg Config) error {
 	}
 	srv.routes(router, assets)
 
-	addr := ":" + strconv.Itoa(cfg.Port)
-	return router.Run(addr)
+	ln, err := net.Listen("tcp", net.JoinHostPort(cfg.Addr, strconv.Itoa(cfg.Port)))
+	if err != nil {
+		return err
+	}
+	httpSrv := &http.Server{Handler: router.Handler(), ReadHeaderTimeout: 30 * time.Second}
+	stop := context.AfterFunc(ctx, func() { _ = httpSrv.Close() })
+	defer stop()
+	// fleetd waits for this line before it opens the browser on the page.
+	fmt.Fprintf(os.Stderr, "fleet landing-page: listening on %s\n", ln.Addr())
+	if err := httpSrv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 // server holds the request-handling state for the landing page.

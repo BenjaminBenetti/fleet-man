@@ -287,13 +287,6 @@ func (b *Backend) Stats(containerIDs []string) (map[string]*backend.ContainerSta
 // a later unit).
 func (b *Backend) EditorURI(string, string) (string, bool) { return "", false }
 
-// PortForwardCommand / ForwardStdioCommand: forwarding on a cluster is the
-// port-forward data plane's (a later unit); the handle has none yet.
-func (b *Backend) PortForwardCommand(string, int, int) *exec.Cmd {
-	return failingCmd(notYet{what: "forwarding a port"})
-}
-func (b *Backend) ForwardStdioCommand(string, int) (*exec.Cmd, bool) { return nil, false }
-
 // MicSinkCommand: the virtual microphone on a cluster is a later unit.
 func (b *Backend) MicSinkCommand(string) (*exec.Cmd, bool) { return nil, false }
 

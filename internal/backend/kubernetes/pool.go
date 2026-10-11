@@ -134,6 +134,12 @@ type PoolOptions struct {
 	// (FLEET_EXEC_HOLD_GRACE, else podwire.HoldGrace), as the agent holds it.
 	HoldGrace time.Duration
 
+	// PortForward opens a pod's port-forward connection (the connection's
+	// pods/portforward); PortForwardIdle is how long an idle one stays open
+	// (DefaultPortForwardIdle).
+	PortForward     func(ctx context.Context, c *Cluster, namespace, pod string) (*kubeexec.PortForward, error)
+	PortForwardIdle time.Duration
+
 	// Now and Rand are the clock and the jitter source (tests).
 	Now  func() time.Time
 	Rand func() float64
@@ -184,6 +190,9 @@ func (o PoolOptions) withDefaults() PoolOptions {
 	}
 	if o.FallbackBurst <= 0 {
 		o.FallbackBurst = DefaultFallbackBurst
+	}
+	if o.PortForwardIdle <= 0 {
+		o.PortForwardIdle = DefaultPortForwardIdle
 	}
 	if o.HoldGrace <= 0 {
 		o.HoldGrace = podwire.HoldGrace
@@ -253,6 +262,10 @@ type Pool struct {
 	// socketsEpoch counts RefreshDesired calls, desiredGen the states sent.
 	socketsEpoch uint64
 	desiredGen   uint64
+
+	// pf is the port-forward pool (pfpool.go), made on first use.
+	pfOnce sync.Once
+	pf     *portForwards
 }
 
 // clusterGates are a connection's limits, kept across reloads of its
@@ -606,11 +619,12 @@ func (p *Pool) Close() {
 	p.Shutdown(ctx)
 }
 
-// Shutdown is CloseSessions, then the end of the pool: its informers stop,
-// and so does every cluster call made under its lifetime (a cancelled
-// create's clean-up). The pool is unusable afterwards.
+// Shutdown is CloseSessions and ClosePortForwards, then the end of the
+// pool: its informers stop, and so does every cluster call made under its
+// lifetime (a cancelled create's clean-up). The pool is unusable afterwards.
 func (p *Pool) Shutdown(ctx context.Context) {
 	p.CloseSessions(ctx)
+	p.ClosePortForwards()
 	p.mu.Lock()
 	p.closed = true
 	p.mu.Unlock()

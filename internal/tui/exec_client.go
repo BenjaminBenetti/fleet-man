@@ -36,9 +36,9 @@ import (
 // argv). The command the caller runs afterwards is unbounded.
 const execResolveTimeout = 10 * time.Second
 
-// browserPrepareTimeout bounds PrepareBrowser, which may install privoxy +
-// stage the landing-page binary inside the container (apt-get etc.), so it is
-// generous.
+// browserPrepareTimeout bounds PrepareBrowser, which may stage the fleet
+// binary inside the container (or, where it cannot run there, install privoxy
+// with apt-get etc.), so it is generous.
 const browserPrepareTimeout = 3 * time.Minute
 
 // coderFetchTimeout bounds the Coder-API template-params fetch (network).
@@ -177,17 +177,18 @@ func mergeExecEnv(extra map[string]string) []string {
 
 // forwardDialer returns a TargetDialer that tunnels one connection per call
 // over the server's Forward bidi stream (the port-forward data plane) to
-// remotePort inside the instance. It reuses the shared mutation connection;
-// the bounded ctx covers only the dial — each per-connection stream manages
-// its own lifetime.
-var forwardDialer = func(fleetName, instanceName string, remotePort int) (portforward.TargetDialer, error) {
+// remotePort inside the instance; halfClose asks for connections that keep a
+// true half-close (portforward.TargetOptions). It reuses the shared mutation
+// connection; the bounded ctx covers only the dial — each per-connection
+// stream manages its own lifetime.
+var forwardDialer = func(fleetName, instanceName string, remotePort int, halfClose bool) (portforward.TargetDialer, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), execResolveTimeout)
 	defer cancel()
 	conn, err := dialMutation(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return portforward.NewGRPCTarget(conn.Service(), fleetName, instanceName, remotePort), nil
+	return portforward.NewGRPCTarget(conn.Service(), fleetName, instanceName, remotePort, portforward.TargetOptions{HalfClose: halfClose}), nil
 }
 
 // resolveLogsArgv resolves the host-side container-logs command for the

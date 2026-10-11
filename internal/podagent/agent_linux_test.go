@@ -368,11 +368,12 @@ func TestRPC(t *testing.T) {
 }
 
 // TestAgentLogsReachFleetd: the agent's own warning (here, a stream kind it
-// does not serve) arrives as a LOG record at its level.
+// does not serve: host dials are the agent's own to open) arrives as a LOG
+// record at its level.
 func TestAgentLogsReachFleetd(t *testing.T) {
 	d := newTestDirs(t)
 	s := startAgent(t, d.options())
-	conn, err := s.c.Open(context.Background(), podwire.TagForward, map[string]int{"port": 80})
+	conn, err := s.c.Open(context.Background(), podwire.TagHostDial, map[string]int{"port": 80})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +392,7 @@ func TestAgentLogsReachFleetd(t *testing.T) {
 		attrs[a.Key] = a.Value.String()
 		return true
 	})
-	if rec.Level != slog.LevelWarn || rec.Message != "pod-agent: refused a stream from fleetd" || attrs["kind"] != "forward" {
+	if rec.Level != slog.LevelWarn || rec.Message != "pod-agent: refused a stream from fleetd" || attrs["kind"] != "host-dial" {
 		t.Fatalf("record %v %q %v", rec.Level, rec.Message, attrs)
 	}
 }

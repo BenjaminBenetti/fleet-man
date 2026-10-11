@@ -938,10 +938,17 @@ func (*ForwardChunk_Data) isForwardChunk_Msg() {}
 // instance to bridge into and the port to reach inside it. There is no
 // local_port — the listen side is entirely the client's business.
 type ForwardOpen struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Fleet         string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
-	Instance      string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
-	RemotePort    int32                  `protobuf:"varint,3,opt,name=remote_port,json=remotePort,proto3" json:"remote_port,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Fleet      string                 `protobuf:"bytes,1,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	Instance   string                 `protobuf:"bytes,2,opt,name=instance,proto3" json:"instance,omitempty"`
+	RemotePort int32                  `protobuf:"varint,3,opt,name=remote_port,json=remotePort,proto3" json:"remote_port,omitempty"`
+	// half_close asks for a connection that passes the client's half-close
+	// (CloseSend) on and keeps reading after it: on Kubernetes, through the pod
+	// agent instead of the cluster's port-forward, whose runtime drops the
+	// half-close (the peer reads no EOF) and ends the connection about a second
+	// later. Backends whose connections keep a true half-close anyway ignore
+	// it.
+	HalfClose     bool `protobuf:"varint,4,opt,name=half_close,json=halfClose,proto3" json:"half_close,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -995,6 +1002,13 @@ func (x *ForwardOpen) GetRemotePort() int32 {
 		return x.RemotePort
 	}
 	return 0
+}
+
+func (x *ForwardOpen) GetHalfClose() bool {
+	if x != nil {
+		return x.HalfClose
+	}
+	return false
 }
 
 // Mic is the virtual-microphone DATA PLANE: one bidi stream per microphone-
@@ -3407,7 +3421,7 @@ func (x *GetBrowserConfigReply) GetHasLanding() bool {
 }
 
 // PrepareBrowser does all the container-side work for a browser open: ensure the
-// privoxy proxy is installed + running, then resolve the page to open —
+// browser proxy is running, then resolve the page to open —
 // honouring an explicit target_url, else the devcontainer.json initialUrl /
 // Fleet Launch landing page (starting the landing-page server when chosen) /
 // the default. It returns the URL the client's browser should open.
@@ -3604,12 +3618,14 @@ const file_exec_proto_rawDesc = "" +
 	"\fForwardChunk\x12,\n" +
 	"\x04open\x18\x01 \x01(\v2\x16.fleetgrpc.ForwardOpenH\x00R\x04open\x12\x14\n" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\x05\n" +
-	"\x03msg\"`\n" +
+	"\x03msg\"\x7f\n" +
 	"\vForwardOpen\x12\x14\n" +
 	"\x05fleet\x18\x01 \x01(\tR\x05fleet\x12\x1a\n" +
 	"\binstance\x18\x02 \x01(\tR\binstance\x12\x1f\n" +
 	"\vremote_port\x18\x03 \x01(\x05R\n" +
-	"remotePort\"\x86\x01\n" +
+	"remotePort\x12\x1d\n" +
+	"\n" +
+	"half_close\x18\x04 \x01(\bR\thalfClose\"\x86\x01\n" +
 	"\x05MicUp\x12(\n" +
 	"\x04open\x18\x01 \x01(\v2\x12.fleetgrpc.MicOpenH\x00R\x04open\x12\x16\n" +
 	"\x05audio\x18\x02 \x01(\fH\x00R\x05audio\x124\n" +

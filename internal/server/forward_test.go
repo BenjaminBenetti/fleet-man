@@ -62,16 +62,19 @@ func startEchoServer(t *testing.T) string {
 func stubBridgeTo(t *testing.T, addr string) *struct {
 	Fleet, Instance string
 	RemotePort      int
+	HalfClose       bool
 } {
 	t.Helper()
 	seen := &struct {
 		Fleet, Instance string
 		RemotePort      int
+		HalfClose       bool
 	}{}
 	orig := openForwardBridge
-	openForwardBridge = func(_ context.Context, inst *fleet.Instance, remotePort int) (io.ReadWriteCloser, error) {
+	openForwardBridge = func(_ context.Context, inst *fleet.Instance, remotePort int, halfClose bool) (io.ReadWriteCloser, error) {
 		seen.Instance = inst.Name
 		seen.RemotePort = remotePort
+		seen.HalfClose = halfClose
 		return net.Dial("tcp", addr)
 	}
 	t.Cleanup(func() { openForwardBridge = orig })
@@ -206,8 +209,8 @@ func TestForwardEndToEndThroughManager(t *testing.T) {
 	localPort := freeTestPort(t)
 	mgr := portforward.NewManager()
 	defer mgr.Shutdown()
-	dial := portforward.NewGRPCTarget(client, "alpha", "i1", 9090)
-	if err := mgr.Add("alpha/i1", localPort, 9090, dial); err != nil {
+	dial := portforward.NewGRPCTarget(client, "alpha", "i1", 9090, portforward.TargetOptions{})
+	if err := mgr.Add("alpha/i1", portforward.Forward{LocalPort: localPort, RemotePort: 9090}, dial); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -231,7 +234,7 @@ func TestForwardEndToEndThroughManager(t *testing.T) {
 	}
 
 	// Duplicate local port is rejected while the forward is up.
-	if err := mgr.Add("alpha/i1", localPort, 9090, dial); err == nil {
+	if err := mgr.Add("alpha/i1", portforward.Forward{LocalPort: localPort, RemotePort: 9090}, dial); err == nil {
 		t.Fatalf("expected duplicate-port error")
 	}
 }
@@ -293,7 +296,7 @@ func TestForwardBridgePrefersPortDialer(t *testing.T) {
 	ctx := context.WithValue(context.Background(), struct{}{}, "forward stream")
 
 	d := &portDialer{conn: ours}
-	bridge, err := forwardBridge(ctx, d, inst, 8080)
+	bridge, err := forwardBridge(ctx, d, inst, 8080, false)
 	if err != nil {
 		t.Fatalf("forwardBridge: %v", err)
 	}
@@ -302,7 +305,70 @@ func TestForwardBridgePrefersPortDialer(t *testing.T) {
 	}
 
 	d = &portDialer{err: errors.New("pods/portforward forbidden")}
-	if _, err := forwardBridge(ctx, d, inst, 8080); err == nil || err.Error() != "pods/portforward forbidden" {
+	if _, err := forwardBridge(ctx, d, inst, 8080, false); err == nil || err.Error() != "pods/portforward forbidden" {
 		t.Fatalf("forwardBridge error = %v, want the dialer's", err)
+	}
+}
+
+// halfCloseDialer is a PortDialer with a half-close path of its own.
+type halfCloseDialer struct {
+	portDialer
+	halfCloses int
+}
+
+func (d *halfCloseDialer) DialPortHalfClose(ctx context.Context, containerID string, port int) (io.ReadWriteCloser, error) {
+	d.halfCloses++
+	d.ctx, d.containerID, d.port = ctx, containerID, port
+	return d.conn, d.err
+}
+
+// TestForwardBridgeHalfCloseTakesTheDialersHalfClosePath: a forward asking
+// for a true half-close goes the dialer's half-close way; the others, and a
+// dialer without one, go the usual way.
+func TestForwardBridgeHalfCloseTakesTheDialersHalfClosePath(t *testing.T) {
+	inst := &fleet.Instance{Name: "i1", ContainerID: "c1"}
+	ours, theirs := net.Pipe()
+	defer theirs.Close()
+	d := &halfCloseDialer{portDialer: portDialer{conn: ours}}
+	if _, err := forwardBridge(context.Background(), d, inst, 8080, true); err != nil || d.halfCloses != 1 || d.port != 8080 {
+		t.Fatalf("a half-close forward: err=%v halfCloses=%d port=%d", err, d.halfCloses, d.port)
+	}
+	if _, err := forwardBridge(context.Background(), d, inst, 8081, false); err != nil || d.halfCloses != 1 || d.port != 8081 {
+		t.Fatalf("an ordinary forward took the half-close path: err=%v halfCloses=%d", err, d.halfCloses)
+	}
+	plain := &portDialer{conn: ours}
+	if _, err := forwardBridge(context.Background(), plain, inst, 8082, true); err != nil || plain.port != 8082 {
+		t.Fatalf("a dialer without a half-close path: err=%v port=%d", err, plain.port)
+	}
+}
+
+// TestForwardPassesTheHalfCloseAsk: ForwardOpen.half_close reaches the bridge.
+func TestForwardPassesTheHalfCloseAsk(t *testing.T) {
+	isolateFleetDir(t)
+	seedForwardInstance(t)
+	seen := stubBridgeTo(t, startEchoServer(t))
+	_, client, cleanup := newTestServer(t)
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stream, err := client.Forward(ctx)
+	if err != nil {
+		t.Fatalf("Forward: %v", err)
+	}
+	open := forwardOpenChunk("alpha", "i1", 8080)
+	open.GetOpen().HalfClose = true
+	if err := stream.Send(open); err != nil {
+		t.Fatalf("send open: %v", err)
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("CloseSend: %v", err)
+	}
+	for {
+		if _, err := stream.Recv(); err != nil {
+			break
+		}
+	}
+	if !seen.HalfClose || seen.RemotePort != 8080 {
+		t.Fatalf("the bridge should be asked for a half-close: %+v", seen)
 	}
 }

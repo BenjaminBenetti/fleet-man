@@ -579,6 +579,27 @@ message KubeInstanceRuntime {
   // happening again ("raise memory_limit in the cluster's resources"); ""
   // when none does, or there is no restart_cause.
   string restart_hint = 8;
+  // published_ports are the instance's published ports (docker run -p, a
+  // devcontainer's appPort), served by listeners on the daemon host while it
+  // runs.
+  repeated KubePublishedPort published_ports = 9;
+}
+
+// KubePublishedPort is one published port of a Kubernetes instance: a listener
+// on the daemon host at address:host_port that forwards each connection to
+// container_port in the pod.
+message KubePublishedPort {
+  // address is the listener's address: 127.0.0.1 unless the devcontainer
+  // names one ("0.0.0.0" or "::" listen on every interface of the daemon
+  // host, which a client of a remote daemon is warned about).
+  string address = 1;
+  // host_port is the listening port (the one picked when the devcontainer
+  // left it to the daemon).
+  int32 host_port = 2;
+  int32 container_port = 3;
+  // error is why the listener is not up (another process holds the port);
+  // "" while it serves. It is tried again while the instance runs.
+  string error = 4;
 }
 
 // ShareSyncState is how far the fleet share on a cluster lags the daemon
