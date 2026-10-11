@@ -1,0 +1,6 @@
+{
+  "name": "fleet-man privileged fixture",
+  "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+  "runArgs": ["--privileged"],
+  "postCreateCommand": "sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends tmux"
+}

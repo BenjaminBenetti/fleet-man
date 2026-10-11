@@ -39,6 +39,16 @@
 // versioned Manifest; a newer version than this binary knows reads as
 // ErrNewerManifest.
 //
+// A clone (OpClone) makes a disk the copy of another instance's: a copier Job
+// mounts the source's disk and copies its instance dirs over, one pass of a
+// stopped source, or, of a running one, passes that each write only what
+// changed since the last, then the final delta between two barriers fleetd
+// holds the source still around (git dirs read refs first, objects last). A
+// disk a snapshot or CSI clone restored needs no copy. Either way the clone's
+// fix-ups follow: its own hostname and resolv.conf, volumes reset to what the
+// image copies up (docker commit drops volumes), and none of the source's PID
+// 1 logs, share-sync state or trashed generations.
+//
 // The spec and manifest types build everywhere, for the daemon that renders
 // and reads them; copying needs linux.
 package podseed

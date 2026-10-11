@@ -191,6 +191,15 @@ func (i *Instance) RemoteWorkspace() string {
 // operation.
 func (i *Instance) Rebind() { i.B = i.target.Bind(i.Record) }
 
+// resultWarnings are the warnings the instance's last Up, Rebuild or Clone
+// returned.
+func (i *Instance) resultWarnings() []string {
+	if i.Result == nil {
+		return nil
+	}
+	return i.Result.Warnings
+}
+
 // SetResult records an Up, Rebuild or Clone result: the record takes its
 // ContainerID and the backend is bound again.
 func (i *Instance) SetResult(r *backend.UpResult) {

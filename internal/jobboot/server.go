@@ -58,6 +58,10 @@ type Server struct {
 	wsDone   bool
 	result   *Result
 	lastByte time.Time
+	// barrier is the one the job waits at, if any (Barrier); barrierSeq
+	// numbers them.
+	barrier    *pendingBarrier
+	barrierSeq int
 	// attempts holds the newest workspace transfer the job has not taken
 	// yet (at most one: a newer transfer replaces it).
 	attempts chan *WorkspaceStream
@@ -189,6 +193,93 @@ func (s *Server) Progress(p Progress) {
 	cur.trySend(outFrame{t: FrameProgress, payload: data})
 }
 
+// pendingBarrier is a barrier the job waits at: its frame, sent again to a
+// newer connection, and where its release goes.
+type pendingBarrier struct {
+	b    Barrier
+	data []byte
+	ch   chan Release
+}
+
+// Barrier stops the job at a point fleetd must act at (a clone's copier
+// before its final delta), sending name to fleetd (now, or to whichever
+// connection comes next) and waiting for its release. It fails with
+// ErrStalled once stall (0 is DefaultStallTimeout) passes without a byte from
+// fleetd since the wait began (a release that says fleetd is still working
+// counts), and with ctx's error when ctx ends. A release that refuses is
+// returned as it is, with a nil error: the job decides.
+func (s *Server) Barrier(ctx context.Context, name, detail string, stall time.Duration) (Release, error) {
+	if stall <= 0 {
+		stall = DefaultStallTimeout
+	}
+	s.mu.Lock()
+	if s.barrier != nil {
+		s.mu.Unlock()
+		return Release{}, fmt.Errorf("jobboot: barrier %q while %q waits", name, s.barrier.b.Name)
+	}
+	s.barrierSeq++
+	b := Barrier{Seq: s.barrierSeq, Name: name, Detail: detail}
+	data, err := json.Marshal(b)
+	if err != nil {
+		s.mu.Unlock()
+		return Release{}, err
+	}
+	pb := &pendingBarrier{b: b, data: data, ch: make(chan Release, 1)}
+	s.barrier = pb
+	cur := s.cur
+	// fleetd's silence is counted from here: it had nothing to say while the
+	// job worked.
+	s.lastByte = time.Now()
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if s.barrier == pb {
+			s.barrier = nil
+		}
+		s.mu.Unlock()
+	}()
+	if cur != nil {
+		cur.send(outFrame{t: FrameBarrier, payload: data})
+	}
+	for {
+		left := stall - s.idleFor()
+		if left <= 0 {
+			select {
+			case r := <-pb.ch:
+				return r, nil
+			default:
+			}
+			return Release{}, ErrStalled
+		}
+		timer := time.NewTimer(left)
+		select {
+		case r := <-pb.ch:
+			timer.Stop()
+			return r, nil
+		case <-ctx.Done():
+			timer.Stop()
+			return Release{}, ctx.Err()
+		case <-s.closed:
+			timer.Stop()
+			return Release{}, net.ErrClosed
+		case <-timer.C:
+		}
+	}
+}
+
+// release hands a release frame to the barrier it answers; one for no
+// waiting barrier (an older one's, late) is dropped.
+func (s *Server) release(r Release) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pb := s.barrier
+	if r.Wait || pb == nil || pb.b.Seq != r.Seq {
+		return
+	}
+	s.barrier = nil
+	pb.ch <- r
+}
+
 // Finish records the job's result, sends it to fleetd (now, or to whichever
 // connection comes next) and waits up to hold (0 is DefaultResultHold) for
 // fleetd to acknowledge it. It returns ErrNotCollected when the hold passes
@@ -293,6 +384,8 @@ func (s *Server) serve(c net.Conn) {
 	if s.result != nil {
 		result, _ := json.Marshal(*s.result)
 		conn.out <- outFrame{t: FrameResult, payload: result}
+	} else if s.barrier != nil {
+		conn.out <- outFrame{t: FrameBarrier, payload: s.barrier.data}
 	}
 	s.cur = conn
 	s.mu.Unlock()
@@ -377,6 +470,12 @@ func (s *Server) readLoop(conn *serverConn) error {
 			if done {
 				s.ackOnce.Do(func() { close(s.acked) })
 			}
+		case FrameRelease:
+			var r Release
+			if err := json.Unmarshal(payload, &r); err != nil {
+				return fmt.Errorf("bad release: %w", err)
+			}
+			s.release(r)
 		case FrameError:
 			var msg ErrorMessage
 			_ = json.Unmarshal(payload, &msg)

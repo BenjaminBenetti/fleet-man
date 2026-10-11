@@ -671,3 +671,27 @@ func TestRulesAllow(t *testing.T) {
 		}
 	}
 }
+
+// A class is a CSI clone source only for a CSI driver fleet knows clones:
+// minikube's hostpath provisioner takes a data source it does not know for an
+// empty disk.
+func TestClassifyStorageClassCSIClone(t *testing.T) {
+	drivers := map[string]*storagev1.CSIDriver{"hostpath.csi.k8s.io": {}, "ebs.csi.aws.com": {}}
+	for _, tc := range []struct {
+		provisioner string
+		want        bool
+	}{
+		{"hostpath.csi.k8s.io", true},
+		{"ebs.csi.aws.com", false},
+		{"k8s.io/minikube-hostpath", false},
+		{"pd.csi.storage.gke.io", false}, // known, but no CSIDriver object here
+	} {
+		got := ClassifyStorageClass(&storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "c"}, Provisioner: tc.provisioner}, drivers).GetCsiClone()
+		if got != tc.want {
+			t.Errorf("%s: csi_clone %v, want %v", tc.provisioner, got, tc.want)
+		}
+	}
+	if !ClonesVolumes("hostpath.csi.k8s.io") || ClonesVolumes("ebs.csi.aws.com") {
+		t.Error("ClonesVolumes")
+	}
+}

@@ -690,6 +690,17 @@ func (s *service) startCloneInstanceJob(req *fleetgrpc.CloneInstanceRequest) (*j
 		if req.BranchOverride != nil {
 			dest.Branch = req.GetBranchOverride()
 		}
+		if dest.Backend == fleet.BackendKubernetes {
+			// A clone is an instance more on its source's connection, under
+			// its quotas, with a key of its own on the record before the
+			// clone applies anything.
+			if err := s.kube.createAllowed(st, fleet.DeployTarget{Backend: dest.Backend, KubeCluster: dest.KubeCluster}); err != nil {
+				return err
+			}
+			if err := assignKubeKey(st, fleetName, dest); err != nil {
+				return status.Error(codes.FailedPrecondition, err.Error())
+			}
+		}
 		return f.AddInstance(dest)
 	})
 	if err != nil {

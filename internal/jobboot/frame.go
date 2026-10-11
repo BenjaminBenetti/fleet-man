@@ -36,6 +36,13 @@ const (
 	// FramePing keeps an idle connection's transport alive (empty). It is
 	// not activity: the stall watchdog waits for real bytes.
 	FramePing FrameType = 'K'
+	// FrameBarrier asks fleetd to do something before the job goes on, job →
+	// fleetd (Barrier): a clone's copier stops at one before its final delta,
+	// for fleetd to freeze or stop the source.
+	FrameBarrier FrameType = 'B'
+	// FrameRelease answers a barrier, fleetd → job (Release); one with Wait
+	// set only says fleetd is still at it (activity for the stall watchdog).
+	FrameRelease FrameType = 'G'
 )
 
 // ProtoVersion is the jobboot protocol this fleet speaks.
@@ -52,7 +59,7 @@ var ErrFrameTooLarge = errors.New("jobboot frame larger than the protocol allows
 func (t FrameType) valid() bool {
 	switch t {
 	case FrameHello, FrameWorkspace, FrameData, FrameEnd, FrameProgress,
-		FrameResult, FrameAck, FrameError, FramePing:
+		FrameResult, FrameAck, FrameError, FramePing, FrameBarrier, FrameRelease:
 		return true
 	}
 	return false
@@ -168,4 +175,26 @@ type ErrorMessage struct {
 	// made (a checksum mismatch, a tar the job could not extract): the job
 	// discarded it and waits for another.
 	Workspace bool `json:"workspace,omitempty"`
+}
+
+// Barrier is a point the job waits at for fleetd (FrameBarrier).
+type Barrier struct {
+	// Seq numbers the job's barriers from 1: a release answers one Seq, and
+	// a barrier sent again on a newer connection keeps its Seq.
+	Seq int `json:"seq"`
+	// Name says what the job waits for ("final", "copied").
+	Name string `json:"name"`
+	// Detail says more, for fleetd's log.
+	Detail string `json:"detail,omitempty"`
+}
+
+// Release is fleetd's answer to a barrier (FrameRelease).
+type Release struct {
+	Seq int `json:"seq"`
+	// Wait: fleetd is still working on the barrier; another release follows.
+	Wait bool `json:"wait,omitempty"`
+	// OK: the job goes on. Otherwise Error says why fleetd refused, and the
+	// job fails with it.
+	OK    bool   `json:"ok,omitempty"`
+	Error string `json:"error,omitempty"`
 }

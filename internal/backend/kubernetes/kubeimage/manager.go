@@ -534,6 +534,34 @@ func (m *Manager) MoveHold(clusterID, from, to string) error {
 	})
 }
 
+// Share makes newHolder hold every image holder holds on the connection: a
+// clone runs its source's image, which must outlive the source's destroy as
+// long as the clone uses it. It returns the delivery newHolder holds now
+// (Lookup's), or nil when holder held none.
+func (m *Manager) Share(clusterID, holder, newHolder string) (*Delivery, error) {
+	if err := m.checkIndex(clusterID); err != nil {
+		return nil, err
+	}
+	var best *Entry
+	err := m.files.update(m.IndexPath(clusterID), func(ix *Index) error {
+		for i := range ix.Images {
+			e := &ix.Images[i]
+			if !slices.Contains(e.Holders, holder) {
+				continue
+			}
+			e.hold(newHolder)
+			if best == nil || e.DeliveredAt.After(best.DeliveredAt) {
+				best = e
+			}
+		}
+		return nil
+	})
+	if err != nil || best == nil {
+		return nil, err
+	}
+	return deliveryOf(*best), nil
+}
+
 // Lookup returns the delivery of the image holder holds on the connection
 // (the latest delivered when it holds several), or nil: what Start needs to
 // re-deliver it. Its PullSecrets name only a Secret the strategy brought

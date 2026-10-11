@@ -37,6 +37,17 @@ func init() {
 	targets[backendtest.BackendKubernetes] = kubernetesTarget
 }
 
+// envConformanceStorageClass names the StorageClass of the run's instance
+// disks; unset leaves it to the connection's auto pick.
+const envConformanceStorageClass = "FLEET_CONFORMANCE_KUBE_STORAGE_CLASS"
+
+// envConformanceSnapshotClass sets the connection's snapshot_class, and
+// envConformanceCloneConsistency its clone_consistency.
+const (
+	envConformanceSnapshotClass    = "FLEET_CONFORMANCE_KUBE_SNAPSHOT_CLASS"
+	envConformanceCloneConsistency = "FLEET_CONFORMANCE_KUBE_CLONE_CONSISTENCY"
+)
+
 // kubernetesTarget is the kubernetes backend as fleetd binds it, on a
 // connection to the selected kube context (the current one when none is
 // named) in a namespace of its own, fleet-it-conformance-<random>, deleted
@@ -76,6 +87,15 @@ func kubernetesTarget(t *testing.T, sel backendtest.Selection) backendtest.Targe
 	rec := fleet.KubeCluster{
 		ID: names.NewClusterID("conformance", nil), Context: kctx, KubeconfigPaths: paths,
 		Namespace: "fleet-it-conformance-" + names.NewClusterID("x", nil)[2:],
+		// The instance disks' class picks the clone tiers the run covers:
+		// a class with snapshots (csi-hostpath-sc) clones by snapshot and CSI
+		// clone, one without (minikube's standard) by copying.
+		StorageClass: os.Getenv(envConformanceStorageClass),
+		// A snapshot class that does not exist leaves a stopped instance's
+		// clone to a CSI clone (and its fallback to a copy).
+		SnapshotClass: os.Getenv(envConformanceSnapshotClass),
+		// stop-source has a clone stop its running source for the final copy.
+		CloneConsistency: fleet.KubeCloneConsistency(os.Getenv(envConformanceCloneConsistency)),
 	}
 	conn, err := kubeexec.Load(rec, kubeexec.Options{})
 	if err != nil {
@@ -131,7 +151,6 @@ func kubernetesTarget(t *testing.T, sel backendtest.Selection) backendtest.Targe
 		Skip: map[string]string{
 			"up-again":   "a cluster create always gets a key of its own: the daemon never runs a second Up on one, so there is nothing to adopt or prune",
 			"editor-uri": "the editor launch for a pod lands with P7.0 (Remote-SSH)",
-			"clone":      "clone on a cluster lands with P6.0",
 		},
 	}
 }

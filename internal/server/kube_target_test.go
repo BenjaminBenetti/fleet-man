@@ -2,10 +2,16 @@ package server
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
+	"github.com/BenjaminBenetti/fleet-man/internal/buildflavor"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -103,9 +109,12 @@ func TestResolveTargetCarriesTheClusterOnlyForKubernetes(t *testing.T) {
 	}
 }
 
-// A clone runs on its source's cluster connection, with a key of its own.
+// A clone runs on its source's cluster connection, with a key of its own on
+// its CLONING record before the clone job runs, under the connection's
+// quotas.
 func TestCloneDestinationInheritsTheSourceCluster(t *testing.T) {
 	isolateFleetDir(t)
+	stubDaemonIdentity(t)
 	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{
 		"alpha": {Name: "alpha", Instances: []*fleet.Instance{{
 			Name: "src", Status: fleet.StatusRunning, ContainerID: "c1",
@@ -113,6 +122,12 @@ func TestCloneDestinationInheritsTheSourceCluster(t *testing.T) {
 		}}},
 	}}); err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+	if err := state.UpdateKubeClusters(func(k *state.KubeClusters) error {
+		k.Clusters = []fleet.KubeCluster{{ID: "prod-eu", Context: "prod", Namespace: "fleet", MaxInstances: 2}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	var dest fleet.Instance
 	orig := jobRunClone
@@ -140,7 +155,24 @@ func TestCloneDestinationInheritsTheSourceCluster(t *testing.T) {
 	if dest.Backend != fleet.BackendKubernetes || dest.KubeCluster != "prod-eu" {
 		t.Fatalf("clone destination ran on %q/%q, want kubernetes/prod-eu", dest.Backend, dest.KubeCluster)
 	}
-	if dest.KubeKey != "" {
-		t.Fatalf("clone destination took the source's key %q", dest.KubeKey)
+	if want := names.InstanceKey(keyTestDaemonID, "alpha", "copy", dest.CreatedAt); dest.KubeKey != want || dest.KubeKey == "srckey12" {
+		t.Fatalf("clone destination key %q, want its own %q", dest.KubeKey, want)
+	}
+
+	// The connection allows two instances: a third clone is refused before
+	// any record exists (by a daemon with the Kubernetes backend).
+	if buildflavor.Current == buildflavor.Pod {
+		return
+	}
+	stream, err = client.CloneInstance(context.Background(), &fleetgrpc.CloneInstanceRequest{Fleet: "alpha", SourceInstance: "src", NewInstance: "third"})
+	if err == nil {
+		_, err = stream.Recv()
+	}
+	if status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "kubernetes:quota") {
+		t.Fatalf("a clone past the quota: %v", err)
+	}
+	st, _ := state.Load()
+	if _, err := st.Fleets["alpha"].GetInstance("third"); err == nil {
+		t.Fatal("the refused clone left a record")
 	}
 }

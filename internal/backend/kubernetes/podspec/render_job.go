@@ -56,6 +56,14 @@ type JobInput struct {
 	// the instance. A Job that runs beside the instance (a copier) asks for
 	// little instead.
 	Resources *corev1.ResourceRequirements
+	// From, when set, is a rendered instance pod's spec the Job takes its
+	// placement, pull secrets, DNS and pod security from instead of the
+	// translation's (a clone's Jobs: CloneJob, with no translation behind
+	// them).
+	From *corev1.PodSpec
+	// Node pins the Job's pod to one node (a copier beside the running
+	// source, whose disk is attached there); "" leaves it to the scheduler.
+	Node string
 }
 
 // JobClaim is a disk a Job mounts besides the instance's.
@@ -159,6 +167,12 @@ func (r *renderer) job(in JobInput, role names.Role) (*JobObjects, error) {
 		resources = *in.Resources.DeepCopy()
 	}
 	spec := r.podSpec(identity)
+	if in.From != nil {
+		fromPlacement(&spec, in.From)
+	}
+	if in.Node != "" {
+		pinToNode(&spec, in.Node)
+	}
 	spec.Volumes = volumes
 	spec.RestartPolicy = corev1.RestartPolicyNever
 	spec.TerminationGracePeriodSeconds = ptr(int64(DefaultStopTimeout))

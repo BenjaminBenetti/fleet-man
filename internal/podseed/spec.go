@@ -42,6 +42,13 @@ const (
 	// it as seed cache Cache: the disk later automation instances' disks
 	// are cloned from (SeedSpec.Cache).
 	OpSeedCache Op = "seed-cache"
+	// OpClone makes the PVC a clone of another instance's disk, of root
+	// generation Gen: copied from the source disk mounted at Clone.Source (a
+	// copier), or, with no source, restored onto the PVC already (from a
+	// snapshot or a CSI clone). Either way the clone's own fix-ups follow:
+	// its hostname, a reset of its volumes to what the image copies up, and
+	// none of the source's logs or leftovers.
+	OpClone Op = "clone"
 )
 
 // ToolResult is an OpTool job's result document.
@@ -49,6 +56,23 @@ type ToolResult struct {
 	// Disk is the instance disk's size and free room.
 	Disk DiskSpace `json:"disk"`
 }
+
+// The barriers a live clone stops at (jobboot.Server.Barrier), for fleetd to
+// act on the source: before the final delta (freeze it, or stop it), and
+// after (thaw it, or start it again).
+const (
+	BarrierFinal  = "final"
+	BarrierCopied = "copied"
+)
+
+// DefaultClonePasses is how many live passes a copier makes at most before
+// its final delta.
+const DefaultClonePasses = 3
+
+// ErrNoInstance is a disk that holds no instance root: a snapshot or CSI clone
+// that came up empty (a driver that ignored the data source), or a copier
+// pointed at the wrong disk.
+var ErrNoInstance = errors.New("the disk holds no instance root (no root manifest)")
 
 // JobSpec is job.json, what fleetd stages for `fleet pod-job`. Unknown fields
 // are ignored, so an older pod binary still runs a newer daemon's spec; a
@@ -77,6 +101,34 @@ type JobSpec struct {
 	Seed *SeedSpec `json:"seed,omitempty"`
 	// Cache is the seed cache id an OpSeedCache marks its disk as.
 	Cache string `json:"cache,omitempty"`
+	// Clone is what an OpClone copies.
+	Clone *CloneSpec `json:"clone,omitempty"`
+}
+
+// CloneSpec is an OpClone's work.
+type CloneSpec struct {
+	// Source is where the source instance's disk mounts in the job, whole;
+	// "" when the PVC holds the copy already (restored from a snapshot or a
+	// CSI clone).
+	Source string `json:"source,omitempty"`
+	// Live: the source runs while it is copied. The copier makes live passes
+	// (at most Passes, until one changes little), stops at BarrierFinal for
+	// fleetd to freeze or stop the source, copies the final delta, and stops
+	// at BarrierCopied for fleetd to let the source go on. A git dir is read
+	// refs first, then objects, and a live pass skips its lock and temp files.
+	Live bool `json:"live,omitempty"`
+	// Passes caps the live passes; 0 is DefaultClonePasses.
+	Passes int `json:"passes,omitempty"`
+	// Hostname is the clone pod's hostname, written to meta/hostname.
+	Hostname string `json:"hostname"`
+	// Volumes are the instance's volumes: the clone's start as a new
+	// container's do on docker, copied up from the image (CopyUp) or empty.
+	Volumes []Volume `json:"volumes,omitempty"`
+	// MountDirs are the instance pod's directory mount targets, as a seed's:
+	// image content under them is no part of a copied-up volume.
+	MountDirs []string `json:"mount_dirs,omitempty"`
+	// Workers is how many files are copied at once; 0 is 8.
+	Workers int `json:"workers,omitempty"`
 }
 
 // SeedSpec is an OpSeed's work.
@@ -212,18 +264,23 @@ func (s JobSpec) Validate() error {
 		}
 		return s.Seed.validate(s.Gen)
 	case OpRollback, OpCommit, OpTool:
-		if s.Seed != nil {
-			return fmt.Errorf("a %s job takes no seed spec", s.Op)
+		if s.Seed != nil || s.Clone != nil {
+			return fmt.Errorf("a %s job takes no seed or clone spec", s.Op)
 		}
 		return nil
 	case OpSeedCache:
-		if s.Seed != nil {
-			return fmt.Errorf("a %s job takes no seed spec", s.Op)
+		if s.Seed != nil || s.Clone != nil {
+			return fmt.Errorf("a %s job takes no seed or clone spec", s.Op)
 		}
 		if s.Cache == "" {
 			return fmt.Errorf("a %s job needs the cache id", s.Op)
 		}
 		return nil
+	case OpClone:
+		if s.Clone == nil || s.Seed != nil {
+			return errors.New("a clone job needs its clone spec, and no seed spec")
+		}
+		return s.Clone.validate()
 	}
 	return fmt.Errorf("unknown op %q", s.Op)
 }
@@ -297,6 +354,42 @@ func isCacheID(id string) bool {
 		}
 	}
 	return true
+}
+
+func (c CloneSpec) validate() error {
+	if c.Source != "" {
+		if err := checkAbs("source", c.Source); err != nil {
+			return err
+		}
+		if c.Source == "/" {
+			return errors.New("the source disk cannot mount at /")
+		}
+	}
+	if c.Live && c.Source == "" {
+		return errors.New("a live clone needs the source disk to copy from")
+	}
+	if c.Passes < 0 || c.Workers < 0 {
+		return fmt.Errorf("passes %d and workers %d cannot be negative", c.Passes, c.Workers)
+	}
+	if c.Hostname == "" || strings.ContainsAny(c.Hostname, "/\n\x00 ") {
+		return fmt.Errorf("hostname %q is not usable", c.Hostname)
+	}
+	for _, dir := range c.MountDirs {
+		if err := checkAbs("mount dir", dir); err != nil {
+			return err
+		}
+	}
+	seen := map[string]bool{}
+	for _, v := range c.Volumes {
+		if !volumeName.MatchString(v.Name) || seen[v.Name] {
+			return fmt.Errorf("volume name %q is not one unique path component", v.Name)
+		}
+		seen[v.Name] = true
+		if err := checkAbs("volume target", v.Target); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // checkAbs reports whether p is a clean absolute path.

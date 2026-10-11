@@ -396,3 +396,80 @@ func TestExecAsExitStatus(t *testing.T) {
 		t.Fatalf("missing spec: exit %d stderr %q", state.ExitCode(), stderr)
 	}
 }
+
+// TestStartInACgroupThatIsNotOneStillRuns: a cgroup the kernel refuses (here
+// a plain dir), or one that does not exist, is never a reason not to run the
+// command; with a TTY too.
+func TestStartInACgroupThatIsNotOneStillRuns(t *testing.T) {
+	h, _ := selfHost(t)
+	for name, dir := range map[string]string{"plain dir": t.TempDir(), "missing": filepath.Join(t.TempDir(), "nope")} {
+		for _, tty := range []bool{false, true} {
+			plan := mustPlan(t, h, Request{Class: ClassScript, Argv: []string{"sh", "-c", "echo ran"}, TTY: tty})
+			plan.Cgroup = dir
+			var out bytes.Buffer
+			proc, err := Start(plan, Stdio{Stdout: &out})
+			if err != nil {
+				t.Fatalf("%s (tty %v): %v", name, tty, err)
+			}
+			if tty {
+				got, _ := io.ReadAll(proc.PTY())
+				out.Write(got)
+			}
+			if st, err := proc.Wait(); err != nil || st.Code != 0 {
+				t.Fatalf("%s (tty %v): %+v, %v", name, tty, st, err)
+			}
+			if !strings.Contains(out.String(), "ran") {
+				t.Fatalf("%s (tty %v): output %q", name, tty, out.String())
+			}
+		}
+	}
+}
+
+// TestStartInACgroupKeepsTheCommandsOwnErrors: a missing executable is still
+// docker's 127 with a cgroup set.
+func TestStartInACgroupKeepsTheCommandsOwnErrors(t *testing.T) {
+	h, _ := selfHost(t)
+	plan := mustPlan(t, h, Request{Class: ClassScript, Argv: []string{"sh"}})
+	plan.Path = filepath.Join(t.TempDir(), "gone")
+	plan.Cgroup = t.TempDir()
+	_, err := Start(plan, Stdio{})
+	if ExitCode(err) != ExitNotFound {
+		t.Fatalf("a missing executable in a cgroup: %v (code %d)", err, ExitCode(err))
+	}
+}
+
+// TestStartInARealCgroup runs where this process may make a cgroup v2 child
+// (root with a delegated, writable cgroupfs): the command is in it from its
+// first instruction.
+func TestStartInARealCgroup(t *testing.T) {
+	data, err := os.ReadFile("/proc/self/cgroup")
+	if err != nil {
+		t.Skip(err)
+	}
+	cur := ""
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if rest, ok := strings.CutPrefix(line, "0::"); ok {
+			cur = rest
+		}
+	}
+	parent := filepath.Join("/sys/fs/cgroup", cur)
+	child := filepath.Join(parent, "execas-test-"+strconv.Itoa(os.Getpid()))
+	if cur == "" || os.Mkdir(child, 0o755) != nil {
+		t.Skip("no writable cgroup v2 here")
+	}
+	t.Cleanup(func() { _ = os.Remove(child) })
+	h, _ := selfHost(t)
+	plan := mustPlan(t, h, Request{Class: ClassScript, Argv: []string{"cat", "/proc/self/cgroup"}})
+	plan.Cgroup = child
+	var out bytes.Buffer
+	proc, err := Start(plan, Stdio{Stdout: &out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := proc.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(cur, filepath.Base(child)); !strings.Contains(out.String(), want) {
+		t.Fatalf("the command ran in %q, want %s", out.String(), want)
+	}
+}

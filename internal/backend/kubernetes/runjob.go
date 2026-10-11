@@ -68,6 +68,14 @@ type JobRun struct {
 	// a command in the Job's container. The job is collected all the same,
 	// so its pod ends; While's error is then RunJob's.
 	While func(ctx context.Context, exec JobExec) error
+	// Pending, when set, is asked each time RunJob looks at a Job whose pod
+	// does not run yet: its error ends the wait (a disk the provisioner
+	// refused, which no deadline need be waited out for).
+	Pending func(context.Context) error
+	// Barrier does what the job waits for at a barrier (jobboot): a clone's
+	// copier holding its source still for the final delta. nil refuses
+	// every barrier.
+	Barrier func(context.Context, jobboot.Barrier) error
 }
 
 // JobExec runs argv in a Job's container (as its user, in its own exec),
@@ -242,7 +250,7 @@ func (p *Pool) feedJob(ctx context.Context, c *Cluster, ns, pod string, paths jo
 		stream := kubeexec.StartStream(ctx, req, func(ctx context.Context, req kubeexec.ExecRequest, stdio kubeexec.Stdio) error {
 			return p.exec(ctx, c, req, stdio)
 		})
-		opts := jobboot.FeedOptions{Progress: r.Progress}
+		opts := jobboot.FeedOptions{Progress: r.Progress, Barrier: r.Barrier}
 		var ws io.ReadCloser
 		if r.Workspace != nil {
 			var err error
@@ -361,6 +369,11 @@ func (p *Pool) waitJobPod(ctx context.Context, cs kclient.Interface, ns string, 
 		}
 		if err := w.observe(p.opts.Now(), pod, pvc); err != nil {
 			return nil, err
+		}
+		if r.Pending != nil {
+			if err := r.Pending(ctx); err != nil {
+				return nil, err
+			}
 		}
 		if err := sleepCtx(ctx, interval); err != nil {
 			return nil, err

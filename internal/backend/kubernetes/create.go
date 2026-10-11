@@ -157,6 +157,17 @@ type creation struct {
 	// seedCacheUse says how the create used its image's seed cache, for
 	// its outcome line ("" without one).
 	seedCacheUse string
+	// verb is what the job is, for its messages ("" is "create"; a clone's
+	// is "clone").
+	verb string
+}
+
+// what is the job, for its messages.
+func (c *creation) what() string {
+	if c.verb != "" {
+		return c.verb
+	}
+	return "create"
 }
 
 func (c *creation) run(ctx context.Context) (*backend.UpResult, error) {
@@ -207,8 +218,8 @@ func (c *creation) checkpoint() error {
 	c.checkpointed = true
 	c.stopFailed()
 	step := c.jj.Journal().Step
-	flog.Info("kube create: the daemon is shutting down; the job is left for the next start", "fleet", c.id.fleet, "instance", c.id.name, "cluster", c.id.cluster, "key", c.id.key, "step", step)
-	return kubeerr.Wrap(kubeerr.Interrupted, fmt.Errorf("the daemon shut down during the create (at step %s): %w", step, backend.ErrCheckpointed))
+	flog.Info("kube "+c.what()+": the daemon is shutting down; the job is left for the next start", "fleet", c.id.fleet, "instance", c.id.name, "cluster", c.id.cluster, "key", c.id.key, "step", step)
+	return kubeerr.Wrap(kubeerr.Interrupted, fmt.Errorf("the daemon shut down during the %s (at step %s): %w", c.what(), step, backend.ErrCheckpointed))
 }
 
 // provision is the create after its journal began.
@@ -686,6 +697,8 @@ func applyObject(ctx context.Context, cs kclient.Interface, ns, kind, name strin
 		m, err = cs.AppsV1().StatefulSets(ns).Patch(ctx, name, types.ApplyPatchType, body, opts)
 	case KindPDB:
 		m, err = cs.PolicyV1().PodDisruptionBudgets(ns).Patch(ctx, name, types.ApplyPatchType, body, opts)
+	case KindVolumeSnapshot:
+		return applySnapshot(ctx, cs, ns, name, body)
 	default:
 		return "", fmt.Errorf("applying a %s is not something a create does", kind)
 	}

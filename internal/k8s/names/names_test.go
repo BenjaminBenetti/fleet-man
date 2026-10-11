@@ -146,6 +146,8 @@ func TestGenerationNames(t *testing.T) {
 		{ExportJob(sts, 3), sts + "-xprt-g3"},
 		{RollbackJob(sts, 3), sts + "-rlbk-g3"},
 		{CommitJob(sts, 4), sts + "-cmit-g4"},
+		{CopierJob(sts, 3), sts + "-copy-g3"},
+		{CloneSnapshot(sts, 2), sts + "-snap-g2"},
 	} {
 		if tt.got != tt.want {
 			t.Errorf("got %q, want %q", tt.got, tt.want)
@@ -189,6 +191,11 @@ func TestSeedCacheNames(t *testing.T) {
 	long := Instance(strings.Repeat("f", 80), strings.Repeat("i", 80), InstanceKey(testDaemonID, "f", "i", testCreated))
 	if job := SeedCacheJob(long); !IsDNS1123Label(job) || !IsLabelValue(job) {
 		t.Errorf("SeedCacheJob of the longest name = %q (%d)", job, len(job))
+	}
+	for _, name := range []string{CopierJob(long, MaxGeneration), CloneSnapshot(long, MaxGeneration)} {
+		if len(name) > 63 || !IsDNS1123Label(name) || !IsLabelValue(name) {
+			t.Errorf("a clone object of the longest name = %q (%d)", name, len(name))
+		}
 	}
 }
 
@@ -357,11 +364,14 @@ func FuzzK8sName(f *testing.F) {
 		}
 		crossCheck(t, "pod", pod)
 		for _, gen := range []int{1, int(uint64(nanos)%MaxGeneration) + 1, MaxGeneration} {
-			for _, job := range []string{SeedJob(sts, gen), ExportJob(sts, gen), RollbackJob(sts, gen), CommitJob(sts, gen)} {
+			for _, job := range []string{SeedJob(sts, gen), ExportJob(sts, gen), RollbackJob(sts, gen), CommitJob(sts, gen), CopierJob(sts, gen)} {
 				if !IsDNS1123Label(job) || !IsLabelValue(job) {
 					t.Fatalf("Job name %q (gen %d): not a Job name", job, gen)
 				}
 				crossCheck(t, "job", job)
+			}
+			if snap := CloneSnapshot(sts, gen); !IsDNS1123Label(snap) {
+				t.Fatalf("CloneSnapshot(%q, %d) = %q: not a DNS label", sts, gen, snap)
 			}
 			for _, secret := range []string{SpecSecret(sts, gen), EnvSecret(sts, gen)} {
 				if !IsDNS1123Label(secret) {

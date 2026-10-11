@@ -24,6 +24,11 @@
 //     shim uses for TTY attaches that must survive fleetd. It starts the
 //     command under a shepherd too, so a dropped attach re-attaches with
 //     `--resume`.
+//   - On a privileged pod, every command starts in pod-init's user cgroup
+//     (fleet-user), and the freeze, thaw and sync RPCs freeze it for a clone's
+//     consistent copy: the agent, PID 1 and the watchdogs stay live in
+//     fleet-agent. A freeze records its deadline first; the agent's timer
+//     thaws at it, and pod-init a little after when the agent is gone.
 //
 // Everything that starts processes is linux-only; elsewhere the entry points
 // fail.

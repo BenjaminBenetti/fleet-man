@@ -12,8 +12,7 @@ func TestBackendTypeCapabilities(t *testing.T) {
 		{"", BackendCapabilities{Clone: true, Rebuild: true}},
 		{BackendCodespaces, BackendCapabilities{Rebuild: true}},
 		{BackendCoder, BackendCapabilities{}},
-		// Until cluster clone lands.
-		{BackendKubernetes, BackendCapabilities{Rebuild: true}},
+		{BackendKubernetes, BackendCapabilities{Clone: true, Rebuild: true}},
 		// A type this build does not know defers to the server.
 		{"some-future-backend", BackendCapabilities{Clone: true, Rebuild: true}},
 	}

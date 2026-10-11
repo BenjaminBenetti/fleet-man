@@ -50,6 +50,9 @@ func TestCloneAndRebuildKeysFollowBackendCapabilities(t *testing.T) {
 		{"", true, true}, // records from before the Backend field
 		{fleet.BackendCodespaces, false, true},
 		{fleet.BackendCoder, false, false},
+		// A cluster instance clones (snapshot, CSI clone or copier); its
+		// rebuild comes later.
+		{fleet.BackendKubernetes, true, false},
 		// A type this TUI does not know is left to the server to judge.
 		{"some-future-backend", true, true},
 	}

@@ -97,6 +97,7 @@ func ExecStdio(ctx context.Context, stdin io.Reader, stdout io.Writer, opts Opti
 		open(podwire.OpenReply{Error: err.Error(), Code: execas.ExitCode(err), Proto: proto})
 		return nil
 	}
+	plan.Cgroup = userCgroup(o)
 	startHeld(o, log, cl, h, plan, proto)
 	return nil
 }

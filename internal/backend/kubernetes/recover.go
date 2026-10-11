@@ -274,9 +274,12 @@ func (s Scope) applyStatefulSet(ctx context.Context, body []byte, replicas *int3
 }
 
 // UndoClone deletes the copier Jobs and snapshots of the interrupted clone j
-// records (its source is not touched; the destination's other objects stay
-// with its failed record, to be retried or destroyed by key). A journal the
-// cluster no longer matches is a *StaleJournalError and nothing is deleted.
+// records, and starts its source again when the clone stopped it for its
+// final copy (clone_consistency stop-source); the source is otherwise not
+// touched, and the destination's other objects stay with its failed record,
+// to be retried or destroyed by key. A journal the cluster no longer matches
+// is a *StaleJournalError and nothing is deleted, but a source it stopped is
+// started all the same: the source is not the clone's to leave stopped.
 func (p *Pool) UndoClone(ctx context.Context, j Journal) (Teardown, error) {
 	if j.Op != OpClone {
 		return Teardown{}, fmt.Errorf("not a clone journal (%s)", j.Op)
@@ -297,6 +300,9 @@ func undoClone(ctx context.Context, s Scope, j Journal) (Teardown, error) {
 		return Teardown{}, err
 	}
 	if !check.Current {
+		if err := s.restartSource(ctx, j); err != nil {
+			return Teardown{}, err
+		}
 		return Teardown{}, &StaleJournalError{Why: check.Why}
 	}
 	t, err := s.DeleteJournalObjects(ctx, j, check, func(o JournalObject) bool {
@@ -305,10 +311,44 @@ func undoClone(ctx context.Context, s Scope, j Journal) (Teardown, error) {
 	if err != nil {
 		return t, err
 	}
+	if err := s.restartSource(ctx, j); err != nil {
+		return t, err
+	}
 	if err := s.ClearMark(ctx, j); err != nil {
 		s.logger().Warn("kube: clearing the clone's mark", "cluster", j.Cluster, "err", err)
 	}
 	return t, nil
+}
+
+// restartSource scales a source the clone j stopped back to the replicas it
+// had, when it is still the StatefulSet the clone stopped (its UID and key)
+// and still stopped: one that was started or removed since is left as it is.
+func (s Scope) restartSource(ctx context.Context, j Journal) error {
+	src := j.Source
+	if src == nil || !src.Stopped {
+		return nil
+	}
+	live, err := s.Client.AppsV1().StatefulSets(s.Namespace).Get(ctx, src.StatefulSet, metav1.GetOptions{})
+	switch {
+	case gone(err):
+		return nil
+	case err != nil:
+		return fmt.Errorf("reading the clone's source %s: %w", src.StatefulSet, err)
+	case (src.UID != "" && string(live.UID) != src.UID) || live.Labels[names.LabelKey] != src.Key:
+		return nil
+	case live.Spec.Replicas != nil && *live.Spec.Replicas > 0:
+		return nil
+	}
+	replicas := int32(1)
+	if src.PrevReplicas != nil {
+		replicas = *src.PrevReplicas
+	}
+	body := []byte(`{"spec":{"replicas":` + strconv.Itoa(int(replicas)) + `}}`)
+	if _, err := s.Client.AppsV1().StatefulSets(s.Namespace).Patch(ctx, src.StatefulSet, types.MergePatchType, body, metav1.PatchOptions{FieldManager: DefaultFieldManager}); err != nil {
+		return fmt.Errorf("starting the clone's source %s again: %w", src.StatefulSet, err)
+	}
+	s.logger().Info("kube: started the source an interrupted clone had stopped", "cluster", j.Cluster, "source", src.StatefulSet, "replicas", replicas)
+	return nil
 }
 
 // DeleteGarbage deletes what j recorded when no record holds its key any
@@ -318,8 +358,14 @@ func undoClone(ctx context.Context, s Scope, j Journal) (Teardown, error) {
 // mid-way. A journal the cluster no longer matches (its job finished, as for
 // one a backup restored) is a *StaleJournalError and nothing is deleted;
 // what it names is no more known garbage than any other unaccounted object.
+// Either way a clone's source the clone stopped is started again.
 func (s Scope) DeleteGarbage(ctx context.Context, j Journal) (Teardown, error) {
 	if err := s.gate(ctx); err != nil {
+		return Teardown{}, err
+	}
+	// A clone's source outlives the clone: one it stopped for its final
+	// copy is started again, whatever became of the clone.
+	if err := s.restartSource(ctx, j); err != nil {
 		return Teardown{}, err
 	}
 	check, err := s.CheckJournal(ctx, j)

@@ -26,11 +26,17 @@
 //     frames back, then the job's Result, which fleetd acknowledges. A dropped
 //     connection loses nothing: the job keeps working, a partly received
 //     workspace is discarded, and the next connection starts over.
-//  4. Stall. While the job waits on fleetd (for a first connection, or bytes
-//     of a workspace), StallTimeout without a byte ends it with ExitStalled
-//     (75), so a vanished daemon never leaves a Job running up to its
-//     activeDeadlineSeconds.
-//  5. Result. The job's full result (the seed's manifest) is written to the
+//  4. Stall. While the job waits on fleetd (for a first connection, bytes of
+//     a workspace, or the release of a barrier), StallTimeout without a byte
+//     ends it with ExitStalled (75), so a vanished daemon never leaves a Job
+//     running up to its activeDeadlineSeconds.
+//  5. Barriers. A job can stop at a named barrier (Server.Barrier) for
+//     fleetd to act first: a clone's copier stops before its final delta,
+//     for fleetd to freeze or stop the source, and after it, for fleetd to let
+//     the source go. fleetd's Feed runs FeedOptions.Barrier and releases the
+//     job (or refuses, failing it), telling it every BarrierKeepalive that it
+//     is still at it.
+//  6. Result. The job's full result (the seed's manifest) is written to the
 //     instance PVC and returned over the socket. The container's termination
 //     message carries only a small Termination (ok, the manifest's sha, the
 //     bytes written, a short error), well under the kubelet's 4 KiB.

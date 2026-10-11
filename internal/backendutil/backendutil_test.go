@@ -6,6 +6,7 @@ import (
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	coderbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/coder"
 	devcontainerbackend "github.com/BenjaminBenetti/fleet-man/internal/backend/devcontainer"
+	"github.com/BenjaminBenetti/fleet-man/internal/buildflavor"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 )
 
@@ -50,6 +51,9 @@ func TestNewForInstanceRegistersCoderName(t *testing.T) {
 func TestBackendCapabilitiesMatchBackends(t *testing.T) {
 	for _, backendType := range fleet.BackendTypes() {
 		t.Run(string(backendType), func(t *testing.T) {
+			if backendType == fleet.BackendKubernetes && buildflavor.Current == buildflavor.Pod {
+				t.Skip("the pod build has no Kubernetes backend: its handle refuses everything")
+			}
 			b := CapabilitiesFor(&fleet.Instance{Backend: backendType})
 			hints := backendType.Capabilities()
 			if hints.Clone != b.SupportsClone() {

@@ -45,6 +45,11 @@ func main() {
 		opts.CacheDir = ""
 		opts.ControlDir = filepath.Join(root, "c")
 		opts.RunDir = filepath.Join(root, "r")
+		// The pod's cgroup layout and freeze record, which a test lays out
+		// (a freeze of a privileged pod's user cgroup).
+		opts.LayoutFile = filepath.Join(root, "r", "cgroup.json")
+		opts.FreezeMarker = filepath.Join(root, "r", "freeze.json")
+		opts.SyncPath = root
 		opts.InitOOMScore = ""
 		conn, err := podagent.TakeStdio()
 		if err == nil {

@@ -175,27 +175,22 @@ func TestWhere(t *testing.T) {
 	}
 }
 
-// What the handle cannot do yet it refuses with kubernetes:unavailable,
-// naming it; what it never does without I/O it answers at once.
+// The handle clones and rebuilds with its job's context (clone.go,
+// rebuild.go); what it never does without I/O it answers at once.
 func TestHandleCapabilities(t *testing.T) {
 	b := newHandle((&handleRig{}).inst(), nil)
-	if !b.SupportsSharedMounts() || b.SupportsClone() || !b.SupportsRebuild() || b.SupportsMicSink() {
+	if !b.SupportsSharedMounts() || !b.SupportsClone() || !b.SupportsRebuild() || b.SupportsMicSink() || !backend.OwnsWorkspace(b) {
 		t.Fatal("capabilities")
 	}
 	if _, ok := any(b).(backend.RebuildContexter); !ok {
 		t.Fatal("the handle rebuilds without its job's context")
 	}
+	if _, ok := any(b).(backend.CloneContexter); !ok {
+		t.Fatal("the handle clones without its job's context")
+	}
 	if !backend.HasControlChannel(b) {
 		t.Fatal("no control channel: provisioning would mount a host control directory")
 	}
-	unavailableCode := func(what string, err error) {
-		t.Helper()
-		if code, _ := kubeerr.Of(err); code != kubeerr.Unavailable {
-			t.Errorf("%s: %v, want kubernetes:unavailable", what, err)
-		}
-	}
-	_, err := b.Clone("cid", "/ws", nil)
-	unavailableCode("Clone", err)
 	// The exec surface (Exec, ExecCommand, CopyFile, Logs) reaches the pod
 	// now; its shape is checked in cmd_test.go, not run here against a
 	// cluster. Editor, mic and forwarding are still later units'.

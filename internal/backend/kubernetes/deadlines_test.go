@@ -15,6 +15,7 @@ func TestLoadDeadlinesDefaults(t *testing.T) {
 	want := Deadlines{
 		PVCBind: 5 * time.Minute, Unschedulable: 3 * time.Minute, ImagePull: 15 * time.Minute,
 		PodReady: 10 * time.Minute, Agent: 2 * time.Minute, SharedState: 60 * time.Second,
+		Snapshot: 30 * time.Minute, Copy: 2 * time.Hour,
 	}
 	if d != want || len(bad) != 0 {
 		t.Fatalf("defaults = %+v %v, want %+v", d, bad, want)
@@ -33,9 +34,11 @@ func TestLoadDeadlinesOverrides(t *testing.T) {
 		EnvPodReadyTimeout:      "0",
 		EnvAgentTimeout:         "-5s",
 		EnvSharedStateTimeout:   "soon",
+		EnvSnapshotTimeout:      "3m",
+		EnvCopyTimeout:          "600",
 	}
 	d, bad := LoadDeadlines(func(k string) string { return env[k] })
-	if d.PVCBind != 90*time.Second || d.Unschedulable != 2*time.Minute || d.ImagePull != time.Hour || d.Seed != 45*time.Minute {
+	if d.PVCBind != 90*time.Second || d.Unschedulable != 2*time.Minute || d.ImagePull != time.Hour || d.Seed != 45*time.Minute || d.Snapshot != 3*time.Minute || d.Copy != 10*time.Minute {
 		t.Errorf("overrides not taken: %+v", d)
 	}
 	if d.PodReady != DefaultPodReadyTimeout || d.Agent != DefaultAgentTimeout || d.SharedState != DefaultSharedStateTimeout {

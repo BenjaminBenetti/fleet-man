@@ -46,6 +46,10 @@ type Fixture struct {
 	// PostCreate, when set, replaces the fixture's postCreateCommand (a
 	// failing one makes a failed create).
 	PostCreate string
+	// Privileged runs the instance with --privileged (what docker-in-docker
+	// asks for): on a cluster, the pod whose user processes a consistent
+	// clone can freeze.
+	Privileged bool
 }
 
 func (f Fixture) postCreate() string {
@@ -67,6 +71,7 @@ type devcontainerJSON struct {
 	RemoteUser        string            `json:"remoteUser"`
 	PostCreateCommand string            `json:"postCreateCommand"`
 	PostStartCommand  string            `json:"postStartCommand"`
+	RunArgs           []string          `json:"runArgs,omitempty"`
 }
 
 // Write lays the fixture out in dir, which must not exist yet: a
@@ -75,13 +80,17 @@ func (f Fixture) Write(dir string) error {
 	if err := os.MkdirAll(filepath.Join(dir, ".devcontainer"), 0o755); err != nil {
 		return err
 	}
-	config, err := json.MarshalIndent(devcontainerJSON{
+	dc := devcontainerJSON{
 		Name:              "fleet backend conformance",
 		Build:             map[string]string{"dockerfile": "Dockerfile"},
 		RemoteUser:        "vscode",
 		PostCreateCommand: f.postCreate(),
 		PostStartCommand:  countInto(PostStartLog, "started"),
-	}, "", "  ")
+	}
+	if f.Privileged {
+		dc.RunArgs = []string{"--privileged"}
+	}
+	config, err := json.MarshalIndent(dc, "", "  ")
 	if err != nil {
 		return err
 	}
