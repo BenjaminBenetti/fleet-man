@@ -43,8 +43,11 @@ var (
 	binDir     = podseed.BinDir
 	fleetLink  = podseed.FleetLink
 	layoutFile = LayoutFile
+	freezeFile = FreezeMarkerFile
 	// pollInterval is how often the cgroup layout is re-checked.
 	pollInterval = 5 * time.Second
+	// freezeWatchInterval is how often the freeze watchdog looks.
+	freezeWatchInterval = time.Second
 	// drainTimeout bounds how long PID 1 keeps copying output after the
 	// start script exits: a daemon it started can hold the pipe forever.
 	drainTimeout = 2 * time.Second
@@ -211,6 +214,16 @@ func layoutCgroups(spec Spec, warnf func(string, ...any)) *Layout {
 	go func() {
 		for range time.Tick(pollInterval) {
 			for _, note := range l.poll() {
+				warnf("%s", note)
+			}
+		}
+	}()
+	// The freeze watchdog: PID 1 outlives the agent that froze the user
+	// cgroup (and fleetd, and their session), so a freeze nobody thaws ends
+	// here, shortly after its deadline.
+	go func() {
+		for now := range time.Tick(freezeWatchInterval) {
+			if note := l.WatchFreeze(freezeFile, now); note != "" {
 				warnf("%s", note)
 			}
 		}

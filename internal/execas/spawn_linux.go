@@ -98,39 +98,79 @@ func Start(plan *Plan, stdio Stdio) (*Process, error) {
 	} else if !fi.IsDir() {
 		return nil, cannotRun(fmt.Errorf("chdir %s: %w", plan.Dir, syscall.ENOTDIR))
 	}
-	cmd := &exec.Cmd{Path: plan.Path, Args: plan.Argv, Env: plan.Env, Dir: plan.Dir, WaitDelay: stdio.WaitDelay}
-	attr := &syscall.SysProcAttr{Setsid: true}
-	if plan.Switch {
-		attr.Credential = &syscall.Credential{
-			Uid:    plan.Identity.UID,
-			Gid:    plan.Identity.GID,
-			Groups: plan.Identity.Groups,
-		}
-	}
-	cmd.SysProcAttr = attr
-
-	var master *os.File
+	var master, tty *os.File
 	if plan.TTY {
-		m, tty, err := openTTY(plan)
+		m, t, err := openTTY(plan)
 		if err != nil {
 			return nil, failed(err)
 		}
-		defer tty.Close()
-		master = m
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
-		attr.Setctty = true
-		attr.Ctty = 0
-	} else {
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = stdio.Stdin, stdio.Stdout, stdio.Stderr
+		defer t.Close()
+		master, tty = m, t
 	}
-
-	if err := cmd.Start(); err != nil {
+	newCmd := func() *exec.Cmd {
+		cmd := &exec.Cmd{Path: plan.Path, Args: plan.Argv, Env: plan.Env, Dir: plan.Dir, WaitDelay: stdio.WaitDelay}
+		attr := &syscall.SysProcAttr{Setsid: true}
+		if plan.Switch {
+			attr.Credential = &syscall.Credential{
+				Uid:    plan.Identity.UID,
+				Gid:    plan.Identity.GID,
+				Groups: plan.Identity.Groups,
+			}
+		}
+		cmd.SysProcAttr = attr
+		if tty != nil {
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
+			attr.Setctty = true
+			attr.Ctty = 0
+		} else {
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = stdio.Stdin, stdio.Stdout, stdio.Stderr
+		}
+		return cmd
+	}
+	cmd, err := startInCgroup(newCmd, plan.Cgroup)
+	if err != nil {
 		if master != nil {
 			_ = master.Close()
 		}
 		return nil, startError(plan, err)
 	}
 	return &Process{cmd: cmd, pty: master}, nil
+}
+
+// startInCgroup starts the command newCmd makes in the cgroup v2 directory
+// dir ("": wherever this process is): through clone3's CLONE_INTO_CGROUP, so
+// not even its first instruction runs elsewhere, else (a kernel before 5.7,
+// or a cgroup that refuses it) started where this process is and moved right
+// after. A cgroup that cannot be opened leaves the command where this process
+// is: fleet's own grouping is never a reason not to run it. A frozen cgroup
+// starts the command frozen, and Start returns once it thaws.
+func startInCgroup(newCmd func() *exec.Cmd, dir string) (*exec.Cmd, error) {
+	cmd := newCmd()
+	if dir == "" {
+		return cmd, cmd.Start()
+	}
+	cg, err := os.Open(dir)
+	if err != nil {
+		return cmd, cmd.Start()
+	}
+	defer cg.Close()
+	cmd.SysProcAttr.UseCgroupFD, cmd.SysProcAttr.CgroupFD = true, int(cg.Fd())
+	err = cmd.Start()
+	if err == nil {
+		return cmd, nil
+	}
+	if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.ENOEXEC) || errors.Is(err, syscall.EISDIR) || errors.Is(err, syscall.ENOTDIR) {
+		return cmd, err // the command itself, not the cgroup
+	}
+	cmd = newCmd()
+	if err := cmd.Start(); err != nil {
+		return cmd, err
+	}
+	if f, err := os.OpenFile(dir+"/cgroup.procs", os.O_WRONLY, 0); err == nil {
+		_, _ = f.WriteString(strconv.Itoa(cmd.Process.Pid))
+		_ = f.Close()
+	}
+	return cmd, nil
 }
 
 // openTTY opens a PTY sized for plan, its slave owned by plan's user.

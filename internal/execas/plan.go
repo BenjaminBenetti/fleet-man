@@ -79,6 +79,10 @@ type Plan struct {
 	// TTYGroup is the group a PTY is chowned to: the container's tty group,
 	// else the user's primary group.
 	TTYGroup uint32
+	// Cgroup, when set, is the cgroup v2 directory the command starts in (a
+	// privileged pod's user cgroup, which a clone freezes); "" leaves it in
+	// the starter's own. The caller sets it; Plan never does.
+	Cgroup string
 }
 
 // Plan resolves req: whom it runs as, its environment, its working directory

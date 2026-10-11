@@ -5,6 +5,7 @@ package podagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,6 +53,9 @@ func (a *agent) methods() map[string]Method {
 		podwire.MethodStats: func(ctx context.Context, _ json.RawMessage) (any, error) {
 			return agentStats.stats(ctx)
 		},
+		podwire.MethodFreeze: a.rpcFreeze,
+		podwire.MethodThaw:   a.rpcThaw,
+		podwire.MethodSync:   a.rpcSync,
 	}
 	for name, fn := range a.opts.Methods {
 		m[name] = fn
@@ -75,7 +79,12 @@ func (a *agent) serveRPC(s *podwire.Stream) {
 	}
 	result, err := method(a.ctx, h.Args)
 	if err != nil {
-		fail(podwire.CodeFailed, err.Error())
+		code := podwire.CodeFailed
+		var re *podwire.RemoteError
+		if errors.As(err, &re) && re.Code != "" {
+			code = re.Code
+		}
+		fail(code, err.Error())
 		return
 	}
 	body, err := json.Marshal(result)

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/execas"
+	"github.com/BenjaminBenetti/fleet-man/internal/podinit"
+	"github.com/BenjaminBenetti/fleet-man/internal/podseed"
 	"github.com/BenjaminBenetti/fleet-man/internal/podwire"
 	"github.com/BenjaminBenetti/fleet-man/internal/version"
 )
@@ -102,6 +104,17 @@ type Options struct {
 	// the agent's own.
 	InitOOMScore string
 
+	// LayoutFile is pod-init's cgroup layout record: on a privileged pod the
+	// agent starts every command in its user cgroup, which a clone freezes
+	// while the agent (in PID 1's cgroup) stays live. "" starts commands
+	// where the agent is, and refuses a freeze.
+	LayoutFile string
+	// FreezeMarker is where a freeze records its deadline for pod-init's
+	// watchdog; SyncPath is a path on the instance disk a freeze and the sync
+	// RPC flush ("" flushes every filesystem).
+	FreezeMarker string
+	SyncPath     string
+
 	// Stderr is where the agent writes what it cannot send fleetd.
 	Stderr io.Writer
 }
@@ -121,6 +134,9 @@ func DefaultOptions() Options {
 		// container's score.
 		InitOOMScore: "/proc/1/oom_score_adj",
 		Bundles:      []execas.Bundle{{Bin: DefaultTmuxDir + "/bin", Terminfo: DefaultTmuxDir + "/share/terminfo"}},
+		LayoutFile:   podinit.LayoutFile,
+		FreezeMarker: podinit.FreezeMarkerFile,
+		SyncPath:     podseed.InstallDir,
 	}
 	if d, err := time.ParseDuration(os.Getenv(EnvHoldGrace)); err == nil && d > 0 {
 		o.HoldGrace = d
@@ -177,6 +193,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Stderr == nil {
 		o.Stderr = os.Stderr
+	}
+	if o.FreezeMarker == "" {
+		o.FreezeMarker = podinit.FreezeMarkerFile
 	}
 	return o
 }

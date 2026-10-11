@@ -280,6 +280,7 @@ func (a *agent) serveExec(s *podwire.Stream) {
 		open(podwire.OpenReply{Error: err.Error(), Code: execas.ExitCode(err)})
 		return
 	}
+	plan.Cgroup = userCgroup(a.opts)
 	if h.Resumable {
 		startHeld(a.opts, a.log, cl, h, plan, 0)
 		return
