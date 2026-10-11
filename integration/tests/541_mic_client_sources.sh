@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: with two microphone clients attached, the one selected in Settings is the one recorded — not whichever attached last — the selection moves the microphone between them, and a selected client that is not attached is stood in for.
 set -euo pipefail
 
@@ -30,6 +31,7 @@ JSON
 
 info "enable the microphone (no client selected) before the instance is created"
 select_mic "" ""
+itest_config_written
 
 fleet_up alpha
 target="${FIXTURE_REPO_NAME}/alpha"

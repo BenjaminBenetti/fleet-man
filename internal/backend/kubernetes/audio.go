@@ -27,8 +27,9 @@ import (
 // the pod's audio activity, which paces its bulk session only while audio
 // actually flows (backend.AudioFlows). The audio stack is installed through
 // the root class (backend.RootExecer); a pod without root (capability tier
-// C) has audio only when its image carries the stack (fleet adds it to the
-// images it builds there; create.go), and otherwise says so.
+// C) has audio only when its image carries the stack (a create adds it to
+// the images fleet builds there: addAudioLayer), and otherwise says so
+// (checkAudio).
 
 // The handle's audio interfaces.
 var (
@@ -93,7 +94,8 @@ func (b *Backend) clusterName() string {
 }
 
 // SupportsMicSink is true unless the instance can have no audio
-// (AudioUnavailable): it reads the instance's record, never the cluster.
+// (AudioUnavailable). Unlike other backends' it reads a file, the instance's
+// record on the daemon host (never the cluster): what its create found.
 func (b *Backend) SupportsMicSink() bool { return b.AudioReason() == "" }
 
 // MicSinkCommand is `fleet mic sink` through the kube-exec shim, as the
