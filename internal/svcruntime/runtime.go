@@ -125,3 +125,21 @@ type UsageReporter interface {
 type Maintainer interface {
 	Maintain(ctx context.Context, fleetName string, services []fleet.SharedService) error
 }
+
+// CredentialIssuer is a runtime whose services take a credential of each
+// instance's own (a cluster's shared Buildkit, which authenticates every
+// instance by a short-lived client certificate whose subject is the
+// instance's key). The daemon issues an instance its credential on create,
+// clone, rebuild and start, and renews it while it runs (ConfigureBuildkit).
+type CredentialIssuer interface {
+	// IssueCredential issues instanceName, a record of fleetName that names
+	// this runtime, a fresh credential for svc. ErrNoEndpoint (errors.Is):
+	// the runtime does not serve svc to the fleet's instances, and says
+	// why.
+	IssueCredential(fleetName, instanceName string, svc fleet.SharedService) (fleet.ServiceCredential, error)
+	// CredentialInstalled records that instanceName holds cred now.
+	CredentialInstalled(fleetName, instanceName string, svc fleet.SharedService, cred fleet.ServiceCredential) error
+	// InstalledCredential is the validity of the credential last recorded
+	// installed in instanceName for svc (ok false: none is).
+	InstalledCredential(fleetName, instanceName string, svc fleet.SharedService) (notBefore, notAfter time.Time, ok bool)
+}

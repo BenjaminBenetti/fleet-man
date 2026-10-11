@@ -5,6 +5,7 @@ package svcruntimetest
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,13 +16,14 @@ import (
 
 var _ svcruntime.Runtime = (*Recorder)(nil)
 
-// Call is one recorded Runtime call. Service and ContainerID are the arguments
-// the method took ("" for one it did not).
+// Call is one recorded Runtime call. Service, ContainerID and Instance are
+// the arguments the method took ("" for one it did not).
 type Call struct {
 	Method      string
 	Fleet       string
 	Service     fleet.SharedService
 	ContainerID string
+	Instance    string
 }
 
 // Recorder is a svcruntime.Runtime that records every call that acts (Key,
@@ -168,4 +170,71 @@ func (r *Recorder) ReconcileBudget() time.Duration {
 		return time.Minute
 	}
 	return r.Budget
+}
+
+var _ svcruntime.CredentialIssuer = (*Issuer)(nil)
+
+// Issuer is a Recorder whose runtime authenticates each instance to its
+// shared Buildkit (svcruntime.CredentialIssuer), as a cluster's does: it
+// records IssueCredential and CredentialInstalled (InstalledCredential only
+// answers) and remembers what was installed.
+type Issuer struct {
+	*Recorder
+	// Credential is what IssueCredential returns.
+	Credential fleet.ServiceCredential
+
+	imu       sync.Mutex
+	installed map[string]fleet.ServiceCredential
+}
+
+// NewIssuer returns an Issuer keyed name that, like a cluster's runtime,
+// does not reconfigure on start and points instances at buildkit over TCP
+// ("tcp://<name>-buildkit:1234", the name's ':' and '/' as '-'), with a
+// stand-in credential for that host valid for a week from now.
+func NewIssuer(name string) *Issuer {
+	r := New(name)
+	r.Reconfigure = false
+	host := strings.NewReplacer(":", "-", "/", "-").Replace(name) + "-buildkit"
+	r.Endpoints[fleet.ServiceBuildkit] = fleet.ServiceEndpoint{URL: "tcp://" + host + ":1234", HostPort: host + ":1234"}
+	now := time.Now()
+	return &Issuer{Recorder: r, Credential: fleet.ServiceCredential{
+		CA: []byte("ca\n"), Cert: []byte("cert\n"), Key: []byte("key\n"), ServerName: host,
+		Serial: "01", NotBefore: now, NotAfter: now.Add(7 * 24 * time.Hour),
+	}}
+}
+
+// IssueCredential records the call and returns Credential.
+func (r *Issuer) IssueCredential(fleetName, instanceName string, svc fleet.SharedService) (fleet.ServiceCredential, error) {
+	err := r.record(Call{Method: "IssueCredential", Fleet: fleetName, Service: svc, Instance: instanceName})
+	r.imu.Lock()
+	defer r.imu.Unlock()
+	return r.Credential, err
+}
+
+// CredentialInstalled records the call and remembers cred.
+func (r *Issuer) CredentialInstalled(fleetName, instanceName string, svc fleet.SharedService, cred fleet.ServiceCredential) error {
+	if err := r.record(Call{Method: "CredentialInstalled", Fleet: fleetName, Service: svc, Instance: instanceName}); err != nil {
+		return err
+	}
+	r.SetInstalled(fleetName, instanceName, cred)
+	return nil
+}
+
+// SetInstalled makes cred what instanceName holds.
+func (r *Issuer) SetInstalled(fleetName, instanceName string, cred fleet.ServiceCredential) {
+	r.imu.Lock()
+	defer r.imu.Unlock()
+	if r.installed == nil {
+		r.installed = map[string]fleet.ServiceCredential{}
+	}
+	r.installed[fleetName+"/"+instanceName] = cred
+}
+
+// InstalledCredential answers what CredentialInstalled or SetInstalled
+// remembered. It is not recorded.
+func (r *Issuer) InstalledCredential(fleetName, instanceName string, _ fleet.SharedService) (time.Time, time.Time, bool) {
+	r.imu.Lock()
+	defer r.imu.Unlock()
+	c, ok := r.installed[fleetName+"/"+instanceName]
+	return c.NotBefore, c.NotAfter, ok
 }
