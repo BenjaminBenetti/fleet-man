@@ -43,7 +43,7 @@ func keybindingsData() []keybindingGroup {
 				{"p", "Port forward"},
 				{"c", "Open VS Code"},
 				{"C", "Clone instance"},
-				{"R", "Rebuild instance"},
+				{"R", "Rebuild / retry a failed create or rebuild"},
 				{"o", "Open external terminal"},
 				{"L", "View logs"},
 				{"→ / l, ← / h", "Select / deselect PR status"},

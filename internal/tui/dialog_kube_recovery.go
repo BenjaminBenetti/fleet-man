@@ -16,16 +16,18 @@ import (
 // before any record exists, with a code; and on enter on a failed Kubernetes
 // row, on a stopped one the cluster parked (a crash loop, out of memory), or
 // on a running one whose pod fleet refuses as tampered with.
-// Its buttons destroy the instance (through the usual confirmation), page
-// its logs, start a parked instance again, or open the cluster editor on the
-// setting that fixes the error. An interrupted create or rebuild is not
-// retried from here yet: destroying it and creating it again is the way.
+// Its buttons retry a failed job (an interrupted create, clone or rebuild, a
+// rebuild that failed and was undone) with a rebuild, destroy the instance
+// (through the usual confirmation), page its logs, start a parked instance
+// again, or open the cluster editor on the setting that fixes the error. R
+// on a retryable row opens it on Retry.
 
 // kubeRecoveryAction is one of the dialog's buttons.
 type kubeRecoveryAction int
 
 const (
 	kubeRecoverySettings kubeRecoveryAction = iota
+	kubeRecoveryRetry
 	kubeRecoveryLogs
 	kubeRecoveryStart
 	kubeRecoveryDestroy
@@ -119,6 +121,9 @@ func (d *kubeRecoveryState) actions() []kubeRecoveryAction {
 		out = append(out, kubeRecoverySettings)
 	}
 	if d.inst != "" {
+		if d.status == fleet.StatusFailed && (d.code.Is(kubeerr.Interrupted) || d.code.Is(kubeerr.RebuildFailed)) {
+			out = append(out, kubeRecoveryRetry)
+		}
 		out = append(out, kubeRecoveryLogs)
 		if d.status == fleet.StatusStopped {
 			out = append(out, kubeRecoveryStart)
@@ -128,11 +133,22 @@ func (d *kubeRecoveryState) actions() []kubeRecoveryAction {
 	return append(out, kubeRecoveryClose)
 }
 
+// focus puts the cursor on button a, when the dialog has it.
+func (d *kubeRecoveryState) focus(a kubeRecoveryAction) {
+	for i, have := range d.actions() {
+		if have == a {
+			d.cursor = i
+		}
+	}
+}
+
 // actionLabel is a button's label.
 func (d *kubeRecoveryState) actionLabel(a kubeRecoveryAction) string {
 	switch a {
 	case kubeRecoverySettings:
 		return "[ " + kubeFixes[d.code.Class()].label + " ]"
+	case kubeRecoveryRetry:
+		return "[ Retry (rebuild) ]"
 	case kubeRecoveryLogs:
 		if d.status == fleet.StatusFailed {
 			return "[ View the creation log ]"
@@ -214,6 +230,15 @@ func (fleetPage *fleetPage) runKubeRecovery(m *model, a kubeRecoveryAction) tea.
 			return nil
 		}
 		return execProcess(logsCommand(d.fleet, inst), func(err error) tea.Msg { return execDoneMsg{err} })
+	case kubeRecoveryRetry:
+		inst := fleetPage.recoveryInstance(m)
+		if inst == nil || inst.Status != fleet.StatusFailed {
+			m.message = fmt.Sprintf("Instance %s/%s is not failed any more", d.fleet, d.inst)
+			return nil
+		}
+		inst.Status = fleet.StatusRebuilding // optimistic, like R
+		fleetPage.buildRows(m)
+		return rebuildInstanceCmd(d.fleet, d.inst)
 	case kubeRecoveryStart:
 		inst := fleetPage.recoveryInstance(m)
 		if inst == nil || inst.Status != fleet.StatusStopped {
