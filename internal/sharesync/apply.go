@@ -494,13 +494,22 @@ func (tr *treeRoot) appendFile(ctx context.Context, op Op, at local, offset int6
 	if err == nil && fingerprintOf(st) != fingerprintOf(at.info) {
 		err = localChange(op.Path)
 	}
+	// landed bounds what of the suffix may be in the file if this fails: a
+	// write that fails has written what it returns, a close that fails (NFS
+	// reports a full share there) any of it.
+	var landed int64
 	if err == nil {
-		_, err = w.Write(suffix)
+		var n int
+		n, err = writeAppend(w, suffix)
+		landed = int64(n)
 	}
-	if cerr := w.Close(); err == nil {
-		err = cerr
+	if cerr := w.Close(); err == nil && cerr != nil {
+		err, landed = cerr, int64(len(suffix))
 	}
 	if err != nil {
+		if landed > 0 {
+			tr.undoAppend(op.Path, at, landed)
+		}
 		return err
 	}
 	if fileMode(File, at.info.Mode()) != op.Entry.Mode {
@@ -513,6 +522,39 @@ func (tr *treeRoot) appendFile(ctx context.Context, op Op, at local, offset int6
 		return err
 	}
 	return tr.recordWritten(op)
+}
+
+// writeAppend writes an in-place append; a variable for tests.
+var writeAppend = func(f *os.File, b []byte) (int, error) {
+	return f.Write(b)
+}
+
+// undoAppend cuts a failed append's bytes off again, so the file holds the
+// content its record describes rather than a torn copy of the op's, which
+// the next scan would report as a newer change and send everywhere. It cuts
+// only a file that is the one the append opened and holds no more than the
+// up to landed bytes it may have added: anything else is a local write,
+// reported next. Called with tr.mu held.
+func (tr *treeRoot) undoAppend(name string, at local, landed int64) {
+	f, err := tr.fs.OpenFile(name, os.O_WRONLY, 0)
+	cut := false
+	if err == nil {
+		var st fs.FileInfo
+		st, err = f.Stat()
+		if err == nil && os.SameFile(st, at.info) && st.Size() > at.info.Size() && st.Size() <= at.info.Size()+landed {
+			err, cut = f.Truncate(at.info.Size()), true
+		}
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
+	if err == nil && cut {
+		mtime := at.info.ModTime()
+		err = tr.fs.Chtimes(name, mtime, mtime)
+	}
+	if err != nil {
+		tr.tree.log.Warn("sharesync: undoing a failed append", "root", tr.Name, "path", name, "err", err)
+	}
 }
 
 // room checks the root's disk can take need more bytes and keep MinFree of

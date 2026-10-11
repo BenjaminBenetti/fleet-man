@@ -30,8 +30,10 @@ const metaKey = ""
 // answered for; like the rest of fleet it does not fsync). The log is folded
 // into a new snapshot once it outgrows it.
 type journal struct {
-	path   string
-	log    *os.File
+	path string
+	log  *os.File
+	// size is the log's length: where the next line starts.
+	size   int64
 	seq    uint64
 	logged int
 	// pending holds the lines of the batch being built.
@@ -98,7 +100,7 @@ func openJournal(path string) (*journal, map[string]json.RawMessage, error) {
 		log.Close()
 		return nil, nil, err
 	}
-	j.log = log
+	j.log, j.size = log, good
 	return j, records, nil
 }
 
@@ -214,11 +216,29 @@ func (j *journal) commit() error {
 	}
 	n := len(j.pending)
 	j.pending = j.pending[:0]
-	if _, err := j.log.Write(buf.Bytes()); err != nil {
+	if _, err := writeLog(j.log, buf.Bytes()); err != nil {
+		// A part of the batch on disk (the disk filled up) would be a torn
+		// line in the middle of the log, and replay stops at the first one:
+		// every record written after it would be lost on the next open.
+		// Cut it off, so the log ends where it did and the batch is simply
+		// not written.
+		j.seq -= uint64(n)
+		if terr := j.log.Truncate(j.size); terr != nil {
+			return errors.Join(err, terr)
+		}
+		if _, serr := j.log.Seek(j.size, 0); serr != nil {
+			return errors.Join(err, serr)
+		}
 		return err
 	}
+	j.size += int64(buf.Len())
 	j.logged += n
 	return nil
+}
+
+// writeLog appends to a journal's log; a variable for tests.
+var writeLog = func(f *os.File, b []byte) (int, error) {
+	return f.Write(b)
 }
 
 // due reports whether the log has outgrown a snapshot of size records.
@@ -264,7 +284,7 @@ func (j *journal) compact(records map[string]any) error {
 	if _, err := j.log.Seek(0, 0); err != nil {
 		return err
 	}
-	j.logged = 0
+	j.size, j.logged = 0, 0
 	return nil
 }
 

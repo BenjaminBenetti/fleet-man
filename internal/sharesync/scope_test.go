@@ -137,7 +137,8 @@ func (b *baseMerger) Merge(ctx context.Context, in *MergeInput) (MergeResult, er
 
 // TestMergersGetTheBase checks a policy keeping history is handed the
 // content a concurrent change was made on, and its merged content reaches
-// every copy, the reporting one included.
+// every copy, the reporting one included, and is the base of the next
+// concurrent change.
 func TestMergersGetTheBase(t *testing.T) {
 	m := &baseMerger{}
 	r := scopeRig(t, m, "host", "host", "c1", "k1")
@@ -156,5 +157,17 @@ func TestMergersGetTheBase(t *testing.T) {
 	got := r.read("host", "tool", "settings.json")
 	if got != "v1|host-v2|c1-v2" && got != "v1|c1-v2|host-v2" {
 		t.Errorf("merged settings.json = %q", got)
+	}
+
+	// Both copies hold the merge now; their next edits meet on it.
+	r.write("host", "tool", "settings.json", "host-v3")
+	r.write("c1", "tool", "settings.json", "c1-v3")
+	r.sync()
+	r.assertConverged()
+	m.mu.Lock()
+	bases = append([]string(nil), m.bases...)
+	m.mu.Unlock()
+	if len(bases) != 2 || bases[1] != got {
+		t.Errorf("bases handed to the merges = %q, want the merged %q second", bases, got)
 	}
 }

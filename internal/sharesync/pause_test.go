@@ -187,3 +187,45 @@ func TestNoSpaceErrorsPause(t *testing.T) {
 		t.Errorf("Apply with ENOSPC: %+v, %v", res, err)
 	}
 }
+
+// TestATornAppendIsCutBack checks an in-place append the disk ran out of room
+// for halfway is cut back to the content the side last synced: the torn copy
+// would otherwise be the side's newest change and replace the whole file
+// everywhere. The side pauses, then takes the append once it has room.
+func TestATornAppendIsCutBack(t *testing.T) {
+	r := newRig(t, "host", "c1")
+	r.write("host", "user", "log.jsonl", "one\n")
+	r.sync()
+	orig := writeAppend
+	t.Cleanup(func() { writeAppend = orig })
+	writeAppend = func(f *os.File, b []byte) (int, error) {
+		n, _ := f.Write(b[:len(b)/2])
+		return n, &os.PathError{Op: "write", Path: f.Name(), Err: syscall.ENOSPC}
+	}
+	f, err := os.OpenFile(r.path("host", "user", "log.jsonl"), os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("two\n")
+	f.Close()
+	if err := r.flushErr(time.Second); err == nil || !strings.Contains(err.Error(), "paused: disk full") {
+		t.Fatalf("Flush with the append failing: %v, want c1 paused", err)
+	}
+	if got := r.read("c1", "user", "log.jsonl"); got != "one\n" {
+		t.Errorf("c1 log.jsonl after the torn append = %q, want it cut back", got)
+	}
+	if rep, _, err := r.sides["c1"].tree.Scan(context.Background(), "user", nil); err != nil || len(rep.Changes) != 0 {
+		t.Errorf("c1 reports %+v, %v after the torn append; want nothing", rep.Changes, err)
+	}
+
+	writeAppend = orig
+	r.hub.Kick("c1")
+	r.sync()
+	r.assertConverged()
+	if got := r.read("host", "user", "log.jsonl"); got != "one\ntwo\n" {
+		t.Errorf("host log.jsonl = %q", got)
+	}
+	if got := r.conflicts(); len(got) != 0 {
+		t.Errorf("conflicts: %q", got)
+	}
+}

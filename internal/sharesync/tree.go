@@ -97,6 +97,8 @@ type treeRoot struct {
 	epoch   string
 	records map[string]*record
 	journal *journal
+	// failing are the paths scans cannot read, warned of once.
+	failing map[string]bool
 }
 
 // record is what a side last synced of one path.
@@ -180,7 +182,7 @@ func (t *Tree) openRoot(spec TreeRoot) (*treeRoot, error) {
 		sroot.Close()
 		return nil, fmt.Errorf("sharesync: root %s: %w", spec.Name, err)
 	}
-	tr := &treeRoot{TreeRoot: spec, tree: t, policy: t.table, fs: sroot, opened: opened, records: map[string]*record{}}
+	tr := &treeRoot{TreeRoot: spec, tree: t, policy: t.table, fs: sroot, opened: opened, records: map[string]*record{}, failing: map[string]bool{}}
 	j, raw, err := openJournal(filepath.Join(t.opts.StateDir, stateFile(spec.Name)))
 	if err != nil {
 		sroot.Close()

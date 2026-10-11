@@ -416,7 +416,8 @@ type planExtra struct {
 	conflict string
 	// merged is the merged file's entry.
 	merged Entry
-	// hist is the incoming content's hash, kept for the policy's history.
+	// hist is the hash of the content the decision commits (the incoming
+	// change's, or the merged file's), kept for the policy's history.
 	hist string
 }
 
@@ -481,6 +482,11 @@ func (h *Hub) decide(ctx context.Context, root *hubRoot, p *plan) (MergeResult, 
 			if cur.Kind == File && cur.Size < extra.merged.Size && hashOf(res.Content[:cur.Size]) == cur.Hash {
 				extra.merged = extra.merged.grownFrom(cur)
 			}
+		}
+		if p.m.History() > 0 && extra.merged.Size <= MaxMergeSize {
+			// The merged content is what every copy holds next: the base of
+			// the next concurrent change.
+			extra.hist = hash
 		}
 	default:
 		return res, extra, fmt.Errorf("policy for %s decided %d", p.c.Path, res.Decision)

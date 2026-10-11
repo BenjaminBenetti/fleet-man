@@ -54,21 +54,27 @@ func (t *Tree) Scan(ctx context.Context, root string, paths []string) (Report, [
 	areas := tr.reach(cover(paths))
 	observed := map[string]fs.FileInfo{}
 	var problems, again []string
+	// failed are the paths that cannot be read for good (a folder or file
+	// sync has no permission for): left to the periodic rescan, not scanned
+	// again soon, and warned of once.
+	failed := map[string]error{}
 	for _, area := range areas {
-		if err := ctx.Err(); err != nil {
-			return Report{}, nil, err
-		}
 		if area != "." && !tr.synced(area) {
 			continue
 		}
 		tr.fs.WalkDir(area, func(name string, d fs.DirEntry, err error) error {
+			if ctx.Err() != nil {
+				return fs.SkipAll
+			}
 			if err != nil {
 				if name == area && errors.Is(err, fs.ErrNotExist) {
 					return nil
 				}
-				problems, again = append(problems, name), append(again, name)
-				if !transient(err) {
-					t.log.Warn("sharesync: cannot scan", "root", root, "path", name, "err", err)
+				problems = append(problems, name)
+				if transient(err) {
+					again = append(again, name)
+				} else {
+					failed[name] = err
 				}
 				if d != nil && d.IsDir() {
 					return fs.SkipDir
@@ -98,6 +104,11 @@ func (t *Tree) Scan(ctx context.Context, root string, paths []string) (Report, [
 			observed[name] = info
 			return nil
 		})
+		if err := ctx.Err(); err != nil {
+			// A walk cut short has not seen everything: what it missed is
+			// not gone.
+			return Report{}, nil, err
+		}
 	}
 
 	tr.mu.Lock()
@@ -138,18 +149,36 @@ func (t *Tree) Scan(ctx context.Context, root string, paths []string) (Report, [
 			return Report{}, nil, err
 		}
 		if !c.gone {
-			entry, ok := tr.examine(c)
-			if !ok {
+			entry, err := tr.examine(c)
+			switch {
+			case err == nil:
+				c.entry = entry
+			case errors.Is(err, errUnsettled), transient(err):
 				again = append(again, c.name)
 				continue
+			default:
+				// A file sync cannot read (a root-owned 0600 file): not
+				// synced, and not taken for gone either.
+				failed[c.name] = err
+				continue
 			}
-			c.entry = entry
 		}
 		examined = append(examined, c)
 	}
 
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
+	for name, err := range failed {
+		if !tr.failing[name] {
+			t.log.Warn("sharesync: cannot scan", "root", root, "path", name, "err", err)
+			tr.failing[name] = true
+		}
+	}
+	for name := range tr.failing {
+		if _, still := failed[name]; !still && inAny(name, areas) {
+			delete(tr.failing, name)
+		}
+	}
 	for _, c := range examined {
 		// The path must still be what was examined: a write applied or made
 		// since is the next scan's.
@@ -198,46 +227,48 @@ func (t *Tree) Scan(ctx context.Context, root string, paths []string) (Report, [
 	return Report{Root: root, Epoch: tr.epoch, Changes: changes}, again, nil
 }
 
-// examine returns the state of a changed path. ok is false when it must be
-// looked at again later: a large file modified within the settle time, or a
-// path that changed while it was read.
-func (tr *treeRoot) examine(c candidate) (Entry, bool) {
+// examine returns the state of a changed path: errUnsettled when it must be
+// looked at again soon (a large file modified within the settle time, or a
+// path that changed while it was read), or why it cannot be read.
+func (tr *treeRoot) examine(c candidate) (Entry, error) {
 	kind, _ := kindOf(c.info)
 	switch kind {
 	case Dir:
-		return Entry{Kind: Dir, Mode: fileMode(Dir, c.info.Mode())}, true
+		return Entry{Kind: Dir, Mode: fileMode(Dir, c.info.Mode())}, nil
 	case Symlink:
+		// The walk could list the folder, so a failure is the link being
+		// replaced meanwhile.
 		target, err := tr.fs.Readlink(c.name)
 		if err != nil || target == "" {
-			return Entry{}, false
+			return Entry{}, errUnsettled
 		}
-		return Entry{Kind: Symlink, Target: target}, true
+		return Entry{Kind: Symlink, Target: target}, nil
 	}
 	settle := tr.tree.opts.Settle
 	if c.info.Size() > BulkSize && settle > 0 && tr.tree.opts.Now().Sub(c.info.ModTime()) < settle {
-		return Entry{}, false
+		return Entry{}, errUnsettled
 	}
 	f, err := tr.fs.Open(c.name)
 	if err != nil {
-		return Entry{}, false
+		return Entry{}, err
 	}
 	defer f.Close()
 	if st, err := f.Stat(); err != nil || fingerprintOf(st) != c.fp {
-		return Entry{}, false
+		return Entry{}, errUnsettled
 	}
 	h := sha256.New()
 	prefix := ""
 	if c.prev.Kind == File && c.prev.Size > 0 && c.prev.Size < c.info.Size() {
 		if _, err := io.CopyN(h, f, c.prev.Size); err != nil {
-			return Entry{}, false
+			return Entry{}, unsettledOr(err)
 		}
 		prefix = hex.EncodeToString(h.Sum(nil))
 	}
 	if _, err := io.Copy(h, f); err != nil {
-		return Entry{}, false
+		return Entry{}, unsettledOr(err)
 	}
 	if st, err := f.Stat(); err != nil || fingerprintOf(st) != c.fp {
-		return Entry{}, false
+		return Entry{}, errUnsettled
 	}
 	entry := Entry{
 		Kind:  File,
@@ -249,7 +280,20 @@ func (tr *treeRoot) examine(c candidate) (Entry, bool) {
 	if prefix != "" && prefix == c.prev.Hash {
 		entry = entry.grownFrom(c.prev)
 	}
-	return entry, true
+	return entry, nil
+}
+
+// errUnsettled: a path changed while a scan read it, or is still being
+// written; it is scanned again soon.
+var errUnsettled = errors.New("changed while it was read")
+
+// unsettledOr returns errUnsettled for a read cut short (the file shrank
+// under it), else err.
+func unsettledOr(err error) error {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return errUnsettled
+	}
+	return err
 }
 
 // cannotExist reports whether an Lstat error says nothing is at the path in

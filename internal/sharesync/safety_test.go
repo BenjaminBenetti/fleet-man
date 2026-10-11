@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -160,7 +161,9 @@ func TestSpecialFilesAreNeverSynced(t *testing.T) {
 }
 
 // TestUnreadableFolderIsNotADelete checks a folder a scan cannot read never
-// makes what was in it look deleted.
+// makes what was in it look deleted, and is warned of once and left to the
+// periodic rescan rather than scanned again and again (a root-owned 0700
+// folder in a custom mount would otherwise flood the daemon's log).
 func TestUnreadableFolderIsNotADelete(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads every folder")
@@ -175,6 +178,95 @@ func TestUnreadableFolderIsNotADelete(t *testing.T) {
 	if got := r.read("host", "user", "d/f"); got != "keep me" {
 		t.Errorf("host user/d/f = %q after c1 could not read d", got)
 	}
+	for range 3 {
+		if _, again, err := r.sides["c1"].tree.Scan(context.Background(), "user", nil); err != nil || len(again) != 0 {
+			t.Errorf("scan with d unreadable: again %q, %v; want none", again, err)
+		}
+	}
+	if n := strings.Count(r.logs.String(), "cannot scan"); n != 1 {
+		t.Errorf("%d warnings for the unreadable folder, want 1", n)
+	}
+	// Readable again, and unreadable once more: warned of again.
+	os.Chmod(d, 0o755)
+	r.sides["c1"].tree.Scan(context.Background(), "user", nil)
+	os.Chmod(d, 0)
+	r.sides["c1"].tree.Scan(context.Background(), "user", nil)
+	if n := strings.Count(r.logs.String(), "cannot scan"); n != 2 {
+		t.Errorf("%d warnings after d came back and went again, want 2", n)
+	}
+}
+
+// TestUnreadableFileIsWarnedOfOnce checks a file sync cannot read (a root-
+// owned 0600 file a docker instance left in a custom mount) is warned of
+// once, left to the periodic rescan rather than read again and again, and
+// never taken for deleted; it syncs once it can be read.
+func TestUnreadableFileIsWarnedOfOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every file")
+	}
+	r := newRig(t, "host", "c1")
+	r.write("host", "user", "key.pem", "v1")
+	r.sync()
+	p := r.path("host", "user", "key.pem")
+	r.write("host", "user", "key.pem", "v2")
+	os.Chmod(p, 0)
+	defer os.Chmod(p, 0o644)
+	for range 3 {
+		rep, again, err := r.sides["host"].tree.Scan(context.Background(), "user", nil)
+		if err != nil || len(again) != 0 || len(rep.Changes) != 0 {
+			t.Errorf("scan with key.pem unreadable: %+v, again %q, %v; want nothing", rep.Changes, again, err)
+		}
+	}
+	if n := strings.Count(r.logs.String(), `msg="sharesync: cannot scan" tree=host root=user path=key.pem`); n != 1 {
+		t.Errorf("%d warnings for the unreadable file, want 1", n)
+	}
+	if got := r.read("c1", "user", "key.pem"); got != "v1" {
+		t.Errorf("c1 key.pem = %q while the host's could not be read", got)
+	}
+	os.Chmod(p, 0o644)
+	r.sync()
+	if got := r.read("c1", "user", "key.pem"); got != "v2" {
+		t.Errorf("c1 key.pem = %q once the host's could be read", got)
+	}
+}
+
+// TestScanCutShortReportsNoDeletes checks a scan whose context ends mid-walk
+// stops there (a full scan of a large tree heeds the shutdown's deadline),
+// returns its error and never takes what it did not reach for deleted.
+func TestScanCutShortReportsNoDeletes(t *testing.T) {
+	r := newRig(t, "host")
+	for i := range 50 {
+		r.write("host", "user", fmt.Sprintf("d%02d/f", i), "x")
+	}
+	r.sync()
+	r.sides["host"].stop()
+	tree := r.sides["host"].tree
+	ctx := &cutCtx{Context: context.Background(), left: 10}
+	rep, _, err := tree.Scan(ctx, "user", nil)
+	if !errors.Is(err, context.Canceled) || len(rep.Changes) != 0 {
+		t.Errorf("a scan cut short: %d changes, %v; want none and its error", len(rep.Changes), err)
+	}
+	if n := ctx.calls.Load(); n > 20 {
+		t.Errorf("the walk went on after its context ended: %d checks", n)
+	}
+	rep, _, err = tree.Scan(context.Background(), "user", nil)
+	if err != nil || len(rep.Changes) != 0 {
+		t.Errorf("the next scan: %+v, %v; want nothing changed", rep.Changes, err)
+	}
+}
+
+// cutCtx is a context that ends after left checks of Err.
+type cutCtx struct {
+	context.Context
+	left  int64
+	calls atomic.Int64
+}
+
+func (c *cutCtx) Err() error {
+	if c.calls.Add(1) > c.left {
+		return context.Canceled
+	}
+	return nil
 }
 
 // TestTreeRefusesAMissingFolder checks a tree only opens on folders that are

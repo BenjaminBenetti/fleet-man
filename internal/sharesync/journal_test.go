@@ -71,6 +71,41 @@ func TestJournalReplaysItsLog(t *testing.T) {
 	}
 }
 
+// TestJournalCutsOffAPartlyWrittenBatch checks a batch the disk took only part
+// of (it filled up) is cut off the log again: the records written after it
+// would otherwise sit behind a torn line that replay stops at, and be lost
+// on the next open.
+func TestJournalCutsOffAPartlyWrittenBatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "root.json")
+	j, _ := openTestJournal(t, path)
+	j.put("a", "1")
+	if err := j.commit(); err != nil {
+		t.Fatal(err)
+	}
+	orig := writeLog
+	t.Cleanup(func() { writeLog = orig })
+	errFull := errors.New("no space left on device")
+	writeLog = func(f *os.File, b []byte) (int, error) {
+		n, _ := f.Write(b[:len(b)/2])
+		return n, errFull
+	}
+	j.put("b", "2")
+	j.put("c", "3")
+	if err := j.commit(); !errors.Is(err, errFull) {
+		t.Fatalf("commit on a full disk: %v", err)
+	}
+	writeLog = orig
+	j.put("d", "4")
+	if err := j.commit(); err != nil {
+		t.Fatal(err)
+	}
+	j.close()
+	_, got := openTestJournal(t, path)
+	if got["a"] != "1" || got["d"] != "4" || len(got) != 2 {
+		t.Errorf("after a batch the disk cut short and one after it: %v, want a and d", got)
+	}
+}
+
 // TestJournalDropsATornTail checks a log cut short mid-line (a crash during
 // the append) loses only that line, and the next append starts cleanly.
 func TestJournalDropsATornTail(t *testing.T) {
