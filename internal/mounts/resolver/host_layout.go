@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/BenjaminBenetti/fleet-man/internal/safefs"
 )
 
 // hostLayout prepares a fleet's Layout paths, the folders and files the
@@ -18,21 +21,18 @@ import (
 // one instance can plant a symlink where the host expects a folder or file:
 // files/.claude.json -> ~/.bashrc, or (custom mounts nest, /opt over
 // /opt/data) .mnt/opt/data -> ~. Followed, the next provision would chmod the
-// link's target 0666/0777 and bind-mount it into the fleet. So every
-// component from the mount root down to a Layout path is Lstat-ed and refused
-// when it is a symlink (SymlinkError), and it is walked one os.Root per
-// directory, each checked to be the same inode the Lstat saw, so a symlink
-// swapped in mid-walk can never redirect an operation outside the folder that
-// holds it. What users keep beneath a Layout path is never inspected.
+// link's target 0666/0777 and bind-mount it into the fleet. So the mount root
+// is walked through internal/safefs, which refuses a symlink at every element
+// from the mount root down to a Layout path (SymlinkError here) and never
+// lets a symlink swapped in mid-walk redirect an operation. What users keep
+// beneath a Layout path is never inspected.
 //
 // The mount root itself (~/.fleet/workspaces/<fleet>) and everything above it
 // belong to the user and are opened following links, so a relocated ~/.fleet
 // or fleet folder keeps working.
 type hostLayout struct {
-	// dir is the fleet's mount root on the host.
-	dir string
-	// root is dir opened as an os.Root; every Layout path is reached through it.
-	root *os.Root
+	// root is the fleet's mount root; every Layout path is reached through it.
+	root *safefs.Root
 }
 
 // openHostLayout creates the fleet's mount root when missing (0777 before
@@ -41,11 +41,11 @@ func openHostLayout(dir string) (*hostLayout, error) {
 	if err := os.MkdirAll(dir, 0777); err != nil {
 		return nil, err
 	}
-	root, err := os.OpenRoot(dir)
+	root, err := safefs.Open(dir, safefs.Options{})
 	if err != nil {
 		return nil, err
 	}
-	return &hostLayout{dir: dir, root: root}, nil
+	return &hostLayout{root: root}, nil
 }
 
 // Close releases the mount root.
@@ -67,13 +67,11 @@ func (l *hostLayout) Close() error {
 // with their own 0600 perms. The explicit chmod also upgrades existing
 // directories that older fleets created at 0700.
 func (l *hostLayout) ensureDir(rel string) error {
-	dir, err := l.openDir(rel)
-	if err != nil {
-		return err
+	name := filepath.ToSlash(rel)
+	if err := l.root.MkdirAll(name, 0777); err != nil {
+		return refusal(err)
 	}
-	defer dir.Close()
-	// "." is the walked directory itself, never a link.
-	return dir.Chmod(".", layoutDirMode)
+	return refusal(l.root.Chmod(name, layoutDirMode))
 }
 
 // ensureFile creates an empty file at rel (relative to the mount root) when
@@ -82,97 +80,38 @@ func (l *hostLayout) ensureDir(rel string) error {
 // the agent that owns the symlinked target inside the container must be able
 // to write through to the host file.
 func (l *hostLayout) ensureFile(rel string) error {
-	dir, err := l.openDir(filepath.Dir(rel))
-	if err != nil {
+	name := filepath.ToSlash(rel)
+	if err := l.root.MkdirAll(path.Dir(name), 0777); err != nil {
+		return refusal(err)
+	}
+	// O_EXCL never follows a link: an existing entry, a symlink included, is
+	// left for Chmod, which refuses a symlink.
+	file, err := l.root.OpenFile(name, os.O_RDONLY|os.O_CREATE|os.O_EXCL, layoutFileMode)
+	switch {
+	case err == nil:
+		file.Close()
+	case !errors.Is(err, fs.ErrExist):
+		return refusal(err)
+	}
+	return refusal(l.root.Chmod(name, layoutFileMode))
+}
+
+// refusal turns safefs's refusals into the resolver's messages: a
+// SymlinkError for a symlink, and the folder at fault named for the rest.
+func refusal(err error) error {
+	var pathErr *fs.PathError
+	if !errors.As(err, &pathErr) {
 		return err
 	}
-	defer dir.Close()
-
-	name := filepath.Base(rel)
-	// O_EXCL never follows a link, so a symlink planted since the Lstat makes
-	// the create fail rather than write through it.
-	info, err := lstatOrCreate(dir, name, func() error {
-		file, err := dir.OpenFile(name, os.O_RDONLY|os.O_CREATE|os.O_EXCL, layoutFileMode)
-		if err != nil {
-			return err
-		}
-		return file.Close()
-	})
-	if err != nil {
-		return err
+	switch {
+	case errors.Is(pathErr.Err, safefs.ErrSymlink):
+		return &SymlinkError{Path: pathErr.Path}
+	case errors.Is(pathErr.Err, safefs.ErrNotDir):
+		return fmt.Errorf("%s is not a directory", displayPath(pathErr.Path))
+	case errors.Is(pathErr.Err, safefs.ErrChanged):
+		return fmt.Errorf("%s changed while fleet was preparing it", displayPath(pathErr.Path))
 	}
-	if info.Mode()&fs.ModeSymlink != 0 {
-		return &SymlinkError{Path: filepath.Join(l.dir, rel)}
-	}
-	// fchmodat(AT_SYMLINK_NOFOLLOW) inside dir: a link swapped in after the
-	// Lstat can only resolve within dir, which holds nothing but these files.
-	return dir.Chmod(name, layoutFileMode)
-}
-
-// openDir walks rel from the mount root one component at a time, creating a
-// missing component (0777 before umask) and refusing one that is a symlink or
-// not a directory, and returns rel opened as its own os.Root.
-func (l *hostLayout) openDir(rel string) (*os.Root, error) {
-	parent := l.root
-	hostPath := l.dir
-	for _, name := range strings.Split(rel, string(filepath.Separator)) {
-		hostPath = filepath.Join(hostPath, name)
-		child, err := openLayoutDir(parent, name, hostPath)
-		if parent != l.root {
-			parent.Close()
-		}
-		if err != nil {
-			return nil, err
-		}
-		parent = child
-	}
-	return parent, nil
-}
-
-// openLayoutDir opens parent's entry name, whose host path is hostPath, as an
-// os.Root after creating it when missing. It refuses a symlink or a
-// non-directory, and an entry that changed between the Lstat and the open.
-func openLayoutDir(parent *os.Root, name, hostPath string) (*os.Root, error) {
-	info, err := lstatOrCreate(parent, name, func() error {
-		return parent.Mkdir(name, 0777)
-	})
-	if err != nil {
-		return nil, err
-	}
-	if info.Mode()&fs.ModeSymlink != 0 {
-		return nil, &SymlinkError{Path: hostPath}
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("%s is not a directory", displayPath(hostPath))
-	}
-	dir, err := parent.OpenRoot(name)
-	if err != nil {
-		return nil, err
-	}
-	opened, err := dir.Stat(".")
-	if err == nil && !os.SameFile(info, opened) {
-		err = fmt.Errorf("%s changed while fleet was preparing it", displayPath(hostPath))
-	}
-	if err != nil {
-		dir.Close()
-		return nil, err
-	}
-	return dir, nil
-}
-
-// lstatOrCreate returns the Lstat of name in dir, first running create when
-// name is missing. create failing with ErrExist is not an error: another
-// provision of the same fleet created the entry first, and the second Lstat
-// reports whatever is there now.
-func lstatOrCreate(dir *os.Root, name string, create func() error) (fs.FileInfo, error) {
-	info, err := dir.Lstat(name)
-	if !errors.Is(err, fs.ErrNotExist) {
-		return info, err
-	}
-	if err := create(); err != nil && !errors.Is(err, fs.ErrExist) {
-		return nil, err
-	}
-	return dir.Lstat(name)
+	return err
 }
 
 // displayPath abbreviates the user's home directory in path to "~" for
