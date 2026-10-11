@@ -27,7 +27,9 @@ import (
 //
 //	~/.fleet/logs/<fleet>/trigger/<trigger>/event-<UTC timestamp>.log
 //
-// keeping the most recent triggerEventLogKeep files. This is the SAME payload
+// keeping the most recent triggerEventLogKeep files; outcome lines about the
+// firing's runs are appended after the payload as they happen
+// (appendTriggerOutcome). This is the SAME payload
 // that gets copied into each spawned agent's instance (see launchAutomation-
 // Command / writeAutomationEventFile), captured durably on the host so a firing
 // can be inspected after the instance is reaped — which is the whole point: it
@@ -91,6 +93,47 @@ func triggerEventLogHeader(ev *triggerEvent) string {
 	fmt.Fprintf(&b, "# fired:   %s\n", ev.firedAt.UTC().Format(time.RFC3339))
 	b.WriteByte('\n')
 	return b.String()
+}
+
+// recordTriggerOutcome appends one outcome line about w's run to the trigger
+// event log of the firing that spawned it (see appendTriggerOutcome); a run
+// with no recorded firing (an adopted one) has no log to append to.
+func recordTriggerOutcome(w *watchedAgent, at time.Time, msg string) {
+	if w.event == nil || w.eventLog == "" {
+		return
+	}
+	who := w.agent
+	if who == "" {
+		who = w.instance
+	}
+	appendTriggerOutcome(w.fleet, w.event.triggerName, w.eventLog, at, who, msg)
+}
+
+// appendTriggerOutcome appends an outcome line to the firing's event log
+// name in its trigger's log directory: what became of the firing for one of
+// its agents, after its payload, as
+//
+//	# outcome: <UTC time> <agent>: <msg>
+//
+// so `L`, `fleet trigger logs` and fleet_trigger_logs show it with the
+// firing. The payload above it is untouched (readTriggerEventBody reads it
+// back by size). Best-effort, like the log itself: a log already pruned or
+// unwritable is warned about and skipped. A package-var seam for tests.
+var appendTriggerOutcome = func(fleetName, triggerName, name string, at time.Time, agent, msg string) {
+	if name == "" || name != filepath.Base(name) || !strings.HasPrefix(name, "event-") {
+		return
+	}
+	path := filepath.Join(state.TriggerLogsDir(fleetName, triggerName), name)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		flog.Warn("automation: trigger log outcome not recorded", "fleet", fleetName, "trigger", triggerName, "log", name, "err", err)
+		return
+	}
+	defer f.Close()
+	line := fmt.Sprintf("# outcome: %s %s: %s\n", at.UTC().Format(time.RFC3339), agent, strings.ReplaceAll(msg, "\n", " "))
+	if _, err := f.WriteString(line); err != nil {
+		flog.Warn("automation: trigger log outcome not recorded", "fleet", fleetName, "trigger", triggerName, "log", name, "err", err)
+	}
 }
 
 // readTriggerEventBody reads back the body (the first size payload bytes) of
