@@ -52,29 +52,6 @@ func shimServer(t *testing.T, serve func(net.Conn)) string {
 	return addr
 }
 
-// swapStdio points os.Stdin and os.Stdout at pipes for the test.
-func swapStdio(t *testing.T) (stdin *os.File, stdout *os.File) {
-	t.Helper()
-	inR, inW, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	outR, outW, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	origIn, origOut := os.Stdin, os.Stdout
-	os.Stdin, os.Stdout = inR, outW
-	t.Cleanup(func() {
-		os.Stdin, os.Stdout = origIn, origOut
-		_ = inR.Close()
-		_ = inW.Close()
-		_ = outR.Close()
-		_ = outW.Close()
-	})
-	return inW, outR
-}
-
 // forward-stdio: stdin to the pod's port, the end of stdin a half-close, the
 // peer's answer to stdout.
 func TestKubeExecForwardStdio(t *testing.T) {
@@ -86,9 +63,14 @@ func TestKubeExecForwardStdio(t *testing.T) {
 		fmt.Fprintf(c, "counted %d\n", n)
 	}))
 	f := forwardShimFlags(t, k)
-	stdin, stdout := swapStdio(t)
+	inR, stdin := io.Pipe()
+	stdout, outW := io.Pipe()
 	done := make(chan error, 1)
-	go func() { done <- runKubeExecForwardStdio(context.Background(), f, 5000) }()
+	go func() {
+		err := runKubeExecForwardStdio(context.Background(), f, 5000, inR, outW)
+		_ = outW.Close()
+		done <- err
+	}()
 	_, _ = io.WriteString(stdin, "twelve bytes")
 	_ = stdin.Close()
 	line, err := bufio.NewReader(stdout).ReadString('\n')
@@ -105,8 +87,9 @@ func TestKubeExecForwardStdio(t *testing.T) {
 	}
 
 	// A port nothing listens on is the kubelet's error.
-	_, _ = swapStdio(t)
-	if err := runKubeExecForwardStdio(context.Background(), f, 5001); err == nil || !strings.Contains(err.Error(), "port 5001") {
+	idle, _ := io.Pipe()
+	defer idle.Close()
+	if err := runKubeExecForwardStdio(context.Background(), f, 5001, idle, io.Discard); err == nil || !strings.Contains(err.Error(), "port 5001") {
 		t.Fatalf("a refused port: %v", err)
 	}
 }

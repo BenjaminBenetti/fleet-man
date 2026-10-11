@@ -19,7 +19,7 @@ import (
 // runKubeExecForwardStdio connects stdin and stdout to port in the pod: the
 // end of stdin half-closes the connection, and it ends when the pod's peer
 // closes it (or refuses it: the kubelet's answer is the error).
-func runKubeExecForwardStdio(ctx context.Context, f kubeExecFlags, port int) error {
+func runKubeExecForwardStdio(ctx context.Context, f kubeExecFlags, port int, stdin io.Reader, stdout io.Writer) error {
 	if f.cluster == "" || f.namespace == "" || f.pod == "" {
 		return errNoPod
 	}
@@ -38,10 +38,10 @@ func runKubeExecForwardStdio(ctx context.Context, f kubeExecFlags, port int) err
 	}
 	defer conn.Close()
 	go func() {
-		_, _ = io.Copy(conn, os.Stdin)
+		_, _ = io.Copy(conn, stdin)
 		_ = conn.CloseWrite()
 	}()
-	_, err = io.Copy(os.Stdout, conn)
+	_, err = io.Copy(stdout, conn)
 	return err
 }
 

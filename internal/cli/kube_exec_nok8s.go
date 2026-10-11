@@ -5,6 +5,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"io"
 )
 
 // The -tags nok8s pod build has no Kubernetes client, and never runs the
@@ -17,6 +18,8 @@ func runKubeExecDirect(context.Context, kubeExecFlags, []string, bool) (int, err
 
 func runKubeExecLogs(context.Context, kubeExecLogsFlags) error { return errNoKubeExec }
 
-func runKubeExecForwardStdio(context.Context, kubeExecFlags, int) error { return errNoKubeExec }
+func runKubeExecForwardStdio(context.Context, kubeExecFlags, int, io.Reader, io.Writer) error {
+	return errNoKubeExec
+}
 
 func runKubeExecPortForward(context.Context, kubeExecFlags, int, int) error { return errNoKubeExec }

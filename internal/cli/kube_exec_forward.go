@@ -29,7 +29,7 @@ func newKubeExecForwardStdioCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			port, err := forwardPortArg(args[0])
 			if err == nil {
-				err = runKubeExecForwardStdio(cmd.Context(), f, port)
+				err = runKubeExecForwardStdio(cmd.Context(), f, port, os.Stdin, os.Stdout)
 			}
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "fleet kube-exec forward-stdio: %v\n", err)
