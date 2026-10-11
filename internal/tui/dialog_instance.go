@@ -8,19 +8,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// allBackendTypes is every backend type, in the deploy targets' dialog order
-// (the automation agent dialog cycles it).
-var allBackendTypes = backendTypesOf(fleet.DeployTargets())
-
-// backendTypesOf returns the targets' backend types, in order.
-func backendTypesOf(targets []fleet.DeployTarget) []fleet.BackendType {
-	out := make([]fleet.BackendType, 0, len(targets))
-	for _, target := range targets {
-		out = append(out, target.Backend)
-	}
-	return out
-}
-
 // cycleOption steps direction places through options from current, wrapping;
 // a current not among the options counts as the first.
 func cycleOption[T comparable](current T, direction int, options []T) T {

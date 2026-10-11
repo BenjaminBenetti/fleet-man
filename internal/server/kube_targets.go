@@ -73,6 +73,12 @@ func (m *kubeManager) defaultCluster(remembered string) string {
 	return ""
 }
 
+// connected reports whether id is one of the daemon's connections.
+func (m *kubeManager) connected(id string) bool {
+	_, ok := m.record(id)
+	return ok
+}
+
 // createAllowed checks a Kubernetes create against its connection before
 // the CREATING record is written: the connection must exist, and its
 // quotas (max_instances, max_total_disk) must have room for one more

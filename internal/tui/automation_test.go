@@ -18,6 +18,10 @@ func newAutomationModel(t *testing.T) (*model, *fleetPage) {
 	orig := setFleetSettingsRemote
 	setFleetSettingsRemote = func(string, fleet.FleetSettings) error { return nil }
 	t.Cleanup(func() { setFleetSettingsRemote = orig })
+	// The agent dialog asks the daemon where agents can run; this one has
+	// every backend and remembers devcontainer.
+	stubListDeployTargets(t, deployTargetsReply(devcontainerTarget,
+		available(devcontainerTarget), available(coderTarget), available(codespacesTarget)), nil)
 
 	fp := newFleetPage()
 	m := &model{

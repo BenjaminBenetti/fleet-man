@@ -99,7 +99,7 @@ func (fleetPage *fleetPage) renderAutomationRow(m *model, r row, cursor string, 
 		if isSelected {
 			style = selectedStyle
 		}
-		return fmt.Sprintf("%s        %s%s", cursor, style.Render(a.Name), dimStyle.Render("  "+agentSummary(f, *a)))
+		return fmt.Sprintf("%s        %s%s", cursor, style.Render(a.Name), dimStyle.Render("  "+agentSummary(m, f, *a)))
 
 	case rowNewTrigger:
 		return renderAutomationAction(cursor, "+ add trigger", isSelected)
@@ -145,11 +145,12 @@ func triggerSummary(t fleet.Trigger) string {
 	return detail
 }
 
-// agentSummary is the dim description shown beside an agent's name, including
-// how many triggers reference it (the issue's "<- x" indicator).
-func agentSummary(f *fleet.Fleet, a fleet.Agent) string {
+// agentSummary is the dim description shown beside an agent's name: where it
+// runs ("☸ <cluster>" for a cluster agent, "(missing)" once that connection
+// is gone) and how many triggers reference it (the issue's "<- x" indicator).
+func agentSummary(m *model, f *fleet.Fleet, a fleet.Agent) string {
 	n := triggerCountForAgent(f, a.Name)
-	parts := []string{backendTypeLabel(a.Backend)}
+	parts := []string{boundTargetLabel(m, a.DeployTarget())}
 	suffix := "s"
 	if n == 1 {
 		suffix = ""

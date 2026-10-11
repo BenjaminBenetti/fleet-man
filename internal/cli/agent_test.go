@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -185,5 +187,110 @@ func TestAgentAliases(t *testing.T) {
 	}
 	if cmds["ls"] != "list" || cmds["rm"] != "delete" {
 		t.Errorf("agent aliases = %v, want ls->list, rm->delete", cmds)
+	}
+}
+
+// stubAgentClusters resolves --cluster references against id -> refs without
+// a daemon ("" is the only connection, only), recording each lookup.
+func stubAgentClusters(t *testing.T, only string, ids map[string]string) *[]string {
+	t.Helper()
+	var asked []string
+	orig := agentClusterID
+	agentClusterID = func(_ context.Context, ref string) (string, error) {
+		asked = append(asked, ref)
+		if ref == "" {
+			if only == "" {
+				return "", errors.New("2 Kubernetes connections (a, b): name one")
+			}
+			return only, nil
+		}
+		if id, ok := ids[ref]; ok {
+			return id, nil
+		}
+		return "", fmt.Errorf("no Kubernetes connection %q", ref)
+	}
+	t.Cleanup(func() { agentClusterID = orig })
+	return &asked
+}
+
+// --cluster stores the connection's id and implies kubernetes; kubernetes
+// with no --cluster is the only connection; no flag at all is devcontainer.
+func TestAgentCreateOnACluster(t *testing.T) {
+	stubAgentClusters(t, "minikube-abc234", map[string]string{"dev": "minikube-abc234", "prod": "prod-def567"})
+	for _, tt := range []struct {
+		args []string
+		want fleet.DeployTarget
+		err  string
+	}{
+		{[]string{"--cluster", "prod"}, fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "prod-def567"}, ""},
+		{[]string{"--backend", "kubernetes"}, fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "minikube-abc234"}, ""},
+		{[]string{"--backend", "kubernetes", "--cluster", "dev"}, fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "minikube-abc234"}, ""},
+		{nil, fleet.DeployTarget{Backend: fleet.BackendDevcontainer}, ""},
+		{[]string{"--backend", "coder", "--cluster", "dev"}, fleet.DeployTarget{}, "not coder"},
+		{[]string{"--cluster", "nope"}, fleet.DeployTarget{}, `no Kubernetes connection "nope"`},
+	} {
+		_, result := stubMutate(t, fleet.FleetSettings{})
+		_, err := runCLI(t, append([]string{"agent", "create", "alpha", "k"}, tt.args...)...)
+		if tt.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tt.err) {
+				t.Errorf("%v: error = %v, want %q", tt.args, err, tt.err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%v: %v", tt.args, err)
+		}
+		if got := result.Agents[0].DeployTarget(); got != tt.want {
+			t.Errorf("%v: target %+v, want %+v", tt.args, got, tt.want)
+		}
+	}
+}
+
+// An edit moves an agent only with --backend or --cluster; kubernetes
+// without --cluster keeps the agent's connection.
+func TestAgentEditCluster(t *testing.T) {
+	asked := stubAgentClusters(t, "", map[string]string{"prod": "prod-def567"})
+	seed := fleet.FleetSettings{Agents: []fleet.Agent{{Name: "k", Backend: fleet.BackendKubernetes, KubeCluster: "minikube-abc234", Command: "claude"}}}
+	for _, tt := range []struct {
+		args []string
+		want fleet.DeployTarget
+	}{
+		{[]string{"--command", "codex"}, fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "minikube-abc234"}},
+		{[]string{"--backend", "kubernetes"}, fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "minikube-abc234"}},
+		{[]string{"--cluster", "prod"}, fleet.DeployTarget{Backend: fleet.BackendKubernetes, KubeCluster: "prod-def567"}},
+		{[]string{"--backend", "devcontainer"}, fleet.DeployTarget{Backend: fleet.BackendDevcontainer}},
+	} {
+		_, result := stubMutate(t, seed)
+		if _, err := runCLI(t, append([]string{"agent", "edit", "alpha", "k"}, tt.args...)...); err != nil {
+			t.Fatalf("%v: %v", tt.args, err)
+		}
+		if got := result.Agents[0].DeployTarget(); got != tt.want {
+			t.Errorf("%v: target %+v, want %+v", tt.args, got, tt.want)
+		}
+	}
+	if len(*asked) != 1 || (*asked)[0] != "prod" {
+		t.Errorf("looked up %q, want only the named prod", *asked)
+	}
+	// From another backend, kubernetes takes the only connection: there are
+	// two here, so the edit asks for one.
+	_, _ = stubMutate(t, fleet.FleetSettings{Agents: []fleet.Agent{{Name: "d", Backend: fleet.BackendDevcontainer}}})
+	if _, err := runCLI(t, "agent", "edit", "alpha", "d", "--backend", "kubernetes"); err == nil || !strings.Contains(err.Error(), "name one") {
+		t.Errorf("kubernetes with two connections: error = %v, want a request to name one", err)
+	}
+}
+
+// The list's BACKEND column names a cluster agent's connection.
+func TestAgentListShowsTheCluster(t *testing.T) {
+	orig := loadAutomation
+	t.Cleanup(func() { loadAutomation = orig })
+	loadAutomation = func(context.Context, string) (fleet.FleetSettings, error) {
+		return fleet.FleetSettings{Agents: []fleet.Agent{{Name: "k", Backend: fleet.BackendKubernetes, KubeCluster: "prod-def567", Command: "claude"}}}, nil
+	}
+	out, err := runCLI(t, "agent", "list", "alpha")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !strings.Contains(out, "kubernetes:prod-def567") {
+		t.Errorf("list should name the cluster:\n%s", out)
 	}
 }

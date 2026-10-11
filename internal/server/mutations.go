@@ -166,6 +166,9 @@ func (s *service) SetFleetSettings(_ context.Context, req *fleetgrpc.SetFleetSet
 		if !ok {
 			return status.Errorf(codes.NotFound, "fleet %q not found", req.GetFleet())
 		}
+		if err := s.checkAgentClusters(f.Settings.Agents, settings.Agents); err != nil {
+			return err
+		}
 		f.Settings = settings
 		return nil
 	})
@@ -174,6 +177,27 @@ func (s *service) SetFleetSettings(_ context.Context, req *fleetgrpc.SetFleetSet
 	}
 	flog.Info("fleet settings updated", "fleet", req.GetFleet())
 	return &fleetgrpc.MutationReply{State: snapshot}, nil
+}
+
+// checkAgentClusters refuses a Kubernetes agent that is new, or whose
+// target changed, unless it names a connection this daemon has: an agent
+// fires unattended, so a wrong cluster would only show as refused firings.
+// An agent whose connection went away since (a Forget) is kept as it is
+// (the TUI shows it "(missing)") until it is given another target.
+func (s *service) checkAgentClusters(prev, next []fleet.Agent) error {
+	for _, a := range next {
+		target := a.DeployTarget()
+		if target.Backend != fleet.BackendKubernetes {
+			continue
+		}
+		if old, ok := fleet.FindAgent(prev, a.Name); ok && old.DeployTarget() == target {
+			continue
+		}
+		if !s.kube.connected(target.KubeCluster) {
+			return status.Errorf(codes.InvalidArgument, "invalid automation agent: agent %q: cluster %s is not connected", a.Name, target.KubeCluster)
+		}
+	}
+	return nil
 }
 
 // SetInstanceMetadata updates user-facing labels (display name, color, tag)

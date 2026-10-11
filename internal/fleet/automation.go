@@ -178,12 +178,31 @@ func NormalizeAgent(a Agent) (Agent, error) {
 	if err := ValidateBackendType(a.Backend); err != nil {
 		return Agent{}, fmt.Errorf("agent %q: %w", a.Name, err)
 	}
-	if a.Backend == BackendKubernetes {
-		// An agent fires unattended into a cluster, which needs the caps
-		// and queue cluster agents get; until then they run on docker.
-		return Agent{}, fmt.Errorf("agent %q: agents cannot run on a Kubernetes cluster yet", a.Name)
+	// The target is stored concretely: a Kubernetes agent names its
+	// connection (a later change of the remembered default never moves an
+	// agent), and no other agent carries one.
+	a.KubeCluster = strings.TrimSpace(a.KubeCluster)
+	switch {
+	case a.Backend != BackendKubernetes:
+		a.KubeCluster = ""
+	case a.KubeCluster == "":
+		return Agent{}, fmt.Errorf("agent %q: a kubernetes agent needs the cluster connection it runs on", a.Name)
+	case strings.ContainsAny(a.KubeCluster, " \t\n/"):
+		return Agent{}, fmt.Errorf("agent %q: %q is not a cluster connection id", a.Name, a.KubeCluster)
 	}
 	return a, nil
+}
+
+// DeployTarget is where the agent's instances are created. An agent from
+// before the Backend field (Backend "") runs on devcontainer.
+func (a Agent) DeployTarget() DeployTarget {
+	if a.Backend == "" {
+		return DeployTarget{Backend: BackendDevcontainer}
+	}
+	if a.Backend != BackendKubernetes {
+		return DeployTarget{Backend: a.Backend}
+	}
+	return DeployTarget{Backend: a.Backend, KubeCluster: a.KubeCluster}
 }
 
 // NormalizeAgents validates every agent and returns the normalized list (input

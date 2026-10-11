@@ -170,3 +170,73 @@ func TestMCPUpOnACluster(t *testing.T) {
 		t.Errorf("an unknown cluster: %q", msg)
 	}
 }
+
+// The agent tools take a cluster (id, name or context), stored as the
+// connection id; kubernetes with no cluster is the only connection, and no
+// backend at all stays devcontainer (agents fire unattended, never on the
+// remembered default). An update keeps the agent's connection unless told.
+func TestMCPAgentOnACluster(t *testing.T) {
+	f := newKubeFixture(t)
+	dev := f.add(&fleetgrpc.KubeCluster{Context: "minikube", DisplayName: "dev", Namespace: "fleet"}).GetCluster()
+	if err := state.Update(func(st *state.State) error {
+		st.GetOrCreateFleet("alpha", "git@x:a.git")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SaveConfig(&state.Config{DefaultBackend: string(fleet.BackendKubernetes), DefaultKubeCluster: dev.GetId()}); err != nil {
+		t.Fatal(err)
+	}
+	cs := mcpConnect(t, f.svc)
+	agent := func(out AutomationOutput, name string) mcpAgent {
+		t.Helper()
+		for _, a := range out.Agents {
+			if a.Name == name {
+				return a
+			}
+		}
+		t.Fatalf("no agent %s in %+v", name, out.Agents)
+		return mcpAgent{}
+	}
+
+	var out AutomationOutput
+	// A fresh output per call: decoding into the last one would keep the
+	// fields a reply omits (an empty cluster).
+	call := func(tool string, args map[string]any) {
+		t.Helper()
+		out = AutomationOutput{}
+		callJSON(t, cs, tool, args, &out)
+	}
+	call("fleet_agent_create", map[string]any{"fleet": "alpha", "name": "named", "cluster": "dev"})
+	if a := agent(out, "named"); a.Backend != string(fleet.BackendKubernetes) || a.Cluster != dev.GetId() {
+		t.Fatalf("named agent %+v, want kubernetes on %s", a, dev.GetId())
+	}
+	call("fleet_agent_create", map[string]any{"fleet": "alpha", "name": "only", "backend": "kubernetes"})
+	if a := agent(out, "only"); a.Cluster != dev.GetId() {
+		t.Fatalf("kubernetes without a cluster = %+v, want the only connection", a)
+	}
+	call("fleet_agent_create", map[string]any{"fleet": "alpha", "name": "plain"})
+	if a := agent(out, "plain"); a.Backend != string(fleet.BackendDevcontainer) || a.Cluster != "" {
+		t.Fatalf("an agent with no backend = %+v, want devcontainer (not the remembered cluster)", a)
+	}
+
+	call("fleet_agent_update", map[string]any{"fleet": "alpha", "name": "named", "command": "claude '${PROMPT}'"})
+	if a := agent(out, "named"); a.Cluster != dev.GetId() {
+		t.Fatalf("an update of the command moved the agent: %+v", a)
+	}
+	call("fleet_agent_update", map[string]any{"fleet": "alpha", "name": "named", "backend": "coder"})
+	if a := agent(out, "named"); a.Backend != string(fleet.BackendCoder) || a.Cluster != "" {
+		t.Fatalf("a move to coder = %+v, want coder with no cluster", a)
+	}
+	call("fleet_agent_update", map[string]any{"fleet": "alpha", "name": "named", "cluster": "minikube"})
+	if a := agent(out, "named"); a.Backend != string(fleet.BackendKubernetes) || a.Cluster != dev.GetId() {
+		t.Fatalf("a move by context = %+v, want kubernetes on %s", a, dev.GetId())
+	}
+
+	if msg := callErr(t, cs, "fleet_agent_create", map[string]any{"fleet": "alpha", "name": "x", "cluster": "dev", "backend": "coder"}); !strings.Contains(msg, "not coder") {
+		t.Errorf("cluster with another backend: %q", msg)
+	}
+	if msg := callErr(t, cs, "fleet_agent_create", map[string]any{"fleet": "alpha", "name": "y", "cluster": "nope"}); !strings.Contains(msg, "nope") {
+		t.Errorf("an unknown cluster: %q", msg)
+	}
+}

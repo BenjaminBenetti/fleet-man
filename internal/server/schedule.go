@@ -569,17 +569,26 @@ func sanitizeAutomationName(s string) string {
 // --- Live operation seams (overridden in tests) ----------------------------
 
 // createAutomationInstance spawns a new instance for an agent run and returns
-// its name. It reuses the same job path as the CreateInstance RPC.
+// its name. It reuses the same job path as the CreateInstance RPC, on the
+// agent's stored target: its backend and, for a Kubernetes agent, its
+// cluster connection (whose quotas the create checks).
 var createAutomationInstance = func(s *service, fleetName string, ag fleet.Agent, now time.Time) (string, error) {
 	instName := automationInstanceName(ag.Name, now)
-	if _, err := s.startCreateInstanceJob(&fleetgrpc.CreateInstanceRequest{
-		Fleet:    fleetName,
-		Instance: instName,
-		Backend:  protoconv.BackendToProto(ag.Backend),
-	}, true); err != nil {
+	if _, err := s.startCreateInstanceJob(automationCreateRequest(fleetName, instName, ag), true); err != nil {
 		return "", err
 	}
 	return instName, nil
+}
+
+// automationCreateRequest is the create of an agent run's instance.
+func automationCreateRequest(fleetName, instName string, ag fleet.Agent) *fleetgrpc.CreateInstanceRequest {
+	target := ag.DeployTarget()
+	return &fleetgrpc.CreateInstanceRequest{
+		Fleet:       fleetName,
+		Instance:    instName,
+		Backend:     protoconv.BackendToProto(target.Backend),
+		KubeCluster: target.KubeCluster,
+	}
 }
 
 // launchAutomationCommand starts the agent's command in a fresh tmux session

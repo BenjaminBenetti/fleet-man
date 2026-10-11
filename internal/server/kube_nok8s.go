@@ -30,4 +30,6 @@ func (*kubeManager) deployTargets() []fleet.DeployTargetOption { return nil }
 
 func (*kubeManager) defaultCluster(string) string { return "" }
 
+func (*kubeManager) connected(string) bool { return false }
+
 func (*kubeManager) createAllowed(*state.State, fleet.DeployTarget) error { return nil }
