@@ -14,7 +14,7 @@ import (
 // the fleet's share before the dev container mounts its folders (see
 // internal/podshare).
 func newPodLayoutCmd() *cobra.Command {
-	spec := podshare.LayoutPath
+	spec, tree := podshare.LayoutPath, podshare.InitDir
 	cmd := &cobra.Command{
 		Use:           "pod-layout",
 		Short:         "Lay out the fleet's share in an instance pod (internal)",
@@ -23,7 +23,7 @@ func newPodLayoutCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(*cobra.Command, []string) error {
-			if err := podshare.RunLayout(spec, jobboot.DefaultTerminationLog); err != nil {
+			if err := podshare.RunLayout(spec, tree, jobboot.DefaultTerminationLog); err != nil {
 				fmt.Fprintf(os.Stderr, "fleet pod-layout: %v\n", err)
 				return err
 			}
@@ -31,5 +31,6 @@ func newPodLayoutCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&spec, "spec", spec, "layout file")
+	cmd.Flags().StringVar(&tree, "tree", tree, "the share's folder tree")
 	return cmd
 }

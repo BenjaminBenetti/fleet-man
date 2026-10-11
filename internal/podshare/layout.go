@@ -285,10 +285,14 @@ func kind(info fs.FileInfo) string {
 	return "special file"
 }
 
-// PrivateSyncDir makes SyncDir (dir) root's alone when running as root, so
-// the pod's users never reach the tree mounted inside it but through their
-// own folders. Without root nothing can be made private, and nothing is.
+// PrivateSyncDir makes SyncDir (dir), when missing, and when running as root
+// makes it root's alone, so the pod's users never reach the tree mounted
+// inside it but through their own folders. Without root nothing can be made
+// private, and nothing is.
 func PrivateSyncDir(dir string) error {
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("making the share's mount folder %s: %w", dir, err)
+	}
 	if os.Geteuid() != 0 {
 		return nil
 	}

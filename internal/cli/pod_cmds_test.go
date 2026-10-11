@@ -18,7 +18,7 @@ func TestPodCommandsAreHiddenAndTakeNoArgs(t *testing.T) {
 		"pod-job feed":      {"socket": "/fleet-tools/job.sock", "dial-timeout": jobboot.DefaultDialTimeout.String()},
 		"pod-job ws-export": {"dir": ""},
 		"pod-job statfs":    {"path": "/opt/fleet"},
-		"pod-layout":        {"spec": "/opt/fleet/spec/layout.json"},
+		"pod-layout":        {"spec": "/opt/fleet/spec/layout.json", "tree": "/fleet-share"},
 	} {
 		cmd, _, err := root.Find(splitWords(path))
 		if err != nil || cmd.CommandPath() != "fleet "+path {

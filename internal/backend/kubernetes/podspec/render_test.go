@@ -192,7 +192,7 @@ func checkObjects(t *testing.T, res *Result, r RenderInput, o *Objects) {
 	}
 	inits := tmpl.Spec.InitContainers
 	if r.Share != nil {
-		if len(inits) == 0 || inits[0].Name != ShareInit || jsonString(inits[0].Command) != jsonString([]string{podseed.CurrentBinary, "pod-layout", "--spec", "/opt/fleet/spec/layout.json"}) || len(inits[0].Env) > 0 {
+		if len(inits) == 0 || inits[0].Name != ShareInit || jsonString(inits[0].Command[:4]) != jsonString([]string{podseed.CurrentBinary, "pod-layout", "--spec", "/opt/fleet/spec/layout.json"}) || len(inits[0].Env) > 0 {
 			t.Errorf("the instance pod's first init container is %+v, want the share layout", inits)
 		} else {
 			inits = inits[1:]
@@ -391,7 +391,7 @@ func TestNoRunStringReachesKubeletExpansion(t *testing.T) {
 						}
 					}
 				} else if i == 0 && c.Name == ShareInit {
-					if jsonString(c.Command) != jsonString([]string{podseed.CurrentBinary, "pod-layout", "--spec", podshare.LayoutPath}) || len(c.Args) > 0 {
+					if jsonString(c.Command) != jsonString(ShareInitCommand(podshare.InitDir)) && jsonString(c.Command) != jsonString(ShareInitCommand(podshare.InitDir+"/sync")) || len(c.Args) > 0 {
 						t.Errorf("%s: the share's init container runs %q %q", name, c.Command, c.Args)
 					}
 				} else if strings.Join(c.Command, "\x00") != strings.Join(want, "\x00") || len(c.Args) > 0 {

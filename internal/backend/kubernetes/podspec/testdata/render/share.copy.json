@@ -95,7 +95,7 @@
         "fleet.dev/container-created": "2026-10-10T12:00:00.123456789Z",
         "fleet.dev/image-id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "fleet.dev/rebuild-gen": "1",
-        "fleet.dev/spec-hash": "sha256:9f258ba7baa2c59bc9ea79218fb7f02a0590845ec89d4cb3d7def03d22e01028"
+        "fleet.dev/spec-hash": "sha256:c48e821d90d461383eea6cc52371fc15dac8a7e2af64ccd70f1c6f351d63706c"
       }
     },
     "spec": {
@@ -166,7 +166,9 @@
                 "/opt/fleet/bin/fleet",
                 "pod-layout",
                 "--spec",
-                "/opt/fleet/spec/layout.json"
+                "/opt/fleet/spec/layout.json",
+                "--tree",
+                "/fleet-share/sync"
               ],
               "resources": {
                 "requests": {
@@ -192,8 +194,7 @@
                 },
                 {
                   "name": "disk",
-                  "mountPath": "/opt/fleet/run/sync/share",
-                  "subPath": "sync"
+                  "mountPath": "/fleet-share"
                 }
               ],
               "terminationMessagePolicy": "File",

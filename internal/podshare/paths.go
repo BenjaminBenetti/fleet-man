@@ -25,6 +25,12 @@ const (
 	// LeaseFile is the spoke's lease.
 	LeaseFile = "lease"
 
+	// InitDir is where the share-layout init container mounts the volume
+	// the tree is on, whole (no subPath the kubelet would make root-owned
+	// for it): the share's root is the tree; on the copy tier the tree is
+	// the instance disk's DiskDir.
+	InitDir = "/fleet-share"
+
 	// LayoutFile is the layout's name in the instance's spec Secret, which
 	// the pod mounts at podseed.SpecDir.
 	LayoutFile = "layout.json"

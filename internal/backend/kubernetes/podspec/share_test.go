@@ -110,8 +110,20 @@ func TestRenderShare(t *testing.T) {
 					t.Errorf("init mount at %s = %+v, want %+v", target, got, want)
 				}
 			}
-			if got, ok := mountAt(init, podshare.MountDir); !ok || got.Name != vol {
-				t.Errorf("the init container has the tree at %+v", got)
+			// The tree's volume whole: a missing subPath the kubelet made
+			// would be root's.
+			if got, ok := mountAt(init, podshare.InitDir); !ok || got.Name != vol || got.SubPath != "" {
+				t.Errorf("the init container has the tree's volume at %+v", got)
+			}
+			if _, ok := mountAt(init, podshare.MountDir); ok {
+				t.Error("the init container mounts the tree by its subPath")
+			}
+			tree := podshare.InitDir
+			if tier.claim == "" {
+				tree += "/sync"
+			}
+			if !reflect.DeepEqual(init.Command, ShareInitCommand(tree)) || init.Command[len(init.Command)-1] != tree {
+				t.Errorf("the init container runs %q, want it to lay out %s", init.Command, tree)
 			}
 			if init.Image != dev.Image || init.SecurityContext == nil || *init.SecurityContext.RunAsUser != 0 {
 				t.Errorf("the init container runs %s as %+v, want the dev image as root", init.Image, init.SecurityContext)

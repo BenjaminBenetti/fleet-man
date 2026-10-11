@@ -101,24 +101,41 @@ var shareInitResources = corev1.ResourceRequirements{Requests: corev1.ResourceLi
 	corev1.ResourceMemory: resource.MustParse("32Mi"),
 }}
 
+// initTree is where the init container finds the tree, its volume mounted
+// whole at podshare.InitDir.
+func (s *Share) initTree() string {
+	if s.Claim == "" {
+		return path.Join(podshare.InitDir, podshare.DiskDir)
+	}
+	return podshare.InitDir
+}
+
 // shareInit is the share-layout init container: fleet's binary on the
-// instance disk replaying the layout in the spec Secret on the tree.
+// instance disk replaying the layout in the spec Secret on the tree. It
+// mounts the tree's volume whole: a subPath the kubelet makes when missing is
+// root-owned, which a pod without root could not lay out.
 func (r *renderer) shareInit(s *Share) corev1.Container {
 	return corev1.Container{
 		Name:            ShareInit,
 		Image:           r.in.Image.Ref,
 		ImagePullPolicy: r.pullPolicy(),
-		Command:         []string{podseed.CurrentBinary, "pod-layout", "--spec", podshare.LayoutPath},
+		Command:         ShareInitCommand(s.initTree()),
 		Resources:       *shareInitResources.DeepCopy(),
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: volumeDisk, MountPath: podseed.InstallDir, SubPath: podseed.DirFleet, ReadOnly: true},
 			{Name: volumeSpec, MountPath: podseed.SpecDir, ReadOnly: true},
 			{Name: volumeRun, MountPath: podseed.RunDir},
-			s.treeMount(),
+			{Name: s.volume(), MountPath: podshare.InitDir},
 		},
 		SecurityContext:          r.containerSecurity(shareInitSecurity(r.in.Identity), r.in.Identity),
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 	}
+}
+
+// ShareInitCommand is the share-layout init container's command, laying out
+// the tree at tree.
+func ShareInitCommand(tree string) []string {
+	return []string{podseed.CurrentBinary, "pod-layout", "--spec", podshare.LayoutPath, "--tree", tree}
 }
 
 // shareInitSecurity is what the init container needs: as root, giving the

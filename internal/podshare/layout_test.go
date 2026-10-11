@@ -202,3 +202,44 @@ func TestSubPath(t *testing.T) {
 		t.Fatalf("SubPath = %q", got)
 	}
 }
+
+// TestRunLayoutMakesWhatIsMissing: the init container makes the private
+// mount folder and the tree's folder (the copy tier's on a new disk) before
+// it replays the layout; a tree that is not a folder is refused.
+func TestRunLayoutMakesWhatIsMissing(t *testing.T) {
+	base := t.TempDir()
+	spec := filepath.Join(base, LayoutFile)
+	data, _ := json.Marshal(claudeLayout(-1, -1))
+	if err := os.WriteFile(spec, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	syncDir, tree := filepath.Join(base, "run", "sync"), filepath.Join(base, "disk", "sync")
+	for _, d := range []string{filepath.Dir(syncDir), filepath.Dir(tree)} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runLayout(spec, syncDir, tree); err != nil {
+		t.Fatalf("runLayout: %v", err)
+	}
+	if info := lstat(t, syncDir); !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Errorf("the mount folder is %v, want a private folder", info.Mode())
+	}
+	if data, _ := os.ReadFile(filepath.Join(tree, "roots/files/.claude.json")); string(data) != "{}" {
+		t.Errorf("the tree was not laid out: %q", data)
+	}
+	notDir := filepath.Join(base, "file")
+	if err := os.WriteFile(notDir, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runLayout(spec, syncDir, notDir); err == nil || !strings.Contains(err.Error(), "not a folder") {
+		t.Fatalf("runLayout over a file = %v", err)
+	}
+	termLog := filepath.Join(base, "termination-log")
+	if err := RunLayout(filepath.Join(base, "missing.json"), tree, termLog); err == nil {
+		t.Fatal("RunLayout without a layout file succeeded")
+	}
+	if msg, _ := os.ReadFile(termLog); !strings.HasPrefix(string(msg), "fleet share layout: ") {
+		t.Fatalf("the termination message is %q", msg)
+	}
+}

@@ -569,6 +569,8 @@
       "/pod/spec/initContainers/0/command/1": "pod-layout",
       "/pod/spec/initContainers/0/command/2": "--spec",
       "/pod/spec/initContainers/0/command/3": "/opt/fleet/spec/layout.json",
+      "/pod/spec/initContainers/0/command/4": "--tree",
+      "/pod/spec/initContainers/0/command/5": "/fleet-share",
       "/pod/spec/initContainers/0/image": "registry.example.com/fleet/01234567/devcontainer@sha256:2222222222222222222222222222222222222222222222222222222222222222",
       "/pod/spec/initContainers/0/imagePullPolicy": "IfNotPresent",
       "/pod/spec/initContainers/0/name": "fleet-share",
@@ -590,7 +592,7 @@
       "/pod/spec/initContainers/0/volumeMounts/1/readOnly": true,
       "/pod/spec/initContainers/0/volumeMounts/2/mountPath": "/opt/fleet/run",
       "/pod/spec/initContainers/0/volumeMounts/2/name": "run",
-      "/pod/spec/initContainers/0/volumeMounts/3/mountPath": "/opt/fleet/run/sync/share",
+      "/pod/spec/initContainers/0/volumeMounts/3/mountPath": "/fleet-share",
       "/pod/spec/initContainers/0/volumeMounts/3/name": "share",
       "/pod/spec/volumes/4/name": "share",
       "/pod/spec/volumes/4/persistentVolumeClaim/claimName": "fs-fleet-man-2f2i5p5y-share"
