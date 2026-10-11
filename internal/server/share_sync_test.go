@@ -166,7 +166,12 @@ func (f *fakeSpokes) retire(_ context.Context, cluster, fleetName string, keep b
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.retired = append(f.retired, fmt.Sprintf("%s/%s keep=%v", cluster, fleetName, keep))
-	return "fs-" + fleetName + "-share", nil
+	for _, s := range f.shares {
+		if s.Claim != "" {
+			return s.Claim, nil
+		}
+	}
+	return "", nil // the copy tier: no share
 }
 
 // up starts key's pod, down stops it.
@@ -240,16 +245,22 @@ func newSyncRig(t *testing.T) *syncRig {
 // ("" for the copy tier: its own).
 func (r *syncRig) instance(name, key, claim string, status fleet.InstanceStatus) {
 	r.t.Helper()
+	r.instanceOn(syncCluster, name, key, claim, syncRoots, status)
+}
+
+// instanceOn is instance on cluster, its share holding roots.
+func (r *syncRig) instanceOn(cluster, name, key, claim string, roots []podshare.SpokeRoot, status fleet.InstanceStatus) {
+	r.t.Helper()
 	mode := "single-node"
 	if claim == "" {
 		mode = "copy"
 	}
 	r.spokes.mu.Lock()
-	r.spokes.shares[key] = kubernetes.ShareRecord{Mode: mode, Claim: claim, Roots: syncRoots, UID: -1, GID: -1}
+	r.spokes.shares[key] = kubernetes.ShareRecord{Mode: mode, Claim: claim, Roots: roots, UID: -1, GID: -1}
 	r.spokes.mu.Unlock()
 	if err := state.Update(func(st *state.State) error {
 		f := st.Fleets[r.fleet]
-		f.Instances = append(f.Instances, &fleet.Instance{Name: name, Status: status, Backend: fleet.BackendKubernetes, KubeCluster: syncCluster, KubeKey: key, ContainerID: "k8s:" + key})
+		f.Instances = append(f.Instances, &fleet.Instance{Name: name, Status: status, Backend: fleet.BackendKubernetes, KubeCluster: cluster, KubeKey: key, ContainerID: "k8s:" + key})
 		return nil
 	}); err != nil {
 		r.t.Fatal(err)
@@ -501,6 +512,152 @@ func TestShareSyncRemembersAStopThatCouldNotFlush(t *testing.T) {
 	r.m.retireFleet(r.fleet, r.m.beforeDestroy(r.fleet, "", true))
 	if got := r.spokes.retired; len(got) != 1 || !strings.HasSuffix(got[0], "keep=true") {
 		t.Errorf("retired %v, want the share kept", got)
+	}
+}
+
+// TestShareSyncStopCountsOnlyItsOwnClustersShare: a stop's flush that only
+// another cluster's share held back (its spoke cut off) leaves the stopped
+// instance's share flushed: a destroy deletes it, and keeps the other's.
+func TestShareSyncStopCountsOnlyItsOwnClustersShare(t *testing.T) {
+	r := newSyncRig(t)
+	r.hostLayout()
+	const otherCluster = "kind-b4c5d6"
+	claimA, claimB := "fs-f-1a2b3c4d-share", "fs-f-5e6f7a8b-share"
+	sideB := "k8s:" + otherCluster + "/" + claimB
+	r.spokes.deaf[sideB] = true
+	r.instance("alpha", "aaaaaaaa", claimA, fleet.StatusRunning)
+	r.instanceOn(otherCluster, "beta", "bbbbbbbb", claimB, syncRoots, fleet.StatusRunning)
+	r.spokes.up("aaaaaaaa")
+	r.spokes.up("bbbbbbbb")
+	r.m.beforeStop(r.fleet, "alpha")
+	if got := loadUnflushed(state.SyncFleetDir(r.fleet)); got[shareSide(claimA)] {
+		t.Errorf("alpha's share marked unflushed by another cluster's: %v", got)
+	}
+	r.m.beforeStop(r.fleet, "beta")
+	if got := loadUnflushed(state.SyncFleetDir(r.fleet)); !got[sideB] {
+		t.Errorf("beta's share, cut off, not marked unflushed: %v", got)
+	}
+}
+
+// TestShareSyncForgetsAnUnflushedStopOnceFlushed: a share whose stop could
+// not flush is no longer kept by a destroy once its spoke is back and a
+// flush took everything it held.
+func TestShareSyncForgetsAnUnflushedStopOnceFlushed(t *testing.T) {
+	r := newSyncRig(t)
+	r.hostLayout()
+	claim := "fs-f-1a2b3c4d-share"
+	side := shareSide(claim)
+	r.spokes.deaf[side] = true
+	r.instance("alpha", "aaaaaaaa", claim, fleet.StatusRunning)
+	r.spokes.up("aaaaaaaa")
+	r.m.beforeStop(r.fleet, "alpha")
+	r.spokes.down("aaaaaaaa")
+	r.setStatus("alpha", fleet.StatusStopped)
+	if got := loadUnflushed(state.SyncFleetDir(r.fleet)); !got[side] {
+		t.Fatalf("unflushed %v", got)
+	}
+
+	// Started again, its spoke answering: a flush clears the mark.
+	r.spokes.mu.Lock()
+	r.spokes.deaf[side] = false
+	r.spokes.mu.Unlock()
+	r.setStatus("alpha", fleet.StatusRunning)
+	r.spokes.up("aaaaaaaa")
+	r.wait()
+	if got := loadUnflushed(state.SyncFleetDir(r.fleet)); got[side] {
+		t.Errorf("still unflushed after a flush with the share attached: %v", got)
+	}
+	r.setStatus("alpha", fleet.StatusDeleting)
+	ff := r.m.beforeDestroy(r.fleet, "", true)
+	r.spokes.down("aaaaaaaa")
+	r.m.retireFleet(r.fleet, ff)
+	if got := r.spokes.retired; len(got) != 1 || !strings.HasSuffix(got[0], "keep=false") {
+		t.Errorf("retired %v, want the flushed share deleted", got)
+	}
+}
+
+// TestShareSyncAKeptShareStaysKept: a share a destroy kept (its flush
+// failed) stays marked past the destroy, so the fleet made again under the
+// name keeps it too when destroyed before a flush took what it holds; the
+// marks of a cluster with no share there (the copy tier) go with it.
+func TestShareSyncAKeptShareStaysKept(t *testing.T) {
+	r := newSyncRig(t)
+	r.hostLayout()
+	claim := "fs-f-1a2b3c4d-share"
+	r.spokes.deaf[shareSide(claim)] = true
+	r.instance("alpha", "aaaaaaaa", claim, fleet.StatusRunning)
+	r.spokes.up("aaaaaaaa")
+	r.setStatus("alpha", fleet.StatusDeleting)
+	ff := r.m.beforeDestroy(r.fleet, "", true)
+	r.spokes.down("aaaaaaaa")
+	r.m.retireFleet(r.fleet, ff)
+	if got := loadUnflushed(state.SyncFleetDir(r.fleet)); !got[shareSide(claim)] {
+		t.Fatalf("the kept share is not marked past the destroy: %v", got)
+	}
+
+	// Made again; its first instance never came up (its pod never ran):
+	// destroyed, its share is kept again.
+	if err := state.Save(&state.State{Fleets: map[string]*fleet.Fleet{r.fleet: {Name: r.fleet}}}); err != nil {
+		t.Fatal(err)
+	}
+	r.instance("gamma", "cccccccc", claim, fleet.StatusDeleting)
+	r.spokes.retired = nil
+	r.m.retireFleet(r.fleet, r.m.beforeDestroy(r.fleet, "", true))
+	if got := r.spokes.retired; len(got) != 1 || !strings.HasSuffix(got[0], "keep=true") {
+		t.Errorf("retired %v, want the share kept again", got)
+	}
+}
+
+// TestShareSyncDropsTheMarksOfACopyTierDestroyed: a copy-tier instance's
+// unflushed mark does not outlive its fleet's destroy (its copy went with
+// its disk), so it keeps no later fleet's share.
+func TestShareSyncDropsTheMarksOfACopyTierDestroyed(t *testing.T) {
+	r := newSyncRig(t)
+	r.hostLayout()
+	side := "k8s:" + syncCluster + "/aaaaaaaa"
+	r.spokes.deaf[side] = true
+	r.instance("alpha", "aaaaaaaa", "", fleet.StatusRunning)
+	r.spokes.up("aaaaaaaa")
+	r.m.beforeStop(r.fleet, "alpha")
+	r.spokes.down("aaaaaaaa")
+	if got := loadUnflushed(state.SyncFleetDir(r.fleet)); !got[side] {
+		t.Fatalf("unflushed %v", got)
+	}
+	r.setStatus("alpha", fleet.StatusDeleting)
+	r.m.retireFleet(r.fleet, r.m.beforeDestroy(r.fleet, "", true))
+	if got := loadUnflushed(state.SyncFleetDir(r.fleet)); len(got) != 0 {
+		t.Errorf("marks %v outlived the copy tier's destroy", got)
+	}
+}
+
+// TestShareSyncFleetWithoutLogins: a fleet whose folders hold no logins
+// (custom mounts alone) syncs without a login store, and opening one is no
+// error.
+func TestShareSyncFleetWithoutLogins(t *testing.T) {
+	r := newSyncRig(t)
+	roots := []podshare.SpokeRoot{{Name: ".mnt", Reserved: []string{"opt/data"}}}
+	if err := os.MkdirAll(r.host(".mnt/opt/data"), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	claim := "fs-f-1a2b3c4d-share"
+	r.instanceOn(syncCluster, "alpha", "aaaaaaaa", claim, roots, fleet.StatusRunning)
+	r.spokes.up("aaaaaaaa")
+	syncWrite(t, r.host(".mnt/opt/data/a.txt"), "a")
+	r.wait()
+	if got := syncRead(r.share(shareSide(claim), ".mnt/opt/data/a.txt")); got != "a" {
+		t.Errorf("the share holds %q", got)
+	}
+	r.m.recMu.Lock()
+	defer r.m.recMu.Unlock()
+	fs := r.m.fleetOf(r.fleet)
+	if fs == nil {
+		t.Fatal("the fleet's sync is not open")
+	}
+	if len(fs.stores) != 0 {
+		t.Errorf("login stores %v for a fleet without logins", fs.stores)
+	}
+	if store, err := r.m.openStore(fs, syncCluster, ""); store != nil || err != nil {
+		t.Errorf("openStore without logins = %v, %v; want none and no error", store, err)
 	}
 }
 

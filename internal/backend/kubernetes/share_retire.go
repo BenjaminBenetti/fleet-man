@@ -26,8 +26,10 @@ import (
 // share_retention is retain keeps it unlabelled.
 
 // RetireShare deletes fleetName's share on connection clusterID, or with
-// keep labels it an orphan. It returns the share's name ("" when the fleet
-// has none there, or the PVC of that name is not this daemon's).
+// keep labels it an orphan; one still labelled an orphan (an earlier fleet
+// of the name kept it, and this one never took it up) is never deleted. It
+// returns the share's name ("" when the fleet has none there, or the PVC of
+// that name is not this daemon's).
 func (p *Pool) RetireShare(ctx context.Context, clusterID, fleetName string, keep bool) (string, error) {
 	c, err := p.Cluster(clusterID)
 	if err != nil {
@@ -55,6 +57,13 @@ func (p *Pool) RetireShare(ctx context.Context, clusterID, fleetName string, kee
 		flog.Warn("kube share: a PVC named as the destroyed fleet's share is not this daemon's; left alone", "cluster", clusterID, "fleet", fleetName, "claim", claim, "why", why)
 		return "", nil
 	}
+	if !keep && pvc.Labels[names.LabelOrphan] != "" {
+		// An earlier fleet of this name left it, its last changes never on
+		// the daemon host, and this one never took it up: this fleet's
+		// flush says nothing of what it holds.
+		flog.Info("kube share: left the share an earlier fleet of this name kept as an orphan", "cluster", clusterID, "fleet", fleetName, "claim", claim)
+		return claim, nil
+	}
 	if keep {
 		patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"labels": map[string]string{names.LabelOrphan: names.OrphanFlushFailed}}})
 		if _, err := pvcs.Patch(ctx, claim, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: DefaultFieldManager}); err != nil {
@@ -73,7 +82,8 @@ func (p *Pool) RetireShare(ctx context.Context, clusterID, fleetName string, kee
 }
 
 // adoptShare drops the orphan label of a share a fleet takes up again.
-// Best effort: the label only counts it in Settings.
+// Best effort: a share left labelled is counted in Settings and kept by the
+// fleet's destroy (RetireShare), which only costs a `fleet cluster gc`.
 func (c *creation) adoptShare(ctx context.Context, claim string) {
 	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"labels": map[string]any{names.LabelOrphan: nil}}})
 	if _, err := c.cs.CoreV1().PersistentVolumeClaims(c.ns).Patch(ctx, claim, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: DefaultFieldManager}); err != nil {
@@ -85,12 +95,12 @@ func (c *creation) adoptShare(ctx context.Context, claim string) {
 
 // ElectShareSpoke is the instance whose pod runs the spoke of the share the
 // instance with key on connection clusterID mounts (share, its record's):
-// on the copy tier the instance itself; for a share its fleet's pods mount,
-// the oldest running one (ElectSpoke) whose pod names a record of fleetd's.
-// "" when no pod of the share runs.
+// on the copy tier the instance itself, while its pod runs; for a share its
+// fleet's pods mount, the oldest running one (ElectSpoke) whose pod names a
+// record of fleetd's. "" when no pod of the share runs.
 func (p *Pool) ElectShareSpoke(ctx context.Context, clusterID, fleetName, key string, share ShareRecord) (string, error) {
 	if share.Claim == "" || !topology.Mode(share.Mode).Shared() {
-		return key, nil
+		return p.copySpoke(ctx, clusterID, key)
 	}
 	ident, err := owner.LoadIdentity()
 	if err != nil {
@@ -116,6 +126,35 @@ func (p *Pool) ElectShareSpoke(ctx context.Context, clusterID, fleetName, key st
 		return "", nil
 	}
 	return elected.Key, nil
+}
+
+// copySpoke is key when the pod of the copy-tier instance with key runs
+// ("" when it does not: a stopped instance's copy on its disk has nothing
+// that can change, and nothing to serve it).
+func (p *Pool) copySpoke(ctx context.Context, clusterID, key string) (string, error) {
+	rec, err := LoadInstanceRecord(clusterID, key)
+	if err != nil {
+		return "", err
+	}
+	c, err := p.Cluster(clusterID)
+	if err != nil {
+		return "", err
+	}
+	objs, err := p.objects(c)
+	if err != nil {
+		return "", classify(err)
+	}
+	pod, err := objs.Pod(ctx, c.Namespace(), rec.target().Pod())
+	if gone(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", classify(err)
+	}
+	if !podReady(pod) {
+		return "", nil
+	}
+	return key, nil
 }
 
 // ServeShareSpoke runs the spoke of the share the instance with key mounts

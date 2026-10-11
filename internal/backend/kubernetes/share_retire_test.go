@@ -39,6 +39,18 @@ func TestRetireShare(t *testing.T) {
 	if err != nil || pvc.Labels[names.LabelOrphan] != names.OrphanFlushFailed {
 		t.Fatalf("the kept share: %v %v", pvc.GetLabels(), err)
 	}
+	// A later fleet of the name that never took it up does not delete it.
+	if got, err := r.pool.RetireShare(ctx, handleCluster, "alpha", false); err != nil || got != claim {
+		t.Fatalf("RetireShare of an orphan = %q, %v", got, err)
+	}
+	if pvc, err := pvcs.Get(ctx, claim, metav1.GetOptions{}); err != nil || pvc.Labels[names.LabelOrphan] != names.OrphanFlushFailed {
+		t.Fatalf("an orphan another fleet of the name never took up was deleted: %v %v", pvc.GetLabels(), err)
+	}
+	// Taken up (its label dropped), it goes with its fleet once flushed.
+	delete(pvc.Labels, names.LabelOrphan)
+	if _, err := pvcs.Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	if got, err := r.pool.RetireShare(ctx, handleCluster, "alpha", false); err != nil || got != claim {
 		t.Fatalf("RetireShare = %q, %v", got, err)
 	}
@@ -84,15 +96,36 @@ func TestPrepareShareTakesUpAnOrphanedShare(t *testing.T) {
 	}
 }
 
-// TestElectShareSpoke: on the copy tier an instance runs its own spoke; a
-// fleet share's runs in its oldest running pod that names one of fleetd's
-// records mounting the share, "" when none runs.
+// TestElectShareSpoke: on the copy tier an instance runs its own spoke
+// while its pod runs; a fleet share's runs in its oldest running pod that
+// names one of fleetd's records mounting the share, "" when none runs.
 func TestElectShareSpoke(t *testing.T) {
 	ctx := context.Background()
 	copyTier := ShareRecord{Mode: "copy"}
 	r := newHandleRig(t)
-	if got, err := r.pool.ElectShareSpoke(ctx, handleCluster, "alpha", "aaaaaaaa", copyTier); err != nil || got != "aaaaaaaa" {
-		t.Fatalf("copy tier: %q %v", got, err)
+	copyRec := InstanceRecord{V: 1, Cluster: handleCluster, Namespace: handleNS, Key: "dddddddd", Fleet: "alpha", Instance: "solo", StatefulSet: names.Instance("alpha", "solo", "dddddddd"), Gen: 1, Share: &copyTier}
+	if err := SaveInstanceRecord(copyRec); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.pool.ElectShareSpoke(ctx, handleCluster, "alpha", "dddddddd", copyTier); err != nil || got != "" {
+		t.Fatalf("copy tier, its pod not running: %q %v", got, err)
+	}
+	copyPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: names.Pod(copyRec.StatefulSet), Namespace: handleNS},
+		Status:     corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}}},
+	}
+	if _, err := r.cs.CoreV1().Pods(handleNS).Create(ctx, copyPod, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.pool.ElectShareSpoke(ctx, handleCluster, "alpha", "dddddddd", copyTier); err != nil || got != "" {
+		t.Fatalf("copy tier, its pod not ready: %q %v", got, err)
+	}
+	copyPod.Status.Conditions[0].Status = corev1.ConditionTrue
+	if _, err := r.cs.CoreV1().Pods(handleNS).UpdateStatus(ctx, copyPod, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.pool.ElectShareSpoke(ctx, handleCluster, "alpha", "dddddddd", copyTier); err != nil || got != "dddddddd" {
+		t.Fatalf("copy tier, its pod running: %q %v", got, err)
 	}
 	ident, err := owner.LoadIdentity()
 	if err != nil {

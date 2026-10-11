@@ -218,8 +218,9 @@ type fleetSync struct {
 	// it is now (as last published).
 	syncedAt map[string]time.Time
 	inSync   map[string]bool
-	// unflushed are the share sides a stop could not flush (persisted): a
-	// destroy keeps such a share.
+	// unflushed are the share sides a stop could not flush, or a destroy
+	// kept as orphans (persisted, past the destroy): a destroy keeps such a
+	// share, until a flush takes what it holds.
 	unflushed map[string]bool
 	// conflicts counts the conflict copies, as of conflictsAt.
 	conflicts   int
@@ -714,12 +715,15 @@ func (m *shareSync) convergeStores(fs *fleetSync, w *fleetWant, logins map[strin
 			m.log.Warn("share sync: opening a cluster's login store", "fleet", fs.name, "cluster", cluster, "err", err)
 			continue
 		}
-		fs.stores[cluster] = store
+		if store != nil {
+			fs.stores[cluster] = store
+		}
 	}
 }
 
 // openStore opens cluster's login store of the fleet: a side over the
-// store's folders that keeps only that location's logins.
+// store's folders that keeps only that location's logins (nil when none of
+// the fleet's folders holds a login: only custom mounts, say).
 func (m *shareSync) openStore(fs *fleetSync, cluster, logins string) (*localSide, error) {
 	table := syncpolicy.Defaults()
 	dir := state.SyncLocationDir(fs.name, cluster)
@@ -736,7 +740,7 @@ func (m *shareSync) openStore(fs *fleetSync, cluster, logins string) (*localSide
 		trees = append(trees, sharesync.TreeRoot{Name: r.Name, Dir: folder})
 	}
 	if len(trees) == 0 {
-		return nil, fmt.Errorf("the fleet's folders hold no logins")
+		return nil, nil
 	}
 	info := sharesync.SideInfo{ID: shareStorePrefix + cluster, Location: cluster, Logins: logins, LoginsOnly: true}
 	return m.openLocal(fs.hub, info, trees, filepath.Join(fs.dir, "state", "loc", stateSegment(cluster)), m.loginsChanged)
@@ -1079,7 +1083,11 @@ func (m *shareSync) flushFleet(ctx context.Context, fleetName string) error {
 	if fs == nil {
 		return nil
 	}
+	attached := m.attachedUnflushed(fs)
 	err := fs.hub.Flush(ctx)
+	if err == nil {
+		m.forgetUnflushed(fs, attached)
+	}
 	if len(missing) == 0 {
 		return err
 	}
@@ -1114,9 +1122,55 @@ func (m *shareSync) flushBefore(fleetName, instance, verb string, d time.Duratio
 	defer cancel()
 	id := spokeInfo(inst.KubeCluster, inst.KubeKey, share, "").ID
 	err = m.flushFleet(ctx, fleetName)
-	m.markUnflushed(fleetName, id, err != nil)
-	if err != nil {
+	// Only what holds this cluster's share back counts against it: another
+	// cluster's share being behind (or out of reach) leaves this one's
+	// changes on the daemon host all the same.
+	behind := flushOutcome(err, nil).keeps(inst.KubeCluster)
+	m.markUnflushed(fleetName, id, behind)
+	switch {
+	case behind:
 		flog.Warn("share sync: the instance's last changes may not be on the daemon host", "fleet", fleetName, "instance", instance, "before", verb, "err", err)
+	case err != nil:
+		flog.Info("share sync: the fleet's other shares are not all in sync", "fleet", fleetName, "instance", instance, "before", verb, "err", err)
+	}
+}
+
+// attachedUnflushed are the spokes, attached now, of the shares of fs a
+// stop could not flush.
+func (m *shareSync) attachedUnflushed(fs *fleetSync) map[string]*spokeRun {
+	m.recMu.Lock()
+	defer m.recMu.Unlock()
+	out := map[string]*spokeRun{}
+	for id := range fs.unflushed {
+		if run := fs.spokes[id]; run != nil && run.attached.Load() && !run.ended() {
+			out[id] = run
+		}
+	}
+	return out
+}
+
+// forgetUnflushed clears the unflushed mark of each share whose spoke was
+// attached (attached, attachedUnflushed's) all through a flush that just
+// succeeded: the daemon host now has everything that share held.
+func (m *shareSync) forgetUnflushed(fs *fleetSync, attached map[string]*spokeRun) {
+	if len(attached) == 0 {
+		return
+	}
+	m.recMu.Lock()
+	defer m.recMu.Unlock()
+	if m.fleetOf(fs.name) != fs {
+		// Opened again meanwhile: what this one saw is no longer current.
+		return
+	}
+	changed := false
+	for id, run := range attached {
+		if fs.spokes[id] == run && !run.ended() && fs.unflushed[id] {
+			delete(fs.unflushed, id)
+			changed = true
+		}
+	}
+	if changed {
+		saveUnflushed(fs.dir, fs.unflushed)
 	}
 }
 
@@ -1203,19 +1257,18 @@ func flushOutcome(err error, unflushed map[string]bool) fleetFlush {
 		}
 	}
 	for id := range unflushed {
-		lines = append(lines, id+": a stop could not flush it")
+		lines = append(lines, id+": may hold changes this host does not have")
 	}
 	for _, line := range lines {
-		rest, ok := strings.CutPrefix(line, "k8s:")
-		cluster, _, found := strings.Cut(rest, "/")
-		if !ok || !found {
+		cluster, ok := sideCluster(line)
+		if !ok {
 			ff.all = true
 			continue
 		}
 		ff.behind[cluster] = true
 	}
 	if len(unflushed) > 0 && ff.err == nil {
-		ff.err = fmt.Errorf("a stop could not flush %s", strings.Join(sortedKeys(unflushed), ", "))
+		ff.err = fmt.Errorf("%s may hold changes this host does not have", strings.Join(sortedKeys(unflushed), ", "))
 	}
 	ff.flushed = !ff.all && len(ff.behind) == 0
 	return ff
@@ -1255,8 +1308,9 @@ func sortedKeys(set map[string]bool) []string {
 // retireFleet is a fleet destroy's end, once its instances are down: on
 // every connection that can be reached, its share is deleted when ff
 // flushed it (share_retention delete, the default), else kept labelled an
-// orphan; a connection that retains shares keeps it as it is. The fleet's
-// sync closes (its state on the daemon host stays, logins included).
+// orphan, and stays marked unflushed; a connection that retains shares
+// keeps it as it is. The fleet's sync closes (its state on the daemon host
+// stays, logins included).
 func (m *shareSync) retireFleet(fleetName string, ff fleetFlush) []string {
 	m.recMu.Lock()
 	m.mu.Lock()
@@ -1267,9 +1321,12 @@ func (m *shareSync) retireFleet(fleetName string, ff fleetFlush) []string {
 		m.closeFleet(fs)
 	}
 	m.recMu.Unlock()
-	if ff.flushed {
-		saveUnflushed(state.SyncFleetDir(fleetName), nil)
-	}
+	dir := state.SyncFleetDir(fleetName)
+	// What stays marked unflushed past the destroy: the shares it kept, and
+	// what was marked on the connections it did not retire (out of reach, or
+	// retaining shares), so a fleet made again under the name keeps them
+	// too until a flush has them (forgetUnflushed).
+	unflushed, next, retired := loadUnflushed(dir), map[string]bool{}, map[string]bool{}
 	var warnings []string
 	for _, rec := range m.records() {
 		id := rec.ID
@@ -1288,10 +1345,35 @@ func (m *shareSync) retireFleet(fleetName string, ff fleetFlush) []string {
 		case err != nil:
 			warnings = append(warnings, fmt.Sprintf("the fleet's share on %s: %v", clusterLabel(rec), err))
 		case claim != "" && keep:
+			next[shareSideOf(id, claim)] = true
+			retired[id] = true
 			warnings = append(warnings, fmt.Sprintf("kept the fleet's share %s on %s (labelled an orphan; `fleet cluster gc --apply` deletes it): its last changes did not reach this host: %v", claim, clusterLabel(rec), ff.err))
+		default:
+			retired[id] = true
 		}
 	}
+	for side := range unflushed {
+		if cluster, ok := sideCluster(side); !ok || !retired[cluster] {
+			next[side] = true
+		}
+	}
+	saveUnflushed(dir, next)
 	return warnings
+}
+
+// shareSideOf is the side of a fleet's share (claim) on cluster, as
+// kubernetes.ShareSide names it for its instances.
+func shareSideOf(cluster, claim string) string { return "k8s:" + cluster + "/" + claim }
+
+// sideCluster is the cluster of a share's side ("k8s:<cluster>/..."); ok is
+// false for the host's side and the login stores.
+func sideCluster(side string) (string, bool) {
+	rest, ok := strings.CutPrefix(side, "k8s:")
+	if !ok {
+		return "", false
+	}
+	cluster, _, found := strings.Cut(rest, "/")
+	return cluster, found
 }
 
 func clusterLabel(rec fleet.KubeCluster) string {
