@@ -204,6 +204,61 @@ func TestPublishedPortsFollowTheInstance(t *testing.T) {
 	}
 }
 
+// closeRecorder is a connection into the instance whose Close is seen.
+type closeRecorder struct {
+	*net.TCPConn
+	closed chan struct{}
+}
+
+func (c *closeRecorder) Close() error {
+	select {
+	case <-c.closed:
+	default:
+		close(c.closed)
+	}
+	return c.TCPConn.Close()
+}
+
+// A connection whose dial into the instance lands after the instance's
+// ports were dropped (it stopped meanwhile) is closed, not left relaying.
+func TestPublishedPortsCloseAConnectionDialledAfterTheDrop(t *testing.T) {
+	hold := make(chan struct{})
+	defer close(hold)
+	// An instance service that keeps its side open after its client's EOF.
+	srv := newInstanceServer(t, func(c net.Conn) {
+		_, _ = io.Copy(io.Discard, c)
+		<-hold
+	})
+	dialing, release := make(chan struct{}, 1), make(chan struct{})
+	remote := &closeRecorder{closed: make(chan struct{})}
+	dial := func(ctx context.Context, port int) (io.ReadWriteCloser, error) {
+		dialing <- struct{}{}
+		<-release
+		c, err := srv.dial(ctx, port)
+		if err != nil {
+			return nil, err
+		}
+		remote.TCPConn = c.(*net.TCPConn)
+		return remote, nil
+	}
+	pp := newPortPublisher()
+	defer pp.close()
+	st := pp.sync("k", "alpha/web", "id1", []backend.PublishedPort{{ContainerPort: 80}}, dial)
+	local, err := net.Dial("tcp", publishedAddr(st[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	<-dialing
+	pp.drop("k")
+	close(release)
+	select {
+	case <-remote.closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the connection dialled after the drop was left open")
+	}
+}
+
 func listening(port int) bool {
 	c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), time.Second)
 	if err != nil {

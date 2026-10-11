@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
@@ -68,8 +69,9 @@ var browserPaths = browserFiles{
 	bin:        fleetlaunch.RemotePath,
 }
 
-// browserStartWait bounds a server's start, until its listening line.
-const browserStartWait = 10 * time.Second
+// browserStartWait bounds a server's start, until its listening line (a
+// var so tests can shorten it).
+var browserStartWait = 10 * time.Second
 
 // builtinBrowserProxy reports whether b's instance runs the built-in proxy:
 // it needs the daemon's fleet build in the instance, which a backend that
@@ -170,7 +172,7 @@ func (s *service) PrepareBrowser(ctx context.Context, req *fleetgrpc.PrepareBrow
 			}
 		}
 	}
-	if err := ensureBrowserServices(b, wsDir, landing); err != nil {
+	if err := ensureInstanceBrowserServices(req.GetFleet()+"/"+inst.Name, b, wsDir, landing); err != nil {
 		flog.Error("browser prepare failed", "fleet", req.GetFleet(), "instance", req.GetInstance(), "err", err)
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -212,6 +214,56 @@ func loadWorkspaceCustomizations(ctx context.Context, b backend.Backend, workspa
 // fleet's PreferFleetLaunch setting.
 func shouldUseLandingPage(hasURL, hasLanding, preferFleetLaunch bool) bool {
 	return hasLanding && (!hasURL || preferFleetLaunch)
+}
+
+// browserStarts serializes the browser servers' checks and starts per
+// instance. Two opens at once (a second 'b' while the first is still
+// starting, two TUIs) would otherwise both start a proxy, and the one that
+// lost the port could leave the pid file naming it, dead, while the winner
+// kept the port: every later open would then fail to start one.
+var browserStarts keyedLocks
+
+// ensureInstanceBrowserServices is ensureBrowserServices for the instance
+// key names, one call at a time.
+func ensureInstanceBrowserServices(key string, b backend.Backend, workspaceDir string, wantLanding bool) error {
+	unlock := browserStarts.lock(key)
+	defer unlock()
+	return ensureBrowserServices(b, workspaceDir, wantLanding)
+}
+
+// keyedLocks is a mutex per key, kept while someone holds or waits for it.
+type keyedLocks struct {
+	mu    sync.Mutex
+	locks map[string]*keyedLock
+}
+
+type keyedLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lock takes key's mutex and returns its unlock.
+func (k *keyedLocks) lock(key string) (unlock func()) {
+	k.mu.Lock()
+	if k.locks == nil {
+		k.locks = map[string]*keyedLock{}
+	}
+	l := k.locks[key]
+	if l == nil {
+		l = &keyedLock{}
+		k.locks[key] = l
+	}
+	l.refs++
+	k.mu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		k.mu.Lock()
+		if l.refs--; l.refs == 0 {
+			delete(k.locks, key)
+		}
+		k.mu.Unlock()
+	}
 }
 
 // ensureBrowserServices makes sure the in-instance browser proxy, and the
@@ -303,10 +355,14 @@ echo "PROXY $(alive %s browser-proxy) LANDING $(alive %s landing-page)"`,
 }
 
 // startBrowserServer starts the in-instance fleet binary with args, detached
-// so it outlives this exec, records its pid and waits for the listening line
-// both servers print once they listen. replacePid, when set, is a pid file of
+// so it outlives this exec, waits for the listening line both servers print
+// once they listen and then records its pid: a start that fails (the port is
+// taken) never replaces the pid of a server that runs. One still not
+// listening when the wait ends is recorded too, so a later open finds it
+// rather than racing it for the port. replacePid, when set, is a pid file of
 // an earlier server on the same port (an older fleet's privoxy), stopped
-// first.
+// first when its pid is still a privoxy (a restarted container gives its pid
+// to others).
 func startBrowserServer(b backend.Backend, workspaceDir string, args []string, pidPath, logPath, replacePid string) error {
 	quoted := make([]string, 0, len(args)+1)
 	quoted = append(quoted, backend.ShellQuote(browserPaths.bin))
@@ -319,7 +375,7 @@ func startBrowserServer(b backend.Backend, workspaceDir string, args []string, p
 		old := backend.ShellQuote(replacePid)
 		fmt.Fprintf(&script, `if [ -f %[1]s ]; then
   old="$(cat %[1]s 2>/dev/null)"
-  if [ -n "$old" ]; then
+  if [ -n "$old" ] && grep -q privoxy "/proc/$old/cmdline" 2>/dev/null; then
     kill "$old" 2>/dev/null || sudo -n kill "$old" 2>/dev/null || true
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do kill -0 "$old" 2>/dev/null || break; sleep 0.1; done
   fi
@@ -332,15 +388,15 @@ fi
 	// not count.
 	fmt.Fprintf(&script, `: > %[2]s
 nohup %[1]s >>%[2]s 2>&1 </dev/null &
-echo $! > %[3]s
 pid=$!
 i=0
 while [ "$i" -lt %[4]d ]; do
-  if grep -q 'listening on' %[2]s 2>/dev/null; then echo STARTED; exit 0; fi
+  if grep -q 'listening on' %[2]s 2>/dev/null; then echo "$pid" > %[3]s; echo STARTED; exit 0; fi
   if ! kill -0 "$pid" 2>/dev/null; then echo START_FAILED; cat %[2]s; exit 1; fi
   sleep 0.1
   i=$((i+1))
 done
+echo "$pid" > %[3]s
 echo START_FAILED; cat %[2]s; exit 1
 `, strings.Join(quoted, " "), log, pid, int(browserStartWait/(100*time.Millisecond)))
 	out, err := b.ExecCommand(workspaceDir, []string{"sh", "-c", script.String()}).CombinedOutputWithTimeout(browserStartWait + 30*time.Second)

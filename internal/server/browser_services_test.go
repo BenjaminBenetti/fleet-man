@@ -9,8 +9,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 )
@@ -24,13 +26,16 @@ import (
 // binary as a fleetlaunch.Stager whose refresh the test decides.
 type localBrowserBackend struct {
 	backend.Backend
+	mu      sync.Mutex
 	refresh bool
 	staged  int
 	scripts []string
 }
 
 func (l *localBrowserBackend) ExecCommand(_ string, argv []string) *backend.Cmd {
+	l.mu.Lock()
 	l.scripts = append(l.scripts, strings.Join(argv, " "))
+	l.mu.Unlock()
 	if strings.Contains(strings.Join(argv, " "), "privoxy --pidfile") {
 		// Never install a package on the test host.
 		return backend.NewCmd(exec.Command("echo", "ALREADY_RUNNING"), nil)
@@ -39,11 +44,14 @@ func (l *localBrowserBackend) ExecCommand(_ string, argv []string) *backend.Cmd 
 }
 
 func (l *localBrowserBackend) StageFleet(_ string, beforeRefresh func() error) (bool, error) {
+	l.mu.Lock()
 	l.staged++
-	if !l.refresh {
+	refresh := l.refresh
+	l.refresh = false
+	l.mu.Unlock()
+	if !refresh {
 		return false, nil
 	}
-	l.refresh = false
 	if beforeRefresh != nil {
 		if err := beforeRefresh(); err != nil {
 			return false, err
@@ -67,6 +75,7 @@ echo "$*" >> "$(dirname "$0")/args.log"
 case "$1" in
 browser-proxy)
   if [ -f "$(dirname "$0")/fail" ]; then echo "listen tcp :58888: bind: address already in use" >&2; exit 1; fi
+  if [ -f "$(dirname "$0")/slow" ]; then sleep 2; fi
   echo "fleet browser-proxy: listening on [::]:58888" >&2 ;;
 landing-page) echo "fleet landing-page: listening on [::]:16767" >&2 ;;
 *) exit 3 ;;
@@ -133,7 +142,7 @@ func launches(t *testing.T, dir string) []string {
 // and a second open reuses it.
 func TestBrowserProxyStartsOnceAndReplacesPrivoxy(t *testing.T) {
 	dir := browserRig(t)
-	privoxy := exec.Command("sleep", "120")
+	privoxy := exec.Command(fakePrivoxy(t, dir), "120")
 	if err := privoxy.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -172,6 +181,125 @@ func TestBrowserProxyStartsOnceAndReplacesPrivoxy(t *testing.T) {
 		if strings.Contains(s, "privoxy --pidfile") || strings.Contains(s, "apt-get") {
 			t.Fatalf("an instance that runs fleet must not install privoxy: %s", s)
 		}
+	}
+}
+
+// fakePrivoxy is a sleep whose command line names privoxy, as an older
+// fleet's proxy's does.
+func fakePrivoxy(t *testing.T, dir string) string {
+	t.Helper()
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no sleep")
+	}
+	path := filepath.Join(dir, "privoxy")
+	if err := os.Symlink(sleep, path); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The privoxy pid file an older fleet left behind may outlive its privoxy
+// (a container restart): the process that has its pid now is not stopped.
+func TestBrowserProxyLeavesAStalePrivoxyPidAlone(t *testing.T) {
+	dir := browserRig(t)
+	other := exec.Command("sleep", "120")
+	if err := other.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = other.Process.Kill(); _ = other.Wait() }()
+	if err := os.WriteFile(browserPaths.legacyPid, []byte(strconv.Itoa(other.Process.Pid)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureBrowserServices(&localBrowserBackend{}, "/ws", false); err != nil {
+		t.Fatal(err)
+	}
+	if !alive(other.Process.Pid) || isZombie(other.Process.Pid) {
+		t.Fatal("a process that is not privoxy was killed for having the old privoxy's pid")
+	}
+	if _, err := os.Stat(browserPaths.legacyPid); !os.IsNotExist(err) {
+		t.Fatalf("the stale privoxy pid file should be gone: %v", err)
+	}
+	if got := launches(t, dir); len(got) != 1 || !alive(readPid(browserPaths.proxyPid)) {
+		t.Fatalf("the proxy should run: %q", got)
+	}
+}
+
+// Two opens of one instance at once start one proxy, and its pid file names
+// it.
+func TestBrowserServicesStartOncePerInstanceAtATime(t *testing.T) {
+	dir := browserRig(t)
+	b := &localBrowserBackend{}
+	var wg sync.WaitGroup
+	errs := make([]error, 4)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = ensureInstanceBrowserServices("alpha/a", b, "/ws", false)
+		}()
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := launches(t, dir); len(got) != 1 || !alive(readPid(browserPaths.proxyPid)) {
+		t.Fatalf("one proxy should have started, and run: %q", got)
+	}
+	if len(browserStarts.locks) != 0 {
+		t.Fatalf("the instance's lock should be gone once nobody holds it: %v", browserStarts.locks)
+	}
+}
+
+// A start that fails (another process has the port) leaves the pid file of
+// the server that runs alone.
+func TestBrowserProxyFailedStartKeepsTheRunningPid(t *testing.T) {
+	dir := browserRig(t)
+	b := &localBrowserBackend{}
+	if err := ensureBrowserServices(b, "/ws", false); err != nil {
+		t.Fatal(err)
+	}
+	first := readPid(browserPaths.proxyPid)
+	if err := os.WriteFile(filepath.Join(dir, "fail"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := startBrowserServer(b, "/ws", browserProxyArgs(""), browserPaths.proxyPid, browserPaths.proxyLog, ""); err == nil {
+		t.Fatal("the second start should fail")
+	}
+	if got := readPid(browserPaths.proxyPid); got != first || !alive(got) {
+		t.Fatalf("the pid file should still name the running proxy %d: %d", first, got)
+	}
+}
+
+// A server still starting when the wait ends is recorded, so the next open
+// finds it rather than starting another on its port.
+func TestBrowserProxySlowStartIsRecorded(t *testing.T) {
+	dir := browserRig(t)
+	orig := browserStartWait
+	browserStartWait = 300 * time.Millisecond
+	defer func() { browserStartWait = orig }()
+	if err := os.WriteFile(filepath.Join(dir, "slow"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b := &localBrowserBackend{}
+	if err := ensureBrowserServices(b, "/ws", false); err == nil {
+		t.Fatal("a start that outlasts the wait should report it")
+	}
+	slow := readPid(browserPaths.proxyPid)
+	if !alive(slow) {
+		t.Fatalf("the slow proxy should be recorded and left running: %d", slow)
+	}
+	waitUntil(t, "the slow proxy to listen", func() bool {
+		data, _ := os.ReadFile(browserPaths.proxyLog)
+		return strings.Contains(string(data), "listening on")
+	})
+	if err := ensureBrowserServices(b, "/ws", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := launches(t, dir); len(got) != 1 || readPid(browserPaths.proxyPid) != slow {
+		t.Fatalf("the next open should find the slow proxy: %q", got)
 	}
 }
 

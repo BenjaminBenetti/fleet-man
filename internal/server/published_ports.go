@@ -93,14 +93,22 @@ func (h *portDialHolder) set(d portDial) {
 	h.mu.Unlock()
 }
 
-// publishedConns is a listener's live connections, closed with it.
+// publishedConns is a listener's live connections, closed with it. One
+// added after that (a connection accepted, or dialled into the instance,
+// while the listener closed) is closed at once.
 type publishedConns struct {
-	mu sync.Mutex
-	m  map[io.Closer]struct{}
+	mu     sync.Mutex
+	m      map[io.Closer]struct{}
+	closed bool
 }
 
 func (s *publishedConns) add(c io.Closer) {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = c.Close()
+		return
+	}
 	s.m[c] = struct{}{}
 	s.mu.Unlock()
 }
@@ -118,6 +126,7 @@ func (s *publishedConns) closeAll() {
 		all = append(all, c)
 	}
 	s.m = map[io.Closer]struct{}{}
+	s.closed = true
 	s.mu.Unlock()
 	for _, c := range all {
 		_ = c.Close()
