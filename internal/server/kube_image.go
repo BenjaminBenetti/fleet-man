@@ -420,9 +420,13 @@ func (m *kubeManager) releaseImages(rec fleet.KubeCluster, leaseHeld bool) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), kubeImageCleanupTime)
 		defer cancel()
+		var seedCaches func(context.Context) ([]string, error)
 		if leaseHeld {
 			if link, err := m.connect(rec, m.environ()); err == nil {
 				t.Secrets = kubebackend.PullSecrets{Client: link.client, Namespace: rec.Namespace}
+				seedCaches = func(ctx context.Context) ([]string, error) {
+					return kubebackend.DeleteSeedCaches(ctx, link.client, rec.Namespace, id.Owner(), rec.ID)
+				}
 			}
 		}
 		if _, err := os.Stat(state.KubeImagesPath(rec.ID)); err == nil {
@@ -431,6 +435,13 @@ func (m *kubeManager) releaseImages(rec fleet.KubeCluster, leaseHeld bool) {
 				flog.Warn("kube: collect the removed connection's images", "cluster", rec.ID, "err", err)
 			} else if len(res.Kept) > 0 || len(res.Warnings) > 0 {
 				flog.Warn("kube: some of the removed connection's images stay", "cluster", rec.ID, "kept", len(res.Kept), "warnings", strings.Join(res.Warnings, "; "))
+			}
+		}
+		if seedCaches != nil {
+			if deleted, err := seedCaches(ctx); err != nil {
+				flog.Warn("kube: delete the removed connection's seed caches", "cluster", rec.ID, "err", preflight.Message(err))
+			} else if len(deleted) > 0 {
+				flog.Info("kube: deleted the removed connection's seed caches", "cluster", rec.ID, "deleted", strings.Join(deleted, ", "))
 			}
 		}
 		if t.Secrets != nil {

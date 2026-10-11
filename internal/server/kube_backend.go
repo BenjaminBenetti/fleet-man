@@ -170,6 +170,14 @@ func (m *kubeManager) collectImages(rec fleet.KubeCluster, link *kubeLink) {
 		case len(res.Deleted) > 0 || len(res.Warnings) > 0:
 			flog.Info("kube: collected the connection's images", "cluster", rec.ID, "deleted", len(res.Deleted), "kept", len(res.Kept), "warnings", strings.Join(res.Warnings, "; "))
 		}
+		// Seed caches no live instance was made from for a week go too.
+		deleted, err := kubernetes.CollectSeedCaches(ctx, link.client, rec.Namespace, id.Owner(), rec.ID, func(key string) bool { return live[key] }, m.now())
+		switch {
+		case err != nil:
+			flog.Warn("kube: collecting the connection's seed caches", "cluster", rec.ID, "err", err)
+		case len(deleted) > 0:
+			flog.Info("kube: collected the connection's seed caches", "cluster", rec.ID, "deleted", strings.Join(deleted, ", "))
+		}
 	}()
 }
 

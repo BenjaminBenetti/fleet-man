@@ -65,6 +65,13 @@ func KubeImagesPath(clusterID string) string {
 	return filepath.Join(KubeClusterDir(clusterID), "images.json")
 }
 
+// KubeSeedCachesPath is one connection's seed cache index
+// (~/.fleet/kube/<cluster id>/seedcaches.json): which instances each seed
+// cache made and since when none does.
+func KubeSeedCachesPath(clusterID string) string {
+	return filepath.Join(KubeClusterDir(clusterID), "seedcaches.json")
+}
+
 // KubeInstancesDir holds what the daemon recorded of each instance it made on
 // a connection (~/.fleet/kube/<cluster id>/instances): the pod it rendered and
 // the image it delivered, which a live pod is verified against.
