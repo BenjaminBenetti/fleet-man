@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 )
 
 // feedChunk is how much workspace a FrameData carries.
@@ -26,7 +27,19 @@ type FeedOptions struct {
 	Workspace io.Reader
 	// Progress receives the job's progress frames; nil drops them.
 	Progress func(Progress)
+	// Barrier does what the job waits for at a barrier (a clone's copier
+	// before and after its final delta); its error refuses the barrier,
+	// which fails the job. It runs beside the feed, which tells the job
+	// every BarrierKeepalive that fleetd is still at it, and Feed waits for
+	// it before returning (its ctx ends with Feed's). A barrier sent again
+	// on a newer connection runs again, so it must be idempotent. nil refuses
+	// every barrier.
+	Barrier func(ctx context.Context, b Barrier) error
 }
+
+// BarrierKeepalive is how often Feed tells a job waiting at a barrier that
+// fleetd is still working on it.
+var BarrierKeepalive = 30 * time.Second
 
 // Feed is fleetd's side of the job socket, over conn (a kube exec of `fleet
 // pod-job feed`, or a bulk-session stream dialed to the socket): the hello,
@@ -45,6 +58,44 @@ func Feed(ctx context.Context, conn io.ReadWriter, opts FeedOptions) (Result, er
 	hello, _ := json.Marshal(Hello{Proto: ProtoVersion})
 	if err := write(FrameHello, hello); err != nil {
 		return Result{}, fmt.Errorf("jobboot hello: %w", err)
+	}
+
+	// Barriers run beside the read loop, and end (their ctx cancelled) before
+	// Feed returns: what one does must never outlive the feed that started
+	// it (a freeze racing the caller's clean-up).
+	bctx, bcancel := context.WithCancel(ctx)
+	var barriers sync.WaitGroup
+	defer func() {
+		bcancel()
+		barriers.Wait()
+	}()
+	runBarrier := func(b Barrier) {
+		defer barriers.Done()
+		release := func(r Release) {
+			data, _ := json.Marshal(r)
+			_ = write(FrameRelease, data)
+		}
+		if opts.Barrier == nil {
+			release(Release{Seq: b.Seq, Error: fmt.Sprintf("fleetd has nothing to do at barrier %q", b.Name)})
+			return
+		}
+		finished := make(chan error, 1)
+		go func() { finished <- opts.Barrier(bctx, b) }()
+		tick := time.NewTicker(BarrierKeepalive)
+		defer tick.Stop()
+		for {
+			select {
+			case err := <-finished:
+				if err != nil {
+					release(Release{Seq: b.Seq, Error: err.Error()})
+				} else {
+					release(Release{Seq: b.Seq, OK: true})
+				}
+				return
+			case <-tick.C:
+				release(Release{Seq: b.Seq, Wait: true})
+			}
+		}
 	}
 
 	type outcome struct {
@@ -105,6 +156,13 @@ func Feed(ctx context.Context, conn io.ReadWriter, opts FeedOptions) (Result, er
 						return outcome{result: r, err: fmt.Errorf("jobboot: acknowledge the result: %w", err)}
 					}
 					return outcome{result: r}
+				case FrameBarrier:
+					var b Barrier
+					if err := json.Unmarshal(payload, &b); err != nil {
+						return outcome{err: fmt.Errorf("jobboot: bad barrier: %w", err)}
+					}
+					barriers.Add(1)
+					go runBarrier(b)
 				case FramePing:
 				default:
 					return outcome{err: fmt.Errorf("jobboot: unexpected %s frame from the job", t)}
