@@ -406,8 +406,7 @@ fleet_up() {
 # Tests check an instance's container, workspace, control dir and shared
 # mounts through these, never through docker (or kubectl) directly, so one
 # test runs on every FLEET_ITEST_BACKEND. Each dispatches to its _be_* twin in
-# integration/backends/<backend>.sh; on kubernetes the share sync still fails
-# the test as "not wired yet", naming the unit that wires it.
+# integration/backends/<backend>.sh.
 #
 # <ref> is <fleet>/<instance>, as `fleet exec` takes it; a bare <instance> is
 # the fixture fleet's. Containers are named by the container_id fleet recorded

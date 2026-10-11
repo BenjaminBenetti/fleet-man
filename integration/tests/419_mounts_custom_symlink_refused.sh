@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: a custom mount whose host folder (.mnt/<path>) was replaced
 # with a symlink is refused, not followed: fleet up fails naming the host-folder
 # option, the instance is FAILED, and the link's target keeps its mode and
@@ -46,6 +47,7 @@ rm "${mnt_dir}"
 mkdir -p "${mnt_dir}"
 ln -s "${outside}" "${mnt_dir}/big-disk"
 fleet_up beta
+itest_share_sync "${FIXTURE_REPO_NAME}"
 assert_equals "private" "$("${FLEET_BIN}" exec "${FIXTURE_REPO_NAME}/beta" -- sh -c 'test -L /opt/data/big-disk && echo private')" \
   "the user's symlink inside the mount folder is missing in the container"
 assert_equals "700" "$(file_mode "${outside}")" "the target of a user's symlink was chmodded"

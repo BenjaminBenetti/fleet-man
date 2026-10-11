@@ -116,8 +116,11 @@ fleetd serves its pods the pod build of the fleet under test, which
 builds that too); `FLEET_POD_TMUX_<ARCH>` names the tmux bundle images without
 tmux need. Teardown deletes what is left of the test's connection by label
 and stops the test's daemons. The control-dir helpers look in the pod's own
-`/fleet-mounts/control` through `fleet exec`; the share sync (P4.6) still
-fails the test as "not wired yet", naming the unit that wires it.
+`/fleet-mounts/control` through `fleet exec`. A fleet's shared mounts live on
+its share in the cluster, which fleetd keeps converged with the host tree;
+`itest_share_sync` waits for that with `fleet sync wait` (bounded by
+`FLEET_ITEST_SHARE_SYNC_TIMEOUT`, 120s) and fails the test, naming what was
+behind, when it does not converge.
 
 Tests other than devcontainer-only ones never inspect a backend directly (no
 `docker inspect`, `docker exec`, `kubectl`, or

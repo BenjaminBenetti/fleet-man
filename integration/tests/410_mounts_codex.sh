@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# itest: k8s
 # Description: Codex mount appears in the container at the expected path.
 set -euo pipefail
 
