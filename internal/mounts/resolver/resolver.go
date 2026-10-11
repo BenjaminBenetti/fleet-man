@@ -9,11 +9,14 @@ package resolver
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
 	"github.com/BenjaminBenetti/fleet-man/internal/flog"
+	"github.com/BenjaminBenetti/fleet-man/internal/mounts/hostbind"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
 
@@ -51,7 +54,9 @@ const sharedFilesContainerPath = "/fleet-mounts/files"
 // shared parent-dir mount and a Symlink that the caller must create
 // inside the container after Up. Every mount it returns is
 // MountScopeFleetShared, and every path it creates is recorded in
-// Resolved.Layout.
+// Resolved.Layout, but for a custom mount the user gave a host folder
+// (FleetSettings.CustomMountHostFolders): that folder is bound as it is
+// (MountScopeHostFolder), never created or chmodded, so it must exist.
 //
 // Home-level mounts are rooted at fleetSettings.HomeDir; project file links
 // are relative to the remote workspace. When HomeDir is empty Resolve falls
@@ -87,6 +92,14 @@ func Resolve(fleetName string, fleetSettings fleet.FleetSettings) (Resolved, err
 
 	// Directory mounts.
 	for _, spec := range dirSpecs {
+		if spec.hostFolder != "" || spec.hostFolderErr != nil {
+			mount, err := hostFolderMount(spec)
+			if err != nil {
+				return Resolved{}, err
+			}
+			resolved.Mounts = append(resolved.Mounts, mount)
+			continue
+		}
 		if err := layout.ensureDir(spec.hostSubdir); err != nil {
 			return Resolved{}, logRefusal(fleetName, spec.prepareError(err))
 		}
@@ -135,6 +148,36 @@ func Resolve(fleetName string, fleetSettings fleet.FleetSettings) (Resolved, err
 // ===========================================
 // Internal helpers
 // ===========================================
+
+// hostFolderMount is the mount of a custom mount's chosen host folder: bound
+// as it is (a link to a bigger disk is the point of choosing one), never made
+// nor chmodded, and so never one of the fleet's Layout paths. It must be a
+// folder now, outside fleet's own ~/.fleet (SetFleetSettings refuses that
+// already; a hand-edited state.json is refused here too).
+func hostFolderMount(spec dirMountSpec) (backend.Mount, error) {
+	if spec.hostFolderErr != nil {
+		return backend.Mount{}, fmt.Errorf("%s: %w; pick another host folder in the fleet options", spec.name, spec.hostFolderErr)
+	}
+	folder := spec.hostFolder
+	if own := state.FleetDir(); hostbind.Overlaps(folder, own) {
+		return backend.Mount{}, fmt.Errorf("%s: host folder %s overlaps fleet's own state (%s); pick another host folder in the fleet options", spec.name, folder, own)
+	}
+	info, err := os.Stat(folder)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return backend.Mount{}, fmt.Errorf("%s: host folder %s does not exist; create it, or pick another in the fleet options", spec.name, folder)
+	case err != nil:
+		return backend.Mount{}, fmt.Errorf("%s: host folder %s: %w", spec.name, folder, err)
+	case !info.IsDir():
+		return backend.Mount{}, fmt.Errorf("%s: host folder %s is not a folder; pick another in the fleet options", spec.name, folder)
+	}
+	return backend.Mount{
+		LocalPath:     folder,
+		ContainerPath: spec.containerPath,
+		Scope:         backend.MountScopeHostFolder,
+		SubPath:       hostbind.Name(folder),
+	}, nil
+}
 
 // fleetMountDir returns the host directory under which all of a fleet's
 // shared mount targets live. Lives next to (not inside) the per-instance

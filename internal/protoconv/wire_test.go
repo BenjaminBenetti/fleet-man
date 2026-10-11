@@ -94,28 +94,30 @@ func TestInstanceWirePlacement(t *testing.T) {
 }
 
 func TestFleetSettingsWirePlacement(t *testing.T) {
-	pinArity[fleet.FleetSettings](t, 18)
+	pinArity[fleet.FleetSettings](t, 19)
 	pinArity[fleet.LayoutPreset](t, 3)
 	pinArity[fleet.CoderParameter](t, 6)
 
 	prefer := true
 	ps := FleetSettingsToProto(fleet.FleetSettings{
-		CustomMounts:       []string{"/m1", "/m2"},
-		HomeDir:            "hd",
-		CoderTemplate:      "ct",
-		CoderPreset:        "cp",
-		CoderWorkspaceName: "cw",
-		PreferFleetLaunch:  &prefer,
-		LayoutPresets:      []fleet.LayoutPreset{{Name: "lp", Layout: "ly", PaneCommands: []string{"pc"}}},
-		Agents:             []fleet.Agent{{Name: "ag"}},
-		Triggers:           []fleet.Trigger{{Name: "tr"}},
+		CustomMounts:           []string{"/m1", "/m2"},
+		CustomMountHostFolders: map[string]string{"/m1": "/h1"},
+		HomeDir:                "hd",
+		CoderTemplate:          "ct",
+		CoderPreset:            "cp",
+		CoderWorkspaceName:     "cw",
+		PreferFleetLaunch:      &prefer,
+		LayoutPresets:          []fleet.LayoutPreset{{Name: "lp", Layout: "ly", PaneCommands: []string{"pc"}}},
+		Agents:                 []fleet.Agent{{Name: "ag"}},
+		Triggers:               []fleet.Trigger{{Name: "tr"}},
 		CoderParameters: []fleet.CoderParameter{{
 			Name: "pn", Value: "pv", DefaultValue: "pd", DisplayName: "pl", Description: "pe", Type: "py",
 		}},
 	})
 	if ps.GetHomeDir() != "hd" || ps.GetCoderTemplate() != "ct" || ps.GetCoderPreset() != "cp" ||
 		ps.GetCoderWorkspaceName() != "cw" || !ps.GetPreferFleetLaunch() ||
-		len(ps.GetCustomMounts()) != 2 || ps.GetCustomMounts()[0] != "/m1" {
+		len(ps.GetCustomMounts()) != 2 || ps.GetCustomMounts()[0] != "/m1" ||
+		len(ps.GetCustomMountHostFolders()) != 1 || ps.GetCustomMountHostFolders()["/m1"] != "/h1" {
 		t.Fatalf("settings scalar wire placement wrong: %+v", ps)
 	}
 	if lp := ps.GetLayoutPresets()[0]; lp.GetName() != "lp" || lp.GetLayout() != "ly" || lp.GetPaneCommands()[0] != "pc" {

@@ -71,6 +71,16 @@ type FleetSettings struct {
 	// means no custom mounts.
 	CustomMounts []string `json:"customMounts,omitempty"`
 
+	// CustomMountHostFolders gives a custom mount (keyed by its CustomMounts
+	// container path) a folder of the user's choosing on the daemon host
+	// instead of ~/.fleet/workspaces/<fleet>/.mnt/<path>: an absolute path
+	// (see NormalizeCustomMountHostFolders), which may be a link to a bigger
+	// disk. Docker binds it as it is, never making it nor changing its mode;
+	// a cluster keeps a copy on the fleet's share in step with it, both
+	// ways. A mount without an entry keeps the .mnt folder. Settable by any
+	// caller that may change the fleet's settings, local or remote.
+	CustomMountHostFolders map[string]string `json:"customMountHostFolders,omitempty"`
+
 	// DebCacheServer enables a shared apt-cacher-ng container for this fleet so
 	// repeated `apt install` across the fleet's instances reuse downloaded
 	// .deb packages instead of re-fetching them. When set, instance

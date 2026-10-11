@@ -3,9 +3,12 @@ package resolver
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/mounts/hostbind"
 )
 
 // TestResolveReturnsEmptyWhenNoSettingsEnabled verifies that an empty
@@ -295,6 +298,84 @@ func TestResolveCreatesCustomMounts(t *testing.T) {
 		}
 		if !info.IsDir() {
 			t.Errorf("%s is not a directory", hostPath)
+		}
+	}
+}
+
+// TestResolveBindsAChosenHostFolderAsIs: a custom mount with a host folder
+// binds that folder (a link to it too) as it is: no .mnt folder, no Layout
+// entry, its mode untouched, scoped so a cluster syncs it at .hostbind/<id>;
+// the other custom mounts keep their .mnt folders.
+func TestResolveBindsAChosenHostFolderAsIs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	big := filepath.Join(t.TempDir(), "big")
+	if err := os.Mkdir(big, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link-to-big")
+	if err := os.Symlink(big, link); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := Resolve("delta", fleet.FleetSettings{
+		CustomMounts:           []string{"/opt/data", "/srv/linked", "/var/plain"},
+		CustomMountHostFolders: map[string]string{"/opt/data": big + "/", "/srv/linked/": link},
+	})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	byPath := map[string]backend.Mount{}
+	for _, m := range resolved.Mounts {
+		byPath[m.ContainerPath] = m
+	}
+	for target, folder := range map[string]string{"/opt/data": big, "/srv/linked": link} {
+		m := byPath[target]
+		if m.LocalPath != folder || m.Scope != backend.MountScopeHostFolder || m.SubPath != hostbind.Name(folder) {
+			t.Errorf("%s: mount = %+v, want %s bound as a host folder at %s", target, m, folder, hostbind.Name(folder))
+		}
+	}
+	if m := byPath["/var/plain"]; m.Scope != backend.MountScopeFleetShared || m.SubPath != ".mnt/var/plain" {
+		t.Errorf("/var/plain: mount = %+v, want its .mnt folder", m)
+	}
+	for _, e := range resolved.Layout {
+		if e.Path == ".mnt/opt/data" || e.Path == ".mnt/srv/linked" {
+			t.Errorf("Layout holds %s, a mount bound from a chosen host folder", e.Path)
+		}
+	}
+	for _, p := range []string{".mnt/opt/data", ".mnt/srv/linked"} {
+		if _, err := os.Lstat(filepath.Join(home, ".fleet", "workspaces", "delta", p)); err == nil {
+			t.Errorf("%s was made, though the mount has a host folder", p)
+		}
+	}
+	if info, err := os.Stat(big); err != nil || info.Mode().Perm() != 0o750 {
+		t.Errorf("the host folder's mode changed: %v, %v", info.Mode(), err)
+	}
+}
+
+// TestResolveRefusesAnUnusableHostFolder: a chosen host folder that is
+// missing, a file, inside fleet's own ~/.fleet, or not absolute (a
+// hand-edited state.json) fails the resolve, naming the mount and the fix,
+// rather than binding the .mnt folder in its place.
+func TestResolveRefusesAnUnusableHostFolder(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, folder := range map[string]string{
+		"missing":       filepath.Join(t.TempDir(), "nope"),
+		"a file":        file,
+		"fleet's state": filepath.Join(home, ".fleet", "workspaces"),
+		"relative":      "data",
+	} {
+		_, err := Resolve("delta", fleet.FleetSettings{
+			CustomMounts:           []string{"/opt/data"},
+			CustomMountHostFolders: map[string]string{"/opt/data": folder},
+		})
+		if err == nil || !strings.Contains(err.Error(), "custom mount /opt/data") || !strings.Contains(err.Error(), "fleet options") {
+			t.Errorf("%s: Resolve() error = %v, want the mount and the fleet options named", name, err)
 		}
 	}
 }

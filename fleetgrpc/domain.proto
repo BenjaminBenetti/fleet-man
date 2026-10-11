@@ -245,6 +245,15 @@ message FleetSettings {
   // coding agents in this fleet's instances (issue #219). Plain bool like the
   // *Mount flags: false == off, the default.
   bool fleet_mcp = 18;
+
+  // custom_mount_host_folders gives a custom mount (keyed by its
+  // custom_mounts path) an absolute folder on the daemon host instead of its
+  // ~/.fleet/workspaces/<fleet>/.mnt/<path> folder. Docker binds it as it
+  // is, never making it nor changing its mode; a cluster keeps a copy on the
+  // fleet's share in step with it, both ways. A mount without an entry
+  // keeps its .mnt folder. Any caller that may set the fleet's settings sets
+  // it, local or remote, like a cluster's kubeconfig paths.
+  map<string, string> custom_mount_host_folders = 19;
 }
 
 // CoderParameter mirrors internal/fleet.CoderParameter — one Coder template
