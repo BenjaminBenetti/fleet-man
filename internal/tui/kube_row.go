@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"fmt"
+	"net/netip"
 	"strings"
 
 	"github.com/BenjaminBenetti/fleet-man/fleetgrpc"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
+	"github.com/BenjaminBenetti/fleet-man/internal/fleetclient"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeerr"
 )
 
@@ -12,9 +15,10 @@ import (
 // cluster: ☸ and its connection's name beside the branch, and after its
 // status the notes InstanceRuntime.kube and the connection's health give
 // (the pod not ready, the agent reconnecting, the cluster unreachable or its
-// login expired, a restart the cluster made), or for a failed or parked one
-// what its error code says. Notes are Muted; the ✕ of a connection that
-// cannot be used is Error.
+// login expired, a restart the cluster made, a published port that could not
+// listen or that a remote daemon opens on its network), or for a failed or
+// parked one what its error code says. Notes are Muted; the ✕ of a
+// connection that cannot be used is Error.
 
 // kubeRowNote is the note a running Kubernetes instance's row carries after
 // its status: the restart the cluster made on its own, until the next attach
@@ -94,7 +98,33 @@ func (m *model) kubeRunningNotes(inst *fleet.Instance, rt *fleetgrpc.InstanceRun
 	}
 	add(cluster)
 	add(kubeRowNote(rt))
+	remote := fleetclient.IsRemote()
+	for _, p := range k.GetPublishedPorts() {
+		add(kubePortNote(p, remote))
+	}
 	return notes, agentUnknown
+}
+
+// kubePortNote is what a running Kubernetes instance's row says of one of its
+// published ports (-p, appPort): one that could not listen on the daemon host
+// (another process holds it), and, when this TUI's daemon is remote, one
+// listening on every interface of the daemon host, which puts the instance on
+// that host's network. "" for a port that serves on 127.0.0.1, or on an
+// address the user's own machine owns.
+func kubePortNote(p *fleetgrpc.KubePublishedPort, remote bool) string {
+	switch {
+	case p.GetError() != "":
+		return fmt.Sprintf("⚠ port %d not published: %s", p.GetHostPort(), p.GetError())
+	case remote && wildcardAddress(p.GetAddress()):
+		return fmt.Sprintf("⚠ port %d open on the daemon host's network (%s)", p.GetHostPort(), p.GetAddress())
+	}
+	return ""
+}
+
+// wildcardAddress reports whether ip is every interface (0.0.0.0, ::).
+func wildcardAddress(ip string) bool {
+	a, err := netip.ParseAddr(ip)
+	return err == nil && a.IsUnspecified()
 }
 
 // kubeRowTarget is what a Kubernetes instance's row shows beside its branch:

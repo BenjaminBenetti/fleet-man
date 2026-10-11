@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/atomicfile"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/state"
 )
@@ -64,6 +65,9 @@ type InstanceRecord struct {
 	// Created is the instance container's creation time (the
 	// container-created annotation the lifecycle hooks' markers compare).
 	Created time.Time `json:"created"`
+	// Ports are the run's published ports (-p, appPort), which the daemon
+	// serves on its host while the instance runs.
+	Ports []backend.PublishedPort `json:"ports,omitempty"`
 }
 
 // ErrInstanceRecordNewer is a record a newer fleet wrote: read-only to this

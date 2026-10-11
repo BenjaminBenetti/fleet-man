@@ -5,8 +5,10 @@ package server
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -553,4 +555,38 @@ func TestKubePodsNoticeClearsOnATTYExec(t *testing.T) {
 	}
 	exec(true)
 	r.eventually("the cleared notice", func() bool { return r.runtime("one").GetKube().GetRestartCause() == "" })
+}
+
+// A running instance's published ports listen on the daemon host and show on
+// its runtime; once it no longer runs they close. The shutdown closes them
+// too.
+func TestKubePodsServeThePublishedPorts(t *testing.T) {
+	srv := newInstanceServer(t, countReply)
+	port := freePort(t)
+	r := newKubePodsRigWith(t, func(k *kubePods) {
+		k.publishFor = func(inst *fleet.Instance) ([]backend.PublishedPort, portDial, bool) {
+			return []backend.PublishedPort{{HostPort: port, ContainerPort: 3000}}, srv.dial, true
+		}
+	}, kubeInstance("one", fleet.StatusRunning))
+	r.waitTracked()
+	sts := kubeSTS("one")
+	r.pool.observe(sts, kubernetes.Observation{Live: backend.LiveStatusRunning})
+	r.eventually("the published port on the runtime", func() bool {
+		ps := r.runtime("one").GetKube().GetPublishedPorts()
+		return len(ps) == 1 && ps[0].GetHostPort() == int32(port) && ps[0].GetAddress() == "127.0.0.1" && ps[0].GetError() == ""
+	})
+	if got := roundTrip(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), "four"); got != "4" {
+		t.Fatalf("through the published port: %q", got)
+	}
+
+	r.pool.observe(sts, kubernetes.Observation{Live: backend.LiveStatusStopped})
+	r.eventually("the port to close", func() bool { return !listening(port) && len(r.runtime("one").GetKube().GetPublishedPorts()) == 0 })
+
+	r.pool.observe(sts, kubernetes.Observation{Live: backend.LiveStatusRunning})
+	r.eventually("the port to listen again", func() bool { return listening(port) })
+	stubServeShutdownPool(t)
+	runShutdownSteps(5*time.Second, r.svc.kubeShutdownSteps())
+	if listening(port) {
+		t.Fatal("the shutdown should close the published ports")
+	}
 }

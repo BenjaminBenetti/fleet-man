@@ -36,3 +36,22 @@ type HalfCloseDialer interface {
 type PortWarmer interface {
 	WarmPorts(ctx context.Context, containerID string) error
 }
+
+// PortPublisher is a backend whose instances' published ports (`docker run
+// -p`, a devcontainer's appPort) the daemon serves itself, as listeners on the
+// daemon host that dial into the instance (PortDialer): Kubernetes. Docker
+// publishes its containers' ports on its own.
+type PortPublisher interface {
+	// PublishedPorts are the instance's published ports, as its create
+	// recorded them.
+	PublishedPorts(containerID string) ([]PublishedPort, error)
+}
+
+// PublishedPort is one published port: a listener on HostIP:HostPort
+// (HostPort 0 leaves the port to the daemon) forwarding to ContainerPort in
+// the instance.
+type PublishedPort struct {
+	HostIP        string `json:"hostIP"`
+	HostPort      int    `json:"hostPort,omitempty"`
+	ContainerPort int    `json:"containerPort"`
+}

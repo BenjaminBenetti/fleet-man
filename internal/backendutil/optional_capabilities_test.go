@@ -10,7 +10,7 @@ import (
 
 // TestTodaysBackendsHaveNoClusterCapabilities: the optional capabilities the
 // server prefers when a backend has them (StreamExecer, PortDialer with
-// HalfCloseDialer and PortWarmer, ControlChannel, WorkspaceOwner,
+// HalfCloseDialer, PortWarmer and PortPublisher, ControlChannel, WorkspaceOwner,
 // RestartAware, fleetlaunch.Stager) are for backends whose instances run out
 // of the daemon host's reach. devcontainer,
 // codespaces and coder have none of them, so they keep their host-side paths
@@ -32,6 +32,9 @@ func TestTodaysBackendsHaveNoClusterCapabilities(t *testing.T) {
 			}
 			if _, ok := b.(backend.PortWarmer); ok {
 				t.Errorf("%s: is a PortWarmer", bt)
+			}
+			if _, ok := b.(backend.PortPublisher); ok {
+				t.Errorf("%s: is a PortPublisher", bt)
 			}
 			if _, ok := b.(backend.ControlChannel); ok {
 				t.Errorf("%s: carries a ControlChannel", bt)

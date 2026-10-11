@@ -445,3 +445,36 @@ func TestLogsViewOfARemoteDaemon(t *testing.T) {
 		t.Fatalf("argv %v %v", argv, err)
 	}
 }
+
+// A published port that could not listen shows on the row; one on every
+// interface of the daemon host shows only when the daemon is remote (on the
+// user's own machine it is their own -p 0.0.0.0, as docker's).
+func TestKubePublishedPortNotes(t *testing.T) {
+	ports := []*fleetgrpc.KubePublishedPort{
+		{Address: "127.0.0.1", HostPort: 3000, ContainerPort: 3000},
+		{Address: "127.0.0.1", HostPort: 8080, ContainerPort: 80, Error: "the port is in use on the daemon host"},
+		{Address: "0.0.0.0", HostPort: 9000, ContainerPort: 9000},
+	}
+	rt := &fleetgrpc.InstanceRuntime{Fleet: "alpha", Instance: "eta", Kube: &fleetgrpc.KubeInstanceRuntime{PublishedPorts: ports}}
+
+	m, fp := kubeRowModel(t, fleetgrpc.KubeClusterState_KUBE_CLUSTER_STATE_READY, kubeInst("eta", fleet.StatusRunning, ""))
+	m.runtime["alpha/eta"] = rt
+	fp.cursor = 0
+	line := rowLine(t, m, fp, "eta")
+	if !strings.Contains(line, "⚠ port 8080 not published: the port is in use on the daemon host") {
+		t.Errorf("a conflict should show: %q", line)
+	}
+	if strings.Contains(line, "9000") || strings.Contains(line, "3000") {
+		t.Errorf("a local daemon's ports should not warn: %q", line)
+	}
+
+	t.Setenv(fleetclient.EnvServer, "tcp://fleet.example:7000")
+	notes, _ := m.kubeRunningNotes(m.st.Fleets["alpha"].Instances[0], rt)
+	joined := strings.Join(notes, " · ")
+	if !strings.Contains(joined, "⚠ port 9000 open on the daemon host's network (0.0.0.0)") || strings.Contains(joined, "3000") {
+		t.Errorf("a remote daemon's wildcard port should warn: %q", joined)
+	}
+	if kubePortNote(&fleetgrpc.KubePublishedPort{Address: "::", HostPort: 1}, true) == "" || kubePortNote(&fleetgrpc.KubePublishedPort{Address: "10.0.0.5", HostPort: 1}, true) != "" {
+		t.Error("only an unspecified address is every interface")
+	}
+}

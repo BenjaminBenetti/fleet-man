@@ -2511,9 +2511,13 @@ type KubeInstanceRuntime struct {
 	// restart_hint is the setting that keeps a restart of restart_cause from
 	// happening again ("raise memory_limit in the cluster's resources"); ""
 	// when none does, or there is no restart_cause.
-	RestartHint   string `protobuf:"bytes,8,opt,name=restart_hint,json=restartHint,proto3" json:"restart_hint,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	RestartHint string `protobuf:"bytes,8,opt,name=restart_hint,json=restartHint,proto3" json:"restart_hint,omitempty"`
+	// published_ports are the instance's published ports (docker run -p, a
+	// devcontainer's appPort), served by listeners on the daemon host while it
+	// runs.
+	PublishedPorts []*KubePublishedPort `protobuf:"bytes,9,rep,name=published_ports,json=publishedPorts,proto3" json:"published_ports,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *KubeInstanceRuntime) Reset() {
@@ -2602,6 +2606,91 @@ func (x *KubeInstanceRuntime) GetRestartHint() string {
 	return ""
 }
 
+func (x *KubeInstanceRuntime) GetPublishedPorts() []*KubePublishedPort {
+	if x != nil {
+		return x.PublishedPorts
+	}
+	return nil
+}
+
+// KubePublishedPort is one published port of a Kubernetes instance: a listener
+// on the daemon host at address:host_port that forwards each connection to
+// container_port in the pod.
+type KubePublishedPort struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// address is the listener's address: 127.0.0.1 unless the devcontainer
+	// names one ("0.0.0.0" or "::" listen on every interface of the daemon
+	// host, which a client of a remote daemon is warned about).
+	Address string `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
+	// host_port is the listening port (the one picked when the devcontainer
+	// left it to the daemon).
+	HostPort      int32 `protobuf:"varint,2,opt,name=host_port,json=hostPort,proto3" json:"host_port,omitempty"`
+	ContainerPort int32 `protobuf:"varint,3,opt,name=container_port,json=containerPort,proto3" json:"container_port,omitempty"`
+	// error is why the listener is not up (another process holds the port);
+	// "" while it serves. It is tried again while the instance runs.
+	Error         string `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KubePublishedPort) Reset() {
+	*x = KubePublishedPort{}
+	mi := &file_kube_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KubePublishedPort) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KubePublishedPort) ProtoMessage() {}
+
+func (x *KubePublishedPort) ProtoReflect() protoreflect.Message {
+	mi := &file_kube_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KubePublishedPort.ProtoReflect.Descriptor instead.
+func (*KubePublishedPort) Descriptor() ([]byte, []int) {
+	return file_kube_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *KubePublishedPort) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *KubePublishedPort) GetHostPort() int32 {
+	if x != nil {
+		return x.HostPort
+	}
+	return 0
+}
+
+func (x *KubePublishedPort) GetContainerPort() int32 {
+	if x != nil {
+		return x.ContainerPort
+	}
+	return 0
+}
+
+func (x *KubePublishedPort) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 // ShareSyncStatus is the sync between an instance's fleet share on its
 // cluster and the canonical host directories.
 type ShareSyncStatus struct {
@@ -2618,7 +2707,7 @@ type ShareSyncStatus struct {
 
 func (x *ShareSyncStatus) Reset() {
 	*x = ShareSyncStatus{}
-	mi := &file_kube_proto_msgTypes[18]
+	mi := &file_kube_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2630,7 +2719,7 @@ func (x *ShareSyncStatus) String() string {
 func (*ShareSyncStatus) ProtoMessage() {}
 
 func (x *ShareSyncStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[18]
+	mi := &file_kube_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2643,7 +2732,7 @@ func (x *ShareSyncStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShareSyncStatus.ProtoReflect.Descriptor instead.
 func (*ShareSyncStatus) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{18}
+	return file_kube_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ShareSyncStatus) GetState() ShareSyncState {
@@ -2713,7 +2802,7 @@ type KubeContext struct {
 
 func (x *KubeContext) Reset() {
 	*x = KubeContext{}
-	mi := &file_kube_proto_msgTypes[19]
+	mi := &file_kube_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2725,7 +2814,7 @@ func (x *KubeContext) String() string {
 func (*KubeContext) ProtoMessage() {}
 
 func (x *KubeContext) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[19]
+	mi := &file_kube_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2738,7 +2827,7 @@ func (x *KubeContext) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KubeContext.ProtoReflect.Descriptor instead.
 func (*KubeContext) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{19}
+	return file_kube_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *KubeContext) GetName() string {
@@ -2837,7 +2926,7 @@ type ListKubeContextsRequest struct {
 
 func (x *ListKubeContextsRequest) Reset() {
 	*x = ListKubeContextsRequest{}
-	mi := &file_kube_proto_msgTypes[20]
+	mi := &file_kube_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2849,7 +2938,7 @@ func (x *ListKubeContextsRequest) String() string {
 func (*ListKubeContextsRequest) ProtoMessage() {}
 
 func (x *ListKubeContextsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[20]
+	mi := &file_kube_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2862,7 +2951,7 @@ func (x *ListKubeContextsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListKubeContextsRequest.ProtoReflect.Descriptor instead.
 func (*ListKubeContextsRequest) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{20}
+	return file_kube_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ListKubeContextsRequest) GetKubeconfigPaths() []string {
@@ -2886,7 +2975,7 @@ type ListKubeContextsReply struct {
 
 func (x *ListKubeContextsReply) Reset() {
 	*x = ListKubeContextsReply{}
-	mi := &file_kube_proto_msgTypes[21]
+	mi := &file_kube_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2898,7 +2987,7 @@ func (x *ListKubeContextsReply) String() string {
 func (*ListKubeContextsReply) ProtoMessage() {}
 
 func (x *ListKubeContextsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[21]
+	mi := &file_kube_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2911,7 +3000,7 @@ func (x *ListKubeContextsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListKubeContextsReply.ProtoReflect.Descriptor instead.
 func (*ListKubeContextsReply) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{21}
+	return file_kube_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ListKubeContextsReply) GetContexts() []*KubeContext {
@@ -2943,7 +3032,7 @@ type ListKubeClustersRequest struct {
 
 func (x *ListKubeClustersRequest) Reset() {
 	*x = ListKubeClustersRequest{}
-	mi := &file_kube_proto_msgTypes[22]
+	mi := &file_kube_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2955,7 +3044,7 @@ func (x *ListKubeClustersRequest) String() string {
 func (*ListKubeClustersRequest) ProtoMessage() {}
 
 func (x *ListKubeClustersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[22]
+	mi := &file_kube_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2968,7 +3057,7 @@ func (x *ListKubeClustersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListKubeClustersRequest.ProtoReflect.Descriptor instead.
 func (*ListKubeClustersRequest) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{22}
+	return file_kube_proto_rawDescGZIP(), []int{23}
 }
 
 type ListKubeClustersReply struct {
@@ -2981,7 +3070,7 @@ type ListKubeClustersReply struct {
 
 func (x *ListKubeClustersReply) Reset() {
 	*x = ListKubeClustersReply{}
-	mi := &file_kube_proto_msgTypes[23]
+	mi := &file_kube_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2993,7 +3082,7 @@ func (x *ListKubeClustersReply) String() string {
 func (*ListKubeClustersReply) ProtoMessage() {}
 
 func (x *ListKubeClustersReply) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[23]
+	mi := &file_kube_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3006,7 +3095,7 @@ func (x *ListKubeClustersReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListKubeClustersReply.ProtoReflect.Descriptor instead.
 func (*ListKubeClustersReply) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{23}
+	return file_kube_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ListKubeClustersReply) GetClusters() []*KubeClusterStatus {
@@ -3033,7 +3122,7 @@ type AddKubeClusterRequest struct {
 
 func (x *AddKubeClusterRequest) Reset() {
 	*x = AddKubeClusterRequest{}
-	mi := &file_kube_proto_msgTypes[24]
+	mi := &file_kube_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3045,7 +3134,7 @@ func (x *AddKubeClusterRequest) String() string {
 func (*AddKubeClusterRequest) ProtoMessage() {}
 
 func (x *AddKubeClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[24]
+	mi := &file_kube_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3058,7 +3147,7 @@ func (x *AddKubeClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddKubeClusterRequest.ProtoReflect.Descriptor instead.
 func (*AddKubeClusterRequest) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{24}
+	return file_kube_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *AddKubeClusterRequest) GetCluster() *KubeCluster {
@@ -3077,7 +3166,7 @@ type AddKubeClusterReply struct {
 
 func (x *AddKubeClusterReply) Reset() {
 	*x = AddKubeClusterReply{}
-	mi := &file_kube_proto_msgTypes[25]
+	mi := &file_kube_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3089,7 +3178,7 @@ func (x *AddKubeClusterReply) String() string {
 func (*AddKubeClusterReply) ProtoMessage() {}
 
 func (x *AddKubeClusterReply) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[25]
+	mi := &file_kube_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3102,7 +3191,7 @@ func (x *AddKubeClusterReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddKubeClusterReply.ProtoReflect.Descriptor instead.
 func (*AddKubeClusterReply) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{25}
+	return file_kube_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *AddKubeClusterReply) GetCluster() *KubeClusterStatus {
@@ -3134,7 +3223,7 @@ type UpdateKubeClusterRequest struct {
 
 func (x *UpdateKubeClusterRequest) Reset() {
 	*x = UpdateKubeClusterRequest{}
-	mi := &file_kube_proto_msgTypes[26]
+	mi := &file_kube_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3146,7 +3235,7 @@ func (x *UpdateKubeClusterRequest) String() string {
 func (*UpdateKubeClusterRequest) ProtoMessage() {}
 
 func (x *UpdateKubeClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[26]
+	mi := &file_kube_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3159,7 +3248,7 @@ func (x *UpdateKubeClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateKubeClusterRequest.ProtoReflect.Descriptor instead.
 func (*UpdateKubeClusterRequest) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{26}
+	return file_kube_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *UpdateKubeClusterRequest) GetId() string {
@@ -3199,7 +3288,7 @@ type UpdateKubeClusterReply struct {
 
 func (x *UpdateKubeClusterReply) Reset() {
 	*x = UpdateKubeClusterReply{}
-	mi := &file_kube_proto_msgTypes[27]
+	mi := &file_kube_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3211,7 +3300,7 @@ func (x *UpdateKubeClusterReply) String() string {
 func (*UpdateKubeClusterReply) ProtoMessage() {}
 
 func (x *UpdateKubeClusterReply) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[27]
+	mi := &file_kube_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3224,7 +3313,7 @@ func (x *UpdateKubeClusterReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateKubeClusterReply.ProtoReflect.Descriptor instead.
 func (*UpdateKubeClusterReply) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{27}
+	return file_kube_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *UpdateKubeClusterReply) GetCluster() *KubeClusterStatus {
@@ -3248,7 +3337,7 @@ type KubeClusterUser struct {
 
 func (x *KubeClusterUser) Reset() {
 	*x = KubeClusterUser{}
-	mi := &file_kube_proto_msgTypes[28]
+	mi := &file_kube_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3260,7 +3349,7 @@ func (x *KubeClusterUser) String() string {
 func (*KubeClusterUser) ProtoMessage() {}
 
 func (x *KubeClusterUser) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[28]
+	mi := &file_kube_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3273,7 +3362,7 @@ func (x *KubeClusterUser) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KubeClusterUser.ProtoReflect.Descriptor instead.
 func (*KubeClusterUser) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{28}
+	return file_kube_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *KubeClusterUser) GetFleet() string {
@@ -3314,7 +3403,7 @@ type RemoveKubeClusterRequest struct {
 
 func (x *RemoveKubeClusterRequest) Reset() {
 	*x = RemoveKubeClusterRequest{}
-	mi := &file_kube_proto_msgTypes[29]
+	mi := &file_kube_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3326,7 +3415,7 @@ func (x *RemoveKubeClusterRequest) String() string {
 func (*RemoveKubeClusterRequest) ProtoMessage() {}
 
 func (x *RemoveKubeClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[29]
+	mi := &file_kube_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3339,7 +3428,7 @@ func (x *RemoveKubeClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveKubeClusterRequest.ProtoReflect.Descriptor instead.
 func (*RemoveKubeClusterRequest) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{29}
+	return file_kube_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *RemoveKubeClusterRequest) GetId() string {
@@ -3371,7 +3460,7 @@ type RemoveKubeClusterReply struct {
 
 func (x *RemoveKubeClusterReply) Reset() {
 	*x = RemoveKubeClusterReply{}
-	mi := &file_kube_proto_msgTypes[30]
+	mi := &file_kube_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3383,7 +3472,7 @@ func (x *RemoveKubeClusterReply) String() string {
 func (*RemoveKubeClusterReply) ProtoMessage() {}
 
 func (x *RemoveKubeClusterReply) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[30]
+	mi := &file_kube_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3396,7 +3485,7 @@ func (x *RemoveKubeClusterReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveKubeClusterReply.ProtoReflect.Descriptor instead.
 func (*RemoveKubeClusterReply) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{30}
+	return file_kube_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *RemoveKubeClusterReply) GetRemoved() bool {
@@ -3440,7 +3529,7 @@ type TestKubeClusterRequest struct {
 
 func (x *TestKubeClusterRequest) Reset() {
 	*x = TestKubeClusterRequest{}
-	mi := &file_kube_proto_msgTypes[31]
+	mi := &file_kube_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3452,7 +3541,7 @@ func (x *TestKubeClusterRequest) String() string {
 func (*TestKubeClusterRequest) ProtoMessage() {}
 
 func (x *TestKubeClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[31]
+	mi := &file_kube_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3465,7 +3554,7 @@ func (x *TestKubeClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestKubeClusterRequest.ProtoReflect.Descriptor instead.
 func (*TestKubeClusterRequest) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{31}
+	return file_kube_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *TestKubeClusterRequest) GetId() string {
@@ -3503,7 +3592,7 @@ type TestKubeClusterEvent struct {
 
 func (x *TestKubeClusterEvent) Reset() {
 	*x = TestKubeClusterEvent{}
-	mi := &file_kube_proto_msgTypes[32]
+	mi := &file_kube_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3515,7 +3604,7 @@ func (x *TestKubeClusterEvent) String() string {
 func (*TestKubeClusterEvent) ProtoMessage() {}
 
 func (x *TestKubeClusterEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[32]
+	mi := &file_kube_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3528,7 +3617,7 @@ func (x *TestKubeClusterEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestKubeClusterEvent.ProtoReflect.Descriptor instead.
 func (*TestKubeClusterEvent) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{32}
+	return file_kube_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *TestKubeClusterEvent) GetKind() isTestKubeClusterEvent_Kind {
@@ -3589,7 +3678,7 @@ type PruneKubeClusterRequest struct {
 
 func (x *PruneKubeClusterRequest) Reset() {
 	*x = PruneKubeClusterRequest{}
-	mi := &file_kube_proto_msgTypes[33]
+	mi := &file_kube_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3601,7 +3690,7 @@ func (x *PruneKubeClusterRequest) String() string {
 func (*PruneKubeClusterRequest) ProtoMessage() {}
 
 func (x *PruneKubeClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[33]
+	mi := &file_kube_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3614,7 +3703,7 @@ func (x *PruneKubeClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PruneKubeClusterRequest.ProtoReflect.Descriptor instead.
 func (*PruneKubeClusterRequest) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{33}
+	return file_kube_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *PruneKubeClusterRequest) GetId() string {
@@ -3659,7 +3748,7 @@ type KubePruneObject struct {
 
 func (x *KubePruneObject) Reset() {
 	*x = KubePruneObject{}
-	mi := &file_kube_proto_msgTypes[34]
+	mi := &file_kube_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3671,7 +3760,7 @@ func (x *KubePruneObject) String() string {
 func (*KubePruneObject) ProtoMessage() {}
 
 func (x *KubePruneObject) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[34]
+	mi := &file_kube_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3684,7 +3773,7 @@ func (x *KubePruneObject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KubePruneObject.ProtoReflect.Descriptor instead.
 func (*KubePruneObject) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{34}
+	return file_kube_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *KubePruneObject) GetKind() string {
@@ -3739,7 +3828,7 @@ type PruneKubeClusterReply struct {
 
 func (x *PruneKubeClusterReply) Reset() {
 	*x = PruneKubeClusterReply{}
-	mi := &file_kube_proto_msgTypes[35]
+	mi := &file_kube_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3751,7 +3840,7 @@ func (x *PruneKubeClusterReply) String() string {
 func (*PruneKubeClusterReply) ProtoMessage() {}
 
 func (x *PruneKubeClusterReply) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[35]
+	mi := &file_kube_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3764,7 +3853,7 @@ func (x *PruneKubeClusterReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PruneKubeClusterReply.ProtoReflect.Descriptor instead.
 func (*PruneKubeClusterReply) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{35}
+	return file_kube_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *PruneKubeClusterReply) GetOwner() string {
@@ -3818,7 +3907,7 @@ type LoginKubeClusterRequest struct {
 
 func (x *LoginKubeClusterRequest) Reset() {
 	*x = LoginKubeClusterRequest{}
-	mi := &file_kube_proto_msgTypes[36]
+	mi := &file_kube_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3830,7 +3919,7 @@ func (x *LoginKubeClusterRequest) String() string {
 func (*LoginKubeClusterRequest) ProtoMessage() {}
 
 func (x *LoginKubeClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[36]
+	mi := &file_kube_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3843,7 +3932,7 @@ func (x *LoginKubeClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoginKubeClusterRequest.ProtoReflect.Descriptor instead.
 func (*LoginKubeClusterRequest) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{36}
+	return file_kube_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *LoginKubeClusterRequest) GetId() string {
@@ -3865,7 +3954,7 @@ type KubeDeviceCode struct {
 
 func (x *KubeDeviceCode) Reset() {
 	*x = KubeDeviceCode{}
-	mi := &file_kube_proto_msgTypes[37]
+	mi := &file_kube_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3877,7 +3966,7 @@ func (x *KubeDeviceCode) String() string {
 func (*KubeDeviceCode) ProtoMessage() {}
 
 func (x *KubeDeviceCode) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[37]
+	mi := &file_kube_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3890,7 +3979,7 @@ func (x *KubeDeviceCode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KubeDeviceCode.ProtoReflect.Descriptor instead.
 func (*KubeDeviceCode) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{37}
+	return file_kube_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *KubeDeviceCode) GetUrl() string {
@@ -3921,7 +4010,7 @@ type LoginKubeClusterEvent struct {
 
 func (x *LoginKubeClusterEvent) Reset() {
 	*x = LoginKubeClusterEvent{}
-	mi := &file_kube_proto_msgTypes[38]
+	mi := &file_kube_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3933,7 +4022,7 @@ func (x *LoginKubeClusterEvent) String() string {
 func (*LoginKubeClusterEvent) ProtoMessage() {}
 
 func (x *LoginKubeClusterEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[38]
+	mi := &file_kube_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3946,7 +4035,7 @@ func (x *LoginKubeClusterEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoginKubeClusterEvent.ProtoReflect.Descriptor instead.
 func (*LoginKubeClusterEvent) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{38}
+	return file_kube_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *LoginKubeClusterEvent) GetKind() isLoginKubeClusterEvent_Kind {
@@ -4010,7 +4099,7 @@ type CreateKubeNamespaceRequest struct {
 
 func (x *CreateKubeNamespaceRequest) Reset() {
 	*x = CreateKubeNamespaceRequest{}
-	mi := &file_kube_proto_msgTypes[39]
+	mi := &file_kube_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4022,7 +4111,7 @@ func (x *CreateKubeNamespaceRequest) String() string {
 func (*CreateKubeNamespaceRequest) ProtoMessage() {}
 
 func (x *CreateKubeNamespaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[39]
+	mi := &file_kube_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4035,7 +4124,7 @@ func (x *CreateKubeNamespaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateKubeNamespaceRequest.ProtoReflect.Descriptor instead.
 func (*CreateKubeNamespaceRequest) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{39}
+	return file_kube_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *CreateKubeNamespaceRequest) GetId() string {
@@ -4084,7 +4173,7 @@ type CreateKubeNamespaceReply struct {
 
 func (x *CreateKubeNamespaceReply) Reset() {
 	*x = CreateKubeNamespaceReply{}
-	mi := &file_kube_proto_msgTypes[40]
+	mi := &file_kube_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4096,7 +4185,7 @@ func (x *CreateKubeNamespaceReply) String() string {
 func (*CreateKubeNamespaceReply) ProtoMessage() {}
 
 func (x *CreateKubeNamespaceReply) ProtoReflect() protoreflect.Message {
-	mi := &file_kube_proto_msgTypes[40]
+	mi := &file_kube_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4109,7 +4198,7 @@ func (x *CreateKubeNamespaceReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateKubeNamespaceReply.ProtoReflect.Descriptor instead.
 func (*CreateKubeNamespaceReply) Descriptor() ([]byte, []int) {
-	return file_kube_proto_rawDescGZIP(), []int{40}
+	return file_kube_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *CreateKubeNamespaceReply) GetManifest() string {
@@ -4352,7 +4441,7 @@ const file_kube_proto_rawDesc = "" +
 	"\tinstances\x18\x01 \x01(\x05R\tinstances\x12\x16\n" +
 	"\x06shares\x18\x02 \x01(\x05R\x06shares\x12#\n" +
 	"\rcache_volumes\x18\x03 \x01(\x05R\fcacheVolumes\x12+\n" +
-	"\x11snapshot_contents\x18\x04 \x01(\x05R\x10snapshotContents\"\xd9\x02\n" +
+	"\x11snapshot_contents\x18\x04 \x01(\x05R\x10snapshotContents\"\xa0\x03\n" +
 	"\x13KubeInstanceRuntime\x12\x1d\n" +
 	"\n" +
 	"pod_reason\x18\x01 \x01(\tR\tpodReason\x12\x12\n" +
@@ -4362,7 +4451,13 @@ const file_kube_proto_rawDesc = "" +
 	"\frestarted_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vrestartedAt\x12%\n" +
 	"\x0esessions_ended\x18\x06 \x01(\bR\rsessionsEnded\x120\n" +
 	"\x14node_cordoned_moving\x18\a \x01(\bR\x12nodeCordonedMoving\x12!\n" +
-	"\frestart_hint\x18\b \x01(\tR\vrestartHint\"\xd4\x01\n" +
+	"\frestart_hint\x18\b \x01(\tR\vrestartHint\x12E\n" +
+	"\x0fpublished_ports\x18\t \x03(\v2\x1c.fleetgrpc.KubePublishedPortR\x0epublishedPorts\"\x87\x01\n" +
+	"\x11KubePublishedPort\x12\x18\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\x12\x1b\n" +
+	"\thost_port\x18\x02 \x01(\x05R\bhostPort\x12%\n" +
+	"\x0econtainer_port\x18\x03 \x01(\x05R\rcontainerPort\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\xd4\x01\n" +
 	"\x0fShareSyncStatus\x12/\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x19.fleetgrpc.ShareSyncStateR\x05state\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x18\n" +
@@ -4515,7 +4610,7 @@ func file_kube_proto_rawDescGZIP() []byte {
 }
 
 var file_kube_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_kube_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
+var file_kube_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
 var file_kube_proto_goTypes = []any{
 	(KubeClusterState)(0),              // 0: fleetgrpc.KubeClusterState
 	(KubeCheckResult)(0),               // 1: fleetgrpc.KubeCheckResult
@@ -4540,92 +4635,94 @@ var file_kube_proto_goTypes = []any{
 	(*KubeImagePull)(nil),              // 20: fleetgrpc.KubeImagePull
 	(*KubeOrphans)(nil),                // 21: fleetgrpc.KubeOrphans
 	(*KubeInstanceRuntime)(nil),        // 22: fleetgrpc.KubeInstanceRuntime
-	(*ShareSyncStatus)(nil),            // 23: fleetgrpc.ShareSyncStatus
-	(*KubeContext)(nil),                // 24: fleetgrpc.KubeContext
-	(*ListKubeContextsRequest)(nil),    // 25: fleetgrpc.ListKubeContextsRequest
-	(*ListKubeContextsReply)(nil),      // 26: fleetgrpc.ListKubeContextsReply
-	(*ListKubeClustersRequest)(nil),    // 27: fleetgrpc.ListKubeClustersRequest
-	(*ListKubeClustersReply)(nil),      // 28: fleetgrpc.ListKubeClustersReply
-	(*AddKubeClusterRequest)(nil),      // 29: fleetgrpc.AddKubeClusterRequest
-	(*AddKubeClusterReply)(nil),        // 30: fleetgrpc.AddKubeClusterReply
-	(*UpdateKubeClusterRequest)(nil),   // 31: fleetgrpc.UpdateKubeClusterRequest
-	(*UpdateKubeClusterReply)(nil),     // 32: fleetgrpc.UpdateKubeClusterReply
-	(*KubeClusterUser)(nil),            // 33: fleetgrpc.KubeClusterUser
-	(*RemoveKubeClusterRequest)(nil),   // 34: fleetgrpc.RemoveKubeClusterRequest
-	(*RemoveKubeClusterReply)(nil),     // 35: fleetgrpc.RemoveKubeClusterReply
-	(*TestKubeClusterRequest)(nil),     // 36: fleetgrpc.TestKubeClusterRequest
-	(*TestKubeClusterEvent)(nil),       // 37: fleetgrpc.TestKubeClusterEvent
-	(*PruneKubeClusterRequest)(nil),    // 38: fleetgrpc.PruneKubeClusterRequest
-	(*KubePruneObject)(nil),            // 39: fleetgrpc.KubePruneObject
-	(*PruneKubeClusterReply)(nil),      // 40: fleetgrpc.PruneKubeClusterReply
-	(*LoginKubeClusterRequest)(nil),    // 41: fleetgrpc.LoginKubeClusterRequest
-	(*KubeDeviceCode)(nil),             // 42: fleetgrpc.KubeDeviceCode
-	(*LoginKubeClusterEvent)(nil),      // 43: fleetgrpc.LoginKubeClusterEvent
-	(*CreateKubeNamespaceRequest)(nil), // 44: fleetgrpc.CreateKubeNamespaceRequest
-	(*CreateKubeNamespaceReply)(nil),   // 45: fleetgrpc.CreateKubeNamespaceReply
-	nil,                                // 46: fleetgrpc.KubeCluster.NodeSelectorEntry
-	nil,                                // 47: fleetgrpc.CreateKubeNamespaceRequest.LabelsEntry
-	(*timestamppb.Timestamp)(nil),      // 48: google.protobuf.Timestamp
-	(*fieldmaskpb.FieldMask)(nil),      // 49: google.protobuf.FieldMask
-	(InstanceStatus)(0),                // 50: fleetgrpc.InstanceStatus
+	(*KubePublishedPort)(nil),          // 23: fleetgrpc.KubePublishedPort
+	(*ShareSyncStatus)(nil),            // 24: fleetgrpc.ShareSyncStatus
+	(*KubeContext)(nil),                // 25: fleetgrpc.KubeContext
+	(*ListKubeContextsRequest)(nil),    // 26: fleetgrpc.ListKubeContextsRequest
+	(*ListKubeContextsReply)(nil),      // 27: fleetgrpc.ListKubeContextsReply
+	(*ListKubeClustersRequest)(nil),    // 28: fleetgrpc.ListKubeClustersRequest
+	(*ListKubeClustersReply)(nil),      // 29: fleetgrpc.ListKubeClustersReply
+	(*AddKubeClusterRequest)(nil),      // 30: fleetgrpc.AddKubeClusterRequest
+	(*AddKubeClusterReply)(nil),        // 31: fleetgrpc.AddKubeClusterReply
+	(*UpdateKubeClusterRequest)(nil),   // 32: fleetgrpc.UpdateKubeClusterRequest
+	(*UpdateKubeClusterReply)(nil),     // 33: fleetgrpc.UpdateKubeClusterReply
+	(*KubeClusterUser)(nil),            // 34: fleetgrpc.KubeClusterUser
+	(*RemoveKubeClusterRequest)(nil),   // 35: fleetgrpc.RemoveKubeClusterRequest
+	(*RemoveKubeClusterReply)(nil),     // 36: fleetgrpc.RemoveKubeClusterReply
+	(*TestKubeClusterRequest)(nil),     // 37: fleetgrpc.TestKubeClusterRequest
+	(*TestKubeClusterEvent)(nil),       // 38: fleetgrpc.TestKubeClusterEvent
+	(*PruneKubeClusterRequest)(nil),    // 39: fleetgrpc.PruneKubeClusterRequest
+	(*KubePruneObject)(nil),            // 40: fleetgrpc.KubePruneObject
+	(*PruneKubeClusterReply)(nil),      // 41: fleetgrpc.PruneKubeClusterReply
+	(*LoginKubeClusterRequest)(nil),    // 42: fleetgrpc.LoginKubeClusterRequest
+	(*KubeDeviceCode)(nil),             // 43: fleetgrpc.KubeDeviceCode
+	(*LoginKubeClusterEvent)(nil),      // 44: fleetgrpc.LoginKubeClusterEvent
+	(*CreateKubeNamespaceRequest)(nil), // 45: fleetgrpc.CreateKubeNamespaceRequest
+	(*CreateKubeNamespaceReply)(nil),   // 46: fleetgrpc.CreateKubeNamespaceReply
+	nil,                                // 47: fleetgrpc.KubeCluster.NodeSelectorEntry
+	nil,                                // 48: fleetgrpc.CreateKubeNamespaceRequest.LabelsEntry
+	(*timestamppb.Timestamp)(nil),      // 49: google.protobuf.Timestamp
+	(*fieldmaskpb.FieldMask)(nil),      // 50: google.protobuf.FieldMask
+	(InstanceStatus)(0),                // 51: fleetgrpc.InstanceStatus
 }
 var file_kube_proto_depIdxs = []int32{
 	8,  // 0: fleetgrpc.KubeCluster.cache_sizes:type_name -> fleetgrpc.KubeCacheSizes
 	9,  // 1: fleetgrpc.KubeCluster.service_images:type_name -> fleetgrpc.KubeServiceImages
 	6,  // 2: fleetgrpc.KubeCluster.resources:type_name -> fleetgrpc.KubeResources
-	46, // 3: fleetgrpc.KubeCluster.node_selector:type_name -> fleetgrpc.KubeCluster.NodeSelectorEntry
+	47, // 3: fleetgrpc.KubeCluster.node_selector:type_name -> fleetgrpc.KubeCluster.NodeSelectorEntry
 	7,  // 4: fleetgrpc.KubeCluster.tolerations:type_name -> fleetgrpc.KubeToleration
 	10, // 5: fleetgrpc.KubeCluster.image:type_name -> fleetgrpc.KubeImageSettings
-	48, // 6: fleetgrpc.KubeCluster.created_at:type_name -> google.protobuf.Timestamp
-	48, // 7: fleetgrpc.KubeCluster.updated_at:type_name -> google.protobuf.Timestamp
-	48, // 8: fleetgrpc.KubeCluster.verified_at:type_name -> google.protobuf.Timestamp
+	49, // 6: fleetgrpc.KubeCluster.created_at:type_name -> google.protobuf.Timestamp
+	49, // 7: fleetgrpc.KubeCluster.updated_at:type_name -> google.protobuf.Timestamp
+	49, // 8: fleetgrpc.KubeCluster.verified_at:type_name -> google.protobuf.Timestamp
 	1,  // 9: fleetgrpc.KubeCheck.result:type_name -> fleetgrpc.KubeCheckResult
 	5,  // 10: fleetgrpc.KubeClusterStatus.cluster:type_name -> fleetgrpc.KubeCluster
 	0,  // 11: fleetgrpc.KubeClusterStatus.state:type_name -> fleetgrpc.KubeClusterState
 	14, // 12: fleetgrpc.KubeClusterStatus.capabilities:type_name -> fleetgrpc.KubeCapabilities
 	11, // 13: fleetgrpc.KubeClusterStatus.checks:type_name -> fleetgrpc.KubeCheck
-	48, // 14: fleetgrpc.KubeClusterStatus.checked_at:type_name -> google.protobuf.Timestamp
-	48, // 15: fleetgrpc.KubeClusterStatus.deep_checked_at:type_name -> google.protobuf.Timestamp
+	49, // 14: fleetgrpc.KubeClusterStatus.checked_at:type_name -> google.protobuf.Timestamp
+	49, // 15: fleetgrpc.KubeClusterStatus.deep_checked_at:type_name -> google.protobuf.Timestamp
 	12, // 16: fleetgrpc.KubeClusters.clusters:type_name -> fleetgrpc.KubeClusterStatus
 	15, // 17: fleetgrpc.KubeCapabilities.admission:type_name -> fleetgrpc.KubeAdmission
 	16, // 18: fleetgrpc.KubeCapabilities.storage_classes:type_name -> fleetgrpc.KubeStorageClass
 	17, // 19: fleetgrpc.KubeCapabilities.nodes:type_name -> fleetgrpc.KubeNode
 	18, // 20: fleetgrpc.KubeCapabilities.quota:type_name -> fleetgrpc.KubeQuotaHeadroom
 	19, // 21: fleetgrpc.KubeCapabilities.image_delivery:type_name -> fleetgrpc.KubeImageDelivery
-	48, // 22: fleetgrpc.KubeCapabilities.credentials_expire_at:type_name -> google.protobuf.Timestamp
+	49, // 22: fleetgrpc.KubeCapabilities.credentials_expire_at:type_name -> google.protobuf.Timestamp
 	21, // 23: fleetgrpc.KubeCapabilities.orphans:type_name -> fleetgrpc.KubeOrphans
 	11, // 24: fleetgrpc.KubeStorageClass.multi_node_test:type_name -> fleetgrpc.KubeCheck
 	20, // 25: fleetgrpc.KubeImageDelivery.last_pull:type_name -> fleetgrpc.KubeImagePull
-	48, // 26: fleetgrpc.KubeImagePull.started_at:type_name -> google.protobuf.Timestamp
-	48, // 27: fleetgrpc.KubeImagePull.last_byte_at:type_name -> google.protobuf.Timestamp
+	49, // 26: fleetgrpc.KubeImagePull.started_at:type_name -> google.protobuf.Timestamp
+	49, // 27: fleetgrpc.KubeImagePull.last_byte_at:type_name -> google.protobuf.Timestamp
 	2,  // 28: fleetgrpc.KubeInstanceRuntime.agent:type_name -> fleetgrpc.KubeAgentState
-	48, // 29: fleetgrpc.KubeInstanceRuntime.restarted_at:type_name -> google.protobuf.Timestamp
-	3,  // 30: fleetgrpc.ShareSyncStatus.state:type_name -> fleetgrpc.ShareSyncState
-	48, // 31: fleetgrpc.ShareSyncStatus.last_synced_at:type_name -> google.protobuf.Timestamp
-	24, // 32: fleetgrpc.ListKubeContextsReply.contexts:type_name -> fleetgrpc.KubeContext
-	12, // 33: fleetgrpc.ListKubeClustersReply.clusters:type_name -> fleetgrpc.KubeClusterStatus
-	5,  // 34: fleetgrpc.AddKubeClusterRequest.cluster:type_name -> fleetgrpc.KubeCluster
-	12, // 35: fleetgrpc.AddKubeClusterReply.cluster:type_name -> fleetgrpc.KubeClusterStatus
-	5,  // 36: fleetgrpc.UpdateKubeClusterRequest.cluster:type_name -> fleetgrpc.KubeCluster
-	49, // 37: fleetgrpc.UpdateKubeClusterRequest.update_mask:type_name -> google.protobuf.FieldMask
-	12, // 38: fleetgrpc.UpdateKubeClusterReply.cluster:type_name -> fleetgrpc.KubeClusterStatus
-	50, // 39: fleetgrpc.KubeClusterUser.status:type_name -> fleetgrpc.InstanceStatus
-	4,  // 40: fleetgrpc.RemoveKubeClusterRequest.mode:type_name -> fleetgrpc.KubeRemoveMode
-	33, // 41: fleetgrpc.RemoveKubeClusterReply.users:type_name -> fleetgrpc.KubeClusterUser
-	5,  // 42: fleetgrpc.TestKubeClusterRequest.cluster:type_name -> fleetgrpc.KubeCluster
-	11, // 43: fleetgrpc.TestKubeClusterEvent.check:type_name -> fleetgrpc.KubeCheck
-	12, // 44: fleetgrpc.TestKubeClusterEvent.result:type_name -> fleetgrpc.KubeClusterStatus
-	48, // 45: fleetgrpc.KubePruneObject.created_at:type_name -> google.protobuf.Timestamp
-	39, // 46: fleetgrpc.PruneKubeClusterReply.objects:type_name -> fleetgrpc.KubePruneObject
-	42, // 47: fleetgrpc.LoginKubeClusterEvent.device_code:type_name -> fleetgrpc.KubeDeviceCode
-	12, // 48: fleetgrpc.LoginKubeClusterEvent.result:type_name -> fleetgrpc.KubeClusterStatus
-	5,  // 49: fleetgrpc.CreateKubeNamespaceRequest.cluster:type_name -> fleetgrpc.KubeCluster
-	47, // 50: fleetgrpc.CreateKubeNamespaceRequest.labels:type_name -> fleetgrpc.CreateKubeNamespaceRequest.LabelsEntry
-	51, // [51:51] is the sub-list for method output_type
-	51, // [51:51] is the sub-list for method input_type
-	51, // [51:51] is the sub-list for extension type_name
-	51, // [51:51] is the sub-list for extension extendee
-	0,  // [0:51] is the sub-list for field type_name
+	49, // 29: fleetgrpc.KubeInstanceRuntime.restarted_at:type_name -> google.protobuf.Timestamp
+	23, // 30: fleetgrpc.KubeInstanceRuntime.published_ports:type_name -> fleetgrpc.KubePublishedPort
+	3,  // 31: fleetgrpc.ShareSyncStatus.state:type_name -> fleetgrpc.ShareSyncState
+	49, // 32: fleetgrpc.ShareSyncStatus.last_synced_at:type_name -> google.protobuf.Timestamp
+	25, // 33: fleetgrpc.ListKubeContextsReply.contexts:type_name -> fleetgrpc.KubeContext
+	12, // 34: fleetgrpc.ListKubeClustersReply.clusters:type_name -> fleetgrpc.KubeClusterStatus
+	5,  // 35: fleetgrpc.AddKubeClusterRequest.cluster:type_name -> fleetgrpc.KubeCluster
+	12, // 36: fleetgrpc.AddKubeClusterReply.cluster:type_name -> fleetgrpc.KubeClusterStatus
+	5,  // 37: fleetgrpc.UpdateKubeClusterRequest.cluster:type_name -> fleetgrpc.KubeCluster
+	50, // 38: fleetgrpc.UpdateKubeClusterRequest.update_mask:type_name -> google.protobuf.FieldMask
+	12, // 39: fleetgrpc.UpdateKubeClusterReply.cluster:type_name -> fleetgrpc.KubeClusterStatus
+	51, // 40: fleetgrpc.KubeClusterUser.status:type_name -> fleetgrpc.InstanceStatus
+	4,  // 41: fleetgrpc.RemoveKubeClusterRequest.mode:type_name -> fleetgrpc.KubeRemoveMode
+	34, // 42: fleetgrpc.RemoveKubeClusterReply.users:type_name -> fleetgrpc.KubeClusterUser
+	5,  // 43: fleetgrpc.TestKubeClusterRequest.cluster:type_name -> fleetgrpc.KubeCluster
+	11, // 44: fleetgrpc.TestKubeClusterEvent.check:type_name -> fleetgrpc.KubeCheck
+	12, // 45: fleetgrpc.TestKubeClusterEvent.result:type_name -> fleetgrpc.KubeClusterStatus
+	49, // 46: fleetgrpc.KubePruneObject.created_at:type_name -> google.protobuf.Timestamp
+	40, // 47: fleetgrpc.PruneKubeClusterReply.objects:type_name -> fleetgrpc.KubePruneObject
+	43, // 48: fleetgrpc.LoginKubeClusterEvent.device_code:type_name -> fleetgrpc.KubeDeviceCode
+	12, // 49: fleetgrpc.LoginKubeClusterEvent.result:type_name -> fleetgrpc.KubeClusterStatus
+	5,  // 50: fleetgrpc.CreateKubeNamespaceRequest.cluster:type_name -> fleetgrpc.KubeCluster
+	48, // 51: fleetgrpc.CreateKubeNamespaceRequest.labels:type_name -> fleetgrpc.CreateKubeNamespaceRequest.LabelsEntry
+	52, // [52:52] is the sub-list for method output_type
+	52, // [52:52] is the sub-list for method input_type
+	52, // [52:52] is the sub-list for extension type_name
+	52, // [52:52] is the sub-list for extension extendee
+	0,  // [0:52] is the sub-list for field type_name
 }
 
 func init() { file_kube_proto_init() }
@@ -4637,11 +4734,11 @@ func file_kube_proto_init() {
 	file_kube_proto_msgTypes[0].OneofWrappers = []any{}
 	file_kube_proto_msgTypes[2].OneofWrappers = []any{}
 	file_kube_proto_msgTypes[5].OneofWrappers = []any{}
-	file_kube_proto_msgTypes[32].OneofWrappers = []any{
+	file_kube_proto_msgTypes[33].OneofWrappers = []any{
 		(*TestKubeClusterEvent_Check)(nil),
 		(*TestKubeClusterEvent_Result)(nil),
 	}
-	file_kube_proto_msgTypes[38].OneofWrappers = []any{
+	file_kube_proto_msgTypes[39].OneofWrappers = []any{
 		(*LoginKubeClusterEvent_DeviceCode)(nil),
 		(*LoginKubeClusterEvent_Result)(nil),
 	}
@@ -4651,7 +4748,7 @@ func file_kube_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kube_proto_rawDesc), len(file_kube_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   43,
+			NumMessages:   44,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

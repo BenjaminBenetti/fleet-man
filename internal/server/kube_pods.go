@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -33,8 +34,10 @@ import (
 //     "sessions reset: <cause>" on the instance's row until the next attach;
 //   - it parks a crash-looping instance (scaled to 0 and recorded stopped,
 //     the reason in its warning), naming an out-of-memory loop as one;
-//   - it keeps InstanceRuntime.kube (pod reason, node, agent, last restart)
-//     current, so a TUI that connects later sees it at once.
+//   - it serves a running instance's published ports (-p, appPort) on the
+//     daemon host (published_ports.go) and closes them when it stops;
+//   - it keeps InstanceRuntime.kube (pod reason, node, agent, last restart,
+//     published ports) current, so a TUI that connects later sees it at once.
 //
 // A pass over every instance every kubePodsBackstop catches anything an event
 // did not deliver; nothing here polls the cluster.
@@ -79,6 +82,26 @@ func kubePostRestart(fleetName string, inst *fleet.Instance, homeDir string) {
 	instanceops.RunPostStartHook(fleetName, inst, homeDir)
 }
 
+// kubePublishFor is a running instance's published ports and the dial into
+// it that serves them: its backend handle's (backend.PortPublisher and
+// backend.PortDialer); false when the handle has none.
+func kubePublishFor(inst *fleet.Instance) ([]backend.PublishedPort, portDial, bool) {
+	b := backendutil.NewForInstance(inst, false)
+	pub, ok := b.(backend.PortPublisher)
+	dialer, ok2 := b.(backend.PortDialer)
+	if !ok || !ok2 {
+		return nil, nil, false
+	}
+	ports, err := pub.PublishedPorts(inst.ContainerID)
+	if err != nil {
+		return nil, nil, false
+	}
+	containerID := inst.ContainerID
+	return ports, func(ctx context.Context, port int) (io.ReadWriteCloser, error) {
+		return dialer.DialPort(ctx, containerID, port)
+	}, true
+}
+
 // kubeTargetFor is the pod the supervisor keeps an agent up in for a running
 // instance: its backend handle's (kubernetes.TargetProvider), nil when the
 // handle provides none.
@@ -95,6 +118,9 @@ func kubeTargetFor(inst *fleet.Instance) *kubernetes.PodTarget {
 }
 
 type kubeRef struct{ cluster, sts string }
+
+// key names the instance among the published ports.
+func (r kubeRef) key() string { return r.cluster + "/" + r.sts }
 
 // kubeInst is kubePods' state for one instance.
 type kubeInst struct {
@@ -132,6 +158,10 @@ type kubePods struct {
 	// (kubePods.readBackRolling; tests stand in for the backend).
 	logs     *kubeLogs
 	readBack func(ctx context.Context, fleetName string, inst *fleet.Instance)
+	// ports serves the running instances' published ports, as publishFor
+	// (kubePublishFor; tests stand in for the backend) gives them.
+	ports      *portPublisher
+	publishFor func(*fleet.Instance) ([]backend.PublishedPort, portDial, bool)
 
 	wake chan struct{}
 
@@ -158,6 +188,8 @@ func newKubePods(svc *service) *kubePods {
 		targetFor:     kubeTargetFor,
 		postRestart:   kubePostRestart,
 		logs:          newKubeLogs(),
+		ports:         newPortPublisher(),
+		publishFor:    kubePublishFor,
 		wake:          make(chan struct{}, 1),
 		pending:       map[kubeRef]bool{},
 		insts:         map[kubeRef]*kubeInst{},
@@ -414,6 +446,7 @@ func (k *kubePods) sync(st *state.State) {
 	pool := k.pool()
 	for _, ref := range gone {
 		// Destroyed (or its record replaced): nothing of its pod is kept.
+		k.ports.drop(ref.key())
 		pool.Forget(kubernetes.PodTarget{Cluster: ref.cluster, StatefulSet: ref.sts})
 	}
 	pool.Track(items)
@@ -484,8 +517,16 @@ func (k *kubePods) evaluate(ctx context.Context, ref kubeRef) {
 	}
 	kr := kubeRuntime(obs, ki)
 	fleetName, name := ki.fleet, ki.name
+	inst := ki.inst
 	k.mu.Unlock()
 
+	// A running instance's published ports listen on this host; a stopped
+	// one's close.
+	if running && obs.Live == backend.LiveStatusRunning {
+		kr.PublishedPorts = k.publish(ref, fleetName, &inst)
+	} else {
+		k.ports.drop(ref.key())
+	}
 	live := liveStatusToProto(obs.Live)
 	k.svc.hub.post(func(h *hub) {
 		h.applyRuntime([]runtimeUpdate{{fleetName, name, func(r *fleetgrpc.InstanceRuntime) {
@@ -499,6 +540,16 @@ func (k *kubePods) evaluate(ctx context.Context, ref kubeRef) {
 	if park != nil {
 		go park()
 	}
+}
+
+// publish serves inst's published ports and returns what each listener is.
+func (k *kubePods) publish(ref kubeRef, fleetName string, inst *fleet.Instance) []*fleetgrpc.KubePublishedPort {
+	ports, dial, ok := k.publishFor(inst)
+	if !ok || len(ports) == 0 {
+		k.ports.drop(ref.key())
+		return nil
+	}
+	return k.ports.sync(ref.key(), publishedLabel(fleetName, inst.Name), inst.ContainerID, ports, dial)
 }
 
 // kubeRuntime is the instance's InstanceRuntime.kube. Called with k.mu held.

@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend"
+	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes/podspec"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleetpaths"
 	"github.com/BenjaminBenetti/fleet-man/internal/k8s/names"
 	"github.com/BenjaminBenetti/fleet-man/internal/kubeexec"
@@ -29,6 +30,7 @@ var (
 	_ backend.PortDialer      = (*Backend)(nil)
 	_ backend.HalfCloseDialer = (*Backend)(nil)
 	_ backend.PortWarmer      = (*Backend)(nil)
+	_ backend.PortPublisher   = (*Backend)(nil)
 )
 
 // DialPort connects to port on the pod's loopback: a stream pair on the pod's
@@ -151,4 +153,35 @@ func (b *Backend) shimForwardArgv(containerID, sub string, args ...string) ([]st
 		argv = append(argv, "--kubeconfig", p)
 	}
 	return append(argv, args...), nil
+}
+
+// PublishedPorts are the instance's published ports (-p, appPort) as its
+// create recorded them: the daemon serves them on its host while the instance
+// runs (backend.PortPublisher). An instance made before fleet recorded them
+// has none.
+func (b *Backend) PublishedPorts(containerID string) ([]backend.PublishedPort, error) {
+	id, err := b.identity()
+	if err != nil {
+		return nil, err
+	}
+	if containerID != "" {
+		if _, err := b.where(containerID); err != nil {
+			return nil, err
+		}
+	}
+	rec, err := LoadInstanceRecord(id.cluster, id.key)
+	if err != nil {
+		return nil, err
+	}
+	return append([]backend.PublishedPort(nil), rec.Ports...), nil
+}
+
+// publishedPorts are a translated run's published ports, as the record keeps
+// them (only TCP reaches the translation's list).
+func publishedPorts(ports []podspec.Port) []backend.PublishedPort {
+	var out []backend.PublishedPort
+	for _, p := range ports {
+		out = append(out, backend.PublishedPort{HostIP: p.HostIP, HostPort: p.HostPort, ContainerPort: p.ContainerPort})
+	}
+	return out
 }

@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"time"
 
 	"github.com/BenjaminBenetti/fleet-man/internal/backend/kubernetes"
 	"github.com/BenjaminBenetti/fleet-man/internal/fleet"
@@ -13,15 +14,22 @@ import (
 
 // kube_shutdown.go is the Kubernetes part of the bounded shutdown
 // (shutdown.go): the pods' agent and bulk sessions are told to close (the
-// agents hold their resumable commands for a later session), and once the
-// running Kubernetes jobs reached their checkpoint the pool ends, with its
-// informers and whatever clean-up is still talking to a cluster.
+// agents hold their resumable commands for a later session), the published
+// ports stop listening and the port-forward pool closes with every forwarded
+// connection, and once the running Kubernetes jobs reached their checkpoint
+// the pool ends, with its informers and whatever clean-up is still talking to
+// a cluster.
 
 // kubeShutdowner is the pool's part in the shutdown (*kubernetes.Pool).
 type kubeShutdowner interface {
 	CloseSessions(ctx context.Context)
+	ClosePortForwards()
 	Close()
 }
+
+// portForwardCloseLimit bounds closing the port-forward pool and the
+// published-port listeners (a var so tests can shorten it).
+var portForwardCloseLimit = time.Second
 
 // kubeShutdownPool is the pool the shutdown ends; a var so tests stand in
 // for it.
@@ -38,8 +46,12 @@ func (s *service) kubeShutdownSteps() []shutdownStep {
 	pool := kubeShutdownPool()
 	return []shutdownStep{
 		{name: "close the agent sessions", limit: sessionCloseLimit, run: pool.CloseSessions},
-		// Step 4 goes here: the port-forward pool and the appPort
-		// listeners close once they exist (pfpool, published ports).
+		{name: "close the port forwards", limit: portForwardCloseLimit, run: func(context.Context) {
+			// No new connection is accepted on a published port, and every
+			// forwarded connection ends with its pod's port-forward.
+			s.kubePods.ports.close()
+			pool.ClosePortForwards()
+		}},
 		{name: "checkpoint the Kubernetes jobs", run: func(ctx context.Context) {
 			s.checkpointKubeJobs(ctx)
 			pool.Close()

@@ -270,6 +270,7 @@ func (c *creation) provision(ctx context.Context, cfg *devcli.Config) (*backend.
 		StatefulSet: c.id.sts, Gen: 1, SpecHash: podspec.SpecHash(&o.StatefulSet.Spec.Template.Spec),
 		Image: del.Ref, Strategy: string(del.Strategy), RemoteUser: capture.RemoteUser,
 		WorkspaceFolder: cfg.WorkspaceFolder, NonRoot: c.identity.NonRoot, Created: c.id.created,
+		Ports: publishedPorts(adm.Result.Pod.Ports),
 	}
 	rec.addImageDigest(del.Digest)
 	rec.addImageDigest(del.ImageID)

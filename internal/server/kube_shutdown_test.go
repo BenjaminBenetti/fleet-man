@@ -55,6 +55,8 @@ func (p *fakeShutdownPool) CloseSessions(ctx context.Context) {
 	}
 }
 
+func (p *fakeShutdownPool) ClosePortForwards() { p.record("forwards") }
+
 func (p *fakeShutdownPool) Close() { p.record("close") }
 
 func (p *fakeShutdownPool) recorded() []string {
@@ -130,7 +132,7 @@ func TestServeShutdownClosesTheAgentSessions(t *testing.T) {
 	shutdownAndWait(t, client, served)
 	took := time.Since(start)
 
-	if got, want := pool.recorded(), []string{"flush", "sessions", "close"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+	if got, want := pool.recorded(), []string{"flush", "sessions", "forwards", "close"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("shutdown steps %v, want %v", got, want)
 	}
 	pool.mu.Lock()
@@ -380,7 +382,7 @@ func TestKubeShutdownEndsThePoolAfterTheCheckpoint(t *testing.T) {
 	})
 	shutdown()
 	runShutdownSteps(5*time.Second, svc.kubeShutdownSteps())
-	if got, want := pool.recorded(), []string{"sessions", "job stopped", "close"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+	if got, want := pool.recorded(), []string{"sessions", "forwards", "job stopped", "close"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("shutdown %v, want %v", got, want)
 	}
 }
