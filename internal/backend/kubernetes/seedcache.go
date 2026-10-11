@@ -147,10 +147,11 @@ func seedCacheID(daemonID, cluster, image string, spec *podseed.SeedSpec, nonRoo
 
 // seedCacheFor is the create's seed cache plan, or nil when it seeds in full
 // as any create does: only an automation create uses one, on a connection
-// whose disks clone.
+// whose disks clone. A rebuild (c.prevGen set) never does: its seed resets
+// a disk that already holds the instance's workspace.
 func (c *creation) seedCacheFor(ctx context.Context, spec *podseed.SeedSpec, image string, disk *corev1.PersistentVolumeClaim) *seedCachePlan {
 	switch {
-	case !c.b.inst.Automated || image == "" || os.Getenv(EnvSeedCache) == "off":
+	case !c.b.inst.Automated || c.prevGen > 0 || image == "" || os.Getenv(EnvSeedCache) == "off":
 		return nil
 	case c.rec.CloneMethod == fleet.KubeCloneCopy || c.facts.Capabilities.GetCloneTier() != "snapshot":
 		return nil
@@ -372,7 +373,7 @@ func (c *creation) trimIntoSeedCache(ctx context.Context, adm *podspec.Admitted,
 	res, err := c.p.RunJob(ctx, JobRun{
 		Cluster:   c.id.cluster,
 		Job:       job.Job.Name,
-		Spec:      podseed.JobSpec{Op: podseed.OpSeedCache, Gen: 1, PVC: seedCacheMount, Cache: p.id},
+		Spec:      podseed.JobSpec{Op: podseed.OpSeedCache, Gen: c.gen, PVC: seedCacheMount, Cache: p.id},
 		PVC:       p.name,
 		Deadlines: &deadlines,
 		Check: func(pod *corev1.Pod) error {

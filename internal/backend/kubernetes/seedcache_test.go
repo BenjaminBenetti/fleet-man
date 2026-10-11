@@ -126,6 +126,20 @@ func TestSeedCacheFor(t *testing.T) {
 			t.Fatalf("plan %+v", p)
 		}
 	})
+	t.Run("a rebuild", func(t *testing.T) {
+		// Its seed resets a disk that holds the instance's workspace: a
+		// ready cache is neither cloned nor built.
+		c := cacheTestCreation(t, true, cachePVC(name, true, nil))
+		c.gen, c.prevGen = 2, 1
+		if p := c.seedCacheFor(context.Background(), spec, image, cacheTestDisk()); p != nil {
+			t.Fatalf("plan %+v", p)
+		}
+		c = cacheTestCreation(t, true)
+		c.gen, c.prevGen = 2, 1
+		if p := c.seedCacheFor(context.Background(), spec, image, cacheTestDisk()); p != nil {
+			t.Fatalf("plan %+v", p)
+		}
+	})
 	t.Run("no clone tier", func(t *testing.T) {
 		c := cacheTestCreation(t, true)
 		c.facts.Capabilities.CloneTier = "copy"
